@@ -383,9 +383,10 @@ pub(crate) fn draw(
         *g.dirty = true;
     }
     // Elsewhere: a layer offered in the map's own system drawn in it as its service gives it
-    // (#769); runs of the others, a mosaic in Web Mercator warped into place.
+    // (#769); runs of the others, a mosaic in Web Mercator warped into place. (A tilted map's
+    // pictures aren't flat on screen: it warps them all, pixel by pixel.)
     let native_to = match place {
-        Place::Flat(flat @ Flat::Custom(_), code) => {
+        Place::Flat(flat @ Flat::Custom(_), code) if view.camera.pitch == 0.0 => {
             rustgis_data::ogc::warp::epsg_of(code).and_then(|c| u16::try_from(c).ok()).map(|e| (flat, e))
         }
         _ => None,

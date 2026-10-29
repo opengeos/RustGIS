@@ -29,6 +29,8 @@ pub(crate) struct Native {
     base: String,
     how: How,
     transformer: Arc<Transformer>,
+    /// The layer's area in the system, when its capabilities give it: nothing is asked past it.
+    area: Option<[f64; 4]>,
 }
 
 enum How {
@@ -72,7 +74,11 @@ fn read(url: &str, epsg: u16) -> Option<Native> {
         How::Map(_) => Warp::map_template(base),
         How::Tiles(_) => base.to_string(),
     };
-    Some(Native { base, how, transformer: rustgis_tiles::warp::transformer(epsg)? })
+    let transformer = rustgis_tiles::warp::transformer(epsg)?;
+    // (Not for a layer over half the world or more: its box there needn't hold all of it.)
+    let area =
+        w.area.filter(|a| a[2] - a[0] < 180.0 && a[3] - a[1] < 90.0).and_then(|a| rustgis_data::ogc::warp::native_box(&transformer, a));
+    Some(Native { base, how, transformer, area })
 }
 
 /// One picture to draw: its address, the area it shows (west, south, east, north in the
@@ -164,7 +170,13 @@ pub(crate) fn draw(pm: &mut Pixmap, n: &Native, t: &TileLayer, view: &View, flat
     if !(lo.0 < hi.0 && lo.1 < hi.1 && per_px.is_finite() && per_px > 0.0) {
         return (false, None);
     }
-    let area = [lo.0, lo.1, hi.0, hi.1];
+    let mut area = [lo.0, lo.1, hi.0, hi.1];
+    if let Some(l) = n.area {
+        area = [area[0].max(l[0]), area[1].max(l[1]), area[2].min(l[2]), area[3].min(l[3])];
+        if !(area[0] < area[2] && area[1] < area[3]) {
+            return (false, None);
+        }
+    }
     let pictures = match &n.how {
         How::Map(system) => map_pictures(&n.base, system, area, per_px),
         How::Tiles(ms) => matrix_pictures(&n.base, ms, area, per_px),

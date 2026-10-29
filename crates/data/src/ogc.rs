@@ -802,7 +802,7 @@ fn wms(url: &str, root: &Node) -> Service {
     let version = if v13 { "1.3.0" } else { "1.1.1" };
     let info_request = info::request_of(root, url, version, format);
     let mut service = Service { kind: "WMS".into(), title, ..Service::default() };
-    let mut skipped = 0;
+    let (mut skipped, mut too_long) = (0, 0);
     let mut time_budget = MAX_DOCUMENT_TIME_VALUES;
     // Layers inherit their parents' coordinate systems, nearest valid geographic bounds, queryable
     // attribute and time dimension.
@@ -857,7 +857,7 @@ fn wms(url: &str, root: &Node) -> Service {
         // In Web Mercator, as the service draws it, else in a system of its own, warped (#769);
         // with the other systems it is offered in, for a map drawn in one of them.
         let mercator = crs.iter().any(|c| c.split_whitespace().any(is_web_mercator));
-        let native = wms_native(&layer, &crs, v13, bbox, mercator);
+        let mut native = wms_native(&layer, &crs, v13, bbox, mercator);
         if !mercator && native.is_none() {
             skipped += 1;
             continue;
@@ -877,10 +877,24 @@ fn wms(url: &str, root: &Node) -> Service {
         );
         // At its time: the service's default, unless another is asked for when it is added.
         let template = if time.is_some() { with_query(&template, "TIME={Time}") } else { template };
-        let template = match &native {
-            Some((_, w)) => w.address(&template),
-            None => template,
-        };
+        // An address the map can fetch (4096 bytes at most): the last of the other systems go
+        // first, then, for a layer offered in Web Mercator, all of them.
+        let mut address = native.as_ref().map(|(_, w)| w.address(&template));
+        while let (Some(a), Some((_, w))) = (&address, &mut native)
+            && a.len() > MAX_ADDRESS
+            && w.systems.len() > 1
+        {
+            w.systems.pop();
+            address = Some(w.address(&template));
+        }
+        if address.as_ref().is_some_and(|a| a.len() > MAX_ADDRESS) {
+            if !mercator {
+                too_long += 1;
+                continue;
+            }
+            (native, address) = (None, None);
+        }
+        let template = address.unwrap_or(template);
         let title = child_text(&layer, "Title").unwrap_or_else(|| name.clone());
         // A service without GetFeatureInfo still gives each layer one, never asked, so Identify
         // doesn't fetch the capabilities again to find out.
@@ -928,6 +942,11 @@ fn wms(url: &str, root: &Node) -> Service {
     if skipped > 0 {
         service.notes.push(format!("{skipped} layers aren't offered in a coordinate system RustGIS can draw and are left out"));
     }
+    if too_long > 0 {
+        service
+            .notes
+            .push(format!("{too_long} layers in another coordinate system are left out: their addresses are longer than 4096 bytes"));
+    }
     service
 }
 
@@ -938,51 +957,59 @@ fn wms(url: &str, root: &Node) -> Service {
 /// In WMS 1.3.0 a bounding box follows the system's axes: written north first where the layer's
 /// own `BoundingBox` in that system says so (else in a geographic system other than CRS:84).
 fn wms_native(layer: &Node, crs: &[String], v13: bool, area: Option<[f64; 4]>, mercator: bool) -> Option<(String, warp::Warp)> {
+    // Each with its place in the list. (A GeoServer lists some 5,000 systems by default, each
+    // layer inheriting them: only a system's definition is looked up here, and its transformer
+    // built for those kept.)
     let mut seen = std::collections::HashSet::new();
-    let mut listed: Vec<(String, u32, crate::raster::Crs)> = crs
+    let mut listed: Vec<(String, u32, crate::raster::Crs, usize)> = crs
         .iter()
         .flat_map(|c| c.split_whitespace())
         .filter(|c| !is_web_mercator(c) && seen.insert(c.to_ascii_uppercase()))
-        .filter_map(|c| {
+        .enumerate()
+        .filter_map(|(i, c)| {
             let code = warp::epsg_of(c)?;
-            Some((c.to_string(), code, warp::usable(code)?))
+            let system = crate::raster::Crs::from_epsg(code).filter(|s| *s != crate::raster::Crs::WebMercator)?;
+            Some((c.to_string(), code, system, i))
         })
         .collect();
     // One name for each system (EPSG:4326 and CRS:84 differ only in their axes: CRS:84 kept).
-    listed.sort_by_key(|(name, code, _)| (*code, !warp::is_crs84(name)));
-    listed.dedup_by_key(|(_, code, _)| *code);
-    if listed.is_empty() {
-        return None;
-    }
-    let rank = |(name, _, c): &(String, u32, crate::raster::Crs)| match (c.is_geographic(), warp::is_crs84(name)) {
+    listed.sort_by_key(|(name, code, _, _)| (*code, !warp::is_crs84(name)));
+    listed.dedup_by_key(|(_, code, _, _)| *code);
+    let rank = |(name, _, c, _): &(String, u32, crate::raster::Crs, usize)| match (c.is_geographic(), warp::is_crs84(name)) {
         (false, _) => 0,
         (true, true) => 1,
         (true, false) => 2,
     };
     // In the order the service lists them, the preferred first.
-    let order = |name: &str| crs.iter().flat_map(|c| c.split_whitespace()).position(|c| c == name).unwrap_or(usize::MAX);
-    listed.sort_by_key(|l| (rank(l), order(&l.0)));
+    listed.sort_by_key(|l| (rank(l), l.3));
     let lat_first = |name: &str, system: crate::raster::Crs| {
         v13 && !warp::is_crs84(name) && {
-            // The layer's own box in that system, against its area worked out there.
-            let own = children(layer, "BoundingBox")
-                .find(|b| b.attribute("CRS").or(b.attribute("SRS")).is_some_and(|c| c.eq_ignore_ascii_case(name)));
+            // The layer's box in that system (its own, else one it inherits: WMS 1.3.0
+            // §7.2.4.6.8), against its area worked out there.
+            let own = layer.ancestors().filter(|a| a.is_element() && local(a) == "Layer").find_map(|a| {
+                children(&a, "BoundingBox")
+                    .find(|b| b.attribute("CRS").or(b.attribute("SRS")).is_some_and(|c| c.eq_ignore_ascii_case(name)))
+            });
             let corner = own.and_then(|b| {
                 let f = |k: &str| b.attribute(k).and_then(|v| v.trim().parse::<f64>().ok());
                 Some((f("minx")?, f("miny")?))
             });
             // (The least of its edges there: a projected box's south-west corner isn't.)
-            let expected = area.and_then(|a| warp::native_box(&*warp::transformer(u32::from(system.epsg()))?, a)).map(|b| (b[0], b[1]));
-            match (corner, expected) {
-                (Some(c), Some(e)) => warp::north_first(c, Some(e), system.is_geographic()),
-                _ => system.is_geographic(),
+            let expected = || area.and_then(|a| warp::native_box(&*warp::transformer(u32::from(system.epsg()))?, a)).map(|b| (b[0], b[1]));
+            match corner {
+                Some(c) => match expected() {
+                    Some(e) => warp::north_first(c, Some(e), system.is_geographic()),
+                    None => system.is_geographic(),
+                },
+                None => system.is_geographic(),
             }
         }
     };
     let systems: Vec<warp::System> = listed
         .iter()
+        .filter(|(_, code, _, _)| warp::usable(*code).is_some())
         .take(warp::MAX_SYSTEMS)
-        .filter_map(|(name, code, system)| {
+        .filter_map(|(name, code, system, _)| {
             Some(warp::System { epsg: u16::try_from(*code).ok()?, name: name.clone(), lat_first: lat_first(name, *system) })
         })
         .collect();
@@ -990,6 +1017,9 @@ fn wms_native(layer: &Node, crs: &[String], v13: bool, area: Option<[f64; 4]>, m
     let (epsg, lat_first) = if mercator { (3857, false) } else { (first.epsg, first.lat_first) };
     Some((first.name, warp::Warp { epsg, grid: warp::Grid::Map { lat_first }, area, systems }))
 }
+
+/// The longest address a layer in another system keeps (the map's own limit on an address).
+const MAX_ADDRESS: usize = 4096;
 
 /// The most styles a WMS layer's legend is looked for among, its own and those it inherits.
 const MAX_STYLES: usize = 64;
@@ -1086,13 +1116,21 @@ fn mercator_matrices(tms: &Node) -> Option<Vec<(String, u8)>> {
 /// `TileMatrixSetLimits` names when it gives them (WMTS 1.0.0 §7.2.4.6.3).
 fn wmts_zooms(layer: &Node, set: &str, sets: &[(String, Vec<(String, u8)>)]) -> Option<(u8, u8)> {
     let matrices = &sets.iter().find(|(id, _)| id == set)?.1;
-    let link = children(layer, "TileMatrixSetLink").find(|l| child_text(l, "TileMatrixSet").as_deref() == Some(set))?;
-    let limited: Vec<String> = child(&link, "TileMatrixSetLimits")
-        .map(|l| children(&l, "TileMatrixLimits").filter_map(|m| child_text(&m, "TileMatrix")).collect())
-        .unwrap_or_default();
+    children(layer, "TileMatrixSetLink").find(|l| child_text(l, "TileMatrixSet").as_deref() == Some(set))?;
+    let limited = wmts_limits(layer, set);
     let zooms = matrices.iter().filter(|(id, _)| limited.is_empty() || limited.contains(id)).map(|(_, z)| *z);
     let (lo, hi) = zooms.fold((u8::MAX, 0), |(lo, hi), z| (lo.min(z), hi.max(z)));
     (lo <= hi.min(24)).then_some((lo, hi.min(24)))
+}
+
+/// The tile matrices of `set` a WMTS layer's link limits it to (its `TileMatrixSetLimits`);
+/// none when it doesn't.
+fn wmts_limits(layer: &Node, set: &str) -> Vec<String> {
+    children(layer, "TileMatrixSetLink")
+        .find(|l| child_text(l, "TileMatrixSet").as_deref() == Some(set))
+        .and_then(|link| child(&link, "TileMatrixSetLimits"))
+        .map(|l| children(&l, "TileMatrixLimits").filter_map(|m| child_text(&m, "TileMatrix")).collect())
+        .unwrap_or_default()
 }
 
 /// A tile matrix as a WMTS document gives it, its corner in the order written.
@@ -1105,11 +1143,12 @@ struct RawMatrix {
 }
 
 /// A tile matrix set in another system than Web Mercator that RustGIS can draw (#769): its EPSG
-/// code and its matrices, coarsest first (at most [`warp::MAX_MATRICES`]).
+/// code and its matrices RustGIS can draw, coarsest first.
 fn native_matrices(tms: &Node) -> Option<(u16, crate::raster::Crs, Vec<RawMatrix>)> {
     let name = child_text(tms, "SupportedCRS")?;
     let code = warp::epsg_of(&name)?;
     let system = warp::usable(code)?;
+    let unit = warp::metres_per_unit(code);
     let mut out = Vec::new();
     // (Every one read, in any order: the coarsest are kept.)
     for m in children(tms, "TileMatrix") {
@@ -1117,23 +1156,31 @@ fn native_matrices(tms: &Node) -> Option<(u16, crate::raster::Crs, Vec<RawMatrix
         let u = |k: &str| child_text(&m, k).and_then(|t| t.trim().parse::<u32>().ok()).filter(|v| *v > 0);
         let corner: Vec<f64> = child_text(&m, "TopLeftCorner")?.split_whitespace().filter_map(|t| t.parse().ok()).collect();
         let [a, b] = corner.as_slice() else { return None };
-        out.push(RawMatrix {
+        let raw = RawMatrix {
             id: child_text(&m, "Identifier")?,
             scale: n("ScaleDenominator").filter(|v| *v > 0.0)?,
             corner: (*a, *b),
             tile: (u("TileWidth").unwrap_or(256), u("TileHeight").unwrap_or(256)),
             size: (u("MatrixWidth")?, u("MatrixHeight")?),
-        });
+        };
+        // Only one RustGIS can draw counts towards `MAX_MATRICES`.
+        if warp::Matrix::from_scale(raw.id.clone(), raw.scale, unit, raw.corner, raw.tile, raw.size).is_some() {
+            out.push(raw);
+        }
     }
-    // Coarsest first; past `MAX_MATRICES` the middle goes, the coarsest half kept for a wide
-    // view and the finest half for a close one. (The corners' order is settled per layer,
-    // against its area.)
+    // Coarsest first. (Each layer keeps those its limits name, at most `MAX_MATRICES`; the
+    // corners' order is settled per layer, against its area.)
     out.sort_by(|a, b| b.scale.total_cmp(&a.scale));
-    let (coarse, len) = (warp::MAX_MATRICES / 2, out.len());
-    if len > warp::MAX_MATRICES {
-        out.drain(coarse..len - (warp::MAX_MATRICES - coarse));
-    }
     (!out.is_empty()).then_some((u16::try_from(code).ok()?, system, out))
+}
+
+/// Past `MAX_MATRICES` the middle of `ms` (coarsest first) goes, the coarsest half kept for a
+/// wide view and the finest half for a close one.
+fn keep_matrices<T>(ms: &mut Vec<T>) {
+    let (coarse, len) = (warp::MAX_MATRICES / 2, ms.len());
+    if len > warp::MAX_MATRICES {
+        ms.drain(coarse..len - (warp::MAX_MATRICES - coarse));
+    }
 }
 
 fn wmts(url: &str, root: &Node) -> Service {
@@ -1197,15 +1244,20 @@ fn wmts(url: &str, root: &Node) -> Service {
                 let geographic = system.is_geographic();
                 // (A geographic one's too: a service may write its corner either way round.)
                 let area = bbox.and_then(|b| warp::native_box(&*warp::transformer(u32::from(*code))?, b));
+                // Only the matrices the layer's link limits it to (WMTS 1.0.0 §7.2.4.6.3), when it does.
+                let limited = wmts_limits(&layer, set);
+                let mut raw: Vec<&RawMatrix> = raw.iter().filter(|m| limited.is_empty() || limited.contains(&m.id)).collect();
+                keep_matrices(&mut raw);
+                let unit = warp::metres_per_unit(u32::from(*code));
                 let first = raw.first()?;
-                let m = warp::Matrix::from_scale(first.id.clone(), first.scale, geographic, first.corner, first.tile, first.size)?;
+                let m = warp::Matrix::from_scale(first.id.clone(), first.scale, unit, first.corner, first.tile, first.size)?;
                 let span = (m.cell * f64::from(m.tile_w) * f64::from(m.cols), m.cell * f64::from(m.tile_h) * f64::from(m.rows));
                 let swap = !*crs84 && warp::corner_north_first(first.corner, span, area, geographic);
                 let matrices: Vec<warp::Matrix> = raw
                     .iter()
                     .filter_map(|m| {
                         let corner = if swap { (m.corner.1, m.corner.0) } else { m.corner };
-                        warp::Matrix::from_scale(m.id.clone(), m.scale, geographic, corner, m.tile, m.size)
+                        warp::Matrix::from_scale(m.id.clone(), m.scale, unit, corner, m.tile, m.size)
                     })
                     .collect();
                 (!matrices.is_empty())
@@ -1278,7 +1330,7 @@ fn wmts(url: &str, root: &Node) -> Service {
         };
         // An address in another system no longer than a tile layer keeps (a set of a great many
         // matrices, in its fragment).
-        if native.is_some() && template.len() > 4096 {
+        if native.is_some() && template.len() > MAX_ADDRESS {
             too_long += 1;
             continue;
         }

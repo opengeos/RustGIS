@@ -34,10 +34,18 @@ pub fn transformer(epsg: u16) -> Option<Arc<Transformer>> {
     rustgis_data::ogc::warp::transformer(u32::from(epsg))
 }
 
-/// Map tiles made without a picture that failed for now, kept a while so they aren't made again
-/// for every frame drawn meanwhile: when each was made, and it.
-const FOR_NOW: web_time::Duration = web_time::Duration::from_secs(10);
-const MAX_FOR_NOW: usize = 1024;
+/// Map tiles made without a picture that failed, kept a while so they aren't made again for
+/// every frame drawn meanwhile: when each was made, and it. As long as the cache keeps the
+/// failure before asking again (a 256 × 256 tile is 256 KiB: at most 64 MiB of them).
+const FOR_NOW: web_time::Duration = cache::RETRY;
+const MAX_FOR_NOW: usize = 256;
+
+/// Forgets the tiles made without a picture that failed, and the plans kept: the pictures are
+/// asked for again ([`cache::clear`], after a login).
+pub(crate) fn forget() {
+    made_for_now().lock().unwrap_or_else(|e| e.into_inner()).clear();
+    plans().lock().unwrap_or_else(|e| e.into_inner()).clear();
+}
 
 fn made_for_now() -> &'static Mutex<HashMap<String, (web_time::Instant, Arc<Payload>)>> {
     static KEPT: OnceLock<Mutex<HashMap<String, (web_time::Instant, Arc<Payload>)>>> = OnceLock::new();
@@ -59,15 +67,16 @@ pub(crate) enum Made {
     Waiting,
     /// Made, to keep.
     Done(Payload),
-    /// Made without a picture that failed for now (the service may answer later): shown, not
-    /// kept in the cache, and made again a little later ([`FOR_NOW`]).
+    /// Made without a picture that failed (the service may answer when asked again): shown, not
+    /// kept in the cache, and made again once the picture is asked for again ([`FOR_NOW`]).
     ForNow(Arc<Payload>),
     Failed(String),
 }
 
 /// The map tile `url` names, made from its pictures when they are all in the cache (asking for
-/// those that aren't). A picture the service doesn't have (a WMTS tile past its matrix, a 4xx
-/// other than 429) or that can't be read is left clear; with none, the tile fails.
+/// those that aren't). A picture the service doesn't have (a WMTS tile past its matrix, see
+/// [`missing`]) is left clear, and one that failed otherwise too, the tile made again once it is
+/// asked for again; with none at all, the tile fails.
 pub(crate) fn make(url: &str) -> Made {
     if let Some((at, tile)) = made_for_now().lock().unwrap_or_else(|e| e.into_inner()).get(url)
         && at.elapsed() < FOR_NOW
@@ -90,13 +99,12 @@ pub(crate) fn make(url: &str) -> Made {
         return Made::Done(Payload::Empty);
     }
     let mut pictures = Vec::with_capacity(plan.parts.len());
-    let (mut waiting, mut error, mut for_now) = (false, None, false);
+    let (mut waiting, mut error) = (false, None);
     for p in &plan.parts {
         match cache::get(&p.url, Want::Image) {
             State::Ready(payload) => pictures.push(Some(payload)),
             State::Pending => waiting = true,
             State::Failed(e) => {
-                for_now |= transient(&e);
                 // A picture the service doesn't have is left clear, not the layer's error.
                 if !missing(&e) {
                     error = Some(e);
@@ -105,7 +113,10 @@ pub(crate) fn make(url: &str) -> Made {
             }
         }
     }
-    // Kept while the tile is made again: its pictures on their way, or one failed for now.
+    // A picture that failed leaves a hole: the tile isn't kept with it, and is made again once
+    // the picture is asked for again. (With none there, the tile fails, as the cache keeps.)
+    let for_now = error.is_some() && pictures.iter().any(Option::is_some);
+    // Kept while the tile is made again: its pictures on their way, or one failed.
     let mut known = plans().lock().unwrap_or_else(|e| e.into_inner());
     if waiting || for_now {
         if known.len() >= MAX_PLANS {
@@ -146,20 +157,6 @@ pub(crate) fn make(url: &str) -> Made {
 /// login (401, 403), a timeout (408) or too many requests (429). Such a picture is left clear.
 pub fn missing(error: &str) -> bool {
     cache::http_status(error).is_some_and(|s| (400..500).contains(&s) && !matches!(s, 401 | 403 | 408 | 429))
-}
-
-/// Whether a picture's failure may pass (the service answers later): a timeout (408), too many requests (429), a
-/// server error (5xx), or the network (a timeout, a connection); not a picture the service
-/// doesn't have (another 4xx) or one it answered that can't be read.
-fn transient(error: &str) -> bool {
-    match cache::http_status(error) {
-        // A request timeout (408) may be repeated too (RFC 9110 §15.5.9).
-        Some(s) => s == 408 || s == 429 || s >= 500,
-        None => {
-            let e = error.to_ascii_lowercase();
-            ["timed out", "timeout", "connect", "network", "reset", "dns", "unreachable", "sending request"].iter().any(|w| e.contains(w))
-        }
-    }
 }
 
 /// The map tile, `size` pixels a side, from the plan's pictures (`pictures[i]` is its part `i`'s):
@@ -250,10 +247,7 @@ mod tests {
     use rustgis_data::ogc::warp::{Matrix, Part};
 
     #[test]
-    fn failures_that_pass() {
-        assert!(transient("http status: 503") && transient("http status: 429") && transient("http status: 408"));
-        assert!(transient("operation timed out"));
-        assert!(!transient("http status: 404") && !transient("a picture of the wrong size") && !transient("not an image"));
+    fn pictures_a_service_does_not_have() {
         assert!(missing("http status: 404") && !missing("http status: 429") && !missing("http status: 503") && !missing("not an image"));
         assert!(!missing("http status: 401") && !missing("http status: 403"), "a refused login is an error, not a gap");
     }

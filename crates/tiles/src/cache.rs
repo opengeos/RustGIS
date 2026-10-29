@@ -62,7 +62,7 @@ type ImageDecoder = Box<dyn Fn(Vec<u8>, Decoded) + Send + Sync>;
 /// Bytes the cache keeps before dropping the least recently used entries.
 const BUDGET: usize = if cfg!(target_arch = "wasm32") { 160 << 20 } else { 384 << 20 };
 /// A failed address is tried again after this long.
-const RETRY: Duration = Duration::from_secs(60);
+pub(crate) const RETRY: Duration = Duration::from_secs(60);
 /// The largest tile or document fetched.
 pub const MAX_BYTES: usize = 16 << 20;
 /// The error a fetcher gives a request it dropped unfetched (the view moved on): the address is
@@ -242,6 +242,7 @@ pub fn clear() {
     crate::pmtiles::forget();
     crate::mbtiles::forget();
     crate::cog::forget();
+    crate::warp::forget();
     rustgis_data::source::remote::forget();
     GENERATION.fetch_add(1, Ordering::Relaxed);
 }
@@ -278,6 +279,8 @@ pub fn forget(url: &str) {
     drop(c);
     crate::pmtiles::forget_archive(url);
     crate::cog::forget_file(url);
+    // (A map tile made from its pictures names the service with more after it: all are made again.)
+    crate::warp::forget();
     rustgis_data::source::remote::forget_file(url);
     GENERATION.fetch_add(1, Ordering::Relaxed);
 }

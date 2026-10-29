@@ -41,6 +41,25 @@ pub const MAX_MATRICES: usize = 40;
 /// count a degree as this long).
 const METRES_PER_DEGREE: f64 = 2.0 * std::f64::consts::PI * 6_378_137.0 / 360.0;
 
+/// Metres in a unit of the system `epsg`: [`METRES_PER_DEGREE`] in a geographic one, else as its
+/// definition gives it (a US survey foot's 1200/3937 in a State Plane system), else 1.
+pub fn metres_per_unit(epsg: u32) -> f64 {
+    let Some(crs) = Crs::from_epsg(epsg) else { return 1.0 };
+    if crs.is_geographic() {
+        return METRES_PER_DEGREE;
+    }
+    let def = u16::try_from(epsg).ok().and_then(crate::raster::crs::epsg_proj4).unwrap_or_default();
+    def.split_whitespace()
+        .find_map(|p| match p.split_once('=')? {
+            ("+to_meter", v) => v.parse::<f64>().ok().filter(|m| m.is_finite() && *m > 0.0),
+            ("+units", "us-ft") => Some(1200.0 / 3937.0),
+            ("+units", "ft") => Some(0.3048),
+            ("+units", "link") => Some(0.201_168),
+            _ => None,
+        })
+        .unwrap_or(1.0)
+}
+
 /// One matrix of a WMTS tile matrix set, in the layer's system.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Matrix {
@@ -59,9 +78,9 @@ pub struct Matrix {
 
 impl Matrix {
     /// A matrix as its capabilities give it: its scale denominator (OGC's 0.28 mm pixels) in a
-    /// system whose units are degrees (`degrees`) or metres.
-    pub fn from_scale(id: String, scale: f64, degrees: bool, corner: (f64, f64), tile: (u32, u32), size: (u32, u32)) -> Option<Matrix> {
-        let cell = scale * 0.000_28 / if degrees { METRES_PER_DEGREE } else { 1.0 };
+    /// system whose unit is `unit` metres (see [`metres_per_unit`]).
+    pub fn from_scale(id: String, scale: f64, unit: f64, corner: (f64, f64), tile: (u32, u32), size: (u32, u32)) -> Option<Matrix> {
+        let cell = scale * 0.000_28 / unit;
         let ok = cell.is_finite() && cell > 0.0 && corner.0.is_finite() && corner.1.is_finite();
         let fits = (1..=4096).contains(&tile.0) && (1..=4096).contains(&tile.1) && size.0 > 0 && size.1 > 0;
         (ok && fits && !id.is_empty() && id.len() <= 64).then_some(Matrix {
@@ -139,14 +158,15 @@ pub fn usable(epsg: u32) -> Option<Crs> {
     (crs != Crs::WebMercator && transformer(epsg).is_some()).then_some(crs)
 }
 
-/// A longitude/latitude box (west, south, east, north) in a system: the bounds of its edges
-/// worked out there, a few points along each (a projected box's corners aren't its extremes).
+/// A longitude/latitude box (west, south, east, north) in a system: the bounds of a grid of
+/// points over it worked out there (a projected box's corners aren't its extremes, and a world's
+/// edges meet at the poles and the antimeridian: its inside says where it is).
 pub fn native_box(t: &Transformer, [w, s, e, n]: [f64; 4]) -> Option<[f64; 4]> {
     let mut out: Option<[f64; 4]> = None;
     for i in 0..=8 {
-        let f = f64::from(i) / 8.0;
-        for (x, y) in [(w + (e - w) * f, s), (w + (e - w) * f, n), (w, s + (n - s) * f), (e, s + (n - s) * f)] {
-            if let Some(c) = t.from_lonlat(Coord::new(x, y)) {
+        for j in 0..=8 {
+            let (x, y) = (w + (e - w) * f64::from(i) / 8.0, s + (n - s) * f64::from(j) / 8.0);
+            if let Some(c) = t.from_lonlat(Coord::new(x, y)).filter(|c| c.x.is_finite() && c.y.is_finite()) {
                 out = Some(out.map_or([c.x, c.y, c.x, c.y], |b| [b[0].min(c.x), b[1].min(c.y), b[2].max(c.x), b[3].max(c.y)]));
             }
         }
@@ -296,8 +316,8 @@ impl Warp {
     pub fn zooms(&self) -> Option<(u8, u8)> {
         let Grid::Tiles(ms) = &self.grid else { return None };
         let (coarsest, finest) = (ms.first()?, ms.last()?);
-        let degrees = usable(u32::from(self.epsg)).is_some_and(|c| c.is_geographic());
-        let metres = |cell: f64| cell * if degrees { METRES_PER_DEGREE } else { 1.0 };
+        let unit = metres_per_unit(u32::from(self.epsg));
+        let metres = |cell: f64| cell * unit;
         // Web Mercator's pixel at zoom 0, 256 to a tile.
         let z0 = 2.0 * std::f64::consts::PI * 6_378_137.0 / 256.0;
         let zoom = |res: f64| (z0 / res).log2();
@@ -537,8 +557,7 @@ mod tests {
 
     #[test]
     fn addresses_round_trip() {
-        let m =
-            Matrix::from_scale("EPSG:2056:20|x".into(), 3571.4285714, false, (2_420_000.0, 1_350_000.0), (256, 256), (938, 625)).unwrap();
+        let m = Matrix::from_scale("EPSG:2056:20|x".into(), 3571.4285714, 1.0, (2_420_000.0, 1_350_000.0), (256, 256), (938, 625)).unwrap();
         assert!((m.cell - 1.0).abs() < 1e-6, "{}", m.cell);
         let w = Warp { epsg: 2056, grid: Grid::Tiles(vec![m.clone()]), area: Some([5.9, 45.8, 10.5, 47.8]), systems: Vec::new() };
         let address = w.address("https://t.example.org/{nm}/{nrow}/{ncol}.png");
@@ -561,6 +580,12 @@ mod tests {
         assert!(Warp::parse("https://x.example.org/{z}/{x}/{y}.png").is_none());
         assert!(Warp::parse("https://x.example.org/a#rustgis-warp=1/0/0;crs=2056").is_none(), "no layout");
         assert_eq!(matrix_in_address("EPSG:2056:{ncol}/a b"), "EPSG:2056:%7Bncol%7D%2Fa%20b");
+        // A world's box in Europe's LAEA reaches west of its centre (10° E): Iberia is in it.
+        let world = native_box(&transformer(3035).unwrap(), [-180.0, -90.0, 180.0, 90.0]).unwrap();
+        assert!(world[0] < 3_000_000.0 && world[2] > 5_500_000.0, "{world:?}");
+        // A State Plane system in US survey feet: its cells in feet.
+        assert!((metres_per_unit(2264) - 1200.0 / 3937.0).abs() < 1e-12, "{}", metres_per_unit(2264));
+        assert!((metres_per_unit(2056) - 1.0).abs() < 1e-12 && (metres_per_unit(4326) - METRES_PER_DEGREE).abs() < 1e-6);
     }
 
     /// A map tile over Bern, from swisstopo's LV95 (EPSG:2056) matrices: the one nearest its
