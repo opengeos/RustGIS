@@ -1839,6 +1839,11 @@ pub struct LabelClass {
     /// Where a label sits relative to its feature.
     #[serde(default)]
     pub placement: LabelPlacement,
+    /// A point's label taken by another tries the other places round the point
+    /// ([`LabelPlacement::alternatives`]) before it is left out (#1011). Off by default: placed
+    /// elsewhere, a label may take the place another has today.
+    #[serde(default, deserialize_with = "de_flag", skip_serializing_if = "std::ops::Not::not")]
+    pub other_positions: bool,
     /// Slanted (an italic face where the font has one).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub italic: bool,
@@ -2040,6 +2045,11 @@ fn de_label_offset<'de, D: serde::Deserializer<'de>>(d: D) -> Result<[f32; 2], D
 
 fn is_no_offset(o: &[f32; 2]) -> bool {
     *o == [0.0; 2]
+}
+
+/// A switch that is on only when it says `true`.
+fn de_flag<'de, D: serde::Deserializer<'de>>(d: D) -> Result<bool, D::Error> {
+    Ok(lenient::<D, bool>(d)? == Some(true))
 }
 
 /// A label's background, kept within its ranges; one that isn't a background is none.
@@ -2248,6 +2258,24 @@ impl LabelPlacement {
             LabelPlacement::BelowLeft => (-dx, dy),
         }
     }
+
+    /// The places round a point a label tries after this one, when [`LabelClass::other_positions`]
+    /// is on: in QGIS's cartographic order (its `DEFAULT_PLACEMENT_ORDER`), corners first, this
+    /// one left out.
+    pub fn alternatives(self) -> impl Iterator<Item = LabelPlacement> {
+        [
+            LabelPlacement::AboveRight,
+            LabelPlacement::AboveLeft,
+            LabelPlacement::BelowRight,
+            LabelPlacement::BelowLeft,
+            LabelPlacement::Right,
+            LabelPlacement::Left,
+            LabelPlacement::Above,
+            LabelPlacement::Below,
+        ]
+        .into_iter()
+        .filter(move |p| *p != self)
+    }
 }
 
 impl LabelClass {
@@ -2275,6 +2303,7 @@ impl LabelClass {
             closest: None,
             farthest: None,
             placement: LabelPlacement::Auto,
+            other_positions: false,
             italic: false,
             font: None,
             halo_color: None,
@@ -2582,6 +2611,44 @@ mod tests {
         // Grown with its label.
         let g = want.scaled(2.0);
         assert_eq!((g.stroke_width, g.padding, g.radius, g.fill), (0.56, [2.44, 0.56], 1.42, want.fill));
+    }
+
+    /// Going round the point is off for a label saved before it, and written only when on; a
+    /// crafted value is off and the rest of the labels still read (#1011).
+    #[test]
+    fn other_positions_are_kept_and_old_labels_save_as_before() {
+        let base = serde_json::json!({"enabled": true, "field": "name", "size": 9.0, "color": [0, 0, 0, 255], "halo": true, "bold": false});
+        let read = |extra: serde_json::Value| {
+            let mut v = base.clone();
+            if let (Some(o), Some(e)) = (v.as_object_mut(), extra.as_object()) {
+                o.extend(e.clone());
+            }
+            serde_json::from_value::<Labeling>(v).unwrap()
+        };
+        let old = read(serde_json::json!({}));
+        assert!(!old.default.other_positions);
+        assert!(serde_json::to_value(&old).unwrap().get("other_positions").is_none());
+        let on = read(serde_json::json!({"other_positions": true}));
+        assert!(on.default.other_positions);
+        assert_eq!(serde_json::from_value::<Labeling>(serde_json::to_value(&on).unwrap()).unwrap(), on);
+        let junk = read(serde_json::json!({"other_positions": "yes"}));
+        assert!(!junk.default.other_positions);
+        assert_eq!(junk.default.field, "name");
+    }
+
+    /// The places a label tries after its own: QGIS's cartographic order, its own left out.
+    #[test]
+    fn label_alternatives_go_round_the_point() {
+        use LabelPlacement::*;
+        let all = [AboveRight, AboveLeft, BelowRight, BelowLeft, Right, Left, Above, Below];
+        for p in [Auto, Center, Parallel, Curved] {
+            assert_eq!(p.alternatives().collect::<Vec<_>>(), all, "{p:?}");
+        }
+        assert_eq!(BelowRight.alternatives().collect::<Vec<_>>(), [AboveRight, AboveLeft, BelowLeft, Right, Left, Above, Below]);
+        for p in all {
+            assert_eq!(p.alternatives().count(), 7);
+            assert!(!p.alternatives().any(|a| a == p));
+        }
     }
 
     /// The shapes are written as they always were; a character with its family, which a crafted

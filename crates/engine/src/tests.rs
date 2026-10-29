@@ -2309,11 +2309,15 @@ fn label_range_placement_lock_and_convert() {
     s.run("labels.lock", &json!({"on": false})).unwrap();
     count(&mut s);
     assert!(s.map().label_lock.is_none());
-    // Convert makes an annotation layer and turns the source's labels off.
+    // Convert makes an annotation layer and turns the source's labels off; its labels stay on
+    // their points, even when the source's went round them (#1011).
+    let countries = s.map().layer_by_name("Countries").unwrap().id;
+    s.map_mut().layer_mut(countries).unwrap().labels.default.other_positions = true;
     let r = s.run("labels.convert", &json!({"layer": "Countries"})).unwrap();
     assert!(r["annotations"].as_u64().unwrap() > 100);
     let a = s.map().layer_by_name("Countries Annotation").unwrap();
     assert!(a.labels.enabled && a.labels.default.field == "TEXT");
+    assert!(!a.labels.default.other_positions);
     assert!(!s.map().layer_by_name("Countries").unwrap().labels.enabled);
 }
 
@@ -2508,6 +2512,39 @@ fn labels_take_an_offset_and_a_background() {
     let text = serde_json::to_string(&s.project).unwrap();
     let reopened = Session::new(serde_json::from_str(&text).unwrap());
     assert_eq!(class(&reopened), class(&s));
+}
+
+/// A lock names the place round its point a label took by its number among its class's (#1011): a
+/// class trying the others locks the labels again when its position changes, not when its offset
+/// does; one that doesn't keeps the lock, as before.
+#[test]
+fn a_change_to_where_point_labels_go_locks_them_again() {
+    use crate::render::View;
+    let mut s = world();
+    s.run("labels.enable", &json!({"layer": "Cities", "on": true})).unwrap();
+    s.run("labels.lock", &json!({"on": true})).unwrap();
+    let draw = |s: &mut Session| {
+        let v = View { width: 800.0, height: 600.0, pixels_per_point: 1.0, camera: s.map().camera, sky: false };
+        crate::render::render(s.map_mut(), &v).unwrap();
+    };
+    draw(&mut s);
+    s.run("labels.placement", &json!({"layer": "Cities", "position": "below"})).unwrap();
+    assert!(s.map().label_lock.is_some(), "no class tries other places: the lock is kept");
+    let id = s.map().layer_by_name("Cities").unwrap().id;
+    s.map_mut().layer_mut(id).unwrap().labels.default.other_positions = true;
+    s.run("labels.placement", &json!({"layer": "Cities", "offset": [2, 2]})).unwrap();
+    assert!(s.map().label_lock.is_some(), "an offset moves every place alike: the lock is kept");
+    s.run("labels.placement", &json!({"layer": "Cities", "position": "above"})).unwrap();
+    assert!(s.map().label_lock.is_none(), "another position: locked again");
+    draw(&mut s);
+    assert!(s.map().label_lock.is_some(), "locked on the next frame");
+    // A style applied counts its classes' places too.
+    s.run("style.new", &json!({"layer": "Cities", "name": "Above"})).unwrap();
+    s.run("labels.placement", &json!({"layer": "Cities", "position": "below"})).unwrap();
+    draw(&mut s);
+    assert!(s.map().label_lock.is_some());
+    s.run("style.apply", &json!({"layer": "Cities", "name": "Above"})).unwrap();
+    assert!(s.map().label_lock.is_none(), "a style putting the labels elsewhere: locked again");
 }
 
 /// A lock names each label by its class's place in the list: a change to the list (a class added,
@@ -9178,6 +9215,9 @@ fn service_times_and_directories() {
         ]
     );
     assert!(s.run("service.add", &json!({"url": url, "layer": "TC", "text": WMTS, "time": "../../etc"})).is_err());
+    // Its matrices are zooms 0 and 1: past them its tiles are stretched, not asked for.
+    assert!(s.map().tiles.iter().all(|t| (t.min_zoom, t.max_zoom) == (0, 1)));
+    assert_eq!((v["layers"][0]["minZoom"].as_u64(), v["layers"][0]["maxZoom"].as_u64()), (Some(0), Some(1)));
     // A directory: its folders and services, each opened by its own address.
     let root = "https://x.example.org/arcgis/rest/services";
     let dir = r#"{"currentVersion": 11, "folders": ["Hydro"], "services": [{"name": "Topo", "type": "MapServer"}]}"#;
@@ -9330,6 +9370,7 @@ fn wms_layers_with_time() {
 <Layer><Name>decades</Name><Title>Decades</Title><Dimension name="time" units="ISO8601" default="2020" multipleValues="1">1990/2020/P10Y</Dimension></Layer>
 <Layer><Name>roads</Name><Title>Roads</Title></Layer>
 <Layer><Name>now</Name><Title>Now</Title><Dimension name="time" units="ISO8601" default="current">current</Dimension></Layer>
+<Layer><Name>once</Name><Title>Once</Title><Dimension name="time" units="ISO8601" default="1946">1946</Dimension></Layer>
 </Layer></Capability></WMS_Capabilities>"#;
     let mut s = Session::new(Project::default());
     let url = "https://maps.example.com/wms";
@@ -9432,7 +9473,15 @@ fn wms_layers_with_time() {
     assert!(named.map().time.is_none() && tile(&named, "Now").ends_with("&TIME=current"), "{}", tile(&named, "Now"));
     // Asked to follow the slider, such a layer can't: it says so.
     let e = named.run("service.add", &json!({"url": url, "layer": "now", "text": WMS, "time": "slider"})).unwrap_err();
-    assert!(e.contains("aren't dates the time slider can step to"), "{e}");
+    assert!(e.contains("lists only one time, current"), "{e}");
+    // A layer with one time, a name or a date, is listed and added as a plain map, at that time.
+    let v = named.run("service.layers", &json!({"url": url, "text": WMS})).unwrap();
+    let listed =
+        |name: &str| v["layers"].as_array().unwrap().iter().find(|l| l["name"] == name).unwrap_or_else(|| panic!("{name}")).clone();
+    assert!(listed("now").get("time").is_none() && listed("once").get("time").is_none(), "{v}");
+    assert_eq!(listed("population")["time"]["default"], "2025");
+    named.run("service.add", &json!({"url": url, "layer": "once", "text": WMS})).unwrap();
+    assert!(named.map().time.is_none() && tile(&named, "Once").ends_with("&TIME=1946"), "{}", tile(&named, "Once"));
     // A year as a number is that time; an empty time, the service's default; anything else, refused.
     let mut given = Session::new(Project::default());
     given.run("service.add", &json!({"url": url, "layer": "population", "text": WMS, "time": 1990})).unwrap();
@@ -16380,7 +16429,7 @@ fn ogc_group_refresh_keeps_children_across_rotated_keys_and_rejects_bad_answers(
     let group = added["group"].clone();
     let ids: Vec<u32> = s.map().service_groups[0].children.iter().map(|c| c.layer).collect();
     s.run("layer.rename", &json!({"layer":ids[0], "name":"Renamed"})).unwrap();
-    s.map_mut().label_lock = Some(vec![(ids[0], 0, 0, 0), (ids[1], 0, 0, 0)]);
+    s.map_mut().label_lock = Some(vec![((ids[0], 0, 0, 0), 0), ((ids[1], 0, 0, 0), 0)]);
 
     // A rotated key changes every source address but not the collections: the children stay.
     let mut q = doc("rotated-key");
@@ -19395,6 +19444,79 @@ impl Drop for GpkgRegressionFixture {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.dir);
     }
+}
+
+/// Whole reads must refuse an oversized provider instead of returning its capped sample (#1108).
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn oversized_geopackage_refuses_whole_reads_but_can_stream() {
+    use rustgis_data::{Dataset, Geometry, GeometryType, source::MAX_LIMIT};
+
+    let fixture = GpkgRegressionFixture::new("whole-read-limit");
+    let path = fixture.path();
+    let count = MAX_LIMIT + 1;
+    let db = rusqlite::Connection::open(&path).unwrap();
+    // A single SQLite statement generates the rows without keeping millions of features in Rust.
+    // The compact, valid point blob omits the optional envelope to keep this fixture small.
+    let mut blob = b"GP\x00\x01".to_vec();
+    blob.extend_from_slice(&4326i32.to_le_bytes());
+    blob.extend(rustgis_data::wkb::encode(&Geometry::Point(rustgis_geom::Coord::new(1.0, 20.0))));
+    db.execute_batch(
+        "DELETE FROM roads;
+         UPDATE gpkg_contents SET min_x=1, max_x=1, min_y=20, max_y=20 WHERE table_name='roads';",
+    )
+    .unwrap();
+    assert_eq!(
+        db.execute(
+            "WITH RECURSIVE rows(fid) AS (SELECT 1 UNION ALL SELECT fid+1 FROM rows WHERE fid<?1)
+             INSERT INTO roads(fid, geom) SELECT fid, ?2 FROM rows",
+            rusqlite::params![count as i64, blob],
+        )
+        .unwrap(),
+        count
+    );
+    drop(db);
+    let assert_limit = |error: &str| {
+        assert!(error.contains(&count.to_string()), "missing source count: {error}");
+        assert!(error.contains(&MAX_LIMIT.to_string()), "missing whole-read limit: {error}");
+    };
+
+    let mut s = Session::new(Project::default());
+    let error = s.run("layer.addData", &json!({"path": path, "stream": false})).unwrap_err();
+    assert_limit(&error);
+    assert!(s.map().layers.is_empty(), "a refused read must not add a partial layer");
+
+    // A real file input to merge must fail even when the map already has a usable input layer.
+    let mut initial = Dataset::new("Initial", GeometryType::Point, vec![]);
+    initial.push_next(Some(Geometry::Point(rustgis_geom::Coord::new(0.0, 0.0))), vec![]);
+    let initial_id = s.map_mut().add_dataset(initial);
+    let error = s.run("gp.run", &json!({"tool": "merge", "params": {"inputs": [path], "output": "Merged"}})).unwrap_err();
+    assert_limit(&error);
+    assert_eq!(s.map().layers.len(), 1);
+    assert!(s.map().layer_by_name("Merged").is_none());
+    assert_eq!(s.map().layer(initial_id).unwrap().dataset.features.len(), 1);
+
+    let loaded = s.run("layer.addData", &json!({"path": path, "stream": true})).unwrap();
+    assert_eq!(loaded["features"].as_u64(), Some(count as u64));
+    let id = loaded["layer"].as_u64().unwrap() as u32;
+    assert!(s.map().layer(id).unwrap().is_streamed());
+    let resident = s.map().layer(id).unwrap().dataset.features.len();
+    assert!(resident < count);
+    let error = s.run("layer.loadAll", &json!({"layer": id})).unwrap_err();
+    assert_limit(&error);
+    assert!(s.map().layer(id).unwrap().is_streamed());
+    assert_eq!(s.map().layer(id).unwrap().dataset.features.len(), resident);
+
+    let output = fixture.dir.join("refused.geojson");
+    let error = s.run("share.exportLayer", &json!({"layer": id, "path": output})).unwrap_err();
+    assert_limit(&error);
+    assert!(!output.exists(), "a refused export must not write a partial file");
+    assert!(s.map().layer(id).unwrap().is_streamed());
+    assert_eq!(s.map().layer(id).unwrap().dataset.features.len(), resident);
+    assert_eq!(s.map().layers.len(), 2);
+
+    assert_limit(&rustgis_data::io::read_path(&path).unwrap_err().to_string());
+    assert_limit(&rustgis_data::io::read_owned("oversized.gpkg", std::fs::read(&path).unwrap()).unwrap_err().to_string());
 }
 
 #[cfg(not(target_arch = "wasm32"))]

@@ -31,16 +31,16 @@ fn z(r: &Raster, data: &[f32], col: i64, row: i64) -> Option<f32> {
 }
 
 /// The surface gradient (dz/dx east, dz/dy north) at a cell (Horn's method), in metres per metre.
-fn gradient(r: &Raster, data: &[f32], col: i64, row: i64, zf: f64) -> Option<(f64, f64)> {
-    let (cx, cy) = r.cell_size_m();
+fn gradient(r: &Raster, data: &[f32], col: i64, row: i64, zf: f64, (cx, cy): (f64, f64)) -> Option<(f64, f64)> {
     let g = |dc: i64, dr: i64| z(r, data, col + dc, row + dr).or_else(|| z(r, data, col, row)).map(|v| v as f64 * zf);
     let (a, b, c) = (g(-1, -1)?, g(0, -1)?, g(1, -1)?);
     let (d, f) = (g(-1, 0)?, g(1, 0)?);
     let (gg, h, i) = (g(-1, 1)?, g(0, 1)?, g(1, 1)?);
     let dzdx = ((c + 2.0 * f + i) - (a + 2.0 * d + gg)) / (8.0 * cx);
-    // Rows run south, so north is up: the difference is top minus bottom.
+    // In a north-up grid rows run south, so the difference is top minus bottom.
     let dzdy = ((a + 2.0 * b + c) - (gg + 2.0 * h + i)) / (8.0 * cy);
-    Some((dzdx, dzdy))
+    // A grid stored bottom up (a positive pixel height) or right to left runs the other way.
+    Some((dzdx * r.transform.pixel_width.signum(), dzdy * -r.transform.pixel_height.signum()))
 }
 
 fn per_cell(r: &Raster, f: impl Fn(i64, i64) -> Option<f64>) -> Vec<f32> {
@@ -56,9 +56,10 @@ fn per_cell(r: &Raster, f: impl Fn(i64, i64) -> Option<f64>) -> Vec<f32> {
 /// Slope in degrees.
 pub fn slope(r: &Raster, b: usize, zf: f64) -> Result<Vec<f32>, String> {
     let d = band(r, b)?;
+    let cell_size = r.cell_size_m();
     Ok(per_cell(r, |c, row| {
         z(r, d, c, row)?;
-        let (gx, gy) = gradient(r, d, c, row, zf)?;
+        let (gx, gy) = gradient(r, d, c, row, zf, cell_size)?;
         Some((gx.hypot(gy)).atan().to_degrees())
     }))
 }
@@ -66,9 +67,10 @@ pub fn slope(r: &Raster, b: usize, zf: f64) -> Result<Vec<f32>, String> {
 /// Aspect: the compass direction the slope faces, in degrees (flat cells are -1).
 pub fn aspect(r: &Raster, b: usize) -> Result<Vec<f32>, String> {
     let d = band(r, b)?;
+    let cell_size = r.cell_size_m();
     Ok(per_cell(r, |c, row| {
         z(r, d, c, row)?;
-        let (gx, gy) = gradient(r, d, c, row, 1.0)?;
+        let (gx, gy) = gradient(r, d, c, row, 1.0, cell_size)?;
         if gx.abs() < 1e-12 && gy.abs() < 1e-12 {
             return Some(-1.0);
         }
@@ -81,12 +83,14 @@ pub fn aspect(r: &Raster, b: usize) -> Result<Vec<f32>, String> {
 pub fn hillshade(r: &Raster, b: usize, azimuth: f64, altitude: f64, zf: f64) -> Result<Vec<f32>, String> {
     let d = band(r, b)?;
     let (zen, az) = ((90.0 - altitude).to_radians(), azimuth.to_radians());
+    let (cos_zen, sin_zen) = (zen.cos(), zen.sin());
+    let cell_size = r.cell_size_m();
     Ok(per_cell(r, |c, row| {
         z(r, d, c, row)?;
-        let (gx, gy) = gradient(r, d, c, row, zf)?;
+        let (gx, gy) = gradient(r, d, c, row, zf, cell_size)?;
         let slope = gx.hypot(gy).atan();
         let aspect = (-gx).atan2(-gy);
-        let v = zen.cos() * slope.cos() + zen.sin() * slope.sin() * (az - aspect).cos();
+        let v = cos_zen * slope.cos() + sin_zen * slope.sin() * (az - aspect).cos();
         Some((v.max(0.0) * 255.0).round())
     }))
 }
@@ -1061,6 +1065,30 @@ mod tests {
     }
 
     #[test]
+    fn terrain_keeps_edge_and_nodata_results() {
+        let values = vec![0.0, 4.0, 3.0, 8.0, 2.0, -9999.0, 9.0, 7.0, 8.0, 5.0, 2.0, 1.0];
+        let transform = GeoTransform { origin_x: 12.0, origin_y: 45.0, pixel_width: 0.002, pixel_height: -0.001 };
+        let r = Raster::new("sample", 4, 3, vec![values], transform, Crs::LonLat, Some(-9999.0), ColorHint::Gray, "Float32")
+            .unwrap_or_else(|e| panic!("{e}"));
+        let expected_slope = [
+            0.70946753, 1.3399616, 1.4611784, 0.93366396, 2.4284103, NODATA, 0.82372725, 2.1364474, 1.4713285, 0.75683224, 1.718825,
+            2.4512568,
+        ];
+        let expected_aspect =
+            [285.89474, 305.4469, 311.66492, 288.18884, 358.39075, NODATA, 160.65001, 180.0, 7.9960175, 97.375114, 163.86998, 172.00398];
+        for (actual, expected) in
+            [(slope(&r, 0, 1.5).unwrap_or_default(), expected_slope), (aspect(&r, 0).unwrap_or_default(), expected_aspect)]
+        {
+            assert_eq!(actual.len(), expected.len());
+            assert!(actual.iter().zip(expected).all(|(a, e)| *a == e || (*a - e).abs() < 1e-4));
+        }
+        assert_eq!(
+            hillshade(&r, 0, 315.0, 45.0, 1.5).unwrap_or_default(),
+            [182.0, 184.0, 185.0, 183.0, 186.0, NODATA, 178.0, 175.0, 183.0, 178.0, 175.0, 174.0]
+        );
+    }
+
+    #[test]
     fn polygon_mask_fills_polygons_and_cuts_holes() {
         let r = ramp();
         let sq = |x0: f64, y0: f64, x1: f64, y1: f64| {
@@ -1100,6 +1128,25 @@ mod tests {
         failures.clear();
         assert!(polygon_mask_with_failures(&r, &[invalid], &mut failures).is_none());
         assert_eq!(failures, vec![0]);
+    }
+
+    #[test]
+    fn terrain_faces_the_right_way_on_a_bottom_up_grid() {
+        // Band 2 rises one per row. North up, rows run south, so the slope faces north; stored
+        // bottom up (a positive pixel height, as some COGs are), rows run north and it faces south.
+        let north_up = ramp();
+        let mut gt = north_up.transform;
+        (gt.origin_y, gt.pixel_height) = (0.0, 0.001);
+        let bands = north_up.bands.iter().map(|b| b.data.clone()).collect();
+        let bottom_up =
+            Raster::new("ramp", 20, 20, bands, gt, Crs::LonLat, None, ColorHint::Gray, "Float32").unwrap_or_else(|e| panic!("{e}"));
+        let a = aspect(&north_up, 1).unwrap_or_default();
+        assert!(a[210] < 1.0 || a[210] > 359.0, "north up faces north: {}", a[210]);
+        let a = aspect(&bottom_up, 1).unwrap_or_default();
+        assert!((a[210] - 180.0).abs() < 1.0, "bottom up faces south: {}", a[210]);
+        let lit_s = hillshade(&bottom_up, 1, 180.0, 45.0, 1.0).unwrap_or_default();
+        let lit_n = hillshade(&bottom_up, 1, 0.0, 45.0, 1.0).unwrap_or_default();
+        assert!(lit_s[210] > lit_n[210], "lit from the south the south-facing slope is brighter");
     }
 
     #[test]

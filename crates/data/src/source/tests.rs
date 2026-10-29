@@ -208,6 +208,68 @@ fn check(src: &dyn FeatureSource, expect_indexed: bool) {
 }
 
 #[test]
+fn materialize_refuses_oversized_and_incomplete_sources() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    struct Source {
+        info: SourceInfo,
+        batch: Option<Batch>,
+        read: AtomicBool,
+    }
+    impl FeatureSource for Source {
+        fn info(&self) -> &SourceInfo {
+            &self.info
+        }
+
+        fn read(&self, _: &Request) -> Result<Batch> {
+            self.read.store(true, Ordering::Relaxed);
+            self.batch.clone().ok_or_else(|| DataError::Format("read reached".into()))
+        }
+    }
+    let mut src = Source {
+        info: SourceInfo {
+            name: "large".into(),
+            format: "Test",
+            geometry_type: GeometryType::None,
+            fields: vec![],
+            extent: Extent::EMPTY,
+            count: Some(MAX_LIMIT as u64 + 1),
+            crs: "EPSG:4326".into(),
+            indexed: false,
+            notes: vec![],
+        },
+        batch: None,
+        read: AtomicBool::new(false),
+    };
+    let error = materialize(&src).unwrap_err().to_string();
+    assert!(error.contains(&(MAX_LIMIT + 1).to_string()) && error.contains(&MAX_LIMIT.to_string()), "{error}");
+    assert!(!src.read.load(Ordering::Relaxed), "an oversized source must be refused before reading");
+
+    // Exactly the limit is allowed through to the provider; no huge allocation needed to check.
+    src.info.count = Some(MAX_LIMIT as u64);
+    assert!(materialize(&src).unwrap_err().to_string().contains("read reached"));
+    assert!(src.read.load(Ordering::Relaxed));
+
+    // Unknown or stale metadata must not allow an incomplete batch to become a dataset.
+    for count in [None, Some(1)] {
+        src.info.count = count;
+        src.batch = Some(Batch { matched: MAX_LIMIT as u64 + 1, complete: false, ..Batch::default() });
+        let error = materialize(&src).unwrap_err().to_string();
+        assert!(error.contains(&(MAX_LIMIT + 1).to_string()) && error.contains(&MAX_LIMIT.to_string()), "{error}");
+    }
+    // Even an incomplete answer below the cap isn't a whole read.
+    src.batch = Some(Batch { matched: 1, complete: false, ..Batch::default() });
+    let error = materialize(&src).unwrap_err().to_string();
+    assert!(error.contains("large") && error.contains(&MAX_LIMIT.to_string()), "{error}");
+
+    // Unreadable rows reported by a complete scan still follow ReadReport's skip contract.
+    src.batch = Some(Batch { matched: 1, complete: true, skipped: 1, ..Batch::default() });
+    let (ds, report) = materialize(&src).unwrap();
+    assert!(ds.features.is_empty());
+    assert_eq!(report.skipped, 1);
+}
+
+#[test]
 fn geoparquet_with_and_without_a_covering() {
     let d = dir();
     let p = d.join("grid.parquet");
