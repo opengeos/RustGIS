@@ -89,12 +89,15 @@ pub fn silverman_bandwidth(points: &[(Coord, f64)], extent: &Extent) -> f64 {
 
     // Fallback: fraction of extent or fixed distance
     let span = extent.width().max(extent.height());
-    if span > 1e-4 { (span / 30.0).max(1e-4) } else { 1000.0 }
+    if span.is_finite() && span > 1e-4 { (span / 30.0).max(1e-4) } else { 1000.0 }
 }
 
 /// Automatically calculates cell size so the grid spans approximately 250 cells across its maximum dimension.
 pub fn auto_cell_size(extent: &Extent) -> f64 {
     let span = extent.width().max(extent.height());
+    if !span.is_finite() || span <= 0.0 {
+        return 1000.0;
+    }
     (span / DEFAULT_GRID_STEPS).max(1e-4)
 }
 
@@ -140,6 +143,9 @@ pub fn kernel_density(
             Extent::new(pt_extent.min_x - bandwidth, pt_extent.min_y - bandwidth, pt_extent.max_x + bandwidth, pt_extent.max_y + bandwidth)
         }
     };
+    if !base_extent.width().is_finite() || !base_extent.height().is_finite() || base_extent.width() <= 0.0 || base_extent.height() <= 0.0 {
+        return Err("the extent must have a positive width and height".into());
+    }
 
     let w = ((base_extent.width() / cell_size).ceil().max(1.0)) as usize;
     let h_rows = ((base_extent.height() / cell_size).ceil().max(1.0)) as usize;
@@ -199,46 +205,85 @@ pub fn kernel_density(
         }
     };
 
-    for &(p, wgt) in points {
-        if wgt <= 0.0 || !wgt.is_finite() || !p.is_finite() {
-            continue;
-        }
-
-        let col_min = (((p.x - bandwidth - origin_x) / cell_size).floor() as isize).clamp(0, (w - 1) as isize) as usize;
-        let col_max = (((p.x + bandwidth - origin_x) / cell_size).ceil() as isize).clamp(0, (w - 1) as isize) as usize;
-
-        let row_min = (((origin_y - (p.y + bandwidth)) / cell_size).floor() as isize).clamp(0, (h_rows - 1) as isize) as usize;
-        let row_max = (((origin_y - (p.y - bandwidth)) / cell_size).ceil() as isize).clamp(0, (h_rows - 1) as isize) as usize;
-
-        for row in row_min..=row_max {
-            let y_cell = origin_y - (row as f64 + 0.5) * cell_size;
-            let dy = p.y - y_cell;
-            let dy_sq = dy * dy;
-            if dy_sq >= h_sq {
-                continue;
-            }
-            let rem_sq = h_sq - dy_sq;
-            let row_offset = row * w;
-
-            for col in col_min..=col_max {
-                let x_cell = origin_x + (col as f64 + 0.5) * cell_size;
-                let dx = p.x - x_cell;
-                let dx_sq = dx * dx;
-                if dx_sq >= rem_sq {
+    match kernel_params {
+        KernelParams::Quartic { factor } => {
+            for &(p, wgt) in points {
+                if wgt <= 0.0 || !wgt.is_finite() || !p.is_finite() {
                     continue;
                 }
 
-                let d_sq = dx_sq + dy_sq;
-                let contrib = match kernel_params {
-                    KernelParams::Quartic { factor } => {
-                        let val = 1.0 - d_sq / h_sq;
-                        wgt * factor * val * val
-                    }
-                    KernelParams::Gaussian { factor, two_sigma_sq } => wgt * factor * (-d_sq / two_sigma_sq).exp(),
-                };
+                let col_min = (((p.x - bandwidth - origin_x) / cell_size).floor() as isize).clamp(0, (w - 1) as isize) as usize;
+                let col_max = (((p.x + bandwidth - origin_x) / cell_size).ceil() as isize).clamp(0, (w - 1) as isize) as usize;
 
-                if let Some(cell) = grid.get_mut(row_offset + col) {
-                    *cell += contrib as f32;
+                let row_min = (((origin_y - (p.y + bandwidth)) / cell_size).floor() as isize).clamp(0, (h_rows - 1) as isize) as usize;
+                let row_max = (((origin_y - (p.y - bandwidth)) / cell_size).ceil() as isize).clamp(0, (h_rows - 1) as isize) as usize;
+
+                for row in row_min..=row_max {
+                    let y_cell = origin_y - (row as f64 + 0.5) * cell_size;
+                    let dy = p.y - y_cell;
+                    let dy_sq = dy * dy;
+                    if dy_sq >= h_sq {
+                        continue;
+                    }
+                    let rem_sq = h_sq - dy_sq;
+                    let row_offset = row * w;
+
+                    for col in col_min..=col_max {
+                        let x_cell = origin_x + (col as f64 + 0.5) * cell_size;
+                        let dx = p.x - x_cell;
+                        let dx_sq = dx * dx;
+                        if dx_sq >= rem_sq {
+                            continue;
+                        }
+
+                        let d_sq = dx_sq + dy_sq;
+                        let val = 1.0 - d_sq / h_sq;
+                        let contrib = wgt * factor * val * val;
+
+                        if let Some(cell) = grid.get_mut(row_offset + col) {
+                            *cell += contrib as f32;
+                        }
+                    }
+                }
+            }
+        }
+        KernelParams::Gaussian { factor, two_sigma_sq } => {
+            for &(p, wgt) in points {
+                if wgt <= 0.0 || !wgt.is_finite() || !p.is_finite() {
+                    continue;
+                }
+
+                let col_min = (((p.x - bandwidth - origin_x) / cell_size).floor() as isize).clamp(0, (w - 1) as isize) as usize;
+                let col_max = (((p.x + bandwidth - origin_x) / cell_size).ceil() as isize).clamp(0, (w - 1) as isize) as usize;
+
+                let row_min = (((origin_y - (p.y + bandwidth)) / cell_size).floor() as isize).clamp(0, (h_rows - 1) as isize) as usize;
+                let row_max = (((origin_y - (p.y - bandwidth)) / cell_size).ceil() as isize).clamp(0, (h_rows - 1) as isize) as usize;
+
+                for row in row_min..=row_max {
+                    let y_cell = origin_y - (row as f64 + 0.5) * cell_size;
+                    let dy = p.y - y_cell;
+                    let dy_sq = dy * dy;
+                    if dy_sq >= h_sq {
+                        continue;
+                    }
+                    let rem_sq = h_sq - dy_sq;
+                    let row_offset = row * w;
+
+                    for col in col_min..=col_max {
+                        let x_cell = origin_x + (col as f64 + 0.5) * cell_size;
+                        let dx = p.x - x_cell;
+                        let dx_sq = dx * dx;
+                        if dx_sq >= rem_sq {
+                            continue;
+                        }
+
+                        let d_sq = dx_sq + dy_sq;
+                        let contrib = wgt * factor * (-d_sq / two_sigma_sq).exp();
+
+                        if let Some(cell) = grid.get_mut(row_offset + col) {
+                            *cell += contrib as f32;
+                        }
+                    }
                 }
             }
         }

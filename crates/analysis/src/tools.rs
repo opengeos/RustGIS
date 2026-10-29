@@ -2041,7 +2041,8 @@ fn kernel_density_tool(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String>
                 };
                 let (min_x, max_x) = (x0.min(x1), x0.max(x1));
                 let (min_y, max_y) = (y0.min(y1), y0.max(y1));
-                if !(max_x > min_x && max_y > min_y) {
+                let (w, h) = (max_x - min_x, max_y - min_y);
+                if !(max_x > min_x && max_y > min_y && w.is_finite() && h.is_finite()) {
                     return Err("the extent must have a positive width and height".into());
                 }
                 Some(Extent::new(min_x, min_y, max_x, max_y))
@@ -2057,7 +2058,8 @@ fn kernel_density_tool(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String>
             };
             let (min_x, max_x) = (x0.min(x1), x0.max(x1));
             let (min_y, max_y) = (y0.min(y1), y0.max(y1));
-            if !(max_x > min_x && max_y > min_y) {
+            let (w, h) = (max_x - min_x, max_y - min_y);
+            if !(max_x > min_x && max_y > min_y && w.is_finite() && h.is_finite()) {
                 return Err("the extent must have a positive width and height".into());
             }
             Some(Extent::new(min_x, min_y, max_x, max_y))
@@ -2068,6 +2070,9 @@ fn kernel_density_tool(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String>
     let grid_ext = custom_extent.unwrap_or_else(|| {
         Extent::new(pt_extent.min_x - bandwidth, pt_extent.min_y - bandwidth, pt_extent.max_x + bandwidth, pt_extent.max_y + bandwidth)
     });
+    if !grid_ext.width().is_finite() || !grid_ext.height().is_finite() || grid_ext.width() <= 0.0 || grid_ext.height() <= 0.0 {
+        return Err("the extent must have a positive width and height".into());
+    }
 
     let cell_size = match num(p, "pixelSize") {
         Some(c) if c > 0.0 => c,
@@ -4738,6 +4743,43 @@ mod tests {
         assert_eq!(r_multi.bands[0].data, r_two_pts.bands[0].data, "MultiPoint must match two independent point features");
         // And must differ from single point (which only contains p1)
         assert_ne!(r_multi.bands[0].data, r_single.bands[0].data, "MultiPoint must differ from single point");
+
+        // 14. Extent whose span overflows f64 must be rejected with extent error, not pixel size error
+        let err_str_overflow =
+            crate::run("kernelDensity", &m_cmp, &serde_json::json!({"input": "single", "extent": "-1e308,-1e308,1e308,1e308"}))
+                .unwrap_err();
+        assert!(
+            err_str_overflow.contains("the extent must have a positive width and height"),
+            "expected extent error, got: {err_str_overflow}"
+        );
+        assert!(
+            !err_str_overflow.contains("pixel size must be a positive number"),
+            "should not blame pixel size when user did not set one: {err_str_overflow}"
+        );
+
+        let err_arr_overflow =
+            crate::run("kernelDensity", &m_cmp, &serde_json::json!({"input": "single", "extent": [-1e308, -1e308, 1e308, 1e308]}))
+                .unwrap_err();
+        assert!(
+            err_arr_overflow.contains("the extent must have a positive width and height"),
+            "expected extent error, got: {err_arr_overflow}"
+        );
+
+        // 15. Hostile and extreme parameters must be rejected cleanly without panic
+        let hostile_cases = vec![
+            serde_json::json!({"input": "single", "radius": -100.0}),
+            serde_json::json!({"input": "single", "radius": 1e308}),
+            serde_json::json!({"input": "single", "pixelSize": -5.0}),
+            serde_json::json!({"input": "single", "pixelSize": 0.0}),
+            serde_json::json!({"input": "single", "pixelSize": 1e-12}),
+            serde_json::json!({"input": "single", "kernel": "nonexistent"}),
+            serde_json::json!({"input": "single", "extent": "0,0,10"}),
+            serde_json::json!({"input": "single", "extent": [10.0, 20.0]}),
+        ];
+        for case in hostile_cases {
+            let res = crate::run("kernelDensity", &m_cmp, &case);
+            assert!(res.is_err(), "hostile params should return Err, but got Ok");
+        }
     }
 
     #[test]
