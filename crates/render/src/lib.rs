@@ -23,6 +23,7 @@ mod picture;
 mod point_marks;
 pub mod post;
 mod raster;
+pub mod raster_export;
 pub mod report;
 mod stroke_paths;
 pub mod svg;

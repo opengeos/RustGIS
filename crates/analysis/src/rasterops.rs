@@ -31,8 +31,7 @@ fn z(r: &Raster, data: &[f32], col: i64, row: i64) -> Option<f32> {
 }
 
 /// The surface gradient (dz/dx east, dz/dy north) at a cell (Horn's method), in metres per metre.
-fn gradient(r: &Raster, data: &[f32], col: i64, row: i64, zf: f64) -> Option<(f64, f64)> {
-    let (cx, cy) = r.cell_size_m();
+fn gradient(r: &Raster, data: &[f32], col: i64, row: i64, zf: f64, (cx, cy): (f64, f64)) -> Option<(f64, f64)> {
     let g = |dc: i64, dr: i64| z(r, data, col + dc, row + dr).or_else(|| z(r, data, col, row)).map(|v| v as f64 * zf);
     let (a, b, c) = (g(-1, -1)?, g(0, -1)?, g(1, -1)?);
     let (d, f) = (g(-1, 0)?, g(1, 0)?);
@@ -56,9 +55,10 @@ fn per_cell(r: &Raster, f: impl Fn(i64, i64) -> Option<f64>) -> Vec<f32> {
 /// Slope in degrees.
 pub fn slope(r: &Raster, b: usize, zf: f64) -> Result<Vec<f32>, String> {
     let d = band(r, b)?;
+    let cell_size = r.cell_size_m();
     Ok(per_cell(r, |c, row| {
         z(r, d, c, row)?;
-        let (gx, gy) = gradient(r, d, c, row, zf)?;
+        let (gx, gy) = gradient(r, d, c, row, zf, cell_size)?;
         Some((gx.hypot(gy)).atan().to_degrees())
     }))
 }
@@ -66,9 +66,10 @@ pub fn slope(r: &Raster, b: usize, zf: f64) -> Result<Vec<f32>, String> {
 /// Aspect: the compass direction the slope faces, in degrees (flat cells are -1).
 pub fn aspect(r: &Raster, b: usize) -> Result<Vec<f32>, String> {
     let d = band(r, b)?;
+    let cell_size = r.cell_size_m();
     Ok(per_cell(r, |c, row| {
         z(r, d, c, row)?;
-        let (gx, gy) = gradient(r, d, c, row, 1.0)?;
+        let (gx, gy) = gradient(r, d, c, row, 1.0, cell_size)?;
         if gx.abs() < 1e-12 && gy.abs() < 1e-12 {
             return Some(-1.0);
         }
@@ -81,12 +82,14 @@ pub fn aspect(r: &Raster, b: usize) -> Result<Vec<f32>, String> {
 pub fn hillshade(r: &Raster, b: usize, azimuth: f64, altitude: f64, zf: f64) -> Result<Vec<f32>, String> {
     let d = band(r, b)?;
     let (zen, az) = ((90.0 - altitude).to_radians(), azimuth.to_radians());
+    let (cos_zen, sin_zen) = (zen.cos(), zen.sin());
+    let cell_size = r.cell_size_m();
     Ok(per_cell(r, |c, row| {
         z(r, d, c, row)?;
-        let (gx, gy) = gradient(r, d, c, row, zf)?;
+        let (gx, gy) = gradient(r, d, c, row, zf, cell_size)?;
         let slope = gx.hypot(gy).atan();
         let aspect = (-gx).atan2(-gy);
-        let v = zen.cos() * slope.cos() + zen.sin() * slope.sin() * (az - aspect).cos();
+        let v = cos_zen * slope.cos() + sin_zen * slope.sin() * (az - aspect).cos();
         Some((v.max(0.0) * 255.0).round())
     }))
 }
@@ -1058,6 +1061,30 @@ mod tests {
         let b: Vec<f32> = (0..w * h).map(|i| (i / w) as f32).collect();
         let gt = GeoTransform { origin_x: 0.0, origin_y: 0.02, pixel_width: 0.001, pixel_height: -0.001 };
         Raster::new("ramp", w, h, vec![a, b], gt, Crs::LonLat, None, ColorHint::Gray, "Float32").unwrap_or_else(|e| panic!("{e}"))
+    }
+
+    #[test]
+    fn terrain_keeps_edge_and_nodata_results() {
+        let values = vec![0.0, 4.0, 3.0, 8.0, 2.0, -9999.0, 9.0, 7.0, 8.0, 5.0, 2.0, 1.0];
+        let transform = GeoTransform { origin_x: 12.0, origin_y: 45.0, pixel_width: 0.002, pixel_height: -0.001 };
+        let r = Raster::new("sample", 4, 3, vec![values], transform, Crs::LonLat, Some(-9999.0), ColorHint::Gray, "Float32")
+            .unwrap_or_else(|e| panic!("{e}"));
+        let expected_slope = [
+            0.70946753, 1.3399616, 1.4611784, 0.93366396, 2.4284103, NODATA, 0.82372725, 2.1364474, 1.4713285, 0.75683224, 1.718825,
+            2.4512568,
+        ];
+        let expected_aspect =
+            [285.89474, 305.4469, 311.66492, 288.18884, 358.39075, NODATA, 160.65001, 180.0, 7.9960175, 97.375114, 163.86998, 172.00398];
+        for (actual, expected) in
+            [(slope(&r, 0, 1.5).unwrap_or_default(), expected_slope), (aspect(&r, 0).unwrap_or_default(), expected_aspect)]
+        {
+            assert_eq!(actual.len(), expected.len());
+            assert!(actual.iter().zip(expected).all(|(a, e)| *a == e || (*a - e).abs() < 1e-4));
+        }
+        assert_eq!(
+            hillshade(&r, 0, 315.0, 45.0, 1.5).unwrap_or_default(),
+            [182.0, 184.0, 185.0, 183.0, 186.0, NODATA, 178.0, 175.0, 183.0, 178.0, 175.0, 174.0]
+        );
     }
 
     #[test]

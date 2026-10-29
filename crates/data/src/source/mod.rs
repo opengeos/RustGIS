@@ -484,23 +484,40 @@ pub fn layers(path: &Path) -> Result<Vec<String>> {
     }
 }
 
-/// Reads a whole source into a dataset.
+/// Reads a whole source into a dataset, refusing sources over [`MAX_LIMIT`] and incomplete reads.
 pub fn materialize(src: &dyn FeatureSource) -> Result<(Dataset, ReadReport)> {
     let info = src.info();
+    let too_many = |n| DataError::Format(format!("{}: the layer has {n} features, more than the {MAX_LIMIT} read at once", info.name));
+    // Refuse before reading or allocating a sample when the source already knows its size.
+    if let Some(n) = info.count.filter(|n| *n > MAX_LIMIT as u64) {
+        return Err(too_many(n));
+    }
     let batch = src.read(&Request::all())?;
+    if !batch.complete {
+        if batch.matched > MAX_LIMIT as u64 {
+            return Err(too_many(batch.matched));
+        }
+        return Err(DataError::Format(format!(
+            "{}: could not read the whole source ({} of {} features; read limit {MAX_LIMIT})",
+            info.name,
+            batch.features.len(),
+            batch.matched
+        )));
+    }
+    // Preserve Load All Features' conservative refusal when the source cannot give a count.
+    if info.count.is_none() && batch.features.len() >= MAX_LIMIT {
+        return Err(DataError::Format(format!("{}: the layer has more features than the {MAX_LIMIT} read at once", info.name)));
+    }
     let mut ds = Dataset::new(info.name.clone(), info.geometry_type, info.fields.clone());
     ds.crs = info.coordinate_system();
     // A streamed Shapefile skips unconvertible shapes rather than retaining empty geometry.
     // Once materialized, it must still direct CRS repairs back to the original file.
     ds.crs_incomplete = (info.format == "Shapefile" && batch.skipped > 0) || src.lost_to_crs();
     ds.features = batch.features.into();
-    let mut report = ReadReport {
+    let report = ReadReport {
         skipped: batch.skipped + src.skipped_at_open(),
         messages: info.notes.iter().map(|n| format!("{}: {n}", info.name)).collect(),
     };
-    if !batch.complete {
-        report.messages.push(format!("{}: read a sample of {} of {} features", info.name, ds.features.len(), batch.matched));
-    }
     if ds.geometry_type == GeometryType::None
         && let Some(g) = ds.features.iter().find_map(|f| f.geometry.as_ref())
     {

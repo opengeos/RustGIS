@@ -9330,6 +9330,7 @@ fn wms_layers_with_time() {
 <Layer><Name>decades</Name><Title>Decades</Title><Dimension name="time" units="ISO8601" default="2020" multipleValues="1">1990/2020/P10Y</Dimension></Layer>
 <Layer><Name>roads</Name><Title>Roads</Title></Layer>
 <Layer><Name>now</Name><Title>Now</Title><Dimension name="time" units="ISO8601" default="current">current</Dimension></Layer>
+<Layer><Name>once</Name><Title>Once</Title><Dimension name="time" units="ISO8601" default="1946">1946</Dimension></Layer>
 </Layer></Capability></WMS_Capabilities>"#;
     let mut s = Session::new(Project::default());
     let url = "https://maps.example.com/wms";
@@ -9432,7 +9433,15 @@ fn wms_layers_with_time() {
     assert!(named.map().time.is_none() && tile(&named, "Now").ends_with("&TIME=current"), "{}", tile(&named, "Now"));
     // Asked to follow the slider, such a layer can't: it says so.
     let e = named.run("service.add", &json!({"url": url, "layer": "now", "text": WMS, "time": "slider"})).unwrap_err();
-    assert!(e.contains("aren't dates the time slider can step to"), "{e}");
+    assert!(e.contains("lists only one time, current"), "{e}");
+    // A layer with one time, a name or a date, is listed and added as a plain map, at that time.
+    let v = named.run("service.layers", &json!({"url": url, "text": WMS})).unwrap();
+    let listed =
+        |name: &str| v["layers"].as_array().unwrap().iter().find(|l| l["name"] == name).unwrap_or_else(|| panic!("{name}")).clone();
+    assert!(listed("now").get("time").is_none() && listed("once").get("time").is_none(), "{v}");
+    assert_eq!(listed("population")["time"]["default"], "2025");
+    named.run("service.add", &json!({"url": url, "layer": "once", "text": WMS})).unwrap();
+    assert!(named.map().time.is_none() && tile(&named, "Once").ends_with("&TIME=1946"), "{}", tile(&named, "Once"));
     // A year as a number is that time; an empty time, the service's default; anything else, refused.
     let mut given = Session::new(Project::default());
     given.run("service.add", &json!({"url": url, "layer": "population", "text": WMS, "time": 1990})).unwrap();
@@ -19395,6 +19404,79 @@ impl Drop for GpkgRegressionFixture {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.dir);
     }
+}
+
+/// Whole reads must refuse an oversized provider instead of returning its capped sample (#1108).
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn oversized_geopackage_refuses_whole_reads_but_can_stream() {
+    use rustgis_data::{Dataset, Geometry, GeometryType, source::MAX_LIMIT};
+
+    let fixture = GpkgRegressionFixture::new("whole-read-limit");
+    let path = fixture.path();
+    let count = MAX_LIMIT + 1;
+    let db = rusqlite::Connection::open(&path).unwrap();
+    // A single SQLite statement generates the rows without keeping millions of features in Rust.
+    // The compact, valid point blob omits the optional envelope to keep this fixture small.
+    let mut blob = b"GP\x00\x01".to_vec();
+    blob.extend_from_slice(&4326i32.to_le_bytes());
+    blob.extend(rustgis_data::wkb::encode(&Geometry::Point(rustgis_geom::Coord::new(1.0, 20.0))));
+    db.execute_batch(
+        "DELETE FROM roads;
+         UPDATE gpkg_contents SET min_x=1, max_x=1, min_y=20, max_y=20 WHERE table_name='roads';",
+    )
+    .unwrap();
+    assert_eq!(
+        db.execute(
+            "WITH RECURSIVE rows(fid) AS (SELECT 1 UNION ALL SELECT fid+1 FROM rows WHERE fid<?1)
+             INSERT INTO roads(fid, geom) SELECT fid, ?2 FROM rows",
+            rusqlite::params![count as i64, blob],
+        )
+        .unwrap(),
+        count
+    );
+    drop(db);
+    let assert_limit = |error: &str| {
+        assert!(error.contains(&count.to_string()), "missing source count: {error}");
+        assert!(error.contains(&MAX_LIMIT.to_string()), "missing whole-read limit: {error}");
+    };
+
+    let mut s = Session::new(Project::default());
+    let error = s.run("layer.addData", &json!({"path": path, "stream": false})).unwrap_err();
+    assert_limit(&error);
+    assert!(s.map().layers.is_empty(), "a refused read must not add a partial layer");
+
+    // A real file input to merge must fail even when the map already has a usable input layer.
+    let mut initial = Dataset::new("Initial", GeometryType::Point, vec![]);
+    initial.push_next(Some(Geometry::Point(rustgis_geom::Coord::new(0.0, 0.0))), vec![]);
+    let initial_id = s.map_mut().add_dataset(initial);
+    let error = s.run("gp.run", &json!({"tool": "merge", "params": {"inputs": [path], "output": "Merged"}})).unwrap_err();
+    assert_limit(&error);
+    assert_eq!(s.map().layers.len(), 1);
+    assert!(s.map().layer_by_name("Merged").is_none());
+    assert_eq!(s.map().layer(initial_id).unwrap().dataset.features.len(), 1);
+
+    let loaded = s.run("layer.addData", &json!({"path": path, "stream": true})).unwrap();
+    assert_eq!(loaded["features"].as_u64(), Some(count as u64));
+    let id = loaded["layer"].as_u64().unwrap() as u32;
+    assert!(s.map().layer(id).unwrap().is_streamed());
+    let resident = s.map().layer(id).unwrap().dataset.features.len();
+    assert!(resident < count);
+    let error = s.run("layer.loadAll", &json!({"layer": id})).unwrap_err();
+    assert_limit(&error);
+    assert!(s.map().layer(id).unwrap().is_streamed());
+    assert_eq!(s.map().layer(id).unwrap().dataset.features.len(), resident);
+
+    let output = fixture.dir.join("refused.geojson");
+    let error = s.run("share.exportLayer", &json!({"layer": id, "path": output})).unwrap_err();
+    assert_limit(&error);
+    assert!(!output.exists(), "a refused export must not write a partial file");
+    assert!(s.map().layer(id).unwrap().is_streamed());
+    assert_eq!(s.map().layer(id).unwrap().dataset.features.len(), resident);
+    assert_eq!(s.map().layers.len(), 2);
+
+    assert_limit(&rustgis_data::io::read_path(&path).unwrap_err().to_string());
+    assert_limit(&rustgis_data::io::read_owned("oversized.gpkg", std::fs::read(&path).unwrap()).unwrap_err().to_string());
 }
 
 #[cfg(not(target_arch = "wasm32"))]

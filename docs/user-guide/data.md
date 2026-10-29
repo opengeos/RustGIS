@@ -786,9 +786,15 @@ features it shows. A single feature, a bare geometry or TopoJSON is loaded whole
 
 A streamed layer works like any other for symbology, labels, pop-ups, selection and the
 attribute table (which lists the features read for the view). Geoprocessing tools, exports and
-**Load All Features** read the whole source, up to 2 million features (500,000 in the web app);
-a larger source is refused rather than processed as a sample. A tool given a streamed layer with
-a selection uses the selected features read for the view. Edits are refused, since the features are read again as the view moves: right-click the
+**Load All Features** read the whole source, up to 2 million features (500,000 in the web app;
+a source that doesn't report its feature count must have fewer than that, since a read that
+reaches the limit is refused); a larger source is refused rather than processed as a sample. A
+GeoPackage, GeoParquet, FlatGeobuf or LAS/LAZ file is refused the same way when added without
+streaming (`layer.addData` with `"stream": false`) or given to a geoprocessing tool as a file
+path. If the source's feature count is known, an oversized whole read is refused before reading
+its features; an incomplete read is an error, not a successful sample. A tool given a
+streamed layer with a selection uses the selected features read for the view. Edits are refused,
+since the features are read again as the view moves: right-click the
 layer in Layers and choose **Load All Features** (`layer.loadAll`) to load it into memory and
 edit it. Projects save the layer's file path, not its features, and read the file again when they
 open; a browser upload is kept in the project.
