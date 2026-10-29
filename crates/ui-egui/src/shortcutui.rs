@@ -51,6 +51,9 @@ pub fn load(app: &mut RustGisApp) {
     if let Some(changes) = app.services.load_pref.as_ref().and_then(|load| load(PREF)) {
         app.ui.shortcut_preferences_blocked = !app.ui.keymap.apply_preferences(&changes);
     }
+    // A stored shortcut on a key the menu bar keeps would never run.
+    let kept: Vec<Chord> = app.ui.keymap.bindings.iter().map(|b| b.chord).filter(|c| reserved(app, *c)).collect();
+    app.ui.keymap.bindings.retain(|b| !kept.contains(&b.chord));
 }
 
 /// Whether the native menu bar keeps a key combination for itself.
@@ -321,6 +324,14 @@ mod tests {
         assign(&mut app, &mut editor, quit, Target { command: "select.clear".into(), params: Value::Null });
         assert!(editor.notice_reserved);
         assert!(app.ui.keymap.command_for(quit).is_none());
+        // A stored shortcut on it is left out when the shortcuts load.
+        let stored = std::rc::Rc::new(r#"[{"keys": "Mod+Q", "command": "select.clear"}, {"keys": "Mod+J", "command": "select.clear"}]"#);
+        app.services.load_pref = Some(Box::new(move |key| (key == PREF).then(|| stored.to_string())));
+        load(&mut app);
+        assert!(app.ui.keymap.command_for(quit).is_none());
+        assert!(app.ui.keymap.command_for(Chord::parse("Mod+J").unwrap()).is_some());
+        // ⌃T (Ctrl without ⌘) isn't the bare T.
+        assert!(app.shortcut_command(egui::KeyboardShortcut::new(egui::Modifiers::CTRL, egui::Key::T)).is_none());
     }
 
     #[test]

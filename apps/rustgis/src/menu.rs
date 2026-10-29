@@ -1,14 +1,16 @@
 //! macOS: the native menu bar (#1077), beside the ribbon rather than a copy of it. Each item runs
 //! a command the app already has, so the menus add no behaviour of their own: File, View and Help
 //! items run their commands as the ribbon does (asking to save first when one would replace the
-//! project), the Edit items press their keys (a focused text field undoes, copies and pastes its
-//! own text, as when the keys are typed), and Quit RustGIS asks to save unsaved changes. The
-//! shortcuts shown are the keymap's, and items grey out as their commands do.
+//! project), the Edit items work as their keys do (on a focused text field, ModelBuilder's canvas,
+//! or the project), and Quit RustGIS asks to save unsaved changes. The shortcuts shown are the
+//! keymap's, and items grey out as their commands do; Undo and Redo don't, since a text field
+//! undoes its own text when the project has nothing to undo.
 //!
 //! The Edit items are the app's own, not macOS's (`copy:`, `paste:`…), which egui's window doesn't
-//! answer: muda leaves them enabled, so they would take ⌘C and ⌘V from egui. A native panel (a
-//! file dialog) gets no Edit items then, as before the menu bar; a choice made while one has the
-//! keys is dropped, so it doesn't reach the app once the panel closes.
+//! answer: muda leaves them enabled, so they would take ⌘C and ⌘V from egui. While a native panel
+//! (a file dialog) has the keys, the items stay enabled but a choice is dropped, so it doesn't
+//! reach the app once the panel closes; the panel's own text fields get no Edit items, as before
+//! the menu bar.
 //!
 //! Built with `muda`; winit's own minimal menu is turned off where the event loop is made.
 
@@ -26,7 +28,9 @@ use serde_json::Value;
 pub enum Action {
     /// Runs a command with these parameters (JSON, or empty for none), as the ribbon does.
     Command(&'static str, &'static str),
-    /// Presses the key the keymap gives this command, else `fallback` (the app's keys handle it).
+    /// Undo or Redo: as its key would when typed (a focused text field or ModelBuilder's canvas
+    /// takes the Mac's, `fallback`; the keymap the one it gives the command), else runs the
+    /// command. Shows the keymap's key, else `fallback` when no other command has it.
     Keys {
         command: &'static str,
         fallback: (Key, bool),
@@ -66,7 +70,9 @@ use Action::*;
 use Entry::{Item, Separator};
 
 /// The menus, in order: (title, rows). Titles and labels are translated; the first menu's title
-/// is replaced by the app's name.
+/// is replaced by the app's name. They are catalog keys translated in the menu's language
+/// ([`label`]), not `tl!` (a `const` can't call it), as keymap.rs's `UI_LABELS` are: new ones go
+/// into the catalogs by hand (docs/i18n.md).
 const MENUS: &[(&str, &[Entry])] = &[
     (
         "RustGIS",
@@ -158,8 +164,8 @@ pub struct MenuBar {
     /// Kept alive: AppKit holds the menu, muda the items' actions.
     _menu: Menu,
     items: Vec<Built>,
-    /// The language it was built in.
-    lang: Lang,
+    /// The language and shortcuts it was built with.
+    built_for: Signature,
     /// The ids of items chosen and not acted on yet (muda calls back on the main thread).
     chosen: Arc<Mutex<Vec<String>>>,
 }
@@ -188,7 +194,8 @@ fn shortcut(app: &RustGisApp, action: Action, fixed: Option<(Key, bool)>) -> Opt
         }
         _ => return None,
     };
-    app.shortcuts_of(command).into_iter().find(|k| k.modifiers.command)
+    // ⌘Z, ⇧⌘Z and ⌘Y are a text field's own: a menu key would take them from it.
+    app.shortcuts_of(command).into_iter().find(|k| k.modifiers.command && !matches!(k.logical_key, Key::Z | Key::Y))
 }
 
 /// The app's own items, in order, with their shortcuts now.
@@ -262,7 +269,9 @@ fn code(key: Key) -> Option<Code> {
         K::Comma => Code::Comma,
         K::Period => Code::Period,
         K::Minus => Code::Minus,
-        K::Equals | K::Plus => Code::Equal,
+        K::Equals => Code::Equal,
+        // A key code is a key, not a character: + is ⇧= on some layouts and its own key on others.
+        K::Plus => return None,
         K::Slash => Code::Slash,
         K::Backslash => Code::Backslash,
         K::Semicolon => Code::Semicolon,
@@ -292,12 +301,23 @@ fn code(key: Key) -> Option<Code> {
     })
 }
 
-/// The command an item enables with, `None` for one that is always there.
-fn enabling_command(action: Action) -> Option<&'static str> {
+/// Whether an item can be chosen now: as its command can, and none of the app's (Close Window
+/// either) while `blocked`. The Edit items stay: a dialog's text field takes them.
+fn enabled_now(app: &RustGisApp, action: Action, blocked: bool) -> bool {
     match action {
-        Command(id, _) => Some(id),
-        _ => None,
+        Command(id, _) => !blocked && app.command_enabled(id),
+        CloseWindow => !blocked,
+        _ => true,
     }
+}
+
+/// What the items show and the language: a change builds the bar again.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Signature(Lang, Vec<Option<KeyboardShortcut>>);
+
+/// The menu bar's signature for the app now.
+pub fn signature(app: &RustGisApp) -> Signature {
+    Signature(app.chosen_lang(), own_items(app).map(|(.., k)| k).collect())
 }
 
 /// A label in the app's language, in logical order (AppKit lays out right-to-left text itself).
@@ -334,7 +354,7 @@ impl MenuBar {
                 match *row {
                     Item(..) => {
                         let (id, text, action, shortcut) = own.next().ok_or("the menu's items are out of step")?;
-                        let enabled = enabling_command(action).is_none_or(|c| app.command_enabled(c));
+                        let enabled = enabled_now(app, action, false);
                         let item = MenuItem::with_id(id.clone(), label(lang, text), enabled, shortcut.and_then(accelerator));
                         sub.append(&item).map_err(|e| e.to_string())?;
                         items.push(Built { id, action, shortcut, item, enabled });
@@ -359,19 +379,19 @@ impl MenuBar {
         if let Some(h) = help {
             h.set_as_help_menu_for_nsapp();
         }
-        Ok(MenuBar { _menu: menu, items, lang, chosen })
+        Ok(MenuBar { _menu: menu, items, built_for: signature(app), chosen })
     }
 
-    /// Whether the app's language, or a shortcut an item shows, has changed since it was built.
-    pub fn stale(&self, app: &RustGisApp) -> bool {
-        self.lang != app.chosen_lang() || own_items(app).zip(&self.items).any(|((.., now), b)| now != b.shortcut)
+    /// What it was built for.
+    pub fn built_for(&self) -> &Signature {
+        &self.built_for
     }
 
     /// Greys out the items whose commands can't run now, and all of them while `blocked` (a
     /// dialog such as Save changes? has the keys), and back.
     pub fn follow(&mut self, app: &RustGisApp, blocked: bool) {
         for b in &mut self.items {
-            let now = enabling_command(b.action).is_none_or(|c| !blocked && app.command_enabled(c));
+            let now = enabled_now(app, b.action, blocked);
             if now != b.enabled {
                 b.item.set_enabled(now);
                 b.enabled = now;
@@ -438,11 +458,23 @@ pub fn listen(chosen: Arc<Mutex<Vec<String>>>, ctx: egui::Context) {
     }));
 }
 
-/// The command and parameters an item runs.
+/// The command and parameters an item runs (Undo and Redo outside a text field).
 pub fn command_of(action: Action) -> Option<(&'static str, Value)> {
     match action {
         Command(id, params) => {
             Some((id, if params.is_empty() { Value::Null } else { serde_json::from_str(params).unwrap_or(Value::Null) }))
+        }
+        Keys { command, .. } => Some((command, Value::Null)),
+        _ => None,
+    }
+}
+
+/// The key Undo or Redo presses in a focused text field: the Mac's own, which the field takes
+/// (the keymap leaves ⌘Z and ⇧⌘Z to a focused field, whatever they're bound to).
+pub fn text_key(action: Action) -> Option<KeyboardShortcut> {
+    match action {
+        Keys { fallback: (key, shift), .. } => {
+            Some(KeyboardShortcut::new(if shift { Modifiers::COMMAND | Modifiers::SHIFT } else { Modifiers::COMMAND }, key))
         }
         _ => None,
     }
@@ -538,5 +570,30 @@ mod tests {
         assert_eq!(shortcut(&app, UNDO, None), None);
         // Redo keeps ⇧⌘Z.
         assert_eq!(shortcut(&app, REDO, None).map(|k| (k.logical_key, k.modifiers.shift)), Some((Key::Z, true)));
+        // Undo still runs edit.undo outside a text field, and presses ⌘Z (the field's) in one,
+        // never the command ⌘Z is bound to.
+        assert_eq!(command_of(UNDO).map(|c| c.0), Some("edit.undo"));
+        assert_eq!(text_key(UNDO).map(|k| (k.logical_key, k.modifiers.shift)), Some((Key::Z, false)));
+        // A menu command rebound to ⌘Z doesn't show it: a text field keeps its undo.
+        assert!(app.ui.keymap.apply_preferences(r#"[{"keys": "Mod+Z", "command": "ui.pane.history"}]"#));
+        assert_eq!(shortcut(&app, Command("ui.pane.history", ""), None), None);
+        // The bar's signature follows: a new build for the changed shortcuts.
+        let before = signature(&app);
+        assert!(app.ui.keymap.apply_preferences(r#"[{"keys": "Mod+J", "command": "ui.pane.history"}]"#));
+        assert_ne!(signature(&app), before);
+    }
+
+    /// Behind a dialog, the app's items grey out, Close Window too; the Edit items stay for a
+    /// dialog's text field. ⌘+ gets no menu key (a key code can't say "+").
+    #[test]
+    fn items_grey_out_behind_a_dialog() {
+        let app = RustGisApp::new(Session::new(Project::default()));
+        assert!(enabled_now(&app, Command("ui.about", ""), false));
+        assert!(!enabled_now(&app, Command("ui.about", ""), true));
+        assert!(!enabled_now(&app, CloseWindow, true));
+        assert!(enabled_now(&app, Paste, true));
+        assert!(enabled_now(&app, UNDO, true));
+        assert!(accelerator(KeyboardShortcut::new(Modifiers::COMMAND, Key::Plus)).is_none());
+        assert!(accelerator(KeyboardShortcut::new(Modifiers::COMMAND, Key::Equals)).is_some());
     }
 }

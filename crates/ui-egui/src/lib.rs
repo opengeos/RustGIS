@@ -972,6 +972,10 @@ impl RustGisApp {
     /// The command a keyboard shortcut runs, if the keymap gives it one.
     pub fn shortcut_command(&self, shortcut: egui::KeyboardShortcut) -> Option<String> {
         let m = shortcut.modifiers;
+        // A chord has no Ctrl apart from ⌘ (the Mac's Ctrl isn't one): ⌃T isn't the bare T.
+        if m.ctrl && !m.command {
+            return None;
+        }
         let chord = keymap::Chord { command: m.command || m.mac_cmd, alt: m.alt, shift: m.shift, key: shortcut.logical_key };
         self.ui.keymap.command_for(chord).map(|b| b.command.clone())
     }

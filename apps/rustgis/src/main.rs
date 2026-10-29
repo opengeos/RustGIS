@@ -23,6 +23,8 @@ struct App(RustGisApp, running::Shared, Menus);
 #[derive(Default)]
 struct Menus {
     bar: Option<menu::MenuBar>,
+    /// What the last build was for: a failed one is tried again only when that changes.
+    tried: Option<menu::Signature>,
     chosen: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
     pending: Vec<menu::Action>,
 }
@@ -272,11 +274,11 @@ impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.0.ui(ui);
     }
-    /// macOS: the Edit items (Undo, Copy, Paste…) arrive as their keys and clipboard events, so
-    /// the app reads them as it reads typed ones; the others wait for `logic`. While the shortcut
-    /// editor is recording, the menu takes the keys it shows first: they go to the editor.
+    /// macOS: the Edit items arrive as clipboard events and keys (Undo and Redo in a focused text
+    /// field), so the app reads them as it reads typed ones; the others wait for `logic`. While
+    /// the shortcut editor is recording, the menu takes the keys it shows first: they go to it.
     #[cfg(target_os = "macos")]
-    fn raw_input_hook(&mut self, _ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+    fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
         let Some(bar) = &self.2.bar else { return };
         let capturing = self.0.capturing_shortcut();
         let press = |events: &mut Vec<egui::Event>, k: egui::KeyboardShortcut| {
@@ -299,9 +301,19 @@ impl eframe::App for App {
                         raw_input.events.push(egui::Event::Paste(text));
                     }
                 }
-                menu::Action::Keys { .. } | menu::Action::SelectAll => {
+                menu::Action::SelectAll => {
                     if let Some(k) = shown {
                         press(&mut raw_input.events, k);
+                    }
+                }
+                // Undo and Redo as when typed: a focused text field or ModelBuilder's canvas takes
+                // the Mac's key, the keymap the key it gives them; with none, the command runs.
+                menu::Action::Keys { command, .. } => {
+                    let own = ctx.text_edit_focused() || (self.0.mb.shown() && !ctx.egui_wants_keyboard_input());
+                    let typed = shown.filter(|k| self.0.shortcut_command(*k).as_deref() == Some(command));
+                    match if own { menu::text_key(action) } else { typed } {
+                        Some(k) => press(&mut raw_input.events, k),
+                        None => self.2.pending.push(action),
                     }
                 }
                 _ => self.2.pending.push(action),
@@ -322,7 +334,9 @@ impl App {
     /// greyed out as their commands are; the commands chosen from it run, unless a dialog (Save
     /// changes?) has the keys, as the keymap's do.
     fn menus(&mut self, ctx: &egui::Context) {
-        if self.2.bar.as_ref().is_none_or(|b| b.stale(&self.0)) {
+        let now = menu::signature(&self.0);
+        if self.2.bar.as_ref().is_none_or(|b| *b.built_for() != now) && self.2.tried.as_ref() != Some(&now) {
+            self.2.tried = Some(now);
             match menu::MenuBar::new(&self.0, self.2.chosen.clone()) {
                 Ok(bar) => self.2.bar = Some(bar),
                 Err(e) => log::warn!("menu bar: {e}"),
@@ -333,17 +347,26 @@ impl App {
         if let Some(bar) = &mut self.2.bar {
             bar.follow(&self.0, blocked);
         }
-        let pending = std::mem::take(&mut self.2.pending);
         if blocked {
+            self.2.pending.clear();
             return;
         }
-        for action in pending {
-            if action == menu::Action::CloseWindow {
-                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-            } else if let Some((id, params)) = menu::command_of(action)
-                && let Err(e) = self.0.run_by_user(id, params)
-            {
-                self.0.session.notify(e, true);
+        // One a frame: one that opens a dialog (Save changes?) keeps the next from running.
+        if self.2.pending.is_empty() {
+            return;
+        }
+        let action = self.2.pending.remove(0);
+        if !self.2.pending.is_empty() {
+            ctx.request_repaint();
+        }
+        if action == menu::Action::CloseWindow {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        } else if let Some((id, params)) = menu::command_of(action) {
+            match self.0.run_by_user(id, params) {
+                // Running out of undo isn't news, as with the keys.
+                Err(_) if matches!(action, menu::Action::Keys { .. }) => {}
+                Err(e) => self.0.session.notify(e, true),
+                Ok(_) => {}
             }
         }
     }
@@ -439,6 +462,14 @@ fn main() -> eframe::Result {
         Ok(_) => Some("the settings folder can't lock files, so a second copy of RustGIS couldn't be told apart".into()),
         Err(why) => Some(why.clone()),
     };
+    // The keys the macOS menu bar keeps, before the stored shortcuts load: the keymap leaves them
+    // out and the shortcut editor refuses them.
+    #[cfg(target_os = "macos")]
+    let app = {
+        let mut app = app;
+        app.ui.reserved_shortcuts = menu::reserved();
+        app
+    };
     let mut app = app.with_services(services);
     // Settings › Start-up; `--sample` still opens the sample.
     let blank = if args.iter().any(|a| a == "--sample") { Some(false) } else { (!files.is_empty()).then_some(true) };
@@ -468,11 +499,6 @@ fn main() -> eframe::Result {
         eprintln!("rustgis: {e}");
     }
     app.session.mark_saved();
-    // The keys the macOS menu bar keeps: the shortcut editor refuses them.
-    #[cfg(target_os = "macos")]
-    {
-        app.ui.reserved_shortcuts = menu::reserved();
-    }
     let mut viewport = egui::ViewportBuilder::default()
         .with_title("RustGIS")
         .with_app_id("org.rustgis.RustGIS")
