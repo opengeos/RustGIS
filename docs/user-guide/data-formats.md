@@ -256,10 +256,14 @@ WMTS layer whose tile matrix set is in one, is listed and added like any other (
   CRS:84, then other longitude/latitude ones, each kind in the order listed), and warped in the
   rest. A tilted map draws every layer warped.
 - **Identify** asks a WMS layer drawn in a system of its own (GetFeatureInfo) in that system.
-- **Axis order.** A WMS 1.3.0 bounding box is written in the order of the system's axes: latitude
-  first in EPSG:4326 and other longitude/latitude systems (not in CRS:84), and north first in a
-  projected system whose own `BoundingBox` in the capabilities says so. A WMTS `TopLeftCorner` is
-  read in the order that puts it at the layer's north-west corner.
+- **Axis order.** A WMS 1.3.0 bounding box and a WMTS `TopLeftCorner` are in the order of the
+  system's axes as EPSG defines them, as the standards ask: latitude first in EPSG:4326 and other
+  longitude/latitude systems (not in CRS:84), north first in EPSG:3035 (LAEA Europe), the German
+  Gauss-Krüger zones, SWEREF99 TM, Poland's CS92 and Austria's Lambert, east first in Web
+  Mercator, UTM and LV95. RustGIS carries that order for the systems it knows (from the EPSG
+  dataset); for a system newer than its table, the layer's own `BoundingBox` is read the way that
+  holds the layer, and a WMTS corner the way its matrix covers the layer. A longitude/latitude
+  corner whose first number can't be a latitude is read longitude first.
 
 A layer offered in no system RustGIS can transform (an `AUTO:` system, a planet's) is still left
 out, and the dialog says how many were.

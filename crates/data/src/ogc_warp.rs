@@ -484,7 +484,8 @@ fn unescape(id: &str) -> String {
 }
 
 /// Whether a layer's box from a capabilities document (a WMS `BoundingBox`: `minx`, `miny`,
-/// `maxx`, `maxy` as written) is written north first: the way that overlaps more of `area` (the
+/// `maxx`, `maxy` as written) is written north first, for a system whose EPSG axis order RustGIS
+/// doesn't know (see [`crate::raster::epsg_axes`]): the way that overlaps more of `area` (the
 /// layer's area worked out in the system: west, south, east, north), so a parent's or a world's
 /// box over a small layer is read right too; overlapping as much either way (a box holding the
 /// area both ways), the way whose middle is nearer the area's; else as the system's axes usually
@@ -504,25 +505,21 @@ pub fn north_first(b: [f64; 4], area: Option<[f64; 4]>, geographic: bool) -> boo
     if north == east { geographic } else { north < east }
 }
 
-/// Whether a WMTS tile matrix's `TopLeftCorner` is written north first: the order whose matrix
-/// (`span`: its width and height in the system's units) covers more of the layer's area in the
-/// system (west, south, east, north), which the set tiles; else, covering as much either way,
-/// as the system's axes usually run.
-pub fn corner_north_first(pair: (f64, f64), span: (f64, f64), area: Option<[f64; 4]>, geographic: bool) -> bool {
-    let Some([w, s, e, n]) = area else { return geographic };
+/// Whether a WMTS tile matrix's `TopLeftCorner` is written north first, by its geometry, for a
+/// system whose EPSG axis order RustGIS doesn't know (see [`crate::raster::epsg_axes`]): the
+/// order whose matrix (`span`: its width and height in the system's units) covers more of the
+/// layer's area in the system (west, south, east, north), which the set tiles. `None` without an
+/// area, or covering as much either way. (Only a guess: a layer's box reaching a little past the
+/// corner tips it.)
+pub fn corner_north_first(pair: (f64, f64), span: (f64, f64), area: Option<[f64; 4]>) -> Option<bool> {
+    let [w, s, e, n] = area?;
     let covered = |x0: f64, y1: f64| {
         let dx = (x0 + span.0).min(e) - x0.max(w);
         let dy = y1.min(n) - (y1 - span.1).max(s);
         if dx > 0.0 && dy > 0.0 { dx * dy } else { 0.0 }
     };
     let (east, north) = (covered(pair.0, pair.1), covered(pair.1, pair.0));
-    if north > east {
-        true
-    } else if east > north {
-        false
-    } else {
-        geographic
-    }
+    (north != east).then_some(north > east)
 }
 
 #[cfg(test)]
@@ -717,11 +714,11 @@ mod tests {
         // A Europe-wide LAEA (EPSG:3035) matrix written north first (its corner 2.0e6 E, 5.5e6 N),
         // over Austria (4.3e6 to 4.9e6 E, 2.6e6 to 2.9e6 N): only north first covers it.
         let austria = Some([4_300_000.0, 2_600_000.0, 4_900_000.0, 2_900_000.0]);
-        assert!(corner_north_first((5_500_000.0, 2_000_000.0), (5_000_000.0, 4_000_000.0), austria, false));
+        assert_eq!(corner_north_first((5_500_000.0, 2_000_000.0), (5_000_000.0, 4_000_000.0), austria), Some(true));
         // swisstopo's LV95 matrix, east first, over a box reaching past its corner's west.
         let switzerland = Some([2_380_000.0, 1_060_000.0, 2_870_000.0, 1_310_000.0]);
-        assert!(!corner_north_first((2_420_000.0, 1_350_000.0), (480_000.0, 320_000.0), switzerland, false));
-        assert!(corner_north_first((90.0, -180.0), (360.0, 180.0), None, true));
+        assert_eq!(corner_north_first((2_420_000.0, 1_350_000.0), (480_000.0, 320_000.0), switzerland), Some(false));
+        assert_eq!(corner_north_first((90.0, -180.0), (360.0, 180.0), None), None);
         // swisstopo's LV95 box, east first; an Austrian one written north first.
         assert!(!north_first([2_480_000.0, 1_070_000.0, 2_840_000.0, 1_300_000.0], switzerland, false));
         assert!(north_first([2_600_000.0, 4_300_000.0, 2_900_000.0, 4_900_000.0], austria, false));

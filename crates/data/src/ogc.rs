@@ -1003,8 +1003,9 @@ fn wms_candidates(crs: &[String]) -> Vec<Candidate> {
 /// candidates (see [`wms_candidates`]), and the one a Web Mercator map takes its pictures in: Web
 /// Mercator itself (`mercator`), else the first. `None` for a layer offered in Web Mercator
 /// alone (its address stays as it was) or in nothing usable. In WMS 1.3.0 a bounding box follows
-/// the system's axes: written north first where the layer's own `BoundingBox` in that system
-/// says so (else in a geographic system other than CRS:84).
+/// the system's axes as EPSG defines them ([`crate::raster::epsg_axes`]); for a system whose
+/// order RustGIS doesn't know, as the layer's own `BoundingBox` in it is written (else latitude
+/// first in a geographic system other than CRS:84).
 fn wms_native(layer: &Node, listed: &[Candidate], v13: bool, area: Option<[f64; 4]>, mercator: bool) -> Option<(String, warp::Warp)> {
     // Its boxes by system (its own, else the nearest it inherits: WMS 1.3.0 §7.2.4.6.8), read
     // once a layer.
@@ -1025,7 +1026,11 @@ fn wms_native(layer: &Node, listed: &[Candidate], v13: bool, area: Option<[f64; 
     }
     let lat_first = |name: &str, system: crate::raster::Crs| {
         v13 && !warp::is_crs84(name) && {
-            // The layer's box in that system, against its area worked out there.
+            // In the order of the system's axes as EPSG defines them (WMS 1.3.0 §6.7.3.3); for a
+            // system newer than RustGIS's table, the layer's box in it, against its area there.
+            if let Some(north) = epsg_north_first(system) {
+                return north;
+            }
             let own = warp::epsg_of(name).and_then(|code| boxes.get(&code));
             let written = own.and_then(|b| {
                 let f = |k: &str| b.attribute(k).and_then(|v| v.trim().parse::<f64>().ok()).filter(|v| v.is_finite());
@@ -1051,6 +1056,15 @@ fn wms_native(layer: &Node, listed: &[Candidate], v13: bool, area: Option<[f64; 
     let first = systems.first()?.clone();
     let (epsg, lat_first) = if mercator { (3857, false) } else { (first.epsg, first.lat_first) };
     Some((first.name, warp::Warp { epsg, grid: warp::Grid::Map { lat_first }, area, systems }))
+}
+
+/// Whether `system` is written north (or latitude) first as EPSG defines its axes, when
+/// RustGIS's table knows it ([`crate::raster::epsg_axes`]).
+fn epsg_north_first(system: crate::raster::Crs) -> Option<bool> {
+    match system {
+        crate::raster::Crs::Custom(_) => None,
+        s => crate::raster::epsg_axes::north_first(s.epsg()),
+    }
 }
 
 /// The longest address a layer in another system keeps (the map's own limit on an address).
@@ -1284,10 +1298,7 @@ fn wmts(url: &str, root: &Node) -> Service {
         let native = match mercator {
             Some(_) => None,
             None => natives.iter().filter(|n| linked.contains(&n.0)).find_map(|(set, code, system, crs84, raw)| {
-                // The corners' order: the one whose matrix covers more of the layer's area worked
-                // out in the system (else latitude first in a geographic system other than CRS84).
                 let geographic = system.is_geographic();
-                // (A geographic one's too: a service may write its corner either way round.)
                 let area = bbox.and_then(|b| warp::native_box(&*warp::transformer(u32::from(*code))?, b));
                 // Only the matrices the layer's link limits it to (WMTS 1.0.0 §7.2.4.6.3), when it does.
                 let limited = wmts_limits(&layer, set);
@@ -1297,7 +1308,15 @@ fn wmts(url: &str, root: &Node) -> Service {
                 let first = raw.first()?;
                 let m = warp::Matrix::from_scale(first.id.clone(), first.scale, unit, first.corner, first.tile, first.size)?;
                 let span = (m.cell * f64::from(m.tile_w) * f64::from(m.cols), m.cell * f64::from(m.tile_h) * f64::from(m.rows));
-                let swap = !*crs84 && warp::corner_north_first(first.corner, span, area, geographic);
+                // In the order of the system's axes as EPSG defines them (WMTS 1.0.0 §6.1): but a
+                // geographic corner whose first number can't be a latitude is longitude first, as
+                // a service may write it. For a system newer than RustGIS's table, the order whose
+                // matrix covers more of the layer, else latitude first in a geographic system.
+                let swap = !*crs84
+                    && match epsg_north_first(*system) {
+                        Some(north) => north && !(geographic && first.corner.0.abs() > 90.0),
+                        None => warp::corner_north_first(first.corner, span, area).unwrap_or(geographic),
+                    };
                 let matrices: Vec<warp::Matrix> = raw
                     .iter()
                     .filter_map(|m| {
@@ -3050,6 +3069,24 @@ mod tests {
         assert_eq!((w.epsg, w.grid), (3035, warp::Grid::Map { lat_first: true }));
     }
 
+    /// A WMS 1.3.0 layer is asked in the order EPSG gives its system's axes, with no box to read
+    /// it from (Gauss-Krüger zone 4, north first) and over a box written the other way (LV95,
+    /// east first); WMS 1.1.1 is always east first.
+    #[test]
+    fn a_wms_layer_follows_epsg_axis_order() {
+        let order = |xml: &str, crs: &str, v13: bool| {
+            let doc = roxmltree::Document::parse(xml).unwrap();
+            let listed = wms_candidates(&[crs.to_string()]);
+            let (_, w) = wms_native(&doc.root_element(), &listed, v13, Some([10.0, 47.5, 13.0, 50.5]), false).unwrap();
+            w.grid
+        };
+        let gk4 = "<Layer><CRS>EPSG:31468</CRS></Layer>";
+        assert_eq!(order(gk4, "EPSG:31468", true), warp::Grid::Map { lat_first: true });
+        assert_eq!(order(gk4, "EPSG:31468", false), warp::Grid::Map { lat_first: false });
+        let lv95 = r#"<Layer><CRS>EPSG:2056</CRS><BoundingBox CRS="EPSG:2056" minx="1070000" miny="2480000" maxx="1300000" maxy="2840000"/></Layer>"#;
+        assert_eq!(order(lv95, "EPSG:2056", true), warp::Grid::Map { lat_first: false });
+    }
+
     /// A tile matrix set keeps the matrices it can read when one can't be (no identifier), and
     /// past `MAX_MATRICES` its 20 coarsest and 20 finest.
     #[test]
@@ -3720,6 +3757,37 @@ mod tests {
         let warp::Grid::Tiles(ms) = &w.grid else { panic!() };
         assert_eq!((w.epsg, ms[0].left, ms[0].top), (4326, -180.0, 90.0));
         assert!((ms[0].cell - 0.703_125).abs() < 1e-6, "{}", ms[0].cell);
+    }
+
+    /// A WMTS corner is read in EPSG's order even where the layer's box tips the guess the other
+    /// way (swisstopo's LV03 set: its box reaches a little west of the corner), and a
+    /// longitude/latitude corner written longitude first is read so.
+    #[test]
+    fn a_wmts_corner_follows_epsg_axis_order() {
+        let caps = r#"<Capabilities xmlns="http://www.opengis.net/wmts/1.0" xmlns:ows="http://www.opengis.net/ows/1.1" version="1.0.0"><Contents>
+<Layer><ows:Title>Map</ows:Title><ows:Identifier>map</ows:Identifier>
+ <ows:WGS84BoundingBox><ows:LowerCorner>5.140242 45.398181</ows:LowerCorner><ows:UpperCorner>11.47757 48.230651</ows:UpperCorner></ows:WGS84BoundingBox>
+ <TileMatrixSetLink><TileMatrixSet>21781_27</TileMatrixSet></TileMatrixSetLink>
+ <ResourceURL resourceType="tile" format="image/png" template="https://t.example.org/{TileMatrix}/{TileCol}/{TileRow}.png"/></Layer>
+<Layer><ows:Title>World</ows:Title><ows:Identifier>world</ows:Identifier>
+ <TileMatrixSetLink><TileMatrixSet>geo</TileMatrixSet></TileMatrixSetLink>
+ <ResourceURL resourceType="tile" format="image/png" template="https://t.example.org/w/{TileMatrix}/{TileRow}/{TileCol}.png"/></Layer>
+<TileMatrixSet><ows:Identifier>21781_27</ows:Identifier><ows:SupportedCRS>urn:ogc:def:crs:EPSG:21781</ows:SupportedCRS>
+ <TileMatrix><ows:Identifier>0</ows:Identifier><ScaleDenominator>14285714.285714287</ScaleDenominator><TopLeftCorner>420000.0 350000.0</TopLeftCorner><TileWidth>256</TileWidth><TileHeight>256</TileHeight><MatrixWidth>1</MatrixWidth><MatrixHeight>1</MatrixHeight></TileMatrix>
+</TileMatrixSet>
+<TileMatrixSet><ows:Identifier>geo</ows:Identifier><ows:SupportedCRS>urn:ogc:def:crs:EPSG::4326</ows:SupportedCRS>
+ <TileMatrix><ows:Identifier>0</ows:Identifier><ScaleDenominator>279541132.0143589</ScaleDenominator><TopLeftCorner>-180 90</TopLeftCorner><TileWidth>256</TileWidth><TileHeight>256</TileHeight><MatrixWidth>2</MatrixWidth><MatrixHeight>1</MatrixHeight></TileMatrix>
+</TileMatrixSet>
+</Contents></Capabilities>"#;
+        let s = parse("https://t.example.org/WMTSCapabilities.xml", caps.as_bytes()).unwrap();
+        let corner = |i: usize| {
+            let Offer::Tiles { template } = &s.layers[i].offer else { panic!() };
+            let (_, _, w) = warp::Warp::parse(&template.replace("{z}/{x}/{y}", "0/0/0")).unwrap();
+            let warp::Grid::Tiles(ms) = &w.grid else { panic!() };
+            (w.epsg, ms[0].left, ms[0].top)
+        };
+        assert_eq!(corner(0), (21781, 420_000.0, 350_000.0));
+        assert_eq!(corner(1), (4326, -180.0, 90.0));
     }
 
     #[test]
