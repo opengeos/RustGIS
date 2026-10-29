@@ -3,6 +3,11 @@ use rustgis_data::source::{Batch, FeatureSource, Request, SourceInfo};
 use rustgis_data::{Dataset, Feature, Field, FieldType, Value};
 use rustgis_map::{Layer, Renderer, source::SourceLayer};
 
+thread_local! {
+    /// Complete chunks drawing from display geometry, and chunks retaining a full projection.
+    pub(super) static LOD_PATHS: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
+}
+
 struct Chunks {
     info: SourceInfo,
     ds: Dataset,
@@ -359,7 +364,9 @@ fn complete_chunks_use_whole_layer_lod_decisions() {
             let mut actual = base.clone();
             actual.layers[0] = streamed(&base.layers[0], size);
             actual.layers[0].source.as_mut().unwrap().byte_budget = budget;
+            LOD_PATHS.set((0, 0));
             let got = render(&mut actual, &view).unwrap();
+            assert_eq!(LOD_PATHS.get(), (11usize.div_ceil(size), 0), "complete chunks must keep full projection lazy");
             assert!(
                 got.pixmap.data() == expected.pixmap.data(),
                 "whole-layer LOD changed at chunk size {size}, interaction budget {budget}"

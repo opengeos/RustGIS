@@ -3116,6 +3116,12 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
                     layer.thinned_in(&flat, &key, thin_tol);
                 }
             }
+            #[cfg(test)]
+            if complete_source && globe.is_none() {
+                let (display, exact) = stream_tests::LOD_PATHS.get();
+                stream_tests::LOD_PATHS
+                    .set((display + usize::from(display_only), exact + usize::from(!layer.projected_cache().is_empty())));
+            }
             // Everything below only reads the layer: borrow rather than copy its data each frame.
             let layer: &rustgis_map::Layer = layer;
             let label_row = |row: usize| if complete_source { layer.dataset.features.get(row).map_or(row, |f| f.id as usize) } else { row };

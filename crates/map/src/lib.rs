@@ -664,7 +664,9 @@ impl Layer {
     pub fn projected_in(&mut self, flat: &projection::Flat, key: &str) -> &[Option<Geometry>] {
         if self.projected_rev != self.geometry_rev || self.projected.len() != self.dataset.features.len() || self.projected_for != key {
             self.display = None;
-            self.display_levels.clear();
+            if !matches!(flat, projection::Flat::Mercator) {
+                self.display_levels.clear();
+            }
             let projected: Vec<Option<Geometry>> =
                 self.dataset.features.iter().map(|ft| ft.geometry.as_ref().map(|g| flat.project(g))).collect();
             self.projected_extents =
@@ -674,6 +676,7 @@ impl Layer {
             self.thinned = Default::default();
             self.projected_rev = self.geometry_rev;
             self.projected_for = key.to_string();
+            self.trim_display_levels(self.lod_budget());
         }
         &self.projected
     }
@@ -691,26 +694,10 @@ impl Layer {
     pub fn prepare_display(&mut self, flat: &projection::Flat, tol: f64, whole_layer_eligible: bool) -> bool {
         self.display = None;
         let Some(level) = lod::level(tol).filter(|_| matches!(flat, projection::Flat::Mercator)) else { return false };
+        self.trim_thinned_levels(self.lod_budget());
         let used: usize = self.thinned.iter().filter_map(|(_, c)| c.as_ref()).map(|c| lod::cache_bytes(c)).sum();
-        let budget = self
-            .source
-            .as_ref()
-            .map_or(lod::CACHE_BYTES, |s| {
-                s.budget()
-                    .saturating_sub(self.view_memory.base(&self.dataset.features, &self.projected, &self.projected_extents))
-                    .min(lod::CACHE_BYTES)
-            })
-            .saturating_sub(used);
-        // Retain recent levels only while their combined storage fits today's budget.
-        let mut bytes = 0usize;
-        self.display_levels.retain(|d| {
-            let valid = d.revision == self.geometry_rev && d.geometries.len() == self.dataset.features.len();
-            if !valid || bytes.saturating_add(d.bytes) > budget {
-                return false;
-            }
-            bytes += d.bytes;
-            true
-        });
+        let budget = self.lod_budget().saturating_sub(used);
+        self.trim_display_levels(budget);
         if let Some(i) = self.display_levels.iter().position(|d| d.level == level && d.whole_layer_eligible == whole_layer_eligible) {
             let hit = self.display_levels.remove(i);
             self.display = Some(hit.clone());
@@ -731,16 +718,46 @@ impl Layer {
         let display = std::sync::Arc::new(display);
         self.display_levels.insert(0, display.clone());
         self.display_levels.truncate(lod::LEVELS_KEPT);
+        self.trim_display_levels(budget);
+        self.display = Some(display);
+        true
+    }
+
+    /// Shared optional LOD storage remaining after original rows and exact projection caches.
+    fn lod_budget(&self) -> usize {
+        self.source.as_ref().map_or(lod::CACHE_BYTES, |s| {
+            s.budget()
+                .saturating_sub(self.view_memory.base(&self.dataset.features, &self.projected, &self.projected_extents))
+                .min(lod::CACHE_BYTES)
+        })
+    }
+
+    /// Drops stale levels and evicts the least recently used copies to fit the supplied budget.
+    fn trim_display_levels(&mut self, budget: usize) {
         let mut bytes = 0usize;
         self.display_levels.retain(|d| {
-            if bytes.saturating_add(d.bytes) > budget {
+            if d.revision != self.geometry_rev
+                || d.geometries.len() != self.dataset.features.len()
+                || bytes.saturating_add(d.bytes) > budget
+            {
                 return false;
             }
             bytes += d.bytes;
             true
         });
-        self.display = Some(display);
-        true
+    }
+
+    /// Reclaims optional exact-consumer LOD copies when the shared remaining budget shrinks.
+    fn trim_thinned_levels(&mut self, budget: usize) {
+        let mut bytes = 0usize;
+        std::sync::Arc::make_mut(&mut self.thinned).retain(|(_, copy)| {
+            let extra = copy.as_ref().map_or(0, |c| lod::cache_bytes(c));
+            if bytes.saturating_add(extra) > budget {
+                return false;
+            }
+            bytes += extra;
+            true
+        });
     }
 
     /// The copy and original extents from a successful `prepare_display`, row for row.
@@ -756,13 +773,11 @@ impl Layer {
     /// geometry itself for a small layer. Read it back with [`Layer::thinned_cache`].
     pub fn thinned_in(&mut self, flat: &projection::Flat, key: &str, tol: f64) -> &[Option<Geometry>] {
         self.display = None;
-        // Exact consumers release display levels so both cache families share one LOD budget.
-        self.display_levels.clear();
         self.projected_in(flat, key);
-        let budget = self.source.as_ref().map_or(lod::CACHE_BYTES, |s| {
-            let base = self.view_memory.base(&self.dataset.features, &self.projected, &self.projected_extents);
-            s.budget().saturating_sub(base).min(lod::CACHE_BYTES)
-        });
+        self.trim_display_levels(self.lod_budget());
+        let display_bytes: usize = self.display_levels.iter().map(|d| d.bytes).sum();
+        let budget = self.lod_budget().saturating_sub(display_bytes);
+        self.trim_thinned_levels(budget);
         let Some(level) = lod::level(tol).filter(|_| self.projected_vertices > lod::THIN_ABOVE) else { return &self.projected };
         let levels = std::sync::Arc::make_mut(&mut self.thinned);
         match levels.iter().position(|(l, _)| *l == level) {
@@ -785,17 +800,9 @@ impl Layer {
                 });
                 levels.insert(0, (level, copy.map(std::sync::Arc::new)));
                 levels.truncate(lod::LEVELS_KEPT);
-                let mut bytes = 0usize;
-                levels.retain(|(_, copy)| {
-                    let extra = copy.as_ref().map_or(0, |c| lod::cache_bytes(c));
-                    if bytes.saturating_add(extra) > budget {
-                        return false;
-                    }
-                    bytes += extra;
-                    true
-                });
             }
         }
+        self.trim_thinned_levels(budget);
         self.thinned_cache(tol)
     }
 
@@ -2912,6 +2919,37 @@ mod tests {
         assert!(copy.display_levels.is_empty());
     }
 
+    /// Display and exact-consumer LOD levels coexist within one source budget, including shrinkage.
+    #[test]
+    fn display_and_exact_lod_share_one_budget() {
+        let flat = projection::Flat::Mercator;
+        let mut l = long_line(lod::THIN_ABOVE + 1000);
+        assert!(l.prepare_display(&flat, 12_000.0, false));
+        let display_bytes = l.display_levels[0].bytes;
+        l.projected();
+        assert_eq!(l.display_levels.len(), 1);
+        let base = l.view_memory.base(&l.dataset.features, &l.projected, &l.projected_extents);
+        let copy = lod::project_budgeted(&l.dataset.features, lod::level(24_000.0).unwrap(), usize::MAX).unwrap();
+        let extra = lod::cache_bytes(&copy);
+        let mut source = source::SourceLayer::default();
+        source.byte_budget = base + display_bytes + extra;
+        l.source = Some(source);
+        l.thinned_in(&flat, "mercator", 24_000.0);
+        assert_eq!(l.display_levels.len(), 1);
+        assert!(l.thinned.iter().any(|(_, c)| c.is_some()));
+        assert!(l.view_cache_bytes() <= base + display_bytes + extra);
+        l.source.as_mut().unwrap().byte_budget = base + display_bytes;
+        l.thinned_in(&flat, "mercator", 24_000.0);
+        assert_eq!(l.display_levels.len(), 1);
+        assert!(l.thinned.iter().all(|(_, c)| c.is_none()));
+        assert!(l.view_cache_bytes() <= base + display_bytes);
+        l.source.as_mut().unwrap().byte_budget = base;
+        l.thinned_in(&flat, "mercator", f64::NAN);
+        assert!(l.display_levels.is_empty());
+        assert!(l.thinned.iter().all(|(_, c)| c.is_none()));
+        assert!(l.view_cache_bytes() <= base);
+    }
+
     /// Invalid requests hide the active display without discarding reusable Mercator levels.
     #[test]
     fn invalid_display_requests_clear_the_active_cache() {
@@ -2922,6 +2960,7 @@ mod tests {
             assert!(l.display_cache().is_some());
             assert!(!l.prepare_display(&flat, tol, false));
             assert!(l.display_cache().is_none());
+            assert_eq!(l.display_levels.len(), 1, "invalid requests keep the reusable level");
         }
         assert!(l.prepare_display(&flat, 12_000.0, false));
         let custom = projection::Flat::of(&Projection::Custom("EPSG:32637".into()));

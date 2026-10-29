@@ -158,6 +158,33 @@ fn lod_landcover_matches_full_geometry_at_several_zooms_and_densities() {
     }
 }
 
+/// Real render fallback must preserve a reusable level, including the first exact projection.
+#[test]
+fn lod_display_survives_rejected_frame_and_returns_without_rebuilding() {
+    let mut map = landcover(84);
+    let view = View {
+        width: 420.0,
+        height: 320.0,
+        pixels_per_point: 1.0,
+        sky: false,
+        camera: Camera::new(lonlat_to_merc(Coord::new(36.25, -1.25)), 0.5 / 84.0 * rustgis_geom::MERCATOR_R.to_radians() / 3.0),
+    };
+    let first = render(&mut map, &view).unwrap();
+    assert!(map.layers[0].projected_cache().is_empty());
+    // Keep the allocation alive independently: a rebuilt cache cannot reuse its address.
+    let held = map.clone();
+    let before = held.layers[0].display_cache().unwrap().0.as_ptr();
+    let zoomed = View { camera: Camera { res: view.camera.res / 1000.0, ..view.camera }, ..view };
+    for _ in 0..3 {
+        render(&mut map, &zoomed).unwrap();
+        assert!(map.layers[0].display_cache().is_none());
+        assert!(!map.layers[0].projected_cache().is_empty());
+        let back = render(&mut map, &view).unwrap();
+        assert_eq!(map.layers[0].display_cache().unwrap().0.as_ptr(), before);
+        assert_eq!(back.pixmap.data(), first.pixmap.data());
+    }
+}
+
 /// Times cold and warm complete renders for a 210,681-cell layer without import costs.
 #[test]
 #[ignore = "manual benchmark: cargo test --release -p rustgis-render lod_landcover_whole_frame_benchmark -- --ignored --nocapture"]
