@@ -508,7 +508,8 @@ GetFeatureInfo requests too, so identify answers for that time; `time.export` an
   time.
 - **One time only**: a layer whose dimension lists a single time, a name (OGC's `current`, as most
   of swisstopo's WMTS layers list) or one date (`1946`), has no other to show: it is listed as a
-  plain "map", without the dialogs' **Follow the time slider**, and added at that time.
+  plain "map", without the dialogs' **Follow the time slider**, and added at its service's default
+  (usually that time).
 - **A time named, not dated**: a layer whose times are only names (`current`, `default`), whose
   times are one period finer than the slider's hour (`…/PT30M`), or whose list of times would take
   more than the slider's 20,000 steps, isn't stepped through: it is added at its default.

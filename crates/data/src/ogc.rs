@@ -3768,7 +3768,9 @@ mod tests {
         // No dates to step to: one time (a name, a date), or none listed.
         assert_eq!(lt("current", &["current"]).slider(), None);
         assert_eq!(lt("1946", &["1946"]).slider(), None);
-        assert!(!lt("current", &["current"]).changes() && !lt("1946", &["1946"]).changes() && !lt("2024", &[]).changes());
+        assert!(!lt("current", &["current"]).changes());
+        assert!(!lt("1946", &["1946"]).changes());
+        assert!(!lt("2024", &[]).changes());
         assert!(lt("2026", &["1952/2026/P1Y"]).changes() && lt("current", &["current", "2025"]).changes());
         assert_eq!(lt("2024", &[]).slider(), None);
         assert_eq!(lt("2024", &["2024/2020"]).slider(), None);

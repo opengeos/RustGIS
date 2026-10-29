@@ -377,7 +377,11 @@ pub(crate) fn add(s: &mut Session, p: &Value) -> CmdResult {
     let slider = match (&layer.time, asked) {
         (Some(t), Some(a)) if a.eq_ignore_ascii_case("slider") => Some(t.slider().ok_or_else(|| match t.changes() {
             true => format!("{}: its times aren't dates the time slider can step to (give one of them as time)", layer.title),
-            false => format!("{}: it has only one time, {}: nothing for the time slider to step through", layer.title, t.default),
+            false => format!(
+                "{}: it lists only one time, {}: nothing for the time slider to step through",
+                layer.title,
+                t.values.first().unwrap_or(&t.default)
+            ),
         })?),
         (None, Some(a)) if a.eq_ignore_ascii_case("slider") => {
             return Err(format!("{}: the layer has no time to follow the time slider with", layer.title));

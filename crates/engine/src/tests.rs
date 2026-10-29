@@ -9433,7 +9433,7 @@ fn wms_layers_with_time() {
     assert!(named.map().time.is_none() && tile(&named, "Now").ends_with("&TIME=current"), "{}", tile(&named, "Now"));
     // Asked to follow the slider, such a layer can't: it says so.
     let e = named.run("service.add", &json!({"url": url, "layer": "now", "text": WMS, "time": "slider"})).unwrap_err();
-    assert!(e.contains("only one time, current"), "{e}");
+    assert!(e.contains("lists only one time, current"), "{e}");
     // A layer with one time, a name or a date, is listed and added as a plain map, at that time.
     let v = named.run("service.layers", &json!({"url": url, "text": WMS})).unwrap();
     let listed =
