@@ -378,6 +378,9 @@ pub struct ServiceLayer {
     /// service's GetLegendGraphic, then its default style's picture; a WMTS layer's default
     /// style's, each for its scales. None when the service gives none.
     pub legends: Vec<Legend>,
+    /// The Web Mercator zooms its tiles are drawn at, least and greatest, when the service says:
+    /// a WMS layer's scale hints, a WMTS layer's tile matrices. `None`: the usual range.
+    pub zooms: Option<(u8, u8)>,
 }
 
 /// A map layer's legend picture as its service gives it: its address and, as a WMTS style's
@@ -733,6 +736,47 @@ fn is_web_mercator(code: &str) -> bool {
 // ---------------------------------------------------------------------------------------------
 // WMS
 
+/// The greatest zoom a WMS layer is drawn at when its service gives no scale hint: a GetMap is
+/// drawn at any scale, and this is about 3 cm a pixel (an aerial photo's 10 cm fills it).
+const WMS_MAX_ZOOM: u8 = 22;
+
+/// A WMS layer's scale hints: the scale denominators it is drawn between (WMS 1.3.0's
+/// `MinScaleDenominator` and `MaxScaleDenominator`; 1.1.1's `ScaleHint`, a pixel's diagonal on
+/// the ground in metres).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct Scales {
+    min: Option<f64>,
+    max: Option<f64>,
+}
+
+impl Scales {
+    /// A layer's own hints; `None` when it gives none (it then has its parent's).
+    fn of(layer: &Node) -> Option<Scales> {
+        let num = |t: Option<&str>| t.and_then(|t| t.trim().parse::<f64>().ok()).filter(|v| v.is_finite() && *v > 0.0);
+        let (min, max) =
+            (num(child_text(layer, "MinScaleDenominator").as_deref()), num(child_text(layer, "MaxScaleDenominator").as_deref()));
+        if min.is_some() || max.is_some() {
+            return Some(Scales { min, max });
+        }
+        let hint = child(layer, "ScaleHint")?;
+        let scale = |k: &str| num(hint.attribute(k)).map(|d| d / std::f64::consts::SQRT_2 / 0.000_28);
+        let s = Scales { min: scale("min"), max: scale("max") };
+        (s != Scales::default()).then_some(s)
+    }
+
+    /// The Web Mercator zooms the layer is drawn at, worked out at the middle latitude of its
+    /// area (`bbox`), where a zoom's scale on the ground is its scale at the equator times the
+    /// latitude's cosine: down to its least scale (else [`WMS_MAX_ZOOM`]), out to its greatest.
+    fn zooms(self, bbox: Option<[f64; 4]>) -> (u8, u8) {
+        let lat = bbox.map_or(0.0, |b| (b[1] + b[3]) / 2.0).clamp(-85.0, 85.0);
+        // The first zoom at or past a scale (a hair short of it counts: hints are rounded).
+        let zoom = |scale: f64| ((Z0_SCALE * lat.to_radians().cos() / scale).log2() - 0.05).ceil().clamp(0.0, 24.0) as u8;
+        let max = self.min.map_or(WMS_MAX_ZOOM, zoom);
+        let min = self.max.map_or(0, zoom).min(max);
+        (min, max)
+    }
+}
+
 fn wms(url: &str, root: &Node) -> Service {
     let v13 = root.attribute("version").is_none_or(|v| v.starts_with("1.3"));
     let title = child(root, "Service").and_then(|s| child_text(&s, "Title")).unwrap_or_default();
@@ -768,14 +812,16 @@ fn wms(url: &str, root: &Node) -> Service {
     let legend_graphic = wms_legend_graphic(root, url, &get_map, version);
     // (What a layer passes on is shared by its sublayers, not copied for each: a hostile document
     // may give one layer a great many.)
-    type Inherited<'a, 'i> = (Node<'a, 'i>, Rc<[String]>, Option<[f64; 4]>, bool, Rc<[Node<'a, 'i>]>, Option<Rc<LayerTime>>);
+    type Inherited<'a, 'i> = (Node<'a, 'i>, Rc<[String]>, Option<[f64; 4]>, bool, Rc<[Node<'a, 'i>]>, Option<Rc<LayerTime>>, Scales);
     let mut stack: Vec<Inherited<'_, '_>> = root
         .descendants()
         .filter(|n| n.is_element() && local(n) == "Capability")
         .flat_map(|c| children(&c, "Layer").collect::<Vec<_>>())
-        .map(|l| (l, Rc::from([]), None, false, Rc::from([]), None))
+        .map(|l| (l, Rc::from([]), None, false, Rc::from([]), None, Scales::default()))
         .collect();
-    while let Some((layer, inherited_crs, inherited_bbox, inherited_queryable, inherited_styles, inherited_time)) = stack.pop() {
+    while let Some((layer, inherited_crs, inherited_bbox, inherited_queryable, inherited_styles, inherited_time, inherited_scales)) =
+        stack.pop()
+    {
         if service.layers.len() >= MAX_LAYERS {
             break;
         }
@@ -803,8 +849,10 @@ fn wms(url: &str, root: &Node) -> Service {
             Some(own) => own.map(Rc::new),
             None => inherited_time,
         };
+        // Its own scale hints replace those it inherits (WMS 1.3.0 §7.2.4.8).
+        let scales = Scales::of(&layer).unwrap_or(inherited_scales);
         for sub in children(&layer, "Layer") {
-            stack.push((sub, Rc::clone(&crs), bbox, queryable, Rc::clone(&styles), time.clone()));
+            stack.push((sub, Rc::clone(&crs), bbox, queryable, Rc::clone(&styles), time.clone(), scales));
         }
         let Some(name) = child_text(&layer, "Name") else { continue };
         if !crs.iter().any(|c| c.split_whitespace().any(is_web_mercator)) {
@@ -840,6 +888,7 @@ fn wms(url: &str, root: &Node) -> Service {
             legends.push(l);
         }
         service.layers.push(ServiceLayer {
+            zooms: Some(scales.zooms(bbox)),
             name,
             title,
             offer: Offer::Tiles { template },
@@ -954,6 +1003,20 @@ fn mercator_matrices(tms: &Node) -> Option<Vec<(String, u8)>> {
     (!out.is_empty()).then_some(out)
 }
 
+/// The zooms a WMTS layer's tiles are at in its Web Mercator tile matrix set `set` (of `sets`,
+/// each matrix's identifier and zoom): its matrices', or only those its link's
+/// `TileMatrixSetLimits` names when it gives them (WMTS 1.0.0 §7.2.4.6.3).
+fn wmts_zooms(layer: &Node, set: &str, sets: &[(String, Vec<(String, u8)>)]) -> Option<(u8, u8)> {
+    let matrices = &sets.iter().find(|(id, _)| id == set)?.1;
+    let link = children(layer, "TileMatrixSetLink").find(|l| child_text(l, "TileMatrixSet").as_deref() == Some(set))?;
+    let limited: Vec<String> = child(&link, "TileMatrixSetLimits")
+        .map(|l| children(&l, "TileMatrixLimits").filter_map(|m| child_text(&m, "TileMatrix")).collect())
+        .unwrap_or_default();
+    let zooms = matrices.iter().filter(|(id, _)| limited.is_empty() || limited.contains(id)).map(|(_, z)| *z);
+    let (lo, hi) = zooms.fold((u8::MAX, 0), |(lo, hi), z| (lo.min(z), hi.max(z)));
+    (lo <= hi).then_some((lo, hi.min(24)))
+}
+
 fn wmts(url: &str, root: &Node) -> Service {
     let title = child(root, "ServiceIdentification").and_then(|s| child_text(&s, "Title")).unwrap_or_default();
     let mut service = Service { kind: "WMTS".into(), title, ..Service::default() };
@@ -1055,6 +1118,7 @@ fn wmts(url: &str, root: &Node) -> Service {
             lonlat_box(*lo.first()?, *lo.get(1)?, *hi.first()?, *hi.get(1)?)
         });
         service.layers.push(ServiceLayer {
+            zooms: wmts_zooms(&layer, set, &sets),
             name,
             title,
             offer: Offer::Tiles { template },
@@ -1163,6 +1227,7 @@ fn wfs(url: &str, root: &Node) -> Service {
         };
         let url = with_query(&get, &query);
         service.layers.push(ServiceLayer {
+            zooms: None,
             name,
             title,
             offer: Offer::Features { url },
@@ -1296,6 +1361,7 @@ fn wcs(url: &str, root: &Node) -> Service {
     let mut add = |id: String, title: Option<String>, bbox: Option<[f64; 4]>| {
         let coverage = Coverage { endpoint: get.clone(), version: version.into(), id: id.clone(), formats: formats.clone() };
         service.layers.push(ServiceLayer {
+            zooms: None,
             title: title.filter(|t| !t.is_empty()).unwrap_or_else(|| id.clone()),
             name: id,
             offer: Offer::Coverage(coverage),
@@ -1712,6 +1778,7 @@ fn arcgis(url: &str, v: &serde_json::Value) -> Result<Service, String> {
             }
             let url = format!("{b}/{id}/query?where=1%3D1&outFields=*&returnGeometry=true&outSR=4326&f=geojson");
             service.layers.push(ServiceLayer {
+                zooms: None,
                 name: id.to_string(),
                 title: name.to_string(),
                 offer: Offer::Features { url },
@@ -1735,6 +1802,7 @@ fn arcgis(url: &str, v: &serde_json::Value) -> Result<Service, String> {
             format!("{b}/export?bbox={{bbox-epsg-3857}}&bboxSR=3857&imageSR=3857&size=256,256&format=png32&transparent=true&f=image")
         };
         service.layers.push(ServiceLayer {
+            zooms: None,
             name: "map".into(),
             title: format!("{title} (map)"),
             offer: Offer::Tiles { template },
@@ -1756,6 +1824,7 @@ fn arcgis(url: &str, v: &serde_json::Value) -> Result<Service, String> {
                     "{b}/export?bbox={{bbox-epsg-3857}}&bboxSR=3857&imageSR=3857&size=256,256&format=png32&transparent=true&f=image&layers=show:{id}"
                 );
                 service.layers.push(ServiceLayer {
+                    zooms: None,
                     name: format!("map:{id}"),
                     title: format!("{name} (map)"),
                     offer: Offer::Tiles { template },
@@ -1771,6 +1840,7 @@ fn arcgis(url: &str, v: &serde_json::Value) -> Result<Service, String> {
         service.kind = "ArcGIS ImageServer".into();
         let template = format!("{b}/exportImage?bbox={{bbox-epsg-3857}}&bboxSR=3857&imageSR=3857&size=256,256&format=png&f=image");
         service.layers.push(ServiceLayer {
+            zooms: None,
             name: "image".into(),
             title: title.clone(),
             offer: Offer::Tiles { template },
@@ -1788,6 +1858,7 @@ fn arcgis(url: &str, v: &serde_json::Value) -> Result<Service, String> {
             .map(|s| format!("{b}/{}/root.json", s.trim_matches('/')))
             .unwrap_or_else(|| format!("{b}/resources/styles/root.json"));
         service.layers.push(ServiceLayer {
+            zooms: None,
             name: "style".into(),
             title: title.clone(),
             offer: Offer::Style { url: style },
@@ -1873,6 +1944,7 @@ fn arcgis_directory(b: &str, v: &serde_json::Value) -> Service {
         }
         let path = if here.is_empty() { name.to_string() } else { format!("{here}/{name}") };
         service.layers.push(ServiceLayer {
+            zooms: None,
             name: format!("{path}/"),
             title: format!("{name}/"),
             offer: Offer::Service { url: format!("{root}/{path}") },
@@ -1898,6 +1970,7 @@ fn arcgis_directory(b: &str, v: &serde_json::Value) -> Service {
         };
         let short = name.rsplit('/').next().unwrap_or(name);
         service.layers.push(ServiceLayer {
+            zooms: None,
             name: format!("{name}/{kind}"),
             title: format!("{short} ({kind})"),
             offer: Offer::Service { url: format!("{root}/{}/{kind}", if rooted { name } else { short }) },
@@ -1932,6 +2005,7 @@ fn ogc_api(url: &str, v: &serde_json::Value) -> Result<Service, String> {
         // The dataset's layers aren't listed here, so its vector tiles can't be styled: map tiles only.
         if let Some((t, list)) = tileset(url, &links, TileRel::Map) {
             service.layers.push(ServiceLayer {
+                zooms: None,
                 name: "map".into(),
                 title: format!("{name} (map tiles)"),
                 offer: Offer::Tiles { template: t },
@@ -1973,6 +2047,7 @@ fn ogc_api(url: &str, v: &serde_json::Value) -> Result<Service, String> {
         let vector = tileset(url, &links, TileRel::Vector);
         if let Some((t, list)) = &map {
             service.layers.push(ServiceLayer {
+                zooms: None,
                 name: format!("{id} (map tiles)"),
                 title: format!("{title} (map tiles)"),
                 offer: Offer::Tiles { template: t.clone() },
@@ -1985,6 +2060,7 @@ fn ogc_api(url: &str, v: &serde_json::Value) -> Result<Service, String> {
         }
         if let Some((t, list)) = &vector {
             service.layers.push(ServiceLayer {
+                zooms: None,
                 name: format!("{id} (vector tiles)"),
                 title: format!("{title} (vector tiles)"),
                 offer: Offer::VectorTiles { template: t.clone(), layers: vec![id.chars().take(200).collect()] },
@@ -2023,6 +2099,7 @@ fn ogc_api(url: &str, v: &serde_json::Value) -> Result<Service, String> {
         // GeoJSON asked for unless the link says it is already.
         let items = if declared_geojson || query_value(&items, "f").is_some() { items } else { with_query(&items, "f=json") };
         service.layers.push(ServiceLayer {
+            zooms: None,
             name: id.to_string(),
             title,
             offer: Offer::Features { url: items },
@@ -3222,6 +3299,69 @@ mod tests {
             Some(ArcgisPaging { size: Some(1000), order: None })
         );
         assert_eq!(paging(serde_json::json!({"maxRecordCount": 1000})), None);
+    }
+
+    /// The zooms a layer's tiles are asked for at: a WMS layer down to its least scale (its own
+    /// hint or its parent's; WMS 1.1.1's `ScaleHint` too), else zoom 22, and out to its greatest;
+    /// a WMTS layer over its matrices, or those its `TileMatrixSetLimits` name.
+    #[test]
+    fn zooms_from_scale_hints_and_tile_matrices() {
+        let wms = |version: &str, layers: &str| {
+            format!(
+                r#"<WMS_Capabilities version="{version}" xmlns="http://www.opengis.net/wms" xmlns:xlink="http://www.w3.org/1999/xlink">
+<Capability><Request><GetMap><Format>image/png</Format><DCPType><HTTP><Get><OnlineResource xlink:href="https://m.example.org/wms?"/></Get></HTTP></DCPType></GetMap></Request>
+<Layer><CRS>EPSG:3857</CRS><SRS>EPSG:3857</SRS>{layers}</Layer></Capability></WMS_Capabilities>"#
+            )
+        };
+        let zooms = |doc: &str, name: &str| {
+            parse("https://m.example.org/wms", doc.as_bytes()).unwrap().layers.into_iter().find(|l| l.name == name).unwrap().zooms
+        };
+        let equator = r#"<EX_GeographicBoundingBox><westBoundLongitude>-1</westBoundLongitude><eastBoundLongitude>1</eastBoundLongitude><southBoundLatitude>-1</southBoundLatitude><northBoundLatitude>1</northBoundLatitude></EX_GeographicBoundingBox>"#;
+        let doc = wms(
+            "1.3.0",
+            &format!(
+                r#"<Layer><Name>any</Name></Layer>
+<Layer><Name>hinted</Name>{equator}<MinScaleDenominator>2132</MinScaleDenominator><MaxScaleDenominator>4400000</MaxScaleDenominator>
+  <Layer><Name>child</Name>{equator}</Layer></Layer>"#
+            ),
+        );
+        // No hint: down to 22.
+        assert_eq!(zooms(&doc, "any"), Some((0, WMS_MAX_ZOOM)));
+        // 1:2132 is zoom 18 at the equator; 1:4 400 000 is past zoom 6's scale, within zoom 7's.
+        assert_eq!(zooms(&doc, "hinted"), Some((7, 18)));
+        assert_eq!(zooms(&doc, "child"), Some((7, 18)), "inherited");
+        // Swiss latitudes: the same scale is a zoom deeper (a zoom's ground scale shrinks with the
+        // latitude's cosine).
+        let swiss = wms(
+            "1.3.0",
+            r#"<Layer><Name>bern</Name><EX_GeographicBoundingBox><westBoundLongitude>7</westBoundLongitude><eastBoundLongitude>8</eastBoundLongitude><southBoundLatitude>46.5</southBoundLatitude><northBoundLatitude>47.5</northBoundLatitude></EX_GeographicBoundingBox><MinScaleDenominator>500</MinScaleDenominator></Layer>"#,
+        );
+        assert_eq!(zooms(&swiss, "bern"), Some((0, 20)));
+        // WMS 1.1.1: a pixel's diagonal on the ground, 0.85 m (0.6 m a side: 1:2142).
+        let old = wms("1.1.1", r#"<Layer><Name>old</Name><ScaleHint min="0.85" max="0"/></Layer>"#);
+        assert_eq!(zooms(&old, "old"), Some((0, 18)));
+        // A WMTS layer: its matrices' zooms, or those its limits name.
+        let wmts = |limits: &str| {
+            let matrix = |z: u32| {
+                format!(
+                    "<TileMatrix><ows:Identifier>{z}</ows:Identifier><ScaleDenominator>{}</ScaleDenominator><TopLeftCorner>-20037508.34278925 20037508.34278925</TopLeftCorner><TileWidth>256</TileWidth><TileHeight>256</TileHeight><MatrixWidth>{}</MatrixWidth><MatrixHeight>{}</MatrixHeight></TileMatrix>",
+                    Z0_SCALE / f64::from(1u32 << z),
+                    1u32 << z,
+                    1u32 << z
+                )
+            };
+            let ms: String = (0..=20).map(matrix).collect();
+            format!(
+                r#"<Capabilities xmlns="http://www.opengis.net/wmts/1.0" xmlns:ows="http://www.opengis.net/ows/1.1" version="1.0.0"><Contents>
+<Layer><ows:Title>Photo</ows:Title><ows:Identifier>photo</ows:Identifier><TileMatrixSetLink><TileMatrixSet>gm</TileMatrixSet>{limits}</TileMatrixSetLink>
+ <ResourceURL resourceType="tile" format="image/jpeg" template="https://t.example.org/{{TileMatrix}}/{{TileRow}}/{{TileCol}}.jpeg"/></Layer>
+<TileMatrixSet><ows:Identifier>gm</ows:Identifier><ows:SupportedCRS>EPSG:3857</ows:SupportedCRS>{ms}</TileMatrixSet></Contents></Capabilities>"#
+            )
+        };
+        let photo = |doc: &str| parse("https://t.example.org/WMTSCapabilities.xml", doc.as_bytes()).unwrap().layers[0].zooms;
+        assert_eq!(photo(&wmts("")), Some((0, 20)), "past the usual 19");
+        let limits = "<TileMatrixSetLimits><TileMatrixLimits><TileMatrix>8</TileMatrix></TileMatrixLimits><TileMatrixLimits><TileMatrix>17</TileMatrix></TileMatrixLimits></TileMatrixSetLimits>";
+        assert_eq!(photo(&wmts(limits)), Some((8, 17)));
     }
 
     #[test]
