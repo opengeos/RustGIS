@@ -249,7 +249,8 @@ WMTS layer whose tile matrix set is in one, is listed and added like any other (
   drawn as the service draws it: nothing is warped, so its lines and labels stay sharp. A WMTS
   layer is drawn so on a map in its tile matrix set's system. Change the map's projection and the
   layer follows: in Web Mercator again, it is asked for in Web Mercator (or warped), and in a
-  projection the layer isn't offered in, it is drawn warped as before.
+  projection the layer isn't offered in, it is drawn warped as before. A WMS layer is drawn so in
+  the first 64 systems it lists that RustGIS can transform, and warped in the rest.
 - **Identify** asks a WMS layer drawn in a system of its own (GetFeatureInfo) in that system.
 - **Axis order.** A WMS 1.3.0 bounding box is written in the order of the system's axes: latitude
   first in EPSG:4326 and other longitude/latitude systems (not in CRS:84), and north first in a

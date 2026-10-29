@@ -1125,10 +1125,14 @@ fn native_matrices(tms: &Node) -> Option<(u16, crate::raster::Crs, Vec<RawMatrix
             size: (u("MatrixWidth")?, u("MatrixHeight")?),
         });
     }
-    // Coarsest first, the finest kept: the detail a close view needs. (The corners' order is
-    // settled per layer, against its area.)
+    // Coarsest first; past `MAX_MATRICES` the middle goes, the coarsest half kept for a wide
+    // view and the finest half for a close one. (The corners' order is settled per layer,
+    // against its area.)
     out.sort_by(|a, b| b.scale.total_cmp(&a.scale));
-    out.drain(..out.len().saturating_sub(warp::MAX_MATRICES));
+    let (coarse, len) = (warp::MAX_MATRICES / 2, out.len());
+    if len > warp::MAX_MATRICES {
+        out.drain(coarse..len - (warp::MAX_MATRICES - coarse));
+    }
     (!out.is_empty()).then_some((u16::try_from(code).ok()?, system, out))
 }
 
@@ -1295,9 +1299,9 @@ fn wmts(url: &str, root: &Node) -> Service {
         service.notes.push(format!("{skipped} layers have no tile matrix set RustGIS can draw and are left out"));
     }
     if too_long > 0 {
-        service.notes.push(format!(
-            "{too_long} layers in another coordinate system are left out: their tile matrix sets have too many matrices to keep in a layer's address (4096 bytes)"
-        ));
+        service
+            .notes
+            .push(format!("{too_long} layers in another coordinate system are left out: their addresses are longer than 4096 bytes"));
     }
     service
 }

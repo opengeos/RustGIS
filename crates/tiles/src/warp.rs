@@ -142,10 +142,10 @@ pub(crate) fn make(url: &str) -> Made {
     Made::ForNow(tile)
 }
 
-/// Whether a picture's failure means the service doesn't have it: a 4xx other than a timeout
-/// (408) or too many requests (429). Such a picture is left clear.
+/// Whether a picture's failure means the service doesn't have it: a 4xx other than a refused
+/// login (401, 403), a timeout (408) or too many requests (429). Such a picture is left clear.
 pub fn missing(error: &str) -> bool {
-    cache::http_status(error).is_some_and(|s| (400..500).contains(&s) && s != 408 && s != 429)
+    cache::http_status(error).is_some_and(|s| (400..500).contains(&s) && !matches!(s, 401 | 403 | 408 | 429))
 }
 
 /// Whether a picture's failure may pass (the service answers later): a timeout (408), too many requests (429), a
@@ -255,6 +255,7 @@ mod tests {
         assert!(transient("operation timed out"));
         assert!(!transient("http status: 404") && !transient("a picture of the wrong size") && !transient("not an image"));
         assert!(missing("http status: 404") && !missing("http status: 429") && !missing("http status: 503") && !missing("not an image"));
+        assert!(!missing("http status: 401") && !missing("http status: 403"), "a refused login is an error, not a gap");
     }
 
     #[test]

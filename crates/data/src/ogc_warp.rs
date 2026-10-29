@@ -34,7 +34,7 @@ pub const MAX_PARTS: usize = 16;
 /// the layer is zoomed in, its tiles need fewer and are whole).
 pub const MAX_COARSEST_PARTS: usize = 64;
 
-/// Most tile matrices kept of a WMTS tile matrix set.
+/// Most tile matrices kept of a WMTS tile matrix set: the coarsest half and the finest half.
 pub const MAX_MATRICES: usize = 40;
 
 /// Metres in a degree of the equator, for a tile matrix in degrees (OGC's scale denominators
@@ -165,11 +165,12 @@ pub fn transformer(epsg: u32) -> Option<std::sync::Arc<Transformer>> {
 }
 
 /// A tile matrix identifier as it goes into an address: as the capabilities give it, but for
-/// what would change the address's path or query (`/`, `?`, `#`, `&`, `%`, spaces).
+/// what would change the address's path or query (`/`, `?`, `#`, `&`, `%`, spaces), and the
+/// braces, so that no `{ncol}` or `{nrow}` in it is filled in later.
 pub fn matrix_in_address(id: &str) -> String {
     id.bytes()
         .map(|b| match b {
-            b'/' | b'?' | b'#' | b'&' | b'%' | b'+' => format!("%{b:02X}"),
+            b'/' | b'?' | b'#' | b'&' | b'%' | b'+' | b'{' | b'}' => format!("%{b:02X}"),
             b if b.is_ascii_graphic() => (b as char).to_string(),
             b => format!("%{b:02X}"),
         })
@@ -559,6 +560,7 @@ mod tests {
         assert_eq!((base, back), ("https://m.example.org/wms?BBOX={nbbox}", wms));
         assert!(Warp::parse("https://x.example.org/{z}/{x}/{y}.png").is_none());
         assert!(Warp::parse("https://x.example.org/a#rustgis-warp=1/0/0;crs=2056").is_none(), "no layout");
+        assert_eq!(matrix_in_address("EPSG:2056:{ncol}/a b"), "EPSG:2056:%7Bncol%7D%2Fa%20b");
     }
 
     /// A map tile over Bern, from swisstopo's LV95 (EPSG:2056) matrices: the one nearest its
