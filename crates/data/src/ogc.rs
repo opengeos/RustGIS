@@ -750,29 +750,25 @@ struct Scales {
 }
 
 impl Scales {
-    /// A layer's own hints; `None` when it gives none (it then has its parent's).
-    fn of(layer: &Node) -> Option<Scales> {
+    /// A layer's hints, each its own or else its parent's (`inherited`): WMS 1.3.0 replaces
+    /// each element on its own (Table 7).
+    fn of(layer: &Node, inherited: Scales) -> Scales {
         let num = |t: Option<&str>| t.and_then(|t| t.trim().parse::<f64>().ok()).filter(|v| v.is_finite() && *v > 0.0);
-        let (min, max) =
-            (num(child_text(layer, "MinScaleDenominator").as_deref()), num(child_text(layer, "MaxScaleDenominator").as_deref()));
-        if min.is_some() || max.is_some() {
-            return Some(Scales { min, max });
-        }
-        let hint = child(layer, "ScaleHint")?;
-        let scale = |k: &str| num(hint.attribute(k)).map(|d| d / std::f64::consts::SQRT_2 / 0.000_28);
-        let s = Scales { min: scale("min"), max: scale("max") };
-        (s != Scales::default()).then_some(s)
+        let hint = child(layer, "ScaleHint");
+        let scale = |k: &str| num(hint.as_ref().and_then(|h| h.attribute(k))).map(|d| d / std::f64::consts::SQRT_2 / 0.000_28);
+        let min = num(child_text(layer, "MinScaleDenominator").as_deref()).or_else(|| scale("min"));
+        let max = num(child_text(layer, "MaxScaleDenominator").as_deref()).or_else(|| scale("max"));
+        Scales { min: min.or(inherited.min), max: max.or(inherited.max) }
     }
 
-    /// The Web Mercator zooms the layer is drawn at, worked out at the middle latitude of its
-    /// area (`bbox`), where a zoom's scale on the ground is its scale at the equator times the
-    /// latitude's cosine: down to its least scale (else [`WMS_MAX_ZOOM`]), out to its greatest.
-    fn zooms(self, bbox: Option<[f64; 4]>) -> (u8, u8) {
-        let lat = bbox.map_or(0.0, |b| (b[1] + b[3]) / 2.0).clamp(-85.0, 85.0);
-        // The first zoom at or past a scale (a hair short of it counts: hints are rounded).
-        let zoom = |scale: f64| ((Z0_SCALE * lat.to_radians().cos() / scale).log2() - 0.05).ceil().clamp(0.0, 24.0) as u8;
-        let max = self.min.map_or(WMS_MAX_ZOOM, zoom);
-        let min = self.max.map_or(0, zoom).min(max);
+    /// The Web Mercator zooms the layer is drawn at: down to the last whose scale is at or above
+    /// its least (else [`WMS_MAX_ZOOM`]), out to the first at or below its greatest. A service
+    /// works out the scale of a request in Web Mercator in its metres, as the zooms' scales are
+    /// (a hair past a hint counts: hints are rounded).
+    fn zooms(self) -> (u8, u8) {
+        let at = |scale: f64| (Z0_SCALE / scale).log2();
+        let max = self.min.map_or(WMS_MAX_ZOOM, |s| (at(s) + 0.05).floor().clamp(0.0, 24.0) as u8);
+        let min = self.max.map_or(0, |s| (at(s) - 0.05).ceil().clamp(0.0, 24.0) as u8).min(max);
         (min, max)
     }
 }
@@ -850,7 +846,7 @@ fn wms(url: &str, root: &Node) -> Service {
             None => inherited_time,
         };
         // Its own scale hints replace those it inherits (WMS 1.3.0 §7.2.4.8).
-        let scales = Scales::of(&layer).unwrap_or(inherited_scales);
+        let scales = Scales::of(&layer, inherited_scales);
         for sub in children(&layer, "Layer") {
             stack.push((sub, Rc::clone(&crs), bbox, queryable, Rc::clone(&styles), time.clone(), scales));
         }
@@ -888,7 +884,7 @@ fn wms(url: &str, root: &Node) -> Service {
             legends.push(l);
         }
         service.layers.push(ServiceLayer {
-            zooms: Some(scales.zooms(bbox)),
+            zooms: Some(scales.zooms()),
             name,
             title,
             offer: Offer::Tiles { template },
@@ -3327,16 +3323,18 @@ mod tests {
         );
         // No hint: down to 22.
         assert_eq!(zooms(&doc, "any"), Some((0, WMS_MAX_ZOOM)));
-        // 1:2132 is zoom 18 at the equator; 1:4 400 000 is past zoom 6's scale, within zoom 7's.
+        // 1:2132 is zoom 18; 1:4 400 000 is past zoom 6's scale, within zoom 7's.
         assert_eq!(zooms(&doc, "hinted"), Some((7, 18)));
         assert_eq!(zooms(&doc, "child"), Some((7, 18)), "inherited");
-        // Swiss latitudes: the same scale is a zoom deeper (a zoom's ground scale shrinks with the
-        // latitude's cosine).
-        let swiss = wms(
+        // Drawn down to 1:1000: zoom 19 (1:1066), not 20 (1:533, which it doesn't draw). A child
+        // giving only its least scale keeps its parent's greatest.
+        let deep = wms(
             "1.3.0",
-            r#"<Layer><Name>bern</Name><EX_GeographicBoundingBox><westBoundLongitude>7</westBoundLongitude><eastBoundLongitude>8</eastBoundLongitude><southBoundLatitude>46.5</southBoundLatitude><northBoundLatitude>47.5</northBoundLatitude></EX_GeographicBoundingBox><MinScaleDenominator>500</MinScaleDenominator></Layer>"#,
+            r#"<Layer><Name>deep</Name><MinScaleDenominator>1000</MinScaleDenominator><MaxScaleDenominator>4400000</MaxScaleDenominator>
+  <Layer><Name>own least</Name><MinScaleDenominator>500</MinScaleDenominator></Layer></Layer>"#,
         );
-        assert_eq!(zooms(&swiss, "bern"), Some((0, 20)));
+        assert_eq!(zooms(&deep, "deep"), Some((7, 19)));
+        assert_eq!(zooms(&deep, "own least"), Some((7, 20)));
         // WMS 1.1.1: a pixel's diagonal on the ground, 0.85 m (0.6 m a side: 1:2142).
         let old = wms("1.1.1", r#"<Layer><Name>old</Name><ScaleHint min="0.85" max="0"/></Layer>"#);
         assert_eq!(zooms(&old, "old"), Some((0, 18)));
