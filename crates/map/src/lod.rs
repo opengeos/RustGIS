@@ -1,15 +1,15 @@
-//! Thinned copies of a layer's projected geometry, for drawing it zoomed out.
+//! Thinned display copies of a layer's geometry, for drawing it zoomed out.
 //!
 //! A detailed layer seen whole puts many vertices in each pixel: walking them all on every frame
 //! makes panning and zooming stall. A thinned copy keeps a vertex only when it is a set distance
 //! from the last one kept, so the map draws from far fewer vertices and looks the same. Copies
 //! are made per level (a tolerance of 2^level projection units) on first use and kept, a few
-//! at a time; the renderer picks the level just under a third of a pixel at the view's zoom.
+//! at a time; the renderer picks the level just under a device pixel at the view's zoom.
 
 use rustgis_data::{Coord, Geometry};
 
 /// The tolerance, in device pixels, a thinned copy keeps within.
-pub const THIN_PX: f64 = 0.3;
+pub const THIN_PX: f64 = 1.0;
 
 /// Layers with fewer line and ring vertices than this are always drawn from the full geometry.
 pub const THIN_ABOVE: usize = 200_000;
@@ -23,6 +23,101 @@ pub const LEVELS_KEPT: usize = 3;
 
 /// Additional geometry retained for display levels per layer, excluding original/projected data.
 pub const CACHE_BYTES: usize = 64 * 1024 * 1024;
+
+/// Inputs of an unsuccessful display attempt, so unchanged frames do not repeat the work.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Rejected {
+    pub revision: u64,
+    pub level: i32,
+    pub rows: usize,
+    pub budget: usize,
+    pub whole_layer_eligible: bool,
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Counts display construction on this test thread, including candidates later rejected.
+    pub(crate) static DISPLAY_BUILDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// One bounded display level, independent of the full geometry used for interaction.
+#[derive(Debug)]
+pub(crate) struct Display {
+    pub revision: u64,
+    pub level: i32,
+    pub geometries: Vec<Option<Geometry>>,
+    pub extents: Vec<rustgis_geom::Extent>,
+    pub bytes: usize,
+}
+
+/// A display copy projected only after thinning. Mercator's largest derivative over the
+/// geometry bounds converts the tolerance to degrees conservatively, including polar clamping.
+/// Other projections retain projected-space thinning: sampled scales cannot bound their seams
+/// or singularities. Non-finite vertices survive thinning and still break paths after projection.
+pub fn project_thinned(g: &Geometry, flat: &crate::projection::Flat, tol: f64) -> Geometry {
+    if !tol.is_finite() || tol <= 0.0 {
+        return flat.project(g);
+    }
+    if !matches!(flat, crate::projection::Flat::Mercator) {
+        return thin(&flat.project(g), tol);
+    }
+    let e = g.extent();
+    let latitude = e.min_y.abs().max(e.max_y.abs()).min(rustgis_geom::MAX_LAT);
+    // |dx| + |dy| in degrees times this derivative bounds projected Euclidean distance.
+    let per_degree = rustgis_geom::MERCATOR_R * std::f64::consts::PI / 180.0 / latitude.to_radians().cos();
+    flat.project(&thin(g, tol / per_degree))
+}
+
+/// Builds a Mercator display level without ever constructing the full projected geometry.
+/// Original extents are transformed separately so thinning cannot change culling or splats.
+/// Both the geometry and its extent table fit in the optional display-cache budget.
+pub(crate) fn display(
+    features: &[rustgis_data::Feature],
+    revision: u64,
+    level: i32,
+    budget: usize,
+    whole_layer_eligible: bool,
+) -> Option<Display> {
+    #[cfg(test)]
+    DISPLAY_BUILDS.set(DISPLAY_BUILDS.get() + 1);
+    let eligible: usize = features.iter().filter_map(|f| f.geometry.as_ref()).map(thinnable).sum();
+    if !whole_layer_eligible && eligible <= THIN_ABOVE {
+        return None;
+    }
+    let mut bytes = features.len().checked_mul(std::mem::size_of::<Option<Geometry>>() + std::mem::size_of::<rustgis_geom::Extent>())?;
+    if bytes > budget {
+        return None;
+    }
+    let mut geometries = Vec::with_capacity(features.len());
+    let mut extents = Vec::with_capacity(features.len());
+    let (mut all, mut kept) = (0usize, 0usize);
+    for f in features {
+        let g = f.geometry.as_ref().map(|g| {
+            all = all.saturating_add(vertices(g));
+            project_thinned(g, &crate::projection::Flat::Mercator, tolerance(level))
+        });
+        kept = kept.saturating_add(g.as_ref().map_or(0, vertices));
+        bytes = bytes.checked_add(g.as_ref().map_or(0, heap_bytes))?;
+        if bytes > budget {
+            return None;
+        }
+        // Mercator is monotone in both axes; two opposite corners bound every source vertex.
+        let e = f.geometry.as_ref().map_or(rustgis_geom::Extent::EMPTY, Geometry::extent);
+        extents.push(if e.is_empty() {
+            e
+        } else {
+            rustgis_geom::Extent::from_points(
+                rustgis_geom::lonlat_to_merc(Coord::new(e.min_x, e.min_y)),
+                rustgis_geom::lonlat_to_merc(Coord::new(e.max_x, e.max_y)),
+            )
+        });
+        geometries.push(g);
+    }
+    if !whole_layer_eligible && kept as f64 > all as f64 * (1.0 - MIN_SAVING) {
+        return None;
+    }
+    Some(Display { revision, level, geometries, extents, bytes })
+}
 
 /// Heap allocation held by a geometry's vectors (the enum itself is in its containing array).
 fn heap_bytes(g: &Geometry) -> usize {
@@ -132,6 +227,60 @@ pub fn vertices(g: &Geometry) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn preprojection_thinning_bounds_mercator_error_at_all_latitudes() {
+        let flat = crate::projection::Flat::Mercator;
+        for (south, north) in [(-1.5, -1.0), (70.0, 85.0), (-90.0, 90.0), (89.0, 95.0)] {
+            let run: Vec<_> = (0..10_000)
+                .map(|i| {
+                    let t = i as f64 / 9999.0;
+                    Coord::new(36.0 + t * 0.5, south + (north - south) * t)
+                })
+                .collect();
+            let original = Geometry::Line(vec![run]);
+            let Geometry::Line(full) = flat.project(&original) else { panic!("line") };
+            let Geometry::Line(kept) = project_thinned(&original, &flat, 10_000.0) else { panic!("line") };
+            // A geometry spanning all latitudes may need every vertex under the polar bound.
+            if south == -1.5 {
+                assert!(kept[0].len() < full[0].len() / 10);
+            }
+            assert_eq!(kept[0].first(), full[0].first());
+            assert_eq!(kept[0].last(), full[0].last());
+            // Each dropped vertex is within tolerance of its preceding retained source vertex.
+            let mut at = 0;
+            for c in &full[0] {
+                if kept[0].get(at + 1) == Some(c) {
+                    at += 1;
+                }
+                let anchor = kept[0][at];
+                assert!((c.x - anchor.x).hypot(c.y - anchor.y) <= 10_000.0 + 1e-6);
+            }
+        }
+    }
+
+    #[test]
+    fn preprojection_preserves_breaks_holes_and_custom_projection_seams() {
+        let flat = crate::projection::Flat::Mercator;
+        let ring = vec![Coord::new(0.0, 0.0), Coord::new(0.01, 0.0), Coord::new(0.01, 0.01), Coord::new(0.0, 0.0)];
+        let g = Geometry::Polygon(vec![vec![ring.clone(), ring]]);
+        assert_eq!(project_thinned(&g, &flat, 1e6), flat.project(&g), "small rings and holes keep their area");
+        let line = Geometry::Line(vec![vec![Coord::new(0.0, 0.0), Coord::new(f64::NAN, 1.0), Coord::new(0.001, 0.0)]]);
+        let Geometry::Line(parts) = project_thinned(&line, &flat, 1e6) else { panic!("line") };
+        assert_eq!(parts[0].len(), 3);
+        assert!(parts[0][1].x.is_nan());
+        for name in ["equalEarth", "northPolar", "EPSG:32633"] {
+            let custom = crate::projection::Flat::Custom(std::sync::Arc::new(crate::projection::Projector::new(name).unwrap()));
+            let g = Geometry::Line(vec![vec![Coord::new(170.0, 30.0), Coord::new(-170.0, 40.0)]]);
+            let actual = project_thinned(&g, &custom, 1000.0);
+            let expected = thin(&custom.project(&g), 1000.0);
+            // Invalid coordinates compare through their serialized debug form, since NaN != NaN.
+            assert_eq!(format!("{actual:?}"), format!("{expected:?}"), "{name}");
+        }
+        for tolerance in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+            assert_eq!(project_thinned(&g, &flat, tolerance), flat.project(&g));
+        }
+    }
 
     #[test]
     fn optional_levels_respect_heap_budget_and_leave_original_geometry_intact() {

@@ -196,6 +196,11 @@ pub struct Layer {
     /// Shared, like the features: an undo snapshot or other copy of the layer doesn't copy it.
     #[serde(skip)]
     projected: std::sync::Arc<Vec<Option<Geometry>>>,
+    /// The last Mercator display level; full projection stays lazy for interaction.
+    #[serde(skip)]
+    display: Option<std::sync::Arc<lod::Display>>,
+    #[serde(skip)]
+    display_rejected: Option<lod::Rejected>,
     /// Each projected geometry's extent, for culling without walking its vertices.
     #[serde(skip)]
     projected_extents: std::sync::Arc<Vec<Extent>>,
@@ -367,6 +372,8 @@ impl Layer {
             postgis: None,
             gpkg: None,
             projected: Default::default(),
+            display: None,
+            display_rejected: None,
             projected_extents: Default::default(),
             projected_vertices: 0,
             thinned: Default::default(),
@@ -512,7 +519,9 @@ impl Layer {
     /// Snapshots report the same shared allocations; totals are memoized until mutable access
     /// changes an allocation identity, including edits through the public dataset API.
     pub fn view_cache_bytes(&self) -> usize {
-        self.view_memory.total(&self.dataset.features, &self.projected, &self.projected_extents, &self.thinned)
+        self.view_memory
+            .total(&self.dataset.features, &self.projected, &self.projected_extents, &self.thinned)
+            .saturating_add(self.display.as_ref().map_or(0, |d| d.bytes))
     }
 
     /// Every feature of a streamed layer's source (up to the read limit), for tools and for
@@ -649,6 +658,7 @@ impl Layer {
     /// vertex index, which only the source geometry has.
     pub fn projected_in(&mut self, flat: &projection::Flat, key: &str) -> &[Option<Geometry>] {
         if self.projected_rev != self.geometry_rev || self.projected.len() != self.dataset.features.len() || self.projected_for != key {
+            self.display = None;
             let projected: Vec<Option<Geometry>> =
                 self.dataset.features.iter().map(|ft| ft.geometry.as_ref().map(|g| flat.project(g))).collect();
             self.projected_extents =
@@ -667,10 +677,53 @@ impl Layer {
         self.projected_in(&projection::Flat::Mercator, "mercator")
     }
 
+    /// Prepares a bounded Mercator display copy without filling the exact projection cache.
+    /// Callers needing labels, selection or other exact positions must use `thinned_in` instead.
+    /// `whole_layer_eligible` applies the complete source's LOD decision to each streamed chunk.
+    /// Returns false for unsupported projections, small layers, weak savings or a full budget.
+    pub fn prepare_display(&mut self, flat: &projection::Flat, tol: f64, whole_layer_eligible: bool) -> bool {
+        let Some(level) = lod::level(tol).filter(|_| matches!(flat, projection::Flat::Mercator)) else { return false };
+        if self
+            .display
+            .as_ref()
+            .is_some_and(|d| d.revision == self.geometry_rev && d.level == level && d.geometries.len() == self.dataset.features.len())
+        {
+            return true;
+        }
+        self.display = None;
+        let used: usize = self.thinned.iter().filter_map(|(_, c)| c.as_ref()).map(|c| lod::cache_bytes(c)).sum();
+        let budget = self
+            .source
+            .as_ref()
+            .map_or(lod::CACHE_BYTES, |s| {
+                s.budget()
+                    .saturating_sub(self.view_memory.base(&self.dataset.features, &self.projected, &self.projected_extents))
+                    .min(lod::CACHE_BYTES)
+            })
+            .saturating_sub(used);
+        let attempt = lod::Rejected { revision: self.geometry_rev, level, rows: self.dataset.features.len(), budget, whole_layer_eligible };
+        if self.display_rejected == Some(attempt) {
+            return false;
+        }
+        self.display =
+            lod::display(&self.dataset.features, self.geometry_rev, level, budget, whole_layer_eligible).map(std::sync::Arc::new);
+        self.display_rejected = self.display.is_none().then_some(attempt);
+        self.display.is_some()
+    }
+
+    /// The copy and original extents from a successful `prepare_display`, row for row.
+    pub fn display_cache(&self) -> Option<(&[Option<Geometry>], &[Extent])> {
+        self.display
+            .as_ref()
+            .filter(|d| d.revision == self.geometry_rev && d.geometries.len() == self.dataset.features.len())
+            .map(|d| (d.geometries.as_slice(), d.extents.as_slice()))
+    }
+
     /// The projected geometry (see [`Layer::projected_in`]) as drawn at a tolerance in projection
     /// units: a thinned copy at the level just under it (see [`lod`]), made on first use, or the
     /// geometry itself for a small layer. Read it back with [`Layer::thinned_cache`].
     pub fn thinned_in(&mut self, flat: &projection::Flat, key: &str, tol: f64) -> &[Option<Geometry>] {
+        self.display = None;
         self.projected_in(flat, key);
         let budget = self.source.as_ref().map_or(lod::CACHE_BYTES, |s| {
             let base = self.view_memory.base(&self.dataset.features, &self.projected, &self.projected_extents);
@@ -685,7 +738,11 @@ impl Layer {
             }
             None => {
                 let t = lod::tolerance(level);
-                let copy = lod::thin_budgeted(&self.projected, t, budget);
+                let copy = if matches!(flat, projection::Flat::Mercator) {
+                    lod::display(&self.dataset.features, self.geometry_rev, level, budget, true).map(|d| d.geometries)
+                } else {
+                    lod::thin_budgeted(&self.projected, t, budget)
+                };
                 // The saving counts against every vertex the copy holds, points included.
                 let all: usize = self.projected.iter().flatten().map(lod::vertices).sum();
                 let copy = copy.filter(|c| {
@@ -731,6 +788,8 @@ impl Layer {
 
     /// Drops the projected geometry cache (the feature cache).
     pub fn clear_cache(&mut self) {
+        self.display = None;
+        self.display_rejected = None;
         self.projected = Default::default();
         self.projected_extents = Default::default();
         self.projected_vertices = 0;
@@ -745,7 +804,7 @@ impl Layer {
     pub fn adopt_cache(&mut self, other: &Layer) -> bool {
         let fits = other.dataset.features.shares(&self.dataset.features)
             && other.geometry_rev == self.geometry_rev
-            && other.is_cached(&other.projected_for)
+            && (other.is_cached(&other.projected_for) || other.display_cache().is_some())
             && self.source.as_ref().is_none_or(|source| {
                 !source.is_pending()
                     && other.source.as_ref().is_some_and(|old| {
@@ -753,6 +812,8 @@ impl Layer {
                     })
             });
         if fits {
+            self.display = other.display.clone();
+            self.display_rejected = other.display_rejected;
             self.projected = other.projected.clone();
             self.projected_extents = other.projected_extents.clone();
             self.projected_vertices = other.projected_vertices;
@@ -2708,6 +2769,59 @@ mod tests {
         m.layer_mut(id).unwrap().touch_geometry();
         m.adopt_caches(&copy);
         assert!(!m.layer(id).unwrap().is_cached("mercator"));
+    }
+
+    #[test]
+    fn display_projection_is_lazy_shared_bounded_and_invalidated() {
+        let flat = projection::Flat::Mercator;
+        let mut l = long_line(lod::THIN_ABOVE + 1000);
+        let original = l.dataset.features.clone();
+        assert!(l.prepare_display(&flat, 12_000.0, false));
+        assert!(l.projected_cache().is_empty(), "display must not project discarded vertices");
+        let (g, extents) = l.display_cache().unwrap();
+        assert!(lod::vertices(g[0].as_ref().unwrap()) < (lod::THIN_ABOVE + 1000) / 40);
+        let expected_extent = flat.project(original[0].geometry.as_ref().unwrap()).extent();
+        assert_eq!(extents, &[expected_extent]);
+        let before = l.view_cache_bytes();
+        assert!(before > rustgis_data::source::memory::features_bytes(&original));
+        let mut copy = l.clone();
+        assert!(copy.prepare_display(&flat, 12_000.0, false));
+        assert_eq!(copy.display_cache().unwrap().0.as_ptr(), l.display_cache().unwrap().0.as_ptr());
+        let mut receiver = long_line(1);
+        receiver.dataset = l.dataset.clone();
+        receiver.geometry_rev = l.geometry_rev;
+        assert!(receiver.adopt_cache(&copy));
+        assert_eq!(receiver.display_cache().unwrap().0.as_ptr(), l.display_cache().unwrap().0.as_ptr());
+        // Requesting exact positions remains exact and drops the optional display copy.
+        assert_eq!(copy.projected().len(), 1);
+        assert!(copy.display_cache().is_none());
+        assert_eq!(lod::vertices(copy.projected_cache()[0].as_ref().unwrap()), lod::THIN_ABOVE + 1000);
+        l.touch_geometry();
+        assert!(l.display_cache().is_none());
+        assert!(l.prepare_display(&flat, 24_000.0, false));
+        l.clear_cache();
+        assert!(l.display_cache().is_none());
+        assert_eq!(l.view_cache_bytes(), rustgis_data::source::memory::features_bytes(&original));
+        assert!(lod::display(&original, 0, 12, 1, false).is_none());
+        assert!(!long_line(100).prepare_display(&flat, 12_000.0, false));
+        assert_eq!(l.dataset.features, original);
+    }
+
+    #[test]
+    fn rejected_display_levels_are_not_rebuilt_on_unchanged_frames() {
+        let flat = projection::Flat::Mercator;
+        let mut l = long_line(lod::THIN_ABOVE + 1000);
+        assert!(!l.prepare_display(&flat, 0.001, false));
+        let built = lod::DISPLAY_BUILDS.get();
+        l.thinned_in(&flat, "mercator", 0.001);
+        assert!(!l.prepare_display(&flat, 0.001, false));
+        assert_eq!(lod::DISPLAY_BUILDS.get(), built + 1, "only thinned_in's first cache attempt runs");
+        l.thinned_in(&flat, "mercator", 0.001);
+        assert!(!l.prepare_display(&flat, 0.001, false));
+        assert_eq!(lod::DISPLAY_BUILDS.get(), built + 1);
+        l.touch_geometry();
+        assert!(!l.prepare_display(&flat, 0.001, false));
+        assert_eq!(lod::DISPLAY_BUILDS.get(), built + 2, "a changed geometry must retry");
     }
 
     #[test]

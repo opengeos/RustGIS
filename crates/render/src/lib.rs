@@ -161,6 +161,11 @@ pub struct View {
 }
 
 impl View {
+    /// Display error budget in map units, with one physical pixel independent of device density.
+    fn lod_tolerance(&self) -> f64 {
+        self.camera.res / self.pixels_per_point.max(0.01) * rustgis_map::lod::THIN_PX
+    }
+
     pub fn pixel_size(&self) -> (u32, u32) {
         let w = (self.width * self.pixels_per_point).round().clamp(1.0, MAX_SIDE as f64) as u32;
         let h = (self.height * self.pixels_per_point).round().clamp(1.0, MAX_SIDE as f64) as u32;
@@ -2194,7 +2199,7 @@ pub fn extruded_shapes(map: &mut Map, view: &View) -> Vec<ExtrudedShape> {
     let (flat, key) = (map.flat(), map.projection.code());
     // Extrusion heights are metres on the map's body.
     let body = map.body().ratio();
-    let tol = view.camera.res * rustgis_map::lod::THIN_PX;
+    let tol = view.lod_tolerance();
     let mut order: Vec<usize> = (0..map.layers.len()).rev().collect();
     order.sort_by_key(|i| map.layers.get(*i).map_or(0, |l| l.priority));
     let mut out = Vec::new();
@@ -2543,7 +2548,7 @@ fn extrusions_tilted(map: &mut Map, view: &View, pm: &mut Pixmap) {
         let Some(x) = layer.extrusion.clone() else { continue };
         let rows = layer.drawn_rows(scale);
         // Refreshes the projected copy for this projection.
-        layer.thinned_in(&flat, &key, view.camera.res * rustgis_map::lod::THIN_PX);
+        layer.projected_in(&flat, &key);
         let layer: &rustgis_map::Layer = layer;
         let geoms: Vec<Option<&Geometry>> = layer.projected_cache().iter().map(Option::as_ref).collect();
         effects::extrude_tilted(pm, view, &layer.dataset, &geoms, &rows, &x, |c| flat.ground_per_unit(c) * body, fog, |r| layer.symbol(r));
@@ -2996,7 +3001,7 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
         let complete_source = source.is_some();
         // LOD is chosen for the entire layer, not separately for each chunk. Both the
         // activation threshold and the required saving must match an ordinary whole read.
-        let thin_tol = view.camera.res / view.pixels_per_point.max(0.01) * rustgis_map::lod::THIN_PX;
+        let thin_tol = view.lod_tolerance();
         let mut thin_complete = false;
         if globe.is_none()
             && layer.geometry_type() != GeometryType::Point
@@ -3006,11 +3011,18 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
             let result = visit_complete(source.as_ref(), &mut |features| {
                 for feature in features {
                     if let Some(g) = feature.geometry {
-                        let g = flat.project(&g);
-                        eligible = eligible.saturating_add(rustgis_map::lod::thinnable(&g));
-                        all = all.saturating_add(rustgis_map::lod::vertices(&g));
-                        kept = kept
-                            .saturating_add(rustgis_map::lod::vertices(&rustgis_map::lod::thin(&g, rustgis_map::lod::tolerance(level))));
+                        let tolerance = rustgis_map::lod::tolerance(level);
+                        let (counted, thinned) = if matches!(flat, rustgis_map::projection::Flat::Mercator) {
+                            let thinned = rustgis_map::lod::project_thinned(&g, &flat, tolerance);
+                            (g, thinned)
+                        } else {
+                            let projected = flat.project(&g);
+                            let thinned = rustgis_map::lod::thin(&projected, tolerance);
+                            (projected, thinned)
+                        };
+                        eligible = eligible.saturating_add(rustgis_map::lod::thinnable(&counted));
+                        all = all.saturating_add(rustgis_map::lod::vertices(&counted));
+                        kept = kept.saturating_add(rustgis_map::lod::vertices(&thinned));
                     }
                 }
                 Ok(())
@@ -3086,9 +3098,17 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
                     }
                 }
             }
-            // Drawn from a copy thinned to under a third of a pixel: a detailed layer seen whole
-            // otherwise walks many vertices per pixel on every frame.
-            if globe.is_none() {
+            // Exact positions are needed by labels, selection and effects. Plain flat layers can
+            // project only their retained display vertices, leaving interaction geometry lazy.
+            let display_only = globe.is_none()
+                && (!layer.labels.enabled || display.paused)
+                && layer.selection.is_empty()
+                && !layer.graphics
+                && layer.aggregation.is_none()
+                && layer.extrusion.is_none()
+                && (!complete_source || thin_complete)
+                && layer.prepare_display(&flat, thin_tol, complete_source);
+            if globe.is_none() && !display_only {
                 if complete_source {
                     layer.projected_in(&flat, &key);
                 } else {
@@ -3102,26 +3122,42 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
             // The globe draws the lon/lat geometry itself; the flat map its Web Mercator copy.
             let geoms: Vec<Option<&Geometry>> = if globe.is_some() {
                 ds_ptr.features.iter().map(|f| f.geometry.as_ref()).collect()
+            } else if display_only {
+                layer.display_cache().map_or(&[][..], |(g, _)| g).iter().map(Option::as_ref).collect()
             } else {
                 layer.projected_cache().iter().map(Option::as_ref).collect()
             };
             // What the features draw from, and their extents for culling (on the flat map, cached).
             // Only the fills and strokes below draw thinned: the selection, labels, aggregation and
             // extrusion keep `geoms`, the full geometry, for their exact positions.
-            let chunk_thinned: Vec<Option<Geometry>> = if thin_complete {
+            let chunk_thinned: Vec<Option<Geometry>> = if thin_complete && !display_only {
                 let tolerance = rustgis_map::lod::level(thin_tol).map_or(thin_tol, rustgis_map::lod::tolerance);
-                geoms.iter().map(|g| g.map(|g| rustgis_map::lod::thin(g, tolerance))).collect()
+                if matches!(flat, rustgis_map::projection::Flat::Mercator) {
+                    ds_ptr
+                        .features
+                        .iter()
+                        .map(|f| f.geometry.as_ref().map(|g| rustgis_map::lod::project_thinned(g, &flat, tolerance)))
+                        .collect()
+                } else {
+                    geoms.iter().map(|g| g.map(|g| rustgis_map::lod::thin(g, tolerance))).collect()
+                }
             } else {
                 Vec::new()
             };
-            let drawn: Vec<Option<&Geometry>> = if globe.is_some() {
+            let drawn: Vec<Option<&Geometry>> = if globe.is_some() || display_only {
                 geoms.clone()
             } else if complete_source {
                 if thin_complete { chunk_thinned.iter().map(Option::as_ref).collect() } else { geoms.clone() }
             } else {
                 layer.thinned_cache(thin_tol).iter().map(Option::as_ref).collect()
             };
-            let extents = if globe.is_some() { &[][..] } else { layer.projected_extents() };
+            let extents = if globe.is_some() {
+                &[][..]
+            } else if display_only {
+                layer.display_cache().map_or(&[][..], |(_, e)| e)
+            } else {
+                layer.projected_extents()
+            };
             // GPU-eligible: a plain vector layer drawn at full opacity with no mask, blend,
             // aggregation, extrusion or per-row graphics (an inert aggregation/extrusion on the
             // "wrong" geometry type still falls back — conservative and correct).
@@ -7685,3 +7721,6 @@ mod offset_normal_tests {
         out
     }
 }
+
+#[cfg(test)]
+mod lod_tests;
