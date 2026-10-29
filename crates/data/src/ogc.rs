@@ -737,7 +737,8 @@ fn is_web_mercator(code: &str) -> bool {
 // WMS
 
 /// The greatest zoom a WMS layer is drawn at when its service gives no scale hint: a GetMap is
-/// drawn at any scale, and this is about 3 cm a pixel (an aerial photo's 10 cm fills it).
+/// drawn at any scale, and this is about 4 cm a pixel at the equator (an aerial photo's 10 cm
+/// fills it).
 const WMS_MAX_ZOOM: u8 = 22;
 
 /// A WMS layer's scale hints: the scale denominators it is drawn between (WMS 1.3.0's
@@ -1010,7 +1011,7 @@ fn wmts_zooms(layer: &Node, set: &str, sets: &[(String, Vec<(String, u8)>)]) -> 
         .unwrap_or_default();
     let zooms = matrices.iter().filter(|(id, _)| limited.is_empty() || limited.contains(id)).map(|(_, z)| *z);
     let (lo, hi) = zooms.fold((u8::MAX, 0), |(lo, hi), z| (lo.min(z), hi.max(z)));
-    (lo <= hi).then_some((lo, hi.min(24)))
+    (lo <= hi.min(24)).then_some((lo, hi.min(24)))
 }
 
 fn wmts(url: &str, root: &Node) -> Service {

@@ -185,8 +185,9 @@ A WMS or WMTS layer's tiles are asked for down to the detail its service gives, 
 only past it: a WMTS layer's over the zooms of its tile matrix set (or those its
 `TileMatrixSetLimits` name; swisstopo's SWISSIMAGE goes to zoom 20), a WMS layer's between the
 scales it is drawn at (WMS 1.3.0's `MinScaleDenominator` and `MaxScaleDenominator`, 1.1.1's
-`ScaleHint`, its parent's when it gives none), else down to zoom 22 (about 3 cm a pixel), since a
-WMS draws at any scale. `service.layers` lists each layer's `minZoom` and `maxZoom`.
+`ScaleHint`, its parent's when it gives none), else down to zoom 22 (about 4 cm a pixel at the
+equator), since a WMS draws at any scale. `service.layers` lists these zooms, `minZoom` and
+`maxZoom`, for each WMS and WMTS layer.
 
 The type is guessed from the address (`?SERVICE=`, `/wmts`, `/wfs`, `/wcs`, `/collections`, `/rest/services`…) or
 chosen (select **OGC API Features and Tiles** when a landing page's address doesn't identify
