@@ -178,7 +178,7 @@ projections such as Web Mercator (EPSG:3857) introduce scale distortion that inc
 use a local projected coordinate system (such as UTM or State Plane) when accurate ground distances
 are required. Leaving `radius` empty or setting it to `0` automatically estimates the bandwidth
 using Silverman's rule of thumb based on the points' spatial distribution (falling back to extent span / 30,
-or 1000 coordinate-space linear units for a single or coincident points). When `pixelSize` is
+or 1000 coordinate-space linear units for a single point or coincident points). When `pixelSize` is
 omitted, an adaptive cell size is calculated to span approximately 250 cells along the longer side
 of the extent. The extent can optionally be overridden via `extent` as `xmin,ymin,xmax,ymax` text or
 a four-number array. The output is written as a single-band Float32 GeoTIFF.

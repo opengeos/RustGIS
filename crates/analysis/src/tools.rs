@@ -764,7 +764,7 @@ pub static TOOLS: &[ToolSpec] = &[
                 kind: K::Number,
                 required: false,
                 default: "",
-                help: "Output cell size in CRS linear units (default: ~250 cells across extent).",
+                help: "Output cell size in CRS linear units (default: ~250 cells along the longer side of the extent).",
             },
             P {
                 name: "kernel",
@@ -1923,7 +1923,16 @@ fn kernel_density_tool(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String>
     }
 
     let field_name = s(p, "field").trim();
-    let fi = if !field_name.is_empty() { Some(find_field_case_insensitive(ds, field_name)?) } else { None };
+    let fi = if !field_name.is_empty() {
+        let idx = find_field_case_insensitive(ds, field_name)?;
+        let f = ds.fields.get(idx).ok_or_else(|| format!("no field named '{field_name}'"))?;
+        if !f.ty.is_numeric() {
+            return Err(format!("field '{field_name}' must be numeric (is {})", f.ty.label()));
+        }
+        Some(idx)
+    } else {
+        None
+    };
 
     let mut pts: Vec<(Coord, f64)> = Vec::new();
     let mut skipped: usize = 0;
@@ -1971,7 +1980,6 @@ fn kernel_density_tool(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String>
             }
             _ => {
                 skipped += 1;
-                continue;
             }
         }
     }
@@ -2041,10 +2049,6 @@ fn kernel_density_tool(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String>
         None if given("pixelSize") => return Err("pixel size must be a number".into()),
         None => crate::density::auto_cell_size(&grid_ext),
     };
-
-    if p.get("kernel").is_some_and(|v| !v.is_null() && !v.is_string()) {
-        return Err("kernel must be text".into());
-    }
 
     let kernel = match s(p, "kernel") {
         "" => crate::density::KernelType::Quartic,
@@ -4639,6 +4643,75 @@ mod tests {
         )
         .unwrap_err();
         assert!(err_work.contains("too much work"), "{err_work}");
+
+        // 12. Text-valued weight field produces clear, actionable error
+        let mut text_field_ds = Dataset::new("stations_text", GeometryType::Point, vec![Field::new("city", FieldType::Text)]);
+        text_field_ds.crs = Some(Crs::from_epsg(32618).unwrap());
+        text_field_ds
+            .push(Some(Geometry::Point(tr.to_lonlat(Coord::new(500_000.0, 4_428_000.0)).unwrap())), vec![Value::Text("Boston".into())]);
+        let m_text = Map(HashMap::from([("stations_text".to_string(), text_field_ds)]));
+        let err_text_field =
+            crate::run("kernelDensity", &m_text, &serde_json::json!({"input": "stations_text", "field": "city"})).unwrap_err();
+        assert!(err_text_field.contains("field 'city' must be numeric (is Text)"), "{err_text_field}");
+
+        // 13. MultiPoint vs single point vs multiple independent points
+        let p1 = tr.to_lonlat(Coord::new(500_000.0, 4_428_000.0)).unwrap();
+        let p2 = tr.to_lonlat(Coord::new(500_100.0, 4_428_100.0)).unwrap();
+
+        // Single point dataset
+        let mut single_ds = Dataset::new("single", GeometryType::Point, vec![Field::new("w", FieldType::Double)]);
+        single_ds.crs = Some(Crs::from_epsg(32618).unwrap());
+        single_ds.push(Some(Geometry::Point(p1)), vec![Value::Float(2.0)]);
+
+        // MultiPoint dataset with 2 parts
+        let mut multi_ds = Dataset::new("multi", GeometryType::Point, vec![Field::new("w", FieldType::Double)]);
+        multi_ds.crs = Some(Crs::from_epsg(32618).unwrap());
+        multi_ds.push(Some(Geometry::MultiPoint(vec![p1, p2])), vec![Value::Float(2.0)]);
+
+        // Two independent point features
+        let mut two_pts_ds = Dataset::new("two_pts", GeometryType::Point, vec![Field::new("w", FieldType::Double)]);
+        two_pts_ds.crs = Some(Crs::from_epsg(32618).unwrap());
+        two_pts_ds.push(Some(Geometry::Point(p1)), vec![Value::Float(2.0)]);
+        two_pts_ds.push(Some(Geometry::Point(p2)), vec![Value::Float(2.0)]);
+
+        let m_cmp =
+            Map(HashMap::from([("single".to_string(), single_ds), ("multi".to_string(), multi_ds), ("two_pts".to_string(), two_pts_ds)]));
+
+        let res_single = crate::run(
+            "kernelDensity",
+            &m_cmp,
+            &serde_json::json!({"input": "single", "field": "w", "extent": "499800,4427800,500300,4428300", "pixelSize": 25.0, "radius": 150.0}),
+        ).unwrap();
+        let res_multi = crate::run(
+            "kernelDensity",
+            &m_cmp,
+            &serde_json::json!({"input": "multi", "field": "w", "extent": "499800,4427800,500300,4428300", "pixelSize": 25.0, "radius": 150.0}),
+        ).unwrap();
+        let res_two_pts = crate::run(
+            "kernelDensity",
+            &m_cmp,
+            &serde_json::json!({"input": "two_pts", "field": "w", "extent": "499800,4427800,500300,4428300", "pixelSize": 25.0, "radius": 150.0}),
+        ).unwrap();
+
+        let extract_raster_bytes = |out: Output| match out {
+            Output::Layers(mut layers) => match layers.remove(0) {
+                OutputLayer::Raster { bytes, .. } => bytes,
+                _ => panic!("expected Raster"),
+            },
+            _ => panic!("expected Layers"),
+        };
+        let bytes_single = extract_raster_bytes(res_single.output);
+        let bytes_multi = extract_raster_bytes(res_multi.output);
+        let bytes_two_pts = extract_raster_bytes(res_two_pts.output);
+
+        let r_single = rustgis_data::raster::geotiff::read(std::io::Cursor::new(&bytes_single), "s").unwrap();
+        let r_multi = rustgis_data::raster::geotiff::read(std::io::Cursor::new(&bytes_multi), "m").unwrap();
+        let r_two_pts = rustgis_data::raster::geotiff::read(std::io::Cursor::new(&bytes_two_pts), "t").unwrap();
+
+        // MultiPoint with 2 parts must produce exact same output as 2 independent points each with weight 2.0
+        assert_eq!(r_multi.bands[0].data, r_two_pts.bands[0].data, "MultiPoint must match two independent point features");
+        // And must differ from single point (which only contains p1)
+        assert_ne!(r_multi.bands[0].data, r_single.bands[0].data, "MultiPoint must differ from single point");
     }
 
     #[test]

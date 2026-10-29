@@ -112,8 +112,9 @@ _GeoLibre: docs/features.md › Layers, styling, and labels; docs/user-guide/sty
 - [x] **Layer groups**.
 - [ ] **Rule-based and expression renderers**: nested rules with scale ranges. Missing; display
   filters are per-scale SQL only (_Roadmap: expressions and cartography_).
-- [ ] **Heatmap and point-clustering renderers**. Partial: hexagon/square aggregation (_Roadmap:
-  expressions and cartography_).
+- [ ] **Heatmap and point-clustering renderers**. Partial: hexagon/square aggregation; kernel density
+  is implemented as an analysis tool, while dynamic heatmap and point-clustering renderers remain outstanding
+  (_Roadmap: expressions and cartography_).
 - [ ] **More classification methods**: standard deviation, geometric interval, manual breaks.
   Partial: Jenks, equal interval, quantile (_Roadmap: fixes and quick wins_).
 - [ ] **Symbol library**: a marker library, custom SVG/PNG markers, fill patterns, pie/donut/bar
