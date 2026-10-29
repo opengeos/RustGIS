@@ -21,6 +21,8 @@ pub struct Editor {
     capture: Option<Target>,
     pending: Option<(Chord, Target)>,
     notice_clipboard: bool,
+    /// A key the menu bar keeps was pressed.
+    notice_reserved: bool,
 }
 
 impl Editor {
@@ -51,9 +53,21 @@ pub fn load(app: &mut RustGisApp) {
     }
 }
 
+/// Whether the native menu bar keeps a key combination for itself.
+fn reserved(app: &RustGisApp, chord: Chord) -> bool {
+    app.ui.reserved_shortcuts.iter().any(|k| {
+        (k.modifiers.command || k.modifiers.mac_cmd) == chord.command
+            && k.modifiers.alt == chord.alt
+            && k.modifiers.shift == chord.shift
+            && k.logical_key == chord.key
+    })
+}
+
 fn assign(app: &mut RustGisApp, editor: &mut Editor, chord: Chord, target: Target) {
     if keymap::is_clipboard(chord) {
         editor.notice_clipboard = true;
+    } else if reserved(app, chord) {
+        editor.notice_reserved = true;
     } else if app.ui.keymap.command_for(chord).is_some_and(|b| !b.runs(&target.command, &target.params)) {
         editor.pending = Some((chord, target));
     } else if app.ui.keymap.assign(chord, &target.command, target.params) {
@@ -160,6 +174,9 @@ pub fn show(app: &mut RustGisApp, ctx: &Context) {
             if editor.notice_clipboard {
                 ui.label(tl!("Copy, Cut and Paste keys cannot be reassigned."));
             }
+            if editor.notice_reserved {
+                ui.label(tl!("The menu bar keeps that key: choose another."));
+            }
             if editor.capture.is_some() {
                 ui.horizontal(|ui| {
                     ui.label(tl!("Press a key combination to assign it. Escape cancels."));
@@ -192,6 +209,7 @@ pub fn show(app: &mut RustGisApp, ctx: &Context) {
                             .clicked()
                         {
                             editor.notice_clipboard = false;
+                            editor.notice_reserved = false;
                             editor.capture = Some(Target { command: command.clone(), params: params.clone() });
                         }
                         for chord in defaults.keys_for(command, params) {
@@ -216,6 +234,7 @@ pub fn show(app: &mut RustGisApp, ctx: &Context) {
         editor.capture = None;
         editor.pending = None;
         editor.notice_clipboard = false;
+        editor.notice_reserved = false;
         save(app);
     }
     if let Some(chord) = remove {
@@ -296,6 +315,12 @@ mod tests {
         assign(&mut app, &mut editor, clipboard, target);
         assert!(editor.notice_clipboard);
         assert!(app.ui.keymap.command_for(clipboard).is_none());
+        // A key the menu bar keeps (macOS's ⌘Q) is refused too.
+        app.ui.reserved_shortcuts = vec![egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::Q)];
+        let quit = Chord::parse("Mod+Q").unwrap();
+        assign(&mut app, &mut editor, quit, Target { command: "select.clear".into(), params: Value::Null });
+        assert!(editor.notice_reserved);
+        assert!(app.ui.keymap.command_for(quit).is_none());
     }
 
     #[test]

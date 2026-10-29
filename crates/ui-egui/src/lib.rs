@@ -553,6 +553,9 @@ pub struct UiState {
     pub start_with: StartWith,
     /// Whether a file holding several layers asks which to add (#934), or adds them all.
     pub ask_layers: bool,
+    /// Key combinations the native menu bar keeps for itself (macOS: Quit, Close Window, Hide…):
+    /// a shortcut on one would never reach the app, so the shortcut editor refuses them.
+    pub reserved_shortcuts: Vec<egui::KeyboardShortcut>,
     /// Files whose layers are being listed or chosen, the first one shown.
     pub choosing: Vec<layerchooser::Chooser>,
     /// The project last opened or saved on this computer, for Start With › Last Project.
@@ -773,6 +776,7 @@ impl Default for UiState {
             worldview: i18n::AUTO.into(),
             start_with: StartWith::Sample,
             ask_layers: true,
+            reserved_shortcuts: Vec::new(),
             choosing: Vec::new(),
             last_project: None,
             start_projection: String::new(),
@@ -957,6 +961,29 @@ impl RustGisApp {
         keys.sort_by_key(|k| (k.0, k.1, k.2 as u32));
         keys.dedup();
         keys
+    }
+
+    /// The keyboard shortcuts of a command run without parameters, in the keymap's order, for a
+    /// native menu to show (the macOS menu bar).
+    pub fn shortcuts_of(&self, command: &str) -> Vec<egui::KeyboardShortcut> {
+        self.ui.keymap.keys_for(command, &Value::Null).map(|c| egui::KeyboardShortcut::new(c.modifiers(), c.key)).collect()
+    }
+
+    /// The command a keyboard shortcut runs, if the keymap gives it one.
+    pub fn shortcut_command(&self, shortcut: egui::KeyboardShortcut) -> Option<String> {
+        let m = shortcut.modifiers;
+        let chord = keymap::Chord { command: m.command || m.mac_cmd, alt: m.alt, shift: m.shift, key: shortcut.logical_key };
+        self.ui.keymap.command_for(chord).map(|b| b.command.clone())
+    }
+
+    /// Whether the keyboard shortcut editor is waiting for a key combination to record.
+    pub fn capturing_shortcut(&self) -> bool {
+        self.ui.shortcut_editor.capturing()
+    }
+
+    /// Whether a command exists and can run now: what the ribbon greys out.
+    pub fn command_enabled(&self, command: &str) -> bool {
+        widgets::enabled(self, command)
     }
 
     /// A fingerprint of the keymap's key combinations: cheap to take every frame (no
