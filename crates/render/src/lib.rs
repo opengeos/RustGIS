@@ -23,6 +23,7 @@ mod picture;
 mod point_marks;
 pub mod post;
 mod raster;
+pub mod raster_export;
 pub mod report;
 mod stroke_paths;
 pub mod svg;
@@ -940,6 +941,98 @@ impl Ctx<'_> {
         true
     }
 
+    /// Draw a near-rectangular filled polygon up to 1.5 px (a rectangle up to 2 px) by coverage.
+    /// Other shapes keep their paths: an extent is not a substitute for a hole or an inset.
+    fn small_polygon(&self, pm: &mut Pixmap, e: &Extent, g: &Geometry, s: &Symbol) -> bool {
+        let Geometry::Polygon(polys) = g else { return false };
+        if self.wireframe
+            || self.globe.is_some()
+            || self.view.camera.bearing != 0.0
+            || self.view.camera.pitch != 0.0
+            || s.fill.a() != 255
+            || s.stroke.a() != 255
+            || !self.ppp.is_finite()
+            || self.ppp <= 0.0
+            || !self.view.camera.res.is_finite()
+            || self.view.camera.res <= 0.0
+            || e.is_empty()
+        {
+            return false;
+        }
+        let k = self.view.pixels_per_point / self.view.camera.res.max(1e-12);
+        let (sx, sy) = (e.width() * k, e.height() * k);
+        let width = s.stroke_width.max(0.0) * self.ppp;
+        // Hairlines use a different rasterizer; unoutlined shapes already draw cheaply.
+        if !(sx.is_finite() && sy.is_finite() && width.is_finite())
+            // `emit_run` can drop an edge this short; use the real path in that case.
+            || sx <= 0.35
+            || sy <= 0.35
+            || sx > 2.0
+            || sy > 2.0
+            || width <= 1.0
+            || width > 2.0
+        {
+            return false;
+        }
+        if !antialiased() {
+            return false;
+        }
+        let [rings] = polys.as_slice() else { return false };
+        let [ring] = rings.as_slice() else { return false };
+        let Some(first) = ring.first().copied() else { return false };
+        if ring.len() < 4 || ring.last() != Some(&first) {
+            return false;
+        }
+        // Work relative to one vertex: small rings in projected coordinates can be far from zero.
+        let (mut twice_area, mut perimeter, mut on_box) = (0.0, 0.0, true);
+        let (mut left, mut right, mut bottom, mut top) = (false, false, false, false);
+        // Each segment must stay near one box edge, including short diagonals from thinning.
+        let margin = e.width().min(e.height()) * 0.15;
+        let inside = |p: Coord| p.x >= e.min_x && p.x <= e.max_x && p.y >= e.min_y && p.y <= e.max_y;
+        for pair in ring.windows(2) {
+            let [a, b] = pair else { continue };
+            if !a.is_finite() || !b.is_finite() {
+                return false;
+            }
+            let shares_edge = (a.x - e.min_x <= margin && b.x - e.min_x <= margin)
+                || (e.max_x - a.x <= margin && e.max_x - b.x <= margin)
+                || (a.y - e.min_y <= margin && b.y - e.min_y <= margin)
+                || (e.max_y - a.y <= margin && e.max_y - b.y <= margin);
+            if !inside(*a) || !inside(*b) || !shares_edge {
+                return false;
+            }
+            let (l, r, bot, t) = (a.x == e.min_x, a.x == e.max_x, a.y == e.min_y, a.y == e.max_y);
+            left |= l;
+            right |= r;
+            bottom |= bot;
+            top |= t;
+            on_box &= l || r || bot || t;
+            twice_area += (a.x - first.x) * (b.y - first.y) - (b.x - first.x) * (a.y - first.y);
+            perimeter += (a.x - b.x).abs() + (a.y - b.y).abs();
+        }
+        let box_area = e.width() * e.height();
+        let share = twice_area.abs() / (2.0 * box_area);
+        // Extents come from the unthinned geometry; don't draw a box bigger than this ring.
+        if !(left && right && bottom && top) {
+            return false;
+        }
+        // Keep at least 80% of the box's area and at most 20% extra perimeter.
+        if !share.is_finite() || !(0.8..=1.0).contains(&share) || perimeter > 2.4 * (e.width() + e.height()) {
+            return false;
+        }
+        // At the larger size, an inset in an outline can be visible: use a full box only.
+        if (sx > 1.5 || sy > 1.5) && (!on_box || share < 1.0 - 1e-10) {
+            return false;
+        }
+        let (x0, y0) = self.px(Coord::new(e.min_x, e.max_y));
+        let (x1, y1) = self.px(Coord::new(e.max_x, e.min_y));
+        if !(x0.is_finite() && y0.is_finite() && x1.is_finite() && y1.is_finite()) {
+            return false;
+        }
+        small_polygon_pixels(pm, [x0.min(x1), y0.min(y1), x0.max(x1), y0.max(y1)], width, s.fill, s.stroke, share as f32);
+        true
+    }
+
     /// A point's marks, or its marker turned ([`point_marks::draw`]), unless it lies off the picture.
     fn marks(&self, pm: &mut Pixmap, c: Coord, s: &Symbol, strokes: &[LineStroke], turn: f32, halo: Option<Rgba>) {
         let (x, y) = self.px(c);
@@ -1301,6 +1394,45 @@ fn splat_color(pm: &mut Pixmap, cx: f32, cy: f32, color: Rgba, coverage: f32) {
             *dc = ((sc as u16 * a + *dc as u16 * inv + 127) / 255) as u8;
         }
         d[3] = (a + (d[3] as u16 * inv + 127) / 255).min(255) as u8;
+    }
+}
+
+/// Coverage of a tiny box and its mitred outline in each touched device pixel.
+fn small_polygon_pixels(pm: &mut Pixmap, b: [f32; 4], width: f32, fill: Rgba, stroke: Rgba, share: f32) {
+    if b[2] + width < 0.0 || b[3] + width < 0.0 || b[0] - width >= pm.width() as f32 || b[1] - width >= pm.height() as f32 {
+        return;
+    }
+    // tiny-skia's path rasterizer samples at quarter-pixel intervals.
+    fn snap(b: [f32; 4]) -> [f32; 4] {
+        b.map(|n| (n * 4.0).round() / 4.0)
+    }
+    fn coverage(b: [f32; 4], x: f32, y: f32) -> f32 {
+        (b[2].min(x + 1.0) - b[0].max(x)).max(0.0) * (b[3].min(y + 1.0) - b[1].max(y)).max(0.0)
+    }
+    fn blend(d: &mut [u8], color: Rgba, coverage: f32) {
+        let a = (color.a() as f32 * coverage.clamp(0.0, 1.0)).round() as u16;
+        let inv = 255 - a;
+        for (dc, sc) in d.iter_mut().zip([color.r(), color.g(), color.b()]) {
+            *dc = ((sc as u16 * a + *dc as u16 * inv + 127) / 255) as u8;
+        }
+        d[3] = (a + (d[3] as u16 * inv + 127) / 255).min(255) as u8;
+    }
+    let hw = width / 2.0;
+    let outer = snap([b[0] - hw, b[1] - hw, b[2] + hw, b[3] + hw]);
+    let inner = snap([b[0] + hw, b[1] + hw, b[2] - hw, b[3] - hw]);
+    let b = snap(b);
+    let (w, h) = (pm.width() as i64, pm.height() as i64);
+    let (x0, y0) = ((outer[0].floor() as i64).clamp(0, w), (outer[1].floor() as i64).clamp(0, h));
+    let (x1, y1) = ((outer[2].ceil() as i64).clamp(0, w), (outer[3].ceil() as i64).clamp(0, h));
+    let data = pm.data_mut();
+    for y in y0..y1 {
+        for x in x0..x1 {
+            let i = ((y * w + x) * 4) as usize;
+            let Some(d) = data.get_mut(i..i + 4) else { continue };
+            let (x, y) = (x as f32, y as f32);
+            blend(d, fill, coverage(b, x, y) * share);
+            blend(d, stroke, coverage(outer, x, y) - coverage(inner, x, y));
+        }
     }
 }
 
@@ -1702,14 +1834,29 @@ fn visit_complete(
     Ok(result)
 }
 
-/// A label waiting to be placed: the label, its priority and its key.
-type Candidate = (PlacedLabel, f64, rustgis_map::LabelKey);
+/// A label waiting to be placed: the label, its priority and its key, and where else it may go
+/// when its own place is taken (#1011): its `x`, `y` there, tried in order. Whatever moves the
+/// label on its way to the screen moves them too, as it does its icon.
+#[derive(Clone, Debug)]
+struct Candidate {
+    label: PlacedLabel,
+    priority: f64,
+    key: rustgis_map::LabelKey,
+    alternatives: Vec<(f32, f32)>,
+}
+
+/// A label with no alternatives.
+impl From<(PlacedLabel, f64, rustgis_map::LabelKey)> for Candidate {
+    fn from((label, priority, key): (PlacedLabel, f64, rustgis_map::LabelKey)) -> Candidate {
+        Candidate { label, priority, key, alternatives: Vec::new() }
+    }
+}
 
 /// Keep exactly the candidates the upstream placement limit can consider, with stable ties.
 fn compact_label_candidates(candidates: &mut Vec<Candidate>) {
     if candidates.len() > 40_000 {
         let rank = |p: f64| if p.is_nan() { f64::NEG_INFINITY } else { p };
-        candidates.sort_by(|a, b| rank(b.1).total_cmp(&rank(a.1)));
+        candidates.sort_by(|a, b| rank(b.priority).total_cmp(&rank(a.priority)));
         candidates.truncate(20_000);
     }
 }
@@ -1942,7 +2089,7 @@ fn affine(src: [(f64, f64); 3], dst: [(f64, f64); 3]) -> Option<Transform> {
 fn lift_labels(view: &View, ground: &terrain::Ground, candidates: &mut [Candidate]) {
     let cam = view.camera;
     let (w, h) = (view.width, view.height);
-    for (l, _, _) in candidates.iter_mut() {
+    for Candidate { label: l, alternatives, .. } in candidates.iter_mut() {
         let Some(m) = cam.try_to_map(f64::from(l.x), f64::from(l.y), w, h) else { continue };
         let (u, v) = cam.ground_px(m);
         let Some((sx, sy)) = cam.project_raised(u, v, ground.up_px(m, &cam), w, h) else { continue };
@@ -1954,6 +2101,7 @@ fn lift_labels(view: &View, ground: &terrain::Ground, candidates: &mut [Candidat
         if let Some(i) = &mut l.icon {
             (i.x, i.y) = (i.x + dx, i.y + dy);
         }
+        alternatives.iter_mut().for_each(|(x, y)| (*x, *y) = (*x + dx, *y + dy));
     }
 }
 
@@ -2073,9 +2221,9 @@ fn place_tilted_labels(map: &Map, view: &View, mut candidates: Vec<Candidate>, g
     let mut seen = std::collections::HashSet::new();
     let mut seen_tile = std::collections::HashSet::new();
     let mut seen_repeat = std::collections::HashSet::new();
-    let near = |c: &Candidate| ((c.0.x / 4.0).round() as i64, (c.0.y / 4.0).round() as i64);
-    candidates.retain(|c| match c.2 {
-        (u32::MAX, ..) => seen_tile.insert((c.0.text.clone(), near(c))),
+    let near = |c: &Candidate| ((c.label.x / 4.0).round() as i64, (c.label.y / 4.0).round() as i64);
+    candidates.retain(|c| match c.key {
+        (u32::MAX, ..) => seen_tile.insert((c.label.text.clone(), near(c))),
         // A line's repeats: each band numbers those on its own stretch, so they are told apart by
         // where they land (the same repeat in two bands lands in one place).
         (l, r, k, i) if i > 0 => seen_repeat.insert((l, r, k, near(c))),
@@ -2144,7 +2292,7 @@ fn raise_labels(map: &Map, view: &View, candidates: &mut [Candidate]) {
     let flat = map.flat();
     let cam = view.camera;
     let (w, h) = (view.width, view.height);
-    for (l, _, (id, row, _, _)) in candidates.iter_mut() {
+    for Candidate { label: l, key: (id, row, _, _), alternatives, .. } in candidates.iter_mut() {
         let Some(layer) = map.layer(*id).filter(|l| l.geometry_type() == GeometryType::Polygon) else { continue };
         let Some(x) = &layer.extrusion else { continue };
         let Some(m) = cam.try_to_map(f64::from(l.x), f64::from(l.y), w, h) else { continue };
@@ -2160,6 +2308,7 @@ fn raise_labels(map: &Map, view: &View, candidates: &mut [Candidate]) {
         if let Some(i) = &mut l.icon {
             (i.x, i.y) = (i.x + dx, i.y + dy);
         }
+        alternatives.iter_mut().for_each(|(x, y)| (*x, *y) = (*x + dx, *y + dy));
     }
 }
 
@@ -2926,10 +3075,10 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
     if !display.locked {
         map.label_lock = None;
     }
-    let lock: Option<std::collections::HashSet<rustgis_map::LabelKey>> = map.label_lock.as_ref().map(|v| v.iter().copied().collect());
+    let lock: Option<std::collections::HashMap<rustgis_map::LabelKey, u8>> = map.label_lock.as_ref().map(|v| v.iter().copied().collect());
     // The classes of features with a label locked (any of its repeats), to pass the rest over early.
     let locked_classes: Option<std::collections::HashSet<(u32, usize, usize)>> =
-        lock.as_ref().map(|k| k.iter().map(|&(l, r, c, _)| (l, r, c)).collect());
+        lock.as_ref().map(|k| k.keys().map(|&(l, r, c, _)| (l, r, c)).collect());
     let distance = viewing_distance(map.ground_res_at(&view.camera), view.height);
     // Graphics text: always drawn, and other labels keep clear of it.
     let mut fixed_labels: Vec<PlacedLabel> = Vec::new();
@@ -3292,7 +3441,8 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
                             && !layer.graphics
                             && strokes.is_empty()
                             && let Some(e) = extents.get(row)
-                            && ctx.splat(dest, e, g, &splat_sym)
+                            && (ctx.splat(dest, e, g, &splat_sym)
+                                || (!gpu && direct && fills.is_empty() && ctx.small_polygon(dest, e, g, &sym)))
                         {
                             continue;
                         }
@@ -3496,14 +3646,15 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
                         let font = class_fonts.get(ci).copied().flatten();
                         let face = text::Face { bold: class.bold, italic: class.italic, serif: false, family: font };
                         let spacing = class.spacing * label_factor;
-                        let (dx, dy) = class.placement.offset(
-                            text::spaced_block_width(&text, class.size, face, class.spacing),
-                            text::block_height(&text, class.size),
-                            marker,
-                            is_point,
-                        );
-                        // Moved as its class says (points, as the text's size), unless along a line.
-                        let (dx, dy) = ((dx + class.offset[0] * 1.33) * label_factor, (dy + class.offset[1] * 1.33) * label_factor);
+                        let (bw, bh) =
+                            (text::spaced_block_width(&text, class.size, face, class.spacing), text::block_height(&text, class.size));
+                        // Where a placement puts it, moved as its class says (points, as the
+                        // text's size), unless along a line.
+                        let place = |p: LabelPlacement| {
+                            let (dx, dy) = p.offset(bw, bh, marker, is_point);
+                            let (dx, dy) = ((dx + class.offset[0] * 1.33) * label_factor, (dy + class.offset[1] * 1.33) * label_factor);
+                            (x as f32 + dx, y as f32 + dy)
+                        };
                         // Where it goes, each with its repeat's index: by its feature (0), or along
                         // a line at its middle and, repeated, every so far either side.
                         let mut places: Vec<(usize, f32, f32, Option<f32>, Vec<LabelGlyph>)> = Vec::new();
@@ -3540,7 +3691,8 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
                                 }
                             }
                         } else {
-                            places.push((0, x as f32 + dx, y as f32 + dy, None, Vec::new()));
+                            let (lx, ly) = place(class.placement);
+                            places.push((0, lx, ly, None, Vec::new()));
                         }
                         // Layers above first, then the classes listed first (#732), then bigger
                         // polygons: a class (ci ≤ MAX_LABEL_CLASSES, 1e9 each) never outweighs a
@@ -3548,16 +3700,28 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
                         // its label at the middle, nearest first (lines have no area).
                         let pri = (n_layers - li) as f64 * 1e12 - ci as f64 * 1e9 + area;
                         let last = places.len().saturating_sub(1);
-                        for (n, (i, lx, ly, angle, glyphs)) in places.into_iter().enumerate() {
+                        for (n, (i, mut lx, mut ly, angle, glyphs)) in places.into_iter().enumerate() {
                             let key = (lid, label_row(row), ci, i);
                             // Locked, only the repeats placed then.
-                            if lock.as_ref().is_some_and(|k| !k.contains(&key)) {
+                            if lock.as_ref().is_some_and(|k| !k.contains_key(&key)) {
                                 continue;
                             }
+                            // A point's label may go round it when its own place is taken (#1011);
+                            // locked, it goes where it went then, and nowhere else.
+                            let others = || class.placement.alternatives().filter(|_| class.other_positions && is_point).map(place);
+                            let alternatives: Vec<(f32, f32)> = match lock.as_ref().and_then(|k| k.get(&key)) {
+                                Some(&won) => {
+                                    if let Some(at) = usize::from(won).checked_sub(1).and_then(|i| others().nth(i)) {
+                                        (lx, ly) = at;
+                                    }
+                                    Vec::new()
+                                }
+                                None => others().collect(),
+                            };
                             // (The text copied for each repeat but the last, which takes it.)
                             let text = if n == last { std::mem::take(&mut text) } else { text.clone() };
-                            label_candidates.push((
-                                PlacedLabel {
+                            label_candidates.push(Candidate {
+                                label: PlacedLabel {
                                     text,
                                     x: lx,
                                     y: ly,
@@ -3583,9 +3747,10 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
                                         .map(|b| b.scaled(label_factor)),
                                     glyphs,
                                 },
-                                pri - i as f64,
+                                priority: pri - i as f64,
                                 key,
-                            ));
+                                alternatives,
+                            });
                         }
                     }
                 }
@@ -3657,7 +3822,7 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
     // Tile labels, after every layer's own.
     if lock.is_none() {
         for (i, (l, pri)) in tile_out.labels.into_iter().enumerate() {
-            label_candidates.push((l, pri - 1e13, (u32::MAX, i, 0, 0)));
+            label_candidates.push((l, pri - 1e13, (u32::MAX, i, 0, 0)).into());
         }
     }
     if let Labels::Tilted(to, out) = &mut labels_to {
@@ -3671,16 +3836,9 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
             let (sx, sy) = to.camera.try_to_screen(m, tw, th).filter(|_| near)?;
             (sy as f32 > sky_y).then_some((sx as f32, sy as f32))
         };
-        let fixed = fixed_labels.into_iter().map(|l| (l, f64::MAX, (u32::MAX, usize::MAX, 0, 0)));
-        for (mut l, pri, key) in fixed.chain(label_candidates) {
-            turn_with(&mut l, &at);
-            let Some((x, y)) = at(l.x, l.y) else { continue };
-            (l.x, l.y) = (x, y);
-            if let Some(i) = &mut l.icon {
-                let Some((ix, iy)) = at(i.x, i.y) else { continue };
-                (i.x, i.y) = (ix, iy);
-            }
-            out.push((l, pri, key));
+        let fixed = fixed_labels.into_iter().map(|l| Candidate::from((l, f64::MAX, (u32::MAX, usize::MAX, 0, 0))));
+        for c in fixed.chain(label_candidates) {
+            out.extend(tilt_candidate(c, &at));
         }
         label_candidates = Vec::new();
         fixed_labels = Vec::new();
@@ -3696,18 +3854,23 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
                 let (sx, sy) = to.to_screen(view.camera.to_map(f64::from(x), f64::from(y), view.width, view.height));
                 (sx as f32, sy as f32)
             };
-            for l in label_candidates.iter_mut().map(|c| &mut c.0).chain(fixed_labels.iter_mut()) {
+            for l in label_candidates.iter_mut().map(|c| &mut c.label).chain(fixed_labels.iter_mut()) {
                 turn_with(l, &|x, y| Some(at(x, y)));
                 (l.x, l.y) = at(l.x, l.y);
                 if let Some(i) = &mut l.icon {
                     (i.x, i.y) = at(i.x, i.y);
                 }
             }
+            for (x, y) in label_candidates.iter_mut().flat_map(|c| &mut c.alternatives) {
+                (*x, *y) = at(*x, *y);
+            }
             (to.width, to.height)
         }
         None => (view.width, view.height),
     };
     let placed = place_labels(label_candidates, fixed_labels, lw as f32, lh as f32, lock.is_some());
+    // (The lock is never taken from a tilted view: its labels' places out of sight are dropped,
+    // so the numbers of the places they take aren't those of their class's.)
     if display.locked && map.label_lock.is_none() && !matches!(labels_to, Labels::Tilted(..)) {
         map.label_lock = Some(placed.keys);
     }
@@ -4246,6 +4409,22 @@ fn longest_on_screen(ctx: &Ctx<'_>, parts: &[Vec<Coord>]) -> Option<Vec<(f32, f3
         .max_by(|a, b| length(a).total_cmp(&length(b)))
 }
 
+/// A label in a tilted view, at its place there (`at`: a place's in the view, if in sight). Its
+/// own place, or else the first of its alternatives in sight, is where it goes; the rest in sight
+/// are left to try. Left out with none in sight, or its icon out of sight.
+fn tilt_candidate(mut c: Candidate, at: &impl Fn(f32, f32) -> Option<(f32, f32)>) -> Option<Candidate> {
+    let l = &mut c.label;
+    turn_with(l, at);
+    let alternatives = std::mem::take(&mut c.alternatives);
+    let mut spots = std::iter::once((l.x, l.y)).chain(alternatives).filter_map(|(x, y)| at(x, y));
+    (l.x, l.y) = spots.next()?;
+    if let Some(i) = &mut l.icon {
+        (i.x, i.y) = at(i.x, i.y)?;
+    }
+    c.alternatives = spots.collect();
+    Some(c)
+}
+
 /// Turns a label turned with the map (and its icon) as `at` moves it into another view (a
 /// turned or tilted one): its angle there is that of a short step along it, the text kept
 /// upright. Called before the label itself is moved.
@@ -4316,8 +4495,9 @@ fn halo_for(text: Rgba) -> Rgba {
 struct Placement {
     labels: Vec<PlacedLabel>,
     unplaced: Vec<PlacedLabel>,
-    /// The key of each placed label.
-    keys: Vec<rustgis_map::LabelKey>,
+    /// The key of each placed label, and the place it took (0 its own, else its alternative's
+    /// number from 1).
+    keys: Vec<(rustgis_map::LabelKey, u8)>,
 }
 
 /// Greedy collision-free placement, highest priority first. Locked labels are all placed (they
@@ -4329,10 +4509,14 @@ struct Placement {
 /// allowed to overlap is shown whatever is under it. A part ignoring placement is shown without
 /// keeping the others off it. Labels reaching past the view's edge are placed (only those wholly
 /// outside it are left out), and the boxes are kept in a grid so a crowded view stays quick.
-fn place_labels(mut cands: Vec<Candidate>, fixed: Vec<PlacedLabel>, w: f32, h: f32, locked: bool) -> Placement {
+///
+/// A label with alternatives (#1011) tries its own place, then each of them in turn, and takes
+/// the first where all of it shows; where none does, its own place shows what fits there.
+fn place_labels(cands: impl IntoIterator<Item = impl Into<Candidate>>, fixed: Vec<PlacedLabel>, w: f32, h: f32, locked: bool) -> Placement {
+    let mut cands: Vec<Candidate> = cands.into_iter().map(Into::into).collect();
     // A priority of no number places last, not first (`total_cmp` puts NaN above everything).
     let rank = |p: f64| if p.is_nan() { f64::NEG_INFINITY } else { p };
-    cands.sort_by(|a, b| rank(b.1).total_cmp(&rank(a.1)));
+    cands.sort_by(|a, b| rank(b.priority).total_cmp(&rank(a.priority)));
     let mut grid = LabelGrid::new(w, h);
     for l in &fixed {
         let (text, icon) = label_boxes(l);
@@ -4340,27 +4524,29 @@ fn place_labels(mut cands: Vec<Candidate>, fixed: Vec<PlacedLabel>, w: f32, h: f
     }
     let mut out = Placement { labels: fixed, unplaced: Vec::new(), keys: Vec::new() };
     let outside = |b: &[f32; 4]| b[2] < 0.0 || b[3] < 0.0 || b[0] > w || b[1] > h;
-    for (l, _, key) in cands.into_iter().take(20_000) {
-        let (text, icon) = label_boxes(&l);
-        if text.iter().chain(&icon).all(outside) {
-            continue;
-        }
+    for Candidate { label: mut l, key, alternatives, .. } in cands.into_iter().take(20_000) {
         let c = l.collide;
-        let (has_text, has_icon) = (!text.is_empty(), !icon.is_empty());
-        let fits = |boxes: &[[f32; 4]], overlap: bool| locked || overlap || !boxes.iter().any(|b| grid.hits(b));
-        let mut show_text = has_text && fits(&text, c.text_allow_overlap);
-        let mut show_icon = has_icon && fits(&icon, c.icon_allow_overlap);
-        // Which part may show without the other (MapLibre's rules).
-        let icon_alone = c.text_optional || !has_text;
-        let text_alone = c.icon_optional || !has_icon;
-        if !icon_alone && !text_alone {
-            let both = show_text && show_icon;
-            (show_text, show_icon) = (both, both);
-        } else if !text_alone {
-            show_text = show_text && show_icon;
-        } else if !icon_alone {
-            show_icon = show_icon && show_text;
+        let (has_text, has_icon) = (!l.text.is_empty(), l.icon.is_some());
+        // Its own place, else the first alternative where all of it shows (the text moves there;
+        // an icon stays).
+        let mut at = None;
+        for (i, (x, y)) in std::iter::once((l.x, l.y)).chain(alternatives).enumerate() {
+            (l.x, l.y) = (x, y);
+            let (text, icon) = label_boxes(&l);
+            if text.iter().chain(&icon).all(outside) {
+                continue;
+            }
+            let (show_text, show_icon) = shows(&l, &text, &icon, &grid, locked);
+            let whole = show_text == has_text && show_icon == has_icon;
+            if i == 0 || whole {
+                at = Some((i, x, y, text, icon, show_text, show_icon));
+            }
+            if whole {
+                break;
+            }
         }
+        let Some((i, x, y, text, icon, show_text, show_icon)) = at else { continue };
+        (l.x, l.y) = (x, y);
         if !show_text && !show_icon {
             if out.unplaced.len() < 2000 && has_text {
                 out.unplaced.push(PlacedLabel { color: UNPLACED, halo: Some(halo_for(UNPLACED)), icon: None, ..l });
@@ -4373,7 +4559,6 @@ fn place_labels(mut cands: Vec<Candidate>, fixed: Vec<PlacedLabel>, w: f32, h: f
         if show_icon && !c.icon_ignore_placement {
             icon.iter().for_each(|b| grid.insert(*b));
         }
-        let mut l = l;
         if !show_text {
             l.text.clear();
         }
@@ -4381,9 +4566,32 @@ fn place_labels(mut cands: Vec<Candidate>, fixed: Vec<PlacedLabel>, w: f32, h: f
             l.icon = None;
         }
         out.labels.push(l);
-        out.keys.push(key);
+        out.keys.push((key, u8::try_from(i).unwrap_or(u8::MAX)));
     }
     out
+}
+
+/// Which of a label's text and icon show with their boxes `text` and `icon` where they are, as
+/// MapLibre has it: each where it fits, or may overlap, and a part that isn't optional only with
+/// the other.
+fn shows(l: &PlacedLabel, text: &[[f32; 4]], icon: &[[f32; 4]], grid: &LabelGrid, locked: bool) -> (bool, bool) {
+    let c = l.collide;
+    let (has_text, has_icon) = (!text.is_empty(), !icon.is_empty());
+    let fits = |boxes: &[[f32; 4]], overlap: bool| locked || overlap || !boxes.iter().any(|b| grid.hits(b));
+    let mut show_text = has_text && fits(text, c.text_allow_overlap);
+    let mut show_icon = has_icon && fits(icon, c.icon_allow_overlap);
+    // Which part may show without the other (MapLibre's rules).
+    let icon_alone = c.text_optional || !has_text;
+    let text_alone = c.icon_optional || !has_icon;
+    if !icon_alone && !text_alone {
+        let both = show_text && show_icon;
+        (show_text, show_icon) = (both, both);
+    } else if !text_alone {
+        show_text = show_text && show_icon;
+    } else if !icon_alone {
+        show_icon = show_icon && show_text;
+    }
+    (show_text, show_icon)
 }
 
 /// A label's collision boxes, [left, top, right, bottom] in points, padded: its text's (one box,
@@ -4748,6 +4956,54 @@ mod tests {
         assert!(p.labels[1].y < 100.0);
     }
 
+    /// A label whose own place is taken tries its alternatives in turn and takes the first free
+    /// one (#1011); where none is, it is unplaced once, at its own place.
+    #[test]
+    fn labels_try_their_alternatives() {
+        let blocker = || Candidate::from((label("Blocker", 100.0, None, 0.0), 9.0, (u32::MAX, 0, 0, 0)));
+        let taken = |alternatives| Candidate { label: label("Taken", 100.0, None, 0.0), priority: 1.0, key: (1, 0, 0, 0), alternatives };
+        let at = |p: &Placement| p.labels.iter().map(|l| (l.text.clone(), l.x, l.y)).collect::<Vec<_>>();
+        // None: left out, as before.
+        let p = place_labels(vec![blocker(), taken(Vec::new())], Vec::new(), 400.0, 200.0, false);
+        assert_eq!(at(&p), [("Blocker".to_string(), 100.0, 20.0)]);
+        assert_eq!(p.unplaced.len(), 1);
+        // The first free one, past one that is taken too.
+        let p = place_labels(vec![blocker(), taken(vec![(104.0, 20.0), (300.0, 20.0), (300.0, 100.0)])], Vec::new(), 400.0, 200.0, false);
+        assert_eq!(at(&p)[1], ("Taken".to_string(), 300.0, 20.0));
+        assert_eq!(p.keys, [((u32::MAX, 0, 0, 0), 0), ((1, 0, 0, 0), 2)], "the place it took, for a lock");
+        assert!(p.unplaced.is_empty());
+        // All taken: unplaced once, where it would have gone.
+        let p = place_labels(vec![blocker(), taken(vec![(104.0, 20.0), (96.0, 22.0)])], Vec::new(), 400.0, 200.0, false);
+        assert_eq!(p.labels.len(), 1);
+        assert_eq!(p.unplaced.iter().map(|l| (l.x, l.y)).collect::<Vec<_>>(), [(100.0, 20.0)]);
+        // Locked, its own place is kept whatever is under it.
+        let p = place_labels(vec![blocker(), taken(vec![(300.0, 20.0)])], Vec::new(), 400.0, 200.0, true);
+        assert_eq!(at(&p)[1], ("Taken".to_string(), 100.0, 20.0));
+    }
+
+    /// In a tilted view a label whose own place is out of sight (in the sky, say) goes to the
+    /// first of its alternatives in sight, and keeps the others in sight to try.
+    #[test]
+    fn tilted_labels_fall_back_on_an_alternative_in_sight() {
+        // In sight below y = 100 only, and moved 1000 right there.
+        let at = |x: f32, y: f32| (y > 100.0).then_some((x + 1000.0, y));
+        let offer = |(x, y): (f32, f32), alternatives| Candidate {
+            label: PlacedLabel { x, y, ..label("Paris", 0.0, None, 0.0) },
+            priority: 1.0,
+            key: (1, 0, 0, 0),
+            alternatives,
+        };
+        let c = tilt_candidate(offer((10.0, 50.0), vec![(10.0, 60.0), (10.0, 150.0), (20.0, 160.0)]), &at).unwrap();
+        assert_eq!((c.label.x, c.label.y), (1010.0, 150.0));
+        assert_eq!(c.alternatives, [(1020.0, 160.0)]);
+        // Its own place in sight stays its own.
+        let c = tilt_candidate(offer((10.0, 120.0), vec![(10.0, 50.0), (10.0, 150.0)]), &at).unwrap();
+        assert_eq!((c.label.x, c.label.y), (1010.0, 120.0));
+        assert_eq!(c.alternatives, [(1010.0, 150.0)]);
+        // None in sight: left out.
+        assert!(tilt_candidate(offer((10.0, 50.0), vec![(10.0, 60.0)]), &at).is_none());
+    }
+
     /// In a tilted view, a candidate the bands repeat (the same layer, row and class) is placed
     /// once, but two classes' labels of one feature are two labels (#732).
     #[test]
@@ -4756,8 +5012,13 @@ mod tests {
         let camera = Camera { center: lonlat_to_merc(Coord::new(0.0, 0.0)), res: 5000.0, bearing: 0.0, pitch: 30.0 };
         let view = View { width: 400.0, height: 300.0, pixels_per_point: 1.0, camera, sky: false };
         let (a, b) = (label("Capitals", 100.0, None, 0.0), label("Default", 300.0, None, 0.0));
-        let texts =
-            |c: Vec<Candidate>| -> Vec<String> { place_tilted_labels(&map, &view, c, None).labels.into_iter().map(|l| l.text).collect() };
+        let texts = |c: Vec<(PlacedLabel, f64, rustgis_map::LabelKey)>| -> Vec<String> {
+            place_tilted_labels(&map, &view, c.into_iter().map(Candidate::from).collect(), None)
+                .labels
+                .into_iter()
+                .map(|l| l.text)
+                .collect()
+        };
         assert_eq!(texts(vec![(a.clone(), 2.0, (1, 0, 0, 0)), (b.clone(), 1.0, (1, 0, 1, 0))]), ["Capitals", "Default"]);
         assert_eq!(texts(vec![(a, 2.0, (1, 0, 0, 0)), (b, 1.0, (1, 0, 0, 0))]), ["Capitals"], "a band's repeat");
         // A line's repeats along it: each band numbers those on its stretch, so two bands' repeat 1
@@ -4770,17 +5031,24 @@ mod tests {
     #[test]
     fn places_many_labels_quickly() {
         // A grid of 20,000 candidates, a third of them fitting: placed without testing each
-        // against every other.
-        let cands: Vec<Candidate> = (0..20_000)
-            .map(|i| {
-                let (x, y) = ((i % 200) as f32 * 10.0, (i / 200) as f32 * 10.0);
-                (PlacedLabel { x, y, ..label("ab", x, None, 0.0) }, -f64::from(i), (u32::MAX, i as usize, 0, 0))
-            })
-            .collect();
-        let start = web_time::Instant::now();
-        let p = place_labels(cands, Vec::new(), 2000.0, 1000.0, false);
-        assert!(!p.labels.is_empty() && p.labels.len() < 20_000);
-        assert!(start.elapsed() < web_time::Duration::from_secs(5));
+        // against every other, also when each has seven places round it to try (#1011).
+        let round = [(-6.0, -6.0), (6.0, -6.0), (-6.0, 6.0), (6.0, 6.0), (-8.0, 0.0), (8.0, 0.0), (0.0, 8.0)];
+        let cands = |others: bool| -> Vec<Candidate> {
+            (0..20_000)
+                .map(|i| {
+                    let (x, y) = ((i % 200) as f32 * 10.0, (i / 200) as f32 * 10.0);
+                    let l = PlacedLabel { x, y, ..label("ab", x, None, 0.0) };
+                    let alternatives = if others { round.map(|(dx, dy)| (x + dx, y + dy)).to_vec() } else { Vec::new() };
+                    Candidate { label: l, priority: -f64::from(i), key: (u32::MAX, i as usize, 0, 0), alternatives }
+                })
+                .collect()
+        };
+        for others in [false, true] {
+            let start = web_time::Instant::now();
+            let p = place_labels(cands(others), Vec::new(), 2000.0, 1000.0, false);
+            assert!(!p.labels.is_empty() && p.labels.len() < 20_000);
+            assert!(start.elapsed() < web_time::Duration::from_secs(5), "with places round them: {others}");
+        }
     }
 
     #[test]
@@ -5064,6 +5332,58 @@ mod tests {
         // A clause that doesn't read takes no feature.
         capitals(m.layer_mut(id).unwrap(), "gone = 1");
         assert_eq!(sizes(&mut m), both);
+    }
+
+    /// A point's label whose place another takes goes round the point when its class says so
+    /// (#1011): off, it is left out as before; locked, it stays where it went as the map moves;
+    /// turned and tilted views place it too.
+    #[test]
+    fn point_labels_go_round_their_point() {
+        let mut m = Map::new("Map");
+        let paris = Coord::new(2.35, 48.85);
+        let mut d = Dataset::new("pts", GeometryType::Point, vec![Field::new("name", FieldType::Text)]);
+        d.push(Some(Geometry::Point(paris)), vec![Value::Text("Paris".into())]);
+        let id = m.add_dataset(d);
+        // Capitals, listed first, takes the place above the point that Default wants too. A big
+        // marker keeps the labels round it well apart: a tilted view draws their distance from
+        // the point on the ground, shortened up and down, while the labels stay their size.
+        if let Some(l) = m.layer_mut(id) {
+            l.renderer = rustgis_map::Renderer::Single(Symbol { size: 20.0, ..l.symbol(0) });
+            l.labels.enabled = true;
+            l.labels.default.placement = rustgis_map::LabelPlacement::Above;
+            let base = l.labels.default.clone();
+            l.labels.classes = vec![rustgis_map::LabelClass { name: "Capitals".into(), size: 20.0, ..base }];
+        }
+        let view = |pitch: f64, bearing: f64, center: Coord| {
+            let camera = Camera { center: lonlat_to_merc(center), res: 2000.0, bearing, pitch };
+            View { width: 800.0, height: 600.0, pixels_per_point: 1.0, camera, sky: false }
+        };
+        // Each label's size and place, Capitals' first.
+        let labels = |m: &mut Map, v: &View| {
+            let mut l: Vec<(f32, f32, f32)> = render(m, v).unwrap().labels.into_iter().map(|l| (l.size, l.x, l.y)).collect();
+            l.sort_by(|a, b| b.0.total_cmp(&a.0));
+            l
+        };
+        let flat = view(0.0, 0.0, paris);
+        assert_eq!(labels(&mut m, &flat).len(), 1, "off, Default's label is left out");
+        m.layer_mut(id).unwrap().labels.default.other_positions = true;
+        let placed = labels(&mut m, &flat);
+        assert_eq!(placed.len(), 2, "on, it goes round the point: {placed:?}");
+        assert!(placed[1].2 > placed[0].2, "below Capitals' label: {placed:?}");
+        // Locked, it stays there as the map moves.
+        m.label_display.locked = true;
+        assert_eq!(labels(&mut m, &flat), placed);
+        assert!(m.label_lock.as_ref().is_some_and(|k| k.iter().any(|(_, i)| *i > 0)), "{:?}", m.label_lock);
+        let moved = labels(&mut m, &view(0.0, 0.0, Coord::new(2.6, 48.85)));
+        let apart = |l: &[(f32, f32, f32)]| (l[1].1 - l[0].1, l[1].2 - l[0].2);
+        assert_eq!(moved.len(), 2);
+        let (a, b) = (apart(&placed), apart(&moved));
+        assert!((a.0 - b.0).abs() < 1e-3 && (a.1 - b.1).abs() < 1e-3, "{placed:?} {moved:?}");
+        m.label_display.locked = false;
+        m.label_lock = None;
+        for v in [view(0.0, 30.0, paris), view(30.0, 0.0, paris)] {
+            assert_eq!(labels(&mut m, &v).len(), 2, "turned {}°, tilted {}°", v.camera.bearing, v.camera.pitch);
+        }
     }
 
     #[test]
@@ -6128,6 +6448,382 @@ mod tests {
         // A 3 pt outline at 2× is 6 px wide: drawn as a ring, not a dot.
         let thick = Symbol { stroke_width: 3.0, ..thin };
         assert!(!ctx.splat(&mut pm, &g.extent(), &g, &thick));
+    }
+
+    #[test]
+    fn small_polygons_preserve_rectangular_coverage_and_refuse_complex_shapes() {
+        let view = View {
+            width: 40.0,
+            height: 40.0,
+            pixels_per_point: 1.0,
+            camera: Camera { center: Coord::new(0.0, 0.0), res: 1.0, bearing: 0.0, pitch: 0.0 },
+            sky: false,
+        };
+        let ctx = Ctx {
+            view: &view,
+            ppp: 1.0,
+            wireframe: false,
+            cull: Extent::EMPTY,
+            globe: None,
+            sprites: Default::default(),
+            bursts: Default::default(),
+        };
+        let polygon = |x: f64, y: f64, width: f64, height: f64| {
+            Geometry::Polygon(vec![vec![vec![
+                Coord::new(x, y),
+                Coord::new(x + width, y),
+                Coord::new(x + width, y + height),
+                Coord::new(x, y + height),
+                Coord::new(x, y),
+            ]]])
+        };
+        for (width_px, height_px) in [(1.1, 1.1), (1.5, 1.5), (2.0, 2.0), (0.4, 1.9), (1.9, 0.4)] {
+            for offset in [0.0, 0.13, 0.49, 0.87] {
+                for (fill, stroke, width) in
+                    [(Rgba::rgb(200, 120, 0), Rgba::rgb(30, 30, 30), 1.4), (Rgba::rgb(200, 120, 0), Rgba::rgb(30, 30, 30), 2.0)]
+                {
+                    let g = polygon(offset, offset, width_px, height_px);
+                    let sym = Symbol { fill, stroke, stroke_width: width, size: 0.0, marker: Marker::Circle };
+                    for white in [false, true] {
+                        let mut actual = Pixmap::new(40, 40).unwrap();
+                        if white {
+                            actual.fill(tiny_skia::Color::WHITE);
+                        }
+                        let mut expected = actual.clone();
+                        ctx.feature(&mut expected, &g, &sym);
+                        assert!(ctx.small_polygon(&mut actual, &g.extent(), &g, &sym));
+                        let max = actual.data().iter().zip(expected.data()).map(|(a, b)| a.abs_diff(*b)).max().unwrap();
+                        assert!(
+                            max <= 8,
+                            "size {width_px}x{height_px}, offset {offset}, width {width}, white {white}: largest difference {max}"
+                        );
+                    }
+                }
+            }
+        }
+        let sym =
+            Symbol { fill: Rgba::rgb(200, 120, 0), stroke: Rgba::rgb(30, 30, 30), stroke_width: 1.4, size: 0.0, marker: Marker::Circle };
+        let mut pm = Pixmap::new(40, 40).unwrap();
+        let square = polygon(0.0, 0.0, 1.5, 1.5);
+        let hole = Geometry::Polygon(vec![vec![
+            vec![Coord::new(0.0, 0.0), Coord::new(1.5, 0.0), Coord::new(1.5, 1.5), Coord::new(0.0, 1.5), Coord::new(0.0, 0.0)],
+            vec![Coord::new(0.4, 0.4), Coord::new(1.1, 0.4), Coord::new(1.1, 1.1), Coord::new(0.4, 1.1), Coord::new(0.4, 0.4)],
+        ]]);
+        let triangle =
+            Geometry::Polygon(vec![vec![vec![Coord::new(0.0, 0.0), Coord::new(1.5, 0.0), Coord::new(0.0, 1.5), Coord::new(0.0, 0.0)]]]);
+        let multi = Geometry::Polygon(vec![
+            vec![vec![
+                Coord::new(0.0, 0.0),
+                Coord::new(1.5, 0.0),
+                Coord::new(1.5, 1.5),
+                Coord::new(0.0, 1.5),
+                Coord::new(0.0, 0.0),
+            ]];
+            2
+        ]);
+        let line = Geometry::Line(vec![vec![Coord::new(0.0, 0.0), Coord::new(1.5, 1.5)]]);
+        let inset = Geometry::Polygon(vec![vec![vec![
+            Coord::new(0.0, 0.0),
+            Coord::new(0.8, 0.0),
+            Coord::new(0.8, 0.05),
+            Coord::new(1.2, 0.05),
+            Coord::new(1.2, 0.0),
+            Coord::new(1.75, 0.0),
+            Coord::new(1.75, 1.75),
+            Coord::new(0.0, 1.75),
+            Coord::new(0.0, 0.0),
+        ]]]);
+        let deep_inset = Geometry::Polygon(vec![vec![vec![
+            Coord::new(0.0, 0.0),
+            Coord::new(0.4, 0.0),
+            Coord::new(0.4, 0.45),
+            Coord::new(1.1, 0.45),
+            Coord::new(1.1, 0.0),
+            Coord::new(1.5, 0.0),
+            Coord::new(1.5, 1.5),
+            Coord::new(0.0, 1.5),
+            Coord::new(0.0, 0.0),
+        ]]]);
+        let chamfer = Geometry::Polygon(vec![vec![vec![
+            Coord::new(0.0, 0.0),
+            Coord::new(0.8, 0.0),
+            Coord::new(1.5, 0.7),
+            Coord::new(1.5, 1.5),
+            Coord::new(0.0, 1.5),
+            Coord::new(0.0, 0.0),
+        ]]]);
+        for g in [hole, triangle, multi, line, inset, deep_inset, chamfer, polygon(0.0, 0.0, 2.01, 2.01), polygon(0.0, 0.0, 0.2, 1.5)] {
+            assert!(!ctx.small_polygon(&mut pm, &g.extent(), &g, &sym));
+        }
+        assert!(!ctx.small_polygon(&mut pm, &square.extent(), &square, &Symbol { stroke_width: 2.1, ..sym }));
+        assert!(
+            !ctx.small_polygon(&mut pm, &square.extent(), &square, &Symbol { stroke_width: 0.0, ..sym }),
+            "unoutlined fills keep their paths"
+        );
+        assert!(!ctx.small_polygon(&mut pm, &square.extent(), &square, &Symbol { stroke: Rgba::new(0, 0, 0, 0), ..sym }));
+        assert!(!ctx.small_polygon(&mut pm, &square.extent(), &square, &Symbol { fill: Rgba::new(200, 120, 0, 120), ..sym }));
+        assert!(!ctx.small_polygon(&mut pm, &square.extent(), &square, &Symbol { stroke: Rgba::new(30, 30, 30, 170), ..sym }));
+        assert!(
+            !ctx.small_polygon(&mut pm, &square.extent(), &square, &Symbol { stroke_width: 0.7, ..sym }),
+            "hairlines keep their rasterizer"
+        );
+        assert!(
+            !ctx.small_polygon(&mut pm, &square.extent(), &square, &Symbol { stroke_width: 1.0, ..sym }),
+            "one pixel is still a hairline"
+        );
+        let smaller = polygon(0.0, 0.0, 1.1, 1.1);
+        let original_extent = Extent::new(-0.02, -0.02, 1.1, 1.1);
+        assert!(!ctx.small_polygon(&mut pm, &original_extent, &smaller, &sym), "a thinned ring must not fill its old extent");
+        assert!(!ctx.small_polygon(&mut pm, &square.extent(), &square, &Symbol { fill: Rgba::new(0, 0, 0, 0), ..sym }));
+        let turned = View { camera: Camera { bearing: 15.0, ..view.camera }, ..view };
+        let turned_ctx = Ctx {
+            view: &turned,
+            ppp: 1.0,
+            wireframe: false,
+            cull: Extent::EMPTY,
+            globe: None,
+            sprites: Default::default(),
+            bursts: Default::default(),
+        };
+        assert!(!turned_ctx.small_polygon(&mut pm, &square.extent(), &square, &sym));
+        let wire = Ctx {
+            view: &view,
+            ppp: 1.0,
+            wireframe: true,
+            cull: Extent::EMPTY,
+            globe: None,
+            sprites: Default::default(),
+            bursts: Default::default(),
+        };
+        assert!(!wire.small_polygon(&mut pm, &square.extent(), &square, &sym));
+        let invalid = View { camera: Camera { res: -1.0, ..view.camera }, ..view };
+        let invalid_ctx = Ctx {
+            view: &invalid,
+            ppp: 1.0,
+            wireframe: false,
+            cull: Extent::EMPTY,
+            globe: None,
+            sprites: Default::default(),
+            bursts: Default::default(),
+        };
+        assert!(!invalid_ctx.small_polygon(&mut pm, &square.extent(), &square, &sym));
+        let far = View { camera: Camera { center: Coord::new(10_000_000.0, 10_000_000.0), ..view.camera }, ..view };
+        let far_ctx = Ctx {
+            view: &far,
+            ppp: 1.0,
+            wireframe: false,
+            cull: Extent::EMPTY,
+            globe: None,
+            sprites: Default::default(),
+            bursts: Default::default(),
+        };
+        let far_square = polygon(10_000_000.13, 10_000_000.13, 1.5, 1.5);
+        let mut actual = Pixmap::new(40, 40).unwrap();
+        actual.fill(tiny_skia::Color::WHITE);
+        let mut expected = actual.clone();
+        far_ctx.feature(&mut expected, &far_square, &sym);
+        assert!(far_ctx.small_polygon(&mut actual, &far_square.extent(), &far_square, &sym));
+        assert!(actual.data().iter().zip(expected.data()).all(|(a, b)| a.abs_diff(*b) <= 8));
+        let hidpi = View { pixels_per_point: 2.0, ..view };
+        let hidpi_ctx = Ctx {
+            view: &hidpi,
+            ppp: 2.0,
+            wireframe: false,
+            cull: Extent::EMPTY,
+            globe: None,
+            sprites: Default::default(),
+            bursts: Default::default(),
+        };
+        let small = polygon(0.13, 0.13, 0.75, 0.75);
+        let hidpi_sym = Symbol { stroke_width: 0.7, ..sym };
+        let mut actual = Pixmap::new(80, 80).unwrap();
+        let mut expected = actual.clone();
+        hidpi_ctx.feature(&mut expected, &small, &hidpi_sym);
+        assert!(hidpi_ctx.small_polygon(&mut actual, &small.extent(), &small, &hidpi_sym));
+        assert!(actual.data().iter().zip(expected.data()).all(|(a, b)| a.abs_diff(*b) <= 8));
+        let edge = polygon(19.6, 0.13, 1.4, 1.4);
+        let mut actual = Pixmap::new(40, 40).unwrap();
+        let mut expected = actual.clone();
+        ctx.feature(&mut expected, &edge, &sym);
+        assert!(ctx.small_polygon(&mut actual, &edge.extent(), &edge, &sym));
+        assert!(actual.data().iter().zip(expected.data()).all(|(a, b)| a.abs_diff(*b) <= 8));
+        let _antialias = Antialias::set(false);
+        assert!(!ctx.small_polygon(&mut pm, &square.extent(), &square, &sym));
+    }
+
+    #[test]
+    fn small_polygon_shortcut_matches_land_cover_tone() {
+        let view = View {
+            width: 100.0,
+            height: 100.0,
+            pixels_per_point: 1.0,
+            camera: Camera { center: Coord::new(0.0, 0.0), res: 1.0, bearing: 0.0, pitch: 0.0 },
+            sky: false,
+        };
+        let ctx = Ctx {
+            view: &view,
+            ppp: 1.0,
+            wireframe: false,
+            cull: Extent::EMPTY,
+            globe: None,
+            sprites: Default::default(),
+            bursts: Default::default(),
+        };
+        let colors = [Rgba::rgb(49, 130, 72), Rgba::rgb(219, 177, 80), Rgba::rgb(65, 120, 180), Rgba::rgb(200, 90, 55)];
+        for (size, gap, stroke_width, thinned, alpha) in [
+            (1.1, 0.18, 0.0, false, 255),
+            (1.1, 0.18, 1.4, false, 255),
+            (1.5, 0.2, 0.0, false, 255),
+            (1.5, 0.2, 1.4, false, 255),
+            (1.1, 0.18, 1.4, true, 255),
+            (1.5, 0.2, 1.4, true, 255),
+            (1.1, 0.18, 1.4, true, 128),
+            (1.5, 0.2, 1.4, true, 128),
+        ] {
+            let features: Vec<_> = (0..40)
+                .flat_map(|i| (0..40).map(move |j| (i, j)))
+                .map(|(i, j)| {
+                    let (x, y, step) = (-44.0 + i as f64 * (size + gap), -44.0 + j as f64 * (size + gap), size / 7.0);
+                    let inset = |t: usize| if (i * 31 + j * 17 + t).is_multiple_of(3) { step * 0.3 } else { 0.0 };
+                    let mut ring = Vec::new();
+                    for t in 0..7 {
+                        ring.push(Coord::new(x + t as f64 * step, y + inset(t)));
+                        let end = if t == 6 { x + size } else { x + (t + 1) as f64 * step };
+                        ring.push(Coord::new(end, y + inset(t)));
+                    }
+                    ring.push(Coord::new(x + size, y + size));
+                    for t in (1..=7).rev() {
+                        let start = if t == 7 { x + size } else { x + t as f64 * step };
+                        ring.push(Coord::new(start, y + size - inset(t + 7)));
+                        ring.push(Coord::new(x + (t - 1) as f64 * step, y + size - inset(t + 7)));
+                    }
+                    ring.push(Coord::new(x, y + inset(0)));
+                    let symbol = Symbol {
+                        fill: colors[(i * 31 + j * 17) % colors.len()].with_alpha(alpha),
+                        stroke: Rgba::rgb(30, 30, 30).with_alpha(alpha),
+                        stroke_width,
+                        size: 0.0,
+                        marker: Marker::Circle,
+                    };
+                    let original = Geometry::Polygon(vec![vec![ring]]);
+                    let extent = original.extent();
+                    let geometry = if thinned { rustgis_map::lod::thin(&original, 0.25) } else { original };
+                    (geometry, extent, symbol)
+                })
+                .collect();
+            let draw = |fast: bool| {
+                let mut pm = Pixmap::new(100, 100).unwrap();
+                if alpha == 255 {
+                    pm.fill(tiny_skia::Color::WHITE);
+                }
+                let mut used = 0;
+                for (g, extent, sym) in &features {
+                    if fast && ctx.small_polygon(&mut pm, extent, g, sym) {
+                        used += 1;
+                    } else {
+                        ctx.feature(&mut pm, g, sym);
+                    }
+                }
+                (pm, used)
+            };
+            let ((reference, _), (fast, used)) = (draw(false), draw(true));
+            let difference =
+                reference.data().iter().zip(fast.data()).map(|(a, b)| a.abs_diff(*b) as f64).sum::<f64>() / reference.data().len() as f64;
+            let maximum = reference.data().iter().zip(fast.data()).map(|(a, b)| a.abs_diff(*b)).max().unwrap();
+            assert!(
+                difference < 0.6 && maximum <= 100,
+                "{size} px, stroke {stroke_width}, thinned {thinned}, alpha {alpha}: mean {difference}, max {maximum}"
+            );
+            if stroke_width > 0.0 && alpha == 255 {
+                assert!(used >= features.len() * 95 / 100, "{size} px, thinned {thinned}: only {used} eligible");
+            } else {
+                assert_eq!(used, 0, "unoutlined or translucent styles keep their paths");
+            }
+        }
+    }
+
+    #[test]
+    fn small_polygons_draw_like_the_path_in_a_thinned_map() {
+        let mut ds = Dataset::new(
+            "land cover",
+            GeometryType::Polygon,
+            vec![Field::new("fill", FieldType::Text), Field::new("outline", FieldType::Text), Field::new("width", FieldType::Double)],
+        );
+        let size = 0.0002;
+        let step = size / 7.0;
+        for i in 0usize..100 {
+            for j in 0usize..80 {
+                let (x, y) = (i as f64 * size * 1.1, j as f64 * size * 1.1);
+                let inset = |t: usize| if (i * 31 + j * 17 + t).is_multiple_of(3) { step * 0.3 } else { 0.0 };
+                let mut ring = Vec::new();
+                for t in 0..7 {
+                    ring.push(Coord::new(x + t as f64 * step, y + inset(t)));
+                    let end = if t == 6 { x + size } else { x + (t + 1) as f64 * step };
+                    ring.push(Coord::new(end, y + inset(t)));
+                }
+                ring.push(Coord::new(x + size, y + size));
+                for t in (1..=7).rev() {
+                    let start = if t == 7 { x + size } else { x + t as f64 * step };
+                    ring.push(Coord::new(start, y + size - inset(t + 7)));
+                    ring.push(Coord::new(x + (t - 1) as f64 * step, y + size - inset(t + 7)));
+                }
+                ring.push(Coord::new(x, y + inset(0)));
+                ds.push_next(
+                    Some(Geometry::Polygon(vec![vec![ring]])),
+                    vec![Value::Text("#4A90D9".into()), Value::Text("#1F4E8C".into()), Value::Float(0.7)],
+                );
+            }
+        }
+        let mut map = Map::new("Map");
+        map.basemap = rustgis_map::Basemap::Blank;
+        map.graticule = false;
+        let id = map.add_dataset(ds);
+        let sym = Symbol {
+            fill: Rgba::rgb(0x4A, 0x90, 0xD9),
+            stroke: Rgba::rgb(0x1F, 0x4E, 0x8C),
+            stroke_width: 0.7,
+            size: 10.0,
+            marker: Marker::Circle,
+        };
+        map.layer_mut(id).unwrap().renderer = rustgis_map::Renderer::Single(sym);
+        let mut baseline = map.clone();
+        baseline.layer_mut(id).unwrap().graphics = true; // The same symbol, but no splat shortcut.
+        assert_eq!(baseline.layer(id).unwrap().symbol(0), sym);
+        // About 1.5 device pixels per cell: thinning removes detail while enough rings remain
+        // near-rectangular for the coverage shortcut (at 1 px, thinning can cut their corners).
+        let camera = Camera { center: lonlat_to_merc(Coord::new(0.011, 0.0088)), res: 30.0, bearing: 0.0, pitch: 0.0 };
+        let view = View { width: 100.0, height: 100.0, pixels_per_point: 2.0, camera, sky: false };
+        let before = render(&mut baseline, &view).unwrap().pixmap;
+        let after = render(&mut map, &view).unwrap().pixmap;
+        let difference =
+            before.data().iter().zip(after.data()).map(|(a, b)| a.abs_diff(*b) as f64).sum::<f64>() / before.data().len() as f64;
+        let maximum = before.data().iter().zip(after.data()).map(|(a, b)| a.abs_diff(*b)).max().unwrap();
+        assert!(difference < 0.6 && maximum <= 100, "map: mean {difference}, max {maximum}");
+        let layer = map.layer(id).unwrap();
+        // Plain layers draw from this cache and leave the full projection unallocated.
+        let (drawn, extents) = layer.display_cache().unwrap();
+        let vertices = |geometries: &[Option<Geometry>]| geometries.iter().flatten().map(rustgis_map::lod::vertices).sum::<usize>();
+        let original_vertices =
+            layer.dataset.features.iter().filter_map(|f| f.geometry.as_ref()).map(rustgis_map::lod::vertices).sum::<usize>();
+        assert!(vertices(drawn) < original_vertices, "the map should use simplified geometry");
+        let ctx = Ctx {
+            view: &view,
+            ppp: 2.0,
+            wireframe: false,
+            cull: Extent::EMPTY,
+            globe: None,
+            sprites: Default::default(),
+            bursts: Default::default(),
+        };
+        let mut scratch = Pixmap::new(200, 200).unwrap();
+        let eligible =
+            drawn.iter().zip(extents).filter(|(g, e)| g.as_ref().is_some_and(|g| ctx.small_polygon(&mut scratch, e, g, &sym))).count();
+        assert!(eligible >= 2_400, "only {eligible} of {} projected features use the shortcut", drawn.len());
+        map.layer_mut(id).unwrap().transparency = 50.0;
+        baseline.layer_mut(id).unwrap().transparency = 50.0;
+        let before = render(&mut baseline, &view).unwrap().pixmap;
+        let after = render(&mut map, &view).unwrap().pixmap;
+        assert_eq!(before.data(), after.data(), "transparent layers keep the original rendering path");
     }
 
     /// A filled polygon a few pixels across has its 1.4 px outline mitred, which covers nearly the
@@ -7509,8 +8205,8 @@ mod tests {
         let placed = xs(&mut m, &view);
         let keys = m.label_lock.clone().unwrap();
         assert_eq!(keys.len(), placed.len());
-        assert!(keys.iter().map(|k| k.3).collect::<std::collections::HashSet<_>>().len() == keys.len(), "{keys:?}");
-        m.label_lock = Some(keys.into_iter().filter(|k| k.3 == 0).collect());
+        assert!(keys.iter().map(|(k, _)| k.3).collect::<std::collections::HashSet<_>>().len() == keys.len(), "{keys:?}");
+        m.label_lock = Some(keys.into_iter().filter(|(k, _)| k.3 == 0).collect());
         assert_eq!(xs(&mut m, &view).len(), 1, "the middle one only");
         m.label_display.locked = false;
         m.label_lock = None;

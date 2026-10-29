@@ -168,6 +168,11 @@ pub trait Inputs {
     ) -> Result<(Vec<u8>, Vec<String>), String> {
         Err("vector-to-PMTiles export is unavailable in this input provider".into())
     }
+
+    /// Builds a raster tile archive with the layer's existing display style.
+    fn raster_to_pmtiles(&self, _layer: &str, _min_zoom: u8, _max_zoom: u8) -> Result<Vec<u8>, String> {
+        Err("raster-to-PMTiles export is unavailable in this input provider".into())
+    }
 }
 
 pub struct ToolSpec {

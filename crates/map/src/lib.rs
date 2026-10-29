@@ -548,15 +548,6 @@ impl Layer {
             }
         }
         let (mut ds, _) = copy.read_all()?;
-        // A sample isn't all of them: refuse rather than run a tool on part of the data.
-        let max = rustgis_data::source::MAX_LIMIT;
-        if let Some(n) = copy.info().and_then(|i| i.count).filter(|n| (ds.features.len() as u64) < *n && *n > max as u64) {
-            return Err(format!("the layer has {n} features, more than the {max} read at once"));
-        }
-        // A count the source doesn't know, and a read that hit the limit: maybe not all of them.
-        if copy.info().is_some_and(|i| i.count.is_none()) && ds.features.len() >= max {
-            return Err(format!("the layer has more features than the {max} read at once"));
-        }
         ds.name = self.dataset.name.clone();
         // (A project that lists no fields keeps the source's, as `sync_source` gives it.)
         if !self.dataset.fields.is_empty() {
@@ -847,7 +838,8 @@ impl Layer {
 
     /// Takes the projected geometry cache `other` (a copy of this layer, such as one drawn off
     /// the UI thread) filled, when it was filled for the same rows and geometry: sharing it costs
-    /// a pointer. False when the cache doesn't fit.
+    /// a pointer. Display-only results preserve this layer's exact cache; optional copies are
+    /// trimmed to its remaining budget. False when the rows or source settings don't match.
     pub fn adopt_cache(&mut self, other: &Layer) -> bool {
         let fits = other.dataset.features.shares(&self.dataset.features)
             && other.geometry_rev == self.geometry_rev
@@ -862,12 +854,19 @@ impl Layer {
             self.display = other.display.clone();
             self.display_rejected = other.display_rejected.clone();
             self.display_levels = other.display_levels.clone();
-            self.projected = other.projected.clone();
-            self.projected_extents = other.projected_extents.clone();
-            self.projected_vertices = other.projected_vertices;
-            self.thinned = other.thinned.clone();
-            self.projected_rev = other.projected_rev;
-            self.projected_for.clone_from(&other.projected_for);
+            if other.is_cached(&other.projected_for) {
+                self.projected = other.projected.clone();
+                self.projected_extents = other.projected_extents.clone();
+                self.projected_vertices = other.projected_vertices;
+                self.thinned = other.thinned.clone();
+                self.projected_rev = other.projected_rev;
+                self.projected_for.clone_from(&other.projected_for);
+            }
+            let budget = self.lod_budget();
+            self.trim_thinned_levels(budget);
+            let used: usize = self.thinned.iter().filter_map(|(_, c)| c.as_ref()).map(|c| lod::cache_bytes(c)).sum();
+            self.trim_display_levels(budget.saturating_sub(used));
+            self.display = self.display.take().filter(|d| self.display_levels.iter().any(|kept| std::sync::Arc::ptr_eq(d, kept)));
         }
         fits
     }
@@ -1135,10 +1134,11 @@ pub struct Map {
     /// Map-wide label display switches.
     #[serde(default)]
     pub label_display: LabelDisplay,
-    /// The labels placed when labels were locked: only they are drawn while the lock holds,
-    /// wherever the map moves. Filled by the renderer.
+    /// The labels placed when labels were locked, each with the place it took (0 its own, else
+    /// one of its alternatives, #1011): only they are drawn while the lock holds, there, wherever
+    /// the map moves. Filled by the renderer.
     #[serde(skip)]
-    pub label_lock: Option<Vec<LabelKey>>,
+    pub label_lock: Option<Vec<(LabelKey, u8)>>,
     /// Relationships, snapping, topology rules and edit settings.
     #[serde(default)]
     pub editing: design::MapEditing,
@@ -2853,6 +2853,43 @@ mod tests {
         assert!(lod::display(&original, 0, 12, 1, false).is_none());
         assert!(!long_line(100).prepare_display(&flat, 12_000.0, false));
         assert_eq!(l.dataset.features, original);
+    }
+
+    /// A worker's display-only snapshot must preserve exact positions filled later by the UI.
+    #[test]
+    fn adopting_display_preserves_newer_exact_cache_and_its_budget() {
+        let flat = projection::Flat::Mercator;
+        for tight in [false, true] {
+            let mut receiver = long_line(lod::THIN_ABOVE + 1000);
+            let mut worker = receiver.clone();
+            assert!(worker.prepare_display(&flat, 12_000.0, false));
+            receiver.thinned_in(&flat, "mercator", 24_000.0);
+            let exact = receiver.projected.clone();
+            let extents = receiver.projected_extents.clone();
+            let thinned = receiver.thinned.clone();
+            let base = receiver.view_memory.base(&receiver.dataset.features, &receiver.projected, &receiver.projected_extents);
+            if tight {
+                let mut source = source::SourceLayer::default();
+                source.byte_budget = base;
+                worker.source = Some(source.clone());
+                receiver.source = Some(source);
+            }
+            assert!(receiver.adopt_cache(&worker));
+            assert!(receiver.is_cached("mercator"), "display-only adoption must keep exact positions");
+            assert!(std::sync::Arc::ptr_eq(&exact, &receiver.projected));
+            assert!(std::sync::Arc::ptr_eq(&extents, &receiver.projected_extents));
+            if tight {
+                assert!(receiver.display_cache().is_none());
+                assert!(receiver.display_levels.is_empty());
+                assert!(receiver.thinned.iter().all(|(_, c)| c.is_none()));
+                assert!(receiver.view_cache_bytes() <= base);
+            } else {
+                assert!(std::sync::Arc::ptr_eq(&thinned, &receiver.thinned));
+                assert_eq!(receiver.display_cache().unwrap().0.as_ptr(), worker.display_cache().unwrap().0.as_ptr());
+            }
+            receiver.projected();
+            assert!(std::sync::Arc::ptr_eq(&exact, &receiver.projected), "the next exact request must reuse the allocation");
+        }
     }
 
     #[test]

@@ -314,7 +314,8 @@ pub fn service_json(svc: &Service) -> Value {
                 Offer::Service { url } => json!({"type": "service", "url": url}),
             };
             let mut layer = json!({"name": l.name, "title": l.title, "bbox": l.bbox, "offer": offer, "tilesets": l.tilesets});
-            if let Some(t) = &l.time {
+            // A layer that lists one time is listed as a plain map: there is no other to pick.
+            if let Some(t) = l.time.as_ref().filter(|t| t.changes()) {
                 // The first and last few of a long list, and how many (the slider takes them all).
                 let values: Vec<&String> = match t.values.len() {
                     n if n > 2 * SHOWN_TIMES => t.values.iter().take(SHOWN_TIMES).chain(t.values.iter().skip(n - SHOWN_TIMES)).collect(),
@@ -374,10 +375,14 @@ pub(crate) fn add(s: &mut Session, p: &Value) -> CmdResult {
     let asked = given.as_deref();
     let pinned = asked.is_some_and(|a| a.eq_ignore_ascii_case("default"));
     let slider = match (&layer.time, asked) {
-        (Some(t), Some(a)) if a.eq_ignore_ascii_case("slider") => Some(
-            t.slider()
-                .ok_or_else(|| format!("{}: its times aren't dates the time slider can step to (give one of them as time)", layer.title))?,
-        ),
+        (Some(t), Some(a)) if a.eq_ignore_ascii_case("slider") => Some(t.slider().ok_or_else(|| match t.changes() {
+            true => format!("{}: its times aren't dates the time slider can step to (give one of them as time)", layer.title),
+            false => format!(
+                "{}: it lists only one time, {}: nothing for the time slider to step through",
+                layer.title,
+                t.values.first().unwrap_or(&t.default)
+            ),
+        })?),
         (None, Some(a)) if a.eq_ignore_ascii_case("slider") => {
             return Err(format!("{}: the layer has no time to follow the time slider with", layer.title));
         }

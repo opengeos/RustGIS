@@ -4897,6 +4897,7 @@ dependencies = [
  "serde_json",
  "sys-locale",
  "tempfile",
+ "unicode-normalization",
  "web-time",
 ]
 

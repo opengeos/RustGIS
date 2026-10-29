@@ -654,6 +654,13 @@ impl Inputs for MapInputs<'_> {
         let out = crate::render::rustgis_tiles::vector_export::export(dataset, rows, min_zoom, max_zoom, source_layer)?;
         Ok((out.bytes, out.messages))
     }
+    fn raster_to_pmtiles(&self, layer: &str, min_zoom: u8, max_zoom: u8) -> Result<Vec<u8>, String> {
+        let map = self.session.map();
+        let layer = map.layer_by_name(layer).ok_or_else(|| format!("no raster layer named '{layer}'"))?;
+        let raster = layer.raster.as_ref().ok_or_else(|| format!("no raster layer named '{}'", layer.name))?;
+        let opacity = map.layer_opacity(layer);
+        crate::render::raster_export::export(raster, min_zoom, max_zoom, opacity)
+    }
     fn dataset(&self, layer: &str) -> Option<&Dataset> {
         self.loaded
             .get(layer)
@@ -1067,6 +1074,52 @@ fn apply(s: &mut Session, ran: Ran, params: Value, res: Result<rustgis_analysis:
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod file_tests {
     use super::*;
+
+    #[test]
+    fn raster_to_pmtiles_queues_the_archive_without_changing_the_map() {
+        use rustgis_data::raster::{ColorHint, Crs, GeoTransform, Raster};
+        let raster = Raster::new(
+            "Elevation",
+            4,
+            4,
+            vec![(0..16).map(|v| v as f32).collect()],
+            GeoTransform { origin_x: -180.0, origin_y: 80.0, pixel_width: 90.0, pixel_height: -40.0 },
+            Crs::LonLat,
+            None,
+            ColorHint::Gray,
+            "Float32",
+        )
+        .unwrap();
+        let mut s = Session::new(crate::Project::default());
+        let id = s.map_mut().add_raster("Elevation", rustgis_map::RasterLayer::from_path(raster, "test.tif"));
+        s.map_mut().layer_mut(id).unwrap().transparency = 50.0;
+        let mut group = rustgis_map::LayerGroup::new("Faded");
+        group.children.push(id);
+        group.transparency = 50.0;
+        s.map_mut().add_group(group);
+        let raster = s.map().layer(id).unwrap().raster.as_ref().unwrap();
+        let expected = crate::render::raster_export::export(raster, 0, 0, 0.25).unwrap();
+        s.queue_gp_files = true;
+        let result =
+            s.run("gp.run", &json!({"tool": "rasterToPmtiles", "params": {"input": "Elevation", "minZoom": 0, "maxZoom": 0}})).unwrap();
+        assert_eq!(result["pending"], true);
+        let files = s.take_gp_files();
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].1, "Elevation.pmtiles");
+        assert!(files[0].2.starts_with(b"PMTiles\x03"));
+        assert_eq!(files[0].2, expected, "layer and group transparency are both applied");
+        assert_eq!(s.map().layers.len(), 1);
+        assert!(
+            s.run("gp.run", &json!({"tool": "rasterToPmtiles", "params": {"input": "Elevation", "minZoom": 2, "maxZoom": 1}})).is_err()
+        );
+        let missing =
+            s.run("gp.run", &json!({"tool": "rasterToPmtiles", "params": {"input": "Missing", "minZoom": 0, "maxZoom": 0}})).unwrap_err();
+        assert!(missing.contains("no raster layer named"), "{missing}");
+        s.map_mut().layer_mut(id).unwrap().raster.as_mut().unwrap().data = None;
+        let pending =
+            s.run("gp.run", &json!({"tool": "rasterToPmtiles", "params": {"input": "Elevation", "minZoom": 0, "maxZoom": 0}})).unwrap_err();
+        assert!(pending.contains("pixels are not loaded"), "{pending}");
+    }
 
     fn record() -> GpRecord {
         GpRecord {
