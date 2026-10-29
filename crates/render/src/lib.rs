@@ -2200,7 +2200,7 @@ pub fn extruded_shapes(map: &mut Map, view: &View) -> Vec<ExtrudedShape> {
     // Extrusion heights are metres on the map's body.
     let body = map.body().ratio();
     // Preserve the tighter footprint tolerance used for extruded walls and roofs.
-    let tol = view.camera.res * 0.3;
+    let tol = view.camera.res * rustgis_map::lod::EXTRUSION_THIN_PX;
     let mut order: Vec<usize> = (0..map.layers.len()).rev().collect();
     order.sort_by_key(|i| map.layers.get(*i).map_or(0, |l| l.priority));
     let mut out = Vec::new();

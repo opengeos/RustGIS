@@ -11,6 +11,9 @@ use rustgis_data::{Coord, Geometry};
 /// The tolerance, in device pixels, a thinned copy keeps within.
 pub const THIN_PX: f64 = 1.0;
 
+/// Extrusion footprint tolerance in logical pixels, kept tighter than flat display thinning.
+pub const EXTRUSION_THIN_PX: f64 = 0.3;
+
 /// Layers with fewer line and ring vertices than this are always drawn from the full geometry.
 pub const THIN_ABOVE: usize = 200_000;
 

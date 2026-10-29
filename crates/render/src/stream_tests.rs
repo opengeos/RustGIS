@@ -341,6 +341,8 @@ fn complete_chunks_fail_without_publishing_a_partial_frame() {
     assert!(map.layers[0].source.as_ref().unwrap().error.as_ref().unwrap().contains("cancelled"));
 }
 
+/// Complete drawing clears the chunk source and uses its display budget independently
+/// of the interaction window, even when that window can retain only one byte.
 #[test]
 fn complete_chunks_use_whole_layer_lod_decisions() {
     let mut ds = Dataset::new("detailed", GeometryType::Polyline, vec![]);
@@ -353,10 +355,16 @@ fn complete_chunks_use_whole_layer_lod_decisions() {
     let view = View { width: 320.0, height: 240.0, pixels_per_point: 1.0, camera: Camera::new(Coord::new(0.0, 0.0), 80.0), sky: false };
     let expected = render(&mut base.clone(), &view).unwrap();
     for size in [1, 3, 20] {
-        let mut actual = base.clone();
-        actual.layers[0] = streamed(&base.layers[0], size);
-        let got = render(&mut actual, &view).unwrap();
-        assert!(got.pixmap.data() == expected.pixmap.data(), "whole-layer LOD changed at chunk size {size}");
+        for budget in [0, 1] {
+            let mut actual = base.clone();
+            actual.layers[0] = streamed(&base.layers[0], size);
+            actual.layers[0].source.as_mut().unwrap().byte_budget = budget;
+            let got = render(&mut actual, &view).unwrap();
+            assert!(
+                got.pixmap.data() == expected.pixmap.data(),
+                "whole-layer LOD changed at chunk size {size}, interaction budget {budget}"
+            );
+        }
     }
 }
 

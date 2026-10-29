@@ -75,6 +75,26 @@ fn local_difference(a: &Pixmap, b: &Pixmap) -> f64 {
     worst
 }
 
+/// Samples each visible cell's centre, away from its antialiased boundary. A missing
+/// three-pixel cell must change its centre even when larger regional averages hide it.
+fn cell_center_difference(a: &Pixmap, b: &Pixmap, view: &View) -> f64 {
+    let mut worst = 0.0f64;
+    for x in 0..84 {
+        for y in 0..84 {
+            let p = Coord::new(36.0 + (x as f64 + 0.5) * 0.5 / 84.0, -1.5 + (y as f64 + 0.5) * 0.5 / 84.0);
+            let (sx, sy) = view.to_screen(lonlat_to_merc(p));
+            let (sx, sy) = ((sx * view.pixels_per_point).floor(), (sy * view.pixels_per_point).floor());
+            if sx < 0.0 || sy < 0.0 || sx >= a.width() as f64 || sy >= a.height() as f64 {
+                continue;
+            }
+            let at = (sy as usize * a.width() as usize + sx as usize) * 4;
+            let delta: u32 = a.data()[at..at + 4].iter().zip(&b.data()[at..at + 4]).map(|(a, b)| u32::from(a.abs_diff(*b))).sum();
+            worst = worst.max(delta as f64 / 4.0);
+        }
+    }
+    worst
+}
+
 /// Compares full and thinned images at six scales, including a deliberate missing-cell control.
 
 #[test]
@@ -101,14 +121,24 @@ fn lod_landcover_matches_full_geometry_at_several_zooms_and_densities() {
             let (mean, max) = difference(&expected.pixmap, &got.pixmap);
             let local = local_difference(&expected.pixmap, &got.pixmap);
             eprintln!("LOD comparison: {across}px, density {ppp}: mean {mean:.4}/255, max {max}, local {local:.4}");
-            assert!(local < 12.0, "local channel difference {local} at {across}px, density {ppp}");
-            if across == 30.0 && ppp == 1.0 {
+            // Current worst region is 4.01/255; allow antialiasing variation while staying
+            // far below the omitted-cell control (59.66/255).
+            assert!(local < 6.0, "local channel difference {local} at {across}px, density {ppp}");
+            let centre = cell_center_difference(&expected.pixmap, &got.pixmap, &view);
+            eprintln!("Cell-centre difference: {across}px, density {ppp}: {centre:.4}");
+            // Centres match exactly in correct renders; allow small channel-rounding differences.
+            assert!(centre < 3.0, "cell-centre difference {centre} at {across}px, density {ppp}");
+            if across == 3.0 || (across == 30.0 && ppp == 1.0) {
                 let mut omitted = base.clone();
                 omitted.layers[0].dataset.features[42 * 84 + 42].geometry = None;
                 let missing = render(&mut unthinned(&omitted), &view).unwrap();
                 let local = local_difference(&expected.pixmap, &missing.pixmap);
-                eprintln!("Missing-cell control: local {local:.4}");
-                assert!(local > 12.0, "localized comparison must detect an omitted central cell");
+                let centre = cell_center_difference(&expected.pixmap, &missing.pixmap, &view);
+                eprintln!("Missing-cell control: {across}px, density {ppp}: local {local:.4}, centre {centre:.4}");
+                assert!(centre > 3.0, "cell-centre comparison must detect an omitted central cell");
+                if across == 30.0 {
+                    assert!(local > 6.0, "localized comparison must detect an omitted central cell");
+                }
             }
             assert!(mean < 3.0, "mean channel difference {mean} at {across}px, density {ppp}");
             if across == 3.0 {
@@ -144,7 +174,7 @@ fn lod_landcover_whole_frame_benchmark() {
     let mut exact = base.clone();
     exact.layers[0].labels.enabled = true; // No label field: forces full projection without labels.
     let mut fast = base.clone();
-    for (name, map) in [("unthinned", &mut full), ("full projection then LOD", &mut exact), ("preprojection LOD", &mut fast)] {
+    for (name, map) in [("unthinned", &mut full), ("labelled exact projection cache", &mut exact), ("preprojection LOD", &mut fast)] {
         let start = web_time::Instant::now();
         let first = render(map, &view).unwrap();
         let cold = start.elapsed();

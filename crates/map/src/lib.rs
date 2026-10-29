@@ -521,7 +521,8 @@ impl Layer {
 
     /// Allocated row, projected-geometry, extent and optional display storage for this layer.
     /// Snapshots report the same shared allocations; totals are memoized until mutable access
-    /// changes an allocation identity, including edits through the public dataset API.
+    /// changes an allocation identity, including edits through the public dataset API. Stale
+    /// allocations still count until the next preparation or explicit cache clear releases them.
     pub fn view_cache_bytes(&self) -> usize {
         self.view_memory
             .total(&self.dataset.features, &self.projected, &self.projected_extents, &self.thinned)
@@ -686,9 +687,10 @@ impl Layer {
     /// Callers needing labels, selection or other exact positions must use `thinned_in` instead.
     /// `whole_layer_eligible` applies the complete source's LOD decision to each streamed chunk.
     /// Returns false for unsupported projections, small layers, weak savings or a full budget.
+    /// Every failure clears the active display; recent reusable levels may remain cached.
     pub fn prepare_display(&mut self, flat: &projection::Flat, tol: f64, whole_layer_eligible: bool) -> bool {
-        let Some(level) = lod::level(tol).filter(|_| matches!(flat, projection::Flat::Mercator)) else { return false };
         self.display = None;
+        let Some(level) = lod::level(tol).filter(|_| matches!(flat, projection::Flat::Mercator)) else { return false };
         let used: usize = self.thinned.iter().filter_map(|(_, c)| c.as_ref()).map(|c| lod::cache_bytes(c)).sum();
         let budget = self
             .source
@@ -754,6 +756,7 @@ impl Layer {
     /// geometry itself for a small layer. Read it back with [`Layer::thinned_cache`].
     pub fn thinned_in(&mut self, flat: &projection::Flat, key: &str, tol: f64) -> &[Option<Geometry>] {
         self.display = None;
+        // Exact consumers release display levels so both cache families share one LOD budget.
         self.display_levels.clear();
         self.projected_in(flat, key);
         let budget = self.source.as_ref().map_or(lod::CACHE_BYTES, |s| {
@@ -2907,6 +2910,23 @@ mod tests {
         assert_eq!(lod::DISPLAY_BUILDS.get(), before + 4);
         copy.clear_cache();
         assert!(copy.display_levels.is_empty());
+    }
+
+    /// Invalid requests hide the active display without discarding reusable Mercator levels.
+    #[test]
+    fn invalid_display_requests_clear_the_active_cache() {
+        let flat = projection::Flat::Mercator;
+        let mut l = long_line(lod::THIN_ABOVE + 1000);
+        for tol in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+            assert!(l.prepare_display(&flat, 12_000.0, false));
+            assert!(l.display_cache().is_some());
+            assert!(!l.prepare_display(&flat, tol, false));
+            assert!(l.display_cache().is_none());
+        }
+        assert!(l.prepare_display(&flat, 12_000.0, false));
+        let custom = projection::Flat::of(&Projection::Custom("EPSG:32637".into()));
+        assert!(!l.prepare_display(&custom, 12_000.0, false));
+        assert!(l.display_cache().is_none());
     }
 
     /// Alternating failed zoom levels must not repeatedly walk all source vertices.
