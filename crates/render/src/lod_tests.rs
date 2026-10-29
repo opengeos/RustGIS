@@ -174,9 +174,24 @@ fn lod_display_survives_rejected_frame_and_returns_without_rebuilding() {
     // Keep the allocation alive independently: a rebuilt cache cannot reuse its address.
     let held = map.clone();
     let before = held.layers[0].display_cache().unwrap().0.as_ptr();
-    let zoomed = View { camera: Camera { res: view.camera.res / 1000.0, ..view.camera }, ..view };
+    let zoomed = View {
+        camera: Camera {
+            center: lonlat_to_merc(Coord::new(36.0 + 42.5 * 0.5 / 84.0, -1.5 + 42.5 * 0.5 / 84.0)),
+            res: view.camera.res / 1000.0,
+            ..view.camera
+        },
+        ..view
+    };
+    let reference = render(&mut unthinned(&map), &zoomed).unwrap();
+    let mut empty = map.clone();
+    empty.layers.clear();
+    let background = render(&mut empty, &zoomed).unwrap();
     for _ in 0..3 {
-        render(&mut map, &zoomed).unwrap();
+        let fallback = render(&mut map, &zoomed).unwrap();
+        // A view deep inside a polygon can be a solid colour; compare against an actual blank
+        // frame rather than requiring variation within the image.
+        assert_ne!(fallback.pixmap.data(), background.pixmap.data(), "fallback must draw geometry");
+        assert_eq!(fallback.pixmap.data(), reference.pixmap.data(), "fallback must match unthinned geometry");
         assert!(map.layers[0].display_cache().is_none());
         assert!(!map.layers[0].projected_cache().is_empty());
         let back = render(&mut map, &view).unwrap();

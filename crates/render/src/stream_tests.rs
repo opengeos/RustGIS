@@ -350,27 +350,38 @@ fn complete_chunks_fail_without_publishing_a_partial_frame() {
 /// of the interaction window, even when that window can retain only one byte.
 #[test]
 fn complete_chunks_use_whole_layer_lod_decisions() {
-    let mut ds = Dataset::new("detailed", GeometryType::Polyline, vec![]);
+    let mut ds = Dataset::new("detailed", GeometryType::Polyline, vec![Field::new("name", FieldType::Text)]);
     for row in 0..11 {
         let points = (0..20_001).map(|i| Coord::new(-0.1 + i as f64 * 0.00001, row as f64 * 0.004 + (i % 2) as f64 * 0.000001)).collect();
-        ds.push(Some(Geometry::Line(vec![points])), vec![]);
+        ds.push(Some(Geometry::Line(vec![points])), vec![Value::Text(format!("line {row}"))]);
     }
     let mut base = Map::new("LOD");
     base.add_dataset(ds);
     let view = View { width: 320.0, height: 240.0, pixels_per_point: 1.0, camera: Camera::new(Coord::new(0.0, 0.0), 80.0), sky: false };
-    let expected = render(&mut base.clone(), &view).unwrap();
-    for size in [1, 3, 20] {
-        for budget in [0, 1] {
-            let mut actual = base.clone();
-            actual.layers[0] = streamed(&base.layers[0], size);
-            actual.layers[0].source.as_mut().unwrap().byte_budget = budget;
-            LOD_PATHS.set((0, 0));
-            let got = render(&mut actual, &view).unwrap();
-            assert_eq!(LOD_PATHS.get(), (11usize.div_ceil(size), 0), "complete chunks must keep full projection lazy");
-            assert!(
-                got.pixmap.data() == expected.pixmap.data(),
-                "whole-layer LOD changed at chunk size {size}, interaction budget {budget}"
-            );
+    for labelled in [false, true] {
+        let mut variant = base.clone();
+        variant.layers[0].labels.enabled = labelled;
+        variant.layers[0].labels.default.field = "name".into();
+        let expected = render(&mut variant.clone(), &view).unwrap();
+        if labelled {
+            assert!(!expected.labels.is_empty(), "the exact-consumer case must place real labels");
+        }
+        for size in [1, 3, 20] {
+            for budget in [0, 1] {
+                let mut actual = variant.clone();
+                actual.layers[0] = streamed(&variant.layers[0], size);
+                actual.layers[0].source.as_mut().unwrap().byte_budget = budget;
+                LOD_PATHS.set((0, 0));
+                let got = render(&mut actual, &view).unwrap();
+                let chunks = 11usize.div_ceil(size);
+                let paths = if labelled { (0, chunks) } else { (chunks, 0) };
+                assert_eq!(LOD_PATHS.get(), paths, "label consumers must select exact projection, plain chunks the display path");
+                assert_eq!(got.labels, expected.labels);
+                assert!(
+                    got.pixmap.data() == expected.pixmap.data(),
+                    "whole-layer LOD changed at chunk size {size}, interaction budget {budget}, labelled {labelled}"
+                );
+            }
         }
     }
 }

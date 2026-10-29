@@ -199,6 +199,7 @@ pub struct Layer {
     /// The active Mercator display level; full projection stays lazy for interaction.
     #[serde(skip)]
     display: Option<std::sync::Arc<lod::Display>>,
+    /// Recent unsuccessful display attempts, keyed by their geometry, level and budget inputs.
     #[serde(skip)]
     display_rejected: Vec<lod::Rejected>,
     /// Recent display levels, shared by snapshots and bounded together with `thinned`.
@@ -749,6 +750,10 @@ impl Layer {
 
     /// Reclaims optional exact-consumer LOD copies when the shared remaining budget shrinks.
     fn trim_thinned_levels(&mut self, budget: usize) {
+        let used = self.thinned.iter().filter_map(|(_, c)| c.as_ref()).fold(0usize, |n, c| n.saturating_add(lod::cache_bytes(c)));
+        if used <= budget {
+            return;
+        }
         let mut bytes = 0usize;
         std::sync::Arc::make_mut(&mut self.thinned).retain(|(_, copy)| {
             let extra = copy.as_ref().map_or(0, |c| lod::cache_bytes(c));
@@ -2917,6 +2922,21 @@ mod tests {
         assert_eq!(lod::DISPLAY_BUILDS.get(), before + 4);
         copy.clear_cache();
         assert!(copy.display_levels.is_empty());
+    }
+
+    /// Unchanged budgets leave snapshot LOD arrays shared; only eviction needs a private array.
+    #[test]
+    fn trimming_lod_preserves_snapshot_sharing_when_nothing_is_evicted() {
+        let flat = projection::Flat::Mercator;
+        let mut l = long_line(lod::THIN_ABOVE + 1000);
+        l.thinned_in(&flat, "mercator", 12_000.0);
+        let mut copy = l.clone();
+        copy.trim_thinned_levels(lod::CACHE_BYTES);
+        assert!(std::sync::Arc::ptr_eq(&l.thinned, &copy.thinned));
+        copy.trim_thinned_levels(0);
+        assert!(!std::sync::Arc::ptr_eq(&l.thinned, &copy.thinned));
+        assert!(l.thinned.iter().any(|(_, c)| c.is_some()));
+        assert!(copy.thinned.iter().all(|(_, c)| c.is_none()));
     }
 
     /// Display and exact-consumer LOD levels coexist within one source budget, including shrinkage.
