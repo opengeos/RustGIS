@@ -107,7 +107,9 @@ impl FeatureInfo {
             name => {
                 // The window in the layer's system: about its centre, as wide as the window's
                 // corners reach there (the point stays in its middle pixel).
-                let t = super::warp::usable(super::warp::epsg_of(name)?)?.transformer().ok()?;
+                let code = super::warp::epsg_of(name)?;
+                super::warp::usable(code)?;
+                let t = super::warp::transformer(code)?;
                 let to = |dx: f64, dy: f64| t.from_merc(rustgis_geom::Coord::new(x + dx, y + dy));
                 let c = to(0.0, 0.0)?;
                 let corners = [to(-half, -half)?, to(half, -half)?, to(-half, half)?, to(half, half)?];

@@ -110,7 +110,7 @@ pub struct Warp {
 }
 
 /// Most systems kept of a WMS layer.
-pub const MAX_SYSTEMS: usize = 24;
+pub const MAX_SYSTEMS: usize = 64;
 
 /// One picture a map tile is made from: its address and the area it shows in the layer's system
 /// (west, south, east, north); for a tile of a matrix, its column and row too.
@@ -137,6 +137,21 @@ pub struct Plan {
 pub fn usable(epsg: u32) -> Option<Crs> {
     let crs = Crs::from_epsg(epsg)?;
     (crs != Crs::WebMercator && transformer(epsg).is_some()).then_some(crs)
+}
+
+/// A longitude/latitude box (west, south, east, north) in a system: the bounds of its edges
+/// worked out there, a few points along each (a projected box's corners aren't its extremes).
+pub fn native_box(t: &Transformer, [w, s, e, n]: [f64; 4]) -> Option<[f64; 4]> {
+    let mut out: Option<[f64; 4]> = None;
+    for i in 0..=8 {
+        let f = f64::from(i) / 8.0;
+        for (x, y) in [(w + (e - w) * f, s), (w + (e - w) * f, n), (w, s + (n - s) * f), (e, s + (n - s) * f)] {
+            if let Some(c) = t.from_lonlat(Coord::new(x, y)) {
+                out = Some(out.map_or([c.x, c.y, c.x, c.y], |b| [b[0].min(c.x), b[1].min(c.y), b[2].max(c.x), b[3].max(c.y)]));
+            }
+        }
+    }
+    out
 }
 
 /// The transformer of a system `epsg` names, made once a code (from two PROJ definitions: a
@@ -336,21 +351,35 @@ impl Warp {
                 ll.x >= aw - mx && ll.x <= ae + mx && ll.y >= as_ - my && ll.y <= an + my
             })
         };
-        let mut points = Vec::with_capacity((GRID + 1) * (GRID + 1));
-        let (mut lo_x, mut lo_y, mut hi_x, mut hi_y) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
-        for j in 0..=GRID {
-            for i in 0..=GRID {
-                let m = Coord::new(w + (e - w) * i as f64 / GRID as f64, n - (n - s) * j as f64 / GRID as f64);
-                let ll = merc_to_lonlat(m);
-                let p = inside(ll).then(|| t.from_lonlat(ll)).flatten().filter(|c| c.is_finite()).map(|c| (c.x, c.y));
-                if let Some((x, y)) = p {
-                    (lo_x, lo_y, hi_x, hi_y) = (lo_x.min(x), lo_y.min(y), hi_x.max(x), hi_y.max(y));
+        let grid = |keep: &dyn Fn(Coord) -> bool| {
+            let mut points = Vec::with_capacity((GRID + 1) * (GRID + 1));
+            let (mut lo_x, mut lo_y, mut hi_x, mut hi_y) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
+            for j in 0..=GRID {
+                for i in 0..=GRID {
+                    let m = Coord::new(w + (e - w) * i as f64 / GRID as f64, n - (n - s) * j as f64 / GRID as f64);
+                    let ll = merc_to_lonlat(m);
+                    let p = keep(ll).then(|| t.from_lonlat(ll)).flatten().filter(|c| c.is_finite()).map(|c| (c.x, c.y));
+                    if let Some((x, y)) = p {
+                        (lo_x, lo_y, hi_x, hi_y) = (lo_x.min(x), lo_y.min(y), hi_x.max(x), hi_y.max(y));
+                    }
+                    points.push(p);
                 }
-                points.push(p);
             }
-        }
+            (points, [lo_x, lo_y, hi_x, hi_y])
+        };
+        let (mut points, [mut lo_x, mut lo_y, mut hi_x, mut hi_y]) = grid(&inside);
+        // A layer's area small enough to fall between the grid's points (a town, far out): the
+        // tile's points all, when the tile and the area meet.
         if !(lo_x < hi_x && lo_y < hi_y) {
-            return Plan::default();
+            let (sw, ne) = (merc_to_lonlat(Coord::new(w, s)), merc_to_lonlat(Coord::new(e, n)));
+            let meets = self.area.is_some_and(|[aw, as_, ae, an]| aw <= ne.x && ae >= sw.x && as_ <= ne.y && an >= sw.y);
+            if !meets {
+                return Plan::default();
+            }
+            (points, [lo_x, lo_y, hi_x, hi_y]) = grid(&|_| true);
+            if !(lo_x < hi_x && lo_y < hi_y) {
+                return Plan::default();
+            }
         }
         // The area each grid cell spans past the outermost points, so the pictures cover them.
         let (pad_x, pad_y) = ((hi_x - lo_x) / GRID as f64, (hi_y - lo_y) / GRID as f64);
@@ -645,6 +674,27 @@ mod tests {
         assert_eq!(lv95.zooms(), Some((3, 21)));
         let wms = Warp { epsg: 2056, grid: Grid::Map { lat_first: false }, area: None, systems: Vec::new() };
         assert_eq!(wms.zooms(), None);
+    }
+
+    /// A layer's address from a project is hostile input: junk fragments are refused, not a
+    /// panic.
+    #[test]
+    fn junk_fragments_are_refused() {
+        for junk in [
+            "https://x.org/#rustgis-warp=",
+            "https://x.org/#rustgis-warp=99999999999/0/0;crs=2056;map=east",
+            "https://x.org/#rustgis-warp=1/0/0;crs=99999999;map=east",
+            "https://x.org/#rustgis-warp=1/0/0;crs=2056;tiles=a|NaN|1|1|256|256|1|1",
+            "https://x.org/#rustgis-warp=1/0/0;crs=2056;tiles=a|0|0|0|256|256|1|1",
+            "https://x.org/#rustgis-warp=1/0/0;crs=2056;tiles=a|0|0|1|0|256|1|1",
+            "https://x.org/#rustgis-warp=1/0/0;crs=2056;tiles=a|0|0|1|256|256|0|1",
+            "https://x.org/#rustgis-warp=1/0/0;crs=2056;tiles=",
+            "https://x.org/#rustgis-warp=1/0/0;crs=2056;in=1,2,x;map=east;sys=x|y",
+            "https://x.org/#rustgis-warp=a/b/c;crs=2056;map=east",
+        ] {
+            let parsed = Warp::parse(junk);
+            assert!(parsed.as_ref().is_none_or(|(_, _, w)| w.area.is_none() && w.systems.is_empty()), "{junk}: {parsed:?}");
+        }
     }
 
     #[test]

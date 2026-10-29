@@ -971,9 +971,8 @@ fn wms_native(layer: &Node, crs: &[String], v13: bool, area: Option<[f64; 4]>, m
                 let f = |k: &str| b.attribute(k).and_then(|v| v.trim().parse::<f64>().ok());
                 Some((f("minx")?, f("miny")?))
             });
-            let expected = area.and_then(|[w, s, ..]| {
-                warp::transformer(u32::from(system.epsg()))?.from_lonlat(rustgis_geom::Coord::new(w, s)).map(|c| (c.x, c.y))
-            });
+            // (The least of its edges there: a projected box's south-west corner isn't.)
+            let expected = area.and_then(|a| warp::native_box(&*warp::transformer(u32::from(system.epsg()))?, a)).map(|b| (b[0], b[1]));
             match (corner, expected) {
                 (Some(c), Some(e)) => warp::north_first(c, Some(e), system.is_geographic()),
                 _ => system.is_geographic(),
@@ -1126,9 +1125,10 @@ fn native_matrices(tms: &Node) -> Option<(u16, crate::raster::Crs, Vec<RawMatrix
             size: (u("MatrixWidth")?, u("MatrixHeight")?),
         });
     }
-    // Coarsest first. (The corners' order is settled per layer, against its area.)
+    // Coarsest first, the finest kept: the detail a close view needs. (The corners' order is
+    // settled per layer, against its area.)
     out.sort_by(|a, b| b.scale.total_cmp(&a.scale));
-    out.truncate(warp::MAX_MATRICES);
+    out.drain(..out.len().saturating_sub(warp::MAX_MATRICES));
     (!out.is_empty()).then_some((u16::try_from(code).ok()?, system, out))
 }
 
@@ -1155,7 +1155,7 @@ fn wmts(url: &str, root: &Node) -> Service {
         .and_then(|g| href(&g))
         .filter(|h| is_web(h))
         .unwrap_or_else(|| endpoint(url));
-    let mut skipped = 0;
+    let (mut skipped, mut too_long) = (0, 0);
     for layer in children(&contents, "Layer").take(MAX_LAYERS) {
         let Some(name) = child_text(&layer, "Identifier") else { continue };
         let title = child_text(&layer, "Title").unwrap_or_else(|| name.clone());
@@ -1191,21 +1191,8 @@ fn wmts(url: &str, root: &Node) -> Service {
                 // The corners' order: the one whose matrix covers more of the layer's area worked
                 // out in the system (else latitude first in a geographic system other than CRS84).
                 let geographic = system.is_geographic();
-                let area = bbox.filter(|_| !geographic).and_then(|[w, s, e, n]| {
-                    let t = warp::transformer(u32::from(*code))?;
-                    let mut out: Option<[f64; 4]> = None;
-                    for i in 0..=4 {
-                        let f = f64::from(i) / 4.0;
-                        for ll in [(w + (e - w) * f, s), (w + (e - w) * f, n), (w, s + (n - s) * f), (e, s + (n - s) * f)] {
-                            if let Some(c) = t.from_lonlat(rustgis_geom::Coord::new(ll.0, ll.1)) {
-                                out = Some(
-                                    out.map_or([c.x, c.y, c.x, c.y], |b| [b[0].min(c.x), b[1].min(c.y), b[2].max(c.x), b[3].max(c.y)]),
-                                );
-                            }
-                        }
-                    }
-                    out
-                });
+                // (A geographic one's too: a service may write its corner either way round.)
+                let area = bbox.and_then(|b| warp::native_box(&*warp::transformer(u32::from(*code))?, b));
                 let first = raw.first()?;
                 let m = warp::Matrix::from_scale(first.id.clone(), first.scale, geographic, first.corner, first.tile, first.size)?;
                 let span = (m.cell * f64::from(m.tile_w) * f64::from(m.cols), m.cell * f64::from(m.tile_h) * f64::from(m.rows));
@@ -1288,7 +1275,7 @@ fn wmts(url: &str, root: &Node) -> Service {
         // An address in another system no longer than a tile layer keeps (a set of a great many
         // matrices, in its fragment).
         if native.is_some() && template.len() > 4096 {
-            skipped += 1;
+            too_long += 1;
             continue;
         }
         service.layers.push(ServiceLayer {
@@ -1306,6 +1293,11 @@ fn wmts(url: &str, root: &Node) -> Service {
     }
     if skipped > 0 {
         service.notes.push(format!("{skipped} layers have no tile matrix set RustGIS can draw and are left out"));
+    }
+    if too_long > 0 {
+        service.notes.push(format!(
+            "{too_long} layers in another coordinate system are left out: their tile matrix sets have too many matrices to keep in a layer's address (4096 bytes)"
+        ));
     }
     service
 }

@@ -38,12 +38,30 @@ enum How {
 
 /// How a tile layer is drawn on a map in `epsg`: `None` when its service doesn't offer it in
 /// that system (it is then warped from Web Mercator with the others).
-pub(crate) fn of(t: &TileLayer, epsg: u16) -> Option<Native> {
+pub(crate) fn of(t: &TileLayer, epsg: u16) -> Option<Arc<Native>> {
     if t.blend != rustgis_map::effects::Blend::Normal || !t.url.contains(rustgis_data::ogc::warp::MARK) {
         return None;
     }
+    // Read once a layer's address and the map's system: the map draws them every frame.
+    type Known = std::collections::HashMap<(String, u16), Option<Arc<Native>>>;
+    static KNOWN: std::sync::OnceLock<std::sync::Mutex<Known>> = std::sync::OnceLock::new();
+    let mut known = KNOWN.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner());
+    let key = (t.url.clone(), epsg);
+    if let Some(n) = known.get(&key) {
+        return n.clone();
+    }
+    if known.len() >= 256 {
+        known.clear();
+    }
+    let n = read(&t.url, epsg).map(Arc::new);
+    known.insert(key, n.clone());
+    n
+}
+
+/// How a layer's address `url` is drawn in `epsg`, read from its fragment.
+fn read(url: &str, epsg: u16) -> Option<Native> {
     // The address names the map tile it is for once filled in; any will do to read it.
-    let filled = t.url.replacen("{z}/{x}/{y}", "0/0/0", 1);
+    let filled = url.replacen("{z}/{x}/{y}", "0/0/0", 1);
     let (base, _, w) = Warp::parse(&filled)?;
     let how = match &w.grid {
         Grid::Map { .. } => How::Map(w.system(epsg)?.clone()),
@@ -58,11 +76,66 @@ pub(crate) fn of(t: &TileLayer, epsg: u16) -> Option<Native> {
 }
 
 /// One picture to draw: its address, the area it shows (west, south, east, north in the
-/// system), and those of coarser ones that stand in for it while it is on its way.
+/// system), and where it is, from which the coarser ones that stand in for it while it is on
+/// its way are worked out (only then).
 struct Picture {
     url: String,
     area: [f64; 4],
-    stand_ins: Vec<(String, [f64; 4])>,
+    at: At,
+}
+
+/// Where a picture is: a WMS layer's own tile (its level, column and row), or a WMTS matrix's
+/// (the matrix and the tile's middle).
+enum At {
+    Map { level: i32, col: i64, row: i64 },
+    Tiles { matrix: usize, mid: (f64, f64) },
+}
+
+/// A WMS layer's own tile's area: `2^level` units a pixel, [`SIDE`] pixels a side.
+fn map_area(level: i32, col: f64, row: f64) -> [f64; 4] {
+    let s = 2f64.powi(level) * f64::from(SIDE);
+    [col * s, row * s, (col + 1.0) * s, (row + 1.0) * s]
+}
+
+/// A matrix tile's area.
+fn tile_area(m: &Matrix, c: u32, r: u32) -> [f64; 4] {
+    let (tw, th) = (m.cell * f64::from(m.tile_w), m.cell * f64::from(m.tile_h));
+    let x0 = m.left + f64::from(c) * tw;
+    let y1 = m.top - f64::from(r) * th;
+    [x0, y1 - th, x0 + tw, y1]
+}
+
+/// The tile of `m` at a point, if it has one there.
+fn tile_at(m: &Matrix, x: f64, y: f64) -> Option<(u32, u32)> {
+    let c = ((x - m.left) / (m.cell * f64::from(m.tile_w))).floor();
+    let r = ((m.top - y) / (m.cell * f64::from(m.tile_h))).floor();
+    (c >= 0.0 && r >= 0.0 && c < f64::from(m.cols) && r < f64::from(m.rows)).then_some((c as u32, r as u32))
+}
+
+fn tile_address(base: &str, m: &Matrix, c: u32, r: u32) -> String {
+    let id = rustgis_data::ogc::warp::matrix_in_address(&m.id);
+    base.replace("{nm}", &id).replace("{ncol}", &c.to_string()).replace("{nrow}", &r.to_string())
+}
+
+/// The coarser pictures that stand in for one on its way, nearest first, with their areas.
+fn stand_ins(base: &str, how: &How, at: &At) -> Vec<(String, [f64; 4])> {
+    match (how, at) {
+        (How::Map(system), At::Map { level, col, row }) => (1..=STAND_IN_LEVELS as i32)
+            .map(|up| {
+                let d = 2f64.powi(up);
+                let a = map_area(level + up, (*col as f64 / d).floor(), (*row as f64 / d).floor());
+                (Warp::map_address(base, system, a, SIDE, SIDE), a)
+            })
+            .collect(),
+        (How::Tiles(ms), At::Tiles { matrix, mid }) => (1..=STAND_IN_LEVELS as usize)
+            .filter_map(|up| {
+                let p = ms.get(matrix.checked_sub(up)?)?;
+                let (pc, pr) = tile_at(p, mid.0, mid.1)?;
+                Some((tile_address(base, p, pc, pr), tile_area(p, pc, pr)))
+            })
+            .collect(),
+        _ => Vec::new(),
+    }
 }
 
 /// Draws the layer over `pm` (the view's pixels), its pictures asked for: whether some are still
@@ -114,8 +187,9 @@ pub(crate) fn draw(pm: &mut Pixmap, n: &Native, t: &TileLayer, view: &View, flat
                 pending = true;
                 // The nearest coarser picture here already, over this one's area (the cache's,
                 // not a copy).
-                let stand_in =
-                    p.stand_ins.iter().find_map(|(u, a)| cache::peek(u).filter(|c| matches!(**c, Payload::Image(_))).map(|c| (c, *a)));
+                let stand_in = stand_ins(&n.base, &n.how, &p.at)
+                    .into_iter()
+                    .find_map(|(u, a)| cache::peek(&u).filter(|c| matches!(**c, Payload::Image(_))).map(|c| (c, a)));
                 if let Some((payload, at)) = stand_in
                     && let Payload::Image(img) = &*payload
                 {
@@ -147,22 +221,11 @@ fn map_pictures(base: &str, system: &System, area: [f64; 4], per_px: f64) -> Vec
             level += 1;
             continue;
         }
-        let at = |l: i32, c: f64, r: f64| {
-            let s = span(l);
-            [c * s, r * s, (c + 1.0) * s, (r + 1.0) * s]
-        };
         let mut out = Vec::new();
         for r in (r0 as i64)..=(r1 as i64) {
             for c in (c0 as i64)..=(c1 as i64) {
-                let a = at(level, c as f64, r as f64);
-                let stand_ins = (1..=STAND_IN_LEVELS as i32)
-                    .map(|up| {
-                        let d = 2f64.powi(up);
-                        let pa = at(level + up, (c as f64 / d).floor(), (r as f64 / d).floor());
-                        (Warp::map_address(base, system, pa, SIDE, SIDE), pa)
-                    })
-                    .collect();
-                out.push(Picture { url: Warp::map_address(base, system, a, SIDE, SIDE), area: a, stand_ins });
+                let a = map_area(level, c as f64, r as f64);
+                out.push(Picture { url: Warp::map_address(base, system, a, SIDE, SIDE), area: a, at: At::Map { level, col: c, row: r } });
             }
         }
         return out;
@@ -173,22 +236,6 @@ fn map_pictures(base: &str, system: &System, area: [f64; 4], per_px: f64) -> Vec
 /// (else its finest), coarser when there would be too many.
 fn matrix_pictures(base: &str, ms: &[Matrix], area: [f64; 4], per_px: f64) -> Vec<Picture> {
     let Some(mut i) = ms.iter().position(|m| m.cell <= per_px * 1.25).or(ms.len().checked_sub(1)) else { return Vec::new() };
-    let tile_area = |m: &Matrix, c: u32, r: u32| {
-        let (tw, th) = (m.cell * f64::from(m.tile_w), m.cell * f64::from(m.tile_h));
-        let x0 = m.left + f64::from(c) * tw;
-        let y1 = m.top - f64::from(r) * th;
-        [x0, y1 - th, x0 + tw, y1]
-    };
-    let address = |m: &Matrix, c: u32, r: u32| {
-        let id = rustgis_data::ogc::warp::matrix_in_address(&m.id);
-        base.replace("{nm}", &id).replace("{ncol}", &c.to_string()).replace("{nrow}", &r.to_string())
-    };
-    // The tile of `m` at a point, if it has one there.
-    let tile_at = |m: &Matrix, x: f64, y: f64| -> Option<(u32, u32)> {
-        let c = ((x - m.left) / (m.cell * f64::from(m.tile_w))).floor();
-        let r = ((m.top - y) / (m.cell * f64::from(m.tile_h))).floor();
-        (c >= 0.0 && r >= 0.0 && c < f64::from(m.cols) && r < f64::from(m.rows)).then_some((c as u32, r as u32))
-    };
     loop {
         let Some(m) = ms.get(i) else { return Vec::new() };
         let (tw, th) = (m.cell * f64::from(m.tile_w), m.cell * f64::from(m.tile_h));
@@ -213,14 +260,7 @@ fn matrix_pictures(base: &str, ms: &[Matrix], area: [f64; 4], per_px: f64) -> Ve
             for c in (c0 as u32)..=(c1 as u32) {
                 let a = tile_area(m, c, r);
                 let mid = ((a[0] + a[2]) / 2.0, (a[1] + a[3]) / 2.0);
-                let stand_ins = (1..=STAND_IN_LEVELS as usize)
-                    .filter_map(|up| {
-                        let p = ms.get(i.checked_sub(up)?)?;
-                        let (pc, pr) = tile_at(p, mid.0, mid.1)?;
-                        Some((address(p, pc, pr), tile_area(p, pc, pr)))
-                    })
-                    .collect();
-                out.push(Picture { url: address(m, c, r), area: a, stand_ins });
+                out.push(Picture { url: tile_address(base, m, c, r), area: a, at: At::Tiles { matrix: i, mid } });
             }
         }
         return out;
@@ -269,8 +309,9 @@ mod tests {
         assert_eq!(p[0].area, [2_599_936.0, 1_199_872.0, 2_600_192.0, 1_200_128.0]);
         assert_eq!(p[0].url, "https://m.example.org/wms?CRS=EPSG:2056&BBOX=2599936,1199872,2600192,1200128&WIDTH=256&HEIGHT=256");
         // Its stand-ins: the tiles twice, four and eight times as coarse containing it.
-        assert_eq!(p[0].stand_ins.len(), STAND_IN_LEVELS as usize);
-        let a = p[0].stand_ins[0].1;
+        let first = stand_ins("x{nbbox}", &How::Map(system.clone()), &p[0].at);
+        assert_eq!(first.len(), STAND_IN_LEVELS as usize);
+        let a = first[0].1;
         assert!(a[0] <= p[0].area[0] && a[2] >= p[0].area[2] && a[2] - a[0] == 512.0);
         // A view wider than its tiles allow: coarser ones.
         let wide = map_pictures("x{nbbox}", &system, [0.0, 0.0, 1e6, 1e6], 1.0);
@@ -293,7 +334,8 @@ mod tests {
         let p =
             matrix_pictures("https://t.example.org/{nm}/{nrow}/{ncol}.png", &ms, [2_600_000.0, 1_200_000.0, 2_600_600.0, 1_200_300.0], 2.1);
         assert!(p.iter().all(|p| p.url.starts_with("https://t.example.org/b/")), "{}", p[0].url);
-        assert!(p[0].stand_ins.first().is_some_and(|(u, _)| u.starts_with("https://t.example.org/a/")));
+        let first = stand_ins("https://t.example.org/{nm}/{nrow}/{ncol}.png", &How::Tiles(ms.to_vec()), &p[0].at);
+        assert!(first.first().is_some_and(|(u, _)| u.starts_with("https://t.example.org/a/")));
         // Finer than its finest: the finest.
         let p =
             matrix_pictures("https://t.example.org/{nm}/{nrow}/{ncol}.png", &ms, [2_600_000.0, 1_200_000.0, 2_600_100.0, 1_200_100.0], 0.1);

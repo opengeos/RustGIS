@@ -97,7 +97,10 @@ pub(crate) fn make(url: &str) -> Made {
             State::Pending => waiting = true,
             State::Failed(e) => {
                 for_now |= transient(&e);
-                error = Some(e);
+                // A picture the service doesn't have is left clear, not the layer's error.
+                if !missing(&e) {
+                    error = Some(e);
+                }
                 pictures.push(None);
             }
         }
@@ -117,7 +120,11 @@ pub(crate) fn make(url: &str) -> Made {
         return Made::Waiting;
     }
     if pictures.iter().all(Option::is_none) {
-        return Made::Failed(error.unwrap_or_else(|| "no picture".into()));
+        // None there at all (past the service's coverage): an empty tile, kept.
+        return match error {
+            Some(e) => Made::Failed(e),
+            None => Made::Done(Payload::Empty),
+        };
     }
     let tile = compose(&plan, &pictures, SIZE).map_or(Payload::Empty, Payload::Image);
     let mut kept = made_for_now().lock().unwrap_or_else(|e| e.into_inner());
@@ -125,6 +132,8 @@ pub(crate) fn make(url: &str) -> Made {
         kept.remove(url);
         return Made::Done(tile);
     }
+    // Those past their while first, then all if it is still full.
+    kept.retain(|_, (at, _)| at.elapsed() < FOR_NOW);
     if kept.len() >= MAX_FOR_NOW {
         kept.clear();
     }
