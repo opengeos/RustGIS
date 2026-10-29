@@ -35,9 +35,10 @@ pub fn transformer(epsg: u16) -> Option<Arc<Transformer>> {
 }
 
 /// Map tiles made without a picture that failed, kept a while so they aren't made again for
-/// every frame drawn meanwhile: when each was made, and it. As long as the cache keeps the
-/// failure before asking again (a 256 × 256 tile is 256 KiB: at most 64 MiB of them).
-const FOR_NOW: web_time::Duration = cache::RETRY;
+/// every frame drawn meanwhile: when each was made, and it (a 256 × 256 tile is 256 KiB: at
+/// most 64 MiB of them). Well short of the cache's [`cache::RETRY`], so a picture that answers
+/// when asked again fills its hole soon after.
+const FOR_NOW: web_time::Duration = web_time::Duration::from_secs(10);
 const MAX_FOR_NOW: usize = 256;
 
 /// Forgets the tiles made without a picture that failed, and the plans kept: the pictures are

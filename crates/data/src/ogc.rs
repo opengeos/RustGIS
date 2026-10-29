@@ -1142,6 +1142,9 @@ struct RawMatrix {
     size: (u32, u32),
 }
 
+/// The most `TileMatrix` entries read of a tile matrix set in another system.
+const MAX_RAW_MATRICES: usize = 256;
+
 /// A tile matrix set in another system than Web Mercator that RustGIS can draw (#769): its EPSG
 /// code and its matrices RustGIS can draw, coarsest first.
 fn native_matrices(tms: &Node) -> Option<(u16, crate::raster::Crs, Vec<RawMatrix>)> {
@@ -1150,8 +1153,8 @@ fn native_matrices(tms: &Node) -> Option<(u16, crate::raster::Crs, Vec<RawMatrix
     let system = warp::usable(code)?;
     let unit = warp::metres_per_unit(code);
     let mut out = Vec::new();
-    // (Every one read, in any order: the coarsest are kept.)
-    for m in children(tms, "TileMatrix") {
+    // (In any order, up to `MAX_RAW_MATRICES` read: a real set has a few dozen.)
+    for m in children(tms, "TileMatrix").take(MAX_RAW_MATRICES) {
         let n = |k: &str| child_text(&m, k).and_then(|t| t.trim().parse::<f64>().ok()).filter(|v| v.is_finite());
         let u = |k: &str| child_text(&m, k).and_then(|t| t.trim().parse::<u32>().ok()).filter(|v| *v > 0);
         let corner: Vec<f64> = child_text(&m, "TopLeftCorner")?.split_whitespace().filter_map(|t| t.parse().ok()).collect();
