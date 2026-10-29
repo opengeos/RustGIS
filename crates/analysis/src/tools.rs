@@ -798,7 +798,7 @@ pub static TOOLS: &[ToolSpec] = &[
                 kind: K::Choice(KERNEL_TYPES),
                 required: false,
                 default: "\"Quartic\"",
-                help: "Kernel function: Quartic (biweight, default) or Gaussian.",
+                help: "Kernel function: Quartic (biweight, default) or Gaussian (truncated at 3σ).",
             },
             P {
                 name: "extent",
@@ -2028,7 +2028,7 @@ fn kernel_density_tool(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String>
         None => crate::density::silverman_bandwidth(&pts, &pt_extent),
     };
 
-    let custom_extent = match p.get("extent") {
+    let raw_extent = match p.get("extent") {
         None | Some(serde_json::Value::Null) => None,
         Some(serde_json::Value::String(s)) => {
             let t = s.trim();
@@ -2036,16 +2036,7 @@ fn kernel_density_tool(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String>
                 None
             } else {
                 let v: Option<Vec<f64>> = t.split(',').map(|x| x.trim().parse().ok().filter(|x: &f64| x.is_finite())).collect();
-                let Some([x0, y0, x1, y1]) = v.as_deref().and_then(|v| <[f64; 4]>::try_from(v).ok()) else {
-                    return Err("the extent is xmin,ymin,xmax,ymax".into());
-                };
-                let (min_x, max_x) = (x0.min(x1), x0.max(x1));
-                let (min_y, max_y) = (y0.min(y1), y0.max(y1));
-                let (w, h) = (max_x - min_x, max_y - min_y);
-                if !(max_x > min_x && max_y > min_y && w.is_finite() && h.is_finite()) {
-                    return Err("the extent must have a positive width and height".into());
-                }
-                Some(Extent::new(min_x, min_y, max_x, max_y))
+                Some(v.as_deref().and_then(|v| <[f64; 4]>::try_from(v).ok()).ok_or("the extent is xmin,ymin,xmax,ymax")?)
             }
         }
         Some(serde_json::Value::Array(arr)) => {
@@ -2053,9 +2044,13 @@ fn kernel_density_tool(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String>
                 return Err("the extent is xmin,ymin,xmax,ymax".into());
             }
             let coords: Option<Vec<f64>> = arr.iter().map(|v| v.as_f64().filter(|x| x.is_finite())).collect();
-            let Some([x0, y0, x1, y1]) = coords.as_deref().and_then(|v| <[f64; 4]>::try_from(v).ok()) else {
-                return Err("the extent is xmin,ymin,xmax,ymax".into());
-            };
+            Some(coords.as_deref().and_then(|v| <[f64; 4]>::try_from(v).ok()).ok_or("the extent is xmin,ymin,xmax,ymax")?)
+        }
+        Some(_) => return Err("the extent is xmin,ymin,xmax,ymax".into()),
+    };
+
+    let custom_extent = match raw_extent {
+        Some([x0, y0, x1, y1]) => {
             let (min_x, max_x) = (x0.min(x1), x0.max(x1));
             let (min_y, max_y) = (y0.min(y1), y0.max(y1));
             let (w, h) = (max_x - min_x, max_y - min_y);
@@ -2064,7 +2059,7 @@ fn kernel_density_tool(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String>
             }
             Some(Extent::new(min_x, min_y, max_x, max_y))
         }
-        Some(_) => return Err("the extent is xmin,ymin,xmax,ymax".into()),
+        None => None,
     };
 
     let grid_ext = custom_extent.unwrap_or_else(|| {
@@ -2075,10 +2070,18 @@ fn kernel_density_tool(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String>
     }
 
     let cell_size = match num(p, "pixelSize") {
-        Some(c) if c > 0.0 => c,
+        Some(c) if c > 0.0 => {
+            if c > bandwidth {
+                return Err("pixel size must not be larger than the search radius (bandwidth); choose a smaller pixel size or a larger search radius".into());
+            }
+            c
+        }
         Some(_) => return Err("pixel size must be a positive number".into()),
         None if given("pixelSize") => return Err("pixel size must be a number".into()),
-        None => crate::density::auto_cell_size(&grid_ext),
+        None => {
+            let auto = crate::density::auto_cell_size(&grid_ext);
+            auto.min(bandwidth)
+        }
     };
 
     let kernel = match s(p, "kernel") {
@@ -4780,6 +4783,14 @@ mod tests {
             let res = crate::run("kernelDensity", &m_cmp, &case);
             assert!(res.is_err(), "hostile params should return Err, but got Ok");
         }
+
+        // 16. pixelSize > radius must be rejected with informative error
+        let err_pixel_larger =
+            crate::run("kernelDensity", &m_cmp, &serde_json::json!({"input": "single", "pixelSize": 250.0, "radius": 50.0})).unwrap_err();
+        assert!(
+            err_pixel_larger.contains("pixel size must not be larger than"),
+            "expected pixel size larger error, got: {err_pixel_larger}"
+        );
     }
 
     #[test]

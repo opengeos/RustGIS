@@ -168,7 +168,8 @@ where holes or neighbouring polygons must stay aligned. The default tolerance re
 use a smaller value for local boundaries.
 
 **Kernel Density** (`kernelDensity`) calculates a continuous magnitude-per-unit-area raster
-surface from point features using a Quartic (biweight, default) or Gaussian kernel.
+surface from point features using a Quartic (biweight, default) or Gaussian kernel (truncated at 3σ,
+capturing >98.8% of mass).
 Points can optionally be weighted by a numeric population field (invalid or non-positive weights
 are excluded and reported in the tool messages; for multipoint features, each constituent point part
 receives the feature's weight). Calculations are performed in the linear units
@@ -181,8 +182,9 @@ are required. Leaving `radius` empty or setting it to `0` automatically estimate
 using Silverman's rule of thumb based on the points' spatial distribution (falling back to extent span / 30,
 or 1000 coordinate-space linear units for a single point or coincident points). When `pixelSize` is
 omitted, an adaptive cell size is calculated to span approximately 250 cells along the longer side
-of the extent. The extent can optionally be overridden via `extent` as `xmin,ymin,xmax,ymax` text or
-a four-number array. The output is written as a single-band Float32 GeoTIFF.
+of the extent (clamped to at most the search radius so points are not missed between cell centres).
+The search radius must be at least the pixel size. The extent can optionally be overridden via `extent`
+as `xmin,ymin,xmax,ymax` text or a four-number array. The output is written as a single-band Float32 GeoTIFF.
 
 Most feature tools process only the selected rows when an input has a selection. Selection tools
 instead replace the input's selection; Select Layer By Location honours the selecting layer's

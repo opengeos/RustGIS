@@ -101,6 +101,60 @@ pub fn auto_cell_size(extent: &Extent) -> f64 {
     (span / DEFAULT_GRID_STEPS).max(1e-4)
 }
 
+fn accumulate_density<F>(
+    points: &[(Coord, f64)],
+    grid: &mut [f32],
+    w: usize,
+    h_rows: usize,
+    origin_x: f64,
+    origin_y: f64,
+    cell_size: f64,
+    bandwidth: f64,
+    h_sq: f64,
+    eval: F,
+) where
+    F: Fn(f64, f64) -> f64,
+{
+    for &(p, wgt) in points {
+        if wgt <= 0.0 || !wgt.is_finite() || !p.is_finite() {
+            continue;
+        }
+
+        let col_min = (((p.x - bandwidth - origin_x) / cell_size).floor() as isize).clamp(0, (w - 1) as isize) as usize;
+        let col_max = (((p.x + bandwidth - origin_x) / cell_size).ceil() as isize).clamp(0, (w - 1) as isize) as usize;
+
+        let row_min = (((origin_y - (p.y + bandwidth)) / cell_size).floor() as isize).clamp(0, (h_rows - 1) as isize) as usize;
+        let row_max = (((origin_y - (p.y - bandwidth)) / cell_size).ceil() as isize).clamp(0, (h_rows - 1) as isize) as usize;
+
+        for row in row_min..=row_max {
+            let y_cell = origin_y - (row as f64 + 0.5) * cell_size;
+            let dy = p.y - y_cell;
+            let dy_sq = dy * dy;
+            if dy_sq >= h_sq {
+                continue;
+            }
+            let rem_sq = h_sq - dy_sq;
+            let row_offset = row * w;
+
+            for col in col_min..=col_max {
+                let x_cell = origin_x + (col as f64 + 0.5) * cell_size;
+                let dx = p.x - x_cell;
+                let dx_sq = dx * dx;
+                if dx_sq >= rem_sq {
+                    continue;
+                }
+
+                let d_sq = dx_sq + dy_sq;
+                let contrib = eval(d_sq, wgt);
+
+                if let Some(cell) = grid.get_mut(row_offset + col) {
+                    *cell += contrib as f32;
+                }
+            }
+        }
+    }
+}
+
 /// Generates a continuous kernel density raster from weighted points in a projected CRS.
 pub fn kernel_density(
     points: &[(Coord, f64)],
@@ -123,6 +177,9 @@ pub fn kernel_density(
     }
     if !cell_size.is_finite() || cell_size <= 0.0 {
         return Err("pixel size must be a positive number".into());
+    }
+    if cell_size > bandwidth {
+        return Err("pixel size must not be larger than the search radius (bandwidth)".into());
     }
     if crs.is_geographic() {
         return Err("kernel density requires a projected coordinate system with linear units (e.g. meters or feet), not geographic coordinates in degrees".into());
@@ -177,18 +234,16 @@ pub fn kernel_density(
 
     let mut grid = vec![0.0f32; total_cells];
 
-    enum KernelParams {
-        Quartic { factor: f64 },
-        Gaussian { factor: f64, two_sigma_sq: f64 },
-    }
-
-    let kernel_params = match kernel {
+    match kernel {
         KernelType::Quartic => {
             let factor = 3.0 / (PI * h_sq);
             if !factor.is_normal() {
                 return Err("search radius is out of range".into());
             }
-            KernelParams::Quartic { factor }
+            accumulate_density(points, &mut grid, w, h_rows, origin_x, origin_y, cell_size, bandwidth, h_sq, |d_sq, wgt| {
+                let val = 1.0 - d_sq / h_sq;
+                wgt * factor * val * val
+            });
         }
         KernelType::Gaussian => {
             // Truncate at 3σ = bandwidth (standard compact-support approximation capturing >98.8% of mass)
@@ -201,91 +256,9 @@ pub fn kernel_density(
             if !factor.is_normal() {
                 return Err("search radius is out of range".into());
             }
-            KernelParams::Gaussian { factor, two_sigma_sq }
-        }
-    };
-
-    match kernel_params {
-        KernelParams::Quartic { factor } => {
-            for &(p, wgt) in points {
-                if wgt <= 0.0 || !wgt.is_finite() || !p.is_finite() {
-                    continue;
-                }
-
-                let col_min = (((p.x - bandwidth - origin_x) / cell_size).floor() as isize).clamp(0, (w - 1) as isize) as usize;
-                let col_max = (((p.x + bandwidth - origin_x) / cell_size).ceil() as isize).clamp(0, (w - 1) as isize) as usize;
-
-                let row_min = (((origin_y - (p.y + bandwidth)) / cell_size).floor() as isize).clamp(0, (h_rows - 1) as isize) as usize;
-                let row_max = (((origin_y - (p.y - bandwidth)) / cell_size).ceil() as isize).clamp(0, (h_rows - 1) as isize) as usize;
-
-                for row in row_min..=row_max {
-                    let y_cell = origin_y - (row as f64 + 0.5) * cell_size;
-                    let dy = p.y - y_cell;
-                    let dy_sq = dy * dy;
-                    if dy_sq >= h_sq {
-                        continue;
-                    }
-                    let rem_sq = h_sq - dy_sq;
-                    let row_offset = row * w;
-
-                    for col in col_min..=col_max {
-                        let x_cell = origin_x + (col as f64 + 0.5) * cell_size;
-                        let dx = p.x - x_cell;
-                        let dx_sq = dx * dx;
-                        if dx_sq >= rem_sq {
-                            continue;
-                        }
-
-                        let d_sq = dx_sq + dy_sq;
-                        let val = 1.0 - d_sq / h_sq;
-                        let contrib = wgt * factor * val * val;
-
-                        if let Some(cell) = grid.get_mut(row_offset + col) {
-                            *cell += contrib as f32;
-                        }
-                    }
-                }
-            }
-        }
-        KernelParams::Gaussian { factor, two_sigma_sq } => {
-            for &(p, wgt) in points {
-                if wgt <= 0.0 || !wgt.is_finite() || !p.is_finite() {
-                    continue;
-                }
-
-                let col_min = (((p.x - bandwidth - origin_x) / cell_size).floor() as isize).clamp(0, (w - 1) as isize) as usize;
-                let col_max = (((p.x + bandwidth - origin_x) / cell_size).ceil() as isize).clamp(0, (w - 1) as isize) as usize;
-
-                let row_min = (((origin_y - (p.y + bandwidth)) / cell_size).floor() as isize).clamp(0, (h_rows - 1) as isize) as usize;
-                let row_max = (((origin_y - (p.y - bandwidth)) / cell_size).ceil() as isize).clamp(0, (h_rows - 1) as isize) as usize;
-
-                for row in row_min..=row_max {
-                    let y_cell = origin_y - (row as f64 + 0.5) * cell_size;
-                    let dy = p.y - y_cell;
-                    let dy_sq = dy * dy;
-                    if dy_sq >= h_sq {
-                        continue;
-                    }
-                    let rem_sq = h_sq - dy_sq;
-                    let row_offset = row * w;
-
-                    for col in col_min..=col_max {
-                        let x_cell = origin_x + (col as f64 + 0.5) * cell_size;
-                        let dx = p.x - x_cell;
-                        let dx_sq = dx * dx;
-                        if dx_sq >= rem_sq {
-                            continue;
-                        }
-
-                        let d_sq = dx_sq + dy_sq;
-                        let contrib = wgt * factor * (-d_sq / two_sigma_sq).exp();
-
-                        if let Some(cell) = grid.get_mut(row_offset + col) {
-                            *cell += contrib as f32;
-                        }
-                    }
-                }
-            }
+            accumulate_density(points, &mut grid, w, h_rows, origin_x, origin_y, cell_size, bandwidth, h_sq, |d_sq, wgt| {
+                wgt * factor * (-d_sq / two_sigma_sq).exp()
+            });
         }
     }
 
@@ -481,5 +454,12 @@ mod tests {
             assert!(val.is_finite());
             assert!(val >= 0.0);
         }
+    }
+
+    #[test]
+    fn pixel_size_larger_than_bandwidth_is_rejected() {
+        let pts = vec![(Coord::new(100.0, 100.0), 1.0)];
+        let err = kernel_density(&pts, None, 50.0, 10.0, KernelType::Quartic, "test", Crs::WebMercator).unwrap_err();
+        assert!(err.contains("pixel size must not be larger than"), "{err}");
     }
 }
