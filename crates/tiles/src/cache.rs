@@ -1067,13 +1067,25 @@ mod native {
     /// Asks for `url`'s headers, following up to 5 redirects, each checked as [`get`] checks
     /// them.
     pub(super) fn head_with(agent: &ureq::Agent, url: &str) -> Result<super::Head, String> {
+        let mut carried_login = false;
+        head_answer(agent, url, &mut carried_login).map_err(|e| if carried_login { crate::logins::scrub(&e) } else { e })
+    }
+
+    fn head_answer(agent: &ureq::Agent, url: &str, carried_login: &mut bool) -> Result<super::Head, String> {
         let prepared = crate::s3::prepare(url)?;
         if prepared.signed {
             return Ok(super::Head::default());
         }
         let mut at = prepared.url.clone();
+        let first_origin = crate::logins::origin(&at);
+        let mut same_origin = true;
         for redirects in 0..=5 {
-            let mut req = agent.head(&at);
+            let login = same_origin.then(|| crate::logins::apply(&at)).flatten();
+            *carried_login |= login.is_some();
+            let mut req = agent.head(login.as_ref().map_or(at.as_str(), |a| a.url.as_str()));
+            if let Some((name, value)) = login.as_ref().and_then(|a| a.header.as_ref()) {
+                req = req.header(name.as_str(), value.as_str());
+            }
             if redirects == 0 {
                 for (k, v) in &prepared.headers {
                     req = req.header(k.as_str(), v.as_str());
@@ -1087,6 +1099,7 @@ mod native {
                 if at.starts_with("https://") && !next.starts_with("https://") {
                     return Err(format!("{next}: a redirect from https to http"));
                 }
+                same_origin &= crate::logins::origin(&next) == first_origin;
                 at = next;
                 continue;
             }
@@ -1111,16 +1124,23 @@ mod native {
     /// POSTs a JSON document and reads the answer (at most [`MAX_BYTES`]); an error status is
     /// `http status: <status>`, and a redirect isn't followed.
     pub(super) fn post_with(agent: &ureq::Agent, url: &str, body: &str) -> Result<Vec<u8>, String> {
+        let mut carried_login = false;
+        post_answer(agent, url, body, &mut carried_login).map_err(|e| if carried_login { crate::logins::scrub(&e) } else { e })
+    }
+
+    fn post_answer(agent: &ureq::Agent, url: &str, body: &str, carried_login: &mut bool) -> Result<Vec<u8>, String> {
         use std::io::Read;
-        let mut resp = agent
-            .post(url)
+        let prepared = crate::s3::prepare(url)?;
+        let login = (!prepared.signed).then(|| crate::logins::apply(url)).flatten();
+        *carried_login = login.is_some();
+        let mut req = agent
+            .post(login.as_ref().map_or(url, |a| a.url.as_str()))
             .header("Content-Type", "application/json")
-            .header("Accept", "application/json")
-            .config()
-            .http_status_as_error(false)
-            .build()
-            .send(body)
-            .map_err(|e| e.to_string())?;
+            .header("Accept", "application/json");
+        if let Some((name, value)) = login.as_ref().and_then(|a| a.header.as_ref()) {
+            req = req.header(name.as_str(), value.as_str());
+        }
+        let mut resp = req.config().http_status_as_error(false).build().send(body).map_err(|e| e.to_string())?;
         let status = resp.status().as_u16();
         if !(200..300).contains(&status) {
             return Err(format!("http status: {status}"));
@@ -1231,6 +1251,17 @@ mod native {
     /// The answer to `url`; a refusal keeps the server's answer only when `detail` asks for it,
     /// as tiles a server doesn't have are routine and only their status is read.
     fn fetch_answer(agent: &ureq::Agent, url: &str, detail: bool) -> Result<Vec<u8>, Failure> {
+        let mut carried_login = false;
+        fetch_answer_inner(agent, url, detail, &mut carried_login).map_err(|mut f| {
+            if carried_login {
+                f.message = crate::logins::scrub(&f.message);
+                f.url = crate::logins::scrub(&f.url);
+            }
+            f
+        })
+    }
+
+    fn fetch_answer_inner(agent: &ureq::Agent, url: &str, detail: bool, carried_login: &mut bool) -> Result<Vec<u8>, Failure> {
         use std::io::Read;
         if crate::mbtiles::is_tile(url) {
             return crate::mbtiles::read_local(url).map_err(Failure::from);
@@ -1250,9 +1281,17 @@ mod native {
         // endpoint is signed.
         let prepared = crate::s3::prepare(url)?;
         let mut at = prepared.url.clone();
+        let first_origin = crate::logins::origin(&at);
+        let mut same_origin = true;
         let mut redirects = 0;
         let mut resp = loop {
-            let mut req = agent.get(&at);
+            let login = (!prepared.signed && same_origin).then(|| crate::logins::apply(&at)).flatten();
+            *carried_login |= login.is_some();
+            let mut req = agent.get(login.as_ref().map_or(at.as_str(), |a| a.url.as_str()));
+            let login_header = login.as_ref().and_then(|a| a.header.as_ref());
+            if let Some((name, value)) = login_header {
+                req = req.header(name.as_str(), value.as_str());
+            }
             if let Some((a, b)) = range {
                 req = req.header("Range", &format!("bytes={a}-{b}"));
             } else if let Some(n) = tail {
@@ -1271,6 +1310,7 @@ mod native {
             // An Earthdata Login token goes to NASA's Earthdata data hosts only, asked for at
             // each hop: a redirect that leaves them (to a presigned address) goes without it.
             if !prepared.signed
+                && !login_header.is_some_and(|(name, _)| name.eq_ignore_ascii_case("Authorization"))
                 && let Some(auth) = crate::earthdata::authorization(&at)
             {
                 req = req.header("Authorization", &auth);
@@ -1278,6 +1318,7 @@ mod native {
             // An ArcGIS sign-in's token goes to the portal and the servers it covers, asked for at
             // each hop like Earthdata's.
             if !prepared.signed
+                && !login_header.is_some_and(|(name, _)| name.eq_ignore_ascii_case("X-Esri-Authorization"))
                 && let Some(auth) = crate::arcgis_auth::authorization_fresh(&at)
             {
                 req = req.header("X-Esri-Authorization", &auth);
@@ -1313,10 +1354,9 @@ mod native {
                 }
             }
             if status >= 400 {
-                // A signed request's refusal is told by its status alone: an answer's headers and
-                // body are the server's text, and a server may echo the request's Authorization
-                // header (the access key's id) back in it.
-                return Err(if detail && !prepared.signed {
+                // A signed or logged-in request's refusal is told by its status alone: a server
+                // may echo its credentials in the answer's headers or body.
+                return Err(if detail && !prepared.signed && login.is_none() {
                     refused(&mut resp)
                 } else {
                     Failure::without_answer("", format!("http status: {status}"), Reason::Status(status))
@@ -1348,6 +1388,7 @@ mod native {
             if redirects > 5 {
                 return Err("too many redirects".into());
             }
+            same_origin &= crate::logins::origin(&next) == first_origin;
             at = next;
         };
         if resp.status().as_u16() == 204 {
@@ -1582,18 +1623,109 @@ mod tests {
 
     #[cfg(not(target_arch = "wasm32"))]
     fn serve_bytes(answers: Vec<Vec<u8>>) -> String {
+        serve_recorded(answers).0
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn serve_recorded(answers: Vec<Vec<u8>>) -> (String, std::sync::mpsc::Receiver<String>) {
         use std::io::{Read, Write};
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
+        let (sent, received) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             for answer in answers {
                 let Ok((mut stream, _)) = listener.accept() else { return };
                 let mut buf = [0u8; 2048];
-                let _ = stream.read(&mut buf);
+                let n = stream.read(&mut buf).unwrap_or(0);
+                let _ = sent.send(String::from_utf8_lossy(&buf[..n]).into_owned());
                 let _ = stream.write_all(&answer);
             }
         });
-        format!("http://{addr}")
+        (format!("http://{addr}"), received)
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn logins_headers_follow_same_origin_redirects() {
+        use crate::logins::{self, Method};
+        let (base, asked) = serve_recorded(
+            [
+                "HTTP/1.1 302 Found\r\nLocation: /next\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                "HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\ntile",
+            ]
+            .into_iter()
+            .map(|s| s.as_bytes().to_vec())
+            .collect(),
+        );
+        logins::activate(&base, "same-origin", Method::Header("X-Service-Key".into()), "same-origin-secret", true).unwrap();
+        assert_eq!(native::get(&native::agent(), &format!("{base}/start")).unwrap(), b"tile");
+        for request in asked.iter().take(2) {
+            assert!(request.to_ascii_lowercase().contains("x-service-key: same-origin-secret\r\n"));
+        }
+        assert!(logins::deactivate(&base, "same-origin"));
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn logins_redirects_never_pick_up_another_origins_login() {
+        use crate::logins::{self, Method};
+        let (other, asked) = serve_recorded(vec![b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\ntile".to_vec()]);
+        let base = serve(vec![format!("HTTP/1.1 302 Found\r\nLocation: {other}/tile\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")]);
+        logins::activate(&base, "first", Method::Header("X-Service-Key".into()), "first-secret", true).unwrap();
+        logins::activate(&other, "second", Method::Header("X-Service-Key".into()), "second-secret", true).unwrap();
+        assert_eq!(native::get(&native::agent(), &format!("{base}/start")).unwrap(), b"tile");
+        let request = asked.recv_timeout(std::time::Duration::from_secs(5)).unwrap().to_ascii_lowercase();
+        assert!(!request.contains("x-service-key"));
+        assert!(!request.contains("first-secret") && !request.contains("second-secret"));
+        assert!(logins::deactivate(&base, "first"));
+        assert!(logins::deactivate(&other, "second"));
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn logins_query_refusals_and_unreachable_requests_keep_no_secrets() {
+        use crate::logins::{self, Method};
+        let secret = "query/error secret";
+        let echoed = "/data?key=query%2Ferror%20secret";
+        let base = serve(vec![format!(
+            "HTTP/1.1 500 Internal Server Error\r\nServer: {secret}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{echoed}",
+            echoed.len()
+        )]);
+        logins::activate(&base, "refused", Method::Query("key".into()), secret, true).unwrap();
+        let url = format!("{base}/data");
+        let failure = native::get_detailed(&native::agent(), &url).unwrap_err();
+        assert_eq!(failure.url, url);
+        assert_eq!(failure.status(), Some(500));
+        assert!(failure.answer.is_none());
+        assert!(!format!("{failure:?}").contains(secret));
+        assert!(!format!("{failure:?}").contains("query%2Ferror%20secret"));
+        assert!(logins::deactivate(&base, "refused"));
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let closed = format!("http://{}", listener.local_addr().unwrap());
+        drop(listener);
+        logins::activate(&closed, "unreachable", Method::Query("key".into()), secret, true).unwrap();
+        let failure = native::get_detailed(&native::agent(), &format!("{closed}/data")).unwrap_err();
+        assert_eq!(failure.reason, crate::failure::Reason::Unreachable);
+        assert!(!format!("{failure:?}").contains(secret));
+        assert!(!format!("{failure:?}").contains("query%2Ferror%20secret"));
+        assert!(logins::deactivate(&closed, "unreachable"));
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn logins_head_and_post_carry_the_login() {
+        use crate::logins::{self, Method};
+        let answer = b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_vec();
+        let (base, asked) = serve_recorded(vec![answer.clone(), answer]);
+        logins::activate(&base, "head-post", Method::Query("service_key".into()), "head/post secret", true).unwrap();
+        let agent = native::agent();
+        native::head_with(&agent, &format!("{base}/data")).unwrap();
+        assert!(native::post_with(&agent, &format!("{base}/data"), "{}").unwrap().is_empty());
+        for (method, request) in ["HEAD", "POST"].into_iter().zip(asked.iter().take(2)) {
+            assert!(request.starts_with(&format!("{method} /data?service_key=head%2Fpost%20secret HTTP/1.1\r\n")), "{request}");
+        }
+        assert!(logins::deactivate(&base, "head-post"));
     }
 
     /// The last bytes from a store that serves ranges but answers `bytes=-n` with 501 (GitHub's

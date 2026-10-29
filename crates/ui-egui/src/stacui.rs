@@ -514,7 +514,12 @@ fn add_signed(app: &mut RustGisApp, href: &str, name: &str) {
 }
 
 fn add_url(app: &mut RustGisApp, href: &str, name: &str) {
-    if let Err(e) = app.run("ui.addUrl", json!({"url": href, "name": name, "zoom": true})) {
+    let mut p = json!({"url": href, "name": name, "zoom": true});
+    if let Some(c) = crate::connectionui::picked(&app.session.connections.connections, app.ui.stac.connection.as_deref(), &app.ui.stac.api)
+    {
+        p["connection"] = json!(c.id);
+    }
+    if let Err(e) = app.run("ui.addUrl", p) {
         app.ui.stac.error = Some(e);
     }
 }

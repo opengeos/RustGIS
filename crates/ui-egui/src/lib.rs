@@ -2401,6 +2401,8 @@ impl RustGisApp {
             }
             // Data by its web address: the dialog, then (with an address) the download, off the
             // frame; it's added when it lands. A PMTiles archive is a tile layer, never downloaded.
+            // Optional `connection`: the saved web-service id forwarded to layer.addUrl or
+            // layer.addDownload, including probes, whole-file fallbacks and paged features.
             "ui.addUrl" => {
                 if p.get("geolibreZarr").and_then(Value::as_bool) == Some(true) {
                     if let Err(e) = geolibreui::start(self, p) {
@@ -2479,7 +2481,7 @@ impl RustGisApp {
                     Box::new(move |r| *land.lock().unwrap_or_else(|e| e.into_inner()) = Some(r)),
                 );
                 let mut q = json!({});
-                for k in ["name", "layer", "crs"] {
+                for k in ["name", "layer", "crs", "connection"] {
                     if let Some(v) = p.get(k).filter(|v| v.as_str().is_some_and(|s| !s.trim().is_empty())) {
                         q[k] = v.clone();
                     }
@@ -3556,9 +3558,9 @@ impl RustGisApp {
     fn report_step(&mut self, dialog: bool, r: Result<String, String>) {
         match (dialog, r) {
             (true, Ok(m)) => self.dialogs.info = Some(m),
-            (true, Err(e)) => self.dialogs.error = Some(e),
+            (true, Err(e)) => self.dialogs.error = Some(connectionui::translated(&e)),
             (false, Ok(m)) => self.session.notify(m, false),
-            (false, Err(e)) => self.session.notify(e, true),
+            (false, Err(e)) => self.session.notify(connectionui::translated(&e), true),
         }
     }
 
@@ -3603,10 +3605,15 @@ impl RustGisApp {
                     let title = params["name"].as_str().unwrap_or("").to_string();
                     let r = r.and_then(|bytes| {
                         params["describe"] = json!(String::from_utf8_lossy(&bytes));
+                        let connection = params.as_object_mut().and_then(|p| p.remove("connection"));
                         // Not `self.run`: an error belongs where the step reports, not the notices.
                         let c = self.session.run("service.coverage", &params)?;
                         let get = c.get("url").and_then(Value::as_str).unwrap_or("").to_string();
-                        connectiontree::run_add_url(self, json!({"url": get, "name": title, "coverage": true}), origin.as_deref())
+                        let mut p = json!({"url": get, "name": title, "coverage": true});
+                        if let Some(connection) = connection {
+                            p["connection"] = connection;
+                        }
+                        connectiontree::run_add_url(self, p, origin.as_deref())
                     });
                     self.report_step(dialog, r.map(|_| format!("{} {title}", tl!("Downloading…"))));
                 }

@@ -1,5 +1,6 @@
 //! Background group import/refresh for both desktop and browser. Discovery and updates live in
-//! engine commands; this state machine only supplies their downloaded documents.
+//! engine commands; this state machine supplies their downloaded documents and preserves the
+//! saved connection id through every deferred add.
 
 use crate::{RustGisApp, Slot, fetch_into, fetch_into_limited, i18n};
 use rustgis_engine::data::ogc::{self, Pages, Step};
@@ -9,6 +10,8 @@ use std::collections::VecDeque;
 pub struct Import {
     params: Value,
     refresh: bool,
+    /// The saved web-service connection to record on imported layers, not a group-plan parameter.
+    connection: Option<Value>,
     token: u64,
     /// The originating map: its index and name (names are unique among a project's maps), so a
     /// deleted or replaced map at that index cancels the import.
@@ -57,12 +60,13 @@ pub(crate) fn add_layer(
     area: Option<[f64; 4]>,
     dialog: bool,
 ) -> Result<&'static str, String> {
-    add_layer_from(app, src, l, time, area, dialog, None)
+    let connection = dialog.then(|| app.dialogs.connection.clone()).flatten();
+    add_layer_from(app, src, l, time, area, dialog, None, connection.as_deref())
 }
 
-/// [`add_layer`] for a layer of the connection named `origin` (the Connections tree): once the
-/// layer is added, now or when its document or download lands, Recent shows its source under that
-/// name. An add that fails or is dropped is not renamed.
+/// [`add_layer`] for a saved connection: `connection` is its id, recorded on the resulting layer;
+/// `origin` is its display name for Recent. Both survive deferred documents and downloads.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn add_layer_from(
     app: &mut RustGisApp,
     src: &ServiceSource,
@@ -71,6 +75,7 @@ pub(crate) fn add_layer_from(
     area: Option<[f64; 4]>,
     dialog: bool,
     origin: Option<&str>,
+    connection: Option<&str>,
 ) -> Result<&'static str, String> {
     let name = l.get("name").and_then(Value::as_str).unwrap_or("").to_string();
     let title = l.get("title").and_then(Value::as_str).unwrap_or(&name).to_string();
@@ -87,8 +92,11 @@ pub(crate) fn add_layer_from(
             );
         }
         let items = asked.as_deref().unwrap_or(items);
-        return crate::connectiontree::run_add_url(app, json!({"url": items, "name": title, "service": true}), origin)
-            .map(|_| tl!("Downloading…"));
+        let mut p = json!({"url": items, "name": title, "service": true});
+        if let Some(connection) = connection {
+            p["connection"] = json!(connection);
+        }
+        return crate::connectiontree::run_add_url(app, p, origin).map(|_| tl!("Downloading…"));
     }
     let origin = origin.map(str::to_string);
     if offer.get("type").and_then(Value::as_str) == Some("coverage") {
@@ -98,6 +106,9 @@ pub(crate) fn add_layer_from(
         if src.kind != "auto" {
             p["type"] = json!(src.kind);
         }
+        if let Some(connection) = connection {
+            p["connection"] = json!(connection);
+        }
         let slot = crate::fetch_into(&describe);
         app.ui.service_steps.push(crate::ServiceStep::Coverage { params: p, slot, dialog, origin });
         return Ok(tl!("Describing"));
@@ -105,6 +116,9 @@ pub(crate) fn add_layer_from(
     let mut p = json!({"url": src.url, "layer": name, "text": src.text, "documents": src.documents, "source_url": l.get("source_url")});
     if src.kind != "auto" {
         p["type"] = json!(src.kind);
+    }
+    if let Some(connection) = connection {
+        p["connection"] = json!(connection);
     }
     if l.get("time").is_some() && !time.is_empty() {
         p["time"] = json!(time);
@@ -136,6 +150,9 @@ pub fn start(app: &mut RustGisApp, p: &Value, refresh: bool) -> Result<(), Strin
         return Err(tl!("A service import or refresh is already running.").into());
     }
     let mut source = p.clone();
+    // ui.importService accepts `connection`, as service.import does. The discovery command does
+    // not: keep it apart until the final add, without leaking it into service.groupPlan calls.
+    let connection = if refresh { None } else { source.as_object_mut().and_then(|p| p.remove("connection")) };
     source["sourceOnly"] = json!(true);
     let mut params = app.session.run("service.groupPlan", &source)?;
     if let Some(p) = params.as_object_mut() {
@@ -149,6 +166,7 @@ pub fn start(app: &mut RustGisApp, p: &Value, refresh: bool) -> Result<(), Strin
     let mut task = Import {
         params,
         refresh,
+        connection,
         token: app.session.download_started(),
         map: active_map(app),
         slot: Slot::default(),
@@ -257,13 +275,16 @@ pub fn poll(app: &mut RustGisApp, ctx: &egui::Context) {
                 p.remove(key);
             }
         }
+        if let Some(connection) = task.connection {
+            task.params["connection"] = connection;
+        }
         let result = app.run(if task.refresh { "service.refresh" } else { "service.import" }, task.params);
         match result {
             Ok(_) => {
                 app.dialogs.info = Some(tl!("Done").into());
                 app.map.invalidate();
             }
-            Err(e) => app.dialogs.error = Some(e),
+            Err(e) => app.dialogs.error = Some(crate::connectionui::translated(&e)),
         }
     } else {
         ctx.request_repaint_after(std::time::Duration::from_millis(30));

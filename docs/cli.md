@@ -49,7 +49,8 @@ no parameters; otherwise use `--cmd 'id={json params}'`. What a command reports 
 which the app shows in its status bar, goes to standard error.
 
 Pass `--use-saved-secrets` to load the desktop app's saved connections and let
-`connection.login` and project sources use their remembered database passwords and S3 keys.
+`connection.login` and project sources use their remembered database passwords, S3 keys and
+web-service logins.
 It also lets `ask` use the API key the app remembers, only for the same provider and address
 when the environment supplies no key, and the ChatGPT sign-in kept in the system keychain.
 Command parameters and environment variables take precedence over saved secrets. Connection

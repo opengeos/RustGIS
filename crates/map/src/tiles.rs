@@ -178,6 +178,11 @@ pub struct TileLayer {
     /// Expanded in the Layers pane, its legend and source layers showing.
     #[serde(default, skip_serializing_if = "is_false")]
     pub expanded: bool,
+    /// The saved connection it was added from (its id, in the app's preferences), so a project
+    /// reopened later logs in with that connection's login and never needs a token in its
+    /// address. Empty for a layer that came from no connection. Never a secret.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub connection: String,
     /// Picked in the Layers pane (`map.selectTiles`), for the session only: it holds while no
     /// map layer is active (the engine's `Session::selected_tile`).
     #[serde(skip)]
@@ -338,6 +343,7 @@ impl TileLayer {
             error: None,
             feature_info: None,
             legends: Vec::new(),
+            connection: String::new(),
             expanded: false,
             selected: false,
         }

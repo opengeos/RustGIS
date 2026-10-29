@@ -10,7 +10,7 @@ use super::{C, CmdResult, MAX_GROUP_BYTES, Session, capabilities, ps, service_js
 pub fn commands() -> Vec<C> {
     vec![
         C::new("service.import", "Import Service", "Home › Add", import).params(
-            r#"{"url": "an OGC API landing page or collections address", "type"?, "name"?: "group name (default My OGC Layer)", "text"?, "documents"?: "as service.layers", "responses"?: [{"url": "features URL", "text": "downloaded GeoJSON"}]} ("group" and "layer" are rejected: use service.refresh)"#,
+            r#"{"url": "an OGC API landing page or collections address", "type"?, "name"?: "group name (default My OGC Layer)", "text"?, "documents"?: "as service.layers", "responses"?: [{"url": "features URL", "text": "downloaded GeoJSON"}], "connection"?: "as service.add"} ("group" and "layer" are rejected: use service.refresh)"#,
         ),
         C::new("service.refresh", "Refresh", "Layers", refresh).params(
             r#"{"group"?: id, "layer"?: "one child layer id or name", "text"?, "documents"?, "responses"?: "as service.import"}"#,
@@ -234,6 +234,10 @@ fn import(s: &mut Session, p: &Value) -> CmdResult {
 
 fn refresh(s: &mut Session, p: &Value) -> CmdResult {
     let (old, child_id) = target(s, p)?.ok_or("group or layer is required")?;
+    // Read with the login of the connection its layers came from (asked for when it is missing).
+    if let Some(origin) = crate::render::rustgis_tiles::logins::origin(&old.url) {
+        crate::service_logins::resolve(s, Some(&std::collections::BTreeSet::from([origin])));
+    }
     let hidden = old.children.iter().any(|c| s.map().layer(c.layer).is_some())
         && old.children.iter().filter_map(|c| s.map().layer(c.layer)).all(|l| !l.visible);
     let (_, reads) = read(s, p)?;

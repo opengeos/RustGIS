@@ -12,6 +12,8 @@ mod remembered_database;
 #[cfg(not(target_arch = "wasm32"))]
 #[path = "tests/remembered_database_packets.rs"]
 mod remembered_database_packets;
+#[path = "tests/service_logins.rs"]
+mod service_logins;
 
 /// Keeps tests away from the user's installed plugins.
 fn isolate_plugins() {
@@ -1971,6 +1973,9 @@ fn hostile_params_never_panic() {
         // A categorical summary: countIn's classes, and a mode by groups with a share out of range.
         json!({"stat": "countIn", "classes": [1e308, -1, "x", null, 3.5, {"a": 1}]}),
         json!({"stat": "countIn", "classes": "all", "by": "year"}),
+        // A web-service connection's login method and secret, and the connection an add records.
+        json!({"id": "c1", "kind": "wms", "auth": "query", "keyName": "\u{0}", "user": ":", "apiKey": "\n", "password": [], "allowInsecure": "yes", "connection": 7}),
+        json!({"id": "c1", "auth": "basic", "user": 7, "keyName": {"a": 1}, "apiKey": "k".repeat(9000), "remember": "yes", "connection": "c999999"}),
         json!({"stat": "mode", "by": "month", "minValid": 2, "months": []}),
         json!({"stat": "frequency", "by": "year", "minValid": -1, "name": []}),
         // MySQL addresses that can't be read, so nothing connects.

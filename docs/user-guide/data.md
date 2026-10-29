@@ -731,8 +731,8 @@ session registry used by the S3 dialog and `s3.connect`, so editing or removing 
 connection also affects a session entry of the same name created there.
 Renaming clears runtime entries under both the old and new names, so the renamed
 connection cannot inherit an unrelated login at its destination name.
-Web-service logins are not supported. Plugins may list connections but cannot manage, log in
-to, forget passwords or S3 keys for, choose an S3 connection for, test or browse them. The in-app
+Plugins may list connections but cannot manage, log in to, log out of, forget passwords, logins
+or S3 keys for, choose an S3 connection for, test or browse them. The in-app
 assistant asks for fresh approval each time for those operations, including Forget, S3 source
 selection and scripted calls; external assistants using MCP cannot run them. Even `probe: true`
 needs approval: connection operations cannot be approved for the whole conversation.
@@ -745,6 +745,40 @@ S3 dialog; use the imported named connections instead. Testing S3 can register o
 session endpoint and credentials under the form's connection name, including a same-name
 session created in the S3 dialog. Cancel does not disconnect that login or restore the
 previous one. CLI and Python connections last only for the run.
+
+#### Web-service logins
+
+A WMS, WMTS, WFS, WCS, OGC API, ArcGIS REST, CSW or STAC connection can log in: its form's
+**Login** picks **None**, **Basic authentication** (a user name and a password), **API key in a
+header** (the header's name, such as `X-API-Key`, and the key) or **API key in the query** (the
+parameter's name, such as `apikey`, and the key). The connection keeps only the method, the user
+name and the header or parameter name; a query parameter of that name is taken out of its address.
+The password or key goes to `connection.login {"id":"c1","password":"…"}` (basic) or
+`{"id":"c1","apiKey":"…"}`, and lasts for the session unless **Remember on this computer** is
+ticked (`"remember": true`, off by default): the store then keeps it with the connection's origin
+and method, and a definition changed to another origin, method, user or key name never sends it.
+Editing any of those ends the login and deletes the saved one. **Log Out** (`connection.logout`)
+ends the session's login; **Forget Saved Login** (`connection.forgetLogin`) deletes the saved one
+and keeps the session's. The web app keeps logins for the session only.
+
+A login is sent only to the connection's origin: the same scheme, host and port, for its
+capabilities, listings, tiles, feature pages and refreshes. A redirect to another origin is
+followed without it (the browser doesn't follow it), and never gets another connection's login
+either. A plain `http://` address sends the login unencrypted, so the form asks for confirmation
+and the command needs `"allowInsecure": true`. Error messages, notices, the preferences,
+projects, History and what the [AI Assistant](assistant.md) sees never hold the password or key.
+
+Only one connection's login goes to an origin at a time. A project's layers use the connection
+they record; layers recording none use the only saved connection for their origin. When several
+saved connections match the address, RustGIS asks which one to use (**Choose Connection…**,
+`connection.login {id}` for the one chosen) and never picks one itself. A layer whose connection
+has no login yet asks for one, and a layer whose recorded connection isn't on this computer offers
+to make one for its address. `connection.list` reports these as `loginRequests` with the `origin`.
+The command line and Python use remembered logins with `--use-saved-secrets` /
+`use_saved_secrets=True`, as they do database passwords and S3 keys. ArcGIS sign-in and tokens
+keep their own [ArcGIS sign-in](#web-data). A login belongs to the session that made it and ends
+with it; like the Earthdata and ArcGIS tokens, it goes with every request the process makes to its
+origin while it lasts, so two Python sessions reading the same origin share the active one.
 
 ## Large files
 
@@ -1029,6 +1063,10 @@ whose bytes exactly match one of those snapshots restores its secrets; saving mo
 snapshots evicts the oldest. Changed files, packages, imports and files saved by another process
 never restore secrets. After a snapshot is evicted or RustGIS closes, add those layers again with
 their credentials.
+A layer added from a saved web-service connection records the connection's id (`"connection"`
+in the `.rgis` file; never its login), so the project needs no token in its addresses. See
+[Web-service logins](#web-service-logins) for what happens when it opens where that connection or
+its login is missing.
 
 ### Complete streamed Shapefile rendering
 

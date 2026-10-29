@@ -240,7 +240,13 @@ pub(super) fn browse(s: &mut Session, p: &Value) -> CmdResult {
             }
         }
     };
-    out["children"] = json!(found.children);
+    let mut children = found.children;
+    if crate::service_logins::is_service(&c) {
+        for child in &mut children {
+            name_connection(child, &c.id, 0);
+        }
+    }
+    out["children"] = json!(children);
     if found.truncated {
         out["truncated"] = json!(true);
     }
@@ -248,6 +254,25 @@ pub(super) fn browse(s: &mut Session, p: &Value) -> CmdResult {
         out["matched"] = json!(m);
     }
     Ok(out)
+}
+
+/// Names the connection in the add commands a listed child (and its children) offers, so the
+/// layers they add record it and are read with its login.
+fn name_connection(child: &mut Value, id: &str, depth: usize) {
+    if depth > 4 {
+        return;
+    }
+    let command = child.get("add").and_then(|a| a.get("command")).and_then(Value::as_str).unwrap_or("");
+    if crate::service_logins::ADD_COMMANDS.contains(&command)
+        && let Some(params) = child.get_mut("add").and_then(|a| a.get_mut("params")).and_then(Value::as_object_mut)
+    {
+        params.insert("connection".into(), json!(id));
+    }
+    if let Some(list) = child.get_mut("children").and_then(Value::as_array_mut) {
+        for c in list {
+            name_connection(c, id, depth + 1);
+        }
+    }
 }
 
 /// A live database's schemas, each browsed separately so one large schema cannot hide later ones.

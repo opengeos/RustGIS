@@ -7,6 +7,7 @@
 //! for that long, `{"click": label}` clicks the first widget whose label contains the text (with
 //! `"exact": true`, whose whole label is the text), `{"combo": text}` opens the combo box showing
 //! that text, `{"type": text}` types into the focused box,
+//! `{"field": label}` focuses the text/password input with that label,
 //! `{"key": "Enter"}` presses a key (egui's key names), `{"dark": true}` switches theme,
 //! `{"drag": [x, y, dx, dy]}` presses the pointer at (x, y) and moves it by (dx, dy), holding
 //! it (shots then catch the map mid-drag; `{"release": true}` lets go; `"button": "secondary"`; `"ctrl": true` holds Ctrl
@@ -27,6 +28,8 @@
 //! The window opens the World Atlas sample.
 //! `"recovery": "/abs/dir"` on the first line gives the run that recovery folder, as the desktop
 //! app has one (Settings › Autosave; a copy left there is offered by the recovery dialog).
+//! `"memorySecrets": true` on the first line uses an empty, in-memory credential store (never
+//! the system keychain), so dialogs can show their desktop Remember controls.
 //!
 //! Add `"ribbonSplit": true` to the first line for a compact reusable split-button showcase
 //! instead of the app. Its "Disable arrows", "Disable enclosing UI", and "Long two-line labels"
@@ -148,6 +151,12 @@ fn main() {
     let ribbon_split = lines.first().and_then(|l| l.get("ribbonSplit")).and_then(Value::as_bool).unwrap_or(false);
     let mut split_showcase = RibbonSplitShowcase::default();
     let mut app = RustGisApp::with_sample();
+    if lines.first().and_then(|l| l.get("memorySecrets")).and_then(Value::as_bool) == Some(true) {
+        app = app.with_services(rustgis_ui_egui::Services {
+            secrets: Some(std::sync::Arc::new(rustgis_engine::data::secrets::MemorySecrets::new())),
+            ..Default::default()
+        });
+    }
     if let Some(dir) = lines.first().and_then(|l| l.get("recovery")).and_then(Value::as_str) {
         let store = rustgis_ui_egui::FolderStore::open(std::path::Path::new(dir)).expect("recovery folder");
         app = app.with_services(rustgis_ui_egui::Services { recovery: Some(Box::new(store)), ..Default::default() });
@@ -270,6 +279,15 @@ fn main() {
             for _ in 0..3 {
                 harness.step();
             }
+        } else if let Some(label) = l.get("field").and_then(Value::as_str) {
+            let node = harness
+                .query_by_role_and_label(egui::accesskit::Role::TextInput, label)
+                .or_else(|| harness.query_by_role_and_label(egui::accesskit::Role::PasswordInput, label));
+            match node {
+                Some(node) => node.focus(),
+                None => eprintln!("no text input labelled '{label}'"),
+            }
+            harness.step();
         } else if let Some(label) = l.get("click").and_then(|v| v.as_str()) {
             // `"exact": true`: the label is the whole of it (an Add button, not Add Data).
             let node = if l.get("exact").and_then(|v| v.as_bool()) == Some(true) {

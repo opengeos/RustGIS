@@ -1053,10 +1053,13 @@ fn add_service(app: &mut RustGisApp, ui: &mut egui::Ui) -> bool {
             Err(e) => app.dialogs.error = Some(e),
         }
     }
-    if let Some(p) = import
-        && let Err(e) = app.run("ui.importService", p)
-    {
-        app.dialogs.error = Some(e);
+    if let Some(mut p) = import {
+        if let Some(id) = &app.dialogs.connection {
+            p["connection"] = json!(id);
+        }
+        if let Err(e) = app.run("ui.importService", p) {
+            app.dialogs.error = Some(e);
+        }
     }
     // Into a directory's folder or service, keeping the way back; or back out of it.
     let here = app.ui.service.as_ref().map(|c| (c.url.clone(), c.kind));

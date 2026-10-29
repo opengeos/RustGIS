@@ -190,6 +190,12 @@ pub struct Layer {
     /// The GeoPackage table this layer's edits save to.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gpkg: Option<source::GpkgEdit>,
+    /// The saved connection it was added from (its id, in the app's preferences): a layer whose
+    /// source is read again logs in with that connection's login, and a project opened where
+    /// the connection or its login is missing asks for one. Empty for a layer that came from no
+    /// connection. Never a secret.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub connection: String,
     /// Process-local identity, preserved by snapshots but never stored in a project.
     #[serde(skip, default = "next_layer_instance")]
     instance_id: u64,
@@ -375,6 +381,7 @@ impl Layer {
             source: None,
             postgis: None,
             gpkg: None,
+            connection: String::new(),
             projected: Default::default(),
             display: None,
             display_rejected: Vec::new(),

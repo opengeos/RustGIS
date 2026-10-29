@@ -19,6 +19,13 @@ const MAX_NAME: usize = 200;
 pub const KINDS: &[&str] =
     &["postgres", "mysql", "sqlserver", "service", "wms", "wmts", "wfs", "wcs", "ogcapi", "arcgis", "csw", "stac", "s3"];
 pub const DATABASE_KINDS: &[&str] = &["postgres", "mysql", "sqlserver"];
+/// The web-service kinds, which can log in with a [`SERVICE_AUTH`] method.
+pub const SERVICE_KINDS: &[&str] = &["service", "wms", "wmts", "wfs", "wcs", "ogcapi", "arcgis", "csw", "stac"];
+/// How a web-service connection logs in: not at all, HTTP basic authentication (a user name and a
+/// password), an API key in a header, or an API key in a query parameter.
+pub const SERVICE_AUTH: &[&str] = &["none", "basic", "header", "query"];
+/// The kind of a [`LoginRequest`] for a web service's origin (its `key`).
+pub const WEB: &str = "web";
 pub const S3_CREDENTIALS: &[&str] = &["keys", "profile", "environment", "none"];
 pub const DESKTOP_ONLY: &str = "database connections are used by the desktop app";
 
@@ -48,6 +55,16 @@ pub struct Connection {
     /// remember it, and cleared when the saved password is forgotten or no longer fits.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub remembered: bool,
+    /// How a web-service connection logs in ([`SERVICE_AUTH`]; empty: it doesn't). The method
+    /// only: the password or key is given to `connection.login`, never kept here.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub auth: String,
+    /// The user name of a basic-authentication login.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub user: String,
+    /// The header (`auth` header) or query parameter (`auth` query) an API key goes in.
+    #[serde(default, rename = "keyName", skip_serializing_if = "String::is_empty")]
+    pub key_name: String,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -117,6 +134,82 @@ fn name_text(t: &str) -> String {
     t.trim().chars().filter(|c| !c.is_control()).take(MAX_NAME).collect()
 }
 
+/// Checks a connection's login method ([`SERVICE_AUTH`]) and the names it uses, leaving out what
+/// the method doesn't use. A query login's parameter is taken out of the address (the key is
+/// given to the login, never kept): whether it was.
+fn clean_login(c: &mut Connection) -> Result<bool, String> {
+    use crate::render::rustgis_tiles::logins;
+    let auth = c.auth.trim().to_ascii_lowercase();
+    c.auth = if auth == "none" { String::new() } else { auth };
+    c.user = c.user.trim().to_string();
+    c.key_name = c.key_name.trim().to_string();
+    if c.auth.is_empty() {
+        c.user.clear();
+        c.key_name.clear();
+        return Ok(false);
+    }
+    if !SERVICE_KINDS.contains(&c.kind.as_str()) {
+        return Err(format!("auth is for web-service connections ({}), not {}", SERVICE_KINDS.join(", "), c.kind));
+    }
+    match c.auth.as_str() {
+        "basic" => {
+            c.key_name.clear();
+            if c.user.is_empty() || c.user.chars().count() > MAX_NAME || c.user.chars().any(|ch| ch.is_control() || ch == ':') {
+                return Err(format!(
+                    "basic authentication needs a user of at most {MAX_NAME} characters, without ':' or control characters"
+                ));
+            }
+            Ok(false)
+        }
+        "header" => {
+            c.user.clear();
+            if !logins::valid_header_name(&c.key_name) {
+                return Err(format!(
+                    "keyName must be a header name of at most {} letters, digits or -_. (not one the app sets itself, such as Host, Cookie or Range)",
+                    logins::MAX_NAME
+                ));
+            }
+            Ok(false)
+        }
+        "query" => {
+            c.user.clear();
+            if !logins::valid_query_name(&c.key_name) {
+                return Err(format!("keyName must be a query parameter name of at most {} letters, digits or -_.~", logins::MAX_NAME));
+            }
+            let kept = without_parameter(&c.address, &c.key_name);
+            let stripped = kept != c.address;
+            c.address = kept;
+            Ok(stripped)
+        }
+        other => Err(format!("unknown auth '{other}' ({})", SERVICE_AUTH.join(", "))),
+    }
+}
+
+/// `address` without the query parameter `name` (its case aside).
+pub(crate) fn without_parameter(address: &str, name: &str) -> String {
+    let Some((head, query)) = address.split_once('?') else { return address.to_string() };
+    let kept: Vec<&str> =
+        query.split('&').filter(|kv| !kv.is_empty() && !kv.split('=').next().is_some_and(|k| k.eq_ignore_ascii_case(name))).collect();
+    if kept.is_empty() { head.to_string() } else { format!("{head}?{}", kept.join("&")) }
+}
+
+/// The origin (`scheme://host[:port]`) a web-service connection's login goes to: the only one.
+pub fn login_origin(c: &Connection) -> Option<String> {
+    crate::render::rustgis_tiles::logins::origin(&c.address)
+}
+
+/// Whether two definitions of a connection log in the same way: a saved password (the same
+/// database address) or a saved web login (the same origin, method, user and key name) stays only
+/// while this holds.
+pub fn same_login(a: &Connection, b: &Connection) -> bool {
+    a.kind == b.kind
+        && if DATABASE_KINDS.contains(&a.kind.as_str()) {
+            a.address == b.address
+        } else {
+            a.auth == b.auth && a.user == b.user && a.key_name == b.key_name && login_origin(a) == login_origin(b)
+        }
+}
+
 pub fn clean(mut c: Connection) -> Result<(Connection, bool), String> {
     if !KINDS.contains(&c.kind.as_str()) {
         return Err(format!("unknown kind '{}' ({})", c.kind, KINDS.join(", ")));
@@ -126,7 +219,7 @@ pub fn clean(mut c: Connection) -> Result<(Connection, bool), String> {
         return Err("a connection address must be at most 2048 bytes and contain no control characters".into());
     }
     let stored = sources::redact(t);
-    let stripped = stored != t;
+    let mut stripped = stored != t;
     if DATABASE_KINDS.contains(&c.kind.as_str()) {
         if stored.is_empty() || database_kind(&stored) != Some(c.kind.as_str()) {
             return Err(format!(
@@ -141,6 +234,7 @@ pub fn clean(mut c: Connection) -> Result<(Connection, bool), String> {
         }
     }
     c.address = stored;
+    stripped |= clean_login(&mut c)?;
     c.name = name_text(&c.name);
     if c.name.is_empty() {
         c.name = if c.kind == "s3" && c.address.is_empty() { "AWS S3".into() } else { sources::default_name(&c.address) };
@@ -149,8 +243,8 @@ pub fn clean(mut c: Connection) -> Result<(Connection, bool), String> {
     if c.kind != "s3" {
         c.saved_keys = false;
     }
-    // Only a database connection has a password to remember.
-    c.remembered &= DATABASE_KINDS.contains(&c.kind.as_str());
+    // Only a database connection has a password to remember, and a web service its login.
+    c.remembered &= DATABASE_KINDS.contains(&c.kind.as_str()) || !c.auth.is_empty();
     if c.kind != "s3" && !c.options.is_empty() {
         return Err(format!("{} connections take no options", c.kind));
     }
@@ -388,8 +482,9 @@ impl Connections {
         let slot = self.connections.iter().find(|c| c.id == id).ok_or_else(|| format!("no connection '{id}'"))?;
         c.id = id.into();
         c.saved_keys = slot.saved_keys && c.kind == "s3";
-        // Password identity includes the cleaned database kind, server and user.
-        c.remembered = slot.remembered && slot.kind == c.kind && slot.address == c.address;
+        // Password identity includes the cleaned database kind, server and user; a web login's,
+        // its origin, method, user and key name.
+        c.remembered = slot.remembered && same_login(slot, &c);
         Ok((c, stripped))
     }
 
@@ -424,9 +519,11 @@ impl Connections {
         Some(c)
     }
 
-    /// Says whether a database connection's password is saved; whether that changed the row.
+    /// Says whether a database connection's password (or a web-service connection's login) is
+    /// saved; whether that changed the row.
     pub fn set_remembered(&mut self, id: &str, on: bool) -> bool {
-        let Some(c) = self.connections.iter_mut().find(|c| c.id == id && DATABASE_KINDS.contains(&c.kind.as_str())) else {
+        let Some(c) = self.connections.iter_mut().find(|c| c.id == id && (DATABASE_KINDS.contains(&c.kind.as_str()) || !c.auth.is_empty()))
+        else {
             return false;
         };
         if c.remembered == on {
@@ -459,6 +556,9 @@ pub enum LoginReason {
     Choose,
     /// No password is usable (the saved one was refused): the user types one.
     Password,
+    /// Layers recorded a saved connection this computer doesn't have (or one for another
+    /// address), and none of its connections logs in to their address: the user makes one.
+    Connection,
 }
 
 impl LoginReason {
@@ -466,6 +566,7 @@ impl LoginReason {
         match self {
             LoginReason::Choose => "choose",
             LoginReason::Password => "password",
+            LoginReason::Connection => "connection",
         }
     }
 }
@@ -481,6 +582,8 @@ pub struct LoginRequest {
     pub connections: Vec<String>,
     /// The layers that wait, by id.
     pub layers: Vec<u32>,
+    /// How many tile layers wait (they have no id).
+    pub tiles: usize,
     /// [`crate::Session::opened`] when it was made: a project opened since has other layers.
     pub opened: u64,
     /// The app has asked the user.
