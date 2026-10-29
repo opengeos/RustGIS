@@ -92,7 +92,9 @@ pub(crate) fn add_layer_from(
             );
         }
         let items = asked.as_deref().unwrap_or(items);
-        let mut p = json!({"url": items, "name": title, "service": true});
+        // The layer's bounds go along, for its features' axes (#1053).
+        let bounds = l.get("bbox").cloned().unwrap_or_default();
+        let mut p = json!({"url": items, "name": title, "service": true, "bounds": bounds});
         if let Some(connection) = connection {
             p["connection"] = json!(connection);
         }
