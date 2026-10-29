@@ -2448,7 +2448,7 @@ fn kernel_density_tool(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String>
 
     let cell_size = match num(p, "pixelSize") {
         Some(c) if c > 0.0 => {
-            if c > bandwidth {
+            if user_radius && c > bandwidth {
                 return Err("pixel size must not be larger than the search radius (bandwidth); choose a smaller pixel size or a larger search radius".into());
             }
             c
@@ -5239,6 +5239,10 @@ mod tests {
             left_point_x - grid_min_x >= r_bump.transform.pixel_width * 0.99,
             "grid must not clip at edge: {grid_min_x} vs {left_point_x}"
         );
+
+        // 19. pixelSize larger than automatic Silverman radius raises radius to pixelSize instead of erroring
+        let res_auto_bump = crate::run("kernelDensity", &m_outlier, &serde_json::json!({"input": "outlier_ds", "pixelSize": 1000.0}));
+        assert!(res_auto_bump.is_ok(), "pixelSize > auto radius should succeed by bumping radius: {:?}", res_auto_bump.err());
     }
 
     #[test]

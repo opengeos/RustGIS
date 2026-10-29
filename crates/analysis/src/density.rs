@@ -310,10 +310,11 @@ pub fn kernel_density(
 
     let mut grid_f32 = Vec::with_capacity(total_cells);
     for d in grid {
-        if !d.is_finite() {
+        let val = d as f32;
+        if !val.is_finite() {
             return Err("calculated density values produced non-finite numbers; check weights and radius".into());
         }
-        grid_f32.push(d as f32);
+        grid_f32.push(val);
     }
 
     Raster::new(name, w as u32, h_rows as u32, vec![grid_f32], gt, crs, None, ColorHint::Gray, "Float32").map_err(|e| e.to_string())
@@ -543,5 +544,12 @@ mod tests {
         let custom = Extent::new(0.0, 0.0, 100.0, 100.0);
         let ge_custom = resolve_grid_extent(&pe, 5.0, Some(&custom)).unwrap();
         assert_eq!(ge_custom, custom);
+    }
+
+    #[test]
+    fn overflowing_f32_weight_is_rejected() {
+        let pt = Coord::new(100.0, 100.0);
+        let err = kernel_density(&[(pt, 1e42)], None, 5.0, 50.0, KernelType::Quartic, "huge_weight", Crs::WebMercator).unwrap_err();
+        assert!(err.contains("calculated density values produced non-finite numbers"), "{err}");
     }
 }
