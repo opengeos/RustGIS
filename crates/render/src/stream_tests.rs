@@ -852,7 +852,15 @@ fn masks_skip_undrawn_targets_and_reuse_one_complete_source_with_distinct_swipes
     }
     base.swipe = Some((first, 0.35));
     let view = View { width: 120.0, height: 90.0, pixels_per_point: 1.0, camera: Camera::new(Coord::new(0.0, 0.0), 80.0), sky: false };
-    let ctx = Ctx { view: &view, ppp: 1.0, wireframe: false, cull: Extent::EMPTY, globe: None, sprites: Default::default() };
+    let ctx = Ctx {
+        view: &view,
+        ppp: 1.0,
+        wireframe: false,
+        cull: Extent::EMPTY,
+        globe: None,
+        sprites: Default::default(),
+        bursts: Default::default(),
+    };
     let flat = base.flat();
     let scale = base.ground_res_at(&view.camera) / rustgis_geom::PIXEL_M;
     let expected = layer_masks(&mut base.clone(), &ctx, 120, 90, &flat, "test", scale).unwrap();

@@ -46,6 +46,8 @@ is read as Windows-1252. An unreadable, empty, invalid, oversized or unsupported
 falls back to the DBF code page; an unsupported DBF code page gives a notice and falls back to
 UTF-8. Files without encoding metadata keep the UTF-8 default. Unsupported characters become
 replacement characters. This applies to zipped files and large files read in place too.
+See the [DBF language-driver support inventory](shapefile-encoding.md) for every recognized
+marker and the legacy code pages that still use the UTF-8 fallback.
 
 Files with more than 100,000 features (GeoPackage, GeoParquet, FlatGeobuf, and Shapefile on the
 desktop) are read in place, a view

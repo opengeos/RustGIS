@@ -1211,6 +1211,7 @@ pub(crate) mod tests {
             attribution: String::new(),
             layers: Vec::new(),
             style_layers: String::new(),
+            hidden_layers: Vec::new(),
         };
         // Zoom 0: one tile over the world, 4096 units across it.
         let half = 20_037_508.342_789_244;
@@ -1264,6 +1265,17 @@ pub(crate) mod tests {
                 std::thread::sleep(std::time::Duration::from_millis(5));
             }
         }
+        // A hidden source layer is left out of the style: not picked, the others still are.
+        assert_eq!(crate::source::source_layers(spec.kind, &spec.url).unwrap(), ["parks", "roads", "pois", "plots"]);
+        let without_roads = Spec { hidden_layers: vec!["roads".into()], ..spec.clone() };
+        let (x, y) = at(2048.0, 2048.0);
+        assert_eq!(pick(&without_roads, x, y, m_per_px, 3.0, 10).len(), 1, "the park is still there");
+        let (x, y) = at(200.0, 505.0);
+        assert!(pick(&without_roads, x, y, m_per_px, 3.0, 10).is_empty(), "the road isn't");
+        // An own style's layers too.
+        let (x, y) = at(500.0, 2800.0);
+        assert_eq!(pick(&Spec { hidden_layers: vec!["roads".into()], ..styled.clone() }, x, y, m_per_px, 3.0, 10).len(), 2);
+        assert!(pick(&Spec { hidden_layers: vec!["plots".into()], ..styled.clone() }, x, y, m_per_px, 3.0, 10).is_empty());
         // Hostile scales and points pick nothing.
         for (x, y, m) in [(f64::NAN, 0.0, m_per_px), (0.0, 0.0, 0.0), (0.0, 0.0, f64::INFINITY)] {
             assert!(pick(&spec, x, y, m, 3.0, 10).is_empty());
@@ -1298,6 +1310,7 @@ pub(crate) mod tests {
             attribution: String::new(),
             layers: Vec::new(),
             style_layers: String::new(),
+            hidden_layers: Vec::new(),
         };
         let half = 20_037_508.342_789_244;
         // Just inside zoom 1 (the archive has no other).

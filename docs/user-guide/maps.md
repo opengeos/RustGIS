@@ -238,6 +238,15 @@ selectable or editable; a tile not yet loaded may need another click once it arr
 **Reload** in the Basemap gallery (`map.reloadWebLayers`) clears cached tiles and styles and
 fetches them again.
 
+**Source layers.** A vector PMTiles or MBTiles archive lists its source layers (the
+`vector_layers` its metadata names: `water`, `roads`, `pois`…) under its row in the Layers pane:
+the arrow beside it opens them, each with its own checkbox. Untick one to hide what it draws
+(fills, lines, points and labels, in the default look and in a style given with `styleLayers`
+alike); Explore's pop-ups then skip its features too. From scripts, `map.tiles` lists a vector
+archive's `sourceLayers` once its header is read, and `map.setTiles` takes `"hiddenLayers":
+["roads", …]`, the source layers switched off (`[]` or `null` shows them all again). Switching one
+off is an edit to undo, and a project keeps which are off.
+
 Tiles load in the background and the map fills in as they arrive, with coarser tiles standing in
 meanwhile; exports and `rustgis-cli` wait for them. On the globe and in other projections the
 tiles are reprojected. From scripts: `map.addTiles`, `map.removeTiles`, `map.setTiles`,

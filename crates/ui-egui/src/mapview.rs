@@ -82,7 +82,13 @@ pub struct Popup {
     pub opened: u64,
     /// The WMS layers being asked what is at the point, whose features join the list.
     pub asks: Vec<Ask>,
+    /// When it opened: it waits for the WMS layers' answers up to [`ASK_WAIT`] from then.
+    since: web_time::Instant,
 }
+
+/// How long a pop-up waits for the WMS layers asked before it shows what was found: then their
+/// answers join it as they come.
+const ASK_WAIT: std::time::Duration = std::time::Duration::from_secs(4);
 
 /// A WMS layer asked what is at a popup's point (GetFeatureInfo), its answer on the way: the
 /// request's, or first its service's capabilities (a layer from a project doesn't know its request).
@@ -123,13 +129,77 @@ impl Popup {
             let request = (!capabilities).then(|| url.to_string());
             asks.push(Ask { layer, also: Vec::new(), capabilities, request, slot });
         }
-        Popup { info, at, index: 0, map, opened, asks }
+        Popup { info, at, index: 0, map, opened, asks, since: web_time::Instant::now() }
+    }
+
+    /// Whether it waits for the WMS layers asked, to show their answers and what was found
+    /// together, in drawing order: a layer drawn over the feature found may answer, and take its
+    /// place.
+    fn asking(&self) -> bool {
+        !self.asks.is_empty() && self.since.elapsed() < ASK_WAIT
     }
 }
 
 /// Whether a popup's value is a feature or pixel found, not only WMS layers still being asked.
 fn is_found(v: &Value) -> bool {
     v.get("layer").is_some() || v.get("attributes").is_some()
+}
+
+/// A popup's results: its list, or the one feature or pixel found; none while it only waits for
+/// WMS layers' answers.
+fn results_of(info: &Value) -> Vec<Value> {
+    match info["results"].as_array() {
+        Some(r) => r.clone(),
+        None if is_found(info) => vec![info.clone()],
+        None => Vec::new(),
+    }
+}
+
+/// Where the result at `index` of `before` is in `after`, the pop-up's results once some were
+/// added or left out: the same one of identical results (a service may answer a feature twice,
+/// and both lists keep their order), or the first when it's gone.
+fn index_after(before: &[Value], index: usize, after: &[Value]) -> usize {
+    let Some(shown) = before.get(index) else { return 0 };
+    let nth = before.iter().take(index).filter(|v| *v == shown).count();
+    after.iter().enumerate().filter(|(_, v)| *v == shown).nth(nth).map_or(0, |(i, _)| i)
+}
+
+/// A popup's results with the WMS layers' answers `found` added, in the map's drawing order, top
+/// first, as identify ranks what it finds itself: a WMS layer drawn over the feature found comes
+/// before it, and with topmost, the map's pop-up mode by default, takes its place once it answers
+/// with features. `None` with nothing to show.
+fn with_answers(map: &rustgis_engine::map::Map, info: &Value, found: Vec<Value>) -> Option<Value> {
+    use rustgis_engine::map::Drawn;
+    let mut all = results_of(info);
+    all.extend(found);
+    // A tile layer's results show while it draws: one hidden since must not keep a later answer
+    // out. Of two layers of one name, the answers are placed by the one drawn (though
+    // identify.featureInfo tells its answer to the first of them, drawn or not).
+    let drawn = |name: &str| map.tiles.iter().position(|t| t.name == name && t.draws());
+    all.retain(|v| v["tileLayer"].as_str().is_none_or(|name| drawn(name).is_some()));
+    let stack = map.stack();
+    // A tile layer's feature by its layer's name (two of one name drawn take the higher one's
+    // place, as their answers are told apart by name too), a map layer's (or raster's pixel) by
+    // its id; anything else after them all.
+    let place = |v: &Value| {
+        let drawn = match v["tileLayer"].as_str() {
+            Some(name) => drawn(name).map(Drawn::Tile),
+            None => v["layerId"].as_u64().and_then(|id| u32::try_from(id).ok()).and_then(|id| map.layer_index(id)).map(Drawn::Layer),
+        };
+        drawn.and_then(|d| stack.iter().position(|o| *o == d)).unwrap_or(usize::MAX)
+    };
+    // Stable: each layer's results keep the order identify or the service gave them.
+    all.sort_by_cached_key(place);
+    if map.popup_mode == rustgis_engine::map::PopupMode::Topmost {
+        let top = all.first().map(place);
+        all.retain(|v| Some(place(v)) == top);
+    }
+    let mut first = all.first().cloned()?;
+    if let Value::Object(o) = &mut first {
+        o.remove("featureInfo");
+        o.insert("results".into(), Value::Array(all));
+    }
+    Some(first)
 }
 
 /// A notice shown as a toast.
@@ -2061,10 +2131,14 @@ fn interact(app: &mut RustGisApp, ui: &mut Ui, resp: &egui::Response, rect: Rect
         }
     }
     // Arrow keys pan; Shift+Left and Shift+Right turn the map, Shift+Up and Shift+Down tilt it
-    // (as in MapLibre).
+    // (as in MapLibre). With Alt or Mod held the arrows are shortcuts (Alt+Shift+arrows move the
+    // active layer in the Layers pane's outline, #836), not map moves.
     if !ui.ctx().egui_wants_keyboard_input() {
         let (mut dx, mut dy, mut turn, mut tilt) = (0.0, 0.0, 0.0, 0.0);
         ui.input(|i| {
+            if i.modifiers.alt || i.modifiers.command {
+                return;
+            }
             // Ninety degrees a second, whatever the frame rate.
             let step = (f64::from(i.stable_dt) * 90.0).clamp(0.0, 15.0);
             if i.modifiers.shift {
@@ -2943,7 +3017,8 @@ fn follow_popup(app: &mut RustGisApp) {
     let here: Vec<bool> = results
         .iter()
         .map(|r| match home(r) {
-            Home::NoLayer => true,
+            // A tile layer's answer, while the layer draws (as `with_answers` keeps them).
+            Home::NoLayer => r["tileLayer"].as_str().is_none_or(|name| map.tiles.iter().any(|t| t.name == name && t.draws())),
             Home::LayerGone => false,
             // A streamed layer holds a window of its features: one outside it isn't gone.
             Home::Layer(l) => r["fid"].as_u64().is_none_or(|fid| l.dataset.windowed || found.contains(&(l.id, fid))),
@@ -2957,10 +3032,9 @@ fn follow_popup(app: &mut RustGisApp) {
     if here.iter().all(|h| *h) {
         return;
     }
-    let shown = results.get(index).cloned();
-    let kept: Vec<Value> = results.into_iter().zip(here).filter(|(_, h)| *h).map(|(r, _)| r).collect();
+    let kept: Vec<Value> = results.iter().zip(here).filter(|(_, h)| *h).map(|(r, _)| r.clone()).collect();
     let Some(mut info) = kept.first().cloned() else { return };
-    pp.index = shown.and_then(|s| kept.iter().position(|k| *k == s)).unwrap_or(0);
+    pp.index = index_after(&results, index, &kept);
     if let Value::Object(o) = &mut info {
         o.insert("results".into(), Value::Array(kept));
     }
@@ -2996,10 +3070,12 @@ fn follow_asks(app: &mut RustGisApp, ctx: &egui::Context) {
     }
     let mut found = Vec::new();
     let mut next = Vec::new();
-    let exists = |app: &RustGisApp, layer: &str| app.session.map().tiles.iter().any(|t| t.name == layer);
+    // Only answers from layers drawn are shown: one hidden while its answer came would otherwise
+    // take the pop-up from a feature in view.
+    let exists = |app: &RustGisApp, layer: &str| app.session.map().tiles.iter().any(|t| t.name == layer && t.draws());
     for (layer, also, capabilities, request, r) in landed {
-        // Layers removed or renamed while the answer came: nothing to show, nothing to tell. The
-        // first of a service's layers still there takes the capabilities for the rest.
+        // Layers removed, renamed or hidden while the answer came: nothing to show, nothing to
+        // tell. The first of a service's layers still there takes the capabilities for the rest.
         let mut group = std::iter::once(layer).chain(also).filter(|l| exists(app, l));
         let Some(layer) = group.next() else { continue };
         let also: Vec<String> = group.collect();
@@ -3041,21 +3117,28 @@ fn follow_asks(app: &mut RustGisApp, ctx: &egui::Context) {
     }
     let Some(pp) = &mut app.map.popup else { return };
     pp.asks.extend(next);
-    if !found.is_empty() {
-        let mut all: Vec<Value> = match pp.info["results"].as_array() {
-            Some(r) => r.clone(),
-            None if is_found(&pp.info) => vec![pp.info.clone()],
-            None => Vec::new(),
-        };
-        all.extend(found);
-        if let Some(mut info) = all.first().cloned() {
-            if let Value::Object(o) = &mut info {
-                o.remove("featureInfo");
-                o.insert("results".into(), Value::Array(all));
-            }
-            pp.info = info;
+    // Answers that land while the pop-up waits for them: it shows nothing yet, so it opens on the
+    // top result, and selects its feature.
+    let waited = pp.since.elapsed() < ASK_WAIT;
+    if !found.is_empty()
+        && let Some(info) = with_answers(app.session.map(), &pp.info, found)
+    {
+        if waited {
+            pp.index = 0;
+        } else {
+            // The result shown stays shown, wherever the answers went; the first when it was left
+            // out (a layer drawn higher answered, with topmost).
+            let before = results_of(&pp.info);
+            // As the pop-up shows it: an index past the end is the last result.
+            let index = pp.index.min(before.len().saturating_sub(1));
+            pp.index = index_after(&before, index, info["results"].as_array().map(Vec::as_slice).unwrap_or_default());
+        }
+        pp.info = info;
+        if waited {
+            select_shown(app);
         }
     }
+    let Some(pp) = &mut app.map.popup else { return };
     if pp.asks.is_empty() && !is_found(&pp.info) {
         app.map.popup = None;
     }
@@ -3070,14 +3153,22 @@ fn popup(app: &mut RustGisApp, ui: &mut Ui, rect: Rect) {
     if !rect.contains(anchor) {
         return;
     }
-    let results = pp.info["results"].as_array().map_or(0, Vec::len);
+    // Waiting for the WMS layers' answers, it shows none of the results yet.
+    let asking = pp.asking();
+    let results = if asking { 0 } else { pp.info["results"].as_array().map_or(0, Vec::len) };
     let index = pp.index.min(results.saturating_sub(1));
-    let info = if results > 1 { pp.info["results"][index].clone() } else { pp.info.clone() };
+    let info = if asking {
+        Value::Null
+    } else if results > 1 {
+        pp.info["results"][index].clone()
+    } else {
+        pp.info.clone()
+    };
     let mut step: Option<usize> = None;
     let mut zoom = false;
     // The feature shown, as its layer id and feature id (a raster pixel has neither).
     let shown = info["layerId"].as_u64().and_then(|id| u32::try_from(id).ok()).zip(info["fid"].as_u64());
-    // Only WMS layers being asked so far: their names.
+    // Only WMS layers being asked so far, or still waited for: their names.
     let waiting = !is_found(&info);
     let layer = if waiting {
         pp.asks.iter().map(|a| a.layer.as_str()).collect::<Vec<_>>().join(", ")
@@ -3252,22 +3343,27 @@ fn popup(app: &mut RustGisApp, ui: &mut Ui, rect: Rect) {
         app.map.popup = None;
     } else if let (Some(i), Some(pp)) = (step, &mut app.map.popup) {
         pp.index = i;
-        // The feature shown is the one selected, as after the click. Not through `select.rows`:
-        // browsing a pop-up mustn't fill the undo history; the new revision redraws the map.
-        // Found again by its feature id: a streamed layer may have read another window since the
-        // click, moving the feature to another row (or out of the layer: then nothing is selected).
-        let shown = pp.info["results"].get(i).and_then(|r| Some((u32::try_from(r["layerId"].as_u64()?).ok()?, r["fid"].as_u64()?)));
-        let found = shown.and_then(|(id, fid)| {
-            let row = app.session.map().layer(id)?.dataset.features.iter().position(|f| f.id == fid)?;
-            Some((id, row))
-        });
-        if let Some((id, row)) = found {
-            rustgis_engine::cmd::select::set(&mut app.session, id, vec![row], rustgis_engine::cmd::select::Mode::New);
-        } else {
-            app.session.map_mut().clear_selection();
-        }
-        app.session.revision = app.session.revision.wrapping_add(1);
+        select_shown(app);
     }
+}
+
+/// Selects the feature the pop-up shows, as after the click. Not through `select.rows`: browsing
+/// a pop-up mustn't fill the undo history; the new revision redraws the map. Found again by its
+/// feature id: a streamed layer may have read another window since the click, moving the feature
+/// to another row (or out of the layer: then nothing is selected).
+fn select_shown(app: &mut RustGisApp) {
+    let Some(pp) = &app.map.popup else { return };
+    let shown = pp.info["results"].get(pp.index).and_then(|r| Some((u32::try_from(r["layerId"].as_u64()?).ok()?, r["fid"].as_u64()?)));
+    let found = shown.and_then(|(id, fid)| {
+        let row = app.session.map().layer(id)?.dataset.features.iter().position(|f| f.id == fid)?;
+        Some((id, row))
+    });
+    if let Some((id, row)) = found {
+        rustgis_engine::cmd::select::set(&mut app.session, id, vec![row], rustgis_engine::cmd::select::Mode::New);
+    } else {
+        app.session.map_mut().clear_selection();
+    }
+    app.session.revision = app.session.revision.wrapping_add(1);
 }
 
 /// Whether an attribute value is a picture (a `data:image/png` or `jpeg` address, as a photo's
@@ -3647,7 +3743,7 @@ fn shown_layers(session: &rustgis_engine::Session) -> u64 {
         (l.id, l.visible).hash(&mut h);
     }
     for g in &map.groups {
-        (g.id, g.visible, &g.children).hash(&mut h);
+        (g.id, g.visible, &g.children, g.parent).hash(&mut h);
     }
     for t in &map.tiles {
         (&t.name, &t.url, t.draws(), t.over).hash(&mut h);
@@ -3919,6 +4015,123 @@ mod picture_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The pop-up stays on the result shown as answers come and results go, the second of two
+    /// identical ones too, and goes to the first when that one is left out.
+    #[test]
+    fn the_result_shown_stays_shown() {
+        let (a, b, c) = (json!({"layer": "A"}), json!({"layer": "B"}), json!({"layer": "C"}));
+        let before = [a.clone(), b.clone(), b.clone()];
+        // An answer before them: each keeps its place among the identical.
+        let after = [c.clone(), a.clone(), b.clone(), b.clone()];
+        assert_eq!((0..3).map(|i| index_after(&before, i, &after)).collect::<Vec<_>>(), [1, 2, 3]);
+        // The one shown left out; a list shorter than the index.
+        assert_eq!(index_after(&before, 0, &[c.clone(), b.clone()]), 0);
+        assert_eq!(index_after(&before, 5, &after), 0);
+    }
+
+    /// A pop-up asking a WMS layer waits for its answer, up to `ASK_WAIT`, before it shows what
+    /// was found, so a layer drawn over the feature found doesn't take its place once shown; with
+    /// nothing asked, it shows at once.
+    #[test]
+    fn a_popup_waits_for_the_wms_answers_a_while() {
+        let found = json!({"layer": "Countries", "attributes": {"name": "Switzerland"}});
+        let mut pp = Popup::new(found, Coord::new(8.6, 46.65), 0, 0);
+        assert!(!pp.asking(), "nothing asked");
+        pp.asks.push(Ask { layer: "Over".into(), also: Vec::new(), capabilities: false, request: None, slot: Default::default() });
+        assert!(pp.asking(), "asked");
+        if let Some(earlier) = web_time::Instant::now().checked_sub(ASK_WAIT) {
+            pp.since = earlier;
+            assert!(!pp.asking(), "waited long enough");
+        }
+    }
+
+    /// Answers that land while the pop-up waits open it on the top result, with its feature
+    /// selected: drawn over Countries, Over's feature comes first, and Switzerland, selected by the
+    /// click, no longer is.
+    #[test]
+    fn a_popup_opens_on_the_top_result_after_its_wait() {
+        let mut s = rustgis_engine::Session::new(rustgis_engine::sample::world_project());
+        let url = "https://wms.example.org/?SERVICE=WMS&VERSION=1.3.0&REQUEST=GetMap&LAYERS=over&STYLES=&CRS=EPSG:3857&BBOX={bbox-epsg-3857}&WIDTH=256&HEIGHT=256&FORMAT=image%2Fpng";
+        s.run("map.addTiles", &json!({"url": url, "name": "Over", "overlay": true})).unwrap();
+        s.run("map.popupMode", &json!({"mode": "visible"})).unwrap();
+        let mut info = s.run("identify", &json!({"lon": 8.6, "lat": 46.65, "tolerancePx": 0})).unwrap();
+        assert_eq!(info["layer"], "Countries");
+        assert_eq!(info["featureInfo"][0]["tileLayer"], "Over", "{info}");
+        s.run("select.rows", &json!({"layer": info["layerId"], "rows": [info["row"]]})).unwrap();
+        // Its answer already in, not fetched.
+        info.as_object_mut().unwrap().remove("featureInfo");
+        let (map, opened) = (s.project.active_map, s.opened);
+        let mut app = RustGisApp::new(s);
+        let mut pp = Popup::new(info, Coord::new(8.6, 46.65), map, opened);
+        let answer = br#"{"type":"FeatureCollection","features":[{"type":"Feature","properties":{"name":"Bern"},"geometry":null}]}"#;
+        let slot = std::sync::Arc::new(std::sync::Mutex::new(Some(Ok(answer.to_vec()))));
+        pp.asks.push(Ask { layer: "Over".into(), also: Vec::new(), capabilities: false, request: None, slot });
+        app.map.popup = Some(pp);
+        follow_asks(&mut app, &egui::Context::default());
+        let pp = app.map.popup.as_ref().unwrap();
+        let shown: Vec<_> =
+            pp.info["results"].as_array().unwrap().iter().map(|r| r["tileLayer"].as_str().or(r["layer"].as_str()).unwrap()).collect();
+        assert_eq!((shown, pp.index), (vec!["Over", "Countries"], 0));
+        assert!(app.session.map().layer_by_name("Countries").unwrap().selection.is_empty());
+    }
+
+    /// A WMS layer's answer comes in the drawing order (#808): drawn over Countries, its feature
+    /// comes first, and with topmost replaces Switzerland; drawn under the map's layers, it comes
+    /// after them, and topmost keeps Switzerland.
+    #[test]
+    fn a_wms_answer_takes_its_place_in_the_drawing_order() {
+        let mut s = rustgis_engine::Session::new(rustgis_engine::sample::world_project());
+        s.run("map.addTiles", &json!({"url": "https://wms.example.org/{z}/{x}/{y}.png", "name": "Over", "overlay": true})).unwrap();
+        s.run("map.addTiles", &json!({"url": "https://base.example.org/{z}/{x}/{y}.png", "name": "Under"})).unwrap();
+        let answer = |layer: &str| json!({"layer": layer, "tileLayer": layer, "sourceLayer": null, "attributes": {"name": "Bern"}});
+        let shown = |v: &Value| -> Vec<String> {
+            v["results"].as_array().unwrap().iter().map(|r| r["tileLayer"].as_str().or(r["layer"].as_str()).unwrap().to_string()).collect()
+        };
+        for (mode, over, under) in
+            [("topmost", vec!["Over"], vec!["Countries"]), ("visible", vec!["Over", "Countries"], vec!["Countries", "Under"])]
+        {
+            s.run("map.popupMode", &json!({"mode": mode})).unwrap();
+            let info = s.run("identify", &json!({"lon": 8.6, "lat": 46.65, "tolerancePx": 0, "mode": mode})).unwrap();
+            assert_eq!(info["layer"], "Countries", "{mode}");
+            let v = with_answers(s.map(), &info, vec![answer("Over")]).unwrap();
+            assert_eq!(shown(&v), over, "{mode}: drawn over");
+            assert_eq!(v["layer"], over[0], "{mode}");
+            let v = with_answers(s.map(), &info, vec![answer("Under")]).unwrap();
+            assert_eq!(shown(&v), under, "{mode}: drawn under");
+        }
+        // Hidden since it answered (and took Switzerland's place): its result goes, and doesn't
+        // keep out a later answer from a layer drawn under it.
+        s.run("map.popupMode", &json!({"mode": "topmost"})).unwrap();
+        let info = s.run("identify", &json!({"lon": 8.6, "lat": 46.65, "tolerancePx": 0})).unwrap();
+        let over = with_answers(s.map(), &info, vec![answer("Over")]).unwrap();
+        s.map_mut().tiles.iter_mut().filter(|t| t.name == "Over").for_each(|t| t.visible = false);
+        let v = with_answers(s.map(), &over, vec![answer("Under")]).unwrap();
+        assert_eq!(shown(&v), ["Under"], "hidden");
+        // And with visible, which keeps everything, it isn't shown.
+        s.map_mut().tiles.iter_mut().filter(|t| t.name == "Over").for_each(|t| t.visible = true);
+        s.run("map.popupMode", &json!({"mode": "visible"})).unwrap();
+        let info = s.run("identify", &json!({"lon": 8.6, "lat": 46.65, "tolerancePx": 0})).unwrap();
+        let over = with_answers(s.map(), &info, vec![answer("Over")]).unwrap();
+        s.map_mut().tiles.iter_mut().filter(|t| t.name == "Over").for_each(|t| t.visible = false);
+        let v = with_answers(s.map(), &over, vec![answer("Under")]).unwrap();
+        assert_eq!(shown(&v), ["Countries", "Under"], "hidden, visible");
+        // Hidden with its result in the pop-up and no answer to come: the result goes at once.
+        s.map_mut().tiles.iter_mut().filter(|t| t.name == "Over").for_each(|t| t.visible = true);
+        let (map, opened) = (s.project.active_map, s.opened);
+        let mut app = RustGisApp::new(s);
+        let mut popup = Popup::new(over, Coord::new(8.6, 46.65), map, opened);
+        popup.index = 1;
+        app.map.popup = Some(popup);
+        app.map.popup_rev = app.session.revision.wrapping_add(1);
+        follow_popup(&mut app);
+        assert_eq!(shown(&app.map.popup.as_ref().unwrap().info), ["Over", "Countries"], "drawn, in the pop-up");
+        app.session.map_mut().tiles.iter_mut().filter(|t| t.name == "Over").for_each(|t| t.visible = false);
+        app.map.popup_rev = app.session.revision.wrapping_add(1);
+        follow_popup(&mut app);
+        let popup = app.map.popup.as_ref().unwrap();
+        assert_eq!((shown(&popup.info), popup.index), (vec!["Countries".to_string()], 0), "hidden, in the pop-up");
+    }
 
     fn selection_harness() -> egui_kittest::Harness<'static, RustGisApp> {
         let mut app = RustGisApp::new(rustgis_engine::Session::new(rustgis_engine::Project::default()));

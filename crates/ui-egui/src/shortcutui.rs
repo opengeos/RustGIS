@@ -179,7 +179,7 @@ pub fn show(app: &mut RustGisApp, ctx: &Context) {
                         ui.label(label);
                         for chord in app.ui.keymap.keys_for(command, params).collect::<Vec<_>>() {
                             if ui
-                                .small_button(format!("{} ×", chord.text(ctx.os().is_mac())))
+                                .small_button(format!("{} ×", chord.shown(ctx)))
                                 .on_hover_text(tl!("Remove shortcut"))
                                 .clicked()
                             {
@@ -196,7 +196,7 @@ pub fn show(app: &mut RustGisApp, ctx: &Context) {
                         }
                         for chord in defaults.keys_for(command, params) {
                             if app.ui.keymap.command_for(chord).is_none_or(|b| !b.runs(command, params))
-                                && ui.small_button(crate::i18n::fmt("Reset {key}", &[("key", &chord.text(ctx.os().is_mac()))])).clicked()
+                                && ui.small_button(crate::i18n::fmt("Reset {key}", &[("key", &chord.shown(ctx))])).clicked()
                             {
                                 restore = Some((chord, Target { command: command.clone(), params: params.clone() }));
                             }
@@ -247,7 +247,7 @@ pub fn show(app: &mut RustGisApp, ctx: &Context) {
         let existing = app.ui.keymap.command_for(chord).map(|b| keymap::label(app, &b.command, &b.params)).unwrap_or_default();
         egui::Modal::new(egui::Id::unique("shortcut_conflict")).show(ctx, |ui| {
             ui.heading(tl!("Shortcut already assigned"));
-            ui.label(crate::i18n::fmt("{key} is used by {command}.", &[("key", &chord.text(ctx.os().is_mac())), ("command", &existing)]));
+            ui.label(crate::i18n::fmt("{key} is used by {command}.", &[("key", &chord.shown(ctx)), ("command", &existing)]));
             ui.horizontal(|ui| {
                 if ui.button(tl!("Replace")).clicked() {
                     if app.ui.keymap.assign(chord, &target.command, target.params.clone()) {

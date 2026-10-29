@@ -36,6 +36,11 @@ const DEFAULTS: &[(&str, &str, &str)] = &[
     ("Escape", "tool.set", r#"{"tool":"explore"}"#),
     ("Delete", "edit.delete", ""),
     ("Mod+D", "layout.duplicateElement", ""),
+    // The active layer in the Layers pane's outline, as a word processor's outline keys (#836).
+    ("Alt+Shift+ArrowRight", "layer.indent", ""),
+    ("Alt+Shift+ArrowLeft", "layer.outdent", ""),
+    ("Alt+Shift+ArrowUp", "layer.moveUp", ""),
+    ("Alt+Shift+ArrowDown", "layer.moveDown", ""),
 ];
 
 /// The clipboard keys: (keys, command). They arrive as copy, cut and paste events rather than key
@@ -147,6 +152,17 @@ impl Chord {
             }
             s + key
         }
+    }
+
+    /// [`Chord::text`] for `ctx`'s keys, Option spelled out (`Opt+⇧Right`) where the interface
+    /// faces have no "⌥" (egui's own have none, so a browser without the system's faces).
+    pub fn shown(self, ctx: &egui::Context) -> String {
+        let text = self.text(ctx.os().is_mac());
+        if !text.contains('⌥') {
+            return text;
+        }
+        let ids = [egui::FontId::monospace(12.0), egui::FontId::proportional(12.0)];
+        if ctx.fonts_mut(|f| ids.iter().all(|id| f.has_glyphs(id, "⌥"))) { text } else { text.replacen('⌥', "Opt+", 1) }
     }
 }
 
@@ -351,7 +367,7 @@ pub fn is_clipboard(chord: Chord) -> bool {
 /// fixed key included), or empty for none.
 pub fn shortcut_text(ctx: &egui::Context, app: &RustGisApp, command: &str, params: &Value) -> String {
     let clipboard = || CLIPBOARD.iter().find(|(_, c)| *c == command).and_then(|(keys, _)| Chord::parse(keys));
-    app.ui.keymap.keys_for(command, params).next().or_else(clipboard).map(|c| c.text(ctx.os().is_mac())).unwrap_or_default()
+    app.ui.keymap.keys_for(command, params).next().or_else(clipboard).map(|c| c.shown(ctx)).unwrap_or_default()
 }
 
 /// What a binding runs, translated: the command's label, or the map tool it picks.

@@ -28,6 +28,7 @@ pub mod s3_address;
 pub mod secrets;
 pub mod sheets;
 pub mod source;
+pub mod source_layers;
 pub mod sqlite;
 pub mod time;
 pub mod topojson;
