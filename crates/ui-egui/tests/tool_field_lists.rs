@@ -79,10 +79,14 @@ fn merge_rules_offer_join_fields_and_text_rules_and_preserve_delimiter() {
     h.run_steps(2);
     assert!(h.query_by_label("sum").is_none());
     assert!(h.query_by_label("join").is_some());
-    h.key_press(egui::Key::Escape);
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "join").click_accesskit();
     h.run_steps(2);
     let rules: serde_json::Value = serde_json::from_str(&h.state().gp.values["merge"]).unwrap();
     assert_eq!(rules, json!([{"field":"category","rule":"join","delimiter":"; "}]));
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "Run").click();
+    h.run_steps(3);
+    let history = h.state().session.project.gp_history.last().unwrap();
+    assert_eq!(history.params["merge"], json!([{"field":"category","rule":"join","delimiter":"; "}]));
 }
 
 #[test]
@@ -265,10 +269,11 @@ fn json_repair_keeps_formatted_non_list_drafts() {
 /// Exact case-variant fields are distinct to merge execution and retain their own type choices.
 #[test]
 fn merge_picker_resolves_case_variants_and_duplicate_headers_like_execution() {
-    let mut h = harness("spatialJoin", json!({"target":"Target", "join":"Records", "merge":[{"field":"region","rule":"join"}]}));
+    let mut h = harness("spatialJoin", json!({"target":"Target", "join":"Records", "merge":[{"field":"region","rule":"sum"}]}));
     h.state_mut().session.project.tables[0].dataset.fields.push(Field::new("REGION", FieldType::Double));
     h.state_mut().session.project.tables[0].dataset.fields.push(Field::new("region", FieldType::Double));
     h.run_steps(3);
+    assert!(h.query_by_label("Rule is not available for this field.").is_some());
     // Exact duplicate headers resolve to the first field, which is text, not the later Double.
     choose(&mut h, "Rule", "join");
     h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Rule").click();
@@ -339,4 +344,41 @@ fn model_typed_statistic_runs_on_an_unrun_tools_new_field() {
     let ds = &h.state().session.project.tables.last().unwrap().dataset;
     let column = ds.field_index("COUNT_orig_fid").unwrap();
     assert_eq!(ds.value(0, column).as_f64(), Some(1.0));
+}
+
+/// A numeric model input must use that table's schema even when a map layer has its ID as a name.
+#[test]
+fn model_numeric_table_input_filters_statistics_by_its_own_fields() {
+    use rustgis_engine::project::{ModelNode, ModelNodeKind};
+    let mut h = harness("summaryStatistics", json!({}));
+    let id = h.state().session.project.tables[0].id;
+    h.state_mut().session.map_mut().add_dataset(Dataset::new(
+        id.to_string(),
+        GeometryType::Point,
+        vec![Field::new("wrong_layer_field", FieldType::Double)],
+    ));
+    h.state_mut().run("ui.pane.geoprocessing", json!({})).unwrap();
+    h.state_mut().run("ui.modelBuilder", json!({})).unwrap();
+    h.state_mut().mb.graph.nodes.push(ModelNode {
+        id: "summary".into(),
+        kind: ModelNodeKind::Tool,
+        tool: Some("summaryStatistics".into()),
+        params: json!({"input":id,"statistics":[{"field":"region","statistic":"P90"}]}),
+        ..Default::default()
+    });
+    h.state_mut().mb.selected = Some("summary".into());
+    h.run_steps(3);
+    assert!(h.query_by_label("Statistic is not available for this field.").is_some());
+    h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Field").click();
+    h.run_steps(2);
+    assert!(h.query_by_label("wrong_layer_field").is_none());
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "region").click_accesskit();
+    h.run_steps(2);
+    h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Statistic").click();
+    h.run_steps(2);
+    assert!(h.query_by_role_and_label(egui::accesskit::Role::Button, "P90").is_none());
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "COUNT").click_accesskit();
+    h.run_steps(2);
+    assert_eq!(h.state().mb.graph.nodes[0].params["input"], json!(id));
+    assert_eq!(h.state().mb.graph.nodes[0].params["statistics"], json!([{"field":"region","statistic":"COUNT"}]));
 }

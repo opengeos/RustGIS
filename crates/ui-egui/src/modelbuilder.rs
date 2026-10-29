@@ -1333,6 +1333,18 @@ fn source_input(app: &RustGisApp, n: &ModelNode, input: &str) -> Option<String> 
     }
 }
 
+/// Fields of a known model input. Numeric parameters refer strictly to a standalone table ID;
+/// a wire takes precedence, and tool-produced schemas remain unknown until execution.
+fn input_fields<'a>(app: &'a RustGisApp, n: &ModelNode, input: &str) -> Option<&'a [rustgis_engine::data::Field]> {
+    if !app.mb.graph.edges.iter().any(|e| e.to == n.id && e.to_port == input)
+        && let Some(id) = n.params.get(input).and_then(Value::as_u64)
+    {
+        return app.session.project.table(u32::try_from(id).ok()?).map(|t| t.dataset.fields.as_slice());
+    }
+    let name = source_input(app, n, input)?;
+    crate::panes::input_dataset(&app.session, &name).map(|d| d.fields.as_slice())
+}
+
 fn tool_settings(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, i: usize, n: &ModelNode) {
     let Some(spec) = model::tool_of(n) else {
         ui.label(
@@ -1422,9 +1434,8 @@ fn tool_settings(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, i: usize, n: &Mo
             continue;
         }
         if let Some(input) = crate::fieldlists::input(p.kind) {
-            let name = source_input(app, n, input);
-            let fields = name.as_deref().and_then(|name| crate::panes::input_dataset(&app.session, name)).map(|d| d.fields.clone());
-            let edit = ui.push_id(("mb_list", &n.id, p.name), |ui| crate::fieldlists::show(ui, p.kind, &cur, fields.as_deref())).inner;
+            let fields = input_fields(app, n, input);
+            let edit = ui.push_id(("mb_list", &n.id, p.name), |ui| crate::fieldlists::show(ui, p.kind, &cur, fields)).inner;
             if edit.checkpoint {
                 app.mb.edit();
             }

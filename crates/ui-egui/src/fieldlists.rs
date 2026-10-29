@@ -151,19 +151,12 @@ pub(crate) fn show(ui: &mut Ui, kind: ParamKind, value: &Value, fields: Option<&
                 .unwrap_or_default()
                 .to_string();
                 let old_name = name.clone();
-                let available: Option<Vec<String>> = fields.map(|fields| {
-                    fields
-                        .iter()
-                        .filter(|f| {
-                            // Field lists and merge rules allow a field once. Summary allows several statistics.
-                            statistics == Some(StatisticList::Summary)
-                                || used_names.get(&identity(&f.name)).copied().unwrap_or(0)
-                                    <= usize::from(identity(&old_name) == identity(&f.name))
-                        })
-                        .map(|f| f.name.clone())
-                        .collect()
+                let selected = identity(&old_name);
+                checkpoint |= field(ui, &mut name, fields, &selected, statistics.is_some(), |f| {
+                    // Only called for an open picker. Summary allows several statistics per field.
+                    statistics == Some(StatisticList::Summary)
+                        || used_names.get(&identity(&f.name)).copied().unwrap_or(0) <= usize::from(selected == identity(&f.name))
                 });
-                checkpoint |= field(ui, &mut name, available.as_deref(), &identity(&old_name), statistics.is_some());
                 if fields.is_some() && !name.is_empty() && resolve(&name).is_none() {
                     ui.label(tl!("Field is missing from this input."));
                 }
@@ -204,14 +197,14 @@ pub(crate) fn show(ui: &mut Ui, kind: ParamKind, value: &Value, fields: Option<&
                         .collect();
                     let mut stat = row.get(s.key()).and_then(Value::as_str).unwrap_or_default().to_string();
                     let before = stat.clone();
-                    let identity = s.canonical_name(&stat);
+                    let picked = s.canonical_name(&stat);
                     let label = ui.label(if s == StatisticList::Merge { tl!("Rule") } else { tl!("Statistic") });
                     egui::ComboBox::from_id_salt("statistic")
-                        .selected_text(if stat.is_empty() { "—" } else { &stat })
+                        .selected_text(if stat.is_empty() { "—" } else { tl!(stat.as_str()) })
                         .width((ui.available_width() - 8.0).max(40.0))
                         .show_ui(ui, |ui| {
                             for &c in &choices {
-                                if ui.selectable_label(identity.as_ref() == Some(c), tl!(c)).clicked() {
+                                if ui.selectable_label(picked.as_ref() == Some(c), tl!(c)).clicked() {
                                     stat = c.clone();
                                     ui.close();
                                 }
@@ -219,8 +212,12 @@ pub(crate) fn show(ui: &mut Ui, kind: ParamKind, value: &Value, fields: Option<&
                         })
                         .response
                         .labelled_by(label.id);
-                    if !stat.is_empty() && !choices.iter().any(|choice| identity.as_ref() == Some(*choice)) {
-                        ui.label(tl!("Statistic is not available for this field."));
+                    if !stat.is_empty() && !choices.iter().any(|choice| picked.as_ref() == Some(*choice)) {
+                        ui.label(if s == StatisticList::Merge {
+                            tl!("Rule is not available for this field.")
+                        } else {
+                            tl!("Statistic is not available for this field.")
+                        });
                     }
                     if let Some(obj) = row.as_object_mut() {
                         if stat != before {
@@ -255,7 +252,10 @@ pub(crate) fn show(ui: &mut Ui, kind: ParamKind, value: &Value, fields: Option<&
             });
         });
     }
-    if let Some((i, to)) = action {
+    if let Some((i, to)) = action
+        && i < rows.len()
+        && to.is_none_or(|to| to < rows.len())
+    {
         if let Some(to) = to {
             rows.swap(i, to);
         } else {
@@ -290,16 +290,18 @@ pub(crate) fn show(ui: &mut Ui, kind: ParamKind, value: &Value, fields: Option<&
     Edit { value: changed.then_some(Value::Array(rows)), checkpoint }
 }
 
-/// Selects known field names, or accepts a name for an input only available when a model runs.
-fn field(ui: &mut Ui, name: &mut String, offered: Option<&[String]>, selected: &str, exact: bool) -> bool {
+/// Borrows and filters known field names only while the picker is open. For a future model input,
+/// accepts typed names and reports focus as the start of an undo gesture.
+fn field(ui: &mut Ui, name: &mut String, fields: Option<&[Field]>, selected: &str, exact: bool, offered: impl Fn(&Field) -> bool) -> bool {
     let label = ui.label(tl!("Field"));
-    match offered {
-        Some(names) => {
+    match fields {
+        Some(fields) => {
             egui::ComboBox::from_id_salt("field")
                 .selected_text(if name.is_empty() { "—" } else { name.as_str() })
                 .width((ui.available_width() - 8.0).max(40.0))
                 .show_ui(ui, |ui| {
-                    for n in names {
+                    for f in fields.iter().filter(|f| offered(f)) {
+                        let n = &f.name;
                         if ui.selectable_label(if exact { selected == n } else { selected.eq_ignore_ascii_case(n) }, n).clicked() {
                             *name = n.clone();
                             ui.close();

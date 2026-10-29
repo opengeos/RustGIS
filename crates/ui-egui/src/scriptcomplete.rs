@@ -2740,6 +2740,12 @@ mod tests {
         let o = super::offer_at(&format!(r#"{before}","name"]}}}}"#), before.chars().count(), &[], &app.session).unwrap();
         assert!(!o.items.iter().any(|f| f.eq_ignore_ascii_case("name")), "later array entry excluded");
         let id = app.session.project.tables[0].id;
+        for tool in ["summaryStatistics", "pivotTable"] {
+            let key = if tool == "summaryStatistics" { "case" } else { "fields" };
+            let text = format!(r#"gp.run {{"tool":"{tool}","params":{{"input":{id},"{key}":[""#);
+            let o = offer(&app, &text).unwrap();
+            assert_eq!((o.items, o.of), (vec!["total".to_string()], Some(super::Of::TableFields(id))), "numeric ID before another key");
+        }
         let before = r#"gp.run {"tool":"summaryStatistics","params":{"case":[""#;
         let o = super::offer_at(&format!(r#"{before}"],"input":{id}}}}}"#), before.chars().count(), &[], &app.session).unwrap();
         assert_eq!(
