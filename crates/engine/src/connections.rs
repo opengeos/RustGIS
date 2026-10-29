@@ -176,6 +176,7 @@ fn clean_login(c: &mut Connection) -> Result<bool, String> {
             if !logins::valid_query_name(&c.key_name) {
                 return Err(format!("keyName must be a query parameter name of at most {} letters, digits or -_.~", logins::MAX_NAME));
             }
+            note_query_key(&c.key_name);
             let kept = without_parameter(&c.address, &c.key_name);
             let stripped = kept != c.address;
             c.address = kept;
@@ -183,6 +184,22 @@ fn clean_login(c: &mut Connection) -> Result<bool, String> {
         }
         other => Err(format!("unknown auth '{other}' ({})", SERVICE_AUTH.join(", "))),
     }
+}
+
+/// The query parameter names saved web-service connections send their API keys in (names only, at
+/// most 256): an address carrying one is redacted even before its connection logs in.
+static QUERY_KEY_NAMES: std::sync::Mutex<BTreeSet<String>> = std::sync::Mutex::new(BTreeSet::new());
+
+fn note_query_key(name: &str) {
+    let mut names = QUERY_KEY_NAMES.lock().unwrap_or_else(|e| e.into_inner());
+    if names.len() < 256 {
+        names.insert(name.to_ascii_lowercase());
+    }
+}
+
+/// The query parameter names saved connections have sent API keys in, this run.
+pub(crate) fn query_key_names() -> Vec<String> {
+    QUERY_KEY_NAMES.lock().unwrap_or_else(|e| e.into_inner()).iter().cloned().collect()
 }
 
 /// `address` without the query parameter `name` (its case aside).

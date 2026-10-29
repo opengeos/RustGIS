@@ -56,6 +56,14 @@ fn web_login_goes_only_to_its_connections_origin() {
     s.run("map.addTiles", &json!({"url":"https://elsewhere757.example.org/{z}/{x}/{y}.png","name":"Elsewhere"})).unwrap();
     let tile = |s: &Session, name: &str| s.map().tiles.iter().find(|t| t.name == name).unwrap().connection.clone();
     assert_eq!((tile(&s, "Named"), tile(&s, "Through login"), tile(&s, "Elsewhere")), (id.clone(), id.clone(), String::new()));
+    // A tile layer replacing one of the same address and name records the connection named.
+    s.run("map.addTiles", &json!({"url":"https://scope757.example.org/again/{z}/{x}/{y}.png","name":"Again"})).unwrap();
+    s.run("connection.logout", &json!({"id":id})).unwrap();
+    s.run("map.addTiles", &json!({"url":"https://scope757.example.org/again/{z}/{x}/{y}.png","name":"Again"})).unwrap();
+    assert_eq!(tile(&s, "Again"), "");
+    s.run("map.addTiles", &json!({"url":"https://scope757.example.org/again/{z}/{x}/{y}.png","name":"Again","connection":id})).unwrap();
+    assert_eq!(tile(&s, "Again"), id);
+    s.run("connection.login", &json!({"id":id,"apiKey":"scope-sentinel-757"})).unwrap();
     // A connection that isn't a saved web service can't be named.
     for bad in [json!(7), json!("c999757"), json!(["c1"])] {
         assert!(s.run("map.addTiles", &json!({"url":"https://scope757.example.org/x/{z}/{x}/{y}.png","connection":bad})).is_err());
@@ -71,6 +79,12 @@ fn web_login_goes_only_to_its_connections_origin() {
     let applied = logins::apply("https://query757.example.org/api/collections").unwrap();
     assert!(applied.url.ends_with("apikey2=query%20sentinel%2F757") && applied.header.is_none(), "{}", applied.url);
     assert_eq!(crate::sources::redact("https://query757.example.org/a?apikey2=leak&b=2"), "https://query757.example.org/a?b=2");
+    // A saved connection's key name is redacted even before it logs in.
+    new(&mut s, json!({"kind":"wms","address":"https://unlogged757.example.org/wms","auth":"query","keyName":"custom757key"}));
+    assert_eq!(
+        crate::sources::redact("https://elsewhere757.example.org/a?Custom757Key=leak&b=2"),
+        "https://elsewhere757.example.org/a?b=2"
+    );
     // Logging out ends it; the address goes without it.
     s.run("connection.logout", &json!({"id":id})).unwrap();
     assert!(header("https://scope757.example.org/wms").is_none());
@@ -162,8 +176,10 @@ fn remembered_web_login_lifetime_and_origin_binding() {
     assert!(!s.connections.to_json().contains("kept-sentinel"));
     // A later session (the preferences reloaded) logs in with it, without typing.
     let prefs = s.connections.to_json();
-    let mut later = session(Some(store.clone()));
-    later.connections = crate::connections::Connections::from_json(&prefs);
+    // The command line and Python, opted into the desktop's saved secrets.
+    let mut later = session(None);
+    let saved = serde_json::Map::from_iter([(crate::connections::PREF.to_string(), Value::String(prefs.clone()))]);
+    crate::prefs::use_saved_secrets(&mut later, &saved, store.clone());
     s.run("connection.logout", &json!({"id":id})).unwrap();
     assert!(header("https://kept757.example.org/ogc").is_none());
     later.run("connection.login", &json!({"id":id})).unwrap();
@@ -251,9 +267,19 @@ fn a_project_opened_without_its_connection_or_login_asks_for_one() {
     s.run("connection.login", &json!({"id":id,"apiKey":"open-sentinel-757"})).unwrap();
     assert_eq!(requests(&mut s), json!([]));
     assert!(header(&format!("{origin}/tiles/1/0/0.png")).is_some());
+    // Nothing echoes the key: a notice or an error quoting it.
+    s.notify("the server said: open-sentinel-757", true);
+    let e = s.run("map.addTiles", &json!({"url":format!("{origin}/x/{{z}}/{{x}}/{{y}}.png"),"kind":"open-sentinel-757"})).unwrap_err();
+    assert!(!e.contains("open-sentinel-757") && !shown(&mut s).contains("open-sentinel-757"), "{e}");
     // Reopened, the project's recorded connection (another id here) still matches the only one.
     s.run("project.openText", &json!({"text": project(origin, &id)})).unwrap();
     assert_eq!(requests(&mut s), json!([]));
+    // The connection moved to another origin: the project's layer asks again rather than going
+    // without a login silently.
+    s.run("connection.edit", &json!({"id":id,"address":"https://moved-open757.example.org/wmts"})).unwrap();
+    s.run("project.openText", &json!({"text": project(origin, &id)})).unwrap();
+    assert_eq!(requests(&mut s)[0]["reason"], "connection");
+    assert!(header(&format!("{origin}/tiles/1/0/0.png")).is_none());
     s.run("connection.remove", &json!({"id":id})).unwrap();
 }
 #[test]

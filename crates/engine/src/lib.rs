@@ -1038,7 +1038,7 @@ impl Session {
             let before = service_logins::before(s, id, params)?;
             let out = run(s, params)?;
             if let Some(before) = before {
-                service_logins::tag(s, params, before)?;
+                service_logins::tag(s, params, before, &out)?;
             }
             Ok(out)
         });

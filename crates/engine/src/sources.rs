@@ -382,8 +382,9 @@ pub fn redact(address: &str) -> String {
     let mut out = format!("{scheme}://{rest}");
     redact_query(&mut out);
     // A saved web-service connection's API key parameter, whatever it is named: its name is in use
-    // as a key (only the connections logged in this session are known here).
-    for name in crate::render::rustgis_tiles::logins::query_names() {
+    // as a key (the names of the connections saved or logged in this run, logged in or not).
+    let names = crate::render::rustgis_tiles::logins::query_names().into_iter().chain(crate::connections::query_key_names());
+    for name in names {
         out = crate::connections::without_parameter(&out, &name);
     }
     out

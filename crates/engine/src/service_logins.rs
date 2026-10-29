@@ -192,10 +192,15 @@ impl Default for SessionLogins {
 impl Drop for SessionLogins {
     fn drop(&mut self) {
         let prefix = format!("{}/", self.session);
+        let mut ended = false;
         for origin in &self.origins {
             if let Some(owner) = logins::owner(origin).filter(|o| o.starts_with(&prefix)) {
-                logins::deactivate(origin, &owner);
+                ended |= logins::deactivate(origin, &owner);
             }
+        }
+        // What was read with them isn't another session's to see.
+        if ended {
+            cache::clear();
         }
     }
 }
@@ -368,8 +373,9 @@ pub(crate) fn resolve(s: &mut Session, only: Option<&BTreeSet<String>>) {
                     candidates.iter().map(|c| c.id.clone()).collect()
                 };
                 ask(s, request(LoginReason::Choose, ids));
-            } else if candidates.is_empty() && r.recorded.iter().any(|id| !s.connections.connections.iter().any(|c| &c.id == id)) {
-                // Layers came from a connection this computer doesn't have.
+            } else if candidates.is_empty() && !r.recorded.is_empty() {
+                // Layers came from a connection this computer doesn't have, or whose address has
+                // since moved to another origin (a layer records only a connection of its origin).
                 ask(s, request(LoginReason::Connection, Vec::new()));
             } else {
                 s.database_logins.clear_requests_for(WEB, &origin);
@@ -477,7 +483,7 @@ pub(crate) fn before(s: &Session, id: &str, params: &Value) -> Result<Option<Bef
 /// Records on the layers an add command made the connection they came from: the one it names
 /// (`connection`) for those read from its origin or holding no address, else the one whose login
 /// their origin is read with. Then logs in for their origins as a project's layers do.
-pub(crate) fn tag(s: &mut Session, params: &Value, before: Before) -> Result<(), String> {
+pub(crate) fn tag(s: &mut Session, params: &Value, before: Before, out: &Value) -> Result<(), String> {
     let named = named(s, params)?;
     let named_origin = named.as_ref().and_then(login_origin);
     let mut origins = BTreeSet::new();
@@ -520,6 +526,19 @@ pub(crate) fn tag(s: &mut Session, params: &Value, before: Before) -> Result<(),
         for g in m.service_groups.iter().filter(|g| g.children.iter().any(|c| added.contains(&c.layer))) {
             origins.extend(logins::origin(&g.url));
         }
+    }
+    // A tile layer the command says it added (`index`, with its `kind`): one that replaced a layer
+    // of the same address and name looks unchanged to the comparison above.
+    let tile_kinds = ["raster", "vector", "style", "pmtiles", "mbtiles", "cog"];
+    if let (Some(at), Some(kind)) = (out.get("index").and_then(Value::as_u64), out.get("kind").and_then(Value::as_str))
+        && tile_kinds.contains(&kind)
+        && let Some(t) = usize::try_from(at).ok().and_then(|at| s.project.map_mut().tiles.get_mut(at))
+    {
+        let origin = logins::origin(tile_address(&t.url));
+        if let Some(id) = pick(origin.as_ref()) {
+            t.connection = id;
+        }
+        origins.extend(origin);
     }
     if !origins.is_empty() {
         resolve(s, Some(&origins));
