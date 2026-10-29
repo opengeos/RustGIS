@@ -2531,12 +2531,7 @@ fn kernel_density_tool(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String>
         None if given("pixelSize") => return Err("pixel size must be a number".into()),
         None => {
             let auto = crate::density::auto_cell_size(&grid_ext);
-            if user_radius && auto > bandwidth {
-                return Err(
-                    "search radius must be at least the pixel size; choose a larger search radius or specify a smaller pixelSize".into()
-                );
-            }
-            auto
+            if user_radius { auto.min(bandwidth) } else { auto }
         }
     };
 
@@ -4007,8 +4002,48 @@ fn join_field_tool(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
     let target = input(inp, p, "target")?;
     let source = input(inp, p, "joinTable")?;
 
-    let target_ref = subset(target, &rows(inp, p, "target", target));
-    let source_ref = subset(source, &rows(inp, p, "joinTable", source));
+    let mut messages = Vec::new();
+
+    let target_sel = inp.selection(s(p, "target"));
+    let target_rows = rows(inp, p, "target", target);
+    if !target_sel.is_empty() {
+        if target_rows.is_empty() {
+            messages.push(format!(
+                "Warning: the selection on target '{}' contains only stale indices (0/{} features selected); output is empty",
+                target.name,
+                target.features.len()
+            ));
+        } else if target_rows.len() < target.features.len() {
+            messages.push(format!(
+                "Processing {} selected feature(s) from target '{}' (out of {})",
+                target_rows.len(),
+                target.name,
+                target.features.len()
+            ));
+        }
+    }
+
+    let source_sel = inp.selection(s(p, "joinTable"));
+    let source_rows = rows(inp, p, "joinTable", source);
+    if !source_sel.is_empty() {
+        if source_rows.is_empty() {
+            messages.push(format!(
+                "Warning: the selection on source '{}' contains only stale indices (0/{} records selected); no attributes will match",
+                source.name,
+                source.features.len()
+            ));
+        } else if source_rows.len() < source.features.len() {
+            messages.push(format!(
+                "Joining against {} selected record(s) from source '{}' (out of {})",
+                source_rows.len(),
+                source.name,
+                source.features.len()
+            ));
+        }
+    }
+
+    let target_ref = subset(target, &target_rows);
+    let source_ref = subset(source, &source_rows);
 
     let target_field = s(p, "targetField");
     if target_field.is_empty() {
@@ -4066,11 +4101,11 @@ fn join_field_tool(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
     };
 
     let (out, report) = crate::attribute_join::join_field(&target_ref, &source_ref, &opts)?;
-    let msg = report.message(&target.name);
+    messages.push(report.message(&target.name));
 
     let output = if out.geometry_type == rustgis_data::GeometryType::None { Output::Table(out) } else { Output::Layer(out) };
 
-    Ok(ToolResult { output, messages: vec![msg] })
+    Ok(ToolResult { output, messages })
 }
 
 #[cfg(test)]
@@ -5462,14 +5497,6 @@ mod tests {
         // 19. pixelSize larger than automatic Silverman radius raises radius to pixelSize instead of erroring
         let res_auto_bump = crate::run("kernelDensity", &m_outlier, &serde_json::json!({"input": "outlier_ds", "pixelSize": 1000.0}));
         assert!(res_auto_bump.is_ok(), "pixelSize > auto radius should succeed by bumping radius: {:?}", res_auto_bump.err());
-
-        // 20. User sets radius smaller than default 250-step cell size with pixelSize omitted returns clear error
-        let err_small_radius =
-            crate::run("kernelDensity", &m_outlier, &serde_json::json!({"input": "outlier_ds", "radius": 10.0})).unwrap_err();
-        assert!(
-            err_small_radius.contains("search radius must be at least the pixel size"),
-            "expected clear error on small radius with omitted pixelSize, got: {err_small_radius}"
-        );
     }
 
     #[test]
@@ -8336,6 +8363,30 @@ mod tests {
         assert_eq!(out_sel.features[0].attrs[2], Value::Text("Bob".into()));
         assert_eq!(out_sel.features[1].attrs[0], Value::Int(20));
         assert_eq!(out_sel.features[1].attrs[2], Value::Text("Carol".into()));
+        assert_eq!(res_sel.messages.len(), 3);
+        assert!(res_sel.messages[0].contains("Processing 2 selected feature(s) from target 'parcels' (out of 3)"));
+        assert!(res_sel.messages[1].contains("Joining against 2 selected record(s) from source 'owners' (out of 3)"));
+        assert!(res_sel.messages[2].contains("Join Field on 'parcels': 2/2 records matched"));
+
+        // 11b. Stale selections emit informative warning messages
+        let inp_stale = TestInputs {
+            datasets: HashMap::from([("parcels".to_string(), target_sel.clone()), ("owners".to_string(), source_sel.clone())]),
+            tables: HashMap::new(),
+            selections: HashMap::from([("parcels".to_string(), vec![99, 100]), ("owners".to_string(), vec![50, 51])]),
+        };
+        let res_stale = crate::run(
+            "joinField",
+            &inp_stale,
+            &serde_json::json!({
+                "target": "parcels",
+                "targetField": "id",
+                "joinTable": "owners",
+                "joinField": "id"
+            }),
+        )
+        .unwrap();
+        assert!(res_stale.messages.iter().any(|m| m.contains("selection on target 'parcels' contains only stale indices")));
+        assert!(res_stale.messages.iter().any(|m| m.contains("selection on source 'owners' contains only stale indices")));
 
         // 12. Aliases and collision suffixes
         let mut target_col = Dataset::new(
@@ -8441,7 +8492,7 @@ mod tests {
 
         // 16. Duplicate index selection [0, 0] dedupes to 1 selected row in table order
         let inp_dup_sel = TestInputs {
-            datasets: HashMap::from([("parcels".to_string(), target_sel), ("owners".to_string(), source_sel)]),
+            datasets: HashMap::from([("parcels".to_string(), target_sel.clone()), ("owners".to_string(), source_sel.clone())]),
             tables: HashMap::new(),
             selections: HashMap::from([("parcels".to_string(), vec![0, 0])]),
         };
