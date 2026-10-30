@@ -429,14 +429,13 @@ fn nesting_limits() {
         let c = format!("{}{c}{}", "(".repeat(63), ")".repeat(63));
         assert!(parse(&c, &d).is_ok(), "{c}");
     }
-    // Each argument of a clamp is evaluated once: nested, they stay linear.
+    // Each argument of a clamp is evaluated once: nested 40 deep, they return at all (2^40
+    // evaluations a row wouldn't), and as one clamp would.
     let clamps = format!("{}pop{}", "clamp(0, ".repeat(40), ", 10)".repeat(40));
-    let parsed = parse(&clamps, &d).unwrap();
-    let t0 = std::time::Instant::now();
+    let (parsed, one) = (parse(&clamps, &d).unwrap(), parse("clamp(0, pop, 10)", &d).unwrap());
     for r in 0..d.features.len() {
-        let _ = value(&parsed, &d, r, &Env::default());
+        assert_eq!(value(&parsed, &d, r, &Env::default()), value(&one, &d, r, &Env::default()), "row {r}");
     }
-    assert!(t0.elapsed() < std::time::Duration::from_secs(5));
 }
 
 #[test]
@@ -465,4 +464,12 @@ fn a_computed_in_list_skips_nulls_and_a_long_pattern_matches_nothing() {
     let long = "name LIKE replace(replace(replace(replace(replace('x', 'x', 'xxxxxxxxxx'), 'x', 'xxxxxxxxxx'), 'x', 'xxxxxxxxxx'), 'x', 'xxxxxxxxxx'), 'x', '%%%%%%%%%%')";
     assert_eq!(rows(long), Vec::<usize>::new());
     assert_eq!(rows(&long.replace("LIKE", "NOT LIKE")), vec![0, 1, 2, 3]);
+    // A match too costly to finish (64 KiB of a's against '%', 1,000 a's and a b) is unknown:
+    // neither LIKE nor NOT LIKE holds.
+    // 10^n a's, made by replacing.
+    let a = |n: usize| format!("{}'x'{}, 'x', 'aaaaaaaaaa')", "replace(".repeat(n), ", 'x', 'xxxxxxxxxx')".repeat(n - 1));
+    let costly = format!("{} LIKE '%' || {} || 'b'", a(5), a(3));
+    assert_eq!(rows(&costly), Vec::<usize>::new());
+    assert_eq!(rows(&costly.replace(" LIKE ", " NOT LIKE ")), Vec::<usize>::new());
+    assert!(!like(&"a".repeat(65536), &format!("%{}b", "a".repeat(1000))));
 }

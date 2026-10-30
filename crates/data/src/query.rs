@@ -12,7 +12,10 @@
 //!
 //! Fields are bare names, `"quoted"` or `!quoted!`; text uses single quotes (`''` is a quote).
 //! Text matching (`=`, `LIKE`, `IN`) is case-insensitive; two values that read as numbers compare
-//! as numbers. Logic is SQL's three-valued: a comparison with a null is unknown. Arithmetic on a
+//! as numbers. Logic is SQL's three-valued: a comparison with a null is unknown. One exception,
+//! kept from the WHERE language this replaced so saved clauses keep their rows: a NULL in an `IN`
+//! list matches nothing, so `2 NOT IN (1, NULL)` is true where SQL makes it unknown. A `LIKE`
+//! too costly to match ([`MAX_LIKE_STEPS`]) is unknown. Arithmetic on a
 //! null, a division by zero or an overflow gives null; `+` joins text that isn't a number.
 
 use crate::{Dataset, Value};
@@ -188,11 +191,6 @@ const FUNCS: &[(&str, Func, usize, usize)] = &[
     ("color_rgb", Func::ColorRgb, 3, 3),
     ("color_rgba", Func::ColorRgba, 4, 4),
 ];
-
-/// The function names, for hints and completion.
-pub fn function_names() -> impl Iterator<Item = &'static str> {
-    FUNCS.iter().map(|(n, ..)| *n)
-}
 
 #[derive(Clone, Debug, PartialEq)]
 enum Tok {
@@ -762,14 +760,31 @@ fn compare(a: &Value, op: Op, b: &Value) -> Option<bool> {
     })
 }
 
-/// SQL LIKE with `%` and `_`, case-insensitive.
+/// The most steps one `LIKE` takes to match. A long text against a pattern of many `%`s costs
+/// up to text × pattern steps (64 KiB of text and a 10,000-character pattern, 6.5 × 10⁸); past
+/// this (a tenth of a second or so), the match is unknown rather than holding up the map.
+pub const MAX_LIKE_STEPS: usize = 1 << 24;
+
+/// SQL LIKE with `%` and `_`, case-insensitive; no match when it would take more than
+/// [`MAX_LIKE_STEPS`].
 pub fn like(text: &str, pat: &str) -> bool {
+    like_within(text, pat).unwrap_or(false)
+}
+
+/// SQL LIKE with `%` and `_`, case-insensitive: `None` when it would take more than
+/// [`MAX_LIKE_STEPS`].
+fn like_within(text: &str, pat: &str) -> Option<bool> {
     let t: Vec<char> = text.to_lowercase().chars().collect();
     let p: Vec<char> = pat.to_lowercase().chars().collect();
     // Iterative wildcard matching with backtracking on the last '%'.
     let (mut ti, mut pi) = (0usize, 0usize);
     let (mut star, mut mark) = (None::<usize>, 0usize);
+    let mut steps = 0usize;
     while ti < t.len() {
+        steps += 1;
+        if steps > MAX_LIKE_STEPS {
+            return None;
+        }
         match p.get(pi) {
             Some('%') => {
                 star = Some(pi);
@@ -786,11 +801,11 @@ pub fn like(text: &str, pat: &str) -> bool {
                     mark += 1;
                     ti = mark;
                 }
-                None => return false,
+                None => return Some(false),
             },
         }
     }
-    p.get(pi..).is_some_and(|rest| rest.iter().all(|c| *c == '%'))
+    Some(p.get(pi..).is_some_and(|rest| rest.iter().all(|c| *c == '%')))
 }
 
 /// Evaluates for one row: whether the row matches.
@@ -933,7 +948,10 @@ impl<'a> Eval<'a> {
             Expr::IsNull { field, negate } => Some(ds.value(row, *field).is_null() != *negate),
             Expr::Like { field, pattern, negate } => {
                 let v = ds.value(row, *field);
-                (!v.is_null()).then(|| like(&v.to_string(), pattern) != *negate)
+                if v.is_null() {
+                    return None;
+                }
+                like_within(&v.to_string(), pattern).map(|m| m != *negate)
             }
             Expr::In { field, values, negate } => {
                 let v = ds.value(row, *field);
@@ -950,7 +968,10 @@ impl<'a> Eval<'a> {
                 }
                 let p = p.to_string();
                 // A longer pattern matches nothing, so NOT LIKE holds.
-                Some((p.chars().count() <= MAX_LEN && like(&v.to_string(), &p)) != *negate)
+                if p.chars().count() > MAX_LEN {
+                    return Some(*negate);
+                }
+                like_within(&v.to_string(), &p).map(|m| m != *negate)
             }
             Expr::InExpr { e, list, negate } => {
                 let v = self.value(e);

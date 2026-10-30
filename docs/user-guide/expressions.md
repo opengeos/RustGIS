@@ -136,7 +136,8 @@ function call, `NOT`, sign before something other than a number, `^` and `CASE` 
 `CASE` two). One chain of `AND`, `OR`, `||`, `+`/`-` or `*`/`/`/`%`, and the arms of one
 `CASE`, take at most 256 terms; a function at most 32 arguments; an `IN` list as many as fit.
 Text an expression makes is cut at 64 KiB, and a `LIKE` pattern longer than 10,000 characters
-matches nothing.
+matches nothing. A `LIKE` that would take more than about 16 million steps to match (a very long
+text against a pattern of many `%`s) is unknown.
 
 ## Calculate Field
 

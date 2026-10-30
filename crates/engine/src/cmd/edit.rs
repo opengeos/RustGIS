@@ -299,7 +299,10 @@ impl Calc {
             if let Some(q) = t.strip_prefix('\'').and_then(|x| x.strip_suffix('\'')) {
                 return Ok(Term::Text(q.to_string()));
             }
-            if let Ok(n) = t.parse::<f64>() {
+            // A number too large to represent isn't one (the expression language's error says so).
+            if let Ok(n) = t.parse::<f64>()
+                && n.is_finite()
+            {
                 return Ok(Term::Num(n));
             }
             let name = t.trim_matches('!').trim_matches('"');
@@ -438,6 +441,8 @@ mod tests {
         // What the earlier calculator couldn't do.
         assert_eq!(v("round(area * 2) || ' ' || upper(name)"), Value::Text("211 PARIS".into()));
         assert!(Calculation::parse("nosuch * 2", &ds).is_err_and(|e| e == "no field named 'nosuch'"));
+        // A number too large to represent is refused by both.
+        assert!(Calculation::parse("1e999", &ds).is_err_and(|e| e.contains("too large")), "1e999");
         // A field named like a literal is still the field.
         let mut ds = Dataset::new("t", GeometryType::None, vec![Field::new("null", FieldType::Integer)]);
         ds.push(None, vec![Value::Int(4)]);
