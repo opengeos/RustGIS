@@ -1,0 +1,112 @@
+name: Fuzz
+
+# Coverage-guided fuzzing of the file readers (fuzz/README.md): every target for ten minutes a
+# night, and for a minute on a pull request labelled `ci:fuzz` (one that adds or changes a
+# reader). Malformed bytes that crash a reader, exhaust memory (over 2 GB) or hang it (over 10 s
+# on one input) fail the target and upload the input. A nightly failure opens a "Fuzzing found a
+# crash" issue. A later success doesn't close it, since the crashing input isn't re-run; it is
+# closed once the reader is fixed. The crate is outside the workspace and needs nightly Rust; nothing
+# else installs either.
+#
+#   gh workflow run fuzz.yml -R opengeos/RustGIS --ref main -f seconds=600
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  pull_request:
+    types: [labeled]
+  workflow_dispatch:
+    inputs:
+      seconds:
+        description: Seconds per target
+        default: "600"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  licences:
+    name: Fuzz crate licences
+    if: (github.event_name == 'pull_request' && github.event.label.name == 'ci:fuzz') || (github.event_name != 'pull_request' && (github.repository == 'opengeos/RustGIS' || github.event_name == 'workflow_dispatch'))
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny
+      # fuzz/deny.toml: the workspace's licences plus NCSA, for libFuzzer.
+      - run: cargo deny --manifest-path fuzz/Cargo.toml --locked check licenses
+
+  fuzz:
+    name: Fuzz ${{ matrix.target }}
+    if: (github.event_name == 'pull_request' && github.event.label.name == 'ci:fuzz') || (github.event_name != 'pull_request' && (github.repository == 'opengeos/RustGIS' || github.event_name == 'workflow_dispatch'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [read_layers, sniff, geotiff, wkt, wkb, mvt, project]
+    env:
+      SECONDS_PER_TARGET: ${{ github.event_name == 'pull_request' && '60' || inputs.seconds || '600' }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: fuzz
+          shared-key: fuzz
+          save-if: ${{ github.ref == 'refs/heads/main' && matrix.target == 'read_layers' }}
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-fuzz
+      # The corpus each target has grown, kept between nights.
+      - uses: actions/cache@v6
+        with:
+          path: fuzz/corpus/${{ matrix.target }}
+          key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
+          restore-keys: fuzz-corpus-${{ matrix.target }}-
+      - name: Build
+        working-directory: fuzz
+        run: cargo fuzz build -O
+      - name: Seed the corpus
+        working-directory: fuzz
+        run: target/x86_64-unknown-linux-gnu/release/seeds
+      - name: Fuzz for ${{ env.SECONDS_PER_TARGET }} s
+        working-directory: fuzz
+        run: >-
+          cargo fuzz run -O ${{ matrix.target }} --
+          -max_total_time=${{ env.SECONDS_PER_TARGET }} -rss_limit_mb=2048 -timeout=10
+      - name: Keep the input that failed
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: fuzz-${{ matrix.target }}
+          path: fuzz/artifacts/${{ matrix.target }}
+          if-no-files-found: ignore
+
+  report:
+    name: Report
+    needs: [licences, fuzz]
+    if: always() && github.event_name == 'schedule' && (needs.fuzz.result == 'failure' || needs.licences.result == 'failure')
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          title="Fuzzing found a crash"
+          open="$(gh issue list -R "$GITHUB_REPOSITORY" --state open --search "in:title \"$title\"" \
+            --json number,title --jq "[.[] | select(.title == \"$title\")][0].number // \"\"")"
+          # One issue at a time: a reader that keeps failing isn't news every night.
+          if [ -z "$open" ]; then
+            gh issue create -R "$GITHUB_REPOSITORY" --title "$title" \
+              --body "The nightly fuzz run on $GITHUB_SHA failed: $RUN. Each failing target's input is attached to the run as an artifact; fix the reader and add the input as a regression test (fuzz/README.md)."
+          fi
