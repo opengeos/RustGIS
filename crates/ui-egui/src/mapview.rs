@@ -715,8 +715,7 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         && app.session.map().view.effects.is_none()
         && app.session.map().view.color_vision == rustgis_engine::map::view::ColorVision::Normal;
     let mut draped = if globe_view && moving {
-        let key = crate::globe_drape::DrapeKey { rev: app.session.revision, sources: rustgis_engine::map::source::generation() };
-        let tiles = if fetches_tiles(app.session.map()) { rustgis_engine::render::rustgis_tiles::cache::generation() } else { 0 };
+        let (key, tiles) = drape_state(app);
         app.map.drape.prepare(ui.ctx(), app.session.map_mut(), key, tiles, w, h, ppp, time)
     } else {
         if !globe_view {
@@ -732,8 +731,7 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     let turned = !globe_view && cam.pitch == 0.0 && cam.bearing != 0.0 && !gpu_ok;
     let tilted = !globe_view && (cam.pitch != 0.0 || (turned && app.map.tex_camera.bearing != cam.bearing)) && !gpu_ok;
     let tilt_draped = if tilted && moving {
-        let key = crate::globe_drape::DrapeKey { rev: app.session.revision, sources: rustgis_engine::map::source::generation() };
-        let tiles = if fetches_tiles(app.session.map()) { rustgis_engine::render::rustgis_tiles::cache::generation() } else { 0 };
+        let (key, tiles) = drape_state(app);
         app.map.tilt_drape.prepare(ui.ctx(), app.session.map_mut(), key, tiles, w, h, ppp, time)
     } else {
         if !tilted && !turned {
@@ -904,8 +902,7 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         let shown = (app.map.texture.is_some() || app.map.gpu_frame.is_some())
             && app.map.key.is_some_and(|k| same_view(Key { draft: false, ..k }, key));
         if !shown {
-            let drape_key = crate::globe_drape::DrapeKey { rev: app.session.revision, sources: rustgis_engine::map::source::generation() };
-            let tiles = if fetches_tiles(app.session.map()) { rustgis_engine::render::rustgis_tiles::cache::generation() } else { 0 };
+            let (drape_key, tiles) = drape_state(app);
             if globe_view {
                 app.map.gpu_frame = None;
                 draped = app.map.drape.prepare(ui.ctx(), app.session.map_mut(), drape_key, tiles, w, h, ppp, time);
@@ -928,8 +925,7 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     // At rest, a turned map's drape is kept up to date off the UI thread: the next turn starts
     // on it.
     if turned && !moving {
-        let drape_key = crate::globe_drape::DrapeKey { rev: app.session.revision, sources: rustgis_engine::map::source::generation() };
-        let tiles = if fetches_tiles(app.session.map()) { rustgis_engine::render::rustgis_tiles::cache::generation() } else { 0 };
+        let (drape_key, tiles) = drape_state(app);
         app.map.tilt_drape.warm(ui.ctx(), app.session.map_mut(), drape_key, tiles, w, h, ppp, time);
     }
     let interacting = moving && (!globe_view || draped) && (!tilted || tilt_draped);
@@ -1225,6 +1221,14 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     }
     overlays(app, ui, &painter, rect, &t);
     popup(app, ui, rect);
+}
+
+/// What a drape of the map shows besides the view (see `DrapeKey`), and the tiles come so far (0
+/// for a map that fetches none): a change of either draws it again.
+fn drape_state(app: &RustGisApp) -> (crate::globe_drape::DrapeKey, u64) {
+    let key = crate::globe_drape::DrapeKey { rev: app.session.revision, sources: rustgis_engine::map::source::generation() };
+    let tiles = if fetches_tiles(app.session.map()) { rustgis_engine::render::rustgis_tiles::cache::generation() } else { 0 };
+    (key, tiles)
 }
 
 /// Whether the map draws from web tiles (its tile layers, or elevation tiles for its terrain):

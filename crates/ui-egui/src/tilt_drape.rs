@@ -219,9 +219,11 @@ impl TiltDrape {
     /// go of a job for an earlier one (an edit while it ran): its drape would be thrown away.
     #[cfg(not(target_arch = "wasm32"))]
     fn adopt(&mut self, ctx: &egui::Context, map: &mut Map, key: DrapeKey, drape_ppp: f32) {
+        // One begun before the drape shown was drawn (by `prepare`, on the UI thread) is older.
         if let Some(drawn) = self.take(map)
             && drawn.key == key
             && drawn.ppp == drape_ppp
+            && self.drape.as_ref().is_none_or(|d| d.built <= drawn.built)
         {
             if drawn.patches.is_empty() {
                 // Nothing to drape where the view was when it started; it may have moved on to
@@ -1001,6 +1003,23 @@ mod tests {
         d.warm(&ctx, &mut m, key, 0, 800.0, 600.0, 1.0, 0.3);
         assert!(d.busy(), "a view moved on is");
         wait(&mut d, &ctx, &mut m, key, 0.4);
+    }
+
+    /// A worker's drape begun before the drape shown was drawn (on the UI thread) isn't shown over
+    /// it.
+    #[test]
+    fn an_older_drape_from_the_worker_doesnt_replace_a_newer_one() {
+        let ctx = egui::Context::default();
+        let key = DrapeKey { rev: 0, sources: 0 };
+        let mut m = tilted(60.0);
+        let mut d = TiltDrape::default();
+        assert!(d.prepare(&ctx, &mut m, key, 0, 800.0, 600.0, 1.0, 1.0));
+        assert_eq!(d.drape.as_ref().map(|d| d.built), Some(1.0));
+        let mut copy = m.clone();
+        let view = View { width: 800.0, height: 600.0, pixels_per_point: 1.0, camera: m.camera, sky: true };
+        assert!(d.start_with(&ctx, key, move || (draw(&mut copy, &view, 1024, key, 0, 0.0), copy)));
+        wait(&mut d, &ctx, &mut m, key, 1.1);
+        assert_eq!(d.drape.as_ref().map(|d| d.built), Some(1.0), "the newer drape stays");
     }
 
     /// An empty drape for a view the map has since left doesn't hold up the view it is at: the

@@ -33,8 +33,8 @@ const MARGIN: f64 = 1.8;
 const STEPS: f64 = 4.0;
 /// Pixels a picture's sides are rounded up to (so a view's size changing a little keeps it).
 const ROUND: f64 = 256.0;
-/// Room past the view on each side, a share of its size, the layer's last picture must reach to
-/// be drawn instead of the view's own (less than a picture's own room, `MARGIN` less its grid).
+/// Room past the view on each side, a share of its size, that the layer's last picture must
+/// reach beyond the view to be drawn instead of a new one.
 const ROOM: f64 = 0.15;
 /// Most layers whose last picture (and refused size) is kept.
 const MAX_KEPT: usize = 256;
