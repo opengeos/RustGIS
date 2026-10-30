@@ -1310,13 +1310,22 @@ fn wmts(url: &str, root: &Node) -> Service {
                 let span = (m.cell * f64::from(m.tile_w) * f64::from(m.cols), m.cell * f64::from(m.tile_h) * f64::from(m.rows));
                 // In the order of the system's axes as EPSG defines them (WMTS 1.0.0 §6.1). A
                 // geographic corner is often written longitude first anyway: one whose first number
-                // can't be a latitude is so; one whose numbers could be either is read the way its
-                // matrix covers more of the layer, else in EPSG's order. For a system newer than
-                // RustGIS's table, that coverage too, else latitude first in a geographic system.
+                // can't be a latitude is so; one whose numbers could be either is read longitude
+                // first only when its matrix, read in EPSG's order, misses the layer and read the
+                // other way doesn't. For a system newer than RustGIS's table, the order whose
+                // matrix covers more of the layer, else latitude first in a geographic system.
                 let swap = !*crs84
                     && match epsg_north_first(*system) {
                         Some(_) if geographic && first.corner.0.abs() > 90.0 => false,
-                        Some(north) if geographic => warp::corner_north_first(first.corner, span, area).unwrap_or(north),
+                        // Read the other way only when EPSG's reading misses the layer altogether
+                        // and that one doesn't: a correct corner is kept, however the other covers.
+                        Some(north) if geographic => match warp::corner_coverage(first.corner, span, area) {
+                            Some((east, north_cov)) => {
+                                let (kept, other) = if north { (north_cov, east) } else { (east, north_cov) };
+                                if kept <= 0.0 && other > 0.0 { !north } else { north }
+                            }
+                            None => north,
+                        },
                         Some(north) => north,
                         None => warp::corner_north_first(first.corner, span, area).unwrap_or(geographic),
                     };
@@ -4035,30 +4044,36 @@ mod tests {
         assert_eq!(corner(1), (4326, -180.0, 90.0));
     }
 
-    /// A regional longitude/latitude WMTS corner whose numbers could be either way round is read
-    /// the way its matrix covers the layer: written longitude first (`5 50`) as some services do,
-    /// or latitude first (`50 5`) as the standard has it, it's at 5° E, 50° N.
+    /// A regional longitude/latitude WMTS corner whose numbers could be either way round: written
+    /// longitude first (`5 50`) as some services do, it misses the layer read latitude first and
+    /// is read longitude first; written latitude first (`50 5`) as the standard has it, it is kept,
+    /// both at 5° E, 50° N. A correct corner is kept even where the other reading would cover
+    /// more of the layer (`50 40` over lon 50..150, lat -60..40: 40° E, 50° N).
     #[test]
     fn a_regional_geographic_corner_is_read_by_its_layer() {
-        let caps = |corner: &str| {
+        let caps = |corner: &str, lower: &str, upper: &str, scale: f64| {
             format!(
                 r#"<Capabilities xmlns="http://www.opengis.net/wmts/1.0" xmlns:ows="http://www.opengis.net/ows/1.1" version="1.0.0"><Contents>
 <Layer><ows:Title>Europe</ows:Title><ows:Identifier>europe</ows:Identifier>
- <ows:WGS84BoundingBox><ows:LowerCorner>5 40</ows:LowerCorner><ows:UpperCorner>15 50</ows:UpperCorner></ows:WGS84BoundingBox>
+ <ows:WGS84BoundingBox><ows:LowerCorner>{lower}</ows:LowerCorner><ows:UpperCorner>{upper}</ows:UpperCorner></ows:WGS84BoundingBox>
  <TileMatrixSetLink><TileMatrixSet>geo</TileMatrixSet></TileMatrixSetLink>
  <ResourceURL resourceType="tile" format="image/png" template="https://t.example.org/{{TileMatrix}}/{{TileRow}}/{{TileCol}}.png"/></Layer>
 <TileMatrixSet><ows:Identifier>geo</ows:Identifier><ows:SupportedCRS>urn:ogc:def:crs:EPSG::4326</ows:SupportedCRS>
- <TileMatrix><ows:Identifier>0</ows:Identifier><ScaleDenominator>15902784</ScaleDenominator><TopLeftCorner>{corner}</TopLeftCorner><TileWidth>256</TileWidth><TileHeight>256</TileHeight><MatrixWidth>1</MatrixWidth><MatrixHeight>1</MatrixHeight></TileMatrix>
+ <TileMatrix><ows:Identifier>0</ows:Identifier><ScaleDenominator>{scale}</ScaleDenominator><TopLeftCorner>{corner}</TopLeftCorner><TileWidth>256</TileWidth><TileHeight>256</TileHeight><MatrixWidth>1</MatrixWidth><MatrixHeight>1</MatrixHeight></TileMatrix>
 </TileMatrixSet>
 </Contents></Capabilities>"#
             )
         };
-        for written in ["5 50", "50 5"] {
-            let s = parse("https://t.example.org/WMTSCapabilities.xml", caps(written).as_bytes()).unwrap();
+        let europe = ("5 40", "15 50", 15_902_784.0);
+        let wide = ("50 -60", "150 40", 155_300_628.896_866);
+        for (written, (lower, upper, scale), at) in
+            [("5 50", europe, (5.0, 50.0)), ("50 5", europe, (5.0, 50.0)), ("50 40", wide, (40.0, 50.0))]
+        {
+            let s = parse("https://t.example.org/WMTSCapabilities.xml", caps(written, lower, upper, scale).as_bytes()).unwrap();
             let Offer::Tiles { template } = &s.layers[0].offer else { panic!() };
             let (_, _, w) = warp::Warp::parse(&template.replace("{z}/{x}/{y}", "0/0/0")).unwrap();
             let warp::Grid::Tiles(ms) = &w.grid else { panic!() };
-            assert_eq!((ms[0].left, ms[0].top), (5.0, 50.0), "{written}");
+            assert_eq!((ms[0].left, ms[0].top), at, "{written}");
         }
     }
 

@@ -275,7 +275,8 @@ WMTS layer whose tile matrix set is in one, is listed and added like any other (
   than its table, the layer's own `BoundingBox` is read the way that holds the layer, and a WMTS
   corner the way its matrix covers the layer. A longitude/latitude WMTS corner, which services
   often write longitude first, is read longitude first when its first number can't be a
-  latitude, and otherwise the way its matrix covers the layer.
+  latitude, or when its matrix read in EPSG's order misses the layer and read the other way
+  doesn't; otherwise in EPSG's order.
 
 A layer offered in no system RustGIS can transform (an `AUTO:` system, a planet's) is still left
 out, and the dialog says how many were.

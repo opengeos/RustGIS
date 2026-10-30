@@ -505,20 +505,26 @@ pub fn north_first(b: [f64; 4], area: Option<[f64; 4]>, geographic: bool) -> boo
     if north == east { geographic } else { north < east }
 }
 
-/// Whether a WMTS tile matrix's `TopLeftCorner` is written north first, by its geometry, for a
-/// system whose EPSG axis order RustGIS doesn't know (see [`crate::raster::epsg_axes`]): the
-/// order whose matrix (`span`: its width and height in the system's units) covers more of the
-/// layer's area in the system (west, south, east, north), which the set tiles. `None` without an
-/// area, or covering as much either way. (Only a guess: a layer's box reaching a little past the
-/// corner tips it.)
-pub fn corner_north_first(pair: (f64, f64), span: (f64, f64), area: Option<[f64; 4]>) -> Option<bool> {
+/// How much of a layer's area in the system (west, south, east, north) a WMTS tile matrix covers
+/// with its `TopLeftCorner` read east first and read north first (`span`: the matrix's width and
+/// height in the system's units). `None` without an area.
+pub fn corner_coverage(pair: (f64, f64), span: (f64, f64), area: Option<[f64; 4]>) -> Option<(f64, f64)> {
     let [w, s, e, n] = area?;
     let covered = |x0: f64, y1: f64| {
         let dx = (x0 + span.0).min(e) - x0.max(w);
         let dy = y1.min(n) - (y1 - span.1).max(s);
         if dx > 0.0 && dy > 0.0 { dx * dy } else { 0.0 }
     };
-    let (east, north) = (covered(pair.0, pair.1), covered(pair.1, pair.0));
+    Some((covered(pair.0, pair.1), covered(pair.1, pair.0)))
+}
+
+/// Whether a WMTS tile matrix's `TopLeftCorner` is written north first, by its geometry, for a
+/// system whose EPSG axis order RustGIS doesn't know (see [`crate::raster::epsg_axes`]): the
+/// order whose matrix covers more of the layer (see [`corner_coverage`]). `None` without an area,
+/// or covering as much either way. (Only a guess: a layer's box reaching a little past the
+/// corner tips it.)
+pub fn corner_north_first(pair: (f64, f64), span: (f64, f64), area: Option<[f64; 4]>) -> Option<bool> {
+    let (east, north) = corner_coverage(pair, span, area)?;
     if north > east {
         Some(true)
     } else if east > north {
