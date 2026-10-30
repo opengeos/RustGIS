@@ -504,12 +504,18 @@ impl Parser<'_> {
             (l, r) => Expr::Compare(op, Box::new(l), Box::new(r)),
         })
     }
-    /// An item of an IN list, at the clause's own depth (the items were once only literals).
+    /// An item of an IN list. A single value (`-2`, `'x'`, `NULL`, a field) is at the clause's
+    /// own depth, as the items were once only literals; anything else nests, so
+    /// `1 IN (1 IN (…))` meets the limit.
     fn item(&mut self) -> Result<Expr, String> {
-        self.depth = self.depth.saturating_sub(1);
-        let e = self.or();
-        self.depth += 1;
-        e
+        let sign = usize::from(matches!(self.toks.get(self.pos), Some(Tok::Arith(Arith::Add | Arith::Sub))));
+        let single =
+            matches!(self.toks.get(self.pos + sign), Some(Tok::Num(_) | Tok::Str(_) | Tok::Ident(_) | Tok::QuotedIdent(_) | Tok::Var(_)))
+                && matches!(self.toks.get(self.pos + sign + 1), Some(Tok::Comma | Tok::RParen));
+        if single {
+            return self.unary();
+        }
+        self.or()
     }
     fn concat(&mut self) -> Result<Expr, String> {
         let mut terms = vec![self.sum()?];
@@ -941,11 +947,17 @@ impl<'a> Eval<'a> {
                     return None;
                 }
                 let p = p.to_string();
-                (p.chars().count() <= MAX_LEN).then(|| like(&v.to_string(), &p) != *negate)
+                // A longer pattern matches nothing, so NOT LIKE holds.
+                Some((p.chars().count() <= MAX_LEN && like(&v.to_string(), &p)) != *negate)
             }
             Expr::InExpr { e, list, negate } => {
                 let v = self.value(e);
-                (!v.is_null()).then(|| list.iter().any(|x| eq(&v, &self.value(x))) != *negate)
+                (!v.is_null()).then(|| {
+                    list.iter().any(|x| {
+                        let x = self.value(x);
+                        !x.is_null() && eq(&v, &x)
+                    }) != *negate
+                })
             }
             Expr::Between { e, lo, hi, negate } => {
                 let v = self.value(e);
@@ -1082,17 +1094,22 @@ impl<'a> Eval<'a> {
                 }
                 return best.map(|(_, v)| v).unwrap_or(Cow::Owned(Value::Null));
             }
-            Func::Clamp => match (n(0), n(1), n(2)) {
-                (Some(lo), Some(x), Some(hi)) if lo <= hi => {
-                    if x < lo {
-                        return arg(0);
-                    } else if x > hi {
-                        return arg(2);
+            Func::Clamp => {
+                // Each argument once: evaluated again, nested clamps would cost 2^depth.
+                let (lo, x, hi) = (arg(0), arg(1), arg(2));
+                match (lo.as_f64(), x.as_f64(), hi.as_f64()) {
+                    (Some(l), Some(v), Some(h)) if l <= h => {
+                        return if v < l {
+                            lo
+                        } else if v > h {
+                            hi
+                        } else {
+                            x
+                        };
                     }
-                    return arg(1);
+                    _ => Value::Null,
                 }
-                _ => Value::Null,
-            },
+            }
             Func::ScaleLinear | Func::ScaleExp => {
                 let exponent = if f == Func::ScaleExp { n(5) } else { Some(1.0) };
                 match (n(0), n(1), n(2), n(3), n(4), exponent) {

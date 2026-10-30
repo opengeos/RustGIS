@@ -255,10 +255,12 @@ pub(crate) enum Calculation {
 impl Calculation {
     /// Parses `expr`; when neither reads it, the error is the expression language's.
     pub(crate) fn parse(expr: &str, ds: &rustgis_data::Dataset) -> Result<Calculation, String> {
-        // A field named like a literal was read as the field (`null + 1`), so on such a layer
-        // what the earlier calculator reads keeps its meaning.
-        if ["true", "false", "null"].iter().any(|k| ds.field_index(k).is_some())
+        // A field named like a literal was read as the field (`null + 1`), so what the earlier
+        // calculator reads with such a field keeps its meaning (quoted text needn't).
+        let named_like_a_literal: Vec<usize> = ["true", "false", "null"].iter().filter_map(|k| ds.field_index(k)).collect();
+        if !named_like_a_literal.is_empty()
             && let Ok(c) = Calc::parse(expr, ds)
+            && [Some(&c.a), c.b.as_ref()].into_iter().flatten().any(|t| matches!(t, Term::Field(i) if named_like_a_literal.contains(i)))
         {
             return Ok(Calculation::Calc(c));
         }
@@ -443,5 +445,8 @@ mod tests {
         assert_eq!(v("null + 1"), Value::Float(5.0));
         // In what only the expression language reads, the field takes quotes.
         assert_eq!(v("round(\"null\" / 3, 1)"), Value::Float(1.3));
+        // Text that doesn't read the field means what it does elsewhere.
+        assert_eq!(v("'it''s'"), Value::Text("it's".into()));
+        assert_eq!(v("'a' || 'b'"), Value::Text("ab".into()));
     }
 }

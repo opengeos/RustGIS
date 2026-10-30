@@ -417,6 +417,23 @@ fn nesting_limits() {
         }
     }
     assert!(parse(&format!("{}pop{}", "abs(".repeat(64), ")".repeat(64)), &d).is_err());
+    // An IN list's items nest unless they are single values.
+    let chain = format!("{}1{}", "1 IN (".repeat(65), ")".repeat(65));
+    assert!(parse(&chain, &d).is_err_and(|e| e.contains("nested too deeply")), "{chain}");
+    let shallow = format!("{}1{}", "1 IN (".repeat(64), ")".repeat(64));
+    assert!(parse(&shallow, &d).is_ok());
+    for c in ["pop IN (NULL, 'x', name, -2)", "pop IN (+3)"] {
+        let c = format!("{}{c}{}", "(".repeat(63), ")".repeat(63));
+        assert!(parse(&c, &d).is_ok(), "{c}");
+    }
+    // Each argument of a clamp is evaluated once: nested, they stay linear.
+    let clamps = format!("{}pop{}", "clamp(0, ".repeat(40), ", 10)".repeat(40));
+    let parsed = parse(&clamps, &d).unwrap();
+    let t0 = std::time::Instant::now();
+    for r in 0..d.features.len() {
+        let _ = value(&parsed, &d, r, &Env::default());
+    }
+    assert!(t0.elapsed() < std::time::Duration::from_secs(5));
 }
 
 #[test]
@@ -427,4 +444,19 @@ fn a_null_anywhere_in_a_join_is_null() {
     let joined = format!("{big} || {big}");
     assert!(matches!(value(&parse(&joined, &d).unwrap(), &d, 0, &Env::default()), Value::Text(_)));
     assert_eq!(value(&parse(&format!("{joined} || NULL"), &d).unwrap(), &d, 0, &Env::default()), Value::Null);
+}
+
+#[test]
+fn a_computed_in_list_skips_nulls_and_a_long_pattern_matches_nothing() {
+    let d = ds();
+    let rows = |e: &str| select(e, &d).unwrap_or_else(|err| panic!("{err}: {e}"));
+    // `<Null>` is how a null shows, not what it equals.
+    let mut odd = Dataset::new("t", GeometryType::None, vec![Field::new("name", FieldType::Text)]);
+    odd.push(None, vec![Value::Text("<null>".into())]);
+    assert_eq!(select("upper(name) IN (NULL)", &odd).unwrap(), Vec::<usize>::new());
+    assert_eq!(select("upper(name) NOT IN (NULL)", &odd).unwrap(), vec![0]);
+    // About 65,000 '%'s (text is cut at 64 KiB): longer than a pattern may be.
+    let long = "name LIKE replace(replace(replace(replace(replace('x', 'x', 'xxxxxxxxxx'), 'x', 'xxxxxxxxxx'), 'x', 'xxxxxxxxxx'), 'x', 'xxxxxxxxxx'), 'x', '%%%%%%%%%%')";
+    assert_eq!(rows(long), Vec::<usize>::new());
+    assert_eq!(rows(&long.replace("LIKE", "NOT LIKE")), vec![0, 1, 2, 3]);
 }
