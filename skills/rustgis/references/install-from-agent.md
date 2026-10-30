@@ -30,8 +30,9 @@ On Windows, use PowerShell:
 Get-Command rustgis-cli, winget -ErrorAction SilentlyContinue
 ```
 
-The documented Windows release assets are x64. Do not invent a native ARM64
-asset. If an existing CLI works, keep it; also check that the desktop app is
+The documented Windows release assets are x64 (`windows-x86_64`) and, from
+the release after v0.4.0, ARM64 (`windows-aarch64`): on ARM64, use the ARM64
+asset when the release has one (winget installs x64 only). If an existing CLI works, keep it; also check that the desktop app is
 installed. Prefer a package manager already present. Do not install a package
 manager just to avoid a release download, and do not silently elevate privileges.
 
