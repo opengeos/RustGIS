@@ -4440,6 +4440,12 @@ fn tilt_candidate(mut c: Candidate, at: &impl Fn(f32, f32) -> Option<(f32, f32)>
     Some(c)
 }
 
+/// Turns `l` as [`turn_with`] does, for a label drawn in one view shown in another (a moving
+/// map's labels laid over its drape): its place is left as it is.
+pub fn turn_label(l: &mut PlacedLabel, at: &impl Fn(f32, f32) -> Option<(f32, f32)>) {
+    turn_with(l, at);
+}
+
 /// Turns a label turned with the map (and its icon) as `at` moves it into another view (a
 /// turned or tilted one): its angle there is that of a short step along it, the text kept
 /// upright. Called before the label itself is moved.

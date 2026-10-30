@@ -1195,12 +1195,22 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             }
         }
     } else if (tilt_draped || (app.map.gpu_frame.is_some() && !app.map.label_map.is_empty())) && placed != cam {
-        // On a moving tilted (or, on the GPU, turned) map each label stays on its ground; under
-        // the sky it drops out.
+        // On a moving tilted (or, on the GPU, turned) map each label stays on its ground, turned
+        // with it; under the sky it drops out.
         let sky = cam.sky_y(h).unwrap_or(0.0);
+        let (fw, fh) = app.map.tex_size;
+        let at = |x: f32, y: f32| {
+            let m = placed.try_to_map(f64::from(x), f64::from(y), fw, fh)?;
+            cam.try_to_screen(m, w, h).map(|(x, y)| (x as f32, y as f32))
+        };
         for (l, m) in app.map.labels.iter().zip(&app.map.label_map) {
             if let Some((x, y)) = m.and_then(|m| cam.try_to_screen(m, w, h)).filter(|s| s.1 > sky) {
-                draw_label(&painter, l, rect.min + vec2(x as f32, y as f32));
+                let turned = (placed.bearing != cam.bearing || placed.pitch != cam.pitch).then(|| {
+                    let mut l = l.clone();
+                    rustgis_engine::render::turn_label(&mut l, &at);
+                    l
+                });
+                draw_label(&painter, turned.as_ref().unwrap_or(l), rect.min + vec2(x as f32, y as f32));
             }
         }
     } else {
@@ -1296,7 +1306,7 @@ fn show_frame(
         };
         // On a turned or tilted map: where its labels stand while its drape moves.
         app.map.label_map = match !globe_view && (cam.pitch != 0.0 || cam.bearing != 0.0) {
-            true => app.map.labels.iter().map(|l| cam.try_to_map(l.x as f64, l.y as f64, w, h)).collect(),
+            true => app.map.labels.iter().map(|l| cam.try_to_map(l.x as f64, l.y as f64, view.width, view.height)).collect(),
             false => Vec::new(),
         };
         app.map.label_camera = cam;
