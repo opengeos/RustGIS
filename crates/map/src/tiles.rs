@@ -311,11 +311,28 @@ pub const MAX_ZOOM: u8 = 24;
 
 pub use rustgis_data::ogc::warp::sized;
 
-/// Whether a raster tile address is one its service draws on request, for any box
-/// ([`TileLayer::on_request`]).
+/// Whether a raster tile address is one its service draws on request, for any box and size
+/// ([`TileLayer::on_request`]): asked for by its box, with a size [`sized`] can write (a WMS's
+/// `WIDTH` and `HEIGHT`, a map service export's `size`, as numbers or size placeholders). An address
+/// with a box and no such size (a generic template) is asked for at its service's default size,
+/// so it is drawn in its own tiles.
 pub fn drawn_on_request(url: &str) -> bool {
     let base = url.split('#').next().unwrap_or_default();
-    base.contains("{bbox-epsg-3857}") || base.contains("{nbbox}")
+    (base.contains("{bbox-epsg-3857}") || base.contains("{nbbox}")) && sizable(base)
+}
+
+/// Whether a picture's size can be written into `base`: it has the size keys, each a number
+/// ([`sized`] writes it) or a size placeholder (`{width}`, `{height}`, `{nw}`, `{nh}`).
+fn sizable(base: &str) -> bool {
+    let Some((path, query)) = base.split_once('?') else { return false };
+    let lower = path.to_ascii_lowercase();
+    let keys: &[&str] = if lower.ends_with("/export") || lower.ends_with("/exportimage") { &["size"] } else { &["width", "height"] };
+    keys.iter().all(|key| {
+        query.split('&').filter_map(|p| p.split_once('=')).any(|(k, v)| {
+            k.eq_ignore_ascii_case(key)
+                && (!v.contains('{') || matches!(v, "{nw}" | "{nh}" | "{nw},{nh}" | "{width}" | "{height}" | "{width},{height}"))
+        })
+    })
 }
 
 impl TileLayer {
@@ -378,6 +395,7 @@ impl TileLayer {
             && base.contains("{bbox-epsg-3857}")
             && !base.contains("{width}")
             && !base.contains("{height}")
+            && sizable(base)
             && mercator
     }
 

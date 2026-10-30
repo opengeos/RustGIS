@@ -9325,6 +9325,16 @@ fn wms_layers_draw_as_one_picture_or_tiles_of_a_size() {
     assert!(e.contains("draws on request"), "{e}");
     assert!(s.run("map.setTiles", &json!({"name": "XYZ", "tileSize": 1024})).is_err());
     assert!(s.run("map.addTiles", &json!({"url": "https://tile.example.org/{z}/{x}/{y}.png", "singleImage": true})).is_err());
+    // Nor is an address by its box with no size to write (a generic template): asked for at its
+    // service's default size, it stays in its own tiles.
+    let bare = "https://maps.example.org/render?bbox={bbox-epsg-3857}&format=png";
+    assert!(!rustgis_map::tiles::drawn_on_request(bare));
+    assert!(s.run("map.addTiles", &json!({"url": bare, "name": "Bare", "overlay": true, "singleImage": true})).is_err());
+    s.run("map.addTiles", &json!({"url": bare, "name": "Bare", "overlay": true})).unwrap();
+    assert!(s.run("map.setTiles", &json!({"name": "Bare", "tileSize": 1024})).is_err());
+    assert!(rustgis_map::tiles::drawn_on_request("https://maps.example.org/wms?BBOX={nbbox}&width={nw}&HEIGHT={nh}&f=png"));
+    assert!(rustgis_map::tiles::drawn_on_request("https://maps.example.org/wms?BBOX={bbox-epsg-3857}&WIDTH={width}&HEIGHT={height}"));
+    assert!(!rustgis_map::tiles::drawn_on_request("https://maps.example.org/wms?BBOX={bbox-epsg-3857}&WIDTH={w}&HEIGHT=256"));
     // A map service's export added with a tile size: its size asked for.
     let export = "https://s.example.org/arcgis/rest/services/x/MapServer/export?bbox={bbox-epsg-3857}&bboxSR=3857&imageSR=3857&size=256,256&format=png32&f=image";
     s.run("map.addTiles", &json!({"url": export, "name": "Export", "overlay": true, "tileSize": 512})).unwrap();
