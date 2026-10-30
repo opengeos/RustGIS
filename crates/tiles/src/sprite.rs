@@ -153,6 +153,9 @@ fn with_suffix(base: &str, suffix: &str) -> String {
 /// The sprite at `base` (an address without `.json`/`.png`), at high density when `hi_dpi`
 /// and the style has one, else at 1×.
 pub fn load(base: &str, hi_dpi: bool) -> Load {
+    if crate::logins::check(base).is_err() {
+        return Load::Failed;
+    }
     if hi_dpi {
         match load_one(base, "@2x") {
             Load::Failed => {}
@@ -172,6 +175,9 @@ fn load_one(base: &str, density: &str) -> Load {
     match (index, sheet) {
         (State::Ready(i), State::Ready(p)) => match (&*i, &*p) {
             (Payload::Json(index), Payload::Image(sheet)) => {
+                if crate::logins::check(base).is_err() {
+                    return Load::Failed;
+                }
                 let s = Arc::new(Sprite::new(index, sheet.clone()));
                 let mut all = sprites().lock().unwrap_or_else(|p| p.into_inner());
                 if all.len() > 16 {

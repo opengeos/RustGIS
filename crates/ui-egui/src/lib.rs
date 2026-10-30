@@ -341,6 +341,8 @@ fn open_with_system(_: &std::path::Path) -> Result<(), String> {
 /// background, then its layers are listed.
 pub struct ServiceConn {
     pub url: String,
+    /// The saved connection captured when browsing began, never the current dialog selection.
+    pub connection: Option<String>,
     /// `wms`, `wmts`, `wfs`, `ogcapi`, `arcgis`, or `auto`.
     pub kind: &'static str,
     pub slot: Slot<Result<Vec<u8>, Failure>>,
@@ -2418,9 +2420,14 @@ impl RustGisApp {
                 let Some(url) = p.get("url").and_then(Value::as_str).map(str::trim).filter(|u| !u.is_empty()) else {
                     return self.run("ui.dialog", json!({"name": "addUrl"}));
                 };
+                let url = rustgis_engine::data::login_address::inner(url);
+                let bound =
+                    rustgis_engine::service_logins::request_params(&mut self.session, p).map_err(|e| connectionui::translated(&e))?;
+                let p = bound.as_ref();
                 if url.to_ascii_lowercase().split(['?', '#']).next().is_some_and(|u| u.ends_with(".pmtiles")) {
                     return connectiontree::run_named(self, "layer.addUrl", p.clone(), origin.as_deref());
                 }
+                let address = p.get("url").and_then(Value::as_str).unwrap_or(url).to_string();
                 // A GeoTIFF, FlatGeobuf or GeoParquet: its header (or footer) first, off the
                 // frame; one that can be read in place is, another is downloaded (see
                 // `poll_downloads`). An address without a file name (an API answering with a
@@ -2438,7 +2445,7 @@ impl RustGisApp {
                     let land = slot.clone();
                     if remote {
                         rustgis_engine::data::source::open_url(
-                            url,
+                            &address,
                             Box::new(move |r| {
                                 let r = match r {
                                     Ok(_) => Ok(true),
@@ -2450,7 +2457,7 @@ impl RustGisApp {
                         );
                     } else {
                         rustgis_engine::render::rustgis_tiles::cog::probe(
-                            url,
+                            &address,
                             Box::new(move |r| {
                                 let r = if unnamed { Ok(r.unwrap_or(false)) } else { r };
                                 *land.lock().unwrap_or_else(|e| e.into_inner()) = Some(r);
@@ -2461,6 +2468,7 @@ impl RustGisApp {
                     let shown = rustgis_engine::data::s3_address::inner(url);
                     self.session.notify(i18n::fmt("Reading {url}…", &[("url", shown)]), false);
                     let mut probe = p.clone();
+                    probe["url"] = json!(address);
                     if let Some(o) = probe.as_object_mut() {
                         o.remove(connectiontree::ORIGIN);
                         if let Some(origin) = &origin {
@@ -2470,7 +2478,7 @@ impl RustGisApp {
                     self.ui.cog_probes.push((probe, slot));
                     return Ok(Value::Null);
                 }
-                let url = url.to_string();
+                let url = address;
                 let slot: Slot<Result<Vec<u8>, String>> = Slot::default();
                 let land = slot.clone();
                 rustgis_engine::render::rustgis_tiles::cache::download_limited(
@@ -2534,12 +2542,18 @@ impl RustGisApp {
                 let Some(url) = p.get("url").and_then(Value::as_str).map(str::trim).filter(|u| !u.is_empty()) else {
                     return self.run("ui.dialog", json!({"name": "addService"}));
                 };
+                let connection = p
+                    .get("connection")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+                    .or_else(|| serviceui::connection_for(self, self.dialogs.connection.as_deref(), url).map(str::to_string));
                 // A catalogue: the dialog's search, run for the words given.
                 if p.get("type").and_then(Value::as_str) == Some("csw") {
                     if self.dialogs.open != Some("addService") {
                         self.run("ui.dialog", json!({"name": "addService"}))?;
                     }
                     self.dialogs.mode = "csw";
+                    self.dialogs.connection = connection;
                     self.ui.csw.url = url.to_string();
                     self.ui.csw.query = p.get("query").and_then(Value::as_str).unwrap_or("").to_string();
                     self.ui.csw.use_view = p.get("bbox").and_then(Value::as_str) == Some("view");
@@ -2564,13 +2578,23 @@ impl RustGisApp {
                 // Another service: its own list, unfiltered (Open keeps the way back).
                 self.ui.service_browse.filter.clear();
                 self.ui.service_browse.back.clear();
+                let mut source = json!({"url":url});
+                if let Some(connection) = &connection {
+                    source["connection"] = json!(connection);
+                }
+                let bound =
+                    rustgis_engine::service_logins::request_params(&mut self.session, &source).map_err(|e| connectionui::translated(&e))?;
+                let resolved_connection = bound.get("connection").and_then(Value::as_str).map(str::to_string);
+                let url = bound.get("url").and_then(Value::as_str).unwrap_or(url);
                 let caps = rustgis_engine::data::ogc::capabilities_url(url, (kind != "auto").then_some(kind));
                 // A refusal is told with what the server said (#509).
                 let slot = fetch_detailed_into(&caps);
                 // The dialog shows the address connected to, however the connection was asked for.
-                self.dialogs.text = url.to_string();
+                self.dialogs.text = rustgis_engine::data::login_address::inner(url).to_string();
+                self.dialogs.connection = connection;
                 self.ui.service = Some(ServiceConn {
                     url: url.to_string(),
+                    connection: resolved_connection,
                     kind,
                     slot,
                     text: None,
@@ -3588,7 +3612,18 @@ impl RustGisApp {
                         Some(TilesStep::Next(next)) if resolve.read < 2 => {
                             resolve.read += 1;
                             resolve.doc = next.clone();
-                            resolve.slot = fetch_into(&next);
+                            match serviceui::request_from(
+                                self,
+                                resolve.params.get("connection").and_then(Value::as_str),
+                                resolve.params.get("url").and_then(Value::as_str).unwrap_or(""),
+                                &next,
+                            ) {
+                                Ok(url) => resolve.slot = fetch_into(&url),
+                                Err(e) => {
+                                    self.report_step(dialog, Err(e));
+                                    continue;
+                                }
+                            }
                             self.ui.service_steps.push(ServiceStep::Tiles { resolve, dialog, origin });
                             continue;
                         }
@@ -3611,9 +3646,9 @@ impl RustGisApp {
                     let title = params["name"].as_str().unwrap_or("").to_string();
                     let r = r.and_then(|bytes| {
                         params["describe"] = json!(String::from_utf8_lossy(&bytes));
-                        let connection = params.as_object_mut().and_then(|p| p.remove("connection"));
                         // Not `self.run`: an error belongs where the step reports, not the notices.
                         let c = self.session.run("service.coverage", &params)?;
+                        let connection = params.as_object_mut().and_then(|p| p.remove("connection"));
                         let get = c.get("url").and_then(Value::as_str).unwrap_or("").to_string();
                         let mut p = json!({"url": get, "name": title, "coverage": true});
                         if let Some(connection) = connection {
@@ -3650,6 +3685,9 @@ impl RustGisApp {
                 let mut p = json!({"url": conn.url, "text": conn.text, "documents": conn.documents});
                 if conn.kind != "auto" {
                     p["type"] = json!(conn.kind);
+                }
+                if let Some(connection) = &conn.connection {
+                    p["connection"] = json!(connection);
                 }
                 // Not `self.run`: an error belongs in the dialog, not the notices.
                 match self.session.run("service.layers", &p) {

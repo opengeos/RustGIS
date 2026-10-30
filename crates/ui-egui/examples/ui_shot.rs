@@ -151,15 +151,23 @@ fn main() {
     let ribbon_split = lines.first().and_then(|l| l.get("ribbonSplit")).and_then(Value::as_bool).unwrap_or(false);
     let mut split_showcase = RibbonSplitShowcase::default();
     let mut app = RustGisApp::with_sample();
-    if lines.first().and_then(|l| l.get("memorySecrets")).and_then(Value::as_bool) == Some(true) {
-        app = app.with_services(rustgis_ui_egui::Services {
-            secrets: Some(std::sync::Arc::new(rustgis_engine::data::secrets::MemorySecrets::new())),
-            ..Default::default()
-        });
-    }
-    if let Some(dir) = lines.first().and_then(|l| l.get("recovery")).and_then(Value::as_str) {
-        let store = rustgis_ui_egui::FolderStore::open(std::path::Path::new(dir)).expect("recovery folder");
-        app = app.with_services(rustgis_ui_egui::Services { recovery: Some(Box::new(store)), ..Default::default() });
+    let memory_secrets = lines.first().and_then(|l| l.get("memorySecrets")).and_then(Value::as_bool) == Some(true);
+    let recovery = lines.first().and_then(|l| l.get("recovery")).and_then(Value::as_str);
+    if memory_secrets || recovery.is_some() {
+        let mut services = std::mem::take(&mut app.services);
+        if memory_secrets {
+            services.secrets = Some(std::sync::Arc::new(rustgis_engine::data::secrets::MemorySecrets::new()));
+        }
+        if let Some(dir) = recovery {
+            match rustgis_ui_egui::FolderStore::open(std::path::Path::new(dir)) {
+                Ok(store) => services.recovery = Some(Box::new(store)),
+                Err(error) => {
+                    eprintln!("recovery folder: {error}");
+                    std::process::exit(2);
+                }
+            }
+        }
+        app = app.with_services(services);
     }
     // One shared wgpu render state: the app's GPU map backend and the harness's renderer must
     // live on the same device for the map's paint callback to be valid.

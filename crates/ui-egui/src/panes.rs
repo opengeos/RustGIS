@@ -3917,7 +3917,7 @@ fn symbology(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         });
         ui.add_space(6.0);
     }
-    if g == GeometryType::Polygon && !l.graphics {
+    if l.has_geometry(GeometryType::Polygon) && !l.graphics {
         if ui.button(tl!("No Fill")).on_hover_text(tl!("Draw only polygon outlines, keeping their colors and widths.")).clicked() {
             let _ = app.run("layer.noFill", Value::Null);
         }
@@ -4007,7 +4007,7 @@ fn symbology(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         ui.add_space(8.0);
         line_strokes_editor(app, ui, &l, t);
     }
-    if g == GeometryType::Polygon && !l.graphics {
+    if l.has_geometry(GeometryType::Polygon) && !l.graphics {
         ui.add_space(8.0);
         crate::fill_editor::fills_editor(app, ui, &l, t);
     }
@@ -6600,6 +6600,39 @@ mod tests {
         let _ = app.run("map.new", json!({"name": "Second"}));
         follow_layer_filter(&mut app);
         assert_eq!((app.ui.layer_filter.as_str(), app.ui.layer_filter_hid), ("", None));
+    }
+
+    #[test]
+    fn mixed_geojson_exposes_polygon_fill_controls() {
+        use egui_kittest::kittest::Queryable;
+        let mut app = RustGisApp::new(Session::new(rustgis_engine::Project::default()));
+        app.run(
+            "layer.addDataText",
+            json!({"fileName":"mixed.geojson", "text":r#"{"type":"FeatureCollection","features":[
+            {"type":"Feature","properties":{},"geometry":{"type":"LineString","coordinates":[[0,0],[1,1]]}},
+            {"type":"Feature","properties":{},"geometry":{"type":"LineString","coordinates":[[1,0],[2,1]]}},
+            {"type":"Feature","properties":{},"geometry":{"type":"Polygon","coordinates":[[[0,0],[1,0],[1,1],[0,0]]]}}
+        ]}"#}),
+        )
+        .unwrap();
+        assert_eq!(app.session.map().layer(app.session.active_layer.unwrap()).unwrap().geometry_type(), GeometryType::Polyline);
+        app.ui.open_right(RightPane::Symbology);
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(1400.0, 900.0)).with_max_steps(64).build_ui_state(
+            |ui, app: &mut RustGisApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            app,
+        );
+        h.run_steps(6);
+        h.get_by_label("No Fill").click();
+        h.run_steps(2);
+        let s = &h.state().session;
+        let l = s.map().layer(s.active_layer.unwrap()).unwrap();
+        assert!(l.fill_layers.iter().all(|f| !f.draws(l.symbol(2).fill)));
+        assert!(!l.fill_layers.is_empty());
+        assert!(h.query_by_label("Add Fill").is_some());
     }
 
     fn symbology_retry_harness() -> egui_kittest::Harness<'static, RustGisApp> {

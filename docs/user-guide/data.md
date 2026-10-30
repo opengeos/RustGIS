@@ -749,17 +749,17 @@ previous one. CLI and Python connections last only for the run.
 #### Web-service logins
 
 A WMS, WMTS, WFS, WCS, OGC API, ArcGIS REST, CSW or STAC connection can log in: its form's
-**Login** picks **None**, **Basic authentication** (a user name and a password), **API key in a
-header** (the header's name, such as `X-API-Key`, and the key) or **API key in the query** (the
-parameter's name, such as `apikey`, and the key). The connection keeps only the method, the user
-name and the header or parameter name; a query parameter of that name is taken out of its address.
+**Login** picks **None**, **Basic authentication** (a user name and a password) or **API key in a
+header** (the header's name, such as `X-API-Key`, and the key). The connection keeps only the method,
+the user name and the header name, never the password or key.
 The password or key goes to `connection.login {"id":"c1","password":"…"}` (basic) or
 `{"id":"c1","apiKey":"…"}`, and lasts for the session unless **Remember on this computer** is
 ticked (`"remember": true`, off by default): the store then keeps it with the connection's origin
 and method, and a definition changed to another origin, method, user or key name never sends it.
 Editing any of those ends the login and deletes the saved one. **Log Out** (`connection.logout`)
-ends the session's login; **Forget Saved Login** (`connection.forgetLogin`) deletes the saved one
-and keeps the session's. The web app keeps logins for the session only.
+ends the session's login and prevents automatic reuse of its remembered login until you log in
+explicitly; **Forget Saved Login** (`connection.forgetLogin`) deletes the saved one and keeps the
+session's. The web app keeps logins for the session only.
 
 A login is sent only to the connection's origin: the same scheme, host and port, for its
 capabilities, listings, tiles, feature pages and refreshes. A redirect to another origin is
@@ -768,17 +768,17 @@ either. A plain `http://` address sends the login unencrypted, so the form asks 
 and the command needs `"allowInsecure": true`. Error messages, notices, the preferences,
 projects, History and what the [AI Assistant](assistant.md) sees never hold the password or key.
 
-Only one connection's login goes to an origin at a time. A project's layers use the connection
-they record; layers recording none use the only saved connection for their origin. When several
-saved connections match the address, RustGIS asks which one to use (**Choose Connection…**,
-`connection.login {id}` for the one chosen) and never picks one itself. A layer whose connection
-has no login yet asks for one, and a layer whose recorded connection isn't on this computer offers
+A project's layers use the connection they record; layers recording none use an explicit session
+choice or the only saved connection for their origin. Different connections and sessions can use
+different logins at the same origin without sharing credentials or authenticated cached responses.
+When several saved connections match the address, RustGIS asks which one to use (**Choose
+Connection…**, `connection.login {id}` for the one chosen) and never picks one itself.
+A layer that has no login yet asks for one, and a layer whose recorded connection isn't on this computer offers
 to make one for its address. `connection.list` reports these as `loginRequests` with the `origin`.
 The command line and Python use remembered logins with `--use-saved-secrets` /
 `use_saved_secrets=True`, as they do database passwords and S3 keys. ArcGIS sign-in and tokens
-keep their own [ArcGIS sign-in](#web-data). A login ends with the session that made it, but while
-it lasts it goes with every request the process makes to its origin, as the Earthdata and ArcGIS
-tokens do: two Python sessions reading the same origin both send the active one.
+keep their own [ArcGIS sign-in](#web-data). A login ends with the session that made it. Ordinary
+unbound requests never adopt another session's service login.
 
 ## Large files
 

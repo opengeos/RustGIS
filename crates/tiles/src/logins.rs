@@ -1,71 +1,22 @@
-//! Session-only connection logins, scoped to one exact HTTP(S) origin.
-//!
-//! Callers keep the original URL in caches and projects, and use [`apply`] only when preparing
-//! a request. Applied URLs and headers contain secrets: never log them; use [`scrub`] for
-//! diagnostics. Activation replaces the origin's previous login, while only its current owner
-//! can deactivate it. Plain HTTP requires an explicit insecure opt-in.
+//! Session-only web-service logins carried by explicit, secret-free request bindings.
+//! Bare addresses never acquire a service login. Each activation creates a fresh generation;
+//! the owning session revokes its token on replacement, logout and drop.
 
 use std::{
     collections::BTreeMap,
     fmt,
-    net::Ipv6Addr,
     sync::{Mutex, MutexGuard, OnceLock},
 };
 
 use base64::Engine;
 use rustgis_data::secrets::Secret;
 
-/// Maximum header or query parameter name length, in bytes.
+/// Maximum header name length, in bytes.
 pub const MAX_NAME: usize = 64;
-/// Maximum credential length, in bytes.
+/// Maximum encoded credential header length, in bytes (including `Basic `).
 pub const MAX_VALUE: usize = 4096;
 
-/// Canonical HTTP(S) origin: lowercase scheme and host, without a trailing host dot or
-/// the scheme's default port. Paths, queries and fragments do not form part of the origin.
-/// User information, whitespace, controls, backslashes and malformed authorities are refused.
-pub fn origin(url: &str) -> Option<String> {
-    if url.chars().any(|c| c.is_whitespace() || c.is_control() || c == '\\') {
-        return None;
-    }
-    let (scheme, rest) = url.split_once("://")?;
-    let scheme = if scheme.eq_ignore_ascii_case("https") {
-        "https"
-    } else if scheme.eq_ignore_ascii_case("http") {
-        "http"
-    } else {
-        return None;
-    };
-    let authority = rest.split(['/', '?', '#']).next()?;
-    if authority.is_empty() || authority.contains('@') {
-        return None;
-    }
-    let (host, port) = if let Some(ip) = authority.strip_prefix('[') {
-        let (ip, tail) = ip.split_once(']')?;
-        let host = format!("[{}]", ip.parse::<Ipv6Addr>().ok()?);
-        let port = if tail.is_empty() { None } else { Some(tail.strip_prefix(':')?) };
-        (host, port)
-    } else {
-        let (host, port) = authority.split_once(':').map_or((authority, None), |(h, p)| (h, Some(p)));
-        let host = host.strip_suffix('.').unwrap_or(host);
-        if host.is_empty() || host.contains(['[', ']', '%', '<', '>', '"', '^', '`', '{', '}', '|']) || host.split('.').any(str::is_empty) {
-            return None;
-        }
-        (host.to_lowercase(), port)
-    };
-    let port = match port {
-        Some(port) => {
-            if port.is_empty() || !port.bytes().all(|b| b.is_ascii_digit()) {
-                return None;
-            }
-            Some(port.parse::<u16>().ok()?)
-        }
-        None => None,
-    };
-    match port.filter(|p| *p != if scheme == "https" { 443 } else { 80 }) {
-        Some(port) => Some(format!("{scheme}://{host}:{port}")),
-        None => Some(format!("{scheme}://{host}")),
-    }
-}
+pub use rustgis_data::login_address::origin;
 
 /// An RFC 7230 token, excluding transport, browser-managed and proxy/security headers.
 pub fn valid_header_name(name: &str) -> bool {
@@ -92,11 +43,6 @@ pub fn valid_header_name(name: &str) -> bool {
         && !name.get(..4).is_some_and(|s| s.eq_ignore_ascii_case("sec-"))
 }
 
-/// A nonempty ASCII unreserved query parameter name.
-pub fn valid_query_name(name: &str) -> bool {
-    !name.is_empty() && name.len() <= MAX_NAME && name.bytes().all(unreserved)
-}
-
 /// A nonempty credential of at most [`MAX_VALUE`] bytes, without control characters.
 pub fn valid_value(value: &str) -> bool {
     !value.is_empty() && value.len() <= MAX_VALUE && !value.chars().any(char::is_control)
@@ -111,16 +57,27 @@ pub fn basic(user: &str, password: &str) -> String {
     result
 }
 
+/// Whether raw Basic inputs produce an allowed encoded header, without allocating it.
+pub fn valid_basic(user: &str, password: &str) -> bool {
+    !user.contains(':')
+        && !user.chars().chain(password.chars()).any(char::is_control)
+        && user
+            .len()
+            .checked_add(password.len())
+            .and_then(|n| n.checked_add(1))
+            .is_some_and(|n| n.div_ceil(3).saturating_mul(4).saturating_add(6) <= MAX_VALUE)
+}
+
 /// How a connection credential is sent.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Method {
     Header(String),
-    Query(String),
 }
 
 // Deliberately no Debug: neither credentials nor their derived redaction patterns are printable.
 struct Entry {
     owner: String,
+    origin: String,
     method: Method,
     value: Secret,
     redactions: Vec<Redaction>,
@@ -136,21 +93,19 @@ fn entries() -> MutexGuard<'static, BTreeMap<String, Entry>> {
     ENTRIES.get_or_init(Mutex::default).lock().unwrap_or_else(|e| e.into_inner())
 }
 
-/// Installs or replaces an origin's session-only login. The origin must already be canonical;
-/// an HTTP origin is accepted only with `insecure`. Errors are fixed, secret-free sentences.
-pub fn activate(origin: &str, owner: &str, method: Method, value: &str, insecure: bool) -> Result<(), &'static str> {
+/// Installs a fresh session/connection login generation. Only addresses bound to the returned
+/// token can use it. Callers revoke their previous generation explicitly.
+pub fn activate(origin: &str, owner: &str, method: Method, value: &str, insecure: bool) -> Result<String, &'static str> {
+    rustgis_data::login_address::set_validator(check);
     if self::origin(origin).as_deref() != Some(origin) {
         return Err("A login requires a canonical HTTP or HTTPS origin.");
     }
     if origin.starts_with("http://") && !insecure {
         return Err("An HTTP login requires explicit permission to send credentials insecurely.");
     }
-    let valid_name = match &method {
-        Method::Header(name) => valid_header_name(name),
-        Method::Query(name) => valid_query_name(name),
-    };
-    if !valid_name {
-        return Err("The login header or query parameter name is not allowed.");
+    let Method::Header(name) = &method;
+    if !valid_header_name(name) {
+        return Err("The login header name is not allowed.");
     }
     if !valid_value(value) {
         return Err("The login credential must be nonempty, within the size limit, and contain no controls.");
@@ -162,8 +117,16 @@ pub fn activate(origin: &str, owner: &str, method: Method, value: &str, insecure
     {
         add_redactions(&mut redactions, payload);
     }
-    entries().insert(origin.to_string(), Entry { owner: owner.to_string(), method, value: Secret::new(value), redactions });
-    Ok(())
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    let token = NEXT
+        .fetch_update(std::sync::atomic::Ordering::Relaxed, std::sync::atomic::Ordering::Relaxed, |n| n.checked_add(1))
+        .map_err(|_| "The service login binding limit was reached.")?;
+    let binding = format!("{token:016x}");
+    entries().insert(
+        binding.clone(),
+        Entry { owner: owner.to_string(), origin: origin.to_string(), method, value: Secret::new(value), redactions },
+    );
+    Ok(binding)
 }
 
 fn add_redactions(redactions: &mut Vec<Redaction>, value: &str) {
@@ -174,34 +137,51 @@ fn add_redactions(redactions: &mut Vec<Redaction>, value: &str) {
     }
 }
 
-/// Removes a login only if it is still owned by this connection.
-pub fn deactivate(origin: &str, owner: &str) -> bool {
-    let mut entries = entries();
-    if entries.get(origin).is_some_and(|entry| entry.owner == owner) {
-        entries.remove(origin);
-        true
-    } else {
-        false
+/// Revokes exactly one login generation; another session's bindings are untouched.
+pub fn deactivate(binding: &str) -> bool {
+    let removed = entries().remove(binding).is_some();
+    if removed {
+        crate::cache::clear();
     }
+    removed
 }
 
-/// The connection currently owning this canonical origin's login.
-pub fn owner(origin: &str) -> Option<String> {
-    entries().get(origin).map(|entry| entry.owner.clone())
+pub fn owner(binding: &str) -> Option<String> {
+    entries().get(binding).map(|entry| entry.owner.clone())
 }
 
-/// Lowercase, sorted, distinct query names of currently active logins.
-pub fn query_names() -> Vec<String> {
-    let mut names: Vec<_> = entries()
-        .values()
-        .filter_map(|entry| match &entry.method {
-            Method::Query(name) => Some(name.to_ascii_lowercase()),
-            Method::Header(_) => None,
-        })
-        .collect();
-    names.sort_unstable();
-    names.dedup();
-    names
+pub fn is_active(binding: &str) -> bool {
+    entries().contains_key(binding)
+}
+
+pub use rustgis_data::login_address::inner;
+
+const REVOKED: &str = "The service login is no longer active. Sign in to this connection again.";
+
+/// Binds a same-origin address to a live login generation.
+pub fn bind(binding: &str, url: &str) -> Result<String, &'static str> {
+    let entries = entries();
+    let entry = entries.get(binding).ok_or(REVOKED)?;
+    let url = inner(url);
+    if origin(url).as_deref() != Some(entry.origin.as_str()) {
+        return Err("The service login does not cover this address.");
+    }
+    rustgis_data::login_address::bind(binding, &entry.origin, url)
+}
+
+pub use rustgis_data::login_address::inherit;
+
+/// Checks runtime authority before any cache (including archive/style/sprite caches) is read.
+pub fn check(address: &str) -> Result<(), &'static str> {
+    let address =
+        if rustgis_data::login_address::is_wrapper(address) { address } else { address.split_once('@').map_or(address, |(_, a)| a) };
+    let Some(b) = rustgis_data::login_address::parse(address)? else { return Ok(()) };
+    let entries = entries();
+    let entry = entries.get(b.binding).ok_or(REVOKED)?;
+    if entry.origin != b.origin || origin(b.url).as_deref() != Some(b.origin) {
+        return Err("The service login does not cover this address.");
+    }
+    Ok(())
 }
 
 /// A request-only URL and optional header. Debug never reveals either field.
@@ -216,57 +196,16 @@ impl fmt::Debug for Applied {
     }
 }
 
-/// Applies a login only to its exact canonical origin (scheme, host and effective port).
-/// Existing query names are compared case-insensitively, including percent-escaped names;
-/// a credential is not appended when the URL already supplies that parameter.
-pub fn apply(url: &str) -> Option<Applied> {
-    let origin = origin(url)?;
+/// Prepares only an explicitly bound login; bare URLs are anonymous.
+pub fn apply(address: &str) -> Result<Option<Applied>, &'static str> {
+    let Some(b) = rustgis_data::login_address::parse(address)? else { return Ok(None) };
     let entries = entries();
-    let entry = entries.get(&origin)?;
-    match &entry.method {
-        Method::Header(name) => Some(Applied { url: url.to_string(), header: Some((name.clone(), entry.value.expose().to_string())) }),
-        Method::Query(name) => {
-            let (address, fragment) = url.split_once('#').map_or((url, None), |(address, fragment)| (address, Some(fragment)));
-            if address.split_once('?').is_some_and(|(_, query)| {
-                query.split('&').any(|parameter| query_name_matches(parameter.split('=').next().unwrap_or_default(), name))
-            }) {
-                return Some(Applied { url: url.to_string(), header: None });
-            }
-            let value = entry.value.expose();
-            let encoded_len: usize = value.bytes().map(|b| if unreserved(b) { 1 } else { 3 }).sum();
-            let mut applied = String::with_capacity(url.len() + name.len() + encoded_len + 2);
-            applied.push_str(address);
-            if !address.contains('?') {
-                applied.push('?');
-            } else if !address.ends_with(['?', '&']) {
-                applied.push('&');
-            }
-            applied.push_str(name);
-            applied.push('=');
-            append_percent_encoded(&mut applied, value);
-            if let Some(fragment) = fragment {
-                applied.push('#');
-                applied.push_str(fragment);
-            }
-            Some(Applied { url: applied, header: None })
-        }
+    let entry = entries.get(b.binding).ok_or(REVOKED)?;
+    if entry.origin != b.origin || origin(b.url).as_deref() != Some(b.origin) {
+        return Err("The service login does not cover this address.");
     }
-}
-
-fn query_name_matches(encoded: &str, name: &str) -> bool {
-    let mut bytes = encoded.bytes();
-    for expected in name.bytes() {
-        let Some(mut actual) = bytes.next() else { return false };
-        if actual == b'%' {
-            let Some(high) = bytes.next().and_then(hex) else { return false };
-            let Some(low) = bytes.next().and_then(hex) else { return false };
-            actual = high * 16 + low;
-        }
-        if !actual.eq_ignore_ascii_case(&expected) {
-            return false;
-        }
-    }
-    bytes.next().is_none()
+    let Method::Header(name) = &entry.method;
+    Ok(Some(Applied { url: b.url.to_string(), header: Some((name.clone(), entry.value.expose().to_string())) }))
 }
 
 fn unreserved(b: u8) -> bool {
@@ -292,15 +231,6 @@ fn append_percent_encoded(result: &mut String, value: &str) {
     }
 }
 
-fn hex(b: u8) -> Option<u8> {
-    match b {
-        b'0'..=b'9' => Some(b - b'0'),
-        b'a'..=b'f' => Some(b - b'a' + 10),
-        b'A'..=b'F' => Some(b - b'A' + 10),
-        _ => None,
-    }
-}
-
 /// Redacts active raw credentials, percent-encoded credentials (with either hex case), and
 /// the bare Base64 payload of Basic credentials. Matching the original input in one pass
 /// prevents overlapping values or a credential resembling `[redacted]` from leaking secrets.
@@ -308,12 +238,25 @@ pub fn scrub(text: &str) -> String {
     let entries = entries();
     let mut patterns: Vec<_> = entries.values().flat_map(|entry| &entry.redactions).collect();
     patterns.sort_unstable_by_key(|pattern| std::cmp::Reverse(pattern.value.expose().len()));
-    if patterns.is_empty() {
-        return text.to_string();
-    }
+    // Strip capabilities even after revocation, when there are no active credential patterns.
     let mut result = String::with_capacity(text.len());
     let mut rest = text;
     while !rest.is_empty() {
+        if let Some(wrapper) = rest.strip_prefix(rustgis_data::login_address::PREFIX) {
+            // The fixed-width token and length-prefixed origin precede the ordinary URL.
+            let url = wrapper
+                .split_once(':')
+                .and_then(|(_, r)| r.split_once(':'))
+                .and_then(|(len, r)| len.parse::<usize>().ok().and_then(|n| r.get(n..)))
+                .and_then(|r| r.strip_prefix(':'));
+            if let Some(url) = url.filter(|u| u.starts_with("http://") || u.starts_with("https://")) {
+                rest = url;
+                continue;
+            }
+            result.push_str("[redacted]");
+            rest = wrapper.split_once(char::is_whitespace).map_or("", |(_, r)| r);
+            continue;
+        }
         if let Some(pattern) = patterns.iter().find(|pattern| {
             let value = pattern.value.expose();
             rest.get(..value.len())
@@ -425,12 +368,6 @@ mod tests {
             assert!(!valid_header_name(name), "{name}");
         }
         assert!(!valid_header_name(&"a".repeat(MAX_NAME + 1)));
-        assert!(valid_query_name("AZaz09-_.~"));
-        assert!(valid_query_name(&"a".repeat(MAX_NAME)));
-        for name in ["", "x y", "x&y", "x=y", "%61", "ümlaut"] {
-            assert!(!valid_query_name(name));
-        }
-        assert!(!valid_query_name(&"a".repeat(MAX_NAME + 1)));
         assert!(valid_value(" a password with spaces é "));
         assert!(valid_value(&"a".repeat(MAX_VALUE)));
         for value in ["", "bad\rvalue", "bad\nvalue", "bad\tvalue", "bad\0value", "bad\u{7f}value", "bad\u{85}value"] {
@@ -447,163 +384,62 @@ mod tests {
     }
 
     #[test]
-    fn scopes_login_to_exact_origin() {
-        let target = "https://exact-login.example:8443";
-        activate(target, "exact", Method::Header("Authorization".into()), "exact-login-secret", false).unwrap();
-        let applied = apply("HTTPS://EXACT-LOGIN.EXAMPLE.:8443/tiles?x=1").unwrap();
-        assert_eq!(applied.url, "HTTPS://EXACT-LOGIN.EXAMPLE.:8443/tiles?x=1");
-        assert_eq!(applied.header, Some(("Authorization".into(), "exact-login-secret".into())));
-        for url in [
-            "http://exact-login.example:8443/tiles",
-            "https://exact-login.example/tiles",
-            "https://exact-login.example:8444/tiles",
-            "https://sub.exact-login.example:8443/tiles",
-            "https://exact-login.example.evil:8443/tiles",
-        ] {
-            assert!(apply(url).is_none());
+    fn http_requires_permission_and_bindings_reject_scheme_host_and_port_changes() {
+        assert!(activate("http://insecure-login.test", "http", Method::Header("X-Key".into()), "short", false).is_err());
+        let binding = activate("https://scoped-login.test", "scope", Method::Header("X-Key".into()), "scope-secret", false).unwrap();
+        let bound = bind(&binding, "https://scoped-login.test/tile").unwrap();
+        for url in ["http://scoped-login.test/tile", "https://scoped-login.test:444/tile", "https://foreign.test/tile"] {
+            assert!(bind(&binding, url).is_err());
+            assert_eq!(inherit(&bound, url), url);
+            assert!(apply(url).unwrap().is_none());
         }
-        assert!(deactivate(target, "exact"));
+        assert!(is_active(&binding));
+        assert!(deactivate(&binding));
+        assert!(!is_active(&binding));
     }
 
     #[test]
-    fn gates_http_and_requires_canonical_registration() {
-        let target = "http://insecure-login.example";
-        assert!(activate(target, "insecure", Method::Header("X-Key".into()), "insecure-login-secret", false).is_err());
-        assert!(owner(target).is_none());
-        activate(target, "insecure", Method::Header("X-Key".into()), "insecure-login-secret", true).unwrap();
-        assert!(apply("http://insecure-login.example:80/tiles").is_some());
-        assert!(apply("https://insecure-login.example/tiles").is_none());
-        for noncanonical in [
-            "HTTP://insecure-login.example",
-            "http://insecure-login.example/",
-            "http://insecure-login.example:80",
-            "http://INSECURE-LOGIN.EXAMPLE",
-            "http://insecure-login.example.",
-        ] {
-            assert!(activate(noncanonical, "insecure", Method::Header("X-Key".into()), "insecure-login-secret", true).is_err());
-        }
-        assert!(deactivate(target, "insecure"));
+    fn bindings_isolate_connections_and_revoke_generations() {
+        let target = "https://binding-login.example";
+        let a = activate(target, "session-a/connection", Method::Header("X-Key".into()), "a", false).unwrap();
+        let b = activate(target, "session-b/connection", Method::Header("X-Key".into()), "b", false).unwrap();
+        let ua = bind(&a, &format!("{target}/tile")).unwrap();
+        let ub = bind(&b, &format!("{target}/tile")).unwrap();
+        assert_eq!(apply(&ua).unwrap().unwrap().header.unwrap().1, "a");
+        assert_eq!(apply(&ub).unwrap().unwrap().header.unwrap().1, "b");
+        assert!(apply(target).unwrap().is_none());
+        assert!(bind(&a, "https://other.example/tile").is_err());
+        assert_eq!(inherit(&ua, "https://other.example/tile"), "https://other.example/tile");
+        assert!(deactivate(&a));
+        assert!(check(&ua).is_err());
+        assert!(apply(&ua).is_err());
+        assert!(apply(&ub).unwrap().is_some());
+        assert!(deactivate(&b));
     }
 
     #[test]
-    fn replacement_transfers_ownership() {
-        let target = "https://ownership-login.example";
-        activate(target, "old", Method::Header("X-Key".into()), "ownership-old-secret", false).unwrap();
-        assert_eq!(owner(target).as_deref(), Some("old"));
-        activate(target, "new", Method::Header("X-Key".into()), "ownership-new-secret", false).unwrap();
-        assert_eq!(owner(target).as_deref(), Some("new"));
-        assert!(!deactivate(target, "old"));
-        assert_eq!(apply(target).unwrap().header.unwrap().1, "ownership-new-secret");
-        assert!(deactivate(target, "new"));
-        assert!(owner(target).is_none());
-        assert!(apply(target).is_none());
-        assert!(!deactivate(target, "new"));
+    fn encoded_basic_limit_and_short_credentials() {
+        assert!(valid_basic("", ""));
+        assert!(valid_basic("a", "b"));
+        assert!(!valid_basic("a:b", "c"));
+        assert!(!valid_basic("a", "\n"));
+        for n in [3064, 3065, 3066, 4096] {
+            let password = "p".repeat(n);
+            assert_eq!(valid_basic("", &password), valid_value(&basic("", &password)));
+        }
     }
 
     #[test]
-    fn query_encoding_fragment_and_deduplication() {
-        let target = "https://query-login.example";
-        activate(target, "query", Method::Query("API_Key".into()), "query value/+?&=é", false).unwrap();
-        for (url, expected) in [
-            (
-                "https://query-login.example/tiles#fragment?ignored",
-                "https://query-login.example/tiles?API_Key=query%20value%2F%2B%3F%26%3D%C3%A9#fragment?ignored",
-            ),
-            (
-                "https://query-login.example/tiles?x=1#f",
-                "https://query-login.example/tiles?x=1&API_Key=query%20value%2F%2B%3F%26%3D%C3%A9#f",
-            ),
-            ("https://query-login.example/tiles?", "https://query-login.example/tiles?API_Key=query%20value%2F%2B%3F%26%3D%C3%A9"),
-            ("https://query-login.example/tiles?x=1&", "https://query-login.example/tiles?x=1&API_Key=query%20value%2F%2B%3F%26%3D%C3%A9"),
-        ] {
-            let applied = apply(url).unwrap();
-            assert_eq!(applied.url, expected);
-            assert!(applied.header.is_none());
-        }
-        for url in [
-            "https://query-login.example/?api_KEY=existing#f",
-            "https://query-login.example/?%61PI%5fKey=existing",
-            "https://query-login.example/?API_Key",
-        ] {
-            assert_eq!(apply(url).unwrap().url, url);
-        }
-        assert!(query_names().iter().any(|name| name == "api_key"));
-        assert!(query_names().iter().all(|name| name == &name.to_ascii_lowercase()));
-        assert!(deactivate(target, "query"));
-    }
-
-    #[test]
-    fn debug_and_errors_never_include_secrets() {
-        let target = "https://debug-login.example";
-        let secret = "debug-login-private-secret";
-        activate(target, "debug", Method::Query("token".into()), secret, false).unwrap();
-        let debug = format!("{:?}", apply(target).unwrap());
-        assert!(!debug.contains(secret));
-        assert!(!debug.contains(target));
-        assert!(!debug.contains("token"));
-        let header = Applied { url: format!("{target}/?secret={secret}"), header: Some((secret.into(), secret.into())) };
-        assert_eq!(format!("{header:?}"), "Applied(<redacted>)");
-        for error in [
-            activate(&format!("https://{secret}/path"), "debug", Method::Header("X-Key".into()), secret, false).unwrap_err(),
-            activate(target, "debug", Method::Header(format!("{secret}:")), secret, false).unwrap_err(),
-            activate(target, "debug", Method::Header("X-Key".into()), &format!("{secret}\n"), false).unwrap_err(),
-        ] {
-            assert!(!error.contains(secret));
-        }
-        assert_eq!(owner(target).as_deref(), Some("debug"));
-        assert!(deactivate(target, "debug"));
-    }
-
-    #[test]
-    fn scrubs_raw_encoded_and_basic_payloads() {
-        let target = "https://scrub-login.example";
-        let value = "scrub-private/+ é";
-        activate(target, "scrub", Method::Query("key".into()), value, false).unwrap();
-        assert_eq!(
-            scrub("raw scrub-private/+ é encoded scrub-private%2F%2B%20%C3%A9 lowercase scrub-private%2f%2b%20%c3%a9"),
-            "raw [redacted] encoded [redacted] lowercase [redacted]"
-        );
-        let basic_target = "https://scrub-basic-login.example";
+    fn scrubs_header_and_basic_payload() {
         let value = basic("scrub-user", "scrub-password");
+        let binding = activate("https://scrub-login.example", "scrub", Method::Header("Authorization".into()), &value, false).unwrap();
         let payload = value.strip_prefix("Basic ").unwrap();
-        activate(basic_target, "scrub-basic", Method::Header("Authorization".into()), &value, false).unwrap();
         assert_eq!(scrub(&format!("{value} {payload} {}", percent_encode(&value))), "[redacted] [redacted] [redacted]");
-        assert!(deactivate(target, "scrub"));
-        assert!(deactivate(basic_target, "scrub-basic"));
-        assert_eq!(scrub("ordinary unrelated diagnostic"), "ordinary unrelated diagnostic");
-    }
-
-    #[test]
-    fn scrubs_longest_overlapping_values_without_rescanning_replacements() {
-        let target = "https://scrub-overlap-login.example";
-        let other = "https://scrub-overlap-other-login.example";
-        activate(target, "overlap", Method::Query("key".into()), "overlap-private", false).unwrap();
-        activate(other, "overlap-other", Method::Query("key".into()), "overlap-private-longer", false).unwrap();
-        assert_eq!(scrub("overlap-private-longer overlap-private"), "[redacted] [redacted]");
-        assert!(deactivate(target, "overlap"));
-        assert!(deactivate(other, "overlap-other"));
-    }
-
-    #[test]
-    fn unicode_host_is_lowercased_without_idna_conversion() {
-        assert_eq!(origin("HTTPS://BÜCHER.Example.:443/path").as_deref(), Some("https://bücher.example"));
-        let target = "https://unicode-bücher-login.example";
-        activate(target, "unicode", Method::Header("X-Key".into()), "unicode-login-private", false).unwrap();
-        assert!(apply("https://UNICODE-BÜCHER-LOGIN.EXAMPLE/tiles").is_some());
-        assert!(deactivate(target, "unicode"));
-    }
-
-    #[test]
-    fn query_names_are_lowercase_sorted_and_distinct() {
-        let first = "https://query-names-first-login.example";
-        let second = "https://query-names-second-login.example";
-        activate(first, "names-first", Method::Query("Unique_Login_Names".into()), "query-names-first-private", false).unwrap();
-        activate(second, "names-second", Method::Query("UNIQUE_LOGIN_NAMES".into()), "query-names-second-private", false).unwrap();
-        let names = query_names();
-        assert_eq!(names.iter().filter(|name| name.as_str() == "unique_login_names").count(), 1);
-        assert!(names.windows(2).all(|pair| pair[0] < pair[1]));
-        assert!(names.iter().all(|name| name == &name.to_ascii_lowercase()));
-        assert!(deactivate(first, "names-first"));
-        assert!(deactivate(second, "names-second"));
+        let url = bind(&binding, "https://scrub-login.example/tile").unwrap();
+        assert!(!scrub(&format!("failed: {url}")).contains(rustgis_data::login_address::PREFIX));
+        assert_eq!(format!("{:?}", apply(&url).unwrap().unwrap()), "Applied(<redacted>)");
+        assert!(deactivate(&binding));
+        let message = scrub(&format!("failed: {url}"));
+        assert!(!message.contains(rustgis_data::login_address::PREFIX) && !message.contains(&binding));
     }
 }

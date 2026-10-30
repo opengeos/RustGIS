@@ -63,6 +63,9 @@ pub const MAX_BYTES: u64 = 512 << 20;
 /// through a saved S3 connection by the address it wraps, the wrapper rebuilt around it (its
 /// binding and endpoint are provenance, not secrets); a COG's look after either is kept.
 fn saved_address(address: &str) -> Option<String> {
+    if let Some(public) = without_login_binding(address) {
+        return Some(saved_address(&public).unwrap_or(public));
+    }
     use rustgis_data::s3_address;
     if let Some((head, archive)) = crate::sources::template_archive(address) {
         let (file, look) = split_look(archive);
@@ -101,6 +104,46 @@ fn split_look(address: &str) -> (&str, &str) {
 /// Packaging calls this without registering the resulting text as a file this process wrote.
 pub(crate) fn strip_addresses(addresses: Vec<&mut String>) -> Vec<Option<String>> {
     addresses.into_iter().map(|a| saved_address(a).map(|redacted| std::mem::replace(a, redacted))).collect()
+}
+
+/// Runtime capabilities never survive a project boundary, including an in-process save restore.
+fn without_login_binding(address: &str) -> Option<String> {
+    if rustgis_data::login_address::is_wrapper(address) {
+        return Some(rustgis_data::login_address::parse(address).ok().flatten().map_or("", |b| b.url).to_string());
+    }
+    if let Some((head, archive)) = crate::sources::template_archive(address) {
+        return without_login_binding(archive).map(|public| format!("{head}{public}"));
+    }
+    if let Ok(Some(bound)) = rustgis_data::s3_address::parse(address) {
+        return without_login_binding(bound.url)
+            .and_then(|public| rustgis_data::s3_address::bind(bound.binding, bound.endpoint, &public).ok());
+    }
+    None
+}
+
+pub(crate) fn clear_login_bindings<'a>(addresses: impl IntoIterator<Item = &'a mut String>) {
+    for address in addresses {
+        if let Some(public) = without_login_binding(address) {
+            *address = public;
+        }
+    }
+}
+
+pub(crate) fn recorded_addresses<'a>(value: &'a mut serde_json::Value, addresses: &mut Vec<&'a mut String>) {
+    match value {
+        serde_json::Value::String(text) => addresses.push(text),
+        serde_json::Value::Array(values) => {
+            for value in values {
+                recorded_addresses(value, addresses);
+            }
+        }
+        serde_json::Value::Object(values) => {
+            for value in values.values_mut() {
+                recorded_addresses(value, addresses);
+            }
+        }
+        _ => {}
+    }
 }
 
 struct Written {
@@ -503,6 +546,27 @@ impl Project {
                 addresses.push(source);
             }
         }
+        for record in &mut self.gp_history {
+            recorded_addresses(&mut record.params, &mut addresses);
+            if let Some((_, params)) = &mut record.command {
+                recorded_addresses(params, &mut addresses);
+            }
+        }
+        for task in &mut self.tasks {
+            for step in &mut task.steps {
+                recorded_addresses(&mut step.params, &mut addresses);
+            }
+        }
+        for model in &mut self.models {
+            for step in &mut model.steps {
+                recorded_addresses(&mut step.params, &mut addresses);
+            }
+            if let Some(graph) = &mut model.graph {
+                for node in &mut graph.nodes {
+                    recorded_addresses(&mut node.params, &mut addresses);
+                }
+            }
+        }
         addresses
     }
 
@@ -844,7 +908,7 @@ impl Project {
             if let Some(full) = original
                 && saved_address(full).as_deref() == Some(address.as_str())
             {
-                *address = full.clone();
+                *address = without_login_binding(full).unwrap_or_else(|| full.clone());
             }
         }
     }
@@ -894,6 +958,7 @@ impl Project {
         // A binding is this computer's runtime token for a login: one in a file is no authority
         // to use any login here.
         crate::s3_connections::clear_bindings(p.addresses_mut());
+        clear_login_bindings(p.addresses_mut());
         if let Some(d) = dir.and_then(Path::to_str) {
             p.resolve_paths(d);
         }
@@ -938,5 +1003,45 @@ fn unique_names<'a>(names: impl Iterator<Item = &'a mut String>) {
                 break;
             }
         }
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod login_binding_tests {
+    use super::*;
+
+    #[test]
+    fn saves_and_imports_strip_runtime_capabilities_including_recorded_urls() {
+        let url = rustgis_data::login_address::bind(
+            "0123456789abcdef",
+            "https://project757.example.org",
+            "https://project757.example.org/tiles/{z}/{x}/{y}.png",
+        )
+        .unwrap();
+        let mut project = Project::default();
+        project.map_mut().tiles.push(rustgis_map::TileLayer::new("Bound", rustgis_map::tiles::TileKind::Raster, &url));
+        project.tasks.push(Task {
+            name: "Recorded".into(),
+            description: String::new(),
+            steps: vec![TaskStep {
+                title: "Add".into(),
+                instructions: String::new(),
+                command: "map.addTiles".into(),
+                params: serde_json::json!({"url": url, "connection": "saved-id"}),
+            }],
+        });
+        let forged = serde_json::to_string(&project).unwrap();
+        let (saved, _) = project.saved_text(None).unwrap();
+        assert!(!saved.contains(rustgis_data::login_address::PREFIX));
+        assert_eq!(project.map().tiles[0].url, url);
+        for text in [&saved, &forged] {
+            let opened = Project::from_json(text).unwrap();
+            assert_eq!(opened.map().tiles[0].url, rustgis_data::login_address::inner(&url));
+            assert_eq!(opened.tasks[0].steps[0].params["url"], rustgis_data::login_address::inner(&url));
+            assert_eq!(opened.tasks[0].steps[0].params["connection"], "saved-id");
+        }
+        let recovery = project.recovery_text().unwrap();
+        assert!(!recovery.contains(rustgis_data::login_address::PREFIX));
     }
 }

@@ -453,6 +453,7 @@ fn import_maps(s: &mut Session, p: &Value) -> CmdResult {
     for mut m in maps.into_iter().take(100) {
         // A binding in a file is no authority to use a login here.
         crate::s3_connections::clear_bindings(m.addresses_mut());
+        crate::project::clear_login_bindings(m.addresses_mut());
         let base = m.name.clone();
         let mut i = 1;
         while s.project.maps.iter().any(|o| o.name.eq_ignore_ascii_case(&m.name)) {
@@ -605,7 +606,16 @@ fn package_gp(s: &Session) -> Result<Vec<u8>, String> {
     if s.project.gp_history.is_empty() {
         return Err("no geoprocessing has been run yet".into());
     }
-    let mut entries = vec![("history.json".to_string(), serde_json::to_vec_pretty(&s.project.gp_history).map_err(|e| e.to_string())?)];
+    let mut history = s.project.gp_history.clone();
+    let mut addresses = Vec::new();
+    for record in &mut history {
+        crate::project::recorded_addresses(&mut record.params, &mut addresses);
+        if let Some((_, params)) = &mut record.command {
+            crate::project::recorded_addresses(params, &mut addresses);
+        }
+    }
+    crate::project::strip_addresses(addresses);
+    let mut entries = vec![("history.json".to_string(), serde_json::to_vec_pretty(&history).map_err(|e| e.to_string())?)];
     let mut layers = std::collections::HashSet::new();
     let mut files = std::collections::HashSet::new();
     for rec in s.project.gp_history.iter().filter(|r| r.ok) {

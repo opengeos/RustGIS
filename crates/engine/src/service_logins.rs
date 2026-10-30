@@ -1,19 +1,19 @@
 //! Logins of saved web-service connections (WMS, WMTS, WFS, WCS, OGC API, ArcGIS REST, CSW,
-//! STAC): HTTP basic authentication, an API key in a header, or an API key in a query parameter.
+//! STAC): HTTP basic authentication or an API key in a header.
 //!
-//! The connection keeps the method, the user name and the header or parameter name, never the
+//! The connection keeps the method, user name and header name, never the
 //! password or key. That is given to `connection.login` and kept for the session (in
 //! [`crate::connections::DatabaseLogins`], by connection id), or on this computer when the user
 //! asks to remember it: one opaque secret at the account `connection/<id>`, the JSON
 //! `{"origin", "auth", "user", "keyName", "secret"}`. The origin and method travel with the secret,
 //! so a connection whose address or method changed outside the app can never send it elsewhere.
 //!
-//! A login is sent only to its connection's origin (scheme, host and port), through the tile
-//! cache's origin-scoped hook ([`rustgis_tiles::logins`](crate::render::rustgis_tiles::logins)),
-//! and only for one connection per origin at a time: which one is never picked silently. Layers
-//! added from a connection record its id ([`tag`]); a project's layers are matched to the
-//! connections of their origin when it opens ([`resolve`]), and asked about when that isn't
-//! clear or the login is missing. Nothing here prints, returns or logs a secret: every failure is
+//! Each session/connection login has an opaque request binding. Only requests carrying that
+//! binding use its credential, and only at the connection's exact origin. Bindings distinguish
+//! authenticated cache entries and are revoked on replacement, logout and session drop. Layers
+//! record their saved connection id, never a trusted persisted runtime binding. A project opened
+//! without its connection or login asks through the existing login-request queue.
+//! Nothing here prints, returns or logs a secret: every failure is
 //! a fixed sentence.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -40,21 +40,34 @@ pub const NOT_FORGOTTEN: &str = "The saved login could not be forgotten. The con
 /// A login typed for a plain http:// address without the confirmation.
 pub const INSECURE: &str = "This connection's address uses plain http://, so its login would be sent unencrypted. Confirm with allowInsecure: true to send it anyway.";
 /// A password or key that can't be sent.
-pub const BAD_SECRET: &str = "The password or key must be at most 4096 characters, without control characters.";
+pub const BAD_SECRET: &str = "The password or key must be at most 4096 bytes, without control characters.";
 /// A login asked of a connection with nothing to log in with this session.
-pub const REQUIRED: &str = "This connection's login is required: give its password (basic) or apiKey (header, query).";
+pub const REQUIRED: &str = "This connection's login is required: give its password (basic) or apiKey (header).";
 /// A login for a definition that isn't saved.
 pub const UNSAVED: &str = "Save the connection first: a login belongs to a saved connection.";
 /// An address a login can't go to.
 pub const NO_ORIGIN: &str = "The connection's address has no http:// or https:// origin a login can go to.";
+/// A Test must not send the edited form's credential to the saved endpoint.
+pub const SAVE_BEFORE_TEST: &str = "Save changes before testing this connection.";
+/// Automatic reads respect a deliberate logout until an explicit login.
+pub const LOGGED_OUT: &str = "This connection is logged out. Log in explicitly to use its saved login.";
 
 /// The most bytes a stored value may have.
 const MAX_STORED: usize = 8192;
 
 /// The commands that add layers from a service, and so may record the connection they came from
 /// (their `connection` parameter, or the connection whose login their address is read with).
-pub const ADD_COMMANDS: &[&str] =
-    &["service.add", "service.import", "service.refresh", "stac.addAsset", "layer.addUrl", "layer.addDownload", "map.addTiles"];
+pub const ADD_COMMANDS: &[&str] = &[
+    "service.add",
+    "service.import",
+    "service.refresh",
+    "stac.search",
+    "stac.addAsset",
+    "stac.addCube",
+    "layer.addUrl",
+    "layer.addDownload",
+    "map.addTiles",
+];
 
 #[derive(Serialize)]
 struct Stored<'a> {
@@ -93,7 +106,7 @@ fn decode(value: &Secret, c: &Connection, origin: &str) -> Result<Secret, &'stat
     }
     // A decoding error would quote the text: its details are dropped.
     let l: Loaded = serde_json::from_str(text).map_err(|_| UNUSABLE)?;
-    if l.origin != origin || l.auth != c.auth || l.user != c.user || l.key_name != c.key_name || !logins::valid_value(&l.secret) {
+    if l.origin != origin || l.auth != c.auth || l.user != c.user || l.key_name != c.key_name || check_login_secret(c, &l.secret).is_err() {
         return Err(UNUSABLE);
     }
     Ok(Secret::new(l.secret))
@@ -140,12 +153,11 @@ pub fn is_service(c: &Connection) -> bool {
     SERVICE_KINDS.contains(&c.kind.as_str())
 }
 
-/// The secret a login of `c` sends, as its method sends it: a header or a query parameter.
+/// The secret a login of `c` sends, as its header method sends it.
 fn method(c: &Connection, secret: &str) -> Option<(logins::Method, String)> {
     match c.auth.as_str() {
         "basic" => Some((logins::Method::Header("Authorization".into()), logins::basic(&c.user, secret))),
         "header" => Some((logins::Method::Header(c.key_name.clone()), secret.to_string())),
-        "query" => Some((logins::Method::Query(c.key_name.clone()), secret.to_string())),
         _ => None,
     }
 }
@@ -155,31 +167,54 @@ pub fn check_secret(secret: &str) -> Result<(), &'static str> {
     if logins::valid_value(secret) { Ok(()) } else { Err(BAD_SECRET) }
 }
 
-/// The web-service logins a session made the ones sent to an origin. The tile cache's fetches are
-/// the process's, so a login is owned by the session and the connection (`<session>/<id>`): a
-/// session never takes over, ends or reports as its own another session's login, and the logins
-/// a session made end when it does (a script's or a Python session that is dropped).
+/// Checks the complete wire credential before a form edit can invalidate an earlier login.
+pub fn check_login_secret(c: &Connection, secret: &str) -> Result<(), String> {
+    check_secret(secret).map_err(str::to_string)?;
+    if c.auth == "basic" && !logins::valid_basic(&c.user, secret) {
+        return Err("The encoded Basic login exceeds the supported header size or contains invalid characters.".into());
+    }
+    Ok(())
+}
+
+/// An active login belongs to one connection in one session; the token is not a secret, but
+/// saved projects must never treat it as authority to use another session's login.
+struct ActiveLogin {
+    origin: String,
+    binding: String,
+    auth: String,
+    user: String,
+    key_name: String,
+}
+
+impl ActiveLogin {
+    fn matches(&self, c: &Connection) -> bool {
+        login_origin(c).as_deref() == Some(self.origin.as_str())
+            && self.auth == c.auth
+            && self.user == c.user
+            && self.key_name == c.key_name
+    }
+}
+
 pub struct SessionLogins {
     session: u64,
-    /// The origins this session's logins were made for.
-    origins: BTreeSet<String>,
+    active: BTreeMap<String, ActiveLogin>,
+    logged_out: BTreeSet<String>,
+    failed: BTreeMap<String, String>,
 }
 
 impl SessionLogins {
     pub fn new() -> Self {
         static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
-        SessionLogins { session: NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed), origins: BTreeSet::new() }
+        Self {
+            session: NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+            active: BTreeMap::new(),
+            logged_out: BTreeSet::new(),
+            failed: BTreeMap::new(),
+        }
     }
 
-    /// The registry's owner of connection `id`'s login in this session.
     fn owner(&self, id: &str) -> String {
         format!("{}/{id}", self.session)
-    }
-
-    /// The connection whose login this session sends to `origin`, if it is this session's.
-    fn connection(&self, origin: &str) -> Option<String> {
-        let owner = logins::owner(origin)?;
-        owner.strip_prefix(&format!("{}/", self.session)).map(str::to_string)
     }
 }
 
@@ -191,81 +226,209 @@ impl Default for SessionLogins {
 
 impl Drop for SessionLogins {
     fn drop(&mut self) {
-        let prefix = format!("{}/", self.session);
         let mut ended = false;
-        for origin in &self.origins {
-            if let Some(owner) = logins::owner(origin).filter(|o| o.starts_with(&prefix)) {
-                ended |= logins::deactivate(origin, &owner);
-            }
+        for active in self.active.values() {
+            ended |= logins::deactivate(&active.binding);
         }
-        // What was read with them isn't another session's to see.
         if ended {
             cache::clear();
         }
     }
 }
 
-/// Makes `c` the connection whose login goes to its origin, with `secret` (none: a connection
-/// without a login method, chosen to send none). `insecure` confirms a plain http:// origin. The
-/// tiles and documents cached for the origin are asked for again.
+/// Replaces only this connection's binding, after the complete new credential has validated.
+/// Other sessions and other connections at this origin retain their own bindings.
 pub(crate) fn activate(s: &mut Session, c: &Connection, secret: Option<&Secret>, insecure: bool) -> Result<(), String> {
     let origin = login_origin(c).ok_or(NO_ORIGIN)?;
-    match secret.and_then(|secret| method(c, secret.expose())) {
-        Some((m, value)) => {
-            logins::activate(&origin, &s.web_logins.owner(&c.id), m, &value, insecure).map_err(str::to_string)?;
-            s.web_logins.origins.insert(origin.clone());
+    let next = match secret.and_then(|secret| method(c, secret.expose())) {
+        Some((method, value)) => {
+            let binding = logins::activate(&origin, &s.web_logins.owner(&c.id), method, &value, insecure).map_err(str::to_string)?;
+            Some(ActiveLogin { origin: origin.clone(), binding, auth: c.auth.clone(), user: c.user.clone(), key_name: c.key_name.clone() })
         }
-        None => {
-            // This session's own login there ends; another session's isn't this one's to end.
-            if let Some(id) = s.web_logins.connection(&origin) {
-                logins::deactivate(&origin, &s.web_logins.owner(&id));
-            }
-        }
+        None => None,
+    };
+    if let Some(old) = s.web_logins.active.remove(&c.id) {
+        logins::deactivate(&old.binding);
     }
+    if let Some(next) = next {
+        s.web_logins.active.insert(c.id.clone(), next);
+    }
+    s.web_logins.logged_out.remove(&c.id);
+    s.web_logins.failed.remove(&c.id);
     s.database_logins.select(WEB, &origin, &c.id);
     s.database_logins.clear_requests_for(WEB, &origin);
+    rebind_connection(s, c);
     cache::clear();
     Ok(())
 }
 
-/// Ends `c`'s login where it is the one sent to its origin (or `origin`, the one it had before an
-/// edit), and its choice for that origin.
-pub(crate) fn deactivate(s: &mut Session, c: &Connection, origin: Option<String>) {
-    let Some(origin) = origin.or_else(|| login_origin(c)) else { return };
-    if logins::deactivate(&origin, &s.web_logins.owner(&c.id)) {
+pub(crate) fn deactivate(s: &mut Session, c: &Connection, _origin: Option<String>) {
+    if let Some(old) = s.web_logins.active.remove(&c.id) {
+        logins::deactivate(&old.binding);
         cache::clear();
     }
-    if s.database_logins.selection(WEB, &origin) == Some(c.id.as_str()) {
+    if let Some(origin) = login_origin(c)
+        && s.database_logins.selection(WEB, &origin) == Some(c.id.as_str())
+    {
         s.database_logins.drop_selection(WEB, &origin);
     }
 }
 
-/// Whether `c`'s login, made in session `s`, is the one sent to its origin now.
-pub fn logged_in(s: &Session, c: &Connection) -> bool {
-    login_origin(c).and_then(|o| s.web_logins.connection(&o)).is_some_and(|id| id == c.id)
+pub(crate) fn logout(s: &mut Session, c: &Connection) {
+    deactivate(s, c, None);
+    s.database_logins.forget_connection(&c.id);
+    s.web_logins.logged_out.insert(c.id.clone());
+    s.web_logins.failed.remove(&c.id);
 }
 
-/// The secret `c` logs in with, with what needs no typing: the one given this session, else the
-/// one saved on this computer (read once, then kept for the session). Errors are fixed sentences.
+/// Explicit login is the retry boundary for a failed store read or a deliberate logout.
+pub(crate) fn retry(s: &mut Session, id: &str) {
+    s.web_logins.failed.remove(id);
+    s.web_logins.logged_out.remove(id);
+}
+
+pub(crate) fn forget(s: &mut Session, c: &Connection) {
+    deactivate(s, c, None);
+    retry(s, &c.id);
+    s.database_logins.forget_connection(&c.id);
+}
+
+pub fn logged_in(s: &Session, c: &Connection) -> bool {
+    s.web_logins.active.get(&c.id).is_some_and(|a| a.matches(c) && logins::is_active(&a.binding))
+}
+
 pub(crate) fn known_secret(s: &mut Session, c: &Connection) -> Result<Secret, String> {
+    if s.web_logins.logged_out.contains(&c.id) {
+        return Err(LOGGED_OUT.into());
+    }
     if let Some(secret) = s.database_logins.session_password(&c.id) {
+        if !s.web_logins.active.get(&c.id).is_some_and(|a| a.matches(c)) {
+            return Err(UNUSABLE.into());
+        }
         return Ok(secret.clone());
+    }
+    if let Some(error) = s.web_logins.failed.get(&c.id) {
+        return Err(error.clone());
     }
     if !c.remembered {
         return Err(REQUIRED.into());
     }
-    match load(s.database_logins.secret_store(), c) {
+    let error = match load(s.database_logins.secret_store(), c) {
         Loading::Found(secret) => {
             s.database_logins.set_session_password(&c.id, secret.expose());
-            Ok(secret)
+            return Ok(secret);
         }
         Loading::Missing => {
             s.connections.set_remembered(&c.id, false);
-            Err(NONE_SAVED.into())
+            NONE_SAVED
         }
-        Loading::Unavailable => Err(UNAVAILABLE.into()),
-        Loading::Unusable => Err(UNUSABLE.into()),
+        Loading::Unavailable => UNAVAILABLE,
+        Loading::Unusable => UNUSABLE,
+    };
+    s.web_logins.failed.insert(c.id.clone(), error.into());
+    Err(error.into())
+}
+
+/// Binds a request to a connection chosen in this session. A bare address can resolve to the
+/// explicit session choice or sole saved definition, never the first of several matches.
+pub fn request(s: &mut Session, connection: Option<&str>, url: &str) -> Result<String, String> {
+    let plain = logins::inner(url);
+    let Some(origin) = logins::origin(plain) else { return Ok(plain.to_string()) };
+    if plain != url && connection.is_none() {
+        let token = rustgis_data::login_address::parse(url).ok().flatten().map(|b| b.binding);
+        if s.web_logins.active.values().any(|a| token == Some(a.binding.as_str())) {
+            logins::check(url).map_err(str::to_string)?;
+            return Ok(url.to_string());
+        }
+        return Err("This request's login does not belong to this session.".into());
     }
+    let candidates: Vec<_> =
+        s.connections.connections.iter().filter(|c| is_service(c) && login_origin(c).as_deref() == Some(origin.as_str())).collect();
+    let chosen = if let Some(id) = connection {
+        let c = s
+            .connections
+            .connections
+            .iter()
+            .find(|c| c.id == id && is_service(c))
+            .ok_or("No saved web-service connection with this id.")?;
+        // A service may link to another origin, but never grants it this login.
+        if login_origin(c).as_deref() != Some(origin.as_str()) {
+            return Ok(plain.to_string());
+        }
+        Some(c.clone())
+    } else if let Some(id) = s.database_logins.selection(WEB, &origin) {
+        candidates.iter().find(|c| c.id == id).map(|c| (*c).clone())
+    } else if candidates.len() == 1 {
+        candidates.first().map(|c| (*c).clone())
+    } else {
+        None
+    };
+    let Some(c) = chosen else {
+        if candidates.len() > 1 {
+            s.database_logins.request(LoginRequest {
+                reason: LoginReason::Choose,
+                kind: WEB,
+                key: origin,
+                connections: candidates.iter().map(|c| c.id.clone()).collect(),
+                layers: Vec::new(),
+                tiles: 0,
+                opened: s.opened,
+                prompted: false,
+            });
+            return Err("Several saved connections match this address. Choose a connection explicitly.".into());
+        }
+        return Ok(plain.to_string());
+    };
+    if c.auth.is_empty() {
+        return Ok(plain.to_string());
+    }
+    if !logged_in(s, &c) {
+        let secret = known_secret(s, &c)?;
+        activate(s, &c, Some(&secret), true)?;
+    }
+    let active = s.web_logins.active.get(&c.id).ok_or(REQUIRED)?;
+    logins::bind(&active.binding, plain).map_err(str::to_string)
+}
+
+pub fn request_params<'a>(s: &mut Session, p: &'a Value) -> Result<std::borrow::Cow<'a, Value>, String> {
+    let Some(url) = p.get("url").and_then(Value::as_str) else { return Ok(std::borrow::Cow::Borrowed(p)) };
+    let id = match p.get("connection") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(id)) if id.trim().is_empty() => None,
+        Some(Value::String(id)) => Some(id.as_str()),
+        Some(_) => return Err("connection is a saved web-service connection id.".into()),
+    };
+    let bound = request(s, id, url)?;
+    // Carry the originating connection into internal add/download commands too. A linked
+    // foreign URL must not silently select a different origin's remembered login.
+    let implicit = if id.is_none() {
+        let origin = logins::origin(url);
+        let token = rustgis_data::login_address::parse(&bound).ok().flatten().map(|b| b.binding);
+        s.web_logins
+            .active
+            .iter()
+            .find(|(_, a)| token == Some(a.binding.as_str()))
+            .map(|(id, _)| id.as_str())
+            .or_else(|| origin.as_deref().and_then(|o| s.database_logins.selection(WEB, o)))
+            .or_else(|| {
+                let mut matches = s.connections.connections.iter().filter(|c| is_service(c) && login_origin(c) == origin);
+                let first = matches.next()?;
+                matches.next().is_none().then_some(first.id.as_str())
+            })
+    } else {
+        None
+    };
+    if bound == url && implicit.is_none() {
+        return Ok(std::borrow::Cow::Borrowed(p));
+    }
+    let mut owned = p.clone();
+    *owned.get_mut("url").ok_or("url is required")? = Value::String(bound);
+    if let Some(id) = implicit
+        && let Some(object) = owned.as_object_mut()
+    {
+        object.insert("connection".into(), Value::String(id.to_string()));
+    }
+    Ok(std::borrow::Cow::Owned(owned))
 }
 
 /// The web address a tile layer reads (a tile template's archive for a PMTiles or COG template).
@@ -278,6 +441,83 @@ fn layer_address(l: &rustgis_map::Layer) -> Option<&str> {
     l.source.as_ref().and_then(|s| s.path.as_deref()).or_else(|| l.raster.as_ref().and_then(|r| r.path.as_deref()))
 }
 
+/// Rebinds only addresses belonging to this connection. Cross-origin links stay anonymous.
+fn rebind_connection(s: &mut Session, c: &Connection) {
+    let binding = s.web_logins.active.get(&c.id).map(|a| a.binding.as_str());
+    let rewrite = |address: &mut String| {
+        let (prefix, raw) = crate::sources::template_archive(address).unwrap_or(("", address.as_str()));
+        let plain = logins::inner(raw);
+        let next = binding.and_then(|b| logins::bind(b, plain).ok()).unwrap_or_else(|| plain.to_string());
+        let next = if prefix.is_empty() { next } else { format!("{prefix}{next}") };
+        if *address != next {
+            *address = next;
+        }
+    };
+    for m in &mut s.project.maps {
+        for t in m.tiles.iter_mut().filter(|t| t.connection == c.id) {
+            rewrite(&mut t.url);
+            if let Some(url) = &mut t.time_url {
+                rewrite(url);
+            }
+            for (_, url) in &mut t.time_urls {
+                rewrite(url);
+            }
+            for legend in &mut t.legends {
+                rewrite(&mut legend.url);
+            }
+            if let Some(info) = &mut t.feature_info {
+                rewrite(&mut info.url);
+            }
+        }
+        for l in m.layers.iter_mut().filter(|l| l.connection == c.id) {
+            if let Some(path) = l.source.as_mut().and_then(|source| source.path.as_mut()) {
+                rewrite(path);
+            }
+            if let Some(path) = l.raster.as_mut().and_then(|raster| raster.path.as_mut()) {
+                rewrite(path);
+            }
+            if let Some(path) = &mut l.dataset.source {
+                rewrite(path);
+            }
+        }
+        for group in &mut m.service_groups {
+            let ids: BTreeSet<_> = group
+                .children
+                .iter()
+                .filter_map(|child| m.layers.iter().find(|l| l.id == child.layer).map(|l| l.connection.as_str()))
+                .collect();
+            if ids.len() == 1 && ids.contains(c.id.as_str()) {
+                rewrite(&mut group.url);
+                for child in &mut group.children {
+                    rewrite(&mut child.source_url);
+                }
+            }
+        }
+    }
+}
+
+fn record_choice(s: &mut Session, origin: &str, old: &str, c: &Connection) {
+    for m in &mut s.project.maps {
+        for t in &mut m.tiles {
+            if t.connection == old && logins::origin(tile_address(&t.url)).as_deref() == Some(origin) {
+                t.connection = c.id.clone();
+            }
+        }
+        let group_layers: BTreeSet<_> = m
+            .service_groups
+            .iter()
+            .filter(|g| logins::origin(&g.url).as_deref() == Some(origin))
+            .flat_map(|g| g.children.iter().map(|child| child.layer))
+            .collect();
+        for l in &mut m.layers {
+            if l.connection == old && (layer_address(l).and_then(logins::origin).as_deref() == Some(origin) || group_layers.contains(&l.id))
+            {
+                l.connection = c.id.clone();
+            }
+        }
+    }
+}
+
 /// What a project reads from one origin again later: its layers and tile layers, and the saved
 /// connections they record.
 #[derive(Default)]
@@ -285,15 +525,16 @@ struct Reads {
     recorded: BTreeSet<String>,
     layers: Vec<u32>,
     tiles: usize,
+    layer_keys: BTreeSet<(usize, u32)>,
 }
 
 /// The origins the project reads from, with what reads each.
-fn reads(s: &Session) -> BTreeMap<String, Reads> {
-    let mut out = BTreeMap::<String, Reads>::new();
-    for m in &s.project.maps {
+fn reads(s: &Session) -> BTreeMap<(String, String), Reads> {
+    let mut out = BTreeMap::<(String, String), Reads>::new();
+    for (map_index, m) in s.project.maps.iter().enumerate() {
         for t in &m.tiles {
             let Some(origin) = logins::origin(tile_address(&t.url)) else { continue };
-            let r = out.entry(origin).or_default();
+            let r = out.entry((origin, t.connection.clone())).or_default();
             r.tiles += 1;
             if !t.connection.is_empty() {
                 r.recorded.insert(t.connection.clone());
@@ -301,8 +542,10 @@ fn reads(s: &Session) -> BTreeMap<String, Reads> {
         }
         for l in &m.layers {
             let Some(origin) = layer_address(l).and_then(logins::origin) else { continue };
-            let r = out.entry(origin).or_default();
-            r.layers.push(l.id);
+            let r = out.entry((origin, l.connection.clone())).or_default();
+            if r.layer_keys.insert((map_index, l.id)) {
+                r.layers.push(l.id);
+            }
             if !l.connection.is_empty() {
                 r.recorded.insert(l.connection.clone());
             }
@@ -311,11 +554,14 @@ fn reads(s: &Session) -> BTreeMap<String, Reads> {
         // with the connection its layers record.
         for g in &m.service_groups {
             let Some(origin) = logins::origin(&g.url) else { continue };
-            let r = out.entry(origin).or_default();
             for child in &g.children {
-                r.layers.push(child.layer);
-                if let Some(l) = m.layers.iter().find(|l| l.id == child.layer && !l.connection.is_empty()) {
-                    r.recorded.insert(l.connection.clone());
+                let id = m.layers.iter().find(|l| l.id == child.layer).map(|l| l.connection.as_str()).unwrap_or("");
+                let r = out.entry((origin.clone(), id.to_string())).or_default();
+                if r.layer_keys.insert((map_index, child.layer)) {
+                    r.layers.push(child.layer);
+                }
+                if !id.is_empty() {
+                    r.recorded.insert(id.to_string());
                 }
             }
         }
@@ -329,10 +575,13 @@ fn reads(s: &Session) -> BTreeMap<String, Reads> {
 /// recorded connection this computer doesn't have are asked about ([`LoginRequest`]), never
 /// guessed.
 pub(crate) fn resolve(s: &mut Session, only: Option<&BTreeSet<String>>) {
-    for (origin, r) in reads(s) {
+    let mut pending = Vec::new();
+    let mut touched = BTreeSet::new();
+    for ((origin, recorded_id), r) in reads(s) {
         if only.is_some_and(|only| !only.contains(&origin)) {
             continue;
         }
+        touched.insert(origin.clone());
         let candidates: Vec<Connection> = s
             .connections
             .connections
@@ -344,12 +593,9 @@ pub(crate) fn resolve(s: &mut Session, only: Option<&BTreeSet<String>>) {
         // project is no one's choice).
         let recorded: Vec<&Connection> = candidates.iter().filter(|c| r.recorded.contains(&c.id)).collect();
         let selected = s.database_logins.selection(WEB, &origin).and_then(|id| candidates.iter().find(|c| c.id == id));
-        let chosen = match (recorded.as_slice(), selected) {
-            ([only], None) => Some(*only),
-            ([only], Some(sel)) if sel.id == only.id => Some(*only),
-            ([_, ..], Some(sel)) if recorded.iter().any(|c| c.id == sel.id) && recorded.len() > 1 => Some(sel),
-            ([], Some(sel)) => Some(sel),
-            ([], None) if candidates.len() == 1 => candidates.first(),
+        let chosen = match recorded.as_slice() {
+            [only] => Some(*only),
+            [] => selected.or_else(|| (candidates.len() == 1).then(|| candidates.first()).flatten()),
             _ => None,
         };
         let chosen = chosen.cloned();
@@ -365,42 +611,50 @@ pub(crate) fn resolve(s: &mut Session, only: Option<&BTreeSet<String>>) {
             prompted: false,
         };
         let Some(c) = chosen else {
-            if candidates.iter().any(|c| !c.auth.is_empty()) && (candidates.len() > 1 || recorded.len() > 1) {
+            if candidates.len() > 1 || recorded.len() > 1 {
                 // Several connections for the address, and none of them clear: the user picks.
                 let ids: Vec<String> = if recorded.len() > 1 {
                     recorded.iter().map(|c| c.id.clone()).collect()
                 } else {
                     candidates.iter().map(|c| c.id.clone()).collect()
                 };
-                ask(s, request(LoginReason::Choose, ids));
+                pending.push(request(LoginReason::Choose, ids));
             } else if candidates.is_empty() && !r.recorded.is_empty() {
                 // Layers came from a connection this computer doesn't have, or whose address has
                 // since moved to another origin (a layer records only a connection of its origin).
-                ask(s, request(LoginReason::Connection, Vec::new()));
-            } else {
-                s.database_logins.clear_requests_for(WEB, &origin);
+                pending.push(request(LoginReason::Connection, Vec::new()));
             }
             continue;
         };
-        let active = s.web_logins.connection(&origin);
-        if c.auth.is_empty() || active.as_deref() == Some(c.id.as_str()) {
-            // Nothing to send, or it is sent already.
-            if c.auth.is_empty() && active.is_some() {
-                let _ = activate(s, &c, None, false);
-            }
-            s.database_logins.clear_requests_for(WEB, &origin);
+        if recorded_id != c.id {
+            record_choice(s, &origin, &recorded_id, &c);
+        }
+        if c.auth.is_empty() || logged_in(s, &c) {
+            rebind_connection(s, &c);
             continue;
         }
         // A secret given this session or saved was confirmed for this origin when it was typed.
         match known_secret(s, &c).and_then(|secret| activate(s, &c, Some(&secret), true)) {
             Ok(()) => {}
             Err(e) => {
-                if e != REQUIRED {
+                let already_asked = s
+                    .database_logins
+                    .requests(s.opened)
+                    .any(|r| r.kind == WEB && r.key == origin && r.connections == [c.id.clone()] && r.reason == LoginReason::Password);
+                if e != REQUIRED && !already_asked {
                     s.notify(format!("{}: {e}", c.name), true);
                 }
-                ask(s, request(LoginReason::Password, vec![c.id.clone()]));
+                pending.push(request(LoginReason::Password, vec![c.id.clone()]));
             }
         }
+    }
+    for origin in touched {
+        if !pending.iter().any(|request| request.key == origin) {
+            s.database_logins.clear_requests_for(WEB, &origin);
+        }
+    }
+    for request in pending {
+        ask(s, request);
     }
 }
 
@@ -492,7 +746,14 @@ pub(crate) fn tag(s: &mut Session, params: &Value, before: Before, out: &Value) 
         match (&named, origin) {
             (Some(c), None) => Some(c.id.clone()),
             (Some(c), Some(o)) if named_origin.as_ref() == Some(o) => Some(c.id.clone()),
-            (_, Some(o)) => s.web_logins.connection(o),
+            (_, Some(o)) => {
+                if let Some(id) = s.database_logins.selection(WEB, o) {
+                    return Some(id.to_string());
+                }
+                let mut matches = s.connections.connections.iter().filter(|c| is_service(c) && login_origin(c).as_ref() == Some(o));
+                let first = matches.next()?;
+                matches.next().is_none().then(|| first.id.clone())
+            }
             (None, None) => None,
         }
     };
@@ -515,7 +776,7 @@ pub(crate) fn tag(s: &mut Session, params: &Value, before: Before, out: &Value) 
         for l in m.layers.iter_mut().filter(|l| old_layers.is_none_or(|old| !old.contains(&l.id))) {
             added.insert(l.id);
             let origin = layer_address(l).or(l.dataset.source.as_deref()).and_then(logins::origin);
-            if let Some(id) = pick(origin.as_ref()) {
+            if let Some(id) = pick(origin.as_ref()).filter(|_| named.is_some() || l.connection.is_empty()) {
                 l.connection = id;
             }
             if layer_address(l).is_some() {

@@ -3021,7 +3021,7 @@ pub fn param_applies(tool: &str, param: &str, value: &dyn Fn(&str) -> String) ->
         ("summaryStatistics", "field") => {
             // Shown until the list holds a pair, so an empty list doesn't hide the field it falls back to.
             let list = serde_json::from_str::<Json>(&value("statistics")).unwrap_or(Json::Null);
-            !list.as_array().is_some_and(|items| !items.is_empty())
+            list.as_array().is_none_or(|items| items.is_empty())
         }
         ("pivotTable", "separator") => value("statistic").trim().eq_ignore_ascii_case("CONCATENATE"),
         ("summaryStatistics", "separator") => {

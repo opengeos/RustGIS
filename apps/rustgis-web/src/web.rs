@@ -573,7 +573,9 @@ async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
     let (url, range) = cache::split_range(url);
     // An `s3://` address becomes its web address, and a request to an S3 connection's endpoint
     // is signed (the bucket's CORS rules must allow the Authorization and x-amz-* headers).
-    let prepared = rustgis_ui_egui::rustgis_engine::render::rustgis_tiles::s3::prepare(url)?;
+    logins::check(url).map_err(str::to_string)?;
+    let bound = url;
+    let prepared = rustgis_ui_egui::rustgis_engine::render::rustgis_tiles::s3::prepare(logins::inner(url))?;
     let url = prepared.url.as_str();
     // An ArcGIS sign-in's token, for the portal and the servers it covers, renewed first when it
     // is about to expire. It goes as the request's `token` parameter, not a header: ArcGIS's
@@ -581,13 +583,14 @@ async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
     if !prepared.signed {
         crate::arcgis::renew_if_due(url).await;
     }
-    let login = if prepared.signed { None } else { logins::apply(url) };
+    let target = logins::inherit(bound, url);
+    let login = if prepared.signed { None } else { logins::apply(&target).map_err(str::to_string)? };
     let login_url = login.as_ref().map_or(url, |applied| applied.url.as_str());
     // An explicit login overrides ArcGIS's equivalent built-in credential on this hop.
     let overrides_arcgis = login
         .as_ref()
         .and_then(|applied| applied.header.as_ref())
-        .is_some_and(|(name, _)| name.eq_ignore_ascii_case("X-Esri-Authorization"));
+        .is_some_and(|(name, _)| name.eq_ignore_ascii_case("Authorization") || name.eq_ignore_ascii_case("X-Esri-Authorization"));
     let arcgis = if prepared.signed || overrides_arcgis {
         None
     } else {
@@ -721,6 +724,7 @@ async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
         Ok(bytes)
     }
     .await;
+    logins::check(bound).map_err(str::to_string)?;
     result.map_err(|error| if login.is_some() { logins::scrub(&format!("{url}: {error}")) } else { error })
 }
 
@@ -729,10 +733,15 @@ async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
 async fn post_json(url: &str, body: &str) -> Result<Vec<u8>, String> {
     use rustgis_ui_egui::rustgis_engine::render::rustgis_tiles::{cache, logins, s3};
     let window = web_sys::window().ok_or("no window")?;
-    // S3 preparation signs a GET, not this POST: only use it to avoid adding another login.
-    let prepared = s3::prepare(url)?;
-    let login = if prepared.signed { None } else { logins::apply(url) };
-    let request = login.as_ref().map_or(url, |applied| applied.url.as_str());
+    logins::check(url).map_err(str::to_string)?;
+    // Preparation supplies the reached URL, never GET signing headers for a POST.
+    let prepared = s3::prepare(logins::inner(url))?;
+    if prepared.signed {
+        return Err("S3 signed JSON POST requests are not supported.".into());
+    }
+    let target = logins::inherit(url, &prepared.url);
+    let login = logins::apply(&target).map_err(str::to_string)?;
+    let request = prepared.url.as_str();
     let result = async {
         let err = |e: wasm_bindgen::JsValue| {
             if login.is_some() { "the browser couldn't process the authenticated request".to_string() } else { format!("{e:?}") }
@@ -772,6 +781,7 @@ async fn post_json(url: &str, body: &str) -> Result<Vec<u8>, String> {
         Ok(bytes.to_vec())
     }
     .await;
+    logins::check(url).map_err(str::to_string)?;
     result.map_err(|error| if login.is_some() { logins::scrub(&format!("{url}: {error}")) } else { error })
 }
 
@@ -781,13 +791,16 @@ async fn post_json(url: &str, body: &str) -> Result<Vec<u8>, String> {
 async fn head(url: &str) -> Result<rustgis_ui_egui::rustgis_engine::render::rustgis_tiles::cache::Head, String> {
     use rustgis_ui_egui::rustgis_engine::render::rustgis_tiles::{cache, logins, s3};
     let window = web_sys::window().ok_or("no window")?;
-    let prepared = s3::prepare(url)?;
+    logins::check(url).map_err(str::to_string)?;
+    let bound = url;
+    let prepared = s3::prepare(logins::inner(url))?;
     // A request signed for S3 is signed for a GET.
     if prepared.signed {
         return Ok(cache::Head::default());
     }
     let url = prepared.url.as_str();
-    let login = logins::apply(url);
+    let target = logins::inherit(bound, url);
+    let login = logins::apply(&target).map_err(str::to_string)?;
     let request = login.as_ref().map_or(url, |applied| applied.url.as_str());
     let result = async {
         let err = |e: wasm_bindgen::JsValue| {
@@ -830,6 +843,7 @@ async fn head(url: &str) -> Result<rustgis_ui_egui::rustgis_engine::render::rust
         })
     }
     .await;
+    logins::check(bound).map_err(str::to_string)?;
     result.map_err(|error| if login.is_some() { logins::scrub(&format!("{url}: {error}")) } else { error })
 }
 

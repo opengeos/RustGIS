@@ -22,8 +22,8 @@ pub const DATABASE_KINDS: &[&str] = &["postgres", "mysql", "sqlserver"];
 /// The web-service kinds, which can log in with a [`SERVICE_AUTH`] method.
 pub const SERVICE_KINDS: &[&str] = &["service", "wms", "wmts", "wfs", "wcs", "ogcapi", "arcgis", "csw", "stac"];
 /// How a web-service connection logs in: not at all, HTTP basic authentication (a user name and a
-/// password), an API key in a header, or an API key in a query parameter.
-pub const SERVICE_AUTH: &[&str] = &["none", "basic", "header", "query"];
+/// password), or an API key in a header.
+pub const SERVICE_AUTH: &[&str] = &["none", "basic", "header"];
 /// The kind of a [`LoginRequest`] for a web service's origin (its `key`).
 pub const WEB: &str = "web";
 pub const S3_CREDENTIALS: &[&str] = &["keys", "profile", "environment", "none"];
@@ -62,7 +62,7 @@ pub struct Connection {
     /// The user name of a basic-authentication login.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub user: String,
-    /// The header (`auth` header) or query parameter (`auth` query) an API key goes in.
+    /// The header an API key goes in (`auth` header).
     #[serde(default, rename = "keyName", skip_serializing_if = "String::is_empty")]
     pub key_name: String,
 }
@@ -134,10 +134,8 @@ fn name_text(t: &str) -> String {
     t.trim().chars().filter(|c| !c.is_control()).take(MAX_NAME).collect()
 }
 
-/// Checks a connection's login method ([`SERVICE_AUTH`]) and the names it uses, leaving out what
-/// the method doesn't use. A query login's parameter is taken out of the address (the key is
-/// given to the login, never kept): whether it was.
-fn clean_login(c: &mut Connection) -> Result<bool, String> {
+/// Checks a connection's login method and the fields it uses.
+fn clean_login(c: &mut Connection) -> Result<(), String> {
     use crate::render::rustgis_tiles::logins;
     let auth = c.auth.trim().to_ascii_lowercase();
     c.auth = if auth == "none" { String::new() } else { auth };
@@ -146,7 +144,7 @@ fn clean_login(c: &mut Connection) -> Result<bool, String> {
     if c.auth.is_empty() {
         c.user.clear();
         c.key_name.clear();
-        return Ok(false);
+        return Ok(());
     }
     if !SERVICE_KINDS.contains(&c.kind.as_str()) {
         return Err(format!("auth is for web-service connections ({}), not {}", SERVICE_KINDS.join(", "), c.kind));
@@ -159,7 +157,7 @@ fn clean_login(c: &mut Connection) -> Result<bool, String> {
                     "basic authentication needs a user of at most {MAX_NAME} characters, without ':' or control characters"
                 ));
             }
-            Ok(false)
+            Ok(())
         }
         "header" => {
             c.user.clear();
@@ -169,45 +167,10 @@ fn clean_login(c: &mut Connection) -> Result<bool, String> {
                     logins::MAX_NAME
                 ));
             }
-            Ok(false)
-        }
-        "query" => {
-            c.user.clear();
-            if !logins::valid_query_name(&c.key_name) {
-                return Err(format!("keyName must be a query parameter name of at most {} letters, digits or -_.~", logins::MAX_NAME));
-            }
-            note_query_key(&c.key_name);
-            let kept = without_parameter(&c.address, &c.key_name);
-            let stripped = kept != c.address;
-            c.address = kept;
-            Ok(stripped)
+            Ok(())
         }
         other => Err(format!("unknown auth '{other}' ({})", SERVICE_AUTH.join(", "))),
     }
-}
-
-/// The query parameter names saved web-service connections send their API keys in (names only, at
-/// most 256): an address carrying one is redacted even before its connection logs in.
-static QUERY_KEY_NAMES: std::sync::Mutex<BTreeSet<String>> = std::sync::Mutex::new(BTreeSet::new());
-
-fn note_query_key(name: &str) {
-    let mut names = QUERY_KEY_NAMES.lock().unwrap_or_else(|e| e.into_inner());
-    if names.len() < 256 {
-        names.insert(name.to_ascii_lowercase());
-    }
-}
-
-/// The query parameter names saved connections have sent API keys in, this run.
-pub(crate) fn query_key_names() -> Vec<String> {
-    QUERY_KEY_NAMES.lock().unwrap_or_else(|e| e.into_inner()).iter().cloned().collect()
-}
-
-/// `address` without the query parameter `name` (its case aside).
-pub(crate) fn without_parameter(address: &str, name: &str) -> String {
-    let Some((head, query)) = address.split_once('?') else { return address.to_string() };
-    let kept: Vec<&str> =
-        query.split('&').filter(|kv| !kv.is_empty() && !kv.split('=').next().is_some_and(|k| k.eq_ignore_ascii_case(name))).collect();
-    if kept.is_empty() { head.to_string() } else { format!("{head}?{}", kept.join("&")) }
 }
 
 /// The origin (`scheme://host[:port]`) a web-service connection's login goes to: the only one.
@@ -236,7 +199,7 @@ pub fn clean(mut c: Connection) -> Result<(Connection, bool), String> {
         return Err("a connection address must be at most 2048 bytes and contain no control characters".into());
     }
     let stored = sources::redact(t);
-    let mut stripped = stored != t;
+    let stripped = stored != t;
     if DATABASE_KINDS.contains(&c.kind.as_str()) {
         if stored.is_empty() || database_kind(&stored) != Some(c.kind.as_str()) {
             return Err(format!(
@@ -251,7 +214,7 @@ pub fn clean(mut c: Connection) -> Result<(Connection, bool), String> {
         }
     }
     c.address = stored;
-    stripped |= clean_login(&mut c)?;
+    clean_login(&mut c)?;
     c.name = name_text(&c.name);
     if c.name.is_empty() {
         c.name = if c.kind == "s3" && c.address.is_empty() { "AWS S3".into() } else { sources::default_name(&c.address) };

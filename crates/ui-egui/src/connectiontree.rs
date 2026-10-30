@@ -342,7 +342,7 @@ fn add_with_options(app: &mut RustGisApp, c: &Connection, child: &Value, source:
         }
         _ => match (source, child.get("layer").filter(|l| l.is_object())) {
             (Some(source), Some(layer)) => {
-                app.run("ui.addService", json!({"url": source.url, "type": source.kind}))?;
+                app.run("ui.addService", json!({"url": source.url, "type": source.kind, "connection": c.id}))?;
                 app.dialogs.connection = Some(c.id.clone());
                 app.ui.service_browse.filter = layer["name"].as_str().unwrap_or("").to_string();
                 Ok(())
@@ -676,7 +676,8 @@ mod tests {
     const WMS: &str = r#"<WMS_Capabilities version="1.3.0" xmlns="http://www.opengis.net/wms" xmlns:xlink="http://www.w3.org/1999/xlink"><Service><Title>Local</Title></Service><Capability><Request><GetMap><Format>image/png</Format><DCPType><HTTP><Get><OnlineResource xlink:href="http://127.0.0.1:9/wms?"/></Get></HTTP></DCPType></GetMap></Request><Layer><CRS>EPSG:3857</CRS><Layer><Name>a</Name><Title>A</Title></Layer><Layer><Name>b</Name><Title>B</Title></Layer></Layer></Capability></WMS_Capabilities>"#;
 
     fn wms(url: &str) -> ServiceSource {
-        ServiceSource { url: url.into(), kind: "wms", text: WMS.into(), documents: Vec::new() }
+        let endpoint = format!("{}?", url.split('?').next().unwrap_or(url));
+        ServiceSource { url: url.into(), kind: "wms", text: WMS.replace("http://127.0.0.1:9/wms?", &endpoint), documents: Vec::new() }
     }
 
     /// A listed WMS layer, as the tree adds it.
@@ -715,6 +716,7 @@ mod tests {
         let name = app.session.connections.find(&id).unwrap().name.clone();
         add_from(app, &layer("b"), Some(&wms(url)), Some(&name), Some(&id)).unwrap();
         // One entry per kind and address: the re-add takes the current name and layer.
+        assert_eq!(app.session.map().tiles.last().unwrap().connection, id);
         assert_eq!(app.session.sources.recent.iter().filter(|s| s.address == url).count(), 1);
         assert_eq!(app.session.sources.recent.first(), Some(&expected(url, "b", "Renamed")));
 
@@ -765,6 +767,11 @@ mod tests {
         assert!(app.ui.connection_tree.picks.is_empty());
         assert_eq!(app.session.sources.recent.first(), Some(&expected(two, "a", "Two")));
         assert_eq!(app.session.sources.recent.get(1), Some(&expected(one, "a", "One")));
+        let added = &app.session.map().tiles;
+        for (id, url) in ids.iter().zip([one, two]) {
+            let tile = added.iter().find(|tile| tile.url.starts_with(url)).unwrap();
+            assert_eq!(&tile.connection, id);
+        }
     }
 
     /// A download lands after the add returned: its entry is named for the connection it came
@@ -782,11 +789,11 @@ mod tests {
         let (good, bad) = (format!("{base}/points.geojson"), format!("{base}/missing.geojson"));
         let url_add = |address: &str| json!({"add": {"command": "layer.addUrl", "params": {"url": address, "name": "Points"}}});
         let app = h.state_mut();
-        let id = app.session.run("connection.new", &json!({"kind": "wms", "address": "http://127.0.0.1:9/wms", "name": "Local"})).unwrap()
-            ["id"]
-            .as_str()
-            .unwrap()
-            .to_string();
+        let id =
+            app.session.run("connection.new", &json!({"kind": "wms", "address": format!("{base}/wms"), "name": "Local"})).unwrap()["id"]
+                .as_str()
+                .unwrap()
+                .to_string();
         let before = app.session.sources.recent.clone();
         add_from(app, &url_add(&good), None, Some("Local"), Some(&id)).unwrap();
         add_from(app, &url_add(&bad), None, Some("Local"), Some(&id)).unwrap();
@@ -801,6 +808,90 @@ mod tests {
         let landed = recent.iter().find(|s| s.address == good).unwrap();
         assert_eq!((landed.kind.as_str(), landed.name.as_str()), ("url", "Local"));
         assert!(recent.iter().all(|s| s.address != bad), "a failed download isn't recorded");
+        assert_eq!(h.state().session.map().layer_by_name("Points").unwrap().connection, id);
+    }
+
+    #[test]
+    fn a_service_dialog_download_keeps_the_browsed_connection_not_the_current_selection() {
+        let base = serve(|_| (200, br#"{"type":"Feature","properties":{},"geometry":{"type":"Point","coordinates":[1,2]}}"#.to_vec()));
+        let mut h = harness();
+        let app = h.state_mut();
+        let url = format!("{base}/wms");
+        let one = app.run("connection.new", json!({"kind":"wms", "name":"One", "address":url})).unwrap();
+        let two = app.run("connection.new", json!({"kind":"wms", "name":"Two", "address":url})).unwrap();
+        app.run("ui.addService", json!({"url":url, "type":"wms", "connection":one["id"]})).unwrap();
+        app.dialogs.connection = two["id"].as_str().map(str::to_string);
+        let src = wms(&url);
+        let feature = json!({"name":"points", "offer":{"type":"features", "url":format!("{base}/points.geojson")}});
+        serviceui::add_layer(app, &src, &feature, "", None, true).unwrap();
+        assert_eq!(app.ui.downloads.last().unwrap().2["connection"], one["id"]);
+        until(&mut h, |app| app.ui.downloads.is_empty());
+        assert_eq!(h.state().session.map().layer_by_name("points").unwrap().connection, one["id"].as_str().unwrap());
+    }
+
+    #[test]
+    fn a_service_dialog_does_not_forward_a_different_origins_connection() {
+        let mut app = RustGisApp::with_sample();
+        let saved = app.run("connection.new", json!({"kind":"wms", "address":"https://other-service.invalid/wms"})).unwrap();
+        let src = wms("http://127.0.0.1:9/wms");
+        let feature = json!({"name":"points", "offer":{"type":"features", "url":"http://127.0.0.1:9/points.geojson"}});
+        serviceui::add_layer_from(&mut app, &src, &feature, "", None, true, None, saved["id"].as_str()).unwrap();
+        assert!(app.ui.downloads.last().unwrap().2.get("connection").is_none());
+    }
+
+    #[test]
+    fn url_downloads_use_the_explicit_basic_or_header_connection_and_record_it() {
+        for basic in [false, true] {
+            let base = serve(move |head| {
+                let head = head.to_ascii_lowercase();
+                let authorized = if basic {
+                    head.contains("authorization: basic cmvhzgvyonbhc3n3b3jk")
+                } else {
+                    head.contains("x-api-key: ui-download-key")
+                };
+                if authorized {
+                    (200, br#"{"type":"Feature","properties":{},"geometry":{"type":"Point","coordinates":[1,2]}}"#.to_vec())
+                } else {
+                    (401, b"Login required".to_vec())
+                }
+            });
+            let mut h = harness();
+            let app = h.state_mut();
+            let c = app
+                .run(
+                    "connection.new",
+                    json!({
+                        "kind":"service", "address":base, "auth":if basic { "basic" } else { "header" },
+                        "user":if basic { "reader" } else { "" }, "keyName":if basic { "" } else { "X-Api-Key" }
+                    }),
+                )
+                .unwrap();
+            let mut login = json!({"id":c["id"], "allowInsecure":true});
+            login[if basic { "password" } else { "apiKey" }] = json!(if basic { "password" } else { "ui-download-key" });
+            app.run("connection.login", login).unwrap();
+            app.run("ui.addUrl", json!({"url":format!("{base}/points.geojson"), "name":"Private points", "connection":c["id"]})).unwrap();
+            until(&mut h, |app| app.ui.downloads.is_empty());
+            let layer = h.state().session.map().layer_by_name("Private points").unwrap();
+            assert_eq!(layer.connection, c["id"].as_str().unwrap());
+        }
+    }
+
+    #[test]
+    fn a_foreign_followup_does_not_adopt_that_origins_saved_login() {
+        let mut app = RustGisApp::with_sample();
+        let foreign = "https://foreign-ui-followup.invalid/points.geojson";
+        let c = app
+            .run(
+                "connection.new",
+                json!({
+                    "kind":"service", "address":foreign, "auth":"header", "keyName":"X-Api-Key"
+                }),
+            )
+            .unwrap();
+        app.run("connection.login", json!({"id":c["id"], "apiKey":"foreign-followup-key"})).unwrap();
+        let address = serviceui::request_from(&mut app, None, "https://original-ui-followup.invalid/service", foreign).unwrap();
+        assert_eq!(address, foreign);
+        assert!(rustgis_engine::render::rustgis_tiles::logins::apply(&address).unwrap().is_none());
     }
 
     #[test]
@@ -867,13 +958,15 @@ mod tests {
         });
         let url = format!("{base}/wcs");
         let mut h = harness();
+        let connection = h.state_mut().run("connection.new", json!({"kind":"wcs", "address":url, "name":"Soils"})).unwrap();
+        let id = connection["id"].as_str().unwrap().to_string();
         let app = h.state_mut();
         app.run("map.zoomToExtent", json!({"extent": [5.0, 49.2, 5.8, 50.0]})).unwrap();
         let listed = app.session.run("service.layers", &json!({"url": url, "text": caps})).unwrap();
         let source = ServiceSource { url: url.clone(), kind: "wcs", text: caps.into(), documents: Vec::new() };
         let child = json!({"add": {"command": "service.add", "params": {}}, "layer": listed["layers"][0].clone()});
         let before = app.session.sources.recent.clone();
-        add_from(app, &child, Some(&source), Some("Soils"), None).unwrap();
+        add_from(app, &child, Some(&source), Some("Soils"), Some(&id)).unwrap();
         assert_eq!(app.session.sources.recent, before, "nothing is recorded while the description is read");
         until(&mut h, |app| {
             app.ui.service_steps.is_empty()
@@ -884,6 +977,7 @@ mod tests {
         let noted = h.state().session.sources.recent.first().unwrap();
         assert_eq!(noted.kind, "url");
         assert!(noted.address.starts_with(&url) && noted.address.contains("GetCoverage"), "{}", noted.address);
+        assert_eq!(h.state().session.map().layer_by_name("Soil carbon").unwrap().connection, id);
     }
 
     /// The whole path on screen: open a connection in the Data Sources pane and double-click a

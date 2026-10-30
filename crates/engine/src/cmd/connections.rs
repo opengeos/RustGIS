@@ -29,7 +29,7 @@ pub fn commands() -> Vec<C> {
             r#"{"kind"?: "postgres"|"mysql"|"sqlserver"|"service"|"wms"|"wmts"|"wfs"|"wcs"|"ogcapi"|"arcgis"|"csw"|"stac"|"s3", "group"?: text}"#,
         ),
         C::new("connection.new", "New Connection", "Home › Add › Data Sources", new).view().params(
-            r#"{"kind": "postgres"|"mysql"|"sqlserver"|"service"|"wms"|"wmts"|"wfs"|"wcs"|"ogcapi"|"arcgis"|"csw"|"stac"|"s3", "address"?: "as the kind's add command takes it, without its password or token (postgres:host=… dbname=… user=…, mysql://user@host/db, mssql://user@host/db, a service's or STAC API's https:// address, an S3 endpoint: AWS when absent)", "name"?: "unique (default from the address)", "group"?: text, "options"?: {"region"?: text, "buckets"?: "a,b", "credentials"?: "keys"|"profile"|"environment"|"none", "profile"?: text} (S3 only), "auth"?: "none"|"basic"|"header"|"query": how a web-service connection logs in (basic authentication, an API key in a header, or an API key in a query parameter; the password or key is given to connection.login, never kept here), "user"?: "the basic login's user name", "keyName"?: "the header (header) or query parameter (query) the API key goes in, e.g. X-API-Key or apikey"}"#,
+            r#"{"kind": "postgres"|"mysql"|"sqlserver"|"service"|"wms"|"wmts"|"wfs"|"wcs"|"ogcapi"|"arcgis"|"csw"|"stac"|"s3", "address"?: "as the kind's add command takes it, without its password or token (postgres:host=… dbname=… user=…, mysql://user@host/db, mssql://user@host/db, a service's or STAC API's https:// address, an S3 endpoint: AWS when absent)", "name"?: "unique (default from the address)", "group"?: text, "options"?: {"region"?: text, "buckets"?: "a,b", "credentials"?: "keys"|"profile"|"environment"|"none", "profile"?: text} (S3 only), "auth"?: "none"|"basic"|"header": how a web-service connection logs in (basic authentication or an API key in a header; the password or key is given to connection.login, never kept here), "user"?: "the basic login's user name", "keyName"?: "the header the API key goes in, e.g. X-API-Key"}"#,
         ),
         C::new("connection.edit", "Edit Connection", "Home › Add › Data Sources", edit).view().params(
             r#"{"id": "a connection's id or name", "name"?: text, "group"?: text, "address"?: text, "options"?: "as connection.new (replaces them)", "auth"?: "as connection.new", "user"?: text, "keyName"?: text, "kind"?: "its kind (unchanged)"} (another origin, login method, user or key name ends the connection's login and deletes its saved one)"#,
@@ -37,7 +37,7 @@ pub fn commands() -> Vec<C> {
         C::new("connection.duplicate", "Duplicate Connection", "Home › Add › Data Sources", duplicate).view().params(r#"{"id": "a connection's id or name", "name"?: text}"#),
         C::new("connection.remove", "Remove Connection", "Home › Add › Data Sources", remove).view().params(r#"{"id": "a connection's id or name"} (deletes its saved password, keys or login)"#),
         C::new("connection.login", "Log In to Connection", "Home › Add › Data Sources", login_command).view().params(
-            r#"{"id": "a connection's id or name; blank credentials explicitly use this ID's session or saved credentials", "password"?: "a database password, or a web service's basic-authentication password; session-only by default", "apiKey"?: "a web service's API key (auth header or query); session-only by default", "allowInsecure"?: "boolean, default false: confirms sending a web service's login to its plain http:// address, unencrypted", "accessKeyId"?: text, "secretAccessKey"?: text, "sessionToken"?: "temporary S3 credentials, never persisted", "remember"?: "boolean, default false: opt into this computer's credential store for a newly typed database password, web-service password or key, or complete S3 key pair (saved keys mode only). No credentials are stored in connections or projects; a failed save preserves the session login"} (a web service's login is sent only to its address's origin: the same scheme, host and port; logging in to one of several connections for an address chooses it for that address)"#,
+            r#"{"id": "a connection's id or name; blank credentials explicitly use this ID's session or saved credentials", "password"?: "a database password, or a web service's basic-authentication password; session-only by default", "apiKey"?: "a web service's API key (auth header); session-only by default", "allowInsecure"?: "boolean, default false: confirms sending a web service's login to its plain http:// address, unencrypted", "accessKeyId"?: text, "secretAccessKey"?: text, "sessionToken"?: "temporary S3 credentials, never persisted", "remember"?: "boolean, default false: opt into this computer's credential store for a newly typed database password, web-service password or key, or complete S3 key pair (saved keys mode only). No credentials are stored in connections or projects; a failed save preserves the session login"} (a web service's login is sent only with this session's requests bound to that connection and only to its address's origin: the same scheme, host and port; logging in to one of several connections chooses it for unassigned requests to that address)"#,
         ),
         C::new("connection.logout", "Log Out of Connection", "Home › Add › Data Sources", logout).view().params(
             r#"{"id": "a web-service connection's id or name"} (ends this session's login, which is no longer sent; a login saved on this computer stays)"#,
@@ -270,8 +270,7 @@ fn edit(s: &mut Session, p: &Value) -> CmdResult {
         clear_identity(s, &old.id);
     }
     if login_changed {
-        web::deactivate(s, &old, None);
-        s.database_logins.forget_connection(&old.id);
+        web::forget(s, &old);
     }
     if web::is_service(&c) && (login_changed || old.address != c.address) {
         resolve_origins(s, &[&old, &c]);
@@ -312,8 +311,7 @@ fn remove(s: &mut Session, p: &Value) -> CmdResult {
         delete_account(&mut s.database_logins, &c)?;
     }
     if web::is_service(&c) {
-        web::deactivate(s, &c, None);
-        s.database_logins.forget_connection(&c.id);
+        web::forget(s, &c);
     }
     if DATABASE_KINDS.contains(&c.kind.as_str()) {
         clear_identity(s, &c.id);
@@ -350,8 +348,7 @@ fn logout(s: &mut Session, p: &Value) -> CmdResult {
     if !web::is_service(&c) {
         return Err(format!("{} connections don't log out: only web-service connections do", c.kind));
     }
-    web::deactivate(s, &c, None);
-    s.database_logins.forget_connection(&c.id);
+    web::logout(s, &c);
     Ok(shown(s, &c))
 }
 
@@ -759,6 +756,9 @@ fn login(s: &mut Session, c: &Connection, p: &Value) -> Result<Reopened, String>
 fn login_command(s: &mut Session, p: &Value) -> CmdResult {
     let c = found(s, p)?.clone();
     let result = login(s, &c, p)?;
+    if web::is_service(&c) {
+        resolve_origins(s, &[&c]);
+    }
     let c = s.connections.find(&c.id).cloned().unwrap_or(c);
     let mut out = shown(s, &c);
     if let Some(saved) = result.password_saved {
@@ -840,7 +840,7 @@ fn insecure_flag(p: &Value) -> Result<bool, String> {
     }
 }
 
-/// Logs in to a saved web-service connection: with the password (basic) or key (header, query)
+/// Logs in to a saved web-service connection: with the password (basic) or key (header)
 /// typed, or else the one given this session or saved on this computer. The login is then the one
 /// sent to the connection's origin, and this connection the one chosen for it. A connection
 /// without a login method is chosen for its origin, which then gets no login.
@@ -859,7 +859,7 @@ fn service_login(s: &mut Session, c: &Connection, p: &Value, remember: bool) -> 
             web::activate(s, c, None, false)?;
             return Ok(Reopened::default());
         }
-        ("", ..) => return Err("this connection has no login method: set auth (basic, header or query) with connection.edit first".into()),
+        ("", ..) => return Err("this connection has no login method: set auth (basic or header) with connection.edit first".into()),
         ("basic", typed, None) => typed,
         ("basic", _, Some(_)) => return Err("a basic login takes a password, not an apiKey".into()),
         (_, None, typed) => typed,
@@ -870,12 +870,13 @@ fn service_login(s: &mut Session, c: &Connection, p: &Value, remember: bool) -> 
         if remember {
             return Err("remember keeps the password or key typed in this login: give it".into());
         }
+        web::retry(s, &c.id);
         // Given this session or saved on this computer: confirmed for this origin when typed.
         let secret = web::known_secret(s, c)?;
         web::activate(s, c, Some(&secret), true)?;
         return Ok(Reopened::default());
     };
-    web::check_secret(typed)?;
+    web::check_login_secret(c, typed)?;
     if origin.starts_with("http://") && !insecure {
         return Err(web::INSECURE.into());
     }
@@ -895,7 +896,19 @@ fn service_login(s: &mut Session, c: &Connection, p: &Value, remember: bool) -> 
 
 fn tested(s: &Session, p: &Value) -> Result<Connection, String> {
     if ps(p, "id").is_some() {
-        return Ok(found(s, p)?.clone());
+        let c = found(s, p)?;
+        for (field, saved) in
+            [("kind", c.kind.as_str()), ("address", &c.address), ("auth", &c.auth), ("user", &c.user), ("keyName", &c.key_name)]
+        {
+            if let Some(value) = p.get(field) {
+                let value = value.as_str().ok_or(web::SAVE_BEFORE_TEST)?.trim();
+                let value = if field == "auth" && value == "none" { "" } else { value };
+                if value != saved {
+                    return Err(web::SAVE_BEFORE_TEST.into());
+                }
+            }
+        }
+        return Ok(c.clone());
     }
     let mut c = Connection {
         kind: ps(p, "kind").ok_or_else(|| format!("id, or kind and address, is required ({})", KINDS.join(", ")))?.trim().into(),
@@ -913,7 +926,7 @@ fn first_bucket(c: &Connection) -> Option<String> {
     c.options.get("buckets")?.split(',').map(str::trim).find(|b| !b.is_empty()).map(str::to_owned)
 }
 
-fn probe_url(s: &Session, c: &Connection) -> Result<Option<String>, String> {
+fn probe_url(s: &mut Session, c: &Connection) -> Result<Option<String>, String> {
     let url = match c.kind.as_str() {
         "postgres" | "mysql" | "sqlserver" => return Ok(None),
         "service" => rustgis_data::ogc::capabilities_url(&c.address, None),
@@ -936,16 +949,17 @@ fn probe_url(s: &Session, c: &Connection) -> Result<Option<String>, String> {
         }
         _ => return Err(format!("unknown kind '{}'", c.kind)),
     };
+    let url = if web::is_service(c) { web::request(s, (!c.id.is_empty()).then_some(c.id.as_str()), &url)? } else { url };
     Ok(Some(url))
 }
 
 fn answered(s: &mut Session, c: &Connection, text: &str) -> CmdResult {
     match c.kind.as_str() {
-        "service" => super::service::layers(s, &json!({"url": c.address, "text": text})),
+        "service" => super::service::layers(s, &json!({"url": c.address, "connection":c.id, "text": text})),
         "wms" | "wmts" | "wfs" | "wcs" | "ogcapi" | "arcgis" => {
-            super::service::layers(s, &json!({"url": c.address, "type": c.kind, "text": text}))
+            super::service::layers(s, &json!({"url": c.address, "connection":c.id, "type": c.kind, "text": text}))
         }
-        "csw" => super::service::catalog_search(s, &json!({"url": c.address, "text": text})),
+        "csw" => super::service::catalog_search(s, &json!({"url": c.address, "connection":c.id, "text": text})),
         "stac" => super::stac::collections_json(&stac::api(Some(&c.address))?, text.as_bytes()),
         "s3" => {
             if let Some(bucket) = first_bucket(c) {
@@ -981,10 +995,9 @@ fn test(s: &mut Session, p: &Value) -> CmdResult {
             login(s, &c, &Value::Null)?;
         }
     }
-    // A saved web service that isn't logged in this session: with its saved login, if it has one
-    // (the test then reads what the service shows that login; without one, what it shows anyone).
+    // Missing or unusable saved logins must not look like a successful anonymous test.
     if web::is_service(&c) && !c.auth.is_empty() && !c.id.is_empty() && !secrets && !web::logged_in(s, &c) {
-        let _ = login(s, &c, &Value::Null);
+        login(s, &c, &Value::Null)?;
     }
     let mut out = json!({});
     if !c.id.is_empty() {
@@ -1015,10 +1028,12 @@ fn test(s: &mut Session, p: &Value) -> CmdResult {
                 }
             }
         }
-        "service" => super::service::layers(s, &json!({"url": c.address}))?,
-        "wms" | "wmts" | "wfs" | "wcs" | "ogcapi" | "arcgis" => super::service::layers(s, &json!({"url": c.address, "type": c.kind}))?,
-        "csw" => super::service::catalog_search(s, &json!({"url": c.address}))?,
-        "stac" => super::stac::collections(s, &json!({"url": c.address}))?,
+        "service" => super::service::layers(s, &json!({"url": c.address, "connection":c.id}))?,
+        "wms" | "wmts" | "wfs" | "wcs" | "ogcapi" | "arcgis" => {
+            super::service::layers(s, &json!({"url": c.address, "connection":c.id, "type": c.kind}))?
+        }
+        "csw" => super::service::catalog_search(s, &json!({"url": c.address, "connection":c.id}))?,
+        "stac" => super::stac::collections(s, &json!({"url": c.address, "connection":c.id}))?,
         "s3" => {
             s3::connection(&c.name).ok_or("log in first: connection.login {id, accessKeyId, secretAccessKey}")?;
             let mut q = json!({"connection": c.name, "limit": 100});

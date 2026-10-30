@@ -270,10 +270,13 @@ WMTS layer whose tile matrix set is in one, is listed and added like any other (
   system's axes as EPSG defines them, as the standards ask: latitude first in EPSG:4326 and other
   longitude/latitude systems (not in CRS:84), north first in EPSG:3035 (LAEA Europe), the German
   Gauss-Krüger zones, SWEREF99 TM, Poland's CS92, Austria's Lambert and the ETRS89 "UTM (N-E)"
-  codes (EPSG:3040 and its neighbours), east first in Web Mercator, the other UTM codes and LV95. RustGIS carries that order for the systems it knows (from the EPSG
-  dataset); for a system newer than its table, the layer's own `BoundingBox` is read the way that
-  holds the layer, and a WMTS corner the way its matrix covers the layer. A longitude/latitude
-  corner whose first number can't be a latitude is read longitude first.
+  codes (EPSG:3040 and its neighbours), east first in Web Mercator, the other UTM codes and LV95.
+  RustGIS carries that order for the systems it knows (from the EPSG dataset); for a system newer
+  than its table, the layer's own `BoundingBox` is read the way that holds the layer, and a WMTS
+  corner the way its matrix covers the layer. A longitude/latitude WMTS corner, which services
+  often write longitude first, is read longitude first when its first number can't be a
+  latitude, or when its matrix read in EPSG's order misses the layer and read the other way
+  doesn't; otherwise in EPSG's order.
 
 A layer offered in no system RustGIS can transform (an `AUTO:` system, a planet's) is still left
 out, and the dialog says how many were.

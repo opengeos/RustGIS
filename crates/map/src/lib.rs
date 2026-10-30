@@ -8,6 +8,7 @@ pub mod design;
 pub mod effects;
 pub mod fills;
 pub mod geolibre;
+mod geometry_kinds;
 pub mod globe;
 pub mod graphics;
 pub mod layout;
@@ -229,6 +230,9 @@ pub struct Layer {
     /// Allocation identities and byte totals, shared with render snapshots without retaining rows.
     #[serde(skip)]
     view_memory: view_memory::Cache,
+    /// Geometry families in the current rows, invalidated by copy-on-write edits and window reads.
+    #[serde(skip)]
+    geometry_kinds: geometry_kinds::Cache,
     /// Bumped whenever geometry changes so caches rebuild.
     #[serde(default)]
     pub geometry_rev: u64,
@@ -393,6 +397,7 @@ impl Layer {
             projected_for: String::new(),
             geometry_rev: 0,
             view_memory: Default::default(),
+            geometry_kinds: Default::default(),
         }
     }
 
@@ -651,6 +656,13 @@ impl Layer {
 
     pub fn geometry_type(&self) -> GeometryType {
         self.dataset.geometry_type
+    }
+
+    /// The declared family or one present in the loaded features. A mixed layer's dominant
+    /// family does not describe every feature; streamed layers also expose their current window.
+    /// Derived from row allocation identity, so repeated UI checks do not rescan the layer.
+    pub fn has_geometry(&self, kind: GeometryType) -> bool {
+        kind != GeometryType::None && (self.geometry_type() == kind || self.geometry_kinds.contains(&self.dataset.features, kind))
     }
 
     /// Copies of every geometry in a map projection's coordinates (`key` names the projection),
@@ -1280,8 +1292,8 @@ impl Map {
     }
 
     /// Every address the map keeps to read its data again (service groups and their layers'
-    /// sources, tile layers and their dated addresses, terrain tiles, layers' dataset, streamed and
-    /// raster sources, time-following Zarr stores). Local paths come too: callers judge each one.
+    /// sources, tile layers and their dated, feature-info and legend addresses, terrain tiles,
+    /// layers' dataset, streamed and raster sources, time-following Zarr stores). Local paths come too.
     pub fn addresses_mut(&mut self) -> Vec<&mut String> {
         let mut addresses = Vec::new();
         for group in &mut self.service_groups {
@@ -1297,6 +1309,9 @@ impl Map {
             }
             for (_, url) in &mut tile.time_urls {
                 addresses.push(url);
+            }
+            if let Some(info) = &mut tile.feature_info {
+                addresses.push(&mut info.url);
             }
             // (A legend's address is built from the service's, its key or password included.)
             for legend in &mut tile.legends {
