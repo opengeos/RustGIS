@@ -165,7 +165,14 @@ Each layer keeps its look:
 Projects and styles from QGIS 1 and 2 read too: their legend gives the layers' order, and the
 older names of the same settings are read.
 
-QGIS expressions carry over where they are SQL: fields compared with values, `LIKE`, `IN`,
+A symbol's data-defined size, fill and outline colours, outline width and marker angle carry over
+as the layer's [symbol expressions](cartography.md#symbols-by-expression), sizes turned from the
+symbol's unit (millimetres, points, pixels, inches; map units at the reference scale) into points, where RustGIS's [expression language](expressions.md) reads them. A marker of several layers
+scales them all with the size one of its layers takes; a marker drawn as marks (several layers,
+or one shifted or turned) leaves its colours and outline widths by expression out, noted. One using a
+function or variable it lacks, or a field the layer hasn't, is noted and left out.
+
+QGIS filter expressions carry over where they are SQL: fields compared with values, `LIKE`, `IN`,
 `IS NULL`, joined by `AND`, `OR` and `NOT`. What RustGIS doesn't draw as QGIS does is drawn as
 near as it can, or left out, and said: the import's notes list, layer by layer, what was
 approximated (gradient and shapeburst fills' offsets left out and colour ramps other than gradients drawn from their first colour to their last, SVG, raster and random fills and dense brushes as a tint of their colour, SVG markers as circles,

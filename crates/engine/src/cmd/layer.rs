@@ -230,6 +230,9 @@ pub fn commands() -> Vec<C> {
         })
         .when(need_points)
         .params(r#"{"layer"?, "field": numeric field name|null (each point's marker turned by the angle in it, in degrees; null: not turned), "counterclockwise"?: bool (the angles run counterclockwise, as in mathematics; default clockwise, as on a compass)}"#),
+        C::new("layer.symbolBy", "Symbol by Expression", "Style › Drawing", symbol_by)
+            .when(need_feature_layer)
+            .params(r#"{"layer"?, "size"?: expression|null (a point's marker size in points), "fill"?: expression|null (the fill colour: '#RRGGBB', a CSS colour name or 'r,g,b[,a]' as color_rgb gives it), "stroke"?: expression|null (the outline colour, a line's colour), "strokeWidth"?: expression|null (the outline's width in points, a line's width), "angle"?: expression|null (point layers: each marker turned by it, in degrees clockwise, in place of layer.markerRotation's field)} (each expression in the language of queries, per feature, @map_scale the map's scale; a key left out keeps its expression, null or "" removes it; where an expression gives null the symbol's own value is drawn)"#),
         C::new("layer.strokeLevels", "Stroke Levels", "Style › Drawing", |s, p| {
             let on = b(p, "on").ok_or("on is true or false")?;
             let id = s.layer_id(p)?;
@@ -538,6 +541,44 @@ fn need_lines(s: &Session) -> Option<&'static str> {
         Some(_) => Some("this works on line layers"),
         None => Some("select a layer in the Layers pane first"),
     }
+}
+
+/// `layer.symbolBy`: sets (or removes) the expressions a layer's symbol takes per feature, each
+/// checked against its fields first.
+fn symbol_by(s: &mut Session, p: &Value) -> CmdResult {
+    const KEYS: [&str; 5] = ["size", "fill", "stroke", "strokeWidth", "angle"];
+    let id = s.layer_id(p)?;
+    let l = s.map_mut().layer_mut(id).ok_or("no such layer")?;
+    if l.is_raster() || l.graphics {
+        return Err("this works on feature layers".into());
+    }
+    let mut by = l.symbol_by.clone();
+    for key in KEYS {
+        let text = match p.get(key) {
+            None => continue,
+            Some(Value::Null) => None,
+            Some(Value::String(t)) if t.trim().is_empty() => None,
+            Some(Value::String(t)) => Some(t.clone()),
+            Some(_) => return Err(format!("{key} is an expression's text, or null for none")),
+        };
+        if let Some(t) = &text {
+            if key == "angle" && l.geometry_type() != GeometryType::Point {
+                return Err("angle works on point layers".into());
+            }
+            rustgis_data::query::parse(t, &l.dataset).map_err(|e| format!("{key}: {e}"))?;
+        }
+        let slot = match key {
+            "size" => &mut by.size,
+            "fill" => &mut by.fill,
+            "stroke" => &mut by.stroke,
+            "strokeWidth" => &mut by.stroke_width,
+            _ => &mut by.angle,
+        };
+        *slot = text;
+    }
+    l.symbol_by = by;
+    let b = &l.symbol_by;
+    Ok(json!({"size": b.size, "fill": b.fill, "stroke": b.stroke, "strokeWidth": b.stroke_width, "angle": b.angle}))
 }
 
 /// `layer.lineStrokes`: sets a line layer's stacked strokes, or one class's own.

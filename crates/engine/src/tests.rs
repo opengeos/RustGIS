@@ -770,6 +770,75 @@ fn a_point_takes_stacked_marks_and_turns_by_a_field() {
 }
 
 #[test]
+fn a_symbol_is_set_by_expressions() {
+    let mut s = world();
+    let r = s
+        .run("layer.symbolBy", &json!({"layer": "Cities", "size": "scale_linear(pop_max, 0, 2e7, 4, 20)", "fill": "if(pop_max > 1e7, '#ff0000', NULL)", "angle": "45"}))
+        .unwrap();
+    assert_eq!(r["angle"], "45");
+    let l = s.map().layer_by_name("Cities").unwrap();
+    let fi = l.dataset.field_index("pop_max").unwrap();
+    let big = (0..l.dataset.features.len()).find(|r| l.dataset.value(*r, fi).as_f64().is_some_and(|v| v > 1e7)).unwrap();
+    let st = l.styler(None);
+    assert_eq!(st.symbol(big).fill, rustgis_map::Rgba::new(255, 0, 0, 255));
+    assert!(st.symbol(big).size > 4.0);
+    assert_eq!(st.marker_turn(big), 45.0);
+    // Drawn in an export.
+    let dir = std::env::temp_dir().join(format!("rustgis-symbol-by-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    s.run("share.exportMap", &json!({"path": dir.join("map.png").display().to_string(), "width": 320, "height": 200})).unwrap();
+    std::fs::remove_dir_all(&dir).ok();
+    let depth = s.undo_depth();
+    for (bad, says) in [
+        (json!({"layer": "Cities", "size": "nosuch + 1"}), "size: "),
+        (json!({"layer": "Cities", "fill": "'red' ||"}), "fill: "),
+        (json!({"layer": "Cities", "stroke": 3}), "stroke is an expression"),
+        (json!({"layer": "Rivers", "angle": "10"}), "angle works on point layers"),
+    ] {
+        let err = s.run("layer.symbolBy", &bad).unwrap_err();
+        assert!(err.contains(says), "{bad}: {err}");
+    }
+    assert_eq!(s.undo_depth(), depth);
+    // A line's width by expression; the Cities keep theirs.
+    s.run("layer.symbolBy", &json!({"layer": "Rivers", "strokeWidth": "2.5"})).unwrap();
+    assert_eq!(s.map().layer_by_name("Cities").unwrap().symbol_by.angle.as_deref(), Some("45"));
+    // A key left out is kept; null removes one, and undo brings it back.
+    s.run("layer.symbolBy", &json!({"layer": "Cities", "angle": null, "fill": ""})).unwrap();
+    let by = &s.map().layer_by_name("Cities").unwrap().symbol_by;
+    assert!(by.size.is_some() && by.fill.is_none() && by.angle.is_none());
+    s.undo();
+    assert_eq!(s.map().layer_by_name("Cities").unwrap().symbol_by.angle.as_deref(), Some("45"));
+}
+
+#[test]
+fn a_qgis_styles_data_defined_settings_are_kept_where_they_read() {
+    let mut s = world();
+    // Size by a field Cities has; fill by a QGIS function RustGIS lacks; outline by a field it hasn't.
+    let dd = |name: &str, expr: &str| {
+        format!(
+            r#"<Option type="Map" name="{name}"><Option value="true" type="bool" name="active"/><Option value="{expr}" type="QString" name="expression"/><Option value="3" type="int" name="type"/></Option>"#
+        )
+    };
+    let qml = format!(
+        r#"<qgis version="3.40.0"><renderer-v2 type="singleSymbol"><symbols><symbol type="marker" name="0" alpha="1">
+        <layer class="SimpleMarker" enabled="1"><Option type="Map"><Option name="name" value="circle"/><Option name="size_unit" value="Pixel"/></Option>
+        <data_defined_properties><Option type="Map"><Option type="Map" name="properties">{}{}{}</Option></Option></data_defined_properties></layer>
+        </symbol></symbols></renderer-v2></qgis>"#,
+        dd("size", "&quot;pop_max&quot; / 1e6"),
+        dd("fillColor", "set_color_part(@symbol_color, 'value', 40)"),
+        dd("outlineColor", "&quot;nosuch&quot;"),
+    );
+    let out = s.run("style.importQgis", &json!({"layer": "Cities", "text": qml})).unwrap();
+    let by = &s.map().layer_by_name("Cities").unwrap().symbol_by;
+    assert_eq!((by.size.as_deref(), &by.fill, &by.stroke), (Some(r#""pop_max" / 1e6"#), &None, &None), "{by:?}");
+    let notes = serde_json::to_string(&out["notes"]).unwrap();
+    assert!(
+        notes.contains("data-defined symbol fill colour `set_color_part") && notes.contains("outline colour `\\\"nosuch\\\"`"),
+        "{notes}"
+    );
+}
+
+#[test]
 fn a_stroke_is_dashed_by_command() {
     let mut s = world();
     let stroke = |dash: Value| json!({"layer": "Rivers", "strokes": [{"color": "#000000", "width": 2, "dash": dash}]});

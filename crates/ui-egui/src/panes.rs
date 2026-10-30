@@ -4025,6 +4025,10 @@ fn symbology(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         ui.add_space(8.0);
         crate::fill_editor::fills_editor(app, ui, &l, t);
     }
+    if !l.graphics {
+        ui.add_space(8.0);
+        symbol_by_editor(app, ui, &l, t);
+    }
     ui.add_space(10.0);
     ui.separator();
     ui.label(egui::RichText::new(tl!("Layer")).size(11.5).color(t.text_dim));
@@ -4912,6 +4916,108 @@ fn marker_rotation_row(app: &mut RustGisApp, ui: &mut Ui, l: &rustgis_engine::ma
                 .changed()
             {
                 let _ = app.run("layer.markerRotation", json!({"field": r.field, "counterclockwise": ccw}));
+            }
+        }
+    });
+}
+
+/// The By Expression section: the symbol's size, colors, outline width and (on points) angle per
+/// feature, each from an expression (`layer.symbolBy`). An expression applies when its box loses
+/// focus; one that doesn't read shows why as it is typed, and stays in its box unapplied until
+/// it is fixed or Escape drops it.
+fn symbol_by_editor(app: &mut RustGisApp, ui: &mut Ui, l: &rustgis_engine::map::Layer, t: &Tokens) {
+    let g = l.geometry_type();
+    let by = &l.symbol_by;
+    let mut rows: Vec<(&str, &str, &Option<String>)> = Vec::new();
+    match g {
+        GeometryType::Point => rows.extend([
+            ("size", tl!("Size"), &by.size),
+            ("fill", tl!("Fill"), &by.fill),
+            ("stroke", tl!("Outline"), &by.stroke),
+            ("strokeWidth", tl!("Outline width"), &by.stroke_width),
+            ("angle", tl!("Angle"), &by.angle),
+        ]),
+        GeometryType::Polyline => rows.extend([("stroke", tl!("Color"), &by.stroke), ("strokeWidth", tl!("Width"), &by.stroke_width)]),
+        _ => rows.extend([
+            ("fill", tl!("Fill"), &by.fill),
+            ("stroke", tl!("Outline"), &by.stroke),
+            ("strokeWidth", tl!("Outline width"), &by.stroke_width),
+        ]),
+    }
+    egui::Frame::NONE.fill(t.pane_header).corner_radius(CornerRadius::same(8)).inner_margin(egui::Margin::same(10)).show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        ui.label(egui::RichText::new(tl!("By Expression")).font(semibold(12.5)));
+        ui.label(
+            egui::RichText::new(tl!(
+                "Set per feature from an expression, e.g. \"pop\" / 1e5 or CASE WHEN … END; colors as '#RRGGBB'. Empty: the symbol's own."
+            ))
+            .small()
+            .weak(),
+        );
+        for (key, label, cur) in rows {
+            let cur = cur.clone().unwrap_or_default();
+            let id = egui::Id::unique(("symbol_by", l.id, key));
+            let (typing, failed) = (id.with("typing"), id.with("failed"));
+            let focused = ui.memory(|m| m.has_focus(id));
+            // Each kept with the expression it was typed over: one set meanwhile (by undo or a
+            // command) drops it. Typing left over from a box that stopped being drawn while
+            // focused is dropped too.
+            let over = |d: &mut egui::util::IdTypeMap, key: egui::Id| {
+                let v = d.get_temp::<(String, String)>(key);
+                if v.as_ref().is_some_and(|(was, _)| *was != cur) {
+                    d.remove::<(String, String)>(key);
+                }
+                v.filter(|(was, _)| *was == cur).map(|(_, text)| text)
+            };
+            if !focused {
+                ui.data_mut(|d| d.remove::<(String, String)>(typing));
+            }
+            // Text that didn't read, kept until it is changed or dropped.
+            let kept = ui.data_mut(|d| over(d, failed));
+            let mut buf = match focused {
+                true => ui.data_mut(|d| over(d, typing)).or_else(|| kept.clone()).unwrap_or_else(|| cur.clone()),
+                false => kept.clone().unwrap_or_else(|| cur.clone()),
+            };
+            let r = ui
+                .horizontal(|ui| {
+                    let input_label = ui
+                        .allocate_ui_with_layout(egui::vec2(96.0, 18.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                            ui.set_min_width(96.0);
+                            ui.label(label)
+                        })
+                        .inner;
+                    ui.add(
+                        egui::TextEdit::singleline(&mut buf)
+                            .id(id)
+                            .hint_text(tl!("None"))
+                            .char_limit(rustgis_engine::data::query::MAX_LEN)
+                            .font(egui::TextStyle::Monospace)
+                            .desired_width(f32::INFINITY),
+                    )
+                    .labelled_by(input_label.id)
+                })
+                .inner;
+            // Checked here, as Calculate Field checks it, only while it differs from what is set.
+            let text = buf.trim();
+            let error =
+                (text != cur.trim() && !text.is_empty()).then(|| rustgis_engine::data::query::parse(text, &l.dataset).err()).flatten();
+            if r.lost_focus() {
+                ui.data_mut(|d| d.remove::<(String, String)>(typing));
+                if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                    ui.data_mut(|d| d.remove::<(String, String)>(failed));
+                } else if error.is_some() {
+                    ui.data_mut(|d| d.insert_temp(failed, (cur.clone(), buf.clone())));
+                } else {
+                    ui.data_mut(|d| d.remove::<(String, String)>(failed));
+                    if text != cur.trim() {
+                        let _ = app.run("layer.symbolBy", json!({ key: text }));
+                    }
+                }
+            } else if r.has_focus() {
+                ui.data_mut(|d| d.insert_temp(typing, (cur.clone(), buf.clone())));
+            }
+            if let Some(e) = error.filter(|_| focused || r.lost_focus() || kept.is_some()) {
+                ui.label(egui::RichText::new(crate::i18n::fmt("Invalid: {error}", &[("error", &e)])).small().color(t.red));
             }
         }
     });

@@ -2269,6 +2269,7 @@ pub fn gpu_may_turn(map: &Map, view: &View) -> bool {
             && !l.has_strokes()
             && !l.has_fills()
             && l.marker_rotation.is_none()
+            && l.symbol_by.is_empty()
             && (l.extrusion.is_none() || view.camera.pitch != 0.0)
             && !(view.camera.pitch != 0.0 && l.renderer.has_char_markers() && stands_up(map, l))
     })
@@ -2370,6 +2371,7 @@ pub fn extruded_shapes(map: &mut Map, view: &View) -> Vec<ExtrudedShape> {
         let rows = layer.drawn_rows(scale);
         layer.thinned_in(&flat, &key, tol);
         let layer: &rustgis_map::Layer = layer;
+        let styler = layer.styler(Some(scale));
         let extents = layer.projected_extents();
         for (row, g) in layer.thinned_cache(tol).iter().enumerate() {
             let Some(Geometry::Polygon(polys)) = g else { continue };
@@ -2387,7 +2389,7 @@ pub fn extruded_shapes(map: &mut Map, view: &View) -> Vec<ExtrudedShape> {
             }
             let roof = mesh::fill_polygon(polys, [origin.x, origin.y], [0.0; 4], view.camera.res * 0.5, mesh::NO_LIMIT);
             let Ok(Some((verts, indices))) = roof else { continue };
-            let sym = layer.symbol(row);
+            let sym = styler.symbol(row);
             let pts: Vec<Coord> = polys.iter().filter_map(|p| p.first()).flatten().copied().filter(|c| c.is_finite()).collect();
             let n = pts.len().max(1) as f64;
             let center = Coord::new(pts.iter().map(|c| c.x).sum::<f64>() / n, pts.iter().map(|c| c.y).sum::<f64>() / n);
@@ -2519,6 +2521,7 @@ fn stands_up(map: &Map, layer: &rustgis_map::Layer) -> bool {
         // Marks and turned markers stay on the ground, drawn as the flat map draws them.
         && !layer.has_strokes()
         && layer.marker_rotation.is_none()
+        && layer.symbol_by.angle.is_none()
         && rows.is_some_and(|n| n <= MAX_UPRIGHT_POINTS as u64)
 }
 
@@ -2621,6 +2624,7 @@ pub fn upright_markers(map: &mut Map, view: &View, margin: f64) -> Vec<UprightMa
         // Refreshes the projected copy for this projection.
         layer.projected_in(&flat, &key);
         let layer: &rustgis_map::Layer = layer;
+        let styler = layer.styler(Some(scale));
         let mut here: Vec<(f64, UprightMarker)> = Vec::new();
         for (row, g) in layer.projected_cache().iter().enumerate() {
             if rows.get(row) != Some(&true) {
@@ -2638,7 +2642,7 @@ pub fn upright_markers(map: &mut Map, view: &View, margin: f64) -> Vec<UprightMa
                     continue;
                 }
             }
-            let mut symbol = layer.symbol(row);
+            let mut symbol = styler.symbol(row);
             // Sized for its reference scale, as on the ground.
             symbol.size *= size_factor;
             symbol.stroke_width *= size_factor;
@@ -2702,8 +2706,9 @@ fn extrusions_tilted(map: &mut Map, view: &View, pm: &mut Pixmap) {
         // Refreshes the projected copy for this projection.
         layer.projected_in(&flat, &key);
         let layer: &rustgis_map::Layer = layer;
+        let styler = layer.styler(Some(scale));
         let geoms: Vec<Option<&Geometry>> = layer.projected_cache().iter().map(Option::as_ref).collect();
-        effects::extrude_tilted(pm, view, &layer.dataset, &geoms, &rows, &x, |c| flat.ground_per_unit(c) * body, fog, |r| layer.symbol(r));
+        effects::extrude_tilted(pm, view, &layer.dataset, &geoms, &rows, &x, |c| flat.ground_per_unit(c) * body, fog, |r| styler.symbol(r));
     }
 }
 
@@ -3275,6 +3280,8 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
             }
             // Everything below only reads the layer: borrow rather than copy its data each frame.
             let layer: &rustgis_map::Layer = layer;
+            // Its symbol by expression, compiled once for the drawing (none: the layer's own).
+            let styler = layer.styler(Some(scale));
             let label_row = |row: usize| if complete_source { layer.dataset.features.get(row).map_or(row, |f| f.id as usize) } else { row };
             let (labels, selection, ds_ptr) = (&layer.labels, &layer.selection, &layer.dataset);
             // The globe draws the lon/lat geometry itself; the flat map its Web Mercator copy.
@@ -3329,6 +3336,8 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
                 && !layer.has_strokes()
                 && !layer.has_fills()
                 && layer.marker_rotation.is_none()
+                // Symbols by expression are styled per feature on the CPU.
+                && layer.symbol_by.is_empty()
                 && !upright.contains(&layer.id);
             // Lyon refuses degenerate geometry tiny-skia draws fine, a layer too dense to mesh
             // (`MAX_LAYER_VERTICES`) is quicker splatted, and zoomed in far, features reaching too
@@ -3382,9 +3391,9 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
                 } else if let Some(x) = extrude.filter(|_| !matches!(labels_to, Labels::Shared)) {
                     let px_per_m = view.pixels_per_point / (map_ground_res(view, &flat) * body);
                     if let Some(spool) = &mut extrusions {
-                        spool.add(ctx, ds_ptr, &geoms, &rows, x, px_per_m, |r| layer.symbol(r))?;
+                        spool.add(ctx, ds_ptr, &geoms, &rows, x, px_per_m, |r| styler.symbol(r))?;
                     } else {
-                        effects::extrude(dest, ctx, ds_ptr, &geoms, &rows, x, px_per_m, |r| layer.symbol(r));
+                        effects::extrude(dest, ctx, ds_ptr, &geoms, &rows, x, px_per_m, |r| styler.symbol(r));
                     }
                 } else {
                     let mut stroke_paths = stroke_paths::Paths::default();
@@ -3402,12 +3411,13 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
                             if globe.is_some() || !matches!(g, Geometry::Point(_) | Geometry::MultiPoint(_)) {
                                 return false;
                             }
-                            let (sym, strokes) = layer.style(row);
-                            if strokes.is_empty() {
+                            let (sym, strokes) = styler.style(row);
+                            let marks = styler.marks(row, strokes);
+                            if marks.is_empty() {
                                 return false;
                             }
                             // In the layer's pixels (`ctx` is scaled by its size factor).
-                            let r = f64::from(point_marks::reach(&sym, strokes) * ctx.ppp) * map_per_px;
+                            let r = f64::from(point_marks::reach(&sym, &marks) * ctx.ppp) * map_per_px;
                             Extent::new(e.min_x - r, e.min_y - r, e.max_x + r, e.max_y + r).intersects(&ctx.cull)
                         };
                         if rows.get(row) != Some(&true) || !(visible(&e) || marked_in()) {
@@ -3429,9 +3439,9 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
                         // polygon's stacked fills too (none in wireframe, which draws outlines only),
                         // the feature classed once for all.
                         let (sym, strokes, fills) = if has_fills && !ctx.wireframe && matches!(g, Geometry::Polygon(_)) {
-                            layer.style_and_fills(row)
+                            styler.style_and_fills(row)
                         } else {
-                            let (sym, strokes) = layer.style(row);
+                            let (sym, strokes) = styler.style(row);
                             (sym, strokes, &[] as &[rustgis_map::fills::FillLayer])
                         };
                         // A feature under a pixel across: blend its coverage into the pixels it touches
@@ -3448,12 +3458,17 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
                         {
                             continue;
                         }
-                        // A point's marks, or its marker turned by a field.
-                        let turn = layer.marker_turn(row);
+                        // A point's marks (sized with an expression's size), or its marker turned by a
+                        // field or an expression.
+                        let turn = styler.marker_turn(row);
+                        let marks = match g {
+                            Geometry::Point(_) | Geometry::MultiPoint(_) => styler.marks(row, strokes),
+                            _ => std::borrow::Cow::Borrowed(strokes),
+                        };
                         match g {
-                            Geometry::Point(c) if !point_marks::plain(strokes, turn) => ctx.marks(dest, *c, &sym, strokes, turn, None),
-                            Geometry::MultiPoint(v) if !point_marks::plain(strokes, turn) => {
-                                v.iter().for_each(|c| ctx.marks(dest, *c, &sym, strokes, turn, None))
+                            Geometry::Point(c) if !point_marks::plain(&marks, turn) => ctx.marks(dest, *c, &sym, &marks, turn, None),
+                            Geometry::MultiPoint(v) if !point_marks::plain(&marks, turn) => {
+                                v.iter().for_each(|c| ctx.marks(dest, *c, &sym, &marks, turn, None))
                             }
                             Geometry::Line(parts) if !strokes.is_empty() && levels => stacked.push((parts, sym, strokes)),
                             Geometry::Line(parts) if !strokes.is_empty() => stroke_paths.draw(ctx, dest, parts, &sym, strokes),
@@ -3503,13 +3518,13 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
                     // draw over it (the CPU path draws highlights over the layer).
                     if complete_source {
                         let rank = ds_ptr.features.get(*row).and_then(|f| selected_order.get(&f.id)).copied().unwrap_or(usize::MAX);
-                        let (symbol, strokes) = layer.style(*row);
-                        highlights.push((rank, (**g).clone(), symbol, strokes.to_vec(), layer.marker_turn(*row)));
-                    } else if gpu_done && mesh::collect_highlight(&mut cmds, g, &layer.symbol(*row), ctx.ppp, map_per_px).is_ok() {
+                        let (symbol, strokes) = styler.style(*row);
+                        highlights.push((rank, (**g).clone(), symbol, styler.marks(*row, strokes).to_vec(), styler.marker_turn(*row)));
+                    } else if gpu_done && mesh::collect_highlight(&mut cmds, g, &styler.symbol(*row), ctx.ppp, map_per_px).is_ok() {
                         // highlight tessellated into the scene, right after its layer
                     } else {
-                        let (symbol, strokes) = layer.style(*row);
-                        ctx.highlight(&mut pm, g, &symbol, strokes, layer.marker_turn(*row));
+                        let (symbol, strokes) = styler.style(*row);
+                        ctx.highlight(&mut pm, g, &symbol, &styler.marks(*row, strokes), styler.marker_turn(*row));
                         cpu_dirty = true;
                     }
                 }
@@ -3605,7 +3620,7 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
                     // A line's longest part on the screen, for the classes placed along it: worked
                     // out once (its path each way too), for the first that asks.
                     let mut screen_line: Option<Option<line_labels::Line>> = None;
-                    let marker = if is_point { layer.symbol(row).size } else { 0.0 };
+                    let marker = if is_point { styler.symbol(row).size } else { 0.0 };
                     // Bigger polygons get priority.
                     let area = match g {
                         Geometry::Polygon(_) => {
@@ -7397,6 +7412,37 @@ mod tests {
         m.layer_mut(id).unwrap().line_strokes.clear();
         let Some(RenderOutput::Gpu(scene)) = render_backend(&mut m, &view, Backend::Gpu) else { panic!("gpu scene") };
         assert!(!cmd_kinds(&scene).contains(&"points"), "turned alone, too");
+    }
+
+    #[test]
+    fn a_marker_sized_and_coloured_by_expression_draws_on_the_cpu() {
+        use rustgis_map::symbol_by::SymbolBy;
+        // One point at the centre of a 200 px view, 40 in field "a".
+        let mut m = Map::new("Map");
+        m.basemap = rustgis_map::Basemap::Blank;
+        let mut d = Dataset::new("p", GeometryType::Point, vec![rustgis_data::Field::new("a", rustgis_data::FieldType::Double)]);
+        d.push(Some(Geometry::Point(Coord::new(0.0, 0.0))), vec![rustgis_data::Value::Float(40.0)]);
+        let id = m.add_dataset(d);
+        let camera = Camera { center: lonlat_to_merc(Coord::new(0.0, 0.0)), res: 1500.0, bearing: 0.0, pitch: 0.0 };
+        let view = View { width: 200.0, height: 200.0, pixels_per_point: 1.0, camera, sky: false };
+        let is_green = |r: &Rendered, x: u32, y: u32| r.pixmap.pixel(x, y).is_some_and(|p| (p.red(), p.green(), p.blue()) == (0, 255, 0));
+        let r = render(&mut m, &view).unwrap();
+        assert!(!is_green(&r, 115, 100), "a 7 pt marker");
+        let scale = m.ground_res_at(&camera) / rustgis_geom::PIXEL_M;
+        m.layer_mut(id).unwrap().symbol_by = SymbolBy {
+            size: Some("a".into()),
+            fill: Some(format!("CASE WHEN @map_scale BETWEEN {} AND {} THEN '#00ff00' END", scale * 0.9, scale * 1.1)),
+            ..Default::default()
+        };
+        let r = render(&mut m, &view).unwrap();
+        assert!(is_green(&r, 115, 100) && is_green(&r, 100, 85), "40 pt across, green at this scale");
+        // Zoomed out the fill is the symbol's own.
+        let out = View { camera: Camera { res: camera.res * 4.0, ..camera }, ..view };
+        let r = render(&mut m, &out).unwrap();
+        assert!(!is_green(&r, 110, 100) && r.pixmap.pixel(110, 100).is_some_and(|p| p.alpha() == 255), "still 40 pt, not green");
+        let Some(RenderOutput::Gpu(scene)) = render_backend(&mut m, &view, Backend::Gpu) else { panic!("gpu scene") };
+        let kinds = cmd_kinds(&scene);
+        assert!(kinds.contains(&"image") && !kinds.contains(&"points"), "{kinds:?}");
     }
 
     #[test]

@@ -22,6 +22,7 @@ pub mod qgis;
 pub mod raster;
 pub mod report;
 pub mod source;
+pub mod symbol_by;
 pub mod symbology;
 pub mod tiles;
 pub mod time;
@@ -166,6 +167,10 @@ pub struct Layer {
     /// field, as QGIS's data-defined symbol angle does.
     #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "symbology::de_marker_rotation")]
     pub marker_rotation: Option<symbology::MarkerRotation>,
+    /// Its symbol's size, colours, outline width and marker angle per feature, each by an
+    /// expression (none set: the renderer's symbol alone); drawn through [`Layer::styler`].
+    #[serde(default, skip_serializing_if = "symbol_by::SymbolBy::is_empty", deserialize_with = "symbol_by::de_symbol_by")]
+    pub symbol_by: symbol_by::SymbolBy,
     /// The scale (1:N) its symbol and label sizes are set for: drawn at another scale they grow
     /// and shrink with the map, as on paper (QGIS's reference scale). `None`: they keep their
     /// size on screen.
@@ -372,6 +377,7 @@ impl Layer {
             fill_layers: Vec::new(),
             stroke_levels: false,
             marker_rotation: None,
+            symbol_by: Default::default(),
             reference_scale: None,
             priority: 0,
             design: design::Design::default(),
@@ -572,6 +578,13 @@ impl Layer {
     pub fn marker_turn(&self, row: usize) -> f32 {
         let Some(r) = self.marker_rotation.as_ref().filter(|_| !self.graphics) else { return 0.0 };
         r.turn(&self.dataset, row)
+    }
+
+    /// Its per-row style for one drawing at the map scale 1:`map_scale` (none: no map, as in an
+    /// export of the features): [`Layer::symbol`] and the rest with [`Layer::symbol_by`]'s
+    /// expressions applied, compiled once here.
+    pub fn styler(&self, map_scale: Option<f64>) -> symbol_by::Styler<'_> {
+        symbol_by::Styler::new(self, map_scale)
     }
 
     /// The stacked strokes a line feature row is drawn with: its class's own
