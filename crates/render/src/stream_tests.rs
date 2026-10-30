@@ -3,6 +3,11 @@ use rustgis_data::source::{Batch, FeatureSource, Request, SourceInfo};
 use rustgis_data::{Dataset, Feature, Field, FieldType, Value};
 use rustgis_map::{Layer, Renderer, source::SourceLayer};
 
+thread_local! {
+    /// Complete chunks drawing from display geometry, and chunks retaining a full projection.
+    pub(super) static LOD_PATHS: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
+}
+
 struct Chunks {
     info: SourceInfo,
     ds: Dataset,
@@ -341,22 +346,43 @@ fn complete_chunks_fail_without_publishing_a_partial_frame() {
     assert!(map.layers[0].source.as_ref().unwrap().error.as_ref().unwrap().contains("cancelled"));
 }
 
+/// Complete drawing clears the chunk source and uses its display budget independently
+/// of the interaction window, even when that window can retain only one byte.
 #[test]
 fn complete_chunks_use_whole_layer_lod_decisions() {
-    let mut ds = Dataset::new("detailed", GeometryType::Polyline, vec![]);
+    let mut ds = Dataset::new("detailed", GeometryType::Polyline, vec![Field::new("name", FieldType::Text)]);
     for row in 0..11 {
         let points = (0..20_001).map(|i| Coord::new(-0.1 + i as f64 * 0.00001, row as f64 * 0.004 + (i % 2) as f64 * 0.000001)).collect();
-        ds.push(Some(Geometry::Line(vec![points])), vec![]);
+        ds.push(Some(Geometry::Line(vec![points])), vec![Value::Text(format!("line {row}"))]);
     }
     let mut base = Map::new("LOD");
     base.add_dataset(ds);
     let view = View { width: 320.0, height: 240.0, pixels_per_point: 1.0, camera: Camera::new(Coord::new(0.0, 0.0), 80.0), sky: false };
-    let expected = render(&mut base.clone(), &view).unwrap();
-    for size in [1, 3, 20] {
-        let mut actual = base.clone();
-        actual.layers[0] = streamed(&base.layers[0], size);
-        let got = render(&mut actual, &view).unwrap();
-        assert!(got.pixmap.data() == expected.pixmap.data(), "whole-layer LOD changed at chunk size {size}");
+    for labelled in [false, true] {
+        let mut variant = base.clone();
+        variant.layers[0].labels.enabled = labelled;
+        variant.layers[0].labels.default.field = "name".into();
+        let expected = render(&mut variant.clone(), &view).unwrap();
+        if labelled {
+            assert!(!expected.labels.is_empty(), "the exact-consumer case must place real labels");
+        }
+        for size in [1, 3, 20] {
+            for budget in [0, 1] {
+                let mut actual = variant.clone();
+                actual.layers[0] = streamed(&variant.layers[0], size);
+                actual.layers[0].source.as_mut().unwrap().byte_budget = budget;
+                LOD_PATHS.set((0, 0));
+                let got = render(&mut actual, &view).unwrap();
+                let chunks = 11usize.div_ceil(size);
+                let paths = if labelled { (0, chunks) } else { (chunks, 0) };
+                assert_eq!(LOD_PATHS.get(), paths, "label consumers must select exact projection, plain chunks the display path");
+                assert_eq!(got.labels, expected.labels);
+                assert!(
+                    got.pixmap.data() == expected.pixmap.data(),
+                    "whole-layer LOD changed at chunk size {size}, interaction budget {budget}, labelled {labelled}"
+                );
+            }
+        }
     }
 }
 
@@ -557,6 +583,7 @@ fn chunked_label_compaction_keeps_late_priorities_stable_ties_and_nan_order() {
                 if i % 17 == 0 { f64::NAN } else { (i % 7) as f64 },
                 (1, i, 0, 0),
             )
+                .into()
         })
         .collect();
     let expected = place_labels(candidates.clone(), vec![], 320.0, 240.0, false);
@@ -852,7 +879,15 @@ fn masks_skip_undrawn_targets_and_reuse_one_complete_source_with_distinct_swipes
     }
     base.swipe = Some((first, 0.35));
     let view = View { width: 120.0, height: 90.0, pixels_per_point: 1.0, camera: Camera::new(Coord::new(0.0, 0.0), 80.0), sky: false };
-    let ctx = Ctx { view: &view, ppp: 1.0, wireframe: false, cull: Extent::EMPTY, globe: None, sprites: Default::default() };
+    let ctx = Ctx {
+        view: &view,
+        ppp: 1.0,
+        wireframe: false,
+        cull: Extent::EMPTY,
+        globe: None,
+        sprites: Default::default(),
+        bursts: Default::default(),
+    };
     let flat = base.flat();
     let scale = base.ground_res_at(&view.camera) / rustgis_geom::PIXEL_M;
     let expected = layer_masks(&mut base.clone(), &ctx, 120, 90, &flat, "test", scale).unwrap();
@@ -963,7 +998,7 @@ fn pitched_plain_chunks_bypass_depth_budget_alone_and_with_upright_markers() {
                 for layer in &mut failed.layers {
                     *layer = streamed(layer, if layer.id == ground { 0 } else { 1 });
                 }
-                let lock = Some(vec![(ground, 0, 0, 0)]);
+                let lock = Some(vec![((ground, 0, 0, 0), 0)]);
                 failed.label_lock = lock.clone();
                 assert!(render_with_backend(&mut failed, &view, true, backend).is_none());
                 assert_eq!(failed.label_lock, lock);

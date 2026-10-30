@@ -112,8 +112,9 @@ _GeoLibre: docs/features.md › Layers, styling, and labels; docs/user-guide/sty
 - [x] **Layer groups**.
 - [ ] **Rule-based and expression renderers**: nested rules with scale ranges. Missing; display
   filters are per-scale SQL only (_Roadmap: expressions and cartography_).
-- [ ] **Heatmap and point-clustering renderers**. Partial: hexagon/square aggregation (_Roadmap:
-  expressions and cartography_).
+- [ ] **Heatmap and point-clustering renderers**. Partial: hexagon/square aggregation; kernel density
+  is implemented as an analysis tool, while dynamic heatmap and point-clustering renderers remain outstanding
+  (_Roadmap: expressions and cartography_).
 - [ ] **More classification methods**: standard deviation, geometric interval, manual breaks.
   Partial: Jenks, equal interval, quantile (_Roadmap: fixes and quick wins_).
 - [ ] **Symbol library**: a marker library, custom SVG/PNG markers, fill patterns, pie/donut/bar
@@ -167,10 +168,11 @@ _GeoLibre: docs/features.md › Processing and analysis; docs/user-guide/process
 model-builder.md, segmentation.md, obia.md_
 
 - [x] **Spatial join, intersect, union** ([#959](https://github.com/opengeos/RustGIS/issues/959)):
-  spatial join, clip, erase, intersect, identity, union and near are built in.
-- [ ] **More built-in vector tools**: attribute join, merge, extract vertices, points along lines,
-  fix/check geometry, random extract, buffer options. Partial: extract vertices is built in,
-  as Feature Vertices To Points (_Roadmap: solid ground_).
+  spatial join, clip, erase, split, intersect, identity, union, symmetrical difference, update
+  and near are built in.
+- [ ] **More built-in vector tools**: attribute join, extract vertices, points along lines,
+  fix/check geometry, random extract, buffer options. Partial: Merge (append layers) and extract vertices are built in,
+  as Merge and Feature Vertices To Points (_Roadmap: solid ground_).
 - [ ] **Routing services**: isochrones, service areas, OD matrix, multi-stop routing,
   turn-by-turn (Valhalla/OSRM). Partial: shortest path over a line layer (_Roadmap: analysis_).
 - [ ] **Geocoding**: forward, batch and reverse, with multiple providers and a place search box.

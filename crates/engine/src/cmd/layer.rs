@@ -41,7 +41,7 @@ pub fn commands() -> Vec<C> {
             r#"{"url": "https://…/data.geojson|.csv|.parquet|.fgb|.gpkg|.zip|.kml|.kmz|.gpx|.tif|.jp2 (JPEG 2000: desktop, through GDAL) (the format from the address, else the contents) | a .pmtiles archive", "name"?: text, "layer"?: "one layer of a zip, KML or GPX", "zoom"?: "bool: true zooms to what was added; false keeps the view of a GeoParquet or FlatGeobuf read in place (zoomed to only when the map was empty)", "x"?, "y"?, "wkt"?, "crs"?, "delimiter"?, "paperSpace"?, "stream"?, "as"? (as layer.addData), "whole"?: "bool: download a cloud-optimised GeoTIFF whole (as a raster layer) instead of reading it in place (an address without a file name is read in place when its first bytes are a cloud-optimised GeoTIFF)", "cog"?: "bool: the address is a cloud-optimised GeoTIFF whatever its name says (the app's probe found it so)", "start"?, "end"?, "unit"?, "interval"?, "dates"?: "a GeoTIFF address with date placeholders ({date:YYYY}, {YYYY}{MM}{DD}), one file per date: the dates it spans and steps through (as time.set), turning the time slider on"}"#,
         ),
         C::new("layer.addDownload", "Add Downloaded Data", "Home › Add", add_download)
-            .params(r#"{"id": a download the app finished (Home › Add › Add Data › From URL), "url": its address, "name"?: text, "layer"?: text, "zoom"?: bool, "x"?, "y"?, "wkt"?, "crs"?, "delimiter"?, "paperSpace"?, "stream"?, "as"? (as layer.addData), "service"?: bool (a service's features: their axes and paging are checked), "coverage"?: bool (a WCS coverage: a GeoTIFF, else the service's error), "geolibreProject"?: bool (internal: downloaded project JSON), "geolibreLayer"?: {"token", "record"} (internal: reserved imported layer and its saved style), "geolibreZarr"?: bool (internal: an imported Zarr slice as GeoTIFF)}"#),
+            .params(r#"{"id": a download the app finished (Home › Add › Add Data › From URL), "url": its address, "name"?: text, "layer"?: text, "zoom"?: bool, "x"?, "y"?, "wkt"?, "crs"?, "delimiter"?, "paperSpace"?, "stream"?, "as"? (as layer.addData), "service"?: bool (a service's features: their axes and paging are checked), "bounds"?: [west, south, east, north] (with service: the layer's longitude/latitude bounds from its capabilities, which its axes are checked against; without bounds they are left as they come; ignored without service), "coverage"?: bool (a WCS coverage: a GeoTIFF, else the service's error), "geolibreProject"?: bool (internal: downloaded project JSON), "geolibreLayer"?: {"token", "record"} (internal: reserved imported layer and its saved style), "geolibreZarr"?: bool (internal: an imported Zarr slice as GeoTIFF)}"#),
         C::new("layer.addEncodedPolyline", "Add Encoded Polyline", "Home › Add", add_encoded_polyline).params(
             r#"{"polyline": "encoded polyline text" | [texts] (one line each), "precision"?: 5 (Google) | 6 (OSRM, Valhalla), "name"?: text}"#,
         ),
@@ -154,10 +154,28 @@ pub fn commands() -> Vec<C> {
         .when(need_feature_layer)
         .params(r##"{"layer"?, "color": "#RRGGBB"|"#RRGGBBAA" (the fill; a polygon's outline is left as it is, set it with layer.outline)}"##),
         C::new("layer.noFill", "No Fill", "Style › Drawing", |s, p| {
-            with(s, p, |l| l.renderer.map_symbols(|sym| sym.fill = sym.fill.with_alpha(0)))
+            with(s, p, |l| {
+                if l.source.is_some() || l.has_geometry(GeometryType::Point) || l.has_geometry(GeometryType::Polyline) {
+                    // Symbols are shared by geometry families. A polygon-only fill override
+                    // leaves point markers and line strokes (including their markers) intact.
+                    // A streamed layer may have other families outside the loaded window.
+                    let fill = rustgis_map::fills::FillLayer { color: Some(Rgba::rgb(0, 0, 0).with_alpha(0)), ..Default::default() };
+                    l.fill_layers = vec![fill];
+                    match &mut l.renderer {
+                        Renderer::Unique { class_fills, other_fills, .. } => {
+                            class_fills.clear();
+                            other_fills.clear();
+                        }
+                        Renderer::Graduated { class_fills, .. } => class_fills.clear(),
+                        _ => {}
+                    }
+                } else {
+                    l.renderer.map_symbols(|sym| sym.fill = sym.fill.with_alpha(0));
+                }
+            })
         })
-        .when(need_polygons)
-        .params(r#"{"layer"?: name|id (default: the active polygon layer; removes every symbol's fill, keeping its RGB and outline)}"#),
+        .when(need_polygon_features)
+        .params(r#"{"layer"?: name|id (default: the active layer containing polygons; hides polygon fills, keeping outlines and point/line symbols)}"#),
         C::new("layer.outline", "Outline", "Style › Drawing", |s, p| {
             let c = s.get_color(p, "color")?;
             let w = f(p, "width").map(|w| w.clamp(0.0, 20.0) as f32);
@@ -180,9 +198,9 @@ pub fn commands() -> Vec<C> {
                 r##"{"layer"?, "strokes": [{"color"?: "#RRGGBB"|"#RRGGBBAA"|null (null: the renderer's line colour), "width"?: points|null (null: the renderer's width), "offset"?: points (positive: right of the line's direction, negative: left), "cap"?: "round"|"flat"|"square", "join"?: "round"|"miter"|"bevel", "level"?: 0..255|null (with layer.strokeLevels: the level it draws at; null: its place in the stack), "dash"?: [points, …]|null (dash, gap, … in turn, at most 8; null: solid), "markers"?: {"mark"?: "circle"|"square"|"triangle"|"diamond"|"star"|"character"|"hash" (a mark across the line), "char"?: text (a character of a font as the marker instead of a shape), "font"?: text (the installed family it is drawn from; none: the label font), "size"?: points (a marker's size, a hash mark's length; default 4), "at"?: "interval"|"vertices"|"innerVertices"|"first"|"last"|"middle"|"segmentMiddles" or a list of them (default "interval"), "interval"?: points (default 12), "offsetAlong"?: points (from the start, back from the end, on from the middle), "rotate"?: bool (turned with the line; default true), "averageAngle"?: points (the stretch of line a marker at an interval turns with; 0: its segment), "angle"?: degrees clockwise (a hash mark at 0 crosses the line square), "outline"?: "#RRGGBB"|"#RRGGBBAA" (the markers' outline, as wide as the stroke)}|null (markers or hash marks along the line in the stroke's colour, instead of a line; cap, join and dash don't apply)}] (drawn bottom first; [] goes back to the single stroke, or for a class to the layer's strokes; on a point layer they are its marks: each stroke's markers drawn at the point in place of the symbol's, "offsetAlong" shifting a mark right and "offset" down, both turned with its "angle", and "rotate" turning it by layer.markerRotation's field), "value"?: text|number (a Unique Values class's own strokes), "index"?: number (a Graduated Colors class's, 0 = the lowest), "other"?: true (Unique Values' <all other values>)}"##,
             ),
         C::new("layer.fillLayers", "Fill Layers", "Style › Drawing", fill_layers)
-            .when(need_polygons)
+            .when(need_polygon_features)
             .params(
-                r##"{"layer"?, "value"?|"index"?|"other"?: a class of Unique Values (its value, or other: true) or Graduated Colors (its index) to set its own fills (none: the layer's), "fills": [{"color"?: "#RRGGBB"|"#RRGGBBAA"|null (null: the feature's fill colour, so the fills follow the classes), "pattern"?: "solid" (default)|"hatch" (parallel lines)|"dots" (markers on a grid), "angle"?: degrees anticlockwise from east (hatch), "spacing"?: points between lines (hatch, 1 to 500; default 8) or points across and down between markers, a number or [across, down] (dots), "width"?: a hatch line's width in points (0 to 50; default 1), "offset"?: points across the lines (hatch) or [across, down] (dots), "marker"?: "circle"|"square"|"triangle"|"diamond"|"star" (dots), "char"?: text (dots: a character of a font as the marker instead of a shape), "font"?: text (the installed family it is drawn from; none: the label font), "size"?: a marker's size in points (default 3), "outline"?: a marker's outline colour or null, "outlineWidth"?: points, "displacement"?: [across, down] points every other row and column are shifted by (dots)}] (bottom first, at most 8; [] for the symbol's single fill; the outline is drawn over them)}"##,
+                r##"{"layer"?, "value"?|"index"?|"other"?: a class of Unique Values (its value, or other: true) or Graduated Colors (its index) to set its own fills (none: the layer's), "fills": [{"color"?: "#RRGGBB"|"#RRGGBBAA"|null (null: the feature's fill colour, so the fills follow the classes), "pattern"?: "solid" (default)|"hatch" (parallel lines)|"dots" (markers on a grid)|"gradient" (from color to color2 across the feature)|"shapeburst" (from color at the edge to color2 inside), "angle"?: degrees anticlockwise from east (hatch), "spacing"?: points between lines (hatch, 1 to 500; default 8) or points across and down between markers, a number or [across, down] (dots), "width"?: a hatch line's width in points (0 to 50; default 1), "offset"?: points across the lines (hatch) or [across, down] (dots), "marker"?: "circle"|"square"|"triangle"|"diamond"|"star" (dots), "char"?: text (dots: a character of a font as the marker instead of a shape), "font"?: text (the installed family it is drawn from; none: the label font), "size"?: a marker's size in points (default 3), "outline"?: a marker's outline colour or null, "outlineWidth"?: points, "displacement"?: [across, down] points every other row and column are shifted by (dots), "color2"?: "#RRGGBB"|"#RRGGBBAA" (gradient, shapeburst: the second colour; default white), "stops"?: [[0..1, "#RRGGBB"|"#RRGGBBAA"], …] (gradient, shapeburst: colours between the two, at most 16), "discrete"?: bool (each colour held until the next stop), "shape"?: "linear" (default)|"radial"|"conical" (gradient), "from"?: [across, down]|"centroid" (gradient: where color is, 0..1 in the feature's box; default [0.5, 0], the top middle), "to"?: [across, down]|"centroid" (where color2 is; default [0.5, 1]), "spread"?: "pad" (default)|"reflect"|"repeat" (gradient: past its points), "angle"?: degrees anticlockwise (gradient: turned round its box's middle), "inView"?: bool (gradient: from and to in the map view's box, not the feature's), "distance"?: points|null (shapeburst: how deep it shades; null or none: to the point deepest inside), "blur"?: 0..17 (shapeburst: pixels), "ignoreRings"?: bool (shapeburst: holes' edges left out)}] (bottom first, at most 8; [] for the symbol's single fill; the outline is drawn over them)}"##,
             ),
         C::new("layer.markerRotation", "Marker Rotation", "Style › Drawing", |s, p| {
             let field = match p.get("field") {
@@ -488,12 +506,12 @@ impl Session {
     }
 }
 
-/// A polygon layer is active.
-fn need_polygons(s: &Session) -> Option<&'static str> {
+/// Polygon styling also applies to the polygon features of a mixed layer.
+fn need_polygon_features(s: &Session) -> Option<&'static str> {
     match s.active_layer.and_then(|id| s.map().layer(id)) {
-        Some(l) if !l.is_raster() && l.geometry_type() == GeometryType::Polygon && !l.graphics => None,
-        Some(_) => Some("this works on polygon layers"),
-        None => Some("select a polygon layer in the Layers pane first"),
+        Some(l) if !l.is_raster() && l.has_geometry(GeometryType::Polygon) && !l.graphics => None,
+        Some(_) => Some("this works on layers containing polygons"),
+        None => Some("select a layer containing polygons in the Layers pane first"),
     }
 }
 
@@ -616,7 +634,7 @@ fn line_strokes(s: &mut Session, p: &Value) -> CmdResult {
 /// `layer.fillLayers`: a polygon layer's stacked fills (or a class's own, with `value`, `index`
 /// or `other`), bottom first; `[]` goes back to the symbol's single fill.
 fn fill_layers(s: &mut Session, p: &Value) -> CmdResult {
-    use rustgis_map::fills::{FillLayer, FillPattern, MAX_FILLS};
+    use rustgis_map::fills::{FillLayer, FillPattern, GradientPoint, GradientShape, MAX_FILLS, Spread, Stop, Stops};
     let class = class_ref(p)?;
     let list = p.get("fills").and_then(Value::as_array).ok_or("fills is a list of fills ([] for the symbol's single fill)")?;
     if list.len() > MAX_FILLS {
@@ -690,14 +708,102 @@ fn fill_layers(s: &mut Session, p: &Value) -> CmdResult {
                     offset: pair("offset", [0.0, 0.0])?,
                 }
             }
-            Some(_) => return Err(format!("fill {n}: pattern is \"solid\", \"hatch\" or \"dots\"")),
+            Some(Some(kind @ ("gradient" | "shapeburst"))) => {
+                let color2 = hex("color2")?.unwrap_or(Rgba::rgb(255, 255, 255));
+                let stops = match o.get("stops") {
+                    None | Some(Value::Null) => Stops::default(),
+                    Some(Value::Array(a)) if a.len() <= rustgis_map::fills::MAX_STOPS => {
+                        let mut list = Vec::with_capacity(a.len());
+                        for st in a {
+                            let bad = || format!("fill {n}: each stop is [0..1, \"#RRGGBB\" or \"#RRGGBBAA\"]");
+                            let [at, c] = st.as_array().map(Vec::as_slice).unwrap_or_default() else { return Err(bad()) };
+                            let at = number(at).ok_or_else(bad)?;
+                            let color = c.as_str().and_then(Rgba::from_hex).ok_or_else(bad)?;
+                            list.push(Stop { at, color });
+                        }
+                        Stops::new(list)
+                    }
+                    Some(_) => {
+                        return Err(format!("fill {n}: stops is a list of at most {} [0..1, \"#RRGGBB\"]", rustgis_map::fills::MAX_STOPS));
+                    }
+                };
+                let flag = |k: &str| -> Result<bool, String> {
+                    match o.get(k) {
+                        None | Some(Value::Null) => Ok(false),
+                        Some(Value::Bool(b)) => Ok(*b),
+                        Some(_) => Err(format!("fill {n}: {k} is true or false")),
+                    }
+                };
+                let discrete = flag("discrete")?;
+                if kind == "shapeburst" {
+                    let blur = num("blur", 0.0)?;
+                    if !(0.0..=f32::from(rustgis_map::fills::MAX_BURST_BLUR)).contains(&blur) {
+                        return Err(format!("fill {n}: blur is 0 to {}", rustgis_map::fills::MAX_BURST_BLUR));
+                    }
+                    let distance = match o.get("distance") {
+                        None | Some(Value::Null) => None,
+                        Some(v) => Some(
+                            number(v).filter(|d| *d >= 0.0).ok_or_else(|| format!("fill {n}: distance is points (0 or more) or null"))?,
+                        ),
+                    };
+                    FillPattern::Shapeburst {
+                        color2,
+                        stops,
+                        discrete,
+                        distance,
+                        blur: blur.round() as u8,
+                        ignore_rings: flag("ignoreRings")?,
+                    }
+                } else {
+                    let point = |k: &str, default: [f32; 2]| -> Result<GradientPoint, String> {
+                        match o.get(k) {
+                            None | Some(Value::Null) => Ok(GradientPoint::At(default)),
+                            Some(Value::String(c)) if c.eq_ignore_ascii_case("centroid") => Ok(GradientPoint::CENTROID),
+                            Some(_) => pair(k, default)
+                                .map(GradientPoint::At)
+                                .map_err(|_| format!("fill {n}: {k} is [across, down] (0..1 in the box) or \"centroid\"")),
+                        }
+                    };
+                    let word = |k: &str, words: &[&str]| -> Result<usize, String> {
+                        match o.get(k) {
+                            None | Some(Value::Null) => Ok(0),
+                            Some(Value::String(w)) => words.iter().position(|x| x.eq_ignore_ascii_case(w.trim())).ok_or_else(|| {
+                                format!("fill {n}: {k} is {}", words.iter().map(|w| format!("\"{w}\"")).collect::<Vec<_>>().join(", "))
+                            }),
+                            Some(_) => {
+                                Err(format!("fill {n}: {k} is {}", words.iter().map(|w| format!("\"{w}\"")).collect::<Vec<_>>().join(", ")))
+                            }
+                        }
+                    };
+                    let shape = [GradientShape::Linear, GradientShape::Radial, GradientShape::Conical]
+                        .get(word("shape", &["linear", "radial", "conical"])?)
+                        .copied()
+                        .unwrap_or_default();
+                    let spread = [Spread::Pad, Spread::Reflect, Spread::Repeat]
+                        .get(word("spread", &["pad", "reflect", "repeat"])?)
+                        .copied()
+                        .unwrap_or_default();
+                    FillPattern::Gradient {
+                        shape,
+                        color2,
+                        stops,
+                        discrete,
+                        from: point("from", [0.5, 0.0])?,
+                        to: point("to", [0.5, 1.0])?,
+                        spread,
+                        angle: num("angle", 0.0)?,
+                        in_view: flag("inView")?,
+                    }
+                }
+            }
+            Some(_) => return Err(format!("fill {n}: pattern is \"solid\", \"hatch\", \"dots\", \"gradient\" or \"shapeburst\"")),
         };
         fills.push(FillLayer { color: hex("color")?, pattern }.clamped());
     }
     let id = s.layer_id(p)?;
     let l = s.map_mut().layer_mut(id).ok_or("no such layer")?;
-    if l.geometry_type() != GeometryType::Polygon || l.graphics || l.is_raster() {
-        return Err("this works on polygon layers".into());
+    if !l.has_geometry(GeometryType::Polygon) || l.graphics || l.is_raster() {
+        return Err("this works on layers containing polygons".into());
     }
     let count = fills.len();
     match class {
@@ -2733,6 +2839,9 @@ fn cog_name(url: &str) -> String {
 fn add_download(s: &mut Session, p: &Value) -> CmdResult {
     let id = f(p, "id").filter(|v| *v >= 0.0 && v.fract() == 0.0).map(|v| v as u64).ok_or("id is required")?;
     let url = ps(p, "url").unwrap_or("data").to_string();
+    // Read before the download is taken, so a bad one leaves it to be added again.
+    let service = super::b(p, "service").unwrap_or(false);
+    let bounds = if service { super::service::bounds_of(p.get("bounds"))? } else { None };
     let i = s.downloaded.iter().position(|(d, _)| *d == id).ok_or("no such download (it was dropped when another project opened)")?;
     let (_, bytes) = s.downloaded.remove(i);
     if p.get("geolibreProject").and_then(Value::as_bool) == Some(true) {
@@ -2746,10 +2855,11 @@ fn add_download(s: &mut Session, p: &Value) -> CmdResult {
         let name = if b(p, "geolibreZarr") == Some(true) { "zarr.tif".into() } else { url_file_name(&url, &bytes)? };
         return super::geolibre::finish_layer(s, p, name, bytes);
     }
-    // A service's features (Add From Service): its answer's axes and paging.
-    let bytes = if super::b(p, "service").unwrap_or(false) {
+    // A service's features (Add From Service): its answer's axes (against its layer's bounds) and
+    // paging.
+    let bytes = if service {
         let label = ps(p, "name").unwrap_or(&url).to_string();
-        super::service::features_answer(s, &label, bytes)
+        super::service::features_answer(s, &label, bytes, bounds)
     } else {
         bytes
     };
@@ -3031,8 +3141,8 @@ fn move_to(s: &mut Session, p: &Value) -> CmdResult {
     let mut placed: Vec<(u32, usize)> = Vec::new();
     for id in grouped {
         let Some(g) = m.group_of(id).map(|g| g.id) else { continue };
-        let run: Vec<usize> =
-            m.layers.iter().enumerate().filter(|(_, l)| m.group_of(l.id).is_some_and(|x| x.id == g)).map(|(i, _)| i).collect();
+        let members = m.group_layers(g);
+        let run: Vec<usize> = m.layers.iter().enumerate().filter(|(_, l)| members.contains(&l.id)).map(|(i, _)| i).collect();
         let (Some(&lo), Some(&hi)) = (run.first(), run.last()) else { continue };
         let k = placed.iter().filter(|(x, _)| *x == g).count();
         placed.push((g, k));

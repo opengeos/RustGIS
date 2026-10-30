@@ -12,7 +12,15 @@ fn cached_pixels_equal_sequential_strokes_including_overlap_and_alpha() {
             camera: Camera { center: Coord::new(0.0, 0.0), res: 1.0, bearing: 0.0, pitch: 0.0 },
             sky: false,
         };
-        let ctx = Ctx { view: &view, ppp, wireframe: false, cull: Extent::EMPTY, globe: None, sprites: Default::default() };
+        let ctx = Ctx {
+            view: &view,
+            ppp,
+            wireframe: false,
+            cull: Extent::EMPTY,
+            globe: None,
+            sprites: Default::default(),
+            bursts: Default::default(),
+        };
         let mut expected = Pixmap::new((600.0 * ppp) as u32, (400.0 * ppp) as u32).unwrap();
         let mut actual = expected.clone();
         let symbol = Symbol::default_for(rustgis_data::GeometryType::Polyline, 0);
@@ -85,7 +93,15 @@ fn path_storage_is_reused_and_large_paths_are_not_retained() {
         camera: Camera { center: Coord::new(0.0, 0.0), res: 1.0, bearing: 0.0, pitch: 0.0 },
         sky: false,
     };
-    let ctx = Ctx { view: &view, ppp: 1.0, wireframe: false, cull: Extent::EMPTY, globe: None, sprites: Default::default() };
+    let ctx = Ctx {
+        view: &view,
+        ppp: 1.0,
+        wireframe: false,
+        cull: Extent::EMPTY,
+        globe: None,
+        sprites: Default::default(),
+        bursts: Default::default(),
+    };
     let mut image = Pixmap::new(600, 400).unwrap();
     let symbol = Symbol::default_for(rustgis_data::GeometryType::Polyline, 0);
     let strokes = [LineStroke { offset: 0.5, width: Some(0.5), ..Default::default() }];

@@ -364,6 +364,9 @@ pub struct ServiceBrowse {
     pub filter: String,
     /// The date time-enabled layers are added at (their default when empty).
     pub time: String,
+    /// Time-enabled layers are added at a fixed date (`time`, or their default when empty) rather
+    /// than following the time slider, as they do by default.
+    pub fixed: bool,
     /// Feature layers are asked only for the features crossing the map's view (Only the map's
     /// area), not whole.
     pub area: bool,
@@ -550,6 +553,9 @@ pub struct UiState {
     pub start_with: StartWith,
     /// Whether a file holding several layers asks which to add (#934), or adds them all.
     pub ask_layers: bool,
+    /// Key combinations the native menu bar keeps for itself (macOS: Quit, Close Window, Hide…):
+    /// a shortcut on one would never reach the app, so the shortcut editor refuses them.
+    pub reserved_shortcuts: Vec<egui::KeyboardShortcut>,
     /// Files whose layers are being listed or chosen, the first one shown.
     pub choosing: Vec<layerchooser::Chooser>,
     /// The project last opened or saved on this computer, for Start With › Last Project.
@@ -770,6 +776,7 @@ impl Default for UiState {
             worldview: i18n::AUTO.into(),
             start_with: StartWith::Sample,
             ask_layers: true,
+            reserved_shortcuts: Vec::new(),
             choosing: Vec::new(),
             last_project: None,
             start_projection: String::new(),
@@ -956,14 +963,58 @@ impl RustGisApp {
         keys
     }
 
-    /// A fingerprint of the keymap's key combinations: cheap to take every frame (no
-    /// allocation), it changes when a shortcut is added, removed or rebound, so a caller can
-    /// rebuild [`RustGisApp::command_keys`] only then.
+    /// The keyboard shortcuts of a command run without parameters, in the keymap's order, for a
+    /// native menu to show (the macOS menu bar).
+    pub fn shortcuts_of(&self, command: &str) -> Vec<egui::KeyboardShortcut> {
+        self.ui.keymap.keys_for(command, &Value::Null).map(|c| egui::KeyboardShortcut::new(c.modifiers(), c.key)).collect()
+    }
+
+    /// The command a keyboard shortcut runs, if the keymap gives it one.
+    pub fn shortcut_command(&self, shortcut: egui::KeyboardShortcut) -> Option<String> {
+        let m = shortcut.modifiers;
+        // A chord has no Ctrl apart from ⌘ (the Mac's Ctrl isn't one): ⌃T isn't the bare T.
+        if m.ctrl && !m.command {
+            return None;
+        }
+        let chord = keymap::Chord { command: m.command || m.mac_cmd, alt: m.alt, shift: m.shift, key: shortcut.logical_key };
+        self.ui.keymap.command_for(chord).map(|b| b.command.clone())
+    }
+
+    /// Whether the keyboard shortcut editor is waiting for a key combination to record.
+    pub fn capturing_shortcut(&self) -> bool {
+        self.ui.shortcut_editor.capturing()
+    }
+
+    /// Whether a command exists and can run now: what the ribbon greys out.
+    pub fn command_enabled(&self, command: &str) -> bool {
+        widgets::enabled(self, command)
+    }
+
+    /// A fingerprint of the keymap's key combinations and what they run: cheap to take every
+    /// frame (no allocation), it changes when a shortcut is added, removed or rebound (to
+    /// another key or another command), so a caller can rebuild [`RustGisApp::command_keys`]
+    /// only then.
     pub fn shortcuts_fingerprint(&self) -> u64 {
         use std::hash::{Hash, Hasher};
         let mut h = std::collections::hash_map::DefaultHasher::new();
         for b in &self.ui.keymap.bindings {
             b.chord.hash(&mut h);
+            // And what it runs: a key rebound to another command changes it too.
+            b.command.hash(&mut h);
+            if !b.params.is_null() {
+                // Written straight into the hash: no allocation.
+                struct Feed<'a>(&'a mut std::collections::hash_map::DefaultHasher);
+                impl std::io::Write for Feed<'_> {
+                    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                        self.0.write(buf);
+                        Ok(buf.len())
+                    }
+                    fn flush(&mut self) -> std::io::Result<()> {
+                        Ok(())
+                    }
+                }
+                let _ = serde_json::to_writer(Feed(&mut h), &b.params);
+            }
         }
         self.ui.keymap.bindings.len().hash(&mut h);
         h.finish()
@@ -1048,8 +1099,10 @@ impl RustGisApp {
     /// Installs the shell's platform hooks and reads what they keep: preferences, saved
     /// connections and the recovery copy an earlier run left.
     pub fn with_services(mut self, services: Services) -> Self {
-        // Both saved database passwords and S3 keys use the same store, installed before prefs.
+        // Saved database passwords, S3 keys and the remembered Earthdata Login token use the same
+        // store, installed before prefs.
         self.session.database_logins.set_store(services.secrets.clone());
+        rustgis_engine::render::rustgis_tiles::earthdata::set_secret_store(services.secrets.clone());
         self.services = services;
         shortcutui::load(&mut self);
         sourcespane::load_connections(&mut self);
@@ -2445,6 +2498,10 @@ impl RustGisApp {
                     if let Some(value) = p.get(key) {
                         q[key] = value.clone();
                     }
+                }
+                // A service layer's bounds, which its features' axes are checked against.
+                if let Some(b) = p.get("bounds").filter(|b| b.is_array()) {
+                    q["bounds"] = b.clone();
                 }
                 if let Some(origin) = &origin {
                     q[connectiontree::ORIGIN] = json!(origin);

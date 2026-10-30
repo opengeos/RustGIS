@@ -94,6 +94,13 @@ the colour picker's opacity control can also make a fill visible again. By comma
 layer.noFill={"layer":"Countries"}
 ```
 
+A GeoJSON with mixed geometry keeps its points, lines and polygons in one layer, classified by its
+most common geometry family. **No Fill** and the **Fills** editor are also available when that
+layer contains polygons. No Fill leaves point and line symbols unchanged; use the Fills editor
+to change the polygon fill's colour or remove its transparent fill to restore the symbol's fill.
+For layers read in place, these controls recognise polygon features in the currently loaded view
+as well as the layer's declared geometry family.
+
 The ribbon's **Color** control changes Unique Values or Graduated Colors back to Single Symbol.
 To keep the classification, edit a class's colour in the Symbology pane instead. A polygon's
 fill and outline are independent: changing its fill leaves its outline intact.
@@ -224,9 +231,17 @@ stacks fills inside the outline, as a wetland gets a pale green under blue hatch
 Fill** puts one on top (the first is the symbol's colour, the next hatch lines over it), the
 arrows move one up or down and the cross removes it; the top fill is listed first. **Draw** picks
 **Solid**, **Hatch lines** (parallel lines at an **Angle**, anticlockwise from east, **Spacing**
-apart, of a **Line width**, shifted across by an **Offset**) or **Markers** (a **Marker** shape
+apart, of a **Line width**, shifted across by an **Offset**), **Markers** (a **Marker** shape
 of a **Size** on a grid **Spacing across** and **Spacing down** apart, **Rows shifted** to
-stagger them). A colour set to **From symbol** follows the renderer, so the fills take each
+stagger them), **Gradient** or **Shapeburst**. A gradient shades each feature from its colour to
+a **Second color**: by default top to bottom, of a **Type** that runs **Linear** (straight
+across), **Radial** (in rings from its first point) or **Conical** (round its first point),
+turned by an **Angle** (anticlockwise), and past its points a **Spread** of **Pad** (its end
+colours), **Reflect** or **Repeat**. A shapeburst shades from its colour at the polygon's edge to
+the second colour inside, a **Distance** in, or over the **Whole shape** to the point deepest
+inside; **Blur** softens it and **Ignore holes** shades from the outer edge alone. Each part of a multi-part
+feature is shaded on its own, in its own box (an island its own gradient). Zoomed far into a
+polygon shaded over the whole shape, its deepest point is found on a coarser picture of it. A colour set to **From symbol** follows the renderer, so the fills take each
 class's colour. The polygon's outline is drawn over the fills. Patterns are fixed to the map, so
 neighbouring polygons' hatch lines meet, and keep their size in points as the map zooms. A Unique
 Values or Graduated Colors class can stack fills of its own, picked under **Fills for** as for
@@ -236,7 +251,13 @@ strokes. By command, `layer.fillLayers`:
 layer.fillLayers={"layer":"Wetlands","fills":[{"color":"#DDEEDD"},{"color":"#3366CC","pattern":"hatch","angle":0,"spacing":6,"width":0.8}]}
 layer.fillLayers={"layer":"Orchards","fills":[{"color":"#F2F5E6"},{"color":"#4E7A2E","pattern":"dots","marker":"circle","size":3,"spacing":[8,8],"displacement":[4,0]}]}
 layer.fillLayers={"layer":"Land use","value":"Forest","fills":[{"color":null},{"color":"#2D5A27","pattern":"hatch","angle":45}]}
+layer.fillLayers={"layer":"Lakes","fills":[{"color":"#1F5FA8","pattern":"shapeburst","color2":"#CFE3F7","distance":12,"blur":4}]}
+layer.fillLayers={"layer":"Countries","fills":[{"color":"#FFFFFF","pattern":"gradient","shape":"radial","from":"centroid","to":[1,0.5],"color2":"#88AA66"}]}
 ```
+
+A gradient's `from` and `to` are places in the feature's box (`[across, down]`, 0 to 1) or
+`"centroid"`, or in the map view's box with `"inView": true`; `stops` adds colours between the two
+(`[[0.5, "#RRGGBB"], …]`), held rather than blended with `"discrete": true`.
 
 `[]` goes back to the single fill (for a class, to the layer's fills). Fills draw on the CPU (on the
 globe, patterns keep to the screen rather than the map as it turns); the

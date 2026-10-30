@@ -55,6 +55,35 @@
    }
   },
   {
+   "name": "erase lines",
+   "tool": "erase",
+   "params": {
+    "input": "roads",
+    "erase": "zones"
+   },
+   "expect": {
+    "features": "expected/erase_roads.geojson"
+   }
+  },
+  {
+   "name": "erase points",
+   "tool": "erase",
+   "params": {
+    "input": "points",
+    "erase": "zones"
+   },
+   "expect": {
+    "ids": [
+     "a",
+     "c",
+     "f",
+     "g",
+     "h",
+     "i"
+    ]
+   }
+  },
+  {
    "name": "intersect polygons",
    "tool": "intersect",
    "params": {
@@ -175,6 +204,32 @@
      "id",
      "id_2"
     ]
+   }
+  },
+  {
+   "name": "symmetrical difference",
+   "tool": "symmetricalDifference",
+   "params": {
+    "input": "parcels",
+    "overlay": "zones"
+   },
+   "expect": {
+    "features": "expected/symdiff_parcels.geojson",
+    "key": [
+     "id",
+     "id_2"
+    ]
+   }
+  },
+  {
+   "name": "update",
+   "tool": "update",
+   "params": {
+    "input": "parcels",
+    "update": "zones"
+   },
+   "expect": {
+    "features": "expected/update_parcels.geojson"
    }
   },
   {

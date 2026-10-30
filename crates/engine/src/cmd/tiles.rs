@@ -70,7 +70,7 @@ pub fn commands() -> Vec<C> {
         C::new("map.removeTiles", "Remove Tile Layer", "Home › Add", remove)
             .params(r#"{"name"?: text, "index"?: number, "id"?: catalog id} (removes every tile layer when none is given)"#),
         C::new("map.setTiles", "Tile Layer Properties", "Home › Add", set).params(
-            r#"{"name"?: text | "index"?: number (0 = top) | "id"?: catalog id, "visible"?: bool, "opacity"?: 0–1, "blend"?: "normal"|"multiply"|"screen"|"overlay"|"darken"|"lighten"|"difference", "move"?: "up"|"down"|"top"|"bottom" (past the next layer in the drawing order of all the map's layers, a feature or raster layer too), "to"?: number (its place in that order among the other layers, 0 = top; the Layers pane lists it), "rename"?: text, "bands"?: [red, green, blue] | [band] (a cloud-optimised GeoTIFF's bands shown, from 1; [] for its own), "range"?: [low, high] (the values shown from black to full colour; null: each band's 2nd–98th percentile), "dequantize"?: "aef" (AlphaEarth's quantised embeddings) | "none", "legend"?: as map.addTiles's, or null for none}"#,
+            r#"{"name"?: text | "index"?: number (0 = top) | "id"?: catalog id, "visible"?: bool, "opacity"?: 0–1, "blend"?: "normal"|"multiply"|"screen"|"overlay"|"darken"|"lighten"|"difference", "move"?: "up"|"down"|"top"|"bottom" (past the next layer in the drawing order of all the map's layers, a feature or raster layer too), "to"?: number (its place in that order among the other layers, 0 = top; the Layers pane lists it), "rename"?: text, "bands"?: [red, green, blue] | [band] (a cloud-optimised GeoTIFF's bands shown, from 1; [] for its own), "range"?: [low, high] (the values shown from black to full colour; null: each band's 2nd–98th percentile), "dequantize"?: "aef" (AlphaEarth's quantised embeddings) | "none", "legend"?: as map.addTiles's, or null for none, "hiddenLayers"?: [source layer name] (vector tiles' source layers not drawn or identified, as map.tiles's sourceLayers names them; replaces the list, [] or null for none)}"#,
         ),
         C::new("map.tiles", "Tile Layers", "Home › Add", |s, _| Ok(list(s, false))).view(),
         // As `layer.expand` for a layer's classes: what the pane shows, not an edit to undo.
@@ -81,7 +81,7 @@ pub fn commands() -> Vec<C> {
             t.expanded = on.unwrap_or(!t.expanded);
             Ok(json!({"index": i, "expanded": t.expanded}))
         })
-        .params(r#"{"name"?: text | "index"?: number (0 = top) | "id"?: catalog id, "on"?: bool (toggles when omitted)} — shows or hides a tile layer's legend under it in the Layers pane"#)
+        .params(r#"{"name"?: text | "index"?: number (0 = top) | "id"?: catalog id, "on"?: bool (toggles when omitted)} — shows or hides a tile layer's legend and source layers under it in the Layers pane"#)
         .view(),
         // As `layer.select` for a map layer: what the pane shows, not an edit to undo.
         C::new("map.selectTiles", "Select Tile Layer", "Layers", select_tiles)
@@ -169,6 +169,14 @@ pub(crate) fn list(s: &Session, redact: bool) -> Value {
                         .collect();
                     o["legends"] = json!(legends);
                     o["expanded"] = json!(t.expanded);
+                }
+                // A vector archive's source layers (once its header is in), and those switched off.
+                if let Some(names) = rustgis_render::tile_source_layers(t) {
+                    o["sourceLayers"] = json!(names);
+                    o["expanded"] = json!(t.expanded);
+                }
+                if !t.hidden_layers.is_empty() {
+                    o["hiddenLayers"] = json!(t.hidden_layers);
                 }
                 // Picked in the Layers pane (`map.selectTiles`).
                 if picked == Some(i) {
@@ -571,6 +579,22 @@ fn legends(v: &Value) -> Result<Vec<rustgis_data::ogc::Legend>, String> {
     Ok(list)
 }
 
+/// The `hiddenLayers` a command gives, if any: a list of names (null for none).
+fn hidden_layers(p: &Value) -> Result<Option<Vec<String>>, String> {
+    use rustgis_map::tiles::{MAX_SOURCE_LAYERS, checked_source_layers};
+    let bad = || "hiddenLayers is a list of source layer names".to_string();
+    match p.get("hiddenLayers") {
+        None => Ok(None),
+        Some(Value::Null) => Ok(Some(Vec::new())),
+        Some(Value::Array(names)) if names.len() > MAX_SOURCE_LAYERS => Err(format!("at most {MAX_SOURCE_LAYERS} hidden source layers")),
+        Some(Value::Array(names)) => {
+            let names: Vec<&str> = names.iter().map(Value::as_str).collect::<Option<_>>().ok_or_else(bad)?;
+            Ok(Some(checked_source_layers(names)))
+        }
+        Some(_) => Err(bad()),
+    }
+}
+
 fn set(s: &mut Session, p: &Value) -> CmdResult {
     let i = find(s, p)?.ok_or("name or index is required")?;
     let mode = blend(p)?;
@@ -580,11 +604,15 @@ fn set(s: &mut Session, p: &Value) -> CmdResult {
         Some(Value::Null) => Some(Vec::new()),
         Some(v) => Some(legends(v)?),
     };
+    let hidden = hidden_layers(p)?;
     let m = s.map_mut();
     let Some(t) = m.tiles.get_mut(i) else { return Err("no tile layer at that index".into()) };
     // Refused before anything changes.
     if look.is_some() && t.kind != TileKind::Cog {
         return Err("bands, range and dequantize are for a cloud-optimised GeoTIFF's layer".into());
+    }
+    if hidden.as_ref().is_some_and(|h| !h.is_empty()) && matches!(t.kind, TileKind::Raster | TileKind::Cog) {
+        return Err("hiddenLayers is for vector tiles' source layers".into());
     }
     let new_url = match look {
         Some(look) => {
@@ -604,6 +632,9 @@ fn set(s: &mut Session, p: &Value) -> CmdResult {
     }
     if let Some(l) = new_legends {
         t.legends = l;
+    }
+    if let Some(h) = hidden {
+        t.hidden_layers = h;
     }
     if let Some(o) = f(p, "opacity") {
         t.opacity = if o.is_finite() { o.clamp(0.0, 1.0) as f32 } else { 1.0 };

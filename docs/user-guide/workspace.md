@@ -140,9 +140,9 @@ Each layer keeps its look:
   shifted, turned or anchored off its centre, as a point's marks; a marker angle taken from a
   field (`"field"` or `- "field"`) as the layer's rotation field; a fill symbol of several layers
   as stacked fills, its brush patterns (horizontal, vertical, diagonal, cross) and line pattern
-  fills as hatch lines, point pattern fills as markers on their grid, and the fills not drawn yet
-  (gradient and shapeburst fills in their first colour; dense brushes, SVG, raster and random fills as
-  a tint of their colour).
+  fills as hatch lines, point pattern fills as markers on their grid, gradient and shapeburst
+  fills with their colours or colour ramp, and the fills not drawn yet (dense brushes, SVG, raster
+  and random fills as a tint of their colour).
 - **Layer settings**: opacity, blending, visibility range, filter (subset string), and the
   reference scale.
 - **Rasters**: singleband grey as a stretch from black to white, singleband pseudocolour as a
@@ -168,7 +168,7 @@ older names of the same settings are read.
 QGIS expressions carry over where they are SQL: fields compared with values, `LIKE`, `IN`,
 `IS NULL`, joined by `AND`, `OR` and `NOT`. What RustGIS doesn't draw as QGIS does is drawn as
 near as it can, or left out, and said: the import's notes list, layer by layer, what was
-approximated (gradient and shapeburst fills drawn in their first colour, SVG, raster and random fills and dense brushes as a tint of their colour, SVG markers as circles,
+approximated (gradient and shapeburst fills' offsets left out and colour ramps other than gradients drawn from their first colour to their last, SVG, raster and random fills and dense brushes as a tint of their colour, SVG markers as circles,
 dashed polygon outlines solid, label halos with sharp corners drawn round and blended ones drawn
 over the map, label backgrounds of other shapes drawn as rectangles, label distances from lines
 and polygons, a distance around points moved straight up, labels wrapped at a shortest line
@@ -301,6 +301,10 @@ duplication and nudging have their own [layout shortcuts](layouts.md#layouts).
       `https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/MODIS_Terra_CorrectedReflectance_TrueColor/default/{date:YYYY-MM-DD}/GoogleMapsCompatible_Level9/{z}/{y}/{x}.jpg`.
     - A Zarr variable added with **Follow the time slider** (Home › Add › Add Data › Zarr…) shows
       the step the slider is at; see [Zarr stores](data.md#zarr-stores).
+    - So does a WMS or WMTS layer with a time dimension, as it is added by default (**Follow the
+      time slider** in Web Data's dialogs; `service.add` without a `"time"`): its requests take
+      the step's time, and a slider that is off starts with the layer's times; see
+      [Layers that change with time](web-data.md#layers-that-change-with-time).
     - From scripts: `time.bind` (`"layer"`, `"field"`, `"start"`, `"end"`, `"unit"`, `"interval"`, `"show"`), `time.set` (the
       window: `"start"`, `"end"`, `"unit"`, `"interval"`, `"show"`, `"speed"`, `"loop"`,
       `"format"`…), `time.goTo` (`"date"`, or `"step"` from 0), `time.step` (`"by"`, negative goes

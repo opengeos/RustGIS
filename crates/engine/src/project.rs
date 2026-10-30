@@ -430,6 +430,12 @@ pub(crate) fn resolve_file_paths<'a>(dir: &str, paths: impl IntoIterator<Item = 
     }
 }
 
+#[derive(Deserialize)]
+struct ProjectFormat {
+    #[serde(default)]
+    format: Option<u32>,
+}
+
 impl Project {
     fn file_paths_mut(&mut self) -> Vec<(&mut String, bool)> {
         let mut paths = Vec::new();
@@ -616,7 +622,8 @@ impl Project {
                 true
             });
             // Layer groups likewise: ids of their own, children that exist and are in no other
-            // group, numbers in range; children kept together in the drawing order.
+            // group, numbers in range, parents that exist without a loop or too many levels;
+            // each group's layers kept together in the drawing order.
             m.groups.truncate(rustgis_map::MAX_GROUPS);
             m.groups.retain_mut(|g| {
                 if g.id == 0 || !ids.insert(g.id) {
@@ -629,10 +636,7 @@ impl Project {
                 g.children.retain(|c| layer_ids.contains(c) && children.insert(*c));
                 true
             });
-            let group_ids: Vec<u32> = m.groups.iter().map(|g| g.id).collect();
-            for id in group_ids {
-                m.gather_group(id);
-            }
+            m.tidy_groups();
             // A projection this version can't use (a hand edit, or a newer file) falls back to
             // Web Mercator rather than being named while another is drawn.
             if let rustgis_map::Projection::Custom(code) = &m.projection
@@ -866,10 +870,23 @@ impl Project {
         if text.len() as u64 > MAX_BYTES {
             return Err("the project file is too large".into());
         }
-        let mut p: Project = serde_json::from_str(text).map_err(|e| format!("not a RustGIS project: {e}"))?;
+        if let Ok(pf) = serde_json::from_str::<ProjectFormat>(text)
+            && let Some(format) = pf.format
+            && format > FORMAT
+        {
+            return Err(format!("this project was saved by a newer RustGIS (format {format}). Update RustGIS to open it."));
+        }
+        let mut p: Project = serde_json::from_str(text).map_err(|e| {
+            let msg = e.to_string();
+            if msg.contains("unknown variant") {
+                format!("this project may have been saved by a newer RustGIS: {msg}. Update RustGIS to open it.")
+            } else {
+                format!("not a RustGIS project: {msg}")
+            }
+        })?;
         p.ensure_imports_complete().map_err(|_| "a project file cannot contain runtime GeoLibre download reservations".to_string())?;
         if p.format > FORMAT {
-            return Err(format!("this project was saved by a newer RustGIS (format {})", p.format));
+            return Err(format!("this project was saved by a newer RustGIS (format {}). Update RustGIS to open it.", p.format));
         }
         if restore {
             p.restore_addresses(text);

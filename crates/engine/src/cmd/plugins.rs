@@ -32,7 +32,7 @@ pub fn commands() -> Vec<C> {
             .view()
             .params(r#"{"id": plugin id, "url"?: registry.json}"#),
         C::new("plugin.panel", "Plugin Panel State", "Plugins", panel).view().params(
-            r#"{"id": plugin id, "values"?: {widget id: true/false or a whole number}, "refresh"?: bool (run the panel's state command)}"#,
+            r#"{"id": plugin id, "values"?: {widget id: true/false, a whole number, or a tree node's id (null for none)}, "refresh"?: bool (run the panel's state command)}"#,
         ),
         C::new("plugin.prepare", "Prepare Plugin Environment", "Plugins › Manage", prepare)
             .view()
@@ -354,7 +354,9 @@ pub fn reaches(spec: &C, params: &Value) -> Option<Reach> {
         return Some(Reach::Files);
     }
     // So do tools with a file parameter (a plugin's `file`): they're handed the file.
-    if spec.id == "gp.run" && ps(params, "tool").and_then(rustgis_analysis::tool).is_some_and(super::gp::reads_files) {
+    if spec.id == "gp.run"
+        && ps(params, "tool").and_then(super::gp::tool_id).and_then(rustgis_analysis::tool).is_some_and(super::gp::reads_files)
+    {
         return Some(Reach::Files);
     }
     if spec.id == "gp.run"

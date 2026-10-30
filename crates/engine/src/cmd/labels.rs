@@ -267,7 +267,7 @@ pub(crate) fn with_labels(s: &mut Session, p: &Value, f: impl FnOnce(&mut Labeli
     let l = s.map_mut().layer_mut(id).ok_or("no such layer")?;
     let mut labels = l.labels.clone();
     f(&mut labels)?;
-    let relock = !same_class_list(&l.labels, &labels);
+    let relock = !lock_holds(&l.labels, &labels);
     l.labels = labels;
     if relock {
         s.map_mut().label_lock = None;
@@ -280,6 +280,21 @@ pub(crate) fn with_labels(s: &mut Session, p: &Value, f: impl FnOnce(&mut Labeli
 /// where they are placed next (`Map::label_lock` emptied, #732).
 pub(crate) fn same_class_list(a: &Labeling, b: &Labeling) -> bool {
     a.classes.iter().map(|c| &c.name).eq(b.classes.iter().map(|c| &c.name))
+}
+
+/// Whether a lock taken with the labels `a` still names those of `b`: the same classes, listed
+/// alike and putting their point labels in the same places.
+pub(crate) fn lock_holds(a: &Labeling, b: &Labeling) -> bool {
+    same_class_list(a, b) && same_places(a, b)
+}
+
+/// Whether the classes of `a` and `b` (listed alike) put their point labels in the same places.
+/// A lock names the place round its point a label took by its number among its class's (#1011),
+/// so another position, or trying the others turned on or off, locks the labels again; with no
+/// class trying them a new position keeps the lock, as before.
+fn same_places(a: &Labeling, b: &Labeling) -> bool {
+    let classes = |l: &Labeling| l.classes.iter().chain([&l.default]).map(|c| (c.placement, c.other_positions)).collect::<Vec<_>>();
+    classes(a).into_iter().zip(classes(b)).all(|(x, y)| x == y || !(x.1 || y.1))
 }
 
 /// The place of the class named `name` among those checked before Default (of the
@@ -446,7 +461,9 @@ fn convert(s: &mut Session, p: &Value) -> CmdResult {
     labels.classes.truncate(MAX_LABEL_CLASSES);
     for c in std::iter::once(&mut labels.default).chain(labels.classes.iter_mut()) {
         c.field = "TEXT".into();
+        // On its point, never round it: an annotation stays where it is (#1011).
         c.placement = LabelPlacement::Center;
+        c.other_positions = false;
         // Each class picks the points it labelled, Default too once there are others (#732):
         // with no clause it would label theirs as well.
         c.where_ = classes.then(|| format!("\"CLASS\" = '{}'", c.name.replace('\'', "''")));

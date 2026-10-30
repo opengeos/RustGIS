@@ -3242,62 +3242,157 @@ fn panel_open(app: &RustGisApp, id: &str) -> bool {
     app.ui.right == Some(crate::RightPane::Plugin) && app.ui.plugin_panel.plugin.as_deref() == Some(id)
 }
 
-/// A plugin's own tab: its groups of commands, tools and menus.
+/// A plugin entry, shared by ribbon buttons and menu rows (`layout == None`).
+fn plugin_entry(
+    app: &mut RustGisApp,
+    ui: &mut Ui,
+    m: &rustgis_engine::plugins::Manifest,
+    lang: &str,
+    entry: &str,
+    layout: Option<rustgis_engine::plugins::Layout>,
+) {
+    use rustgis_engine::plugins::{Entry, Layout, command_id};
+    let open = panel_open(app, &m.id);
+    let mut show = |icon: &str, label: &str, help: &str, id: &str, params: Value| {
+        let label = if layout != Some(Layout::Large) && label.contains('\n') {
+            std::borrow::Cow::Owned(label.replace('\n', " "))
+        } else {
+            std::borrow::Cow::Borrowed(label)
+        };
+        let checked = open && id == "ui.pane.plugin";
+        match layout {
+            Some(Layout::Large) => {
+                big(ui, app, icon, &label, help, id, params, checked, false);
+            }
+            Some(Layout::Small) => {
+                small(ui, app, icon, &label, help, id, params, checked);
+            }
+            None => menu_item(ui, app, icon, &label, id, params),
+        }
+    };
+    match m.entry(entry) {
+        Some(Entry::Command(c)) => {
+            let icon = if crate::icons::ALL.contains(&c.icon.as_str()) { c.icon.as_str() } else { "plugin" };
+            show(icon, m.translate(lang, &c.label), m.translate(lang, &c.help), &command_id(&m.id, &c.id), Value::Null);
+        }
+        Some(Entry::Tool(t)) => {
+            let name = m.translate(lang, &t.name);
+            let label = if layout == Some(Layout::Large) {
+                std::borrow::Cow::Owned(name.replacen(' ', "\n", 1))
+            } else {
+                std::borrow::Cow::Borrowed(name)
+            };
+            show("toolbox", &label, m.translate(lang, &t.summary), "ui.gp.open", json!({"tool": command_id(&m.id, &t.id)}));
+        }
+        Some(Entry::Panel(d)) => {
+            let (icon, label, help) = panel_button(m, d, lang);
+            show(icon, &label, &help, "ui.pane.plugin", json!({"id": m.id}));
+        }
+        None => {}
+    }
+}
+
+/// Popup entries always use menu rows; nested menus cascade rather than opening another ribbon.
+fn plugin_menu_items(
+    app: &mut RustGisApp,
+    ui: &mut Ui,
+    m: &rustgis_engine::plugins::Manifest,
+    lang: &str,
+    items: &[rustgis_engine::plugins::ItemDecl],
+) {
+    use rustgis_engine::plugins::ItemDecl;
+    for (index, item) in items.iter().enumerate() {
+        ui.push_id(index, |ui| match item {
+            ItemDecl::Entry(e) => plugin_entry(app, ui, m, lang, e, None),
+            ItemDecl::Menu(menu) => {
+                let icon = if crate::icons::ALL.contains(&menu.icon.as_str()) { menu.icon.as_str() } else { "plugin" };
+                let label = m.translate(lang, &menu.menu);
+                let label = if label.contains('\n') {
+                    std::borrow::Cow::Owned(label.replace('\n', " "))
+                } else {
+                    std::borrow::Cow::Borrowed(label)
+                };
+                submenu_row(ui, icon, &label, |ui| plugin_menu_items(app, ui, m, lang, &menu.items));
+            }
+        });
+    }
+}
+
+fn plugin_item_layout(
+    item: &rustgis_engine::plugins::ItemDecl,
+    inherited: rustgis_engine::plugins::Layout,
+) -> rustgis_engine::plugins::Layout {
+    match item {
+        rustgis_engine::plugins::ItemDecl::Entry(_) => inherited,
+        rustgis_engine::plugins::ItemDecl::Menu(menu) => menu.layout.unwrap_or(inherited),
+    }
+}
+
+fn plugin_ribbon_item(
+    app: &mut RustGisApp,
+    ui: &mut Ui,
+    m: &rustgis_engine::plugins::Manifest,
+    lang: &str,
+    item: &rustgis_engine::plugins::ItemDecl,
+    layout: rustgis_engine::plugins::Layout,
+) {
+    use rustgis_engine::plugins::{ItemDecl, Layout};
+    match item {
+        ItemDecl::Entry(e) => plugin_entry(app, ui, m, lang, e, Some(layout)),
+        ItemDecl::Menu(menu) => {
+            let icon = if crate::icons::ALL.contains(&menu.icon.as_str()) { menu.icon.as_str() } else { "plugin" };
+            let label = m.translate(lang, &menu.menu);
+            let help = m.translate(lang, &menu.help);
+            let contents = |ui: &mut Ui, app: &mut RustGisApp| plugin_menu_items(app, ui, m, lang, &menu.items);
+            match layout {
+                Layout::Large => big_menu(ui, app, icon, label, help, contents),
+                Layout::Small => {
+                    let label = if label.contains('\n') {
+                        std::borrow::Cow::Owned(label.replace('\n', " "))
+                    } else {
+                        std::borrow::Cow::Borrowed(label)
+                    };
+                    small_menu(ui, app, icon, &label, help, contents);
+                }
+            }
+        }
+    }
+}
+
+/// A plugin's own tab: large controls and runs of three small controls per column.
 fn plugin_tab(app: &mut RustGisApp, ui: &mut Ui, plugin: &str) {
-    use rustgis_engine::plugins::{Entry, ItemDecl, command_id};
+    use rustgis_engine::plugins::Layout;
     let Some(p) = rustgis_engine::plugins::get(plugin).filter(|p| p.enabled) else { return };
     let Some(tab) = p.manifest.tab.as_ref() else { return };
     let m = &p.manifest;
     let lang = app.lang().code();
-    // What a button runs: a command, or the Tools pane open on a tool.
-    let target = |e: Entry<'_>| -> (String, String, String, String, Value) {
-        match e {
-            Entry::Command(c) => {
-                let icon = if crate::icons::ALL.contains(&c.icon.as_str()) { c.icon.clone() } else { "plugin".into() };
-                (
-                    icon,
-                    m.translate(lang, &c.label).to_string(),
-                    m.translate(lang, &c.help).to_string(),
-                    command_id(&m.id, &c.id),
-                    Value::Null,
-                )
-            }
-            Entry::Tool(t) => (
-                "toolbox".into(),
-                m.translate(lang, &t.name).replacen(' ', "\n", 1),
-                m.translate(lang, &t.summary).to_string(),
-                "ui.gp.open".into(),
-                json!({"tool": command_id(&m.id, &t.id)}),
-            ),
-            Entry::Panel(d) => {
-                let (icon, label, help) = panel_button(m, d, lang);
-                (icon.into(), label, help, "ui.pane.plugin".into(), json!({"id": m.id}))
-            }
-        }
-    };
-    let open = panel_open(app, &m.id);
-    for g in &tab.groups {
-        group(ui, m.translate(lang, &g.label), |ui| {
-            for item in &g.items {
-                match item {
-                    ItemDecl::Entry(e) => {
-                        if let Some((icon, label, help, id, params)) = m.entry(e).map(target) {
-                            let checked = open && id == "ui.pane.plugin";
-                            big(ui, app, &icon, &label, &help, &id, params, checked, false);
+    for (group_index, g) in tab.groups.iter().enumerate() {
+        ui.push_id(group_index, |ui| {
+            group(ui, m.translate(lang, &g.label), |ui| {
+                let mut remaining = g.items.as_slice();
+                let mut offset = 0;
+                while let Some(item) = remaining.first() {
+                    let layout = plugin_item_layout(item, g.layout);
+                    let count = if layout == Layout::Small {
+                        remaining.iter().take(3).take_while(|item| plugin_item_layout(item, g.layout) == Layout::Small).count()
+                    } else {
+                        1
+                    };
+                    let (column, rest) = remaining.split_at(count);
+                    let mut draw = |ui: &mut Ui| {
+                        for (index, item) in column.iter().enumerate() {
+                            ui.push_id(offset + index, |ui| plugin_ribbon_item(app, ui, m, lang, item, layout));
                         }
+                    };
+                    if layout == Layout::Small {
+                        col(ui, draw);
+                    } else {
+                        draw(ui);
                     }
-                    ItemDecl::Menu(menu) => {
-                        let icon = if crate::icons::ALL.contains(&menu.icon.as_str()) { menu.icon.as_str() } else { "plugin" };
-                        big_menu(ui, app, icon, m.translate(lang, &menu.menu), m.translate(lang, &menu.help), |ui, app| {
-                            for e in &menu.items {
-                                if let Some((icon, label, _, id, params)) = m.entry(e).map(target) {
-                                    menu_item(ui, app, &icon, &label.replace('\n', " "), &id, params);
-                                }
-                            }
-                        });
-                    }
+                    offset += count;
+                    remaining = rest;
                 }
-            }
+            });
         });
     }
 }
@@ -4034,7 +4129,8 @@ fn drawing_group(app: &mut RustGisApp, ui: &mut Ui, layer: &rustgis_engine::map:
                     }
                     ui.label(egui::RichText::new(tl!("Size")).size(11.5));
                 });
-            } else if layer.geometry_type() == GeometryType::Polygon && !layer.graphics {
+            }
+            if layer.has_geometry(GeometryType::Polygon) && !layer.graphics {
                 small(
                     ui,
                     app,

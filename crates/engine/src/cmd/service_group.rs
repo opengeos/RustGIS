@@ -167,7 +167,9 @@ fn read(s: &mut Session, p: &Value) -> Result<(Value, Vec<(ServiceChild, Dataset
         if bytes_read > MAX_GROUP_BYTES {
             return Err("service group data exceeds 64 MB".into());
         }
-        let bytes = super::features_answer(s, name, bytes);
+        // The collection's bounds, from the listing: none read leaves the axes as they come.
+        let bounds = super::bounds_of(layer.get("bbox")).ok().flatten();
+        let bytes = super::features_answer(s, name, bytes, bounds);
         let text = std::str::from_utf8(&bytes).map_err(|e| format!("{name}: {e}"))?;
         let (mut dataset, report) = rustgis_data::io::read_geojson(text, name).map_err(|e| format!("{name}: {e}"))?;
         if dataset.features.is_empty() && !feature_collection(text) {
@@ -295,7 +297,7 @@ fn refresh(s: &mut Session, p: &Value) -> CmdResult {
             child.layer = layer.id;
             // Locked labels name rows of the old features.
             if let Some(lock) = &mut s.map_mut().label_lock {
-                lock.retain(|(id, _, _, _)| *id != child.layer);
+                lock.retain(|((id, _, _, _), _)| *id != child.layer);
             }
         } else {
             child.layer = crate::cmd::layer::add_dataset(s, dataset);
@@ -310,7 +312,7 @@ fn refresh(s: &mut Session, p: &Value) -> CmdResult {
         let gone: Vec<u32> = old.children.iter().map(|c| c.layer).filter(|id| !ids.contains(id)).collect();
         crate::cmd::layer::drop_layers(s, &gone);
         if let Some(lock) = &mut s.map_mut().label_lock {
-            lock.retain(|(id, _, _, _)| !gone.contains(id));
+            lock.retain(|((id, _, _, _), _)| !gone.contains(id));
         }
     }
     let map = s.map_mut();
