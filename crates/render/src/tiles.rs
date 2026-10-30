@@ -749,6 +749,8 @@ pub(crate) mod tests {
 
     /// What `one.test` was asked for (a test of its own: tests run at once).
     static ASKED_ONE: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+    /// Held by the tests reading `ASKED_ONE`, one at a time.
+    static ONE_TEST: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     /// Requests that are never answered: their tiles stay on their way.
     static PARKED: std::sync::Mutex<Vec<rustgis_tiles::cache::Done>> = std::sync::Mutex::new(Vec::new());
@@ -881,6 +883,7 @@ pub(crate) mod tests {
     /// in tiles, many.
     #[test]
     fn a_wms_layer_as_one_picture_of_the_view() {
+        let _one = ONE_TEST.lock().unwrap_or_else(|e| e.into_inner());
         use rustgis_data::ogc::warp::{Grid, System, Warp};
         serve();
         let bern = Coord::new(7.4474, 46.948);
@@ -952,6 +955,57 @@ pub(crate) mod tests {
         assert_eq!(p, [green; 3]);
         assert_eq!(asked.len(), 1, "{asked:?}");
         assert!(asked[0].contains("&CRS=EPSG:2056&BBOX=2") && asked[0].ends_with("&WIDTH=512&HEIGHT=256"), "{}", asked[0]);
+    }
+
+    /// Turning the map round asks a single picture layer for a picture or two, not one every few
+    /// degrees (the turned view's box widens and narrows as it turns): a picture holding the
+    /// view at its detail is drawn again.
+    #[test]
+    fn a_turning_map_asks_for_a_picture_or_two() {
+        let _one = ONE_TEST.lock().unwrap_or_else(|e| e.into_inner());
+        use rustgis_data::ogc::warp::{Grid, System, Warp};
+        serve();
+        let bern = Coord::new(7.4474, 46.948);
+        let turned = |m: &mut Map, res: f64, bearing: f64| {
+            let center = m.to_map(bern).unwrap();
+            let view = View {
+                width: 200.0,
+                height: 100.0,
+                pixels_per_point: 2.0,
+                camera: Camera { center, res, bearing, pitch: 0.0 },
+                sky: false,
+            };
+            ASKED_ONE.lock().unwrap().clear();
+            let png = crate::render_png(m, &view).unwrap();
+            let pm = tiny_skia::Pixmap::decode_png(&png).unwrap();
+            let px = |x, y| pm.pixel(x, y).map(|p| [p.red(), p.green(), p.blue(), p.alpha()]).unwrap();
+            ([px(1, 1), px(200, 100), px(398, 198)], std::mem::take(&mut *ASKED_ONE.lock().unwrap()))
+        };
+        let green = [20, 200, 20, 255];
+        let merc = "https://one.test/merc/?SERVICE=WMS&VERSION=1.3.0&REQUEST=GetMap&LAYERS=turn&STYLES=&CRS=EPSG:3857&BBOX={bbox-epsg-3857}&WIDTH=256&HEIGHT=256&FORMAT=image%2Fpng";
+        let lv95 = System { epsg: 2056, name: "EPSG:2056".into(), lat_first: false };
+        let own = Warp { epsg: 2056, grid: Grid::Map { lat_first: false }, area: Some([5.9, 45.8, 10.5, 47.8]), systems: vec![lv95] }.address(
+            "https://one.test/lv95/?SERVICE=WMS&VERSION=1.3.0&REQUEST=GetMap&LAYERS=turn&STYLES=&CRS={ncrs}&BBOX={nbbox}&WIDTH={nw}&HEIGHT={nh}",
+        );
+        for (projection, url, res) in
+            [(Projection::WebMercator, merc.to_string(), 30.0), (Projection::Custom("EPSG:2056".into()), own, 5.0)]
+        {
+            let mut m = Map::new("Map");
+            m.graticule = false;
+            m.set_projection(projection);
+            let mut t = TileLayer::new("WMS", TileKind::Raster, url);
+            t.single_image = true;
+            m.tiles.push(t);
+            let (p, asked) = turned(&mut m, res, 0.0);
+            assert_eq!((p, asked.len()), ([green; 3], 1), "{asked:?}");
+            let mut all = Vec::new();
+            for step in 0..120 {
+                let (p, asked) = turned(&mut m, res, 0.5 + f64::from(step) * 3.0);
+                assert_eq!(p, [green; 3], "{step}");
+                all.extend(asked);
+            }
+            assert!(all.len() <= 2, "{all:?}");
+        }
     }
 
     /// A tile layer draws at its place in the drawing order (#808): under all the map's layers

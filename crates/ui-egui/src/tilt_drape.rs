@@ -205,16 +205,10 @@ impl TiltDrape {
         self.drape = Some(Drape { key, ppp, res, tiles, built, bands, relief, shapes, markers });
     }
 
-    /// Makes sure the drape covers the tilted `w × h` view of `map`, drawing it again when the
-    /// view has moved or zoomed past it or the map changed. The first drape of a map change is
-    /// drawn at once; one following the view is drawn off the UI thread, the last staying on
-    /// screen meanwhile. False when there is nothing to drape.
-    #[allow(clippy::too_many_arguments)]
-    pub fn prepare(&mut self, ctx: &egui::Context, map: &mut Map, key: DrapeKey, tiles: u64, w: f64, h: f64, ppp: f32, time: f64) -> bool {
-        let cam = map.camera;
-        // A screen's worth of detail at most: the settled frame is sharp.
-        let drape_ppp = ppp.min(1.0);
-        #[cfg(not(target_arch = "wasm32"))]
+    /// Shows the drape a worker finished for this map change (`key`, at `drape_ppp`), and lets
+    /// go of a job for an earlier one (an edit while it ran): its drape would be thrown away.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn adopt(&mut self, ctx: &egui::Context, map: &mut Map, key: DrapeKey, drape_ppp: f32) {
         if let Some(drawn) = self.take(map)
             && drawn.key == key
             && drawn.ppp == drape_ppp
@@ -227,20 +221,62 @@ impl TiltDrape {
                 self.show(ctx, drawn);
             }
         }
-        // A job for an earlier map change (an edit while it ran) isn't waited for: its drape
-        // would be thrown away.
-        #[cfg(not(target_arch = "wasm32"))]
         if self.job.as_ref().is_some_and(|(k, _)| *k != key) {
             self.let_job_go();
         }
-        let same_map = |d: &Drape| d.key == key && d.ppp == drape_ppp;
-        let fresh = self.drape.as_ref().is_some_and(|d| {
-            same_map(d)
+    }
+
+    /// Whether the drape shows this map change as it is now over the `w × h` view of `cam`:
+    /// drawn at about its zoom, covering it, and with the tiles come since (or drawn just now).
+    #[allow(clippy::too_many_arguments)]
+    fn fresh(&self, cam: &Camera, key: DrapeKey, drape_ppp: f32, tiles: u64, w: f64, h: f64, time: f64) -> bool {
+        self.drape.as_ref().is_some_and(|d| {
+            d.key == key
+                && d.ppp == drape_ppp
                 && cam.res * MAX_ZOOM_IN >= d.res
                 && (d.tiles == tiles || time - d.built < TILE_REFRESH)
-                && covers(&cam, w, h, &d.bands)
-        });
-        if fresh {
+                && covers(cam, w, h, &d.bands)
+        })
+    }
+
+    /// While the map rests, draws its drape again off the UI thread when it is out of date (tiles
+    /// came, the view moved past it) or there is none, so the next gesture starts on a drape of
+    /// the map as it is: one drawn when the gesture starts shows what the map showed then (on a
+    /// map just opened, nothing). In the browser, with no threads, the gesture draws it.
+    #[allow(clippy::too_many_arguments)]
+    pub fn warm(&mut self, ctx: &egui::Context, map: &mut Map, key: DrapeKey, tiles: u64, w: f64, h: f64, ppp: f32, time: f64) {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let drape_ppp = ppp.min(1.0);
+            self.adopt(ctx, map, key, drape_ppp);
+            if self.busy()
+                || self.let_go_running()
+                || self.failed == Some(key)
+                || self.fresh(&map.camera, key, drape_ppp, tiles, w, h, time)
+            {
+                return;
+            }
+            let max_side = ctx.input(|i| i.max_texture_side).clamp(256, 4096) as u32;
+            let view = View { width: w, height: h, pixels_per_point: f64::from(drape_ppp), camera: map.camera, sky: true };
+            render::sync_tilted_view(map, &view);
+            self.start(ctx, map.clone(), view, max_side, key, tiles, time);
+        }
+        #[cfg(target_arch = "wasm32")]
+        let _ = (ctx, map, key, tiles, w, h, ppp, time);
+    }
+
+    /// Makes sure the drape covers the tilted `w × h` view of `map`, drawing it again when the
+    /// view has moved or zoomed past it or the map changed. The first drape of a map change is
+    /// drawn at once; one following the view is drawn off the UI thread, the last staying on
+    /// screen meanwhile. False when there is nothing to drape.
+    #[allow(clippy::too_many_arguments)]
+    pub fn prepare(&mut self, ctx: &egui::Context, map: &mut Map, key: DrapeKey, tiles: u64, w: f64, h: f64, ppp: f32, time: f64) -> bool {
+        let cam = map.camera;
+        // A screen's worth of detail at most: the settled frame is sharp.
+        let drape_ppp = ppp.min(1.0);
+        #[cfg(not(target_arch = "wasm32"))]
+        self.adopt(ctx, map, key, drape_ppp);
+        if self.fresh(&cam, key, drape_ppp, tiles, w, h, time) {
             return true;
         }
         let max_side = ctx.input(|i| i.max_texture_side).clamp(256, 4096) as u32;
@@ -248,7 +284,7 @@ impl TiltDrape {
         // The view moved on, or tiles came: the last drape shows until the next is drawn. One
         // that couldn't be drawn off the UI thread is drawn here.
         #[cfg(not(target_arch = "wasm32"))]
-        if self.drape.as_ref().is_some_and(same_map) && self.failed != Some(key) {
+        if self.drape.as_ref().is_some_and(|d| d.key == key && d.ppp == drape_ppp) && self.failed != Some(key) {
             if self.busy() || self.let_go_running() {
                 return true;
             }
@@ -758,6 +794,33 @@ mod tests {
         let changed = DrapeKey { rev: 1, sources: 0 };
         assert!(d.prepare(&ctx, &mut m, changed, 0, 800.0, 600.0, 1.0, 0.4));
         assert!(d.drape.as_ref().is_some_and(|d| d.key == changed && Some(d.built) != built));
+    }
+
+    /// A flat map turning is laid over by one north-up band round the view: turned all the way
+    /// round, the view stays on it, and nothing is drawn again.
+    #[test]
+    fn a_turning_flat_map_keeps_its_drape() {
+        let ctx = egui::Context::default();
+        let key = DrapeKey { rev: 0, sources: 0 };
+        let mut m = tilted(0.0);
+        let mut d = TiltDrape::default();
+        assert!(d.prepare(&ctx, &mut m, key, 0, 800.0, 600.0, 1.0, 0.0));
+        let built = d.drape.as_ref().map(|d| d.built);
+        let band = d.drape.as_ref().and_then(|d| d.bands.first()).map(|(b, _)| *b).unwrap();
+        assert_eq!(d.drape.as_ref().map(|d| d.bands.len()), Some(1));
+        assert_eq!(band.camera.bearing, 0.0, "drawn facing north");
+        let rect = Rect::from_min_size(pos2(0.0, 0.0), egui::vec2(800.0, 600.0));
+        for step in 0..72 {
+            m.camera.bearing = f64::from(step) * 5.0 + 0.5;
+            assert!(d.prepare(&ctx, &mut m, key, 0, 800.0, 600.0, 1.0, 0.01 * f64::from(step)));
+            assert_eq!(d.drape.as_ref().map(|d| d.built), built, "{}°", m.camera.bearing);
+            assert!(covers(&m.camera, 800.0, 600.0, d.drape.as_ref().map(|d| &d.bands[..]).unwrap_or_default()));
+            let meshes = d.meshes(rect, &m.camera, 800.0, 600.0);
+            assert!(meshes.len() == 1 && meshes.iter().all(|mesh| !mesh.indices.is_empty() && mesh.is_valid()));
+            // The band's middle is under the view's.
+            let mid = meshes[0].vertices[meshes[0].vertices.len() / 2].pos;
+            assert!((mid.x - 400.0).abs() < 1.0 && (mid.y - 300.0).abs() < 1.0, "{mid:?}");
+        }
     }
 
     #[test]

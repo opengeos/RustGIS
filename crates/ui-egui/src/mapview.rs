@@ -726,13 +726,17 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     };
     // A tilted map moving on the CPU: its bands drawn flat once are laid over the tilted ground
     // (see `tilt_drape`), or failing that it redraws every frame. On the GPU it re-projects.
-    let tilted = !globe_view && cam.pitch != 0.0 && !gpu_ok;
+    // So does a flat map turning (to a bearing other than its frame's): drawn again for every
+    // step of a turn, on the UI thread, a busy map (a tiled overlay) took over a hundred
+    // milliseconds a frame. Its drape is one band round the view; panning it shifts its frame.
+    let turned = !globe_view && cam.pitch == 0.0 && cam.bearing != 0.0 && !gpu_ok;
+    let tilted = !globe_view && (cam.pitch != 0.0 || (turned && app.map.tex_camera.bearing != cam.bearing)) && !gpu_ok;
     let tilt_draped = if tilted && moving {
         let key = crate::globe_drape::DrapeKey { rev: app.session.revision, sources: rustgis_engine::map::source::generation() };
         let tiles = if fetches_tiles(app.session.map()) { rustgis_engine::render::rustgis_tiles::cache::generation() } else { 0 };
         app.map.tilt_drape.prepare(ui.ctx(), app.session.map_mut(), key, tiles, w, h, ppp, time)
     } else {
-        if !tilted {
+        if !tilted && !turned {
             app.map.tilt_drape.clear();
         }
         false
@@ -920,6 +924,13 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                 }
             }
         }
+    }
+    // At rest, a turned map's drape is kept up to date off the UI thread: the next turn starts
+    // on it.
+    if turned && !moving {
+        let drape_key = crate::globe_drape::DrapeKey { rev: app.session.revision, sources: rustgis_engine::map::source::generation() };
+        let tiles = if fetches_tiles(app.session.map()) { rustgis_engine::render::rustgis_tiles::cache::generation() } else { 0 };
+        app.map.tilt_drape.warm(ui.ctx(), app.session.map_mut(), drape_key, tiles, w, h, ppp, time);
     }
     let interacting = moving && (!globe_view || draped) && (!tilted || tilt_draped);
     if (globe_view || tilted) && moving {
@@ -1283,7 +1294,8 @@ fn show_frame(
             }
             false => Vec::new(),
         };
-        app.map.label_map = match !globe_view && cam.pitch != 0.0 {
+        // On a turned or tilted map: where its labels stand while its drape moves.
+        app.map.label_map = match !globe_view && (cam.pitch != 0.0 || cam.bearing != 0.0) {
             true => app.map.labels.iter().map(|l| cam.try_to_map(l.x as f64, l.y as f64, w, h)).collect(),
             false => Vec::new(),
         };

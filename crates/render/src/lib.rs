@@ -4362,12 +4362,25 @@ pub struct TiltPatch {
 /// fraction of its size) on every side so the view can move a little before they no longer
 /// cover it, and at most `max_side` pixels a side (coarser beyond that). The map view lays them
 /// over the tilted ground as meshes while it moves, with no drawing per frame. Labels are left
-/// out (the view keeps the last frame's while it moves).
+/// out (the view keeps the last frame's while it moves). A flat view turned to a bearing is one
+/// band, square, over the circle round the view and without the margin: it is laid over the view
+/// the same way while it turns.
 pub fn render_tilt_drape(map: &mut Map, view: &View, margin: f64, max_side: u32) -> Vec<TiltPatch> {
     let ppp = if view.pixels_per_point.is_finite() { view.pixels_per_point.clamp(0.25, 4.0) } else { 1.0 };
-    let margin = if margin.is_finite() { margin.clamp(0.0, 2.0) } else { 0.0 };
     let max_side = f64::from(max_side.clamp(64, 8192));
-    let bands = view.camera.tilt_bands(view.width, view.height);
+    let cam = view.camera;
+    let turned = cam.pitch == 0.0 && cam.bearing != 0.0;
+    // A flat turned view moves on its band only as it turns: no room for panning, whose picture
+    // a service drawing one picture of the view would be asked for again, larger.
+    let margin = if margin.is_finite() && !turned { margin.clamp(0.0, 2.0) } else { 0.0 };
+    let bands = if turned {
+        // One band facing north over the circle round the view, so turning it stays on the band
+        // (its tiles and pictures the same at every bearing).
+        let side = view.width.hypot(view.height) + 2.0;
+        vec![rustgis_map::camera::Band { camera: Camera { bearing: 0.0, ..cam }, width: side, height: side, depth: (1.0, 1.0) }]
+    } else {
+        cam.tilt_bands(view.width, view.height)
+    };
     sync_tilted(map, view, &bands, false);
     let (display, lock) = (map.label_display, map.label_lock.take());
     map.label_display.paused = true;
