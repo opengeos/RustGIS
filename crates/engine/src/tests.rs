@@ -9335,6 +9335,17 @@ fn wms_layers_draw_as_one_picture_or_tiles_of_a_size() {
     assert!(rustgis_map::tiles::drawn_on_request("https://maps.example.org/wms?BBOX={nbbox}&width={nw}&HEIGHT={nh}&f=png"));
     assert!(rustgis_map::tiles::drawn_on_request("https://maps.example.org/wms?BBOX={bbox-epsg-3857}&WIDTH={width}&HEIGHT={height}"));
     assert!(!rustgis_map::tiles::drawn_on_request("https://maps.example.org/wms?BBOX={bbox-epsg-3857}&WIDTH={w}&HEIGHT=256"));
+    // Added by its address, a layer drawn on request is one picture too, unless tiles are asked
+    // for; a bare template, and tiles cut from a tile set, are tiles.
+    let wms = "https://m.example.org/wms?SERVICE=WMS&REQUEST=GetMap&LAYERS=a&CRS=EPSG:3857&BBOX={bbox-epsg-3857}&WIDTH=256&HEIGHT=256&FORMAT=image%2Fpng";
+    let single = |s: &Session, name: &str| s.map().tiles.iter().find(|t| t.name == name).unwrap().single_image;
+    s.run("map.addTiles", &json!({"url": wms, "name": "ByAddress", "overlay": true})).unwrap();
+    assert!(single(&s, "ByAddress"));
+    s.run("map.addTiles", &json!({"url": wms, "name": "AsTiles", "overlay": true, "singleImage": false})).unwrap();
+    assert!(!single(&s, "AsTiles"));
+    s.run("map.addTiles", &json!({"url": wms.replace("LAYERS=a", "LAYERS=b"), "name": "Sized", "overlay": true, "tileSize": 512})).unwrap();
+    assert!(!single(&s, "Sized"));
+    assert!(!single(&s, "Bare") && !single(&s, "XYZ"));
     // A map service's export added with a tile size: its size asked for.
     let export = "https://s.example.org/arcgis/rest/services/x/MapServer/export?bbox={bbox-epsg-3857}&bboxSR=3857&imageSR=3857&size=256,256&format=png32&f=image";
     s.run("map.addTiles", &json!({"url": export, "name": "Export", "overlay": true, "tileSize": 512})).unwrap();

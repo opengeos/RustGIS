@@ -248,7 +248,9 @@ A WMS layer and an ArcGIS map or image service's export draw their pictures on r
 area and size. Added from **Add Service**, the Library or the National Map (its drawn maps; its
 imagery stays in tiles), such a layer is asked for **one picture of the view**: the service lays
 out its symbols and labels over the whole view, so none is cut at a tile edge, and it is asked
-once a view instead of for every tile (#1162).
+once a view instead of for every tile (#1162). So is one added by its address (`map.addTiles`
+with a GetMap or export address that has its size: `WIDTH` and `HEIGHT`, or `size`), unless
+it's given `"singleImage": false` or a `"tileSize"`.
 
 - The picture reaches past the view, its middle on a grid, so small pans and zooms (most of a
   quarter of a level) ask for nothing new; while the next picture loads, the last one stays in
