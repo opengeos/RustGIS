@@ -15,16 +15,50 @@ pub struct TableState {
     pub folder: Option<std::path::PathBuf>,
     sort: Option<(usize, bool)>,
     selected_only: bool,
-    editing: Option<(usize, usize, String)>,
+    editing: Option<CellEdit>,
+    /// The pass the cell editor last had the focus in (see [`had_focus`]).
+    focus_pass: Option<u64>,
     filter: String,
+}
+
+/// Whether a cell was being typed in during the pass before `pass`: egui takes the focus away on
+/// Escape before the shortcuts run, and that Escape cancels the cell, not the tool.
+pub fn had_focus(st: &TableState, pass: u64) -> bool {
+    st.focus_pass.is_some_and(|p| p + 1 == pass)
+}
+
+/// A value being typed into a cell.
+struct CellEdit {
+    /// The layer the table showed: shown another (Ctrl+T), the edit is dropped.
+    layer: Option<u32>,
+    row: usize,
+    col: usize,
+    text: String,
+    /// The text it opened with: left as it was, nothing is written (a null stays null).
+    was: String,
+    /// Just opened: the editor takes the keyboard focus this frame. Taken every frame, Enter
+    /// couldn't let it go and nothing was ever kept (#1182).
+    focus: bool,
+}
+
+impl CellEdit {
+    fn new(layer: Option<u32>, row: usize, col: usize, text: String) -> CellEdit {
+        CellEdit { layer, row, col, was: text.clone(), text, focus: true }
+    }
 }
 
 pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
     let layer_id = app.session.table_layer;
+    // An edit is the layer's it was opened on: the table closed (however) or showing another
+    // layer, it is dropped rather than written later to whatever row has its place.
+    if app.table.editing.as_ref().is_some_and(|e| e.layer != layer_id) {
+        app.table.editing = None;
+    }
     if layer_id.is_none() && app.session.table_standalone.is_none() {
         return;
     }
     let t = Tokens::get(ui.ctx());
+    let pass = ui.ctx().cumulative_pass_nr();
     egui::Panel::bottom("attribute_table")
         .resizable(true)
         .default_size(250.0)
@@ -119,7 +153,10 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
             }
             let nf = ds.fields.len();
             let mut clicked: Option<(usize, bool)> = None;
-            let mut commit: Option<(usize, usize, String)> = None;
+            let mut commits: Vec<(usize, usize, String, String)> = Vec::new();
+            // Whether the cell being typed in was laid out (its row scrolled into view).
+            let mut drawn = false;
+            let mut cancel: Option<(usize, usize)> = None;
             let mut sort_click: Option<usize> = None;
             egui::ScrollArea::horizontal().show(ui, |ui| {
                 let mut tb = TableBuilder::new(ui)
@@ -169,13 +206,29 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
                             });
                             for c in 0..nf {
                                 row.col(|ui| {
-                                    let editing = app.table.editing.as_ref().is_some_and(|(er, ec, _)| *er == r && *ec == c);
+                                    let editing = app.table.editing.as_ref().is_some_and(|e| e.row == r && e.col == c);
                                     if editing {
-                                        if let Some((_, _, buf)) = app.table.editing.as_mut() {
-                                            let te = ui.add(egui::TextEdit::singleline(buf).desired_width(f32::INFINITY));
-                                            te.request_focus();
+                                        if let Some(e) = app.table.editing.as_mut() {
+                                            drawn = true;
+                                            // Named for its field (a screen reader says what it edits; an empty cell shows it).
+                                            let name = ds.fields.get(c).map(|f| f.name.as_str()).unwrap_or_default();
+                                            let te = ui
+                                                .add(egui::TextEdit::singleline(&mut e.text).hint_text(name).desired_width(f32::INFINITY));
+                                            if std::mem::take(&mut e.focus) {
+                                                te.request_focus();
+                                            }
+                                            if te.has_focus() {
+                                                app.table.focus_pass = Some(pass);
+                                            }
+                                            // Enter, Tab or a click elsewhere keeps the value; Escape
+                                            // leaves the cell as it was (the shortcuts leave it to the
+                                            // cell, see `had_focus`).
                                             if te.lost_focus() {
-                                                commit = Some((r, c, buf.clone()));
+                                                if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                                                    cancel = Some((r, c));
+                                                } else {
+                                                    commits.push((r, c, e.text.clone(), e.was.clone()));
+                                                }
                                             }
                                         }
                                     } else {
@@ -187,8 +240,12 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
                                         let txt = if matches!(v, V::Null) || picture { txt.color(t.text_disabled).italics() } else { txt };
                                         let resp = ui.add(egui::Label::new(txt).sense(Sense::click()).truncate());
                                         if resp.double_clicked() && is_layer {
-                                            app.table.editing =
-                                                Some((r, c, if matches!(v, V::Null) { String::new() } else { v.to_string() }));
+                                            // The cell being typed in is kept first.
+                                            if let Some(e) = app.table.editing.take() {
+                                                commits.push((e.row, e.col, e.text, e.was));
+                                            }
+                                            let text = if matches!(v, V::Null) { String::new() } else { v.to_string() };
+                                            app.table.editing = Some(CellEdit::new(layer_id, r, c, text));
                                         } else if resp.clicked() {
                                             clicked = Some((r, ui.input(|i| i.modifiers.command || i.modifiers.shift)));
                                         }
@@ -214,11 +271,83 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
                 let mode = if add { if selection.contains(&r) { "remove" } else { "add" } } else { "new" };
                 let _ = app.run("select.rows", json!({"layer": layer_id, "rows": [r], "mode": mode}));
             }
-            if let Some((r, c, text)) = commit {
+            // A cell scrolled out of view loses the focus unseen: kept, as a click elsewhere.
+            if !drawn && let Some(e) = app.table.editing.take_if(|e| !e.focus) {
+                commits.push((e.row, e.col, e.text, e.was));
+            }
+            let ends = |editing: &Option<CellEdit>, r: usize, c: usize| editing.as_ref().is_some_and(|e| e.row == r && e.col == c);
+            if let Some((r, c)) = cancel
+                && ends(&app.table.editing, r, c)
+            {
                 app.table.editing = None;
-                if let Some(fd) = ds.fields.get(c) {
+            }
+            for (r, c, text, was) in commits {
+                if ends(&app.table.editing, r, c) {
+                    app.table.editing = None;
+                }
+                if text != was
+                    && let Some(fd) = ds.fields.get(c)
+                {
                     let _ = app.run("edit.setValue", json!({"layer": layer_id, "row": r, "field": fd.name, "value": text}));
                 }
             }
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A value typed into a cell is kept on Enter, and Escape leaves the cell as it was (not the
+    /// tool: the shortcuts run first, egui has dropped the focus on Escape by then). The editor
+    /// took the focus back every frame, so Enter never ended it and nothing was kept (#1182).
+    #[test]
+    fn a_value_typed_into_a_cell_is_kept_on_enter() {
+        let mut app = RustGisApp::with_sample();
+        let id = app.session.map().layers.first().map(|l| l.id).unwrap();
+        app.session.table_layer = Some(id);
+        app.run("tool.set", json!({"tool": "select"})).unwrap();
+        let ds = &app.session.map().layer(id).unwrap().dataset;
+        let col = (0..ds.fields.len()).find(|&c| matches!(ds.value(0, c), V::Text(_))).expect("a text field");
+        let value = |app: &RustGisApp, row: usize| app.session.map().layer(id).unwrap().dataset.value(row, col).to_string();
+        let (first, second) = (value(&app, 0), value(&app, 1));
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(1400.0, 1000.0)).with_max_steps(64).build_ui_state(
+            |ui, app: &mut RustGisApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            app,
+        );
+        h.run_steps(4);
+        let tool = h.state().session.tool;
+        // Opened as a double-click opens it, the text selected by nothing: typing adds to it.
+        h.state_mut().table.editing = Some(CellEdit::new(Some(id), 0, col, first.clone()));
+        h.run_steps(2);
+        h.event(egui::Event::Text("Zed".into()));
+        h.run_steps(2);
+        h.key_press(egui::Key::Enter);
+        h.run_steps(2);
+        assert_eq!(value(h.state(), 0), format!("{first}Zed"));
+        assert!(h.state().table.editing.is_none(), "the editor closed");
+        // Escape: typed, then left as it was, the tool kept.
+        h.state_mut().table.editing = Some(CellEdit::new(Some(id), 1, col, second.clone()));
+        h.run_steps(2);
+        h.event(egui::Event::Text("Nope".into()));
+        h.run_steps(2);
+        h.key_press(egui::Key::Escape);
+        h.run_steps(2);
+        assert_eq!(value(h.state(), 1), second);
+        assert!(h.state().table.editing.is_none(), "the editor closed");
+        assert_eq!(h.state().session.tool, tool, "Escape left the cell, not the tool");
+        // Shown another layer meanwhile (Ctrl+T), an open edit is dropped, not written there;
+        // so is one left open when the table closes.
+        h.state_mut().table.editing = Some(CellEdit::new(Some(id + 1000), 0, col, String::new()));
+        h.run_steps(2);
+        assert!(h.state().table.editing.is_none());
+        h.state_mut().table.editing = Some(CellEdit::new(Some(id), 0, col, String::new()));
+        h.state_mut().session.table_layer = None;
+        h.run_steps(2);
+        assert!(h.state().table.editing.is_none(), "dropped when the table closed");
+    }
 }
