@@ -492,10 +492,14 @@ fn remove(s: &mut Session, p: &Value) -> CmdResult {
     match find(s, p)? {
         Some(i) => {
             let t = s.map_mut().tiles.remove(i);
+            super::layer::legends_follow_layer(s, &t.name, None);
             Ok(json!({"removed": [t.name]}))
         }
         None => {
             let gone: Vec<String> = s.map_mut().tiles.drain(..).map(|t| t.name).collect();
+            for n in &gone {
+                super::layer::legends_follow_layer(s, n, None);
+            }
             Ok(json!({"removed": gone}))
         }
     }
@@ -605,6 +609,7 @@ fn set(s: &mut Session, p: &Value) -> CmdResult {
         Some(v) => Some(legends(v)?),
     };
     let hidden = hidden_layers(p)?;
+    let old_name = s.map().tiles.get(i).map(|t| t.name.clone());
     let m = s.map_mut();
     let Some(t) = m.tiles.get_mut(i) else { return Err("no tile layer at that index".into()) };
     // Refused before anything changes.
@@ -652,6 +657,7 @@ fn set(s: &mut Session, p: &Value) -> CmdResult {
         }
         t.url = url;
     }
+    let new_name = t.name.clone();
     // In the drawing order of all the map's layers: past the next layer, a map layer too (#808).
     match (ps(p, "move"), p.get("to").filter(|v| !v.is_null())) {
         (Some(_), Some(_)) => return Err("give move or to, not both".into()),
@@ -663,6 +669,10 @@ fn set(s: &mut Session, p: &Value) -> CmdResult {
             m.place_tile(i, usize::try_from(to).unwrap_or(usize::MAX))?;
         }
         (None, None) => {}
+    }
+    // Legends that leave it out follow it to its new name.
+    if let Some(old) = old_name.filter(|o| *o != new_name) {
+        super::layer::legends_follow_layer(s, &old, Some(&new_name));
     }
     Ok(list(s, false))
 }

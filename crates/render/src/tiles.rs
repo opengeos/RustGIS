@@ -662,7 +662,7 @@ fn warp(pm: &mut Pixmap, mosaic: &Pixmap, frame: &Frame, to_lonlat: &dyn Fn(f64,
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use rustgis_geom::{Coord, lonlat_to_merc};
     use rustgis_map::{Camera, Map, Projection, TileKind, TileLayer};
 
@@ -727,7 +727,7 @@ mod tests {
 
     /// Serves tiles and documents for `https://tiles.test/…` without a network. Under `split/`,
     /// zoom 11 is red, zoom 13 blue, and zoom 12 never arrives.
-    fn serve() {
+    pub(crate) fn serve() {
         rustgis_tiles::cache::set_fetcher(|url, done| {
             let color = |r, g, b| {
                 let mut pm = tiny_skia::Pixmap::new(256, 256).unwrap();

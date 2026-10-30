@@ -18613,6 +18613,15 @@ fn legends_leave_layers_out() {
     s.run("layer.rename", &json!({"layer": "Nations", "name": "Countries"})).unwrap();
     s.run("layer.rename", &json!({"layer": "Lakes", "name": "Countries"})).unwrap();
     assert!(left_out(&s, lakes).is_empty(), "the other Countries isn't taken out");
+    // A WMS or WMTS layer is left out by name too, and the name follows it: renamed, removed.
+    let wms = json!({"url": "https://maps.example.org/wms/{bbox-epsg-3857}", "name": "Soils", "overlay": true, "legend": "https://maps.example.org/legend.png"});
+    s.run("map.addTiles", &wms).unwrap();
+    s.run("layout.update", &json!({"element": lakes, "exclude": ["soils"]})).unwrap();
+    assert_eq!(left_out(&s, lakes), ["Soils"]);
+    s.run("map.setTiles", &json!({"name": "Soils", "rename": "Soil map", "move": "bottom"})).unwrap();
+    assert_eq!(left_out(&s, lakes), ["Soil map"]);
+    s.run("map.removeTiles", &json!({"name": "Soil map"})).unwrap();
+    assert!(left_out(&s, lakes).is_empty());
 }
 
 /// A point layer of events, one a month through 2015 (two in March), with their dates as text,

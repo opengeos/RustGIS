@@ -2951,11 +2951,16 @@ fn add_sample(s: &mut Session, p: &Value) -> CmdResult {
 /// isn't left out unasked. Called once the layer is renamed or gone: while another layer still
 /// bears `old` (names may repeat), the legends keep it for that one. Renamed onto the name of
 /// another layer a legend lists, the layer is listed with it rather than taking that one out.
+/// A WMS or WMTS layer's name counts as a layer's: legends list those too.
 pub(crate) fn legends_follow_layer(s: &mut Session, old: &str, new: Option<&str>) {
-    if s.map().layers.iter().any(|l| l.name.eq_ignore_ascii_case(old)) {
+    let named = |s: &Session, n: &str| {
+        let m = s.map();
+        m.layers.iter().map(|l| &l.name).chain(m.tiles.iter().map(|t| &t.name)).filter(|x| x.eq_ignore_ascii_case(n)).count()
+    };
+    if named(s, old) > 0 {
         return;
     }
-    let shared = new.is_some_and(|n| s.map().layers.iter().filter(|l| l.name.eq_ignore_ascii_case(n)).count() > 1);
+    let shared = new.is_some_and(|n| named(s, n) > 1);
     let map = s.map().name.clone();
     for layout in &mut s.project.layouts {
         let frames: Vec<u32> = layout

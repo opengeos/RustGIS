@@ -1775,8 +1775,9 @@ fn properties(app: &mut RustGisApp, ui: &mut Ui, layout: &Layout, li: usize) {
             update(app, font);
         }
     }
-    // The layers a legend lists: a checkbox for each vector layer of its frame's map, ticked when
-    // listed. Names gone from the map drop out of the list as it's written back.
+    // The layers a legend lists: a checkbox for each vector layer of its frame's map and each
+    // WMS or WMTS layer with a legend, ticked when listed. Names gone from the map drop out of
+    // the list as it's written back.
     if let ElementKind::Legend { frame, exclude, .. } = &e.kind {
         let map = layout.element(*frame).and_then(|f| match &f.kind {
             ElementKind::MapFrame { map, .. } => app.session.project.maps.iter().find(|m| m.name.eq_ignore_ascii_case(map)),
@@ -1786,17 +1787,25 @@ fn properties(app: &mut RustGisApp, ui: &mut Ui, layout: &Layout, li: usize) {
             .map(|m| {
                 // Once each: layers may share a name, and the legend leaves names out.
                 let mut names: Vec<String> = Vec::new();
-                for l in m.layers.iter().filter(|l| !l.graphics && !l.is_raster()) {
-                    if !names.iter().any(|n| n.eq_ignore_ascii_case(&l.name)) {
-                        names.push(l.name.clone());
+                let listed = m.layers.iter().filter(|l| !l.graphics && !l.is_raster()).map(|l| &l.name);
+                for name in listed.chain(m.tiles.iter().filter(|t| !t.legends.is_empty()).map(|t| &t.name)) {
+                    if !names.iter().any(|n| n.eq_ignore_ascii_case(name)) {
+                        names.push(name.clone());
                     }
                 }
                 names
             })
             .unwrap_or_default();
         // The names left out that the map still has, those not listed here (a raster's) too.
-        let kept: Vec<String> =
-            exclude.iter().filter(|x| map.is_some_and(|m| m.layers.iter().any(|l| l.name.eq_ignore_ascii_case(x)))).cloned().collect();
+        let kept: Vec<String> = exclude
+            .iter()
+            .filter(|x| {
+                map.is_some_and(|m| {
+                    m.layers.iter().map(|l| &l.name).chain(m.tiles.iter().map(|t| &t.name)).any(|n| n.eq_ignore_ascii_case(x))
+                })
+            })
+            .cloned()
+            .collect();
         if !names.is_empty() {
             ui.add_space(4.0);
             egui::CollapsingHeader::new(tl!("Layers")).id_salt(("legend_layers", id)).default_open(!exclude.is_empty()).show(ui, |ui| {
