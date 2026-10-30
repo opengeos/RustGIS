@@ -30,11 +30,12 @@ On Windows, use PowerShell:
 Get-Command rustgis-cli, winget -ErrorAction SilentlyContinue
 ```
 
-The documented Windows release assets are x64 (`windows-x86_64`) and, in
-releases after v0.4.0, ARM64 (`windows-aarch64`). On ARM64, use the ARM64 asset
-when the release has one (winget installs x64 only). If an existing CLI works,
-keep it; also check that the desktop app is installed. Prefer a package manager already present. Do not install a package
-manager just to avoid a release download, and do not silently elevate privileges.
+The documented Windows release assets are x64 (`windows-x86_64`) and, where a
+release has them, ARM64 (`windows-aarch64`). On ARM64, use the ARM64 asset when
+the release has one (winget installs x64 only). If an existing CLI works, keep
+it; also check that the desktop app is installed. Prefer a package manager
+already present. Do not install a package manager just to avoid a release
+download, and do not silently elevate privileges.
 
 ## 2. Install the desktop app and CLI
 
@@ -172,10 +173,11 @@ retrying if Apple cannot verify an old release; do not routinely strip quarantin
 
 ### Checked release downloads: Windows x64 and ARM64
 
-Prefer winget when present. Otherwise the portable zip needs no administrator
-rights and includes both the app and CLI. On ARM64 Windows it takes the ARM64
-zip when the release has one, else the x64 one (run under emulation). In
-PowerShell:
+On x64, prefer winget when present. On ARM64, winget installs the x64 build (run
+under emulation), so prefer the ARM64 zip below when the release has one. The
+portable zip needs no administrator rights and includes both the app and CLI.
+On ARM64 Windows the script takes the ARM64 zip when the release has one, else
+the x64 one. In PowerShell:
 
 ```powershell
 $ErrorActionPreference = 'Stop'
@@ -183,7 +185,8 @@ $release = Invoke-RestMethod 'https://api.github.com/repos/opengeos/RustGIS/rele
 $version = $release.tag_name -replace '^v', ''
 $arch = 'x86_64'
 $arm = "RustGIS-$version-windows-aarch64-portable.zip"
-if ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture -eq 'Arm64' -and ($release.assets.name -contains $arm)) {
+$os = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture
+if ($os -eq 'Arm64' -and ($release.assets.name -contains $arm)) {
   $arch = 'aarch64'
 }
 $name = "RustGIS-$version-windows-$arch-portable.zip"
