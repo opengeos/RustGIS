@@ -1006,20 +1006,22 @@ mod tests {
     }
 
     /// A window larger than a texture: the band, drawn coarser to fit, still covers the view at
-    /// every bearing (its pixels rounded down, it isn't let fall short).
+    /// every bearing (its pixels rounded down, it isn't let fall short). At 0.75 pixels a point
+    /// its 2048 pixels are 2730.7 points' worth, rounded down to 2730: at 3.5 times coarser, over
+    /// two points of ground, past the band's spare.
     #[test]
     fn a_large_turning_view_stays_on_its_coarser_drape() {
         let ctx = egui::Context::default();
         let key = DrapeKey { rev: 0, sources: 0 };
-        let (w, h) = (4000.0, 2500.0);
+        let (w, h, ppp) = (8000.0, 5000.0, 0.75);
         let mut m = tilted(0.0);
         m.camera.bearing = 0.5;
         let mut d = TiltDrape::default();
-        assert!(d.prepare(&ctx, &mut m, key, 0, w, h, 1.0, 0.0));
+        assert!(d.prepare(&ctx, &mut m, key, 0, w, h, ppp, 0.0));
         let built = d.drape.as_ref().map(|d| d.built);
         for step in 0..=360 {
             m.camera.bearing = f64::from(step) * 0.25 + 0.5;
-            assert!(d.prepare(&ctx, &mut m, key, 0, w, h, 1.0, 0.01));
+            assert!(d.prepare(&ctx, &mut m, key, 0, w, h, ppp, 0.01));
             assert_eq!(d.drape.as_ref().map(|d| d.built), built, "{}°", m.camera.bearing);
             assert!(covers(&m.camera, w, h, d.drape.as_ref().map(|d| &d.bands[..]).unwrap_or_default()), "{}°", m.camera.bearing);
         }
