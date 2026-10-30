@@ -4,7 +4,7 @@
 use std::collections::{BinaryHeap, HashMap};
 
 use rustgis_data::{Dataset, Geometry};
-use rustgis_geom::{Coord, haversine_m};
+use rustgis_geom::{Coord, haversine_m, wgs84_distance_m};
 
 /// A shortest route: its path, length in metres, cost, and the line rows it uses.
 #[derive(Clone, Debug, PartialEq)]
@@ -35,8 +35,8 @@ fn key(c: Coord) -> (i64, i64) {
 }
 
 /// The shortest route between two points over the lines of `rows`, joining where vertices
-/// coincide. Each edge costs its length times the row's `cost_field` value (1 when empty; lines
-/// costing zero or less are closed). Each
+/// coincide. Each edge costs its length (on the WGS 84 ellipsoid) times the row's `cost_field`
+/// value (1 when empty; lines costing zero or less are closed). Each
 /// end snaps to the nearest point on a line (within `snap_m`), where the route starts or stops.
 pub fn shortest_route(
     ds: &Dataset,
@@ -70,7 +70,7 @@ pub fn shortest_route(
             for w in part.windows(2) {
                 let (Some(a), Some(b)) = (w.first(), w.get(1)) else { continue };
                 let (ia, ib) = (node(*a, &mut ids, &mut nodes, &mut adj), node(*b, &mut ids, &mut nodes, &mut adj));
-                let len = haversine_m(*a, *b);
+                let len = wgs84_distance_m(*a, *b);
                 if let Some(v) = adj.get_mut(ia) {
                     v.push((ib, len * weight, len, *r));
                 }
@@ -96,14 +96,22 @@ pub fn shortest_route(
                 let len2 = dx * dx + dy * dy;
                 let t = if len2 > 0.0 { (((p.x - a.x) * k * dx + (p.y - a.y) * dy) / len2).clamp(0.0, 1.0) } else { 0.0 };
                 let q = Coord::new(a.x + t * (b.x - a.x), a.y + t * (b.y - a.y));
-                Some((i, t, q, haversine_m(q, p)))
+                let d = haversine_m(q, p);
+                // A NaN distance (a broken segment) ranks last: `min_by` treats NaN as equal to
+                // everything, so it could keep one as the minimum and hide the valid segments.
+                Some((i, t, q, if d.is_nan() { f64::INFINITY } else { d }))
             })
             .min_by(|a, b| a.3.partial_cmp(&b.3).unwrap_or(std::cmp::Ordering::Equal))
+            // The scan ranks segments by the cheap great-circle distance, which differs from the
+            // ellipsoid's by up to about 0.7 %; only the winner is solved exactly, so the segment
+            // chosen is approximate near the snap tolerance.
+            .map(|(i, t, q, _)| (i, t, q, wgs84_distance_m(q, p)))
     };
     // Each end becomes a node on its segment, joined to the segment's two ends.
     let attach = |p: Coord, nodes: &mut Vec<Coord>, adj: &mut Vec<Vec<(usize, f64, f64, usize)>>| -> Result<(usize, usize, f64), String> {
         let (si, t, q, d) = nearest(p, nodes).ok_or("the layer has no lines")?;
-        if d > snap_m {
+        // A NaN distance (a broken end) fails the check too, rather than snapping to a random segment.
+        if d.is_nan() || d > snap_m {
             return Err(format!("a route end is more than {} from the network", rustgis_geom::format_distance(snap_m)));
         }
         let &(a, b, weight, row) = segs.get(si).ok_or("the layer has no lines")?;
@@ -117,7 +125,7 @@ pub fn shortest_route(
         adj.push(Vec::new());
         let n = nodes.len() - 1;
         for end in [a, b] {
-            let len = haversine_m(q, nodes.get(end).copied().unwrap_or(q));
+            let len = wgs84_distance_m(q, nodes.get(end).copied().unwrap_or(q));
             if let Some(v) = adj.get_mut(n) {
                 v.push((end, len * weight, len, row));
             }
@@ -134,7 +142,7 @@ pub fn shortest_route(
         let (Some(&(_, _, weight, row)), Some(a), Some(b)) = (segs.get(s_seg), nodes.get(s).copied(), nodes.get(t).copied()) else {
             return Err("the layer has no lines".into());
         };
-        let len = haversine_m(a, b);
+        let len = wgs84_distance_m(a, b);
         if let Some(v) = adj.get_mut(s) {
             v.push((t, len * weight, len, row));
         }
@@ -445,9 +453,20 @@ mod tests {
         ds.push(Some(Geometry::Line(vec![vec![Coord::new(0.0, 0.0), Coord::new(0.09, 0.0)]])), vec![]);
         // Clicks beside its middle, far from both vertices but close to the road.
         let r = shortest_route(&ds, &[0], Coord::new(0.03, 0.0001), Coord::new(0.06, -0.0001), None, 50.0).unwrap();
-        assert!((r.length_m - 3336.0).abs() < 20.0, "{}", r.length_m);
+        assert!((r.length_m - 3339.6).abs() < 1.0, "{}", r.length_m);
         assert!((r.path[0].x - 0.03).abs() < 1e-9 && (r.path.last().unwrap().x - 0.06).abs() < 1e-9);
         assert!(shortest_route(&ds, &[0], Coord::new(0.03, 0.01), Coord::new(0.06, 0.0), None, 50.0).is_err(), "1 km away");
+        assert!(shortest_route(&ds, &[0], Coord::new(f64::NAN, 0.0), Coord::new(0.06, 0.0), None, 50.0).is_err(), "a NaN end");
+    }
+
+    #[test]
+    fn a_broken_segment_listed_first_does_not_hide_a_valid_one() {
+        // The NaN vertex makes the first segment's distance NaN, which the snap must not keep.
+        let mut ds = Dataset::new("roads", GeometryType::Polyline, vec![]);
+        ds.push(Some(Geometry::Line(vec![vec![Coord::new(0.5, 0.5), Coord::new(f64::NAN, 0.5)]])), vec![]);
+        ds.push(Some(Geometry::Line(vec![vec![Coord::new(0.0, 0.0), Coord::new(0.09, 0.0)]])), vec![]);
+        let r = shortest_route(&ds, &[0, 1], Coord::new(0.03, 0.0001), Coord::new(0.06, -0.0001), None, 50.0).unwrap();
+        assert!((r.length_m - 3339.6).abs() < 1.0, "{}", r.length_m);
     }
 
     fn offset(at: Coord, x: f64, y: f64) -> Coord {
