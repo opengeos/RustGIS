@@ -8131,19 +8131,21 @@ mod tests {
         .unwrap_err();
         assert!(err_dup.contains("duplicate key"));
 
-        // 4. Incompatible key type error
-        let mut int_source = Dataset::new("int_source", GeometryType::None, vec![Field::new("num_key", FieldType::Integer)]);
-        int_source.push(None, vec![Value::Int(123)]);
-        let m4 =
-            Map(HashMap::from([("inventory".to_string(), m2.0.get("inventory").unwrap().clone()), ("int_source".to_string(), int_source)]));
+        // 4. Incompatible key type error (a text key matches an integer key, not a boolean one)
+        let mut bool_source = Dataset::new("bool_source", GeometryType::None, vec![Field::new("flag_key", FieldType::Boolean)]);
+        bool_source.push(None, vec![Value::Bool(true)]);
+        let m4 = Map(HashMap::from([
+            ("inventory".to_string(), m2.0.get("inventory").unwrap().clone()),
+            ("bool_source".to_string(), bool_source),
+        ]));
         let err_type = crate::run(
             "joinField",
             &m4,
             &serde_json::json!({
                 "target": "inventory",
                 "targetField": "sku",
-                "join": "int_source",
-                "joinField": "num_key"
+                "join": "bool_source",
+                "joinField": "flag_key"
             }),
         )
         .unwrap_err();
