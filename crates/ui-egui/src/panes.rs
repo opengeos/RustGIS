@@ -4025,6 +4025,11 @@ fn symbology(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         ui.add_space(8.0);
         crate::fill_editor::fills_editor(app, ui, &l, t);
     }
+    if !l.graphics {
+        ui.add_space(10.0);
+        ui.separator();
+        diagram_section(app, ui, &l, &numeric, t);
+    }
     ui.add_space(10.0);
     ui.separator();
     ui.label(egui::RichText::new(tl!("Layer")).size(11.5).color(t.text_dim));
@@ -4042,6 +4047,222 @@ fn symbology(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     if ui.button(tl!("Import QGIS Style…")).on_hover_text(tl!("Style this layer as a QGIS layer style file (.qml) does")).clicked() {
         let _ = app.run("ui.openItem", json!({"kind": "qgisStyle"}));
     }
+}
+
+/// The Symbology pane's Diagram section (#976): a pie or bar chart of several numeric fields
+/// drawn on each feature over its symbol, as ArcGIS Pro's Chart symbology and QGIS's Diagrams
+/// draw. Every change re-runs `layer.diagram` with the whole setting — one undo step, and the
+/// scaled size range is recomputed from the data; `layer.clearDiagram` removes the diagram.
+fn diagram_section(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, numeric: &[String], t: &Tokens) {
+    use rustgis_engine::map::diagram::{CATEGORY_COLORS, MAX_CATEGORIES};
+    use rustgis_engine::map::{DiagramKind, DiagramLabel, DiagramSize};
+
+    // The layer.diagram call for `cats` with the rest of `d`'s own settings.
+    let apply = |app: &mut RustGisApp, d: &rustgis_engine::map::DiagramSettings, cats: Vec<Value>| {
+        let fields: Vec<Value> = cats.into_iter().map(|c| json!({"field": c["field"], "color": c["color"]})).collect();
+        let params = json!({
+            "kind": if d.kind == DiagramKind::Pie { "pie" } else { "bar" },
+            "fields": fields,
+            "size": match d.size {
+                DiagramSize::Fixed(s) => json!(s),
+                DiagramSize::Scaled { min_size, max_size, .. } => json!({"from": min_size, "to": max_size}),
+            },
+            "startAngle": d.start_angle,
+            "labels": d.labels.code(),
+            "background": d.background.as_ref().map(|c| json!(c.hex())).unwrap_or(Value::Null),
+            "outline": {"color": d.stroke.hex(), "width": d.stroke_width},
+        });
+        if let Err(error) = app.run("layer.diagram", params) {
+            app.session.notify(error, true);
+        }
+    };
+
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new(tl!("Diagram")).size(11.5).color(t.text_dim))
+            .on_hover_text(tl!("A small chart of several numeric fields, drawn on each feature over its symbol"));
+        if l.diagram.is_some() && ui.small_button(tl!("Remove")).clicked() {
+            let _ = app.run("layer.clearDiagram", json!({}));
+        }
+    });
+    let Some(mut d) = l.diagram.clone() else {
+        if numeric.len() < 2 {
+            ui.label(egui::RichText::new(tl!("Needs two or more numeric fields.")).color(t.text_dim));
+            return;
+        }
+        ui.horizontal(|ui| {
+            if ui.button(tl!("Pie Chart")).clicked() {
+                let _ = app.run("layer.diagram", json!({"kind": "pie", "fields": [numeric[0], numeric[1]]}));
+            }
+            if ui.button(tl!("Bar Chart")).clicked() {
+                let _ = app.run("layer.diagram", json!({"kind": "bar", "fields": [numeric[0], numeric[1]]}));
+            }
+        });
+        return;
+    };
+
+    // The chart kind.
+    ui.horizontal(|ui| {
+        ui.label(tl!("Kind"));
+        for (kind, label) in [(DiagramKind::Pie, "Pie"), (DiagramKind::Bar, "Bar")] {
+            if ui.selectable_label(d.kind == kind, tl!(label)).clicked() && d.kind != kind {
+                d.kind = kind;
+                apply(app, &d, d.categories.iter().map(|c| json!({"field": c.field, "color": c.colour.hex()})).collect());
+            }
+        }
+    });
+
+    // The categories: a field and its colour each, in draw order.
+    ui.add_space(4.0);
+    ui.label(egui::RichText::new(tl!("Fields")).size(11.5).color(t.text_dim));
+    let mut edited: Option<Vec<Value>> = None;
+    for (i, c) in d.categories.iter().enumerate() {
+        ui.horizontal(|ui| {
+            let mut field = c.field.clone();
+            egui::ComboBox::from_id_salt(("diagram_field", i)).selected_text(&field).width(140.0).show_ui(ui, |ui| {
+                for f in numeric {
+                    if ui.selectable_label(*f == field, f).clicked() {
+                        field = f.clone();
+                    }
+                }
+            });
+            let mut colour = crate::theme::c32(c.colour);
+            let mut cats: Vec<Value> = d.categories.iter().map(|c| json!({"field": c.field, "color": c.colour.hex()})).collect();
+            let mut changed = false;
+            if crate::widgets::color_button(ui, &mut colour).changed() {
+                cats[i]["color"] = json!(crate::theme::rgba(colour).hex());
+                changed = true;
+            }
+            if field != c.field {
+                cats[i]["field"] = json!(field);
+                changed = true;
+            }
+            if d.categories.len() > 1 && ui.small_button("✕").on_hover_text(tl!("Drop this field")).clicked() {
+                cats.remove(i);
+                changed = true;
+            }
+            if changed {
+                edited = Some(cats);
+            }
+        });
+    }
+    if let Some(cats) = edited {
+        apply(app, &d, cats);
+    }
+    if d.categories.len() < MAX_CATEGORIES.min(numeric.len()) && ui.small_button(tl!("＋ Add field")).clicked() {
+        let taken: Vec<&str> = d.categories.iter().map(|c| c.field.as_str()).collect();
+        if let Some(next) = numeric.iter().find(|f| !taken.contains(&f.as_str())) {
+            let i = d.categories.len();
+            let mut cats: Vec<Value> = d.categories.iter().map(|c| json!({"field": c.field, "color": c.colour.hex()})).collect();
+            cats.push(json!({"field": next, "color": CATEGORY_COLORS[i % CATEGORY_COLORS.len()].hex()}));
+            apply(app, &d, cats);
+        }
+    }
+
+    // The size: one for every feature, or grown with the categories' sum.
+    ui.add_space(4.0);
+    ui.horizontal(|ui| {
+        ui.label(tl!("Size"));
+        let scaled = !matches!(d.size, DiagramSize::Fixed(_));
+        egui::ComboBox::from_id_salt("diagram_size_kind")
+            .selected_text(if scaled { tl!("Scaled by sum") } else { tl!("Fixed") })
+            .width(120.0)
+            .show_ui(ui, |ui| {
+                if ui.selectable_label(!scaled, tl!("Fixed")).clicked() && scaled {
+                    let mut d2 = d.clone();
+                    d2.size = DiagramSize::Fixed(12.0);
+                    apply(app, &d2, d2.categories.iter().map(|c| json!({"field": c.field, "color": c.colour.hex()})).collect());
+                }
+                if ui.selectable_label(scaled, tl!("Scaled by sum")).clicked() && !scaled {
+                    let mut d2 = d.clone();
+                    d2.size = DiagramSize::Scaled { min_size: 6.0, max_size: 40.0, min: 0.0, max: 0.0 };
+                    apply(app, &d2, d2.categories.iter().map(|c| json!({"field": c.field, "color": c.colour.hex()})).collect());
+                }
+            });
+        let mut changed = false;
+        match d.size {
+            DiagramSize::Fixed(mut s) => {
+                if ui.add(egui::DragValue::new(&mut s).range(1.0..=200.0).suffix(" pt")).changed() {
+                    d.size = DiagramSize::Fixed(s);
+                    changed = true;
+                }
+            }
+            DiagramSize::Scaled { ref mut min_size, ref mut max_size, .. } => {
+                if ui.add(egui::DragValue::new(min_size).range(1.0..=200.0).suffix(" pt")).changed() {
+                    changed = true;
+                }
+                if ui.add(egui::DragValue::new(max_size).range(1.0..=200.0).suffix(" pt")).changed() {
+                    changed = true;
+                }
+            }
+        }
+        if changed {
+            apply(app, &d, d.categories.iter().map(|c| json!({"field": c.field, "color": c.colour.hex()})).collect());
+        }
+    });
+
+    // A pie's first slice can start anywhere on the turn.
+    if d.kind == DiagramKind::Pie {
+        ui.horizontal(|ui| {
+            let mut a = d.start_angle;
+            let input_label = ui.label(tl!("Start angle"));
+            if ui.add(egui::DragValue::new(&mut a).range(0.0..=360.0).suffix("°")).labelled_by(input_label.id).changed() {
+                d.start_angle = a;
+                apply(app, &d, d.categories.iter().map(|c| json!({"field": c.field, "color": c.colour.hex()})).collect());
+            }
+        });
+    }
+
+    // What each slice or bar says beside it: nothing, its value, its percent, or both.
+    ui.horizontal(|ui| {
+        let input_label = ui.label(tl!("Labels"));
+        let cur = d.labels;
+        egui::ComboBox::from_id_salt("diagram_labels")
+            .selected_text(tl!(cur.label()))
+            .width(120.0)
+            .show_ui(ui, |ui| {
+                for mode in DiagramLabel::ALL {
+                    if ui.selectable_label(cur == mode, tl!(mode.label())).clicked() && cur != mode {
+                        let mut d2 = d.clone();
+                        d2.labels = mode;
+                        apply(app, &d2, d2.categories.iter().map(|c| json!({"field": c.field, "color": c.colour.hex()})).collect());
+                    }
+                }
+            })
+            .response
+            .labelled_by(input_label.id)
+            .on_hover_text(tl!("What each slice or bar says beside it: its value, its share in percent, or both"));
+    });
+
+    // The disc or box behind the chart, and the outline around it all.
+    ui.horizontal(|ui| {
+        let mut on = d.background.is_some();
+        if ui.checkbox(&mut on, tl!("Background")).changed() {
+            d.background = on.then(|| rustgis_engine::map::Rgba::new(255, 255, 255, 204));
+            apply(app, &d, d.categories.iter().map(|c| json!({"field": c.field, "color": c.colour.hex()})).collect());
+        } else if let Some(bg) = d.background {
+            let mut colour = crate::theme::c32(bg);
+            if crate::widgets::color_button(ui, &mut colour).changed() {
+                d.background = Some(crate::theme::rgba(colour));
+                apply(app, &d, d.categories.iter().map(|c| json!({"field": c.field, "color": c.colour.hex()})).collect());
+            }
+        }
+    });
+    ui.horizontal(|ui| {
+        ui.label(tl!("Outline"));
+        let mut colour = crate::theme::c32(d.stroke);
+        let mut changed = crate::widgets::color_button(ui, &mut colour).changed();
+        if changed {
+            d.stroke = crate::theme::rgba(colour);
+        }
+        let mut w = d.stroke_width;
+        if ui.add(egui::DragValue::new(&mut w).range(0.0..=8.0).suffix(" pt")).changed() {
+            d.stroke_width = w;
+            changed = true;
+        }
+        if changed {
+            apply(app, &d, d.categories.iter().map(|c| json!({"field": c.field, "color": c.colour.hex()})).collect());
+        }
+    });
 }
 
 /// The scales the Reference scale picker offers, besides none and the map's own.

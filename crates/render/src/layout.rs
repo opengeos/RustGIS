@@ -1276,6 +1276,10 @@ fn legend_rows<'a>(map: &'a Map, drawn: Option<&[(u32, Vec<LegendEntry>)]>, opts
                 continue;
             }
         }
+        // A layer with a diagram lists its categories under its classes.
+        if let Some(d) = &l.diagram {
+            entries.extend(d.legend());
+        }
         if entries.is_empty() {
             // A Unique Values layer that lists nothing draws nothing visible (#207).
             if !matches!(l.renderer, rustgis_map::Renderer::Unique { .. }) {

@@ -6,6 +6,7 @@
 //! the labels too, for export and the command line.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+mod diagrams;
 mod effects;
 pub mod families;
 pub mod fonts;
@@ -3329,6 +3330,7 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
                 && !layer.has_strokes()
                 && !layer.has_fills()
                 && layer.marker_rotation.is_none()
+                && layer.diagram.is_none()
                 && !upright.contains(&layer.id);
             // Lyon refuses degenerate geometry tiny-skia draws fine, a layer too dense to mesh
             // (`MAX_LAYER_VERTICES`) is quicker splatted, and zoomed in far, features reaching too
@@ -3476,6 +3478,26 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
                         one.clear();
                         one.extend(strokes.iter().enumerate().filter(|(i, s)| s.level_at(*i) == level).map(|(_, s)| *s));
                         stroke_paths.draw(ctx, dest, parts, sym, &one);
+                    }
+                    // Diagrams: a small chart on each feature from several fields, over the
+                    // renderer's own symbol (pie or bars, as ArcGIS Pro's Chart symbology draws).
+                    if let Some(d) = layer.diagram.as_ref().filter(|_| !layer.graphics) {
+                        for (row, g) in geoms.iter().enumerate() {
+                            let Some(g) = g else { continue };
+                            if rows.get(row) != Some(&true) {
+                                continue;
+                            }
+                            let e = extents.get(row).copied().unwrap_or_else(|| g.extent());
+                            // Grown by the largest diagram, as a point's marks are (in map units).
+                            let r = f64::from(diagrams::reach(d) * ctx.ppp) * map_per_px;
+                            if !visible(&Extent::new(e.min_x - r, e.min_y - r, e.max_x + r, e.max_y + r)) {
+                                continue;
+                            }
+                            let Some(c) = diagrams::anchor(g) else { continue };
+                            let (x, y) = ctx.px(c);
+                            let Some((values, total)) = d.values(ds_ptr, row) else { continue };
+                            diagrams::draw(dest, x, y, d, &values, total, if direct { opacity } else { 1.0 }, ctx.ppp);
+                        }
                     }
                 }
                 cpu_dirty |= drawn_here;
