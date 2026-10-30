@@ -71,7 +71,13 @@ pub(crate) fn of(t: &TileLayer, epsg: u16) -> Option<Request> {
     if !matches!(w.grid, Grid::Map { .. }) {
         return None;
     }
-    let system = w.system(epsg)?.clone();
+    // Web Mercator for a layer drawn in it as it comes (a WMS that offers other systems too,
+    // marked `crs=3857`): its other systems are listed, not that one.
+    let system = match w.system(epsg) {
+        Some(s) => s.clone(),
+        None if epsg == 3857 && w.epsg == 3857 => mercator(),
+        None => return None,
+    };
     let base = Warp::map_template(base);
     if epsg == 3857 {
         return Some(Request { base, system, transformer: None });
@@ -376,6 +382,16 @@ mod tests {
             Warp::map_address(&r.base, &r.system, [1.0, 2.0, 3.0, 4.0], 8, 6),
             "https://m.example.org/wms?BBOX=1,2,3,4&WIDTH=8&HEIGHT=6"
         );
+        // A WMS that offers Web Mercator and other systems (swisstopo's), marked as drawn in Web
+        // Mercator as it comes: one picture in Web Mercator, though only its others are listed.
+        t.url = "https://wms.geo.admin.ch/de/?SERVICE=WMS&VERSION=1.3.0&REQUEST=GetMap&LAYERS=a&STYLES=&CRS=EPSG:3857&BBOX={bbox-epsg-3857}&WIDTH=256&HEIGHT=256&FORMAT=image%2Fpng&TRANSPARENT=TRUE#rustgis-warp={z}/{x}/{y};crs=3857;in=3.3,44.0,14.2,49.2;sys=2056|e|EPSG:2056~4326|n|EPSG:4326;map=east".into();
+        let r = of(&t, 3857).expect("one picture in Web Mercator");
+        assert_eq!(
+            Warp::map_address(&r.base, &r.system, [1.0, 2.0, 3.0, 4.0], 800, 600),
+            "https://wms.geo.admin.ch/de/?SERVICE=WMS&VERSION=1.3.0&REQUEST=GetMap&LAYERS=a&STYLES=&CRS=EPSG:3857&BBOX=1,2,3,4&WIDTH=800&HEIGHT=600&FORMAT=image%2Fpng&TRANSPARENT=TRUE"
+        );
+        // On a map in one of its other systems, in that one.
+        assert_eq!(of(&t, 2056).map(|r| r.system.epsg), Some(2056));
         // Tiles cut from a tile set aren't drawn on request.
         t.url = "https://tile.example.org/{z}/{x}/{y}.png".into();
         assert!(of(&t, 3857).is_none());
