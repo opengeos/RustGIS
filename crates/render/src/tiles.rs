@@ -752,6 +752,9 @@ pub(crate) mod tests {
 
     /// Requests that are never answered: their tiles stay on their way.
     static PARKED: std::sync::Mutex<Vec<rustgis_tiles::cache::Done>> = std::sync::Mutex::new(Vec::new());
+    /// Fetches under `stuck.test/`, left unanswered until a test lets them go: another's fetch
+    /// still under way.
+    static STUCK: std::sync::Mutex<Vec<rustgis_tiles::cache::Done>> = std::sync::Mutex::new(Vec::new());
 
     /// Serves tiles and documents for `https://tiles.test/…` without a network. Under `split/`,
     /// zoom 11 is red, zoom 13 blue, and zoom 12 never arrives.
@@ -768,6 +771,8 @@ pub(crate) mod tests {
                 done(Ok(color(20, 20, 220)));
             } else if url.starts_with("https://tiles.test/split/12/") {
                 PARKED.lock().unwrap().push(done);
+            } else if url.starts_with("https://stuck.test/") {
+                STUCK.lock().unwrap().push(done);
             } else if url.starts_with("https://wms.test/") || url.starts_with("https://wmts.test/") {
                 // A service drawing in a system of its own (#769): green, and what it was asked.
                 ASKED.lock().unwrap().push(url.clone());
@@ -928,14 +933,22 @@ pub(crate) mod tests {
         m.tiles[0].min_zoom = 15;
         let (p, asked) = at(&mut m, 30.0, 0.0);
         assert!(p[1] != green && asked.is_empty(), "{p:?} {asked:?}");
-        // A service drawing no picture larger than a tile: its tiles, after its picture failed.
+        // A service drawing no picture larger than a tile: its tiles, after its picture failed,
+        // and at once though a fetch of another's is still under way.
+        let _ = rustgis_tiles::cache::get("https://stuck.test/0.png", rustgis_tiles::cache::Want::Image);
         let mut m = Map::new("Map");
         m.graticule = false;
         let mut t = TileLayer::new("WMS", TileKind::Raster, url.replace("one.test/merc/", "one.test/tiles-only/"));
         t.single_image = true;
         m.tiles.push(t);
+        let t0 = std::time::Instant::now();
         let (p, asked) = at(&mut m, 30.0, 0.0);
+        let took = t0.elapsed();
+        for done in std::mem::take(&mut *STUCK.lock().unwrap()) {
+            done(Err("404".into()));
+        }
         assert_eq!(p, [green; 3], "drawn in tiles");
+        assert!(took < std::time::Duration::from_secs(10), "waited {took:?} for another's fetch");
         assert!(asked.iter().any(|u| u.contains("&WIDTH=512&HEIGHT=256&")), "its picture asked first: {asked:?}");
         // In a system of its own, on a map in it.
         let lv95 = System { epsg: 2056, name: "EPSG:2056".into(), lat_first: false };

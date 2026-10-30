@@ -4711,18 +4711,24 @@ impl LabelGrid {
     }
 }
 
+/// Render passes [`render_complete`] makes at most: each draws again with what has come since
+/// the last.
+const COMPLETE_PASSES: usize = 32;
+
 /// Renders at full resolution once the map's tiles have arrived: each pass fetches what it is
-/// missing (a style, then its sources, then their tiles) and waits for it, at most a minute in
-/// all. In the browser, which can't wait, it draws what has arrived.
+/// missing (a style, then its sources, then their tiles, or a layer's tiles after its picture
+/// failed) and waits for news of it, at most a minute in all. In the browser, which can't wait,
+/// it draws what has arrived.
 pub(crate) fn render_complete(map: &mut Map, view: &View) -> Option<Rendered> {
     let mut r = render_with(map, view, true)?;
     let start = web_time::Instant::now();
     let budget = web_time::Duration::from_secs(60);
     let mut passes = 0;
-    while r.tiles_pending && passes < 6 && start.elapsed() < budget && cfg!(not(target_arch = "wasm32")) {
-        // Each wait within what is left of the minute.
+    while r.tiles_pending && passes < COMPLETE_PASSES && start.elapsed() < budget && cfg!(not(target_arch = "wasm32")) {
+        // Each wait within what is left of the minute, until something has come: a fetch of
+        // another's (a map open beside it, a slow server) doesn't hold it up.
         let left = budget.saturating_sub(start.elapsed());
-        rustgis_tiles::cache::wait(left.min(web_time::Duration::from_secs(30)));
+        rustgis_tiles::cache::wait_for_news(left.min(web_time::Duration::from_secs(30)));
         r = render_with(map, view, true)?;
         passes += 1;
     }
