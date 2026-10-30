@@ -34,9 +34,12 @@ jobs:
             os: ubuntu-22.04-arm
           - name: Windows x64
             os: windows-latest
-          # Snapdragon and other ARM64 PCs (#1143): native, not under x64 emulation.
+          # Snapdragon and other ARM64 PCs (#1143): native, not under x64 emulation. Built for
+          # its target by name: Git Bash on this runner says x86_64, so package.sh would name
+          # (and mark) the packages x64 from `uname -m`.
           - name: Windows arm64
             os: windows-11-arm
+            target: aarch64-pc-windows-msvc
           - name: macOS Apple Silicon
             os: macos-latest
           - name: macOS Intel
@@ -45,6 +48,8 @@ jobs:
       - uses: actions/checkout@v7
 
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
 
       - uses: Swatinem/rust-cache@v2
 
@@ -68,7 +73,9 @@ jobs:
 
       - name: Build
         shell: bash
-        run: cargo build --release --locked -p rustgis -p rustgis-cli
+        env:
+          TARGET: ${{ matrix.target }}
+        run: cargo build --release --locked -p rustgis -p rustgis-cli ${TARGET:+--target "$TARGET"}
 
       - name: Install packaging tools
         if: runner.os == 'Linux'
@@ -138,7 +145,17 @@ jobs:
           APPLE_API_KEY_PATH: ${{ steps.macsign.outputs.api_key_path }}
           APPLE_API_KEY_ID: ${{ runner.os == 'macOS' && secrets.APPLE_API_KEY_ID || '' }}
           APPLE_API_ISSUER: ${{ runner.os == 'macOS' && secrets.APPLE_API_ISSUER || '' }}
-        run: packaging/package.sh "$VERSION"
+          TARGET: ${{ matrix.target }}
+        run: |
+          packaging/package.sh "$VERSION" "$TARGET"
+          # A build for a named target is packaged under its architecture, not the shell's.
+          if [ -n "$TARGET" ]; then
+            arch="${TARGET%%-*}"
+            ls dist | grep -q -- "-$arch" || { ls dist; echo "::error::No $arch packages in dist/"; exit 1; }
+            if [ "$arch" != x86_64 ] && ls dist | grep -q -- "-x86_64"; then
+              ls dist; echo "::error::x86_64 packages from a $TARGET build"; exit 1
+            fi
+          fi
 
       - name: Verify macOS signature
         if: runner.os == 'macOS' && steps.macsign.outputs.identity != ''
