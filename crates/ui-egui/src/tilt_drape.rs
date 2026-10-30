@@ -55,7 +55,8 @@ struct Drape {
 struct Drawn {
     key: DrapeKey,
     ppp: f32,
-    res: f64,
+    /// The view's camera it was drawn for.
+    camera: Camera,
     tiles: u64,
     built: f64,
     patches: Vec<render::TiltPatch>,
@@ -210,8 +211,8 @@ impl TiltDrape {
                 (p.band, tex)
             })
             .collect();
-        let Drawn { key, ppp, res, tiles, built, relief, shapes, markers, .. } = drawn;
-        self.drape = Some(Drape { key, ppp, res, tiles, built, bands, relief, shapes, markers });
+        let Drawn { key, ppp, camera, tiles, built, relief, shapes, markers, .. } = drawn;
+        self.drape = Some(Drape { key, ppp, res: camera.res, tiles, built, bands, relief, shapes, markers });
     }
 
     /// Shows the drape a worker finished for this map change (`key`, at `drape_ppp`), and lets
@@ -226,7 +227,7 @@ impl TiltDrape {
                 // Nothing to drape where the view was when it started; it may have moved on to
                 // ground since, so the drape is drawn here for where it is now.
                 self.drape = None;
-                self.empty = Some((key, map.camera));
+                self.empty = Some((key, drawn.camera));
             } else {
                 self.show(ctx, drawn);
             }
@@ -553,7 +554,7 @@ fn draw(map: &mut Map, view: &View, max_side: u32, key: DrapeKey, tiles: u64, ti
     let ppp = view.pixels_per_point as f32;
     let patches = render::render_tilt_drape(map, view, MARGIN, max_side);
     if patches.is_empty() {
-        return Drawn { key, ppp, res: cam.res, tiles, built: time, patches, relief: None, shapes: Vec::new(), markers: Vec::new() };
+        return Drawn { key, ppp, camera: cam, tiles, built: time, patches, relief: None, shapes: Vec::new(), markers: Vec::new() };
     }
     // A turned flat map's band is a square over the circle round the view: what stands on it is
     // taken over all of it, as the view turns there.
@@ -581,7 +582,7 @@ fn draw(map: &mut Map, view: &View, max_side: u32, key: DrapeKey, tiles: u64, ti
             .collect();
         (n, heights)
     });
-    Drawn { key, ppp, res: cam.res, tiles, built: time, patches, relief, shapes, markers }
+    Drawn { key, ppp, camera: cam, tiles, built: time, patches, relief, shapes, markers }
 }
 
 /// Adds a convex polygon (screen points, `None` where one couldn't be placed) to `mesh` as a fan
@@ -970,8 +971,8 @@ mod tests {
         let mut m = tilted(60.0);
         let mut d = TiltDrape::default();
         assert!(d.prepare(&ctx, &mut m, key, 0, 800.0, 600.0, 1.0, 0.0));
-        let (copy, res) = (m.clone(), m.camera.res);
-        assert!(d.start_with(&ctx, key, move || (nothing(key, res), copy)));
+        let (copy, cam) = (m.clone(), m.camera);
+        assert!(d.start_with(&ctx, key, move || (nothing(key, cam), copy)));
         wait(&mut d, &ctx, &mut m, key, 0.1);
         assert!(d.failed.is_none());
         assert!(covers(&m.camera, 800.0, 600.0, d.drape.as_ref().map(|d| &d.bands[..]).unwrap_or_default()));
@@ -985,8 +986,8 @@ mod tests {
         let key = DrapeKey { rev: 0, sources: 0 };
         let mut m = tilted(60.0);
         let mut d = TiltDrape::default();
-        let (copy, res) = (m.clone(), m.camera.res);
-        assert!(d.start_with(&ctx, key, move || (nothing(key, res), copy)));
+        let (copy, cam) = (m.clone(), m.camera);
+        assert!(d.start_with(&ctx, key, move || (nothing(key, cam), copy)));
         let end = std::time::Instant::now() + std::time::Duration::from_secs(30);
         while d.busy() {
             assert!(std::time::Instant::now() < end, "the worker never ended");
@@ -1002,9 +1003,28 @@ mod tests {
         wait(&mut d, &ctx, &mut m, key, 0.4);
     }
 
+    /// An empty drape for a view the map has since left doesn't hold up the view it is at: the
+    /// resting map is draped there.
+    #[test]
+    fn an_empty_drape_for_a_view_left_since_doesnt_hold_up_the_next() {
+        let ctx = egui::Context::default();
+        let key = DrapeKey { rev: 0, sources: 0 };
+        let mut m = tilted(60.0);
+        let mut d = TiltDrape::default();
+        let (copy, cam) = (m.clone(), m.camera);
+        assert!(d.start_with(&ctx, key, move || (nothing(key, cam), copy)));
+        m.camera.pan_px(5_000.0, 0.0);
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while d.drape.is_none() {
+            assert!(std::time::Instant::now() < end, "the view moved to was never draped");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+            d.warm(&ctx, &mut m, key, 0, 800.0, 600.0, 1.0, 0.1);
+        }
+    }
+
     /// A drape with nothing in it, as a worker hands back for a view over no ground.
-    fn nothing(key: DrapeKey, res: f64) -> Drawn {
-        Drawn { key, ppp: 1.0, res, tiles: 0, built: 0.0, patches: Vec::new(), relief: None, shapes: Vec::new(), markers: Vec::new() }
+    fn nothing(key: DrapeKey, camera: Camera) -> Drawn {
+        Drawn { key, ppp: 1.0, camera, tiles: 0, built: 0.0, patches: Vec::new(), relief: None, shapes: Vec::new(), markers: Vec::new() }
     }
 
     /// Prepares `d` until the drape being drawn is shown.
