@@ -4369,17 +4369,13 @@ pub fn render_tilt_drape(map: &mut Map, view: &View, margin: f64, max_side: u32)
     let ppp = if view.pixels_per_point.is_finite() { view.pixels_per_point.clamp(0.25, 4.0) } else { 1.0 };
     let max_side = f64::from(max_side.clamp(64, 8192));
     let cam = view.camera;
-    let turned = cam.pitch == 0.0 && cam.bearing != 0.0;
+    let turned = turned_band(view);
     // A flat turned view moves on its band only as it turns: no room for panning, whose picture
     // a service drawing one picture of the view would be asked for again, larger.
-    let margin = if margin.is_finite() && !turned { margin.clamp(0.0, 2.0) } else { 0.0 };
-    let bands = if turned {
-        // One band facing north over the circle round the view, so turning it stays on the band
-        // (its tiles and pictures the same at every bearing).
-        let side = view.width.hypot(view.height) + 2.0;
-        vec![rustgis_map::camera::Band { camera: Camera { bearing: 0.0, ..cam }, width: side, height: side, depth: (1.0, 1.0) }]
-    } else {
-        cam.tilt_bands(view.width, view.height)
+    let margin = if margin.is_finite() && turned.is_none() { margin.clamp(0.0, 2.0) } else { 0.0 };
+    let bands = match turned {
+        Some(band) => vec![band],
+        None => cam.tilt_bands(view.width, view.height),
     };
     sync_tilted(map, view, &bands, false);
     let (display, lock) = (map.label_display, map.label_lock.take());
@@ -4440,7 +4436,18 @@ fn tilt_candidate(mut c: Candidate, at: &impl Fn(f32, f32) -> Option<(f32, f32)>
     Some(c)
 }
 
-/// Turns `l` as [`turn_with`] does, for a label drawn in one view shown in another (a moving
+/// The one band a flat view turned to a bearing is draped on: facing north, square over the
+/// circle round the view, so turning it stays on the band (its tiles and pictures the same at
+/// every bearing). `None` for a view north up or tilted.
+pub fn turned_band(view: &View) -> Option<rustgis_map::camera::Band> {
+    let cam = view.camera;
+    (cam.pitch == 0.0 && cam.bearing != 0.0).then(|| {
+        let side = view.width.hypot(view.height) + 2.0;
+        rustgis_map::camera::Band { camera: Camera { bearing: 0.0, ..cam }, width: side, height: side, depth: (1.0, 1.0) }
+    })
+}
+
+/// Turns `l` as `turn_with` does, for a label drawn in one view shown in another (a moving
 /// map's labels laid over its drape): its place is left as it is.
 pub fn turn_label(l: &mut PlacedLabel, at: &impl Fn(f32, f32) -> Option<(f32, f32)>) {
     turn_with(l, at);

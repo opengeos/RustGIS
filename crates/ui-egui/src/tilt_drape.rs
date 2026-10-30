@@ -186,6 +186,11 @@ impl TiltDrape {
 
     /// Makes `drawn` the drape, its pictures textures (reusing the last drape's).
     fn show(&mut self, ctx: &egui::Context, drawn: Drawn) {
+        // Something to drape: `warm` keeps it up to date again.
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.empty = None;
+        }
         let options = TextureOptions { mipmap_mode: Some(TextureFilter::Linear), ..TextureOptions::LINEAR };
         let mut old = self.drape.take().map(|d| d.bands).unwrap_or_default().into_iter().map(|b| b.1);
         let bands: Vec<(Band, TextureHandle)> = drawn
@@ -550,13 +555,11 @@ fn draw(map: &mut Map, view: &View, max_side: u32, key: DrapeKey, tiles: u64, ti
     if patches.is_empty() {
         return Drawn { key, ppp, res: cam.res, tiles, built: time, patches, relief: None, shapes: Vec::new(), markers: Vec::new() };
     }
-    // A turned flat map's band is a square over the circle round the view (see
-    // `render_tilt_drape`): what stands on it is taken over all of it, as the view turns there.
-    let reach = if cam.pitch == 0.0 && cam.bearing != 0.0 {
-        let side = view.width.hypot(view.height) + 2.0;
-        View { width: side, height: side, camera: Camera { bearing: 0.0, ..cam }, ..*view }
-    } else {
-        *view
+    // A turned flat map's band is a square over the circle round the view: what stands on it is
+    // taken over all of it, as the view turns there.
+    let reach = match render::turned_band(view) {
+        Some(b) => View { width: b.width, height: b.height, camera: b.camera, ..*view },
+        None => *view,
     };
     let shapes = render::extruded_shapes(map, &reach);
     let markers = render::upright_markers(map, &reach, MARGIN);
