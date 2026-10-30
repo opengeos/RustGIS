@@ -18,7 +18,7 @@ on:
   workflow_dispatch:
     inputs:
       seconds:
-        description: Seconds per target
+        description: Seconds per target (1 to 2400)
         default: "600"
 
 concurrency:
@@ -81,8 +81,10 @@ jobs:
         working-directory: fuzz
         run: |
           case "$SECONDS_PER_TARGET" in ''|*[!0-9]*) echo "::error::seconds must be a whole number"; exit 1;; esac
-          # libFuzzer reads 0 as no limit.
-          [ "$((10#$SECONDS_PER_TARGET))" -gt 0 ] || { echo "::error::seconds must be more than 0"; exit 1; }
+          # libFuzzer reads 0 as no limit; over 2400 s, the build and the run outlast the job's timeout
+          # and its findings would be lost.
+          n=$((10#$SECONDS_PER_TARGET))
+          [ "$n" -gt 0 ] && [ "$n" -le 2400 ] || { echo "::error::seconds must be from 1 to 2400"; exit 1; }
           # Fork mode with the ignore flags keeps fuzzing past a finding, so one known failure (an
           # unreleased fix in a dependency, say) doesn't stop the rest of the target being explored.
           # Each failing input is saved in artifacts/<target>/.
@@ -90,6 +92,8 @@ jobs:
             -max_total_time="$SECONDS_PER_TARGET" -rss_limit_mb=2048 -timeout=10
       - name: Findings
         id: findings
+        # libFuzzer can exit non-zero after an ignored finding: check for saved inputs either way.
+        if: ${{ !cancelled() }}
         working-directory: fuzz
         run: |
           if [ -n "$(ls -A "artifacts/$TARGET" 2>/dev/null)" ]; then
@@ -131,8 +135,19 @@ jobs:
           title="Fuzzing found a crash"
           open="$(gh issue list -R "$GITHUB_REPOSITORY" --state open --search "in:title \"$title\"" \
             --json number,title --jq "[.[] | select(.title == \"$title\")][0].number // \"\"")"
-          # One issue at a time: a reader that keeps failing isn't news every night.
+          # One issue at a time: a reader that keeps failing isn't news every night, but a target that
+          # starts failing is, so it gets a comment on the open issue.
           if [ -z "$open" ]; then
             gh issue create -R "$GITHUB_REPOSITORY" --title "$title" \
-              --body "The nightly fuzz run on $GITHUB_SHA found failing inputs for $targets: $RUN. They are attached to the run as artifacts; fix the reader and add each input as a regression test (fuzz/README.md)."
+              --body "The nightly fuzz run on $GITHUB_SHA found failing inputs for: $targets. Run: $RUN. They are attached to the run as artifacts; fix the reader and add each input as a regression test (fuzz/README.md)."
+          else
+            seen="$(gh issue view "$open" -R "$GITHUB_REPOSITORY" --json body,comments --jq '[.body, .comments[].body] | join(" ")')"
+            new=""
+            for t in $(echo "$targets" | tr ',' ' '); do
+              case " $(echo "$seen" | tr -c 'a-z_' ' ') " in *" $t "*) ;; *) new="$new${new:+,}$t";; esac
+            done
+            if [ -n "$new" ]; then
+              gh issue comment "$open" -R "$GITHUB_REPOSITORY" \
+                --body "The nightly fuzz run on $GITHUB_SHA also found failing inputs for: $new. Run: $RUN."
+            fi
           fi

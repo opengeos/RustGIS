@@ -81,8 +81,8 @@ fn main() -> Result<()> {
 
     let (read, sniff) = (corpus("read_layers")?, corpus("sniff")?);
     // GeoPackages are written here and read back: in the crate's own build folder, not a shared
-    // temporary one, cleared of anything an earlier run left.
-    let scratch = Path::new(env!("CARGO_MANIFEST_DIR")).join("target").join("seeds-scratch");
+    // temporary one, one folder per run, cleared of anything an earlier run with its id left.
+    let scratch = Path::new(env!("CARGO_MANIFEST_DIR")).join("target").join(format!("seeds-scratch-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&scratch);
     std::fs::create_dir_all(scratch.parent().unwrap_or(&scratch)).map_err(|e| format!("{}: {e}", scratch.display()))?;
     std::fs::create_dir(&scratch).map_err(|e| format!("{}: {e}", scratch.display()))?;
@@ -108,9 +108,8 @@ fn main() -> Result<()> {
 
     let (dir, mut n) = (corpus("wkt")?, 0);
     for code in EPSG {
-        if let Some(text) = Crs::from_epsg(*code).and_then(wkt::to_wkt) {
-            seed(&dir, &mut n, text.as_bytes())?;
-        }
+        let text = Crs::from_epsg(*code).and_then(wkt::to_wkt).ok_or_else(|| format!("EPSG:{code} has no WKT"))?;
+        seed(&dir, &mut n, text.as_bytes())?;
     }
 
     let (dir, mut n) = (corpus("geotiff")?, 0);

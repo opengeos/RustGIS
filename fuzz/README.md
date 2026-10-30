@@ -38,7 +38,8 @@ ignored. Put `CARGO_TARGET_DIR` somewhere roomy: a sanitizer build of the engine
 CI runs `.github/workflows/fuzz.yml`: every target for ten minutes a night, and for a minute on a
 pull request labelled `ci:fuzz`. It runs libFuzzer in fork mode with `-ignore_crashes`,
 `-ignore_ooms` and `-ignore_timeouts`, so a known failure doesn't stop the rest of a target being
-explored; add those flags locally to do the same. Failing inputs fail the target, are uploaded,
+explored. To do the same locally, add `-fork=1 -ignore_crashes=1 -ignore_ooms=1 -ignore_timeouts=1`
+(the ignore flags work only in fork mode). Failing inputs fail the target, are uploaded,
 and at night open a "Fuzzing found a crash" issue.
 
 ## A failure
