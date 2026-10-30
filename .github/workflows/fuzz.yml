@@ -3,10 +3,10 @@ name: Fuzz
 # Coverage-guided fuzzing of the file readers (fuzz/README.md): every target for ten minutes a
 # night, and for a minute on a pull request labelled `ci:fuzz` (one that adds or changes a
 # reader). Malformed bytes that crash a reader, exhaust memory (over 2 GB) or hang it (over 10 s
-# on one input) fail the target and upload the input. A nightly failure opens a "Fuzzing found a
-# crash" issue. A later success doesn't close it, since the crashing input isn't re-run; it is
-# closed once the reader is fixed. The crate is outside the workspace and needs nightly Rust; nothing
-# else installs either.
+# on one input) are saved, fuzzing carries on, and at the end the target fails and uploads them.
+# At night, failing inputs open a "Fuzzing found a crash" issue. A later success doesn't close
+# it, since the failing inputs aren't re-run: it is closed once the reader is fixed. The crate is
+# outside the workspace and needs nightly Rust; nothing else installs either.
 #
 #   gh workflow run fuzz.yml -R opengeos/RustGIS --ref main -f seconds=600
 
@@ -81,34 +81,58 @@ jobs:
         working-directory: fuzz
         run: |
           case "$SECONDS_PER_TARGET" in ''|*[!0-9]*) echo "::error::seconds must be a whole number"; exit 1;; esac
-          cargo fuzz run -O "$TARGET" -- -max_total_time="$SECONDS_PER_TARGET" -rss_limit_mb=2048 -timeout=10
-      - name: Keep the input that failed
-        if: failure()
+          # libFuzzer reads 0 as no limit.
+          [ "$((10#$SECONDS_PER_TARGET))" -gt 0 ] || { echo "::error::seconds must be more than 0"; exit 1; }
+          # Fork mode with the ignore flags keeps fuzzing past a finding, so one known failure (an
+          # unreleased fix in a dependency, say) doesn't stop the rest of the target being explored.
+          # Each failing input is saved in artifacts/<target>/.
+          cargo fuzz run -O "$TARGET" -- -fork=1 -ignore_crashes=1 -ignore_ooms=1 -ignore_timeouts=1 \
+            -max_total_time="$SECONDS_PER_TARGET" -rss_limit_mb=2048 -timeout=10
+      - name: Findings
+        id: findings
+        working-directory: fuzz
+        run: |
+          if [ -n "$(ls -A "artifacts/$TARGET" 2>/dev/null)" ]; then
+            ls -l "artifacts/$TARGET"
+            echo "::error::$TARGET: $(ls "artifacts/$TARGET" | wc -l) failing inputs (crash-, oom- or timeout-)"
+            exit 1
+          fi
+      - name: Keep the failing inputs
+        if: failure() && steps.findings.outcome == 'failure'
         uses: actions/upload-artifact@v7
         with:
           name: fuzz-${{ matrix.target }}
           path: fuzz/artifacts/${{ matrix.target }}
-          if-no-files-found: ignore
 
   report:
     name: Report
     needs: [licences, fuzz]
-    # Only a fuzz target's failure is a crash; a licence failure fails the run without an issue.
+    # Only a failing input is a finding: a failed build or licence check fails the run without an
+    # issue. The inputs come from the fuzz jobs' uploads.
     if: always() && github.event_name == 'schedule' && needs.fuzz.result == 'failure'
     runs-on: ubuntu-latest
     permissions:
       issues: write
     steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: fuzz-*
+          path: findings
       - env:
           GH_TOKEN: ${{ github.token }}
           RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
+          if [ -z "$(ls -A findings 2>/dev/null)" ]; then
+            echo "The fuzz run failed without a failing input (a build or setup step): no issue."
+            exit 0
+          fi
+          targets="$(ls findings | sed 's/^fuzz-//' | paste -sd, -)"
           title="Fuzzing found a crash"
           open="$(gh issue list -R "$GITHUB_REPOSITORY" --state open --search "in:title \"$title\"" \
             --json number,title --jq "[.[] | select(.title == \"$title\")][0].number // \"\"")"
           # One issue at a time: a reader that keeps failing isn't news every night.
           if [ -z "$open" ]; then
             gh issue create -R "$GITHUB_REPOSITORY" --title "$title" \
-              --body "The nightly fuzz run on $GITHUB_SHA failed: $RUN. Each failing target's input is attached to the run as an artifact; fix the reader and add the input as a regression test (fuzz/README.md)."
+              --body "The nightly fuzz run on $GITHUB_SHA found failing inputs for $targets: $RUN. They are attached to the run as artifacts; fix the reader and add each input as a regression test (fuzz/README.md)."
           fi

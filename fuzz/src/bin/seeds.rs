@@ -80,8 +80,12 @@ fn main() -> Result<()> {
     let (project, layers) = layers()?;
 
     let (read, sniff) = (corpus("read_layers")?, corpus("sniff")?);
-    let scratch = std::env::temp_dir().join(format!("rustgis-fuzz-seeds-{}", std::process::id()));
-    std::fs::create_dir_all(&scratch).map_err(|e| format!("{}: {e}", scratch.display()))?;
+    // GeoPackages are written here and read back: in the crate's own build folder, not a shared
+    // temporary one, cleared of anything an earlier run left.
+    let scratch = Path::new(env!("CARGO_MANIFEST_DIR")).join("target").join("seeds-scratch");
+    let _ = std::fs::remove_dir_all(&scratch);
+    std::fs::create_dir_all(scratch.parent().unwrap_or(&scratch)).map_err(|e| format!("{}: {e}", scratch.display()))?;
+    std::fs::create_dir(&scratch).map_err(|e| format!("{}: {e}", scratch.display()))?;
     let (mut nr, mut ns) = (0, 0);
     for ds in &layers {
         for (format, ext) in WRITTEN {

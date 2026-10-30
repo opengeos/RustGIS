@@ -36,8 +36,10 @@ fuzzing starts from real files; the repository commits no data. `corpus/` and `a
 ignored. Put `CARGO_TARGET_DIR` somewhere roomy: a sanitizer build of the engine is several GB.
 
 CI runs `.github/workflows/fuzz.yml`: every target for ten minutes a night, and for a minute on a
-pull request labelled `ci:fuzz`. A failure uploads the input and, at night, opens a "Fuzzing
-found a crash" issue.
+pull request labelled `ci:fuzz`. It runs libFuzzer in fork mode with `-ignore_crashes`,
+`-ignore_ooms` and `-ignore_timeouts`, so a known failure doesn't stop the rest of a target being
+explored; add those flags locally to do the same. Failing inputs fail the target, are uploaded,
+and at night open a "Fuzzing found a crash" issue.
 
 ## A failure
 
