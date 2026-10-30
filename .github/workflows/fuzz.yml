@@ -21,10 +21,11 @@ on:
         description: Seconds per target (1 to 2400)
         default: "600"
 
-# A manual run and the nightly one don't cancel each other.
+# A manual run and the nightly one don't cancel each other, and a manual run is never cancelled
+# once started, so the inputs it saved are uploaded.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
 
 permissions:
   contents: read
@@ -139,13 +140,16 @@ jobs:
             --json number,title --jq "[.[] | select(.title == \"$title\")][0].number // \"\"")"
           # One issue at a time: a reader that keeps failing isn't news every night, but a target that
           # starts failing is, so it gets a comment on the open issue. The targets reported so far are
-          # read only from the hidden markers this step writes, never from people's comments.
+          # read only from the hidden markers this step writes, in the issue and comments it posted.
           if [ -z "$open" ]; then
             gh issue create -R "$GITHUB_REPOSITORY" --title "$title" \
               --body "The nightly fuzz run on $GITHUB_SHA found failing inputs for: $targets. Run: $RUN. They are attached to the run as artifacts; fix the reader and add each input as a regression test (fuzz/README.md).
           <!-- fuzz-targets: $targets -->"
           else
-            seen=" $(gh issue view "$open" -R "$GITHUB_REPOSITORY" --json body,comments --jq '[.body, .comments[].body] | join("\n")' \
+            # The issue's body and this workflow's own comments: github-actions posts with GITHUB_TOKEN.
+            seen=" $(gh issue view "$open" -R "$GITHUB_REPOSITORY" --json author,body,comments --jq '
+              [(select(.author.login == "app/github-actions" or .author.login == "github-actions") | .body),
+               (.comments[] | select(.author.login == "app/github-actions" or .author.login == "github-actions") | .body)] | join("\n")' \
               | sed -n 's/.*<!-- fuzz-targets: \([a-z_,]*\) -->.*/\1/p' | tr ',\n' '  ') "
             new=""
             for t in $(echo "$targets" | tr ',' ' '); do
