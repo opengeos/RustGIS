@@ -3395,6 +3395,7 @@ fn geoprocessing(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         app.session.map().layers.iter().filter(|l| takes_layer(kind, l)).map(|l| l.name.clone()).collect()
     };
     let plugin_tool = spec.id.starts_with(rustgis_engine::plugins::PREFIX);
+    #[cfg(not(target_arch = "wasm32"))]
     let first_layer = first_layer(spec).map(|p| p.name);
     // The file parameter whose Browse was pressed: picked once the form is drawn.
     let mut browse_for = None;
