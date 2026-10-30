@@ -301,29 +301,36 @@ pub fn wait(timeout: Duration) {
 }
 
 /// How long nothing more has to land, after something has, for [`wait_for_news`] to return.
+#[cfg(not(target_arch = "wasm32"))]
 const QUIET: Duration = Duration::from_millis(100);
+/// How long [`wait_for_news`] waits at most once something has landed, however much more does
+/// (other maps' fetches landing one after another).
+#[cfg(not(target_arch = "wasm32"))]
+const SETTLE: Duration = Duration::from_secs(1);
 
-/// Waits (up to `timeout`) for the fetches under way to finish, or until some have and nothing
-/// more has landed for a moment since: one drawing again with what came needn't wait for every
+/// Waits (up to `timeout`) for the fetches under way to finish, or until something has landed
+/// since the [`generation`] `since` (read before the caller last drew) and then nothing more for
+/// a moment, or for a second at most: one drawing again with what came needn't wait for every
 /// fetch in the process (another map's, a slow server's, one never answered). Native only.
-pub fn wait_for_news(timeout: Duration) {
+pub fn wait_for_news(since: u64, timeout: Duration) {
     #[cfg(not(target_arch = "wasm32"))]
     {
         let start = Instant::now();
-        let first = generation();
-        let (mut seen, mut since) = (first, Instant::now());
+        let (mut seen, mut changed, mut news) = (since, Instant::now(), None);
         while in_flight() > 0 && start.elapsed() < timeout {
             let now = generation();
             if now != seen {
-                (seen, since) = (now, Instant::now());
-            } else if seen != first && since.elapsed() >= QUIET {
+                (seen, changed) = (now, Instant::now());
+                news.get_or_insert(changed);
+            }
+            if news.is_some_and(|first: Instant| changed.elapsed() >= QUIET || first.elapsed() >= SETTLE) {
                 return;
             }
             std::thread::sleep(std::time::Duration::from_millis(15));
         }
     }
     #[cfg(target_arch = "wasm32")]
-    let _ = timeout;
+    let _ = (since, timeout);
 }
 
 fn queue() -> &'static Mutex<Queue<Want>> {
@@ -1913,11 +1920,12 @@ mod tests {
             }
         });
         assert!(matches!(get("test://stuck/0.json", Want::Json), State::Pending));
+        let g = generation();
         assert!(matches!(get("test://news/0.json", Want::Json), State::Pending));
         let t = Instant::now();
         // (Another test's fetch landing may end a wait first.)
         while !matches!(get("test://news/0.json", Want::Json), State::Ready(_)) && t.elapsed() < Duration::from_secs(20) {
-            wait_for_news(Duration::from_secs(20));
+            wait_for_news(g, Duration::from_secs(20));
         }
         assert!(t.elapsed() < Duration::from_secs(5), "waited {:?} for the stuck fetch", t.elapsed());
         for done in std::mem::take(&mut *STUCK.lock().unwrap()) {
