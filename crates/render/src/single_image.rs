@@ -156,9 +156,9 @@ fn mercator_res(view: &View, flat: &Flat) -> Option<f64> {
     (r.is_finite() && r > 0.0).then_some(r)
 }
 
-/// Metres a pixel of a 256-pixel tile at `zoom`.
-fn zoom_res(zoom: u8) -> f64 {
-    2.0 * HALF_WORLD / (256.0 * 2f64.powi(i32::from(zoom)))
+/// Metres a pixel of a `tile_size`-pixel tile at `zoom` (a layer's zooms are its tiles').
+fn zoom_res(zoom: u8, tile_size: u32) -> f64 {
+    2.0 * HALF_WORLD / (f64::from(tile_size.max(1)) * 2f64.powi(i32::from(zoom)))
 }
 
 /// Draws the layer over `pm` (the view's pixels) from one picture: whether it is still on its
@@ -169,11 +169,11 @@ pub(crate) fn draw(pm: &mut Pixmap, req: &Request, t: &TileLayer, view: &View, f
     let nothing = Some((false, None));
     // Not closer out than its service draws it (as its tiles).
     let Some(merc) = mercator_res(view, flat) else { return nothing };
-    if rustgis_tiles::template::zoom_for(merc, 256, rustgis_map::tiles::MAX_ZOOM) < t.min_zoom {
+    if rustgis_tiles::template::zoom_for(merc, t.tile_size, rustgis_map::tiles::MAX_ZOOM) < t.min_zoom {
         return nothing;
     }
     // Closer in than its finest zoom, its picture there is stretched (as its finest tiles are).
-    let finer = (zoom_res(t.max_zoom) / merc).max(1.0);
+    let finer = (zoom_res(t.max_zoom, t.tile_size) / merc).max(1.0);
     let cam = view.camera;
     let (w, h, k) = (view.width, view.height, view.pixels_per_point.max(0.01));
     let to_system = |m: Coord| -> Option<Coord> {
@@ -278,6 +278,16 @@ pub(crate) fn draw(pm: &mut Pixmap, req: &Request, t: &TileLayer, view: &View, f
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A layer's zooms are its tiles': a 512-pixel tile at a zoom has the resolution of a
+    /// 256-pixel one a zoom finer, so its picture is held, and its layer drawn, as its tiles are.
+    #[test]
+    fn zooms_are_in_the_layers_tile_size() {
+        for z in 0..20 {
+            assert!((zoom_res(z, 512) - zoom_res(z + 1, 256)).abs() < 1e-9 * zoom_res(z + 1, 256));
+            assert_eq!(rustgis_tiles::template::zoom_for(zoom_res(z, 512), 512, 22), z);
+        }
+    }
 
     #[test]
     fn a_picture_reaches_past_the_view_and_holds_while_it_moves_a_little() {

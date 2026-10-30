@@ -261,8 +261,9 @@ once a view instead of for every tile (#1162).
   in than its finest zoom its picture there is stretched, as its tiles are.
 - It is drawn so on a flat map, north up or turned, in Web Mercator or in a
   [projection the service offers](#services-in-other-coordinate-systems). On the globe, a tilted
-  map, a projection the service doesn't offer, or a Web Mercator view across the antimeridian
-  (which tiles wrap), the layer is drawn in tiles. Exports and layouts ask for their own picture.
+  map, a projection the service doesn't offer, or a Web Mercator view across or near the
+  antimeridian (whose picture, a little larger than the view, would cross it; tiles wrap), the
+  layer is drawn in tiles. Exports and layouts ask for their own picture.
 
 Right-click the layer in the Layers pane, **Draw as**, to switch to **Tiles** and back to
 **Single image** (`map.setTiles` with `"singleImage"`). A layer asked for in Web Mercator takes
