@@ -1316,7 +1316,7 @@ fn data_defined_symbol_settings_carry_over_as_expressions() {
     let mut report = Report::default();
     read_style(&fixed, "places", &mut report).unwrap();
     assert!(report.notes.iter().any(|n| n.text.contains("scaled with its size")), "{:?}", report.notes);
-    assert!(!said("drawn with the first's"), "{:?}", report.notes);
+    assert!(!report.notes.iter().any(|n| n.text.contains("drawn with the first's")), "{:?}", report.notes);
 
     let dashed = line.replace("outlineColor", "customDash");
     let mut report = Report::default();

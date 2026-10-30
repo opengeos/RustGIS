@@ -794,6 +794,7 @@ fn a_symbol_is_set_by_expressions() {
         (json!({"layer": "Cities", "fill": "'red' ||"}), "fill: "),
         (json!({"layer": "Cities", "stroke": 3}), "stroke is an expression"),
         (json!({"layer": "Rivers", "angle": "10"}), "angle works on point layers"),
+        (json!({"layer": "Rivers", "size": "4"}), "size works on point layers"),
     ] {
         let err = s.run("layer.symbolBy", &bad).unwrap_err();
         assert!(err.contains(says), "{bad}: {err}");

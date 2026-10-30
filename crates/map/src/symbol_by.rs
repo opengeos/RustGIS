@@ -47,7 +47,7 @@ impl SymbolBy {
 /// Reads one expression leniently: text up to [`query::MAX_LEN`], blank or anything else none.
 fn de_text<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<String>, D::Error> {
     Ok(match serde_json::Value::deserialize(d)? {
-        serde_json::Value::String(s) if !s.trim().is_empty() && s.len() <= query::MAX_LEN => Some(s),
+        serde_json::Value::String(s) if !s.trim().is_empty() && s.chars().count() <= query::MAX_LEN => Some(s),
         _ => None,
     })
 }
@@ -194,6 +194,10 @@ impl<'a> Styler<'a> {
         use std::borrow::Cow;
         let Some(b) = self.by.as_ref().filter(|b| b.points && !strokes.is_empty()) else { return Cow::Borrowed(strokes) };
         let Some(size) = b.number(&b.size, &self.layer.dataset, row) else { return Cow::Borrowed(strokes) };
+        let size = (size as f32).clamp(0.0, MAX_SIZE);
+        if size == 0.0 {
+            return Cow::Owned(Vec::new());
+        }
         // The size the marks are drawn for: a Proportional renderer's base symbol's (it sizes the
         // symbol per feature, not the marks), else the feature's class's.
         let base = match &self.layer.renderer {
@@ -203,10 +207,7 @@ impl<'a> Styler<'a> {
         if base.is_nan() || base <= 0.0 {
             return Cow::Borrowed(strokes);
         }
-        let k = (size as f32).clamp(0.0, MAX_SIZE) / base;
-        if k == 0.0 {
-            return Cow::Owned(Vec::new());
-        }
+        let k = size / base;
         Cow::Owned(
             strokes
                 .iter()

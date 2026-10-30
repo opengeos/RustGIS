@@ -4944,6 +4944,8 @@ fn symbol_by_editor(app: &mut RustGisApp, ui: &mut Ui, l: &rustgis_engine::map::
             ("strokeWidth", tl!("Outline width"), &by.stroke_width),
         ]),
     }
+    // A layer's id is its map's: a draft left on one map's layer isn't another's.
+    let scope = crate::labelpane::layer_key(app, l);
     egui::Frame::NONE.fill(t.pane_header).corner_radius(CornerRadius::same(8)).inner_margin(egui::Margin::same(10)).show(ui, |ui| {
         ui.set_width(ui.available_width());
         ui.label(egui::RichText::new(tl!("By Expression")).font(semibold(12.5)));
@@ -4956,7 +4958,7 @@ fn symbol_by_editor(app: &mut RustGisApp, ui: &mut Ui, l: &rustgis_engine::map::
         );
         for (key, label, cur) in rows {
             let cur = cur.clone().unwrap_or_default();
-            let id = egui::Id::unique(("symbol_by", l.id, key));
+            let id = egui::Id::unique(("symbol_by", scope, key));
             let (typing, failed) = (id.with("typing"), id.with("failed"));
             let focused = ui.memory(|m| m.has_focus(id));
             // Each kept with the expression it was typed over: one set meanwhile (by undo or a

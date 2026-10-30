@@ -562,8 +562,8 @@ fn symbol_by(s: &mut Session, p: &Value) -> CmdResult {
             Some(_) => return Err(format!("{key} is an expression's text, or null for none")),
         };
         if let Some(t) = &text {
-            if key == "angle" && l.geometry_type() != GeometryType::Point {
-                return Err("angle works on point layers".into());
+            if matches!(key, "size" | "angle") && l.geometry_type() != GeometryType::Point {
+                return Err(format!("{key} works on point layers"));
             }
             rustgis_data::query::parse(t, &l.dataset).map_err(|e| format!("{key}: {e}"))?;
         }

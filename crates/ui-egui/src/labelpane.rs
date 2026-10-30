@@ -199,7 +199,7 @@ fn shown(c: &Class) -> String {
 /// `l` as a layer of this map of this project: another map, or another project, may reuse its id.
 /// A map goes by its place and its name, as Define Projection's does: deleting a map moves the
 /// next one into its place, and a copy keeps its layer ids.
-fn layer_key(app: &RustGisApp, l: &Layer) -> egui::Id {
+pub(crate) fn layer_key(app: &RustGisApp, l: &Layer) -> egui::Id {
     egui::Id::unique((app.session.opened, app.session.project.active_map, app.session.map().name.as_str(), l.id))
 }
 
