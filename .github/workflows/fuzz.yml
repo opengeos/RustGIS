@@ -21,11 +21,11 @@ on:
         description: Seconds per target (1 to 2400)
         default: "600"
 
-# A manual run and the nightly one don't cancel each other, and a manual run is never cancelled
-# once started, so the inputs it saved are uploaded.
+# A manual run and the nightly one don't cancel each other. Only a pull request's run gives way to
+# a newer one: a nightly or manual run, once started, finishes and uploads the inputs it saved.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
-  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
