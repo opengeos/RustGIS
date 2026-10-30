@@ -1,6 +1,7 @@
 //! The WHERE clause parser and evaluator as they were before the expression language, kept
-//! verbatim as the oracle of the differential tests: every clause it accepts must select the
-//! same rows through the new one.
+//! verbatim as the oracle of the differential tests (every clause it accepts must select the
+//! same rows through the new one) but for the one rule the expression language changes: a NULL
+//! in an IN list matches nothing, where the text `<Null>` once matched it.
 #![allow(dead_code)]
 
 use crate::{Dataset, Value};

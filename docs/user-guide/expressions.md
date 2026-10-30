@@ -131,7 +131,7 @@ Rules shared by all of them:
 
 ## Limits
 
-An expression is at most 10,000 characters and nests at most 64 levels: each parenthesis,
+A number too large to represent (`1e999`) is an error. An expression is at most 10,000 characters and nests at most 64 levels: each parenthesis,
 function call, `NOT`, sign before something other than a number, `^` and `CASE` counts (a
 `CASE` two). One chain of `AND`, `OR`, `||`, `+`/`-` or `*`/`/`/`%`, and the arms of one
 `CASE`, take at most 256 terms; a function at most 32 arguments; an `IN` list as many as fit.

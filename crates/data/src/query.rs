@@ -606,7 +606,9 @@ impl Parser<'_> {
                 }
                 Ok(e)
             }
-            Some(Tok::Num(n)) => Ok(Expr::Lit(num(n))),
+            // A number too large to represent (`1e999`) would be infinity, which nothing reads.
+            Some(Tok::Num(n)) if n.is_finite() => Ok(Expr::Lit(num(n))),
+            Some(Tok::Num(_)) => Err("the number is too large".into()),
             Some(Tok::Str(s)) => Ok(Expr::Lit(Value::Text(s))),
             Some(Tok::QuotedIdent(s)) => self.field(&s),
             Some(Tok::Var(v)) => match v.to_ascii_lowercase().as_str() {

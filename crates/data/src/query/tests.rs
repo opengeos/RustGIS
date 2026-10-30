@@ -55,6 +55,9 @@ fn hostile_input() {
         let _ = select(t, &d);
     }
     assert!(select(&long_chain, &d).is_err());
+    for t in ["1e999 + 1", "pop < 1e999", "-1e999"] {
+        assert!(parse(t, &d).is_err_and(|e| e.contains("too large")), "{t}");
+    }
     assert!(like("abc", "a%c") && like("abc", "_b_") && !like("abc", "a_") && like("", "%"));
 }
 
