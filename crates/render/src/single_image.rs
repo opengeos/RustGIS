@@ -8,7 +8,7 @@
 //! stood in for by the layer's last picture. Its size is in the map's logical pixels, as tiles
 //! are asked for, so the service's symbols keep their size on a high-density screen.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use rustgis_data::ogc::warp::{Grid, System, Warp};
@@ -107,12 +107,16 @@ fn picture(area: [f64; 4], res: f64, max_side: u32) -> Option<([f64; 4], u32, u3
     out.iter().all(|v| v.is_finite()).then_some((out, w as u32, h as u32))
 }
 
+/// How long a layer whose large picture failed is asked for smaller ones before a large one is
+/// tried again (the failure may have been passing: a timeout, a busy server).
+const SMALL_FOR: web_time::Duration = web_time::Duration::from_secs(300);
+
 /// What is kept between frames, by the layer's address: its last picture drawn (the address
-/// and area), and that its service refused a large one.
+/// and area), and when a large picture of it last failed.
 #[derive(Default)]
 struct Kept {
     last: HashMap<String, (String, [f64; 4])>,
-    small: HashSet<String>,
+    small: HashMap<String, web_time::Instant>,
 }
 
 fn kept() -> std::sync::MutexGuard<'static, Kept> {
@@ -139,16 +143,37 @@ fn in_world(at: [f64; 4], w: u32, h: u32) -> Option<Option<([f64; 4], u32, u32)>
     Some(Some(([at[0], s, at[2], n], w, rows.min(f64::from(h)) as u32)))
 }
 
+/// Web Mercator metres a logical pixel at the middle of the view, whatever the map's projection
+/// and its units: what a layer's zooms are worked out from.
+fn mercator_res(view: &View, flat: &Flat) -> Option<f64> {
+    let (cam, w, h) = (view.camera, view.width, view.height);
+    let (a, b) = (cam.to_map(w / 2.0, h / 2.0, w, h), cam.to_map(w / 2.0 + 1.0, h / 2.0, w, h));
+    let (a, b) = match flat {
+        Flat::Mercator => (a, b),
+        Flat::Custom(_) => (rustgis_geom::lonlat_to_merc(flat.inverse(a)?), rustgis_geom::lonlat_to_merc(flat.inverse(b)?)),
+    };
+    let r = (b.x - a.x).hypot(b.y - a.y);
+    (r.is_finite() && r > 0.0).then_some(r)
+}
+
+/// Metres a pixel of a 256-pixel tile at `zoom`.
+fn zoom_res(zoom: u8) -> f64 {
+    2.0 * HALF_WORLD / (256.0 * 2f64.powi(i32::from(zoom)))
+}
+
 /// Draws the layer over `pm` (the view's pixels) from one picture: whether it is still on its
 /// way, and the error of one that failed. `None` when the view's picture can't be asked for (it
-/// crosses the antimeridian): the layer is drawn in tiles instead.
+/// crosses the antimeridian, or the service failed to draw it): the layer is drawn in tiles
+/// instead.
 pub(crate) fn draw(pm: &mut Pixmap, req: &Request, t: &TileLayer, view: &View, flat: &Flat) -> Option<(bool, Option<String>)> {
     let nothing = Some((false, None));
     // Not closer out than its service draws it (as its tiles).
-    let zoom = rustgis_tiles::template::zoom_for(view.camera.res, 256, rustgis_map::tiles::MAX_ZOOM);
-    if zoom < t.min_zoom {
+    let Some(merc) = mercator_res(view, flat) else { return nothing };
+    if rustgis_tiles::template::zoom_for(merc, 256, rustgis_map::tiles::MAX_ZOOM) < t.min_zoom {
         return nothing;
     }
+    // Closer in than its finest zoom, its picture there is stretched (as its finest tiles are).
+    let finer = (zoom_res(t.max_zoom) / merc).max(1.0);
     let cam = view.camera;
     let (w, h, k) = (view.width, view.height, view.pixels_per_point.max(0.01));
     let to_system = |m: Coord| -> Option<Coord> {
@@ -179,7 +204,7 @@ pub(crate) fn draw(pm: &mut Pixmap, req: &Request, t: &TileLayer, view: &View, f
     let (Some(a), Some(b)) = (to_system(cam.to_map(w / 2.0, h / 2.0, w, h)), to_system(cam.to_map(w / 2.0 + 1.0, h / 2.0, w, h))) else {
         return nothing;
     };
-    let res = (b.x - a.x).hypot(b.y - a.y);
+    let res = (b.x - a.x).hypot(b.y - a.y) * finer;
     if !(lo.0 < hi.0 && lo.1 < hi.1) {
         return nothing;
     }
@@ -202,7 +227,7 @@ pub(crate) fn draw(pm: &mut Pixmap, req: &Request, t: &TileLayer, view: &View, f
     let paint = |pm: &mut Pixmap, img: &Pixmap, at: [f64; 4]| crate::native_tiles::paint_blended(pm, img, at, at, opacity, blend, &place);
     // Asked again smaller when the service refuses a large picture.
     for _ in 0..2 {
-        let small = kept().small.contains(&key);
+        let small = kept().small.get(&key).is_some_and(|at| at.elapsed() < SMALL_FOR);
         let Some((at, pw, ph)) = picture(area, res, if small { SMALL_SIDE } else { MAX_SIDE }) else { return nothing };
         let (at, pw, ph) = match req.system.epsg {
             3857 => match in_world(at, pw, ph)? {
@@ -235,18 +260,19 @@ pub(crate) fn draw(pm: &mut Pixmap, req: &Request, t: &TileLayer, view: &View, f
                 }
                 return Some((true, None));
             }
-            // Asked again at most 2048 pixels a side: some services draw no larger.
+            // Asked again at most 2048 pixels a side for a while: some services draw no larger.
             State::Failed(_) if !small && pw.max(ph) > SMALL_SIDE => {
                 let mut k = kept();
                 if k.small.len() >= MAX_KEPT {
                     k.small.clear();
                 }
-                k.small.insert(key.clone());
+                k.small.insert(key.clone(), web_time::Instant::now());
             }
-            State::Failed(e) => return Some((false, Some(e))),
+            // A picture the service doesn't draw: its tiles may draw (and say what fails).
+            State::Failed(_) => return None,
         }
     }
-    nothing
+    None
 }
 
 #[cfg(test)]

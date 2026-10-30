@@ -774,7 +774,12 @@ mod tests {
                 done(Ok(color(20, 200, 20)));
             } else if url.starts_with("https://one.test/") {
                 ASKED_ONE.lock().unwrap().push(url.clone());
-                done(Ok(color(20, 200, 20)));
+                // Under `tiles-only/`, a service drawing no picture larger than a tile.
+                if url.starts_with("https://one.test/tiles-only/") && !url.contains("&WIDTH=256&HEIGHT=256") {
+                    done(Err("400 Bad Request".into()));
+                } else {
+                    done(Ok(color(20, 200, 20)));
+                }
             } else if url == "https://tiles.test/style.json" {
                 let style = r##"{"version": 8, "sources": {}, "layers": [{"id": "bg", "type": "background", "paint": {"background-color": "#2050e0"}}]}"##;
                 done(Ok(style.as_bytes().to_vec()));
@@ -912,6 +917,26 @@ mod tests {
         // A small pan: the same picture, from the cache.
         let (p, asked) = at(&mut m, 30.0, 300.0);
         assert_eq!((p, asked.len()), ([green; 3], 0));
+        // Closer in than its finest zoom (10: 153 m a pixel), its picture there stretched, as its
+        // finest tiles are: fewer pixels for the same view.
+        m.tiles[0].max_zoom = 10;
+        let (p, asked) = at(&mut m, 30.0, 0.0);
+        assert_eq!((p, asked.len()), ([green; 3], 1));
+        assert!(asked[0].contains("&WIDTH=256&HEIGHT=256&"), "{}", asked[0]);
+        // Zoomed out past its coarsest zoom: nothing asked, nothing drawn.
+        m.tiles[0].max_zoom = 19;
+        m.tiles[0].min_zoom = 15;
+        let (p, asked) = at(&mut m, 30.0, 0.0);
+        assert!(p[1] != green && asked.is_empty(), "{p:?} {asked:?}");
+        // A service drawing no picture larger than a tile: its tiles, after its picture failed.
+        let mut m = Map::new("Map");
+        m.graticule = false;
+        let mut t = TileLayer::new("WMS", TileKind::Raster, url.replace("one.test/merc/", "one.test/tiles-only/"));
+        t.single_image = true;
+        m.tiles.push(t);
+        let (p, asked) = at(&mut m, 30.0, 0.0);
+        assert_eq!(p, [green; 3], "drawn in tiles");
+        assert!(asked.iter().any(|u| u.contains("&WIDTH=512&HEIGHT=256&")), "its picture asked first: {asked:?}");
         // In a system of its own, on a map in it.
         let lv95 = System { epsg: 2056, name: "EPSG:2056".into(), lat_first: false };
         let wms = Warp { epsg: 2056, grid: Grid::Map { lat_first: false }, area: Some([5.9, 45.8, 10.5, 47.8]), systems: vec![lv95] }.address(

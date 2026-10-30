@@ -254,10 +254,11 @@ once a view instead of for every tile (#1162).
   quarter of a level) ask for nothing new; while the next picture loads, the last one stays in
   place.
 - It is asked for in the map's logical pixels, as tiles are, so the service's symbols keep their
-  size on a high-density screen; at most 4096 pixels a side (2048 for the rest of the session
-  once a larger picture of the layer fails), coarser for a view larger than that.
-- Nothing is asked for zoomed out past the layer's scale range or outside its bounds, as with
-  its tiles.
+  size on a high-density screen; at most 4096 pixels a side (2048 for five minutes after a larger
+  picture of the layer fails), coarser for a view larger than that. A picture the service fails
+  to draw leaves the layer drawn in tiles there.
+- Nothing is asked for zoomed out past the layer's scale range or outside its bounds, and closer
+  in than its finest zoom its picture there is stretched, as its tiles are.
 - It is drawn so on a flat map, north up or turned, in Web Mercator or in a
   [projection the service offers](#services-in-other-coordinate-systems). On the globe, a tilted
   map, a projection the service doesn't offer, or a Web Mercator view across the antimeridian
@@ -284,8 +285,9 @@ WMTS layer whose tile matrix set is in one, is listed and added like any other (
   asked for in the projected system it lists first, else in CRS:84, else in another
   longitude/latitude system.
 - **On a map in another projection** (**View › Projection**, `map.projection`) that the layer is
-  offered in, a WMS layer is asked for in that system, in tiles of its own 256 pixels a side, and
-  drawn as the service draws it: nothing is warped, so its lines and labels stay sharp. A WMTS
+  offered in, a WMS layer is asked for in that system, as
+  [one picture of the view](#one-picture-of-the-view-or-tiles) or, drawn as tiles, in tiles of its
+  own 256 pixels a side, and drawn as the service draws it: nothing is warped, so its lines and labels stay sharp. A WMTS
   layer is drawn so on a map in its tile matrix set's system. Change the map's projection and the
   layer follows: in Web Mercator again, it is asked for in Web Mercator (or warped), and in a
   projection the layer isn't offered in, it is drawn warped as before. A WMS layer is drawn so in
