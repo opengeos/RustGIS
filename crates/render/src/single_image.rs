@@ -103,18 +103,20 @@ fn export_in(base: &str, epsg: u16) -> Option<String> {
     if !(lower.ends_with("/export") || lower.ends_with("/exportimage")) {
         return None;
     }
-    let mut keys = 0;
+    // Each of the two once, both Web Mercator: the box's and the picture's system.
+    let (mut bbox, mut image, mut other) = (0, 0, false);
     let parts: Vec<String> = query
         .split('&')
         .map(|part| match part.split_once('=') {
-            Some((k, "3857" | "102100")) if k.eq_ignore_ascii_case("bboxSR") || k.eq_ignore_ascii_case("imageSR") => {
-                keys += 1;
+            Some((k, v)) if k.eq_ignore_ascii_case("bboxSR") || k.eq_ignore_ascii_case("imageSR") => {
+                *if k.eq_ignore_ascii_case("bboxSR") { &mut bbox } else { &mut image } += 1;
+                other |= !matches!(v, "3857" | "102100");
                 format!("{k}={epsg}")
             }
             _ => part.to_string(),
         })
         .collect();
-    (keys == 2).then(|| format!("{path}?{}", parts.join("&")))
+    (bbox == 1 && image == 1 && !other).then(|| format!("{path}?{}", parts.join("&")))
 }
 
 /// The picture to ask for: its area (west, south, east, north in the system) and size in
@@ -364,21 +366,24 @@ fn paint_warped(
         })
         .collect();
     let at_grid = |i: u32, j: u32| grid.get((j * (n + 1) + i) as usize).copied().flatten();
-    // Each cell's corners (top-left, top-right, bottom-left, bottom-right) and signed area.
+    // Each cell's corners (top-left, top-right, bottom-left, bottom-right) and its two
+    // triangles' signed areas.
     type P = (f32, f32);
-    let cells: Vec<(u32, u32, [P; 4], f32)> = (0..n)
+    let cells: Vec<(u32, u32, [P; 4], [f32; 2])> = (0..n)
         .flat_map(|j| (0..n).map(move |i| (i, j)))
         .filter_map(|(i, j)| {
             let c = [at_grid(i, j)?, at_grid(i + 1, j)?, at_grid(i, j + 1)?, at_grid(i + 1, j + 1)?];
             let cross = |a: P, b: P, o: P| (a.0 - o.0) * (b.1 - o.1) - (a.1 - o.1) * (b.0 - o.0);
-            Some((i, j, c, cross(c[1], c[2], c[0]) + cross(c[2], c[1], c[3])))
+            Some((i, j, c, [cross(c[1], c[2], c[0]), cross(c[2], c[1], c[3])]))
         })
         .collect();
-    // The cells' usual size and turn: one turned over, or many times the size, is across a fold.
-    let mut sizes: Vec<f32> = cells.iter().map(|c| c.3.abs()).collect();
+    // The cells' usual size and turn (most cells': a few huge ones across a wrap don't decide
+    // it): a triangle turned over, or a cell many times the size, is across a fold.
+    let mut sizes: Vec<f32> = cells.iter().map(|c| (c.3[0] + c.3[1]).abs()).collect();
     sizes.sort_by(f32::total_cmp);
     let usual = sizes.get(sizes.len() / 2).copied().unwrap_or(0.0);
-    let turn: f32 = cells.iter().map(|c| c.3).sum::<f32>().signum();
+    let positive = cells.iter().filter(|c| c.3[0] + c.3[1] > 0.0).count();
+    let turn = if positive * 2 >= cells.len() { 1.0 } else { -1.0 };
     let (cw, ch) = (iw / n as f32, ih / n as f32);
     // A triangle of the picture's pixels `s` drawn at the screen points `d`.
     let mut triangle = |s: [P; 3], d: [P; 3]| {
@@ -405,8 +410,8 @@ fn paint_warped(
         let paint = Paint { shader, anti_alias: false, blend_mode: blend, ..Paint::default() };
         pm.fill_path(&path, &paint, FillRule::Winding, Transform::identity(), None);
     };
-    for (i, j, [tl, tr, bl, br], area) in cells {
-        if area.signum() != turn || area.abs() > usual * 16.0 {
+    for (i, j, [tl, tr, bl, br], [a, b]) in cells {
+        if a.signum() != turn || b.signum() != turn || (a + b).abs() > usual * 16.0 {
             continue;
         }
         let (x0, y0) = (i as f32 * cw, j as f32 * ch);
@@ -587,6 +592,12 @@ mod tests {
             Warp::map_address(&r.base, &r.system, [1.0, 2.0, 3.0, 4.0], 800, 600),
             "https://s.example.org/arcgis/rest/services/x/MapServer/export?bbox=1,2,3,4&bboxSR=2056&imageSR=2056&size=800,600&format=png32&transparent=true&f=image"
         );
+        // Both systems named once each, both Web Mercator; else asked for as it is, and warped.
+        let x = "https://s.example.org/arcgis/rest/services/x/MapServer/export?bbox=1,2,3,4";
+        assert!(export_in(&format!("{x}&bboxSR=3857&imageSR=102100"), 2056).is_some());
+        assert_eq!(export_in(&format!("{x}&bboxSR=3857&bboxSR=3857"), 2056), None);
+        assert_eq!(export_in(&format!("{x}&bboxSR=3857&imageSR=4326"), 2056), None);
+        assert_eq!(export_in(&format!("{x}&bboxSR=3857&imageSR=3857&imageSR=3857"), 2056), None);
         // A template sized with `{width}` and `{height}`.
         t.url = "https://m.example.org/wms?BBOX={bbox-epsg-3857}&WIDTH={width}&HEIGHT={height}".into();
         let r = of(&t, 3857).unwrap();

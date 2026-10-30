@@ -264,8 +264,9 @@ once a view instead of for every tile (#1162).
   map service's export takes any: the service projects it); otherwise in one it does offer
   (Web Mercator, or the WMS layer's [own system](#services-in-other-coordinate-systems)), and
   warped into place piece by piece. On the globe, a tilted map, a projection without an EPSG
-  code (the presets), or a Web Mercator picture across or near the antimeridian (a little
-  larger than the view, it would cross it; tiles wrap), the layer is drawn in tiles. Exports
+  code (the presets), or a Web Mercator or longitude/latitude picture across or near the
+  antimeridian (a little larger than the view, it would cross it; tiles wrap), the layer is
+  drawn in tiles. Exports
   and layouts ask for their own picture.
 
 Right-click the layer in the Layers pane, **Draw as**, to switch to **Tiles** and back to
