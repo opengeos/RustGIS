@@ -101,10 +101,12 @@ impl<K: Copy + PartialEq> TiltSettle<K> {
             let (tx, rx) = std::sync::mpsc::channel();
             let ctx = ctx.clone();
             let spawned = std::thread::Builder::new().name("rustgis-map-frame".into()).spawn(move || {
-                // Without an answer (a panic) `take` finds the channel closed.
+                // Without an answer (a panic) `take` finds the channel closed: closed before the
+                // frame is woken, or the frame it wakes finds it still open, and none follows.
                 if let Ok(done) = std::panic::catch_unwind(work) {
                     let _ = tx.send(done);
                 }
+                drop(tx);
                 ctx.request_repaint();
             });
             match spawned {
@@ -196,5 +198,25 @@ mod tests {
         assert!(!s.busy(), "the same frame was tried again");
         s.start(&ctx, 2u8, map, view);
         assert!(s.busy());
+    }
+
+    /// The frame a worker's panic wakes finds the job over: the worker closes the channel before
+    /// it wakes the frame, so no wake-up is lost (the callback holds the worker meanwhile).
+    #[test]
+    fn the_frame_a_panic_wakes_finds_the_job_over() {
+        let ctx = egui::Context::default();
+        let (woken, wake) = std::sync::mpsc::channel::<()>();
+        let woken = std::sync::Mutex::new(woken);
+        ctx.set_request_repaint_callback(move |_| {
+            if let Ok(w) = woken.lock() {
+                let _ = w.send(());
+            }
+            std::thread::sleep(std::time::Duration::from_millis(200));
+        });
+        let mut s = TiltSettle::default();
+        s.start_with(&ctx, 1u8, || panic!("the renderer failed"));
+        assert!(wake.recv_timeout(std::time::Duration::from_secs(30)).is_ok(), "never woken");
+        assert!(s.take().is_none());
+        assert!(!s.busy(), "the woken frame found the job still running");
     }
 }
