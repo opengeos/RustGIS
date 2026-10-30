@@ -21,10 +21,11 @@ on:
         description: Seconds per target (1 to 2400)
         default: "600"
 
-# A manual run and the nightly one don't cancel each other. Only a pull request's run gives way to
-# a newer one: a nightly or manual run, once started, finishes and uploads the inputs it saved.
+# Only a pull request's run gives way to a newer one, and only to one for the same label (adding
+# another label starts a run here too). A nightly run finishes and uploads the inputs it saved; each
+# manual run has a group of its own, so one never waits for, replaces or cancels another.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.event.label.name }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
@@ -83,7 +84,8 @@ jobs:
       - name: Fuzz
         working-directory: fuzz
         run: |
-          case "$SECONDS_PER_TARGET" in ''|*[!0-9]*) echo "::error::seconds must be a whole number"; exit 1;; esac
+          # At most four digits, so the arithmetic below can't wrap; the checked number is what runs.
+          case "$SECONDS_PER_TARGET" in ''|*[!0-9]*|?????*) echo "::error::seconds must be a whole number from 1 to 2400"; exit 1;; esac
           # libFuzzer reads 0 as no limit; over 2400 s, a cold build and the run could outlast the job's
           # timeout, and its findings would be lost.
           n=$((10#$SECONDS_PER_TARGET))
@@ -92,7 +94,7 @@ jobs:
           # unreleased fix in a dependency, say) doesn't stop the rest of the target being explored.
           # Each failing input is saved in artifacts/<target>/.
           cargo fuzz run -O "$TARGET" -- -fork=1 -ignore_crashes=1 -ignore_ooms=1 -ignore_timeouts=1 \
-            -max_total_time="$SECONDS_PER_TARGET" -rss_limit_mb=2048 -timeout=10
+            -max_total_time="$n" -rss_limit_mb=2048 -timeout=10
       - name: Findings
         id: findings
         # libFuzzer can exit non-zero after an ignored finding: check for saved inputs either way.
