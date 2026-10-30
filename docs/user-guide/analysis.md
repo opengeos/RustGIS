@@ -33,7 +33,8 @@ deletes the selection, adds or calculates a field, and calculates geometry attri
   <figcaption>The attribute table, with a selection highlighted on the map and in the table.</figcaption>
 </figure>
 
-Select By Attributes and definition queries use SQL `WHERE` clauses:
+Select By Attributes and definition queries use SQL `WHERE` clauses, written in the
+[expression language](expressions.md):
 
 ```sql
 pop_est > 100000000 AND continent = 'Asia'

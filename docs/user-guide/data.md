@@ -86,10 +86,10 @@ Open a feature layer's table with ++ctrl+t++ (++cmd+t++ on macOS), **Home › Se
 or **Attribute Table** on a feature layer's **Data** tab (`table.open`). Rows and map selections stay in sync.
 Standalone tables open from their right-click menu; their cells are read only. See [The attribute table](analysis.md#the-attribute-table) for
 sorting, filtering, selection and the SQL `WHERE` clause syntax used by **Select By Attributes**
-and **Definition Query**. These clauses filter a layer; they are not DuckDB queries.
+and **Definition Query** (the full grammar is in [Expressions](expressions.md)). These clauses filter a layer; they are not DuckDB queries.
 
 For an editable feature layer, double-click a cell to change it. The table's toolbar also adds
-fields, calculates field expressions and opens **Calculate Geometry** (`edit.calculateGeometry`).
+fields, calculates field [expressions](expressions.md) and opens **Calculate Geometry** (`edit.calculateGeometry`).
 The geometry calculator fills a new double field or an existing numeric field with area,
 perimeter, length or point X/Y, for all or selected features. Point coordinates can be WGS 84
 degrees or a supported projected EPSG system's units. See [Editing](editing.md) for field
