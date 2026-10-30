@@ -282,7 +282,9 @@ WMS layer offered in any system with an EPSG code that RustGIS can transform (or
 WMTS layer whose tile matrix set is in one, is listed and added like any other (#769):
 
 - **On a Web Mercator map**, a layer the service offers in Web Mercator is asked for in it, as
-  before. Otherwise each of the map's tiles is made from what the service gives for its area in the
+  before. Otherwise a WMS layer drawn as [one picture of the view](#one-picture-of-the-view-or-tiles)
+  is asked for one picture in its own system, warped into place; drawn as tiles (and a WMTS
+  layer), each of the map's tiles is made from what the service gives for its area in the
   layer's own system, warped into place on your computer: one GetMap image, or the tiles of the
   WMTS matrix nearest the map's detail (a coarser one where that would take more than 16 tiles;
   of a set of more than 40 matrices, its 20 coarsest and 20 finest are kept). A WMS layer is

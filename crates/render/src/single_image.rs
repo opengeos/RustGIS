@@ -75,9 +75,10 @@ pub(crate) fn of(t: &TileLayer, epsg: u16) -> Option<Request> {
             .replace("{height}", "{nh}");
         // A map service's export in the map's own system: the service projects it.
         if epsg != 3857
-            && let Some(own) = export_in(&base, epsg)
+            && let Some(r) =
+                export_in(&base, epsg).and_then(|own| request(own, System { epsg, name: format!("EPSG:{epsg}"), lat_first: false }))
         {
-            return request(own, System { epsg, name: format!("EPSG:{epsg}"), lat_first: false });
+            return Some(r);
         }
         return request(base, mercator());
     }
@@ -89,12 +90,9 @@ pub(crate) fn of(t: &TileLayer, epsg: u16) -> Option<Request> {
     }
     // Else in the one it is drawn in: Web Mercator for one drawn in it as it comes (a WMS that
     // offers other systems too, marked `crs=3857`, whose other systems are listed, not that one).
-    let system = match w.system(epsg) {
-        Some(s) => s.clone(),
-        None if w.epsg == 3857 => mercator(),
-        None => w.system(w.epsg)?.clone(),
-    };
-    request(Warp::map_template(base), system)
+    let base = Warp::map_template(base);
+    let own = if w.epsg == 3857 { Some(mercator()) } else { w.system(w.epsg).cloned() };
+    w.system(epsg).cloned().and_then(|s| request(base.clone(), s)).or_else(|| request(base, own?))
 }
 
 /// A map service export's address (`…/export` or `…/exportImage`, its box and picture in Web
@@ -166,15 +164,24 @@ fn kept() -> std::sync::MutexGuard<'static, Kept> {
 /// Half the width of the Web Mercator world, metres: what a service draws in it.
 const HALF_WORLD: f64 = std::f64::consts::PI * rustgis_geom::MERCATOR_R;
 
-/// A Web Mercator picture kept to the world: `None` where it reaches past the antimeridian (a
+/// The world a system's pictures are kept to (west, south, east, north): Web Mercator's square,
+/// longitude and latitude's; `None` for a projected system (its service says where it draws).
+fn world_of(epsg: u16) -> Option<[f64; 4]> {
+    if epsg == 3857 {
+        return Some([-HALF_WORLD, -HALF_WORLD, HALF_WORLD, HALF_WORLD]);
+    }
+    rustgis_data::raster::Crs::from_epsg(u32::from(epsg)).filter(|c| c.is_geographic()).map(|_| [-180.0, -90.0, 180.0, 90.0])
+}
+
+/// A picture kept to its system's `world`: `None` where it reaches past the antimeridian (a
 /// service draws nothing there: the layer is drawn in tiles, which wrap); past the poles' edge,
 /// cut off there, with as many fewer pixels.
-fn in_world(at: [f64; 4], w: u32, h: u32) -> Option<Option<([f64; 4], u32, u32)>> {
-    if at[0] < -HALF_WORLD || at[2] > HALF_WORLD {
+fn in_world(at: [f64; 4], w: u32, h: u32, world: [f64; 4]) -> Option<Option<([f64; 4], u32, u32)>> {
+    if at[0] < world[0] || at[2] > world[2] {
         return None;
     }
     let r = (at[3] - at[1]) / f64::from(h.max(1));
-    let (s, n) = (at[1].max(-HALF_WORLD), at[3].min(HALF_WORLD));
+    let (s, n) = (at[1].max(world[1]), at[3].min(world[3]));
     let rows = ((n - s) / r).round();
     if rows.is_nan() || rows < 1.0 {
         return Some(None);
@@ -224,7 +231,9 @@ pub(crate) fn draw(pm: &mut Pixmap, req: &Request, t: &TileLayer, view: &View, f
     let place = |c: Coord| -> Option<(f32, f32)> {
         let m = match &req.transformer {
             None => c,
-            Some(tr) => tr.to_lonlat(c).and_then(|ll| flat.forward(ll))?,
+            // Warped, a point the projection folds or wraps isn't placed (a cell across it would
+            // be smeared over the map).
+            Some(tr) => tr.to_lonlat(c).and_then(|ll| if req.warp { flat.forward_checked(ll) } else { flat.forward(ll) })?,
         };
         let (x, y) = cam.to_screen(m, w, h);
         Some(((x * k) as f32, (y * k) as f32))
@@ -277,12 +286,12 @@ pub(crate) fn draw(pm: &mut Pixmap, req: &Request, t: &TileLayer, view: &View, f
     for _ in 0..2 {
         let small = kept().small.get(&key).is_some_and(|at| at.elapsed() < SMALL_FOR);
         let Some((at, pw, ph)) = picture(area, res, if small { SMALL_SIDE } else { MAX_SIDE }) else { return nothing };
-        let (at, pw, ph) = match req.system.epsg {
-            3857 => match in_world(at, pw, ph)? {
+        let (at, pw, ph) = match world_of(req.system.epsg) {
+            Some(world) => match in_world(at, pw, ph, world)? {
                 Some(p) => p,
                 None => return nothing,
             },
-            _ => (at, pw, ph),
+            None => (at, pw, ph),
         };
         let url = Warp::map_address(&req.base, &req.system, at, pw, ph);
         match cache::get(&url, Want::Image) {
@@ -328,8 +337,10 @@ pub(crate) fn draw(pm: &mut Pixmap, req: &Request, t: &TileLayer, view: &View, f
 const WARP_CELLS: u32 = 16;
 
 /// Draws `img`, covering `at` (west, south, east, north in its system), over `pm` through `place`
-/// (a point of its system to the view's pixels) cell by cell: each cell an affine piece fitted to
-/// its corners, the cells meeting without seams.
+/// (a point of its system to the view's pixels) cell by cell, each cell two triangles placed by
+/// their corners: the picture follows the bend between the systems, continuous across the cells.
+/// A cell `place` turns over or stretches far past the others (across a projection's fold or
+/// wrap) isn't drawn, rather than smeared over the map.
 fn paint_warped(
     pm: &mut Pixmap,
     img: &Pixmap,
@@ -345,37 +356,63 @@ fn paint_warped(
     }
     let n = WARP_CELLS;
     // The grid's points on screen, row by row from the top.
-    let point = |i: u32, j: u32| {
-        let (fx, fy) = (f64::from(i) / f64::from(n), f64::from(j) / f64::from(n));
-        place(Coord::new(at[0] + (at[2] - at[0]) * fx, at[3] - (at[3] - at[1]) * fy))
-    };
-    let grid: Vec<Option<(f32, f32)>> = (0..=n).flat_map(|j| (0..=n).map(move |i| (i, j))).map(|(i, j)| point(i, j)).collect();
+    let grid: Vec<Option<(f32, f32)>> = (0..=n)
+        .flat_map(|j| (0..=n).map(move |i| (i, j)))
+        .map(|(i, j)| {
+            let (fx, fy) = (f64::from(i) / f64::from(n), f64::from(j) / f64::from(n));
+            place(Coord::new(at[0] + (at[2] - at[0]) * fx, at[3] - (at[3] - at[1]) * fy))
+        })
+        .collect();
     let at_grid = |i: u32, j: u32| grid.get((j * (n + 1) + i) as usize).copied().flatten();
+    // Each cell's corners (top-left, top-right, bottom-left, bottom-right) and signed area.
+    type P = (f32, f32);
+    let cells: Vec<(u32, u32, [P; 4], f32)> = (0..n)
+        .flat_map(|j| (0..n).map(move |i| (i, j)))
+        .filter_map(|(i, j)| {
+            let c = [at_grid(i, j)?, at_grid(i + 1, j)?, at_grid(i, j + 1)?, at_grid(i + 1, j + 1)?];
+            let cross = |a: P, b: P, o: P| (a.0 - o.0) * (b.1 - o.1) - (a.1 - o.1) * (b.0 - o.0);
+            Some((i, j, c, cross(c[1], c[2], c[0]) + cross(c[2], c[1], c[3])))
+        })
+        .collect();
+    // The cells' usual size and turn: one turned over, or many times the size, is across a fold.
+    let mut sizes: Vec<f32> = cells.iter().map(|c| c.3.abs()).collect();
+    sizes.sort_by(f32::total_cmp);
+    let usual = sizes.get(sizes.len() / 2).copied().unwrap_or(0.0);
+    let turn: f32 = cells.iter().map(|c| c.3).sum::<f32>().signum();
     let (cw, ch) = (iw / n as f32, ih / n as f32);
-    for j in 0..n {
-        for i in 0..n {
-            let (Some(tl), Some(tr), Some(bl), Some(br)) = (at_grid(i, j), at_grid(i + 1, j), at_grid(i, j + 1), at_grid(i + 1, j + 1))
-            else {
-                continue;
-            };
-            // The picture's pixels to the screen, fitted to the cell's top-left, top-right and
-            // bottom-left corners.
-            let (sx, sy) = (i as f32 * cw, j as f32 * ch);
-            let (a, b) = ((tr.0 - tl.0) / cw, (tr.1 - tl.1) / cw);
-            let (c, d) = ((bl.0 - tl.0) / ch, (bl.1 - tl.1) / ch);
-            let transform = Transform::from_row(a, b, c, d, tl.0 - a * sx - c * sy, tl.1 - b * sx - d * sy);
-            let mut path = PathBuilder::new();
-            path.move_to(tl.0, tl.1);
-            path.line_to(tr.0, tr.1);
-            path.line_to(br.0, br.1);
-            path.line_to(bl.0, bl.1);
-            path.close();
-            let Some(path) = path.finish() else { continue };
-            let shader = Pattern::new(img.as_ref(), SpreadMode::Pad, FilterQuality::Bilinear, opacity, transform);
-            // Without anti-aliasing, neighbouring cells meet without a seam.
-            let paint = Paint { shader, anti_alias: false, blend_mode: blend, ..Paint::default() };
-            pm.fill_path(&path, &paint, FillRule::Winding, Transform::identity(), None);
+    // A triangle of the picture's pixels `s` drawn at the screen points `d`.
+    let mut triangle = |s: [P; 3], d: [P; 3]| {
+        // The affine map taking s to d: its columns from two edges.
+        let (u, v) = ((s[1].0 - s[0].0, s[1].1 - s[0].1), (s[2].0 - s[0].0, s[2].1 - s[0].1));
+        let det = u.0 * v.1 - u.1 * v.0;
+        if det.abs() < f32::EPSILON {
+            return;
         }
+        let (p, q) = ((d[1].0 - d[0].0, d[1].1 - d[0].1), (d[2].0 - d[0].0, d[2].1 - d[0].1));
+        let a = (p.0 * v.1 - q.0 * u.1) / det;
+        let c = (q.0 * u.0 - p.0 * v.0) / det;
+        let b = (p.1 * v.1 - q.1 * u.1) / det;
+        let e = (q.1 * u.0 - p.1 * v.0) / det;
+        let transform = Transform::from_row(a, b, c, e, d[0].0 - a * s[0].0 - c * s[0].1, d[0].1 - b * s[0].0 - e * s[0].1);
+        let mut path = PathBuilder::new();
+        path.move_to(d[0].0, d[0].1);
+        path.line_to(d[1].0, d[1].1);
+        path.line_to(d[2].0, d[2].1);
+        path.close();
+        let Some(path) = path.finish() else { return };
+        let shader = Pattern::new(img.as_ref(), SpreadMode::Pad, FilterQuality::Bilinear, opacity, transform);
+        // Without anti-aliasing, neighbouring triangles meet without a seam.
+        let paint = Paint { shader, anti_alias: false, blend_mode: blend, ..Paint::default() };
+        pm.fill_path(&path, &paint, FillRule::Winding, Transform::identity(), None);
+    };
+    for (i, j, [tl, tr, bl, br], area) in cells {
+        if area.signum() != turn || area.abs() > usual * 16.0 {
+            continue;
+        }
+        let (x0, y0) = (i as f32 * cw, j as f32 * ch);
+        let (x1, y1) = (x0 + cw, y0 + ch);
+        triangle([(x0, y0), (x1, y0), (x0, y1)], [tl, tr, bl]);
+        triangle([(x1, y0), (x1, y1), (x0, y1)], [tr, br, bl]);
     }
 }
 
@@ -403,13 +440,40 @@ mod tests {
         crate::native_tiles::paint_blended(&mut b, &img, at, at, 1.0, tiny_skia::BlendMode::SourceOver, &shift);
         let differ = a.pixels().iter().zip(b.pixels()).filter(|(p, q)| p != q).count();
         assert!(differ < 64, "{differ} pixels differ from one quad");
-        // Bent: x pushed right the more the further up.
-        let bend = |c: Coord| Some(((c.x + 10.0 + c.y * c.y / 128.0) as f32, (74.0 - c.y) as f32));
-        let mut pm = Pixmap::new(120, 100).unwrap();
-        paint_warped(&mut pm, &img, at, 1.0, tiny_skia::BlendMode::SourceOver, &bend);
-        let (x, y) = bend(Coord::new(32.0, 32.0)).unwrap();
-        let p = pm.pixel(x as u32, y as u32).unwrap();
-        assert!(p.blue() > 150 && p.red() < 100, "the middle at {x},{y}: {p:?}");
+        // Bent with a cross term (x pushed right by x × y), so a cell's fourth corner is off any
+        // affine piece fitted to the other three (by 16 × 16 / 64 = 4 pixels): each drawn pixel
+        // shows the picture's column the bend's inverse says it should, within a pixel. (The
+        // picture's red is its column.)
+        let mut ramp = Pixmap::new(256, 256).unwrap();
+        for (k, p) in ramp.pixels_mut().iter_mut().enumerate() {
+            *p = tiny_skia::ColorU8::from_rgba((k % 256) as u8, 0, 0, 255).premultiply();
+        }
+        let bend = |c: Coord| Some(((c.x + 10.0 + c.x * c.y / 64.0) as f32, (266.0 - c.y) as f32));
+        let mut pm = Pixmap::new(1300, 280).unwrap();
+        paint_warped(&mut pm, &ramp, [0.0, 0.0, 256.0, 256.0], 1.0, tiny_skia::BlendMode::SourceOver, &bend);
+        let (mut worst, mut seen) = (0.0f64, 0);
+        for py in 0..pm.height() {
+            for px in 0..pm.width() {
+                let y = 266.0 - (f64::from(py) + 0.5);
+                let x = (f64::from(px) + 0.5 - 10.0) / (1.0 + y / 64.0);
+                // Away from the picture's edges, where its own pixels are clamped.
+                if !(2.0..254.0).contains(&x) || !(2.0..254.0).contains(&y) {
+                    continue;
+                }
+                let red = f64::from(pm.pixel(px, py).unwrap().red());
+                worst = worst.max((red - (x - 0.5)).abs());
+                seen += 1;
+            }
+        }
+        assert!(seen > 100_000, "{seen} pixels drawn");
+        assert!(worst < 1.5, "a pixel {worst} columns off the bend");
+        // Across a wrap (the right of the picture placed a thousand pixels on): the cells
+        // straddling it aren't drawn, so nothing is smeared between the two parts.
+        let wrap = |c: Coord| Some(((if c.x > 200.0 { c.x + 1000.0 } else { c.x }) as f32, (256.0 - c.y) as f32));
+        let mut pm = Pixmap::new(1400, 256).unwrap();
+        paint_warped(&mut pm, &ramp, [0.0, 0.0, 256.0, 256.0], 1.0, tiny_skia::BlendMode::SourceOver, &wrap);
+        assert!((0..256).all(|y| pm.pixel(600, y).unwrap().alpha() == 0), "smeared across the wrap");
+        assert!(pm.pixel(100, 128).unwrap().alpha() == 255 && pm.pixel(1240, 128).unwrap().alpha() == 255);
         // Nothing drawn where `place` can't put the picture.
         let mut none = Pixmap::new(10, 10).unwrap();
         paint_warped(&mut none, &img, at, 1.0, tiny_skia::BlendMode::SourceOver, &|_| None);
@@ -475,15 +539,23 @@ mod tests {
     fn a_web_mercator_picture_is_kept_to_the_world() {
         let h = HALF_WORLD;
         // Inside: as it is.
-        assert_eq!(in_world([-10.0, -20.0, 10.0, 20.0], 100, 200), Some(Some(([-10.0, -20.0, 10.0, 20.0], 100, 200))));
+        let world = [-h, -h, h, h];
+        assert_eq!(world_of(3857), Some(world));
+        assert_eq!(world_of(4326), Some([-180.0, -90.0, 180.0, 90.0]));
+        assert_eq!(world_of(2056), None);
+        // Longitude and latitude: past the antimeridian, tiles; past a pole, cut there.
+        let geo = [-180.0, -90.0, 180.0, 90.0];
+        assert_eq!(in_world([170.0, 0.0, 190.0, 10.0], 100, 100, geo), None);
+        assert_eq!(in_world([0.0, 80.0, 10.0, 100.0], 100, 200, geo).unwrap().unwrap().0, [0.0, 80.0, 10.0, 90.0]);
+        assert_eq!(in_world([-10.0, -20.0, 10.0, 20.0], 100, 200, world), Some(Some(([-10.0, -20.0, 10.0, 20.0], 100, 200))));
         // Past the antimeridian (a Pacific view): tiles, which wrap.
-        assert_eq!(in_world([h - 10.0, 0.0, h + 10.0, 20.0], 100, 100), None);
-        assert_eq!(in_world([-h - 1.0, 0.0, 0.0, 20.0], 100, 100), None);
+        assert_eq!(in_world([h - 10.0, 0.0, h + 10.0, 20.0], 100, 100, world), None);
+        assert_eq!(in_world([-h - 1.0, 0.0, 0.0, 20.0], 100, 100, world), None);
         // Past the top of the world: cut there, with as many fewer rows.
-        let (at, w, rows) = in_world([0.0, h - 50.0, 100.0, h + 150.0], 100, 200).unwrap().unwrap();
+        let (at, w, rows) = in_world([0.0, h - 50.0, 100.0, h + 150.0], 100, 200, world).unwrap().unwrap();
         assert_eq!((at, w, rows), ([0.0, h - 50.0, 100.0, h], 100, 50));
         // Wholly past it: nothing.
-        assert_eq!(in_world([0.0, h + 10.0, 100.0, h + 20.0], 100, 10), Some(None));
+        assert_eq!(in_world([0.0, h + 10.0, 100.0, h + 20.0], 100, 10, world), Some(None));
     }
 
     #[test]
