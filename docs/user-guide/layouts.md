@@ -153,7 +153,7 @@ Layouts open as tabs next to the maps; while one is open, its groups lead the Pu
   width, in the order the map draws its layers (as the Layers pane lists them); one whose picture
   can't be loaded (or is wider or taller than 2048 pixels) is left out. Exporting waits up to
   half a minute for the pictures, as it waits for the map's tiles; in the browser the page is
-  drawn with those that have arrived. Its **Layers** section
+  drawn with those that have arrived, and again as the others arrive. Its **Layers** section
   has a checkbox for each layer of the frame's map (and each WMS or WMTS layer with a legend): untick one to leave it out of the legend
   while the map still draws it (a mask, a highlight, a basemap-like layer). Scripts give the same
   with `"exclude": ["Graticule"]` on `layout.addElement` or `layout.update` (`[]` lists every

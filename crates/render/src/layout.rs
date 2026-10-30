@@ -1199,6 +1199,21 @@ pub fn tile_legends_pending(map: &Map, scale: f64, exclude: &[String]) -> bool {
     pending
 }
 
+/// Whether a legend on the page `layout` lists a WMS or WMTS layer whose legend picture is still
+/// on its way, at its frame's scale: in the browser, which doesn't wait for them, the page is
+/// drawn again once it lands.
+pub fn legends_pending(layout: &Layout, maps: &[Map]) -> bool {
+    layout.elements.iter().filter(|e| e.visible).any(|e| {
+        let ElementKind::Legend { frame, exclude, .. } = &e.kind else { return false };
+        let Some(ElementKind::MapFrame { map, center, scale, bearing, pitch, .. }) = layout.element(*frame).map(|f| &f.kind) else {
+            return false;
+        };
+        let Some(m) = maps.iter().find(|m| m.name.eq_ignore_ascii_case(map)) else { return false };
+        let cam = frame_camera(m, *center, *scale, *bearing, *pitch);
+        tile_legends_pending(m, m.ground_res_at(&cam) / rustgis_geom::PIXEL_M, exclude)
+    })
+}
+
 /// Waits (natively, up to half a minute) for the legend pictures a legend of `map` at 1:`scale`
 /// shows, as a frame waits for its tiles: a page needs them all. Only for those: not for the
 /// cache's other fetches, nor for a layer the legend leaves out (`exclude`).
@@ -1873,8 +1888,26 @@ mod tests {
             })
             .collect();
         assert_eq!(names, ["Walls", "Floors"]);
+        // Among the map's layers where the map draws them: a web layer placed over a feature
+        // layer is listed just above it, under the feature layers above.
+        let lower = map.add_dataset(rustgis_data::Dataset::new("Lower", GeometryType::Point, vec![]));
+        map.add_dataset(rustgis_data::Dataset::new("Upper", GeometryType::Point, vec![]));
+        map.tiles[1].over = Some(lower);
+        let listed: Vec<&str> = legend_rows(&map, None, &opts)
+            .iter()
+            .filter_map(|r| match r {
+                LegendRow::Head(n) => Some(*n),
+                LegendRow::Plain(l) => Some(l.name.as_str()),
+                _ => None,
+            })
+            .collect();
+        let feature_order: Vec<&str> = map.layers.iter().map(|l| l.name.as_str()).collect();
+        let expected: Vec<&str> =
+            feature_order.iter().flat_map(|n| if *n == "Lower" { vec!["Floors", "Lower"] } else { vec![*n] }).chain(["Walls"]).collect();
+        assert_eq!(listed, expected, "layers top first: {feature_order:?}");
         // A heading with no room for any of its picture under it isn't drawn: a legend one row
-        // tall stays blank.
+        // tall stays blank (the map's layers set aside, whose rows would fit).
+        map.layers.clear();
         let mut pm = Pixmap::new(300, 15).unwrap();
         pm.fill(tiny_skia::Color::WHITE);
         legend(&mut pm, Rect::from_xywh(0.0, 0.0, 300.0, LEGEND_ROW).unwrap(), &map, "", None, opts, 1.0);
