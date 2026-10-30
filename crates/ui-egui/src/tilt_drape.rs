@@ -165,7 +165,9 @@ impl TiltDrape {
         let (tx, rx) = std::sync::mpsc::channel();
         let ctx = ctx.clone();
         let work = std::panic::AssertUnwindSafe(work);
+        let diagnostics = rustgis_engine::data::diagnostics::Capture::current();
         let spawned = std::thread::Builder::new().name("rustgis-tilt-drape".into()).spawn(move || {
+            let _diagnostics = diagnostics.enter();
             // Without an answer (a panic) `take` finds the channel closed.
             if let Ok(done) = std::panic::catch_unwind(work) {
                 let _ = tx.send(done);

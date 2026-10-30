@@ -10129,7 +10129,6 @@ fn kml_ground_overlays_become_rasters() {
     assert_eq!(r["layers"].as_array().map(Vec::len), Some(2), "{r}");
     let overlay = s.map().layer_by_name("Red").unwrap();
     assert!(overlay.raster.as_ref().is_some_and(|r| r.data.is_some()));
-    assert!(s.notices.iter().any(|n| n.text.contains("1 ground overlays without a picture or a box")));
     // The project keeps the picture.
     let text = serde_json::to_string(&s.project).unwrap();
     let mut t = Session::new(Project::default());
@@ -10140,14 +10139,18 @@ fn kml_ground_overlays_become_rasters() {
     std::fs::create_dir_all(&dir).unwrap();
     let only = r#"<kml><GroundOverlay><name>Far</name><Icon><href>../secret.png</href></Icon><LatLonBox><north>1</north><south>0</south><east>1</east><west>0</west></LatLonBox></GroundOverlay>
 <GroundOverlay><name>Web</name><Icon><href>https://example.com/x.png</href></Icon><LatLonBox><north>1</north><south>0</south><east>1</east><west>0</west></LatLonBox></GroundOverlay>
-<GroundOverlay><name>Here</name><Icon><href>red.png</href></Icon><LatLonBox><north>1</north><south>0</south><east>1</east><west>0</west></LatLonBox></GroundOverlay></kml>"#;
+<GroundOverlay><name>Here</name><Icon><href>red.png</href></Icon><LatLonBox><north>1</north><south>0</south><east>1</east><west>0</west></LatLonBox></GroundOverlay>
+<GroundOverlay><name>Empty</name></GroundOverlay></kml>"#;
     std::fs::write(dir.join("o.kml"), only).unwrap();
     std::fs::write(dir.join("red.png"), red.encode_png().unwrap()).unwrap();
     let mut u = Session::new(Project::default());
     u.run("layer.addData", &json!({"path": dir.join("o.kml").display().to_string()})).unwrap();
     assert!(u.map().layer_by_name("Here").is_some());
     assert!(u.map().layer_by_name("Far").is_none() && u.map().layer_by_name("Web").is_none());
-    assert!(u.notices.iter().any(|n| n.text.contains("Far (its picture ../secret.png isn't in the file or beside it)")));
+    // A path containing a credential word is still useful failure context, not a secret field.
+    // Match the href itself so an absolute Windows temp prefix cannot hide the regression.
+    assert!(u.notices.iter().any(|notice| notice.text.contains("../secret.png")));
+    assert!(u.notices.iter().any(|notice| notice.text.contains("1 ground overlays without a picture or a box")));
     let _ = std::fs::remove_dir_all(dir);
 }
 
@@ -10232,6 +10235,152 @@ fn notices_since_survives_the_cap() {
     s.notify("last", false);
     assert_eq!(s.notices_since(mark).iter().map(|n| n.text.as_str()).collect::<Vec<_>>(), ["last"]);
     assert_eq!(s.notices_since(0).len(), 200);
+}
+
+#[test]
+fn diagnostics_capture_notices_without_an_open_pane_or_project_persistence() {
+    use rustgis_data::diagnostics::{Filter, MAX_MESSAGE_BYTES, Severity};
+    let mut s = Session::new(Project::default());
+    let mark = s.notice_mark();
+    s.notify("diagnostics-session-only information", false);
+    s.warn("diagnostics-session-only warning");
+    s.notify("diagnostics-session-only error Authorization: Bearer never-retain-this", true);
+    let notices = s.notices_since(mark);
+    assert_eq!(notices.len(), 3);
+    assert!(!notices[0].error && !notices[1].error && notices[2].error);
+    assert!(!notices[2].text.contains("never-retain-this"));
+    let records: Vec<_> = s.diagnostics.records().into_iter().filter(|r| r.message.starts_with("diagnostics-session-only")).collect();
+    assert_eq!(records.iter().map(|r| r.severity).collect::<Vec<_>>(), [Severity::Info, Severity::Warning, Severity::Error]);
+    assert!(records.iter().all(|r| r.source == "Application" && r.timestamp_ms > 0));
+    assert!(!s.diagnostics.report(Filter::All).contains("never-retain-this"));
+    let saved = serde_json::to_string(&s.project).unwrap();
+    assert!(!saved.contains("diagnostics-session-only"));
+    s.notify("界".repeat(3000), false);
+    assert!(s.notices.last().unwrap().text.len() <= MAX_MESSAGE_BYTES);
+    s.run("project.new", &json!({})).unwrap();
+    let records = s.diagnostics.records();
+    assert!(records.iter().any(|r| r.message == "diagnostics-session-only information"));
+    assert!(records.iter().any(|r| r.message == "diagnostics-session-only warning"));
+    // A separate session restoring the saved project must not inherit troubleshooting history.
+    let reopened = Session::new(serde_json::from_str(&saved).unwrap());
+    assert!(!reopened.diagnostics.records().iter().any(|r| r.message.starts_with("diagnostics-session-only")));
+}
+
+#[test]
+fn diagnostics_keep_failed_command_context_without_changing_notice_rollback() {
+    use rustgis_data::diagnostics::Severity;
+    let mut s = Session::new(Project::default());
+    let before = s.project.name.clone();
+    let mark = s.notice_mark();
+    let result = s.guarded("Diagnostics rollback", true, |s| {
+        s.project.name = "not committed".to_string();
+        s.notify("diagnostics-rollback information", false);
+        s.warn("diagnostics-rollback warning");
+        s.notify("diagnostics-rollback error", true);
+        Err("diagnostics-rollback failed".to_string())
+    });
+    assert!(result.is_err());
+    assert_eq!(s.project.name, before);
+    assert!(s.notices_since(mark).iter().all(|n| n.error));
+    let records = s.diagnostics.records();
+    for text in
+        ["diagnostics-rollback information", "diagnostics-rollback warning", "diagnostics-rollback error", "diagnostics-rollback failed"]
+    {
+        assert!(records.iter().any(|r| r.message == text), "missing {text}");
+    }
+    // Registered command ids, not command parameters, identify the source.
+    assert!(s.run("layer.rename", &json!({"layer": "diagnostics-missing-layer", "name": "never-copy-parameters"})).is_err());
+    assert!(s.diagnostics.records().iter().any(|r| r.source == "layer.rename" && r.severity == Severity::Error));
+    s.notify("diagnostics-after-command", false);
+    assert!(s.diagnostics.records().iter().any(|r| r.message == "diagnostics-after-command" && r.source == "Application"));
+    assert!(!s.diagnostics.report(rustgis_data::diagnostics::Filter::All).contains("never-copy-parameters"));
+
+    // A panic caught inside the command must still restore Application attribution afterward.
+    fn panic_run(_: &mut Session, _: &Value) -> crate::CmdResult {
+        panic!("diagnostics source restore");
+    }
+    let command = crate::CommandSpec {
+        id: "diagnostics.testSourceRestore",
+        label: "Diagnostics source restore",
+        mutates: false,
+        run: panic_run,
+        ..*s.registry.get("map.zoomIn").unwrap()
+    };
+    s.registry.commands.push(command);
+    assert!(s.run(command.id, &Value::Null).is_err());
+    s.notify("diagnostics-after-panic", false);
+    assert!(s.diagnostics.records().iter().any(|r| r.message == "diagnostics-after-panic" && r.source == "Application"));
+}
+
+#[test]
+fn diagnostics_survive_project_replacement_rolled_back_within_a_command() {
+    let mut s = Session::new(Project::default());
+    let before = s.project.name.clone();
+    let result = s.guarded("Diagnostics replacement rollback", true, |s| {
+        s.run("project.new", &json!({"name": "temporary replacement"}))?;
+        s.notify("diagnostics-replacement context", false);
+        Err("diagnostics-replacement failed".to_string())
+    });
+    assert!(result.is_err());
+    assert_eq!(s.project.name, before);
+    assert!(s.diagnostics.records().iter().any(|r| r.message == "diagnostics-replacement context"));
+    assert!(s.diagnostics.records().iter().any(|r| r.message == "diagnostics-replacement failed"));
+}
+
+#[test]
+fn diagnostics_network_requests_belong_only_to_the_command_session() {
+    use rustgis_data::diagnostics::{Capture, Network, NetworkKind};
+
+    fn failure(message: &str) {
+        Capture::current().network_failure(
+            "Network",
+            message,
+            "",
+            Network {
+                url: "https://session-owned.example.org/request".to_string(),
+                method: "GET".to_string(),
+                status: Some(503),
+                duration_ms: Some(1),
+                kind: NetworkKind::Http,
+            },
+        );
+    }
+
+    fn request(_: &mut Session, params: &Value) -> crate::CmdResult {
+        let message = params.as_str().unwrap();
+        failure(message);
+        match message {
+            "b error" => Err("command refused".to_string()),
+            "b panic" => panic!("command panicked"),
+            _ => Ok(Value::Null),
+        }
+    }
+
+    let mut a = Session::new(Project::default());
+    let mut b = Session::new(Project::default());
+    let command = crate::CommandSpec {
+        id: "diagnostics.testRequest",
+        label: "Diagnostics request",
+        mutates: false,
+        run: request,
+        ..*a.registry.get("map.zoomIn").unwrap()
+    };
+    a.registry.commands.push(command);
+    b.registry.commands.push(command);
+    failure("unowned before command");
+    a.run(command.id, &json!("a command")).unwrap();
+    {
+        let _a = a.diagnostics.enter();
+        b.run(command.id, &json!("b command")).unwrap();
+        assert!(b.run(command.id, &json!("b error")).is_err());
+        assert!(b.run(command.id, &json!("b panic")).is_err());
+        // Every return path, including a caught command panic, restores A's enclosing scope.
+        failure("a restored");
+    }
+    failure("unowned after command");
+    let messages = |s: &Session| s.diagnostics.records().into_iter().filter(|r| r.network.is_some()).map(|r| r.message).collect::<Vec<_>>();
+    assert_eq!(messages(&a), ["a command", "a restored"]);
+    assert_eq!(messages(&b), ["b command", "b error", "b panic"]);
 }
 
 /// The web app's `?blank&projection=EPSG:3010` (discussion #81): an empty project starts in a

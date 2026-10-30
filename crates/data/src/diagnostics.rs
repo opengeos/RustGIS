@@ -1,0 +1,696 @@
+//! Session-local troubleshooting records. Raw credentials and network bodies never belong here.
+
+use std::cell::RefCell;
+use std::collections::VecDeque;
+use std::fmt::Write as _;
+use std::marker::PhantomData;
+use std::rc::Rc;
+use std::sync::{Arc, Mutex, MutexGuard, Weak};
+
+pub const MAX_RECORDS: usize = 500;
+pub const MAX_SOURCE_BYTES: usize = 256;
+pub const MAX_MESSAGE_BYTES: usize = 2048;
+pub const MAX_DETAILS_BYTES: usize = 8192;
+pub const MAX_URL_BYTES: usize = 2048;
+// Reject, rather than clip, oversized input: a clipped credential key might become harmless-looking.
+const MAX_INPUT_BYTES: usize = 16 * 1024;
+const REDACTED: &str = "[REDACTED]";
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Severity {
+    Error,
+    Warning,
+    Info,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Filter {
+    #[default]
+    All,
+    Errors,
+    Warnings,
+    Info,
+    Network,
+}
+
+impl Filter {
+    pub fn matches(self, record: &Record) -> bool {
+        match self {
+            Self::All => true,
+            Self::Errors => record.severity == Severity::Error,
+            Self::Warnings => record.severity == Severity::Warning,
+            Self::Info => record.severity == Severity::Info,
+            Self::Network => record.network.is_some(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NetworkKind {
+    Http,
+    Connection,
+    Timeout,
+    Other,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Network {
+    pub url: String,
+    pub method: String,
+    pub status: Option<u16>,
+    pub duration_ms: Option<u64>,
+    pub kind: NetworkKind,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Record {
+    pub id: u64,
+    pub timestamp_ms: u64,
+    pub severity: Severity,
+    pub source: String,
+    pub message: String,
+    pub details: String,
+    pub network: Option<Network>,
+}
+
+#[derive(Default)]
+struct State {
+    next_id: u64,
+    generation: u64,
+    records: VecDeque<Record>,
+}
+
+static CLOCK: Mutex<Option<fn() -> u64>> = Mutex::new(None);
+
+fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// Installs the application's portable UTC clock (the engine uses `web_time` on every target).
+pub fn set_clock(clock: fn() -> u64) {
+    *lock(&CLOCK) = Some(clock);
+}
+
+fn timestamp_ms() -> u64 {
+    let clock = *lock(&CLOCK);
+    if let Some(clock) = clock {
+        return clock();
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
+    }
+    // Applications install a browser-compatible clock before any requests are started.
+    #[cfg(target_arch = "wasm32")]
+    {
+        0
+    }
+}
+
+thread_local! {
+    static CURRENT_CAPTURE: RefCell<Capture> = RefCell::new(Capture::default());
+}
+
+/// Request ownership, captured at dispatch without keeping a session or its records alive.
+/// An empty capture deliberately omits failures rather than delivering to another session.
+#[derive(Clone, Default)]
+pub struct Capture(Weak<Mutex<State>>);
+
+/// Restores the previous thread-local owner on return or unwind.
+/// Keep this guard on the entering thread and never hold it across an async suspension;
+/// carry a cloned [`Capture`] into async work instead.
+#[must_use = "the capture scope ends when its guard is dropped"]
+pub struct CaptureGuard {
+    previous: Capture,
+    _thread_bound: PhantomData<Rc<()>>,
+}
+
+impl Drop for CaptureGuard {
+    fn drop(&mut self) {
+        CURRENT_CAPTURE.with(|current| {
+            *current.borrow_mut() = std::mem::take(&mut self.previous);
+        });
+    }
+}
+
+impl Capture {
+    /// Snapshots the current synchronous scope for a request or queued task.
+    pub fn current() -> Self {
+        CURRENT_CAPTURE.with(|current| current.borrow().clone())
+    }
+
+    /// Enters this owner for synchronous request construction, restoring the previous owner
+    /// when the returned guard is dropped. Scopes must be dropped in reverse entry order.
+    pub fn enter(&self) -> CaptureGuard {
+        let previous = CURRENT_CAPTURE.with(|current| current.replace(self.clone()));
+        CaptureGuard { previous, _thread_bound: PhantomData }
+    }
+}
+
+/// A cloneable handle, separate from project persistence and undo. Dropping its last clone
+/// immediately releases the records; the network dispatcher holds only a weak reference.
+#[derive(Clone, Default)]
+pub struct History(Arc<Mutex<State>>);
+
+impl History {
+    pub fn capture(&self) -> Capture {
+        Capture(Arc::downgrade(&self.0))
+    }
+
+    /// Enters this session's synchronous request scope. Do not hold across an async suspension.
+    pub fn enter(&self) -> CaptureGuard {
+        self.capture().enter()
+    }
+
+    pub fn push(&self, severity: Severity, source: &str, message: &str, details: &str) {
+        self.retain(Record {
+            id: 0,
+            timestamp_ms: timestamp_ms(),
+            severity,
+            source: bounded(source, MAX_SOURCE_BYTES),
+            message: bounded(message, MAX_MESSAGE_BYTES),
+            details: bounded(details, MAX_DETAILS_BYTES),
+            network: None,
+        });
+    }
+
+    fn retain(&self, mut record: Record) {
+        let mut state = lock(&self.0);
+        state.next_id = state.next_id.saturating_add(1);
+        state.generation = state.generation.wrapping_add(1);
+        record.id = state.next_id;
+        if state.records.len() >= MAX_RECORDS {
+            state.records.pop_front();
+        }
+        state.records.push_back(record);
+    }
+
+    /// Oldest first; both the count and every string in this independent snapshot are bounded.
+    pub fn records(&self) -> Vec<Record> {
+        lock(&self.0).records.iter().cloned().collect()
+    }
+
+    pub fn clear(&self) {
+        let mut state = lock(&self.0);
+        state.records.clear();
+        state.generation = state.generation.wrapping_add(1);
+    }
+
+    /// Changes whenever records are added or cleared, for inexpensive view snapshot caching.
+    pub fn generation(&self) -> u64 {
+        lock(&self.0).generation
+    }
+
+    /// Plain text suitable for a clipboard or a troubleshooting attachment. Timestamps are UTC
+    /// Unix milliseconds, explicitly labelled so they cannot be mistaken for local time.
+    pub fn report(&self, filter: Filter) -> String {
+        let records = self.records();
+        let mut report = String::from("RustGIS Diagnostics\nTimestamps: Unix milliseconds (UTC)\n");
+        for record in records.iter().filter(|record| filter.matches(record)) {
+            let _ =
+                writeln!(report, "\n#{} {} {:?} [{}] {}", record.id, record.timestamp_ms, record.severity, record.source, record.message);
+            if !record.details.is_empty() {
+                let _ = writeln!(report, "{}", record.details);
+            }
+            if let Some(network) = &record.network {
+                let _ = writeln!(
+                    report,
+                    "{} {}\nKind: {:?}; status: {:?}; duration_ms: {:?}",
+                    network.method, network.url, network.kind, network.status, network.duration_ms
+                );
+            }
+        }
+        report
+    }
+}
+
+impl Capture {
+    /// Retains one sanitized failure only in the originating live session. Callers supply local
+    /// classifications/metadata only, never bodies, arbitrary server text, or header dumps.
+    pub fn network_failure(&self, source: &str, message: &str, details: &str, mut network: Network) {
+        let Some(state) = self.0.upgrade() else { return };
+        network.url = if network.url.len() > MAX_INPUT_BYTES {
+            "[oversized address omitted]".to_string()
+        } else {
+            let end = network.url.find(['?', '#']).unwrap_or(network.url.len());
+            bounded(network.url.get(..end).unwrap_or(""), MAX_URL_BYTES)
+        };
+        network.method = match network.method.as_str() {
+            "GET" | "HEAD" | "POST" | "PUT" | "PATCH" | "DELETE" | "OPTIONS" => network.method,
+            _ => "OTHER".to_string(),
+        };
+        History(state).retain(Record {
+            id: 0,
+            timestamp_ms: timestamp_ms(),
+            severity: Severity::Error,
+            source: bounded(source, MAX_SOURCE_BYTES),
+            message: bounded(message, MAX_MESSAGE_BYTES),
+            details: bounded(details, MAX_DETAILS_BYTES),
+            network: Some(network),
+        });
+    }
+}
+
+/// The same bounded message used by both notice consumers and diagnostic records.
+pub fn redact_message(text: &str) -> String {
+    bounded(text, MAX_MESSAGE_BYTES)
+}
+
+fn bounded(text: &str, limit: usize) -> String {
+    let mut clean = redact(text);
+    if clean.len() > limit {
+        let mut end = limit.saturating_sub(3);
+        while !clean.is_char_boundary(end) {
+            end = end.saturating_sub(1);
+        }
+        clean.truncate(end);
+        clean.push('…');
+    }
+    clean
+}
+
+fn separator(c: char) -> bool {
+    c.is_whitespace()
+        || c.is_control()
+        || matches!(c, '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}' | ':' | '=' | ';' | ',' | '?' | '&' | '#' | '@' | '"' | '\'' | '{' | '}' | '[' | ']' | '<' | '>' | '(' | ')' | '`')
+}
+
+fn secret_name(key: &str) -> bool {
+    // Decode only names, never values: decoding a URL value could introduce whitespace and
+    // incorrectly end its redacted query. Work and allocation are capped by MAX_INPUT_BYTES.
+    let mut name = key.to_string();
+    for _ in 0..4 {
+        let bytes = name.as_bytes();
+        let mut decoded = String::with_capacity(name.len());
+        let mut i = 0;
+        while let Some(&b) = bytes.get(i) {
+            if b == b'%'
+                && let Some(hex) = name.get(i + 1..i + 3)
+                && let Ok(value) = u8::from_str_radix(hex, 16)
+            {
+                decoded.push(char::from(value));
+                i += 3;
+            } else if b == b'\\'
+                && bytes.get(i + 1) == Some(&b'u')
+                && let Some(hex) = name.get(i + 2..i + 6)
+                && let Ok(value) = u32::from_str_radix(hex, 16)
+                && let Some(c) = char::from_u32(value)
+            {
+                decoded.push(c);
+                i += 6;
+            } else if let Some(c) = name.get(i..).and_then(|s| s.chars().next()) {
+                decoded.push(c);
+                i += c.len_utf8();
+            } else {
+                break;
+            }
+        }
+        if decoded == name {
+            break;
+        }
+        name = decoded;
+    }
+    let normalized: String = name.chars().filter(|c| c.is_ascii_alphanumeric()).flat_map(char::to_lowercase).collect();
+    crate::source::credentials::secret_key(&name)
+        || crate::source::credentials::secret_key(&normalized)
+        || normalized.contains("credential")
+        || normalized.contains("connectionstring")
+        || normalized.contains("privatekey")
+        || normalized.contains("accountkey")
+        || normalized.contains("sharedaccess")
+        || normalized.contains("body")
+        || matches!(
+            normalized.as_str(),
+            "basic" | "bearer" | "authentication" | "wwwauthenticate" | "proxyauthenticate" | "userid" | "username"
+        )
+}
+
+/// Whether the name is an HTTP credential header: its value is always a scheme and a credential
+/// (or, for cookies, a list of them), however many words it holds.
+fn credential_header(key: &str) -> bool {
+    let normalized: String = key.chars().filter(|c| c.is_ascii_alphanumeric()).flat_map(char::to_lowercase).collect();
+    matches!(normalized.as_str(), "authorization" | "proxyauthorization" | "wwwauthenticate" | "proxyauthenticate" | "cookie" | "setcookie")
+}
+
+/// Sanitizes before bounding. Oversized input is omitted *whole*, so a secret can never be
+/// retained because its identifying key lay beyond a clipped prefix. URL queries/fragments
+/// are all omitted, including unknown/encoded signing schemes. JSON/XML bodies are not logged.
+/// A credential field discards the remaining text: quoted, multiline and malformed values need
+/// not be parsed correctly to remain private. Diagnostics intentionally prefer less context.
+pub fn redact(text: &str) -> String {
+    if text.len() > MAX_INPUT_BYTES {
+        return "[oversized diagnostic omitted]".to_string();
+    }
+    let mut out = String::with_capacity(text.len().min(MAX_DETAILS_BYTES));
+    let mut i = 0;
+    let mut quote_scan_budget = MAX_INPUT_BYTES;
+    'scan: while let Some(rest) = text.get(i..) {
+        let Some(c) = rest.chars().next() else { break };
+        if c == '['
+            && let Some(marker) = [
+                REDACTED,
+                "[structured content omitted]",
+                "[oversized diagnostic omitted]",
+                "[address omitted]",
+                "[oversized address omitted]",
+            ]
+            .into_iter()
+            .find(|marker| rest.starts_with(marker))
+        {
+            out.push_str(marker);
+            i += marker.len();
+            continue;
+        }
+        if matches!(c, '{' | '[' | '<') {
+            out.push_str("[structured content omitted]");
+            break;
+        }
+        if matches!(c, '"' | '\'') {
+            let quote = c;
+            let mut escaped = false;
+            let mut end = None;
+            for (offset, next) in rest.get(c.len_utf8()..).unwrap_or("").char_indices() {
+                if next.len_utf8() > quote_scan_budget {
+                    out.push_str(REDACTED);
+                    break 'scan;
+                }
+                quote_scan_budget -= next.len_utf8();
+                if next == quote && !escaped {
+                    end = Some(c.len_utf8() + offset);
+                    break;
+                }
+                escaped = next == '\\' && !escaped;
+            }
+            if let Some(end) = end {
+                let key = rest.get(c.len_utf8()..end).unwrap_or("");
+                let after = rest.get(end + c.len_utf8()..).unwrap_or("");
+                if (after.trim_start().starts_with([':', '=']) || after.chars().next().is_some_and(char::is_whitespace)) && secret_name(key)
+                {
+                    out.push_str(REDACTED);
+                    break;
+                }
+            }
+            out.push(c);
+            i += c.len_utf8();
+            continue;
+        }
+        if !separator(c) {
+            let end = rest.find(separator).unwrap_or(rest.len());
+            let atom = rest.get(..end).unwrap_or("");
+            let after = rest.get(end..).unwrap_or("");
+            if after.starts_with("://") {
+                let url_end = rest.find(|c: char| c.is_whitespace() || matches!(c, '"' | '\'' | '<' | '>' | '`')).unwrap_or(rest.len());
+                let address = rest.get(..url_end).unwrap_or("");
+                match url::Url::parse(address) {
+                    Ok(mut url) if url.has_host() => {
+                        let _ = url.set_username("");
+                        let _ = url.set_password(None);
+                        url.set_query(None);
+                        url.set_fragment(None);
+                        out.push_str(url.as_str());
+                    }
+                    _ => out.push_str("[address omitted]"),
+                }
+                i += url_end;
+                if address.contains(['?', '#']) {
+                    // A malformed/unescaped value may continue after whitespace or a quote.
+                    // Do not guess where that credential ends.
+                    break;
+                }
+                continue;
+            }
+            let after_space = after.trim_start();
+            // A file path (POSIX or Windows) is context, not a credential field name.
+            if !atom.contains(['/', '\\']) && secret_name(atom) {
+                // `name: value` or `name=value` is a field when its value is one token, quoted,
+                // or the header's own credential. Anything longer is prose: "its password:
+                // right-click the connection".
+                let value = after_space.strip_prefix(':').or_else(|| after_space.strip_prefix('=')).map(str::trim_start);
+                let field = value.is_some_and(|value| {
+                    credential_header(atom) || value.starts_with(['"', '\'']) || (!value.is_empty() && !value.contains(char::is_whitespace))
+                });
+                // A bare `Bearer <token>` line is a credential only where the text or line begins,
+                // so ordinary prose keeps its words ("the saved password is missing").
+                let line = i == 0 || text.get(..i).is_some_and(|before| before.ends_with('\n'));
+                let bare = line && after.chars().next().is_some_and(char::is_whitespace);
+                if field || bare {
+                    out.push_str(REDACTED);
+                    break;
+                }
+            }
+            // A non-URL user:password@host or a scheme-relative authority is ambiguous:
+            // omit the whole field rather than leave either half of its credentials behind.
+            if after.starts_with('@') || after.starts_with(':') && after.split_whitespace().next().is_some_and(|s| s.contains('@')) {
+                out.push_str("[address omitted]");
+                break;
+            }
+            out.push_str(atom);
+            i += end;
+        } else {
+            // Drop control/escape characters (including terminal escapes and bidi controls).
+            if c == '\n' || c == '\t' || !c.is_control() && !matches!(c, '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}') {
+                out.push(c);
+            }
+            i += c.len_utf8();
+        }
+    }
+    if out.len() > MAX_DETAILS_BYTES {
+        let mut end = MAX_DETAILS_BYTES.saturating_sub(3);
+        while !out.is_char_boundary(end) {
+            end = end.saturating_sub(1);
+        }
+        out.truncate(end);
+        out.push('…');
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn eviction_clear_and_clones_are_session_local() {
+        let history = History::default();
+        let other = History::default();
+        for i in 0..MAX_RECORDS + 5 {
+            history.push(Severity::Info, "Application", &format!("notice {i}"), "");
+        }
+        let records = history.records();
+        assert_eq!(records.len(), MAX_RECORDS);
+        assert_eq!(records.first().unwrap().message, "notice 5");
+        assert_eq!(records.last().unwrap().id, 505);
+        assert!(other.records().is_empty());
+        history.clone().clear();
+        assert!(history.records().is_empty());
+        history.push(Severity::Error, "Application", "after clear", "");
+        assert_eq!(history.records()[0].id, 506);
+    }
+
+    #[test]
+    fn unicode_fields_and_oversized_keys_are_bounded_before_retention() {
+        let history = History::default();
+        let text = "界".repeat(4000);
+        history.push(Severity::Warning, &text, &text, &text);
+        let record = history.records().remove(0);
+        assert!(record.source.len() <= MAX_SOURCE_BYTES);
+        assert!(record.message.len() <= MAX_MESSAGE_BYTES);
+        assert!(record.details.len() <= MAX_DETAILS_BYTES);
+        let hostile = format!("{}token=hidden", "x".repeat(MAX_INPUT_BYTES));
+        assert_eq!(redact(&hostile), "[oversized diagnostic omitted]");
+        assert!(!history.report(Filter::All).contains('�'));
+    }
+
+    #[test]
+    fn filters_and_reports_select_exact_severities() {
+        let history = History::default();
+        for severity in [Severity::Info, Severity::Warning, Severity::Error] {
+            history.push(severity, "Application", &format!("{severity:?}"), "context");
+        }
+        let records = history.records();
+        for (filter, expected) in [(Filter::All, 3), (Filter::Errors, 1), (Filter::Warnings, 1), (Filter::Info, 1), (Filter::Network, 0)] {
+            assert_eq!(records.iter().filter(|r| filter.matches(r)).count(), expected);
+        }
+        let report = history.report(Filter::Errors);
+        assert!(report.contains("Error") && !report.contains("Warning") && !report.contains("Info"));
+        assert!(report.contains("UTC"));
+    }
+
+    #[test]
+    fn adversarial_credentials_are_never_retained() {
+        for input in [
+            "GET https://alice:hidden@example.org/path?%74oken=hidden#hidden failed",
+            "GET https://alice:hidden@example.org/path?X-Amz-Credential=hidden&signature=hidden failed",
+            "https://example.org/path?sv=1&sig=hidden&se=hidden#hidden",
+            "Authorization: Bearer hidden",
+            "proxy-AUTHORIZATION : Basic hidden",
+            "Authorization Bearer hidden",
+            "token hidden",
+            "password is hidden",
+            "secret hidden",
+            "https://example.org/path?token=hidden hidden",
+            "Bearer hidden",
+            "Basic hidden",
+            "Cookie: session=hidden; other=hidden",
+            "Set-Cookie: hidden",
+            r#"failed: {"Password":"hidden"}"#,
+            r#""\u0070assword": "hidden""#,
+            "%2574oken=hidden",
+            "api-key = hidden",
+            "AccountKey=hidden;Endpoint=x",
+            "Server=localhost;User ID=alice;Password='hidden;more'",
+            "postgres://alice:hidden@db.example.org/db",
+            "alice:hidden@db.example.org",
+            "password = 'hidden\nmore hidden'",
+            "request_body: hidden",
+            "responseBody=hidden",
+            "error: <html>hidden</html>",
+            "connection_string=hidden",
+        ] {
+            let clean = redact(input);
+            assert!(!clean.contains("hidden"), "{input} -> {clean}");
+        }
+        assert_eq!(redact("Loaded 3 layers"), "Loaded 3 layers");
+        assert_eq!(redact("failed https://example.org/path?unknown=opaque#fragment"), "failed https://example.org/path");
+    }
+
+    #[test]
+    fn credential_words_in_file_paths_preserve_failure_context() {
+        let path = "../token-cache/secret.png";
+        let clean = redact(&format!("{path}: open failed"));
+        assert!(clean.contains(path) && clean.contains("open failed"));
+        // Windows paths and ordinary percentages are message context, not secret field names.
+        let windows = r"C:\Users\Temp\rustgis-overlay\o.kml: Far (its picture ../secret.png isn't beside it)";
+        assert_eq!(redact(windows), windows);
+        assert_eq!(redact(r"Loaded 50% of tiles"), "Loaded 50% of tiles");
+        assert_eq!(redact(r"Progress 12% complete"), "Progress 12% complete");
+    }
+
+    #[test]
+    fn prose_naming_credentials_keeps_its_words() {
+        // RustGIS's own notices name credentials without holding one: redacting must not
+        // swallow the rest of the message.
+        for text in [
+            "The saved password is missing or doesn't match this connection.",
+            "4 layer address(es) were saved without their keys, tokens or passwords: after RustGIS closes, add those layers again to give them",
+            "3 layer(s) read the database of the connection 'db' and need its password: right-click the connection in Data Sources › Connections, or one of the layers, and choose Log In…",
+            "Set Color's step keeps its key parameter. If that is an access key, delete the step (Edit Steps) before sharing the task.",
+        ] {
+            assert_eq!(redact(text), text, "{text}");
+        }
+        // A credential line is still redacted whole, wherever it begins.
+        assert_eq!(redact("failed\ntoken hidden"), "failed\n[REDACTED]");
+        assert_eq!(redact("Authorization: Bearer hidden"), "[REDACTED]");
+    }
+
+    fn failed(capture: &Capture, message: &str) {
+        capture.network_failure(
+            "Network",
+            message,
+            "local classification",
+            Network {
+                url: "https://diagnostics-history.example.org/request?%74oken=hidden#hidden".to_string(),
+                method: "GET".to_string(),
+                status: Some(503),
+                duration_ms: Some(7),
+                kind: NetworkKind::Http,
+            },
+        );
+    }
+
+    #[test]
+    fn network_delivery_is_scoped_redacted_and_independently_clearable() {
+        let a = History::default();
+        let b = History::default();
+        failed(&Capture::current(), "no owner");
+        {
+            let _a = a.enter();
+            let request_a = Capture::current();
+            failed(&request_a, "a first");
+            {
+                let _b = b.enter();
+                failed(&Capture::current(), "b only");
+                // A request dispatched by A still belongs to A while B is current.
+                failed(&request_a, "a dispatched");
+                {
+                    let _empty = Capture::default().enter();
+                    failed(&Capture::current(), "explicitly unowned");
+                }
+                failed(&Capture::current(), "b restored");
+            }
+            failed(&Capture::current(), "a restored");
+        }
+        failed(&Capture::current(), "no owner after return");
+        let records = a.records();
+        assert_eq!(records.iter().map(|r| r.message.as_str()).collect::<Vec<_>>(), ["a first", "a dispatched", "a restored"]);
+        assert_eq!(b.records().iter().map(|r| r.message.as_str()).collect::<Vec<_>>(), ["b only", "b restored"]);
+        assert!(Filter::Network.matches(&records[0]));
+        let network = records[0].network.as_ref().unwrap();
+        assert_eq!(network.status, Some(503));
+        assert_eq!(network.duration_ms, Some(7));
+        assert_eq!(network.url, "https://diagnostics-history.example.org/request");
+        assert!(!format!("{records:?}").contains("hidden"));
+        a.clear();
+        assert!(a.records().is_empty());
+        assert_eq!(b.records().len(), 2);
+        assert!(Capture::current().0.upgrade().is_none());
+    }
+
+    #[test]
+    fn network_scope_restores_on_unwind_and_does_not_retain_a_dead_history() {
+        let a = History::default();
+        let b = History::default();
+        {
+            let _a = a.enter();
+            let result = std::panic::catch_unwind(|| {
+                let _b = b.enter();
+                failed(&Capture::current(), "b before panic");
+                panic!("unwind capture scope");
+            });
+            assert!(result.is_err());
+            failed(&Capture::current(), "a after panic");
+        }
+        assert_eq!(a.records().len(), 1);
+        assert_eq!(a.records()[0].message, "a after panic");
+        assert_eq!(b.records().len(), 1);
+        assert_eq!(b.records()[0].message, "b before panic");
+        assert!(Capture::current().0.upgrade().is_none());
+
+        let dropped = History::default();
+        let capture = dropped.capture();
+        let _scope = capture.enter();
+        let weak = Arc::downgrade(&dropped.0);
+        drop(dropped);
+        assert!(weak.upgrade().is_none());
+        failed(&capture, "dead request");
+        failed(&Capture::current(), "dead current owner");
+        assert_eq!(a.records().len(), 1);
+        assert_eq!(b.records().len(), 1);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn worker_threads_require_explicit_request_ownership() {
+        let a = History::default();
+        let b = History::default();
+        let _a = a.enter();
+        let capture = Capture::current();
+        std::thread::spawn(move || {
+            failed(&Capture::current(), "unowned worker");
+            let _scope = capture.enter();
+            failed(&Capture::current(), "owned worker");
+        })
+        .join()
+        .unwrap();
+        assert_eq!(a.records().len(), 1);
+        assert_eq!(a.records()[0].message, "owned worker");
+        assert!(b.records().is_empty());
+    }
+    #[test]
+    fn quoted_and_adversarial_credential_fields_are_omitted() {
+        for input in ["\"token\" hidden".to_string(), "\"password\" is hidden".to_string(), format!("{} token=hidden", "\\\"".repeat(4000))]
+        {
+            assert!(!redact(&input).contains("hidden"));
+        }
+    }
+}

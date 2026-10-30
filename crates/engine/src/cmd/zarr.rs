@@ -92,9 +92,11 @@ fn fetch(root: &str, keys: &[String]) -> Result<(HashMap<String, Vec<u8>>, usize
     let total = std::sync::atomic::AtomicU64::new(0);
     let failure: Mutex<Option<String>> = Mutex::new(None);
     let next = std::sync::atomic::AtomicUsize::new(0);
+    let capture = rustgis_data::diagnostics::Capture::current();
     std::thread::scope(|scope| {
         for _ in 0..8.min(keys.len().max(1)) {
             scope.spawn(|| {
+                let _diagnostic_scope = capture.enter();
                 loop {
                     let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     let Some(k) = keys.get(i) else { break };
@@ -388,7 +390,9 @@ fn read_ahead(zt: ZarrTime, i: usize) {
         }
     }
     let ids: Vec<String> = keys.iter().map(|(_, k)| k.clone()).collect();
+    let capture = rustgis_data::diagnostics::Capture::current();
     let spawned = std::thread::Builder::new().name("zarr-read-ahead".into()).spawn(move || {
+        let _diagnostic_scope = capture.enter();
         let _done = Done(keys.iter().map(|(_, k)| k.clone()).collect());
         for (n, (j, k)) in keys.iter().enumerate() {
             let ok = read_step(&zt, *j, k.clone()).is_ok();
@@ -704,7 +708,7 @@ fn add_following(s: &mut Session, p: &Value) -> CmdResult {
         layer.time_zarr = Some(zt);
         let mut out = super::raster::add_raster(s, &name, layer)?;
         if let Some(w) = part {
-            s.notify(w.clone(), false);
+            s.warn(w.clone());
             out["warning"] = serde_json::json!(w);
         }
         Ok(out)

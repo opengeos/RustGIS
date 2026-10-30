@@ -543,6 +543,8 @@ pub struct Session {
     /// camera then: moved since, the map stays.
     pub style_view: Option<(String, Camera)>,
     pub notices: Vec<Notice>,
+    /// Troubleshooting history, independent of the active pane, project files and undo.
+    pub diagnostics: rustgis_data::diagnostics::History,
     /// Notices given in this session, including ones no longer kept (see [`Session::notices_since`]),
     /// less those a failed command withdrew.
     notices_given: u64,
@@ -613,6 +615,8 @@ pub struct Session {
     /// the command fails ([`PutAside`]); and how deep commands run within commands now.
     put_aside: Option<Box<PutAside>>,
     depth: u32,
+    /// Only the command's registered id, never its parameters. Nested commands restore this.
+    diagnostic_source: Option<&'static str>,
     /// How many of the commands running now restore the project if they fail: a replacement is
     /// put aside only under one of them, as only then can it be rolled back.
     restorable: u32,
@@ -783,6 +787,9 @@ impl Session {
         rustgis_plugins::tools::register();
         // FlatGeobuf and GeoParquet by their web address are read through the tile fetchers.
         render::rustgis_tiles::remote::install();
+        rustgis_data::diagnostics::set_clock(|| {
+            web_time::SystemTime::now().duration_since(web_time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
+        });
         Session {
             project,
             path: None,
@@ -807,6 +814,7 @@ impl Session {
             view_size: (1200.0, 720.0),
             style_view: None,
             notices: Vec::new(),
+            diagnostics: rustgis_data::diagnostics::History::default(),
             notices_given: 0,
             table_layer: None,
             table_standalone: None,
@@ -837,6 +845,7 @@ impl Session {
             merged: None,
             put_aside: None,
             depth: 0,
+            diagnostic_source: None,
             restorable: 0,
             actor: None,
             back: Vec::new(),
@@ -978,6 +987,30 @@ impl Session {
     /// Runs a command by id. Mutating commands snapshot the project for undo; an error or a
     /// panic restores it.
     pub fn run(&mut self, id: &str, params: &Value) -> CmdResult {
+        let _diagnostic_scope = self.diagnostics.enter();
+        let source = self.registry.get(id).map(|spec| spec.id).or_else(|| id.starts_with(rustgis_plugins::PREFIX).then_some("Plugin"));
+        // Restored on every path, including panics outside `guarded`, so a later notice is not
+        // attributed to an aborted command. Mirrors the capture scope's restore-on-drop.
+        let previous = std::mem::replace(&mut self.diagnostic_source, source);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let notice_mark = self.notice_mark();
+            let result = self.run_command(id, params);
+            if let Err(error) = &result {
+                let text = rustgis_data::diagnostics::redact_message(error);
+                if !self.notices_since(notice_mark).iter().any(|notice| notice.error && notice.text == text) {
+                    self.notify(text, true);
+                }
+            }
+            result
+        }));
+        self.diagnostic_source = previous;
+        match result {
+            Ok(result) => result,
+            Err(payload) => std::panic::resume_unwind(payload),
+        }
+    }
+
+    fn run_command(&mut self, id: &str, params: &Value) -> CmdResult {
         // The merge key asked for ([`Session::merge_undo`]) goes to this command if it runs, and is
         // gone if it's refused first, so it can't merge a later command into the last step.
         let merge = if self.depth == 0 { self.merge.take() } else { None };
@@ -1000,7 +1033,7 @@ impl Session {
                     said.push(format!("{} more", unknown.len() - 5));
                 }
                 let reads = if known.is_empty() { "no parameters".to_string() } else { known.join(", ") };
-                self.notify(format!("{id} ignores {} (it reads {reads})", said.join(", ")), false);
+                self.warn(format!("{id} ignores {} (it reads {reads})", said.join(", ")));
             }
         }
         // Layer conditions apply to the layer the parameters name (the first of a list), falling
@@ -1358,7 +1391,20 @@ impl Session {
     }
 
     pub fn notify(&mut self, text: impl Into<String>, error: bool) {
-        self.notices.push(Notice { text: text.into(), error });
+        use rustgis_data::diagnostics::Severity;
+        self.notice(text.into(), if error { Severity::Error } else { Severity::Info });
+    }
+
+    /// A nonfatal problem: existing notice consumers still see it as a non-error, while
+    /// troubleshooting history can distinguish it from ordinary informational notices.
+    pub fn warn(&mut self, text: impl Into<String>) {
+        self.notice(text.into(), rustgis_data::diagnostics::Severity::Warning);
+    }
+
+    fn notice(&mut self, text: String, severity: rustgis_data::diagnostics::Severity) {
+        let text = rustgis_data::diagnostics::redact_message(&text);
+        self.diagnostics.push(severity, self.diagnostic_source.unwrap_or("Application"), &text, "");
+        self.notices.push(Notice { text, error: severity == rustgis_data::diagnostics::Severity::Error });
         self.notices_given += 1;
         if self.notices.len() > 200 {
             self.notices.remove(0);

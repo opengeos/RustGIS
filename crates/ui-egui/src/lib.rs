@@ -27,6 +27,7 @@ mod connectionui;
 mod connectui;
 mod cswui;
 mod cubesui;
+mod diagnosticlog;
 mod dialogs;
 mod docpanes;
 mod earthaccessui;
@@ -478,6 +479,8 @@ pub enum RightPane {
     /// A Zarr variable's time series at points clicked on the map (#555).
     TimeSeries,
     Diagnostics,
+    /// Session-local troubleshooting messages, separate from the performance monitor.
+    DiagnosticLog,
     Infographics,
     Report,
     Presentation,
@@ -536,6 +539,8 @@ pub struct UiState {
     pub right: Option<RightPane>,
     /// The right panes open as tabs, in the order they were opened (#303).
     pub right_open: Vec<RightPane>,
+    pub diagnostic_filter: rustgis_engine::data::diagnostics::Filter,
+    diagnostic_snapshot: Option<(u64, Vec<rustgis_engine::data::diagnostics::Record>)>,
     /// The Web Data service the Web Data pane shows (a `ui.dialog` name, see
     /// `panes::web_data_name`).
     pub web_data: &'static str,
@@ -768,6 +773,8 @@ impl Default for UiState {
             left: Some(LeftPane::Contents),
             right: None,
             right_open: Vec::new(),
+            diagnostic_filter: rustgis_engine::data::diagnostics::Filter::All,
+            diagnostic_snapshot: None,
             web_data: "opendata",
             dark: false,
             measurement_imperial: false,
@@ -1708,6 +1715,7 @@ impl RustGisApp {
 
     /// Runs a command by id: `ui.*` here, everything else in the engine.
     pub fn run(&mut self, id: &str, params: Value) -> Result<Value, String> {
+        let _diagnostics = self.session.diagnostics.enter();
         if !matches!(id, "ui.menu" | "ui.ribbon" | "ui.language" | "ui.worldview") {
             self.ui.ribbon_peek = false;
         }
@@ -1727,6 +1735,7 @@ impl RustGisApp {
         // of another, so it ends when the open layout changes (or layouts come and go).
         let open_layout = |app: &Self| (app.session.active_layout, app.session.project.layouts.len());
         let layout_before = open_layout(self);
+        let notice_mark = self.session.notice_mark();
         let mut r = if id.starts_with("ui.") { self.run_ui(id, &params) } else { self.session.run(id, &params) };
         r = self.deliver_gp_files(r);
         if r.is_ok() && id == "tool.set" {
@@ -1734,6 +1743,11 @@ impl RustGisApp {
         }
         if let Err(e) = &r {
             log::info!("{id}: {e}");
+            // UI-only failures can return before an engine command emits a notice.
+            let text = rustgis_engine::data::diagnostics::redact_message(e);
+            if !self.session.notices_since(notice_mark).iter().any(|notice| notice.error && notice.text == text) {
+                self.session.notify(text, true);
+            }
         }
         // Commands can replace the project, switch maps or change the renderer while the pane
         // is closed. A field picked for the old context must not overwrite the new renderer.
@@ -2949,6 +2963,7 @@ impl RustGisApp {
             "ui.pane.profile" => toggle_right(&mut self.ui, RightPane::Profile),
             "ui.pane.timeSeries" => toggle_right(&mut self.ui, RightPane::TimeSeries),
             "ui.pane.diagnostics" => toggle_right(&mut self.ui, RightPane::Diagnostics),
+            "ui.pane.diagnosticLog" => toggle_right(&mut self.ui, RightPane::DiagnosticLog),
             "ui.pane.infographics" => toggle_right(&mut self.ui, RightPane::Infographics),
             "ui.pane.report" => toggle_right(&mut self.ui, RightPane::Report),
             "ui.pane.presentation" => toggle_right(&mut self.ui, RightPane::Presentation),
@@ -3660,6 +3675,7 @@ impl RustGisApp {
 
     /// Per-frame work that doesn't draw (theme, fonts, files that arrived).
     pub fn logic(&mut self, ctx: &egui::Context) {
+        let _diagnostics = self.session.diagnostics.enter();
         // The MCP relay: what attached agents sent runs here, on this session, before the frame
         // draws (Session lives on this thread; the listener only queues messages).
         #[cfg(not(target_arch = "wasm32"))]
@@ -3911,6 +3927,7 @@ impl RustGisApp {
     }
 
     pub fn ui(&mut self, ui: &mut egui::Ui) {
+        let _diagnostics = self.session.diagnostics.enter();
         let ctx = ui.ctx().clone();
         // Fonts installed by `logic` take effect on the next frame.
         if self.fonts_frames < 2 {
