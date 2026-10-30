@@ -913,7 +913,10 @@
     "features": "expected/buffer_points_1km.geojson",
     "tolerance": 0.001
    },
-   "known": "#1159: Buffer outlines sit up to 10 % of the distance off"
+   "known": {
+    "issue": "#1159: Buffer outlines sit up to 10 % of the distance off",
+    "tolerance": 0.1
+   }
   },
   {
    "name": "buffer points far",
@@ -927,7 +930,10 @@
     "features": "expected/buffer_stations_120km.geojson",
     "tolerance": 0.001
    },
-   "known": "#1159: Buffer outlines sit up to 10 % of the distance off"
+   "known": {
+    "issue": "#1159: Buffer outlines sit up to 10 % of the distance off",
+    "tolerance": 0.1
+   }
   },
   {
    "name": "buffer lines",
@@ -941,7 +947,10 @@
     "features": "expected/buffer_roads_2km.geojson",
     "tolerance": 0.001
    },
-   "known": "#1159: Buffer outlines sit up to 10 % of the distance off"
+   "known": {
+    "issue": "#1159: Buffer outlines sit up to 10 % of the distance off",
+    "tolerance": 0.1
+   }
   },
   {
    "name": "buffer a long line",
@@ -955,7 +964,10 @@
     "features": "expected/buffer_long_5km.geojson",
     "tolerance": 0.001
    },
-   "known": "#1159: Buffer outlines sit up to 10 % of the distance off"
+   "known": {
+    "issue": "#1159: Buffer outlines sit up to 10 % of the distance off",
+    "tolerance": 0.1
+   }
   },
   {
    "name": "buffer polygons",
@@ -969,7 +981,10 @@
     "features": "expected/buffer_parcels_1km.geojson",
     "tolerance": 0.001
    },
-   "known": "#1159: Buffer outlines sit up to 10 % of the distance off"
+   "known": {
+    "issue": "#1159: Buffer outlines sit up to 10 % of the distance off",
+    "tolerance": 0.1
+   }
   },
   {
    "name": "buffer polygons inward",
@@ -983,7 +998,10 @@
     "features": "expected/buffer_parcels_-2km.geojson",
     "tolerance": 0.001
    },
-   "known": "#1159: Buffer outlines sit up to 10 % of the distance off"
+   "known": {
+    "issue": "#1159: Buffer outlines sit up to 10 % of the distance off",
+    "tolerance": 0.1
+   }
   }
  ]
 }

@@ -13,6 +13,9 @@ on:
     paths: ["crates/analysis/tests/reference/**", ".github/workflows/reference.yml"]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true

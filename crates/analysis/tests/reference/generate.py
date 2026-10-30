@@ -240,15 +240,28 @@ def geodesic_buffer(g, d):
 
 
 def check_buffer(g, b, d):
-    """A check on geodesic_buffer: vertices along b's outline are |d| from g's (or from point g)."""
+    """Checks on geodesic_buffer's result b (Web Mercator), both ways: vertices along its outline
+    are |d| from g's outline (or from point g), and it covers what it must. Outward, a disc just
+    under d round every sample along g's edges (or round point g) lies inside it; inward, it lies
+    inside the polygon."""
     edge = g if isinstance(g, Point) else (g.boundary if g.geom_type.endswith("Polygon") else g)
     rings = [r for p in shapely.get_parts(b) for r in [p.exterior, *p.interiors]]
     for r in rings:
         cs = list(ll(r).coords)
-        for x, y in cs[:: max(1, len(cs) // 12)]:
+        for x, y in cs:
             # |d| away, less what a disc's straight edges cut off.
             e = point_distance_m(Point(x, y), edge)
-            assert abs(e - abs(d)) < 4e-5 * abs(d) + 1e-3, (x, y, e, d)
+            if not abs(e - abs(d)) < 4e-5 * abs(d) + 1e-3:
+                raise AssertionError(("outline vertex off", x, y, e, d))
+    shapely.prepare(b)
+    if d < 0:
+        if not b.within(m(g).buffer(1e-3)):
+            raise AssertionError(("an inward buffer reaches outside its polygon", d))
+        return
+    pts = [(g.x, g.y)] if isinstance(g, Point) else [q for a, c in segments(g) for q in along(a, c, abs(d))]
+    for q in pts:
+        if not b.contains(disc(q, 0.999 * d, n=8)):
+            raise AssertionError(("not covered", q, d))
 
 
 # --- the answers ------------------------------------------------------------------------------
@@ -294,7 +307,8 @@ def main():
     cases = []
 
     def case(name, tool, params, expect, known=None):
-        """A case; `known` names the open issue a case that still fails is waiting on."""
+        """A case; `known` names the open issue a case that still fails is waiting on, and the looser
+        tolerance it must meet meanwhile."""
         cases.append({"name": name, "tool": tool, "params": params, "expect": expect, **({"known": known} if known else {})})
 
     # Clip and Erase: each input feature's part inside (outside) the union of the zones; features
@@ -492,7 +506,8 @@ def main():
     tol = 1e-3
     # Arcs are drawn with 32 edges, and long edges come back from the plane as straight lines in
     # lon/lat: a 2 km buffer of a 96 km road is up to 190 m off.
-    known = "#1159: Buffer outlines sit up to 10 % of the distance off"
+    # Until then each must still agree within 10 %, so a buffer that breaks further fails the test.
+    known = {"issue": "#1159: Buffer outlines sit up to 10 % of the distance off", "tolerance": 0.1}
     case("buffer points", "buffer", {"input": "points", "distance": 1, "units": "Kilometers"},
          {"features": buffered("buffer_points_1km", POINTS, 1000.0), "tolerance": tol}, known)
     case("buffer points far", "buffer", {"input": "stations", "distance": 120, "units": "Kilometers"},
@@ -543,4 +558,6 @@ def check():
 
 
 if __name__ == "__main__":
+    if sys.argv[1:] not in ([], ["--check"]):
+        sys.exit(f"usage: uv run generate.py [--check] (not {' '.join(sys.argv[1:])})")
     sys.exit(check() if sys.argv[1:] == ["--check"] else main())

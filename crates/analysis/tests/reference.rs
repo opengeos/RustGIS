@@ -2,8 +2,10 @@
 //! answers in `reference/cases.json`, worked out by GEOS (the geometry engine of QGIS and PostGIS)
 //! with `reference/generate.py`. Every case runs and every difference is reported together.
 //!
-//! A case marked `known` fails for a reason with an open issue: it is reported but doesn't fail the
-//! test, and once it passes the test fails until the mark is removed from `generate.py`.
+//! A case marked `known` fails for a reason with an open issue. It must still agree within the
+//! mark's looser tolerance, so it fails the test only if it gets worse; its differences are printed
+//! (`cargo test --test reference -- --nocapture` shows them). Once it agrees within the case's own
+//! tolerance, the test fails until the mark is removed from `generate.py`.
 //!
 //! When a case fails, fix the tool with RustGIS's own code. Don't translate GEOS's source to make
 //! it pass: GEOS is LGPL-2.1, and RustGIS is Apache-2.0 with no third-party code.
@@ -244,7 +246,10 @@ fn check(case: &Json, layers: &Layers) -> Vec<String> {
         }
         for row in 0..ds.features.len() {
             let id = text(&ds, row, "id").unwrap_or_default();
-            let Some(fields) = numbers.get(&id).and_then(Json::as_object) else { continue };
+            let Some(fields) = numbers.get(&id).and_then(Json::as_object) else {
+                problems.push(format!("{id}: no measurements in the reference"));
+                continue;
+            };
             for (field, want) in fields {
                 let want = want.as_f64().unwrap_or(f64::NAN);
                 let got = ds.field_index(field).and_then(|fi| ds.value(row, fi).as_f64());
@@ -321,9 +326,20 @@ fn tools_agree_with_the_reference() {
     for case in cases["cases"].as_array().expect("cases.json has a \"cases\" list") {
         let name = case["name"].as_str().unwrap_or("?");
         let problems = check(case, &layers);
-        match (case["known"].as_str(), problems.is_empty()) {
-            (Some(known), false) => eprintln!("{name}: still differs ({known}):\n    {}", problems.join("\n    ")),
-            (Some(known), true) => report.push(format!("{name}: agrees now; remove its `known` mark ({known}) from generate.py")),
+        let known = &case["known"];
+        match (known["issue"].as_str(), problems.is_empty()) {
+            (Some(issue), false) => {
+                // Within the known bound: the case as written, with the mark's tolerance.
+                let mut loose = case.clone();
+                loose["expect"]["tolerance"] = known["tolerance"].clone();
+                let worse = check(&loose, &layers);
+                if worse.is_empty() {
+                    eprintln!("{name}: still differs ({issue}):\n    {}", problems.join("\n    "));
+                } else {
+                    report.push(format!("{name}: differs beyond its known bound ({issue}):\n    {}", worse.join("\n    ")));
+                }
+            }
+            (Some(issue), true) => report.push(format!("{name}: agrees now; remove its `known` mark ({issue}) from generate.py")),
             (None, false) => report.push(format!("{name}:\n    {}", problems.join("\n    "))),
             (None, true) => {}
         }
