@@ -1262,14 +1262,15 @@ fn data_defined_symbol_settings_carry_over_as_expressions() {
     assert_eq!(by.stroke.as_deref(), Some("color_rgb(255, 0, 0)"));
     assert!(report.notes.is_empty(), "{:?}", report.notes);
     // A line of two strokes draws each with its own: left out, said.
-    let stroke = r#"<layer class="SimpleLine" enabled="1"><Option type="Map"><Option name="line_color" value="0,0,0,255"/></Option></layer>"#;
+    let stroke =
+        r#"<layer class="SimpleLine" enabled="1"><Option type="Map"><Option name="line_color" value="0,0,0,255"/></Option></layer>"#;
     let doubled = line.replace("</symbol>", &format!("{stroke}{stroke}</symbol>"));
     let mut report = Report::default();
     let s = read_style(&doubled, "roads", &mut report).unwrap();
     assert!(s.symbol_by.is_none_or(|b| b.stroke.is_none() && b.stroke_width.is_none()));
     assert!(report.notes.iter().any(|n| n.text.contains("line of several strokes")), "{:?}", report.notes);
-    // Classes: one sized by expression, one not; the other's drawn with the first's, said. A
-    // see-through symbol's expression colour is drawn opaque, said.
+    // Classes: one sized by expression, one not; left out (applied to every feature, they would
+    // change the other's), said. A see-through symbol's expression colour is drawn opaque, said.
     let marker = |name: &str, props: &str| {
         format!(
             r#"<symbol type="marker" name="{name}" alpha="0.5"><layer class="SimpleMarker" enabled="1"><Option type="Map"/>{props}</layer></symbol>"#
@@ -1284,9 +1285,23 @@ fn data_defined_symbol_settings_carry_over_as_expressions() {
     );
     let mut report = Report::default();
     let s = read_style(&classes, "points", &mut report).unwrap();
-    assert_eq!(s.symbol_by.unwrap().size.as_deref(), Some(r#"("v") * 3.779528"#));
+    assert!(s.symbol_by.is_none_or(|b| b.is_empty()));
     let said = |t: &str| report.notes.iter().any(|n| n.text.contains(t));
-    assert!(said("different data-defined settings") && said("see-through symbol"), "{:?}", report.notes);
+    assert!(said("differ between its classes") && said("see-through symbol"), "{:?}", report.notes);
+    // Both classes alike: theirs. With a class switched off besides, which they would paint: left
+    // out, said.
+    let same = dd(&[("size", "&quot;v&quot;")]);
+    let alike =
+        classes.replace(&marker("1", ""), &marker("1", &same)).replace(&dd(&[("size", "&quot;v&quot;"), ("fillColor", "'red'")]), &same);
+    let mut report = Report::default();
+    let s = read_style(&alike, "points", &mut report).unwrap();
+    assert_eq!(s.symbol_by.unwrap().size.as_deref(), Some(r#"("v") * 3.779528"#));
+    assert!(report.notes.is_empty(), "{:?}", report.notes);
+    let off = alike.replace("</categories>", r#"<category value="c" symbol="1" label="c" render="false"/></categories>"#);
+    let mut report = Report::default();
+    let s = read_style(&off, "points", &mut report).unwrap();
+    assert!(s.symbol_by.is_none_or(|b| b.is_empty()));
+    assert!(report.notes.iter().any(|n| n.text.contains("a class switched off")), "{:?}", report.notes);
     // A marker of two layers (the Training Manual's world places): a white disc sized by
     // expression, a black dot sized in proportion on top. The marks scale with the top layer's
     // size; their colours stay their own, the outline colour by expression is left out.

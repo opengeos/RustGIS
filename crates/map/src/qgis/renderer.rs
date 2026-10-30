@@ -10,6 +10,7 @@ use roxmltree::Node;
 use super::symbol::{self, Converted};
 use super::{QGIS_SCALE, Report, Style, child, expr, has_effect};
 use crate::color::Ramp;
+use crate::symbol_by::SymbolBy;
 use crate::symbology::{ClassMethod, LineStroke, Renderer, Symbol};
 
 /// The most classes a renderer is imported with: every feature is matched against them.
@@ -50,7 +51,7 @@ fn read_depth(r: Node, layer: &str, style: &mut Style, report: &mut Report, dept
     let rotation = std::cell::RefCell::new(None);
     let turned = symbols.values().any(|n| symbol::turns_by_field(*n));
     // Every symbol's data-defined expressions: the first that has any are the layer's.
-    let by: std::cell::RefCell<Vec<crate::symbol_by::SymbolBy>> = std::cell::RefCell::new(Vec::new());
+    let by: std::cell::RefCell<Vec<SymbolBy>> = std::cell::RefCell::new(Vec::new());
     let read = |n: Node, report: &mut Report| {
         let c = symbol::read(n, reference, turned, layer, report);
         if let (Some(r), Ok(mut had)) = (&c.rotation, rotation.try_borrow_mut())
@@ -98,13 +99,24 @@ fn read_depth(r: Node, layer: &str, style: &mut Style, report: &mut Report, dept
         matches!(kind, "pointCluster" | "pointDisplacement" | "invertedPolygonRenderer" | "mergedFeatureRenderer" | "25dRenderer");
     if style.renderer.is_some() && !wrapper {
         style.marker_rotation = Some(rotation.try_borrow().ok().and_then(|r| r.clone()));
-        let all = by.try_borrow().map(|b| b.clone()).unwrap_or_default();
-        let first = all.iter().find(|b| !b.is_empty()).cloned().unwrap_or_default();
-        // Classes with other expressions, or none, are drawn with the first's.
-        if !first.is_empty() && all.len() > 1 {
-            report.approximated(layer, "symbols with different data-defined settings, all drawn with the first's");
+        let mut all = by.try_borrow().map(|b| b.clone()).unwrap_or_default();
+        // A switched-off class draws nothing: expressions applied to every feature would paint it.
+        let off =
+            r.descendants().any(|n| (n.has_tag_name("category") || n.has_tag_name("range")) && n.attribute("render") == Some("false"));
+        if off && !all.iter().any(SymbolBy::is_empty) {
+            all.push(SymbolBy::default());
         }
-        style.symbol_by = Some(first);
+        // The expressions apply to every feature: kept only when every symbol has the same.
+        let one = match all.as_slice() {
+            [one] => one.clone(),
+            _ => {
+                if all.iter().any(|b| !b.is_empty()) {
+                    report.skipped(layer, "data-defined settings that differ between its classes (or a class switched off)");
+                }
+                SymbolBy::default()
+            }
+        };
+        style.symbol_by = Some(one);
     }
 }
 

@@ -169,7 +169,9 @@ A symbol's data-defined size, fill and outline colours, outline width and marker
 as the layer's [symbol expressions](cartography.md#symbols-by-expression), sizes turned from the
 symbol's unit (millimetres, points, pixels, inches; map units at the reference scale) into points, where RustGIS's [expression language](expressions.md) reads them. A marker of several layers
 scales them all with the size one of its layers takes; a marker drawn as marks (several layers,
-or one shifted or turned) leaves its colours and outline widths by expression out, noted. One using a
+or one shifted or turned) leaves its colours and outline widths by expression out, noted, and so
+does a line of several strokes. They apply to every feature, so a layer whose classes set different
+ones (or one with a class switched off) leaves them out, noted. One using a
 function or variable it lacks, or a field the layer hasn't, is noted and left out.
 
 QGIS filter expressions carry over where they are SQL: fields compared with values, `LIKE`, `IN`,
