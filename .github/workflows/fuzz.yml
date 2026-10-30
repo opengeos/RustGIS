@@ -33,17 +33,21 @@ permissions:
 
 jobs:
   licences:
-    name: Fuzz crate licences
+    name: Fuzz crate licences and format
     if: (github.event_name == 'pull_request' && github.event.label.name == 'ci:fuzz') || (github.event_name != 'pull_request' && (github.repository == 'opengeos/RustGIS' || github.event_name == 'workflow_dispatch'))
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-deny
       # fuzz/deny.toml: the workspace's licences plus NCSA, for libFuzzer.
       - run: cargo deny --manifest-path fuzz/Cargo.toml --locked check licenses
+      # The workspace's `cargo fmt --all` doesn't reach this crate.
+      - run: cargo fmt --manifest-path fuzz/Cargo.toml --check
 
   fuzz:
     name: Fuzz ${{ matrix.target }}
@@ -69,8 +73,9 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-fuzz
-      # The corpus each target has grown, kept between nights.
-      - uses: actions/cache@v6
+      # The corpus each target has grown, kept between nights. Restored and saved as separate steps:
+      # the combined action saves only when the job passes, and a target with a known finding fails.
+      - uses: actions/cache/restore@v6
         with:
           path: fuzz/corpus/${{ matrix.target }}
           key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
@@ -84,11 +89,15 @@ jobs:
       - name: Fuzz
         working-directory: fuzz
         run: |
-          # At most four digits, so the arithmetic below can't wrap; the checked number is what runs.
-          case "$SECONDS_PER_TARGET" in ''|*[!0-9]*|?????*) echo "::error::seconds must be a whole number from 1 to 2400"; exit 1;; esac
+          # Digits only, and at most four once leading zeros are dropped, so the arithmetic below
+          # can't wrap; the checked number is what runs.
+          v="$SECONDS_PER_TARGET"
+          case "$v" in ''|*[!0-9]*) echo "::error::seconds must be a whole number from 1 to 2400"; exit 1;; esac
+          v="${v#"${v%%[!0]*}"}"
+          case "$v" in ?????*) echo "::error::seconds must be a whole number from 1 to 2400"; exit 1;; esac
           # libFuzzer reads 0 as no limit; over 2400 s, a cold build and the run could outlast the job's
           # timeout, and its findings would be lost.
-          n=$((10#$SECONDS_PER_TARGET))
+          n=$((10#${v:-0}))
           [ "$n" -gt 0 ] && [ "$n" -le 2400 ] || { echo "::error::seconds must be from 1 to 2400"; exit 1; }
           # Fork mode with the ignore flags keeps fuzzing past a finding, so one known failure (an
           # unreleased fix in a dependency, say) doesn't stop the rest of the target being explored.
@@ -106,6 +115,12 @@ jobs:
             echo "::error::$TARGET: $(ls "artifacts/$TARGET" | wc -l) failing inputs (crash-, oom- or timeout-)"
             exit 1
           fi
+      - name: Keep the corpus
+        if: ${{ !cancelled() && github.event_name != 'pull_request' }}
+        uses: actions/cache/save@v6
+        with:
+          path: fuzz/corpus/${{ matrix.target }}
+          key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
       - name: Keep the failing inputs
         if: failure() && steps.findings.outcome == 'failure'
         uses: actions/upload-artifact@v7

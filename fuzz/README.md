@@ -27,7 +27,7 @@ From this folder:
 rustup toolchain install nightly
 cargo install cargo-fuzz
 cargo +nightly fuzz build -O
-target/x86_64-unknown-linux-gnu/release/seeds        # writes corpus/<target>/
+${CARGO_TARGET_DIR:-target}/x86_64-unknown-linux-gnu/release/seeds   # writes corpus/<target>/
 cargo +nightly fuzz run -O read_layers -- -max_total_time=600 -rss_limit_mb=2048 -timeout=10
 ```
 
