@@ -1693,6 +1693,36 @@ fn tile_row(app: &mut RustGisApp, ui: &mut Ui, i: usize, moves: [bool; 2], reord
         })
         .response
         .on_hover_text(tl!("How the layer's colours combine with the tile layers and basemap beneath."));
+        // A layer its service draws on request: one picture of the view, or tiles (#1162).
+        if tile.on_request() {
+            let shown = if tile.single_image {
+                tl!("Single image").to_string()
+            } else if tile.sized_tiles() {
+                crate::i18n::fmt("Tiles of {size} px", &[("size", &tile.tile_size.to_string())])
+            } else {
+                tl!("Tiles").to_string()
+            };
+            ui.menu_button(crate::i18n::fmt("Draw as: {how}", &[("how", &shown)]), |ui| {
+                if ui.radio(tile.single_image, tl!("Single image")).on_hover_text(tl!("One picture of the view: symbols and labels aren't cut at tile edges, and the service is asked once a view. Drawn in tiles on the globe, on a tilted map, or in a projection the service doesn't offer.")).clicked() {
+                    action = Some(("map.setTiles", json!({"index": i, "singleImage": true})));
+                    ui.close();
+                }
+                if tile.sized_tiles() {
+                    for side in [256u32, 512, 1024] {
+                        let label = crate::i18n::fmt("Tiles of {size} px", &[("size", &side.to_string())]);
+                        if ui.radio(!tile.single_image && tile.tile_size == side, label).clicked() {
+                            action = Some(("map.setTiles", json!({"index": i, "singleImage": false, "tileSize": side})));
+                            ui.close();
+                        }
+                    }
+                } else if ui.radio(!tile.single_image, tl!("Tiles")).clicked() {
+                    action = Some(("map.setTiles", json!({"index": i, "singleImage": false})));
+                    ui.close();
+                }
+            })
+            .response
+            .on_hover_text(tl!("Whether the service is asked for one picture of the view or for tiles."));
+        }
         ui.separator();
         if ui.add_enabled(reorder && moves[0], egui::Button::new(tl!("Move up"))).clicked() {
             action = Some(("map.setTiles", json!({"index": i, "move": "up"})));

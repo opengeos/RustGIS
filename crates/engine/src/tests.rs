@@ -9275,6 +9275,63 @@ fn an_arcgis_token_in_a_service_address_reaches_its_layers() {
     assert!(kept.is_none() && arcgis_auth::authorization(wms).is_none());
 }
 
+/// A layer its service draws on request (#1162): one picture of the view when added from its
+/// service, tiles of 256, 512 or 1024 pixels when asked; a project saved before keeps its tiles;
+/// tiles cut from a tile set refuse both.
+#[test]
+fn wms_layers_draw_as_one_picture_or_tiles_of_a_size() {
+    const WMS: &str = r#"<WMS_Capabilities version="1.3.0" xmlns="http://www.opengis.net/wms" xmlns:xlink="http://www.w3.org/1999/xlink">
+<Service><Title>Test WMS</Title></Service>
+<Capability><Request><GetMap><Format>image/png</Format><DCPType><HTTP><Get><OnlineResource xlink:href="https://maps.example.com/wms?"/></Get></HTTP></DCPType></GetMap></Request>
+<Layer><CRS>EPSG:3857</CRS><CRS>EPSG:4326</CRS><Layer><Name>roads</Name><Title>Roads</Title></Layer></Layer></Capability></WMS_Capabilities>"#;
+    let mut s = Session::new(Project::default());
+    s.run("service.add", &json!({"url": "https://maps.example.com/wms", "layer": "roads", "text": WMS})).unwrap();
+    let roads = |s: &Session| s.map().tiles.iter().find(|t| t.name == "Roads").cloned().unwrap();
+    assert!(roads(&s).single_image, "one picture of the view, from its service");
+    // Offered in another system too: drawn in Web Mercator as it comes, its other systems kept
+    // for maps in them (as most services are).
+    assert!(roads(&s).url.contains("#rustgis-warp=") && roads(&s).sized_tiles(), "{}", roads(&s).url);
+    let listed = s.run("map.tiles", &json!({})).unwrap();
+    assert_eq!((listed[0]["singleImage"].clone(), listed[0]["tileSize"].clone()), (json!(true), json!(256)));
+    // Tiles of 1024 pixels: asked for that size.
+    s.run("map.setTiles", &json!({"name": "Roads", "singleImage": false, "tileSize": 1024.0})).unwrap();
+    let t = roads(&s);
+    assert!(!t.single_image && t.tile_size == 1024);
+    assert!(t.url.contains("&WIDTH=1024&HEIGHT=1024&") && t.url.contains("#rustgis-warp="), "{}", t.url);
+    // Its pictures in another system take any size still.
+    let base = t.url.split('#').next().unwrap();
+    assert!(rustgis_data::ogc::warp::Warp::map_template(base).contains("BBOX={nbbox}&WIDTH={nw}&HEIGHT={nh}"));
+    // Kept with the project, and undone.
+    let saved: rustgis_map::TileLayer = serde_json::from_value(serde_json::to_value(&t).unwrap()).unwrap();
+    assert_eq!((saved.single_image, saved.tile_size), (false, 1024));
+    assert!(s.undo());
+    let t = roads(&s);
+    assert!(t.single_image && t.tile_size == 256 && t.url.contains("&WIDTH=256&HEIGHT=256&"));
+    // Junk refused, nothing changed.
+    for bad in
+        [json!({"name": "Roads", "tileSize": 300}), json!({"name": "Roads", "tileSize": "big"}), json!({"name": "Roads", "tileSize": 2048})]
+    {
+        assert!(s.run("map.setTiles", &bad).is_err(), "{bad}");
+    }
+    assert_eq!(roads(&s).tile_size, 256);
+    // A project saved before: tiles, as then.
+    let mut old = serde_json::to_value(roads(&s)).unwrap();
+    old.as_object_mut().unwrap().remove("singleImage");
+    let old: rustgis_map::TileLayer = serde_json::from_value(old).unwrap();
+    assert!(!old.single_image);
+    // Tiles cut from a tile set are neither.
+    s.run("map.addTiles", &json!({"url": "https://tile.example.org/{z}/{x}/{y}.png", "name": "XYZ", "overlay": true})).unwrap();
+    let e = s.run("map.setTiles", &json!({"name": "XYZ", "singleImage": true})).unwrap_err();
+    assert!(e.contains("draws on request"), "{e}");
+    assert!(s.run("map.setTiles", &json!({"name": "XYZ", "tileSize": 1024})).is_err());
+    assert!(s.run("map.addTiles", &json!({"url": "https://tile.example.org/{z}/{x}/{y}.png", "singleImage": true})).is_err());
+    // A map service's export added with a tile size: its size asked for.
+    let export = "https://s.example.org/arcgis/rest/services/x/MapServer/export?bbox={bbox-epsg-3857}&bboxSR=3857&imageSR=3857&size=256,256&format=png32&f=image";
+    s.run("map.addTiles", &json!({"url": export, "name": "Export", "overlay": true, "tileSize": 512})).unwrap();
+    let t = s.map().tiles.iter().find(|t| t.name == "Export").unwrap();
+    assert!(t.url.contains("&size=512,512&") && t.tile_size == 512 && !t.single_image, "{}", t.url);
+}
+
 /// A WMS layer added from its service takes its legends (the service's GetLegendGraphic, then
 /// its style's picture); any tile layer can be given one, or several for their scales; they and
 /// whether they show are kept with the project and undo; junk is refused.

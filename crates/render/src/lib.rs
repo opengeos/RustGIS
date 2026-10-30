@@ -26,6 +26,7 @@ pub mod post;
 mod raster;
 pub mod raster_export;
 pub mod report;
+mod single_image;
 mod stroke_paths;
 pub mod svg;
 pub mod terrain;

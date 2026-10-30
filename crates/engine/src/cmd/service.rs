@@ -445,6 +445,12 @@ pub(crate) fn add(s: &mut Session, p: &Value) -> CmdResult {
             };
             // With its legends, as its service gives them (none: no key, as before).
             let mut add = json!({"url": template, "kind": "raster", "name": name, "overlay": true, "bounds": layer.bbox});
+            // A layer its service draws on request (a WMS, an ArcGIS map service) is asked for
+            // as one picture of the view, so its symbols and labels aren't cut at tile edges
+            // (#1162); `map.setTiles` turns it back to tiles.
+            if rustgis_map::tiles::drawn_on_request(&template) {
+                add["singleImage"] = json!(true);
+            }
             // The zooms its service draws it at (a WMS layer's scale hints, a WMTS layer's matrices):
             // closer in, its finest tiles are stretched rather than asked for.
             if let Some((min, max)) = layer.zooms {

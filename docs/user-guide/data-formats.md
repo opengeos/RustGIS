@@ -173,7 +173,7 @@ Scripts use `service.import {"url":"…","name":"My OGC Layer"}` and
 
 | Service | What it lists | How a layer is added |
 | --- | --- | --- |
-| WMS 1.1.1 / 1.3.0 | Named layers offered in Web Mercator or in a coordinate system RustGIS can transform (an EPSG code, CRS:84) | A tile layer of GetMap images (PNG when the service offers it, else JPEG); see [Services in other coordinate systems](#services-in-other-coordinate-systems) |
+| WMS 1.1.1 / 1.3.0 | Named layers offered in Web Mercator or in a coordinate system RustGIS can transform (an EPSG code, CRS:84) | A layer of GetMap images (PNG when the service offers it, else JPEG): one picture of the view, or tiles; see [One picture of the view, or tiles](#one-picture-of-the-view-or-tiles) and [Services in other coordinate systems](#services-in-other-coordinate-systems) |
 | WMTS | Layers whose tile matrix set is Web Mercator's pyramid, or a tile matrix set in a coordinate system RustGIS can transform | A tile layer from the tile template (or KVP GetTile) |
 | WFS 1.1 / 2.0 | Feature types | Their features downloaded as GeoJSON, in the output format the service names (up to 50,000) |
 | OGC API Features | Collections | Their items downloaded as GeoJSON, following the service's `next` pages up to 100,000 features (a command such as `service.add` waits a minute at most) |
@@ -241,6 +241,33 @@ never cause a blocking capabilities fetch. Each listed layer includes `source_ur
 and the same documents to `service.add` to distinguish layers with the same name. Discovery
 follows at most four documents and rejects loops and disallowed addresses. Collection lists
 aren't paged. On the desktop, feature downloads follow their `next` pages (see the table above).
+
+### One picture of the view, or tiles
+
+A WMS layer and an ArcGIS map or image service's export draw their pictures on request, for any
+area and size. Added from **Add Service**, the Library or the National Map (its drawn maps; its
+imagery stays in tiles), such a layer is asked for **one picture of the view**: the service lays
+out its symbols and labels over the whole view, so none is cut at a tile edge, and it is asked
+once a view instead of for every tile (#1162).
+
+- The picture reaches past the view, its middle on a grid, so small pans and zooms (most of a
+  quarter of a level) ask for nothing new; while the next picture loads, the last one stays in
+  place.
+- It is asked for in the map's logical pixels, as tiles are, so the service's symbols keep their
+  size on a high-density screen; at most 4096 pixels a side (2048 for the rest of the session
+  once a larger picture of the layer fails), coarser for a view larger than that.
+- Nothing is asked for zoomed out past the layer's scale range or outside its bounds, as with
+  its tiles.
+- It is drawn so on a flat map, north up or turned, in Web Mercator or in a
+  [projection the service offers](#services-in-other-coordinate-systems). On the globe, a tilted
+  map, a projection the service doesn't offer, or a Web Mercator view across the antimeridian
+  (which tiles wrap), the layer is drawn in tiles. Exports and layouts ask for their own picture.
+
+Right-click the layer in the Layers pane, **Draw as**, to switch to **Tiles** and back to
+**Single image** (`map.setTiles` with `"singleImage"`). A layer asked for in Web Mercator takes
+tiles of 256, 512 or 1024 pixels (`"tileSize"`): larger tiles cut fewer labels and ask fewer times.
+Tiles are fetched while the map moves, and kept for panning back. A layer in a project saved
+before keeps its tiles until you switch it.
 
 ### Services in other coordinate systems
 
