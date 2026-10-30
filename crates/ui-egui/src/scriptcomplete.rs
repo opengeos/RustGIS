@@ -629,16 +629,25 @@ fn tool_value(script: &str, at: usize, session: &rustgis_engine::Session) -> Opt
             let d = crate::panes::input_dataset(session, &input)?;
             let names = d.fields.iter().enumerate().filter(|(i, _)| takes_field(p.kind, d, *i)).map(|(_, f)| f.name.as_str());
             let (start, word) = if p.kind == K::Fields {
-                let suffix = word.rsplit([',', ';']).next()?.trim_start();
-                (start + word.chars().count() - suffix.chars().count(), suffix)
+                let (off, suffix) = list_suffix(&word);
+                (start + off, suffix)
             } else {
-                (start, word.as_str())
+                (start, word)
             };
-            value_ids(start, at, word, names, Of::ToolFields(input))
+            value_ids(start, at, &word, names, Of::ToolFields(input))
         }
         K::Choice(choices) => value_ids(start, at, &word, choices.iter().copied(), Of::Choices),
         _ => None,
     }
+}
+
+/// The name a `Fields` completion replaces: the list's last entry, after any `,`/`;` and the
+/// spaces following it, with the character offset it begins at, so earlier entries stay typed.
+fn list_suffix(word: &str) -> (usize, String) {
+    let cut = word.char_indices().filter(|(_, c)| matches!(c, ',' | ';')).map(|(i, c)| i + c.len_utf8()).next_back().unwrap_or(0);
+    let (head, tail) = word.split_at(cut);
+    let spaces = tail.len() - tail.trim_start().len();
+    (head.chars().count() + tail[..spaces].chars().count(), tail.trim_start().to_string())
 }
 
 /// What follows a cursor in a key (`after`, to the line's end) up to the `}` that closes the key's
@@ -2712,6 +2721,15 @@ mod tests {
         assert!(offer(&app, r#"gp.run {"tool": "nope", "params": {"input": ""#).is_none(), "a tool that isn't there");
         assert!(offer(&app, r#"gp.run {"tool": "buffer", "params": {"input": {"x": ""#).is_none(), "deeper");
         assert!(offer(&app, r#"task.addStep {"command": "buffer", "params": {"input": ""#).is_none(), "another command's params");
+    }
+
+    /// A `Fields` completion replaces only the list's last name, so earlier names stay typed.
+    #[test]
+    fn a_field_list_completes_only_its_last_name() {
+        assert_eq!(super::list_suffix("name, pop"), (6, "pop".into()));
+        assert_eq!(super::list_suffix("name;pop"), (5, "pop".into()));
+        assert_eq!(super::list_suffix("name, "), (6, String::new()));
+        assert_eq!(super::list_suffix("pop"), (0, "pop".into()));
     }
 
     /// Beside a table, its rows and the table icon; beside a tool's field, its type and the field

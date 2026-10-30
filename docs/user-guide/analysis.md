@@ -475,7 +475,7 @@ columns; a value or class field can also use text columns.
 The text box stays editable for new column names or fields not yet known before a model runs.
 For plural field parameters, each choice appends a name, separated by a comma (or by `;` if the
 text already uses that separator). Follow the parameter's help if its runner needs different
-list syntax. Leave optional weight fields blank to count each feature equally.
+list syntax, and check the tool's own help for what a weight field left blank means.
 
 - Raster inputs are passed as their own files; vector layers (or their selection) are written
   in the first raster input's coordinate system, or, with no raster input, the UTM zone around
