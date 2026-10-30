@@ -246,6 +246,7 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
                                             // editor may have kept it on losing the focus).
                                             if let Some(e) = app.table.editing.take()
                                                 && !commits.iter().any(|q| q.0 == e.fid && q.1 == e.col)
+                                                && cancel != Some((e.fid, e.col))
                                             {
                                                 commits.push((e.fid, e.col, e.text, e.was));
                                             }
@@ -312,7 +313,13 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
                     app.session.notify(msg, true);
                     continue;
                 }
-                let _ = app.run("edit.setValue", json!({"layer": layer_id, "row": r, "field": fd.name, "value": text}));
+                // Refused (editing turned off, a domain or rule): said, unless the command said so.
+                let mark = app.session.notice_mark();
+                if let Err(e) = app.run("edit.setValue", json!({"layer": layer_id, "row": r, "field": fd.name, "value": text}))
+                    && app.session.notices_since(mark).is_empty()
+                {
+                    app.session.notify(e, true);
+                }
             }
         });
 }
@@ -327,8 +334,11 @@ fn fits(text: &str, ty: rustgis_engine::data::FieldType) -> bool {
         || t.eq_ignore_ascii_case("<null>")
         || match ty {
             T::Text => true,
-            // A whole number, or a finite number in range (`Value::parse` truncates it).
-            T::Integer => t.parse::<i64>().is_ok() || t.parse::<f64>().is_ok_and(|f| f.is_finite() && f.abs() < 9.2e18),
+            // A whole number, also written as a float (`1e3`), in range (`Value::parse` would
+            // truncate a fraction or saturate past the range).
+            T::Integer => {
+                t.parse::<i64>().is_ok() || t.parse::<f64>().is_ok_and(|f| f.fract() == 0.0 && f >= i64::MIN as f64 && f < i64::MAX as f64)
+            }
             T::Double => t.parse::<f64>().is_ok_and(f64::is_finite),
             T::Boolean => matches!(t.to_ascii_lowercase().as_str(), "true" | "false" | "yes" | "no" | "1" | "0" | "y" | "n"),
         }
@@ -397,6 +407,18 @@ mod tests {
         h.run_steps(2);
         assert_eq!(h.state().session.map().layer(id).unwrap().dataset.value(0, num).to_string(), number);
         assert!(h.state().table.editing.is_none());
+        // With editing turned off, a value isn't kept, and the table says why.
+        h.state_mut().session.map_mut().editing.settings.enabled = false;
+        let mark = h.state().session.notice_mark();
+        h.state_mut().table.editing = Some(CellEdit::new(Some(id), fid[0], col, String::new()));
+        h.run_steps(2);
+        h.event(egui::Event::Text("Off".into()));
+        h.run_steps(2);
+        h.key_press(egui::Key::Enter);
+        h.run_steps(2);
+        assert_eq!(value(h.state(), 0), format!("{first}Zed"));
+        assert!(h.state().session.notices_since(mark).iter().any(|n| n.text.contains("editing is turned off")), "said why");
+        h.state_mut().session.map_mut().editing.settings.enabled = true;
         h.state_mut().table.editing = Some(CellEdit::new(Some(id), fid[0], col, String::new()));
         h.state_mut().session.table_layer = None;
         h.run_steps(2);
@@ -413,6 +435,9 @@ mod tests {
             ("1e3", T::Integer, true),
             ("-7", T::Integer, true),
             ("1e30", T::Integer, false),
+            ("1.5", T::Integer, false),
+            ("9.21e18", T::Integer, true),
+            ("1e19", T::Integer, false),
             ("NaN", T::Integer, false),
             ("inf", T::Double, false),
             ("tru", T::Boolean, false),
