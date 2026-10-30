@@ -53,6 +53,7 @@ jobs:
         target: [read_layers, sniff, geotiff, wkt, wkb, mvt, project]
     env:
       SECONDS_PER_TARGET: ${{ github.event_name == 'pull_request' && '60' || inputs.seconds || '600' }}
+      TARGET: ${{ matrix.target }}
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@nightly
@@ -76,11 +77,11 @@ jobs:
       - name: Seed the corpus
         working-directory: fuzz
         run: target/x86_64-unknown-linux-gnu/release/seeds
-      - name: Fuzz for ${{ env.SECONDS_PER_TARGET }} s
+      - name: Fuzz
         working-directory: fuzz
-        run: >-
-          cargo fuzz run -O ${{ matrix.target }} --
-          -max_total_time=${{ env.SECONDS_PER_TARGET }} -rss_limit_mb=2048 -timeout=10
+        run: |
+          case "$SECONDS_PER_TARGET" in ''|*[!0-9]*) echo "::error::seconds must be a whole number"; exit 1;; esac
+          cargo fuzz run -O "$TARGET" -- -max_total_time="$SECONDS_PER_TARGET" -rss_limit_mb=2048 -timeout=10
       - name: Keep the input that failed
         if: failure()
         uses: actions/upload-artifact@v7
@@ -92,7 +93,8 @@ jobs:
   report:
     name: Report
     needs: [licences, fuzz]
-    if: always() && github.event_name == 'schedule' && (needs.fuzz.result == 'failure' || needs.licences.result == 'failure')
+    # Only a fuzz target's failure is a crash; a licence failure fails the run without an issue.
+    if: always() && github.event_name == 'schedule' && needs.fuzz.result == 'failure'
     runs-on: ubuntu-latest
     permissions:
       issues: write

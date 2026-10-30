@@ -7,7 +7,7 @@ allocations and hangs that hand-written hostile-input tests don't anticipate.
 | Target | Calls | Covers |
 |---|---|---|
 | `read_layers` | `io::read_layers`, the first byte picking the extension from `READ_EXTENSIONS` | GeoJSON, CSV, KML/KMZ, GPX, GML, DXF, OSM PBF, TopoJSON, MapInfo, zipped Shapefiles, GeoPackage, GeoParquet, FlatGeobuf, LAS/LAZ and the rest |
-| `sniff` | `io::sniff_extension`, then `read_layers` | files dropped without an extension |
+| `sniff` | `io::sniff_extension`, then `raster::read_bytes` for a raster or `read_layers` | files dropped without an extension |
 | `geotiff` | `raster::geotiff::read` | GeoTIFF and the `tiff` crate |
 | `wkt` | `raster::wkt::read_wkt` | `.prj` files, GeoPackage spatial reference rows |
 | `wkb` | `wkb::decode` | GeoPackage, GeoParquet and PostGIS geometry |
