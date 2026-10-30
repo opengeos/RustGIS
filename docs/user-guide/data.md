@@ -570,7 +570,9 @@ Data Sources** also opens it) gathers the places data comes from:
   edit, test, duplicate, copy its address or remove it.
 - **Library**: well-known public sources: OpenStreetMap tiles, EOX Sentinel-2 cloudless and
   NASA GIBS (WMTS), USGS imagery, topographic and hydrography maps (ArcGIS), GEBCO bathymetry
-  (WMS), swisstopo's maps and imagery (geo.admin.ch, WMTS), Earth Search and Planetary Computer (STAC), and the Natural Earth sample layers.
+  (WMS), swisstopo's maps and imagery (geo.admin.ch) as WMTS tiles and as a WMS (most of its
+  layers answer Identify), Earth Search and Planetary Computer (STAC), and the Natural Earth
+  sample layers.
 
 A click on a file, a web address, a tile layer or a sample adds it at once. The lists are kept
 with the app's preferences, never in a project. They hold no secrets: a web address loses its
