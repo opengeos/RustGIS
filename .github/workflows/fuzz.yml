@@ -21,8 +21,9 @@ on:
         description: Seconds per target (1 to 2400)
         default: "600"
 
+# A manual run and the nightly one don't cancel each other.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
   cancel-in-progress: true
 
 permissions:
@@ -46,7 +47,8 @@ jobs:
     name: Fuzz ${{ matrix.target }}
     if: (github.event_name == 'pull_request' && github.event.label.name == 'ci:fuzz') || (github.event_name != 'pull_request' && (github.repository == 'opengeos/RustGIS' || github.event_name == 'workflow_dispatch'))
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    # Room for a cold build (about 10 minutes) and the longest run allowed (2400 s).
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
@@ -81,8 +83,8 @@ jobs:
         working-directory: fuzz
         run: |
           case "$SECONDS_PER_TARGET" in ''|*[!0-9]*) echo "::error::seconds must be a whole number"; exit 1;; esac
-          # libFuzzer reads 0 as no limit; over 2400 s, the build and the run outlast the job's timeout
-          # and its findings would be lost.
+          # libFuzzer reads 0 as no limit; over 2400 s, a cold build and the run could outlast the job's
+          # timeout, and its findings would be lost.
           n=$((10#$SECONDS_PER_TARGET))
           [ "$n" -gt 0 ] && [ "$n" -le 2400 ] || { echo "::error::seconds must be from 1 to 2400"; exit 1; }
           # Fork mode with the ignore flags keeps fuzzing past a finding, so one known failure (an
@@ -136,18 +138,22 @@ jobs:
           open="$(gh issue list -R "$GITHUB_REPOSITORY" --state open --search "in:title \"$title\"" \
             --json number,title --jq "[.[] | select(.title == \"$title\")][0].number // \"\"")"
           # One issue at a time: a reader that keeps failing isn't news every night, but a target that
-          # starts failing is, so it gets a comment on the open issue.
+          # starts failing is, so it gets a comment on the open issue. The targets reported so far are
+          # read only from the hidden markers this step writes, never from people's comments.
           if [ -z "$open" ]; then
             gh issue create -R "$GITHUB_REPOSITORY" --title "$title" \
-              --body "The nightly fuzz run on $GITHUB_SHA found failing inputs for: $targets. Run: $RUN. They are attached to the run as artifacts; fix the reader and add each input as a regression test (fuzz/README.md)."
+              --body "The nightly fuzz run on $GITHUB_SHA found failing inputs for: $targets. Run: $RUN. They are attached to the run as artifacts; fix the reader and add each input as a regression test (fuzz/README.md).
+          <!-- fuzz-targets: $targets -->"
           else
-            seen="$(gh issue view "$open" -R "$GITHUB_REPOSITORY" --json body,comments --jq '[.body, .comments[].body] | join(" ")')"
+            seen=" $(gh issue view "$open" -R "$GITHUB_REPOSITORY" --json body,comments --jq '[.body, .comments[].body] | join("\n")' \
+              | sed -n 's/.*<!-- fuzz-targets: \([a-z_,]*\) -->.*/\1/p' | tr ',\n' '  ') "
             new=""
             for t in $(echo "$targets" | tr ',' ' '); do
-              case " $(echo "$seen" | tr -c 'a-z_' ' ') " in *" $t "*) ;; *) new="$new${new:+,}$t";; esac
+              case "$seen" in *" $t "*) ;; *) new="$new${new:+,}$t";; esac
             done
             if [ -n "$new" ]; then
               gh issue comment "$open" -R "$GITHUB_REPOSITORY" \
-                --body "The nightly fuzz run on $GITHUB_SHA also found failing inputs for: $new. Run: $RUN."
+                --body "The nightly fuzz run on $GITHUB_SHA also found failing inputs for: $new. Run: $RUN.
+          <!-- fuzz-targets: $new -->"
             fi
           fi
