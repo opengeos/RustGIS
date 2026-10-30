@@ -259,11 +259,14 @@ once a view instead of for every tile (#1162).
   to draw leaves the layer drawn in tiles there.
 - Nothing is asked for zoomed out past the layer's scale range or outside its bounds, and closer
   in than its finest zoom its picture there is stretched, as its tiles are.
-- It is drawn so on a flat map, north up or turned, in Web Mercator or in a
-  [projection the service offers](#services-in-other-coordinate-systems). On the globe, a tilted
-  map, a projection the service doesn't offer, or a Web Mercator view across or near the
-  antimeridian (whose picture, a little larger than the view, would cross it; tiles wrap), the
-  layer is drawn in tiles. Exports and layouts ask for their own picture.
+- It is drawn so on a flat map, north up or turned, in Web Mercator or in a projection with an
+  EPSG code. The picture is asked for in the map's own system when the service offers it (a
+  map service's export takes any: the service projects it); otherwise in one it does offer
+  (Web Mercator, or the WMS layer's [own system](#services-in-other-coordinate-systems)), and
+  warped into place piece by piece. On the globe, a tilted map, a projection without an EPSG
+  code (the presets), or a Web Mercator picture across or near the antimeridian (a little
+  larger than the view, it would cross it; tiles wrap), the layer is drawn in tiles. Exports
+  and layouts ask for their own picture.
 
 Right-click the layer in the Layers pane, **Draw as**, to switch to **Tiles** and back to
 **Single image** (`map.setTiles` with `"singleImage"`). A layer asked for in Web Mercator takes

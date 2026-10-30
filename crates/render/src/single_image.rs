@@ -44,26 +44,42 @@ pub(crate) struct Request {
     /// From the system to longitude/latitude and back; `None` for Web Mercator on a Web
     /// Mercator map (the map's own units).
     transformer: Option<Arc<Transformer>>,
+    /// In another system than the map's: warped into place.
+    warp: bool,
 }
 
-/// How `t` is asked for one picture on a flat map in `epsg` (3857 for Web Mercator): `None` when
-/// it isn't to be, or can't be (its service doesn't offer it in that system): it is drawn in
-/// tiles then.
+/// How `t` is asked for one picture on a flat map in `epsg` (3857 for Web Mercator): in the map's
+/// system when its service offers it (an ArcGIS export takes any), else in one it does, warped
+/// into place. `None` when it isn't to be, or can't be: it is drawn in tiles then.
 pub(crate) fn of(t: &TileLayer, epsg: u16) -> Option<Request> {
     if !t.single_image || !t.on_request() {
         return None;
     }
     let mercator = || System { epsg: 3857, name: "EPSG:3857".into(), lat_first: false };
+    // In `system`, on a map in `epsg`: as it comes on a map in it, else through longitude and
+    // latitude (and warped into place).
+    let request = |base: String, system: System| -> Option<Request> {
+        let transformer = match (system.epsg, epsg) {
+            (3857, 3857) => None,
+            // Web Mercator, on a map in another system (`usable` leaves it out: maps are in it).
+            (3857, _) => Some(rustgis_data::ogc::warp::transformer(3857)?),
+            (own, _) => Some(rustgis_tiles::warp::transformer(own)?),
+        };
+        Some(Request { warp: system.epsg != epsg, base, system, transformer })
+    };
     if !t.url.contains(rustgis_data::ogc::warp::MARK) {
-        // Asked for in Web Mercator by its box: on a Web Mercator map only.
-        if epsg != 3857 {
-            return None;
-        }
+        // Asked for in Web Mercator by its box.
         let base = rustgis_map::tiles::sized(&t.url, "{nw}", "{nh}")
             .replace("{bbox-epsg-3857}", "{nbbox}")
             .replace("{width}", "{nw}")
             .replace("{height}", "{nh}");
-        return Some(Request { base, system: mercator(), transformer: None });
+        // A map service's export in the map's own system: the service projects it.
+        if epsg != 3857
+            && let Some(own) = export_in(&base, epsg)
+        {
+            return request(own, System { epsg, name: format!("EPSG:{epsg}"), lat_first: false });
+        }
+        return request(base, mercator());
     }
     // A layer of a system of its own: asked for in the map's when its service offers it.
     let filled = t.url.replacen("{z}/{x}/{y}", "0/0/0", 1);
@@ -71,19 +87,36 @@ pub(crate) fn of(t: &TileLayer, epsg: u16) -> Option<Request> {
     if !matches!(w.grid, Grid::Map { .. }) {
         return None;
     }
-    // Web Mercator for a layer drawn in it as it comes (a WMS that offers other systems too,
-    // marked `crs=3857`): its other systems are listed, not that one.
+    // Else in the one it is drawn in: Web Mercator for one drawn in it as it comes (a WMS that
+    // offers other systems too, marked `crs=3857`, whose other systems are listed, not that one).
     let system = match w.system(epsg) {
         Some(s) => s.clone(),
-        None if epsg == 3857 && w.epsg == 3857 => mercator(),
-        None => return None,
+        None if w.epsg == 3857 => mercator(),
+        None => w.system(w.epsg)?.clone(),
     };
-    let base = Warp::map_template(base);
-    if epsg == 3857 {
-        return Some(Request { base, system, transformer: None });
+    request(Warp::map_template(base), system)
+}
+
+/// A map service export's address (`…/export` or `…/exportImage`, its box and picture in Web
+/// Mercator: `bboxSR` and `imageSR` 3857) asked for in `epsg` instead; `None` for any other.
+fn export_in(base: &str, epsg: u16) -> Option<String> {
+    let (path, query) = base.split_once('?')?;
+    let lower = path.to_ascii_lowercase();
+    if !(lower.ends_with("/export") || lower.ends_with("/exportimage")) {
+        return None;
     }
-    let transformer = Some(rustgis_tiles::warp::transformer(epsg)?);
-    Some(Request { base, system, transformer })
+    let mut keys = 0;
+    let parts: Vec<String> = query
+        .split('&')
+        .map(|part| match part.split_once('=') {
+            Some((k, "3857" | "102100")) if k.eq_ignore_ascii_case("bboxSR") || k.eq_ignore_ascii_case("imageSR") => {
+                keys += 1;
+                format!("{k}={epsg}")
+            }
+            _ => part.to_string(),
+        })
+        .collect();
+    (keys == 2).then(|| format!("{path}?{}", parts.join("&")))
 }
 
 /// The picture to ask for: its area (west, south, east, north in the system) and size in
@@ -230,7 +263,16 @@ pub(crate) fn draw(pm: &mut Pixmap, req: &Request, t: &TileLayer, view: &View, f
     let key = format!("{} {}", req.system.epsg, req.base);
     let opacity = t.opacity.clamp(0.0, 1.0);
     let blend = crate::blend_mode(t.blend);
-    let paint = |pm: &mut Pixmap, img: &Pixmap, at: [f64; 4]| crate::native_tiles::paint_blended(pm, img, at, at, opacity, blend, &place);
+    // In another system than the map's, warped into place piece by piece (one affine placing
+    // would leave it off where the systems bend apart).
+    let warped = req.warp;
+    let paint = |pm: &mut Pixmap, img: &Pixmap, at: [f64; 4]| {
+        if warped {
+            paint_warped(pm, img, at, opacity, blend, &place);
+        } else {
+            crate::native_tiles::paint_blended(pm, img, at, at, opacity, blend, &place);
+        }
+    };
     // Asked again smaller when the service refuses a large picture.
     for _ in 0..2 {
         let small = kept().small.get(&key).is_some_and(|at| at.elapsed() < SMALL_FOR);
@@ -281,9 +323,98 @@ pub(crate) fn draw(pm: &mut Pixmap, req: &Request, t: &TileLayer, view: &View, f
     None
 }
 
+/// Cells a side a picture in another system is warped in: each placed by its own corners, so
+/// it is off by at most the bend within a cell.
+const WARP_CELLS: u32 = 16;
+
+/// Draws `img`, covering `at` (west, south, east, north in its system), over `pm` through `place`
+/// (a point of its system to the view's pixels) cell by cell: each cell an affine piece fitted to
+/// its corners, the cells meeting without seams.
+fn paint_warped(
+    pm: &mut Pixmap,
+    img: &Pixmap,
+    at: [f64; 4],
+    opacity: f32,
+    blend: tiny_skia::BlendMode,
+    place: &dyn Fn(Coord) -> Option<(f32, f32)>,
+) {
+    use tiny_skia::{FillRule, FilterQuality, Paint, PathBuilder, Pattern, SpreadMode, Transform};
+    let (iw, ih) = (img.width() as f32, img.height() as f32);
+    if iw <= 0.0 || ih <= 0.0 {
+        return;
+    }
+    let n = WARP_CELLS;
+    // The grid's points on screen, row by row from the top.
+    let point = |i: u32, j: u32| {
+        let (fx, fy) = (f64::from(i) / f64::from(n), f64::from(j) / f64::from(n));
+        place(Coord::new(at[0] + (at[2] - at[0]) * fx, at[3] - (at[3] - at[1]) * fy))
+    };
+    let grid: Vec<Option<(f32, f32)>> = (0..=n).flat_map(|j| (0..=n).map(move |i| (i, j))).map(|(i, j)| point(i, j)).collect();
+    let at_grid = |i: u32, j: u32| grid.get((j * (n + 1) + i) as usize).copied().flatten();
+    let (cw, ch) = (iw / n as f32, ih / n as f32);
+    for j in 0..n {
+        for i in 0..n {
+            let (Some(tl), Some(tr), Some(bl), Some(br)) = (at_grid(i, j), at_grid(i + 1, j), at_grid(i, j + 1), at_grid(i + 1, j + 1))
+            else {
+                continue;
+            };
+            // The picture's pixels to the screen, fitted to the cell's top-left, top-right and
+            // bottom-left corners.
+            let (sx, sy) = (i as f32 * cw, j as f32 * ch);
+            let (a, b) = ((tr.0 - tl.0) / cw, (tr.1 - tl.1) / cw);
+            let (c, d) = ((bl.0 - tl.0) / ch, (bl.1 - tl.1) / ch);
+            let transform = Transform::from_row(a, b, c, d, tl.0 - a * sx - c * sy, tl.1 - b * sx - d * sy);
+            let mut path = PathBuilder::new();
+            path.move_to(tl.0, tl.1);
+            path.line_to(tr.0, tr.1);
+            path.line_to(br.0, br.1);
+            path.line_to(bl.0, bl.1);
+            path.close();
+            let Some(path) = path.finish() else { continue };
+            let shader = Pattern::new(img.as_ref(), SpreadMode::Pad, FilterQuality::Bilinear, opacity, transform);
+            // Without anti-aliasing, neighbouring cells meet without a seam.
+            let paint = Paint { shader, anti_alias: false, blend_mode: blend, ..Paint::default() };
+            pm.fill_path(&path, &paint, FillRule::Winding, Transform::identity(), None);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A picture warped piece by piece lands where `place` puts each of its points: an affine
+    /// placing draws as one quad does, and a bent one is followed (a picture's middle where the
+    /// bend puts it, not where its corners alone would).
+    #[test]
+    fn a_picture_in_another_system_is_warped_into_place() {
+        let mut img = Pixmap::new(64, 64).unwrap();
+        img.fill(tiny_skia::Color::from_rgba8(200, 30, 30, 255));
+        // A blue dot in its middle.
+        for y in 30..34 {
+            for x in 30..34 {
+                img.pixels_mut()[y * 64 + x] = tiny_skia::ColorU8::from_rgba(30, 30, 200, 255).premultiply();
+            }
+        }
+        let at = [0.0, 0.0, 64.0, 64.0];
+        let shift = |c: Coord| Some(((c.x + 10.0) as f32, (74.0 - c.y) as f32));
+        let (mut a, mut b) = (Pixmap::new(100, 100).unwrap(), Pixmap::new(100, 100).unwrap());
+        paint_warped(&mut a, &img, at, 1.0, tiny_skia::BlendMode::SourceOver, &shift);
+        crate::native_tiles::paint_blended(&mut b, &img, at, at, 1.0, tiny_skia::BlendMode::SourceOver, &shift);
+        let differ = a.pixels().iter().zip(b.pixels()).filter(|(p, q)| p != q).count();
+        assert!(differ < 64, "{differ} pixels differ from one quad");
+        // Bent: x pushed right the more the further up.
+        let bend = |c: Coord| Some(((c.x + 10.0 + c.y * c.y / 128.0) as f32, (74.0 - c.y) as f32));
+        let mut pm = Pixmap::new(120, 100).unwrap();
+        paint_warped(&mut pm, &img, at, 1.0, tiny_skia::BlendMode::SourceOver, &bend);
+        let (x, y) = bend(Coord::new(32.0, 32.0)).unwrap();
+        let p = pm.pixel(x as u32, y as u32).unwrap();
+        assert!(p.blue() > 150 && p.red() < 100, "the middle at {x},{y}: {p:?}");
+        // Nothing drawn where `place` can't put the picture.
+        let mut none = Pixmap::new(10, 10).unwrap();
+        paint_warped(&mut none, &img, at, 1.0, tiny_skia::BlendMode::SourceOver, &|_| None);
+        assert!(none.pixels().iter().all(|p| p.alpha() == 0));
+    }
 
     /// A layer's zooms are its tiles': a 512-pixel tile at a zoom has the resolution of a
     /// 256-pixel one a zoom finer, so its picture is held, and its layer drawn, as its tiles are.
@@ -366,14 +497,23 @@ mod tests {
             Warp::map_address(&r.base, &r.system, [1.0, 2.0, 3.0, 4.0], 800, 600),
             "https://m.example.org/wms?SERVICE=WMS&VERSION=1.3.0&REQUEST=GetMap&LAYERS=a&STYLES=&CRS=EPSG:3857&BBOX=1,2,3,4&WIDTH=800&HEIGHT=600&FORMAT=image%2Fpng&TRANSPARENT=TRUE"
         );
-        // Not on a map in another system: its service is asked in Web Mercator only.
-        assert!(of(&t, 2056).is_none());
+        // On a map in another system: in Web Mercator still (all its service offers), warped.
+        let r = of(&t, 2056).unwrap();
+        assert!(r.system.epsg == 3857 && r.warp && r.transformer.is_some());
+        assert!(!of(&t, 3857).unwrap().warp);
         let export = "https://s.example.org/arcgis/rest/services/x/MapServer/export?bbox={bbox-epsg-3857}&bboxSR=3857&imageSR=3857&size=256,256&format=png32&transparent=true&f=image";
         t.url = export.into();
         let r = of(&t, 3857).unwrap();
         assert_eq!(
             Warp::map_address(&r.base, &r.system, [1.0, 2.0, 3.0, 4.0], 800, 600),
             "https://s.example.org/arcgis/rest/services/x/MapServer/export?bbox=1,2,3,4&bboxSR=3857&imageSR=3857&size=800,600&format=png32&transparent=true&f=image"
+        );
+        // On a map in another system, asked for in that one: the service projects it.
+        let r = of(&t, 2056).unwrap();
+        assert!(r.system.epsg == 2056 && !r.warp);
+        assert_eq!(
+            Warp::map_address(&r.base, &r.system, [1.0, 2.0, 3.0, 4.0], 800, 600),
+            "https://s.example.org/arcgis/rest/services/x/MapServer/export?bbox=1,2,3,4&bboxSR=2056&imageSR=2056&size=800,600&format=png32&transparent=true&f=image"
         );
         // A template sized with `{width}` and `{height}`.
         t.url = "https://m.example.org/wms?BBOX={bbox-epsg-3857}&WIDTH={width}&HEIGHT={height}".into();
@@ -390,8 +530,15 @@ mod tests {
             Warp::map_address(&r.base, &r.system, [1.0, 2.0, 3.0, 4.0], 800, 600),
             "https://wms.geo.admin.ch/de/?SERVICE=WMS&VERSION=1.3.0&REQUEST=GetMap&LAYERS=a&STYLES=&CRS=EPSG:3857&BBOX=1,2,3,4&WIDTH=800&HEIGHT=600&FORMAT=image%2Fpng&TRANSPARENT=TRUE"
         );
-        // On a map in one of its other systems, in that one.
-        assert_eq!(of(&t, 2056).map(|r| r.system.epsg), Some(2056));
+        // On a map in one of its other systems, in that one; in one it doesn't offer, in Web
+        // Mercator, warped.
+        assert_eq!(of(&t, 2056).map(|r| (r.system.epsg, r.warp)), Some((2056, false)));
+        assert_eq!(of(&t, 3035).map(|r| (r.system.epsg, r.warp)), Some((3857, true)));
+        // A WMS offered only in LV95: in it on a Web Mercator map, warped.
+        t.url = "https://m.example.org/wms?SERVICE=WMS&VERSION=1.3.0&REQUEST=GetMap&LAYERS=a&STYLES=&CRS={ncrs}&BBOX={nbbox}&WIDTH={nw}&HEIGHT={nh}&FORMAT=image%2Fpng#rustgis-warp={z}/{x}/{y};crs=2056;in=5.9,45.8,10.5,47.8;sys=2056|e|EPSG:2056;map=east".into();
+        let r = of(&t, 3857).unwrap();
+        assert!(r.system.epsg == 2056 && r.warp);
+        assert!(Warp::map_address(&r.base, &r.system, [1.0, 2.0, 3.0, 4.0], 8, 6).contains("CRS=EPSG:2056&BBOX=1,2,3,4&WIDTH=8&HEIGHT=6"));
         // Tiles cut from a tile set aren't drawn on request.
         t.url = "https://tile.example.org/{z}/{x}/{y}.png".into();
         assert!(of(&t, 3857).is_none());
