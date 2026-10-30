@@ -4384,10 +4384,12 @@ pub fn render_tilt_drape(map: &mut Map, view: &View, margin: f64, max_side: u32)
     for b in bands {
         let (mut w, mut h) = (b.width * (1.0 + 2.0 * margin), b.height * (1.0 + 2.0 * margin));
         let mut camera = b.camera;
-        // Coarser to fit the size limit.
+        // Coarser to fit the size limit, its pixels whole: as coarse again as the rounding takes,
+        // so it still reaches as far (a turned band has a point to spare).
         let k = (w.max(h) * ppp / max_side).max(1.0);
-        camera.res *= k;
-        (w, h) = ((w / k).floor().max(1.0), (h / k).floor().max(1.0));
+        let (fw, fh) = ((w / k).floor().max(1.0), (h / k).floor().max(1.0));
+        camera.res *= (w / fw).max(h / fh);
+        (w, h) = (fw, fh);
         let v = View { width: w, height: h, pixels_per_point: ppp, camera, sky: false };
         // The bands share the read above.
         if let Some(RenderOutput::Cpu(r)) = render_frame(map, &v, false, Backend::Cpu, Labels::Shared) {

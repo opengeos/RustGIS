@@ -924,7 +924,8 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     }
     // At rest, a turned map's drape is kept up to date off the UI thread: the next turn starts
     // on it.
-    if turned && !moving {
+    // (Not while an animation plays: the view moves every frame, past any drape drawn.)
+    if turned && !moving && app.ws.playing.is_none() {
         let (drape_key, tiles) = drape_state(app);
         app.map.tilt_drape.warm(ui.ctx(), app.session.map_mut(), drape_key, tiles, w, h, ppp, time);
     }
@@ -1259,10 +1260,9 @@ fn show_gpu_frame(app: &mut RustGisApp, scene: rustgis_engine::render::gpu_scene
     app.map.labels = scene.labels;
     app.map.labels.splice(0..0, scene.unplaced);
     app.map.label_lonlat.clear();
-    app.map.label_map = match cam.bearing != 0.0 || cam.pitch != 0.0 {
-        true => app.map.labels.iter().map(|l| cam.try_to_map(l.x as f64, l.y as f64, view.width, view.height)).collect(),
-        false => Vec::new(),
-    };
+    // Where its labels stand: a turn starting from a north-up frame is draped too (on the CPU,
+    // when the GPU doesn't turn the map), and they stay on their ground through it.
+    app.map.label_map = app.map.labels.iter().map(|l| cam.try_to_map(l.x as f64, l.y as f64, view.width, view.height)).collect();
     app.map.label_camera = cam;
     app.map.attribution = scene.attribution;
     app.map.last_render = time;
