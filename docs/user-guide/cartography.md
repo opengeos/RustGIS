@@ -78,9 +78,11 @@ scale the map is drawn at, so a width can change with the zoom (in a shared web 
 reader zooms freely, it is null). They apply on top of the
 renderer: a Unique Values class's colour, then the expression's. An expression applies when its
 box loses focus; one that doesn't read shows why and isn't applied. A layer styled by expression
-is drawn on the CPU; points drawn as counted bins (aggregation) keep the bins' own symbol. A
-shared web map draws each feature as styled; a layer's MapLibre style (a web layer's, or one
-exported alone) carries the renderer's symbol, without the expressions. By command:
+is drawn on the CPU; points drawn as counted bins (aggregation) keep the bins' own symbol, and
+a line's stacked strokes keep the colour and width each sets. A shared web map draws each
+feature's colours, outline width and size as styled (points as circles, without their angle or
+marks); a layer's MapLibre style (a web layer's, or one exported alone) carries the renderer's
+symbol, without the expressions. By command:
 
 ```text
 layer.symbolBy={"layer":"Cities","size":"scale_linear(pop_max, 0, 2e7, 4, 24)","fill":"CASE WHEN pop_max > 1e7 THEN '#d7301f' END"}

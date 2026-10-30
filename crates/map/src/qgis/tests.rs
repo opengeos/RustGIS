@@ -1261,6 +1261,13 @@ fn data_defined_symbol_settings_carry_over_as_expressions() {
     assert_eq!(by.stroke_width.as_deref(), Some("(if(@map_scale < 4656581, 1.0, 0)) * 1.333333"), "{by:?}");
     assert_eq!(by.stroke.as_deref(), Some("color_rgb(255, 0, 0)"));
     assert!(report.notes.is_empty(), "{:?}", report.notes);
+    // A line of two strokes draws each with its own: left out, said.
+    let stroke = r#"<layer class="SimpleLine" enabled="1"><Option type="Map"><Option name="line_color" value="0,0,0,255"/></Option></layer>"#;
+    let doubled = line.replace("</symbol>", &format!("{stroke}{stroke}</symbol>"));
+    let mut report = Report::default();
+    let s = read_style(&doubled, "roads", &mut report).unwrap();
+    assert!(s.symbol_by.is_none_or(|b| b.stroke.is_none() && b.stroke_width.is_none()));
+    assert!(report.notes.iter().any(|n| n.text.contains("line of several strokes")), "{:?}", report.notes);
     // Classes: one sized by expression, one not; the other's drawn with the first's, said. A
     // see-through symbol's expression colour is drawn opaque, said.
     let marker = |name: &str, props: &str| {

@@ -131,6 +131,11 @@ pub(super) fn read(sym: Node, reference: Option<f64>, turned: bool, layer: &str,
         report.skipped(layer, "data-defined colours and outline widths of a marker drawn as marks");
         (by.fill, by.stroke, by.stroke_width) = (None, None, None);
     }
+    // A line of stacked strokes draws each with its own colour and width.
+    if sym.attribute("type") == Some("line") && out.stacked() && (by.stroke.is_some() || by.stroke_width.is_some()) {
+        report.skipped(layer, "data-defined colours and widths of a line of several strokes");
+        (by.stroke, by.stroke_width) = (None, None);
+    }
     // Marks scale with the symbol's size, its largest layer's: the expression, taken from one
     // layer, is turned into the size it gives that one, so every mark scales as that layer does.
     if let (true, Some(text), Some(own)) = (drawn_as_marks, by.size.as_ref(), sized_layer.map(|s| s.clamp(0.0, 200.0)))
