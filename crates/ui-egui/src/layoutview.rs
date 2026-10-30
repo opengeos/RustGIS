@@ -585,7 +585,9 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
     let dpi = (px_per_mm as f64 * 25.4).min(max_side / layout.width.max(layout.height) * 25.4).clamp(20.0, 300.0);
     let size = [(page.width() * ppp) as usize, (page.height() * ppp) as usize];
     let key = (app.session.revision, li, size, (dpi * 10.0) as i64, layout.width as i64, layout.height as i64);
-    let landed = app.layout.legends_wait.is_some_and(|g| g != rustgis_engine::render::rustgis_tiles::cache::generation());
+    // Only once the pictures have: any other fetch landing (the map's tiles) bumps the generation.
+    let landed = app.layout.legends_wait.is_some_and(|g| g != rustgis_engine::render::rustgis_tiles::cache::generation())
+        && !rustgis_engine::render::layout::legends_pending(&layout, &app.session.project.maps);
     if (app.layout.key != Some(key) || landed) && size[0] > 2 && size[1] > 2 {
         let info = page_info(app, li);
         // Before drawing: a fetch landing while it draws is a reason to draw again.

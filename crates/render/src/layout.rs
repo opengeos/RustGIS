@@ -1220,11 +1220,9 @@ pub fn legends_pending(layout: &Layout, maps: &[Map]) -> bool {
 fn wait_for_tile_legends(map: &Map, scale: f64, exclude: &[String]) {
     let start = web_time::Instant::now();
     let budget = web_time::Duration::from_secs(30);
-    while tile_legends_pending(map, scale, exclude) && start.elapsed() < budget {
-        #[cfg(not(target_arch = "wasm32"))]
+    // In the browser, which can't wait, the page draws what has arrived.
+    while cfg!(not(target_arch = "wasm32")) && tile_legends_pending(map, scale, exclude) && start.elapsed() < budget {
         std::thread::sleep(std::time::Duration::from_millis(15));
-        #[cfg(target_arch = "wasm32")]
-        return;
     }
 }
 
