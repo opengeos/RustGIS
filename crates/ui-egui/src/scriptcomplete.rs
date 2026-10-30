@@ -599,9 +599,17 @@ fn tool_value(script: &str, at: usize, session: &rustgis_engine::Session) -> Opt
     let text = script.get(byte_at(script, brace)?..byte_at(script, at)?)?;
     // A tool's parameter takes no array.
     let (start, key, false) = scan(text).value? else { return None };
-    let word = word_from(text, start)?;
-    let start = brace + start;
     let p = tool.params.iter().find(|p| p.name == key)?;
+    let word = if p.kind == K::Fields {
+        let word: String = text.chars().skip(start).collect();
+        if word.contains('\\') {
+            return None;
+        }
+        word
+    } else {
+        word_from(text, start)?
+    };
+    let start = brace + start;
     let map = session.map();
     match p.kind {
         K::Layer | K::PolygonLayer | K::PointLayer | K::RasterLayer | K::VectorLayer => {
@@ -615,12 +623,18 @@ fn tool_value(script: &str, at: usize, session: &rustgis_engine::Session) -> Opt
             let names = layers.map(|l| l.name.as_str()).chain(tables.map(|(_, t)| t.name.as_str()));
             value_ids(start, at, &word, names, Of::Layers)
         }
-        K::Field | K::NumericField | K::CoordinateField => {
+        K::Field | K::Fields | K::NumericField | K::CoordinateField => {
             let after = object_rest(script.get(byte_at(script, at)?..)?.split('\n').next()?);
-            let input = value_of(&format!("{text}{after}"), crate::panes::first_layer(tool)?.name)?;
+            let input = value_of(&format!("{text}{after}"), crate::panes::layer_for_param(tool, p.name)?.name)?;
             let d = crate::panes::input_dataset(session, &input)?;
             let names = d.fields.iter().enumerate().filter(|(i, _)| takes_field(p.kind, d, *i)).map(|(_, f)| f.name.as_str());
-            value_ids(start, at, &word, names, Of::ToolFields(input))
+            let (start, word) = if p.kind == K::Fields {
+                let suffix = word.rsplit([',', ';']).next()?.trim_start();
+                (start + word.chars().count() - suffix.chars().count(), suffix)
+            } else {
+                (start, word.as_str())
+            };
+            value_ids(start, at, word, names, Of::ToolFields(input))
         }
         K::Choice(choices) => value_ids(start, at, &word, choices.iter().copied(), Of::Choices),
         _ => None,
@@ -781,6 +795,7 @@ fn param_line(p: &rustgis_engine::analysis::ParamSpec) -> String {
         K::RasterLayers => tl_raw!("raster layers (names separated by ;)"),
         K::VectorLayers => tl_raw!("vector layers (names separated by ;)"),
         K::Field => tl_raw!("a field of the first layer"),
+        K::Fields => tl_raw!("field names (separated by commas)"),
         K::NumericField => tl_raw!("a numeric field of the first layer"),
         K::CoordinateField => tl_raw!("a field of the first layer holding coordinates"),
         K::Number => tl_raw!("number"),

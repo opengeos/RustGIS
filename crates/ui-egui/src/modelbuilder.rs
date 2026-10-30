@@ -1319,12 +1319,12 @@ fn input_settings(app: &mut RustGisApp, ui: &mut Ui, i: usize, n: &ModelNode) {
     }
 }
 
-/// The layer feeding a tool's first layer parameter, when it is an input node's (for its fields).
-fn source_layer(app: &RustGisApp, n: &ModelNode, spec: &ToolSpec) -> Option<String> {
-    let first = crate::panes::first_layer(spec)?;
-    match app.mb.graph.edges.iter().find(|e| e.to == n.id && e.to_port == first.name) {
-        Some(e) => app.mb.graph.nodes.iter().find(|u| u.id == e.from && u.kind == ModelNodeKind::Input).and_then(|u| u.layer.clone()),
-        None => n.params.get(first.name).and_then(Value::as_str).map(str::to_string),
+/// The layer feeding the parameter's associated input, when known before running the model.
+fn source_layer<'a>(app: &'a RustGisApp, n: &'a ModelNode, spec: &ToolSpec, param_name: &str) -> Option<&'a str> {
+    let input = crate::panes::layer_for_param(spec, param_name)?;
+    match app.mb.graph.edges.iter().find(|e| e.to == n.id && e.to_port == input.name) {
+        Some(e) => app.mb.graph.nodes.iter().find(|u| u.id == e.from && u.kind == ModelNodeKind::Input).and_then(|u| u.layer.as_deref()),
+        None => n.params.get(input.name).and_then(Value::as_str),
     }
 }
 
@@ -1339,15 +1339,6 @@ fn tool_settings(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, i: usize, n: &Mo
     };
     ui.label(egui::RichText::new(tl!(spec.summary)).size(11.5).color(t.text_dim));
     ui.add_space(6.0);
-    let fields: Vec<(String, bool)> = source_layer(app, n, spec)
-        .and_then(|l| {
-            let s = &app.session;
-            s.map().layer_by_name(&l).map(|x| &x.dataset).or_else(|| {
-                rustgis_engine::project::find_table(&s.project.tables, &l).and_then(|k| s.project.tables.get(k)).map(|x| &x.dataset)
-            })
-        })
-        .map(|d| d.fields.iter().map(|f| (f.name.clone(), f.ty.is_numeric())).collect())
-        .unwrap_or_default();
     let mut set: Option<(&'static str, Value)> = None;
     let mut focus = false;
     let mut unwire: Option<&'static str> = None;
@@ -1416,6 +1407,22 @@ fn tool_settings(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, i: usize, n: &Mo
             ui.add_space(4.0);
             continue;
         }
+        let fields: Vec<&str> =
+            if matches!(p.kind, ParamKind::Field | ParamKind::Fields | ParamKind::NumericField | ParamKind::CoordinateField) {
+                source_layer(app, n, spec, p.name)
+                    .and_then(|name| {
+                        crate::panes::input_dataset(&app.session, name).map(|d| {
+                            d.fields
+                                .iter()
+                                .filter(|f| p.kind != ParamKind::NumericField || f.ty.is_numeric())
+                                .map(|f| f.name.as_str())
+                                .collect()
+                        })
+                    })
+                    .unwrap_or_default()
+            } else {
+                Vec::new()
+            };
         match p.kind {
             ParamKind::Bool => {
                 let mut on = cur.as_bool().unwrap_or(text == "true" || (cur.is_null() && default == "true"));
@@ -1442,8 +1449,33 @@ fn tool_settings(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, i: usize, n: &Mo
                     .response
                     .on_hover_text(tl!(p.label));
             }
+            ParamKind::Field | ParamKind::Fields | ParamKind::NumericField
+                if spec.id.starts_with("geolibre:") || p.kind == ParamKind::Fields =>
+            {
+                let mut value = text;
+                let response = crate::panes::field_suggestions(
+                    ui,
+                    egui::Id::unique(("mb_p", &n.id, p.name)),
+                    &mut value,
+                    tl!(p.label),
+                    fields.iter().copied(),
+                    p.kind == ParamKind::Fields,
+                );
+                if response.gained_focus() {
+                    focus = true;
+                }
+                if response.changed() {
+                    let value = if value.is_empty() { Value::Null } else { json!(value) };
+                    if response.has_focus() {
+                        if let Some(m) = app.mb.graph.nodes.get_mut(i) {
+                            set_param(m, p.name, value);
+                        }
+                    } else {
+                        set = Some((p.name, value));
+                    }
+                }
+            }
             ParamKind::Field | ParamKind::NumericField | ParamKind::CoordinateField if !fields.is_empty() => {
-                let numeric = p.kind == ParamKind::NumericField;
                 let shown = if text.is_empty() { "—".to_string() } else { text.clone() };
                 egui::ComboBox::from_id_salt(("mb_p", &n.id, p.name))
                     .selected_text(shown)
@@ -1452,8 +1484,8 @@ fn tool_settings(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, i: usize, n: &Mo
                         if !p.required && ui.selectable_label(text.is_empty(), "—").clicked() {
                             set = Some((p.name, Value::Null));
                         }
-                        for (f, num) in &fields {
-                            if (!numeric || *num) && ui.selectable_label(*f == text, f).clicked() {
+                        for f in &fields {
+                            if ui.selectable_label(*f == text, *f).clicked() {
                                 set = Some((p.name, json!(f)));
                             }
                         }

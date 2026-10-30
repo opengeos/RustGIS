@@ -3002,7 +3002,7 @@ pub(crate) fn takes_layer(kind: ParamKind, l: &rustgis_engine::map::Layer) -> bo
 /// a kind that isn't a field's.
 pub(crate) fn takes_field(kind: ParamKind, d: &rustgis_engine::data::Dataset, i: usize) -> bool {
     match kind {
-        ParamKind::Field => true,
+        ParamKind::Field | ParamKind::Fields => true,
         ParamKind::NumericField => d.fields.get(i).is_some_and(|f| f.ty.is_numeric()),
         ParamKind::CoordinateField => rustgis_engine::analysis::holds_coordinates(d, i),
         _ => false,
@@ -3016,12 +3016,67 @@ pub(crate) fn first_layer(spec: &rustgis_engine::analysis::ToolSpec) -> Option<&
         .find(|p| matches!(p.kind, ParamKind::Layer | ParamKind::PolygonLayer | ParamKind::PointLayer | ParamKind::VectorLayer))
 }
 
-/// The tool's layer parameter associated with a field parameter.
-pub(crate) fn layer_for_param<'a>(spec: &'a rustgis_engine::analysis::ToolSpec, param_name: &str) -> Option<&'a rustgis_engine::analysis::ParamSpec> {
-    spec.params.iter().find(|p| {
-        matches!(p.kind, ParamKind::Layer | ParamKind::PolygonLayer | ParamKind::PointLayer | ParamKind::VectorLayer)
-            && param_name.starts_with(format!("{}_", p.name).as_str())
-    }).or_else(|| first_layer(spec))
+/// The most specific `<input>_…` prefix wins; otherwise use the first attribute input.
+pub(crate) fn layer_for_param<'a>(
+    spec: &'a rustgis_engine::analysis::ToolSpec,
+    param_name: &str,
+) -> Option<&'a rustgis_engine::analysis::ParamSpec> {
+    spec.params
+        .iter()
+        .filter(|p| {
+            matches!(p.kind, ParamKind::Layer | ParamKind::PolygonLayer | ParamKind::PointLayer | ParamKind::VectorLayer)
+                && param_name.strip_prefix(p.name).is_some_and(|rest| rest.starts_with('_'))
+        })
+        .max_by_key(|p| p.name.len())
+        .or_else(|| first_layer(spec))
+}
+
+/// Editable field names with suggestions: manifests may describe new columns, not just inputs.
+/// A list appends names without replacing its earlier entries; manually typed syntax is retained.
+pub(crate) fn field_suggestions<'a>(
+    ui: &mut Ui,
+    id: egui::Id,
+    value: &mut String,
+    label: &str,
+    fields: impl Iterator<Item = &'a str>,
+    multiple: bool,
+) -> egui::Response {
+    let mut picked = None;
+    let mut response = ui
+        .horizontal(|ui| {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                egui::ComboBox::from_id_salt(id)
+                    .selected_text(tl!("Fields"))
+                    .width(70.0)
+                    .show_ui(ui, |ui| {
+                        for field in fields {
+                            if ui.selectable_label(false, field).clicked() {
+                                picked = Some(field);
+                            }
+                        }
+                    })
+                    .response
+                    .on_hover_text(tl!("Choose a field"));
+                ui.add(egui::TextEdit::singleline(&mut *value).desired_width(f32::INFINITY)).on_hover_text(label)
+            })
+            .inner
+        })
+        .inner;
+    if let Some(field) = picked {
+        if !multiple || value.trim().is_empty() {
+            value.clear();
+            value.push_str(field);
+            response.mark_changed();
+        } else if !value.split([',', ';']).any(|part| part.trim() == field) {
+            let separator = if value.contains(';') { ';' } else { ',' };
+            if !value.trim_end().ends_with([',', ';']) {
+                value.push(separator);
+            }
+            value.push_str(field);
+            response.mark_changed();
+        }
+    }
+    response
 }
 
 /// The layer or table of name `name`, as a tool finds its input: a layer by its name, else a
@@ -3266,7 +3321,7 @@ fn geoprocessing(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                 continue;
             }
             ParamKind::PolygonLayer | ParamKind::PointLayer => Some(layer_names(p.kind)),
-            ParamKind::Field | ParamKind::NumericField | ParamKind::CoordinateField => {
+            ParamKind::Field | ParamKind::Fields | ParamKind::NumericField | ParamKind::CoordinateField => {
                 let target_param = layer_for_param(spec, p.name).map(|p| p.name);
                 let lname = target_param.and_then(|n| app.gp.values.get(n)).cloned().unwrap_or_default();
                 let table = target_param.and_then(|n| app.gp.tables.get(n)).copied();
@@ -3297,6 +3352,22 @@ fn geoprocessing(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                         v
                     }
                 };
+                if spec.id.starts_with("geolibre:") || p.kind == ParamKind::Fields {
+                    if field_suggestions(
+                        ui,
+                        egui::Id::unique(("gp", p.name)),
+                        &mut cur,
+                        tl!(p.label),
+                        v.iter().map(String::as_str),
+                        p.kind == ParamKind::Fields,
+                    )
+                    .changed()
+                    {
+                        app.gp.values.insert(p.name, cur);
+                    }
+                    ui.add_space(4.0);
+                    continue;
+                }
                 // A field picked for another layer, which this one doesn't have: unset.
                 if ds.is_some() && !cur.is_empty() && !v.iter().any(|f| f.eq_ignore_ascii_case(&cur)) {
                     app.gp.values.remove(p.name);
@@ -5927,6 +5998,51 @@ pub(crate) fn layout_menu(app: &mut RustGisApp, ui: &mut Ui, n: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn field_source_uses_the_longest_input_prefix() {
+        use rustgis_engine::analysis::{ParamSpec, ToolSpec};
+        const fn layer(name: &'static str) -> ParamSpec {
+            ParamSpec { name, label: name, kind: ParamKind::VectorLayer, required: true, default: "", help: "" }
+        }
+        const PARAMS: &[ParamSpec] = &[layer("input"), layer("input_points"), layer("denominator")];
+        let spec = ToolSpec {
+            id: "field_sources",
+            name: "",
+            toolbox: "",
+            summary: "",
+            params: PARAMS,
+            run: rustgis_engine::analysis::external_placeholder,
+        };
+        assert_eq!(layer_for_param(&spec, "input_points_weight_field").map(|p| p.name), Some("input_points"));
+        assert_eq!(layer_for_param(&spec, "denominator_weight_field").map(|p| p.name), Some("denominator"));
+        assert_eq!(layer_for_param(&spec, "denominators_field").map(|p| p.name), Some("input"), "prefix needs an underscore boundary");
+        assert_eq!(layer_for_param(&spec, "weight_field").map(|p| p.name), Some("input"));
+    }
+
+    #[test]
+    fn field_suggestions_append_without_erasing_typed_names() {
+        use egui_kittest::kittest::Queryable;
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(400.0, 150.0)).build_ui_state(
+            |ui, value: &mut String| {
+                field_suggestions(ui, egui::Id::unique("fields"), value, "Fields", ["name", "population"].into_iter(), true);
+            },
+            String::from("new_column"),
+        );
+        h.run_steps(3);
+        assert_eq!(h.state(), "new_column", "a name absent from the input is not cleared");
+        h.get_by_role(egui::accesskit::Role::ComboBox).click();
+        h.run_steps(3);
+        h.get_by_label("population").click();
+        h.run_steps(3);
+        assert_eq!(h.state(), "new_column,population", "append without replacing earlier names");
+        h.get_by_role(egui::accesskit::Role::TextInput).focus();
+        h.run_steps(2);
+        h.key_press(egui::Key::End);
+        h.event(egui::Event::Text(",typed_column".into()));
+        h.run_steps(3);
+        assert_eq!(h.state(), "new_column,population,typed_column");
+    }
 
     /// A run opened again from the History pane (#539) fills its tool's form as the form would
     /// have it: a standalone table, given by its id, by its name and picked by its id; numbers

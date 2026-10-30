@@ -27,6 +27,8 @@ Click a column header to sort by it (a second click reverses the order, a third 
 keeps to the selected rows and **Filter rows…** keeps rows where any value contains the text typed,
 ignoring letter case. The toolbar opens Select By Attributes and zooms to, switches, clears or
 deletes the selection, adds or calculates a field, and calculates geometry attributes.
+The first column, **Feature ID**, shows each feature's identifier, not its current row position
+after sorting or filtering. It is not a dataset field: do not use it as a geoprocessing field name.
 
 <figure markdown="span">
   ![The attribute table docked under the map: the 14 African countries of more than 30 million people, selected by attributes, highlighted on the map and in the table](https://assets.rustgis.app/images/attribute-table.webp)
@@ -462,6 +464,18 @@ pane and the Browser's toolboxes, grouped by the category and subcategory the ru
 each tool (Conversion, Hydrology, LiDAR, Projection, Raster, Remote Sensing, Terrain, Vector,
 then e.g. **GeoLibre › Terrain › Derivatives**). A runner too old to list subcategories groups
 them by category only. Find Tools searches them.
+
+Field-name parameters (`field`, `*_field`, `fields` and `*_fields`) have a **Fields** menu beside
+the text box. Pick an input layer or table first, then choose one of its fields. For tools with
+several inputs, the longest matching input-name prefix selects the source: for example,
+`denominator_weight_field` uses `denominator`, not `input`. Without a matching prefix, suggestions
+come from the first vector or table input. Weight and numeric field suggestions show numeric
+columns; a value or class field can also use text columns.
+
+The text box stays editable for new column names or fields not yet known before a model runs.
+For plural field parameters, each choice appends a name, separated by a comma (or by `;` if the
+text already uses that separator). Follow the parameter's help if its runner needs different
+list syntax. Leave optional weight fields blank to count each feature equally.
 
 - Raster inputs are passed as their own files; vector layers (or their selection) are written
   in the first raster input's coordinate system, or, with no raster input, the UTM zone around

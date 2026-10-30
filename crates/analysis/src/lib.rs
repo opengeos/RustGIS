@@ -41,11 +41,14 @@ pub enum ParamKind {
     PolygonLayer,
     /// A point layer.
     PointLayer,
-    /// A field of the layer given by the first `Layer` parameter.
+    /// A field of the associated input (the longest `<input>_` name prefix, else the first layer).
     Field,
-    /// A numeric field of the first layer.
+    /// Several field names entered as text, with suggestions from the associated input.
+    /// The runner defines the list syntax; suggestions append comma-separated names.
+    Fields,
+    /// A numeric field of the associated input.
     NumericField,
-    /// A field of the first layer that can hold coordinates: a numeric field, or a text field
+    /// A field of the associated input that can hold coordinates: a numeric field, or a text field
     /// with numbers written in it (see [`holds_coordinates`]).
     CoordinateField,
     Number,
