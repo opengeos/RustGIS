@@ -454,6 +454,9 @@ fn a_computed_in_list_skips_nulls_and_a_long_pattern_matches_nothing() {
     let mut odd = Dataset::new("t", GeometryType::None, vec![Field::new("name", FieldType::Text)]);
     odd.push(None, vec![Value::Text("<null>".into())]);
     assert_eq!(select("upper(name) IN (NULL)", &odd).unwrap(), Vec::<usize>::new());
+    assert_eq!(select("name IN (NULL)", &odd).unwrap(), Vec::<usize>::new());
+    assert_eq!(select("name NOT IN (NULL)", &odd).unwrap(), vec![0]);
+    assert_eq!(value(&parse("round(1e307, 2)", &odd).unwrap(), &odd, 0, &Env::default()), Value::Float(1e307));
     assert_eq!(select("upper(name) NOT IN (NULL)", &odd).unwrap(), vec![0]);
     // About 65,000 '%'s (text is cut at 64 KiB): longer than a pattern may be.
     let long = "name LIKE replace(replace(replace(replace(replace('x', 'x', 'xxxxxxxxxx'), 'x', 'xxxxxxxxxx'), 'x', 'xxxxxxxxxx'), 'x', 'xxxxxxxxxx'), 'x', '%%%%%%%%%%')";

@@ -356,7 +356,7 @@ fn eval3(e: &Expr, ds: &Dataset, row: usize) -> Option<bool> {
         }
         Expr::In { field, values, negate } => {
             let v = ds.value(row, *field);
-            (!v.is_null()).then(|| values.iter().any(|x| eq(v, x)) != *negate)
+            (!v.is_null()).then(|| values.iter().any(|x| !x.is_null() && eq(v, x)) != *negate)
         }
         Expr::Cmp { field, op, lit } => {
             let v = ds.value(row, *field);

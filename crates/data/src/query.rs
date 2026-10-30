@@ -935,7 +935,7 @@ impl<'a> Eval<'a> {
             }
             Expr::In { field, values, negate } => {
                 let v = ds.value(row, *field);
-                (!v.is_null()).then(|| values.iter().any(|x| eq(v, x)) != *negate)
+                (!v.is_null()).then(|| values.iter().any(|x| !x.is_null() && eq(v, x)) != *negate)
             }
             Expr::Cmp { field, op, lit } => compare(ds.value(row, *field), *op, lit),
             Expr::Compare(op, l, r) => compare(&self.value(l), *op, &self.value(r)),
@@ -1064,7 +1064,8 @@ impl<'a> Eval<'a> {
                     (v, Some(p)) => match v.as_f64() {
                         Some(x) => {
                             let m = 10f64.powi(p);
-                            let r = (x * m).round() / m;
+                            // So large it has no places to round: as it is.
+                            let r = if (x * m).is_finite() { (x * m).round() / m } else { x };
                             if p <= 0 { whole(r) } else { real(r) }
                         }
                         None => Value::Null,
