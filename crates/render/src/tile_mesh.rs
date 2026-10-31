@@ -378,8 +378,7 @@ pub fn meshes(
 ) -> Vec<Option<Arc<TileMesh>>> {
     // Whether the style's sprite is still on its way, asked before the store is locked (a
     // lookup in the sprites the tile cache keeps).
-    let sprite_pending =
-        style.sprite.as_deref().is_some_and(|b| matches!(rustgis_tiles::sprite::load(b, false), rustgis_tiles::sprite::Load::Pending));
+    let sprite_pending = matches!(rustgis_tiles::sprite::load(&style.sprites, false), rustgis_tiles::sprite::Load::Pending);
     let key = |t: &DataTile| Key { payload: Arc::as_ptr(&t.payload) as usize, style: Arc::as_ptr(style) as usize, level };
     let mut out: Vec<Option<Arc<TileMesh>>> = Vec::with_capacity(tiles.len());
     let mut missing = Vec::new();
@@ -641,10 +640,10 @@ mod tests {
                 sources: vec![("s".into(), Source::parse(&serde_json::json!({"type": "vector", "tiles": ["x/{z}/{x}/{y}"]})))],
                 layers: StyleLayer::parse(&layer).into_iter().collect(),
                 glyphs: None,
-                sprite: None,
+                sprites: Vec::new(),
                 view: Default::default(),
             },
-            sprite: None,
+            sprites: Vec::new(),
             attribution: Vec::new(),
             left_out: Vec::new(),
             made: std::sync::Mutex::new(web_time::Instant::now()),

@@ -252,7 +252,7 @@ pub fn shapes(style: &Resolved, source: &str, tile: &Tile, level: u8) -> TileSha
         let free = layer.paint_feature_free();
         let mut fixed: [Option<Vec<Paint>>; 4] = Default::default();
         for (fi, f) in tl.features.iter().enumerate() {
-            let ctx = |zoom| FeatureCtx { zoom, kind: f.kind, id: f.id, props: &f.props };
+            let ctx = |zoom| FeatureCtx { zoom, kind: f.kind, id: f.id, props: &f.props, images: None };
             if !layer.matches(&ctx(lo)) {
                 continue;
             }
@@ -278,13 +278,13 @@ pub fn shapes(style: &Resolved, source: &str, tile: &Tile, level: u8) -> TileSha
                                 else {
                                     break 'p out;
                                 };
-                                let sprite = sheet.get_or_insert_with(|| match style.sprite.as_deref().map(|b| sprite::load(b, false)) {
-                                    Some(Load::Ready(s)) => Some(s),
-                                    Some(Load::Pending) => {
+                                let sprite = sheet.get_or_insert_with(|| match sprite::load(&style.sprites, false) {
+                                    Load::Ready(s) => Some(s),
+                                    Load::Pending => {
                                         waiting = true;
                                         None
                                     }
-                                    _ => None,
+                                    Load::Failed => None,
                                 });
                                 let found = match averages.get(&name) {
                                     Some(a) => *a,

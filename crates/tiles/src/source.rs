@@ -75,9 +75,9 @@ impl Spec {
 /// A style whose sources all have tile addresses.
 pub struct Resolved {
     pub style: Style,
-    /// The style's sprite (an address without `.json`/`.png`), when it has one RustGIS can
+    /// The style's sprites as (id, address without `.json`/`.png`), those RustGIS can
     /// fetch.
-    pub sprite: Option<String>,
+    pub sprites: Vec<(String, String)>,
     /// Credits from the layer and its sources, without duplicates.
     pub attribution: Vec<String>,
     /// What of the style was left out and why, said with every drawing of it as its error.
@@ -104,7 +104,7 @@ fn kept(old: Arc<Resolved>, new: Arc<Resolved>) -> Arc<Resolved> {
     if old.left_out != new.left_out
         || old.waiting != new.waiting
         || old.style != new.style
-        || old.sprite != new.sprite
+        || old.sprites != new.sprites
         || old.attribution != new.attribution
     {
         return new;
@@ -278,14 +278,15 @@ fn resolve_anew(spec: &Spec, key: String) -> Resolve {
             credit(attribution);
         }
     }
-    // The sprite is the style's choice; one that can't be fetched only loses the icons.
-    let sprite = style
-        .sprite
-        .as_deref()
-        .filter(|s| !s.starts_with("mapbox://"))
-        .map(|s| template::join(&base, s))
-        .filter(|s| address::check(s, Some(&base)).is_ok());
-    let r = Arc::new(Resolved { style, attribution, sprite, left_out, made: Mutex::new(Instant::now()), waiting });
+    // The sprites are the style's choice; one that can't be fetched only loses its icons.
+    let sprites = style
+        .sprites
+        .iter()
+        .filter(|(_, s)| !s.starts_with("mapbox://"))
+        .map(|(id, s)| (id.clone(), template::join(&base, s)))
+        .filter(|(_, s)| address::check(s, Some(&base)).is_ok())
+        .collect();
+    let r = Arc::new(Resolved { style, attribution, sprites, left_out, made: Mutex::new(Instant::now()), waiting });
     let mut all = resolved().lock().unwrap_or_else(|e| e.into_inner());
     // A few layers are in use at a time: past that many, start again rather than grow.
     if all.len() >= MAX_RESOLVED {
@@ -794,7 +795,7 @@ mod tests {
         let doc = serde_json::json!({"version": 8, "sources": {}, "layers": [{"id": "bg", "type": "background", "paint": {"background-color": "#f00"}}]});
         let r = Resolved {
             style: Style::parse(&doc).unwrap(),
-            sprite: None,
+            sprites: Vec::new(),
             attribution: Vec::new(),
             left_out: Vec::new(),
             made: Mutex::new(Instant::now()),
@@ -826,7 +827,7 @@ mod tests {
         assert!(matches!(style.source("dem"), Some(Source::Other)));
         let r = Resolved {
             style,
-            sprite: None,
+            sprites: Vec::new(),
             attribution: Vec::new(),
             left_out: sources.left_out,
             made: Mutex::new(Instant::now()),
@@ -848,7 +849,7 @@ mod tests {
         let left_out = vec!["elevation source dem left out, so its relief isn't drawn: gone".to_owned()];
         let r = Resolved {
             style: Style::parse(&doc).unwrap(),
-            sprite: None,
+            sprites: Vec::new(),
             attribution: Vec::new(),
             left_out,
             made: Mutex::new(Instant::now()),
@@ -866,7 +867,7 @@ mod tests {
         let Some(long_ago) = Instant::now().checked_sub(cache::RETRY * 2) else { return };
         let stale = Resolved {
             style: Style::parse(&doc).unwrap(),
-            sprite: None,
+            sprites: Vec::new(),
             attribution: Vec::new(),
             left_out: vec!["x".into()],
             made: Mutex::new(long_ago),
@@ -875,7 +876,7 @@ mod tests {
         assert!(!stale.current());
         let complete = Resolved {
             style: Style::parse(&doc).unwrap(),
-            sprite: None,
+            sprites: Vec::new(),
             attribution: Vec::new(),
             left_out: Vec::new(),
             made: Mutex::new(long_ago),
@@ -886,7 +887,7 @@ mod tests {
         let s = spec(Kind::Raster, "https://expired.example.com/{z}/{x}/{y}.png");
         let expired = Arc::new(Resolved {
             style: Style::parse(&doc).unwrap(),
-            sprite: None,
+            sprites: Vec::new(),
             attribution: Vec::new(),
             left_out: vec!["x".into()],
             made: Mutex::new(long_ago),
@@ -918,7 +919,7 @@ mod tests {
         let made = |left_out: &[&str], at: Instant| {
             Arc::new(Resolved {
                 style: Style::parse(&doc).unwrap(),
-                sprite: None,
+                sprites: Vec::new(),
                 attribution: Vec::new(),
                 left_out: left_out.iter().map(|s| s.to_string()).collect(),
                 made: Mutex::new(at),
@@ -935,7 +936,7 @@ mod tests {
         assert!(Arc::ptr_eq(&kept(old.clone(), new.clone()), &new));
         let other = Arc::new(Resolved {
             style: Style::parse(&serde_json::json!({"version": 8, "sources": {}, "layers": [{"id": "bg", "type": "background"}]})).unwrap(),
-            sprite: None,
+            sprites: Vec::new(),
             attribution: Vec::new(),
             left_out: vec!["dem: gone".into()],
             made: Mutex::new(Instant::now()),
@@ -945,7 +946,7 @@ mod tests {
         // Still waiting for an elevation source, or no longer: the new one.
         let arrived = Arc::new(Resolved {
             style: Style::parse(&doc).unwrap(),
-            sprite: None,
+            sprites: Vec::new(),
             attribution: Vec::new(),
             left_out: vec!["dem: gone".into()],
             made: Mutex::new(Instant::now()),
@@ -955,7 +956,7 @@ mod tests {
         // Only its credits changed: the new one too.
         let recredited = Arc::new(Resolved {
             style: Style::parse(&doc).unwrap(),
-            sprite: None,
+            sprites: Vec::new(),
             attribution: vec!["© Example".into()],
             left_out: vec!["dem: gone".into()],
             made: Mutex::new(Instant::now()),

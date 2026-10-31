@@ -159,7 +159,7 @@ pub(crate) fn collect(
     // between zooms is stretched by up to 2.
     let stretch = 2f32.powf(zoom.rem_euclid(1.0));
     for f in &l.features {
-        let ctx = FeatureCtx { zoom, kind: f.kind, id: f.id, props: &f.props };
+        let ctx = FeatureCtx { zoom, kind: f.kind, id: f.id, props: &f.props, images: None };
         if !layer.matches(&ctx) {
             continue;
         }
@@ -349,7 +349,7 @@ fn label_length(l: &Label) -> f32 {
 /// `icon-offset`; an SDF icon takes `icon-color`. Along a line, an icon turned with the map
 /// (`icon-rotation-alignment` `map`, or `auto`) gets an angle, `icon-rotate` to begin with.
 fn icon(sheet: &Sprite, layer: &StyleLayer, ctx: &FeatureCtx, placement: SymbolPlacement) -> Option<LabelIcon> {
-    let name = layer.layout_value("icon-image", ctx)?;
+    let name = layer.layout_value("icon-image", &FeatureCtx { images: Some(sheet), ..*ctx })?;
     let name = name.as_str().filter(|n| !n.is_empty())?;
     let img = sheet.image(name, layer.paint_value("icon-color", ctx).and_then(|c| c.as_color()))?;
     let k = layer.layout_value("icon-size", ctx).and_then(|v| v.as_f64()).filter(|v| v.is_finite()).unwrap_or(1.0).clamp(0.0, 8.0) as f32;
