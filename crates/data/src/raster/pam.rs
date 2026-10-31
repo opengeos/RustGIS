@@ -64,6 +64,11 @@ pub struct Pam {
 }
 
 impl Pam {
+    /// A document that names nothing, with the reason it was left out.
+    pub fn losing(why: String) -> Pam {
+        Pam { bands: Vec::new(), lost: vec![why] }
+    }
+
     /// The band numbered `band` (from 1).
     pub fn band(&self, band: usize) -> Option<&PamBand> {
         self.bands.iter().find(|b| b.band == band)
@@ -157,12 +162,22 @@ pub fn parse(text: &str) -> Option<Pam> {
 ///   <Item name="CLASS_3">Forest Formation</Item>
 /// </GDALMetadata>
 /// ```
+///
+/// A document that doesn't read as XML (or is too large to), or isn't GDAL's, names nothing: it
+/// comes back with only [`Pam::lost`] saying so. An empty tag says nothing.
 pub fn parse_gdal_metadata(text: &str) -> Option<Pam> {
+    if text.trim().is_empty() {
+        return None;
+    }
     let opts = ParsingOptions { allow_dtd: false, nodes_limit: crate::io::XML_NODES, ..ParsingOptions::default() };
-    let doc = crate::xml::parse(text, opts).ok()?;
+    let doc = match crate::xml::parse(text, opts) {
+        Ok(doc) => doc,
+        Err(e) => return Some(Pam::losing(format!("it doesn't read as XML ({e}): band and class names are left out"))),
+    };
     let root = doc.root_element();
     if root.tag_name().name() != "GDALMetadata" {
-        return None;
+        let name = root.tag_name().name().chars().take(40).collect::<String>();
+        return Some(Pam::losing(format!("it is a <{name}> document, not GDAL's <GDALMetadata>: band and class names are left out")));
     }
     let mut pam = Pam::default();
     // What is left out or cut, counted.
@@ -427,8 +442,17 @@ mod tests {
         assert_eq!(pam.band(1).unwrap().description.as_deref(), Some("NDVI 2024-06-01"));
         assert_eq!(pam.band(2).unwrap().description.as_deref(), Some("NDVI 2024-07-01"));
         assert_eq!(pam.nodata(), None);
-        for text in ["", "not xml", "<GDALMetadata/>", "<PAMDataset/>", "<GDALMetadata><Item name=\"A\">1</Item></GDALMetadata>"] {
+        // A document naming nothing says nothing; one that doesn't read, or isn't GDAL's, says so.
+        for text in ["", " ", "<GDALMetadata/>", "<GDALMetadata><Item name=\"A\">1</Item></GDALMetadata>"] {
             assert!(parse_gdal_metadata(text).is_none(), "{text}");
+        }
+        for (text, said) in [
+            ("not xml", "doesn't read as XML"),
+            ("<GDALMetadata><Item>", "doesn't read as XML"),
+            ("<PAMDataset/>", "a <PAMDataset> document"),
+        ] {
+            let pam = parse_gdal_metadata(text).unwrap();
+            assert!(pam.bands.is_empty() && pam.lost.len() == 1 && pam.lost[0].contains(said), "{text}: {pam:?}");
         }
     }
 

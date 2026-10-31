@@ -879,12 +879,15 @@ pub(super) fn read_limited(r: Reader<'_>, name: &str, max: usize, open: Option<O
     let (full_w, full_h) = dec.dimensions().map_err(err)?;
     let geo = geo_tags(&mut dec)?;
     // The bands' descriptions GDAL keeps in the file (an `.aux.xml` sidecar's are applied after).
-    let described = dec
-        .find_tag(Tag::Unknown(42112))
-        .ok()
-        .flatten()
-        .and_then(|v| v.into_string().ok())
-        .and_then(|t| super::pam::parse_gdal_metadata(&t));
+    // A tag that doesn't decode is left out, and said (`Raster::lost`).
+    let described = match dec.find_tag(Tag::Unknown(42112)) {
+        Ok(None) => None,
+        Ok(Some(v)) => match v.into_string() {
+            Ok(t) => super::pam::parse_gdal_metadata(&t),
+            Err(e) => Some(super::pam::Pam::losing(format!("it isn't text ({e}): band and class names are left out"))),
+        },
+        Err(e) => Some(super::pam::Pam::losing(format!("it doesn't decode ({e}): band and class names are left out"))),
+    };
     let spp = samples(&mut dec);
     let bytes = sample_bytes(&mut dec);
     // The decoded image is held at its own pixel size before conversion to f32, so bound bytes
@@ -1187,23 +1190,15 @@ pub fn write(r: &Raster, band: usize) -> Result<Vec<u8>> {
             .then(|| band.data.iter().map(|v| if r.is_valid(*v) { v.clamp(0.0, 255.0) as u8 } else { nodata.unwrap_or(0) }).collect())
     };
     let rgb = matches!(r.color, ColorHint::Rgb { .. }) && r.bands.len() >= 3;
-    // The written bands' names and the first one's class names (the red band's, for a colour
-    // file), in GDAL's metadata tag, read back on open.
-    // The samples each branch below writes: colour bytes with alpha when a fourth band fits
-    // bytes, colour floats with alpha when the raster says it has one, else the one band.
-    let four = |alpha: bool| (0..if r.bands.len() >= 4 && alpha { 4 } else { 3 }).collect::<Vec<usize>>();
-    let written: Vec<usize> = if !rgb {
-        vec![band]
-    } else if (0..3).all(|b| fits_bytes(r, b)) {
-        four(fits_bytes(r, 3))
-    } else {
-        four(matches!(r.color, ColorHint::Rgb { alpha: true }))
-    };
-    let names: Vec<Option<&str>> = written.iter().map(|b| super::band_name_of(r, *b)).collect();
-    let first = written.first().and_then(|b| r.bands.get(*b)).map_or(&[][..], |b| &b.classes[..]);
-    let classes = super::pam::gdal_metadata(&names, first);
+    // Each branch below names the bands it writes as samples (`$written`): their names, and the
+    // first one's class names (the red band's, for a colour file), go to GDAL's metadata tag,
+    // read back on open.
     macro_rules! tags {
-        ($img:expr) => {{
+        ($img:expr, $written:expr) => {{
+            let written: &[usize] = $written;
+            let names: Vec<Option<&str>> = written.iter().map(|b| super::band_name_of(r, *b)).collect();
+            let first = written.first().and_then(|b| r.bands.get(*b)).map_or(&[][..], |b| &b.classes[..]);
+            let classes = super::pam::gdal_metadata(&names, first);
             let e = $img.encoder();
             e.write_tag(Tag::ModelPixelScaleTag, &scale[..]).map_err(err)?;
             e.write_tag(Tag::ModelTiepointTag, &tie[..]).map_err(err)?;
@@ -1233,7 +1228,7 @@ pub fn write(r: &Raster, band: usize) -> Result<Vec<u8>> {
                 data.extend([red.get(i), green.get(i), blue.get(i), a.get(i)].map(|v| v.copied().unwrap_or(0)));
             }
             let mut img = enc.new_image::<colortype::RGBA8>(w, h).map_err(err)?;
-            tags!(img);
+            tags!(img, &[0, 1, 2, 3]);
             img.write_data(&data).map_err(err)?;
         } else {
             let mut data = Vec::with_capacity(n * 3);
@@ -1241,7 +1236,7 @@ pub fn write(r: &Raster, band: usize) -> Result<Vec<u8>> {
                 data.extend([red.get(i), green.get(i), blue.get(i)].map(|v| v.copied().unwrap_or(0)));
             }
             let mut img = enc.new_image::<colortype::RGB8>(w, h).map_err(err)?;
-            tags!(img);
+            tags!(img, &[0, 1, 2]);
             img.write_data(&data).map_err(err)?;
         }
     } else if rgb && let (Some(red), Some(green), Some(blue)) = (r.bands.first(), r.bands.get(1), r.bands.get(2)) {
@@ -1256,7 +1251,7 @@ pub fn write(r: &Raster, band: usize) -> Result<Vec<u8>> {
                     data.extend([at(red, i), at(green, i), at(blue, i), at(alpha, i)]);
                 }
                 let mut img = enc.new_image::<colortype::RGBA32Float>(w, h).map_err(err)?;
-                tags!(img);
+                tags!(img, &[0, 1, 2, 3]);
                 img.write_data(&data).map_err(err)?;
             }
             None => {
@@ -1265,14 +1260,14 @@ pub fn write(r: &Raster, band: usize) -> Result<Vec<u8>> {
                     data.extend([at(red, i), at(green, i), at(blue, i)]);
                 }
                 let mut img = enc.new_image::<colortype::RGB32Float>(w, h).map_err(err)?;
-                tags!(img);
+                tags!(img, &[0, 1, 2]);
                 img.write_data(&data).map_err(err)?;
             }
         }
     } else {
         let b = r.bands.get(band).ok_or_else(|| err(format!("the raster has no band {}", band + 1)))?;
         let mut img = enc.new_image::<colortype::Gray32Float>(w, h).map_err(err)?;
-        tags!(img);
+        tags!(img, &[band]);
         img.write_data(&b.data).map_err(err)?;
     }
     Ok(out.into_inner())

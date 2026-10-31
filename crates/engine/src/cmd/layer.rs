@@ -3003,8 +3003,8 @@ fn add_cog_window(s: &mut Session, p: &Value, url: &str) -> CmdResult {
     let unit = if geographic { " m" } else { " (the file's units)" };
     if values(lv) > MAX_WINDOW_VALUES {
         // The finest overview the window fits in, offered, never read unasked.
-        let take = match (level..layout.levels.len()).find(|i| values(&layout.levels[*i]) <= MAX_WINDOW_VALUES) {
-            Some(i) => format!("take \"cellSize\": {} or more, or a smaller box", size_of(&layout.levels[i]).ceil()),
+        let take = match layout.levels.iter().skip(level).find(|l| values(l) <= MAX_WINDOW_VALUES) {
+            Some(l) => format!("take \"cellSize\": {} or more, or a smaller box", size_of(l).ceil()),
             None => "take a smaller box".into(),
         };
         return Err(named(format!(
