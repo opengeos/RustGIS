@@ -201,10 +201,14 @@ impl GpkgSource {
             .ok()
         });
         let extent = native.map(|e| reproject.extent_to_lonlat(&e)).unwrap_or(Extent::EMPTY);
-        let count = conn
-            .query_row(&format!("SELECT COUNT(*) FROM {}", quote(&table)), [], |r| r.get::<_, i64>(0))
-            .ok()
-            .and_then(|n| u64::try_from(n).ok());
+        // Rows, and rows with a geometry (what a note on dropped Z or M values counts), in one scan.
+        let counts = conn
+            .query_row(&format!("SELECT COUNT(*), COUNT({}) FROM {}", quote(&geom), quote(&table)), [], |r| {
+                Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?))
+            })
+            .ok();
+        let count = counts.and_then(|(n, _)| u64::try_from(n).ok());
+        let geometries = counts.and_then(|(_, g)| u64::try_from(g).ok());
         let geometry_type = match geom_type.to_ascii_uppercase().as_str() {
             "POINT" | "MULTIPOINT" => GeometryType::Point,
             "LINESTRING" | "MULTILINESTRING" | "CURVE" | "MULTICURVE" => GeometryType::Polyline,
@@ -226,11 +230,6 @@ impl GpkgSource {
         // Z and M are 0 (none), 1 (every geometry) or 2 (optional: looked for in the first rows).
         let zm: Option<(i64, i64)> =
             conn.query_row("SELECT z, m FROM gpkg_geometry_columns WHERE table_name = ?1", [&table], |r| Ok((r.get(0)?, r.get(1)?))).ok();
-        // The geometries those values come with (rows without one have none).
-        let geometries = zm.filter(|(z, m)| *z == 1 || *m == 1).and_then(|_| {
-            let sql = format!("SELECT COUNT(*) FROM {} WHERE {} IS NOT NULL", quote(&table), quote(&geom));
-            conn.query_row(&sql, [], |r| r.get::<_, i64>(0)).ok().and_then(|n| u64::try_from(n).ok())
-        });
         let file = conn.path().filter(|p| !p.is_empty()).map(|p| (PathBuf::from(p), id));
         let mut src = GpkgSource { info, conn: Mutex::new(Some(conn)), table, geom, pk, rtree, reproject, temp, file };
         if src.info.geometry_type == GeometryType::None {
@@ -239,27 +238,32 @@ impl GpkgSource {
         match zm {
             // Every geometry has them.
             Some((z, m)) if z == 1 || m == 1 => src.info.drop_zm(geometries),
-            Some((z, m)) if (z == 2 || m == 2) && src.peek_zm() => src.info.drop_zm(None),
+            Some((z, m)) if z == 2 || m == 2 => match src.peek_zm() {
+                Some(true) => src.info.drop_zm(None),
+                Some(false) => {}
+                None => src.info.notes.push("couldn't tell whether it has Z or M values, which RustGIS doesn't keep".into()),
+            },
             _ => {}
         }
         Ok(src)
     }
 
-    /// Whether any of the first few geometries has Z or M values (a query that stops there).
-    fn peek_zm(&self) -> bool {
-        let Ok(guard) = self.conn.lock() else { return false };
-        let Some(conn) = guard.as_ref() else { return false };
+    /// Whether any of the first few geometries has Z or M values (a query that stops there);
+    /// `None` when they can't be read.
+    fn peek_zm(&self) -> Option<bool> {
+        let guard = self.conn.lock().ok()?;
+        let conn = guard.as_ref()?;
         let sql = format!("SELECT {g} FROM {t} WHERE {g} IS NOT NULL LIMIT 16", g = quote(&self.geom), t = quote(&self.table));
-        let Ok(mut st) = conn.prepare(&sql) else { return false };
-        let Ok(mut rows) = st.query([]) else { return false };
-        while let Ok(Some(r)) = rows.next() {
+        let mut st = conn.prepare(&sql).ok()?;
+        let mut rows = st.query([]).ok()?;
+        while let Some(r) = rows.next().ok()? {
             if let Ok(ValueRef::Blob(b)) = r.get_ref(0)
                 && split_blob(b).is_some_and(|(_, body)| wkb::has_zm(body))
             {
-                return true;
+                return Some(true);
             }
         }
-        false
+        Some(false)
     }
 
     /// The geometry type of a table declared as plain `GEOMETRY`, from its first few rows (a

@@ -318,7 +318,8 @@ fn geometry(n: &Node, out: &mut Parts, depth: usize) {
                     let mut it = t.split_whitespace();
                     let x = it.next()?.parse::<f64>().ok()?;
                     let y = it.next()?.parse::<f64>().ok()?;
-                    if !(x.is_finite() && y.is_finite()) {
+                    // Longitude/latitude, as `coords` keeps (NaN and infinities fail it too).
+                    if !((-180.0..=180.0).contains(&x) && (-90.0..=90.0).contains(&y)) {
                         return None;
                     }
                     alt |= it.next().and_then(|z| z.parse::<f64>().ok()).is_some_and(|z| z != 0.0);

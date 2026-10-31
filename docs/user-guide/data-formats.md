@@ -457,8 +457,9 @@ Shapefile, GeoPackage, GeoParquet, FlatGeobuf, PostGIS, File Geodatabase, GeoJSO
 other than 0), GML and CSV WKT columns are checked; sources read through GDAL or DuckDB, and SQL
 Server tables, aren't yet. GPX elevations and LiDAR heights are kept as fields, and a File
 Geodatabase multipatch's heights as `z_min` and `z_max`. Where a source doesn't declare its
-dimensions (a GeoParquet file without geometry types, a GeoPackage table with optional Z or M, an
-unconstrained PostGIS column), only its first 16 geometries are checked.
+dimensions, only a sample is checked: the first 16 rows of a GeoParquet file without geometry types
+(in its first row group), and the first 16 rows with a geometry of a GeoPackage table with optional
+Z or M (in the web app, its first 16 rows) or of an unconstrained PostGIS column.
 
 ## Define Projection
 
