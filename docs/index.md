@@ -69,6 +69,13 @@ Map operations are commands you can script from the command line, Python or the 
     with sandboxed WebAssembly or desktop-only process runtimes.
     [Command Line](cli.md) · [Python](python.md) · [MCP](mcp.md) · [Plugins](plugins.md)
 
+-   **Themed**
+
+    Light and Dark ship. Write a theme as a JSON file of colours, spacing and text sizes, drop
+    it in the themes folder and pick it in Settings, or scale the whole interface from 80% to
+    200%.
+    [Themes](themes.md)
+
 </div>
 
 ## A tour

@@ -46,7 +46,7 @@ struct RibbonSplitShowcase {
     disable_enclosing_ui: bool,
     long_labels: bool,
     fonts_installed: bool,
-    applied_dark: Option<bool>,
+    applied_look: Option<(String, bool)>,
 }
 
 fn split_tool_menu(ui: &mut egui::Ui, app: &mut RustGisApp) {
@@ -66,10 +66,10 @@ impl RibbonSplitShowcase {
             theme::install_fonts(ui.ctx(), &[], None);
             self.fonts_installed = true;
         }
-        if self.applied_dark != Some(app.ui.dark) {
-            let tokens = if app.ui.dark { theme::Tokens::dark() } else { theme::Tokens::light() };
-            theme::apply(ui.ctx(), &tokens);
-            self.applied_dark = Some(app.ui.dark);
+        if self.applied_look.as_ref() != Some(&(app.ui.theme_name.clone(), app.ui.dark)) {
+            let chosen = app.current_theme();
+            theme::apply(ui.ctx(), &chosen.tokens, &chosen.metrics);
+            self.applied_look = Some((app.ui.theme_name.clone(), app.ui.dark));
         }
         i18n::set_current(app.chosen_lang());
         ui.heading("Ribbon split buttons");
