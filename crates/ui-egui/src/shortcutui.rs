@@ -21,9 +21,9 @@ pub struct Editor {
     capture: Option<Target>,
     pending: Option<(Chord, Target)>,
     notice_clipboard: bool,
-    pub(crate) import: Option<crate::shortcutfile::Preview>,
     /// A key the menu bar keeps was pressed.
     notice_reserved: bool,
+    pub(crate) import: Option<crate::shortcutfile::Preview>,
 }
 
 impl Editor {
