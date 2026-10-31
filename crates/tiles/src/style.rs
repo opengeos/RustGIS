@@ -263,6 +263,53 @@ impl Expr {
     pub fn feature_free(&self) -> bool {
         free(&self.0)
     }
+
+    /// A `color-relief-color` at `zoom` as colours by height: an `interpolate` or `step` on
+    /// `["elevation"]` whose stops' colours are worked out once, or a single colour. `None` for
+    /// anything else, which a layer can't be drawn from pixel by pixel.
+    pub fn elevation_ramp(&self, zoom: f32) -> Option<ElevationRamp> {
+        let f = FeatureCtx::zoom_only(zoom);
+        let color = |n: &Node| eval(n, &f, &mut Vec::new()).as_color();
+        let height = |n: &Node| matches!(n, Node::Call(Op::Elevation, _));
+        let (base, below, stops) = match &self.0 {
+            Node::Interp(base, input, stops) if height(input) => (Some(*base), None, stops),
+            Node::Step(input, first, stops) if height(input) => (None, Some(color(first)?), stops),
+            Node::Lit(_) => return Some(ElevationRamp { base: None, below: color(&self.0)?, stops: Vec::new() }),
+            _ => return None,
+        };
+        let stops = stops.iter().map(|(h, n)| Some((*h, color(n)?))).collect::<Option<Vec<_>>>()?;
+        // The spec's stops ascend; others have no meaning.
+        if !stops.is_sorted_by(|a, b| a.0 <= b.0) {
+            return None;
+        }
+        let below = below.or_else(|| stops.first().map(|s| s.1))?;
+        Some(ElevationRamp { base, below, stops })
+    }
+}
+
+/// Colours by height, from a `color-relief-color` (see [`Expr::elevation_ramp`]).
+#[derive(Clone, Debug, PartialEq)]
+pub struct ElevationRamp {
+    /// An `interpolate`'s exponential base (1: linear); `None` for a `step`.
+    base: Option<f64>,
+    /// The colour below the first stop.
+    below: Rgba,
+    /// Heights and their colours, ascending.
+    stops: Vec<(f64, Rgba)>,
+}
+
+impl ElevationRamp {
+    /// The colour of a height, as the expression gives it.
+    pub fn color(&self, h: f64) -> Rgba {
+        // The stops at or below the height.
+        let i = self.stops.partition_point(|s| s.0 <= h);
+        let (lo, hi) = (i.checked_sub(1).and_then(|j| self.stops.get(j)), self.stops.get(i));
+        match (self.base, lo, hi) {
+            (_, None, _) => self.below,
+            (None, Some(lo), _) | (Some(_), Some(lo), None) => lo.1,
+            (Some(base), Some(lo), Some(hi)) => lerp_color(lo.1, hi.1, interp_t(base, h - lo.0, hi.0 - lo.0)),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -322,6 +369,8 @@ enum Op {
     Slice,
     Format,
     Rgb,
+    /// A `color-relief` layer's height (see [`Expr::elevation_ramp`]); null anywhere else.
+    Elevation,
 }
 
 fn op_of(name: &str) -> Option<Op> {
@@ -332,6 +381,7 @@ fn op_of(name: &str) -> Option<Op> {
         "id" => Id,
         "geometry-type" => GeomType,
         "zoom" => Zoom,
+        "elevation" => Elevation,
         "==" => Eq,
         "!=" => Ne,
         "<" => Lt,
@@ -515,7 +565,7 @@ fn compile_op(name: &str, args: &[Json], depth: usize) -> Option<Node> {
         "within" => Node::Lit(Val::Bool(false)),
         "is-supported-script" => Node::Lit(Val::Bool(true)),
         "properties" | "feature-state" | "line-progress" | "accumulated" | "heatmap-density" | "image" | "collator" | "resolved-locale"
-        | "global-state" | "object" | "elevation" | "distance" => null(),
+        | "global-state" | "object" | "distance" => null(),
         _ => Node::Call(op_of(name)?, args.iter().take(MAX_ARRAY).map(|j| compile(j, d)).collect()),
     })
 }
@@ -874,6 +924,7 @@ fn call(op: Op, args: &[Node], f: &FeatureCtx, vars: &mut Vars) -> Val {
         Id => f.id.map_or(Val::Null, |i| Val::Num(i as f64)),
         GeomType => Val::Str(geom_name(f.kind).into()),
         Zoom => Val::Num(f64::from(f.zoom)),
+        Elevation => Val::Null,
         Eq => Val::Bool(arg(0) == arg(1)),
         Ne => Val::Bool(arg(0) != arg(1)),
         Lt | Le | Gt | Ge => {
@@ -1088,8 +1139,57 @@ pub enum Source {
         max_zoom: u8,
         attribution: String,
     },
-    /// geojson, raster-dem, image, video… (ignored by the renderer).
+    /// Elevation tiles, for `hillshade` and `color-relief` layers.
+    RasterDem {
+        tiles: Vec<String>,
+        url: Option<String>,
+        tile_size: u32,
+        min_zoom: u8,
+        max_zoom: u8,
+        attribution: String,
+        encoding: DemEncoding,
+    },
+    /// geojson, image, video… (ignored by the renderer).
     Other,
+}
+
+/// How a `raster-dem` source's pixels give heights (its `encoding`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum DemEncoding {
+    /// `(R × 256 × 256 + G × 256 + B) × 0.1 − 10000` (the default).
+    Mapbox,
+    /// `R × 256 + G + B / 256 − 32768`.
+    Terrarium,
+    /// `R × red + G × green + B × blue − base` (`redFactor`, `greenFactor`, `blueFactor`, `baseShift`).
+    Custom { red: f64, green: f64, blue: f64, base: f64 },
+}
+
+impl DemEncoding {
+    fn parse(j: &Json) -> DemEncoding {
+        let factor = |k: &str, d: f64| j.get(k).and_then(Json::as_f64).filter(|v| v.is_finite()).unwrap_or(d);
+        match j.get("encoding").and_then(Json::as_str) {
+            Some("terrarium") => DemEncoding::Terrarium,
+            // The spec's defaults are Mapbox's factors.
+            Some("custom") => DemEncoding::Custom {
+                red: factor("redFactor", 6553.6),
+                green: factor("greenFactor", 25.6),
+                blue: factor("blueFactor", 0.1),
+                base: factor("baseShift", 10000.0),
+            },
+            _ => DemEncoding::Mapbox,
+        }
+    }
+
+    /// The height, in metres, of a pixel's colour.
+    pub fn height(self, [r, g, b]: [u8; 3]) -> f32 {
+        let (r, g, b) = (f64::from(r), f64::from(g), f64::from(b));
+        let h = match self {
+            DemEncoding::Mapbox => (r * 65536.0 + g * 256.0 + b) * 0.1 - 10000.0,
+            DemEncoding::Terrarium => r * 256.0 + g + b / 256.0 - 32768.0,
+            DemEncoding::Custom { red, green, blue, base } => r * red + g * green + b * blue - base,
+        };
+        h as f32
+    }
 }
 
 fn str_of(v: Option<&Json>) -> Option<String> {
@@ -1116,15 +1216,21 @@ impl Source {
                 let tile_size = get("tileSize").and_then(Json::as_u64).map_or(512, |t| t.clamp(1, 4096) as u32);
                 Source::Raster { tiles, url, tile_size, min_zoom, max_zoom, attribution }
             }
+            Some("raster-dem") => {
+                let tile_size = get("tileSize").and_then(Json::as_u64).map_or(512, |t| t.clamp(1, 4096) as u32);
+                Source::RasterDem { tiles, url, tile_size, min_zoom, max_zoom, attribution, encoding: DemEncoding::parse(j) }
+            }
             _ => Source::Other,
         }
     }
 
     /// Fills tiles, zoom range and attribution from a TileJSON document (fields it lacks are kept).
+    /// A `raster-dem` source keeps its own `encoding`, as MapLibre does.
     pub fn apply_tilejson(&mut self, tilejson: &Json) {
         match self {
             Source::Vector { tiles, min_zoom, max_zoom, attribution, .. }
-            | Source::Raster { tiles, min_zoom, max_zoom, attribution, .. } => {
+            | Source::Raster { tiles, min_zoom, max_zoom, attribution, .. }
+            | Source::RasterDem { tiles, min_zoom, max_zoom, attribution, .. } => {
                 let t = strings(tilejson.get("tiles"));
                 if !t.is_empty() {
                     *tiles = t;
@@ -1186,7 +1292,43 @@ pub enum LayerKind {
     Raster,
     Circle,
     FillExtrusion,
+    /// Shading from a `raster-dem` source's slopes.
+    Hillshade,
+    /// Colours by height from a `raster-dem` source.
+    ColorRelief,
     Other,
+}
+
+/// `hillshade-method`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum HillshadeMethod {
+    #[default]
+    Standard,
+    Basic,
+    Combined,
+    Igor,
+    Multidirectional,
+}
+
+/// A hillshade layer's paint (see [`StyleLayer::hillshade`]). The light's direction is degrees
+/// clockwise from north and its altitude degrees above the horizon; the multidirectional method
+/// takes a light from each direction, with the altitude and colours at the same place in their
+/// lists (the last one standing in for those missing).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Hillshade {
+    pub method: HillshadeMethod,
+    /// 0 to 1 (default 0.5).
+    pub exaggeration: f32,
+    /// Default 335.
+    pub directions: Vec<f32>,
+    /// Default 45.
+    pub altitudes: Vec<f32>,
+    /// Default black.
+    pub shadows: Vec<Rgba>,
+    /// Default white.
+    pub highlights: Vec<Rgba>,
+    /// Steep slopes' colour (default black; the standard method's only).
+    pub accent: Rgba,
 }
 
 /// `line-cap`.
@@ -1253,6 +1395,8 @@ impl StyleLayer {
             Some("raster") => LayerKind::Raster,
             Some("circle") => LayerKind::Circle,
             Some("fill-extrusion") => LayerKind::FillExtrusion,
+            Some("hillshade") => LayerKind::Hillshade,
+            Some("color-relief") => LayerKind::ColorRelief,
             _ => LayerKind::Other,
         };
         let layout_json = o.get("layout").and_then(Json::as_object);
@@ -1456,6 +1600,56 @@ impl StyleLayer {
     /// `raster-opacity` (default 1).
     pub fn raster_opacity(&self, zoom: f32) -> f32 {
         self.opacity("raster-opacity", &FeatureCtx::zoom_only(zoom))
+    }
+
+    /// `color-relief-color` as colours by height; `None` when absent or not one the renderer
+    /// can draw (see [`Expr::elevation_ramp`]).
+    pub fn color_relief_ramp(&self, zoom: f32) -> Option<ElevationRamp> {
+        self.paint.get("color-relief-color")?.elevation_ramp(zoom)
+    }
+
+    /// `color-relief-opacity` (default 1).
+    pub fn color_relief_opacity(&self, zoom: f32) -> f32 {
+        self.opacity("color-relief-opacity", &FeatureCtx::zoom_only(zoom))
+    }
+
+    /// Whether `resampling` is `nearest` (default `linear`): heights are read from the nearest
+    /// pixel rather than blended, which keeps category codes from blending into heights.
+    pub fn resampling_nearest(&self, zoom: f32) -> bool {
+        self.pval("resampling", &FeatureCtx::zoom_only(zoom)).as_str() == Some("nearest")
+    }
+
+    /// The `hillshade-*` paint properties at `zoom`.
+    pub fn hillshade(&self, zoom: f32) -> Hillshade {
+        let f = FeatureCtx::zoom_only(zoom);
+        // A number or colour, or for the multidirectional method a list of them.
+        fn many<T>(v: Val, one: impl Fn(&Val) -> Option<T>) -> Vec<T> {
+            match v {
+                Val::Arr(a) => a.iter().take(MAX_STOPS).filter_map(one).collect(),
+                v => one(&v).into_iter().collect(),
+            }
+        }
+        let num = |v: &Val| v.as_f64().filter(|v| v.is_finite()).map(|v| v as f32);
+        let or = |v: Vec<f32>, d: f32| if v.is_empty() { vec![d] } else { v };
+        let colors = |name: &str, d: Rgba| {
+            let c = many(self.pval(name, &f), Val::as_color);
+            if c.is_empty() { vec![d] } else { c }
+        };
+        Hillshade {
+            method: match self.pval("hillshade-method", &f).as_str() {
+                Some("basic") => HillshadeMethod::Basic,
+                Some("combined") => HillshadeMethod::Combined,
+                Some("igor") => HillshadeMethod::Igor,
+                Some("multidirectional") => HillshadeMethod::Multidirectional,
+                _ => HillshadeMethod::Standard,
+            },
+            exaggeration: self.pnum("hillshade-exaggeration", &f).map_or(0.5, |v| v.clamp(0.0, 1.0)),
+            directions: or(many(self.pval("hillshade-illumination-direction", &f), num), 335.0),
+            altitudes: or(many(self.pval("hillshade-illumination-altitude", &f), num), 45.0),
+            shadows: colors("hillshade-shadow-color", BLACK),
+            highlights: colors("hillshade-highlight-color", [255, 255, 255, 255]),
+            accent: self.pcolor("hillshade-accent-color", &f).unwrap_or(BLACK),
+        }
     }
 
     /// `text-field` as plain text (tokens substituted, formatting and images dropped, `text-transform` applied,
@@ -2210,6 +2404,86 @@ mod tests {
         e.push(json!(["var", "a"]));
         let v = Expr::property(&Json::Array(e)).eval(&f);
         assert_eq!(v.to_text().len(), MAX_STR);
+    }
+
+    #[test]
+    fn raster_dem_sources_and_their_layers_parse() {
+        use serde_json::json;
+        let style = Style::parse(&json!({
+            "sources": {
+                "a": {"type": "raster-dem", "url": "https://x/dem.json", "tileSize": 256, "encoding": "terrarium"},
+                "b": {"type": "raster-dem", "tiles": ["https://x/{z}/{x}/{y}.png"]},
+                "c": {"type": "raster-dem", "tiles": [], "encoding": "custom", "redFactor": 1, "baseShift": 5}
+            },
+            "layers": [
+                {"id": "relief", "type": "color-relief", "source": "a"},
+                {"id": "shade", "type": "hillshade", "source": "a", "paint": {
+                    "hillshade-method": "multidirectional",
+                    "hillshade-illumination-direction": [270, 315],
+                    "hillshade-shadow-color": ["#111", "#222"],
+                    "hillshade-exaggeration": 3
+                }}
+            ]
+        }))
+        .unwrap();
+        assert!(matches!(
+            style.source("a"),
+            Some(Source::RasterDem { tile_size: 256, encoding: DemEncoding::Terrarium, url: Some(_), .. })
+        ));
+        assert!(matches!(style.source("b"), Some(Source::RasterDem { tile_size: 512, encoding: DemEncoding::Mapbox, .. })));
+        assert!(matches!(
+            style.source("c"),
+            Some(Source::RasterDem { encoding: DemEncoding::Custom { red: 1.0, green: 25.6, blue: 0.1, base: 5.0 }, .. })
+        ));
+        assert_eq!(style.layers.iter().map(|l| l.kind).collect::<Vec<_>>(), [LayerKind::ColorRelief, LayerKind::Hillshade]);
+        let hs = style.layers[1].hillshade(10.0);
+        assert_eq!(hs.method, HillshadeMethod::Multidirectional);
+        assert_eq!(hs.directions, [270.0, 315.0]);
+        assert_eq!(hs.altitudes, [45.0]);
+        assert_eq!(hs.shadows, [[0x11, 0x11, 0x11, 255], [0x22, 0x22, 0x22, 255]]);
+        assert_eq!(hs.highlights, [[255, 255, 255, 255]]);
+        // Exaggeration is 0 to 1.
+        assert_eq!(hs.exaggeration, 1.0);
+        let plain = StyleLayer::parse(&json!({"id": "s", "type": "hillshade", "source": "a"})).unwrap().hillshade(10.0);
+        assert_eq!((plain.method, plain.exaggeration, plain.directions), (HillshadeMethod::Standard, 0.5, vec![335.0]));
+        // A missing `raster-dem` source's TileJSON keeps its encoding.
+        let mut a = style.source("a").unwrap().clone();
+        a.apply_tilejson(&json!({"tiles": ["https://x/{z}/{x}/{y}.webp"], "encoding": "mapbox", "maxzoom": 12}));
+        assert!(matches!(a, Source::RasterDem { encoding: DemEncoding::Terrarium, max_zoom: 12, .. }));
+    }
+
+    #[test]
+    fn elevation_ramps_colour_as_the_expression_does() {
+        use serde_json::json;
+        // The same ramp on zoom, which the expression language evaluates itself.
+        let stops = json!([-100, "#0b1f3a", -10, "rgba(169,212,238,0.5)", 0, "#ffffff", 2, "#d4d4d4"]);
+        for (head, by_zoom) in [
+            (json!(["interpolate", ["linear"]]), json!(["interpolate", ["linear"], ["zoom"]])),
+            (json!(["interpolate", ["exponential", 1.5]]), json!(["interpolate", ["exponential", 1.5], ["zoom"]])),
+        ] {
+            let mut on_height = head.as_array().unwrap().clone();
+            on_height.push(json!(["elevation"]));
+            on_height.extend(stops.as_array().unwrap().iter().cloned());
+            let mut on_zoom = by_zoom.as_array().unwrap().clone();
+            on_zoom.extend(stops.as_array().unwrap().iter().cloned());
+            let ramp = Expr::property(&Json::Array(on_height)).elevation_ramp(10.0).unwrap();
+            let expr = Expr::property(&Json::Array(on_zoom));
+            for h in [-500.0f32, -100.0, -55.5, -10.0, -3.25, 0.0, 1.0, 2.0, 9.0] {
+                assert_eq!(Some(ramp.color(f64::from(h))), expr.eval(&FeatureCtx::zoom_only(h)).as_color(), "{head} at {h}");
+            }
+        }
+        let step = Expr::property(&json!(["step", ["elevation"], "#000000", 0, "#ff0000", 5, "#00ff00"])).elevation_ramp(3.0).unwrap();
+        assert_eq!(
+            [step.color(-1.0), step.color(0.0), step.color(4.9), step.color(5.0)],
+            [[0, 0, 0, 255], [255, 0, 0, 255], [255, 0, 0, 255], [0, 255, 0, 255]]
+        );
+        assert_eq!(Expr::property(&json!("#336699")).elevation_ramp(3.0).unwrap().color(123.0), [0x33, 0x66, 0x99, 255]);
+        // Not on the height, not ascending, or not colours: not a ramp.
+        assert!(Expr::property(&json!(["interpolate", ["linear"], ["zoom"], 0, "#000", 5, "#fff"])).elevation_ramp(3.0).is_none());
+        assert!(Expr::property(&json!(["interpolate", ["linear"], ["elevation"], 5, "#000", 0, "#fff"])).elevation_ramp(3.0).is_none());
+        assert!(Expr::property(&json!(["interpolate", ["linear"], ["elevation"], 0, 1, 5, 2])).elevation_ramp(3.0).is_none());
+        // Elsewhere the height is null.
+        assert_eq!(Expr::property(&json!(["elevation"])).eval(&FeatureCtx::zoom_only(3.0)), Val::Null);
     }
 }
 

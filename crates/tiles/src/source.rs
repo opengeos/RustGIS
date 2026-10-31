@@ -198,73 +198,15 @@ pub fn resolve(spec: &Spec) -> Resolve {
     // Sources given by a TileJSON address.
     let base = spec.url.clone();
     let mut pending = false;
-    for (_, src) in &mut style.sources {
-        let (tiles, url) = match src {
-            Source::Vector { tiles, url, .. } | Source::Raster { tiles, url, .. } => (tiles, url),
-            Source::Other => continue,
-        };
-        if tiles.is_empty()
-            && let Some(u) = url.clone()
-        {
-            if u.starts_with("mapbox://") {
-                return Resolve::Failed(format!("{u}: mapbox:// addresses need Mapbox's own library"));
+    for (id, src) in &mut style.sources {
+        match resolve_source(src, spec, &base) {
+            Ok(p) => pending |= p,
+            // Elevation shades what the rest of the style draws: without it, the rest still draws.
+            Err(e) if matches!(src, Source::RasterDem { .. }) => {
+                log::warn!("{}: elevation source {id} left out: {e}", spec.url);
+                *src = Source::Other;
             }
-            let u = template::join(&base, &u);
-            // An ArcGIS vector tile service answers its TileJSON-like description as JSON only
-            // when asked (`?f=json`); its styles point at the service itself.
-            let path = u.split(['?', '#']).next().unwrap_or(&u).trim_end_matches('/').to_string();
-            // The query's other parameters (a token) stay; `f` is the one asked for.
-            let others: Vec<&str> = u
-                .split('#')
-                .next()
-                .and_then(|x| x.split_once('?'))
-                .map(|(_, q)| q)
-                .unwrap_or("")
-                .split('&')
-                .filter(|kv| !kv.is_empty() && !kv.split_once('=').map(|(k, _)| k).unwrap_or(kv).eq_ignore_ascii_case("f"))
-                .collect();
-            let u = if path.to_ascii_lowercase().ends_with("/vectortileserver") {
-                // With the slash, so the tile paths it gives resolve inside the service.
-                if others.is_empty() { format!("{path}/?f=json") } else { format!("{path}/?f=json&{}", others.join("&")) }
-            } else {
-                u
-            };
-            // A style's TileJSON is the style's choice; a vector layer's is the user's.
-            if let Err(e) = address::check(&u, (spec.kind == Kind::Style).then_some(base.as_str())) {
-                return Resolve::Failed(e);
-            }
-            match fetch_json(&u) {
-                Ok(Some(tj)) => {
-                    src.apply_tilejson(&tj);
-                    // Tile addresses relative to the TileJSON document, which chose them.
-                    if let Source::Vector { tiles, .. } | Source::Raster { tiles, .. } = src {
-                        for t in tiles.iter_mut() {
-                            *t = template::join(&u, t);
-                            if let Err(e) = address::check(t, Some(&u)) {
-                                return Resolve::Failed(e);
-                            }
-                        }
-                    }
-                }
-                Ok(None) => pending = true,
-                Err(e) => return Resolve::Failed(e),
-            }
-        } else if let Source::Vector { tiles, .. } | Source::Raster { tiles, .. } = src {
-            for t in tiles.iter_mut() {
-                // Tiles from an archive: read from the archive the layer names.
-                if (spec.kind == Kind::PmTiles && pmtiles::is_tile(t))
-                    || (spec.kind == Kind::MbTiles && mbtiles::is_tile(t))
-                    || (spec.kind == Kind::Cog && cog::is_tile(t))
-                {
-                    continue;
-                }
-                *t = template::join(&base, t);
-                // A style's tile addresses are the style's choice; a raster or vector layer's
-                // template is the user's.
-                if let Err(e) = address::check(t, (spec.kind == Kind::Style).then_some(base.as_str())) {
-                    return Resolve::Failed(e);
-                }
-            }
+            Err(e) => return Resolve::Failed(e),
         }
     }
     if pending {
@@ -279,7 +221,7 @@ pub fn resolve(spec: &Spec) -> Resolve {
     };
     credit(&spec.attribution);
     for (_, src) in &style.sources {
-        if let Source::Vector { attribution, .. } | Source::Raster { attribution, .. } = src {
+        if let Source::Vector { attribution, .. } | Source::Raster { attribution, .. } | Source::RasterDem { attribution, .. } = src {
             credit(attribution);
         }
     }
@@ -298,6 +240,72 @@ pub fn resolve(spec: &Spec) -> Resolve {
     }
     all.insert(key, r.clone());
     Resolve::Ready(r)
+}
+
+/// Fills in a style source's tile addresses: from its TileJSON address when it gives no tiles
+/// (`Ok(true)` while that is on its way), resolved against `base` and checked.
+fn resolve_source(src: &mut Source, spec: &Spec, base: &str) -> Result<bool, String> {
+    let (tiles, url) = match src {
+        Source::Vector { tiles, url, .. } | Source::Raster { tiles, url, .. } | Source::RasterDem { tiles, url, .. } => (tiles, url),
+        Source::Other => return Ok(false),
+    };
+    if tiles.is_empty()
+        && let Some(u) = url.clone()
+    {
+        if u.starts_with("mapbox://") {
+            return Err(format!("{u}: mapbox:// addresses need Mapbox's own library"));
+        }
+        let u = template::join(base, &u);
+        // An ArcGIS vector tile service answers its TileJSON-like description as JSON only
+        // when asked (`?f=json`); its styles point at the service itself.
+        let path = u.split(['?', '#']).next().unwrap_or(&u).trim_end_matches('/').to_string();
+        // The query's other parameters (a token) stay; `f` is the one asked for.
+        let others: Vec<&str> = u
+            .split('#')
+            .next()
+            .and_then(|x| x.split_once('?'))
+            .map(|(_, q)| q)
+            .unwrap_or("")
+            .split('&')
+            .filter(|kv| !kv.is_empty() && !kv.split_once('=').map(|(k, _)| k).unwrap_or(kv).eq_ignore_ascii_case("f"))
+            .collect();
+        let u = if path.to_ascii_lowercase().ends_with("/vectortileserver") {
+            // With the slash, so the tile paths it gives resolve inside the service.
+            if others.is_empty() { format!("{path}/?f=json") } else { format!("{path}/?f=json&{}", others.join("&")) }
+        } else {
+            u
+        };
+        // A style's TileJSON is the style's choice; a vector layer's is the user's.
+        address::check(&u, (spec.kind == Kind::Style).then_some(base))?;
+        match fetch_json(&u)? {
+            Some(tj) => {
+                src.apply_tilejson(&tj);
+                // Tile addresses relative to the TileJSON document, which chose them.
+                if let Source::Vector { tiles, .. } | Source::Raster { tiles, .. } | Source::RasterDem { tiles, .. } = src {
+                    for t in tiles.iter_mut() {
+                        *t = template::join(&u, t);
+                        address::check(t, Some(&u))?;
+                    }
+                }
+            }
+            None => return Ok(true),
+        }
+    } else if let Source::Vector { tiles, .. } | Source::Raster { tiles, .. } | Source::RasterDem { tiles, .. } = src {
+        for t in tiles.iter_mut() {
+            // Tiles from an archive: read from the archive the layer names.
+            if (spec.kind == Kind::PmTiles && pmtiles::is_tile(t))
+                || (spec.kind == Kind::MbTiles && mbtiles::is_tile(t))
+                || (spec.kind == Kind::Cog && cog::is_tile(t))
+            {
+                continue;
+            }
+            *t = template::join(base, t);
+            // A style's tile addresses are the style's choice; a raster or vector layer's
+            // template is the user's.
+            address::check(t, (spec.kind == Kind::Style).then_some(base))?;
+        }
+    }
+    Ok(false)
 }
 
 /// A vector archive's source layers, as its metadata lists them (`vector_layers`) and
