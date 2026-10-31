@@ -1896,11 +1896,17 @@ mod tests {
             let before = h.query_all_by_role(Role::TextInput).count();
             h.get_by_role_and_label(Role::ComboBox, list).click();
             h.run();
-            // (The list's search box is the one that came with it, the last.)
-            h.query_all_by_role(Role::TextInput).last().unwrap().click();
+            // (The list's search box is the input with no label: the tab's own have theirs, and can
+            // come after it, as Wrap at does on Symbol.)
+            let search_box = |h: &egui_kittest::Harness<'static, RustGisApp>| {
+                h.query_all_by_role(Role::TextInput).find(|n| n.accesskit_node().label().is_none()).map(|n| n.accesskit_node().id())
+            };
+            let id = search_box(h).unwrap();
+            h.get_by(|n| n.id() == id).click();
             h.run();
             assert_eq!(h.query_all_by_role(Role::TextInput).count(), before + 1, "{list}: clicking its search box left it open");
-            h.query_all_by_role(Role::TextInput).last().unwrap().type_text(text);
+            let id = search_box(h).unwrap();
+            h.get_by(|n| n.id() == id).type_text(text);
             h.run();
             before
         };
