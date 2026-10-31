@@ -874,6 +874,15 @@ fn position(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, c: &Class) {
             ui.end_row();
         }
     });
+    // Points: the other places round the point, tried when the label's own is taken (#1011).
+    if l.geometry_type() == rustgis_engine::data::GeometryType::Point {
+        ui.add_space(4.0);
+        let mut on = c.it.other_positions;
+        let help = tl!("When its place is taken, the label tries the other places round the point, corners first.");
+        if ui.checkbox(&mut on, tl!("Try other places round the point")).on_hover_text(help).changed() {
+            run(app, "labels.placement", c.params(json!({"otherPositions": on})));
+        }
+    }
     // Lines: the text along them, straight or bending with them.
     if l.geometry_type() == rustgis_engine::data::GeometryType::Polyline {
         ui.add_space(4.0);
@@ -1288,6 +1297,35 @@ mod tests {
         h.get_by_role_and_label(Role::CheckBox, "Repeat").click();
         h.run();
         assert_eq!(class(&h).repeat, None);
+    }
+
+    /// A point layer's labels can try the other places round their points (#1011); a line or
+    /// polygon layer's have no such box.
+    #[test]
+    fn other_positions_are_set_in_the_pane_for_points() {
+        use egui::accesskit::Role;
+        const BOX: &str = "Try other places round the point";
+        let mut h = harness(with_cities());
+        h.run();
+        open_tab(&mut h, "Position");
+        let on = |h: &egui_kittest::Harness<'_, RustGisApp>| {
+            h.state().session.map().layer_by_name("Cities").unwrap().labels.default.other_positions
+        };
+        assert!(!on(&h));
+        h.get_by_role_and_label(Role::CheckBox, BOX).click();
+        h.run();
+        assert!(on(&h));
+        h.get_by_role_and_label(Role::CheckBox, BOX).click();
+        h.run();
+        assert!(!on(&h));
+        let rivers = layer_id(h.state(), "Rivers");
+        h.state_mut().session.run("layer.select", &json!({"layer": rivers})).unwrap();
+        h.run();
+        assert!(h.query_by_role_and_label(Role::CheckBox, BOX).is_none(), "not for lines");
+        let countries = layer_id(h.state(), "Countries");
+        h.state_mut().session.run("layer.select", &json!({"layer": countries})).unwrap();
+        h.run();
+        assert!(h.query_by_role_and_label(Role::CheckBox, BOX).is_none(), "not for polygons");
     }
 
     #[test]
