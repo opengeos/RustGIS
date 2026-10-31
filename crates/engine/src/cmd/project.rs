@@ -127,6 +127,7 @@ fn export_log(s: &mut Session, p: &Value) -> CmdResult {
     // an existing file as it was.
     let n = s.log.len();
     rustgis_data::io::write_atomic_with(&path, |w| {
+        use std::io::Write;
         if format == "csv" {
             w.write_all(b"time_utc,at,command,ok,millis,error,params\n")?;
         }
