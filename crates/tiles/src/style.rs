@@ -1170,7 +1170,9 @@ pub enum DemEncoding {
     Mapbox,
     /// `R × 256 + G + B / 256 − 32768`.
     Terrarium,
-    /// `R × red + G × green + B × blue − base` (`redFactor`, `greenFactor`, `blueFactor`, `baseShift`).
+    /// `R × red + G × green + B × blue − base` (`redFactor`, `greenFactor`, `blueFactor`, `baseShift`;
+    /// 1, 1, 1 and 0 when not given). The base is taken off, as MapLibre's own encodings take
+    /// off theirs (Mapbox's is `custom` with 6553.6, 25.6, 0.1 and 10000).
     Custom { red: f64, green: f64, blue: f64, base: f64 },
 }
 
@@ -1179,12 +1181,11 @@ impl DemEncoding {
         let factor = |k: &str, d: f64| j.get(k).and_then(Json::as_f64).filter(|v| v.is_finite()).unwrap_or(d);
         match j.get("encoding").and_then(Json::as_str) {
             Some("terrarium") => DemEncoding::Terrarium,
-            // The spec's defaults are Mapbox's factors.
             Some("custom") => DemEncoding::Custom {
-                red: factor("redFactor", 6553.6),
-                green: factor("greenFactor", 25.6),
-                blue: factor("blueFactor", 0.1),
-                base: factor("baseShift", 10000.0),
+                red: factor("redFactor", 1.0),
+                green: factor("greenFactor", 1.0),
+                blue: factor("blueFactor", 1.0),
+                base: factor("baseShift", 0.0),
             },
             _ => DemEncoding::Mapbox,
         }
@@ -2513,7 +2514,8 @@ mod tests {
                 "c": {"type": "raster-dem", "tiles": [], "encoding": "custom", "redFactor": 1, "baseShift": 5}
             },
             "layers": [
-                {"id": "relief", "type": "color-relief", "source": "a"},
+                {"id": "relief", "type": "color-relief", "source": "a",
+                    "paint": {"color-relief-color": ["interpolate", ["linear"], ["elevation"], 0, "#000000", 5000, "#ffffff"]}},
                 {"id": "shade", "type": "hillshade", "source": "a", "paint": {
                     "hillshade-method": "multidirectional",
                     "hillshade-illumination-direction": [270, 315],
@@ -2530,9 +2532,11 @@ mod tests {
         assert!(matches!(style.source("b"), Some(Source::RasterDem { tile_size: 512, encoding: DemEncoding::Mapbox, .. })));
         assert!(matches!(
             style.source("c"),
-            Some(Source::RasterDem { encoding: DemEncoding::Custom { red: 1.0, green: 25.6, blue: 0.1, base: 5.0 }, .. })
+            Some(Source::RasterDem { encoding: DemEncoding::Custom { red: 1.0, green: 1.0, blue: 1.0, base: 5.0 }, .. })
         ));
         assert_eq!(style.layers.iter().map(|l| l.kind).collect::<Vec<_>>(), [LayerKind::ColorRelief, LayerKind::Hillshade]);
+        // Its ramp, as the drawing reads it.
+        assert_eq!(style.layers[0].color_relief_ramp(10.0).map(|r| r.color(2500.0)), Some([128, 128, 128, 255]));
         let hs = style.layers[1].hillshade(10.0);
         assert_eq!(hs.method, HillshadeMethod::Multidirectional);
         assert_eq!(hs.directions, [270.0, 315.0]);

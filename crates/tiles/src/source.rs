@@ -84,14 +84,24 @@ pub struct Resolved {
     pub left_out: Vec<String>,
     /// When it was resolved: one that left something out is resolved again once a failed
     /// fetch may be tried again ([`cache::RETRY`]).
-    pub made: Instant,
+    pub made: Mutex<Instant>,
 }
 
 impl Resolved {
     /// Whether it may still be used as it is.
     fn current(&self) -> bool {
-        self.left_out.is_empty() || self.made.elapsed() < cache::RETRY
+        self.left_out.is_empty() || self.made.lock().unwrap_or_else(|e| e.into_inner()).elapsed() < cache::RETRY
     }
+}
+
+/// What resolving a style again gives instead of `old`: `old` itself when it leaves out the same,
+/// so what was drawn of it (pictures and meshes, kept by style) is kept, else `new`.
+fn kept(old: Arc<Resolved>, new: Arc<Resolved>) -> Arc<Resolved> {
+    if old.left_out != new.left_out {
+        return new;
+    }
+    *old.made.lock().unwrap_or_else(|e| e.into_inner()) = Instant::now();
+    old
 }
 
 pub enum Resolve {
@@ -137,10 +147,15 @@ pub fn resolve(spec: &Spec) -> Resolve {
     if let Some(r) = cached.as_ref().filter(|r| r.current()) {
         return Resolve::Ready(r.clone());
     }
-    match resolve_anew(spec, key) {
+    match (resolve_anew(spec, key.clone()), cached) {
         // One that left something out is drawn as it was while that is fetched again, not blank.
-        Resolve::Pending => cached.map_or(Resolve::Pending, Resolve::Ready),
-        other => other,
+        (Resolve::Pending, Some(old)) => Resolve::Ready(old),
+        (Resolve::Ready(new), Some(old)) => {
+            let r = kept(old, new);
+            resolved().lock().unwrap_or_else(|e| e.into_inner()).insert(key, r.clone());
+            Resolve::Ready(r)
+        }
+        (other, _) => other,
     }
 }
 
@@ -245,7 +260,7 @@ fn resolve_anew(spec: &Spec, key: String) -> Resolve {
         .filter(|s| !s.starts_with("mapbox://"))
         .map(|s| template::join(&base, s))
         .filter(|s| address::check(s, Some(&base)).is_ok());
-    let r = Arc::new(Resolved { style, attribution, sprite, left_out, made: Instant::now() });
+    let r = Arc::new(Resolved { style, attribution, sprite, left_out, made: Mutex::new(Instant::now()) });
     let mut all = resolved().lock().unwrap_or_else(|e| e.into_inner());
     // A few layers are in use at a time: past that many, start again rather than grow.
     if all.len() >= MAX_RESOLVED {
@@ -707,7 +722,13 @@ mod tests {
     fn a_style_that_left_something_out_draws_the_rest_and_says_so() {
         let doc = serde_json::json!({"version": 8, "sources": {}, "layers": [{"id": "bg", "type": "background", "paint": {"background-color": "#f00"}}]});
         let left_out = vec!["elevation source dem left out, so its relief isn't drawn: gone".to_owned()];
-        let r = Resolved { style: Style::parse(&doc).unwrap(), sprite: None, attribution: Vec::new(), left_out, made: Instant::now() };
+        let r = Resolved {
+            style: Style::parse(&doc).unwrap(),
+            sprite: None,
+            attribution: Vec::new(),
+            left_out,
+            made: Mutex::new(Instant::now()),
+        };
         assert!(r.current());
         let s = spec(Kind::Style, "https://left-out.example.com/style.json");
         resolved().lock().unwrap().insert(s.key(), Arc::new(r));
@@ -723,11 +744,16 @@ mod tests {
             sprite: None,
             attribution: Vec::new(),
             left_out: vec!["x".into()],
-            made: long_ago,
+            made: Mutex::new(long_ago),
         };
         assert!(!stale.current());
-        let complete =
-            Resolved { style: Style::parse(&doc).unwrap(), sprite: None, attribution: Vec::new(), left_out: Vec::new(), made: long_ago };
+        let complete = Resolved {
+            style: Style::parse(&doc).unwrap(),
+            sprite: None,
+            attribution: Vec::new(),
+            left_out: Vec::new(),
+            made: Mutex::new(long_ago),
+        };
         assert!(complete.current());
         // Through `resolve`: an expired one is resolved again (a raster layer's at once)…
         let s = spec(Kind::Raster, "https://expired.example.com/{z}/{x}/{y}.png");
@@ -736,7 +762,7 @@ mod tests {
             sprite: None,
             attribution: Vec::new(),
             left_out: vec!["x".into()],
-            made: long_ago,
+            made: Mutex::new(long_ago),
         });
         resolved().lock().unwrap().insert(s.key(), expired.clone());
         let Resolve::Ready(r) = resolve(&s) else { panic!("not resolved again") };
@@ -750,6 +776,29 @@ mod tests {
             Resolve::Pending => panic!("blank while it is read again"),
             Resolve::Failed(e) => assert!(!e.is_empty(), "read again, and failed"),
         }
+    }
+
+    #[test]
+    fn resolving_again_to_the_same_omission_keeps_the_style() {
+        let doc = serde_json::json!({"version": 8, "sources": {}, "layers": []});
+        let Some(long_ago) = Instant::now().checked_sub(cache::RETRY * 2) else { return };
+        let made = |left_out: &[&str], at: Instant| {
+            Arc::new(Resolved {
+                style: Style::parse(&doc).unwrap(),
+                sprite: None,
+                attribution: Vec::new(),
+                left_out: left_out.iter().map(|s| s.to_string()).collect(),
+                made: Mutex::new(at),
+            })
+        };
+        // Left out as before: the same style, current again, so its pictures stay.
+        let old = made(&["dem: gone"], long_ago);
+        assert!(!old.current());
+        let r = kept(old.clone(), made(&["dem: gone"], Instant::now()));
+        assert!(Arc::ptr_eq(&r, &old) && r.current());
+        // Something else (or nothing) left out: the new one.
+        let new = made(&[], Instant::now());
+        assert!(Arc::ptr_eq(&kept(old, new.clone()), &new));
     }
 
     #[test]
