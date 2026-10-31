@@ -3317,7 +3317,7 @@ Step	단계
 Step back	한 단계 뒤로
 Step forward	한 단계 앞으로
 Step through a task.	태스크를 단계별로 진행합니다.
-Step through the days with the time slider (View › Time), which starts with the layer's	시간 슬라이더(보기 › 시간)로 날짜를 단계별로 보며, 레이어의 날짜부터 시작합니다
+Step through the days with the time slider (View › Time), which starts with the layer's days	시간 슬라이더(보기 › 시간)로 날짜를 단계별로 보며, 레이어의 날짜부터 시작합니다
 Step through the layer's times with the time slider (View › Time), which starts with them	시간 슬라이더(보기 › 시간)로 레이어의 시간을 단계별로 보며, 그 시간부터 시작합니다
 Step Time	단계 시간
 Step {n} done	{n}단계 완료

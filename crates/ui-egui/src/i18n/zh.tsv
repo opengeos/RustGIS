@@ -3317,7 +3317,7 @@ Step	步长
 Step back	后退一步
 Step forward	前进一步
 Step through a task.	逐步执行任务。
-Step through the days with the time slider (View › Time), which starts with the layer's	使用时间滑块（视图 › 时间）逐日浏览，从图层的日期开始
+Step through the days with the time slider (View › Time), which starts with the layer's days	使用时间滑块（视图 › 时间）逐日浏览，从图层的日期开始
 Step through the layer's times with the time slider (View › Time), which starts with them	使用时间滑块（视图 › 时间）逐步浏览图层的时间，从这些时间开始
 Step Time	步长时间
 Step {n} done	第 {n} 步已完成

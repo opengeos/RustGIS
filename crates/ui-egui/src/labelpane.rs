@@ -921,6 +921,7 @@ fn repeat(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, c: &Class) {
                         .range(LABEL_REPEAT)
                         .speed(1.0)
                         .max_decimals(1)
+                        // The space stays out of the key: the whitespace hook strips it from catalog lines.
                         .prefix(format!("{} ", tl!("every")))
                         .suffix(" pt"),
                 )

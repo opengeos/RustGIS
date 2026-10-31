@@ -3317,7 +3317,7 @@ Step	Pas
 Step back	Étape précédente
 Step forward	Étape suivante
 Step through a task.	Parcourir une tâche étape par étape.
-Step through the days with the time slider (View › Time), which starts with the layer's	Parcourez les jours avec le curseur temporel (Affichage › Temps), qui commence par ceux de la couche
+Step through the days with the time slider (View › Time), which starts with the layer's days	Parcourez les jours avec le curseur temporel (Affichage › Temps), qui commence par ceux de la couche
 Step through the layer's times with the time slider (View › Time), which starts with them	Parcourez les temps de la couche avec le curseur temporel (Affichage › Temps), qui commence par ceux-ci
 Step Time	Durée du pas
 Step {n} done	Étape {n} terminée

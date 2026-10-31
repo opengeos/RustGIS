@@ -3317,7 +3317,7 @@ Step	ステップ
 Step back	1 ステップ戻る
 Step forward	1 ステップ進む
 Step through a task.	タスクを順に実行します。
-Step through the days with the time slider (View › Time), which starts with the layer's	タイム スライダー (表示 › 時間) で日を順に表示します。開始はレイヤーの日付からです
+Step through the days with the time slider (View › Time), which starts with the layer's days	タイム スライダー (表示 › 時間) で日を順に表示します。開始はレイヤーの日付からです
 Step through the layer's times with the time slider (View › Time), which starts with them	タイム スライダー (表示 › 時間) でレイヤーの時刻を順に表示します。開始はそれらの時刻からです
 Step Time	ステップ時間
 Step {n} done	ステップ {n} が完了しました
