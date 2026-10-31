@@ -96,6 +96,34 @@ fn cache_shared_readers_and_oversized_indexes_are_protected_until_release() {
     wait_removed(&path);
 }
 
+/// A release sweeps the folder only when the last sweep couldn't bring it within budget because
+/// of indexes in use; one within budget is left alone (#1230).
+#[test]
+fn cache_releases_sweep_only_a_cache_left_over_budget() {
+    let root = Folder::new();
+    let kept = ready(&root.0, 1, 10, 4096);
+    let kept_path = kept.path().to_path_buf();
+    let before = sweeps();
+    drop(kept);
+    assert_eq!(sweeps(), before, "a release within budget doesn't sweep");
+    assert!(kept_path.exists(), "a ready index within budget stays");
+
+    // Both in use: the second's commit evicts the idle first index but can't evict either of
+    // these, so the cache stays over budget until one is released.
+    let first = ready(&root.0, 2, 10, 10);
+    assert!(!kept_path.exists(), "the idle index went first");
+    let second = ready(&root.0, 3, 10, 10);
+    let (first_path, second_path) = (first.path().to_path_buf(), second.path().to_path_buf());
+    let before = sweeps();
+    drop(first);
+    assert_eq!(sweeps(), before + 1, "a release frees what the last sweep couldn't");
+    assert!(!first_path.exists(), "the released index brought the cache back within budget");
+    let before = sweeps();
+    drop(second);
+    assert_eq!(sweeps(), before, "within budget again, the next release doesn't sweep");
+    assert!(second_path.exists());
+}
+
 fn wait_removed(path: &Path) {
     let deadline = Instant::now() + Duration::from_secs(10);
     while path.exists() {
