@@ -24,6 +24,8 @@ const MAX_LAYERS: usize = 10_000;
 const MAX_SOURCES: usize = 256;
 const MAX_PROPS: usize = 256;
 const MAX_STOPS: usize = 1024;
+/// The most lights a multidirectional hillshade takes: each shades every pixel again.
+const MAX_LIGHTS: usize = 16;
 const MAX_URLS: usize = 64;
 const MAX_DASHES: usize = 64;
 
@@ -301,6 +303,13 @@ pub struct ElevationRamp {
 impl ElevationRamp {
     /// The colour of a height, as the expression gives it.
     pub fn color(&self, h: f64) -> Rgba {
+        // At or below an `interpolate`'s first height, its first stop, as the expression gives it
+        // when that height is repeated.
+        if let (Some(_), Some(first)) = (self.base, self.stops.first())
+            && h <= first.0
+        {
+            return first.1;
+        }
         // The stops at or below the height.
         let i = self.stops.partition_point(|s| s.0 <= h);
         let (lo, hi) = (i.checked_sub(1).and_then(|j| self.stops.get(j)), self.stops.get(i));
@@ -1180,6 +1189,17 @@ impl DemEncoding {
         }
     }
 
+    /// Whether every pixel's height fits in an `f32`: a custom encoding's factors may be too
+    /// large.
+    pub fn fits(self) -> bool {
+        match self {
+            DemEncoding::Mapbox | DemEncoding::Terrarium => true,
+            DemEncoding::Custom { red, green, blue, base } => {
+                255.0 * (red.abs() + green.abs() + blue.abs()) + base.abs() < f64::from(f32::MAX)
+            }
+        }
+    }
+
     /// The height, in metres, of a pixel's colour.
     pub fn height(self, [r, g, b]: [u8; 3]) -> f32 {
         let (r, g, b) = (f64::from(r), f64::from(g), f64::from(b));
@@ -1622,19 +1642,17 @@ impl StyleLayer {
     /// The `hillshade-*` paint properties at `zoom`.
     pub fn hillshade(&self, zoom: f32) -> Hillshade {
         let f = FeatureCtx::zoom_only(zoom);
-        // A number or colour, or for the multidirectional method a list of them.
-        fn many<T>(v: Val, one: impl Fn(&Val) -> Option<T>) -> Vec<T> {
-            match v {
-                Val::Arr(a) => a.iter().take(MAX_STOPS).filter_map(one).collect(),
-                v => one(&v).into_iter().collect(),
-            }
+        // A number or colour, or for the multidirectional method a list of them: one that isn't
+        // usable is the default, so the lights keep their places in each list.
+        fn many<T: Copy>(v: Val, one: impl Fn(&Val) -> Option<T>, default: T) -> Vec<T> {
+            let list: Vec<T> = match v {
+                Val::Arr(a) => a.iter().take(MAX_LIGHTS).map(|v| one(v).unwrap_or(default)).collect(),
+                v => vec![one(&v).unwrap_or(default)],
+            };
+            if list.is_empty() { vec![default] } else { list }
         }
-        let num = |v: &Val| v.as_f64().filter(|v| v.is_finite()).map(|v| v as f32);
-        let or = |v: Vec<f32>, d: f32| if v.is_empty() { vec![d] } else { v };
-        let colors = |name: &str, d: Rgba| {
-            let c = many(self.pval(name, &f), Val::as_color);
-            if c.is_empty() { vec![d] } else { c }
-        };
+        let num = |v: &Val| v.as_f64().map(|v| v as f32).filter(|v| v.is_finite());
+        let colors = |name: &str, d: Rgba| many(self.pval(name, &f), Val::as_color, d);
         Hillshade {
             method: match self.pval("hillshade-method", &f).as_str() {
                 Some("basic") => HillshadeMethod::Basic,
@@ -1644,8 +1662,8 @@ impl StyleLayer {
                 _ => HillshadeMethod::Standard,
             },
             exaggeration: self.pnum("hillshade-exaggeration", &f).map_or(0.5, |v| v.clamp(0.0, 1.0)),
-            directions: or(many(self.pval("hillshade-illumination-direction", &f), num), 335.0),
-            altitudes: or(many(self.pval("hillshade-illumination-altitude", &f), num), 45.0),
+            directions: many(self.pval("hillshade-illumination-direction", &f), num, 335.0),
+            altitudes: many(self.pval("hillshade-illumination-altitude", &f), num, 45.0),
             shadows: colors("hillshade-shadow-color", BLACK),
             highlights: colors("hillshade-highlight-color", [255, 255, 255, 255]),
             accent: self.pcolor("hillshade-accent-color", &f).unwrap_or(BLACK),
@@ -2484,6 +2502,48 @@ mod tests {
         assert!(Expr::property(&json!(["interpolate", ["linear"], ["elevation"], 0, 1, 5, 2])).elevation_ramp(3.0).is_none());
         // Elsewhere the height is null.
         assert_eq!(Expr::property(&json!(["elevation"])).eval(&FeatureCtx::zoom_only(3.0)), Val::Null);
+        // Repeated heights colour as the expression does, the first stop at the first height.
+        let ramp_on = |input: &str| {
+            Expr::property(&json!([
+                "interpolate",
+                ["linear"],
+                [input],
+                0,
+                "#ff0000",
+                0,
+                "#00ff00",
+                5,
+                "#0000ff",
+                5,
+                "#ffffff",
+                9,
+                "#000000"
+            ]))
+        };
+        let (ramp, by_zoom) = (ramp_on("elevation").elevation_ramp(0.0).unwrap(), ramp_on("zoom"));
+        for h in [-1.0, 0.0, 2.5, 5.0, 7.0, 9.0, 10.0] {
+            assert_eq!(Some(ramp.color(h)), by_zoom.eval(&FeatureCtx::zoom_only(h as f32)).as_color(), "at {h}");
+        }
+    }
+
+    #[test]
+    fn hillshade_lists_keep_their_places() {
+        let layer = |paint: serde_json::Value| {
+            StyleLayer::parse(&json!({"id": "h", "type": "hillshade", "source": "dem", "paint": paint})).unwrap().hillshade(0.0)
+        };
+        // An unusable entry, or one past an f32, is the default where it stands.
+        let hs =
+            layer(json!({"hillshade-method": "multidirectional", "hillshade-illumination-direction": ["literal", [0, "bad", 180, 1e300]],
+            "hillshade-illumination-altitude": ["literal", [30, 45, 60, 75]], "hillshade-shadow-color": ["literal", ["#f00", 7]]}));
+        assert_eq!(hs.directions, [0.0, 335.0, 180.0, 335.0]);
+        assert_eq!(hs.altitudes, [30.0, 45.0, 60.0, 75.0]);
+        assert_eq!(hs.shadows, [[255, 0, 0, 255], BLACK]);
+        // Each light shades every pixel: a few are taken.
+        let many: Vec<u32> = (0..1000).collect();
+        let hs = layer(json!({"hillshade-method": "multidirectional", "hillshade-illumination-direction": ["literal", many]}));
+        assert_eq!(hs.directions.len(), MAX_LIGHTS);
+        // An empty list is the default.
+        assert_eq!(layer(json!({"hillshade-illumination-direction": ["literal", []]})).directions, [335.0]);
     }
 }
 

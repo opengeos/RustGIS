@@ -170,6 +170,10 @@ pub(crate) fn draw_layers(
             continue;
         }
         let Some(src_id) = layer.source.as_deref() else { continue };
+        // A colour ramp it can't draw needs no heights read.
+        if layer.kind == LayerKind::ColorRelief && layer.color_relief_ramp(zoom).is_none() {
+            continue;
+        }
         if !items.contains_key(src_id) {
             let Some(src) = r.style.sources.iter().find(|s| s.0 == src_id).map(|s| &s.1) else { continue };
             // Hillshade reads the heights a pixel past the view's edges: those tiles too.

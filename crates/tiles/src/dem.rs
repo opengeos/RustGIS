@@ -380,6 +380,31 @@ mod tests {
     }
 
     #[test]
+    fn hillshade_runs_on_across_tile_edges() {
+        // One even slope rising east over two tiles, the view centred on the edge between them.
+        let (west, east) = (Extent::new(0.0, 0.0, 6400.0, 6400.0), Extent::new(6400.0, 0.0, 12800.0, 6400.0));
+        let tiles = [tile(64, west, |u, _| f64::from(u) * 50.0), tile(64, east, |u, _| f64::from(u + 64) * 50.0)];
+        let f = Frame { left: 3200.0, top: 6400.0, m_per_px: 100.0, ppp: 1.0 };
+        let g = Grid::read(&tiles, DemEncoding::Terrarium, &f, (64, 64), false);
+        let hs = Hillshade {
+            method: HillshadeMethod::Standard,
+            exaggeration: 0.5,
+            directions: vec![270.0],
+            altitudes: vec![45.0],
+            shadows: vec![[0, 0, 0, 255]],
+            highlights: vec![[255, 255, 255, 255]],
+            accent: [0, 0, 0, 0],
+        };
+        let pm = hillshade(&g, &hs).unwrap();
+        // Either side of the edge shades as the middle of a tile does: its neighbours' heights are read.
+        let inside = pm.pixel(10, 32).unwrap();
+        assert!(inside.alpha() > 0);
+        for x in [31, 32] {
+            assert_eq!(pm.pixel(x, 32), Some(inside), "column {x}");
+        }
+    }
+
+    #[test]
     fn hillshade_leaves_flat_ground_alone() {
         let at = Extent::new(0.0, 0.0, 6400.0, 6400.0);
         let g = Grid::read(&[tile(64, at, |_, _| -20.0)], DemEncoding::Terrarium, &frame(&at), (64, 64), false);

@@ -647,6 +647,7 @@ mod tests {
             sprite: None,
             attribution: Vec::new(),
             left_out: Vec::new(),
+            made: web_time::Instant::now(),
         });
         let at = Extent::new(0.0, 0.0, 1.0, 1.0);
         let tiles =

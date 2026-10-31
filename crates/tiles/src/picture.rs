@@ -178,7 +178,9 @@ fn draws_shapes(r: &Resolved, zoom: f32) -> bool {
                 LayerKind::Fill | LayerKind::FillExtrusion | LayerKind::Line | LayerKind::Circle => {
                     matches!(source(), Some(Source::Vector { .. }))
                 }
-                LayerKind::Hillshade | LayerKind::ColorRelief => matches!(source(), Some(Source::RasterDem { .. })),
+                LayerKind::Hillshade => matches!(source(), Some(Source::RasterDem { .. })),
+                // A colour ramp it can't draw is no reason for a picture.
+                LayerKind::ColorRelief => matches!(source(), Some(Source::RasterDem { .. })) && l.color_relief_ramp(zoom).is_some(),
                 _ => false,
             }
     })

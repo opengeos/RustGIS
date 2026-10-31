@@ -10,6 +10,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use serde_json::{Value, json};
+use web_time::Instant;
 
 use crate::cache::{self, Payload, State, Want};
 use crate::style::{Source, Style};
@@ -81,6 +82,16 @@ pub struct Resolved {
     pub attribution: Vec<String>,
     /// What of the style was left out and why, said with every drawing of it as its error.
     pub left_out: Vec<String>,
+    /// When it was resolved: one that left something out is resolved again once a failed
+    /// fetch may be tried again ([`cache::RETRY`]).
+    pub made: Instant,
+}
+
+impl Resolved {
+    /// Whether it may still be used as it is.
+    fn current(&self) -> bool {
+        self.left_out.is_empty() || self.made.elapsed() < cache::RETRY
+    }
 }
 
 pub enum Resolve {
@@ -122,7 +133,7 @@ pub fn resolve(spec: &Spec) -> Resolve {
     if let Err(e) = checked {
         return Resolve::Failed(e);
     }
-    if let Some(r) = resolved().lock().unwrap_or_else(|e| e.into_inner()).get(&key) {
+    if let Some(r) = resolved().lock().unwrap_or_else(|e| e.into_inner()).get(&key).filter(|r| r.current()) {
         return Resolve::Ready(r.clone());
     }
     let doc = match spec.kind {
@@ -224,7 +235,7 @@ pub fn resolve(spec: &Spec) -> Resolve {
         .filter(|s| !s.starts_with("mapbox://"))
         .map(|s| template::join(&base, s))
         .filter(|s| address::check(s, Some(&base)).is_ok());
-    let r = Arc::new(Resolved { style, attribution, sprite, left_out });
+    let r = Arc::new(Resolved { style, attribution, sprite, left_out, made: Instant::now() });
     let mut all = resolved().lock().unwrap_or_else(|e| e.into_inner());
     // A few layers are in use at a time: past that many, start again rather than grow.
     if all.len() >= MAX_RESOLVED {
@@ -240,11 +251,26 @@ fn resolve_sources(style: &mut Style, spec: &Spec, base: &str) -> Result<Option<
     let mut pending = false;
     let mut left_out = Vec::new();
     for (id, src) in &mut style.sources {
-        match resolve_source(src, spec, base) {
+        let resolved = resolve_source(src, spec, base).and_then(|pending| match src {
+            Source::RasterDem { tiles, encoding, .. } if !pending => {
+                if tiles.is_empty() {
+                    Err("it gives no tile addresses".to_owned())
+                } else if !encoding.fits() {
+                    Err("its custom encoding gives heights too large to draw".to_owned())
+                } else {
+                    Ok(false)
+                }
+            }
+            _ => Ok(pending),
+        });
+        match resolved {
             Ok(p) => pending |= p,
-            // Elevation shades what the rest of the style draws: without it, the rest still draws.
+            // Elevation shades what the rest of the style draws: without it, the rest still draws,
+            // and only a source a layer draws from is missed.
             Err(e) if matches!(src, Source::RasterDem { .. }) => {
-                left_out.push(format!("elevation source {id} left out, so its relief isn't drawn: {e}"));
+                if style.layers.iter().any(|l| l.source.as_deref() == Some(id.as_str())) {
+                    left_out.push(format!("elevation source {id} left out, so its relief isn't drawn: {e}"));
+                }
                 *src = Source::Other;
             }
             Err(e) => return Err(e),
@@ -650,6 +676,47 @@ mod tests {
         let doc = serde_json::json!({"version": 8, "sources": {"sat": {"type": "raster", "tiles": ["https://t.example.com/{z}/{x}/{y}.png"]}}, "layers": []});
         let mut style = Style::parse(&doc).unwrap();
         assert_eq!(resolve_sources(&mut style, &spec(Kind::Style, base), base), Ok(Some(Vec::new())));
+        // Only a source a layer draws from is missed; the others are dropped without a word.
+        let left_out_of = |doc: serde_json::Value| {
+            let mut style = Style::parse(&doc).unwrap();
+            resolve_sources(&mut style, &spec(Kind::Style, base), base).unwrap().unwrap()
+        };
+        let unused = serde_json::json!({"version": 8, "sources": {"dem": {"type": "raster-dem", "url": "http://169.254.169.254/dem.json"}}, "layers": []});
+        assert!(left_out_of(unused).is_empty());
+        // One with no tiles to read, or heights too large for its encoding, is left out too.
+        for dem in [
+            serde_json::json!({"type": "raster-dem"}),
+            serde_json::json!({"type": "raster-dem", "tiles": ["https://t.example.com/{z}/{x}/{y}.png"], "encoding": "custom", "redFactor": 1e40}),
+        ] {
+            let doc = serde_json::json!({"version": 8, "sources": {"dem": dem}, "layers": [{"id": "shade", "type": "hillshade", "source": "dem"}]});
+            assert_eq!(left_out_of(doc).len(), 1);
+        }
+    }
+
+    #[test]
+    fn a_style_that_left_something_out_draws_the_rest_and_says_so() {
+        let doc = serde_json::json!({"version": 8, "sources": {}, "layers": [{"id": "bg", "type": "background", "paint": {"background-color": "#f00"}}]});
+        let left_out = vec!["elevation source dem left out, so its relief isn't drawn: gone".to_owned()];
+        let r = Resolved { style: Style::parse(&doc).unwrap(), sprite: None, attribution: Vec::new(), left_out, made: Instant::now() };
+        assert!(r.current());
+        let s = spec(Kind::Style, "https://left-out.example.com/style.json");
+        resolved().lock().unwrap().insert(s.key(), Arc::new(r));
+        let mut pm = tiny_skia::Pixmap::new(4, 4).unwrap();
+        let frame = crate::draw::Frame { left: 0.0, top: 400.0, m_per_px: 100.0, ppp: 1.0 };
+        let drawn = crate::draw::draw(&mut pm, &s, 1.0, &frame, false);
+        assert_eq!(drawn.error.as_deref(), Some("elevation source dem left out, so its relief isn't drawn: gone"));
+        assert_eq!(pm.pixel(1, 1).map(|p| (p.red(), p.alpha())), Some((255, 255)), "the rest is drawn");
+        // Once a failed fetch may be tried again, it is resolved again; a complete style stays.
+        let Some(long_ago) = Instant::now().checked_sub(cache::RETRY * 2) else { return };
+        let stale = Resolved {
+            style: Style::parse(&doc).unwrap(),
+            sprite: None,
+            attribution: Vec::new(),
+            left_out: vec!["x".into()],
+            made: long_ago,
+        };
+        assert!(!stale.current());
+        assert!(Resolved { left_out: Vec::new(), ..stale }.current());
     }
 
     #[test]
