@@ -58,7 +58,8 @@ fn write_chunks_in(src: &dyn FeatureSource, layer: &Dataset, path: &Path, crs: C
     }
     // A layer that declares no geometry type takes its first geometry's, as a whole read does.
     let geometry_type = match layer.geometry_type {
-        GeometryType::None => first_kind(src, bytes)?,
+        // Peeks a megabyte, not a chunk: the first geometry is usually near the start.
+        GeometryType::None => first_kind(src, 1 << 20)?,
         t => t,
     };
     let t = if crs == Crs::LonLat { None } else { Some(crs.transformer().map_err(DataError::Format)?) };
