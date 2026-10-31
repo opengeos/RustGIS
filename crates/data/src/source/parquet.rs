@@ -366,8 +366,9 @@ impl FeatureSource for ParquetSource {
             let base = starts.get(g).copied().unwrap_or(0);
             // The columns hold the taken rows only, in order: the k-th is row `r`.
             for (k, (r, _)) in take.iter().enumerate().filter(|(_, t)| **t).enumerate() {
-                let geometry = geoms.get(k).and_then(|b| b.as_deref()).and_then(wkb::decode).and_then(|g| self.reproject.geometry(g));
-                let Some(geometry) = geometry else {
+                // A row without a geometry is left out; one that can't be read is skipped and counted.
+                let Some(bytes) = geoms.get(k).and_then(|b| b.as_deref()) else { continue };
+                let Some(geometry) = wkb::decode(bytes).and_then(|g| self.reproject.geometry(g)) else {
                     skipped += 1;
                     continue;
                 };
@@ -446,8 +447,9 @@ impl FeatureSource for ParquetSource {
                 return Err(DataError::Format(format!("GeoParquet: row group {g} has columns shorter than its rows")));
             }
             for (k, (r, _)) in take.iter().enumerate().filter(|(_, t)| **t).enumerate() {
-                let geometry = geoms.get(k).and_then(|b| b.as_deref()).and_then(wkb::decode).and_then(|geom| self.reproject.geometry(geom));
-                let Some(geometry) = geometry else {
+                // A row without a geometry is left out; one that can't be read is skipped and counted.
+                let Some(bytes) = geoms.get(k).and_then(|b| b.as_deref()) else { continue };
+                let Some(geometry) = wkb::decode(bytes).and_then(|geom| self.reproject.geometry(geom)) else {
                     out.skipped += 1;
                     continue;
                 };
