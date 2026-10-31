@@ -94,14 +94,20 @@ impl Resolved {
     }
 }
 
-/// What resolving a style again gives instead of `old`: `old` itself when it leaves out the same,
-/// so what was drawn of it (pictures and meshes, kept by style) is kept, else `new`.
+/// What resolving a style again gives instead of `old`: `old` itself, renewed, when it is the same
+/// style leaving out the same, so what was drawn of it (pictures and meshes, kept by style) is
+/// kept; else `new`.
 fn kept(old: Arc<Resolved>, new: Arc<Resolved>) -> Arc<Resolved> {
-    if old.left_out != new.left_out {
+    if old.left_out != new.left_out || old.style != new.style || old.sprite != new.sprite || old.attribution != new.attribution {
         return new;
     }
-    *old.made.lock().unwrap_or_else(|e| e.into_inner()) = Instant::now();
-    old
+    renewed(old)
+}
+
+/// `r`, current again until the next retry.
+fn renewed(r: Arc<Resolved>) -> Arc<Resolved> {
+    *r.made.lock().unwrap_or_else(|e| e.into_inner()) = Instant::now();
+    r
 }
 
 pub enum Resolve {
@@ -155,6 +161,8 @@ pub fn resolve(spec: &Spec) -> Resolve {
             resolved().lock().unwrap_or_else(|e| e.into_inner()).insert(key, r.clone());
             Resolve::Ready(r)
         }
+        // Or while it can't be read again: it is tried again after the next wait.
+        (Resolve::Failed(_), Some(old)) => Resolve::Ready(renewed(old)),
         (other, _) => other,
     }
 }
@@ -771,11 +779,9 @@ mod tests {
         let s = spec(Kind::Style, "https://expired.example.com/style.json");
         let stale = Arc::new(stale);
         resolved().lock().unwrap().insert(s.key(), stale.clone());
-        match resolve(&s) {
-            Resolve::Ready(r) => assert!(Arc::ptr_eq(&r, &stale), "the stale style"),
-            Resolve::Pending => panic!("blank while it is read again"),
-            Resolve::Failed(e) => assert!(!e.is_empty(), "read again, and failed"),
-        }
+        // (Pending, or failing at once: either way the stale style, never blank or an error.)
+        let Resolve::Ready(r) = resolve(&s) else { panic!("blank, or an error, while it is read again") };
+        assert!(Arc::ptr_eq(&r, &stale), "the stale style");
     }
 
     #[test]
@@ -796,9 +802,17 @@ mod tests {
         assert!(!old.current());
         let r = kept(old.clone(), made(&["dem: gone"], Instant::now()));
         assert!(Arc::ptr_eq(&r, &old) && r.current());
-        // Something else (or nothing) left out: the new one.
+        // Something else (or nothing) left out, or another style: the new one.
         let new = made(&[], Instant::now());
-        assert!(Arc::ptr_eq(&kept(old, new.clone()), &new));
+        assert!(Arc::ptr_eq(&kept(old.clone(), new.clone()), &new));
+        let other = Arc::new(Resolved {
+            style: Style::parse(&serde_json::json!({"version": 8, "sources": {}, "layers": [{"id": "bg", "type": "background"}]})).unwrap(),
+            sprite: None,
+            attribution: Vec::new(),
+            left_out: vec!["dem: gone".into()],
+            made: Mutex::new(Instant::now()),
+        });
+        assert!(Arc::ptr_eq(&kept(old, other.clone()), &other));
     }
 
     #[test]

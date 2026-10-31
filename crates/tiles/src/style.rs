@@ -240,7 +240,7 @@ fn geom_name(k: GeomKind) -> &'static str {
 // ---------------------------------------------------------------------------------------------------------------
 
 /// A compiled expression, filter or legacy function.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Expr(Node);
 
 impl Expr {
@@ -445,7 +445,7 @@ fn op_of(name: &str) -> Option<Op> {
     })
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 enum Node {
     Lit(Val),
     Call(Op, Vec<Node>),
@@ -1086,7 +1086,7 @@ fn substitute_tokens(s: &str, f: &FeatureCtx) -> String {
 // ---------------------------------------------------------------------------------------------------------------
 
 /// A parsed style. URLs are left as given.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Style {
     pub name: String,
     pub sources: Vec<(String, Source)>,
@@ -1390,7 +1390,7 @@ pub enum TextTransform {
 }
 
 /// A style layer with compiled filter, paint and layout.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct StyleLayer {
     pub id: String,
     pub kind: LayerKind,
