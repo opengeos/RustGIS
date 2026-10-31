@@ -646,6 +646,7 @@ mod tests {
             },
             sprite: None,
             attribution: Vec::new(),
+            left_out: Vec::new(),
         });
         let at = Extent::new(0.0, 0.0, 1.0, 1.0);
         let tiles =

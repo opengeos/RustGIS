@@ -200,8 +200,9 @@ Ocean, Atlas, Blank), which need no network, and web tile layers over them:
   `color-relief-color` that is an `interpolate` or `step` on `["elevation"]`) and `hillshade`
   layers (each `hillshade-method`, lit as the map is drawn, north up; slopes are steepened at
   small scales so relief stays visible). Its shading follows the style's colours, exaggeration
-  and light rather than matching MapLibre's pixel for pixel. If a style's elevation source can't
-  be read, its relief and hillshade layers are left out and the rest is drawn. Labels are placed
+  and light rather than matching MapLibre's pixel for pixel. Other `color-relief-color`
+  expressions aren't drawn. If a style's elevation source can't be read, its relief and
+  hillshade layers are left out with a notice saying why, and the rest is drawn. Labels are placed
   as MapLibre places them: at points,
   in the middle of areas, and along lines (street names every `symbol-spacing`, turned to the
   street, where it bends less than `text-max-angle`; shields and one-way arrows), wrapped to

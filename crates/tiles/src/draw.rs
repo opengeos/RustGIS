@@ -61,6 +61,11 @@ pub(crate) struct Item {
     pub(crate) clip: Extent,
 }
 
+/// What of a resolved style was left out, as a drawing's error: the style still draws.
+fn left_out(r: &Resolved) -> Option<String> {
+    (!r.left_out.is_empty()).then(|| r.left_out.join("; "))
+}
+
 /// Draws `spec` into `pm` at `opacity`. Labels are collected when `labels` is set.
 pub fn draw(pm: &mut Pixmap, spec: &Spec, opacity: f32, frame: &Frame, labels: bool) -> Drawn {
     let mut out = Drawn::default();
@@ -76,6 +81,7 @@ pub fn draw(pm: &mut Pixmap, spec: &Spec, opacity: f32, frame: &Frame, labels: b
         }
     };
     out.attribution = r.attribution.clone();
+    out.error = left_out(&r);
     if !(frame.m_per_px.is_finite() && frame.m_per_px > 0.0) || opacity <= 0.0 {
         return out;
     }
@@ -295,6 +301,7 @@ fn place_as(
         }
     };
     out.attribution = r.attribution.clone();
+    out.error = left_out(&r);
     if !(frame.m_per_px.is_finite() && frame.m_per_px > 0.0) || opacity <= 0.0 {
         return Some(out);
     }

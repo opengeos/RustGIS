@@ -79,6 +79,8 @@ pub struct Resolved {
     pub sprite: Option<String>,
     /// Credits from the layer and its sources, without duplicates.
     pub attribution: Vec<String>,
+    /// What of the style was left out and why, said with every drawing of it as its error.
+    pub left_out: Vec<String>,
 }
 
 pub enum Resolve {
@@ -197,21 +199,11 @@ pub fn resolve(spec: &Spec) -> Resolve {
     }
     // Sources given by a TileJSON address.
     let base = spec.url.clone();
-    let mut pending = false;
-    for (id, src) in &mut style.sources {
-        match resolve_source(src, spec, &base) {
-            Ok(p) => pending |= p,
-            // Elevation shades what the rest of the style draws: without it, the rest still draws.
-            Err(e) if matches!(src, Source::RasterDem { .. }) => {
-                log::warn!("{}: elevation source {id} left out: {e}", spec.url);
-                *src = Source::Other;
-            }
-            Err(e) => return Resolve::Failed(e),
-        }
-    }
-    if pending {
-        return Resolve::Pending;
-    }
+    let left_out = match resolve_sources(&mut style, spec, &base) {
+        Ok(Some(left_out)) => left_out,
+        Ok(None) => return Resolve::Pending,
+        Err(e) => return Resolve::Failed(e),
+    };
     let mut attribution: Vec<String> = Vec::new();
     let mut credit = |a: &str| {
         let a = plain_text(a);
@@ -232,7 +224,7 @@ pub fn resolve(spec: &Spec) -> Resolve {
         .filter(|s| !s.starts_with("mapbox://"))
         .map(|s| template::join(&base, s))
         .filter(|s| address::check(s, Some(&base)).is_ok());
-    let r = Arc::new(Resolved { style, attribution, sprite });
+    let r = Arc::new(Resolved { style, attribution, sprite, left_out });
     let mut all = resolved().lock().unwrap_or_else(|e| e.into_inner());
     // A few layers are in use at a time: past that many, start again rather than grow.
     if all.len() >= MAX_RESOLVED {
@@ -240,6 +232,25 @@ pub fn resolve(spec: &Spec) -> Resolve {
     }
     all.insert(key, r.clone());
     Resolve::Ready(r)
+}
+
+/// Resolves the sources of `style` in place: what was left out of it, or `None` while some are
+/// still on their way.
+fn resolve_sources(style: &mut Style, spec: &Spec, base: &str) -> Result<Option<Vec<String>>, String> {
+    let mut pending = false;
+    let mut left_out = Vec::new();
+    for (id, src) in &mut style.sources {
+        match resolve_source(src, spec, base) {
+            Ok(p) => pending |= p,
+            // Elevation shades what the rest of the style draws: without it, the rest still draws.
+            Err(e) if matches!(src, Source::RasterDem { .. }) => {
+                left_out.push(format!("elevation source {id} left out, so its relief isn't drawn: {e}"));
+                *src = Source::Other;
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    Ok((!pending).then_some(left_out))
 }
 
 /// Fills in a style source's tile addresses: from its TileJSON address when it gives no tiles
@@ -617,6 +628,28 @@ mod tests {
         assert!(matches!(resolve(&spec(Kind::Raster, "http://169.254.169.254/{z}/{x}/{y}.png")), Resolve::Failed(_)));
         // A self-hosted server the user names is fine.
         assert!(matches!(resolve(&spec(Kind::Raster, "http://localhost:8080/{z}/{x}/{y}.png")), Resolve::Ready(_)));
+    }
+
+    #[test]
+    fn an_unreadable_elevation_source_is_left_out_and_said() {
+        let doc = serde_json::json!({"version": 8, "sources": {
+            "dem": {"type": "raster-dem", "url": "http://169.254.169.254/dem.json"},
+            "sat": {"type": "raster", "tiles": ["https://t.example.com/{z}/{x}/{y}.png"]}},
+            "layers": [{"id": "shade", "type": "hillshade", "source": "dem"}, {"id": "sat", "type": "raster", "source": "sat"}]});
+        let mut style = Style::parse(&doc).unwrap();
+        let base = "https://t.example.com/style.json";
+        let left_out = resolve_sources(&mut style, &spec(Kind::Style, base), base).unwrap().unwrap();
+        assert_eq!(left_out.len(), 1);
+        assert!(left_out[0].starts_with("elevation source dem left out"), "{left_out:?}");
+        assert!(matches!(style.sources.iter().find(|s| s.0 == "dem").map(|s| &s.1), Some(Source::Other)));
+        // A source the style can't draw without still fails it.
+        let doc = serde_json::json!({"version": 8, "sources": {"sat": {"type": "raster", "url": "http://169.254.169.254/sat.json"}}, "layers": []});
+        let mut style = Style::parse(&doc).unwrap();
+        assert!(resolve_sources(&mut style, &spec(Kind::Style, base), base).is_err());
+        // Clean sources leave nothing out.
+        let doc = serde_json::json!({"version": 8, "sources": {"sat": {"type": "raster", "tiles": ["https://t.example.com/{z}/{x}/{y}.png"]}}, "layers": []});
+        let mut style = Style::parse(&doc).unwrap();
+        assert_eq!(resolve_sources(&mut style, &spec(Kind::Style, base), base), Ok(Some(Vec::new())));
     }
 
     #[test]
