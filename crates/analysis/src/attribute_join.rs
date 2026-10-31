@@ -137,8 +137,10 @@ pub struct JoinFieldOptions<'a> {
     pub output_name: String,
 }
 
-/// Result metadata from a successful Join Field execution.
+/// Result metadata from a successful Join Field execution. Only `join_field` builds one, so
+/// it is `non_exhaustive`: a new count can be added without breaking callers.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct JoinFieldReport {
     pub matched_records: usize,
     pub unmatched_records: usize,
