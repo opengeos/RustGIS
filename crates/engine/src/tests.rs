@@ -9105,6 +9105,93 @@ fn downloads_land_in_their_own_project() {
     assert_eq!(rustgis_geom::merc_to_lonlat(w.map().camera.center), c);
 }
 
+/// `"zoom": false` keeps the view of a downloaded layer even when it is the map's first content;
+/// without it the first content is framed. A whole GeoTIFF downloaded from an address follows the
+/// same rule as one read in place, through `layer.addUrl` and the app's `layer.addDownload` alike.
+#[test]
+fn zoom_false_keeps_the_view_of_downloaded_data() {
+    let far = r#"{"type": "FeatureCollection", "features": [{"type": "Feature", "properties": {}, "geometry": {"type": "Point", "coordinates": [151.2, -33.9]}}]}"#;
+    let (base, _) = serve_file(far.as_bytes().to_vec(), false);
+    // A GeoJSON downloaded from an address on an empty map: "zoom": false keeps the view.
+    let mut s = Session::new(Project::default());
+    let start = s.map().camera;
+    let r = s.run("layer.addUrl", &json!({"url": format!("{base}/sydney.geojson"), "zoom": false})).unwrap();
+    assert_eq!(r["features"], 1, "{r}");
+    assert_eq!(s.map().camera, start);
+    // Without "zoom" the first content on an empty map is framed, as before.
+    let mut f = Session::new(Project::default());
+    f.run("layer.addUrl", &json!({"url": format!("{base}/sydney.geojson")})).unwrap();
+    let at = f.map().center_lonlat();
+    assert!((at.x - 151.2).abs() < 0.1 && (at.y + 33.9).abs() < 0.5, "{at:?}");
+    // The app's download lands and is added (layer.addDownload): the same rule holds.
+    let mut a = Session::new(Project::default());
+    let id = a.download_started();
+    assert!(a.download_landed(id, far.as_bytes().to_vec()));
+    let start = a.map().camera;
+    a.run("layer.addDownload", &json!({"id": id, "url": "https://x.org/sydney.geojson", "zoom": false})).unwrap();
+    assert_eq!(a.map().camera, start);
+    // A whole GeoTIFF (strips, not cloud-optimised) is downloaded and added as a raster layer;
+    // "zoom": false keeps the view when it is the first content too.
+    let raster = rustgis_data::raster::Raster::new(
+        "strips",
+        8,
+        8,
+        vec![vec![3.0; 64]],
+        rustgis_data::raster::GeoTransform { origin_x: 5.0, origin_y: 50.0, pixel_width: 0.1, pixel_height: -0.1 },
+        rustgis_data::raster::Crs::LonLat,
+        None,
+        rustgis_data::raster::ColorHint::Gray,
+        "Float32",
+    )
+    .unwrap();
+    let bytes = rustgis_data::raster::geotiff::write(&raster, 0).unwrap();
+    let (tif, _) = serve_ranges(bytes.clone());
+    let mut z = Session::new(Project::default());
+    let start = z.map().camera;
+    let r = z.run("layer.addUrl", &json!({"url": format!("{tif}/strips.tif"), "zoom": false})).unwrap();
+    assert!(z.map().layer(r["layer"].as_u64().unwrap() as u32).is_some_and(|l| l.is_raster()), "{r}");
+    assert_eq!(z.map().camera, start);
+    // Through the app's download path as well.
+    let mut w = Session::new(Project::default());
+    let id = w.download_started();
+    assert!(w.download_landed(id, bytes));
+    let start = w.map().camera;
+    w.run("layer.addDownload", &json!({"id": id, "url": "https://x.org/strips.tif", "zoom": false})).unwrap();
+    assert_eq!(w.map().camera, start);
+    // A FlatGeobuf downloaded whole (not read in place): same rule through the source reader.
+    let fgb = std::fs::read(grid_fgb("zoom-false", 5)).unwrap();
+    let (fgb_base, _) = serve_file(fgb, false);
+    let mut v = Session::new(Project::default());
+    let start = v.map().camera;
+    v.run("layer.addUrl", &json!({"url": format!("{fgb_base}/grid.fgb"), "zoom": false})).unwrap();
+    assert_eq!(v.map().camera, start);
+    // A downloaded KMZ of ground overlays only: its raster layers follow the same rule.
+    let mut red = tiny_skia::Pixmap::new(8, 8).unwrap();
+    red.fill(tiny_skia::Color::from_rgba8(255, 0, 0, 255));
+    let doc = r#"<kml xmlns="http://www.opengis.net/kml/2.2"><Document><GroundOverlay><name>Over</name><Icon><href>files/red.png</href></Icon><LatLonBox><north>41</north><south>40</south><east>11</east><west>10</west></LatLonBox></GroundOverlay></Document></kml>"#;
+    let kmz = rustgis_data::zip::write(&[("doc.kml".into(), doc.as_bytes().to_vec()), ("files/red.png".into(), red.encode_png().unwrap())])
+        .unwrap();
+    let (kmz_base, _) = serve_file(kmz, false);
+    let mut o = Session::new(Project::default());
+    let start = o.map().camera;
+    o.run("layer.addUrl", &json!({"url": format!("{kmz_base}/site.kmz"), "zoom": false})).unwrap();
+    assert!(o.map().layer_by_name("Over").is_some());
+    assert_eq!(o.map().camera, start);
+}
+
+/// `"zoom": true` frames everything a multi-layer file added, not only its last layer: the native
+/// `layer.addUrl` path as the app's `layer.addDownload` does with its own union.
+#[test]
+fn zoom_true_frames_every_layer_a_file_added() {
+    let gpx = br#"<gpx version="1.1" creator="t" xmlns="http://www.topografix.com/GPX/1/1"><wpt lat="10" lon="10"/><trk><trkseg><trkpt lat="20" lon="30"/><trkpt lat="21" lon="31"/></trkseg></trk></gpx>"#;
+    let (base, _) = serve_file(gpx.to_vec(), false);
+    let mut s = world();
+    let r = s.run("layer.addUrl", &json!({"url": format!("{base}/trip.gpx"), "zoom": true})).unwrap();
+    assert!(r["layers"].as_array().is_some_and(|l| l.len() >= 2), "{r}");
+    let c = rustgis_geom::merc_to_lonlat(s.map().camera.center);
+    assert!(c.x > 15.0 && c.x < 26.0 && c.y > 10.0 && c.y < 21.0, "{c:?}");
+}
+
 /// Spreadsheets, GeoRSS, LandXML and encoded polylines through the commands.
 #[test]
 fn spreadsheets_feeds_landxml_and_polylines() {
@@ -10013,6 +10100,19 @@ fn adding_a_layer_keeps_the_view() {
     let before = h.map().camera;
     h.run("layer.addDataText", &json!({"fileName": "far.geojson", "text": far})).unwrap();
     assert_eq!(h.map().camera, before);
+    // An archive is content too, whether it draws as a basemap or as data: a data layer added
+    // over a PMTiles basemap keeps the view.
+    let dir = std::env::temp_dir().join(format!("rustgis-archive-content-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let archive = dir.join("iceland.pmtiles");
+    std::fs::write(&archive, empty_pmtiles([-24.5, 63.3, -13.5, 66.6])).unwrap();
+    let mut a = Session::new(Project::default());
+    a.run("map.addTiles", &json!({"url": archive.display().to_string()})).unwrap();
+    a.run("map.zoomToExtent", &json!({"extent": [0.0, 0.0, 10.0, 10.0]})).unwrap();
+    let before = a.map().camera;
+    a.run("layer.addDataText", &json!({"fileName": "far.geojson", "text": far})).unwrap();
+    assert_eq!(a.map().camera, before);
+    let _ = std::fs::remove_dir_all(&dir);
     // A cloud-optimised GeoTIFF read in place is content too, though it is a tile layer: data
     // added after it keeps the view.
     let file = rustgis_data::raster::cog::example(512, 128);
@@ -16619,6 +16719,19 @@ fn importing_a_service_group_keeps_the_view() {
     let before = s.map().camera;
     s.run("service.import", &json!({"url": server.root()})).unwrap();
     assert_eq!(s.map().camera, before);
+    // Removing its layers leaves the map empty even though the service group keeps their stale
+    // entries: the next layer added is framed.
+    let mut g = Session::new(Project::default());
+    g.run("service.import", &json!({"url": server.root()})).unwrap();
+    let ids: Vec<u32> = g.map().service_groups[0].children.iter().map(|c| c.layer).collect();
+    assert_eq!(ids.len(), 2);
+    g.run("layer.remove", &json!({"layer": ids})).unwrap();
+    assert!(g.map().layers.is_empty());
+    assert!(!g.map().service_groups[0].children.is_empty(), "the service group keeps its entries");
+    let far = r#"{"type": "FeatureCollection", "features": [{"type": "Feature", "properties": {}, "geometry": {"type": "Point", "coordinates": [151.2, -33.9]}}]}"#;
+    g.run("layer.addDataText", &json!({"fileName": "far.geojson", "text": far})).unwrap();
+    let at = g.map().center_lonlat();
+    assert!((at.x - 151.2).abs() < 0.1 && (at.y + 33.9).abs() < 0.5, "{at:?}");
 }
 
 #[test]

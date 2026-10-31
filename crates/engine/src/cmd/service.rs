@@ -535,7 +535,7 @@ pub(crate) fn add(s: &mut Session, p: &Value) -> CmdResult {
             {
                 let bytes = crate::render::rustgis_tiles::cache::download_blocking(&get).map_err(|e| format!("{name}: {e}"))?;
                 coverage_check(&name, &bytes)?;
-                super::raster::add_named_bytes(s, &json!({"name": name}), format!("{name}.tif"), bytes)
+                super::raster::add_named_bytes(s, &json!({"name": name}), format!("{name}.tif"), bytes, None)
             }
         }
         Offer::Features { url: items } => {
@@ -558,7 +558,7 @@ pub(crate) fn add(s: &mut Session, p: &Value) -> CmdResult {
                 let max = crate::render::rustgis_tiles::cache::MAX_DOWNLOAD;
                 let bytes = download_features(s, &name, asked.as_deref().unwrap_or(items), max).map_err(|e| slow_whole_layer(e, given))?;
                 let bytes = features_answer(s, &name, bytes, layer.bbox);
-                let mut r = super::raster::add_named_bytes(s, &json!({"name": name}), format!("{name}.geojson"), bytes)?;
+                let mut r = super::raster::add_named_bytes(s, &json!({"name": name}), format!("{name}.geojson"), bytes, None)?;
                 // Over an area, the features crossing it: the view stays, or goes to a box given
                 // (the whole layer's bounds would show a country to fill one state).
                 match (asked.is_some(), area, p.get("bbox")) {
