@@ -7,7 +7,9 @@ The `rustgis` package runs the RustGIS engine inside Python, headless. It opens 
 projects, runs engine commands and geoprocessing tools, styles layers, renders maps and saves
 projects that the desktop app opens as they are. There is no app to install and no server to run:
 the engine is a native module for Python 3.12 and later. Release wheels cover Windows x64 and
-arm64, macOS Intel and Apple Silicon, and Linux x64 and arm64 (glibc 2.28 or later).
+arm64, macOS Intel and Apple Silicon, and Linux x64 and arm64 (glibc 2.28 or later). The
+`geopandas` extra doesn't install on Windows arm64 yet, because `pyogrio`, which geopandas needs,
+has no wheel for it.
 
 ```sh
 pip install rustgis               # pip install "rustgis[geopandas]" for GeoDataFrames
