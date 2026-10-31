@@ -1998,9 +1998,55 @@ fn raster_masks_hide_values() {
     assert!(style(&s).mask.is_empty());
 }
 
-/// Every command with junk parameters returns Ok or Err, never panics, and leaves a usable session.
+/// Shards of `hostile_params_never_panic`: each takes every eighth command, so the parts run side by
+/// side (opengeos/RustGIS#1201).
+const HOSTILE_SHARDS: usize = 8;
+const _: () = assert!(HOSTILE_SHARDS == 8, "add a hostile_params_never_panic_N test for each shard");
+
 #[test]
-fn hostile_params_never_panic() {
+fn hostile_params_never_panic_0() {
+    hostile_params_never_panic(0);
+}
+
+#[test]
+fn hostile_params_never_panic_1() {
+    hostile_params_never_panic(1);
+}
+
+#[test]
+fn hostile_params_never_panic_2() {
+    hostile_params_never_panic(2);
+}
+
+#[test]
+fn hostile_params_never_panic_3() {
+    hostile_params_never_panic(3);
+}
+
+#[test]
+fn hostile_params_never_panic_4() {
+    hostile_params_never_panic(4);
+}
+
+#[test]
+fn hostile_params_never_panic_5() {
+    hostile_params_never_panic(5);
+}
+
+#[test]
+fn hostile_params_never_panic_6() {
+    hostile_params_never_panic(6);
+}
+
+#[test]
+fn hostile_params_never_panic_7() {
+    hostile_params_never_panic(7);
+}
+
+/// Every command with junk parameters returns Ok or Err, never panics, and leaves a usable session.
+/// Runs the commands of one shard: those whose place in the registry is `shard` modulo
+/// [`HOSTILE_SHARDS`].
+fn hostile_params_never_panic(shard: usize) {
     let junk = [
         Value::Null,
         json!({}),
@@ -2070,8 +2116,16 @@ fn hostile_params_never_panic() {
         json!({"source": "rustgis-s3::0::s3://bucket/key", "id": "c1", "remember": {"a": 1}}),
         json!({"source": 7, "id": ["c1"]}),
     ];
-    let ids: Vec<&str> = Session::new(Project::default()).registry.commands.iter().map(|c| c.id).collect();
-    let streamed = grid_fgb("hostile", 20);
+    let ids: Vec<&str> = Session::new(Project::default())
+        .registry
+        .commands
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| i % HOSTILE_SHARDS == shard)
+        .map(|(_, c)| c.id)
+        .collect();
+    // Shards share the process under `cargo test`: each streams its own file.
+    let streamed = grid_fgb(&format!("hostile-{shard}"), 20);
     for id in ids {
         if matches!(
             id,
