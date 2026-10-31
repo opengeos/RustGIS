@@ -8,8 +8,10 @@ which every package ships next to LICENSE. They are generated from `Cargo.lock` 
 `cargo xtask notices` (it needs `cargo install --locked --features cli cargo-about@0.9.2`);
 `deny.toml` lists the licences a dependency may have. The code and data RustGIS's own crates
 take from other projects (the colour maps, coordinate-system tables and borrowed code below) are
-listed in `INCLUDED` in [xtask/src/notices.rs](xtask/src/notices.rs), which adds their licence
-texts, kept as published in [third-party/](third-party/), to the same files.
+listed in `INCLUDED` in [xtask/src/notices.rs](xtask/src/notices.rs), which adds them to the
+same files: each with its licence texts, kept in [third-party/](third-party/) as published, and
+the EPSG tables with the acknowledgement of IOGP's ownership and a link to the dataset's terms
+of use.
 
 | File | Author / source | Licence |
 |---|---|---|

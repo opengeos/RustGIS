@@ -44,7 +44,9 @@ struct Included {
     /// The files it is in, from the repository root.
     paths: &'static [&'static str],
     /// The licence texts and notices its licences ask to go with every copy, in `third-party/`,
-    /// copied as the upstream projects publish them.
+    /// as the upstream projects publish them (the notices file tidies their line ends and
+    /// trailing spaces, as it does the crates' licences). Empty for data whose terms ask only
+    /// for the acknowledgement in `what`.
     notices: &'static [&'static str],
 }
 
