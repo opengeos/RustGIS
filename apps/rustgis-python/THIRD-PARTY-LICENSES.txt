@@ -5669,7 +5669,7 @@ Used by: web-time
 ====================================================================================================
 Apache License 2.0
 Used by: windows-core, windows-implement, windows-interface, windows-link, windows-result, windows-strings,
-windows-sys
+windows-sys, windows-targets, windows_aarch64_msvc, windows_x86_64_gnu, windows_x86_64_msvc
 ====================================================================================================
 
                                  Apache License

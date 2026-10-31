@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # The platforms to test on, as a JSON list of runners. Pushes to main, manual runs and releases
 # test on every platform; a pull request on Linux, plus macOS when it's labelled `ci:macos` and
-# Windows (x64 and ARM64) when it's labelled `ci:windows` (`ci:full` asks for both). For the label just added (the
-# `CI on label` workflow), only the platform that label asks for: the pull request's own run
-# already covers Linux.
+# Windows (x64 and ARM64) when it's labelled `ci:windows` (`ci:full` asks for both). For the label
+# just added (the `CI on label` workflow), only the platform that label asks for: the pull
+# request's own run already covers Linux.
 #
 # From the event: EVENT (github.event_name), ACTION (github.event.action), LABEL (the label
 # added) and LABELS (the pull request's labels, as JSON).

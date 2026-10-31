@@ -74,8 +74,8 @@ Before picking work, read [ROADMAP.md](ROADMAP.md) (check Underway) and
 A new dependency must have a licence `deny.toml` allows (CI runs `cargo deny check licenses`); after
 changing dependencies, run `cargo xtask notices` to refresh the `THIRD-PARTY-LICENSES.txt` files the
 packages ship (the release build fails on stale ones).
-Pull requests run CI on Linux; pushes to `main` add macOS and Windows (x64 and ARM64). Label a pull request
-`ci:windows`, `ci:macos` or `ci:full` to test there before merging (platform-specific code, paths,
+Pull requests run CI on Linux; pushes to `main` add macOS and Windows (x64 and ARM64). Label a
+pull request `ci:windows`, `ci:macos` or `ci:full` to test there before merging (platform-specific code, paths,
 file dialogs). The release build of the apps runs nightly (`.github/workflows/nightly.yml`), with every
 platform's tests; a failure opens a `Nightly build failed` issue. `ci:full` also runs the release
 build on the pull request.

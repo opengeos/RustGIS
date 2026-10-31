@@ -43,7 +43,8 @@ only the parts that changed, with the `.zsync` file published beside each AppIma
 
 On Windows, `setup.exe` installs for your account in `%LOCALAPPDATA%\Programs\RustGIS` and needs
 no admin rights; the `.msi` installs for every user in `Program Files` and suits managed
-deployment (`msiexec /i RustGIS-<version>-windows-x86_64.msi /qn`). Both add a Start menu
+deployment (`msiexec /i RustGIS-<version>-windows-<arch>.msi /qn`, where `<arch>` is `x86_64` or
+`aarch64`). Both add a Start menu
 entry, open `.rgis` projects, list RustGIS under **Open with** for `.geojson`, and
 uninstall from **Settings › Apps**.
 
