@@ -682,7 +682,9 @@ fn custom(p: &Node, method: &str) -> Result<Crs, String> {
     let proj = match method {
         "TRANSVERSE_MERCATOR" | "GAUSS_KRUGER" => format!("+proj=tmerc +lat_0={lat0} +k_0={k0} {at}"),
         // proj4rs supports the Swiss special case and, since 0.3, the azimuth forms in general;
-        // the two-point one (no AZIMUTH) isn't supported.
+        // the two-point one (no AZIMUTH) isn't supported. The Swiss system is the azimuth-90°
+        // Hotine on a Swiss datum — the one azimuth the guard below refuses, because an oblique
+        // Mercator at exactly 90° is either Swiss or degenerate.
         "HOTINE_OBLIQUE_MERCATOR_AZIMUTH_CENTER"
             if national_datum(p.child("GEOGCS").and_then(|g| g.child("DATUM")))
                 .is_some_and(|d| Some(d) == epsg_proj4(4149) || Some(d) == epsg_proj4(4150))
@@ -692,6 +694,8 @@ fn custom(p: &Node, method: &str) -> Result<Crs, String> {
             format!("+proj=somerc +lat_0={lat0} +k_0={k0} {at}")
         }
         "HOTINE_OBLIQUE_MERCATOR_AZIMUTH_CENTER" => omerc(false)?,
+        // ESRI's WKT1 name for EPSG's variant A (ArcGIS writes it to `.prj`); WKT2's variant A
+        // arrives as the plain name through the METHODS table.
         "HOTINE_OBLIQUE_MERCATOR" | "HOTINE_OBLIQUE_MERCATOR_AZIMUTH_NATURAL_ORIGIN" if get(&["AZIMUTH"]).is_some() => omerc(true)?,
         // EPSG's methods 9806 and 9818 have no scale factor; PROJ's cass and poly ignore one.
         "CASSINI_SOLDNER" => format!("+proj=cass +lat_0={lat0} {at}"),
@@ -1830,6 +1834,19 @@ mod tests {
             let b = read.transformer().unwrap().from_lonlat(lonlat).unwrap();
             let tolerance = if crs.is_geographic() { 1e-8 } else { 0.01 };
             assert!((a.x - b.x).abs() < tolerance && (a.y - b.y).abs() < tolerance, "EPSG:{code}: {a:?} {b:?}\n{bare}");
+        }
+        // Each new method against PROJ (pyproj 3.8.0, EPSG:4326 to the code): the round trip
+        // above can't catch a wrong formula, both sides being the same code.
+        let checked = [
+            (2057u16, (58.5, 23.6), (1_260_860.830, 2_623_439.977)),
+            (3078, (-84.6, 46.47), (607_329.382, 658_531.220)),
+            (8857, (10.0, 40.0), (849_749.831, 4_921_020.062)),
+            (3068, (13.4, 52.4), (24_656.900, 8_104.416)),
+            (29100, (-54.0, -10.0), (5_000_000.000, 8_894_141.426)),
+        ];
+        for (code, (lon, lat), (x, y)) in checked {
+            let m = Crs::from_epsg(u32::from(code)).unwrap().transformer().unwrap().from_lonlat(Coord::new(lon, lat)).unwrap();
+            assert!((m.x - x).abs() < 1.0 && (m.y - y).abs() < 1.0, "EPSG:{code}: {m:?}");
         }
         // LV95 takes CH1903+'s name, LV03 CH1903's.
         assert!(to_wkt(Crs::from_epsg(2056).unwrap()).unwrap().contains("DATUM[\"CH1903+\""));
