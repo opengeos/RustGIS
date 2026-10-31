@@ -273,7 +273,7 @@ fn streamed_exports_refuse_what_they_cant_write() {
 fn a_panicking_writer_leaves_nothing_behind() {
     let d = folder("panic");
     let path = d.join("out.csv");
-    let r = std::panic::catch_unwind(|| crate::io::write_atomic_streamed(&path, |_| -> Result<()> { panic!("the writer failed") }));
+    let r = std::panic::catch_unwind(|| crate::io::write_atomic_with(&path, |_| -> Result<()> { panic!("the writer failed") }));
     assert!(r.is_err());
     assert_eq!(std::fs::read_dir(&d).unwrap().count(), 0);
 }

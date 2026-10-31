@@ -6,7 +6,7 @@
 
 use std::path::Path;
 
-use crate::io::{CsvWriter, GeoJsonWriter, PROJECTED_FORMATS, check_projected, project_features, write_atomic_streamed};
+use crate::io::{CsvWriter, GeoJsonWriter, PROJECTED_FORMATS, check_projected, project_features, write_atomic_with};
 use crate::raster::Crs;
 use crate::source::FeatureSource;
 use crate::{DataError, Dataset, Feature, GeometryType, Result};
@@ -88,24 +88,24 @@ fn write_chunks_in(src: &dyn FeatureSource, layer: &Dataset, path: &Path, crs: C
         }
         #[cfg(target_arch = "wasm32")]
         "gpkg" => return Err(DataError::Unsupported("GeoPackage in the browser".into())),
-        "geojson" | "json" => write_atomic_streamed(path, |out| {
+        "geojson" | "json" => write_atomic_with(path, |out| {
             let mut w = GeoJsonWriter::new(out, &layer.name, &layer.fields)?;
             feed(&mut |features| w.write(features))?;
             w.finish()?;
-            Ok(0)
+            Ok::<_, DataError>(0)
         })?,
-        "csv" => write_atomic_streamed(path, |out| {
+        "csv" => write_atomic_with(path, |out| {
             let mut w = CsvWriter::new(out, &layer.fields, geometry_type)?;
             feed(&mut |features| w.write(features))?;
             w.finish()?;
-            Ok(0)
+            Ok::<_, DataError>(0)
         })?,
-        "fgb" => write_atomic_streamed(path, |out| {
+        "fgb" => write_atomic_with(path, |out| {
             crate::source::fgb::write_features(&layer.name, geometry_type, &layer.fields, crs, out, &mut feed)
         })?,
-        _ => write_atomic_streamed(path, |out| {
+        _ => write_atomic_with(path, |out| {
             crate::source::parquet::write_features(geometry_type, &layer.fields, out, &mut feed)?;
-            Ok(0)
+            Ok::<_, DataError>(0)
         })?,
     };
     Ok(Exported { written: total.saturating_sub(left_out), left_out, skipped })

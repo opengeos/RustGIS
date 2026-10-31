@@ -595,24 +595,17 @@ fn write_new_with(path: &Path, write: impl FnOnce(&mut dyn std::io::Write) -> st
 /// Writes through a temporary file that is synced and renamed into place, so an interrupted
 /// write never truncates an existing file. The temporary file is removed on failure.
 pub fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
     write_atomic_with(path, |w| w.write_all(bytes))
 }
 
-/// [`write_atomic`] with the content written by `write` as it goes, so a long text needn't be
-/// held whole first. A failure in `write` leaves an existing file as it was.
-pub fn write_atomic_with(path: &Path, write: impl FnOnce(&mut dyn std::io::Write) -> std::io::Result<()>) -> std::io::Result<()> {
-    let tmp = temp_beside(path)?;
-    write_new_with(&tmp, write)?;
-    let res = std::fs::rename(&tmp, path);
-    if res.is_err() {
-        let _ = std::fs::remove_file(&tmp);
-    }
-    res
-}
-
-/// As [`write_atomic`], the file written through `write` as it goes rather than from bytes held
-/// whole: for exports that write a layer a chunk at a time. Returns what `write` returns.
-pub(crate) fn write_atomic_streamed<T>(path: &Path, write: impl FnOnce(&mut std::io::BufWriter<std::fs::File>) -> Result<T>) -> Result<T> {
+/// [`write_atomic`] with the content written by `write` as it goes, so a long text or a layer
+/// written a chunk at a time needn't be held whole first. A failure in `write` leaves an existing
+/// file as it was. Returns what `write` returns.
+pub fn write_atomic_with<T, E: From<std::io::Error>>(
+    path: &Path,
+    write: impl FnOnce(&mut std::io::BufWriter<std::fs::File>) -> std::result::Result<T, E>,
+) -> std::result::Result<T, E> {
     use std::io::Write;
     let tmp = temp_beside(path)?;
     // Opened before the guard, so a name already taken is never removed.
@@ -2208,6 +2201,7 @@ pub(crate) fn group_rings(rings: Vec<(Vec<Coord>, bool)>) -> Geometry {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
 
     /// Exercises caller cleanup through the public Shapefile writer, one fresh process per collision.
     #[cfg(not(target_arch = "wasm32"))]
@@ -2424,7 +2418,7 @@ mod tests {
         // Written as it goes: a failure part way leaves the file as it was, and no temp file.
         let failed = write_atomic_with(&p, |w| {
             w.write_all(b"half")?;
-            Err(std::io::Error::other("stopped"))
+            Err::<(), _>(std::io::Error::other("stopped"))
         });
         assert!(failed.is_err());
         assert_eq!(std::fs::read(&p).unwrap(), b"two");

@@ -916,7 +916,15 @@ fn repeat(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, c: &Class) {
             let Some(every) = c.it.repeat else { return };
             let mut v = f64::from(every);
             let r = ui
-                .add(egui::DragValue::new(&mut v).range(LABEL_REPEAT).speed(1.0).max_decimals(1).prefix(tl!("every ")).suffix(" pt"))
+                .add(
+                    egui::DragValue::new(&mut v)
+                        .range(LABEL_REPEAT)
+                        .speed(1.0)
+                        .max_decimals(1)
+                        // The space stays out of the key: the whitespace hook strips it from catalog lines.
+                        .prefix(format!("{} ", tl!("every")))
+                        .suffix(" pt"),
+                )
                 .labelled_by(input_label.id);
             crate::ribbon::live_drag(
                 app,
