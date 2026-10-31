@@ -133,9 +133,19 @@ pub fn resolve(spec: &Spec) -> Resolve {
     if let Err(e) = checked {
         return Resolve::Failed(e);
     }
-    if let Some(r) = resolved().lock().unwrap_or_else(|e| e.into_inner()).get(&key).filter(|r| r.current()) {
+    let cached = resolved().lock().unwrap_or_else(|e| e.into_inner()).get(&key).cloned();
+    if let Some(r) = cached.as_ref().filter(|r| r.current()) {
         return Resolve::Ready(r.clone());
     }
+    match resolve_anew(spec, key) {
+        // One that left something out is drawn as it was while that is fetched again, not blank.
+        Resolve::Pending => cached.map_or(Resolve::Pending, Resolve::Ready),
+        other => other,
+    }
+}
+
+/// Reads `spec`'s style and resolves its sources, keeping the result under `key`.
+fn resolve_anew(spec: &Spec, key: String) -> Resolve {
     let doc = match spec.kind {
         Kind::Raster => raster_style(spec),
         Kind::Vector => match vector_style(spec) {
@@ -716,7 +726,30 @@ mod tests {
             made: long_ago,
         };
         assert!(!stale.current());
-        assert!(Resolved { left_out: Vec::new(), ..stale }.current());
+        let complete =
+            Resolved { style: Style::parse(&doc).unwrap(), sprite: None, attribution: Vec::new(), left_out: Vec::new(), made: long_ago };
+        assert!(complete.current());
+        // Through `resolve`: an expired one is resolved again (a raster layer's at once)…
+        let s = spec(Kind::Raster, "https://expired.example.com/{z}/{x}/{y}.png");
+        let expired = Arc::new(Resolved {
+            style: Style::parse(&doc).unwrap(),
+            sprite: None,
+            attribution: Vec::new(),
+            left_out: vec!["x".into()],
+            made: long_ago,
+        });
+        resolved().lock().unwrap().insert(s.key(), expired.clone());
+        let Resolve::Ready(r) = resolve(&s) else { panic!("not resolved again") };
+        assert!(!Arc::ptr_eq(&r, &expired) && r.left_out.is_empty());
+        // …and drawn as it was while what it needs is on its way.
+        let s = spec(Kind::Style, "https://expired.example.com/style.json");
+        let stale = Arc::new(stale);
+        resolved().lock().unwrap().insert(s.key(), stale.clone());
+        match resolve(&s) {
+            Resolve::Ready(r) => assert!(Arc::ptr_eq(&r, &stale), "the stale style"),
+            Resolve::Pending => panic!("blank while it is read again"),
+            Resolve::Failed(e) => assert!(!e.is_empty(), "read again, and failed"),
+        }
     }
 
     #[test]

@@ -57,10 +57,14 @@ impl Grid {
                 continue;
             }
             let (sx, sy) = (pw as f64 / it.at.width(), ph as f64 / it.at.height());
-            let pixels = pm.pixels();
-            // A tile pixel's height; one that isn't opaque has none.
-            let texel = |u: usize, v: usize| {
-                pixels.get(v * pw + u).filter(|c| c.alpha() == 255).map_or(f32::NAN, |c| encoding.height([c.red(), c.green(), c.blue()]))
+            // A tile pixel's height; one that isn't opaque has none. One a pixel past the tile's
+            // edge is the next tile's, so a blend near the edge runs on into it.
+            let texel = |u: isize, v: isize| match (usize::try_from(u), usize::try_from(v)) {
+                (Ok(u), Ok(v)) if u < pw && v < ph => height_of(pm, u, v, encoding),
+                _ => {
+                    let (x, y) = (it.at.min_x + (u as f64 + 0.5) / sx, it.at.max_y - (v as f64 + 0.5) / sy);
+                    items.iter().rev().filter(|o| !std::ptr::eq(*o, it)).find_map(|o| height_at(o, x, y, encoding)).unwrap_or(f32::NAN)
+                }
             };
             let (i0, i1) = (col(it.clip.min_x) as usize, (col(it.clip.max_x) as usize).min(gw));
             let (j0, j1) = (row(it.clip.max_y) as usize, (row(it.clip.min_y) as usize).min(gh));
@@ -89,18 +93,38 @@ impl Grid {
     }
 }
 
-/// The height at tile pixel coordinates (`u`, `v`) (pixel centres at whole numbers), from the
-/// nearest pixel or blended from the four around it; a blend over a pixel with no height takes
-/// the nearest instead.
-fn sample(texel: &impl Fn(usize, usize) -> f32, u: f64, v: f64, pw: usize, ph: usize, nearest: bool) -> f32 {
+/// The height of a tile's pixel (`u`, `v`); one that isn't opaque has none.
+fn height_of(pm: &Pixmap, u: usize, v: usize, encoding: DemEncoding) -> f32 {
+    let w = pm.width() as usize;
+    pm.pixels().get(v * w + u).filter(|c| c.alpha() == 255).map_or(f32::NAN, |c| encoding.height([c.red(), c.green(), c.blue()]))
+}
+
+/// The height of `it`'s pixel nearest a point it stands in for, if it does.
+fn height_at(it: &Item, x: f64, y: f64, encoding: DemEncoding) -> Option<f32> {
+    let Payload::Image(pm) = &*it.payload else { return None };
+    if !(it.clip.min_x <= x && x < it.clip.max_x && it.clip.min_y < y && y <= it.clip.max_y) {
+        return None;
+    }
+    let (pw, ph) = (pm.width(), pm.height());
+    let u = ((x - it.at.min_x) / it.at.width() * f64::from(pw)).floor().clamp(0.0, f64::from(pw.max(1) - 1));
+    let v = ((it.at.max_y - y) / it.at.height() * f64::from(ph)).floor().clamp(0.0, f64::from(ph.max(1) - 1));
+    Some(height_of(pm, u as usize, v as usize, encoding))
+}
+
+/// The height at tile pixel coordinates (`u`, `v`) (pixel centres at whole numbers, the tile's
+/// own from 0 to `pw - 1` and `ph - 1`), from the nearest pixel or blended from the four around
+/// it, which may be past the tile's edge; a blend over a pixel with no height takes the tile's
+/// own nearest instead.
+fn sample(texel: &impl Fn(isize, isize) -> f32, u: f64, v: f64, pw: usize, ph: usize, nearest: bool) -> f32 {
     let clamp = |p: f64, n: usize| p.clamp(0.0, (n - 1) as f64);
-    let (u, v) = (clamp(u, pw), clamp(v, ph));
-    let near = || texel(u.round() as usize, v.round() as usize);
+    let near = || texel(clamp(u, pw).round() as isize, clamp(v, ph).round() as isize);
     if nearest {
         return near();
     }
-    let (u0, v0) = (u.floor() as usize, v.floor() as usize);
-    let (u1, v1) = ((u0 + 1).min(pw - 1), (v0 + 1).min(ph - 1));
+    // Within half a pixel past the tile's own: the blend's far pixels are its neighbour's.
+    let (u, v) = (u.clamp(-0.5, pw as f64 - 0.5), v.clamp(-0.5, ph as f64 - 0.5));
+    let (u0, v0) = (u.floor() as isize, v.floor() as isize);
+    let (u1, v1) = (u0 + 1, v0 + 1);
     let (fu, fv) = ((u - u0 as f64) as f32, (v - v0 as f64) as f32);
     let (a, b, c, d) = (texel(u0, v0), texel(u1, v0), texel(u0, v1), texel(u1, v1));
     if a.is_nan() || b.is_nan() || c.is_nan() || d.is_nan() {
@@ -381,10 +405,11 @@ mod tests {
 
     #[test]
     fn hillshade_runs_on_across_tile_edges() {
-        // One even slope rising east over two tiles, the view centred on the edge between them.
+        // One even slope rising east over two tiles, the view across the edge between them, half
+        // a tile pixel off it, so pixels near the edge blend the two tiles.
         let (west, east) = (Extent::new(0.0, 0.0, 6400.0, 6400.0), Extent::new(6400.0, 0.0, 12800.0, 6400.0));
         let tiles = [tile(64, west, |u, _| f64::from(u) * 50.0), tile(64, east, |u, _| f64::from(u + 64) * 50.0)];
-        let f = Frame { left: 3200.0, top: 6400.0, m_per_px: 100.0, ppp: 1.0 };
+        let f = Frame { left: 3250.0, top: 6400.0, m_per_px: 100.0, ppp: 1.0 };
         let g = Grid::read(&tiles, DemEncoding::Terrarium, &f, (64, 64), false);
         let hs = Hillshade {
             method: HillshadeMethod::Standard,
@@ -399,9 +424,17 @@ mod tests {
         // Either side of the edge shades as the middle of a tile does: its neighbours' heights are read.
         let inside = pm.pixel(10, 32).unwrap();
         assert!(inside.alpha() > 0);
-        for x in [31, 32] {
+        for x in 29..=33 {
             assert_eq!(pm.pixel(x, 32), Some(inside), "column {x}");
         }
+        // The heights themselves run on evenly: pixel 31 is centred on the edge, at x = 6400.
+        for (x, want) in [(30, 3125.0), (31, 3175.0), (32, 3225.0)] {
+            assert!((g.at(x, 32) - want).abs() < 1e-3, "column {x}: {}", g.at(x, 32));
+        }
+        // Without a neighbour, the edge's own pixel stands in, as before (pixel 31 at x = 6370).
+        let f = Frame { left: 3220.0, ..f };
+        let g = Grid::read(&tiles[..1], DemEncoding::Terrarium, &f, (64, 64), false);
+        assert!((g.at(31, 32) - 3150.0).abs() < 1e-3, "{}", g.at(31, 32));
     }
 
     #[test]
