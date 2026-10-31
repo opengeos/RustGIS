@@ -6,7 +6,10 @@ crates RustGIS is built from, with their copyright notices, are in
 [apps/rustgis-python/THIRD-PARTY-LICENSES.txt](apps/rustgis-python/THIRD-PARTY-LICENSES.txt)),
 which every package ships next to LICENSE. They are generated from `Cargo.lock` by
 `cargo xtask notices` (it needs `cargo install --locked --features cli cargo-about@0.9.2`);
-`deny.toml` lists the licences a dependency may have.
+`deny.toml` lists the licences a dependency may have. The code and data RustGIS's own crates
+take from other projects (the colour maps, coordinate-system tables and borrowed code below) are
+listed in `INCLUDED` in [xtask/src/notices.rs](xtask/src/notices.rs), which adds their licence
+texts, kept as published in [third-party/](third-party/), to the same files.
 
 | File | Author / source | Licence |
 |---|---|---|
@@ -17,11 +20,14 @@ which every package ships next to LICENSE. They are generated from `Cargo.lock` 
 
 Raster coordinate systems are looked up by EPSG code in the PROJ definitions of the
 [crs-definitions](https://crates.io/crates/crs-definitions) crate (CC0-1.0), compiled into the
-app. The codes it lacks (EPSG 9020–20003, `crates/data/src/raster/epsg_gap.rs`) are from the
-[EPSG Geodetic Parameter Dataset](https://epsg.org) v12.029 (© IOGP, under its
-[terms of use](https://epsg.org/terms-of-use.html)), written as PROJ definitions by PROJ 9.8.
-The Equi7 grids' codes (EPSG 27701–27707, in the same file) are from the dataset's v13.106,
-written as PROJ definitions of its Azimuthal Equidistant method.
+app. Those definitions come from PostGIS's `spatial_ref_sys`, itself derived from the EPSG Geodetic
+Parameter Dataset (© IOGP). The codes it lacks (EPSG 9020–20003,
+`crates/data/src/raster/epsg_gap.rs`) are derived from the
+[EPSG Geodetic Parameter Dataset](https://epsg.org) v12.029 (owned by IOGP, under its
+[terms of use](https://epsg.org/terms-of-use.html)): converted to PROJ definitions by PROJ 9.8,
+some of them approximately, so they are not the dataset itself. The Equi7 grids' codes
+(EPSG 27701–27707, in the same file) are derived from the dataset's v13.106, written as PROJ
+definitions of its Azimuthal Equidistant method.
 The axis order of those systems (`crates/data/src/raster/epsg_axes.rs`: which are written north
 or latitude first) is from the EPSG Geodetic Parameter Dataset v11.022 (© IOGP, under its terms
 of use), read from the PROJ 9.5.1 database through pyproj 3.7.2.
@@ -53,12 +59,26 @@ Haline, Deep and Topo from [cmocean](https://matplotlib.org/cmocean/), Copyright
 Kristen M. Thyng (MIT). The Matplotlib group's colour maps (`crates/map/src/color/matplotlib.rs`)
 are sampled from [rio-tiler](https://github.com/cogeotiff/rio-tiler)'s tables, Copyright (c) 2021
 cogeotiff (BSD-3-Clause): matplotlib's own maps (matplotlib licence; its
-ColorBrewer maps, such as Blues and RdYlBu, by Cynthia Brewer, Apache-2.0), cmocean's (MIT, as
-above) and rio-tiler's cfastie, rplumbo and schwarzwald. The MIT licence's terms: permission is granted, free of charge, to use,
-copy, modify, merge, publish, distribute, sublicense and sell copies, provided the copyright
-notice and permission notice are included; the software is provided "as is", without warranty
-of any kind.
+ColorBrewer maps, such as Blues and RdYlBu, Copyright (c) 2002 Cynthia Brewer, Mark Harrower and
+The Pennsylvania State University, Apache-2.0; its gist maps, such as gist_earth, from Yorick,
+Copyright (c) 1996 The Regents of the University of California, under a BSD-style licence),
+cmocean's (MIT, as above) and rio-tiler's cfastie, rplumbo and schwarzwald. The full licence
+texts are in THIRD-PARTY-LICENSES.txt.
+
+Three small pieces of code follow other projects' code, and their licences are in
+THIRD-PARTY-LICENSES.txt too: where a label goes in an area (`pole_of_inaccessibility` in
+`crates/tiles/src/symbols.rs`) follows [polylabel](https://github.com/mapbox/polylabel)
+(Copyright (c) 2016 Mapbox, ISC); telling expression filters from legacy ones
+(`is_expression_filter` in `crates/tiles/src/style.rs`) follows the
+[MapLibre style specification](https://github.com/maplibre/maplibre-style-spec) (Copyright (c)
+2020 MapLibre contributors and Mapbox, BSD-3-Clause); and the sinusoidal projection's meridian distance
+(`crates/geom/src/sinusoidal.rs`) follows [PROJ](https://proj.org)'s `pj_enfn`, `pj_mlfn` and
+`pj_inv_mlfn` (MIT).
 
 Icons are original vector drawings in code (`crates/ui-egui/src/icons.rs`). Fonts are not
 bundled: the interface uses an installed system sans-serif when one is found, otherwise the
-Ubuntu Light face that ships inside `epaint_default_fonts` (Ubuntu Font Licence 1.0).
+Ubuntu Light face that ships inside `epaint_default_fonts` (Ubuntu Font Licence 1.0). For an
+interface language in a script those faces lack, the web app downloads one from
+[rustgis-assets](https://github.com/opengeos/rustgis-assets/tree/main/fonts), where each font's
+licence is kept beside it: Noto Sans SC, JP or KR for Chinese, Japanese or Korean, and Vazirmatn
+for Arabic script (both SIL Open Font License 1.1).
