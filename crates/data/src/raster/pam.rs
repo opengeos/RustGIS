@@ -142,11 +142,14 @@ pub fn parse(text: &str) -> Option<Pam> {
 
 /// The band descriptions a GeoTIFF holds itself, in GDAL's metadata tag (`GDAL_METADATA`, 42112),
 /// where GDAL and rasterio write them: `None` when it isn't such a document or describes no band.
-/// Its `sample` counts from 0.
+/// Its `sample` counts from 0. Class names may be dataset items named `CLASS_<value>`, as the
+/// MapBiomas files on Source Cooperative have them: they name band 1's classes, however many
+/// bands the file has.
 ///
 /// ```xml
 /// <GDALMetadata>
 ///   <Item name="DESCRIPTION" sample="0" role="description">NDVI 2024-06-01</Item>
+///   <Item name="CLASS_3">Forest Formation</Item>
 /// </GDALMetadata>
 /// ```
 pub fn parse_gdal_metadata(text: &str) -> Option<Pam> {
@@ -173,12 +176,72 @@ pub fn parse_gdal_metadata(text: &str) -> Option<Pam> {
             pam.bands.push(PamBand { band, description: Some(description), ..PamBand::default() });
         }
     }
+    // Class names, by value: dataset items (no band, no role) named CLASS_ and a whole number.
+    let mut classes: Vec<String> = Vec::new();
+    for item in root.children().filter(|n| n.has_tag_name("Item") && n.attribute("sample").is_none() && n.attribute("role").is_none()) {
+        let value = item
+            .attribute("name")
+            .and_then(|n| n.strip_prefix("CLASS_"))
+            .and_then(|v| v.parse::<usize>().ok())
+            .filter(|v| *v < MAX_CATEGORIES);
+        let name = item.text().map(str::trim).filter(|d| !d.is_empty()).map(|d| d.chars().take(256).collect::<String>());
+        if let (Some(value), Some(name)) = (value, name) {
+            if classes.len() <= value {
+                classes.resize(value + 1, String::new());
+            }
+            if let Some(slot) = classes.get_mut(value).filter(|s| s.is_empty()) {
+                *slot = name;
+            }
+        }
+    }
+    if !classes.is_empty() {
+        match pam.bands.iter_mut().find(|b| b.band == 1) {
+            Some(b) => b.categories = classes,
+            None => pam.bands.push(PamBand { band: 1, categories: classes, ..PamBand::default() }),
+        }
+    }
     (!pam.bands.is_empty()).then_some(pam)
+}
+
+/// GDAL's metadata document naming a band's classes as dataset items `CLASS_<value>`, as
+/// [`parse_gdal_metadata`] reads them back: `None` when no class is named. It is plain ASCII
+/// (other characters as XML references), as the tag's type is.
+pub fn class_metadata(classes: &[String]) -> Option<String> {
+    let mut items = String::new();
+    for (value, name) in classes.iter().enumerate().take(MAX_CATEGORIES) {
+        let name = name.trim();
+        if name.is_empty() {
+            continue;
+        }
+        items.push_str(&format!("<Item name=\"CLASS_{value}\">"));
+        for c in name.chars().take(256) {
+            match c {
+                '&' => items.push_str("&amp;"),
+                '<' => items.push_str("&lt;"),
+                '>' => items.push_str("&gt;"),
+                c if c.is_ascii() && !c.is_ascii_control() => items.push(c),
+                c => items.push_str(&format!("&#{};", u32::from(c))),
+            }
+        }
+        items.push_str("</Item>");
+    }
+    (!items.is_empty()).then(|| format!("<GDALMetadata>{items}</GDALMetadata>"))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn class_names_written_are_read_back() {
+        let classes = vec![String::new(), "Floresta & savana".into(), String::new(), "Formação <campestre>".into()];
+        let xml = class_metadata(&classes).unwrap();
+        assert!(xml.is_ascii(), "{xml}");
+        let pam = parse_gdal_metadata(&xml).unwrap();
+        assert_eq!(pam.band(1).unwrap().categories, classes);
+        // No class named, no document.
+        assert_eq!(class_metadata(&[String::new(), " ".into()]), None);
+    }
 
     #[test]
     fn reads_band_descriptions_nodata_and_statistics() {
@@ -248,6 +311,31 @@ mod tests {
         }
         let deep = format!("<PAMDataset>{}{}</PAMDataset>", "<a>".repeat(100_000), "</a>".repeat(100_000));
         assert!(parse(&deep).is_none());
+    }
+
+    #[test]
+    fn reads_class_names_from_gdal_metadata() {
+        let xml = r#"<GDALMetadata>
+  <Item name="AREA_OR_POINT">Area</Item>
+  <Item name="CLASS_3">Forest Formation</Item>
+  <Item name="CLASS_15"> Pasture </Item>
+  <Item name="CLASS_15">again</Item>
+  <Item name="CLASS_x">not a value</Item>
+  <Item name="CLASS_70000">past the last value</Item>
+  <Item name="CLASS_4"></Item>
+  <Item name="CLASS_5" sample="0">a band's own item</Item>
+  <Item name="DESCRIPTION" sample="0" role="description">mapbiomas_class</Item>
+</GDALMetadata>"#;
+        let pam = parse_gdal_metadata(xml).unwrap();
+        let b1 = pam.band(1).unwrap();
+        assert_eq!(b1.description.as_deref(), Some("mapbiomas_class"));
+        assert_eq!(b1.categories.len(), 16);
+        assert_eq!((b1.categories[3].as_str(), b1.categories[15].as_str()), ("Forest Formation", "Pasture"));
+        assert!(b1.categories[4].is_empty() && b1.categories[5].is_empty() && b1.categories[0].is_empty());
+        // Classes alone describe band 1.
+        let only = parse_gdal_metadata(r#"<GDALMetadata><Item name="CLASS_1">Forest</Item></GDALMetadata>"#).unwrap();
+        assert_eq!(only.band(1).map(|b| b.categories.clone()), Some(vec![String::new(), "Forest".into()]));
+        assert!(parse_gdal_metadata(r#"<GDALMetadata><Item name="AREA_OR_POINT">Area</Item></GDALMetadata>"#).is_none());
     }
 
     #[test]

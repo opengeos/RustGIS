@@ -22092,3 +22092,93 @@ fn merge_distinguishes_case_sensitive_file_paths() {
     assert_eq!(coordinates, [1.0, 2.0]);
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+/// `layer.addUrl` with `"bbox"` (#1204): a window of a cloud-optimised GeoTIFF, read by range as a
+/// raster layer, at full resolution or at the overview a cell size asks for; a palette file's
+/// colours and class names come with it; the window is kept in a saved project, class names too.
+#[test]
+fn a_cog_window_comes_in_as_a_raster() {
+    use rustgis_data::raster::ColorHint;
+    use rustgis_data::raster::cog::{Example, example, example_with};
+    // 1024 pixels over 10°–11° E, 45°–46° N, in tiles of 256, with overviews of 512 and 256;
+    // pixel (x, y) is (x + y) % 256.
+    let (base, sent) = serve_ranges(example(1024, 256));
+    let mut s = world();
+    let raster = |s: &Session, name: &str| s.map().layer_by_name(name).and_then(|l| l.raster.as_ref()?.data.clone()).unwrap();
+    let r =
+        s.run("layer.addUrl", &json!({"url": format!("{base}/scene.tif"), "bbox": [10.25, 45.5, 10.5, 45.75], "name": "Window"})).unwrap();
+    assert_eq!(r["window"], json!({"columns": [256, 512], "rows": [256, 512], "level": 0, "cellSize": 111_320.0 / 1024.0}));
+    let w = raster(&s, "Window");
+    assert_eq!((w.width, w.height), (256, 256));
+    assert_eq!((w.transform.origin_x, w.transform.origin_y), (10.25, 45.75));
+    assert_eq!((w.value(0, 0, 0), w.value(0, 10, 5)), (Some(0.0), Some(15.0)));
+    // Only the window's tile was read (one of the full image's sixteen), with the header and the
+    // coarsest overview opening the file reads: 192 KB of the 1.4 MB.
+    let read = sent.load(std::sync::atomic::Ordering::Relaxed);
+    assert!(read <= 3 * 256 * 256, "{read} bytes");
+    // A cell size of 300 m takes the 512-pixel overview (cells of 217 m), not the 256 (435 m).
+    let r = s
+        .run(
+            "layer.addUrl",
+            &json!({"url": format!("{base}/scene.tif"), "bbox": [10.25, 45.5, 10.5, 45.75], "cellSize": 300, "name": "Coarser"}),
+        )
+        .unwrap();
+    assert_eq!((r["window"]["level"].clone(), r["window"]["columns"].clone()), (json!(1), json!([128, 256])));
+    let c = raster(&s, "Coarser");
+    assert_eq!((c.width, c.value(0, 1, 0)), (128, Some(2.0)));
+    // A box over the file's edge is cut to the file; one off it, or a wrong one, is refused.
+    s.run("layer.addUrl", &json!({"url": format!("{base}/scene.tif"), "bbox": [10.75, 45.75, 12.0, 47.0], "name": "Edge"})).unwrap();
+    assert_eq!((raster(&s, "Edge").width, raster(&s, "Edge").height), (256, 256));
+    for (bbox, want) in [
+        (json!([20.0, 45.0, 21.0, 46.0]), "outside the file"),
+        (json!([10.5, 45.5, 10.25, 45.75]), "bbox is"),
+        (json!([10, 45, 11]), "bbox is"),
+        (json!("everywhere"), "bbox is"),
+    ] {
+        let e = s.run("layer.addUrl", &json!({"url": format!("{base}/scene.tif"), "bbox": bbox})).unwrap_err();
+        assert!(e.contains(want), "{e}");
+    }
+    let e = s.run("layer.addUrl", &json!({"url": format!("{base}/scene.tif"), "bbox": [10, 45, 11, 46], "whole": true})).unwrap_err();
+    assert!(e.contains("leave out"), "{e}");
+    let e = s.run("layer.addUrl", &json!({"url": format!("{base}/scene.tif"), "bbox": [10, 45, 11, 46], "cellSize": 0})).unwrap_err();
+    assert!(e.contains("cellSize"), "{e}");
+    // A window over the most values (300,000 under test) is refused, naming the overview that
+    // fits: the 512-pixel one, cells of 217.4 m; asked for, it comes in.
+    let e = s.run("layer.addUrl", &json!({"url": format!("{base}/scene.tif"), "bbox": [10, 45, 11, 46]})).unwrap_err();
+    assert!(e.contains("1024 × 1024 cells") && e.contains("take \"cellSize\": 218 or more"), "{e}");
+    let r = s
+        .run("layer.addUrl", &json!({"url": format!("{base}/scene.tif"), "bbox": [10, 45, 11, 46], "cellSize": 218, "name": "Whole"}))
+        .unwrap();
+    assert_eq!((r["window"]["level"].clone(), raster(&s, "Whole").width), (json!(1), 512));
+    // "zoom": true frames the window, though the map held layers already.
+    let r = s
+        .run(
+            "layer.addUrl",
+            &json!({"url": format!("{base}/scene.tif"), "bbox": [10.25, 45.5, 10.5, 45.75], "name": "Zoomed", "zoom": true}),
+        )
+        .unwrap();
+    assert_eq!(r["zoomed"], true, "{r}");
+    let c = rustgis_geom::merc_to_lonlat(s.map().camera.center);
+    assert!((c.x - 10.375).abs() < 0.05 && (c.y - 45.625).abs() < 0.05, "{c:?}");
+    // Each band is read: two bands, and no colour table for them.
+    let (two, _) = serve_ranges(example_with(&Example { size: 512, tile: 256, bands: 2, ..Example::default() }));
+    s.run("layer.addUrl", &json!({"url": format!("{two}/two.tif"), "bbox": [10.0, 45.0, 10.5, 45.5], "name": "Two"})).unwrap();
+    let w2 = raster(&s, "Two");
+    assert_eq!((w2.band_count(), w2.value(0, 10, 5), w2.value(1, 10, 5)), (2, Some(15.0), Some(25.0)));
+    assert!(!matches!(w2.color, ColorHint::Palette(_)), "{:?}", w2.color);
+    // A palette file, as MapBiomas's: its colour table and class names come with the window.
+    let (classes, _) = serve_ranges(example_with(&Example { size: 512, tile: 256, classes: true, ..Example::default() }));
+    s.run("layer.addUrl", &json!({"url": format!("{classes}/cover.tif"), "bbox": [10.0, 45.0, 10.5, 45.5], "name": "Cover"})).unwrap();
+    let cover = raster(&s, "Cover");
+    let ColorHint::Palette(table) = &cover.color else { panic!("{:?}", cover.color) };
+    assert_eq!(table[3], [3, 252, 0, 255]);
+    assert_eq!((cover.bands[0].class_name(3.0), cover.bands[0].class_name(15.0)), (Some("Forest Formation"), Some("Pasture")));
+    // Saved, the project keeps the windows, not the addresses, and opens them again.
+    let text = serde_json::to_string(&s.project).unwrap();
+    s.run("project.openText", &json!({"text": text})).unwrap();
+    let w = raster(&s, "Window");
+    assert_eq!((w.width, w.value(0, 10, 5)), (256, Some(15.0)));
+    let cover = raster(&s, "Cover");
+    assert!(matches!(cover.color, ColorHint::Palette(_)));
+    assert_eq!(cover.bands[0].class_name(15.0), Some("Pasture"));
+}
