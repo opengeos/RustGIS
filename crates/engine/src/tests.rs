@@ -9974,6 +9974,78 @@ fn services_list_and_add_layers() {
     }
 }
 
+/// Adding a layer leaves the view where it is once the map holds something (a service layer, a
+/// data layer over a tile overlay — hidden or not — or after a COG): only the first layer on an
+/// empty map is framed, an empty group holding nothing.
+#[test]
+fn adding_a_layer_keeps_the_view() {
+    const WMS: &str = r#"<WMS_Capabilities version="1.3.0" xmlns="http://www.opengis.net/wms" xmlns:xlink="http://www.w3.org/1999/xlink">
+<Service><Title>Test WMS</Title></Service>
+<Capability><Request><GetMap><Format>image/png</Format><DCPType><HTTP><Get><OnlineResource xlink:href="https://maps.example.com/wms?"/></Get></HTTP></DCPType></GetMap></Request>
+<Layer><Title>Root</Title><CRS>EPSG:3857</CRS>
+<Layer queryable="1"><Name>roads</Name><Title>Roads</Title><EX_GeographicBoundingBox><westBoundLongitude>5</westBoundLongitude><eastBoundLongitude>15</eastBoundLongitude><southBoundLatitude>45</southBoundLatitude><northBoundLatitude>55</northBoundLatitude></EX_GeographicBoundingBox></Layer>
+</Layer></Capability></WMS_Capabilities>"#;
+    let url = "https://maps.example.com/wms";
+    let mut s = Session::new(Project::default());
+    // The first layer on an empty map is framed.
+    s.run("service.add", &json!({"url": url, "layer": "roads", "text": WMS})).unwrap();
+    let c = s.map().center_lonlat();
+    assert!((c.x - 10.0).abs() < 0.1 && (c.y - 50.0).abs() < 0.5, "{c:?}");
+    // A later one leaves the view where it was put.
+    s.run("map.zoomToExtent", &json!({"extent": [0.0, 0.0, 10.0, 10.0]})).unwrap();
+    let before = s.map().camera;
+    s.run("service.add", &json!({"url": url, "layer": "roads", "text": WMS, "name": "Roads again"})).unwrap();
+    assert_eq!(s.map().camera, before);
+    // A data layer over a tile overlay is no first layer either.
+    let far = r#"{"type": "FeatureCollection", "features": [{"type": "Feature", "properties": {}, "geometry": {"type": "Point", "coordinates": [151.2, -33.9]}}]}"#;
+    let mut t = Session::new(Project::default());
+    t.run("map.addTiles", &json!({"url": "https://tiles.example.com/{z}/{x}/{y}.png", "overlay": true})).unwrap();
+    t.run("map.zoomToExtent", &json!({"extent": [0.0, 0.0, 10.0, 10.0]})).unwrap();
+    let before = t.map().camera;
+    t.run("layer.addDataText", &json!({"fileName": "far.geojson", "text": far})).unwrap();
+    assert_eq!(t.map().camera, before);
+    // A hidden overlay is content too: the user hid it after choosing a view, so data added to a
+    // map that shows only its basemap keeps that view.
+    let mut h = Session::new(Project::default());
+    h.run("map.addTiles", &json!({"url": "https://tiles.example.com/{z}/{x}/{y}.png", "overlay": true})).unwrap();
+    h.run("map.setTiles", &json!({"index": 0, "visible": false})).unwrap();
+    h.run("map.zoomToExtent", &json!({"extent": [0.0, 0.0, 10.0, 10.0]})).unwrap();
+    let before = h.map().camera;
+    h.run("layer.addDataText", &json!({"fileName": "far.geojson", "text": far})).unwrap();
+    assert_eq!(h.map().camera, before);
+    // A cloud-optimised GeoTIFF read in place is content too, though it is a tile layer: data
+    // added after it keeps the view.
+    let file = rustgis_data::raster::cog::example(512, 128);
+    let (base, _) = serve_ranges(file);
+    let url = format!("{base}/scene.tif");
+    let mut c = Session::new(Project::default());
+    c.run("layer.addUrl", &json!({"url": url})).unwrap();
+    // The first one is framed on the file: 10–11° E, 45–46° N.
+    let at = c.map().center_lonlat();
+    assert!((at.x - 10.5).abs() < 0.1 && (at.y - 45.5).abs() < 0.5, "{at:?}");
+    c.run("map.zoomToExtent", &json!({"extent": [0.0, 0.0, 10.0, 10.0]})).unwrap();
+    let before = c.map().camera;
+    c.run("layer.addDataText", &json!({"fileName": "far.geojson", "text": far})).unwrap();
+    assert_eq!(c.map().camera, before);
+    // A later COG without `"zoom"` leaves the view alone too.
+    c.run("layer.addUrl", &json!({"url": url, "name": "Second"})).unwrap();
+    assert_eq!(c.map().camera, before);
+    // `"zoom": false` keeps the view of a first COG; `"zoom": true` frames a later one.
+    let mut z = Session::new(Project::default());
+    let start = z.map().camera;
+    z.run("layer.addUrl", &json!({"url": url, "zoom": false})).unwrap();
+    assert_eq!(z.map().camera, start);
+    z.run("layer.addUrl", &json!({"url": url, "name": "Again", "zoom": true})).unwrap();
+    let at = z.map().center_lonlat();
+    assert!((at.x - 10.5).abs() < 0.1 && (at.y - 45.5).abs() < 0.5, "{at:?}");
+    // A group holding no layer holds nothing: the first data layer added is framed.
+    let mut g = Session::new(Project::default());
+    g.run("group.add", &json!({"name": "Empty"})).unwrap();
+    g.run("layer.addDataText", &json!({"fileName": "far.geojson", "text": far})).unwrap();
+    let at = g.map().center_lonlat();
+    assert!((at.x - 151.2).abs() < 0.1 && (at.y + 33.9).abs() < 0.5, "{at:?}");
+}
+
 /// An OGC API collection that comes in pages is read page by page, and a `next` link is followed
 /// only where the page may point.
 #[test]
@@ -16527,6 +16599,26 @@ fn ogc_group_import_refresh_and_persistence() {
     assert_eq!(server.requests()[before..].iter().map(|r| r.path.as_str()).collect::<Vec<_>>(), [ROOT, CATALOG, ITEMS, LINE_ITEMS]);
     assert_eq!(s.map().service_groups[0].children.iter().map(|c| c.layer).collect::<Vec<_>>(), [points, lines]);
     assert!(!s.map().layer(points).unwrap().visible);
+}
+
+/// Importing a service group frames the first one on an empty map and leaves the view where it is
+/// when the map already shows something.
+#[test]
+fn importing_a_service_group_keeps_the_view() {
+    use ogc_server::Server;
+    let server = Server::group_fixture();
+    // A new map frames the group imported first: its point at 10° E, 50° N and the line from it.
+    let mut e = Session::new(Project::default());
+    e.run("service.import", &json!({"url": server.root()})).unwrap();
+    let at = e.map().center_lonlat();
+    assert!((at.x - 10.5).abs() < 0.1 && (at.y - 50.5).abs() < 0.5, "{at:?}");
+    let mut s = Session::new(Project::default());
+    let point = r#"{"type": "FeatureCollection", "features": [{"type": "Feature", "properties": {}, "geometry": {"type": "Point", "coordinates": [0, 0]}}]}"#;
+    s.run("layer.addDataText", &json!({"fileName": "origin.geojson", "text": point})).unwrap();
+    s.run("map.zoomToExtent", &json!({"extent": [0.0, 0.0, 10.0, 10.0]})).unwrap();
+    let before = s.map().camera;
+    s.run("service.import", &json!({"url": server.root()})).unwrap();
+    assert_eq!(s.map().camera, before);
 }
 
 #[test]
