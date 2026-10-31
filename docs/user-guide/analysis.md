@@ -211,8 +211,13 @@ is the layer name; `vectorToPmtiles` uses it as a file destination.
 **Buffer** distances, and the distance of **Select Layer By Location**, are measured on the Earth
 (the WGS 84 ellipsoid, as PROJ and GeographicLib measure it), not in the map's display
 projection. Each feature is buffered in an azimuthal equidistant projection on the ellipsoid
-centred on it, so a point's buffer is exact; long lines and large polygon outlines are
-buffered in stretches of a few hundred kilometres to limit projection error. Negative Buffer
+centred on it, so distances from a point are true; long lines and large polygon outlines are
+buffered in stretches of a few hundred kilometres to limit projection error. Up to 85° of
+latitude, a buffer's sides are within 0.012 % of the distance (or 1 cm), and within 0.05 % along
+a winding line or outline buffered in stretches. Its curves are drawn with straight edges (32 to
+a point's circle, 15 to a half circle at a line's end or a polygon's corner, close to GEOS and
+PostGIS's 8 to a quarter circle), whose corners are at the distance and whose middles run up to
+about 0.5 % of it inside the true curve. Negative Buffer
 distances shrink polygons. Buffer and Select Layer By Location limit distances to 5,000 km.
 **Calculate Geometry Attributes** measures polygon areas and perimeters, and line lengths,
 on the WGS 84 ellipsoid, independently of the map's display projection. Holes are subtracted
@@ -403,6 +408,10 @@ hold. For example, the total units permitted in each district:
 gp.run={"tool":"spatialJoin","params":{"target":"districts","join":"permits","merge":[{"field":"units","rule":"sum"}]}}
 ```
 
+In the Tools pane, use **Add rule** under **Merge Rules**, pick a field from Join Features
+and its rule, and set **Delimiter** for `join`. Use **Move up**, **Move down** and **Remove** to
+manage the list. Fields without a rule keep the first match.
+
 **Join Field** (`joinField`) performs a one-off non-spatial attribute join,
 copying fields from a source table or layer (`joinTable`, specified by name or numeric table ID)
 into a `target` table or layer based on matching key values:
@@ -447,6 +456,13 @@ to 256 (field, statistic) pairs in the order the fields should appear:
 gp.run={"tool":"summaryStatistics","params":{"input":"parcels","case":["county","year"],"statistics":[{"field":"income","statistic":"MEAN"},{"field":"income","statistic":"MEDIAN"},{"field":"zoning","statistic":"MODE"}]}}
 ```
 
+In the Tools pane, use **Add statistic** to pick each field and statistic. The statistic picker
+offers the operations supported by that field's type, including percentiles `P1` through `P99`
+for numeric fields. Use **Add field** under **Case Fields** to group by several fields. Move
+entries up or down to choose their output order, or remove them. Leaving Statistics empty keeps
+the single **Statistics Field** shortcut. These lists are also available in ModelBuilder; for an
+input produced by another tool, type its field names before running the model.
+
 | Statistic | What it is |
 | --- | --- |
 | `COUNT` | Values that aren't empty |
@@ -487,6 +503,9 @@ gp.run={"tool":"pivotTable","params":{"input":"incomes","fields":"county","pivot
 | --- | --- | --- | --- |
 | A | 10 | 11 | |
 | B | 20 | | 22 |
+
+Use **Add field** under **Row Fields** in the Tools pane or ModelBuilder to choose several row
+fields and order them with **Move up** and **Move down**.
 
 Without `statistic`, each row and pivot value can have one record at most; the tool names the
 first pair with more, and the cells keep the value field's type. Give a `statistic` to combine the
