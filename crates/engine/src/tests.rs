@@ -22008,6 +22008,20 @@ fn merge_distinguishes_case_sensitive_file_paths() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// A box given −180° to 180° over a file stored 0° to 360° is shifted into its range; one across
+/// the file's seam is refused (#1210).
+#[test]
+fn a_window_box_takes_the_files_longitudes() {
+    use crate::cmd::layer::box_in_file_longitudes as fit;
+    assert_eq!(fit(-10.0, -1.0, 0.0, 360.0).unwrap(), (350.0, 359.0));
+    assert_eq!(fit(10.0, 20.0, 0.0, 360.0).unwrap(), (10.0, 20.0));
+    assert!(fit(-10.0, 10.0, 0.0, 360.0).unwrap_err().contains("seam at 0°"));
+    // A file stored −180° to 180°, or a part of the globe, is left as it is.
+    assert_eq!(fit(-170.0, -160.0, -180.0, 180.0).unwrap(), (-170.0, -160.0));
+    assert_eq!(fit(10.25, 10.5, 10.0, 11.0).unwrap(), (10.25, 10.5));
+    assert_eq!(fit(12.0, 13.0, 10.0, 11.0).unwrap(), (12.0, 13.0), "off the file: refused later as such");
+}
+
 /// `layer.addUrl` with `"bbox"` (#1204): a window of a cloud-optimised GeoTIFF, read by range as a
 /// raster layer, at full resolution or at the overview a cell size asks for; a palette file's
 /// colours and class names come with it; the window is kept in a saved project, class names too.
@@ -22041,6 +22055,16 @@ fn a_cog_window_comes_in_as_a_raster() {
     assert_eq!((r["window"]["level"].clone(), r["window"]["columns"].clone()), (json!(1), json!([128, 256])));
     let c = raster(&s, "Coarser");
     assert_eq!((c.width, c.value(0, 1, 0)), (128, Some(2.0)));
+    // A cell size finer than the full image's (108.7 m) reads the full image, and says so.
+    let mark = s.notice_mark();
+    let r = s
+        .run(
+            "layer.addUrl",
+            &json!({"url": format!("{base}/scene.tif"), "bbox": [10.25, 45.5, 10.5, 45.75], "cellSize": 10, "name": "Finer"}),
+        )
+        .unwrap();
+    assert_eq!(r["window"]["level"], json!(0));
+    assert!(s.notices_since(mark).iter().any(|n| n.text.contains("cellSize 10 is finer than the file's finest cells (108.7 m)")));
     // A box over the file's edge is cut to the file; one off it, or a wrong one, is refused.
     s.run("layer.addUrl", &json!({"url": format!("{base}/scene.tif"), "bbox": [10.75, 45.75, 12.0, 47.0], "name": "Edge"})).unwrap();
     assert_eq!((raster(&s, "Edge").width, raster(&s, "Edge").height), (256, 256));

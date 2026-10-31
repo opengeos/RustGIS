@@ -1200,7 +1200,7 @@ pub fn write(r: &Raster, band: usize) -> Result<Vec<u8>> {
         four(matches!(r.color, ColorHint::Rgb { alpha: true }))
     };
     let names: Vec<Option<&str>> = written.iter().map(|b| super::band_name_of(r, *b)).collect();
-    let first = r.bands.get(written[0]).map_or(&[][..], |b| &b.classes[..]);
+    let first = written.first().and_then(|b| r.bands.get(*b)).map_or(&[][..], |b| &b.classes[..]);
     let classes = super::pam::gdal_metadata(&names, first);
     macro_rules! tags {
         ($img:expr) => {{

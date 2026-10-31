@@ -2941,20 +2941,22 @@ fn add_cog_window(s: &mut Session, p: &Value, url: &str) -> CmdResult {
         }
     }
     // Each piece's middle is placed, and the piece halved while the middle strays from the
-    // straight line between its ends.
+    // straight line between its ends, or toward where the file's system stops placing points
+    // (the edge of its projection's domain, between a point it places and one it doesn't).
     while let Some((a, b, depth)) = pieces.pop() {
         let m = ((a.0 + b.0) / 2.0, (a.1 + b.1) / 2.0);
         points += 1;
-        let Some(c) = place(m.0, m.1) else {
-            unplaced += 1;
-            continue;
+        let c = place(m.0, m.1);
+        match c {
+            Some(c) => (x0, y0, x1, y1) = (x0.min(c.x), y0.min(c.y), x1.max(c.x), y1.max(c.y)),
+            None => unplaced += 1,
+        }
+        let halve = match (place(a.0, a.1), place(b.0, b.1), c) {
+            (Some(pa), Some(pb), Some(c)) => (c.x - (pa.x + pb.x) / 2.0).hypot(c.y - (pa.y + pb.y) / 2.0) > tolerance,
+            (None, None, None) => false,
+            _ => true,
         };
-        (x0, y0, x1, y1) = (x0.min(c.x), y0.min(c.y), x1.max(c.x), y1.max(c.y));
-        if let (Some(pa), Some(pb)) = (place(a.0, a.1), place(b.0, b.1))
-            && depth < 12
-            && points < 200_000
-            && (c.x - (pa.x + pb.x) / 2.0).hypot(c.y - (pa.y + pb.y) / 2.0) > tolerance
-        {
+        if halve && depth < 12 && points < 200_000 {
             pieces.extend([(a, m, depth + 1), (m, b, depth + 1)]);
         }
     }
@@ -2963,6 +2965,11 @@ fn add_cog_window(s: &mut Session, p: &Value, url: &str) -> CmdResult {
     }
     // A level's cell size, its longer side, in metres for a longitude/latitude file.
     let geographic = layout.crs.is_geographic();
+    // A longitude/latitude file stored 0° to 360° (a climate grid) takes the box in its range.
+    if geographic && let Some(full) = layout.levels.first() {
+        let (fx0, pw) = (layout.transform.origin_x, layout.transform.pixel_width);
+        (x0, x1) = box_in_file_longitudes(x0, x1, fx0, fx0 + f64::from(full.width) * pw).map_err(named)?;
+    }
     let size_of = |l: &Level| {
         let lt = layout.transform_of(l);
         let px = lt.pixel_width.abs().max(lt.pixel_height.abs());
@@ -2982,11 +2989,12 @@ fn add_cog_window(s: &mut Session, p: &Value, url: &str) -> CmdResult {
         let (c0, c1, r0, r1) = window(l);
         u64::from(c1 - c0).saturating_mul(u64::from(r1 - r0)).saturating_mul(layout.bands.max(1) as u64)
     };
-    // The full image, or the coarsest overview whose cells are no larger than the size asked.
-    let level = match cell {
-        None => 0,
-        Some(c) => (0..layout.levels.len()).rev().find(|i| size_of(&layout.levels[*i]) <= c * (1.0 + 1e-9)).unwrap_or(0),
-    };
+    // The full image, or the coarsest overview whose cells are no larger than the size asked. A
+    // size finer than the full image's cells reads the full image, and says so.
+    let fits =
+        cell.and_then(|c| (0..layout.levels.len()).rev().find(|i| layout.levels.get(*i).is_some_and(|l| size_of(l) <= c * (1.0 + 1e-9))));
+    let level = fits.unwrap_or(0);
+    let finer = cell.filter(|_| fits.is_none());
     let lv = layout.levels.get(level).ok_or_else(|| named("the file has no image".into()))?;
     let (c0, c1, r0, r1) = window(lv);
     if c1 <= c0 || r1 <= r0 {
@@ -3047,6 +3055,9 @@ fn add_cog_window(s: &mut Session, p: &Value, url: &str) -> CmdResult {
     let of = if level == 0 { "the full image".to_string() } else { format!("overview {level} of {}", layout.levels.len() - 1) };
     let added = s.active_layer.and_then(|id| s.map().layer(id)).map(|l| l.name.clone()).unwrap_or(name);
     s.notify(format!("{added}: a {width} × {height} window of {of}, cells of {size:.1}{unit}, read by range from its address"), false);
+    if let Some(c) = finer {
+        s.notify(format!("{added}: cellSize {c} is finer than the file's finest cells ({size:.1}{unit}): the full image is read"), false);
+    }
     if unplaced > 0 {
         s.notify(
             format!("{added}: {unplaced} of the box's {points} edge points have no place in the file's coordinate system: the window is placed from the others"),
@@ -3067,6 +3078,27 @@ fn add_cog_window(_: &mut Session, _: &Value, url: &str) -> CmdResult {
     Err(format!(
         "{url}: a window of a cloud-optimised GeoTIFF (\"bbox\") is read on the desktop and the command line for now; here, leave out \"bbox\" to draw the file in place"
     ))
+}
+
+/// A longitude/latitude box's west and east, `x0..x1`, in the range of a file whose columns span
+/// `fx0..fx1` degrees: shifted by 360° when that puts more of it over the file (a file stored 0°
+/// to 360°, a box given −180° to 180°). A box across a whole-world file's seam, which would take
+/// columns at both of its ends, is refused rather than cut at the seam.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn box_in_file_longitudes(x0: f64, x1: f64, fx0: f64, fx1: f64) -> Result<(f64, f64), String> {
+    let over = |a: f64, b: f64| (b.min(fx1) - a.max(fx0)).max(0.0);
+    let mut best = (x0, x1);
+    for k in [360.0, -360.0] {
+        if over(x0 + k, x1 + k) > over(best.0, best.1) {
+            best = (x0 + k, x1 + k);
+        }
+    }
+    let (a, b) = best;
+    if fx1 - fx0 >= 360.0 - 1e-6 && (a < fx0 - 1e-9 || b > fx1 + 1e-9) {
+        let seam = if a < fx0 { fx0 } else { fx1 };
+        return Err(format!("the box crosses the file's seam at {seam}° of longitude: give one box on each side of it"));
+    }
+    Ok(best)
 }
 
 /// A window's box: `[west, south, east, north]` in degrees, or `"view"`, the map's extent.
