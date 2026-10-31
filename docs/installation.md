@@ -217,7 +217,8 @@ from the extracted directory and open `http://localhost:8080/`.
 
 The archive uses relative URLs, so it can be hosted at the root or under a path such as
 `https://example.com/rustgis/` (with the trailing slash). Use HTTPS, or `localhost` for local
-use, to install the app and start it offline. The ZIP includes the service worker and contains no analytics tag.
+use, to install the app and start it offline. The ZIP includes the service worker and contains
+no analytics tag.
 
 ### Self-host the web app with Docker
 
