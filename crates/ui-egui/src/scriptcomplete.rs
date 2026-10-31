@@ -599,9 +599,17 @@ fn tool_value(script: &str, at: usize, session: &rustgis_engine::Session) -> Opt
     let text = script.get(byte_at(script, brace)?..byte_at(script, at)?)?;
     // A tool's parameter takes no array.
     let (start, key, false) = scan(text).value? else { return None };
-    let word = word_from(text, start)?;
-    let start = brace + start;
     let p = tool.params.iter().find(|p| p.name == key)?;
+    let word = if p.kind == K::Fields {
+        let word: String = text.chars().skip(start).collect();
+        if word.contains('\\') {
+            return None;
+        }
+        word
+    } else {
+        word_from(text, start)?
+    };
+    let start = brace + start;
     let map = session.map();
     match p.kind {
         K::Layer | K::PolygonLayer | K::PointLayer | K::RasterLayer | K::VectorLayer => {
@@ -615,16 +623,31 @@ fn tool_value(script: &str, at: usize, session: &rustgis_engine::Session) -> Opt
             let names = layers.map(|l| l.name.as_str()).chain(tables.map(|(_, t)| t.name.as_str()));
             value_ids(start, at, &word, names, Of::Layers)
         }
-        K::Field | K::NumericField | K::CoordinateField => {
+        K::Field | K::Fields | K::NumericField | K::CoordinateField => {
             let after = object_rest(script.get(byte_at(script, at)?..)?.split('\n').next()?);
-            let input = value_of(&format!("{text}{after}"), crate::panes::first_layer(tool)?.name)?;
+            let input = value_of(&format!("{text}{after}"), crate::panes::layer_for_param(tool, p.name)?.name)?;
             let d = crate::panes::input_dataset(session, &input)?;
             let names = d.fields.iter().enumerate().filter(|(i, _)| takes_field(p.kind, d, *i)).map(|(_, f)| f.name.as_str());
+            let (start, word) = if p.kind == K::Fields {
+                let (off, suffix) = list_suffix(&word);
+                (start + off, suffix)
+            } else {
+                (start, word)
+            };
             value_ids(start, at, &word, names, Of::ToolFields(input))
         }
         K::Choice(choices) => value_ids(start, at, &word, choices.iter().copied(), Of::Choices),
         _ => None,
     }
+}
+
+/// The name a `Fields` completion replaces: the list's last entry, after any `,`/`;` and the
+/// spaces following it, with the character offset it begins at, so earlier entries stay typed.
+fn list_suffix(word: &str) -> (usize, String) {
+    let cut = word.char_indices().filter(|(_, c)| matches!(c, ',' | ';')).map(|(i, c)| i + c.len_utf8()).next_back().unwrap_or(0);
+    let (head, tail) = word.split_at(cut);
+    let spaces = tail.len() - tail.trim_start().len();
+    (head.chars().count() + tail[..spaces].chars().count(), tail.trim_start().to_string())
 }
 
 /// What follows a cursor in a key (`after`, to the line's end) up to the `}` that closes the key's
@@ -780,9 +803,10 @@ fn param_line(p: &rustgis_engine::analysis::ParamSpec) -> String {
         K::VectorLayer => tl_raw!("vector layer"),
         K::RasterLayers => tl_raw!("raster layers (names separated by ;)"),
         K::VectorLayers => tl_raw!("vector layers (names separated by ;)"),
-        K::Field => tl_raw!("a field of the first layer"),
-        K::NumericField => tl_raw!("a numeric field of the first layer"),
-        K::CoordinateField => tl_raw!("a field of the first layer holding coordinates"),
+        K::Field => tl_raw!("a field of the associated input"),
+        K::Fields => tl_raw!("field names (separated by commas)"),
+        K::NumericField => tl_raw!("a numeric field of the associated input"),
+        K::CoordinateField => tl_raw!("a field of the associated input holding coordinates"),
         K::Number => tl_raw!("number"),
         K::Text => tl_raw!("text"),
         K::Bool => tl_raw!("bool"),
@@ -2697,6 +2721,15 @@ mod tests {
         assert!(offer(&app, r#"gp.run {"tool": "nope", "params": {"input": ""#).is_none(), "a tool that isn't there");
         assert!(offer(&app, r#"gp.run {"tool": "buffer", "params": {"input": {"x": ""#).is_none(), "deeper");
         assert!(offer(&app, r#"task.addStep {"command": "buffer", "params": {"input": ""#).is_none(), "another command's params");
+    }
+
+    /// A `Fields` completion replaces only the list's last name, so earlier names stay typed.
+    #[test]
+    fn a_field_list_completes_only_its_last_name() {
+        assert_eq!(super::list_suffix("name, pop"), (6, "pop".into()));
+        assert_eq!(super::list_suffix("name;pop"), (5, "pop".into()));
+        assert_eq!(super::list_suffix("name, "), (6, String::new()));
+        assert_eq!(super::list_suffix("pop"), (0, "pop".into()));
     }
 
     /// Beside a table, its rows and the table icon; beside a tool's field, its type and the field
