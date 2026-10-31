@@ -201,14 +201,23 @@ impl GpkgSource {
             .ok()
         });
         let extent = native.map(|e| reproject.extent_to_lonlat(&e)).unwrap_or(Extent::EMPTY);
-        // Rows, and rows with a geometry (what a note on dropped Z or M values counts), in one scan.
+        // Z and M are 0 (none), 1 (every geometry) or 2 (optional: looked for in the first rows).
+        let zm: Option<(i64, i64)> = conn
+            .query_row("SELECT z, m FROM gpkg_geometry_columns WHERE table_name = ?1 AND column_name = ?2", [&table, &geom], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .ok();
+        // Rows; with Z or M declared for every geometry, also the rows with one (what the note on
+        // them counts), in the same scan. Counting geometries reads every blob, so only then.
+        let mandatory = zm.is_some_and(|(z, m)| z == 1 || m == 1);
+        let counted = if mandatory { format!("COUNT({})", quote(&geom)) } else { "0".into() };
         let counts = conn
-            .query_row(&format!("SELECT COUNT(*), COUNT({}) FROM {}", quote(&geom), quote(&table)), [], |r| {
+            .query_row(&format!("SELECT COUNT(*), {counted} FROM {}", quote(&table)), [], |r| {
                 Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?))
             })
             .ok();
         let count = counts.and_then(|(n, _)| u64::try_from(n).ok());
-        let geometries = counts.and_then(|(_, g)| u64::try_from(g).ok());
+        let geometries = counts.filter(|_| mandatory).and_then(|(_, g)| u64::try_from(g).ok());
         let geometry_type = match geom_type.to_ascii_uppercase().as_str() {
             "POINT" | "MULTIPOINT" => GeometryType::Point,
             "LINESTRING" | "MULTILINESTRING" | "CURVE" | "MULTICURVE" => GeometryType::Polyline,
@@ -227,12 +236,6 @@ impl GpkgSource {
             notes,
             zm_dropped: false,
         };
-        // Z and M are 0 (none), 1 (every geometry) or 2 (optional: looked for in the first rows).
-        let zm: Option<(i64, i64)> = conn
-            .query_row("SELECT z, m FROM gpkg_geometry_columns WHERE table_name = ?1 AND column_name = ?2", [&table, &geom], |r| {
-                Ok((r.get(0)?, r.get(1)?))
-            })
-            .ok();
         let file = conn.path().filter(|p| !p.is_empty()).map(|p| (PathBuf::from(p), id));
         let mut src = GpkgSource { info, conn: Mutex::new(Some(conn)), table, geom, pk, rtree, reproject, temp, file };
         if src.info.geometry_type == GeometryType::None {
