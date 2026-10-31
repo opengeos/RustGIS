@@ -129,9 +129,8 @@ fn budget_eviction_releases_capacity_and_allows_reuse() {
 fn reentrant_and_failed_measurements_leave_the_cache_usable() {
     let cache = Cache::default();
     assert_eq!(cache.measure("same", 10.0, false, || cache.measure("same", 10.0, false, || 17.0)), 17.0);
-    // The caught panic is dropped here, not held to the end of the test: on Windows ARM64, holding
-    // it across the calls below corrupts the heap when it is freed (#1192).
-    assert!(std::panic::catch_unwind(|| cache.measure("failed", 10.0, false, || panic!("measurement failed"))).is_err());
+    let failed = std::panic::catch_unwind(|| cache.measure("failed", 10.0, false, || panic!("measurement failed")));
+    assert!(failed.is_err());
     assert_eq!(cache.measure("failed", 10.0, false, || 23.0), 23.0);
     assert_eq!(cache.measure("failed", 10.0, false, || panic!("retry must have been cached")), 23.0);
 }
