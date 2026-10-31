@@ -8,8 +8,9 @@ for the conventions.
    UI-only commands (`ui.*`) live in `crates/ui-egui/src/lib.rs`.
 3. Run `cargo xtask ci` and `pre-commit run --all-files`.
 4. Open a pull request. Rust CI runs on Linux by default. A maintainer can label it `ci:windows`,
-   `ci:macos` or `ci:full` to test those platforms before merging; pushes to `main` test all three.
-   `ci:full` also builds the release apps. The nightly workflow tests and release-builds all three
+   `ci:macos` or `ci:full` to test those platforms before merging (`ci:windows` tests Windows x64 and
+   ARM64); pushes to `main` test them all. `ci:full` also builds the release apps. The nightly
+   workflow tests and release-builds them all
    when there are new commits, and opens an issue on failure.
 5. The docs workflow builds a site and web-app preview. A first-time fork contributor's preview
    needs a maintainer to add `preview` or re-run the workflow; returning contributors' previews

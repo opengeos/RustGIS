@@ -22,10 +22,10 @@ builds of the desktop app and `rustgis-cli`. The same files, grouped by platform
 
 | Platform | File |
 | --- | --- |
-| Windows x64 (installer, no admin rights) | `RustGIS-<version>-windows-x86_64-setup.exe` |
-| Windows x64 (installer for all users) | `RustGIS-<version>-windows-x86_64.msi` |
-| Windows x64 (no install) | `RustGIS-<version>-windows-x86_64-portable.zip` (unzip and run `rustgis.exe`) |
-| Windows x64 (Microsoft Store package) | `RustGIS-<version>-windows-x86_64.msix` |
+| Windows x64 / arm64 (installer, no admin rights) | `RustGIS-<version>-windows-x86_64-setup.exe` / `RustGIS-<version>-windows-aarch64-setup.exe` |
+| Windows x64 / arm64 (installer for all users) | `RustGIS-<version>-windows-x86_64.msi` / `RustGIS-<version>-windows-aarch64.msi` |
+| Windows x64 / arm64 (no install) | `RustGIS-<version>-windows-x86_64-portable.zip` / `RustGIS-<version>-windows-aarch64-portable.zip` (unzip and run `rustgis.exe`) |
+| Windows x64 / arm64 (Microsoft Store package) | `RustGIS-<version>-windows-x86_64.msix` / `RustGIS-<version>-windows-aarch64.msix` |
 | macOS Apple Silicon | `RustGIS-<version>-macos-aarch64.dmg` |
 | macOS Intel | `RustGIS-<version>-macos-x86_64.dmg` |
 | Linux x64 / arm64 (Debian, Ubuntu) | `rustgis_<version>_amd64.deb` / `rustgis_<version>_arm64.deb` |
@@ -63,7 +63,7 @@ RustGIS is also published to these package managers, which keep it up to date:
 
 | Platform | Command |
 | --- | --- |
-| Windows ([winget](https://learn.microsoft.com/windows/package-manager/)) | `winget install OpenGeos.RustGIS` |
+| Windows x64 ([winget](https://learn.microsoft.com/windows/package-manager/)) | `winget install OpenGeos.RustGIS` (x64 only for now: on ARM64, use the ARM64 setup.exe or .msi above) |
 | macOS ([Homebrew](https://brew.sh)) | `brew install --cask opengeos/rustgis/rustgis` |
 | macOS and Linux, command-line tool only (Homebrew) | `brew install opengeos/rustgis/rustgis-cli` |
 | Arch Linux ([AUR](https://aur.archlinux.org/packages/rustgis-bin)) | `yay -S rustgis-bin` (or any AUR helper) |
