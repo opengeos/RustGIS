@@ -1837,14 +1837,58 @@ fn visit_complete(
 }
 
 /// A label waiting to be placed: the label, its priority and its key, and where else it may go
-/// when its own place is taken (#1011): its `x`, `y` there, tried in order. Whatever moves the
-/// label on its way to the screen moves them too, as it does its icon.
+/// when its own place is taken: position, angle and curved glyphs, tried in order. Whatever
+/// moves the label on its way to the screen moves each place's geometry too.
 #[derive(Clone, Debug)]
 struct Candidate {
     label: PlacedLabel,
     priority: f64,
     key: rustgis_map::LabelKey,
-    alternatives: Vec<(f32, f32)>,
+    alternatives: Vec<LabelPlace>,
+}
+
+/// Geometry of a possible text placement; style and the stationary icon belong to the candidate.
+#[derive(Clone, Debug, PartialEq)]
+struct LabelPlace {
+    x: f32,
+    y: f32,
+    angle: Option<f32>,
+    glyphs: Vec<LabelGlyph>,
+}
+
+impl From<(f32, f32)> for LabelPlace {
+    fn from((x, y): (f32, f32)) -> Self {
+        Self { x, y, angle: None, glyphs: Vec::new() }
+    }
+}
+
+impl LabelPlace {
+    fn of(l: &PlacedLabel) -> Self {
+        Self { x: l.x, y: l.y, angle: l.angle, glyphs: l.glyphs.clone() }
+    }
+
+    fn take(l: &mut PlacedLabel) -> Self {
+        Self { x: l.x, y: l.y, angle: l.angle, glyphs: std::mem::take(&mut l.glyphs) }
+    }
+
+    fn swap(&mut self, l: &mut PlacedLabel) {
+        std::mem::swap(&mut self.x, &mut l.x);
+        std::mem::swap(&mut self.y, &mut l.y);
+        std::mem::swap(&mut self.angle, &mut l.angle);
+        std::mem::swap(&mut self.glyphs, &mut l.glyphs);
+    }
+
+    /// Transform this place using the candidate's font metrics, without moving its icon.
+    fn transform(&mut self, l: &mut PlacedLabel, at: &impl Fn(f32, f32) -> Option<(f32, f32)>) -> bool {
+        let Some((x, y)) = at(self.x, self.y) else { return false };
+        let icon = l.icon.take();
+        self.swap(l);
+        turn_with(l, at);
+        (l.x, l.y) = (x, y);
+        self.swap(l);
+        l.icon = icon;
+        true
+    }
 }
 
 /// A label with no alternatives.
@@ -2103,7 +2147,7 @@ fn lift_labels(view: &View, ground: &terrain::Ground, candidates: &mut [Candidat
         if let Some(i) = &mut l.icon {
             (i.x, i.y) = (i.x + dx, i.y + dy);
         }
-        alternatives.iter_mut().for_each(|(x, y)| (*x, *y) = (*x + dx, *y + dy));
+        alternatives.iter_mut().for_each(|p| (p.x, p.y) = (p.x + dx, p.y + dy));
     }
 }
 
@@ -2311,7 +2355,7 @@ fn raise_labels(map: &Map, view: &View, candidates: &mut [Candidate]) {
         if let Some(i) = &mut l.icon {
             (i.x, i.y) = (i.x + dx, i.y + dy);
         }
-        alternatives.iter_mut().for_each(|(x, y)| (*x, *y) = (*x + dx, *y + dy));
+        alternatives.iter_mut().for_each(|p| (p.x, p.y) = (p.x + dx, p.y + dy));
     }
 }
 
@@ -3726,14 +3770,14 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
                             // A point's label may go round it when its own place is taken (#1011);
                             // locked, it goes where it went then, and nowhere else.
                             let others = || class.placement.alternatives().filter(|_| class.other_positions && is_point).map(place);
-                            let alternatives: Vec<(f32, f32)> = match lock.as_ref().and_then(|k| k.get(&key)) {
+                            let alternatives: Vec<LabelPlace> = match lock.as_ref().and_then(|k| k.get(&key)) {
                                 Some(&won) => {
                                     if let Some(at) = usize::from(won).checked_sub(1).and_then(|i| others().nth(i)) {
                                         (lx, ly) = at;
                                     }
                                     Vec::new()
                                 }
-                                None => others().collect(),
+                                None => others().map(LabelPlace::from).collect(),
                             };
                             // (The text copied for each repeat but the last, which takes it.)
                             let text = if n == last { std::mem::take(&mut text) } else { text.clone() };
@@ -3878,8 +3922,10 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
                     (i.x, i.y) = at(i.x, i.y);
                 }
             }
-            for (x, y) in label_candidates.iter_mut().flat_map(|c| &mut c.alternatives) {
-                (*x, *y) = at(*x, *y);
+            for c in &mut label_candidates {
+                for p in &mut c.alternatives {
+                    p.transform(&mut c.label, &|x, y| Some(at(x, y)));
+                }
             }
             (to.width, to.height)
         }
@@ -4441,15 +4487,19 @@ fn longest_on_screen(ctx: &Ctx<'_>, parts: &[Vec<Coord>]) -> Option<Vec<(f32, f3
 /// own place, or else the first of its alternatives in sight, is where it goes; the rest in sight
 /// are left to try. Left out with none in sight, or its icon out of sight.
 fn tilt_candidate(mut c: Candidate, at: &impl Fn(f32, f32) -> Option<(f32, f32)>) -> Option<Candidate> {
-    let l = &mut c.label;
-    turn_with(l, at);
-    let alternatives = std::mem::take(&mut c.alternatives);
-    let mut spots = std::iter::once((l.x, l.y)).chain(alternatives).filter_map(|(x, y)| at(x, y));
-    (l.x, l.y) = spots.next()?;
-    if let Some(i) = &mut l.icon {
+    let mut places = std::iter::once(LabelPlace::of(&c.label))
+        .chain(std::mem::take(&mut c.alternatives))
+        .filter_map(|mut p| p.transform(&mut c.label, at).then_some(p));
+    let mut first = places.next()?;
+    let alternatives = places.collect();
+    first.swap(&mut c.label);
+    if let Some(i) = &mut c.label.icon {
+        if let Some(a) = i.angle {
+            i.angle = Some(turned_angle(i.x, i.y, a, at).unwrap_or(a));
+        }
         (i.x, i.y) = at(i.x, i.y)?;
     }
-    c.alternatives = spots.collect();
+    c.alternatives = alternatives;
     Some(c)
 }
 
@@ -4470,15 +4520,18 @@ pub fn turn_label(l: &mut PlacedLabel, at: &impl Fn(f32, f32) -> Option<(f32, f3
     turn_with(l, at);
 }
 
+/// Direction of a short step after projection into another view.
+fn turned_angle(x: f32, y: f32, a: f32, at: &impl Fn(f32, f32) -> Option<(f32, f32)>) -> Option<f32> {
+    let ((x0, y0), (x1, y1)) = (at(x, y)?, at(x + 4.0 * a.cos(), y + 4.0 * a.sin())?);
+    let b = (y1 - y0).atan2(x1 - x0);
+    b.is_finite().then_some(b)
+}
+
 /// Turns a label turned with the map (and its icon) as `at` moves it into another view (a
 /// turned or tilted one): its angle there is that of a short step along it, the text kept
 /// upright. Called before the label itself is moved.
 fn turn_with(l: &mut PlacedLabel, at: &impl Fn(f32, f32) -> Option<(f32, f32)>) {
-    let turned = |x: f32, y: f32, a: f32| -> Option<f32> {
-        let ((x0, y0), (x1, y1)) = (at(x, y)?, at(x + 4.0 * a.cos(), y + 4.0 * a.sin())?);
-        let b = (y1 - y0).atan2(x1 - x0);
-        b.is_finite().then_some(b)
-    };
+    let turned = |x, y, a| turned_angle(x, y, a, at);
     if let Some(a) = l.angle {
         let x = l.center_x();
         l.angle = Some(turned(x, l.y, a).map_or(a, rustgis_tiles::symbols::upright));
@@ -4575,8 +4628,8 @@ fn place_labels(cands: impl IntoIterator<Item = impl Into<Candidate>>, fixed: Ve
         // Its own place, else the first alternative where all of it shows (the text moves there;
         // an icon stays).
         let mut at = None;
-        for (i, (x, y)) in std::iter::once((l.x, l.y)).chain(alternatives).enumerate() {
-            (l.x, l.y) = (x, y);
+        for (i, mut place) in std::iter::once(LabelPlace::take(&mut l)).chain(alternatives).enumerate() {
+            place.swap(&mut l);
             let (text, icon) = label_boxes(&l);
             if text.iter().chain(&icon).all(outside) {
                 continue;
@@ -4584,14 +4637,14 @@ fn place_labels(cands: impl IntoIterator<Item = impl Into<Candidate>>, fixed: Ve
             let (show_text, show_icon) = shows(&l, &text, &icon, &grid, locked);
             let whole = show_text == has_text && show_icon == has_icon;
             if i == 0 || whole {
-                at = Some((i, x, y, text, icon, show_text, show_icon));
+                at = Some((i, LabelPlace::take(&mut l), text, icon, show_text, show_icon));
             }
             if whole {
                 break;
             }
         }
-        let Some((i, x, y, text, icon, show_text, show_icon)) = at else { continue };
-        (l.x, l.y) = (x, y);
+        let Some((i, mut place, text, icon, show_text, show_icon)) = at else { continue };
+        place.swap(&mut l);
         if !show_text && !show_icon {
             if out.unplaced.len() < 2000 && has_text {
                 out.unplaced.push(PlacedLabel { color: UNPLACED, halo: Some(halo_for(UNPLACED)), icon: None, ..l });
@@ -5018,7 +5071,12 @@ mod tests {
     #[test]
     fn labels_try_their_alternatives() {
         let blocker = || Candidate::from((label("Blocker", 100.0, None, 0.0), 9.0, (u32::MAX, 0, 0, 0)));
-        let taken = |alternatives| Candidate { label: label("Taken", 100.0, None, 0.0), priority: 1.0, key: (1, 0, 0, 0), alternatives };
+        let taken = |alternatives: Vec<(f32, f32)>| Candidate {
+            label: label("Taken", 100.0, None, 0.0),
+            priority: 1.0,
+            key: (1, 0, 0, 0),
+            alternatives: alternatives.into_iter().map(LabelPlace::from).collect(),
+        };
         let at = |p: &Placement| p.labels.iter().map(|l| (l.text.clone(), l.x, l.y)).collect::<Vec<_>>();
         // None: left out, as before.
         let p = place_labels(vec![blocker(), taken(Vec::new())], Vec::new(), 400.0, 200.0, false);
@@ -5038,25 +5096,78 @@ mod tests {
         assert_eq!(at(&p)[1], ("Taken".to_string(), 100.0, 20.0));
     }
 
+    #[test]
+    fn alternatives_keep_their_angle_and_curved_glyphs() {
+        let base = label("ab", 100.0, None, 0.0);
+        let first = LabelPlace::of(&base);
+        let other = LabelPlace {
+            x: 300.0,
+            y: 80.0,
+            angle: Some(0.4),
+            glyphs: vec![
+                LabelGlyph { text: "a".into(), dx: -5.0, dy: 1.0, angle: 0.2 },
+                LabelGlyph { text: "b".into(), dx: 5.0, dy: -1.0, angle: 0.4 },
+            ],
+        };
+        let candidate = Candidate { label: base.clone(), priority: 1.0, key: (1, 0, 0, 0), alternatives: vec![other.clone()] };
+        let blocker = label("Blocker", 100.0, None, 0.0);
+        let p = place_labels(vec![candidate.clone()], vec![blocker], 400.0, 200.0, false);
+        assert_eq!(LabelPlace::of(&p.labels[1]), other);
+        assert_eq!(p.keys, [((1, 0, 0, 0), 1)]);
+        // If every place collides, View Unplaced retains the original geometry, once.
+        let p = place_labels(
+            vec![candidate],
+            vec![base, PlacedLabel { x: other.x, y: other.y, ..label("Blocker", 0.0, None, 0.0) }],
+            400.0,
+            200.0,
+            false,
+        );
+        assert_eq!(p.unplaced.len(), 1);
+        assert_eq!(LabelPlace::of(&p.unplaced[0]), first);
+    }
+
+    #[test]
+    fn tilted_alternatives_transform_their_own_glyph_geometry() {
+        let base = label("ab", 100.0, None, 0.0);
+        let alternative = LabelPlace {
+            x: 100.0,
+            y: 80.0,
+            angle: Some(0.4),
+            glyphs: vec![
+                LabelGlyph { text: "a".into(), dx: -5.0, dy: 1.0, angle: 0.2 },
+                LabelGlyph { text: "b".into(), dx: 5.0, dy: -1.0, angle: 0.4 },
+            ],
+        };
+        let c = Candidate { label: base, priority: 1.0, key: (1, 0, 0, 0), alternatives: vec![alternative.clone()] };
+        let projected = tilt_candidate(c, &|x, y| (y > 50.0).then_some((2.0 * x + 10.0, 2.0 * y))).unwrap();
+        assert!(projected.alternatives.is_empty());
+        assert_eq!((projected.label.x, projected.label.y), (210.0, 160.0));
+        assert!((projected.label.angle.unwrap() - 0.4).abs() < 1e-5);
+        for (got, original) in projected.label.glyphs.iter().zip(&alternative.glyphs) {
+            assert_eq!((got.dx, got.dy), (original.dx * 2.0, original.dy * 2.0));
+            assert!((got.angle - original.angle).abs() < 1e-5);
+        }
+    }
+
     /// In a tilted view a label whose own place is out of sight (in the sky, say) goes to the
     /// first of its alternatives in sight, and keeps the others in sight to try.
     #[test]
     fn tilted_labels_fall_back_on_an_alternative_in_sight() {
         // In sight below y = 100 only, and moved 1000 right there.
         let at = |x: f32, y: f32| (y > 100.0).then_some((x + 1000.0, y));
-        let offer = |(x, y): (f32, f32), alternatives| Candidate {
+        let offer = |(x, y): (f32, f32), alternatives: Vec<(f32, f32)>| Candidate {
             label: PlacedLabel { x, y, ..label("Paris", 0.0, None, 0.0) },
             priority: 1.0,
             key: (1, 0, 0, 0),
-            alternatives,
+            alternatives: alternatives.into_iter().map(LabelPlace::from).collect(),
         };
         let c = tilt_candidate(offer((10.0, 50.0), vec![(10.0, 60.0), (10.0, 150.0), (20.0, 160.0)]), &at).unwrap();
         assert_eq!((c.label.x, c.label.y), (1010.0, 150.0));
-        assert_eq!(c.alternatives, [(1020.0, 160.0)]);
+        assert_eq!(c.alternatives, [LabelPlace::from((1020.0, 160.0))]);
         // Its own place in sight stays its own.
         let c = tilt_candidate(offer((10.0, 120.0), vec![(10.0, 50.0), (10.0, 150.0)]), &at).unwrap();
         assert_eq!((c.label.x, c.label.y), (1010.0, 120.0));
-        assert_eq!(c.alternatives, [(1010.0, 150.0)]);
+        assert_eq!(c.alternatives, [LabelPlace::from((1010.0, 150.0))]);
         // None in sight: left out.
         assert!(tilt_candidate(offer((10.0, 50.0), vec![(10.0, 60.0)]), &at).is_none());
     }
@@ -5095,7 +5206,7 @@ mod tests {
                 .map(|i| {
                     let (x, y) = ((i % 200) as f32 * 10.0, (i / 200) as f32 * 10.0);
                     let l = PlacedLabel { x, y, ..label("ab", x, None, 0.0) };
-                    let alternatives = if others { round.map(|(dx, dy)| (x + dx, y + dy)).to_vec() } else { Vec::new() };
+                    let alternatives = if others { round.map(|(dx, dy)| LabelPlace::from((x + dx, y + dy))).to_vec() } else { Vec::new() };
                     Candidate { label: l, priority: -f64::from(i), key: (u32::MAX, i as usize, 0, 0), alternatives }
                 })
                 .collect()
