@@ -968,8 +968,8 @@ pub(crate) const PHOTOS: &str = "Photos";
 /// Adds photos as points: to the photo layer named `name` when there is one, else to a new one.
 /// `feed` hands the reader one photo at a time, so only one file's bytes are held at once; the
 /// reader stops taking photos when the layer is full. Photos without a GPS position are left out
-/// and named in a notice.
-pub(crate) fn add_photos_to(s: &mut Session, name: &str, feed: impl FnOnce(&mut photo::Reader)) -> CmdResult {
+/// and named in a notice. The map zooms to the photos added unless `zoom` is `Some(false)`.
+pub(crate) fn add_photos_to(s: &mut Session, name: &str, zoom: Option<bool>, feed: impl FnOnce(&mut photo::Reader)) -> CmdResult {
     let existing = s.map().layers.iter().find(|l| l.name == name && photo::is_photo_layer(&l.dataset)).map(|l| l.id);
     let held = existing.and_then(|id| s.map().layer(id)).map_or(0, |l| l.dataset.features.len());
     let room = photo::MAX_PHOTOS.saturating_sub(held);
@@ -998,7 +998,9 @@ pub(crate) fn add_photos_to(s: &mut Session, name: &str, feed: impl FnOnce(&mut 
         }
         None => add_dataset(s, ds),
     };
-    s.zoom_to(&extent);
+    if zoom.unwrap_or(true) {
+        s.zoom_to(&extent);
+    }
     Ok(json!({"layer": id, "photos": added, "skipped": report.skipped}))
 }
 
@@ -1039,7 +1041,7 @@ fn add_photos(s: &mut Session, p: &Value) -> CmdResult {
         if paths.is_empty() {
             return Err("give \"paths\" (photo files) or a \"folder\" of photos".into());
         }
-        add_photos_to(s, &name, |reader| {
+        add_photos_to(s, &name, None, |reader| {
             for (i, path) in paths.iter().enumerate() {
                 if reader.is_full() {
                     reader.left_over(paths.len() - i);
@@ -1630,12 +1632,6 @@ const MAX_TABLES: usize = 32;
 /// Most skipped tables named in `layer.addData`'s result (`skippedCount` counts them all, and
 /// `info.fileLayers` lists them).
 const MAX_SKIPPED_NAMED: usize = 100;
-
-/// Whether what was added should be framed: `"zoom": true` frames it, `"zoom": false` keeps the
-/// view, and without it only the first content on an empty map is framed.
-pub(crate) fn zoom_after_add(p: &Value, empty_before: bool) -> bool {
-    super::b(p, "zoom").unwrap_or(empty_before)
-}
 
 /// Adds a GeoPackage, GeoParquet or FlatGeobuf file: each feature table becomes a layer. Large
 /// sources (or any, with `"stream": true`) are streamed, read in place a view at a time; smaller
@@ -2531,9 +2527,9 @@ fn add_encoded_polyline(s: &mut Session, p: &Value) -> CmdResult {
 
 /// Adds a sheet of a spreadsheet (`"layer"` names it; the first by default), read like delimited
 /// text with the same options.
-pub(crate) fn add_sheet(s: &mut Session, p: &Value, file_name: &str, bytes: &[u8]) -> CmdResult {
+pub(crate) fn add_sheet(s: &mut Session, p: &Value, file_name: &str, bytes: &[u8], zoom: Option<bool>) -> CmdResult {
     let read = read_sheet(p, file_name, bytes)?;
-    add_read(s, p, read, None)
+    add_read(s, p, read, zoom)
 }
 
 fn read_sheet(p: &Value, file_name: &str, bytes: &[u8]) -> Result<(rustgis_data::Dataset, rustgis_data::ReadReport), String> {
@@ -2806,7 +2802,7 @@ fn add_remote(s: &mut Session, p: &Value, url: &str, src: Box<dyn rustgis_data::
     s.notify(format!("{unique}: {count} features, read in place by range from its address, a view at a time"), false);
     // Framed when it is the map's first layer, unless told to keep the view (a catalog's data for
     // the view, such as Overture's).
-    if zoom_after_add(p, empty_before) && !info.extent.is_empty() {
+    if b(p, "zoom").unwrap_or(empty_before) && !info.extent.is_empty() {
         s.zoom_to(&info.extent);
     }
     Ok(json!({"layer": id, "layers": [id], "features": info.count, "streamed": true, "inPlace": true}))
@@ -2857,7 +2853,7 @@ pub(crate) fn add_cog(s: &mut Session, p: &Value, url: &str) -> CmdResult {
         let [w, so, e, n] = info.bounds;
         // A cloud-optimised GeoTIFF read in place is framed when it is the first content on the
         // map, as other data is; `"zoom"` says otherwise (`true`, or `false` to keep the view).
-        if zoom_after_add(p, empty_before) {
+        if b(p, "zoom").unwrap_or(empty_before) {
             s.zoom_to(&rustgis_geom::Extent::new(w, so, e, n));
         }
         r["bounds"] = json!(info.bounds);

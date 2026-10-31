@@ -191,9 +191,9 @@ pub(crate) fn need_layers(s: &Session) -> Option<&'static str> {
 }
 
 /// Whether the map holds nothing but its basemap: no layer and no data tile layer (a cloud-optimised
-/// GeoTIFF, a PMTiles or MBTiles archive, or an overlay). The layers alone say whether a layer exists:
-/// a group holds layer ids, so a group holding layers makes `layers` non-empty, while an empty group,
-/// or one whose layers were removed, holds nothing. Hidden content counts, a layer or a tile layer the
+/// GeoTIFF, a PMTiles or MBTiles archive, or an overlay). `layers` is the source of truth: a group only
+/// holds ids of layers in `layers`, so a group with no live layers (an empty one, or one whose layers
+/// were removed) does not count as content. Hidden content counts, a layer or a tile layer the
 /// user hid alike: the map holds data and a view the user chose, so adding a layer leaves that view
 /// alone. A data archive counts even when it draws as a basemap: it carries no overlay flag, so it
 /// cannot be told from a basemap archive (a deliberate choice). The first content added to such a map

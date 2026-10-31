@@ -205,7 +205,7 @@ fn import(s: &mut Session, p: &Value) -> CmdResult {
     if p.get("group").is_some() || p.get("layer").is_some() {
         return Err("use service.refresh for an existing group or child".into());
     }
-    // This file is a submodule of `service`, so the helper above every command is two levels up.
+    // `super` is `service`, which lacks the helper, so the path starts at the crate root.
     let empty_before = crate::cmd::map_is_empty(s);
     let (listing, reads) = read(s, p)?;
     if reads.is_empty() {

@@ -9179,6 +9179,37 @@ fn zoom_false_keeps_the_view_of_downloaded_data() {
     assert_eq!(o.map().camera, start);
 }
 
+/// `"zoom": false` keeps the view when a spreadsheet or a geotagged photo is added to an empty map;
+/// without it the first content is framed.
+#[test]
+fn zoom_false_keeps_the_view_of_sheets_and_photos() {
+    use base64::Engine;
+    let book = rustgis_data::sheets::xlsx(&[("Places", &[&["name", "longitude", "latitude"], &["A", "10", "20"]])]);
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&book);
+    let mut s = Session::new(Project::default());
+    let start = s.map().camera;
+    let r = s
+        .run("layer.addDataBytes", &json!({"fileName": "places.xlsx", "data": b64, "x": "longitude", "y": "latitude", "zoom": false}))
+        .unwrap();
+    assert!(s.map().layer(r["layer"].as_u64().unwrap() as u32).is_some(), "{r}");
+    assert_eq!(s.map().camera, start);
+    let mut f = Session::new(Project::default());
+    f.run("layer.addDataBytes", &json!({"fileName": "places.xlsx", "data": b64, "x": "longitude", "y": "latitude"})).unwrap();
+    let c = rustgis_geom::merc_to_lonlat(f.map().camera.center);
+    assert!((c.x - 10.0).abs() < 0.01 && (c.y - 20.0).abs() < 0.01, "{c:?}");
+    // A geotagged photo downloaded from an address: the same rule.
+    let (base, _) = serve_file(rustgis_data::photo::example(true, (43.4674, "N"), (11.8851, "E")), false);
+    let mut ph = Session::new(Project::default());
+    let start = ph.map().camera;
+    let r = ph.run("layer.addUrl", &json!({"url": format!("{base}/pic.jpg"), "zoom": false})).unwrap();
+    assert_eq!(r["photos"], 1, "{r}");
+    assert_eq!(ph.map().camera, start);
+    let mut ph2 = Session::new(Project::default());
+    ph2.run("layer.addUrl", &json!({"url": format!("{base}/pic.jpg")})).unwrap();
+    let c = rustgis_geom::merc_to_lonlat(ph2.map().camera.center);
+    assert!((c.x - 11.8851).abs() < 0.01 && (c.y - 43.4674).abs() < 0.01, "{c:?}");
+}
+
 /// `"zoom": true` frames everything a multi-layer file added, not only its last layer: the native
 /// `layer.addUrl` path as the app's `layer.addDownload` does with its own union.
 #[test]

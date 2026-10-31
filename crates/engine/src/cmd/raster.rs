@@ -492,7 +492,7 @@ pub(crate) fn add_named_bytes(s: &mut Session, p: &Value, name: String, bytes: V
     let scan = wants_scan(p, &name)?;
     if !scan && rustgis_data::photo::is_photo_name(&name) {
         let layer = ps(p, "name").map(str::trim).filter(|n| !n.is_empty()).unwrap_or(super::layer::PHOTOS).to_string();
-        return super::layer::add_photos_to(s, &layer, |reader| reader.add(&name, &bytes));
+        return super::layer::add_photos_to(s, &layer, zoom, |reader| reader.add(&name, &bytes));
     }
     // JPEG 2000 (an upload or a download): through GDAL, on the desktop.
     if raster::is_jpeg2000_name(&name) {
@@ -520,7 +520,7 @@ pub(crate) fn add_named_bytes(s: &mut Session, p: &Value, name: String, bytes: V
     }
     // A spreadsheet's sheet.
     if rustgis_data::sheets::is_sheet_name(&name) {
-        return super::layer::add_sheet(s, p, &name, &bytes);
+        return super::layer::add_sheet(s, p, &name, &bytes, zoom);
     }
     // Files of several layers: zipped Shapefiles, KML/KMZ, GPX, GeoRSS, LandXML.
     if rustgis_data::io::is_multi_layer_name(&name) {
