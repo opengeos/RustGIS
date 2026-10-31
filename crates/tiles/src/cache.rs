@@ -62,7 +62,7 @@ type ImageDecoder = Box<dyn Fn(Vec<u8>, Decoded) + Send + Sync>;
 /// Bytes the cache keeps before dropping the least recently used entries.
 const BUDGET: usize = if cfg!(target_arch = "wasm32") { 160 << 20 } else { 384 << 20 };
 /// A failed address is tried again after this long.
-const RETRY: Duration = Duration::from_secs(60);
+pub(crate) const RETRY: Duration = Duration::from_secs(60);
 /// The largest tile or document fetched.
 pub const MAX_BYTES: usize = 16 << 20;
 /// The error a fetcher gives a request it dropped unfetched (the view moved on): the address is
@@ -127,6 +127,11 @@ pub fn set_fetcher(f: impl Fn(String, Done) + Send + Sync + 'static) {
     *fetcher().lock().unwrap_or_else(|e| e.into_inner()) = Some(Arc::new(Box::new(f)));
 }
 
+/// Undoes [`set_fetcher`]: addresses are fetched natively again (a test done with its own).
+pub fn clear_fetcher() {
+    *fetcher().lock().unwrap_or_else(|e| e.into_inner()) = None;
+}
+
 /// Replaces how tile pictures (PNG, JPEG, WebP) are decoded: the browser's own decoder works
 /// off the page's thread, where decoding them here held up every frame tiles arrived in. `done`
 /// must be called once, with the picture as [`RAW`] pixels, or with the bytes given back.
@@ -166,6 +171,11 @@ pub fn in_flight() -> usize {
 /// What the cache holds for `url`, fetching it when it holds nothing (or a failure old enough
 /// to try again).
 pub fn get(url: &str, want: Want) -> State {
+    // A map tile of a layer in another system: its service's picture as it comes, or made from
+    // its pictures (#769).
+    if let Some(base) = crate::warp::direct(url) {
+        return get(base, want);
+    }
     let now = Instant::now();
     let mut c = lock();
     c.tick += 1;
@@ -181,6 +191,24 @@ pub fn get(url: &str, want: Want) -> State {
             Entry::Failed(..) => {}
         }
     }
+    if crate::warp::is_warp(url) {
+        drop(c);
+        // Made once its pictures are here; asked again (as the map draws) until then.
+        return match crate::warp::make(url) {
+            crate::warp::Made::Waiting => State::Pending,
+            crate::warp::Made::Done(payload) => {
+                let payload = Arc::new(payload);
+                let n = payload_bytes(&payload);
+                store(url, Entry::Ready(payload.clone(), n));
+                State::Ready(payload)
+            }
+            crate::warp::Made::ForNow(payload) => State::Ready(payload),
+            crate::warp::Made::Failed(e) => {
+                store(url, Entry::Failed(e.clone(), Instant::now()));
+                State::Failed(e)
+            }
+        };
+    }
     c.slots.insert(url.to_string(), Slot { entry: Entry::Pending, used: tick, asked: now });
     drop(c);
     start(url.to_string(), want);
@@ -189,6 +217,9 @@ pub fn get(url: &str, want: Want) -> State {
 
 /// What the cache holds for `url`, without fetching it.
 pub fn peek(url: &str) -> Option<Arc<Payload>> {
+    if let Some(base) = crate::warp::direct(url) {
+        return peek(base);
+    }
     let mut c = lock();
     c.tick += 1;
     let tick = c.tick;
@@ -216,6 +247,7 @@ pub fn clear() {
     crate::pmtiles::forget();
     crate::mbtiles::forget();
     crate::cog::forget();
+    crate::warp::forget();
     rustgis_data::source::remote::forget();
     GENERATION.fetch_add(1, Ordering::Relaxed);
 }
@@ -252,6 +284,9 @@ pub fn forget(url: &str) {
     drop(c);
     crate::pmtiles::forget_archive(url);
     crate::cog::forget_file(url);
+    // Map tiles made from a service's pictures, kept only while one is missing or on its way,
+    // and their plans: all are made again (those kept in the cache stay till `clear`).
+    crate::warp::forget();
     rustgis_data::source::remote::forget_file(url);
     GENERATION.fetch_add(1, Ordering::Relaxed);
 }
@@ -268,6 +303,39 @@ pub fn wait(timeout: Duration) {
     }
     #[cfg(target_arch = "wasm32")]
     let _ = timeout;
+}
+
+/// How long nothing more has to land, after something has, for [`wait_for_news`] to return.
+#[cfg(not(target_arch = "wasm32"))]
+const QUIET: Duration = Duration::from_millis(100);
+/// How long [`wait_for_news`] waits at most once something has landed, however much more does
+/// (other maps' fetches landing one after another).
+#[cfg(not(target_arch = "wasm32"))]
+const SETTLE: Duration = Duration::from_secs(1);
+
+/// Waits (up to `timeout`) for the fetches under way to finish, or until something has landed
+/// since the [`generation`] `since` (read before the caller last drew) and then nothing more for
+/// a moment, or for a second at most: one drawing again with what came needn't wait for every
+/// fetch in the process (another map's, a slow server's, one never answered). Native only.
+pub fn wait_for_news(since: u64, timeout: Duration) {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let start = Instant::now();
+        let (mut seen, mut changed, mut news) = (since, Instant::now(), None);
+        while in_flight() > 0 && start.elapsed() < timeout {
+            let now = generation();
+            if now != seen {
+                (seen, changed) = (now, Instant::now());
+                news.get_or_insert(changed);
+            }
+            if news.is_some_and(|first: Instant| changed.elapsed() >= QUIET || first.elapsed() >= SETTLE) {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(15));
+        }
+    }
+    #[cfg(target_arch = "wasm32")]
+    let _ = (since, timeout);
 }
 
 fn queue() -> &'static Mutex<Queue<Want>> {
@@ -1842,5 +1910,31 @@ mod tests {
         }
         assert_eq!(SEEN.load(Ordering::Relaxed), 3 * crate::schedule::PER_HOST);
         assert!(peek("test://lost/0.json").is_none());
+
+        // Waiting for news: a fetch never answered (another's, a slow server's) doesn't hold up
+        // one waiting for what has come.
+        static STUCK: Mutex<Vec<Done>> = Mutex::new(Vec::new());
+        set_fetcher(|url, done| {
+            if url.starts_with("test://stuck/") {
+                STUCK.lock().unwrap().push(done);
+            } else {
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                    done(Ok(b"1".to_vec()));
+                });
+            }
+        });
+        assert!(matches!(get("test://stuck/0.json", Want::Json), State::Pending));
+        let g = generation();
+        assert!(matches!(get("test://news/0.json", Want::Json), State::Pending));
+        let t = Instant::now();
+        // (Another test's fetch landing may end a wait first.)
+        while !matches!(get("test://news/0.json", Want::Json), State::Ready(_)) && t.elapsed() < Duration::from_secs(20) {
+            wait_for_news(g, Duration::from_secs(20));
+        }
+        assert!(t.elapsed() < Duration::from_secs(5), "waited {:?} for the stuck fetch", t.elapsed());
+        for done in std::mem::take(&mut *STUCK.lock().unwrap()) {
+            done(Ok(b"1".to_vec()));
+        }
     }
 }

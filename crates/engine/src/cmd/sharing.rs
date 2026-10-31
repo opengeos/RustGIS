@@ -445,6 +445,8 @@ fn styled_features(l: &Layer, budget: &mut usize) -> Vec<Value> {
     let rows = l.visible_rows();
     let opacity = 1.0 - f64::from(l.transparency.clamp(0.0, 100.0)) / 100.0;
     let mut out = Vec::new();
+    // Its symbol by expression (no map scale: the page zooms on its own).
+    let styler = l.styler(None);
     for (row, ft) in l.dataset.features.iter().enumerate() {
         if *budget == 0 {
             break;
@@ -453,7 +455,7 @@ fn styled_features(l: &Layer, budget: &mut usize) -> Vec<Value> {
             continue;
         }
         let Some(g) = &ft.geometry else { continue };
-        let sym = l.symbol(row);
+        let sym = styler.symbol(row);
         let props: serde_json::Map<String, Value> =
             l.dataset.fields.iter().enumerate().map(|(i, f)| (f.name.clone(), json!(l.dataset.value(row, i).to_string()))).collect();
         out.push(json!({
@@ -879,6 +881,7 @@ fn gltf(m: &Map, view: (f64, f64)) -> Result<Vec<u8>, String> {
         let hf = ex.and_then(|e| e.field.as_deref()).and_then(|f| l.dataset.field_index(f));
         let (base_h, factor) = ex.map_or((0.0, 0.0), |e| (e.height, e.factor));
         let rows = l.visible_rows();
+        let styler = l.styler(Some(m.scale()));
         // The bytes built so far: a feature only adds to its own colour, so each step adds what
         // the last feature's colour grew by.
         let size = |tri: &std::collections::BTreeMap<[u8; 4], (Vec<[f32; 3]>, Vec<u32>)>,
@@ -901,7 +904,7 @@ fn gltf(m: &Map, view: (f64, f64)) -> Result<Vec<u8>, String> {
             if buffer.len() + built > MAX_SCENE_BYTES {
                 return Err("the scene would be too large; share fewer features".into());
             }
-            let sym = l.symbol(row);
+            let sym = styler.symbol(row);
             let h = (hf.and_then(|fi| l.dataset.value(row, fi).as_f64()).filter(|v| v.is_finite()).unwrap_or(base_h) * factor)
                 .clamp(0.0, 1e6) as f32;
             let key = [sym.fill.r(), sym.fill.g(), sym.fill.b(), sym.fill.a()];

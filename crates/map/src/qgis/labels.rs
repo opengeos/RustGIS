@@ -241,6 +241,7 @@ fn class(
         closest: None,
         farthest: None,
         placement,
+        other_positions: false,
         italic,
         font,
         halo_color,

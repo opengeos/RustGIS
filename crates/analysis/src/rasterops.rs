@@ -31,16 +31,16 @@ fn z(r: &Raster, data: &[f32], col: i64, row: i64) -> Option<f32> {
 }
 
 /// The surface gradient (dz/dx east, dz/dy north) at a cell (Horn's method), in metres per metre.
-fn gradient(r: &Raster, data: &[f32], col: i64, row: i64, zf: f64) -> Option<(f64, f64)> {
-    let (cx, cy) = r.cell_size_m();
+fn gradient(r: &Raster, data: &[f32], col: i64, row: i64, zf: f64, (cx, cy): (f64, f64)) -> Option<(f64, f64)> {
     let g = |dc: i64, dr: i64| z(r, data, col + dc, row + dr).or_else(|| z(r, data, col, row)).map(|v| v as f64 * zf);
     let (a, b, c) = (g(-1, -1)?, g(0, -1)?, g(1, -1)?);
     let (d, f) = (g(-1, 0)?, g(1, 0)?);
     let (gg, h, i) = (g(-1, 1)?, g(0, 1)?, g(1, 1)?);
     let dzdx = ((c + 2.0 * f + i) - (a + 2.0 * d + gg)) / (8.0 * cx);
-    // Rows run south, so north is up: the difference is top minus bottom.
+    // In a north-up grid rows run south, so the difference is top minus bottom.
     let dzdy = ((a + 2.0 * b + c) - (gg + 2.0 * h + i)) / (8.0 * cy);
-    Some((dzdx, dzdy))
+    // A grid stored bottom up (a positive pixel height) or right to left runs the other way.
+    Some((dzdx * r.transform.pixel_width.signum(), dzdy * -r.transform.pixel_height.signum()))
 }
 
 fn per_cell(r: &Raster, f: impl Fn(i64, i64) -> Option<f64>) -> Vec<f32> {
@@ -53,41 +53,74 @@ fn per_cell(r: &Raster, f: impl Fn(i64, i64) -> Option<f64>) -> Vec<f32> {
     out
 }
 
+/// Draw the interior from three borrowed rows; edges and no-data keep the scalar path.
+fn terrain(r: &Raster, data: &[f32], zf: f64, f: impl Fn(f64, f64) -> f64) -> Vec<f32> {
+    let (w, h) = (r.width as usize, r.height as usize);
+    let cell = r.cell_size_m();
+    let scalar = |c, row| {
+        z(r, data, c, row)?;
+        let (x, y) = gradient(r, data, c, row, zf, cell)?;
+        Some(f(x, y))
+    };
+    let Some(len) = w.checked_mul(h) else { return per_cell(r, scalar) };
+    if w < 3 || h < 3 || data.len() != len {
+        return per_cell(r, scalar);
+    }
+    let value = |v: Option<f64>| v.filter(|v| v.is_finite()).map(|v| v as f32).unwrap_or(NODATA);
+    let mut out = Vec::with_capacity(len);
+    out.extend((0..w).map(|c| value(scalar(c as i64, 0))));
+    for (row, ((top, mid), bottom)) in data.chunks_exact(w).zip(data.chunks_exact(w).skip(1)).zip(data.chunks_exact(w).skip(2)).enumerate()
+    {
+        let row = row + 1;
+        out.push(value(scalar(0, row as i64)));
+        for (col, ((a, b), c)) in top.windows(3).zip(mid.windows(3)).zip(bottom.windows(3)).enumerate() {
+            let ([a, b, c], [d, center, f0], [g, h, i]) = (a, b, c) else { continue };
+            if !r.is_valid(*center) {
+                out.push(NODATA);
+            } else if [*a, *b, *c, *d, *f0, *g, *h, *i].iter().all(|v| r.is_valid(*v)) {
+                let [a, b, c, d, f0, g, h, i] = [*a, *b, *c, *d, *f0, *g, *h, *i].map(|v| f64::from(v) * zf);
+                let x = ((c + 2.0 * f0 + i) - (a + 2.0 * d + g)) / (8.0 * cell.0) * r.transform.pixel_width.signum();
+                let y = ((a + 2.0 * b + c) - (g + 2.0 * h + i)) / (8.0 * cell.1) * -r.transform.pixel_height.signum();
+                out.push(value(Some(f(x, y))));
+            } else {
+                out.push(value(scalar((col + 1) as i64, row as i64)));
+            }
+        }
+        out.push(value(scalar((w - 1) as i64, row as i64)));
+    }
+    out.extend((0..w).map(|c| value(scalar(c as i64, (h - 1) as i64))));
+    out
+}
+
 /// Slope in degrees.
 pub fn slope(r: &Raster, b: usize, zf: f64) -> Result<Vec<f32>, String> {
     let d = band(r, b)?;
-    Ok(per_cell(r, |c, row| {
-        z(r, d, c, row)?;
-        let (gx, gy) = gradient(r, d, c, row, zf)?;
-        Some((gx.hypot(gy)).atan().to_degrees())
-    }))
+    Ok(terrain(r, d, zf, |gx, gy| gx.hypot(gy).atan().to_degrees()))
 }
 
 /// Aspect: the compass direction the slope faces, in degrees (flat cells are -1).
 pub fn aspect(r: &Raster, b: usize) -> Result<Vec<f32>, String> {
     let d = band(r, b)?;
-    Ok(per_cell(r, |c, row| {
-        z(r, d, c, row)?;
-        let (gx, gy) = gradient(r, d, c, row, 1.0)?;
-        if gx.abs() < 1e-12 && gy.abs() < 1e-12 {
-            return Some(-1.0);
-        }
-        // Downhill is -gradient; its compass bearing.
-        Some((-gx).atan2(-gy).to_degrees().rem_euclid(360.0))
-    }))
+    Ok(terrain(
+        r,
+        d,
+        1.0,
+        |gx, gy| {
+            if gx.abs() < 1e-12 && gy.abs() < 1e-12 { -1.0 } else { (-gx).atan2(-gy).to_degrees().rem_euclid(360.0) }
+        },
+    ))
 }
 
 /// Hillshade (0–255) lit from `azimuth` and `altitude` degrees.
 pub fn hillshade(r: &Raster, b: usize, azimuth: f64, altitude: f64, zf: f64) -> Result<Vec<f32>, String> {
     let d = band(r, b)?;
     let (zen, az) = ((90.0 - altitude).to_radians(), azimuth.to_radians());
-    Ok(per_cell(r, |c, row| {
-        z(r, d, c, row)?;
-        let (gx, gy) = gradient(r, d, c, row, zf)?;
+    let (cos_zen, sin_zen) = (zen.cos(), zen.sin());
+    Ok(terrain(r, d, zf, |gx, gy| {
         let slope = gx.hypot(gy).atan();
         let aspect = (-gx).atan2(-gy);
-        let v = zen.cos() * slope.cos() + zen.sin() * slope.sin() * (az - aspect).cos();
-        Some((v.max(0.0) * 255.0).round())
+        let v = cos_zen * slope.cos() + sin_zen * slope.sin() * (az - aspect).cos();
+        (v.max(0.0) * 255.0).round()
     }))
 }
 
@@ -1051,6 +1084,44 @@ impl Expr {
 mod tests {
     use super::*;
 
+    #[test]
+    fn terrain_rows_match_scalar_edges_nodata_and_orientations() {
+        for (w, h) in [(1, 1), (1, 5), (2, 3), (3, 2), (3, 3), (9, 7)] {
+            for (pixel_width, pixel_height) in [(0.01, -0.01), (0.01, 0.01), (-0.01, -0.01), (-0.01, 0.01)] {
+                for with_holes in [false, true] {
+                    let values = (0..w * h)
+                        .map(|i| {
+                            if with_holes && i % 7 == 3 {
+                                -9999.0
+                            } else if with_holes && i % 11 == 4 {
+                                f32::NAN
+                            } else {
+                                (i * 31 % 53) as f32
+                            }
+                        })
+                        .collect();
+                    let transform = GeoTransform { origin_x: 0.0, origin_y: 45.0, pixel_width, pixel_height };
+                    let r = Raster::new("terrain", w, h, vec![values], transform, Crs::LonLat, Some(-9999.0), ColorHint::Gray, "Float32")
+                        .unwrap_or_else(|e| panic!("{e}"));
+                    let data = band(&r, 0).unwrap_or_default();
+                    for zf in [0.0, 1.0, 2.5] {
+                        let f = |x: f64, y: f64| x.hypot(y).atan().to_degrees();
+                        let expected = per_cell(&r, |col, row| {
+                            z(&r, data, col, row)?;
+                            let (x, y) = gradient(&r, data, col, row, zf, r.cell_size_m())?;
+                            Some(f(x, y))
+                        });
+                        assert_eq!(
+                            terrain(&r, data, zf, f),
+                            expected,
+                            "{w}x{h}, {pixel_width}, {pixel_height}, holes={with_holes}, zf={zf}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
     /// A 20×20 lon/lat raster: a ramp rising 10 m per cell to the east, and a second band.
     fn ramp() -> Raster {
         let (w, h) = (20u32, 20u32);
@@ -1058,6 +1129,30 @@ mod tests {
         let b: Vec<f32> = (0..w * h).map(|i| (i / w) as f32).collect();
         let gt = GeoTransform { origin_x: 0.0, origin_y: 0.02, pixel_width: 0.001, pixel_height: -0.001 };
         Raster::new("ramp", w, h, vec![a, b], gt, Crs::LonLat, None, ColorHint::Gray, "Float32").unwrap_or_else(|e| panic!("{e}"))
+    }
+
+    #[test]
+    fn terrain_keeps_edge_and_nodata_results() {
+        let values = vec![0.0, 4.0, 3.0, 8.0, 2.0, -9999.0, 9.0, 7.0, 8.0, 5.0, 2.0, 1.0];
+        let transform = GeoTransform { origin_x: 12.0, origin_y: 45.0, pixel_width: 0.002, pixel_height: -0.001 };
+        let r = Raster::new("sample", 4, 3, vec![values], transform, Crs::LonLat, Some(-9999.0), ColorHint::Gray, "Float32")
+            .unwrap_or_else(|e| panic!("{e}"));
+        let expected_slope = [
+            0.70946753, 1.3399616, 1.4611784, 0.93366396, 2.4284103, NODATA, 0.82372725, 2.1364474, 1.4713285, 0.75683224, 1.718825,
+            2.4512568,
+        ];
+        let expected_aspect =
+            [285.89474, 305.4469, 311.66492, 288.18884, 358.39075, NODATA, 160.65001, 180.0, 7.9960175, 97.375114, 163.86998, 172.00398];
+        for (actual, expected) in
+            [(slope(&r, 0, 1.5).unwrap_or_default(), expected_slope), (aspect(&r, 0).unwrap_or_default(), expected_aspect)]
+        {
+            assert_eq!(actual.len(), expected.len());
+            assert!(actual.iter().zip(expected).all(|(a, e)| *a == e || (*a - e).abs() < 1e-4));
+        }
+        assert_eq!(
+            hillshade(&r, 0, 315.0, 45.0, 1.5).unwrap_or_default(),
+            [182.0, 184.0, 185.0, 183.0, 186.0, NODATA, 178.0, 175.0, 183.0, 178.0, 175.0, 174.0]
+        );
     }
 
     #[test]
@@ -1100,6 +1195,25 @@ mod tests {
         failures.clear();
         assert!(polygon_mask_with_failures(&r, &[invalid], &mut failures).is_none());
         assert_eq!(failures, vec![0]);
+    }
+
+    #[test]
+    fn terrain_faces_the_right_way_on_a_bottom_up_grid() {
+        // Band 2 rises one per row. North up, rows run south, so the slope faces north; stored
+        // bottom up (a positive pixel height, as some COGs are), rows run north and it faces south.
+        let north_up = ramp();
+        let mut gt = north_up.transform;
+        (gt.origin_y, gt.pixel_height) = (0.0, 0.001);
+        let bands = north_up.bands.iter().map(|b| b.data.clone()).collect();
+        let bottom_up =
+            Raster::new("ramp", 20, 20, bands, gt, Crs::LonLat, None, ColorHint::Gray, "Float32").unwrap_or_else(|e| panic!("{e}"));
+        let a = aspect(&north_up, 1).unwrap_or_default();
+        assert!(a[210] < 1.0 || a[210] > 359.0, "north up faces north: {}", a[210]);
+        let a = aspect(&bottom_up, 1).unwrap_or_default();
+        assert!((a[210] - 180.0).abs() < 1.0, "bottom up faces south: {}", a[210]);
+        let lit_s = hillshade(&bottom_up, 1, 180.0, 45.0, 1.0).unwrap_or_default();
+        let lit_n = hillshade(&bottom_up, 1, 0.0, 45.0, 1.0).unwrap_or_default();
+        assert!(lit_s[210] > lit_n[210], "lit from the south the south-facing slope is brighter");
     }
 
     #[test]

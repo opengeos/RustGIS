@@ -761,8 +761,12 @@ pub fn context(s: &Session) -> String {
         if !l.visible {
             line.push_str(", hidden");
         }
-        if let Some(g) = m.group_of(l.id) {
-            line.push_str(&format!(", in group \"{}\"{}", g.name, if g.visible { "" } else { " (hidden)" }));
+        let groups = m.groups_of(l.id);
+        if !groups.is_empty() {
+            // Outermost first: "Base map › Hydrography".
+            let path: Vec<&str> = groups.iter().rev().map(|g| g.name.as_str()).collect();
+            let hidden = if groups.iter().all(|g| g.visible) { "" } else { " (hidden)" };
+            line.push_str(&format!(", in group \"{}\"{hidden}", path.join(" › ")));
         }
         if !l.selection.is_empty() {
             line.push_str(&format!(", {} selected", l.selection.len()));

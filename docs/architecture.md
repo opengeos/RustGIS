@@ -50,6 +50,28 @@ unimplemented, todo and unreachable lints. Readers treat file contents and comma
 exercise engine commands and built-in geoprocessing tools; some file-writing and network
 commands are skipped.
 
+## Never silent
+
+When a reader, writer, tool or command can't represent something, approximates it or drops it, it
+says so in a notice: what was lost, how much and where. Notices go through `Session::notify`,
+which the app shows, the CLI prints and Python returns from `take_notices`. Commands pass on the
+notes readers return, and geoprocessing tools report theirs in `ToolResult::messages`. A result
+that would be unusable is an error instead. Older code doesn't yet report every loss; each one
+found is treated as a bug.
+
+## Pure Rust
+
+RustGIS's engine and apps are written in Rust and run without GDAL, PROJ or any other GIS
+library installed. GDAL, DuckDB and the `geolibre` program are optional extras: on the desktop,
+when they are installed, RustGIS calls them to read [more formats](user-guide/data-formats.md#formats-read-through-gdal),
+run DuckDB queries and run the [GeoLibre tools](user-guide/analysis.md#geolibre-tools). In the web
+app the GeoLibre tools run in the browser instead, through geolibre-rust's WASI runner. Some
+dependencies do compile C code into the build: the Zstandard decoder (`zstd-sys`,
+desktop and browser), SQLite (`libsqlite3-sys` through `rusqlite`, desktop), the TLS cryptography
+libraries (`aws-lc-sys` and `ring`, desktop) and GeographicLib's geodesic routines for the
+azimuthal equidistant projection (`proj4rs-geodesic`, desktop). Building them needs a C
+compiler; building the web app needs clang for Zstandard.
+
 ## Secrets
 
 `Services::secrets` gives the desktop app its OS credential store: the login Keychain on macOS,
@@ -90,6 +112,15 @@ model listing.
   the requested bucket's explicit-grant status. Copy only that login and grant boolean, not
   the grant list; parse and validate addresses and prepare signatures outside the lock.
   Keychain calls and network I/O never run under the registry lock.
+- **Earthdata Login token.** `rustgis_tiles::earthdata::set_secret_store` gets `Services::secrets`
+  from `RustGisApp::with_services`, and `prefs::opt_in`'s store for the command line and Python. `earthdata.login` with
+  `remember` keeps the token at `earthdata/token`, and without it (or when the store refuses
+  it) deletes the remembered one; `earthdata.logout` always deletes it. The token is read back
+  once per store given, on the first
+  request to an Earthdata data host or when the NASA Earthaccess pane opens (on a worker), never
+  over a token typed this session. An expired token is deleted, not sent, and the pane and the
+  refusal message ask for a new one. The token and its store are process-global, like the
+  session token before them.
 - **ChatGPT sign-in.** The desktop app gives its store to `chatgpt::set_secret_store` at start.
   The keychain keeps only each registration's refresh token, `chatgpt/<client_id>/<subject>`,
   with the `rev` its entry in `chatgpt-auth.json` names (any other is out of date and never
