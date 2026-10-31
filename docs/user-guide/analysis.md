@@ -413,10 +413,11 @@ into a `target` table or layer based on matching key values:
   types when whole numbers (e.g. `10` matches `10.0`), while non-finite floats (`NaN`, infinity) and
   nulls never match. A text key matches an integer key when the text is the number written out in
   full (`"47157000100"` matches `47157000100`), so an all-digit ID typed as a number in one table and
-  as text in the other (Census GEOIDs, FIPS codes, ZIP codes) still joins; the text is compared
-  exactly, so leading zeros stay meaningful (`"01001"` does not match `1001`). Other incompatible key
-  data types (e.g. text vs floating point or boolean) are rejected, and the message suggests converting
-  one key with Add Field and Calculate Field.
+  as text in the other (Census GEOIDs, FIPS codes, ZIP codes) joins when the codes match exactly as
+  written. Leading zeros stay meaningful: a number that lost its zero (`1001` for `"01001"`) leaves its
+  record unmatched, and a warning says how many records missed this way, with the first pair. Other
+  incompatible key data types (e.g. text vs floating point or boolean) are rejected, and the message
+  suggests converting one key with Add Field and Calculate Field.
 - **Transferred fields:** `fields` selects specific source fields to transfer (a comma-separated list
   or a JSON array of strings, e.g. `["tax_rate", "zone_code"]`; non-string and non-array types are rejected). Repeated
   field names are deduplicated in order. When omitted or passed as a blank string (`""`), every source field except

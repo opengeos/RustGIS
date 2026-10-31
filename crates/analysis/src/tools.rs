@@ -4102,6 +4102,7 @@ fn join_field_tool(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
 
     let (out, report) = crate::attribute_join::join_field(&target_ref, &source_ref, &opts)?;
     messages.push(report.message(&target.name));
+    messages.extend(report.leading_zero_notice());
 
     let output = if out.geometry_type == rustgis_data::GeometryType::None { Output::Table(out) } else { Output::Layer(out) };
 

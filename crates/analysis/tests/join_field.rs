@@ -77,6 +77,7 @@ fn census_gazetteer_joins_tiger_tracts_by_geoid() {
     assert_eq!(out.features.iter().map(|f| f.id).collect::<Vec<_>>(), before.features.iter().map(|f| f.id).collect::<Vec<_>>());
     assert!(out.features.iter().zip(before.features.iter()).all(|(a, b)| a.geometry == b.geometry));
     assert!(res.messages.iter().any(|m| m.contains("3/4 records matched")), "{:?}", res.messages);
+    assert!(!res.messages.iter().any(|m| m.contains("leading zeros")), "no zeros were lost: {:?}", res.messages);
 }
 
 #[test]
@@ -115,19 +116,27 @@ fn codes_with_leading_zeros_only_match_as_written() {
     // No leading zeros are made up: only the code written without one matches.
     assert_eq!(column(&out, "county"), [&Value::Null, &Value::Null, &Value::Text("Barbour".into())]);
     assert!(res.messages.iter().any(|m| m.contains("1/3 records matched")), "{:?}", res.messages);
+    // The two codes that lost their zero are named, not only counted.
+    let notice = res.messages.iter().find(|m| m.contains("leading zeros")).unwrap_or_else(|| panic!("{:?}", res.messages));
+    assert!(notice.contains("2 record(s) left unmatched"), "{notice}");
+    assert!(notice.contains("target key 1001, source key \"01001\""), "{notice}");
 }
 
 #[test]
 fn selections_are_honoured_with_mixed_key_types() {
     let mut layers = Layers::default().with(tracts()).with(gazetteer());
-    layers.selected.insert("tracts".into(), vec![1, 3]);
+    layers.selected.insert("tracts".into(), vec![0, 1, 3]);
     layers.selected.insert("gazetteer".into(), vec![0, 1]);
     let res =
         rustgis_analysis::run("joinField", &layers, &json!({"target":"tracts","targetField":"GEOID","joinTable":"gazetteer"})).unwrap();
     let Output::Layer(out) = res.output else { panic!("a layer target gives a layer") };
-    assert_eq!(column(&out, "GEOID"), [&Value::Text("47157000200".into()), &Value::Text("47157980100".into())]);
-    // 47157000200 is in the gazetteer but not among its selected records.
-    assert_eq!(column(&out, "ALAND"), [&Value::Null, &Value::Null]);
+    assert_eq!(
+        column(&out, "GEOID"),
+        [&Value::Text("47157000100".into()), &Value::Text("47157000200".into()), &Value::Text("47157980100".into())]
+    );
+    // 47157000100 matches a selected record; 47157000200 is in the gazetteer but not among its
+    // selected records.
+    assert_eq!(column(&out, "ALAND"), [&Value::Int(1000), &Value::Null, &Value::Null]);
 }
 
 #[test]

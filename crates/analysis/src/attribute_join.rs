@@ -101,11 +101,6 @@ pub(crate) enum KeyComparison {
     NumberAsText,
 }
 
-/// Validates that target key and source key fields have compatible data types.
-pub fn validate_key_compatibility(target_field: &Field, source_field: &Field) -> Result<(), String> {
-    key_comparison(target_field, source_field).map(|_| ())
-}
-
 /// How the values of the target and source key fields are compared, or why they can't be.
 pub(crate) fn key_comparison(target_field: &Field, source_field: &Field) -> Result<KeyComparison, String> {
     let t_ty = target_field.ty;
@@ -150,6 +145,11 @@ pub struct JoinFieldReport {
     pub total_records: usize,
     pub transferred_fields: usize,
     pub duplicate_keys: usize,
+    /// Unmatched target records whose key equals a source key once leading zeros are dropped
+    /// (`"01001"` against `1001`): compared as written, they don't match.
+    pub leading_zero_mismatches: usize,
+    /// The first such pair as written, target key then source key (`"01001"`, `1001`).
+    pub leading_zero_example: Option<(String, String)>,
 }
 
 impl JoinFieldReport {
@@ -163,6 +163,31 @@ impl JoinFieldReport {
         }
         msg
     }
+
+    /// A warning when records were left unmatched only by leading zeros, or `None`.
+    pub fn leading_zero_notice(&self) -> Option<String> {
+        let (target_key, source_key) = self.leading_zero_example.as_ref().filter(|_| self.leading_zero_mismatches > 0)?;
+        Some(format!(
+            "Warning: {} record(s) left unmatched because one key has leading zeros the other lacks \
+             (first: target key {target_key}, source key {source_key}); keys are compared as written, \
+             so give both the same digits, e.g. as text with the zeros kept",
+            self.leading_zero_mismatches
+        ))
+    }
+}
+
+/// An all-digit text key with leading zeros, without them (`"01001"` → `"1001"`, `"00"` → `"0"`).
+fn without_leading_zeros(s: &str) -> Option<&str> {
+    if s.len() < 2 || !s.starts_with('0') || !s.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let rest = s.trim_start_matches('0');
+    Some(if rest.is_empty() { "0" } else { rest })
+}
+
+/// A key value as the user wrote it: text quoted, numbers bare.
+fn written(v: &Value) -> String {
+    JoinKey::from_value(v).map(|k| k.display()).unwrap_or_default()
 }
 
 /// Executes a non-spatial attribute join from `source` onto `target`.
@@ -268,6 +293,22 @@ pub fn join_field(target: &Dataset, source: &Dataset, opts: &JoinFieldOptions<'_
         }
     }
 
+    // Source text keys with leading zeros, by their digits without them: a target number that
+    // lost its zeros (`1001` for `"01001"`) doesn't match, and the report says so.
+    let mut zero_padded_sources: HashMap<String, usize> = HashMap::new();
+    if comparison == KeyComparison::NumberAsText {
+        for (s_idx, s_feat) in source.features.iter().enumerate() {
+            if let Some(Value::Text(text)) = s_feat.attrs.get(source_key_idx)
+                && let Some(digits) = without_leading_zeros(text)
+            {
+                zero_padded_sources.entry(digits.to_string()).or_insert(s_idx);
+            }
+        }
+    }
+    let source_key_value = |s_idx: usize| source.features.get(s_idx).and_then(|f| f.attrs.get(source_key_idx)).unwrap_or(&Value::Null);
+    let mut leading_zero_mismatches = 0usize;
+    let mut leading_zero_example = None;
+
     // 6. Join records into target
     let target_len = target.features.len();
     let mut matched_records = 0usize;
@@ -290,7 +331,22 @@ pub fn join_field(target: &Dataset, source: &Dataset, opts: &JoinFieldOptions<'_
         new_attrs.reserve(transfer_indices.len());
 
         let t_val = t_feat.attrs.get(target_key_idx).unwrap_or(&Value::Null);
-        let matching_s_idx = JoinKey::from_value_compared(t_val, comparison).and_then(|k| source_index.get(&k).copied());
+        let t_key = JoinKey::from_value_compared(t_val, comparison);
+        let matching_s_idx = t_key.as_ref().and_then(|k| source_index.get(k).copied());
+        if matching_s_idx.is_none()
+            && comparison == KeyComparison::NumberAsText
+            && let Some(JoinKey::Text(text)) = &t_key
+        {
+            // A target text key with leading zeros against a source key without them, or a target
+            // key without them against a source text key with them.
+            let near = without_leading_zeros(text)
+                .and_then(|digits| source_index.get(&JoinKey::Text(digits.to_string())).copied())
+                .or_else(|| zero_padded_sources.get(text).copied());
+            if let Some(s_idx) = near {
+                leading_zero_mismatches += 1;
+                leading_zero_example.get_or_insert_with(|| (written(t_val), written(source_key_value(s_idx))));
+            }
+        }
 
         if let Some(s_idx) = matching_s_idx {
             matched_records += 1;
@@ -317,6 +373,8 @@ pub fn join_field(target: &Dataset, source: &Dataset, opts: &JoinFieldOptions<'_
         total_records: target_len,
         transferred_fields: transfer_indices.len(),
         duplicate_keys: duplicate_count,
+        leading_zero_mismatches,
+        leading_zero_example,
     };
 
     Ok((out, report))
@@ -651,6 +709,79 @@ mod tests {
             [&Value::Null, &Value::Text("county".into()), &Value::Text("negative".into()), &Value::Null, &Value::Null, &Value::Null]
         );
         assert_eq!(rep.matched_records, 2);
+        // Only "01001" is a leading-zero miss; " 7" and "7.0" aren't digits, and nulls aren't keys.
+        assert_eq!(rep.leading_zero_mismatches, 1);
+        assert_eq!(rep.leading_zero_example, Some(("\"01001\"".into(), "1001".into())));
+        let notice = rep.leading_zero_notice().unwrap();
+        assert!(notice.contains("1 record(s) left unmatched"), "{notice}");
+        assert!(notice.contains("target key \"01001\", source key 1001"), "{notice}");
+    }
+
+    #[test]
+    fn test_leading_zero_misses_are_reported_both_ways() {
+        // Target numbers that lost their zeros against source text that kept them.
+        let target = make_table(
+            "target",
+            vec![("GEOID", FieldType::Integer)],
+            vec![vec![Value::Int(1001)], vec![Value::Int(7)], vec![Value::Int(0)], vec![Value::Int(42)], vec![Value::Int(5)]],
+        );
+        let source = make_table(
+            "source",
+            vec![("GEOID", FieldType::Text), ("tag", FieldType::Text)],
+            vec![
+                vec![Value::Text("01001".into()), Value::Text("county".into())],
+                vec![Value::Text("007".into()), Value::Text("seven".into())],
+                vec![Value::Text("00".into()), Value::Text("zero".into())],
+                vec![Value::Text("42".into()), Value::Text("answer".into())],
+                vec![Value::Text("0x5".into()), Value::Text("hex".into())],
+            ],
+        );
+        let (out, rep) = join_field(&target, &source, &key_opts(DuplicateStrategy::First)).unwrap();
+        assert_eq!(out.features.iter().filter(|f| f.attrs[1] != Value::Null).count(), 1, "only 42 matches");
+        assert_eq!((rep.matched_records, rep.leading_zero_mismatches), (1, 3));
+        assert_eq!(rep.leading_zero_example, Some(("1001".into(), "\"01001\"".into())));
+        assert!(rep.leading_zero_notice().unwrap().contains("3 record(s) left unmatched"));
+
+        // The same tables the other way round: target text with zeros against source numbers.
+        let (_, rep) = join_field(&source, &target, &key_opts(DuplicateStrategy::First)).unwrap();
+        assert_eq!((rep.matched_records, rep.leading_zero_mismatches), (1, 3));
+        assert_eq!(rep.leading_zero_example, Some(("\"01001\"".into(), "1001".into())));
+    }
+
+    #[test]
+    fn test_no_leading_zero_notice_without_a_miss() {
+        // Every key matches, or misses with no near match: no notice.
+        let target = make_table(
+            "target",
+            vec![("GEOID", FieldType::Text)],
+            vec![vec![Value::Text("0100".into())], vec![Value::Text("0200".into())]],
+        );
+        let source = make_table(
+            "source",
+            vec![("GEOID", FieldType::Integer), ("tag", FieldType::Text)],
+            vec![vec![Value::Int(100), Value::Text("hundred".into())], vec![Value::Int(300), Value::Text("other".into())]],
+        );
+        let (_, rep) = join_field(&target, &source, &key_opts(DuplicateStrategy::First)).unwrap();
+        assert_eq!((rep.matched_records, rep.leading_zero_mismatches), (0, 1), "premise: \"0100\" is a miss, \"0200\" isn't near");
+        let clean =
+            make_table("clean", vec![("GEOID", FieldType::Text)], vec![vec![Value::Text("100".into())], vec![Value::Text("200".into())]]);
+        let (_, rep) = join_field(&clean, &source, &key_opts(DuplicateStrategy::First)).unwrap();
+        assert_eq!((rep.matched_records, rep.leading_zero_mismatches, &rep.leading_zero_example), (1, 0, &None));
+        assert_eq!(rep.leading_zero_notice(), None);
+        // Same-type text keys are compared exactly, as before, and aren't second-guessed.
+        let text_source = make_table("ts", vec![("GEOID", FieldType::Text)], vec![vec![Value::Text("100".into())]]);
+        let (_, rep) = join_field(&target, &text_source, &key_opts(DuplicateStrategy::First)).unwrap();
+        assert_eq!((rep.matched_records, rep.leading_zero_mismatches), (0, 0));
+    }
+
+    #[test]
+    fn test_without_leading_zeros() {
+        assert_eq!(without_leading_zeros("01001"), Some("1001"));
+        assert_eq!(without_leading_zeros("00"), Some("0"));
+        assert_eq!(without_leading_zeros("000120"), Some("120"));
+        for s in ["", "0", "1001", "10", "0x5", "0 1", "-01", "01.0", "０1"] {
+            assert_eq!(without_leading_zeros(s), None, "{s:?}");
+        }
     }
 
     #[test]
@@ -692,7 +823,6 @@ mod tests {
                 let (a, b) = (Field::new("a", t), Field::new("b", s));
                 let got = key_comparison(&a, &b);
                 assert_eq!(got.as_ref().ok().copied(), expected, "{t:?} against {s:?}: {got:?}");
-                assert_eq!(validate_key_compatibility(&a, &b), got.clone().map(|_| ()));
                 if let Err(e) = got {
                     assert!(e.contains(t.label()) && e.contains(s.label()) && e.contains("Add Field and Calculate Field"), "{e}");
                 }
