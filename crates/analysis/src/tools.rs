@@ -1,10 +1,11 @@
 //! The tools.
 
-use geo::{BooleanOps, Contains, ConvexHull, InteriorPoint, Intersects, MultiPolygon, Orient, Simplify, orient::Direction};
+use geo::{BooleanOps, Contains, ConvexHull, InteriorPoint, Intersects, MultiPolygon, Orient, Relate, Simplify, orient::Direction};
 use rustgis_data::raster::Crs;
 use rustgis_data::{Coord, Dataset, Field, FieldType, Geometry, GeometryType, Value};
 use rustgis_geom::Extent;
 use serde_json::Value as Json;
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet, TryReserveError};
 
 use crate::convert::{from_line, from_multipolygon, from_point, to_geo, to_multiline, to_multipolygon};
@@ -19,6 +20,7 @@ const MATCH_OPTIONS: &[&str] =
 const DISTANCE_MATCHES: &[&str] = &["Closest", "Within a distance"];
 const JOIN_OPERATIONS: &[&str] = &["Join one to one", "Join one to many"];
 const TARGET_RECORDS: &[&str] = &["Keep all", "Keep only matching"];
+const KERNEL_TYPES: &[&str] = &["Quartic", "Gaussian"];
 
 pub static TOOLS: &[ToolSpec] = &[
     ToolSpec {
@@ -51,9 +53,9 @@ pub static TOOLS: &[ToolSpec] = &[
         id: "erase",
         name: "Erase",
         toolbox: "Analysis › Overlay",
-        summary: "Removes the parts of polygon features that overlap erase polygons.",
+        summary: "Removes the parts of input features that fall inside erase polygons.",
         params: &[
-            P { name: "input", label: "Input Features", kind: K::PolygonLayer, required: true, default: "", help: "" },
+            P { name: "input", label: "Input Features", kind: K::Layer, required: true, default: "", help: "" },
             P { name: "erase", label: "Erase Features", kind: K::PolygonLayer, required: true, default: "", help: "" },
             P { name: "output", label: "Output Name", kind: K::Text, required: false, default: "", help: "" },
         ],
@@ -94,6 +96,57 @@ pub static TOOLS: &[ToolSpec] = &[
             P { name: "output", label: "Output Name", kind: K::Text, required: false, default: "", help: "" },
         ],
         run: union,
+    },
+    ToolSpec {
+        id: "symmetricalDifference",
+        name: "Symmetrical Difference",
+        toolbox: "Analysis › Overlay",
+        summary: "Keeps the parts of two polygon layers that only one of them covers, with that layer's attributes.",
+        params: &[
+            P { name: "input", label: "Input Features", kind: K::PolygonLayer, required: true, default: "", help: "" },
+            P { name: "overlay", label: "Overlay Features", kind: K::PolygonLayer, required: true, default: "", help: "" },
+            P { name: "output", label: "Output Name", kind: K::Text, required: false, default: "", help: "" },
+        ],
+        run: symmetrical_difference,
+    },
+    ToolSpec {
+        id: "update",
+        name: "Update",
+        toolbox: "Analysis › Overlay",
+        summary: "Replaces the parts of input polygons that update polygons cover with the update polygons themselves.",
+        params: &[
+            P { name: "input", label: "Input Features", kind: K::PolygonLayer, required: true, default: "", help: "" },
+            P { name: "update", label: "Update Features", kind: K::PolygonLayer, required: true, default: "", help: "" },
+            P { name: "output", label: "Output Name", kind: K::Text, required: false, default: "", help: "" },
+        ],
+        run: update,
+    },
+    ToolSpec {
+        id: "split",
+        name: "Split",
+        toolbox: "Analysis › Extract",
+        summary: "Clips input features by each split polygon, writing one layer per split polygon or split field value.",
+        params: &[
+            P { name: "input", label: "Input Features", kind: K::Layer, required: true, default: "", help: "" },
+            P { name: "split", label: "Split Features", kind: K::PolygonLayer, required: true, default: "", help: "" },
+            P {
+                name: "field",
+                label: "Split Field",
+                kind: K::Text,
+                required: false,
+                default: "",
+                help: "A field of the split features. Polygons sharing a value make one layer, named by it. Leave empty for one layer per polygon, named by its id.",
+            },
+            P {
+                name: "output",
+                label: "Output Name",
+                kind: K::Text,
+                required: false,
+                default: "",
+                help: "The start of each layer's name, before an underscore and its value. Leave empty for the input's name.",
+            },
+        ],
+        run: split,
     },
     ToolSpec {
         id: "dissolve",
@@ -150,6 +203,32 @@ pub static TOOLS: &[ToolSpec] = &[
             P { name: "output", label: "Output Name", kind: K::Text, required: false, default: "", help: "" },
         ],
         run: feature_to_point,
+    },
+    ToolSpec {
+        id: "merge",
+        name: "Merge",
+        toolbox: "Data Management › General",
+        summary: "Appends vector layers of the same geometry type into a new layer, optionally combining their attributes.",
+        params: &[
+            P {
+                name: "inputs",
+                label: "Input Layers",
+                kind: K::VectorLayers,
+                required: true,
+                default: "",
+                help: "Layer names or local file paths (desktop), in order; selections are honored in each layer.",
+            },
+            P {
+                name: "attributes",
+                label: "Preserve Attributes",
+                kind: K::Bool,
+                required: false,
+                default: "true",
+                help: "Combines matching fields. Incompatible field types get separate names; missing values are empty.",
+            },
+            P { name: "output", label: "Output Name", kind: K::Text, required: false, default: "", help: "" },
+        ],
+        run: crate::merge::run,
     },
     ToolSpec {
         id: "featureVerticesToPoints",
@@ -339,7 +418,7 @@ pub static TOOLS: &[ToolSpec] = &[
             P {
                 name: "statistics",
                 label: "Statistics",
-                kind: K::Text,
+                kind: K::FieldStatistics { input: "input", statistics: crate::StatisticList::Summary },
                 required: false,
                 default: "",
                 help: "The statistics to compute, as (field, statistic) pairs, e.g. [{\"field\": \"income\", \"statistic\": \"MEDIAN\"}]. Statistics: COUNT, SUM, MEAN, MIN, MAX, RANGE, STD, VARIANCE, MEDIAN, P1 to P99, IQR, CV, MODE, MINORITY, UNIQUE, FIRST, LAST, CONCATENATE, NULLS; a text field takes COUNT, MIN, MAX, FIRST, LAST, UNIQUE, CONCATENATE, MODE, MINORITY and NULLS. Leave empty to use Statistics Field.",
@@ -354,11 +433,11 @@ pub static TOOLS: &[ToolSpec] = &[
             },
             P {
                 name: "case",
-                label: "Case Field",
-                kind: K::Field,
+                label: "Case Fields",
+                kind: K::Fields { input: "input" },
                 required: false,
                 default: "",
-                help: "Groups records by this field's values. Scripts and the AI Assistant can give several fields as a list.",
+                help: "Groups records by the combination of these fields' values. Scripts and the AI Assistant can give several fields as a list.",
             },
             P {
                 name: "separator",
@@ -380,11 +459,11 @@ pub static TOOLS: &[ToolSpec] = &[
             P { name: "input", label: "Input Table", kind: K::Layer, required: true, default: "", help: "" },
             P {
                 name: "fields",
-                label: "Row Field",
-                kind: K::Field,
+                label: "Row Fields",
+                kind: K::Fields { input: "input" },
                 required: false,
                 default: "",
-                help: "Makes a row for each of this field's values. Scripts and the AI Assistant can give several fields as a list. Leave empty for one row for the whole table.",
+                help: "Makes a row for each combination of these fields' values. Leave empty for one row for the whole table. Scripts and the AI Assistant can give several fields as a list.",
             },
             P {
                 name: "pivot",
@@ -551,7 +630,7 @@ pub static TOOLS: &[ToolSpec] = &[
             P {
                 name: "merge",
                 label: "Merge Rules",
-                kind: K::Text,
+                kind: K::FieldStatistics { input: "join", statistics: crate::StatisticList::Merge },
                 required: false,
                 default: "",
                 help: "One to one: how the values of several matches are combined, e.g. [{\"field\": \"units\", \"rule\": \"sum\"}]. Rules: first, last, sum, mean, min, max, count, join (with a \"delimiter\"). Other fields keep the first match.",
@@ -686,6 +765,47 @@ pub static TOOLS: &[ToolSpec] = &[
         run: zonal_stats,
     },
     ToolSpec {
+        id: "rasterToPmtiles",
+        name: "Raster to PMTiles",
+        toolbox: "Analyze › Tools",
+        summary: "Exports a styled raster layer as Web Mercator PNG tiles in a PMTiles archive.",
+        params: &[
+            P {
+                name: "input",
+                label: "Input Layer",
+                kind: K::RasterLayer,
+                required: true,
+                default: "",
+                help: "The raster's current style, bands and resampling are used.",
+            },
+            P {
+                name: "minZoom",
+                label: "Minimum Zoom",
+                kind: K::Number,
+                required: true,
+                default: "",
+                help: "Minimum tile zoom, an integer from 0 to 16.",
+            },
+            P {
+                name: "maxZoom",
+                label: "Maximum Zoom",
+                kind: K::Number,
+                required: true,
+                default: "",
+                help: "Maximum tile zoom, an integer from minZoom to 16.",
+            },
+            P {
+                name: "output",
+                label: "Output",
+                kind: K::SaveFile { ext: "pmtiles" },
+                required: false,
+                default: "",
+                help: "Write a .pmtiles archive.",
+            },
+        ],
+        run: raster_to_pmtiles,
+    },
+    ToolSpec {
         id: "vectorToPmtiles",
         name: "Vector to PMTiles",
         toolbox: "Analyze › Tools",
@@ -727,6 +847,145 @@ pub static TOOLS: &[ToolSpec] = &[
         ],
         run: vector_to_pmtiles,
     },
+    ToolSpec {
+        id: "kernelDensity",
+        name: "Kernel Density",
+        toolbox: "Analysis › Density",
+        summary: "Calculates a magnitude-per-unit-area surface from point features using a kernel function.",
+        params: &[
+            P {
+                name: "input",
+                label: "Input Points",
+                kind: K::PointLayer,
+                required: true,
+                default: "",
+                help: "Point features to calculate density from (for multipoints, each point component receives the feature's weight).",
+            },
+            P {
+                name: "field",
+                label: "Population Field",
+                kind: K::NumericField,
+                required: false,
+                default: "",
+                help: "Numeric weight or count for each point (default 1.0; multipoint parts each receive this weight).",
+            },
+            P {
+                name: "radius",
+                label: "Search Radius",
+                kind: K::Number,
+                required: false,
+                default: "",
+                help: "Search bandwidth in CRS linear units (default or 0: Silverman's rule of thumb, or 1000 units for single/coincident points).",
+            },
+            P {
+                name: "pixelSize",
+                label: "Pixel Size",
+                kind: K::Number,
+                required: false,
+                default: "",
+                help: "Output cell size in CRS linear units (default: ~250 cells along the longer side of the extent).",
+            },
+            P {
+                name: "kernel",
+                label: "Kernel Type",
+                kind: K::Choice(KERNEL_TYPES),
+                required: false,
+                default: "\"Quartic\"",
+                help: "Kernel function: Quartic (biweight, default) or Gaussian (truncated at 3σ).",
+            },
+            P {
+                name: "extent",
+                label: "Extent",
+                kind: K::Text,
+                required: false,
+                default: "",
+                help: "xmin,ymin,xmax,ymax in CRS linear units; points expanded by bandwidth when empty.",
+            },
+            P {
+                name: "crs",
+                label: "Coordinate System",
+                kind: K::Text,
+                required: false,
+                default: "",
+                help: "Projected coordinate system (e.g. EPSG:32618); defaults to the layer's CRS when projected, or required when the layer has none or is in degrees.",
+            },
+            P { name: "output", label: "Output Name", kind: K::Text, required: false, default: "", help: "Output raster layer name." },
+        ],
+        run: kernel_density_tool,
+    },
+    ToolSpec {
+        id: "joinField",
+        name: "Join Field",
+        toolbox: "Data Management › Joins",
+        summary: "Joins attributes from a source table or layer to a target layer or table based on matching key values.",
+        params: &[
+            P {
+                name: "target",
+                label: "Target Table / Layer",
+                kind: K::Layer,
+                required: true,
+                default: "",
+                help: "The layer or table that receives joined attributes.",
+            },
+            P {
+                name: "targetField",
+                label: "Target Key Field",
+                kind: K::Field,
+                required: true,
+                default: "",
+                help: "The key field in the target layer/table used for matching.",
+            },
+            P {
+                name: "joinTable",
+                label: "Source Table / Layer",
+                kind: K::Layer,
+                required: true,
+                default: "",
+                help: "The table or layer whose attributes are joined.",
+            },
+            P {
+                name: "joinField",
+                label: "Source Key Field",
+                kind: K::Text,
+                required: false,
+                default: "",
+                help: "The key field in the source table/layer used for matching; defaults to the target key field name when empty.",
+            },
+            P {
+                name: "fields",
+                label: "Transfer Fields",
+                kind: K::Text,
+                required: false,
+                default: "",
+                help: "Source fields to transfer (comma-separated or JSON array; all non-key fields if omitted).",
+            },
+            P {
+                name: "prefix",
+                label: "Field Prefix",
+                kind: K::Text,
+                required: false,
+                default: "",
+                help: "Optional prefix prepended to transferred field names.",
+            },
+            P {
+                name: "duplicates",
+                label: "Duplicate Keys",
+                kind: K::Choice(crate::attribute_join::DuplicateStrategy::ALL),
+                required: false,
+                default: "\"First\"",
+                help: "How to handle duplicate keys in the source table: First (first row), Last (last row), or Error.",
+            },
+            P {
+                name: "output",
+                label: "Output Name",
+                kind: K::Text,
+                required: false,
+                default: "",
+                help: "Name for the output joined layer or table.",
+            },
+        ],
+        run: join_field_tool,
+    },
 ];
 
 // ---------------------------------------------------------------------------------------------
@@ -756,8 +1015,7 @@ fn rows(inp: &dyn Inputs, p: &Json, k: &str, ds: &Dataset) -> Vec<usize> {
     if sel.is_empty() { (0..ds.features.len()).collect() } else { sel.iter().copied().filter(|r| *r < ds.features.len()).collect() }
 }
 
-fn vector_to_pmtiles(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
-    let ds = input(inp, p, "input")?;
+fn pmtiles_zooms(p: &Json) -> Result<(u8, u8), String> {
     let zoom = |name: &str| -> Result<u8, String> {
         let value = p.get(name).ok_or_else(|| format!("{name} is required"))?;
         let parsed = match value {
@@ -772,6 +1030,12 @@ fn vector_to_pmtiles(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
     if min_zoom > max_zoom {
         return Err("minZoom must not exceed maxZoom".into());
     }
+    Ok((min_zoom, max_zoom))
+}
+
+fn vector_to_pmtiles(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
+    let ds = input(inp, p, "input")?;
+    let (min_zoom, max_zoom) = pmtiles_zooms(p)?;
     let source_layer = {
         let name = s(p, "sourceLayer").trim();
         if name.is_empty() { &ds.name } else { name }
@@ -782,6 +1046,16 @@ fn vector_to_pmtiles(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
     let selected = inp.selection(s(p, "input"));
     let (bytes, messages) = inp.vector_to_pmtiles(ds, selected, min_zoom, max_zoom, source_layer)?;
     Ok(ToolResult { output: Output::File { file_name, bytes }, messages })
+}
+
+fn raster_to_pmtiles(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
+    let name = s(p, "input");
+    let (min_zoom, max_zoom) = pmtiles_zooms(p)?;
+    let output = s(p, "output").trim();
+    let default_name = name.rsplit(['/', '\\']).find(|part| !part.is_empty()).unwrap_or("output");
+    let file_name = if output.is_empty() { format!("{default_name}.pmtiles") } else { output.to_string() };
+    let bytes = inp.raster_to_pmtiles(name, min_zoom, max_zoom)?;
+    Ok(ToolResult { output: Output::File { file_name, bytes }, messages: vec![] })
 }
 
 /// The name of a tool's new layer, from its `output` parameter.
@@ -816,6 +1090,14 @@ fn result(ds: Dataset, msg: String) -> Result<ToolResult, String> {
 /// A copy of a feature's attributes for an output with the same schema.
 fn copy_schema(ds: &Dataset, name: String, g: GeometryType) -> Dataset {
     Dataset::new(name, g, ds.fields.clone())
+}
+
+/// Gives an overlay tool's output its input's source CRS, for export, and marks it incomplete
+/// when the input or the layer it is overlaid with lost features on reading, so it isn't taken
+/// for complete.
+fn keep_source_crs(out: &mut Dataset, ds: &Dataset, overlay: &Dataset) {
+    out.crs = ds.crs;
+    out.crs_incomplete = ds.crs_incomplete || overlay.crs_incomplete;
 }
 
 /// Finds the index of a field by case-insensitive name, explicitly detecting collisions.
@@ -885,17 +1167,6 @@ fn buffer(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
     result(out, format!("Buffer: {n} features at {d} {}", if s(p, "units").is_empty() { "Kilometers" } else { s(p, "units") }))
 }
 
-/// Union of a polygon layer's (selected) features.
-fn union_of(inp: &dyn Inputs, p: &Json, k: &str) -> Result<MultiPolygon<f64>, String> {
-    let ds = input(inp, p, k)?;
-    if ds.geometry_type != GeometryType::Polygon {
-        return Err(format!("'{}' is not a polygon layer", ds.name));
-    }
-    let polys: Vec<MultiPolygon<f64>> =
-        rows(inp, p, k, ds).iter().filter_map(|r| ds.features.get(*r)?.geometry.as_ref()).filter_map(to_multipolygon).collect();
-    Ok(union_all(polys.iter().flat_map(|m| m.0.iter())))
-}
-
 /// A feature as the overlay can take it: a feature of several polygons, which may overlap, unioned
 /// into one; any other as it is, so a single polygon's edges stay exactly where they are.
 fn dissolved(g: &Geometry) -> std::borrow::Cow<'_, Geometry> {
@@ -943,13 +1214,66 @@ fn part(g: &Geometry, mask: &MultiPolygon<f64>, inside: bool) -> Option<Geometry
     }
 }
 
+/// Clip each input feature to the union of only the selected clip polygons whose projected
+/// extents meet it. Union candidates together so overlapping masks never duplicate output.
 fn clip(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
     let ds = input(inp, p, "input")?;
-    let mask = union_of(inp, p, "clip")?;
+    let clip_ds = input(inp, p, "clip")?;
+    if clip_ds.geometry_type != GeometryType::Polygon {
+        return Err(format!("'{}' is not a polygon layer", clip_ds.name));
+    }
+    let masks: Vec<_> = rows(inp, p, "clip", clip_ds)
+        .into_iter()
+        .filter_map(|r| clip_ds.features.get(r)?.geometry.as_ref().and_then(to_multipolygon))
+        .map(|m| {
+            let ext = merc_extent(&m);
+            // Union even one polygon: collapsed rings have no filled area. Keep the original
+            // bounds too: rounding an edge must not hide a line the boolean overlay clips to it.
+            let mask = union_all(m.0.iter());
+            let ext = ext.union(&merc_extent(&mask));
+            (mask, ext)
+        })
+        .filter(|(m, _)| !m.0.is_empty())
+        .collect();
+    let index = ExtentIndex::new(masks.iter().map(|(_, ext)| *ext));
+    // Single candidates reuse their normalized mask. Retain eight recent multi-mask unions
+    // so alternating neighbourhoods can reuse work too; evict the least recently used.
+    const MAX_CACHED_MASKS: usize = 8;
+    let mut cached_masks: std::collections::VecDeque<(Vec<usize>, MultiPolygon<f64>)> = std::collections::VecDeque::new();
     let mut out = copy_schema(ds, out_name(p, format!("{}_Clip", ds.name)), ds.geometry_type);
     for r in rows(inp, p, "input", ds) {
         let Some(f) = ds.features.get(r) else { continue };
-        if let Some(c) = f.geometry.as_ref().and_then(|g| part(&dissolved(g), &mask, true)) {
+        let Some(g) = f.geometry.as_ref() else { continue };
+        let ext = projected_extent(g);
+        // i_overlay uses 29 integer bits about the domain centre. Allow several grid steps
+        // for normalization and clipping: a line just outside an edge can snap onto it.
+        // This widens only the candidate search; the boolean overlay still decides the result.
+        let domain = index.total.union(&ext);
+        let margin = domain.width().max(domain.height()) / f64::from(1_u32 << 27);
+        let ext = ext.padded(0.0, margin);
+        let near: Vec<_> = index.candidates(&ext).into_iter().filter(|i| masks.get(*i).is_some_and(|(_, e)| e.intersects(&ext))).collect();
+        if near.is_empty() {
+            continue;
+        }
+        let mask = if let [i] = near.as_slice() {
+            let Some((m, _)) = masks.get(*i) else { continue };
+            m
+        } else {
+            if let Some(pos) = cached_masks.iter().position(|(ids, _)| *ids == near) {
+                if let Some(entry) = cached_masks.remove(pos) {
+                    cached_masks.push_back(entry);
+                }
+            } else {
+                if cached_masks.len() == MAX_CACHED_MASKS {
+                    cached_masks.pop_front();
+                }
+                let mask = union_all(near.iter().filter_map(|i| masks.get(*i)).flat_map(|(m, _)| m.0.iter()));
+                cached_masks.push_back((near, mask));
+            }
+            let Some((_, mask)) = cached_masks.back() else { continue };
+            mask
+        };
+        if let Some(c) = part(&dissolved(g), mask, true) {
             out.push(Some(c), f.attrs.clone());
         }
     }
@@ -957,14 +1281,23 @@ fn clip(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
     result(out, format!("Clip: {n} features kept"))
 }
 
+/// Erase: each input feature's part outside every erase polygon, as [`outside`] gives it (a point
+/// on an edge, or a line along one, counts as inside and is erased); a feature no erase polygon
+/// meets is kept as it is. Features left with nothing, or without geometry, are left out; the
+/// input must have geometry.
 fn erase(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
     let ds = input(inp, p, "input")?;
-    let mask = union_of(inp, p, "erase")?;
-    let mut out = copy_schema(ds, out_name(p, format!("{}_Erase", ds.name)), GeometryType::Polygon);
+    if ds.geometry_type == GeometryType::None {
+        return Err(format!("'{}' has no geometry", ds.name));
+    }
+    let (er, zones) = overlay_zones(inp, p, "erase")?;
+    let index = ExtentIndex::new(zones.iter().map(|z| z.ext));
+    let mut out = copy_schema(ds, out_name(p, format!("{}_Erase", ds.name)), ds.geometry_type);
+    keep_source_crs(&mut out, ds, er);
     for r in rows(inp, p, "input", ds) {
         let Some(f) = ds.features.get(r) else { continue };
-        if let Some(rest) = f.geometry.as_ref().and_then(to_multipolygon).and_then(|m| from_multipolygon(&m.difference(&mask))) {
-            out.push(Some(rest), f.attrs.clone());
+        if let Some(rest) = f.geometry.as_ref().and_then(|g| outside(g, &zones, &index)) {
+            out.push_next(Some(rest), f.attrs.clone());
         }
     }
     let n = out.features.len();
@@ -986,14 +1319,14 @@ fn mask_of(poly: MultiPolygon<f64>) -> MultiPolygon<f64> {
     if poly.0.len() > 1 { union_all(poly.0.iter()) } else { poly.orient(Direction::Default) }
 }
 
-/// The overlay layer of an overlay tool (its `overlay` parameter), which must be polygons, and its
-/// (selected) features with geometry as [`Zone`]s, in order.
-fn overlay_zones<'a>(inp: &'a dyn Inputs, p: &Json) -> Result<(&'a Dataset, Vec<Zone>), String> {
-    let ov = input(inp, p, "overlay")?;
+/// The polygon layer of an overlay tool's parameter `k` (`overlay`, `erase`, `update`, `split`),
+/// which must be polygons, and its (selected) features with geometry as [`Zone`]s, in order.
+fn overlay_zones<'a>(inp: &'a dyn Inputs, p: &Json, k: &str) -> Result<(&'a Dataset, Vec<Zone>), String> {
+    let ov = input(inp, p, k)?;
     if ov.geometry_type != GeometryType::Polygon {
         return Err(format!("'{}' is not a polygon layer", ov.name));
     }
-    let zones = rows(inp, p, "overlay", ov)
+    let zones = rows(inp, p, k, ov)
         .into_iter()
         .filter_map(|row| {
             let g = ov.features.get(row)?.geometry.as_ref()?;
@@ -1007,7 +1340,7 @@ fn overlay_zones<'a>(inp: &'a dyn Inputs, p: &Json) -> Result<(&'a Dataset, Vec<
 /// name is taken getting a suffix (`name_2`). It keeps the input's source CRS for export.
 fn overlay_schema(ds: &Dataset, ov: &Dataset, name: String, g: GeometryType) -> Dataset {
     let mut out = copy_schema(ds, name, g);
-    out.crs = ds.crs;
+    keep_source_crs(&mut out, ds, ov);
     for f in &ov.fields {
         let name = unique_field(&out, &f.name);
         out.fields.push(Field { name, ..f.clone() });
@@ -1034,92 +1367,157 @@ enum Overlay {
     Identity,
     /// Those, and the parts of overlay polygons outside every input polygon.
     Union,
+    /// Union's parts that only one layer covers: the input's outside every overlay polygon, the
+    /// overlay's outside every input polygon.
+    SymmetricalDifference,
 }
 
 impl Overlay {
-    /// The tool's name, for its messages and its output's default name.
+    /// The tool's name, for its messages.
     fn name(self) -> &'static str {
         match self {
             Overlay::Intersect => "Intersect",
             Overlay::Identity => "Identity",
             Overlay::Union => "Union",
+            Overlay::SymmetricalDifference => "Symmetrical Difference",
         }
+    }
+
+    /// The end of its output's default name, after the input's and an underscore.
+    fn suffix(self) -> &'static str {
+        match self {
+            Overlay::SymmetricalDifference => "SymDiff",
+            op => op.name(),
+        }
+    }
+
+    /// Whether it keeps input features' parts inside overlay polygons.
+    fn keeps_inside(self) -> bool {
+        self != Overlay::SymmetricalDifference
+    }
+
+    /// Whether it keeps input features' parts outside every overlay polygon, and input features
+    /// without geometry.
+    fn keeps_outside(self) -> bool {
+        self != Overlay::Intersect
+    }
+
+    /// Whether it adds overlay polygons' parts outside every input polygon; it then needs an input
+    /// of polygons.
+    fn keeps_overlay_rest(self) -> bool {
+        matches!(self, Overlay::Union | Overlay::SymmetricalDifference)
     }
 }
 
-/// Intersect, Identity and Union. Each input feature in turn gives its part in each overlay
-/// polygon, in overlay order, with the attributes of both; then (Identity, Union) its part outside
-/// them all, with empty overlay attributes. Union then adds each overlay polygon's part outside
-/// every input polygon, with empty input attributes. Parts that only touch are left out, and
-/// features of one layer that overlap each other are not split against each other. Intersect
-/// leaves out input features without geometry; Identity and Union keep them, as they are, and an
-/// input feature no overlay polygon meets too, coordinates untouched (a feature that is cut comes
-/// out rebuilt, its overlapping parts unioned).
+/// A feature cut by overlay zones: its part in each zone it overlaps, with the zone's index, in
+/// zone order; and, when `outside` is set, its part outside them all. Parts that only touch are
+/// left out. A feature no zone overlaps is its own part outside, coordinates untouched; one that
+/// is cut comes out rebuilt, its overlapping parts unioned (see [`dissolved`]).
+fn cut(g: &Geometry, zones: &[Zone], index: &ExtentIndex, outside: bool) -> (Vec<(usize, Geometry)>, Option<Geometry>) {
+    let ext = g.extent();
+    let meets: Vec<usize> =
+        index.candidates(&ext).into_iter().filter(|zi| zones.get(*zi).is_some_and(|z| ext.intersects(&z.ext))).collect();
+    // A feature of overlapping parts is unioned once, for all the zones it may meet, and only
+    // when it may meet one.
+    let whole = if meets.is_empty() { std::borrow::Cow::Borrowed(g) } else { dissolved(g) };
+    let inside: Vec<(usize, Geometry)> = meets.into_iter().filter_map(|zi| Some((zi, part(&whole, &zones.get(zi)?.poly, true)?))).collect();
+    if !outside {
+        return (inside, None);
+    }
+    let hit: Vec<&Zone> = inside.iter().filter_map(|(zi, _)| zones.get(*zi)).collect();
+    let rest = rest_outside(g, &whole, &hit);
+    (inside, rest)
+}
+
+/// A feature's part outside the zones that cut it, for [`cut`] and [`outside`], which find those
+/// zones differently: `cut` makes each part inside anyway, so a zone cuts when that part is
+/// something; `outside` makes none, so it tests each zone with a predicate. `whole` is the feature
+/// as [`dissolved`] gives it. With no zone, the feature as it is, coordinates untouched; with one,
+/// cut by that zone itself (a union would move its edges by a rounding error, and a line along one
+/// could come out on both sides of it); with several, by their union.
+fn rest_outside(g: &Geometry, whole: &Geometry, hit: &[&Zone]) -> Option<Geometry> {
+    match hit {
+        [] => Some(g.clone()),
+        [only] => part(whole, &only.poly, false),
+        _ => part(whole, &union_all(hit.iter().flat_map(|z| z.poly.0.iter())), false),
+    }
+}
+
+/// A feature's part outside every zone, as [`part`] gives it, for tools that keep only that
+/// (Erase, Update): it is cut once, by the zones that cut it (that zone itself, so its edges stay
+/// exactly where they are, or their union), without [`cut`]'s part in each zone. Only zones whose
+/// extent meets the feature's are tested. A feature no zone cuts is kept as it is, coordinates
+/// untouched: a polygon that at most touches them, a line or point that doesn't meet them.
+fn outside(g: &Geometry, zones: &[Zone], index: &ExtentIndex) -> Option<Geometry> {
+    let ext = g.extent();
+    let near: Vec<&Zone> = index.candidates(&ext).into_iter().filter_map(|zi| zones.get(zi)).filter(|z| ext.intersects(&z.ext)).collect();
+    if near.is_empty() {
+        return Some(g.clone());
+    }
+    // The feature as the cut takes it: overlapping parts unioned, for the tests and the cut alike.
+    let whole = dissolved(g);
+    let geo_g = to_geo(&whole);
+    // The zones that cut it: a polygon is cut by those it overlaps, a line or point by those it
+    // meets (an edge counts as inside). Each is tested on its own, before any union.
+    let cuts = |z: &&Zone| match g {
+        Geometry::Polygon(_) => {
+            let m = z.poly.relate(&geo_g);
+            m.is_intersects() && !m.is_touches()
+        }
+        _ => z.poly.intersects(&geo_g),
+    };
+    let hit: Vec<&Zone> = near.into_iter().filter(cuts).collect();
+    rest_outside(g, &whole, &hit)
+}
+
+/// Intersect, Identity, Union and Symmetrical Difference. Each input feature in turn gives its
+/// part in each overlay polygon, in overlay order, with the attributes of both (all but Symmetrical
+/// Difference); then (all but Intersect) its part outside them all, with empty overlay attributes.
+/// Union and Symmetrical Difference then add each overlay polygon's part outside every input
+/// polygon, with empty input attributes. Parts that only touch are left out, and features of one
+/// layer that overlap each other are not split against each other. Intersect leaves out input
+/// features without geometry; the others keep them, as they are, and an input feature no overlay
+/// polygon meets too, coordinates untouched (a feature that is cut comes out rebuilt, its
+/// overlapping parts unioned).
 fn overlay(inp: &dyn Inputs, p: &Json, op: Overlay) -> Result<ToolResult, String> {
     let ds = input(inp, p, "input")?;
     if ds.geometry_type == GeometryType::None {
         return Err(format!("'{}' has no geometry", ds.name));
     }
-    if op == Overlay::Union && ds.geometry_type != GeometryType::Polygon {
+    if op.keeps_overlay_rest() && ds.geometry_type != GeometryType::Polygon {
         return Err(format!("'{}' is not a polygon layer", ds.name));
     }
-    let (ov, zones) = overlay_zones(inp, p)?;
+    let (ov, zones) = overlay_zones(inp, p, "overlay")?;
     let index = ExtentIndex::new(zones.iter().map(|z| z.ext));
-    let mut out = overlay_schema(ds, ov, out_name(p, format!("{}_{}", ds.name, op.name())), ds.geometry_type);
+    let mut out = overlay_schema(ds, ov, out_name(p, format!("{}_{}", ds.name, op.suffix())), ds.geometry_type);
     let zone_attrs = |z: &Zone| ov.features.get(z.row).map(|o| o.attrs.as_slice());
-    // For Union, the rows of the input polygons that overlap each zone.
+    // For Union and Symmetrical Difference, the rows of the input polygons that overlap each zone.
     let mut covering: Vec<Vec<usize>> = vec![Vec::new(); zones.len()];
     for r in rows(inp, p, "input", ds) {
         let Some(f) = ds.features.get(r) else { continue };
         let Some(g) = &f.geometry else {
-            // Identity and Union keep every input feature: one without geometry, as it is.
-            if op != Overlay::Intersect {
+            // All but Intersect keep every input feature: one without geometry, as it is.
+            if op.keeps_outside() {
                 out.push_next(None, overlay_row(ds, Some(&f.attrs), ov, None));
             }
             continue;
         };
-        let ext = g.extent();
-        let meets: Vec<(usize, &Zone)> = index
-            .candidates(&ext)
-            .into_iter()
-            .filter_map(|zi| Some((zi, zones.get(zi)?)))
-            .filter(|(_, z)| ext.intersects(&z.ext))
-            .collect();
-        // A feature of overlapping parts is unioned once, for all the zones it may meet, and only
-        // when it may meet one.
-        let whole = if meets.is_empty() { std::borrow::Cow::Borrowed(g) } else { dissolved(g) };
-        let mut hit: Vec<usize> = Vec::new();
-        for (zi, z) in meets {
-            if let Some(inside) = part(&whole, &z.poly, true) {
-                out.push_next(Some(inside), overlay_row(ds, Some(&f.attrs), ov, zone_attrs(z)));
-                hit.push(zi);
+        let (inside, rest) = cut(g, &zones, &index, op.keeps_outside());
+        for (zi, piece) in inside {
+            if op.keeps_inside() {
+                out.push_next(Some(piece), overlay_row(ds, Some(&f.attrs), ov, zones.get(zi).and_then(zone_attrs)));
+            }
+            if op.keeps_overlay_rest()
+                && let Some(c) = covering.get_mut(zi)
+            {
+                c.push(r);
             }
         }
-        if op == Overlay::Intersect {
-            continue;
-        }
-        let rest = if hit.is_empty() {
-            Some(g.clone())
-        } else {
-            // The same mask the inside part was cut with, when one zone was hit: a union would move its
-            // edges by a rounding error, and a line along one could come out on both sides.
-            match hit.as_slice() {
-                [only] => zones.get(*only).and_then(|z| part(&whole, &z.poly, false)),
-                _ => part(&whole, &union_all(hit.iter().filter_map(|zi| zones.get(*zi)).flat_map(|z| z.poly.0.iter())), false),
-            }
-        };
         if let Some(rest) = rest {
             out.push_next(Some(rest), overlay_row(ds, Some(&f.attrs), ov, None));
         }
-        if op == Overlay::Union {
-            for zi in hit {
-                if let Some(c) = covering.get_mut(zi) {
-                    c.push(r);
-                }
-            }
-        }
     }
-    if op == Overlay::Union {
+    if op.keeps_overlay_rest() {
         for (z, inputs) in zones.iter().zip(&covering) {
             let rest = if inputs.is_empty() {
                 from_multipolygon(&z.poly)
@@ -1150,6 +1548,205 @@ fn identity(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
 /// Union: see [`overlay`].
 fn union(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
     overlay(inp, p, Overlay::Union)
+}
+
+/// Symmetrical Difference: see [`overlay`].
+fn symmetrical_difference(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
+    overlay(inp, p, Overlay::SymmetricalDifference)
+}
+
+/// A value as a field of type `ty` holds it: unchanged when it already fits; else converted as
+/// typing it into the field would, so text that isn't a number becomes empty in a numeric field.
+/// A number becomes text at full precision, and a fractional one an integer by truncation; one
+/// beyond an integer field's range, or not finite, becomes empty. Text becomes a Boolean as typing
+/// it would: true for true, yes, 1 or y, else false.
+fn converted(v: &Value, ty: FieldType) -> Value {
+    match (v, ty) {
+        (Value::Int(_), FieldType::Integer)
+        | (Value::Float(_), FieldType::Double)
+        | (Value::Text(_), FieldType::Text)
+        | (Value::Bool(_), FieldType::Boolean) => v.clone(),
+        (Value::Null, _) => Value::Null,
+        (Value::Int(i), FieldType::Double) => Value::Float(*i as f64),
+        // In range, truncated; out of range (or not a number), empty rather than clamped. i64's
+        // bounds as f64 are exactly -2⁶³ and 2⁶³.
+        (Value::Float(f), FieldType::Integer) if (i64::MIN as f64..i64::MAX as f64).contains(&f.trunc()) => Value::Int(f.trunc() as i64),
+        (Value::Float(_), FieldType::Integer) => Value::Null,
+        (Value::Float(f), FieldType::Text) => Value::Text(f.to_string()),
+        (Value::Bool(b), FieldType::Integer) => Value::Int(i64::from(*b)),
+        (Value::Bool(b), FieldType::Double) => Value::Float(if *b { 1.0 } else { 0.0 }),
+        // Text that reads as an integer is one; text that reads as another number goes as that
+        // float would, so one out of range (or not a number) is empty, not clamped.
+        (Value::Text(t), FieldType::Integer) => match t.trim().parse::<i64>() {
+            Ok(i) => Value::Int(i),
+            Err(_) => t.trim().parse::<f64>().map_or(Value::Null, |f| converted(&Value::Float(f), ty)),
+        },
+        // Text that reads as a finite number goes into a Double field; "NaN", "inf" or "1e400" is
+        // empty, as it is in an integer field.
+        (Value::Text(t), FieldType::Double) => t.trim().parse::<f64>().ok().filter(|f| f.is_finite()).map_or(Value::Null, Value::Float),
+        (Value::Text(t), _) => Value::parse(t, ty),
+        (v, _) => Value::parse(&v.to_string(), ty),
+    }
+}
+
+/// Update: each input polygon's part outside every update polygon, with its attributes, then each
+/// update polygon as it is, its values copied into the input's fields of the same name (matched
+/// exactly, else ignoring case; converted by [`converted`]), the input's other fields empty. The
+/// output has the input's fields only. Input features without geometry, and those no update
+/// polygon overlaps, are kept as they are; update features without geometry are left out, and
+/// update polygons that overlap each other each come out whole. An input field that no update
+/// field matches exactly, but two match ignoring case, is an error rather than a guess.
+fn update(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
+    let ds = input(inp, p, "input")?;
+    if ds.geometry_type != GeometryType::Polygon {
+        return Err(format!("'{}' is not a polygon layer", ds.name));
+    }
+    let (up, zones) = overlay_zones(inp, p, "update")?;
+    // Each input field's field in the update layer, if it has one: an ambiguous one fails here,
+    // before any geometry work.
+    let from = ds
+        .fields
+        .iter()
+        .map(|f| {
+            if up.fields.iter().any(|u| u.name.eq_ignore_ascii_case(&f.name)) {
+                find_field_case_insensitive(up, &f.name).map(Some)
+            } else {
+                Ok(None)
+            }
+        })
+        .collect::<Result<Vec<Option<usize>>, String>>()?;
+    let index = ExtentIndex::new(zones.iter().map(|z| z.ext));
+    let mut out = copy_schema(ds, out_name(p, format!("{}_Update", ds.name)), GeometryType::Polygon);
+    keep_source_crs(&mut out, ds, up);
+    for r in rows(inp, p, "input", ds) {
+        let Some(f) = ds.features.get(r) else { continue };
+        let rest = match &f.geometry {
+            None => {
+                out.push_next(None, f.attrs.clone());
+                continue;
+            }
+            Some(g) => outside(g, &zones, &index),
+        };
+        if let Some(rest) = rest {
+            out.push_next(Some(rest), f.attrs.clone());
+        }
+    }
+    let kept = out.features.len();
+    for z in &zones {
+        let Some(u) = up.features.get(z.row) else { continue };
+        let attrs =
+            ds.fields.iter().zip(&from).map(|(f, i)| i.and_then(|i| u.attrs.get(i)).map_or(Value::Null, |v| converted(v, f.ty))).collect();
+        out.push_next(u.geometry.clone(), attrs);
+    }
+    let added = out.features.len() - kept;
+    result(out, format!("Update: {kept} input features kept, {added} update features added"))
+}
+
+/// The most split areas (split polygons, or values of the split field) Split takes: more is an
+/// error before anything is clipped, not thousands of layers. Areas that come out empty count too.
+const MAX_SPLIT_AREAS: usize = 1000;
+/// The most characters of a split value kept in a layer's name.
+const MAX_SPLIT_NAME: usize = 64;
+
+/// A split value as it goes into a layer's name: control characters dropped, then its first
+/// [`MAX_SPLIT_NAME`] characters, trimmed.
+fn split_name(value: &str) -> String {
+    let name: String = value.chars().filter(|c| !c.is_control()).take(MAX_SPLIT_NAME).collect();
+    name.trim().to_string()
+}
+
+/// A split value exactly, for grouping: a float as the shortest text that reads back as it (its
+/// displayed text keeps six decimals, so 0.0000012 and 0.0000014 would read alike); any other
+/// value as it displays.
+fn split_key(v: &Value) -> String {
+    match v {
+        Value::Float(f) => format!("{f:?}"),
+        v => v.to_string(),
+    }
+}
+
+/// Split: the input clipped (as Clip clips) by each split polygon, one layer each, named by the
+/// output name (else the input's), an underscore and the polygon's id. With a split field, split
+/// polygons sharing its value make one layer together, named by the value (its first
+/// [`MAX_SPLIT_NAME`] characters, control characters dropped); one with no value is named by its
+/// id, as is one whose value is blank once its control characters are dropped. A name the map
+/// already has gets a number when the layer is added. Layers left with no features are left out;
+/// selections in both layers count.
+fn split(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
+    let ds = input(inp, p, "input")?;
+    if ds.geometry_type == GeometryType::None {
+        return Err(format!("'{}' has no geometry", ds.name));
+    }
+    let (sp, zones) = overlay_zones(inp, p, "split")?;
+    // A field name, or none; anything else is an error, not one layer per polygon.
+    let field = match p.get("field") {
+        None | Some(Json::Null) => None,
+        Some(Json::String(name)) if name.trim().is_empty() => None,
+        Some(Json::String(name)) => Some(find_field_case_insensitive(sp, name.trim())?),
+        Some(other) => return Err(format!("Split Field must be a field name, not {other}")),
+    };
+    // The split polygons of each layer, in the order their first polygon comes, keyed by the exact
+    // value, so values that would be named alike stay apart. A layer named by a value and one named
+    // by an id are kept apart even when the two read the same.
+    let mut groups: Vec<(String, Vec<usize>)> = Vec::new();
+    let mut by_key: HashMap<(bool, String), usize> = HashMap::new();
+    for (zi, z) in zones.iter().enumerate() {
+        let Some(f) = sp.features.get(z.row) else { continue };
+        let value = field.and_then(|i| f.attrs.get(i)).filter(|v| !v.is_null());
+        // -0 is 0, in the key and the name alike.
+        let value = value.map(|v| if let Value::Float(f) = v { Value::Float(f + 0.0) } else { v.clone() });
+        let named = value.map(|v| (split_key(&v), split_name(&v.to_string()))).filter(|(_, name)| !name.is_empty());
+        let (key, name) = match named {
+            Some((key, name)) => ((true, key), name),
+            None => ((false, f.id.to_string()), f.id.to_string()),
+        };
+        if let Some(g) = by_key.get(&key).and_then(|g| groups.get_mut(*g)) {
+            g.1.push(zi);
+        } else {
+            if groups.len() >= MAX_SPLIT_AREAS {
+                return Err(format!("Split takes at most {MAX_SPLIT_AREAS} split areas"));
+            }
+            by_key.insert(key, groups.len());
+            groups.push((name, vec![zi]));
+        }
+    }
+    let prefix = out_name(p, ds.name.clone());
+    let located: Vec<(usize, Extent)> =
+        rows(inp, p, "input", ds).into_iter().filter_map(|r| Some((r, ds.features.get(r)?.geometry.as_ref()?.extent()))).collect();
+    let index = ExtentIndex::new(located.iter().map(|(_, e)| *e));
+    // Each input feature as the overlay takes it, made once, when a split polygon first meets it.
+    let mut whole: Vec<Option<std::borrow::Cow<'_, Geometry>>> = vec![None; located.len()];
+    let mut layers = Vec::new();
+    let mut empty = 0usize;
+    for (name, members) in groups {
+        let polys: Vec<&Zone> = members.iter().filter_map(|zi| zones.get(*zi)).collect();
+        let mask = match polys.as_slice() {
+            [only] => std::borrow::Cow::Borrowed(&only.poly),
+            _ => std::borrow::Cow::Owned(union_all(polys.iter().flat_map(|z| z.poly.0.iter()))),
+        };
+        let ext = polys.iter().fold(Extent::EMPTY, |e, z| e.union(&z.ext));
+        let mut out = copy_schema(ds, format!("{prefix}_{name}"), ds.geometry_type);
+        keep_source_crs(&mut out, ds, sp);
+        for li in index.candidates(&ext) {
+            let Some((r, e)) = located.get(li) else { continue };
+            let Some(f) = ds.features.get(*r) else { continue };
+            let (Some(g), Some(slot)) = (f.geometry.as_ref().filter(|_| e.intersects(&ext)), whole.get_mut(li)) else { continue };
+            if let Some(c) = part(slot.get_or_insert_with(|| dissolved(g)), &mask, true) {
+                out.push_next(Some(c), f.attrs.clone());
+            }
+        }
+        if out.features.is_empty() {
+            empty += 1;
+        } else {
+            layers.push(OutputLayer::Vector(out));
+        }
+    }
+    let mut msg = format!("Split: {} layers", layers.len());
+    if empty > 0 {
+        let areas = if empty == 1 { "split area" } else { "split areas" };
+        msg = format!("{msg} ({empty} {areas} held no features)");
+    }
+    Ok(ToolResult { output: Output::Layers(layers), messages: vec![msg] })
 }
 
 fn dissolve(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
@@ -1326,7 +1923,7 @@ fn check_room(n: usize, need: u64, has_room: impl FnOnce(u64) -> bool) -> Result
 
 /// A copy of `v` whose allocation (a text's) fails into an error rather than aborting the process.
 /// The variants are listed, so one that owns memory can't be added without deciding how.
-fn try_clone_value(v: &Value) -> Result<Value, TryReserveError> {
+pub(crate) fn try_clone_value(v: &Value) -> Result<Value, TryReserveError> {
     Ok(match v {
         Value::Text(t) => {
             let mut s = String::new();
@@ -1567,6 +2164,8 @@ fn simplify(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
     result(out, format!("Simplify: {before} → {after} vertices"))
 }
 
+/// Select against nearby selectors, indexed in the projection used by the predicate and after
+/// any distance buffer. Inversion and input row order keep the exhaustive selection's semantics.
 fn select_by_location(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
     let ds = input(inp, p, "input")?;
     let sel_ds = input(inp, p, "select")?;
@@ -1574,14 +2173,17 @@ fn select_by_location(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> 
     if dist > 5_000_000.0 {
         return Err("Distance is too large (limit 5000 km)".into());
     }
-    let selectors: Vec<geo::Geometry<f64>> = rows(inp, p, "select", sel_ds)
+    let selectors: Vec<(geo::Geometry<f64>, Extent)> = rows(inp, p, "select", sel_ds)
         .iter()
         .filter_map(|r| sel_ds.features.get(*r)?.geometry.as_ref())
         .map(|g| {
             let b = if dist > 0.0 { geodesic_buffer(g, dist) } else { None };
-            to_geo(b.as_ref().unwrap_or(g))
+            let gg = to_geo(b.as_ref().unwrap_or(g));
+            let ext = merc_extent(&gg);
+            (gg, ext)
         })
         .collect();
+    let index = ExtentIndex::new(selectors.iter().map(|(_, ext)| *ext));
     let invert = s(p, "invert") == "Yes";
     let hits: Vec<usize> = (0..ds.features.len())
         .filter(|r| {
@@ -1589,7 +2191,8 @@ fn select_by_location(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> 
                 return false;
             };
             let gg = to_geo(g);
-            let hit = selectors.iter().any(|s| s.intersects(&gg));
+            let ext = merc_extent(&gg);
+            let hit = index.any_candidate(&ext, |i| selectors.get(i).is_some_and(|(s, e)| e.intersects(&ext) && s.intersects(&gg)));
             hit != invert
         })
         .collect();
@@ -1817,22 +2420,262 @@ fn kriging_auto_cell(extent: &Extent, n: usize, neighbours: usize) -> f64 {
     cell
 }
 
+fn parse_optional_extent(p: &Json) -> Result<Option<Extent>, String> {
+    let raw = match p.get("extent") {
+        None | Some(serde_json::Value::Null) => return Ok(None),
+        Some(serde_json::Value::String(s)) => {
+            let t = s.trim();
+            if t.is_empty() {
+                return Ok(None);
+            }
+            let v: Option<Vec<f64>> = t.split(',').map(|x| x.trim().parse().ok().filter(|x: &f64| x.is_finite())).collect();
+            v.as_deref().and_then(|v| <[f64; 4]>::try_from(v).ok()).ok_or("the extent is xmin,ymin,xmax,ymax")?
+        }
+        Some(serde_json::Value::Array(arr)) => {
+            if arr.len() != 4 {
+                return Err("the extent is xmin,ymin,xmax,ymax".into());
+            }
+            let coords: Option<Vec<f64>> = arr.iter().map(|v| v.as_f64().filter(|x| x.is_finite())).collect();
+            coords.as_deref().and_then(|v| <[f64; 4]>::try_from(v).ok()).ok_or("the extent is xmin,ymin,xmax,ymax")?
+        }
+        Some(_) => return Err("the extent is xmin,ymin,xmax,ymax".into()),
+    };
+
+    let (min_x, max_x) = (raw[0].min(raw[2]), raw[0].max(raw[2]));
+    let (min_y, max_y) = (raw[1].min(raw[3]), raw[1].max(raw[3]));
+    let (w, h) = (max_x - min_x, max_y - min_y);
+    if !(max_x > min_x && max_y > min_y && w.is_finite() && h.is_finite()) {
+        return Err("the extent must have a positive width and height".into());
+    }
+    Ok(Some(Extent::new(min_x, min_y, max_x, max_y)))
+}
+
+fn kernel_density_tool(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
+    let ds = input(inp, p, "input")?;
+    if ds.geometry_type != GeometryType::Point {
+        return Err("Input Points must be a point layer".into());
+    }
+
+    if p.get("crs").is_some_and(|v| !v.is_null() && !v.is_string()) {
+        return Err("crs must be text".into());
+    }
+
+    let crs_text = s(p, "crs").trim();
+    let crs = if !crs_text.is_empty() {
+        Crs::parse(crs_text)?
+    } else if let Some(c) = ds.crs {
+        c
+    } else {
+        return Err(format!(
+            "kernel density requires a projected coordinate system with linear units (such as UTM or State Plane); '{}' has no coordinate system. Provide a projected system under 'crs' (e.g. EPSG:32618)",
+            ds.name
+        ));
+    };
+
+    if crs.is_geographic() {
+        if !crs_text.is_empty() {
+            return Err("crs must be a projected coordinate system with linear units (such as UTM or State Plane, e.g. EPSG:32618), not geographic coordinates (degrees)".into());
+        }
+        return Err(format!(
+            "kernel density requires a projected coordinate system with linear units (such as UTM or State Plane); '{}' is in geographic coordinates (degrees). Provide a projected system under 'crs' (e.g. EPSG:32618)",
+            ds.name
+        ));
+    }
+
+    let transformer = crs.transformer()?;
+
+    if p.get("field").is_some_and(|v| !v.is_null() && !v.is_string()) {
+        return Err("field must be text".into());
+    }
+
+    let field_name = s(p, "field").trim();
+    let fi = if !field_name.is_empty() {
+        let idx = find_field_case_insensitive(ds, field_name)?;
+        let f = ds.fields.get(idx).ok_or_else(|| format!("no field named '{field_name}'"))?;
+        if !f.ty.is_numeric() {
+            return Err(format!("field '{field_name}' must be numeric (is {})", f.ty.label()));
+        }
+        Some(idx)
+    } else {
+        None
+    };
+
+    let mut pts: Vec<(Coord, f64)> = Vec::new();
+    let mut skipped: usize = 0;
+    for r in rows(inp, p, "input", ds) {
+        let Some(g) = ds.features.get(r).and_then(|f| f.geometry.as_ref()) else {
+            skipped += 1;
+            continue;
+        };
+        let w = match fi {
+            Some(idx) => match ds.value(r, idx).as_f64() {
+                Some(v) if v.is_finite() && v > 0.0 => v,
+                _ => {
+                    skipped += 1;
+                    continue;
+                }
+            },
+            None => 1.0,
+        };
+
+        match g {
+            Geometry::Point(c) => {
+                if c.is_finite()
+                    && let Some(p_proj) = transformer.from_lonlat(*c)
+                    && p_proj.is_finite()
+                {
+                    pts.push((p_proj, w));
+                } else {
+                    skipped += 1;
+                }
+            }
+            Geometry::MultiPoint(cs) => {
+                let mut any = false;
+                for c in cs {
+                    if c.is_finite()
+                        && let Some(p_proj) = transformer.from_lonlat(*c)
+                        && p_proj.is_finite()
+                    {
+                        pts.push((p_proj, w));
+                        any = true;
+                    }
+                }
+                if !any {
+                    skipped += 1;
+                }
+            }
+            _ => {
+                skipped += 1;
+            }
+        }
+    }
+
+    if pts.is_empty() {
+        return Err("input layer has no valid points with positive weights to analyze".into());
+    }
+
+    let pt_extent = crate::density::points_extent(&pts).ok_or("input layer has no valid points with positive weights to analyze")?;
+
+    let given = |k: &str| p.get(k).is_some_and(|v| !v.is_null() && v.as_str().is_none_or(|t| !t.trim().is_empty()));
+    let (mut bandwidth, user_radius) = match num(p, "radius") {
+        Some(h) if h > 0.0 => (h, true),
+        Some(0.0) => (crate::density::silverman_bandwidth(&pts, &pt_extent), false),
+        Some(_) => return Err("search radius must be a positive number".into()),
+        None if given("radius") => return Err("search radius must be a number".into()),
+        None => (crate::density::silverman_bandwidth(&pts, &pt_extent), false),
+    };
+
+    let custom_extent = parse_optional_extent(p)?;
+    let mut grid_ext = crate::density::resolve_grid_extent(&pt_extent, bandwidth, custom_extent.as_ref())?;
+
+    let cell_size = match num(p, "pixelSize") {
+        Some(c) if c > 0.0 => {
+            if user_radius && c > bandwidth {
+                return Err("pixel size must not be larger than the search radius (bandwidth); choose a smaller pixel size or a larger search radius".into());
+            }
+            c
+        }
+        Some(_) => return Err("pixel size must be a positive number".into()),
+        None if given("pixelSize") => return Err("pixel size must be a number".into()),
+        None => {
+            let auto = crate::density::auto_cell_size(&grid_ext);
+            if user_radius { auto.min(bandwidth) } else { auto }
+        }
+    };
+
+    if !user_radius && bandwidth < cell_size {
+        bandwidth = cell_size;
+        if custom_extent.is_none() {
+            grid_ext = crate::density::resolve_grid_extent(&pt_extent, bandwidth, None)?;
+        }
+    }
+
+    let kernel = crate::density::KernelType::parse(s(p, "kernel"))?;
+
+    if p.get("output").is_some_and(|v| !v.is_null() && !v.is_string()) {
+        return Err("output must be text".into());
+    }
+
+    let name = out_name(p, format!("{}_density", ds.name));
+    let r = crate::density::kernel_density(&pts, Some(&grid_ext), cell_size, bandwidth, kernel, &name, crs)?;
+    let bytes = rustgis_data::raster::geotiff::write(&r, 0).map_err(|e| e.to_string())?;
+
+    let msg = if skipped > 0 {
+        format!(
+            "Kernel Density: {} × {} cells from {} points ({} skipped, bandwidth: {:.2})",
+            r.width,
+            r.height,
+            pts.len(),
+            skipped,
+            bandwidth
+        )
+    } else {
+        format!("Kernel Density: {} × {} cells from {} points (bandwidth: {:.2})", r.width, r.height, pts.len(), bandwidth)
+    };
+    Ok(ToolResult {
+        output: Output::Layers(vec![OutputLayer::Raster { file_name: format!("{name}.tif"), name, bytes }]),
+        messages: vec![msg],
+    })
+}
+
+/// Project coordinates directly into an extent, without allocating the full geometry. Use the
+/// same transform and non-finite-coordinate filtering as [`to_geo`] followed by [`merc_extent`].
+fn projected_extent(g: &Geometry) -> Extent {
+    let mut ext = Extent::EMPTY;
+    g.for_each_coord(|c| ext.expand(rustgis_geom::lonlat_to_merc(c)));
+    ext
+}
+
+/// The extent of a geometry in Web Mercator, as [`to_geo`] gives it, leaving out non-finite
+/// coordinates as [`Extent::expand`] does: one NaN doesn't hide the rest.
+fn merc_extent(g: &impl geo::CoordsIter<Scalar = f64>) -> Extent {
+    g.coords_iter().fold(Extent::EMPTY, |mut e, c| {
+        e.expand(Coord::new(c.x, c.y));
+        e
+    })
+}
+
+/// Summarize Within: each polygon's count of the (selected) point features that meet it, inside it
+/// or on its edge; a feature of several points counts once in each polygon it meets. Each point is
+/// tested only against the polygons whose extents hold it, through an [`ExtentIndex`]. The extents
+/// are in Web Mercator, where the test runs, so a point beyond the map's latitude limit still
+/// meets a polygon reaching that limit.
 fn count_points(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
     let polys = input(inp, p, "polygons")?;
     let pts = input(inp, p, "points")?;
-    let point_geoms: Vec<geo::Geometry<f64>> =
-        rows(inp, p, "points", pts).iter().filter_map(|r| pts.features.get(*r)?.geometry.as_ref()).map(to_geo).collect();
     let mut out = polys.clone();
     out.name = out_name(p, format!("{}_Summarize", polys.name));
     out.source = None;
     let fi = out.ensure_field("point_count", FieldType::Integer);
-    let mut total = 0i64;
-    for f in &mut out.features {
-        let n = match f.geometry.as_ref().and_then(to_multipolygon) {
-            Some(mp) => point_geoms.iter().filter(|g| mp.intersects(*g)).count() as i64,
-            None => 0,
-        };
-        total += n;
+    // Each polygon's row, shape and extent; a feature without polygons meets no point.
+    let zones: Vec<(usize, MultiPolygon<f64>, Extent)> = out
+        .features
+        .iter()
+        .enumerate()
+        .filter_map(|(row, f)| {
+            let mp = f.geometry.as_ref().and_then(to_multipolygon)?;
+            let ext = merc_extent(&mp);
+            Some((row, mp, ext))
+        })
+        .collect();
+    let index = ExtentIndex::new(zones.iter().map(|(_, _, ext)| *ext));
+    let mut counts = vec![0i64; out.features.len()];
+    for r in rows(inp, p, "points", pts) {
+        let Some(g) = pts.features.get(r).and_then(|f| f.geometry.as_ref()) else { continue };
+        let pg = to_geo(g);
+        let ext = merc_extent(&pg);
+        for zi in index.candidates(&ext) {
+            let Some((row, mp, z_ext)) = zones.get(zi) else { continue };
+            if z_ext.intersects(&ext)
+                && mp.intersects(&pg)
+                && let Some(c) = counts.get_mut(*row)
+            {
+                *c += 1;
+            }
+        }
+    }
+    let total: i64 = counts.iter().sum();
+    for (f, n) in out.features.iter_mut().zip(counts) {
         if let Some(v) = f.attrs.get_mut(fi) {
             *v = Value::Int(n);
         }
@@ -2234,7 +3077,7 @@ pub fn param_applies(tool: &str, param: &str, value: &dyn Fn(&str) -> String) ->
         ("summaryStatistics", "field") => {
             // Shown until the list holds a pair, so an empty list doesn't hide the field it falls back to.
             let list = serde_json::from_str::<Json>(&value("statistics")).unwrap_or(Json::Null);
-            !list.as_array().is_some_and(|items| !items.is_empty())
+            list.as_array().is_none_or(|items| items.is_empty())
         }
         ("pivotTable", "separator") => value("statistic").trim().eq_ignore_ascii_case("CONCATENATE"),
         ("summaryStatistics", "separator") => {
@@ -2310,7 +3153,7 @@ fn oriented(g: &Geometry) -> geo::Geometry<f64> {
 }
 
 /// A unique field name in `out`: `base`, else `base_2`, `base_3`, ….
-fn unique_field(out: &Dataset, base: &str) -> String {
+pub(crate) fn unique_field(out: &Dataset, base: &str) -> String {
     let mut name = base.to_string();
     let mut k = 1usize;
     while out.field_index(&name).is_some() {
@@ -2386,18 +3229,41 @@ impl ExtentIndex {
         self.grid.as_ref().map(|_| self.cell_w.max(self.cell_h))
     }
 
+    /// The cell bounds of the query's overlap with the grid, excluding empty or disjoint queries.
+    fn query_cells(&self, ext: &Extent) -> Option<((i64, i64), (i64, i64))> {
+        if !ext.intersects(&self.total) {
+            return None;
+        }
+        // Clamp to the grid's own bounds, even for a query far larger than the layer.
+        let t = &self.total;
+        Some((self.key(ext.min_x.max(t.min_x), ext.min_y.max(t.min_y)), self.key(ext.max_x.min(t.max_x), ext.max_y.min(t.max_y))))
+    }
+
+    /// Whether any candidate passes `test`, stopping immediately at the first match. Test each
+    /// candidate at most once even when it spans several cells; candidate order is unspecified.
+    fn any_candidate(&self, ext: &Extent, mut test: impl FnMut(usize) -> bool) -> bool {
+        let Some(grid) = &self.grid else { return (0..self.len).any(test) };
+        let Some(((x0, y0), (x1, y1))) = self.query_cells(ext) else { return false };
+        let mut seen = std::collections::HashSet::new();
+        for x in x0..=x1 {
+            for y in y0..=y1 {
+                if let Some(indices) = grid.get(&(x, y)) {
+                    for &i in indices {
+                        if seen.insert(i) && test(i) {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+        false
+    }
+
     /// The features whose extents may meet `ext`, in order and once each: every feature without a
     /// grid. Each still needs its own test.
     fn candidates(&self, ext: &Extent) -> Vec<usize> {
         let Some(grid) = &self.grid else { return (0..self.len).collect() };
-        if !ext.intersects(&self.total) {
-            return Vec::new();
-        }
-        // Only the part of `ext` over the grid: a feature far larger than the indexed layer would
-        // otherwise reach cells up to the clamp, past the grid's own.
-        let t = &self.total;
-        let (min_x, min_y, max_x, max_y) = (ext.min_x.max(t.min_x), ext.min_y.max(t.min_y), ext.max_x.min(t.max_x), ext.max_y.min(t.max_y));
-        let ((x0, y0), (x1, y1)) = (self.key(min_x, min_y), self.key(max_x, max_y));
+        let Some(((x0, y0), (x1, y1))) = self.query_cells(ext) else { return Vec::new() };
         let mut found = Vec::new();
         for x in x0..=x1 {
             for y in y0..=y1 {
@@ -3141,6 +4007,186 @@ fn zonal_stats(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
     Ok(ToolResult { output: Output::Layer(out), messages })
 }
 
+/// Returns a borrowed dataset when rows match the full dataset in identity order, or a new dataset containing
+/// only the selected rows, in table order, with schema, CRS, and windowed flag preserved.
+fn subset<'a>(ds: &'a Dataset, selected_rows: &[usize]) -> Cow<'a, Dataset> {
+    // Selections keep the order they were picked in: sort and dedupe so the table's order wins.
+    let mut rows: Vec<usize> = selected_rows.iter().copied().filter(|&r| r < ds.features.len()).collect();
+    rows.sort_unstable();
+    rows.dedup();
+    if rows.len() == ds.features.len() {
+        Cow::Borrowed(ds)
+    } else {
+        let mut sub = Dataset::new(ds.name.clone(), ds.geometry_type, ds.fields.clone());
+        sub.crs = ds.crs;
+        sub.crs_incomplete = ds.crs_incomplete;
+        sub.windowed = ds.windowed;
+        sub.features = rows.iter().filter_map(|&r| ds.features.get(r).cloned()).collect::<Vec<_>>().into();
+        Cow::Owned(sub)
+    }
+}
+
+/// Normalizes tool-specific parameter aliases before validation and execution.
+pub(crate) fn normalize_params(spec: &ToolSpec, p: &mut serde_json::Map<String, Json>) {
+    if spec.id == "joinField" {
+        normalize_join_field_params(p);
+    }
+}
+
+pub(crate) fn normalize_join_field_params(p: &mut serde_json::Map<String, Json>) {
+    let is_blank = |val: Option<&Json>| val.is_none_or(|v| v.is_null() || v.as_str().is_some_and(|s| s.trim().is_empty()));
+    let find_first =
+        |map: &serde_json::Map<String, Json>, keys: &[&str]| keys.iter().filter_map(|k| map.get(*k)).find(|v| !is_blank(Some(v))).cloned();
+
+    if is_blank(p.get("target"))
+        && let Some(v) = find_first(p, &["target", "input", "target_layer"])
+    {
+        p.insert("target".to_string(), v);
+    }
+    if is_blank(p.get("joinTable"))
+        && let Some(v) = find_first(p, &["joinTable", "join", "source", "join_table"])
+    {
+        p.insert("joinTable".to_string(), v);
+    }
+    if is_blank(p.get("targetField"))
+        && let Some(v) = find_first(p, &["targetField", "target_field", "key", "target_key"])
+    {
+        p.insert("targetField".to_string(), v);
+    }
+    if is_blank(p.get("joinField")) {
+        if let Some(v) = find_first(p, &["joinField", "join_field", "join_key"]) {
+            p.insert("joinField".to_string(), v);
+        } else if let Some(tf) = p.get("targetField").filter(|v| !is_blank(Some(v))) {
+            p.insert("joinField".to_string(), tf.clone());
+        }
+    }
+    if is_blank(p.get("duplicates"))
+        && let Some(v) = find_first(p, &["duplicates", "duplicateStrategy", "duplicate_strategy"])
+    {
+        p.insert("duplicates".to_string(), v);
+    }
+}
+
+fn join_field_tool(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
+    let mut normalized_storage;
+    let p = match p.as_object() {
+        Some(map) => {
+            normalized_storage = map.clone();
+            normalize_join_field_params(&mut normalized_storage);
+            &Json::Object(normalized_storage)
+        }
+        None => p,
+    };
+
+    let target = input(inp, p, "target")?;
+    let source = input(inp, p, "joinTable")?;
+
+    let mut messages = Vec::new();
+
+    let target_sel = inp.selection(s(p, "target"));
+    let target_rows = rows(inp, p, "target", target);
+    if !target_sel.is_empty() {
+        if target_rows.is_empty() {
+            messages.push(format!(
+                "Warning: the selection on target '{}' contains only stale indices (0/{} features selected); output is empty",
+                target.name,
+                target.features.len()
+            ));
+        } else if target_rows.len() < target.features.len() {
+            messages.push(format!(
+                "Processing {} selected feature(s) from target '{}' (out of {})",
+                target_rows.len(),
+                target.name,
+                target.features.len()
+            ));
+        }
+    }
+
+    let source_sel = inp.selection(s(p, "joinTable"));
+    let source_rows = rows(inp, p, "joinTable", source);
+    if !source_sel.is_empty() {
+        if source_rows.is_empty() {
+            messages.push(format!(
+                "Warning: the selection on source '{}' contains only stale indices (0/{} records selected); no attributes will match",
+                source.name,
+                source.features.len()
+            ));
+        } else if source_rows.len() < source.features.len() {
+            messages.push(format!(
+                "Joining against {} selected record(s) from source '{}' (out of {})",
+                source_rows.len(),
+                source.name,
+                source.features.len()
+            ));
+        }
+    }
+
+    let target_ref = subset(target, &target_rows);
+    let source_ref = subset(source, &source_rows);
+
+    let target_field = s(p, "targetField");
+    if target_field.is_empty() {
+        return Err("target key field is required".into());
+    }
+
+    let join_field = s(p, "joinField");
+    let duplicate_strategy = crate::attribute_join::DuplicateStrategy::parse(s(p, "duplicates"))?;
+    let prefix = s(p, "prefix");
+
+    let explicit_fields: Option<Vec<String>> = match p.get("fields") {
+        None | Some(Json::Null) => None,
+        Some(Json::Array(arr)) => {
+            let names: Vec<String> = arr
+                .iter()
+                .map(|v| {
+                    v.as_str().map(|s| s.trim().to_string()).ok_or_else(|| "Transfer Fields: array entries must be strings".to_string())
+                })
+                .collect::<Result<Vec<String>, String>>()?
+                .into_iter()
+                .filter(|s| !s.is_empty())
+                .collect();
+            Some(names)
+        }
+        Some(Json::String(str_val)) => {
+            let text = str_val.trim();
+            if text.is_empty() {
+                None
+            } else if text.starts_with('[') {
+                let names: Vec<String> = serde_json::from_str::<Vec<String>>(text)
+                    .map_err(|e| format!("Transfer Fields: invalid JSON array: {e}"))?
+                    .into_iter()
+                    .map(|n| n.trim().to_string())
+                    .filter(|n| !n.is_empty())
+                    .collect();
+                Some(names)
+            } else {
+                let names: Vec<String> = text.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
+                Some(names)
+            }
+        }
+        Some(_) => return Err("Transfer Fields must be a string or JSON array".to_string()),
+    };
+
+    let default_out_name = format!("{}_JoinField", target.name);
+    let output_name = out_name(p, default_out_name);
+
+    let opts = crate::attribute_join::JoinFieldOptions {
+        target_field,
+        join_field,
+        fields_to_transfer: explicit_fields.as_deref(),
+        prefix,
+        duplicate_strategy,
+        output_name,
+    };
+
+    let (out, report) = crate::attribute_join::join_field(&target_ref, &source_ref, &opts)?;
+    messages.push(report.message(&target.name));
+
+    let output = if out.geometry_type == rustgis_data::GeometryType::None { Output::Table(out) } else { Output::Layer(out) };
+
+    Ok(ToolResult { output, messages })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3690,8 +4736,11 @@ mod tests {
     fn built_in_tool_outputs_have_explicit_contracts() {
         for spec in TOOLS {
             for p in spec.params.iter().filter(|p| p.name.eq_ignore_ascii_case("output")) {
-                let valid =
-                    if spec.id == "vectorToPmtiles" { matches!(p.kind, K::SaveFile { ext: "pmtiles" }) } else { matches!(p.kind, K::Text) };
+                let valid = if matches!(spec.id, "vectorToPmtiles" | "rasterToPmtiles") {
+                    matches!(p.kind, K::SaveFile { ext: "pmtiles" })
+                } else {
+                    matches!(p.kind, K::Text)
+                };
                 assert!(valid, "{}: unexpected output kind {:?}", spec.id, p.kind);
             }
         }
@@ -3881,6 +4930,133 @@ mod tests {
                 assert!((d - 1_000.0).abs() < 1e-3, "{azimuth}: {c:?} is {d} m away");
             }
         }
+    }
+
+    /// Points along each edge of each ring at the fractions `ts`, as the tools draw edges: straight
+    /// in Web Mercator.
+    fn along_edges(polys: &[Vec<Vec<Coord>>], ts: &[f64]) -> Vec<Coord> {
+        use rustgis_geom::{lonlat_to_merc, merc_to_lonlat};
+        polys
+            .iter()
+            .flatten()
+            .flat_map(|ring| ring.windows(2).map(|w| (lonlat_to_merc(w[0]), lonlat_to_merc(w[1]))).collect::<Vec<_>>())
+            .flat_map(|(a, b)| ts.iter().map(move |t| merc_to_lonlat(Coord::new(a.x + t * (b.x - a.x), a.y + t * (b.y - a.y)))))
+            .collect()
+    }
+
+    /// Points along the geodesic from `a` to `b` on WGS 84, at most 20 m apart.
+    fn geodesic_samples(a: Coord, b: Coord) -> Vec<Coord> {
+        use geo::InterpolatePoint;
+        let n = (rustgis_geom::haversine_m(a, b) / 20.0).ceil().max(1.0) as usize;
+        (0..=n)
+            .map(|k| geo::Geodesic.point_at_ratio_between(geo::Point::new(a.x, a.y), geo::Point::new(b.x, b.y), k as f64 / n as f64))
+            .map(|p| Coord::new(p.x(), p.y()))
+            .collect()
+    }
+
+    /// The distance (metres) from `c` to a geodesic given by its [`geodesic_samples`], and whether
+    /// its nearest point is strictly between the ends: the nearest sample on the sphere (among
+    /// every 50th, then its neighbours), then the nearest point on the ellipsoid along the geodesic
+    /// either side of it, by golden-section search to well under a millimetre.
+    fn m_to_geodesic(c: Coord, samples: &[Coord]) -> (f64, bool) {
+        use geo::InterpolatePoint;
+        let near = |range: std::ops::Range<usize>, step: usize| {
+            range
+                .step_by(step)
+                .min_by(|&i, &j| rustgis_geom::haversine_m(c, samples[i]).total_cmp(&rustgis_geom::haversine_m(c, samples[j])))
+        };
+        let coarse = near(0..samples.len(), 50).unwrap_or(0);
+        let i = near(coarse.saturating_sub(50)..(coarse + 51).min(samples.len()), 1).unwrap_or(coarse);
+        let (first, last) = (i.saturating_sub(1), (i + 1).min(samples.len() - 1));
+        let (lo, hi) = (samples[first], samples[last]);
+        let at = |t: f64| {
+            let p = geo::Geodesic.point_at_ratio_between(geo::Point::new(lo.x, lo.y), geo::Point::new(hi.x, hi.y), t);
+            on_wgs84_m(c, Coord::new(p.x(), p.y()))
+        };
+        let (mut a, mut b) = (0.0, 1.0);
+        let g = (5f64.sqrt() - 1.0) / 2.0;
+        for _ in 0..60 {
+            let (x1, x2) = (b - g * (b - a), a + g * (b - a));
+            if at(x1) <= at(x2) { b = x2 } else { a = x1 }
+        }
+        let t = (a + b) / 2.0;
+        // Strictly between the ends unless the nearest point is the line's first or last sample.
+        let at_start = first == 0 && t < 1e-6;
+        let at_end = last == samples.len() - 1 && t > 1.0 - 1e-6;
+        (at(t).min(at(0.0)).min(at(1.0)), !at_start && !at_end)
+    }
+
+    /// The outline keeps its distance between its vertices too, not only at them (#1159): edges
+    /// drawn straight in the projection came back to lon/lat as straight lines there, so the long
+    /// sides of a 2 km buffer of a 96 km east–west line sat up to 190 m off. Every vertex, and every
+    /// edge's quarter points and midpoint as the tools draw edges (straight in Web Mercator), is now
+    /// within 0.012% of the distance (or 1 cm) along a line's sides, and no further inside an arc
+    /// than its edges cut: 32 to a point's circle and 15 to a half circle at a line's cap, as `geo`
+    /// draws them.
+    #[test]
+    fn buffer_outlines_keep_their_distance_between_vertices() {
+        let fractions = [0.25, 0.5, 0.75];
+        let points = |polys: &[Vec<Vec<Coord>>]| -> Vec<Coord> {
+            polys.iter().flatten().flatten().copied().chain(along_edges(polys, &fractions)).collect()
+        };
+        // An arc of n edges to a circle cuts d(1 − cos(π/n)) inside it between vertices.
+        let sag = |d: f64, n: f64| d * (1.0 - (std::f64::consts::PI / n).cos());
+
+        let centre = Coord::new(10.125, 46.125);
+        for c in points(&buffered(Geometry::Point(centre), 1.0)) {
+            let d = on_wgs84_m(centre, c);
+            assert!(d < 1_000.1 && d > 1_000.0 - sag(1_000.0, 32.0) - 0.1, "{c:?} is {d} m from the centre");
+        }
+
+        // A long east–west line; a diagonal one across the equator, where the stray changes side
+        // halfway along an edge (a 10 m buffer of it strayed 0.65 m at the quarter points); and a
+        // 298 km one at 84°N, whose sides needed more halvings than the limit first allowed.
+        for (a, b, km) in [
+            (Coord::new(9.875, 46.25), Coord::new(11.125, 46.25), 2.0),
+            (Coord::new(-0.6, -0.6), Coord::new(0.6, 0.6), 0.01),
+            (Coord::new(-12.559_750_946_199_074, 83.853_999_752_232_98), Coord::new(12.559_750_946_199_074, 83.853_999_752_232_98), 0.01),
+            // Longer than one projection holds (150 km from its centre): buffered in stretches,
+            // densified along the WGS 84 geodesic.
+            (Coord::new(6.0, 46.25), Coord::new(14.0, 46.25), 2.0),
+        ] {
+            let (d0, samples) = (km * 1000.0, geodesic_samples(a, b));
+            // A point beside the line just inside an end is held to the side's bound; one just
+            // beyond the end, to the cap's.
+            // Probes 1 m inside and beyond the end, 10 m to the side, along the geodesic's last
+            // 20 m step (in local metres, so the side is square to it at any latitude).
+            let (end, last) = (samples[samples.len() - 1], samples[samples.len() - 2]);
+            let k = end.y.to_radians().cos();
+            let (dx, dy) = (end.x - last.x, end.y - last.y);
+            for (along, beside) in [(-0.05, true), (0.05, false)] {
+                let c = Coord::new(end.x + dx * along - dy / k * 0.5, end.y + dy * along + dx * k * 0.5);
+                assert_eq!(m_to_geodesic(c, &samples).1, beside, "{c:?} {along}");
+            }
+            for c in points(&buffered(Geometry::Line(vec![vec![a, b]]), km)) {
+                let (d, beside) = m_to_geodesic(c, &samples);
+                // Along the sides, within 0.012% or 1 cm (and the sampler's millimetre); round the
+                // caps, within the sag of their 15 edges to a half circle.
+                let side = (d0 * 1.2e-4).max(0.01) + 1e-3;
+                let bound = if beside { side } else { sag(d0, 30.0) + side };
+                assert!(d < d0 + side && d > d0 - bound, "{km} km: {c:?} is {d} m from the line");
+            }
+        }
+
+        // Near a pole: a circle reaching past Web Mercator's 85.05° keeps its distance up to 85°
+        // (an edge across 85.05° was left whole, its visible part 80 km out). Within the last
+        // twentieth of a degree, where Mercator stretches its edges most, it can be 0.03% out.
+        let north = Coord::new(10.0, 83.0);
+        for c in points(&buffered(Geometry::Point(north), 1000.0)).into_iter().filter(|c| c.y.abs() < 85.0) {
+            let d = on_wgs84_m(north, c);
+            assert!(d < 1_000_000.0 * (1.0 + 1.2e-4) && d > 1_000_000.0 - sag(1_000_000.0, 32.0) - 100.0, "{c:?} is {d} m from {north:?}");
+        }
+
+        // Coordinates off the Earth have no geodesic: buffering them doesn't panic.
+        let off = [Coord::new(0.0, 100.0), Coord::new(20.0, 100.0)];
+        let mut ds = Dataset::new("f", GeometryType::Polyline, vec![]);
+        ds.push(Some(Geometry::Line(vec![off.to_vec()])), vec![]);
+        let m = Map(HashMap::from([("f".to_string(), ds)]));
+        let r = crate::run("buffer", &m, &serde_json::json!({"input": "f", "distance": 1}));
+        assert!(!matches!(&r, Err(e) if e.ends_with("failed unexpectedly")), "{:?}", r.err());
     }
 
     /// Buffers are geodesic (#394): Web Mercator's scale changes with latitude, so one scale for
@@ -4124,6 +5300,412 @@ mod tests {
     }
 
     #[test]
+    fn kernel_density_analysis_tool_tests() {
+        // Create point dataset with UTM projection
+        let mut pts = Dataset::new("stations", GeometryType::Point, vec![Field::new("pop", FieldType::Double)]);
+        pts.crs = Some(Crs::from_epsg(32618).unwrap()); // UTM zone 18N
+        let tr = pts.crs.unwrap().transformer().unwrap();
+
+        // 3 points around central meridian (-75.0, 40.0)
+        let c1_proj = Coord::new(500_000.0, 4_428_000.0);
+        let c2_proj = Coord::new(500_500.0, 4_428_200.0);
+        let c3_proj = Coord::new(501_000.0, 4_428_000.0);
+
+        pts.push(Some(Geometry::Point(tr.to_lonlat(c1_proj).unwrap())), vec![Value::Float(10.0)]);
+        pts.push(Some(Geometry::Point(tr.to_lonlat(c2_proj).unwrap())), vec![Value::Float(20.0)]);
+        pts.push(Some(Geometry::Point(tr.to_lonlat(c3_proj).unwrap())), vec![Value::Float(30.0)]);
+
+        let mut polys = Dataset::new("bounds", GeometryType::Polygon, vec![]);
+        polys.push(Some(sq(0.0, 0.0, 1.0)), vec![]);
+
+        let m = Map(HashMap::from([("stations".to_string(), pts), ("bounds".to_string(), polys)]));
+
+        // 1. Normal run with weights and explicit bandwidth
+        let res = crate::run(
+            "kernelDensity",
+            &m,
+            &serde_json::json!({
+                "input": "stations",
+                "field": "pop",
+                "radius": 1000.0,
+                "pixelSize": 50.0,
+                "output": "stations_kde"
+            }),
+        )
+        .unwrap();
+
+        let Output::Layers(layers) = res.output else { panic!("expected Output::Layers") };
+        assert_eq!(layers.len(), 1);
+        let (name, r) = match &layers[0] {
+            OutputLayer::Raster { name, file_name, bytes } => {
+                assert_eq!(file_name, "stations_kde.tif");
+                (name.clone(), rustgis_data::raster::geotiff::read(std::io::Cursor::new(bytes), name).unwrap())
+            }
+            _ => panic!("expected OutputLayer::Raster"),
+        };
+        assert_eq!(name, "stations_kde");
+        assert_eq!(r.crs, Crs::from_epsg(32618).unwrap());
+        assert!(r.width > 0 && r.height > 0);
+        let peak = r.bands[0].data.iter().copied().fold(0.0f32, f32::max);
+        assert!(peak > 0.0, "peak density must be positive, got {peak}");
+
+        // 2. Auto bandwidth and omitted weight field
+        let res_auto = crate::run(
+            "kernelDensity",
+            &m,
+            &serde_json::json!({
+                "input": "stations",
+                "pixelSize": 50.0
+            }),
+        )
+        .unwrap();
+        let Output::Layers(layers_auto) = res_auto.output else { panic!("expected layers") };
+        assert_eq!(layers_auto.len(), 1);
+
+        let pt_extent = Extent::new(500_000.0, 4_428_000.0, 501_000.0, 4_428_200.0);
+        let expected_bw = crate::density::silverman_bandwidth(&[(c1_proj, 1.0), (c2_proj, 1.0), (c3_proj, 1.0)], &pt_extent);
+        assert!(
+            res_auto.messages[0].contains(&format!("bandwidth: {expected_bw:.2}")),
+            "expected silverman bandwidth {expected_bw:.2} in message: {}",
+            res_auto.messages[0]
+        );
+
+        let OutputLayer::Raster { bytes: auto_bytes, .. } = &layers_auto[0] else { panic!("expected OutputLayer::Raster") };
+        let r_auto = rustgis_data::raster::geotiff::read(std::io::Cursor::new(auto_bytes), "stations_density").unwrap();
+        let expected_origin_x = pt_extent.min_x - expected_bw;
+        assert!(
+            (r_auto.transform.origin_x - expected_origin_x).abs() < 1e-4,
+            "origin_x ({}) must match expected Silverman bandwidth expansion ({expected_origin_x})",
+            r_auto.transform.origin_x
+        );
+
+        // Explicit radius 0.0 behaves identically to omitted radius (sentinel for Silverman bandwidth)
+        let res_zero = crate::run(
+            "kernelDensity",
+            &m,
+            &serde_json::json!({
+                "input": "stations",
+                "pixelSize": 50.0,
+                "radius": 0.0
+            }),
+        )
+        .unwrap();
+        assert!(res_zero.messages[0].contains(&format!("bandwidth: {expected_bw:.2}")));
+
+        // 3. Gaussian kernel run
+        let res_gauss = crate::run(
+            "kernelDensity",
+            &m,
+            &serde_json::json!({
+                "input": "stations",
+                "radius": 800.0,
+                "pixelSize": 50.0,
+                "kernel": "Gaussian"
+            }),
+        )
+        .unwrap();
+        let Output::Layers(layers_gauss) = res_gauss.output else { panic!("expected layers") };
+        assert_eq!(layers_gauss.len(), 1);
+
+        // 4. Reject non-point layer
+        let err_poly = crate::run("kernelDensity", &m, &serde_json::json!({"input": "bounds"})).unwrap_err();
+        assert!(err_poly.contains("must be a point layer"), "{err_poly}");
+
+        // 5. Reject geographic CRS without explicit projected crs param
+        let mut geo_pts = Dataset::new("geopts", GeometryType::Point, vec![]);
+        geo_pts.crs = Some(Crs::LonLat);
+        geo_pts.push(Some(Geometry::Point(Coord::new(10.0, 10.0))), vec![]);
+        let mut no_crs_pts = Dataset::new("nocrs", GeometryType::Point, vec![]);
+        no_crs_pts.crs = None;
+        no_crs_pts.push(Some(Geometry::Point(Coord::new(10.0, 10.0))), vec![]);
+        let m_geo = Map(HashMap::from([("geopts".to_string(), geo_pts), ("nocrs".to_string(), no_crs_pts)]));
+        let err_geo = crate::run("kernelDensity", &m_geo, &serde_json::json!({"input": "geopts"})).unwrap_err();
+        assert!(err_geo.contains("is in geographic coordinates (degrees)"), "{err_geo}");
+        assert!(err_geo.contains("Provide a projected system under 'crs'"), "{err_geo}");
+        let err_explicit_geo =
+            crate::run("kernelDensity", &m_geo, &serde_json::json!({"input": "geopts", "crs": "EPSG:4326"})).unwrap_err();
+        assert!(err_explicit_geo.contains("crs must be a projected coordinate system with linear units"), "{err_explicit_geo}");
+        let err_nocrs = crate::run("kernelDensity", &m_geo, &serde_json::json!({"input": "nocrs"})).unwrap_err();
+        assert!(err_nocrs.contains("has no coordinate system"), "{err_nocrs}");
+
+        // 6. Geographic CRS succeeds when projected crs parameter is supplied
+        let res_projected = crate::run(
+            "kernelDensity",
+            &m_geo,
+            &serde_json::json!({
+                "input": "geopts",
+                "crs": "EPSG:3857",
+                "radius": 50000.0,
+                "pixelSize": 5000.0
+            }),
+        )
+        .unwrap();
+        let Output::Layers(layers_proj) = res_projected.output else { panic!("expected layers") };
+        assert_eq!(layers_proj.len(), 1);
+
+        // 7. Reject negative radius and negative pixelSize
+        assert!(crate::run("kernelDensity", &m, &serde_json::json!({"input": "stations", "radius": -10.0})).is_err());
+        assert!(crate::run("kernelDensity", &m, &serde_json::json!({"input": "stations", "pixelSize": -5.0})).is_err());
+        assert!(crate::run("kernelDensity", &m, &serde_json::json!({"input": "stations", "kernel": "InvalidKernel"})).is_err());
+
+        // 8. Reject invalid field parameter types (must be string or null/missing)
+        let err_num_field = crate::run("kernelDensity", &m, &serde_json::json!({"input": "stations", "field": 123})).unwrap_err();
+        assert!(err_num_field.contains("field must be text"), "{err_num_field}");
+        let err_bool_field = crate::run("kernelDensity", &m, &serde_json::json!({"input": "stations", "field": true})).unwrap_err();
+        assert!(err_bool_field.contains("field must be text"), "{err_bool_field}");
+        let err_arr_field = crate::run("kernelDensity", &m, &serde_json::json!({"input": "stations", "field": ["pop"]})).unwrap_err();
+        assert!(err_arr_field.contains("field must be text"), "{err_arr_field}");
+        let err_obj_field =
+            crate::run("kernelDensity", &m, &serde_json::json!({"input": "stations", "field": {"name": "pop"}})).unwrap_err();
+        assert!(err_obj_field.contains("field must be text"), "{err_obj_field}");
+
+        // Explicit null field runs successfully unweighted
+        assert!(crate::run("kernelDensity", &m, &serde_json::json!({"input": "stations", "field": null})).is_ok());
+
+        // Reject invalid types for crs, kernel, and output
+        let err_crs_num = crate::run("kernelDensity", &m, &serde_json::json!({"input": "stations", "crs": 3857})).unwrap_err();
+        assert!(err_crs_num.contains("crs must be text"), "{err_crs_num}");
+        let err_kernel_num = crate::run("kernelDensity", &m, &serde_json::json!({"input": "stations", "kernel": 123})).unwrap_err();
+        assert!(err_kernel_num.contains("must be one of Quartic, Gaussian"), "{err_kernel_num}");
+        let err_out_bool = crate::run("kernelDensity", &m, &serde_json::json!({"input": "stations", "output": true})).unwrap_err();
+        assert!(err_out_bool.contains("output must be text"), "{err_out_bool}");
+
+        // Extent parameter accepts both text and JSON number arrays, and rejects invalid types
+        let res_ext_str = crate::run(
+            "kernelDensity",
+            &m,
+            &serde_json::json!({
+                "input": "stations",
+                "extent": "500000, 4428000, 501000, 4428200",
+                "pixelSize": 50.0
+            }),
+        )
+        .unwrap();
+        assert_eq!(res_ext_str.messages.len(), 1);
+
+        let res_ext_arr = crate::run(
+            "kernelDensity",
+            &m,
+            &serde_json::json!({
+                "input": "stations",
+                "extent": [500000.0, 4428000.0, 501000.0, 4428200.0],
+                "pixelSize": 50.0
+            }),
+        )
+        .unwrap();
+        assert_eq!(res_ext_arr.messages.len(), 1);
+
+        let err_ext_short =
+            crate::run("kernelDensity", &m, &serde_json::json!({"input": "stations", "extent": [500000.0, 4428000.0]})).unwrap_err();
+        assert!(err_ext_short.contains("the extent is xmin,ymin,xmax,ymax"), "{err_ext_short}");
+        let err_ext_num = crate::run("kernelDensity", &m, &serde_json::json!({"input": "stations", "extent": 12345})).unwrap_err();
+        assert!(err_ext_num.contains("the extent is xmin,ymin,xmax,ymax"), "{err_ext_num}");
+        let err_ext_zero =
+            crate::run("kernelDensity", &m, &serde_json::json!({"input": "stations", "extent": "500000,4428000,500000,4428000"}))
+                .unwrap_err();
+        assert!(err_ext_zero.contains("positive width and height"), "{err_ext_zero}");
+
+        // 9. Report skipped points with non-positive or invalid weights
+        let mut mixed_ds = m.0.get("stations").unwrap().clone();
+        mixed_ds.push(Some(Geometry::Point(tr.to_lonlat(Coord::new(500_500.0, 4_428_100.0)).unwrap())), vec![Value::Float(-10.0)]);
+        let m_mixed = Map(HashMap::from([("mixed".to_string(), mixed_ds)]));
+        let res_mixed = crate::run(
+            "kernelDensity",
+            &m_mixed,
+            &serde_json::json!({
+                "input": "mixed",
+                "field": "pop",
+                "pixelSize": 50.0
+            }),
+        )
+        .unwrap();
+        assert!(res_mixed.messages[0].contains("1 skipped"), "expected '1 skipped' in: {}", res_mixed.messages[0]);
+
+        // 10. MultiPoint geometry support
+        let mut mp_ds = Dataset::new("mp", GeometryType::Point, vec![Field::new("w", FieldType::Double)]);
+        mp_ds.crs = Some(Crs::from_epsg(32618).unwrap());
+        mp_ds.push(
+            Some(Geometry::MultiPoint(vec![
+                tr.to_lonlat(Coord::new(500_000.0, 4_428_000.0)).unwrap(),
+                tr.to_lonlat(Coord::new(500_100.0, 4_428_100.0)).unwrap(),
+            ])),
+            vec![Value::Float(5.0)],
+        );
+        let m_mp = Map(HashMap::from([("mp".to_string(), mp_ds)]));
+        let res_mp =
+            crate::run("kernelDensity", &m_mp, &serde_json::json!({"input": "mp", "field": "w", "pixelSize": 25.0, "radius": 100.0}))
+                .unwrap();
+        assert_eq!(res_mp.messages.len(), 1);
+
+        // 11. Reject excessive workload exceeding MAX_DENSITY_WORK
+        let mut crowded = Dataset::new("crowded", GeometryType::Point, vec![]);
+        crowded.crs = Some(Crs::from_epsg(32618).unwrap());
+        for i in 0..500 {
+            crowded.push(Some(Geometry::Point(tr.to_lonlat(Coord::new(500_000.0 + (i as f64) * 2.0, 4_428_000.0)).unwrap())), vec![]);
+        }
+        let m_crowded = Map(HashMap::from([("crowded".to_string(), crowded)]));
+        let err_work = crate::run(
+            "kernelDensity",
+            &m_crowded,
+            &serde_json::json!({
+                "input": "crowded",
+                "radius": 1000.0,
+                "pixelSize": 1.0
+            }),
+        )
+        .unwrap_err();
+        assert!(err_work.contains("too much work"), "{err_work}");
+
+        // 12. Text-valued weight field produces clear, actionable error
+        let mut text_field_ds = Dataset::new("stations_text", GeometryType::Point, vec![Field::new("city", FieldType::Text)]);
+        text_field_ds.crs = Some(Crs::from_epsg(32618).unwrap());
+        text_field_ds
+            .push(Some(Geometry::Point(tr.to_lonlat(Coord::new(500_000.0, 4_428_000.0)).unwrap())), vec![Value::Text("Boston".into())]);
+        let m_text = Map(HashMap::from([("stations_text".to_string(), text_field_ds)]));
+        let err_text_field =
+            crate::run("kernelDensity", &m_text, &serde_json::json!({"input": "stations_text", "field": "city"})).unwrap_err();
+        assert!(err_text_field.contains("field 'city' must be numeric (is Text)"), "{err_text_field}");
+
+        // 13. MultiPoint vs single point vs multiple independent points
+        let p1 = tr.to_lonlat(Coord::new(500_000.0, 4_428_000.0)).unwrap();
+        let p2 = tr.to_lonlat(Coord::new(500_100.0, 4_428_100.0)).unwrap();
+
+        // Single point dataset
+        let mut single_ds = Dataset::new("single", GeometryType::Point, vec![Field::new("w", FieldType::Double)]);
+        single_ds.crs = Some(Crs::from_epsg(32618).unwrap());
+        single_ds.push(Some(Geometry::Point(p1)), vec![Value::Float(2.0)]);
+
+        // MultiPoint dataset with 2 parts
+        let mut multi_ds = Dataset::new("multi", GeometryType::Point, vec![Field::new("w", FieldType::Double)]);
+        multi_ds.crs = Some(Crs::from_epsg(32618).unwrap());
+        multi_ds.push(Some(Geometry::MultiPoint(vec![p1, p2])), vec![Value::Float(2.0)]);
+
+        // Two independent point features
+        let mut two_pts_ds = Dataset::new("two_pts", GeometryType::Point, vec![Field::new("w", FieldType::Double)]);
+        two_pts_ds.crs = Some(Crs::from_epsg(32618).unwrap());
+        two_pts_ds.push(Some(Geometry::Point(p1)), vec![Value::Float(2.0)]);
+        two_pts_ds.push(Some(Geometry::Point(p2)), vec![Value::Float(2.0)]);
+
+        let m_cmp =
+            Map(HashMap::from([("single".to_string(), single_ds), ("multi".to_string(), multi_ds), ("two_pts".to_string(), two_pts_ds)]));
+
+        let res_single = crate::run(
+            "kernelDensity",
+            &m_cmp,
+            &serde_json::json!({"input": "single", "field": "w", "extent": "499800,4427800,500300,4428300", "pixelSize": 25.0, "radius": 150.0}),
+        ).unwrap();
+        let res_multi = crate::run(
+            "kernelDensity",
+            &m_cmp,
+            &serde_json::json!({"input": "multi", "field": "w", "extent": "499800,4427800,500300,4428300", "pixelSize": 25.0, "radius": 150.0}),
+        ).unwrap();
+        let res_two_pts = crate::run(
+            "kernelDensity",
+            &m_cmp,
+            &serde_json::json!({"input": "two_pts", "field": "w", "extent": "499800,4427800,500300,4428300", "pixelSize": 25.0, "radius": 150.0}),
+        ).unwrap();
+
+        let extract_raster_bytes = |out: Output| match out {
+            Output::Layers(mut layers) => match layers.remove(0) {
+                OutputLayer::Raster { bytes, .. } => bytes,
+                _ => panic!("expected Raster"),
+            },
+            _ => panic!("expected Layers"),
+        };
+        let bytes_single = extract_raster_bytes(res_single.output);
+        let bytes_multi = extract_raster_bytes(res_multi.output);
+        let bytes_two_pts = extract_raster_bytes(res_two_pts.output);
+
+        let r_single = rustgis_data::raster::geotiff::read(std::io::Cursor::new(&bytes_single), "s").unwrap();
+        let r_multi = rustgis_data::raster::geotiff::read(std::io::Cursor::new(&bytes_multi), "m").unwrap();
+        let r_two_pts = rustgis_data::raster::geotiff::read(std::io::Cursor::new(&bytes_two_pts), "t").unwrap();
+
+        // MultiPoint with 2 parts must produce exact same output as 2 independent points each with weight 2.0
+        assert_eq!(r_multi.bands[0].data, r_two_pts.bands[0].data, "MultiPoint must match two independent point features");
+        // And must differ from single point (which only contains p1)
+        assert_ne!(r_multi.bands[0].data, r_single.bands[0].data, "MultiPoint must differ from single point");
+
+        // 14. Extent whose span overflows f64 must be rejected with extent error, not pixel size error
+        let err_str_overflow =
+            crate::run("kernelDensity", &m_cmp, &serde_json::json!({"input": "single", "extent": "-1e308,-1e308,1e308,1e308"}))
+                .unwrap_err();
+        assert!(
+            err_str_overflow.contains("the extent must have a positive width and height"),
+            "expected extent error, got: {err_str_overflow}"
+        );
+        assert!(
+            !err_str_overflow.contains("pixel size must be a positive number"),
+            "should not blame pixel size when user did not set one: {err_str_overflow}"
+        );
+
+        let err_arr_overflow =
+            crate::run("kernelDensity", &m_cmp, &serde_json::json!({"input": "single", "extent": [-1e308, -1e308, 1e308, 1e308]}))
+                .unwrap_err();
+        assert!(
+            err_arr_overflow.contains("the extent must have a positive width and height"),
+            "expected extent error, got: {err_arr_overflow}"
+        );
+
+        // 15. Hostile and extreme parameters must be rejected cleanly without panic
+        let hostile_cases = vec![
+            serde_json::json!({"input": "single", "radius": -100.0}),
+            serde_json::json!({"input": "single", "radius": 1e308}),
+            serde_json::json!({"input": "single", "pixelSize": -5.0}),
+            serde_json::json!({"input": "single", "pixelSize": 0.0}),
+            serde_json::json!({"input": "single", "pixelSize": 1e-12}),
+            serde_json::json!({"input": "single", "kernel": "nonexistent"}),
+            serde_json::json!({"input": "single", "extent": "0,0,10"}),
+            serde_json::json!({"input": "single", "extent": [10.0, 20.0]}),
+        ];
+        for case in hostile_cases {
+            let res = crate::run("kernelDensity", &m_cmp, &case);
+            assert!(res.is_err(), "hostile params should return Err, but got Ok");
+        }
+
+        // 16. pixelSize > radius must be rejected with informative error
+        let err_pixel_larger =
+            crate::run("kernelDensity", &m_cmp, &serde_json::json!({"input": "single", "pixelSize": 250.0, "radius": 50.0})).unwrap_err();
+        assert!(
+            err_pixel_larger.contains("pixel size must not be larger than"),
+            "expected pixel size larger error, got: {err_pixel_larger}"
+        );
+
+        // 17. Clustered points with far outlier must succeed with default parameters
+        let mut outlier_ds = Dataset::new("outlier_ds", GeometryType::Point, vec![]);
+        outlier_ds.crs = Some(Crs::from_epsg(32618).unwrap());
+        outlier_ds.push(Some(Geometry::Point(tr.to_lonlat(Coord::new(500000.0, 4428000.0)).unwrap())), vec![]);
+        outlier_ds.push(Some(Geometry::Point(tr.to_lonlat(Coord::new(500010.0, 4428010.0)).unwrap())), vec![]);
+        outlier_ds.push(Some(Geometry::Point(tr.to_lonlat(Coord::new(500020.0, 4428020.0)).unwrap())), vec![]);
+        outlier_ds.push(Some(Geometry::Point(tr.to_lonlat(Coord::new(500030.0, 4428030.0)).unwrap())), vec![]);
+        outlier_ds.push(Some(Geometry::Point(tr.to_lonlat(Coord::new(550000.0, 4478000.0)).unwrap())), vec![]);
+        let m_outlier = Map(HashMap::from([("outlier_ds".to_string(), outlier_ds)]));
+        let res_outlier = crate::run("kernelDensity", &m_outlier, &serde_json::json!({"input": "outlier_ds"}));
+        assert!(res_outlier.is_ok(), "default run with outlier should succeed: {:?}", res_outlier.err());
+
+        // 18. Default run where Silverman radius is bumped to cell_size does not clip grid extent
+        let mut bump_ds = Dataset::new("bump_ds", GeometryType::Point, vec![]);
+        bump_ds.crs = Some(Crs::from_epsg(32618).unwrap());
+        bump_ds.push(Some(Geometry::Point(tr.to_lonlat(Coord::new(500000.0, 4428000.0)).unwrap())), vec![]);
+        bump_ds.push(Some(Geometry::Point(tr.to_lonlat(Coord::new(500005.0, 4428005.0)).unwrap())), vec![]);
+        bump_ds.push(Some(Geometry::Point(tr.to_lonlat(Coord::new(500010.0, 4428010.0)).unwrap())), vec![]);
+        bump_ds.push(Some(Geometry::Point(tr.to_lonlat(Coord::new(550000.0, 4478000.0)).unwrap())), vec![]);
+        let m_bump = Map(HashMap::from([("bump_ds".to_string(), bump_ds)]));
+        let res_bump = crate::run("kernelDensity", &m_bump, &serde_json::json!({"input": "bump_ds"})).unwrap();
+        let bytes_bump = extract_raster_bytes(res_bump.output);
+        let r_bump = rustgis_data::raster::geotiff::read(std::io::Cursor::new(&bytes_bump), "b").unwrap();
+        let left_point_x = 500000.0;
+        let grid_min_x = r_bump.transform.origin_x;
+        assert!(
+            left_point_x - grid_min_x >= r_bump.transform.pixel_width * 0.99,
+            "grid must not clip at edge: {grid_min_x} vs {left_point_x}"
+        );
+
+        // 19. pixelSize larger than automatic Silverman radius raises radius to pixelSize instead of erroring
+        let res_auto_bump = crate::run("kernelDensity", &m_outlier, &serde_json::json!({"input": "outlier_ds", "pixelSize": 1000.0}));
+        assert!(res_auto_bump.is_ok(), "pixelSize > auto radius should succeed by bumping radius: {:?}", res_auto_bump.err());
+    }
+
+    #[test]
     fn xy_table_to_point_places_rows_by_their_coordinates() {
         let fields = vec![Field::new("name", FieldType::Text), Field::new("lon", FieldType::Text), Field::new("lat", FieldType::Double)];
         let mut stops = Dataset::new("stops", GeometryType::None, fields);
@@ -4208,6 +5790,9 @@ mod tests {
             serde_json::json!({"input": "polys", "overlay": "polys"}),
             serde_json::json!({"input": "pts", "overlay": "pts", "output": ""}),
             serde_json::json!({"input": 3, "overlay": ["polys"]}),
+            serde_json::json!({"input": "polys", "update": "polys", "erase": "pts"}),
+            serde_json::json!({"input": "pts", "split": "polys", "field": "k", "output": "\u{0}"}),
+            serde_json::json!({"input": "polys", "split": "polys", "field": 5, "update": 2}),
             serde_json::json!({"input": "pts", "near": "pts", "distance": -0.0, "units": "Feet"}),
             serde_json::json!({"input": "polys", "near": "pts", "distance": 1e308}),
             serde_json::json!({"input": "pts", "statistics": [{"field": "v", "statistic": "P0"}, 7], "case": ["k", 3], "separator": 5}),
@@ -4293,6 +5878,417 @@ mod tests {
             .map(|f| (f.attrs[0].as_f64().unwrap(), if let Value::Text(t) = &f.attrs[1] { t.as_str() } else { "" }))
             .collect();
         assert_eq!(rows, [(1.0, "a"), (2.0, "a"), (2.0, "a")]);
+    }
+
+    /// Summarize Within, through its index, counts what testing every point against every polygon
+    /// counts: random triangles and squares with holes, overlapping and of very different sizes
+    /// (one covering them all), a polygon feature without geometry, points on vertices (the edge
+    /// counts), several-point features, points outside every polygon, past the latitude limit or
+    /// with non-finite coordinates, and a selection of points.
+    #[test]
+    fn count_points_matches_testing_every_point_against_every_polygon() {
+        let mut seed = 0x9e37_79b9_7f4a_7c15u64;
+        let mut rand = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            (seed >> 11) as f64 / (1u64 << 53) as f64
+        };
+        let c = Coord::new;
+        let mut polys = Dataset::new("polys", GeometryType::Polygon, vec![]);
+        let mut vertices = Vec::new();
+        for i in 0..300 {
+            let (x, y, size) = (rand() * 40.0 - 20.0, rand() * 40.0 - 20.0, 0.1 + rand() * 3.0);
+            let g = if i % 3 == 0 {
+                let hole = vec![
+                    c(x + size * 0.25, y + size * 0.25),
+                    c(x + size * 0.25, y + size * 0.75),
+                    c(x + size * 0.75, y + size * 0.75),
+                    c(x + size * 0.25, y + size * 0.25),
+                ];
+                let outer = vec![c(x, y), c(x + size, y), c(x + size, y + size), c(x, y + size), c(x, y)];
+                Geometry::Polygon(vec![vec![outer, hole]])
+            } else {
+                let (a, b) = (c(x + size * rand(), y), c(x + size, y + size * rand()));
+                Geometry::Polygon(vec![vec![vec![c(x, y + size), a, b, c(x, y + size)]]])
+            };
+            if i % 7 == 0 {
+                vertices.extend(match &g {
+                    Geometry::Polygon(p) => p.iter().flatten().flatten().copied().collect::<Vec<_>>(),
+                    _ => Vec::new(),
+                });
+            }
+            polys.push(Some(g), vec![]);
+        }
+        polys.push(Some(sq(-30.0, -30.0, 60.0)), vec![]);
+        // Reaching past the map's latitude limit, where every latitude beyond it is the same.
+        polys.push(Some(sq(40.0, 80.0, 6.0)), vec![]);
+        polys.push(None, vec![]);
+        let mut pts = Dataset::new("pts", GeometryType::Point, vec![]);
+        for _ in 0..3000 {
+            pts.push(Some(Geometry::Point(c(rand() * 50.0 - 25.0, rand() * 50.0 - 25.0))), vec![]);
+        }
+        for v in vertices {
+            pts.push(Some(Geometry::Point(v)), vec![]);
+        }
+        for _ in 0..100 {
+            let (x, y) = (rand() * 40.0 - 20.0, rand() * 40.0 - 20.0);
+            pts.push(Some(Geometry::MultiPoint(vec![c(x, y), c(x + 2.0, y + 1.0), c(x - 1.0, y + 3.0)])), vec![]);
+        }
+        // Beyond the latitude limit, and features with non-finite coordinates.
+        pts.push(Some(Geometry::Point(c(42.0, 89.0))), vec![]);
+        pts.push(Some(Geometry::MultiPoint(vec![c(f64::NAN, 1.0), c(41.0, 81.0)])), vec![]);
+        pts.push(Some(Geometry::MultiPoint(vec![c(f64::INFINITY, f64::NAN), c(-29.0, -29.0)])), vec![]);
+        pts.push(Some(Geometry::Point(c(f64::NAN, f64::NAN))), vec![]);
+        pts.push(None, vec![]);
+        let selected: Vec<usize> = (0..pts.features.len()).filter(|r| r % 5 != 0).collect();
+        // Enough polygons for the index to build its grid, not fall back to testing them all.
+        let extents = polys.features.iter().filter_map(|f| f.geometry.as_ref().and_then(to_multipolygon)).map(|mp| merc_extent(&mp));
+        assert!(ExtentIndex::new(extents).cell_size().is_some());
+        // Every selected point against every polygon.
+        let expected: Vec<i64> = polys
+            .features
+            .iter()
+            .map(|f| {
+                let Some(mp) = f.geometry.as_ref().and_then(to_multipolygon) else { return 0 };
+                selected.iter().filter_map(|r| pts.features.get(*r)?.geometry.as_ref()).filter(|g| mp.intersects(&to_geo(g))).count() as i64
+            })
+            .collect();
+        let m = Selected(
+            Map(HashMap::from([("polys".to_string(), polys), ("pts".to_string(), pts)])),
+            HashMap::from([("pts".to_string(), selected)]),
+        );
+        let out = layer(crate::run("countPoints", &m, &serde_json::json!({"polygons": "polys", "points": "pts"})).unwrap());
+        let fi = out.field_index("point_count").unwrap();
+        let counts: Vec<i64> = (0..out.features.len())
+            .map(|r| match out.value(r, fi) {
+                Value::Int(n) => *n,
+                v => panic!("{v:?}"),
+            })
+            .collect();
+        assert_eq!(counts, expected);
+        assert!(expected.iter().filter(|n| **n > 0).count() > 200, "most polygons hold some points: {expected:?}");
+    }
+
+    /// Deterministic random masks and mixed inputs exercise an actual grid, overlapping masks,
+    /// holes, multipart features, empty geometry, boundary contacts and projected coordinates.
+    fn indexed_overlay_inputs() -> Map {
+        let mut seed = 0x1142_9e37_79b9u64;
+        let mut rand = || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            (seed >> 11) as f64 / (1u64 << 53) as f64
+        };
+        let mut masks = Dataset::new("masks", GeometryType::Polygon, vec![]);
+        for i in 0..80 {
+            let (x, y, size) = (rand() * 12.0, rand() * 12.0, 0.2 + rand() * 2.0);
+            let mut g = sq(x, y, size);
+            if let Geometry::Polygon(polys) = &mut g {
+                if i % 3 == 0 {
+                    let Geometry::Polygon(hole) = sq(x + size * 0.25, y + size * 0.25, size * 0.5) else {
+                        panic!("square fixture must be a polygon")
+                    };
+                    polys[0].push(hole[0][0].clone());
+                } else if i % 3 == 1 {
+                    let Geometry::Polygon(extra) = sq(x + size * 0.5, y, size) else { panic!("square fixture must be a polygon") };
+                    polys.extend(extra);
+                }
+            }
+            masks.push(Some(g), vec![]);
+        }
+        masks.push(Some(sq(40.0, 80.0, 6.0)), vec![]);
+        masks.push(Some(sq(190.0, 0.0, 2.0)), vec![]);
+        masks.push(Some(sq(0.0, 0.0, 1.0)), vec![]);
+        masks.push(None, vec![]);
+        let mut features = Dataset::new("features", GeometryType::Polygon, vec![Field::new("row", FieldType::Integer)]);
+        for i in 0..180 {
+            let (x, y, size) = (rand() * 16.0 - 2.0, rand() * 16.0 - 2.0, rand() * 2.0 + 0.1);
+            let g = match i % 4 {
+                0 => sq(x, y, size),
+                1 => Geometry::Line(vec![vec![Coord::new(x, y), Coord::new(x + size, y + size)]]),
+                2 => Geometry::Point(Coord::new(x, y)),
+                _ => Geometry::MultiPoint(vec![Coord::new(x, y), Coord::new(x + size, y)]),
+            };
+            features.push(Some(g), vec![Value::Int(i)]);
+        }
+        for g in [
+            Some(Geometry::Point(Coord::new(42.0, 89.0))),
+            Some(Geometry::Point(Coord::new(-169.0, 1.0))),
+            Some(Geometry::Point(Coord::new(0.0, 0.0))),
+            Some(Geometry::Line(vec![vec![Coord::new(0.0, 0.0), Coord::new(1.0, 0.0)]])),
+            Some(sq(0.0, 0.0, 1.0)),
+            Some(sq(-3.0, -3.0, 22.0)),
+            Some(Geometry::Polygon(vec![])),
+            None,
+        ] {
+            features.push(g, vec![Value::Int(features.features.len() as i64)]);
+        }
+        Map(HashMap::from([("masks".into(), masks), ("features".into(), features)]))
+    }
+
+    /// Compare polygon coverage rather than vertex order or the overlay's rounding; other
+    /// geometries must have the same parts. The fixture spans nearly the whole projected world:
+    /// its whole-mask integer overlay rounds to centimetres, so allow a 10 cm boundary band
+    /// for symmetric-difference area and 10 cm between line vertices. Points never move.
+    fn assert_same_clip_geometry(got: &Geometry, want: &Geometry) {
+        use geo::{Area, Euclidean, Length};
+        if let (Some(a), Some(b)) = (to_multipolygon(got), to_multipolygon(want)) {
+            let perimeter: f64 = [&a, &b]
+                .into_iter()
+                .flat_map(|m| m.0.iter())
+                .flat_map(|p| std::iter::once(p.exterior()).chain(p.interiors()))
+                .map(|ring| Euclidean.length(ring))
+                .sum();
+            let error = a.xor(&b).unsigned_area();
+            assert!(error <= perimeter * 0.1, "area error {error}: {got:?} vs {want:?}");
+        } else {
+            match (got, want) {
+                (Geometry::Point(_), Geometry::Point(_)) | (Geometry::MultiPoint(_), Geometry::MultiPoint(_)) => {
+                    assert_eq!(got, want);
+                    return;
+                }
+                (Geometry::Line(a), Geometry::Line(b)) => {
+                    assert_eq!(a.len(), b.len(), "line parts differ");
+                    for (a, b) in a.iter().zip(b) {
+                        assert_eq!(a.len(), b.len(), "line vertices differ");
+                    }
+                }
+                _ => panic!("geometry variants differ: {got:?} vs {want:?}"),
+            }
+            let a = to_geo(got);
+            let b = to_geo(want);
+            use geo::CoordsIter;
+            let a: Vec<_> = a.coords_iter().collect();
+            let b: Vec<_> = b.coords_iter().collect();
+            assert_eq!(a.len(), b.len(), "{got:?} vs {want:?}");
+            for (a, b) in a.iter().zip(&b) {
+                assert!((a.x - b.x).abs() < 0.1 && (a.y - b.y).abs() < 0.1, "{got:?} vs {want:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn indexed_clip_matches_the_whole_mask() {
+        let m = indexed_overlay_inputs();
+        let masks = &m.0["masks"];
+        assert!(
+            ExtentIndex::new(masks.features.iter().filter_map(|f| f.geometry.as_ref().and_then(to_multipolygon)).map(|m| merc_extent(&m)))
+                .cell_size()
+                .is_some()
+        );
+        for selection in [None, Some((0..80).filter(|i| i % 3 != 0).collect()), Some(vec![82]), Some(vec![83])] {
+            let mut selected = HashMap::new();
+            if let Some(s) = selection {
+                selected.insert("masks".into(), s);
+                selected.insert("features".into(), (0..188).filter(|i| i % 5 != 0).collect());
+            }
+            let inp = Selected(indexed_overlay_inputs(), selected);
+            let p = serde_json::json!({"input":"features", "clip":"masks"});
+            let masks = &inp.0.0["masks"];
+            let polys: Vec<_> = rows(&inp, &p, "clip", masks)
+                .iter()
+                .filter_map(|r| masks.features[*r].geometry.as_ref().and_then(to_multipolygon))
+                .collect();
+            let whole = union_all(polys.iter().flat_map(|m| m.0.iter()));
+            let features = &inp.0.0["features"];
+            let expected: Vec<_> = rows(&inp, &p, "input", features)
+                .into_iter()
+                .filter_map(|r| {
+                    let f = &features.features[r];
+                    let g = part(&dissolved(f.geometry.as_ref()?), &whole, true)?;
+                    Some((f.attrs.clone(), g))
+                })
+                .collect();
+            let out = layer(crate::run("clip", &inp, &p).unwrap());
+            assert_eq!(out.fields, features.fields);
+            assert_eq!(
+                out.features.iter().map(|f| &f.attrs).collect::<Vec<_>>(),
+                expected.iter().map(|(attrs, _)| attrs).collect::<Vec<_>>()
+            );
+            for (f, (attrs, g)) in out.features.iter().zip(&expected) {
+                assert_eq!(&f.attrs, attrs);
+                assert_same_clip_geometry(f.geometry.as_ref().unwrap(), g);
+            }
+        }
+    }
+
+    #[test]
+    fn indexed_clip_handles_repeated_and_changing_neighbourhoods() {
+        let mut masks = Dataset::new("masks", GeometryType::Polygon, vec![]);
+        for i in 0..20 {
+            masks.push(Some(sq(f64::from(i) * 2.0, 0.0, 1.0)), vec![]);
+        }
+        masks.push(Some(sq(0.2, 0.0, 1.0)), vec![]);
+        masks.push(Some(sq(4.2, 0.0, 1.0)), vec![]);
+        // Repeated multi-mask hits, a different multi-mask set, a singleton, a miss, and the
+        // earlier sets again: neither cached unions nor single masks may leak across inputs.
+        let xs = [-100.0, 0.5, 0.6, 4.5, 8.5, 100.0, 0.7, 4.7, 4.8];
+        let mut pts = Dataset::new("pts", GeometryType::Point, vec![Field::new("x", FieldType::Double)]);
+        for x in xs {
+            pts.push(Some(Geometry::Point(Coord::new(x, 0.5))), vec![Value::Float(x)]);
+        }
+        let m = Map(HashMap::from([("masks".into(), masks), ("pts".into(), pts)]));
+        let out = layer(crate::run("clip", &m, &serde_json::json!({"input":"pts", "clip":"masks"})).unwrap());
+        let kept: Vec<_> = out.features.iter().map(|f| f.attrs[0].as_f64().unwrap()).collect();
+        assert_eq!(kept, [0.5, 0.6, 4.5, 8.5, 0.7, 4.7, 4.8]);
+        for f in &out.features {
+            assert_eq!(f.geometry, Some(Geometry::Point(Coord::new(f.attrs[0].as_f64().unwrap(), 0.5))));
+        }
+    }
+
+    #[test]
+    fn indexed_clip_handles_alternating_neighbourhoods_and_cache_eviction() {
+        let mut masks = Dataset::new("masks", GeometryType::Polygon, vec![]);
+        for i in 0..12 {
+            let x = f64::from(i) * 2.0;
+            masks.push(Some(sq(x, 0.0, 1.0)), vec![]);
+            masks.push(Some(sq(x + 0.2, 0.0, 1.0)), vec![]);
+        }
+        let mut pts = Dataset::new("pts", GeometryType::Point, vec![Field::new("x", FieldType::Double)]);
+        // Revisit alternating sets, then overflow the eight-entry cache and revisit evicted sets.
+        for i in [0, 1, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 0, 1, 11, 0] {
+            let x = f64::from(i) * 2.0 + 0.5;
+            pts.push(Some(Geometry::Point(Coord::new(x, 0.5))), vec![Value::Float(x)]);
+        }
+        let expected = pts.features.clone();
+        let m = Map(HashMap::from([("masks".into(), masks), ("pts".into(), pts)]));
+        let out = layer(crate::run("clip", &m, &serde_json::json!({"input":"pts", "clip":"masks"})).unwrap());
+        assert_eq!(out.features.len(), expected.len());
+        for (got, want) in out.features.iter().zip(expected) {
+            assert_eq!(got.geometry, want.geometry);
+            assert_eq!(got.attrs, want.attrs);
+        }
+    }
+
+    #[test]
+    fn projected_extent_matches_full_geometry_projection() {
+        let m = indexed_overlay_inputs();
+        for ds in m.0.values() {
+            for g in ds.features.iter().filter_map(|f| f.geometry.as_ref()) {
+                assert_eq!(projected_extent(g), merc_extent(&to_geo(g)), "{g:?}");
+            }
+        }
+        for g in [
+            Geometry::MultiPoint(vec![]),
+            Geometry::Line(vec![vec![]]),
+            Geometry::Polygon(vec![]),
+            Geometry::MultiPoint(vec![Coord::new(f64::NAN, 10.0), Coord::new(200.0, 90.0), Coord::new(-220.0, -90.0)]),
+            Geometry::Point(Coord::new(f64::INFINITY, f64::NEG_INFINITY)),
+        ] {
+            assert_eq!(projected_extent(&g), merc_extent(&to_geo(&g)), "{g:?}");
+        }
+    }
+
+    #[test]
+    fn indexed_clip_discards_masks_with_no_filled_area() {
+        let mut masks = Dataset::new("masks", GeometryType::Polygon, vec![]);
+        masks.push(
+            Some(Geometry::Polygon(vec![vec![vec![
+                Coord::new(0.0, 0.0),
+                Coord::new(1.0, 0.0),
+                Coord::new(2.0, 0.0),
+                Coord::new(0.0, 0.0),
+            ]]])),
+            vec![],
+        );
+        masks.push(Some(sq(10.0, 0.0, 1.0)), vec![]);
+        let mut pts = Dataset::new("pts", GeometryType::Point, vec![]);
+        pts.push(Some(Geometry::Point(Coord::new(0.5, 0.0))), vec![]);
+        pts.push(Some(Geometry::Line(vec![vec![Coord::new(0.5, 0.0), Coord::new(1.5, 0.0)]])), vec![]);
+        pts.push(Some(Geometry::MultiPoint(vec![Coord::new(0.5, 0.0), Coord::new(10.5, 0.5)])), vec![]);
+        let m = Map(HashMap::from([("masks".into(), masks), ("pts".into(), pts)]));
+        let out = layer(crate::run("clip", &m, &serde_json::json!({"input":"pts", "clip":"masks"})).unwrap());
+        assert_eq!(out.features.len(), 1);
+        assert_eq!(out.features[0].geometry, Some(Geometry::Point(Coord::new(10.5, 0.5))));
+    }
+
+    #[test]
+    fn indexed_clip_keeps_lines_that_snap_to_mask_edges() {
+        let mut masks = Dataset::new("masks", GeometryType::Polygon, vec![]);
+        masks.push(Some(sq(0.0, 0.0, 1.0)), vec![]);
+        let mut lines = Dataset::new("lines", GeometryType::Polyline, vec![]);
+        for y in [-1e-12, -0.01] {
+            lines.push(Some(Geometry::Line(vec![vec![Coord::new(0.1, y), Coord::new(0.9, y)]])), vec![]);
+        }
+        let whole = union_all(to_multipolygon(masks.features[0].geometry.as_ref().unwrap()).unwrap().0.iter());
+        let expected: Vec<_> = lines.features.iter().filter_map(|f| part(f.geometry.as_ref().unwrap(), &whole, true)).collect();
+        // The integer overlay snaps the near line onto the edge, but leaves the far line out.
+        assert_eq!(expected.len(), 1);
+        let m = Map(HashMap::from([("masks".into(), masks), ("lines".into(), lines)]));
+        let out = layer(crate::run("clip", &m, &serde_json::json!({"input":"lines", "clip":"masks"})).unwrap());
+        assert_eq!(out.features.iter().filter_map(|f| f.geometry.clone()).collect::<Vec<_>>(), expected);
+    }
+
+    #[test]
+    fn indexed_selection_matches_every_selector_including_buffers() {
+        for selection in [None, Some((0..80).filter(|i| i % 3 != 0).collect()), Some(vec![83])] {
+            let mut selected = HashMap::new();
+            if let Some(s) = selection {
+                selected.insert("masks".into(), s);
+                // Input selection must not restrict a new location selection.
+                selected.insert("features".into(), vec![0]);
+            }
+            let inp = Selected(indexed_overlay_inputs(), selected);
+            for distance in [0.0, 20_000.0] {
+                for invert in [false, true] {
+                    let p = serde_json::json!({"input":"features", "select":"masks", "distance": distance, "units":"Meters", "invert": if invert { "Yes" } else { "No" }});
+                    let masks = &inp.0.0["masks"];
+                    let selectors: Vec<_> = rows(&inp, &p, "select", masks)
+                        .iter()
+                        .filter_map(|r| masks.features[*r].geometry.as_ref())
+                        .map(|g| {
+                            let b = if distance > 0.0 { geodesic_buffer(g, distance) } else { None };
+                            to_geo(b.as_ref().unwrap_or(g))
+                        })
+                        .collect();
+                    let expected: Vec<_> = inp.0.0["features"]
+                        .features
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(r, f)| {
+                            let gg = to_geo(f.geometry.as_ref()?);
+                            (selectors.iter().any(|s| s.intersects(&gg)) != invert).then_some(r)
+                        })
+                        .collect();
+                    let Output::Selection { rows, .. } = crate::run("selectByLocation", &inp, &p).unwrap().output else {
+                        panic!("expected selection")
+                    };
+                    assert_eq!(rows, expected, "distance={distance}, invert={invert}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn extent_index_any_candidate_short_circuits_and_deduplicates() {
+        // Every extent spans many cells. A hit must not collect the rest of the grid first;
+        // on a miss, repeated references to the same selector must not repeat its predicate.
+        for n in [8, 40] {
+            let index = ExtentIndex::new((0..n).map(|_| Extent::new(0.0, 0.0, 10.0, 10.0)));
+            let query = Extent::new(-100.0, -100.0, 100.0, 100.0);
+            let mut calls = 0;
+            assert!(index.any_candidate(&query, |_| {
+                calls += 1;
+                true
+            }));
+            assert_eq!(calls, 1);
+            let mut seen = std::collections::HashSet::new();
+            assert!(!index.any_candidate(&query, |i| {
+                assert!(seen.insert(i));
+                false
+            }));
+            assert_eq!(seen.len(), n);
+        }
+        let index = ExtentIndex::new((0..40).map(|i| Extent::new(f64::from(i), 0.0, f64::from(i) + 0.1, 0.1)));
+        let mut calls = 0;
+        assert!(!index.any_candidate(&Extent::new(0.0, 0.0, 0.1, 0.1), |_| {
+            calls += 1;
+            false
+        }));
+        assert!(calls > 0 && calls < 40, "visited {calls} candidates");
+        assert!(!index.any_candidate(&Extent::new(50.0, 50.0, 51.0, 51.0), |_| panic!("disjoint query visited a candidate")));
+        assert!(!index.any_candidate(&Extent::EMPTY, |_| panic!("empty query visited a candidate")));
     }
 
     #[test]
@@ -4442,6 +6438,447 @@ mod tests {
         assert_eq!(out.features[4].attrs[3], Value::Text("C2".into()));
         let e = crate::run("union", &inputs(), &serde_json::json!({"input": "pts", "overlay": "polys"})).unwrap_err();
         assert!(e.contains("not a polygon layer"), "{e}");
+    }
+
+    #[test]
+    fn symmetrical_difference_keeps_what_only_one_layer_covers() {
+        let mut m = parcels_and_zones();
+        m.0.get_mut("parcels").unwrap().push(None, vec![Value::Text("p3".into()), Value::Text("lot".into())]);
+        let out = layer(crate::run("symmetricalDifference", &m, &serde_json::json!({"input": "parcels", "overlay": "zones"})).unwrap());
+        assert_eq!(out.name, "parcels_SymDiff");
+        let names: Vec<&str> = out.fields.iter().map(|f| f.name.as_str()).collect();
+        assert_eq!(names, ["id", "use", "id_2", "zone"]);
+        // Union's features less p1's half in z1: p1's other half, p2 whole, p3 without geometry,
+        // then z1 less p1 and z2 whole.
+        assert_eq!(overlay_keys(&out), ["p1|", "p2|", "p3|", "|z1", "|z2"]);
+        let x = |r: usize| {
+            let e = out.features[r].geometry.as_ref().unwrap().extent();
+            (e.min_x, e.max_x)
+        };
+        let near = |(a, b): (f64, f64), (c, d): (f64, f64)| (a - c).abs() < 1e-9 && (b - d).abs() < 1e-9;
+        assert!(near(x(0), (0.0, 1.0)) && near(x(3), (2.0, 3.0)), "{:?} {:?}", x(0), x(3));
+        assert_eq!(out.features[1].geometry, m.0["parcels"].features[1].geometry, "p2 only touches z2: copied as it is");
+        let e = crate::run("symmetricalDifference", &inputs(), &serde_json::json!({"input": "pts", "overlay": "polys"})).unwrap_err();
+        assert!(e.contains("not a polygon layer"), "{e}");
+    }
+
+    #[test]
+    fn symmetrical_difference_honours_both_layers_selections() {
+        // Only p2 and z1 selected: p1 doesn't take its half out of z1.
+        let m = Selected(parcels_and_zones(), HashMap::from([("parcels".to_string(), vec![1]), ("zones".to_string(), vec![0])]));
+        let out = layer(crate::run("symmetricalDifference", &m, &serde_json::json!({"input": "parcels", "overlay": "zones"})).unwrap());
+        assert_eq!(overlay_keys(&out), ["p2|", "|z1"]);
+    }
+
+    #[test]
+    fn erase_takes_points_and_lines_too() {
+        let m = inputs();
+        let out = layer(crate::run("erase", &m, &serde_json::json!({"input": "pts", "erase": "polys"})).unwrap());
+        assert_eq!((out.name.as_str(), out.geometry_type), ("pts_Erase", GeometryType::Point));
+        // (0.5, 0.5) and (1.5, 1.5) are in the squares; only (50, 50) is left.
+        let left: Vec<&Value> = out.features.iter().map(|f| &f.attrs[0]).collect();
+        assert_eq!(left, [&Value::Float(3.0)]);
+        // A road across the 2° square x 0–2 (and the one over x 1–3): what is left either side.
+        let mut roads = Dataset::new("roads", GeometryType::Polyline, vec![]);
+        roads.push(Some(Geometry::Line(vec![vec![Coord::new(-1.0, 1.0), Coord::new(4.0, 1.0)]])), vec![]);
+        let mut m = m;
+        m.0.insert("roads".into(), roads);
+        let out = layer(crate::run("erase", &m, &serde_json::json!({"input": "roads", "erase": "polys"})).unwrap());
+        assert_eq!(out.geometry_type, GeometryType::Polyline);
+        let Some(Geometry::Line(parts)) = out.features.first().and_then(|f| f.geometry.as_ref()) else { panic!("{:?}", out.features) };
+        let mut spans: Vec<(f64, f64)> =
+            parts.iter().map(|p| p.iter().fold((f64::MAX, f64::MIN), |(a, b), c| (a.min(c.x), b.max(c.x)))).collect();
+        spans.sort_by(|a, b| a.0.total_cmp(&b.0));
+        assert_eq!(spans.len(), 2, "{spans:?}");
+        // Cut in Web Mercator and back, so not to the last bit.
+        assert!((spans[0].0 + 1.0).abs() < 1e-7 && spans[0].1.abs() < 1e-7, "{spans:?}");
+        assert!((spans[1].0 - 3.0).abs() < 1e-7 && (spans[1].1 - 4.0).abs() < 1e-7, "{spans:?}");
+    }
+
+    #[test]
+    fn erase_unions_an_input_feature_whose_parts_overlap() {
+        // One parcel of two overlapping squares (x 0–2 and 1–3), and an erase square over x 2.5–4.5.
+        let ring =
+            |x: f64| vec![Coord::new(x, 0.0), Coord::new(x + 2.0, 0.0), Coord::new(x + 2.0, 2.0), Coord::new(x, 2.0), Coord::new(x, 0.0)];
+        let mut parcels = Dataset::new("parcels", GeometryType::Polygon, vec![]);
+        parcels.push(Some(Geometry::Polygon(vec![vec![ring(0.0)], vec![ring(1.0)]])), vec![]);
+        let mut zones = Dataset::new("zones", GeometryType::Polygon, vec![]);
+        zones.push(Some(sq(2.5, 0.0, 2.0)), vec![]);
+        let m = Map(HashMap::from([("parcels".to_string(), parcels), ("zones".to_string(), zones)]));
+        let out = layer(crate::run("erase", &m, &serde_json::json!({"input": "parcels", "erase": "zones"})).unwrap());
+        // What is left is x 0–2.5 whole, the overlap (x 1–2) included.
+        use geo::Area;
+        let rest = to_multipolygon(out.features[0].geometry.as_ref().unwrap()).unwrap();
+        let want = to_multipolygon(&Geometry::Polygon(vec![vec![vec![
+            Coord::new(0.0, 0.0),
+            Coord::new(2.5, 0.0),
+            Coord::new(2.5, 2.0),
+            Coord::new(0.0, 2.0),
+            Coord::new(0.0, 0.0),
+        ]]]))
+        .unwrap();
+        assert_eq!(rest.0.len(), 1, "{rest:?}");
+        assert!((rest.unsigned_area() - want.unsigned_area()).abs() < 1e-6 * want.unsigned_area(), "{rest:?}");
+    }
+
+    #[test]
+    fn update_replaces_the_covered_part_with_the_update_polygons() {
+        let mut m = parcels_and_zones();
+        m.0.get_mut("parcels").unwrap().push(None, vec![Value::Text("p3".into()), Value::Text("lot".into())]);
+        // An update feature without geometry adds nothing.
+        m.0.get_mut("zones").unwrap().push(None, vec![Value::Text("z0".into()), Value::Null]);
+        let out = layer(crate::run("update", &m, &serde_json::json!({"input": "parcels", "update": "zones"})).unwrap());
+        assert_eq!(out.name, "parcels_Update");
+        let names: Vec<&str> = out.fields.iter().map(|f| f.name.as_str()).collect();
+        assert_eq!(names, ["id", "use"], "the input's fields only");
+        let text = |t: &str| Value::Text(t.into());
+        let attrs: Vec<&[Value]> = out.features.iter().map(|f| f.attrs.as_slice()).collect();
+        // p1 less z1, p2 (only touching z2) and p3 as they are; then z1 and z2 whole, their `id`
+        // in the input's `id` and no `use`.
+        assert_eq!(
+            attrs,
+            [
+                &[text("p1"), text("home")][..],
+                &[text("p2"), text("shop")],
+                &[text("p3"), text("lot")],
+                &[text("z1"), Value::Null],
+                &[text("z2"), Value::Null],
+            ]
+        );
+        let p1 = out.features[0].geometry.as_ref().unwrap().extent();
+        assert!(p1.min_x.abs() < 1e-9 && (p1.max_x - 1.0).abs() < 1e-9, "{p1:?}");
+        let (parcels, zones) = (&m.0["parcels"], &m.0["zones"]);
+        assert_eq!(out.features[1].geometry, parcels.features[1].geometry);
+        assert!(out.features[2].geometry.is_none());
+        assert_eq!(out.features[3].geometry, zones.features[0].geometry, "update polygons as they are");
+        assert_eq!(out.features[4].geometry, zones.features[1].geometry);
+        let e = crate::run("update", &inputs(), &serde_json::json!({"input": "pts", "update": "polys"})).unwrap_err();
+        assert!(e.contains("not a polygon layer"), "{e}");
+    }
+
+    #[test]
+    fn update_converts_values_to_the_input_fields_types() {
+        let fields = vec![
+            Field::new("n", FieldType::Integer),
+            Field::new("x", FieldType::Double),
+            Field::new("t", FieldType::Text),
+            Field::new("b", FieldType::Boolean),
+        ];
+        let mut parcels = Dataset::new("parcels", GeometryType::Polygon, fields);
+        parcels.push(Some(sq(0.0, 0.0, 1.0)), vec![Value::Int(1), Value::Float(1.0), Value::Text("a".into()), Value::Bool(false)]);
+        // Same names in another case and order, with other types; and a field the input lacks.
+        let mut zones = Dataset::new(
+            "zones",
+            GeometryType::Polygon,
+            vec![
+                Field::new("other", FieldType::Text),
+                Field::new("T", FieldType::Double),
+                Field::new("N", FieldType::Text),
+                Field::new("X", FieldType::Integer),
+                Field::new("B", FieldType::Integer),
+            ],
+        );
+        let row = |t: f64, n: &str, x: i64, b: i64| {
+            vec![Value::Text("o".into()), Value::Float(t), Value::Text(n.into()), Value::Int(x), Value::Int(b)]
+        };
+        zones.push(Some(sq(5.0, 0.0, 1.0)), row(0.1, " 7 ", 3, 1));
+        zones.push(Some(sq(7.0, 0.0, 1.0)), row(2.5, "seven", -2, 0));
+        let m = Map(HashMap::from([("parcels".to_string(), parcels), ("zones".to_string(), zones)]));
+        let out = layer(crate::run("update", &m, &serde_json::json!({"input": "parcels", "update": "zones"})).unwrap());
+        let attrs: Vec<&[Value]> = out.features.iter().skip(1).map(|f| f.attrs.as_slice()).collect();
+        assert_eq!(
+            attrs,
+            [
+                &[Value::Int(7), Value::Float(3.0), Value::Text("0.1".into()), Value::Bool(true)][..],
+                &[Value::Null, Value::Float(-2.0), Value::Text("2.5".into()), Value::Bool(false)],
+            ]
+        );
+    }
+
+    #[test]
+    fn converted_keeps_fitting_values_and_converts_the_rest() {
+        let third = 1.0 / 3.0;
+        assert_eq!(converted(&Value::Float(third), FieldType::Double), Value::Float(third));
+        assert_eq!(converted(&Value::Float(third), FieldType::Text), Value::Text(third.to_string()), "full precision");
+        assert_eq!(converted(&Value::Float(-2.7), FieldType::Integer), Value::Int(-2));
+        assert_eq!(converted(&Value::Float(f64::NAN), FieldType::Integer), Value::Null);
+        // Beyond i64: empty, not clamped to its largest value.
+        assert_eq!(converted(&Value::Float(1e30), FieldType::Integer), Value::Null);
+        assert_eq!(converted(&Value::Float(-1e30), FieldType::Integer), Value::Null);
+        assert_eq!(converted(&Value::Float(9.223_372_036_854_776e18), FieldType::Integer), Value::Null, "2⁶³ itself");
+        assert_eq!(converted(&Value::Float(-9.223_372_036_854_776e18), FieldType::Integer), Value::Int(i64::MIN));
+        // Text goes the same way: an integer as it is, another number as that float.
+        let text = |t: &str| converted(&Value::Text(t.into()), FieldType::Integer);
+        assert_eq!(text(" 9223372036854775807 "), Value::Int(i64::MAX));
+        assert_eq!(text("-2.7"), Value::Int(-2));
+        for t in ["1e30", "-1e30", "NaN", "inf", "x", ""] {
+            assert_eq!(text(t), Value::Null, "{t}");
+        }
+        // And into a Double field: finite numbers only.
+        let double = |t: &str| converted(&Value::Text(t.into()), FieldType::Double);
+        assert_eq!(double(" 2.5 "), Value::Float(2.5));
+        for t in ["NaN", "inf", "-infinity", "1e400", "x", ""] {
+            assert_eq!(double(t), Value::Null, "{t}");
+        }
+        assert_eq!(converted(&Value::Bool(true), FieldType::Double), Value::Float(1.0));
+        assert_eq!(converted(&Value::Int(5), FieldType::Text), Value::Text("5".into()));
+        assert_eq!(converted(&Value::Text("x".into()), FieldType::Double), Value::Null);
+        assert_eq!(converted(&Value::Null, FieldType::Text), Value::Null);
+    }
+
+    /// The layers of a tool's output with several.
+    fn layers_of(r: ToolResult) -> Vec<Dataset> {
+        match r.output {
+            Output::Layers(v) => v
+                .into_iter()
+                .map(|o| match o {
+                    OutputLayer::Vector(d) => d,
+                    _ => panic!("expected vector layers"),
+                })
+                .collect(),
+            _ => panic!("expected several layers"),
+        }
+    }
+
+    #[test]
+    fn split_writes_one_layer_per_split_polygon() {
+        let m = parcels_and_zones();
+        let r = crate::run("split", &m, &serde_json::json!({"input": "parcels", "split": "zones"})).unwrap();
+        // z1 (id 1) holds p1's right half; z2 only touches p1 and p2, so its layer is left out.
+        assert!(r.messages[0].contains("1 split area held no features"), "{:?}", r.messages);
+        let out = layers_of(r);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].name, "parcels_1");
+        assert_eq!(out[0].fields, m.0["parcels"].fields);
+        assert_eq!(out[0].features.len(), 1);
+        assert_eq!(out[0].features[0].attrs[0], Value::Text("p1".into()));
+        let e = out[0].features[0].geometry.as_ref().unwrap().extent();
+        assert!((e.min_x - 1.0).abs() < 1e-9 && (e.max_x - 2.0).abs() < 1e-9, "{e:?}");
+    }
+
+    #[test]
+    fn split_by_a_field_makes_one_layer_per_value() {
+        let mut m = parcels_and_zones();
+        let text = |t: &str| Value::Text(t.into());
+        // z3 shares z1's zone, and covers p2; z4 has no zone, and covers p1's left half.
+        let zones = m.0.get_mut("zones").unwrap();
+        zones.push(Some(sq(4.0, 0.0, 1.0)), vec![text("z3"), text("R1")]);
+        zones.push(Some(sq(0.0, 0.0, 1.0)), vec![text("z4"), Value::Null]);
+        let r = crate::run("split", &m, &serde_json::json!({"input": "parcels", "split": "zones", "field": "ZONE", "output": "lots"}));
+        let out = layers_of(r.unwrap());
+        let names: Vec<&str> = out.iter().map(|d| d.name.as_str()).collect();
+        // C2 (z2) holds nothing; z4 is named by its id.
+        assert_eq!(names, ["lots_R1", "lots_4"]);
+        let ids = |d: &Dataset| d.features.iter().map(|f| f.attrs[0].clone()).collect::<Vec<_>>();
+        assert_eq!(ids(&out[0]), [text("p1"), text("p2")]);
+        assert_eq!(ids(&out[1]), [text("p1")]);
+        let e = crate::run("split", &m, &serde_json::json!({"input": "parcels", "split": "zones", "field": "nope"})).unwrap_err();
+        assert!(e.contains("no field named"), "{e}");
+    }
+
+    #[test]
+    fn split_puts_a_point_on_a_shared_edge_in_both_layers() {
+        let mut m = inputs();
+        let mut zones = Dataset::new("zones", GeometryType::Polygon, vec![]);
+        zones.push(Some(sq(0.0, 0.0, 1.0)), vec![]);
+        zones.push(Some(sq(1.0, 0.0, 1.0)), vec![]);
+        m.0.insert("zones".into(), zones);
+        let mut edge = Dataset::new("edge", GeometryType::Point, vec![]);
+        edge.push(Some(Geometry::Point(Coord::new(1.0, 0.5))), vec![]);
+        m.0.insert("edge".into(), edge);
+        let out = layers_of(crate::run("split", &m, &serde_json::json!({"input": "edge", "split": "zones"})).unwrap());
+        assert_eq!(out.iter().map(|d| d.features.len()).collect::<Vec<_>>(), [1, 1]);
+        let e = crate::run("split", &m, &serde_json::json!({"input": "pts", "split": "pts"})).unwrap_err();
+        assert!(e.contains("not a polygon layer"), "{e}");
+    }
+
+    #[test]
+    fn split_honours_both_layers_selections() {
+        let mut m = parcels_and_zones();
+        m.0.get_mut("zones").unwrap().push(Some(sq(4.0, 0.0, 1.0)), vec![Value::Text("z3".into()), Value::Null]);
+        // z1 and z3 selected, p2 only: z1's layer would hold p1, so it is left out.
+        let m = Selected(m, HashMap::from([("parcels".to_string(), vec![1]), ("zones".to_string(), vec![0, 2])]));
+        let out = layers_of(crate::run("split", &m, &serde_json::json!({"input": "parcels", "split": "zones"})).unwrap());
+        let names: Vec<&str> = out.iter().map(|d| d.name.as_str()).collect();
+        assert_eq!(names, ["parcels_3"]);
+    }
+
+    #[test]
+    fn split_keeps_values_apart_that_would_be_named_alike() {
+        let mut m = inputs();
+        let long = "x".repeat(MAX_SPLIT_NAME);
+        let mut zones = Dataset::new("zones", GeometryType::Polygon, vec![Field::new("name", FieldType::Text)]);
+        // Alike in their first 64 characters, and alike without the line break.
+        for (x, name) in [(0.0, format!("{long}a")), (0.5, format!("{long}b")), (1.0, "a\nb".into()), (1.5, "ab".into())] {
+            zones.push(Some(sq(x, 0.0, 0.5)), vec![Value::Text(name)]);
+        }
+        m.0.insert("zones".into(), zones);
+        let mut row = Dataset::new("row", GeometryType::Point, vec![]);
+        for x in [0.25, 0.75, 1.25, 1.75] {
+            row.push(Some(Geometry::Point(Coord::new(x, 0.25))), vec![]);
+        }
+        m.0.insert("row".into(), row);
+        let out = layers_of(crate::run("split", &m, &serde_json::json!({"input": "row", "split": "zones", "field": "name"})).unwrap());
+        let names: Vec<&str> = out.iter().map(|d| d.name.as_str()).collect();
+        let cut = format!("row_{long}");
+        assert_eq!(names, [cut.as_str(), cut.as_str(), "row_ab", "row_ab"], "four layers, the names shortened");
+        assert!(out.iter().all(|d| d.features.len() == 1));
+    }
+
+    #[test]
+    fn update_refuses_a_field_two_update_fields_match() {
+        let mut m = parcels_and_zones();
+        let zones = m.0.get_mut("zones").unwrap();
+        zones.fields.push(Field::new("ID", FieldType::Text));
+        for f in &mut zones.features {
+            f.attrs.push(Value::Null);
+        }
+        // `use` matches nothing; the parcels' `id` matches the zones' `id` exactly, so that is fine.
+        assert!(crate::run("update", &m, &serde_json::json!({"input": "parcels", "update": "zones"})).is_ok());
+        // `Id` matches `id` and `ID` alike.
+        m.0.get_mut("parcels").unwrap().fields[0].name = "Id".into();
+        let e = crate::run("update", &m, &serde_json::json!({"input": "parcels", "update": "zones"})).unwrap_err();
+        assert!(e.contains("ambiguous"), "{e}");
+    }
+
+    #[test]
+    fn erase_keeps_a_feature_no_erase_polygon_overlaps_as_it_is() {
+        // Two overlapping squares as one parcel, far from the erase square; and a triangle whose
+        // extent meets the erase square's but whose shape doesn't reach it.
+        let ring = |x: f64| {
+            vec![Coord::new(x, 10.0), Coord::new(x + 2.0, 10.0), Coord::new(x + 2.0, 12.0), Coord::new(x, 12.0), Coord::new(x, 10.0)]
+        };
+        let overlapping = Geometry::Polygon(vec![vec![ring(0.0)], vec![ring(1.0)]]);
+        let triangle =
+            Geometry::Polygon(vec![vec![vec![Coord::new(0.0, 0.0), Coord::new(4.0, 0.0), Coord::new(0.0, 4.0), Coord::new(0.0, 0.0)]]]);
+        let mut parcels = Dataset::new("parcels", GeometryType::Polygon, vec![]);
+        parcels.push(Some(overlapping.clone()), vec![]);
+        parcels.push(Some(triangle.clone()), vec![]);
+        let mut zones = Dataset::new("zones", GeometryType::Polygon, vec![]);
+        zones.push(Some(sq(3.0, 3.0, 1.0)), vec![]);
+        let m = Map(HashMap::from([("parcels".to_string(), parcels), ("zones".to_string(), zones)]));
+        let out = layer(crate::run("erase", &m, &serde_json::json!({"input": "parcels", "erase": "zones"})).unwrap());
+        let got: Vec<Option<&Geometry>> = out.features.iter().map(|f| f.geometry.as_ref()).collect();
+        assert_eq!(got, [Some(&overlapping), Some(&triangle)], "copied as they are, parts and coordinates");
+    }
+
+    #[test]
+    fn erase_needs_an_input_with_geometry() {
+        let mut m = inputs();
+        m.0.insert("table".into(), Dataset::new("table", GeometryType::None, vec![]));
+        let e = crate::run("erase", &m, &serde_json::json!({"input": "table", "erase": "polys"})).unwrap_err();
+        assert!(e.contains("no geometry"), "{e}");
+    }
+
+    #[test]
+    fn split_names_a_value_of_control_characters_by_its_id() {
+        let mut m = parcels_and_zones();
+        // z1's zone is only a control character (trim leaves it), so its layer is named by its id.
+        m.0.get_mut("zones").unwrap().features[0].attrs[1] = Value::Text("\u{1}".into());
+        let out = layers_of(crate::run("split", &m, &serde_json::json!({"input": "parcels", "split": "zones", "field": "zone"})).unwrap());
+        let names: Vec<&str> = out.iter().map(|d| d.name.as_str()).collect();
+        assert_eq!(names, ["parcels_1"]);
+        assert_eq!(split_name(" \u{1}a\tb "), "ab");
+    }
+
+    #[test]
+    fn split_keeps_floats_apart_that_display_alike() {
+        let mut m = inputs();
+        let mut zones = Dataset::new("zones", GeometryType::Polygon, vec![Field::new("v", FieldType::Double)]);
+        // Both display as 0.000001; -0 and 0 are one value.
+        for (x, v) in [(0.0, 0.000_001_2), (0.5, 0.000_001_4), (1.0, -0.0), (1.5, 0.0)] {
+            zones.push(Some(sq(x, 0.0, 0.5)), vec![Value::Float(v)]);
+        }
+        m.0.insert("zones".into(), zones);
+        let mut row = Dataset::new("row", GeometryType::Point, vec![]);
+        for x in [0.25, 0.75, 1.25, 1.75] {
+            row.push(Some(Geometry::Point(Coord::new(x, 0.25))), vec![]);
+        }
+        m.0.insert("row".into(), row);
+        let out = layers_of(crate::run("split", &m, &serde_json::json!({"input": "row", "split": "zones", "field": "v"})).unwrap());
+        let layers: Vec<(&str, usize)> = out.iter().map(|d| (d.name.as_str(), d.features.len())).collect();
+        assert_eq!(layers, [("row_0.000001", 1), ("row_0.000001", 1), ("row_0", 2)]);
+        // Each float layer holds the point in its own zone: 0.0000012's at x 0.25, 0.0000014's at 0.75.
+        let x = |d: &Dataset| d.features.iter().filter_map(|f| f.geometry.as_ref()).map(|g| g.extent().min_x).collect::<Vec<_>>();
+        assert_eq!((x(&out[0]), x(&out[1])), (vec![0.25], vec![0.75]));
+    }
+
+    #[test]
+    fn split_refuses_a_split_field_that_is_not_a_name() {
+        let m = parcels_and_zones();
+        for bad in [serde_json::json!(5), serde_json::json!(["zone"]), serde_json::json!(true)] {
+            let e = crate::run("split", &m, &serde_json::json!({"input": "parcels", "split": "zones", "field": bad})).unwrap_err();
+            assert!(e.contains("must be a field name"), "{e}");
+        }
+        // Empty or null is no field.
+        for none in [serde_json::json!(""), serde_json::json!(null)] {
+            assert!(crate::run("split", &m, &serde_json::json!({"input": "parcels", "split": "zones", "field": none})).is_ok());
+        }
+    }
+
+    #[test]
+    fn erase_update_split_and_overlays_keep_an_incomplete_crs_flag() {
+        for incomplete in ["parcels", "zones"] {
+            incomplete_flag_reaches_every_output(incomplete);
+        }
+    }
+
+    #[test]
+    fn overlays_leave_the_crs_flag_clear_when_inputs_are_complete() {
+        let m = parcels_and_zones();
+        for (tool, p) in [
+            ("erase", serde_json::json!({"input": "parcels", "erase": "zones"})),
+            ("update", serde_json::json!({"input": "parcels", "update": "zones"})),
+            ("symmetricalDifference", serde_json::json!({"input": "parcels", "overlay": "zones"})),
+            ("intersect", serde_json::json!({"input": "parcels", "overlay": "zones"})),
+        ] {
+            assert!(!layer(crate::run(tool, &m, &p).unwrap()).crs_incomplete, "{tool}");
+        }
+        let out = layers_of(crate::run("split", &m, &serde_json::json!({"input": "parcels", "split": "zones"})).unwrap());
+        assert!(!out.is_empty() && out.iter().all(|d| !d.crs_incomplete));
+    }
+
+    /// Runs every tool that overlays parcels with zones, with layer `lost` marked as having lost
+    /// features on reading, and checks each output is marked so too.
+    fn incomplete_flag_reaches_every_output(lost: &str) {
+        let mut m = parcels_and_zones();
+        m.0.get_mut(lost).unwrap().crs_incomplete = true;
+        let params = [
+            ("erase", serde_json::json!({"input": "parcels", "erase": "zones"})),
+            ("update", serde_json::json!({"input": "parcels", "update": "zones"})),
+            ("symmetricalDifference", serde_json::json!({"input": "parcels", "overlay": "zones"})),
+            ("intersect", serde_json::json!({"input": "parcels", "overlay": "zones"})),
+        ];
+        for (tool, p) in params {
+            assert!(layer(crate::run(tool, &m, &p).unwrap()).crs_incomplete, "{tool}, {lost} incomplete");
+        }
+        let out = layers_of(crate::run("split", &m, &serde_json::json!({"input": "parcels", "split": "zones"})).unwrap());
+        assert!(!out.is_empty() && out.iter().all(|d| d.crs_incomplete));
+    }
+
+    #[test]
+    fn split_refuses_more_split_areas_than_it_takes() {
+        let mut m = inputs();
+        let mut zones = Dataset::new("zones", GeometryType::Polygon, vec![]);
+        for i in 0..=MAX_SPLIT_AREAS {
+            zones.push_next(Some(sq(f64::from(i as u32 % 100), f64::from(i as u32 / 100), 0.5)), vec![]);
+        }
+        m.0.insert("zones".into(), zones);
+        let e = crate::run("split", &m, &serde_json::json!({"input": "pts", "split": "zones"})).unwrap_err();
+        assert!(e.contains("at most"), "{e}");
+    }
+
+    #[test]
+    fn split_accepts_exactly_max_split_areas() {
+        let mut m = inputs();
+        let mut zones = Dataset::new("zones", GeometryType::Polygon, vec![]);
+        for i in 0..MAX_SPLIT_AREAS {
+            zones.push_next(Some(sq(f64::from(i as u32 % 100), f64::from(i as u32 / 100), 0.5)), vec![]);
+        }
+        m.0.insert("zones".into(), zones);
+        // (0.5, 0.5) and (1.5, 1.5) fall in the first and 102nd zones' corners; the rest hold nothing.
+        let r = crate::run("split", &m, &serde_json::json!({"input": "pts", "split": "zones"})).unwrap();
+        assert!(r.messages[0].contains("held no features"), "{:?}", r.messages);
     }
 
     /// Near's four fields of row `r`: the near feature's id, the distance and the point.
@@ -6098,5 +8535,538 @@ mod tests {
         assert!(crate::run("zonalStats", &m, &serde_json::json!({"raster": "elev", "polygons": "zones", "bands": -1})).is_err());
         assert!(crate::run("zonalStats", &m, &serde_json::json!({"raster": "elev", "polygons": "zones", "bands": [""]})).is_err());
         assert!(crate::run("zonalStats", &m, &serde_json::json!({"raster": "elev", "polygons": "zones", "bands": ["  "]})).is_err());
+    }
+
+    #[test]
+    fn join_field_integration_tests() {
+        // 1. Vector layer joined with standalone table
+        let mut target_pts = Dataset::new(
+            "stations",
+            GeometryType::Point,
+            vec![Field::new("st_id", FieldType::Integer), Field::new("name", FieldType::Text)],
+        );
+        target_pts.push(Some(Geometry::Point(Coord::new(10.0, 20.0))), vec![Value::Int(101), Value::Text("North".into())]);
+        target_pts.push(Some(Geometry::Point(Coord::new(11.0, 21.0))), vec![Value::Int(102), Value::Text("South".into())]);
+        target_pts.push(Some(Geometry::Point(Coord::new(12.0, 22.0))), vec![Value::Int(103), Value::Text("East".into())]);
+
+        let mut source_tab = Dataset::new(
+            "climate",
+            GeometryType::None,
+            vec![Field::new("station", FieldType::Integer), Field::new("temp", FieldType::Double), Field::new("rain", FieldType::Double)],
+        );
+        source_tab.push(None, vec![Value::Int(101), Value::Float(22.5), Value::Float(120.0)]);
+        source_tab.push(None, vec![Value::Int(102), Value::Float(25.0), Value::Float(80.0)]);
+        // 103 has no entry in source_tab
+
+        let m = Map(HashMap::from([("stations".to_string(), target_pts), ("climate".to_string(), source_tab)]));
+
+        let res = crate::run(
+            "joinField",
+            &m,
+            &serde_json::json!({
+                "target": "stations",
+                "targetField": "st_id",
+                "joinTable": "climate",
+                "joinField": "station",
+                "output": "stations_with_climate"
+            }),
+        )
+        .unwrap();
+
+        let Output::Layer(out) = res.output else { panic!("expected Output::Layer") };
+        assert_eq!(out.name, "stations_with_climate");
+        assert_eq!(out.geometry_type, GeometryType::Point);
+        assert_eq!(out.features.len(), 3);
+        assert_eq!(out.fields.len(), 4); // st_id, name, temp, rain (station key omitted by default)
+        assert_eq!(out.fields[2].name, "temp");
+        assert_eq!(out.fields[3].name, "rain");
+
+        // Feature 0: 101 matched
+        assert_eq!(out.features[0].attrs[2], Value::Float(22.5));
+        assert_eq!(out.features[0].attrs[3], Value::Float(120.0));
+        assert_eq!(out.features[0].geometry, Some(Geometry::Point(Coord::new(10.0, 20.0))));
+
+        // Feature 1: 102 matched
+        assert_eq!(out.features[1].attrs[2], Value::Float(25.0));
+        assert_eq!(out.features[1].attrs[3], Value::Float(80.0));
+
+        // Feature 2: 103 unmatched -> padded with Null
+        assert_eq!(out.features[2].attrs[2], Value::Null);
+        assert_eq!(out.features[2].attrs[3], Value::Null);
+
+        // 2. Standalone table target + explicit fields subset with prefix
+        let mut target_tab = Dataset::new("inventory", GeometryType::None, vec![Field::new("sku", FieldType::Text)]);
+        target_tab.push(None, vec![Value::Text("SKU-A".into())]);
+        target_tab.push(None, vec![Value::Text("SKU-B".into())]);
+
+        let mut prices = Dataset::new(
+            "prices",
+            GeometryType::None,
+            vec![
+                Field::new("item_sku", FieldType::Text),
+                Field::new("price", FieldType::Double),
+                Field::new("discount", FieldType::Double),
+            ],
+        );
+        prices.push(None, vec![Value::Text("SKU-A".into()), Value::Float(19.99), Value::Float(0.1)]);
+        prices.push(None, vec![Value::Text("SKU-B".into()), Value::Float(29.99), Value::Float(0.2)]);
+
+        let m2 = Map(HashMap::from([("inventory".to_string(), target_tab), ("prices".to_string(), prices)]));
+
+        let res2 = crate::run(
+            "joinField",
+            &m2,
+            &serde_json::json!({
+                "target": "inventory",
+                "targetField": "sku",
+                "join": "prices",
+                "joinField": "item_sku",
+                "fields": ["price"],
+                "prefix": "p_"
+            }),
+        )
+        .unwrap();
+
+        let Output::Table(out2) = res2.output else { panic!("expected Output::Table") };
+        assert_eq!(out2.name, "inventory_JoinField");
+        assert_eq!(out2.fields.len(), 2);
+        assert_eq!(out2.fields[1].name, "p_price");
+        assert_eq!(out2.features[0].attrs[1], Value::Float(19.99));
+        assert_eq!(out2.features[1].attrs[1], Value::Float(29.99));
+
+        // 3. Duplicate strategy Error rejects duplicate source keys
+        let mut dup_prices = Dataset::new(
+            "dup_prices",
+            GeometryType::None,
+            vec![Field::new("item_sku", FieldType::Text), Field::new("price", FieldType::Double)],
+        );
+        dup_prices.push(None, vec![Value::Text("SKU-A".into()), Value::Float(10.0)]);
+        dup_prices.push(None, vec![Value::Text("SKU-A".into()), Value::Float(15.0)]);
+        let m3 = Map(HashMap::from([("inventory".to_string(), out2), ("dup_prices".to_string(), dup_prices)]));
+
+        let err_dup = crate::run(
+            "joinField",
+            &m3,
+            &serde_json::json!({
+                "target": "inventory",
+                "targetField": "sku",
+                "join": "dup_prices",
+                "joinField": "item_sku",
+                "duplicates": "Error"
+            }),
+        )
+        .unwrap_err();
+        assert!(err_dup.contains("duplicate key"));
+
+        // 4. Incompatible key type error
+        let mut int_source = Dataset::new("int_source", GeometryType::None, vec![Field::new("num_key", FieldType::Integer)]);
+        int_source.push(None, vec![Value::Int(123)]);
+        let m4 =
+            Map(HashMap::from([("inventory".to_string(), m2.0.get("inventory").unwrap().clone()), ("int_source".to_string(), int_source)]));
+        let err_type = crate::run(
+            "joinField",
+            &m4,
+            &serde_json::json!({
+                "target": "inventory",
+                "targetField": "sku",
+                "join": "int_source",
+                "joinField": "num_key"
+            }),
+        )
+        .unwrap_err();
+        assert!(err_type.contains("type mismatch"));
+
+        // 5. Default joinField to targetField when omitted
+        let mut matching_source = Dataset::new(
+            "matching_source",
+            GeometryType::None,
+            vec![Field::new("sku", FieldType::Text), Field::new("weight", FieldType::Double)],
+        );
+        matching_source.push(None, vec![Value::Text("SKU-A".into()), Value::Float(1.25)]);
+        let m5 = Map(HashMap::from([
+            ("inventory".to_string(), m2.0.get("inventory").unwrap().clone()),
+            ("matching_source".to_string(), matching_source),
+        ]));
+        let res5 = crate::run(
+            "joinField",
+            &m5,
+            &serde_json::json!({
+                "target": "inventory",
+                "targetField": "sku",
+                "join": "matching_source"
+            }),
+        )
+        .unwrap();
+        let Output::Table(out5) = res5.output else { panic!("expected Output::Table") };
+        assert_eq!(out5.fields.len(), 2);
+        assert_eq!(out5.fields[1].name, "weight");
+        assert_eq!(out5.features[0].attrs[1], Value::Float(1.25));
+
+        // 6. JSON array text in fields and duplicateStrategy alias
+        let res6 = crate::run(
+            "joinField",
+            &m5,
+            &serde_json::json!({
+                "target": "inventory",
+                "targetField": "sku",
+                "join": "matching_source",
+                "fields": "[\"weight\"]",
+                "duplicateStrategy": "First"
+            }),
+        )
+        .unwrap();
+        let Output::Table(out6) = res6.output else { panic!("expected Output::Table") };
+        assert_eq!(out6.fields.len(), 2);
+        assert_eq!(out6.fields[1].name, "weight");
+        assert_eq!(out6.features[0].attrs[1], Value::Float(1.25));
+
+        // 7. duplicateStrategy "Last" selects the last matching row
+        let mut dup_prices_last = Dataset::new(
+            "dup_prices_last",
+            GeometryType::None,
+            vec![Field::new("item_sku", FieldType::Text), Field::new("price", FieldType::Double)],
+        );
+        dup_prices_last.push(None, vec![Value::Text("SKU-A".into()), Value::Float(10.0)]);
+        dup_prices_last.push(None, vec![Value::Text("SKU-A".into()), Value::Float(20.0)]);
+        let m7 = Map(HashMap::from([
+            ("inventory".to_string(), m2.0.get("inventory").unwrap().clone()),
+            ("dup_prices_last".to_string(), dup_prices_last),
+        ]));
+        let res7 = crate::run(
+            "joinField",
+            &m7,
+            &serde_json::json!({
+                "target": "inventory",
+                "targetField": "sku",
+                "join": "dup_prices_last",
+                "joinField": "item_sku",
+                "duplicateStrategy": "Last"
+            }),
+        )
+        .unwrap();
+        let Output::Table(out7) = res7.output else { panic!("expected Output::Table") };
+        assert_eq!(out7.features[0].attrs[1], Value::Float(20.0));
+
+        // 8. Whitespace-only joinField falls back to targetField
+        let res8 = crate::run(
+            "joinField",
+            &m5,
+            &serde_json::json!({
+                "target": "inventory",
+                "targetField": "sku",
+                "join": "matching_source",
+                "joinField": "   "
+            }),
+        )
+        .unwrap();
+        let Output::Table(out8) = res8.output else { panic!("expected Output::Table") };
+        assert_eq!(out8.fields.len(), 2);
+        assert_eq!(out8.fields[1].name, "weight");
+        assert_eq!(out8.features[0].attrs[1], Value::Float(1.25));
+
+        // 9. Reject non-string entries in fields array
+        let err_non_string = crate::run(
+            "joinField",
+            &m5,
+            &serde_json::json!({
+                "target": "inventory",
+                "targetField": "sku",
+                "join": "matching_source",
+                "fields": [42]
+            }),
+        )
+        .unwrap_err();
+        assert!(err_non_string.contains("Transfer Fields: array entries must be strings"));
+
+        let err_mixed = crate::run(
+            "joinField",
+            &m5,
+            &serde_json::json!({
+                "target": "inventory",
+                "targetField": "sku",
+                "join": "matching_source",
+                "fields": ["weight", true]
+            }),
+        )
+        .unwrap_err();
+        assert!(err_mixed.contains("Transfer Fields: array entries must be strings"));
+
+        // 10. Test numeric table ID in input() and row selections
+        struct TestInputs {
+            datasets: HashMap<String, Dataset>,
+            tables: HashMap<u32, Dataset>,
+            selections: HashMap<String, Vec<usize>>,
+        }
+        impl Inputs for TestInputs {
+            fn dataset(&self, layer: &str) -> Option<&Dataset> {
+                self.datasets.get(layer)
+            }
+            fn table(&self, id: u32) -> Option<&Dataset> {
+                self.tables.get(&id)
+            }
+            fn selection(&self, layer: &str) -> &[usize] {
+                self.selections.get(layer).map(|v| v.as_slice()).unwrap_or(&[])
+            }
+        }
+
+        let mut target_ds = Dataset::new(
+            "cities",
+            GeometryType::None,
+            vec![Field::new("city_id", FieldType::Integer), Field::new("name", FieldType::Text)],
+        );
+        target_ds.push(None, vec![Value::Int(1), Value::Text("Paris".into())]);
+        target_ds.push(None, vec![Value::Int(2), Value::Text("Tokyo".into())]);
+        target_ds.push(None, vec![Value::Int(3), Value::Text("New York".into())]);
+
+        let mut source_table = Dataset::new(
+            "table_99",
+            GeometryType::None,
+            vec![Field::new("c_id", FieldType::Integer), Field::new("pop", FieldType::Integer)],
+        );
+        source_table.push(None, vec![Value::Int(1), Value::Int(2_100_000)]);
+        source_table.push(None, vec![Value::Int(2), Value::Int(14_000_000)]);
+        source_table.push(None, vec![Value::Int(3), Value::Int(8_300_000)]);
+
+        let inp_numeric = TestInputs {
+            datasets: HashMap::from([("cities".to_string(), target_ds)]),
+            tables: HashMap::from([(99u32, source_table)]),
+            selections: HashMap::new(),
+        };
+
+        let res_num = crate::run(
+            "joinField",
+            &inp_numeric,
+            &serde_json::json!({
+                "target": "cities",
+                "targetField": "city_id",
+                "joinTable": 99,
+                "joinField": "c_id"
+            }),
+        )
+        .unwrap();
+        let Output::Table(out_num) = res_num.output else { panic!("expected Output::Table") };
+        assert_eq!(out_num.fields.len(), 3);
+        assert_eq!(out_num.fields[2].name, "pop");
+        assert_eq!(out_num.features[0].attrs[2], Value::Int(2_100_000));
+        assert_eq!(out_num.features[1].attrs[2], Value::Int(14_000_000));
+
+        // 11. Row selections on target and source
+        let mut target_sel =
+            Dataset::new("parcels", GeometryType::None, vec![Field::new("id", FieldType::Integer), Field::new("code", FieldType::Text)]);
+        target_sel.push(None, vec![Value::Int(10), Value::Text("P10".into())]);
+        target_sel.push(None, vec![Value::Int(20), Value::Text("P20".into())]);
+        target_sel.push(None, vec![Value::Int(30), Value::Text("P30".into())]);
+
+        let mut source_sel =
+            Dataset::new("owners", GeometryType::None, vec![Field::new("id", FieldType::Integer), Field::new("owner", FieldType::Text)]);
+        // Two rows for id 10: unselected row has "Alice", selected row has "Bob"
+        source_sel.push(None, vec![Value::Int(10), Value::Text("Alice".into())]);
+        source_sel.push(None, vec![Value::Int(10), Value::Text("Bob".into())]);
+        source_sel.push(None, vec![Value::Int(20), Value::Text("Carol".into())]);
+
+        let inp_sel = TestInputs {
+            datasets: HashMap::from([("parcels".to_string(), target_sel.clone()), ("owners".to_string(), source_sel.clone())]),
+            tables: HashMap::new(),
+            selections: HashMap::from([
+                ("parcels".to_string(), vec![0, 1]), // Only parcels 10 and 20 selected
+                ("owners".to_string(), vec![1, 2]),  // Only second row of 10 ("Bob") and 20 ("Carol") selected
+            ]),
+        };
+
+        let res_sel = crate::run(
+            "joinField",
+            &inp_sel,
+            &serde_json::json!({
+                "target": "parcels",
+                "targetField": "id",
+                "joinTable": "owners",
+                "joinField": "id"
+            }),
+        )
+        .unwrap();
+        let Output::Table(out_sel) = res_sel.output else { panic!("expected Output::Table") };
+        assert_eq!(out_sel.features.len(), 2);
+        assert_eq!(out_sel.features[0].attrs[0], Value::Int(10));
+        assert_eq!(out_sel.features[0].attrs[2], Value::Text("Bob".into()));
+        assert_eq!(out_sel.features[1].attrs[0], Value::Int(20));
+        assert_eq!(out_sel.features[1].attrs[2], Value::Text("Carol".into()));
+        assert_eq!(res_sel.messages.len(), 3);
+        assert!(res_sel.messages[0].contains("Processing 2 selected feature(s) from target 'parcels' (out of 3)"));
+        assert!(res_sel.messages[1].contains("Joining against 2 selected record(s) from source 'owners' (out of 3)"));
+        assert!(res_sel.messages[2].contains("Join Field on 'parcels': 2/2 records matched"));
+
+        // 11b. Stale selections emit informative warning messages
+        let inp_stale = TestInputs {
+            datasets: HashMap::from([("parcels".to_string(), target_sel.clone()), ("owners".to_string(), source_sel.clone())]),
+            tables: HashMap::new(),
+            selections: HashMap::from([("parcels".to_string(), vec![99, 100]), ("owners".to_string(), vec![50, 51])]),
+        };
+        let res_stale = crate::run(
+            "joinField",
+            &inp_stale,
+            &serde_json::json!({
+                "target": "parcels",
+                "targetField": "id",
+                "joinTable": "owners",
+                "joinField": "id"
+            }),
+        )
+        .unwrap();
+        assert!(res_stale.messages.iter().any(|m| m.contains("selection on target 'parcels' contains only stale indices")));
+        assert!(res_stale.messages.iter().any(|m| m.contains("selection on source 'owners' contains only stale indices")));
+
+        // 12. Aliases and collision suffixes
+        let mut target_col = Dataset::new(
+            "items",
+            GeometryType::None,
+            vec![Field::new("item_id", FieldType::Integer), Field::new("price", FieldType::Double)],
+        );
+        target_col.push(None, vec![Value::Int(1), Value::Float(10.0)]);
+
+        let mut source_col = Dataset::new(
+            "extra",
+            GeometryType::None,
+            vec![Field::new("item_id", FieldType::Integer), Field::new("price", FieldType::Double)],
+        );
+        source_col.push(None, vec![Value::Int(1), Value::Float(15.0)]);
+
+        let m_col = Map(HashMap::from([("items".to_string(), target_col), ("extra".to_string(), source_col)]));
+        let res_col = crate::run(
+            "joinField",
+            &m_col,
+            &serde_json::json!({
+                "target": "items",
+                "target_field": "item_id",
+                "join": "extra",
+                "join_field": "item_id",
+                "fields": ["price", "item_id"]
+            }),
+        )
+        .unwrap();
+        let Output::Table(out_col) = res_col.output else { panic!("expected Output::Table") };
+        assert_eq!(out_col.fields.len(), 4);
+        assert_eq!(out_col.fields[1].name, "price");
+        assert_eq!(out_col.fields[2].name, "price_2");
+        assert_eq!(out_col.fields[3].name, "item_id_2");
+        assert_eq!(out_col.features[0].attrs[1], Value::Float(10.0));
+        assert_eq!(out_col.features[0].attrs[2], Value::Float(15.0));
+        assert_eq!(out_col.features[0].attrs[3], Value::Int(1));
+
+        // 13. "input" alias for target through complete run() lifecycle
+        let res13 = crate::run(
+            "joinField",
+            &m5,
+            &serde_json::json!({
+                "input": "inventory",
+                "key": "sku",
+                "source": "matching_source",
+            }),
+        )
+        .unwrap();
+        let Output::Table(out13) = res13.output else { panic!("expected Output::Table") };
+        assert_eq!(out13.name, "inventory_JoinField");
+        assert_eq!(out13.fields.len(), 2);
+        assert_eq!(out13.fields[1].name, "weight");
+        assert_eq!(out13.features[0].attrs[1], Value::Float(1.25));
+
+        // 14. Explicitly empty array and blank-only array in fields transfers zero fields
+        let res14_empty = crate::run(
+            "joinField",
+            &m5,
+            &serde_json::json!({
+                "target": "inventory",
+                "targetField": "sku",
+                "joinTable": "matching_source",
+                "fields": []
+            }),
+        )
+        .unwrap();
+        let Output::Table(out14_empty) = res14_empty.output else { panic!("expected Output::Table") };
+        assert_eq!(out14_empty.fields.len(), 1);
+        assert_eq!(out14_empty.features[0].attrs.len(), 1);
+
+        let res14_blank = crate::run(
+            "joinField",
+            &m5,
+            &serde_json::json!({
+                "target": "inventory",
+                "targetField": "sku",
+                "joinTable": "matching_source",
+                "fields": ["   ", ""]
+            }),
+        )
+        .unwrap();
+        let Output::Table(out14_blank) = res14_blank.output else { panic!("expected Output::Table") };
+        assert_eq!(out14_blank.fields.len(), 1);
+        assert_eq!(out14_blank.features[0].attrs.len(), 1);
+
+        // 15. Repeated field names in fields are deduplicated
+        let res15 = crate::run(
+            "joinField",
+            &m5,
+            &serde_json::json!({
+                "target": "inventory",
+                "targetField": "sku",
+                "joinTable": "matching_source",
+                "fields": ["weight", "weight"]
+            }),
+        )
+        .unwrap();
+        let Output::Table(out15) = res15.output else { panic!("expected Output::Table") };
+        assert_eq!(out15.fields.len(), 2);
+        assert_eq!(out15.fields[1].name, "weight");
+        assert_eq!(out15.features[0].attrs[1], Value::Float(1.25));
+
+        // 16. Duplicate index selection [0, 0] dedupes to 1 selected row in table order
+        let inp_dup_sel = TestInputs {
+            datasets: HashMap::from([("parcels".to_string(), target_sel.clone()), ("owners".to_string(), source_sel.clone())]),
+            tables: HashMap::new(),
+            selections: HashMap::from([("parcels".to_string(), vec![0, 0])]),
+        };
+        let res16 = crate::run(
+            "joinField",
+            &inp_dup_sel,
+            &serde_json::json!({
+                "target": "parcels",
+                "targetField": "id",
+                "joinTable": "owners",
+                "joinField": "id"
+            }),
+        )
+        .unwrap();
+        let Output::Table(out16) = res16.output else { panic!("expected Output::Table") };
+        assert_eq!(out16.features.len(), 1);
+        assert_eq!(out16.features[0].attrs[0], Value::Int(10));
+
+        // 17. Blank join_field falls back to join_key
+        let res17 = crate::run(
+            "joinField",
+            &m5,
+            &serde_json::json!({
+                "target": "inventory",
+                "targetField": "sku",
+                "joinTable": "matching_source",
+                "join_field": "",
+                "join_key": "sku"
+            }),
+        )
+        .unwrap();
+        let Output::Table(out17) = res17.output else { panic!("expected Output::Table") };
+        assert_eq!(out17.features[0].attrs[1], Value::Float(1.25));
+
+        // 18. Invalid fields type (e.g. integer 5) is rejected
+        let res18 = crate::run(
+            "joinField",
+            &m5,
+            &serde_json::json!({
+                "target": "inventory",
+                "targetField": "sku",
+                "joinTable": "matching_source",
+                "joinField": "sku",
+                "fields": 5
+            }),
+        );
+        assert!(res18.is_err());
+        assert_eq!(res18.unwrap_err(), "Transfer Fields must be a string or JSON array");
     }
 }

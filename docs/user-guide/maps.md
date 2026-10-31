@@ -222,7 +222,9 @@ tile service, **Overlay** ticked in Add Tile Layer) on top of the map's layers w
 every new layer goes. Drag one, or right-click it and choose **Move up** or **Move down**, to put it
 between the map's layers (above a layer group, never inside one). Tick
 one to show or hide it, and right-click it for **Zoom To Layer** (when its bounds are known), opacity,
-**Blend** mode, order and **Remove**.
+**Blend** mode, order and **Remove**; a WMS or map service layer also has **Draw as**: one picture
+of the view or tiles of a size (see
+[One picture of the view, or tiles](data-formats.md#one-picture-of-the-view-or-tiles)).
 A blend mode (Multiply, Screen, Overlay, Darken, Lighten, Difference) combines a tile layer with
 what is drawn beneath it (tile layers, the basemap, and map layers when it's placed over them): stack imagery over a hillshade and set it to Multiply to
 let the terrain show through. Overlays stay over the basemaps; choosing a built-in basemap
@@ -237,6 +239,15 @@ alone, whichever it is (a WMS layer too). Tiles are not
 selectable or editable; a tile not yet loaded may need another click once it arrives.
 **Reload** in the Basemap gallery (`map.reloadWebLayers`) clears cached tiles and styles and
 fetches them again.
+
+**Source layers.** A vector PMTiles or MBTiles archive lists its source layers (the
+`vector_layers` its metadata names: `water`, `roads`, `pois`…) under its row in the Layers pane:
+the arrow beside it opens them, each with its own checkbox. Untick one to hide what it draws
+(fills, lines, points and labels, in the default look and in a style given with `styleLayers`
+alike); Explore's pop-ups then skip its features too. From scripts, `map.tiles` lists a vector
+archive's `sourceLayers` once its header is read, and `map.setTiles` takes `"hiddenLayers":
+["roads", …]`, the source layers switched off (`[]` or `null` shows them all again). Switching one
+off is an edit to undo, and a project keeps which are off.
 
 Tiles load in the background and the map fills in as they arrive, with coarser tiles standing in
 meanwhile; exports and `rustgis-cli` wait for them. On the globe and in other projections the

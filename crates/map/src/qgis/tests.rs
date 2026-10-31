@@ -389,6 +389,9 @@ fn pattern_fills_carry_over_as_stacked_fills() {
         angle == 30.0 && (spacing - mm(1.0)).abs() < 1e-3 && (width - mm(0.3)).abs() < 1e-3 && (offset - mm(0.5)).abs() < 1e-3,
         "{fills:?}"
     );
+    // QGIS 3 saves the angle as `angle` (QGIS 2 as `lineangle`).
+    let (fills, ..) = read(&lines.replace("lineangle", "angle").replace("\"30\"", "\"90\""));
+    assert!(matches!(fills[0].pattern, FillPattern::Hatch { angle: 90.0, .. }), "{fills:?}");
     // Two colours stacked: both, the top one over the bottom.
     let half = r#"<layer class="SimpleFill" enabled="1"><Option type="Map"><Option name="color" value="0,0,0,64"/><Option name="style" value="solid"/></Option></layer>"#;
     let (fills, ..) = read(&format!("{}{half}", simple("solid")));
@@ -929,6 +932,13 @@ fn marker_and_hashed_lines_carry_over_as_strokes_of_marks() {
     assert_eq!(pic.color, Some(Rgba::new(242, 242, 242, 128)));
     assert!(near(m.offset_along, 0.12 * mm) && near(pic.offset, (0.5 - 0.35) * mm), "{pic:?}");
     assert!(near(m.size, mm) && near(m.average_angle, 4.0 * mm) && m.rotate && m.outline.is_none());
+    // The average angle's length in its own unit, `average_angle_unit` (4 pixels, not 4 mm).
+    let px = qml.replace(
+        r#"<Option name="average_angle_length" value="4"/>"#,
+        r#"<Option name="average_angle_length" value="4"/><Option name="average_angle_unit" value="Pixel"/>"#,
+    );
+    let m = read_style(&px, "Rail", &mut Report::default()).unwrap().line_strokes.unwrap()[1].markers.unwrap();
+    assert!(m.average_angle > 0.0 && m.average_angle < 2.0 * mm, "4 pixels: {}", m.average_angle);
     assert_eq!(pic.level, Some(2));
 
     // The triangle: its outline, its angle, offset only by the line's.
@@ -1050,12 +1060,13 @@ fn marker_symbols_of_several_layers_carry_over_as_marks_turned_by_their_field() 
     let Some(Renderer::Single(sym)) = &s.renderer else { panic!() };
     assert_eq!(sym.marker, Marker::Star);
 
-    // An angle from any other expression is noted, and turns nothing.
+    // An angle from any other expression turns the markers by that expression.
     let other = qml.replace("</layer>", &format!("{}</layer>", dd("&quot;A&quot; * 2")));
     let mut report = Report::default();
     let s = read_style(&other, "Signs", &mut report).unwrap();
     assert_eq!(s.marker_rotation, Some(None));
-    assert!(report.notes.iter().any(|n| n.text.contains("data-defined")), "{:?}", report.notes);
+    assert_eq!(s.symbol_by.and_then(|b| b.angle).as_deref(), Some(r#""A" * 2"#));
+    assert!(!report.notes.iter().any(|n| n.text.contains("data-defined")), "{:?}", report.notes);
 
     // Classes of one layer: an antenna that keeps still where a cliff turns by the field. The
     // antenna's single plain character becomes a mark that doesn't turn; the cliff's turns.
@@ -1103,5 +1114,235 @@ fn marker_symbols_of_several_layers_carry_over_as_marks_turned_by_their_field() 
       </symbol></symbols></renderer-v2></qgis>"#;
     let mut report = Report::default();
     read_style(old, "Signs", &mut report).unwrap();
+    assert!(report.notes.iter().any(|n| n.text.contains("data-defined")), "{:?}", report.notes);
+}
+
+/// Gradient and shapeburst fills carry over: their two colours (or their ramp's, with its stops,
+/// a colour of which carries its own colon), how a gradient runs, and how deep a shapeburst shades
+/// in its unit; neither is noted as approximated any more.
+#[test]
+fn gradient_and_shapeburst_fills_carry_over() {
+    use crate::fills::{FillPattern, GradientPoint, GradientShape, Spread, Stop};
+    let read = |layer: &str| {
+        let qml = format!(
+            r#"<qgis version="4.2.3"><renderer-v2 type="singleSymbol"><symbols><symbol type="fill" name="0" alpha="0.5">{layer}</symbol></symbols></renderer-v2></qgis>"#
+        );
+        let mut report = Report::default();
+        let s = read_style(&qml, "Countries", &mut report).unwrap();
+        (s.fill_layers.unwrap_or_default(), report)
+    };
+    let opts =
+        |o: &[(&str, &str)]| o.iter().map(|(k, v)| format!(r#"<Option name="{k}" type="QString" value="{v}"/>"#)).collect::<String>();
+    // A radial gradient from the centroid, reflected, turned; as QGIS 4 writes it.
+    let gradient = format!(
+        r#"<layer class="GradientFill" enabled="1"><Option type="Map">{}</Option></layer>"#,
+        opts(&[
+            ("color", "255,0,0,255,rgb:1,0,0,1"),
+            ("gradient_color2", "0,0,255,255,rgb:0,0,1,1"),
+            ("color1", "69,116,40,255"),
+            ("color2", "188,220,60,255"),
+            ("color_type", "0"),
+            ("type", "1"),
+            ("spread", "1"),
+            ("angle", "30"),
+            ("coordinate_mode", "0"),
+            ("reference_point1", "0.5,0"),
+            ("reference_point1_iscentroid", "1"),
+            ("reference_point2", "1,0.25"),
+            ("reference_point2_iscentroid", "0"),
+            ("offset", "0,0"),
+        ])
+    );
+    let (fills, report) = read(&gradient);
+    assert_eq!(fills.len(), 1, "{fills:?}");
+    let half = |c: Rgba| c.with_alpha(128);
+    assert_eq!(fills[0].color, Some(half(Rgba::rgb(255, 0, 0))), "its first colour, the symbol's opacity on it");
+    let FillPattern::Gradient { shape, color2, from, to, spread, angle, in_view, stops, .. } = fills[0].pattern else {
+        panic!("{fills:?}")
+    };
+    assert_eq!(
+        (shape, from, to, spread, angle, in_view),
+        (GradientShape::Radial, GradientPoint::CENTROID, GradientPoint::At([1.0, 0.25]), Spread::Reflect, 30.0, false)
+    );
+    assert_eq!(color2, half(Rgba::rgb(0, 0, 255)), "faded with the symbol");
+    assert!(stops.is_empty());
+    assert!(!report.notes.iter().any(|n| n.text.contains("gradient")), "{:?}", report.notes);
+    // world.qgs's shapeburst: a colour ramp with stops (QGIS 2 props), 5 mm deep, blurred.
+    let burst = r#"<layer class="ShapeburstFill" enabled="1"><prop k="blur_radius" v="10"/><prop k="color" v="51,160,44,255"/><prop k="color1" v="0,104,55,255"/>
+        <prop k="color2" v="255,255,204,255"/><prop k="color_type" v="1"/><prop k="discrete" v="0"/><prop k="distance_unit" v="MM"/><prop k="gradient_color2" v="178,223,138,255"/>
+        <prop k="ignore_rings" v="0"/><prop k="max_distance" v="5"/><prop k="offset" v="0,0"/><prop k="stops" v="0.05;49,163,84,255:0.1;120,198,121,255,rgb:0.47,0.78,0.47,1;rgb;ccw:0.75;194,230,153,255"/>
+        <prop k="use_whole_shape" v="0"/></layer>"#;
+    let (fills, report) = read(burst);
+    let FillPattern::Shapeburst { color2, stops, distance, blur, ignore_rings, discrete } = fills[0].pattern else { panic!("{fills:?}") };
+    assert_eq!(fills[0].color, Some(half(Rgba::rgb(0, 104, 55))), "the ramp's first colour");
+    assert_eq!(color2, half(Rgba::rgb(255, 255, 204)));
+    assert_eq!(
+        stops.as_slice(),
+        &[(0.05, Rgba::rgb(49, 163, 84)), (0.1, Rgba::rgb(120, 198, 121)), (0.75, Rgba::rgb(194, 230, 153))]
+            .map(|(at, c)| Stop { at, color: half(c) })
+    );
+    assert!((distance.unwrap() - 5.0 * 96.0 / 25.4).abs() < 1e-3, "{distance:?}");
+    assert_eq!((blur, ignore_rings, discrete), (10, false, false));
+    assert!(report.notes.is_empty(), "{:?}", report.notes);
+    // A ramp that isn't a gradient: drawn by its two ends, its stops left out, and noted.
+    let random = burst.replace(r#"<prop k="color_type" v="1"/>"#, r#"<prop k="color_type" v="1"/><prop k="rampType" v="random"/>"#);
+    let (fills, report) = read(&random);
+    let FillPattern::Shapeburst { stops, .. } = fills[0].pattern else { panic!("{fills:?}") };
+    assert!(stops.as_slice().is_empty(), "{stops:?}");
+    assert!(report.notes.iter().any(|n| n.text.contains("other than gradients")), "{:?}", report.notes);
+    // Invalid stops before a valid one don't use up what a fill keeps.
+    let junk: String = (0..20).map(|_| "0.1;not a colour:").collect();
+    let late = burst.replace(r#"<prop k="stops" v=""#, &format!(r#"<prop k="stops" v="{junk}0.5;255,0,0,255:"#));
+    let (fills, _) = read(&late);
+    let FillPattern::Shapeburst { stops, .. } = fills[0].pattern else { panic!("{fills:?}") };
+    assert!(stops.as_slice().iter().any(|s| s.at == 0.5 && s.color.0[..3] == [255, 0, 0]), "{stops:?}");
+    // Over the whole shape; an offset, which is left out, noted.
+    let whole =
+        burst.replace(r#"<prop k="use_whole_shape" v="0"/>"#, r#"<prop k="use_whole_shape" v="1"/>"#).replace(r#"v="0,0""#, r#"v="1,2""#);
+    let (fills, report) = read(&whole);
+    assert!(matches!(fills[0].pattern, FillPattern::Shapeburst { distance: None, .. }), "{fills:?}");
+    assert!(report.notes.iter().any(|n| n.text.contains("offsets")), "{:?}", report.notes);
+    // Without the setting, QGIS's default: over the whole shape.
+    let (fills, _) = read(&burst.replace(r#"<prop k="use_whole_shape" v="0"/>"#, ""));
+    assert!(matches!(fills[0].pattern, FillPattern::Shapeburst { distance: None, .. }), "{fills:?}");
+}
+
+/// Data-defined size, colours, outline width and angle carry over as the layer's expressions:
+/// a field's quoted, sizes in millimetres turned into points; an angle that is a field still
+/// turns the markers by it, as before.
+#[test]
+fn data_defined_symbol_settings_carry_over_as_expressions() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/qgis/generated/qml/datadefined-size-angle-color.qml");
+    let text = std::fs::read_to_string(path).unwrap();
+    let mut report = Report::default();
+    let s = read_style(&text, "points", &mut report).unwrap();
+    let by = s.symbol_by.clone().unwrap();
+    assert_eq!(by.size.as_deref(), Some(r#"("value") * 3.779528"#));
+    assert_eq!(by.fill.as_deref(), Some(r#"CASE WHEN "kind" = 'a' THEN '#ff0000' ELSE '#0000ff' END"#));
+    assert_eq!(by.angle, None, "a field's angle turns by the field");
+    assert_eq!(s.marker_rotation.clone().flatten().map(|r| r.field), Some("angle".into()));
+    assert!(!report.notes.iter().any(|n| n.text.contains("data-defined")), "{:?}", report.notes);
+    // Applied to a point layer with those fields, each reads and draws per feature.
+    let fields = ["value", "angle"].map(|f| rustgis_data::Field::new(f, rustgis_data::FieldType::Double));
+    let mut ds = rustgis_data::Dataset::new("points", rustgis_data::GeometryType::Point, fields.to_vec());
+    ds.fields.push(rustgis_data::Field::new("kind", rustgis_data::FieldType::Text));
+    ds.push(
+        Some(rustgis_data::Geometry::Point(rustgis_geom::Coord::new(0.0, 0.0))),
+        vec![rustgis_data::Value::Float(2.0), rustgis_data::Value::Float(0.0), rustgis_data::Value::Text("a".into())],
+    );
+    let mut layer = crate::Layer::new(1, ds);
+    s.apply(&mut layer);
+    let sym = layer.styler(None).symbol(0);
+    assert!((sym.size - 2.0 * 96.0 / 25.4).abs() < 1e-3 && sym.fill == Rgba::rgb(255, 0, 0), "{sym:?}");
+
+    // A line's colour and width; an outline width in points; what isn't drawn by expression is noted.
+    let dd = |props: &[(&str, &str)]| {
+        let one = |(name, expr): &(&str, &str)| {
+            format!(
+                r#"<Option type="Map" name="{name}"><Option value="true" type="bool" name="active"/><Option value="{expr}" type="QString" name="expression"/>
+                <Option value="3" type="int" name="type"/></Option>"#
+            )
+        };
+        format!(
+            r#"<data_defined_properties><Option type="Map"><Option value="" type="QString" name="name"/><Option type="Map" name="properties">{}</Option>
+            <Option value="collection" type="QString" name="type"/></Option></data_defined_properties>"#,
+            props.iter().map(one).collect::<String>()
+        )
+    };
+    let line = format!(
+        r#"<qgis version="3.40.0"><renderer-v2 type="singleSymbol"><symbols><symbol type="line" name="0" alpha="1">
+        <layer class="SimpleLine" enabled="1"><Option type="Map"><Option name="line_width" value="0.5"/><Option name="line_width_unit" value="Point"/></Option>{}</layer>
+        </symbol></symbols></renderer-v2></qgis>"#,
+        dd(&[("outlineWidth", "if(@map_scale &lt; 4656581, 1.0, 0)"), ("outlineColor", "color_rgb(255, 0, 0)")])
+    );
+    let mut report = Report::default();
+    let s = read_style(&line, "roads", &mut report).unwrap();
+    let by = s.symbol_by.unwrap();
+    assert_eq!(by.stroke_width.as_deref(), Some("(if(@map_scale < 4656581, 1.0, 0)) * 1.333333"), "{by:?}");
+    assert_eq!(by.stroke.as_deref(), Some("color_rgb(255, 0, 0)"));
+    assert!(report.notes.is_empty(), "{:?}", report.notes);
+    // A line of two strokes draws each with its own: left out, said.
+    let stroke =
+        r#"<layer class="SimpleLine" enabled="1"><Option type="Map"><Option name="line_color" value="0,0,0,255"/></Option></layer>"#;
+    let doubled = line.replace("</symbol>", &format!("{stroke}{stroke}</symbol>"));
+    let mut report = Report::default();
+    let s = read_style(&doubled, "roads", &mut report).unwrap();
+    assert!(s.symbol_by.is_none_or(|b| b.stroke.is_none() && b.stroke_width.is_none()));
+    assert!(report.notes.iter().any(|n| n.text.contains("line of several strokes")), "{:?}", report.notes);
+    // Classes: one sized by expression, one not; left out (applied to every feature, they would
+    // change the other's), said. A see-through symbol's expression colour is drawn opaque, said.
+    let marker = |name: &str, props: &str| {
+        format!(
+            r#"<symbol type="marker" name="{name}" alpha="0.5"><layer class="SimpleMarker" enabled="1"><Option type="Map"/>{props}</layer></symbol>"#
+        )
+    };
+    let classes = format!(
+        r#"<qgis version="3.40.0"><renderer-v2 type="categorizedSymbol" attr="kind"><categories>
+          <category value="a" symbol="0" label="a" render="true"/><category value="b" symbol="1" label="b" render="true"/></categories>
+          <symbols>{}{}</symbols></renderer-v2></qgis>"#,
+        marker("0", &dd(&[("size", "&quot;v&quot;"), ("fillColor", "'red'")])),
+        marker("1", "")
+    );
+    let mut report = Report::default();
+    let s = read_style(&classes, "points", &mut report).unwrap();
+    assert!(s.symbol_by.is_none_or(|b| b.is_empty()));
+    let said = |t: &str| report.notes.iter().any(|n| n.text.contains(t));
+    assert!(said("differ between its classes") && said("see-through symbol"), "{:?}", report.notes);
+    // Both classes alike: theirs. With a class switched off besides, which they would paint: left
+    // out, said.
+    let same = dd(&[("size", "&quot;v&quot;")]);
+    let alike =
+        classes.replace(&marker("1", ""), &marker("1", &same)).replace(&dd(&[("size", "&quot;v&quot;"), ("fillColor", "'red'")]), &same);
+    let mut report = Report::default();
+    let s = read_style(&alike, "points", &mut report).unwrap();
+    assert_eq!(s.symbol_by.unwrap().size.as_deref(), Some(r#"("v") * 3.779528"#));
+    assert!(report.notes.is_empty(), "{:?}", report.notes);
+    let off = alike.replace("</categories>", r#"<category value="c" symbol="1" label="c" render="false"/></categories>"#);
+    let mut report = Report::default();
+    let s = read_style(&off, "points", &mut report).unwrap();
+    assert!(s.symbol_by.is_none_or(|b| b.is_empty()));
+    assert!(report.notes.iter().any(|n| n.text.contains("a class switched off")), "{:?}", report.notes);
+    // A marker of two layers (the Training Manual's world places): a white disc sized by
+    // expression, a black dot sized in proportion on top. The marks scale with the top layer's
+    // size; their colours stay their own, the outline colour by expression is left out.
+    let layer_of = |color: &str, size: &str, props: &[(&str, &str)]| {
+        format!(
+            r#"<layer class="SimpleMarker" enabled="1"><Option type="Map"><Option name="color" value="{color}"/><Option name="size" value="{size}"/></Option>{}</layer>"#,
+            dd(props)
+        )
+    };
+    let places = format!(
+        r#"<qgis version="3.10.4"><renderer-v2 type="singleSymbol"><symbols><symbol type="marker" name="0" alpha="1">{}{}</symbol></symbols></renderer-v2></qgis>"#,
+        layer_of(
+            "255,255,255,255",
+            "2.4",
+            &[
+                ("outlineColor", "IF(pop_max &gt; 5000000, color_rgb(255,0,0), color_rgb(0,0,0))"),
+                ("size", "scale_linear(pop_max, 7026, 35676000, 8, 18)")
+            ]
+        ),
+        layer_of("0,0,0,255", "0.5", &[("size", "0.208333*(scale_linear(pop_max, 7026, 35676000, 8, 18))")])
+    );
+    let mut report = Report::default();
+    let s = read_style(&places, "places", &mut report).unwrap();
+    let by = s.symbol_by.unwrap();
+    // Turned into the largest layer's (the symbol's) size: 2.4 / 0.5 times the dot's.
+    assert_eq!(by.size.as_deref(), Some("((0.208333*(scale_linear(pop_max, 7026, 35676000, 8, 18))) * 3.779528) * 4.8"));
+    assert!(by.stroke.is_none(), "{by:?}");
+    assert_eq!(s.line_strokes.map(|m| m.len()), Some(2));
+    let said = |t: &str| report.notes.iter().any(|n| n.text.contains(t));
+    // Both layers sized by expression scale together as QGIS scales them: nothing to say of that.
+    assert!(!said("scaled with its size") && said("colours and outline widths of a marker drawn as marks"), "{:?}", report.notes);
+    // A layer of a fixed size scales with the rest: said.
+    let fixed = places.replace(&dd(&[("size", "0.208333*(scale_linear(pop_max, 7026, 35676000, 8, 18))")]), "");
+    let mut report = Report::default();
+    read_style(&fixed, "places", &mut report).unwrap();
+    assert!(report.notes.iter().any(|n| n.text.contains("scaled with its size")), "{:?}", report.notes);
+    assert!(!report.notes.iter().any(|n| n.text.contains("drawn with the first's")), "{:?}", report.notes);
+
+    let dashed = line.replace("outlineColor", "customDash");
+    let mut report = Report::default();
+    let s = read_style(&dashed, "roads", &mut report).unwrap();
+    assert!(s.symbol_by.unwrap().stroke.is_none());
     assert!(report.notes.iter().any(|n| n.text.contains("data-defined")), "{:?}", report.notes);
 }

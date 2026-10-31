@@ -86,10 +86,10 @@ Open a feature layer's table with ++ctrl+t++ (++cmd+t++ on macOS), **Home › Se
 or **Attribute Table** on a feature layer's **Data** tab (`table.open`). Rows and map selections stay in sync.
 Standalone tables open from their right-click menu; their cells are read only. See [The attribute table](analysis.md#the-attribute-table) for
 sorting, filtering, selection and the SQL `WHERE` clause syntax used by **Select By Attributes**
-and **Definition Query**. These clauses filter a layer; they are not DuckDB queries.
+and **Definition Query** (the full grammar is in [Expressions](expressions.md)). These clauses filter a layer; they are not DuckDB queries.
 
 For an editable feature layer, double-click a cell to change it. The table's toolbar also adds
-fields, calculates field expressions and opens **Calculate Geometry** (`edit.calculateGeometry`).
+fields, calculates field [expressions](expressions.md) and opens **Calculate Geometry** (`edit.calculateGeometry`).
 The geometry calculator fills a new double field or an existing numeric field with area,
 perimeter, length or point X/Y, for all or selected features. Point coordinates can be WGS 84
 degrees or a supported projected EPSG system's units. See [Editing](editing.md) for field
@@ -570,7 +570,9 @@ Data Sources** also opens it) gathers the places data comes from:
   edit, test, duplicate, copy its address or remove it.
 - **Library**: well-known public sources: OpenStreetMap tiles, EOX Sentinel-2 cloudless and
   NASA GIBS (WMTS), USGS imagery, topographic and hydrography maps (ArcGIS), GEBCO bathymetry
-  (WMS), swisstopo's maps and imagery (geo.admin.ch, WMTS), Earth Search and Planetary Computer (STAC), and the Natural Earth sample layers.
+  (WMS), swisstopo's maps and imagery (geo.admin.ch) as WMTS tiles and as a WMS (most of its
+  layers answer Identify), Earth Search and Planetary Computer (STAC), and the Natural Earth
+  sample layers.
 
 A click on a file, a web address, a tile layer or a sample adds it at once. The lists are kept
 with the app's preferences, never in a project. They hold no secrets: a web address loses its
@@ -786,9 +788,15 @@ features it shows. A single feature, a bare geometry or TopoJSON is loaded whole
 
 A streamed layer works like any other for symbology, labels, pop-ups, selection and the
 attribute table (which lists the features read for the view). Geoprocessing tools, exports and
-**Load All Features** read the whole source, up to 2 million features (500,000 in the web app);
-a larger source is refused rather than processed as a sample. A tool given a streamed layer with
-a selection uses the selected features read for the view. Edits are refused, since the features are read again as the view moves: right-click the
+**Load All Features** read the whole source, up to 2 million features (500,000 in the web app;
+a source that doesn't report its feature count must have fewer than that, since a read that
+reaches the limit is refused); a larger source is refused rather than processed as a sample. A
+GeoPackage, GeoParquet, FlatGeobuf or LAS/LAZ file is refused the same way when added without
+streaming (`layer.addData` with `"stream": false`) or given to a geoprocessing tool as a file
+path. If the source's feature count is known, an oversized whole read is refused before reading
+its features; an incomplete read is an error, not a successful sample. A tool given a
+streamed layer with a selection uses the selected features read for the view. Edits are refused,
+since the features are read again as the view moves: right-click the
 layer in Layers and choose **Load All Features** (`layer.loadAll`) to load it into memory and
 edit it. Projects save the layer's file path, not its features, and read the file again when they
 open; a browser upload is kept in the project.
