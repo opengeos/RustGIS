@@ -92,20 +92,23 @@ fn export_layer(s: &mut Session, p: &Value) -> CmdResult {
         Some(text) => Crs::parse(text)?,
         None => rustgis_data::io::default_export_crs(ds, &ext),
     };
-    let (written, left_out) = match &chunks {
+    let (written, left_out, skipped) = match &chunks {
         Some((src, layer)) => {
             let e = rustgis_data::export::write_source_in(src.as_ref(), layer, Path::new(&path), crs).map_err(|e| e.to_string())?;
-            (e.written, e.left_out)
+            (e.written, e.left_out, e.skipped)
         }
         None => {
             let left_out = rustgis_data::io::write_path_in(ds, Path::new(&path), crs).map_err(|e| e.to_string())?;
-            (ds.features.len().saturating_sub(left_out), left_out)
+            (ds.features.len().saturating_sub(left_out), left_out, 0)
         }
     };
     // FlatGeobuf, KML, GPX and Shapefile hold features with geometry only (a Shapefile, only
     // geometry it can draw).
     if left_out > 0 {
         s.notify(format!("{path}: {left_out} features without drawable geometry were left out"), false);
+    }
+    if skipped > 0 {
+        s.notify(format!("{path}: {skipped} rows couldn't be read and were left out"), false);
     }
     if matches!(ext.as_str(), "shp" | "zip") && rustgis_data::raster::wkt::to_wkt(crs).is_none() {
         s.notify(format!("{path}: no .prj written, as {} has no WKT form", crs.label()), false);

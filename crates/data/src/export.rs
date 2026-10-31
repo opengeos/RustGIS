@@ -6,7 +6,7 @@
 
 use std::path::Path;
 
-use crate::io::{CsvWriter, GeoJsonWriter, PROJECTED_FORMATS, check_projected, project_features, write_atomic_with};
+use crate::io::{CsvWriter, GeoJsonWriter, PROJECTED_FORMATS, check_projected, project_features, write_atomic_streamed};
 use crate::raster::Crs;
 use crate::source::FeatureSource;
 use crate::{DataError, Dataset, Feature, GeometryType, Result};
@@ -30,6 +30,8 @@ pub struct Exported {
     pub written: usize,
     /// Features the format couldn't hold (a FlatGeobuf holds only features with geometry).
     pub left_out: usize,
+    /// Rows of the source that couldn't be read, so aren't in the export.
+    pub skipped: usize,
 }
 
 /// Writes every feature of `src` to `path` in the format of its extension, in `crs` (see
@@ -64,16 +66,18 @@ fn write_chunks_in(src: &dyn FeatureSource, layer: &Dataset, path: &Path, crs: C
     };
     let t = if crs == Crs::LonLat { None } else { Some(crs.transformer().map_err(DataError::Format)?) };
     let mut total = 0usize;
+    let mut skipped = 0usize;
     let mut feed = |add: &mut dyn FnMut(&[Feature]) -> Result<()>| -> Result<()> {
         // A GeoPackage export that starts again feeds the features again.
         total = 0;
-        src.visit_chunks(None, bytes, &mut |mut chunk| {
+        let batch = src.visit_chunks(None, bytes, &mut |mut chunk| {
             if let Some(t) = &t {
                 project_features(&mut chunk, t, crs)?;
             }
             total = total.saturating_add(chunk.len());
             add(&chunk)
         })?;
+        skipped = batch.skipped;
         Ok(())
     };
     let left_out = match ext.as_str() {
@@ -84,27 +88,27 @@ fn write_chunks_in(src: &dyn FeatureSource, layer: &Dataset, path: &Path, crs: C
         }
         #[cfg(target_arch = "wasm32")]
         "gpkg" => return Err(DataError::Unsupported("GeoPackage in the browser".into())),
-        "geojson" | "json" => write_atomic_with(path, |out| {
+        "geojson" | "json" => write_atomic_streamed(path, |out| {
             let mut w = GeoJsonWriter::new(out, &layer.name, &layer.fields)?;
             feed(&mut |features| w.write(features))?;
             w.finish()?;
             Ok(0)
         })?,
-        "csv" => write_atomic_with(path, |out| {
+        "csv" => write_atomic_streamed(path, |out| {
             let mut w = CsvWriter::new(out, &layer.fields, geometry_type)?;
             feed(&mut |features| w.write(features))?;
             w.finish()?;
             Ok(0)
         })?,
-        "fgb" => write_atomic_with(path, |out| {
+        "fgb" => write_atomic_streamed(path, |out| {
             crate::source::fgb::write_features(&layer.name, geometry_type, &layer.fields, crs, out, &mut feed)
         })?,
-        _ => write_atomic_with(path, |out| {
+        _ => write_atomic_streamed(path, |out| {
             crate::source::parquet::write_features(geometry_type, &layer.fields, out, &mut feed)?;
             Ok(0)
         })?,
     };
-    Ok(Exported { written: total.saturating_sub(left_out), left_out })
+    Ok(Exported { written: total.saturating_sub(left_out), left_out, skipped })
 }
 
 /// The kind of a source's first geometry, read up to it; `None` for a source without any (read

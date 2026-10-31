@@ -612,7 +612,7 @@ pub fn write_atomic_with(path: &Path, write: impl FnOnce(&mut dyn std::io::Write
 
 /// As [`write_atomic`], the file written through `write` as it goes rather than from bytes held
 /// whole: for exports that write a layer a chunk at a time. Returns what `write` returns.
-pub(crate) fn write_atomic_with<T>(path: &Path, write: impl FnOnce(&mut std::io::BufWriter<std::fs::File>) -> Result<T>) -> Result<T> {
+pub(crate) fn write_atomic_streamed<T>(path: &Path, write: impl FnOnce(&mut std::io::BufWriter<std::fs::File>) -> Result<T>) -> Result<T> {
     use std::io::Write;
     let tmp = temp_beside(path)?;
     // Opened before the guard, so a name already taken is never removed.
