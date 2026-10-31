@@ -31,6 +31,7 @@ A catalogue's (CSW 2.0.2) address: search its records by words and, if you like,
 A ChatGPT plan or app usage limit was reached. Review Weekly usage before trying again.	Une limite d’utilisation du forfait ChatGPT ou de l’application a été atteinte. Consultez l’utilisation hebdomadaire avant de réessayer.
 A ChatGPT sign-in can only be used with the OpenAI API.	Une connexion ChatGPT ne peut être utilisée qu'avec l'API OpenAI.
 A colour, hatch lines, markers on a grid, a gradient, or a shapeburst (shaded from the edge inwards)	Une couleur, des lignes de hachures, des marqueurs sur une grille, un dégradé ou un dégradé de forme (ombré du bord vers l'intérieur)
+A command id is required.	Un identifiant de commande est requis.
 A connection has this name: give this one another name to remember its keys.	Une connexion porte déjà ce nom : donnez-en un autre à celle-ci pour mémoriser ses clés.
 A copy of {name} with unsaved changes was kept a minute ago.	Une copie de {name} avec des modifications non enregistrées a été conservée il y a une minute.
 A copy of {name} with unsaved changes was kept less than a minute ago.	Une copie de {name} avec des modifications non enregistrées a été conservée il y a moins d'une minute.
@@ -434,6 +435,7 @@ Bike	Vélo
 Bilinear	Bilinéaire
 Bind To Time Slider	Lier au curseur temporel
 Bind to Time Slider	Lier au curseur temporel
+Bindings: {bindings} · Conflicts: {conflicts} · Unknown commands: {unknown}	Associations : {bindings} · Conflits : {conflicts} · Commandes inconnues : {unknown}
 Blank	Vierge
 Blank for Amazon S3	Vide pour Amazon S3
 Blank Letter page	Page Lettre vierge
@@ -582,6 +584,7 @@ Choose a layer…	Choisissez une couche…
 Choose a model.	Choisissez un modèle.
 Choose a resampling type for the raster layer.	Choisir un type de rééchantillonnage pour la couche raster.
 Choose a saved S3 connection before opening this source.	Choisissez une connexion S3 enregistrée avant d'ouvrir cette source.
+Choose a shortcut file in the browser.	Choisissez un fichier de raccourcis dans le navigateur.
 Choose a start	Choisir un départ
 Choose a stop	Choisir un arrêt
 Choose a table to load for editing	Choisir une table à charger pour l'édition
@@ -1211,6 +1214,7 @@ Export Features	Exporter des entités
 Export Features (tool)	Exporter des entités (outil)
 Export Features needs a vector layer (Data › Export Raster writes a raster)	Exporter des entités nécessite une couche vecteur (Données › Exporter le raster écrit un raster)
 Export Features…	Exporter des entités…
+Export Keyboard Shortcuts…	Exporter les raccourcis clavier…
 Export Layout	Exporter la mise en page
 Export Map	Exporter la carte
 Export Map failed unexpectedly	L'export de la carte a échoué de façon inattendue
@@ -1567,6 +1571,8 @@ Import Bookmarks	Importer des signets
 Import Bookmarks…	Importer des signets…
 Import Deep Learning Package	Importer un paquetage d'apprentissage profond
 Import GeoLibre Project	Importer un projet GeoLibre
+Import Keyboard Shortcuts	Importer les raccourcis clavier
+Import Keyboard Shortcuts…	Importer les raccourcis clavier…
 Import Layout	Importer une mise en page
 Import Layout…	Importer une mise en page…
 Import Model	Importer un modèle
@@ -1585,6 +1591,7 @@ Import Styles From…	Importer des styles depuis…
 Import Task	Importer une tâche
 Import Task…	Importer une tâche…
 Import Thumbnail	Importer une miniature
+Imported bindings replace conflicting keys. Unknown commands are kept for later use.	Les associations importées remplacent les touches en conflit. Les commandes inconnues sont conservées pour plus tard.
 Imported Zarr slice exceeds the 128 MiB download limit	La tranche Zarr importée dépasse la limite de téléchargement de 128 Mio
 Import…	Importer…
 IN	IN
@@ -1649,8 +1656,11 @@ Intersect	Intersection
 Interval	Intervalle
 Into the group just above it, as its last item	Dans le groupe juste au-dessus, comme son dernier élément
 invalid child id	identifiant d'enfant non valide
+Invalid or reserved shortcut key.	Touche de raccourci non valide ou réservée.
 Invalid selection outline · draw a smaller area	Contour de sélection non valide · dessinez une zone plus petite
 Invalid selection outline · draw a smaller radius	Contour de sélection non valide · dessinez un rayon plus petit
+Invalid shortcut binding.	Association de raccourci non valide.
+Invalid shortcut key.	Touche de raccourci non valide.
 Invalid: {error}	Non valide : {error}
 Invert	Inverser
 Invert color scheme	Inverser la palette de couleurs
@@ -1715,6 +1725,7 @@ Kernel Type	Type de noyau
 Key	Key
 Keyboard\nShortcuts	Raccourcis\nclavier
 Keyboard Shortcuts	Raccourcis clavier
+Keyboard shortcuts	Raccourcis clavier
 Keyboard shortcuts.	Raccourcis clavier.
 Keys are available for this session but were not remembered on this computer.	Les clés sont disponibles pour cette session mais n'ont pas été mémorisées sur cet ordinateur.
 Keys are kept for this session only: there is no credential store to remember them in here.	Les clés ne sont conservées que pour cette session : il n'y a ici aucun magasin d'identifiants où les mémoriser.
@@ -2564,6 +2575,8 @@ Projects and JSON data (RustGIS, QGIS, GeoLibre)	Projets et données JSON (RustG
 Properties	Propriétés
 Property	Propriété
 Proportional Symbols	Symboles proportionnels
+Provide keys to reset, or no parameters to reset all.	Indiquez les touches à réinitialiser, ou aucun paramètre pour tout réinitialiser.
+Provide shortcut file text, data or a path.	Indiquez le texte, les données ou le chemin du fichier de raccourcis.
 Provider	Fournisseur
 Provinces:	Provinces :
 Proximity	Proximité
@@ -2747,6 +2760,7 @@ Reset Default	Rétablir la valeur par défaut
 Reset Effects	Réinitialiser les effets
 Reset North	Réorienter au nord
 Reset north	Réorienter au nord
+Reset unreadable saved shortcuts before importing.	Réinitialisez les raccourcis enregistrés illisibles avant d'importer.
 Reset {key}	Réinitialiser {key}
 Resolution (0–30)	Résolution (0–30)
 Response	Réponse
@@ -3068,6 +3082,7 @@ Set the pixels inside a polygon	Définir les pixels à l'intérieur d'un polygon
 Set the pixels inside a polygon.	Définir les pixels à l'intérieur d'un polygone.
 Settings	Paramètres
 Settings › Customize	Paramètres › Personnaliser
+Settings › Customize › Keyboard Shortcuts	Paramètres › Personnaliser › Raccourcis clavier
 Several places	Plusieurs positions
 Shade from the outer edge alone	Ombrer à partir du seul bord extérieur
 Shade to the point deepest inside	Ombrer jusqu'au point le plus à l'intérieur
@@ -3103,6 +3118,9 @@ Shifts the mark right of the point (left when negative)	Décale la marque à dro
 Shifts the stroke sideways: positive to the right of the line's direction, negative to the left	Décale le trait latéralement : positif à droite du sens de la ligne, négatif à gauche
 Short labels	Étiquettes courtes
 Shortcut already assigned	Raccourci déjà attribué
+Shortcut file contains invalid or reserved bindings.	Le fichier de raccourcis contient des associations non valides ou réservées.
+Shortcut file exceeds the size limit.	Le fichier de raccourcis dépasse la taille maximale.
+Shortcut keys are required.	Les touches du raccourci sont requises.
 Shortcuts	Raccourcis
 Shortest route over a line network	Itinéraire le plus court sur un réseau de lignes
 Show	Afficher
@@ -3633,6 +3651,7 @@ Toggle Imperial Measurements	Basculer les mesures impériales
 Token Required	Jeton requis
 Tolerance (km)	Tolérance (km)
 Tolls	Péages
+Too many shortcut changes to save.	Trop de modifications de raccourcis à enregistrer.
 Too many shortcut changes to save. Changes apply only to this session.	Trop de changements de raccourcis à enregistrer. Les changements ne s'appliquent qu'à cette session.
 Tool Gallery	Galerie d'outils
 Toolboxes	Boîtes à outils
@@ -3718,11 +3737,14 @@ United States	États-Unis
 Units	Unités
 Units per step	Unités par pas
 unknown (an older project)	inconnu (un projet plus ancien)
+Unknown shortcut binding field.	Champ d'association de raccourci inconnu.
+Unknown shortcut command.	Commande de raccourci inconnue.
 UNKNOWN TOOL	OUTIL INCONNU
 Unload the GeoLibre tools and stop loading them when RustGIS starts.	Décharger les outils GeoLibre et ne plus les charger au démarrage de RustGIS.
 Unsaved changes	Modifications non enregistrées
 Unsupervised classes (k-means)	Classes non supervisées (k-means)
 Unsupervised classes (k-means).	Classes non supervisées (k-means).
+Unsupported shortcut file version.	Version du fichier de raccourcis non prise en charge.
 Untitled	Sans titre
 Untitled model	Modèle sans titre
 Up	Remonter
@@ -3745,6 +3767,7 @@ US State GIS	SIG des États (É.-U.)
 US State GIS…	SIG des États (É.-U.)…
 USA Contiguous Albers Equal Area	Albers équivalente des États-Unis contigus
 Use	Utiliser
+Use a browser download to export shortcuts.	Utilisez un téléchargement du navigateur pour exporter les raccourcis.
 Use a Single Stroke	Utiliser un seul trait
 Use another account	Utiliser un autre compte
 Use ArcGIS Token	Utiliser un jeton ArcGIS

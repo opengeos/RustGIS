@@ -31,6 +31,7 @@ A catalogue's (CSW 2.0.2) address: search its records by words and, if you like,
 A ChatGPT plan or app usage limit was reached. Review Weekly usage before trying again.	已达到 ChatGPT 套餐或应用的用量限制。请查看每周用量后再重试。
 A ChatGPT sign-in can only be used with the OpenAI API.	ChatGPT 登录只能用于 OpenAI API。
 A colour, hatch lines, markers on a grid, a gradient, or a shapeburst (shaded from the edge inwards)	颜色、阴影线、格网上的标记、渐变或形状渐变（从边缘向内着色）
+A command id is required.	需要命令 ID。
 A connection has this name: give this one another name to remember its keys.	已有同名连接：请为此连接另取名称以记住其密钥。
 A copy of {name} with unsaved changes was kept a minute ago.	已在 1 分钟前保留了含未保存更改的 {name} 副本。
 A copy of {name} with unsaved changes was kept less than a minute ago.	已在不到 1 分钟前保留了含未保存更改的 {name} 副本。
@@ -434,6 +435,7 @@ Bike	骑行
 Bilinear	双线性
 Bind To Time Slider	绑定到时间滑块
 Bind to Time Slider	绑定到时间滑块
+Bindings: {bindings} · Conflicts: {conflicts} · Unknown commands: {unknown}	绑定：{bindings} · 冲突：{conflicts} · 未知命令：{unknown}
 Blank	空白
 Blank for Amazon S3	Amazon S3 留空
 Blank Letter page	空白 Letter 页面
@@ -582,6 +584,7 @@ Choose a layer…	选择图层…
 Choose a model.	请选择模型。
 Choose a resampling type for the raster layer.	为栅格图层选择重采样类型。
 Choose a saved S3 connection before opening this source.	打开此数据源前，请选择一个已保存的 S3 连接。
+Choose a shortcut file in the browser.	请在浏览器中选择快捷键文件。
 Choose a start	选择起点
 Choose a stop	选择途经点
 Choose a table to load for editing	选择要加载以进行编辑的表
@@ -1211,6 +1214,7 @@ Export Features	导出要素
 Export Features (tool)	导出要素（工具）
 Export Features needs a vector layer (Data › Export Raster writes a raster)	导出要素需要矢量图层（“数据 › 导出栅格”用于写出栅格）
 Export Features…	导出要素…
+Export Keyboard Shortcuts…	导出键盘快捷键…
 Export Layout	导出布局
 Export Map	导出地图
 Export Map failed unexpectedly	导出地图意外失败
@@ -1567,6 +1571,8 @@ Import Bookmarks	导入书签
 Import Bookmarks…	导入书签…
 Import Deep Learning Package	导入深度学习包
 Import GeoLibre Project	导入 GeoLibre 工程
+Import Keyboard Shortcuts	导入键盘快捷键
+Import Keyboard Shortcuts…	导入键盘快捷键…
 Import Layout	导入布局
 Import Layout…	导入布局…
 Import Model	导入模型
@@ -1585,6 +1591,7 @@ Import Styles From…	从…导入样式
 Import Task	导入任务
 Import Task…	导入任务…
 Import Thumbnail	导入缩略图
+Imported bindings replace conflicting keys. Unknown commands are kept for later use.	导入的绑定会替换冲突的按键。未知命令会保留以供日后使用。
 Imported Zarr slice exceeds the 128 MiB download limit	导入的 Zarr 切片超出 128 MiB 下载限制
 Import…	导入…
 IN	IN
@@ -1649,8 +1656,11 @@ Intersect	相交
 Interval	间隔
 Into the group just above it, as its last item	移入紧邻其上的分组，作为最后一项
 invalid child id	子进程 ID 无效
+Invalid or reserved shortcut key.	快捷键无效或已被保留。
 Invalid selection outline · draw a smaller area	选择轮廓无效 · 请绘制更小的区域
 Invalid selection outline · draw a smaller radius	选择轮廓无效 · 请绘制更小的半径
+Invalid shortcut binding.	快捷键绑定无效。
+Invalid shortcut key.	快捷键无效。
 Invalid: {error}	无效：{error}
 Invert	反转
 Invert color scheme	反转配色方案
@@ -1715,6 +1725,7 @@ Kernel Type	核类型
 Key	Key
 Keyboard\nShortcuts	键盘\n快捷键
 Keyboard Shortcuts	键盘快捷键
+Keyboard shortcuts	键盘快捷键
 Keyboard shortcuts.	键盘快捷键。
 Keys are available for this session but were not remembered on this computer.	密钥在本次会话中可用，但未在此计算机上记住。
 Keys are kept for this session only: there is no credential store to remember them in here.	密钥仅在本次会话中保留：此处没有可用于记住密钥的凭据存储。
@@ -2564,6 +2575,8 @@ Projects and JSON data (RustGIS, QGIS, GeoLibre)	工程和 JSON 数据（RustGIS
 Properties	属性
 Property	属性
 Proportional Symbols	比例符号
+Provide keys to reset, or no parameters to reset all.	请提供要重置的按键，不提供参数则全部重置。
+Provide shortcut file text, data or a path.	请提供快捷键文件的文本、数据或路径。
 Provider	提供商
 Provinces:	省份：
 Proximity	邻域
@@ -2747,6 +2760,7 @@ Reset Default	重置默认值
 Reset Effects	重置效果
 Reset North	重置为正北
 Reset north	重置为正北
+Reset unreadable saved shortcuts before importing.	导入前请重置无法读取的已保存快捷键。
 Reset {key}	重置 {key}
 Resolution (0–30)	分辨率（0–30）
 Response	响应
@@ -3068,6 +3082,7 @@ Set the pixels inside a polygon	设置多边形内的像素
 Set the pixels inside a polygon.	设置多边形内的像素。
 Settings	设置
 Settings › Customize	设置 › 自定义
+Settings › Customize › Keyboard Shortcuts	设置 › 自定义 › 键盘快捷键
 Several places	多个地点
 Shade from the outer edge alone	仅从外边缘着色
 Shade to the point deepest inside	着色至内部最深的点
@@ -3103,6 +3118,9 @@ Shifts the mark right of the point (left when negative)	将标记移至点的右
 Shifts the stroke sideways: positive to the right of the line's direction, negative to the left	横向移动描边：正值移向线方向的右侧，负值移向左侧
 Short labels	短标注
 Shortcut already assigned	快捷键已被分配
+Shortcut file contains invalid or reserved bindings.	快捷键文件包含无效或保留的绑定。
+Shortcut file exceeds the size limit.	快捷键文件超出大小限制。
+Shortcut keys are required.	需要快捷键按键。
 Shortcuts	快捷键
 Shortest route over a line network	线网络上的最短路径
 Show	显示
@@ -3633,6 +3651,7 @@ Toggle Imperial Measurements	切换英制测量单位
 Token Required	需要令牌
 Tolerance (km)	容差（km）
 Tolls	收费路段
+Too many shortcut changes to save.	要保存的快捷键更改过多。
 Too many shortcut changes to save. Changes apply only to this session.	快捷键更改过多，无法保存。更改仅应用于此会话。
 Tool Gallery	工具库
 Toolboxes	工具箱
@@ -3718,11 +3737,14 @@ United States	美国
 Units	单位
 Units per step	每步单位数
 unknown (an older project)	未知（旧版工程）
+Unknown shortcut binding field.	未知的快捷键绑定字段。
+Unknown shortcut command.	未知的快捷键命令。
 UNKNOWN TOOL	未知工具
 Unload the GeoLibre tools and stop loading them when RustGIS starts.	卸载 GeoLibre 工具，并在 RustGIS 启动时不再加载。
 Unsaved changes	未保存的更改
 Unsupervised classes (k-means)	非监督分类（k-means）
 Unsupervised classes (k-means).	非监督分类（k-means）。
+Unsupported shortcut file version.	不支持的快捷键文件版本。
 Untitled	未命名
 Untitled model	未命名模型
 Up	上一级
@@ -3745,6 +3767,7 @@ US State GIS	美国州 GIS
 US State GIS…	美国州 GIS…
 USA Contiguous Albers Equal Area	美国本土阿尔伯斯等积投影
 Use	使用
+Use a browser download to export shortcuts.	请使用浏览器下载来导出快捷键。
 Use a Single Stroke	使用单一描边
 Use another account	使用其他账号
 Use ArcGIS Token	使用 ArcGIS 令牌

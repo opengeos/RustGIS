@@ -31,6 +31,7 @@ A catalogue's (CSW 2.0.2) address: search its records by words and, if you like,
 A ChatGPT plan or app usage limit was reached. Review Weekly usage before trying again.	ChatGPT 요금제 또는 앱 사용 한도에 도달했습니다. 다시 시도하기 전에 주간 사용량을 확인하세요.
 A ChatGPT sign-in can only be used with the OpenAI API.	ChatGPT 로그인은 OpenAI API에서만 사용할 수 있습니다.
 A colour, hatch lines, markers on a grid, a gradient, or a shapeburst (shaded from the edge inwards)	색상, 해치선, 격자 위의 마커, 그라데이션 또는 셰이프버스트(가장자리에서 안쪽으로 음영)
+A command id is required.	명령 ID가 필요합니다.
 A connection has this name: give this one another name to remember its keys.	이 이름의 연결이 이미 있습니다. 키를 기억하려면 다른 이름을 지정하세요.
 A copy of {name} with unsaved changes was kept a minute ago.	저장하지 않은 변경 내용이 있는 {name}의 사본이 1분 전에 보관되었습니다.
 A copy of {name} with unsaved changes was kept less than a minute ago.	저장하지 않은 변경 내용이 있는 {name}의 사본이 1분 이내에 보관되었습니다.
@@ -434,6 +435,7 @@ Bike	자전거
 Bilinear	쌍선형
 Bind To Time Slider	시간 슬라이더에 연결
 Bind to Time Slider	시간 슬라이더에 연결
+Bindings: {bindings} · Conflicts: {conflicts} · Unknown commands: {unknown}	할당: {bindings} · 충돌: {conflicts} · 알 수 없는 명령: {unknown}
 Blank	빈 지도
 Blank for Amazon S3	Amazon S3이면 비워 두기
 Blank Letter page	빈 Letter 페이지
@@ -582,6 +584,7 @@ Choose a layer…	레이어 선택…
 Choose a model.	모델을 선택하세요.
 Choose a resampling type for the raster layer.	래스터 레이어의 리샘플링 유형을 선택합니다.
 Choose a saved S3 connection before opening this source.	이 소스를 열기 전에 저장된 S3 연결을 선택하세요.
+Choose a shortcut file in the browser.	브라우저에서 단축키 파일을 선택하세요.
 Choose a start	출발지 선택
 Choose a stop	경유지 선택
 Choose a table to load for editing	편집을 위해 불러올 테이블 선택
@@ -1211,6 +1214,7 @@ Export Features	피처 내보내기
 Export Features (tool)	피처 내보내기(도구)
 Export Features needs a vector layer (Data › Export Raster writes a raster)	피처 내보내기에는 벡터 레이어가 필요합니다(래스터는 데이터 › 래스터 내보내기로 저장합니다)
 Export Features…	피처 내보내기…
+Export Keyboard Shortcuts…	키보드 단축키 내보내기…
 Export Layout	레이아웃 내보내기
 Export Map	지도 내보내기
 Export Map failed unexpectedly	지도 내보내기가 예기치 않게 실패했습니다
@@ -1567,6 +1571,8 @@ Import Bookmarks	북마크 가져오기
 Import Bookmarks…	북마크 가져오기…
 Import Deep Learning Package	딥러닝 패키지 가져오기
 Import GeoLibre Project	GeoLibre 프로젝트 가져오기
+Import Keyboard Shortcuts	키보드 단축키 가져오기
+Import Keyboard Shortcuts…	키보드 단축키 가져오기…
 Import Layout	레이아웃 가져오기
 Import Layout…	레이아웃 가져오기…
 Import Model	모델 가져오기
@@ -1585,6 +1591,7 @@ Import Styles From…	다음에서 스타일 가져오기…
 Import Task	태스크 가져오기
 Import Task…	태스크 가져오기…
 Import Thumbnail	썸네일 가져오기
+Imported bindings replace conflicting keys. Unknown commands are kept for later use.	가져온 할당이 충돌하는 키를 대체합니다. 알 수 없는 명령은 나중에 사용할 수 있도록 유지됩니다.
 Imported Zarr slice exceeds the 128 MiB download limit	가져온 Zarr 슬라이스가 128 MiB 다운로드 한도를 초과합니다
 Import…	가져오기…
 IN	IN
@@ -1649,8 +1656,11 @@ Intersect	교차
 Interval	간격
 Into the group just above it, as its last item	바로 위 그룹의 마지막 항목으로
 invalid child id	잘못된 자식 프로세스 ID
+Invalid or reserved shortcut key.	잘못되었거나 예약된 단축키입니다.
 Invalid selection outline · draw a smaller area	잘못된 선택 윤곽선 · 더 작은 영역을 그리세요
 Invalid selection outline · draw a smaller radius	잘못된 선택 윤곽선 · 더 작은 반경으로 그리세요
+Invalid shortcut binding.	잘못된 단축키 할당입니다.
+Invalid shortcut key.	잘못된 단축키입니다.
 Invalid: {error}	유효하지 않음: {error}
 Invert	반전
 Invert color scheme	색상표 반전
@@ -1715,6 +1725,7 @@ Kernel Type	커널 유형
 Key	Key
 Keyboard\nShortcuts	키보드\n단축키
 Keyboard Shortcuts	키보드 단축키
+Keyboard shortcuts	키보드 단축키
 Keyboard shortcuts.	키보드 단축키.
 Keys are available for this session but were not remembered on this computer.	키는 이 세션에서 사용할 수 있지만 이 컴퓨터에 기억되지 않았습니다.
 Keys are kept for this session only: there is no credential store to remember them in here.	키는 이 세션 동안만 유지됩니다. 여기에는 키를 기억할 자격 증명 저장소가 없습니다.
@@ -2564,6 +2575,8 @@ Projects and JSON data (RustGIS, QGIS, GeoLibre)	프로젝트 및 JSON 데이터
 Properties	속성
 Property	속성
 Proportional Symbols	비례 심볼
+Provide keys to reset, or no parameters to reset all.	재설정할 키를 지정하거나, 모두 재설정하려면 매개변수를 지정하지 마세요.
+Provide shortcut file text, data or a path.	단축키 파일의 텍스트, 데이터 또는 경로를 지정하세요.
 Provider	공급자
 Provinces:	성:
 Proximity	근접
@@ -2747,6 +2760,7 @@ Reset Default	기본값으로 재설정
 Reset Effects	효과 재설정
 Reset North	북쪽 재설정
 Reset north	북쪽 재설정
+Reset unreadable saved shortcuts before importing.	가져오기 전에 읽을 수 없는 저장된 단축키를 재설정하세요.
 Reset {key}	{key} 재설정
 Resolution (0–30)	해상도(0–30)
 Response	응답
@@ -3068,6 +3082,7 @@ Set the pixels inside a polygon	폴리곤 내부 픽셀 설정
 Set the pixels inside a polygon.	폴리곤 내부의 픽셀 값을 설정합니다.
 Settings	설정
 Settings › Customize	설정 › 사용자 지정
+Settings › Customize › Keyboard Shortcuts	설정 › 사용자 지정 › 키보드 단축키
 Several places	여러 장소
 Shade from the outer edge alone	바깥쪽 가장자리에서만 음영
 Shade to the point deepest inside	안쪽의 가장 깊은 지점까지 음영
@@ -3103,6 +3118,9 @@ Shifts the mark right of the point (left when negative)	마크를 포인트 오�
 Shifts the stroke sideways: positive to the right of the line's direction, negative to the left	선을 옆으로 이동합니다: 양수는 선 방향의 오른쪽, 음수는 왼쪽
 Short labels	짧은 라벨
 Shortcut already assigned	이미 지정된 단축키
+Shortcut file contains invalid or reserved bindings.	단축키 파일에 잘못되었거나 예약된 할당이 있습니다.
+Shortcut file exceeds the size limit.	단축키 파일이 크기 제한을 초과합니다.
+Shortcut keys are required.	단축키의 키가 필요합니다.
 Shortcuts	단축키
 Shortest route over a line network	라인 네트워크상의 최단 경로
 Show	표시
@@ -3633,6 +3651,7 @@ Toggle Imperial Measurements	야드파운드법 측정 전환
 Token Required	토큰 필요
 Tolerance (km)	허용 오차(km)
 Tolls	유료 도로
+Too many shortcut changes to save.	저장할 단축키 변경 사항이 너무 많습니다.
 Too many shortcut changes to save. Changes apply only to this session.	단축키 변경이 너무 많아 저장할 수 없습니다. 변경 내용은 이 세션에만 적용됩니다.
 Tool Gallery	도구 갤러리
 Toolboxes	도구 상자
@@ -3718,11 +3737,14 @@ United States	미국
 Units	단위
 Units per step	단계당 단위
 unknown (an older project)	알 수 없음 (이전 프로젝트)
+Unknown shortcut binding field.	알 수 없는 단축키 할당 필드입니다.
+Unknown shortcut command.	알 수 없는 단축키 명령입니다.
 UNKNOWN TOOL	알 수 없는 도구
 Unload the GeoLibre tools and stop loading them when RustGIS starts.	GeoLibre 도구를 언로드하고 RustGIS 시작 시 더 이상 불러오지 않습니다.
 Unsaved changes	저장하지 않은 변경 내용
 Unsupervised classes (k-means)	비지도 클래스(k-means)
 Unsupervised classes (k-means).	비지도 클래스(k-means).
+Unsupported shortcut file version.	지원되지 않는 단축키 파일 버전입니다.
 Untitled	제목 없음
 Untitled model	제목 없는 모델
 Up	위로
@@ -3745,6 +3767,7 @@ US State GIS	미국 주 GIS
 US State GIS…	미국 주 GIS…
 USA Contiguous Albers Equal Area	미국 본토 앨버스 정적도법
 Use	사용
+Use a browser download to export shortcuts.	단축키를 내보내려면 브라우저 다운로드를 사용하세요.
 Use a Single Stroke	단일 선 사용
 Use another account	다른 계정 사용
 Use ArcGIS Token	ArcGIS 토큰 사용
