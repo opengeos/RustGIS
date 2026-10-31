@@ -2077,6 +2077,7 @@ fn hostile_params_never_panic() {
             id,
             "project.save"
                 | "project.saveAs"
+                | "project.exportLog"
                 | "share.exportMap"
                 | "time.export"
                 | "share.exportLayer"
@@ -21300,6 +21301,250 @@ fn calculate_geometry_updates_ellipsoidal_lengths_in_one_undo_step() {
     assert!(s.redo());
     let out = &s.map().layer_by_name("routes").unwrap().dataset;
     assert!((out.value(0, length).as_f64().unwrap() - 111.31949079327356).abs() < 1e-6);
+}
+
+/// The session log (#797): a command run by itself that changes the project, or reaches a file
+/// or a service, is logged once (a script's lines inside it), with its outcome; reading isn't.
+/// Undo keeps the entries and is logged with the step it took back (not when there is none).
+/// Secrets are taken out and large values clipped; the log is capped and kept for the session
+/// only, across the projects opened in it; it can be read by filter, written out, cleared and
+/// turned off, none of which changes the project.
+#[test]
+fn the_session_log_records_each_command_run_in_the_session() {
+    use crate::project_log::{LOG_LIMIT, LOG_PARAMS_BYTES, LogEntry};
+    let mut s = world();
+    // The sample project's making is its first entry: counted from after it.
+    assert_eq!(s.log.clear(), 1);
+    let commands = |s: &Session| s.log.entries().map(|e| e.command.clone()).collect::<Vec<_>>();
+    let last = |s: &Session| s.log.entries().last().cloned().unwrap();
+    s.run("project.rename", &json!({"name": "Atlas"})).unwrap();
+    s.run("info.project", &Value::Null).unwrap();
+    s.run("map.zoomIn", &Value::Null).unwrap();
+    s.run("script.run", &json!({"script": "project.rename {\"name\": \"A\"}\nproject.rename {\"name\": \"B\"}"})).unwrap();
+    assert_eq!(commands(&s), ["project.rename", "script.run"], "reading and moving the view aren't logged, nor a script's lines");
+    let first = s.log.entries().next().cloned().unwrap();
+    assert!(first.ok && first.error.is_none() && first.at > 1_700_000_000_000, "{first:?}");
+    assert_eq!(first.params, json!({"name": "Atlas"}));
+    // Undone: the entries stay, and the undo says what it took back.
+    s.run("edit.undo", &Value::Null).unwrap();
+    assert_eq!(s.project.name, "Atlas");
+    assert_eq!(commands(&s), ["project.rename", "script.run", "edit.undo"]);
+    assert_eq!(s.log.entries().nth(2).unwrap().params, json!({"step": "Run Script"}));
+    // A failure is logged with its error; a service's address without its token.
+    assert!(s.run("project.rename", &json!({"name": " "})).is_err());
+    let failed = last(&s);
+    assert!(!failed.ok && failed.error.as_deref().is_some_and(|e| e.contains("name")), "{failed:?}");
+    let _ = s.run("service.layers", &json!({"url": "https://x.org/wms?token=S3CRET&layers=a", "text": "not a capabilities document"}));
+    let service = last(&s);
+    assert_eq!(service.command, "service.layers");
+    assert!(!service.params.to_string().contains("S3CRET"), "{service:?}");
+    // A document given as text is kept as its size only: it may hold secrets no redaction finds.
+    let qgs = format!("<qgis version=\"3.42.0\"><title>{}</title></qgis>", "rustgis-s3:TOKEN:s3://b/k ".repeat(20));
+    let _ = s.run("project.importQgis", &json!({"text": qgs}));
+    let doc = last(&s);
+    assert_eq!(doc.params["text"], json!(format!("(a document of {} characters)", qgs.chars().count())), "{doc:?}");
+    // So is one after a byte-order mark (a QGIS project read from a file that has one).
+    let marked = format!("\u{feff}{qgs}");
+    let _ = s.run("project.importQgis", &json!({"text": marked}));
+    let doc = last(&s);
+    assert!(doc.params["text"].as_str().is_some_and(|t| t.starts_with("(a document of")), "{doc:?}");
+    // A secret in the JSON a text holds (a script's command line) is taken out too.
+    let line = r#"s3.connect {"accessKeyId": "AKIA", "secretAccessKey": "S3CRETKEY", "region": "x"}"#;
+    let _ = s.run("script.run", &json!({"script": line}));
+    let script = last(&s);
+    assert!(!script.params.to_string().contains("S3CRETKEY") && script.params.to_string().contains("s3.connect"), "{script:?}");
+    // Nor where the clip cuts the object short: what follows its `{` goes.
+    // The secret comes first and a long field after it, past the cut.
+    let long = format!(r#"s3.connect {{"secretAccessKey": "S3CRETKEY", "notes": "{}"}}"#, "x".repeat(5000));
+    let _ = s.run("script.run", &json!({"script": long}));
+    let cut = last(&s);
+    assert!(!cut.params.to_string().contains("S3CRET"), "{}", cut.params);
+    // Nor in an object that doesn't parse (a trailing comma), while text such as `{name}` stays.
+    let broken = r#"s3.connect {"secretAccessKey": "S3CRETKEY", "region": "x",} # see {name}"#;
+    let _ = s.run("script.run", &json!({"script": broken}));
+    let kept = last(&s).params.to_string();
+    assert!(!kept.contains("S3CRET") && kept.contains("s3.connect"), "{kept}");
+    let _ = s.run("script.run", &json!({"script": "# keep {name} as it is"}));
+    assert!(last(&s).params.to_string().contains("{name}"));
+    // A long list is "…" once its texts are cut to fit, its count with it.
+    let long: Vec<String> = (0..5_000).map(|i| format!("{i}{}", "y".repeat(100))).collect();
+    let _ = s.run("project.rename", &json!({"name": "Long", "tags": long}));
+    let tags = last(&s).params.to_string();
+    assert_eq!(last(&s).params, json!({"name": "Long", "tags": "…"}), "{tags}");
+    // Large values clipped.
+    s.run("project.rename", &json!({"name": "x".repeat(20_000), "note": vec![1; 5_000]})).ok();
+    let big = last(&s);
+    assert!(serde_json::to_vec(&big.params).unwrap().len() <= LOG_PARAMS_BYTES, "{}", big.params.to_string().len());
+    // The project carries none of it: a saved project, or its recovery copy, holds no log.
+    assert!(!s.project.saved_text(None).unwrap().0.contains("\"log\""));
+    assert!(!s.project.clone().recovery_text().unwrap().contains("\"log\""));
+    // Read by filter, newest last.
+    let r = s.run("project.log", &json!({"command": "project.rename", "failed": true})).unwrap();
+    assert_eq!((r["count"].as_u64(), r["entries"][0]["command"].as_str()), (Some(1), Some("project.rename")));
+    assert_eq!(s.run("project.log", &json!({"limit": 2})).unwrap()["entries"].as_array().map(Vec::len), Some(2));
+    assert!(s.run("project.log", &json!({"limit": 0})).is_err());
+    assert!(s.run("project.log", &json!({"limit": 0.5})).unwrap_err().contains("whole number"));
+    // Steps merged into one undo step (a held arrow key) are one entry, with the last parameters.
+    let n = s.log.len();
+    for name in ["Nudged 1", "Nudged 2", "Nudged 3"] {
+        s.merge_undo("nudge");
+        s.run("project.rename", &json!({"name": name})).unwrap();
+    }
+    assert_eq!(s.log.len(), n + 1);
+    assert_eq!(last(&s).params["name"], json!("Nudged 3"));
+    // Times as decimals too; a negative time, or a filter that isn't true or false, is refused.
+    assert_eq!(s.run("project.log", &json!({"since": 1.7e12, "limit": 1})).unwrap()["entries"].as_array().map(Vec::len), Some(1));
+    assert!(s.run("project.log", &json!({"since": -1})).is_err());
+    assert!(s.run("project.log", &json!({"failed": "true"})).is_err());
+    assert!(s.run("project.log", &json!({"command": 7})).is_err());
+    // An error that starts as a spreadsheet formula is written as text in the CSV.
+    let formula = LogEntry { at: 2, command: "x".into(), params: Value::Null, ok: false, error: Some("=HYPERLINK(1)".into()), millis: 0 };
+    s.log.push(formula);
+    // Written out as CSV and JSON Lines.
+    let dir = std::env::temp_dir().join(format!("rustgis-session-log-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let csv = dir.join("log.csv");
+    s.run("project.exportLog", &json!({"path": csv.to_string_lossy()})).unwrap();
+    let csv_text = std::fs::read_to_string(&csv).unwrap();
+    assert!(csv_text.starts_with("time_utc,at,command,ok,millis,error,params\n") && csv_text.contains("\"edit.undo\""), "{csv_text}");
+    assert!(csv_text.contains("\"'=HYPERLINK(1)\"") && !csv_text.contains(",\"=HYPERLINK"), "{csv_text}");
+    let jsonl = dir.join("log.jsonl");
+    s.run("project.exportLog", &json!({"path": jsonl.to_string_lossy()})).unwrap();
+    let lines: Vec<LogEntry> = std::fs::read_to_string(&jsonl).unwrap().lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+    assert_eq!(lines.len() + 1, s.log.len(), "every entry but the export's own");
+    let _ = std::fs::remove_dir_all(&dir);
+    // Cleared, it says so; off, nothing goes in; on again, it does. Neither changes the project,
+    // which holds no log, nor takes an undo step.
+    for id in ["project.clearLog", "project.logCommands"] {
+        assert!(!s.registry.get(id).unwrap().mutates, "{id}");
+    }
+    let steps = s.undo.len();
+    s.mark_saved();
+    assert!(s.run("project.clearLog", &Value::Null).unwrap()["cleared"].as_u64().unwrap() > 5);
+    assert_eq!(commands(&s), ["project.clearLog"]);
+    assert!(!s.dirty() && s.undo.len() == steps, "the project doesn't change");
+    s.run("project.logCommands", &json!({"on": false})).unwrap();
+    s.run("project.rename", &json!({"name": "Quiet"})).unwrap();
+    assert_eq!(commands(&s), ["project.clearLog", "project.logCommands"], "turned off, and said so");
+    s.run("project.logCommands", &json!({"on": true})).unwrap();
+    assert_eq!(commands(&s), ["project.clearLog", "project.logCommands", "project.logCommands"]);
+    // A .json path is refused: JSON Lines isn't one JSON document. A format given doesn't let
+    // the log go over another kind of file, nor disagree with the path's extension.
+    assert!(s.run("project.exportLog", &json!({"path": "log.json"})).is_err());
+    for (path, format) in [("log.json", "jsonl"), ("map.rgis", "csv"), ("log.csv", "jsonl"), ("log", "xml")] {
+        let e = s.run("project.exportLog", &json!({"path": path, "format": format})).unwrap_err();
+        assert!(e.contains("not a .") || e.contains("doesn't match") || e.contains("format is"), "{path}: {e}");
+    }
+    assert!(s.run("project.exportLog", &json!({"path": "log"})).unwrap_err().contains("give a .csv"));
+    // The log lasts for the session: making a project adds to it and keeps what was there.
+    let mut made = world();
+    let before = made.log.len();
+    made.run("project.new", &json!({"name": "Fresh"})).unwrap();
+    assert_eq!(made.log.len(), before + 1);
+    assert_eq!(made.log.entries().last().unwrap().command, "project.new");
+    // Cleared while off, it still says so.
+    s.run("project.logCommands", &json!({"on": false})).unwrap();
+    s.run("project.clearLog", &Value::Null).unwrap();
+    assert_eq!(commands(&s), ["project.clearLog"]);
+    s.run("project.logCommands", &json!({"on": true})).unwrap();
+    // Capped: the oldest go first.
+    for i in 0..LOG_LIMIT + 5 {
+        s.log.push(LogEntry { at: i as u64, command: "x".into(), params: Value::Null, ok: true, error: None, millis: 0 });
+    }
+    assert_eq!(s.log.len(), LOG_LIMIT);
+    assert_eq!(s.log.entries().next().unwrap().at, 5);
+    // Undo or redo with nothing to take back changes nothing, and isn't logged.
+    s.clear_history();
+    let n = s.log.len();
+    assert!(s.run("edit.undo", &Value::Null).is_err() && s.run("edit.redo", &Value::Null).is_err());
+    assert_eq!(s.log.len(), n, "nothing to undo or redo: not logged");
+}
+
+/// What the session log keeps of a command's parameters: bounded in bytes, keys and time, and
+/// without secrets, those in JSON a text holds and in SQL `CREATE … SECRET` options included.
+#[test]
+fn the_session_log_keeps_parameters_bounded_and_without_secrets() {
+    // Many keys with short values still fit the bound.
+    let wide: serde_json::Map<String, Value> = (0..40).map(|i| (format!("{i:02}{}", "k".repeat(62)), json!("é".repeat(64)))).collect();
+    let kept = crate::project_log::kept_params(&Value::Object(wide));
+    assert!(serde_json::to_vec(&kept).unwrap().len() <= crate::project_log::LOG_PARAMS_BYTES, "{kept}");
+    assert!(kept.as_object().is_some_and(|o| o.len() > 1 && o.len() < 40));
+    assert_eq!(kept["…"], json!("40 keys in all"));
+    // Keys alike in their first 64 characters: the first stays, the other counted as left out.
+    let mut alike: serde_json::Map<String, Value> = (0..40).map(|i| (format!("{i:02}{}", "k".repeat(62)), json!("v".repeat(64)))).collect();
+    // Sorts right after the first key, and is the same once cut to 64 characters.
+    alike.insert(format!("00{}a", "k".repeat(62)), json!(2));
+    let kept = crate::project_log::kept_params(&Value::Object(alike));
+    assert_eq!(kept["…"], json!("41 keys in all"));
+    assert_eq!(kept[format!("00{}", "k".repeat(62))], json!("v".repeat(64)), "the first stays");
+    assert!(kept.as_object().is_some_and(|o| !o.values().any(|v| *v == json!(2))), "{kept}");
+    // A crafted text costs its length, not its braces times its length: 200,000 braces are
+    // milliseconds once, and would be hours if each `{` scanned the rest (a bound far from both).
+    let crafted = "{1".repeat(200_000);
+    let started = std::time::Instant::now();
+    assert_eq!(crate::project_log::json_in_text_redacted(&crafted).len(), crafted.len());
+    assert!(started.elapsed() < std::time::Duration::from_secs(60), "{:?}", started.elapsed());
+    // A key cut short keeps no value: a secret's name may be past the cut.
+    let long_key = format!("{}secretAccessKey", "x".repeat(195));
+    let kept = crate::project_log::kept_params(&json!({long_key: "S3CRET"}));
+    assert!(!kept.to_string().contains("S3CRET"), "{kept}");
+    // An SQL secret's options, written as plain words, go; the statement's shape stays.
+    let sql = "CREATE OR REPLACE SECRET s3 (TYPE s3, KEY_ID 'AKIA1', SECRET 'S3CRET'); SELECT 1 / 2";
+    let kept = crate::project_log::kept_params(&json!({"sql": sql}));
+    assert_eq!(kept["sql"], json!("CREATE OR REPLACE SECRET s3 (…); SELECT 1 / 2"));
+    assert_eq!(crate::project_log::sql_secrets_removed("create table t (a int)"), "create table t (a int)");
+    assert_eq!(crate::project_log::sql_secrets_removed("create table secret (a int)"), "create table secret (a int)");
+    // A file's contents in base64 (`layer.addDataBytes`) are kept as their size: a secret's name
+    // can't be seen in them. A long text that isn't base64 is clipped as before.
+    let encoded = "eyJ0b2tlbiI6ICJTM0NSRVQifQ==".repeat(20);
+    for data in [encoded.clone(), format!("data:application/json;base64,{encoded}")] {
+        let kept = crate::project_log::kept_params(&json!({"fileName": "a.geojson", "data": data}));
+        assert_eq!(kept["data"], json!(format!("(file contents of {} characters, base64)", data.len())), "{kept}");
+    }
+    let prose = crate::project_log::kept_params(&json!({"note": "word ".repeat(100)}));
+    assert!(prose["note"].as_str().is_some_and(|n| n.starts_with("word word")), "{prose}");
+    // `create` inside another word starts no statement.
+    for t in ["recreate secret s (key 'a')", "created secret (key 'a')"] {
+        assert_eq!(crate::project_log::sql_secrets_removed(t), t);
+    }
+    assert_eq!(crate::project_log::sql_secrets_removed("CREATE PERSISTENT SECRET (TYPE s3, SECRET 'x')"), "CREATE PERSISTENT SECRET (…)");
+    // An unquoted secret key in an object that doesn't parse goes, with the rest of the text;
+    // a format string's braces stay.
+    let line = crate::project_log::kept_params(&json!({"script": "s3.connect {secretAccessKey: \"S3CRET\"}\nprint(f\"{x:.2f}\")"}));
+    assert!(!line.to_string().contains("S3CRET"), "{line}");
+    let fmt = crate::project_log::kept_params(&json!({"script": "print(f\"{x:.2f}\")"}));
+    assert_eq!(fmt["script"], json!("print(f\"{x:.2f}\")"));
+    // A quoted secret key in such an object goes too, its value with it, double or single quotes.
+    for line in [r#"s3.connect {a: "x", "secretAccessKey": "S3CRET",}"#, "s3.connect {a: 'x', 'secretAccessKey': 'S3CRET',}"] {
+        let kept = crate::project_log::kept_params(&json!({"script": line}));
+        assert!(!kept.to_string().contains("S3CRET") && kept.to_string().contains("s3.connect"), "{kept}");
+    }
+}
+
+/// Plugins can neither empty the session log nor turn it off, nor push the user's entries out of
+/// it; writing the log out, or reading it, reaches a file.
+#[test]
+fn plugins_can_neither_clear_the_session_log_nor_crowd_out_the_users_entries() {
+    use crate::project_log::LogEntry;
+    // Plugins' commands keep at most their own share of the log: the user's entries stay.
+    let mut log = crate::project_log::SessionLog::default();
+    let entry = |command: &str| LogEntry { at: 1, command: command.into(), params: Value::Null, ok: true, error: None, millis: 0 };
+    log.push(entry("layer.rename"));
+    for _ in 0..crate::project_log::LOG_PLUGIN_LIMIT + 5 {
+        log.push(entry("plugin:p/flood"));
+    }
+    assert_eq!(log.len(), crate::project_log::LOG_PLUGIN_LIMIT + 1);
+    assert_eq!(log.entries().next().unwrap().command, "layer.rename");
+    // A plugin never empties the log or turns it off; writing it out is reaching a file.
+    assert!(crate::cmd::plugins::user_only("project.clearLog") && crate::cmd::plugins::user_only("project.logCommands"));
+    {
+        use crate::cmd::plugins::{Reach, reaches};
+        let export = crate::cmd::all().into_iter().find(|c| c.id == "project.exportLog").unwrap();
+        assert_eq!(reaches(&export, &json!({"path": "log.csv"})), Some(Reach::Files));
+        // Reading it too: it names the files and addresses the user's commands used.
+        let read = crate::cmd::all().into_iter().find(|c| c.id == "project.log").unwrap();
+        assert_eq!(reaches(&read, &json!({})), Some(Reach::Files));
+    }
 }
 
 /// `raster.project` puts a raster on a grid of another coordinate system, cell size, origin and

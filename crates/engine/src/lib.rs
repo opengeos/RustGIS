@@ -12,6 +12,7 @@ pub mod model;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod prefs;
 pub mod project;
+pub mod project_log;
 pub mod s3_connections;
 pub mod s3_keys;
 #[cfg(test)]
@@ -489,6 +490,9 @@ struct PutAside {
 pub struct Session {
     pub project: Project,
     pub path: Option<PathBuf>,
+    /// What was run in this session (#797), whatever project was open: kept in memory only, so
+    /// a saved or shared project carries none of it.
+    pub log: project_log::SessionLog,
     /// Package this project was opened from, protected as an input without making it the save
     /// destination. Kept after Save As; cleared when a different project starts.
     opened_package: Option<PathBuf>,
@@ -786,6 +790,7 @@ impl Session {
         Session {
             project,
             path: None,
+            log: project_log::SessionLog::default(),
             opened_package: None,
             file_identity: 0,
             state: 0,
@@ -976,8 +981,55 @@ impl Session {
     }
 
     /// Runs a command by id. Mutating commands snapshot the project for undo; an error or a
-    /// panic restores it.
+    /// panic restores it. A command run by itself (not as a part of another) that changes the
+    /// project, or reaches a file or a service, goes into the session's log (#797).
     pub fn run(&mut self, id: &str, params: &Value) -> CmdResult {
+        if self.depth > 0 {
+            return self.run_command(id, params);
+        }
+        // Undo and redo are logged with the step they take back or bring back.
+        let step = match id {
+            "edit.undo" => self.undo_label(),
+            "edit.redo" => self.redo_label(),
+            _ => None,
+        };
+        // A step that joins the last one (a held arrow key nudging an element: `merge_undo`) is
+        // one entry too, as it is one step to undo.
+        let joins = self.merge.is_some() && self.merge == self.merged && !self.undo.is_empty();
+        let (at, start) = (project_log::now_ms(), web_time::Instant::now());
+        let res = self.run_command(id, params);
+        // A plugin's command waiting for its fetches answers `pending` and runs again when they
+        // land: logged then, once. (Another command's `pending`, a download the web app makes, is
+        // logged as it is asked for: nothing runs it again.)
+        let pending =
+            id.starts_with(rustgis_plugins::PREFIX) && res.as_ref().is_ok_and(|v| v.get("pending").and_then(Value::as_bool) == Some(true));
+        // With logging off, only its own switching and clearing go in: nothing else is clipped
+        // or redacted for nothing.
+        let wanted = self.log.on() || matches!(id, "project.logCommands" | "project.clearLog");
+        // Undo and redo go in when they take a step back or bring one back: pressed with nothing
+        // to undo, they change nothing, and each press would be an entry.
+        let stepped = !matches!(id, "edit.undo" | "edit.redo") || res.is_ok();
+        if !pending && wanted && stepped {
+            // Outside `guarded`'s catch: logging is best-effort, so a panic in it leaves the
+            // command's result as it was, without an entry, and says so in the app's log.
+            let logged = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                if project_log::is_logged(self, id, params) {
+                    let params = match step {
+                        Some(label) => serde_json::json!({"step": label}),
+                        None => project_log::kept_params(params),
+                    };
+                    let e = project_log::entry(id, params, &res, at, start.elapsed());
+                    if joins && res.is_ok() { self.log.join_last(e) } else { self.log.push(e) }
+                }
+            }));
+            if logged.is_err() {
+                log::warn!("the session log has no entry for {id}: writing it failed unexpectedly");
+            }
+        }
+        res
+    }
+
+    fn run_command(&mut self, id: &str, params: &Value) -> CmdResult {
         // The merge key asked for ([`Session::merge_undo`]) goes to this command if it runs, and is
         // gone if it's refused first, so it can't merge a later command into the last step.
         let merge = if self.depth == 0 { self.merge.take() } else { None };
