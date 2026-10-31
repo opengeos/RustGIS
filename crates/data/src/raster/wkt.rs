@@ -663,14 +663,15 @@ fn custom(p: &Node, method: &str) -> Result<Crs, String> {
     let at = format!("+lon_0={lon0} +x_0={x0} +y_0={y0}");
     // Hotine's oblique Mercator by its azimuth: `no_uoff` puts the origin at the natural origin
     // on the centre line (EPSG's variant A, WKT1's plain `Hotine_Oblique_Mercator`), else at the
-    // centre (EPSG's variant B, `…_Azimuth_Center`). An azimuth of 90° isn't oblique, and
-    // proj4rs' omerc is degenerate there (the Swiss case is `somerc` below), so refuse it
-    // instead of placing points wrong.
+    // centre (EPSG's variant B, `…_Azimuth_Center`). An azimuth of 90° (or 270°, the same
+    // east-west centre line) isn't oblique, and the omerc formula is degenerate there in proj4rs
+    // and PROJ alike (the Swiss case is `somerc` below), so refuse it instead of placing points
+    // wrong.
     let omerc = |no_uoff: bool| -> Result<String, String> {
         let azimuth =
             get(&["AZIMUTH"]).ok_or_else(|| format!("the {} projection has no azimuth", p.child("PROJECTION").map_or("", Node::title)))?;
-        if (azimuth.abs() - 90.0).abs() < 1e-10 {
-            return Err("a Hotine projection with its azimuth at 90° isn't supported".into());
+        if (azimuth.rem_euclid(180.0) - 90.0).abs() < 1e-10 {
+            return Err("a Hotine projection with its azimuth at 90° (or 270°) isn't supported".into());
         }
         let gamma = get(&["RECTIFIED_GRID_ANGLE"]).unwrap_or(azimuth);
         Ok(format!(
@@ -692,8 +693,9 @@ fn custom(p: &Node, method: &str) -> Result<Crs, String> {
         }
         "HOTINE_OBLIQUE_MERCATOR_AZIMUTH_CENTER" => omerc(false)?,
         "HOTINE_OBLIQUE_MERCATOR" | "HOTINE_OBLIQUE_MERCATOR_AZIMUTH_NATURAL_ORIGIN" if get(&["AZIMUTH"]).is_some() => omerc(true)?,
-        "CASSINI_SOLDNER" => format!("+proj=cass +lat_0={lat0} +k_0={k0} {at}"),
-        "POLYCONIC" => format!("+proj=poly +lat_0={lat0} +k_0={k0} {at}"),
+        // EPSG's methods 9806 and 9818 have no scale factor; PROJ's cass and poly ignore one.
+        "CASSINI_SOLDNER" => format!("+proj=cass +lat_0={lat0} {at}"),
+        "POLYCONIC" => format!("+proj=poly +lat_0={lat0} {at}"),
         "EQUAL_EARTH" => format!("+proj=eqearth {at}"),
         // The implementation fixes the cone axis and pseudo standard parallel. Refuse other
         // variants and axis conventions instead of treating their coordinates as East/North.
@@ -1465,6 +1467,9 @@ mod tests {
         let changed = swiss.split('\t').nth(5).unwrap().replace("90.0", "45.0");
         let def = crs_from_wkt(&changed).unwrap().custom_def().unwrap();
         assert!(def.proj4.contains("+proj=omerc") && !def.proj4.contains("+proj=somerc"), "{}", def.proj4);
+        // 270° is the same east-west centre line read the other way, and just as degenerate.
+        let changed = swiss.split('\t').nth(5).unwrap().replace("90.0", "270.0");
+        assert!(crs_from_wkt(&changed).is_err(), "{changed}");
         for (code, from, to) in [("5514", "78.5", "77.5"), ("5514", r#""X_Scale",-1.0"#, r#""X_Scale",1.0"#)] {
             let row = include_str!("esri_datum_corpus.tsv").lines().find(|l| l.starts_with(&format!("{code}\t"))).unwrap();
             let changed = row.split('\t').nth(5).unwrap().replace(from, to);
