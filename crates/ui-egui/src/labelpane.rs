@@ -874,6 +874,15 @@ fn position(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, c: &Class) {
             ui.end_row();
         }
     });
+    // Points: the other places round the point, tried when the label's own is taken (#1011).
+    if l.geometry_type() == rustgis_engine::data::GeometryType::Point {
+        ui.add_space(4.0);
+        let mut on = c.it.other_positions;
+        let help = tl!("When its place is taken, the label tries the other places round the point, corners first.");
+        if ui.checkbox(&mut on, tl!("Try other places round the point")).on_hover_text(help).changed() {
+            run(app, "labels.placement", c.params(json!({"otherPositions": on})));
+        }
+    }
     // Lines: the text along them, straight or bending with them.
     if l.geometry_type() == rustgis_engine::data::GeometryType::Polyline {
         ui.add_space(4.0);
@@ -907,7 +916,15 @@ fn repeat(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, c: &Class) {
             let Some(every) = c.it.repeat else { return };
             let mut v = f64::from(every);
             let r = ui
-                .add(egui::DragValue::new(&mut v).range(LABEL_REPEAT).speed(1.0).max_decimals(1).prefix(tl!("every ")).suffix(" pt"))
+                .add(
+                    egui::DragValue::new(&mut v)
+                        .range(LABEL_REPEAT)
+                        .speed(1.0)
+                        .max_decimals(1)
+                        // The space stays out of the key: the whitespace hook strips it from catalog lines.
+                        .prefix(format!("{} ", tl!("every")))
+                        .suffix(" pt"),
+                )
                 .labelled_by(input_label.id);
             crate::ribbon::live_drag(
                 app,
@@ -1288,6 +1305,35 @@ mod tests {
         h.get_by_role_and_label(Role::CheckBox, "Repeat").click();
         h.run();
         assert_eq!(class(&h).repeat, None);
+    }
+
+    /// A point layer's labels can try the other places round their points (#1011); a line or
+    /// polygon layer's have no such box.
+    #[test]
+    fn other_positions_are_set_in_the_pane_for_points() {
+        use egui::accesskit::Role;
+        const BOX: &str = "Try other places round the point";
+        let mut h = harness(with_cities());
+        h.run();
+        open_tab(&mut h, "Position");
+        let on = |h: &egui_kittest::Harness<'_, RustGisApp>| {
+            h.state().session.map().layer_by_name("Cities").unwrap().labels.default.other_positions
+        };
+        assert!(!on(&h));
+        h.get_by_role_and_label(Role::CheckBox, BOX).click();
+        h.run();
+        assert!(on(&h));
+        h.get_by_role_and_label(Role::CheckBox, BOX).click();
+        h.run();
+        assert!(!on(&h));
+        let rivers = layer_id(h.state(), "Rivers");
+        h.state_mut().session.run("layer.select", &json!({"layer": rivers})).unwrap();
+        h.run();
+        assert!(h.query_by_role_and_label(Role::CheckBox, BOX).is_none(), "not for lines");
+        let countries = layer_id(h.state(), "Countries");
+        h.state_mut().session.run("layer.select", &json!({"layer": countries})).unwrap();
+        h.run();
+        assert!(h.query_by_role_and_label(Role::CheckBox, BOX).is_none(), "not for polygons");
     }
 
     #[test]
@@ -1858,11 +1904,17 @@ mod tests {
             let before = h.query_all_by_role(Role::TextInput).count();
             h.get_by_role_and_label(Role::ComboBox, list).click();
             h.run();
-            // (The list's search box is the one that came with it, the last.)
-            h.query_all_by_role(Role::TextInput).last().unwrap().click();
+            // (The list's search box is the input with no label: the tab's own have theirs, and can
+            // come after it, as Wrap at does on Symbol.)
+            let search_box = |h: &egui_kittest::Harness<'static, RustGisApp>| {
+                h.query_all_by_role(Role::TextInput).find(|n| n.accesskit_node().label().is_none()).map(|n| n.accesskit_node().id())
+            };
+            let id = search_box(h).unwrap();
+            h.get_by(|n| n.id() == id).click();
             h.run();
             assert_eq!(h.query_all_by_role(Role::TextInput).count(), before + 1, "{list}: clicking its search box left it open");
-            h.query_all_by_role(Role::TextInput).last().unwrap().type_text(text);
+            let id = search_box(h).unwrap();
+            h.get_by(|n| n.id() == id).type_text(text);
             h.run();
             before
         };

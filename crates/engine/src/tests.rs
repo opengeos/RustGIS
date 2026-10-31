@@ -2435,14 +2435,19 @@ fn label_range_placement_lock_and_convert() {
     count(&mut s);
     assert!(s.map().label_lock.is_none());
     // Convert makes an annotation layer and turns the source's labels off; its labels stay on
-    // their points, even when the source's went round them (#1011).
+    // their points, even when the source's classes had the other places on (#1011: refused for
+    // polygons by labels.placement, but a project file may have it).
+    s.run("labels.class.add", &json!({"layer": "Countries", "name": "Big", "where": "pop_est > 100000000"})).unwrap();
     let countries = s.map().layer_by_name("Countries").unwrap().id;
-    s.map_mut().layer_mut(countries).unwrap().labels.default.other_positions = true;
+    let labels = &mut s.map_mut().layer_mut(countries).unwrap().labels;
+    labels.default.other_positions = true;
+    labels.classes.iter_mut().for_each(|c| c.other_positions = true);
     let r = s.run("labels.convert", &json!({"layer": "Countries"})).unwrap();
     assert!(r["annotations"].as_u64().unwrap() > 100);
     let a = s.map().layer_by_name("Countries Annotation").unwrap();
     assert!(a.labels.enabled && a.labels.default.field == "TEXT");
-    assert!(!a.labels.default.other_positions);
+    assert!(!a.labels.default.other_positions && !a.labels.classes.is_empty());
+    assert!(a.labels.classes.iter().all(|c| !c.other_positions), "every class's, not only Default's");
     assert!(!s.map().layer_by_name("Countries").unwrap().labels.enabled);
 }
 
@@ -2562,6 +2567,57 @@ fn labels_take_wrapping_and_a_repeat_along_lines() {
     let text = serde_json::to_string(&s.project).unwrap();
     let reopened = Session::new(serde_json::from_str(&text).unwrap());
     assert_eq!(class(&reopened), class(&s));
+}
+
+/// A point label class tries the other places round its point when told to (#1011): alone it keeps
+/// the position, junk is refused (in it or in the position) and so is turning it on for lines and
+/// polygons, it undoes, the project keeps it, and turning it on or off while the labels are locked
+/// locks them again (the places they took no longer stand).
+#[test]
+fn labels_take_other_positions_round_points() {
+    use crate::render::View;
+    let mut s = world();
+    let class = |s: &Session| {
+        let c = &s.map().layer_by_name("Cities").unwrap().labels.default;
+        (c.other_positions, c.placement)
+    };
+    let placement = class(&s).1;
+    assert_eq!(class(&s), (false, placement));
+    s.run("labels.placement", &json!({"layer": "Cities", "otherPositions": true})).unwrap();
+    assert_eq!(class(&s), (true, placement), "alone it keeps the position");
+    s.run("edit.undo", &json!({})).unwrap();
+    assert!(!class(&s).0, "undoes");
+    for bad in [json!("yes"), json!(1), Value::Null] {
+        assert!(s.run("labels.placement", &json!({"layer": "Cities", "otherPositions": bad})).is_err(), "{bad}");
+    }
+    // A position that isn't a placement name is refused, not dropped for otherPositions; null is
+    // none.
+    for bad in [json!(123), json!(true), json!(["above"])] {
+        assert!(s.run("labels.placement", &json!({"layer": "Cities", "position": bad, "otherPositions": true})).is_err(), "{bad}");
+    }
+    assert!(!class(&s).0);
+    s.run("labels.placement", &json!({"layer": "Cities", "position": null, "otherPositions": false})).unwrap();
+    assert_eq!(class(&s), (false, placement), "null is no position");
+    // Only a point's label goes round it: on is refused for lines and polygons, off taken anywhere.
+    for layer in ["Rivers", "Countries"] {
+        assert!(s.run("labels.placement", &json!({"layer": layer, "otherPositions": true})).is_err(), "{layer}");
+        s.run("labels.placement", &json!({"layer": layer, "otherPositions": false})).unwrap();
+    }
+    s.run("labels.placement", &json!({"layer": "Cities", "otherPositions": true})).unwrap();
+    let text = serde_json::to_string(&s.project).unwrap();
+    assert!(Session::new(serde_json::from_str(&text).unwrap()).map().layer_by_name("Cities").unwrap().labels.default.other_positions);
+    s.run("labels.enable", &json!({"layer": "Cities", "on": true})).unwrap();
+    s.run("labels.lock", &json!({"on": true})).unwrap();
+    let v = View { width: 800.0, height: 600.0, pixels_per_point: 1.0, camera: s.map().camera, sky: false };
+    crate::render::render(s.map_mut(), &v).unwrap();
+    assert!(s.map().label_lock.is_some());
+    s.run("labels.placement", &json!({"layer": "Cities", "otherPositions": false})).unwrap();
+    assert!(s.map().label_lock.is_none(), "turned off: locked again");
+    s.run("labels.lock", &json!({"on": true})).unwrap();
+    crate::render::render(s.map_mut(), &v).unwrap();
+    assert!(s.map().label_lock.is_some());
+    s.run("labels.placement", &json!({"layer": "Cities", "otherPositions": true})).unwrap();
+    assert!(s.map().label_lock.is_none(), "turned on: locked again");
 }
 
 /// A label class takes an offset with its placement and a background with its text symbol; junk
@@ -7482,19 +7538,20 @@ fn presentations_and_notebooks() {
     // Trust left by an undone notebook doesn't pass to a file's notebook of the same name.
     s.run("notebook.new", &json!({"name": "Notebook"})).unwrap();
     s.run("edit.undo", &Value::Null).unwrap();
-    let text = json!({"nbformat": 4, "cells": [{"cell_type": "code", "source": cell}]}).to_string();
+    let text = json!({"nbformat": 4, "metadata": {"language_info": {"name": "rustgis"}}, "cells": [{"cell_type": "code", "source": cell}]})
+        .to_string();
     s.run("notebook.open", &json!({"text": text})).unwrap();
     let r = s.run("notebook.run", &json!({"notebook": "Notebook"})).unwrap();
     assert_eq!(r["error"], 0, "{r}");
     // Nor can it make a trusted notebook to run its lines later.
-    let text = json!({"nbformat": 4, "cells": [{"cell_type": "code", "source": "notebook.new {\"name\": \"Laundered\"}"}]}).to_string();
+    let text = json!({"nbformat": 4, "metadata": {"language_info": {"name": "rustgis"}}, "cells": [{"cell_type": "code", "source": "notebook.new {\"name\": \"Laundered\"}"}]}).to_string();
     s.run("notebook.open", &json!({"text": text})).unwrap();
     let opened = s.project.notebooks.last().unwrap().name.clone();
     let r = s.run("notebook.run", &json!({"notebook": opened})).unwrap();
     assert_eq!(r["error"], 0, "{r}");
     assert!(!s.project.notebooks.iter().any(|nb| nb.name == "Laundered"));
     // Nor borrow trust from a notebook whose name differs only by non-ASCII case.
-    let text = json!({"nbformat": 4, "metadata": {"title": "éa"}, "cells": [{"cell_type": "code", "source": cell}]}).to_string();
+    let text = json!({"nbformat": 4, "metadata": {"title": "éa", "language_info": {"name": "rustgis"}}, "cells": [{"cell_type": "code", "source": cell}]}).to_string();
     s.run("notebook.open", &json!({"text": text})).unwrap();
     s.run("notebook.new", &json!({"name": "Éa"})).unwrap();
     let r = s.run("notebook.run", &json!({"notebook": "éa"})).unwrap();
@@ -7538,6 +7595,175 @@ fn presentations_and_notebooks() {
     assert_eq!(p.notebooks.last().unwrap().name, format!("A {}", crate::project::MAX_ITEMS));
     assert!(t0.elapsed().as_secs() < 5);
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn jupyter_python_notebooks_survive_open_and_save() {
+    // A Python notebook as Jupyter writes it: kernelspec, cell ids, rich outputs, a raw cell.
+    let png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+    let original = json!({
+        "nbformat": 4, "nbformat_minor": 5,
+        "metadata": {
+            "kernelspec": {"display_name": "Python 3", "language": "python", "name": "python3"},
+            "language_info": {"name": "python", "version": "3.12.4"},
+            "widgets": {"state": {}}
+        },
+        "cells": [
+            {"cell_type": "markdown", "id": "intro", "metadata": {"tags": ["title"]}, "source": ["# Rivers\n", "A study."]},
+            {"cell_type": "code", "id": "load", "metadata": {"scrolled": true}, "execution_count": 3, "source": "import geopandas\n1 + 1",
+             "outputs": [
+                {"output_type": "stream", "name": "stdout", "text": ["loading\n"]},
+                {"output_type": "execute_result", "execution_count": 3, "metadata": {}, "data": {"text/plain": ["2"], "text/html": ["<b>2</b>"]}},
+                {"output_type": "display_data", "metadata": {}, "data": {"text/plain": "<Figure>", "image/png": png}}
+             ]},
+            {"cell_type": "code", "id": "boom", "metadata": {}, "execution_count": 4, "source": "1 / 0",
+             "outputs": [{"output_type": "error", "ename": "ZeroDivisionError", "evalue": "division by zero",
+                          "traceback": ["\u{1b}[0;31mZeroDivisionError\u{1b}[0m: division by zero"]}]},
+            {"cell_type": "raw", "id": "raw", "metadata": {"format": "text/x-rst"}, "source": ".. note:: raw"}
+        ]
+    });
+    let mut s = world();
+    s.run("notebook.open", &json!({"text": original.to_string()})).unwrap();
+    let nb = s.project.notebooks.last().unwrap().clone();
+    assert_eq!(nb.language(), Some("python"));
+    // Rich outputs read as text, with the image kept for the pane.
+    let out = nb.cells[1].output.as_deref().unwrap_or_default();
+    assert!(out.contains("loading") && out.contains('2') && out.contains("<Figure>"), "{out:?}");
+    assert!(!nb.cells[1].error);
+    assert_eq!(nb.cells[1].images(), vec![png]);
+    let err = nb.cells[2].output.as_deref().unwrap_or_default();
+    assert!(nb.cells[2].error && err.contains("ZeroDivisionError: division by zero") && !err.contains('\u{1b}'), "{err:?}");
+    // A stream after a result starts its own line; consecutive streams join.
+    let outputs = json!([
+        {"output_type": "execute_result", "data": {"text/plain": "2"}},
+        {"output_type": "stream", "name": "stdout", "text": "a"},
+        {"output_type": "stream", "name": "stdout", "text": "b"}
+    ]);
+    // A kernel known only by its name, or with a blank language, is still Python.
+    for meta in [json!({"kernelspec": {"name": "python3"}}), json!({"kernelspec": {"language": " "}, "language_info": {"name": "python"}})]
+    {
+        let text = json!({"nbformat": 4, "metadata": meta, "cells": [{"cell_type": "code", "source": "x", "outputs": outputs}]});
+        s.run("notebook.open", &json!({"text": text.to_string()})).unwrap();
+        let opened = s.project.notebooks.last().unwrap();
+        assert_eq!(opened.language(), Some("python"), "{meta}");
+        assert_eq!(opened.cells[0].output.as_deref(), Some("2\nab"));
+        s.run("notebook.remove", &json!({"notebook": s.project.notebooks.len() - 1})).unwrap();
+    }
+    // A notebook with more cells than RustGIS holds is refused rather than cut short.
+    let many = json!({"nbformat": 4, "cells": vec![json!({"cell_type": "markdown", "source": "x"}); 1001]});
+    let e = s.run("notebook.open", &json!({"text": many.to_string()})).unwrap_err();
+    assert!(e.contains("1001 cells"), "{e}");
+    // So is one too large in RustGIS's own format.
+    let many = json!({"name": "Big", "cells": vec![json!({"kind": "markdown", "source": "x"}); 1001]});
+    assert!(s.run("notebook.open", &json!({"text": many.to_string()})).unwrap_err().contains("1001 cells"));
+    // Nor one with a cell that isn't an object.
+    let odd = json!({"nbformat": 4, "cells": [{"cell_type": "markdown", "source": "a"}, 7]});
+    assert!(s.run("notebook.open", &json!({"text": odd.to_string()})).is_err());
+    // Nor is an nbformat 3 notebook, whose cells are in worksheets.
+    let v3 = json!({"nbformat": 3, "worksheets": [{"cells": [{"cell_type": "code", "input": "1"}]}]});
+    assert!(s.run("notebook.open", &json!({"text": v3.to_string()})).unwrap_err().contains("nbformat 3"));
+    // Nor is a cell longer than RustGIS keeps.
+    let long = json!({"nbformat": 4, "cells": [{"cell_type": "code", "source": "x".repeat(200_001)}]});
+    assert!(s.run("notebook.open", &json!({"text": long.to_string()})).unwrap_err().contains("cell 1"));
+    let long = json!({"name": "Long", "cells": [{"kind": "code", "source": "x".repeat(200_001)}]});
+    assert!(s.run("notebook.open", &json!({"text": long.to_string()})).unwrap_err().contains("cell 1"));
+    // A cell that removes an earlier one writes its result to itself, not to the cell that moved
+    // into its place.
+    s.run("notebook.new", &json!({"name": "Shift"})).unwrap();
+    s.run("notebook.editCell", &json!({"cell": 1, "source": "notebook.removeCell {\"notebook\": \"Shift\", \"cell\": 0}"})).unwrap();
+    s.run("notebook.addCell", &json!({"source": "map.goToXY {\"lon\": 1, \"lat\": 1}"})).unwrap();
+    s.run("notebook.run", &json!({"cell": 1})).unwrap();
+    let shift = s.project.notebooks.last().unwrap();
+    assert_eq!(shift.cells.len(), 2);
+    assert_eq!(shift.cells[1].output, None, "the cell that moved up keeps its own (empty) output");
+    assert!(shift.cells[0].output.as_deref().is_some_and(|o| o.starts_with("notebook.removeCell")), "{:?}", shift.cells[0].output);
+    s.run("notebook.remove", &json!({"notebook": s.project.notebooks.len() - 1})).unwrap();
+    // Junk where a Jupyter notebook has its parts is skipped or refused, never a panic.
+    for junk in [
+        json!({"nbformat": 4, "cells": 5}),
+        json!({"nbformat": 4, "cells": [1, "x", null, {"cell_type": 7, "source": {"a": 1}, "outputs": "no"}]}),
+        json!({"nbformat": "4", "nbformat_minor": "5", "metadata": "x", "cells": [{"cell_type": "code", "outputs": [1, {"output_type": "error", "traceback": [1, null]}, {"output_type": "display_data", "data": 3}]}]}),
+        json!({"nbformat": 4, "metadata": {"kernelspec": 1, "language_info": [1]}, "cells": [{"cell_type": "code", "id": 9, "outputs": [{"data": {"image/png": [1, 2]}}]}]}),
+    ] {
+        if s.run("notebook.open", &json!({"text": junk.to_string()})).is_ok() {
+            let nb = s.project.notebooks.last().unwrap();
+            let _ = (nb.language_label(), nb.cells.iter().map(crate::cmd::notebook::Cell::images).count());
+            let i = s.project.notebooks.len() - 1;
+            assert!(crate::cmd::notebook::notebook_file(&s, i, true).is_ok(), "{junk}");
+            s.run("notebook.remove", &json!({"notebook": i})).unwrap();
+        }
+    }
+    // A command cell from Jupyter that runs here replaces its Jupyter outputs with the result.
+    let cmds = json!({"nbformat": 4, "nbformat_minor": 5, "metadata": {"language_info": {"name": "rustgis"}}, "cells": [
+        {"cell_type": "code", "id": "go", "metadata": {}, "execution_count": 7, "source": "map.goToXY {\"lon\": 3, \"lat\": 3}",
+         "outputs": [{"output_type": "stream", "name": "stdout", "text": "old\n"}]}]});
+    s.run("notebook.open", &json!({"text": cmds.to_string()})).unwrap();
+    s.run("notebook.run", &json!({"cell": 0})).unwrap();
+    let i = s.project.notebooks.len() - 1;
+    let saved: Value = serde_json::from_slice(&crate::cmd::notebook::notebook_file(&s, i, true).unwrap()).unwrap();
+    let cell = &saved["cells"][0];
+    assert_eq!(cell["id"], "go");
+    assert_eq!(cell["execution_count"], Value::Null);
+    let text = crate::cmd::notebook::jupyter_text(&cell["outputs"][0]["text"]);
+    assert!(text.starts_with("map.goToXY") && !text.contains("old"), "{text}");
+    s.run("notebook.remove", &json!({"notebook": i})).unwrap();
+    // A Jupyter notebook that names no language isn't run as commands either.
+    let bare = json!({"nbformat": 4, "cells": [{"cell_type": "code", "source": "map.goToXY {\"lon\": 9, \"lat\": 9}"}]});
+    s.run("notebook.open", &json!({"text": bare.to_string()})).unwrap();
+    assert_eq!(s.project.notebooks.last().unwrap().language(), Some("code"));
+    // A language from the file is kept short when shown.
+    let long = json!({"nbformat": 4, "metadata": {"kernelspec": {"language": "q".repeat(1000)}}, "cells": []});
+    s.run("notebook.open", &json!({"text": long.to_string()})).unwrap();
+    assert_eq!(s.project.notebooks.last().unwrap().language_label().map(|l| l.chars().count()), Some(32));
+    s.run("notebook.remove", &json!({"notebook": s.project.notebooks.len() - 1})).unwrap();
+    s.run("notebook.activate", &json!({"notebook": s.project.notebooks.len() - 1})).unwrap();
+    assert_eq!(s.run("notebook.run", &Value::Null).unwrap()["skipped"], 1);
+    s.run("notebook.remove", &json!({"notebook": s.project.notebooks.len() - 1})).unwrap();
+    s.run("notebook.activate", &json!({"notebook": nb.name.as_str()})).unwrap();
+    // Python cells aren't run as commands: running them all skips them, one alone says why.
+    let r = s.run("notebook.run", &Value::Null).unwrap();
+    assert_eq!(r["ran"], 0);
+    assert_eq!(r["skipped"], 2);
+    let e = s.run("notebook.run", &json!({"cell": 1})).unwrap_err();
+    assert!(e.contains("Python"), "{e}");
+    assert_eq!(s.project.notebooks.last().unwrap(), &nb, "skipped cells keep their outputs");
+    // Saving keeps the kernel, metadata, ids, raw cells and every output, so Jupyter can run it.
+    let dir = std::env::temp_dir().join(format!("rustgis-jupyter-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("rivers.ipynb");
+    s.run("notebook.save", &json!({"path": path.to_str().unwrap()})).unwrap();
+    let saved: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(saved["nbformat_minor"], 5);
+    for key in ["kernelspec", "language_info", "widgets"] {
+        assert_eq!(saved["metadata"][key], original["metadata"][key], "{key}");
+    }
+    let (sc, oc) = (saved["cells"].as_array().unwrap(), original["cells"].as_array().unwrap());
+    assert_eq!(sc.len(), oc.len());
+    for (a, b) in sc.iter().zip(oc) {
+        for key in ["cell_type", "id", "metadata", "outputs", "execution_count"] {
+            assert_eq!(a[key], b[key], "{key} of cell {}", b["id"]);
+        }
+        assert_eq!(crate::cmd::notebook::jupyter_text(&a["source"]), crate::cmd::notebook::jupyter_text(&b["source"]));
+    }
+    // An edited cell keeps its outputs; a new cell gets a fresh, unique id.
+    s.run("notebook.editCell", &json!({"cell": 1, "source": "1 + 2"})).unwrap();
+    s.run("notebook.addCell", &json!({"source": "print('hi')"})).unwrap();
+    s.run("notebook.save", &json!({"path": path.to_str().unwrap()})).unwrap();
+    let saved: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(saved["cells"][1]["outputs"], original["cells"][1]["outputs"]);
+    let id = saved["cells"][4]["id"].as_str().unwrap();
+    assert!(!id.is_empty() && !["intro", "load", "boom", "raw"].contains(&id), "{id}");
+    assert_eq!(saved["cells"][4]["outputs"], json!([]));
+    // A RustGIS command notebook saved as Jupyter still opens as commands.
+    s.run("notebook.new", &json!({"name": "Commands"})).unwrap();
+    s.run("notebook.save", &json!({"path": path.to_str().unwrap()})).unwrap();
+    s.run("notebook.open", &json!({"path": path.to_str().unwrap()})).unwrap();
+    assert_eq!(s.project.notebooks.last().unwrap().language(), None);
+    // And a notebook kept in a project keeps its Jupyter details.
+    let i = s.project.notebooks.iter().position(|n| n.name == nb.name).unwrap();
+    let back: crate::cmd::notebook::Notebook = serde_json::from_value(serde_json::to_value(&s.project.notebooks[i]).unwrap()).unwrap();
+    assert_eq!(back.language(), Some("python"));
+    std::fs::remove_dir_all(&dir).ok();
 }
 
 /// A three-band raster: water-like pixels on the left half, field-like on the right.
@@ -19935,7 +20161,7 @@ impl Drop for GpkgRegressionFixture {
 /// Whole reads must refuse an oversized provider instead of returning its capped sample (#1108).
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
-fn oversized_geopackage_refuses_whole_reads_but_can_stream() {
+fn oversized_geopackage_refuses_whole_reads_but_streams_and_exports() {
     use rustgis_data::{Dataset, Geometry, GeometryType, source::MAX_LIMIT};
 
     let fixture = GpkgRegressionFixture::new("whole-read-limit");
@@ -19955,7 +20181,7 @@ fn oversized_geopackage_refuses_whole_reads_but_can_stream() {
     assert_eq!(
         db.execute(
             "WITH RECURSIVE rows(fid) AS (SELECT 1 UNION ALL SELECT fid+1 FROM rows WHERE fid<?1)
-             INSERT INTO roads(fid, geom) SELECT fid, ?2 FROM rows",
+             INSERT INTO roads(fid, geom, name) SELECT fid, ?2, 'road ' || fid FROM rows",
             rusqlite::params![count as i64, blob],
         )
         .unwrap(),
@@ -19993,10 +20219,25 @@ fn oversized_geopackage_refuses_whole_reads_but_can_stream() {
     assert!(s.map().layer(id).unwrap().is_streamed());
     assert_eq!(s.map().layer(id).unwrap().dataset.features.len(), resident);
 
-    let output = fixture.dir.join("refused.geojson");
-    let error = s.run("share.exportLayer", &json!({"layer": id, "path": output})).unwrap_err();
+    // Exported a chunk at a time, past the limit a whole read has.
+    let output = fixture.dir.join("whole.csv");
+    let exported = s.run("share.exportLayer", &json!({"layer": id, "path": output})).unwrap();
+    assert_eq!(exported["features"].as_u64(), Some(count as u64));
+    // A header, then every row once and in order (the first column is the road's name).
+    let mut lines = std::io::BufRead::lines(std::io::BufReader::new(std::fs::File::open(&output).unwrap()));
+    assert!(lines.next().unwrap().unwrap().starts_with("name,"));
+    let mut rows = 0;
+    for (k, line) in lines.enumerate() {
+        let line = line.unwrap();
+        assert!(line.starts_with(&format!("road {},", k + 1)), "row {k}: {line}");
+        rows += 1;
+    }
+    assert_eq!(rows, count, "every row");
+    // A format still written from a whole layer is refused, and writes nothing.
+    let refused = fixture.dir.join("refused.kml");
+    let error = s.run("share.exportLayer", &json!({"layer": id, "path": refused})).unwrap_err();
     assert_limit(&error);
-    assert!(!output.exists(), "a refused export must not write a partial file");
+    assert!(!refused.exists(), "a refused export must not write a partial file");
     assert!(s.map().layer(id).unwrap().is_streamed());
     assert_eq!(s.map().layer(id).unwrap().dataset.features.len(), resident);
     assert_eq!(s.map().layers.len(), 2);
