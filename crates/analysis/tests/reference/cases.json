@@ -963,10 +963,6 @@
    "expect": {
     "features": "expected/buffer_long_5km.geojson",
     "tolerance": 0.001
-   },
-   "known": {
-    "issue": "#1159: Buffer outlines sit up to 10 % of the distance off",
-    "tolerance": 0.1
    }
   },
   {
@@ -980,10 +976,6 @@
    "expect": {
     "features": "expected/buffer_parcels_1km.geojson",
     "tolerance": 0.001
-   },
-   "known": {
-    "issue": "#1159: Buffer outlines sit up to 10 % of the distance off",
-    "tolerance": 0.1
    }
   },
   {
@@ -997,10 +989,6 @@
    "expect": {
     "features": "expected/buffer_parcels_-2km.geojson",
     "tolerance": 0.001
-   },
-   "known": {
-    "issue": "#1159: Buffer outlines sit up to 10 % of the distance off",
-    "tolerance": 0.1
    }
   }
  ]
