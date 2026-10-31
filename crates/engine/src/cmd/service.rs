@@ -217,13 +217,26 @@ fn vet(mut svc: Service, caps: &str) -> Service {
     svc
 }
 
-/// A service's GeoJSON answer made ready to read: latitude-first coordinates turned round, and a
-/// cut-off answer pointed out.
-pub fn features_answer(s: &mut Session, name: &str, bytes: Vec<u8>) -> Vec<u8> {
+/// A service's GeoJSON answer made ready to read: latitude-first coordinates turned round, judged
+/// against the layer's longitude/latitude `bounds` from its capabilities (see
+/// [`fix_axes`](rustgis_data::ogc::fix_axes); none: left as they come), and a cut-off answer
+/// pointed out.
+pub fn features_answer(s: &mut Session, name: &str, bytes: Vec<u8>, bounds: Option<[f64; 4]>) -> Vec<u8> {
     if let Some(note) = rustgis_data::ogc::partial_note(&bytes) {
         s.notify(format!("{name}: {note}"), false);
     }
-    rustgis_data::ogc::fix_axes(&bytes).unwrap_or(bytes)
+    rustgis_data::ogc::fix_axes(&bytes, bounds).unwrap_or(bytes)
+}
+
+/// A layer's longitude/latitude bounds as a listing or a parameter gives them (`[west, south,
+/// east, north]`), for [`features_answer`]: none when absent or null.
+pub(crate) fn bounds_of(v: Option<&Value>) -> Result<Option<[f64; 4]>, String> {
+    let Some(v) = v.filter(|v| !v.is_null()) else { return Ok(None) };
+    let b: [f64; 4] = serde::Deserialize::deserialize(v).map_err(|_| "bounds must be [west, south, east, north]")?;
+    if !rustgis_map::tiles::valid_bounds(&b) {
+        return Err("bounds must be a finite, ordered geographic rectangle".into());
+    }
+    Ok(Some(b))
 }
 
 /// A service's features at `url`, with the pages that follow (its `next` links, or an ArcGIS
@@ -314,7 +327,12 @@ pub fn service_json(svc: &Service) -> Value {
                 Offer::Service { url } => json!({"type": "service", "url": url}),
             };
             let mut layer = json!({"name": l.name, "title": l.title, "bbox": l.bbox, "offer": offer, "tilesets": l.tilesets});
-            if let Some(t) = &l.time {
+            if let Some((min, max)) = l.zooms {
+                layer["minZoom"] = json!(min);
+                layer["maxZoom"] = json!(max);
+            }
+            // A layer that lists one time is listed as a plain map: there is no other to pick.
+            if let Some(t) = l.time.as_ref().filter(|t| t.changes()) {
                 // The first and last few of a long list, and how many (the slider takes them all).
                 let values: Vec<&String> = match t.values.len() {
                     n if n > 2 * SHOWN_TIMES => t.values.iter().take(SHOWN_TIMES).chain(t.values.iter().skip(n - SHOWN_TIMES)).collect(),
@@ -374,10 +392,14 @@ pub(crate) fn add(s: &mut Session, p: &Value) -> CmdResult {
     let asked = given.as_deref();
     let pinned = asked.is_some_and(|a| a.eq_ignore_ascii_case("default"));
     let slider = match (&layer.time, asked) {
-        (Some(t), Some(a)) if a.eq_ignore_ascii_case("slider") => Some(
-            t.slider()
-                .ok_or_else(|| format!("{}: its times aren't dates the time slider can step to (give one of them as time)", layer.title))?,
-        ),
+        (Some(t), Some(a)) if a.eq_ignore_ascii_case("slider") => Some(t.slider().ok_or_else(|| match t.changes() {
+            true => format!("{}: its times aren't dates the time slider can step to (give one of them as time)", layer.title),
+            false => format!(
+                "{}: it lists only one time, {}: nothing for the time slider to step through",
+                layer.title,
+                t.values.first().unwrap_or(&t.default)
+            ),
+        })?),
         (None, Some(a)) if a.eq_ignore_ascii_case("slider") => {
             return Err(format!("{}: the layer has no time to follow the time slider with", layer.title));
         }
@@ -423,6 +445,18 @@ pub(crate) fn add(s: &mut Session, p: &Value) -> CmdResult {
             };
             // With its legends, as its service gives them (none: no key, as before).
             let mut add = json!({"url": template, "kind": "raster", "name": name, "overlay": true, "bounds": layer.bbox});
+            // A layer its service draws on request (a WMS, an ArcGIS map service) is asked for
+            // as one picture of the view, so its symbols and labels aren't cut at tile edges
+            // (#1162); `map.setTiles` turns it back to tiles.
+            if rustgis_map::tiles::drawn_on_request(&template) {
+                add["singleImage"] = json!(true);
+            }
+            // The zooms its service draws it at (a WMS layer's scale hints, a WMTS layer's matrices):
+            // closer in, its finest tiles are stretched rather than asked for.
+            if let Some((min, max)) = layer.zooms {
+                add["minZoom"] = json!(min);
+                add["maxZoom"] = json!(max);
+            }
             // The time slider, when it is off, turned on with the layer's steps (one that is on
             // keeps its own); it starts at the layer's default.
             let fresh = s.map().time.is_none();
@@ -520,7 +554,7 @@ pub(crate) fn add(s: &mut Session, p: &Value) -> CmdResult {
                 }
                 let max = crate::render::rustgis_tiles::cache::MAX_DOWNLOAD;
                 let bytes = download_features(s, &name, asked.as_deref().unwrap_or(items), max).map_err(|e| slow_whole_layer(e, given))?;
-                let bytes = features_answer(s, &name, bytes);
+                let bytes = features_answer(s, &name, bytes, layer.bbox);
                 let mut r = super::raster::add_named_bytes(s, &json!({"name": name}), format!("{name}.geojson"), bytes)?;
                 // Over an area, the features crossing it: the view stays, or goes to a box given
                 // (the whole layer's bounds would show a country to fill one state).

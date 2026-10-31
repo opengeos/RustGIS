@@ -64,6 +64,32 @@ layer.markerRotation={"layer":"Signs","field":"angle","counterclockwise":true}
 layer.lineStrokes={"layer":"Signs","strokes":[{"color":"#FFFFFF","markers":{"mark":"circle","size":14}},{"color":"#000000","markers":{"mark":"character","char":"▲","size":10,"offsetAlong":0}}]}
 ```
 
+### Symbols by expression
+
+**By Expression**, under the symbol in the Symbology pane, sets parts of the symbol per feature
+from an [expression](expressions.md): a point's **Size** (points), the **Fill** and **Outline**
+colours (a line's **Color**), the **Outline width** (a line's **Width**, in points) and a point's
+**Angle** (degrees clockwise, in place of the **Rotation** field; where it gives null, the field's). A colour is text: `'#d7301f'`,
+a CSS colour name such as `'navy'`, or `'r,g,b[,a]'` as `color_rgb()` and `color_rgba()` give it.
+A point with **Marks** scales them all with its **Size**, their sizes and offsets in proportion to
+the symbol's own size (each mark keeps its colours); a size of 0 or less draws nothing. Where an
+expression gives null (or, for a colour, text that isn't one), the feature takes the symbol's own, so a `CASE` without `ELSE` changes only the features it names. `@map_scale` is the
+scale the map is drawn at, so a width can change with the zoom (in a shared web map, whose
+reader zooms freely, it is null). They apply on top of the
+renderer: a Unique Values class's colour, then the expression's. An expression applies when its
+box loses focus; one that doesn't read shows why and isn't applied. A layer styled by expression
+is drawn on the CPU; points drawn as counted bins (aggregation) keep the bins' own symbol, and
+a line's stacked strokes keep the colour and width each sets. A shared web map draws each
+feature's colours, outline width and size as styled (points as circles, without their angle or
+marks); a layer's MapLibre style (a web layer's, or one exported alone) carries the renderer's
+symbol, without the expressions. By command:
+
+```text
+layer.symbolBy={"layer":"Cities","size":"scale_linear(pop_max, 0, 2e7, 4, 24)","fill":"CASE WHEN pop_max > 1e7 THEN '#d7301f' END"}
+layer.symbolBy={"layer":"Rivers","strokeWidth":"if(@map_scale < 5e6, 2, 0.5)"}
+layer.symbolBy={"layer":"Cities","fill":null}
+```
+
 Pick a colour scheme from the pane's swatches, listed in groups: **Perceptually Uniform** (Viridis,
 Plasma, Inferno, Magma, Cividis, Batlow and Aurora: even steps in lightness, so they read in
 greyscale and for colour-blind viewers), **Sequential**, **Diverging** (Red–Blue, Vik, Roma,
@@ -93,6 +119,13 @@ the colour picker's opacity control can also make a fill visible again. By comma
 ```text
 layer.noFill={"layer":"Countries"}
 ```
+
+A GeoJSON with mixed geometry keeps its points, lines and polygons in one layer, classified by its
+most common geometry family. **No Fill** and the **Fills** editor are also available when that
+layer contains polygons. No Fill leaves point and line symbols unchanged; use the Fills editor
+to change the polygon fill's colour or remove its transparent fill to restore the symbol's fill.
+For layers read in place, these controls recognise polygon features in the currently loaded view
+as well as the layer's declared geometry family.
 
 The ribbon's **Color** control changes Unique Values or Graduated Colors back to Single Symbol.
 To keep the classification, edit a class's colour in the Symbology pane instead. A polygon's

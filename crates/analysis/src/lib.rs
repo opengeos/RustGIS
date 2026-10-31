@@ -10,7 +10,9 @@
 //! [`tool`] and run by [`run`] like the rest.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+pub mod attribute_join;
 pub mod convert;
+pub mod density;
 pub mod dggs;
 pub mod geodesic;
 pub mod georef;
@@ -19,6 +21,7 @@ pub mod kriging;
 mod merge;
 pub mod network;
 pub mod neural;
+mod parameters;
 pub mod rasterops;
 pub mod selection;
 mod stats;
@@ -28,6 +31,12 @@ pub mod topology;
 pub mod trend;
 pub mod warp;
 
+pub use attribute_join::{DuplicateStrategy, JoinFieldOptions, JoinFieldReport, join_field};
+pub use density::{
+    KernelType, MAX_DENSITY_CELLS, MAX_DENSITY_WORK, auto_cell_size, kernel_density, points_extent, resolve_grid_extent,
+    silverman_bandwidth,
+};
+pub use parameters::StatisticList;
 pub use tools::{TOOLS, find_field_case_insensitive, holds_coordinates, param_applies, simplify_geometry, zonal_bands};
 
 use rustgis_data::Dataset;
@@ -49,6 +58,15 @@ pub enum ParamKind {
     /// A field of the first layer that can hold coordinates: a numeric field, or a text field
     /// with numbers written in it (see [`holds_coordinates`]).
     CoordinateField,
+    /// Ordered field names from the named input; accepts the existing string or array values.
+    Fields {
+        input: &'static str,
+    },
+    /// Ordered field/statistic objects from the named input, using the existing JSON keys.
+    FieldStatistics {
+        input: &'static str,
+        statistics: StatisticList,
+    },
     Number,
     Text,
     /// One of a fixed list of choices.
@@ -167,6 +185,11 @@ pub trait Inputs {
         _source_layer: &str,
     ) -> Result<(Vec<u8>, Vec<String>), String> {
         Err("vector-to-PMTiles export is unavailable in this input provider".into())
+    }
+
+    /// Builds a raster tile archive with the layer's existing display style.
+    fn raster_to_pmtiles(&self, _layer: &str, _min_zoom: u8, _max_zoom: u8) -> Result<Vec<u8>, String> {
+        Err("raster-to-PMTiles export is unavailable in this input provider".into())
     }
 }
 
@@ -316,6 +339,9 @@ pub fn resolve_params(spec: &ToolSpec, params: &Value) -> Result<Value, String> 
     let mut p = params.as_object().cloned().unwrap_or_default();
     // Not an external suite's tool (a copy of a built-in spec counts as built-in).
     let built_in = source_of(spec).is_none();
+    if built_in {
+        tools::normalize_params(spec, &mut p);
+    }
     for ps in spec.params {
         if !p.contains_key(ps.name)
             && !ps.default.is_empty()
