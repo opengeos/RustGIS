@@ -154,6 +154,15 @@ test similarly generates its KML, KMZ, CSV and GeoJSON inputs. These run automat
 `cargo test --workspace --locked` and `cargo xtask ci`, without a separate setup step or a
 public service. Extend these generators when adding cases.
 
+`crates/engine/tests/workflows.rs` runs everyday jobs from start to finish: join, overlay,
+summarise, map, save, reopen and export, and the same saved job twice. Its real-data case,
+Shelby County's census tracts checked against the areas the Census Bureau publishes, is
+`#[ignore]`d: the nightly build downloads the public-domain files, pinned by checksum, and runs it
+with `RUSTGIS_WORKFLOW_DATA` naming their folder (the list of files is in `nightly.yml`). To run
+it locally, download the files listed there into one folder, check them with `sha256sum` against
+the checksums beside them, and run
+`RUSTGIS_WORKFLOW_DATA=<folder> cargo test -p rustgis-engine --test workflows -- --ignored`.
+
 ## Documentation
 
 The site is built with [Zensical](https://zensical.org):
