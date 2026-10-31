@@ -33,7 +33,8 @@ deletes the selection, adds or calculates a field, and calculates geometry attri
   <figcaption>The attribute table, with a selection highlighted on the map and in the table.</figcaption>
 </figure>
 
-Select By Attributes and definition queries use SQL `WHERE` clauses:
+Select By Attributes and definition queries use SQL `WHERE` clauses, written in the
+[expression language](expressions.md):
 
 ```sql
 pop_est > 100000000 AND continent = 'Asia'
@@ -94,6 +95,7 @@ Use these ids in `gp.run`'s `tool` parameter (`gp.tools` lists the available too
 | Symmetrical Difference | `symmetricalDifference` | Analysis › Overlay |
 | Update | `update` | Analysis › Overlay |
 | Spatial Join | `spatialJoin` | Analysis › Overlay |
+| Join Field | `joinField` | Data Management › Joins |
 | Dissolve | `dissolve` | Data Management › Generalization |
 | Minimum Bounding Geometry | `convexHull` | Data Management › Features |
 | Feature To Point | `featureToPoint` | Data Management › Features |
@@ -116,6 +118,7 @@ Use these ids in `gp.run`'s `tool` parameter (`gp.tools` lists the available too
 | IDW Interpolation | `idwInterpolation` | Analysis › Interpolation |
 | Ordinary Kriging | `kriging` | Analysis › Interpolation |
 | Zonal Statistics | `zonalStats` | Analysis › Raster |
+| Kernel Density | `kernelDensity` | Analysis › Density |
 
 **Raster to PMTiles** (`rasterToPmtiles`) writes Web Mercator PNG tiles using the raster's current
 bands, colors, mask and resampling. Set the minimum and maximum zoom from 0 to 16 and choose a
@@ -178,6 +181,27 @@ multipart rings are retained. This is not a topology-preserving simplifier: chec
 where holes or neighbouring polygons must stay aligned. The default tolerance remains 25 km;
 use a smaller value for local boundaries.
 
+**Kernel Density** (`kernelDensity`) calculates a continuous magnitude-per-unit-area raster
+surface from point features using a Quartic (biweight, default) or Gaussian kernel (truncated at 3σ and
+renormalised to integrate to 1).
+Points can optionally be weighted by a numeric population field (invalid or non-positive weights
+are excluded and reported in the tool messages; for multipoint features, each constituent point part
+receives the feature's weight). Calculations are performed in the linear units
+of a projected coordinate system (defaults to the layer's projected system; if the input layer lacks a
+coordinate system or is in degrees, or to project into a specific system, supply a projected system via `crs`,
+e.g. `EPSG:32618`).
+Because bandwidth and cell size are measured in coordinate-space linear units, global cylindrical
+projections such as Web Mercator (EPSG:3857) introduce scale distortion that increases with latitude;
+use a local projected coordinate system (such as UTM or State Plane) when accurate ground distances
+are required. Leaving `radius` empty or setting it to `0` automatically estimates the bandwidth
+using Silverman's rule of thumb based on the points' spatial distribution (falling back to extent span / 30,
+or 1000 coordinate-space linear units for a single point or coincident points). When `pixelSize` is
+omitted, an adaptive cell size is calculated to span approximately 250 cells along the longer side
+of the extent; the default search radius is automatically adjusted if needed to be at least the pixel
+size so points are not missed between cell centres.
+The search radius must be at least the pixel size. The extent can optionally be overridden via `extent`
+as `xmin,ymin,xmax,ymax` text or a four-number array. The output is written as a single-band Float32 GeoTIFF.
+
 Most feature tools process only the selected rows when an input has a selection. Selection tools
 instead replace the input's selection; Select Layer By Location honours the selecting layer's
 selection. Summarize Within counts the selected points against **all** input polygons, and
@@ -187,8 +211,13 @@ is the layer name; `vectorToPmtiles` uses it as a file destination.
 **Buffer** distances, and the distance of **Select Layer By Location**, are measured on the Earth
 (the WGS 84 ellipsoid, as PROJ and GeographicLib measure it), not in the map's display
 projection. Each feature is buffered in an azimuthal equidistant projection on the ellipsoid
-centred on it, so a point's buffer is exact; long lines and large polygon outlines are
-buffered in stretches of a few hundred kilometres to limit projection error. Negative Buffer
+centred on it, so distances from a point are true; long lines and large polygon outlines are
+buffered in stretches of a few hundred kilometres to limit projection error. Up to 85° of
+latitude, a buffer's sides are within 0.012 % of the distance (or 1 cm), and within 0.05 % along
+a winding line or outline buffered in stretches. Its curves are drawn with straight edges (32 to
+a point's circle, 15 to a half circle at a line's end or a polygon's corner, close to GEOS and
+PostGIS's 8 to a quarter circle), whose corners are at the distance and whose middles run up to
+about 0.5 % of it inside the true curve. Negative Buffer
 distances shrink polygons. Buffer and Select Layer By Location limit distances to 5,000 km.
 **Calculate Geometry Attributes** measures polygon areas and perimeters, and line lengths,
 on the WGS 84 ellipsoid, independently of the map's display projection. Holes are subtracted
@@ -379,6 +408,41 @@ hold. For example, the total units permitted in each district:
 gp.run={"tool":"spatialJoin","params":{"target":"districts","join":"permits","merge":[{"field":"units","rule":"sum"}]}}
 ```
 
+In the Tools pane, use **Add rule** under **Merge Rules**, pick a field from Join Features
+and its rule, and set **Delimiter** for `join`. Use **Move up**, **Move down** and **Remove** to
+manage the list. Fields without a rule keep the first match.
+
+**Join Field** (`joinField`) performs a one-off non-spatial attribute join,
+copying fields from a source table or layer (`joinTable`, specified by name or numeric table ID)
+into a `target` table or layer based on matching key values:
+
+- **Key fields:** `targetField` (aliases: `target_field`, `key`) names the key field in the target.
+  `joinField` (aliases: `join_field`) names the matching key in the source table; when omitted, empty,
+  or whitespace-only, it defaults to `targetField`. Numeric keys match across integer and floating-point
+  types when whole numbers (e.g. `10` matches `10.0`), while non-finite floats (`NaN`, infinity) and
+  nulls never match. Incompatible key data types (e.g. text vs integer) are rejected.
+- **Transferred fields:** `fields` selects specific source fields to transfer (a comma-separated list
+  or a JSON array of strings, e.g. `["tax_rate", "zone_code"]`; non-string and non-array types are rejected). Repeated
+  field names are deduplicated in order. When omitted or passed as a blank string (`""`), every source field except
+  the join key is transferred; passing an explicitly empty array (`[]`) or an array of blank strings transfers zero fields.
+  Transferred fields preserve their original source display aliases (retained without technical prefixes) and field types.
+- **Prefix and collision handling:** `prefix` prepends text to all transferred field names. When a
+  transferred field name conflicts with an existing target field, an incremental suffix is added
+  (`name_2`, `name_3`) to maintain schema uniqueness without overwriting existing data.
+- **Duplicate keys:** `duplicates` (`duplicateStrategy`) determines what happens when multiple source
+  rows share the same join key: **First** (default: uses the first matching source record), **Last**
+  (uses the last matching source record), or **Error** (fails the operation and reports the duplicate key).
+- **Selections and streamed inputs:** selections on the target layer or source table are honoured;
+  when a target selection is active, the output contains the selected target rows, while unselected
+  datasets are processed in full. Streamed layers that are only partially loaded in the view window are
+  rejected with a clear message (`the target layer is streamed; load all features first`) so incomplete
+  results are never committed as a whole layer. Rows with attribute counts exceeding the schema definition
+  are rejected with a clear error rather than silently truncated. Unmatched target records receive null values.
+
+```text
+gp.run={"tool":"joinField","params":{"target":"parcels","targetField":"owner_id","joinTable":"owners","fields":["name","phone"],"duplicates":"First"}}
+```
+
 **Summary Statistics** (`summaryStatistics`) makes a standalone table of statistics: one row for
 the whole table (none for an empty one), or one for each combination of values of the `case`
 fields (one field, or several as a list such as `["county", "year"]`). Rows are sorted by those
@@ -391,6 +455,13 @@ to 256 (field, statistic) pairs in the order the fields should appear:
 ```text
 gp.run={"tool":"summaryStatistics","params":{"input":"parcels","case":["county","year"],"statistics":[{"field":"income","statistic":"MEAN"},{"field":"income","statistic":"MEDIAN"},{"field":"zoning","statistic":"MODE"}]}}
 ```
+
+In the Tools pane, use **Add statistic** to pick each field and statistic. The statistic picker
+offers the operations supported by that field's type, including percentiles `P1` through `P99`
+for numeric fields. Use **Add field** under **Case Fields** to group by several fields. Move
+entries up or down to choose their output order, or remove them. Leaving Statistics empty keeps
+the single **Statistics Field** shortcut. These lists are also available in ModelBuilder; for an
+input produced by another tool, type its field names before running the model.
 
 | Statistic | What it is |
 | --- | --- |
@@ -433,6 +504,9 @@ gp.run={"tool":"pivotTable","params":{"input":"incomes","fields":"county","pivot
 | A | 10 | 11 | |
 | B | 20 | | 22 |
 
+Use **Add field** under **Row Fields** in the Tools pane or ModelBuilder to choose several row
+fields and order them with **Move up** and **Move down**.
+
 Without `statistic`, each row and pivot value can have one record at most; the tool names the
 first pair with more, and the cells keep the value field's type. Give a `statistic` to combine the
 records instead, such as the mean income by county and year from a table of households. It
@@ -458,7 +532,6 @@ output is named `<input>_Pivot` unless `output` names it.
 The AI Assistant uses Pivot Table for questions such as "mean household income by county and year":
 it runs the tool with `county` as the row field, `year` as the pivot field and `MEAN`, then reads
 the table it names with `read_features`, a row per county.
-
 <figure markdown="span">
   ![Tissot's indicatrix on the Robinson projection: circles of 800 km every 30°, stretched and sheared toward the poles](https://assets.rustgis.app/images/tissot.webp)
   <figcaption>Tissot's indicatrix on Robinson: equal circles, stretched and sheared by the projection.</figcaption>
