@@ -1442,7 +1442,7 @@ pub fn frame_coverage(map: &mut Map, center: Coord, scale: f64, w_mm: f64, h_mm:
         basemap: rustgis_map::Basemap,
         tiles: Vec<rustgis_map::TileLayer>,
         graticule: bool,
-        lock: Option<Vec<(rustgis_map::LabelKey, u8)>>,
+        lock: Option<Vec<(rustgis_map::LabelKey, rustgis_map::LockedPlace)>>,
         map: &'a mut Map,
     }
     impl Drop for Aside<'_> {

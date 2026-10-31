@@ -40,6 +40,15 @@ pub use symbology::{
 };
 pub use tiles::{TileKind, TileLayer};
 
+/// Where a locked label stays.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct LockedPlace {
+    /// The place it took: 0 its own, else one of its alternatives (#1011), numbered from 1.
+    pub place: u8,
+    /// How far a callout moved it from there (points, right and down), if one did.
+    pub callout: Option<[f32; 2]>,
+}
+
 use rustgis_data::{Dataset, Geometry, GeometryType};
 use rustgis_geom::{Coord, Extent};
 use serde::{Deserialize, Serialize};
@@ -1159,11 +1168,10 @@ pub struct Map {
     /// Map-wide label display switches.
     #[serde(default)]
     pub label_display: LabelDisplay,
-    /// The labels placed when labels were locked, each with the place it took (0 its own, else
-    /// one of its alternatives, #1011): only they are drawn while the lock holds, there, wherever
-    /// the map moves. Filled by the renderer.
+    /// The labels placed when labels were locked, each with the place it took: only they are
+    /// drawn while the lock holds, there, wherever the map moves. Filled by the renderer.
     #[serde(skip)]
-    pub label_lock: Option<Vec<(LabelKey, u8)>>,
+    pub label_lock: Option<Vec<(LabelKey, LockedPlace)>>,
     /// Relationships, snapping, topology rules and edit settings.
     #[serde(default)]
     pub editing: design::MapEditing,

@@ -2469,6 +2469,127 @@ fn labels_take_a_font_by_family_name() {
     assert!(s.run("labels.fonts", &json!({})).unwrap()["fonts"].is_array());
 }
 
+/// Labels are moved by hand by feature id and put back, one class's or all; bad input is refused.
+#[test]
+fn labels_are_moved_by_command_and_reset() {
+    let mut s = world();
+    let id = s.map().layer_by_name("Cities").unwrap().id;
+    let fid = s.map().layer(id).unwrap().dataset.features.first().unwrap().id;
+    let moved = |s: &Session| s.map().layer(id).unwrap().labels.default.moved.clone();
+    s.run("labels.move", &json!({"layer": id, "feature": fid, "to": [12.5, 41.9]})).unwrap();
+    assert_eq!(moved(&s), vec![rustgis_map::symbology::MovedLabel { id: fid, at: [12.5, 41.9] }]);
+    // By the class's name too (Default's); again moves it again.
+    let name = s.map().layer(id).unwrap().labels.default.name.clone();
+    s.run("labels.move", &json!({"layer": id, "class": name, "feature": fid, "to": [13.0, 42.0]})).unwrap();
+    assert_eq!(moved(&s).len(), 1);
+    // Bad values change nothing.
+    for bad in [
+        json!({"feature": fid}),
+        json!({"feature": "one", "to": [1, 1]}),
+        json!({"feature": fid, "to": [1]}),
+        json!({"feature": fid, "to": [1, 200]}),
+        json!({"feature": fid, "to": ["a", 1]}),
+        json!({"feature": fid, "to": [1, 1], "class": "No such class"}),
+    ] {
+        let mut p = bad.clone();
+        p["layer"] = json!(id);
+        assert!(s.run("labels.move", &p).is_err(), "{bad}");
+    }
+    assert_eq!(moved(&s)[0].at, [13.0, 42.0]);
+    // Saved with the project's layer, and one undo step a move.
+    let saved = serde_json::to_value(&s.map().layer(id).unwrap().labels).unwrap();
+    assert_eq!(saved["moved"], json!([{"id": fid, "at": [13.0, 42.0]}]));
+    s.run("edit.undo", &json!({})).unwrap();
+    assert_eq!(moved(&s)[0].at, [12.5, 41.9]);
+    // Put back: one, then all.
+    s.run("labels.move", &json!({"layer": id, "feature": fid, "to": null})).unwrap();
+    assert!(moved(&s).is_empty());
+    s.run("labels.move", &json!({"layer": id, "feature": fid, "to": [1, 1]})).unwrap();
+    // A bad "all" is refused, not taken as false.
+    assert!(s.run("labels.resetMoved", &json!({"layer": id, "all": "tru"})).is_err());
+    assert_eq!(moved(&s).len(), 1);
+    s.run("labels.class.add", &json!({"layer": id, "name": "Named"})).unwrap();
+    s.run("labels.move", &json!({"layer": id, "class": "Named", "feature": fid, "to": [3, 3]})).unwrap();
+    s.run("labels.resetMoved", &json!({"layer": id, "all": true})).unwrap();
+    assert!(moved(&s).is_empty());
+    assert!(s.map().layer(id).unwrap().labels.class("Named").unwrap().moved.is_empty(), "every class's");
+    s.run("labels.class.remove", &json!({"layer": id, "class": "Named"})).unwrap();
+    // Locked, a move locks the labels again where they are placed next: the one moved may not
+    // have been placed when the lock was taken.
+    s.run("labels.lock", &json!({"on": true})).unwrap();
+    let v = crate::render::View { width: 800.0, height: 600.0, pixels_per_point: 1.0, camera: s.map().camera, sky: false };
+    crate::render::render(s.map_mut(), &v).unwrap();
+    assert!(s.map().label_lock.is_some());
+    s.run("labels.move", &json!({"layer": id, "feature": fid, "to": [2, 2]})).unwrap();
+    assert!(s.map().label_lock.is_none() && s.map().label_display.locked, "locked again, not unlocked");
+    // Converted to annotations, a moved label's annotation is where it was put, and the
+    // annotations' classes keep none moved (their ids aren't the features').
+    s.run("labels.lock", &json!({"on": false})).unwrap();
+    let r = s.run("labels.convert", &json!({"layer": id})).unwrap();
+    let a = s.map().layer(r["layer"].as_u64().unwrap() as u32).unwrap();
+    // It stays moved there under its new id, so its class's offset doesn't shift it.
+    let at = |g: &Option<rustgis_data::Geometry>| match g {
+        Some(rustgis_data::Geometry::Point(c)) => Some([c.x, c.y]),
+        _ => None,
+    };
+    let put = a.dataset.features.iter().find(|f| at(&f.geometry) == Some([2.0, 2.0])).expect("the moved one's annotation");
+    assert_eq!(a.labels.default.moved, vec![rustgis_map::symbology::MovedLabel { id: put.id, at: [2.0, 2.0] }]);
+    // The tool by its code.
+    s.run("tool.set", &json!({"tool": "moveLabel"})).unwrap();
+    assert_eq!(s.tool, crate::Tool::MoveLabel);
+}
+
+#[test]
+fn labels_show_all_and_take_callouts() {
+    // A project file's 0 is off, as the command's is; a length is kept.
+    let ds = rustgis_data::Dataset::new("d", rustgis_data::GeometryType::Point, vec![]);
+    let mut v = serde_json::to_value(rustgis_map::LabelClass::default_for(&ds)).unwrap();
+    for (file, read) in [(json!(0), None), (json!(-3), None), (json!(30), Some(30.0))] {
+        v["callout"] = file;
+        assert_eq!(serde_json::from_value::<rustgis_map::LabelClass>(v.clone()).unwrap().callout, read);
+    }
+    let mut s = world();
+    let class = |s: &Session| {
+        let c = &s.map().layer_by_name("Cities").unwrap().labels.default;
+        (c.show_all, c.callout)
+    };
+    assert_eq!(class(&s), (false, None));
+    s.run("labels.placement", &json!({"layer": "Cities", "showAll": true})).unwrap();
+    assert_eq!(class(&s), (true, None), "no position needed");
+    // On: the default length, then one given, kept within range; on again keeps it.
+    s.run("labels.placement", &json!({"layer": "Cities", "callout": true})).unwrap();
+    assert_eq!(class(&s).1, Some(rustgis_map::symbology::DEFAULT_CALLOUT));
+    s.run("labels.placement", &json!({"layer": "Cities", "callout": 80})).unwrap();
+    assert_eq!(class(&s).1, Some(80.0));
+    s.run("labels.placement", &json!({"layer": "Cities", "callout": 99999})).unwrap();
+    assert_eq!(class(&s).1, Some(500.0), "within its range");
+    s.run("labels.placement", &json!({"layer": "Cities", "callout": true})).unwrap();
+    assert_eq!(class(&s).1, Some(500.0), "on again keeps its length");
+    // Saved with the layer, and read back.
+    let saved = serde_json::to_value(&s.map().layer_by_name("Cities").unwrap().labels).unwrap();
+    assert_eq!((saved["show_all"].clone(), saved["callout"].clone()), (json!(true), json!(500.0)));
+    let back: rustgis_map::symbology::Labeling = serde_json::from_value(saved).unwrap();
+    assert_eq!((back.default.show_all, back.default.callout), (true, Some(500.0)));
+    // A project file's out-of-range length is brought within range.
+    let mut wild = serde_json::to_value(&back).unwrap();
+    wild["callout"] = json!(1e9);
+    let read: rustgis_map::symbology::Labeling = serde_json::from_value(wild).unwrap();
+    assert_eq!(read.default.callout, Some(500.0));
+    // Off, three ways; bad values change nothing.
+    for off in [json!(false), json!(0), json!(null)] {
+        s.run("labels.placement", &json!({"layer": "Cities", "callout": 40})).unwrap();
+        s.run("labels.placement", &json!({"layer": "Cities", "callout": off})).unwrap();
+        assert_eq!(class(&s).1, None, "{off}");
+    }
+    for bad in [json!({"callout": "long"}), json!({"callout": -5}), json!({"showAll": "yes"})] {
+        let mut p = bad.clone();
+        p["layer"] = json!("Cities");
+        assert!(s.run("labels.placement", &p).is_err(), "{bad}");
+    }
+    s.run("edit.undo", &json!({})).unwrap();
+    assert_eq!(class(&s), (true, Some(40.0)), "undoes");
+}
+
 /// A label class's halo takes its own colour and width, and its letters a spacing; blank and null
 /// go back to the automatic colour and the thin halo, and other settings leave them.
 #[test]
@@ -16714,7 +16835,7 @@ fn ogc_group_refresh_keeps_children_across_rotated_keys_and_rejects_bad_answers(
     let group = added["group"].clone();
     let ids: Vec<u32> = s.map().service_groups[0].children.iter().map(|c| c.layer).collect();
     s.run("layer.rename", &json!({"layer":ids[0], "name":"Renamed"})).unwrap();
-    s.map_mut().label_lock = Some(vec![((ids[0], 0, 0, 0), 0), ((ids[1], 0, 0, 0), 0)]);
+    s.map_mut().label_lock = Some(vec![((ids[0], 0, 0, 0), Default::default()), ((ids[1], 0, 0, 0), Default::default())]);
 
     // A rotated key changes every source address but not the collections: the children stay.
     let mut q = doc("rotated-key");
