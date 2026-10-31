@@ -52,8 +52,8 @@ _GeoLibre: docs/data-formats.md, docs/features.md › Adding data, SQL and datab
   time_).
 - [ ] **ArcGIS services**: FeatureServer, MapServer, ImageServer and VectorTileServer, with OAuth
   and a Portal browser. Partial: the four layer types through From Service… ([#120](https://github.com/opengeos/RustGIS/issues/120)); a token in
-  the service address is sent with its requests (saved sources drop it). Missing: OAuth and a
-  Portal browser (_Roadmap: data at the source_).
+  the service address is sent with its requests (saved sources drop it); sign-in with OAuth to
+  ArcGIS Online and Enterprise. Missing: a Portal browser (_Roadmap: data at the source_).
 - [ ] **STAC browser and cloud catalogs**: STAC, Planetary Computer, Earth Engine, Overture,
   Source Cooperative, NASA Earthdata, Planet and Hugging Face. Partial: STAC Search ([#128](https://github.com/opengeos/RustGIS/issues/128)),
   Planetary Computer with signed assets ([#144](https://github.com/opengeos/RustGIS/issues/144)), Overture Maps and Source Cooperative ([#158](https://github.com/opengeos/RustGIS/issues/158)), NASA
@@ -148,7 +148,7 @@ _GeoLibre: docs/features.md › Attribute data and expressions; docs/arcgis-edit
   Missing; edits stay in the project (_Roadmap: data at the source_ for GeoPackage and PostGIS).
 - [ ] **Expression builder and engine**: one engine shared by filters, labels, styles and Calculate
   Field, with a function reference. Partial: one expression language serves queries, filters,
-  label classes, attribute rules and Calculate Field (docs: Expressions); symbols and labels by
+  label classes, attribute rules, Calculate Field and symbols (docs: Expressions); labels by
   expression and a builder are missing (_Roadmap: expressions and cartography_).
 - [ ] **Virtual fields and persistent attribute joins**. Missing; relationships exist (_Roadmap:
   data at the source_; a one-off join field tool under solid ground).
@@ -194,8 +194,8 @@ model-builder.md, segmentation.md, obia.md_
   code; batch runs are missing (_Roadmap: solid ground_).
 - [ ] **Viewshed from public terrain tiles (no DEM needed)**. Partial: needs a loaded elevation
   raster (_Roadmap: analysis_ for a DEM downloader).
-- [ ] **Conversion**: vector to PMTiles/GeoParquet, raster to COG. Partial: GeoParquet and COG
-  out; vector to PMTiles is missing (_Roadmap: any time_, [#557](https://github.com/opengeos/RustGIS/issues/557)).
+- [x] **Conversion**: vector to PMTiles/GeoParquet, raster to COG: GeoParquet, COG and vector and
+  raster PMTiles out ([#557](https://github.com/opengeos/RustGIS/issues/557)).
 - [x] **Time Slider**: vector layers by a date field (`time.bind`), data cubes, trends (Sen's
   slope, Mann–Kendall), GIF export.
 - [ ] **Point cloud annotation**: ASPRS classes, 3D boxes. Missing.

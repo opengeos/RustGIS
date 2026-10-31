@@ -68,8 +68,7 @@ Correct, robust and recoverable, with the foundations other themes stand on.
 - Batch runs: one tool over many layers or a folder of files.
 
 ### Expressions and cartography
-One expression language now serves queries, Calculate Field, attribute rules and symbol
-properties. Next on top of it:
+Next on top of the expression language:
 - Expression labels, with rotation, case, priority and number formats.
 - Rule-based renderer: ordered rules with an expression, symbol and scale range.
 - Quick filters in the attribute table; pop-up templates (chosen fields, formats for dates, links
@@ -213,19 +212,21 @@ Open questions rather than plans; discuss before building.
 - Merge vector layers: append matching geometry types, union attributes without type conversion,
   honor selections and complete streamed inputs ([#1061](https://github.com/opengeos/RustGIS/issues/1061)).
 - Editing: create, move, rotate, scale, merge, split, explode, vertex editing; snapping,
-  templates, elevation, topology, coincident polygon vertices moved together; domains, subtypes, attribute rules, contingent values,
+  templates, elevation, topology, coincident polygon vertices moved together; domains, subtypes,
+  attribute rules, contingent values,
   relationships, archiving.
 - Analysis: selection by attributes and location; polygon, lasso and radius on the map; overlay
   (clip, erase, split, intersect, identity, union, symmetrical difference, update), proximity
   (buffer, near) and summary tools, pivot tables, spatial join by intersection, centre, largest
   overlap, closest and distance with merge rules, join field (non-spatial attribute join), feature
   vertices to points, zonal statistics, kernel density, A5 grids, kriging, Calculate Field with an
-  expression language, Calculate Geometry with metric or imperial units, Project Raster, and vector and
-  raster PMTiles export (#557); guided workflows (viewshed, line of sight, IDW, shortest
+  expression language, Calculate Geometry with metric or imperial units, Project Raster, and
+  vector and raster PMTiles export (#557); guided workflows (viewshed, line of sight, IDW, shortest
   path, suitability); ModelBuilder on a node canvas, scripts with command, parameter and value completion,
   and history copied as code; the GeoLibre and Whitebox suite (1,000+ tools) natively and in the browser.
 - Layouts (map frames, surrounds, map series, publication sheets and figures in one command,
-  format panes, guides, snapping, element locking and order, measured grids and PDF), reports, presentations and
+  format panes, guides, snapping, element locking and order, measured grids and PDF), reports,
+  presentations and
   notebooks; the web app embeddable in a page (`?embed`).
 - Sharing as open formats (web maps, OGC API Features collections, MapLibre styles, glTF
   scenes, locators), offline areas with sync, deep learning pixel classification, hosted
