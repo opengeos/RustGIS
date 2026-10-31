@@ -10120,7 +10120,7 @@ fn service_features_asked_for_over_an_area() {
     assert_eq!(query.get("VERSION").map(String::as_str), Some("1.1.0"), "{source}");
     assert_eq!(query.get("REQUEST").map(String::as_str), Some("GetFeature"), "{source}");
     assert_eq!(query.get("TYPENAME").map(String::as_str), Some("CGMAT:munic"), "{source}");
-    assert!(query.contains_key("BBOX"), "{source}");
+    assert_eq!(query.get("BBOX").map(String::as_str), Some("-10.93,-45.99,-2.74,-40.37,urn:ogc:def:crs:EPSG::4326"), "{source}");
     let r = add(&mut s, "2.0.0", Some(json!("view")));
     assert!(r["area"].is_array(), "{r}");
     let r = add(&mut s, "2.0.0", None);

@@ -38,8 +38,10 @@ type Source<'a> = (u32, &'a str, String);
 type Tile<'a> = (usize, &'a str, String);
 
 /// The command that removes the listed layer `l` from the map, when it is there: matched by its
-/// address as it is first, then without its keys (as a saved project keeps it), so a copy of the
-/// same service added under another key is only taken when nothing matches exactly.
+/// address as it is first, then without its keys (as a saved project keeps it). The keyless form
+/// names the same layer: a project reopened from disk keeps no keys, and a copy of the same
+/// service added under another key is that service's layer, so Remove takes it rather than
+/// offering an Add that would duplicate it. An exact copy always wins.
 fn removal(sources: &[Source<'_>], tiles: &[Tile<'_>], l: &Value) -> Option<Removal> {
     let offer = l.get("offer")?;
     let url = offer.get("url").and_then(Value::as_str).filter(|u| !u.is_empty())?;
@@ -87,28 +89,33 @@ fn tile_match(tiles: &[Tile<'_>], l: &Value) -> Option<usize> {
 /// Gives the OGC API rows asked about (`rows`) that `added` doesn't match yet the tile layer their
 /// tileset list advertised. Its template isn't in the listing, so it is found under that list: a
 /// tile layer under one listed layer's list alone (counting every layer listed, shown or not),
-/// starting with the listed layer's own template's start (its tile matrix set), and that no row
-/// matched by its own template. Two rows of one collection may share a list: their tile matrix
-/// sets tell their tiles apart. A tile layer under no listed layer's list, or another tileset's
-/// under the same list (a layer added by hand), is nobody's, so Remove never removes another layer.
+/// following the listed layer's own template (its tile matrix set, then the same address up to a
+/// format extension), and that no row matched by its own template. Two rows of one collection may
+/// share a list: their tile matrix sets tell their tiles apart. A tile layer under no listed
+/// layer's list, or in another tile matrix set or another path under the same list (a layer added
+/// by hand), is nobody's, so Remove never removes another layer.
 fn claim_tilesets(listed: &[Value], rows: &[usize], tiles: &[Tile<'_>], added: &mut [Option<Removal>]) {
     // Every listed row's own match, shown or not: a tile a row's own template matched is that
     // row's, so an asked row's advertised template never takes it.
     let mut claimed: Vec<u64> = listed.iter().filter_map(|l| tile_match(tiles, l)).map(|i| i as u64).collect();
     claimed.sort_unstable();
     claimed.dedup();
-    // Each listed layer's tileset list and the start of its own template (its tile matrix set),
-    // as listed and without their keys: a saved project keeps its addresses without them.
+    // Each listed layer's tileset list and its own template (its tile matrix set and the tiles
+    // under it), as listed and without their keys: a saved project keeps its addresses without
+    // them.
     let starts: Vec<Option<Tileset<'_>>> = listed
         .iter()
         .map(|l| {
             let list = tileset_list(l)?;
-            let start = l.get("offer")?.get("url")?.as_str().map(tile_start)?;
+            let template = l.get("offer")?.get("url")?.as_str()?;
+            let start = tile_start(template);
             (!start.is_empty()).then(|| Tileset {
                 list,
                 start,
+                template,
                 list_keyless: crate::sources::redact(list),
                 start_keyless: crate::sources::redact(start),
+                template_keyless: crate::sources::redact(template),
             })
         })
         .collect();
@@ -143,7 +150,7 @@ fn claim_tilesets(listed: &[Value], rows: &[usize], tiles: &[Tile<'_>], added: &
                 **under == 1
                     && !claimed.contains(n)
                     && (under_list(tileset.list, tile.1) || under_list(&tileset.list_keyless, &tile.2))
-                    && (tile.1.starts_with(tileset.start) || tile.2.starts_with(tileset.start_keyless.as_str()))
+                    && (template_follows(tileset.template, tile.1) || template_follows(&tileset.template_keyless, &tile.2))
             })
             .map(|(_, n)| n);
         if let (Some(n), Some(slot)) = (found, added.get_mut(i)) {
@@ -153,12 +160,15 @@ fn claim_tilesets(listed: &[Value], rows: &[usize], tiles: &[Tile<'_>], added: &
     }
 }
 
-/// A listed OGC API layer's tileset list and template start, as listed and without their keys.
+/// A listed OGC API layer's tileset list and template (and that template's start), as listed and
+/// without their keys.
 struct Tileset<'a> {
     list: &'a str,
     start: &'a str,
+    template: &'a str,
     list_keyless: String,
     start_keyless: String,
+    template_keyless: String,
 }
 
 /// The address a tile template's tiles share: the template up to its first placeholder (`{z}`,
@@ -234,6 +244,28 @@ fn template_matches(template: &str, url: &str) -> bool {
         rest = rest.get(at + part.len()..).unwrap_or("");
     }
     rest.is_empty()
+}
+
+/// Whether the tile address `url` follows the advertised template `template`: the same address,
+/// up to the order the template writes its three coordinates in (`{z}/{y}/{x}`, or the service's
+/// own `{z}/{x}/{y}`) and the tile's format extension after them (`…/{z}/{y}/{x}` and
+/// `…/{z}/{y}/{x}.png`). A tile with anything else in between, or in another path under the
+/// tile matrix set (`…/WebMercatorQuad/custom/…`), doesn't, so a layer added by hand is left alone.
+fn template_follows(template: &str, url: &str) -> bool {
+    if template_matches(template, url) {
+        return true;
+    }
+    // What stays around the tile coordinates, which a service may write in another order: the
+    // path, the extension and the query must still be the template's.
+    let skeleton = |address: &str| address.replace("{z}", "").replace("{x}", "").replace("{y}", "");
+    let (template, url) = (skeleton(template), skeleton(url));
+    if url == template {
+        return true;
+    }
+    // The format's extension after the template: a short run of letters and digits after a dot at
+    // the address's end, never a path or a query.
+    url.rsplit_once('.')
+        .is_some_and(|(stem, ext)| !ext.is_empty() && ext.len() <= 8 && ext.chars().all(|c| c.is_ascii_alphanumeric()) && stem == template)
 }
 
 #[cfg(test)]
@@ -459,6 +491,30 @@ mod tests {
             "tilesets": "https://h/c/tiles?f=json",
         });
         assert_eq!(added(&map, &[row], &[0]), [None]);
+    }
+
+    /// A tile layer under the listed layer's tileset list and tile matrix set but in another path
+    /// (a layer added by hand) doesn't follow the advertised template: it is left alone.
+    #[test]
+    fn a_hand_added_tile_in_another_path_is_left_alone() {
+        let map = tiles(&["https://h/c/tiles/WebMercatorQuad/custom/{z}/{y}/{x}.png"]);
+        let row = json!({
+            "offer": {"type": "tiles", "url": "https://h/c/tiles/WebMercatorQuad/{z}/{y}/{x}"},
+            "tilesets": "https://h/c/tiles?f=json",
+        });
+        assert_eq!(added(&map, &[row], &[0]), [None]);
+    }
+
+    /// The tile's format extension after the advertised template (a template without one) doesn't
+    /// stop its row from claiming it.
+    #[test]
+    fn a_tiles_format_extension_follows_the_advertised_template() {
+        let map = tiles(&["https://h/c/tiles/WebMercatorQuad/{z}/{y}/{x}.png"]);
+        let row = json!({
+            "offer": {"type": "tiles", "url": "https://h/c/tiles/WebMercatorQuad/{z}/{y}/{x}"},
+            "tilesets": "https://h/c/tiles?f=json",
+        });
+        assert_eq!(added(&map, &[row], &[0]), [Some(("map.removeTiles", json!({"index": 0})))]);
     }
 
     /// A project saved and reopened keeps the tileset's addresses without their keys: the OGC API

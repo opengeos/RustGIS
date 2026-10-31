@@ -2171,7 +2171,19 @@ mod tests {
         let mut app = RustGisApp::with_sample();
         app.run("map.projection", json!({"type": "robinson"})).unwrap();
         app.run("ui.dialog", json!({"name": "coordinateSystem"})).unwrap();
-        let mut h = app_harness(app);
+        let mut fonts = false;
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(1200.0, 900.0)).build_ui_state(
+            move |ui, app: &mut RustGisApp| {
+                if !fonts {
+                    crate::theme::install_fonts(ui.ctx(), &[], None);
+                    fonts = true;
+                    return;
+                }
+                let ctx = ui.ctx().clone();
+                super::show(app, &ctx);
+            },
+            app,
+        );
         h.run_steps(3);
         // A world preset takes only its meridian.
         assert!(h.query_by_role_and_label(Role::SpinButton, "First standard parallel").is_none());
