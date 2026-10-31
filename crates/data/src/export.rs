@@ -87,20 +87,20 @@ fn write_chunks_in(src: &dyn FeatureSource, layer: &Dataset, path: &Path, crs: C
             let mut w = GeoJsonWriter::new(out, &layer.name, &layer.fields)?;
             feed(&mut |features| w.write(features))?;
             w.finish()?;
-            Ok(0)
+            Ok::<_, DataError>(0)
         })?,
         "csv" => write_atomic_with(path, |out| {
             let mut w = CsvWriter::new(out, &layer.fields, geometry_type)?;
             feed(&mut |features| w.write(features))?;
             w.finish()?;
-            Ok(0)
+            Ok::<_, DataError>(0)
         })?,
         "fgb" => write_atomic_with(path, |out| {
             crate::source::fgb::write_features(&layer.name, geometry_type, &layer.fields, crs, out, &mut feed)
         })?,
         _ => write_atomic_with(path, |out| {
             crate::source::parquet::write_features(geometry_type, &layer.fields, out, &mut feed)?;
-            Ok(0)
+            Ok::<_, DataError>(0)
         })?,
     };
     Ok(Exported { written: total.saturating_sub(left_out), left_out })

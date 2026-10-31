@@ -110,10 +110,13 @@ _GeoLibre: docs/features.md › Map workspace, Rendering engines and 3D globe; d
 _GeoLibre: docs/features.md › Layers, styling, and labels; docs/user-guide/styling.md_
 
 - [x] **Layer groups**.
-- [ ] **Rule-based and expression renderers**: nested rules with scale ranges. Missing; display
-  filters are per-scale SQL only (_Roadmap: expressions and cartography_).
-- [ ] **Heatmap and point-clustering renderers**. Partial: hexagon/square aggregation (_Roadmap:
-  expressions and cartography_).
+- [ ] **Rule-based and expression renderers**: nested rules with scale ranges. Partial: a symbol's
+  size, colours, outline width and marker angle by expression (Symbology › By Expression,
+  `layer.symbolBy`); display filters are per-scale clauses; rule renderers are missing
+  (_Roadmap: expressions and cartography_).
+- [ ] **Heatmap and point-clustering renderers**. Partial: hexagon/square aggregation; kernel density
+  is implemented as an analysis tool, while dynamic heatmap and point-clustering renderers remain outstanding
+  (_Roadmap: expressions and cartography_).
 - [ ] **More classification methods**: standard deviation, geometric interval, manual breaks.
   Partial: Jenks, equal interval, quantile (_Roadmap: fixes and quick wins_).
 - [ ] **Symbol library**: a marker library, custom SVG/PNG markers, fill patterns, pie/donut/bar
@@ -144,8 +147,9 @@ _GeoLibre: docs/features.md › Attribute data and expressions; docs/arcgis-edit
 - [ ] **Write-back to sources**: GeoPackage, GeoJSON, PostGIS, SQL Server, ArcGIS FeatureService.
   Missing; edits stay in the project (_Roadmap: data at the source_ for GeoPackage and PostGIS).
 - [ ] **Expression builder and engine**: one engine shared by filters, labels, styles and Calculate
-  Field, with a function reference. Partial: Calculate Field is `field op field/number`
-  (_Roadmap: expressions and cartography_).
+  Field, with a function reference. Partial: one expression language serves queries, filters,
+  label classes, attribute rules and Calculate Field (docs: Expressions); symbols and labels by
+  expression and a builder are missing (_Roadmap: expressions and cartography_).
 - [ ] **Virtual fields and persistent attribute joins**. Missing; relationships exist (_Roadmap:
   data at the source_; a one-off join field tool under solid ground).
 - [ ] **Attribute form designer**: widgets, constraints, conditional visibility. Partial: domains,

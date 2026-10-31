@@ -715,8 +715,7 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         && app.session.map().view.effects.is_none()
         && app.session.map().view.color_vision == rustgis_engine::map::view::ColorVision::Normal;
     let mut draped = if globe_view && moving {
-        let key = crate::globe_drape::DrapeKey { rev: app.session.revision, sources: rustgis_engine::map::source::generation() };
-        let tiles = if fetches_tiles(app.session.map()) { rustgis_engine::render::rustgis_tiles::cache::generation() } else { 0 };
+        let (key, tiles) = drape_state(app);
         app.map.drape.prepare(ui.ctx(), app.session.map_mut(), key, tiles, w, h, ppp, time)
     } else {
         if !globe_view {
@@ -726,13 +725,16 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     };
     // A tilted map moving on the CPU: its bands drawn flat once are laid over the tilted ground
     // (see `tilt_drape`), or failing that it redraws every frame. On the GPU it re-projects.
-    let tilted = !globe_view && cam.pitch != 0.0 && !gpu_ok;
+    // So does a flat map turning (to a bearing other than its frame's): drawn again for every
+    // step of a turn, on the UI thread, a busy map (a tiled overlay) took over a hundred
+    // milliseconds a frame. Its drape is one band round the view; panning it shifts its frame.
+    let turned = !globe_view && cam.pitch == 0.0 && cam.bearing != 0.0 && !gpu_ok;
+    let tilted = !globe_view && (cam.pitch != 0.0 || (turned && app.map.tex_camera.bearing != cam.bearing)) && !gpu_ok;
     let tilt_draped = if tilted && moving {
-        let key = crate::globe_drape::DrapeKey { rev: app.session.revision, sources: rustgis_engine::map::source::generation() };
-        let tiles = if fetches_tiles(app.session.map()) { rustgis_engine::render::rustgis_tiles::cache::generation() } else { 0 };
+        let (key, tiles) = drape_state(app);
         app.map.tilt_drape.prepare(ui.ctx(), app.session.map_mut(), key, tiles, w, h, ppp, time)
     } else {
-        if !tilted {
+        if !tilted && !turned {
             app.map.tilt_drape.clear();
         }
         false
@@ -900,8 +902,7 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         let shown = (app.map.texture.is_some() || app.map.gpu_frame.is_some())
             && app.map.key.is_some_and(|k| same_view(Key { draft: false, ..k }, key));
         if !shown {
-            let drape_key = crate::globe_drape::DrapeKey { rev: app.session.revision, sources: rustgis_engine::map::source::generation() };
-            let tiles = if fetches_tiles(app.session.map()) { rustgis_engine::render::rustgis_tiles::cache::generation() } else { 0 };
+            let (drape_key, tiles) = drape_state(app);
             if globe_view {
                 app.map.gpu_frame = None;
                 draped = app.map.drape.prepare(ui.ctx(), app.session.map_mut(), drape_key, tiles, w, h, ppp, time);
@@ -920,6 +921,13 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                 }
             }
         }
+    }
+    // At rest, a turned map's drape is kept up to date off the UI thread: the next turn starts
+    // on it.
+    // (Not while an animation plays: the view moves every frame, past any drape drawn.)
+    if turned && !moving && app.ws.playing.is_none() {
+        let (drape_key, tiles) = drape_state(app);
+        app.map.tilt_drape.warm(ui.ctx(), app.session.map_mut(), drape_key, tiles, w, h, ppp, time);
     }
     let interacting = moving && (!globe_view || draped) && (!tilted || tilt_draped);
     if (globe_view || tilted) && moving {
@@ -1184,12 +1192,23 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             }
         }
     } else if (tilt_draped || (app.map.gpu_frame.is_some() && !app.map.label_map.is_empty())) && placed != cam {
-        // On a moving tilted (or, on the GPU, turned) map each label stays on its ground; under
-        // the sky it drops out.
-        let sky = cam.sky_y(h).unwrap_or(0.0);
+        // On a moving tilted (or, on the GPU, turned) map each label stays on its ground, turned
+        // with it; under the sky (a tilted map's) it drops out.
+        let sky = cam.sky_y(h);
+        let (fw, fh) = app.map.tex_size;
+        let at = |x: f32, y: f32| {
+            let m = placed.try_to_map(f64::from(x), f64::from(y), fw, fh)?;
+            cam.try_to_screen(m, w, h).map(|(x, y)| (x as f32, y as f32))
+        };
+        let turns = placed.bearing != cam.bearing || placed.pitch != cam.pitch;
         for (l, m) in app.map.labels.iter().zip(&app.map.label_map) {
-            if let Some((x, y)) = m.and_then(|m| cam.try_to_screen(m, w, h)).filter(|s| s.1 > sky) {
-                draw_label(&painter, l, rect.min + vec2(x as f32, y as f32));
+            if let Some((x, y)) = m.and_then(|m| cam.try_to_screen(m, w, h)).filter(|s| sky.is_none_or(|sky| s.1 > sky)) {
+                let moved = turns.then(|| {
+                    let mut l = l.clone();
+                    rustgis_engine::render::turn_label(&mut l, &at);
+                    l
+                });
+                draw_label(&painter, moved.as_ref().unwrap_or(l), rect.min + vec2(x as f32, y as f32));
             }
         }
     } else {
@@ -1203,6 +1222,14 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     }
     overlays(app, ui, &painter, rect, &t);
     popup(app, ui, rect);
+}
+
+/// What a drape of the map shows besides the view (see `DrapeKey`), and the tiles come so far (0
+/// for a map that fetches none): a change of either draws it again.
+fn drape_state(app: &RustGisApp) -> (crate::globe_drape::DrapeKey, u64) {
+    let key = crate::globe_drape::DrapeKey { rev: app.session.revision, sources: rustgis_engine::map::source::generation() };
+    let tiles = if fetches_tiles(app.session.map()) { rustgis_engine::render::rustgis_tiles::cache::generation() } else { 0 };
+    (key, tiles)
 }
 
 /// Whether the map draws from web tiles (its tile layers, or elevation tiles for its terrain):
@@ -1233,10 +1260,9 @@ fn show_gpu_frame(app: &mut RustGisApp, scene: rustgis_engine::render::gpu_scene
     app.map.labels = scene.labels;
     app.map.labels.splice(0..0, scene.unplaced);
     app.map.label_lonlat.clear();
-    app.map.label_map = match cam.bearing != 0.0 || cam.pitch != 0.0 {
-        true => app.map.labels.iter().map(|l| cam.try_to_map(l.x as f64, l.y as f64, view.width, view.height)).collect(),
-        false => Vec::new(),
-    };
+    // Where its labels stand: a turn starting from a north-up frame is draped too (on the CPU,
+    // when the GPU doesn't turn the map), and they stay on their ground through it.
+    app.map.label_map = app.map.labels.iter().map(|l| cam.try_to_map(l.x as f64, l.y as f64, view.width, view.height)).collect();
     app.map.label_camera = cam;
     app.map.attribution = scene.attribution;
     app.map.last_render = time;
@@ -1283,8 +1309,10 @@ fn show_frame(
             }
             false => Vec::new(),
         };
-        app.map.label_map = match !globe_view && cam.pitch != 0.0 {
-            true => app.map.labels.iter().map(|l| cam.try_to_map(l.x as f64, l.y as f64, w, h)).collect(),
+        // Where its labels stand while its drape moves (a north-up frame's too: a turn starting
+        // from it is draped).
+        app.map.label_map = match !globe_view {
+            true => app.map.labels.iter().map(|l| cam.try_to_map(l.x as f64, l.y as f64, view.width, view.height)).collect(),
             false => Vec::new(),
         };
         app.map.label_camera = cam;
