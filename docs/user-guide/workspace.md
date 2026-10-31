@@ -301,7 +301,8 @@ The version 1 file format is:
 ```
 
 Conflicts count distinct keys whose final imported assignment replaces a different current binding.
-Unknown-command counts cover retained imported assignments, excluding removals and overwritten records.
+Unknown-command counts cover distinct unknown command IDs among retained imported assignments, excluding
+removals and overwritten records.
 Records apply in file order; the last assignment to a key wins. A removal removes only the named
 command and parameters at that key, so a different user binding is preserved.
 
