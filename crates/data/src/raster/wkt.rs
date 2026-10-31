@@ -1835,14 +1835,15 @@ mod tests {
             let tolerance = if crs.is_geographic() { 1e-8 } else { 0.01 };
             assert!((a.x - b.x).abs() < tolerance && (a.y - b.y).abs() < tolerance, "EPSG:{code}: {a:?} {b:?}\n{bare}");
         }
-        // Each new method against PROJ (pyproj 3.8.0, EPSG:4326 to the code): the round trip
-        // above can't catch a wrong formula, both sides being the same code.
+        // Each new method against PROJ (pyproj 3.8.0 on the system's own PROJ definition, from
+        // EPSG:4326): the round trip above can't catch a wrong formula, both sides being the same
+        // code, and the same definition keeps the bundled datum shift in the comparison.
         let checked = [
             (2057u16, (58.5, 23.6), (1_260_860.830, 2_623_439.977)),
             (3078, (-84.6, 46.47), (607_329.382, 658_531.220)),
             (8857, (10.0, 40.0), (849_749.831, 4_921_020.062)),
             (3068, (13.4, 52.4), (24_656.900, 8_104.416)),
-            (29100, (-54.0, -10.0), (5_000_000.000, 8_894_141.426)),
+            (29100, (-54.0, -10.0), (5_000_045.526, 8_894_187.489)),
         ];
         for (code, (lon, lat), (x, y)) in checked {
             let m = Crs::from_epsg(u32::from(code)).unwrap().transformer().unwrap().from_lonlat(Coord::new(lon, lat)).unwrap();
