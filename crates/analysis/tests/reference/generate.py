@@ -515,11 +515,11 @@ def main():
     case("buffer lines", "buffer", {"input": "roads", "distance": 2000, "units": "Meters"},
          {"features": buffered("buffer_roads_2km", ROADS, 2000.0), "tolerance": tol}, known)
     case("buffer a long line", "buffer", {"input": "long", "distance": 5, "units": "Kilometers"},
-         {"features": buffered("buffer_long_5km", LONG, 5000.0), "tolerance": tol}, known)
+         {"features": buffered("buffer_long_5km", LONG, 5000.0), "tolerance": tol})
     case("buffer polygons", "buffer", {"input": "parcels", "distance": 1, "units": "Kilometers"},
-         {"features": buffered("buffer_parcels_1km", parcels, 1000.0), "tolerance": tol}, known)
+         {"features": buffered("buffer_parcels_1km", parcels, 1000.0), "tolerance": tol})
     case("buffer polygons inward", "buffer", {"input": "parcels", "distance": -2, "units": "Kilometers"},
-         {"features": buffered("buffer_parcels_-2km", parcels, -2000.0), "tolerance": tol}, known)
+         {"features": buffered("buffer_parcels_-2km", parcels, -2000.0), "tolerance": tol})
 
     meta = {
         "about": "Answers from GEOS; regenerate with `uv run generate.py` (see its header).",
