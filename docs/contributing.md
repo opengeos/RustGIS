@@ -38,7 +38,7 @@ Other workspace tasks:
 | Task | Purpose |
 | --- | --- |
 | `cargo xtask layers` | Check crate dependency direction and keep UI dependencies out of lower layers |
-| `cargo xtask notices` | Regenerate the shipped `THIRD-PARTY-LICENSES.txt` files after changing dependencies; requires `cargo-about` |
+| `cargo xtask notices` | Regenerate the shipped `THIRD-PARTY-LICENSES.txt` files after changing dependencies, or after adding code or data from another project to `INCLUDED` in `xtask/src/notices.rs` (with its licence text in `third-party/`); requires `cargo-about` |
 | `cargo xtask notices --check` | Check the notices without writing them; stale notices warn in CI but block releases |
 | `cargo xtask web-pwa <dir>` | Generate the service worker in a Trunk build output directory, such as `dist/web` |
 
@@ -207,6 +207,15 @@ in `tests/support/ogc.rs` builds OGC landing pages, collection lists and GeoJSON
 test similarly generates its KML, KMZ, CSV and GeoJSON inputs. These run automatically with
 `cargo test --workspace --locked` and `cargo xtask ci`, without a separate setup step or a
 public service. Extend these generators when adding cases.
+
+`crates/engine/tests/workflows.rs` runs everyday jobs from start to finish: join, overlay,
+summarise, map, save, reopen and export, and the same saved job twice. Its real-data case,
+Shelby County's census tracts checked against the areas the Census Bureau publishes, is
+`#[ignore]`d: the nightly build downloads the public-domain files, pinned by checksum, and runs it
+with `RUSTGIS_WORKFLOW_DATA` naming their folder (the list of files is in `nightly.yml`). To run
+it locally, download the files listed there into one folder, check them with `sha256sum` against
+the checksums beside them, and run
+`RUSTGIS_WORKFLOW_DATA=<folder> cargo test -p rustgis-engine --test workflows -- --ignored`.
 
 ## Documentation
 
