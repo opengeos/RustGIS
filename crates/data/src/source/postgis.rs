@@ -761,7 +761,7 @@ impl PostgisSource {
             }
         }
         let lonlat = if srid == 0 || srid == 4326 { native.clone() } else { format!("ST_Transform({native}, 4326)") };
-        // Curves become lines; Z and M are dropped by the reader.
+        // Curves become lines; Z and M are dropped by the reader (opening notes them, below).
         let wkb = format!("ST_AsBinary(ST_CurveToLine({lonlat}))");
 
         // The columns: a single integer primary key gives the ids.
@@ -837,6 +837,7 @@ impl PostgisSource {
                 crs: if srid == 0 { "EPSG:4326".into() } else { format!("EPSG:{srid}") },
                 indexed: false,
                 notes,
+                zm_dropped: false,
             },
             conn,
             table,
@@ -848,6 +849,24 @@ impl PostgisSource {
             select,
             reproject,
         };
+        // A column declared with Z or M, or (an unconstrained one) Z or M in the first rows this layer
+        // reads. A check that fails is said too.
+        let sql = format!(
+            "SELECT COALESCE((SELECT coord_dimension FROM geometry_columns WHERE f_table_schema = $1 AND f_table_name = $2 AND f_geometry_column = $3 \
+             UNION ALL SELECT coord_dimension FROM geography_columns WHERE f_table_schema = $1 AND f_table_name = $2 AND f_geography_column = $3 \
+             LIMIT 1), 2) > 2 \
+             OR COALESCE((SELECT bool_or(ST_NDims(g::geometry) > 2) FROM (SELECT {} AS g FROM {} WHERE {} LIMIT 16) AS s), false)",
+            src.table.geom(),
+            src.table.sql_from(),
+            src.filter(false)
+        );
+        let t = &src.table;
+        match src.conn.with(|c| c.query_one(sql.as_str(), &[&t.schema, &t.name, &t.column])).ok().and_then(|r| r.try_get::<_, bool>(0).ok())
+        {
+            Some(true) => src.info.drop_zm(),
+            Some(false) => {}
+            None => src.info.notes.push("couldn't tell whether it has Z or M values, which RustGIS doesn't keep".into()),
+        }
         src.info.indexed = src.has_index();
         src.info.count = src.count_rows();
         src.info.extent = src.extent();
@@ -1427,6 +1446,7 @@ mod tests {
                 crs: "EPSG:4326".into(),
                 indexed: false,
                 notes: Vec::new(),
+                zm_dropped: false,
             },
             conn: Arc::new(Conn { config: postgres::Config::new(), tls: Tls::Disable, writable: false, client: Mutex::new(None) }),
             table: Table {

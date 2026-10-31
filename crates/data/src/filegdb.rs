@@ -309,6 +309,10 @@ fn read_table(name: &str, t: &[u8], x: &[u8], wkid: Option<u32>) -> Result<Optio
         return Ok(None);
     }
     let mut ds = Dataset::new(name, layer_type, fields);
+    // A multipatch's heights are kept as fields and noted below; its measures aren't.
+    if table.geometry.is_some() && (table.has_m || (table.has_z && table.shape != Shape::Multipatch)) {
+        ds.drop_zm(&mut report);
+    }
     ds.crs = crs;
     let geometry_at = table.fields.iter().position(|f| f.kind == Kind::Geometry);
     let (mut curves, mut wall_hulls, mut unmerged, mut unprojected) = (0usize, 0usize, 0usize, 0usize);
@@ -573,6 +577,10 @@ struct Table {
     utf8: bool,
     /// How many fields have a bit in each row's null flags.
     nullable: usize,
+    /// The geometries carry Z values (which reading drops, but a multipatch keeps as fields).
+    has_z: bool,
+    /// The geometries carry M values (which reading drops).
+    has_m: bool,
 }
 
 /// One field's value in a row: a value, or a geometry's bytes.
@@ -582,6 +590,8 @@ struct Cell<'a> {
 }
 
 impl Table {
+    /// Reads a table's header: its fields, geometry kind and definition, and whether geometries
+    /// carry Z or M values.
     fn parse(t: &[u8]) -> Result<Table> {
         let bad = |what: &str| DataError::Format(format!("unreadable table ({what})"));
         let mut c = Cur::new(t, 32);
@@ -692,7 +702,7 @@ impl Table {
                 nullable += 1;
             }
         }
-        Ok(Table { fields, geometry, shape, utf8: flags & 0x100 != 0, nullable })
+        Ok(Table { fields, geometry, shape, utf8: flags & 0x100 != 0, nullable, has_z, has_m })
     }
 
     fn field(&self, name: &str) -> Option<usize> {

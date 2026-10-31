@@ -12,7 +12,7 @@ use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
 use super::{Batch, FeatureSource, Reproject, Request, SourceInfo, clamp_limit, stride};
-use crate::io::{FeatureSink, Schema, declared_crs, geojson_attrs, geojson_geometry, geometry_to_lonlat};
+use crate::io::{FeatureSink, Schema, declared_crs, geojson_attrs, geojson_geometry, geojson_has_z, geometry_to_lonlat};
 use crate::{DataError, Feature, GeometryType, Result};
 use rustgis_geom::Extent;
 use serde_json::Value as Json;
@@ -59,6 +59,8 @@ struct Scan {
     /// Points, lines and polygons seen.
     kinds: [usize; 3],
     skipped: usize,
+    /// A geometry had heights, which reading drops.
+    zm: bool,
 }
 
 impl Scan {
@@ -83,6 +85,8 @@ impl Scan {
         };
         let b = match &geom {
             Some(g) => {
+                // Only a geometry kept counts.
+                self.zm |= geojson_has_z(f);
                 let e = g.extent();
                 self.extent = self.extent.union(&e);
                 if let Some(slot) = self.kinds.get_mut(kind_slot(g.kind())) {
@@ -181,7 +185,7 @@ impl GeoJsonSource {
             Some((1, _)) => GeometryType::Polyline,
             Some(_) => GeometryType::Polygon,
         };
-        let info = SourceInfo {
+        let mut info = SourceInfo {
             name: name.to_string(),
             format: "GeoJSON",
             geometry_type,
@@ -191,7 +195,11 @@ impl GeoJsonSource {
             crs: reproject.label(),
             indexed: false,
             notes,
+            zm_dropped: false,
         };
+        if scan.zm {
+            info.drop_zm();
+        }
         let unreadable = scan.skipped;
         Ok(GeoJsonSource { info, path: path.to_path_buf(), places: scan.places, boxes: scan.boxes, reproject, failed, unreadable })
     }
