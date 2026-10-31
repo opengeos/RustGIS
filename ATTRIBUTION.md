@@ -37,10 +37,11 @@ with the bundled `crs-definitions` Helmert definitions. The OSGB36, Amersfoort a
 reference coordinates use those same transformations.
 
 The GeoLibre tool suite ([geolibre-rust](https://github.com/opengeos/geolibre-rust), MIT, built
-on [whitebox-wasm](https://github.com/opengeos/whitebox-wasm), MIT) is not part of RustGIS: the
-desktop app and command line run its separately downloaded `geolibre` runner, and the web app
-loads its WebAssembly runner (the `geolibre-wasm` npm package, from jsDelivr) when asked. Its
-tool names, descriptions and categories come from the runner's manifests.
+on [whitebox-wasm](https://github.com/opengeos/whitebox-wasm), MIT OR Apache-2.0) is not part of
+RustGIS: the desktop app and command line run its separately downloaded `geolibre` runner, and
+the web app loads its WebAssembly runner (the `geolibre-wasm` npm package, from jsDelivr, which
+carries its own licence and third-party notices) when asked. Its tool names, descriptions and
+categories come from the runner's manifests.
 
 The scientific colour ramps (`crates/map/src/color/scientific.rs`) are sampled from published
 colour maps: Viridis, Plasma, Inferno and Magma by Stéfan van der Walt and Nathaniel Smith (CC0),
