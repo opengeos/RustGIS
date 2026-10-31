@@ -2131,6 +2131,7 @@ fn hostile_params_never_panic(shard: usize) {
             id,
             "project.save"
                 | "project.saveAs"
+                | "project.exportLog"
                 | "share.exportMap"
                 | "time.export"
                 | "share.exportLayer"
@@ -2434,14 +2435,19 @@ fn label_range_placement_lock_and_convert() {
     count(&mut s);
     assert!(s.map().label_lock.is_none());
     // Convert makes an annotation layer and turns the source's labels off; its labels stay on
-    // their points, even when the source's went round them (#1011).
+    // their points, even when the source's classes had the other places on (#1011: refused for
+    // polygons by labels.placement, but a project file may have it).
+    s.run("labels.class.add", &json!({"layer": "Countries", "name": "Big", "where": "pop_est > 100000000"})).unwrap();
     let countries = s.map().layer_by_name("Countries").unwrap().id;
-    s.map_mut().layer_mut(countries).unwrap().labels.default.other_positions = true;
+    let labels = &mut s.map_mut().layer_mut(countries).unwrap().labels;
+    labels.default.other_positions = true;
+    labels.classes.iter_mut().for_each(|c| c.other_positions = true);
     let r = s.run("labels.convert", &json!({"layer": "Countries"})).unwrap();
     assert!(r["annotations"].as_u64().unwrap() > 100);
     let a = s.map().layer_by_name("Countries Annotation").unwrap();
     assert!(a.labels.enabled && a.labels.default.field == "TEXT");
-    assert!(!a.labels.default.other_positions);
+    assert!(!a.labels.default.other_positions && !a.labels.classes.is_empty());
+    assert!(a.labels.classes.iter().all(|c| !c.other_positions), "every class's, not only Default's");
     assert!(!s.map().layer_by_name("Countries").unwrap().labels.enabled);
 }
 
@@ -2563,6 +2569,57 @@ fn labels_take_wrapping_and_a_repeat_along_lines() {
     assert_eq!(class(&reopened), class(&s));
 }
 
+/// A point label class tries the other places round its point when told to (#1011): alone it keeps
+/// the position, junk is refused (in it or in the position) and so is turning it on for lines and
+/// polygons, it undoes, the project keeps it, and turning it on or off while the labels are locked
+/// locks them again (the places they took no longer stand).
+#[test]
+fn labels_take_other_positions_round_points() {
+    use crate::render::View;
+    let mut s = world();
+    let class = |s: &Session| {
+        let c = &s.map().layer_by_name("Cities").unwrap().labels.default;
+        (c.other_positions, c.placement)
+    };
+    let placement = class(&s).1;
+    assert_eq!(class(&s), (false, placement));
+    s.run("labels.placement", &json!({"layer": "Cities", "otherPositions": true})).unwrap();
+    assert_eq!(class(&s), (true, placement), "alone it keeps the position");
+    s.run("edit.undo", &json!({})).unwrap();
+    assert!(!class(&s).0, "undoes");
+    for bad in [json!("yes"), json!(1), Value::Null] {
+        assert!(s.run("labels.placement", &json!({"layer": "Cities", "otherPositions": bad})).is_err(), "{bad}");
+    }
+    // A position that isn't a placement name is refused, not dropped for otherPositions; null is
+    // none.
+    for bad in [json!(123), json!(true), json!(["above"])] {
+        assert!(s.run("labels.placement", &json!({"layer": "Cities", "position": bad, "otherPositions": true})).is_err(), "{bad}");
+    }
+    assert!(!class(&s).0);
+    s.run("labels.placement", &json!({"layer": "Cities", "position": null, "otherPositions": false})).unwrap();
+    assert_eq!(class(&s), (false, placement), "null is no position");
+    // Only a point's label goes round it: on is refused for lines and polygons, off taken anywhere.
+    for layer in ["Rivers", "Countries"] {
+        assert!(s.run("labels.placement", &json!({"layer": layer, "otherPositions": true})).is_err(), "{layer}");
+        s.run("labels.placement", &json!({"layer": layer, "otherPositions": false})).unwrap();
+    }
+    s.run("labels.placement", &json!({"layer": "Cities", "otherPositions": true})).unwrap();
+    let text = serde_json::to_string(&s.project).unwrap();
+    assert!(Session::new(serde_json::from_str(&text).unwrap()).map().layer_by_name("Cities").unwrap().labels.default.other_positions);
+    s.run("labels.enable", &json!({"layer": "Cities", "on": true})).unwrap();
+    s.run("labels.lock", &json!({"on": true})).unwrap();
+    let v = View { width: 800.0, height: 600.0, pixels_per_point: 1.0, camera: s.map().camera, sky: false };
+    crate::render::render(s.map_mut(), &v).unwrap();
+    assert!(s.map().label_lock.is_some());
+    s.run("labels.placement", &json!({"layer": "Cities", "otherPositions": false})).unwrap();
+    assert!(s.map().label_lock.is_none(), "turned off: locked again");
+    s.run("labels.lock", &json!({"on": true})).unwrap();
+    crate::render::render(s.map_mut(), &v).unwrap();
+    assert!(s.map().label_lock.is_some());
+    s.run("labels.placement", &json!({"layer": "Cities", "otherPositions": true})).unwrap();
+    assert!(s.map().label_lock.is_none(), "turned on: locked again");
+}
+
 /// A label class takes an offset with its placement and a background with its text symbol; junk
 /// is refused, numbers kept within their ranges, and each change undoes.
 #[test]
@@ -2669,6 +2726,37 @@ fn a_change_to_where_point_labels_go_locks_them_again() {
     assert!(s.map().label_lock.is_some());
     s.run("style.apply", &json!({"layer": "Cities", "name": "Above"})).unwrap();
     assert!(s.map().label_lock.is_none(), "a style putting the labels elsewhere: locked again");
+}
+
+/// A lock names each label by its feature's id, not its row: deleting a feature (the rows after
+/// it move up) neither shows a label left out when the lock was taken nor hides one placed (#1046).
+#[test]
+fn locked_labels_stay_with_their_features_when_rows_move() {
+    use crate::render::View;
+    use rustgis_data::{Dataset, Field, FieldType, Geometry, GeometryType, Value as V};
+    let mut s = world();
+    // Three buoys on one spot of the South Atlantic: only the first one's label fits.
+    let mut d = Dataset::new("Buoys", GeometryType::Point, vec![Field::new("name", FieldType::Text)]);
+    for name in ["Alpha", "Beta", "Gamma"] {
+        d.push(Some(Geometry::Point(rustgis_geom::Coord::new(-20.0, -30.0))), vec![V::Text(name.into())]);
+    }
+    let id = s.map_mut().add_dataset(d);
+    s.run("labels.enable", &json!({"layer": "Buoys", "on": true})).unwrap();
+    let draw = |s: &mut Session| -> Vec<String> {
+        let v = View { width: 800.0, height: 600.0, pixels_per_point: 1.0, camera: s.map().camera, sky: false };
+        let labels = crate::render::render(s.map_mut(), &v).unwrap().labels;
+        labels.into_iter().map(|l| l.text).filter(|t| ["Alpha", "Beta", "Gamma"].contains(&t.as_str())).collect()
+    };
+    assert_eq!(draw(&mut s), ["Alpha"]);
+    s.run("labels.lock", &json!({"on": true})).unwrap();
+    assert_eq!(draw(&mut s), ["Alpha"]);
+    s.map_mut().layer_mut(id).unwrap().selection = vec![0];
+    s.run("edit.delete", &Value::Null).unwrap();
+    assert!(draw(&mut s).is_empty(), "Beta's label wasn't placed when the lock was taken");
+    s.run("labels.lock", &json!({"on": false})).unwrap();
+    assert_eq!(draw(&mut s), ["Beta"], "unlocked, Beta's fits");
+    s.run("labels.lock", &json!({"on": true})).unwrap();
+    assert_eq!(draw(&mut s), ["Beta"], "and is locked in turn");
 }
 
 /// A lock names each label by its class's place in the list: a change to the list (a class added,
@@ -6647,6 +6735,32 @@ fn plugin_edits_are_one_undo_step() {
     rustgis_plugins::unload("eng-edit");
 }
 
+/// A plugin's command the app runs leaves its downloads to the app, which fetches them off the
+/// frame (as the browser does): nothing waits, and nothing is an undo step until the data lands,
+/// with what the plugin asked (how a table's points are read) kept. Run another way (the command
+/// line, a script), the same command waits for the download and says how it went.
+#[test]
+fn plugin_downloads_are_left_to_the_app() {
+    let mut s = world();
+    plugin("eng-url", &["edit", "network"]);
+    let (undo, layers) = (s.undo.len(), s.map().layers.len());
+    // Nothing answers there: a download that waited fails.
+    let url = "http://127.0.0.1:9/places.csv";
+    let p = json!({"op": "layer.addUrl", "params": {"url": url, "name": "Places", "x": "lon", "y": "lat"}});
+    assert_eq!(s.run_leaving_downloads("plugin:eng-url/f", &p).unwrap(), json!({"pending": true, "url": url}));
+    assert_eq!((s.undo.len(), s.map().layers.len()), (undo, layers));
+    let asked = s.take_url_requests();
+    assert_eq!(asked.len(), 1);
+    assert_eq!((asked[0]["name"].as_str(), asked[0]["x"].as_str(), asked[0]["y"].as_str()), (Some("Places"), Some("lon"), Some("lat")));
+    assert!(s.run("plugin:eng-url/f", &p).is_err(), "run otherwise, it waits");
+    assert!(s.take_url_requests().is_empty());
+    // An edit run that way is an undo step still.
+    let p = json!({"op": "layer.rename", "params": {"layer": "Rivers", "name": "Streams"}});
+    s.run_leaving_downloads("plugin:eng-url/f", &p).unwrap();
+    assert_eq!(s.undo.len(), undo + 1);
+    rustgis_plugins::unload("eng-url");
+}
+
 #[test]
 fn plugin_panels_keep_their_state_between_calls() {
     let mut s = world();
@@ -7424,19 +7538,20 @@ fn presentations_and_notebooks() {
     // Trust left by an undone notebook doesn't pass to a file's notebook of the same name.
     s.run("notebook.new", &json!({"name": "Notebook"})).unwrap();
     s.run("edit.undo", &Value::Null).unwrap();
-    let text = json!({"nbformat": 4, "cells": [{"cell_type": "code", "source": cell}]}).to_string();
+    let text = json!({"nbformat": 4, "metadata": {"language_info": {"name": "rustgis"}}, "cells": [{"cell_type": "code", "source": cell}]})
+        .to_string();
     s.run("notebook.open", &json!({"text": text})).unwrap();
     let r = s.run("notebook.run", &json!({"notebook": "Notebook"})).unwrap();
     assert_eq!(r["error"], 0, "{r}");
     // Nor can it make a trusted notebook to run its lines later.
-    let text = json!({"nbformat": 4, "cells": [{"cell_type": "code", "source": "notebook.new {\"name\": \"Laundered\"}"}]}).to_string();
+    let text = json!({"nbformat": 4, "metadata": {"language_info": {"name": "rustgis"}}, "cells": [{"cell_type": "code", "source": "notebook.new {\"name\": \"Laundered\"}"}]}).to_string();
     s.run("notebook.open", &json!({"text": text})).unwrap();
     let opened = s.project.notebooks.last().unwrap().name.clone();
     let r = s.run("notebook.run", &json!({"notebook": opened})).unwrap();
     assert_eq!(r["error"], 0, "{r}");
     assert!(!s.project.notebooks.iter().any(|nb| nb.name == "Laundered"));
     // Nor borrow trust from a notebook whose name differs only by non-ASCII case.
-    let text = json!({"nbformat": 4, "metadata": {"title": "éa"}, "cells": [{"cell_type": "code", "source": cell}]}).to_string();
+    let text = json!({"nbformat": 4, "metadata": {"title": "éa", "language_info": {"name": "rustgis"}}, "cells": [{"cell_type": "code", "source": cell}]}).to_string();
     s.run("notebook.open", &json!({"text": text})).unwrap();
     s.run("notebook.new", &json!({"name": "Éa"})).unwrap();
     let r = s.run("notebook.run", &json!({"notebook": "éa"})).unwrap();
@@ -7480,6 +7595,175 @@ fn presentations_and_notebooks() {
     assert_eq!(p.notebooks.last().unwrap().name, format!("A {}", crate::project::MAX_ITEMS));
     assert!(t0.elapsed().as_secs() < 5);
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn jupyter_python_notebooks_survive_open_and_save() {
+    // A Python notebook as Jupyter writes it: kernelspec, cell ids, rich outputs, a raw cell.
+    let png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+    let original = json!({
+        "nbformat": 4, "nbformat_minor": 5,
+        "metadata": {
+            "kernelspec": {"display_name": "Python 3", "language": "python", "name": "python3"},
+            "language_info": {"name": "python", "version": "3.12.4"},
+            "widgets": {"state": {}}
+        },
+        "cells": [
+            {"cell_type": "markdown", "id": "intro", "metadata": {"tags": ["title"]}, "source": ["# Rivers\n", "A study."]},
+            {"cell_type": "code", "id": "load", "metadata": {"scrolled": true}, "execution_count": 3, "source": "import geopandas\n1 + 1",
+             "outputs": [
+                {"output_type": "stream", "name": "stdout", "text": ["loading\n"]},
+                {"output_type": "execute_result", "execution_count": 3, "metadata": {}, "data": {"text/plain": ["2"], "text/html": ["<b>2</b>"]}},
+                {"output_type": "display_data", "metadata": {}, "data": {"text/plain": "<Figure>", "image/png": png}}
+             ]},
+            {"cell_type": "code", "id": "boom", "metadata": {}, "execution_count": 4, "source": "1 / 0",
+             "outputs": [{"output_type": "error", "ename": "ZeroDivisionError", "evalue": "division by zero",
+                          "traceback": ["\u{1b}[0;31mZeroDivisionError\u{1b}[0m: division by zero"]}]},
+            {"cell_type": "raw", "id": "raw", "metadata": {"format": "text/x-rst"}, "source": ".. note:: raw"}
+        ]
+    });
+    let mut s = world();
+    s.run("notebook.open", &json!({"text": original.to_string()})).unwrap();
+    let nb = s.project.notebooks.last().unwrap().clone();
+    assert_eq!(nb.language(), Some("python"));
+    // Rich outputs read as text, with the image kept for the pane.
+    let out = nb.cells[1].output.as_deref().unwrap_or_default();
+    assert!(out.contains("loading") && out.contains('2') && out.contains("<Figure>"), "{out:?}");
+    assert!(!nb.cells[1].error);
+    assert_eq!(nb.cells[1].images(), vec![png]);
+    let err = nb.cells[2].output.as_deref().unwrap_or_default();
+    assert!(nb.cells[2].error && err.contains("ZeroDivisionError: division by zero") && !err.contains('\u{1b}'), "{err:?}");
+    // A stream after a result starts its own line; consecutive streams join.
+    let outputs = json!([
+        {"output_type": "execute_result", "data": {"text/plain": "2"}},
+        {"output_type": "stream", "name": "stdout", "text": "a"},
+        {"output_type": "stream", "name": "stdout", "text": "b"}
+    ]);
+    // A kernel known only by its name, or with a blank language, is still Python.
+    for meta in [json!({"kernelspec": {"name": "python3"}}), json!({"kernelspec": {"language": " "}, "language_info": {"name": "python"}})]
+    {
+        let text = json!({"nbformat": 4, "metadata": meta, "cells": [{"cell_type": "code", "source": "x", "outputs": outputs}]});
+        s.run("notebook.open", &json!({"text": text.to_string()})).unwrap();
+        let opened = s.project.notebooks.last().unwrap();
+        assert_eq!(opened.language(), Some("python"), "{meta}");
+        assert_eq!(opened.cells[0].output.as_deref(), Some("2\nab"));
+        s.run("notebook.remove", &json!({"notebook": s.project.notebooks.len() - 1})).unwrap();
+    }
+    // A notebook with more cells than RustGIS holds is refused rather than cut short.
+    let many = json!({"nbformat": 4, "cells": vec![json!({"cell_type": "markdown", "source": "x"}); 1001]});
+    let e = s.run("notebook.open", &json!({"text": many.to_string()})).unwrap_err();
+    assert!(e.contains("1001 cells"), "{e}");
+    // So is one too large in RustGIS's own format.
+    let many = json!({"name": "Big", "cells": vec![json!({"kind": "markdown", "source": "x"}); 1001]});
+    assert!(s.run("notebook.open", &json!({"text": many.to_string()})).unwrap_err().contains("1001 cells"));
+    // Nor one with a cell that isn't an object.
+    let odd = json!({"nbformat": 4, "cells": [{"cell_type": "markdown", "source": "a"}, 7]});
+    assert!(s.run("notebook.open", &json!({"text": odd.to_string()})).is_err());
+    // Nor is an nbformat 3 notebook, whose cells are in worksheets.
+    let v3 = json!({"nbformat": 3, "worksheets": [{"cells": [{"cell_type": "code", "input": "1"}]}]});
+    assert!(s.run("notebook.open", &json!({"text": v3.to_string()})).unwrap_err().contains("nbformat 3"));
+    // Nor is a cell longer than RustGIS keeps.
+    let long = json!({"nbformat": 4, "cells": [{"cell_type": "code", "source": "x".repeat(200_001)}]});
+    assert!(s.run("notebook.open", &json!({"text": long.to_string()})).unwrap_err().contains("cell 1"));
+    let long = json!({"name": "Long", "cells": [{"kind": "code", "source": "x".repeat(200_001)}]});
+    assert!(s.run("notebook.open", &json!({"text": long.to_string()})).unwrap_err().contains("cell 1"));
+    // A cell that removes an earlier one writes its result to itself, not to the cell that moved
+    // into its place.
+    s.run("notebook.new", &json!({"name": "Shift"})).unwrap();
+    s.run("notebook.editCell", &json!({"cell": 1, "source": "notebook.removeCell {\"notebook\": \"Shift\", \"cell\": 0}"})).unwrap();
+    s.run("notebook.addCell", &json!({"source": "map.goToXY {\"lon\": 1, \"lat\": 1}"})).unwrap();
+    s.run("notebook.run", &json!({"cell": 1})).unwrap();
+    let shift = s.project.notebooks.last().unwrap();
+    assert_eq!(shift.cells.len(), 2);
+    assert_eq!(shift.cells[1].output, None, "the cell that moved up keeps its own (empty) output");
+    assert!(shift.cells[0].output.as_deref().is_some_and(|o| o.starts_with("notebook.removeCell")), "{:?}", shift.cells[0].output);
+    s.run("notebook.remove", &json!({"notebook": s.project.notebooks.len() - 1})).unwrap();
+    // Junk where a Jupyter notebook has its parts is skipped or refused, never a panic.
+    for junk in [
+        json!({"nbformat": 4, "cells": 5}),
+        json!({"nbformat": 4, "cells": [1, "x", null, {"cell_type": 7, "source": {"a": 1}, "outputs": "no"}]}),
+        json!({"nbformat": "4", "nbformat_minor": "5", "metadata": "x", "cells": [{"cell_type": "code", "outputs": [1, {"output_type": "error", "traceback": [1, null]}, {"output_type": "display_data", "data": 3}]}]}),
+        json!({"nbformat": 4, "metadata": {"kernelspec": 1, "language_info": [1]}, "cells": [{"cell_type": "code", "id": 9, "outputs": [{"data": {"image/png": [1, 2]}}]}]}),
+    ] {
+        if s.run("notebook.open", &json!({"text": junk.to_string()})).is_ok() {
+            let nb = s.project.notebooks.last().unwrap();
+            let _ = (nb.language_label(), nb.cells.iter().map(crate::cmd::notebook::Cell::images).count());
+            let i = s.project.notebooks.len() - 1;
+            assert!(crate::cmd::notebook::notebook_file(&s, i, true).is_ok(), "{junk}");
+            s.run("notebook.remove", &json!({"notebook": i})).unwrap();
+        }
+    }
+    // A command cell from Jupyter that runs here replaces its Jupyter outputs with the result.
+    let cmds = json!({"nbformat": 4, "nbformat_minor": 5, "metadata": {"language_info": {"name": "rustgis"}}, "cells": [
+        {"cell_type": "code", "id": "go", "metadata": {}, "execution_count": 7, "source": "map.goToXY {\"lon\": 3, \"lat\": 3}",
+         "outputs": [{"output_type": "stream", "name": "stdout", "text": "old\n"}]}]});
+    s.run("notebook.open", &json!({"text": cmds.to_string()})).unwrap();
+    s.run("notebook.run", &json!({"cell": 0})).unwrap();
+    let i = s.project.notebooks.len() - 1;
+    let saved: Value = serde_json::from_slice(&crate::cmd::notebook::notebook_file(&s, i, true).unwrap()).unwrap();
+    let cell = &saved["cells"][0];
+    assert_eq!(cell["id"], "go");
+    assert_eq!(cell["execution_count"], Value::Null);
+    let text = crate::cmd::notebook::jupyter_text(&cell["outputs"][0]["text"]);
+    assert!(text.starts_with("map.goToXY") && !text.contains("old"), "{text}");
+    s.run("notebook.remove", &json!({"notebook": i})).unwrap();
+    // A Jupyter notebook that names no language isn't run as commands either.
+    let bare = json!({"nbformat": 4, "cells": [{"cell_type": "code", "source": "map.goToXY {\"lon\": 9, \"lat\": 9}"}]});
+    s.run("notebook.open", &json!({"text": bare.to_string()})).unwrap();
+    assert_eq!(s.project.notebooks.last().unwrap().language(), Some("code"));
+    // A language from the file is kept short when shown.
+    let long = json!({"nbformat": 4, "metadata": {"kernelspec": {"language": "q".repeat(1000)}}, "cells": []});
+    s.run("notebook.open", &json!({"text": long.to_string()})).unwrap();
+    assert_eq!(s.project.notebooks.last().unwrap().language_label().map(|l| l.chars().count()), Some(32));
+    s.run("notebook.remove", &json!({"notebook": s.project.notebooks.len() - 1})).unwrap();
+    s.run("notebook.activate", &json!({"notebook": s.project.notebooks.len() - 1})).unwrap();
+    assert_eq!(s.run("notebook.run", &Value::Null).unwrap()["skipped"], 1);
+    s.run("notebook.remove", &json!({"notebook": s.project.notebooks.len() - 1})).unwrap();
+    s.run("notebook.activate", &json!({"notebook": nb.name.as_str()})).unwrap();
+    // Python cells aren't run as commands: running them all skips them, one alone says why.
+    let r = s.run("notebook.run", &Value::Null).unwrap();
+    assert_eq!(r["ran"], 0);
+    assert_eq!(r["skipped"], 2);
+    let e = s.run("notebook.run", &json!({"cell": 1})).unwrap_err();
+    assert!(e.contains("Python"), "{e}");
+    assert_eq!(s.project.notebooks.last().unwrap(), &nb, "skipped cells keep their outputs");
+    // Saving keeps the kernel, metadata, ids, raw cells and every output, so Jupyter can run it.
+    let dir = std::env::temp_dir().join(format!("rustgis-jupyter-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("rivers.ipynb");
+    s.run("notebook.save", &json!({"path": path.to_str().unwrap()})).unwrap();
+    let saved: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(saved["nbformat_minor"], 5);
+    for key in ["kernelspec", "language_info", "widgets"] {
+        assert_eq!(saved["metadata"][key], original["metadata"][key], "{key}");
+    }
+    let (sc, oc) = (saved["cells"].as_array().unwrap(), original["cells"].as_array().unwrap());
+    assert_eq!(sc.len(), oc.len());
+    for (a, b) in sc.iter().zip(oc) {
+        for key in ["cell_type", "id", "metadata", "outputs", "execution_count"] {
+            assert_eq!(a[key], b[key], "{key} of cell {}", b["id"]);
+        }
+        assert_eq!(crate::cmd::notebook::jupyter_text(&a["source"]), crate::cmd::notebook::jupyter_text(&b["source"]));
+    }
+    // An edited cell keeps its outputs; a new cell gets a fresh, unique id.
+    s.run("notebook.editCell", &json!({"cell": 1, "source": "1 + 2"})).unwrap();
+    s.run("notebook.addCell", &json!({"source": "print('hi')"})).unwrap();
+    s.run("notebook.save", &json!({"path": path.to_str().unwrap()})).unwrap();
+    let saved: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(saved["cells"][1]["outputs"], original["cells"][1]["outputs"]);
+    let id = saved["cells"][4]["id"].as_str().unwrap();
+    assert!(!id.is_empty() && !["intro", "load", "boom", "raw"].contains(&id), "{id}");
+    assert_eq!(saved["cells"][4]["outputs"], json!([]));
+    // A RustGIS command notebook saved as Jupyter still opens as commands.
+    s.run("notebook.new", &json!({"name": "Commands"})).unwrap();
+    s.run("notebook.save", &json!({"path": path.to_str().unwrap()})).unwrap();
+    s.run("notebook.open", &json!({"path": path.to_str().unwrap()})).unwrap();
+    assert_eq!(s.project.notebooks.last().unwrap().language(), None);
+    // And a notebook kept in a project keeps its Jupyter details.
+    let i = s.project.notebooks.iter().position(|n| n.name == nb.name).unwrap();
+    let back: crate::cmd::notebook::Notebook = serde_json::from_value(serde_json::to_value(&s.project.notebooks[i]).unwrap()).unwrap();
+    assert_eq!(back.language(), Some("python"));
+    std::fs::remove_dir_all(&dir).ok();
 }
 
 /// A three-band raster: water-like pixels on the left half, field-like on the right.
@@ -9048,7 +9332,7 @@ fn jpeg2000_from_a_web_address() {
 }
 
 /// Where a command may not download itself (the browser), `layer.addUrl` leaves its request for
-/// the front end: once per address, a few at a time (the next is refused, never one silently
+/// the front end: once per request, a few at a time (the next is refused, never one silently
 /// dropped after it was promised), and taken once.
 #[test]
 fn url_requests_wait_for_the_front_end() {
@@ -9057,10 +9341,13 @@ fn url_requests_wait_for_the_front_end() {
     assert_eq!(s.request_url(&p), Ok(json!({"pending": true, "url": "https://x.org/a.geojson"})));
     assert!(s.request_url(&p).is_ok());
     assert!(s.request_url(&json!({"url": "https://x.org/b.geojson"})).is_ok());
+    // The same address read another way is another layer.
+    assert!(s.request_url(&json!({"url": "https://x.org/a.geojson", "name": "A2"})).is_ok());
     let taken = s.take_url_requests();
-    assert_eq!(taken.len(), 2, "the same address once");
+    assert_eq!(taken.len(), 3, "the same request once");
     assert_eq!((taken[0]["name"].as_str(), taken[0]["zoom"].as_bool()), (Some("A"), Some(true)));
     assert_eq!(taken[1]["url"], "https://x.org/b.geojson");
+    assert_eq!((taken[2]["url"].as_str(), taken[2]["name"].as_str()), (Some("https://x.org/a.geojson"), Some("A2")));
     assert!(s.take_url_requests().is_empty());
     for i in 0..16 {
         assert!(s.request_url(&json!({"url": format!("https://x.org/{i}")})).is_ok(), "{i}");
@@ -21354,6 +21641,250 @@ fn calculate_geometry_updates_ellipsoidal_lengths_in_one_undo_step() {
     assert!(s.redo());
     let out = &s.map().layer_by_name("routes").unwrap().dataset;
     assert!((out.value(0, length).as_f64().unwrap() - 111.31949079327356).abs() < 1e-6);
+}
+
+/// The session log (#797): a command run by itself that changes the project, or reaches a file
+/// or a service, is logged once (a script's lines inside it), with its outcome; reading isn't.
+/// Undo keeps the entries and is logged with the step it took back (not when there is none).
+/// Secrets are taken out and large values clipped; the log is capped and kept for the session
+/// only, across the projects opened in it; it can be read by filter, written out, cleared and
+/// turned off, none of which changes the project.
+#[test]
+fn the_session_log_records_each_command_run_in_the_session() {
+    use crate::project_log::{LOG_LIMIT, LOG_PARAMS_BYTES, LogEntry};
+    let mut s = world();
+    // The sample project's making is its first entry: counted from after it.
+    assert_eq!(s.log.clear(), 1);
+    let commands = |s: &Session| s.log.entries().map(|e| e.command.clone()).collect::<Vec<_>>();
+    let last = |s: &Session| s.log.entries().last().cloned().unwrap();
+    s.run("project.rename", &json!({"name": "Atlas"})).unwrap();
+    s.run("info.project", &Value::Null).unwrap();
+    s.run("map.zoomIn", &Value::Null).unwrap();
+    s.run("script.run", &json!({"script": "project.rename {\"name\": \"A\"}\nproject.rename {\"name\": \"B\"}"})).unwrap();
+    assert_eq!(commands(&s), ["project.rename", "script.run"], "reading and moving the view aren't logged, nor a script's lines");
+    let first = s.log.entries().next().cloned().unwrap();
+    assert!(first.ok && first.error.is_none() && first.at > 1_700_000_000_000, "{first:?}");
+    assert_eq!(first.params, json!({"name": "Atlas"}));
+    // Undone: the entries stay, and the undo says what it took back.
+    s.run("edit.undo", &Value::Null).unwrap();
+    assert_eq!(s.project.name, "Atlas");
+    assert_eq!(commands(&s), ["project.rename", "script.run", "edit.undo"]);
+    assert_eq!(s.log.entries().nth(2).unwrap().params, json!({"step": "Run Script"}));
+    // A failure is logged with its error; a service's address without its token.
+    assert!(s.run("project.rename", &json!({"name": " "})).is_err());
+    let failed = last(&s);
+    assert!(!failed.ok && failed.error.as_deref().is_some_and(|e| e.contains("name")), "{failed:?}");
+    let _ = s.run("service.layers", &json!({"url": "https://x.org/wms?token=S3CRET&layers=a", "text": "not a capabilities document"}));
+    let service = last(&s);
+    assert_eq!(service.command, "service.layers");
+    assert!(!service.params.to_string().contains("S3CRET"), "{service:?}");
+    // A document given as text is kept as its size only: it may hold secrets no redaction finds.
+    let qgs = format!("<qgis version=\"3.42.0\"><title>{}</title></qgis>", "rustgis-s3:TOKEN:s3://b/k ".repeat(20));
+    let _ = s.run("project.importQgis", &json!({"text": qgs}));
+    let doc = last(&s);
+    assert_eq!(doc.params["text"], json!(format!("(a document of {} characters)", qgs.chars().count())), "{doc:?}");
+    // So is one after a byte-order mark (a QGIS project read from a file that has one).
+    let marked = format!("\u{feff}{qgs}");
+    let _ = s.run("project.importQgis", &json!({"text": marked}));
+    let doc = last(&s);
+    assert!(doc.params["text"].as_str().is_some_and(|t| t.starts_with("(a document of")), "{doc:?}");
+    // A secret in the JSON a text holds (a script's command line) is taken out too.
+    let line = r#"s3.connect {"accessKeyId": "AKIA", "secretAccessKey": "S3CRETKEY", "region": "x"}"#;
+    let _ = s.run("script.run", &json!({"script": line}));
+    let script = last(&s);
+    assert!(!script.params.to_string().contains("S3CRETKEY") && script.params.to_string().contains("s3.connect"), "{script:?}");
+    // Nor where the clip cuts the object short: what follows its `{` goes.
+    // The secret comes first and a long field after it, past the cut.
+    let long = format!(r#"s3.connect {{"secretAccessKey": "S3CRETKEY", "notes": "{}"}}"#, "x".repeat(5000));
+    let _ = s.run("script.run", &json!({"script": long}));
+    let cut = last(&s);
+    assert!(!cut.params.to_string().contains("S3CRET"), "{}", cut.params);
+    // Nor in an object that doesn't parse (a trailing comma), while text such as `{name}` stays.
+    let broken = r#"s3.connect {"secretAccessKey": "S3CRETKEY", "region": "x",} # see {name}"#;
+    let _ = s.run("script.run", &json!({"script": broken}));
+    let kept = last(&s).params.to_string();
+    assert!(!kept.contains("S3CRET") && kept.contains("s3.connect"), "{kept}");
+    let _ = s.run("script.run", &json!({"script": "# keep {name} as it is"}));
+    assert!(last(&s).params.to_string().contains("{name}"));
+    // A long list is "…" once its texts are cut to fit, its count with it.
+    let long: Vec<String> = (0..5_000).map(|i| format!("{i}{}", "y".repeat(100))).collect();
+    let _ = s.run("project.rename", &json!({"name": "Long", "tags": long}));
+    let tags = last(&s).params.to_string();
+    assert_eq!(last(&s).params, json!({"name": "Long", "tags": "…"}), "{tags}");
+    // Large values clipped.
+    s.run("project.rename", &json!({"name": "x".repeat(20_000), "note": vec![1; 5_000]})).ok();
+    let big = last(&s);
+    assert!(serde_json::to_vec(&big.params).unwrap().len() <= LOG_PARAMS_BYTES, "{}", big.params.to_string().len());
+    // The project carries none of it: a saved project, or its recovery copy, holds no log.
+    assert!(!s.project.saved_text(None).unwrap().0.contains("\"log\""));
+    assert!(!s.project.clone().recovery_text().unwrap().contains("\"log\""));
+    // Read by filter, newest last.
+    let r = s.run("project.log", &json!({"command": "project.rename", "failed": true})).unwrap();
+    assert_eq!((r["count"].as_u64(), r["entries"][0]["command"].as_str()), (Some(1), Some("project.rename")));
+    assert_eq!(s.run("project.log", &json!({"limit": 2})).unwrap()["entries"].as_array().map(Vec::len), Some(2));
+    assert!(s.run("project.log", &json!({"limit": 0})).is_err());
+    assert!(s.run("project.log", &json!({"limit": 0.5})).unwrap_err().contains("whole number"));
+    // Steps merged into one undo step (a held arrow key) are one entry, with the last parameters.
+    let n = s.log.len();
+    for name in ["Nudged 1", "Nudged 2", "Nudged 3"] {
+        s.merge_undo("nudge");
+        s.run("project.rename", &json!({"name": name})).unwrap();
+    }
+    assert_eq!(s.log.len(), n + 1);
+    assert_eq!(last(&s).params["name"], json!("Nudged 3"));
+    // Times as decimals too; a negative time, or a filter that isn't true or false, is refused.
+    assert_eq!(s.run("project.log", &json!({"since": 1.7e12, "limit": 1})).unwrap()["entries"].as_array().map(Vec::len), Some(1));
+    assert!(s.run("project.log", &json!({"since": -1})).is_err());
+    assert!(s.run("project.log", &json!({"failed": "true"})).is_err());
+    assert!(s.run("project.log", &json!({"command": 7})).is_err());
+    // An error that starts as a spreadsheet formula is written as text in the CSV.
+    let formula = LogEntry { at: 2, command: "x".into(), params: Value::Null, ok: false, error: Some("=HYPERLINK(1)".into()), millis: 0 };
+    s.log.push(formula);
+    // Written out as CSV and JSON Lines.
+    let dir = std::env::temp_dir().join(format!("rustgis-session-log-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let csv = dir.join("log.csv");
+    s.run("project.exportLog", &json!({"path": csv.to_string_lossy()})).unwrap();
+    let csv_text = std::fs::read_to_string(&csv).unwrap();
+    assert!(csv_text.starts_with("time_utc,at,command,ok,millis,error,params\n") && csv_text.contains("\"edit.undo\""), "{csv_text}");
+    assert!(csv_text.contains("\"'=HYPERLINK(1)\"") && !csv_text.contains(",\"=HYPERLINK"), "{csv_text}");
+    let jsonl = dir.join("log.jsonl");
+    s.run("project.exportLog", &json!({"path": jsonl.to_string_lossy()})).unwrap();
+    let lines: Vec<LogEntry> = std::fs::read_to_string(&jsonl).unwrap().lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+    assert_eq!(lines.len() + 1, s.log.len(), "every entry but the export's own");
+    let _ = std::fs::remove_dir_all(&dir);
+    // Cleared, it says so; off, nothing goes in; on again, it does. Neither changes the project,
+    // which holds no log, nor takes an undo step.
+    for id in ["project.clearLog", "project.logCommands"] {
+        assert!(!s.registry.get(id).unwrap().mutates, "{id}");
+    }
+    let steps = s.undo.len();
+    s.mark_saved();
+    assert!(s.run("project.clearLog", &Value::Null).unwrap()["cleared"].as_u64().unwrap() > 5);
+    assert_eq!(commands(&s), ["project.clearLog"]);
+    assert!(!s.dirty() && s.undo.len() == steps, "the project doesn't change");
+    s.run("project.logCommands", &json!({"on": false})).unwrap();
+    s.run("project.rename", &json!({"name": "Quiet"})).unwrap();
+    assert_eq!(commands(&s), ["project.clearLog", "project.logCommands"], "turned off, and said so");
+    s.run("project.logCommands", &json!({"on": true})).unwrap();
+    assert_eq!(commands(&s), ["project.clearLog", "project.logCommands", "project.logCommands"]);
+    // A .json path is refused: JSON Lines isn't one JSON document. A format given doesn't let
+    // the log go over another kind of file, nor disagree with the path's extension.
+    assert!(s.run("project.exportLog", &json!({"path": "log.json"})).is_err());
+    for (path, format) in [("log.json", "jsonl"), ("map.rgis", "csv"), ("log.csv", "jsonl"), ("log", "xml")] {
+        let e = s.run("project.exportLog", &json!({"path": path, "format": format})).unwrap_err();
+        assert!(e.contains("not a .") || e.contains("doesn't match") || e.contains("format is"), "{path}: {e}");
+    }
+    assert!(s.run("project.exportLog", &json!({"path": "log"})).unwrap_err().contains("give a .csv"));
+    // The log lasts for the session: making a project adds to it and keeps what was there.
+    let mut made = world();
+    let before = made.log.len();
+    made.run("project.new", &json!({"name": "Fresh"})).unwrap();
+    assert_eq!(made.log.len(), before + 1);
+    assert_eq!(made.log.entries().last().unwrap().command, "project.new");
+    // Cleared while off, it still says so.
+    s.run("project.logCommands", &json!({"on": false})).unwrap();
+    s.run("project.clearLog", &Value::Null).unwrap();
+    assert_eq!(commands(&s), ["project.clearLog"]);
+    s.run("project.logCommands", &json!({"on": true})).unwrap();
+    // Capped: the oldest go first.
+    for i in 0..LOG_LIMIT + 5 {
+        s.log.push(LogEntry { at: i as u64, command: "x".into(), params: Value::Null, ok: true, error: None, millis: 0 });
+    }
+    assert_eq!(s.log.len(), LOG_LIMIT);
+    assert_eq!(s.log.entries().next().unwrap().at, 5);
+    // Undo or redo with nothing to take back changes nothing, and isn't logged.
+    s.clear_history();
+    let n = s.log.len();
+    assert!(s.run("edit.undo", &Value::Null).is_err() && s.run("edit.redo", &Value::Null).is_err());
+    assert_eq!(s.log.len(), n, "nothing to undo or redo: not logged");
+}
+
+/// What the session log keeps of a command's parameters: bounded in bytes, keys and time, and
+/// without secrets, those in JSON a text holds and in SQL `CREATE … SECRET` options included.
+#[test]
+fn the_session_log_keeps_parameters_bounded_and_without_secrets() {
+    // Many keys with short values still fit the bound.
+    let wide: serde_json::Map<String, Value> = (0..40).map(|i| (format!("{i:02}{}", "k".repeat(62)), json!("é".repeat(64)))).collect();
+    let kept = crate::project_log::kept_params(&Value::Object(wide));
+    assert!(serde_json::to_vec(&kept).unwrap().len() <= crate::project_log::LOG_PARAMS_BYTES, "{kept}");
+    assert!(kept.as_object().is_some_and(|o| o.len() > 1 && o.len() < 40));
+    assert_eq!(kept["…"], json!("40 keys in all"));
+    // Keys alike in their first 64 characters: the first stays, the other counted as left out.
+    let mut alike: serde_json::Map<String, Value> = (0..40).map(|i| (format!("{i:02}{}", "k".repeat(62)), json!("v".repeat(64)))).collect();
+    // Sorts right after the first key, and is the same once cut to 64 characters.
+    alike.insert(format!("00{}a", "k".repeat(62)), json!(2));
+    let kept = crate::project_log::kept_params(&Value::Object(alike));
+    assert_eq!(kept["…"], json!("41 keys in all"));
+    assert_eq!(kept[format!("00{}", "k".repeat(62))], json!("v".repeat(64)), "the first stays");
+    assert!(kept.as_object().is_some_and(|o| !o.values().any(|v| *v == json!(2))), "{kept}");
+    // A crafted text costs its length, not its braces times its length: 200,000 braces are
+    // milliseconds once, and would be hours if each `{` scanned the rest (a bound far from both).
+    let crafted = "{1".repeat(200_000);
+    let started = std::time::Instant::now();
+    assert_eq!(crate::project_log::json_in_text_redacted(&crafted).len(), crafted.len());
+    assert!(started.elapsed() < std::time::Duration::from_secs(60), "{:?}", started.elapsed());
+    // A key cut short keeps no value: a secret's name may be past the cut.
+    let long_key = format!("{}secretAccessKey", "x".repeat(195));
+    let kept = crate::project_log::kept_params(&json!({long_key: "S3CRET"}));
+    assert!(!kept.to_string().contains("S3CRET"), "{kept}");
+    // An SQL secret's options, written as plain words, go; the statement's shape stays.
+    let sql = "CREATE OR REPLACE SECRET s3 (TYPE s3, KEY_ID 'AKIA1', SECRET 'S3CRET'); SELECT 1 / 2";
+    let kept = crate::project_log::kept_params(&json!({"sql": sql}));
+    assert_eq!(kept["sql"], json!("CREATE OR REPLACE SECRET s3 (…); SELECT 1 / 2"));
+    assert_eq!(crate::project_log::sql_secrets_removed("create table t (a int)"), "create table t (a int)");
+    assert_eq!(crate::project_log::sql_secrets_removed("create table secret (a int)"), "create table secret (a int)");
+    // A file's contents in base64 (`layer.addDataBytes`) are kept as their size: a secret's name
+    // can't be seen in them. A long text that isn't base64 is clipped as before.
+    let encoded = "eyJ0b2tlbiI6ICJTM0NSRVQifQ==".repeat(20);
+    for data in [encoded.clone(), format!("data:application/json;base64,{encoded}")] {
+        let kept = crate::project_log::kept_params(&json!({"fileName": "a.geojson", "data": data}));
+        assert_eq!(kept["data"], json!(format!("(file contents of {} characters, base64)", data.len())), "{kept}");
+    }
+    let prose = crate::project_log::kept_params(&json!({"note": "word ".repeat(100)}));
+    assert!(prose["note"].as_str().is_some_and(|n| n.starts_with("word word")), "{prose}");
+    // `create` inside another word starts no statement.
+    for t in ["recreate secret s (key 'a')", "created secret (key 'a')"] {
+        assert_eq!(crate::project_log::sql_secrets_removed(t), t);
+    }
+    assert_eq!(crate::project_log::sql_secrets_removed("CREATE PERSISTENT SECRET (TYPE s3, SECRET 'x')"), "CREATE PERSISTENT SECRET (…)");
+    // An unquoted secret key in an object that doesn't parse goes, with the rest of the text;
+    // a format string's braces stay.
+    let line = crate::project_log::kept_params(&json!({"script": "s3.connect {secretAccessKey: \"S3CRET\"}\nprint(f\"{x:.2f}\")"}));
+    assert!(!line.to_string().contains("S3CRET"), "{line}");
+    let fmt = crate::project_log::kept_params(&json!({"script": "print(f\"{x:.2f}\")"}));
+    assert_eq!(fmt["script"], json!("print(f\"{x:.2f}\")"));
+    // A quoted secret key in such an object goes too, its value with it, double or single quotes.
+    for line in [r#"s3.connect {a: "x", "secretAccessKey": "S3CRET",}"#, "s3.connect {a: 'x', 'secretAccessKey': 'S3CRET',}"] {
+        let kept = crate::project_log::kept_params(&json!({"script": line}));
+        assert!(!kept.to_string().contains("S3CRET") && kept.to_string().contains("s3.connect"), "{kept}");
+    }
+}
+
+/// Plugins can neither empty the session log nor turn it off, nor push the user's entries out of
+/// it; writing the log out, or reading it, reaches a file.
+#[test]
+fn plugins_can_neither_clear_the_session_log_nor_crowd_out_the_users_entries() {
+    use crate::project_log::LogEntry;
+    // Plugins' commands keep at most their own share of the log: the user's entries stay.
+    let mut log = crate::project_log::SessionLog::default();
+    let entry = |command: &str| LogEntry { at: 1, command: command.into(), params: Value::Null, ok: true, error: None, millis: 0 };
+    log.push(entry("layer.rename"));
+    for _ in 0..crate::project_log::LOG_PLUGIN_LIMIT + 5 {
+        log.push(entry("plugin:p/flood"));
+    }
+    assert_eq!(log.len(), crate::project_log::LOG_PLUGIN_LIMIT + 1);
+    assert_eq!(log.entries().next().unwrap().command, "layer.rename");
+    // A plugin never empties the log or turns it off; writing it out is reaching a file.
+    assert!(crate::cmd::plugins::user_only("project.clearLog") && crate::cmd::plugins::user_only("project.logCommands"));
+    {
+        use crate::cmd::plugins::{Reach, reaches};
+        let export = crate::cmd::all().into_iter().find(|c| c.id == "project.exportLog").unwrap();
+        assert_eq!(reaches(&export, &json!({"path": "log.csv"})), Some(Reach::Files));
+        // Reading it too: it names the files and addresses the user's commands used.
+        let read = crate::cmd::all().into_iter().find(|c| c.id == "project.log").unwrap();
+        assert_eq!(reaches(&read, &json!({})), Some(Reach::Files));
+    }
 }
 
 /// `raster.project` puts a raster on a grid of another coordinate system, cell size, origin and
