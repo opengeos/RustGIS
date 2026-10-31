@@ -153,7 +153,12 @@ pub fn resolve(spec: &Spec) -> Resolve {
     if let Some(r) = cached.as_ref().filter(|r| r.current()) {
         return Resolve::Ready(r.clone());
     }
-    match (resolve_anew(spec, key.clone()), cached) {
+    settle(resolve_anew(spec, key.clone()), cached, spec, key)
+}
+
+/// What resolving `spec` again (`anew`) gives, with `cached`, the expired one under `key`.
+fn settle(anew: Resolve, cached: Option<Arc<Resolved>>, spec: &Spec, key: String) -> Resolve {
+    match (anew, cached) {
         // One that left something out is drawn as it was while that is fetched again, not blank.
         (Resolve::Pending, Some(old)) => Resolve::Ready(old),
         (Resolve::Ready(new), Some(old)) => {
@@ -161,8 +166,12 @@ pub fn resolve(spec: &Spec) -> Resolve {
             resolved().lock().unwrap_or_else(|e| e.into_inner()).insert(key, r.clone());
             Resolve::Ready(r)
         }
-        // Or while it can't be read again: it is tried again after the next wait.
-        (Resolve::Failed(_), Some(old)) => Resolve::Ready(renewed(old)),
+        // Or while it can't be read again: it is tried again after the next wait. Its own notice
+        // still says what it leaves out; why it couldn't be read again goes to the log.
+        (Resolve::Failed(e), Some(old)) => {
+            log::warn!("{}: drawn as it was, as it could not be read again: {e}", spec.url);
+            Resolve::Ready(renewed(old))
+        }
         (other, _) => other,
     }
 }
@@ -779,9 +788,16 @@ mod tests {
         let s = spec(Kind::Style, "https://expired.example.com/style.json");
         let stale = Arc::new(stale);
         resolved().lock().unwrap().insert(s.key(), stale.clone());
-        // (Pending, or failing at once: either way the stale style, never blank or an error.)
-        let Resolve::Ready(r) = resolve(&s) else { panic!("blank, or an error, while it is read again") };
+        // Pending on the first fetch: the stale style is drawn meanwhile.
+        let Resolve::Ready(r) = resolve(&s) else { panic!("blank while it is read again") };
         assert!(Arc::ptr_eq(&r, &stale), "the stale style");
+        // Failing to be read again: drawn as it was, and current until it is tried again.
+        assert!(!stale.current());
+        let Resolve::Ready(r) = settle(Resolve::Failed("gone".into()), Some(stale.clone()), &s, s.key()) else { panic!("an error") };
+        assert!(Arc::ptr_eq(&r, &stale) && stale.current());
+        // With nothing drawn before, pending is pending and an error an error.
+        assert!(matches!(settle(Resolve::Pending, None, &s, s.key()), Resolve::Pending));
+        assert!(matches!(settle(Resolve::Failed("gone".into()), None, &s, s.key()), Resolve::Failed(_)));
     }
 
     #[test]
@@ -812,7 +828,16 @@ mod tests {
             left_out: vec!["dem: gone".into()],
             made: Mutex::new(Instant::now()),
         });
-        assert!(Arc::ptr_eq(&kept(old, other.clone()), &other));
+        assert!(Arc::ptr_eq(&kept(old.clone(), other.clone()), &other));
+        // Only its credits changed: the new one too.
+        let recredited = Arc::new(Resolved {
+            style: Style::parse(&doc).unwrap(),
+            sprite: None,
+            attribution: vec!["© Example".into()],
+            left_out: vec!["dem: gone".into()],
+            made: Mutex::new(Instant::now()),
+        });
+        assert!(Arc::ptr_eq(&kept(old, recredited.clone()), &recredited));
     }
 
     #[test]
