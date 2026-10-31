@@ -183,8 +183,8 @@ impl GpkgMemSource {
         // Z and M are 0 (none), 1 (every geometry) or 2 (optional: looked for in the first rows).
         let (z, m) = (int(get(gc, "z")).unwrap_or(0), int(get(gc, "m")).unwrap_or(0));
         if z == 1 || m == 1 {
-            // Every geometry has them.
-            src.info.drop_zm(src.info.count);
+            // Every geometry has them; how many rows have one isn't known without a scan.
+            src.info.drop_zm(None);
         } else if (z == 2 || m == 2) && src.peek_zm() {
             src.info.drop_zm(None);
         }

@@ -2471,6 +2471,24 @@ mod tests {
         let mut empty = crate::source::shp::ShpSource::open_path(&flat, "flat").unwrap().info().clone();
         empty.drop_zm(Some(0));
         assert!(!empty.zm_dropped && !empty.notes.iter().any(|n| n.contains("Z or M")));
+        // The same through a real zero-record PointZ file, built from the wells' headers (the
+        // exporter refuses an empty layer).
+        let none = dir.path().join("none.shp");
+        for ext in ["shp", "shx"] {
+            let mut header = std::fs::read(wells.with_extension(ext)).unwrap();
+            header.truncate(100);
+            header[24..28].copy_from_slice(&50i32.to_be_bytes());
+            std::fs::write(none.with_extension(ext), header).unwrap();
+        }
+        let mut header = std::fs::read(wells.with_extension("dbf")).unwrap();
+        let len = u16::from_le_bytes([header[8], header[9]]) as usize;
+        header.truncate(len);
+        header[4..8].copy_from_slice(&0u32.to_le_bytes());
+        header.push(0x1a);
+        std::fs::write(none.with_extension("dbf"), header).unwrap();
+        assert!(!crate::source::shp::ShpSource::open_path(&none, "none").unwrap().info().zm_dropped);
+        let (ds, rep) = read_path(&none).unwrap();
+        assert!(!ds.zm_dropped && !said(&rep), "{:?}", rep.messages);
 
         // GeoJSON: a third position value, whole or in place, in a collection's member too.
         let doc = |pos: &str| {

@@ -229,7 +229,8 @@ impl ParquetSource {
             notes,
             zm_dropped: false,
         };
-        if zm {
+        // An empty file loses nothing.
+        if zm && count != Some(0) {
             info.drop_zm(if all_zm { count } else { None });
         }
         let untyped = types.is_empty() && !zm;

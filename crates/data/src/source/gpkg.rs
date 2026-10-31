@@ -226,6 +226,11 @@ impl GpkgSource {
         // Z and M are 0 (none), 1 (every geometry) or 2 (optional: looked for in the first rows).
         let zm: Option<(i64, i64)> =
             conn.query_row("SELECT z, m FROM gpkg_geometry_columns WHERE table_name = ?1", [&table], |r| Ok((r.get(0)?, r.get(1)?))).ok();
+        // The geometries those values come with (rows without one have none).
+        let geometries = zm.filter(|(z, m)| *z == 1 || *m == 1).and_then(|_| {
+            let sql = format!("SELECT COUNT(*) FROM {} WHERE {} IS NOT NULL", quote(&table), quote(&geom));
+            conn.query_row(&sql, [], |r| r.get::<_, i64>(0)).ok().and_then(|n| u64::try_from(n).ok())
+        });
         let file = conn.path().filter(|p| !p.is_empty()).map(|p| (PathBuf::from(p), id));
         let mut src = GpkgSource { info, conn: Mutex::new(Some(conn)), table, geom, pk, rtree, reproject, temp, file };
         if src.info.geometry_type == GeometryType::None {
@@ -233,7 +238,7 @@ impl GpkgSource {
         }
         match zm {
             // Every geometry has them.
-            Some((z, m)) if z == 1 || m == 1 => src.info.drop_zm(src.info.count),
+            Some((z, m)) if z == 1 || m == 1 => src.info.drop_zm(geometries),
             Some((z, m)) if (z == 2 || m == 2) && src.peek_zm() => src.info.drop_zm(None),
             _ => {}
         }

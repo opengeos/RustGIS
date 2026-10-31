@@ -456,7 +456,9 @@ OGC API Features, says what's written lacks them.
 Shapefile, GeoPackage, GeoParquet, FlatGeobuf, PostGIS, File Geodatabase, GeoJSON, KML (altitudes
 other than 0), GML and CSV WKT columns are checked; sources read through GDAL or DuckDB, and SQL
 Server tables, aren't yet. GPX elevations and LiDAR heights are kept as fields, and a File
-Geodatabase multipatch's heights as `z_min` and `z_max`.
+Geodatabase multipatch's heights as `z_min` and `z_max`. Where a source doesn't declare its
+dimensions (a GeoParquet file without geometry types, a GeoPackage table with optional Z or M, an
+unconstrained PostGIS column), only its first 16 geometries are checked.
 
 ## Define Projection
 

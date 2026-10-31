@@ -233,18 +233,21 @@ fn style_of(n: &Node) -> Style {
 }
 
 /// Coordinates: `lon,lat[,alt]` tuples separated by white space; malformed ones are dropped.
-/// `zm` is set when an altitude other than 0 (KML's default) is dropped.
+/// `zm` is set when a tuple kept had an altitude other than 0 (KML's default), which is dropped.
 fn coords(s: &str, zm: &Cell<bool>) -> Vec<Coord> {
     s.split_whitespace()
         .filter_map(|t| {
             let mut it = t.split(',');
             let x = it.next()?.trim().parse::<f64>().ok()?;
             let y = it.next()?.trim().parse::<f64>().ok()?;
+            // Longitude/latitude, as KML always is.
+            if !((-180.0..=180.0).contains(&x) && (-90.0..=90.0).contains(&y)) {
+                return None;
+            }
             if it.next().and_then(|z| z.trim().parse::<f64>().ok()).is_some_and(|z| z != 0.0) {
                 zm.set(true);
             }
-            // Longitude/latitude, as KML always is.
-            ((-180.0..=180.0).contains(&x) && (-90.0..=90.0).contains(&y)).then(|| Coord::new(x, y))
+            Some(Coord::new(x, y))
         })
         .collect()
 }
@@ -315,8 +318,11 @@ fn geometry(n: &Node, out: &mut Parts, depth: usize) {
                     let mut it = t.split_whitespace();
                     let x = it.next()?.parse::<f64>().ok()?;
                     let y = it.next()?.parse::<f64>().ok()?;
+                    if !(x.is_finite() && y.is_finite()) {
+                        return None;
+                    }
                     alt |= it.next().and_then(|z| z.parse::<f64>().ok()).is_some_and(|z| z != 0.0);
-                    (x.is_finite() && y.is_finite()).then(|| Coord::new(x, y))
+                    Some(Coord::new(x, y))
                 })
                 .collect();
             if c.len() >= 2 {
