@@ -104,20 +104,22 @@ each waits for the other's lock ("Blocking waiting for file lock"), and as they 
 different settings, each undoes the other's work. With `rust-analyzer.cargo.targetDir` set to
 `true` it builds in `target/rust-analyzer` instead, at the cost of the disk space.
 
-**On macOS.** The linker needs nothing: mold doesn't run there, Apple's own (Xcode 15 and later)
-is already fast, and `split-debuginfo = "unpacked"` is already the default for debug builds.
+**On macOS.** No linker setting is needed: mold doesn't run there, Apple's own linker (Xcode 15
+and later) is already fast, and `split-debuginfo = "unpacked"` is already the default for debug
+builds.
 
 - Leave `target/` out of backups and search, which otherwise go through every file a build
-  changes: `tmutil addexclusion target` once it exists, and add the folder under System Settings ›
-  Spotlight › Search Privacy.
+  changes: `tmutil addexclusion target` once it exists, and add the folder to Spotlight's privacy
+  list in System Settings.
 - macOS checks a program the first time it runs, and each build makes new test binaries. If even
   the simplest tests take more than 0.2 seconds under nextest, run
   `sudo spctl developer-mode enable-terminal`, turn your terminal on under System Settings ›
-  Privacy & Security › Developer Tools, and restart it: the programs it starts are no longer
-  checked. Working inside tmux or zellij, add the multiplexer too, since its shells aren't the
-  terminal's children, and add it again after each update of a Homebrew build (signed ad hoc, it
-  gets a new identity each time). Measure before and after: on some machines it makes no
-  difference (an M1 Max with macOS 15.7, for one).
+  Privacy & Security › Developer Tools, and restart it. From then on, nothing that terminal starts
+  gets the first-run check, programs you download included, so do it only for a terminal you
+  trust; turning its switch off there undoes it. Working inside tmux or zellij, add the
+  multiplexer too, since its shells aren't the terminal's children, and add it again after each
+  update of a Homebrew build (signed ad hoc, it gets a new identity each time). Measure before
+  and after: on some machines it makes no difference (an M1 Max with macOS 15.7, for one).
 
 **`cargo clean` now and then.** `target/` keeps the artifacts of every branch and setting you have
 built, and can grow past a hundred gigabytes.
