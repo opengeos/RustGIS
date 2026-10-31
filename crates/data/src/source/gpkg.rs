@@ -228,8 +228,11 @@ impl GpkgSource {
             zm_dropped: false,
         };
         // Z and M are 0 (none), 1 (every geometry) or 2 (optional: looked for in the first rows).
-        let zm: Option<(i64, i64)> =
-            conn.query_row("SELECT z, m FROM gpkg_geometry_columns WHERE table_name = ?1", [&table], |r| Ok((r.get(0)?, r.get(1)?))).ok();
+        let zm: Option<(i64, i64)> = conn
+            .query_row("SELECT z, m FROM gpkg_geometry_columns WHERE table_name = ?1 AND column_name = ?2", [&table, &geom], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .ok();
         let file = conn.path().filter(|p| !p.is_empty()).map(|p| (PathBuf::from(p), id));
         let mut src = GpkgSource { info, conn: Mutex::new(Some(conn)), table, geom, pk, rtree, reproject, temp, file };
         if src.info.geometry_type == GeometryType::None {
