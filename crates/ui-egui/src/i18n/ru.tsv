@@ -31,6 +31,7 @@ A catalogue's (CSW 2.0.2) address: search its records by words and, if you like,
 A ChatGPT plan or app usage limit was reached. Review Weekly usage before trying again.	Достигнут лимит использования тарифа ChatGPT или приложения. Проверьте использование за неделю перед повторной попыткой.
 A ChatGPT sign-in can only be used with the OpenAI API.	Вход через ChatGPT можно использовать только с API OpenAI.
 A colour, hatch lines, markers on a grid, a gradient, or a shapeburst (shaded from the edge inwards)	Цвет, линии штриховки, маркеры по сетке, градиент или заливка от края (с затенением от края внутрь)
+A command id is required.	Требуется идентификатор команды.
 A connection has this name: give this one another name to remember its keys.	Подключение с таким именем уже есть: дайте этому другое имя, чтобы запомнить его ключи.
 A copy of {name} with unsaved changes was kept a minute ago.	Копия {name} с несохранёнными изменениями сохранена минуту назад.
 A copy of {name} with unsaved changes was kept less than a minute ago.	Копия {name} с несохранёнными изменениями сохранена меньше минуты назад.
@@ -434,6 +435,7 @@ Bike	Велосипед
 Bilinear	Билинейная
 Bind To Time Slider	Привязать к ползунку времени
 Bind to Time Slider	Привязать к ползунку времени
+Bindings: {bindings} · Conflicts: {conflicts} · Unknown commands: {unknown}	Назначения: {bindings} · Конфликты: {conflicts} · Неизвестные команды: {unknown}
 Blank	Пустая
 Blank for Amazon S3	Пусто для Amazon S3
 Blank Letter page	Пустая страница Letter
@@ -582,6 +584,7 @@ Choose a layer…	Выберите слой…
 Choose a model.	Выберите модель.
 Choose a resampling type for the raster layer.	Выберите тип передискретизации для растрового слоя.
 Choose a saved S3 connection before opening this source.	Выберите сохранённое подключение S3, прежде чем открывать этот источник.
+Choose a shortcut file in the browser.	Выберите файл сочетаний клавиш в браузере.
 Choose a start	Выберите начало
 Choose a stop	Выберите остановку
 Choose a table to load for editing	Выберите таблицу для загрузки и редактирования
@@ -1211,6 +1214,7 @@ Export Features	Экспорт объектов
 Export Features (tool)	Экспорт объектов (инструмент)
 Export Features needs a vector layer (Data › Export Raster writes a raster)	Для экспорта объектов нужен векторный слой (Данные › Экспорт растра записывает растр)
 Export Features…	Экспорт объектов…
+Export Keyboard Shortcuts…	Экспорт сочетаний клавиш…
 Export Layout	Экспорт макета
 Export Map	Экспорт карты
 Export Map failed unexpectedly	Экспорт карты неожиданно завершился ошибкой
@@ -1567,6 +1571,8 @@ Import Bookmarks	Импорт закладок
 Import Bookmarks…	Импорт закладок…
 Import Deep Learning Package	Импорт пакета глубокого обучения
 Import GeoLibre Project	Импорт проекта GeoLibre
+Import Keyboard Shortcuts	Импорт сочетаний клавиш
+Import Keyboard Shortcuts…	Импорт сочетаний клавиш…
 Import Layout	Импорт макета
 Import Layout…	Импорт макета…
 Import Model	Импорт модели
@@ -1585,6 +1591,7 @@ Import Styles From…	Импорт стилей из…
 Import Task	Импорт задачи
 Import Task…	Импорт задачи…
 Import Thumbnail	Импорт эскиза
+Imported bindings replace conflicting keys. Unknown commands are kept for later use.	Импортированные назначения заменяют конфликтующие клавиши. Неизвестные команды сохраняются для последующего использования.
 Imported Zarr slice exceeds the 128 MiB download limit	Импортированный срез Zarr превышает лимит загрузки в 128 МиБ
 Import…	Импорт…
 IN	IN
@@ -1649,8 +1656,11 @@ Intersect	Пересечение
 Interval	Интервал
 Into the group just above it, as its last item	В группу прямо над ним, последним элементом
 invalid child id	недопустимый идентификатор дочернего процесса
+Invalid or reserved shortcut key.	Недопустимое или зарезервированное сочетание клавиш.
 Invalid selection outline · draw a smaller area	Недопустимый контур выборки · нарисуйте меньшую область
 Invalid selection outline · draw a smaller radius	Недопустимый контур выборки · нарисуйте меньший радиус
+Invalid shortcut binding.	Недопустимое назначение сочетания клавиш.
+Invalid shortcut key.	Недопустимое сочетание клавиш.
 Invalid: {error}	Недопустимо: {error}
 Invert	Инвертировать
 Invert color scheme	Инвертировать цветовую схему
@@ -1715,6 +1725,7 @@ Kernel Type	Тип ядра
 Key	Key
 Keyboard\nShortcuts	Сочетания\nклавиш
 Keyboard Shortcuts	Сочетания клавиш
+Keyboard shortcuts	Сочетания клавиш
 Keyboard shortcuts.	Сочетания клавиш.
 Keys are available for this session but were not remembered on this computer.	Ключи доступны в течение этого сеанса, но не запомнены на этом компьютере.
 Keys are kept for this session only: there is no credential store to remember them in here.	Ключи хранятся только в течение этого сеанса: здесь нет хранилища учётных данных, чтобы их запомнить.
@@ -2564,6 +2575,8 @@ Projects and JSON data (RustGIS, QGIS, GeoLibre)	Проекты и данные 
 Properties	Свойства
 Property	Свойство
 Proportional Symbols	Пропорциональные символы
+Provide keys to reset, or no parameters to reset all.	Укажите клавиши для сброса или не указывайте параметры, чтобы сбросить все.
+Provide shortcut file text, data or a path.	Укажите текст, данные или путь к файлу сочетаний клавиш.
 Provider	Поставщик
 Provinces:	Провинции:
 Proximity	Близость
@@ -2747,6 +2760,7 @@ Reset Default	Сбросить по умолчанию
 Reset Effects	Сбросить эффекты
 Reset North	Север вверх
 Reset north	Север вверх
+Reset unreadable saved shortcuts before importing.	Перед импортом сбросьте нечитаемые сохранённые сочетания клавиш.
 Reset {key}	Сбросить {key}
 Resolution (0–30)	Разрешение (0–30)
 Response	Ответ
@@ -3068,6 +3082,7 @@ Set the pixels inside a polygon	Задать пиксели внутри пол�
 Set the pixels inside a polygon.	Задать пиксели внутри полигона.
 Settings	Настройки
 Settings › Customize	Настройки › Настроить
+Settings › Customize › Keyboard Shortcuts	Настройки › Настроить › Сочетания клавиш
 Several places	Несколько мест
 Shade from the outer edge alone	Затенять только от внешнего края
 Shade to the point deepest inside	Затенять до самой глубокой внутренней точки
@@ -3103,6 +3118,9 @@ Shifts the mark right of the point (left when negative)	Сдвигает зна�
 Shifts the stroke sideways: positive to the right of the line's direction, negative to the left	Сдвигает обводку в сторону: положительное значение вправо от направления линии, отрицательное влево
 Short labels	Короткие подписи
 Shortcut already assigned	Сочетание уже назначено
+Shortcut file contains invalid or reserved bindings.	Файл сочетаний клавиш содержит недопустимые или зарезервированные назначения.
+Shortcut file exceeds the size limit.	Файл сочетаний клавиш превышает ограничение по размеру.
+Shortcut keys are required.	Требуются клавиши сочетания.
 Shortcuts	Сочетания клавиш
 Shortest route over a line network	Кратчайший маршрут по линейной сети
 Show	Показать
@@ -3633,6 +3651,7 @@ Toggle Imperial Measurements	Переключить имперские един�
 Token Required	Требуется токен
 Tolerance (km)	Допуск (км)
 Tolls	Платные дороги
+Too many shortcut changes to save.	Слишком много изменений сочетаний клавиш для сохранения.
 Too many shortcut changes to save. Changes apply only to this session.	Слишком много изменений сочетаний клавиш для сохранения. Изменения действуют только в этом сеансе.
 Tool Gallery	Галерея инструментов
 Toolboxes	Наборы инструментов
@@ -3718,11 +3737,14 @@ United States	США
 Units	Единицы
 Units per step	Единиц на шаг
 unknown (an older project)	неизвестно (старый проект)
+Unknown shortcut binding field.	Неизвестное поле назначения сочетания клавиш.
+Unknown shortcut command.	Неизвестная команда сочетания клавиш.
 UNKNOWN TOOL	НЕИЗВЕСТНЫЙ ИНСТРУМЕНТ
 Unload the GeoLibre tools and stop loading them when RustGIS starts.	Выгрузить инструменты GeoLibre и не загружать их при запуске RustGIS.
 Unsaved changes	Несохранённые изменения
 Unsupervised classes (k-means)	Классы без учителя (k-средних)
 Unsupervised classes (k-means).	Классы без учителя (k-средних).
+Unsupported shortcut file version.	Неподдерживаемая версия файла сочетаний клавиш.
 Untitled	Без названия
 Untitled model	Модель без имени
 Up	Вверх
@@ -3745,6 +3767,7 @@ US State GIS	ГИС штатов США
 US State GIS…	ГИС штатов США…
 USA Contiguous Albers Equal Area	Равновеликая Альберса для смежных штатов США
 Use	Применить
+Use a browser download to export shortcuts.	Для экспорта сочетаний клавиш используйте загрузку через браузер.
 Use a Single Stroke	Использовать одну обводку
 Use another account	Использовать другой аккаунт
 Use ArcGIS Token	Использовать токен ArcGIS
