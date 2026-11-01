@@ -354,7 +354,7 @@ jobs:
       # raised and the author already answered. Best effort, like the stats
       # step: the fallback is written first. Comment bodies are untrusted input
       # like the diff. To bound the size, collapsed <details> blocks are replaced
-      # by a marker, HTML comments and icons are dropped, each comment is cut to
+      # by a marker, HTML comments and <picture> icons are dropped, each comment is cut to
       # 1000 characters, a long thread keeps its opening comment and latest 29
       # replies, and once a thread would pass MAX_PRIOR_BYTES it and every later
       # one are left out, unresolved current threads going first. Every cut is
@@ -370,7 +370,7 @@ jobs:
           set -euo pipefail
           echo '{"unavailable": "the earlier review threads could not be fetched"}' > pr-context/prior-reviews.json
           gh api graphql --paginate \
-            -F owner="${REPO%/*}" -F name="${REPO#*/}" -F number="$PR_NUMBER" \
+            -f owner="${REPO%/*}" -f name="${REPO#*/}" -F number="$PR_NUMBER" \
             -f query='
               query($owner: String!, $name: String!, $number: Int!, $endCursor: String) {
                 repository(owner: $owner, name: $name) {
@@ -386,7 +386,10 @@ jobs:
                   }
                 }
               }' \
-            --jq '.data.repository.pullRequest.reviewThreads.nodes[]
+            > "$RUNNER_TEMP/pages.json"
+          # Shaped by jq rather than gh's --jq, whose regex engine lacks the
+          # lookahead the nested <details> strip needs.
+          jq -c '.data.repository.pullRequest.reviewThreads.nodes[]
               | { path, line: (.line // .originalLine), resolved: .isResolved, outdated: .isOutdated,
                   replies_left_out: ([.latest.totalCount - 30, 0] | max),
                   comments: [ (.opening.nodes + .latest.nodes)
@@ -394,11 +397,13 @@ jobs:
                     | .[] | { author: (.author.login // "ghost"), association: .authorAssociation,
                       body: (.body
                         | gsub("\r"; "")
-                        | gsub("(?s)<details[^>]*>.*?</details>"; "[collapsed section removed]")
+                        # Innermost block first, so a nested block cannot leave its outer text behind.
+                        | until(test("(?s)<details[^>]*>((?!<details).)*?</details>") | not;
+                            gsub("(?s)<details[^>]*>((?!<details).)*?</details>"; "[collapsed section removed]"))
                         | gsub("(?s)<!--.*?-->|<picture>.*?</picture>"; "")
                         | gsub("\\n{3,}"; "\n\n")
                         | if length > 1000 then .[0:1000] + " [cut at 1000 characters]" else . end) } ] }' \
-            > "$RUNNER_TEMP/threads.jsonl"
+            "$RUNNER_TEMP/pages.json" > "$RUNNER_TEMP/threads.jsonl"
           jq -sc --argjson max "$MAX_PRIOR_BYTES" '
             sort_by(.resolved, .outdated)
             # 64 bytes reserve the wrapper object, the left-out count and the final
