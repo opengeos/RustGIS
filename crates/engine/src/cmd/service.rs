@@ -558,7 +558,10 @@ pub(crate) fn add(s: &mut Session, p: &Value) -> CmdResult {
                 let max = crate::render::rustgis_tiles::cache::MAX_DOWNLOAD;
                 let bytes = download_features(s, &name, asked.as_deref().unwrap_or(items), max).map_err(|e| slow_whole_layer(e, given))?;
                 let bytes = features_answer(s, &name, bytes, layer.bbox);
-                let mut r = super::raster::add_named_bytes(s, &json!({"name": name}), format!("{name}.geojson"), bytes, None)?;
+                // An area asked for keeps the view (or goes to the box given below), even on an
+                // empty map: the features returned are only those crossing it, not the layer.
+                let keep_view = asked.is_some().then_some(false);
+                let mut r = super::raster::add_named_bytes(s, &json!({"name": name}), format!("{name}.geojson"), bytes, keep_view)?;
                 // Over an area, the features crossing it: the view stays, or goes to a box given
                 // (the whole layer's bounds would show a country to fill one state).
                 match (asked.is_some(), area, p.get("bbox")) {

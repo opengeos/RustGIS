@@ -9714,7 +9714,7 @@ fn zoom_false_keeps_the_view_of_downloaded_data() {
 }
 
 /// `"zoom": false` keeps the view when a spreadsheet or a geotagged photo is added to an empty map;
-/// without it the first content is framed.
+/// without it the first content is framed, and a later photo, like any layer, leaves the view alone.
 #[test]
 fn zoom_false_keeps_the_view_of_sheets_and_photos() {
     use base64::Engine;
@@ -9741,6 +9741,17 @@ fn zoom_false_keeps_the_view_of_sheets_and_photos() {
     let mut ph2 = Session::new(Project::default());
     ph2.run("layer.addUrl", &json!({"url": format!("{base}/pic.jpg")})).unwrap();
     let c = rustgis_geom::merc_to_lonlat(ph2.map().camera.center);
+    assert!((c.x - 11.8851).abs() < 0.01 && (c.y - 43.4674).abs() < 0.01, "{c:?}");
+    // A later photo leaves the view alone, as a later layer does; `"zoom": true` frames it.
+    let far = r#"{"type": "FeatureCollection", "features": [{"type": "Feature", "properties": {}, "geometry": {"type": "Point", "coordinates": [151.2, -33.9]}}]}"#;
+    let mut ph3 = Session::new(Project::default());
+    ph3.run("layer.addDataText", &json!({"fileName": "far.geojson", "text": far})).unwrap();
+    ph3.run("map.zoomToExtent", &json!({"extent": [0.0, 0.0, 10.0, 10.0]})).unwrap();
+    let before = ph3.map().camera;
+    ph3.run("layer.addUrl", &json!({"url": format!("{base}/pic.jpg")})).unwrap();
+    assert_eq!(ph3.map().camera, before);
+    ph3.run("layer.addUrl", &json!({"url": format!("{base}/pic.jpg"), "zoom": true})).unwrap();
+    let c = rustgis_geom::merc_to_lonlat(ph3.map().camera.center);
     assert!((c.x - 11.8851).abs() < 0.01 && (c.y - 43.4674).abs() < 0.01, "{c:?}");
 }
 
@@ -10703,6 +10714,29 @@ fn adding_a_layer_keeps_the_view() {
     z.run("layer.addUrl", &json!({"url": url, "name": "Again", "zoom": true})).unwrap();
     let at = z.map().center_lonlat();
     assert!((at.x - 10.5).abs() < 0.1 && (at.y - 45.5).abs() < 0.5, "{at:?}");
+    // A raster added while the map holds only an overlay keeps the view too: `add_raster_after`
+    // (shared by analysis outputs) counts the overlay as content.
+    use base64::Engine;
+    let raster = rustgis_data::raster::Raster::new(
+        "dem",
+        8,
+        8,
+        vec![vec![3.0; 64]],
+        rustgis_data::raster::GeoTransform { origin_x: 5.0, origin_y: 50.0, pixel_width: 0.1, pixel_height: -0.1 },
+        rustgis_data::raster::Crs::LonLat,
+        None,
+        rustgis_data::raster::ColorHint::Gray,
+        "Float32",
+    )
+    .unwrap();
+    let tif = rustgis_data::raster::geotiff::write(&raster, 0).unwrap();
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&tif);
+    let mut t = Session::new(Project::default());
+    t.run("map.addTiles", &json!({"url": "https://tiles.example.com/{z}/{x}/{y}.png", "overlay": true})).unwrap();
+    t.run("map.zoomToExtent", &json!({"extent": [0.0, 0.0, 10.0, 10.0]})).unwrap();
+    let before = t.map().camera;
+    t.run("layer.addDataBytes", &json!({"fileName": "dem.tif", "data": b64})).unwrap();
+    assert_eq!(t.map().camera, before);
     // A group holding no layer holds nothing: the first data layer added is framed.
     let mut g = Session::new(Project::default());
     g.run("group.add", &json!({"name": "Empty"})).unwrap();
@@ -10853,6 +10887,13 @@ fn service_features_asked_for_over_an_area() {
     s.run("service.add", &json!({"url": url, "layer": "CGMAT:munic", "text": caps("2.0.0"), "name": "Piauí", "bbox": piaui})).unwrap();
     let v = view_lonlat(&s);
     assert!(v[0] < -45.0 && v[2] > -41.0 && v[1] < -10.0 && v[3] > -3.0 && v[2] - v[0] < 20.0, "{v:?}");
+    // An area asked for as the view keeps the view, even on an empty map: the features returned
+    // are only those crossing it.
+    let mut k = Session::new(Project::default());
+    k.run("map.zoomToExtent", &json!({"extent": [0.0, 0.0, 10.0, 10.0]})).unwrap();
+    let before = k.map().camera;
+    k.run("service.add", &json!({"url": url, "layer": "CGMAT:munic", "text": caps("2.0.0"), "bbox": "view"})).unwrap();
+    assert_eq!(k.map().camera, before);
 }
 
 /// The map's view in longitude/latitude, as `bbox: "view"` reads it.
