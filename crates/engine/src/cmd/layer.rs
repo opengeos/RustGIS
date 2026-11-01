@@ -2660,7 +2660,7 @@ pub fn url_file_name(url: &str, bytes: &[u8]) -> Result<String, String> {
         return jpeg2000_only_on_desktop(last);
     }
     // A `.shp` address comes with its files fetched beside it, zipped ([`download_data`]).
-    if ext == "shp" && bytes.starts_with(b"PK\x03\x04") {
+    if ext == "shp" && is_zip(bytes) {
         return Ok(format!("{}.zip", Path::new(&last).file_stem().and_then(|s| s.to_str()).unwrap_or("layer")));
     }
     let known = rustgis_data::io::READ_EXTENSIONS.contains(&ext.as_str()) || rustgis_data::raster::is_raster_name(&last) || ext == "tsv";
@@ -2807,8 +2807,20 @@ fn part_not_there(ext: &str, url: &str, e: &str) -> bool {
         }
 }
 
+/// Whether downloaded bytes are a zip archive (its first local file header).
+fn is_zip(bytes: &[u8]) -> bool {
+    bytes.starts_with(b"PK\x03\x04")
+}
+
+/// A Shapefile's part that failed, named by its address without its keys or signature (the
+/// `.shp`'s query, which the parts carry too).
+fn part_failed(url: &str, e: String) -> String {
+    let e = e.strip_prefix(url).map(|r| r.trim_start_matches(": ").to_string()).unwrap_or(e);
+    format!("{}: {e}", crate::sources::redact(url))
+}
+
 /// What a Shapefile added by its `.shp` address (#1238) was read without, said: its `.shx`, `.prj`
-/// or `.cpg` when they weren't beside it.
+/// or `.cpg` when they weren't found beside it. The address is said without its keys or signature.
 fn parts_left_out(url: &str, bytes: &[u8]) -> Option<String> {
     rustgis_data::io::shapefile_part_urls(url)?;
     let lacks = rustgis_data::io::shapefile_zip_lacks(bytes);
@@ -2818,7 +2830,8 @@ fn parts_left_out(url: &str, bytes: &[u8]) -> Option<String> {
     let names = lacks.iter().map(|e| format!(".{e}")).collect::<Vec<_>>().join(", ");
     let crs = if lacks.contains(&"prj") { "; its coordinates are read as longitude/latitude" } else { "" };
     let them = if lacks.len() == 1 { "it" } else { "them" };
-    Some(format!("{url}: no {names} beside it ({} of 3 optional files), so it was read without {them}{crs}", lacks.len()))
+    let url = crate::sources::redact(url);
+    Some(format!("{url}: no {names} found beside it ({} of 3 optional files), so it was read without {them}{crs}", lacks.len()))
 }
 
 /// A Shapefile by its `.shp` address, waited for (#1238): the `.shp`, then its `.dbf`, `.shx`,
@@ -2834,7 +2847,7 @@ fn download_shapefile_blocking(url: &str) -> Result<Vec<u8>, String> {
     let wait = || until.saturating_duration_since(std::time::Instant::now());
     let shp = cache::download_blocking_within(url, cache::MAX_DOWNLOAD, wait()).map_err(|e| named(url, e))?;
     // Already zipped (a server answering the address with its parts): read as it is.
-    if shp.starts_with(b"PK") {
+    if is_zip(&shp) {
         return Ok(shp);
     }
     let name = url_file_name(url, &shp).map_err(|e| named(url, e))?;
@@ -2847,7 +2860,7 @@ fn download_shapefile_blocking(url: &str) -> Result<Vec<u8>, String> {
                 got.push((ext, b));
             }
             Err(e) if part_not_there(ext, &u, &e) => {}
-            Err(e) => return Err(named(&u, e)),
+            Err(e) => return Err(part_failed(&u, e)),
         }
     }
     zipped_within(&name, shp, got, left).map_err(|e| named(url, e))
@@ -2868,12 +2881,12 @@ pub fn download_data(url: &str, max: usize, done: crate::render::rustgis_tiles::
         max,
         Box::new(move |r| match r.and_then(|shp| url_file_name(&shp_url, &shp).map(|name| (name, shp))) {
             // Already zipped: as it is.
-            Ok((_, shp)) if shp.starts_with(b"PK") => done(Ok(shp)),
+            Ok((_, shp)) if is_zip(&shp) => done(Ok(shp)),
             Ok((name, shp)) => {
                 let left = max.saturating_sub(shp.len());
                 download_parts(name, shp, parts.into_iter(), Vec::new(), left, done);
             }
-            Err(e) => done(Err(e)),
+            Err(e) => done(Err(if e.starts_with(&shp_url) { e } else { format!("{shp_url}: {e}") })),
         }),
     );
 }
@@ -2913,7 +2926,7 @@ fn download_parts(
                 download_parts(name, shp, parts, got, left, done);
             }
             Err(e) if part_not_there(ext, &url, &e) => download_parts(name, shp, parts, got, left, done),
-            Err(e) => done(Err(if e.starts_with(&url) { e } else { format!("{url}: {e}") })),
+            Err(e) => done(Err(part_failed(&url, e))),
         }),
     );
 }

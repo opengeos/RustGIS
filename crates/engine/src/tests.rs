@@ -9236,9 +9236,9 @@ fn serve_files(files: Vec<(String, Vec<u8>)>) -> (String, std::sync::Arc<std::sy
                     let _ = write!(s, "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len());
                     let _ = s.write_all(body);
                 }
-                // A missing file under `/signed/` is forbidden, as S3 answers a signature that
-                // doesn't cover it.
-                None if path.starts_with("/signed/") => {
+                // A missing file under `/signed/` or `/s3/` is forbidden, as S3 answers a
+                // signature that doesn't cover it, or a missing object to those who can't list.
+                None if path.starts_with("/signed/") || path.starts_with("/s3/") => {
                     let _ = write!(s, "HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
                 }
                 None => {
@@ -9272,6 +9272,7 @@ fn shapefile_by_its_shp_address() {
     files.extend(parts.iter().filter(|(e, _)| *e != "dbf").map(|(e, b)| (format!("/nodbf/rios.{e}"), b.clone())));
     // One whose signature doesn't cover its .prj, and one whose address answers with its parts zipped.
     files.extend(parts.iter().filter(|(e, _)| *e != "prj").map(|(e, b)| (format!("/signed/rios.{e}?sig=1"), b.clone())));
+    files.extend(parts.iter().filter(|(e, _)| *e != "prj").map(|(e, b)| (format!("/s3/rios.{e}"), b.clone())));
     let shp = parts.iter().find(|(e, _)| *e == "shp").unwrap().1.clone();
     let others = parts.iter().filter(|(e, _)| *e != "shp").map(|(e, b)| (*e, b.clone())).collect();
     files.push(("/zipped/rios.shp".into(), rustgis_data::io::zip_shapefile_parts("rios.shp", shp, others).unwrap()));
@@ -9290,10 +9291,15 @@ fn shapefile_by_its_shp_address() {
     let r = s.run("layer.addUrl", &json!({"url": format!("{base}/plain/rios.shp"), "name": "Sem prj"})).unwrap();
     assert_eq!(r["features"], 1, "{r}");
     let said = &s.notices.last().unwrap().text;
-    assert!(said.contains("no .prj, .cpg beside it (2 of 3") && said.contains("longitude/latitude"), "{said}");
+    assert!(said.contains("no .prj, .cpg found beside it (2 of 3") && said.contains("longitude/latitude"), "{said}");
     // A part a signed address is refused (403) fails it, named: the signature may not cover it.
+    // It names the part without the signature.
     let e = s.run("layer.addUrl", &json!({"url": format!("{base}/signed/rios.shp?sig=1")})).unwrap_err();
-    assert!(e.contains("/signed/rios.prj?sig=1") && e.contains("403"), "{e}");
+    assert!(e.contains("/signed/rios.prj") && e.contains("403") && !e.contains("sig=1"), "{e}");
+    // An unsigned address answered 403 for a part (S3, for a missing object) is done without.
+    let r = s.run("layer.addUrl", &json!({"url": format!("{base}/s3/rios.shp"), "name": "S3"})).unwrap();
+    assert_eq!(r["features"], 1, "{r}");
+    assert!(s.notices.last().unwrap().text.contains("no .prj found beside it (1 of 3"), "{:?}", s.notices.last());
     // An address answering with the parts zipped is read as it is, its parts not asked for.
     let r = s.run("layer.addUrl", &json!({"url": format!("{base}/zipped/rios.shp"), "name": "Zipado"})).unwrap();
     assert_eq!(r["features"], 1, "{r}");
@@ -9307,45 +9313,39 @@ fn shapefile_by_its_shp_address() {
     assert_eq!(s.run("layer.addUrl", &json!({"url": url, "name": "Pela janela"})).unwrap()["pending"], true);
     s.leave_downloads = false;
     assert_eq!(s.take_url_requests()[0]["url"], json!(url));
-    let slot = std::sync::Arc::new(std::sync::Mutex::new(None));
-    let land = slot.clone();
-    crate::cmd::layer::download_data(&url, 1 << 20, Box::new(move |r| *land.lock().unwrap() = Some(r)));
-    let bytes = loop {
-        if let Some(r) = slot.lock().unwrap().take() {
-            break r.unwrap();
+    // The app's download, waited for here (failing rather than hanging past 30 s).
+    let fetch = |url: &str, max: usize| {
+        let slot = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let land = slot.clone();
+        crate::cmd::layer::download_data(url, max, Box::new(move |r| *land.lock().unwrap() = Some(r)));
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        loop {
+            if let Some(r) = slot.lock().unwrap().take() {
+                break r;
+            }
+            assert!(std::time::Instant::now() < until, "{url}: the download didn't land");
+            std::thread::sleep(std::time::Duration::from_millis(20));
         }
-        std::thread::sleep(std::time::Duration::from_millis(20));
     };
     let id = s.download_started();
-    assert!(s.download_landed(id, bytes));
+    assert!(s.download_landed(id, fetch(&url, 1 << 20).unwrap()));
     let r = s.run("layer.addDownload", &json!({"id": id, "url": url, "name": "Pela janela"})).unwrap();
     assert_eq!(r["features"], 1, "{r}");
     assert!(s.map().layer_by_name("Pela janela").is_some());
-    // A download too large for the budget together is refused.
-    let slot = std::sync::Arc::new(std::sync::Mutex::new(None));
-    let land = slot.clone();
-    crate::cmd::layer::download_data(&url, 200, Box::new(move |r| *land.lock().unwrap() = Some(r)));
-    let r = loop {
-        if let Some(r) = slot.lock().unwrap().take() {
-            break r;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(20));
-    };
-    // The .shp and .dbf land; the .shx goes over the 2 bytes left, and is named.
-    let e = r.unwrap_err();
-    assert!(e.ends_with("/PI_2211001_RIOS.shx?token=1: larger than 2 bytes"), "{e}");
+    assert!(!s.notices.last().unwrap().text.contains("optional files"), "{:?}", s.notices.last());
+    // Through the app too, what was left out is said.
+    let plain = format!("{base}/plain/rios.shp");
+    let id = s.download_started();
+    assert!(s.download_landed(id, fetch(&plain, 1 << 20).unwrap()));
+    s.run("layer.addDownload", &json!({"id": id, "url": plain, "name": "Sem prj pela janela"})).unwrap();
+    assert!(s.notices.last().unwrap().text.contains("no .prj, .cpg found beside it (2 of 3"), "{:?}", s.notices.last());
+    // A download too large for the budget together is refused: the .shp and .dbf land, and the
+    // .shx goes over the 2 bytes left, named without the address's token.
+    let e = fetch(&url, 200).unwrap_err();
+    assert!(e.contains("/PI_2211001_RIOS.shx") && e.ends_with(": larger than 2 bytes") && !e.contains("token=1"), "{e}");
     // Within the parts' own size, the zip's records go over.
     let exact: usize = parts.iter().map(|(_, b)| b.len()).sum();
-    let slot = std::sync::Arc::new(std::sync::Mutex::new(None));
-    let land = slot.clone();
-    crate::cmd::layer::download_data(&url, exact, Box::new(move |r| *land.lock().unwrap() = Some(r)));
-    let r = loop {
-        if let Some(r) = slot.lock().unwrap().take() {
-            break r;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(20));
-    };
-    assert_eq!(r.unwrap_err(), format!("larger than {exact} bytes, zipped"));
+    assert_eq!(fetch(&url, exact).unwrap_err(), format!("larger than {exact} bytes, zipped"));
 }
 
 /// Data added by its web address: the format from the address or, without one, the contents; a

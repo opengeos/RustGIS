@@ -1675,9 +1675,10 @@ pub fn gather_shapefiles(files: Vec<(String, Vec<u8>)>) -> (Vec<(String, Vec<u8>
 }
 
 /// The addresses of a Shapefile's files beside its `.shp`, by the `.shp`'s address (#1238): the
-/// address with each of [`SHAPEFILE_SIDECARS`] in place of `.shp`, its extension in upper case when
-/// the `.shp`'s is (`.SHP`), its query and fragment kept (a signed address stays signed). `None` for an address whose path doesn't end in
-/// a file named `.shp`, and for one without a scheme (`rios.shp`, a file on this computer).
+/// address with each of [`SHAPEFILE_SIDECARS`] in place of `.shp`, its extension in upper case
+/// when the `.shp`'s is (`.SHP`), its query and fragment kept (a signed address stays signed).
+/// `None` for an address whose path doesn't end in a file named `.shp`, and for one without a
+/// scheme (`rios.shp`, a file on this computer).
 pub fn shapefile_part_urls(url: &str) -> Option<Vec<(&'static str, String)>> {
     let (path, rest) = url.split_at(url.find(['?', '#']).unwrap_or(url.len()));
     let stem = path.get(..path.len().checked_sub(4)?)?;
