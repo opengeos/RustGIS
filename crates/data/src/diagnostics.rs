@@ -421,6 +421,9 @@ fn secret_name(key: &str) -> bool {
         || normalized.contains("connectionstring")
         || normalized.contains("privatekey")
         || normalized.contains("accountkey")
+        // A prefixed name is still one: MAPBOX_API_KEY, X_API_KEY, AWS_ACCESS_KEY_ID.
+        || normalized.contains("apikey")
+        || normalized.contains("accesskey")
         || normalized.contains("sharedaccess")
         || normalized.contains("body")
         || matches!(
@@ -668,9 +671,18 @@ pub fn redact(text: &str) -> String {
                 continue;
             }
             // A non-URL user:password@host is ambiguous: omit the whole field rather than leave
-            // either half of its credentials behind. A word before `@` alone (`alice@example.org`,
-            // `a@2x.png`) is prose.
-            if after.starts_with(':') && after.split_whitespace().next().is_some_and(|s| s.contains('@')) {
+            // either half of its credentials behind, its colon percent-encoded too
+            // (`alice%3Ahidden@host`, to the depth `secret_name` decodes). A word before `@`
+            // alone (`alice@example.org`, `a@2x.png`) is prose.
+            let encoded_colon = after.starts_with('@') && atom.contains('%') && {
+                let mut lower = atom.to_ascii_lowercase();
+                (0..4).any(|_| {
+                    let hit = lower.contains("%3a");
+                    lower = lower.replace("%25", "%");
+                    hit
+                })
+            };
+            if encoded_colon || (after.starts_with(':') && after.split_whitespace().next().is_some_and(|s| s.contains('@'))) {
                 out.push_str("[address omitted]");
                 break;
             }
@@ -772,6 +784,12 @@ mod tests {
             "Server=localhost;User ID=alice;Password='hidden;more'",
             "postgres://alice:hidden@db.example.org/db",
             "alice:hidden@db.example.org",
+            "alice%3Ahidden@db.example.org",
+            "alice%25253Ahidden@db.example.org",
+            "connect alice%253ahidden@db.example.org failed",
+            "Set MAPBOX_API_KEY=pk.hidden for the layer",
+            "X_API_KEY: hidden",
+            "AWS_ACCESS_KEY_ID=hidden",
             "password = 'hidden\nmore hidden'",
             "request_body: hidden",
             "responseBody=hidden",
