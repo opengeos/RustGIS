@@ -374,6 +374,19 @@ pub fn viewshed(r: &Raster, b: usize, observer: Coord, height: f64, radius_m: f6
 /// Inverse distance weighted interpolation of point values onto a longitude/latitude grid, from
 /// each cell's `neighbours` nearest points, or from every point (as QGIS does) when it is 0.
 pub fn idw(points: &[(Coord, f64)], extent: &Extent, cell_deg: f64, power: f64, neighbours: usize, name: &str) -> Result<Raster, String> {
+    idw_on(None, points, extent, cell_deg, power, neighbours, name)
+}
+
+/// [`idw`] on `threads` threads, or as many as its work calls for.
+fn idw_on(
+    threads: Option<usize>,
+    points: &[(Coord, f64)],
+    extent: &Extent,
+    cell_deg: f64,
+    power: f64,
+    neighbours: usize,
+    name: &str,
+) -> Result<Raster, String> {
     if points.len() < 2 {
         return Err("interpolation needs at least two points with values".into());
     }
@@ -395,37 +408,46 @@ pub fn idw(points: &[(Coord, f64)], extent: &Extent, cell_deg: f64, power: f64, 
         return Err("the distance coefficient must be zero or more".into());
     }
     let k = if neighbours == 0 { points.len() } else { neighbours.clamp(1, points.len()) };
-    let mut data = Vec::with_capacity(w * h);
-    let mut near: Vec<(f64, f64)> = Vec::with_capacity(points.len());
-    for row in 0..h {
-        // East-west degrees shrink with latitude, which only changes by row.
-        let kx = (extent.max_y - (row as f64 + 0.5) * cell_deg).to_radians().cos();
-        for col in 0..w {
-            let c = Coord::new(extent.min_x + (col as f64 + 0.5) * cell_deg, extent.max_y - (row as f64 + 0.5) * cell_deg);
-            near.clear();
-            near.extend(points.iter().map(|(p, v)| {
-                let dx = (p.x - c.x) * kx;
-                ((dx * dx + (p.y - c.y).powi(2)).sqrt(), *v)
-            }));
-            if k < near.len() {
-                near.select_nth_unstable_by(k - 1, |a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
-                near.truncate(k);
+    // Each row on its own, on several threads when the work is large (#1252); a thread's
+    // distances go into its own buffer.
+    let threads = threads.unwrap_or_else(|| crate::parallel::threads_for_rows(h, w.saturating_mul(h).saturating_mul(points.len())));
+    let rows = crate::parallel::map_rows(
+        h,
+        threads,
+        || Vec::with_capacity(points.len()),
+        |near: &mut Vec<(f64, f64)>, row| {
+            let mut data = Vec::with_capacity(w);
+            // East-west degrees shrink with latitude, which only changes by row.
+            let kx = (extent.max_y - (row as f64 + 0.5) * cell_deg).to_radians().cos();
+            for col in 0..w {
+                let c = Coord::new(extent.min_x + (col as f64 + 0.5) * cell_deg, extent.max_y - (row as f64 + 0.5) * cell_deg);
+                near.clear();
+                near.extend(points.iter().map(|(p, v)| {
+                    let dx = (p.x - c.x) * kx;
+                    ((dx * dx + (p.y - c.y).powi(2)).sqrt(), *v)
+                }));
+                if k < near.len() {
+                    near.select_nth_unstable_by(k - 1, |a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+                    near.truncate(k);
+                }
+                let v = if let Some(exact) = near.iter().find(|(d, _)| *d < 1e-12) {
+                    exact.1
+                } else {
+                    // Weights relative to the nearest point's: the same ratios as 1/dᵖ, without
+                    // overflowing for a high power.
+                    let nearest = near.iter().map(|(d, _)| *d).fold(f64::INFINITY, f64::min);
+                    let (num, den) = near.iter().fold((0.0, 0.0), |(n, d), (dist, v)| {
+                        let wgt = (nearest / dist).powf(power);
+                        (n + wgt * v, d + wgt)
+                    });
+                    num / den
+                };
+                data.push(if v.is_finite() { v as f32 } else { NODATA });
             }
-            let v = if let Some(exact) = near.iter().find(|(d, _)| *d < 1e-12) {
-                exact.1
-            } else {
-                // Weights relative to the nearest point's: the same ratios as 1/dᵖ, without
-                // overflowing for a high power.
-                let nearest = near.iter().map(|(d, _)| *d).fold(f64::INFINITY, f64::min);
-                let (num, den) = near.iter().fold((0.0, 0.0), |(n, d), (dist, v)| {
-                    let wgt = (nearest / dist).powf(power);
-                    (n + wgt * v, d + wgt)
-                });
-                num / den
-            };
-            data.push(if v.is_finite() { v as f32 } else { NODATA });
-        }
-    }
+            data
+        },
+    );
+    let data = rows.concat();
     let gt = GeoTransform { origin_x: extent.min_x, origin_y: extent.max_y, pixel_width: cell_deg, pixel_height: -cell_deg };
     Raster::new(name, w as u32, h as u32, vec![data], gt, Crs::LonLat, Some(NODATA as f64), ColorHint::Gray, "Float32")
         .map_err(|e| e.to_string())
@@ -1083,6 +1105,27 @@ impl Expr {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Rows made on several threads give the same surface, bit for bit, as one thread (#1252),
+    /// from every point and from the nearest few.
+    #[test]
+    fn idw_on_several_threads_is_idw_on_one() {
+        let pts: Vec<(Coord, f64)> = (0..500)
+            .map(|i| {
+                let (x, y) = ((i * 37 % 500) as f64 / 50.0, (i * 91 % 500) as f64 / 50.0);
+                (Coord::new(x, 40.0 + y), (x * 1.3).sin() * 100.0 + y * 7.0)
+            })
+            .collect();
+        let extent = Extent::new(0.0, 40.0, 10.0, 50.0);
+        for neighbours in [0, 8] {
+            let one = idw_on(Some(1), &pts, &extent, 0.1, 2.0, neighbours, "idw").unwrap_or_else(|e| panic!("{e}"));
+            for threads in [2, 7, 16] {
+                let many = idw_on(Some(threads), &pts, &extent, 0.1, 2.0, neighbours, "idw").unwrap_or_else(|e| panic!("{e}"));
+                let bits = |r: &Raster| r.bands[0].data.iter().map(|v| v.to_bits()).collect::<Vec<_>>();
+                assert_eq!(bits(&one), bits(&many), "{threads} threads, {neighbours} neighbours");
+            }
+        }
+    }
 
     #[test]
     fn terrain_rows_match_scalar_edges_nodata_and_orientations() {

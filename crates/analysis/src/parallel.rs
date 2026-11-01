@@ -12,13 +12,46 @@ pub(crate) const BATCH: usize = 16;
 /// Each worker's stack, as large as the main thread's usually is.
 const STACK_BYTES: usize = 8 << 20;
 
+/// The work below which a raster tool's rows are made on one thread (cell-point pairs, say: a
+/// few milliseconds of it).
+pub(crate) const MIN_ROW_WORK: usize = 2_000_000;
+
 /// How many threads to make `items` items on: one below `min_items`, always one in the browser,
 /// and no more than there are batches.
 pub(crate) fn threads_for(items: usize, min_items: usize) -> usize {
     if cfg!(target_arch = "wasm32") || items < min_items {
         return 1;
     }
-    std::thread::available_parallelism().map_or(1, |n| n.get()).min(MAX_THREADS).min(items.div_ceil(BATCH)).max(1)
+    cores().min(items.div_ceil(BATCH)).max(1)
+}
+
+/// How many threads to make `rows` raster rows on, `work` in all: one below [`MIN_ROW_WORK`] and
+/// in the browser, and no more than there are rows.
+pub(crate) fn threads_for_rows(rows: usize, work: usize) -> usize {
+    if cfg!(target_arch = "wasm32") || work < MIN_ROW_WORK {
+        return 1;
+    }
+    cores().min(rows).max(1)
+}
+
+/// The cores to use, at most [`MAX_THREADS`].
+fn cores() -> usize {
+    std::thread::available_parallelism().map_or(1, |n| n.get()).min(MAX_THREADS)
+}
+
+/// `f` on each of `rows` raster rows by its number, the rows in their order, on `threads`
+/// threads ([`threads_for_rows`]). A row is costly enough to be taken one at a time, so rows
+/// that cost more than others are shared out too. Each thread makes its own `scratch()` once.
+pub(crate) fn map_rows<S, R: Send>(
+    rows: usize,
+    threads: usize,
+    scratch: impl Fn() -> S + Sync,
+    f: impl Fn(&mut S, usize) -> R + Sync,
+) -> Vec<R> {
+    match try_each_on(rows, 1, threads, scratch, |s, i| Ok::<R, std::convert::Infallible>(f(s, i))) {
+        Ok(made) => made,
+        Err(never) => match never {},
+    }
 }
 
 /// `f` on each of `items` with its index, the results in their order: on several threads when
@@ -46,25 +79,52 @@ pub(crate) fn try_map_on<T: Sync, S, R: Send, E: Send>(
     scratch: impl Fn() -> S + Sync,
     f: impl Fn(&mut S, usize, &T) -> Result<R, E> + Sync,
 ) -> Result<Vec<R>, E> {
-    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-    if threads <= 1 || items.len() <= 1 {
-        let mut s = scratch();
-        return items.iter().enumerate().map(|(i, item)| f(&mut s, i, item)).collect();
+    try_each_on(items.len(), BATCH, threads, scratch, |s, i| f(s, i, &items[i]))
+}
+
+/// Sets the stop flag when the thread it lives on panics, so the others stop after the items
+/// they are making rather than make the rest for nothing.
+struct StopOnPanic<'a>(&'a std::sync::atomic::AtomicBool);
+
+impl Drop for StopOnPanic<'_> {
+    fn drop(&mut self) {
+        if std::thread::panicking() {
+            self.0.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
     }
+}
+
+/// [`try_map_on`] over the indices `0..len`, taken `batch` at a time.
+fn try_each_on<S, R: Send, E: Send>(
+    len: usize,
+    batch: usize,
+    threads: usize,
+    scratch: impl Fn() -> S + Sync,
+    f: impl Fn(&mut S, usize) -> Result<R, E> + Sync,
+) -> Result<Vec<R>, E> {
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    if threads <= 1 || len <= 1 {
+        let mut s = scratch();
+        return (0..len).map(|i| f(&mut s, i)).collect();
+    }
+    let batch = batch.max(1);
     let next = AtomicUsize::new(0);
     let failed = AtomicBool::new(false);
     let work = || {
+        let _stop = StopOnPanic(&failed);
         let mut s = scratch();
         let mut made = Vec::new();
         while !failed.load(Ordering::Relaxed) {
-            let from = next.fetch_add(BATCH, Ordering::Relaxed);
-            let Some(batch) = items.get(from..items.len().min(from + BATCH)).filter(|b| !b.is_empty()) else { break };
-            for (k, item) in batch.iter().enumerate() {
-                match f(&mut s, from + k, item) {
-                    Ok(r) => made.push((from + k, r)),
+            let from = next.fetch_add(batch, Ordering::Relaxed);
+            if from >= len {
+                break;
+            }
+            for i in from..len.min(from.saturating_add(batch)) {
+                match f(&mut s, i) {
+                    Ok(r) => made.push((i, r)),
                     Err(e) => {
                         failed.store(true, Ordering::Relaxed);
-                        return Err((from + k, e));
+                        return Err((i, e));
                     }
                 }
             }
@@ -82,7 +142,7 @@ pub(crate) fn try_map_on<T: Sync, S, R: Send, E: Send>(
             parts.push(h.join().unwrap_or_else(|e| std::panic::resume_unwind(e)));
         }
     });
-    let mut made: Vec<(usize, R)> = Vec::with_capacity(items.len());
+    let mut made: Vec<(usize, R)> = Vec::with_capacity(len);
     let mut first: Option<(usize, E)> = None;
     for part in parts {
         match part {
@@ -215,6 +275,45 @@ mod tests {
         );
         assert!(r.is_err());
         assert!(ran.load(std::sync::atomic::Ordering::Relaxed) < items.len());
+    }
+
+    #[test]
+    fn rows_come_back_in_their_order_one_at_a_time() {
+        let alone: Vec<usize> = (0..37).map(|r| r * 3).collect();
+        for threads in [1, 2, 5, 16, 64] {
+            assert_eq!(map_rows(37, threads, || (), |_, r| r * 3), alone, "{threads} threads");
+        }
+        assert!(map_rows(0, 4, || (), |_, r| r).is_empty());
+        // Small work, and the browser: one thread; never more threads than rows.
+        assert_eq!(threads_for_rows(100, MIN_ROW_WORK - 1), 1);
+        assert!(threads_for_rows(3, usize::MAX) <= 3);
+    }
+
+    #[test]
+    fn a_workers_panic_stops_the_other_threads() {
+        // A worker panics on its first item; the others stop after the items they are making,
+        // far short of all of them. Unless no worker could start: then nothing panics.
+        let items: Vec<u32> = (0..2_000).collect();
+        let caller = std::thread::current().id();
+        let ran = std::sync::atomic::AtomicUsize::new(0);
+        let r = std::panic::catch_unwind(|| {
+            map_on(
+                &items,
+                4,
+                || (),
+                |_, _, x| {
+                    ran.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    if std::thread::current().id() != caller {
+                        panic!("a worker's panic");
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+                    *x
+                },
+            )
+        });
+        if r.is_err() {
+            assert!(ran.load(std::sync::atomic::Ordering::Relaxed) < items.len() / 2, "{}", ran.load(std::sync::atomic::Ordering::Relaxed));
+        }
     }
 
     #[test]
