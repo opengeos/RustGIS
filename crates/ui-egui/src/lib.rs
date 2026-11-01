@@ -1175,7 +1175,12 @@ impl RustGisApp {
             panes::start_geolibre_load(&mut self);
         }
         // Plugins the web app installed in earlier visits (the desktop loads its plugins folder).
-        pluginsui::restore(&mut self);
+        // Their fetches (the blocklist, each plugin) are this session's: a failure is recorded
+        // in its Diagnostics.
+        {
+            let _diagnostics = self.session.diagnostics.enter();
+            pluginsui::restore(&mut self);
+        }
         // A GeoLibre runner located earlier (Locate… in the Tools pane).
         if let Some(path) = self.services.load_pref.as_ref().and_then(|load| load("geolibre_runner")).filter(|p| !p.is_empty())
             && let Err(e) = self.session.run("gp.setGeolibre", &json!({"path": path}))

@@ -43,7 +43,8 @@ impl Filter {
             Self::Errors => record.severity == Severity::Error,
             Self::Warnings => record.severity == Severity::Warning,
             Self::Info => record.severity == Severity::Info,
-            Self::Network => record.network.is_some(),
+            // The note that further servers' absences go unlisted belongs with the absences.
+            Self::Network => record.network.is_some() || record.source == "Network",
         }
     }
 }
@@ -182,15 +183,8 @@ impl History {
         });
     }
 
-    fn retain(&self, mut record: Record) {
-        let mut state = lock(&self.0);
-        state.next_id = state.next_id.saturating_add(1);
-        state.generation = state.generation.wrapping_add(1);
-        record.id = state.next_id;
-        if state.records.len() >= MAX_RECORDS {
-            state.records.pop_front();
-        }
-        state.records.push_back(record);
+    fn retain(&self, record: Record) {
+        store(&mut lock(&self.0), record);
     }
 
     /// Oldest first; both the count and every string in this independent snapshot are bounded.
@@ -242,40 +236,45 @@ impl Capture {
     pub fn absence_said(&self, url: &str, status: u16) {
         let Some(state) = self.0.upgrade() else { return };
         // The server is the address's origin (scheme, host and port): two tile sources on one
-        // host but different ports are two sources.
-        let server = url::Url::parse(url).map(|u| u.origin().ascii_serialization()).unwrap_or_default();
-        let (first, overflow) = {
-            let mut guard = lock(&state);
-            if guard.absences_said.contains(&server) {
-                (false, false)
-            } else if guard.absences_said.len() >= MAX_ABSENT_SERVERS {
-                // Past the cap a new server isn't listed, and that is said once.
-                (false, !std::mem::replace(&mut guard.absences_overflow_said, true))
-            } else {
-                guard.absences_said.push(server);
-                (true, false)
+        // host but different ports are two sources. An address without a web origin (`s3://`)
+        // is its scheme and host, so two buckets are two sources.
+        let server = url::Url::parse(url)
+            .map(|u| {
+                let origin = u.origin();
+                if origin.is_tuple() { origin.ascii_serialization() } else { format!("{}://{}", u.scheme(), u.host_str().unwrap_or("")) }
+            })
+            .unwrap_or_default();
+        // Checked, marked and stored under one lock: a Clear between can't leave the note behind.
+        let mut guard = lock(&state);
+        if guard.absences_said.contains(&server) {
+            return;
+        }
+        if guard.absences_said.len() >= MAX_ABSENT_SERVERS {
+            // Past the cap a new server isn't listed, and that is said once.
+            if std::mem::replace(&mut guard.absences_overflow_said, true) {
+                return;
             }
-        };
-        if overflow {
-            History(state).retain(Record {
-                id: 0,
-                timestamp_ms: timestamp_ms(),
-                severity: Severity::Warning,
-                source: "Network".to_string(),
-                message: format!(
-                    "expected absences from further servers are not listed: this history names the first {MAX_ABSENT_SERVERS} servers"
-                ),
-                details: String::new(),
-                network: None,
-            });
+            let message =
+                format!("expected absences from further servers are not listed: this history names the first {MAX_ABSENT_SERVERS} servers");
+            store(
+                &mut guard,
+                Record {
+                    id: 0,
+                    timestamp_ms: timestamp_ms(),
+                    severity: Severity::Warning,
+                    source: "Network".to_string(),
+                    message,
+                    details: String::new(),
+                    network: None,
+                },
+            );
             return;
         }
-        if !first {
-            return;
-        }
-        // The address without its query or fragment, as a failure's record keeps it.
-        let url = url.get(..url.find(['?', '#']).unwrap_or(url.len())).unwrap_or("");
-        History(state).retain(Record {
+        guard.absences_said.push(server);
+        // The address without its query or fragment, or a secret in its path, as a failure's
+        // record keeps it.
+        let url = path_secrets_redacted(url.get(..url.find(['?', '#']).unwrap_or(url.len())).unwrap_or(""));
+        let record = Record {
             id: 0,
             timestamp_ms: timestamp_ms(),
             severity: Severity::Warning,
@@ -286,13 +285,14 @@ impl Capture {
             ),
             details: String::new(),
             network: Some(Network {
-                url: bounded(url, MAX_URL_BYTES),
+                url: bounded(&url, MAX_URL_BYTES),
                 method: "GET".to_string(),
                 status: Some(status),
                 duration_ms: None,
                 kind: NetworkKind::Http,
             }),
-        });
+        };
+        store(&mut guard, record);
     }
 
     /// Retains one sanitized failure only in the originating live session. Callers supply local
@@ -303,7 +303,7 @@ impl Capture {
             "[oversized address omitted]".to_string()
         } else {
             let end = network.url.find(['?', '#']).unwrap_or(network.url.len());
-            bounded(network.url.get(..end).unwrap_or(""), MAX_URL_BYTES)
+            bounded(&path_secrets_redacted(network.url.get(..end).unwrap_or("")), MAX_URL_BYTES)
         };
         network.method = match network.method.as_str() {
             "GET" | "HEAD" | "POST" | "PUT" | "PATCH" | "DELETE" | "OPTIONS" => network.method,
@@ -319,6 +319,43 @@ impl Capture {
             network: Some(network),
         });
     }
+}
+
+/// Adds a record to a locked history: numbered, the oldest let go past [`MAX_RECORDS`].
+fn store(state: &mut State, mut record: Record) {
+    state.next_id = state.next_id.saturating_add(1);
+    state.generation = state.generation.wrapping_add(1);
+    record.id = state.next_id;
+    if state.records.len() >= MAX_RECORDS {
+        state.records.pop_front();
+    }
+    state.records.push_back(record);
+}
+
+/// An address (without its query) with the value of each `name=value` in its path that names a
+/// secret replaced (`/files;token=abc/x.png`, `/token=abc/x.png`): the path is kept, as context,
+/// so a credential carried in it must not be.
+fn path_secrets_redacted(address: &str) -> String {
+    let mut out = String::with_capacity(address.len());
+    for (s, segment) in address.split('/').enumerate() {
+        if s > 0 {
+            out.push('/');
+        }
+        for (p, part) in segment.split(';').enumerate() {
+            if p > 0 {
+                out.push(';');
+            }
+            match part.split_once('=') {
+                Some((name, _)) if secret_name(name) => {
+                    out.push_str(name);
+                    out.push('=');
+                    out.push_str(REDACTED);
+                }
+                _ => out.push_str(part),
+            }
+        }
+    }
+    out
 }
 
 /// Redacts, then bounds: a record's copy of a message or of details.
@@ -436,9 +473,17 @@ fn bare_name(key: &str) -> bool {
 }
 
 /// Whether a word looks like a credential rather than prose: it has a digit, is long, or holds
-/// punctuation. "Token refreshed" and "Password is missing" are prose; "token abc123" is not.
+/// punctuation, a sentence's own ending aside. "Token refreshed." and "Password is missing" are
+/// prose; "token abc123" is not.
 fn credential_shaped(word: &str) -> bool {
+    let word = word.trim_end_matches(['.', ',', '!', '?', ';', ':', ')']);
     word.chars().any(|c| c.is_ascii_digit()) || word.chars().count() >= 16 || word.chars().any(|c| !c.is_alphanumeric())
+}
+
+/// Whether a word after a scheme word (`Basic`) looks like its base64 credential: shaped like a
+/// credential, or a capital past its first letter ("dXNlcjpwYXNz"), so "Basic settings" keeps.
+fn base64_shaped(word: &str) -> bool {
+    credential_shaped(word) || word.chars().skip(1).any(char::is_uppercase)
 }
 
 /// Sanitizes before bounding. Oversized input is omitted *whole*, so a secret can never be
@@ -496,8 +541,12 @@ pub fn redact(text: &str) -> String {
             if let Some(end) = end {
                 let key = rest.get(c.len_utf8()..end).unwrap_or("");
                 let after = rest.get(end + c.len_utf8()..).unwrap_or("");
-                if (after.trim_start().starts_with([':', '=']) || after.chars().next().is_some_and(char::is_whitespace)) && secret_name(key)
-                {
+                // A quoted secret name before `:` or `=` is a field. Before a space, it is one
+                // only when one of the next two words looks like a credential ("'password' is
+                // hunter2"), so prose keeps its words ("Column 'key' is missing").
+                let field = after.trim_start().starts_with([':', '='])
+                    || (after.chars().next().is_some_and(char::is_whitespace) && after.split_whitespace().take(2).any(credential_shaped));
+                if field && secret_name(key) {
                     out.push_str(REDACTED);
                     break;
                 }
@@ -526,14 +575,14 @@ pub fn redact(text: &str) -> String {
                                 .chars()
                                 .any(|c| c.is_control() || matches!(c, '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')) =>
                     {
-                        out.push_str(address);
+                        out.push_str(&path_secrets_redacted(address));
                     }
                     Ok(mut url) if url.has_host() => {
                         let _ = url.set_username("");
                         let _ = url.set_password(None);
                         url.set_query(None);
                         url.set_fragment(None);
-                        out.push_str(url.as_str());
+                        out.push_str(&path_secrets_redacted(url.as_str()));
                     }
                     _ => out.push_str("[address omitted]"),
                 }
@@ -580,12 +629,12 @@ pub fn redact(text: &str) -> String {
                 // A bare credential line is redacted only where the text or line begins, for an
                 // unambiguous secret name, and when the word after it looks like a credential, so
                 // ordinary notices keep their words ("Token refreshed", "Password is missing").
-                // A scheme word (`Basic`) is followed by its credential whatever its shape: a Basic
-                // credential is base64, letters and digits that may look like a word.
+                // A scheme word (`Basic`) needs a word shaped like base64 after it, which may
+                // look like a word but has capitals inside: "Basic settings were saved" keeps.
                 let next = after.trim_start().split(char::is_whitespace).next().unwrap_or("");
                 let scheme = atom.eq_ignore_ascii_case("basic");
-                let bare =
-                    line && after.chars().next().is_some_and(char::is_whitespace) && bare_name(atom) && (scheme || credential_shaped(next));
+                let shaped = if scheme { base64_shaped(next) } else { credential_shaped(next) };
+                let bare = line && after.chars().next().is_some_and(char::is_whitespace) && bare_name(atom) && shaped;
                 if field || bare {
                     out.push_str(REDACTED);
                     break;
@@ -710,7 +759,7 @@ mod tests {
             "secret hiddenhiddenhidden1",
             "https://example.org/path?token=hidden hidden",
             "Bearer hidden",
-            "Basic hidden",
+            "Basic hidden==",
             "Cookie: session=hidden; other=hidden",
             "Set-Cookie: hidden",
             r#"failed: {"Password":"hidden"}"#,
@@ -772,6 +821,11 @@ mod tests {
             "Key column 'id' is missing",
             "Choose the Basic plan to map with.",
             "Token refreshed",
+            "Token refreshed.",
+            "Basic settings were saved",
+            "Column 'key' is missing",
+            "Layer 'Body Mass' failed",
+            "The 'password' field is required.",
             "Password is missing for this connection.",
         ] {
             assert_eq!(redact(text), text, "{text}");
@@ -779,6 +833,9 @@ mod tests {
         // A credential line is still redacted whole, wherever it begins.
         assert_eq!(redact("failed\ntoken abc123"), "failed\n[REDACTED]");
         assert_eq!(redact("Authorization: Bearer hidden"), "[REDACTED]");
+        // A Basic credential is base64: capitals inside a word, or a digit or padding.
+        assert_eq!(redact("Basic dXNlcjpwYXNz"), "[REDACTED]");
+        assert_eq!(redact("Basic YWxhZGRpbjpvcGVuc2VzYW1l"), "[REDACTED]");
     }
 
     fn failed(capture: &Capture, message: &str) {
@@ -886,8 +943,14 @@ mod tests {
     }
     #[test]
     fn quoted_and_adversarial_credential_fields_are_omitted() {
-        for input in ["\"token\" hidden".to_string(), "\"password\" is hidden".to_string(), format!("{} token=hidden", "\\\"".repeat(4000))]
-        {
+        // A quoted secret name before a space is a field when a following word looks like a
+        // credential; prose after one is covered by `prose_naming_credentials_keeps_its_words`.
+        for input in [
+            "\"token\" hidden-value".to_string(),
+            "\"password\" is hidden42".to_string(),
+            "'key': hidden".to_string(),
+            format!("{} token=hidden", "\\\"".repeat(4000)),
+        ] {
             assert!(!redact(&input).contains("hidden"));
         }
     }
@@ -903,12 +966,43 @@ mod tests {
         // One note for each server up to the cap, then one saying further servers aren't listed.
         assert_eq!(records.len(), MAX_ABSENT_SERVERS + 1);
         assert!(records.last().is_some_and(|r| r.message.contains("further servers are not listed")));
+        assert!(records.last().is_some_and(|r| Filter::Network.matches(r)), "shown with the absences it speaks for");
         // Clear says it again.
         history.clear();
         for i in 0..MAX_ABSENT_SERVERS + 3 {
             capture.absence_said(&format!("https://tiles{i}.example.org/0/0/0.png"), 404);
         }
         assert_eq!(history.records().len(), MAX_ABSENT_SERVERS + 1);
+    }
+
+    #[test]
+    fn absences_without_a_web_origin_are_said_per_bucket() {
+        let history = History::default();
+        let capture = history.capture();
+        capture.absence_said("s3://first-bucket/tiles/0/0/0.png", 404);
+        capture.absence_said("s3://first-bucket/tiles/1/1/1.png", 404);
+        capture.absence_said("s3://second-bucket/tiles/0/0/0.png", 404);
+        assert_eq!(history.records().len(), 2, "one note for each bucket");
+    }
+
+    #[test]
+    fn secrets_in_a_url_path_are_redacted() {
+        let history = History::default();
+        let capture = history.capture();
+        capture.absence_said("https://tiles.example.org/token=hidden-path-value/0/0/0.png", 404);
+        failed(&capture, "failed");
+        let report = history.report(Filter::All);
+        assert!(!report.contains("hidden-path-value"), "{report}");
+        assert!(report.contains("token=[REDACTED]"), "{report}");
+        for text in [
+            "Could not reach https://tiles.example.org/files;api_key=hidden-path-value/0.png: timeout",
+            "Could not reach https://alice:pw@tiles.example.org/token=hidden-path-value/0.png: timeout",
+        ] {
+            let clean = redact(text);
+            assert!(!clean.contains("hidden-path-value") && clean.contains("[REDACTED]") && clean.ends_with("timeout"), "{clean}");
+        }
+        // A path without a secret stays as written.
+        assert_eq!(redact("Could not reach https://example.org/a=b/c: timeout"), "Could not reach https://example.org/a=b/c: timeout");
     }
 
     #[test]

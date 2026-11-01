@@ -177,12 +177,26 @@ pub fn in_flight() -> usize {
 }
 
 /// What the cache holds for `url`, fetching it when it holds nothing (or a failure old enough
-/// to try again).
+/// to try again). Every failed fetch is recorded in the asking session's diagnostics: use
+/// [`get_tile`] for a map tile, whose 404 is routine.
 pub fn get(url: &str, want: Want) -> State {
+    request(url, want, &[])
+}
+
+/// Like [`get`], for a map tile: a server's 404 for it is routine (the map asks past an area's
+/// edges), so it makes no network record of its own; each would flood the history and evict
+/// real failures. A picture that isn't a tile (a single-image layer, a layout's picture, a
+/// style's sprite sheet) goes through [`get`], so its 404 is recorded.
+pub fn get_tile(url: &str, want: Want) -> State {
+    request(url, want, &[404])
+}
+
+/// [`get`] with the statuses that are expected answers for this fetch.
+fn request(url: &str, want: Want, omit: &'static [u16]) -> State {
     // A map tile of a layer in another system: its service's picture as it comes, or made from
     // its pictures (#769).
     if let Some(base) = crate::warp::direct(url) {
-        return get(base, want);
+        return request(base, want, omit);
     }
     let now = Instant::now();
     let mut c = lock();
@@ -219,7 +233,7 @@ pub fn get(url: &str, want: Want) -> State {
     }
     c.slots.insert(url.to_string(), Slot { entry: Entry::Pending, used: tick, asked: now });
     drop(c);
-    start(url.to_string(), want);
+    start(url.to_string(), want, omit);
     State::Pending
 }
 
@@ -346,13 +360,16 @@ pub fn wait_for_news(since: u64, timeout: Duration) {
     let _ = (since, timeout);
 }
 
-fn queue() -> &'static Mutex<Queue<(Want, Capture)>> {
-    static Q: OnceLock<Mutex<Queue<(Want, Capture)>>> = OnceLock::new();
+/// A waiting fetch: what to decode it as, whose diagnostics it goes to, and its expected statuses.
+type Job = (Want, Capture, &'static [u16]);
+
+fn queue() -> &'static Mutex<Queue<Job>> {
+    static Q: OnceLock<Mutex<Queue<Job>>> = OnceLock::new();
     Q.get_or_init(Mutex::default)
 }
 
 /// Asks for a tile: fetched now when its server has room, else it waits its turn.
-fn start(url: String, want: Want) {
+fn start(url: String, want: Want, omit: &'static [u16]) {
     let capture = Capture::current();
     IN_FLIGHT.fetch_add(1, Ordering::Relaxed);
     let mut swept = Vec::new();
@@ -360,7 +377,7 @@ fn start(url: String, want: Want) {
         let mut q = queue().lock().unwrap_or_else(|e| e.into_inner());
         let mut c = lock();
         let latest = c.latest.unwrap_or_else(Instant::now);
-        let now = q.push(url, (want, capture), |u| c.slots.get(u).map(|s| s.asked), latest, &mut swept);
+        let now = q.push(url, (want, capture, omit), |u| c.slots.get(u).map(|s| s.asked), latest, &mut swept);
         // Under the same lock as the choice: a tile asked for again meanwhile isn't forgotten.
         forget_dropped(&mut c, &swept);
         now
@@ -384,7 +401,7 @@ fn release(host: &str) {
 
 /// Forgets tiles dropped unfetched: no longer under way, and fetched again when next asked for.
 /// Called holding the cache's lock taken to choose them, so a tile can't be asked for between.
-fn forget_dropped(c: &mut Cache, dropped: &[Waiting<(Want, Capture)>]) {
+fn forget_dropped(c: &mut Cache, dropped: &[Waiting<Job>]) {
     for w in dropped {
         if matches!(c.slots.get(&w.url), Some(Slot { entry: Entry::Pending, .. })) {
             c.slots.remove(&w.url);
@@ -396,8 +413,8 @@ fn forget_dropped(c: &mut Cache, dropped: &[Waiting<(Want, Capture)>]) {
 /// Starts fetches one after another, never inside each other: a fetch can be over at once (a
 /// local read, an archive that failed), and each one over starts the next waiting tile, so a
 /// long queue would otherwise go as deep into the stack as it is long.
-fn launch(jobs: Vec<Waiting<(Want, Capture)>>) {
-    static TO_START: Mutex<Vec<Waiting<(Want, Capture)>>> = Mutex::new(Vec::new());
+fn launch(jobs: Vec<Waiting<Job>>) {
+    static TO_START: Mutex<Vec<Waiting<Job>>> = Mutex::new(Vec::new());
     static STARTING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
     let pop = || TO_START.lock().unwrap_or_else(|e| e.into_inner()).pop();
     if !jobs.is_empty() {
@@ -419,9 +436,9 @@ fn launch(jobs: Vec<Waiting<(Want, Capture)>>) {
             }
             let _lower = Lower;
             while let Some(w) = pop() {
-                let (want, capture) = w.job;
+                let (want, capture, omit) = w.job;
                 let _scope = capture.enter();
-                fetch_tile(w.url, w.host, want);
+                fetch_tile(w.url, w.host, want, omit);
             }
         }
         // A tile queued after the last `pop` and before the flag went down is started here.
@@ -464,7 +481,7 @@ impl Drop for Answer {
     }
 }
 
-fn fetch_tile(url: String, host: String, want: Want) {
+fn fetch_tile(url: String, host: String, want: Want, omit: &'static [u16]) {
     let answer = Answer { key: url.clone(), host, entry: None };
     let done: Done = Box::new(move |bytes| {
         if matches!(&bytes, Err(e) if e == DROPPED) {
@@ -503,10 +520,7 @@ fn fetch_tile(url: String, host: String, want: Want) {
         crate::mbtiles::fetch(&url, done);
         return;
     }
-    // Tiles a server doesn't have are routine (the map asks past an area's edges): each would
-    // flood the history and evict real failures. A style's or a TileJSON's 404 is a real
-    // failure, so it is kept.
-    fetch_bytes(url, done, if matches!(want, Want::Json) { &[] } else { &[404] });
+    fetch_bytes(url, done, omit);
 }
 
 /// Decodes what a fetch gave as `want` and hands it to `settle`: a picture through `decoder`, if
@@ -2446,5 +2460,23 @@ mod tests {
         for done in std::mem::take(&mut *STUCK.lock().unwrap()) {
             done(Ok(b"1".to_vec()));
         }
+
+        // Only a map tile's 404 is an expected answer: a picture that isn't a tile (a single
+        // image, a layout's picture, a sprite sheet) and a style keep theirs.
+        static OMITS: Mutex<Vec<(String, &'static [u16])>> = Mutex::new(Vec::new());
+        set_fetcher_omitting(|url, done, omit| {
+            OMITS.lock().unwrap().push((url, omit));
+            done(Err("http status: 404".into()));
+        });
+        let _ = get_tile("test://omit/tile.png", Want::Image);
+        let _ = get_tile("test://omit/tile.pbf", Want::Vector);
+        let _ = get("test://omit/picture.png", Want::Image);
+        let _ = get("test://omit/style.json", Want::Json);
+        let omits = std::mem::take(&mut *OMITS.lock().unwrap());
+        let omit = |name: &str| omits.iter().find(|(u, _)| u.ends_with(name)).map(|(_, o)| *o);
+        assert_eq!(omit("tile.png"), Some(&[404][..]));
+        assert_eq!(omit("tile.pbf"), Some(&[404][..]));
+        assert_eq!(omit("picture.png"), Some(&[][..]));
+        assert_eq!(omit("style.json"), Some(&[][..]));
     }
 }
