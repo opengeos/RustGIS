@@ -76,7 +76,8 @@ uploaded file. Native formats include GeoJSON, delimited text, GeoParquet, FlatG
 zipped Shapefiles, KML/KMZ, GPX, spreadsheets, GeoRSS, GML, DXF, TopoJSON, LiDAR and rasters.
 A Shapefile published as loose files, one address per part, is added by its `.shp` address:
 the `.dbf` beside it (same name and folder) is fetched too, and the `.shx`, `.prj` and `.cpg` when
-they are there, within the same download limit together.
+they are there, within the same download limit together. A presigned address (S3's `X-Amz-*`)
+signs one file, so its Shapefile's parts can't be fetched with it: add that Shapefile zipped.
 Downloads are limited to 512 MiB on desktop and 256 MiB on the web; individual readers may have
 lower limits (the whole-file vector readers use 256 MiB). In the web app the server must allow
 requests from web pages (CORS). On the desktop, with
