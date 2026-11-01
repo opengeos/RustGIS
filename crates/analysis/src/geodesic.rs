@@ -15,13 +15,15 @@
 //! stretch's centre, where the sides are within 0.05%. A ring gains at most [`MAX_ADDED`] points,
 //! which only a ring of thousands of long edges uses up; past that, its edges are left whole.
 //!
-//! Arcs are drawn as `geo` draws them by default, close to GEOS and PostGIS's 8 edges to a quarter
-//! circle: a point's circle with 32 edges, a line's caps and a polygon's corners with 15 to a half
-//! circle. Between an arc's vertices the outline runs inside it, by up to 0.48% of the distance
-//! round a point and 0.55% at a cap or corner.
+//! Arcs use a 2.8125° step: 128 edges to a point's circle and 64 to a semicircular cap.
+//! Between vertices, those edges cut at most 0.031% of the distance inside the circle in the
+//! projection plane. A short corner can have a step approaching 5.625° when the backend rounds
+//! its segment count down, cutting at most 0.125% inside, on top of the projection error.
 
 use geo::{
-    BooleanOps, Buffer, Contains, Coord as GC, LineString, MultiLineString, MultiPolygon, Orient, Point, Polygon, orient::Direction,
+    BooleanOps, Buffer, Contains, Coord as GC, CoordsIter, LineString, MultiLineString, MultiPolygon, Orient, Point, Polygon,
+    algorithm::buffer::{BufferStyle, LineCap, LineJoin},
+    orient::Direction,
 };
 use rustgis_data::{Coord, Geometry};
 use rustgis_geom::{Aeqd, geodesic_interpolate, haversine_m, lonlat_to_merc, merc_to_lonlat, spherical_centre};
@@ -65,19 +67,63 @@ const EARTH_R_M: f64 = rustgis_geom::EARTH_RADIUS_M;
 /// a tenth of the turn at 45°, as at about 5.7° of latitude.
 const FLAT_ALLOWANCE: f64 = 0.1;
 
+/// A circle's area deficit is under 0.041% with 128 edges: less than half the reference's
+/// 0.1% bound, leaving room for projection error.
+const ARC_STEP: f64 = std::f64::consts::PI / 64.0;
+
+pub(crate) const VERTEX_BUDGET_ERROR: &str = "Buffer exceeds its vertex budget; split large features or select fewer features";
+
+/// Round arcs at the same density for points, line caps and polygon corners, including stretches.
+fn buffer_style(metres: f64) -> BufferStyle<f64> {
+    BufferStyle::new(metres).line_cap(LineCap::Round(ARC_STEP)).line_join(LineJoin::Round(ARC_STEP))
+}
+
 /// A feature's buffer at `metres` (negative shrinks a polygon), in lon/lat; `None` when nothing
 /// is left.
 pub fn geodesic_buffer(g: &Geometry, metres: f64) -> Option<Geometry> {
+    geodesic_buffer_with_limit(g, metres, usize::MAX).ok().and_then(|b| b.geometry)
+}
+
+/// A buffered outline and its budget charge: at least the retained coordinate count, or the
+/// pre-union disc total for a multipoint, whichever is larger.
+pub(crate) struct BudgetedBuffer {
+    pub geometry: Option<Geometry>,
+    pub charged_vertices: usize,
+}
+
+/// A buffer that must fit the caller's remaining vertex budget. Multipoint discs are counted
+/// before collecting them for union, and their charge is returned for the caller to accumulate.
+/// Other geometries are checked before conversion to the returned geometry; this bounds retained
+/// outlines, not all temporary allocations inside the polygon overlay backend.
+pub(crate) fn geodesic_buffer_with_limit(g: &Geometry, metres: f64, max_vertices: usize) -> Result<BudgetedBuffer, &'static str> {
     if !metres.is_finite() {
-        return None;
+        return Ok(BudgetedBuffer { geometry: None, charged_vertices: 0 });
     }
+    let mut pre_union_vertices = 0;
     let mp = match g {
         Geometry::Point(c) => point(*c, metres),
-        Geometry::MultiPoint(v) => union(v.iter().map(|c| point(*c, metres)).collect()),
+        Geometry::MultiPoint(v) => {
+            let mut remaining = max_vertices;
+            let mut discs = Vec::new();
+            for c in v {
+                let disc = point(*c, metres);
+                if disc.0.is_empty() {
+                    continue;
+                }
+                remaining = remaining.checked_sub(disc.coords_count()).ok_or(VERTEX_BUDGET_ERROR)?;
+                discs.push(disc);
+            }
+            pre_union_vertices = max_vertices - remaining;
+            union(discs)
+        }
         Geometry::Line(parts) => lines(&finite(parts), metres),
         Geometry::Polygon(polys) => polygons(&polys.iter().map(|rings| finite(rings)).collect::<Vec<_>>(), metres),
     };
-    to_geometry(&mp)
+    if mp.coords_count() > max_vertices {
+        return Err(VERTEX_BUDGET_ERROR);
+    }
+    let charged_vertices = pre_union_vertices.max(mp.coords_count());
+    Ok(BudgetedBuffer { geometry: to_geometry(&mp), charged_vertices })
 }
 
 /// Buffers of this many features or more are made on several threads.
@@ -91,32 +137,51 @@ const STACK_BYTES: usize = 8 << 20;
 /// The buffers of `geoms` at `metres`, in their order, as [`geodesic_buffer`] makes them: on
 /// several threads when there are many (one in the browser), since each is made alone.
 pub fn geodesic_buffers(geoms: &[&Geometry], metres: f64) -> Vec<Option<Geometry>> {
+    geodesic_buffers_with_limit(geoms, metres, usize::MAX).unwrap_or_default()
+}
+
+/// Ordered parallel buffers sharing an outline budget, including pre-union multipoint discs.
+/// `usize::MAX` disables cumulative charging for the public unlimited API. Each worker checks its current
+/// allowance before buffering, then atomically charges the result before retaining it. In-flight
+/// operations may allocate temporary geometry on each worker (one worker in the browser).
+pub(crate) fn geodesic_buffers_with_limit(geoms: &[&Geometry], metres: f64, limit: usize) -> Result<Vec<Option<Geometry>>, &'static str> {
     let threads = if cfg!(target_arch = "wasm32") || geoms.len() < PARALLEL_FEATURES {
         1
     } else {
         std::thread::available_parallelism().map_or(1, |n| n.get()).min(16)
     };
-    buffers_on(geoms, metres, threads)
+    buffers_on(geoms, metres, threads, limit)
 }
 
-/// [`geodesic_buffers`] on `threads` threads, this one among them. Each takes the next
-/// [`BATCH`] of features until none are left, so the work is shared however it is spread, and
-/// the results go back in their places. A thread that can't start (a limit on threads, say)
-/// leaves its share to the others; one that panics passes its panic on, as a buffer made here
-/// would.
-fn buffers_on(geoms: &[&Geometry], metres: f64, threads: usize) -> Vec<Option<Geometry>> {
-    if threads <= 1 {
-        return geoms.iter().map(|g| geodesic_buffer(g, metres)).collect();
-    }
-    let next = std::sync::atomic::AtomicUsize::new(0);
+/// [`geodesic_buffers_with_limit`] on `threads` threads, this one among them. Each takes the next
+/// [`BATCH`] of features until none are left, and results go back in their places. The shared
+/// remaining budget is charged before a worker retains an outline. A thread that cannot start
+/// leaves its work to the others; a worker panic is passed on as in a buffer made here.
+fn buffers_on(geoms: &[&Geometry], metres: f64, threads: usize, limit: usize) -> Result<Vec<Option<Geometry>>, &'static str> {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let next = AtomicUsize::new(0);
+    let remaining = AtomicUsize::new(limit);
     let work = || {
         let mut made = Vec::new();
         loop {
-            let from = next.fetch_add(BATCH, std::sync::atomic::Ordering::Relaxed);
+            let from = next.fetch_add(BATCH, Ordering::Relaxed);
             let Some(batch) = geoms.get(from..geoms.len().min(from + BATCH)).filter(|b| !b.is_empty()) else { break };
-            made.extend(batch.iter().enumerate().map(|(i, g)| (from + i, geodesic_buffer(g, metres))));
+            for (i, g) in batch.iter().enumerate() {
+                let buffered = geodesic_buffer_with_limit(g, metres, remaining.load(Ordering::Relaxed))?;
+                if limit != usize::MAX {
+                    let mut left = remaining.load(Ordering::Relaxed);
+                    loop {
+                        let next = left.checked_sub(buffered.charged_vertices).ok_or(VERTEX_BUDGET_ERROR)?;
+                        match remaining.compare_exchange_weak(left, next, Ordering::Relaxed, Ordering::Relaxed) {
+                            Ok(_) => break,
+                            Err(current) => left = current,
+                        }
+                    }
+                }
+                made.push((from + i, buffered.geometry));
+            }
         }
-        made
+        Ok::<_, &'static str>(made)
     };
     let mut out: Vec<Option<Geometry>> = vec![None; geoms.len()];
     let mut place = |made: Vec<(usize, Option<Geometry>)>| {
@@ -126,17 +191,22 @@ fn buffers_on(geoms: &[&Geometry], metres: f64, threads: usize) -> Vec<Option<Ge
             }
         }
     };
-    std::thread::scope(|scope| {
-        let others: Vec<_> =
-            (1..threads).filter_map(|_| std::thread::Builder::new().stack_size(STACK_BYTES).spawn_scoped(scope, work).ok()).collect();
-        place(work());
-        for h in others {
-            // Not a new panic but the worker's, raised again here as a serial run would raise it,
-            // for `analysis::run` to catch (AGENTS.md's never-crash rule is about new ones).
-            place(h.join().unwrap_or_else(|e| std::panic::resume_unwind(e)));
-        }
-    });
-    out
+    if threads <= 1 {
+        place(work()?);
+    } else {
+        std::thread::scope(|scope| {
+            let others: Vec<_> =
+                (1..threads).filter_map(|_| std::thread::Builder::new().stack_size(STACK_BYTES).spawn_scoped(scope, work).ok()).collect();
+            place(work()?);
+            for h in others {
+                // Not a new panic but the worker's, raised again here as a serial run would raise it,
+                // for `analysis::run` to catch (AGENTS.md's never-crash rule is about new ones).
+                place(h.join().unwrap_or_else(|e| std::panic::resume_unwind(e))?);
+            }
+            Ok::<_, &'static str>(())
+        })?;
+    }
+    Ok(out)
 }
 
 /// An azimuthal equidistant plane whose centre's longitude is within 180° of `reference`, a
@@ -329,7 +399,7 @@ fn point(c: Coord, metres: f64) -> MultiPolygon<f64> {
         return MultiPolygon::new(vec![]);
     }
     let plane = Plane::new(c, c.x);
-    plane.back(&Point::new(0.0, 0.0).buffer(metres), metres)
+    plane.back(&Point::new(0.0, 0.0).buffer_with_style(buffer_style(metres)), metres)
 }
 
 /// A line's buffer: in one projection centred on it when it fits, else in stretches.
@@ -338,7 +408,8 @@ fn lines(parts: &[Vec<Coord>], metres: f64) -> MultiPolygon<f64> {
     let Some(centre) = spherical_centre(&all) else { return MultiPolygon::new(vec![]) };
     if fits(&all, centre) {
         let plane = Plane::new(centre, all.first().map_or(centre.x, |c| c.x));
-        return plane.back(&MultiLineString::new(parts.iter().map(|p| plane.line(p)).collect()).buffer(metres), metres);
+        return plane
+            .back(&MultiLineString::new(parts.iter().map(|p| plane.line(p)).collect()).buffer_with_style(buffer_style(metres)), metres);
     }
     union(stretched(parts, metres))
 }
@@ -362,7 +433,7 @@ fn polygons(polys: &[Vec<Vec<Coord>>], metres: f64) -> MultiPolygon<f64> {
     };
     if fits(&all, centre) {
         let plane = Plane::new(centre, all.first().map_or(centre.x, |c| c.x));
-        return plane.back(&shape(&|r| plane.line(r)).buffer(metres), metres);
+        return plane.back(&shape(&|r| plane.line(r)).buffer_with_style(buffer_style(metres)), metres);
     }
     // A buffer distributes over a union: the polygon's buffer is the polygon with its outline's
     // buffer added (or, inward, taken away). The polygon stays in lon/lat, along the same densified
@@ -397,7 +468,7 @@ fn stretched(parts: &[Vec<Coord>], metres: f64) -> Vec<MultiPolygon<f64>> {
             let Some(stretch) = d.get(start..=end.min(d.len().saturating_sub(1))) else { break };
             if let (Some(centre), Some(first)) = (spherical_centre(stretch), stretch.first()) {
                 let plane = Plane::new(centre, first.x);
-                out.push(plane.back(&plane.line(stretch).buffer(metres), metres));
+                out.push(plane.back(&plane.line(stretch).buffer_with_style(buffer_style(metres)), metres));
             }
             // Consecutive stretches share a vertex, so their buffers overlap.
             if end + 1 >= d.len() {
@@ -458,6 +529,32 @@ fn to_geometry(mp: &MultiPolygon<f64>) -> Option<Geometry> {
 mod tests {
     use super::*;
 
+    /// Samples the actual projected outlines: shallow turns exercise a rounded-down join,
+    /// while larger turns would fail this bound at the old default arc density.
+    #[test]
+    fn round_polygon_corners_and_line_joins_keep_their_error_bound() {
+        for degrees in [0.25_f64, 2.8, 2.9, 5.5, 8.3, 89.0, 179.0] {
+            let angle = degrees.to_radians();
+            let line = LineString::from(vec![(-100.0, 0.0), (0.0, 0.0), (100.0 * angle.cos(), 100.0 * angle.sin())]);
+            for shape in [geo::Geometry::LineString(line.clone()), geo::Geometry::Polygon(Polygon::new(line, vec![]))] {
+                let buffered = shape.buffer_with_style(buffer_style(1.0));
+                let mut probes = 0;
+                for edge in buffered.0.iter().flat_map(|p| p.exterior().0.windows(2)) {
+                    let [a, b] = edge else { continue };
+                    if (a.x.hypot(a.y) - 1.0).abs() > 1e-5 || (b.x.hypot(b.y) - 1.0).abs() > 1e-5 {
+                        continue;
+                    }
+                    for t in [0.0, 0.25, 0.5, 0.75, 1.0] {
+                        let distance = (a.x + t * (b.x - a.x)).hypot(a.y + t * (b.y - a.y));
+                        assert!((1.0 - 0.00125 - 1e-5..=1.0 + 1e-5).contains(&distance), "{degrees}°: {distance}");
+                        probes += 1;
+                    }
+                }
+                assert!(probes > 0, "no corner samples at {degrees}°");
+            }
+        }
+    }
+
     #[test]
     fn a_ring_gains_at_most_max_added_points() {
         // 2,000 edges of about 100 km zigzagging across the plane, each needing dozens of splits.
@@ -513,11 +610,23 @@ mod tests {
         let refs: Vec<&Geometry> = points.iter().collect();
         let alone: Vec<Option<Geometry>> = refs.iter().map(|g| geodesic_buffer(g, 5_000.0)).collect();
         assert_eq!(geodesic_buffers(&refs, 5_000.0), alone);
-        // However many threads, and fewer features than threads or batches.
+        let vertices: usize = alone.iter().flatten().map(Geometry::coord_count).sum();
+        // The exact shared limit succeeds; one vertex less fails on every thread count.
         for threads in [1, 3, 16] {
-            assert_eq!(buffers_on(&refs, 5_000.0, threads), alone, "{threads} threads");
-            assert_eq!(buffers_on(&refs[..3], 5_000.0, threads), alone[..3], "{threads} threads, 3 features");
+            assert_eq!(buffers_on(&refs, 5_000.0, threads, vertices).unwrap(), alone);
+            assert_eq!(buffers_on(&refs, 5_000.0, threads, vertices - 1).unwrap_err(), VERTEX_BUDGET_ERROR);
+            assert_eq!(buffers_on(&refs, 5_000.0, threads, usize::MAX).unwrap(), alone, "{threads} threads");
+            assert_eq!(buffers_on(&refs[..3], 5_000.0, threads, usize::MAX).unwrap(), alone[..3], "{threads} threads, 3 features");
         }
-        assert!(buffers_on(&[], 5_000.0, 3).is_empty());
+        assert!(buffers_on(&[], 5_000.0, 3, 0).unwrap().is_empty());
+        // Overlapping multipoint unions stay small, but every disc is charged across workers.
+        let multipoint = Geometry::MultiPoint(vec![Coord::new(0.0, 0.0); 2]);
+        let refs = vec![&multipoint; 2 * BATCH];
+        let disc_vertices = geodesic_buffer(&Geometry::Point(Coord::new(0.0, 0.0)), 5_000.0).unwrap().coord_count();
+        let charge = refs.len() * 2 * disc_vertices;
+        for threads in [1, 3, 16] {
+            assert!(buffers_on(&refs, 5_000.0, threads, charge).is_ok());
+            assert_eq!(buffers_on(&refs, 5_000.0, threads, charge - 1).unwrap_err(), VERTEX_BUDGET_ERROR);
+        }
     }
 }

@@ -1,6 +1,8 @@
 //! The tools.
 
-use geo::{BooleanOps, Contains, ConvexHull, InteriorPoint, Intersects, MultiPolygon, Orient, Relate, Simplify, orient::Direction};
+use geo::{
+    BooleanOps, Contains, ConvexHull, CoordsIter, InteriorPoint, Intersects, MultiPolygon, Orient, Relate, Simplify, orient::Direction,
+};
 use rustgis_data::raster::Crs;
 use rustgis_data::{Coord, Dataset, Feature, Field, FieldType, Geometry, GeometryType, Value};
 use rustgis_geom::Extent;
@@ -9,7 +11,7 @@ use std::borrow::Cow;
 use std::collections::{HashMap, HashSet, TryReserveError};
 
 use crate::convert::{from_line, from_multipolygon, from_point, to_geo, to_multiline, to_multipolygon};
-use crate::geodesic::{geodesic_buffer, geodesic_buffers};
+use crate::geodesic::{VERTEX_BUDGET_ERROR, geodesic_buffer_with_limit, geodesic_buffers_with_limit};
 use crate::{Inputs, Output, OutputLayer, ParamKind as K, ParamSpec as P, ToolResult, ToolSpec};
 
 const UNITS: &[&str] = &["Kilometers", "Meters", "Miles", "Feet"];
@@ -1137,7 +1139,18 @@ fn union_all<'a>(polys: impl IntoIterator<Item = &'a geo::Polygon<f64>>) -> Mult
 // ---------------------------------------------------------------------------------------------
 // tools
 
+/// At most 32 MB of retained outline coordinates, before dataset/overlay overhead. The same
+/// budget applies before dissolve, so a large dissolved request cannot accumulate every disc.
+const MAX_BUFFER_VERTICES: usize = 2_000_000;
+
+/// Buffer with the output budget shared by all selected input features.
 fn buffer(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
+    buffer_with_vertex_limit(inp, p, MAX_BUFFER_VERTICES)
+}
+
+/// Runs the tool with a vertex budget; the explicit limit also lets the regression exercise
+/// exhaustion with a few features rather than allocating millions of coordinates.
+fn buffer_with_vertex_limit(inp: &dyn Inputs, p: &Json, limit: usize) -> Result<ToolResult, String> {
     let ds = input(inp, p, "input")?;
     let d = num(p, "distance").ok_or("Distance must be a number")?;
     let metres = to_metres(d, s(p, "units"))?;
@@ -1149,7 +1162,7 @@ fn buffer(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
     let picked: Vec<&Feature> = rows(inp, p, "input", ds).into_iter().filter_map(|r| ds.features.get(r)).collect();
     let geoms: Vec<(&Feature, &Geometry)> = picked.iter().filter_map(|f| Some((*f, f.geometry.as_ref()?))).collect();
     let without = picked.len() - geoms.len();
-    let buffers = geodesic_buffers(&geoms.iter().map(|(_, g)| *g).collect::<Vec<_>>(), metres);
+    let buffers = geodesic_buffers_with_limit(&geoms.iter().map(|(_, g)| *g).collect::<Vec<_>>(), metres, limit)?;
     // Buffers with nothing in them: points at a negative distance, polygons that shrink away,
     // features with no finite coordinates.
     let mut empty = 0;
@@ -1167,6 +1180,9 @@ fn buffer(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
     if !all.is_empty() {
         out.fields.clear();
         let u = union_all(all.iter().flat_map(|m| m.0.iter()));
+        if u.coords_count() > limit {
+            return Err(VERTEX_BUDGET_ERROR.into());
+        }
         if let Some(geom) = from_multipolygon(&u) {
             out.push(Some(geom), vec![]);
         }
@@ -2183,22 +2199,33 @@ fn simplify(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
 /// Select against nearby selectors, indexed in the projection used by the predicate and after
 /// any distance buffer. Inversion and input row order keep the exhaustive selection's semantics.
 fn select_by_location(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
+    select_by_location_with_vertex_limit(inp, p, MAX_BUFFER_VERTICES)
+}
+
+/// Bounds retained distance-buffer outlines across selectors before building the spatial index.
+/// Zero-distance selection uses original geometries and does not consume the buffer budget.
+fn select_by_location_with_vertex_limit(inp: &dyn Inputs, p: &Json, limit: usize) -> Result<ToolResult, String> {
     let ds = input(inp, p, "input")?;
     let sel_ds = input(inp, p, "select")?;
     let dist = to_metres(num(p, "distance").unwrap_or(0.0).max(0.0), s(p, "units"))?;
     if dist > 5_000_000.0 {
         return Err("Distance is too large (limit 5000 km)".into());
     }
-    let selectors: Vec<(geo::Geometry<f64>, Extent)> = rows(inp, p, "select", sel_ds)
-        .iter()
-        .filter_map(|r| sel_ds.features.get(*r)?.geometry.as_ref())
-        .map(|g| {
-            let b = if dist > 0.0 { geodesic_buffer(g, dist) } else { None };
-            let gg = to_geo(b.as_ref().unwrap_or(g));
-            let ext = merc_extent(&gg);
-            (gg, ext)
-        })
-        .collect();
+    let mut remaining = limit;
+    let mut selectors = Vec::new();
+    for r in rows(inp, p, "select", sel_ds) {
+        let Some(g) = sel_ds.features.get(r).and_then(|f| f.geometry.as_ref()) else { continue };
+        let b = if dist > 0.0 {
+            let buffered = geodesic_buffer_with_limit(g, dist, remaining)?;
+            remaining = remaining.saturating_sub(buffered.charged_vertices);
+            buffered.geometry
+        } else {
+            None
+        };
+        let gg = to_geo(b.as_ref().unwrap_or(g));
+        let ext = merc_extent(&gg);
+        selectors.push((gg, ext));
+    }
     let index = ExtentIndex::new(selectors.iter().map(|(_, ext)| *ext));
     let invert = s(p, "invert") == "Yes";
     let hits: Vec<usize> = (0..ds.features.len())
@@ -4207,6 +4234,7 @@ fn join_field_tool(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::geodesic::geodesic_buffer;
     use rustgis_data::Feature;
     use std::collections::HashMap;
 
@@ -4864,6 +4892,70 @@ mod tests {
         assert!(ran * 2 >= tested, "only {ran} of {tested} layer tools ran on these inputs");
     }
 
+    /// The budget covers accumulated features and pre-union multipoint discs, including
+    /// dissolve requests. Exhaustion is an error, never a partial layer or a silent skip.
+    #[test]
+    fn buffer_vertex_budget_covers_features_and_multipoint_discs() {
+        let point = Coord::new(0.0, 0.0);
+        let vertices = geodesic_buffer(&Geometry::Point(point), 1000.0).unwrap().coord_count();
+        let mut ds = Dataset::new("p", GeometryType::Point, vec![]);
+        for c in [point, Coord::new(0.5, 0.0)] {
+            ds.push(Some(Geometry::Point(c)), vec![]);
+        }
+        let mut m = Map(HashMap::from([("p".to_string(), ds)]));
+        for dissolve in ["None", "All"] {
+            let params = serde_json::json!({"input": "p", "distance": 1, "dissolve": dissolve});
+            assert!(buffer_with_vertex_limit(&m, &params, 2 * vertices).is_ok());
+            assert!(buffer_with_vertex_limit(&m, &params, vertices).unwrap_err().contains("vertex budget"));
+        }
+        // Crossing thin rectangles add intersection vertices during dissolve even though no
+        // original vertex lies inside the other rectangle. The inputs fit; the union does not.
+        let rectangle = |x: f64, y: f64| {
+            Geometry::Polygon(vec![vec![vec![
+                Coord::new(-x, -y),
+                Coord::new(x, -y),
+                Coord::new(x, y),
+                Coord::new(-x, y),
+                Coord::new(-x, -y),
+            ]]])
+        };
+        let mut cross = Dataset::new("cross", GeometryType::Polygon, vec![]);
+        for g in [rectangle(0.02, 0.001), rectangle(0.001, 0.02)] {
+            cross.push(Some(g), vec![]);
+        }
+        let outline_vertices = cross
+            .features
+            .iter()
+            .filter_map(|f| f.geometry.as_ref())
+            .filter_map(|g| geodesic_buffer(g, 0.0))
+            .map(|g| g.coord_count())
+            .sum();
+        let cross_inputs = Map(HashMap::from([("cross".into(), cross)]));
+        let mut params = serde_json::json!({"input":"cross", "distance":0, "dissolve":"None"});
+        assert!(buffer_with_vertex_limit(&cross_inputs, &params, outline_vertices).is_ok());
+        params["dissolve"] = serde_json::json!("All");
+        let union = layer(buffer_with_vertex_limit(&cross_inputs, &params, usize::MAX).unwrap());
+        assert!(union.features[0].geometry.as_ref().unwrap().coord_count() > outline_vertices);
+        assert!(buffer_with_vertex_limit(&cross_inputs, &params, outline_vertices).unwrap_err().contains("vertex budget"));
+        // All discs overlap: the final union fits, but collecting the discs must still stop.
+        m.0.get_mut("p").unwrap().features.clear();
+        m.0.get_mut("p").unwrap().push(Some(Geometry::MultiPoint(vec![point; 3])), vec![]);
+        for dissolve in ["None", "All"] {
+            let params = serde_json::json!({"input": "p", "distance": 1, "dissolve": dissolve});
+            assert!(buffer_with_vertex_limit(&m, &params, 2 * vertices).unwrap_err().contains("vertex budget"));
+        }
+        // Each feature's discs fit alone, but their combined pre-union charge does not.
+        m.0.get_mut("p").unwrap().features.clear();
+        for _ in 0..2 {
+            m.0.get_mut("p").unwrap().push(Some(Geometry::MultiPoint(vec![point; 2])), vec![]);
+        }
+        for dissolve in ["None", "All"] {
+            let params = serde_json::json!({"input":"p", "distance":1, "dissolve":dissolve});
+            assert!(buffer_with_vertex_limit(&m, &params, 4 * vertices).is_ok());
+            assert!(buffer_with_vertex_limit(&m, &params, 3 * vertices).unwrap_err().contains("vertex budget"));
+        }
+    }
+
     #[test]
     fn buffers_made_on_threads_keep_their_features_and_say_which_had_no_geometry() {
         // Enough features for several threads: each output keeps its own attributes and buffer.
@@ -5040,21 +5132,21 @@ mod tests {
     /// sides of a 2 km buffer of a 96 km east–west line sat up to 190 m off. Every vertex, and every
     /// edge's quarter points and midpoint as the tools draw edges (straight in Web Mercator), is now
     /// within 0.012% of the distance (or 1 cm) along a line's sides, and no further inside an arc
-    /// than its edges cut: 32 to a point's circle and 15 to a half circle at a line's cap, as `geo`
-    /// draws them.
+    /// than 0.031% of the distance in the projection plane (#1221). The old 32-edge circles
+    /// and 15-edge caps cut about 0.5% inside and fail these bounds.
     #[test]
     fn buffer_outlines_keep_their_distance_between_vertices() {
         let fractions = [0.25, 0.5, 0.75];
         let points = |polys: &[Vec<Vec<Coord>>]| -> Vec<Coord> {
             polys.iter().flatten().flatten().copied().chain(along_edges(polys, &fractions)).collect()
         };
-        // An arc of n edges to a circle cuts d(1 − cos(π/n)) inside it between vertices.
-        let sag = |d: f64, n: f64| d * (1.0 - (std::f64::consts::PI / n).cos());
+        // Bound the geometric error independently of how many vertices the buffer emits.
+        let arc_error = |d: f64| d * 3.1e-4;
 
         let centre = Coord::new(10.125, 46.125);
         for c in points(&buffered(Geometry::Point(centre), 1.0)) {
             let d = on_wgs84_m(centre, c);
-            assert!(d < 1_000.1 && d > 1_000.0 - sag(1_000.0, 32.0) - 0.1, "{c:?} is {d} m from the centre");
+            assert!(d < 1_000.1 && d > 1_000.0 - arc_error(1_000.0) - 0.1, "{c:?} is {d} m from the centre");
         }
 
         // A long east–west line; a diagonal one across the equator, where the stray changes side
@@ -5083,9 +5175,9 @@ mod tests {
             for c in points(&buffered(Geometry::Line(vec![vec![a, b]]), km)) {
                 let (d, beside) = m_to_geodesic(c, &samples);
                 // Along the sides, within 0.012% or 1 cm (and the sampler's millimetre); round the
-                // caps, within the sag of their 15 edges to a half circle.
+                // caps, add the 0.031% arc approximation in the projection plane.
                 let side = (d0 * 1.2e-4).max(0.01) + 1e-3;
-                let bound = if beside { side } else { sag(d0, 30.0) + side };
+                let bound = if beside { side } else { arc_error(d0) + side };
                 assert!(d < d0 + side && d > d0 - bound, "{km} km: {c:?} is {d} m from the line");
             }
         }
@@ -5096,7 +5188,7 @@ mod tests {
         let north = Coord::new(10.0, 83.0);
         for c in points(&buffered(Geometry::Point(north), 1000.0)).into_iter().filter(|c| c.y.abs() < 85.0) {
             let d = on_wgs84_m(north, c);
-            assert!(d < 1_000_000.0 * (1.0 + 1.2e-4) && d > 1_000_000.0 - sag(1_000_000.0, 32.0) - 100.0, "{c:?} is {d} m from {north:?}");
+            assert!(d < 1_000_000.0 * (1.0 + 1.2e-4) && d > 1_000_000.0 - arc_error(1_000_000.0) - 100.0, "{c:?} is {d} m from {north:?}");
         }
 
         // Coordinates off the Earth have no geodesic: buffering them doesn't panic.
@@ -6267,6 +6359,41 @@ mod tests {
         let m = Map(HashMap::from([("masks".into(), masks), ("lines".into(), lines)]));
         let out = layer(crate::run("clip", &m, &serde_json::json!({"input":"lines", "clip":"masks"})).unwrap());
         assert_eq!(out.features.iter().filter_map(|f| f.geometry.clone()).collect::<Vec<_>>(), expected);
+    }
+
+    /// Distance selection shares one outline budget, including overlapping multipoint discs.
+    /// Exhaustion must fail before producing a partial selection, even when inverted.
+    #[test]
+    fn location_selection_bounds_accumulated_buffer_outlines() {
+        let point = Coord::new(0.0, 0.0);
+        let vertices = geodesic_buffer(&Geometry::Point(point), 1000.0).unwrap().coord_count();
+        let mut selectors = Dataset::new("selectors", GeometryType::Point, vec![]);
+        for c in [point, Coord::new(0.5, 0.0)] {
+            selectors.push(Some(Geometry::Point(c)), vec![]);
+        }
+        let mut features = Dataset::new("features", GeometryType::Point, vec![]);
+        features.push(Some(Geometry::Point(point)), vec![]);
+        let mut m = Map(HashMap::from([("selectors".into(), selectors), ("features".into(), features)]));
+        for invert in ["No", "Yes"] {
+            let p = serde_json::json!({"input":"features", "select":"selectors", "distance":1, "invert":invert});
+            let result = select_by_location_with_vertex_limit(&m, &p, 2 * vertices).unwrap();
+            let Output::Selection { rows, .. } = result.output else { panic!("expected selection") };
+            assert_eq!(rows, if invert == "No" { vec![0] } else { vec![] });
+            assert!(select_by_location_with_vertex_limit(&m, &p, vertices).unwrap_err().contains("vertex budget"));
+        }
+        // A zero-distance predicate does not allocate buffer outlines.
+        let p = serde_json::json!({"input":"features", "select":"selectors", "distance":0});
+        assert!(select_by_location_with_vertex_limit(&m, &p, 0).is_ok());
+        m.0.get_mut("selectors").unwrap().features.clear();
+        m.0.get_mut("selectors").unwrap().push(Some(Geometry::MultiPoint(vec![point; 3])), vec![]);
+        let p = serde_json::json!({"input":"features", "select":"selectors", "distance":1});
+        assert!(select_by_location_with_vertex_limit(&m, &p, 2 * vertices).unwrap_err().contains("vertex budget"));
+        m.0.get_mut("selectors").unwrap().features.clear();
+        for _ in 0..2 {
+            m.0.get_mut("selectors").unwrap().push(Some(Geometry::MultiPoint(vec![point; 2])), vec![]);
+        }
+        assert!(select_by_location_with_vertex_limit(&m, &p, 4 * vertices).is_ok());
+        assert!(select_by_location_with_vertex_limit(&m, &p, 3 * vertices).unwrap_err().contains("vertex budget"));
     }
 
     #[test]
