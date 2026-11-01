@@ -6,7 +6,7 @@ use std::io::{self, Read, Seek, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const MIB: u64 = 1024 * 1024;
 const CANDIDATES: usize = 256;
@@ -15,6 +15,14 @@ pub const INDEX_DEFAULT_BYTES: u64 = 2048 * MIB;
 pub fn index_budget() -> u64 {
     std::env::var("RUSTGIS_SHP_CACHE_MIB").ok().and_then(|s| s.parse::<u64>().ok()).unwrap_or(INDEX_DEFAULT_BYTES / MIB).clamp(64, 65536)
         * MIB
+}
+pub const INDEX_DEFAULT_DAYS: u64 = 30;
+/// How long an index may go unused before a sweep drops it, within budget or not: indexes of
+/// files that were deleted or moved are never opened again (#1230).
+pub fn index_max_idle() -> Duration {
+    let days =
+        std::env::var("RUSTGIS_SHP_CACHE_DAYS").ok().and_then(|s| s.parse::<u64>().ok()).unwrap_or(INDEX_DEFAULT_DAYS).clamp(1, 3650);
+    Duration::from_secs(days * 24 * 60 * 60)
 }
 pub fn index_dir() -> PathBuf {
     #[cfg(test)]
@@ -288,7 +296,11 @@ impl Lease {
         file.lock_shared()?;
         self.ready = true;
         drop(directory);
-        let _ = maintain(root, self.budget);
+        // A new index of a file replaces those of its earlier versions (#1230).
+        let newest = if self.temporary { None } else { self.path.file_name().and_then(|n| n.to_str()) };
+        if let Ok(directory) = directory_lock(root) {
+            let _ = prune_locked(&directory.root, self.budget, newest);
+        }
         Ok(())
     }
 }
@@ -312,20 +324,19 @@ impl Drop for Lease {
         if self.temporary || !self.ready {
             let _ = remove_unpinned(&self.path);
         }
-        // Sweep only a cache the last sweep left over budget (#1230): a sweep per release made
-        // every open slower as the cache grew. Files without a readable lease can't be evicted,
-        // so while they hold the cache over budget every release still sweeps. A failed build
-        // never reached the sweep at commit, so it sweeps here: abandoned builds filling the
-        // disk would otherwise make every later build fail too.
+        // Sweep only a cache the last sweep left over budget with indexes in use, which a release
+        // may free (#1230): a sweep per release made every open slower as the cache grew. A
+        // failed build never reached the sweep at commit, so it sweeps here: abandoned builds
+        // filling the disk would otherwise make every later build fail too.
         if !self.ready || over_budget(&directory.root) {
-            let _ = prune_locked(&directory.root, self.budget);
+            let _ = prune_locked(&directory.root, self.budget, None);
         }
     }
 }
 
-/// The cache folders whose last sweep in this process ended over budget or failed. Only this
-/// process's sweeps set or clear the mark: one in another process doesn't reach it until this
-/// process builds an index and sweeps again.
+/// The cache folders whose last sweep in this process ended over budget with indexes in use, or
+/// failed. Only this process's sweeps set or clear the mark: one in another process doesn't
+/// reach it until this process builds an index and sweeps again.
 static OVER_BUDGET: Mutex<BTreeSet<PathBuf>> = Mutex::new(BTreeSet::new());
 
 fn over_budget(root: &Path) -> bool {
@@ -454,7 +465,7 @@ pub fn reserve_index(root: &Path, key: &str, budget: u64) -> io::Result<Lease> {
     if reserved.is_err() {
         // No lease was taken here, so no release will sweep this folder: sweep it now, so
         // abandoned builds filling the disk don't make every later reservation fail too.
-        let _ = prune_locked(&directory.root, budget);
+        let _ = prune_locked(&directory.root, budget, None);
     }
     reserved
 }
@@ -484,21 +495,30 @@ pub struct PruneStats {
 }
 pub fn maintain(root: &Path, budget: u64) -> io::Result<PruneStats> {
     let directory = directory_lock(root)?;
-    prune_locked(&directory.root, budget)
+    prune_locked(&directory.root, budget, None)
 }
-fn prune_locked(root: &Path, budget: u64) -> io::Result<PruneStats> {
+/// Sweeps a locked cache folder. `newest` names an index just committed: idle indexes of
+/// earlier versions of the same file go with it.
+fn prune_locked(root: &Path, budget: u64, newest: Option<&str>) -> io::Result<PruneStats> {
     #[cfg(test)]
     SWEEPS.with(|n| n.set(n.get() + 1));
-    let stats = sweep(root, budget);
-    // A failed sweep may have left the cache over budget, so the next release sweeps again.
+    let stats = sweep(root, budget, newest);
+    // Mark the folder for the next release only when releases can bring it back within budget:
+    // a cache over budget because of indexes in use, or a sweep that failed. Files a sweep never
+    // evicts (without a readable lease) would otherwise make every release sweep, and evict the
+    // index it just released.
     let over = match &stats {
-        Ok(s) => s.remaining_bytes > budget,
+        Ok(s) => s.remaining_bytes > budget && s.pinned_bytes > 0 && s.remaining_bytes.saturating_sub(s.pinned_bytes) <= budget,
         Err(_) => true,
     };
     note_budget(root, over);
     stats
 }
-fn sweep(root: &Path, budget: u64) -> io::Result<PruneStats> {
+fn sweep(root: &Path, budget: u64, newest: Option<&str>) -> io::Result<PruneStats> {
+    // `rg-index-v1-{file}-{version}.sqlite`: the same file's other versions share the prefix.
+    let replaced = newest.and_then(|name| name.get(..29)).filter(|prefix| prefix.starts_with("rg-index-v1-"));
+    let now = SystemTime::now();
+    let max_idle = index_max_idle();
     let mut stats = PruneStats::default();
     loop {
         stats.remaining_bytes = 0;
@@ -543,14 +563,21 @@ fn sweep(root: &Path, budget: u64) -> io::Result<PruneStats> {
                 continue;
             }
             let temporary = flag != Some(b'C') || !name.starts_with("rg-index-v1-");
-            if temporary && std::fs::remove_file(&path).is_ok() {
+            let modified = lock.metadata()?.modified().ok();
+            let used = modified.unwrap_or(UNIX_EPOCH);
+            // An index of an earlier version of a file just indexed again, or one unused for
+            // longer than the limit (its file deleted or moved, say), is stale (#1230). An
+            // unknown or future time never counts as unused.
+            let superseded = replaced.is_some_and(|prefix| name.starts_with(prefix) && Some(name.as_str()) != newest);
+            let idle = modified.and_then(|t| now.duration_since(t).ok()).is_some_and(|age| age > max_idle);
+            if (temporary || superseded || idle) && std::fs::remove_file(&path).is_ok() {
                 drop(lock);
                 let _ = std::fs::remove_file(lease_path(&path));
                 stats.removed += 1;
                 continue;
             }
             stats.remaining_bytes = stats.remaining_bytes.saturating_add(bytes);
-            oldest.push((lock.metadata()?.modified().unwrap_or(UNIX_EPOCH), name, bytes));
+            oldest.push((used, name, bytes));
             if oldest.len() > CANDIDATES {
                 oldest.pop();
             }
