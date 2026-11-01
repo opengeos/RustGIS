@@ -10,7 +10,7 @@ use super::{C, CmdResult, MAX_GROUP_BYTES, Session, capabilities, ps, service_js
 pub fn commands() -> Vec<C> {
     vec![
         C::new("service.import", "Import Service", "Home › Add", import).params(
-            r#"{"url": "an OGC API landing page or collections address", "type"?, "name"?: "group name (default My OGC Layer)", "text"?, "documents"?: "as service.layers", "responses"?: [{"url": "features URL", "text": "downloaded GeoJSON"}]} ("group" and "layer" are rejected: use service.refresh)"#,
+            r#"{"url": "an OGC API landing page or collections address", "type"?, "name"?: "group name (default My OGC Layer)", "text"?, "documents"?: "as service.layers", "responses"?: [{"url": "features URL", "text": "downloaded GeoJSON"}], "connection"?: "as service.add"} ("group" and "layer" are rejected: use service.refresh)"#,
         ),
         C::new("service.refresh", "Refresh", "Layers", refresh).params(
             r#"{"group"?: id, "layer"?: "one child layer id or name", "text"?, "documents"?, "responses"?: "as service.import"}"#,
@@ -39,15 +39,47 @@ fn target(s: &Session, p: &Value) -> Result<Option<(ServiceGroup, Option<u32>)>,
     Ok(Some((group.clone(), layer)))
 }
 
-fn request(s: &Session, p: &Value) -> CmdResult {
+fn request(s: &mut Session, p: &Value) -> CmdResult {
     let mut q = p.clone();
-    if let Some((group, _)) = target(s, p)? {
-        q["url"] = json!(group.url);
+    if let Some((group, child)) = target(s, p)? {
+        if q.get("connection").is_none_or(Value::is_null) {
+            let mut ids = group
+                .children
+                .iter()
+                .filter(|c| child.is_none_or(|id| c.layer == id))
+                .filter_map(|c| s.map().layer(c.layer))
+                .map(|l| l.connection.as_str());
+            if let Some(id) = ids.next().filter(|id| !id.is_empty())
+                && ids.all(|other| other == id)
+                && valid_connection(s, id, &group.url)
+            {
+                q["connection"] = json!(id);
+            }
+        }
+        q["url"] = json!(crate::render::rustgis_tiles::logins::inner(&group.url));
         q["type"] = json!(group.kind);
         q["name"] = json!(group.name);
     }
     super::url_of(&q)?;
-    Ok(q)
+    Ok(crate::service_logins::request_params(s, &q)?.into_owned())
+}
+
+fn valid_connection(s: &Session, id: &str, url: &str) -> bool {
+    let origin = crate::render::rustgis_tiles::logins::origin(url);
+    origin.is_some()
+        && s.connections.connections.iter().any(|c| {
+            c.id == id && crate::service_logins::is_service(c) && crate::render::rustgis_tiles::logins::origin(&c.address) == origin
+        })
+}
+
+fn record_connection(s: &mut Session, layer: u32, request: &Value) {
+    let Some(id) = ps(request, "connection") else { return };
+    let Some(url) = s.map().layer(layer).and_then(|l| l.dataset.source.as_deref()) else { return };
+    if valid_connection(s, id, url)
+        && let Some(layer) = s.map_mut().layer_mut(layer)
+    {
+        layer.connection = id.to_string();
+    }
 }
 
 fn plan(s: &mut Session, p: &Value) -> CmdResult {
@@ -92,7 +124,7 @@ fn listing(s: &mut Session, p: &Value) -> CmdResult {
     // One child: its collection at its saved source, or else the one collection with its id (a
     // rotated query or a moved collections document keeps the child's identity).
     if let Some(c) = &child {
-        let exact = offered.iter().position(|(l, src)| l.name == c.collection && *src == c.source_url);
+        let exact = offered.iter().position(|(l, src)| l.name == c.collection && super::same_address(src, &c.source_url));
         let pos = match exact {
             Some(i) => Some(i),
             None => {
@@ -120,7 +152,7 @@ fn listing(s: &mut Session, p: &Value) -> CmdResult {
     if let Some(next) = found.next {
         out["next"] = json!(next);
     }
-    out["request"] = json!({"url": q.get("url"), "type": ps(&q, "type").unwrap_or("ogcapi")});
+    out["request"] = json!({"url": q.get("url"), "type": ps(&q, "type").unwrap_or("ogcapi"), "connection": q.get("connection")});
     Ok(out)
 }
 
@@ -153,7 +185,7 @@ fn read(s: &mut Session, p: &Value) -> Result<(Value, Vec<(ServiceChild, Dataset
             Some(responses) => {
                 let text = responses
                     .iter()
-                    .find(|r| ps(r, "url") == Some(url))
+                    .find(|r| ps(r, "url").is_some_and(|u| super::same_address(u, url)))
                     .and_then(|r| ps(r, "text"))
                     .ok_or_else(|| format!("{name}: missing downloaded response"))?;
                 if text.len() > MAX_GROUP_BYTES.saturating_sub(bytes_read) {
@@ -211,6 +243,9 @@ fn import(s: &mut Session, p: &Value) -> CmdResult {
     let mut extent = rustgis_geom::Extent::EMPTY;
     for (mut child, dataset) in reads {
         child.layer = crate::cmd::layer::add_dataset(s, dataset);
+        if let Some(request) = listing.get("request") {
+            record_connection(s, child.layer, request);
+        }
         if let Some(layer) = s.map().layer(child.layer) {
             extent = extent.union(&layer.extent());
         }
@@ -238,7 +273,7 @@ fn refresh(s: &mut Session, p: &Value) -> CmdResult {
     let (old, child_id) = target(s, p)?.ok_or("group or layer is required")?;
     let hidden = old.children.iter().any(|c| s.map().layer(c.layer).is_some())
         && old.children.iter().filter_map(|c| s.map().layer(c.layer)).all(|l| !l.visible);
-    let (_, reads) = read(s, p)?;
+    let (listing, reads) = read(s, p)?;
     if !s.map().service_groups.iter().any(|g| g.id == old.id) {
         return Err("the group was removed".into());
     }
@@ -254,7 +289,7 @@ fn refresh(s: &mut Session, p: &Value) -> CmdResult {
             .map(|(child, _)| {
                 old.children
                     .iter()
-                    .find(|c| c.collection == child.collection && c.source_url == child.source_url)
+                    .find(|c| c.collection == child.collection && super::same_address(&c.source_url, &child.source_url))
                     .or_else(|| {
                         let unique = read_count(&child.collection) == 1 && old_count(&child.collection) == 1;
                         old.children.iter().find(|c| unique && c.collection == child.collection)
@@ -301,6 +336,9 @@ fn refresh(s: &mut Session, p: &Value) -> CmdResult {
             }
         } else {
             child.layer = crate::cmd::layer::add_dataset(s, dataset);
+            if let Some(request) = listing.get("request") {
+                record_connection(s, child.layer, request);
+            }
             if hidden && let Some(layer) = s.map_mut().layer_mut(child.layer) {
                 layer.visible = false;
             }
@@ -357,4 +395,95 @@ fn set_group(s: &mut Session, p: &Value) -> CmdResult {
         g.expanded = expanded;
     }
     Ok(json!({"group":group.id}))
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+
+    fn document(ids: &[&str]) -> Value {
+        json!({"collections": ids.iter().map(|id| json!({
+            "id": id, "title": id,
+            "links": [{"rel": "items", "type": "application/geo+json",
+                "href": format!("https://group-none757.example.org/collections/{id}/items")}]
+        })).collect::<Vec<_>>()})
+    }
+
+    fn features() -> String {
+        json!({"type": "FeatureCollection", "features": [{
+            "type": "Feature", "geometry": {"type": "Point", "coordinates": [1, 2]},
+            "properties": {"collection": "any"}
+        }]})
+        .to_string()
+    }
+
+    /// Answers keyed by the offer addresses `service.layers` reports (a service may spell them
+    /// its own way), exactly as `service.import` and `service.refresh` look them up.
+    fn answers(s: &mut Session, p: &Value, text: &str) -> Value {
+        let plan = s.run("service.layers", p).unwrap();
+        json!(plan["layers"].as_array().unwrap().iter().map(|l| json!({"url": l["offer"]["url"], "text": text})).collect::<Vec<_>>())
+    }
+
+    #[test]
+    fn refresh_new_children_keep_the_unambiguous_auth_none_connection() {
+        let mut s = Session::new(crate::Project::default());
+        let connection = s
+            .run(
+                "connection.new",
+                &json!({
+                    "kind": "ogcapi", "name": "Public", "auth": "none",
+                    "address": "https://group-none757.example.org/collections"
+                }),
+            )
+            .unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let mut p = json!({
+            "url": "https://group-none757.example.org/collections", "type": "ogcapi",
+            "connection": connection, "text": document(&["old"]).to_string()
+        });
+        p["responses"] = answers(&mut s, &p, &features());
+        let imported = s.run("service.import", &p).unwrap();
+        let old = imported["layers"][0].as_u64().unwrap() as u32;
+        let mut q = json!({
+            "url": "https://group-none757.example.org/collections",
+            "group": imported["group"], "text": document(&["old", "new"]).to_string()
+        });
+        q["responses"] = answers(&mut s, &q, &features());
+        s.run("service.refresh", &q).unwrap();
+        assert_eq!(s.map().layers.len(), 2);
+        assert!(s.map().layer(old).is_some());
+        for layer in &s.map().layers {
+            assert_eq!(layer.connection, connection);
+            assert_eq!(layer.dataset.features.len(), 1);
+        }
+    }
+
+    #[test]
+    fn an_unrelated_explicit_connection_is_not_attributed_to_imported_children() {
+        let mut s = Session::new(crate::Project::default());
+        let connection = s
+            .run(
+                "connection.new",
+                &json!({
+                    "kind": "ogcapi", "name": "Elsewhere", "auth": "none",
+                    "address": "https://elsewhere757.example.org/collections"
+                }),
+            )
+            .unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let mut p = json!({
+            "url": "https://group-none757.example.org/collections", "type": "ogcapi",
+            "connection": connection, "text": document(&["new"]).to_string()
+        });
+        p["responses"] = answers(&mut s, &p, &features());
+        s.run("service.import", &p).unwrap();
+        assert_eq!(s.map().layers.len(), 1);
+        assert_eq!(s.map().layers[0].dataset.features.len(), 1);
+        assert!(s.map().layers[0].connection.is_empty());
+    }
 }

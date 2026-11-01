@@ -196,6 +196,12 @@ pub struct Layer {
     /// The GeoPackage table this layer's edits save to.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gpkg: Option<source::GpkgEdit>,
+    /// The saved connection it was added from (its id, in the app's preferences): a layer whose
+    /// source is read again logs in with that connection's login, and a project opened where
+    /// the connection or its login is missing asks for one. Empty for a layer that came from no
+    /// connection. Never a secret.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub connection: String,
     /// Process-local identity, preserved by snapshots but never stored in a project.
     #[serde(skip, default = "next_layer_instance")]
     instance_id: u64,
@@ -387,6 +393,7 @@ impl Layer {
             source: None,
             postgis: None,
             gpkg: None,
+            connection: String::new(),
             projected: Default::default(),
             display: None,
             display_rejected: Vec::new(),
@@ -1338,8 +1345,8 @@ impl Map {
     }
 
     /// Every address the map keeps to read its data again (service groups and their layers'
-    /// sources, tile layers and their dated addresses, terrain tiles, layers' dataset, streamed and
-    /// raster sources, time-following Zarr stores). Local paths come too: callers judge each one.
+    /// sources, tile layers and their dated, feature-info and legend addresses, terrain tiles,
+    /// layers' dataset, streamed and raster sources, time-following Zarr stores). Local paths come too.
     pub fn addresses_mut(&mut self) -> Vec<&mut String> {
         let mut addresses = Vec::new();
         for group in &mut self.service_groups {
@@ -1355,6 +1362,9 @@ impl Map {
             }
             for (_, url) in &mut tile.time_urls {
                 addresses.push(url);
+            }
+            if let Some(info) = &mut tile.feature_info {
+                addresses.push(&mut info.url);
             }
             // (A legend's address is built from the service's, its key or password included.)
             for legend in &mut tile.legends {

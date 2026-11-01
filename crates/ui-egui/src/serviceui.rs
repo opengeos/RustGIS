@@ -1,5 +1,6 @@
 //! Background group import/refresh for both desktop and browser. Discovery and updates live in
-//! engine commands; this state machine only supplies their downloaded documents.
+//! engine commands; this state machine supplies their downloaded documents and preserves the
+//! saved connection id through every deferred add.
 
 use crate::{RustGisApp, Slot, fetch_into, fetch_into_limited, i18n};
 use rustgis_engine::data::ogc::{self, Pages, Step};
@@ -9,6 +10,8 @@ use std::collections::VecDeque;
 pub struct Import {
     params: Value,
     refresh: bool,
+    /// The saved web-service connection to record on imported layers, not a group-plan parameter.
+    connection: Option<Value>,
     token: u64,
     /// The originating map: its index and name (names are unique among a project's maps), so a
     /// deleted or replaced map at that index cancels the import.
@@ -44,6 +47,27 @@ pub(crate) fn kind_of(t: &str) -> &'static str {
     }
 }
 
+/// A dialog's provenance is usable only for a saved service of the displayed source's origin.
+pub(crate) fn connection_for<'a>(app: &RustGisApp, connection: Option<&'a str>, url: &str) -> Option<&'a str> {
+    connection.filter(|id| {
+        app.session.connections.find(id).is_some_and(|c| {
+            rustgis_engine::service_logins::is_service(c)
+                && rustgis_engine::connections::login_origin(c)
+                    .is_some_and(|origin| rustgis_engine::render::rustgis_tiles::logins::origin(url).as_deref() == Some(origin.as_str()))
+        })
+    })
+}
+
+/// A linked document never acquires another origin's saved login, even without explicit provenance.
+pub(crate) fn request_from(app: &mut RustGisApp, connection: Option<&str>, base: &str, url: &str) -> Result<String, String> {
+    use rustgis_engine::render::rustgis_tiles::logins;
+    if logins::origin(base).is_some_and(|origin| logins::origin(url).as_deref() == Some(origin.as_str())) {
+        rustgis_engine::service_logins::request(&mut app.session, connection, url).map_err(|e| crate::connectionui::translated(&e))
+    } else {
+        Ok(logins::inner(url).to_string())
+    }
+}
+
 /// Adds one of a service's layers (as `service.layers` lists it): features are downloaded in the
 /// background as From URL… does, map layers are added now, and an OGC API layer or a WCS coverage
 /// waits on a document (a step the app moves along). A feature layer is asked only for the
@@ -57,12 +81,13 @@ pub(crate) fn add_layer(
     area: Option<[f64; 4]>,
     dialog: bool,
 ) -> Result<&'static str, String> {
-    add_layer_from(app, src, l, time, area, dialog, None)
+    let connection = dialog.then(|| app.ui.service.as_ref().and_then(|source| source.connection.clone())).flatten();
+    add_layer_from(app, src, l, time, area, dialog, None, connection.as_deref())
 }
 
-/// [`add_layer`] for a layer of the connection named `origin` (the Connections tree): once the
-/// layer is added, now or when its document or download lands, Recent shows its source under that
-/// name. An add that fails or is dropped is not renamed.
+/// [`add_layer`] for a saved connection: `connection` is its id, recorded on the resulting layer;
+/// `origin` is its display name for Recent. Both survive deferred documents and downloads.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn add_layer_from(
     app: &mut RustGisApp,
     src: &ServiceSource,
@@ -71,7 +96,9 @@ pub(crate) fn add_layer_from(
     area: Option<[f64; 4]>,
     dialog: bool,
     origin: Option<&str>,
+    connection: Option<&str>,
 ) -> Result<&'static str, String> {
+    let connection = connection_for(app, connection, &src.url);
     let name = l.get("name").and_then(Value::as_str).unwrap_or("").to_string();
     let title = l.get("title").and_then(Value::as_str).unwrap_or(&name).to_string();
     let offer = l.get("offer").cloned().unwrap_or_default();
@@ -89,8 +116,11 @@ pub(crate) fn add_layer_from(
         let items = asked.as_deref().unwrap_or(items);
         // The layer's bounds go along, for its features' axes (#1053).
         let bounds = l.get("bbox").cloned().unwrap_or_default();
-        return crate::connectiontree::run_add_url(app, json!({"url": items, "name": title, "service": true, "bounds": bounds}), origin)
-            .map(|_| tl!("Downloading…"));
+        let mut p = json!({"url": items, "name": title, "service": true, "bounds": bounds});
+        if let Some(connection) = connection {
+            p["connection"] = json!(connection);
+        }
+        return crate::connectiontree::run_add_url(app, p, origin).map(|_| tl!("Downloading…"));
     }
     let origin = origin.map(str::to_string);
     if offer.get("type").and_then(Value::as_str) == Some("coverage") {
@@ -100,6 +130,10 @@ pub(crate) fn add_layer_from(
         if src.kind != "auto" {
             p["type"] = json!(src.kind);
         }
+        if let Some(connection) = connection {
+            p["connection"] = json!(connection);
+        }
+        let describe = request_from(app, connection, &src.url, &describe)?;
         let slot = crate::fetch_into(&describe);
         app.ui.service_steps.push(crate::ServiceStep::Coverage { params: p, slot, dialog, origin });
         return Ok(tl!("Describing"));
@@ -107,6 +141,9 @@ pub(crate) fn add_layer_from(
     let mut p = json!({"url": src.url, "layer": name, "text": src.text, "documents": src.documents, "source_url": l.get("source_url")});
     if src.kind != "auto" {
         p["type"] = json!(src.kind);
+    }
+    if let Some(connection) = connection {
+        p["connection"] = json!(connection);
     }
     if l.get("time").is_some() && !time.is_empty() {
         p["time"] = json!(time);
@@ -118,8 +155,9 @@ pub(crate) fn add_layer_from(
             p["name"] = json!(title);
             let fallback = offer.get("url").and_then(Value::as_str).unwrap_or("").to_string();
             let vector = offer.get("type").and_then(Value::as_str) == Some("vectorTiles");
-            let slot = crate::fetch_into(list);
-            let resolve = crate::TilesResolve { params: p, list: list.to_string(), doc: list.to_string(), read: 0, vector, fallback, slot };
+            let list = request_from(app, connection, &src.url, list)?;
+            let slot = crate::fetch_into(&list);
+            let resolve = crate::TilesResolve { params: p, list: list.clone(), doc: list, read: 0, vector, fallback, slot };
             app.ui.service_steps.push(crate::ServiceStep::Tiles { resolve, dialog, origin });
             Ok(tl!("Reading the tileset of"))
         }
@@ -137,7 +175,11 @@ pub fn start(app: &mut RustGisApp, p: &Value, refresh: bool) -> Result<(), Strin
     if app.ui.service_import.is_some() {
         return Err(tl!("A service import or refresh is already running.").into());
     }
-    let mut source = p.clone();
+    // ui.importService accepts `connection`, as service.import does. The discovery command does
+    // not: keep it apart until the final add, without leaking it into service.groupPlan calls.
+    let bound = rustgis_engine::service_logins::request_params(&mut app.session, p).map_err(|e| crate::connectionui::translated(&e))?;
+    let mut source = bound.into_owned();
+    let connection = if refresh { None } else { source.as_object_mut().and_then(|p| p.remove("connection")) };
     source["sourceOnly"] = json!(true);
     let mut params = app.session.run("service.groupPlan", &source)?;
     if let Some(p) = params.as_object_mut() {
@@ -151,6 +193,7 @@ pub fn start(app: &mut RustGisApp, p: &Value, refresh: bool) -> Result<(), Strin
     let mut task = Import {
         params,
         refresh,
+        connection,
         token: app.session.download_started(),
         map: active_map(app),
         slot: Slot::default(),
@@ -169,6 +212,13 @@ pub fn start(app: &mut RustGisApp, p: &Value, refresh: bool) -> Result<(), Strin
         let url = task.params.get("url").and_then(Value::as_str).unwrap_or_default();
         let kind = task.params.get("type").and_then(Value::as_str);
         let caps = rustgis_engine::data::ogc::capabilities_url(url, kind);
+        let caps = match request_from(app, task.connection.as_ref().and_then(Value::as_str), url, &caps) {
+            Ok(caps) => caps,
+            Err(e) => {
+                app.session.download_failed(task.token);
+                return Err(e);
+            }
+        };
         task.slot = fetch_into(&caps);
         task.document = Some(caps);
     }
@@ -181,8 +231,10 @@ impl Import {
     fn discover(&mut self, app: &mut RustGisApp) -> Result<(), String> {
         let listing = app.session.run("service.groupPlan", &self.params)?;
         if let Some(next) = listing.get("next").and_then(Value::as_str) {
-            self.document = Some(next.into());
-            self.slot = fetch_into(next);
+            let url = self.params.get("url").and_then(Value::as_str).unwrap_or_default();
+            let next = request_from(app, self.connection.as_ref().and_then(Value::as_str), url, next)?;
+            self.slot = fetch_into(&next);
+            self.document = Some(next);
         } else {
             self.remaining = listing
                 .get("layers")
@@ -191,16 +243,19 @@ impl Import {
                 .flatten()
                 .filter_map(|l| l.get("offer").and_then(|o| o.get("url")).and_then(Value::as_str).map(str::to_string))
                 .collect();
-            self.next();
+            self.next(app)?;
         }
         Ok(())
     }
 
-    fn next(&mut self) {
+    fn next(&mut self, app: &mut RustGisApp) -> Result<(), String> {
         self.current = self.remaining.pop_front();
         if let Some(url) = &self.current {
-            self.slot = fetch_into_limited(url, rustgis_engine::cmd::service::MAX_GROUP_BYTES.saturating_sub(self.bytes));
+            let base = self.params.get("url").and_then(Value::as_str).unwrap_or_default();
+            let url = request_from(app, self.connection.as_ref().and_then(Value::as_str), base, url)?;
+            self.slot = fetch_into_limited(&url, rustgis_engine::cmd::service::MAX_GROUP_BYTES.saturating_sub(self.bytes));
         }
+        Ok(())
     }
 
     fn landed(&mut self, app: &mut RustGisApp, bytes: Vec<u8>) -> Result<(), String> {
@@ -222,7 +277,7 @@ impl Import {
             }
             let text = String::from_utf8(bytes).map_err(|_| tl!("The service's answer isn't UTF-8 text").to_string())?;
             self.responses.push(json!({"url":self.current.take(),"text":text}));
-            self.next();
+            self.next(app)?;
             Ok(())
         }
     }
@@ -259,13 +314,16 @@ pub fn poll(app: &mut RustGisApp, ctx: &egui::Context) {
                 p.remove(key);
             }
         }
+        if let Some(connection) = task.connection {
+            task.params["connection"] = connection;
+        }
         let result = app.run(if task.refresh { "service.refresh" } else { "service.import" }, task.params);
         match result {
             Ok(_) => {
                 app.dialogs.info = Some(tl!("Done").into());
                 app.map.invalidate();
             }
-            Err(e) => app.dialogs.error = Some(e),
+            Err(e) => app.dialogs.error = Some(crate::connectionui::translated(&e)),
         }
     } else {
         ctx.request_repaint_after(std::time::Duration::from_millis(30));
@@ -336,8 +394,10 @@ pub fn poll_pages(app: &mut RustGisApp, ctx: &egui::Context) {
 fn go_on(app: &mut RustGisApp, landed: Landed, left: usize, step: Step) {
     match step {
         Step::Fetch(pages) => {
-            let slot = match rustgis_engine::render::rustgis_tiles::address::check(pages.next_url(), Some(pages.referrer())) {
-                Ok(()) => fetch_into_limited(pages.next_url(), left),
+            let next = rustgis_engine::render::rustgis_tiles::address::check(pages.next_url(), Some(pages.referrer()))
+                .and_then(|()| request_from(app, landed.params.get("connection").and_then(Value::as_str), &landed.url, pages.next_url()));
+            let slot = match next {
+                Ok(url) => fetch_into_limited(&url, left),
                 Err(e) => Slot::new(std::sync::Mutex::new(Some(Err(e)))),
             };
             app.ui.service_pages.push(PageRead { landed, pages, left, slot });

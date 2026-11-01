@@ -30,8 +30,8 @@ enum Asked {
     /// A search, by its address (which the answer's links are resolved against).
     Search(String),
     /// A token for an asset that needs signing: the token service's address, the asset's and the
-    /// layer's name.
-    Token { token_url: String, href: String, name: String },
+    /// layer's name and saved connection, captured when Add was requested.
+    Token { token_url: String, href: String, name: String, connection: Option<String> },
     /// An item's or a collection's document (a `?stac=` link), by its address.
     Link(String),
     /// A static catalog's document, for its children, by its address.
@@ -219,6 +219,16 @@ fn fetch(url: &str) -> Answer {
     slot
 }
 
+/// Reads with the selected API's login only; a catalog's foreign links stay anonymous.
+fn fetch_service(app: &mut RustGisApp, url: &str) -> Answer {
+    let connection = selected_connection(app);
+    let base = app.ui.stac.api.clone();
+    match crate::serviceui::request_from(app, connection.as_deref(), &base, url) {
+        Ok(url) => fetch(&url),
+        Err(e) => Slot::new(std::sync::Mutex::new(Some(Err(crate::connectionui::translated(&e))))),
+    }
+}
+
 /// An item's preview picture: being fetched, shown, or not to be had.
 enum Thumb {
     Loading(Answer),
@@ -269,7 +279,10 @@ fn poll_thumbs(app: &mut RustGisApp, ctx: &egui::Context) {
 
 /// Starts fetching the preview pictures of the items found (those on the web an item may point
 /// to, not ones that need signing).
-fn want_thumbs(st: &mut State) {
+fn want_thumbs(app: &mut RustGisApp) {
+    let connection = selected_connection(app);
+    let base = app.ui.stac.api.clone();
+    let (session, st) = (&mut app.session, &mut app.ui.stac);
     if st.thumbs.len() > MAX_THUMBS {
         st.thumbs.clear();
     }
@@ -284,13 +297,23 @@ fn want_thumbs(st: &mut State) {
                 Some(item.origin.as_deref().unwrap_or("https://item.invalid/")),
             )
             .is_ok();
-        let picture = || {
+        let address = if ok {
+            use rustgis_engine::render::rustgis_tiles::logins;
+            if logins::origin(&base).is_some_and(|origin| logins::origin(&a.href).as_deref() == Some(origin.as_str())) {
+                rustgis_engine::service_logins::request(session, connection.as_deref(), &a.href).ok()
+            } else {
+                Some(logins::inner(&a.href).to_string())
+            }
+        } else {
+            None
+        };
+        let picture = address.map(|address| {
             let slot: Answer = Slot::default();
             let land = slot.clone();
-            cache::download_limited(&a.href, THUMB_BYTES, Box::new(move |r| *land.lock().unwrap_or_else(|e| e.into_inner()) = Some(r)));
-            slot
-        };
-        st.thumbs.insert(a.href.clone(), if ok { Thumb::Loading(picture()) } else { Thumb::Failed });
+            cache::download_limited(&address, THUMB_BYTES, Box::new(move |r| *land.lock().unwrap_or_else(|e| e.into_inner()) = Some(r)));
+            Thumb::Loading(slot)
+        });
+        st.thumbs.insert(a.href.clone(), picture.unwrap_or(Thumb::Failed));
     }
 }
 
@@ -333,10 +356,10 @@ pub fn poll(app: &mut RustGisApp, ctx: &egui::Context) {
             }
             Err(e) => st.error = Some(e),
         },
-        Asked::Token { token_url, href, name } => match r.and_then(|b| stac::parse_sas(&b)) {
+        Asked::Token { token_url, href, name, connection } => match r.and_then(|b| stac::parse_sas(&b)) {
             Ok(token) => {
                 stac::remember_token(&token_url, &token);
-                add_url(app, &stac::sign(&href, &token), &name);
+                add_url_from(app, &stac::sign(&href, &token), &name, connection.as_deref());
             }
             Err(e) => st.error = Some(e),
         },
@@ -372,7 +395,7 @@ pub fn poll(app: &mut RustGisApp, ctx: &egui::Context) {
 /// Drives a static catalog's walk: lands the documents fetched, asks for the next ones (a few at
 /// a time) and, once it is over, shows the items found.
 fn poll_walk(app: &mut RustGisApp, ctx: &egui::Context) {
-    let Some((walk, fetching)) = &mut app.ui.stac.walk else { return };
+    let Some((mut walk, mut fetching)) = app.ui.stac.walk.take() else { return };
     let mut i = 0;
     while let Some((url, slot)) = fetching.get(i) {
         let landed = slot.lock().unwrap_or_else(|e| e.into_inner()).take();
@@ -386,7 +409,7 @@ fn poll_walk(app: &mut RustGisApp, ctx: &egui::Context) {
     }
     while fetching.len() < catalog::AT_ONCE {
         let Some(url) = walk.next_url() else { break };
-        let slot = fetch(&url);
+        let slot = fetch_service(app, &url);
         fetching.push((url, slot));
     }
     if !walk.finished() {
@@ -395,9 +418,9 @@ fn poll_walk(app: &mut RustGisApp, ctx: &egui::Context) {
             &[("n", &walk.reads.to_string()), ("m", &walk.items().len().to_string())],
         ));
         ctx.request_repaint_after(std::time::Duration::from_millis(100));
+        app.ui.stac.walk = Some((walk, fetching));
         return;
     }
-    let Some((walk, _)) = app.ui.stac.walk.take() else { return };
     let st = &mut app.ui.stac;
     let n = walk.items().len().to_string();
     st.info = Some(if walk.complete() {
@@ -506,7 +529,8 @@ fn add_signed(app: &mut RustGisApp, href: &str, name: &str) {
             None => {
                 let slot = fetch(&token_url);
                 app.ui.stac.info = Some(tl!("Signing the asset (Planetary Computer)…").to_string());
-                app.ui.stac.waiting = Some((Asked::Token { token_url, href: href.to_string(), name: name.to_string() }, slot));
+                let connection = selected_connection(app);
+                app.ui.stac.waiting = Some((Asked::Token { token_url, href: href.to_string(), name: name.to_string(), connection }, slot));
             }
         },
         Err(e) => app.ui.stac.error = Some(e),
@@ -514,7 +538,21 @@ fn add_signed(app: &mut RustGisApp, href: &str, name: &str) {
 }
 
 fn add_url(app: &mut RustGisApp, href: &str, name: &str) {
-    if let Err(e) = app.run("ui.addUrl", json!({"url": href, "name": name, "zoom": true})) {
+    let connection = selected_connection(app);
+    add_url_from(app, href, name, connection.as_deref());
+}
+
+fn selected_connection(app: &RustGisApp) -> Option<String> {
+    crate::connectionui::picked(&app.session.connections.connections, app.ui.stac.connection.as_deref(), &app.ui.stac.api)
+        .map(|c| c.id.clone())
+}
+
+fn add_url_from(app: &mut RustGisApp, href: &str, name: &str, connection: Option<&str>) {
+    let mut p = json!({"url": href, "name": name, "zoom": true});
+    if let Some(connection) = connection {
+        p["connection"] = json!(connection);
+    }
+    if let Err(e) = app.run("ui.addUrl", p) {
         app.ui.stac.error = Some(e);
     }
 }
@@ -533,7 +571,8 @@ pub fn open_link(app: &mut RustGisApp, url: &str) -> Result<(), String> {
     let url = url.trim();
     rustgis_engine::render::rustgis_tiles::address::check(url, None)?;
     app.run("ui.dialog", serde_json::json!({"name": "stac"}))?;
-    let slot = fetch(url);
+    let address = rustgis_engine::service_logins::request(&mut app.session, None, url)?;
+    let slot = fetch(&address);
     app.ui.stac.error = None;
     app.ui.stac.info = Some(i18n::fmt("Opening {url}…", &[("url", url)]));
     app.ui.stac.waiting = Some((Asked::Link(url.to_string()), slot));
@@ -660,7 +699,8 @@ fn fetch_children(app: &mut RustGisApp) {
     }
     st.info = Some(tl!("Reading the catalog…").to_string());
     st.counted = false;
-    st.waiting = Some((Asked::Children(url.clone()), fetch(&url)));
+    let slot = fetch_service(app, &url);
+    app.ui.stac.waiting = Some((Asked::Children(url), slot));
 }
 
 /// The preset the dialog is showing, if it is still on its API or catalog.
@@ -871,7 +911,8 @@ pub fn dialog(app: &mut RustGisApp, ui: &mut egui::Ui) {
         match stac::api(Some(app.ui.stac.api.as_str())) {
             Ok(api) => {
                 let typed = app.ui.stac.api.trim().to_string();
-                app.ui.stac.waiting = Some((Asked::Collections(typed), fetch(&stac::collections_url(&api))));
+                let slot = fetch_service(app, &stac::collections_url(&api));
+                app.ui.stac.waiting = Some((Asked::Collections(typed), slot));
             }
             Err(e) => app.ui.stac.error = Some(e),
         }
@@ -1043,7 +1084,7 @@ fn find_items(app: &mut RustGisApp) {
     let url = stac::api(Some(app.ui.stac.api.as_str())).and_then(|api| search.and_then(|s| stac::search_url(&api, &s)));
     match url {
         Ok(url) => {
-            let slot = fetch(&url);
+            let slot = fetch_service(app, &url);
             app.ui.stac.waiting = Some((Asked::Search(url), slot));
         }
         Err(e) => app.ui.stac.error = Some(e),
@@ -1056,7 +1097,7 @@ fn results(app: &mut RustGisApp, ui: &mut egui::Ui) {
     if app.ui.stac.items.is_empty() {
         return;
     }
-    want_thumbs(&mut app.ui.stac);
+    want_thumbs(app);
     let (mut zoom, mut add, mut details) = (None, None, None);
     // A window starts from its last size: without a floor the list would get egui's 64 px back.
     let tall = (app.ui.stac.items.len() as f32 * 96.0 + if app.ui.stac.details.is_some() { 200.0 } else { 0.0 }).min(440.0);
@@ -1159,6 +1200,30 @@ fn properties(ui: &mut egui::Ui, i: usize, item: &Item) {
 mod tests {
     use super::*;
     use crate::RustGisApp;
+
+    #[test]
+    fn a_deferred_token_add_keeps_its_original_connection_when_selection_changes() {
+        let mut app = RustGisApp::with_sample();
+        let api = "http://127.0.0.1:9/stac";
+        let one = app.run("connection.new", json!({"kind":"stac", "name":"One", "address":api})).unwrap();
+        let two = app.run("connection.new", json!({"kind":"stac", "name":"Two", "address":api})).unwrap();
+        app.ui.stac.api = api.into();
+        app.ui.stac.connection = one["id"].as_str().map(str::to_string);
+        let asked = Asked::Token {
+            token_url: "https://snapshot-token.invalid/token".into(),
+            href: "http://127.0.0.1:9/points.geojson".into(),
+            name: "Original asset".into(),
+            connection: selected_connection(&app),
+        };
+        let slot = Slot::default();
+        *slot.lock().unwrap() = Some(Ok(br#"{"token":"sig=snapshot"}"#.to_vec()));
+        app.ui.stac.waiting = Some((asked, slot));
+        app.ui.stac.connection = two["id"].as_str().map(str::to_string);
+        poll(&mut app, &egui::Context::default());
+        let (_, _, params, _) = app.ui.downloads.last().unwrap();
+        assert_eq!(params["connection"], one["id"], "token completion must not re-read the picker");
+        assert_ne!(params["connection"], two["id"]);
+    }
 
     #[test]
     fn presets_open_the_dialog_set_up() {

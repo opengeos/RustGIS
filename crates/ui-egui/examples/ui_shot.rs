@@ -7,6 +7,7 @@
 //! for that long, `{"click": label}` clicks the first widget whose label contains the text (with
 //! `"exact": true`, whose whole label is the text), `{"combo": text}` opens the combo box showing
 //! that text, `{"type": text}` types into the focused box,
+//! `{"field": label}` focuses the text/password input with that label,
 //! `{"key": "Enter"}` presses a key (egui's key names), `{"dark": true}` switches theme,
 //! `{"drag": [x, y, dx, dy]}` presses the pointer at (x, y) and moves it by (dx, dy), holding
 //! it (shots then catch the map mid-drag; `{"release": true}` lets go; `"button": "secondary"`; `"ctrl": true` holds Ctrl
@@ -270,6 +271,15 @@ fn main() {
             for _ in 0..3 {
                 harness.step();
             }
+        } else if let Some(label) = l.get("field").and_then(Value::as_str) {
+            let node = harness
+                .query_by_role_and_label(egui::accesskit::Role::TextInput, label)
+                .or_else(|| harness.query_by_role_and_label(egui::accesskit::Role::PasswordInput, label));
+            match node {
+                Some(node) => node.focus(),
+                None => eprintln!("no text input labelled '{label}'"),
+            }
+            harness.step();
         } else if let Some(label) = l.get("click").and_then(|v| v.as_str()) {
             // `"exact": true`: the label is the whole of it (an Add button, not Add Data).
             let node = if l.get("exact").and_then(|v| v.as_bool()) == Some(true) {

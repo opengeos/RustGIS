@@ -152,8 +152,8 @@ impl RasterLayer {
         }
     }
 
-    /// Reads the pixels again from the path or the embedded file (after a project opens). A
-    /// layer that follows the time slider is left to the engine, which reads the step shown.
+    /// Reads the pixels again from the path, remote URL or embedded file (after a project opens).
+    /// Remote requests keep their login wrapper; a layer following time is left to the engine.
     pub fn reload(&mut self) -> Result<(), String> {
         if self.time_zarr.is_some() {
             return Ok(());
@@ -161,12 +161,18 @@ impl RasterLayer {
         self.opening = None;
         self.error = None;
         if self.embedded.is_none()
-            && let Some(path) = self
-                .path
-                .as_deref()
-                .filter(|p| rustgis_data::s3_address::is_wrapper(p) || p.get(..5).is_some_and(|s| s.eq_ignore_ascii_case("s3://")))
+            && let Some(path) = self.path.as_deref().filter(|p| {
+                rustgis_data::login_address::is_wrapper(p)
+                    || rustgis_data::s3_address::is_wrapper(p)
+                    || crate::tiles::is_web(p)
+                    || p.get(..5).is_some_and(|s| s.eq_ignore_ascii_case("s3://"))
+            })
         {
-            let name = rustgis_data::s3_address::inner(path).split(['?', '#']).next().unwrap_or("raster.tif").to_string();
+            let name = rustgis_data::login_address::inner(rustgis_data::s3_address::inner(path))
+                .split(['?', '#'])
+                .next()
+                .unwrap_or("raster.tif")
+                .to_string();
             let placement = self.placement;
             let slot = Arc::new(Mutex::new(None));
             let land = slot.clone();

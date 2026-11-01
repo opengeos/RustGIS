@@ -350,21 +350,29 @@ fn connection_header(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, c: &Connecti
         for (label, command, params) in items {
             if ui.button(label).clicked() {
                 if let Err(e) = app.run(command, params) {
-                    app.session.notify(e, true);
+                    app.session.notify(crate::connectionui::translated(&e), true);
                 }
                 ui.close();
             }
         }
         if !unavailable {
             let keys = c.kind == "s3" && c.options.get("credentials").is_some_and(|v| v == "keys");
-            if (DATABASE_KINDS.contains(&c.kind.as_str()) || keys) && ui.button(tl!("Log In…")).clicked() {
+            let service_login = rustgis_engine::service_logins::is_service(c) && !c.auth.is_empty();
+            if (DATABASE_KINDS.contains(&c.kind.as_str()) || keys || service_login) && ui.button(tl!("Log In…")).clicked() {
                 crate::connectionui::log_in(app, &c.id);
                 ui.close();
             }
             if DATABASE_KINDS.contains(&c.kind.as_str()) && c.remembered && ui.button(tl!("Forget Saved Password")).clicked() {
                 match app.run("connection.forgetPassword", json!({"id":c.id})) {
                     Ok(_) => crate::connectiontree::refresh(app, Some(&c.id)),
-                    Err(e) => app.session.notify(e, true),
+                    Err(e) => app.session.notify(crate::connectionui::translated(&e), true),
+                }
+                ui.close();
+            }
+            if service_login && rustgis_engine::service_logins::logged_in(&app.session, c) && ui.button(tl!("Log Out")).clicked() {
+                match app.run("connection.logout", json!({"id": c.id})) {
+                    Ok(_) => crate::connectiontree::refresh(app, Some(&c.id)),
+                    Err(e) => app.session.notify(crate::connectionui::translated(&e), true),
                 }
                 ui.close();
             }
@@ -378,7 +386,7 @@ fn connection_header(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, c: &Connecti
             // The kind's own add dialog, as a click on the connection opened it before.
             if ui.button(tl!("Add With Options…")).clicked() {
                 if let Err(e) = crate::connectionui::open_connection(app, c) {
-                    app.session.notify(e, true);
+                    app.session.notify(crate::connectionui::translated(&e), true);
                 }
                 ui.close();
             }
@@ -388,7 +396,7 @@ fn connection_header(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, c: &Connecti
                         tl!("The keys saved on this computer were forgotten; a login in this session keeps working.").to_string(),
                         false,
                     ),
-                    Err(e) => app.session.notify(e, true),
+                    Err(e) => app.session.notify(crate::connectionui::translated(&e), true),
                 }
                 ui.close();
             }
@@ -400,7 +408,7 @@ fn connection_header(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, c: &Connecti
         if ui.button(tl!("Remove")).clicked() {
             match app.run("connection.remove", json!({"id":c.id})) {
                 Ok(_) => crate::connectiontree::refresh(app, Some(&c.id)),
-                Err(e) => app.session.notify(e, true),
+                Err(e) => app.session.notify(crate::connectionui::translated(&e), true),
             }
             ui.close();
         }

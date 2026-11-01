@@ -107,6 +107,9 @@ pub const DEFAULT_STYLE: &str = include_str!("default_style.json");
 
 /// The style to draw `spec` with, once the documents it needs have been fetched.
 pub fn resolve(spec: &Spec) -> Resolve {
+    if let Err(e) = crate::logins::check(&spec.url) {
+        return Resolve::Failed(e.to_string());
+    }
     let key = spec.key();
     // A PMTiles archive on this computer is a path, not a web address.
     let local = spec.kind == Kind::PmTiles && pmtiles::is_local(&spec.url);
@@ -150,7 +153,7 @@ pub fn resolve(spec: &Spec) -> Resolve {
                 }
             }
             Ok(None) => return Resolve::Pending,
-            Err(e) => return Resolve::Failed(format!("{}: {e}", spec.url)),
+            Err(e) => return Resolve::Failed(format!("{}: {e}", crate::logins::inner(&spec.url))),
         },
         Kind::Cog => match cog::info(&spec.url) {
             Ok(Some(info)) => {
@@ -190,7 +193,7 @@ pub fn resolve(spec: &Spec) -> Resolve {
     };
     let mut style = match Style::parse(&doc) {
         Ok(s) => s,
-        Err(e) => return Resolve::Failed(format!("{}: {e}", spec.url)),
+        Err(e) => return Resolve::Failed(format!("{}: {e}", crate::logins::inner(&spec.url))),
     };
     if !spec.hidden_layers.is_empty() {
         style.layers.retain(|l| l.source_layer.as_ref().is_none_or(|s| !spec.hidden_layers.contains(s)));
@@ -291,6 +294,9 @@ pub fn resolve(spec: &Spec) -> Resolve {
         .map(|s| template::join(&base, s))
         .filter(|s| address::check(s, Some(&base)).is_ok());
     let r = Arc::new(Resolved { style, attribution, sprite });
+    if let Err(e) = crate::logins::check(&spec.url) {
+        return Resolve::Failed(e.to_string());
+    }
     let mut all = resolved().lock().unwrap_or_else(|e| e.into_inner());
     // A few layers are in use at a time: past that many, start again rather than grow.
     if all.len() >= MAX_RESOLVED {
@@ -318,10 +324,10 @@ fn fetch_json(url: &str) -> Result<Option<Value>, String> {
     match cache::get(url, Want::Json) {
         State::Ready(p) => match &*p {
             Payload::Json(v) => Ok(Some(v.clone())),
-            _ => Err(format!("{url}: not a JSON document")),
+            _ => Err(format!("{}: not a JSON document", crate::logins::inner(url))),
         },
         State::Pending => Ok(None),
-        State::Failed(e) => Err(format!("{url}: {e}")),
+        State::Failed(e) => Err(format!("{}: {e}", crate::logins::inner(url))),
     }
 }
 

@@ -18,6 +18,7 @@ pub mod s3_keys;
 #[cfg(test)]
 mod s3_saved_tests;
 pub mod sample;
+pub mod service_logins;
 pub mod sources;
 #[cfg(test)]
 mod tests;
@@ -521,6 +522,9 @@ pub struct Session {
     /// and login requests. S3 uses the same store through `DatabaseLogins::secret_store`.
     /// Never saved; see [`connections::DatabaseLogins`].
     pub database_logins: connections::DatabaseLogins,
+    /// The web-service logins this session made the ones sent to an origin, which the process's
+    /// fetches share: they end with it (see [`service_logins`]).
+    pub(crate) web_logins: service_logins::SessionLogins,
     /// How rasters added from now on are drawn (`raster.setDefaultStyle`; kept with the app's
     /// preferences, not the project).
     pub raster_defaults: rustgis_map::RasterDefaults,
@@ -804,6 +808,7 @@ impl Session {
             s3_bindings: std::collections::BTreeMap::new(),
             s3_pending: Vec::new(),
             database_logins: connections::DatabaseLogins::default(),
+            web_logins: service_logins::SessionLogins::new(),
             raster_defaults: rustgis_map::RasterDefaults::default(),
             registry: Registry { commands: cmd::all() },
             revision: 1,
@@ -1094,7 +1099,15 @@ impl Session {
             return Err(e);
         }
         self.merge = merge;
-        let res = self.guarded(label, mutates, |s| run(s, params));
+        // A layer added from a saved web-service connection records it, inside the command's step.
+        let res = self.guarded(label, mutates, |s| {
+            let before = service_logins::before(s, id, params)?;
+            let out = run(s, params)?;
+            if let Some(before) = before {
+                service_logins::tag(s, params, before, &out)?;
+            }
+            Ok(out)
+        });
         if id == "layer.addDownload"
             && res.is_ok()
             && let Some(token) = params.get("geolibreLayer").and_then(|v| v.get("token")).and_then(serde_json::Value::as_str)
@@ -1107,7 +1120,8 @@ impl Session {
         {
             self.sources.note(src);
         }
-        res
+        // An error never quotes a web-service connection's password or key.
+        res.map_err(|e| render::rustgis_tiles::logins::scrub(&e))
     }
 
     /// Retires only this consumed reservation, preserving unrelated pending imports in history.
@@ -1424,7 +1438,9 @@ impl Session {
     }
 
     pub fn notify(&mut self, text: impl Into<String>, error: bool) {
-        self.notices.push(Notice { text: text.into(), error });
+        // A web-service connection's password or key never shows, whatever quoted it.
+        let text = render::rustgis_tiles::logins::scrub(&text.into());
+        self.notices.push(Notice { text, error });
         self.notices_given += 1;
         if self.notices.len() > 200 {
             self.notices.remove(0);

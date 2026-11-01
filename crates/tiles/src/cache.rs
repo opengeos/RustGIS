@@ -171,6 +171,9 @@ pub fn in_flight() -> usize {
 /// What the cache holds for `url`, fetching it when it holds nothing (or a failure old enough
 /// to try again).
 pub fn get(url: &str, want: Want) -> State {
+    if let Err(e) = crate::logins::check(resource_of(url)) {
+        return State::Failed(e.to_string());
+    }
     // A map tile of a layer in another system: its service's picture as it comes, or made from
     // its pictures (#769).
     if let Some(base) = crate::warp::direct(url) {
@@ -217,6 +220,7 @@ pub fn get(url: &str, want: Want) -> State {
 
 /// What the cache holds for `url`, without fetching it.
 pub fn peek(url: &str) -> Option<Arc<Payload>> {
+    crate::logins::check(resource_of(url)).ok()?;
     if let Some(base) = crate::warp::direct(url) {
         return peek(base);
     }
@@ -469,7 +473,7 @@ fn fetch_tile(url: String, host: String, want: Want) {
                     Entry::Ready(Arc::new(p), size)
                 }
                 Err(e) => {
-                    log::debug!("{}: {e}", answer.key);
+                    log::debug!("{}", crate::logins::scrub(&format!("{}: {e}", answer.key)));
                     Entry::Failed(e, Instant::now())
                 }
             });
@@ -615,7 +619,8 @@ pub fn download_detailed(url: &str, max: usize, done: DoneDetailed) {
     // The failure names the address asked for, not the marked one fetched.
     let asked = url.to_string();
     let done: DoneDetailed = Box::new(move |r| {
-        done(r.map_err(|f| Failure { url: asked, ..f }));
+        let r = crate::logins::check(&asked).map_err(|e| Failure::new(&asked, e)).and(r);
+        done(r.map_err(|f| Failure { url: crate::logins::inner(&asked).to_string(), ..f }));
         finished();
     });
     let f = fetcher().lock().unwrap_or_else(|e| e.into_inner()).clone();
@@ -698,8 +703,9 @@ pub fn post_json(url: &str, body: String, done: Done) {
         return;
     }
     IN_FLIGHT.fetch_add(1, Ordering::Relaxed);
+    let key = url.to_string();
     let done: Done = Box::new(move |r| {
-        done(r);
+        done(crate::logins::check(&key).map_err(str::to_string).and(r));
         finished();
     });
     let p = poster().lock().unwrap_or_else(|e| e.into_inner()).clone();
@@ -763,8 +769,9 @@ pub fn head(url: &str, done: HeadDone) {
         return;
     }
     IN_FLIGHT.fetch_add(1, Ordering::Relaxed);
+    let key = url.to_string();
     let done: HeadDone = Box::new(move |r| {
-        done(r);
+        done(crate::logins::check(&key).map_err(str::to_string).and(r));
         finished();
     });
     let h = header().lock().unwrap_or_else(|e| e.into_inner()).clone();
@@ -776,6 +783,12 @@ pub fn head(url: &str, done: HeadDone) {
 
 /// Fetches an address's bytes, uncached (through the browser's fetcher, or the worker threads).
 pub(crate) fn fetch_bytes(url: String, done: Done) {
+    if let Err(e) = crate::logins::check(resource_of(&url)) {
+        done(Err(e.to_string()));
+        return;
+    }
+    let key = url.clone();
+    let done: Done = Box::new(move |r| done(crate::logins::check(resource_of(&key)).map_err(str::to_string).and(r)));
     let f = fetcher().lock().unwrap_or_else(|e| e.into_inner()).clone();
     match f {
         Some(f) => f(url, done),
@@ -836,6 +849,13 @@ fn finished() {
 }
 
 fn store(url: &str, entry: Entry) {
+    if crate::logins::check(resource_of(url)).is_err() {
+        let mut c = lock();
+        if let Some(Slot { entry: Entry::Ready(_, n), .. }) = c.slots.remove(url) {
+            c.bytes = c.bytes.saturating_sub(n);
+        }
+        return;
+    }
     let mut c = lock();
     let added = if let Entry::Ready(_, n) = &entry { *n } else { 0 };
     // Dropped while it was fetched (cleared, or evicted): kept anyway, it was asked for.
@@ -1001,7 +1021,9 @@ mod native {
         if crate::mbtiles::is_tile(url) || url.starts_with(LOCAL) {
             return String::new();
         }
-        let Some((_, rest)) = rustgis_data::s3_address::reached(url).split_once("://") else { return String::new() };
+        let Some((_, rest)) = rustgis_data::login_address::reached(rustgis_data::s3_address::reached(url)).split_once("://") else {
+            return String::new();
+        };
         let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
         let authority = rest.get(..end).unwrap_or(rest);
         // Credentials in the address aren't part of the server.
@@ -1135,13 +1157,27 @@ mod native {
     /// Asks for `url`'s headers, following up to 5 redirects, each checked as [`get`] checks
     /// them.
     pub(super) fn head_with(agent: &ureq::Agent, url: &str) -> Result<super::Head, String> {
-        let prepared = crate::s3::prepare(url)?;
+        let mut carried_login = false;
+        head_answer(agent, url, &mut carried_login).map_err(|e| if carried_login { crate::logins::scrub(&e) } else { e })
+    }
+
+    fn head_answer(agent: &ureq::Agent, url: &str, carried_login: &mut bool) -> Result<super::Head, String> {
+        crate::logins::check(url).map_err(str::to_string)?;
+        let prepared = crate::s3::prepare(crate::logins::inner(url))?;
         if prepared.signed {
             return Ok(super::Head::default());
         }
         let mut at = prepared.url.clone();
+        let first_origin = crate::logins::origin(&at);
+        let mut same_origin = true;
         for redirects in 0..=5 {
-            let mut req = agent.head(&at);
+            let bound = crate::logins::inherit(url, &at);
+            let login = if same_origin { crate::logins::apply(&bound)? } else { None };
+            *carried_login |= login.is_some();
+            let mut req = agent.head(login.as_ref().map_or(at.as_str(), |a| a.url.as_str()));
+            if let Some((name, value)) = login.as_ref().and_then(|a| a.header.as_ref()) {
+                req = req.header(name.as_str(), value.as_str());
+            }
             if redirects == 0 {
                 for (k, v) in &prepared.headers {
                     req = req.header(k.as_str(), v.as_str());
@@ -1155,12 +1191,14 @@ mod native {
                 if at.starts_with("https://") && !next.starts_with("https://") {
                     return Err(format!("{next}: a redirect from https to http"));
                 }
+                same_origin &= crate::logins::origin(&next) == first_origin;
                 at = next;
                 continue;
             }
             if resp.status().as_u16() >= 400 {
                 return Err(format!("http status: {}", resp.status().as_u16()));
             }
+            crate::logins::check(url).map_err(str::to_string)?;
             return Ok(super::Head {
                 tiff_header_length: header("x-tiff-header-length").and_then(super::tiff_header_length),
                 content_type: header("content-type").map(str::to_string),
@@ -1179,16 +1217,25 @@ mod native {
     /// POSTs a JSON document and reads the answer (at most [`MAX_BYTES`]); an error status is
     /// `http status: <status>`, and a redirect isn't followed.
     pub(super) fn post_with(agent: &ureq::Agent, url: &str, body: &str) -> Result<Vec<u8>, String> {
+        let mut carried_login = false;
+        post_answer(agent, url, body, &mut carried_login).map_err(|e| if carried_login { crate::logins::scrub(&e) } else { e })
+    }
+
+    fn post_answer(agent: &ureq::Agent, url: &str, body: &str, carried_login: &mut bool) -> Result<Vec<u8>, String> {
         use std::io::Read;
-        let mut resp = agent
-            .post(url)
-            .header("Content-Type", "application/json")
-            .header("Accept", "application/json")
-            .config()
-            .http_status_as_error(false)
-            .build()
-            .send(body)
-            .map_err(|e| e.to_string())?;
+        crate::logins::check(url).map_err(str::to_string)?;
+        let prepared = crate::s3::prepare(crate::logins::inner(url))?;
+        if prepared.signed {
+            return Err("S3 signed JSON POST requests are not supported.".into());
+        }
+        let bound = crate::logins::inherit(url, &prepared.url);
+        let login = crate::logins::apply(&bound)?;
+        *carried_login = login.is_some();
+        let mut req = agent.post(prepared.url.as_str()).header("Content-Type", "application/json").header("Accept", "application/json");
+        if let Some((name, value)) = login.as_ref().and_then(|a| a.header.as_ref()) {
+            req = req.header(name.as_str(), value.as_str());
+        }
+        let mut resp = req.config().http_status_as_error(false).build().send(body).map_err(|e| e.to_string())?;
         let status = resp.status().as_u16();
         if !(200..300).contains(&status) {
             return Err(format!("http status: {status}"));
@@ -1204,6 +1251,7 @@ mod native {
         if buf.len() > MAX_BYTES {
             return Err(format!("larger than {MAX_BYTES} bytes"));
         }
+        crate::logins::check(url).map_err(str::to_string)?;
         Ok(buf)
     }
 
@@ -1286,7 +1334,10 @@ mod native {
 
     /// [`get`], telling what is known of a failure.
     pub(super) fn get_detailed(agent: &ureq::Agent, url: &str) -> Result<Vec<u8>, Failure> {
-        fetch_answer(agent, url, true).map_err(|f| Failure { url: url.to_string(), ..f })
+        fetch_answer(agent, url, true).map_err(|f| Failure {
+            url: if url.contains(rustgis_data::login_address::PREFIX) { crate::logins::scrub(url) } else { url.to_string() },
+            ..f
+        })
     }
 
     /// A file's length from a `Content-Range` header (`bytes 0-0/1234`); none when the server
@@ -1299,6 +1350,19 @@ mod native {
     /// The answer to `url`; a refusal keeps the server's answer only when `detail` asks for it,
     /// as tiles a server doesn't have are routine and only their status is read.
     fn fetch_answer(agent: &ureq::Agent, url: &str, detail: bool) -> Result<Vec<u8>, Failure> {
+        let mut carried_login = false;
+        let result = fetch_answer_inner(agent, url, detail, &mut carried_login);
+        let result = crate::logins::check(super::resource_of(url)).map_err(Failure::from).and(result);
+        result.map_err(|mut f| {
+            if carried_login {
+                f.message = crate::logins::scrub(&f.message);
+                f.url = crate::logins::scrub(&f.url);
+            }
+            f
+        })
+    }
+
+    fn fetch_answer_inner(agent: &ureq::Agent, url: &str, detail: bool, carried_login: &mut bool) -> Result<Vec<u8>, Failure> {
         use std::io::Read;
         if crate::mbtiles::is_tile(url) {
             return crate::mbtiles::read_local(url).map_err(Failure::from);
@@ -1316,11 +1380,21 @@ mod native {
         let mut measuring: Option<u64> = None;
         // An `s3://` address becomes its web address, and a request to an S3 connection's
         // endpoint is signed.
-        let prepared = crate::s3::prepare(url)?;
+        crate::logins::check(url)?;
+        let prepared = crate::s3::prepare(crate::logins::inner(url))?;
         let mut at = prepared.url.clone();
+        let first_origin = crate::logins::origin(&at);
+        let mut same_origin = true;
         let mut redirects = 0;
         let mut resp = loop {
-            let mut req = agent.get(&at);
+            let bound = crate::logins::inherit(url, &at);
+            let login = if !prepared.signed && same_origin { crate::logins::apply(&bound)? } else { None };
+            *carried_login |= login.is_some();
+            let mut req = agent.get(login.as_ref().map_or(at.as_str(), |a| a.url.as_str()));
+            let login_header = login.as_ref().and_then(|a| a.header.as_ref());
+            if let Some((name, value)) = login_header {
+                req = req.header(name.as_str(), value.as_str());
+            }
             if let Some((a, b)) = range {
                 req = req.header("Range", &format!("bytes={a}-{b}"));
             } else if let Some(n) = tail {
@@ -1339,6 +1413,7 @@ mod native {
             // An Earthdata Login token goes to NASA's Earthdata data hosts only, asked for at
             // each hop: a redirect that leaves them (to a presigned address) goes without it.
             if !prepared.signed
+                && !login_header.is_some_and(|(name, _)| name.eq_ignore_ascii_case("Authorization"))
                 && let Some(auth) = crate::earthdata::authorization(&at)
             {
                 req = req.header("Authorization", &auth);
@@ -1346,6 +1421,9 @@ mod native {
             // An ArcGIS sign-in's token goes to the portal and the servers it covers, asked for at
             // each hop like Earthdata's.
             if !prepared.signed
+                && !login_header.is_some_and(|(name, _)| {
+                    name.eq_ignore_ascii_case("Authorization") || name.eq_ignore_ascii_case("X-Esri-Authorization")
+                })
                 && let Some(auth) = crate::arcgis_auth::authorization_fresh(&at)
             {
                 req = req.header("X-Esri-Authorization", &auth);
@@ -1381,10 +1459,9 @@ mod native {
                 }
             }
             if status >= 400 {
-                // A signed request's refusal is told by its status alone: an answer's headers and
-                // body are the server's text, and a server may echo the request's Authorization
-                // header (the access key's id) back in it.
-                return Err(if detail && !prepared.signed {
+                // A signed or logged-in request's refusal is told by its status alone: a server
+                // may echo its credentials in the answer's headers or body.
+                return Err(if detail && !prepared.signed && login.is_none() {
                     refused(&mut resp)
                 } else {
                     Failure::without_answer("", format!("http status: {status}"), Reason::Status(status))
@@ -1416,6 +1493,7 @@ mod native {
             if redirects > 5 {
                 return Err("too many redirects".into());
             }
+            same_origin &= crate::logins::origin(&next) == first_origin;
             at = next;
         };
         if resp.status().as_u16() == 204 {
@@ -1650,18 +1728,222 @@ mod tests {
 
     #[cfg(not(target_arch = "wasm32"))]
     fn serve_bytes(answers: Vec<Vec<u8>>) -> String {
+        serve_recorded(answers).0
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn serve_recorded(answers: Vec<Vec<u8>>) -> (String, std::sync::mpsc::Receiver<String>) {
         use std::io::{Read, Write};
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
+        let (sent, received) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             for answer in answers {
                 let Ok((mut stream, _)) = listener.accept() else { return };
                 let mut buf = [0u8; 2048];
-                let _ = stream.read(&mut buf);
+                let n = stream.read(&mut buf).unwrap_or(0);
+                let _ = sent.send(String::from_utf8_lossy(&buf[..n]).into_owned());
                 let _ = stream.write_all(&answer);
             }
         });
-        format!("http://{addr}")
+        (format!("http://{addr}"), received)
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn logins_headers_follow_same_origin_redirects() {
+        use crate::logins::{self, Method};
+        let (base, asked) = serve_recorded(
+            [
+                "HTTP/1.1 302 Found\r\nLocation: /next\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                "HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\ntile",
+            ]
+            .into_iter()
+            .map(|s| s.as_bytes().to_vec())
+            .collect(),
+        );
+        let binding = logins::activate(&base, "same-origin", Method::Header("X-Service-Key".into()), "same-origin-secret", true).unwrap();
+        let url = logins::bind(&binding, &format!("{base}/start")).unwrap();
+        assert_eq!(native::get(&native::agent(), &url).unwrap(), b"tile");
+        for request in asked.iter().take(2) {
+            assert!(request.to_ascii_lowercase().contains("x-service-key: same-origin-secret\r\n"));
+        }
+        assert!(logins::deactivate(&binding));
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn logins_redirects_never_pick_up_another_origins_login() {
+        use crate::logins::{self, Method};
+        let (other, asked) = serve_recorded(vec![b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\ntile".to_vec()]);
+        let base = serve(vec![format!("HTTP/1.1 302 Found\r\nLocation: {other}/tile\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")]);
+        let first = logins::activate(&base, "first", Method::Header("X-Service-Key".into()), "first-secret", true).unwrap();
+        let second = logins::activate(&other, "second", Method::Header("X-Service-Key".into()), "second-secret", true).unwrap();
+        let url = logins::bind(&first, &format!("{base}/start")).unwrap();
+        assert_eq!(native::get(&native::agent(), &url).unwrap(), b"tile");
+        let request = asked.recv_timeout(std::time::Duration::from_secs(5)).unwrap().to_ascii_lowercase();
+        assert!(!request.contains("x-service-key"));
+        assert!(!request.contains("first-secret") && !request.contains("second-secret"));
+        assert!(logins::deactivate(&first));
+        assert!(logins::deactivate(&second));
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn logins_head_and_post_carry_the_login() {
+        use crate::logins::{self, Method};
+        let answer = b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_vec();
+        let (base, asked) = serve_recorded(vec![answer.clone(), answer]);
+        let binding = logins::activate(&base, "head-post", Method::Header("X-Service-Key".into()), "head/post secret", true).unwrap();
+        let url = logins::bind(&binding, &format!("{base}/data?key=a%2Fb")).unwrap();
+        let agent = native::agent();
+        native::head_with(&agent, &url).unwrap();
+        assert!(native::post_with(&agent, &url, "{}").unwrap().is_empty());
+        for (method, request) in ["HEAD", "POST"].into_iter().zip(asked.iter().take(2)) {
+            assert!(request.starts_with(&format!("{method} /data?key=a%2Fb HTTP/1.1\r\n")), "{request}");
+            assert!(request.to_ascii_lowercase().contains("x-service-key: head/post secret\r\n"));
+        }
+        assert!(logins::deactivate(&binding));
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn live_connection_bindings_separate_requests_and_cache_entries() {
+        use crate::logins::{self, Method};
+        let answer = b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}".to_vec();
+        let (base, asked) = serve_recorded(vec![answer.clone(), answer.clone(), answer]);
+        let raw = format!("{base}/same");
+        let a = logins::activate(&base, "session-a/connection-a", Method::Header("X-Key".into()), "a", true).unwrap();
+        let b = logins::activate(&base, "session-b/connection-b", Method::Header("X-Key".into()), "b", true).unwrap();
+        let ua = logins::bind(&a, &raw).unwrap();
+        let ub = logins::bind(&b, &raw).unwrap();
+        for url in [&ua, &ub, &raw] {
+            native::get(&native::agent(), url).unwrap();
+        }
+        let requests: Vec<_> = asked.iter().take(3).map(|r| r.to_ascii_lowercase()).collect();
+        assert!(requests[0].contains("x-key: a\r\n"));
+        assert!(requests[1].contains("x-key: b\r\n"));
+        assert!(!requests[2].contains("x-key:"));
+        store(&ua, Entry::Ready(Arc::new(Payload::Json(serde_json::json!({"a": 1}))), 64));
+        assert!(peek(&ua).is_some());
+        assert!(peek(&ub).is_none() && peek(&raw).is_none());
+        assert!(logins::deactivate(&a));
+        assert!(peek(&ua).is_none());
+        assert!(matches!(get(&ua, Want::Json), State::Failed(_)));
+        let replacement = logins::activate(&base, "session-a/connection-a", Method::Header("X-Key".into()), "new", true).unwrap();
+        assert!(logins::apply(&ua).is_err());
+        assert!(logins::apply(&ub).unwrap().is_some());
+        assert!(logins::deactivate(&replacement));
+        assert!(logins::deactivate(&b));
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn logout_during_pending_download_discards_old_authenticated_body() {
+        use crate::logins::{self, Method};
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let binding =
+            logins::activate(&base, "pending-session/connection", Method::Header("X-Key".into()), "pending-secret", true).unwrap();
+        let url = logins::bind(&binding, &format!("{base}/pending")).unwrap();
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buf = [0u8; 2048];
+            let n = stream.read(&mut buf).unwrap();
+            assert!(String::from_utf8_lossy(&buf[..n]).to_ascii_lowercase().contains("x-key: pending-secret"));
+            started_tx.send(()).unwrap();
+            release_rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
+            stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 8\r\nConnection: close\r\n\r\nold-body").unwrap();
+        });
+        let worker_url = url.clone();
+        let worker = std::thread::spawn(move || native::get(&native::agent(), &worker_url));
+        started_rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
+        assert!(logins::deactivate(&binding));
+        let replacement =
+            logins::activate(&base, "pending-session/connection", Method::Header("X-Key".into()), "replacement-secret", true).unwrap();
+        let replacement_url = logins::bind(&replacement, &format!("{base}/pending")).unwrap();
+        assert_ne!(url, replacement_url);
+        release_tx.send(()).unwrap();
+        assert!(worker.join().unwrap().is_err());
+        store(&url, Entry::Ready(Arc::new(Payload::Json(serde_json::json!({"old": true}))), 64));
+        assert!(peek(&url).is_none());
+        assert!(matches!(get(&url, Want::Json), State::Failed(_)));
+        assert!(peek(&replacement_url).is_none());
+        assert!(logins::apply(&replacement_url).unwrap().is_some());
+        assert!(logins::deactivate(&replacement));
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn derived_style_tilejson_sprite_and_feature_requests_carry_the_binding() {
+        use crate::{
+            logins::{self, Method},
+            source,
+            style::Source,
+            template,
+        };
+        let style = serde_json::json!({
+            "version": 8, "sprite": "./sprite",
+            "sources": {"roads": {"type": "vector", "url": "./tiles.json"}}, "layers": []
+        });
+        let tilejson = serde_json::json!({"tiles": ["./tile/{z}/{x}/{y}.pbf"]});
+        let answer =
+            |body: String| format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).into_bytes();
+        let (base, asked) = serve_recorded(vec![
+            answer(style.to_string()),
+            answer(tilejson.to_string()),
+            answer("{}".into()),
+            answer("{}".into()),
+            answer("{}".into()),
+        ]);
+        let binding =
+            logins::activate(&base, "derived-style", Method::Header("X-Service-Key".into()), "derived-style-secret", true).unwrap();
+        let url = logins::bind(&binding, &format!("{base}/style.json")).unwrap();
+        let tilejson_url = template::join(&url, "./tiles.json");
+        for address in [&url, &tilejson_url] {
+            let bytes = native::get(&native::agent(), address).unwrap();
+            let json = serde_json::from_slice(&bytes).unwrap();
+            store(address, Entry::Ready(Arc::new(Payload::Json(json)), bytes.len()));
+        }
+        let spec = source::Spec {
+            kind: source::Kind::Style,
+            url: url.clone(),
+            subdomains: vec![],
+            min_zoom: 0,
+            max_zoom: 22,
+            tile_size: 256,
+            tms: false,
+            attribution: String::new(),
+            layers: vec![],
+            style_layers: String::new(),
+            hidden_layers: vec![],
+        };
+        let source::Resolve::Ready(resolved) = source::resolve(&spec) else { panic!("style must resolve from fetched documents") };
+        let Source::Vector { tiles, .. } = &resolved.style.sources[0].1 else { panic!("vector source") };
+        let tile = template::expand(&tiles[0], template::TileId { z: 0, x: 0, y: 0 }, 256, false, &[]);
+        native::get(&native::agent(), &tile).unwrap();
+        let sprite = resolved.sprite.as_ref().unwrap();
+        native::get(&native::agent(), &format!("{sprite}.json")).unwrap();
+        let info = rustgis_data::ogc::FeatureInfo {
+            url: template::join(&url, "./info"),
+            layer: "roads".into(),
+            version: "1.3.0".into(),
+            formats: vec!["application/json".into()],
+            ..Default::default()
+        };
+        native::get(&native::agent(), &info.request(0.0, 0.0, 10.0).unwrap()).unwrap();
+        for request in asked.iter().take(5) {
+            assert!(request.to_ascii_lowercase().contains("x-service-key: derived-style-secret\r\n"));
+            assert!(!request.contains("rustgis-login:"));
+        }
+        assert!(logins::deactivate(&binding));
+        assert!(matches!(source::resolve(&spec), source::Resolve::Failed(_)));
+        assert!(matches!(crate::sprite::load(sprite, false), crate::sprite::Load::Failed));
+        assert!(crate::pmtiles::info(&url).is_err());
+        assert!(crate::cog::info(&url).is_err());
     }
 
     /// The last bytes from a store that serves ranges but answers `bytes=-n` with 501 (GitHub's
