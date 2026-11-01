@@ -1484,12 +1484,18 @@ fn tool_settings(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, i: usize, n: &Mo
                 if spec.id.starts_with("geolibre:") || p.kind == ParamKind::FieldNames =>
             {
                 let mut value = text;
+                // As the text box below says it, when the input's fields aren't known yet.
+                let hint = if default.is_empty() && fields.is_empty() && p.kind != ParamKind::FieldNames {
+                    tl!("A field (known once the model runs)")
+                } else {
+                    &default
+                };
                 let response = crate::panes::field_suggestions(
                     ui,
                     egui::Id::unique(("mb_p", &n.id, p.name)),
                     &mut value,
                     tl!(p.label),
-                    &default,
+                    hint,
                     fields.iter().copied(),
                     p.kind == ParamKind::FieldNames,
                 );
