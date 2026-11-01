@@ -770,16 +770,26 @@ The record directory and R-tree stay on disk, with an 8 MiB SQLite page-cache ta
 index and memory mapping disabled. Query results retain file order and the same sampling
 rules. Attributes and the `.prj` are still read from the source files.
 
-Set `RUSTGIS_SHP_CACHE` to choose the cache directory and `RUSTGIS_SHP_CACHE_MIB` to choose
-the retained index budget (2048 MiB by default, clamped to 64–65536 MiB). Idle indexes are
-evicted in least-recently-used order. Open readers and builders hold operating-system leases,
-so another instance cannot evict their indexes; active files can temporarily exceed the
-budget. An index larger than the budget is session-only. Building an index, even one that
-fails, reclaims abandoned builds and temporary indexes and evicts idle ones past the budget.
-Reopening a cached index leaves the cache as it is, and releasing one removes only its own
-temporary index. Otherwise a release sweeps the folder only while the cache is over budget:
-because of indexes in use (a release frees them) or files without a readable lease (no release
-can free them, so each release sweeps). A corrupt cache is rebuilt, and an unavailable cache
+The indexes are kept in the `shp-index` folder of the RustGIS cache directory:
+`~/Library/Caches/RustGIS/shp-index` on macOS, `~/.cache/rustgis/shp-index` on Linux
+(`$XDG_CACHE_HOME`), `%LOCALAPPDATA%\RustGIS\cache\shp-index` on Windows, or under
+`RUSTGIS_CACHE_DIR` when it is set. Set
+`RUSTGIS_SHP_CACHE` to choose another directory, `RUSTGIS_SHP_CACHE_MIB` to choose the
+retained index budget (2048 MiB by default, clamped to 64–65536 MiB), and
+`RUSTGIS_SHP_CACHE_DAYS` to choose how long an unused index is kept (30 days by default,
+clamped to 1–3650). The cache is disposable: with RustGIS closed, the folder can be deleted,
+and each index is rebuilt the next time its Shapefile is opened.
+
+Idle indexes are evicted in least-recently-used order. Open readers and builders hold
+operating-system leases, so another instance cannot evict their indexes; active files can
+temporarily exceed the budget. An index larger than the budget is session-only. Building an
+index, even one that fails, reclaims abandoned builds and temporary indexes, evicts idle ones
+past the budget, and drops idle indexes unused for longer than the limit (of a file deleted or
+moved, for example). A build that is kept also drops the idle indexes of the same Shapefile
+from before it changed. Reopening a cached index leaves the cache as it is, and releasing one
+removes only its own temporary index. Otherwise a release sweeps the folder only while indexes
+in use keep the cache over budget and releasing them can bring it back within budget. A
+corrupt cache is rebuilt, and an unavailable cache
 directory falls back to the system temporary directory (a per-user directory on Unix).
 New Unix cache directories are created with mode `0700`. Existing roots must belong to
 the effective user, forbid group/other writes, and have trusted parents; symlink roots
