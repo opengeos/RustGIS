@@ -31,6 +31,7 @@ A catalogue's (CSW 2.0.2) address: search its records by words and, if you like,
 A ChatGPT plan or app usage limit was reached. Review Weekly usage before trying again.	Osiągnięto limit planu ChatGPT albo limit użycia aplikacji. Sprawdź pozycję Użycie tygodniowe i spróbuj ponownie.
 A ChatGPT sign-in can only be used with the OpenAI API.	Logowanie do ChatGPT działa tylko z interfejsem API OpenAI.
 A colour, hatch lines, markers on a grid, a gradient, or a shapeburst (shaded from the edge inwards)	Kolor, linie kreskowania, znaczniki na siatce, gradient lub cieniowanie od krawędzi (cieniowane od krawędzi do środka)
+A command id is required.	Wymagany jest identyfikator polecenia.
 A connection has this name: give this one another name to remember its keys.	Inne połączenie ma już tę nazwę. Nadaj temu inną nazwę, aby zapamiętać klucze.
 A copy of {name} with unsaved changes was kept a minute ago.	Kopię {name} z niezapisanymi zmianami zachowano minutę temu.
 A copy of {name} with unsaved changes was kept less than a minute ago.	Kopię {name} z niezapisanymi zmianami zachowano niecałą minutę temu.
@@ -434,6 +435,7 @@ Bike	Rower
 Bilinear	Bilinearne
 Bind To Time Slider	Powiąż z suwakiem czasu
 Bind to Time Slider	Powiąż z suwakiem czasu
+Bindings: {bindings} · Conflicts: {conflicts} · Unknown commands: {unknown}	Przypisania: {bindings} · Konflikty: {conflicts} · Nieznane polecenia: {unknown}
 Blank	Pusty
 Blank for Amazon S3	Puste dla Amazon S3
 Blank Letter page	Pusta strona Letter
@@ -582,6 +584,7 @@ Choose a layer…	Wybierz warstwę…
 Choose a model.	Wybierz model.
 Choose a resampling type for the raster layer.	Wybierz metodę ponownego próbkowania dla warstwy rastrowej.
 Choose a saved S3 connection before opening this source.	Przed otwarciem tego źródła wybierz zapisane połączenie S3.
+Choose a shortcut file in the browser.	Wybierz plik skrótów w przeglądarce.
 Choose a start	Wybierz początek
 Choose a stop	Wybierz przystanek
 Choose a table to load for editing	Wybierz tabelę do wczytania i edycji
@@ -1211,6 +1214,7 @@ Export Features	Eksportuj obiekty
 Export Features (tool)	Eksportuj obiekty (narzędzie)
 Export Features needs a vector layer (Data › Export Raster writes a raster)	Eksportowanie obiektów wymaga warstwy wektorowej (Dane › Eksportuj raster zapisuje raster)
 Export Features…	Eksportuj obiekty…
+Export Keyboard Shortcuts…	Eksportuj skróty klawiszowe…
 Export Layout	Eksportuj układ
 Export Map	Eksportuj mapę
 Export Map failed unexpectedly	Eksport mapy nieoczekiwanie się nie powiódł
@@ -1567,6 +1571,8 @@ Import Bookmarks	Importuj zakładki
 Import Bookmarks…	Importuj zakładki…
 Import Deep Learning Package	Importuj pakiet uczenia głębokiego
 Import GeoLibre Project	Importuj projekt GeoLibre
+Import Keyboard Shortcuts	Importuj skróty klawiszowe
+Import Keyboard Shortcuts…	Importuj skróty klawiszowe…
 Import Layout	Importuj układ
 Import Layout…	Importuj układ…
 Import Model	Importuj model
@@ -1585,6 +1591,7 @@ Import Styles From…	Importuj style z…
 Import Task	Importuj zadanie
 Import Task…	Importuj zadanie…
 Import Thumbnail	Importuj miniaturę
+Imported bindings replace conflicting keys. Unknown commands are kept for later use.	Zaimportowane przypisania zastępują kolidujące klawisze. Nieznane polecenia są zachowywane do późniejszego użycia.
 Imported Zarr slice exceeds the 128 MiB download limit	Zaimportowany wycinek Zarr przekracza limit pobierania 128 MiB
 Import…	Importuj…
 IN	IN
@@ -1649,8 +1656,11 @@ Intersect	Przecięcie
 Interval	Odstęp
 Into the group just above it, as its last item	Do grupy tuż powyżej, jako jej ostatni element
 invalid child id	nieprawidłowy identyfikator elementu podrzędnego
+Invalid or reserved shortcut key.	Nieprawidłowy lub zarezerwowany klawisz skrótu.
 Invalid selection outline · draw a smaller area	Nieprawidłowy obrys zaznaczenia · zaznacz mniejszy obszar
 Invalid selection outline · draw a smaller radius	Nieprawidłowy obrys zaznaczenia · wybierz mniejszy promień
+Invalid shortcut binding.	Nieprawidłowe przypisanie skrótu.
+Invalid shortcut key.	Nieprawidłowy klawisz skrótu.
 Invalid: {error}	Nieprawidłowe: {error}
 Invert	Odwróć
 Invert color scheme	Odwróć schemat kolorów
@@ -1715,6 +1725,7 @@ Kernel Type	Typ jądra
 Key	Klucz
 Keyboard\nShortcuts	Skróty\nklawiszowe
 Keyboard Shortcuts	Skróty klawiszowe
+Keyboard shortcuts	Skróty klawiszowe
 Keyboard shortcuts.	Skróty klawiszowe.
 Keys are available for this session but were not remembered on this computer.	Klucze są dostępne w tej sesji, ale nie zostały zapamiętane na tym komputerze.
 Keys are kept for this session only: there is no credential store to remember them in here.	Klucze są trzymane tylko w tej sesji, bo nie ma tu magazynu poświadczeń, który mógłby je zapamiętać.
@@ -2564,6 +2575,8 @@ Projects and JSON data (RustGIS, QGIS, GeoLibre)	Projekty i dane JSON (RustGIS, 
 Properties	Właściwości
 Property	Właściwość
 Proportional Symbols	Symbole proporcjonalne
+Provide keys to reset, or no parameters to reset all.	Podaj klawisze do przywrócenia lub nie podawaj parametrów, aby przywrócić wszystkie.
+Provide shortcut file text, data or a path.	Podaj tekst, dane lub ścieżkę pliku skrótów.
 Provider	Dostawca
 Provinces:	Prowincje:
 Proximity	Bliskość
@@ -2747,6 +2760,7 @@ Reset Default	Przywróć domyślne
 Reset Effects	Przywróć efekty
 Reset North	Ustaw północ
 Reset north	Ustaw północ
+Reset unreadable saved shortcuts before importing.	Przed importem przywróć nieczytelne zapisane skróty.
 Reset {key}	Przywróć {key}
 Resolution (0–30)	Rozdzielczość (0–30)
 Response	Odpowiedź
@@ -3068,6 +3082,7 @@ Set the pixels inside a polygon	Ustaw piksele wewnątrz poligonu
 Set the pixels inside a polygon.	Ustaw piksele wewnątrz poligonu.
 Settings	Ustawienia
 Settings › Customize	Ustawienia › Dostosuj
+Settings › Customize › Keyboard Shortcuts	Ustawienia › Dostosuj › Skróty klawiszowe
 Several places	Kilka miejsc
 Shade from the outer edge alone	Cieniuj tylko od zewnętrznej krawędzi
 Shade to the point deepest inside	Cieniuj do punktu najgłębiej w środku
@@ -3103,6 +3118,9 @@ Shifts the mark right of the point (left when negative)	Przesuwa znak w prawo od
 Shifts the stroke sideways: positive to the right of the line's direction, negative to the left	Przesuwa obrys w bok: dodatnio na prawo od kierunku linii, ujemnie na lewo
 Short labels	Krótkie etykiety
 Shortcut already assigned	Skrót jest już przypisany
+Shortcut file contains invalid or reserved bindings.	Plik skrótów zawiera nieprawidłowe lub zarezerwowane przypisania.
+Shortcut file exceeds the size limit.	Plik skrótów przekracza limit rozmiaru.
+Shortcut keys are required.	Klawisze skrótu są wymagane.
 Shortcuts	Skróty
 Shortest route over a line network	Najkrótsza trasa w sieci linii
 Show	Pokaż
@@ -3633,6 +3651,7 @@ Toggle Imperial Measurements	Przełącz miary angielskie
 Token Required	Wymagany token
 Tolerance (km)	Tolerancja (km)
 Tolls	Opłaty drogowe
+Too many shortcut changes to save.	Zbyt wiele zmian skrótów do zapisania.
 Too many shortcut changes to save. Changes apply only to this session.	Zbyt wiele zmian skrótów do zapisania. Zmiany obowiązują tylko w tej sesji.
 Tool Gallery	Galeria narzędzi
 Toolboxes	Skrzynki narzędzi
@@ -3718,11 +3737,14 @@ United States	Stany Zjednoczone
 Units	Jednostki
 Units per step	Jednostki na krok
 unknown (an older project)	nieznany (starszy projekt)
+Unknown shortcut binding field.	Nieznane pole przypisania skrótu.
+Unknown shortcut command.	Nieznane polecenie skrótu.
 UNKNOWN TOOL	NIEZNANE NARZĘDZIE
 Unload the GeoLibre tools and stop loading them when RustGIS starts.	Wyładuj narzędzia GeoLibre i przestań je wczytywać przy starcie RustGIS.
 Unsaved changes	Niezapisane zmiany
 Unsupervised classes (k-means)	Klasy bez nadzoru (k-średnich)
 Unsupervised classes (k-means).	Klasy bez nadzoru (k-średnich).
+Unsupported shortcut file version.	Nieobsługiwana wersja pliku skrótów.
 Untitled	Bez tytułu
 Untitled model	Model bez nazwy
 Up	W górę
@@ -3745,6 +3767,7 @@ US State GIS	GIS stanowy USA
 US State GIS…	GIS stanowy USA…
 USA Contiguous Albers Equal Area	USA Contiguous Albers Equal Area
 Use	Użyj
+Use a browser download to export shortcuts.	Aby wyeksportować skróty, użyj pobierania w przeglądarce.
 Use a Single Stroke	Użyj jednego obrysu
 Use another account	Użyj innego konta
 Use ArcGIS Token	Użyj tokenu ArcGIS

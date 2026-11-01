@@ -6856,7 +6856,7 @@ limitations under the License.
 Apache License 2.0
 Used by: windows, windows-collections, windows-core, windows-future, windows-implement, windows-interface,
 windows-link, windows-numerics, windows-result, windows-strings, windows-sys, windows-targets,
-windows-threading, windows_x86_64_gnu, windows_x86_64_msvc
+windows-threading, windows_aarch64_msvc, windows_x86_64_gnu, windows_x86_64_msvc
 ====================================================================================================
 
                                  Apache License
@@ -10968,7 +10968,7 @@ ICU 1.8.1 to ICU 57.1 © 1995-2016 International Business Machines Corporation a
 
 ====================================================================================================
 Unicode License v3
-Used by: unicode-ident
+Used by: unicode-ident, unicode-normalization
 ====================================================================================================
 
 UNICODE LICENSE V3

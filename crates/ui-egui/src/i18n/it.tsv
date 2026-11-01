@@ -31,6 +31,7 @@ A catalogue's (CSW 2.0.2) address: search its records by words and, if you like,
 A ChatGPT plan or app usage limit was reached. Review Weekly usage before trying again.	È stato raggiunto un limite di utilizzo del piano ChatGPT o dell’app. Controlla l’utilizzo settimanale prima di riprovare.
 A ChatGPT sign-in can only be used with the OpenAI API.	Un accesso ChatGPT può essere usato solo con l'API di OpenAI.
 A colour, hatch lines, markers on a grid, a gradient, or a shapeburst (shaded from the edge inwards)	Un colore, linee di tratteggio, marcatori su una griglia, un gradiente o un gradiente di forma (ombreggiato dal bordo verso l'interno)
+A command id is required.	È richiesto un ID comando.
 A connection has this name: give this one another name to remember its keys.	Esiste già una connessione con questo nome: assegna a questa un altro nome per ricordarne le chiavi.
 A copy of {name} with unsaved changes was kept a minute ago.	Una copia di {name} con modifiche non salvate è stata conservata un minuto fa.
 A copy of {name} with unsaved changes was kept less than a minute ago.	Una copia di {name} con modifiche non salvate è stata conservata meno di un minuto fa.
@@ -434,6 +435,7 @@ Bike	In bici
 Bilinear	Bilineare
 Bind To Time Slider	Collega al cursore temporale
 Bind to Time Slider	Collega al cursore temporale
+Bindings: {bindings} · Conflicts: {conflicts} · Unknown commands: {unknown}	Associazioni: {bindings} · Conflitti: {conflicts} · Comandi sconosciuti: {unknown}
 Blank	Vuota
 Blank for Amazon S3	Vuoto per Amazon S3
 Blank Letter page	Pagina Letter vuota
@@ -582,6 +584,7 @@ Choose a layer…	Scegli un layer…
 Choose a model.	Scegli un modello.
 Choose a resampling type for the raster layer.	Scegli un tipo di ricampionamento per il layer raster.
 Choose a saved S3 connection before opening this source.	Scegli una connessione S3 salvata prima di aprire questa origine.
+Choose a shortcut file in the browser.	Scegli un file di scorciatoie nel browser.
 Choose a start	Scegli una partenza
 Choose a stop	Scegli una tappa
 Choose a table to load for editing	Scegli una tabella da caricare per la modifica
@@ -1211,6 +1214,7 @@ Export Features	Esporta elementi
 Export Features (tool)	Esporta elementi (strumento)
 Export Features needs a vector layer (Data › Export Raster writes a raster)	Esporta elementi richiede un layer vettoriale (Dati › Esporta raster scrive un raster)
 Export Features…	Esporta elementi…
+Export Keyboard Shortcuts…	Esporta scorciatoie da tastiera…
 Export Layout	Esporta layout
 Export Map	Esporta mappa
 Export Map failed unexpectedly	Esportazione mappa non riuscita inaspettatamente
@@ -1567,6 +1571,8 @@ Import Bookmarks	Importa segnalibri
 Import Bookmarks…	Importa segnalibri…
 Import Deep Learning Package	Importa pacchetto di deep learning
 Import GeoLibre Project	Importa progetto GeoLibre
+Import Keyboard Shortcuts	Importa scorciatoie da tastiera
+Import Keyboard Shortcuts…	Importa scorciatoie da tastiera…
 Import Layout	Importa layout
 Import Layout…	Importa layout…
 Import Model	Importa modello
@@ -1585,6 +1591,7 @@ Import Styles From…	Importa stili da…
 Import Task	Importa attività
 Import Task…	Importa attività…
 Import Thumbnail	Importa miniatura
+Imported bindings replace conflicting keys. Unknown commands are kept for later use.	Le associazioni importate sostituiscono i tasti in conflitto. I comandi sconosciuti vengono conservati per un uso futuro.
 Imported Zarr slice exceeds the 128 MiB download limit	La sezione Zarr importata supera il limite di download di 128 MiB
 Import…	Importa…
 IN	IN
@@ -1649,8 +1656,11 @@ Intersect	Intersezione
 Interval	Intervallo
 Into the group just above it, as its last item	Nel gruppo subito sopra, come ultima voce
 invalid child id	id del processo figlio non valido
+Invalid or reserved shortcut key.	Tasto della scorciatoia non valido o riservato.
 Invalid selection outline · draw a smaller area	Contorno di selezione non valido · disegna un’area più piccola
 Invalid selection outline · draw a smaller radius	Contorno di selezione non valido · disegna un raggio più piccolo
+Invalid shortcut binding.	Associazione della scorciatoia non valida.
+Invalid shortcut key.	Tasto della scorciatoia non valido.
 Invalid: {error}	Non valida: {error}
 Invert	Inverti
 Invert color scheme	Inverti schema di colori
@@ -1715,6 +1725,7 @@ Kernel Type	Tipo di kernel
 Key	Key
 Keyboard\nShortcuts	Scorciatoie\nda tastiera
 Keyboard Shortcuts	Scorciatoie da tastiera
+Keyboard shortcuts	Scorciatoie da tastiera
 Keyboard shortcuts.	Scorciatoie da tastiera.
 Keys are available for this session but were not remembered on this computer.	Le chiavi sono disponibili per questa sessione ma non sono state ricordate su questo computer.
 Keys are kept for this session only: there is no credential store to remember them in here.	Le chiavi vengono conservate solo per questa sessione: qui non c'è un archivio credenziali in cui ricordarle.
@@ -2564,6 +2575,8 @@ Projects and JSON data (RustGIS, QGIS, GeoLibre)	Progetti e dati JSON (RustGIS, 
 Properties	Proprietà
 Property	Proprietà
 Proportional Symbols	Simboli proporzionali
+Provide keys to reset, or no parameters to reset all.	Indica i tasti da reimpostare, oppure nessun parametro per reimpostarli tutti.
+Provide shortcut file text, data or a path.	Indica il testo, i dati o il percorso del file di scorciatoie.
 Provider	Provider
 Provinces:	Province:
 Proximity	Prossimità
@@ -2747,6 +2760,7 @@ Reset Default	Reimposta predefinito
 Reset Effects	Reimposta effetti
 Reset North	Reimposta nord
 Reset north	Reimposta nord
+Reset unreadable saved shortcuts before importing.	Reimposta le scorciatoie salvate illeggibili prima di importare.
 Reset {key}	Reimposta {key}
 Resolution (0–30)	Risoluzione (0–30)
 Response	Risposta
@@ -3068,6 +3082,7 @@ Set the pixels inside a polygon	Imposta i pixel all'interno di un poligono
 Set the pixels inside a polygon.	Imposta i pixel all'interno di un poligono.
 Settings	Impostazioni
 Settings › Customize	Impostazioni › Personalizza
+Settings › Customize › Keyboard Shortcuts	Impostazioni › Personalizza › Scorciatoie da tastiera
 Several places	Più luoghi
 Shade from the outer edge alone	Ombreggia solo dal bordo esterno
 Shade to the point deepest inside	Ombreggia fino al punto più interno
@@ -3103,6 +3118,9 @@ Shifts the mark right of the point (left when negative)	Sposta il segno a destra
 Shifts the stroke sideways: positive to the right of the line's direction, negative to the left	Sposta il tratto lateralmente: positivo a destra della direzione della linea, negativo a sinistra
 Short labels	Etichette brevi
 Shortcut already assigned	Scorciatoia già assegnata
+Shortcut file contains invalid or reserved bindings.	Il file di scorciatoie contiene associazioni non valide o riservate.
+Shortcut file exceeds the size limit.	Il file di scorciatoie supera il limite di dimensione.
+Shortcut keys are required.	I tasti della scorciatoia sono obbligatori.
 Shortcuts	Scorciatoie
 Shortest route over a line network	Percorso più breve su una rete di linee
 Show	Mostra
@@ -3633,6 +3651,7 @@ Toggle Imperial Measurements	Attiva/disattiva misure imperiali
 Token Required	Token obbligatorio
 Tolerance (km)	Tolleranza (km)
 Tolls	Pedaggi
+Too many shortcut changes to save.	Troppe modifiche alle scorciatoie da salvare.
 Too many shortcut changes to save. Changes apply only to this session.	Troppe modifiche alle scorciatoie da salvare. Le modifiche valgono solo per questa sessione.
 Tool Gallery	Galleria strumenti
 Toolboxes	Caselle degli strumenti
@@ -3718,11 +3737,14 @@ United States	Stati Uniti
 Units	Unità
 Units per step	Unità per passo
 unknown (an older project)	sconosciuto (un progetto precedente)
+Unknown shortcut binding field.	Campo dell'associazione della scorciatoia sconosciuto.
+Unknown shortcut command.	Comando della scorciatoia sconosciuto.
 UNKNOWN TOOL	STRUMENTO SCONOSCIUTO
 Unload the GeoLibre tools and stop loading them when RustGIS starts.	Scarica dalla memoria gli strumenti GeoLibre e smetti di caricarli all'avvio di RustGIS.
 Unsaved changes	Modifiche non salvate
 Unsupervised classes (k-means)	Classi non supervisionate (k-means)
 Unsupervised classes (k-means).	Classi non supervisionate (k-means).
+Unsupported shortcut file version.	Versione del file di scorciatoie non supportata.
 Untitled	Senza titolo
 Untitled model	Modello senza titolo
 Up	Su
@@ -3745,6 +3767,7 @@ US State GIS	GIS statali USA
 US State GIS…	GIS statali USA…
 USA Contiguous Albers Equal Area	Albers equivalente USA continentali
 Use	Usa
+Use a browser download to export shortcuts.	Usa un download del browser per esportare le scorciatoie.
 Use a Single Stroke	Usa un solo tratto
 Use another account	Usa un altro account
 Use ArcGIS Token	Usa token ArcGIS

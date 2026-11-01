@@ -42,13 +42,15 @@ struct Runs {
     info: SourceInfo,
     features: Vec<Feature>,
     per: usize,
-    /// Fails the traversal after this many runs (of the traversal counted from 0 that the second
-    /// says, or every one).
+    /// Fails the traversal on its run numbered `fail_after` (counted from 0), on the traversal
+    /// numbered `fail_pass` if set, or on every traversal.
     fail_after: Option<usize>,
     fail_pass: Option<usize>,
     passes: std::sync::atomic::AtomicUsize,
     /// Whether it can be read a chunk at a time.
     chunks: bool,
+    /// Rows it reports as unreadable, as a GeoPackage's bad rows are.
+    unreadable: usize,
 }
 
 impl Runs {
@@ -66,7 +68,16 @@ impl Runs {
             notes: Vec::new(),
             zm_dropped: false,
         };
-        Runs { info, features: ds.features.to_vec(), per, fail_after: None, fail_pass: None, passes: Default::default(), chunks: true }
+        Runs {
+            info,
+            features: ds.features.to_vec(),
+            per,
+            fail_after: None,
+            fail_pass: None,
+            passes: Default::default(),
+            chunks: true,
+            unreadable: 0,
+        }
     }
 }
 
@@ -88,7 +99,7 @@ impl FeatureSource for Runs {
             }
             visit(run.to_vec())?;
         }
-        Ok(Batch { complete: true, matched: self.features.len() as u64, ..Batch::default() })
+        Ok(Batch { complete: true, matched: self.features.len() as u64, skipped: self.unreadable, ..Batch::default() })
     }
 }
 
@@ -117,7 +128,7 @@ fn a_streamed_export_writes_what_a_whole_export_writes() {
                 let streamed = write_chunks_in(src.as_ref(), &layer, &a, crs, 2048).unwrap();
                 let left_out = crate::io::write_path_in(&whole, &b, crs).unwrap();
                 let what = format!("{format} to .{ext} in {}", crs.label());
-                assert_eq!(streamed, Exported { written: whole.features.len() - left_out, left_out }, "{what}");
+                assert_eq!(streamed, Exported { written: whole.features.len() - left_out, left_out, skipped: 0 }, "{what}");
                 let (a, b) = (read_back(&a), read_back(&b));
                 assert_eq!((&a.fields, a.geometry_type, a.crs), (&b.fields, b.geometry_type, b.crs), "{what}");
                 assert_eq!(a.features, b.features, "{what}");
@@ -204,6 +215,22 @@ fn a_layer_without_a_declared_type_takes_its_first_geometrys() {
     assert!(text.starts_with("n,longitude,latitude"), "{text}");
 }
 
+/// Rows a source couldn't read are counted, so an export can say how many it left out; a clean
+/// source counts none.
+#[test]
+fn rows_a_source_couldnt_read_are_counted() {
+    let d = folder("unreadable");
+    let ds = squares();
+    let layer = Dataset::new("squares", ds.geometry_type, ds.fields.clone());
+    let mut src = Runs::new(&ds, 40);
+    let clean = write_chunks_in(&src, &layer, &d.join("clean.csv"), Crs::LonLat, 2048).unwrap();
+    assert_eq!(clean.skipped, 0);
+    src.unreadable = 3;
+    let lossy = write_chunks_in(&src, &layer, &d.join("lossy.csv"), Crs::LonLat, 2048).unwrap();
+    assert_eq!(lossy.skipped, 3);
+    assert_eq!(lossy.written, clean.written);
+}
+
 /// A failed export leaves no file, and no temporary one, behind; a file it would have replaced
 /// stays as it was.
 #[test]
@@ -239,5 +266,15 @@ fn streamed_exports_refuse_what_they_cant_write() {
     }
     let whole_only = Runs { chunks: false, ..Runs::new(&ds, 10) };
     assert!(write_source_in(&whole_only, &layer, &d.join("out.csv"), Crs::LonLat).is_err());
+    assert_eq!(std::fs::read_dir(&d).unwrap().count(), 0);
+}
+
+/// A writer that panics leaves no temporary file behind either.
+#[test]
+fn a_panicking_writer_leaves_nothing_behind() {
+    let d = folder("panic");
+    let path = d.join("out.csv");
+    let r = std::panic::catch_unwind(|| crate::io::write_atomic_with(&path, |_| -> Result<()> { panic!("the writer failed") }));
+    assert!(r.is_err());
     assert_eq!(std::fs::read_dir(&d).unwrap().count(), 0);
 }

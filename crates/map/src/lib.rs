@@ -551,15 +551,20 @@ impl Layer {
     /// Every feature of a streamed layer's source (up to the read limit), for tools and for
     /// loading the layer into memory.
     pub fn load_all(&self) -> Result<Dataset, String> {
-        let Some(copy) = self.open_source()? else { return Ok(self.dataset.clone()) };
-        let (mut ds, _) = copy.read_all()?;
+        self.load_all_counted().map(|(ds, _)| ds)
+    }
+
+    /// [`Layer::load_all`], with the number of rows of the source that couldn't be read.
+    pub fn load_all_counted(&self) -> Result<(Dataset, usize), String> {
+        let Some(copy) = self.open_source()? else { return Ok((self.dataset.clone(), 0)) };
+        let (mut ds, report) = copy.read_all()?;
         ds.name = self.dataset.name.clone();
         // (A project that lists no fields keeps the source's, as `sync_source` gives it.)
         if !self.dataset.fields.is_empty() {
             ds.fields = self.dataset.fields.clone();
         }
         ds.source = self.dataset.source.clone();
-        Ok(ds)
+        Ok((ds, report.skipped))
     }
 
     /// A streamed layer's source, to export whole a chunk at a time, with a dataset of no
