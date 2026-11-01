@@ -214,7 +214,8 @@ Download `RustGIS-<version>-web.zip` from the
 [GitHub release](https://github.com/opengeos/RustGIS/releases) and unzip it into a directory of
 its own (or the document root, if the server serves nothing else). Serve it over HTTP, rather
 than opening `index.html` as a local file. For a local preview, run `python3 -m http.server 8080`
-from the extracted directory and open `http://localhost:8080/`.
+from the extracted directory and open `http://localhost:8080/`. Browsers do not let a page opened
+as a local file start the app, so it shows these steps instead.
 
 The archive uses relative URLs, so it can be hosted at the root or under a path such as
 `https://example.com/rustgis/` (with the trailing slash). Use HTTPS, or `localhost` for local
