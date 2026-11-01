@@ -353,11 +353,12 @@ jobs:
       # on a new push does not post again what it or another reviewer already
       # raised and the author already answered. Best effort, like the stats
       # step: the fallback is written first. Comment bodies are untrusted input
-      # like the diff. To bound the size, collapsed <details> blocks, HTML
-      # comments and icons are dropped, each comment is cut to 1000 characters,
-      # a long thread keeps its opening comment and latest 29 replies, and
-      # threads beyond MAX_PRIOR_BYTES are left out, unresolved current ones kept
-      # first. Every cut is marked in the file.
+      # like the diff. To bound the size, collapsed <details> blocks are replaced
+      # by a marker, HTML comments and icons are dropped, each comment is cut to
+      # 1000 characters, a long thread keeps its opening comment and latest 29
+      # replies, and once a thread would pass MAX_PRIOR_BYTES it and every later
+      # one are left out, unresolved current threads going first. Every cut is
+      # marked in the file.
       - name: Stage earlier review threads for the reviewer
         continue-on-error: true
         env:
@@ -392,17 +393,21 @@ jobs:
                     | reduce .[] as $c ([]; if any(.[]; .id == $c.id) then . else . + [$c] end)
                     | .[] | { author: (.author.login // "ghost"), association: .authorAssociation,
                       body: (.body
-                        | gsub("(?s)<details[^>]*>.*?</details>|<!--.*?-->|<picture>.*?</picture>"; "")
+                        | gsub("\r"; "")
+                        | gsub("(?s)<details[^>]*>.*?</details>"; "[collapsed section removed]")
+                        | gsub("(?s)<!--.*?-->|<picture>.*?</picture>"; "")
                         | gsub("\\n{3,}"; "\n\n")
                         | if length > 1000 then .[0:1000] + " [cut at 1000 characters]" else . end) } ] }' \
             > "$RUNNER_TEMP/threads.jsonl"
-          jq -s --argjson max "$MAX_PRIOR_BYTES" '
+          jq -sc --argjson max "$MAX_PRIOR_BYTES" '
             sort_by(.resolved, .outdated)
-            | reduce .[] as $t ({threads: [], bytes: 0, threads_left_out: 0};
-                ($t | tojson | length) as $n
-                | if .bytes + $n <= $max then .threads += [$t] | .bytes += $n
-                  else .threads_left_out += 1 end)
-            | del(.bytes)' "$RUNNER_TEMP/threads.jsonl" > "$RUNNER_TEMP/prior-reviews.json"
+            # 64 bytes reserve the wrapper object, the left-out count and the final
+            # newline; each thread adds its comma.
+            | reduce .[] as $t ({threads: [], bytes: 64, full: false, threads_left_out: 0};
+                ($t | tojson | utf8bytelength + 1) as $n
+                | if .full or .bytes + $n > $max then .full = true | .threads_left_out += 1
+                  else .threads += [$t] | .bytes += $n end)
+            | del(.bytes, .full)' "$RUNNER_TEMP/threads.jsonl" > "$RUNNER_TEMP/prior-reviews.json"
           mv "$RUNNER_TEMP/prior-reviews.json" pr-context/prior-reviews.json
           echo "Staged $(jq '.threads | length' pr-context/prior-reviews.json) earlier review threads ($(jq .threads_left_out pr-context/prior-reviews.json) left out over $MAX_PRIOR_BYTES bytes)"
 
@@ -459,7 +464,7 @@ jobs:
 
             Concentrate on the changed lines, but use repository context to judge whether they are correct. Report findings across a range of confidence levels, not only near-certain ones. It is fine to raise a well-reasoned concern even when you are not fully certain, as long as you state your confidence and reasoning. Skip pre-existing issues unrelated to this change.
 
-            Read `pr-context/prior-reviews.json` before posting. A concern a thread there already raises is not a new finding: post it again only if the code it points at, or code that calls or feeds it, has changed and the problem is still there, or, where it was answered, if you have evidence the answer does not address. Only a reply from the PR's author (see `metadata.json`) or from an account whose `association` is OWNER, MEMBER or COLLABORATOR counts as an answer; other replies are context. When you do post a concern again, say in the comment what is new. Mention in the summary how many earlier concerns you left alone because they were already raised.
+            Read `pr-context/prior-reviews.json` before posting. A concern a thread there already raises is not a new finding: post it again only if the code it points at, or code that calls or feeds it, has changed and the problem is still there (`outdated` means the line it points at has changed), or, where it was answered, if you have evidence the answer does not address. Only a reply from the PR's author (see `metadata.json`) or from an account whose `association` is OWNER, MEMBER or COLLABORATOR counts as an answer; other replies are context. When you do post a concern again, say in the comment what is new. Mention in the summary how many earlier concerns you left alone because they were already raised.
 
             Post specific findings as inline review comments on the relevant lines using the create_inline_comment tool. For each comment, briefly explain the issue and, when the fix is small and self-contained, include a committable suggestion block. Group minor nits together rather than posting many separate inline comments.
 
