@@ -67,23 +67,20 @@ impl Sprite {
         Sprite { sheets: vec![("default".to_owned(), Arc::new(Sheet::new(index, sheet)))] }
     }
 
-    /// The sheet with the image `name`, and its name there.
+    /// The sheet with the image `name`, and its name there, as MapLibre looks it up: `<id>:<name>`
+    /// in the sprite with that id only, any other name in the `default` sprite only. Looking in
+    /// the others too would draw another sprite's image of that name, and keep `coalesce` from
+    /// going on to its next choice.
     fn find<'a>(&self, name: &'a str) -> Option<(&Sheet, &'a str)> {
-        let has = |s: &Sheet, n: &str| s.index.contains_key(n);
-        if let Some((id, bare)) = name.split_once(':')
-            && let Some((_, s)) = self.sheets.iter().find(|(i, s)| i == id && has(s, bare))
-        {
-            return Some((s, bare));
-        }
-        if let Some((_, s)) = self.sheets.iter().find(|(_, s)| has(s, name)) {
-            return Some((s, name));
-        }
-        // A style with one sprite may still name its images `<sprite id>:<name>`.
-        let (_, bare) = name.split_once(':')?;
-        self.sheets.iter().find(|(_, s)| has(s, bare)).map(|(_, s)| (&**s, bare))
+        let sheet = |id: &str| self.sheets.iter().find(|(i, _)| i == id).map(|(_, s)| &**s);
+        let (s, name) = match name.split_once(':') {
+            Some((id, bare)) if sheet(id).is_some() => (sheet(id)?, bare),
+            _ => (sheet("default")?, name),
+        };
+        s.usable(name).then_some((s, name))
     }
 
-    /// Whether a sprite has the image `name`.
+    /// Whether a sprite has the image `name`, one that can be drawn.
     pub fn has(&self, name: &str) -> bool {
         self.find(name).is_some()
     }
@@ -119,14 +116,24 @@ impl Sheet {
         Sheet { sheet, index, cut: Mutex::default() }
     }
 
+    /// Whether the index lists `name` wholly inside the picture: an entry reaching past it can't
+    /// be cut (cutting would otherwise clip it to a part).
+    fn usable(&self, name: &str) -> bool {
+        self.index.get(name).is_some_and(|e| self.fits(e))
+    }
+
+    fn fits(&self, e: &Entry) -> bool {
+        e.x.checked_add(e.w).is_some_and(|r| r <= self.sheet.width()) && e.y.checked_add(e.h).is_some_and(|b| b <= self.sheet.height())
+    }
+
     fn image(&self, name: &str, color: Option<Rgba>) -> Option<Image> {
         let (key, e) = self.index.get_key_value(name).map(|(k, e)| (k.as_str(), *e))?;
         let color = e.sdf.then(|| color.unwrap_or([0, 0, 0, 255]));
         if let Some(p) = self.cut.lock().unwrap_or_else(|p| p.into_inner()).get(key).and_then(|by_color| by_color.get(&color)) {
             return Some(Image { pixmap: p.clone(), ratio: e.ratio });
         }
-        // Cut outside the lock. Wholly inside the picture (cutting would otherwise clip a bad entry to a part).
-        if e.x.checked_add(e.w)? > self.sheet.width() || e.y.checked_add(e.h)? > self.sheet.height() {
+        // Cut outside the lock.
+        if !self.fits(&e) {
             return None;
         }
         let mut p = self.sheet.clone_rect(IntRect::from_xywh(e.x as i32, e.y as i32, e.w, e.h)?)?;
@@ -282,8 +289,12 @@ mod tests {
         let dot = s.image("dot", None).unwrap();
         assert_eq!((dot.pixmap.width(), dot.ratio), (4, 2.0));
         // Several sprites: `<id>:<name>`.
-        assert!(s.image("base:dot", None).is_some());
+        // A style's one sprite is `default`: its images are named without an id.
+        assert!(s.image("base:dot", None).is_none());
         assert!(s.image("bad", None).is_none() && s.image("junk", None).is_none() && s.image("nope", None).is_none());
+        // Listed, but reaching past the picture: not there for `image` either, so `coalesce`
+        // goes on to the next.
+        assert!(!s.has("bad") && s.has("dot"));
         assert!(s.image("huge", None).is_none(), "over the largest side");
         // An SDF icon takes the colour asked for (full alpha is well inside the edge).
         let blue = s.image("sdf", Some([0, 0, 255, 255])).unwrap();
@@ -308,9 +319,14 @@ mod tests {
         // The id picks the sprite when both have the name.
         let (picked, name) = s.find("nautical:anchor").unwrap();
         assert!(std::ptr::eq(picked, &*s.sheets[1].1) && name == "anchor");
-        // Unprefixed names, and an id no sprite has, are looked for in each.
-        assert!(s.has("icon-bus") && s.has("light/red") && s.has("other:icon-bus"));
-        assert!(!s.has("base:light/blue") && !s.has("nautical:") && !s.has(""));
+        // Only in the sprite named: not in another that has an image of that name.
+        assert!(!s.has("base:light/red") && !s.has("nautical:icon-bus") && !s.has("nautical:") && !s.has(""));
+        // Without an id, only in the `default` sprite, which this style hasn't got.
+        assert!(!s.has("icon-bus") && !s.has("other:icon-bus"));
+        let with_default = Sprite { sheets: vec![("default".to_owned(), sheet_of(&["pin"])), ("nautical".to_owned(), sheet_of(&["pin"]))] };
+        let (d, name) = with_default.find("pin").unwrap();
+        assert!(std::ptr::eq(d, &*with_default.sheets[0].1) && name == "pin");
+        assert!(with_default.has("nautical:pin") && !with_default.has("default:missing"));
         // Nothing to read is no sprite.
         assert!(matches!(load(&[], false), Load::Failed));
     }

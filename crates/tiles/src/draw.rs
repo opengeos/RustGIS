@@ -801,8 +801,9 @@ fn draw_vector(pm: &mut Pixmap, it: &Item, layer: &StyleLayer, frame: &Frame, zo
                 paint.anti_alias = true;
                 // A pattern from the sprite, repeated from a fixed point of the world so it
                 // lines up across tiles and stays put as the map moves.
+                // (Its name may be an `image` expression, which asks the sprite.)
                 let image = pattern(layer).and_then(|p| {
-                    let name = layer.paint_value(p, &ctx)?;
+                    let name = layer.paint_value(p, &FeatureCtx { images: sheet, ..ctx })?;
                     sheet?.image(name.as_str()?, None)
                 });
                 if pattern(layer).is_some() && image.is_none() {
@@ -1185,8 +1186,16 @@ pub(crate) mod tests {
             &serde_json::json!({"id": "a", "type": "fill", "source": "s", "source-layer": "l", "paint": {"fill-pattern": "nope"}}),
         )
         .unwrap();
-        draw_vector(&mut pm, &item(vec![square]), &missing, &world_frame(), 0.0, Some(&sheet()), &[]);
+        draw_vector(&mut pm, &item(vec![square.clone()]), &missing, &world_frame(), 0.0, Some(&sheet()), &[]);
         assert_eq!(pm.pixel(32, 32).unwrap().alpha(), 0);
+        // A pattern chosen with `image`: the first the sprite has.
+        let chosen = StyleLayer::parse(&serde_json::json!({"id": "a", "type": "fill", "source": "s", "source-layer": "l",
+            "paint": {"fill-pattern": ["coalesce", ["image", "nope"], ["image", "red"]]}}))
+        .unwrap();
+        let mut pm = Pixmap::new(64, 64).unwrap();
+        draw_vector(&mut pm, &item(vec![square]), &chosen, &world_frame(), 0.0, Some(&sheet()), &[]);
+        let px = pm.pixel(32, 32).unwrap();
+        assert_eq!((px.red(), px.green(), px.alpha()), (255, 0, 255));
     }
 
     /// A one-feature MVT layer with one string property, `name`.

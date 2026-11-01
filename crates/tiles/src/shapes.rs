@@ -273,11 +273,7 @@ pub fn shapes(style: &Resolved, source: &str, tile: &Tile, level: u8) -> TileSha
                         // A pattern names an image of the sprite; one that names none isn't drawn.
                         let pattern = match ["fill-pattern", "fill-extrusion-pattern"].into_iter().find(|p| layer.has_paint(p)) {
                             Some(p) => {
-                                let Some(crate::style::Val::Str(name)) =
-                                    layer.paint_value(p, &a).filter(|v| v.as_str().is_some_and(|n| !n.is_empty()))
-                                else {
-                                    break 'p out;
-                                };
+                                // The sprite first: the name may be an `image` expression, which asks it.
                                 let sprite = sheet.get_or_insert_with(|| match sprite::load(&style.sprites, false) {
                                     Load::Ready(s) => Some(s),
                                     Load::Pending => {
@@ -286,6 +282,12 @@ pub fn shapes(style: &Resolved, source: &str, tile: &Tile, level: u8) -> TileSha
                                     }
                                     Load::Failed => None,
                                 });
+                                let images = sprite.as_deref();
+                                let Some(crate::style::Val::Str(name)) =
+                                    layer.paint_value(p, &FeatureCtx { images, ..a }).filter(|v| v.as_str().is_some_and(|n| !n.is_empty()))
+                                else {
+                                    break 'p out;
+                                };
                                 let found = match averages.get(&name) {
                                     Some(a) => *a,
                                     None => {
