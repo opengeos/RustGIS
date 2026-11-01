@@ -18,7 +18,7 @@ pub(crate) const UNIONS: bool = !cfg!(target_arch = "wasm32");
 /// union library can't be caught there, and hostile input mustn't end the page, so shapes are always
 /// the hulls of their points. On the desktop the catch relies on the workspace's default
 /// `panic = "unwind"`.
-pub(crate) const MAX_UNION_FACES: usize = 50_000;
+const MAX_UNION_FACES: usize = 50_000;
 
 /// Why a footprint is the hull of its points.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -35,7 +35,7 @@ pub(crate) enum Hull {
 /// some out), more seen from above than [`MAX_UNION_FACES`] or than `budget` has left (which they
 /// then take from it). `points` are all the shape's points, in any grouping: they also set the scale
 /// below which a face is too narrow to show. A shape with a point or a face whose X or Y isn't a
-/// finite number has no footprint (the hull panics on NaN).
+/// finite number has no footprint: the hull, and orienting a face, panic on NaN.
 pub(crate) fn footprint(
     faces: &[Vec<Vec<P3>>],
     truncated: bool,
@@ -121,14 +121,10 @@ pub(crate) fn footprint(
 mod tests {
     use super::*;
 
-    /// Twice the area of a footprint's outer rings.
-    fn area2(g: &Option<Geometry>) -> f64 {
+    /// The area of a footprint's outer rings.
+    fn area(g: &Option<Geometry>) -> f64 {
         let Some(Geometry::Polygon(polys)) = g else { return 0.0 };
-        polys
-            .iter()
-            .filter_map(|p| p.first())
-            .map(|r| r.iter().zip(r.iter().skip(1)).map(|(a, b)| a.x * b.y - b.x * a.y).sum::<f64>().abs())
-            .sum()
+        polys.iter().filter_map(|p| p.first()).map(|r| crate::geometry::ring_area(r).abs()).sum()
     }
 
     /// A box 10 m wide: its roof and floor show from above, its walls don't. Its footprint is the
@@ -142,7 +138,7 @@ mod tests {
         let mut budget = 10;
         let (shape, hull) = footprint(&faces, false, &points, &mut budget);
         assert_eq!((hull, budget), (None, 8), "the two flat faces merged: {shape:?}");
-        assert!((area2(&shape) - 200.0).abs() < 1e-9, "{shape:?}");
+        assert!((area(&shape) - 100.0).abs() < 1e-9, "{shape:?}");
     }
 
     /// Walls alone show nothing from above: the hull of their points stands in, and says why.
@@ -155,7 +151,7 @@ mod tests {
         let mut budget = 10;
         let (shape, hull) = footprint(&faces, false, &points, &mut budget);
         assert_eq!((hull, budget), (Some(Hull::NoFaces), 10));
-        assert!((area2(&shape) - 200.0).abs() < 1e-9, "{shape:?}");
+        assert!((area(&shape) - 100.0).abs() < 1e-9, "{shape:?}");
         let (shape, hull) = footprint(&faces, true, &points, &mut budget);
         assert_eq!((hull, budget), (Some(Hull::Unmerged), 10));
         assert!(shape.is_some());
@@ -171,7 +167,8 @@ mod tests {
     }
 
     /// A point or a face that isn't a finite number makes no footprint rather than reaching the
-    /// hull, which panics on NaN; a part of the shape isn't drawn as if it were the whole.
+    /// hull or the orienting of a face, which panic on NaN; a part of the shape isn't drawn as if it
+    /// were the whole. A hole counts too: it is oriented with a face that shows.
     #[test]
     fn a_shape_with_points_that_arent_numbers_has_none() {
         let square = vec![[0.0, 0.0, 0.0], [10.0, 0.0, 0.0], [10.0, 10.0, 0.0], [0.0, 10.0, 0.0], [0.0, 0.0, 0.0]];
@@ -181,6 +178,9 @@ mod tests {
             odd.insert(2, [bad, 5.0, 0.0]);
             assert_eq!(footprint(&[], false, &[square.clone(), odd.clone()], &mut budget), (None, None), "point {bad}");
             assert_eq!(footprint(&[vec![odd.clone()]], false, std::slice::from_ref(&square), &mut budget), (None, None), "face {bad}");
+            let hole = vec![[2.0, 2.0, 0.0], [2.0, 4.0, 0.0], [4.0, bad, 0.0], [4.0, 2.0, 0.0], [2.0, 2.0, 0.0]];
+            let face = vec![square.clone(), hole];
+            assert_eq!(footprint(&[face], false, std::slice::from_ref(&square), &mut budget), (None, None), "hole {bad}");
             odd[2] = [5.0, bad, 0.0];
             assert_eq!(footprint(&[], false, &[odd], &mut budget), (None, None), "y {bad}");
         }
