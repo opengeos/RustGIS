@@ -154,9 +154,9 @@ integer attributes outside ±2^53 are rejected to avoid precision loss.
 This is an in-memory export, limited to 10,000 distinct output tiles and a conservative
 256 MiB working-memory budget, including the input, clipping/encoding temporaries and final
 archive. This budget is checked after streamed-source materialization, not during provider
-loading: the existing full-read limits (2,000,000 features on desktop, 500,000 in the browser)
-apply first, and loading may use more than 256 MiB before export refuses the input. Reduce a
-large source before loading it for export. Geometry allocation estimates are linear in the
+loading: the whole-read limits ([Large files](data.md#large-files)) apply first, and loading may
+use more than 256 MiB before export refuses the input. Reduce a large source before loading it
+for export. Geometry allocation estimates are linear in the
 number of vertices and rings.
 Each geometry component's buffered candidate rectangle is limited to 40,000 tiles per zoom,
 including candidates where clipping produces no output. A separate **100,000,000-unit
