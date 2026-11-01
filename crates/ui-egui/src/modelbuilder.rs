@@ -1480,6 +1480,7 @@ fn tool_settings(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, i: usize, n: &Mo
                     egui::Id::unique(("mb_p", &n.id, p.name)),
                     &mut value,
                     tl!(p.label),
+                    &default,
                     fields.iter().copied(),
                     p.kind == ParamKind::FieldNames,
                 );

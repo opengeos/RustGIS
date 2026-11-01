@@ -3185,11 +3185,13 @@ pub(crate) fn layer_for_param<'a>(
 
 /// Editable field names with suggestions: manifests may describe new columns, not just inputs.
 /// A list appends names without replacing its earlier entries; manually typed syntax is retained.
+/// `hint` shows in the empty box (the default a run uses).
 pub(crate) fn field_suggestions<'a>(
     ui: &mut Ui,
     id: egui::Id,
     value: &mut String,
     label: &str,
+    hint: &str,
     fields: impl Iterator<Item = &'a str>,
     multiple: bool,
 ) -> egui::Response {
@@ -3209,7 +3211,7 @@ pub(crate) fn field_suggestions<'a>(
                     })
                     .response
                     .on_hover_text(tl!("Choose a field"));
-                ui.add(egui::TextEdit::singleline(&mut *value).desired_width(f32::INFINITY)).on_hover_text(label)
+                ui.add(egui::TextEdit::singleline(&mut *value).hint_text(hint).desired_width(f32::INFINITY)).on_hover_text(label)
             })
             .inner
         })
@@ -3536,6 +3538,7 @@ fn geoprocessing(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                         egui::Id::unique(("gp", p.name)),
                         &mut cur,
                         tl!(p.label),
+                        "",
                         v.iter().map(String::as_str),
                         p.kind == ParamKind::FieldNames,
                     )
@@ -6337,7 +6340,7 @@ mod tests {
         use egui_kittest::kittest::Queryable;
         let mut h = egui_kittest::Harness::builder().with_size(vec2(400.0, 150.0)).build_ui_state(
             |ui, value: &mut String| {
-                field_suggestions(ui, egui::Id::unique("fields"), value, "Fields", ["name", "population"].into_iter(), true);
+                field_suggestions(ui, egui::Id::unique("fields"), value, "Fields", "", ["name", "population"].into_iter(), true);
             },
             String::from("new_column"),
         );
