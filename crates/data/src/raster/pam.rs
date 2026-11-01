@@ -58,8 +58,8 @@ pub struct PamBand {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Pam {
     pub bands: Vec<PamBand>,
-    /// What [`parse_gdal_metadata`] left out or cut, one line a kind with a count, for the caller
-    /// to say (AGENTS.md, Never silent). Empty when the document is read whole.
+    /// What [`parse`] or [`parse_gdal_metadata`] left out or cut, one line a kind with a count,
+    /// for the caller to say (AGENTS.md, Never silent). Empty when the document is read whole.
     pub lost: Vec<String>,
 }
 
@@ -110,12 +110,18 @@ pub fn parse(text: &str) -> Option<Pam> {
         return None;
     }
     let mut pam = Pam::default();
+    // Names cut to `MAX_NAME` characters, and class names past `MAX_CATEGORIES`, counted.
+    let (mut cut, mut beyond) = (0usize, 0usize);
+    let mut kept = |t: &str| {
+        cut += usize::from(t.chars().nth(MAX_NAME).is_some());
+        t.chars().take(MAX_NAME).collect::<String>()
+    };
     for b in root.children().filter(|n| n.has_tag_name("PAMRasterBand")) {
         let Some(band) = b.attribute("band").and_then(|v| v.trim().parse::<usize>().ok()).filter(|n| (1..=MAX_BANDS).contains(n)) else {
             continue;
         };
         let text_of = |tag: &str| b.children().find(|n| n.has_tag_name(tag)).and_then(|n| n.text()).map(str::trim);
-        let description = text_of("Description").filter(|d| !d.is_empty()).map(|d| d.chars().take(256).collect());
+        let description = text_of("Description").filter(|d| !d.is_empty()).map(&mut kept);
         let nodata = text_of("NoDataValue").and_then(|v| v.parse::<f64>().ok()).filter(|v| v.is_finite());
         // Only the default (unnamed) metadata domain holds the statistics.
         let mdi = |key: &str| {
@@ -133,19 +139,26 @@ pub fn parse(text: &str) -> Option<Pam> {
             }
             _ => None,
         };
-        let mut categories: Vec<String> = b
+        let named: Vec<_> = b
             .children()
             .find(|n| n.has_tag_name("CategoryNames"))
             .into_iter()
             .flat_map(|c| c.children().filter(|n| n.has_tag_name("Category")))
-            .take(MAX_CATEGORIES)
-            .map(|n| n.text().map(str::trim).unwrap_or_default().chars().take(256).collect())
             .collect();
+        beyond += named.len().saturating_sub(MAX_CATEGORIES);
+        let mut categories: Vec<String> =
+            named.iter().take(MAX_CATEGORIES).map(|n| kept(n.text().map(str::trim).unwrap_or_default())).collect();
         // Values past the last named one have no name either.
         while categories.last().is_some_and(String::is_empty) {
             categories.pop();
         }
         pam.bands.push(PamBand { band, description, nodata, stats, categories });
+    }
+    if beyond > 0 {
+        pam.lost.push(format!("{beyond} class name(s) past the first {MAX_CATEGORIES} of a band left out"));
+    }
+    if cut > 0 {
+        pam.lost.push(format!("{cut} band or class name(s) cut to {MAX_NAME} characters"));
     }
     Some(pam)
 }
@@ -450,6 +463,16 @@ mod tests {
             "x".repeat(1000)
         );
         assert_eq!(parse(&long).unwrap().band(1).unwrap().categories[0].len(), 256);
+        // What is cut or left out is said; a sidecar read whole says nothing.
+        assert_eq!(parse(&long).unwrap().lost, ["1 band or class name(s) cut to 256 characters"]);
+        assert!(pam.lost.is_empty(), "{:?}", pam.lost);
+        let many = format!(
+            r#"<PAMDataset><PAMRasterBand band="1"><CategoryNames>{}</CategoryNames></PAMRasterBand></PAMDataset>"#,
+            "<Category>a</Category>".repeat(MAX_CATEGORIES + 2)
+        );
+        let many = parse(&many).unwrap();
+        assert_eq!(many.band(1).unwrap().categories.len(), MAX_CATEGORIES);
+        assert_eq!(many.lost, [format!("2 class name(s) past the first {MAX_CATEGORIES} of a band left out")]);
     }
 
     #[test]

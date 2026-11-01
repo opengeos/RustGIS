@@ -22209,6 +22209,12 @@ fn a_cog_window_comes_in_as_a_raster() {
     assert!(said.iter().any(|n| n.contains("its colour table is left out: the window has 2 bands, a palette has one")), "{said:?}");
     let paired = raster(&s, "Paired");
     assert!(paired.band_count() == 2 && !matches!(paired.color, ColorHint::Palette(_)), "{:?}", paired.color);
+    // Five bands of 256 × 256 cells are 327,680 values: over the cap (300,000 under test), though
+    // the pixels alone are not.
+    let (five, _) = serve_ranges(example_with(&Example { size: 512, tile: 256, bands: 5, ..Example::default() }));
+    let e =
+        s.run("layer.addUrl", &json!({"url": format!("{five}/five.tif"), "bbox": [10.0, 45.0, 10.5, 45.5], "name": "Five"})).unwrap_err();
+    assert!(e.contains("the window is 256 × 256 cells") && e.contains("5 band(s); a window holds 300000 values at most"), "{e}");
     let cover = raster(&s, "Cover");
     let ColorHint::Palette(table) = &cover.color else { panic!("{:?}", cover.color) };
     assert_eq!(table[3], [3, 252, 0, 255]);

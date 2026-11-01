@@ -125,7 +125,9 @@ tile), without a STAC catalogue:
 - Only the tiles the window crosses are read, at full resolution. `"cellSize"` reads the coarsest
   overview whose cells are no larger, in the file's units (metres for a longitude/latitude file, a
   degree taken as 111.32 km); one finer than the full image's cells reads the full image, with a
-  notice. Overviews are never read unasked.
+  notice. Without it the window takes no overview's values. Reading the header still reads up to
+  16 tiles of the coarsest overview at least 256 pixels a side (the full image when none is), for
+  the stretch it is drawn with, as for any GeoTIFF drawn in place; an 8-bit colour file skips it.
 - A window holds 64 million values at most, all bands together (256 MB), and 4,096 of the file's
   tiles a band. A window over the first limit is refused, naming the cell size that fits when an
   overview does, or asking for a smaller box; one over the second asks for a coarser level or a
