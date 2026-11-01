@@ -353,11 +353,11 @@ fn kriging_on(
     let threads =
         threads.unwrap_or_else(|| crate::parallel::threads_for_rows(h, w.saturating_mul(h).saturating_mul(work_per_cell), scratch_bytes));
     let scratch = || (Vec::<(f64, f64, Coord)>::with_capacity(points.len()), KrigingBuffers::new());
-    let rows = crate::parallel::map_rows(h, threads, scratch, |(near, buffers), row| {
-        let mut pred_data = Vec::with_capacity(w);
-        let mut var_data = Vec::with_capacity(w);
+    let (mut pred_data, mut var_data) = (vec![NODATA; w * h], vec![NODATA; w * h]);
+    let rows = pred_data.chunks_mut(w).zip(var_data.chunks_mut(w));
+    crate::parallel::for_each_row(rows, threads, scratch, |(near, buffers), row, (pred, var): (&mut [f32], &mut [f32])| {
         let kx = (extent.max_y - (row as f64 + 0.5) * cell_deg).to_radians().cos().abs().max(1e-6);
-        for col in 0..w {
+        for (col, (pred, var)) in pred.iter_mut().zip(var.iter_mut()).enumerate() {
             let c = Coord::new(extent.min_x + (col as f64 + 0.5) * cell_deg, extent.max_y - (row as f64 + 0.5) * cell_deg);
             near.clear();
             near.extend(points.iter().map(|(p, v)| {
@@ -372,18 +372,11 @@ fn kriging_on(
                 near.truncate(k);
             }
 
-            let (val, var) = ordinary_kriging_point(c, near, params, kx, buffers);
-            pred_data.push(if val.is_finite() { val as f32 } else { NODATA });
-            var_data.push(if var.is_finite() { var as f32 } else { NODATA });
+            let (val, var_est) = ordinary_kriging_point(c, near, params, kx, buffers);
+            *pred = if val.is_finite() { val as f32 } else { NODATA };
+            *var = if var_est.is_finite() { var_est as f32 } else { NODATA };
         }
-        (pred_data, var_data)
     });
-    // Each row dropped as it is copied, so the surfaces aren't held twice.
-    let (mut pred_data, mut var_data) = (Vec::with_capacity(w * h), Vec::with_capacity(w * h));
-    for (p, v) in rows {
-        pred_data.extend(p);
-        var_data.extend(v);
-    }
 
     let gt = GeoTransform { origin_x: extent.min_x, origin_y: extent.max_y, pixel_width: cell_deg, pixel_height: -cell_deg };
     Raster::new(name, w as u32, h as u32, vec![pred_data, var_data], gt, Crs::LonLat, Some(NODATA as f64), ColorHint::Gray, "Float32")

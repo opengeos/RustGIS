@@ -44,19 +44,45 @@ fn cores() -> usize {
     std::thread::available_parallelism().map_or(1, |n| n.get()).min(MAX_THREADS)
 }
 
-/// `f` on each of `rows` raster rows by its number, the rows in their order, on `threads`
-/// threads ([`threads_for_rows`]). A row is costly enough to be taken one at a time, so rows
-/// that cost more than others are shared out too. Each thread makes its own `scratch()` once.
-pub(crate) fn map_rows<S, R: Send>(
-    rows: usize,
+/// `f` on each of a raster's `rows` (its output rows, `chunks_mut` of the bands it writes) with
+/// the row's number, on `threads` threads ([`threads_for_rows`]), this one among them. Each row
+/// is written where it lies, so the output is held once, as on one thread. A row is costly
+/// enough to be taken one at a time, so rows that cost more than others are shared out too.
+/// Each thread makes its own `scratch()` once; one that panics stops the others after the rows
+/// they are making, and its panic is raised again here.
+pub(crate) fn for_each_row<T: Send, S>(
+    rows: impl Iterator<Item = T> + Send,
     threads: usize,
     scratch: impl Fn() -> S + Sync,
-    f: impl Fn(&mut S, usize) -> R + Sync,
-) -> Vec<R> {
-    match try_each_on(rows, 1, threads, scratch, |s, i| Ok::<R, std::convert::Infallible>(f(s, i))) {
-        Ok(made) => made,
-        Err(never) => match never {},
+    f: impl Fn(&mut S, usize, T) + Sync,
+) {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    if threads <= 1 {
+        let mut s = scratch();
+        rows.enumerate().for_each(|(i, row)| f(&mut s, i, row));
+        return;
     }
+    let rows = std::sync::Mutex::new(rows.enumerate());
+    let failed = AtomicBool::new(false);
+    let work = || {
+        let _stop = StopOnPanic(&failed);
+        let mut s = scratch();
+        while !failed.load(Ordering::Relaxed) {
+            // The lock is held only to take a row; a poisoned one means a thread panicked.
+            let Some((i, row)) = rows.lock().ok().and_then(|mut r| r.next()) else { break };
+            f(&mut s, i, row);
+        }
+    };
+    std::thread::scope(|scope| {
+        let others: Vec<_> =
+            (1..threads).filter_map(|_| std::thread::Builder::new().stack_size(STACK_BYTES).spawn_scoped(scope, work).ok()).collect();
+        work();
+        for h in others {
+            if let Err(e) = h.join() {
+                std::panic::resume_unwind(e);
+            }
+        }
+    });
 }
 
 /// `f` on each of `items` with its index, the results in their order: on several threads when
@@ -84,7 +110,7 @@ pub(crate) fn try_map_on<T: Sync, S, R: Send, E: Send>(
     scratch: impl Fn() -> S + Sync,
     f: impl Fn(&mut S, usize, &T) -> Result<R, E> + Sync,
 ) -> Result<Vec<R>, E> {
-    try_each_on(items.len(), BATCH, threads, scratch, |s, i| f(s, i, &items[i]))
+    try_each_on(items.len(), threads, scratch, |s, i| f(s, i, &items[i]))
 }
 
 /// Sets the stop flag when the thread it lives on panics, so the others stop after the items
@@ -99,10 +125,9 @@ impl Drop for StopOnPanic<'_> {
     }
 }
 
-/// [`try_map_on`] over the indices `0..len`, taken `batch` at a time.
+/// [`try_map_on`] over the indices `0..len`.
 fn try_each_on<S, R: Send, E: Send>(
     len: usize,
-    batch: usize,
     threads: usize,
     scratch: impl Fn() -> S + Sync,
     f: impl Fn(&mut S, usize) -> Result<R, E> + Sync,
@@ -112,7 +137,6 @@ fn try_each_on<S, R: Send, E: Send>(
         let mut s = scratch();
         return (0..len).map(|i| f(&mut s, i)).collect();
     }
-    let batch = batch.max(1);
     let next = AtomicUsize::new(0);
     let failed = AtomicBool::new(false);
     let work = || {
@@ -120,11 +144,11 @@ fn try_each_on<S, R: Send, E: Send>(
         let mut s = scratch();
         let mut made = Vec::new();
         while !failed.load(Ordering::Relaxed) {
-            let from = next.fetch_add(batch, Ordering::Relaxed);
+            let from = next.fetch_add(BATCH, Ordering::Relaxed);
             if from >= len {
                 break;
             }
-            for i in from..len.min(from.saturating_add(batch)) {
+            for i in from..len.min(from.saturating_add(BATCH)) {
                 match f(&mut s, i) {
                     Ok(r) => made.push((i, r)),
                     Err(e) => {
@@ -283,12 +307,22 @@ mod tests {
     }
 
     #[test]
-    fn rows_come_back_in_their_order_one_at_a_time() {
-        let alone: Vec<usize> = (0..37).map(|r| r * 3).collect();
+    fn each_row_is_written_in_its_place() {
+        let alone: Vec<usize> = (0..37 * 5).map(|i| i / 5 * 3 + i % 5).collect();
         for threads in [1, 2, 5, 16, 64] {
-            assert_eq!(map_rows(37, threads, || (), |_, r| r * 3), alone, "{threads} threads");
+            let mut out = vec![0usize; 37 * 5];
+            for_each_row(
+                out.chunks_mut(5),
+                threads,
+                || (),
+                |_, r, row: &mut [usize]| {
+                    row.iter_mut().enumerate().for_each(|(c, o)| *o = r * 3 + c);
+                },
+            );
+            assert_eq!(out, alone, "{threads} threads");
         }
-        assert!(map_rows(0, 4, || (), |_, r| r).is_empty());
+        let mut none: Vec<u8> = Vec::new();
+        for_each_row(none.chunks_mut(5), 4, || (), |_, _, _: &mut [u8]| panic!("no rows"));
         // Small work, and the browser: one thread; never more threads than rows.
         assert_eq!(threads_for_rows(100, MIN_ROW_WORK - 1, 0), 1);
         assert!(threads_for_rows(3, usize::MAX, 0) <= 3);
@@ -321,6 +355,29 @@ mod tests {
         });
         assert!(r.is_err(), "no worker ran an item");
         assert!(ran.load(std::sync::atomic::Ordering::Relaxed) < items.len() / 2, "{}", ran.load(std::sync::atomic::Ordering::Relaxed));
+    }
+
+    #[test]
+    fn a_workers_panic_on_a_row_reaches_the_caller_and_stops_the_others() {
+        let caller = std::thread::current().id();
+        let ran = std::sync::atomic::AtomicUsize::new(0);
+        let mut out = vec![0u8; 2_000];
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            for_each_row(
+                out.chunks_mut(1),
+                4,
+                || (),
+                |_, _, _: &mut [u8]| {
+                    ran.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    if std::thread::current().id() != caller {
+                        panic!("a worker's panic");
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+                },
+            )
+        }));
+        assert!(r.is_err(), "no worker took a row");
+        assert!(ran.load(std::sync::atomic::Ordering::Relaxed) < 1_000, "{}", ran.load(std::sync::atomic::Ordering::Relaxed));
     }
 
     #[test]

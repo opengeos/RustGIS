@@ -413,15 +413,15 @@ fn idw_on(
     let scratch_bytes = points.len().saturating_mul(std::mem::size_of::<(f64, f64)>());
     let threads =
         threads.unwrap_or_else(|| crate::parallel::threads_for_rows(h, w.saturating_mul(h).saturating_mul(points.len()), scratch_bytes));
-    let rows = crate::parallel::map_rows(
-        h,
+    let mut data = vec![NODATA; w * h];
+    crate::parallel::for_each_row(
+        data.chunks_mut(w),
         threads,
         || Vec::with_capacity(points.len()),
-        |near: &mut Vec<(f64, f64)>, row| {
-            let mut data = Vec::with_capacity(w);
+        |near: &mut Vec<(f64, f64)>, row, out: &mut [f32]| {
             // East-west degrees shrink with latitude, which only changes by row.
             let kx = (extent.max_y - (row as f64 + 0.5) * cell_deg).to_radians().cos();
-            for col in 0..w {
+            for (col, o) in out.iter_mut().enumerate() {
                 let c = Coord::new(extent.min_x + (col as f64 + 0.5) * cell_deg, extent.max_y - (row as f64 + 0.5) * cell_deg);
                 near.clear();
                 near.extend(points.iter().map(|(p, v)| {
@@ -444,14 +444,10 @@ fn idw_on(
                     });
                     num / den
                 };
-                data.push(if v.is_finite() { v as f32 } else { NODATA });
+                *o = if v.is_finite() { v as f32 } else { NODATA };
             }
-            data
         },
     );
-    // Each row dropped as it is copied, so the surface isn't held twice.
-    let mut data = Vec::with_capacity(w * h);
-    rows.into_iter().for_each(|r| data.extend(r));
     let gt = GeoTransform { origin_x: extent.min_x, origin_y: extent.max_y, pixel_width: cell_deg, pixel_height: -cell_deg };
     Raster::new(name, w as u32, h as u32, vec![data], gt, Crs::LonLat, Some(NODATA as f64), ColorHint::Gray, "Float32")
         .map_err(|e| e.to_string())
