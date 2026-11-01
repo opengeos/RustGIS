@@ -345,10 +345,11 @@ fn path_secrets_redacted(address: &str) -> String {
             if p > 0 {
                 out.push(';');
             }
-            match part.split_once('=') {
-                Some((name, _)) if secret_name(name) => {
-                    out.push_str(name);
-                    out.push('=');
+            // The separator may be percent-encoded (`token%3Dvalue`).
+            let at = part.find('=').map(|at| (at, 1)).into_iter().chain(part.to_ascii_lowercase().find("%3d").map(|at| (at, 3))).min();
+            match at.and_then(|(at, len)| Some((part.get(..at)?, part.get(..at + len)?))) {
+                Some((name, kept)) if secret_name(name) => {
+                    out.push_str(kept);
                     out.push_str(REDACTED);
                 }
                 _ => out.push_str(part),
@@ -666,9 +667,10 @@ pub fn redact(text: &str) -> String {
                 i += end + (after.len() - value.len()) + token;
                 continue;
             }
-            // A non-URL user:password@host or a scheme-relative authority is ambiguous:
-            // omit the whole field rather than leave either half of its credentials behind.
-            if after.starts_with('@') || after.starts_with(':') && after.split_whitespace().next().is_some_and(|s| s.contains('@')) {
+            // A non-URL user:password@host is ambiguous: omit the whole field rather than leave
+            // either half of its credentials behind. A word before `@` alone (`alice@example.org`,
+            // `a@2x.png`) is prose.
+            if after.starts_with(':') && after.split_whitespace().next().is_some_and(|s| s.contains('@')) {
                 out.push_str("[address omitted]");
                 break;
             }
@@ -822,6 +824,8 @@ mod tests {
             "Choose the Basic plan to map with.",
             "Token refreshed",
             "Token refreshed.",
+            "Exported to alice@example.org: 3 rows",
+            "Loaded a@2x.png and parcels@2020",
             "Basic settings were saved",
             "Column 'key' is missing",
             "Layer 'Body Mass' failed",
@@ -1003,6 +1007,11 @@ mod tests {
         }
         // A path without a secret stays as written.
         assert_eq!(redact("Could not reach https://example.org/a=b/c: timeout"), "Could not reach https://example.org/a=b/c: timeout");
+        // A percent-encoded separator doesn't hide the value.
+        let clean = redact("Could not reach https://example.org/files;token%3Dhidden-path-value/0.png: timeout");
+        assert!(!clean.contains("hidden-path-value") && clean.ends_with("timeout"), "{clean}");
+        let clean = redact("Could not reach https://example.org/api_key%3dhidden-path-value/0.png: timeout");
+        assert!(!clean.contains("hidden-path-value"), "{clean}");
     }
 
     #[test]
