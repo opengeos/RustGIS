@@ -2066,29 +2066,35 @@ pub(crate) fn cut(s: &str, max: usize) -> &str {
 
 /// What an export to a Shapefile says when field names don't fit dBase's (at most 10 bytes,
 /// unique without regard to case), or `None` when every name is kept: one notice, counting the
-/// fields renamed and naming the first few as `'old' → 'new'`. Line breaks and other control
-/// characters in a name show as spaces, and a long name only its first 40 bytes. `target` names
-/// what was written.
+/// fields renamed and naming the first few as `'old' → 'new'`. `target` names what was written.
+/// Line breaks, other control characters and the characters that reorder text (bidirectional
+/// marks, embeddings, overrides and isolates) in a name or in `target` show as spaces, and a
+/// long name only its first 40 bytes.
 pub fn shapefile_names_note(fields: &[Field], target: &str) -> Option<String> {
     let renamed: Vec<(&str, String)> =
         fields.iter().zip(dbf_names(fields)).filter(|(f, n)| f.name != *n).map(|(f, n)| (f.name.as_str(), n)).collect();
     if renamed.is_empty() {
         return None;
     }
-    // A name read from a file can hold anything, at any length: the notice stays one line, and
-    // copies no more of a name than it shows.
+    // A name read from a file, like a path or layer name, can hold anything, at any length: the
+    // notice stays one line, reads in the order it is written, and copies no more of a field name
+    // than it shows.
+    let flat = |c: char| {
+        let reorders = matches!(c, '\u{061C}' | '\u{200E}' | '\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}');
+        if c.is_control() || reorders || matches!(c, '\u{2028}' | '\u{2029}') { ' ' } else { c }
+    };
     let shown = |name: &str| {
-        let mut flat = String::new();
-        for c in name.chars() {
-            let c = if c.is_control() || matches!(c, '\u{2028}' | '\u{2029}') { ' ' } else { c };
-            if flat.len() + c.len_utf8() > 40 {
-                flat.push('…');
+        let mut out = String::new();
+        for c in name.chars().map(flat) {
+            if out.len() + c.len_utf8() > 40 {
+                out.push('…');
                 break;
             }
-            flat.push(c);
+            out.push(c);
         }
-        flat
+        out
     };
+    let target: String = target.chars().map(flat).collect();
     let listed: Vec<String> = renamed.iter().take(5).map(|(old, new)| format!("'{}' → '{}'", shown(old), shown(new))).collect();
     let more = if renamed.len() > 5 { format!(" and {} more", renamed.len() - 5) } else { String::new() };
     let count = if renamed.len() == 1 { "1 field name was".to_string() } else { format!("{} field names were", renamed.len()) };
@@ -3107,6 +3113,19 @@ mod tests {
         assert!(!note.contains(['\n', '\r', '\t', '\u{2028}', '\u{2029}']), "{note:?}");
         // U+2028 is three bytes: the ten-byte name ends at d.
         assert!(note.ends_with("'a b  c d e_long_name' → 'a b  c d'"), "{note:?}");
+        // So does the target, a path or layer name given by the user or read from a file.
+        let note = shapefile_names_note(&layer(&["population_2020"]).fields, "out\nput\r\u{2029}.shp").unwrap();
+        assert!(note.starts_with("out put  .shp: 1 field name"), "{note:?}");
+        // Characters that reorder text (a right-to-left override, isolates, direction marks) show
+        // as spaces too, so the notice reads 'old' → 'new' in that order; a zero-width joiner
+        // stays, as emoji sequences use it.
+        // The override and the isolate are three bytes each: the ten-byte name ends at d.
+        let bidi = "a\u{202E}bc\u{2066}d\u{2069}e\u{200E}f\u{200F}g\u{061C}h_longer";
+        let note = shapefile_names_note(&layer(&[bidi]).fields, "r\u{202E}tl.shp").unwrap();
+        assert!(!note.contains(['\u{202E}', '\u{2066}', '\u{2069}', '\u{200E}', '\u{200F}', '\u{061C}']), "{note:?}");
+        assert!(note.starts_with("r tl.shp: ") && note.ends_with("'a bc d e f g h_longer' → 'a bc d'"), "{note:?}");
+        let joined = "a\u{200D}b_long_name";
+        assert!(shapefile_names_note(&layer(&[joined]).fields, "j.shp").unwrap().contains(&format!("'{joined}' →")));
         // Exactly 40 bytes is shown whole; past that, cut at a character boundary.
         let forty = format!("{}_long", "y".repeat(35));
         assert!(shapefile_names_note(&layer(&[&forty]).fields, "f.shp").unwrap().contains(&format!("'{forty}' →")));

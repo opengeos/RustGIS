@@ -23046,9 +23046,45 @@ fn shapefile_exports_say_which_field_names_they_changed() {
     let mark = s.notice_mark();
     s.run("share.exportLayer", &json!({"layer": "Countries", "path": dir.join("countries.shp")})).unwrap();
     assert!(changed(&s, mark).is_empty(), "{:?}", s.notices_since(mark));
-    // A standalone table has no geometry, so it is never a Shapefile: an error, not a notice.
+    // A standalone table can hold geometry (a plugin's output table is read from GeoJSON whole,
+    // and a project file keeps a table's geometry), so `share.exportTable` can write a Shapefile
+    // too, and says the same of its names.
+    use rustgis_data::{Dataset, Field, FieldType, Geometry, GeometryType};
+    use rustgis_geom::Coord;
+    let table = |name: &str, field: &str| {
+        let mut ds = Dataset::new(name, GeometryType::Point, vec![Field::new(field, FieldType::Integer)]);
+        ds.push(Some(Geometry::Point(Coord::new(1.0, 2.0))), vec![rustgis_data::Value::Int(1)]);
+        ds
+    };
+    s.project.add_table(table("Sites", "population_2020"));
+    for ext in ["shp", "zip"] {
+        let out = dir.join(format!("sites.{ext}")).display().to_string();
+        let mark = s.notice_mark();
+        s.run("share.exportTable", &json!({"table": "Sites", "path": out})).unwrap();
+        assert_eq!(
+            changed(&s, mark),
+            [format!(
+                "{out}: 1 field name was changed to fit a Shapefile (10 bytes at most, unique ignoring case): \
+                 'population_2020' → 'population'"
+            )],
+            ".{ext}"
+        );
+        let back = s.run("layer.addData", &json!({"path": out})).unwrap()["layer"].as_u64().unwrap() as u32;
+        let names: Vec<&str> = s.map().layer(back).unwrap().dataset.fields.iter().map(|f| f.name.as_str()).collect();
+        assert_eq!(names, ["population"], ".{ext}");
+    }
+    // To another format, or with names that fit: no notice.
+    s.project.add_table(table("Fits", "population"));
+    for (table, ext) in [("Sites", "geojson"), ("Fits", "shp")] {
+        let mark = s.notice_mark();
+        s.run("share.exportTable", &json!({"table": table, "path": dir.join(format!("{table}.{ext}"))})).unwrap();
+        assert!(changed(&s, mark).is_empty(), "{table}.{ext}: {:?}", s.notices_since(mark));
+    }
+    // A table without geometry is never a Shapefile: an error, and nothing said of its names.
     s.run("gp.run", &json!({"tool": "summaryStatistics", "params": {"input": "Countries", "field": "pop_est"}})).unwrap();
-    let table = s.project.tables.last().unwrap().name.clone();
-    assert!(s.run("share.exportTable", &json!({"table": table, "path": dir.join("stats.shp")})).is_err());
+    let stats = s.project.tables.last().unwrap().name.clone();
+    let mark = s.notice_mark();
+    assert!(s.run("share.exportTable", &json!({"table": stats, "path": dir.join("stats.shp")})).is_err());
+    assert!(changed(&s, mark).is_empty(), "{:?}", s.notices_since(mark));
     std::fs::remove_dir_all(dir).unwrap();
 }
