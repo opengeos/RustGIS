@@ -3084,7 +3084,7 @@ fn add_cog_window(s: &mut Session, p: &Value, url: &str) -> CmdResult {
     r.lost.extend(layout.lost.iter().cloned());
     r.lost.extend(palette_lost);
     if let Some(described) = &layout.described {
-        r.apply_pam(described);
+        r.apply_pam(described, rustgis_data::raster::pam::GDAL_METADATA);
     }
     // Kept in the project as a GeoTIFF of the window: a cloud-optimised one, which keeps a colour
     // table; one it can't write (a palette with no index left for no-data) is kept plain, and said so.
@@ -3095,7 +3095,14 @@ fn add_cog_window(s: &mut Session, p: &Value, url: &str) -> CmdResult {
         Ok(bytes) => bytes,
         Err(why) => {
             let bytes = rustgis_data::raster::geotiff::write(&r, 0).map_err(|e| named(e.to_string()))?;
-            s.notify(format!("{name}: saved in the project as a plain GeoTIFF without its colour table ({why}): drawn in its colours now, it opens grey once the project is reopened"), false);
+            let said = if matches!(r.color, rustgis_data::raster::ColorHint::Palette(_)) {
+                format!(
+                    "{name}: saved in the project as a plain GeoTIFF without its colour table ({why}): drawn in its colours now, it opens grey once the project is reopened"
+                )
+            } else {
+                format!("{name}: saved in the project as a plain GeoTIFF, not a cloud-optimised one ({why})")
+            };
+            s.notify(said, false);
             bytes
         }
     };

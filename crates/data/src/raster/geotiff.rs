@@ -1052,7 +1052,7 @@ pub(super) fn read_limited(r: Reader<'_>, name: &str, max: usize, open: Option<O
         r.georeferenced = false;
         r.overview = overview;
         if let Some(p) = &described {
-            r.apply_pam(p);
+            r.apply_pam(p, super::pam::GDAL_METADATA);
         }
         return Ok(r);
     }
@@ -1101,7 +1101,7 @@ pub(super) fn read_limited(r: Reader<'_>, name: &str, max: usize, open: Option<O
     let mut r = Raster::new(name, w, h, bands, transform, crs, geo.nodata, color, data_type)?;
     r.overview = overview;
     if let Some(p) = &described {
-        r.apply_pam(p);
+        r.apply_pam(p, super::pam::GDAL_METADATA);
     }
     Ok(r)
 }

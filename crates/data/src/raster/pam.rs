@@ -63,6 +63,12 @@ pub struct Pam {
     pub lost: Vec<String>,
 }
 
+/// Where [`Raster::apply_pam`](super::Raster::apply_pam) says a document's losses came from: a
+/// GeoTIFF's GDAL metadata tag (42112) …
+pub const GDAL_METADATA: &str = "its GDAL metadata";
+/// … or a `.aux.xml` sidecar next to the file.
+pub const SIDECAR: &str = "its .aux.xml sidecar";
+
 impl Pam {
     /// A document that names nothing, with the reason it was left out.
     pub fn losing(why: String) -> Pam {
@@ -110,17 +116,24 @@ pub fn parse(text: &str) -> Option<Pam> {
         return None;
     }
     let mut pam = Pam::default();
-    // Names cut to `MAX_NAME` characters, and class names past `MAX_CATEGORIES`, counted.
-    let (mut cut, mut beyond) = (0usize, 0usize);
+    // Names cut to `MAX_NAME` characters, class names past `MAX_CATEGORIES`, records for no band
+    // from 1 to `MAX_BANDS`, and the scale, offset and units that aren't read, counted.
+    let (mut cut, mut beyond, mut odd_bands, mut unscaled, mut units) = (0usize, 0usize, 0usize, 0usize, 0usize);
     let mut kept = |t: &str| {
         cut += usize::from(t.chars().nth(MAX_NAME).is_some());
         t.chars().take(MAX_NAME).collect::<String>()
     };
     for b in root.children().filter(|n| n.has_tag_name("PAMRasterBand")) {
         let Some(band) = b.attribute("band").and_then(|v| v.trim().parse::<usize>().ok()).filter(|n| (1..=MAX_BANDS).contains(n)) else {
+            odd_bands += 1;
             continue;
         };
         let text_of = |tag: &str| b.children().find(|n| n.has_tag_name(tag)).and_then(|n| n.text()).map(str::trim);
+        // A scale of 1 and an offset of 0 change nothing, and an empty unit says nothing.
+        let number = |tag: &str| text_of(tag).map(|v| v.parse::<f64>().ok());
+        unscaled += usize::from(number("Scale").is_some_and(|v| v != Some(1.0)));
+        unscaled += usize::from(number("Offset").is_some_and(|v| v != Some(0.0)));
+        units += usize::from(text_of("UnitType").is_some_and(|u| !u.is_empty()));
         let description = text_of("Description").filter(|d| !d.is_empty()).map(&mut kept);
         let nodata = text_of("NoDataValue").and_then(|v| v.parse::<f64>().ok()).filter(|v| v.is_finite());
         // Only the default (unnamed) metadata domain holds the statistics.
@@ -153,6 +166,15 @@ pub fn parse(text: &str) -> Option<Pam> {
             categories.pop();
         }
         pam.bands.push(PamBand { band, description, nodata, stats, categories });
+    }
+    if odd_bands > 0 {
+        pam.lost.push(format!("{odd_bands} band record(s) for no band from 1 to {MAX_BANDS} left out"));
+    }
+    if unscaled > 0 {
+        pam.lost.push(format!("{unscaled} scale or offset(s) not applied: the values are as stored"));
+    }
+    if units > 0 {
+        pam.lost.push(format!("{units} band unit(s) not read: left out"));
     }
     if beyond > 0 {
         pam.lost.push(format!("{beyond} class name(s) past the first {MAX_CATEGORIES} of a band left out"));
@@ -468,11 +490,29 @@ mod tests {
         assert!(pam.lost.is_empty(), "{:?}", pam.lost);
         let many = format!(
             r#"<PAMDataset><PAMRasterBand band="1"><CategoryNames>{}</CategoryNames></PAMRasterBand></PAMDataset>"#,
-            "<Category>a</Category>".repeat(MAX_CATEGORIES + 2)
+            (0..MAX_CATEGORIES + 2).map(|v| format!("<Category>c{v}</Category>")).collect::<String>()
         );
         let many = parse(&many).unwrap();
-        assert_eq!(many.band(1).unwrap().categories.len(), MAX_CATEGORIES);
+        let kept = &many.band(1).unwrap().categories;
+        assert_eq!((kept.len(), kept[0].as_str()), (MAX_CATEGORIES, "c0"));
+        assert_eq!(kept[MAX_CATEGORIES - 1], format!("c{}", MAX_CATEGORIES - 1));
         assert_eq!(many.lost, [format!("2 class name(s) past the first {MAX_CATEGORIES} of a band left out")]);
+        // A record for no band, a scale, an offset and a unit are said; a scale of 1 and an offset
+        // of 0 aren't.
+        let odd = parse(
+            r#"<PAMDataset><PAMRasterBand band="0"><Description>x</Description></PAMRasterBand>
+            <PAMRasterBand band="1"><Scale>0.01</Scale><Offset>-5</Offset><UnitType>m</UnitType></PAMRasterBand>
+            <PAMRasterBand band="2"><Scale>1</Scale><Offset>0</Offset><UnitType></UnitType></PAMRasterBand></PAMDataset>"#,
+        )
+        .unwrap();
+        assert_eq!(
+            odd.lost,
+            [
+                format!("1 band record(s) for no band from 1 to {MAX_BANDS} left out"),
+                "2 scale or offset(s) not applied: the values are as stored".to_string(),
+                "1 band unit(s) not read: left out".to_string(),
+            ]
+        );
     }
 
     #[test]

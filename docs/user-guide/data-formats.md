@@ -127,7 +127,8 @@ tile), without a STAC catalogue:
   degree taken as 111.32 km); one finer than the full image's cells reads the full image, with a
   notice. Without it the window takes no overview's values. Reading the header still reads up to
   16 tiles of the coarsest overview at least 256 pixels a side (the full image when none is), for
-  the stretch it is drawn with, as for any GeoTIFF drawn in place; an 8-bit colour file skips it.
+  the stretch it is drawn with, as for any GeoTIFF drawn in place. An 8-bit colour file skips it,
+  and so does one whose level has more than 16 tiles: it is drawn with its value type's full range.
 - A window holds 64 million values at most, all bands together (256 MB), and 4,096 of the file's
   tiles a band. A window over the first limit is refused, naming the cell size that fits when an
   overview does, or asking for a smaller box; one over the second asks for a coarser level or a
@@ -140,8 +141,10 @@ tile), without a STAC catalogue:
   with it, and class names given as `CLASS_<value>` items in GDAL's metadata tag, as the MapBiomas
   files on Source Cooperative give theirs.
 - The window is kept in the project as a GeoTIFF, with its colour table and class names, not
-  read again from the address. Files stored bottom up aren't read this way yet. In the web app,
-  `"bbox"` is refused for now: the file is drawn in place without it.
+  read again from the address. A window of several bands that aren't colour (or grey and alpha)
+  keeps only its first band once the project is reopened, with a notice. Files stored bottom up
+  aren't read this way yet. In the web app, `"bbox"` is refused for now: the file is drawn in
+  place without it.
 
 A GeoParquet or FlatGeobuf file by its address is read in place too, a view at a time, however
 large: the layer is streamed like a large local file, and the view's features are fetched in the
