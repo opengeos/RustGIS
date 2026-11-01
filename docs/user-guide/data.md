@@ -781,9 +781,9 @@ clamped to 1–3650). The cache is disposable: each index is rebuilt the next ti
 is opened. **Empty Index Cache** (`cache.emptyIndexes`, from command search, a script or the
 CLI) removes every index not in use, in the cache folder and its fallback, and reports how many
 indexes and bytes it freed. A notice names what it kept: the indexes of open layers, here or in
-another RustGIS window, and files without a readable lease, which the cache can't tell are its
-own; and a folder it couldn't empty, without stopping at it. With RustGIS closed, the folder can
-also be deleted by hand.
+another RustGIS window, and files it couldn't remove, without a readable lease or refused by the
+system; and a folder it couldn't empty, without stopping at it. With RustGIS closed, the folder
+can also be deleted by hand.
 
 Idle indexes are evicted in least-recently-used order. Open readers and builders hold
 operating-system leases, so another instance cannot evict their indexes; active files can

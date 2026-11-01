@@ -147,6 +147,18 @@ fn cache_empty_removes_every_index_not_in_use() {
     assert!(!missing.exists(), "a missing folder isn't created");
 }
 
+/// A root that isn't a folder is reported, not skipped as a missing one is (#1259).
+#[test]
+fn cache_empty_reports_a_root_that_is_not_a_folder() {
+    let root = Folder::new();
+    let file = root.0.join("not-a-folder");
+    std::fs::write(&file, b"keep").unwrap();
+    let emptied = empty_folders(std::slice::from_ref(&file));
+    assert_eq!((emptied.folders, emptied.failed.len()), (0, 1), "{emptied:?}");
+    assert!(emptied.failed[0].contains("not a folder"), "{emptied:?}");
+    assert_eq!(std::fs::read(&file).unwrap(), b"keep");
+}
+
 /// A folder the cache refuses (writable by others) is reported and doesn't stop the next one
 /// from being emptied: that is where the indexes are when the first is refused (#1259).
 #[cfg(unix)]

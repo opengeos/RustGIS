@@ -15194,6 +15194,26 @@ fn emptying_the_index_cache_keeps_indexes_in_use() {
     }
 }
 
+/// Emptying the index cache tells the user only what it couldn't do: nothing when all went (#1259).
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn emptying_the_index_cache_notices_only_what_stayed() {
+    use crate::cmd::workspace::empty_notices;
+    let mut e = rustgis_data::source::shp::Emptied::default();
+    assert!(empty_notices(&e).is_empty());
+    e.removed = 3;
+    e.removed_bytes = 4096;
+    assert!(empty_notices(&e).is_empty(), "what it freed is in the result, not a notice");
+    e.in_use = 1;
+    e.in_use_bytes = 2048;
+    e.kept_bytes = 3 * 1024 * 1024;
+    e.failed.push("/somewhere: refused".to_string());
+    let notices = empty_notices(&e);
+    assert!(notices.iter().any(|(t, error)| *error && t.contains("/somewhere: refused")), "{notices:?}");
+    assert!(notices.iter().any(|(t, error)| !*error && t.contains("1 index in use") && t.contains("2.0 KB")), "{notices:?}");
+    assert!(notices.iter().any(|(t, error)| !*error && t.contains("not removed") && t.contains("3.0 MB")), "{notices:?}");
+}
+
 /// A Shapefile of `n` points along the equator, numbered.
 fn line_of_points_shp(name: &str, n: usize) -> std::path::PathBuf {
     use rustgis_data::{Coord, Dataset, Field, FieldType, Geometry, GeometryType, Value as V};

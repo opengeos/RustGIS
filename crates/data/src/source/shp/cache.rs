@@ -1,7 +1,7 @@
 //! Native disposable caches. A directory lock serializes publication and eviction;
 //! per-entry leases protect readers/builders across processes, including PID reuse.
 use std::collections::{BTreeSet, BinaryHeap};
-use std::fs::{File, OpenOptions};
+use std::fs::{File, OpenOptions, TryLockError};
 use std::io::{self, Read, Seek, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -506,7 +506,8 @@ pub struct Emptied {
     /// Indexes in use (by this process or another) that stayed, and their bytes.
     pub in_use: u64,
     pub in_use_bytes: u64,
-    /// Bytes that stayed although not in use: files the cache can't vouch for (no readable lease).
+    /// Bytes that stayed although not in use: files without a readable lease, or that the system
+    /// refused to remove.
     pub kept_bytes: u64,
     /// The folders emptied, and those that couldn't be, with why.
     pub folders: u64,
@@ -529,9 +530,21 @@ pub fn empty_index_cache() -> Emptied {
 }
 fn empty_folders(roots: &[PathBuf]) -> Emptied {
     let mut emptied = Emptied::default();
-    for root in roots.iter().filter(|root| root.is_dir()) {
-        // A budget of 0 evicts everything not in use. With indexes in use left, the folder stays
-        // marked over budget until the next release sweeps it at the usual budget.
+    for root in roots {
+        match std::fs::metadata(root) {
+            Ok(meta) if meta.is_dir() => {}
+            Ok(_) => {
+                emptied.failed.push(format!("{}: not a folder", root.display()));
+                continue;
+            }
+            Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
+            Err(e) => {
+                emptied.failed.push(format!("{}: {e}", root.display()));
+                continue;
+            }
+        }
+        // A budget of 0 evicts everything not in use. With only indexes in use left, the folder
+        // stays marked over budget until the next release sweeps it at the usual budget.
         match maintain(root, 0) {
             Ok(stats) => {
                 emptied.folders += 1;
@@ -577,6 +590,7 @@ fn sweep(root: &Path, budget: u64, newest: Option<&str>) -> io::Result<PruneStat
         stats.remaining_bytes = 0;
         stats.pinned = 0;
         stats.pinned_bytes = 0;
+        let removed_before = stats.removed;
         // Bounded metadata even if a cache folder contains millions of files.
         let mut oldest = BinaryHeap::new();
         for entry in std::fs::read_dir(root)? {
@@ -606,10 +620,14 @@ fn sweep(root: &Path, budget: u64, newest: Option<&str>) -> io::Result<PruneStat
                 stats.remaining_bytes = stats.remaining_bytes.saturating_add(bytes);
                 continue;
             };
-            if lock.try_lock().is_err() {
+            if let Err(e) = lock.try_lock() {
                 stats.remaining_bytes = stats.remaining_bytes.saturating_add(bytes);
-                stats.pinned += 1;
-                stats.pinned_bytes = stats.pinned_bytes.saturating_add(bytes);
+                // Only contention means someone holds it; a file system that can't lock says
+                // nothing about use, and such an entry is left alone all the same.
+                if matches!(e, TryLockError::WouldBlock) {
+                    stats.pinned += 1;
+                    stats.pinned_bytes = stats.pinned_bytes.saturating_add(bytes);
+                }
                 continue;
             }
             let flag = state(&mut lock).ok();
@@ -625,7 +643,9 @@ fn sweep(root: &Path, budget: u64, newest: Option<&str>) -> io::Result<PruneStat
             // unknown or future time never counts as unused.
             let superseded = replaced.is_some_and(|prefix| name.starts_with(prefix) && Some(name.as_str()) != newest);
             let idle = modified.and_then(|t| now.duration_since(t).ok()).is_some_and(|age| age > max_idle);
-            if (temporary || superseded || idle) && std::fs::remove_file(&path).is_ok() {
+            // With no budget every entry not in use goes now: evicting from the candidates would
+            // scan the whole folder again for every batch of them.
+            if (temporary || superseded || idle || budget == 0) && std::fs::remove_file(&path).is_ok() {
                 drop(lock);
                 let _ = std::fs::remove_file(lease_path(&path));
                 stats.removed += 1;
@@ -637,6 +657,11 @@ fn sweep(root: &Path, budget: u64, newest: Option<&str>) -> io::Result<PruneStat
             if oldest.len() > CANDIDATES {
                 oldest.pop();
             }
+        }
+        // Removing while listing a folder can make some file systems skip entries, and one skipped
+        // would go unreported: scan again until a pass removes nothing.
+        if budget == 0 && stats.removed > removed_before {
+            continue;
         }
         if stats.remaining_bytes <= budget {
             break;

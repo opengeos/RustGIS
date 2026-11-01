@@ -16,29 +16,12 @@ use crate::{CmdResult, CommandSpec as C, Session};
 fn empty_indexes(s: &mut Session, _p: &Value) -> CmdResult {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let mb = |bytes: u64| format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0));
         let e = rustgis_data::source::shp::empty_index_cache();
         if e.folders == 0 && !e.failed.is_empty() {
             return Err(format!("couldn't empty the Shapefile index cache: {}", e.failed.join("; ")));
         }
-        for failed in &e.failed {
-            s.notify(format!("Shapefile index cache: couldn't empty {failed}"), true);
-        }
-        if e.in_use > 0 {
-            let what = if e.in_use == 1 { "1 index".to_string() } else { format!("{} indexes", e.in_use) };
-            s.notify(
-                format!("Shapefile index cache: {what} in use by open layers or another RustGIS window kept ({})", mb(e.in_use_bytes)),
-                false,
-            );
-        }
-        if e.kept_bytes > 0 {
-            s.notify(
-                format!(
-                    "Shapefile index cache: {} of files without a readable lease kept, as the cache can't tell they are its own",
-                    mb(e.kept_bytes)
-                ),
-                false,
-            );
+        for (text, error) in empty_notices(&e) {
+            s.notify(text, error);
         }
         Ok(json!({
             "removed": e.removed, "freedBytes": e.removed_bytes, "inUse": e.in_use, "inUseBytes": e.in_use_bytes,
@@ -50,6 +33,30 @@ fn empty_indexes(s: &mut Session, _p: &Value) -> CmdResult {
         let _ = s;
         Err("the browser keeps no Shapefile index cache".to_string())
     }
+}
+
+/// What emptying the Shapefile index cache has to tell the user beyond its counts, each with
+/// whether it is an error: nothing when all went.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn empty_notices(e: &rustgis_data::source::shp::Emptied) -> Vec<(String, bool)> {
+    let size = |bytes: u64| {
+        if bytes < 1024 * 1024 { format!("{:.1} KB", bytes as f64 / 1024.0) } else { format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0)) }
+    };
+    let mut notices: Vec<(String, bool)> = e.failed.iter().map(|f| (format!("Shapefile index cache: couldn't empty {f}"), true)).collect();
+    if e.in_use > 0 {
+        let what = if e.in_use == 1 { "1 index".to_string() } else { format!("{} indexes", e.in_use) };
+        notices.push((
+            format!("Shapefile index cache: {what} in use by open layers or another RustGIS window kept ({})", size(e.in_use_bytes)),
+            false,
+        ));
+    }
+    if e.kept_bytes > 0 {
+        notices.push((
+            format!("Shapefile index cache: {} of files not removed (no readable lease, or refused by the system)", size(e.kept_bytes)),
+            false,
+        ));
+    }
+    notices
 }
 
 fn now() -> f64 {
