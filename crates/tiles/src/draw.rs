@@ -141,13 +141,13 @@ pub(crate) fn draw_layers(
     let mut sprite_state: Option<Option<Arc<Sprite>>> = None;
     let mut sprite = |pending: &mut bool| -> Option<Arc<Sprite>> {
         sprite_state
-            .get_or_insert_with(|| match r.sprite.as_deref().map(|b| sprite::load(b, frame.ppp >= 1.5)) {
-                Some(Load::Ready(s)) => Some(s),
-                Some(Load::Pending) => {
+            .get_or_insert_with(|| match sprite::load(&r.sprites, frame.ppp >= 1.5) {
+                Load::Ready(s) => Some(s),
+                Load::Pending => {
                     *pending = true;
                     None
                 }
-                Some(Load::Failed) | None => None,
+                Load::Failed => None,
             })
             .clone()
     };
@@ -413,7 +413,7 @@ pub fn pick(spec: &Spec, x: f64, y: f64, m_per_px: f64, tol_px: f32, limit: usiz
             let p = [((x - it.at.min_x) * units) as f32, ((it.at.max_y - y) * units) as f32];
             let px = (m_per_px * units) as f32;
             for (fi, f) in l.features.iter().enumerate() {
-                let ctx = FeatureCtx { zoom, kind: f.kind, id: f.id, props: &f.props };
+                let ctx = FeatureCtx { zoom, kind: f.kind, id: f.id, props: &f.props, images: None };
                 if !layer.matches(&ctx) {
                     continue;
                 }
@@ -781,7 +781,7 @@ fn draw_vector(pm: &mut Pixmap, it: &Item, layer: &StyleLayer, frame: &Frame, zo
         if boxes.get(i).is_some_and(|b| b[0] > area[2] || b[2] < area[0] || b[1] > area[3] || b[3] < area[1]) {
             continue;
         }
-        let ctx = FeatureCtx { zoom, kind: f.kind, id: f.id, props: &f.props };
+        let ctx = FeatureCtx { zoom, kind: f.kind, id: f.id, props: &f.props, images: None };
         if !layer.matches(&ctx) {
             continue;
         }
@@ -801,8 +801,9 @@ fn draw_vector(pm: &mut Pixmap, it: &Item, layer: &StyleLayer, frame: &Frame, zo
                 paint.anti_alias = true;
                 // A pattern from the sprite, repeated from a fixed point of the world so it
                 // lines up across tiles and stays put as the map moves.
+                // (Its name may be an `image` expression, which asks the sprite.)
                 let image = pattern(layer).and_then(|p| {
-                    let name = layer.paint_value(p, &ctx)?;
+                    let name = layer.paint_value(p, &FeatureCtx { images: sheet, ..ctx })?;
                     sheet?.image(name.as_str()?, None)
                 });
                 if pattern(layer).is_some() && image.is_none() {
@@ -1185,8 +1186,16 @@ pub(crate) mod tests {
             &serde_json::json!({"id": "a", "type": "fill", "source": "s", "source-layer": "l", "paint": {"fill-pattern": "nope"}}),
         )
         .unwrap();
-        draw_vector(&mut pm, &item(vec![square]), &missing, &world_frame(), 0.0, Some(&sheet()), &[]);
+        draw_vector(&mut pm, &item(vec![square.clone()]), &missing, &world_frame(), 0.0, Some(&sheet()), &[]);
         assert_eq!(pm.pixel(32, 32).unwrap().alpha(), 0);
+        // A pattern chosen with `image`: the first the sprite has.
+        let chosen = StyleLayer::parse(&serde_json::json!({"id": "a", "type": "fill", "source": "s", "source-layer": "l",
+            "paint": {"fill-pattern": ["coalesce", ["image", "nope"], ["image", "red"]]}}))
+        .unwrap();
+        let mut pm = Pixmap::new(64, 64).unwrap();
+        draw_vector(&mut pm, &item(vec![square]), &chosen, &world_frame(), 0.0, Some(&sheet()), &[]);
+        let px = pm.pixel(32, 32).unwrap();
+        assert_eq!((px.red(), px.green(), px.alpha()), (255, 0, 255));
     }
 
     /// A one-feature MVT layer with one string property, `name`.

@@ -195,8 +195,10 @@ Ocean, Atlas, Blank), which need no network, and web tile layers over them:
 - **Map styles**: a MapLibre style document (`style.json`), with its vector, raster and
   elevation (`raster-dem`: Terrarium, Mapbox or custom encoding) sources.
   RustGIS draws background, fill, line, circle and raster layers, labels with their icons from
-  the style's sprite (SDF icons in their `icon-color`), and fill patterns; it evaluates the
-  style's expressions and zoom functions. From elevation it draws `color-relief` layers (a
+  the style's sprites (SDF icons in their `icon-color`; a style with several names their icons
+  `<sprite id>:<name>`), and fill patterns; it evaluates the style's expressions and zoom
+  functions, `image` among them (an icon's name when a sprite has it, so `coalesce` falls back
+  to the next). From elevation it draws `color-relief` layers (a
   `color-relief-color` that is an `interpolate` or `step` on `["elevation"]`) and `hillshade`
   layers (each `hillshade-method`, lit as the map is drawn, north up; slopes are steepened at
   small scales so relief stays visible). Its shading follows the style's colours, exaggeration

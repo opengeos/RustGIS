@@ -4,6 +4,8 @@
 //! picture, its pixel ratio and whether it is an SDF icon) and `<address>.png`, and their `@2x`
 //! versions for high-density screens. Both come through the tile cache; images are cut out of
 //! the picture the first time they are asked for, and SDF icons are coloured as they are drawn.
+//! A style may name several sprites, each with an id: one is its `default`, and the images of
+//! the others are named `<id>:<name>`.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -24,8 +26,19 @@ struct Entry {
     sdf: bool,
 }
 
-/// A loaded sprite.
+/// A style's loaded sprites, by id.
 pub struct Sprite {
+    sheets: Vec<(String, Arc<Sheet>)>,
+}
+
+impl std::fmt::Debug for Sprite {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_list().entries(self.sheets.iter().map(|(id, s)| (id, s.index.len()))).finish()
+    }
+}
+
+/// One sprite: its picture and index.
+struct Sheet {
     sheet: Pixmap,
     index: HashMap<String, Entry>,
     /// Images cut out so far, by name and (for SDF icons) colour: looked up by `&str`, so a
@@ -49,8 +62,39 @@ const MAX_SIDE: f64 = 1024.0;
 const MAX_CUT_BYTES: usize = 32 << 20;
 
 impl Sprite {
-    /// Reads a sprite from its index and picture.
+    /// A style's one sprite, from its index and picture.
     pub fn new(index: &serde_json::Value, sheet: Pixmap) -> Sprite {
+        Sprite { sheets: vec![("default".to_owned(), Arc::new(Sheet::new(index, sheet)))] }
+    }
+
+    /// The sheet with the image `name`, and its name there, as MapLibre looks it up: `<id>:<name>`
+    /// in the sprite with that id only, any other name in the `default` sprite only. Looking in
+    /// the others too would draw another sprite's image of that name, and keep `coalesce` from
+    /// going on to its next choice.
+    fn find<'a>(&self, name: &'a str) -> Option<(&Sheet, &'a str)> {
+        let sheet = |id: &str| self.sheets.iter().find(|(i, _)| i == id).map(|(_, s)| &**s);
+        let (s, name) = match name.split_once(':') {
+            Some((id, bare)) if sheet(id).is_some() => (sheet(id)?, bare),
+            _ => (sheet("default")?, name),
+        };
+        s.usable(name).then_some((s, name))
+    }
+
+    /// Whether a sprite has the image `name`, one that can be drawn.
+    pub fn has(&self, name: &str) -> bool {
+        self.find(name).is_some()
+    }
+
+    /// The image `name`, if a sprite has it. An SDF icon is drawn in `color` (black when none
+    /// is given).
+    pub fn image(&self, name: &str, color: Option<Rgba>) -> Option<Image> {
+        let (sheet, name) = self.find(name)?;
+        sheet.image(name, color)
+    }
+}
+
+impl Sheet {
+    fn new(index: &serde_json::Value, sheet: Pixmap) -> Sheet {
         let num = |v: &serde_json::Value, k: &str| v.get(k).and_then(serde_json::Value::as_f64);
         let index = index
             .as_object()
@@ -69,28 +113,27 @@ impl Sprite {
                 Some((name.clone(), Entry { x: x as u32, y: y as u32, w: w as u32, h: h as u32, ratio, sdf }))
             })
             .collect();
-        Sprite { sheet, index, cut: Mutex::default() }
+        Sheet { sheet, index, cut: Mutex::default() }
     }
 
-    fn entry(&self, name: &str) -> Option<(&str, Entry)> {
-        if let Some((k, e)) = self.index.get_key_value(name) {
-            return Some((k.as_str(), *e));
-        }
-        // A style with several sprites names their images `<sprite id>:<name>`.
-        let (_, bare) = name.split_once(':')?;
-        self.index.get_key_value(bare).map(|(k, e)| (k.as_str(), *e))
+    /// Whether the index lists `name` wholly inside the picture: an entry reaching past it can't
+    /// be cut (cutting would otherwise clip it to a part).
+    fn usable(&self, name: &str) -> bool {
+        self.index.get(name).is_some_and(|e| self.fits(e))
     }
 
-    /// The image `name`, if the sprite has it. An SDF icon is drawn in `color` (black when
-    /// none is given).
-    pub fn image(&self, name: &str, color: Option<Rgba>) -> Option<Image> {
-        let (key, e) = self.entry(name)?;
+    fn fits(&self, e: &Entry) -> bool {
+        e.x.checked_add(e.w).is_some_and(|r| r <= self.sheet.width()) && e.y.checked_add(e.h).is_some_and(|b| b <= self.sheet.height())
+    }
+
+    fn image(&self, name: &str, color: Option<Rgba>) -> Option<Image> {
+        let (key, e) = self.index.get_key_value(name).map(|(k, e)| (k.as_str(), *e))?;
         let color = e.sdf.then(|| color.unwrap_or([0, 0, 0, 255]));
         if let Some(p) = self.cut.lock().unwrap_or_else(|p| p.into_inner()).get(key).and_then(|by_color| by_color.get(&color)) {
             return Some(Image { pixmap: p.clone(), ratio: e.ratio });
         }
-        // Cut outside the lock. Wholly inside the picture (cutting would otherwise clip a bad entry to a part).
-        if e.x.checked_add(e.w)? > self.sheet.width() || e.y.checked_add(e.h)? > self.sheet.height() {
+        // Cut outside the lock.
+        if !self.fits(&e) {
             return None;
         }
         let mut p = self.sheet.clone_rect(IntRect::from_xywh(e.x as i32, e.y as i32, e.w, e.h)?)?;
@@ -132,8 +175,8 @@ pub enum Load {
     Failed,
 }
 
-fn sprites() -> &'static Mutex<HashMap<String, Arc<Sprite>>> {
-    static S: OnceLock<Mutex<HashMap<String, Arc<Sprite>>>> = OnceLock::new();
+fn sprites() -> &'static Mutex<HashMap<String, Arc<Sheet>>> {
+    static S: OnceLock<Mutex<HashMap<String, Arc<Sheet>>>> = OnceLock::new();
     S.get_or_init(Mutex::default)
 }
 
@@ -150,40 +193,67 @@ fn with_suffix(base: &str, suffix: &str) -> String {
     }
 }
 
-/// The sprite at `base` (an address without `.json`/`.png`), at high density when `hi_dpi`
-/// and the style has one, else at 1×.
-pub fn load(base: &str, hi_dpi: bool) -> Load {
+/// A sheet on its way.
+enum SheetLoad {
+    Ready(Arc<Sheet>),
+    Pending,
+    Failed,
+}
+
+/// A style's sprites, as (id, address without `.json`/`.png`), at high density when `hi_dpi`
+/// and a sprite has it, else at 1×. Ready once none is on its way, with those that could be
+/// read; one that can't only loses its images.
+pub fn load(sprites: &[(String, String)], hi_dpi: bool) -> Load {
+    let mut sheets = Vec::new();
+    let mut pending = false;
+    for (id, base) in sprites {
+        match load_sheet(base, hi_dpi) {
+            SheetLoad::Ready(s) => sheets.push((id.clone(), s)),
+            SheetLoad::Pending => pending = true,
+            SheetLoad::Failed => {}
+        }
+    }
+    if pending {
+        Load::Pending
+    } else if sheets.is_empty() {
+        Load::Failed
+    } else {
+        Load::Ready(Arc::new(Sprite { sheets }))
+    }
+}
+
+fn load_sheet(base: &str, hi_dpi: bool) -> SheetLoad {
     if hi_dpi {
         match load_one(base, "@2x") {
-            Load::Failed => {}
+            SheetLoad::Failed => {}
             other => return other,
         }
     }
     load_one(base, "")
 }
 
-fn load_one(base: &str, density: &str) -> Load {
+fn load_one(base: &str, density: &str) -> SheetLoad {
     let key = format!("{base}|{density}");
     if let Some(s) = sprites().lock().unwrap_or_else(|p| p.into_inner()).get(&key) {
-        return Load::Ready(s.clone());
+        return SheetLoad::Ready(s.clone());
     }
     let index = cache::get(&with_suffix(base, &format!("{density}.json")), Want::Json);
     let sheet = cache::get(&with_suffix(base, &format!("{density}.png")), Want::Image);
     match (index, sheet) {
         (State::Ready(i), State::Ready(p)) => match (&*i, &*p) {
             (Payload::Json(index), Payload::Image(sheet)) => {
-                let s = Arc::new(Sprite::new(index, sheet.clone()));
+                let s = Arc::new(Sheet::new(index, sheet.clone()));
                 let mut all = sprites().lock().unwrap_or_else(|p| p.into_inner());
                 if all.len() > 16 {
                     all.clear();
                 }
                 all.insert(key, s.clone());
-                Load::Ready(s)
+                SheetLoad::Ready(s)
             }
-            _ => Load::Failed,
+            _ => SheetLoad::Failed,
         },
-        (State::Failed(_), _) | (_, State::Failed(_)) => Load::Failed,
-        _ => Load::Pending,
+        (State::Failed(_), _) | (_, State::Failed(_)) => SheetLoad::Failed,
+        _ => SheetLoad::Pending,
     }
 }
 
@@ -200,7 +270,7 @@ mod tests {
     #[test]
     fn forgetting_drops_the_decoded_sheets() {
         let key = "forget-test|".to_string();
-        let sprite = Sprite { sheet: sheet(), index: Default::default(), cut: Default::default() };
+        let sprite = Sheet { sheet: sheet(), index: Default::default(), cut: Default::default() };
         sprites().lock().unwrap().insert(key.clone(), Arc::new(sprite));
         forget();
         assert!(!sprites().lock().unwrap().contains_key(&key));
@@ -219,13 +289,46 @@ mod tests {
         let dot = s.image("dot", None).unwrap();
         assert_eq!((dot.pixmap.width(), dot.ratio), (4, 2.0));
         // Several sprites: `<id>:<name>`.
-        assert!(s.image("base:dot", None).is_some());
+        // A style's one sprite is `default`: its images are named without an id.
+        assert!(s.image("base:dot", None).is_none());
         assert!(s.image("bad", None).is_none() && s.image("junk", None).is_none() && s.image("nope", None).is_none());
+        // Listed, but reaching past the picture: not there for `image` either, so `coalesce`
+        // goes on to the next.
+        assert!(!s.has("bad") && s.has("dot"));
         assert!(s.image("huge", None).is_none(), "over the largest side");
         // An SDF icon takes the colour asked for (full alpha is well inside the edge).
         let blue = s.image("sdf", Some([0, 0, 255, 255])).unwrap();
         let px = blue.pixmap.pixel(1, 1).unwrap();
         assert_eq!((px.red(), px.blue(), px.alpha()), (0, 255, 255));
+    }
+
+    #[test]
+    fn several_sprites_name_their_images_by_id() {
+        let sheet_of = |names: &[&str]| {
+            let index: serde_json::Map<_, _> =
+                names.iter().map(|n| (n.to_string(), serde_json::json!({"x": 0, "y": 0, "width": 4, "height": 4}))).collect();
+            Arc::new(Sheet::new(&serde_json::Value::Object(index), sheet()))
+        };
+        let s = Sprite {
+            sheets: vec![
+                ("base".to_owned(), sheet_of(&["icon-bus", "anchor"])),
+                ("nautical".to_owned(), sheet_of(&["anchor", "light/red"])),
+            ],
+        };
+        assert!(s.has("nautical:light/red") && s.has("base:icon-bus"));
+        // The id picks the sprite when both have the name.
+        let (picked, name) = s.find("nautical:anchor").unwrap();
+        assert!(std::ptr::eq(picked, &*s.sheets[1].1) && name == "anchor");
+        // Only in the sprite named: not in another that has an image of that name.
+        assert!(!s.has("base:light/red") && !s.has("nautical:icon-bus") && !s.has("nautical:") && !s.has(""));
+        // Without an id, only in the `default` sprite, which this style hasn't got.
+        assert!(!s.has("icon-bus") && !s.has("other:icon-bus"));
+        let with_default = Sprite { sheets: vec![("default".to_owned(), sheet_of(&["pin"])), ("nautical".to_owned(), sheet_of(&["pin"]))] };
+        let (d, name) = with_default.find("pin").unwrap();
+        assert!(std::ptr::eq(d, &*with_default.sheets[0].1) && name == "pin");
+        assert!(with_default.has("nautical:pin") && !with_default.has("default:missing"));
+        // Nothing to read is no sprite.
+        assert!(matches!(load(&[], false), Load::Failed));
     }
 
     #[test]
