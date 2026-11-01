@@ -9418,7 +9418,12 @@ fn shapefile_by_its_shp_address() {
     // A download too large for the budget together is refused: the .shp and .dbf land, and the
     // .shx goes over the 2 bytes left, named without the address's token.
     let e = fetch(&url, 200).unwrap_err();
-    assert!(e.contains("/PI_2211001_RIOS.shx") && e.ends_with(": larger than 2 bytes") && !e.contains("token=1"), "{e}");
+    assert!(
+        e.contains("/PI_2211001_RIOS.shx")
+            && e.ends_with(": larger than 2 bytes, what the .shp and the parts before it left of the download limit")
+            && !e.contains("token=1"),
+        "{e}"
+    );
     // Within the parts' own size, the zip's records go over.
     let exact: usize = parts.iter().map(|(_, b)| b.len()).sum();
     assert_eq!(fetch(&url, exact).unwrap_err(), format!("larger than {exact} bytes, zipped"));

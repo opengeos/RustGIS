@@ -2859,6 +2859,12 @@ fn status_hint(url: &str, e: &str) -> &'static str {
     }
 }
 
+/// A part's download error, saying that a size limit is what was left of the one the Shapefile's
+/// files share (a part is fetched within what the `.shp` and the parts before it left).
+fn over_shared_limit(e: String) -> String {
+    if e.starts_with("larger than ") { format!("{e}, what the .shp and the parts before it left of the download limit") } else { e }
+}
+
 /// What a Shapefile added by its `.shp` address (#1238) was read without, said: its `.shx`, `.prj`
 /// or `.cpg` when they weren't found beside it. The address is said without its keys or signature;
 /// a `crs` given (`p`) stands for the `.prj`.
@@ -2935,7 +2941,7 @@ fn download_shapefile_blocking(url: &str) -> Result<Vec<u8>, String> {
                 got.push((ext, b));
             }
             Err(e) if part_not_there(ext, &u, &e) => {}
-            Err(e) => return Err(part_failed(&u, e)),
+            Err(e) => return Err(part_failed(&u, over_shared_limit(e))),
         }
     }
     zipped_within(&name, shp, got, left).map_err(|e| part_failed(url, e))
@@ -3009,7 +3015,7 @@ fn download_parts(
                 download_parts(name, shp, parts, got, left, done);
             }
             Err(e) if part_not_there(ext, &url, &e) => download_parts(name, shp, parts, got, left, done),
-            Err(e) => done(Err(part_failed(&url, e))),
+            Err(e) => done(Err(part_failed(&url, over_shared_limit(e)))),
         }),
     );
 }
