@@ -427,7 +427,13 @@ pub fn format_distance(m: f64) -> String {
         // Under half a millimetre, which the closest zoom spreads over pixels: tenths, then a
         // bound rather than 0.
         let tenths = (m * 10_000.0).round() / 10.0;
-        return if tenths != 0.0 { format!("{tenths:.1} mm") } else { "< 0.1 mm".to_string() };
+        return if tenths != 0.0 {
+            format!("{tenths:.1} mm")
+        } else if m < 0.0 {
+            "> -0.1 mm".to_string()
+        } else {
+            "< 0.1 mm".to_string()
+        };
     }
     if m != 0.0 && mm.abs() < 10.0 {
         format!("{mm:.0} mm")
@@ -762,6 +768,7 @@ mod tests {
         assert_eq!(format_distance(0.0002), "0.2 mm");
         assert_eq!(format_distance(-0.0002), "-0.2 mm");
         assert_eq!(format_distance(0.00001), "< 0.1 mm");
+        assert_eq!(format_distance(-0.00001), "> -0.1 mm");
         assert_eq!(format_distance(999.4), "999 m");
         assert_eq!(format_distance(999.6), "1.0 km");
         assert_eq!(format_distance(12_500.0), "12.5 km");
