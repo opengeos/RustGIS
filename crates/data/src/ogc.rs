@@ -621,12 +621,14 @@ fn resolve(from: &str, href: &str) -> Option<String> {
 /// `service.add` finds why a layer isn't listed.
 pub const LEFT_OUT_3D: &str = "which RustGIS doesn't draw";
 
-/// What an OGC API collection's items link offers when it is 3D content, not features: 3D Tiles
-/// (its type, or an address ending in `/3dtiles`) or quantized mesh terrain (an address ending in
-/// `/quantized-mesh`; its type is only `application/json`).
-fn items_3d(link: &serde_json::Value) -> Option<&'static str> {
+/// What an OGC API collection's items link, in the document at `from`, offers when it is 3D
+/// content, not features: 3D Tiles (its type, or an address ending in `/3dtiles`) or quantized
+/// mesh terrain (an address ending in `/quantized-mesh`; its type is only `application/json`).
+/// A relative address is judged resolved, so a bare `3dtiles` counts.
+fn items_3d(from: &str, link: &serde_json::Value) -> Option<&'static str> {
     let kind = link.get("type").and_then(|t| t.as_str()).unwrap_or_default().to_ascii_lowercase();
     let href = link.get("href").and_then(|h| h.as_str()).unwrap_or_default();
+    let href = resolve(from, href).unwrap_or_else(|| href.to_string());
     let path = href.split(['?', '#']).next().unwrap_or_default().trim_end_matches('/').to_ascii_lowercase();
     if kind.contains("3dtiles") || path.ends_with("/3dtiles") {
         Some("3D Tiles")
@@ -2410,23 +2412,26 @@ fn ogc_api(url: &str, v: &serde_json::Value) -> Result<Service, String> {
         let json_items: Vec<&serde_json::Value> = links
             .iter()
             .filter(|l| l.get("rel").and_then(|r| r.as_str()) == Some("items"))
-            .filter(|l| items_3d(l).is_some() || l.get("type").and_then(|t| t.as_str()).is_none_or(|t| t.contains("json")))
+            .filter(|l| {
+                items_3d(url, l).is_some() || l.get("type").and_then(|t| t.as_str()).is_none_or(|t| t.to_ascii_lowercase().contains("json"))
+            })
             .collect();
-        let link = json_items.iter().copied().find(|l| items_3d(l).is_none());
+        let link = json_items.iter().copied().find(|l| items_3d(url, l).is_none());
         // A collection with tiles and no items link has no features to offer.
         if link.is_none() && (map.is_some() || vector.is_some()) {
             continue;
         }
         // Nor one whose items are only 3D content (PDOK links 3D Tiles and quantized meshes as
         // its items, for 3D viewers): it is left out, and the notes say why.
-        if let (None, Some(what)) = (link, json_items.first().and_then(|l| items_3d(l))) {
+        if let (None, Some(what)) = (link, json_items.first().and_then(|l| items_3d(url, l))) {
             match three_d.iter_mut().find(|(w, _)| *w == what) {
                 Some((_, ids)) => ids.push(id),
                 None => three_d.push((what, vec![id])),
             }
             continue;
         }
-        let declared_geojson = link.and_then(|l| l.get("type").and_then(|t| t.as_str())).is_some_and(|t| t.contains("geo+json"));
+        let declared_geojson =
+            link.and_then(|l| l.get("type").and_then(|t| t.as_str())).is_some_and(|t| t.to_ascii_lowercase().contains("geo+json"));
         // Without an items link: the standard path under the collections address. A relative
         // link is resolved against the document's address.
         let items = match link.and_then(|l| l.get("href").and_then(|h| h.as_str())) {
@@ -3541,9 +3546,10 @@ mod tests {
         let json = r#"{"collections": [
             {"id": "gebouwen", "itemType": "feature", "links": [{"rel": "items", "type": "application/json+3dtiles", "href": "https://x.org/collections/gebouwen/3dtiles?f=json"}]},
             {"id": "terreinen", "itemType": "feature", "links": [{"rel": "items", "type": "application/json+3dtiles", "href": "https://x.org/collections/terreinen/3dtiles?f=json"}]},
+            {"id": "relative", "links": [{"rel": "items", "href": "3dtiles"}]},
             {"id": "bin", "links": [{"rel": "items", "type": "application/octet-stream", "href": "https://x.org/collections/bin/3dtiles"}]},
             {"id": "dtm", "itemType": "feature", "links": [{"rel": "items", "type": "application/json", "href": "https://x.org/collections/dtm/quantized-mesh?f=json"}]},
-            {"id": "both", "links": [{"rel": "items", "href": "https://x.org/collections/both/3dtiles/"}, {"rel": "items", "type": "application/geo+json", "href": "https://x.org/collections/both/items?f=json"}]},
+            {"id": "both", "links": [{"rel": "items", "href": "https://x.org/collections/both/3dtiles/"}, {"rel": "items", "type": "application/geo+JSON", "href": "https://x.org/collections/both/items?f=json"}]},
             {"id": "plain", "links": [{"rel": "items", "type": "application/geo+json", "href": "https://x.org/collections/plain/items?f=json"}]}
         ]}"#;
         let s = parse("https://x.org/collections", json.as_bytes()).unwrap();
@@ -3556,7 +3562,8 @@ mod tests {
         assert_eq!(offered[1].0, "plain");
         assert!(
             s.notes.contains(
-                &"collections 'gebouwen', 'terreinen', 'bin' offer 3D Tiles, which RustGIS doesn't draw, so they are left out".to_string()
+                &"collections 'gebouwen', 'terreinen', 'relative', 'bin' offer 3D Tiles, which RustGIS doesn't draw, so they are left out"
+                    .to_string()
             ),
             "{:?}",
             s.notes
@@ -3567,6 +3574,11 @@ mod tests {
             s.notes
         );
         assert!(!s.incomplete);
+        // Without them, no note on 3D content.
+        let plain = r#"{"collections": [{"id": "plain", "links": [{"rel": "items", "type": "application/geo+json", "href": "https://x.org/collections/plain/items?f=json"}]}]}"#;
+        let s = parse("https://x.org/collections", plain.as_bytes()).unwrap();
+        assert_eq!(s.layers.len(), 1);
+        assert!(!s.notes.iter().any(|n| n.contains(LEFT_OUT_3D)), "{:?}", s.notes);
     }
 
     #[test]
