@@ -582,7 +582,7 @@ fn package_map(s: &Session, mobile: bool, tol: f64) -> Result<Vec<u8>, String> {
             Some(rustgis_map::view::Terrain { source: rustgis_map::view::TerrainSource::Layer(n), .. }) => Some(n.clone()),
             _ => None,
         };
-        let kept = |l: &rustgis_map::Layer| l.visible || dem.as_deref().is_some_and(|d| l.name.eq_ignore_ascii_case(d));
+        let kept = |l: &rustgis_map::Layer| l.visible || (l.is_raster() && dem.as_deref().is_some_and(|d| l.name.eq_ignore_ascii_case(d)));
         let hidden: Vec<u32> = m.layers.iter().filter(|l| !kept(l)).map(|l| l.id).collect();
         m.release_tiles(&hidden);
         m.layers.retain(|l| kept(l));
