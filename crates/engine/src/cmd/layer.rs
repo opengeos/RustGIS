@@ -2906,7 +2906,7 @@ fn add_cog_window(s: &mut Session, p: &Value, url: &str) -> CmdResult {
     let [west, south, east, north] = window_box(s, p).map_err(named)?;
     let cell = match p.get("cellSize").filter(|v| !v.is_null()) {
         None => None,
-        Some(v) => Some(v.as_f64().filter(|c| c.is_finite() && *c > 0.0).ok_or("cellSize is a size above 0")?),
+        Some(v) => Some(v.as_f64().filter(|c| c.is_finite() && *c > 0.0).ok_or_else(|| named("cellSize is a size above 0".into()))?),
     };
     // The five minutes count from the header's read.
     let started = std::time::Instant::now();
@@ -3126,7 +3126,7 @@ fn add_cog_window(s: &mut Session, p: &Value, url: &str) -> CmdResult {
     }
     if unplaced > 0 {
         s.notify(
-            format!("{added}: {unplaced} of the box's {points} edge points have no place in the file's coordinate system: the window is placed from the others"),
+            format!("{added}: {unplaced} of the {points} points tested along the box's edges have no place in the file's coordinate system: the window is placed from the others"),
             false,
         );
     }

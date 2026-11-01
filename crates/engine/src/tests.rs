@@ -22180,6 +22180,11 @@ fn a_cog_window_comes_in_as_a_raster() {
     assert!(e.ends_with("the file has 9 bands; a window reads 8 at most"), "{e}");
     let header = nine_sent.load(std::sync::atomic::Ordering::Relaxed);
     assert!(header < 256 * 256 * 9 / 4, "only the header was read: {header} bytes");
+    // A cellSize that isn't a number above 0 is refused, naming the address.
+    let e = s
+        .run("layer.addUrl", &json!({"url": format!("{nine}/nine.tif"), "bbox": [10.0, 45.0, 10.01, 45.01], "cellSize": "90"}))
+        .unwrap_err();
+    assert_eq!(e, format!("{nine}/nine.tif: cellSize is a size above 0"));
     // A palette file, as MapBiomas's: its colour table and class names come with the window.
     let (classes, _) = serve_ranges(example_with(&Example { size: 512, tile: 256, classes: true, ..Example::default() }));
     let mark = s.notice_mark();
