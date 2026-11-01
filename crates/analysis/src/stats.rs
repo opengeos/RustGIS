@@ -333,7 +333,7 @@ pub struct Column {
     /// 2^53 whole numbers can differ where their f64s don't. Empty when there are none.
     whole: Vec<Option<i64>>,
     /// How many of the numbers were read from a whole number written as text, in digits, past the
-    /// i64 range, which the decimal read from it doesn't hold exactly.
+    /// i64 range, as a decimal.
     rounded_texts: usize,
     /// The values in ascending order, sorted once, and only for a statistic that needs them so.
     sorted: OnceCell<Values>,
@@ -355,9 +355,9 @@ impl Column {
     }
 
     /// How many values were read from a whole number written as text, in digits, past the i64
-    /// range, as a decimal that doesn't hold it exactly: a loss the tool reports, as it isn't
-    /// checked per statistic. (One written with a decimal point or an exponent asks for a
-    /// decimal, and is one.)
+    /// range, as a decimal: such a value is past what the checks take exactly, so the statistics
+    /// of it aren't checked and the tool reports it instead. (One written with a decimal point or
+    /// an exponent asks for a decimal, and is one.)
     pub fn rounded_texts(&self) -> usize {
         self.rounded_texts
     }
@@ -422,13 +422,14 @@ pub fn column(ds: &Dataset, rows: &[usize], field: usize, as_numbers: bool) -> C
                     out.push(x);
                     // A whole number written as text, read as a number, is kept exactly too; one
                     // past the i64 range is the decimal, counted when it was written as digits
-                    // (asking for a whole number) and the decimal doesn't hold it.
+                    // (asking for a whole number), whether or not the decimal holds it: the
+                    // statistics of it aren't checked.
                     whole.push(match v {
                         Value::Int(i) => Some(*i),
                         Value::Text(t) => {
                             let written = whole_text(t);
                             let exact = written.as_ref().and_then(WholeText::to_i64);
-                            if exact.is_none() && written.is_some_and(|w| w.plain && !w.held_by(x)) {
+                            if exact.is_none() && written.is_some_and(|w| w.plain) {
                                 rounded_texts += 1;
                             }
                             exact
@@ -617,11 +618,6 @@ impl WholeText {
     /// The number, when it fits an i64.
     fn to_i64(&self) -> Option<i64> {
         self.digits.parse().ok()
-    }
-
-    /// Whether the decimal `x` the text was read as holds the number exactly (−0 is 0).
-    fn held_by(&self, x: f64) -> bool {
-        x.fract() == 0.0 && format!("{:.0}", x + 0.0) == self.digits
     }
 }
 
@@ -1285,55 +1281,62 @@ mod tests {
         }
     }
 
-    /// A whole number written as text past the i64 range is its digits, and the decimal it is read
-    /// as holds it exactly or not; such a value is counted in the column when it doesn't.
+    /// A whole number written as text past the i64 range is its digits, however it is written;
+    /// one written as digits alone is counted in a column read as numbers, whether or not the
+    /// decimal it is read as holds it.
     #[test]
-    fn whole_text_past_i64_is_held_by_its_decimal_or_not() {
-        let held = |t: &str| {
+    fn whole_text_past_i64_is_counted_when_written_in_digits() {
+        let digits = |t: &str| {
             let w = whole_text(t).unwrap_or_else(|| panic!("{t:?} is a whole number"));
             assert_eq!(w.to_i64(), None, "{t:?} is past the i64 range");
-            let x = t.trim().parse::<f64>().unwrap();
-            (w.digits.clone(), w.held_by(x))
+            w.digits.clone()
         };
         // Written as digits alone, or with a point or an exponent, which ask for a decimal.
         let plain = |t: &str| whole_text(t).map(|w| w.plain);
-        for t in ["123456789012345678901", " -9223372036854775809 ", "+12", "0", "-0", "007"] {
+        for t in ["123456789012345678901", " -9223372036854775809 ", "9223372036854775808", "+12", "0", "-0", "007"] {
             assert_eq!(plain(t), Some(true), "{t:?}");
         }
         for t in ["1e20", "12.", "12.0", "1200e-2", "0.0", "0e5", "9e37"] {
             assert_eq!(plain(t), Some(false), "{t:?}");
         }
-        assert_eq!(held("123456789012345678901"), ("123456789012345678901".to_string(), false));
-        assert_eq!(held("-123456789012345678901"), ("-123456789012345678901".to_string(), false));
-        assert_eq!(held("9223372036854775808"), ("9223372036854775808".to_string(), true), "2^63 is a decimal");
-        assert_eq!(held("9223372036854775809"), ("9223372036854775809".to_string(), false));
-        assert_eq!(held("100000000000000000000"), ("100000000000000000000".to_string(), true), "2^20 · 5^20");
-        assert_eq!(held("1e20"), ("100000000000000000000".to_string(), true));
-        assert_eq!(held("12345678901234567890000e-3"), ("12345678901234567890".to_string(), false));
-        // 10^308 is 2^308 · 5^308, and 5^308 doesn't fit a decimal's 53 bits; the largest decimal's
-        // shortest form stands for a round number the decimal itself isn't.
-        assert!(!held("1e308").1);
-        assert!(!held("1.7976931348623157e308").1);
-        assert!(held("1e22").1, "2^22 · 5^22, and 5^22 fits");
-        assert!(!held("1e23").1, "5^23 doesn't");
+        assert_eq!(digits("123456789012345678901"), "123456789012345678901");
+        assert_eq!(digits("-123456789012345678901"), "-123456789012345678901");
+        assert_eq!(digits("9223372036854775808"), "9223372036854775808", "2^63, which is a decimal");
+        assert_eq!(digits("-9223372036854775809"), "-9223372036854775809");
+        assert_eq!(digits("100000000000000000000"), "100000000000000000000");
+        assert_eq!(digits("1e20"), "100000000000000000000");
+        assert_eq!(digits("12345678901234567890000e-3"), "12345678901234567890");
+        assert_eq!(digits("1.7976931348623157e308").len(), 309, "the largest decimal");
         assert_eq!(whole_text("1e2147483647"), None, "more digits than any decimal has");
         // Zero and a decimal with a fraction are never past the range.
         assert_eq!(whole_text("-0").as_ref().and_then(WholeText::to_i64), Some(0));
-        assert!(whole_text("-0").is_some_and(|w| w.held_by(-0.0)));
         assert_eq!(whole_text("12.5"), None);
-        // In a column read as numbers, each such value is counted; ones a decimal holds, whole
-        // numbers within the range and decimals aren't.
+        // In a column read as numbers, each value written in digits past the range is counted,
+        // whether the decimal holds it (2^63, 10^20) or not; whole numbers within the range,
+        // decimals and numbers written with an exponent aren't.
         let mut ds = Dataset::new("t", GeometryType::None, vec![Field::new("code", FieldType::Text)]);
-        for t in
-            ["123456789012345678901", "-9223372036854775809", "100000000000000000000", "9007199254740993", "12.5", "1e400", "n/a", "9e37"]
-        {
+        for t in [
+            "123456789012345678901",
+            "-9223372036854775809",
+            "100000000000000000000",
+            "9007199254740993",
+            "12.5",
+            "1e400",
+            "n/a",
+            "9e37",
+            "9223372036854775808",
+            "9223372036854775807",
+            "1e20",
+        ] {
             ds.push(None, vec![Value::Text(t.into())]);
         }
-        let c = column(&ds, &[0, 1, 2, 3, 4, 5, 6, 7], 0, true);
-        assert_eq!(c.rounded_texts(), 2);
+        let all: Vec<usize> = (0..11).collect();
+        let c = column(&ds, &all, 0, true);
+        assert_eq!(c.rounded_texts(), 4);
         assert_eq!(c.nulls, 2, "premise: an infinite decimal and a word are null");
-        assert_eq!(c.whole, [None, None, None, Some(9_007_199_254_740_993), None, None]);
-        assert_eq!(column(&ds, &[2, 3, 4, 7], 0, true).rounded_texts(), 0, "held, within the range, a decimal, an exponent");
+        assert_eq!(c.whole, [None, None, None, Some(9_007_199_254_740_993), None, None, None, Some(i64::MAX), None]);
+        assert_eq!(column(&ds, &[2, 8], 0, true).rounded_texts(), 2, "10^20 and 2^63, which their decimals hold");
+        assert_eq!(column(&ds, &[3, 4, 7, 9, 10], 0, true).rounded_texts(), 0, "within the range, a decimal, an exponent");
         assert_eq!(column(&ds, &[0], 0, false).rounded_texts(), 0, "read as text, nothing is a number");
         // Over whole numbers past the range the per-statistic check says nothing: the count is the
         // notice.

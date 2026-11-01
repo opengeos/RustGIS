@@ -2925,7 +2925,7 @@ struct Rounded {
     /// For each request, how many of its results came out rounded from a whole number past 2^53.
     results: Vec<usize>,
     /// For each input field read as numbers that holds some, by name, how many of its values were
-    /// whole numbers written as text past the i64 range, read as decimals that don't hold them.
+    /// whole numbers written as text past the i64 range, read as decimals.
     texts: Vec<(String, usize)>,
 }
 
@@ -2936,9 +2936,9 @@ impl Rounded {
     }
 
     /// Adds, for each field `requests` read as numbers from `ds`, how many of its values among the
-    /// records `rows` are whole numbers written as text past the i64 range, read as decimals that
-    /// don't hold them. Called once over the records a tool reads, each once, so a value is counted
-    /// once however many groups (Summarize Within's polygons) it is summarised in.
+    /// records `rows` are whole numbers written as text past the i64 range, read as decimals.
+    /// Called once over the records a tool reads, each once, so a value is counted once however
+    /// many groups (Summarize Within's polygons) it is summarised in.
     fn count_texts(&mut self, ds: &Dataset, rows: &[usize], requests: &[crate::stats::Request], as_numbers: bool) {
         // Each field once, in the requests' order, which names them in the notice.
         let mut fields: Vec<usize> = Vec::new();
@@ -3003,8 +3003,8 @@ fn statistic_values(
 /// The notices for what a statistics list lost to decimals: the statistics that came out rounded,
 /// naming their output fields `fields` (one per request, as `rounded` counts them), as a decimal
 /// field holds whole numbers exactly only up to 2^53; and the whole numbers written as text past
-/// the i64 range that were read as decimals that don't hold them, naming their input fields.
-/// Empty when nothing was rounded.
+/// the i64 range that were read as decimals, whose statistics aren't checked, naming their input
+/// fields. Empty when nothing was rounded.
 fn rounded_notice(rounded: &Rounded, fields: &[Field]) -> Vec<String> {
     let mut notices = Vec::new();
     let total: usize = rounded.results.iter().sum();
@@ -3019,13 +3019,10 @@ fn rounded_notice(rounded: &Rounded, fields: &[Field]) -> Vec<String> {
     let total: usize = rounded.texts.iter().map(|(_, n)| n).sum();
     if total > 0 {
         let names: Vec<&str> = rounded.texts.iter().map(|(f, _)| f.as_str()).collect();
-        let (numbers, were, decimals) = if total == 1 {
-            ("number", "was", "a decimal that doesn't hold it")
-        } else {
-            ("numbers", "were", "decimals that don't hold them")
-        };
+        let (numbers, are, were, decimals, them) =
+            if total == 1 { ("number", "is", "was", "a decimal", "it") } else { ("numbers", "are", "were", "decimals", "them") };
         notices.push(format!(
-            "{total} whole {numbers} written as text in {} past the 64-bit integer range {were} read as {decimals} exactly",
+            "{total} whole {numbers} written as text in {} {are} past the 64-bit integer range and {were} read as {decimals}, so statistics of {them} may be rounded",
             names.join(", ")
         ));
     }

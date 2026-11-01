@@ -507,10 +507,12 @@ past it (a `SUM`, `RANGE` or evenly dividing `MEAN` of whole numbers, the `MIN`,
 tool says how many results were rounded and in which fields. The whole numbers are an Integer
 field's values and whole numbers written as text in a numeric field, which these checks and
 `UNIQUE`, `MODE`, `MINORITY` and `CONCATENATE` take exactly up to the 64-bit integer range. A
-longer one is read as a decimal; when that rounds a number written in digits, the tool says how
-many and in which fields. A Double field's values are decimals already, rounded as decimal
-arithmetic rounds, and get no notice. Without `statistics`, `field` gives that field's `COUNT`,
-`SUM`, `MEAN`, `MIN`, `MAX` and `STD`, reading its values as numbers.
+longer one written in digits is read as a decimal, and its statistics aren't checked: the tool
+says how many such values it read and in which fields, as statistics of them may be rounded. A
+number written with a decimal point or an exponent (`6.02e23`) asks for a decimal and gets no
+notice. A Double field's values are decimals already, rounded as decimal arithmetic rounds, and
+get no notice. Without `statistics`, `field` gives that field's `COUNT`, `SUM`, `MEAN`, `MIN`,
+`MAX` and `STD`, reading its values as numbers.
 
 **Dissolve** (`dissolve`) merges the polygons sharing a value of `field` into one feature for
 each value, or all of them into one without a field. Each feature has the value and `count`, the

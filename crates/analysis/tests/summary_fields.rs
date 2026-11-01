@@ -706,9 +706,10 @@ fn rounding_check_survives_whole_numbers_past_the_i64_range() {
     let layers = Layers::default().with(codes);
     let res = rustgis_analysis::run("summaryStatistics", &layers, &json!({"input": "codes", "field": "code"})).unwrap();
     assert_eq!(res.messages, ["Summary Statistics: 1 rows"], "decimals past the i64 range are decimals, not whole numbers");
-    // A whole number written as text in digits past the i64 range is read as a decimal too, which
-    // rounds it: the tool says so once for the field, and its statistics aren't checked one by one.
-    // One the decimal holds (10^20) isn't counted, nor one written with an exponent (above).
+    // A whole number written as text in digits past the i64 range is read as a decimal too, past
+    // what the checks take exactly: the tool says so once for the field, and its statistics aren't
+    // checked one by one. One the decimal holds (10^20) is counted as well, as its statistics
+    // aren't checked either; one written with an exponent (above) isn't.
     let csv = "code\n123456789012345678901\n100000000000000000000\n1\nn/a\n-9223372036854775809\n";
     let (codes, _) = read_csv(csv, "codes").unwrap();
     assert_eq!(field_ty(&codes, "code"), FieldType::Text, "premise");
@@ -718,12 +719,29 @@ fn rounding_check_survives_whole_numbers_past_the_i64_range() {
         res.messages,
         [
             "Summary Statistics: 1 rows".to_string(),
-            "2 whole numbers written as text in code past the 64-bit integer range were read as decimals that don't hold them exactly"
+            "3 whole numbers written as text in code are past the 64-bit integer range and were read as decimals, so statistics of them may be rounded"
                 .to_string()
         ]
     );
     let Output::Table(out) = res.output else { panic!("a table") };
     assert_eq!(column(&out, "MAX_code"), [&float(123_456_789_012_345_678_901.0)], "the decimal, not the number written");
+    // 2^63 is a decimal, but the SUM of it and 1 is 2^63 + 1, which isn't: the statistic is rounded
+    // without the per-statistic check seeing it, and the count is the notice.
+    let csv = "code\n9223372036854775808\n1\nn/a\n";
+    let (codes, _) = read_csv(csv, "codes").unwrap();
+    assert_eq!(field_ty(&codes, "code"), FieldType::Text, "premise");
+    let layers = Layers::default().with(codes);
+    let res = rustgis_analysis::run("summaryStatistics", &layers, &json!({"input": "codes", "field": "code"})).unwrap();
+    assert_eq!(
+        res.messages,
+        [
+            "Summary Statistics: 1 rows".to_string(),
+            "1 whole number written as text in code is past the 64-bit integer range and was read as a decimal, so statistics of it may be rounded"
+                .to_string()
+        ]
+    );
+    let Output::Table(out) = res.output else { panic!("a table") };
+    assert_eq!(column(&out, "SUM_code"), [&float(9_223_372_036_854_775_808.0)], "2^63, not 2^63 + 1");
     // By case, the field is counted once over all its groups, and the results' notice comes first.
     let csv = "k,code\na,123456789012345678901\nb,9007199254740993\nb,9223372036854775809\nc,n/a\n";
     let (codes, _) = read_csv(csv, "codes").unwrap();
@@ -743,7 +761,7 @@ fn rounding_check_survives_whole_numbers_past_the_i64_range() {
         [
             "Summary Statistics: 3 rows".to_string(),
             "1 result rounded in MIN_code: a decimal field holds whole numbers exactly only up to 2^53 (9007199254740992)".to_string(),
-            "2 whole numbers written as text in code past the 64-bit integer range were read as decimals that don't hold them exactly"
+            "2 whole numbers written as text in code are past the 64-bit integer range and were read as decimals, so statistics of them may be rounded"
                 .to_string()
         ]
     );
@@ -753,7 +771,7 @@ fn rounding_check_survives_whole_numbers_past_the_i64_range() {
         rustgis_analysis::run("summaryStatistics", &Layers::default().with(codes), &json!({"input": "codes", "field": "code"})).unwrap();
     assert_eq!(
         res.messages[1],
-        "1 whole number written as text in code past the 64-bit integer range was read as a decimal that doesn't hold it exactly"
+        "1 whole number written as text in code is past the 64-bit integer range and was read as a decimal, so statistics of it may be rounded"
     );
     // An Integer field holding such decimals beside a whole number, through every statistic.
     let text = collection(vec![(square(0.0, 0.0, 1.0), json!({"n": 1})), (square(1.0, 0.0, 1.0), json!({"n": 2}))]);
@@ -778,10 +796,14 @@ fn a_rounded_text_in_overlapping_polygons_is_counted_once() {
     const HUGE: &str = "123456789012345678901";
     const LOW: &str = "-9223372036854775809";
     let one = |n: usize| {
-        format!("{n} whole number written as text in n past the 64-bit integer range was read as a decimal that doesn't hold it exactly")
+        format!(
+            "{n} whole number written as text in n is past the 64-bit integer range and was read as a decimal, so statistics of it may be rounded"
+        )
     };
     let many = |n: usize| {
-        format!("{n} whole numbers written as text in n past the 64-bit integer range were read as decimals that don't hold them exactly")
+        format!(
+            "{n} whole numbers written as text in n are past the 64-bit integer range and were read as decimals, so statistics of them may be rounded"
+        )
     };
     // Sites 0 and 1 lie where `west` and `east` overlap, 2 in `west` only, 3 in neither. The
     // Integer field `n` then gets text values: HUGE at 0 and 2, LOW at 3, and 2^53 + 1 at 1.
