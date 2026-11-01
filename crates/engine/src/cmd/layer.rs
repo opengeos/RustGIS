@@ -2843,19 +2843,18 @@ fn status_hint(url: &str, e: &str) -> &'static str {
 /// a `crs` given (`p`) stands for the `.prj`.
 fn parts_left_out(url: &str, bytes: &[u8], p: &Value) -> Option<String> {
     rustgis_data::io::shapefile_part_urls(url)?;
-    let lacks = rustgis_data::io::shapefile_zip_lacks(bytes);
-    if lacks.is_empty() {
-        return None;
-    }
-    let names = lacks.iter().map(|e| format!(".{e}")).collect::<Vec<_>>().join(", ");
-    let crs = if lacks.contains(&"prj") && ps(p, "crs").is_none_or(|c| c.trim().is_empty()) {
-        "; its coordinates are read as longitude/latitude"
-    } else {
-        ""
-    };
-    let them = if lacks.len() == 1 { "it" } else { "them" };
-    let url = crate::sources::redact(url);
-    Some(format!("{url}: no {names} found beside it ({} of 3 optional files missing), so it was read without {them}{crs}", lacks.len()))
+    let given_crs = ps(p, "crs").is_some_and(|c| !c.trim().is_empty());
+    // Each Shapefile by its name: a zip the address answered with may hold several.
+    let said: Vec<String> = rustgis_data::io::shapefile_zip_lacks(bytes)
+        .into_iter()
+        .map(|(shp, lacks)| {
+            let names = lacks.iter().map(|e| format!(".{e}")).collect::<Vec<_>>().join(", ");
+            let crs = if lacks.contains(&"prj") && !given_crs { "; its coordinates are read as longitude/latitude" } else { "" };
+            let them = if lacks.len() == 1 { "it" } else { "them" };
+            format!("{shp}: no {names} found beside it ({} of 3 optional files missing), so it was read without {them}{crs}", lacks.len())
+        })
+        .collect();
+    (!said.is_empty()).then(|| format!("{}: {}", crate::sources::redact(url), said.join("; ")))
 }
 
 /// A Shapefile by its `.shp` address, waited for (#1238): the `.shp`, then its `.dbf`, `.shx`,
