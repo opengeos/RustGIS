@@ -6864,8 +6864,8 @@ fn plugin_data_cubes_need_files_and_network() {
 }
 
 /// A mosaic of the project's raster layers, written to no file, stays in the project: a plugin
-/// with `edit` alone may make one. Writing it to a `path`, or an input that isn't a raster layer
-/// (a file name, read from disk), needs `files`.
+/// with `edit` alone may make one, and none without it. Writing it to a `path`, or an input that
+/// isn't a raster layer in memory (a file name, read from disk), needs `files`.
 #[test]
 fn plugin_mosaics_of_project_layers_need_no_files() {
     use rustgis_data::raster::{ColorHint, Crs, GeoTransform, Raster, geotiff};
@@ -6876,6 +6876,10 @@ fn plugin_mosaics_of_project_layers_need_no_files() {
         let bytes = geotiff::write(&r, 0).unwrap();
         crate::cmd::raster::add_raster(&mut s, name, rustgis_map::RasterLayer::from_bytes(r, format!("{name}.tif"), bytes)).unwrap();
     }
+    plugin("eng-mosaic-view", &[]);
+    let e = forward(&mut s, "eng-mosaic-view", "raster.mosaic", json!({"inputs": ["west", "east"]})).unwrap_err();
+    assert!(e.contains("'edit' permission"), "{e}");
+    rustgis_plugins::unload("eng-mosaic-view");
     plugin("eng-mosaic", &["edit"]);
     forward(&mut s, "eng-mosaic", "raster.mosaic", json!({"inputs": ["west", " east "], "name": "Elevation"})).unwrap();
     assert!(s.map().layer_by_name("Elevation").is_some_and(|l| l.is_raster()));
@@ -6889,6 +6893,11 @@ fn plugin_mosaics_of_project_layers_need_no_files() {
         let e = forward(&mut s, "eng-mosaic", "raster.mosaic", params.clone()).unwrap_err();
         assert!(e.contains("'files' permission"), "{params}: {e}");
     }
+    // A raster layer whose cells aren't in memory is read from its file.
+    let east = s.map().layer_by_name("east").unwrap().id;
+    s.map_mut().layer_mut(east).unwrap().raster.as_mut().unwrap().data = None;
+    let e = forward(&mut s, "eng-mosaic", "raster.mosaic", json!({"inputs": ["west", "east"]})).unwrap_err();
+    assert!(e.contains("'files' permission"), "{e}");
     rustgis_plugins::unload("eng-mosaic");
 }
 

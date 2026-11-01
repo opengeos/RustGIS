@@ -836,14 +836,15 @@ fn process(s: &mut Session, p: &Value) -> CmdResult {
     }
 }
 
-/// Whether a mosaic stays in the project: every input is a raster layer in the session, found as
-/// [`raster_mosaic`] finds it (a layer of that name before a file), and nothing else names a place
-/// (no `path`, nor a name that looks like one).
+/// Whether a mosaic stays in the project: it has inputs, each a raster layer in the session, found
+/// as [`raster_mosaic`] finds it (a layer of that name before a file), and nothing else names a
+/// place (no `path`, nor a name that looks like one). A layer named like a path (`~dem`,
+/// `a/../b`) counts as a place too: that errs towards asking for `files`.
 pub(crate) fn mosaics_layers(s: &Session, p: &Value) -> bool {
     let layers = p
         .get("inputs")
         .and_then(Value::as_array)
-        .is_some_and(|a| a.iter().all(|v| v.as_str().map(str::trim).is_some_and(|n| raster_named(s, n).is_ok())));
+        .is_some_and(|a| !a.is_empty() && a.iter().all(|v| v.as_str().map(str::trim).is_some_and(|n| raster_named(s, n).is_ok())));
     layers && !super::items::names_place(p, super::plugins::PLACE_KEYS, 0)
 }
 
