@@ -780,9 +780,7 @@ fn forget_locks_of_removed_features(before: &Project, after: &mut Project) {
         let was = before.maps.get(i).filter(|o| o.name == m.name);
         let Some(lock) = m.label_lock.as_mut() else { continue };
         for l in m.layers.iter().filter(|l| !l.is_streamed()) {
-            let same =
-                was.and_then(|o| o.layers.iter().find(|o| o.id == l.id)).is_some_and(|o| o.dataset.features.shares(&l.dataset.features));
-            if same {
+            if was.and_then(|o| o.layers.iter().find(|o| o.id == l.id)).is_some_and(|o| o.dataset.features.shares(&l.dataset.features)) {
                 continue;
             }
             // The lock's ids for this layer, less those it still has: sized by the lock, not the layer.
@@ -793,6 +791,9 @@ fn forget_locks_of_removed_features(before: &Project, after: &mut Project) {
             }
             for f in l.dataset.features.iter() {
                 gone.remove(&(f.id as usize));
+                if gone.is_empty() {
+                    break;
+                }
             }
             lock.retain(|((layer, id, ..), _)| *layer != l.id || !gone.contains(id));
         }

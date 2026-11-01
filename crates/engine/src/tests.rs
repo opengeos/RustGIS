@@ -2823,9 +2823,7 @@ fn a_lock_holds_for_a_streamed_layers_features_outside_its_window() {
     crate::forget_locks_of_removed_features(&before, &mut s.project);
     assert_eq!(s.map().label_lock.as_ref().map(Vec::len), Some(1));
     drop(s);
-    for ext in ["shp", "shx", "dbf", "prj", "cpg"] {
-        let _ = std::fs::remove_file(p.with_extension(ext));
-    }
+    remove_shp(&p);
 }
 
 /// A lock names each label by its class's place in the list: a change to the list (a class added,
@@ -15318,9 +15316,7 @@ fn emptying_the_index_cache_keeps_indexes_in_use() {
     let layer = s.map().layer(r["layer"].as_u64().unwrap() as u32).unwrap();
     assert_eq!(layer.load_all().unwrap().features.len(), 20);
     drop(s);
-    for ext in ["shp", "shx", "dbf", "prj", "cpg"] {
-        let _ = std::fs::remove_file(p.with_extension(ext));
-    }
+    remove_shp(&p);
 }
 
 /// Emptying the index cache tells the user only what it couldn't do: nothing when all went (#1259).
@@ -15355,6 +15351,13 @@ fn line_of_points_shp(name: &str, n: usize) -> std::path::PathBuf {
     p
 }
 
+/// Removes a Shapefile written by [`line_of_points_shp`] with its sidecar files.
+fn remove_shp(p: &std::path::Path) {
+    for ext in ["shp", "shx", "dbf", "prj", "cpg"] {
+        let _ = std::fs::remove_file(p.with_extension(ext));
+    }
+}
+
 #[test]
 fn shapefiles_too_large_to_load_whole_still_open() {
     // Few records, but a .shp or .dbf past what the whole-file reader takes (#1055): opened and
@@ -15376,9 +15379,7 @@ fn shapefiles_too_large_to_load_whole_still_open() {
         let mut s = Session::new(Project::default());
         let e = s.run("layer.addData", &json!({"path": path, "stream": false})).unwrap_err();
         assert!(e.contains("too large"), "{grown}: {e}");
-        for ext in ["shp", "shx", "dbf", "prj", "cpg"] {
-            let _ = std::fs::remove_file(p.with_extension(ext));
-        }
+        remove_shp(&p);
     }
 }
 
@@ -15422,9 +15423,7 @@ fn large_shapefiles_are_read_in_place() {
     let r = u.run("layer.addData", &json!({"path": big.display().to_string(), "stream": false})).unwrap();
     assert!(!u.map().layer(r["layer"].as_u64().unwrap() as u32).unwrap().is_streamed());
     for p in [small, big] {
-        for ext in ["shp", "shx", "dbf", "prj", "cpg"] {
-            let _ = std::fs::remove_file(p.with_extension(ext));
-        }
+        remove_shp(&p);
     }
 }
 
