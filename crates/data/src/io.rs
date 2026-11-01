@@ -1727,7 +1727,8 @@ pub fn shapefile_zip_lacks(bytes: &[u8]) -> Vec<&'static str> {
     {
         return Vec::new();
     }
-    let names = names.into_inner();
+    // A set: a served zip may hold up to 65,535 entries.
+    let names: std::collections::HashSet<String> = names.into_inner().into_iter().collect();
     let is_fork = |n: &str| n.split('/').any(|part| part == "__macosx" || part.starts_with("._"));
     let stems: Vec<&str> = names
         .iter()

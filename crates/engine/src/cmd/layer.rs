@@ -2813,8 +2813,8 @@ fn is_zip(bytes: &[u8]) -> bool {
     bytes.starts_with(b"PK\x03\x04")
 }
 
-/// A Shapefile's part that failed, named by its address without its keys or signature (the
-/// `.shp`'s query, which the parts carry too).
+/// A Shapefile's `.shp` or part that failed, named by its address without its keys or signature
+/// (the `.shp`'s query, which the parts carry too).
 fn part_failed(url: &str, e: String) -> String {
     let e = e.strip_prefix(url).map(|r| r.trim_start_matches(": ").to_string()).unwrap_or(e);
     format!("{}: {}", crate::sources::redact(url), crate::sources::redact_text(&e))
@@ -2846,7 +2846,6 @@ fn parts_left_out(url: &str, bytes: &[u8], p: &Value) -> Option<String> {
 #[cfg(not(target_arch = "wasm32"))]
 fn download_shapefile_blocking(url: &str) -> Result<Vec<u8>, String> {
     use crate::render::rustgis_tiles::cache;
-    let named = |u: &str, e: String| if e.starts_with(u) { e } else { format!("{u}: {e}") };
     let parts = rustgis_data::io::shapefile_part_urls(url).unwrap_or_default();
     // One wait for all the parts together, as for one download.
     let until = std::time::Instant::now() + cache::BLOCKING_TIMEOUT;
@@ -2856,12 +2855,12 @@ fn download_shapefile_blocking(url: &str) -> Result<Vec<u8>, String> {
         w if w.is_zero() => Err(cache::large_file_hint("timed out".into())),
         w => cache::download_blocking_within(u, max, w).map_err(cache::large_file_hint),
     };
-    let shp = within(url, cache::MAX_DOWNLOAD).map_err(|e| named(url, e))?;
+    let shp = within(url, cache::MAX_DOWNLOAD).map_err(|e| part_failed(url, e))?;
     // Already zipped (a server answering the address with its parts): read as it is.
     if is_zip(&shp) {
         return Ok(shp);
     }
-    let name = url_file_name(url, &shp).map_err(|e| named(url, e))?;
+    let name = url_file_name(url, &shp).map_err(|e| part_failed(url, e))?;
     let mut left = cache::MAX_DOWNLOAD.saturating_sub(shp.len());
     let mut got = Vec::new();
     for (ext, u) in parts {
@@ -2874,7 +2873,7 @@ fn download_shapefile_blocking(url: &str) -> Result<Vec<u8>, String> {
             Err(e) => return Err(part_failed(&u, e)),
         }
     }
-    zipped_within(&name, shp, got, left).map_err(|e| named(url, e))
+    zipped_within(&name, shp, got, left).map_err(|e| part_failed(url, e))
 }
 
 /// Downloads a file the user named by its address off the frame, as `cache::download_limited`

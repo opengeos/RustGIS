@@ -9303,6 +9303,8 @@ fn shapefile_by_its_shp_address() {
     // It names the part without the signature.
     let e = s.run("layer.addUrl", &json!({"url": format!("{base}/signed/rios.shp?sig=1")})).unwrap_err();
     assert!(e.contains("/signed/rios.prj") && e.contains("403") && !e.contains("sig=1"), "{e}");
+    let e = s.run("layer.addUrl", &json!({"url": format!("{base}/signed/gone.shp?sig=1")})).unwrap_err();
+    assert!(e.contains("/signed/gone.shp") && e.contains("403") && !e.contains("sig=1"), "{e}");
     // An unsigned address answered 403 for a part (S3, for a missing object) is done without.
     let r = s.run("layer.addUrl", &json!({"url": format!("{base}/s3/rios.shp"), "name": "S3"})).unwrap();
     assert_eq!(r["features"], 1, "{r}");
@@ -9336,16 +9338,20 @@ fn shapefile_by_its_shp_address() {
     };
     let id = s.download_started();
     assert!(s.download_landed(id, fetch(&url, 1 << 20).unwrap()));
+    let mark = s.notice_mark();
     let r = s.run("layer.addDownload", &json!({"id": id, "url": url, "name": "Pela janela"})).unwrap();
     assert_eq!(r["features"], 1, "{r}");
     assert!(s.map().layer_by_name("Pela janela").is_some());
-    assert!(!s.notices.last().unwrap().text.contains("optional files"), "{:?}", s.notices.last());
+    let said = s.notices_since(mark);
+    assert!(!said.iter().any(|n| n.text.contains("optional files")), "{said:?}");
     // Through the app too, what was left out is said.
     let plain = format!("{base}/plain/rios.shp");
     let id = s.download_started();
     assert!(s.download_landed(id, fetch(&plain, 1 << 20).unwrap()));
+    let mark = s.notice_mark();
     s.run("layer.addDownload", &json!({"id": id, "url": plain, "name": "Sem prj pela janela"})).unwrap();
-    assert!(s.notices.last().unwrap().text.contains("no .prj, .cpg found beside it (2 of 3"), "{:?}", s.notices.last());
+    let said = s.notices_since(mark);
+    assert!(said.iter().any(|n| n.text.contains("no .prj, .cpg found beside it (2 of 3")), "{said:?}");
     // A download too large for the budget together is refused: the .shp and .dbf land, and the
     // .shx goes over the 2 bytes left, named without the address's token.
     let e = fetch(&url, 200).unwrap_err();
