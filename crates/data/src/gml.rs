@@ -145,7 +145,14 @@ fn ring(mut r: Vec<Coord>) -> Option<Vec<Coord>> {
 /// The rings of a polygon or surface patch: exterior (outerBoundaryIs) first.
 fn polygon(p: &Node, zm: &Cell<bool>) -> Option<Vec<Vec<Coord>>> {
     let boundary = |names: &[&str]| -> Vec<Vec<Coord>> {
-        p.descendants().filter(|d| d.is_element() && is_gml(d) && names.contains(&local(d))).filter_map(|b| ring(coords(&b, zm)?)).collect()
+        // Only a ring kept (closed, with four points) marks Z or M.
+        let kept = |b: Node| {
+            let dims = Cell::new(false);
+            let r = ring(coords(&b, &dims)?)?;
+            zm.set(zm.get() || dims.get());
+            Some(r)
+        };
+        p.descendants().filter(|d| d.is_element() && is_gml(d) && names.contains(&local(d))).filter_map(kept).collect()
     };
     let mut rings = boundary(&["exterior", "outerBoundaryIs"]);
     if rings.is_empty() {
@@ -171,8 +178,14 @@ fn geometry(g: &Node, zm: &Cell<bool>) -> Option<Geometry> {
             (c.len() >= 2).then_some(Geometry::Line(vec![c]))
         }
         "MultiLineString" | "MultiCurve" => {
-            let parts: Vec<Vec<Coord>> =
-                kids(&["LineString", "Curve"]).iter().filter_map(|l| coords(l, zm)).filter(|c| c.len() >= 2).collect();
+            // Only a part kept (two points or more) marks Z or M.
+            let kept = |l: &Node| {
+                let dims = Cell::new(false);
+                let c = coords(l, &dims).filter(|c| c.len() >= 2)?;
+                zm.set(zm.get() || dims.get());
+                Some(c)
+            };
+            let parts: Vec<Vec<Coord>> = kids(&["LineString", "Curve"]).iter().filter_map(kept).collect();
             (!parts.is_empty()).then_some(Geometry::Line(parts))
         }
         "Polygon" => Some(Geometry::Polygon(vec![polygon(g, zm)?])),
@@ -428,6 +441,14 @@ mod tests {
         assert_eq!(ds.features[0].geometry, Some(Geometry::Point(Coord::new(10.0, 48.0))));
         // Its height is dropped, and said.
         assert!(ds.zm_dropped && rep.messages.iter().any(|m| m.contains("Z or M values")), "{:?}", rep.messages);
+
+        // A one-point 3D part is left out, and its height with it: the 2D line kept says nothing.
+        let gml = r#"<wfs:FeatureCollection xmlns:wfs="http://www.opengis.net/wfs/2.0" xmlns:gml="http://www.opengis.net/gml/3.2" xmlns:app="http://example.com/app">
+<wfs:member><app:roads gml:id="r.1"><app:geom><gml:MultiCurve srsName="EPSG:4326"><gml:curveMember><gml:LineString><gml:pos>10 48 312</gml:pos></gml:LineString></gml:curveMember>
+  <gml:curveMember><gml:LineString><gml:posList srsDimension="2">10 48 11 49</gml:posList></gml:LineString></gml:curveMember></gml:MultiCurve></app:geom></app:roads></wfs:member>
+</wfs:FeatureCollection>"#;
+        let layers = read("r.gml", gml.as_bytes()).unwrap();
+        assert!(!layers[0].0.zm_dropped, "{:?}", layers[0].1.messages);
     }
 
     #[test]

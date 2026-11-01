@@ -853,15 +853,15 @@ impl PostgisSource {
         src.info.count = src.count_rows();
         src.info.extent = src.extent();
         // A column declared with Z or M, or (an unconstrained one) Z or M in the first rows this layer
-        // reads; an empty table loses nothing. A check that fails (or times out) is said too.
+        // reads, for a layer with a row to read: an empty one (or one its filter leaves empty, which an
+        // estimated count can't tell) loses nothing. A check that fails (or times out) is said too.
+        let (from, filter) = (src.table.sql_from(), src.filter(false));
         let sql = format!(
-            "SELECT COALESCE((SELECT coord_dimension FROM geometry_columns WHERE f_table_schema = $1 AND f_table_name = $2 AND f_geometry_column = $3 \
+            "SELECT EXISTS (SELECT 1 FROM {from} WHERE {filter}) AND (COALESCE((SELECT coord_dimension FROM geometry_columns WHERE f_table_schema = $1 AND f_table_name = $2 AND f_geometry_column = $3 \
              UNION ALL SELECT coord_dimension FROM geography_columns WHERE f_table_schema = $1 AND f_table_name = $2 AND f_geography_column = $3 \
              LIMIT 1), 2) > 2 \
-             OR COALESCE((SELECT bool_or(ST_NDims(g::geometry) > 2) FROM (SELECT {} AS g FROM {} WHERE {} LIMIT 16) AS s), false)",
+             OR COALESCE((SELECT bool_or(ST_NDims(g::geometry) > 2) FROM (SELECT {} AS g FROM {from} WHERE {filter} LIMIT 16) AS s), false))",
             src.table.geom(),
-            src.table.sql_from(),
-            src.filter(false)
         );
         let zm = if src.info.count == Some(0) {
             Some(false)
