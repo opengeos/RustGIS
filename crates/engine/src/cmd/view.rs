@@ -243,17 +243,11 @@ fn terrain(s: &mut Session, p: &Value) -> CmdResult {
         let l = s.active_layer.and_then(|id| s.map().layer(id)).filter(|l| l.raster.is_some())?;
         Some(TerrainSource::Layer(l.name.clone()))
     });
-    // The terrain keeps its DEM by name: with two layers of that name (a rename can make them),
-    // it would draw the first one's heights.
-    if let Some(TerrainSource::Layer(n)) = &source
-        && s.map().layers.iter().filter(|l| l.name.eq_ignore_ascii_case(n)).count() > 1
-    {
-        return Err(format!("two layers are called '{n}': rename one, then turn Terrain on"));
-    }
     // Relief shows on a tilted Web Mercator map only (the globe and other projections stay flat).
     let mercator = matches!(s.map().projection, rustgis_map::Projection::WebMercator);
-    let flat = s.map().camera.pitch == 0.0;
+    let flat = s.map().camera.pitch.abs() < 0.5;
     let m = s.map_mut();
+    let old_terrain = m.view.terrain.clone();
     let t = match (source, m.view.terrain.take()) {
         (Some(source), old) => Terrain { source, exaggeration: exaggeration.or(old.map(|t| t.exaggeration)).unwrap_or(1.0) },
         // Only a new exaggeration: the terrain keeps its source.
@@ -271,6 +265,18 @@ fn terrain(s: &mut Session, p: &Value) -> CmdResult {
         },
         "exaggeration": t.exaggeration,
     });
+    // The terrain keeps its DEM by name: with two layers of that name (a rename can make them),
+    // it would draw the first one's heights. Checked for a terrain kept on too.
+    if let TerrainSource::Layer(n) = &t.source
+        && m.layers.iter().filter(|l| l.name.eq_ignore_ascii_case(n)).count() > 1
+    {
+        let e = format!("two layers are called '{n}': rename one, then turn Terrain on");
+        // A terrain that was on stays as it was.
+        if let Some(old) = old_terrain {
+            m.view.terrain = Some(old);
+        }
+        return Err(e);
+    }
     let heights_from = match &t.source {
         TerrainSource::Layer(n) => Some(n.clone()),
         TerrainSource::Tiles { .. } => None,

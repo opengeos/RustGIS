@@ -59,11 +59,22 @@ pub fn commands() -> Vec<C> {
             if n.is_empty() {
                 return Err("name is required".into());
             }
-            let old = s.map().layer(s.layer_id(p)?).map(|l| l.name.clone()).unwrap_or_default();
+            let id = s.layer_id(p)?;
+            let old = s.map().layer(id).map(|l| l.name.clone()).unwrap_or_default();
+            // A terrain on this layer follows its rename, when no other layer has that name (with
+            // two, the name doesn't say which one the terrain was set on).
+            let drawn = s.map().layers.iter().filter(|l| l.name.eq_ignore_ascii_case(&old)).count() == 1;
             let r = with(s, p, |l| {
                 l.name = n.clone();
                 l.dataset.name = n.clone();
             })?;
+            // A terrain drawn from this layer follows the new name.
+            if let Some(rustgis_map::view::Terrain { source: rustgis_map::view::TerrainSource::Layer(t), .. }) = &mut s.map_mut().view.terrain
+                && drawn
+                && t.eq_ignore_ascii_case(&old)
+            {
+                *t = n.clone();
+            }
             // Layers masked by this one follow the new name.
             for l in &mut s.map_mut().layers {
                 if l.mask.as_deref().is_some_and(|m| m.eq_ignore_ascii_case(&old)) {
