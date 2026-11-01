@@ -472,9 +472,9 @@ mod tests {
     #[test]
     fn an_edge_let_pass_by_its_latitude_does_not_stray() {
         // Wherever `may_stray` lets an edge pass without looking, looking agrees: planes from 88°S
-        // to 88°N (past Web Mercator's 85.05° too), edges of 100 m to 1,000 km in eight directions, up to 5,000 km from the centre
-        // to the side or at 45°, at the tolerances of buffers from 100 m to 5,000 km (the largest
-        // Buffer makes).
+        // to 88°N (past Web Mercator's 85.05° too), edges of 100 m to 1,000 km in eight directions,
+        // up to 5,000 km from the centre to the side or at 45°, at the tolerances of buffers from
+        // 100 m to 5,000 km (the largest Buffer makes).
         let mut passed = 0;
         for lat in (-84..=84).step_by(12).chain([-88, -86, 86, 88]) {
             let plane = Plane::new(Coord::new(10.0, f64::from(lat)), 10.0);
