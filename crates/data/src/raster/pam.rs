@@ -208,8 +208,31 @@ pub fn parse_gdal_metadata(text: &str) -> Option<Pam> {
             twice += 1;
         }
     }
-    // Class names, by value: dataset items (no band, no role) named CLASS_ and a whole number.
+    // A band's scale and offset aren't applied: the values stay as stored. One that changes
+    // nothing (a scale of 1, an offset of 0) isn't counted.
+    let unscaled = root
+        .children()
+        .filter(|n| n.has_tag_name("Item"))
+        .filter(|n| match n.attribute("role") {
+            Some("scale") => n.text().and_then(|t| t.trim().parse::<f64>().ok()) != Some(1.0),
+            Some("offset") => n.text().and_then(|t| t.trim().parse::<f64>().ok()) != Some(0.0),
+            _ => false,
+        })
+        .count();
+    if unscaled > 0 {
+        pam.lost.push(format!("{unscaled} scale or offset item(s) not applied: the values are as stored"));
+    }
+    // Class names, by value: dataset items (no band, no role) named CLASS_ and a whole number. One
+    // given for a band or a role isn't read, and is counted.
     let (mut classes, mut odd_classes): (Vec<String>, usize) = (Vec::new(), 0);
+    let banded = root
+        .children()
+        .filter(|n| n.has_tag_name("Item") && (n.attribute("sample").is_some() || n.attribute("role").is_some()))
+        .filter(|n| n.attribute("name").is_some_and(|name| name.starts_with("CLASS_")))
+        .count();
+    if banded > 0 {
+        pam.lost.push(format!("{banded} CLASS_ item(s) given for a band or a role left out (only the file's own are read)"));
+    }
     for item in root.children().filter(|n| n.has_tag_name("Item") && n.attribute("sample").is_none() && n.attribute("role").is_none()) {
         // Other dataset items (AREA_OR_POINT, a file's own keys) aren't class names.
         let Some(value) = item.attribute("name").and_then(|n| n.strip_prefix("CLASS_")) else { continue };
@@ -327,6 +350,24 @@ mod tests {
         }
         // Only what is lost: a document of nothing but bad items still says so.
         assert!(!parse_gdal_metadata(r#"<GDALMetadata><Item name="CLASS_99999">Far</Item></GDALMetadata>"#).unwrap().lost.is_empty());
+        // A scale or offset that changes the values isn't applied, and is said; 1 and 0 aren't.
+        let scaled = parse_gdal_metadata(
+            r#"<GDALMetadata><Item name="SCALE" sample="0" role="scale">0.0001</Item><Item name="OFFSET" sample="0" role="offset">-0.1</Item></GDALMetadata>"#,
+        )
+        .unwrap();
+        assert_eq!(scaled.lost, ["2 scale or offset item(s) not applied: the values are as stored"]);
+        assert!(
+            parse_gdal_metadata(
+                r#"<GDALMetadata><Item name="SCALE" sample="0" role="scale">1</Item><Item name="OFFSET" sample="0" role="offset">0</Item></GDALMetadata>"#
+            )
+            .is_none()
+        );
+        // A CLASS_ item for a band isn't read, and is said.
+        let banded = parse_gdal_metadata(r#"<GDALMetadata><Item name="CLASS_5" sample="0">Water</Item></GDALMetadata>"#).unwrap();
+        assert!(
+            banded.bands.is_empty() && banded.lost.len() == 1 && banded.lost[0].starts_with("1 CLASS_ item(s) given for a band"),
+            "{banded:?}"
+        );
     }
 
     #[test]

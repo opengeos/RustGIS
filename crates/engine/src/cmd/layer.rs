@@ -2874,6 +2874,14 @@ pub(crate) fn add_cog(s: &mut Session, p: &Value, url: &str) -> CmdResult {
 #[cfg(not(target_arch = "wasm32"))]
 const MAX_WINDOW_VALUES: u64 = if cfg!(test) { 300_000 } else { crate::render::rustgis_tiles::cog::MAX_VALUES_READ };
 
+/// The most bands a window reads: each band is a read of its own.
+#[cfg(not(target_arch = "wasm32"))]
+const MAX_WINDOW_BANDS: usize = 256;
+
+/// How long a window's bands are read for, all together: past it, no band more is asked for.
+#[cfg(not(target_arch = "wasm32"))]
+const WINDOW_WAIT: std::time::Duration = std::time::Duration::from_secs(300);
+
 /// `layer.addUrl` keys for other kinds of address, which a window (`"bbox"`) doesn't read.
 const WINDOW_UNREAD: [&str; 13] =
     ["layer", "x", "y", "wkt", "crs", "delimiter", "paperSpace", "stream", "start", "end", "unit", "interval", "dates"];
@@ -2894,7 +2902,7 @@ fn add_cog_window(s: &mut Session, p: &Value, url: &str) -> CmdResult {
     use crate::render::rustgis_tiles::cog;
     use rustgis_data::raster::cog::Level;
     let named = |e: String| if e.starts_with(url) { e } else { format!("{url}: {e}") };
-    let [west, south, east, north] = window_box(s, p)?;
+    let [west, south, east, north] = window_box(s, p).map_err(named)?;
     let cell = match p.get("cellSize").filter(|v| !v.is_null()) {
         None => None,
         Some(v) => Some(v.as_f64().filter(|c| c.is_finite() && *c > 0.0).ok_or("cellSize is a size above 0")?),
@@ -3015,8 +3023,20 @@ fn add_cog_window(s: &mut Session, p: &Value, url: &str) -> CmdResult {
             layout.bands.max(1)
         )));
     }
-    let mut bands = Vec::with_capacity(layout.bands.max(1));
-    for band in 0..layout.bands.max(1) {
+    let count = layout.bands.max(1);
+    if count > MAX_WINDOW_BANDS {
+        return Err(named(format!("the file has {count} bands; a window reads {MAX_WINDOW_BANDS} at most")));
+    }
+    // One read a band, each waiting up to two minutes, within one wait for them all.
+    let started = std::time::Instant::now();
+    let mut bands = Vec::with_capacity(count);
+    for band in 0..count {
+        if band > 0 && started.elapsed() > WINDOW_WAIT {
+            let minutes = WINDOW_WAIT.as_secs() / 60;
+            return Err(named(format!(
+                "{band} of {count} bands read in {minutes} minutes, so the window is given up: take a smaller box or a larger cellSize"
+            )));
+        }
         bands.push(cog::read_values_blocking(&info, url, level, band, (c0, c1), (r0, r1)).map_err(named)?);
     }
     let lt = layout.transform_of(lv);
