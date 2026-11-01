@@ -350,7 +350,9 @@ pub fn user_only(id: &str) -> bool {
 }
 
 /// What running `spec` with `params` reaches beyond the project, if anything: by what the
-/// parameters name, what the command's parameters can name, and what it is.
+/// parameters name, what the command's parameters can name, and what it is. Without the session,
+/// it counts every `raster.mosaic` as reaching files; [`refused`] lets a plugin's mosaic of the
+/// project's layers through.
 pub fn reaches(spec: &C, params: &Value) -> Option<Reach> {
     // External tools (the GeoLibre suite) run a native program that reads files a parameter
     // names, including bare file names.
