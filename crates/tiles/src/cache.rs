@@ -640,13 +640,17 @@ pub fn download_blocking(url: &str) -> Result<Vec<u8>, String> {
 /// Like [`download_blocking`], but reads at most `max` bytes plus one overflow sentinel.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn download_blocking_limited(url: &str, max: usize) -> Result<Vec<u8>, String> {
-    download_blocking_within(url, max, BLOCKING_TIMEOUT).map_err(|e| {
-        if e.contains("timeout") || e.contains("timed out") {
-            format!("{e} (a large file: add it with Home › Add › Add Data › From URL, which downloads in the background)")
-        } else {
-            e
-        }
-    })
+    download_blocking_within(url, max, BLOCKING_TIMEOUT).map_err(large_file_hint)
+}
+
+/// A waited-for download's error, with where a large file goes instead when it timed out.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn large_file_hint(e: String) -> String {
+    if e.contains("timeout") || e.contains("timed out") {
+        format!("{e} (a large file: add it with Home › Add › Add Data › From URL, which downloads in the background)")
+    } else {
+        e
+    }
 }
 
 /// Like [`download_blocking_limited`], giving up after `timeout` (with the bare error).

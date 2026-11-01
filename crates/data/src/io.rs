@@ -1714,7 +1714,8 @@ pub fn zip_shapefile_parts(file_name: &str, shp: Vec<u8>, parts: Vec<(&str, Vec<
 
 /// Which of a zipped Shapefile's optional parts (`.shx`, `.prj`, `.cpg`) a `.shp` in it lacks,
 /// beside it by its name: what a Shapefile added by its `.shp` address (#1238) was read without,
-/// to say so. Empty for bytes that aren't a zip.
+/// to say so. Only the `.shp`s [`read_zip`] reads count: those with their `.dbf`, not a macOS
+/// resource fork. Empty for bytes that aren't a zip.
 pub fn shapefile_zip_lacks(bytes: &[u8]) -> Vec<&'static str> {
     // The entries' names only: `want` sees each, and none is inflated.
     let names = std::cell::RefCell::new(Vec::new());
@@ -1727,7 +1728,13 @@ pub fn shapefile_zip_lacks(bytes: &[u8]) -> Vec<&'static str> {
         return Vec::new();
     }
     let names = names.into_inner();
-    let stems: Vec<&str> = names.iter().filter_map(|n| n.strip_suffix(".shp")).collect();
+    let is_fork = |n: &str| n.split('/').any(|part| part == "__macosx" || part.starts_with("._"));
+    let stems: Vec<&str> = names
+        .iter()
+        .filter(|n| !is_fork(n))
+        .filter_map(|n| n.strip_suffix(".shp"))
+        .filter(|s| names.contains(&format!("{s}.dbf")))
+        .collect();
     ["shx", "prj", "cpg"].into_iter().filter(|e| stems.iter().any(|s| !names.contains(&format!("{s}.{e}")))).collect()
 }
 
@@ -2909,6 +2916,14 @@ mod tests {
                 .map(|(n, b)| (n.to_string(), b.clone()))
                 .into();
         assert_eq!(shapefile_zip_lacks(&crate::zip::write(&mixed).unwrap()), ["prj"]);
+        // A stray .shp without its .dbf, and a macOS resource fork, aren't read, so they lack nothing.
+        let mut whole: Vec<(String, Vec<u8>)> =
+            ["roads.shp", "roads.dbf", "roads.shx", "roads.prj", "roads.cpg", "stray.shp", "__MACOSX/._roads.shp"]
+                .map(|n| (n.to_string(), shp.clone()))
+                .into();
+        assert!(shapefile_zip_lacks(&crate::zip::write(&whole).unwrap()).is_empty());
+        whole.retain(|(n, _)| n != "roads.prj");
+        assert_eq!(shapefile_zip_lacks(&crate::zip::write(&whole).unwrap()), ["prj"]);
         let no_dbf: Vec<_> = others.into_iter().filter(|(e, _)| *e != "dbf").collect();
         assert!(zip_shapefile_parts("RIOS_SIMPLES.shp", shp, no_dbf).unwrap_err().contains(".dbf"));
     }

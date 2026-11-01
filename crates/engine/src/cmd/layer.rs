@@ -2844,8 +2844,13 @@ fn download_shapefile_blocking(url: &str) -> Result<Vec<u8>, String> {
     let parts = rustgis_data::io::shapefile_part_urls(url).unwrap_or_default();
     // One wait for all the parts together, as for one download.
     let until = std::time::Instant::now() + cache::BLOCKING_TIMEOUT;
-    let wait = || until.saturating_duration_since(std::time::Instant::now());
-    let shp = cache::download_blocking_within(url, cache::MAX_DOWNLOAD, wait()).map_err(|e| named(url, e))?;
+    // Past it, a part isn't asked for at all (a zero timeout may mean none), and a timeout says
+    // where a large file goes instead.
+    let within = |u: &str, max: usize| match until.saturating_duration_since(std::time::Instant::now()) {
+        w if w.is_zero() => Err(cache::large_file_hint("timed out".into())),
+        w => cache::download_blocking_within(u, max, w).map_err(cache::large_file_hint),
+    };
+    let shp = within(url, cache::MAX_DOWNLOAD).map_err(|e| named(url, e))?;
     // Already zipped (a server answering the address with its parts): read as it is.
     if is_zip(&shp) {
         return Ok(shp);
@@ -2854,7 +2859,7 @@ fn download_shapefile_blocking(url: &str) -> Result<Vec<u8>, String> {
     let mut left = cache::MAX_DOWNLOAD.saturating_sub(shp.len());
     let mut got = Vec::new();
     for (ext, u) in parts {
-        match cache::download_blocking_within(&u, left, wait()) {
+        match within(&u, left) {
             Ok(b) => {
                 left = left.saturating_sub(b.len());
                 got.push((ext, b));
