@@ -9284,7 +9284,14 @@ fn shapefile_by_its_shp_address() {
     files.extend(parts.iter().filter(|(e, _)| *e == "shp").map(|(e, b)| (format!("/s3/sem_dbf.{e}"), b.clone())));
     let shp = parts.iter().find(|(e, _)| *e == "shp").unwrap().1.clone();
     let others = parts.iter().filter(|(e, _)| *e != "shp").map(|(e, b)| (*e, b.clone())).collect();
-    files.push(("/zipped/rios.shp".into(), rustgis_data::io::zip_shapefile_parts("rios.shp", shp, others).unwrap()));
+    files.push(("/zipped/rios.shp".into(), rustgis_data::io::zip_shapefile_parts("rios.shp", shp.clone(), others).unwrap()));
+    // A zip of two Shapefiles: a complete, b without its .prj.
+    let two: Vec<(String, Vec<u8>)> = parts
+        .iter()
+        .map(|(e, b)| (format!("a.{e}"), b.clone()))
+        .chain(parts.iter().filter(|(e, _)| *e != "prj").map(|(e, b)| (format!("b.{e}"), b.clone())))
+        .collect();
+    files.push(("/zipped/dois.shp".into(), rustgis_data::zip::write(&two).unwrap()));
     let (base, asked) = serve_files(files);
     let mut s = Session::new(Project::default());
     let r = s.run("layer.addUrl", &json!({"url": format!("{base}/PI/TERESINA/HIDROGRAFIA/PI_2211001_RIOS.shp?token=1")})).unwrap();
@@ -9343,6 +9350,13 @@ fn shapefile_by_its_shp_address() {
     let r = s.run("layer.addUrl", &json!({"url": format!("{base}/zipped/rios.shp"), "name": "Zipado"})).unwrap();
     assert_eq!(r["features"], 1, "{r}");
     assert!(!asked.lock().unwrap().iter().any(|a| a.starts_with("/zipped/rios.dbf")));
+    // With `layer`, the notice speaks of the Shapefile added only.
+    let mark = s.notice_mark();
+    s.run("layer.addUrl", &json!({"url": format!("{base}/zipped/dois.shp"), "layer": "a", "name": "So a"})).unwrap();
+    assert!(!s.notices_since(mark).iter().any(|n| n.text.contains("optional files")), "{:?}", s.notices_since(mark));
+    let mark = s.notice_mark();
+    s.run("layer.addUrl", &json!({"url": format!("{base}/zipped/dois.shp"), "layer": "b", "name": "So b"})).unwrap();
+    assert!(s.notices_since(mark).iter().any(|n| n.text.contains("b.shp: no .prj")), "{:?}", s.notices_since(mark));
     // Without its .dbf, it is refused, naming the .dbf's address.
     let e = s.run("layer.addUrl", &json!({"url": format!("{base}/nodbf/rios.shp")})).unwrap_err();
     assert!(e.contains("/nodbf/rios.dbf") && e.contains("404"), "{e}");

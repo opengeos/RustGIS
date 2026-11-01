@@ -2861,7 +2861,14 @@ fn parts_left_out(url: &str, bytes: &[u8], p: &Value) -> Option<String> {
     // Each Shapefile by its name: a zip the address answered with may hold several (the first
     // few named, the rest counted).
     const NAMED: usize = 5;
-    let lacking = rustgis_data::io::shapefile_zip_lacks(bytes);
+    // With `layer`, only the Shapefile added is said, picked as the read layers are (by its name
+    // or its last word).
+    let want = ps(p, "layer").map(str::trim).filter(|w| !w.is_empty());
+    let picked = |shp: &str| {
+        let stem = Path::new(shp).file_stem().and_then(|s| s.to_str()).unwrap_or(shp);
+        want.is_none_or(|w| stem.eq_ignore_ascii_case(w) || stem.rsplit(' ').next().is_some_and(|l| l.eq_ignore_ascii_case(w)))
+    };
+    let lacking: Vec<_> = rustgis_data::io::shapefile_zip_lacks(bytes).into_iter().filter(|(shp, _)| picked(shp)).collect();
     let more = lacking.len().saturating_sub(NAMED);
     let mut said: Vec<String> = lacking
         .into_iter()
