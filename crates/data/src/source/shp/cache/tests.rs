@@ -96,6 +96,86 @@ fn cache_shared_readers_and_oversized_indexes_are_protected_until_release() {
     wait_removed(&path);
 }
 
+/// A release sweeps the folder only when the last sweep couldn't bring it within budget because
+/// of indexes in use; one within budget is left alone (#1230).
+#[test]
+fn cache_releases_sweep_only_a_cache_left_over_budget() {
+    let root = Folder::new();
+    let kept = ready(&root.0, 1, 10, 4096);
+    let kept_path = kept.path().to_path_buf();
+    let before = sweeps();
+    drop(kept);
+    assert_eq!(sweeps(), before, "a release within budget doesn't sweep");
+    assert!(kept_path.exists(), "a ready index within budget stays");
+
+    // The first's commit evicts the idle index; the second's can't evict either of these two in
+    // use, so the cache stays over budget until one is released.
+    let first = ready(&root.0, 2, 10, 10);
+    assert!(!kept_path.exists(), "the idle index went first");
+    let second = ready(&root.0, 3, 10, 10);
+    let (first_path, second_path) = (first.path().to_path_buf(), second.path().to_path_buf());
+    let before = sweeps();
+    drop(first);
+    assert_eq!(sweeps(), before + 1, "a release frees what the last sweep couldn't");
+    assert!(!first_path.exists(), "the released index brought the cache back within budget");
+    let before = sweeps();
+    drop(second);
+    assert_eq!(sweeps(), before, "within budget again, the next release doesn't sweep");
+    assert!(second_path.exists());
+
+    // A sweep that fails may have left the cache over budget: the next release sweeps again.
+    let missing = root.0.join("missing");
+    assert!(prune_locked(&missing, 10).is_err());
+    assert!(over_budget(&missing));
+    note_budget(&missing, false);
+}
+
+/// A failed build never reaches the sweep at commit, so its release sweeps instead: abandoned
+/// builds left by a crashed process don't outlive the build that failed next to them (#1230).
+#[test]
+fn cache_failed_build_sweeps_abandoned_builds() {
+    let root = Folder::new();
+    let abandoned = root.0.join("rg-index-work-v1-1-2-3.sqlite");
+    std::fs::write(&abandoned, b"partial").unwrap();
+    std::fs::write(lease_path(&abandoned), b"T").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(lease_path(&abandoned), std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    let failed = reserve_index(&root.0, &key(1), 4096).unwrap();
+    assert!(abandoned.exists(), "reserving doesn't sweep");
+    let failed_path = failed.path().to_path_buf();
+    let before = sweeps();
+    drop(failed);
+    assert_eq!(sweeps(), before + 1, "a failed build sweeps on release");
+    assert!(!abandoned.exists(), "the abandoned build is reclaimed");
+    assert!(!failed_path.exists(), "the failed build removes its own index");
+}
+
+/// A reservation that fails takes no lease, so no release would sweep the folder: it sweeps
+/// itself, and abandoned builds are reclaimed even though no lease is taken (#1230).
+#[test]
+fn cache_failed_reservation_sweeps_abandoned_builds() {
+    let root = Folder::new();
+    let abandoned = root.0.join("rg-index-work-v1-1-2-3.sqlite");
+    std::fs::write(&abandoned, b"partial").unwrap();
+    std::fs::write(lease_path(&abandoned), b"T").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(lease_path(&abandoned), std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    // A folder where the lease file should be makes the reservation fail.
+    let blocked = lease_path(&index_path(&root.0, &key(1)).unwrap());
+    std::fs::create_dir(&blocked).unwrap();
+    let before = sweeps();
+    assert!(reserve_index(&root.0, &key(1), 4096).is_err());
+    assert_eq!(sweeps(), before + 1, "a failed reservation sweeps");
+    assert!(!abandoned.exists(), "the abandoned build is reclaimed");
+    assert!(blocked.is_dir(), "the sweep leaves what it doesn't own");
+}
+
 fn wait_removed(path: &Path) {
     let deadline = Instant::now() + Duration::from_secs(10);
     while path.exists() {

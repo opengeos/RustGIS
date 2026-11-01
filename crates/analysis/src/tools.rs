@@ -2,14 +2,14 @@
 
 use geo::{BooleanOps, Contains, ConvexHull, InteriorPoint, Intersects, MultiPolygon, Orient, Relate, Simplify, orient::Direction};
 use rustgis_data::raster::Crs;
-use rustgis_data::{Coord, Dataset, Field, FieldType, Geometry, GeometryType, Value};
+use rustgis_data::{Coord, Dataset, Feature, Field, FieldType, Geometry, GeometryType, Value};
 use rustgis_geom::Extent;
 use serde_json::Value as Json;
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet, TryReserveError};
 
 use crate::convert::{from_line, from_multipolygon, from_point, to_geo, to_multiline, to_multipolygon};
-use crate::geodesic::{VERTEX_BUDGET_ERROR, geodesic_buffer, geodesic_buffer_with_limit};
+use crate::geodesic::{VERTEX_BUDGET_ERROR, geodesic_buffer_with_limit, geodesic_buffers_with_limit};
 use crate::{Inputs, Output, OutputLayer, ParamKind as K, ParamSpec as P, ToolResult, ToolSpec};
 
 const UNITS: &[&str] = &["Kilometers", "Meters", "Miles", "Feet"];
@@ -1157,12 +1157,16 @@ fn buffer_with_vertex_limit(inp: &dyn Inputs, p: &Json, limit: usize) -> Result<
     }
     let mut out = copy_schema(ds, out_name(p, format!("{}_Buffer", ds.name)), GeometryType::Polygon);
     let mut all: Vec<MultiPolygon<f64>> = Vec::new();
-    let mut remaining = limit;
-    for r in rows(inp, p, "input", ds) {
-        let Some(f) = ds.features.get(r) else { continue };
-        let Some(g) = &f.geometry else { continue };
-        let Some(geom) = geodesic_buffer_with_limit(g, metres, remaining)? else { continue };
-        remaining = remaining.saturating_sub(geom.coord_count());
+    let geoms: Vec<(&Feature, &Geometry)> = rows(inp, p, "input", ds)
+        .into_iter()
+        .filter_map(|r| {
+            let f = ds.features.get(r)?;
+            Some((f, f.geometry.as_ref()?))
+        })
+        .collect();
+    let buffers = geodesic_buffers_with_limit(&geoms.iter().map(|(_, g)| *g).collect::<Vec<_>>(), metres, limit)?;
+    for ((f, _), geom) in geoms.iter().zip(buffers) {
+        let Some(geom) = geom else { continue };
         if s(p, "dissolve") == "All" {
             all.extend(to_multipolygon(&geom));
         } else {
@@ -2183,22 +2187,30 @@ fn simplify(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
 /// Select against nearby selectors, indexed in the projection used by the predicate and after
 /// any distance buffer. Inversion and input row order keep the exhaustive selection's semantics.
 fn select_by_location(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
+    select_by_location_with_vertex_limit(inp, p, MAX_BUFFER_VERTICES)
+}
+
+/// Bounds retained distance-buffer outlines across selectors before building the spatial index.
+/// Zero-distance selection uses original geometries and does not consume the buffer budget.
+fn select_by_location_with_vertex_limit(inp: &dyn Inputs, p: &Json, limit: usize) -> Result<ToolResult, String> {
     let ds = input(inp, p, "input")?;
     let sel_ds = input(inp, p, "select")?;
     let dist = to_metres(num(p, "distance").unwrap_or(0.0).max(0.0), s(p, "units"))?;
     if dist > 5_000_000.0 {
         return Err("Distance is too large (limit 5000 km)".into());
     }
-    let selectors: Vec<(geo::Geometry<f64>, Extent)> = rows(inp, p, "select", sel_ds)
-        .iter()
-        .filter_map(|r| sel_ds.features.get(*r)?.geometry.as_ref())
-        .map(|g| {
-            let b = if dist > 0.0 { geodesic_buffer(g, dist) } else { None };
-            let gg = to_geo(b.as_ref().unwrap_or(g));
-            let ext = merc_extent(&gg);
-            (gg, ext)
-        })
-        .collect();
+    let mut remaining = limit;
+    let mut selectors = Vec::new();
+    for r in rows(inp, p, "select", sel_ds) {
+        let Some(g) = sel_ds.features.get(r).and_then(|f| f.geometry.as_ref()) else { continue };
+        let b = if dist > 0.0 { geodesic_buffer_with_limit(g, dist, remaining)? } else { None };
+        if let Some(buffered) = &b {
+            remaining = remaining.saturating_sub(buffered.coord_count());
+        }
+        let gg = to_geo(b.as_ref().unwrap_or(g));
+        let ext = merc_extent(&gg);
+        selectors.push((gg, ext));
+    }
     let index = ExtentIndex::new(selectors.iter().map(|(_, ext)| *ext));
     let invert = s(p, "invert") == "Yes";
     let hits: Vec<usize> = (0..ds.features.len())
@@ -4197,6 +4209,7 @@ fn join_field_tool(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
 
     let (out, report) = crate::attribute_join::join_field(&target_ref, &source_ref, &opts)?;
     messages.push(report.message(&target.name));
+    messages.extend(report.leading_zero_notice());
 
     let output = if out.geometry_type == rustgis_data::GeometryType::None { Output::Table(out) } else { Output::Layer(out) };
 
@@ -4206,6 +4219,7 @@ fn join_field_tool(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::geodesic::geodesic_buffer;
     use rustgis_data::Feature;
     use std::collections::HashMap;
 
@@ -4879,6 +4893,35 @@ mod tests {
             assert!(buffer_with_vertex_limit(&m, &params, 2 * vertices).is_ok());
             assert!(buffer_with_vertex_limit(&m, &params, vertices).unwrap_err().contains("vertex budget"));
         }
+        // Crossing thin rectangles add intersection vertices during dissolve even though no
+        // original vertex lies inside the other rectangle. The inputs fit; the union does not.
+        let rectangle = |x: f64, y: f64| {
+            Geometry::Polygon(vec![vec![vec![
+                Coord::new(-x, -y),
+                Coord::new(x, -y),
+                Coord::new(x, y),
+                Coord::new(-x, y),
+                Coord::new(-x, -y),
+            ]]])
+        };
+        let mut cross = Dataset::new("cross", GeometryType::Polygon, vec![]);
+        for g in [rectangle(0.02, 0.001), rectangle(0.001, 0.02)] {
+            cross.push(Some(g), vec![]);
+        }
+        let outline_vertices = cross
+            .features
+            .iter()
+            .filter_map(|f| f.geometry.as_ref())
+            .filter_map(|g| geodesic_buffer(g, 0.0))
+            .map(|g| g.coord_count())
+            .sum();
+        let cross_inputs = Map(HashMap::from([("cross".into(), cross)]));
+        let mut params = serde_json::json!({"input":"cross", "distance":0, "dissolve":"None"});
+        assert!(buffer_with_vertex_limit(&cross_inputs, &params, outline_vertices).is_ok());
+        params["dissolve"] = serde_json::json!("All");
+        let union = layer(buffer_with_vertex_limit(&cross_inputs, &params, usize::MAX).unwrap());
+        assert!(union.features[0].geometry.as_ref().unwrap().coord_count() > outline_vertices);
+        assert!(buffer_with_vertex_limit(&cross_inputs, &params, outline_vertices).unwrap_err().contains("vertex budget"));
         // All discs overlap: the final union fits, but collecting the discs must still stop.
         m.0.get_mut("p").unwrap().features.clear();
         m.0.get_mut("p").unwrap().push(Some(Geometry::MultiPoint(vec![point; 3])), vec![]);
@@ -6259,6 +6302,35 @@ mod tests {
         let m = Map(HashMap::from([("masks".into(), masks), ("lines".into(), lines)]));
         let out = layer(crate::run("clip", &m, &serde_json::json!({"input":"lines", "clip":"masks"})).unwrap());
         assert_eq!(out.features.iter().filter_map(|f| f.geometry.clone()).collect::<Vec<_>>(), expected);
+    }
+
+    /// Distance selection shares one outline budget, including overlapping multipoint discs.
+    /// Exhaustion must fail before producing a partial selection, even when inverted.
+    #[test]
+    fn location_selection_bounds_accumulated_buffer_outlines() {
+        let point = Coord::new(0.0, 0.0);
+        let vertices = geodesic_buffer(&Geometry::Point(point), 1000.0).unwrap().coord_count();
+        let mut selectors = Dataset::new("selectors", GeometryType::Point, vec![]);
+        for c in [point, Coord::new(0.5, 0.0)] {
+            selectors.push(Some(Geometry::Point(c)), vec![]);
+        }
+        let mut features = Dataset::new("features", GeometryType::Point, vec![]);
+        features.push(Some(Geometry::Point(point)), vec![]);
+        let mut m = Map(HashMap::from([("selectors".into(), selectors), ("features".into(), features)]));
+        for invert in ["No", "Yes"] {
+            let p = serde_json::json!({"input":"features", "select":"selectors", "distance":1, "invert":invert});
+            let result = select_by_location_with_vertex_limit(&m, &p, 2 * vertices).unwrap();
+            let Output::Selection { rows, .. } = result.output else { panic!("expected selection") };
+            assert_eq!(rows, if invert == "No" { vec![0] } else { vec![] });
+            assert!(select_by_location_with_vertex_limit(&m, &p, vertices).unwrap_err().contains("vertex budget"));
+        }
+        // A zero-distance predicate does not allocate buffer outlines.
+        let p = serde_json::json!({"input":"features", "select":"selectors", "distance":0});
+        assert!(select_by_location_with_vertex_limit(&m, &p, 0).is_ok());
+        m.0.get_mut("selectors").unwrap().features.clear();
+        m.0.get_mut("selectors").unwrap().push(Some(Geometry::MultiPoint(vec![point; 3])), vec![]);
+        let p = serde_json::json!({"input":"features", "select":"selectors", "distance":1});
+        assert!(select_by_location_with_vertex_limit(&m, &p, 2 * vertices).unwrap_err().contains("vertex budget"));
     }
 
     #[test]
@@ -8699,19 +8771,21 @@ mod tests {
         .unwrap_err();
         assert!(err_dup.contains("duplicate key"));
 
-        // 4. Incompatible key type error
-        let mut int_source = Dataset::new("int_source", GeometryType::None, vec![Field::new("num_key", FieldType::Integer)]);
-        int_source.push(None, vec![Value::Int(123)]);
-        let m4 =
-            Map(HashMap::from([("inventory".to_string(), m2.0.get("inventory").unwrap().clone()), ("int_source".to_string(), int_source)]));
+        // 4. Incompatible key type error (a text key matches an integer key, not a boolean one)
+        let mut bool_source = Dataset::new("bool_source", GeometryType::None, vec![Field::new("flag_key", FieldType::Boolean)]);
+        bool_source.push(None, vec![Value::Bool(true)]);
+        let m4 = Map(HashMap::from([
+            ("inventory".to_string(), m2.0.get("inventory").unwrap().clone()),
+            ("bool_source".to_string(), bool_source),
+        ]));
         let err_type = crate::run(
             "joinField",
             &m4,
             &serde_json::json!({
                 "target": "inventory",
                 "targetField": "sku",
-                "join": "int_source",
-                "joinField": "num_key"
+                "join": "bool_source",
+                "joinField": "flag_key"
             }),
         )
         .unwrap_err();

@@ -31,6 +31,7 @@ A catalogue's (CSW 2.0.2) address: search its records by words and, if you like,
 A ChatGPT plan or app usage limit was reached. Review Weekly usage before trying again.	ChatGPT প্ল্যান বা অ্যাপ ব্যবহারের সীমা পূর্ণ হয়েছে। আবার চেষ্টা করার আগে Weekly usage দেখুন।
 A ChatGPT sign-in can only be used with the OpenAI API.	ChatGPT সাইন-ইন শুধু OpenAI API-এর সঙ্গে ব্যবহার করা যায়।
 A colour, hatch lines, markers on a grid, a gradient, or a shapeburst (shaded from the edge inwards)	একটি রং, হ্যাচ রেখা, গ্রিডে মার্কার, একটি গ্রেডিয়েন্ট বা একটি শেপবার্স্ট (ধার থেকে ভেতরে ছায়াযুক্ত)
+A command id is required.	একটি কমান্ড আইডি প্রয়োজন।
 A connection has this name: give this one another name to remember its keys.	এই নামে একটি সংযোগ আছে: এর key মনে রাখতে এটিকে অন্য নাম দিন।
 A copy of {name} with unsaved changes was kept a minute ago.	অসংরক্ষিত পরিবর্তনসহ {name}-এর একটি কপি এক মিনিট আগে রাখা হয়েছিল।
 A copy of {name} with unsaved changes was kept less than a minute ago.	অসংরক্ষিত পরিবর্তনসহ {name}-এর একটি কপি এক মিনিটেরও কম আগে রাখা হয়েছিল।
@@ -434,6 +435,7 @@ Bike	সাইকেল
 Bilinear	দ্বিরৈখিক
 Bind To Time Slider	সময় স্লাইডারের সঙ্গে যুক্ত করুন
 Bind to Time Slider	সময় স্লাইডারের সঙ্গে যুক্ত করুন
+Bindings: {bindings} · Conflicts: {conflicts} · Unknown commands: {unknown}	বাইন্ডিং: {bindings} · দ্বন্দ্ব: {conflicts} · অজানা কমান্ড: {unknown}
 Blank	ফাঁকা
 Blank for Amazon S3	Amazon S3-এর জন্য ফাঁকা
 Blank Letter page	ফাঁকা Letter পৃষ্ঠা
@@ -582,6 +584,7 @@ Choose a layer…	একটি layer বেছে নিন…
 Choose a model.	একটি model বেছে নিন।
 Choose a resampling type for the raster layer.	raster layer-এর জন্য resampling-এর ধরন বেছে নিন।
 Choose a saved S3 connection before opening this source.	এই source খোলার আগে একটি সংরক্ষিত S3 সংযোগ বেছে নিন।
+Choose a shortcut file in the browser.	ব্রাউজারে একটি শর্টকাট ফাইল বেছে নিন।
 Choose a start	শুরুর স্থান বেছে নিন
 Choose a stop	শেষের স্থান বেছে নিন
 Choose a table to load for editing	সম্পাদনার জন্য লোড করতে একটি টেবিল বেছে নিন
@@ -1211,6 +1214,7 @@ Export Features	ফিচার রপ্তানি
 Export Features (tool)	ফিচার রপ্তানি (টুল)
 Export Features needs a vector layer (Data › Export Raster writes a raster)	Feature export-এর জন্য vector layer দরকার (Data › Export Raster raster লেখে)
 Export Features…	ফিচার রপ্তানি…
+Export Keyboard Shortcuts…	কীবোর্ড শর্টকাট রপ্তানি…
 Export Layout	লেআউট রপ্তানি
 Export Map	Map export
 Export Map failed unexpectedly	Map export অপ্রত্যাশিতভাবে ব্যর্থ হয়েছে
@@ -1567,6 +1571,8 @@ Import Bookmarks	বুকমার্ক ইমপোর্ট
 Import Bookmarks…	বুকমার্ক ইমপোর্ট…
 Import Deep Learning Package	Deep Learning package ইমপোর্ট
 Import GeoLibre Project	GeoLibre প্রজেক্ট ইমপোর্ট
+Import Keyboard Shortcuts	কীবোর্ড শর্টকাট ইমপোর্ট
+Import Keyboard Shortcuts…	কীবোর্ড শর্টকাট ইমপোর্ট…
 Import Layout	Layout ইমপোর্ট
 Import Layout…	Layout ইমপোর্ট…
 Import Model	Model ইমপোর্ট
@@ -1585,6 +1591,7 @@ Import Styles From…	এখান থেকে style ইমপোর্ট ক�
 Import Task	Task ইমপোর্ট
 Import Task…	Task ইমপোর্ট…
 Import Thumbnail	Thumbnail ইমপোর্ট
+Imported bindings replace conflicting keys. Unknown commands are kept for later use.	ইমপোর্ট করা বাইন্ডিং দ্বন্দ্বপূর্ণ কী প্রতিস্থাপন করে। অজানা কমান্ড পরবর্তী ব্যবহারের জন্য রাখা হয়।
 Imported Zarr slice exceeds the 128 MiB download limit	ইমপোর্ট করা Zarr slice 128 MiB ডাউনলোড সীমা ছাড়িয়ে গেছে
 Import…	ইমপোর্ট…
 IN	IN
@@ -1649,8 +1656,11 @@ Intersect	ইন্টারসেক্ট
 Interval	ব্যবধান
 Into the group just above it, as its last item	ঠিক ওপরের group-এর ভেতরে, শেষ item হিসেবে
 invalid child id	child process-এর ID অবৈধ
+Invalid or reserved shortcut key.	শর্টকাট কী অবৈধ বা সংরক্ষিত।
 Invalid selection outline · draw a smaller area	নির্বাচনের সীমানা অবৈধ · আরও ছোট এলাকা আঁকুন
 Invalid selection outline · draw a smaller radius	নির্বাচনের সীমানা অবৈধ · আরও ছোট ব্যাসার্ধ আঁকুন
+Invalid shortcut binding.	শর্টকাট বাইন্ডিং অবৈধ।
+Invalid shortcut key.	শর্টকাট কী অবৈধ।
 Invalid: {error}	অবৈধ: {error}
 Invert	উল্টান
 Invert color scheme	রঙের scheme উল্টান
@@ -1715,6 +1725,7 @@ Kernel Type	কার্নেলের ধরন
 Key	কী
 Keyboard\nShortcuts	কীবোর্ড\nশর্টকাট
 Keyboard Shortcuts	কীবোর্ড শর্টকাট
+Keyboard shortcuts	কীবোর্ড শর্টকাট
 Keyboard shortcuts.	কীবোর্ড শর্টকাট।
 Keys are available for this session but were not remembered on this computer.	Key এই সেশনে পাওয়া যাচ্ছে, কিন্তু এই কম্পিউটারে মনে রাখা হয়নি।
 Keys are kept for this session only: there is no credential store to remember them in here.	Key শুধু এই সেশনের জন্য রাখা হয়: এখানে মনে রাখার মতো কোনো credential store নেই।
@@ -2564,6 +2575,8 @@ Projects and JSON data (RustGIS, QGIS, GeoLibre)	প্রজেক্ট ও JS
 Properties	বৈশিষ্ট্য
 Property	বৈশিষ্ট্য
 Proportional Symbols	আনুপাতিক প্রতীক
+Provide keys to reset, or no parameters to reset all.	রিসেট করার কী দিন, অথবা সব রিসেট করতে কোনো প্যারামিটার দেবেন না।
+Provide shortcut file text, data or a path.	শর্টকাট ফাইলের টেক্সট, ডেটা বা পাথ দিন।
 Provider	প্রদানকারী
 Provinces:	প্রদেশ:
 Proximity	নিকটতা
@@ -2747,6 +2760,7 @@ Reset Default	ডিফল্টে রিসেট করুন
 Reset Effects	Effect রিসেট করুন
 Reset North	উত্তর দিক রিসেট করুন
 Reset north	উত্তর দিক রিসেট করুন
+Reset unreadable saved shortcuts before importing.	ইমপোর্টের আগে অপঠনযোগ্য সংরক্ষিত শর্টকাট রিসেট করুন।
 Reset {key}	{key} রিসেট করুন
 Resolution (0–30)	রেজোলিউশন (0–30)
 Response	উত্তর
@@ -3068,6 +3082,7 @@ Set the pixels inside a polygon	একটি polygon-এর ভেতরের p
 Set the pixels inside a polygon.	একটি polygon-এর ভেতরের pixel নির্ধারণ করুন।
 Settings	সেটিংস
 Settings › Customize	সেটিংস › কাস্টমাইজ করুন
+Settings › Customize › Keyboard Shortcuts	সেটিংস › কাস্টমাইজ করুন › কীবোর্ড শর্টকাট
 Several places	একাধিক স্থান
 Shade from the outer edge alone	শুধু বাইরের ধার থেকে ছায়া দিন
 Shade to the point deepest inside	ভেতরের গভীরতম বিন্দু পর্যন্ত ছায়া দিন
@@ -3103,6 +3118,9 @@ Shifts the mark right of the point (left when negative)	মার্ককে �
 Shifts the stroke sideways: positive to the right of the line's direction, negative to the left	stroke পাশের দিকে সরায়: ধনাত্মক মান line-এর দিকের ডানে, ঋণাত্মক মান বামে
 Short labels	ছোট লেবেল
 Shortcut already assigned	শর্টকাট ইতিমধ্যে নির্ধারিত
+Shortcut file contains invalid or reserved bindings.	শর্টকাট ফাইলে অবৈধ বা সংরক্ষিত বাইন্ডিং আছে।
+Shortcut file exceeds the size limit.	শর্টকাট ফাইল আকারের সীমা ছাড়িয়ে গেছে।
+Shortcut keys are required.	শর্টকাট কী প্রয়োজন।
 Shortcuts	শর্টকাট
 Shortest route over a line network	line network-এ সবচেয়ে ছোট route
 Show	দেখান
@@ -3633,6 +3651,7 @@ Toggle Imperial Measurements	Imperial measurement চালু/বন্ধ ক�
 Token Required	Token আবশ্যক
 Tolerance (km)	সহনসীমা (কিমি)
 Tolls	টোল
+Too many shortcut changes to save.	সংরক্ষণের জন্য শর্টকাটের পরিবর্তন অত্যধিক।
 Too many shortcut changes to save. Changes apply only to this session.	সংরক্ষণের জন্য শর্টকাট পরিবর্তন অনেক বেশি। পরিবর্তন শুধু এই সেশনে প্রযোজ্য।
 Tool Gallery	টুল গ্যালারি
 Toolboxes	Toolbox-সমূহ
@@ -3718,11 +3737,14 @@ United States	যুক্তরাষ্ট্র
 Units	একক
 Units per step	প্রতি ধাপে একক
 unknown (an older project)	অজানা (পুরোনো প্রজেক্ট)
+Unknown shortcut binding field.	অজানা শর্টকাট বাইন্ডিং ক্ষেত্র।
+Unknown shortcut command.	অজানা শর্টকাট কমান্ড।
 UNKNOWN TOOL	অজানা টুল
 Unload the GeoLibre tools and stop loading them when RustGIS starts.	GeoLibre tool memory থেকে সরিয়ে দিন এবং RustGIS চালুর সময় সেগুলো লোড হওয়া বন্ধ করুন।
 Unsaved changes	অসংরক্ষিত পরিবর্তন
 Unsupervised classes (k-means)	অসুপারভাইজড class (k-means)
 Unsupervised classes (k-means).	অসুপারভাইজড class (k-means)।
+Unsupported shortcut file version.	অসমর্থিত শর্টকাট ফাইল সংস্করণ।
 Untitled	শিরোনামহীন
 Untitled model	শিরোনামহীন model
 Up	ওপরে
@@ -3745,6 +3767,7 @@ US State GIS	যুক্তরাষ্ট্রের রাজ্য GIS
 US State GIS…	যুক্তরাষ্ট্রের রাজ্য GIS…
 USA Contiguous Albers Equal Area	সংলগ্ন যুক্তরাষ্ট্রের Albers Equal Area
 Use	ব্যবহার করুন
+Use a browser download to export shortcuts.	শর্টকাট রপ্তানি করতে ব্রাউজার ডাউনলোড ব্যবহার করুন।
 Use a Single Stroke	একটি stroke ব্যবহার করুন
 Use another account	অন্য account ব্যবহার করুন
 Use ArcGIS Token	ArcGIS token ব্যবহার করুন

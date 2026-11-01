@@ -63,6 +63,8 @@ impl FgbSource {
         Ok(src)
     }
 
+    /// Opens a FlatGeobuf from its header: schema, extent, coordinate system, and notes (including
+    /// Z or M values, which reading drops).
     fn new<R: Read + Seek>(r: R, input: Input, name: &str) -> Result<Self> {
         let reader = open_reader(r)?;
         let h = reader.header();
@@ -99,7 +101,7 @@ impl FgbSource {
             })
             .unwrap_or(Extent::EMPTY);
         let count = h.features_count();
-        let info = SourceInfo {
+        let mut info = SourceInfo {
             name: h.name().filter(|n| !n.trim().is_empty()).unwrap_or(name).to_string(),
             format: "FlatGeobuf",
             geometry_type,
@@ -110,7 +112,11 @@ impl FgbSource {
             // The crate's index search assumes the default node size; other files are scanned.
             indexed: h.index_node_size() == flatgeobuf::packed_r_tree::PackedRTree::DEFAULT_NODE_SIZE && count > 0,
             notes,
+            zm_dropped: false,
         };
+        if h.has_z() || h.has_m() {
+            info.drop_zm((count > 0).then_some(count));
+        }
         let mut src = FgbSource { info, input, reproject };
         if src.info.geometry_type == GeometryType::None {
             src.info.geometry_type = src.peek_kind();
@@ -629,9 +635,39 @@ pub fn write(ds: &crate::Dataset) -> Result<Vec<u8>> {
 /// Writes a dataset whose geometry is in `crs`'s coordinates as FlatGeobuf, with a spatial index,
 /// the file saying `crs`.
 pub fn write_in(ds: &crate::Dataset, crs: Crs) -> Result<Vec<u8>> {
+    let mut out = Vec::new();
+    write_features(&ds.name, ds.geometry_type, &ds.fields, crs, &mut out, &mut |add| add(&ds.features))?;
+    Ok(out)
+}
+
+/// Refuses to write FlatGeobuf in the browser, before the writer is made: its temporary file
+/// would reach `std::env::temp_dir`, which aborts the web app. (A flag rather than `#[cfg]`, so
+/// both cases are tested natively.)
+fn writable(browser: bool) -> Result<()> {
+    if browser {
+        return Err(DataError::Unsupported("FlatGeobuf in the browser".into()));
+    }
+    Ok(())
+}
+
+/// Writes FlatGeobuf with a spatial index to `out`, in `crs`'s coordinates: the features `feed`
+/// hands to the function it is given, a run at a time, their attributes named by `fields`.
+/// Returns how many were left out for having no geometry. The writer keeps each feature in a
+/// temporary file and only its index entry in memory, so a whole layer needn't be held. The
+/// writer needs that file whether or not it writes an index, and the web app has no files, so
+/// there a FlatGeobuf is refused rather than written.
+pub(crate) fn write_features(
+    name: &str,
+    geometry_type: GeometryType,
+    fields: &[Field],
+    crs: Crs,
+    out: &mut dyn std::io::Write,
+    feed: &mut dyn FnMut(&mut dyn FnMut(&[Feature]) -> Result<()>) -> Result<()>,
+) -> Result<usize> {
     use flatgeobuf::geozero::wkb::Wkb;
     use flatgeobuf::{FgbCrs, FgbWriter, FgbWriterOptions, GeometryType as G};
-    let ty = match ds.geometry_type {
+    writable(cfg!(target_arch = "wasm32"))?;
+    let ty = match geometry_type {
         GeometryType::Point => G::Unknown,
         GeometryType::Polyline => G::MultiLineString,
         GeometryType::Polygon => G::MultiPolygon,
@@ -643,8 +679,8 @@ pub fn write_in(ds: &crate::Dataset, crs: Crs) -> Result<Vec<u8>> {
         crs: FgbCrs { org: (code > 0).then_some("EPSG"), code, wkt: wkt.as_deref(), ..Default::default() },
         ..Default::default()
     };
-    let mut w = FgbWriter::create_with_options(&ds.name, ty, options).map_err(err)?;
-    for f in &ds.fields {
+    let mut w = FgbWriter::create_with_options(name, ty, options).map_err(err)?;
+    for f in fields {
         let t = match f.ty {
             FieldType::Integer => ColumnType::Long,
             FieldType::Double => ColumnType::Double,
@@ -653,30 +689,49 @@ pub fn write_in(ds: &crate::Dataset, crs: Crs) -> Result<Vec<u8>> {
         };
         w.add_column(&f.name, t, |_, c| c.nullable = true);
     }
-    for feat in &ds.features {
-        let Some(g) = &feat.geometry else { continue };
-        let mut failed = None;
-        w.add_feature_geom(Wkb(wkb::encode(g)), |out| {
-            use flatgeobuf::geozero::PropertyProcessor;
-            for (i, (f, v)) in ds.fields.iter().zip(&feat.attrs).enumerate() {
-                let r = match v {
-                    Value::Null => continue,
-                    Value::Int(x) => out.property(i, &f.name, &ColumnValue::Long(*x)),
-                    Value::Float(x) => out.property(i, &f.name, &ColumnValue::Double(*x)),
-                    Value::Bool(x) => out.property(i, &f.name, &ColumnValue::Bool(*x)),
-                    Value::Text(x) => out.property(i, &f.name, &ColumnValue::String(x)),
-                };
-                if let Err(e) = r {
-                    failed = Some(e.to_string());
+    let mut left_out = 0;
+    feed(&mut |features| {
+        for feat in features {
+            let Some(g) = &feat.geometry else {
+                left_out += 1;
+                continue;
+            };
+            let mut failed = None;
+            w.add_feature_geom(Wkb(wkb::encode(g)), |out| {
+                use flatgeobuf::geozero::PropertyProcessor;
+                for (i, (f, v)) in fields.iter().zip(&feat.attrs).enumerate() {
+                    let r = match v {
+                        Value::Null => continue,
+                        Value::Int(x) => out.property(i, &f.name, &ColumnValue::Long(*x)),
+                        Value::Float(x) => out.property(i, &f.name, &ColumnValue::Double(*x)),
+                        Value::Bool(x) => out.property(i, &f.name, &ColumnValue::Bool(*x)),
+                        Value::Text(x) => out.property(i, &f.name, &ColumnValue::String(x)),
+                    };
+                    if let Err(e) = r {
+                        failed = Some(e.to_string());
+                    }
                 }
+            })
+            .map_err(|e| DataError::Format(format!("FlatGeobuf: {e}")))?;
+            if let Some(e) = failed {
+                return Err(DataError::Format(format!("FlatGeobuf: {e}")));
             }
-        })
-        .map_err(|e| DataError::Format(format!("FlatGeobuf: {e}")))?;
-        if let Some(e) = failed {
-            return Err(DataError::Format(format!("FlatGeobuf: {e}")));
         }
+        Ok(())
+    })?;
+    w.write(out).map_err(err)?;
+    Ok(left_out)
+}
+
+#[cfg(test)]
+mod write_tests {
+    use super::*;
+
+    /// The browser refuses FlatGeobuf before the writer, whose temporary file aborted the web
+    /// app, is made; the desktop writes it.
+    #[test]
+    fn flatgeobuf_is_refused_in_the_browser_and_written_on_the_desktop() {
+        assert!(matches!(writable(true), Err(DataError::Unsupported(m)) if m.contains("browser")));
+        assert!(writable(false).is_ok());
     }
-    let mut out = Vec::new();
-    w.write(&mut out).map_err(err)?;
-    Ok(out)
 }

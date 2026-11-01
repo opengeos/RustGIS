@@ -10,6 +10,7 @@
 //! The file is hostile: no DTD is read, the node count is capped, and features whose geometry
 //! can't be read are counted.
 
+use std::cell::Cell;
 use std::collections::BTreeMap;
 
 use roxmltree::{Node, ParsingOptions};
@@ -74,9 +75,12 @@ const GEOMETRIES: &[&str] = &[
 ];
 
 /// The coordinates under a node: `gml:pos`/`gml:posList` (with `srsDimension`),
-/// `gml:coordinates` (`cs`, `ts`) or `gml:coord` (`X`, `Y`).
-fn coords(n: &Node) -> Option<Vec<Coord>> {
+/// `gml:coordinates` (`cs`, `ts`) or `gml:coord` (`X`, `Y`). `zm` is set when a third or fourth
+/// value (a height or measure) is dropped.
+fn coords(n: &Node, zm: &Cell<bool>) -> Option<Vec<Coord>> {
     let mut out = Vec::new();
+    // Only coordinates that parse count.
+    let mut extra = false;
     for c in n.descendants().filter(|d| d.is_element() && is_gml(d)) {
         match local(&c) {
             "pos" | "posList" | "lowerCorner" | "upperCorner" => {
@@ -92,6 +96,9 @@ fn coords(n: &Node) -> Option<Vec<Coord>> {
                 if !v.len().is_multiple_of(dim) {
                     return None;
                 }
+                if dim > 2 && !v.is_empty() {
+                    extra = true;
+                }
                 out.extend(
                     v.chunks(dim).map(|p| Coord::new(p.first().copied().unwrap_or(f64::NAN), p.get(1).copied().unwrap_or(f64::NAN))),
                 );
@@ -104,18 +111,28 @@ fn coords(n: &Node) -> Option<Vec<Coord>> {
                     text.split(|ch: char| if ts == " " { ch.is_whitespace() } else { ts.contains(ch) }).filter(|t| !t.trim().is_empty())
                 {
                     let v: Vec<f64> = tuple.split(cs).map(|t| t.trim().parse().ok()).collect::<Option<_>>()?;
+                    if v.len() > 2 {
+                        extra = true;
+                    }
                     out.push(Coord::new(*v.first()?, *v.get(1)?));
                 }
             }
             "coord" => {
                 let get =
                     |k: &str| c.children().find(|x| x.is_element() && local(x) == k).and_then(|x| text_of(&x).trim().parse::<f64>().ok());
+                if get("Z").is_some() {
+                    extra = true;
+                }
                 out.push(Coord::new(get("X")?, get("Y")?));
             }
             _ => {}
         }
     }
-    (out.iter().all(|c| c.is_finite())).then_some(out)
+    let ok = out.iter().all(|c| c.is_finite());
+    if ok && extra {
+        zm.set(true);
+    }
+    ok.then_some(out)
 }
 
 fn ring(mut r: Vec<Coord>) -> Option<Vec<Coord>> {
@@ -126,9 +143,9 @@ fn ring(mut r: Vec<Coord>) -> Option<Vec<Coord>> {
 }
 
 /// The rings of a polygon or surface patch: exterior (outerBoundaryIs) first.
-fn polygon(p: &Node) -> Option<Vec<Vec<Coord>>> {
+fn polygon(p: &Node, zm: &Cell<bool>) -> Option<Vec<Vec<Coord>>> {
     let boundary = |names: &[&str]| -> Vec<Vec<Coord>> {
-        p.descendants().filter(|d| d.is_element() && is_gml(d) && names.contains(&local(d))).filter_map(|b| ring(coords(&b)?)).collect()
+        p.descendants().filter(|d| d.is_element() && is_gml(d) && names.contains(&local(d))).filter_map(|b| ring(coords(&b, zm)?)).collect()
     };
     let mut rings = boundary(&["exterior", "outerBoundaryIs"]);
     if rings.is_empty() {
@@ -139,31 +156,32 @@ fn polygon(p: &Node) -> Option<Vec<Vec<Coord>>> {
     Some(rings)
 }
 
-/// A GML geometry element as a geometry.
-fn geometry(g: &Node) -> Option<Geometry> {
+/// A GML geometry element as a geometry; `zm` is set when Z or M values are dropped.
+fn geometry(g: &Node, zm: &Cell<bool>) -> Option<Geometry> {
     let kids =
         |names: &[&str]| -> Vec<Node> { g.descendants().filter(|d| d.is_element() && is_gml(d) && names.contains(&local(d))).collect() };
     match local(g) {
-        "Point" => coords(g)?.first().map(|c| Geometry::Point(*c)),
+        "Point" => coords(g, zm)?.first().map(|c| Geometry::Point(*c)),
         "MultiPoint" => {
-            let pts: Vec<Coord> = kids(&["Point"]).iter().filter_map(|p| coords(p)?.first().copied()).collect();
+            let pts: Vec<Coord> = kids(&["Point"]).iter().filter_map(|p| coords(p, zm)?.first().copied()).collect();
             (!pts.is_empty()).then_some(Geometry::MultiPoint(pts))
         }
         "LineString" | "Curve" | "LinearRing" => {
-            let c = coords(g)?;
+            let c = coords(g, zm)?;
             (c.len() >= 2).then_some(Geometry::Line(vec![c]))
         }
         "MultiLineString" | "MultiCurve" => {
-            let parts: Vec<Vec<Coord>> = kids(&["LineString", "Curve"]).iter().filter_map(|l| coords(l)).filter(|c| c.len() >= 2).collect();
+            let parts: Vec<Vec<Coord>> =
+                kids(&["LineString", "Curve"]).iter().filter_map(|l| coords(l, zm)).filter(|c| c.len() >= 2).collect();
             (!parts.is_empty()).then_some(Geometry::Line(parts))
         }
-        "Polygon" => Some(Geometry::Polygon(vec![polygon(g)?])),
+        "Polygon" => Some(Geometry::Polygon(vec![polygon(g, zm)?])),
         "Surface" | "MultiPolygon" | "MultiSurface" => {
-            let polys: Vec<Vec<Vec<Coord>>> = kids(&["Polygon", "PolygonPatch"]).iter().filter_map(polygon).collect();
+            let polys: Vec<Vec<Vec<Coord>>> = kids(&["Polygon", "PolygonPatch"]).iter().filter_map(|p| polygon(p, zm)).collect();
             (!polys.is_empty()).then_some(Geometry::Polygon(polys))
         }
         "Envelope" | "Box" => {
-            let c = coords(g)?;
+            let c = coords(g, zm)?;
             let (a, b) = (c.first()?, c.get(1)?);
             let (w, e, s, n) = (a.x.min(b.x), a.x.max(b.x), a.y.min(b.y), a.y.max(b.y));
             (w < e && s < n).then(|| {
@@ -185,6 +203,8 @@ fn geometry(g: &Node) -> Option<Geometry> {
 struct Kind {
     columns: Vec<String>,
     rows: Vec<(Option<Geometry>, BTreeMap<String, String>)>,
+    /// Features whose Z or M values were dropped.
+    zm: usize,
 }
 
 /// Reads a GML file into a layer per feature type (those with features).
@@ -224,6 +244,8 @@ pub fn read(file_name: &str, bytes: &[u8]) -> Result<Vec<(Dataset, ReadReport)>>
         let mut attrs = BTreeMap::new();
         let mut geom = None;
         let mut bad = false;
+        // Whether the geometry kept had Z or M values.
+        let mut zm = false;
         for p in f.children().filter(|c| c.is_element()) {
             // A property holding a geometry, or a simple value.
             // A feature's bounding box (gml:boundedBy) is neither its shape nor an attribute.
@@ -243,8 +265,12 @@ pub fn read(file_name: &str, bytes: &[u8]) -> Result<Vec<(Dataset, ReadReport)>>
                         None => unknown_srs = Some(s.to_string()),
                     }
                 }
-                match geometry(&g) {
-                    Some(gm) => geom = Some(gm),
+                let dims = Cell::new(false);
+                match geometry(&g, &dims) {
+                    Some(gm) => {
+                        zm = dims.get();
+                        geom = Some(gm);
+                    }
                     None => bad = true,
                 }
             } else if p.children().any(|c| c.is_element() && is_gml(&c)) {
@@ -269,6 +295,7 @@ pub fn read(file_name: &str, bytes: &[u8]) -> Result<Vec<(Dataset, ReadReport)>>
         }
         // A geometry that couldn't be read, unless another property gave the feature its shape.
         skipped += usize::from(bad && geom.is_none());
+        kind.zm += usize::from(zm && geom.is_some());
         kind.rows.push((geom, attrs));
     }
     let mut report = ReadReport { skipped, ..ReadReport::default() };
@@ -296,6 +323,7 @@ pub fn read(file_name: &str, bytes: &[u8]) -> Result<Vec<(Dataset, ReadReport)>>
             .collect();
         let title = if single { stem.clone() } else { format!("{stem} {name}") };
         let mut ds = Dataset::new(title, GeometryType::None, fields);
+        let zm = kind.zm;
         let mut outside = false;
         for (g, attrs) in kind.rows {
             let g = g.map(|g| match &transform {
@@ -320,6 +348,10 @@ pub fn read(file_name: &str, bytes: &[u8]) -> Result<Vec<(Dataset, ReadReport)>>
         let mut rep = if out.is_empty() { report.clone() } else { ReadReport::default() };
         if file_srs.is_none() && outside {
             rep.messages.push("the GML doesn't say its coordinate system (srsName) and its coordinates aren't longitude/latitude".into());
+        }
+        if zm > 0 {
+            ds.zm_dropped = true;
+            rep.messages.push(format!("{}: {}", ds.name, crate::zm_note(Some(zm as u64))));
         }
         out.push((ds, rep));
     }
@@ -394,6 +426,8 @@ mod tests {
         let (ds, rep) = &layers[0];
         assert_eq!((ds.features.len(), rep.skipped), (1, 0));
         assert_eq!(ds.features[0].geometry, Some(Geometry::Point(Coord::new(10.0, 48.0))));
+        // Its height is dropped, and said.
+        assert!(ds.zm_dropped && rep.messages.iter().any(|m| m.contains("Z or M values")), "{:?}", rep.messages);
     }
 
     #[test]

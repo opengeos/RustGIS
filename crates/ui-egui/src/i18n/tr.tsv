@@ -31,6 +31,7 @@ A catalogue's (CSW 2.0.2) address: search its records by words and, if you like,
 A ChatGPT plan or app usage limit was reached. Review Weekly usage before trying again.	ChatGPT planı veya uygulama kullanım sınırına ulaşıldı. Yeniden denemeden önce haftalık kullanımı inceleyin.
 A ChatGPT sign-in can only be used with the OpenAI API.	ChatGPT oturumu yalnızca OpenAI API ile kullanılabilir.
 A colour, hatch lines, markers on a grid, a gradient, or a shapeburst (shaded from the edge inwards)	Bir renk, tarama çizgileri, ızgara üzerinde işaretçiler, bir gradyan veya kenardan gölgeleme (kenardan içe doğru gölgeli)
+A command id is required.	Bir komut kimliği gerekli.
 A connection has this name: give this one another name to remember its keys.	Bu adda bir bağlantı var: anahtarlarını hatırlamak için buna başka bir ad verin.
 A copy of {name} with unsaved changes was kept a minute ago.	{name} için kaydedilmemiş değişiklikleri içeren bir kopya bir dakika önce saklandı.
 A copy of {name} with unsaved changes was kept less than a minute ago.	{name} için kaydedilmemiş değişiklikleri içeren bir kopya bir dakikadan kısa süre önce saklandı.
@@ -434,6 +435,7 @@ Bike	Bisiklet
 Bilinear	Çift Doğrusal
 Bind To Time Slider	Zaman Kaydırıcısına Bağla
 Bind to Time Slider	Zaman kaydırıcısına bağla
+Bindings: {bindings} · Conflicts: {conflicts} · Unknown commands: {unknown}	Atamalar: {bindings} · Çakışmalar: {conflicts} · Bilinmeyen komutlar: {unknown}
 Blank	Boş
 Blank for Amazon S3	Amazon S3 için boş bırakın
 Blank Letter page	Boş Letter sayfası
@@ -582,6 +584,7 @@ Choose a layer…	Bir katman seçin…
 Choose a model.	Bir model seçin.
 Choose a resampling type for the raster layer.	Raster katmanı için bir yeniden örnekleme türü seçin.
 Choose a saved S3 connection before opening this source.	Bu kaynağı açmadan önce kayıtlı bir S3 bağlantısı seçin.
+Choose a shortcut file in the browser.	Tarayıcıda bir kısayol dosyası seçin.
 Choose a start	Bir başlangıç seçin
 Choose a stop	Bir durak seçin
 Choose a table to load for editing	Düzenlemek üzere yüklenecek bir tablo seçin
@@ -1211,6 +1214,7 @@ Export Features	Detayları Dışa Aktar
 Export Features (tool)	Detayları Dışa Aktar (araç)
 Export Features needs a vector layer (Data › Export Raster writes a raster)	Detayları Dışa Aktar bir vektör katmanı gerektirir (Veri › Rasteri Dışa Aktar raster yazar)
 Export Features…	Detayları Dışa Aktar…
+Export Keyboard Shortcuts…	Klavye Kısayollarını Dışa Aktar…
 Export Layout	Sayfa Düzenini Dışa Aktar
 Export Map	Haritayı Dışa Aktar
 Export Map failed unexpectedly	Haritayı Dışa Aktarma beklenmedik şekilde başarısız oldu
@@ -1567,6 +1571,8 @@ Import Bookmarks	Yer İmlerini İçe Aktar
 Import Bookmarks…	Yer İmlerini İçe Aktar…
 Import Deep Learning Package	Derin Öğrenme Paketini İçe Aktar
 Import GeoLibre Project	GeoLibre Projesini İçe Aktar
+Import Keyboard Shortcuts	Klavye Kısayollarını İçe Aktar
+Import Keyboard Shortcuts…	Klavye Kısayollarını İçe Aktar…
 Import Layout	Sayfa Düzenini İçe Aktar
 Import Layout…	Sayfa Düzenini İçe Aktar…
 Import Model	Modeli İçe Aktar
@@ -1585,6 +1591,7 @@ Import Styles From…	Stilleri Şuradan İçe Aktar…
 Import Task	Görevi İçe Aktar
 Import Task…	Görevi İçe Aktar…
 Import Thumbnail	Küçük Resmi İçe Aktar
+Imported bindings replace conflicting keys. Unknown commands are kept for later use.	İçe aktarılan atamalar çakışan tuşların yerini alır. Bilinmeyen komutlar sonraki kullanım için saklanır.
 Imported Zarr slice exceeds the 128 MiB download limit	İçe aktarılan Zarr dilimi 128 MiB indirme sınırını aşıyor
 Import…	İçe Aktar…
 IN	IN
@@ -1649,8 +1656,11 @@ Intersect	Kesişim
 Interval	Aralık
 Into the group just above it, as its last item	Hemen üstündeki gruba, son öğesi olarak
 invalid child id	geçersiz alt süreç kimliği
+Invalid or reserved shortcut key.	Geçersiz veya ayrılmış kısayol tuşu.
 Invalid selection outline · draw a smaller area	Geçersiz seçim sınırı · daha küçük bir alan çizin
 Invalid selection outline · draw a smaller radius	Geçersiz seçim sınırı · daha küçük bir yarıçap çizin
+Invalid shortcut binding.	Geçersiz kısayol ataması.
+Invalid shortcut key.	Geçersiz kısayol tuşu.
 Invalid: {error}	Geçersiz: {error}
 Invert	Ters Çevir
 Invert color scheme	Renk şemasını ters çevir
@@ -1715,6 +1725,7 @@ Kernel Type	Çekirdek Türü
 Key	Key
 Keyboard\nShortcuts	Klavye\nKısayolları
 Keyboard Shortcuts	Klavye Kısayolları
+Keyboard shortcuts	Klavye kısayolları
 Keyboard shortcuts.	Klavye kısayolları.
 Keys are available for this session but were not remembered on this computer.	Anahtarlar bu oturum için kullanılabilir ancak bu bilgisayarda hatırlanmadı.
 Keys are kept for this session only: there is no credential store to remember them in here.	Anahtarlar yalnızca bu oturum için saklanır: burada onları hatırlayacak bir kimlik bilgisi deposu yok.
@@ -2564,6 +2575,8 @@ Projects and JSON data (RustGIS, QGIS, GeoLibre)	Projeler ve JSON verileri (Rust
 Properties	Özellikler
 Property	Özellik
 Proportional Symbols	Orantılı Semboller
+Provide keys to reset, or no parameters to reset all.	Sıfırlanacak tuşları belirtin veya tümünü sıfırlamak için parametre vermeyin.
+Provide shortcut file text, data or a path.	Kısayol dosyasının metnini, verisini veya yolunu belirtin.
 Provider	Sağlayıcı
 Provinces:	İller:
 Proximity	Yakınlık
@@ -2747,6 +2760,7 @@ Reset Default	Varsayılanı Sıfırla
 Reset Effects	Efektleri Sıfırla
 Reset North	Kuzeye Sıfırla
 Reset north	Kuzeye sıfırla
+Reset unreadable saved shortcuts before importing.	İçe aktarmadan önce okunamayan kayıtlı kısayolları sıfırlayın.
 Reset {key}	{key} sıfırla
 Resolution (0–30)	Çözünürlük (0–30)
 Response	Yanıt
@@ -3068,6 +3082,7 @@ Set the pixels inside a polygon	Bir poligonun içindeki pikselleri ayarla
 Set the pixels inside a polygon.	Bir poligonun içindeki pikselleri ayarla.
 Settings	Ayarlar
 Settings › Customize	Ayarlar › Özelleştir
+Settings › Customize › Keyboard Shortcuts	Ayarlar › Özelleştir › Klavye Kısayolları
 Several places	Birkaç yer
 Shade from the outer edge alone	Yalnızca dış kenardan gölgele
 Shade to the point deepest inside	En içteki noktaya kadar gölgele
@@ -3103,6 +3118,9 @@ Shifts the mark right of the point (left when negative)	İşareti noktanın sağ
 Shifts the stroke sideways: positive to the right of the line's direction, negative to the left	Konturu yana kaydırır: pozitif değer çizgi yönünün sağına, negatif değer soluna
 Short labels	Kısa etiketler
 Shortcut already assigned	Kısayol zaten atanmış
+Shortcut file contains invalid or reserved bindings.	Kısayol dosyası geçersiz veya ayrılmış atamalar içeriyor.
+Shortcut file exceeds the size limit.	Kısayol dosyası boyut sınırını aşıyor.
+Shortcut keys are required.	Kısayol tuşları gerekli.
 Shortcuts	Kısayollar
 Shortest route over a line network	Bir çizgi ağı üzerinde en kısa rota
 Show	Göster
@@ -3633,6 +3651,7 @@ Toggle Imperial Measurements	İngiliz Ölçü Birimlerini Aç/Kapat
 Token Required	Belirteç Gerekli
 Tolerance (km)	Tolerans (km)
 Tolls	Ücretli yollar
+Too many shortcut changes to save.	Kaydedilecek çok fazla kısayol değişikliği var.
 Too many shortcut changes to save. Changes apply only to this session.	Kaydedilemeyecek kadar çok kısayol değişikliği var. Değişiklikler yalnızca bu oturum için geçerlidir.
 Tool Gallery	Araç Galerisi
 Toolboxes	Araç Kutuları
@@ -3718,11 +3737,14 @@ United States	Amerika Birleşik Devletleri
 Units	Birimler
 Units per step	Adım başına birim
 unknown (an older project)	bilinmiyor (eski bir proje)
+Unknown shortcut binding field.	Bilinmeyen kısayol ataması alanı.
+Unknown shortcut command.	Bilinmeyen kısayol komutu.
 UNKNOWN TOOL	BİLİNMEYEN ARAÇ
 Unload the GeoLibre tools and stop loading them when RustGIS starts.	GeoLibre araçlarını kaldır ve RustGIS başlarken yüklenmelerini durdur.
 Unsaved changes	Kaydedilmemiş değişiklikler
 Unsupervised classes (k-means)	Denetimsiz sınıflar (k-ortalama)
 Unsupervised classes (k-means).	Denetimsiz sınıflar (k-ortalama).
+Unsupported shortcut file version.	Desteklenmeyen kısayol dosyası sürümü.
 Untitled	Adsız
 Untitled model	Adsız model
 Up	Yukarı
@@ -3745,6 +3767,7 @@ US State GIS	ABD Eyalet CBS
 US State GIS…	ABD Eyalet CBS…
 USA Contiguous Albers Equal Area	ABD Bitişik Albers Eşalan
 Use	Kullan
+Use a browser download to export shortcuts.	Kısayolları dışa aktarmak için tarayıcı indirmesini kullanın.
 Use a Single Stroke	Tek Kontur Kullan
 Use another account	Başka bir hesap kullan
 Use ArcGIS Token	ArcGIS Belirteci Kullan

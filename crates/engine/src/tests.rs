@@ -10772,6 +10772,41 @@ fn exporting_features_refuses_to_replace_an_existing_geopackage() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// A layer whose Z values were dropped on import says so when added, read whole or in place, and
+/// again when exported or converted; a 2D layer's export says nothing of it.
+#[test]
+fn dropped_z_values_are_said_on_import_and_export() {
+    let dir = std::env::temp_dir().join(format!("rustgis-engine-zm-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = dir.join("wells.geojson");
+    std::fs::write(
+        &src,
+        r#"{"type":"FeatureCollection","features":[{"type":"Feature","properties":{},"geometry":{"type":"Point","coordinates":[1,2,30]}}]}"#,
+    )
+    .unwrap();
+    isolate_plugins();
+    let mut s = Session::new(Project::default());
+    for stream in [false, true] {
+        let mark = s.notice_mark();
+        let id = s.run("layer.addData", &json!({"path": src, "stream": stream})).unwrap()["layer"].as_u64().unwrap();
+        assert!(s.notices_since(mark).iter().any(|n| n.text.contains("Z or M values")), "stream {stream}: {:?}", s.notices_since(mark));
+        let out = dir.join(format!("out-{stream}.geojson"));
+        let mark = s.notice_mark();
+        s.run("share.exportLayer", &json!({"layer": id, "path": out})).unwrap();
+        let said = |s: &Session, mark| s.notices_since(mark).iter().any(|n| n.text.contains("its geometry has no Z or M values"));
+        assert!(said(&s, mark), "stream {stream}: {:?}", s.notices_since(mark));
+        assert!(std::fs::read_to_string(&out).unwrap().contains("[1.0,2.0]"));
+        let mark = s.notice_mark();
+        s.run("data.convert", &json!({"layer": id, "format": "wkt"})).unwrap();
+        assert!(said(&s, mark), "stream {stream}");
+    }
+    let mut s = world();
+    let mark = s.notice_mark();
+    s.run("share.exportLayer", &json!({"layer": "Cities", "path": dir.join("cities.geojson")})).unwrap();
+    assert!(!s.notices_since(mark).iter().any(|n| n.text.contains("Z or M")), "{:?}", s.notices_since(mark));
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 #[test]
 fn layers_export_to_geopackage_geoparquet_shapefile_and_kmz() {
     let dir = std::env::temp_dir().join(format!("rustgis-engine-export-{}", std::process::id()));
@@ -20123,10 +20158,33 @@ impl Drop for GpkgRegressionFixture {
     }
 }
 
+/// A streamed layer's export says how many of its source's rows couldn't be read, written a
+/// chunk at a time (GeoJSON) or from a whole read (KML) alike.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_streamed_export_counts_the_rows_it_could_not_read() {
+    let fixture = GpkgRegressionFixture::new("unread-rows");
+    let path = fixture.path();
+    let db = rusqlite::Connection::open(&path).unwrap();
+    db.execute_batch("INSERT INTO roads (fid, geom, name) VALUES (4, X'4750000300000000DEAD', 'bad');").unwrap();
+    drop(db);
+    let mut s = Session::new(Project::default());
+    let loaded = s.run("layer.addData", &json!({"path": path, "stream": true})).unwrap();
+    let id = loaded["layer"].as_u64().unwrap() as u32;
+    assert!(s.map().layer(id).unwrap().is_streamed());
+    for ext in ["geojson", "kml"] {
+        let mark = s.notice_mark();
+        let exported = s.run("share.exportLayer", &json!({"layer": id, "path": fixture.dir.join(format!("out.{ext}"))})).unwrap();
+        assert_eq!(exported["features"].as_u64(), Some(3), "{ext}");
+        let notices: Vec<_> = s.notices_since(mark).iter().map(|n| n.text.clone()).collect();
+        assert!(notices.iter().any(|n| n.contains("1 rows couldn't be read")), "{ext}: {notices:?}");
+    }
+}
+
 /// Whole reads must refuse an oversized provider instead of returning its capped sample (#1108).
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
-fn oversized_geopackage_refuses_whole_reads_but_can_stream() {
+fn oversized_geopackage_refuses_whole_reads_but_streams_and_exports() {
     use rustgis_data::{Dataset, Geometry, GeometryType, source::MAX_LIMIT};
 
     let fixture = GpkgRegressionFixture::new("whole-read-limit");
@@ -20146,7 +20204,7 @@ fn oversized_geopackage_refuses_whole_reads_but_can_stream() {
     assert_eq!(
         db.execute(
             "WITH RECURSIVE rows(fid) AS (SELECT 1 UNION ALL SELECT fid+1 FROM rows WHERE fid<?1)
-             INSERT INTO roads(fid, geom) SELECT fid, ?2 FROM rows",
+             INSERT INTO roads(fid, geom, name) SELECT fid, ?2, 'road ' || fid FROM rows",
             rusqlite::params![count as i64, blob],
         )
         .unwrap(),
@@ -20184,10 +20242,25 @@ fn oversized_geopackage_refuses_whole_reads_but_can_stream() {
     assert!(s.map().layer(id).unwrap().is_streamed());
     assert_eq!(s.map().layer(id).unwrap().dataset.features.len(), resident);
 
-    let output = fixture.dir.join("refused.geojson");
-    let error = s.run("share.exportLayer", &json!({"layer": id, "path": output})).unwrap_err();
+    // Exported a chunk at a time, past the limit a whole read has.
+    let output = fixture.dir.join("whole.csv");
+    let exported = s.run("share.exportLayer", &json!({"layer": id, "path": output})).unwrap();
+    assert_eq!(exported["features"].as_u64(), Some(count as u64));
+    // A header, then every row once and in order (the first column is the road's name).
+    let mut lines = std::io::BufRead::lines(std::io::BufReader::new(std::fs::File::open(&output).unwrap()));
+    assert!(lines.next().unwrap().unwrap().starts_with("name,"));
+    let mut rows = 0;
+    for (k, line) in lines.enumerate() {
+        let line = line.unwrap();
+        assert!(line.starts_with(&format!("road {},", k + 1)), "row {k}: {line}");
+        rows += 1;
+    }
+    assert_eq!(rows, count, "every row");
+    // A format still written from a whole layer is refused, and writes nothing.
+    let refused = fixture.dir.join("refused.kml");
+    let error = s.run("share.exportLayer", &json!({"layer": id, "path": refused})).unwrap_err();
     assert_limit(&error);
-    assert!(!output.exists(), "a refused export must not write a partial file");
+    assert!(!refused.exists(), "a refused export must not write a partial file");
     assert!(s.map().layer(id).unwrap().is_streamed());
     assert_eq!(s.map().layer(id).unwrap().dataset.features.len(), resident);
     assert_eq!(s.map().layers.len(), 2);

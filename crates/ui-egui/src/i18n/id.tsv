@@ -31,6 +31,7 @@ A catalogue's (CSW 2.0.2) address: search its records by words and, if you like,
 A ChatGPT plan or app usage limit was reached. Review Weekly usage before trying again.	Batas penggunaan paket ChatGPT atau aplikasi telah tercapai. Tinjau penggunaan mingguan sebelum mencoba lagi.
 A ChatGPT sign-in can only be used with the OpenAI API.	Masuk dengan ChatGPT hanya dapat digunakan dengan API OpenAI.
 A colour, hatch lines, markers on a grid, a gradient, or a shapeburst (shaded from the edge inwards)	Warna, garis arsir, marker pada grid, gradien, atau shapeburst (bergradasi dari tepi ke dalam)
+A command id is required.	ID perintah diperlukan.
 A connection has this name: give this one another name to remember its keys.	Sudah ada koneksi dengan nama ini: beri nama lain untuk koneksi ini agar kuncinya dapat diingat.
 A copy of {name} with unsaved changes was kept a minute ago.	Salinan {name} dengan perubahan belum disimpan dibuat semenit lalu.
 A copy of {name} with unsaved changes was kept less than a minute ago.	Salinan {name} dengan perubahan belum disimpan dibuat kurang dari semenit lalu.
@@ -434,6 +435,7 @@ Bike	Sepeda
 Bilinear	Bilinear
 Bind To Time Slider	Ikat ke Penggeser Waktu
 Bind to Time Slider	Ikat ke penggeser waktu
+Bindings: {bindings} · Conflicts: {conflicts} · Unknown commands: {unknown}	Penetapan: {bindings} · Konflik: {conflicts} · Perintah tidak dikenal: {unknown}
 Blank	Kosong
 Blank for Amazon S3	Kosongkan untuk Amazon S3
 Blank Letter page	Halaman Letter kosong
@@ -582,6 +584,7 @@ Choose a layer…	Pilih layer…
 Choose a model.	Pilih model.
 Choose a resampling type for the raster layer.	Pilih tipe resampling untuk layer raster.
 Choose a saved S3 connection before opening this source.	Pilih koneksi S3 tersimpan sebelum membuka sumber ini.
+Choose a shortcut file in the browser.	Pilih file pintasan di browser.
 Choose a start	Pilih titik awal
 Choose a stop	Pilih persinggahan
 Choose a table to load for editing	Pilih tabel yang dimuat untuk penyuntingan
@@ -1211,6 +1214,7 @@ Export Features	Ekspor Fitur
 Export Features (tool)	Ekspor Fitur (alat)
 Export Features needs a vector layer (Data › Export Raster writes a raster)	Ekspor Fitur memerlukan layer vektor (Data › Ekspor Raster menulis raster)
 Export Features…	Ekspor Fitur…
+Export Keyboard Shortcuts…	Ekspor Pintasan Keyboard…
 Export Layout	Ekspor Tata Letak
 Export Map	Ekspor Peta
 Export Map failed unexpectedly	Ekspor Peta gagal secara tak terduga
@@ -1567,6 +1571,8 @@ Import Bookmarks	Impor Penanda
 Import Bookmarks…	Impor Penanda…
 Import Deep Learning Package	Impor Paket Deep Learning
 Import GeoLibre Project	Impor Proyek GeoLibre
+Import Keyboard Shortcuts	Impor Pintasan Keyboard
+Import Keyboard Shortcuts…	Impor Pintasan Keyboard…
 Import Layout	Impor Tata Letak
 Import Layout…	Impor Tata Letak…
 Import Model	Impor Model
@@ -1585,6 +1591,7 @@ Import Styles From…	Impor Gaya Dari…
 Import Task	Impor Tugas
 Import Task…	Impor Tugas…
 Import Thumbnail	Impor Thumbnail
+Imported bindings replace conflicting keys. Unknown commands are kept for later use.	Penetapan yang diimpor menggantikan tombol yang berkonflik. Perintah tidak dikenal disimpan untuk digunakan nanti.
 Imported Zarr slice exceeds the 128 MiB download limit	Irisan Zarr yang diimpor melebihi batas unduhan 128 MiB
 Import…	Impor…
 IN	IN
@@ -1649,8 +1656,11 @@ Intersect	Interseksi
 Interval	Interval
 Into the group just above it, as its last item	Ke dalam grup tepat di atasnya, sebagai item terakhir
 invalid child id	id proses anak tidak valid
+Invalid or reserved shortcut key.	Tombol pintasan tidak valid atau dicadangkan.
 Invalid selection outline · draw a smaller area	Garis tepi pilihan tidak valid · gambar area yang lebih kecil
 Invalid selection outline · draw a smaller radius	Garis tepi pilihan tidak valid · gambar radius yang lebih kecil
+Invalid shortcut binding.	Penetapan pintasan tidak valid.
+Invalid shortcut key.	Tombol pintasan tidak valid.
 Invalid: {error}	Tidak valid: {error}
 Invert	Balik
 Invert color scheme	Balik skema warna
@@ -1715,6 +1725,7 @@ Kernel Type	Jenis Kernel
 Key	Key
 Keyboard\nShortcuts	Pintasan\nKeyboard
 Keyboard Shortcuts	Pintasan Keyboard
+Keyboard shortcuts	Pintasan keyboard
 Keyboard shortcuts.	Pintasan keyboard.
 Keys are available for this session but were not remembered on this computer.	Kunci tersedia untuk sesi ini tetapi tidak diingat di komputer ini.
 Keys are kept for this session only: there is no credential store to remember them in here.	Kunci hanya disimpan untuk sesi ini: di sini tidak ada penyimpanan kredensial untuk mengingatnya.
@@ -2564,6 +2575,8 @@ Projects and JSON data (RustGIS, QGIS, GeoLibre)	Proyek dan data JSON (RustGIS, 
 Properties	Properti
 Property	Properti
 Proportional Symbols	Simbol Proporsional
+Provide keys to reset, or no parameters to reset all.	Berikan tombol yang akan diatur ulang, atau tanpa parameter untuk mengatur ulang semua.
+Provide shortcut file text, data or a path.	Berikan teks, data, atau jalur file pintasan.
 Provider	Penyedia
 Provinces:	Provinsi:
 Proximity	Kedekatan
@@ -2747,6 +2760,7 @@ Reset Default	Atur Ulang Bawaan
 Reset Effects	Atur Ulang Efek
 Reset North	Atur Ulang Utara
 Reset north	Atur ulang utara
+Reset unreadable saved shortcuts before importing.	Atur ulang pintasan tersimpan yang tidak terbaca sebelum mengimpor.
 Reset {key}	Atur Ulang {key}
 Resolution (0–30)	Resolusi (0–30)
 Response	Respons
@@ -3068,6 +3082,7 @@ Set the pixels inside a polygon	Atur piksel di dalam poligon
 Set the pixels inside a polygon.	Atur piksel di dalam poligon.
 Settings	Pengaturan
 Settings › Customize	Pengaturan › Sesuaikan
+Settings › Customize › Keyboard Shortcuts	Pengaturan › Sesuaikan › Pintasan Keyboard
 Several places	Beberapa tempat
 Shade from the outer edge alone	Gradasi dari tepi luar saja
 Shade to the point deepest inside	Gradasi hingga titik terdalam
@@ -3103,6 +3118,9 @@ Shifts the mark right of the point (left when negative)	Menggeser tanda ke kanan
 Shifts the stroke sideways: positive to the right of the line's direction, negative to the left	Menggeser goresan ke samping: positif ke kanan arah garis, negatif ke kiri
 Short labels	Label pendek
 Shortcut already assigned	Pintasan sudah ditetapkan
+Shortcut file contains invalid or reserved bindings.	File pintasan berisi penetapan yang tidak valid atau dicadangkan.
+Shortcut file exceeds the size limit.	File pintasan melebihi batas ukuran.
+Shortcut keys are required.	Tombol pintasan diperlukan.
 Shortcuts	Pintasan
 Shortest route over a line network	Rute terpendek pada jaringan garis
 Show	Tampilkan
@@ -3633,6 +3651,7 @@ Toggle Imperial Measurements	Alihkan Pengukuran Imperial
 Token Required	Token Diperlukan
 Tolerance (km)	Toleransi (km)
 Tolls	Jalan berbayar
+Too many shortcut changes to save.	Terlalu banyak perubahan pintasan untuk disimpan.
 Too many shortcut changes to save. Changes apply only to this session.	Terlalu banyak perubahan pintasan untuk disimpan. Perubahan hanya berlaku untuk sesi ini.
 Tool Gallery	Galeri Alat
 Toolboxes	Kotak Alat
@@ -3718,11 +3737,14 @@ United States	Amerika Serikat
 Units	Satuan
 Units per step	Unit per langkah
 unknown (an older project)	tidak diketahui (proyek lama)
+Unknown shortcut binding field.	Bidang penetapan pintasan tidak dikenal.
+Unknown shortcut command.	Perintah pintasan tidak dikenal.
 UNKNOWN TOOL	ALAT TIDAK DIKENAL
 Unload the GeoLibre tools and stop loading them when RustGIS starts.	Lepas alat GeoLibre dan berhenti memuatnya saat RustGIS dimulai.
 Unsaved changes	Perubahan belum disimpan
 Unsupervised classes (k-means)	Kelas tak terbimbing (k-means)
 Unsupervised classes (k-means).	Kelas tak terbimbing (k-means).
+Unsupported shortcut file version.	Versi file pintasan tidak didukung.
 Untitled	Tanpa Judul
 Untitled model	Model tanpa judul
 Up	Naik
@@ -3745,6 +3767,7 @@ US State GIS	SIG Negara Bagian AS
 US State GIS…	SIG Negara Bagian AS…
 USA Contiguous Albers Equal Area	Albers Luas Sama AS Kontinental
 Use	Gunakan
+Use a browser download to export shortcuts.	Gunakan unduhan browser untuk mengekspor pintasan.
 Use a Single Stroke	Gunakan Satu Goresan
 Use another account	Gunakan akun lain
 Use ArcGIS Token	Gunakan Token ArcGIS

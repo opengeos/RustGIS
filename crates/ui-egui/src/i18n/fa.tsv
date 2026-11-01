@@ -31,6 +31,7 @@ A catalogue's (CSW 2.0.2) address: search its records by words and, if you like,
 A ChatGPT plan or app usage limit was reached. Review Weekly usage before trying again.	سقف مصرف طرح ChatGPT یا برنامه پر شده است. پیش از تلاش دوباره، «مصرف هفتگی» را ببینید.
 A ChatGPT sign-in can only be used with the OpenAI API.	ورود به ChatGPT فقط می‌تواند با API OpenAI استفاده شود.
 A colour, hatch lines, markers on a grid, a gradient, or a shapeburst (shaded from the edge inwards)	یک رنگ، خط‌های هاشور، نشانه‌ها روی یک شبکه، یک گرادیان یا یک سایه‌زنی از لبه (سایه‌زده از لبه به داخل)
+A command id is required.	شناسه فرمان لازم است.
 A connection has this name: give this one another name to remember its keys.	اتصالی با این نام وجود دارد: برای به خاطر سپردن کلیدهای این یکی، نام دیگری به آن بدهید.
 A copy of {name} with unsaved changes was kept a minute ago.	یک نسخه از {name} با تغییرات ذخیره‌نشده یک دقیقه پیش نگه داشته شد.
 A copy of {name} with unsaved changes was kept less than a minute ago.	یک نسخه از {name} با تغییرات ذخیره‌نشده کمتر از یک دقیقه پیش نگه داشته شد.
@@ -434,6 +435,7 @@ Bike	دوچرخه
 Bilinear	دوخطی
 Bind To Time Slider	پیوند به لغزنده زمان
 Bind to Time Slider	پیوند به لغزنده زمان
+Bindings: {bindings} · Conflicts: {conflicts} · Unknown commands: {unknown}	پیوندها: {bindings} · تداخل‌ها: {conflicts} · فرمان‌های ناشناخته: {unknown}
 Blank	خالی
 Blank for Amazon S3	برای Amazon S3 خالی بگذارید
 Blank Letter page	صفحه نامه خالی
@@ -582,6 +584,7 @@ Choose a layer…	انتخاب لایه…
 Choose a model.	یک مدل انتخاب کنید.
 Choose a resampling type for the raster layer.	نوع بازنمونه‌برداری را برای لایه رستری انتخاب کنید.
 Choose a saved S3 connection before opening this source.	پیش از باز کردن این منبع، یک اتصال S3 ذخیره‌شده انتخاب کنید.
+Choose a shortcut file in the browser.	یک فایل میان‌بر را در مرورگر انتخاب کنید.
 Choose a start	انتخاب مبدأ
 Choose a stop	انتخاب مقصد میانی
 Choose a table to load for editing	جدولی را برای بارگذاری و ویرایش انتخاب کنید
@@ -1211,6 +1214,7 @@ Export Features	برون‌بری عناصر
 Export Features (tool)	برون‌بری عناصر (ابزار)
 Export Features needs a vector layer (Data › Export Raster writes a raster)	برون‌بری عناصر به یک لایه برداری نیاز دارد (داده › برون‌بری رستر یک رستر می‌نویسد)
 Export Features…	برون‌بری عناصر…
+Export Keyboard Shortcuts…	برون‌بری میان‌برهای صفحه‌کلید…
 Export Layout	برون‌بری صفحه‌آرایی
 Export Map	برون‌بری نقشه
 Export Map failed unexpectedly	برون‌بری نقشه به‌طور غیرمنتظره‌ای ناموفق شد
@@ -1567,6 +1571,8 @@ Import Bookmarks	درون‌بری نشانک‌ها
 Import Bookmarks…	درون‌بری نشانک‌ها…
 Import Deep Learning Package	درون‌بری بسته یادگیری عمیق
 Import GeoLibre Project	درون‌بری پروژه GeoLibre
+Import Keyboard Shortcuts	درون‌بری میان‌برهای صفحه‌کلید
+Import Keyboard Shortcuts…	درون‌بری میان‌برهای صفحه‌کلید…
 Import Layout	درون‌بری صفحه‌آرایی
 Import Layout…	درون‌بری صفحه‌آرایی…
 Import Model	درون‌بری مدل
@@ -1585,6 +1591,7 @@ Import Styles From…	درون‌بری استایل‌ها از…
 Import Task	درون‌بری تسک
 Import Task…	درون‌بری تسک…
 Import Thumbnail	درون‌بری تصویر بندانگشتی
+Imported bindings replace conflicting keys. Unknown commands are kept for later use.	پیوندهای درون‌بری‌شده جایگزین کلیدهای متداخل می‌شوند. فرمان‌های ناشناخته برای استفاده بعدی نگه داشته می‌شوند.
 Imported Zarr slice exceeds the 128 MiB download limit	برش Zarr واردشده از حد دانلود ۱۲۸ MiB بیشتر است
 Import…	درون‌بری…
 IN	IN
@@ -1649,8 +1656,11 @@ Intersect	اشتراک
 Interval	بازه
 Into the group just above it, as its last item	به داخل گروه درست بالای آن، به‌عنوان آخرین مورد
 invalid child id	شناسه فرزند نامعتبر
+Invalid or reserved shortcut key.	کلید میان‌بر نامعتبر یا رزروشده است.
 Invalid selection outline · draw a smaller area	مرز انتخاب نامعتبر است · ناحیهٔ کوچک‌تری رسم کنید
 Invalid selection outline · draw a smaller radius	مرز انتخاب نامعتبر است · شعاع کوچک‌تری رسم کنید
+Invalid shortcut binding.	پیوند میان‌بر نامعتبر است.
+Invalid shortcut key.	کلید میان‌بر نامعتبر است.
 Invalid: {error}	نامعتبر: {error}
 Invert	وارونه‌کردن
 Invert color scheme	وارونه‌کردن طرح رنگ
@@ -1715,6 +1725,7 @@ Kernel Type	نوع کرنل
 Key	Key
 Keyboard\nShortcuts	میان‌برهای\nصفحه‌کلید
 Keyboard Shortcuts	میان‌برهای صفحه‌کلید
+Keyboard shortcuts	میان‌برهای صفحه‌کلید
 Keyboard shortcuts.	میان‌برهای صفحه‌کلید.
 Keys are available for this session but were not remembered on this computer.	کلیدها برای همین نشست در دسترس‌اند اما روی این رایانه به خاطر سپرده نشدند.
 Keys are kept for this session only: there is no credential store to remember them in here.	کلیدها فقط برای همین نشست نگه داشته می‌شوند: اینجا انبار اعتبارنامه‌ای برای به خاطر سپردنشان وجود ندارد.
@@ -2564,6 +2575,8 @@ Projects and JSON data (RustGIS, QGIS, GeoLibre)	پروژه‌ها و داده�
 Properties	ویژگی‌ها
 Property	ویژگی
 Proportional Symbols	نمادهای تناسبی
+Provide keys to reset, or no parameters to reset all.	کلیدهای بازنشانی را مشخص کنید، یا برای بازنشانی همه هیچ پارامتری ندهید.
+Provide shortcut file text, data or a path.	متن، داده یا مسیر فایل میان‌بر را مشخص کنید.
 Provider	ارائه‌دهنده
 Provinces:	استان‌ها:
 Proximity	نزدیکی
@@ -2747,6 +2760,7 @@ Reset Default	بازنشانی پیش‌فرض
 Reset Effects	بازنشانی جلوه‌ها
 Reset North	بازنشانی شمال
 Reset north	بازنشانی شمال
+Reset unreadable saved shortcuts before importing.	پیش از درون‌بری، میان‌برهای ذخیره‌شده ناخوانا را بازنشانی کنید.
 Reset {key}	بازنشانی {key}
 Resolution (0–30)	تفکیک‌پذیری (0–30)
 Response	پاسخ
@@ -3068,6 +3082,7 @@ Set the pixels inside a polygon	تنظیم پیکسل‌های داخل یک چ�
 Set the pixels inside a polygon.	پیکسل‌های داخل یک چندضلعی را تنظیم می‌کند.
 Settings	تنظیمات
 Settings › Customize	تنظیمات › شخصی‌سازی
+Settings › Customize › Keyboard Shortcuts	تنظیمات › شخصی‌سازی › میان‌برهای صفحه‌کلید
 Several places	چند مکان
 Shade from the outer edge alone	سایه‌زنی فقط از لبه بیرونی
 Shade to the point deepest inside	سایه‌زنی تا عمیق‌ترین نقطه داخل
@@ -3103,6 +3118,9 @@ Shifts the mark right of the point (left when negative)	نشان را به را�
 Shifts the stroke sideways: positive to the right of the line's direction, negative to the left	ضربه را به پهلو جابه‌جا می‌کند: مثبت به سمت راست جهت خط، منفی به سمت چپ
 Short labels	برچسب‌های کوتاه
 Shortcut already assigned	میان‌بر قبلاً اختصاص داده شده است
+Shortcut file contains invalid or reserved bindings.	فایل میان‌بر دارای پیوندهای نامعتبر یا رزروشده است.
+Shortcut file exceeds the size limit.	فایل میان‌بر از حد اندازه فراتر می‌رود.
+Shortcut keys are required.	کلیدهای میان‌بر لازم است.
 Shortcuts	میان‌برها
 Shortest route over a line network	کوتاه‌ترین مسیر روی شبکه خطی
 Show	نمایش‌دهنده
@@ -3633,6 +3651,7 @@ Toggle Imperial Measurements	تغییر اندازه‌گیری امپریال
 Token Required	توکن لازم است
 Tolerance (km)	رواداری (km)
 Tolls	عوارض
+Too many shortcut changes to save.	تغییرات میان‌بر برای ذخیره بیش از حد زیاد است.
 Too many shortcut changes to save. Changes apply only to this session.	تغییرات میان‌بر برای ذخیره بیش از حد زیاد است. تغییرات فقط برای این نشست اعمال می‌شوند.
 Tool Gallery	گالری ابزارها
 Toolboxes	جعبه‌ابزارها
@@ -3718,11 +3737,14 @@ United States	ایالات متحده
 Units	واحدها
 Units per step	واحد در هر گام
 unknown (an older project)	نامشخص (یک پروژه قدیمی‌تر)
+Unknown shortcut binding field.	فیلد ناشناخته در پیوند میان‌بر.
+Unknown shortcut command.	فرمان میان‌بر ناشناخته.
 UNKNOWN TOOL	ابزار ناشناخته
 Unload the GeoLibre tools and stop loading them when RustGIS starts.	تخلیه ابزارهای GeoLibre و توقف بارگذاری‌شان هنگام راه‌اندازی RustGIS.
 Unsaved changes	تغییرات ذخیره‌نشده
 Unsupervised classes (k-means)	طبقه‌های بدون نظارت (k-means)
 Unsupervised classes (k-means).	طبقه‌های بدون نظارت (k-means).
+Unsupported shortcut file version.	نسخه فایل میان‌بر پشتیبانی نمی‌شود.
 Untitled	بی‌نام
 Untitled model	مدل بی‌نام
 Up	Up
@@ -3745,6 +3767,7 @@ US State GIS	داده‌های GIS ایالتی آمریکا
 US State GIS…	داده‌های GIS ایالتی آمریکا…
 USA Contiguous Albers Equal Area	آلبرز هم‌مساحت سرزمین پیوسته آمریکا
 Use	استفاده
+Use a browser download to export shortcuts.	برای برون‌بری میان‌برها از بارگیری مرورگر استفاده کنید.
 Use a Single Stroke	استفاده از یک ضربه واحد
 Use another account	استفاده از حساب دیگر
 Use ArcGIS Token	استفاده از توکن ArcGIS

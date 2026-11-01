@@ -237,6 +237,7 @@ fn materialize_refuses_oversized_and_incomplete_sources() {
             crs: "EPSG:4326".into(),
             indexed: false,
             notes: vec![],
+            zm_dropped: false,
         },
         batch: None,
         read: AtomicBool::new(false),
@@ -1460,8 +1461,9 @@ fn geojson_crs_is_read_only_from_the_feature_collection() {
 #[test]
 fn geojson_features_that_cant_be_converted_are_skipped_and_counted() {
     // A coordinate the declared system can't convert (UTM 1e9 m east), or converts to beyond
-    // longitude/latitude (Web Mercator 1e9 m east is longitude 8983°): the feature is dropped.
-    for (crs, good, bad) in [("EPSG:32617", "[500000,4649776]", "[1e9,0]"), ("EPSG:3857", "[1000000,6000000]", "[1e9,0]")] {
+    // longitude/latitude (Web Mercator 1e9 m east is longitude 8983°): the feature is dropped, and
+    // its height with it (no Z notice for the 2D features kept).
+    for (crs, good, bad) in [("EPSG:32617", "[500000,4649776]", "[1e9,0,30]"), ("EPSG:3857", "[1000000,6000000]", "[1e9,0,30]")] {
         let text = format!(
             r#"{{"type":"FeatureCollection","crs":{},"features":[
             {{"type":"Feature","properties":{{"n":1}},"geometry":{{"type":"Point","coordinates":{good}}}}},
@@ -1476,6 +1478,7 @@ fn geojson_features_that_cant_be_converted_are_skipped_and_counted() {
         assert!(messages[0].contains(&format!("1 features couldn't be converted from {crs}")), "{}", messages[0]);
         assert_eq!(info_crs, crs);
         assert!(ds.crs_incomplete, "{crs}: a projection can't be defined again over lost features");
+        assert!(!ds.zm_dropped, "{crs}");
         let Some(Geometry::Point(c)) = ds.features.first().and_then(|f| f.geometry.clone()) else { panic!("a point") };
         assert!(c.x.abs() < 180.0 && c.y.abs() < 90.0, "{crs}: {c:?}");
         if crs == "EPSG:32617" {
@@ -1903,6 +1906,10 @@ fn geopackage_flatgeobuf_and_geoparquet_visit_what_a_whole_read_gives() {
         let error = src.visit_chunks(None, 4096, &mut |_| Ok(())).unwrap_err().to_string();
         assert!(error.contains("replaced"), "{error}");
         assert_eq!(src.read(&Request::all()).unwrap().features.len(), 600);
+        // A file removed is missing, not replaced.
+        std::fs::remove_file(&gpkg).unwrap();
+        let error = src.visit_chunks(None, 4096, &mut |_| Ok(())).unwrap_err();
+        assert!(matches!(&error, crate::DataError::Io(e) if e.kind() == std::io::ErrorKind::NotFound), "{error}");
     }
     // An unreadable geometry is skipped and counted, and a row without one left out, as a read does.
     drop(sources);
