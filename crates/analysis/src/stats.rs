@@ -560,8 +560,10 @@ pub fn rounded(stat: Stat, column: &Column, value: &Value) -> bool {
         // A MEAN of whole numbers is whole when their sum divides by their count.
         Stat::Mean => {
             let n = i128::try_from(column.whole.len()).unwrap_or(i128::MAX);
-            let sum: i128 = wholes().sum();
-            all_whole() && n > 0 && sum % n == 0 && differs(sum / n)
+            all_whole() && n > 0 && {
+                let sum: i128 = wholes().sum();
+                sum % n == 0 && differs(sum / n)
+            }
         }
         Stat::Std | Stat::Variance | Stat::Cv | Stat::Count | Stat::Unique | Stat::Nulls | Stat::Concatenate => false,
     }
@@ -1169,6 +1171,9 @@ mod tests {
         assert!(marked(Stat::Sum, &mixed([Value::Int(BIG), Value::Float(0.0)])));
         assert!(marked(Stat::Sum, &mixed([Value::Int(BIG), Value::Bool(true)])));
         assert!(marked(Stat::Mean, &mixed([Value::Int(BIG), Value::Float(1.0)])), "(2^53 + 2) / 2");
+        // A MEAN over a decimal with a fraction is a decimal, however the whole numbers alone divide:
+        // (BIG + 1.5 + 1.5) / 3 is whole and comes out right, while BIG / 3 is whole and differs.
+        assert!(!marked(Stat::Mean, &ints(&[Value::Int(BIG), Value::Float(1.5), Value::Float(1.5)])));
         assert!(!marked(Stat::Sum, &mixed([Value::Int(1 << 53), Value::Float(2.0)])), "2^53 + 2 fits");
         // −2^63 is an i64 too, so checked as one: BIG − 2^63 comes out 2^53 − 2^63.
         assert!(marked(Stat::Sum, &mixed([Value::Int(BIG), Value::Float(-9_223_372_036_854_775_808.0)])));

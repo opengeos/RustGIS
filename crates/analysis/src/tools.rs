@@ -1789,7 +1789,7 @@ fn dissolve(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
     let (requests, separator) = summary_requests(ds, p)?;
     // Each group's key, polygons and records.
     let mut groups: Vec<(Value, Vec<MultiPolygon<f64>>, Vec<usize>)> = Vec::new();
-    for r in each_once(rows(inp, p, "input", ds), ds) {
+    for r in each_once(rows(inp, p, "input", ds)) {
         let Some(mp) = ds.features.get(r).and_then(|f| f.geometry.as_ref()).and_then(to_multipolygon) else { continue };
         let key = fi.map(|fi| ds.value(r, fi).clone()).unwrap_or(Value::Null);
         match groups.iter_mut().find(|(k, _, _)| *k == key) {
@@ -2709,7 +2709,7 @@ fn count_points(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
     let mut counts = vec![0i64; out.features.len()];
     // Each polygon's points, kept only for statistics.
     let mut members: Vec<Vec<usize>> = if requests.is_empty() { Vec::new() } else { vec![Vec::new(); out.features.len()] };
-    for r in each_once(rows(inp, p, "points", pts), pts) {
+    for r in each_once(rows(inp, p, "points", pts)) {
         let Some(g) = pts.features.get(r).and_then(|f| f.geometry.as_ref()) else { continue };
         let pg = to_geo(g);
         let ext = merc_extent(&pg);
@@ -2964,15 +2964,20 @@ fn rounded_notice(rounded: &[usize], fields: &[Field]) -> Option<String> {
 /// values with. The separator is read only with a list: a run without one ignores it.
 fn summary_requests<'a>(ds: &Dataset, p: &'a Json) -> Result<(Vec<crate::stats::Request>, &'a str), String> {
     let requests = crate::stats::parse_requests(ds, p.get("statistics"))?;
-    let separator = if requests.is_empty() { ", " } else { concatenate_separator(p)? };
+    let separator = if requests.is_empty() { DEFAULT_SEPARATOR } else { concatenate_separator(p)? };
     Ok((requests, separator))
 }
 
-/// `rows` of `ds` (each below its length, as [`rows`] gives them) with each record once, at its
-/// first place: a selection that lists a record twice still counts it once.
-fn each_once(rows: Vec<usize>, ds: &Dataset) -> Vec<usize> {
-    let mut seen = vec![false; ds.features.len()];
-    rows.into_iter().filter(|&r| seen.get_mut(r).is_some_and(|s| !std::mem::replace(s, true))).collect()
+/// `rows`, as [`rows`] gives them, with each record once, at its first place: a selection that
+/// lists a record twice still counts it once. Rows in increasing order (all of a layer's, or a
+/// selection made in the app) hold each record once already and are returned as they are; any
+/// other selection is deduplicated through a set its own size, not the layer's.
+fn each_once(rows: Vec<usize>) -> Vec<usize> {
+    if rows.windows(2).all(|w| matches!(w, [a, b] if a < b)) {
+        return rows;
+    }
+    let mut seen = HashSet::with_capacity(rows.len());
+    rows.into_iter().filter(|&r| seen.insert(r)).collect()
 }
 
 /// `rows` in record order, each once, as [`statistic_values`] takes them.
@@ -3013,12 +3018,15 @@ fn key_fields(ds: &Dataset, v: Option<&Json>, label: &str) -> Result<Vec<usize>,
     Ok(out)
 }
 
-/// The separator CONCATENATE joins values with: `, ` unless given. A bad one is refused whatever
-/// the statistics (Dissolve and Summarize Within read it only with a statistics list); the Tools
-/// pane leaves it out of runs without CONCATENATE.
+/// The separator CONCATENATE joins values with unless one is given.
+const DEFAULT_SEPARATOR: &str = ", ";
+
+/// The separator CONCATENATE joins values with: [`DEFAULT_SEPARATOR`] unless given. A bad one is
+/// refused whatever the statistics (Dissolve and Summarize Within read it only with a statistics
+/// list); the Tools pane leaves it out of runs without CONCATENATE.
 fn concatenate_separator(p: &Json) -> Result<&str, String> {
     match p.get("separator") {
-        None | Some(Json::Null) => Ok(", "),
+        None | Some(Json::Null) => Ok(DEFAULT_SEPARATOR),
         Some(Json::String(t)) if t.len() <= MAX_SEPARATOR => Ok(t.as_str()),
         Some(Json::String(_)) => Err(format!("Separator can be at most {MAX_SEPARATOR} bytes")),
         Some(_) => Err("Separator must be text".into()),
@@ -7923,6 +7931,17 @@ mod tests {
         let p = serde_json::json!({"separator": " | ", "statistics": list});
         assert_eq!(summary_requests(&ds, &p).map(|(r, s)| (r.len(), s.to_string())), Ok((1, " | ".to_string())));
         assert_eq!(record_order(&[5, 2, 9, 2, 0]), [0, 2, 5, 9]);
+    }
+
+    /// A selection's rows are taken once each, at their first place, whether they are listed out
+    /// of order or sorted with a record repeated; rows in increasing order are already unique.
+    #[test]
+    fn each_once_keeps_the_first_of_a_repeated_row() {
+        assert_eq!(each_once(vec![3, 1, 3, 0, 1]), [3, 1, 0]);
+        assert_eq!(each_once(vec![0, 0, 2, 7, 7]), [0, 2, 7]);
+        assert_eq!(each_once(vec![0, 1, 2]), [0, 1, 2]);
+        assert_eq!(each_once(vec![4]), [4]);
+        assert!(each_once(Vec::new()).is_empty());
     }
 
     /// Summarize Within writes its statistics in the fields it adds even for a polygon whose row

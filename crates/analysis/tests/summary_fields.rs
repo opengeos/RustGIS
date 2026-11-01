@@ -593,6 +593,11 @@ fn a_record_selected_twice_counts_once() {
     assert_eq!(column(&out, "SUM_pop"), [&float(100.0)]);
     let plain = run("dissolve", &layers, json!({"input": "parcels", "field": "zone"}));
     assert_eq!(column(&plain, "count"), [&int(3)], "without statistics too");
+    // The same records in order, 0 and 7 still listed twice.
+    let sorted = Layers::default().with(parcels()).select("parcels", &[0, 0, 2, 7, 7]);
+    let out = run("dissolve", &sorted, json!({"input": "parcels", "field": "zone", "statistics": statistics}));
+    assert_eq!(column(&out, "count"), [&int(3)]);
+    assert_eq!(column(&out, "COUNT_pop"), [&int(3)]);
     // Summarize Within: sites 0 and 1, both in west, 1 also in east, each listed twice.
     let layers = Layers::default().with(zones()).with(sites()).select("sites", &[1, 0, 1, 0]);
     let statistics = json!([{"field": "val", "statistic": "COUNT"}, {"field": "val", "statistic": "SUM"}]);
@@ -722,6 +727,53 @@ fn rounding_check_survives_whole_numbers_past_the_i64_range() {
     let layers = Layers::default().with(ds);
     let res = rustgis_analysis::run("summaryStatistics", &layers, &json!({"input": "huge", "statistics": all})).unwrap();
     assert_eq!(res.messages, ["Summary Statistics: 1 rows"]);
+}
+
+/// A Double field's values are decimals already: statistics of them round as decimal arithmetic
+/// rounds, and the tools say nothing, however large the values. The readers store a Double field's
+/// whole numbers as decimals too.
+#[test]
+fn decimal_fields_get_no_rounding_notice() {
+    const BIG: f64 = 9_007_199_254_740_994.0;
+    // GeoJSON: a decimal among whole numbers makes the field Double, and 2^53 + 2 and 1 sum to
+    // 2^53 + 3, which a decimal can't hold.
+    let text = collection(vec![
+        (square(0.0, 0.0, 1.0), json!({"zone": "A", "d": 9_007_199_254_740_994i64})),
+        (square(1.0, 0.0, 1.0), json!({"zone": "A", "d": 1})),
+        (square(5.0, 0.0, 1.0), json!({"zone": "B", "d": 0.5})),
+    ]);
+    let (ds, _) = read_geojson(&text, "decimals").unwrap();
+    assert_eq!(field_ty(&ds, "d"), FieldType::Double, "premise");
+    assert_eq!(column(&ds, "d"), [&float(BIG), &float(1.0), &float(0.5)], "premise: whole numbers stored as decimals");
+    let statistics: Vec<Json> = ["SUM", "RANGE", "MEAN", "MEDIAN", "P75", "IQR", "MIN", "MAX", "FIRST", "MODE"]
+        .iter()
+        .map(|s| json!({"field": "d", "statistic": s}))
+        .collect();
+    let layers = Layers::default().with(ds);
+    let res = rustgis_analysis::run("dissolve", &layers, &json!({"input": "decimals", "field": "zone", "statistics": statistics})).unwrap();
+    assert_eq!(res.messages, ["Dissolve: 2 features"]);
+    let out = layer(res);
+    assert_eq!(column(&out, "SUM_d"), [&float(9_007_199_254_740_996.0), &float(0.5)], "rounded, as decimals are");
+    assert_eq!(column(&out, "MAX_d"), [&float(BIG), &float(0.5)]);
+    // Summarize Within over the same records as points.
+    let points = run("featureToPoint", &layers, json!({"input": "decimals", "output": "decimal_points"}));
+    let area = collection(vec![(square(-1.0, -1.0, 20.0), json!({"name": "all"}))]);
+    let (area, _) = read_geojson(&area, "area").unwrap();
+    let layers = Layers::default().with(points).with(area);
+    let p = json!({"polygons": "area", "points": "decimal_points", "statistics": statistics});
+    let res = rustgis_analysis::run("countPoints", &layers, &p).unwrap();
+    assert_eq!(res.messages, ["Summarize Within: 3 points counted"]);
+    assert_eq!(column(&layer(res), "SUM_d"), [&float(9_007_199_254_740_996.0)]);
+    // CSV: a column of whole numbers with a decimal among them reads as Double as well.
+    let csv = "d\n9007199254740994\n1\n0.5\n";
+    let (ds, _) = read_csv(csv, "decimals").unwrap();
+    assert_eq!(field_ty(&ds, "d"), FieldType::Double, "premise");
+    assert_eq!(column(&ds, "d"), [&float(BIG), &float(1.0), &float(0.5)], "premise");
+    let layers = Layers::default().with(ds);
+    let res = rustgis_analysis::run("summaryStatistics", &layers, &json!({"input": "decimals", "statistics": statistics})).unwrap();
+    assert_eq!(res.messages, ["Summary Statistics: 1 rows"]);
+    let res = rustgis_analysis::run("summaryStatistics", &layers, &json!({"input": "decimals", "field": "d"})).unwrap();
+    assert_eq!(res.messages, ["Summary Statistics: 1 rows"], "through the shortcut too");
 }
 
 #[test]
