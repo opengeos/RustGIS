@@ -150,8 +150,8 @@ fn field_suggestions_keep_categorical_values_and_plural_lists() {
     let kind = |name| spec.params.iter().find(|p| p.name == name).unwrap().kind;
     assert_eq!(kind("value_field"), ParamKind::Field, "categorical values must remain selectable");
     assert_eq!(kind("denominator_weight_field"), ParamKind::NumericField);
-    assert_eq!(kind("fields"), ParamKind::Fields);
-    assert_eq!(kind("predictor_fields"), ParamKind::Fields);
+    assert_eq!(kind("fields"), ParamKind::FieldNames);
+    assert_eq!(kind("predictor_fields"), ParamKind::FieldNames);
     assert_eq!(kind("output_field"), ParamKind::Field, "the form must allow a new column name");
     assert_eq!(kind("field"), ParamKind::Choice(&["all"]), "explicit schema wins over naming");
     assert_eq!(kind("number_field"), ParamKind::Number);

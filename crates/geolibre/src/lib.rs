@@ -209,7 +209,7 @@ fn toolbox_of(m: &Value, category: &str) -> String {
 /// Keep these editable in the form, since names can also describe new output columns.
 fn field_kind(name: &str) -> Option<ParamKind> {
     match name.rsplit('_').next()? {
-        last if last.eq_ignore_ascii_case("fields") => Some(ParamKind::Fields),
+        last if last.eq_ignore_ascii_case("fields") => Some(ParamKind::FieldNames),
         last if last.eq_ignore_ascii_case("field") => {
             let numeric = name.split('_').any(|part| part.eq_ignore_ascii_case("weight") || part.eq_ignore_ascii_case("numeric"));
             Some(if numeric { ParamKind::NumericField } else { ParamKind::Field })
