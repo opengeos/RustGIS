@@ -808,10 +808,12 @@ Shapefile read in place, is read a chunk at a time, with no limit on its feature
 4 GiB of features in memory (1 GiB in the web app). Other sources (a large GeoJSON read in
 place, LAS/LAZ, databases, a file by its web address) are read at once, up to 2 million features
 (500,000 in the web app; a source that doesn't report its feature count must have fewer than
-that, since a read that reaches the limit is refused). A larger source is refused rather than
-processed as a sample. The same holds for a GeoPackage, FlatGeobuf, GeoParquet or LAS/LAZ file
-added without streaming (`layer.addData` with `"stream": false`) or given to a geoprocessing tool
-as a file path. An incomplete read is an error, not a successful sample. A tool given a
+that, since a read that reaches the limit is refused). A source past its limit, memory or
+count, is refused rather than processed as a sample, and these limits also apply to a file added
+without streaming (`layer.addData` with `"stream": false`) or given to a geoprocessing tool as a
+file path (a Shapefile so added goes through the Shapefile reader and its file-size limit). An
+incomplete read is an error, not a successful sample. In the web app, a GeoParquet or FlatGeobuf
+file read in place by its web address isn't read whole: download it to load it. A tool given a
 streamed layer with a selection uses the selected features read for the view. Edits are refused,
 since the features are read again as the view moves: right-click the
 layer in Layers and choose **Load All Features** (`layer.loadAll`) to load it into memory and

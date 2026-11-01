@@ -156,8 +156,7 @@ This is an in-memory export, limited to 10,000 distinct output tiles and a conse
 archive. This budget is checked after streamed-source materialization, not during provider
 loading: the whole-read limits ([Large files](data.md#large-files)) apply first, and loading may
 use more than 256 MiB before export refuses the input. Reduce a large source before loading it
-for export. Geometry allocation estimates are linear in the
-number of vertices and rings.
+for export. Geometry allocation estimates are linear in the number of vertices and rings.
 Each geometry component's buffered candidate rectangle is limited to 40,000 tiles per zoom,
 including candidates where clipping produces no output. A separate **100,000,000-unit
 geometry-work budget** accumulates across all exported features, components and zooms:
