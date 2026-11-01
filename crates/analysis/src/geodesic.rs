@@ -51,6 +51,16 @@ const MAX_SPLITS: u32 = 12;
 /// line at 84°N, with a margin. An edge too short to stray as far as the tolerance isn't
 /// checked, so an arc's short edges cost nothing.
 const STRAY_PER_M2: f64 = 3e-7;
+/// How much [`may_stray`] overstates how far an edge can stray at its latitude: the margin
+/// [`STRAY_PER_M2`] has over the worst stray measured.
+const STRAY_MARGIN: f64 = 1.6;
+/// How far, against ρ / R, an edge straight in the plane at ρ from its centre turns from the
+/// geodesic, for [`may_stray`]: about a third on the sphere (the plane's scale x / sin x changes
+/// by 1/x − cot x per radian across it), so two leaves a wide margin;
+/// [`tests::an_edge_let_pass_by_its_latitude_does_not_stray`] fails at a tenth.
+const PLANE_TURN: f64 = 2.0;
+/// The Earth's mean radius (metres), for [`may_stray`].
+const EARTH_R_M: f64 = 6_371_008.8;
 
 /// A feature's buffer at `metres` (negative shrinks a polygon), in lon/lat; `None` when nothing
 /// is left.
@@ -65,6 +75,37 @@ pub fn geodesic_buffer(g: &Geometry, metres: f64) -> Option<Geometry> {
         Geometry::Polygon(polys) => polygons(&polys.iter().map(|rings| finite(rings)).collect::<Vec<_>>(), metres),
     };
     to_geometry(&mp)
+}
+
+/// Buffers of this many features or more are made on several threads.
+const PARALLEL_FEATURES: usize = 256;
+
+/// The buffers of `geoms` at `metres`, in their order, as [`geodesic_buffer`] makes them: on
+/// several threads when there are many (one in the browser), since each is made alone.
+pub fn geodesic_buffers(geoms: &[&Geometry], metres: f64) -> Vec<Option<Geometry>> {
+    let threads = if cfg!(target_arch = "wasm32") || geoms.len() < PARALLEL_FEATURES {
+        1
+    } else {
+        std::thread::available_parallelism().map_or(1, |n| n.get()).min(16)
+    };
+    if threads <= 1 {
+        return geoms.iter().map(|g| geodesic_buffer(g, metres)).collect();
+    }
+    let chunk = geoms.len().div_ceil(threads);
+    let make = |part: &[&Geometry]| part.iter().map(|g| geodesic_buffer(g, metres)).collect::<Vec<_>>();
+    std::thread::scope(|scope| {
+        // A part whose thread can't start (a limit on threads, say) is made here instead.
+        let parts: Vec<_> =
+            geoms.chunks(chunk).map(|part| std::thread::Builder::new().spawn_scoped(scope, move || make(part)).map_err(|_| part)).collect();
+        // A thread that panicked passes its panic on, as one buffer made here would.
+        parts
+            .into_iter()
+            .flat_map(|p| match p {
+                Ok(h) => h.join().unwrap_or_else(|e| std::panic::resume_unwind(e)),
+                Err(part) => make(part),
+            })
+            .collect()
+    })
 }
 
 /// An azimuthal equidistant plane whose centre's longitude is within 180° of `reference`, a
@@ -89,19 +130,26 @@ impl Plane {
         MultiPolygon::new(mp.0.iter().map(|p| Polygon::new(ring(p.exterior()), p.interiors().iter().map(ring).collect())).collect())
     }
 
+    /// A point of the plane in lon/lat.
+    fn to_lonlat(&self, p: GC<f64>) -> Coord {
+        self.0.inverse(Coord::new(p.x, p.y))
+    }
+
     /// A ring drawn in the plane, in lon/lat degrees, its edges split as [`Plane::split`] needs, by
-    /// at most [`MAX_ADDED`] points in all, however many edges stray.
+    /// at most [`MAX_ADDED`] points in all, however many edges stray. Each vertex is taken back to
+    /// lon/lat once, where most of a buffer's time goes.
     fn ring(&self, r: &LineString<f64>, tolerance: f64) -> LineString<f64> {
-        let mut dense = Vec::with_capacity(r.0.len());
+        let mut both = Vec::with_capacity(r.0.len());
         let mut budget = MAX_ADDED as usize;
-        for w in r.0.windows(2) {
+        let vertices: Vec<(GC<f64>, Coord)> = r.0.iter().map(|p| (*p, self.to_lonlat(*p))).collect();
+        for w in vertices.windows(2) {
             let [a, b] = w else { continue };
-            dense.push(*a);
-            self.split(*a, *b, tolerance, 0, &mut budget, &mut dense);
+            both.push(*a);
+            self.split(*a, *b, tolerance, 0, &mut budget, &mut both);
         }
-        dense.extend(r.0.last());
+        both.extend(vertices.last());
+        let (dense, lonlat): (Vec<GC<f64>>, Vec<Coord>) = both.into_iter().unzip();
         let dense = &LineString::new(dense);
-        let lonlat: Vec<Coord> = dense.0.iter().map(|p| self.0.inverse(Coord::new(p.x, p.y))).collect();
         let around = |lat: f64| {
             let pole = self.0.forward(Coord::new(0.0, lat));
             Polygon::new(dense.clone(), vec![]).contains(&Point::new(pole.x, pole.y))
@@ -126,15 +174,41 @@ impl Plane {
     /// and midpoint are compared with the same points of the straight edge in Web Mercator, the
     /// plane the tools draw edges in (one point alone misses a stray that changes side, as along a
     /// line crossing the equator); an edge that strays is halved, and each half checked again, up
-    /// to [`MAX_SPLITS`] times, while the ring's `budget` of added points lasts.
-    fn split(&self, a: GC<f64>, b: GC<f64>, tolerance: f64, depth: u32, budget: &mut usize, out: &mut Vec<GC<f64>>) {
-        if *budget == 0 || depth >= MAX_SPLITS || STRAY_PER_M2 * ((b.x - a.x).powi(2) + (b.y - a.y).powi(2)) <= tolerance {
+    /// to [`MAX_SPLITS`] times, while the ring's `budget` of added points lasts. Each point, the
+    /// ends and those added to `out`, comes with its place in lon/lat.
+    fn split(
+        &self,
+        (a, la): (GC<f64>, Coord),
+        (b, lb): (GC<f64>, Coord),
+        tolerance: f64,
+        depth: u32,
+        budget: &mut usize,
+        out: &mut Vec<(GC<f64>, Coord)>,
+    ) {
+        if *budget == 0 || depth >= MAX_SPLITS || !may_stray(a, b, la, lb, tolerance) {
             return;
         }
+        if !self.strays(a, b, la, lb, tolerance) {
+            return;
+        }
+        let mid = GC { x: (a.x + b.x) / 2.0, y: (a.y + b.y) / 2.0 };
+        let mid = (mid, self.to_lonlat(mid));
+        self.split((a, la), mid, tolerance, depth + 1, budget, out);
+        if *budget == 0 {
+            return;
+        }
+        *budget -= 1;
+        out.push(mid);
+        self.split(mid, (b, lb), tolerance, depth + 1, budget, out);
+    }
+
+    /// Whether the edge from `a` to `b` (straight in the plane, `la` and `lb` in lon/lat) strays
+    /// from the same edge straight in Web Mercator by more than `tolerance` metres at its quarter
+    /// points or midpoint.
+    fn strays(&self, a: GC<f64>, b: GC<f64>, la: Coord, lb: Coord, tolerance: f64) -> bool {
         let at = |t: f64| self.0.inverse(Coord::new(a.x + t * (b.x - a.x), a.y + t * (b.y - a.y)));
-        let (la, lb) = (at(0.0), at(1.0));
         let beyond = |c: Coord| c.y.abs() >= rustgis_geom::MAX_LAT;
-        let strays = match (beyond(la), beyond(lb)) {
+        match (beyond(la), beyond(lb)) {
             // Beyond Web Mercator's 85.05° there's no straight edge to compare with.
             (true, true) => false,
             // Across that edge: halved until each piece is on one side of it or too short to stray.
@@ -149,18 +223,7 @@ impl Plane {
                     haversine_m(p, Coord::new(p.x + wrap(chord.x - p.x), chord.y)) > tolerance
                 })
             }
-        };
-        if !strays {
-            return;
         }
-        let mid = GC { x: (a.x + b.x) / 2.0, y: (a.y + b.y) / 2.0 };
-        self.split(a, mid, tolerance, depth + 1, budget, out);
-        if *budget == 0 {
-            return;
-        }
-        *budget -= 1;
-        out.push(mid);
-        self.split(mid, b, tolerance, depth + 1, budget, out);
     }
 
     /// A ring round a pole, which goes once round the globe in longitude, as a lon/lat ring: cut at
@@ -197,6 +260,31 @@ impl Plane {
         out.extend([GC { x: edge, y }, GC { x: edge, y: pole }, GC { x: -edge, y: pole }, GC { x: -edge, y }]);
         out
     }
+}
+
+/// Whether the edge from `a` to `b` in the plane (`la` and `lb` in lon/lat) can stray as far as
+/// `tolerance` from the same edge straight in Web Mercator, so that [`Plane::strays`] must look.
+/// Straight in Web Mercator is a rhumb line, which runs off the geodesic by about L² tan φ / 8R
+/// at latitude φ, the heading of a geodesic turning by L tan φ / R along it: 2.0e-8 per square
+/// metre at 46°, 1.9e-7 at 84°, as measured for [`STRAY_PER_M2`], and a tenth of the turn at 45°
+/// more for the ellipsoid and near the equator, where tan φ is near 0. Straight in the plane is the
+/// geodesic only through the plane's centre, and turns from it as the edge lies farther out, by
+/// about ρ / R at ρ from the centre. The latitude is the edge's farthest from the equator plus its
+/// length, and ρ its end farthest from the centre plus its length; both overstate, so an edge
+/// this passes doesn't stray, and shorter edges, edges nearer the centre and lower latitudes skip
+/// the look that most of a buffer's time went to.
+fn may_stray(a: GC<f64>, b: GC<f64>, la: Coord, lb: Coord, tolerance: f64) -> bool {
+    let length2 = (b.x - a.x).powi(2) + (b.y - a.y).powi(2);
+    if STRAY_PER_M2 * length2 <= tolerance {
+        return false;
+    }
+    let length = length2.sqrt();
+    let lat = la.y.abs().max(lb.y.abs()).to_radians() + length / EARTH_R_M;
+    let rho = a.x.hypot(a.y).max(b.x.hypot(b.y)) + length;
+    if !(lat.is_finite() && rho.is_finite()) || lat >= 89f64.to_radians() {
+        return true;
+    }
+    STRAY_MARGIN * (lat.tan() + 0.1 + PLANE_TURN * rho / EARTH_R_M) / (8.0 * EARTH_R_M) * length2 > tolerance
 }
 
 /// A longitude difference folded into −180..180.
@@ -348,5 +436,52 @@ mod tests {
         let n = zigzag.len();
         let ring = plane.ring(&LineString::new(zigzag), MIN_TOLERANCE_M);
         assert_eq!(ring.0.len(), n + MAX_ADDED as usize);
+    }
+
+    #[test]
+    fn an_edge_let_pass_by_its_latitude_does_not_stray() {
+        // Wherever `may_stray` lets an edge pass without looking, looking agrees: planes from 84°S
+        // to 84°N, edges of 100 m to 1,000 km in eight directions, up to 5,000 km from the centre
+        // to the side or at 45°, at the tolerances of buffers from 100 m to 5,000 km (the largest
+        // Buffer makes).
+        let mut passed = 0;
+        for lat in (-84..=84).step_by(12) {
+            let plane = Plane::new(Coord::new(10.0, f64::from(lat)), 10.0);
+            for len in [100.0, 500.0, 1_000.0, 2_000.0, 5_000.0, 10_000.0, 30_000.0, 100_000.0, 300_000.0, 1_000_000.0] {
+                for k in 0..8 {
+                    let (sin, cos) = (f64::from(k) * std::f64::consts::PI / 8.0).sin_cos();
+                    // The edge's centre off it to the side (where the plane turns it most) or obliquely.
+                    for (off, skew) in [-3_000_000.0, -300_000.0, -50_000.0, 0.0, 150_000.0, 1_000_000.0, 5_000_000.0]
+                        .into_iter()
+                        .flat_map(|off| [(off, 0.0), (off, 1.0)])
+                    {
+                        let (s, c) = (skew * std::f64::consts::FRAC_PI_4 + std::f64::consts::FRAC_PI_2).sin_cos();
+                        let (cx, cy) = ((cos * c - sin * s) * off, (sin * c + cos * s) * off);
+                        let a = GC { x: cx - cos * len / 2.0, y: cy - sin * len / 2.0 };
+                        let b = GC { x: cx + cos * len / 2.0, y: cy + sin * len / 2.0 };
+                        let (la, lb) = (plane.to_lonlat(a), plane.to_lonlat(b));
+                        for metres in [100.0, 1_000.0, 5_000.0, 50_000.0, 500_000.0, 2_000_000.0, 5_000_000.0] {
+                            let tolerance = (metres * OUTLINE_TOLERANCE).max(MIN_TOLERANCE_M);
+                            if STRAY_PER_M2 * len * len > tolerance && !may_stray(a, b, la, lb, tolerance) {
+                                passed += 1;
+                                assert!(!plane.strays(a, b, la, lb, tolerance), "{len} m at {lat}°, {off} m off, {metres} m");
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // Most edges a buffer has at mid latitudes are let pass.
+        assert!(passed > 1_000, "{passed}");
+    }
+
+    #[test]
+    fn buffers_made_on_several_threads_are_the_ones_made_alone_in_order() {
+        let points: Vec<Geometry> =
+            (0..PARALLEL_FEATURES * 3).map(|i| Geometry::Point(Coord::new(-170.0 + (i % 340) as f64, -80.0 + (i % 161) as f64))).collect();
+        let refs: Vec<&Geometry> = points.iter().collect();
+        let alone: Vec<Option<Geometry>> = refs.iter().map(|g| geodesic_buffer(g, 5_000.0)).collect();
+        assert_eq!(geodesic_buffers(&refs, 5_000.0), alone);
+        assert_eq!(geodesic_buffers(&refs[..3], 5_000.0), alone[..3]);
     }
 }
