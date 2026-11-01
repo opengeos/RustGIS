@@ -10,6 +10,7 @@ pub mod dirs;
 pub mod dxf;
 pub mod export;
 pub mod filegdb;
+mod footprint;
 pub mod geometry;
 pub mod georss;
 pub mod gml;
