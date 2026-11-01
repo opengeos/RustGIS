@@ -61,35 +61,26 @@ pub fn commands() -> Vec<C> {
             }
             let id = s.layer_id(p)?;
             let old = s.map().layer(id).map(|l| l.name.clone()).unwrap_or_default();
-            // A terrain on this layer follows its rename, when no other layer has that name (with
-            // two, the name doesn't say which one the terrain was set on).
-            let drawn = s.map().layers.iter().filter(|l| l.name.eq_ignore_ascii_case(&old)).count() == 1;
-            // A terrain on a name two layers shared (a project saved so) can't tell which one this was.
-            let was_ambiguous = !drawn
-                && matches!(&s.map().view.terrain, Some(rustgis_map::view::Terrain { source: rustgis_map::view::TerrainSource::Layer(t), .. }) if t.eq_ignore_ascii_case(&old));
+            // The terrain keeps its DEM by name: did it name this layer, and was the name its own?
+            let on_old = terrain_dem(s).is_some_and(|d| d.eq_ignore_ascii_case(&old));
+            let old_was_shared = named_layers(s, &old) > 1;
             let r = with(s, p, |l| {
                 l.name = n.clone();
                 l.dataset.name = n.clone();
             })?;
-            // A terrain drawn from this layer follows the new name.
-            if let Some(rustgis_map::view::Terrain { source: rustgis_map::view::TerrainSource::Layer(t), .. }) = &mut s.map_mut().view.terrain
-                && drawn
-                && t.eq_ignore_ascii_case(&old)
-            {
-                *t = n.clone();
-            }
-            // A terrain whose DEM name two layers now share would draw the first one's heights:
-            // it is turned off, and said.
-            let ambiguous = match &s.map().view.terrain {
-                Some(rustgis_map::view::Terrain { source: rustgis_map::view::TerrainSource::Layer(t), .. }) => {
-                    let count = s.map().layers.iter().filter(|l| l.name.eq_ignore_ascii_case(t)).count();
-                    (count > 1 || was_ambiguous).then(|| t.clone())
+            if let Some(dem) = terrain_dem(s) {
+                if on_old && old_was_shared {
+                    // Two layers had the DEM's name: which one the terrain was on can't be told.
+                    s.map_mut().view.terrain = None;
+                    s.notify(format!("Terrain turned off: two layers were called '{dem}', so which one gives the heights can't be told; turn Terrain on again"), false);
+                } else if on_old {
+                    // The DEM itself, renamed: the terrain follows it.
+                    set_terrain_dem(s, n.clone());
+                } else if named_layers(s, &dem) > 1 {
+                    // Another layer now has the DEM's name: the first of them would give the heights.
+                    s.map_mut().view.terrain = None;
+                    s.notify(format!("Terrain turned off: two layers are now called '{dem}'; rename one and turn Terrain on again"), false);
                 }
-                _ => None,
-            };
-            if let Some(t) = ambiguous {
-                s.map_mut().view.terrain = None;
-                s.notify(format!("Terrain turned off: two layers are or were called '{t}'; rename one and turn Terrain on again"), false);
             }
             // Layers masked by this one follow the new name.
             for l in &mut s.map_mut().layers {
@@ -2837,6 +2828,26 @@ fn add_remote(s: &mut Session, p: &Value, url: &str, src: Box<dyn rustgis_data::
         s.zoom_to(&info.extent);
     }
     Ok(json!({"layer": id, "layers": [id], "features": info.count, "streamed": true, "inPlace": true}))
+}
+
+/// The name of the layer the map's terrain takes its heights from, when it has one.
+fn terrain_dem(s: &Session) -> Option<String> {
+    match &s.map().view.terrain {
+        Some(rustgis_map::view::Terrain { source: rustgis_map::view::TerrainSource::Layer(n), .. }) => Some(n.clone()),
+        _ => None,
+    }
+}
+
+/// Points the map's terrain at the layer called `name`.
+fn set_terrain_dem(s: &mut Session, name: String) {
+    if let Some(rustgis_map::view::Terrain { source: rustgis_map::view::TerrainSource::Layer(n), .. }) = &mut s.map_mut().view.terrain {
+        *n = name;
+    }
+}
+
+/// How many layers are called `name` (as layers are looked up, ignoring case).
+fn named_layers(s: &Session, name: &str) -> usize {
+    s.map().layers.iter().filter(|l| l.name.eq_ignore_ascii_case(name)).count()
 }
 
 /// Whether a web address names a GeoTIFF (by its path's extension).
