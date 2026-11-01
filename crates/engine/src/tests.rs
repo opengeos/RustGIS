@@ -9292,6 +9292,13 @@ fn shapefile_by_its_shp_address() {
     assert_eq!(r["features"], 1, "{r}");
     let said = &s.notices.last().unwrap().text;
     assert!(said.contains("no .prj, .cpg found beside it (2 of 3") && said.contains("longitude/latitude"), "{said}");
+    // With its coordinate system given, nothing is assumed of the missing .prj.
+    s.run("layer.addUrl", &json!({"url": format!("{base}/plain/rios.shp"), "name": "Com crs", "crs": "EPSG:31983"})).unwrap();
+    let said = &s.notices.last().unwrap().text;
+    assert!(said.contains("no .prj, .cpg found beside it") && !said.contains("longitude/latitude"), "{said}");
+    // A long name keeps its extension (and is still a .shp's zip).
+    let long = crate::cmd::layer::url_file_name(&format!("https://x.org/{}.shp", "a".repeat(200)), b"PK\x03\x04").unwrap();
+    assert!(long.ends_with(".zip") && long.chars().count() <= 120, "{long}");
     // A part a signed address is refused (403) fails it, named: the signature may not cover it.
     // It names the part without the signature.
     let e = s.run("layer.addUrl", &json!({"url": format!("{base}/signed/rios.shp?sig=1")})).unwrap_err();

@@ -2643,15 +2643,16 @@ fn read_delimited(
 pub fn url_file_name(url: &str, bytes: &[u8]) -> Result<String, String> {
     let path = url.split(['?', '#']).next().unwrap_or(url);
     let path = path.split_once("://").map_or(path, |(_, rest)| rest.split_once('/').map_or("", |(_, p)| p));
-    let last: String = path
-        .rsplit('/')
-        .find(|p| !p.is_empty())
-        .unwrap_or("")
-        .chars()
-        .filter(|c| !c.is_control() && !matches!(c, '\\' | ':'))
-        .take(120)
-        .collect();
-    let ext = Path::new(&last).extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase).unwrap_or_default();
+    let full: String =
+        path.rsplit('/').find(|p| !p.is_empty()).unwrap_or("").chars().filter(|c| !c.is_control() && !matches!(c, '\\' | ':')).collect();
+    let ext = Path::new(&full).extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase).unwrap_or_default();
+    // At most 120 characters, keeping the extension (a long `.shp` name is still one).
+    let last: String = match Path::new(&full).extension().and_then(|e| e.to_str()) {
+        Some(e) if full.chars().count() > 120 && e.chars().count() < 60 => {
+            format!("{}.{e}", full.chars().take(119 - e.chars().count()).collect::<String>())
+        }
+        _ => full.chars().take(120).collect(),
+    };
     // JPEG 2000 (Sentinel-2's imagery) is read through GDAL, which the browser can't run.
     let jpeg2000_only_on_desktop = |name: String| {
         if cfg!(target_arch = "wasm32") { Err(super::raster::JPEG2000_WEB_LIMITATION.to_string()) } else { Ok(name) }
@@ -2786,7 +2787,7 @@ pub(crate) fn add_url(s: &mut Session, p: &Value) -> CmdResult {
             crate::render::rustgis_tiles::cache::download_blocking(url).map_err(named)?
         };
         let name = url_file_name(url, &bytes).map_err(named)?;
-        let left_out = parts_left_out(url, &bytes);
+        let left_out = parts_left_out(url, &bytes, p);
         let r = super::raster::add_named_bytes(s, p, name, bytes).map_err(named)?;
         if let Some(n) = left_out {
             s.notify(n, false);
@@ -2816,19 +2817,24 @@ fn is_zip(bytes: &[u8]) -> bool {
 /// `.shp`'s query, which the parts carry too).
 fn part_failed(url: &str, e: String) -> String {
     let e = e.strip_prefix(url).map(|r| r.trim_start_matches(": ").to_string()).unwrap_or(e);
-    format!("{}: {e}", crate::sources::redact(url))
+    format!("{}: {}", crate::sources::redact(url), crate::sources::redact_text(&e))
 }
 
 /// What a Shapefile added by its `.shp` address (#1238) was read without, said: its `.shx`, `.prj`
-/// or `.cpg` when they weren't found beside it. The address is said without its keys or signature.
-fn parts_left_out(url: &str, bytes: &[u8]) -> Option<String> {
+/// or `.cpg` when they weren't found beside it. The address is said without its keys or signature;
+/// a `crs` given (`p`) stands for the `.prj`.
+fn parts_left_out(url: &str, bytes: &[u8], p: &Value) -> Option<String> {
     rustgis_data::io::shapefile_part_urls(url)?;
     let lacks = rustgis_data::io::shapefile_zip_lacks(bytes);
     if lacks.is_empty() {
         return None;
     }
     let names = lacks.iter().map(|e| format!(".{e}")).collect::<Vec<_>>().join(", ");
-    let crs = if lacks.contains(&"prj") { "; its coordinates are read as longitude/latitude" } else { "" };
+    let crs = if lacks.contains(&"prj") && ps(p, "crs").is_none_or(|c| c.trim().is_empty()) {
+        "; its coordinates are read as longitude/latitude"
+    } else {
+        ""
+    };
     let them = if lacks.len() == 1 { "it" } else { "them" };
     let url = crate::sources::redact(url);
     Some(format!("{url}: no {names} found beside it ({} of 3 optional files missing), so it was read without {them}{crs}", lacks.len()))
@@ -3072,7 +3078,7 @@ fn add_download(s: &mut Session, p: &Value) -> CmdResult {
     } else {
         url_file_name(&url, &bytes).map_err(|e| format!("{url}: {e}"))?
     };
-    let left_out = parts_left_out(&url, &bytes);
+    let left_out = parts_left_out(&url, &bytes, p);
     let mut r = super::raster::add_named_bytes(s, p, name, bytes)?;
     if let Some(n) = left_out {
         s.notify(n, false);
