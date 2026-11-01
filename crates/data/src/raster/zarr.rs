@@ -1190,11 +1190,14 @@ pub fn assemble(store: &Store, plan: &Plan, chunks: &HashMap<String, Vec<u8>>, n
                     } else {
                         let x = v * scale + offset;
                         let f = x as f32;
-                        // A packed whole number is held when unscaling its f32 gives it back exactly;
-                        // a scaled float (or anything scaled by 0), when f32 holds the scaled value.
+                        // A packed whole number is held when unscaling its f32 gives it back exactly.
+                        // Float32 or narrower storage states no more precision than f32 holds, so
+                        // scaling it isn't counted; a scaled Float64 (or anything scaled by 0) is held
+                        // when f32 holds the scaled value.
                         let held = match dt.whole(b) {
                             _ if !scaled => dt.held_as_f32(b),
                             Some(i) if scale != 0.0 => ((f64::from(f) - offset) / scale).round() as i128 == i,
+                            None if dt.size <= 4 => true,
                             _ => f64::from(f) == x,
                         };
                         rounded += u64::from(!held);
@@ -2051,6 +2054,10 @@ mod tests {
         assert!(read_scaled("<i4", (0.01, 273.15), i32s([-32_768, 1, 2_315, 32_767])).is_empty());
         assert_eq!(read_scaled("<i4", (1.0, 0.25), i32s([100_000_001, 1, 2, 3])), vec![1]);
         assert_eq!(read_scaled("<f8", (0.1, 0.0), f64s([1.0, 5.0, 10.0, f64::NAN])), vec![1]);
+        // The same values stored as Float32 or Float16 hold no more than f32 does: none counted.
+        assert!(read_scaled("<f4", (0.1, 0.0), f32s(&[1.0, 1.5, 10.0, 0.123_456_7])).is_empty());
+        let f16s = |v: [u16; 4]| v.iter().flat_map(|x| x.to_le_bytes()).collect();
+        assert!(read_scaled("<f2", (0.1, 273.15), f16s([0x3c00, 0x3e00, 0x4900, 0])).is_empty());
         // Scaled 64-bit whole numbers are compared exactly too, and a scale of 0 writes the offset.
         assert_eq!(read_scaled("<i8", (2.0, 0.0), i64s([(1 << 60) + 1, 1 << 60, 3, 0])), vec![1]);
         assert_eq!(read_scaled("<u8", (2.0, 0.0), u64s([(1 << 60) + 1, 1 << 60, 3, 0])), vec![1]);

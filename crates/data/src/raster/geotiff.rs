@@ -990,8 +990,9 @@ pub(super) fn read_limited_with_nodata(
     let mut dec = Decoder::new(r).map_err(err)?.with_limits(limits.clone());
     let (full_w, full_h) = dec.dimensions().map_err(err)?;
     let geo = geo_tags(&mut dec)?;
-    // The no-data value whose pixels aren't counted as rounded: the file's, or else the sidecar's.
-    let uncounted = geo.nodata.or(sidecar_nodata);
+    // The no-data value whose pixels aren't counted as rounded: the file's, or else (as
+    // `Raster::new` drops a NaN or infinite one) the sidecar's.
+    let uncounted = geo.nodata.filter(|v| v.is_finite()).or(sidecar_nodata);
     // The bands' descriptions GDAL keeps in the file (an `.aux.xml` sidecar's are applied after).
     let described = dec
         .find_tag(Tag::Unknown(42112))
@@ -2585,6 +2586,10 @@ mod tests {
         std::fs::write(dir.join("s.tif.aux.xml"), xml).unwrap();
         let side = crate::raster::read_path(&tif).unwrap();
         assert_eq!((side.nodata, side.rounded.as_slice()), (Some(0.1), &[1u64][..]));
+        // The same with a NaN no-data tag, which leaves the sidecar's value in force.
+        std::fs::write(&tif, typed::<Gray64Float>(2, 2, &px, Some("nan"))).unwrap();
+        let nan = crate::raster::read_path(&tif).unwrap();
+        assert_eq!((nan.nodata, nan.rounded.as_slice()), (Some(0.1), &[1u64][..]));
         std::fs::remove_dir_all(&dir).unwrap();
         // 64-bit whole numbers are compared as integers: 2^60 + 1 changes, 2^60 doesn't.
         let big = read(std::io::Cursor::new(typed::<GrayI64>(2, 1, &[(1 << 60) + 1, 1 << 60], None)), "i64").unwrap();
