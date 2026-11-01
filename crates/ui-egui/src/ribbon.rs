@@ -1930,6 +1930,18 @@ fn view_tab(app: &mut RustGisApp, ui: &mut Ui) {
         });
     });
     group(ui, "Scene", |ui| {
+        let on = v.terrain.is_some();
+        big(
+            ui,
+            app,
+            "relief",
+            "Terrain",
+            "Drape the map over the heights of the active DEM raster layer, and tilt the map to see the relief. Click again to flatten it.",
+            "map.terrain",
+            if on { json!({"off": true}) } else { json!({}) },
+            on,
+            false,
+        );
         col(ui, |ui| {
             small(
                 ui,

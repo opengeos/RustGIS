@@ -3729,6 +3729,23 @@ fn terrain_is_set_from_a_dem_or_tiles() {
     assert_eq!(back.terrain, s.map().view.terrain);
     s.run("map.terrain", &json!({"off": true})).unwrap();
     assert!(s.map().view.terrain.is_none());
+    // Nothing named: the active layer, when it is a raster, is the DEM; a vector one is refused,
+    // saying to make a DEM the active layer.
+    s.active_layer = s.map().layer_by_name("Countries").map(|l| l.id);
+    assert!(s.run("map.terrain", &json!({})).unwrap_err().contains("make a DEM raster layer the active layer"));
+    s.run("layer.addDataBytes", &json!({"fileName": "dem.tif", "data": dem_b64()})).unwrap();
+    let dem = s.map().layers.iter().find(|l| l.is_raster()).unwrap();
+    let (id, name) = (dem.id, dem.name.clone());
+    s.active_layer = Some(id);
+    let v = s.run("map.terrain", &json!({"exaggeration": 3})).unwrap();
+    assert_eq!((v["source"]["layer"].as_str(), v["exaggeration"].as_f64()), (Some(name.as_str()), Some(3.0)));
+    // On a map looked at straight down, a notice says to tilt it.
+    assert!(s.notices.last().unwrap().text.contains("tilt the map"), "{:?}", s.notices.last());
+    // Once on, nothing named changes nothing but what is given: the active layer doesn't replace it.
+    s.active_layer = s.map().layer_by_name("Countries").map(|l| l.id);
+    let v = s.run("map.terrain", &json!({})).unwrap();
+    assert_eq!(v["source"]["layer"].as_str(), Some(name.as_str()));
+    s.run("map.terrain", &json!({"off": true})).unwrap();
 }
 
 #[test]

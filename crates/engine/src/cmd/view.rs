@@ -49,7 +49,7 @@ pub fn commands() -> Vec<C> {
         })
         .params(r#"{"mode": "none"|"distance", "distance"?: metres from the view's centre}"#),
         C::new("map.terrain", "Terrain", "View › Scene", terrain).params(
-            r#"{"layer"?: a DEM raster layer (heights in metres) | "tiles"?: elevation tile URL with {z}/{x}/{y}, "encoding"?: "terrarium"|"mapbox" (tiles; default terrarium), "exaggeration"?: 0 to 20 (default 1, or the terrain's), "off"?: true}"#,
+            r#"{"layer"?: a DEM raster layer (heights in metres; without layer or tiles, and no terrain yet, the active layer when it is a raster) | "tiles"?: elevation tile URL with {z}/{x}/{y}, "encoding"?: "terrarium"|"mapbox" (tiles; default terrarium), "exaggeration"?: 0 to 20 (default 1, or the terrain's), "off"?: true}"#,
         ),
         C::new("map.displayType", "Display Type", "View › Options", |s, p| {
             let fast = match ps(p, "mode").ok_or("mode is required")? {
@@ -233,12 +233,26 @@ fn terrain(s: &mut Session, p: &Value) -> CmdResult {
         }
         (None, None) => None,
     };
+    // Nothing named and no terrain yet (Terrain from the ribbon or command search): the active
+    // layer, when it is a raster, is the DEM.
+    let source = source.or_else(|| {
+        if s.map().view.terrain.is_some() {
+            return None;
+        }
+        let l = s.active_layer.and_then(|id| s.map().layer(id)).filter(|l| l.raster.is_some())?;
+        Some(TerrainSource::Layer(l.name.clone()))
+    });
+    let flat = s.map().camera.pitch == 0.0;
     let m = s.map_mut();
     let t = match (source, m.view.terrain.take()) {
         (Some(source), old) => Terrain { source, exaggeration: exaggeration.or(old.map(|t| t.exaggeration)).unwrap_or(1.0) },
         // Only a new exaggeration: the terrain keeps its source.
         (None, Some(old)) => Terrain { exaggeration: exaggeration.unwrap_or(old.exaggeration), ..old },
-        (None, None) => return Err("layer (a DEM raster layer) or tiles (an elevation tile URL) is required".into()),
+        (None, None) => {
+            return Err(
+                "make a DEM raster layer the active layer, or give layer (a DEM raster layer) or tiles (an elevation tile URL)".into()
+            );
+        }
     };
     let out = json!({
         "source": match &t.source {
@@ -248,5 +262,9 @@ fn terrain(s: &mut Session, p: &Value) -> CmdResult {
         "exaggeration": t.exaggeration,
     });
     m.view.terrain = Some(t);
+    // A map looked at straight down stays flat: say how to see the relief.
+    if flat {
+        s.notify("Terrain is on: tilt the map (drag with the right button, or Shift+Up) to see the relief", false);
+    }
     Ok(out)
 }
