@@ -9347,6 +9347,9 @@ fn shapefile_by_its_shp_address() {
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
     };
+    // The app's download of a signed .shp refused says what the 403 may mean, without the signature.
+    let e = fetch(&format!("{base}/signed/gone.shp?sig=1"), 1 << 20).unwrap_err();
+    assert!(e.contains("403") && e.contains("may also mean the file isn't there") && !e.contains("sig=1"), "{e}");
     // A .shp address answering with a zip lands as it is, its parts not asked for.
     let zipped = fetch(&format!("{base}/zipped/rios.shp"), 1 << 20).unwrap();
     assert!(zipped.starts_with(b"PK\x03\x04"));

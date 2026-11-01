@@ -3558,7 +3558,10 @@ impl RustGisApp {
                 Err(e) => {
                     self.session.download_failed(id);
                     rustgis_engine::cmd::geolibre::discard_pending(&mut self.session, &p);
-                    self.session.notify(if e.starts_with(&url) { e } else { format!("{url}: {e}") }, true);
+                    // Named without the address's keys, token or signature.
+                    let e = e.strip_prefix(url.as_str()).map(|r| r.trim_start_matches(": ").to_string()).unwrap_or(e);
+                    let (shown, why) = (rustgis_engine::sources::redact(&url), rustgis_engine::sources::redact_text(&e));
+                    self.session.notify(format!("{shown}: {why}"), true);
                 }
             }
         }
