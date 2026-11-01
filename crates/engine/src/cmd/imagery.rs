@@ -839,13 +839,18 @@ fn process(s: &mut Session, p: &Value) -> CmdResult {
 /// Most inputs a mosaic takes.
 const MAX_MOSAIC_INPUTS: usize = 10_000;
 
-/// Whether a mosaic stays in the project: it has inputs, no more than it takes, each a raster
-/// layer in the session with its cells in memory, found as [`raster_mosaic`] finds it (a layer of
-/// that name before a file), and nothing else names a place (no `path`, nor a name that looks like
-/// one). A layer named like a path (`~dem`, `a/../b`) counts as a place too: that errs towards
-/// asking for `files`.
+/// The raster layer a mosaic input names, with its cells in memory; any other input is read as a
+/// file. [`raster_mosaic`] and [`mosaic_stays_in_project`] both go by it, so they can't disagree.
+fn mosaic_layer(s: &Session, v: &Value) -> Option<Arc<Raster>> {
+    v.as_str().map(str::trim).and_then(|n| raster_named(s, n).ok())
+}
+
+/// Whether a mosaic stays in the project: it has inputs, no more than it takes, each a
+/// [`mosaic_layer`], and nothing else names a place (no `path`, nor a name that looks like one).
+/// A layer named like a path (`~dem`, `a/../b`) counts as a place too: that errs towards asking
+/// for `files`.
 pub(crate) fn mosaic_stays_in_project(s: &Session, p: &Value) -> bool {
-    let in_memory = |v: &Value| v.as_str().map(str::trim).is_some_and(|n| raster_named(s, n).is_ok());
+    let in_memory = |v: &Value| mosaic_layer(s, v).is_some();
     let layers =
         p.get("inputs").and_then(Value::as_array).is_some_and(|a| !a.is_empty() && a.len() <= MAX_MOSAIC_INPUTS && a.iter().all(in_memory));
     layers && !super::items::names_place(p, super::plugins::PLACE_KEYS, 0)
@@ -870,12 +875,12 @@ fn raster_mosaic(s: &mut Session, p: &Value) -> CmdResult {
     // rest are loaded.
     for v in inputs {
         let n = v.as_str().map(str::trim).filter(|n| !n.is_empty()).ok_or("each input is a raster layer's name or a file path")?;
-        let r = match raster_named(s, n) {
-            Ok(r) => r,
-            Err(_) if rustgis_data::raster::is_raster_name(n) => {
+        let r = match mosaic_layer(s, v) {
+            Some(r) => r,
+            None if rustgis_data::raster::is_raster_name(n) => {
                 Arc::new(rustgis_data::raster::read_path(std::path::Path::new(n)).map_err(|e| format!("{n}: {e}"))?)
             }
-            Err(e) => return Err(e),
+            None => return Err(format!("no raster layer '{n}'")),
         };
         // An overview would quietly coarsen the whole mosaic.
         if let Some((fw, fh)) = r.overview {

@@ -6895,6 +6895,11 @@ fn plugin_mosaics_of_project_layers_need_no_files() {
         let e = forward(&mut s, "eng-mosaic", "raster.mosaic", params.clone()).unwrap_err();
         assert!(e.contains("'files' permission"), "{params}: {e}");
     }
+    // With `files`, the mosaic's own limit says why.
+    plugin("eng-mosaic-files", &["edit", "files"]);
+    let e = forward(&mut s, "eng-mosaic-files", "raster.mosaic", json!({"inputs": vec!["west"; 10_001]})).unwrap_err();
+    assert!(e.contains("at most 10000 inputs"), "{e}");
+    rustgis_plugins::unload("eng-mosaic-files");
     // A raster layer whose cells aren't in memory is read from its file.
     let east = s.map().layer_by_name("east").unwrap().id;
     s.map_mut().layer_mut(east).unwrap().raster.as_mut().unwrap().data = None;
