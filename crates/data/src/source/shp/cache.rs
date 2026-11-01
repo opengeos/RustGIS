@@ -283,9 +283,11 @@ impl Drop for Lease {
         if self.temporary || !self.ready {
             let _ = remove_unpinned(&self.path);
         }
-        // Only a cache the last sweep left over budget (indexes in use it couldn't evict) has
-        // anything for this release to free: a full sweep costs a lock and a few system calls per
-        // entry, so one on every release made each Shapefile open slower as the cache grew (#1230).
+        // Only a cache the last sweep left over budget has anything for this release to free: a
+        // full sweep costs a lock and a few system calls per entry, so one on every release made
+        // each Shapefile open slower as the cache grew (#1230). What it couldn't evict may be
+        // indexes in use, which a release frees, or files without a readable lease, which no
+        // release frees: while those keep the cache over budget, every release still sweeps.
         if over_budget(&directory.root) {
             let _ = prune_locked(&directory.root, self.budget);
         }
