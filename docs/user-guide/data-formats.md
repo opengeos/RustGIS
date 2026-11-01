@@ -139,6 +139,17 @@ its capabilities. For OGC API feature collections, enter a group name (initially
 and choose **Import All**. The group expands into ordinary point, line and polygon layers with
 the same legends, styling and attribute tables as file imports. Other offerings have individual
 **Add** buttons (`service.layers` and `service.add` from scripts, the command line and MCP).
+
+Adding a layer or importing a group leaves the view where it is: only the first content added to an
+empty map (beyond its basemap) is framed. A map holds content once it has a layer (hidden or not), a
+tile overlay, or a cloud-optimised GeoTIFF, PMTiles or MBTiles tile layer (hidden, or drawn as a
+basemap, included). A plain basemap does not count, and neither does a map style a service offers:
+it draws as a basemap, under the layers.
+
+A PMTiles or MBTiles archive added as a file is the exception: it is framed on its bounds whatever
+the map holds, unless it covers the whole world. Features asked for over an area keep the view, or
+go to the box given.
+
 An OGC API landing page works directly: RustGIS follows its advertised
 JSON collections link, so you don't need to append `/collections`. If the landing page also
 offers map tiles, they remain listed alongside the collections. A failed collections request

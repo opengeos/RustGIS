@@ -2522,8 +2522,8 @@ impl RustGisApp {
                         q[k] = v.clone();
                     }
                 }
-                if p.get("zoom").and_then(Value::as_bool) == Some(true) {
-                    q["zoom"] = json!(true);
+                if let Some(zoom) = p.get("zoom").and_then(Value::as_bool) {
+                    q["zoom"] = json!(zoom);
                 }
                 for k in ["service", "coverage"] {
                     if p.get(k).and_then(Value::as_bool) == Some(true) {

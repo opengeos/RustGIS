@@ -9413,6 +9413,81 @@ fn mbtiles_archives_become_tile_layers() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+/// An MBTiles archive added frames the map on its metadata bounds, as a PMTiles archive does, over
+/// a map that already holds content too, unless it covers the whole world; Zoom To Tile Layer goes
+/// there again and `"zoom"` is ignored, as it is for PMTiles.
+#[test]
+fn mbtiles_archives_frame_the_map_on_their_bounds() {
+    use base64::Engine;
+    let dir = std::env::temp_dir().join(format!("rustgis-mbtiles-frame-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut red = tiny_skia::Pixmap::new(256, 256).unwrap();
+    red.fill(tiny_skia::Color::from_rgba8(255, 0, 0, 255));
+    let png = red.encode_png().unwrap();
+    let write = |name: &str, bounds: Option<&str>| {
+        let path = dir.join(name);
+        let _ = std::fs::remove_file(&path);
+        let c = rusqlite::Connection::open(&path).unwrap();
+        c.execute_batch(
+            "CREATE TABLE metadata (name text, value text); CREATE TABLE tiles (zoom_level integer, tile_column integer, tile_row integer, tile_data blob);",
+        )
+        .unwrap();
+        c.execute("INSERT INTO metadata VALUES ('format', 'png'), ('minzoom', '0'), ('maxzoom', '0')", []).unwrap();
+        if let Some(b) = bounds {
+            c.execute("INSERT INTO metadata VALUES ('bounds', ?1)", [b]).unwrap();
+        }
+        c.execute("INSERT INTO tiles VALUES (0, 0, 0, ?1)", [png.as_slice()]).unwrap();
+        drop(c);
+        path.display().to_string()
+    };
+    let center = |s: &Session| rustgis_geom::merc_to_lonlat(s.map().camera.center);
+    let near_iceland = |s: &Session| {
+        let c = center(s);
+        assert!((c.x + 19.0).abs() < 0.5 && (c.y - 65.0).abs() < 1.5, "{c:?}");
+    };
+    let iceland = write("iceland.mbtiles", Some("-24.5,63.3,-13.5,66.6"));
+
+    // Added as data on an empty map: framed on its bounds straight away (read natively).
+    let mut s = Session::new(Project::default());
+    s.run("layer.addData", &json!({"path": iceland})).unwrap();
+    assert!(s.style_view.is_none());
+    near_iceland(&s);
+
+    // Over a map that holds content, the archive is still framed (see `follow_style_view`).
+    let mut w = world();
+    w.run("map.zoomToExtent", &json!({"extent": [0.0, 0.0, 10.0, 10.0]})).unwrap();
+    w.run("layer.addData", &json!({"path": iceland})).unwrap();
+    near_iceland(&w);
+
+    // An archive decides for itself: `"zoom": false` doesn't stop it (documented in layer.addUrl).
+    s.run("map.zoomToExtent", &json!({"extent": [0.0, 0.0, 10.0, 10.0]})).unwrap();
+    s.run("layer.addData", &json!({"path": iceland, "zoom": false})).unwrap();
+    near_iceland(&s);
+
+    // Zoom To Tile Layer reads the same metadata.
+    s.run("map.zoomToExtent", &json!({"extent": [0.0, 0.0, 10.0, 10.0]})).unwrap();
+    let r = s.run("map.zoomToTiles", &json!({"name": "iceland"})).unwrap();
+    assert_eq!(r["bounds"][0].as_f64().map(|w| (w + 24.5).abs() < 1e-6), Some(true), "{r}");
+    near_iceland(&s);
+
+    // An upload's bytes are framed too.
+    let b64 = base64::engine::general_purpose::STANDARD.encode(std::fs::read(dir.join("iceland.mbtiles")).unwrap());
+    let mut u = Session::new(Project::default());
+    u.run("layer.addDataBytes", &json!({"fileName": "uploaded.mbtiles", "data": b64})).unwrap();
+    near_iceland(&u);
+
+    // A world archive, or one with no bounds, leaves the map where it is.
+    for (name, bounds) in [("world.mbtiles", Some("-180,-85,180,85")), ("bare.mbtiles", None)] {
+        let p = write(name, bounds);
+        let mut w = Session::new(Project::default());
+        w.run("map.zoomToExtent", &json!({"extent": [0.0, 0.0, 10.0, 10.0]})).unwrap();
+        let before = w.map().camera;
+        w.run("layer.addData", &json!({"path": p})).unwrap();
+        assert_eq!(w.map().camera, before, "{name}");
+    }
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 /// Delimited text in a projected system, by path, text and upload; WKT columns; bad options.
 #[test]
 fn delimited_text_with_a_coordinate_system() {
@@ -9704,6 +9779,156 @@ fn downloads_land_in_their_own_project() {
     let r = w.run("layer.addDownload", &json!({"id": id, "url": "https://x.org/far.geojson"})).unwrap();
     assert!(r.get("zoomed").is_none());
     assert_eq!(rustgis_geom::merc_to_lonlat(w.map().camera.center), c);
+}
+
+/// `"zoom": false` keeps the view of a downloaded layer even when it is the map's first content;
+/// without it the first content is framed. A whole GeoTIFF downloaded from an address follows the
+/// same rule as one read in place, through `layer.addUrl` and the app's `layer.addDownload` alike.
+#[test]
+fn zoom_false_keeps_the_view_of_downloaded_data() {
+    let far = r#"{"type": "FeatureCollection", "features": [{"type": "Feature", "properties": {}, "geometry": {"type": "Point", "coordinates": [151.2, -33.9]}}]}"#;
+    let (base, _) = serve_file(far.as_bytes().to_vec(), false);
+    // A GeoJSON downloaded from an address on an empty map: "zoom": false keeps the view.
+    let mut s = Session::new(Project::default());
+    let start = s.map().camera;
+    let r = s.run("layer.addUrl", &json!({"url": format!("{base}/sydney.geojson"), "zoom": false})).unwrap();
+    assert_eq!(r["features"], 1, "{r}");
+    assert_eq!(s.map().camera, start);
+    // Without "zoom" the first content on an empty map is framed, as before.
+    let mut f = Session::new(Project::default());
+    f.run("layer.addUrl", &json!({"url": format!("{base}/sydney.geojson")})).unwrap();
+    let at = f.map().center_lonlat();
+    assert!((at.x - 151.2).abs() < 0.1 && (at.y + 33.9).abs() < 0.5, "{at:?}");
+    // The app's download lands and is added (layer.addDownload): the same rule holds.
+    let mut a = Session::new(Project::default());
+    let id = a.download_started();
+    assert!(a.download_landed(id, far.as_bytes().to_vec()));
+    let start = a.map().camera;
+    a.run("layer.addDownload", &json!({"id": id, "url": "https://x.org/sydney.geojson", "zoom": false})).unwrap();
+    assert_eq!(a.map().camera, start);
+    // A whole GeoTIFF (strips, not cloud-optimised) is downloaded and added as a raster layer;
+    // "zoom": false keeps the view when it is the first content too.
+    let raster = rustgis_data::raster::Raster::new(
+        "strips",
+        8,
+        8,
+        vec![vec![3.0; 64]],
+        rustgis_data::raster::GeoTransform { origin_x: 5.0, origin_y: 50.0, pixel_width: 0.1, pixel_height: -0.1 },
+        rustgis_data::raster::Crs::LonLat,
+        None,
+        rustgis_data::raster::ColorHint::Gray,
+        "Float32",
+    )
+    .unwrap();
+    let bytes = rustgis_data::raster::geotiff::write(&raster, 0).unwrap();
+    let (tif, _) = serve_ranges(bytes.clone());
+    let mut z = Session::new(Project::default());
+    let start = z.map().camera;
+    let r = z.run("layer.addUrl", &json!({"url": format!("{tif}/strips.tif"), "zoom": false})).unwrap();
+    assert!(z.map().layer(r["layer"].as_u64().unwrap() as u32).is_some_and(|l| l.is_raster()), "{r}");
+    assert_eq!(z.map().camera, start);
+    // Through the app's download path as well.
+    let mut w = Session::new(Project::default());
+    let id = w.download_started();
+    assert!(w.download_landed(id, bytes));
+    let start = w.map().camera;
+    w.run("layer.addDownload", &json!({"id": id, "url": "https://x.org/strips.tif", "zoom": false})).unwrap();
+    assert_eq!(w.map().camera, start);
+    // A FlatGeobuf downloaded whole (not read in place): same rule through the source reader.
+    let fgb = std::fs::read(grid_fgb("zoom-false", 5)).unwrap();
+    let (fgb_base, _) = serve_file(fgb, false);
+    let mut v = Session::new(Project::default());
+    let start = v.map().camera;
+    v.run("layer.addUrl", &json!({"url": format!("{fgb_base}/grid.fgb"), "zoom": false})).unwrap();
+    assert_eq!(v.map().camera, start);
+    // A downloaded KMZ of ground overlays only: its raster layers follow the same rule.
+    let mut red = tiny_skia::Pixmap::new(8, 8).unwrap();
+    red.fill(tiny_skia::Color::from_rgba8(255, 0, 0, 255));
+    let doc = r#"<kml xmlns="http://www.opengis.net/kml/2.2"><Document><GroundOverlay><name>Over</name><Icon><href>files/red.png</href></Icon><LatLonBox><north>41</north><south>40</south><east>11</east><west>10</west></LatLonBox></GroundOverlay></Document></kml>"#;
+    let kmz = rustgis_data::zip::write(&[("doc.kml".into(), doc.as_bytes().to_vec()), ("files/red.png".into(), red.encode_png().unwrap())])
+        .unwrap();
+    let (kmz_base, _) = serve_file(kmz, false);
+    let mut o = Session::new(Project::default());
+    let start = o.map().camera;
+    o.run("layer.addUrl", &json!({"url": format!("{kmz_base}/site.kmz"), "zoom": false})).unwrap();
+    assert!(o.map().layer_by_name("Over").is_some());
+    assert_eq!(o.map().camera, start);
+}
+
+/// `"zoom": false` keeps the view when a spreadsheet or a geotagged photo is added to an empty map;
+/// without it the first content is framed, and a later photo, like any layer, leaves the view alone.
+#[test]
+fn zoom_false_keeps_the_view_of_sheets_and_photos() {
+    use base64::Engine;
+    let book = rustgis_data::sheets::xlsx(&[("Places", &[&["name", "longitude", "latitude"], &["A", "10", "20"]])]);
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&book);
+    let mut s = Session::new(Project::default());
+    let start = s.map().camera;
+    let r = s
+        .run("layer.addDataBytes", &json!({"fileName": "places.xlsx", "data": b64, "x": "longitude", "y": "latitude", "zoom": false}))
+        .unwrap();
+    assert!(s.map().layer(r["layer"].as_u64().unwrap() as u32).is_some(), "{r}");
+    assert_eq!(s.map().camera, start);
+    let mut f = Session::new(Project::default());
+    f.run("layer.addDataBytes", &json!({"fileName": "places.xlsx", "data": b64, "x": "longitude", "y": "latitude"})).unwrap();
+    let c = rustgis_geom::merc_to_lonlat(f.map().camera.center);
+    assert!((c.x - 10.0).abs() < 0.01 && (c.y - 20.0).abs() < 0.01, "{c:?}");
+    // A geotagged photo downloaded from an address: the same rule.
+    let (base, _) = serve_file(rustgis_data::photo::example(true, (43.4674, "N"), (11.8851, "E")), false);
+    let mut ph = Session::new(Project::default());
+    let start = ph.map().camera;
+    let r = ph.run("layer.addUrl", &json!({"url": format!("{base}/pic.jpg"), "zoom": false})).unwrap();
+    assert_eq!(r["photos"], 1, "{r}");
+    assert_eq!(ph.map().camera, start);
+    let mut ph2 = Session::new(Project::default());
+    ph2.run("layer.addUrl", &json!({"url": format!("{base}/pic.jpg")})).unwrap();
+    let c = rustgis_geom::merc_to_lonlat(ph2.map().camera.center);
+    assert!((c.x - 11.8851).abs() < 0.01 && (c.y - 43.4674).abs() < 0.01, "{c:?}");
+    // A later photo leaves the view alone, as a later layer does; `"zoom": true` frames it.
+    let far = r#"{"type": "FeatureCollection", "features": [{"type": "Feature", "properties": {}, "geometry": {"type": "Point", "coordinates": [151.2, -33.9]}}]}"#;
+    let mut ph3 = Session::new(Project::default());
+    ph3.run("layer.addDataText", &json!({"fileName": "far.geojson", "text": far})).unwrap();
+    ph3.run("map.zoomToExtent", &json!({"extent": [0.0, 0.0, 10.0, 10.0]})).unwrap();
+    let before = ph3.map().camera;
+    ph3.run("layer.addUrl", &json!({"url": format!("{base}/pic.jpg")})).unwrap();
+    assert_eq!(ph3.map().camera, before);
+    ph3.run("layer.addUrl", &json!({"url": format!("{base}/pic.jpg"), "zoom": true})).unwrap();
+    let c = rustgis_geom::merc_to_lonlat(ph3.map().camera.center);
+    assert!((c.x - 11.8851).abs() < 0.01 && (c.y - 43.4674).abs() < 0.01, "{c:?}");
+    // The app's download of a photo follows the same rule: `"zoom": false` keeps the view.
+    let mut ph4 = Session::new(Project::default());
+    let start = ph4.map().camera;
+    let id = ph4.download_started();
+    assert!(ph4.download_landed(id, rustgis_data::photo::example(true, (43.4674, "N"), (11.8851, "E"))));
+    let r = ph4.run("layer.addDownload", &json!({"id": id, "url": "https://x.org/pic.jpg", "zoom": false})).unwrap();
+    assert_eq!(r["photos"], 1, "{r}");
+    assert_eq!(ph4.map().camera, start);
+    // `"zoom": true` frames only the photos the download added: the layer holds an earlier,
+    // far-away photo too, which must not pull the view back to it.
+    let mut ph5 = Session::new(Project::default());
+    let id = ph5.download_started();
+    assert!(ph5.download_landed(id, rustgis_data::photo::example(true, (43.4674, "N"), (11.8851, "E"))));
+    ph5.run("layer.addDownload", &json!({"id": id, "url": "https://x.org/pic.jpg"})).unwrap();
+    ph5.run("map.zoomToExtent", &json!({"extent": [0.0, 0.0, 10.0, 10.0]})).unwrap();
+    let id = ph5.download_started();
+    assert!(ph5.download_landed(id, rustgis_data::photo::example(true, (48.8566, "N"), (2.3522, "E"))));
+    let r = ph5.run("layer.addDownload", &json!({"id": id, "url": "https://x.org/pic2.jpg", "zoom": true})).unwrap();
+    assert_eq!(r["zoomed"], true, "{r}");
+    let c = rustgis_geom::merc_to_lonlat(ph5.map().camera.center);
+    assert!((c.x - 2.3522).abs() < 0.05 && (c.y - 48.8566).abs() < 0.05, "{c:?}");
+}
+
+/// `"zoom": true` frames everything a multi-layer file added, not only its last layer: the native
+/// `layer.addUrl` path as the app's `layer.addDownload` does with its own union.
+#[test]
+fn zoom_true_frames_every_layer_a_file_added() {
+    let gpx = br#"<gpx version="1.1" creator="t" xmlns="http://www.topografix.com/GPX/1/1"><wpt lat="10" lon="10"/><trk><trkseg><trkpt lat="20" lon="30"/><trkpt lat="21" lon="31"/></trkseg></trk></gpx>"#;
+    let (base, _) = serve_file(gpx.to_vec(), false);
+    let mut s = world();
+    let r = s.run("layer.addUrl", &json!({"url": format!("{base}/trip.gpx"), "zoom": true})).unwrap();
+    assert!(r["layers"].as_array().is_some_and(|l| l.len() >= 2), "{r}");
+    let c = rustgis_geom::merc_to_lonlat(s.map().camera.center);
+    assert!(c.x > 15.0 && c.x < 26.0 && c.y > 10.0 && c.y < 21.0, "{c:?}");
 }
 
 /// Spreadsheets, GeoRSS, LandXML and encoded polylines through the commands.
@@ -10588,6 +10813,117 @@ fn services_list_and_add_layers() {
     }
 }
 
+/// Adding a layer leaves the view where it is once the map holds something (a service layer, a
+/// data layer over a tile overlay — hidden or not — or after a COG): only the first layer on an
+/// empty map is framed, an empty group holding nothing.
+#[test]
+fn adding_a_layer_keeps_the_view() {
+    const WMS: &str = r#"<WMS_Capabilities version="1.3.0" xmlns="http://www.opengis.net/wms" xmlns:xlink="http://www.w3.org/1999/xlink">
+<Service><Title>Test WMS</Title></Service>
+<Capability><Request><GetMap><Format>image/png</Format><DCPType><HTTP><Get><OnlineResource xlink:href="https://maps.example.com/wms?"/></Get></HTTP></DCPType></GetMap></Request>
+<Layer><Title>Root</Title><CRS>EPSG:3857</CRS>
+<Layer queryable="1"><Name>roads</Name><Title>Roads</Title><EX_GeographicBoundingBox><westBoundLongitude>5</westBoundLongitude><eastBoundLongitude>15</eastBoundLongitude><southBoundLatitude>45</southBoundLatitude><northBoundLatitude>55</northBoundLatitude></EX_GeographicBoundingBox></Layer>
+</Layer></Capability></WMS_Capabilities>"#;
+    let url = "https://maps.example.com/wms";
+    let mut s = Session::new(Project::default());
+    // The first layer on an empty map is framed.
+    s.run("service.add", &json!({"url": url, "layer": "roads", "text": WMS})).unwrap();
+    let c = s.map().center_lonlat();
+    assert!((c.x - 10.0).abs() < 0.1 && (c.y - 50.0).abs() < 0.5, "{c:?}");
+    // A later one leaves the view where it was put.
+    s.run("map.zoomToExtent", &json!({"extent": [0.0, 0.0, 10.0, 10.0]})).unwrap();
+    let before = s.map().camera;
+    s.run("service.add", &json!({"url": url, "layer": "roads", "text": WMS, "name": "Roads again"})).unwrap();
+    assert_eq!(s.map().camera, before);
+    // A data layer over a tile overlay is no first layer either.
+    let far = r#"{"type": "FeatureCollection", "features": [{"type": "Feature", "properties": {}, "geometry": {"type": "Point", "coordinates": [151.2, -33.9]}}]}"#;
+    let mut t = Session::new(Project::default());
+    t.run("map.addTiles", &json!({"url": "https://tiles.example.com/{z}/{x}/{y}.png", "overlay": true})).unwrap();
+    t.run("map.zoomToExtent", &json!({"extent": [0.0, 0.0, 10.0, 10.0]})).unwrap();
+    let before = t.map().camera;
+    t.run("layer.addDataText", &json!({"fileName": "far.geojson", "text": far})).unwrap();
+    assert_eq!(t.map().camera, before);
+    // A hidden overlay is content too: the user hid it after choosing a view, so data added to a
+    // map that shows only its basemap keeps that view.
+    let mut h = Session::new(Project::default());
+    h.run("map.addTiles", &json!({"url": "https://tiles.example.com/{z}/{x}/{y}.png", "overlay": true})).unwrap();
+    h.run("map.setTiles", &json!({"index": 0, "visible": false})).unwrap();
+    h.run("map.zoomToExtent", &json!({"extent": [0.0, 0.0, 10.0, 10.0]})).unwrap();
+    let before = h.map().camera;
+    h.run("layer.addDataText", &json!({"fileName": "far.geojson", "text": far})).unwrap();
+    assert_eq!(h.map().camera, before);
+    // An archive is content too, whether it draws as a basemap or as data: a data layer added
+    // over a PMTiles basemap keeps the view.
+    let dir = std::env::temp_dir().join(format!("rustgis-archive-content-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let archive = dir.join("iceland.pmtiles");
+    std::fs::write(&archive, empty_pmtiles([-24.5, 63.3, -13.5, 66.6])).unwrap();
+    let mut a = Session::new(Project::default());
+    a.run("map.addTiles", &json!({"url": archive.display().to_string()})).unwrap();
+    a.run("map.zoomToExtent", &json!({"extent": [0.0, 0.0, 10.0, 10.0]})).unwrap();
+    let before = a.map().camera;
+    a.run("layer.addDataText", &json!({"fileName": "far.geojson", "text": far})).unwrap();
+    assert_eq!(a.map().camera, before);
+    let _ = std::fs::remove_dir_all(&dir);
+    // A cloud-optimised GeoTIFF read in place is content too, though it is a tile layer: data
+    // added after it keeps the view.
+    let file = rustgis_data::raster::cog::example(512, 128);
+    let (base, _) = serve_ranges(file);
+    let url = format!("{base}/scene.tif");
+    let mut c = Session::new(Project::default());
+    c.run("layer.addUrl", &json!({"url": url})).unwrap();
+    // The first one is framed on the file: 10–11° E, 45–46° N.
+    let at = c.map().center_lonlat();
+    assert!((at.x - 10.5).abs() < 0.1 && (at.y - 45.5).abs() < 0.5, "{at:?}");
+    c.run("map.zoomToExtent", &json!({"extent": [0.0, 0.0, 10.0, 10.0]})).unwrap();
+    let before = c.map().camera;
+    c.run("layer.addDataText", &json!({"fileName": "far.geojson", "text": far})).unwrap();
+    assert_eq!(c.map().camera, before);
+    // A later COG without `"zoom"` leaves the view alone too.
+    c.run("layer.addUrl", &json!({"url": url, "name": "Second"})).unwrap();
+    assert_eq!(c.map().camera, before);
+    // `"zoom": false` keeps the view of a first COG; `"zoom": true` frames a later one.
+    let mut z = Session::new(Project::default());
+    let start = z.map().camera;
+    z.run("layer.addUrl", &json!({"url": url, "zoom": false})).unwrap();
+    assert_eq!(z.map().camera, start);
+    z.run("layer.addUrl", &json!({"url": url, "name": "Again", "zoom": true})).unwrap();
+    let at = z.map().center_lonlat();
+    assert!((at.x - 10.5).abs() < 0.1 && (at.y - 45.5).abs() < 0.5, "{at:?}");
+    // A raster added while the map holds only an overlay keeps the view too: `add_raster_after`
+    // (shared by analysis outputs) counts the overlay as content.
+    use base64::Engine;
+    let raster = rustgis_data::raster::Raster::new(
+        "dem",
+        8,
+        8,
+        vec![vec![3.0; 64]],
+        rustgis_data::raster::GeoTransform { origin_x: 5.0, origin_y: 50.0, pixel_width: 0.1, pixel_height: -0.1 },
+        rustgis_data::raster::Crs::LonLat,
+        None,
+        rustgis_data::raster::ColorHint::Gray,
+        "Float32",
+    )
+    .unwrap();
+    let tif = rustgis_data::raster::geotiff::write(&raster, 0).unwrap();
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&tif);
+    let mut t = Session::new(Project::default());
+    t.run("map.addTiles", &json!({"url": "https://tiles.example.com/{z}/{x}/{y}.png", "overlay": true})).unwrap();
+    t.run("map.zoomToExtent", &json!({"extent": [0.0, 0.0, 10.0, 10.0]})).unwrap();
+    let before = t.map().camera;
+    t.run("layer.addDataBytes", &json!({"fileName": "dem.tif", "data": b64})).unwrap();
+    assert_eq!(t.map().camera, before);
+    // An analysis output adds through the same `add_raster_after`: it leaves the view too.
+    t.run("raster.function", &json!({"layer": "dem", "function": "slope"})).unwrap();
+    assert_eq!(t.map().camera, before);
+    // A group holding no layer holds nothing: the first data layer added is framed.
+    let mut g = Session::new(Project::default());
+    g.run("group.add", &json!({"name": "Empty"})).unwrap();
+    g.run("layer.addDataText", &json!({"fileName": "far.geojson", "text": far})).unwrap();
+    let at = g.map().center_lonlat();
+    assert!((at.x - 151.2).abs() < 0.1 && (at.y + 33.9).abs() < 0.5, "{at:?}");
+}
+
 /// An OGC API collection that comes in pages is read page by page, and a `next` link is followed
 /// only where the page may point.
 #[test]
@@ -10730,6 +11066,13 @@ fn service_features_asked_for_over_an_area() {
     s.run("service.add", &json!({"url": url, "layer": "CGMAT:munic", "text": caps("2.0.0"), "name": "Piauí", "bbox": piaui})).unwrap();
     let v = view_lonlat(&s);
     assert!(v[0] < -45.0 && v[2] > -41.0 && v[1] < -10.0 && v[3] > -3.0 && v[2] - v[0] < 20.0, "{v:?}");
+    // An area asked for as the view keeps the view, even on an empty map: the features returned
+    // are only those crossing it.
+    let mut k = Session::new(Project::default());
+    k.run("map.zoomToExtent", &json!({"extent": [0.0, 0.0, 10.0, 10.0]})).unwrap();
+    let before = k.map().camera;
+    k.run("service.add", &json!({"url": url, "layer": "CGMAT:munic", "text": caps("2.0.0"), "bbox": "view"})).unwrap();
+    assert_eq!(k.map().camera, before);
 }
 
 /// The map's view in longitude/latitude, as `bbox: "view"` reads it.
@@ -17265,6 +17608,39 @@ fn ogc_group_import_refresh_and_persistence() {
     assert_eq!(server.requests()[before..].iter().map(|r| r.path.as_str()).collect::<Vec<_>>(), [ROOT, CATALOG, ITEMS, LINE_ITEMS]);
     assert_eq!(s.map().service_groups[0].children.iter().map(|c| c.layer).collect::<Vec<_>>(), [points, lines]);
     assert!(!s.map().layer(points).unwrap().visible);
+}
+
+/// Importing a service group frames the first one on an empty map and leaves the view where it is
+/// when the map already shows something.
+#[test]
+fn importing_a_service_group_keeps_the_view() {
+    use ogc_server::Server;
+    let server = Server::group_fixture();
+    // A new map frames the group imported first: its point at 10° E, 50° N and the line from it.
+    let mut e = Session::new(Project::default());
+    e.run("service.import", &json!({"url": server.root()})).unwrap();
+    let at = e.map().center_lonlat();
+    assert!((at.x - 10.5).abs() < 0.1 && (at.y - 50.5).abs() < 0.5, "{at:?}");
+    let mut s = Session::new(Project::default());
+    let point = r#"{"type": "FeatureCollection", "features": [{"type": "Feature", "properties": {}, "geometry": {"type": "Point", "coordinates": [0, 0]}}]}"#;
+    s.run("layer.addDataText", &json!({"fileName": "origin.geojson", "text": point})).unwrap();
+    s.run("map.zoomToExtent", &json!({"extent": [0.0, 0.0, 10.0, 10.0]})).unwrap();
+    let before = s.map().camera;
+    s.run("service.import", &json!({"url": server.root()})).unwrap();
+    assert_eq!(s.map().camera, before);
+    // Removing its layers leaves the map empty even though the service group keeps their stale
+    // entries: the next layer added is framed.
+    let mut g = Session::new(Project::default());
+    g.run("service.import", &json!({"url": server.root()})).unwrap();
+    let ids: Vec<u32> = g.map().service_groups[0].children.iter().map(|c| c.layer).collect();
+    assert_eq!(ids.len(), 2);
+    g.run("layer.remove", &json!({"layer": ids})).unwrap();
+    assert!(g.map().layers.is_empty());
+    assert!(!g.map().service_groups[0].children.is_empty(), "the service group keeps its entries");
+    let far = r#"{"type": "FeatureCollection", "features": [{"type": "Feature", "properties": {}, "geometry": {"type": "Point", "coordinates": [151.2, -33.9]}}]}"#;
+    g.run("layer.addDataText", &json!({"fileName": "far.geojson", "text": far})).unwrap();
+    let at = g.map().center_lonlat();
+    assert!((at.x - 151.2).abs() < 0.1 && (at.y + 33.9).abs() < 0.5, "{at:?}");
 }
 
 #[test]

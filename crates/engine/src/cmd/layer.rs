@@ -38,7 +38,7 @@ pub fn commands() -> Vec<C> {
             .params(r#"{"layer"?: name|id, "crs": "EPSG:… or WKT; reinterpret native coordinates, without rewriting the source file"}"#),
         C::new("layer.loadAll", "Load All Features", "Layers", load_all).when(need_streamed).params(r#"{"layer"?: name|id}"#),
         C::new("layer.addUrl", "Add Data From URL", "Home › Add › Add Data", add_url).params(
-            r#"{"url": "https://…/data.geojson|.csv|.parquet|.fgb|.gpkg|.zip|.kml|.kmz|.gpx|.tif|.jp2 (JPEG 2000: desktop, through GDAL) (the format from the address, else the contents) | a .pmtiles archive", "name"?: text, "layer"?: "one layer of a zip, KML or GPX", "zoom"?: "bool: true zooms to what was added; false keeps the view of a GeoParquet or FlatGeobuf read in place (zoomed to only when the map was empty)", "x"?, "y"?, "wkt"?, "crs"?, "delimiter"?, "paperSpace"?, "stream"?, "as"? (as layer.addData), "whole"?: "bool: download a cloud-optimised GeoTIFF whole (as a raster layer) instead of reading it in place (an address without a file name is read in place when its first bytes are a cloud-optimised GeoTIFF)", "cog"?: "bool: the address is a cloud-optimised GeoTIFF whatever its name says (the app's probe found it so)", "start"?, "end"?, "unit"?, "interval"?, "dates"?: "a GeoTIFF address with date placeholders ({date:YYYY}, {YYYY}{MM}{DD}), one file per date: the dates it spans and steps through (as time.set), turning the time slider on"}"#,
+            r#"{"url": "https://…/data.geojson|.csv|.parquet|.fgb|.gpkg|.zip|.kml|.kmz|.gpx|.tif|.jp2 (JPEG 2000: desktop, through GDAL) (the format from the address, else the contents) | a .pmtiles archive", "name"?: text, "layer"?: "one layer of a zip, KML or GPX", "zoom"?: "bool: true frames everything added; false keeps the view, even on an empty map; omitted, the first content on an empty map is framed (a GeoParquet, FlatGeobuf or cloud-optimised GeoTIFF read in place likewise; a PMTiles or MBTiles archive ignores zoom and is framed on its bounds unless it covers the whole world)", "x"?, "y"?, "wkt"?, "crs"?, "delimiter"?, "paperSpace"?, "stream"?, "as"? (as layer.addData), "whole"?: "bool: download a cloud-optimised GeoTIFF whole (as a raster layer) instead of reading it in place (an address without a file name is read in place when its first bytes are a cloud-optimised GeoTIFF)", "cog"?: "bool: the address is a cloud-optimised GeoTIFF whatever its name says (the app's probe found it so)", "start"?, "end"?, "unit"?, "interval"?, "dates"?: "a GeoTIFF address with date placeholders ({date:YYYY}, {YYYY}{MM}{DD}), one file per date: the dates it spans and steps through (as time.set), turning the time slider on"}"#,
         ),
         C::new("layer.addDownload", "Add Downloaded Data", "Home › Add", add_download)
             .params(r#"{"id": a download the app finished (Home › Add › Add Data › From URL), "url": its address, "name"?: text, "layer"?: text, "zoom"?: bool, "x"?, "y"?, "wkt"?, "crs"?, "delimiter"?, "paperSpace"?, "stream"?, "as"? (as layer.addData), "service"?: bool (a service's features: their axes and paging are checked), "bounds"?: [west, south, east, north] (with service: the layer's longitude/latitude bounds from its capabilities, which its axes are checked against; without bounds they are left as they come; ignored without service), "coverage"?: bool (a WCS coverage: a GeoTIFF, else the service's error), "geolibreProject"?: bool (internal: downloaded project JSON), "geolibreLayer"?: {"token", "record"} (internal: reserved imported layer and its saved style), "geolibreZarr"?: bool (internal: an imported Zarr slice as GeoTIFF)}"#),
@@ -968,8 +968,10 @@ pub(crate) const PHOTOS: &str = "Photos";
 /// Adds photos as points: to the photo layer named `name` when there is one, else to a new one.
 /// `feed` hands the reader one photo at a time, so only one file's bytes are held at once; the
 /// reader stops taking photos when the layer is full. Photos without a GPS position are left out
-/// and named in a notice.
-pub(crate) fn add_photos_to(s: &mut Session, name: &str, feed: impl FnOnce(&mut photo::Reader)) -> CmdResult {
+/// and named in a notice. The map zooms to the photos added when it was empty, or when `zoom` is
+/// `Some(true)`; `Some(false)` keeps the view.
+pub(crate) fn add_photos_to(s: &mut Session, name: &str, zoom: Option<bool>, feed: impl FnOnce(&mut photo::Reader)) -> CmdResult {
+    let empty_before = super::map_is_empty(s);
     let existing = s.map().layers.iter().find(|l| l.name == name && photo::is_photo_layer(&l.dataset)).map(|l| l.id);
     let held = existing.and_then(|id| s.map().layer(id)).map_or(0, |l| l.dataset.features.len());
     let room = photo::MAX_PHOTOS.saturating_sub(held);
@@ -998,7 +1000,9 @@ pub(crate) fn add_photos_to(s: &mut Session, name: &str, feed: impl FnOnce(&mut 
         }
         None => add_dataset(s, ds),
     };
-    s.zoom_to(&extent);
+    if zoom.unwrap_or(empty_before) {
+        s.zoom_to(&extent);
+    }
     Ok(json!({"layer": id, "photos": added, "skipped": report.skipped}))
 }
 
@@ -1039,7 +1043,7 @@ fn add_photos(s: &mut Session, p: &Value) -> CmdResult {
         if paths.is_empty() {
             return Err("give \"paths\" (photo files) or a \"folder\" of photos".into());
         }
-        add_photos_to(s, &name, |reader| {
+        add_photos_to(s, &name, None, |reader| {
             for (i, path) in paths.iter().enumerate() {
                 if reader.is_full() {
                     reader.left_over(paths.len() - i);
@@ -1089,7 +1093,7 @@ fn add_geodatabase(s: &mut Session, p: &Value, path: &str) -> CmdResult {
     // is installed; else, or if GDAL can't either, said. The second go on whether the first added.
     let mut results: Vec<Value> = Vec::new();
     let mut failed: Vec<String> = Vec::new();
-    match add_reads(s, p, path, reads, Vec::new()) {
+    match add_reads(s, p, path, reads, Vec::new(), None) {
         Ok(r) => results.push(r),
         Err(e) => failed.push(e),
     }
@@ -1159,7 +1163,7 @@ fn add_data(s: &mut Session, p: &Value) -> CmdResult {
         return add_layer_file(s, path);
     }
     if rustgis_data::source::is_source_name(path) {
-        return add_source(s, p, Origin::Path(path));
+        return add_source(s, p, Origin::Path(path), None);
     }
     // A large GeoJSON FeatureCollection (any, with `"stream": true`) is read in place, streamed
     // when it holds many features; another GeoJSON document, or one that can't be read so, is
@@ -1172,7 +1176,7 @@ fn add_data(s: &mut Session, p: &Value) -> CmdResult {
     {
         let name = Path::new(path).file_stem().and_then(|n| n.to_str()).unwrap_or("layer");
         match rustgis_data::source::geojson::GeoJsonSource::open_path(Path::new(path), name) {
-            Ok(src) => return add_source_with(s, p, Origin::Path(path), Some(Box::new(src))),
+            Ok(src) => return add_source_with(s, p, Origin::Path(path), Some(Box::new(src)), None),
             // Not a FeatureCollection: read whole below.
             Err(rustgis_data::DataError::Unsupported(_)) => {}
             Err(e) => return Err(format!("{path}: {e}")),
@@ -1195,11 +1199,11 @@ fn add_data(s: &mut Session, p: &Value) -> CmdResult {
         });
         if stream {
             let src = rustgis_data::source::shp::ShpSource::open_path_in(Path::new(path), name, Some(crs)).map_err(|e| e.to_string())?;
-            return add_source_with(s, p, Origin::Path(path), Some(Box::new(src)));
+            return add_source_with(s, p, Origin::Path(path), Some(Box::new(src)), None);
         }
         let mut read = rustgis_data::io::read_shapefile_in(Path::new(path), name, Some(crs)).map_err(|e| e.to_string())?;
         read.0.source = Some(path.to_string());
-        return add_read(s, p, read);
+        return add_read(s, p, read, None);
     }
     // A large Shapefile is read in place, as a GeoPackage is; smaller ones are loaded whole.
     #[cfg(not(target_arch = "wasm32"))]
@@ -1208,7 +1212,7 @@ fn add_data(s: &mut Session, p: &Value) -> CmdResult {
             rustgis_data::source::shp::record_count(Path::new(path)).is_some_and(|n| n > rustgis_map::source::STREAM_ABOVE)
         })
     {
-        return add_source(s, p, Origin::Path(path));
+        return add_source(s, p, Origin::Path(path), None);
     }
     // A PMTiles archive is a tile layer (raster or vector, as its header says).
     if path.to_ascii_lowercase().ends_with(".pmtiles") {
@@ -1258,7 +1262,7 @@ fn add_data(s: &mut Session, p: &Value) -> CmdResult {
         // Read from disk: the table keeps the workbook's path, so an export can't replace it.
         let mut read = read_sheet(p, path, &bytes)?;
         read.0.source = Some(std::path::absolute(path).map_or_else(|_| path.to_string(), |a| a.display().to_string()));
-        return add_read(s, p, read);
+        return add_read(s, p, read, None);
     }
     #[cfg(not(target_arch = "wasm32"))]
     if large_osm(path) {
@@ -1271,7 +1275,7 @@ fn add_data(s: &mut Session, p: &Value) -> CmdResult {
         }
         let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
         let full = std::path::absolute(path).map(|p| p.display().to_string()).unwrap_or_else(|_| path.to_string());
-        return add_layers(s, p, &full, &bytes);
+        return add_layers(s, p, &full, &bytes, None);
     }
     let delimited = read_delimited(p, path, || {
         let meta = std::fs::metadata(path).map_err(|e| format!("{path}: {e}"))?;
@@ -1285,13 +1289,13 @@ fn add_data(s: &mut Session, p: &Value) -> CmdResult {
         Some(read) => read,
         None => rustgis_data::io::read_path(Path::new(path)).map_err(|e| format!("{path}: {e}"))?,
     };
-    add_read(s, p, read)
+    add_read(s, p, read, None)
 }
 
 /// Adds every layer of a file that holds several: the Shapefiles (and other files) of a zip, a KML
 /// or KMZ's points, lines and polygons drawn in its styles, a GPX's waypoints, routes, tracks and
 /// track points. `"layer"` picks one by name; a name given applies to the first.
-pub(crate) fn add_layers(s: &mut Session, p: &Value, file_name: &str, bytes: &[u8]) -> CmdResult {
+pub(crate) fn add_layers(s: &mut Session, p: &Value, file_name: &str, bytes: &[u8], zoom: Option<bool>) -> CmdResult {
     // A LandXML file in a coordinate system it doesn't say.
     let crs = ps(p, "crs").map(str::trim).filter(|c| !c.is_empty());
     let landxml = rustgis_data::landxml::is_landxml_name(file_name)
@@ -1350,7 +1354,7 @@ pub(crate) fn add_layers(s: &mut Session, p: &Value, file_name: &str, bytes: &[u
             return Err(format!("{file_name}: no layer '{want}' (layers: {})", names.join(", ")));
         }
     }
-    add_reads(s, p, file_name, reads, overlays)
+    add_reads(s, p, file_name, reads, overlays, zoom)
 }
 
 /// Adds the layers a file gave and its ground overlays: a layer that can't be added is skipped
@@ -1361,6 +1365,7 @@ fn add_reads(
     file_name: &str,
     reads: Vec<rustgis_data::io::LayerRead>,
     overlays: Vec<(String, rustgis_data::raster::Raster)>,
+    zoom: Option<bool>,
 ) -> CmdResult {
     let mut added = Vec::new();
     let mut failed = Vec::new();
@@ -1370,7 +1375,7 @@ fn add_reads(
         let styles = read.styles;
         // A layer that can't be added is skipped and said; the others are still added. A name
         // given goes to the first layer actually added.
-        match add_read(s, &q, (read.dataset, read.report)) {
+        match add_read(s, &q, (read.dataset, read.report), zoom) {
             Ok(r) => {
                 if let Some(id) = r.get("layer").and_then(Value::as_u64).and_then(|i| u32::try_from(i).ok()) {
                     apply_styles(s, id, &styles);
@@ -1384,7 +1389,7 @@ fn add_reads(
         }
     }
     for (name, raster) in overlays {
-        match super::raster::add_overlay(s, &name, raster) {
+        match super::raster::add_overlay(s, &name, raster, zoom) {
             Ok(r) => added.push(r),
             Err(e) => failed.push(format!("{name}: {e}")),
         }
@@ -1402,6 +1407,11 @@ fn add_reads(
     // The first layer, as the result of adding a single file says it.
     if let Some(first) = layers.first() {
         out["layer"] = first.clone();
+    }
+    // `"zoom": true` frames everything added, not only the file's last layer (each `add_read`
+    // above framed its own).
+    if zoom == Some(true) {
+        zoom_to_added(s, &out);
     }
     Ok(out)
 }
@@ -1628,8 +1638,8 @@ const MAX_SKIPPED_NAMED: usize = 100;
 /// Adds a GeoPackage, GeoParquet or FlatGeobuf file: each feature table becomes a layer. Large
 /// sources (or any, with `"stream": true`) are streamed, read in place a view at a time; smaller
 /// ones are loaded whole, so they can be edited.
-pub(crate) fn add_source(s: &mut Session, p: &Value, origin: Origin<'_>) -> CmdResult {
-    add_source_with(s, p, origin, None)
+pub(crate) fn add_source(s: &mut Session, p: &Value, origin: Origin<'_>, zoom: Option<bool>) -> CmdResult {
+    add_source_with(s, p, origin, None, zoom)
 }
 
 /// [`add_source`], with the source already open (its one table).
@@ -1638,6 +1648,7 @@ fn add_source_with(
     p: &Value,
     origin: Origin<'_>,
     mut opened: Option<Box<dyn rustgis_data::source::FeatureSource>>,
+    zoom: Option<bool>,
 ) -> CmdResult {
     use rustgis_data::source;
     let label = match &origin {
@@ -1678,7 +1689,7 @@ fn add_source_with(
     if tables.is_empty() {
         return Err(format!("{label}: no feature tables"));
     }
-    let empty_before = s.map().layers.is_empty();
+    let empty_before = super::map_is_empty(s);
     let mut ids = Vec::new();
     let mut streamed = false;
     let mut features = 0u64;
@@ -1758,7 +1769,7 @@ fn add_source_with(
             }
         }
     }
-    if empty_before {
+    if zoom.unwrap_or(empty_before) {
         let e = ids.iter().filter_map(|id| s.map().layer(*id)).fold(rustgis_geom::Extent::EMPTY, |e, l| e.union(&l.extent()));
         if !e.is_empty() {
             s.zoom_to(&e);
@@ -2137,7 +2148,7 @@ fn add_live(s: &mut Session, p: &Value, db: &rustgis_data::source::duckdb::Datab
     let skipped: Vec<String> =
         if total > MAX_TABLES { tables.split_off(MAX_TABLES).iter().map(|t| t.label()).collect() } else { Vec::new() };
     let single = tables.len() == 1;
-    let empty_before = s.map().layers.is_empty();
+    let empty_before = super::map_is_empty(s);
     let (mut ids, mut features, mut streamed, mut empty) = (Vec::new(), 0u64, false, 0usize);
     for t in tables {
         // A table that fails doesn't stop the others.
@@ -2195,7 +2206,7 @@ fn add_live(s: &mut Session, p: &Value, db: &rustgis_data::source::duckdb::Datab
             if let Some(v) = p.get("stream") {
                 q["stream"] = v.clone();
             }
-            let r = match add_source_with(s, &q, origin, Some(src)) {
+            let r = match add_source_with(s, &q, origin, Some(src), None) {
                 Ok(r) => r,
                 Err(e) => {
                     failed = true;
@@ -2339,7 +2350,7 @@ enum ConvertedOrigin {
 /// the layers' source.
 #[cfg(not(target_arch = "wasm32"))]
 fn add_converted(s: &mut Session, p: &Value, label: &str, original: &str, converted: Vec<Converted>) -> CmdResult {
-    let empty_before = s.map().layers.is_empty();
+    let empty_before = super::map_is_empty(s);
     let single = converted.len() == 1;
     let (mut ids, mut features, mut streamed) = (Vec::new(), 0u64, false);
     for c in converted {
@@ -2352,7 +2363,7 @@ fn add_converted(s: &mut Session, p: &Value, label: &str, original: &str, conver
         }
         let file = c.path.display().to_string();
         // One layer that can't be added doesn't stop the others.
-        let r = match add_source(s, &q, Origin::Path(&file)) {
+        let r = match add_source(s, &q, Origin::Path(&file), None) {
             Ok(r) => r,
             Err(e) if !single => {
                 s.notify(format!("{}: {e}", c.name), true);
@@ -2517,14 +2528,14 @@ fn add_encoded_polyline(s: &mut Session, p: &Value) -> CmdResult {
         let n = pts.len() as i64;
         ds.push_next(Some(Geometry::Line(vec![pts])), vec![V::Int(i as i64 + 1), V::Int(n)]);
     }
-    add_read(s, p, (ds, rustgis_data::ReadReport::default()))
+    add_read(s, p, (ds, rustgis_data::ReadReport::default()), None)
 }
 
 /// Adds a sheet of a spreadsheet (`"layer"` names it; the first by default), read like delimited
 /// text with the same options.
-pub(crate) fn add_sheet(s: &mut Session, p: &Value, file_name: &str, bytes: &[u8]) -> CmdResult {
+pub(crate) fn add_sheet(s: &mut Session, p: &Value, file_name: &str, bytes: &[u8], zoom: Option<bool>) -> CmdResult {
     let read = read_sheet(p, file_name, bytes)?;
-    add_read(s, p, read)
+    add_read(s, p, read, zoom)
 }
 
 fn read_sheet(p: &Value, file_name: &str, bytes: &[u8]) -> Result<(rustgis_data::Dataset, rustgis_data::ReadReport), String> {
@@ -2782,7 +2793,7 @@ pub(crate) fn add_url(s: &mut Session, p: &Value) -> CmdResult {
         }
         let bytes = crate::render::rustgis_tiles::cache::download_blocking(url).map_err(named)?;
         let name = url_file_name(url, &bytes).map_err(named)?;
-        super::raster::add_named_bytes(s, p, name, bytes).map_err(named)
+        super::raster::add_named_bytes(s, p, name, bytes, b(p, "zoom")).map_err(named)
     }
 }
 
@@ -2791,7 +2802,7 @@ pub(crate) fn add_url(s: &mut Session, p: &Value) -> CmdResult {
 fn add_remote(s: &mut Session, p: &Value, url: &str, src: Box<dyn rustgis_data::source::FeatureSource>) -> CmdResult {
     let info = src.info().clone();
     let name = ps(p, "name").map(str::trim).filter(|n| !n.is_empty()).map(str::to_string).unwrap_or_else(|| info.name.clone());
-    let empty_before = s.map().layers.is_empty();
+    let empty_before = super::map_is_empty(s);
     let layer = rustgis_map::source::SourceLayer::from_path(url.to_string(), None, src);
     let unique = unique_name(s, &name);
     for n in &info.notes {
@@ -2806,7 +2817,7 @@ fn add_remote(s: &mut Session, p: &Value, url: &str, src: Box<dyn rustgis_data::
     s.notify(format!("{unique}: {count} features, read in place by range from its address, a view at a time"), false);
     // Framed when it is the map's first layer, unless told to keep the view (a catalog's data for
     // the view, such as Overture's).
-    if (empty_before || b(p, "zoom") == Some(true)) && b(p, "zoom") != Some(false) && !info.extent.is_empty() {
+    if b(p, "zoom").unwrap_or(empty_before) && !info.extent.is_empty() {
         s.zoom_to(&info.extent);
     }
     Ok(json!({"layer": id, "layers": [id], "features": info.count, "streamed": true, "inPlace": true}))
@@ -2834,6 +2845,7 @@ pub fn is_unnamed_url(url: &str) -> bool {
 pub(crate) fn add_cog(s: &mut Session, p: &Value, url: &str) -> CmdResult {
     let stem = cog_name(url);
     let name = ps(p, "name").map(str::trim).filter(|n| !n.is_empty()).unwrap_or(&stem);
+    let empty_before = super::map_is_empty(s);
     let mut q = json!({"url": url, "kind": "cog", "name": name, "top": true});
     // A dated address's span and steps (see map.addTiles).
     for k in ["start", "end", "unit", "interval", "dates"] {
@@ -2854,7 +2866,11 @@ pub(crate) fn add_cog(s: &mut Session, p: &Value, url: &str) -> CmdResult {
     };
     if let Ok(Some(info)) = crate::render::rustgis_tiles::cog::info(&url) {
         let [w, so, e, n] = info.bounds;
-        s.zoom_to(&rustgis_geom::Extent::new(w, so, e, n));
+        // A cloud-optimised GeoTIFF read in place is framed when it is the first content on the
+        // map, as other data is; `"zoom"` says otherwise (`true`, or `false` to keep the view).
+        if b(p, "zoom").unwrap_or(empty_before) {
+            s.zoom_to(&rustgis_geom::Extent::new(w, so, e, n));
+        }
         r["bounds"] = json!(info.bounds);
     } else if r.get("dated").is_some() {
         // Added, but its first date's file couldn't be read: the view stays where it was.
@@ -2924,11 +2940,13 @@ fn add_download(s: &mut Session, p: &Value) -> CmdResult {
     } else {
         url_file_name(&url, &bytes).map_err(|e| format!("{url}: {e}"))?
     };
-    let mut r = super::raster::add_named_bytes(s, p, name, bytes)?;
+    let mut r = super::raster::add_named_bytes(s, p, name, bytes, b(p, "zoom"))?;
     // `"zoom": true` zooms to everything added, whatever the map held (a link's data); `zoomed`
-    // says whether there was anything to zoom to (a tile archive adds no layer).
+    // says whether there was anything to zoom to (a tile archive adds no layer). A photo result
+    // was already framed on the photos this download added; `zoom_to_added` would frame the whole
+    // photo layer, earlier photos included.
     if b(p, "zoom") == Some(true) {
-        let zoomed = zoom_to_added(s, &r);
+        let zoomed = if r.get("photos").is_some() { true } else { zoom_to_added(s, &r) };
         if let Some(o) = r.as_object_mut() {
             o.insert("zoomed".into(), json!(zoomed));
         }
@@ -2954,17 +2972,27 @@ fn zoom_to_added(s: &mut Session, r: &Value) -> bool {
 }
 
 pub(crate) fn add_data_text(s: &mut Session, p: &Value) -> CmdResult {
+    add_data_text_after(s, p, None)
+}
+
+/// [`add_data_text`], with the adding command's `"zoom"` (layer.addUrl, layer.addDownload).
+pub(crate) fn add_data_text_after(s: &mut Session, p: &Value, zoom: Option<bool>) -> CmdResult {
     let name = s_req(p, "fileName")?;
     let text = s_req(p, "text")?;
     if let Some(read) = read_delimited(p, name, || Ok(text.as_bytes().to_vec()))? {
-        return add_read(s, p, read);
+        return add_read(s, p, read, zoom);
     }
     let read = rustgis_data::io::read_bytes(name, text.as_bytes()).map_err(|e| format!("{name}: {e}"))?;
-    add_read(s, p, read)
+    add_read(s, p, read, zoom)
 }
 
 /// Adds an imported dataset as a layer or table, forwarding reader notices for either result.
-pub(crate) fn add_read(s: &mut Session, p: &Value, read: (rustgis_data::Dataset, rustgis_data::ReadReport)) -> CmdResult {
+pub(crate) fn add_read(
+    s: &mut Session,
+    p: &Value,
+    read: (rustgis_data::Dataset, rustgis_data::ReadReport),
+    zoom: Option<bool>,
+) -> CmdResult {
     let (mut ds, report) = read;
     if let Some(n) = ps(p, "name").map(str::trim).filter(|n| !n.is_empty()) {
         ds.name = n.to_string();
@@ -2978,9 +3006,11 @@ pub(crate) fn add_read(s: &mut Session, p: &Value, read: (rustgis_data::Dataset,
         return Ok(json!({"table": name, "id": id}));
     }
     let n = ds.features.len();
-    let empty_before = s.map().layers.is_empty();
+    let empty_before = super::map_is_empty(s);
     let id = add_dataset(s, ds);
-    if empty_before && let Some(e) = s.map().layer(id).map(|l| l.extent()) {
+    if zoom.unwrap_or(empty_before)
+        && let Some(e) = s.map().layer(id).map(|l| l.extent())
+    {
         s.zoom_to(&e);
     }
     Ok(json!({"layer": id, "features": n}))
