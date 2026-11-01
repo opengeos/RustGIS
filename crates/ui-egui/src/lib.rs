@@ -3235,7 +3235,7 @@ impl RustGisApp {
                 };
                 let ext = if ext == "shp" { "zip".to_string() } else { ext };
                 let name = format!("{}.{ext}", l.name);
-                let zm_note = rustgis_engine::data::zm_export_note([ds], &name);
+                let notes = rustgis_engine::data::export_notes([(ds, l.extent())], &name, crs);
                 let names_note = if ext == "zip" { io::shapefile_names_note(&ds.fields, &name) } else { None };
                 if left_out > 0 {
                     self.session.notify(format!("{name}: {left_out} features without drawable geometry were left out"), false);
@@ -3244,7 +3244,7 @@ impl RustGisApp {
                     self.session.notify(format!("{name}: no .prj written, as {} has no WKT form", crs.label()), false);
                 }
                 if self.download(&name, bytes) {
-                    for note in [zm_note, names_note].into_iter().flatten() {
+                    for note in notes.into_iter().chain(names_note) {
                         self.session.notify(note, false);
                     }
                 }

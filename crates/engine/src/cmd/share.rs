@@ -86,7 +86,8 @@ fn export_map(s: &mut Session, p: &Value) -> CmdResult {
 /// `share.exportLayer`: writes a layer to a file by its extension. A streamed layer exports its
 /// whole source, a chunk at a time where the source and format allow (see `data::export`). Says
 /// what the file couldn't hold: features without drawable geometry, a missing `.prj`, Z or M
-/// values dropped on import, field names a Shapefile cuts.
+/// values dropped on import, positions that are approximate or aren't longitude/latitude, field
+/// names a Shapefile cuts.
 fn export_layer(s: &mut Session, p: &Value) -> CmdResult {
     let id = s.layer_id(p)?;
     let path = ps(p, "path").ok_or("path is required")?.to_string();
@@ -113,7 +114,8 @@ fn export_layer(s: &mut Session, p: &Value) -> CmdResult {
             (ds.features.len().saturating_sub(left_out), left_out, unread)
         }
     };
-    let zm_note = rustgis_data::zm_export_note([ds], &path);
+    // A streamed layer's extent is its whole source's.
+    let notes = rustgis_data::export_notes([(ds, l.extent())], &path, crs);
     // A Shapefile (`.shp`, or zipped to `.zip`) cuts field names to dBase's.
     let shapefile = matches!(ext.as_str(), "shp" | "zip");
     let names_note = if shapefile { rustgis_data::io::shapefile_names_note(&ds.fields, &path) } else { None };
@@ -125,7 +127,7 @@ fn export_layer(s: &mut Session, p: &Value) -> CmdResult {
     if skipped > 0 {
         s.notify(format!("{path}: {skipped} rows couldn't be read and were left out"), false);
     }
-    if let Some(note) = zm_note {
+    for note in notes {
         s.notify(note, false);
     }
     if let Some(note) = names_note {

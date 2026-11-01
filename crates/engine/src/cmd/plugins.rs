@@ -385,7 +385,9 @@ pub fn reaches(spec: &C, params: &Value) -> Option<Reach> {
     if spec.id == "raster.georeference" || spec.id == "raster.project" {
         return super::items::names_place(params, PLACE_KEYS, 0).then_some(Reach::Files);
     }
-    let files = super::items::names_place(params, PLACE_KEYS, 0)
+    // A built-in tool's output layer name stays in the session, as it does in a task.
+    let params = super::items::layer_name_left_out(spec.id, params);
+    let files = super::items::names_place(&params, PLACE_KEYS, 0)
         || PLACE_KEYS.iter().any(|k| spec.params.contains(&format!("\"{k}\"")))
         || REACHES_FILES.contains(&spec.id)
         || READS_FILES.contains(&spec.id)
