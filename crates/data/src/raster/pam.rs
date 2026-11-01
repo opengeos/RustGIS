@@ -183,7 +183,7 @@ pub fn parse_gdal_metadata(text: &str) -> Option<Pam> {
     // What is left out or cut, counted.
     let (mut odd_bands, mut twice, mut cut) = (0usize, 0usize, 0usize);
     // An item's text, and whether it is longer than is kept (counted only once it is kept).
-    let text = |item: roxmltree::Node| {
+    let item_text = |item: roxmltree::Node| {
         let t = item.text().map(str::trim).filter(|d| !d.is_empty())?;
         Some((t.chars().take(MAX_NAME).collect::<String>(), t.chars().nth(MAX_NAME).is_some()))
     };
@@ -195,7 +195,7 @@ pub fn parse_gdal_metadata(text: &str) -> Option<Pam> {
             .and_then(|v| v.trim().parse::<usize>().ok())
             .and_then(|s| s.checked_add(1))
             .filter(|n| *n <= MAX_BANDS);
-        let Some((description, long)) = text(item) else { continue };
+        let Some((description, long)) = item_text(item) else { continue };
         let Some(band) = band else {
             odd_bands += 1;
             continue;
@@ -247,7 +247,7 @@ pub fn parse_gdal_metadata(text: &str) -> Option<Pam> {
     for item in root.children().filter(|n| n.has_tag_name("Item") && n.attribute("sample").is_none() && n.attribute("role").is_none()) {
         // Other dataset items (AREA_OR_POINT, a file's own keys) aren't class names.
         let Some(value) = item.attribute("name").and_then(|n| n.strip_prefix("CLASS_")) else { continue };
-        let Some((name, long)) = text(item) else { continue };
+        let Some((name, long)) = item_text(item) else { continue };
         // Digits only: `parse` would also take a sign (`CLASS_+5`).
         let digits = !value.is_empty() && value.bytes().all(|b| b.is_ascii_digit());
         let Some(value) = value.parse::<usize>().ok().filter(|v| digits && *v < MAX_CATEGORIES) else {

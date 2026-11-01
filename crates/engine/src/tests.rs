@@ -22196,6 +22196,14 @@ fn a_cog_window_comes_in_as_a_raster() {
     assert!(said.iter().any(|n| n.starts_with("Lossy: its colour table has 384 entries")), "{said:?}");
     assert!(said.iter().any(|n| n.contains("its GDAL metadata: 1 CLASS_ item(s)")), "{said:?}");
     assert!(!matches!(raster(&s, "Lossy").color, ColorHint::Palette(_)));
+    // A colour table on a file of two samples a pixel: the window keeps both bands, without it.
+    let (paired, _) = serve_ranges(example_with(&Example { size: 512, tile: 256, bands: 2, classes: true, ..Example::default() }));
+    let mark = s.notice_mark();
+    s.run("layer.addUrl", &json!({"url": format!("{paired}/paired.tif"), "bbox": [10.0, 45.0, 10.5, 45.5], "name": "Paired"})).unwrap();
+    let said: Vec<String> = s.notices_since(mark).iter().map(|n| n.text.clone()).collect();
+    assert!(said.iter().any(|n| n.contains("its colour table is left out: the window has 2 bands, a palette has one")), "{said:?}");
+    let paired = raster(&s, "Paired");
+    assert!(paired.band_count() == 2 && !matches!(paired.color, ColorHint::Palette(_)), "{:?}", paired.color);
     let cover = raster(&s, "Cover");
     let ColorHint::Palette(table) = &cover.color else { panic!("{:?}", cover.color) };
     assert_eq!(table[3], [3, 252, 0, 255]);
