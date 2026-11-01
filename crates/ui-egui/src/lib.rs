@@ -1850,7 +1850,8 @@ impl RustGisApp {
         // Terrain with nothing named, while none is on, takes the active raster: named, so the
         // step replays on that DEM (a change of exaggeration on a terrain already on names none).
         if id == "map.terrain" {
-            let named = ["layer", "tiles", "off"].iter().any(|k| params.get(*k).is_some_and(|v| !v.is_null()));
+            let named = ["layer", "tiles"].iter().any(|k| params.get(*k).is_some_and(|v| !v.is_null()))
+                || params.get("off").and_then(serde_json::Value::as_bool) == Some(true);
             let map = self.session.map();
             if named || map.view.terrain.is_some() {
                 return None;

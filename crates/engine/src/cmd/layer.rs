@@ -80,8 +80,14 @@ pub fn commands() -> Vec<C> {
                     // The DEM renamed onto another layer's name, or another layer given the DEM's:
                     // the first layer of that name would give the heights.
                     let shared = if on_old { n.clone() } else { dem };
+                    let said = if named_layers(s, &shared) > 1 {
+                        format!("Terrain turned off: two layers are now called '{shared}'; rename one and turn Terrain on again")
+                    } else {
+                        // The DEM was gone (removed), and this layer took its name.
+                        format!("Terrain turned off: its DEM '{shared}' was missing, and a layer now has that name; turn Terrain on again to use it")
+                    };
                     s.map_mut().view.terrain = None;
-                    s.notify(format!("Terrain turned off: two layers are now called '{shared}'; rename one and turn Terrain on again"), false);
+                    s.notify(said, false);
                 }
             }
             // Layers masked by this one follow the new name.

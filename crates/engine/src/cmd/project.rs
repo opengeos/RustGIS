@@ -219,8 +219,24 @@ fn reset(s: &mut Session, p: Project) {
             _ => None,
         })
         .collect();
-    for (map, dem) in shared {
-        s.notify(format!("{map}: its terrain's DEM name '{dem}' is shared by two layers, so the first of them gives the heights; rename one and turn Terrain on again"), false);
+    // One notice, with a count when several maps are so.
+    match shared.as_slice() {
+        [] => {}
+        [(map, dem)] => s.notify(
+            format!("{map}: its terrain's DEM name '{dem}' is shared by two layers, so the first of them gives the heights; rename one and turn Terrain on again"),
+            false,
+        ),
+        _ => {
+            let maps: Vec<String> = shared.iter().map(|(map, dem)| format!("{map} ('{dem}')")).collect();
+            s.notify(
+                format!(
+                    "{} maps have a terrain whose DEM name is shared by two layers, so the first of them gives the heights: {}; rename one and turn Terrain on again",
+                    shared.len(),
+                    maps.join(", ")
+                ),
+                false,
+            );
+        }
     }
 }
 
