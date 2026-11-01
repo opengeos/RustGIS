@@ -97,7 +97,7 @@ impl FeatureInfo {
     /// `m_per_px` metres per pixel: a small window of the map around the point, which is its
     /// middle pixel. `None` when the layer can't be asked.
     pub fn request(&self, x: f64, y: f64, m_per_px: f64) -> Option<String> {
-        if !self.queryable() || !(x.is_finite() && y.is_finite() && m_per_px.is_finite() && m_per_px > 0.0) {
+        if !(self.queryable() && x.is_finite() && y.is_finite() && m_per_px.is_finite() && m_per_px > 0.0) {
             return None;
         }
         let format = self.info_format()?;
