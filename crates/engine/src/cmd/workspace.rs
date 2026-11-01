@@ -580,6 +580,9 @@ fn offline_download(s: &mut Session, p: &Value) -> CmdResult {
 
 /// Copies edits made to an offline area (in its offline map, if open) back to its source map by
 /// feature id: changed and new features update the source, deleted ones are removed from it.
+/// A feature changed in the source too since the last sync takes the area's version (or its
+/// deletion), and is reported with a warning, as is an offline edit to a feature since deleted
+/// from the source.
 /// Then the area is refreshed from the source.
 fn offline_sync(s: &mut Session, p: &Value) -> CmdResult {
     let n = ps(p, "name").ok_or("name is required")?;
@@ -595,6 +598,11 @@ fn offline_sync(s: &mut Session, p: &Value) -> CmdResult {
         .ok_or_else(|| format!("the source map '{}' is gone", area.map))?;
     crate::project::ensure_map_imports_complete(s.project.maps.get(si).ok_or("the source map is gone")?)?;
     let (mut updated, mut added, mut deleted, mut skipped) = (0, 0, 0, 0);
+    // Features changed in the source since the last sync whose changes the area's version (or its
+    // deletion) replaced, and features changed offline whose edits a deletion in the source
+    // dropped, as "layer #id".
+    let (mut conflicts, mut dropped) = (Vec::new(), Vec::new());
+    let tag = |layer: &str, id: u64| format!("{layer} #{id}");
     if let Some(src) = s.project.maps.get_mut(si) {
         for ol in &edited.layers {
             // Layers are matched by id (the snapshot keeps them), so same-named layers don't mix.
@@ -620,19 +628,32 @@ fn offline_sync(s: &mut Session, p: &Value) -> CmdResult {
                 .unwrap_or_default();
             // Deletions first, so a fresh id given to a new feature below can't be swept away.
             let before = sl.dataset.features.len();
-            sl.dataset.features.retain(|x| !had.contains(&x.id) || now_ids.contains(&x.id));
+            sl.dataset.features.retain(|x| {
+                let keep = !had.contains(&x.id) || now_ids.contains(&x.id);
+                // Deleted offline but changed in the source meanwhile.
+                if !keep && base.get(&x.id).is_some_and(|b| *b != x) {
+                    conflicts.push(tag(&sl.name, x.id));
+                }
+                keep
+            });
             deleted += before - sl.dataset.features.len();
             for f in &ol.dataset.features {
                 if had.contains(&f.id) {
                     let changed_offline = base.get(&f.id).is_none_or(|b| *b != f);
                     match sl.dataset.features.iter_mut().find(|x| x.id == f.id) {
                         Some(x) if changed_offline && x != f => {
+                            if base.get(&f.id).is_some_and(|b| *b != x) {
+                                conflicts.push(tag(&sl.name, f.id));
+                            }
                             *x = f.clone();
                             updated += 1;
                         }
                         // Changed offline but deleted from the source meanwhile: left deleted, and
                         // reported.
-                        None if changed_offline => skipped += 1,
+                        None if changed_offline => {
+                            skipped += 1;
+                            dropped.push(tag(&sl.name, f.id));
+                        }
                         _ => {}
                     }
                 } else {
@@ -657,5 +678,38 @@ fn offline_sync(s: &mut Session, p: &Value) -> CmdResult {
         a.data = fresh;
         a.synced = now();
     }
-    Ok(json!({"updated": updated, "added": added, "deleted": deleted, "skipped": skipped}))
+    // Never silent: say which features lost an edit, so they can be checked (Undo puts the
+    // source's versions back).
+    let listed = |ids: &[String]| {
+        let mut said: Vec<String> = ids.iter().take(20).cloned().collect();
+        if ids.len() > 20 {
+            said.push(format!("{} more", ids.len() - 20));
+        }
+        said.join(", ")
+    };
+    if !conflicts.is_empty() {
+        s.notify(
+            format!(
+                "Offline area '{}': {} feature(s) were changed in the map '{}' since the last sync and also edited or deleted in the area, so the area's version replaced the map's changes: {}. Undo restores the map's versions",
+                area.name,
+                conflicts.len(),
+                area.map,
+                listed(&conflicts)
+            ),
+            true,
+        );
+    }
+    if !dropped.is_empty() {
+        s.notify(
+            format!(
+                "Offline area '{}': {} feature(s) edited in the area were deleted from the map '{}' meanwhile, so those edits were dropped: {}",
+                area.name,
+                dropped.len(),
+                area.map,
+                listed(&dropped)
+            ),
+            true,
+        );
+    }
+    Ok(json!({"updated": updated, "added": added, "deleted": deleted, "skipped": skipped, "conflicts": conflicts.len()}))
 }
