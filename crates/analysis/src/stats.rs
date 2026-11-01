@@ -568,9 +568,12 @@ pub fn rounded(stat: Stat, column: &Column, value: &Value) -> bool {
     }
 }
 
-/// The whole number a decimal with no fraction is, exactly; None for one with a fraction.
+/// The whole number a decimal with no fraction is, exactly; None for one with a fraction, or past
+/// the i64 range the whole numbers are read in. Bounded so, sums and differences of any count of
+/// values stay far within an i128.
 fn decimal_whole(x: f64) -> Option<i128> {
-    (x.fract() == 0.0 && x.abs() < 1e38).then_some(x as i128)
+    const I64_LIMIT: f64 = 9_223_372_036_854_775_808.0;
+    (x.fract() == 0.0 && x.abs() < I64_LIMIT).then_some(x as i128)
 }
 
 /// 2^53, up to which a decimal holds every whole number.

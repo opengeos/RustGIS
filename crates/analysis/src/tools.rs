@@ -2947,9 +2947,9 @@ fn rounded_notice(rounded: &[usize], fields: &[Field]) -> Option<String> {
         return None;
     }
     let names: Vec<&str> = rounded.iter().zip(fields).filter(|(n, _)| **n > 0).map(|(_, f)| f.name.as_str()).collect();
-    let values = if total == 1 { "value" } else { "values" };
+    let results = if total == 1 { "result" } else { "results" };
     Some(format!(
-        "{total} {values} rounded in {}: a decimal field holds whole numbers exactly only up to 2^53 (9007199254740992)",
+        "{total} {results} rounded in {}: a decimal field holds whole numbers exactly only up to 2^53 (9007199254740992)",
         names.join(", ")
     ))
 }
