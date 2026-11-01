@@ -404,7 +404,7 @@ jobs:
                         | gsub("\\n{3,}"; "\n\n")
                         | if length > 1000 then .[0:1000] + " [cut at 1000 characters]" else . end) } ] }' \
             "$RUNNER_TEMP/pages.json" > "$RUNNER_TEMP/threads.jsonl"
-          jq -sc --argjson max "$MAX_PRIOR_BYTES" '
+          jq -s --indent 1 --argjson max "$MAX_PRIOR_BYTES" '
             sort_by(.resolved, .outdated)
             # 64 bytes reserve the wrapper object, the left-out count and the final
             # newline; each thread adds its comma.
@@ -413,6 +413,13 @@ jobs:
                 | if .full or .bytes + $n > $max then .full = true | .threads_left_out += 1
                   else .threads += [$t] | .bytes += $n end)
             | del(.bytes, .full)' "$RUNNER_TEMP/threads.jsonl" > "$RUNNER_TEMP/prior-reviews.json"
+          # The budget counts compact JSON, but the file is indented so that no
+          # line is too long for the reviewer's Read tool; drop the last threads
+          # until the indented file fits too.
+          while [ "$(wc -c < "$RUNNER_TEMP/prior-reviews.json")" -gt "$MAX_PRIOR_BYTES" ]; do
+            jq --indent 1 '.threads |= .[:-1] | .threads_left_out += 1' "$RUNNER_TEMP/prior-reviews.json" > "$RUNNER_TEMP/trimmed.json"
+            mv "$RUNNER_TEMP/trimmed.json" "$RUNNER_TEMP/prior-reviews.json"
+          done
           mv "$RUNNER_TEMP/prior-reviews.json" pr-context/prior-reviews.json
           echo "Staged $(jq '.threads | length' pr-context/prior-reviews.json) earlier review threads ($(jq .threads_left_out pr-context/prior-reviews.json) left out over $MAX_PRIOR_BYTES bytes)"
 
