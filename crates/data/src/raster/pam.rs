@@ -237,7 +237,9 @@ pub fn parse_gdal_metadata(text: &str) -> Option<Pam> {
         // Other dataset items (AREA_OR_POINT, a file's own keys) aren't class names.
         let Some(value) = item.attribute("name").and_then(|n| n.strip_prefix("CLASS_")) else { continue };
         let Some((name, long)) = text(item) else { continue };
-        let Some(value) = value.parse::<usize>().ok().filter(|v| *v < MAX_CATEGORIES) else {
+        // Digits only: `parse` would also take a sign (`CLASS_+5`).
+        let digits = !value.is_empty() && value.bytes().all(|b| b.is_ascii_digit());
+        let Some(value) = value.parse::<usize>().ok().filter(|v| digits && *v < MAX_CATEGORIES) else {
             odd_classes += 1;
             continue;
         };
@@ -350,6 +352,9 @@ mod tests {
         }
         // Only what is lost: a document of nothing but bad items still says so.
         assert!(!parse_gdal_metadata(r#"<GDALMetadata><Item name="CLASS_99999">Far</Item></GDALMetadata>"#).unwrap().lost.is_empty());
+        // A signed value isn't a class's.
+        let signed = parse_gdal_metadata(r#"<GDALMetadata><Item name="CLASS_+5">Water</Item></GDALMetadata>"#).unwrap();
+        assert!(signed.bands.is_empty() && signed.lost.len() == 1, "{signed:?}");
         // A scale or offset that changes the values isn't applied, and is said; 1 and 0 aren't.
         let scaled = parse_gdal_metadata(
             r#"<GDALMetadata><Item name="SCALE" sample="0" role="scale">0.0001</Item><Item name="OFFSET" sample="0" role="offset">-0.1</Item></GDALMetadata>"#,

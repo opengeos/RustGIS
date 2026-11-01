@@ -2925,6 +2925,9 @@ fn add_cog_window(s: &mut Session, p: &Value, url: &str) -> CmdResult {
     let (mut x0, mut y0, mut x1, mut y1) = (f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
     // Edge points the file's coordinate system has no place for, said once the window is in.
     let (mut points, mut unplaced) = (0usize, 0usize);
+    // Bent pieces the depth or point limit left unhalved: said, as the window may then fall short
+    // of a bent edge.
+    let mut unrefined = 0usize;
     let mut pieces = Vec::new();
     for k in 0..32 {
         let (t, u) = (f64::from(k) / 32.0, f64::from(k + 1) / 32.0);
@@ -2959,13 +2962,20 @@ fn add_cog_window(s: &mut Session, p: &Value, url: &str) -> CmdResult {
             Some(c) => (x0, y0, x1, y1) = (x0.min(c.x), y0.min(c.y), x1.max(c.x), y1.max(c.y)),
             None => unplaced += 1,
         }
-        let halve = match (place(a.0, a.1), place(b.0, b.1), c) {
-            (Some(pa), Some(pb), Some(c)) => (c.x - (pa.x + pb.x) / 2.0).hypot(c.y - (pa.y + pb.y) / 2.0) > tolerance,
-            (None, None, None) => false,
-            _ => true,
+        // Bent: all three placed and the middle off the line. Toward a domain's edge (some placed,
+        // some not) the halving stops at the depth limit by design, and the points unplaced are said.
+        let (halve, bent) = match (place(a.0, a.1), place(b.0, b.1), c) {
+            (Some(pa), Some(pb), Some(c)) => {
+                let off = (c.x - (pa.x + pb.x) / 2.0).hypot(c.y - (pa.y + pb.y) / 2.0) > tolerance;
+                (off, off)
+            }
+            (None, None, None) => (false, false),
+            _ => (true, false),
         };
         if halve && depth < 12 && points < 200_000 {
             pieces.extend([(a, m, depth + 1), (m, b, depth + 1)]);
+        } else if bent {
+            unrefined += 1;
         }
     }
     if !(x0 < x1 && y0 < y1) {
@@ -3042,7 +3052,8 @@ fn add_cog_window(s: &mut Session, p: &Value, url: &str) -> CmdResult {
     if count > MAX_WINDOW_BANDS {
         return Err(named(format!("the file has {count} bands; a window reads {MAX_WINDOW_BANDS} at most")));
     }
-    // One read a band, each waiting up to two minutes, within one wait for them all.
+    // One read a band, each waiting up to two minutes; no band is started once five minutes are
+    // up, so the last one started may run two minutes more.
     let started = std::time::Instant::now();
     let mut bands = Vec::with_capacity(count);
     for band in 0..count {
@@ -3105,6 +3116,12 @@ fn add_cog_window(s: &mut Session, p: &Value, url: &str) -> CmdResult {
     }
     if !cut.is_empty() {
         s.notify(format!("{added}: the box reaches past the file's {} edge(s): the window is cut to the file", cut.join(", ")), false);
+    }
+    if unrefined > 0 {
+        s.notify(
+            format!("{added}: {unrefined} piece(s) of the box's edges not followed to a quarter of a pixel: the window may fall short of a bent edge"),
+            false,
+        );
     }
     if unplaced > 0 {
         s.notify(
