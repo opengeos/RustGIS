@@ -937,10 +937,11 @@ pub(crate) fn geojson_attrs(f: &Json, fields: &[Field]) -> Vec<Value> {
 /// Whether a feature's geometry has a third value in any position (a height, which reading drops),
 /// a GeometryCollection's members included.
 pub(crate) fn geojson_has_z(f: &Json) -> bool {
-    /// Any position under `v` (nested arrays, ending in arrays of numbers) has more than two values.
+    /// Any position under `v` (nested arrays, ending in arrays of numbers) has a third value that
+    /// is a number (a `null` there isn't a height).
     fn positions(v: &Json) -> bool {
         match v.as_array() {
-            Some(a) if a.first().is_some_and(Json::is_number) => a.len() > 2,
+            Some(a) if a.first().is_some_and(Json::is_number) => a.get(2).is_some_and(Json::is_number),
             Some(a) => a.iter().any(positions),
             None => false,
         }
@@ -2602,6 +2603,9 @@ mod tests {
         // A height past the first position counts; one only in a geometry that isn't read doesn't.
         let line = r#"{"type":"Feature","properties":{},"geometry":{"type":"LineString","coordinates":[[1,2],[3,4,5]]}}"#;
         assert!(read_geojson(line, "line").unwrap().0.zm_dropped);
+        // A `null` third value isn't a height.
+        let null_z = r#"{"type":"Feature","properties":{},"geometry":{"type":"LineString","coordinates":[[1,2,null],[3,4]]}}"#;
+        assert!(!read_geojson(null_z, "line").unwrap().0.zm_dropped);
         let curve = r#"{"type":"FeatureCollection","features":[{"type":"Feature","properties":{},"geometry":{"type":"Curve","coordinates":[[1,2,3]]}},{"type":"Feature","properties":{},"geometry":{"type":"Point","coordinates":[1,2]}}]}"#;
         let (ds, rep) = read_geojson(curve, "curve").unwrap();
         assert!(!ds.zm_dropped && !said(&rep) && rep.skipped == 1, "{rep:?}");
