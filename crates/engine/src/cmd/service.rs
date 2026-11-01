@@ -516,6 +516,9 @@ pub(crate) fn add(s: &mut Session, p: &Value) -> CmdResult {
             zoom(s);
             Ok(r)
         }
+        // A style draws the whole look of the map, so it goes in as a basemap, under the layers,
+        // and does not count as content (see `super::map_is_empty`): adding a layer after it frames
+        // the map again. Documented in docs/user-guide/data-formats.md.
         Offer::Style { url: style } => {
             let r = super::tiles::add(s, &json!({"url": style, "kind": "style", "name": name, "bounds": layer.bbox}))?;
             zoom(s);

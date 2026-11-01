@@ -316,13 +316,16 @@ pub(crate) fn add(s: &mut Session, p: &Value) -> CmdResult {
         out["url"] = json!(t.url);
         out["dated"] = json!(true);
     }
-    let archive = t.kind == TileKind::PmTiles && t.id.is_empty();
+    // A file added as data (a catalog's archive, kept where the user put it, excepted) frames the
+    // map on its bounds, PMTiles and MBTiles alike, whether it draws as a basemap or as data.
+    let pmtiles = t.kind == TileKind::PmTiles && t.id.is_empty();
+    let archive = pmtiles || (t.kind == TileKind::MbTiles && t.id.is_empty());
     m.tiles.insert(at, t);
     // A file's header is read now (natively), so a script's next command sees the map moved; a
     // file slower than a second to answer (a network mount) is framed when it does, as a web
     // address is, and one that can't be read says so when the layer draws.
     #[cfg(not(target_arch = "wasm32"))]
-    if archive && rustgis_render::rustgis_tiles::pmtiles::is_local(&url) {
+    if pmtiles && rustgis_render::rustgis_tiles::pmtiles::is_local(&url) {
         // Its error, if any, is the layer's to report when it draws.
         let _ = rustgis_render::rustgis_tiles::pmtiles::info_blocking(&url, std::time::Duration::from_secs(1));
     }
@@ -338,10 +341,11 @@ pub(crate) fn add(s: &mut Session, p: &Value) -> CmdResult {
 /// What a tile layer covers, from service metadata or an archive/GeoTIFF header.
 /// `None` while a header is still being read.
 fn extent_of(t: &TileLayer) -> Result<Option<rustgis_geom::Extent>, String> {
-    use rustgis_render::rustgis_tiles::pmtiles;
+    use rustgis_render::rustgis_tiles::{mbtiles, pmtiles};
     let bounds = match (t.bounds, t.kind) {
         (Some(bounds), _) => Some(bounds),
         (None, TileKind::PmTiles) => pmtiles::info(&t.url)?.map(|i| i.bounds),
+        (None, TileKind::MbTiles) => Some(mbtiles::info(&t.url)?.bounds),
         (None, TileKind::Cog) => cog::info(&t.url)?.map(|i| i.bounds),
         _ => return Err(format!("{}: a {} doesn't say what it covers", t.name, t.kind.label().to_lowercase())),
     };
@@ -408,8 +412,9 @@ fn dated_start(s: &mut Session, p: &Value) -> Result<f64, String> {
 const STYLE_WAITS: usize = 8;
 
 /// Moves the map to the view in the root properties of the style added with `"view": true`
-/// once it has loaded, unless the map has moved since, waiting up to `wait` for it (natively; the
-/// browser loads between frames). True when the map moved.
+/// once it has loaded, and frames an archive on its bounds, unless the map has moved since,
+/// waiting up to `wait` for it (natively; the browser loads between frames). True when the map
+/// moved.
 pub(crate) fn follow_style_view(s: &mut Session, wait: web_time::Duration) -> bool {
     let Some((url, camera)) = s.style_view.clone() else { return false };
     if s.map().camera != camera {
@@ -417,13 +422,15 @@ pub(crate) fn follow_style_view(s: &mut Session, wait: web_time::Duration) -> bo
         s.style_view = None;
         return false;
     }
-    let Some(t) = s.map().tiles.iter().find(|t| matches!(t.kind, TileKind::Style | TileKind::PmTiles) && t.url == url).cloned() else {
+    let Some(t) =
+        s.map().tiles.iter().find(|t| matches!(t.kind, TileKind::Style | TileKind::PmTiles | TileKind::MbTiles) && t.url == url).cloned()
+    else {
         // Removed, or another map is active: nothing to follow.
         s.style_view = None;
         return false;
     };
     let wait = if cfg!(target_arch = "wasm32") { web_time::Duration::ZERO } else { wait };
-    if t.kind == TileKind::PmTiles {
+    if matches!(t.kind, TileKind::PmTiles | TileKind::MbTiles) {
         return follow_archive(s, &t, wait);
     }
     let start = web_time::Instant::now();
@@ -457,8 +464,9 @@ pub(crate) fn follow_style_view(s: &mut Session, wait: web_time::Duration) -> bo
     }
 }
 
-/// Frames the map on an archive added (see [`follow_style_view`]) once its header is read, unless
-/// it covers the whole world. Unreadable, it stays where it is: the layer says why when it draws.
+/// Frames the map on an archive (a PMTiles or MBTiles file) added (see [`follow_style_view`]) once
+/// its header is read, unless it covers the whole world. Unreadable, it stays where it is: the
+/// layer says why when it draws.
 fn follow_archive(s: &mut Session, t: &TileLayer, wait: web_time::Duration) -> bool {
     let start = web_time::Instant::now();
     let mut passes = 0;

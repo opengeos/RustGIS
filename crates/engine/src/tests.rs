@@ -9346,6 +9346,81 @@ fn mbtiles_archives_become_tile_layers() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+/// An MBTiles archive added frames the map on its metadata bounds, as a PMTiles archive does, over
+/// a map that already holds content too, unless it covers the whole world; Zoom To Tile Layer goes
+/// there again and `"zoom"` is ignored, as it is for PMTiles.
+#[test]
+fn mbtiles_archives_frame_the_map_on_their_bounds() {
+    use base64::Engine;
+    let dir = std::env::temp_dir().join(format!("rustgis-mbtiles-frame-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut red = tiny_skia::Pixmap::new(256, 256).unwrap();
+    red.fill(tiny_skia::Color::from_rgba8(255, 0, 0, 255));
+    let png = red.encode_png().unwrap();
+    let write = |name: &str, bounds: Option<&str>| {
+        let path = dir.join(name);
+        let _ = std::fs::remove_file(&path);
+        let c = rusqlite::Connection::open(&path).unwrap();
+        c.execute_batch(
+            "CREATE TABLE metadata (name text, value text); CREATE TABLE tiles (zoom_level integer, tile_column integer, tile_row integer, tile_data blob);",
+        )
+        .unwrap();
+        c.execute("INSERT INTO metadata VALUES ('format', 'png'), ('minzoom', '0'), ('maxzoom', '0')", []).unwrap();
+        if let Some(b) = bounds {
+            c.execute("INSERT INTO metadata VALUES ('bounds', ?1)", [b]).unwrap();
+        }
+        c.execute("INSERT INTO tiles VALUES (0, 0, 0, ?1)", [png.as_slice()]).unwrap();
+        drop(c);
+        path.display().to_string()
+    };
+    let center = |s: &Session| rustgis_geom::merc_to_lonlat(s.map().camera.center);
+    let near_iceland = |s: &Session| {
+        let c = center(s);
+        assert!((c.x + 19.0).abs() < 0.5 && (c.y - 65.0).abs() < 1.5, "{c:?}");
+    };
+    let iceland = write("iceland.mbtiles", Some("-24.5,63.3,-13.5,66.6"));
+
+    // Added as data on an empty map: framed on its bounds straight away (read natively).
+    let mut s = Session::new(Project::default());
+    s.run("layer.addData", &json!({"path": iceland})).unwrap();
+    assert!(s.style_view.is_none());
+    near_iceland(&s);
+
+    // Over a map that holds content, the archive is still framed (see `follow_style_view`).
+    let mut w = world();
+    w.run("map.zoomToExtent", &json!({"extent": [0.0, 0.0, 10.0, 10.0]})).unwrap();
+    w.run("layer.addData", &json!({"path": iceland})).unwrap();
+    near_iceland(&w);
+
+    // An archive decides for itself: `"zoom": false` doesn't stop it (documented in layer.addUrl).
+    s.run("map.zoomToExtent", &json!({"extent": [0.0, 0.0, 10.0, 10.0]})).unwrap();
+    s.run("layer.addData", &json!({"path": iceland, "zoom": false})).unwrap();
+    near_iceland(&s);
+
+    // Zoom To Tile Layer reads the same metadata.
+    s.run("map.zoomToExtent", &json!({"extent": [0.0, 0.0, 10.0, 10.0]})).unwrap();
+    let r = s.run("map.zoomToTiles", &json!({"name": "iceland"})).unwrap();
+    assert_eq!(r["bounds"][0].as_f64().map(|w| (w + 24.5).abs() < 1e-6), Some(true), "{r}");
+    near_iceland(&s);
+
+    // An upload's bytes are framed too.
+    let b64 = base64::engine::general_purpose::STANDARD.encode(std::fs::read(dir.join("iceland.mbtiles")).unwrap());
+    let mut u = Session::new(Project::default());
+    u.run("layer.addDataBytes", &json!({"fileName": "uploaded.mbtiles", "data": b64})).unwrap();
+    near_iceland(&u);
+
+    // A world archive, or one with no bounds, leaves the map where it is.
+    for (name, bounds) in [("world.mbtiles", Some("-180,-85,180,85")), ("bare.mbtiles", None)] {
+        let p = write(name, bounds);
+        let mut w = Session::new(Project::default());
+        w.run("map.zoomToExtent", &json!({"extent": [0.0, 0.0, 10.0, 10.0]})).unwrap();
+        let before = w.map().camera;
+        w.run("layer.addData", &json!({"path": p})).unwrap();
+        assert_eq!(w.map().camera, before, "{name}");
+    }
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 /// Delimited text in a projected system, by path, text and upload; WKT columns; bad options.
 #[test]
 fn delimited_text_with_a_coordinate_system() {
@@ -10757,6 +10832,9 @@ fn adding_a_layer_keeps_the_view() {
     t.run("map.zoomToExtent", &json!({"extent": [0.0, 0.0, 10.0, 10.0]})).unwrap();
     let before = t.map().camera;
     t.run("layer.addDataBytes", &json!({"fileName": "dem.tif", "data": b64})).unwrap();
+    assert_eq!(t.map().camera, before);
+    // An analysis output adds through the same `add_raster_after`: it leaves the view too.
+    t.run("raster.function", &json!({"layer": "dem", "function": "slope"})).unwrap();
     assert_eq!(t.map().camera, before);
     // A group holding no layer holds nothing: the first data layer added is framed.
     let mut g = Session::new(Project::default());
