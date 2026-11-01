@@ -127,6 +127,30 @@ fn cache_releases_sweep_only_a_cache_left_over_budget() {
     let missing = root.0.join("missing");
     assert!(prune_locked(&missing, 10).is_err());
     assert!(over_budget(&missing));
+    note_budget(&missing, false);
+}
+
+/// A failed build never reaches the sweep at commit, so its release sweeps instead: abandoned
+/// builds left by a crashed process don't outlive the build that failed next to them (#1230).
+#[test]
+fn cache_failed_build_sweeps_abandoned_builds() {
+    let root = Folder::new();
+    let abandoned = root.0.join("rg-index-work-v1-1-2-3.sqlite");
+    std::fs::write(&abandoned, b"partial").unwrap();
+    std::fs::write(lease_path(&abandoned), b"T").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(lease_path(&abandoned), std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    let failed = reserve_index(&root.0, &key(1), 4096).unwrap();
+    assert!(abandoned.exists(), "reserving doesn't sweep");
+    let failed_path = failed.path().to_path_buf();
+    let before = sweeps();
+    drop(failed);
+    assert_eq!(sweeps(), before + 1, "a failed build sweeps on release");
+    assert!(!abandoned.exists(), "the abandoned build is reclaimed");
+    assert!(!failed_path.exists(), "the failed build removes its own index");
 }
 
 fn wait_removed(path: &Path) {

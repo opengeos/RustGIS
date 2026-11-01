@@ -286,8 +286,10 @@ impl Drop for Lease {
         }
         // Sweep only a cache the last sweep left over budget (#1230): a sweep per release made
         // every open slower as the cache grew. Files without a readable lease can't be evicted,
-        // so while they hold the cache over budget every release still sweeps.
-        if over_budget(&directory.root) {
+        // so while they hold the cache over budget every release still sweeps. A failed build
+        // never reached the sweep at commit, so it sweeps here: abandoned builds filling the
+        // disk would otherwise make every later build fail too.
+        if !self.ready || over_budget(&directory.root) {
             let _ = prune_locked(&directory.root, self.budget);
         }
     }
