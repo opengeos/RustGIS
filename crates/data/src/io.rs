@@ -650,8 +650,16 @@ fn rings(v: &Json) -> Option<Vec<Vec<Coord>>> {
     v.as_array()?.iter().map(coords).collect()
 }
 
-/// Parses a GeoJSON geometry object (GeometryCollection keeps its first member).
-pub fn geometry_from_geojson(g: &Json) -> Option<Geometry> {
+/// Parses a GeoJSON geometry object. Collections must contain exactly one member, since
+/// `Geometry` cannot represent a collection. Unwraps nested single-member collections without
+/// recursion; rejects empty or multi-member collections rather than retaining partial geometry.
+pub fn geometry_from_geojson(mut g: &Json) -> Option<Geometry> {
+    while g.get("type")?.as_str()? == "GeometryCollection" {
+        let [only] = g.get("geometries")?.as_array()?.as_slice() else {
+            return None;
+        };
+        g = only;
+    }
     let c = g.get("coordinates");
     match g.get("type")?.as_str()? {
         "Point" => coord(c?).map(Geometry::Point),
@@ -660,7 +668,6 @@ pub fn geometry_from_geojson(g: &Json) -> Option<Geometry> {
         "MultiLineString" => rings(c?).map(Geometry::Line),
         "Polygon" => rings(c?).map(|r| Geometry::Polygon(vec![r])),
         "MultiPolygon" => c?.as_array()?.iter().map(rings).collect::<Option<Vec<_>>>().map(Geometry::Polygon),
-        "GeometryCollection" => g.get("geometries")?.as_array()?.iter().find_map(geometry_from_geojson),
         _ => None,
     }
 }
@@ -2433,6 +2440,37 @@ mod tests {
     }
 
     #[test]
+    fn geojson_collection_never_exports_only_a_member() {
+        let point = json!({"type":"Point", "coordinates":[1,2]});
+        let polygon = json!({"type":"Polygon", "coordinates":[[[0,0],[4,0],[4,4],[0,0]]]});
+        let collection = json!({"type":"GeometryCollection", "geometries":[point, polygon]});
+        let nested = json!({"type":"GeometryCollection", "geometries":[collection]});
+        for geometry in [collection, nested] {
+            let feature = json!({"type":"Feature", "properties":{}, "geometry":geometry});
+            let fc = json!({"type":"FeatureCollection", "features":[feature]});
+            for root in [&geometry, &feature, &fc] {
+                let (ds, report) = read_geojson(&root.to_string(), "collection").unwrap();
+                assert!(ds.features.is_empty(), "must not retain a partial collection: {root}");
+                assert_eq!(report.skipped, 1);
+                assert_eq!(report.messages, ["1 features had unreadable geometry"]);
+                assert!(to_geojson(&ds)["features"].as_array().unwrap().is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn geojson_single_member_collection_is_lossless_and_quiet() {
+        let geometry = json!({"type":"GeometryCollection", "geometries":[
+            {"type":"GeometryCollection", "geometries":[{"type":"Point", "coordinates":[1,2]}]}
+        ]});
+        let (ds, report) = read_geojson(&geometry.to_string(), "single").unwrap();
+        assert_eq!(ds.features.len(), 1);
+        assert_eq!(ds.features[0].geometry, Some(Geometry::Point(Coord::new(1.0, 2.0))));
+        assert_eq!(report.skipped, 0);
+        assert!(report.messages.is_empty());
+    }
+
+    #[test]
     fn geojson_null_first_keeps_numeric_type() {
         let text = r#"{"type":"FeatureCollection","features":[
             {"type":"Feature","properties":{"v":null,"n":null},"geometry":null},
@@ -2611,9 +2649,12 @@ mod tests {
         // A stray `geometries` on another type isn't read, so its heights don't count.
         let stray = r#"{"type":"Feature","properties":{},"geometry":{"type":"Point","coordinates":[1,2],"geometries":[{"type":"Point","coordinates":[1,2,3]}]}}"#;
         assert!(!read_geojson(stray, "pt").unwrap().0.zm_dropped);
-        // A height in a later collection member counts too.
+        // A rejected collection loses the whole feature, not just its heights.
         let mixed = r#"{"type":"Feature","properties":{},"geometry":{"type":"GeometryCollection","geometries":[{"type":"LineString","coordinates":[[1,2],[3,4]]},{"type":"Point","coordinates":[5,6,7]}]}}"#;
-        assert!(read_geojson(mixed, "mixed").unwrap().0.zm_dropped);
+        let (ds, rep) = read_geojson(mixed, "mixed").unwrap();
+        assert!(ds.features.is_empty() && !ds.zm_dropped && !said(&rep));
+        assert_eq!(rep.skipped, 1);
+        assert_eq!(rep.messages, ["1 features had unreadable geometry"]);
         let curve = r#"{"type":"FeatureCollection","features":[{"type":"Feature","properties":{},"geometry":{"type":"Curve","coordinates":[[1,2,3]]}},{"type":"Feature","properties":{},"geometry":{"type":"Point","coordinates":[1,2]}}]}"#;
         let (ds, rep) = read_geojson(curve, "curve").unwrap();
         assert!(!ds.zm_dropped && !said(&rep) && rep.skipped == 1, "{rep:?}");

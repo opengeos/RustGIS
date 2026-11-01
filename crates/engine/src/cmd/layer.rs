@@ -2963,10 +2963,14 @@ pub(crate) fn add_data_text(s: &mut Session, p: &Value) -> CmdResult {
     add_read(s, p, read)
 }
 
+/// Adds an imported dataset as a layer or table, forwarding reader notices for either result.
 pub(crate) fn add_read(s: &mut Session, p: &Value, read: (rustgis_data::Dataset, rustgis_data::ReadReport)) -> CmdResult {
     let (mut ds, report) = read;
     if let Some(n) = ps(p, "name").map(str::trim).filter(|n| !n.is_empty()) {
         ds.name = n.to_string();
+    }
+    for m in report.messages {
+        s.notify(m, false);
     }
     if ds.geometry_type == GeometryType::None {
         let name = ds.name.clone();
@@ -2976,9 +2980,6 @@ pub(crate) fn add_read(s: &mut Session, p: &Value, read: (rustgis_data::Dataset,
     let n = ds.features.len();
     let empty_before = s.map().layers.is_empty();
     let id = add_dataset(s, ds);
-    for m in report.messages {
-        s.notify(m, false);
-    }
     if empty_before && let Some(e) = s.map().layer(id).map(|l| l.extent()) {
         s.zoom_to(&e);
     }

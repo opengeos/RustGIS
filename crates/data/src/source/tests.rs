@@ -1225,6 +1225,35 @@ fn geojson_read_in_place() {
 }
 
 #[test]
+fn geojson_in_place_rejects_partial_collections_with_a_notice() {
+    let text = r#"{"type":"FeatureCollection","features":[
+        {"type":"Feature","properties":{},"geometry":{"type":"GeometryCollection","geometries":[
+            {"type":"Point","coordinates":[1,2]},
+            {"type":"Polygon","coordinates":[[[0,0],[4,0],[4,4],[0,0]]]}
+        ]}},
+        {"type":"Feature","properties":{},"geometry":{"type":"GeometryCollection","geometries":[
+            {"type":"Point","coordinates":[8,9]}
+        ]}}
+    ]}"#;
+    let p = dir().join("collections.geojson");
+    std::fs::write(&p, text).unwrap();
+    let (whole, report) = crate::io::read_geojson(text, "x").unwrap();
+    assert_eq!(whole.features.len(), 1);
+    assert_eq!(report.skipped, 1);
+    for in_memory in [crate::io::MAX_BYTES, 0] {
+        let src = geojson::GeoJsonSource::open_with(&p, "x", in_memory).unwrap();
+        assert_eq!(src.info().count, Some(1));
+        assert_eq!(src.skipped_at_open(), 1);
+        assert_eq!(src.info().notes, ["1 features had unreadable geometry"]);
+        let (ds, streamed_report) = materialize(&src).unwrap();
+        assert_eq!(ds.features, whole.features);
+        assert_eq!(streamed_report.skipped, report.skipped);
+        assert_eq!(streamed_report.messages, report.messages.iter().map(|m| format!("x: {m}")).collect::<Vec<_>>());
+    }
+    std::fs::remove_file(p).unwrap();
+}
+
+#[test]
 fn geojson_in_place_matches_one_read_whole() {
     let d = dir().join("geojson-whole");
     std::fs::create_dir_all(&d).unwrap();
