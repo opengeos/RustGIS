@@ -471,10 +471,11 @@ impl Layer {
         {
             self.dataset.fields = info.fields.clone();
         }
-        // An opened source's dropped Z or M values, as `replace_source` takes them: the source
-        // decides, so a project saved without the mark (or with a stale one) gets the right one.
+        // An opened source's dropped Z or M values, for a project saved without the mark. Added to,
+        // not replaced: a source that couldn't tell (a check that timed out) mustn't clear a mark the
+        // project kept, and a stale one gives one notice too many rather than one too few.
         if let Some(info) = self.source.as_ref().and_then(|s| s.info()) {
-            self.dataset.zm_dropped = info.zm_dropped;
+            self.dataset.zm_dropped |= info.zm_dropped;
         }
         let Some(src) = &mut self.source else { return false };
         src.window_fields = Some(self.dataset.fields.len());

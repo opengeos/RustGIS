@@ -144,23 +144,20 @@ fn ring(mut r: Vec<Coord>) -> Option<Vec<Coord>> {
 
 /// The rings of a polygon or surface patch: exterior (outerBoundaryIs) first.
 fn polygon(p: &Node, zm: &Cell<bool>) -> Option<Vec<Vec<Coord>>> {
-    let boundary = |names: &[&str]| -> Vec<Vec<Coord>> {
-        // Only a ring kept (closed, with four points) marks Z or M.
+    // Each ring `ring` keeps (at least three points, closed if it wasn't), and whether it had Z or M.
+    let boundary = |names: &[&str]| -> Vec<(Vec<Coord>, bool)> {
         let kept = |b: Node| {
             let dims = Cell::new(false);
-            let r = ring(coords(&b, &dims)?)?;
-            zm.set(zm.get() || dims.get());
-            Some(r)
+            ring(coords(&b, &dims)?).map(|r| (r, dims.get()))
         };
         p.descendants().filter(|d| d.is_element() && is_gml(d) && names.contains(&local(d))).filter_map(kept).collect()
     };
-    let mut rings = boundary(&["exterior", "outerBoundaryIs"]);
-    if rings.is_empty() {
-        return None;
-    }
-    rings.truncate(1);
+    // The first exterior ring, then the interiors: only the rings kept mark Z or M.
+    let outer = boundary(&["exterior", "outerBoundaryIs"]).into_iter().next()?;
+    let mut rings = vec![outer];
     rings.extend(boundary(&["interior", "innerBoundaryIs"]));
-    Some(rings)
+    zm.set(zm.get() || rings.iter().any(|(_, d)| *d));
+    Some(rings.into_iter().map(|(r, _)| r).collect())
 }
 
 /// A GML geometry element as a geometry; `zm` is set when Z or M values are dropped.
@@ -449,6 +446,18 @@ mod tests {
 </wfs:FeatureCollection>"#;
         let layers = read("r.gml", gml.as_bytes()).unwrap();
         assert!(!layers[0].0.zm_dropped, "{:?}", layers[0].1.messages);
+        assert_eq!(layers[0].0.features[0].geometry, Some(Geometry::Line(vec![vec![Coord::new(10.0, 48.0), Coord::new(11.0, 49.0)]])));
+
+        // A two-point 3D interior ring is left out: the 2D polygon kept says nothing.
+        let gml = r#"<wfs:FeatureCollection xmlns:wfs="http://www.opengis.net/wfs/2.0" xmlns:gml="http://www.opengis.net/gml/3.2" xmlns:app="http://example.com/app">
+<wfs:member><app:parcels gml:id="p.1"><app:geom><gml:Polygon srsName="EPSG:4326">
+  <gml:exterior><gml:LinearRing><gml:posList srsDimension="2">10 48 11 48 11 49 10 48</gml:posList></gml:LinearRing></gml:exterior>
+  <gml:interior><gml:LinearRing><gml:posList srsDimension="3">10.4 48.2 5 10.5 48.3 5</gml:posList></gml:LinearRing></gml:interior>
+</gml:Polygon></app:geom></app:parcels></wfs:member>
+</wfs:FeatureCollection>"#;
+        let layers = read("p.gml", gml.as_bytes()).unwrap();
+        assert!(!layers[0].0.zm_dropped, "{:?}", layers[0].1.messages);
+        assert!(matches!(&layers[0].0.features[0].geometry, Some(Geometry::Polygon(p)) if p.len() == 1 && p[0].len() == 1));
     }
 
     #[test]
