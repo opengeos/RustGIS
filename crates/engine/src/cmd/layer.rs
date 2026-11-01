@@ -2809,7 +2809,8 @@ fn part_not_there(ext: &str, url: &str, e: &str) -> bool {
         }
 }
 
-/// Whether an address is read with keys: signed (a query) or through a saved S3 connection.
+/// Whether an address is read with keys: one whose query holds a key, token or signature (what
+/// `sources::redact` takes out), or a saved S3 connection.
 fn keyed(url: &str) -> bool {
     // A key, token or signature in the query is what redaction takes out; a query like `?v=2`
     // carries none.
@@ -2979,7 +2980,9 @@ pub fn download_data(url: &str, max: usize, done: crate::render::rustgis_tiles::
 }
 
 /// A Shapefile's parts zipped, within the budget they were downloaded in (`left` being what is
-/// still free): the archive's own records count too.
+/// still free): the archive's own records count too. It runs where the last part lands: on the
+/// download thread natively, on the page's event loop in the web app (as the web app's loose
+/// Shapefiles picked or dropped are zipped, #426).
 fn zipped_within(name: &str, shp: Vec<u8>, got: Vec<(&'static str, Vec<u8>)>, left: usize) -> Result<Vec<u8>, String> {
     let max = got.iter().fold(shp.len().saturating_add(left), |n, (_, b)| n.saturating_add(b.len()));
     let zip = rustgis_data::io::zip_shapefile_parts(name, shp, got)?;
