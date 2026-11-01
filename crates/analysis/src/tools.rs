@@ -1815,6 +1815,8 @@ fn dissolve(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
         let mut attrs = if fi.is_some() { vec![key, Value::Int(n)] } else { vec![Value::Int(n)] };
         if !requests.is_empty() {
             record_order(&mut records);
+            // Each record is in one group: counted here, each is counted once.
+            rounded.count_texts(ds, &records, &requests, false);
             attrs.extend(statistic_values(ds, &records, &requests, false, separator, &mut rounded));
         }
         out.push(from_multipolygon(&u), attrs);
@@ -2710,10 +2712,13 @@ fn count_points(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
     let mut counts = vec![0i64; out.features.len()];
     // Each polygon's points, kept only for statistics.
     let mut members: Vec<Vec<usize>> = if requests.is_empty() { Vec::new() } else { vec![Vec::new(); out.features.len()] };
+    // The points in at least one polygon, each once: the ones the statistics read.
+    let mut summarised: Vec<usize> = Vec::new();
     for r in each_once(rows(inp, p, "points", pts)) {
         let Some(g) = pts.features.get(r).and_then(|f| f.geometry.as_ref()) else { continue };
         let pg = to_geo(g);
         let ext = merc_extent(&pg);
+        let mut met = false;
         for zi in index.candidates(&ext) {
             let Some((row, mp, z_ext)) = zones.get(zi) else { continue };
             if z_ext.intersects(&ext)
@@ -2721,6 +2726,7 @@ fn count_points(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
                 && let Some(c) = counts.get_mut(*row)
             {
                 *c += 1;
+                met = true;
                 if let Some(m) = members.get_mut(*row) {
                     // One entry for each point in each polygon it meets: many overlapping polygons
                     // can make that more than memory holds, an error rather than an abort. The
@@ -2731,6 +2737,9 @@ fn count_points(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
                     m.push(r);
                 }
             }
+        }
+        if met && !requests.is_empty() {
+            summarised.push(r);
         }
     }
     let total: i64 = counts.iter().sum();
@@ -2743,6 +2752,9 @@ fn count_points(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
     let first = out.fields.len();
     if !requests.is_empty() {
         out.fields.extend(added);
+        // A point in several overlapping polygons is read for each of them: counted over the
+        // points, not the polygons' lists, each is counted once.
+        rounded.count_texts(pts, &summarised, &requests, false);
         let width = out.fields.len();
         for (f, mut records) in out.features.iter_mut().zip(members) {
             if f.attrs.len() < width {
@@ -2877,6 +2889,7 @@ fn summary_statistics(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> 
     rs.sort_unstable();
     rs.dedup();
     let mut rounded = Rounded::new(requests.len());
+    rounded.count_texts(ds, &rs, &requests, field_only);
     for group in stats::group_rows(ds, &rs, &cases) {
         let mut row = group.key;
         row.push(stats::count(group.rows.len()));
@@ -2921,14 +2934,39 @@ impl Rounded {
     fn new(requests: usize) -> Rounded {
         Rounded { results: vec![0; requests], texts: Vec::new() }
     }
+
+    /// Adds, for each field `requests` read as numbers from `ds`, how many of its values among the
+    /// records `rows` are whole numbers written as text past the i64 range, read as decimals that
+    /// don't hold them. Called once over the records a tool reads, each once, so a value is counted
+    /// once however many groups (Summarize Within's polygons) it is summarised in.
+    fn count_texts(&mut self, ds: &Dataset, rows: &[usize], requests: &[crate::stats::Request], as_numbers: bool) {
+        // Each field once, in the requests' order, which names them in the notice.
+        let mut fields: Vec<usize> = Vec::new();
+        for r in requests {
+            if !fields.contains(&r.field) {
+                fields.push(r.field);
+            }
+        }
+        for field in fields {
+            let n = crate::stats::column(ds, rows, field, as_numbers).rounded_texts();
+            if n == 0 {
+                continue;
+            }
+            let name = ds.fields.get(field).map(|f| f.name.as_str()).unwrap_or_default();
+            match self.texts.iter_mut().find(|(f, _)| f == name) {
+                Some((_, count)) => *count += n,
+                None => self.texts.push((name.to_string(), n)),
+            }
+        }
+    }
 }
 
 /// The values of a statistics list over the records `rows` of `ds`, one per request, in the
 /// requests' order. `rows` must be in record order, each once: FIRST, LAST and CONCATENATE follow
 /// it. Each field's values are read once, however many of its statistics are asked for. Each
 /// value that comes out rounded from whole numbers past 2^53 adds one to its request's count in
-/// `rounded`, and each whole number written as text that reading its field as numbers rounded
-/// adds one to the field's, for [`rounded_notice`].
+/// `rounded`, for [`rounded_notice`]; the whole numbers written as text that reading a field as
+/// numbers rounds are counted by [`Rounded::count_texts`], per record rather than per group.
 fn statistic_values(
     ds: &Dataset,
     rows: &[usize],
@@ -2944,15 +2982,7 @@ fn statistic_values(
         let i = match read.iter().position(|(f, _)| *f == r.field) {
             Some(i) => i,
             None => {
-                let column = stats::column(ds, rows, r.field, as_numbers);
-                if column.rounded_texts() > 0 {
-                    let name = ds.fields.get(r.field).map(|f| f.name.as_str()).unwrap_or_default();
-                    match rounded.texts.iter_mut().find(|(f, _)| f == name) {
-                        Some((_, n)) => *n += column.rounded_texts(),
-                        None => rounded.texts.push((name.to_string(), column.rounded_texts())),
-                    }
-                }
-                read.push((r.field, column));
+                read.push((r.field, stats::column(ds, rows, r.field, as_numbers)));
                 read.len() - 1
             }
         };

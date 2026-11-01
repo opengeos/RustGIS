@@ -562,7 +562,7 @@ pub fn rounded(stat: Stat, column: &Column, value: &Value) -> bool {
             let picked = match stat {
                 // One pass, compared exactly, as [`Column::exact`] would sort them.
                 Stat::Min | Stat::Max => {
-                    let exact = numbers.iter().zip(&column.whole).map(|(x, w)| w.map_or(Value::Float(*x), Value::Int));
+                    let exact = numbers.iter().zip(&column.whole).map(|(n, w)| w.map_or(Value::Float(*n), Value::Int));
                     if stat == Stat::Min { exact.min_by(cmp_number) } else { exact.max_by(cmp_number) }
                 }
                 // MODE and MINORITY have sorted the column already.

@@ -771,6 +771,94 @@ fn rounding_check_survives_whole_numbers_past_the_i64_range() {
     assert_eq!(res.messages, ["Summary Statistics: 1 rows"]);
 }
 
+/// Whole numbers written as text past the i64 range are counted per record: a point in two
+/// overlapping polygons is read for both but is one value, and so is a record in a dissolved group.
+#[test]
+fn a_rounded_text_in_overlapping_polygons_is_counted_once() {
+    const HUGE: &str = "123456789012345678901";
+    const LOW: &str = "-9223372036854775809";
+    let one = |n: usize| {
+        format!("{n} whole number written as text in n past the 64-bit integer range was read as a decimal that doesn't hold it exactly")
+    };
+    let many = |n: usize| {
+        format!("{n} whole numbers written as text in n past the 64-bit integer range were read as decimals that don't hold them exactly")
+    };
+    // Sites 0 and 1 lie where `west` and `east` overlap, 2 in `west` only, 3 in neither. The
+    // Integer field `n` then gets text values: HUGE at 0 and 2, LOW at 3, and 2^53 + 1 at 1.
+    let geojson = collection(vec![
+        (point(6.0, 1.0), json!({"n": 1})),
+        (point(6.0, 2.0), json!({"n": (1i64 << 53) + 1})),
+        (point(1.0, 1.0), json!({"n": 1})),
+        (point(50.0, 50.0), json!({"n": 1})),
+    ]);
+    let (mut pts, _) = read_geojson(&geojson, "sites").unwrap();
+    assert_eq!(field_ty(&pts, "n"), FieldType::Integer, "premise");
+    pts.features[0].attrs[0] = text(HUGE);
+    pts.features[2].attrs[0] = text(HUGE);
+    pts.features[3].attrs[0] = text(LOW);
+    let statistics = json!([{"field": "n", "statistic": "MIN"}, {"field": "n", "statistic": "MAX"}, {"field": "n", "statistic": "COUNT"}]);
+    let p = |rows: &str| json!({"polygons": "zones", "points": rows, "statistics": statistics});
+    // Site 0 alone: one value, in two polygons. Site 1's 2^53 + 1 is the MIN picked in both, a
+    // result rounded in each, so that notice counts two.
+    let layers = Layers::default().with(zones()).with(pts.clone()).select("sites", &[1, 0]);
+    let res = rustgis_analysis::run("countPoints", &layers, &p("sites")).unwrap();
+    assert_eq!(
+        res.messages,
+        [
+            "Summarize Within: 4 points counted".to_string(),
+            "2 results rounded in MIN_n: a decimal field holds whole numbers exactly only up to 2^53 (9007199254740992)".to_string(),
+            one(1)
+        ]
+    );
+    let out = layer(res);
+    assert_eq!(column(&out, "COUNT_n"), [&int(2), &int(2), &int(0), &int(0)]);
+    assert_eq!(
+        column(&out, "MAX_n"),
+        [&float(123_456_789_012_345_678_901.0), &float(123_456_789_012_345_678_901.0), &Value::Null, &Value::Null]
+    );
+    // All sites: site 2's HUGE is a second value, and site 3's LOW lies in no polygon and isn't read.
+    let layers = Layers::default().with(zones()).with(pts.clone());
+    let res = rustgis_analysis::run("countPoints", &layers, &p("sites")).unwrap();
+    assert_eq!(res.messages[0], "Summarize Within: 5 points counted");
+    assert_eq!(res.messages[2], many(2));
+    assert_eq!(column(&layer(res), "COUNT_n"), [&int(3), &int(2), &int(0), &int(0)]);
+    // Without statistics nothing is read, and nothing said.
+    let res = rustgis_analysis::run("countPoints", &layers, &json!({"polygons": "zones", "points": "sites"})).unwrap();
+    assert_eq!(res.messages, ["Summarize Within: 5 points counted"]);
+
+    // Dissolve: records 0 and 2 in zone A, 1 and 3 in zone B, with the same values; each is in one
+    // group, and the count is the same by zone and as one group. Zone B's MAX, 2^53 + 1, is the one
+    // result rounded: zone A's and the whole layer's MIN and MAX are the decimals read from text.
+    let geojson = collection(vec![
+        (square(0.0, 0.0, 1.0), json!({"zone": "A", "n": 1})),
+        (square(5.0, 0.0, 1.0), json!({"zone": "B", "n": (1i64 << 53) + 1})),
+        (square(1.0, 0.0, 1.0), json!({"zone": "A", "n": 1})),
+        (square(6.0, 0.0, 1.0), json!({"zone": "B", "n": 1})),
+    ]);
+    let (mut ds, _) = read_geojson(&geojson, "parcels").unwrap();
+    assert_eq!(names(&ds), ["n", "zone"], "premise");
+    assert_eq!(field_ty(&ds, "n"), FieldType::Integer, "premise");
+    ds.features[0].attrs[0] = text(HUGE);
+    ds.features[2].attrs[0] = text(HUGE);
+    ds.features[3].attrs[0] = text(LOW);
+    let layers = Layers::default().with(ds.clone());
+    let res = rustgis_analysis::run("dissolve", &layers, &json!({"input": "parcels", "field": "zone", "statistics": statistics})).unwrap();
+    assert_eq!(
+        res.messages,
+        [
+            "Dissolve: 2 features".to_string(),
+            "1 result rounded in MAX_n: a decimal field holds whole numbers exactly only up to 2^53 (9007199254740992)".to_string(),
+            many(3)
+        ]
+    );
+    let res = rustgis_analysis::run("dissolve", &layers, &json!({"input": "parcels", "statistics": statistics})).unwrap();
+    assert_eq!(res.messages, ["Dissolve: 1 features".to_string(), many(3)]);
+    // Only zone A, selected with a repeat: its two values.
+    let layers = Layers::default().with(ds).select("parcels", &[2, 0, 2]);
+    let res = rustgis_analysis::run("dissolve", &layers, &json!({"input": "parcels", "field": "zone", "statistics": statistics})).unwrap();
+    assert_eq!(res.messages, ["Dissolve: 1 features".to_string(), many(2)]);
+}
+
 /// A Double field's values are decimals already: statistics of them round as decimal arithmetic
 /// rounds, and the tools say nothing, however large the values. The readers store a Double field's
 /// whole numbers as decimals too.
