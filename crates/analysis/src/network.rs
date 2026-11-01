@@ -13,6 +13,8 @@ pub struct Route {
     pub length_m: f64,
     pub cost: f64,
     pub rows: Vec<usize>,
+    /// Segments omitted because an endpoint has non-finite coordinates or an invalid latitude.
+    pub skipped_segments: usize,
 }
 
 #[derive(PartialEq)]
@@ -46,6 +48,10 @@ pub fn shortest_route(
     cost_field: Option<usize>,
     snap_m: f64,
 ) -> Result<Route, String> {
+    if [from, to].iter().any(|c| !c.is_finite() || c.y.abs() > 90.0) {
+        return Err("a route end has invalid coordinates".into());
+    }
+    let mut skipped_segments = 0;
     let mut ids: HashMap<(i64, i64), usize> = HashMap::new();
     let mut nodes: Vec<Coord> = Vec::new();
     let mut adj: Vec<Vec<(usize, f64, f64, usize)>> = Vec::new(); // (to, cost, length, row)
@@ -71,7 +77,8 @@ pub fn shortest_route(
                 let (Some(a), Some(b)) = (w.first(), w.get(1)) else { continue };
                 // Non-finite coordinates cast to ordinary integer keys (NaN becomes zero).
                 // Keep unroutable segments out before they can corrupt a valid shared node.
-                if !a.is_finite() || !b.is_finite() {
+                if !a.is_finite() || !b.is_finite() || a.y.abs() > 90.0 || b.y.abs() > 90.0 {
+                    skipped_segments += 1;
                     continue;
                 }
                 let (ia, ib) = (node(*a, &mut ids, &mut nodes, &mut adj), node(*b, &mut ids, &mut nodes, &mut adj));
@@ -89,6 +96,9 @@ pub fn shortest_route(
                 }
             }
         }
+    }
+    if segs.is_empty() && skipped_segments > 0 {
+        return Err(format!("no usable network remains: {skipped_segments} segments have invalid coordinates"));
     }
     // The closest point on any segment: (segment, fraction along it, the point, metres away).
     let nearest = |p: Coord, nodes: &[Coord]| -> Option<(usize, f64, Coord, f64)> {
@@ -121,8 +131,7 @@ pub fn shortest_route(
     // Each end becomes a node on its segment, joined to the segment's two ends.
     let attach = |p: Coord, nodes: &mut Vec<Coord>, adj: &mut Vec<Vec<(usize, f64, f64, usize)>>| -> Result<(usize, usize, f64), String> {
         let (si, t, q, d) = nearest(p, nodes).ok_or("the layer has no lines")?;
-        // A NaN distance (a broken end) fails the check too, rather than snapping to a random segment.
-        if d.is_nan() || d > snap_m {
+        if d > snap_m {
             return Err(format!("a route end is more than {} from the network", rustgis_geom::format_distance(snap_m)));
         }
         let &(a, b, weight, row) = segs.get(si).ok_or("the layer has no lines")?;
@@ -209,7 +218,7 @@ pub fn shortest_route(
     path.reverse();
     used.reverse();
     used.dedup();
-    Ok(Route { path, length_m: length, cost, rows: used })
+    Ok(Route { path, length_m: length, cost, rows: used, skipped_segments })
 }
 
 /// Most random points made in one call, and point-in-polygon tries spent making them.
@@ -467,12 +476,15 @@ mod tests {
         assert!((r.length_m - 3339.6).abs() < 1.0, "{}", r.length_m);
         assert!((r.path[0].x - 0.03).abs() < 1e-9 && (r.path.last().unwrap().x - 0.06).abs() < 1e-9);
         assert!(shortest_route(&ds, &[0], Coord::new(0.03, 0.01), Coord::new(0.06, 0.0), None, 50.0).is_err(), "1 km away");
-        assert!(shortest_route(&ds, &[0], Coord::new(f64::NAN, 0.0), Coord::new(0.06, 0.0), None, 50.0).is_err(), "a NaN end");
+        let error = shortest_route(&ds, &[0], Coord::new(f64::NAN, 0.0), Coord::new(0.06, 0.0), None, 50.0).unwrap_err();
+        assert!(error.contains("route end"), "{error}");
+        let error = shortest_route(&ds, &[0], Coord::new(0.0, 95.0), Coord::new(0.06, 0.0), None, 50.0).unwrap_err();
+        assert!(error.contains("route end"), "{error}");
     }
 
     #[test]
     fn a_broken_segment_listed_first_does_not_hide_a_valid_one() {
-        // The NaN vertex makes the first segment's distance NaN, which the snap must not keep.
+        // The invalid segment is excluded before graph construction and cannot hide the road.
         let mut ds = Dataset::new("roads", GeometryType::Polyline, vec![]);
         ds.push(Some(Geometry::Line(vec![vec![Coord::new(0.5, 0.5), Coord::new(f64::NAN, 0.5)]])), vec![]);
         ds.push(Some(Geometry::Line(vec![vec![Coord::new(0.0, 0.0), Coord::new(0.09, 0.0)]])), vec![]);
