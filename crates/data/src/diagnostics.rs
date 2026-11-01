@@ -12,6 +12,9 @@ pub const MAX_SOURCE_BYTES: usize = 256;
 pub const MAX_MESSAGE_BYTES: usize = 2048;
 pub const MAX_DETAILS_BYTES: usize = 8192;
 pub const MAX_URL_BYTES: usize = 2048;
+/// Servers whose omitted absences are each said once; past this many, later servers add nothing,
+/// so a session of many sources can't grow the list without bound.
+const MAX_ABSENT_SERVERS: usize = 64;
 // Reject, rather than clip, oversized input: a clipped credential key might become harmless-looking.
 const MAX_INPUT_BYTES: usize = 16 * 1024;
 const REDACTED: &str = "[REDACTED]";
@@ -78,8 +81,9 @@ struct State {
     next_id: u64,
     generation: u64,
     records: VecDeque<Record>,
-    /// Said once: expected absences are omitted, so a misconfigured tile source is not silent.
-    absence_said: bool,
+    /// Servers whose expected absences have been said (one note each, so a second misconfigured
+    /// tile source isn't silent once the first has spoken). Bounded; cleared with the records.
+    absences_said: Vec<String>,
 }
 
 static CLOCK: Mutex<Option<fn() -> u64>> = Mutex::new(None);
@@ -195,6 +199,8 @@ impl History {
     pub fn clear(&self) {
         let mut state = lock(&self.0);
         state.records.clear();
+        // A source said before the clear is said again: the pane must not stay silent about it.
+        state.absences_said.clear();
         state.generation = state.generation.wrapping_add(1);
     }
 
@@ -227,18 +233,28 @@ impl History {
 }
 
 impl Capture {
-    /// Says once, per history, that expected absences (a tile past a map's edge, a store's
-    /// absent chunk) are omitted: the pane is not silent about a misconfigured tile source
-    /// while the history stays free of their flood. Later absences add nothing.
+    /// Says once per server, per history, that expected absences (a tile past a map's edge, a
+    /// store's absent chunk) are omitted: the pane is not silent about a misconfigured source
+    /// while the history stays free of their flood. Later absences from that server add nothing.
     pub fn absence_said(&self, url: &str, status: u16) {
         let Some(state) = self.0.upgrade() else { return };
+        // The server is the address's origin (scheme, host and port): two tile sources on one
+        // host but different ports are two sources.
+        let server = url::Url::parse(url).map(|u| u.origin().ascii_serialization()).unwrap_or_default();
         let first = {
             let mut guard = lock(&state);
-            !std::mem::replace(&mut guard.absence_said, true)
+            if guard.absences_said.contains(&server) || guard.absences_said.len() >= MAX_ABSENT_SERVERS {
+                false
+            } else {
+                guard.absences_said.push(server);
+                true
+            }
         };
         if !first {
             return;
         }
+        // The address without its query or fragment, as a failure's record keeps it.
+        let url = url.get(..url.find(['?', '#']).unwrap_or(url.len())).unwrap_or("");
         History(state).retain(Record {
             id: 0,
             timestamp_ms: timestamp_ms(),
@@ -399,6 +415,12 @@ fn bare_name(key: &str) -> bool {
         && secret_name(key)
 }
 
+/// Whether a word looks like a credential rather than prose: it has a digit, is long, or holds
+/// punctuation. "Token refreshed" and "Password is missing" are prose; "token abc123" is not.
+fn credential_shaped(word: &str) -> bool {
+    word.chars().any(|c| c.is_ascii_digit()) || word.chars().count() >= 16 || word.chars().any(|c| !c.is_alphanumeric())
+}
+
 /// Sanitizes before bounding. Oversized input is omitted *whole*, so a secret can never be
 /// retained because its identifying key lay beyond a clipped prefix. URL queries/fragments
 /// are all omitted, including unknown/encoded signing schemes. JSON/XML bodies are not logged.
@@ -484,32 +506,52 @@ pub fn redact(text: &str) -> String {
                 i += url_end;
                 field_before = false;
                 if address.contains(['?', '#']) {
-                    // A malformed/unescaped value may continue after whitespace or a quote.
-                    // Do not guess where that credential ends.
-                    break;
+                    // Its query or fragment is gone, and that is said. When a pair in it named a
+                    // secret, an unescaped value may run on past whitespace: the rest of the text
+                    // goes too, said. Otherwise the rest keeps going through the field rules, so a
+                    // failure's reason after the address isn't lost.
+                    let query = address.split_once(['?', '#']).map_or("", |(_, q)| q);
+                    let secret = query.split(['&', ';', '#']).any(|pair| secret_name(pair.split('=').next().unwrap_or("")));
+                    if secret {
+                        out.push_str("[query and the rest omitted]");
+                        break;
+                    }
+                    out.push_str("[query omitted]");
+                    if let Some(end) = address.chars().last().filter(|c| matches!(c, ':' | ',' | ';' | ')' | '.')) {
+                        out.push(end);
+                    }
                 }
                 continue;
             }
             let after_space = after.trim_start();
             // A file path (POSIX or Windows) is context, not a credential field name.
             if !atom.contains(['/', '\\']) && secret_name(atom) {
-                // `name=value` is a field however its value is shaped: an equals sign is not how
-                // prose speaks, so a value with spaces is still a value ("Password=my secret").
-                // `name: value` needs its value to look like one (one token, quoted, or the
-                // header's own credential); anything longer is prose: "its password:
-                // right-click the connection".
+                // At the start of a line, `name: value` is a field whatever its value's shape
+                // ("Password: correct horse"). `name=value` is a field however its value is
+                // shaped anywhere: an equals sign is not how prose speaks. Mid-line, `name: value`
+                // needs its value to look like one (one token, quoted, or the header's own
+                // credential); anything longer is prose: "its password: right-click the
+                // connection".
+                let line = i == 0 || text.get(..i).is_some_and(|before| before.ends_with('\n'));
                 let field = if let Some(value) = after_space.strip_prefix('=').map(str::trim_start) {
                     credential_header(atom) || !value.is_empty()
                 } else if let Some(value) = after_space.strip_prefix(':').map(str::trim_start) {
-                    credential_header(atom) || value.starts_with(['"', '\'']) || (!value.is_empty() && !value.contains(char::is_whitespace))
+                    credential_header(atom)
+                        || (line && !value.is_empty())
+                        || value.starts_with(['"', '\''])
+                        || (!value.is_empty() && !value.contains(char::is_whitespace))
                 } else {
                     false
                 };
-                // A bare credential line is redacted only where the text or line begins, and only
-                // for an unambiguous secret name, so ordinary prose keeps its words ("the saved
-                // password is missing", "Key column 'id' is missing").
-                let line = i == 0 || text.get(..i).is_some_and(|before| before.ends_with('\n'));
-                let bare = line && after.chars().next().is_some_and(char::is_whitespace) && bare_name(atom);
+                // A bare credential line is redacted only where the text or line begins, for an
+                // unambiguous secret name, and when the word after it looks like a credential, so
+                // ordinary notices keep their words ("Token refreshed", "Password is missing").
+                // A scheme word (`Basic`) is followed by its credential whatever its shape: a Basic
+                // credential is base64, letters and digits that may look like a word.
+                let next = after.trim_start().split(char::is_whitespace).next().unwrap_or("");
+                let scheme = atom.eq_ignore_ascii_case("basic");
+                let bare =
+                    line && after.chars().next().is_some_and(char::is_whitespace) && bare_name(atom) && (scheme || credential_shaped(next));
                 if field || bare {
                     out.push_str(REDACTED);
                     break;
@@ -533,7 +575,12 @@ pub fn redact(text: &str) -> String {
                 out.push_str(REDACTED);
                 field_before = false;
                 let value = after.trim_start();
-                i += end + (after.len() - value.len()) + value.find(separator).unwrap_or(value.len());
+                // A quoted token goes whole, spaces and all; an unquoted one to its separator.
+                let token = match value.chars().next() {
+                    Some(q @ ('"' | '\'')) => value.get(1..).and_then(|v| v.find(q)).map_or(value.len(), |at| at + 2),
+                    _ => value.find(separator).unwrap_or(value.len()),
+                };
+                i += end + (after.len() - value.len()) + token;
                 continue;
             }
             // A non-URL user:password@host or a scheme-relative authority is ambiguous:
@@ -624,9 +671,9 @@ mod tests {
             "Authorization: Bearer hidden",
             "proxy-AUTHORIZATION : Basic hidden",
             "Authorization Bearer hidden",
-            "token hidden",
-            "password is hidden",
-            "secret hidden",
+            "token hidden42",
+            "password hidden-value",
+            "secret hiddenhiddenhidden1",
             "https://example.org/path?token=hidden hidden",
             "Bearer hidden",
             "Basic hidden",
@@ -649,12 +696,18 @@ mod tests {
             "server: Basic hidden",
             "Server=db;Password=very hidden",
             "password=very hidden indeed",
+            "Password: correct horse hidden",
+            "Bearer \"hidden more-hidden\"",
         ] {
             let clean = redact(input);
             assert!(!clean.contains("hidden"), "{input} -> {clean}");
         }
         assert_eq!(redact("Loaded 3 layers"), "Loaded 3 layers");
-        assert_eq!(redact("failed https://example.org/path?unknown=opaque#fragment"), "failed https://example.org/path");
+        assert_eq!(redact("failed https://example.org/path?unknown=opaque#fragment"), "failed https://example.org/path[query omitted]");
+        // A query without a secret-named pair keeps the failure's reason after it, said.
+        assert_eq!(redact("https://host/data?page=2: HTTP 503"), "https://host/data[query omitted]: HTTP 503");
+        // One with a secret drops the rest too, and says so.
+        assert_eq!(redact("https://host/data?sig=abc: HTTP 503"), "https://host/data[query and the rest omitted]");
         let connection = redact("Server=localhost;User ID=alice;Password='hidden;more'");
         assert!(!connection.contains("alice") && !connection.contains("hidden"), "{connection}");
     }
@@ -684,11 +737,13 @@ mod tests {
             "Layer {2020} failed",
             "Key column 'id' is missing",
             "Choose the Basic plan to map with.",
+            "Token refreshed",
+            "Password is missing for this connection.",
         ] {
             assert_eq!(redact(text), text, "{text}");
         }
         // A credential line is still redacted whole, wherever it begins.
-        assert_eq!(redact("failed\ntoken hidden"), "failed\n[REDACTED]");
+        assert_eq!(redact("failed\ntoken abc123"), "failed\n[REDACTED]");
         assert_eq!(redact("Authorization: Bearer hidden"), "[REDACTED]");
     }
 
