@@ -82,6 +82,7 @@ pub fn draw(pm: &mut Pixmap, spec: &Spec, opacity: f32, frame: &Frame, labels: b
     };
     out.attribution = r.attribution.clone();
     out.error = left_out(&r);
+    out.pending |= r.waiting;
     if !(frame.m_per_px.is_finite() && frame.m_per_px > 0.0) || opacity <= 0.0 {
         return out;
     }
@@ -306,6 +307,7 @@ fn place_as(
     };
     out.attribution = r.attribution.clone();
     out.error = left_out(&r);
+    out.pending |= r.waiting;
     if !(frame.m_per_px.is_finite() && frame.m_per_px > 0.0) || opacity <= 0.0 {
         return Some(out);
     }

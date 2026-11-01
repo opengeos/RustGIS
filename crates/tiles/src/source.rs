@@ -85,12 +85,15 @@ pub struct Resolved {
     /// When it was resolved: one that left something out is resolved again once a failed
     /// fetch may be tried again ([`cache::RETRY`]).
     pub made: Mutex<Instant>,
+    /// An elevation source is still on its way: the rest is drawn without it meanwhile, each
+    /// drawing pending, and it is resolved again on the next one.
+    pub waiting: bool,
 }
 
 impl Resolved {
     /// Whether it may still be used as it is.
     fn current(&self) -> bool {
-        self.left_out.is_empty() || self.made.lock().unwrap_or_else(|e| e.into_inner()).elapsed() < cache::RETRY
+        !self.waiting && (self.left_out.is_empty() || self.made.lock().unwrap_or_else(|e| e.into_inner()).elapsed() < cache::RETRY)
     }
 }
 
@@ -98,7 +101,12 @@ impl Resolved {
 /// style leaving out the same, so what was drawn of it (pictures and meshes, kept by style) is
 /// kept; else `new`.
 fn kept(old: Arc<Resolved>, new: Arc<Resolved>) -> Arc<Resolved> {
-    if old.left_out != new.left_out || old.style != new.style || old.sprite != new.sprite || old.attribution != new.attribution {
+    if old.left_out != new.left_out
+        || old.waiting != new.waiting
+        || old.style != new.style
+        || old.sprite != new.sprite
+        || old.attribution != new.attribution
+    {
         return new;
     }
     renewed(old)
@@ -252,8 +260,8 @@ fn resolve_anew(spec: &Spec, key: String) -> Resolve {
     }
     // Sources given by a TileJSON address.
     let base = spec.url.clone();
-    let left_out = match resolve_sources(&mut style, spec, &base) {
-        Ok(Some(left_out)) => left_out,
+    let Sources { left_out, waiting } = match resolve_sources(&mut style, spec, &base) {
+        Ok(Some(sources)) => sources,
         Ok(None) => return Resolve::Pending,
         Err(e) => return Resolve::Failed(e),
     };
@@ -277,7 +285,7 @@ fn resolve_anew(spec: &Spec, key: String) -> Resolve {
         .filter(|s| !s.starts_with("mapbox://"))
         .map(|s| template::join(&base, s))
         .filter(|s| address::check(s, Some(&base)).is_ok());
-    let r = Arc::new(Resolved { style, attribution, sprite, left_out, made: Mutex::new(Instant::now()) });
+    let r = Arc::new(Resolved { style, attribution, sprite, left_out, made: Mutex::new(Instant::now()), waiting });
     let mut all = resolved().lock().unwrap_or_else(|e| e.into_inner());
     // A few layers are in use at a time: past that many, start again rather than grow.
     if all.len() >= MAX_RESOLVED {
@@ -287,11 +295,21 @@ fn resolve_anew(spec: &Spec, key: String) -> Resolve {
     Resolve::Ready(r)
 }
 
-/// Resolves the sources of `style` in place: what was left out of it, or `None` while some are
-/// still on their way.
-fn resolve_sources(style: &mut Style, spec: &Spec, base: &str) -> Result<Option<Vec<String>>, String> {
+/// What resolving a style's sources left out of it.
+#[derive(Debug, Default, PartialEq)]
+struct Sources {
+    /// Sources dropped, and why (see [`Resolved::left_out`]).
+    left_out: Vec<String>,
+    /// An elevation source still on its way, left out until it comes (see [`Resolved::waiting`]).
+    waiting: bool,
+}
+
+/// Resolves the sources of `style` in place: what was left out of it, or `None` while some the
+/// style can't be drawn without are still on their way.
+fn resolve_sources(style: &mut Style, spec: &Spec, base: &str) -> Result<Option<Sources>, String> {
     let mut pending = false;
     let mut left_out = Vec::new();
+    let mut waiting = false;
     for (id, src) in &mut style.sources {
         let resolved = resolve_source(src, spec, base).and_then(|pending| match src {
             Source::RasterDem { tiles, encoding, .. } if !pending => {
@@ -305,12 +323,18 @@ fn resolve_sources(style: &mut Style, spec: &Spec, base: &str) -> Result<Option<
             }
             _ => Ok(pending),
         });
+        // Only a source a layer draws from is waited for, or missed.
+        let used = style.layers.iter().any(|l| l.source.as_deref() == Some(id.as_str()));
         match resolved {
+            // Elevation on its way is drawn once it comes; the rest needn't wait for it.
+            Ok(true) if matches!(src, Source::RasterDem { .. }) => {
+                waiting |= used;
+                *src = Source::Other;
+            }
             Ok(p) => pending |= p,
-            // Elevation shades what the rest of the style draws: without it, the rest still draws,
-            // and only a source a layer draws from is missed.
+            // Elevation shades what the rest of the style draws: without it, the rest still draws.
             Err(e) if matches!(src, Source::RasterDem { .. }) => {
-                if style.layers.iter().any(|l| l.source.as_deref() == Some(id.as_str())) {
+                if used {
                     left_out.push(format!("elevation source {id} left out, so its relief isn't drawn: {e}"));
                 }
                 *src = Source::Other;
@@ -318,7 +342,7 @@ fn resolve_sources(style: &mut Style, spec: &Spec, base: &str) -> Result<Option<
             Err(e) => return Err(e),
         }
     }
-    Ok((!pending).then_some(left_out))
+    Ok((!pending).then_some(Sources { left_out, waiting }))
 }
 
 /// Fills in a style source's tile addresses: from its TileJSON address when it gives no tiles
@@ -706,7 +730,7 @@ mod tests {
             "layers": [{"id": "shade", "type": "hillshade", "source": "dem"}, {"id": "sat", "type": "raster", "source": "sat"}]});
         let mut style = Style::parse(&doc).unwrap();
         let base = "https://t.example.com/style.json";
-        let left_out = resolve_sources(&mut style, &spec(Kind::Style, base), base).unwrap().unwrap();
+        let left_out = resolve_sources(&mut style, &spec(Kind::Style, base), base).unwrap().unwrap().left_out;
         assert_eq!(left_out.len(), 1);
         assert!(left_out[0].starts_with("elevation source dem left out"), "{left_out:?}");
         assert!(matches!(style.sources.iter().find(|s| s.0 == "dem").map(|s| &s.1), Some(Source::Other)));
@@ -717,11 +741,11 @@ mod tests {
         // Clean sources leave nothing out.
         let doc = serde_json::json!({"version": 8, "sources": {"sat": {"type": "raster", "tiles": ["https://t.example.com/{z}/{x}/{y}.png"]}}, "layers": []});
         let mut style = Style::parse(&doc).unwrap();
-        assert_eq!(resolve_sources(&mut style, &spec(Kind::Style, base), base), Ok(Some(Vec::new())));
+        assert_eq!(resolve_sources(&mut style, &spec(Kind::Style, base), base), Ok(Some(Sources::default())));
         // Only a source a layer draws from is missed; the others are dropped without a word.
         let left_out_of = |doc: serde_json::Value| {
             let mut style = Style::parse(&doc).unwrap();
-            resolve_sources(&mut style, &spec(Kind::Style, base), base).unwrap().unwrap()
+            resolve_sources(&mut style, &spec(Kind::Style, base), base).unwrap().unwrap().left_out
         };
         let unused = serde_json::json!({"version": 8, "sources": {"dem": {"type": "raster-dem", "url": "http://169.254.169.254/dem.json"}}, "layers": []});
         assert!(left_out_of(unused).is_empty());
@@ -736,6 +760,89 @@ mod tests {
     }
 
     #[test]
+    fn a_readable_elevation_source_is_kept() {
+        let doc = serde_json::json!({"version": 8, "sources": {"dem": {"type": "raster-dem", "tiles": ["https://t.example.com/{z}/{x}/{y}.png"]}},
+            "layers": [{"id": "shade", "type": "hillshade", "source": "dem"}]});
+        let mut style = Style::parse(&doc).unwrap();
+        let base = "https://t.example.com/style.json";
+        assert_eq!(resolve_sources(&mut style, &spec(Kind::Style, base), base), Ok(Some(Sources::default())));
+        assert!(
+            matches!(style.source("dem"), Some(Source::RasterDem { tiles, .. }) if tiles == &["https://t.example.com/{z}/{x}/{y}.png"])
+        );
+    }
+
+    #[test]
+    fn an_elevation_source_on_its_way_holds_back_only_its_own_layers() {
+        // Its TileJSON isn't here yet (the first fetch of an address is on its way).
+        let doc = serde_json::json!({"version": 8, "sources": {
+            "dem": {"type": "raster-dem", "url": "https://on-its-way.example.com/dem.json"},
+            "sat": {"type": "raster", "tiles": ["https://t.example.com/{z}/{x}/{y}.png"]}},
+            "layers": [{"id": "shade", "type": "hillshade", "source": "dem"}, {"id": "sat", "type": "raster", "source": "sat"}]});
+        let mut style = Style::parse(&doc).unwrap();
+        let base = "https://t.example.com/style.json";
+        let sources = resolve_sources(&mut style, &spec(Kind::Style, base), base).unwrap().expect("drawn without it meanwhile");
+        assert_eq!(sources, Sources { left_out: Vec::new(), waiting: true }, "nothing lost, only waited for");
+        assert!(matches!(style.source("dem"), Some(Source::Other)));
+        assert!(matches!(style.source("sat"), Some(Source::Raster { .. })));
+        // One no layer draws from isn't waited for.
+        let unused = serde_json::json!({"version": 8, "sources": {"dem": {"type": "raster-dem", "url": "https://unused-on-its-way.example.com/dem.json"}}, "layers": []});
+        let mut style = Style::parse(&unused).unwrap();
+        assert_eq!(resolve_sources(&mut style, &spec(Kind::Style, base), base), Ok(Some(Sources::default())));
+        assert!(matches!(style.source("dem"), Some(Source::Other)));
+        // Drawn meanwhile, pending (so it is drawn again, and an export waits), without a notice;
+        // resolved again on the next drawing.
+        let doc = serde_json::json!({"version": 8, "sources": {}, "layers": [{"id": "bg", "type": "background", "paint": {"background-color": "#f00"}}]});
+        let r = Resolved {
+            style: Style::parse(&doc).unwrap(),
+            sprite: None,
+            attribution: Vec::new(),
+            left_out: Vec::new(),
+            made: Mutex::new(Instant::now()),
+            waiting: true,
+        };
+        assert!(!r.current());
+        let s = spec(Kind::Style, "https://waiting.example.com/style.json");
+        resolved().lock().unwrap().insert(s.key(), Arc::new(r));
+        let mut pm = tiny_skia::Pixmap::new(4, 4).unwrap();
+        let frame = crate::draw::Frame { left: 0.0, top: 400.0, m_per_px: 100.0, ppp: 1.0 };
+        let drawn = crate::draw::draw(&mut pm, &s, 1.0, &frame, false);
+        assert!(drawn.pending && drawn.error.is_none());
+        assert_eq!(pm.pixel(1, 1).map(|p| (p.red(), p.alpha())), Some((255, 255)), "the rest is drawn");
+    }
+
+    #[test]
+    fn a_relief_layer_whose_source_was_left_out_draws_nothing() {
+        // Lit from every side with white, a hillshade would show on any slope drawn.
+        let doc = serde_json::json!({"version": 8, "sources": {"dem": {"type": "raster-dem", "url": "http://169.254.169.254/dem.json"}},
+            "layers": [
+                {"id": "bg", "type": "background", "paint": {"background-color": "#f00"}},
+                {"id": "shade", "type": "hillshade", "source": "dem", "paint": {"hillshade-highlight-color": "#fff", "hillshade-shadow-color": "#fff"}},
+                {"id": "relief", "type": "color-relief", "source": "dem",
+                    "paint": {"color-relief-color": ["interpolate", ["linear"], ["elevation"], 0, "#00f", 10, "#00f"]}}]});
+        let mut style = Style::parse(&doc).unwrap();
+        let base = "https://t.example.com/style.json";
+        let sources = resolve_sources(&mut style, &spec(Kind::Style, base), base).unwrap().unwrap();
+        assert_eq!(sources.left_out.len(), 1);
+        assert!(matches!(style.source("dem"), Some(Source::Other)));
+        let r = Resolved {
+            style,
+            sprite: None,
+            attribution: Vec::new(),
+            left_out: sources.left_out,
+            made: Mutex::new(Instant::now()),
+            waiting: false,
+        };
+        let s = spec(Kind::Style, "https://relief-left-out.example.com/style.json");
+        resolved().lock().unwrap().insert(s.key(), Arc::new(r));
+        let mut pm = tiny_skia::Pixmap::new(8, 8).unwrap();
+        let frame = crate::draw::Frame { left: 0.0, top: 800.0, m_per_px: 100.0, ppp: 1.0 };
+        let drawn = crate::draw::draw(&mut pm, &s, 1.0, &frame, false);
+        assert!(drawn.error.as_deref().is_some_and(|e| e.starts_with("elevation source dem left out")));
+        // The background, and nothing over it.
+        assert!(pm.pixels().iter().all(|p| (p.red(), p.green(), p.blue(), p.alpha()) == (255, 0, 0, 255)));
+    }
+
+    #[test]
     fn a_style_that_left_something_out_draws_the_rest_and_says_so() {
         let doc = serde_json::json!({"version": 8, "sources": {}, "layers": [{"id": "bg", "type": "background", "paint": {"background-color": "#f00"}}]});
         let left_out = vec!["elevation source dem left out, so its relief isn't drawn: gone".to_owned()];
@@ -745,6 +852,7 @@ mod tests {
             attribution: Vec::new(),
             left_out,
             made: Mutex::new(Instant::now()),
+            waiting: false,
         };
         assert!(r.current());
         let s = spec(Kind::Style, "https://left-out.example.com/style.json");
@@ -762,6 +870,7 @@ mod tests {
             attribution: Vec::new(),
             left_out: vec!["x".into()],
             made: Mutex::new(long_ago),
+            waiting: false,
         };
         assert!(!stale.current());
         let complete = Resolved {
@@ -770,6 +879,7 @@ mod tests {
             attribution: Vec::new(),
             left_out: Vec::new(),
             made: Mutex::new(long_ago),
+            waiting: false,
         };
         assert!(complete.current());
         // Through `resolve`: an expired one is resolved again (a raster layer's at once)…
@@ -780,6 +890,7 @@ mod tests {
             attribution: Vec::new(),
             left_out: vec!["x".into()],
             made: Mutex::new(long_ago),
+            waiting: false,
         });
         resolved().lock().unwrap().insert(s.key(), expired.clone());
         let Resolve::Ready(r) = resolve(&s) else { panic!("not resolved again") };
@@ -811,6 +922,7 @@ mod tests {
                 attribution: Vec::new(),
                 left_out: left_out.iter().map(|s| s.to_string()).collect(),
                 made: Mutex::new(at),
+                waiting: false,
             })
         };
         // Left out as before: the same style, current again, so its pictures stay.
@@ -827,8 +939,19 @@ mod tests {
             attribution: Vec::new(),
             left_out: vec!["dem: gone".into()],
             made: Mutex::new(Instant::now()),
+            waiting: false,
         });
         assert!(Arc::ptr_eq(&kept(old.clone(), other.clone()), &other));
+        // Still waiting for an elevation source, or no longer: the new one.
+        let arrived = Arc::new(Resolved {
+            style: Style::parse(&doc).unwrap(),
+            sprite: None,
+            attribution: Vec::new(),
+            left_out: vec!["dem: gone".into()],
+            made: Mutex::new(Instant::now()),
+            waiting: true,
+        });
+        assert!(Arc::ptr_eq(&kept(old.clone(), arrived.clone()), &arrived));
         // Only its credits changed: the new one too.
         let recredited = Arc::new(Resolved {
             style: Style::parse(&doc).unwrap(),
@@ -836,6 +959,7 @@ mod tests {
             attribution: vec!["© Example".into()],
             left_out: vec!["dem: gone".into()],
             made: Mutex::new(Instant::now()),
+            waiting: false,
         });
         assert!(Arc::ptr_eq(&kept(old, recredited.clone()), &recredited));
     }
