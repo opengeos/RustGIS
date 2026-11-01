@@ -3757,6 +3757,19 @@ fn terrain_is_set_from_a_dem_or_tiles() {
     s.run("layer.rename", &json!({"name": "dem 2"})).unwrap();
     s.active_layer = Some(id);
     s.run("map.terrain", &json!({})).unwrap();
+    // A project saved with a terrain on a shared DEM name says so as it opens.
+    {
+        let mut saved = s.project.clone();
+        let m = &mut saved.maps[0];
+        let first = m.layers.iter().find(|l| l.is_raster()).map(|l| l.name.clone()).unwrap();
+        if let Some(l) = m.layers.iter_mut().filter(|l| l.is_raster()).nth(1) {
+            l.name = first.clone();
+        }
+        m.view.terrain = Some(rustgis_map::view::Terrain { source: rustgis_map::view::TerrainSource::Layer(first), exaggeration: 1.0 });
+        let mut opened = Session::new(Project::default());
+        crate::cmd::project::reset_to(&mut opened, saved);
+        assert!(opened.notices.iter().any(|n| n.text.contains("is shared by two layers")), "{:?}", opened.notices);
+    }
     // Renaming another layer leaves the terrain as it is.
     s.run("layer.rename", &json!({"layer": "Countries", "name": "Paises"})).unwrap();
     assert!(s.map().view.terrain.is_some());

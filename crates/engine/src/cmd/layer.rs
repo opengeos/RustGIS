@@ -72,7 +72,7 @@ pub fn commands() -> Vec<C> {
                 if on_old && old_was_shared {
                     // Two layers had the DEM's name: which one the terrain was on can't be told.
                     s.map_mut().view.terrain = None;
-                    s.notify(format!("Terrain turned off: two layers were called '{dem}', so which one gives the heights can't be told; turn Terrain on again"), false);
+                    s.notify(format!("Terrain turned off: its name '{dem}' was shared, so which layer gave the heights can't be told; once one layer has that name, turn Terrain on again"), false);
                 } else if on_old && named_layers(s, &n) == 1 {
                     // The DEM itself, renamed to a name of its own: the terrain follows it.
                     set_terrain_dem(s, n.clone());
