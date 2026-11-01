@@ -3008,6 +3008,21 @@ fn add_cog_window(s: &mut Session, p: &Value, url: &str) -> CmdResult {
     if c1 <= c0 || r1 <= r0 {
         return Err(named("the box is outside the file".into()));
     }
+    // The sides of the box past the file's edges, which the window is cut at (snapping outwards
+    // onto the pixels isn't a cut).
+    let cut: Vec<&str> = {
+        let lt = layout.transform_of(lv);
+        let (fx1, fy0) = (lt.origin_x + f64::from(lv.width) * lt.pixel_width, lt.origin_y + f64::from(lv.height) * lt.pixel_height);
+        [
+            ("west", x0 < lt.origin_x - tolerance),
+            ("east", x1 > fx1 + tolerance),
+            ("south", y0 < fy0 - tolerance),
+            ("north", y1 > lt.origin_y + tolerance),
+        ]
+        .into_iter()
+        .filter_map(|(side, past)| past.then_some(side))
+        .collect()
+    };
     let unit = if geographic { " m" } else { " (the file's units)" };
     if values(lv) > MAX_WINDOW_VALUES {
         // The finest overview the window fits in, offered, never read unasked.
@@ -3088,6 +3103,9 @@ fn add_cog_window(s: &mut Session, p: &Value, url: &str) -> CmdResult {
             false,
         );
     }
+    if !cut.is_empty() {
+        s.notify(format!("{added}: the box reaches past the file's {} edge(s): the window is cut to the file", cut.join(", ")), false);
+    }
     if unplaced > 0 {
         s.notify(
             format!("{added}: {unplaced} of the box's {points} edge points have no place in the file's coordinate system: the window is placed from the others"),
@@ -3112,8 +3130,8 @@ fn add_cog_window(_: &mut Session, _: &Value, url: &str) -> CmdResult {
 
 /// A longitude/latitude box's west and east, `x0..x1`, in the range of a file whose columns span
 /// `fx0..fx1` degrees: shifted by 360° when that puts more of it over the file (a file stored 0°
-/// to 360°, a box given −180° to 180°). A box across a whole-world file's seam, which would take
-/// columns at both of its ends, is refused rather than cut at the seam.
+/// to 360°, a box given −180° to 180°). A box across the file's seam, which would take columns at
+/// both of its ends (one part as given and one shifted), is refused rather than cut at the seam.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn box_in_file_longitudes(x0: f64, x1: f64, fx0: f64, fx1: f64) -> Result<(f64, f64), String> {
     let over = |a: f64, b: f64| (b.min(fx1) - a.max(fx0)).max(0.0);
@@ -3124,8 +3142,9 @@ pub(crate) fn box_in_file_longitudes(x0: f64, x1: f64, fx0: f64, fx1: f64) -> Re
         }
     }
     let (a, b) = best;
-    if fx1 - fx0 >= 360.0 - 1e-6 && (a < fx0 - 1e-9 || b > fx1 + 1e-9) {
-        let seam = if a < fx0 { fx0 } else { fx1 };
+    let both = over(x0, x1) > 0.0 && [360.0, -360.0].iter().any(|k| over(x0 + k, x1 + k) > 0.0);
+    if both || (fx1 - fx0 >= 360.0 - 1e-6 && (a < fx0 - 1e-9 || b > fx1 + 1e-9)) {
+        let seam = if x0.min(a) < fx0 { fx0 } else { fx1 };
         return Err(format!("the box crosses the file's seam at {seam}° of longitude: give one box on each side of it"));
     }
     Ok(best)
