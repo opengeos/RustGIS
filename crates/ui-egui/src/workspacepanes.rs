@@ -997,7 +997,7 @@ mod tests {
             let v: Vec<egui::Pos2> = tri.iter().map(|&i| mesh.vertices[i as usize].pos).collect();
             let (x0, x1) = (v.iter().map(|p| p.x).fold(f32::MAX, f32::min), v.iter().map(|p| p.x).fold(f32::MIN, f32::max));
             assert!(x1 - x0 <= 10.0, "a triangle spans more than one segment: {v:?}");
-            let seg = line.windows(2).find(|w| w[0].x == x0).unwrap();
+            let seg = line.windows(2).find(|w| w[0].x == x0 && w[1].x == x1).unwrap();
             for p in &v {
                 assert!(p.y <= 100.0 && p.y >= seg[0].y.min(seg[1].y), "{p:?} is outside {seg:?} and the base");
             }
