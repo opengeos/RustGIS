@@ -145,6 +145,26 @@ impl DType {
             (Kind::Float, _) => f64::from_le_bytes(a),
         }
     }
+
+    /// Whether `f32` holds the value in `b` (exactly `size` bytes) exactly. 64-bit whole numbers
+    /// are compared as integers: past 2^53, [`DType::value`]'s `f64` has already rounded them.
+    fn held_as_f32(self, b: &[u8]) -> bool {
+        if matches!(self.kind, Kind::Int | Kind::UInt) && self.size == 8 {
+            let mut a = [0u8; 8];
+            if let Some(src) = b.get(..8) {
+                a.copy_from_slice(src);
+            }
+            if !self.little {
+                a.reverse();
+            }
+            return match self.kind {
+                Kind::Int => i64::from_le_bytes(a) as f32 as i128 == i128::from(i64::from_le_bytes(a)),
+                _ => u64::from_le_bytes(a) as f32 as i128 == i128::from(u64::from_le_bytes(a)),
+            };
+        }
+        let v = self.value(b);
+        v.is_nan() || f64::from(v as f32) == v
+    }
 }
 
 /// A half-precision float's value.
@@ -1109,7 +1129,9 @@ pub fn assemble(store: &Store, plan: &Plan, chunks: &HashMap<String, Vec<u8>>, n
     let scale = attr_f64(a, "scale_factor").unwrap_or(1.0);
     let offset = attr_f64(a, "add_offset").unwrap_or(0.0);
     let mut found = 0usize;
-    // Stored values f32 doesn't hold exactly (Int32 or Int64 past 16,777,216, Float64 digits).
+    // Values f32 doesn't hold exactly: stored ones (Int32 or Int64 past 16,777,216, Float64
+    // digits), or scaled ones whose f32 no longer gives back the stored value.
+    let scaled = scale != 1.0 || offset != 0.0;
     let mut rounded = 0u64;
     for gy in 0..a.grid(plan.y) {
         for gx in 0..a.grid(plan.x) {
@@ -1152,12 +1174,24 @@ pub fn assemble(store: &Store, plan: &Plan, chunks: &HashMap<String, Vec<u8>>, n
                     }
                     let i = base + ly * strides[plan.y] + lx * strides[plan.x];
                     let at = usize::try_from(i).ok().and_then(|i| i.checked_mul(dt.size));
-                    let Some(v) = at.and_then(|at| vals.get(at..at + dt.size)).map(|b| dt.value(b)) else { continue };
+                    let Some(b) = at.and_then(|at| vals.get(at..at + dt.size)) else { continue };
+                    let v = dt.value(b);
                     let out = if v.is_nan() || missing.contains(&v) {
                         f32::NAN
                     } else {
-                        rounded += u64::from(f64::from(v as f32) != v);
-                        (v * scale + offset) as f32
+                        let x = v * scale + offset;
+                        let f = x as f32;
+                        // A packed whole number is held when unscaling its f32 gives it back; a
+                        // scaled float, when f32 holds the scaled value.
+                        let held = if !scaled {
+                            dt.held_as_f32(b)
+                        } else if matches!(dt.kind, Kind::Float) {
+                            f64::from(f) == x
+                        } else {
+                            ((f64::from(f) - offset) / scale).round() == v
+                        };
+                        rounded += u64::from(!held);
+                        f
                     };
                     if let Some(g) = grid.get_mut(row as usize * w + col as usize) {
                         *g = out;
@@ -1966,8 +2000,9 @@ mod tests {
 
     #[test]
     fn values_f32_cannot_hold_are_counted() {
-        // A 2 × 2 variable of type `dtype` holding `values`, on latitude and longitude.
-        let read = |dtype: &str, values: Vec<u8>| {
+        // A 2 × 2 variable of type `dtype` holding `values`, scaled by `scale` and `offset`, on
+        // latitude and longitude.
+        let read_scaled = |dtype: &str, (scale, offset): (f64, f64), values: Vec<u8>| {
             let arr = |shape: &str, dtype: &str| {
                 serde_json::from_str::<Value>(&format!(
                     r#"{{"shape":{shape},"chunks":{shape},"dtype":"{dtype}","compressor":null,"fill_value":null,"filters":null,"order":"C","zarr_format":2}}"#
@@ -1977,7 +2012,7 @@ mod tests {
             let meta = serde_json::json!({"metadata": {
                 ".zgroup": {"zarr_format": 2},
                 "v/.zarray": arr("[2,2]", dtype),
-                "v/.zattrs": {"_ARRAY_DIMENSIONS": ["lat","lon"]},
+                "v/.zattrs": {"_ARRAY_DIMENSIONS": ["lat","lon"], "scale_factor": scale, "add_offset": offset},
                 "lat/.zarray": arr("[2]", "<f8"),
                 "lat/.zattrs": {"_ARRAY_DIMENSIONS": ["lat"], "units": "degrees_north"},
                 "lon/.zarray": arr("[2]", "<f8"),
@@ -1990,12 +2025,25 @@ mod tests {
             let p = plan(&store, &Selection { variable: "v".into(), index: vec![] }).unwrap();
             assemble(&store, &p, &chunks, "v", None).unwrap().rounded
         };
+        let read = |dtype: &str, values: Vec<u8>| read_scaled(dtype, (1.0, 0.0), values);
         let i64s = |v: [i64; 4]| v.iter().flat_map(|x| x.to_le_bytes()).collect();
         assert_eq!(read("<i8", i64s([16_777_217, 1 << 40, 3, -16_777_216])), vec![1]);
         assert!(read("<i8", i64s([16_777_216, 1, 2, 3])).is_empty());
+        // Past 2^53 too, where an f64 has already rounded 2^60 + 1 to 2^60.
+        assert_eq!(read("<i8", i64s([(1 << 60) + 1, 1 << 60, 0, 0])), vec![1]);
+        let u64s = |v: [u64; 4]| v.iter().flat_map(|x| x.to_le_bytes()).collect();
+        assert_eq!(read("<u8", u64s([(1 << 60) + 1, 1 << 60, u64::MAX, 0])), vec![2]);
         let f64s = |v: [f64; 4]| v.iter().flat_map(|x| x.to_le_bytes()).collect();
         assert_eq!(read("<f8", f64s([0.1, 1234567.891234, 0.5, f64::NAN])), vec![2]);
         assert!(read("<f8", f64s([0.5, 2.0, -3.25, f64::NAN])).is_empty());
+        // Scaled, the value written counts: packed whole numbers are held while unscaling their
+        // f32 gives them back, a scaled float when f32 holds the scaled value. Halving 16777217
+        // doesn't help: 8388608.5 needs the same 25 bits, and comes back as 16777216.
+        let i32s = |v: [i32; 4]| v.iter().flat_map(|x| x.to_le_bytes()).collect();
+        assert_eq!(read_scaled("<i4", (0.5, 0.0), i32s([16_777_217, 3, 5, 7])), vec![1]);
+        assert!(read_scaled("<i4", (0.01, 273.15), i32s([-32_768, 1, 2_315, 32_767])).is_empty());
+        assert_eq!(read_scaled("<i4", (1.0, 0.25), i32s([100_000_001, 1, 2, 3])), vec![1]);
+        assert_eq!(read_scaled("<f8", (0.1, 0.0), f64s([1.0, 5.0, 10.0, f64::NAN])), vec![1]);
     }
 
     #[test]

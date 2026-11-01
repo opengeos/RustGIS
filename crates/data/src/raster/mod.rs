@@ -364,6 +364,18 @@ impl Raster {
                 band.stats = BandStats::compute_with(&band.data, valid, stored);
             }
         }
+        // Pixels the sidecar's no-data value now masks aren't counted as rounded (as the file's own
+        // no-data value isn't): a value f32 doesn't hold exactly was counted only because the file
+        // didn't say.
+        if let Some(nd) = self.nodata.filter(|nd| recompute && f64::from(*nd as f32) != *nd && !self.rounded.is_empty()) {
+            let nd = nd as f32;
+            for (n, band) in self.rounded.iter_mut().zip(&self.bands) {
+                *n = n.saturating_sub(band.data.iter().filter(|v| **v == nd).count() as u64);
+            }
+            if self.rounded.iter().all(|n| *n == 0) {
+                self.rounded.clear();
+            }
+        }
     }
 
     /// Longitude/latitude bounds, from points along the grid's edges.

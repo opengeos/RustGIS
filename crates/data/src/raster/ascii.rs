@@ -61,11 +61,11 @@ pub fn read(text: &str, name: &str, crs: Option<Crs>) -> Result<Raster> {
     }
     // Each value takes at least two characters, so the text bounds what to reserve.
     let mut data = Vec::with_capacity(n.min(text.len() / 2 + 1));
-    let (mut rounded, mut scratch) = (0u64, String::new());
+    let mut rounded = 0u64;
     for (i, t) in tokens.take(n).enumerate() {
         let v =
             t.parse::<f32>().map_err(|_| bad(&format!("value {} ('{}') isn't a number", i + 1, t.chars().take(20).collect::<String>())))?;
-        rounded += u64::from(!held(t, v, nodata, &mut scratch));
+        rounded += u64::from(!held(t, v, nodata));
         data.push(v);
     }
     if data.len() != n {
@@ -85,32 +85,64 @@ pub fn read(text: &str, name: &str, crs: Option<Crs>) -> Result<Raster> {
     Ok(r)
 }
 
-/// Whether `v`, `text` read as `f32`, is the number `text` writes: always for up to 6 significant
-/// digits (which `f32` keeps); past that, when `v` written back out is `text`'s number, as
-/// `123.4567` is and `1234567.891` and `16777217` aren't. NaN and the no-data value count as held.
-/// `scratch` is reused for writing `v` out.
-fn held(text: &str, v: f32, nodata: Option<f64>, scratch: &mut String) -> bool {
-    use std::fmt::Write;
-    let Ok(wide) = text.parse::<f64>() else { return true };
-    if v.is_nan() || f64::from(v) == wide || nodata == Some(wide) {
+/// The powers of ten `f64` holds exactly, 10^0 to 10^22.
+const TENS: [f64; 23] =
+    [1e0, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9, 1e10, 1e11, 1e12, 1e13, 1e14, 1e15, 1e16, 1e17, 1e18, 1e19, 1e20, 1e21, 1e22];
+
+/// Whether `v`, `text` read as `f32`, still gives back `text` at the precision it is written: within
+/// half a unit of its last digit, so `123.4567` is held (its `f32` is 123.45670319) and
+/// `1234567.891` (1234567.875) and `16777217` (16777216) aren't. Values past `f32`'s range aren't
+/// held, nor those too small for it or for `f64` (`1e-400` reads as 0). NaN, written infinities
+/// and pixels the no-data value masks are held. One pass over the text: up to 6 significant digits
+/// are always held in `f32`'s normal range, and up to 15 are compared as a whole number, so only
+/// longer or more extreme values are read again as `f64`.
+fn held(text: &str, v: f32, nodata: Option<f64>) -> bool {
+    if v.is_nan() || nodata.is_some_and(|d| v == d as f32) {
         return true;
     }
-    // Overflowed to infinity, or into f32's subnormals, which keep fewer digits.
-    if !v.is_finite() || v.abs() < f32::MIN_POSITIVE {
+    // Short enough for 6 digits at most (a point and a sign aren't digits), and neither zero nor
+    // past f32's range, so nothing underflowed or overflowed: held without looking further.
+    let marks = usize::from(text.contains('.')) + usize::from(text.starts_with(['-', '+']));
+    if text.len() <= 6 + marks && v.is_finite() && v.abs() >= f32::MIN_POSITIVE {
+        return true;
+    }
+    // The digits from the first nonzero one, as a whole number; how many there are, how many
+    // follow the point, and the exponent.
+    let (mut whole, mut written, mut decimals, mut point, mut exponent) = (0u64, 0u32, 0i32, false, 0i32);
+    for (i, c) in text.bytes().enumerate() {
+        match c {
+            b'0'..=b'9' => {
+                if written > 0 || c != b'0' {
+                    written = written.saturating_add(1);
+                    whole = whole.wrapping_mul(10).wrapping_add(u64::from(c - b'0'));
+                }
+                if point {
+                    decimals = decimals.saturating_add(1);
+                }
+            }
+            b'.' => point = true,
+            b'e' | b'E' => {
+                exponent = text.get(i + 1..).and_then(|e| e.parse().ok()).unwrap_or(0);
+                break;
+            }
+            _ => {}
+        }
+    }
+    // A number with a nonzero digit read as zero or infinity underflowed or overflowed.
+    if written > 0 && (v == 0.0 || v.is_infinite()) {
         return false;
     }
-    let mantissa = text.as_bytes().split(|b| matches!(b, b'e' | b'E')).next().unwrap_or_default();
-    let significant = |b: &u8| b.is_ascii_digit() && *b != b'0';
-    let digits = match (mantissa.iter().position(significant), mantissa.iter().rposition(significant)) {
-        (Some(a), Some(b)) => mantissa.get(a..=b).map_or(0, |d| d.iter().filter(|c| c.is_ascii_digit()).count()),
-        _ => 0,
-    };
-    if digits <= 6 {
+    if !v.is_finite() || (written <= 6 && (v == 0.0 || v.abs() >= f32::MIN_POSITIVE)) {
         return true;
     }
-    scratch.clear();
-    let _ = write!(scratch, "{v}");
-    scratch.parse::<f64>().is_ok_and(|back| back == wide)
+    // `text` is `whole` × 10^-shift: held when `v` × 10^shift is within half of `whole`.
+    let shift = decimals.saturating_sub(exponent);
+    if let (true, Some(&ten)) = (written <= 15, TENS.get(shift.unsigned_abs() as usize)) {
+        let at = if shift >= 0 { f64::from(v) * ten } else { f64::from(v) / ten };
+        return (at.abs() - whole as f64).abs() < 0.5;
+    }
+    let Ok(wide) = text.parse::<f64>() else { return true };
+    (f64::from(v) - wide).abs() * 2.0 < 10f64.powi(shift.saturating_neg())
 }
 
 #[cfg(test)]
@@ -182,8 +214,12 @@ mod tests {
         // and long zero runs are held.
         let clean = read(&grid("123.4567 16777216 -9999.123456789 12.3\n0.000100 1.5e-3 -0 1000000000"), "g", None).unwrap();
         assert!(clean.rounded.is_empty(), "{:?}", clean.rounded);
-        // Past 2^24, too many digits, past f32's range and in its subnormals, they change.
-        let lossy = read(&grid("16777217 1234567.891 1e39 1e-40\n0.123456789 1 2 3"), "g", None).unwrap();
-        assert_eq!(lossy.rounded, vec![5]);
+        // Past 2^24, too many digits, past f32's range and in its subnormals, they change; a
+        // subnormal written to one digit is held.
+        let lossy = read(&grid("16777217 1234567.891 1e39 1.234567e-40\n0.123456789 1e-40 1e400 -1e-400"), "g", None).unwrap();
+        assert_eq!(lossy.rounded, vec![7]);
+        // Written infinities and zeros, and extra zeros, are held.
+        let edges = read(&grid("inf -inf 0.000 1.500000000000000000\n0e5 -0.0 1.50000000 2"), "g", None).unwrap();
+        assert!(edges.rounded.is_empty(), "{:?}", edges.rounded);
     }
 }

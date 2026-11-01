@@ -477,17 +477,15 @@ fn rounded_bits(buf: &DecodingResult, nodata: Option<f64>) -> Option<Vec<u64>> {
         return None;
     }
     let n = sample_count(buf);
-    let mut bits = vec![0u64; n.div_ceil(64)];
-    let mut any = false;
+    let mut bits: Option<Vec<u64>> = None;
     for j in 0..n {
         if !held_exactly(buf, j, nodata)
-            && let Some(w) = bits.get_mut(j / 64)
+            && let Some(w) = bits.get_or_insert_with(|| vec![0u64; n.div_ceil(64)]).get_mut(j / 64)
         {
             *w |= 1 << (j % 64);
-            any = true;
         }
     }
-    any.then_some(bits)
+    bits
 }
 
 /// Whether `f32` holds sample `j` of `buf` exactly, as [`to_f32`] converts it: whole numbers past
@@ -2531,7 +2529,7 @@ mod tests {
 
     #[test]
     fn values_f32_cannot_hold_are_counted() {
-        use tiff::encoder::colortype::{Gray64Float, GrayI32, RGB32};
+        use tiff::encoder::colortype::{Gray64Float, GrayI32, GrayI64, RGB32};
         // Int32 past 16,777,216: 16777217 and 100000001 change, 16777216 itself doesn't.
         let ids = read(std::io::Cursor::new(typed::<GrayI32>(2, 2, &[16_777_217, 16_777_216, 100_000_001, 7], None)), "ids").unwrap();
         assert_eq!((ids.data_type.as_str(), ids.rounded.as_slice()), ("Int32", &[2u64][..]));
@@ -2545,6 +2543,19 @@ mod tests {
         assert_eq!(r.rounded, vec![1]);
         let exact = read(std::io::Cursor::new(typed::<Gray64Float>(2, 2, &[0.5, 2.0, -3.25, 1e6], None)), "e").unwrap();
         assert!(exact.rounded.is_empty());
+        // A no-data value only a sidecar gives isn't counted once the sidecar is applied.
+        let mut side = read(std::io::Cursor::new(typed::<Gray64Float>(2, 2, &[0.1, 0.1, 0.123_456_789_012_345, 2.0], None)), "s").unwrap();
+        assert_eq!(side.rounded, vec![3]);
+        side.apply_pam(
+            &crate::raster::pam::parse(
+                r#"<PAMDataset><PAMRasterBand band="1"><NoDataValue>0.1</NoDataValue></PAMRasterBand></PAMDataset>"#,
+            )
+            .unwrap(),
+        );
+        assert_eq!(side.rounded, vec![1]);
+        // 64-bit whole numbers are compared as integers: 2^60 + 1 changes, 2^60 doesn't.
+        let big = read(std::io::Cursor::new(typed::<GrayI64>(2, 1, &[(1 << 60) + 1, 1 << 60], None)), "i64").unwrap();
+        assert_eq!(big.rounded, vec![1]);
         // Interleaved bands are counted apart.
         let rgb = read(std::io::Cursor::new(typed::<RGB32>(2, 1, &[1, 20_000_001, 3, 4, 5, 6], None)), "rgb").unwrap();
         assert_eq!(rgb.rounded, vec![0, 1, 0]);
@@ -2564,5 +2575,17 @@ mod tests {
         let r = read_limited(reader(std::io::Cursor::new(typed::<GrayI32>(4, 4, &px, None))).unwrap(), "ids", 4, None).unwrap();
         assert_eq!((r.width, r.overview), (2, Some((4, 4))));
         assert_eq!(r.rounded, vec![1]);
+    }
+
+    #[test]
+    fn chunks_decoded_on_several_threads_count_rounded_values() {
+        use tiff::encoder::colortype::GrayI32;
+        // 64 one-row strips (enough for several threads), read at every eighth pixel: the 64 kept
+        // pixels, all past 16,777,216, are counted once each, as one thread counts them.
+        let bytes = typed::<GrayI32>(64, 64, &[50_000_001; 64 * 64], None);
+        let many = read_threaded(&bytes, 100).unwrap();
+        let one = read_limited(reader(std::io::Cursor::new(&bytes)).unwrap(), "one", 100, None).unwrap();
+        assert_eq!((many.width, many.overview), (8, Some((64, 64))));
+        assert_eq!((many.rounded.as_slice(), one.rounded.as_slice()), (&[64u64][..], &[64u64][..]));
     }
 }
