@@ -1685,7 +1685,7 @@ pub fn shapefile_part_urls(url: &str) -> Option<Vec<(&'static str, String)>> {
     let stem = path.get(..path.len().checked_sub(4)?)?;
     let ext = path.get(stem.len()..)?;
     // A path after the host: `https://x.org.shp` names a host, whose parts would be other hosts.
-    // Of the address a saved S3 connection wraps, whose endpoint has its own `://`.
+    // A saved S3 connection's endpoint has its own `://`, so the check looks inside the wrapper.
     let has_path = crate::s3_address::inner(stem).split_once("://").is_some_and(|(_, rest)| rest.contains('/'));
     if !ext.eq_ignore_ascii_case(".shp") || stem.ends_with('/') || !has_path {
         return None;

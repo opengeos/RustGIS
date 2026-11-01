@@ -2814,7 +2814,8 @@ fn keyed(url: &str) -> bool {
     // A key, token or signature in the query is what redaction takes out; a query like `?v=2`
     // carries none.
     // (Redaction drops a fragment too, which carries no key.)
-    let bare = url.split('#').next().unwrap_or(url);
+    // (A trailing `?` or `&`, which redaction drops too, carries none either.)
+    let bare = url.split('#').next().unwrap_or(url).trim_end_matches(['?', '&']);
     crate::sources::redact(bare) != bare || rustgis_data::s3_address::is_wrapper(url)
 }
 
