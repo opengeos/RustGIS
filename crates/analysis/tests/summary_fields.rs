@@ -420,7 +420,14 @@ fn summarize_within_adds_statistics_of_the_points_in_each_polygon() {
     let res =
         rustgis_analysis::run("countPoints", &layers, &json!({"polygons": "zones", "points": "sites", "statistics": site_statistics()}))
             .unwrap();
-    assert_eq!(res.messages, ["Summarize Within: 8 points counted"]);
+    // SUM and MAX of `big` near i64::MAX are rounded in west and east, and the tool says so.
+    assert_eq!(
+        res.messages,
+        [
+            "Summarize Within: 8 points counted",
+            "4 values rounded in SUM_big, MAX_big: a decimal field holds whole numbers exactly only up to 2^53 (9007199254740992)"
+        ]
+    );
     let out = layer(res);
     assert_eq!(
         names(&out),
@@ -572,4 +579,115 @@ fn summarize_within_reads_statistics_of_csv_points() {
     assert_eq!(column(&out, "NULLS_amount"), [&int(1), &int(0), &int(0), &int(0)]);
     assert_eq!(column(&out, "MODE_kind"), [&text("shop"), &Value::Null, &Value::Null, &Value::Null]);
     assert_eq!(column(&out, "UNIQUE_kind"), [&int(2), &int(0), &int(0), &int(0)]);
+}
+
+#[test]
+fn a_record_selected_twice_counts_once() {
+    // Dissolve: zone A's records 0, 2 and 7, with 0 and 7 listed twice.
+    let layers = Layers::default().with(parcels()).select("parcels", &[0, 7, 0, 2, 7]);
+    let statistics = json!([{"field": "pop", "statistic": "SUM"}, {"field": "pop", "statistic": "COUNT"}]);
+    let out = run("dissolve", &layers, json!({"input": "parcels", "field": "zone", "statistics": statistics}));
+    assert_eq!(column(&out, "zone"), [&text("A")]);
+    assert_eq!(column(&out, "count"), [&int(3)]);
+    assert_eq!(column(&out, "COUNT_pop"), [&int(3)]);
+    assert_eq!(column(&out, "SUM_pop"), [&float(100.0)]);
+    let plain = run("dissolve", &layers, json!({"input": "parcels", "field": "zone"}));
+    assert_eq!(column(&plain, "count"), [&int(3)], "without statistics too");
+    // Summarize Within: sites 0 and 1, both in west, 1 also in east, each listed twice.
+    let layers = Layers::default().with(zones()).with(sites()).select("sites", &[1, 0, 1, 0]);
+    let statistics = json!([{"field": "val", "statistic": "COUNT"}, {"field": "val", "statistic": "SUM"}]);
+    let res =
+        rustgis_analysis::run("countPoints", &layers, &json!({"polygons": "zones", "points": "sites", "statistics": statistics})).unwrap();
+    assert_eq!(res.messages, ["Summarize Within: 3 points counted"]);
+    let out = layer(res);
+    assert_eq!(column(&out, "point_count"), [&int(2), &int(1), &int(0), &int(0)]);
+    assert_eq!(column(&out, "COUNT_val"), [&int(2), &int(1), &int(0), &int(0)]);
+    assert_eq!(column(&out, "SUM_val"), [&float(3.0), &float(2.0), &Value::Null, &Value::Null]);
+}
+
+/// Whole numbers in a GeoJSON file, read as Integer: `n` past 2^53 in zone A, `m` within it but
+/// summing past it in zone B, and `small` within it everywhere.
+fn large_numbers() -> Dataset {
+    const BIG: i64 = (1 << 53) + 1;
+    let text = collection(vec![
+        (square(0.0, 0.0, 1.0), json!({"zone": "A", "n": BIG, "m": 1, "small": 1})),
+        (square(1.0, 0.0, 1.0), json!({"zone": "A", "n": 2, "m": 2, "small": 2})),
+        (square(5.0, 0.0, 1.0), json!({"zone": "B", "n": 3, "m": 1i64 << 53, "small": 3})),
+        (square(6.0, 0.0, 1.0), json!({"zone": "B", "n": 4, "m": 1, "small": 4})),
+    ]);
+    let (ds, _) = read_geojson(&text, "large").unwrap();
+    for f in ["n", "m", "small"] {
+        assert_eq!(field_ty(&ds, f), FieldType::Integer, "premise: {f} reads as Integer");
+    }
+    assert_eq!(ds.value(0, ds.fields.iter().position(|f| f.name == "n").unwrap()), &int(BIG), "premise: read exactly");
+    ds
+}
+
+#[test]
+fn rounded_statistics_are_reported_and_exact_ones_are_not() {
+    let layers = Layers::default().with(large_numbers());
+    let statistics = json!([
+        {"field": "n", "statistic": "SUM"},
+        {"field": "n", "statistic": "MAX"},
+        {"field": "n", "statistic": "MIN"},
+        {"field": "n", "statistic": "CONCATENATE"},
+        {"field": "m", "statistic": "SUM"},
+        {"field": "m", "statistic": "MAX"},
+        {"field": "small", "statistic": "SUM"},
+        {"field": "small", "statistic": "MEAN"},
+    ]);
+    let note = |n: &str, fields: &str| {
+        format!("{n} rounded in {fields}: a decimal field holds whole numbers exactly only up to 2^53 (9007199254740992)")
+    };
+    // Dissolve: zone A rounds SUM_n and MAX_n (its MIN is 2), zone B rounds SUM_m (2^53 + 1);
+    // MAX_m, 2^53, fits. CONCATENATE writes the whole numbers as they are.
+    let res = rustgis_analysis::run("dissolve", &layers, &json!({"input": "large", "field": "zone", "statistics": statistics})).unwrap();
+    assert_eq!(res.messages, ["Dissolve: 2 features".to_string(), note("3 values", "SUM_n, MAX_n, SUM_m")]);
+    let out = layer(res);
+    assert_eq!(column(&out, "CONCATENATE_n"), [&text("9007199254740993, 2"), &text("3, 4")]);
+    assert_eq!(column(&out, "MIN_n"), [&float(2.0), &float(3.0)]);
+    // One group: SUM_m of 1, 2, 2^53 and 1 in record order passes 2^53 but comes out exact,
+    // 2^53 + 4, so only SUM_n and MAX_n are rounded.
+    let res = rustgis_analysis::run("dissolve", &layers, &json!({"input": "large", "statistics": statistics})).unwrap();
+    assert_eq!(res.messages[1], note("2 values", "SUM_n, MAX_n"));
+    assert_eq!(column(&layer(res), "SUM_m"), [&float(9_007_199_254_740_996.0)]);
+    // Only zone B: SUM_m alone, one value.
+    let only_b = Layers::default().with(large_numbers()).select("large", &[2, 3]);
+    let res = rustgis_analysis::run("dissolve", &only_b, &json!({"input": "large", "statistics": statistics})).unwrap();
+    assert_eq!(res.messages[1], note("1 value", "SUM_m"));
+    // Fields within 2^53: no notice.
+    let clean = json!([{"field": "small", "statistic": "SUM"}, {"field": "n", "statistic": "MIN"}, {"field": "n", "statistic": "COUNT"}]);
+    let res = rustgis_analysis::run("dissolve", &layers, &json!({"input": "large", "field": "zone", "statistics": clean})).unwrap();
+    assert_eq!(res.messages, ["Dissolve: 2 features"]);
+
+    // Summarize Within over the same records as points: a zone holding all of them.
+    let points = run("featureToPoint", &layers, json!({"input": "large", "output": "large_points"}));
+    let area = collection(vec![(square(-1.0, -1.0, 20.0), json!({"name": "all"}))]);
+    let (area, _) = read_geojson(&area, "area").unwrap();
+    let layers = Layers::default().with(points).with(area);
+    let res =
+        rustgis_analysis::run("countPoints", &layers, &json!({"polygons": "area", "points": "large_points", "statistics": statistics}))
+            .unwrap();
+    assert_eq!(res.messages, ["Summarize Within: 4 points counted".to_string(), note("2 values", "SUM_n, MAX_n")]);
+    let res =
+        rustgis_analysis::run("countPoints", &layers, &json!({"polygons": "area", "points": "large_points", "statistics": clean})).unwrap();
+    assert_eq!(res.messages, ["Summarize Within: 4 points counted"]);
+
+    // Summary Statistics, by zone and from its single-field shortcut.
+    let layers = Layers::default().with(large_numbers());
+    let res =
+        rustgis_analysis::run("summaryStatistics", &layers, &json!({"input": "large", "case": "zone", "statistics": statistics})).unwrap();
+    assert_eq!(res.messages, ["Summary Statistics: 2 rows".to_string(), note("3 values", "SUM_n, MAX_n, SUM_m")]);
+    let res = rustgis_analysis::run("summaryStatistics", &layers, &json!({"input": "large", "field": "n"})).unwrap();
+    assert_eq!(res.messages, ["Summary Statistics: 1 rows".to_string(), note("2 values", "SUM_n, MAX_n")]);
+    let res = rustgis_analysis::run("summaryStatistics", &layers, &json!({"input": "large", "field": "small"})).unwrap();
+    assert_eq!(res.messages, ["Summary Statistics: 1 rows"]);
+    // The shortcut reads a text field's values as numbers: whole numbers written as text past 2^53
+    // are rounded and reported too. The MEAN, (2^53 + 1 + 1) / 2, is whole and rounded as well.
+    let csv = "code\n9007199254740993\nn/a\n1\n";
+    let (codes, _) = read_csv(csv, "codes").unwrap();
+    assert_eq!(field_ty(&codes, "code"), FieldType::Text, "premise: a column with a word in it is text");
+    let layers = Layers::default().with(codes);
+    let res = rustgis_analysis::run("summaryStatistics", &layers, &json!({"input": "codes", "field": "code"})).unwrap();
+    assert_eq!(res.messages, ["Summary Statistics: 1 rows".to_string(), note("3 values", "SUM_code, MEAN_code, MAX_code")]);
 }

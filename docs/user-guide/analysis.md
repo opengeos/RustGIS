@@ -499,10 +499,13 @@ Every statistic but `NULLS` leaves out empty values. A text field takes `COUNT`,
 `FIRST`, `LAST`, `UNIQUE`, `CONCATENATE`, `MODE`, `MINORITY` and `NULLS`; the rest need a numeric
 field. A group with no values gets empty statistics, except a `COUNT` and `UNIQUE` of 0 (its
 `NULLS` is its `FREQUENCY`). Two output fields can't share a name, so a case field can't be called
-`FREQUENCY` or `<STAT>_<field>` for a statistic asked for. Counts
-are whole numbers, `CONCATENATE` and the statistics of a text field are text, and the others are
-decimal. Without `statistics`, `field` gives that field's `COUNT`, `SUM`, `MEAN`, `MIN`, `MAX` and
-`STD`, reading its values as numbers.
+`FREQUENCY` or `<STAT>_<field>` for a statistic asked for. Counts are whole numbers, `CONCATENATE`
+and the statistics of a text field are text, and the others are decimal. A decimal holds whole
+numbers exactly only up to 2^53 (9,007,199,254,740,992): a statistic that should be a whole number
+past it (a `SUM`, `RANGE` or evenly dividing `MEAN` of whole numbers, the `MIN`, `MAX`, `FIRST`,
+`LAST`, `MODE` or `MINORITY` picked, or a whole `MEDIAN`, percentile or `IQR`) is rounded, and the
+tool says how many values were rounded and in which fields. Without `statistics`, `field` gives that field's `COUNT`, `SUM`,
+`MEAN`, `MIN`, `MAX` and `STD`, reading its values as numbers.
 
 **Dissolve** (`dissolve`) merges the polygons sharing a value of `field` into one feature for
 each value, or all of them into one without a field. Each feature has the value and `count`, the
@@ -527,8 +530,8 @@ the points `point_count` counts; a polygon with no points (or no geometry) gets 
 `UNIQUE` and `NULLS` of 0 and empty other statistics. Both use only the selected records or
 points when there is a selection, taken in record order for `FIRST`, `LAST` and `CONCATENATE`. A
 summary field can't share a name, in any case, with another output field: the dissolve field, a
-field of the polygons, or another summary field. In the Tools pane, use **Add statistic** as in Summary Statistics. Without
-`statistics`, neither tool adds fields.
+field of the polygons, or another summary field. In the Tools pane, use **Add statistic** as in
+Summary Statistics. Without `statistics`, neither tool adds fields.
 
 **Pivot Table** (`pivotTable`) turns the values of one field into fields of their own. It makes a
 standalone table with a row for each combination of values of the row `fields` (one field, or

@@ -408,7 +408,12 @@ pub fn column(ds: &Dataset, rows: &[usize], field: usize, as_numbers: bool) -> C
             match v.as_f64() {
                 Some(x) => {
                     out.push(x);
-                    whole.push(if let Value::Int(i) = v { Some(*i) } else { None });
+                    // A whole number written as text, read as a number, is kept exactly too.
+                    whole.push(match v {
+                        Value::Int(i) => Some(*i),
+                        Value::Text(t) => whole_text(t),
+                        _ => None,
+                    });
                 }
                 None => nulls += 1,
             }
@@ -470,6 +475,153 @@ pub fn compute(stat: Stat, column: &Column, separator: &str) -> Value {
             textual(stat, v, sorted).map_or(Value::Null, |t| Value::Text(t.to_string()))
         }
     }
+}
+
+/// Whether `value`, [`compute`]'s result for `stat` over `column`, is rounded from a whole number
+/// it should be exactly: a decimal holds every whole number only up to 2^53. That is a statistic
+/// whose exact value is whole, worked out from the whole numbers the column was read from: SUM and
+/// RANGE of whole numbers, a MEAN of them that divides evenly, the MIN, MAX, FIRST, LAST, MODE or
+/// MINORITY picked, and a whole MEDIAN, percentile or IQR of values past 2^53. Other means, STD,
+/// VARIANCE, CV and percentiles that aren't whole are decimals anyway, and counts and CONCATENATE
+/// (which writes whole numbers as they are) aren't rounded.
+pub fn rounded(stat: Stat, column: &Column, value: &Value) -> bool {
+    let Value::Float(x) = value else { return false };
+    let Values::Numbers(numbers) = &column.values else { return false };
+    if column.whole.is_empty() {
+        return false;
+    }
+    let differs = |w: i128| !(x.fract() == 0.0 && *x as i128 == w);
+    // Each value as the whole number it is exactly: one read from a whole number, or a decimal (or
+    // true or false) with no fraction, which holds its whole number exactly.
+    let exact_ints = || numbers.iter().zip(&column.whole).map(|(n, w)| w.map(i128::from).or_else(|| decimal_whole(*n)));
+    let wholes = || exact_ints().flatten();
+    let all_whole = || exact_ints().all(|w| w.is_some());
+    // Percentiles are checked when a value they lie on or between is past 2^53, where the limit
+    // is: within it, interpolating has rounding of its own, as any decimal arithmetic does.
+    let past = |v: i128| v.unsigned_abs() > 1 << 53;
+    // The `k`th percentile worked out exactly, as [`percentile`] interpolates it between ranks of
+    // the whole numbers: its value times 100, and whether a value it lies on or between is past
+    // 2^53. None over decimals.
+    let exact_percentile = |k: i128| -> Option<(i128, bool)> {
+        let e = column.exact()?;
+        let whole = |i: i128| match e.get(usize::try_from(i).ok()?)? {
+            Value::Int(w) => Some(i128::from(*w)),
+            Value::Float(f) => decimal_whole(*f),
+            _ => None,
+        };
+        let at = (i128::try_from(e.len()).ok()? - 1) * k;
+        let (lo, rem) = (at / 100, at % 100);
+        let a = whole(lo)?;
+        if rem == 0 {
+            return Some((a * 100, past(a)));
+        }
+        let b = whole(lo + 1)?;
+        Some((a * (100 - rem) + b * rem, past(a) || past(b)))
+    };
+    // A whole value times 100, compared with the result.
+    let whole_differs = |hundredfold: i128| hundredfold % 100 == 0 && differs(hundredfold / 100);
+    // Without a value past 2^53 no percentile is checked, and the column needn't be sorted.
+    let any_past = || wholes().any(past);
+    let percentile_rounded = |k: i128| any_past() && exact_percentile(k).is_some_and(|(v, near)| near && whole_differs(v));
+    // Rounding keeps order, so a value within 2^53 was picked from one within it, exactly: no need
+    // to sort the column.
+    let picked_within = x.abs() < TWO_53;
+    match stat {
+        Stat::Sum => all_whole() && differs(wholes().sum()),
+        Stat::Range => all_whole() && wholes().min().zip(wholes().max()).is_some_and(|(lo, hi)| differs(hi - lo)),
+        Stat::First | Stat::Last => {
+            let w = if stat == Stat::First { column.whole.first() } else { column.whole.last() };
+            matches!(w, Some(Some(w)) if differs(i128::from(*w)))
+        }
+        Stat::Min | Stat::Max | Stat::Mode | Stat::Minority => {
+            if picked_within {
+                return false;
+            }
+            let picked = match stat {
+                // One pass, compared exactly, as [`Column::exact`] would sort them.
+                Stat::Min | Stat::Max => {
+                    let Values::Numbers(v) = &column.values else { return false };
+                    let exact = v.iter().zip(&column.whole).map(|(x, w)| w.map_or(Value::Float(*x), Value::Int));
+                    if stat == Stat::Min { exact.min_by(cmp_number) } else { exact.max_by(cmp_number) }
+                }
+                // MODE and MINORITY have sorted the column already.
+                _ => column.exact().and_then(|e| pick_run_by(e, stat == Stat::Mode, |a, b| cmp_number(a, b).is_eq())).cloned(),
+            };
+            matches!(picked, Some(Value::Int(w)) if differs(i128::from(w)))
+        }
+        Stat::Median => percentile_rounded(50),
+        Stat::Percentile(k) => percentile_rounded(i128::from(k)),
+        // A difference of percentiles, whole even when they aren't.
+        Stat::Iqr => {
+            any_past()
+                && exact_percentile(75)
+                    .zip(exact_percentile(25))
+                    .is_some_and(|((hi, near_hi), (lo, near_lo))| (near_hi || near_lo) && whole_differs(hi - lo))
+        }
+        // A MEAN of whole numbers is whole when their sum divides by their count.
+        Stat::Mean => {
+            let n = i128::try_from(column.whole.len()).unwrap_or(i128::MAX);
+            let sum: i128 = wholes().sum();
+            all_whole() && n > 0 && sum % n == 0 && differs(sum / n)
+        }
+        Stat::Std | Stat::Variance | Stat::Cv | Stat::Count | Stat::Unique | Stat::Nulls | Stat::Concatenate => false,
+    }
+}
+
+/// The whole number a decimal with no fraction is, exactly; None for one with a fraction.
+fn decimal_whole(x: f64) -> Option<i128> {
+    (x.fract() == 0.0 && x.abs() < 1e38).then_some(x as i128)
+}
+
+/// 2^53, up to which a decimal holds every whole number.
+const TWO_53: f64 = 9_007_199_254_740_992.0;
+
+/// The whole number a number written as text stands for, exactly, in the forms the decimal reader
+/// takes ("12", "+12", "12.0", "1.2e1", "1200e-2"); None for text that isn't a whole number or
+/// doesn't fit an i64.
+fn whole_text(t: &str) -> Option<i64> {
+    let t = t.trim();
+    let (negative, t) = match t.strip_prefix('-') {
+        Some(rest) => (true, rest),
+        None => (false, t.strip_prefix('+').unwrap_or(t)),
+    };
+    let (mantissa, exponent) = t.split_once(['e', 'E']).unwrap_or((t, "0"));
+    let (int, frac) = mantissa.split_once('.').unwrap_or((mantissa, ""));
+    let exponent_digits = exponent.strip_prefix(['+', '-']).unwrap_or(exponent);
+    let all_digits = |s: &str| s.bytes().all(|b| b.is_ascii_digit());
+    if (int.is_empty() && frac.is_empty())
+        || !all_digits(int)
+        || !all_digits(frac)
+        || exponent_digits.is_empty()
+        || !all_digits(exponent_digits)
+    {
+        return None;
+    }
+    let joined = format!("{int}{frac}");
+    let digits = joined.trim_start_matches('0');
+    // Zero is zero whatever power of ten it is written with.
+    if digits.is_empty() {
+        return Some(0);
+    }
+    let exponent: i32 = exponent.parse().ok()?;
+    // The power of ten the digits are multiplied by.
+    let scale = i64::from(exponent) - i64::try_from(frac.len()).ok()?;
+    let whole: String = if scale < 0 {
+        // The last digits are the fraction: all zeros for a whole number.
+        let cut = digits.len().saturating_sub(usize::try_from(scale.unsigned_abs()).ok()?);
+        if !digits.get(cut..)?.bytes().all(|b| b == b'0') {
+            return None;
+        }
+        digits.get(..cut)?.to_string()
+    } else if digits.is_empty() {
+        String::new()
+    } else {
+        // An i64 has at most 19 digits.
+        let zeros = usize::try_from(scale).ok().filter(|z| digits.len() + z <= 19)?;
+        format!("{digits}{}", "0".repeat(zeros))
+    };
+    let n: i128 = if whole.is_empty() { 0 } else { whole.parse().ok()? };
+    i64::try_from(if negative { -n } else { n }).ok()
 }
 
 /// How many distinct values sorted `s` holds.
@@ -863,6 +1015,216 @@ mod tests {
         assert!(matches!(f("MODE", &nums(&[-0.0, 0.0])), Value::Float(z) if z.to_bits() == 0));
         let tiny = f64::from_bits(1);
         assert_eq!(f("MEDIAN", &nums(&[tiny, tiny])), Value::Float(tiny));
+    }
+
+    /// A statistic whose exact value is a whole number is rounded when a decimal can't hold it, and
+    /// not otherwise; statistics that are decimals anyway never are.
+    #[test]
+    fn rounded_marks_whole_numbers_past_2_53() {
+        const BIG: i64 = (1 << 53) + 1;
+        let ints = |v: &[Value]| {
+            let mut ds = Dataset::new("t", GeometryType::None, vec![Field::new("n", FieldType::Integer)]);
+            for x in v {
+                ds.push(None, vec![x.clone()]);
+            }
+            let rows: Vec<usize> = (0..v.len()).collect();
+            column(&ds, &rows, 0, false)
+        };
+        let check = |stat: &str, c: &Column| {
+            let stat = Stat::parse(stat).unwrap();
+            rounded(stat, c, &compute(stat, c, ", "))
+        };
+        // In range: nothing is rounded, a sum reaching exactly 2^53 included.
+        let small = ints(&[Value::Int(1 << 52), Value::Int(1 << 52), Value::Int(-3)]);
+        for stat in ["SUM", "MEAN", "MIN", "MAX", "RANGE", "MEDIAN", "STD", "FIRST", "LAST", "MODE", "P90", "COUNT", "UNIQUE"] {
+            assert!(!check(stat, &small), "{stat}");
+        }
+        assert!(!check("SUM", &ints(&[Value::Int(1 << 52), Value::Int(1 << 52)])));
+        // A sum past 2^53 of whole numbers each in range is rounded; the mean of the same is a
+        // decimal anyway and isn't counted.
+        let sum_past = ints(&[Value::Int(1 << 53), Value::Int(1)]);
+        assert!(check("SUM", &sum_past));
+        assert!(!check("MEAN", &sum_past));
+        assert!(!check("MAX", &sum_past), "2^53 itself fits");
+        // A range past 2^53, odd, is rounded.
+        assert!(check("RANGE", &ints(&[Value::Int(1 << 53), Value::Int(-1)])));
+        // One whole number past 2^53: the statistics that pick it, or sum or subtract it, are
+        // rounded; those that pick another value, fall between values or are decimals anyway aren't.
+        let one_big = ints(&[Value::Int(2), Value::Int(2), Value::Int(BIG)]);
+        for stat in ["MAX", "LAST", "SUM", "RANGE", "MINORITY", "P99"] {
+            assert!(check(stat, &one_big) == (stat != "P99"), "{stat}");
+        }
+        for stat in ["MIN", "FIRST", "MODE", "MEDIAN", "P99", "MEAN", "STD", "VARIANCE", "CV", "COUNT", "UNIQUE", "NULLS", "CONCATENATE"] {
+            // (2 + 2 + BIG) / 3 isn't whole: the MEAN is a decimal anyway.
+            assert!(!check(stat, &one_big), "{stat}");
+        }
+        // A MEAN that is whole is checked: BIG alone, and (BIG + BIG + 4) / 3; not (2 + BIG) / 2.
+        assert!(check("MEAN", &ints(&[Value::Int(BIG)])));
+        assert!(check("MEAN", &ints(&[Value::Int(BIG), Value::Int(BIG), Value::Int(4)])) == ((2 * BIG + 4) % 3 == 0));
+        assert!(!check("MEAN", &ints(&[Value::Int(1 << 53), Value::Int(-4)])), "whole, and it fits");
+        assert!(!check("MEAN", &ints(&[Value::Int((1 << 53) + 2), Value::Int((1 << 53) + 6)])), "2^53 + 4, as the decimals give it");
+        assert!(check("MEAN", &ints(&[Value::Int((1 << 53) + 2), Value::Int((1 << 53) + 4)])), "2^53 + 3 doesn't fit");
+        // A MEDIAN or percentile landing on it is rounded; one halfway between it and another, not a
+        // whole number, isn't.
+        let two_big = ints(&[Value::Int(2), Value::Int(BIG), Value::Int(BIG)]);
+        assert!(check("MEDIAN", &two_big));
+        assert!(check("P50", &two_big));
+        assert!(!check("P25", &two_big), "halfway between 2 and BIG");
+        assert!(!check("MEDIAN", &ints(&[Value::Int(2), Value::Int(BIG)])), "halfway");
+        // Between two values, a whole percentile past 2^53 is checked: 2^53 + 1 halfway between
+        // 2^53 and 2^53 + 2 comes out 2^53, but 2^53 + 2 between 2^53 and 2^53 + 4 fits.
+        assert!(check("MEDIAN", &ints(&[Value::Int(1 << 53), Value::Int((1 << 53) + 2)])));
+        assert!(!check("MEDIAN", &ints(&[Value::Int(1 << 53), Value::Int((1 << 53) + 4)])));
+        assert!(check("P75", &ints(&[Value::Int(1 << 53), Value::Int((1 << 53) + 4)])), "2^53 + 3");
+        // Within 2^53 the interpolation's own rounding isn't reported: P29 of 0 and 100 is 29,
+        // computed as 28.999999999999996.
+        let hundred = ints(&[Value::Int(0), Value::Int(100), Value::Int(BIG)]);
+        assert_ne!(compute(Stat::Percentile(29), &ints(&[Value::Int(0), Value::Int(100)]), ", "), Value::Float(29.0), "premise");
+        assert!(!check("P29", &ints(&[Value::Int(0), Value::Int(100)])));
+        assert!(!check("P14", &hundred), "with a value past 2^53 beside them too");
+        // So is an IQR's: 2 between percentiles within 2^53 comes out 0.
+        // But a whole percentile or IQR of values past 2^53 is checked wherever it lies: the median
+        // of −(2^53 + 1) and 2^53 + 3 is 1, computed as 2; the IQR of 2^53 + 1 and 2^53 + 3 is 1,
+        // from quartiles that aren't whole, computed as 4.
+        let straddle = ints(&[Value::Int(-BIG), Value::Int(BIG + 2)]);
+        assert_eq!(compute(Stat::Median, &straddle, ", "), Value::Float(2.0), "premise");
+        assert!(check("MEDIAN", &straddle));
+        let close = ints(&[Value::Int(BIG), Value::Int(BIG + 2)]);
+        assert_eq!(compute(Stat::Iqr, &close, ", "), Value::Float(4.0), "premise");
+        assert!(check("IQR", &close));
+        // A value past 2^53 elsewhere in the column doesn't make it checked: these quartiles lie
+        // between values within 2^53, and the IQR, 3, comes out 2.
+        let (m, n) = (Value::Int(6_755_399_441_055_746), Value::Int(6_755_399_441_055_750));
+        let beside = ints(&[m.clone(), m, n.clone(), n.clone(), n, Value::Int(BIG)]);
+        assert_eq!(compute(Stat::Iqr, &beside, ", "), Value::Float(2.0), "premise");
+        assert!(!check("IQR", &beside));
+        // Interpolation weighs the nearer value more: P25 of 2^53 and 2^53 + 8 is 2^53 + 2, P75
+        // 2^53 + 6, and both fit.
+        let eight = ints(&[Value::Int(1 << 53), Value::Int((1 << 53) + 8)]);
+        assert_eq!(compute(Stat::Percentile(25), &eight, ", "), Value::Float(9_007_199_254_740_994.0), "premise");
+        assert!(!check("P25", &eight));
+        assert!(!check("P75", &eight));
+        // Past 2^53 the check follows the result: marked exactly when the IQR, 2, comes out otherwise.
+        let wide = ints(&[Value::Int((1 << 53) + 2), Value::Int((1 << 53) + 6)]);
+        assert_eq!(check("IQR", &wide), compute(Stat::Iqr, &wide, ", ") != Value::Float(2.0));
+        let within = ints(&[Value::Int(6_755_399_441_055_746), Value::Int(6_755_399_441_055_750)]);
+        assert_eq!(compute(Stat::Iqr, &within, ", "), Value::Float(0.0), "premise");
+        assert!(!check("IQR", &within));
+        // Halfway between two values past 2^53 that differ by an odd number isn't a whole number.
+        assert!(!check("MEDIAN", &ints(&[Value::Int((1 << 53) + 2), Value::Int((1 << 53) + 5)])));
+        // IQR is checked as the difference of the values it lands on: BIG − 2 is 2^53 − 1, but the
+        // decimals give 2^53 − 2.
+        let spread = ints(&[Value::Int(2), Value::Int(2), Value::Int(2), Value::Int(BIG), Value::Int(BIG)]);
+        assert!(check("IQR", &spread));
+        assert!(!check("IQR", &ints(&[Value::Int(1 << 52), Value::Int(-(1 << 52)), Value::Int(3)])));
+        assert!(!check("IQR", &ints(&[Value::Int(BIG), Value::Int(BIG), Value::Int(BIG)])), "BIG − BIG is 0");
+        let exact_spread = ints(&[Value::Int(BIG), Value::Int(BIG), Value::Int(BIG), Value::Int(BIG + 4), Value::Int(BIG + 4)]);
+        assert_eq!(compute(Stat::Iqr, &exact_spread, ", "), Value::Float(4.0), "premise: rounded alike, 4 apart");
+        assert!(!check("IQR", &exact_spread));
+        // A sum is checked against its exact value: BIG − (BIG − 1) is 1, but BIG reads as 2^53 and
+        // the decimal sum is 0. A rounded input whose sum comes out right isn't marked.
+        let cancel = ints(&[Value::Int(BIG), Value::Int(-(BIG - 1))]);
+        assert_eq!(compute(Stat::Sum, &cancel, ", "), Value::Float(0.0), "premise: BIG reads as 2^53");
+        assert!(check("SUM", &cancel));
+        let even = ints(&[Value::Int((1 << 53) + 2), Value::Int(-2)]);
+        assert!(!check("SUM", &even), "2^53 + 2 fits a decimal, and so does the sum");
+        // Past 2^53 only the whole numbers a decimal can't hold count: 2^53 + 2 can.
+        let fits = ints(&[Value::Int((1 << 53) + 2), Value::Int(4), Value::Int((1 << 53) + 2)]);
+        for stat in ["MEDIAN", "MAX", "MODE", "FIRST", "IQR"] {
+            assert!(!check(stat, &fits), "{stat}");
+        }
+        // MIN and MAX each check the value they pick: here 2^53 + 2 fits, 2^53 + 3 doesn't.
+        let apart = ints(&[Value::Int((1 << 53) + 3), Value::Int((1 << 53) + 2)]);
+        assert!(!check("MIN", &apart));
+        assert!(check("MAX", &apart));
+        let apart = ints(&[Value::Int(-(1 << 53) - 2), Value::Int(-(1 << 53) - 3)]);
+        assert!(!check("MAX", &apart));
+        assert!(check("MIN", &apart));
+        // Decimals and texts are never marked: there are no whole numbers to round.
+        assert!(!check("SUM", &Column::new(nums(&[1e300, 1.0]), 0)));
+        assert!(!check("MAX", &Column::new(texts(&["a"]), 0)));
+        // Whole numbers written as text and read as numbers are checked as well, in any form.
+        let mut written = Dataset::new("t", GeometryType::None, vec![Field::new("n", FieldType::Text)]);
+        for t in ["9.007199254740993e15", " 2 ", "1e3"] {
+            written.push(None, vec![Value::Text(t.into())]);
+        }
+        let as_text = column(&written, &[0, 1, 2], 0, true);
+        assert!(rounded(Stat::Max, &as_text, &compute(Stat::Max, &as_text, ", ")));
+        assert!(!rounded(Stat::Min, &as_text, &compute(Stat::Min, &as_text, ", ")));
+        let small_text = column(&written, &[1, 2], 0, true);
+        assert!(!rounded(Stat::Sum, &small_text, &compute(Stat::Sum, &small_text, ", ")));
+        // A decimal with a fraction among whole numbers: the SUM is a decimal, not checked.
+        let mixed = |v: [Value; 2]| {
+            let mut ds = Dataset::new("t", GeometryType::None, vec![Field::new("n", FieldType::Integer)]);
+            for x in v {
+                ds.push(None, vec![x]);
+            }
+            column(&ds, &[0, 1], 0, false)
+        };
+        assert!(!rounded(Stat::Sum, &mixed([Value::Int(BIG), Value::Float(0.5)]), &Value::Float(1.0)));
+        // A decimal with no fraction, or true or false, among whole numbers is a whole number too.
+        let marked = |stat: Stat, c: &Column| rounded(stat, c, &compute(stat, c, ", "));
+        // BIG + 0.0 and BIG + true come out 2^53 and 2^53, not 2^53 + 1 and 2^53 + 2.
+        assert!(marked(Stat::Sum, &mixed([Value::Int(BIG), Value::Float(0.0)])));
+        assert!(marked(Stat::Sum, &mixed([Value::Int(BIG), Value::Bool(true)])));
+        assert!(marked(Stat::Mean, &mixed([Value::Int(BIG), Value::Float(1.0)])), "(2^53 + 2) / 2");
+        assert!(!marked(Stat::Sum, &mixed([Value::Int(1 << 53), Value::Float(2.0)])), "2^53 + 2 fits");
+        // P75 of 1.0 and BIG is 3·2^51 + 1, computed as 3·2^51.
+        assert!(marked(Stat::Percentile(75), &mixed([Value::Float(1.0), Value::Int(BIG)])));
+        let max = mixed([Value::Int(BIG), Value::Float(0.5)]);
+        assert!(rounded(Stat::Max, &max, &compute(Stat::Max, &max, ", ")), "but the whole number it picks is");
+    }
+
+    /// Whole numbers written as text are read exactly in every form the decimal reader takes, and
+    /// other text is not a whole number.
+    #[test]
+    fn whole_numbers_in_text() {
+        for (t, want) in [
+            ("12", Some(12)),
+            (" +12 ", Some(12)),
+            ("-12", Some(-12)),
+            ("0012", Some(12)),
+            ("12.", Some(12)),
+            ("12.000", Some(12)),
+            ("1.2e1", Some(12)),
+            ("1200E-2", Some(12)),
+            ("9007199254740993.0", Some((1 << 53) + 1)),
+            ("9.007199254740993e15", Some((1 << 53) + 1)),
+            ("9223372036854775807", Some(i64::MAX)),
+            ("-9223372036854775808", Some(i64::MIN)),
+            ("-0", Some(0)),
+            ("0.0e5", Some(0)),
+            (".0", Some(0)),
+            ("0e2147483647", Some(0)),
+            ("0e2147483648", Some(0)),
+            ("-0.000e-99999999999", Some(0)),
+            ("12.5", None),
+            ("1.25e1", None),
+            ("1e-1", None),
+            ("9223372036854775808", None),
+            ("1e19", None),
+            ("1e2147483647", None),
+            ("1e99999999999", None),
+            ("", None),
+            (".", None),
+            ("-", None),
+            ("e5", None),
+            ("1e", None),
+            ("1e+", None),
+            ("1e5.0", None),
+            ("0e", None),
+            ("inf", None),
+            ("NaN", None),
+            ("1_000", None),
+            ("--1", None),
+            ("1.2.3", None),
+            ("١٢", None),
+        ] {
+            assert_eq!(whole_text(t), want, "{t:?}");
+            if let Some(w) = want {
+                assert_eq!(t.trim().parse::<f64>().ok(), Some(w as f64), "premise: the decimal reader takes {t:?}");
+            }
+        }
     }
 
     /// CONCATENATE writes −0 as 0, as grouping treats it.

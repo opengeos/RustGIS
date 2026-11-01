@@ -1789,7 +1789,7 @@ fn dissolve(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
     let (requests, separator) = summary_requests(ds, p)?;
     // Each group's key, polygons and records.
     let mut groups: Vec<(Value, Vec<MultiPolygon<f64>>, Vec<usize>)> = Vec::new();
-    for r in rows(inp, p, "input", ds) {
+    for r in each_once(rows(inp, p, "input", ds)) {
         let Some(mp) = ds.features.get(r).and_then(|f| f.geometry.as_ref()).and_then(to_multipolygon) else { continue };
         let key = fi.map(|fi| ds.value(r, fi).clone()).unwrap_or(Value::Null);
         match groups.iter_mut().find(|(k, _, _)| *k == key) {
@@ -1805,19 +1805,23 @@ fn dissolve(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
         None => vec![Field::new("count", FieldType::Integer)],
     };
     let added = statistic_fields(ds, &requests, false, &fields)?;
+    let first_added = fields.len();
     fields.extend(added);
     let mut out = Dataset::new(out_name(p, format!("{}_Dissolve", ds.name)), GeometryType::Polygon, fields);
+    let mut rounded = vec![0; requests.len()];
     for (key, parts, records) in groups {
         let n = parts.len() as i64;
         let u = union_all(parts.iter().flat_map(|m| m.0.iter()));
         let mut attrs = if fi.is_some() { vec![key, Value::Int(n)] } else { vec![Value::Int(n)] };
         if !requests.is_empty() {
-            attrs.extend(statistic_values(ds, &record_order(&records), &requests, false, separator));
+            attrs.extend(statistic_values(ds, &record_order(&records), &requests, false, separator, &mut rounded));
         }
         out.push(from_multipolygon(&u), attrs);
     }
     let n = out.features.len();
-    result(out, format!("Dissolve: {n} features"))
+    let mut messages = vec![format!("Dissolve: {n} features")];
+    messages.extend(rounded_notice(&rounded, out.fields.get(first_added..).unwrap_or_default()));
+    Ok(ToolResult { output: Output::Layer(out), messages })
 }
 
 fn convex_hull(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
@@ -2705,7 +2709,7 @@ fn count_points(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
     let mut counts = vec![0i64; out.features.len()];
     // Each polygon's points, kept only for statistics.
     let mut members: Vec<Vec<usize>> = if requests.is_empty() { Vec::new() } else { vec![Vec::new(); out.features.len()] };
-    for r in rows(inp, p, "points", pts) {
+    for r in each_once(rows(inp, p, "points", pts)) {
         let Some(g) = pts.features.get(r).and_then(|f| f.geometry.as_ref()) else { continue };
         let pg = to_geo(g);
         let ext = merc_extent(&pg);
@@ -2728,8 +2732,9 @@ fn count_points(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
             *v = Value::Int(n);
         }
     }
+    let mut rounded = vec![0; requests.len()];
+    let first = out.fields.len();
     if !requests.is_empty() {
-        let first = out.fields.len();
         out.fields.extend(added);
         let width = out.fields.len();
         for (row, f) in out.features.iter_mut().enumerate() {
@@ -2737,7 +2742,7 @@ fn count_points(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
                 f.attrs.resize(width, Value::Null);
             }
             let records = members.get(row).map(|m| record_order(m)).unwrap_or_default();
-            let values = statistic_values(pts, &records, &requests, false, separator);
+            let values = statistic_values(pts, &records, &requests, false, separator, &mut rounded);
             for (i, v) in values.into_iter().enumerate() {
                 if let Some(slot) = f.attrs.get_mut(first + i) {
                     *slot = v;
@@ -2745,7 +2750,9 @@ fn count_points(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
             }
         }
     }
-    result(out, format!("Summarize Within: {total} points counted"))
+    let mut messages = vec![format!("Summarize Within: {total} points counted")];
+    messages.extend(rounded_notice(&rounded, out.fields.get(first..).unwrap_or_default()));
+    Ok(ToolResult { output: Output::Layer(out), messages })
 }
 
 fn calculate_geometry(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
@@ -2851,6 +2858,7 @@ fn summary_statistics(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> 
     let mut fields: Vec<Field> = cases.iter().filter_map(|&c| ds.fields.get(c).cloned()).collect();
     fields.push(Field::new("FREQUENCY", FieldType::Integer));
     let added = statistic_fields(ds, &requests, field_only, &fields)?;
+    let first_added = fields.len();
     fields.extend(added);
     if let Some(c) = cases.iter().filter_map(|&c| ds.fields.get(c)).find(|f| f.name.eq_ignore_ascii_case("FREQUENCY")) {
         return Err(format!("the case field '{}' has the name of the output's FREQUENCY field", c.name));
@@ -2861,15 +2869,18 @@ fn summary_statistics(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> 
     let mut rs = rows(inp, p, "input", ds);
     rs.sort_unstable();
     rs.dedup();
+    let mut rounded = vec![0; requests.len()];
     for group in stats::group_rows(ds, &rs, &cases) {
         let mut row = group.key;
         row.push(stats::count(group.rows.len()));
-        row.extend(statistic_values(ds, &group.rows, &requests, field_only, separator));
+        row.extend(statistic_values(ds, &group.rows, &requests, field_only, separator, &mut rounded));
         // One past the last id: `push` would search them all for each group.
         out.push_next(None, row);
     }
     let n = out.features.len();
-    Ok(ToolResult { output: Output::Table(out), messages: vec![format!("Summary Statistics: {n} rows")] })
+    let mut messages = vec![format!("Summary Statistics: {n} rows")];
+    messages.extend(rounded_notice(&rounded, out.fields.get(first_added..).unwrap_or_default()));
+    Ok(ToolResult { output: Output::Table(out), messages })
 }
 
 /// The output fields of a statistics list over `ds`: `<STAT>_<field>` for each request, typed by
@@ -2891,8 +2902,17 @@ fn statistic_fields(ds: &Dataset, requests: &[crate::stats::Request], as_numbers
 
 /// The values of a statistics list over the records `rows` of `ds`, one per request, in the
 /// requests' order. `rows` must be in record order, each once: FIRST, LAST and CONCATENATE follow
-/// it. Each field's values are read once, however many of its statistics are asked for.
-fn statistic_values(ds: &Dataset, rows: &[usize], requests: &[crate::stats::Request], as_numbers: bool, separator: &str) -> Vec<Value> {
+/// it. Each field's values are read once, however many of its statistics are asked for. Each
+/// value that comes out rounded from whole numbers past 2^53 adds one to its request's count in
+/// `rounded`, for [`rounded_notice`].
+fn statistic_values(
+    ds: &Dataset,
+    rows: &[usize],
+    requests: &[crate::stats::Request],
+    as_numbers: bool,
+    separator: &str,
+    rounded: &mut [usize],
+) -> Vec<Value> {
     use crate::stats;
     let mut read: Vec<(usize, stats::Column)> = Vec::new();
     let mut out = Vec::with_capacity(requests.len());
@@ -2904,9 +2924,34 @@ fn statistic_values(ds: &Dataset, rows: &[usize], requests: &[crate::stats::Requ
                 read.len() - 1
             }
         };
-        out.push(read.get(i).map_or(Value::Null, |(_, c)| stats::compute(r.stat, c, separator)));
+        let value = read.get(i).map_or(Value::Null, |(_, c)| {
+            let v = stats::compute(r.stat, c, separator);
+            if stats::rounded(r.stat, c, &v)
+                && let Some(n) = rounded.get_mut(out.len())
+            {
+                *n += 1;
+            }
+            v
+        });
+        out.push(value);
     }
     out
+}
+
+/// The notice for statistics that came out rounded, naming their output fields `fields` (one per
+/// request, as `rounded` counts them): a decimal field holds whole numbers exactly only up to 2^53.
+/// None when nothing was rounded.
+fn rounded_notice(rounded: &[usize], fields: &[Field]) -> Option<String> {
+    let total: usize = rounded.iter().sum();
+    if total == 0 {
+        return None;
+    }
+    let names: Vec<&str> = rounded.iter().zip(fields).filter(|(n, _)| **n > 0).map(|(_, f)| f.name.as_str()).collect();
+    let values = if total == 1 { "value" } else { "values" };
+    Some(format!(
+        "{total} {values} rounded in {}: a decimal field holds whole numbers exactly only up to 2^53 (9007199254740992)",
+        names.join(", ")
+    ))
 }
 
 /// The statistics list of a tool that adds statistics to its own output (Dissolve, Summarize
@@ -2916,6 +2961,13 @@ fn summary_requests<'a>(ds: &Dataset, p: &'a Json) -> Result<(Vec<crate::stats::
     let requests = crate::stats::parse_requests(ds, p.get("statistics"))?;
     let separator = if requests.is_empty() { ", " } else { concatenate_separator(p)? };
     Ok((requests, separator))
+}
+
+/// `rows` with each record once, at its first place: a selection that lists a record twice still
+/// counts it once.
+fn each_once(rows: Vec<usize>) -> Vec<usize> {
+    let mut seen = std::collections::HashSet::with_capacity(rows.len());
+    rows.into_iter().filter(|r| seen.insert(*r)).collect()
 }
 
 /// `rows` in record order, each once, as [`statistic_values`] takes them.
