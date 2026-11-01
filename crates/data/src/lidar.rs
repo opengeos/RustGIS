@@ -377,20 +377,21 @@ fn read_points<R: Read + Seek + Send + Sync>(mut r: R, name: &str, crs: Option<C
     let mut lost = 0usize;
     for (id, p) in points.into_iter().enumerate() {
         let c = Coord::new(p.x, p.y);
+        if !c.is_finite() {
+            lost += 1;
+            continue;
+        }
         let c = match &transform {
             Some(t) => match t.to_lonlat(c) {
                 Some(c) => c,
                 None => {
                     lost += 1;
+                    ds.crs_incomplete = true;
                     continue;
                 }
             },
             None => c,
         };
-        if !c.x.is_finite() || !c.y.is_finite() {
-            lost += 1;
-            continue;
-        }
         let mut attrs =
             vec![Value::Float(p.z), Value::Int(i64::from(p.intensity)), Value::Int(i64::from(p.class)), Value::Int(i64::from(p.ret))];
         if has_rgb {
@@ -634,11 +635,13 @@ mod tests {
         bytes[131..139].copy_from_slice(&f64::MAX.to_le_bytes());
         let (direct, report) = read_bytes(&bytes, "lossy", None).unwrap();
         assert_eq!(direct.features.len(), 1);
+        assert!(!direct.crs_incomplete);
         assert_eq!(report.skipped, 1);
         let src = crate::source::open_bytes("lossy.las", bytes.clone(), None).unwrap();
         assert_eq!(src.info().count, Some(2));
         let (ds, report) = crate::source::materialize(src.as_ref()).unwrap();
         assert_eq!(ds.features, direct.features);
+        assert!(!ds.crs_incomplete);
         assert_eq!(report.skipped, 1);
         assert_eq!(report.messages.len(), 1);
         assert!(report.messages[0].contains("1 points couldn't be converted"));
@@ -646,6 +649,21 @@ mod tests {
         assert!(crate::io::read_bytes("truncated.las", &bytes).is_err());
         let truncated = crate::source::open_bytes("truncated.las", bytes, None).unwrap();
         assert!(crate::source::materialize(truncated.as_ref()).is_err());
+    }
+
+    /// Projection repairs must re-read the original cloud if a transform already lost points.
+    #[test]
+    fn transform_losses_block_projection_redefinition() {
+        let bytes = las(2, 0, &[(500_000.0, 5_000_000.0, 3.0, 2), (20_000_000.0, 0.0, 4.0, 2)], Some("EPSG:32632"));
+        let direct = crate::io::read_bytes("transform.las", &bytes).unwrap();
+        let src = crate::source::open_bytes("transform.las", bytes, None).unwrap();
+        let materialized = crate::source::materialize(src.as_ref()).unwrap();
+        for (ds, report) in [direct, materialized] {
+            assert_eq!(ds.features.len(), 1);
+            assert_eq!(report.skipped, 1);
+            assert!(crate::io::define_projection(&ds, Crs::LonLat).is_err());
+            assert!(ds.crs_incomplete);
+        }
     }
 
     #[test]
@@ -658,6 +676,9 @@ mod tests {
         let mut lie = b.clone();
         lie[247..255].copy_from_slice(&u64::MAX.to_le_bytes());
         assert!(read_bytes(&lie, "t", None).is_err());
+        let shown = crate::source::open_bytes("lie.las", lie, None).unwrap();
+        assert_eq!(shown.info().count, Some(u64::MAX));
+        assert!(crate::source::materialize(shown.as_ref()).is_err());
         let mut zero = b.clone();
         zero[131..139].copy_from_slice(&0f64.to_le_bytes());
         assert!(read_bytes(&zero, "t", None).is_err());

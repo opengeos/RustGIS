@@ -13,6 +13,7 @@ pub struct LidarSource {
     info: SourceInfo,
     features: Vec<Feature>,
     skipped: usize,
+    crs_incomplete: bool,
 }
 
 impl LidarSource {
@@ -29,7 +30,7 @@ impl LidarSource {
 
     /// Keeps the file count separate from its retained display sample.
     fn from_read((ds, report, count): (Dataset, crate::ReadReport, u64)) -> Result<LidarSource> {
-        let Dataset { name, geometry_type, fields, features, .. } = ds;
+        let Dataset { name, geometry_type, fields, features, crs_incomplete, .. } = ds;
         let extent = features.iter().filter_map(|f| f.geometry.as_ref()).fold(Extent::EMPTY, |e, g| e.union(&g.extent()));
         // The reader's messages start with the layer's name, which the source's notes add.
         let notes = report.messages.iter().map(|m| m.strip_prefix(&format!("{name}: ")).unwrap_or(m).to_string()).collect();
@@ -45,7 +46,7 @@ impl LidarSource {
             notes,
             zm_dropped: false,
         };
-        Ok(LidarSource { info, features: features.into_vec(), skipped: report.skipped })
+        Ok(LidarSource { info, features: features.into_vec(), skipped: report.skipped, crs_incomplete })
     }
 }
 
@@ -57,6 +58,11 @@ impl FeatureSource for LidarSource {
     /// Conversion failures were already disclosed at open, rather than omitted by sampling.
     fn skipped_at_open(&self) -> usize {
         self.skipped
+    }
+
+    /// A projection repair must re-read the original file after a transform discarded points.
+    fn lost_to_crs(&self) -> bool {
+        self.crs_incomplete
     }
 
     /// Answers from retained points; a sample never constitutes a complete source read.

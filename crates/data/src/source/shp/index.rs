@@ -60,9 +60,12 @@ impl DiskIndex {
         }
         // Building one sweeps each cache folder it tries once: when the index is committed or, if
         // it fails, when it is released or its reservation fails. Abandoned builds and indexes past
-        // the budget go then.
-        let mut lease =
-            cache::reserve_index(&dir, &key, budget).or_else(|_| cache::reserve_index(&cache::index_fallback_dir(), &key, budget))?;
+        // the budget go then, and so do this file's earlier versions and indexes unused too long.
+        let fallback = cache::index_fallback_dir();
+        let reserved = cache::reserve_index(&dir, &key, budget);
+        // Already the fallback folder: trying it again would only sweep it again. A failed
+        // reservation there scans the records instead, as a failed fallback does.
+        let mut lease = if dir == fallback { reserved? } else { reserved.or_else(|_| cache::reserve_index(&fallback, &key, budget))? };
         let mut db = connect(lease.path(), true)?;
         // A disposable cache: no journal allocation proportional to the source is necessary.
         db.execute_batch(

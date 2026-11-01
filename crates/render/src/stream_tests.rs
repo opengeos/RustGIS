@@ -425,6 +425,8 @@ fn perspective_uses_complete_isolated_fallback() {
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn actual_shapefile_export_is_complete_despite_one_row_interaction_limit() {
+    // Keep this Shapefile's index out of the user's cache (#1230).
+    rustgis_data::source::shp::use_temporary_index_dir();
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("complete.shp");
     let mut ds =

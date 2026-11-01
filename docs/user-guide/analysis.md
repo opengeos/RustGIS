@@ -154,10 +154,9 @@ integer attributes outside ±2^53 are rejected to avoid precision loss.
 This is an in-memory export, limited to 10,000 distinct output tiles and a conservative
 256 MiB working-memory budget, including the input, clipping/encoding temporaries and final
 archive. This budget is checked after streamed-source materialization, not during provider
-loading: the existing full-read limits (2,000,000 features on desktop, 500,000 in the browser)
-apply first, and loading may use more than 256 MiB before export refuses the input. Reduce a
-large source before loading it for export. Geometry allocation estimates are linear in the
-number of vertices and rings.
+loading: the whole-read limits ([Large files](data.md#large-files)) apply first, and loading may
+use more than 256 MiB before export refuses the input. Reduce a large source before loading it
+for export. Geometry allocation estimates are linear in the number of vertices and rings.
 Each geometry component's buffered candidate rectangle is limited to 40,000 tiles per zoom,
 including candidates where clipping produces no output. A separate **100,000,000-unit
 geometry-work budget** accumulates across all exported features, components and zooms:
@@ -214,11 +213,17 @@ projection. Each feature is buffered in an azimuthal equidistant projection on t
 centred on it, so distances from a point are true; long lines and large polygon outlines are
 buffered in stretches of a few hundred kilometres to limit projection error. Up to 85° of
 latitude, a buffer's sides are within 0.012 % of the distance (or 1 cm), and within 0.05 % along
-a winding line or outline buffered in stretches. Its curves are drawn with straight edges (32 to
-a point's circle, 15 to a half circle at a line's end or a polygon's corner, close to GEOS and
-PostGIS's 8 to a quarter circle), whose corners are at the distance and whose middles run up to
-about 0.5 % of it inside the true curve. Negative Buffer
+a winding line or outline buffered in stretches. Its curves are drawn with straight edges (128
+to a point's circle, 64 to a semicircular line end). Between vertices, those edges cut up
+to 0.031 % of the distance inside the true curve in the projection plane, and up to 0.125 % at
+polygon corners and line joins, in addition to the projection error. Negative Buffer
 distances shrink polygons. Buffer and Select Layer By Location limit distances to 5,000 km.
+Buffer limits retained outlines to 2,000,000 vertices before dissolving and checks the dissolved
+result too. Multipoint discs count before union even when they overlap, cumulatively across features. A request that exceeds
+the budget fails with an error; split large features or select fewer features and run smaller batches. This limits retained
+geometry, not every temporary allocation inside a complex polygon operation. Select Layer By
+Location applies the same shared budget to its distance-buffered selector outlines; selection at
+zero distance uses the original geometries without this buffer limit.
 **Calculate Geometry Attributes** measures polygon areas and perimeters, and line lengths,
 on the WGS 84 ellipsoid, independently of the map's display projection. Holes are subtracted
 regardless of ring winding, and multipart measurements are summed. Ring directions are
