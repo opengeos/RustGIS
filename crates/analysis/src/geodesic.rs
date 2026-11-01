@@ -61,14 +61,17 @@ const STRAY_MARGIN: f64 = 1.6;
 /// by 1/x − cot x per radian across it), so two leaves a wide margin;
 /// [`tests::an_edge_let_pass_by_its_latitude_does_not_stray`] fails at a tenth.
 const PLANE_TURN: f64 = 2.0;
-/// The Earth's mean radius (metres), for [`may_stray`].
-const EARTH_R_M: f64 = 6_371_008.8;
+/// The Earth's mean radius (metres), for [`may_stray`]: the one distances are measured with.
+const EARTH_R_M: f64 = rustgis_geom::EARTH_RADIUS_M;
+/// What [`may_stray`] adds to tan φ for the ellipsoid and near the equator, where tan φ is near 0:
+/// a tenth of the turn at 45°, as at about 5.7° of latitude.
+const FLAT_ALLOWANCE: f64 = 0.1;
 
 /// A circle's area deficit is under 0.041% with 128 edges: less than half the reference's
-/// 0.1% bound, leaving room for projection error without the cost of the backend's finest step.
+/// 0.1% bound, leaving room for projection error.
 const ARC_STEP: f64 = std::f64::consts::PI / 64.0;
 
-pub(crate) const VERTEX_BUDGET_ERROR: &str = "Buffer exceeds its vertex budget; select fewer features";
+pub(crate) const VERTEX_BUDGET_ERROR: &str = "Buffer exceeds its vertex budget; split large features or select fewer features";
 
 /// Round arcs at the same density for points, line caps and polygon corners, including stretches.
 fn buffer_style(metres: f64) -> BufferStyle<f64> {
@@ -78,17 +81,25 @@ fn buffer_style(metres: f64) -> BufferStyle<f64> {
 /// A feature's buffer at `metres` (negative shrinks a polygon), in lon/lat; `None` when nothing
 /// is left.
 pub fn geodesic_buffer(g: &Geometry, metres: f64) -> Option<Geometry> {
-    geodesic_buffer_with_limit(g, metres, usize::MAX).ok().flatten()
+    geodesic_buffer_with_limit(g, metres, usize::MAX).ok().and_then(|b| b.geometry)
+}
+
+/// A buffered outline and its budget charge: at least the retained coordinate count, or the
+/// pre-union disc total for a multipoint, whichever is larger.
+pub(crate) struct BudgetedBuffer {
+    pub geometry: Option<Geometry>,
+    pub charged_vertices: usize,
 }
 
 /// A buffer that must fit the caller's remaining vertex budget. Multipoint discs are counted
-/// before collecting them for union, so even overlapping discs cannot grow an unbounded batch.
+/// before collecting them for union, and their charge is returned for the caller to accumulate.
 /// Other geometries are checked before conversion to the returned geometry; this bounds retained
 /// outlines, not all temporary allocations inside the polygon overlay backend.
-pub(crate) fn geodesic_buffer_with_limit(g: &Geometry, metres: f64, max_vertices: usize) -> Result<Option<Geometry>, &'static str> {
+pub(crate) fn geodesic_buffer_with_limit(g: &Geometry, metres: f64, max_vertices: usize) -> Result<BudgetedBuffer, &'static str> {
     if !metres.is_finite() {
-        return Ok(None);
+        return Ok(BudgetedBuffer { geometry: None, charged_vertices: 0 });
     }
+    let mut pre_union_vertices = 0;
     let mp = match g {
         Geometry::Point(c) => point(*c, metres),
         Geometry::MultiPoint(v) => {
@@ -102,6 +113,7 @@ pub(crate) fn geodesic_buffer_with_limit(g: &Geometry, metres: f64, max_vertices
                 remaining = remaining.checked_sub(disc.coords_count()).ok_or(VERTEX_BUDGET_ERROR)?;
                 discs.push(disc);
             }
+            pre_union_vertices = max_vertices - remaining;
             union(discs)
         }
         Geometry::Line(parts) => lines(&finite(parts), metres),
@@ -110,7 +122,8 @@ pub(crate) fn geodesic_buffer_with_limit(g: &Geometry, metres: f64, max_vertices
     if mp.coords_count() > max_vertices {
         return Err(VERTEX_BUDGET_ERROR);
     }
-    Ok(to_geometry(&mp))
+    let charged_vertices = pre_union_vertices.max(mp.coords_count());
+    Ok(BudgetedBuffer { geometry: to_geometry(&mp), charged_vertices })
 }
 
 /// Buffers of this many features or more are made on several threads.
@@ -127,7 +140,8 @@ pub fn geodesic_buffers(geoms: &[&Geometry], metres: f64) -> Vec<Option<Geometry
     geodesic_buffers_with_limit(geoms, metres, usize::MAX).unwrap_or_default()
 }
 
-/// Ordered parallel buffers sharing a retained-outline budget. Each worker checks its current
+/// Ordered parallel buffers sharing an outline budget, including pre-union multipoint discs.
+/// `usize::MAX` disables cumulative charging for the public unlimited API. Each worker checks its current
 /// allowance before buffering, then atomically charges the result before retaining it. In-flight
 /// operations may allocate temporary geometry on each worker (one worker in the browser).
 pub(crate) fn geodesic_buffers_with_limit(geoms: &[&Geometry], metres: f64, limit: usize) -> Result<Vec<Option<Geometry>>, &'static str> {
@@ -154,16 +168,17 @@ fn buffers_on(geoms: &[&Geometry], metres: f64, threads: usize, limit: usize) ->
             let Some(batch) = geoms.get(from..geoms.len().min(from + BATCH)).filter(|b| !b.is_empty()) else { break };
             for (i, g) in batch.iter().enumerate() {
                 let buffered = geodesic_buffer_with_limit(g, metres, remaining.load(Ordering::Relaxed))?;
-                let count = buffered.as_ref().map_or(0, Geometry::coord_count);
-                let mut left = remaining.load(Ordering::Relaxed);
-                loop {
-                    let next = left.checked_sub(count).ok_or(VERTEX_BUDGET_ERROR)?;
-                    match remaining.compare_exchange_weak(left, next, Ordering::Relaxed, Ordering::Relaxed) {
-                        Ok(_) => break,
-                        Err(current) => left = current,
+                if limit != usize::MAX {
+                    let mut left = remaining.load(Ordering::Relaxed);
+                    loop {
+                        let next = left.checked_sub(buffered.charged_vertices).ok_or(VERTEX_BUDGET_ERROR)?;
+                        match remaining.compare_exchange_weak(left, next, Ordering::Relaxed, Ordering::Relaxed) {
+                            Ok(_) => break,
+                            Err(current) => left = current,
+                        }
                     }
                 }
-                made.push((from + i, buffered));
+                made.push((from + i, buffered.geometry));
             }
         }
         Ok::<_, &'static str>(made)
@@ -184,6 +199,8 @@ fn buffers_on(geoms: &[&Geometry], metres: f64, threads: usize, limit: usize) ->
                 (1..threads).filter_map(|_| std::thread::Builder::new().stack_size(STACK_BYTES).spawn_scoped(scope, work).ok()).collect();
             place(work()?);
             for h in others {
+                // Not a new panic but the worker's, raised again here as a serial run would raise it,
+                // for `analysis::run` to catch (AGENTS.md's never-crash rule is about new ones).
                 place(h.join().unwrap_or_else(|e| std::panic::resume_unwind(e))?);
             }
             Ok::<_, &'static str>(())
@@ -350,8 +367,8 @@ impl Plane {
 /// `tolerance` from the same edge straight in Web Mercator, so that [`Plane::strays`] must look.
 /// Straight in Web Mercator is a rhumb line, which runs off the geodesic by about L² tan φ / 8R
 /// at latitude φ, the heading of a geodesic turning by L tan φ / R along it: 2.0e-8 per square
-/// metre at 46°, 1.9e-7 at 84°, as measured for [`STRAY_PER_M2`], and a tenth of the turn at 45°
-/// more for the ellipsoid and near the equator, where tan φ is near 0. Straight in the plane is the
+/// metre at 46°, 1.9e-7 at 84°, as measured for [`STRAY_PER_M2`], plus [`FLAT_ALLOWANCE`] for the
+/// ellipsoid and near the equator. Straight in the plane is the
 /// geodesic only through the plane's centre, and turns from it as the edge lies farther out, by
 /// about ρ / R at ρ from the centre. The latitude is the edge's farthest from the equator plus its
 /// length as an angle (L / R), and ρ its end farthest from the centre plus L; both overstate, so an edge
@@ -368,7 +385,7 @@ fn may_stray(a: GC<f64>, b: GC<f64>, la: Coord, lb: Coord, tolerance: f64) -> bo
     if !(lat.is_finite() && rho.is_finite()) || lat >= 89f64.to_radians() {
         return true;
     }
-    STRAY_MARGIN * (lat.tan() + 0.1 + PLANE_TURN * rho / EARTH_R_M) / (8.0 * EARTH_R_M) * length2 > tolerance
+    STRAY_MARGIN * (lat.tan() + FLAT_ALLOWANCE + PLANE_TURN * rho / EARTH_R_M) / (8.0 * EARTH_R_M) * length2 > tolerance
 }
 
 /// A longitude difference folded into −180..180.
@@ -551,12 +568,12 @@ mod tests {
 
     #[test]
     fn an_edge_let_pass_by_its_latitude_does_not_stray() {
-        // Wherever `may_stray` lets an edge pass without looking, looking agrees: planes from 84°S
-        // to 84°N, edges of 100 m to 1,000 km in eight directions, up to 5,000 km from the centre
-        // to the side or at 45°, at the tolerances of buffers from 100 m to 5,000 km (the largest
-        // Buffer makes).
+        // Wherever `may_stray` lets an edge pass without looking, looking agrees: planes from 88°S
+        // to 88°N (past Web Mercator's 85.05° too), edges of 100 m to 1,000 km in eight directions,
+        // up to 5,000 km from the centre to the side or at 45°, at the tolerances of buffers from
+        // 100 m to 5,000 km (the largest Buffer makes).
         let mut passed = 0;
-        for lat in (-84..=84).step_by(12) {
+        for lat in (-84..=84).step_by(12).chain([-88, -86, 86, 88]) {
             let plane = Plane::new(Coord::new(10.0, f64::from(lat)), 10.0);
             for len in [100.0, 500.0, 1_000.0, 2_000.0, 5_000.0, 10_000.0, 30_000.0, 100_000.0, 300_000.0, 1_000_000.0] {
                 for k in 0..8 {
@@ -602,5 +619,14 @@ mod tests {
             assert_eq!(buffers_on(&refs[..3], 5_000.0, threads, usize::MAX).unwrap(), alone[..3], "{threads} threads, 3 features");
         }
         assert!(buffers_on(&[], 5_000.0, 3, 0).unwrap().is_empty());
+        // Overlapping multipoint unions stay small, but every disc is charged across workers.
+        let multipoint = Geometry::MultiPoint(vec![Coord::new(0.0, 0.0); 2]);
+        let refs = vec![&multipoint; 2 * BATCH];
+        let disc_vertices = geodesic_buffer(&Geometry::Point(Coord::new(0.0, 0.0)), 5_000.0).unwrap().coord_count();
+        let charge = refs.len() * 2 * disc_vertices;
+        for threads in [1, 3, 16] {
+            assert!(buffers_on(&refs, 5_000.0, threads, charge).is_ok());
+            assert_eq!(buffers_on(&refs, 5_000.0, threads, charge - 1).unwrap_err(), VERTEX_BUDGET_ERROR);
+        }
     }
 }

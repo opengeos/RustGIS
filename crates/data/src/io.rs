@@ -948,9 +948,9 @@ pub(crate) fn geojson_has_z(f: &Json) -> bool {
     }
     /// A geometry object, or a collection's members, has such a position.
     fn has_z(g: &Json) -> bool {
-        match g.get("geometries").and_then(Json::as_array) {
-            Some(members) => members.iter().any(has_z),
-            None => g.get("coordinates").is_some_and(positions),
+        match g.get("type").and_then(Json::as_str) {
+            Some("GeometryCollection") => g.get("geometries").and_then(Json::as_array).is_some_and(|m| m.iter().any(has_z)),
+            _ => g.get("coordinates").is_some_and(positions),
         }
     }
     f.get("geometry").is_some_and(has_z)
@@ -2608,6 +2608,9 @@ mod tests {
         assert!(!read_geojson(null_z, "line").unwrap().0.zm_dropped);
         let null_z_m = r#"{"type":"Feature","properties":{},"geometry":{"type":"LineString","coordinates":[[1,2,null,7],[3,4]]}}"#;
         assert!(read_geojson(null_z_m, "line").unwrap().0.zm_dropped);
+        // A stray `geometries` on another type isn't read, so its heights don't count.
+        let stray = r#"{"type":"Feature","properties":{},"geometry":{"type":"Point","coordinates":[1,2],"geometries":[{"type":"Point","coordinates":[1,2,3]}]}}"#;
+        assert!(!read_geojson(stray, "pt").unwrap().0.zm_dropped);
         // A height in a later collection member counts too.
         let mixed = r#"{"type":"Feature","properties":{},"geometry":{"type":"GeometryCollection","geometries":[{"type":"LineString","coordinates":[[1,2],[3,4]]},{"type":"Point","coordinates":[5,6,7]}]}}"#;
         assert!(read_geojson(mixed, "mixed").unwrap().0.zm_dropped);

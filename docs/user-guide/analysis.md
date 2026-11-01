@@ -220,8 +220,8 @@ to 0.031 % of the distance inside the true curve in the projection plane, and up
 polygon corners and line joins, in addition to the projection error. Negative Buffer
 distances shrink polygons. Buffer and Select Layer By Location limit distances to 5,000 km.
 Buffer limits retained outlines to 2,000,000 vertices before dissolving and checks the dissolved
-result too. Multipoint discs count before union even when they overlap. A request that exceeds
-the budget fails with an error; select fewer features and run smaller batches. This limits retained
+result too. Multipoint discs count before union even when they overlap, cumulatively across features. A request that exceeds
+the budget fails with an error; split large features or select fewer features and run smaller batches. This limits retained
 geometry, not every temporary allocation inside a complex polygon operation. Select Layer By
 Location applies the same shared budget to its distance-buffered selector outlines; selection at
 zero distance uses the original geometries without this buffer limit.

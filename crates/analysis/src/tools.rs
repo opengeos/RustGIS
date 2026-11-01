@@ -1,6 +1,8 @@
 //! The tools.
 
-use geo::{BooleanOps, Contains, ConvexHull, InteriorPoint, Intersects, MultiPolygon, Orient, Relate, Simplify, orient::Direction};
+use geo::{
+    BooleanOps, Contains, ConvexHull, CoordsIter, InteriorPoint, Intersects, MultiPolygon, Orient, Relate, Simplify, orient::Direction,
+};
 use rustgis_data::raster::Crs;
 use rustgis_data::{Coord, Dataset, Feature, Field, FieldType, Geometry, GeometryType, Value};
 use rustgis_geom::Extent;
@@ -1157,16 +1159,18 @@ fn buffer_with_vertex_limit(inp: &dyn Inputs, p: &Json, limit: usize) -> Result<
     }
     let mut out = copy_schema(ds, out_name(p, format!("{}_Buffer", ds.name)), GeometryType::Polygon);
     let mut all: Vec<MultiPolygon<f64>> = Vec::new();
-    let geoms: Vec<(&Feature, &Geometry)> = rows(inp, p, "input", ds)
-        .into_iter()
-        .filter_map(|r| {
-            let f = ds.features.get(r)?;
-            Some((f, f.geometry.as_ref()?))
-        })
-        .collect();
+    let picked: Vec<&Feature> = rows(inp, p, "input", ds).into_iter().filter_map(|r| ds.features.get(r)).collect();
+    let geoms: Vec<(&Feature, &Geometry)> = picked.iter().filter_map(|f| Some((*f, f.geometry.as_ref()?))).collect();
+    let without = picked.len() - geoms.len();
     let buffers = geodesic_buffers_with_limit(&geoms.iter().map(|(_, g)| *g).collect::<Vec<_>>(), metres, limit)?;
+    // Buffers with nothing in them: points at a negative distance, polygons that shrink away,
+    // features with no finite coordinates.
+    let mut empty = 0;
     for ((f, _), geom) in geoms.iter().zip(buffers) {
-        let Some(geom) = geom else { continue };
+        let Some(geom) = geom else {
+            empty += 1;
+            continue;
+        };
         if s(p, "dissolve") == "All" {
             all.extend(to_multipolygon(&geom));
         } else {
@@ -1176,15 +1180,23 @@ fn buffer_with_vertex_limit(inp: &dyn Inputs, p: &Json, limit: usize) -> Result<
     if !all.is_empty() {
         out.fields.clear();
         let u = union_all(all.iter().flat_map(|m| m.0.iter()));
+        if u.coords_count() > limit {
+            return Err(VERTEX_BUDGET_ERROR.into());
+        }
         if let Some(geom) = from_multipolygon(&u) {
-            if geom.coord_count() > limit {
-                return Err(VERTEX_BUDGET_ERROR.into());
-            }
             out.push(Some(geom), vec![]);
         }
     }
     let n = out.features.len();
-    result(out, format!("Buffer: {n} features at {d} {}", if s(p, "units").is_empty() { "Kilometers" } else { s(p, "units") }))
+    let units = if s(p, "units").is_empty() { "Kilometers" } else { s(p, "units") };
+    let mut r = result(out, format!("Buffer: {n} features at {d} {units}"))?;
+    if without > 0 {
+        r.messages.push(format!("{without} of {} features have no geometry, so they have no buffer", picked.len()));
+    }
+    if empty > 0 {
+        r.messages.push(format!("{empty} of {} features have nothing left at {d} {units}, so they have no buffer", picked.len()));
+    }
+    Ok(r)
 }
 
 /// A feature as the overlay can take it: a feature of several polygons, which may overlap, unioned
@@ -2203,10 +2215,13 @@ fn select_by_location_with_vertex_limit(inp: &dyn Inputs, p: &Json, limit: usize
     let mut selectors = Vec::new();
     for r in rows(inp, p, "select", sel_ds) {
         let Some(g) = sel_ds.features.get(r).and_then(|f| f.geometry.as_ref()) else { continue };
-        let b = if dist > 0.0 { geodesic_buffer_with_limit(g, dist, remaining)? } else { None };
-        if let Some(buffered) = &b {
-            remaining = remaining.saturating_sub(buffered.coord_count());
-        }
+        let b = if dist > 0.0 {
+            let buffered = geodesic_buffer_with_limit(g, dist, remaining)?;
+            remaining = remaining.saturating_sub(buffered.charged_vertices);
+            buffered.geometry
+        } else {
+            None
+        };
         let gg = to_geo(b.as_ref().unwrap_or(g));
         let ext = merc_extent(&gg);
         selectors.push((gg, ext));
@@ -4929,6 +4944,48 @@ mod tests {
             let params = serde_json::json!({"input": "p", "distance": 1, "dissolve": dissolve});
             assert!(buffer_with_vertex_limit(&m, &params, 2 * vertices).unwrap_err().contains("vertex budget"));
         }
+        // Each feature's discs fit alone, but their combined pre-union charge does not.
+        m.0.get_mut("p").unwrap().features.clear();
+        for _ in 0..2 {
+            m.0.get_mut("p").unwrap().push(Some(Geometry::MultiPoint(vec![point; 2])), vec![]);
+        }
+        for dissolve in ["None", "All"] {
+            let params = serde_json::json!({"input":"p", "distance":1, "dissolve":dissolve});
+            assert!(buffer_with_vertex_limit(&m, &params, 4 * vertices).is_ok());
+            assert!(buffer_with_vertex_limit(&m, &params, 3 * vertices).unwrap_err().contains("vertex budget"));
+        }
+    }
+
+    #[test]
+    fn buffers_made_on_threads_keep_their_features_and_say_which_had_no_geometry() {
+        // Enough features for several threads: each output keeps its own attributes and buffer.
+        let at = |i: i64| Coord::new(-150.0 + i as f64, (i % 120) as f64 - 60.0);
+        let mut pts = Dataset::new("p", GeometryType::Point, vec![Field::new("i", FieldType::Integer)]);
+        for i in 0..300 {
+            pts.push(Some(Geometry::Point(at(i))), vec![Value::Int(i)]);
+        }
+        let clean = Map(HashMap::from([("p".to_string(), pts.clone())]));
+        assert_eq!(crate::run("buffer", &clean, &serde_json::json!({"input": "p", "distance": 5})).unwrap().messages.len(), 1);
+        pts.push(None, vec![Value::Int(-1)]);
+        let m = Map(HashMap::from([("p".to_string(), pts)]));
+        let r = crate::run("buffer", &m, &serde_json::json!({"input": "p", "distance": 5})).unwrap();
+        assert_eq!(r.messages.get(1).map(String::as_str), Some("1 of 301 features have no geometry, so they have no buffer"));
+        let b = layer(r);
+        assert_eq!(b.features.len(), 300);
+        for (k, f) in b.features.iter().enumerate() {
+            assert_eq!(f.attrs, vec![Value::Int(k as i64)]);
+            assert_eq!(f.geometry, geodesic_buffer(&Geometry::Point(at(k as i64)), 5_000.0), "feature {k}");
+        }
+        let r = crate::run("buffer", &m, &serde_json::json!({"input": "p", "distance": 5, "dissolve": "All"})).unwrap();
+        assert_eq!(r.messages.get(1).map(String::as_str), Some("1 of 301 features have no geometry, so they have no buffer"));
+        assert_eq!(layer(r).features.len(), 1);
+        // Points at a negative distance have nothing left, and say so.
+        let r = crate::run("buffer", &clean, &serde_json::json!({"input": "p", "distance": -5})).unwrap();
+        assert_eq!(
+            r.messages.get(1).map(String::as_str),
+            Some("300 of 300 features have nothing left at -5 Kilometers, so they have no buffer")
+        );
+        assert!(layer(r).features.is_empty());
     }
 
     #[test]
@@ -6331,6 +6388,12 @@ mod tests {
         m.0.get_mut("selectors").unwrap().push(Some(Geometry::MultiPoint(vec![point; 3])), vec![]);
         let p = serde_json::json!({"input":"features", "select":"selectors", "distance":1});
         assert!(select_by_location_with_vertex_limit(&m, &p, 2 * vertices).unwrap_err().contains("vertex budget"));
+        m.0.get_mut("selectors").unwrap().features.clear();
+        for _ in 0..2 {
+            m.0.get_mut("selectors").unwrap().push(Some(Geometry::MultiPoint(vec![point; 2])), vec![]);
+        }
+        assert!(select_by_location_with_vertex_limit(&m, &p, 4 * vertices).is_ok());
+        assert!(select_by_location_with_vertex_limit(&m, &p, 3 * vertices).unwrap_err().contains("vertex budget"));
     }
 
     #[test]
