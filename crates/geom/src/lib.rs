@@ -393,7 +393,10 @@ pub fn geodesic_ring_area_m2(ring: &[Coord]) -> f64 {
         return 0.0;
     }
     // With n >= 3, first() and get(i) always succeed, maintaining the carried-over sin1 across edges.
-    let mut sin1 = ring.first().map_or(0.0, |p| p.y.to_radians().sin());
+    let Some(p0) = ring.first() else {
+        return 0.0;
+    };
+    let mut sin1 = p0.y.to_radians().sin();
     let mut total = 0.0;
     for i in 0..n {
         let (Some(p1), Some(p2)) = (ring.get(i), ring.get((i + 1) % n)) else { continue };
