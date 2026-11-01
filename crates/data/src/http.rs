@@ -18,37 +18,50 @@ use ureq::tls::{RootCerts, TlsConfig};
 pub fn tls_config() -> TlsConfig {
     static ROOTS: LazyLock<RootCerts> = LazyLock::new(|| {
         #[cfg(all(unix, not(target_vendor = "apple"), not(target_os = "android")))]
-        if !names_trust_source(std::env::var_os("SSL_CERT_FILE"), std::env::var_os("SSL_CERT_DIR"))
-            && rustls_native_certs::load_native_certs().certs.is_empty()
-        {
-            return RootCerts::WebPki;
-        }
+        return roots(std::env::var_os("SSL_CERT_FILE"), std::env::var_os("SSL_CERT_DIR"), || {
+            rustls_native_certs::load_native_certs().certs.is_empty()
+        });
+        #[cfg(not(all(unix, not(target_vendor = "apple"), not(target_os = "android"))))]
         RootCerts::PlatformVerifier
     });
     TlsConfig::builder().root_certs(ROOTS.clone()).build()
 }
 
-/// Whether `SSL_CERT_FILE` and `SSL_CERT_DIR` choose the trust source, as `rustls-native-certs`
-/// reads them: any `SSL_CERT_FILE` (even empty), or an `SSL_CERT_DIR` naming a directory.
+/// The roots on Linux and the BSDs: the bundled ones only when neither `SSL_CERT_FILE` nor
+/// `SSL_CERT_DIR` chooses the trust source and the system has no certificates (`no_system_roots`,
+/// asked only then). The variables count as `rustls-native-certs` reads them: any `SSL_CERT_FILE`
+/// (even empty), or an `SSL_CERT_DIR` naming a directory.
 // Only Linux and the BSDs fall back; the rule is tested on every platform.
 #[cfg_attr(not(all(unix, not(target_vendor = "apple"), not(target_os = "android"))), allow(dead_code))]
-fn names_trust_source(file: Option<std::ffi::OsString>, dirs: Option<std::ffi::OsString>) -> bool {
-    file.is_some() || dirs.is_some_and(|d| std::env::split_paths(&d).any(|p| !p.as_os_str().is_empty()))
+fn roots(file: Option<std::ffi::OsString>, dirs: Option<std::ffi::OsString>, no_system_roots: impl FnOnce() -> bool) -> RootCerts {
+    let named = file.is_some() || dirs.is_some_and(|d| std::env::split_paths(&d).any(|p| !p.as_os_str().is_empty()));
+    if !named && no_system_roots() { RootCerts::WebPki } else { RootCerts::PlatformVerifier }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::names_trust_source;
+    use super::{RootCerts, roots};
 
     #[test]
-    fn only_a_named_source_blocks_the_fallback() {
+    fn bundled_roots_only_without_a_named_source_or_system_roots() {
         let s = |v: &str| Some(std::ffi::OsString::from(v));
-        assert!(!names_trust_source(None, None));
+        let bundled = |file, dirs| matches!(roots(file, dirs, || true), RootCerts::WebPki);
+        assert!(bundled(None, None));
+        assert!(matches!(roots(None, None, || false), RootCerts::PlatformVerifier));
         // An empty directory list is no list: the system's defaults (or the fallback) apply.
-        assert!(!names_trust_source(None, s("")));
-        assert!(!names_trust_source(None, s("::")));
-        assert!(names_trust_source(None, s(":/etc/ssl/certs")));
+        assert!(bundled(None, s("")));
+        // `:` separates directories only on Unix; on Windows the string is one directory.
+        #[cfg(unix)]
+        assert!(bundled(None, s("::")));
+        assert!(!bundled(None, s("/etc/ssl/certs")));
         // An empty file is still a file the verifier is told to read.
-        assert!(names_trust_source(s(""), None));
+        assert!(!bundled(s(""), None));
+        // A named source is never widened, so the system isn't even asked.
+        let asked = std::cell::Cell::new(false);
+        let r = roots(s("ca.pem"), None, || {
+            asked.set(true);
+            true
+        });
+        assert!(matches!(r, RootCerts::PlatformVerifier) && !asked.get());
     }
 }

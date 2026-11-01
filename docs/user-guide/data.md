@@ -587,10 +587,10 @@ database is kept without its password. The commands `sources.list`, `sources.sav
 ### HTTPS certificates
 
 On desktop and the command line, RustGIS's HTTPS clients use platform certificate verification:
-OGC services (WMS, WMTS, WFS and WCS), web tiles and downloads, ArcGIS portal sign-in, the AI
-Assistant's model requests, plugin registry and Python environment downloads, and the GeoLibre
-runner installer. A private or enterprise CA (or a TLS inspection proxy's) must be trusted by the
-operating system for the account running RustGIS:
+OGC services (WMS, WMTS, WFS and WCS), web tiles and downloads, ArcGIS portal sign-in's token
+requests, the AI Assistant's model requests, the plugin registry, the uv download that makes
+Python environments, and the GeoLibre runner installer. A private or enterprise CA (or a TLS
+inspection proxy's) must be trusted by the operating system for the account running RustGIS:
 
 - **Windows:** install the CA in the appropriate Windows Trusted Root Certification
   Authorities store. Windows evaluates the certificate chain and its trust/distrust policies.
@@ -609,6 +609,16 @@ use a certificate matching its hostname, and have unexpired certificates; there 
 to skip verification. Database connections (PostgreSQL/PostGIS, MySQL, SQL Server) have their
 own TLS settings; PostGIS with verification on and no root certificate given still trusts only
 the bundled roots.
+
+Two steps use other trust:
+
+- **ArcGIS sign-in** opens the portal's page in your browser, which checks the portal's
+  certificate with its own trust (some browsers keep their own certificate store). If it doesn't
+  trust the CA, sign-in stops before RustGIS gets a token.
+- **uv**, making a plugin's Python environment, downloads Python and packages with its bundled
+  Mozilla roots. To have it use the operating system's trust, set `UV_SYSTEM_CERTS=true` in the
+  environment (or `system-certs = true` in a `uv.toml`) before starting RustGIS. A non-empty
+  `SSL_CERT_FILE` or `SSL_CERT_DIR` replaces uv's roots on every platform.
 
 The web app continues to use the browser's certificate verification and fetch behavior; its
 server must also allow browser requests (CORS).
