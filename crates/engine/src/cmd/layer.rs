@@ -68,11 +68,12 @@ pub fn commands() -> Vec<C> {
                 l.name = n.clone();
                 l.dataset.name = n.clone();
             })?;
-            if let Some(dem) = terrain_dem(s) {
+            // A rename to the same name (case aside) changes nothing the terrain reads.
+            if let Some(dem) = terrain_dem(s).filter(|_| !n.eq_ignore_ascii_case(&old)) {
                 if on_old && old_was_shared {
                     // Two layers had the DEM's name: which one the terrain was on can't be told.
                     s.map_mut().view.terrain = None;
-                    s.notify(format!("Terrain turned off: its name '{dem}' was shared, so which layer gave the heights can't be told; once one layer has that name, turn Terrain on again"), false);
+                    s.notify(format!("Terrain turned off: its name '{dem}' was shared by two layers, so which one gave the heights can't be told; turn Terrain on again from the layer you want"), false);
                 } else if on_old && named_layers(s, &n) == 1 {
                     // The DEM itself, renamed to a name of its own: the terrain follows it.
                     set_terrain_dem(s, n.clone());
@@ -3128,6 +3129,12 @@ fn remove(s: &mut Session, p: &Value) -> CmdResult {
     }
     let next = m.layers.get(at.min(m.layers.len().saturating_sub(1))).map(|l| l.id);
     s.set_layer_selection(next.into_iter().collect(), next);
+    // A terrain drawn from a removed layer (or from a name it shared) would lose its relief, or
+    // take another layer's heights: it is turned off, and said.
+    if let Some(dem) = terrain_dem(s).filter(|d| names.iter().any(|n| n.eq_ignore_ascii_case(d))) {
+        s.map_mut().view.terrain = None;
+        s.notify(format!("Terrain turned off: its DEM '{dem}' was removed"), false);
+    }
     // A legend that left it out forgets it.
     for name in names {
         legends_follow_layer(s, &name, None);
