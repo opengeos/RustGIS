@@ -20123,6 +20123,29 @@ impl Drop for GpkgRegressionFixture {
     }
 }
 
+/// A streamed layer's export says how many of its source's rows couldn't be read, written a
+/// chunk at a time (GeoJSON) or from a whole read (KML) alike.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_streamed_export_counts_the_rows_it_could_not_read() {
+    let fixture = GpkgRegressionFixture::new("unread-rows");
+    let path = fixture.path();
+    let db = rusqlite::Connection::open(&path).unwrap();
+    db.execute_batch("INSERT INTO roads (fid, geom, name) VALUES (4, X'4750000300000000DEAD', 'bad');").unwrap();
+    drop(db);
+    let mut s = Session::new(Project::default());
+    let loaded = s.run("layer.addData", &json!({"path": path, "stream": true})).unwrap();
+    let id = loaded["layer"].as_u64().unwrap() as u32;
+    assert!(s.map().layer(id).unwrap().is_streamed());
+    for ext in ["geojson", "kml"] {
+        let mark = s.notice_mark();
+        let exported = s.run("share.exportLayer", &json!({"layer": id, "path": fixture.dir.join(format!("out.{ext}"))})).unwrap();
+        assert_eq!(exported["features"].as_u64(), Some(3), "{ext}");
+        let notices: Vec<_> = s.notices_since(mark).iter().map(|n| n.text.clone()).collect();
+        assert!(notices.iter().any(|n| n.contains("1 rows couldn't be read")), "{ext}: {notices:?}");
+    }
+}
+
 /// Whole reads must refuse an oversized provider instead of returning its capped sample (#1108).
 #[cfg(not(target_arch = "wasm32"))]
 #[test]

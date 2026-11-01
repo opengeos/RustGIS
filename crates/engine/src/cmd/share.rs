@@ -84,7 +84,7 @@ fn export_layer(s: &mut Session, p: &Value) -> CmdResult {
     // A streamed layer exports its whole source, not the features read for the view: a chunk at
     // a time where the source and format allow, so its size isn't limited by memory.
     let chunks = if l.is_streamed() && rustgis_data::export::streams(&ext) { l.chunk_export()? } else { None };
-    let whole = if l.is_streamed() && chunks.is_none() { Some(l.load_all()?) } else { None };
+    let (whole, unread) = if l.is_streamed() && chunks.is_none() { l.load_all_counted().map(|(ds, n)| (Some(ds), n))? } else { (None, 0) };
     let ds = chunks.as_ref().map(|(_, layer)| layer).or(whole.as_ref()).unwrap_or(&l.dataset);
     // GeoJSON, KML and GPX are longitude/latitude; the others keep the layer's own system unless
     // told another.
@@ -99,7 +99,7 @@ fn export_layer(s: &mut Session, p: &Value) -> CmdResult {
         }
         None => {
             let left_out = rustgis_data::io::write_path_in(ds, Path::new(&path), crs).map_err(|e| e.to_string())?;
-            (ds.features.len().saturating_sub(left_out), left_out, 0)
+            (ds.features.len().saturating_sub(left_out), left_out, unread)
         }
     };
     // FlatGeobuf, KML, GPX and Shapefile hold features with geometry only (a Shapefile, only
