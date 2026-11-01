@@ -1711,15 +1711,23 @@ pub fn zip_shapefile_parts(file_name: &str, shp: Vec<u8>, parts: Vec<(&str, Vec<
         .ok_or_else(|| if problems.is_empty() { format!("{stem}.shp: its files couldn't be read together") } else { problems.join("; ") })
 }
 
-/// Which of a zipped Shapefile's optional parts (`.shx`, `.prj`, `.cpg`) it lacks: what a
-/// Shapefile added by its `.shp` address (#1238) was read without, to say so. Empty for bytes that
-/// aren't a zip.
+/// Which of a zipped Shapefile's optional parts (`.shx`, `.prj`, `.cpg`) a `.shp` in it lacks,
+/// beside it by its name: what a Shapefile added by its `.shp` address (#1238) was read without,
+/// to say so. Empty for bytes that aren't a zip.
 pub fn shapefile_zip_lacks(bytes: &[u8]) -> Vec<&'static str> {
-    let ext = |n: &str| Path::new(n).extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase);
-    let Ok(have) = crate::zip::read_matching(bytes, |n| ext(n).is_some_and(|e| matches!(e.as_str(), "shx" | "prj" | "cpg"))) else {
+    // The entries' names only: `want` sees each, and none is inflated.
+    let names = std::cell::RefCell::new(Vec::new());
+    if crate::zip::read_matching(bytes, |n| {
+        names.borrow_mut().push(n.to_ascii_lowercase());
+        false
+    })
+    .is_err()
+    {
         return Vec::new();
-    };
-    ["shx", "prj", "cpg"].into_iter().filter(|e| !have.iter().any(|(n, _)| ext(n).as_deref() == Some(*e))).collect()
+    }
+    let names = names.into_inner();
+    let stems: Vec<&str> = names.iter().filter_map(|n| n.strip_suffix(".shp")).collect();
+    ["shx", "prj", "cpg"].into_iter().filter(|e| stems.iter().any(|s| !names.contains(&format!("{s}.{e}")))).collect()
 }
 
 /// Most layers read from one zip archive.
@@ -2894,6 +2902,12 @@ mod tests {
         let no_prj: Vec<_> = others.iter().filter(|(e, _)| !matches!(*e, "prj" | "cpg")).cloned().collect();
         assert_eq!(shapefile_zip_lacks(&zip_shapefile_parts("RIOS_SIMPLES.shp", shp.clone(), no_prj).unwrap()), ["prj", "cpg"]);
         assert!(shapefile_zip_lacks(&shp).is_empty(), "not a zip");
+        // Another file's .prj isn't this one's.
+        let mixed: Vec<(String, Vec<u8>)> =
+            [("roads.shp", &shp), ("roads.dbf", &shp), ("roads.shx", &shp), ("roads.cpg", &shp), ("other.prj", &shp)]
+                .map(|(n, b)| (n.to_string(), b.clone()))
+                .into();
+        assert_eq!(shapefile_zip_lacks(&crate::zip::write(&mixed).unwrap()), ["prj"]);
         let no_dbf: Vec<_> = others.into_iter().filter(|(e, _)| *e != "dbf").collect();
         assert!(zip_shapefile_parts("RIOS_SIMPLES.shp", shp, no_dbf).unwrap_err().contains(".dbf"));
     }

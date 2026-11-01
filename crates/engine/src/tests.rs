@@ -9334,6 +9334,18 @@ fn shapefile_by_its_shp_address() {
     // The .shp and .dbf land; the .shx goes over the 2 bytes left, and is named.
     let e = r.unwrap_err();
     assert!(e.ends_with("/PI_2211001_RIOS.shx?token=1: larger than 2 bytes"), "{e}");
+    // Within the parts' own size, the zip's records go over.
+    let exact: usize = parts.iter().map(|(_, b)| b.len()).sum();
+    let slot = std::sync::Arc::new(std::sync::Mutex::new(None));
+    let land = slot.clone();
+    crate::cmd::layer::download_data(&url, exact, Box::new(move |r| *land.lock().unwrap() = Some(r)));
+    let r = loop {
+        if let Some(r) = slot.lock().unwrap().take() {
+            break r;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    };
+    assert_eq!(r.unwrap_err(), format!("larger than {exact} bytes, zipped"));
 }
 
 /// Data added by its web address: the format from the address or, without one, the contents; a

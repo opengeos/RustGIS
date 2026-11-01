@@ -2850,7 +2850,7 @@ fn download_shapefile_blocking(url: &str) -> Result<Vec<u8>, String> {
             Err(e) => return Err(named(&u, e)),
         }
     }
-    rustgis_data::io::zip_shapefile_parts(&name, shp, got).map_err(|e| named(url, e))
+    zipped_within(&name, shp, got, left).map_err(|e| named(url, e))
 }
 
 /// Downloads a file the user named by its address off the frame, as `cache::download_limited`
@@ -2878,6 +2878,17 @@ pub fn download_data(url: &str, max: usize, done: crate::render::rustgis_tiles::
     );
 }
 
+/// A Shapefile's parts zipped, within the budget they were downloaded in (`left` being what is
+/// still free): the archive's own records count too.
+fn zipped_within(name: &str, shp: Vec<u8>, got: Vec<(&'static str, Vec<u8>)>, left: usize) -> Result<Vec<u8>, String> {
+    let max = got.iter().fold(shp.len().saturating_add(left), |n, (_, b)| n.saturating_add(b.len()));
+    let zip = rustgis_data::io::zip_shapefile_parts(name, shp, got)?;
+    if zip.len() > max {
+        return Err(format!("larger than {max} bytes, zipped"));
+    }
+    Ok(zip)
+}
+
 /// The next of a Shapefile's parts for [`download_data`], then the zip once they are all in.
 fn download_parts(
     name: String,
@@ -2888,7 +2899,7 @@ fn download_parts(
     done: crate::render::rustgis_tiles::cache::Done,
 ) {
     let Some((ext, url)) = parts.next() else {
-        done(rustgis_data::io::zip_shapefile_parts(&name, shp, got));
+        done(zipped_within(&name, shp, got, left));
         return;
     };
     let next = url.clone();
