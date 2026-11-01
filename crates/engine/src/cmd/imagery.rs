@@ -836,15 +836,18 @@ fn process(s: &mut Session, p: &Value) -> CmdResult {
     }
 }
 
-/// Whether a mosaic stays in the project: it has inputs, each a raster layer in the session, found
-/// as [`raster_mosaic`] finds it (a layer of that name before a file), and nothing else names a
-/// place (no `path`, nor a name that looks like one). A layer named like a path (`~dem`,
-/// `a/../b`) counts as a place too: that errs towards asking for `files`.
+/// Most inputs a mosaic takes.
+const MAX_MOSAIC_INPUTS: usize = 10_000;
+
+/// Whether a mosaic stays in the project: it has inputs, no more than it takes, each a raster
+/// layer in the session with its cells in memory, found as [`raster_mosaic`] finds it (a layer of
+/// that name before a file), and nothing else names a place (no `path`, nor a name that looks like
+/// one). A layer named like a path (`~dem`, `a/../b`) counts as a place too: that errs towards
+/// asking for `files`.
 pub(crate) fn mosaics_layers(s: &Session, p: &Value) -> bool {
-    let layers = p
-        .get("inputs")
-        .and_then(Value::as_array)
-        .is_some_and(|a| !a.is_empty() && a.iter().all(|v| v.as_str().map(str::trim).is_some_and(|n| raster_named(s, n).is_ok())));
+    let in_memory = |v: &Value| v.as_str().map(str::trim).is_some_and(|n| raster_named(s, n).is_ok());
+    let layers =
+        p.get("inputs").and_then(Value::as_array).is_some_and(|a| !a.is_empty() && a.len() <= MAX_MOSAIC_INPUTS && a.iter().all(in_memory));
     layers && !super::items::names_place(p, super::plugins::PLACE_KEYS, 0)
 }
 
@@ -855,8 +858,8 @@ fn raster_mosaic(s: &mut Session, p: &Value) -> CmdResult {
     if inputs.len() < 2 {
         return Err("a mosaic needs two or more rasters".into());
     }
-    if inputs.len() > 10_000 {
-        return Err("a mosaic takes at most 10000 inputs".into());
+    if inputs.len() > MAX_MOSAIC_INPUTS {
+        return Err(format!("a mosaic takes at most {MAX_MOSAIC_INPUTS} inputs"));
     }
     let max = rustgis_data::raster::MAX_SAMPLES as i64;
     let mut rs: Vec<Arc<Raster>> = Vec::with_capacity(inputs.len());
