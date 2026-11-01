@@ -6891,6 +6891,7 @@ fn plugin_mosaics_of_project_layers_need_no_files() {
         json!({"inputs": ["west", "Countries"]}),
         json!({"inputs": ["west", "east"], "name": "../elevation"}),
         json!({"inputs": vec!["west"; 10_001]}),
+        json!({"inputs": ["west", 3]}),
     ] {
         let e = forward(&mut s, "eng-mosaic", "raster.mosaic", params.clone()).unwrap_err();
         assert!(e.contains("'files' permission"), "{params}: {e}");

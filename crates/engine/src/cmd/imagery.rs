@@ -841,8 +841,9 @@ const MAX_MOSAIC_INPUTS: usize = 10_000;
 
 /// The raster layer a mosaic input names, with its cells in memory; any other input is read as a
 /// file. [`raster_mosaic`] and [`mosaic_stays_in_project`] both go by it, so they can't disagree.
-fn mosaic_layer(s: &Session, v: &Value) -> Option<Arc<Raster>> {
-    v.as_str().map(str::trim).and_then(|n| raster_named(s, n).ok())
+fn mosaic_layer(s: &Session, v: &Value) -> Result<Arc<Raster>, String> {
+    let n = v.as_str().map(str::trim).filter(|n| !n.is_empty()).ok_or("each input is a raster layer's name or a file path")?;
+    raster_named(s, n)
 }
 
 /// Whether a mosaic stays in the project: it has inputs, no more than it takes, each a
@@ -850,7 +851,7 @@ fn mosaic_layer(s: &Session, v: &Value) -> Option<Arc<Raster>> {
 /// A layer named like a path (`~dem`, `a/../b`) counts as a place too: that errs towards asking
 /// for `files`.
 pub(crate) fn mosaic_stays_in_project(s: &Session, p: &Value) -> bool {
-    let in_memory = |v: &Value| mosaic_layer(s, v).is_some();
+    let in_memory = |v: &Value| mosaic_layer(s, v).is_ok();
     let layers =
         p.get("inputs").and_then(Value::as_array).is_some_and(|a| !a.is_empty() && a.len() <= MAX_MOSAIC_INPUTS && a.iter().all(in_memory));
     layers && !super::items::names_place(p, super::plugins::PLACE_KEYS, 0)
@@ -876,11 +877,11 @@ fn raster_mosaic(s: &mut Session, p: &Value) -> CmdResult {
     for v in inputs {
         let n = v.as_str().map(str::trim).filter(|n| !n.is_empty()).ok_or("each input is a raster layer's name or a file path")?;
         let r = match mosaic_layer(s, v) {
-            Some(r) => r,
-            None if rustgis_data::raster::is_raster_name(n) => {
+            Ok(r) => r,
+            Err(_) if rustgis_data::raster::is_raster_name(n) => {
                 Arc::new(rustgis_data::raster::read_path(std::path::Path::new(n)).map_err(|e| format!("{n}: {e}"))?)
             }
-            None => return Err(format!("no raster layer '{n}'")),
+            Err(e) => return Err(e),
         };
         // An overview would quietly coarsen the whole mosaic.
         if let Some((fw, fh)) = r.overview {
