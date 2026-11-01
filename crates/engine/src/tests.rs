@@ -3746,6 +3746,17 @@ fn terrain_is_set_from_a_dem_or_tiles() {
     let mark = s.notice_mark();
     s.run("map.terrain", &json!({"exaggeration": 2})).unwrap();
     assert!(s.notices_since(mark).iter().all(|n| !n.text.contains("Terrain is on")), "{:?}", s.notices_since(mark));
+    // Two layers of the DEM's name: refused, since the terrain keeps it by name.
+    s.run("map.terrain", &json!({"off": true})).unwrap();
+    s.run("layer.addDataBytes", &json!({"fileName": "dem.tif", "data": dem_b64()})).unwrap();
+    let second = s.map().layers.iter().filter(|l| l.is_raster()).map(|l| l.id).max().unwrap();
+    s.active_layer = Some(second);
+    s.run("layer.rename", &json!({"name": name})).unwrap();
+    let e = s.run("map.terrain", &json!({})).unwrap_err();
+    assert!(e.contains("two layers are called"), "{e}");
+    s.run("layer.rename", &json!({"name": "dem 2"})).unwrap();
+    s.active_layer = Some(id);
+    s.run("map.terrain", &json!({})).unwrap();
     // Once on, nothing named changes nothing but what is given: the active layer doesn't replace it.
     s.active_layer = s.map().layer_by_name("Countries").map(|l| l.id);
     let v = s.run("map.terrain", &json!({})).unwrap();

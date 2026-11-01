@@ -4164,9 +4164,6 @@ mod record_tests {
     use super::{DEFAULTS_TO_ACTIVE_LAYER, RustGisApp};
     use serde_json::json;
 
-    /// Every command with an optional `layer` either needs an active layer to be enabled, defaults
-    /// to it (`DEFAULTS_TO_ACTIVE_LAYER`), or reads `layer` as something else: a recorded step
-    /// names the active layer for the first two only.
     /// Terrain run with nothing named (from command search) records the DEM it took, so the
     /// step replays on it; a change of exaggeration on a terrain already on records none.
     #[test]
@@ -4185,6 +4182,9 @@ mod record_tests {
         assert_eq!(layers, [Some(&json!(dem.1)), None]);
     }
 
+    /// Every command with an optional `layer` either needs an active layer to be enabled, defaults
+    /// to it (`DEFAULTS_TO_ACTIVE_LAYER`), or reads `layer` as something else: a recorded step
+    /// names the active layer for the first two only.
     #[test]
     fn every_optional_layer_is_classified() {
         // `layer` is a file's or a service's, the graphics layer drawn on (the active one only if
