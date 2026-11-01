@@ -2645,9 +2645,10 @@ pub fn url_file_name(url: &str, bytes: &[u8]) -> Result<String, String> {
     let path = path.split_once("://").map_or(path, |(_, rest)| rest.split_once('/').map_or("", |(_, p)| p));
     let full: String =
         path.rsplit('/').find(|p| !p.is_empty()).unwrap_or("").chars().filter(|c| !c.is_control() && !matches!(c, '\\' | ':')).collect();
-    let ext = Path::new(&full).extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase).unwrap_or_default();
+    let raw_ext = Path::new(&full).extension().and_then(|e| e.to_str());
+    let ext = raw_ext.map(str::to_ascii_lowercase).unwrap_or_default();
     // At most 120 characters, keeping the extension (a long `.shp` name is still one).
-    let last: String = match Path::new(&full).extension().and_then(|e| e.to_str()) {
+    let last: String = match raw_ext {
         Some(e) if full.chars().count() > 120 && e.chars().count() < 60 => {
             format!("{}.{e}", full.chars().take(119 - e.chars().count()).collect::<String>())
         }
