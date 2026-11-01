@@ -9832,6 +9832,19 @@ fn service_times_and_directories() {
     assert!(e.contains("service.layers"), "{e}");
 }
 
+/// Adding an OGC API collection the listing left out, as 3D Tiles (#1267), says why, not that the
+/// document isn't GeoJSON.
+#[test]
+fn adding_a_collection_of_3d_tiles_says_why_it_is_left_out() {
+    let mut s = Session::new(Project::default());
+    let url = "https://x.example.org/ogc/v1/collections";
+    let doc = r#"{"collections": [{"id": "gebouwen", "title": "3D Tiles Gebouwen", "itemType": "feature", "links": [{"rel": "items", "type": "application/json+3dtiles", "href": "https://x.example.org/ogc/v1/collections/gebouwen/3dtiles?f=json"}]}]}"#;
+    let e = s.run("service.add", &json!({"url": url, "text": doc, "layer": "Gebouwen"})).unwrap_err();
+    assert!(e.contains("no layer 'Gebouwen': collection 'gebouwen' offers 3D Tiles, which RustGIS doesn't draw"), "{e}");
+    let e = s.run("service.add", &json!({"url": url, "text": doc, "layer": "gebouwen_x"})).unwrap_err();
+    assert!(e.ends_with("(service.layers lists them)"), "{e}");
+}
+
 /// A secured ArcGIS service given by an address with `?token=…` (#914): the token is kept for its
 /// server and sent, as the request's credential, to the addresses built from the service's document (its tiles,
 /// its layers' queries), and no address the session lists or keeps carries it.
