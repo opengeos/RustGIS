@@ -773,9 +773,10 @@ evicted in least-recently-used order. Open readers and builders hold operating-s
 so another instance cannot evict their indexes; active files can temporarily exceed the
 budget. An index larger than the budget is session-only. Building an index reclaims abandoned
 builds and temporary indexes and evicts idle ones past the budget; reopening a cached index
-leaves the cache as it is, and a release removes only its own temporary index, unless the cache
-was left over budget by indexes in use. A corrupt cache is rebuilt, and an unavailable cache
-directory falls back to the system temporary directory (a per-user directory on Unix).
+leaves the cache as it is, and a release removes only its own temporary or unfinished index,
+unless the cache was left over budget by indexes in use. A corrupt cache is rebuilt, and an
+unavailable cache directory falls back to the system temporary directory (a per-user directory
+on Unix).
 New Unix cache directories are created with mode `0700`. Existing roots must belong to
 the effective user, forbid group/other writes, and have trusted parents; symlink roots
 are rejected. These checks also apply to configured locations. Unsafe locations fall
