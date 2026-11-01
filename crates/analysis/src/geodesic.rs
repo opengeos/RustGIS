@@ -61,7 +61,8 @@ const STRAY_MARGIN: f64 = 1.6;
 /// by 1/x − cot x per radian across it), so two leaves a wide margin;
 /// [`tests::an_edge_let_pass_by_its_latitude_does_not_stray`] fails at a tenth.
 const PLANE_TURN: f64 = 2.0;
-/// The Earth's mean radius (metres), for [`may_stray`]: the one distances are measured with.
+/// The Earth's mean radius (metres), for [`may_stray`]'s sphere: the radius `haversine_m` and the
+/// planes use.
 const EARTH_R_M: f64 = rustgis_geom::EARTH_RADIUS_M;
 /// What [`may_stray`] adds to tan φ for the ellipsoid and near the equator, where tan φ is near 0:
 /// a tenth of the turn at 45°, as at about 5.7° of latitude.
@@ -127,12 +128,7 @@ pub(crate) fn geodesic_buffer_with_limit(g: &Geometry, metres: f64, max_vertices
 }
 
 /// Buffers of this many features or more are made on several threads.
-const PARALLEL_FEATURES: usize = 256;
-/// The features a thread takes at a time: few enough that expensive features lying together are
-/// shared out, enough that taking them costs nothing.
-const BATCH: usize = 16;
-/// Each buffering thread's stack, as large as the main thread's usually is.
-const STACK_BYTES: usize = 8 << 20;
+pub(crate) const PARALLEL_FEATURES: usize = 256;
 
 /// The buffers of `geoms` at `metres`, in their order, as [`geodesic_buffer`] makes them: on
 /// several threads when there are many (one in the browser), since each is made alone.
@@ -141,72 +137,44 @@ pub fn geodesic_buffers(geoms: &[&Geometry], metres: f64) -> Vec<Option<Geometry
 }
 
 /// Ordered parallel buffers sharing an outline budget, including pre-union multipoint discs.
-/// `usize::MAX` disables cumulative charging for the public unlimited API. Each worker checks its current
-/// allowance before buffering, then atomically charges the result before retaining it. In-flight
-/// operations may allocate temporary geometry on each worker (one worker in the browser).
+/// `usize::MAX` disables cumulative charging for the public unlimited API. Each buffer checks the
+/// allowance left before it is made, then is charged to it before it is kept. In-flight
+/// operations may allocate temporary geometry on each thread (one in the browser).
 pub(crate) fn geodesic_buffers_with_limit(geoms: &[&Geometry], metres: f64, limit: usize) -> Result<Vec<Option<Geometry>>, &'static str> {
-    let threads = if cfg!(target_arch = "wasm32") || geoms.len() < PARALLEL_FEATURES {
-        1
-    } else {
-        std::thread::available_parallelism().map_or(1, |n| n.get()).min(16)
-    };
-    buffers_on(geoms, metres, threads, limit)
+    buffers_on(geoms, metres, crate::parallel::threads_for(geoms.len(), PARALLEL_FEATURES), limit)
 }
 
-/// [`geodesic_buffers_with_limit`] on `threads` threads, this one among them. Each takes the next
-/// [`BATCH`] of features until none are left, and results go back in their places. The shared
-/// remaining budget is charged before a worker retains an outline. A thread that cannot start
-/// leaves its work to the others; a worker panic is passed on as in a buffer made here.
+/// [`geodesic_buffers_with_limit`] on `threads` threads, through [`crate::parallel::try_map_on`]:
+/// a buffer past the budget stops the others.
 fn buffers_on(geoms: &[&Geometry], metres: f64, threads: usize, limit: usize) -> Result<Vec<Option<Geometry>>, &'static str> {
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    let next = AtomicUsize::new(0);
-    let remaining = AtomicUsize::new(limit);
-    let work = || {
-        let mut made = Vec::new();
-        loop {
-            let from = next.fetch_add(BATCH, Ordering::Relaxed);
-            let Some(batch) = geoms.get(from..geoms.len().min(from + BATCH)).filter(|b| !b.is_empty()) else { break };
-            for (i, g) in batch.iter().enumerate() {
-                let buffered = geodesic_buffer_with_limit(g, metres, remaining.load(Ordering::Relaxed))?;
-                if limit != usize::MAX {
-                    let mut left = remaining.load(Ordering::Relaxed);
-                    loop {
-                        let next = left.checked_sub(buffered.charged_vertices).ok_or(VERTEX_BUDGET_ERROR)?;
-                        match remaining.compare_exchange_weak(left, next, Ordering::Relaxed, Ordering::Relaxed) {
-                            Ok(_) => break,
-                            Err(current) => left = current,
-                        }
-                    }
-                }
-                made.push((from + i, buffered.geometry));
-            }
-        }
-        Ok::<_, &'static str>(made)
-    };
-    let mut out: Vec<Option<Geometry>> = vec![None; geoms.len()];
-    let mut place = |made: Vec<(usize, Option<Geometry>)>| {
-        for (i, b) in made {
-            if let Some(slot) = out.get_mut(i) {
-                *slot = b;
-            }
-        }
-    };
-    if threads <= 1 {
-        place(work()?);
-    } else {
-        std::thread::scope(|scope| {
-            let others: Vec<_> =
-                (1..threads).filter_map(|_| std::thread::Builder::new().stack_size(STACK_BYTES).spawn_scoped(scope, work).ok()).collect();
-            place(work()?);
-            for h in others {
-                // Not a new panic but the worker's, raised again here as a serial run would raise it,
-                // for `analysis::run` to catch (AGENTS.md's never-crash rule is about new ones).
-                place(h.join().unwrap_or_else(|e| std::panic::resume_unwind(e))?);
-            }
-            Ok::<_, &'static str>(())
-        })?;
+    let remaining = std::sync::atomic::AtomicUsize::new(limit);
+    crate::parallel::try_map_on(
+        geoms,
+        threads,
+        || (),
+        |_, _, g| {
+            let buffered = geodesic_buffer_with_limit(g, metres, remaining.load(std::sync::atomic::Ordering::Relaxed))?;
+            charge(&remaining, limit, buffered.charged_vertices)?;
+            Ok(buffered.geometry)
+        },
+    )
+}
+
+/// Takes `vertices` from the `remaining` budget that threads share, or says it is spent; nothing
+/// when the `limit` is `usize::MAX`.
+pub(crate) fn charge(remaining: &std::sync::atomic::AtomicUsize, limit: usize, vertices: usize) -> Result<(), &'static str> {
+    use std::sync::atomic::Ordering;
+    if limit == usize::MAX {
+        return Ok(());
     }
-    Ok(out)
+    let mut left = remaining.load(Ordering::Relaxed);
+    loop {
+        let next = left.checked_sub(vertices).ok_or(VERTEX_BUDGET_ERROR)?;
+        match remaining.compare_exchange_weak(left, next, Ordering::Relaxed, Ordering::Relaxed) {
+            Ok(_) => return Ok(()),
+            Err(current) => left = current,
+        }
+    }
 }
 
 /// An azimuthal equidistant plane whose centre's longitude is within 180° of `reference`, a
@@ -528,6 +496,7 @@ fn to_geometry(mp: &MultiPolygon<f64>) -> Option<Geometry> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::parallel::BATCH;
 
     /// Samples the actual projected outlines: shallow turns exercise a rounded-down join,
     /// while larger turns would fail this bound at the old default arc density.

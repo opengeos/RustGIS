@@ -21,6 +21,7 @@ pub mod kriging;
 mod merge;
 pub mod network;
 pub mod neural;
+mod parallel;
 mod parameters;
 pub mod rasterops;
 pub mod selection;
