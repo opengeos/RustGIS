@@ -335,6 +335,8 @@ impl Layer {
         if let Some(info) = src.info() {
             self.dataset.fields = info.fields.clone();
             self.dataset.crs = info.coordinate_system();
+            // The new source's Z and M, which reading it drops (see `Dataset::zm_dropped`).
+            self.dataset.zm_dropped = info.zm_dropped;
         }
         self.dataset.source = src.linked_file().map(String::from);
         self.source = Some(src);
@@ -469,6 +471,12 @@ impl Layer {
         {
             self.dataset.fields = info.fields.clone();
         }
+        // An opened source's dropped Z or M values, for a project saved without the mark. Added to,
+        // not replaced: a source that couldn't tell (a check that timed out) mustn't clear a mark the
+        // project kept, and a stale one gives one notice too many rather than one too few.
+        if let Some(info) = self.source.as_ref().and_then(|s| s.info()) {
+            self.dataset.zm_dropped |= info.zm_dropped;
+        }
         let Some(src) = &mut self.source else { return false };
         src.window_fields = Some(self.dataset.fields.len());
         // A failed read leaves nothing drawn for it (its error shows in Layers), not the
@@ -544,7 +552,46 @@ impl Layer {
     /// Every feature of a streamed layer's source (up to the read limit), for tools and for
     /// loading the layer into memory.
     pub fn load_all(&self) -> Result<Dataset, String> {
-        let Some(src) = &self.source else { return Ok(self.dataset.clone()) };
+        self.load_all_counted().map(|(ds, _)| ds)
+    }
+
+    /// [`Layer::load_all`], with the number of rows of the source that couldn't be read.
+    pub fn load_all_counted(&self) -> Result<(Dataset, usize), String> {
+        let Some(copy) = self.open_source()? else { return Ok((self.dataset.clone(), 0)) };
+        let (mut ds, report) = copy.read_all()?;
+        ds.name = self.dataset.name.clone();
+        // (A project that lists no fields keeps the source's, as `sync_source` gives it.)
+        if !self.dataset.fields.is_empty() {
+            ds.fields = self.dataset.fields.clone();
+        }
+        ds.source = self.dataset.source.clone();
+        Ok((ds, report.skipped))
+    }
+
+    /// A streamed layer's source, to export whole a chunk at a time, with a dataset of no
+    /// features naming them as [`Layer::load_all`] would. `None` for a layer not
+    /// read in place, or whose source can't be read so (one by its web address).
+    pub fn chunk_export(&self) -> Result<Option<(std::sync::Arc<dyn rustgis_data::source::FeatureSource>, Dataset)>, String> {
+        let Some(copy) = self.open_source()? else { return Ok(None) };
+        let Some(src) = copy.visit_source() else { return Ok(None) };
+        let info = src.info();
+        let mut ds = Dataset::new(self.dataset.name.clone(), info.geometry_type, info.fields.clone());
+        ds.crs = info.coordinate_system();
+        // What reading the source drops, the export lacks (see `Dataset::zm_dropped`).
+        ds.zm_dropped = info.zm_dropped || self.dataset.zm_dropped;
+        if !self.dataset.fields.is_empty() {
+            ds.fields = self.dataset.fields.clone();
+        }
+        // (A source declaring no geometry type takes its first geometry's when exported, as a
+        // whole read does.)
+        ds.source = self.dataset.source.clone();
+        Ok(Some((src, ds)))
+    }
+
+    /// A copy of a streamed layer's source, opened (waiting for one still opening, as an export
+    /// does); `None` for a layer not read in place.
+    fn open_source(&self) -> Result<Option<source::SourceLayer>, String> {
+        let Some(src) = &self.source else { return Ok(None) };
         let mut copy = src.clone();
         if !copy.is_open() {
             copy.open()?;
@@ -558,14 +605,7 @@ impl Layer {
                     .unwrap_or_else(|| "the layer's source is still opening: try again once it has opened".into()));
             }
         }
-        let (mut ds, _) = copy.read_all()?;
-        ds.name = self.dataset.name.clone();
-        // (A project that lists no fields keeps the source's, as `sync_source` gives it.)
-        if !self.dataset.fields.is_empty() {
-            ds.fields = self.dataset.fields.clone();
-        }
-        ds.source = self.dataset.source.clone();
-        Ok(ds)
+        Ok(Some(copy))
     }
 
     /// The symbol a row draws with.
@@ -2305,7 +2345,7 @@ impl Map {
                 src.full_read = block;
                 if changed || mode_changed || budget_changed {
                     let selected = std::mem::take(&mut src.saved_selection);
-                    src.reset();
+                    src.reset_window();
                     src.saved_selection = selected;
                 }
                 if changed || (!block && layer.view_cache_bytes() > bytes) {
@@ -2315,7 +2355,7 @@ impl Map {
                         layer.selection.iter().filter_map(|r| layer.dataset.features.get(*r)).map(|f| f.id).collect();
                     if let Some(src) = &mut layer.source {
                         selected.append(&mut src.saved_selection);
-                        src.reset();
+                        src.reset_window();
                     }
                     layer.install(Vec::new());
                     if let Some(src) = &mut layer.source {
