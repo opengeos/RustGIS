@@ -11,6 +11,47 @@ use super::{b, f, ps};
 use crate::project::{Job, OfflineArea};
 use crate::{CmdResult, CommandSpec as C, Session};
 
+/// Removes every Shapefile index not in use and says what it freed, what stayed and why, and which
+/// cache folder it couldn't empty.
+fn empty_indexes(s: &mut Session, _p: &Value) -> CmdResult {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let mb = |bytes: u64| format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0));
+        let e = rustgis_data::source::shp::empty_index_cache();
+        if e.folders == 0 && !e.failed.is_empty() {
+            return Err(format!("couldn't empty the Shapefile index cache: {}", e.failed.join("; ")));
+        }
+        for failed in &e.failed {
+            s.notify(format!("Shapefile index cache: couldn't empty {failed}"), true);
+        }
+        if e.in_use > 0 {
+            let what = if e.in_use == 1 { "1 index".to_string() } else { format!("{} indexes", e.in_use) };
+            s.notify(
+                format!("Shapefile index cache: {what} in use by open layers or another RustGIS window kept ({})", mb(e.in_use_bytes)),
+                false,
+            );
+        }
+        if e.kept_bytes > 0 {
+            s.notify(
+                format!(
+                    "Shapefile index cache: {} of files without a readable lease kept, as the cache can't tell they are its own",
+                    mb(e.kept_bytes)
+                ),
+                false,
+            );
+        }
+        Ok(json!({
+            "removed": e.removed, "freedBytes": e.removed_bytes, "inUse": e.in_use, "inUseBytes": e.in_use_bytes,
+            "keptBytes": e.kept_bytes, "failed": e.failed,
+        }))
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = s;
+        Err("the browser keeps no Shapefile index cache".to_string())
+    }
+}
+
 fn now() -> f64 {
     web_time::SystemTime::now().duration_since(web_time::UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.0)
 }
@@ -252,6 +293,9 @@ pub fn commands() -> Vec<C> {
             Ok(json!({"emptied": n}))
         })
         .view(),
+        // The Shapefile index cache on disk, shared by every project (#1259). Command search,
+        // scripts and the CLI run it; it has no ribbon button.
+        C::new("cache.emptyIndexes", "Empty Index Cache", "Data › Shapefile Index Cache", empty_indexes).view(),
         // A fill runs to the end in one go (it's quick); cancelling stops the automatic fills
         // that follow projection changes.
         C::new("cache.cancel", "Cancel Caching", "Data › Feature Cache", |s, _| {

@@ -490,8 +490,61 @@ fn reserve_locked(root: &Path, path: PathBuf, budget: u64) -> io::Result<Lease> 
 #[derive(Default, Debug)]
 pub struct PruneStats {
     pub removed: u64,
+    pub removed_bytes: u64,
     pub remaining_bytes: u64,
+    /// Indexes in use (by this process or another) left in place, and their bytes.
+    pub pinned: u64,
     pub pinned_bytes: u64,
+}
+/// What emptying the Shapefile index cache did (#1259).
+#[derive(Default, Debug)]
+#[non_exhaustive]
+pub struct Emptied {
+    /// Indexes removed, and their bytes.
+    pub removed: u64,
+    pub removed_bytes: u64,
+    /// Indexes in use (by this process or another) that stayed, and their bytes.
+    pub in_use: u64,
+    pub in_use_bytes: u64,
+    /// Bytes that stayed although not in use: files the cache can't vouch for (no readable lease).
+    pub kept_bytes: u64,
+    /// The folders emptied, and those that couldn't be, with why.
+    pub folders: u64,
+    pub failed: Vec<String>,
+}
+
+/// Removes every Shapefile index not in use, in the cache folder and its fallback, and says what
+/// it freed, what stayed and which folder it couldn't empty (#1259). Indexes an open layer or
+/// another RustGIS instance is reading keep their leases, so they stay. A folder that doesn't
+/// exist is skipped; one that can't be emptied doesn't stop the other.
+pub fn empty_index_cache() -> Emptied {
+    // A process with a folder of its own (a test suite) never empties the shared fallback.
+    if cfg!(test) || PROCESS_INDEX_DIR.get().is_some() {
+        return empty_folders(&[index_dir()]);
+    }
+    let (primary, fallback) = (index_dir(), index_fallback_dir());
+    // The same folder spelled two ways (a symlinked temporary directory) is emptied once.
+    let same = primary == fallback || matches!((primary.canonicalize(), fallback.canonicalize()), (Ok(a), Ok(b)) if a == b);
+    empty_folders(&if same { vec![primary] } else { vec![primary, fallback] })
+}
+fn empty_folders(roots: &[PathBuf]) -> Emptied {
+    let mut emptied = Emptied::default();
+    for root in roots.iter().filter(|root| root.is_dir()) {
+        // A budget of 0 evicts everything not in use. With indexes in use left, the folder stays
+        // marked over budget until the next release sweeps it at the usual budget.
+        match maintain(root, 0) {
+            Ok(stats) => {
+                emptied.folders += 1;
+                emptied.removed += stats.removed;
+                emptied.removed_bytes = emptied.removed_bytes.saturating_add(stats.removed_bytes);
+                emptied.in_use += stats.pinned;
+                emptied.in_use_bytes = emptied.in_use_bytes.saturating_add(stats.pinned_bytes);
+                emptied.kept_bytes = emptied.kept_bytes.saturating_add(stats.remaining_bytes.saturating_sub(stats.pinned_bytes));
+            }
+            Err(e) => emptied.failed.push(format!("{}: {e}", root.display())),
+        }
+    }
+    emptied
 }
 pub fn maintain(root: &Path, budget: u64) -> io::Result<PruneStats> {
     let directory = directory_lock(root)?;
@@ -522,6 +575,7 @@ fn sweep(root: &Path, budget: u64, newest: Option<&str>) -> io::Result<PruneStat
     let mut stats = PruneStats::default();
     loop {
         stats.remaining_bytes = 0;
+        stats.pinned = 0;
         stats.pinned_bytes = 0;
         // Bounded metadata even if a cache folder contains millions of files.
         let mut oldest = BinaryHeap::new();
@@ -554,6 +608,7 @@ fn sweep(root: &Path, budget: u64, newest: Option<&str>) -> io::Result<PruneStat
             };
             if lock.try_lock().is_err() {
                 stats.remaining_bytes = stats.remaining_bytes.saturating_add(bytes);
+                stats.pinned += 1;
                 stats.pinned_bytes = stats.pinned_bytes.saturating_add(bytes);
                 continue;
             }
@@ -574,6 +629,7 @@ fn sweep(root: &Path, budget: u64, newest: Option<&str>) -> io::Result<PruneStat
                 drop(lock);
                 let _ = std::fs::remove_file(lease_path(&path));
                 stats.removed += 1;
+                stats.removed_bytes = stats.removed_bytes.saturating_add(bytes);
                 continue;
             }
             stats.remaining_bytes = stats.remaining_bytes.saturating_add(bytes);
@@ -593,6 +649,7 @@ fn sweep(root: &Path, budget: u64, newest: Option<&str>) -> io::Result<PruneStat
             if remove_unpinned(&root.join(name)).unwrap_or(false) {
                 stats.remaining_bytes = stats.remaining_bytes.saturating_sub(bytes);
                 stats.removed += 1;
+                stats.removed_bytes = stats.removed_bytes.saturating_add(bytes);
                 removed = true;
             }
         }

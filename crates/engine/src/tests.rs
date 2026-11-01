@@ -15173,6 +15173,27 @@ fn geojson_read_in_place_when_asked_or_large() {
     let _ = std::fs::remove_file(one);
 }
 
+/// Emptying the Shapefile index cache keeps the index of a layer that's open, says so, and the
+/// layer still reads (#1259).
+#[test]
+fn emptying_the_index_cache_keeps_indexes_in_use() {
+    let p = line_of_points_shp("index-cache", 20);
+    let mut s = Session::new(Project::default());
+    let r = s.run("layer.addData", &json!({"path": p.display().to_string(), "stream": true})).unwrap();
+    let mark = s.notice_mark();
+    let out = s.run("cache.emptyIndexes", &Value::Null).unwrap();
+    assert!(out["inUse"].as_u64().unwrap() >= 1, "{out}");
+    assert!(out["removed"].is_u64() && out["freedBytes"].is_u64(), "{out}");
+    let notices = s.notices_since(mark);
+    assert!(notices.iter().any(|n| n.text.contains("in use") && !n.error), "{notices:?}");
+    let layer = s.map().layer(r["layer"].as_u64().unwrap() as u32).unwrap();
+    assert_eq!(layer.load_all().unwrap().features.len(), 20);
+    drop(s);
+    for ext in ["shp", "shx", "dbf", "prj", "cpg"] {
+        let _ = std::fs::remove_file(p.with_extension(ext));
+    }
+}
+
 /// A Shapefile of `n` points along the equator, numbered.
 fn line_of_points_shp(name: &str, n: usize) -> std::path::PathBuf {
     use rustgis_data::{Coord, Dataset, Field, FieldType, Geometry, GeometryType, Value as V};

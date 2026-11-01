@@ -17,6 +17,7 @@ mod index;
 
 #[doc(hidden)]
 pub use cache::use_temporary_index_dir;
+pub use cache::{Emptied, empty_index_cache};
 
 use super::{Batch, FeatureSource, Reproject, Request, SourceInfo, clamp_limit};
 use crate::io::group_rings;
