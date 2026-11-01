@@ -578,6 +578,11 @@ fn offline_download(s: &mut Session, p: &Value) -> CmdResult {
     Ok(json!({"name": name, "features": features}))
 }
 
+fn offline_fields_match(a: &[rustgis_data::Field], b: &[rustgis_data::Field]) -> bool {
+    // Attribute values are positional; aliases are display metadata and field lookup ignores case.
+    a.len() == b.len() && a.iter().zip(b).all(|(x, y)| x.name.eq_ignore_ascii_case(&y.name) && x.ty == y.ty)
+}
+
 /// Copies edits made to an offline area (in its offline map, if open) back to its source map by
 /// feature id: changed and new features update the source, deleted ones are removed from it.
 /// Then the area is refreshed from the source.
@@ -600,24 +605,22 @@ fn offline_sync(s: &mut Session, p: &Value) -> CmdResult {
             // Layers are matched by id (the snapshot keeps them), so same-named layers don't mix.
             // Layers removed from either side since the download are left alone.
             let Some(sl) = src.layers.iter_mut().find(|l| l.id == ol.id && !l.is_raster()) else { continue };
+            let baseline = area.data.layers.iter().find(|l| l.id == ol.id);
+            if !offline_fields_match(&sl.dataset.fields, &ol.dataset.fields)
+                && baseline.is_none_or(|l| {
+                    !offline_fields_match(&l.dataset.fields, &ol.dataset.fields) || l.dataset.features != ol.dataset.features
+                })
+            {
+                return Err(format!("cannot sync layer '{}': source and offline fields differ; align the fields before syncing", ol.name));
+            }
             // The ids the area held when it was last synced.
-            let had: std::collections::HashSet<u64> = area
-                .data
-                .layers
-                .iter()
-                .find(|l| l.id == ol.id)
-                .map(|l| l.dataset.features.iter().map(|f| f.id).collect())
-                .unwrap_or_default();
+            let had: std::collections::HashSet<u64> =
+                baseline.map(|l| l.dataset.features.iter().map(|f| f.id).collect()).unwrap_or_default();
             let now_ids: std::collections::HashSet<u64> = ol.dataset.features.iter().map(|f| f.id).collect();
             // The area's copies as last synced: only features changed offline since then go back,
             // so edits made to the source meanwhile aren't overwritten by stale copies.
-            let base: std::collections::HashMap<u64, &rustgis_data::Feature> = area
-                .data
-                .layers
-                .iter()
-                .find(|l| l.id == ol.id)
-                .map(|l| l.dataset.features.iter().map(|f| (f.id, f)).collect())
-                .unwrap_or_default();
+            let base: std::collections::HashMap<u64, &rustgis_data::Feature> =
+                baseline.map(|l| l.dataset.features.iter().map(|f| (f.id, f)).collect()).unwrap_or_default();
             // Deletions first, so a fresh id given to a new feature below can't be swept away.
             let before = sl.dataset.features.len();
             sl.dataset.features.retain(|x| !had.contains(&x.id) || now_ids.contains(&x.id));
