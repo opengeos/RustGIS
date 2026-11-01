@@ -2825,10 +2825,12 @@ fn part_failed(url: &str, e: String) -> String {
     let e = e.strip_prefix(url).map(|r| r.trim_start_matches(": ").to_string()).unwrap_or(e);
     // S3 answers a signed request for a file that isn't there as it answers a signature that
     // doesn't cover it.
-    let why = if keyed(url) && crate::render::rustgis_tiles::cache::http_status(&e) == Some(403) {
-        " (to an address read with keys, this may also mean the file isn't there, or that the keys or signature don't cover it: a presigned address signs one file, so a Shapefile's parts need addresses of their own; zip them and add the zip)"
-    } else {
-        ""
+    let why = match crate::render::rustgis_tiles::cache::http_status(&e) {
+        Some(403) if keyed(url) => {
+            " (to an address read with keys, this may also mean the file isn't there, or that the keys or signature don't cover it: a presigned address signs one file, so a Shapefile's parts need addresses of their own; zip them and add the zip)"
+        }
+        Some(403) => " (S3 answers this for a file that isn't there, to those who can't list its bucket)",
+        _ => "",
     };
     format!("{}: {}{why}", crate::sources::redact(url), crate::sources::redact_text(&e))
 }

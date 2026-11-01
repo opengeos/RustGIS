@@ -9273,6 +9273,7 @@ fn shapefile_by_its_shp_address() {
     // One whose signature doesn't cover its .prj, and one whose address answers with its parts zipped.
     files.extend(parts.iter().filter(|(e, _)| *e != "prj").map(|(e, b)| (format!("/signed/rios.{e}?sig=1"), b.clone())));
     files.extend(parts.iter().filter(|(e, _)| *e != "prj").map(|(e, b)| (format!("/s3/rios.{e}"), b.clone())));
+    files.extend(parts.iter().filter(|(e, _)| *e == "shp").map(|(e, b)| (format!("/s3/sem_dbf.{e}"), b.clone())));
     let shp = parts.iter().find(|(e, _)| *e == "shp").unwrap().1.clone();
     let others = parts.iter().filter(|(e, _)| *e != "shp").map(|(e, b)| (*e, b.clone())).collect();
     files.push(("/zipped/rios.shp".into(), rustgis_data::io::zip_shapefile_parts("rios.shp", shp, others).unwrap()));
@@ -9316,6 +9317,9 @@ fn shapefile_by_its_shp_address() {
     let r = s.run("layer.addUrl", &json!({"url": format!("{base}/s3/rios.shp"), "name": "S3"})).unwrap();
     assert_eq!(r["features"], 1, "{r}");
     assert!(s.notices.last().unwrap().text.contains("no .prj found beside it (1 of 3"), "{:?}", s.notices.last());
+    // Its .dbf answered so is refused, saying what the 403 may mean.
+    let e = s.run("layer.addUrl", &json!({"url": format!("{base}/s3/sem_dbf.shp")})).unwrap_err();
+    assert!(e.contains("/s3/sem_dbf.dbf") && e.contains("S3 answers this for a file that isn't there"), "{e}");
     // An address answering with the parts zipped is read as it is, its parts not asked for.
     let r = s.run("layer.addUrl", &json!({"url": format!("{base}/zipped/rios.shp"), "name": "Zipado"})).unwrap();
     assert_eq!(r["features"], 1, "{r}");
