@@ -3757,6 +3757,17 @@ fn terrain_is_set_from_a_dem_or_tiles() {
     s.run("layer.rename", &json!({"name": "dem 2"})).unwrap();
     s.active_layer = Some(id);
     s.run("map.terrain", &json!({})).unwrap();
+    // Renaming another layer leaves the terrain as it is.
+    s.run("layer.rename", &json!({"layer": "Countries", "name": "Paises"})).unwrap();
+    assert!(s.map().view.terrain.is_some());
+    s.run("layer.rename", &json!({"layer": "Paises", "name": "Countries"})).unwrap();
+    // Renaming the DEM onto another layer's name turns the terrain off, said.
+    s.active_layer = Some(id);
+    s.run("layer.rename", &json!({"name": "dem 2"})).unwrap();
+    assert!(s.map().view.terrain.is_none());
+    assert!(s.notices.last().unwrap().text.contains("two layers are now called 'dem 2'"), "{:?}", s.notices.last());
+    s.run("layer.rename", &json!({"name": name})).unwrap();
+    s.run("map.terrain", &json!({"layer": name})).unwrap();
     // Renaming the DEM keeps the terrain on it.
     s.run("layer.rename", &json!({"name": "Relevo"})).unwrap();
     assert_eq!(s.run("map.terrain", &json!({"exaggeration": 1})).unwrap()["source"]["layer"], "Relevo");
