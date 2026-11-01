@@ -2816,14 +2816,14 @@ fn keyed(url: &str) -> bool {
 
 /// A Shapefile's part that answered with a web page (a site that serves its page for any
 /// address it doesn't have): an optional part is done without, as one that isn't there, and the
-/// `.dbf` fails (the error without an address: `part_failed` names it). Any other answer is the
+/// `.shp` or `.dbf` fails (the error without an address: `part_failed` names it). Any other answer is the
 /// part.
 fn part_page(ext: &str, b: Vec<u8>) -> Result<Option<Vec<u8>>, String> {
     if b.iter().find(|c| !c.is_ascii_whitespace()) != Some(&b'<') {
         return Ok(Some(b));
     }
-    if ext == "dbf" {
-        return Err("a web page answered, not a .dbf".into());
+    if matches!(ext, "shp" | "dbf") {
+        return Err(format!("a web page answered, not a .{ext}"));
     }
     Ok(None)
 }
@@ -2911,6 +2911,11 @@ fn download_shapefile_blocking(url: &str) -> Result<Vec<u8>, String> {
     if is_zip(&shp) {
         return Ok(shp);
     }
+    let shp = match part_page("shp", shp) {
+        Ok(Some(shp)) => shp,
+        Ok(None) => return Err(part_failed(url, "a web page answered, not a .shp".into())),
+        Err(e) => return Err(part_failed(url, e)),
+    };
     let name = url_file_name(url, &shp).map_err(|e| part_failed(url, e))?;
     let mut left = cache::MAX_DOWNLOAD.saturating_sub(shp.len());
     let mut got = Vec::new();
@@ -2944,10 +2949,14 @@ pub fn download_data(url: &str, max: usize, done: crate::render::rustgis_tiles::
         Box::new(move |r| match r.and_then(|shp| url_file_name(&shp_url, &shp).map(|name| (name, shp))) {
             // Already zipped: as it is.
             Ok((_, shp)) if is_zip(&shp) => done(Ok(shp)),
-            Ok((name, shp)) => {
-                let left = max.saturating_sub(shp.len());
-                download_parts(name, shp, parts.into_iter(), Vec::new(), left, done);
-            }
+            Ok((name, shp)) => match part_page("shp", shp) {
+                Ok(Some(shp)) => {
+                    let left = max.saturating_sub(shp.len());
+                    download_parts(name, shp, parts.into_iter(), Vec::new(), left, done);
+                }
+                Ok(None) => done(Err("a web page answered, not a .shp".into())),
+                Err(e) => done(Err(e)),
+            },
             // The app names the address it asked for (redacted), as for any download.
             Err(e) => {
                 let why = status_hint(&shp_url, &e);

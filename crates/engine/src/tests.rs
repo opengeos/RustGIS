@@ -9281,6 +9281,7 @@ fn shapefile_by_its_shp_address() {
     files.push(("/spa/sem_dbf.dbf".into(), page.clone()));
     files.extend(parts.iter().filter(|(e, _)| *e == "shp").map(|(e, b)| (format!("/spa/tk.{e}?token=1"), b.clone())));
     files.push(("/spa/tk.dbf?token=1".into(), page.clone()));
+    files.push(("/spa/pagina.shp".into(), page.clone()));
     files.extend(parts.iter().filter(|(e, _)| *e == "shp").map(|(e, b)| (format!("/s3/sem_dbf.{e}"), b.clone())));
     let shp = parts.iter().find(|(e, _)| *e == "shp").unwrap().1.clone();
     let others = parts.iter().filter(|(e, _)| *e != "shp").map(|(e, b)| (*e, b.clone())).collect();
@@ -9340,6 +9341,10 @@ fn shapefile_by_its_shp_address() {
     assert!(s.notices.last().unwrap().text.contains("no .prj, .cpg found or readable beside it"), "{:?}", s.notices.last());
     let e = s.run("layer.addUrl", &json!({"url": format!("{base}/spa/sem_dbf.shp")})).unwrap_err();
     assert!(e.contains("/spa/sem_dbf.dbf: a web page answered, not a .dbf"), "{e}");
+    // A page answering for the .shp itself fails at once, its parts not asked for.
+    let e = s.run("layer.addUrl", &json!({"url": format!("{base}/spa/pagina.shp")})).unwrap_err();
+    assert!(e.contains("/spa/pagina.shp: a web page answered, not a .shp"), "{e}");
+    assert!(!asked.lock().unwrap().iter().any(|a| a.starts_with("/spa/pagina.dbf")));
     // A keyed address is named once, without its token.
     let e = s.run("layer.addUrl", &json!({"url": format!("{base}/spa/tk.shp?token=1")})).unwrap_err();
     assert!(e.matches("/spa/tk.dbf").count() == 1 && e.contains("a web page answered") && !e.contains("token=1"), "{e}");
@@ -9412,6 +9417,7 @@ fn shapefile_by_its_shp_address() {
     assert_eq!(fetch(&url, exact).unwrap_err(), format!("larger than {exact} bytes, zipped"));
     // The app's parts too: a page answering for a part leaves it out, and a keyed part refused
     // fails, named without its signature.
+    assert_eq!(fetch(&format!("{base}/spa/pagina.shp"), 1 << 20).unwrap_err(), "a web page answered, not a .shp");
     let zip = fetch(&format!("{base}/spa/rios.shp"), 1 << 20).unwrap();
     assert_eq!(rustgis_data::io::shapefile_zip_lacks(&zip), [("rios.shp".to_string(), vec!["prj", "cpg"])]);
     let e = fetch(&format!("{base}/signed/rios.shp?sig=1"), 1 << 20).unwrap_err();
