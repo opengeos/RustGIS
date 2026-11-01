@@ -335,6 +335,8 @@ impl Layer {
         if let Some(info) = src.info() {
             self.dataset.fields = info.fields.clone();
             self.dataset.crs = info.coordinate_system();
+            // The new source's Z and M, which reading it drops (see `Dataset::zm_dropped`).
+            self.dataset.zm_dropped = info.zm_dropped;
         }
         self.dataset.source = src.linked_file().map(String::from);
         self.source = Some(src);
@@ -468,6 +470,11 @@ impl Layer {
             && let Some(info) = self.source.as_ref().and_then(|s| s.info())
         {
             self.dataset.fields = info.fields.clone();
+        }
+        // An opened source's dropped Z or M values, for a project saved without the mark (from
+        // before it was kept, or by another app).
+        if let Some(info) = self.source.as_ref().and_then(|s| s.info()) {
+            self.dataset.zm_dropped |= info.zm_dropped;
         }
         let Some(src) = &mut self.source else { return false };
         src.window_fields = Some(self.dataset.fields.len());

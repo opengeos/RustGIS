@@ -849,8 +849,11 @@ impl PostgisSource {
             select,
             reproject,
         };
+        src.info.indexed = src.has_index();
+        src.info.count = src.count_rows();
+        src.info.extent = src.extent();
         // A column declared with Z or M, or (an unconstrained one) Z or M in the first rows this layer
-        // reads. A check that fails is said too.
+        // reads; an empty table loses nothing. A check that fails (or times out) is said too.
         let sql = format!(
             "SELECT COALESCE((SELECT coord_dimension FROM geometry_columns WHERE f_table_schema = $1 AND f_table_name = $2 AND f_geometry_column = $3 \
              UNION ALL SELECT coord_dimension FROM geography_columns WHERE f_table_schema = $1 AND f_table_name = $2 AND f_geography_column = $3 \
@@ -860,16 +863,18 @@ impl PostgisSource {
             src.table.sql_from(),
             src.filter(false)
         );
-        let t = &src.table;
-        match src.conn.with(|c| c.query_one(sql.as_str(), &[&t.schema, &t.name, &t.column])).ok().and_then(|r| r.try_get::<_, bool>(0).ok())
-        {
+        let zm = if src.info.count == Some(0) {
+            Some(false)
+        } else {
+            let t = &src.table;
+            let row = src.conn.snapshot(Some(PROBE_TIMEOUT), |c| c.query_one(sql.as_str(), &[&t.schema, &t.name, &t.column]));
+            row.ok().and_then(|r| r.try_get::<_, bool>(0).ok())
+        };
+        match zm {
             Some(true) => src.info.drop_zm(None),
             Some(false) => {}
             None => src.info.notes.push("couldn't tell whether it has Z or M values, which RustGIS doesn't keep".into()),
         }
-        src.info.indexed = src.has_index();
-        src.info.count = src.count_rows();
-        src.info.extent = src.extent();
         Ok(src)
     }
 
