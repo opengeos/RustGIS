@@ -9753,6 +9753,27 @@ fn zoom_false_keeps_the_view_of_sheets_and_photos() {
     ph3.run("layer.addUrl", &json!({"url": format!("{base}/pic.jpg"), "zoom": true})).unwrap();
     let c = rustgis_geom::merc_to_lonlat(ph3.map().camera.center);
     assert!((c.x - 11.8851).abs() < 0.01 && (c.y - 43.4674).abs() < 0.01, "{c:?}");
+    // The app's download of a photo follows the same rule: `"zoom": false` keeps the view.
+    let mut ph4 = Session::new(Project::default());
+    let start = ph4.map().camera;
+    let id = ph4.download_started();
+    assert!(ph4.download_landed(id, rustgis_data::photo::example(true, (43.4674, "N"), (11.8851, "E"))));
+    let r = ph4.run("layer.addDownload", &json!({"id": id, "url": "https://x.org/pic.jpg", "zoom": false})).unwrap();
+    assert_eq!(r["photos"], 1, "{r}");
+    assert_eq!(ph4.map().camera, start);
+    // `"zoom": true` frames only the photos the download added: the layer holds an earlier,
+    // far-away photo too, which must not pull the view back to it.
+    let mut ph5 = Session::new(Project::default());
+    let id = ph5.download_started();
+    assert!(ph5.download_landed(id, rustgis_data::photo::example(true, (43.4674, "N"), (11.8851, "E"))));
+    ph5.run("layer.addDownload", &json!({"id": id, "url": "https://x.org/pic.jpg"})).unwrap();
+    ph5.run("map.zoomToExtent", &json!({"extent": [0.0, 0.0, 10.0, 10.0]})).unwrap();
+    let id = ph5.download_started();
+    assert!(ph5.download_landed(id, rustgis_data::photo::example(true, (48.8566, "N"), (2.3522, "E"))));
+    let r = ph5.run("layer.addDownload", &json!({"id": id, "url": "https://x.org/pic2.jpg", "zoom": true})).unwrap();
+    assert_eq!(r["zoomed"], true, "{r}");
+    let c = rustgis_geom::merc_to_lonlat(ph5.map().camera.center);
+    assert!((c.x - 2.3522).abs() < 0.05 && (c.y - 48.8566).abs() < 0.05, "{c:?}");
 }
 
 /// `"zoom": true` frames everything a multi-layer file added, not only its last layer: the native

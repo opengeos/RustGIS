@@ -2942,9 +2942,11 @@ fn add_download(s: &mut Session, p: &Value) -> CmdResult {
     };
     let mut r = super::raster::add_named_bytes(s, p, name, bytes, b(p, "zoom"))?;
     // `"zoom": true` zooms to everything added, whatever the map held (a link's data); `zoomed`
-    // says whether there was anything to zoom to (a tile archive adds no layer).
+    // says whether there was anything to zoom to (a tile archive adds no layer). A photo result
+    // was already framed on the photos this download added; `zoom_to_added` would frame the whole
+    // photo layer, earlier photos included.
     if b(p, "zoom") == Some(true) {
-        let zoomed = zoom_to_added(s, &r);
+        let zoomed = if r.get("photos").is_some() { true } else { zoom_to_added(s, &r) };
         if let Some(o) = r.as_object_mut() {
             o.insert("zoomed".into(), json!(zoomed));
         }
