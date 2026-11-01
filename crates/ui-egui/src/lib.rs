@@ -3235,17 +3235,17 @@ impl RustGisApp {
                 };
                 let ext = if ext == "shp" { "zip".to_string() } else { ext };
                 let name = format!("{}.{ext}", l.name);
-                let zm_note = rustgis_engine::data::zm_export_note([ds], &name);
+                let notes = rustgis_engine::data::export_notes([(ds, l.extent())], &name, crs);
                 if left_out > 0 {
                     self.session.notify(format!("{name}: {left_out} features without drawable geometry were left out"), false);
                 }
                 if ext == "zip" && rustgis_engine::data::raster::wkt::to_wkt(crs).is_none() {
                     self.session.notify(format!("{name}: no .prj written, as {} has no WKT form", crs.label()), false);
                 }
-                if self.download(&name, bytes)
-                    && let Some(note) = zm_note
-                {
-                    self.session.notify(note, false);
+                if self.download(&name, bytes) {
+                    for note in notes {
+                        self.session.notify(note, false);
+                    }
                 }
             }
             "ui.exportRaster" if self.services.download.is_some() => {

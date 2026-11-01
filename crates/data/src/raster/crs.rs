@@ -327,6 +327,20 @@ impl Crs {
         }
     }
 
+    /// Whether converting to WGS 84 leaves out a datum shift, so positions in longitude/latitude
+    /// may be off by up to a few hundred metres: a custom system with an ellipsoid (`+ellps`,
+    /// `+a` or `+R`, other than `+ellps=WGS84`) but no `+towgs84`, `+datum` or `+nadgrids`. That
+    /// is what reading a WKT datum with no known shift writes (and says, whatever its ellipsoid:
+    /// SVY21's is WGS 84's). Written back in the same system, positions come back exact.
+    pub fn lacks_datum_shift(self) -> bool {
+        let Some(def) = self.custom_def() else { return false };
+        let keys: Vec<&str> = def.proj4.split_whitespace().collect();
+        let has = |prefix: &str| keys.iter().any(|k| k.starts_with(prefix));
+        let shifted = has("+towgs84=") || has("+datum=") || has("+nadgrids=");
+        let ellipsoid = (has("+ellps=") && !keys.contains(&"+ellps=WGS84")) || has("+a=") || has("+R=");
+        ellipsoid && !shifted
+    }
+
     /// A transformer between this system and WGS 84 longitude/latitude.
     pub fn transformer(self) -> Result<Transformer, String> {
         Ok(Transformer {

@@ -11013,6 +11013,83 @@ fn dropped_z_values_are_said_on_import_and_export() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// What an import says about positions, an export says again: a NAD 27 Shapefile whose `.prj`
+/// has no shift to WGS 84 (read whole or in place, and after the project is saved and opened)
+/// exported to GeoJSON, but not written back to a Shapefile in NAD 27; and a Shapefile without a
+/// `.prj` or a CSV whose coordinates aren't longitude/latitude, exported, converted or shared.
+/// Sample layers say neither.
+#[test]
+fn exports_say_what_import_said_about_positions() {
+    const NAD27: &str = r#"PROJCS["NAD_1927_UTM_Zone_16N",GEOGCS["GCS_North_American_1927",DATUM["D_North_American_1927",SPHEROID["Clarke_1866",6378206.4,294.9786982]],PRIMEM["Greenwich",0.0],UNIT["Degree",0.0174532925199433]],PROJECTION["Transverse_Mercator"],PARAMETER["False_Easting",500000.0],PARAMETER["False_Northing",0.0],PARAMETER["Central_Meridian",-87.0],PARAMETER["Scale_Factor",0.9996],PARAMETER["Latitude_Of_Origin",0.0],UNIT["Meter",1.0]]"#;
+    let dir = std::env::temp_dir().join(format!("rustgis-engine-positions-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    isolate_plugins();
+    let pt = dir.join("pt.geojson");
+    std::fs::write(
+        &pt,
+        r#"{"type":"FeatureCollection","features":[{"type":"Feature","properties":{"id":1},"geometry":{"type":"Point","coordinates":[-89.9,35.1]}}]}"#,
+    )
+    .unwrap();
+    let mut s = Session::new(Project::default());
+    s.run("layer.addData", &json!({"path": pt, "name": "pt"})).unwrap();
+    let (nad27, bare) = (dir.join("nad27.shp"), dir.join("bare.shp"));
+    s.run("share.exportLayer", &json!({"layer": "pt", "path": nad27, "crs": "EPSG:32616"})).unwrap();
+    std::fs::write(nad27.with_extension("prj"), NAD27).unwrap();
+    s.run("share.exportLayer", &json!({"layer": "pt", "path": bare, "crs": "EPSG:32616"})).unwrap();
+    std::fs::remove_file(bare.with_extension("prj")).unwrap();
+    let csv = dir.join("utm.csv");
+    std::fs::write(&csv, "id,x,y\n1,500000,3800000\n").unwrap();
+
+    let said = |s: &Session, mark, what: &str| s.notices_since(mark).iter().any(|n| n.text.contains(what));
+    const APPROXIMATE: &str = "are approximate, possibly a few hundred metres off";
+    const NOT_LONLAT: &str = "aren't longitude/latitude, so they're out of place";
+    for stream in [false, true] {
+        let mut s = Session::new(Project::default());
+        let mark = s.notice_mark();
+        let id = s.run("layer.addData", &json!({"path": nad27, "stream": stream})).unwrap()["layer"].as_u64().unwrap();
+        assert!(said(&s, mark, "has no conversion to WGS 84"), "stream {stream}: {:?}", s.notices_since(mark));
+        let mark = s.notice_mark();
+        s.run("share.exportLayer", &json!({"layer": id, "path": dir.join(format!("nad27-{stream}.geojson"))})).unwrap();
+        assert!(said(&s, mark, APPROXIMATE), "stream {stream}: {:?}", s.notices_since(mark));
+        let mark = s.notice_mark();
+        s.run("share.exportLayer", &json!({"layer": id, "path": dir.join(format!("back-{stream}.shp"))})).unwrap();
+        assert!(!said(&s, mark, APPROXIMATE), "stream {stream}: {:?}", s.notices_since(mark));
+        let mark = s.notice_mark();
+        let id = s.run("layer.addData", &json!({"path": bare, "stream": stream})).unwrap()["layer"].as_u64().unwrap();
+        assert!(said(&s, mark, "not longitude/latitude"), "stream {stream}");
+        let mark = s.notice_mark();
+        s.run("share.exportLayer", &json!({"layer": id, "path": dir.join(format!("bare-{stream}.geojson"))})).unwrap();
+        assert!(said(&s, mark, NOT_LONLAT), "stream {stream}: {:?}", s.notices_since(mark));
+    }
+
+    let mut s = Session::new(Project::default());
+    s.run("layer.addData", &json!({"path": nad27, "name": "nad27"})).unwrap();
+    s.run("layer.addData", &json!({"path": csv, "name": "utm"})).unwrap();
+    let saved = s.project.saved_text(None).unwrap().0;
+    let mut s = Session::new(Project::from_json(&saved).unwrap());
+    let mark = s.notice_mark();
+    s.run("share.exportLayer", &json!({"layer": "nad27", "path": dir.join("reopened.geojson")})).unwrap();
+    assert!(said(&s, mark, APPROXIMATE), "{:?}", s.notices_since(mark));
+    for (cmd, params) in [
+        ("share.exportLayer", json!({"layer": "utm", "path": dir.join("utm.geojson")})),
+        ("data.convert", json!({"layer": "utm", "format": "geojson"})),
+    ] {
+        let mark = s.notice_mark();
+        s.run(cmd, &params).unwrap();
+        assert!(said(&s, mark, NOT_LONLAT), "{cmd}: {:?}", s.notices_since(mark));
+    }
+    let mark = s.notice_mark();
+    s.run("share.webMap", &json!({"path": dir.join("map.html")})).unwrap();
+    let notes: Vec<_> = s.notices_since(mark).iter().map(|n| n.text.clone()).collect();
+    assert_eq!(notes.iter().filter(|n| n.contains(APPROXIMATE) || n.contains(NOT_LONLAT)).count(), 2, "{notes:?}");
+
+    let mut s = world();
+    let mark = s.notice_mark();
+    s.run("share.exportLayer", &json!({"layer": "Cities", "path": dir.join("cities.geojson")})).unwrap();
+    assert!(!said(&s, mark, APPROXIMATE) && !said(&s, mark, NOT_LONLAT), "{:?}", s.notices_since(mark));
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 #[test]
 fn layers_export_to_geopackage_geoparquet_shapefile_and_kmz() {
     let dir = std::env::temp_dir().join(format!("rustgis-engine-export-{}", std::process::id()));

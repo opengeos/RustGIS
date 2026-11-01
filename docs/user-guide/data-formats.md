@@ -461,6 +461,14 @@ dimensions, only a sample is checked: the first 16 rows of a GeoParquet file wit
 (in its first row group), and the first 16 rows with a geometry of a GeoPackage table with optional
 Z or M (in the web app, its first 16 rows) or of an unconstrained PostGIS column.
 
+Exporting, converting or sharing a layer also repeats what adding it said about its positions. A
+coordinate system defined in a file whose datum has no shift to WGS 84 (a NAD 27 `.prj` without
+`TOWGS84`, say) makes positions approximate, possibly a few hundred metres off, so an export in
+another system says so; written back in that same system they are exact, and nothing is said.
+Coordinates beyond ±180.5° longitude or ±90.5° latitude (a CSV of eastings and northings without its
+`"crs"`, a Shapefile without its `.prj`) aren't longitude/latitude: an export says they're out of
+place, and Define Projection, below, places them.
+
 ## Define Projection
 
 When a Shapefile's `.prj` is missing or incorrect, right-click its layer and choose
