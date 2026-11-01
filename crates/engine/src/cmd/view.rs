@@ -235,13 +235,18 @@ fn terrain(s: &mut Session, p: &Value) -> CmdResult {
     };
     // Nothing named and no terrain yet (Terrain from the ribbon or command search): the active
     // layer, when it is a raster, is the DEM.
+    let was_off = s.map().view.terrain.is_none();
+    let mut picked = None;
     let source = source.or_else(|| {
-        if s.map().view.terrain.is_some() {
+        if !was_off {
             return None;
         }
         let l = s.active_layer.and_then(|id| s.map().layer(id)).filter(|l| l.raster.is_some())?;
+        picked = Some(l.name.clone());
         Some(TerrainSource::Layer(l.name.clone()))
     });
+    // Relief shows on a tilted Web Mercator map only (the globe and other projections stay flat).
+    let mercator = matches!(s.map().projection, rustgis_map::Projection::WebMercator);
     let flat = s.map().camera.pitch == 0.0;
     let m = s.map_mut();
     let t = match (source, m.view.terrain.take()) {
@@ -262,9 +267,20 @@ fn terrain(s: &mut Session, p: &Value) -> CmdResult {
         "exaggeration": t.exaggeration,
     });
     m.view.terrain = Some(t);
-    // A map looked at straight down stays flat: say how to see the relief.
-    if flat {
-        s.notify("Terrain is on: tilt the map (drag with the right button, or Shift+Up) to see the relief", false);
+    // Turned on: which layer gives the heights when it was picked (any raster can be the active
+    // layer), and what to do to see the relief.
+    if was_off {
+        let from = picked.map(|n| format!("heights from '{n}' (its first band, in metres); ")).unwrap_or_default();
+        let how = if !mercator {
+            "relief shows on a tilted Web Mercator map, not on this projection"
+        } else if flat {
+            "tilt the map (drag with the right button, or Shift+Up) to see the relief"
+        } else {
+            ""
+        };
+        if !from.is_empty() || !how.is_empty() {
+            s.notify(format!("Terrain is on: {from}{how}").trim_end_matches("; ").to_string(), false);
+        }
     }
     Ok(out)
 }

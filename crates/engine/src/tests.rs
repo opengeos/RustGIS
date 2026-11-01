@@ -3739,8 +3739,13 @@ fn terrain_is_set_from_a_dem_or_tiles() {
     s.active_layer = Some(id);
     let v = s.run("map.terrain", &json!({"exaggeration": 3})).unwrap();
     assert_eq!((v["source"]["layer"].as_str(), v["exaggeration"].as_f64()), (Some(name.as_str()), Some(3.0)));
-    // On a map looked at straight down, a notice says to tilt it.
-    assert!(s.notices.last().unwrap().text.contains("tilt the map"), "{:?}", s.notices.last());
+    // On a map looked at straight down, a notice names the layer picked and says to tilt it.
+    let said = s.notices.last().unwrap().text.clone();
+    assert!(said.contains(&format!("heights from '{name}'")) && said.contains("tilt the map"), "{said}");
+    // A change of exaggeration alone says nothing again.
+    let mark = s.notice_mark();
+    s.run("map.terrain", &json!({"exaggeration": 2})).unwrap();
+    assert!(s.notices_since(mark).iter().all(|n| !n.text.contains("Terrain is on")), "{:?}", s.notices_since(mark));
     // Once on, nothing named changes nothing but what is given: the active layer doesn't replace it.
     s.active_layer = s.map().layer_by_name("Countries").map(|l| l.id);
     let v = s.run("map.terrain", &json!({})).unwrap();
