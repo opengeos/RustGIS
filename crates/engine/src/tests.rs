@@ -15112,6 +15112,22 @@ fn unknown_params_are_said() {
 }
 
 #[test]
+fn geojson_collection_import_reports_loss_even_without_surviving_geometry() {
+    let collection = json!({"type":"GeometryCollection", "geometries":[
+        {"type":"Point", "coordinates":[1,2]},
+        {"type":"Polygon", "coordinates":[[[0,0],[4,0],[4,4],[0,0]]]}
+    ]});
+    let mut s = Session::new(Project::default());
+    s.run("layer.addDataText", &json!({"fileName":"collection.geojson", "text":collection.to_string()})).unwrap();
+    assert!(s.notices.iter().any(|n| n.text.contains("1 features had unreadable geometry")));
+    assert!(s.map().layers.is_empty(), "a partial geometry must never become a layer");
+
+    let mut clean = Session::new(Project::default());
+    clean.run("layer.addDataText", &json!({"fileName":"point.geojson", "text":r#"{"type":"Point","coordinates":[1,2]}"#})).unwrap();
+    assert!(!clean.notices.iter().any(|n| n.text.contains("unreadable geometry")));
+}
+
+#[test]
 fn geojson_read_in_place_when_asked_or_large() {
     use rustgis_data::{Coord, Dataset, Field, FieldType, Geometry, GeometryType, Value as V};
     let mut ds = Dataset::new("pts", GeometryType::Point, vec![Field::new("i", FieldType::Integer)]);
