@@ -839,8 +839,8 @@ fn process(s: &mut Session, p: &Value) -> CmdResult {
 /// Most inputs a mosaic takes.
 const MAX_MOSAIC_INPUTS: usize = 10_000;
 
-/// The raster layer a mosaic input names, with its cells in memory; any other input is read as a
-/// file. [`raster_mosaic`] and [`mosaic_stays_in_project`] both go by it, so they can't disagree.
+/// The raster layer a mosaic input names, with its cells in memory; otherwise a raster file name is
+/// read from disk. [`raster_mosaic`] and [`mosaic_stays_in_project`] both go by it, so they can't disagree.
 fn mosaic_layer(s: &Session, v: &Value) -> Result<Arc<Raster>, String> {
     let n = v.as_str().map(str::trim).filter(|n| !n.is_empty()).ok_or("each input is a raster layer's name or a file path")?;
     raster_named(s, n)
