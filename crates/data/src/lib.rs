@@ -269,6 +269,10 @@ pub struct Dataset {
     /// recover it; import the original file with a CRS override instead. Kept across project saves.
     #[serde(default)]
     pub crs_incomplete: bool,
+    /// The source had Z or M values (heights or measures), which RustGIS doesn't keep: they were
+    /// dropped on import, so an export writes x and y only. Kept across project saves.
+    #[serde(default)]
+    pub zm_dropped: bool,
     /// The features are a window onto a source read in place (the part of a large file in view),
     /// so they aren't saved: the source is read again instead.
     #[serde(skip)]
@@ -276,10 +280,10 @@ pub struct Dataset {
 }
 
 impl Serialize for Dataset {
-    /// Saves CRS recovery state with the dataset, but omits disposable streamed rows.
+    /// Saves CRS recovery and dropped Z/M state with the dataset, but omits disposable streamed rows.
     fn serialize<S: serde::Serializer>(&self, s: S) -> std::result::Result<S::Ok, S::Error> {
         use serde::ser::SerializeStruct;
-        let mut st = s.serialize_struct("Dataset", 7)?;
+        let mut st = s.serialize_struct("Dataset", 8)?;
         st.serialize_field("name", &self.name)?;
         st.serialize_field("geometry_type", &self.geometry_type)?;
         st.serialize_field("fields", &self.fields)?;
@@ -296,6 +300,11 @@ impl Serialize for Dataset {
         } else {
             st.skip_field("crs_incomplete")?;
         }
+        if self.zm_dropped {
+            st.serialize_field("zm_dropped", &true)?;
+        } else {
+            st.skip_field("zm_dropped")?;
+        }
         st.end()
     }
 }
@@ -307,7 +316,46 @@ pub struct ReadReport {
     pub messages: Vec<String>,
 }
 
+/// What a read says when it drops Z or M values (see [`Dataset::zm_dropped`]): from `features` of
+/// them when counted, else from the source as a whole.
+pub fn zm_note(features: Option<u64>) -> String {
+    let what = match features {
+        Some(1) => "1 feature had Z or M values (heights or measures), which were".to_string(),
+        Some(n) => format!("{n} features had Z or M values (heights or measures), which were"),
+        None => "its Z or M values (heights or measures) were".to_string(),
+    };
+    format!("{what} dropped: RustGIS keeps x and y only, so exports won't have them")
+}
+
+/// What an export of `layers` says when any lost Z or M values on import, or `None`: one notice,
+/// naming them (the first few) and counting them. `target` names what was written (a file, or the
+/// text returned).
+pub fn zm_export_note<'a>(layers: impl IntoIterator<Item = &'a Dataset>, target: &str) -> Option<String> {
+    let names: Vec<&str> = layers.into_iter().filter(|ds| ds.zm_dropped).map(|ds| ds.name.as_str()).collect();
+    match names.as_slice() {
+        [] => None,
+        [one] => Some(format!("{target}: its geometry has no Z or M values, which were dropped when {one} was read")),
+        _ => {
+            let shown = names.iter().take(5).copied().collect::<Vec<_>>().join(", ");
+            let more = if names.len() > 5 { format!(" and {} more", names.len() - 5) } else { String::new() };
+            Some(format!(
+                "{target}: its geometry has no Z or M values for {} layers ({shown}{more}), which were dropped when they were read",
+                names.len()
+            ))
+        }
+    }
+}
+
 impl Dataset {
+    /// Marks the dataset as having lost the Z or M values of `features` features (none: nothing)
+    /// and says so in `report`.
+    pub(crate) fn drop_zm(&mut self, report: &mut ReadReport, features: usize) {
+        if features > 0 {
+            self.zm_dropped = true;
+            report.messages.push(zm_note(Some(features as u64)));
+        }
+    }
+
     /// Creates an empty, complete dataset whose coordinates are assumed to be WGS 84.
     pub fn new(name: impl Into<String>, geometry_type: GeometryType, fields: Vec<Field>) -> Self {
         Dataset {
@@ -318,6 +366,7 @@ impl Dataset {
             source: None,
             crs: None,
             crs_incomplete: false,
+            zm_dropped: false,
             windowed: false,
         }
     }

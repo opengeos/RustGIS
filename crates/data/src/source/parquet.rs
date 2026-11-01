@@ -130,6 +130,8 @@ fn remote_reader(file: &Arc<Remote>) -> Result<Arc<RemoteFile>> {
 }
 
 impl ParquetSource {
+    /// Opens a GeoParquet from its `geo` metadata: geometry column, types, bbox and coordinate
+    /// system, noting Z or M values (which reading drops).
     fn new(reader: Arc<dyn FileReader>, name: &str, remote: Option<Arc<Remote>>) -> Result<Self> {
         let md = reader.metadata();
         let schema = md.file_metadata().schema_descr();
@@ -202,8 +204,20 @@ impl ParquetSource {
             Some(e) => reproject.extent_to_lonlat(&e),
             None => covering.map(|c| reproject.extent_to_lonlat(&groups_extent(md, c))).unwrap_or(Extent::EMPTY),
         };
+        // Types such as "Point Z" (every geometry has Z or M values when every type does), or a bbox
+        // with Z bounds. Without types (any geometry), the first rows are looked at below.
+        let types: Vec<&str> = col_meta
+            .and_then(|c| c.get("geometry_types"))
+            .and_then(|t| t.as_array())
+            .into_iter()
+            .flatten()
+            .filter_map(|v| v.as_str())
+            .collect();
+        let has_zm = |v: &&str| v.ends_with(" Z") || v.ends_with(" M") || v.ends_with(" ZM");
+        let all_zm = !types.is_empty() && types.iter().all(has_zm);
+        let zm = types.iter().any(has_zm) || col_meta.and_then(|c| c.get("bbox")).and_then(|b| b.as_array()).is_some_and(|b| b.len() == 6);
         let count = u64::try_from(md.file_metadata().num_rows()).ok();
-        let info = SourceInfo {
+        let mut info = SourceInfo {
             name: name.to_string(),
             format: "GeoParquet",
             geometry_type,
@@ -213,13 +227,44 @@ impl ParquetSource {
             crs: reproject.label(),
             indexed: covering.is_some(),
             notes,
+            zm_dropped: false,
         };
+        // An empty file loses nothing.
+        if zm && count != Some(0) {
+            info.drop_zm(if all_zm { count } else { None });
+        }
+        let untyped = types.is_empty() && !zm;
         let mut src =
             ParquetSource { info, reader, geom_col, field_cols, covering, reproject, remote, exact: false, group_rows: MAX_GROUP_ROWS };
+        if untyped {
+            match src.peek_zm() {
+                Some(true) => src.info.drop_zm(None),
+                Some(false) => {}
+                None => src.info.notes.push("couldn't tell whether it has Z or M values, which RustGIS doesn't keep".into()),
+            }
+        }
         if src.info.geometry_type == GeometryType::None {
             src.info.geometry_type = super::peek_kind(&src);
         }
         Ok(src)
+    }
+
+    /// Whether any of the first 16 geometries has Z or M values; `None` when they can't be read
+    /// here (a remote file's first row group not fetched yet).
+    fn peek_zm(&self) -> Option<bool> {
+        let md = self.reader.metadata();
+        if md.num_row_groups() == 0 {
+            return Some(false);
+        }
+        if let Some(file) = &self.remote
+            && !want_chunks(file, md, &[0], &[self.geom_col]).ok()?
+        {
+            return None;
+        }
+        let rows = usize::try_from(md.row_group(0).num_rows()).unwrap_or(0).min(16);
+        let rg = self.reader.get_row_group(0).ok()?;
+        let geoms = read_bytes(rg.as_ref(), self.geom_col, &vec![true; rows]).ok()?;
+        Some(geoms.iter().filter_map(|b| b.as_deref()).any(wkb::has_zm))
     }
 }
 
