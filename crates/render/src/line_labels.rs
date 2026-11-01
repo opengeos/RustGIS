@@ -147,6 +147,12 @@ impl Line {
         Some(Line { fwd: Path::new(line, false)?, rev: Path::new(line, true)? })
     }
 
+    /// Upright local direction at a preview anchor, even when the text cannot fit there.
+    pub(super) fn direction(&self, at: f32) -> Option<f32> {
+        let (a, b) = (self.fwd.at(at - 0.5)?, self.fwd.at(at + 0.5)?);
+        Some(rustgis_tiles::symbols::upright(angle(a, b)))
+    }
+
     /// Its length in screen points.
     pub(super) fn length(&self) -> f32 {
         self.fwd.length()

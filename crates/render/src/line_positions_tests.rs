@@ -133,13 +133,7 @@ fn rendering_retries_only_opted_in_nonrepeated_line_labels() {
         assert!(before.labels.iter().any(|l| l.text == "BLOCKER"), "{:?}", before.labels);
         let exported = render_complete(&mut map, &view).unwrap();
         assert!(exported.labels.iter().any(|l| l.text == "BLOCKER"), "export labels: {:?}", exported.labels);
-        if let Ok(dir) = std::env::var("RUSTGIS_LINE_LABEL_EVIDENCE_DIR") {
-            std::fs::write(format!("{dir}/{placement:?}-before.png"), render_png(&mut map, &view).unwrap()).unwrap();
-        }
         map.layer_mut(id).unwrap().labels.default.other_positions = true;
-        if let Ok(dir) = std::env::var("RUSTGIS_LINE_LABEL_EVIDENCE_DIR") {
-            std::fs::write(format!("{dir}/{placement:?}-after.png"), render_png(&mut map, &view).unwrap()).unwrap();
-        }
         for (bearing, pitch) in [(0.0, 0.0), (35.0, 0.0), (20.0, 30.0)] {
             let view = View { camera: Camera { bearing, pitch, ..view.camera }, ..view };
             let r = render(&mut map, &view).unwrap();
@@ -476,4 +470,39 @@ fn tilted_icons_turn_once_for_both_ready_and_deferred_labels() {
         assert!((icon.angle.unwrap() - std::f32::consts::FRAC_PI_2).abs() < 1e-4);
         assert_eq!((icon.x, icon.y), (200.0, 200.0));
     }
+}
+
+#[test]
+fn an_unplaced_tilted_curve_uses_the_visible_anchors_own_direction() {
+    let mut c = curved(&[(20.0, 100.0), (220.0, 100.0), (220.0, 300.0)]);
+    let curves = c.curves.as_mut().unwrap();
+    curves.positions = vec![200.0, 300.0];
+    // The text cannot fit: retain a preview without laying out glyphs. The midpoint is
+    // hidden and the next position is on a vertical segment with a different direction.
+    Arc::get_mut(&mut curves.spec).unwrap().advances = vec![500.0; 4];
+    label_places::LAYOUTS.with(|n| n.set(0));
+    let c = tilt_candidate(c, &|x, y| (y > 150.0).then_some((x + (y - 200.0) * 0.25, y))).unwrap();
+    label_places::LAYOUTS.with(|n| assert_eq!(n.get(), 0));
+    let p = place_labels(vec![c], Vec::new(), 500.0, 400.0, false);
+    assert!(p.labels.is_empty());
+    assert_eq!(p.unplaced.len(), 1);
+    let preview = &p.unplaced[0];
+    assert_eq!((preview.x, preview.y), (220.0, 200.0));
+    assert!((preview.angle.unwrap() - 1.0_f32.atan2(0.25)).abs() < 1e-4);
+}
+
+#[test]
+fn an_invalid_locked_straight_slot_never_invents_a_middle_preview() {
+    let (mut map, id, view) = map_with_line(false);
+    map.layer_mut(id).unwrap().labels.default.other_positions = true;
+    map.label_display.locked = true;
+    map.label_display.show_unplaced = true;
+    render(&mut map, &view).unwrap();
+    assert!(!map.label_lock.as_ref().unwrap().is_empty());
+    // A stale or malformed lock cannot name a real place. There is no accurate preview
+    // to draw, even when View Unplaced is on; the valid lock's geographic anchor stays put.
+    map.label_lock.as_mut().unwrap()[0].1 = u8::MAX;
+    let r = render(&mut map, &view).unwrap();
+    assert!(r.labels.is_empty());
+    assert!(r.unplaced.is_empty());
 }

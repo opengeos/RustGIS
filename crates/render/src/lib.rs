@@ -1845,6 +1845,8 @@ struct Candidate {
     label: PlacedLabel,
     priority: f64,
     key: rustgis_map::LabelKey,
+    // Ready slots and deferred curve positions are mutually exclusive. Slot 0 is the
+    // own place; alternatives keep slots 1.. even when invalid (locks name these slots).
     alternatives: Vec<LabelPlace>,
     curves: Option<label_places::Curves>,
     line: Option<LinePlaces>,
@@ -1858,6 +1860,7 @@ struct Candidate {
 struct LinePlaces {
     anchors: Vec<Option<Coord>>,
     deduplicate: bool,
+    // Other camera bands for the same key, each retaining its own placement slots.
     fallbacks: Vec<Candidate>,
 }
 
@@ -3805,8 +3808,7 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
                             let key = (lid, label_id(row), ci, 0);
                             let repeat = class.repeat.map(|r| r * 1.33 * label_factor);
                             let try_others = class.other_positions && repeat.is_none();
-                            let saved_anchor =
-                                lock.as_ref().and_then(|_| map.label_lock_line_anchors.get(&key)).copied().filter(|_| try_others);
+                            let saved_anchor = lock.as_ref().and(map.label_lock_line_anchors.get(&key)).copied().filter(|_| try_others);
                             let (line, locked_at) = if let Some(anchor) = saved_anchor {
                                 let target = match &globe {
                                     Some(globe) => globe.forward(anchor),
@@ -3831,6 +3833,10 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
                                 None => line_labels::positions(line.length(), width, overrun),
                             };
                             let anchors = |positions: &[f32]| {
+                                // Back-project only while locking is requested, never on ordinary frames or replay.
+                                if !display.locked || lock.is_some() {
+                                    return Vec::new();
+                                }
                                 positions
                                     .iter()
                                     .map(|d| {
@@ -3853,8 +3859,7 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
                                     let angle = line.parallel(width, overrun, locked_at).map(|(_, _, a)| a);
                                     // The preview is also View Unplaced's middle when every curve fails.
                                     places.push((0, cx, cy, angle, Vec::new()));
-                                    let locked =
-                                        lock.as_ref().and_then(|k| k.get(&(lid, label_id(row), ci, 0))).map(|won| usize::from(*won));
+                                    let locked = lock.as_ref().and_then(|k| k.get(&key)).map(|won| usize::from(*won));
                                     curves = Some(label_places::Curves::new(
                                         std::sync::Arc::new(label_places::CurveSpec {
                                             line: line.clone(),
@@ -3939,7 +3944,9 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
                                         (lx, ly, angle, glyphs) = (at.x, at.y, at.angle, at.glyphs);
                                     } else if won > 0 && !is_point && curves.is_none() {
                                         // Do not slide a locked line to its middle when its saved place
-                                        // cannot be represented. Point alternatives have a fixed shape.
+                                        // cannot be represented. Without a valid saved place there is also
+                                        // no truthful View Unplaced preview; never invent one at the middle.
+                                        // Point alternatives have a fixed shape.
                                         continue;
                                     }
                                     Vec::new()
@@ -4686,12 +4693,9 @@ fn line_near_anchor(ctx: &Ctx<'_>, parts: &[Vec<Coord>], anchor: (f32, f32), ove
 /// own place, or else the first of its alternatives in sight, is where it goes; the rest in sight
 /// are left to try. Left out with none in sight, or its icon out of sight.
 fn tilt_candidate(mut c: Candidate, at: &(impl Fn(f32, f32) -> Option<(f32, f32)> + Clone + Send + Sync + 'static)) -> Option<Candidate> {
-    // turn_with handles the curved label icon angle; the ready path leaves it here.
-    let curved = c.curves.is_some();
     if let Some(curves) = &mut c.curves {
-        let (x, y) = curves.anchor_in(at)?;
-        turn_with(&mut c.label, at);
-        (c.label.x, c.label.y) = (x, y);
+        let mut preview = curves.preview_in(&mut c.label, at)?;
+        preview.swap(&mut c.label);
         curves.project(at.clone());
     } else {
         let mut first = None;
@@ -4709,7 +4713,7 @@ fn tilt_candidate(mut c: Candidate, at: &(impl Fn(f32, f32) -> Option<(f32, f32)
         c.alternatives = alternatives;
     }
     if let Some(i) = &mut c.label.icon {
-        if !curved && let Some(a) = i.angle {
+        if let Some(a) = i.angle {
             i.angle = Some(turned_angle(i.x, i.y, a, at).unwrap_or(a));
         }
         (i.x, i.y) = at(i.x, i.y)?;
@@ -4718,6 +4722,8 @@ fn tilt_candidate(mut c: Candidate, at: &(impl Fn(f32, f32) -> Option<(f32, f32)
 }
 
 /// Project every possible text place, retaining deferred curved layouts until placement.
+/// `at` must succeed for the main label and its icon (the turned-view caller is infallible).
+/// Alternative glyph positions may fail; their slots stay invalid rather than being renumbered.
 fn turn_candidate(c: &mut Candidate, at: impl Fn(f32, f32) -> Option<(f32, f32)> + Clone + Send + Sync + 'static) {
     turn_with(&mut c.label, &at);
     if let Some((x, y)) = at(c.label.x, c.label.y) {

@@ -46,15 +46,20 @@ impl Curves {
         self.changes.push(Change::Shift(dx, dy));
     }
 
-    /// The first in-sight anchor (middle first) for a tilted view's label; no character layout.
-    pub fn anchor_in(&self, at: &impl Fn(f32, f32) -> Option<(f32, f32)>) -> Option<(f32, f32)> {
+    /// The first in-sight preview, with its own line direction projected at its source anchor;
+    /// no character layout. Even a too-short stretch has a tangent for View Unplaced.
+    pub fn preview_in(&self, template: &mut PlacedLabel, at: &impl Fn(f32, f32) -> Option<(f32, f32)>) -> Option<LabelPlace> {
+        let width = line_labels::curved_len(&self.spec.advances, self.spec.gap);
         for (i, d) in self.positions.iter().enumerate() {
             if self.locked.is_some_and(|won| won != i) {
                 continue;
             }
             let Some((x, y)) = self.spec.line.anchor(*d) else { continue };
-            if let Some(p) = at(x, y) {
-                return Some(p);
+            let angle =
+                self.spec.line.parallel(width, self.spec.overrun, Some(*d)).map(|(_, _, a)| a).or_else(|| self.spec.line.direction(*d));
+            let mut preview = LabelPlace { x, y, angle, glyphs: Vec::new() };
+            if preview.transform(template, at) {
+                return Some(preview);
             }
         }
         None

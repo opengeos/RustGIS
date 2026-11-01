@@ -271,6 +271,7 @@ pub(crate) fn with_labels(s: &mut Session, p: &Value, f: impl FnOnce(&mut Labeli
     l.labels = labels;
     if relock {
         s.map_mut().label_lock = None;
+        s.map_mut().label_lock_line_anchors.clear();
     }
     Ok(Value::Null)
 }
