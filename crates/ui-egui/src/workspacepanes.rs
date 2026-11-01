@@ -490,10 +490,6 @@ pub struct Reducing {
     pub result: std::sync::Arc<std::sync::Mutex<Option<Result<Vec<u8>, String>>>>,
 }
 
-/// A summary that has finished, added to the map (or its error kept for the pane): called
-/// every frame, whatever pane is in view, so a run lands though the Time Series pane closed or
-/// its layer went. `true` while one is still running.
-#[cfg(not(target_arch = "wasm32"))]
 /// The area between a profile's line and its base, as one quad (two triangles) per segment: a
 /// filled path is drawn as a fan from its first point, which only fills a convex shape, and the
 /// area under a profile rarely is.
@@ -510,6 +506,10 @@ fn area_under(line: &[egui::Pos2], base: f32, colour: Color32) -> egui::Mesh {
     mesh
 }
 
+/// A summary that has finished, added to the map (or its error kept for the pane): called
+/// every frame, whatever pane is in view, so a run lands though the Time Series pane closed or
+/// its layer went. `true` while one is still running.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn land_summary(app: &mut RustGisApp) -> bool {
     use std::sync::atomic::Ordering;
     let Some(r) = &app.ws.reducing else { return false };
