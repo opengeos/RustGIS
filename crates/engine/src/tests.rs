@@ -12337,6 +12337,37 @@ fn lidar_point_clouds() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+/// A preview of an oversized cloud must never become a successful whole-data result.
+#[test]
+fn lidar_sample_refuses_exports_and_statistics() {
+    let dir = std::env::temp_dir().join(format!("rustgis-lidar-limit-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("oversized.las");
+    let count = rustgis_data::lidar::MAX_POINTS as u32 + 1;
+    // Only a few records are needed: the header must retain its count even if the file ends early.
+    let mut bytes = las_bytes(&[(10.0, 50.0, 300.0, 2), (10.5, 50.5, 310.0, 2)]);
+    bytes[107..111].copy_from_slice(&count.to_le_bytes());
+    std::fs::write(&path, bytes).unwrap();
+    let mut s = Session::new(Project::default());
+    let added = s.run("layer.addData", &json!({"path": path})).unwrap();
+    assert_eq!(added["streamed"], true);
+    let id = added["layer"].as_u64().unwrap() as u32;
+    let output = dir.join("out.geojson");
+    for (command, params) in [
+        ("share.exportLayer", json!({"layer": id, "path": output})),
+        ("gp.run", json!({"tool": "summaryStatistics", "params": {"input": "oversized", "field": "z"}})),
+        ("layer.loadAll", json!({"layer": id})),
+        ("layer.addData", json!({"path": path, "stream": false})),
+    ] {
+        let error = s.run(command, &params).unwrap_err();
+        assert!(error.contains(&count.to_string()), "{command}: {error}");
+        assert!(error.contains(&rustgis_data::lidar::MAX_POINTS.to_string()), "{command}: {error}");
+    }
+    assert!(!output.exists());
+    assert_eq!(s.map().layers.len(), 1);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 /// A Zarr store in a temporary folder: `t` over three monthly steps (days since 2001-01-01: 0,
 /// 31, 59) on a 3 × 4 grid, step `k`'s values `100·k + i`.
 #[cfg(not(target_arch = "wasm32"))]
