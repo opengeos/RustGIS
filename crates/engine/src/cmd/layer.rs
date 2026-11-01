@@ -3041,6 +3041,9 @@ fn add_cog_window(s: &mut Session, p: &Value, url: &str) -> CmdResult {
     }
     // Kept in the project as a GeoTIFF of the window: a cloud-optimised one, which keeps a colour
     // table; one it can't write (a palette with no index left for no-data) is kept plain, and said so.
+    // Neither writes more bands than colour (or grey and alpha) takes: the others are said.
+    let left_out = rustgis_data::raster::cogwrite::bands_written(&r, 0).map_or(0, |b| r.bands.len().saturating_sub(b.len()));
+    let band_count = r.bands.len();
     let bytes = match rustgis_data::raster::cogwrite::write(&r, 0) {
         Ok(bytes) => bytes,
         Err(why) => {
@@ -3057,6 +3060,13 @@ fn add_cog_window(s: &mut Session, p: &Value, url: &str) -> CmdResult {
     s.notify(format!("{added}: a {width} × {height} window of {of}, cells of {size:.1}{unit}, read by range from its address"), false);
     if let Some(c) = finer {
         s.notify(format!("{added}: cellSize {c} is finer than the file's finest cells ({size:.1}{unit}): the full image is read"), false);
+    }
+    if left_out > 0 {
+        let kept = band_count - left_out;
+        s.notify(
+            format!("{added}: the project keeps {kept} of its {band_count} bands: {left_out} band(s) are left out once it is reopened"),
+            false,
+        );
     }
     if unplaced > 0 {
         s.notify(

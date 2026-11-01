@@ -22009,7 +22009,7 @@ fn merge_distinguishes_case_sensitive_file_paths() {
 }
 
 /// A box given −180° to 180° over a file stored 0° to 360° is shifted into its range; one across
-/// the file's seam is refused (#1210).
+/// the file's seam is refused (#1204).
 #[test]
 fn a_window_box_takes_the_files_longitudes() {
     use crate::cmd::layer::box_in_file_longitudes as fit;
@@ -22114,7 +22114,11 @@ fn a_cog_window_comes_in_as_a_raster() {
     assert!(v.width() < 1.0 && v.height() < 1.0, "{v:?}");
     // Each band is read: two bands, and no colour table for them.
     let (two, _) = serve_ranges(example_with(&Example { size: 512, tile: 256, bands: 2, ..Example::default() }));
+    let mark = s.notice_mark();
     s.run("layer.addUrl", &json!({"url": format!("{two}/two.tif"), "bbox": [10.0, 45.0, 10.5, 45.5], "name": "Two"})).unwrap();
+    // The project keeps one of them, and says so.
+    let said: Vec<String> = s.notices_since(mark).iter().map(|n| n.text.clone()).collect();
+    assert!(said.iter().any(|n| n == "Two: the project keeps 1 of its 2 bands: 1 band(s) are left out once it is reopened"), "{said:?}");
     let w2 = raster(&s, "Two");
     assert_eq!((w2.band_count(), w2.value(0, 10, 5), w2.value(1, 10, 5)), (2, Some(15.0), Some(25.0)));
     assert!(!matches!(w2.color, ColorHint::Palette(_)), "{:?}", w2.color);
@@ -22141,6 +22145,8 @@ fn a_cog_window_comes_in_as_a_raster() {
     s.run("project.openText", &json!({"text": text})).unwrap();
     let w = raster(&s, "Window");
     assert_eq!((w.width, w.value(0, 10, 5)), (256, Some(15.0)));
+    let w2 = raster(&s, "Two");
+    assert_eq!((w2.band_count(), w2.value(0, 10, 5)), (1, Some(15.0)));
     let cover = raster(&s, "Cover");
     assert!(matches!(cover.color, ColorHint::Palette(_)));
     assert_eq!(cover.bands[0].class_name(15.0), Some("Pasture"));

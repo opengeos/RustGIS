@@ -262,7 +262,8 @@ pub struct Raster {
     /// a stand-in until the picture is placed or georeferenced, and says nothing about the ground.
     pub georeferenced: bool,
     /// What reading it left out or cut (a colour table, names), one line a kind with a count,
-    /// for whoever adds it to the map to say (AGENTS.md, Never silent). Empty when read whole.
+    /// for whoever adds it to the map to say (AGENTS.md, Never silent). Empty when nothing was
+    /// left out.
     pub lost: Vec<String>,
     transformer: Transformer,
     extent: Extent,

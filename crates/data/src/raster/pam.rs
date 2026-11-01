@@ -151,7 +151,7 @@ pub fn parse(text: &str) -> Option<Pam> {
 }
 
 /// The band descriptions a GeoTIFF holds itself, in GDAL's metadata tag (`GDAL_METADATA`, 42112),
-/// where GDAL and rasterio write them: `None` when it isn't such a document or describes no band.
+/// where GDAL and rasterio write them: `None` when it names no band and loses nothing.
 /// Its `sample` counts from 0. Class names may be dataset items named `CLASS_<value>`, as the
 /// MapBiomas files on Source Cooperative have them: they name band 1's classes, however many
 /// bands the file has.

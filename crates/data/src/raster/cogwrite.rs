@@ -200,6 +200,12 @@ fn plan(r: &Raster, band: usize) -> Result<Plan> {
     })
 }
 
+/// The bands [`write`] keeps of `r` with `band` asked for, 0-based: the colour bands, grey and
+/// alpha, or `band` alone; an error when it can't write `r`.
+pub fn bands_written(r: &Raster, band: usize) -> Result<Vec<usize>> {
+    plan(r, band).map(|p| p.bands)
+}
+
 /// One image of the file: the full one (factor 1) or an overview.
 struct Level {
     w: u32,
