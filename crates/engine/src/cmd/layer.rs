@@ -2813,7 +2813,9 @@ fn part_not_there(ext: &str, url: &str, e: &str) -> bool {
 fn keyed(url: &str) -> bool {
     // A key, token or signature in the query is what redaction takes out; a query like `?v=2`
     // carries none.
-    crate::sources::redact(url) != url || rustgis_data::s3_address::is_wrapper(url)
+    // (Redaction drops a fragment too, which carries no key.)
+    let bare = url.split('#').next().unwrap_or(url);
+    crate::sources::redact(bare) != bare || rustgis_data::s3_address::is_wrapper(url)
 }
 
 /// A part that arrived: itself, or `None` for an optional one that a web page answered for (an

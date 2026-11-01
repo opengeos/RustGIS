@@ -9339,6 +9339,9 @@ fn shapefile_by_its_shp_address() {
     // So with a query that carries no key (a version, a download flag).
     let r = s.run("layer.addUrl", &json!({"url": format!("{base}/s3/v.shp?v=2"), "name": "S3 v2"})).unwrap();
     assert_eq!(r["features"], 1, "{r}");
+    // And with a fragment, which carries no key either.
+    let r = s.run("layer.addUrl", &json!({"url": format!("{base}/s3/rios.shp#parte"), "name": "S3 frag"})).unwrap();
+    assert_eq!(r["features"], 1, "{r}");
     // Parts answered with a web page are done without, and said; a .dbf answered so is refused.
     let r = s.run("layer.addUrl", &json!({"url": format!("{base}/spa/rios.shp"), "name": "SPA"})).unwrap();
     assert_eq!(r["features"], 1, "{r}");
