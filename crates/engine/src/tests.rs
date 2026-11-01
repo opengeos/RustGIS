@@ -3789,6 +3789,15 @@ fn terrain_is_set_from_a_dem_or_tiles() {
         t.run("layer.remove", &json!({})).unwrap();
         assert!(t.map().view.terrain.is_none());
         assert!(t.notices.last().unwrap().text.contains("was removed"), "{:?}", t.notices.last());
+        // So does removing a group that holds it.
+        t.run("layer.addDataBytes", &json!({"fileName": "dem.tif", "data": dem_b64()})).unwrap();
+        let dem = t.map().layers.iter().find(|l| l.is_raster()).map(|l| l.id).unwrap();
+        let group = t.run("group.add", &json!({"name": "Relevo", "layers": [dem]})).unwrap()["group"].clone();
+        t.active_layer = Some(dem);
+        t.run("map.terrain", &json!({})).unwrap();
+        t.run("group.remove", &json!({"group": group})).unwrap();
+        assert!(t.map().view.terrain.is_none());
+        assert!(t.notices.last().unwrap().text.contains("was removed"), "{:?}", t.notices.last());
     }
     // Renaming the DEM keeps the terrain on it.
     s.run("layer.rename", &json!({"name": "Relevo"})).unwrap();

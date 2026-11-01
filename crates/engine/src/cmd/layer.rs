@@ -3108,9 +3108,25 @@ pub(crate) fn drop_layers(s: &mut Session, ids: &[u32]) {
     // The tile layers drawn over them keep their place.
     m.release_tiles(ids);
     m.layers.retain(|l| !ids.contains(&l.id));
+    terrain_follows_removal(s, &names);
     for n in &names {
         legends_follow_layer(s, n, None);
     }
+}
+
+/// After layers called `names` are removed: a terrain drawn from one of them would lose its
+/// relief, or take another layer's heights by that name, so it is turned off, and said.
+fn terrain_follows_removal(s: &mut Session, names: &[String]) {
+    let Some(dem) = terrain_dem(s).filter(|d| names.iter().any(|n| n.eq_ignore_ascii_case(d))) else { return };
+    s.map_mut().view.terrain = None;
+    let said = if named_layers(s, &dem) > 0 {
+        format!(
+            "Terrain turned off: one of the layers called '{dem}' was removed, so which one gives the heights can't be told; turn Terrain on again"
+        )
+    } else {
+        format!("Terrain turned off: its DEM '{dem}' was removed")
+    };
+    s.notify(said, false);
 }
 
 fn remove(s: &mut Session, p: &Value) -> CmdResult {
@@ -3129,12 +3145,7 @@ fn remove(s: &mut Session, p: &Value) -> CmdResult {
     }
     let next = m.layers.get(at.min(m.layers.len().saturating_sub(1))).map(|l| l.id);
     s.set_layer_selection(next.into_iter().collect(), next);
-    // A terrain drawn from a removed layer (or from a name it shared) would lose its relief, or
-    // take another layer's heights: it is turned off, and said.
-    if let Some(dem) = terrain_dem(s).filter(|d| names.iter().any(|n| n.eq_ignore_ascii_case(d))) {
-        s.map_mut().view.terrain = None;
-        s.notify(format!("Terrain turned off: its DEM '{dem}' was removed"), false);
-    }
+    terrain_follows_removal(s, &names);
     // A legend that left it out forgets it.
     for name in names {
         legends_follow_layer(s, &name, None);
