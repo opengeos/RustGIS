@@ -11,6 +11,7 @@ This guide walks through RustGIS by task. Each page covers one part of the app:
 | [Cartography](cartography.md) | Symbology, labeling, layer effects and graphics |
 | [Editing](editing.md) | Creating and modifying features, data design, the clipboard and pop-ups |
 | [Analysis](analysis.md) | Selection and SQL queries, geoprocessing, the GeoLibre tools, guided workflows, imagery, data cubes and time series |
+| [Expressions](expressions.md) | The expression language of queries, filters and Calculate Field: grammar, operators, functions |
 | [Layouts and Reports](layouts.md) | Page layouts, map series, reports, presentations and notebooks |
 | [Sharing](sharing.md) | Exports, packages and open-format web maps, layers, styles and scenes |
 | [Workspace](workspace.md) | Linked views, the Browser view, animation, profiles, offline areas, customizing the ribbon |
@@ -27,7 +28,8 @@ This guide walks through RustGIS by task. Each page covers one part of the app:
   (Start, New, Open, Save, Save As and About).
 - **Quick Access Toolbar** (top left): New, Open, Save, Undo and Redo, plus any commands you add
   under **Settings › Customize › Quick Access**.
-- **Layers pane** (left): the map's layers in drawing order, with their legends. Tick a layer to
+- **Layers pane** (left): the map's layers in drawing order, with their legends. A new layer goes
+  on top, whatever its kind (a feature, raster or web layer, an analysis result). Tick a layer to
   show or hide it; drag it up or down to change the drawing order; right-click it to zoom to it,
   rename or remove it and more. The entire layer block, including its expanded legend and
   classes, is split 50/50: drop in its upper half to insert above, or its lower half to insert
@@ -53,23 +55,32 @@ This guide walks through RustGIS by task. Each page covers one part of the app:
   group or zoom to a layer take a list in `layer`, or the picked layers when it is left out.
   **Group layers** to keep related ones together, such as one dataset drawn as several layers
   with their own visibility ranges: right-click a layer and pick **Group › New Group**, or move
-  it into a group that already exists. A group folds open and closed with its arrow; its box
-  shows or hides all its layers at once (each keeps its own box), and its menu renames it, sets a
-  transparency over its layers' own, ungroups it (its layers stay) or removes it with its layers.
-  Drag a layer onto a group's row, or between its layers, to put it in the group; drag it out
-  of the group's rows to take it out. Drag the group's row to move all its layers in the drawing
-  order. Scripts and the AI Assistant build groups with `group.add`, `group.set`,
-  `group.scaleRange` (a visibility range on top of each layer's own), `group.move`,
-  `group.expand`, `group.ungroup`, `group.remove` and `layer.group`.
-  **Copy Layer** (or **Copy Group**, with its layers) from its menu and **Paste Layer** (or
-  **Paste Group**) it on a layer (above it), a group or the map's name above the list
-  (at the top, also when the map has no layers yet), after switching to another map if you like,
-  or on a map in the Browser (at the top). The copy keeps its source, symbology, labels,
+  it into a group that already exists. Groups nest, up to eight levels (*Base map › Hydrography
+  › Rivers*): a new group made from layers that are all in one group goes inside it. A group
+  folds open and closed with its arrow; its box shows or hides all its layers at once, its
+  subgroups' too (each keeps its own box), and its menu renames it, sets a transparency over its
+  layers' own, ungroups it (its layers and subgroups go up one level) or removes it with its
+  layers and subgroups. The visibility, transparency and visibility range of every group above a
+  layer apply to it.
+  Drag a layer or group onto a group's row to put it in that group, or between rows to put it
+  in the group of the row below; drag it out of the group's rows to take it out. Drag a group's
+  row to move all its layers in the drawing order. Like a word processor's outline, a layer's or
+  group's menu has **Indent** (into the group just above it, as its last item) and **Outdent**
+  (out of its group, just below it); ++alt+shift+right++ and ++alt+shift+left++ indent and
+  outdent the active layer, ++alt+shift+up++ and ++alt+shift+down++ move it one step, past a
+  subgroup at once. Scripts and the AI Assistant build groups with `group.add` (`parent` puts it
+  in another), `group.set`, `group.scaleRange` (a visibility range on top of each layer's own),
+  `group.move`, `group.setParent`, `group.indent`, `group.outdent`, `group.expand`,
+  `group.ungroup`, `group.remove`, `layer.group`, `layer.indent` and `layer.outdent`.
+  **Copy Layer** (or **Copy Group**, with its layers and subgroups) from its menu and **Paste
+  Layer** (or **Paste Group**) it on a layer (above it), a group or the map's name above the
+  list (at the top, also when the map has no layers yet), after switching to another map if you
+  like, or on a map in the Browser (at the top). The copy keeps its source, symbology, labels,
   transparency, scale range, definition query, display filters and mask, but not its selection,
   and a name the map already has gets " copy". Pasting into the same map duplicates the layer. A
-  mask whose layer the map lacks is cleared, and said. Groups don't nest: pasted into a group (on
-  it, or on one of its layers), a copied group's layers join it at the top. Scripts use
-  `layer.copy` and `layer.paste`.
+  mask whose layer the map lacks is cleared, and said. Pasted into a group (on it, or on one of
+  its layers), the copies go in it at the top, copied groups too. Scripts use `layer.copy` and
+  `layer.paste`.
   The Style and Data tabs act on the layer selected here. The tabs at the top of the left pane
   switch it between **Layers**, **Browser** and **Data Sources** (also in **View › Windows**).
   The planet button above the list switches the map between the Earth and other celestial bodies.
@@ -112,7 +123,7 @@ ribbon, arrows at its ends scroll it.
 | **Data** | Layer Templates, Data Source (Repair Source); for a feature layer: Definition Query, Table, Selection, Data Design, Archiving, Relationship and Export; for a raster layer: Information and Export; then Offline and Feature Cache |
 | **Style** | For the layer selected in Layers. A feature layer: Visibility Range, Effects, Drawing, Drawing Effects, Extrusion for polygons (with Faces and Light and Shadow once on) and Layer. A raster layer: Visibility Range, Effects, Compare, Raster Effects, Rendering, Enhancement and Layer. Both: Styles |
 | **Labeling** | For the feature layer selected in Layers: Labels (Label, Properties), Label Class (Class, Field), Text Symbol (Size, Color, Bold, Halo), Label Placement and Label Range. Whatever is selected: Map Labeling (Lock, Pause, View Unplaced, Convert) |
-| **Edit** | Manage Edits (Edit, Save, Undo, Redo, Status, Settings, Templates, Topology), Snapping, Features (Create, Delete, Edit Vertices, Modify), Tools, Elevation, Corrections, Graphics, Graphics and Text, Clipboard |
+| **Edit** | Manage Edits (Edit, Save, Undo, Redo, Status, Save to PostGIS and Discard PostGIS Edits on the desktop while a [PostGIS layer is loaded for editing](data.md#editing-postgis-tables), Settings, Templates, Topology), Snapping, Features (Create, Delete, Edit Vertices, Modify), Tools, Elevation, Corrections, Graphics, Graphics and Text, Clipboard |
 | **Analyze** | Geoprocessing (History, Tools, Model Builder, Script, SQL, Environments), Tasks (the Tasks pane; Task: Record Task, New Task From History, Import Task, run a task), AI (AI Assistant), Portal (Feature Analysis, Raster Analysis), Workflows, Raster (Raster Functions, Function Editor), Tools (the tool gallery), Selection, Notebook, the imagery groups (Ortho Mapping, Reality Mapping, Alignment, Image Analysis, Image Classification, Imagery Sharing, Mensuration, Imagery Tools) |
 | **View** | Display (Graticule, Dark Mode, GPU Rendering), View (Globe, Projection, Global; Local on the desktop), Effects, Scene, Windows, Navigation, Link, Workspace, Animation, Time (Time Slider), Profile (Profile; Time Series on the desktop) |
 | **Publish** | While a layout is open, its groups first (Page, Map Frames, Map Surrounds, Shapes, Text, Export); then Report, Presentation, Output (Export Map, Export Features, Print Map, Capture To Clipboard, Report, Presentation, Export To 3D), Package, Share As, Layout, Save As, Thumbnail |
@@ -193,6 +204,8 @@ with `{"index":0,"path":"/data/tiles.pmtiles"}`. Tile archives can also be selec
 | ++delete++ | Delete selected features; with Edit Vertices, the chosen vertex; in a layout, the selected element |
 | ++ctrl+d++ | Duplicate the selected layout element |
 | Arrow keys / ++shift++ + arrow keys | Nudge the selected layout element / nudge it further |
+| ++alt+shift+right++ / ++alt+shift+left++ | Indent the active layer into the group above it / outdent it out of its group |
+| ++alt+shift+up++ / ++alt+shift+down++ | Move the active layer up / down one step in the Layers pane |
 | ++ctrl+c++ / ++ctrl+x++ / ++ctrl+v++ | Copy / Cut / Paste features |
 
 On macOS, ++cmd++ takes the place of ++ctrl++. **Help › Shortcuts** lists them all in the app,

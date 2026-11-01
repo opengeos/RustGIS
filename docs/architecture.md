@@ -50,13 +50,44 @@ unimplemented, todo and unreachable lints. Readers treat file contents and comma
 exercise engine commands and built-in geoprocessing tools; some file-writing and network
 commands are skipped.
 
+## Never silent
+
+When a reader, writer, tool or command can't represent something, approximates it or drops it, it
+says so in a notice: what was lost, how much and where. Notices go through `Session::notify`,
+which the app shows, the CLI prints and Python returns from `take_notices`. Commands pass on the
+notes readers return, and geoprocessing tools report theirs in `ToolResult::messages`. A result
+that would be unusable is an error instead. Older code doesn't yet report every loss; each one
+found is treated as a bug.
+
+## Pure Rust
+
+RustGIS's engine and apps are written in Rust and run without GDAL, PROJ or any other GIS
+library installed. GDAL, DuckDB and the `geolibre` program are optional extras: on the desktop,
+when they are installed, RustGIS calls them to read [more formats](user-guide/data-formats.md#formats-read-through-gdal),
+run DuckDB queries and run the [GeoLibre tools](user-guide/analysis.md#geolibre-tools). In the web
+app the GeoLibre tools run in the browser instead, through geolibre-rust's WASI runner. Some
+dependencies do compile C code into the build: the Zstandard decoder (`zstd-sys`,
+desktop and browser), SQLite (`libsqlite3-sys` through `rusqlite`, desktop), the TLS cryptography
+libraries (`aws-lc-sys` and `ring`, desktop) and GeographicLib's geodesic routines for the
+azimuthal equidistant projection (`proj4rs-geodesic`, desktop). Building them needs a C
+compiler; building the web app needs clang for Zstandard.
+
 ## Secrets
 
-`Services::secrets` is the only way to the OS credential store. The desktop app implements it
-with the login Keychain on macOS, Windows Credential Manager (persistence Local), and the Secret
-Service (GNOME Keyring, KWallet) over pure-Rust D-Bus on Linux and the BSDs. It is `None` in the
-browser and the CLI, where callers keep a secret for the session only, as before. Crates below
-`apps/` use only the `rustgis_data::secrets` trait and never an OS API.
+`Services::secrets` gives the desktop app its OS credential store: the login Keychain on macOS,
+Windows Credential Manager (persistence Local), and the Secret Service (GNOME Keyring, KWallet)
+over pure-Rust D-Bus on Linux and the BSDs. It is `None` in the browser, and the session's store
+is `None` on the command line and in Python unless `--use-saved-secrets` / `use_saved_secrets`
+asks for it. Only `rustgis-keychain` uses an OS API; other crates use only the
+`rustgis_data::secrets` trait. CLI and Python call `rustgis_engine::prefs::opt_in` once to read
+the desktop's preferences, load its saved connections without writing changes back, and install
+the lazy store. The generic `rustgis_data::secrets::Reporting` wrapper warns once on failure and
+stops retrying an unavailable backend. The preferences module also owns desktop writes, refuses
+to overwrite unreadable or malformed preferences, and returns read errors for callers to report
+without preference values. Assistant API keys additionally require the desktop's Remember
+preference and matching provider/address; an environment key wins. The CLI uses shared assistant
+preference names and only reads a saved API key for a prompt, never for account management or
+model listing.
 
 - **Keys.** The service is `RustGIS`. The account is `owner/name` with a lowercase owner (for
   example `assistant/<provider>` or `connection/<id>`); each feature defines its own. Values are
@@ -68,6 +99,11 @@ browser and the CLI, where callers keep a secret for the session only, as before
 - **Blocking.** A call can wait on an OS prompt or D-Bus. Make it on a user action or a worker
   thread, never every frame, and keep the value in memory for the session. Don't access one
   account from two threads at once.
+  Python releases the GIL for commands, rendering, data reads and lock waits. A process-wide
+  native-operation gate preserves serialization across Python sessions because driver
+  activations are process-global; a per-session mutex protects each session's state. Diagnostics
+  are logged only after both locks are released. Non-throwing `rustgis` logging cannot replace
+  an operation's result or original error.
   The Assistant queues legacy API-key migrations once at startup and serializes its keychain
   reads, writes and deletions on a worker. An existing keychain key takes precedence over a
   legacy preference. The preference is removed only after a successful read of that key or a
@@ -76,6 +112,15 @@ browser and the CLI, where callers keep a secret for the session only, as before
   the requested bucket's explicit-grant status. Copy only that login and grant boolean, not
   the grant list; parse and validate addresses and prepare signatures outside the lock.
   Keychain calls and network I/O never run under the registry lock.
+- **Earthdata Login token.** `rustgis_tiles::earthdata::set_secret_store` gets `Services::secrets`
+  from `RustGisApp::with_services`, and `prefs::opt_in`'s store for the command line and Python. `earthdata.login` with
+  `remember` keeps the token at `earthdata/token`, and without it (or when the store refuses
+  it) deletes the remembered one; `earthdata.logout` always deletes it. The token is read back
+  once per store given, on the first
+  request to an Earthdata data host or when the NASA Earthaccess pane opens (on a worker), never
+  over a token typed this session. An expired token is deleted, not sent, and the pane and the
+  refusal message ask for a new one. The token and its store are process-global, like the
+  session token before them.
 - **ChatGPT sign-in.** The desktop app gives its store to `chatgpt::set_secret_store` at start.
   The keychain keeps only each registration's refresh token, `chatgpt/<client_id>/<subject>`,
   with the `rev` its entry in `chatgpt-auth.json` names (any other is out of date and never
@@ -94,8 +139,9 @@ browser and the CLI, where callers keep a secret for the session only, as before
   it.
 - **macOS.** The system asks again for access when the app's code signature changes, which
   happens with unsigned or re-signed builds.
-- **Tests.** Use `MemorySecrets`, and `MemorySecrets::failing(..)` for error paths. The desktop
-  backend's smoke test is `#[ignore]`d: `cargo test -p rustgis keychain_round_trip -- --ignored`.
+- **Tests.** Use `MemorySecrets`, and `MemorySecrets::failing(..)` for error paths. The shared
+  backend's smoke test is `#[ignore]`d:
+  `cargo test -p rustgis-keychain keychain_round_trip -- --ignored`.
 
 ## Quality gates
 

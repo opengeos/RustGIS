@@ -18,6 +18,7 @@ use rustgis_data::source::{Batch, FeatureSource, Request, SourceInfo};
 use rustgis_geom::Extent;
 use serde::{Deserialize, Serialize};
 
+mod render_lod;
 mod window;
 
 /// Retained streamed rows and geometry caches per map; excludes scratch and render/export copies.
@@ -54,6 +55,9 @@ pub struct SourceLayer {
     handle: Option<Arc<dyn FeatureSource>>,
     #[serde(skip)]
     window: Option<Window>,
+    /// Whole-source thinning decisions shared by render snapshots, independent of view rows.
+    #[serde(skip)]
+    render_lod: Arc<Mutex<render_lod::Decisions>>,
     #[serde(skip)]
     pending: Option<Arc<Pending>>,
     /// Projection used for this disposable window's geometry cache.
@@ -124,6 +128,205 @@ pub struct PostgisOrigin {
     /// The coordinate system given for a geometry that doesn't say.
     #[serde(default)]
     pub crs: Option<String>,
+}
+
+/// A PostGIS table a layer was loaded from whole to be edited: what saving its edits writes to
+/// (desktop only). The layer's feature ids are the table's key.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PostgisEdit {
+    /// The connection (never with its password), the table and the family loaded.
+    pub origin: PostgisOrigin,
+    /// The table's integer primary key column.
+    pub key: String,
+    /// The SRID of the table's geometry.
+    pub srid: i32,
+    /// Whether the user it was loaded as may insert, update and delete rows.
+    pub writable: bool,
+    /// The SQL condition the rows were loaded with, if any (loaded again with it when edits
+    /// are discarded).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub condition: Option<String>,
+    /// The most rows loaded.
+    #[serde(default)]
+    pub limit: usize,
+    /// Each loaded row's version and what it held, by its key, as read: saving checks the
+    /// database against them, so a row changed or deleted by someone else since is a conflict,
+    /// not overwritten.
+    #[serde(default)]
+    pub versions: Versions,
+}
+
+/// A GeoPackage feature table loaded whole for desktop editing.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct GpkgEdit {
+    /// Absolute when loaded; relative to a project saved beside it.
+    pub path: String,
+    pub table: String,
+    /// Its INTEGER PRIMARY KEY column.
+    pub key: String,
+    pub geometry: String,
+    /// The source SRS when these rows were loaded.
+    pub srs_id: i64,
+    /// The declared geometry type (uppercase) and Z/M flags when these rows were loaded.
+    /// Missing in a project means unknown: saving refuses until Discard Edits reloads them.
+    #[serde(default)]
+    pub geometry_type: String,
+    #[serde(default)]
+    pub z: i64,
+    #[serde(default)]
+    pub m: i64,
+    /// The table's durable revision, checked before saving pending inserts.
+    pub revision: String,
+    pub writable: bool,
+    #[serde(default)]
+    pub limit: usize,
+    /// Every column's stored fingerprint and the loaded feature's hash, by key.
+    pub versions: Versions,
+}
+
+/// How a loaded row is told apart from the same row edited: a hash of its geometry and
+/// attributes (FNV-1a over their JSON, the same in every build).
+pub fn row_hash(f: &rustgis_data::Feature) -> u64 {
+    /// FNV-1a over the bytes written to it, kept as they come (no buffer per row).
+    struct Fnv(u64);
+    impl std::io::Write for Fnv {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0 = buf.iter().fold(self.0, |h, b| (h ^ u64::from(*b)).wrapping_mul(0x0100_0000_01b3));
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut h = Fnv(0xcbf2_9ce4_8422_2325);
+    // As before, a row that can't be written hashes as no bytes.
+    if serde_json::to_writer(&mut h, &(&f.geometry, &f.attrs)).is_err() {
+        return 0xcbf2_9ce4_8422_2325;
+    }
+    h.0
+}
+
+/// A loaded row: its source version or fingerprint and [`row_hash`] as read.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RowVersion {
+    pub version: i64,
+    pub hash: u64,
+}
+
+/// Loaded rows by key, shared until changed like a dataset's features: an undo snapshot copies
+/// a pointer, not the map.
+#[derive(Clone, Default, PartialEq)]
+pub struct Versions(Arc<std::collections::BTreeMap<u64, RowVersion>>);
+
+impl Versions {
+    /// The row with key `id`, if it was loaded.
+    pub fn get(&self, id: u64) -> Option<RowVersion> {
+        self.0.get(&id).copied()
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// Whether two are the same rows in memory (one cloned from the other).
+    pub fn shares(&self, other: &Versions) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+
+    /// Whether anything but this holds the same rows (a layer, an undo step).
+    pub fn held_elsewhere(&self) -> bool {
+        Arc::strong_count(&self.0) > 1
+    }
+
+    /// The keys and rows, in key order.
+    pub fn iter(&self) -> impl Iterator<Item = (u64, RowVersion)> + '_ {
+        self.0.iter().map(|(k, v)| (*k, *v))
+    }
+}
+
+impl FromIterator<(u64, RowVersion)> for Versions {
+    fn from_iter<I: IntoIterator<Item = (u64, RowVersion)>>(it: I) -> Versions {
+        Versions(Arc::new(it.into_iter().collect()))
+    }
+}
+
+impl std::fmt::Debug for Versions {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Versions({} rows)", self.0.len())
+    }
+}
+
+/// Saved as `[[key, version, hash], …]` (JSON object keys would be text).
+impl Serialize for Versions {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.collect_seq(self.0.iter().map(|(k, r)| (k, r.version, r.hash)))
+    }
+}
+
+impl<'de> Deserialize<'de> for Versions {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Versions, D::Error> {
+        Vec::<(u64, i64, u64)>::deserialize(d).map(|v| v.into_iter().map(|(k, version, hash)| (k, RowVersion { version, hash })).collect())
+    }
+}
+
+/// What changed in a source layer since it was loaded (or last saved), by
+/// comparing its features with the rows as read.
+#[derive(Debug, Default)]
+pub struct RowChanges {
+    /// Features of loaded rows that differ from them, with the rows' versions.
+    pub updates: Vec<(rustgis_data::Feature, i64)>,
+    /// Loaded rows no feature holds any more: their keys and versions.
+    pub deletes: Vec<(u64, i64)>,
+    /// Features of no loaded row.
+    pub inserts: Vec<rustgis_data::Feature>,
+    /// Where each of `inserts` is among the features.
+    pub insert_rows: Vec<usize>,
+}
+
+impl RowChanges {
+    pub fn is_empty(&self) -> bool {
+        self.updates.is_empty() && self.deletes.is_empty() && self.inserts.is_empty()
+    }
+}
+
+impl Versions {
+    /// What changed in `features` since the rows were read. A feature whose id is a loaded row's
+    /// is that row (once: a copy with the same id is new).
+    pub fn changes(&self, features: &[rustgis_data::Feature]) -> RowChanges {
+        let mut out = RowChanges::default();
+        let mut seen = std::collections::HashSet::new();
+        for (i, f) in features.iter().enumerate() {
+            match self.get(f.id) {
+                Some(row) if seen.insert(f.id) => {
+                    if row_hash(f) != row.hash {
+                        out.updates.push((f.clone(), row.version));
+                    }
+                }
+                _ => {
+                    out.inserts.push(f.clone());
+                    out.insert_rows.push(i);
+                }
+            }
+        }
+        out.deletes = self.iter().filter(|(k, _)| !seen.contains(k)).map(|(k, r)| (k, r.version)).collect();
+        out
+    }
+}
+
+/// The loaded rows' new baseline after a save or load.
+pub fn versions_of(features: &[rustgis_data::Feature], old: &Versions, saved: &std::collections::HashMap<u64, i64>) -> Versions {
+    let mut seen = std::collections::HashSet::new();
+    features
+        .iter()
+        .filter_map(|f| {
+            let version = saved.get(&f.id).copied().or_else(|| old.get(f.id).map(|r| r.version))?;
+            seen.insert(f.id).then(|| (f.id, RowVersion { version, hash: row_hash(f) }))
+        })
+        .collect()
 }
 
 /// A MySQL or MariaDB table a layer reads live.
@@ -414,9 +617,30 @@ impl SourceLayer {
         Ok(new)
     }
 
+    /// A source that can be read whole a chunk at a time, for an export.
+    pub fn visit_source(&self) -> Option<Arc<dyn FeatureSource>> {
+        self.handle.as_ref().filter(|h| h.visits_chunks()).cloned()
+    }
+
     /// A source capable of a complete, ordered render traversal.
     pub fn chunk_source(&self) -> Option<Arc<dyn FeatureSource>> {
         self.handle.as_ref().filter(|h| h.streams_chunks()).cloned()
+    }
+
+    /// Reuses a complete source's thinning decision for a projection and LOD level. Both
+    /// outcomes are retained across render snapshots; failed calculations are retried. The
+    /// bounded cache follows the open handle, and explicit source resets discard it.
+    pub fn cached_thinning(
+        &self,
+        projection: &str,
+        level: i32,
+        calculate: impl FnOnce() -> rustgis_data::Result<bool>,
+    ) -> rustgis_data::Result<bool> {
+        let Some(handle) = &self.handle else { return calculate() };
+        // Calculations insert only on success, so an escaped source panic leaves a valid
+        // cache. Recover the guard so later frames can cache successful decisions again.
+        let mut cache = self.render_lod.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        cache.get_or_try_insert(handle, projection, level, calculate)
     }
 
     /// Retained interaction bytes assigned by the map, or the standalone default.
@@ -693,6 +917,12 @@ impl SourceLayer {
 
     /// Forgets the window, so the next view reads again (after the source changes).
     pub fn reset(&mut self) {
+        self.render_lod = Default::default();
+        self.reset_window();
+    }
+
+    /// Drops disposable view rows while retaining decisions about the unchanged full source.
+    pub(crate) fn reset_window(&mut self) {
         self.window = None;
         self.pending = None;
         self.ready_cache = None;
@@ -884,4 +1114,93 @@ pub fn set_waker(f: impl Fn() + Send + Sync + 'static) {
 /// Bumped whenever a background read finishes, so a cached map image knows to redraw.
 pub fn generation() -> u64 {
     GENERATION.load(Ordering::Relaxed)
+}
+
+#[cfg(test)]
+mod tests {
+    /// Reopening this same layer must invalidate populated decisions even without `reset`.
+    #[test]
+    fn reopening_a_populated_thinning_cache_uses_the_new_handle() {
+        let mut ds = rustgis_data::Dataset::new("source", rustgis_data::GeometryType::Point, vec![]);
+        ds.push(Some(rustgis_data::Geometry::Point(rustgis_geom::Coord::new(0.0, 0.0))), vec![]);
+        let bytes = std::sync::Arc::new(rustgis_data::source::fgb::write(&ds).unwrap());
+        let handle = rustgis_data::source::open_shared("source.fgb", bytes.clone(), None).unwrap();
+        let mut source = super::SourceLayer::from_bytes("source.fgb", bytes, None, handle);
+        assert!(!source.cached_thinning("mercator", 0, || Ok(false)).unwrap());
+        let old_handle = source.handle.clone().unwrap();
+        source.open().unwrap();
+        assert!(!std::sync::Arc::ptr_eq(&old_handle, source.handle.as_ref().unwrap()));
+        assert!(source.cached_thinning("mercator", 0, || Ok(true)).unwrap());
+        assert!(source.cached_thinning("mercator", 0, || panic!("new handle's decision must be cached")).unwrap());
+    }
+
+    #[test]
+    fn postgis_edits_keep_their_row_versions() {
+        let edit = super::PostgisEdit {
+            origin: super::PostgisOrigin { database: "postgres:host=h dbname=g".into(), table: "roads".into(), family: None, crs: None },
+            key: "gid".into(),
+            srid: 3857,
+            writable: true,
+            condition: Some("lanes > 2".into()),
+            limit: 100,
+            versions: [(1, 700), (2, 701), (u64::MAX, 9)]
+                .into_iter()
+                .map(|(k, version)| (k, super::RowVersion { version, hash: k ^ 5 }))
+                .collect(),
+        };
+        let text = serde_json::to_string(&edit).unwrap_or_default();
+        assert!(text.contains("\"versions\":[[1,700,4],[2,701,7],"), "{text}");
+        let back: super::PostgisEdit = serde_json::from_str(&text).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(back, edit);
+        assert_eq!((back.versions.get(2).map(|r| r.version), back.versions.get(3), back.versions.len()), (Some(701), None, 3));
+        // A copy (an undo snapshot) shares the versions.
+        let copy = edit.clone();
+        assert!(std::sync::Arc::ptr_eq(&copy.versions.0, &edit.versions.0));
+    }
+
+    /// The hash is FNV-1a over the row's JSON, the same as the projects saved with it hold.
+    #[test]
+    fn row_hashes_are_fnv_over_the_rows_json() {
+        use rustgis_data::{Coord, Feature, Geometry, Value};
+        let f = Feature {
+            id: 3,
+            geometry: Some(Geometry::Point(Coord { x: 1.5, y: -2.0 })),
+            attrs: vec![Value::Text("Main St".into()), Value::Int(4), Value::Null],
+        };
+        let bytes = serde_json::to_vec(&(&f.geometry, &f.attrs)).unwrap();
+        let fnv = bytes.iter().fold(0xcbf2_9ce4_8422_2325_u64, |h, b| (h ^ u64::from(*b)).wrapping_mul(0x0100_0000_01b3));
+        assert_eq!(super::row_hash(&f), fnv);
+        // And the value itself: a change in how rows are written would show every saved row edited.
+        assert_eq!(super::row_hash(&f), 8_547_063_913_914_077_080);
+    }
+
+    #[test]
+    fn changes_are_what_differs_from_the_rows_as_read() {
+        use rustgis_data::{Coord, Feature, Geometry, Value};
+        let row = |id: u64, name: &str| Feature {
+            id,
+            geometry: Some(Geometry::Point(Coord { x: id as f64, y: 1.0 })),
+            attrs: vec![Value::Text(name.into())],
+        };
+        let loaded = [row(1, "a"), row(2, "b"), row(3, "c")];
+        let edit = super::PostgisEdit {
+            origin: super::PostgisOrigin { database: "postgres:dbname=g".into(), table: "t".into(), family: None, crs: None },
+            key: "id".into(),
+            srid: 4326,
+            writable: true,
+            condition: None,
+            limit: 0,
+            versions: loaded.iter().map(|f| (f.id, super::RowVersion { version: f.id as i64 * 10, hash: super::row_hash(f) })).collect(),
+        };
+        assert!(edit.versions.changes(&loaded).is_empty());
+        // Row 1 as it was, row 2 renamed, row 3 deleted, a new feature and a copy of row 1.
+        let now = [row(1, "a"), row(2, "bee"), row(9, "new"), row(1, "copy")];
+        let c = edit.versions.changes(&now);
+        assert_eq!(c.updates.iter().map(|(f, v)| (f.id, *v)).collect::<Vec<_>>(), vec![(2, 20)]);
+        assert_eq!(c.deletes, vec![(3, 30)]);
+        assert_eq!(c.inserts.iter().map(|f| f.id).collect::<Vec<_>>(), vec![9, 1]);
+        assert_eq!(c.insert_rows, vec![2, 3]);
+        // The hash is the same however often it is taken.
+        assert_eq!(super::row_hash(&now[1]), super::row_hash(&row(2, "bee")));
+    }
 }

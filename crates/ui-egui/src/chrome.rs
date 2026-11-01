@@ -489,13 +489,15 @@ pub fn shortcuts(app: &mut RustGisApp, ctx: &egui::Context) {
     // Behind a dialog (Save changes?, Recover unsaved work?, Command Search…) the keys are the
     // dialog's: Escape answers it rather than switching tools, and Ctrl+N can't start what it
     // asks about.
-    if ctx.memory(|m| m.top_modal_layer()).is_some() {
+    if ctx.memory(|m| m.top_modal_layer()).is_some() || app.ui.shortcut_editor.capturing() {
         return;
     }
     crate::modelbuilder::shortcuts(app, ctx);
-    // The search box was typed in until egui took its focus away on Escape: that Escape clears
-    // the box, not the tool.
-    let typing = ctx.egui_wants_keyboard_input() || crate::searchbox::had_focus(&app.ui.search, ctx.cumulative_pass_nr());
+    // The search box (or a table cell) was typed in until egui took its focus away on Escape:
+    // that Escape clears the box (leaves the cell as it was), not the tool.
+    let pass = ctx.cumulative_pass_nr();
+    let typing =
+        ctx.egui_wants_keyboard_input() || crate::searchbox::had_focus(&app.ui.search, pass) || crate::table::had_focus(&app.table, pass);
     // A text field focused, not any widget (a button reached with Tab): it has an undo of its own.
     let text_field = ctx.text_edit_focused();
     // An element selected in the open layout, for the layout's own keys.
@@ -507,12 +509,25 @@ pub fn shortcuts(app: &mut RustGisApp, ctx: &egui::Context) {
             // While a text field has focus, it keeps the keys it acts on: those without Ctrl (⌘),
             // which type text, and undo and redo, whatever they're bound to (#685), as ModelBuilder
             // leaves them.
-            if (typing && !b.chord.command) || (text_field && b.chord.is_text_undo()) {
+            // Pause unmodified shortcuts during first-person movement, retaining the existing Escape, Home and Delete controls.
+            if (typing && !b.chord.command)
+                || (text_field && b.chord.is_text_undo())
+                || (app.session.map().view.first_person
+                    && !b.chord.command
+                    && !b.chord.alt
+                    && !b.chord.shift
+                    && !matches!(b.chord.key, Key::Escape | Key::Home | Key::Delete))
+            {
                 continue;
             }
             // Duplicating needs a selected layout element, and not a text field being typed in;
             // otherwise the key is left alone.
             if b.command == "layout.duplicateElement" && (!element || typing) {
+                continue;
+            }
+            // With a layout element selected, the arrows nudge it (below), whatever else they run;
+            // the nudge never takes Ctrl (⌘), so a shortcut with it still runs.
+            if element && !b.chord.command && matches!(b.chord.key, Key::ArrowLeft | Key::ArrowRight | Key::ArrowUp | Key::ArrowDown) {
                 continue;
             }
             if i.consume_shortcut(&KeyboardShortcut::new(b.chord.modifiers(), b.chord.key)) {
@@ -632,8 +647,16 @@ pub fn shortcuts(app: &mut RustGisApp, ctx: &egui::Context) {
     }
 }
 
+/// Whether a UI command is available on the current platform.
+pub(crate) fn command_available(id: &str, web: bool) -> bool {
+    !web || !matches!(id, "ui.checkUpdate" | "ui.mcpRelay")
+}
+
 /// The `ui.*` commands Command Search lists: (id, label, ribbon location).
 pub(crate) const UI_COMMANDS: &[(&str, &str, &str)] = &[
+    ("ui.shortcuts.import", "Import Keyboard Shortcuts…", "Settings › Customize › Keyboard Shortcuts"),
+    ("ui.shortcuts.export", "Export Keyboard Shortcuts…", "Settings › Customize › Keyboard Shortcuts"),
+    ("ui.customizeShortcuts", "Keyboard Shortcuts", "Settings › Customize"),
     ("ui.addData", "Add Data…", "Home › Add"),
     ("ui.addDelimited", "Add Delimited Text…", "Home › Add › Add Data"),
     ("ui.addUrl", "Add Data From URL…", "Home › Add › Add Data"),
@@ -708,6 +731,13 @@ fn search_action(id: &str) -> Option<SearchAction> {
         "connection.resolveS3" => Command("ui.s3Connections"),
         "layer.addSql" => Pane(RightPane::Sql),
         "layer.addDatabase" => Dialog("addDatabase"),
+        // Add From Database with Load for editing ticked.
+        "pg.connect" | "pg.addLayer" => Dialog("pgAddLayer"),
+        "pg.saveEdits" => Dialog("pgSave"),
+        "pg.discardEdits" => Dialog("pgDiscard"),
+        "gpkg.addLayer" => Dialog("gpkgAddLayer"),
+        "gpkg.saveEdits" => Dialog("gpkgSave"),
+        "gpkg.discardEdits" => Dialog("gpkgDiscard"),
         "layer.addZarr" => Command("ui.addZarr"),
         "layer.addLayerFile" => OpenItem("layer"),
         "layer.save" => SaveItem("layer"),
@@ -720,9 +750,8 @@ fn search_action(id: &str) -> Option<SearchAction> {
         "layer.repairSource" => Dialog("repairSource"),
         "ui.importShapefile" => Dialog("addShapefile"),
         "layer.definitionQuery" => Dialog("definitionQuery"),
-        "layer.symbology" | "raster.symbology" | "layer.color" | "layer.outline" | "layer.lineStrokes" | "layer.ramp" => {
-            Pane(RightPane::Symbology)
-        }
+        "layer.symbology" | "raster.symbology" | "layer.color" | "layer.outline" | "layer.lineStrokes" | "layer.fillLayers"
+        | "layer.ramp" => Pane(RightPane::Symbology),
         "select.byAttributes" => Dialog("selectByAttributes"),
         "select.rows" => Command("table.open"),
         "edit.addField" => Dialog("addField"),
@@ -734,6 +763,7 @@ fn search_action(id: &str) -> Option<SearchAction> {
         "style.add" => OpenItem("styles"),
         "style.import" => OpenItem("importStyles"),
         "style.importQgis" => OpenItem("qgisStyle"),
+        "project.importGeolibre" => OpenItem("geolibreProject"),
         "project.importQgis" => OpenItem("qgisProject"),
         "style.save" => SaveItem("styles"),
         "ramp.add" => OpenItem("ramps"),
@@ -797,6 +827,7 @@ fn search_action(id: &str) -> Option<SearchAction> {
         "overture.add" => Dialog("overture"),
         "boundaries.add" => Dialog("boundaries"),
         "embeddings.add" | "embeddings.search" => Dialog("embeddings"),
+        "cube.catalog" | "cube.open" => Dialog("dataCubes"),
         "nationalMap.add" => Dialog("nationalMap"),
         "fieldsOfTheWorld.add" => Dialog("fieldsOfTheWorld"),
         "portal.add" | "portal.search" => Command("ui.searchOpenData"),
@@ -813,6 +844,8 @@ fn search_platform_disabled(id: &str, web: bool) -> Option<&'static str> {
     match id {
         "project.addFolder" => Some("folder connections need the desktop app"),
         "layer.addDatabase" => Some("databases are read through DuckDB, a program the browser can't run"),
+        "pg.connect" | "pg.addLayer" | "pg.saveEdits" | "pg.discardEdits" => Some("PostGIS tables are edited in the desktop app"),
+        "gpkg.addLayer" | "gpkg.saveEdits" | "gpkg.discardEdits" => Some("GeoPackage tables are edited in the desktop app"),
         _ => None,
     }
 }
@@ -942,7 +975,7 @@ pub fn command_search(app: &mut RustGisApp, ctx: &egui::Context) {
         for &(id, label, loc) in UI_COMMANDS {
             // The web app always serves the latest release (no Check for Updates button) and is
             // one process a loopback relay could not reach (`ui.mcpRelay` is desktop only).
-            if matches!(id, "ui.checkUpdate" | "ui.mcpRelay") && cfg!(target_arch = "wasm32") {
+            if !command_available(id, cfg!(target_arch = "wasm32")) {
                 continue;
             }
             if ql.is_empty() || label.to_lowercase().contains(&ql) || tl!(label).to_lowercase().contains(&ql) {
@@ -966,7 +999,11 @@ pub fn command_search(app: &mut RustGisApp, ctx: &egui::Context) {
                 let on = why.is_none();
                 let mut b = egui::Button::new(egui::RichText::new(label).size(13.0)).frame(false).min_size(vec2(row_w, 26.0));
                 // The command's shortcut after its location.
-                let keys = if id.contains(':') { String::new() } else { crate::keymap::shortcut_text(ui.ctx(), app, id, &Value::Null) };
+                let keys = if id.contains(':') && !id.starts_with("plugin:") {
+                    String::new()
+                } else {
+                    crate::keymap::shortcut_text(ui.ctx(), app, id, &Value::Null)
+                };
                 let right = match (show_loc, keys.is_empty()) {
                     (true, false) => format!("{loc}   {keys}"),
                     (true, true) => loc.clone(),
@@ -979,6 +1016,20 @@ pub fn command_search(app: &mut RustGisApp, ctx: &egui::Context) {
                 let mut resp = row_button(ui, on, b, 0.0);
                 if let Some(why) = why {
                     resp = resp.on_disabled_hover_text(crate::i18n::fmt("Unavailable: {reason}", &[("reason", tl_raw!(why))]));
+                }
+                let mut customize = false;
+                if (!id.contains(':') || id.starts_with("plugin:")) && crate::shortcutui::can_customize(app, id) {
+                    resp.context_menu(|ui| {
+                        if ui.button(tl!("Keyboard Shortcuts")).clicked() {
+                            customize = true;
+                            ui.close();
+                        }
+                    });
+                }
+                if customize {
+                    app.ui.shortcut_editor.open = true;
+                    app.ui.shortcut_editor.filter = id.clone();
+                    keep = false;
                 }
                 let enter = on && first && ui.input(|i| i.key_pressed(Key::Enter));
                 first &= !on;
@@ -1108,7 +1159,7 @@ pub fn about(app: &mut RustGisApp, ctx: &egui::Context) {
                         .grouped()
                         .into_iter()
                         .map(|(command, params, keys)| {
-                            let keys: Vec<String> = keys.into_iter().map(|c| c.text(mac)).collect();
+                            let keys: Vec<String> = keys.into_iter().map(|c| c.shown(ctx)).collect();
                             (keys.join(" / "), crate::keymap::label(app, command, params))
                         })
                         .collect();
@@ -1196,7 +1247,15 @@ mod tests {
 
     #[test]
     fn desktop_only_search_actions_are_disabled_only_on_the_web() {
-        for id in ["project.addFolder", "layer.addDatabase"] {
+        for id in [
+            "project.addFolder",
+            "layer.addDatabase",
+            "pg.addLayer",
+            "pg.saveEdits",
+            "gpkg.addLayer",
+            "gpkg.saveEdits",
+            "gpkg.discardEdits",
+        ] {
             assert!(search_platform_disabled(id, true).is_some(), "{id} must explain its web restriction");
             assert_eq!(search_platform_disabled(id, false), None, "{id} stays available on desktop");
         }
@@ -1273,6 +1332,61 @@ mod tests {
         h.event(undo);
         h.run();
         assert_eq!(h.state().session.undo_depth(), depth - 1, "no field focused: the project");
+    }
+
+    #[test]
+    fn first_person_preserves_default_controls_and_pauses_custom_single_keys() {
+        let mut app = RustGisApp::with_sample();
+        app.session.map_mut().view.first_person = true;
+        app.run("tool.set", json!({"tool": "select"})).unwrap();
+        app.ui.keymap.assign(crate::keymap::Chord::parse("T").unwrap(), "ui.theme", Value::Null);
+        let before = app.ui.dark;
+        let mut h = egui_kittest::Harness::builder().build_ui_state(
+            |ui, app: &mut RustGisApp| {
+                shortcuts(app, ui.ctx());
+            },
+            app,
+        );
+        h.key_press(Key::T);
+        h.run();
+        assert_eq!(h.state().ui.dark, before);
+        h.key_press(Key::Escape);
+        h.run();
+        assert_eq!(h.state().session.tool.code(), "explore");
+        // Home and Delete must also reach the keymap while navigating.
+        for key in ["Home", "Delete"] {
+            h.state_mut().ui.keymap.assign(crate::keymap::Chord::parse(key).unwrap(), "ui.theme", Value::Null);
+            let before = h.state().ui.dark;
+            h.key_press(Key::from_name(key).unwrap());
+            h.run();
+            assert_ne!(h.state().ui.dark, before);
+        }
+    }
+
+    #[test]
+    fn typing_keeps_shift_and_alt_shortcuts_in_the_text_field() {
+        use egui_kittest::kittest::Queryable;
+        let mut app = RustGisApp::with_sample();
+        for key in ["Shift+T", "Alt+T"] {
+            app.ui.keymap.assign(crate::keymap::Chord::parse(key).unwrap(), "ui.theme", Value::Null);
+        }
+        let before = app.ui.dark;
+        let mut h = egui_kittest::Harness::builder().build_ui_state(
+            |ui, app: &mut RustGisApp| {
+                shortcuts(app, ui.ctx());
+                let label = ui.label("Script");
+                ui.text_edit_singleline(&mut app.workflow.script).labelled_by(label.id);
+            },
+            app,
+        );
+        h.run();
+        h.get_by_role(egui::accesskit::Role::TextInput).focus();
+        h.run();
+        for modifiers in [Modifiers::SHIFT, Modifiers::ALT] {
+            h.key_press_modifiers(modifiers, Key::T);
+            h.run();
+            assert_eq!(h.state().ui.dark, before);
+        }
     }
 
     #[test]

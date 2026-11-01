@@ -14,7 +14,9 @@ pub mod edit;
 pub mod effects;
 pub mod embeddings;
 pub mod geocode;
+pub mod geolibre;
 pub mod gp;
+pub mod gpkg;
 pub mod graphics;
 pub mod group;
 pub mod history;
@@ -27,6 +29,7 @@ pub mod layout;
 pub mod navigate;
 pub mod nldi;
 pub mod notebook;
+pub mod pg;
 pub mod plugins;
 pub mod portals;
 pub mod presentation;
@@ -56,10 +59,12 @@ use serde_json::Value;
 
 use crate::{CommandSpec, Session};
 
+/// Collects the engine command registry, including project importers, for every front end.
 pub fn all() -> Vec<CommandSpec> {
     let mut v = Vec::new();
     v.extend(project::commands());
     v.extend(qgis::commands());
+    v.extend(geolibre::commands());
     v.extend(navigate::commands());
     v.extend(geocode::commands());
     v.extend(directions::commands());
@@ -98,6 +103,8 @@ pub fn all() -> Vec<CommandSpec> {
     v.extend(history::commands());
     v.extend(share::commands());
     v.extend(sql::commands());
+    v.extend(pg::commands());
+    v.extend(gpkg::commands());
     v.extend(plugins::commands());
     v.extend(sharing::commands());
     v.extend(stac::commands());

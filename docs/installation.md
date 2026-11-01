@@ -77,7 +77,8 @@ managers shortly after it is published (winget after Microsoft's review).
 ## From source
 
 RustGIS builds from source with a recent stable Rust toolchain (1.90 or later), a C compiler (for
-the bundled SQLite and the Zstandard decoder) and `curl` (to download the sample data).
+the C code some dependencies bundle; see [Architecture](architecture.md#pure-rust)) and `curl`
+(to download the sample data).
 
 ```sh
 git clone https://github.com/opengeos/RustGIS.git
@@ -205,6 +206,19 @@ cargo xtask web-pwa ../../dist/web   # add the service worker (offline start), a
 
 The service worker is left out of `trunk serve`, so a development build is never served from a
 stale cache.
+
+### Self-host the static build
+
+Download `RustGIS-<version>-web.zip` from the
+[GitHub release](https://github.com/opengeos/RustGIS/releases) and unzip it into a directory of
+its own (or the document root, if the server serves nothing else). Serve it over HTTP, rather
+than opening `index.html` as a local file. For a local preview, run `python3 -m http.server 8080`
+from the extracted directory and open `http://localhost:8080/`.
+
+The archive uses relative URLs, so it can be hosted at the root or under a path such as
+`https://example.com/rustgis/` (with the trailing slash). Use HTTPS, or `localhost` for local
+use, to install the app and start it offline. The ZIP includes the service worker and contains
+no analytics tag.
 
 ### Self-host the web app with Docker
 

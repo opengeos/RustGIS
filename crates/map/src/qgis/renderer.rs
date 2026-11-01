@@ -10,6 +10,7 @@ use roxmltree::Node;
 use super::symbol::{self, Converted};
 use super::{QGIS_SCALE, Report, Style, child, expr, has_effect};
 use crate::color::Ramp;
+use crate::symbol_by::SymbolBy;
 use crate::symbology::{ClassMethod, LineStroke, Renderer, Symbol};
 
 /// The most classes a renderer is imported with: every feature is matched against them.
@@ -49,12 +50,19 @@ fn read_depth(r: Node, layer: &str, style: &mut Style, report: &mut Report, dept
     // The first symbol turned by a field turns the layer's markers.
     let rotation = std::cell::RefCell::new(None);
     let turned = symbols.values().any(|n| symbol::turns_by_field(*n));
+    // Every symbol's data-defined expressions: the first that has any are the layer's.
+    let by: std::cell::RefCell<Vec<SymbolBy>> = std::cell::RefCell::new(Vec::new());
     let read = |n: Node, report: &mut Report| {
         let c = symbol::read(n, reference, turned, layer, report);
         if let (Some(r), Ok(mut had)) = (&c.rotation, rotation.try_borrow_mut())
             && *had.get_or_insert_with(|| r.clone()) != *r
         {
             report.approximated(layer, "marker layers turned by different fields, all turned by the first");
+        }
+        if let Ok(mut all) = by.try_borrow_mut()
+            && !all.contains(&c.by)
+        {
+            all.push(c.by.clone());
         }
         c
     };
@@ -66,11 +74,13 @@ fn read_depth(r: Node, layer: &str, style: &mut Style, report: &mut Report, dept
                 return;
             };
             style.line_strokes = Some(if c.stacked() { c.strokes.clone() } else { Vec::new() });
+            style.fill_layers = Some(c.fills.clone());
             style.renderer = Some(Renderer::Single(c.symbol));
         }
         "nullSymbol" => {
             style.renderer = Some(Renderer::Single(symbol::hidden()));
             style.line_strokes = Some(Vec::new());
+            style.fill_layers = Some(Vec::new());
         }
         "categorizedSymbol" => categorized(r, layer, style, report, &sym),
         "graduatedSymbol" => graduated(r, layer, style, report, &sym),
@@ -89,6 +99,24 @@ fn read_depth(r: Node, layer: &str, style: &mut Style, report: &mut Report, dept
         matches!(kind, "pointCluster" | "pointDisplacement" | "invertedPolygonRenderer" | "mergedFeatureRenderer" | "25dRenderer");
     if style.renderer.is_some() && !wrapper {
         style.marker_rotation = Some(rotation.try_borrow().ok().and_then(|r| r.clone()));
+        let mut all = by.try_borrow().map(|b| b.clone()).unwrap_or_default();
+        // A switched-off class draws nothing: expressions applied to every feature would paint it.
+        let off =
+            r.descendants().any(|n| (n.has_tag_name("category") || n.has_tag_name("range")) && n.attribute("render") == Some("false"));
+        if off && !all.iter().any(SymbolBy::is_empty) {
+            all.push(SymbolBy::default());
+        }
+        // The expressions apply to every feature: kept only when every symbol has the same.
+        let one = match all.as_slice() {
+            [one] => one.clone(),
+            _ => {
+                if all.iter().any(|b| !b.is_empty()) {
+                    report.skipped(layer, "data-defined settings that differ between its classes (or a class switched off)");
+                }
+                SymbolBy::default()
+            }
+        };
+        style.symbol_by = Some(one);
     }
 }
 
@@ -106,7 +134,7 @@ fn field_of(attr: &str, layer: &str, report: &mut Report) -> Option<String> {
 
 /// A switched-off class (`render="false"`): it draws nothing.
 fn switched_off() -> Converted {
-    Converted { symbol: symbol::hidden(), strokes: Vec::new(), rotation: None }
+    Converted { symbol: symbol::hidden(), strokes: Vec::new(), rotation: None, by: Default::default(), fills: Vec::new() }
 }
 
 type SymbolOf<'a> = dyn Fn(Option<&str>, &mut Report) -> Option<Converted> + 'a;
@@ -116,6 +144,7 @@ fn categorized(r: Node, layer: &str, style: &mut Style, report: &mut Report, sym
     let Some(field) = field_of(r.attribute("attr").unwrap_or_default(), layer, report) else {
         // Drawn as one: the first category's symbol.
         if let Some(c) = cats.first().and_then(|c| sym(c.attribute("symbol"), report)) {
+            style.fill_layers = Some(c.fills.clone());
             style.renderer = Some(Renderer::Single(c.symbol));
         }
         return;
@@ -124,6 +153,7 @@ fn categorized(r: Node, layer: &str, style: &mut Style, report: &mut Report, sym
     let (mut class_labels, mut class_strokes) = (BTreeMap::new(), BTreeMap::new());
     let mut other = symbol::hidden();
     let mut other_strokes = Vec::new();
+    let (mut class_fills, mut other_fills) = (BTreeMap::new(), Vec::new());
     for cat in &cats {
         // A switched-off class draws nothing; its symbol isn't read (its field would turn the rest).
         let c = if cat.attribute("render") == Some("false") {
@@ -147,6 +177,7 @@ fn categorized(r: Node, layer: &str, style: &mut Style, report: &mut Report, sym
             if v.is_empty() || v == "NULL" {
                 other = c.symbol;
                 other_strokes = if c.stacked() { c.strokes.clone() } else { Vec::new() };
+                other_fills.clone_from(&c.fills);
                 continue;
             }
             if classes.len() >= MAX_CLASSES {
@@ -159,10 +190,14 @@ fn categorized(r: Node, layer: &str, style: &mut Style, report: &mut Report, sym
             if c.stacked() {
                 class_strokes.insert(v.clone(), c.strokes.clone());
             }
+            if !c.fills.is_empty() {
+                class_fills.insert(v.clone(), c.fills.clone());
+            }
             classes.push((v, c.symbol));
         }
     }
     style.line_strokes = Some(Vec::new());
+    style.fill_layers = Some(Vec::new());
     style.renderer = Some(Renderer::Unique {
         field,
         classes,
@@ -172,6 +207,8 @@ fn categorized(r: Node, layer: &str, style: &mut Style, report: &mut Report, sym
         other_label: None,
         class_strokes,
         other_strokes,
+        class_fills,
+        other_fills,
     });
 }
 
@@ -194,6 +231,7 @@ fn graduated(r: Node, layer: &str, style: &mut Style, report: &mut Report, sym: 
     }
     let Some(field) = field_of(r.attribute("attr").unwrap_or_default(), layer, report) else {
         if let Some((.., c, _)) = ranges.first() {
+            style.fill_layers = Some(c.fills.clone());
             style.renderer = Some(Renderer::Single(c.symbol));
         }
         return;
@@ -212,6 +250,7 @@ fn graduated(r: Node, layer: &str, style: &mut Style, report: &mut Report, sym: 
     report.approximated(layer, "values below the first range or above the last, drawn in the first or last class (QGIS leaves them out)");
     let mut class_labels = BTreeMap::new();
     let mut class_strokes: BTreeMap<usize, Vec<LineStroke>> = BTreeMap::new();
+    let mut class_fills = BTreeMap::new();
     for (i, (.., c, label)) in ranges.iter().enumerate() {
         if let Some(l) = label.as_ref().filter(|l| !l.is_empty()) {
             class_labels.insert(i, l.clone());
@@ -219,8 +258,12 @@ fn graduated(r: Node, layer: &str, style: &mut Style, report: &mut Report, sym: 
         if c.stacked() {
             class_strokes.insert(i, c.strokes.clone());
         }
+        if !c.fills.is_empty() {
+            class_fills.insert(i, c.fills.clone());
+        }
     }
     style.line_strokes = Some(Vec::new());
+    style.fill_layers = Some(Vec::new());
     style.renderer = Some(Renderer::Graduated {
         field,
         breaks: ranges.iter().map(|r| r.1).collect(),
@@ -231,6 +274,7 @@ fn graduated(r: Node, layer: &str, style: &mut Style, report: &mut Report, sym: 
         classes: ranges.len(),
         class_labels,
         class_strokes,
+        class_fills,
     });
 }
 
@@ -287,20 +331,25 @@ fn rules(r: Node, layer: &str, style: &mut Style, report: &mut Report, sym: &Sym
     }
     if simple && let Some(field) = field {
         let mut class_strokes = BTreeMap::new();
+        let mut class_fills = BTreeMap::new();
         let mut class_labels = BTreeMap::new();
         for (v, c, label) in &classes {
             if c.stacked() {
                 class_strokes.insert(v.clone(), c.strokes.clone());
             }
+            if !c.fills.is_empty() {
+                class_fills.insert(v.clone(), c.fills.clone());
+            }
             if let Some(l) = label.as_ref().filter(|l| !l.is_empty() && *l != v) {
                 class_labels.insert(v.clone(), l.clone());
             }
         }
-        let (other_symbol, other_strokes) = match &other {
-            Some(c) => (c.symbol, if c.stacked() { c.strokes.clone() } else { Vec::new() }),
-            None => (symbol::hidden(), Vec::new()),
+        let (other_symbol, other_strokes, other_fills) = match &other {
+            Some(c) => (c.symbol, if c.stacked() { c.strokes.clone() } else { Vec::new() }, c.fills.clone()),
+            None => (symbol::hidden(), Vec::new(), Vec::new()),
         };
         style.line_strokes = Some(Vec::new());
+        style.fill_layers = Some(Vec::new());
         style.renderer = Some(Renderer::Unique {
             field,
             classes: classes.into_iter().map(|(v, c, _)| (v, c.symbol)).collect(),
@@ -310,6 +359,8 @@ fn rules(r: Node, layer: &str, style: &mut Style, report: &mut Report, sym: &Sym
             other_label: None,
             class_strokes,
             other_strokes,
+            class_fills,
+            other_fills,
         });
         return;
     }
@@ -317,6 +368,7 @@ fn rules(r: Node, layer: &str, style: &mut Style, report: &mut Report, sym: &Sym
     if drawn.len() == 1 && drawn.first().is_some_and(|r| r.filters.is_empty()) || drawn.is_empty() {
         if let Some(c) = drawn.first().and_then(|r| sym(r.node.attribute("symbol"), report)) {
             style.line_strokes = Some(if c.stacked() { c.strokes.clone() } else { Vec::new() });
+            style.fill_layers = Some(c.fills.clone());
             style.renderer = Some(Renderer::Single(c.symbol));
         }
         return;
@@ -325,6 +377,7 @@ fn rules(r: Node, layer: &str, style: &mut Style, report: &mut Report, sym: &Sym
         .approximated(layer, format!("its {} rules (filters beyond one field's values), drawn with the first rule's symbol", drawn.len()));
     if let Some(c) = drawn.first().and_then(|r| sym(r.node.attribute("symbol"), report)) {
         style.line_strokes = Some(if c.stacked() { c.strokes.clone() } else { Vec::new() });
+        style.fill_layers = Some(c.fills.clone());
         style.renderer = Some(Renderer::Single(c.symbol));
     }
 }

@@ -26,13 +26,18 @@ mod connectionui;
 #[cfg(not(target_arch = "wasm32"))]
 mod connectui;
 mod cswui;
+mod cubesui;
 mod dialogs;
 mod docpanes;
 mod earthaccessui;
 mod editpanes;
 mod embeddingsui;
 mod failureui;
+mod fieldlists;
+mod fieldmenu;
+mod fill_editor;
 mod geocodeui;
+mod geolibreui;
 mod geometrycalc;
 mod globe_drape;
 mod graphicformat;
@@ -67,6 +72,8 @@ mod scriptcolor;
 mod scriptcomplete;
 mod searchbox;
 mod serviceui;
+mod shortcutfile;
+mod shortcutui;
 mod showme;
 mod sourcespane;
 mod sqlbox;
@@ -99,6 +106,29 @@ pub use rustgis_assistant;
 pub use rustgis_engine;
 pub use widgets::big_split_menu;
 
+/// Reconciles only command-result wrappers, not parameters or other arbitrary JSON.
+/// Script and model results retain their structure while file results become completed.
+fn complete_gp_file(result: Result<Value, String>, id: u64, completed: &Result<Value, String>) -> Result<Value, String> {
+    fn visit(result: &mut Value, id: u64, completed: &Result<Value, String>) -> Result<(), String> {
+        if result.get("download").and_then(Value::as_u64) == Some(id) {
+            *result = completed.as_ref().map_err(Clone::clone)?.clone();
+            return Ok(());
+        }
+        if let Some(ran) = result.get_mut("ran").and_then(Value::as_array_mut) {
+            for step in ran {
+                visit(step, id, completed)?;
+            }
+        }
+        if let Some(result) = result.get_mut("result") {
+            visit(result, id, completed)?;
+        }
+        Ok(())
+    }
+    let mut result = result?;
+    visit(&mut result, id, completed)?;
+    Ok(result)
+}
+
 /// Files read asynchronously (browser uploads, drops) waiting to be opened: (file name, bytes).
 pub type Inbox = std::sync::Arc<std::sync::Mutex<Vec<(String, Vec<u8>)>>>;
 
@@ -113,6 +143,12 @@ pub const SHAPEFILE_PICK: &str = "\u{1}shapefile:";
 /// The `open_async` purpose for a tool's file parameter, followed by the extensions it offers
 /// (`toolfile:nc,nc4`; none for any file).
 pub const TOOL_FILE_PURPOSE: &str = "toolfile:";
+
+/// Marks a returned shortcut picker file; cancellation leaves no pending routing state.
+pub const SHORTCUT_PICK: &str = "\u{1}shortcuts:";
+
+/// Maximum portable shortcut document size: saved overrides plus room for version metadata.
+pub const SHORTCUT_FILE_MAX_BYTES: usize = keymap::MAX_PREF_BYTES + 100;
 
 /// Starts the name of a file the web shell's tool file picker put in the inbox: it goes to the
 /// Tools pane's file parameter, not onto the map.
@@ -224,8 +260,9 @@ pub struct Services {
     /// Opens a file picker for `"data"`, `"project"`, or `"shapefile"`; results land in `inbox`.
     /// Shapefile picks carry [`SHAPEFILE_PICK`] after sidecars are gathered into ZIPs.
     pub open_async: Option<Box<dyn Fn(&str)>>,
-    /// Hands bytes to the user as a download named `file_name`.
-    pub download: Option<Box<dyn Fn(&str, Vec<u8>)>>,
+    /// Offers bytes as a download named `file_name`; success means submission to the host's
+    /// download mechanism. Browsers do not expose confirmation that the file was saved.
+    pub download: Option<Box<dyn Fn(&str, Vec<u8>) -> Result<(), String>>>,
     pub inbox: Option<Inbox>,
     /// Reads a saved preference (`language`, …).
     pub load_pref: Option<Box<dyn Fn(&str) -> Option<String>>>,
@@ -251,6 +288,10 @@ pub struct Services {
     /// `None` turns autosave off: the browser for now, and a second copy of the desktop app
     /// running alongside the first, which mustn't touch its copy.
     pub recovery: Option<Box<dyn RecoveryStore>>,
+    /// Reads the system clipboard's text into the slot (the browser's `navigator.clipboard`,
+    /// which may ask the user first), for a text field's Paste; `None` where the window sends
+    /// it (the desktop) or the browser can't read it (a page not served over HTTPS).
+    pub read_clipboard: Option<Box<dyn Fn(Slot<Result<String, String>>)>>,
     /// Signs in to an ArcGIS portal (its address and an OAuth client id, either blank for ArcGIS
     /// Online and RustGIS's own app) in a pop-up window, putting who signed in, or why not, in the
     /// slot (the browser; the desktop runs `arcgis.signIn`).
@@ -331,6 +372,9 @@ pub struct ServiceBrowse {
     pub filter: String,
     /// The date time-enabled layers are added at (their default when empty).
     pub time: String,
+    /// Time-enabled layers are added at a fixed date (`time`, or their default when empty) rather
+    /// than following the time slider, as they do by default.
+    pub fixed: bool,
     /// Feature layers are asked only for the features crossing the map's view (Only the map's
     /// area), not whole.
     pub area: bool,
@@ -517,6 +561,9 @@ pub struct UiState {
     pub start_with: StartWith,
     /// Whether a file holding several layers asks which to add (#934), or adds them all.
     pub ask_layers: bool,
+    /// Key combinations the native menu bar keeps for itself (macOS: Quit, Close Window, Hide…):
+    /// a shortcut on one would never reach the app, so the shortcut editor refuses them.
+    pub reserved_shortcuts: Vec<egui::KeyboardShortcut>,
     /// Files whose layers are being listed or chosen, the first one shown.
     pub choosing: Vec<layerchooser::Chooser>,
     /// The project last opened or saved on this computer, for Start With › Last Project.
@@ -544,6 +591,11 @@ pub struct UiState {
     pub shortcuts: bool,
     /// The keyboard shortcuts.
     pub keymap: keymap::Keymap,
+    pub(crate) shortcut_editor: shortcutui::Editor,
+    /// Preserve unreadable saved shortcuts until the user explicitly resets them.
+    pub(crate) shortcut_preferences_blocked: bool,
+    /// The shortcut changes are too many to save: they apply only to this session.
+    pub(crate) shortcut_preferences_full: bool,
     pub tab_strip_rect: Option<egui::Rect>,
     /// Where the left and right panes were drawn on the last frame, while they show.
     pub pane_rects: [Option<egui::Rect>; 2],
@@ -617,6 +669,8 @@ pub struct UiState {
     pub stac: stacui::State,
     /// WMS and WMTS layers' legend pictures, as the Layers pane shows them (#942).
     pub tile_legends: tilelegend::Legends,
+    /// A text field's right-click menu: the field it's open on, and the row picked.
+    pub field_menu: fieldmenu::FieldMenu,
     /// S3…: the connection form, the bucket browsed and the listing under way.
     pub s3: s3ui::State,
     /// New/Edit Connection: the form and the Test under way.
@@ -634,6 +688,8 @@ pub struct UiState {
     pub opendata: opendataui::State,
     /// Satellite Embeddings: the dataset, its choices, the read under way and the tiles found.
     pub embeddings: embeddingsui::State,
+    /// Data Cubes: the filters, the period, and what the last action said.
+    pub cubes: cubesui::State,
     /// NASA Earthaccess: the dataset, the granules found and the request under way.
     pub earthaccess: earthaccessui::State,
     /// Add From Service › Sign in to ArcGIS.
@@ -658,6 +714,8 @@ pub struct UiState {
     pub raster_defaults_saved: rustgis_engine::map::RasterDefaults,
     /// Home › Add › Add Data › Zarr…: its store, choices and fetches.
     pub zarr: zarrui::State,
+    /// Independent Zarr reads for imported GeoLibre layers; does not share the picker state.
+    pub geolibre_zarr: Vec<geolibreui::Read>,
     /// A layout picture waiting for its image file (web).
     pub pending_layout_picture: bool,
     /// The corners of a picture graphic waiting for its image file.
@@ -709,6 +767,7 @@ impl UiState {
 }
 
 impl Default for UiState {
+    /// Starts on Home with no pending picker or download, keeping transient imports out of saved state.
     fn default() -> Self {
         UiState {
             tab: "Home".into(),
@@ -725,6 +784,7 @@ impl Default for UiState {
             worldview: i18n::AUTO.into(),
             start_with: StartWith::Sample,
             ask_layers: true,
+            reserved_shortcuts: Vec::new(),
             choosing: Vec::new(),
             last_project: None,
             start_projection: String::new(),
@@ -738,6 +798,9 @@ impl Default for UiState {
             about: false,
             shortcuts: false,
             keymap: keymap::Keymap::default(),
+            shortcut_editor: shortcutui::Editor::default(),
+            shortcut_preferences_blocked: false,
+            shortcut_preferences_full: false,
             tab_strip_rect: None,
             pane_rects: [None; 2],
             copy_out: None,
@@ -764,6 +827,7 @@ impl Default for UiState {
             csw: Default::default(),
             stac: Default::default(),
             tile_legends: Default::default(),
+            field_menu: Default::default(),
             s3: Default::default(),
             connection: Default::default(),
             s3_chooser: Default::default(),
@@ -772,6 +836,7 @@ impl Default for UiState {
             catalogs: Default::default(),
             opendata: Default::default(),
             embeddings: Default::default(),
+            cubes: Default::default(),
             earthaccess: Default::default(),
             arcgis: Default::default(),
             nldi: Default::default(),
@@ -785,6 +850,7 @@ impl Default for UiState {
             connections_saved: 0,
             raster_defaults_saved: Default::default(),
             zarr: Default::default(),
+            geolibre_zarr: Vec::new(),
             hidden_tabs: Vec::new(),
             quick_access: Vec::new(),
             titlebar: None,
@@ -905,14 +971,58 @@ impl RustGisApp {
         keys
     }
 
-    /// A fingerprint of the keymap's key combinations: cheap to take every frame (no
-    /// allocation), it changes when a shortcut is added, removed or rebound, so a caller can
-    /// rebuild [`RustGisApp::command_keys`] only then.
+    /// The keyboard shortcuts of a command run without parameters, in the keymap's order, for a
+    /// native menu to show (the macOS menu bar).
+    pub fn shortcuts_of(&self, command: &str) -> Vec<egui::KeyboardShortcut> {
+        self.ui.keymap.keys_for(command, &Value::Null).map(|c| egui::KeyboardShortcut::new(c.modifiers(), c.key)).collect()
+    }
+
+    /// The command a keyboard shortcut runs, if the keymap gives it one.
+    pub fn shortcut_command(&self, shortcut: egui::KeyboardShortcut) -> Option<String> {
+        let m = shortcut.modifiers;
+        // A chord has no Ctrl apart from ⌘ (the Mac's Ctrl isn't one): ⌃T isn't the bare T.
+        if m.ctrl && !m.command {
+            return None;
+        }
+        let chord = keymap::Chord { command: m.command || m.mac_cmd, alt: m.alt, shift: m.shift, key: shortcut.logical_key };
+        self.ui.keymap.command_for(chord).map(|b| b.command.clone())
+    }
+
+    /// Whether the keyboard shortcut editor is waiting for a key combination to record.
+    pub fn capturing_shortcut(&self) -> bool {
+        self.ui.shortcut_editor.capturing()
+    }
+
+    /// Whether a command exists and can run now: what the ribbon greys out.
+    pub fn command_enabled(&self, command: &str) -> bool {
+        widgets::enabled(self, command)
+    }
+
+    /// A fingerprint of the keymap's key combinations and what they run: cheap to take every
+    /// frame (no allocation), it changes when a shortcut is added, removed or rebound (to
+    /// another key or another command), so a caller can rebuild [`RustGisApp::command_keys`]
+    /// only then.
     pub fn shortcuts_fingerprint(&self) -> u64 {
         use std::hash::{Hash, Hasher};
         let mut h = std::collections::hash_map::DefaultHasher::new();
         for b in &self.ui.keymap.bindings {
             b.chord.hash(&mut h);
+            // And what it runs: a key rebound to another command changes it too.
+            b.command.hash(&mut h);
+            if !b.params.is_null() {
+                // Written straight into the hash: no allocation.
+                struct Feed<'a>(&'a mut std::collections::hash_map::DefaultHasher);
+                impl std::io::Write for Feed<'_> {
+                    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                        self.0.write(buf);
+                        Ok(buf.len())
+                    }
+                    fn flush(&mut self) -> std::io::Result<()> {
+                        Ok(())
+                    }
+                }
+                let _ = serde_json::to_writer(Feed(&mut h), &b.params);
+            }
         }
         self.ui.keymap.bindings.len().hash(&mut h);
         h.finish()
@@ -997,9 +1107,12 @@ impl RustGisApp {
     /// Installs the shell's platform hooks and reads what they keep: preferences, saved
     /// connections and the recovery copy an earlier run left.
     pub fn with_services(mut self, services: Services) -> Self {
-        // Both saved database passwords and S3 keys use the same store, installed before prefs.
+        // Saved database passwords, S3 keys and the remembered Earthdata Login token use the same
+        // store, installed before prefs.
         self.session.database_logins.set_store(services.secrets.clone());
+        rustgis_engine::render::rustgis_tiles::earthdata::set_secret_store(services.secrets.clone());
         self.services = services;
+        shortcutui::load(&mut self);
         sourcespane::load_connections(&mut self);
         autosave::load(&mut self);
         if let Some(lang) = self.services.load_pref.as_ref().and_then(|load| load("language")) {
@@ -1201,8 +1314,12 @@ impl RustGisApp {
 
     /// Opens a file from the inbox: one the `"text"` picker marked ([`DELIMITED_PICK`]) opens Add
     /// Delimited Text for it, or is read with a script's options; one the tool file picker marked
-    /// ([`TOOL_FILE_PICK`]) goes to the Tools pane. Source-CRS picks carry [`SHAPEFILE_PICK`].
+    /// ([`TOOL_FILE_PICK`]) goes to the Tools pane. Source-CRS picks carry [`SHAPEFILE_PICK`];
+    /// shortcut picks carry [`SHORTCUT_PICK`] and open the validated merge preview.
     pub fn open_picked(&mut self, name: &str, bytes: &[u8]) -> Result<Value, String> {
+        if name.starts_with(SHORTCUT_PICK) {
+            return shortcutfile::picked(self, bytes);
+        }
         if let Some(name) = name.strip_prefix(TOOL_FILE_PICK) {
             panes::received_file(self, name, bytes);
             return Ok(Value::Null);
@@ -1239,6 +1356,8 @@ impl RustGisApp {
         }
         // Project items picked or dropped in the browser.
         let item = [
+            (".geolibre", "project.importGeolibre"),
+            (".geolibre.json", "project.importGeolibre"),
             (".rgismap", "map.import"),
             (".rgismpk", "map.import"),
             (".rgislyr", "layer.addLayerFile"),
@@ -1248,6 +1367,7 @@ impl RustGisApp {
             (".rgistemplate", "project.fromTemplate"),
             (".rgistask", "task.import"),
             (".rgisbookmarks", "bookmark.import"),
+            (".rgisshortcuts", "ui.shortcuts.import"),
             (".rgisreport", "report.open"),
             (".rgisrpttemplate", "report.open"),
             (".rgispres", "presentation.import"),
@@ -1266,6 +1386,9 @@ impl RustGisApp {
             return self.run(cmd, json!({"image": base64::engine::general_purpose::STANDARD.encode(bytes)}));
         }
         if let Some(cmd) = self.ui.pending_open.take().or(item) {
+            if cmd == "ui.shortcuts.import" {
+                return shortcutfile::picked(self, bytes);
+            }
             use base64::Engine;
             let mut p = json!({"data": base64::engine::general_purpose::STANDARD.encode(bytes)});
             // A colour ramp file's name tells its format and names its ramp.
@@ -1369,7 +1492,11 @@ impl RustGisApp {
             }
         };
         let file = format!("{stem}.rgis");
-        self.download(&file, text.into_bytes());
+        if let Err(e) = self.services.download.as_ref().ok_or(tl!("no download service"))?(&file, text.into_bytes()) {
+            self.session.project.name = old;
+            return Err(e);
+        }
+        self.session.notify(crate::i18n::fmt("Downloaded {name}", &[("name", &file)]), false);
         if stripped > 0 {
             self.session.notify(
                 crate::i18n::fmt(
@@ -1393,12 +1520,40 @@ impl RustGisApp {
     fn download(&mut self, name: &str, bytes: Vec<u8>) -> bool {
         match &self.services.download {
             Some(d) => {
-                d(name, bytes);
+                if let Err(e) = d(name, bytes) {
+                    self.session.notify(e, true);
+                    return false;
+                }
                 self.session.notify(crate::i18n::fmt("Downloaded {name}", &[("name", name)]), false);
                 true
             }
             None => false,
         }
+    }
+
+    /// Delivers exports from all command entry points, including scripts and the assistant.
+    /// The engine records success only after the service submits the file to the host.
+    fn deliver_gp_files(&mut self, mut requested: Result<Value, String>) -> Result<Value, String> {
+        for (id, name, bytes) in self.session.take_gp_files() {
+            let delivered = match &self.services.download {
+                Some(download) => download(&name, bytes),
+                None => Err(tl!("this build has no download service").into()),
+            };
+            let mut params = json!({"id": id});
+            if let Err(error) = &delivered {
+                params["error"] = json!(error);
+            }
+            let completed = self.session.run("gp.fileDelivered", &params);
+            let result = delivered.and(completed);
+            self.gp.last = Some(match &result {
+                Ok(_) => (true, self.session.project.gp_history.last().map(|h| h.messages.clone()).unwrap_or_default()),
+                Err(error) => (false, vec![error.clone()]),
+            });
+            // gp.fileDelivered reports delivery failures from the history record and its
+            // own acknowledgment errors through Session::run; neither needs a second notice.
+            requested = complete_gp_file(requested, id, &result);
+        }
+        requested
     }
 
     /// The RustGIS logo as a texture (rasterised once from `rustgis_render::logo`).
@@ -1590,7 +1745,16 @@ impl RustGisApp {
         // of another, so it ends when the open layout changes (or layouts come and go).
         let open_layout = |app: &Self| (app.session.active_layout, app.session.project.layouts.len());
         let layout_before = open_layout(self);
-        let r = if id.starts_with("ui.") { self.run_ui(id, &params) } else { self.session.run(id, &params) };
+        // A plugin's command that adds data by address doesn't freeze the app: the download is
+        // left for the frame loop (`ui.addUrl`), as in the browser.
+        let mut r = if id.starts_with("ui.") {
+            self.run_ui(id, &params)
+        } else if id.starts_with(rustgis_engine::plugins::PREFIX) {
+            self.session.run_leaving_downloads(id, &params)
+        } else {
+            self.session.run(id, &params)
+        };
+        r = self.deliver_gp_files(r);
         if r.is_ok() && id == "tool.set" {
             self.map.cancel_sketch();
         }
@@ -1617,6 +1781,9 @@ impl RustGisApp {
                 );
                 self.session.notify(text, true);
             }
+            // A probe still under way is for an address added to the old project: dropped, so
+            // its layer never lands in the new one.
+            self.ui.cog_probes.clear();
         }
         // Undo and redo can move vertices: an index chosen before may now name another vertex.
         // A step moved or deleted, from the pane, Command Search, the assistant or a script: the
@@ -1792,10 +1959,11 @@ impl RustGisApp {
         // updates its step; anything else, a second selection on the same layer included, is a
         // step of its own.
         if let Some(last) = steps.last_mut()
-            && matches!(id, "layer.color" | "layer.outline" | "layer.lineStrokes" | "layer.transparency")
+            && matches!(id, "layer.color" | "layer.outline" | "layer.lineStrokes" | "layer.fillLayers" | "layer.transparency")
             && last.command == id
             && params.get("layer").is_some()
             && last.params.get("layer") == params.get("layer")
+            && ["value", "index", "other"].iter().all(|k| last.params.get(*k) == params.get(*k))
         {
             last.params = params.clone();
             return;
@@ -2166,7 +2334,11 @@ impl RustGisApp {
                     self.map.popup = None;
                 }
             }
+            "ui.shortcuts.set" | "ui.shortcuts.reset" | "ui.shortcuts.export" | "ui.shortcuts.import" => {
+                return shortcutfile::run(self, id, p);
+            }
             "ui.shortcuts" => self.ui.shortcuts = true,
+            "ui.customizeShortcuts" => self.ui.shortcut_editor.open = true,
             // Copy, cut and copy path also put their text on the system clipboard.
             "ui.copy" | "ui.cut" | "ui.copyPath" => {
                 let cmd = match id {
@@ -2214,13 +2386,20 @@ impl RustGisApp {
                 }
             }
             // A project by its web address (a `?project=` link): downloaded off the frame, opened
-            // when it lands, in place of the open project (see `poll_downloads`).
+            // when it lands: native projects replace it; GeoLibre imports add a map (see `poll_downloads`).
             "ui.openUrl" => {
                 let url = p.get("url").and_then(Value::as_str).map(str::trim).filter(|u| !u.is_empty()).ok_or("url is required")?;
+                let url = rustgis_engine::map::geolibre::download_url(url);
+                let url = url.as_str();
                 let slot: Slot<Result<Vec<u8>, String>> = Slot::default();
                 let land = slot.clone();
-                rustgis_engine::render::rustgis_tiles::cache::download(
+                rustgis_engine::render::rustgis_tiles::cache::download_limited(
                     url,
+                    if rustgis_engine::map::geolibre::is_project_file(url) {
+                        rustgis_engine::map::geolibre::MAX_TEXT
+                    } else {
+                        rustgis_engine::render::rustgis_tiles::cache::MAX_DOWNLOAD
+                    },
                     Box::new(move |r| *land.lock().unwrap_or_else(|e| e.into_inner()) = Some(r)),
                 );
                 self.session.notify(i18n::fmt("Opening {url}…", &[("url", url)]), false);
@@ -2252,6 +2431,13 @@ impl RustGisApp {
             // Data by its web address: the dialog, then (with an address) the download, off the
             // frame; it's added when it lands. A PMTiles archive is a tile layer, never downloaded.
             "ui.addUrl" => {
+                if p.get("geolibreZarr").and_then(Value::as_bool) == Some(true) {
+                    if let Err(e) = geolibreui::start(self, p) {
+                        rustgis_engine::cmd::geolibre::discard_pending(&mut self.session, p);
+                        return Err(e);
+                    }
+                    return Ok(Value::Null);
+                }
                 // The connection a Connections tree add is for (named in Recent once it is added).
                 let origin = connectiontree::take_origin(self);
                 let Some(url) = p.get("url").and_then(Value::as_str).map(str::trim).filter(|u| !u.is_empty()) else {
@@ -2262,9 +2448,19 @@ impl RustGisApp {
                 }
                 // A GeoTIFF, FlatGeobuf or GeoParquet: its header (or footer) first, off the
                 // frame; one that can be read in place is, another is downloaded (see
-                // `poll_downloads`).
+                // `poll_downloads`). An address without a file name (an API answering with a
+                // file, such as Vantor's `…/geotiff?…`) is probed as a GeoTIFF too, and downloaded
+                // as before when it doesn't answer as one.
                 let remote = rustgis_engine::data::source::is_remote_name(url);
-                if (remote || rustgis_engine::cmd::layer::is_tiff_url(url)) && p.get("whole").and_then(Value::as_bool) != Some(true) {
+                let tiff = rustgis_engine::cmd::layer::is_tiff_url(url);
+                // A scan (`"as"`, a plugin's or a script's) keeps only the pixels: downloaded
+                // whole.
+                let scan = p.get("as").and_then(Value::as_str) == Some("scan");
+                let unnamed = !remote
+                    && !tiff
+                    && rustgis_engine::cmd::layer::is_unnamed_url(url)
+                    && ["service", "coverage"].iter().all(|k| p.get(*k).and_then(Value::as_bool) != Some(true));
+                if (remote || tiff || unnamed) && !scan && p.get("whole").and_then(Value::as_bool) != Some(true) {
                     let slot: Slot<Result<bool, String>> = Slot::default();
                     let land = slot.clone();
                     if remote {
@@ -2282,7 +2478,10 @@ impl RustGisApp {
                     } else {
                         rustgis_engine::render::rustgis_tiles::cog::probe(
                             url,
-                            Box::new(move |r| *land.lock().unwrap_or_else(|e| e.into_inner()) = Some(r)),
+                            Box::new(move |r| {
+                                let r = if unnamed { Ok(r.unwrap_or(false)) } else { r };
+                                *land.lock().unwrap_or_else(|e| e.into_inner()) = Some(r);
+                            }),
                         );
                     }
                     // An address read through a saved S3 connection is said as the address it wraps.
@@ -2301,13 +2500,25 @@ impl RustGisApp {
                 let url = url.to_string();
                 let slot: Slot<Result<Vec<u8>, String>> = Slot::default();
                 let land = slot.clone();
-                rustgis_engine::render::rustgis_tiles::cache::download(
+                rustgis_engine::render::rustgis_tiles::cache::download_limited(
                     &url,
+                    if p.get("geolibreProject").and_then(Value::as_bool) == Some(true) {
+                        rustgis_engine::map::geolibre::MAX_TEXT
+                    } else {
+                        rustgis_engine::render::rustgis_tiles::cache::MAX_DOWNLOAD
+                    },
                     Box::new(move |r| *land.lock().unwrap_or_else(|e| e.into_inner()) = Some(r)),
                 );
                 let mut q = json!({});
                 for k in ["name", "layer", "crs"] {
                     if let Some(v) = p.get(k).filter(|v| v.as_str().is_some_and(|s| !s.trim().is_empty())) {
+                        q[k] = v.clone();
+                    }
+                }
+                // How the bytes are read, as `layer.addData` takes it (a command asking by
+                // address, such as a plugin's: the dialog gives none of these).
+                for k in ["x", "y", "wkt", "delimiter", "paperSpace", "stream", "as"] {
+                    if let Some(v) = p.get(k).filter(|v| !v.is_null()) {
                         q[k] = v.clone();
                     }
                 }
@@ -2318,6 +2529,15 @@ impl RustGisApp {
                     if p.get(k).and_then(Value::as_bool) == Some(true) {
                         q[k] = json!(true);
                     }
+                }
+                for key in ["geolibreProject", "geolibreLayer"] {
+                    if let Some(value) = p.get(key) {
+                        q[key] = value.clone();
+                    }
+                }
+                // A service layer's bounds, which its features' axes are checked against.
+                if let Some(b) = p.get("bounds").filter(|b| b.is_array()) {
+                    q["bounds"] = b.clone();
                 }
                 if let Some(origin) = &origin {
                     q[connectiontree::ORIGIN] = json!(origin);
@@ -2483,11 +2703,17 @@ impl RustGisApp {
                     self.ui.pending_open = None;
                     open("project");
                     self.ui.backstage = false;
-                } else if let Some(path) = dialogs::pick_open(&["rgis", "rgisx", "rgispkg", "qgs", "qgz"], tl!("Projects (RustGIS, QGIS)"))
-                {
+                } else if let Some(path) = dialogs::pick_open(
+                    &["rgis", "rgisx", "rgispkg", "qgs", "qgz", "geolibre", "json"],
+                    tl!("Projects and JSON data (RustGIS, QGIS, GeoLibre)"),
+                ) {
                     // A QGIS project opens as a new map of this one.
                     let lower = path.to_ascii_lowercase();
-                    let cmd = if lower.ends_with(".qgs") || lower.ends_with(".qgz") { "project.importQgis" } else { "project.open" };
+                    let cmd = if lower.ends_with(".qgs") || lower.ends_with(".qgz") {
+                        "project.importQgis"
+                    } else {
+                        rustgis_engine::project::open_command(&path)
+                    };
                     let r = self.run_by_user(cmd, json!({"path": path}));
                     // Asking to save first: the Project tab stays until the answer, so Cancel
                     // goes back to it.
@@ -2503,7 +2729,11 @@ impl RustGisApp {
             "ui.save" | "ui.saveAs" if self.services.download.is_some() => {
                 let name = format!("{}.rgis", self.session.project.name);
                 if id == "ui.save" && self.ui.web_file.as_deref() == Some(name.as_str()) {
-                    self.save_download(&name)?;
+                    // The keyboard caller discards the result, so the failure is shown here too.
+                    if let Err(error) = self.save_download(&name) {
+                        self.session.notify(error.clone(), true);
+                        return Err(error);
+                    }
                 } else {
                     self.dialogs.open("saveProject", &self.session)?;
                 }
@@ -2638,6 +2868,7 @@ impl RustGisApp {
                     "styles" => ("style.add", &["rgisstyle"], "RustGIS styles"),
                     "ramps" => ("ramp.add", &["rgisramp", "xml", "qml", "txt", "clr", "cpt"], "Colour ramps (RustGIS, QGIS, GDAL, GMT)"),
                     "importStyles" => ("style.import", &["rgislyr", "rgismap", "rgis", "rgisx"], "RustGIS layers, maps and projects"),
+                    "geolibreProject" => ("project.importGeolibre", &["geolibre", "json"], "GeoLibre project"),
                     "qgisProject" => ("project.importQgis", &["qgs", "qgz"], "QGIS project"),
                     "qgisStyle" => ("style.importQgis", &["qml"], "QGIS layer style"),
                     "template" => ("project.fromTemplate", &["rgistemplate"], "RustGIS project template"),
@@ -2651,7 +2882,12 @@ impl RustGisApp {
                 };
                 if let Some(open) = &self.services.open_async {
                     self.ui.pending_open = Some(cmd);
-                    open(if kind == "ramps" { "ramp" } else { "item" });
+                    open(match kind {
+                        "ramps" => "ramp",
+                        "geolibreProject" => "project",
+                        "qgisProject" => "qgisProject",
+                        _ => "item",
+                    });
                 } else if let Some(path) = dialogs::pick_open(exts, tl!(label)) {
                     let r = self.run_by_user(cmd, json!({"path": path}));
                     self.map.invalidate();
@@ -3242,6 +3478,12 @@ impl RustGisApp {
     /// keeping its own name when the address has none). Unlike [`Self::open_bytes`], it never takes
     /// a picker's pending item: the download isn't the file the user is picking.
     fn open_project_bytes(&mut self, file: Option<&str>, bytes: &[u8]) -> Result<Value, String> {
+        if file.is_some_and(rustgis_engine::map::geolibre::is_project_file) {
+            let text = std::str::from_utf8(bytes).map_err(|_| tl!("Not a GeoLibre project").to_string())?;
+            let result = self.run("project.importGeolibre", json!({"text":text}));
+            self.map.invalidate();
+            return result;
+        }
         let package = file.is_some_and(|f| f.to_ascii_lowercase().ends_with(".rgispkg"));
         let text = if package {
             rustgis_engine::cmd::items::package_text(bytes)?
@@ -3260,6 +3502,8 @@ impl RustGisApp {
         r
     }
 
+    /// Consumes completed probes and downloads on the app frame, finalizing imports in their
+    /// reserved map or discarding failed reservations even when another map is active.
     fn poll_data_downloads(&mut self) {
         // GeoTIFFs, FlatGeobufs and GeoParquets whose headers are in: read in place, or
         // downloaded whole.
@@ -3276,6 +3520,10 @@ impl RustGisApp {
             let url = p.get("url").and_then(Value::as_str).unwrap_or("").to_string();
             match r {
                 Ok(true) => {
+                    // A GeoTIFF by its first bytes, whatever its address is named.
+                    if !rustgis_engine::data::source::is_remote_name(&url) {
+                        p["cog"] = json!(true);
+                    }
                     let before = self.session.sources.generation;
                     if self.run("layer.addUrl", p).is_ok() {
                         connectiontree::name_recent(self, before, origin.as_deref());
@@ -3307,6 +3555,7 @@ impl RustGisApp {
                 Ok(bytes) => self.add_landed(serviceui::Landed { id, url, params: p, origin }, bytes),
                 Err(e) => {
                     self.session.download_failed(id);
+                    rustgis_engine::cmd::geolibre::discard_pending(&mut self.session, &p);
                     self.session.notify(if e.starts_with(&url) { e } else { format!("{url}: {e}") }, true);
                 }
             }
@@ -3328,6 +3577,7 @@ impl RustGisApp {
             p["zoom"] = json!(false);
         }
         let before = self.session.sources.generation;
+        let pending = p.clone();
         match self.run("layer.addDownload", p) {
             Ok(r) => {
                 connectiontree::name_recent(self, before, origin.as_deref());
@@ -3336,7 +3586,10 @@ impl RustGisApp {
                 }
                 self.map.invalidate();
             }
-            Err(e) => self.session.notify(if e.starts_with(&url) { e } else { format!("{url}: {e}") }, true),
+            Err(e) => {
+                rustgis_engine::cmd::geolibre::discard_pending(&mut self.session, &pending);
+                self.session.notify(if e.starts_with(&url) { e } else { format!("{url}: {e}") }, true);
+            }
         }
     }
 
@@ -3492,6 +3745,7 @@ impl RustGisApp {
         panes::poll_geolibre(self, ctx);
         panes::poll_plugin_run(self, ctx);
         self.poll_downloads();
+        let _ = self.deliver_gp_files(Ok(Value::Null));
         // A value picked under Dynamic Text lasts while the text tool does, however the tool
         // changes (Esc, another tool, a text placed without Keep Tool, a command).
         if self.session.tool != rustgis_engine::Tool::Graphic("text") {
@@ -3542,6 +3796,7 @@ impl RustGisApp {
         geocodeui::poll(self, ctx);
         navui::poll(self, ctx);
         zarrui::poll(self, ctx);
+        geolibreui::poll(self, ctx);
         pluginsui::poll(self, ctx);
         assistantpane::poll(self, ctx);
         // A project the MCP relay, the assistant or a plugin opened or saved this frame (they run
@@ -3703,6 +3958,8 @@ impl RustGisApp {
         }
         i18n::set_current(self.lang());
         let t = theme::Tokens::get(&ctx);
+        // Before the shortcuts and the fields: the row picked in a text field's menu, as its keys.
+        fieldmenu::play(self, &ctx);
         chrome::shortcuts(self, &ctx);
         panes::follow_layer_filter(self);
         if self.ui.backstage {
@@ -3731,10 +3988,13 @@ impl RustGisApp {
         update::show(self, &ctx);
         showme::tick(self, &ctx);
         chrome::command_search(self, &ctx);
+        shortcutui::show(self, &ctx);
         chrome::about(self, &ctx);
         #[cfg(not(target_arch = "wasm32"))]
         agentthreads::windows(self, &ctx);
         chrome::notices(self, &ctx);
+        // After every field is drawn: one right-clicked opens its menu.
+        fieldmenu::show(self, &ctx);
         if let Some(text) = self.ui.copy_out.take() {
             ctx.copy_text(text);
         }
@@ -3757,7 +4017,32 @@ impl RustGisApp {
 fn project_file_name(url: &str) -> Option<&str> {
     let path = url.split(['?', '#']).next().unwrap_or("");
     let last = path.rsplit('/').next().unwrap_or("");
-    rustgis_engine::project::opens_as_project(last).then_some(last)
+    (rustgis_engine::project::opens_as_project(last) || rustgis_engine::map::geolibre::is_project_file(last)).then_some(last)
+}
+
+/// Tests that fetch through the tile cache take turns: it has one fetcher for the whole process,
+/// and a test that replaces it (`set_fetcher`) would answer another's downloads.
+#[cfg(test)]
+pub(crate) mod fetching {
+    use std::sync::{Mutex, MutexGuard};
+
+    static TURN: Mutex<()> = Mutex::new(());
+
+    /// A test's turn: when it ends, even by failing, addresses are fetched natively again.
+    pub(crate) struct Turn {
+        _held: MutexGuard<'static, ()>,
+    }
+
+    impl Drop for Turn {
+        fn drop(&mut self) {
+            rustgis_engine::render::rustgis_tiles::cache::clear_fetcher();
+        }
+    }
+
+    /// Waits for the tests fetching before this one to end.
+    pub(crate) fn turn() -> Turn {
+        Turn { _held: TURN.lock().unwrap_or_else(|e| e.into_inner()) }
+    }
 }
 
 #[cfg(test)]
@@ -3846,6 +4131,10 @@ const DEFAULTS_TO_ACTIVE_LAYER: &[&str] = &[
     "share.webLayer",
     "share.webStyle",
     "share.locator",
+    "pg.saveEdits",
+    "pg.discardEdits",
+    "gpkg.saveEdits",
+    "gpkg.discardEdits",
     "zarr.reduce",
     "cube.trend",
     "cube.reduce",
@@ -4011,5 +4300,87 @@ mod vertex_undo_tests {
         app.map.vertex = Some((id, row, VertexId::new(0, 0, 1)));
         app.run("edit.redo", Value::Null).unwrap();
         assert_eq!(app.map.vertex, None, "redo");
+    }
+}
+
+#[cfg(test)]
+mod download_service_tests {
+    use super::{RustGisApp, Services, complete_gp_file};
+    use serde_json::json;
+
+    #[test]
+    fn rejected_download_does_not_announce_success_or_rename_project() {
+        let mut app = RustGisApp::with_sample()
+            .with_services(Services { download: Some(Box::new(|_, _| Err("browser rejected download".into()))), ..Default::default() });
+        let name = app.session.project.name.clone();
+        let saved_name = app.ui.web_file.clone();
+        assert!(app.save_download("renamed.rgis").is_err());
+        assert_eq!(app.session.project.name, name);
+        assert_eq!(app.ui.web_file, saved_name);
+        assert!(!app.session.notices.iter().any(|n| n.text.contains("Downloaded")));
+        assert!(!app.download("archive.pmtiles", vec![1, 2, 3]));
+        assert!(app.session.notices.iter().any(|n| n.error && n.text.contains("browser rejected download")));
+        assert!(!app.session.notices.iter().any(|n| n.text.contains("Downloaded")));
+    }
+
+    #[test]
+    fn direct_file_result_reports_delivery_instead_of_pending() {
+        let pending = json!({"pending": true, "download": 7, "file": "cities.pmtiles"});
+        let completed = json!({"file": "cities.pmtiles", "delivered": true, "messages": ["Exported cities"]});
+        assert_eq!(complete_gp_file(Ok(pending.clone()), 7, &Ok(completed.clone())), Ok(completed));
+        assert_eq!(complete_gp_file(Ok(pending), 7, &Err("browser rejected download".into())), Err("browser rejected download".into()));
+    }
+
+    #[test]
+    fn delivered_script_and_model_results_keep_their_wrappers_and_other_outputs() {
+        let script = json!({
+            "ran": [
+                {"line": 1, "command": "model.run", "result": {
+                    "model": "Export cities",
+                    "ran": [
+                        {"step": 1, "node": "export", "tool": "vectorToPmtiles",
+                            "result": {"pending": true, "download": 7, "file": "cities.pmtiles"}},
+                        {"step": 2, "node": "buffer", "tool": "buffer", "result": {"layer": 42}}
+                    ],
+                    "outputs": [{"node": "buffer", "layer": 42}]
+                }},
+                {"line": 2, "command": "map.zoom", "result": {"zoom": 5}}
+            ]
+        });
+        let completed = json!({"file": "cities.pmtiles", "delivered": true, "messages": ["Exported cities"]});
+        let mut expected = script.clone();
+        expected["ran"][0]["result"]["ran"][0]["result"] = completed.clone();
+        assert_eq!(complete_gp_file(Ok(script), 7, &Ok(completed)), Ok(expected));
+    }
+
+    #[test]
+    fn any_matching_failed_export_fails_the_compound_command() {
+        let script = json!({"ran": [
+            {"line": 1, "command": "gp.run", "result": {"pending": true, "download": 7, "file": "cities.pmtiles"}},
+            {"line": 2, "command": "gp.run", "result": {"pending": true, "download": 8, "file": "roads.pmtiles"}}
+        ]});
+        let cities = Ok(json!({"file": "cities.pmtiles", "delivered": true, "messages": []}));
+        let after_first = complete_gp_file(Ok(script), 7, &cities);
+        assert_eq!(complete_gp_file(after_first, 8, &Err("roads download rejected".into())), Err("roads download rejected".into()));
+    }
+
+    #[test]
+    fn unrelated_delivery_failures_do_not_change_the_command_result() {
+        let script = json!({"ran": [
+            {"line": 1, "command": "gp.run", "result": {"pending": true, "download": 7, "file": "cities.pmtiles"}},
+            {"line": 2, "command": "layer.color", "params": {"download": 8}, "result": {"layer": 42}}
+        ]});
+        assert_eq!(complete_gp_file(Ok(script.clone()), 8, &Err("unrelated download failed".into())), Ok(script));
+        assert_eq!(
+            complete_gp_file(Err("script command failed".into()), 7, &Err("download failed".into())),
+            Err("script command failed".into())
+        );
+    }
+
+    #[test]
+    fn acknowledgment_errors_still_have_one_error_notice() {
+        let mut app = RustGisApp::with_sample();
+        assert_eq!(app.run("gp.fileDelivered", json!({"id": u64::MAX})), Err("no pending file with that id".into()));
+        assert_eq!(app.session.notices.iter().filter(|n| n.error && n.text == "no pending file with that id").count(), 1);
     }
 }

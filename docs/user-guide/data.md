@@ -86,10 +86,10 @@ Open a feature layer's table with ++ctrl+t++ (++cmd+t++ on macOS), **Home › Se
 or **Attribute Table** on a feature layer's **Data** tab (`table.open`). Rows and map selections stay in sync.
 Standalone tables open from their right-click menu; their cells are read only. See [The attribute table](analysis.md#the-attribute-table) for
 sorting, filtering, selection and the SQL `WHERE` clause syntax used by **Select By Attributes**
-and **Definition Query**. These clauses filter a layer; they are not DuckDB queries.
+and **Definition Query** (the full grammar is in [Expressions](expressions.md)). These clauses filter a layer; they are not DuckDB queries.
 
 For an editable feature layer, double-click a cell to change it. The table's toolbar also adds
-fields, calculates field expressions and opens **Calculate Geometry** (`edit.calculateGeometry`).
+fields, calculates field [expressions](expressions.md) and opens **Calculate Geometry** (`edit.calculateGeometry`).
 The geometry calculator fills a new double field or an existing numeric field with area,
 perimeter, length or point X/Y, for all or selected features. Point coordinates can be WGS 84
 degrees or a supported projected EPSG system's units. Areas, perimeters and lengths measure on
@@ -219,6 +219,126 @@ addresses, so a view in it that reaches elsewhere fails rather than reading them
 A query can read any file the app can and fetch any web address, and a database is a file or a
 server, so the [AI Assistant](assistant.md) asks before it runs a query or reads a database, and
 plugins need both the files and network permissions.
+
+### Editing PostGIS tables
+
+On the desktop, a PostgreSQL table with PostGIS can be loaded to be edited and its edits saved
+back to it. In **Home › Add › Add Data › Database…**, give a PostgreSQL connection, choose a table
+(**List Tables**) and tick **Load for editing**.
+
+- The connection (`pg.connect`) lasts until RustGIS closes, or until **Disconnect** in the same
+  form (`pg.disconnect`). It isn't saved with the project, and neither is the password. Without a
+  password, `PGPASSWORD` or libpq's password file serve.
+- The table (`pg.addLayer`; `pg.tables` lists those with a geometry or geography column) loads
+  whole, up to 100,000 rows a layer, in the order of its key.
+  A table whose geometries are of several types loads each type as its own layer, each up to that many.
+  A **condition** (an SQL expression on its columns, such as `population > 10000`) loads only the
+  rows it keeps. The layer is an ordinary layer in memory, so every editing tool works on it.
+
+- **Edit › Manage Edits › Save to PostGIS…** (`pg.saveEdits`), there while a layer is loaded for
+  editing, shows how many of the layer's rows are new, changed and deleted, and writes them to its
+  table in one transaction. **Discard PostGIS Edits…** (`pg.discardEdits`)
+  loads the rows again as they are in the database, dropping the edits (Undo brings them back).
+
+A table needs a single-column integer primary key to be added this way. The key becomes each
+feature's id, and the layer keeps each row's version (PostgreSQL's `xmin`) and what it held as it
+was read. Saving locks the rows you changed or deleted and checks them first: when one was changed
+or deleted in the database since you loaded it, or a new row's key is already taken, **nothing is
+saved**, and the message lists those rows. Discard PostGIS Edits then loads them as they are now. A row
+someone else changed that you didn't edit is no conflict, and stays as they left it.
+
+Undo doesn't reach into the database: undoing a save brings back the layer as it was before, but
+the rows stay saved. Saving that layer again is refused, since it would write the same edits
+twice (its new rows as more new rows); Redo, or Discard PostGIS Edits, brings the layer back in step.
+
+Only what you changed is written: the columns whose values differ, and the geometry when it moved
+(converted back to the table's coordinate system, single or multi type and dimensions). A new row
+takes the value of its key field, else the table's default key (`serial`, identity), else its
+feature id, and its feature takes the key it was saved with. A new row's empty fields take their
+column's default, NULL when it has none. Fields the table has no column for
+aren't saved, and the message names them. The layer says when the database's user can't insert,
+update or delete the table's rows; saving is then refused.
+
+```sh
+rustgis-cli run --cmd 'pg.connect={"host":"localhost","database":"gis","user":"postgres"}' \
+  --cmd 'pg.addLayer={"table":"public.roads","where":"lanes > 2","name":"Roads"}' \
+  --cmd 'edit.enable={"on":true}' \
+  --cmd 'edit.setValue={"layer":"Roads","row":0,"field":"name","value":"Main St"}' \
+  --cmd 'pg.saveEdits={"layer":"Roads"}'
+```
+
+Connecting and adding a layer read the database, so the [AI Assistant](assistant.md) asks
+before it connects or adds a table, and asks every time before it saves edits. Plugins can't
+connect or save at all.
+
+### Editing GeoPackage tables
+
+On the desktop, **Home › Add › Add Data › Edit GeoPackage Table…** (`gpkg.addLayer`) loads one
+feature table of an existing local `.gpkg` for editing. Choose its table with **List Tables**
+when the file has several. The table needs one `INTEGER PRIMARY KEY`. At most 100,000 rows
+are loaded; **Most rows** can lower that limit. Whole numbers may use comma-grouped thousands
+(for example, `1,000`); fractional values are rejected. RustGIS does not
+directly edit rows outside that load, including rows with unreadable geometry. File-owned
+triggers can change other rows.
+
+**Edit › Manage Edits › Save to GeoPackage…** (`gpkg.saveEdits`) writes pending inserts, updates
+and deletes to that table in one SQLite transaction. If any row you changed or deleted has
+changed or disappeared in the file since it was loaded, nothing is saved. A constraint or
+trigger failure also rolls everything back; pending edits remain in the layer. New features
+get source-assigned keys that cannot alias loaded rows, and unrelated columns and tables remain
+intact. The saved rows are read back within the transaction, so the layer keeps values assigned
+by defaults and triggers before it starts tracking its next edits. If a DELETE trigger recreates
+a target row, that stored row reappears in the layer and is not counted as deleted. If triggers
+change or remove other rows already loaded in the layer, those rows are refreshed or removed
+before the next edits; rows outside the load are not added.
+
+New-feature saves also check the table's persisted `last_change` revision. If it changed since
+the layer was loaded, the save is refused rather than risking duplicate inserts from an older
+project or an undone save reopened in another session. Pending edits remain available to export;
+Discard Edits reloads the source and drops those pending edits. Identical feature values are not
+used to guess whether a new row was saved before.
+
+Spatial indexes use the final stored geometry after table triggers run. Bounds are refreshed
+from the whole table's readable native extents after inserts, geometry edits or deletes; they
+can shrink, and become NULL when no readable nonempty geometry remains. Attribute-only saves
+keep known bounds unless a trigger writes feature rows. Such trigger writes require a whole-table
+spatial rebuild in the transaction; unreadable nonempty geometry, including a body hidden behind
+a valid header envelope, makes that rebuild refuse the entire save rather than guess its index
+coverage. Metadata or index-repair triggers that would change features after the final snapshot
+are also refused, with the transaction rolled back. A geometry type, Z/M declaration or SRS that
+changed since the layer was loaded also refuses the save until Discard Edits reloads it.
+
+**Discard GeoPackage Edits…** (`gpkg.discardEdits`) reloads the scoped rows as they are in the
+file now, including renamed columns and its current geometry type and coordinate system; Undo
+restores the discarded layer edits. A changed geometry family resets its renderer to a compatible
+default. Saving refuses a changed source SRS until the layer is reloaded.
+Undoing a save does not undo file writes: Redo or Discard Edits is needed before saving again.
+Saving the project keeps pending edits in the project only; exporting writes a new file rather
+than changing this table.
+Save and Discard dialogs remain bound to the project, map and specific layer instance where they
+opened. Switching maps or projects, or undoing and re-adding a layer, requires reopening or
+choosing again; a reused layer ID cannot retarget another file.
+Feature-less project templates retain the layer's schema and styling, but no source-edit binding:
+opening a template cannot turn its absent features into source-row deletions. The same holds for
+the simplified layers a publication layout's globe locator map keeps: they can't be saved back.
+
+Geometry is converted back to the table's coordinate system and must match its declared family.
+Single-part columns reject multipart features; collection, curve and surface columns cannot
+receive geometry writes. Geometry writes that would lose existing Z/M dimensions, or insert
+geometry into a table requiring them, are refused; attribute-only edits can still be saved.
+Read-only files cannot be saved. These editing commands are desktop-only; normal GeoPackage
+reading remains available in the browser.
+
+```sh
+rustgis-cli run --cmd 'gpkg.addLayer={"path":"/data/roads.gpkg","table":"roads","name":"Roads"}' \
+  --cmd 'edit.enable={"on":true}' \
+  --cmd 'edit.setValue={"layer":"Roads","row":0,"field":"name","value":"Main St"}' \
+  --cmd 'gpkg.saveEdits={"layer":"Roads"}'
+```
+
+The AI Assistant asks before reading the file and every time before saving edits. Plugins
+need file permission to load or discard rows and cannot save edits back to the table.
+
 
 ## MySQL and MariaDB
 
@@ -381,9 +501,10 @@ does not read the store or guarantee it is available. In the next session, choos
 testing or logging in to the connection can read its keys from the store with nothing typed
 (the system may ask you to unlock it). Typed keys win over saved ones for that login.
 Temporary credentials (with a session token) are never kept: they work for the session,
-and keys saved earlier stay as they were. If the store is missing or refuses (the web app and the
-command line have none), the login still works for this session and says the keys weren't
-remembered; without keys typed, a connection with nothing available says so, and is not logged in.
+and keys saved earlier stay as they were. If the store is missing or refuses, the login still
+works for this session and says the keys weren't remembered; without keys typed, a connection
+with nothing available says so, and is not logged in. The web app has no system keychain; the
+command line and Python use it only with `--use-saved-secrets` / `use_saved_secrets=True`.
 **Forget Saved Keys** (`connection.forgetSavedKeys`; the connection's right-click menu or its
 form) deletes them from the store and keeps the session's login. Removing a connection deletes
 its saved keys first, and changing its endpoint or switching away from typed keys does too.
@@ -452,7 +573,9 @@ Data Sources** also opens it) gathers the places data comes from:
   edit, test, duplicate, copy its address or remove it.
 - **Library**: well-known public sources: OpenStreetMap tiles, EOX Sentinel-2 cloudless and
   NASA GIBS (WMTS), USGS imagery, topographic and hydrography maps (ArcGIS), GEBCO bathymetry
-  (WMS), swisstopo's maps and imagery (geo.admin.ch, WMTS), Earth Search and Planetary Computer (STAC), and the Natural Earth sample layers.
+  (WMS), swisstopo's maps and imagery (geo.admin.ch) as WMTS tiles and as a WMS (most of its
+  layers answer Identify), Earth Search and Planetary Computer (STAC), and the Natural Earth
+  sample layers.
 
 A click on a file, a web address, a tile layer or a sample adds it at once. The lists are kept
 with the app's preferences, never in a project. They hold no secrets: a web address loses its
@@ -517,17 +640,21 @@ databases). For non-database kinds, pass that response text as `answer` with the
 to parse it without a network request. Database kinds ignore `answer` and test through their
 driver. An anonymous S3 test needs at least one named bucket.
 
-`connection.browse` lists what a connection offers, a level at a time: the tables of a database
-(under their schemas), the layers of a service, the records of a catalogue with the services and
-files they link to, the collections of a STAC API and the items and assets of a collection (for a
-static STAC catalog, its catalogs, collections and items, each item opened for its assets), or
-the buckets, folders and files of an S3 connection. Each child has a `key`, a `name` and what it
-is (`what`); a child with a `node` is browsed by asking again with that `node`; one with `add`
-names the command and parameters that add it (`service.add`, `layer.addDatabase`,
-`stac.addAsset`, `layer.addUrl`). A level lists at most 500 children and says `truncated` when
-it left some out. Like `connection.test`, it reads the address itself on the desktop and the
-command line; with `probe: true` it returns the address to fetch, and the app passes what it
-fetched back as `answer` (and further `documents` when a service asks for them, as `next`).
+`connection.browse` lists what a connection offers, a level at a time: database roots list the
+schemas returned by their provider; opening a schema lists its spatial tables. Services list their
+layers, catalogues their records with the services and files they link to, STAC APIs their
+collections, items and assets (for a static STAC catalog, its catalogs, collections and items,
+each item opened for its assets), and S3 connections their buckets, folders and files. Each child
+has a `key`, a `name` and what it is (`what`); a child with a `node` is browsed by asking again with
+that `node`; one with `add` names the command and parameters that add it (`service.add`,
+`layer.addDatabase`, `stac.addAsset`, `layer.addUrl`). Database browsing adds no table-count cap
+of its own. MySQL/MariaDB and SQL Server providers list at most 10,000 spatial-column rows per
+catalog read, so larger catalogs can omit later tables or schemas; PostGIS has no such provider
+limit.
+Other levels list at most 500 children and say `truncated` when they leave some out. Like
+`connection.test`, it reads the address itself on the desktop and the command line; with
+`probe: true` it returns the address to fetch, and the app passes what it fetched back as `answer`
+(and further `documents` when a service asks for them, as `next`).
 Browsing never changes the project. When a saved database password turns out to be missing, or
 to have been saved for another address, the connection loses its **Saved password** marker; the
 stored entry itself is left for **Forget Saved Password**, an address edit or a removal to delete.
@@ -540,7 +667,8 @@ initially. Checking it opts that submitted password into the operating system's 
 `connection.login {"id":"c1","password":"…","remember":true}`; `remember` defaults to false.
 If the store is missing, unavailable or denies access, the login remains usable for the
 session and a visible warning says it was not remembered (`passwordSaved:false` in the result).
-The browser and command line have no OS-store hook and remain session-only.
+The browser has no OS-store hook and remains session-only. The command line and Python also
+remain session-only unless run with `--use-saved-secrets` (Python: `use_saved_secrets=True`).
 
 The stored database password envelope is bound to the connection's ID, kind and cleaned address,
 including its username. Renaming or regrouping preserves it. Changing the address or username,
@@ -560,17 +688,22 @@ Matching strips passwords and outer wrappers/whitespace, but does not infer that
 libpq forms, reordered parameters, host aliases or different usernames mean the same server.
 Several eligible remembered matches open a chooser with no default; cancel leaves the layers
 unavailable. Choose a connection explicitly, or use `connection.login {"id":"c2"}` to select
-its existing session or remembered password without exposing it. Selection lasts for this
-session, not in the project. `connection.list` reports secret-free `loginRequests` with the
-reason, database label, candidate IDs and affected-layer count; ambiguous layers are not
-attributed to the first saved row. `loggedIn` means this ID has a session password or an already
-loaded remembered password available; it does not certify successful server authentication.
+its existing session, environment or remembered password without exposing it. Selection lasts
+for this session, not in the project. `connection.list` reports secret-free `loginRequests` with
+the reason, database label, candidate IDs and affected-layer count; ambiguous layers are not
+attributed to the first saved row. `loggedIn` means this ID has a session password, an
+environment password selected for it, or an already-loaded remembered password available; it
+does not certify successful server authentication.
 
-Explicit session input or selection takes precedence over a saved password; a saved password
-takes precedence over existing ambient fallbacks on explicitly initiated connections.
-Opening a project never newly authorizes environment/password-file credentials or Windows
-identity. A positively refused saved password is not retried for the rest of the session,
-and no other saved password is tried automatically. Its old OS-store value is retained.
+Explicit command, address and session passwords take precedence over saved credentials. On the
+command line and in Python with `--use-saved-secrets` / `use_saved_secrets=True`, an eligible
+remembered connection's `PGPASSWORD`, `MYSQL_PWD` or `SQLCMDPASSWORD` (according to the database
+kind) wins over the keychain password without reading the store; the desktop app always uses the
+saved password. Project opening may use it only through the same exact-address
+remembered-connection selection; it never newly authorizes an unrelated address, password-file
+credentials or Windows identity. A positively refused saved or environment password is not
+retried automatically for the rest of the session, and no other saved password is tried
+automatically. Its old OS-store value is retained.
 The fresh login form has an empty password and Remember unchecked: an unchecked replacement is
 session-only and does not overwrite or delete the old value; checking Remember and successfully
 saving replaces it. A password the server refuses is not kept as this session's, and is not sent
@@ -657,10 +790,24 @@ file over 256 MB through a buffer, so it is never held whole), and each view par
 features it shows. A single feature, a bare geometry or TopoJSON is loaded whole.
 
 A streamed layer works like any other for symbology, labels, pop-ups, selection and the
-attribute table (which lists the features read for the view). Geoprocessing tools, exports and
-**Load All Features** read the whole source, up to 2 million features (500,000 in the web app);
-a larger source is refused rather than processed as a sample. A tool given a streamed layer with
-a selection uses the selected features read for the view. Edits are refused, since the features are read again as the view moves: right-click the
+attribute table (which lists the features read for the view). On the desktop, **Export Features**
+(`share.exportLayer`) of a GeoPackage, FlatGeobuf, GeoParquet or Shapefile read in place to
+GeoJSON, CSV, FlatGeobuf, GeoPackage or GeoParquet reads the source a chunk at a time, putting
+each chunk in the output's coordinate system and writing it before reading the next: the layer
+is never held whole. What stays in memory is a chunk and what the source and the output keep: a
+GeoParquet source one row group at a time (memory grows with its largest row group), a FlatGeobuf
+output a small index entry for each feature. A source read by its web address is exported whole,
+as below.
+Geoprocessing tools, other exports and
+**Load All Features** read the whole source, up to 2 million features (500,000 in the web app;
+a source that doesn't report its feature count must have fewer than that, since a read that
+reaches the limit is refused); a larger source is refused rather than processed as a sample. A
+GeoPackage, GeoParquet, FlatGeobuf or LAS/LAZ file is refused the same way when added without
+streaming (`layer.addData` with `"stream": false`) or given to a geoprocessing tool as a file
+path. If the source's feature count is known, an oversized whole read is refused before reading
+its features; an incomplete read is an error, not a successful sample. A tool given a
+streamed layer with a selection uses the selected features read for the view. Edits are refused,
+since the features are read again as the view moves: right-click the
 layer in Layers and choose **Load All Features** (`layer.loadAll`) to load it into memory and
 edit it. Projects save the layer's file path, not its features, and read the file again when they
 open; a browser upload is kept in the project.

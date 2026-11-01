@@ -33,7 +33,8 @@ deletes the selection, adds or calculates a field, and calculates geometry attri
   <figcaption>The attribute table, with a selection highlighted on the map and in the table.</figcaption>
 </figure>
 
-Select By Attributes and definition queries use SQL `WHERE` clauses:
+Select By Attributes and definition queries use SQL `WHERE` clauses, written in the
+[expression language](expressions.md):
 
 ```sql
 pop_est > 100000000 AND continent = 'Asia'
@@ -78,21 +79,28 @@ written some other way (a token typed into a SQL query, say) can still be there:
 before sharing it. A point buffered where the
 map was clicked is copied as the command that buffered it, with the point.
 
-There are 24 built-in tools; GeoLibre and plugin tools join them when available.
+These are the built-in tools; GeoLibre and plugin tools join them when available.
 Use these ids in `gp.run`'s `tool` parameter (`gp.tools` lists the available tools and their parameters):
 
 | Tool | Id | Toolbox |
 | --- | --- | --- |
 | Buffer | `buffer` | Analysis › Proximity |
+| Near | `near` | Analysis › Proximity |
 | Clip | `clip` | Analysis › Extract |
+| Split | `split` | Analysis › Extract |
 | Erase | `erase` | Analysis › Overlay |
 | Intersect | `intersect` | Analysis › Overlay |
 | Identity | `identity` | Analysis › Overlay |
 | Union | `union` | Analysis › Overlay |
+| Symmetrical Difference | `symmetricalDifference` | Analysis › Overlay |
+| Update | `update` | Analysis › Overlay |
 | Spatial Join | `spatialJoin` | Analysis › Overlay |
+| Join Field | `joinField` | Data Management › Joins |
 | Dissolve | `dissolve` | Data Management › Generalization |
 | Minimum Bounding Geometry | `convexHull` | Data Management › Features |
 | Feature To Point | `featureToPoint` | Data Management › Features |
+| Merge | `merge` | Data Management › General |
+| Feature Vertices To Points | `featureVerticesToPoints` | Data Management › Features |
 | XY Table To Point | `xyTableToPoint` | Data Management › Features |
 | Calculate Geometry Attributes | `calculateGeometry` | Data Management › Features |
 | Simplify | `simplify` | Cartography › Generalization |
@@ -103,10 +111,68 @@ Use these ids in `gp.run`'s `tool` parameter (`gp.tools` lists the available too
 | Select Layer By Attribute | `selectByAttributes` | Data Management › Layers and Table Views |
 | Summarize Within | `countPoints` | Analysis › Summarize |
 | Summary Statistics | `summaryStatistics` | Analysis › Statistics |
+| Pivot Table | `pivotTable` | Analysis › Statistics |
 | Export Features | `exportFeatures` | Conversion |
-| Zonal Statistics | `zonalStats` | Analysis › Raster |
+| Vector to PMTiles | `vectorToPmtiles` | Analyze › Tools |
+| Raster to PMTiles | `rasterToPmtiles` | Analyze › Tools |
 | IDW Interpolation | `idwInterpolation` | Analysis › Interpolation |
 | Ordinary Kriging | `kriging` | Analysis › Interpolation |
+| Zonal Statistics | `zonalStats` | Analysis › Raster |
+| Kernel Density | `kernelDensity` | Analysis › Density |
+
+**Raster to PMTiles** (`rasterToPmtiles`) writes Web Mercator PNG tiles using the raster's current
+bands, colors, mask and resampling. Set the minimum and maximum zoom from 0 to 16 and choose a
+`.pmtiles` output; without one it uses the last component of the layer name. Layer and group
+transparency are included. The raster must be georeferenced and fit
+within one world. Turn off dynamic range adjustment and display rotation first. The in-memory
+export is limited to 512 tiles and 64 MiB of compressed tile data; reduce the extent or zoom range
+if it exceeds a limit. Areas beyond the Web Mercator latitude limit are clipped.
+
+**Vector to PMTiles** (`vectorToPmtiles`) writes a single-layer MVT archive in standard Web
+Mercator. Choose `minZoom` and `maxZoom` from 0 to 16; `sourceLayer` defaults to the input
+layer's name. The output file is saved atomically on desktop or downloaded in the browser.
+Without `output`, CLI, script and task calls write `<layer>.pmtiles` in the process's working
+directory, where `<layer>` is the layer's name without any folder part; an existing destination
+is replaced atomically. The desktop tool pane instead asks for a destination with Save As.
+Native exports refuse to replace the open/saved project file, the package this project was
+opened from, or a file that a loaded layer, raster, standalone table or tile archive reads.
+For directory-backed sources such as File Geodatabases, files inside the source directory are
+protected as well.
+This includes path aliases, ZIP archives holding loaded members, and Shapefile companion
+files. Project/package paths stay anchored across changes to the working directory, and their
+origins are restored when a project replacement is undone or redone. Browser downloads cannot
+check the eventual save destination; choose a different file in the browser's save dialog to
+avoid replacing an input.
+An active selection is exported; otherwise the geoprocessing extent applies, and streamed
+sources are read in full rather than limited to the visible map window. It exports points,
+lines and polygons, including multipart geometry, attributes and feature IDs—not the map's
+style or labels. Antimeridian paths are unwrapped and clipped with an 8/4096-tile buffer;
+latitudes beyond Web Mercator's limit are clamped and reported. Geometry parts collapsed by
+integer quantization and features without geometry are reported. Null properties are omitted;
+integer attributes outside ±2^53 are rejected to avoid precision loss.
+
+This is an in-memory export, limited to 10,000 distinct output tiles and a conservative
+256 MiB working-memory budget, including the input, clipping/encoding temporaries and final
+archive. This budget is checked after streamed-source materialization, not during provider
+loading: the existing full-read limits (2,000,000 features on desktop, 500,000 in the browser)
+apply first, and loading may use more than 256 MiB before export refuses the input. Reduce a
+large source before loading it for export. Geometry allocation estimates are linear in the
+number of vertices and rings.
+Each geometry component's buffered candidate rectangle is limited to 40,000 tiles per zoom,
+including candidates where clipping produces no output. A separate **100,000,000-unit
+geometry-work budget** accumulates across all exported features, components and zooms:
+each candidate tile costs the component's vertex count, and each polygon validity check
+(before clipping and after integer quantization) costs `(vertices + rings)²`. The extra
+vertex per ring allows for implicit ring closure. The work-limit error is distinct from
+the memory-limit error: simplify polygon rings, reduce the input extent, or narrow the zoom
+range. These limits reject the whole export rather than sampling or truncating it.
+Browser task, model and script runs can queue at most eight files or 256 MiB of archive bytes
+before downloads are submitted; split larger batches into separate runs. Browser success
+means the download was submitted, not confirmation that the browser saved it. Example:
+
+```text
+gp.run={"tool":"vectorToPmtiles","params":{"input":"Roads","minZoom":0,"maxZoom":12,"sourceLayer":"roads","output":"roads.pmtiles"}}
+```
 
 **Simplify** uses Douglas–Peucker with a tolerance in kilometres. Each polygon ring keeps at
 least three different, non-collinear corners (plus the closing vertex), so a tolerance larger
@@ -115,17 +181,43 @@ multipart rings are retained. This is not a topology-preserving simplifier: chec
 where holes or neighbouring polygons must stay aligned. The default tolerance remains 25 km;
 use a smaller value for local boundaries.
 
+**Kernel Density** (`kernelDensity`) calculates a continuous magnitude-per-unit-area raster
+surface from point features using a Quartic (biweight, default) or Gaussian kernel (truncated at 3σ and
+renormalised to integrate to 1).
+Points can optionally be weighted by a numeric population field (invalid or non-positive weights
+are excluded and reported in the tool messages; for multipoint features, each constituent point part
+receives the feature's weight). Calculations are performed in the linear units
+of a projected coordinate system (defaults to the layer's projected system; if the input layer lacks a
+coordinate system or is in degrees, or to project into a specific system, supply a projected system via `crs`,
+e.g. `EPSG:32618`).
+Because bandwidth and cell size are measured in coordinate-space linear units, global cylindrical
+projections such as Web Mercator (EPSG:3857) introduce scale distortion that increases with latitude;
+use a local projected coordinate system (such as UTM or State Plane) when accurate ground distances
+are required. Leaving `radius` empty or setting it to `0` automatically estimates the bandwidth
+using Silverman's rule of thumb based on the points' spatial distribution (falling back to extent span / 30,
+or 1000 coordinate-space linear units for a single point or coincident points). When `pixelSize` is
+omitted, an adaptive cell size is calculated to span approximately 250 cells along the longer side
+of the extent; the default search radius is automatically adjusted if needed to be at least the pixel
+size so points are not missed between cell centres.
+The search radius must be at least the pixel size. The extent can optionally be overridden via `extent`
+as `xmin,ymin,xmax,ymax` text or a four-number array. The output is written as a single-band Float32 GeoTIFF.
+
 Most feature tools process only the selected rows when an input has a selection. Selection tools
 instead replace the input's selection; Select Layer By Location honours the selecting layer's
 selection. Summarize Within counts the selected points against **all** input polygons, and
-Calculate Geometry Attributes updates **all** rows. A built-in tool's `output` is a layer name in
-the project, never a file path.
+Calculate Geometry Attributes updates **all** rows. For tools that create a map layer, `output`
+is the layer name; `vectorToPmtiles` uses it as a file destination.
 
 **Buffer** distances, and the distance of **Select Layer By Location**, are measured on the Earth
 (the WGS 84 ellipsoid, as PROJ and GeographicLib measure it), not in the map's display
 projection. Each feature is buffered in an azimuthal equidistant projection on the ellipsoid
-centred on it, so a point's buffer is exact; long lines and large polygon outlines are
-buffered in stretches of a few hundred kilometres to limit projection error. Negative Buffer
+centred on it, so distances from a point are true; long lines and large polygon outlines are
+buffered in stretches of a few hundred kilometres to limit projection error. Up to 85° of
+latitude, a buffer's sides are within 0.012 % of the distance (or 1 cm), and within 0.05 % along
+a winding line or outline buffered in stretches. Its curves are drawn with straight edges (32 to
+a point's circle, 15 to a half circle at a line's end or a polygon's corner, close to GEOS and
+PostGIS's 8 to a quarter circle), whose corners are at the distance and whose middles run up to
+about 0.5 % of it inside the true curve. Negative Buffer
 distances shrink polygons. Buffer and Select Layer By Location limit distances to 5,000 km.
 **Calculate Geometry Attributes** measures polygon areas and perimeters, and line lengths,
 on the WGS 84 ellipsoid, independently of the map's display projection. Holes are subtracted
@@ -143,10 +235,45 @@ read the same number for the same geometry, with two exceptions. A polygon ring 
 (-180° to 180°) edge, such as a globe-wide band, is measured on the sphere by the attribute table
 and the Measure tools, while **Calculate Geometry Attributes** unwraps it, so it reads near zero
 there. A ring winding around a pole is measured as the region it traces by the attribute table
-(a ring that goes all the way round at 60° N gives the larger region), while **Calculate Geometry
-Attributes** gives the smaller polar cap. On the Moon or another body, the Measure tools measure on
+and the Measure tools (a ring that goes all the way round at 60° N gives the larger region),
+while **Calculate Geometry Attributes** gives the smaller polar cap. On the Moon or another body, the Measure tools measure on
 that body's sphere. The Radius tools still measure a local Mercator distance, and **Mensuration
 Tools** (`raster.measure`) still measure on the sphere, so those can differ from the numbers above.
+
+**Merge** (`merge`, Data Management › General) appends loaded vector layers of the same geometry
+type (points, lines or polygons) into a new layer. It needs no GeoLibre runner. Choose **Input
+Layers** and **Preserve Attributes** in the tool pane, or pass names separated by `;` or a JSON
+array. Desktop runs can also name local vector files without adding them to the map first.
+In the browser, load the files as layers first. Each layer contributes its selection, or all its
+features when it has no selection; read-in-place layers without a selection contribute their
+complete source.
+
+```json
+{"tool":"merge","params":{"inputs":["Survey A","Survey B"],"attributes":true,"output":"Combined survey"}}
+```
+
+Matching field names (case-insensitive) and types share a column. Other fields are added and
+missing values are empty. Incompatible types remain separate columns with unique suffixes,
+such as `count_2`, preserving their original values and types. Turn off **Preserve Attributes**
+for geometry only. Multipart geometry and holes are kept unchanged, new feature ids are assigned,
+and export defaults to the first input's coordinate system; internal coordinates stay longitude
+and latitude. The inputs stay unchanged, and the new layer can be undone.
+
+**Feature Vertices To Points** (`featureVerticesToPoints`) writes a point at each vertex of the
+`input` layer's features (a point layer's points are their own vertices, and a multipoint's points
+its parts), with its feature's attributes and four fields. `orig_fid` is the feature's OID, linking
+each point to its feature as ArcGIS's tool of the same name does. Three say where the point lies,
+named as in QGIS's Extract Vertices: `vertex_part` (the part of a multipart feature),
+`vertex_part_ring` (the polygon ring: 0 for the outer ring, and for lines and points) and
+`vertex_part_index` (the place along the part or ring, from 0). Unlike QGIS's tool, it doesn't
+write a polygon ring's closing point, which repeats its first. A new field whose name the input
+already has gets a suffix (`vertex_part_2`). The points keep the input's coordinate system. In the
+web app, the tool stops with a message if the browser can't give it the points' memory: select
+fewer features, or simplify ones with many vertices.
+
+```text
+gp.run={"tool":"featureVerticesToPoints","params":{"input":"Rivers","output":"river_vertices"}}
+```
 
 **IDW Interpolation** works like the QGIS tool of the same name: every point weighs on every
 cell by 1/distanceᴾ, where P is the distance coefficient (2 by default). Lines and polygons
@@ -165,6 +292,11 @@ third of the extent's diagonal. Coordinates, `range`, `extent` and `pixelSize` a
 lines and polygons contribute their bounding-box centres. At least two distinct locations with
 numeric values are needed. It adds **two separate Float32 GeoTIFF layers**: the prediction,
 named by `output`, and `<output>_variance`.
+
+**Erase** (`erase`) removes from `input` features (points, lines or polygons) their parts inside
+the `erase` polygons. An erase polygon's edge counts as inside it, as for Clip, so a point on the
+edge or a stretch of line along it is erased; features left with nothing are left out, and one
+no erase polygon overlaps is kept as it is.
 
 **Intersect** (`intersect`) splits `input` features by the polygons of `overlay`: each part of an
 input feature inside an overlay polygon becomes a feature with the attributes of both, the input's
@@ -185,14 +317,63 @@ gp.run={"tool":"intersect","params":{"input":"parcels","overlay":"floodplain","o
 
 **Identity** (`identity`) takes the same parameters. Each input feature gives its Intersect
 features, then its part outside every overlay polygon, with empty overlay attributes. Every parcel
-is then in the result, in or out of the floodplain; one without geometry is kept as it is (Intersect
-leaves it out). **Union** (`union`) takes two polygon
+is then in the result, in or out of the floodplain: one no overlay polygon meets, or without
+geometry, as it is (Intersect leaves those out). **Union** (`union`) takes two polygon
 layers and adds, after Identity's features, each overlay polygon's part outside every input polygon,
 with empty input attributes: together the features cover everything either layer covers. Both
 follow Intersect's rules for field names, touching parts and selections. Where overlay polygons
 overlap each other, an input feature's part in both comes out once for each, and Union adds each
 overlay polygon's own remainder, so the overlay's overlap outside the input comes out once for each
 too.
+
+**Symmetrical Difference** (`symmetricalDifference`) takes two polygon layers, as Union does, and
+keeps only the pieces one layer covers: Union's features without Intersect's. Each input feature's
+part outside every overlay polygon comes first, with empty overlay attributes, then each overlay
+polygon's part outside every input polygon, with empty input attributes. As in Union, an input
+feature without geometry is kept as it is, with empty overlay attributes, so no input row is lost.
+
+**Update** (`update`) replaces part of a polygon layer with another: each `input` polygon's part
+outside every `update` polygon keeps its attributes, and each update polygon is then added whole.
+The output has the input's fields only. An update polygon's values go into the input's fields of the
+same name (matched exactly, else ignoring case; converted to the field's type, so text that isn't a
+number becomes empty in a numeric field); the input's other fields are left empty. An input field
+that no update field matches exactly, but two match ignoring case, stops the tool rather than pick
+one. An input polygon no update polygon overlaps, or one without geometry, is kept as it is. Update
+polygons that overlap each other each come out whole, so their overlap comes out twice.
+
+```text
+gp.run={"tool":"update","params":{"input":"parcels","update":"resurveyed_parcels"}}
+```
+
+**Split** (`split`) clips `input` (points, lines or polygons) by each polygon of `split`, as Clip
+does, and adds one layer for each. Give a `field` of the split layer to name the layers by its
+values: polygons sharing a value make one layer together, and one without a value is named by its
+id. Without a field, each polygon gives a layer named by its id. Names start with `output`, else
+the input's name, and an underscore: `roads_North` (a name the map already has gets a number, as
+for any new layer). A feature on the edge between two split
+polygons goes into both layers. Layers that would be empty are left out. Split stops, before
+clipping anything, when there are more than 1,000 split areas (split polygons, or values of the
+field), empty ones included. Selections in both layers are honoured.
+
+```text
+gp.run={"tool":"split","params":{"input":"roads","split":"districts","field":"name"}}
+```
+
+**Near** (`near`) copies `input` and adds, for each feature, the nearest feature of `near`: its OID
+as the attribute table shows it (`near_fid`), the distance to it (`near_dist`, in `units`,
+Kilometers by default) and the point on it nearest the input feature (`near_x` and `near_y`, in
+longitude from −180° up to 180° and latitude). Distances are measured as Spatial Join's **Closest**
+measures them: on the ground, between the features' nearest points, and zero for features that
+intersect, whose point is one they share. The point is found as the distance is, in a plane centred
+between the features, so on a long edge it can sit off the geodesic by up to about 0.01 % of the
+distance (5 m at 50 km). A `distance` limits how far it looks; features with nothing that near, or
+without geometry, get empty values. Of equally near features, the first in the near layer wins.
+With the same layer as both, each feature's nearest is another feature, not itself. A field name
+the input already has gets a suffix (`near_dist_2`). Selections in both layers are honoured:
+
+```text
+gp.run={"tool":"near","params":{"input":"addresses","near":"hydrants","units":"Feet"}}
+```
 
 **Spatial Join** (`spatialJoin`, also `gp.spatialJoin`) copies attributes from `join` features
 to `target` features. Layers may have different source coordinate systems: their geometry is
@@ -237,6 +418,130 @@ hold. For example, the total units permitted in each district:
 gp.run={"tool":"spatialJoin","params":{"target":"districts","join":"permits","merge":[{"field":"units","rule":"sum"}]}}
 ```
 
+In the Tools pane, use **Add rule** under **Merge Rules**, pick a field from Join Features
+and its rule, and set **Delimiter** for `join`. Use **Move up**, **Move down** and **Remove** to
+manage the list. Fields without a rule keep the first match.
+
+**Join Field** (`joinField`) performs a one-off non-spatial attribute join,
+copying fields from a source table or layer (`joinTable`, specified by name or numeric table ID)
+into a `target` table or layer based on matching key values:
+
+- **Key fields:** `targetField` (aliases: `target_field`, `key`) names the key field in the target.
+  `joinField` (aliases: `join_field`) names the matching key in the source table; when omitted, empty,
+  or whitespace-only, it defaults to `targetField`. Numeric keys match across integer and floating-point
+  types when whole numbers (e.g. `10` matches `10.0`), while non-finite floats (`NaN`, infinity) and
+  nulls never match. Incompatible key data types (e.g. text vs integer) are rejected.
+- **Transferred fields:** `fields` selects specific source fields to transfer (a comma-separated list
+  or a JSON array of strings, e.g. `["tax_rate", "zone_code"]`; non-string and non-array types are rejected). Repeated
+  field names are deduplicated in order. When omitted or passed as a blank string (`""`), every source field except
+  the join key is transferred; passing an explicitly empty array (`[]`) or an array of blank strings transfers zero fields.
+  Transferred fields preserve their original source display aliases (retained without technical prefixes) and field types.
+- **Prefix and collision handling:** `prefix` prepends text to all transferred field names. When a
+  transferred field name conflicts with an existing target field, an incremental suffix is added
+  (`name_2`, `name_3`) to maintain schema uniqueness without overwriting existing data.
+- **Duplicate keys:** `duplicates` (`duplicateStrategy`) determines what happens when multiple source
+  rows share the same join key: **First** (default: uses the first matching source record), **Last**
+  (uses the last matching source record), or **Error** (fails the operation and reports the duplicate key).
+- **Selections and streamed inputs:** selections on the target layer or source table are honoured;
+  when a target selection is active, the output contains the selected target rows, while unselected
+  datasets are processed in full. Streamed layers that are only partially loaded in the view window are
+  rejected with a clear message (`the target layer is streamed; load all features first`) so incomplete
+  results are never committed as a whole layer. Rows with attribute counts exceeding the schema definition
+  are rejected with a clear error rather than silently truncated. Unmatched target records receive null values.
+
+```text
+gp.run={"tool":"joinField","params":{"target":"parcels","targetField":"owner_id","joinTable":"owners","fields":["name","phone"],"duplicates":"First"}}
+```
+
+**Summary Statistics** (`summaryStatistics`) makes a standalone table of statistics: one row for
+the whole table (none for an empty one), or one for each combination of values of the `case`
+fields (one field, or several as a list such as `["county", "year"]`). Rows are sorted by those
+values; records with no value form a group of their own, first. Statistics follow record order
+(`FIRST`, `LAST`, `CONCATENATE`) and use only the selected records when the table has a
+selection. Each row has the case fields, then `FREQUENCY` (the group's records), then a field
+`<STAT>_<field>` for each statistic asked for. Name the statistics in `statistics`, a list of up
+to 256 (field, statistic) pairs in the order the fields should appear:
+
+```text
+gp.run={"tool":"summaryStatistics","params":{"input":"parcels","case":["county","year"],"statistics":[{"field":"income","statistic":"MEAN"},{"field":"income","statistic":"MEDIAN"},{"field":"zoning","statistic":"MODE"}]}}
+```
+
+In the Tools pane, use **Add statistic** to pick each field and statistic. The statistic picker
+offers the operations supported by that field's type, including percentiles `P1` through `P99`
+for numeric fields. Use **Add field** under **Case Fields** to group by several fields. Move
+entries up or down to choose their output order, or remove them. Leaving Statistics empty keeps
+the single **Statistics Field** shortcut. These lists are also available in ModelBuilder; for an
+input produced by another tool, type its field names before running the model.
+
+| Statistic | What it is |
+| --- | --- |
+| `COUNT` | Values that aren't empty |
+| `SUM`, `MEAN`, `MIN`, `MAX` | The usual; `MIN` and `MAX` of text compare by character code, so ISO dates order as dates |
+| `RANGE` | `MAX` − `MIN` |
+| `STD`, `VARIANCE` | Population standard deviation and variance (divided by the count) |
+| `MEDIAN` | The middle value; for an even count, the mean of the middle two |
+| `P1` to `P99` | Percentiles, interpolated linearly between ranks (as a spreadsheet's `PERCENTILE.INC`), so `P50` is the median |
+| `IQR` | `P75` − `P25` |
+| `CV` | Coefficient of variation, `STD` / `MEAN`; empty when the mean is 0 |
+| `MODE`, `MINORITY` | The most and least common value; on a tie, the lowest |
+| `UNIQUE` | The number of distinct values |
+| `FIRST`, `LAST` | The first and last value, in record order |
+| `CONCATENATE` | The values in record order, joined by `separator` (`, ` by default; 256 bytes at most) |
+| `NULLS` | Records with no value |
+
+Every statistic but `NULLS` leaves out empty values. A text field takes `COUNT`, `MIN`, `MAX`,
+`FIRST`, `LAST`, `UNIQUE`, `CONCATENATE`, `MODE`, `MINORITY` and `NULLS`; the rest need a numeric
+field. A group with no values gets empty statistics, except a `COUNT` and `UNIQUE` of 0 (its
+`NULLS` is its `FREQUENCY`). Two output fields can't share a name, so a case field can't be called
+`FREQUENCY` or `<STAT>_<field>` for a statistic asked for. Counts
+are whole numbers, `CONCATENATE` and the statistics of a text field are text, and the others are
+decimal. Without `statistics`, `field` gives that field's `COUNT`, `SUM`, `MEAN`, `MIN`, `MAX` and
+`STD`, reading its values as numbers.
+
+**Pivot Table** (`pivotTable`) turns the values of one field into fields of their own. It makes a
+standalone table with a row for each combination of values of the row `fields` (one field, or
+several as a list); with no row fields there is one row for the whole table, or none for an empty
+table. Then it adds a field for each value of the `pivot` field, sorted by value. Each cell holds
+the `value` field's value for that row and pivot value, or is empty when no record has them. A
+table with a record per county and year becomes one with a row per county and a field per year:
+
+```text
+gp.run={"tool":"pivotTable","params":{"input":"incomes","fields":"county","pivot":"year","value":"income"}}
+```
+
+| county | year2020 | year2021 | year2022 |
+| --- | --- | --- | --- |
+| A | 10 | 11 | |
+| B | 20 | | 22 |
+
+Use **Add field** under **Row Fields** in the Tools pane or ModelBuilder to choose several row
+fields and order them with **Move up** and **Move down**.
+
+Without `statistic`, each row and pivot value can have one record at most; the tool names the
+first pair with more, and the cells keep the value field's type. Give a `statistic` to combine the
+records instead, such as the mean income by county and year from a table of households. It
+takes any statistic from Summary Statistics (above), with the same rules for text fields, empty
+values and output types; `separator` joins `CONCATENATE`'s values. A cell with no records is
+empty even for `COUNT`, which tells it apart from records that have no value (a `COUNT` of 0):
+
+```text
+gp.run={"tool":"pivotTable","params":{"input":"households","fields":"county","pivot":"year","value":"income","statistic":"MEAN"}}
+```
+
+Field names come from the pivot values. A number, or true and false, follows the pivot field's name
+(`year2020`, `rate2_5` for 2.5, `temp_3` for −3). Text keeps its letters, digits and underscores,
+each run of other characters becoming one underscore (none right after an underscore) and
+underscores at its ends dropped (`North east` and `North_-east` give `North_east`), and follows the
+field's name when it would start with a digit or have nothing left. At most 64 characters of a
+value are kept; a name already taken, ignoring case, gets `_2`, `_3` and so on in the order of the
+pivot values. A record with no pivot value (or a number that isn't one, NaN) is an error: fill
+those in, or select the other records. The pivot field can have at most 1,000 values, and the table
+at most 10 million cells. Only selected records are used when the table has a selection, and the
+output is named `<input>_Pivot` unless `output` names it.
+
+The AI Assistant uses Pivot Table for questions such as "mean household income by county and year":
+it runs the tool with `county` as the row field, `year` as the pivot field and `MEAN`, then reads
+the table it names with `read_features`, a row per county.
 <figure markdown="span">
   ![Tissot's indicatrix on the Robinson projection: circles of 800 km every 30°, stretched and sheared toward the poles](https://assets.rustgis.app/images/tissot.webp)
   <figcaption>Tissot's indicatrix on Robinson: equal circles, stretched and sheared by the projection.</figcaption>
@@ -360,6 +665,10 @@ click them on the map:
 | Exploratory Analysis | Histograms and correlations of numeric fields |
 | Embeddings | The features most like the selected one, by their numeric attributes |
 | Data Interop | KML, GPX, CSV with WKT, GeoJSON or CSV |
+
+Network routing rebuilds its graph for each request and solves each edge length on WGS 84.
+Large line networks can therefore take longer to route than with spherical lengths; repeated
+routes do not currently share a cached graph.
 
 Rasters these make are kept in the project. **Environments** (`gp.env`) set an extent from the map
 view, full extent, a layer or a longitude/latitude box (or `null` to clear it). For tools that
@@ -586,7 +895,8 @@ and a **Mann–Kendall** test of whether the trend is significant.
   - an entry of the catalog of data cubes (see [Web data](web-data.md)), by its id: `{"cube":
     "bdc-mod13q1-ndvi", "bbox": [-46, -10.95, -40.35, -2.7], "start": "2001", "end": "2025"}`
     fills in the collection's API, band, cell size and cloud cap, or a Zarr entry's store and
-    variable.
+    variable. In the app, **Trend Analysis…** on a cube of Home › Add › Web Data › Data Cubes opens
+    this section on it: a STAC cube is read where the map is, a Zarr cube whole.
 
   For the mean of a finer layer's pixels in each cell, or for a grid of your own, put the rasters
   on one grid first with Project Raster (`"grid"`, the first one's, and `"resampling":
@@ -717,7 +1027,7 @@ data is unavailable, shows the available band range for invalid band input, and 
 only selected polygons will appear in the output. Both tools report parts omitted during raster-grid
 projection while retaining the valid parts.
 
-Field parameters in Dissolve, XY Table to Point, IDW, Kriging and Summary Statistics accept
+Field parameters in Dissolve, XY Table to Point, IDW, Kriging, Summary Statistics and Pivot Table accept
 case-insensitive names. An exact spelling takes precedence; otherwise a name matching several
 fields is rejected as ambiguous. This prevents silently using the wrong field.
 

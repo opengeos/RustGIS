@@ -5,7 +5,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use rustgis_ui_egui::{Inbox, RustGisApp, Services};
+use rustgis_ui_egui::{Inbox, RustGisApp, Services, Slot};
 
 use crate::parts::Notes;
 use wasm_bindgen::JsCast as _;
@@ -158,9 +158,9 @@ pub fn start() {
                             None => log::warn!("?lang={code}: no such interface language; following the browser's"),
                         }
                     }
-                    // `?project=<url>` opens a project (`.rgis`) by its web address: a whole map,
-                    // its layers, symbology and view, shared as one link. It replaces the project
-                    // when it lands, so the links that add to a project are left out beside it.
+                    // `?project=<url>` opens a native project or imports a GeoLibre map asynchronously.
+                    // Keep this startup path exclusive: other links could otherwise add data
+                    // to different maps depending on when the import completes.
                     if let Some(url) = &project {
                         if let Err(e) = app.run("ui.openUrl", serde_json::json!({"url": url})) {
                             app.session.notify(format!("?project={url}: {e}"), true);
@@ -169,7 +169,13 @@ pub fn start() {
                             ["data", "stac", "style", "tiles", "zarr"].into_iter().filter(|k| !params(&q, k, 1).is_empty()).collect();
                         if !skipped.is_empty() {
                             let list = skipped.iter().map(|k| format!("?{k}=")).collect::<Vec<_>>().join(", ");
-                            app.session.notify(format!("?project= opens a whole project, so {list} links were left out"), false);
+                            app.session.notify(
+                                rustgis_ui_egui::i18n::fmt(
+                                    "?project= opens a project or imports a map, so {list} links were left out",
+                                    &[("list", &list)],
+                                ),
+                                false,
+                            );
                         }
                     }
                     let links = if project.is_some() { "" } else { q.as_str() };
@@ -465,6 +471,14 @@ async fn read_together(files: Vec<web_sys::File>, mark: &str, inbox: &Inbox, not
     let mut read = Vec::new();
     for file in files {
         let name = file.name();
+        let shortcut = mark == rustgis_ui_egui::SHORTCUT_PICK || (mark.is_empty() && name.to_ascii_lowercase().ends_with(".rgisshortcuts"));
+        if shortcut && file.size() > rustgis_ui_egui::SHORTCUT_FILE_MAX_BYTES as f64 {
+            notes
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .push((rustgis_ui_egui::tl!("Shortcut file exceeds the size limit.").into(), true));
+            continue;
+        }
         if let Some(bytes) = crate::parts::read_file(file, notes.clone()).await {
             read.push((name, bytes));
         }
@@ -721,6 +735,44 @@ async fn post_json(url: &str, body: &str) -> Result<Vec<u8>, String> {
     Ok(bytes.to_vec())
 }
 
+/// Asks for an address's headers (`HEAD`): a TIFF header's announced length and the type. The
+/// browser shows a page `X-TIFF-Header-Length` only when the server exposes it
+/// (`Access-Control-Expose-Headers`); without it, the header is read as any other file's.
+async fn head(url: &str) -> Result<rustgis_ui_egui::rustgis_engine::render::rustgis_tiles::cache::Head, String> {
+    use rustgis_ui_egui::rustgis_engine::render::rustgis_tiles::{cache, s3};
+    let err = |e: wasm_bindgen::JsValue| format!("{e:?}");
+    let window = web_sys::window().ok_or("no window")?;
+    let prepared = s3::prepare(url)?;
+    // A request signed for S3 is signed for a GET.
+    if prepared.signed {
+        return Ok(cache::Head::default());
+    }
+    let init = web_sys::RequestInit::new();
+    init.set_method("HEAD");
+    if !prepared.headers.is_empty() {
+        let headers = web_sys::Headers::new().map_err(err)?;
+        for (k, v) in &prepared.headers {
+            headers.set(k, v).map_err(err)?;
+        }
+        init.set_headers(&headers);
+    }
+    let resp: web_sys::Response = wasm_bindgen_futures::JsFuture::from(window.fetch_with_str_and_init(&prepared.url, &init))
+        .await
+        .map_err(|_| "the browser couldn't reach it (offline, or the server doesn't accept requests from web pages)".to_string())?
+        .dyn_into()
+        .map_err(err)?;
+    if !resp.ok() {
+        return Err(format!("HTTP {}", resp.status()));
+    }
+    let header = |k: &str| resp.headers().get(k).ok().flatten();
+    Ok(cache::Head {
+        tiff_header_length: header("x-tiff-header-length").as_deref().and_then(cache::tiff_header_length),
+        content_type: header("content-type"),
+        // Seen only where the server exposes it to pages.
+        accepts_ranges: header("accept-ranges").as_deref().is_some_and(cache::accepts_byte_ranges),
+    })
+}
+
 /// Makes an HTTP request (the AI assistant's calls to its model), returning the response of any
 /// status.
 async fn http(
@@ -777,6 +829,16 @@ async fn http(
     Ok(rustgis_ui_egui::rustgis_assistant::HttpResponse { status, body: bytes.to_vec(), headers })
 }
 
+/// The browser's clipboard, where a page may read it: a secure context (HTTPS, or this computer)
+/// whose `navigator.clipboard` has `readText`.
+fn clipboard() -> Option<web_sys::Clipboard> {
+    let window = web_sys::window().filter(web_sys::Window::is_secure_context)?;
+    let navigator = window.navigator();
+    let clipboard = js_sys::Reflect::get(&navigator, &"clipboard".into()).ok().filter(|c| !c.is_null_or_undefined())?;
+    js_sys::Reflect::get(&clipboard, &"readText".into()).ok().filter(wasm_bindgen::JsValue::is_function)?;
+    Some(navigator.clipboard())
+}
+
 /// The browser's services. Embedded, settings live in memory for the visit: the page that embeds
 /// the app must not read what the user saved on the site.
 fn services(inbox: Inbox, font_inbox: Inbox, notes: Notes, ctx: egui::Context, embedded: bool) -> Services {
@@ -796,6 +858,10 @@ fn services(inbox: Inbox, font_inbox: Inbox, notes: Notes, ctx: egui::Context, e
                 }
             }
         });
+    });
+    // So are HEAD requests (a GeoTIFF made on request saying how long its header is).
+    rustgis_ui_egui::rustgis_engine::render::rustgis_tiles::cache::set_header(|url, done| {
+        wasm_bindgen_futures::spawn_local(async move { done(head(&url).await) });
     });
     // So are JSON documents POSTed (the NLDI's flowtrace).
     rustgis_ui_egui::rustgis_engine::render::rustgis_tiles::cache::set_poster(|url, body, done| {
@@ -827,7 +893,24 @@ fn services(inbox: Inbox, font_inbox: Inbox, notes: Notes, ctx: egui::Context, e
         )
     };
     let arcgis_ctx = ctx.clone();
+    let clipboard_ctx = ctx.clone();
     Services {
+        // A text field's Paste: the page reads the clipboard (Firefox and Safari show a Paste
+        // button to confirm, Chrome asks once); only over HTTPS, where the browser offers it.
+        read_clipboard: clipboard().map(|clipboard| -> Box<dyn Fn(Slot<Result<String, String>>)> {
+            Box::new(move |slot| {
+                let (clipboard, ctx) = (clipboard.clone(), clipboard_ctx.clone());
+                wasm_bindgen_futures::spawn_local(async move {
+                    let read = wasm_bindgen_futures::JsFuture::from(clipboard.read_text()).await;
+                    let text = read.map(|v| v.as_string().unwrap_or_default()).map_err(|e| {
+                        // A refusal is a DOMException: its name says why (NotAllowedError).
+                        js_sys::Reflect::get(&e, &"name".into()).ok().and_then(|n| n.as_string()).unwrap_or_else(|| format!("{e:?}"))
+                    });
+                    *slot.lock().unwrap_or_else(|e| e.into_inner()) = Some(text);
+                    ctx.request_repaint();
+                });
+            })
+        }),
         arcgis_sign_in: Some(Box::new(move |portal, client_id, slot| crate::arcgis::sign_in(portal, client_id, slot, arcgis_ctx.clone()))),
         load_pref: Some(load_pref),
         save_pref: Some(save_pref),
@@ -861,6 +944,7 @@ fn services(inbox: Inbox, font_inbox: Inbox, notes: Notes, ctx: egui::Context, e
             // So does a file picked for a tool's file parameter, which goes to the Tools pane.
             let tool_exts = purpose.strip_prefix(rustgis_ui_egui::TOOL_FILE_PURPOSE);
             let mark = match (purpose, tool_exts) {
+                ("shortcuts", _) => rustgis_ui_egui::SHORTCUT_PICK,
                 ("text", _) => rustgis_ui_egui::DELIMITED_PICK,
                 ("shapefile", _) => rustgis_ui_egui::SHAPEFILE_PICK,
                 (_, Some(_)) => rustgis_ui_egui::TOOL_FILE_PICK,
@@ -869,10 +953,17 @@ fn services(inbox: Inbox, font_inbox: Inbox, notes: Notes, ctx: egui::Context, e
             let dialog = if let Some(exts) = tool_exts {
                 let exts: Vec<&str> = exts.split(',').filter(|e| !e.is_empty()).collect();
                 if exts.is_empty() { rfd::AsyncFileDialog::new() } else { rfd::AsyncFileDialog::new().add_filter(exts.join(", "), &exts) }
+            } else if purpose == "shortcuts" {
+                rfd::AsyncFileDialog::new().add_filter(rustgis_ui_egui::tl!("Keyboard shortcuts"), &["json", "rgisshortcuts"])
             } else if purpose == "shapefile" {
                 rfd::AsyncFileDialog::new().add_filter("Shapefile", &["shp", "dbf", "shx", "prj", "cpg", "zip"])
             } else if purpose == "project" {
-                rfd::AsyncFileDialog::new().add_filter("RustGIS project", &["rgis", "rgisx", "rgispkg"])
+                rfd::AsyncFileDialog::new().add_filter(
+                    rustgis_ui_egui::tl!("Projects and JSON data (RustGIS, GeoLibre)"),
+                    &["rgis", "rgisx", "rgispkg", "geolibre", "json"],
+                )
+            } else if purpose == "qgisProject" {
+                rfd::AsyncFileDialog::new().add_filter(rustgis_ui_egui::tl!("QGIS project"), &["qgs", "qgz"])
             } else if purpose == "item" {
                 rfd::AsyncFileDialog::new().add_filter(
                     "RustGIS items",
@@ -913,11 +1004,7 @@ fn services(inbox: Inbox, font_inbox: Inbox, notes: Notes, ctx: egui::Context, e
                 ctx.request_repaint();
             });
         })),
-        download: Some(Box::new(|name: &str, bytes: Vec<u8>| {
-            if let Err(e) = download(name, &bytes) {
-                log::error!("download of {name} failed: {e}");
-            }
-        })),
+        download: Some(Box::new(|name: &str, bytes: Vec<u8>| download(name, &bytes))),
         inbox: Some(inbox),
         geolibre_manifests: Some(Box::new(move |slot| crate::geolibre::manifests(slot, gl_list_ctx.clone()))),
         geolibre_run: Some(Box::new(move |job, slot| crate::geolibre::run(job, slot, gl_run_ctx.clone()))),
@@ -943,7 +1030,10 @@ fn services(inbox: Inbox, font_inbox: Inbox, notes: Notes, ctx: egui::Context, e
 /// Saves bytes through a temporary `<a download>` link.
 fn download(name: &str, bytes: &[u8]) -> Result<(), String> {
     let err = |e: wasm_bindgen::JsValue| format!("{e:?}");
-    let document = web_sys::window().and_then(|w| w.document()).ok_or("no document")?;
+    let window = web_sys::window().ok_or("no window")?;
+    let document = window.document().ok_or("no document")?;
+    let body = document.body().ok_or("no body")?;
+    let a: web_sys::HtmlAnchorElement = document.create_element("a").map_err(err)?.dyn_into().map_err(|_| "not an anchor".to_string())?;
     let array = js_sys::Uint8Array::from(bytes);
     let parts = js_sys::Array::new();
     parts.push(&array);
@@ -951,20 +1041,26 @@ fn download(name: &str, bytes: &[u8]) -> Result<(), String> {
     props.set_type("application/octet-stream");
     let blob = web_sys::Blob::new_with_u8_array_sequence_and_options(&parts, &props).map_err(err)?;
     let url = web_sys::Url::create_object_url_with_blob(&blob).map_err(err)?;
-    let a: web_sys::HtmlAnchorElement = document.create_element("a").map_err(err)?.dyn_into().map_err(|_| "not an anchor".to_string())?;
     a.set_href(&url);
     a.set_download(name);
     // Some browsers only follow links that are in the document.
-    let body = document.body().ok_or("no body")?;
-    body.append_child(&a).map_err(err)?;
+    if let Err(error) = body.append_child(&a) {
+        let _ = web_sys::Url::revoke_object_url(&url);
+        return Err(err(error));
+    }
+    // Schedule cleanup before submission: a timer error must not mark an already offered file
+    // as failed. The browser may start reading the URL after `click` returns.
+    let cleanup_url = url.clone();
+    let revoke = wasm_bindgen::closure::Closure::once_into_js(move || {
+        let _ = web_sys::Url::revoke_object_url(&cleanup_url);
+    });
+    if let Err(error) = window.set_timeout_with_callback_and_timeout_and_arguments_0(revoke.unchecked_ref(), 10_000) {
+        a.remove();
+        let _ = web_sys::Url::revoke_object_url(&url);
+        return Err(err(error));
+    }
     a.click();
     a.remove();
-    // Browsers may start the download after `click` returns, so free the URL a little later.
-    let revoke = wasm_bindgen::closure::Closure::once_into_js(move || {
-        let _ = web_sys::Url::revoke_object_url(&url);
-    });
-    let window = web_sys::window().ok_or("no window")?;
-    window.set_timeout_with_callback_and_timeout_and_arguments_0(revoke.unchecked_ref(), 10_000).map_err(err)?;
     Ok(())
 }
 

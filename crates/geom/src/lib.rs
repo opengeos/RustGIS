@@ -300,11 +300,12 @@ pub fn wgs84_ring_perimeter_area_m2(ring: &[Coord]) -> (f64, f64) {
     let (perimeter, area, _) = polygon.compute(true);
     let area = area.abs();
     let sphere = geodesic_ring_area_m2(ring);
-    let complement = WGS84_AREA_M2 - area;
-    (perimeter, if (sphere - complement).abs() < (sphere - area).abs() { complement } else { area })
+    // Compare a sphere area with its own hemisphere; the ellipsoid's hemisphere differs.
+    let hemisphere = 2.0 * std::f64::consts::PI * EARTH_RADIUS_M * EARTH_RADIUS_M;
+    (perimeter, if sphere > hemisphere { WGS84_AREA_M2 - area } else { area })
 }
 
-/// The surface area of the WGS 84 ellipsoid (square metres).
+/// Surface area 2πa²(1 + (1 − e²) atanh(e) / e) for WGS 84 (square metres).
 const WGS84_AREA_M2: f64 = 510_065_621_724_079.0;
 
 /// The WGS 84 ellipsoid's geodesic solver.
@@ -486,6 +487,21 @@ mod tests {
         // A broken latitude is no pole.
         assert!(wgs84_length_m(&[c(0.0, 0.0), c(0.0, f64::INFINITY)]).is_nan());
         assert!(wgs84_distance_m(c(0.0, f64::NEG_INFINITY), c(0.0, 0.0)).is_nan());
+    }
+
+    #[test]
+    fn wgs84_near_hemisphere_rings_keep_the_spherical_side() {
+        // Both sides of the equator: the spherical and ellipsoidal hemisphere areas differ.
+        // Compare each model with its own hemisphere, independently of winding.
+        for latitude in [-0.00001, 0.00001] {
+            let ring: Vec<_> = (0..36).map(|i| Coord::new(-180.0 + f64::from(i) * 10.0, latitude)).collect();
+            let (perimeter, area) = wgs84_ring_perimeter_area_m2(&ring);
+            assert_eq!(area > WGS84_AREA_M2 / 2.0, latitude > 0.0, "{latitude}: {area}");
+            let reversed: Vec<_> = ring.iter().rev().copied().collect();
+            let (reverse_perimeter, reverse_area) = wgs84_ring_perimeter_area_m2(&reversed);
+            assert!((reverse_area - area).abs() < 1.0);
+            assert!((reverse_perimeter - perimeter).abs() < 1e-6);
+        }
     }
 
     #[test]

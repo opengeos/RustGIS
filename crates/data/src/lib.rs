@@ -4,9 +4,11 @@
 //! bad features are skipped and counted in [`ReadReport`].
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+pub mod color;
 mod dbf;
 pub mod dirs;
 pub mod dxf;
+pub mod export;
 pub mod filegdb;
 pub mod geometry;
 pub mod georss;
@@ -28,6 +30,7 @@ pub mod s3_address;
 pub mod secrets;
 pub mod sheets;
 pub mod source;
+pub mod source_layers;
 pub mod sqlite;
 pub mod time;
 pub mod topojson;

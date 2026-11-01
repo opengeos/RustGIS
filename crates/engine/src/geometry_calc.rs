@@ -32,12 +32,11 @@ pub fn units(property: &str) -> &'static [(&'static str, &'static str)] {
     }
 }
 
+/// Measures WGS 84 geometry in metres or square metres; holes subtract from polygon area.
 fn measure(g: &Geometry, property: &str) -> Option<f64> {
     match (g, property) {
-        // On the WGS 84 ellipsoid, like every other measurement named geodesic (#939): the same
-        // numbers the geoprocessing tools give, except two kinds of ring. One with a full-turn
-        // (-180° to 180°) edge is measured on the sphere here but unwrapped (so near zero for a band)
-        // there. A ring winding round a pole is the region it traces here, but the smaller polar cap there.
+        // Full-turn and polar rings retain the documented exceptions to geoprocessing parity:
+        // docs/user-guide/analysis.md (Calculate Geometry Attributes).
         (Geometry::Polygon(polys), "area") => Some(
             polys
                 .iter()
