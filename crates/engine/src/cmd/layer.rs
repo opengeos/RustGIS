@@ -2811,7 +2811,9 @@ fn part_not_there(ext: &str, url: &str, e: &str) -> bool {
 
 /// Whether an address is read with keys: signed (a query) or through a saved S3 connection.
 fn keyed(url: &str) -> bool {
-    url.contains('?') || rustgis_data::s3_address::is_wrapper(url)
+    // A key, token or signature in the query is what redaction takes out; a query like `?v=2`
+    // carries none.
+    crate::sources::redact(url) != url || rustgis_data::s3_address::is_wrapper(url)
 }
 
 /// A part that arrived: itself, or `None` for an optional one that a web page answered for (an
@@ -2876,8 +2878,11 @@ fn parts_left_out(url: &str, bytes: &[u8], p: &Value) -> Option<String> {
     let mut said: Vec<String> = lacking
         .into_iter()
         .take(NAMED)
-        // A name from the archive, at most 80 characters.
-        .map(|(shp, lacks)| (if shp.chars().count() > 80 { format!("{}…", shp.chars().take(79).collect::<String>()) } else { shp }, lacks))
+        // A name from the archive, without control characters and at most 80 characters.
+        .map(|(shp, lacks)| {
+            let shp: String = shp.chars().filter(|c| !c.is_control()).collect();
+            (if shp.chars().count() > 80 { format!("{}…", shp.chars().take(79).collect::<String>()) } else { shp }, lacks)
+        })
         .map(|(shp, lacks)| {
             let names = lacks.iter().map(|e| format!(".{e}")).collect::<Vec<_>>().join(", ");
             let crs = if lacks.contains(&"prj") && !given_crs { "; its coordinates are read as longitude/latitude" } else { "" };

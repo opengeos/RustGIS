@@ -9273,6 +9273,7 @@ fn shapefile_by_its_shp_address() {
     // One whose signature doesn't cover its .prj, and one whose address answers with its parts zipped.
     files.extend(parts.iter().filter(|(e, _)| *e != "prj").map(|(e, b)| (format!("/signed/rios.{e}?sig=1"), b.clone())));
     files.extend(parts.iter().filter(|(e, _)| *e != "prj").map(|(e, b)| (format!("/s3/rios.{e}"), b.clone())));
+    files.extend(parts.iter().filter(|(e, _)| *e != "prj").map(|(e, b)| (format!("/s3/v.{e}?v=2"), b.clone())));
     // A site that answers any address with its page: the .prj and .cpg come back as HTML.
     let page = b"\n<!doctype html><html><body>app</body></html>".to_vec();
     files.extend(parts.iter().filter(|(e, _)| !matches!(*e, "prj" | "cpg")).map(|(e, b)| (format!("/spa/rios.{e}"), b.clone())));
@@ -9335,6 +9336,9 @@ fn shapefile_by_its_shp_address() {
     let r = s.run("layer.addUrl", &json!({"url": format!("{base}/s3/rios.shp"), "name": "S3"})).unwrap();
     assert_eq!(r["features"], 1, "{r}");
     assert!(s.notices.last().unwrap().text.contains("no .prj found or readable beside it (1 of 3"), "{:?}", s.notices.last());
+    // So with a query that carries no key (a version, a download flag).
+    let r = s.run("layer.addUrl", &json!({"url": format!("{base}/s3/v.shp?v=2"), "name": "S3 v2"})).unwrap();
+    assert_eq!(r["features"], 1, "{r}");
     // Parts answered with a web page are done without, and said; a .dbf answered so is refused.
     let r = s.run("layer.addUrl", &json!({"url": format!("{base}/spa/rios.shp"), "name": "SPA"})).unwrap();
     assert_eq!(r["features"], 1, "{r}");
