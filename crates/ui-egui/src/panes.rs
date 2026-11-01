@@ -3150,11 +3150,13 @@ pub(crate) fn takes_layer(kind: ParamKind, l: &rustgis_engine::map::Layer) -> bo
 }
 
 /// Whether a tool's parameter of `kind` takes field `i` of `d`: a numeric one for a
-/// `NumericField`, one holding coordinates for a `CoordinateField`, any for a `Field`. False for
-/// a kind that isn't a field's.
+/// `NumericField`, one holding coordinates for a `CoordinateField`, one without a `,` or `;` for
+/// `FieldNames` (runners split the text list at commas, some at semicolons too, so such a name
+/// can't be one entry), any for a `Field`. False for a kind that isn't a field's.
 pub(crate) fn takes_field(kind: ParamKind, d: &rustgis_engine::data::Dataset, i: usize) -> bool {
     match kind {
-        ParamKind::Field | ParamKind::FieldNames | ParamKind::Fields { .. } => true,
+        ParamKind::Field | ParamKind::Fields { .. } => true,
+        ParamKind::FieldNames => d.fields.get(i).is_some_and(|f| !f.name.contains([',', ';'])),
         ParamKind::NumericField => d.fields.get(i).is_some_and(|f| f.ty.is_numeric()),
         ParamKind::CoordinateField => rustgis_engine::analysis::holds_coordinates(d, i),
         _ => false,
@@ -6333,6 +6335,17 @@ mod tests {
         assert_eq!(layer_for_param(&spec, "denominator_weight_field").map(|p| p.name), Some("denominator"));
         assert_eq!(layer_for_param(&spec, "denominators_field").map(|p| p.name), Some("input"), "prefix needs an underscore boundary");
         assert_eq!(layer_for_param(&spec, "weight_field").map(|p| p.name), Some("input"));
+    }
+
+    /// A `FieldNames` list is split at `,` (and by some runners at `;`), so a name holding either
+    /// isn't offered for it; a single field takes any name.
+    #[test]
+    fn field_name_lists_leave_out_names_holding_a_separator() {
+        let opts = rustgis_engine::data::io::CsvOptions { delimiter: Some(b'\t'), ..Default::default() };
+        let (d, _) = rustgis_engine::data::io::read_csv_with("last,first\ta;b\tname\nx\ty\tz\n", "t", &opts).unwrap();
+        let names = |kind| (0..d.fields.len()).filter(|&i| takes_field(kind, &d, i)).map(|i| d.fields[i].name.as_str()).collect::<Vec<_>>();
+        assert_eq!(names(ParamKind::FieldNames), ["name"]);
+        assert_eq!(names(ParamKind::Field), ["last,first", "a;b", "name"]);
     }
 
     #[test]

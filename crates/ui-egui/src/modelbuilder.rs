@@ -1439,7 +1439,16 @@ fn tool_settings(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, i: usize, n: &Mo
                 crate::panes::layer_for_param(spec, p.name)
                     .and_then(|input| input_fields(app, n, input.name))
                     .map(|fields| {
-                        fields.iter().filter(|f| p.kind != ParamKind::NumericField || f.ty.is_numeric()).map(|f| f.name.as_str()).collect()
+                        // As the Tools pane offers them (`panes::takes_field`).
+                        fields
+                            .iter()
+                            .filter(|f| match p.kind {
+                                ParamKind::NumericField => f.ty.is_numeric(),
+                                ParamKind::FieldNames => !f.name.contains([',', ';']),
+                                _ => true,
+                            })
+                            .map(|f| f.name.as_str())
+                            .collect()
                     })
                     .unwrap_or_default()
             } else {
