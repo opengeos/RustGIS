@@ -64,6 +64,9 @@ pub fn commands() -> Vec<C> {
             // A terrain on this layer follows its rename, when no other layer has that name (with
             // two, the name doesn't say which one the terrain was set on).
             let drawn = s.map().layers.iter().filter(|l| l.name.eq_ignore_ascii_case(&old)).count() == 1;
+            // A terrain on a name two layers shared (a project saved so) can't tell which one this was.
+            let was_ambiguous = !drawn
+                && matches!(&s.map().view.terrain, Some(rustgis_map::view::Terrain { source: rustgis_map::view::TerrainSource::Layer(t), .. }) if t.eq_ignore_ascii_case(&old));
             let r = with(s, p, |l| {
                 l.name = n.clone();
                 l.dataset.name = n.clone();
@@ -80,13 +83,13 @@ pub fn commands() -> Vec<C> {
             let ambiguous = match &s.map().view.terrain {
                 Some(rustgis_map::view::Terrain { source: rustgis_map::view::TerrainSource::Layer(t), .. }) => {
                     let count = s.map().layers.iter().filter(|l| l.name.eq_ignore_ascii_case(t)).count();
-                    (count > 1).then(|| t.clone())
+                    (count > 1 || was_ambiguous).then(|| t.clone())
                 }
                 _ => None,
             };
             if let Some(t) = ambiguous {
                 s.map_mut().view.terrain = None;
-                s.notify(format!("Terrain turned off: two layers are now called '{t}'; rename one and turn Terrain on again"), false);
+                s.notify(format!("Terrain turned off: two layers are or were called '{t}'; rename one and turn Terrain on again"), false);
             }
             // Layers masked by this one follow the new name.
             for l in &mut s.map_mut().layers {

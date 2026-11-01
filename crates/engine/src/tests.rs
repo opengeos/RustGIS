@@ -3765,7 +3765,7 @@ fn terrain_is_set_from_a_dem_or_tiles() {
     s.active_layer = Some(second);
     s.run("layer.rename", &json!({"name": "relevo"})).unwrap();
     assert!(s.map().view.terrain.is_none());
-    assert!(s.notices.last().unwrap().text.contains("Terrain turned off: two layers are now called"), "{:?}", s.notices.last());
+    assert!(s.notices.last().unwrap().text.contains("Terrain turned off: two layers are or were called"), "{:?}", s.notices.last());
     s.run("layer.rename", &json!({"name": "dem 2"})).unwrap();
     s.active_layer = Some(id);
     s.run("map.terrain", &json!({"layer": "Relevo"})).unwrap();
