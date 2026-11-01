@@ -177,16 +177,36 @@ impl ParquetSource {
 
         let mut fields = Vec::new();
         let mut field_cols = Vec::new();
+        // Dates and times, read as the whole numbers they're stored as.
+        let mut as_numbers = Vec::new();
         for i in 0..schema.num_columns() {
             if i == geom_col || covering.is_some_and(|c| c.contains(&i)) {
                 continue;
             }
             let Some(name) = top(i) else { continue };
-            if let Some(ty) = field_type(&schema.column(i)) {
+            let c = schema.column(i);
+            if let Some(ty) = field_type(&c) {
+                if let Some(unit) = time_unit(&c) {
+                    as_numbers.push((name.clone(), unit));
+                }
                 fields.push(Field::new(name, ty));
                 field_cols.push(i);
             }
         }
+        // Top-level columns not read: neither a field, the geometry nor its covering.
+        let root = |i: usize| schema.column(i).path().parts().first().cloned();
+        let used: Vec<String> = field_cols.iter().chain([&geom_col]).chain(covering.iter().flatten()).filter_map(|&i| root(i)).collect();
+        let geometries = geo.as_ref().and_then(|g| g.get("columns")).and_then(|c| c.as_object());
+        let left_out: Vec<(String, String)> = schema
+            .root_schema()
+            .get_fields()
+            .iter()
+            .filter(|t| !used.iter().any(|u| u == t.name()))
+            .map(|t| {
+                let kind = if geometries.is_some_and(|g| g.contains_key(t.name())) { "geometry" } else { column_kind(t) };
+                (t.name().to_string(), kind.to_string())
+            })
+            .collect();
         let geometry_type = col_meta
             .and_then(|c| c.get("geometry_types"))
             .and_then(|t| t.as_array())
@@ -229,6 +249,11 @@ impl ParquetSource {
             notes,
             zm_dropped: false,
         };
+        info.note_columns(
+            &left_out,
+            ["of a type RustGIS has no field for was left out", "of types RustGIS has no field for were left out"],
+        );
+        info.note_columns(&as_numbers, ["of dates or times was read as whole numbers", "of dates or times were read as whole numbers"]);
         // An empty file loses nothing.
         if zm && count != Some(0) {
             info.drop_zm(if all_zm { count } else { None });
@@ -723,6 +748,51 @@ fn decimal_scale(c: &ColumnDescPtr) -> Option<i32> {
         _ if c.converted_type() == ConvertedType::DECIMAL => Some(c.type_scale()),
         _ => None,
     }
+}
+
+/// What a top-level column not read as a field holds, for the note saying it was left out: a
+/// list, map or struct, or a decimal, geometry, INT96 timestamp or binary value.
+fn column_kind(t: &parquet::schema::types::Type) -> &'static str {
+    let info = t.get_basic_info();
+    let logical = info.logical_type_ref();
+    if info.has_repetition() && info.repetition() == parquet::basic::Repetition::REPEATED {
+        return "list";
+    }
+    if t.is_group() {
+        return match (logical, info.converted_type()) {
+            (Some(LogicalType::List), _) | (_, ConvertedType::LIST) => "list",
+            (Some(LogicalType::Map), _) | (_, ConvertedType::MAP | ConvertedType::MAP_KEY_VALUE) => "map",
+            _ => "struct",
+        };
+    }
+    match (t.get_physical_type(), logical, info.converted_type()) {
+        (_, Some(LogicalType::Decimal(_)), _) | (_, _, ConvertedType::DECIMAL) => "decimal",
+        (_, Some(LogicalType::Geometry(_) | LogicalType::Geography(_)), _) => "geometry",
+        (Physical::INT96, ..) => "INT96 timestamp",
+        _ => "binary",
+    }
+}
+
+/// What a date or time column's whole numbers count ("days since 1970-01-01"); `None` for other
+/// columns.
+fn time_unit(c: &ColumnDescPtr) -> Option<String> {
+    use parquet::basic::TimeUnit;
+    let unit = |u: &TimeUnit| match u {
+        TimeUnit::MILLIS => "milliseconds",
+        TimeUnit::MICROS => "microseconds",
+        TimeUnit::NANOS => "nanoseconds",
+    };
+    let (count, since) = match (c.logical_type_ref(), c.converted_type()) {
+        (Some(LogicalType::Timestamp(t)), _) => (unit(&t.unit), "1970-01-01"),
+        (Some(LogicalType::Time(t)), _) => (unit(&t.unit), "midnight"),
+        (Some(LogicalType::Date), _) | (None, ConvertedType::DATE) => ("days", "1970-01-01"),
+        (None, ConvertedType::TIMESTAMP_MILLIS) => ("milliseconds", "1970-01-01"),
+        (None, ConvertedType::TIMESTAMP_MICROS) => ("microseconds", "1970-01-01"),
+        (None, ConvertedType::TIME_MILLIS) => ("milliseconds", "midnight"),
+        (None, ConvertedType::TIME_MICROS) => ("microseconds", "midnight"),
+        _ => return None,
+    };
+    Some(format!("{count} since {since}"))
 }
 
 /// A field type for a top-level column; `None` for types not read (binary, INT96, fixed-length).

@@ -2025,3 +2025,115 @@ fn declared_z_and_m_are_said_and_counted() {
     let info = open_path(&parquet, None).unwrap().info().clone();
     assert!(info.zm_dropped && info.notes.contains(&crate::zm_note(None)), "{:?}", info.notes);
 }
+
+/// A GeoParquet whose columns RustGIS has no field type for (a decimal too wide for a 64-bit
+/// integer, binary, a list, a struct) are said and left out, and whose dates and times, read as
+/// whole numbers, are said with their unit; a file of ordinary columns says nothing.
+#[test]
+fn geoparquet_columns_not_kept_or_read_as_numbers_are_said() {
+    use arrow_array::builder::{Int32Builder, ListBuilder};
+    use arrow_array::{
+        BinaryArray, Date32Array, Decimal128Array, RecordBatch, StringArray, StructArray, TimestampMicrosecondArray,
+        TimestampMillisecondArray,
+    };
+    use arrow_schema::{DataType, Field as AField, Fields, Schema, TimeUnit};
+    let d = tempfile::tempdir().unwrap();
+    let path = d.path().join("columns.parquet");
+    let wkb = wkb::encode(&Geometry::Point(Coord::new(1.0, 2.0)));
+    let mut tags = ListBuilder::new(Int32Builder::new());
+    tags.values().append_value(7);
+    tags.append(true);
+    let tags = tags.finish();
+    let inner: Fields = vec![Arc::new(AField::new("a", DataType::Int64, true))].into_iter().collect();
+    let extra = StructArray::new(inner.clone(), vec![Arc::new(arrow_array::Int64Array::from(vec![1]))], None);
+    let schema = Arc::new(Schema::new(vec![
+        AField::new("name", DataType::Utf8, true),
+        AField::new("price", DataType::Decimal128(30, 2), true),
+        AField::new("photo", DataType::Binary, true),
+        AField::new("tags", arrow_array::Array::data_type(&tags).clone(), true),
+        AField::new("extra", DataType::Struct(inner), true),
+        AField::new("seen", DataType::Timestamp(TimeUnit::Millisecond, Some("UTC".into())), true),
+        AField::new("logged", DataType::Timestamp(TimeUnit::Microsecond, None), true),
+        AField::new("day", DataType::Date32, true),
+        AField::new("geometry", DataType::Binary, false),
+    ]));
+    let cols: Vec<arrow_array::ArrayRef> = vec![
+        Arc::new(StringArray::from(vec!["a"])),
+        Arc::new(Decimal128Array::from(vec![12345]).with_precision_and_scale(30, 2).unwrap()),
+        Arc::new(BinaryArray::from(vec![&b"\x89PNG"[..]])),
+        Arc::new(tags),
+        Arc::new(extra),
+        Arc::new(TimestampMillisecondArray::from(vec![1_790_856_000_000]).with_timezone("UTC")),
+        Arc::new(TimestampMicrosecondArray::from(vec![1_790_856_000_000_000])),
+        Arc::new(Date32Array::from(vec![20_727])),
+        Arc::new(BinaryArray::from(vec![wkb.as_slice()])),
+    ];
+    let geo = r#"{"version":"1.0.0","primary_column":"geometry","columns":{"geometry":{"encoding":"WKB","geometry_types":["Point"]}}}"#;
+    let props = ::parquet::file::properties::WriterProperties::builder()
+        .set_key_value_metadata(Some(vec![::parquet::file::metadata::KeyValue::new("geo".to_string(), geo.to_string())]))
+        .build();
+    let mut w = ::parquet::arrow::ArrowWriter::try_new(std::fs::File::create(&path).unwrap(), schema.clone(), Some(props)).unwrap();
+    w.write(&RecordBatch::try_new(schema, cols).unwrap()).unwrap();
+    w.close().unwrap();
+
+    let left_out =
+        "4 columns of types RustGIS has no field for were left out: price (decimal), photo (binary), tags (list), extra (struct)";
+    let as_numbers = "3 columns of dates or times were read as whole numbers: seen (milliseconds since 1970-01-01), \
+                      logged (microseconds since 1970-01-01), day (days since 1970-01-01)";
+    // Read in place: the source's notes, which adding the layer gives as notices.
+    let src = open_path(&path, None).unwrap();
+    let info = src.info();
+    assert_eq!(info.notes, vec![left_out.to_string(), as_numbers.to_string()]);
+    let names: Vec<&str> = info.fields.iter().map(|f| f.name.as_str()).collect();
+    assert_eq!(names, ["name", "seen", "logged", "day"]);
+    // Read whole: the same, in the read's report, and the values as said.
+    let (ds, report) = materialize(src.as_ref()).unwrap();
+    assert_eq!(report.messages, vec![format!("columns: {left_out}"), format!("columns: {as_numbers}")]);
+    assert_eq!(
+        ds.features[0].attrs,
+        vec![Value::Text("a".into()), Value::Int(1_790_856_000_000), Value::Int(1_790_856_000_000_000), Value::Int(20_727)]
+    );
+
+    // Ordinary columns, with a bbox covering: nothing to say.
+    let clean = d.path().join("clean.parquet");
+    write_parquet(&clean, true);
+    let src = open_path(&clean, None).unwrap();
+    assert!(src.info().notes.is_empty(), "{:?}", src.info().notes);
+    assert!(materialize(src.as_ref()).unwrap().1.messages.is_empty());
+}
+
+/// A FlatGeobuf's binary column, which RustGIS has no field type for, is said and left out, the
+/// columns after it keeping their values; a file without one says nothing.
+#[test]
+fn flatgeobuf_binary_columns_are_said_and_left_out() {
+    use flatgeobuf::geozero::{ColumnValue, PropertyProcessor};
+    use flatgeobuf::{ColumnType, FgbWriter, GeometryType as G};
+    let d = tempfile::tempdir().unwrap();
+    let path = d.path().join("blobs.fgb");
+    let mut w = FgbWriter::create("blobs", G::Point).unwrap();
+    w.add_column("name", ColumnType::String, |_, _| {});
+    w.add_column("blob", ColumnType::Binary, |_, _| {});
+    w.add_column("value", ColumnType::Long, |_, _| {});
+    let g = flatgeobuf::geozero::wkb::Wkb(wkb::encode(&Geometry::Point(Coord::new(1.0, 2.0))));
+    w.add_feature_geom(g, |f| {
+        f.property(0, "name", &ColumnValue::String("a")).unwrap();
+        f.property(1, "blob", &ColumnValue::Binary(b"\x89PNG")).unwrap();
+        f.property(2, "value", &ColumnValue::Long(42)).unwrap();
+    })
+    .unwrap();
+    w.write(std::fs::File::create(&path).unwrap()).unwrap();
+
+    let note = "1 column of a type RustGIS has no field for was left out: blob (binary)";
+    let src = open_path(&path, None).unwrap();
+    assert_eq!(src.info().notes, vec![note.to_string()]);
+    let names: Vec<&str> = src.info().fields.iter().map(|f| f.name.as_str()).collect();
+    assert_eq!(names, ["name", "value"]);
+    let (ds, report) = materialize(src.as_ref()).unwrap();
+    assert_eq!(report.messages, vec![format!("blobs: {note}")]);
+    assert_eq!(ds.features[0].attrs, vec![Value::Text("a".into()), Value::Int(42)]);
+
+    let clean = d.path().join("clean.fgb");
+    write_fgb(&clean);
+    let src = open_path(&clean, None).unwrap();
+    assert!(src.info().notes.is_empty(), "{:?}", src.info().notes);
+}
