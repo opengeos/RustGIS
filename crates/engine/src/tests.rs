@@ -6735,6 +6735,32 @@ fn plugin_edits_are_one_undo_step() {
     rustgis_plugins::unload("eng-edit");
 }
 
+/// A built-in tool's output layer stays in the session, so a plugin with `edit` alone may name
+/// it, as a task from a file may. A name that could be a path, and tools that may write files
+/// (GeoLibre's, those that save one), still need `files`.
+#[test]
+fn plugin_tools_name_their_output_layer_with_edit_alone() {
+    use crate::cmd::plugins::reaches;
+    let mut s = world();
+    plugin("eng-out", &["edit"]);
+    let clip = json!({"tool": "clip", "params": {"input": "Cities", "clip": "Countries", "output": "Cities in countries"}});
+    let gp = s.registry.get("gp.run").copied().unwrap();
+    assert!(reaches(&gp, &clip).is_none(), "the assistant doesn't ask either");
+    forward(&mut s, "eng-out", "gp.run", clip).unwrap();
+    assert!(s.map().layer_by_name("Cities in countries").is_some());
+    for params in [
+        json!({"tool": "clip", "params": {"input": "Cities", "clip": "Countries", "output": "out/cities"}}),
+        json!({"tool": "clip", "params": {"input": "Cities", "clip": "Countries", "output": "cities.shp"}}),
+        json!({"tool": "clip", "params": {"input": "Cities", "clip": "Countries", "output": "C:\\cities"}}),
+        json!({"tool": "geolibre:slope", "params": {"input": "Cities", "output": "slope"}}),
+        json!({"tool": "vectorToPmtiles", "params": {"input": "Cities", "output": "cities"}}),
+    ] {
+        let e = forward(&mut s, "eng-out", "gp.run", params.clone()).unwrap_err();
+        assert!(e.contains("'files' permission"), "{params}: {e}");
+    }
+    rustgis_plugins::unload("eng-out");
+}
+
 /// A plugin's command the app runs leaves its downloads to the app, which fetches them off the
 /// frame (as the browser does): nothing waits, and nothing is an undo step until the data lands,
 /// with what the plugin asked (how a table's points are read) kept. Run another way (the command
