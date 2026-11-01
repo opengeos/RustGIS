@@ -12,8 +12,9 @@ pub(crate) const BATCH: usize = 16;
 /// Each worker's stack, as large as the main thread's usually is.
 const STACK_BYTES: usize = 8 << 20;
 
-/// The work below which a raster tool's rows are made on one thread: cell-point pairs, say,
-/// about 30 ns each for IDW, so some 5 ms of it, against tens of microseconds to start a thread.
+/// The work below which a raster tool's rows are made on one thread, in the tool's own units:
+/// cell-point pairs for IDW (about 30 ns each, so some 5 ms of it), the same plus each cell's
+/// system for kriging, ray steps for a viewshed. Starting a thread costs tens of microseconds.
 pub(crate) const MIN_ROW_WORK: usize = 200_000;
 /// The scratch memory a raster tool's threads may take together, beyond one thread's.
 const SCRATCH_BUDGET: usize = 256 << 20;
@@ -47,8 +48,9 @@ fn cores() -> usize {
 /// `f` on each of a raster's `rows` (its output rows, `chunks_mut` of the bands it writes) with
 /// the row's number, on `threads` threads ([`threads_for_rows`]), this one among them. Each row
 /// is written where it lies, so the output is held once, as on one thread. Rows are taken a few
-/// at a time: one each when there are few per thread, so rows that cost more than others are
-/// shared out, up to [`BATCH`] when there are many, so cheap rows don't wait on the lock.
+/// at a time, by the rows still left: one each when there are few per thread (and so at the
+/// end), so rows that cost more than others are shared out, up to [`BATCH`] when there are many,
+/// so cheap rows don't wait on the lock.
 /// Each thread makes its own `scratch()` once; one that panics stops the others after the rows
 /// they are making, and its panic is raised again here.
 pub(crate) fn for_each_row<T: Send, S>(
@@ -63,16 +65,16 @@ pub(crate) fn for_each_row<T: Send, S>(
         rows.enumerate().for_each(|(i, row)| f(&mut s, i, row));
         return;
     }
-    let take = (rows.len() / threads.saturating_mul(BATCH)).clamp(1, BATCH);
     let rows = std::sync::Mutex::new(rows.enumerate());
     let failed = AtomicBool::new(false);
     let work = || {
         let _stop = StopOnPanic(&failed);
         let mut s = scratch();
-        let mut taken = Vec::with_capacity(take);
+        let mut taken = Vec::with_capacity(BATCH);
         while !failed.load(Ordering::Relaxed) {
             // The lock is held only to take rows; a poisoned one means a thread panicked.
             if let Ok(mut r) = rows.lock() {
+                let take = (r.len() / threads.saturating_mul(BATCH)).clamp(1, BATCH);
                 taken.extend(r.by_ref().take(take));
             }
             if taken.is_empty() {

@@ -333,7 +333,8 @@ fn viewshed_on(threads: Option<usize>, r: &Raster, b: usize, observer: Coord, he
     let rad_r = (radius_m / cy).ceil() as i64;
     // Each cell walks a ray back to the observer: bound cells × ray length, not just cells.
     let cells = (2 * rad_c + 1).saturating_mul(2 * rad_r + 1);
-    if cells > 25_000_000 || cells.saturating_mul(rad_c.max(rad_r) / 2 + 1) > MAX_VIEWSHED_WORK {
+    let ray_work = cells.saturating_mul(rad_c.max(rad_r) / 2 + 1);
+    if cells > 25_000_000 || ray_work > MAX_VIEWSHED_WORK {
         return Err("the radius covers too many cells; use a smaller radius".into());
     }
     let w = r.width as usize;
@@ -343,9 +344,7 @@ fn viewshed_on(threads: Option<usize>, r: &Raster, b: usize, observer: Coord, he
     // on several threads when the work is large (#1252).
     let (first, last) = ((or - rad_r).max(0), (or + rad_r).min(r.height as i64 - 1));
     let rows = usize::try_from(last - first + 1).unwrap_or(0);
-    let threads = threads.unwrap_or_else(|| {
-        crate::parallel::threads_for_rows(rows, usize::try_from(cells.saturating_mul(rad_c.max(rad_r) / 2 + 1)).unwrap_or(usize::MAX), 0)
-    });
+    let threads = threads.unwrap_or_else(|| crate::parallel::threads_for_rows(rows, usize::try_from(ray_work).unwrap_or(usize::MAX), 0));
     let window = out.chunks_mut(w).skip(usize::try_from(first).unwrap_or(0)).take(rows);
     crate::parallel::for_each_row(
         window,
@@ -1138,9 +1137,14 @@ mod tests {
         let transform = GeoTransform { origin_x: 0.0, origin_y: 45.0, pixel_width: 0.0003, pixel_height: -0.0003 };
         let dem = Raster::new("dem", w, h, vec![data], transform, Crs::LonLat, Some(-9999.0), ColorHint::Gray, "Float32")
             .unwrap_or_else(|e| panic!("{e}"));
-        for (at, radius) in [(Coord::new(0.012, 44.990), 500.0), (Coord::new(0.003, 44.985), 5_000.0)] {
+        // Visible, hidden and no-data cells, as one thread gives them: a change to the
+        // ray walk shows here, not only a difference between thread counts.
+        for (at, radius, expected) in
+            [(Coord::new(0.012, 44.990), 500.0, [207, 775, 5318]), (Coord::new(0.003, 44.985), 5_000.0, [185, 6050, 65])]
+        {
             let one = viewshed_on(Some(1), &dem, 0, at, 2.0, radius).unwrap_or_else(|e| panic!("{e}"));
-            assert!(one.contains(&1.0) && one.contains(&0.0), "{radius}");
+            let counts = [1.0, 0.0, NODATA].map(|k| one.iter().filter(|v| v.to_bits() == k.to_bits()).count());
+            assert_eq!(counts, expected, "radius {radius}");
             for threads in [2, 7, 16] {
                 let many = viewshed_on(Some(threads), &dem, 0, at, 2.0, radius).unwrap_or_else(|e| panic!("{e}"));
                 assert!(one.iter().map(|v| v.to_bits()).eq(many.iter().map(|v| v.to_bits())), "{threads} threads, radius {radius}");
