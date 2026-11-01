@@ -1,0 +1,213 @@
+//! Tabulate Intersection through `rustgis_analysis::run`: class areas and sums shared out to zones.
+
+use rustgis_analysis::{Inputs, Output, ToolResult};
+use rustgis_data::{Coord, Dataset, Field, FieldType, Geometry, GeometryType, Value};
+use serde_json::json;
+use std::collections::HashMap;
+
+/// The tool's inputs: layers by name, and each layer's selected rows.
+#[derive(Default)]
+struct Layers {
+    data: HashMap<String, Dataset>,
+    selected: HashMap<String, Vec<usize>>,
+}
+impl Inputs for Layers {
+    /// The layer of this name.
+    fn dataset(&self, name: &str) -> Option<&Dataset> {
+        self.data.get(name)
+    }
+    /// The layer's selected rows; none selects nothing, so every row is used.
+    fn selection(&self, name: &str) -> &[usize] {
+        self.selected.get(name).map(Vec::as_slice).unwrap_or(&[])
+    }
+}
+
+/// A lon/lat rectangle from `x0` to `x1` and the equator to 1°N.
+fn rect(x0: f64, x1: f64) -> Option<Geometry> {
+    let ring = [(x0, 0.0), (x1, 0.0), (x1, 1.0), (x0, 1.0), (x0, 0.0)].map(|(x, y)| Coord::new(x, y)).to_vec();
+    Some(Geometry::Polygon(vec![vec![ring]]))
+}
+
+/// Zones `A` (0°–1°E), `B` (1°–2°E) and `C` (10°–11°E), named by `zone`.
+fn zones() -> Dataset {
+    let mut ds = Dataset::new("zones", GeometryType::Polygon, vec![Field::new("zone", FieldType::Text)]);
+    for (name, x0) in [("A", 0.0), ("B", 1.0), ("C", 10.0)] {
+        ds.push_next(rect(x0, x0 + 1.0), vec![Value::Text(name.into())]);
+    }
+    ds
+}
+
+/// Classes by `kind`, with a population `pop`: a forest across A and B, a second forest over the
+/// first one's half in A, and water over A's other half with no population.
+fn classes() -> Dataset {
+    let mut ds = Dataset::new(
+        "classes",
+        GeometryType::Polygon,
+        vec![Field::new("kind", FieldType::Text), Field::new("pop", FieldType::Integer), Field::new("zone", FieldType::Text)],
+    );
+    let rows = [(0.5, 1.5, "forest", Value::Int(100)), (0.5, 1.0, "forest", Value::Int(10)), (0.0, 0.5, "water", Value::Null)];
+    for (x0, x1, kind, pop) in rows {
+        ds.push_next(rect(x0, x1), vec![Value::Text(kind.into()), pop, Value::Text("x".into())]);
+    }
+    ds
+}
+
+/// The two layers as the tool's inputs, under their own names, with nothing selected.
+fn layers(zones: Dataset, classes: Dataset) -> Layers {
+    let mut l = Layers::default();
+    l.data.insert(zones.name.clone(), zones);
+    l.data.insert(classes.name.clone(), classes);
+    l
+}
+
+/// The standalone table a run made.
+fn table(result: ToolResult) -> Dataset {
+    match result.output {
+        Output::Table(ds) => ds,
+        _ => panic!("expected a table"),
+    }
+}
+
+/// Each row's text fields, then its numbers rounded to 3 decimals (empty as NaN).
+fn rows(ds: &Dataset) -> Vec<(Vec<String>, Vec<f64>)> {
+    ds.features
+        .iter()
+        .map(|f| {
+            let text = f.attrs.iter().filter_map(|v| if let Value::Text(t) = v { Some(t.clone()) } else { None }).collect();
+            let nums = f
+                .attrs
+                .iter()
+                .filter(|v| !matches!(v, Value::Text(_)))
+                .map(|v| v.as_f64().map_or(f64::NAN, |n| (n * 1000.0).round() / 1000.0))
+                .collect();
+            (text, nums)
+        })
+        .collect()
+}
+
+/// The `area_km2` Calculate Geometry Attributes gives a polygon, rounded as [`rows`] rounds.
+fn calculated_area_km2(g: Option<Geometry>) -> f64 {
+    let mut ds = Dataset::new("one", GeometryType::Polygon, vec![]);
+    ds.push_next(g, vec![]);
+    let l = layers(ds, Dataset::new("none", GeometryType::Polygon, vec![]));
+    let Output::Update { dataset, .. } = rustgis_analysis::run("calculateGeometry", &l, &json!({"input": "one"})).unwrap().output else {
+        panic!("expected an update")
+    };
+    let area = dataset.field_index("area_km2").map(|i| dataset.value(0, i).clone());
+    area.and_then(|v| v.as_f64()).map(|a| (a * 1000.0).round() / 1000.0).unwrap()
+}
+
+#[test]
+fn shares_class_areas_and_sums_out_to_zones() {
+    let l = layers(zones(), classes());
+    let params = json!({"zones": "zones", "zoneFields": "zone", "classes": "classes", "classFields": "kind", "sumFields": ["pop"]});
+    let result = rustgis_analysis::run("tabulateIntersection", &l, &params).unwrap();
+    let messages = result.messages.clone();
+    let out = table(result);
+    let names: Vec<&str> = out.fields.iter().map(|f| f.name.as_str()).collect();
+    assert_eq!(names, ["zone", "kind", "area_km2", "percentage", "pop"]);
+    assert!(out.fields.iter().skip(2).all(|f| f.ty == FieldType::Double));
+    let got = rows(&out);
+    let text: Vec<Vec<String>> = got.iter().map(|(t, _)| t.clone()).collect();
+    assert_eq!(text, [["A", "forest"], ["A", "water"], ["B", "forest"]].map(|r| r.map(String::from).to_vec()));
+    // Half of A, measured as Calculate Geometry Attributes measures it: the two forests over that
+    // half count once.
+    let expected = calculated_area_km2(rect(0.5, 1.0));
+    let half = got.first().and_then(|(_, n)| n.first()).copied().unwrap();
+    assert!((half - expected).abs() < 0.01 && (6100.0..6200.0).contains(&half), "{half} km², not {expected}");
+    for (_, nums) in &got {
+        assert!((nums[0] - half).abs() < 0.01 && (nums[1] - 50.0).abs() < 0.001, "{nums:?}");
+    }
+    // A gets half the first forest's 100 and all the second's 10; B the other half of 100. Water
+    // has no population, so its share is 0 and a notice says so.
+    let pops: Vec<f64> = got.iter().map(|(_, n)| n[2]).collect();
+    assert_eq!(pops, [60.0, 0.0, 50.0]);
+    assert_eq!(
+        messages,
+        [
+            "Tabulate Intersection: 3 rows",
+            "1 zone overlaps no class feature, so it has no rows",
+            "1 class feature has no value in 'pop', left out of its shares",
+        ]
+    );
+}
+
+#[test]
+fn clean_input_gives_no_notices() {
+    let mut l = layers(zones(), classes());
+    // Zones A and B only, and the forests, which all have a population.
+    l.selected.insert("zones".into(), vec![1, 0]);
+    l.selected.insert("classes".into(), vec![0, 1]);
+    let params = json!({"zones": "zones", "zoneFields": ["zone"], "classes": "classes", "sumFields": "pop"});
+    let result = rustgis_analysis::run("tabulateIntersection", &l, &params).unwrap();
+    assert_eq!(result.messages, ["Tabulate Intersection: 2 rows"]);
+    let out = table(result);
+    // Without class fields every class feature is one class.
+    let names: Vec<&str> = out.fields.iter().map(|f| f.name.as_str()).collect();
+    assert_eq!(names, ["zone", "area_km2", "percentage", "pop"]);
+    let got = rows(&out);
+    assert_eq!(got.iter().map(|(t, _)| t.join("")).collect::<Vec<_>>(), ["A", "B"]);
+    assert_eq!(got.iter().map(|(_, n)| (n[1], n[2])).collect::<Vec<_>>(), [(50.0, 60.0), (50.0, 50.0)]);
+}
+
+#[test]
+fn says_what_it_leaves_out() {
+    let mut z = zones();
+    z.push_next(None, vec![Value::Text("D".into())]);
+    let mut c = Dataset::new("classes", GeometryType::Polygon, vec![Field::new("pop", FieldType::Integer)]);
+    // Half in B, half outside every zone; then one without geometry.
+    c.push_next(rect(1.5, 2.5), vec![Value::Int(100)]);
+    c.push_next(None, vec![Value::Int(7)]);
+    let l = layers(z, c);
+    let params = json!({"zones": "zones", "zoneFields": "zone", "classes": "classes", "sumFields": "pop"});
+    let result = rustgis_analysis::run("tabulateIntersection", &l, &params).unwrap();
+    assert_eq!(
+        result.messages,
+        [
+            "Tabulate Intersection: 1 row",
+            "1 zone feature has no geometry and was left out",
+            "1 class feature has no geometry and was left out",
+            "3 zones overlap no class feature, so they have no rows",
+            "1 class feature lies partly or wholly outside the zones: its value outside isn't shared out",
+        ]
+    );
+    let got = rows(&table(result));
+    assert_eq!(got.iter().map(|(t, n)| (t.join(""), n[1], n[2])).collect::<Vec<_>>(), [("B".into(), 50.0, 50.0)]);
+}
+
+#[test]
+fn zones_sharing_a_value_are_one_zone() {
+    let mut z = zones();
+    for f in &mut z.features {
+        f.attrs[0] = Value::Text("all".into());
+    }
+    let l = layers(z, classes());
+    let params = json!({"zones": "zones", "zoneFields": "zone", "classes": "classes", "classFields": "kind"});
+    let result = rustgis_analysis::run("tabulateIntersection", &l, &params).unwrap();
+    assert_eq!(result.messages, ["Tabulate Intersection: 2 rows"]);
+    // The forests cover 1° of the zone's 3°, the water half a degree.
+    let got = rows(&table(result));
+    assert_eq!(
+        got.iter().map(|(t, n)| (t.join(" "), n[1])).collect::<Vec<_>>(),
+        [("all forest".into(), 33.333), ("all water".into(), 16.667)]
+    );
+}
+
+#[test]
+fn refuses_inputs_it_cannot_tabulate() {
+    let mut lines = Dataset::new("lines", GeometryType::Polyline, vec![Field::new("zone", FieldType::Text)]);
+    lines.push_next(Some(Geometry::Line(vec![vec![Coord::new(0.0, 0.0), Coord::new(1.0, 1.0)]])), vec![Value::Text("A".into())]);
+    let mut l = layers(zones(), classes());
+    l.data.insert("lines".into(), lines);
+    let run = |params: serde_json::Value| rustgis_analysis::run("tabulateIntersection", &l, &params).unwrap_err();
+    assert_eq!(run(json!({"zones": "zones", "zoneFields": "zone", "classes": "lines"})), "'lines' is not a polygon layer");
+    assert_eq!(run(json!({"zones": "zones", "zoneFields": [], "classes": "classes"})), "'Zone Fields' is required");
+    assert_eq!(
+        run(json!({"zones": "zones", "zoneFields": "zone", "classes": "classes", "sumFields": "kind"})),
+        "the sum field 'kind' is not numeric"
+    );
+    assert_eq!(
+        run(json!({"zones": "zones", "zoneFields": "zone", "classes": "classes", "classFields": "pop", "sumFields": "pop"})),
+        "the sum field 'pop' can't also be a class field"
+    );
+}

@@ -504,6 +504,42 @@ pub static TOOLS: &[ToolSpec] = &[
         run: pivot_table,
     },
     ToolSpec {
+        id: "tabulateIntersection",
+        name: "Tabulate Intersection",
+        toolbox: "Analysis › Statistics",
+        summary: "How much of each zone each class of polygons covers, with the classes' totals shared out to the zones by area.",
+        params: &[
+            P { name: "zones", label: "Input Zone Features", kind: K::PolygonLayer, required: true, default: "", help: "" },
+            P {
+                name: "zoneFields",
+                label: "Zone Fields",
+                kind: K::Fields { input: "zones" },
+                required: true,
+                default: "",
+                help: "Zones sharing these fields' values make one zone. Scripts and the AI Assistant can give several fields as a list.",
+            },
+            P { name: "classes", label: "Input Class Features", kind: K::PolygonLayer, required: true, default: "", help: "" },
+            P {
+                name: "classFields",
+                label: "Class Fields",
+                kind: K::Fields { input: "classes" },
+                required: false,
+                default: "",
+                help: "Class features sharing these fields' values make one class. Leave empty to treat them all as one class.",
+            },
+            P {
+                name: "sumFields",
+                label: "Sum Fields",
+                kind: K::Fields { input: "classes" },
+                required: false,
+                default: "",
+                help: "Numeric fields of the class features whose values are shared out to the zones by the part of each feature's area in them.",
+            },
+            P { name: "output", label: "Output Name", kind: K::Text, required: false, default: "", help: "" },
+        ],
+        run: tabulate_intersection,
+    },
+    ToolSpec {
         id: "exportFeatures",
         name: "Export Features",
         toolbox: "Conversion",
@@ -2743,9 +2779,50 @@ fn count_points(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
     result(out, format!("Summarize Within: {total} points counted"))
 }
 
+/// A lon/lat line or ring as a `geo` line string, in degrees.
+fn lonlat_line(coords: &[Coord]) -> geo::LineString<f64> {
+    geo::LineString::new(coords.iter().map(|c| geo::Coord { x: c.x, y: c.y }).collect())
+}
+
+/// The ground area (square metres, holes taken out) and perimeter (metres, holes included) of a
+/// lon/lat polygon geometry on the WGS 84 ellipsoid, as Calculate Geometry Attributes gives them;
+/// zero for any other geometry.
+fn ground_area_perimeter(g: &Geometry) -> (f64, f64) {
+    use geo::GeodesicArea;
+    let (mut a, mut per) = (0.0, 0.0);
+    let Geometry::Polygon(polys) = g else { return (a, per) };
+    for rings in polys {
+        for (i, r) in rings.iter().enumerate() {
+            let mut ring = lonlat_line(r);
+            ring.close();
+            // Orient in continuous longitude space, including small dateline crossings.
+            let mut longitude = ring.0.first().map_or(0.0, |c| c.x);
+            for c in &mut ring.0 {
+                longitude += (c.x - longitude + 180.0).rem_euclid(360.0) - 180.0;
+                c.x = longitude;
+            }
+            let polar = ring.0.first().zip(ring.0.last()).is_some_and(|(a, b)| (a.x - b.x).abs() > 180.0);
+            let orientable = !polar && ring.0.iter().all(|c| c.x.is_finite() && (-90.0..=90.0).contains(&c.y));
+            let polygon = geo::Polygon::new(ring, vec![]);
+            let (rp, ra) = if orientable {
+                polygon.orient(Direction::Default).geodesic_perimeter_area_unsigned()
+            } else {
+                // Keep smaller polar caps; invalid coordinates bypass planar orientation.
+                let (perimeter, area) = polygon.geodesic_perimeter_area_signed();
+                (perimeter, area.abs())
+            };
+            a += if i == 0 { ra } else { -ra };
+            per += rp;
+        }
+    }
+    (a, per)
+}
+
+/// Calculate Geometry Attributes: adds `area_km2` and `perimeter_km` to a polygon layer (see
+/// [`ground_area_perimeter`]), `length_km` to a line layer, and `point_x`/`point_y` (a label point)
+/// to any other, updating the layer in place.
 fn calculate_geometry(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
-    use geo::{Geodesic, GeodesicArea, Length};
-    let line = |coords: &[Coord]| geo::LineString::new(coords.iter().map(|c| geo::Coord { x: c.x, y: c.y }).collect());
+    use geo::{Geodesic, Length};
     let ds = input(inp, p, "input")?;
     let mut out = ds.clone();
     match ds.geometry_type {
@@ -2753,33 +2830,7 @@ fn calculate_geometry(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> 
             let fa = out.ensure_field("area_km2", FieldType::Double);
             let fp = out.ensure_field("perimeter_km", FieldType::Double);
             for f in &mut out.features {
-                let (mut a, mut per) = (0.0, 0.0);
-                if let Some(Geometry::Polygon(polys)) = &f.geometry {
-                    for rings in polys {
-                        for (i, r) in rings.iter().enumerate() {
-                            let mut ring = line(r);
-                            ring.close();
-                            // Orient in continuous longitude space, including small dateline crossings.
-                            let mut longitude = ring.0.first().map_or(0.0, |c| c.x);
-                            for c in &mut ring.0 {
-                                longitude += (c.x - longitude + 180.0).rem_euclid(360.0) - 180.0;
-                                c.x = longitude;
-                            }
-                            let polar = ring.0.first().zip(ring.0.last()).is_some_and(|(a, b)| (a.x - b.x).abs() > 180.0);
-                            let orientable = !polar && ring.0.iter().all(|c| c.x.is_finite() && (-90.0..=90.0).contains(&c.y));
-                            let polygon = geo::Polygon::new(ring, vec![]);
-                            let (rp, ra) = if orientable {
-                                polygon.orient(Direction::Default).geodesic_perimeter_area_unsigned()
-                            } else {
-                                // Keep smaller polar caps; invalid coordinates bypass planar orientation.
-                                let (perimeter, area) = polygon.geodesic_perimeter_area_signed();
-                                (perimeter, area.abs())
-                            };
-                            a += if i == 0 { ra } else { -ra };
-                            per += rp;
-                        }
-                    }
-                }
+                let (a, per) = f.geometry.as_ref().map_or((0.0, 0.0), ground_area_perimeter);
                 if let Some(v) = f.attrs.get_mut(fa) {
                     *v = Value::Float(a / 1e6);
                 }
@@ -2792,7 +2843,7 @@ fn calculate_geometry(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> 
             let fl = out.ensure_field("length_km", FieldType::Double);
             for f in &mut out.features {
                 let len: f64 = match &f.geometry {
-                    Some(Geometry::Line(parts)) => parts.iter().map(|p| Geodesic.length(&line(p))).sum(),
+                    Some(Geometry::Line(parts)) => parts.iter().map(|p| Geodesic.length(&lonlat_line(p))).sum(),
                     _ => 0.0,
                 };
                 if let Some(v) = f.attrs.get_mut(fl) {
@@ -3097,6 +3148,216 @@ fn pivot_column_name(field: &str, v: &Value) -> String {
     let kept: String = name.chars().take(MAX_PIVOT_NAME).collect();
     let name = if text { kept.trim_matches('_').to_string() } else { kept };
     if !text || name.is_empty() || name.starts_with(char::is_numeric) { format!("{field}{name}") } else { name }
+}
+
+/// A zone of Tabulate Intersection: the zone features sharing the zone fields' values, as one mask.
+struct TabulateZone {
+    /// The zone fields' values.
+    key: Vec<Value>,
+    /// The lon/lat extent of its features, for the index.
+    ext: Extent,
+    /// Its features' polygons in Web Mercator, unioned when there are several, as [`mask_of`] does.
+    mask: MultiPolygon<f64>,
+    /// Its area in square metres on the sphere, as [`tabulate_intersection`] compares areas (see
+    /// there), overlaps between its features counted once.
+    sphere_area_m2: f64,
+}
+
+/// What one class covers of one zone: its class features' parts in the zone, and the shares of
+/// their sum fields' values, in the order of the sum fields.
+struct TabulateCell {
+    parts: Vec<Geometry>,
+    sums: Vec<f64>,
+}
+
+/// Tabulate Intersection: a row for each zone and class that overlap, holding the zone fields, the
+/// class fields, `area_km2` (the ground area of the class in the zone, class features overlapping
+/// each other counted once), `percentage` (that area as a percentage of the zone's) and each sum
+/// field's share: the sum, over the class's features, of the field's value times the part of the
+/// feature's area inside the zone. Rows follow the zones, then the classes, in record order; pairs
+/// that only touch get none. Only selected features are used when a layer has a selection. The
+/// messages count features without geometry (left out), zones with no rows, class features with no
+/// value in a sum field and, with sum fields, class features not wholly inside the zones, whose
+/// values are not wholly shared out.
+///
+/// `area_km2` is measured on the ellipsoid, as Calculate Geometry Attributes measures it. The
+/// percentages and shares compare areas measured on the sphere instead ([`crate::join::area_m2`]):
+/// the overlay cuts along straight lines on the map, and that measure adds up exactly when a
+/// polygon is cut along a parallel or a meridian, where the ellipsoid's geodesic edges don't, so a
+/// feature's shares in zones that cover it without overlapping each other add up to its whole value.
+fn tabulate_intersection(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
+    use crate::join::area_m2;
+    let zones = input(inp, p, "zones")?;
+    let classes = input(inp, p, "classes")?;
+    for ds in [zones, classes] {
+        if ds.geometry_type != GeometryType::Polygon {
+            return Err(format!("'{}' is not a polygon layer", ds.name));
+        }
+    }
+    let zone_keys = key_fields(zones, p.get("zoneFields"), "Zone Field")?;
+    if zone_keys.is_empty() {
+        return Err("'Zone Fields' is required".into());
+    }
+    let class_keys = key_fields(classes, p.get("classFields"), "Class Field")?;
+    let sum_fields = key_fields(classes, p.get("sumFields"), "Sum Field")?;
+    for &f in &sum_fields {
+        let Some(field) = classes.fields.get(f) else { continue };
+        if !field.ty.is_numeric() {
+            return Err(format!("the sum field '{}' is not numeric", field.name));
+        }
+        if class_keys.contains(&f) {
+            return Err(format!("the sum field '{}' can't also be a class field", field.name));
+        }
+    }
+    // Record order, each record once, whatever order a selection lists them in.
+    let sorted_rows = |k: &str, ds: &Dataset| {
+        let mut rs = rows(inp, p, k, ds);
+        rs.sort_unstable();
+        rs.dedup();
+        rs
+    };
+    let shapeless = |ds: &Dataset, rs: &[usize]| rs.iter().filter(|&&r| ds.features.get(r).is_none_or(|f| f.geometry.is_none())).count();
+    let zone_rows = sorted_rows("zones", zones);
+    let class_rows = sorted_rows("classes", classes);
+    let (zones_shapeless, classes_shapeless) = (shapeless(zones, &zone_rows), shapeless(classes, &class_rows));
+    let zone_list: Vec<TabulateZone> = crate::stats::group_rows(zones, &zone_rows, &zone_keys)
+        .into_iter()
+        .map(|group| {
+            let shapes: Vec<&Geometry> = group.rows.iter().filter_map(|&r| zones.features.get(r)?.geometry.as_ref()).collect();
+            let ext = shapes.iter().fold(Extent::EMPTY, |e, g| e.union(&g.extent()));
+            let mask = mask_of(MultiPolygon::new(shapes.iter().filter_map(|g| to_multipolygon(g)).flat_map(|m| m.0).collect()));
+            let sphere_area_m2 = from_multipolygon(&mask).map_or(0.0, |g| area_m2(&g));
+            TabulateZone { key: group.key, ext, mask, sphere_area_m2 }
+        })
+        .collect();
+    let class_groups = crate::stats::group_rows(classes, &class_rows, &class_keys);
+    let index = ExtentIndex::new(zone_list.iter().map(|z| z.ext));
+    let mut cells: std::collections::BTreeMap<(usize, usize), TabulateCell> = std::collections::BTreeMap::new();
+    // For each sum field, the class features in some zone whose value isn't a number.
+    let mut missing = vec![0usize; sum_fields.len()];
+    // With sum fields, the class features whose shares come to less than their whole value.
+    let mut outside = 0usize;
+    for (ci, group) in class_groups.iter().enumerate() {
+        for &r in &group.rows {
+            let Some(g) = classes.features.get(r).and_then(|f| f.geometry.as_ref()) else { continue };
+            let ext = g.extent();
+            let near: Vec<usize> =
+                index.candidates(&ext).into_iter().filter(|&zi| zone_list.get(zi).is_some_and(|z| z.ext.intersects(&ext))).collect();
+            if near.is_empty() {
+                outside += usize::from(!sum_fields.is_empty());
+                continue;
+            }
+            // Overlapping parts of one feature are unioned once, so they count once.
+            let whole = dissolved(g);
+            let values: Vec<Option<f64>> = sum_fields.iter().map(|&f| classes.value(r, f).as_f64()).collect();
+            let mut whole_area: Option<f64> = None;
+            let mut inside = false;
+            // The part of the feature's area its shares took, over all zones.
+            let mut shared = 0.0;
+            for zi in near {
+                let Some(piece) = zone_list.get(zi).and_then(|z| part(&whole, &z.mask, true)) else { continue };
+                let piece_area = area_m2(&piece);
+                if piece_area <= 0.0 || !piece_area.is_finite() {
+                    continue;
+                }
+                inside = true;
+                let cell = cells.entry((zi, ci)).or_insert_with(|| TabulateCell { parts: Vec::new(), sums: vec![0.0; sum_fields.len()] });
+                if !sum_fields.is_empty() {
+                    let total = *whole_area.get_or_insert_with(|| area_m2(&whole));
+                    // The part inside can come out a rounding error larger than the whole.
+                    let share = if total > 0.0 { (piece_area / total).min(1.0) } else { 0.0 };
+                    shared += share;
+                    for (sum, v) in cell.sums.iter_mut().zip(&values) {
+                        if let Some(v) = v {
+                            *sum += v * share;
+                        }
+                    }
+                }
+                cell.parts.push(piece);
+            }
+            if inside {
+                for (m, v) in missing.iter_mut().zip(&values) {
+                    *m += usize::from(v.is_none());
+                }
+            }
+            // A share is a rounding error short of the whole when zones cover the feature.
+            if !sum_fields.is_empty() && shared < 1.0 - 1e-6 {
+                outside += 1;
+            }
+        }
+    }
+    let mut out = Dataset::new(
+        out_name(p, format!("{}_Tabulate", zones.name)),
+        GeometryType::None,
+        zone_keys.iter().filter_map(|&k| zones.fields.get(k).cloned()).collect(),
+    );
+    out.crs_incomplete = zones.crs_incomplete || classes.crs_incomplete;
+    // A class field, or an output field, whose name is taken gets a suffix (`name_2`).
+    for f in class_keys.iter().filter_map(|&k| classes.fields.get(k)) {
+        let name = unique_field(&out, &f.name);
+        out.fields.push(Field { name, ..f.clone() });
+    }
+    for base in
+        ["area_km2", "percentage"].into_iter().chain(sum_fields.iter().filter_map(|&f| classes.fields.get(f).map(|f| f.name.as_str())))
+    {
+        let name = unique_field(&out, base);
+        out.fields.push(Field::new(name, FieldType::Double));
+    }
+    let mut zones_hit: HashSet<usize> = HashSet::new();
+    for ((zi, ci), cell) in cells {
+        let (Some(zone), Some(class)) = (zone_list.get(zi), class_groups.get(ci)) else { continue };
+        zones_hit.insert(zi);
+        // Parts of a class's features that overlap each other are unioned, so they count once.
+        let union;
+        let covered = match cell.parts.as_slice() {
+            [one] => one,
+            parts => {
+                let polys: Vec<MultiPolygon<f64>> = parts.iter().filter_map(to_multipolygon).collect();
+                let Some(g) = from_multipolygon(&union_all(polys.iter().flat_map(|m| m.0.iter()))) else {
+                    return Err(format!("Tabulate Intersection: the parts of a class in the zone {:?} could not be combined", zone.key));
+                };
+                union = g;
+                &union
+            }
+        };
+        let mut row = zone.key.clone();
+        row.extend(class.key.iter().cloned());
+        row.push(Value::Float(ground_area_perimeter(covered).0 / 1e6));
+        let sphere_area_m2 = area_m2(covered);
+        row.push(if zone.sphere_area_m2 > 0.0 { Value::Float(sphere_area_m2 / zone.sphere_area_m2 * 100.0) } else { Value::Null });
+        row.extend(cell.sums.into_iter().map(Value::Float));
+        // One past the last id: `push` would search them all for each row.
+        out.push_next(None, row);
+    }
+    let mut messages = vec![match out.features.len() {
+        1 => "Tabulate Intersection: 1 row".to_string(),
+        n => format!("Tabulate Intersection: {n} rows"),
+    }];
+    for (n, layer) in [(zones_shapeless, "zone"), (classes_shapeless, "class")] {
+        match n {
+            0 => {}
+            1 => messages.push(format!("1 {layer} feature has no geometry and was left out")),
+            n => messages.push(format!("{n} {layer} features have no geometry and were left out")),
+        }
+    }
+    match zone_list.len().saturating_sub(zones_hit.len()) {
+        0 => {}
+        1 => messages.push("1 zone overlaps no class feature, so it has no rows".into()),
+        n => messages.push(format!("{n} zones overlap no class feature, so they have no rows")),
+    }
+    for (&f, n) in sum_fields.iter().zip(missing) {
+        if n > 0 {
+            let name = classes.fields.get(f).map_or("", |f| f.name.as_str());
+            let features = if n == 1 { "1 class feature has".to_string() } else { format!("{n} class features have") };
+            messages.push(format!("{features} no value in '{name}', left out of its shares"));
+        }
+    }
+    match outside {
+        0 => {}
+        1 => messages.push("1 class feature lies partly or wholly outside the zones: its value outside isn't shared out".into()),
+        n => messages.push(format!("{n} class features lie partly or wholly outside the zones: their values outside aren't shared out")),
+    }
+    Ok(ToolResult { output: Output::Table(out), messages })
 }
 
 fn export_features(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
@@ -5972,6 +6233,10 @@ mod tests {
             serde_json::json!({"input": "pts", "fields": ["k", 3], "pivot": "k", "value": "v", "statistic": "P100"}),
             serde_json::json!({"input": "polys", "fields": {"k": 1}, "pivot": 5, "value": ["v"], "statistic": 7, "separator": []}),
             serde_json::json!({"input": "pts", "fields": "", "pivot": "v", "value": "k", "statistic": "concatenate", "output": ""}),
+            serde_json::json!({"zones": "polys", "zoneFields": ["k", 3], "classes": "polys", "classFields": "k", "sumFields": {"v": 1}}),
+            serde_json::json!({"zones": "polys", "zoneFields": "k", "classes": "polys", "classFields": ["k", "K"], "sumFields": ["v", "k"]}),
+            serde_json::json!({"zones": "pts", "zoneFields": "k", "classes": "polys", "sumFields": "v", "output": 7}),
+            serde_json::json!({"zones": "polys", "zoneFields": "k", "classes": "polys", "classFields": "k", "output": ""}),
         ];
         for t in TOOLS {
             for p in &junk {
