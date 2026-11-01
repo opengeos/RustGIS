@@ -1,9 +1,10 @@
 //! Native disposable caches. A directory lock serializes publication and eviction;
 //! per-entry leases protect readers/builders across processes, including PID reuse.
-use std::collections::BinaryHeap;
+use std::collections::{BTreeSet, BinaryHeap};
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Seek, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -283,11 +284,9 @@ impl Drop for Lease {
         if self.temporary || !self.ready {
             let _ = remove_unpinned(&self.path);
         }
-        // Only a cache the last sweep left over budget has anything for this release to free: a
-        // full sweep costs a lock and a few system calls per entry, so one on every release made
-        // each Shapefile open slower as the cache grew (#1230). What it couldn't evict may be
-        // indexes in use, which a release frees, or files without a readable lease, which no
-        // release frees: while those keep the cache over budget, every release still sweeps.
+        // Sweep only a cache the last sweep left over budget (#1230): a sweep per release made
+        // every open slower as the cache grew. Files without a readable lease can't be evicted,
+        // so while they hold the cache over budget every release still sweeps.
         if over_budget(&directory.root) {
             let _ = prune_locked(&directory.root, self.budget);
         }
@@ -297,7 +296,7 @@ impl Drop for Lease {
 /// The cache folders whose last sweep in this process ended over budget or failed. Only this
 /// process's sweeps set or clear the mark: one in another process doesn't reach it until this
 /// process builds an index and sweeps again.
-static OVER_BUDGET: std::sync::Mutex<std::collections::BTreeSet<PathBuf>> = std::sync::Mutex::new(std::collections::BTreeSet::new());
+static OVER_BUDGET: Mutex<BTreeSet<PathBuf>> = Mutex::new(BTreeSet::new());
 
 fn over_budget(root: &Path) -> bool {
     OVER_BUDGET.lock().unwrap_or_else(|e| e.into_inner()).contains(root)
@@ -327,7 +326,7 @@ pub(crate) fn sweeps() -> usize {
 // that entry as pinned. Coalesce roots on one bounded worker, never one thread per drop.
 fn retry_maintenance(root: &Path, budget: u64) {
     use std::collections::BTreeMap;
-    use std::sync::{Arc, Condvar, Mutex, OnceLock};
+    use std::sync::{Arc, Condvar, OnceLock};
     type Jobs = Arc<(Mutex<BTreeMap<PathBuf, u64>>, Condvar)>;
     static WORKER: OnceLock<Option<Jobs>> = OnceLock::new();
     let jobs = WORKER.get_or_init(|| {
