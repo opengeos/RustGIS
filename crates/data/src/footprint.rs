@@ -141,6 +141,18 @@ mod tests {
         assert!((area(&shape) - 100.0).abs() < 1e-9, "{shape:?}");
     }
 
+    /// A courtyard stays open: a face's hole is kept in the footprint, not filled.
+    #[test]
+    fn a_hole_in_a_face_stays_in_the_footprint() {
+        let ring = |a: f64, b: f64| vec![[a, a, 0.0], [b, a, 0.0], [b, b, 0.0], [a, b, 0.0], [a, a, 0.0]];
+        let mut budget = 10;
+        let (shape, hull) = footprint(&[vec![ring(0.0, 10.0), ring(3.0, 7.0)]], false, &[ring(0.0, 10.0), ring(3.0, 7.0)], &mut budget);
+        assert_eq!(hull, None);
+        let Some(Geometry::Polygon(polys)) = &shape else { panic!("{shape:?}") };
+        assert_eq!(polys.iter().map(Vec::len).collect::<Vec<_>>(), [2], "one polygon with its hole: {shape:?}");
+        assert!((area(&shape) - 100.0).abs() < 1e-9, "{shape:?}");
+    }
+
     /// Walls alone show nothing from above: the hull of their points stands in, and says why.
     /// Left out by the reader, faces aren't merged either: the hull, as unmerged.
     #[test]

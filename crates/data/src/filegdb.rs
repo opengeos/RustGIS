@@ -309,7 +309,7 @@ fn read_table(name: &str, t: &[u8], x: &[u8], wkid: Option<u32>) -> Result<Optio
     ds.crs = crs;
     let geometry_at = table.fields.iter().position(|f| f.kind == Kind::Geometry);
     let (mut curves, mut wall_hulls, mut unmerged, mut unprojected) = (0usize, 0usize, 0usize, 0usize);
-    // Multipatches with points but no footprint (too few points, or coordinates that aren't numbers).
+    // Multipatches with points but no footprint: too few, all on one line, or not finite numbers.
     let mut no_footprint = 0usize;
     // Shapes decoded, a multipatch's too (its M values go even when it has no footprint).
     let mut decoded = 0usize;
@@ -377,7 +377,7 @@ fn read_table(name: &str, t: &[u8], x: &[u8], wkid: Option<u32>) -> Result<Optio
     }
     if no_footprint > 0 {
         report.messages.push(format!(
-            "{no_footprint} multipatches have no footprint (fewer than three usable points, or coordinates that aren't numbers): they are kept without geometry"
+            "{no_footprint} multipatches have no footprint (their points don't outline an area: fewer than three, all on one line, or not finite numbers): they are kept without geometry"
         ));
     }
     if wall_hulls > 0 {
@@ -884,7 +884,7 @@ struct Patch {
     z: Option<(f64, f64)>,
     /// Why the footprint is the hull of its points, when it is.
     hull: Option<Hull>,
-    /// Whether it has points: one without has nothing to draw, so lacks no footprint.
+    /// Whether it has any points. One with none has nothing to outline: it isn't counted as lacking a footprint.
     has_points: bool,
 }
 
