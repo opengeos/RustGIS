@@ -15,13 +15,15 @@
 //! stretch's centre, where the sides are within 0.05%. A ring gains at most [`MAX_ADDED`] points,
 //! which only a ring of thousands of long edges uses up; past that, its edges are left whole.
 //!
-//! Arcs are drawn as `geo` draws them by default, close to GEOS and PostGIS's 8 edges to a quarter
-//! circle: a point's circle with 32 edges, a line's caps and a polygon's corners with 15 to a half
-//! circle. Between an arc's vertices the outline runs inside it, by up to 0.48% of the distance
-//! round a point and 0.55% at a cap or corner.
+//! Arcs use a 1.8° step: 200 edges to a point's circle and about 100 to a semicircular cap.
+//! Between vertices, those edges cut at most 0.013% of the distance inside the circle in the
+//! projection plane. The buffer backend rounds a corner's segment count down, so a short corner
+//! can have a step approaching 3.6° and cut up to 0.05% inside, on top of the projection error.
 
 use geo::{
-    BooleanOps, Buffer, Contains, Coord as GC, LineString, MultiLineString, MultiPolygon, Orient, Point, Polygon, orient::Direction,
+    BooleanOps, Buffer, Contains, Coord as GC, LineString, MultiLineString, MultiPolygon, Orient, Point, Polygon,
+    algorithm::buffer::{BufferStyle, LineCap, LineJoin},
+    orient::Direction,
 };
 use rustgis_data::{Coord, Geometry};
 use rustgis_geom::{Aeqd, geodesic_interpolate, haversine_m, lonlat_to_merc, merc_to_lonlat, spherical_centre};
@@ -51,6 +53,15 @@ const MAX_SPLITS: u32 = 12;
 /// line at 84°N, with a margin. An edge too short to stray as far as the tolerance isn't
 /// checked, so an arc's short edges cost nothing.
 const STRAY_PER_M2: f64 = 3e-7;
+
+/// The finest round-cap/join step supported by the buffer backend (1.8°). A circle's area
+/// deficit is under 0.017%, leaving room for projection error in the reference's 0.1% bound.
+const ARC_STEP: f64 = std::f64::consts::PI / 100.0;
+
+/// Round arcs at the same density for points, line caps and polygon corners, including stretches.
+fn buffer_style(metres: f64) -> BufferStyle<f64> {
+    BufferStyle::new(metres).line_cap(LineCap::Round(ARC_STEP)).line_join(LineJoin::Round(ARC_STEP))
+}
 
 /// A feature's buffer at `metres` (negative shrinks a polygon), in lon/lat; `None` when nothing
 /// is left.
@@ -210,7 +221,7 @@ fn point(c: Coord, metres: f64) -> MultiPolygon<f64> {
         return MultiPolygon::new(vec![]);
     }
     let plane = Plane::new(c, c.x);
-    plane.back(&Point::new(0.0, 0.0).buffer(metres), metres)
+    plane.back(&Point::new(0.0, 0.0).buffer_with_style(buffer_style(metres)), metres)
 }
 
 /// A line's buffer: in one projection centred on it when it fits, else in stretches.
@@ -219,7 +230,8 @@ fn lines(parts: &[Vec<Coord>], metres: f64) -> MultiPolygon<f64> {
     let Some(centre) = spherical_centre(&all) else { return MultiPolygon::new(vec![]) };
     if fits(&all, centre) {
         let plane = Plane::new(centre, all.first().map_or(centre.x, |c| c.x));
-        return plane.back(&MultiLineString::new(parts.iter().map(|p| plane.line(p)).collect()).buffer(metres), metres);
+        return plane
+            .back(&MultiLineString::new(parts.iter().map(|p| plane.line(p)).collect()).buffer_with_style(buffer_style(metres)), metres);
     }
     union(stretched(parts, metres))
 }
@@ -243,7 +255,7 @@ fn polygons(polys: &[Vec<Vec<Coord>>], metres: f64) -> MultiPolygon<f64> {
     };
     if fits(&all, centre) {
         let plane = Plane::new(centre, all.first().map_or(centre.x, |c| c.x));
-        return plane.back(&shape(&|r| plane.line(r)).buffer(metres), metres);
+        return plane.back(&shape(&|r| plane.line(r)).buffer_with_style(buffer_style(metres)), metres);
     }
     // A buffer distributes over a union: the polygon's buffer is the polygon with its outline's
     // buffer added (or, inward, taken away). The polygon stays in lon/lat, along the same densified
@@ -278,7 +290,7 @@ fn stretched(parts: &[Vec<Coord>], metres: f64) -> Vec<MultiPolygon<f64>> {
             let Some(stretch) = d.get(start..=end.min(d.len().saturating_sub(1))) else { break };
             if let (Some(centre), Some(first)) = (spherical_centre(stretch), stretch.first()) {
                 let plane = Plane::new(centre, first.x);
-                out.push(plane.back(&plane.line(stretch).buffer(metres), metres));
+                out.push(plane.back(&plane.line(stretch).buffer_with_style(buffer_style(metres)), metres));
             }
             // Consecutive stretches share a vertex, so their buffers overlap.
             if end + 1 >= d.len() {

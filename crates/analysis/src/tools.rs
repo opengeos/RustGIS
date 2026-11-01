@@ -4991,21 +4991,21 @@ mod tests {
     /// sides of a 2 km buffer of a 96 km east–west line sat up to 190 m off. Every vertex, and every
     /// edge's quarter points and midpoint as the tools draw edges (straight in Web Mercator), is now
     /// within 0.012% of the distance (or 1 cm) along a line's sides, and no further inside an arc
-    /// than its edges cut: 32 to a point's circle and 15 to a half circle at a line's cap, as `geo`
-    /// draws them.
+    /// than 0.013% of the distance in the projection plane (#1221). The old 32-edge circles
+    /// and 15-edge caps cut about 0.5% inside and fail these bounds.
     #[test]
     fn buffer_outlines_keep_their_distance_between_vertices() {
         let fractions = [0.25, 0.5, 0.75];
         let points = |polys: &[Vec<Vec<Coord>>]| -> Vec<Coord> {
             polys.iter().flatten().flatten().copied().chain(along_edges(polys, &fractions)).collect()
         };
-        // An arc of n edges to a circle cuts d(1 − cos(π/n)) inside it between vertices.
-        let sag = |d: f64, n: f64| d * (1.0 - (std::f64::consts::PI / n).cos());
+        // Bound the geometric error independently of how many vertices the buffer emits.
+        let arc_error = |d: f64| d * 1.3e-4;
 
         let centre = Coord::new(10.125, 46.125);
         for c in points(&buffered(Geometry::Point(centre), 1.0)) {
             let d = on_wgs84_m(centre, c);
-            assert!(d < 1_000.1 && d > 1_000.0 - sag(1_000.0, 32.0) - 0.1, "{c:?} is {d} m from the centre");
+            assert!(d < 1_000.1 && d > 1_000.0 - arc_error(1_000.0) - 0.1, "{c:?} is {d} m from the centre");
         }
 
         // A long east–west line; a diagonal one across the equator, where the stray changes side
@@ -5034,9 +5034,9 @@ mod tests {
             for c in points(&buffered(Geometry::Line(vec![vec![a, b]]), km)) {
                 let (d, beside) = m_to_geodesic(c, &samples);
                 // Along the sides, within 0.012% or 1 cm (and the sampler's millimetre); round the
-                // caps, within the sag of their 15 edges to a half circle.
+                // caps, add the 0.013% arc approximation in the projection plane.
                 let side = (d0 * 1.2e-4).max(0.01) + 1e-3;
-                let bound = if beside { side } else { sag(d0, 30.0) + side };
+                let bound = if beside { side } else { arc_error(d0) + side };
                 assert!(d < d0 + side && d > d0 - bound, "{km} km: {c:?} is {d} m from the line");
             }
         }
@@ -5047,7 +5047,7 @@ mod tests {
         let north = Coord::new(10.0, 83.0);
         for c in points(&buffered(Geometry::Point(north), 1000.0)).into_iter().filter(|c| c.y.abs() < 85.0) {
             let d = on_wgs84_m(north, c);
-            assert!(d < 1_000_000.0 * (1.0 + 1.2e-4) && d > 1_000_000.0 - sag(1_000_000.0, 32.0) - 100.0, "{c:?} is {d} m from {north:?}");
+            assert!(d < 1_000_000.0 * (1.0 + 1.2e-4) && d > 1_000_000.0 - arc_error(1_000_000.0) - 100.0, "{c:?} is {d} m from {north:?}");
         }
 
         // Coordinates off the Earth have no geodesic: buffering them doesn't panic.
