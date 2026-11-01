@@ -9273,6 +9273,12 @@ fn shapefile_by_its_shp_address() {
     // One whose signature doesn't cover its .prj, and one whose address answers with its parts zipped.
     files.extend(parts.iter().filter(|(e, _)| *e != "prj").map(|(e, b)| (format!("/signed/rios.{e}?sig=1"), b.clone())));
     files.extend(parts.iter().filter(|(e, _)| *e != "prj").map(|(e, b)| (format!("/s3/rios.{e}"), b.clone())));
+    // A site that answers any address with its page: the .prj and .cpg come back as HTML.
+    let page = b"\n<!doctype html><html><body>app</body></html>".to_vec();
+    files.extend(parts.iter().filter(|(e, _)| !matches!(*e, "prj" | "cpg")).map(|(e, b)| (format!("/spa/rios.{e}"), b.clone())));
+    files.extend(["prj", "cpg"].map(|e| (format!("/spa/rios.{e}"), page.clone())));
+    files.extend(parts.iter().filter(|(e, _)| *e == "shp").map(|(e, b)| (format!("/spa/sem_dbf.{e}"), b.clone())));
+    files.push(("/spa/sem_dbf.dbf".into(), page.clone()));
     files.extend(parts.iter().filter(|(e, _)| *e == "shp").map(|(e, b)| (format!("/s3/sem_dbf.{e}"), b.clone())));
     let shp = parts.iter().find(|(e, _)| *e == "shp").unwrap().1.clone();
     let others = parts.iter().filter(|(e, _)| *e != "shp").map(|(e, b)| (*e, b.clone())).collect();
@@ -9319,6 +9325,12 @@ fn shapefile_by_its_shp_address() {
     let r = s.run("layer.addUrl", &json!({"url": format!("{base}/s3/rios.shp"), "name": "S3"})).unwrap();
     assert_eq!(r["features"], 1, "{r}");
     assert!(s.notices.last().unwrap().text.contains("no .prj found or readable beside it (1 of 3"), "{:?}", s.notices.last());
+    // Parts answered with a web page are done without, and said; a .dbf answered so is refused.
+    let r = s.run("layer.addUrl", &json!({"url": format!("{base}/spa/rios.shp"), "name": "SPA"})).unwrap();
+    assert_eq!(r["features"], 1, "{r}");
+    assert!(s.notices.last().unwrap().text.contains("no .prj, .cpg found or readable beside it"), "{:?}", s.notices.last());
+    let e = s.run("layer.addUrl", &json!({"url": format!("{base}/spa/sem_dbf.shp")})).unwrap_err();
+    assert!(e.contains("/spa/sem_dbf.dbf: a web page answered, not a .dbf"), "{e}");
     // Its .dbf answered so is refused, saying what the 403 may mean.
     let e = s.run("layer.addUrl", &json!({"url": format!("{base}/s3/sem_dbf.shp")})).unwrap_err();
     assert!(e.contains("/s3/sem_dbf.dbf") && e.contains("S3 also answers this for a file that isn't there"), "{e}");

@@ -2814,6 +2814,19 @@ fn keyed(url: &str) -> bool {
     url.contains('?') || rustgis_data::s3_address::is_wrapper(url)
 }
 
+/// A Shapefile's part that answered with a web page (a site that serves its page for any
+/// address it doesn't have): an optional part is done without, as one that isn't there, and the
+/// `.dbf` fails. Any other answer is the part.
+fn part_page(ext: &str, url: &str, b: Vec<u8>) -> Result<Option<Vec<u8>>, String> {
+    if b.iter().find(|c| !c.is_ascii_whitespace()) != Some(&b'<') {
+        return Ok(Some(b));
+    }
+    if ext == "dbf" {
+        return Err(format!("{}: a web page answered, not a .dbf", crate::sources::redact(url)));
+    }
+    Ok(None)
+}
+
 /// Whether downloaded bytes are a zip archive (its first local file header).
 fn is_zip(bytes: &[u8]) -> bool {
     bytes.starts_with(b"PK\x03\x04")
@@ -2884,8 +2897,9 @@ fn download_shapefile_blocking(url: &str) -> Result<Vec<u8>, String> {
     let mut left = cache::MAX_DOWNLOAD.saturating_sub(shp.len());
     let mut got = Vec::new();
     for (ext, u) in parts {
-        match within(&u, left) {
-            Ok(b) => {
+        match within(&u, left).and_then(|b| part_page(ext, &u, b)) {
+            Ok(None) => {}
+            Ok(Some(b)) => {
                 left = left.saturating_sub(b.len());
                 got.push((ext, b));
             }
@@ -2955,8 +2969,9 @@ fn download_parts(
     crate::render::rustgis_tiles::cache::download_limited(
         &next,
         left,
-        Box::new(move |r| match r {
-            Ok(b) => {
+        Box::new(move |r| match r.and_then(|b| part_page(ext, &url, b)) {
+            Ok(None) => download_parts(name, shp, parts, got, left, done),
+            Ok(Some(b)) => {
                 let left = left.saturating_sub(b.len());
                 got.push((ext, b));
                 download_parts(name, shp, parts, got, left, done);
