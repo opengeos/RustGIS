@@ -9270,6 +9270,7 @@ fn shapefile_by_its_shp_address() {
     // The same without its .prj and .cpg, and one without its .dbf.
     files.extend(parts.iter().filter(|(e, _)| !matches!(*e, "prj" | "cpg")).map(|(e, b)| (format!("/plain/rios.{e}"), b.clone())));
     files.extend(parts.iter().filter(|(e, _)| *e != "dbf").map(|(e, b)| (format!("/nodbf/rios.{e}"), b.clone())));
+    files.extend(parts.iter().filter(|(e, _)| *e != "shx").map(|(e, b)| (format!("/noshx/rios.{e}"), b.clone())));
     // One whose signature doesn't cover its .prj, and one whose address answers with its parts zipped.
     files.extend(parts.iter().filter(|(e, _)| *e != "prj").map(|(e, b)| (format!("/signed/rios.{e}?sig=1"), b.clone())));
     files.extend(parts.iter().filter(|(e, _)| *e != "prj").map(|(e, b)| (format!("/s3/rios.{e}"), b.clone())));
@@ -9369,6 +9370,10 @@ fn shapefile_by_its_shp_address() {
     let mark = s.notice_mark();
     s.run("layer.addUrl", &json!({"url": format!("{base}/zipped/dois.shp"), "layer": "b", "name": "So b"})).unwrap();
     assert!(s.notices_since(mark).iter().any(|n| n.text.contains("b.shp: no .prj")), "{:?}", s.notices_since(mark));
+    // Without its .shx, it is read, and the notice names the .shx.
+    let r = s.run("layer.addUrl", &json!({"url": format!("{base}/noshx/rios.shp"), "name": "Sem shx"})).unwrap();
+    assert_eq!(r["features"], 1, "{r}");
+    assert!(s.notices.last().unwrap().text.contains("no .shx found or readable beside it (1 of 3"), "{:?}", s.notices.last());
     // Without its .dbf, it is refused, naming the .dbf's address.
     let e = s.run("layer.addUrl", &json!({"url": format!("{base}/nodbf/rios.shp")})).unwrap_err();
     assert!(e.contains("/nodbf/rios.dbf") && e.contains("404"), "{e}");
