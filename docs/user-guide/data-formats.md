@@ -129,9 +129,10 @@ tile), without a STAC catalogue:
   tiles a band. A window over the first limit is refused, naming the cell size that fits when an
   overview does, or asking for a smaller box; one over the second asks for a coarser level or a
   smaller box. The header and then each band's tiles are waited for up to two minutes each. No
-  band is started after five minutes in all (the last one started may take two minutes more):
-  past that the window is given up, saying how many bands were read. A window reads 256 bands
-  at most. A window near the limit takes several hundred MB of memory while it is read and kept.
+  band is started after five minutes in all, the header's read counted (the last one started
+  may take two minutes more): past that the window is given up, saying how many bands were read.
+  A window reads 256 bands at most. A window near the limit takes several hundred MB of memory
+  while it is read and kept.
 - The file's no-data, colour table (a palette file draws in its colours) and band names come
   with it, and class names given as `CLASS_<value>` items in GDAL's metadata tag, as the MapBiomas
   files on Source Cooperative give theirs.

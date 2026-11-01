@@ -285,6 +285,14 @@ pub(crate) fn band_name_of(r: &Raster, band: usize) -> Option<&str> {
     r.bands.get(band).map(|b| b.name.as_str()).filter(|n| !n.trim().is_empty() && *n != format!("Band {}", band + 1))
 }
 
+/// GDAL's metadata tag (42112) for the bands `bands` of `r`, written as samples in that order:
+/// their names, and the first one's class names. Both GeoTIFF writers take it from here.
+pub(crate) fn gdal_metadata_of(r: &Raster, bands: &[usize]) -> Option<String> {
+    let names: Vec<Option<&str>> = bands.iter().map(|b| band_name_of(r, *b)).collect();
+    let first = bands.first().and_then(|b| r.bands.get(*b)).map_or(&[][..], |b| &b.classes[..]);
+    pam::gdal_metadata(&names, first)
+}
+
 impl Raster {
     /// Builds a raster from bands of `width × height` pixels and computes statistics.
     #[allow(clippy::too_many_arguments)]

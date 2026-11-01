@@ -2908,6 +2908,8 @@ fn add_cog_window(s: &mut Session, p: &Value, url: &str) -> CmdResult {
         None => None,
         Some(v) => Some(v.as_f64().filter(|c| c.is_finite() && *c > 0.0).ok_or("cellSize is a size above 0")?),
     };
+    // The five minutes count from the header's read.
+    let started = std::time::Instant::now();
     let info = cog::info_blocking(url).map_err(named)?;
     let layout = &info.layout;
     let (pw, ph) = (layout.transform.pixel_width, layout.transform.pixel_height);
@@ -3054,8 +3056,7 @@ fn add_cog_window(s: &mut Session, p: &Value, url: &str) -> CmdResult {
         return Err(named(format!("the file has {count} bands; a window reads {MAX_WINDOW_BANDS} at most")));
     }
     // One read a band, each waiting up to two minutes; no band is started once five minutes are
-    // up, so the last one started may run two minutes more.
-    let started = std::time::Instant::now();
+    // up (the header's read counted), so the last one started may run two minutes more.
     let mut bands = Vec::with_capacity(count);
     for band in 0..count {
         band_in_time(band, count, started.elapsed(), WINDOW_WAIT).map_err(named)?;

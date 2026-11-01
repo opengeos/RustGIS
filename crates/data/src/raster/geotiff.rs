@@ -1195,10 +1195,7 @@ pub fn write(r: &Raster, band: usize) -> Result<Vec<u8>> {
     // read back on open.
     macro_rules! tags {
         ($img:expr, $written:expr) => {{
-            let written: &[usize] = $written;
-            let names: Vec<Option<&str>> = written.iter().map(|b| super::band_name_of(r, *b)).collect();
-            let first = written.first().and_then(|b| r.bands.get(*b)).map_or(&[][..], |b| &b.classes[..]);
-            let classes = super::pam::gdal_metadata(&names, first);
+            let classes = super::gdal_metadata_of(r, $written);
             let e = $img.encoder();
             e.write_tag(Tag::ModelPixelScaleTag, &scale[..]).map_err(err)?;
             e.write_tag(Tag::ModelTiepointTag, &tie[..]).map_err(err)?;
