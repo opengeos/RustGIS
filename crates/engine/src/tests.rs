@@ -6870,8 +6870,8 @@ fn plugin_data_cubes_need_files_and_network() {
 fn plugin_mosaics_of_project_layers_need_no_files() {
     use rustgis_data::raster::{ColorHint, Crs, GeoTransform, Raster, geotiff};
     let mut s = world();
-    // A layer named like a path is still taken for a place.
-    for (name, x0) in [("west", 0.0), ("east", 1.0), ("../east.tif", 2.0)] {
+    // A layer named like a path is still taken for a place; one named like a bare file isn't.
+    for (name, x0) in [("west", 0.0), ("east", 1.0), ("../east.tif", 2.0), ("north.tif", 3.0)] {
         let gt = GeoTransform { origin_x: x0, origin_y: 1.0, pixel_width: 0.1, pixel_height: -0.1 };
         let r = Raster::new(name, 10, 10, vec![vec![1.0; 100]], gt, Crs::LonLat, None, ColorHint::Gray, "Float32").unwrap();
         let bytes = geotiff::write(&r, 0).unwrap();
@@ -6884,6 +6884,9 @@ fn plugin_mosaics_of_project_layers_need_no_files() {
     plugin("eng-mosaic", &["edit"]);
     forward(&mut s, "eng-mosaic", "raster.mosaic", json!({"inputs": ["west", " east "], "name": "Elevation"})).unwrap();
     assert!(s.map().layer_by_name("Elevation").is_some_and(|l| l.is_raster()));
+    // The layer comes before a file of its name.
+    forward(&mut s, "eng-mosaic", "raster.mosaic", json!({"inputs": ["east", "north.tif"], "name": "East and north"})).unwrap();
+    assert!(s.map().layer_by_name("East and north").is_some());
     for params in [
         json!({"inputs": ["west", "east"], "name": "Elevation", "path": "elevation.tif"}),
         json!({"inputs": ["west", "east.tif"]}),
