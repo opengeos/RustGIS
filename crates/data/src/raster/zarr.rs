@@ -1109,6 +1109,8 @@ pub fn assemble(store: &Store, plan: &Plan, chunks: &HashMap<String, Vec<u8>>, n
     let scale = attr_f64(a, "scale_factor").unwrap_or(1.0);
     let offset = attr_f64(a, "add_offset").unwrap_or(0.0);
     let mut found = 0usize;
+    // Stored values f32 doesn't hold exactly (Int32 or Int64 past 16,777,216, Float64 digits).
+    let mut rounded = 0u64;
     for gy in 0..a.grid(plan.y) {
         for gx in 0..a.grid(plan.x) {
             let idx: Vec<u64> = (0..nd)
@@ -1151,7 +1153,12 @@ pub fn assemble(store: &Store, plan: &Plan, chunks: &HashMap<String, Vec<u8>>, n
                     let i = base + ly * strides[plan.y] + lx * strides[plan.x];
                     let at = usize::try_from(i).ok().and_then(|i| i.checked_mul(dt.size));
                     let Some(v) = at.and_then(|at| vals.get(at..at + dt.size)).map(|b| dt.value(b)) else { continue };
-                    let out = if v.is_nan() || missing.contains(&v) { f32::NAN } else { (v * scale + offset) as f32 };
+                    let out = if v.is_nan() || missing.contains(&v) {
+                        f32::NAN
+                    } else {
+                        rounded += u64::from(f64::from(v as f32) != v);
+                        (v * scale + offset) as f32
+                    };
                     if let Some(g) = grid.get_mut(row as usize * w + col as usize) {
                         *g = out;
                     }
@@ -1228,7 +1235,11 @@ pub fn assemble(store: &Store, plan: &Plan, chunks: &HashMap<String, Vec<u8>>, n
         (Kind::UInt, _) => "UInt32",
     };
     let data_type = if scale != 1.0 || offset != 0.0 { "Float32" } else { data_type };
-    Raster::new(name, w as u32, h as u32, vec![grid], transform, crs, None, ColorHint::Gray, data_type)
+    let mut r = Raster::new(name, w as u32, h as u32, vec![grid], transform, crs, None, ColorHint::Gray, data_type)?;
+    if rounded > 0 {
+        r.rounded = vec![rounded];
+    }
+    Ok(r)
 }
 
 // --- What a store holds --------------------------------------------------------------------------
@@ -1951,6 +1962,40 @@ mod tests {
             chunks.insert(format!("t/1.0.{cx}"), blosc_frame(&f32s(&v), 4));
         }
         (store, chunks)
+    }
+
+    #[test]
+    fn values_f32_cannot_hold_are_counted() {
+        // A 2 × 2 variable of type `dtype` holding `values`, on latitude and longitude.
+        let read = |dtype: &str, values: Vec<u8>| {
+            let arr = |shape: &str, dtype: &str| {
+                serde_json::from_str::<Value>(&format!(
+                    r#"{{"shape":{shape},"chunks":{shape},"dtype":"{dtype}","compressor":null,"fill_value":null,"filters":null,"order":"C","zarr_format":2}}"#
+                ))
+                .unwrap()
+            };
+            let meta = serde_json::json!({"metadata": {
+                ".zgroup": {"zarr_format": 2},
+                "v/.zarray": arr("[2,2]", dtype),
+                "v/.zattrs": {"_ARRAY_DIMENSIONS": ["lat","lon"]},
+                "lat/.zarray": arr("[2]", "<f8"),
+                "lat/.zattrs": {"_ARRAY_DIMENSIONS": ["lat"], "units": "degrees_north"},
+                "lon/.zarray": arr("[2]", "<f8"),
+                "lon/.zattrs": {"_ARRAY_DIMENSIONS": ["lon"], "units": "degrees_east"},
+            }, "zarr_consolidated_format": 1});
+            let store = parse_store(&[(".zmetadata".into(), meta.to_string().into_bytes())]).unwrap();
+            let f64s = |v: [f64; 2]| v.iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<u8>>();
+            let chunks =
+                HashMap::from([("v/0.0".to_string(), values), ("lat/0".into(), f64s([10.0, 20.0])), ("lon/0".into(), f64s([30.0, 40.0]))]);
+            let p = plan(&store, &Selection { variable: "v".into(), index: vec![] }).unwrap();
+            assemble(&store, &p, &chunks, "v", None).unwrap().rounded
+        };
+        let i64s = |v: [i64; 4]| v.iter().flat_map(|x| x.to_le_bytes()).collect();
+        assert_eq!(read("<i8", i64s([16_777_217, 1 << 40, 3, -16_777_216])), vec![1]);
+        assert!(read("<i8", i64s([16_777_216, 1, 2, 3])).is_empty());
+        let f64s = |v: [f64; 4]| v.iter().flat_map(|x| x.to_le_bytes()).collect();
+        assert_eq!(read("<f8", f64s([0.1, 1234567.891234, 0.5, f64::NAN])), vec![2]);
+        assert!(read("<f8", f64s([0.5, 2.0, -3.25, f64::NAN])).is_empty());
     }
 
     #[test]

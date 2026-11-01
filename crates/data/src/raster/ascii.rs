@@ -61,10 +61,12 @@ pub fn read(text: &str, name: &str, crs: Option<Crs>) -> Result<Raster> {
     }
     // Each value takes at least two characters, so the text bounds what to reserve.
     let mut data = Vec::with_capacity(n.min(text.len() / 2 + 1));
+    let (mut rounded, mut scratch) = (0u64, String::new());
     for (i, t) in tokens.take(n).enumerate() {
-        data.push(
-            t.parse::<f32>().map_err(|_| bad(&format!("value {} ('{}') isn't a number", i + 1, t.chars().take(20).collect::<String>())))?,
-        );
+        let v =
+            t.parse::<f32>().map_err(|_| bad(&format!("value {} ('{}') isn't a number", i + 1, t.chars().take(20).collect::<String>())))?;
+        rounded += u64::from(!held(t, v, nodata, &mut scratch));
+        data.push(v);
     }
     if data.len() != n {
         return Err(bad("fewer values than ncols × nrows"));
@@ -76,7 +78,39 @@ pub fn read(text: &str, name: &str, crs: Option<Crs>) -> Result<Raster> {
         None => return Err(bad("unknown coordinate system: put a .prj file next to it")),
     };
     let gt = GeoTransform { origin_x: x, origin_y: top, pixel_width: dx, pixel_height: -dy };
-    Raster::new(name, w, h, vec![data], gt, crs, nodata, ColorHint::Gray, "Float32")
+    let mut r = Raster::new(name, w, h, vec![data], gt, crs, nodata, ColorHint::Gray, "Float32")?;
+    if rounded > 0 {
+        r.rounded = vec![rounded];
+    }
+    Ok(r)
+}
+
+/// Whether `v`, `text` read as `f32`, is the number `text` writes: always for up to 6 significant
+/// digits (which `f32` keeps); past that, when `v` written back out is `text`'s number, as
+/// `123.4567` is and `1234567.891` and `16777217` aren't. NaN and the no-data value count as held.
+/// `scratch` is reused for writing `v` out.
+fn held(text: &str, v: f32, nodata: Option<f64>, scratch: &mut String) -> bool {
+    use std::fmt::Write;
+    let Ok(wide) = text.parse::<f64>() else { return true };
+    if v.is_nan() || f64::from(v) == wide || nodata == Some(wide) {
+        return true;
+    }
+    // Overflowed to infinity, or into f32's subnormals, which keep fewer digits.
+    if !v.is_finite() || v.abs() < f32::MIN_POSITIVE {
+        return false;
+    }
+    let mantissa = text.as_bytes().split(|b| matches!(b, b'e' | b'E')).next().unwrap_or_default();
+    let significant = |b: &u8| b.is_ascii_digit() && *b != b'0';
+    let digits = match (mantissa.iter().position(significant), mantissa.iter().rposition(significant)) {
+        (Some(a), Some(b)) => mantissa.get(a..=b).map_or(0, |d| d.iter().filter(|c| c.is_ascii_digit()).count()),
+        _ => 0,
+    };
+    if digits <= 6 {
+        return true;
+    }
+    scratch.clear();
+    let _ = write!(scratch, "{v}");
+    scratch.parse::<f64>().is_ok_and(|back| back == wide)
 }
 
 #[cfg(test)]
@@ -138,5 +172,18 @@ mod tests {
         // Centre and corner coordinates per axis.
         let r = read("ncols 1\nnrows 1\nxllcenter 10.5\nyllcorner 40\ncellsize 1\n7", "g", None).unwrap();
         assert_eq!((r.transform.origin_x, r.transform.origin_y), (10.0, 41.0));
+    }
+
+    #[test]
+    fn values_f32_cannot_hold_are_counted() {
+        let grid =
+            |values: &str| format!("ncols 4\nnrows 2\nxllcorner 10\nyllcorner 40\ncellsize 1\nNODATA_value -9999.123456789\n{values}");
+        // Up to 7 digits that f32 writes back the same, a whole number at 2^24, the no-data value
+        // and long zero runs are held.
+        let clean = read(&grid("123.4567 16777216 -9999.123456789 12.3\n0.000100 1.5e-3 -0 1000000000"), "g", None).unwrap();
+        assert!(clean.rounded.is_empty(), "{:?}", clean.rounded);
+        // Past 2^24, too many digits, past f32's range and in its subnormals, they change.
+        let lossy = read(&grid("16777217 1234567.891 1e39 1e-40\n0.123456789 1 2 3"), "g", None).unwrap();
+        assert_eq!(lossy.rounded, vec![5]);
     }
 }

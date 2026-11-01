@@ -1,6 +1,8 @@
 //! Rasters: bands of numbers on a georeferenced grid (elevation, imagery, classified land cover).
 //!
-//! Pixels are held as `f32` per band. Readers never panic on malformed input and refuse rasters
+//! Pixels are held as `f32` per band: whole numbers are exact up to ±16,777,216 and decimals to
+//! about 7 significant digits. Readers count the values that change on the way in
+//! ([`Raster::rounded`]). Readers never panic on malformed input and refuse rasters
 //! larger than [`MAX_SAMPLES`]; cloud-optimised GeoTIFFs fall back to their largest overview that
 //! fits.
 
@@ -261,6 +263,10 @@ pub struct Raster {
     /// `false` for a scan (a TIFF with no GeoTIFF tags, a PNG, a JPEG): `transform` is then only
     /// a stand-in until the picture is placed or georeferenced, and says nothing about the ground.
     pub georeferenced: bool,
+    /// How many values of each band changed when read as `f32` (Int32 IDs past 16,777,216, Float64
+    /// values with more digits than `f32` holds), by band; empty when none did. NaN and no-data
+    /// values aren't counted.
+    pub rounded: Vec<u64>,
     transformer: Transformer,
     extent: Extent,
 }
@@ -321,6 +327,7 @@ impl Raster {
             source: None,
             overview: None,
             georeferenced: true,
+            rounded: Vec::new(),
             transformer,
             extent: Extent::EMPTY,
         };
