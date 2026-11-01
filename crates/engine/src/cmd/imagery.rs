@@ -844,9 +844,9 @@ fn mosaic_name(v: &Value) -> Result<&str, &'static str> {
     v.as_str().map(str::trim).filter(|n| !n.is_empty()).ok_or("each input is a raster layer's name or a file path")
 }
 
-/// The raster layer a mosaic input names, with its cells in memory; otherwise a raster file name
-/// is read from disk. [`raster_mosaic`] and [`mosaic_stays_in_project`] both go by it, so they
-/// can't disagree.
+/// The raster layer a mosaic input names, with its cells in memory. An error means the input isn't
+/// one: [`raster_mosaic`] then reads it as a file if it is a raster file name. It and
+/// [`mosaic_stays_in_project`] both go by this, so they can't disagree.
 fn mosaic_layer(s: &Session, v: &Value) -> Result<Arc<Raster>, String> {
     raster_named(s, mosaic_name(v)?)
 }
