@@ -1712,6 +1712,11 @@ pub fn zip_shapefile_parts(file_name: &str, shp: Vec<u8>, parts: Vec<(&str, Vec<
         .ok_or_else(|| if problems.is_empty() { format!("{stem}.shp: its files couldn't be read together") } else { problems.join("; ") })
 }
 
+/// Whether a zip entry is a macOS resource fork (`__MACOSX/`, `._*`), which isn't read.
+fn is_resource_fork(name: &str) -> bool {
+    name.split('/').any(|part| part.eq_ignore_ascii_case("__MACOSX") || part.starts_with("._"))
+}
+
 /// Which of a zipped Shapefile's optional parts (`.shx`, `.prj`, `.cpg`) a `.shp` in it lacks,
 /// beside it by its name: what a Shapefile added by its `.shp` address (#1238) was read without,
 /// to say so. Only the `.shp`s [`read_zip`] reads count: those with their `.dbf`, not a macOS
@@ -1729,10 +1734,9 @@ pub fn shapefile_zip_lacks(bytes: &[u8]) -> Vec<&'static str> {
     }
     // A set: a served zip may hold up to 65,535 entries.
     let names: std::collections::HashSet<String> = names.into_inner().into_iter().collect();
-    let is_fork = |n: &str| n.split('/').any(|part| part == "__macosx" || part.starts_with("._"));
     let stems: Vec<&str> = names
         .iter()
-        .filter(|n| !is_fork(n))
+        .filter(|n| !is_resource_fork(n))
         .filter_map(|n| n.strip_suffix(".shp"))
         .filter(|s| names.contains(&format!("{s}.dbf")))
         .collect();
@@ -1761,13 +1765,12 @@ pub fn read_zip_in(file_name: &str, bytes: &[u8], crs: Option<Crs>) -> Result<Ve
         c.transformer().map_err(DataError::Format)?;
     }
     let lower = |n: &str| n.to_ascii_lowercase();
-    let is_fork = |n: &str| n.split('/').any(|part| part == "__MACOSX" || part.starts_with("._"));
     let ext_of = |n: &str| Path::new(n).extension().and_then(|e| e.to_str()).map(lower).unwrap_or_default();
     // A `.pbf` is read only as an OpenStreetMap extract (`.osm.pbf`): a vector tile set's
     // `z/x/y.pbf` files aren't extracted at all.
     let wanted = |n: &str| {
         let e = ext_of(n);
-        !is_fork(n)
+        !is_resource_fork(n)
             && (matches!(e.as_str(), "shp" | "shx" | "dbf" | "prj" | "cpg" | "mid")
                 || (e == "pbf" && lower(n).ends_with(".osm.pbf"))
                 || (!matches!(e.as_str(), "zip" | "txt" | "pbf") && READ_EXTENSIONS.contains(&e.as_str())))

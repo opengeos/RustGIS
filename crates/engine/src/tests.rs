@@ -9303,6 +9303,7 @@ fn shapefile_by_its_shp_address() {
     // It names the part without the signature.
     let e = s.run("layer.addUrl", &json!({"url": format!("{base}/signed/rios.shp?sig=1")})).unwrap_err();
     assert!(e.contains("/signed/rios.prj") && e.contains("403") && !e.contains("sig=1"), "{e}");
+    assert!(e.contains("also the answer for a file that isn't there"), "{e}");
     let e = s.run("layer.addUrl", &json!({"url": format!("{base}/signed/gone.shp?sig=1")})).unwrap_err();
     assert!(e.contains("/signed/gone.shp") && e.contains("403") && !e.contains("sig=1"), "{e}");
     // An unsigned address answered 403 for a part (S3, for a missing object) is done without.
@@ -9336,6 +9337,10 @@ fn shapefile_by_its_shp_address() {
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
     };
+    // A .shp address answering with a zip lands as it is, its parts not asked for.
+    let zipped = fetch(&format!("{base}/zipped/rios.shp"), 1 << 20).unwrap();
+    assert!(zipped.starts_with(b"PK\x03\x04"));
+    assert!(!asked.lock().unwrap().iter().any(|a| a.starts_with("/zipped/rios.dbf")));
     let id = s.download_started();
     assert!(s.download_landed(id, fetch(&url, 1 << 20).unwrap()));
     let mark = s.notice_mark();

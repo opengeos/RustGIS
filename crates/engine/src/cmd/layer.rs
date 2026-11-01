@@ -2817,7 +2817,14 @@ fn is_zip(bytes: &[u8]) -> bool {
 /// (the `.shp`'s query, which the parts carry too).
 fn part_failed(url: &str, e: String) -> String {
     let e = e.strip_prefix(url).map(|r| r.trim_start_matches(": ").to_string()).unwrap_or(e);
-    format!("{}: {}", crate::sources::redact(url), crate::sources::redact_text(&e))
+    // S3 answers a signed request for a file that isn't there as it answers a signature that
+    // doesn't cover it.
+    let why = if url.contains('?') && crate::render::rustgis_tiles::cache::http_status(&e) == Some(403) {
+        " (to a signed address, this is also the answer for a file that isn't there)"
+    } else {
+        ""
+    };
+    format!("{}: {}{why}", crate::sources::redact(url), crate::sources::redact_text(&e))
 }
 
 /// What a Shapefile added by its `.shp` address (#1238) was read without, said: its `.shx`, `.prj`
