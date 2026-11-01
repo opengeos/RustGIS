@@ -9331,7 +9331,9 @@ fn shapefile_by_its_shp_address() {
         }
         std::thread::sleep(std::time::Duration::from_millis(20));
     };
-    assert!(r.is_err(), "within 200 bytes");
+    // The .shp and .dbf land; the .shx goes over the 2 bytes left, and is named.
+    let e = r.unwrap_err();
+    assert!(e.ends_with("/PI_2211001_RIOS.shx?token=1: larger than 2 bytes"), "{e}");
 }
 
 /// Data added by its web address: the format from the address or, without one, the contents; a

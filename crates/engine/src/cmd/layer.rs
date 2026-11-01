@@ -2891,8 +2891,9 @@ fn download_parts(
         done(rustgis_data::io::zip_shapefile_parts(&name, shp, got));
         return;
     };
+    let next = url.clone();
     crate::render::rustgis_tiles::cache::download_limited(
-        &url.clone(),
+        &next,
         left,
         Box::new(move |r| match r {
             Ok(b) => {
