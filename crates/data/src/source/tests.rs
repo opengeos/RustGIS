@@ -58,6 +58,11 @@ fn dir() -> PathBuf {
 }
 
 fn write_parquet(path: &Path, covering: bool) {
+    write_parquet_typed(path, covering, r#"["Point"]"#);
+}
+
+/// [`write_parquet`], with the `geo` metadata's `geometry_types` (a JSON list) given.
+fn write_parquet_typed(path: &Path, covering: bool, types: &str) {
     use arrow_array::{BinaryArray, Float32Array, Int64Array, RecordBatch, StringArray, StructArray};
     use arrow_schema::{DataType, Field as AField, Schema};
     let pts = points();
@@ -79,10 +84,14 @@ fn write_parquet(path: &Path, covering: bool) {
     let geo = if covering {
         fields.push(AField::new("geometry_bbox", DataType::Struct(bbox_fields.iter().cloned().collect()), false));
         cols.push(Arc::new(bbox));
-        r#"{"version":"1.1.0","primary_column":"geometry","columns":{"geometry":{"encoding":"WKB","geometry_types":["Point"],
-            "covering":{"bbox":{"xmin":["geometry_bbox","xmin"],"ymin":["geometry_bbox","ymin"],"xmax":["geometry_bbox","xmax"],"ymax":["geometry_bbox","ymax"]}}}}}"#
+        format!(
+            r#"{{"version":"1.1.0","primary_column":"geometry","columns":{{"geometry":{{"encoding":"WKB","geometry_types":{types},
+            "covering":{{"bbox":{{"xmin":["geometry_bbox","xmin"],"ymin":["geometry_bbox","ymin"],"xmax":["geometry_bbox","xmax"],"ymax":["geometry_bbox","ymax"]}}}}}}}}}}"#
+        )
     } else {
-        r#"{"version":"1.0.0","primary_column":"geometry","columns":{"geometry":{"encoding":"WKB","geometry_types":["Point"]}}}"#
+        format!(
+            r#"{{"version":"1.0.0","primary_column":"geometry","columns":{{"geometry":{{"encoding":"WKB","geometry_types":{types}}}}}}}"#
+        )
     };
     let schema = Arc::new(Schema::new(fields));
     let batch = RecordBatch::try_new(schema.clone(), cols).unwrap();
@@ -1927,4 +1936,36 @@ fn geopackage_flatgeobuf_and_geoparquet_visit_what_a_whole_read_gives() {
     assert_eq!((whole.features.len(), whole.skipped), (600, 1));
     let (rows, summary, _) = visit_all(&mem, None, 4096);
     assert_eq!((rows, summary.skipped), (whole.features, 1));
+}
+
+/// GeoPackage (desktop and web readers) and GeoParquet tables that declare Z or M for every
+/// geometry say they lose them, counting the features; the same tables declaring 2D say nothing.
+#[test]
+fn declared_z_and_m_are_said_and_counted() {
+    let d = tempfile::tempdir().unwrap();
+    let says = |info: &SourceInfo| info.zm_dropped && info.notes.contains(&crate::zm_note(Some(600)));
+    let quiet = |info: &SourceInfo| !info.zm_dropped && !info.notes.iter().any(|n| n.contains("Z or M"));
+
+    let gpkg = d.path().join("grid.gpkg");
+    write_gpkg(&gpkg, false);
+    assert!(quiet(open_path(&gpkg, None).unwrap().info()));
+    let mem = |path: &Path| gpkg_mem::GpkgMemSource::open_shared(Shared(Arc::new(std::fs::read(path).unwrap())), None).unwrap();
+    assert!(quiet(mem(&gpkg).info()));
+    rusqlite::Connection::open(&gpkg).unwrap().execute("UPDATE gpkg_geometry_columns SET z = 1", []).unwrap();
+    let info = open_path(&gpkg, None).unwrap().info().clone();
+    assert!(says(&info), "{:?}", info.notes);
+    // The web reader doesn't scan for the count, and says so without one.
+    let info = mem(&gpkg).info().clone();
+    assert!(info.zm_dropped && info.notes.contains(&crate::zm_note(None)), "{:?}", info.notes);
+
+    let parquet = d.path().join("grid.parquet");
+    write_parquet_typed(&parquet, false, r#"["Point"]"#);
+    assert!(quiet(open_path(&parquet, None).unwrap().info()));
+    write_parquet_typed(&parquet, false, r#"["Point Z"]"#);
+    let info = open_path(&parquet, None).unwrap().info().clone();
+    assert!(says(&info), "{:?}", info.notes);
+    // Some types with Z, some without: said, without a count.
+    write_parquet_typed(&parquet, false, r#"["Point", "Point Z"]"#);
+    let info = open_path(&parquet, None).unwrap().info().clone();
+    assert!(info.zm_dropped && info.notes.contains(&crate::zm_note(None)), "{:?}", info.notes);
 }

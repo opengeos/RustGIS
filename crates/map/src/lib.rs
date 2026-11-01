@@ -471,8 +471,9 @@ impl Layer {
         {
             self.dataset.fields = info.fields.clone();
         }
-        // An opened source's dropped Z or M values, for a project saved without the mark (from
-        // before it was kept, or by another app).
+        // An opened source's dropped Z or M values, for a project saved without the mark. Added to,
+        // not replaced: a source that couldn't tell (a check that timed out) mustn't clear a mark the
+        // project kept, and a stale one gives one notice too many rather than one too few.
         if let Some(info) = self.source.as_ref().and_then(|s| s.info()) {
             self.dataset.zm_dropped |= info.zm_dropped;
         }
