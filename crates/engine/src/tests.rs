@@ -20374,11 +20374,12 @@ fn a_streamed_export_counts_the_rows_it_could_not_read() {
     }
 }
 
-/// Whole reads must refuse an oversized provider instead of returning its capped sample (#1108).
+/// A GeoPackage past the count limit is read whole within the memory budget, not refused or
+/// sampled (#1108, #1111), and exported a chunk at a time.
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
-fn oversized_geopackage_refuses_whole_reads_but_streams_and_exports() {
-    use rustgis_data::{Dataset, Geometry, GeometryType, source::MAX_LIMIT};
+fn geopackage_past_the_count_limit_streams_exports_and_reads_whole() {
+    use rustgis_data::{Geometry, source::MAX_LIMIT};
 
     let fixture = GpkgRegressionFixture::new("whole-read-limit");
     let path = fixture.path();
@@ -20404,37 +20405,13 @@ fn oversized_geopackage_refuses_whole_reads_but_streams_and_exports() {
         count
     );
     drop(db);
-    let assert_limit = |error: &str| {
-        assert!(error.contains(&count.to_string()), "missing source count: {error}");
-        assert!(error.contains(&MAX_LIMIT.to_string()), "missing whole-read limit: {error}");
-    };
-
     let mut s = Session::new(Project::default());
-    let error = s.run("layer.addData", &json!({"path": path, "stream": false})).unwrap_err();
-    assert_limit(&error);
-    assert!(s.map().layers.is_empty(), "a refused read must not add a partial layer");
-
-    // A real file input to merge must fail even when the map already has a usable input layer.
-    let mut initial = Dataset::new("Initial", GeometryType::Point, vec![]);
-    initial.push_next(Some(Geometry::Point(rustgis_geom::Coord::new(0.0, 0.0))), vec![]);
-    let initial_id = s.map_mut().add_dataset(initial);
-    let error = s.run("gp.run", &json!({"tool": "merge", "params": {"inputs": [path], "output": "Merged"}})).unwrap_err();
-    assert_limit(&error);
-    assert_eq!(s.map().layers.len(), 1);
-    assert!(s.map().layer_by_name("Merged").is_none());
-    assert_eq!(s.map().layer(initial_id).unwrap().dataset.features.len(), 1);
-
     let loaded = s.run("layer.addData", &json!({"path": path, "stream": true})).unwrap();
     assert_eq!(loaded["features"].as_u64(), Some(count as u64));
     let id = loaded["layer"].as_u64().unwrap() as u32;
     assert!(s.map().layer(id).unwrap().is_streamed());
     let resident = s.map().layer(id).unwrap().dataset.features.len();
     assert!(resident < count);
-    let error = s.run("layer.loadAll", &json!({"layer": id})).unwrap_err();
-    assert_limit(&error);
-    assert!(s.map().layer(id).unwrap().is_streamed());
-    assert_eq!(s.map().layer(id).unwrap().dataset.features.len(), resident);
-
     // Exported a chunk at a time, past the limit a whole read has.
     let output = fixture.dir.join("whole.csv");
     let exported = s.run("share.exportLayer", &json!({"layer": id, "path": output})).unwrap();
@@ -20449,17 +20426,10 @@ fn oversized_geopackage_refuses_whole_reads_but_streams_and_exports() {
         rows += 1;
     }
     assert_eq!(rows, count, "every row");
-    // A format still written from a whole layer is refused, and writes nothing.
-    let refused = fixture.dir.join("refused.kml");
-    let error = s.run("share.exportLayer", &json!({"layer": id, "path": refused})).unwrap_err();
-    assert_limit(&error);
-    assert!(!refused.exists(), "a refused export must not write a partial file");
-    assert!(s.map().layer(id).unwrap().is_streamed());
-    assert_eq!(s.map().layer(id).unwrap().dataset.features.len(), resident);
-    assert_eq!(s.map().layers.len(), 2);
-
-    assert_limit(&rustgis_data::io::read_path(&path).unwrap_err().to_string());
-    assert_limit(&rustgis_data::io::read_owned("oversized.gpkg", std::fs::read(&path).unwrap()).unwrap_err().to_string());
+    // A whole read is bounded by memory, not by the count.
+    s.run("layer.loadAll", &json!({"layer": id})).unwrap();
+    assert!(!s.map().layer(id).unwrap().is_streamed());
+    assert_eq!(s.map().layer(id).unwrap().dataset.features.len(), count);
 }
 
 #[cfg(not(target_arch = "wasm32"))]

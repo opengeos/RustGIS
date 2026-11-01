@@ -279,6 +279,33 @@ fn materialize_refuses_oversized_and_incomplete_sources() {
     assert_eq!(report.skipped, 1);
 }
 
+/// A whole read of a source that can be read a chunk at a time holds what one read gives, and is
+/// refused once its features outgrow the memory budget (#1111).
+#[test]
+fn whole_reads_by_chunk_stay_within_the_memory_budget() {
+    let d = dir().join("budget");
+    std::fs::create_dir_all(&d).unwrap();
+    let mut ds = Dataset::new("lines", GeometryType::Polyline, vec![Field::new("name", FieldType::Text)]);
+    for i in 0..200 {
+        let x = f64::from(i) * 0.01;
+        ds.push_next(Some(Geometry::Line(vec![vec![Coord::new(x, 1.0), Coord::new(x, 2.0)]])), vec![Value::Text(format!("line {i}"))]);
+    }
+    for ext in ["gpkg", "fgb", "parquet", "shp"] {
+        let p = d.join(format!("lines.{ext}"));
+        let _ = std::fs::remove_file(&p);
+        crate::io::write_path(&ds, &p).unwrap();
+        let src = open_path(&p, None).unwrap();
+        assert!(src.visits_chunks(), "{ext}");
+        let once = src.read(&Request::all()).unwrap().features;
+        let (whole, report) = materialize_within(src.as_ref(), MAX_READ_BYTES).unwrap();
+        assert_eq!(whole.features.to_vec(), once, "{ext}");
+        assert_eq!(report.skipped, 0, "{ext}");
+        let half = chunk_memory::features_bytes(&once) as u64 / 2;
+        let error = materialize_within(src.as_ref(), half).unwrap_err().to_string();
+        assert!(error.contains("clip or filter it first"), "{ext}: {error}");
+    }
+}
+
 #[test]
 fn geoparquet_with_and_without_a_covering() {
     let d = dir();
