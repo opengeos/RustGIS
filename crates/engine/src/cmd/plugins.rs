@@ -393,8 +393,8 @@ pub fn reaches(spec: &C, params: &Value) -> Option<Reach> {
     files.then_some(Reach::Files)
 }
 
-/// Why a plugin may not run `id` with `params`, if it may not.
-fn refused(plugin: &Plugin, spec: &C, params: &Value) -> Option<String> {
+/// Why a plugin may not run `id` with `params` on the session `s`, if it may not.
+fn refused(s: &Session, plugin: &Plugin, spec: &C, params: &Value) -> Option<String> {
     let m = &plugin.manifest;
     if user_only(spec.id) {
         return Some(format!("plugins can't run '{}'", spec.id));
@@ -404,7 +404,10 @@ fn refused(plugin: &Plugin, spec: &C, params: &Value) -> Option<String> {
     if database && !(m.has(Permission::Files) && m.has(Permission::Network)) {
         return Some(format!("{} needs the 'files' and 'network' permissions to run '{}'", m.name, spec.id));
     }
-    match reaches(spec, params) {
+    // A mosaic writes a file only when given a `path`, and reads one for an input that isn't a
+    // raster layer; a mosaic of the project's layers stays in it, as `raster.project` does.
+    let reach = if spec.id == "raster.mosaic" && super::imagery::mosaics_layers(s, params) { None } else { reaches(spec, params) };
+    match reach {
         Some(Reach::Files)
             if spec.id == "gp.run"
                 && !m.has(Permission::Files)
@@ -514,7 +517,7 @@ impl Bridge<'_> {
             return Err("plugins can't run other plugins' commands".into());
         }
         let spec = self.s.registry.get(id).ok_or_else(|| format!("unknown command '{id}'"))?;
-        if let Some(why) = refused(&self.plugin, spec, params) {
+        if let Some(why) = refused(self.s, &self.plugin, spec, params) {
             return Err(why);
         }
         let (enabled, run, label, mutates) = (spec.enabled, spec.run, spec.label, spec.mutates);
