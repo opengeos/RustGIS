@@ -12,8 +12,10 @@
      projections, ribbon, panes, dialogs, labels, colors — attach screenshots by dragging
      images into this text box: before AND after for changes to existing UI, after-only
      for brand-new UI. The optional `gh image` extension automates the upload:
-     https://github.com/drogers0/gh-image. If there is no visible UI change, leave the
-     line "No visible UI change" here instead of deleting this section. -->
+     https://github.com/drogers0/gh-image. If there is no visible UI change, keep the
+     line below instead of deleting this section; otherwise replace it. -->
+
+No visible UI change.
 
 ## Related issue
 
