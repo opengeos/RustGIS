@@ -2357,8 +2357,9 @@ fn ogc_api(url: &str, v: &serde_json::Value) -> Result<Service, String> {
     let root = base(url).trim_end_matches('/').to_string();
     let mut unreadable = 0;
     let mut tiled = 0;
-    // Collections whose items are 3D content, not features, by what it is.
-    let mut three_d: Vec<(&str, Vec<&str>)> = Vec::new();
+    // Collections whose items are 3D content, not features, by what it is and whether their tiles
+    // are listed.
+    let mut three_d: Vec<((&str, bool), Vec<&str>)> = Vec::new();
     for c in collections.iter().take(MAX_LAYERS) {
         let Some(id) = c.get("id").and_then(|i| i.as_str()) else { continue };
         let links = c.get("links").and_then(|l| l.as_array()).cloned().unwrap_or_default();
@@ -2417,17 +2418,19 @@ fn ogc_api(url: &str, v: &serde_json::Value) -> Result<Service, String> {
             })
             .collect();
         let link = json_items.iter().copied().find(|l| items_3d(url, l).is_none());
-        // A collection with tiles and no items link has no features to offer.
-        if link.is_none() && (map.is_some() || vector.is_some()) {
+        let tiles = map.is_some() || vector.is_some();
+        // Items that are only 3D content (PDOK links 3D Tiles and quantized meshes as items, for
+        // 3D viewers) aren't offered, and the notes say so: the collection is left out, or listed
+        // by its tiles alone.
+        if let (None, Some(what)) = (link, json_items.first().and_then(|l| items_3d(url, l))) {
+            match three_d.iter_mut().find(|(k, _)| *k == (what, tiles)) {
+                Some((_, ids)) => ids.push(id),
+                None => three_d.push(((what, tiles), vec![id])),
+            }
             continue;
         }
-        // Nor one whose items are only 3D content (PDOK links 3D Tiles and quantized meshes as
-        // its items, for 3D viewers): it is left out, and the notes say why.
-        if let (None, Some(what)) = (link, json_items.first().and_then(|l| items_3d(url, l))) {
-            match three_d.iter_mut().find(|(w, _)| *w == what) {
-                Some((_, ids)) => ids.push(id),
-                None => three_d.push((what, vec![id])),
-            }
+        // A collection with tiles and no items link has no features to offer.
+        if link.is_none() && tiles {
             continue;
         }
         let declared_geojson =
@@ -2462,13 +2465,19 @@ fn ogc_api(url: &str, v: &serde_json::Value) -> Result<Service, String> {
     if unreadable > 0 {
         service.notes.push(format!("{unreadable} collections link to their items with an address RustGIS doesn't fetch and are left out"));
     }
-    for (what, ids) in &three_d {
+    for ((what, tiles), ids) in &three_d {
         let mut named = ids.iter().take(20).map(|i| format!("'{i}'")).collect::<Vec<_>>().join(", ");
         if ids.len() > 20 {
-            named.push_str(", …");
+            named.push_str(&format!(", and {} more", ids.len() - 20));
         }
-        let (noun, verb, they) = if ids.len() == 1 { ("collection", "offers", "it is") } else { ("collections", "offer", "they are") };
-        service.notes.push(format!("{noun} {named} {verb} {what}, {LEFT_OUT_3D}, so {they} left out"));
+        let one = ids.len() == 1;
+        let (noun, verb) = if one { ("collection", "offers") } else { ("collections", "offer") };
+        service.notes.push(match (tiles, one) {
+            (false, true) => format!("{noun} {named} {verb} {what}, {LEFT_OUT_3D}, so it is left out"),
+            (false, false) => format!("{noun} {named} {verb} {what}, {LEFT_OUT_3D}, so they are left out"),
+            (true, true) => format!("{noun} {named} also {verb} {what}, {LEFT_OUT_3D}; its tiles are listed"),
+            (true, false) => format!("{noun} {named} also {verb} {what}, {LEFT_OUT_3D}; their tiles are listed"),
+        });
     }
     if collections.len() > MAX_LAYERS {
         service.notes.push(format!("only the first {MAX_LAYERS} collections are listed"));
@@ -3547,13 +3556,15 @@ mod tests {
             {"id": "gebouwen", "itemType": "feature", "links": [{"rel": "items", "type": "application/json+3dtiles", "href": "https://x.org/collections/gebouwen/3dtiles?f=json"}]},
             {"id": "terreinen", "itemType": "feature", "links": [{"rel": "items", "type": "application/json+3dtiles", "href": "https://x.org/collections/terreinen/3dtiles?f=json"}]},
             {"id": "relative", "links": [{"rel": "items", "href": "3dtiles"}]},
+            {"id": "tiled", "links": [{"rel": "items", "type": "application/json+3dtiles", "href": "https://x.org/collections/tiled/3dtiles"}, {"rel": "http://www.opengis.net/def/rel/ogc/1.0/tilesets-map", "href": "https://x.org/collections/tiled/map/tiles"}]},
             {"id": "bin", "links": [{"rel": "items", "type": "application/octet-stream", "href": "https://x.org/collections/bin/3dtiles"}]},
             {"id": "dtm", "itemType": "feature", "links": [{"rel": "items", "type": "application/json", "href": "https://x.org/collections/dtm/quantized-mesh?f=json"}]},
             {"id": "both", "links": [{"rel": "items", "href": "https://x.org/collections/both/3dtiles/"}, {"rel": "items", "type": "application/geo+JSON", "href": "https://x.org/collections/both/items?f=json"}]},
             {"id": "plain", "links": [{"rel": "items", "type": "application/geo+json", "href": "https://x.org/collections/plain/items?f=json"}]}
         ]}"#;
         let s = parse("https://x.org/collections", json.as_bytes()).unwrap();
-        let offered: Vec<_> = s.layers.iter().map(|l| (l.name.as_str(), &l.offer)).collect();
+        let offered: Vec<_> =
+            s.layers.iter().filter(|l| matches!(l.offer, Offer::Features { .. })).map(|l| (l.name.as_str(), &l.offer)).collect();
         assert_eq!(offered.len(), 2, "{offered:?}");
         assert!(
             matches!(offered[0], ("both", Offer::Features { url }) if url == "https://x.org/collections/both/items?f=json&limit=10000"),
@@ -3573,7 +3584,19 @@ mod tests {
             "{:?}",
             s.notes
         );
+        // A collection with tiles too is listed by them, and the note says its 3D items aren't.
+        assert!(s.layers.iter().any(|l| l.name == "tiled (map tiles)"));
+        assert!(
+            s.notes.contains(&"collection 'tiled' also offers 3D Tiles, which RustGIS doesn't draw; its tiles are listed".to_string()),
+            "{:?}",
+            s.notes
+        );
         assert!(!s.incomplete);
+        // Past 20 names, the note says how many more.
+        let many: Vec<String> =
+            (0..23).map(|i| format!(r#"{{"id": "c{i}", "links": [{{"rel": "items", "href": "https://x.org/c{i}/3dtiles"}}]}}"#)).collect();
+        let s = parse("https://x.org/collections", format!(r#"{{"collections": [{}]}}"#, many.join(",")).as_bytes()).unwrap();
+        assert!(s.notes.iter().any(|n| n.contains("'c19', and 3 more offer 3D Tiles")), "{:?}", s.notes);
         // Without them, no note on 3D content.
         let plain = r#"{"collections": [{"id": "plain", "links": [{"rel": "items", "type": "application/geo+json", "href": "https://x.org/collections/plain/items?f=json"}]}]}"#;
         let s = parse("https://x.org/collections", plain.as_bytes()).unwrap();
