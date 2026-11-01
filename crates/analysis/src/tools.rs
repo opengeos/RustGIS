@@ -1146,8 +1146,13 @@ fn buffer(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
     }
     let mut out = copy_schema(ds, out_name(p, format!("{}_Buffer", ds.name)), GeometryType::Polygon);
     let mut all: Vec<MultiPolygon<f64>> = Vec::new();
-    let features: Vec<&Feature> = rows(inp, p, "input", ds).into_iter().filter_map(|r| ds.features.get(r)).collect();
-    let geoms: Vec<(&Feature, &Geometry)> = features.into_iter().filter_map(|f| Some((f, f.geometry.as_ref()?))).collect();
+    let geoms: Vec<(&Feature, &Geometry)> = rows(inp, p, "input", ds)
+        .into_iter()
+        .filter_map(|r| {
+            let f = ds.features.get(r)?;
+            Some((f, f.geometry.as_ref()?))
+        })
+        .collect();
     let buffers = geodesic_buffers(&geoms.iter().map(|(_, g)| *g).collect::<Vec<_>>(), metres);
     for ((f, _), geom) in geoms.iter().zip(buffers) {
         let Some(geom) = geom else { continue };

@@ -79,6 +79,11 @@ pub fn geodesic_buffer(g: &Geometry, metres: f64) -> Option<Geometry> {
 
 /// Buffers of this many features or more are made on several threads.
 const PARALLEL_FEATURES: usize = 256;
+/// The features a thread takes at a time: few enough that expensive features lying together are
+/// shared out, enough that taking them costs nothing.
+const BATCH: usize = 16;
+/// Each buffering thread's stack, as large as the main thread's usually is.
+const STACK_BYTES: usize = 8 << 20;
 
 /// The buffers of `geoms` at `metres`, in their order, as [`geodesic_buffer`] makes them: on
 /// several threads when there are many (one in the browser), since each is made alone.
@@ -88,24 +93,45 @@ pub fn geodesic_buffers(geoms: &[&Geometry], metres: f64) -> Vec<Option<Geometry
     } else {
         std::thread::available_parallelism().map_or(1, |n| n.get()).min(16)
     };
+    buffers_on(geoms, metres, threads)
+}
+
+/// [`geodesic_buffers`] on `threads` threads, this one among them. Each takes the next
+/// [`BATCH`] of features until none are left, so the work is shared however it is spread, and
+/// the results go back in their places. A thread that can't start (a limit on threads, say)
+/// leaves its share to the others; one that panics passes its panic on, as a buffer made here
+/// would.
+fn buffers_on(geoms: &[&Geometry], metres: f64, threads: usize) -> Vec<Option<Geometry>> {
     if threads <= 1 {
         return geoms.iter().map(|g| geodesic_buffer(g, metres)).collect();
     }
-    let chunk = geoms.len().div_ceil(threads);
-    let make = |part: &[&Geometry]| part.iter().map(|g| geodesic_buffer(g, metres)).collect::<Vec<_>>();
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let work = || {
+        let mut made = Vec::new();
+        loop {
+            let from = next.fetch_add(BATCH, std::sync::atomic::Ordering::Relaxed);
+            let Some(batch) = geoms.get(from..geoms.len().min(from + BATCH)).filter(|b| !b.is_empty()) else { break };
+            made.extend(batch.iter().enumerate().map(|(i, g)| (from + i, geodesic_buffer(g, metres))));
+        }
+        made
+    };
+    let mut out: Vec<Option<Geometry>> = vec![None; geoms.len()];
+    let mut place = |made: Vec<(usize, Option<Geometry>)>| {
+        for (i, b) in made {
+            if let Some(slot) = out.get_mut(i) {
+                *slot = b;
+            }
+        }
+    };
     std::thread::scope(|scope| {
-        // A part whose thread can't start (a limit on threads, say) is made here instead.
-        let parts: Vec<_> =
-            geoms.chunks(chunk).map(|part| std::thread::Builder::new().spawn_scoped(scope, move || make(part)).map_err(|_| part)).collect();
-        // A thread that panicked passes its panic on, as one buffer made here would.
-        parts
-            .into_iter()
-            .flat_map(|p| match p {
-                Ok(h) => h.join().unwrap_or_else(|e| std::panic::resume_unwind(e)),
-                Err(part) => make(part),
-            })
-            .collect()
-    })
+        let others: Vec<_> =
+            (1..threads).filter_map(|_| std::thread::Builder::new().stack_size(STACK_BYTES).spawn_scoped(scope, work).ok()).collect();
+        place(work());
+        for h in others {
+            place(h.join().unwrap_or_else(|e| std::panic::resume_unwind(e)));
+        }
+    });
+    out
 }
 
 /// An azimuthal equidistant plane whose centre's longitude is within 180° of `reference`, a
@@ -270,7 +296,7 @@ impl Plane {
 /// more for the ellipsoid and near the equator, where tan φ is near 0. Straight in the plane is the
 /// geodesic only through the plane's centre, and turns from it as the edge lies farther out, by
 /// about ρ / R at ρ from the centre. The latitude is the edge's farthest from the equator plus its
-/// length, and ρ its end farthest from the centre plus its length; both overstate, so an edge
+/// length as an angle (L / R), and ρ its end farthest from the centre plus L; both overstate, so an edge
 /// this passes doesn't stray, and shorter edges, edges nearer the centre and lower latitudes skip
 /// the look that most of a buffer's time went to.
 fn may_stray(a: GC<f64>, b: GC<f64>, la: Coord, lb: Coord, tolerance: f64) -> bool {
@@ -482,6 +508,11 @@ mod tests {
         let refs: Vec<&Geometry> = points.iter().collect();
         let alone: Vec<Option<Geometry>> = refs.iter().map(|g| geodesic_buffer(g, 5_000.0)).collect();
         assert_eq!(geodesic_buffers(&refs, 5_000.0), alone);
-        assert_eq!(geodesic_buffers(&refs[..3], 5_000.0), alone[..3]);
+        // However many threads, and fewer features than threads or batches.
+        for threads in [1, 3, 16] {
+            assert_eq!(buffers_on(&refs, 5_000.0, threads), alone, "{threads} threads");
+            assert_eq!(buffers_on(&refs[..3], 5_000.0, threads), alone[..3], "{threads} threads, 3 features");
+        }
+        assert!(buffers_on(&[], 5_000.0, 3).is_empty());
     }
 }
