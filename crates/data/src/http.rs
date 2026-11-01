@@ -33,7 +33,7 @@ fn system_roots() -> RootCerts {
 /// The roots on Linux and the BSDs: the bundled ones only when neither `SSL_CERT_FILE` nor
 /// `SSL_CERT_DIR` chooses the trust source and the system has no certificates (`no_system_roots`,
 /// asked only then). The variables count as `rustls-native-certs` reads them: any `SSL_CERT_FILE`
-/// (even empty), or an `SSL_CERT_DIR` naming a directory.
+/// (even empty), or an `SSL_CERT_DIR` with a non-empty entry.
 // Only Linux and the BSDs fall back; the rule is tested on every platform.
 #[cfg_attr(not(all(unix, not(target_vendor = "apple"), not(target_os = "android"))), allow(dead_code))]
 fn roots(file: Option<std::ffi::OsString>, dirs: Option<std::ffi::OsString>, no_system_roots: impl FnOnce() -> bool) -> RootCerts {
