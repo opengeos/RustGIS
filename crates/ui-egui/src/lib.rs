@@ -548,6 +548,10 @@ pub struct UiState {
     /// `panes::web_data_name`).
     pub web_data: &'static str,
     pub dark: bool,
+    /// The theme file in use, by name. Empty follows `dark` and the system.
+    pub theme_name: String,
+    /// The interface scale, 0.8 to 2.0, applied as egui's zoom factor.
+    pub interface_scale: f32,
     /// Live measurement and map scale-bar units, chosen in Home › Measure.
     pub measurement_imperial: bool,
     /// The theme follows the system's light or dark setting until the user picks one.
@@ -778,6 +782,8 @@ impl Default for UiState {
             right_open: Vec::new(),
             web_data: "opendata",
             dark: false,
+            theme_name: String::new(),
+            interface_scale: 1.0,
             measurement_imperial: false,
             dark_follows_system: true,
             language: i18n::AUTO.into(),
@@ -899,7 +905,13 @@ pub struct RustGisApp {
     #[cfg(not(target_arch = "wasm32"))]
     pub connect: connectui::ConnectState,
     fonts_frames: u32,
-    applied_dark: Option<bool>,
+    applied_theme: Option<(String, bool)>,
+    /// The themes the app can offer: built in, then the ones in the user's themes folder.
+    pub themes: Vec<theme::Theme>,
+    /// The theme files that did not load, with the reason.
+    pub theme_errors: Vec<String>,
+    themes_stamp: u64,
+    themes_checked: f64,
     sent_title: String,
     pub quit_requested: bool,
     logo: Option<egui::TextureHandle>,
@@ -1051,7 +1063,7 @@ impl RustGisApp {
             s.active_layer = s.map().layers.first().map(|l| l.id);
         }
         let ui = UiState { keymap: keymap::Keymap::new(&s.registry), ..UiState::default() };
-        RustGisApp {
+        let mut app = RustGisApp {
             session: s,
             ui,
             map: mapview::MapView::default(),
@@ -1071,7 +1083,11 @@ impl RustGisApp {
             docs: docpanes::DocState::default(),
             assistant: assistantpane::AssistantState::default(),
             fonts_frames: 0,
-            applied_dark: None,
+            applied_theme: None,
+            themes: Vec::new(),
+            theme_errors: Vec::new(),
+            themes_stamp: 0,
+            themes_checked: 0.0,
             sent_title: String::new(),
             quit_requested: false,
             logo: None,
@@ -1101,7 +1117,9 @@ impl RustGisApp {
             seen_project: None,
             autosave: Default::default(),
             save_prompt: Default::default(),
-        }
+        };
+        app.load_themes();
+        app
     }
 
     /// Installs the shell's platform hooks and reads what they keep: preferences, saved
@@ -1167,6 +1185,9 @@ impl RustGisApp {
         let list = |s: Option<String>| -> Vec<String> {
             s.map(|v| v.split(',').map(str::trim).filter(|x| !x.is_empty()).map(String::from).collect()).unwrap_or_default()
         };
+        // take_saved_look finds a saved theme only once the folder is read.
+        self.load_themes();
+        self.take_saved_look();
         self.ui.hidden_tabs = ribbon::current_hidden_tabs(list(self.services.load_pref.as_ref().and_then(|load| load("hidden_tabs"))));
         self.ui.quick_access = list(self.services.load_pref.as_ref().and_then(|load| load("quick_access")));
         // The browser's GeoLibre tools, loaded in an earlier visit: load them again (the runner
@@ -1595,6 +1616,121 @@ impl RustGisApp {
             sample::swap_countries(&mut self.session, before, after);
             self.map.invalidate();
         }
+    }
+
+    fn load_themes(&mut self) {
+        // The stamp before the read, so a save between the two is loaded again rather than lost.
+        self.themes_stamp = theme::Theme::folder_signature(theme::Theme::user_dir().as_deref());
+        let (themes, errors) = theme::Theme::available();
+        self.themes = themes;
+        self.theme_errors = errors;
+        self.sync_named_brightness();
+        self.drop_missing_name();
+        // Reset so a file that reads differently is applied again on the next frame.
+        self.applied_theme = None;
+    }
+
+    /// A theme that was deleted or stopped loading is not named: the button names what is drawn.
+    fn drop_missing_name(&mut self) {
+        if !self.ui.theme_name.is_empty() && !self.themes.iter().any(|t| t.name == self.ui.theme_name) {
+            self.ui.theme_name.clear();
+        }
+    }
+
+    /// A file saved as the other brightness takes the interface with it, so name and look agree.
+    fn sync_named_brightness(&mut self) {
+        if self.ui.theme_name.is_empty() {
+            return;
+        }
+        if let Some(dark) = self.themes.iter().find(|t| t.name == self.ui.theme_name).map(|t| t.dark) {
+            self.ui.dark = dark;
+        }
+    }
+
+    /// Reads the folder again when a file in it was added, removed or saved, at most once a second.
+    fn refresh_themes(&mut self, ctx: &egui::Context) {
+        let Some(dir) = theme::Theme::user_dir() else { return };
+        ctx.request_repaint_after(web_time::Duration::from_secs(1));
+        let now = ctx.input(|i| i.time);
+        if now < self.themes_checked + 1.0 {
+            return;
+        }
+        self.themes_checked = now;
+        if theme::Theme::folder_signature(Some(&dir)) != self.themes_stamp {
+            self.load_themes();
+        }
+    }
+
+    /// The theme in use: the one named, else the nearest built-in theme for the current brightness.
+    pub fn current_theme(&self) -> theme::Theme {
+        self.themes
+            .iter()
+            .find(|t| t.name == self.ui.theme_name && t.dark == self.ui.dark)
+            .or_else(|| self.themes.iter().find(|t| t.dark == self.ui.dark))
+            .cloned()
+            .unwrap_or_else(|| {
+                let builtin = theme::Theme::builtin();
+                let wanted = builtin.iter().find(|t| t.dark == self.ui.dark).or_else(|| builtin.first());
+                wanted.cloned().unwrap_or(theme::Theme {
+                    name: "Light".to_string(),
+                    dark: false,
+                    tokens: theme::Tokens::light(),
+                    metrics: theme::Metrics::standard(),
+                })
+            })
+    }
+
+    /// A saved theme name wins; one that no longer loads follows the system.
+    fn take_saved_look(&mut self) {
+        let pref = |app: &Self, key: &str| -> Option<String> {
+            app.services.load_pref.as_ref().and_then(|load| load(key)).filter(|v| !v.is_empty())
+        };
+        let wanted = pref(self, "theme");
+        let picked = wanted.and_then(|name| self.themes.iter().find(|t| t.name == name).cloned());
+        if let Some(picked) = picked {
+            self.ui.theme_name = picked.name;
+            self.ui.dark = picked.dark;
+            self.ui.dark_follows_system = false;
+        } else if let Some(dark) = pref(self, "dark") {
+            // "auto" was Follow the System; a toggle stores the brightness it left.
+            self.ui.dark = dark == "true";
+            self.ui.dark_follows_system = dark == "auto";
+        }
+        let scale = pref(self, "ui_scale").and_then(|v| v.parse::<f32>().ok());
+        self.ui.interface_scale = scale.map_or(1.0, theme::clamp_scale);
+    }
+
+    fn use_theme(&mut self, name: &str) -> Result<(), String> {
+        let Some(picked) = self.themes.iter().find(|t| t.name == name).cloned() else {
+            return Err(i18n::fmt("No theme is named {name}.", &[("name", name)]));
+        };
+        self.ui.theme_name = picked.name.clone();
+        self.ui.dark = picked.dark;
+        self.ui.dark_follows_system = false;
+        if let Some(save) = &self.services.save_pref {
+            save("theme", &picked.name);
+            save("dark", if picked.dark { "true" } else { "false" });
+        }
+        Ok(())
+    }
+
+    fn load_theme_file(&mut self, path: &std::path::Path) -> Result<(), String> {
+        let said = |reason: &str| i18n::fmt("{path}: {reason}", &[("path", &path.display().to_string()), ("reason", reason)]);
+        let text = match theme::read_text(path) {
+            Ok(text) => text,
+            Err(theme::Over::TooBig) => return Err(theme::too_big(path)),
+            Err(theme::Over::Reason(reason)) => return Err(said(&reason)),
+        };
+        let stem = path.file_stem().map_or_else(String::new, |s| s.to_string_lossy().into_owned());
+        let theme = theme::Theme::parse(&stem, &text).map_err(|e| said(&e))?;
+        let kept = theme.save_user()?;
+        self.load_themes();
+        self.use_theme(&theme.name)?;
+        let kept = kept.display().to_string();
+        let name = theme.name.clone();
+        let text = i18n::fmt("Theme {name} loaded and kept at {path}", &[("name", &name), ("path", &kept)]);
+        self.session.notify(text, false);
+        Ok(())
     }
 
     /// Sets up the project the app opens with, from the Settings › Start-up preferences; a shell
@@ -2206,10 +2342,52 @@ impl RustGisApp {
                     save("ribbon_minimized", if self.ui.ribbon_minimized { "true" } else { "false" });
                 }
             }
+            // The theme list in Settings is the one control for brightness; this picks its entry.
             "ui.theme" => {
-                self.ui.dark = p.get("dark").and_then(Value::as_bool).unwrap_or(!self.ui.dark);
+                let dark = p.get("dark").and_then(Value::as_bool).unwrap_or(!self.ui.dark);
+                // The brightness asked for wins: a user file may rework Light or Dark.
+                self.ui.dark = dark;
+                let wanted = if dark { "Dark" } else { "Light" };
+                self.ui.theme_name =
+                    self.themes.iter().find(|t| t.name == wanted && t.dark == dark).map(|t| t.name.clone()).unwrap_or_default();
                 self.ui.dark_follows_system = false;
+                if let Some(save) = &self.services.save_pref {
+                    save("theme", &self.ui.theme_name);
+                    save("dark", if dark { "true" } else { "false" });
+                }
             }
+            // Picks a theme by name; no name follows the system again.
+            "ui.themeFile" => {
+                let name = match p.get("name") {
+                    Some(given) => given.as_str().ok_or_else(|| i18n::fmt("ui.themeFile needs a name string", &[]))?.trim().to_string(),
+                    None => String::new(),
+                };
+                if name.is_empty() {
+                    self.ui.theme_name.clear();
+                    self.ui.dark_follows_system = true;
+                    if let Some(save) = &self.services.save_pref {
+                        save("theme", "");
+                        save("dark", "auto");
+                    }
+                } else {
+                    self.use_theme(&name)?;
+                }
+            }
+            "ui.themeLoad" => {
+                let Some(path) = dialogs::pick_open(&["json"], tl!("A theme file")) else { return Ok(Value::Null) };
+                self.load_theme_file(std::path::Path::new(&path))?;
+            }
+            "ui.scale" => {
+                let factor = match p.get("factor") {
+                    Some(given) => given.as_f64().ok_or_else(|| i18n::fmt("ui.scale needs a number at factor", &[]))? as f32,
+                    None => 1.0,
+                };
+                self.ui.interface_scale = theme::clamp_scale(factor);
+                if let Some(save) = &self.services.save_pref {
+                    save("ui_scale", &format!("{:.2}", self.ui.interface_scale));
+                }
+            }
+            "ui.themeReload" => self.load_themes(),
             "ui.measurementUnits" => {
                 let imperial = match p.get("units") {
                     None => !self.ui.measurement_imperial,
@@ -3941,17 +4119,41 @@ impl RustGisApp {
                 ctx.request_repaint();
             }
         }
+        self.refresh_themes(ctx);
         if self.ui.dark_follows_system
             && let Some(system) = ctx.system_theme()
         {
             self.ui.dark = system == egui::Theme::Dark;
         }
-        if self.applied_dark != Some(self.ui.dark) {
-            let t = if self.ui.dark { theme::Tokens::dark() } else { theme::Tokens::light() };
-            theme::apply(ctx, &t);
-            self.applied_dark = Some(self.ui.dark);
+        if self.applied_theme.as_ref() != Some(&(self.ui.theme_name.clone(), self.ui.dark)) {
+            let chosen = self.current_theme();
+            theme::apply(ctx, &chosen.tokens, &chosen.metrics);
+            self.applied_theme = Some((self.ui.theme_name.clone(), self.ui.dark));
             self.map.invalidate();
         }
+        // egui's own zoom keys would change the zoom behind the Interface Scale menu.
+        ctx.options_mut(|o| o.zoom_with_keyboard = false);
+        // The menu is the only control, so a zoom from anywhere else is put back the same frame.
+        if (ctx.zoom_factor() - self.ui.interface_scale).abs() > 0.001 {
+            ctx.set_zoom_factor(self.ui.interface_scale);
+            self.map.invalidate();
+        }
+    }
+
+    /// The entry the Theme button names. A platform that reports no theme cannot be followed, so
+    /// the brightness in force is named instead. winit reports no system theme on Linux.
+    pub fn theme_shown(&self, system_reports: bool) -> (bool, String) {
+        let follows = self.ui.theme_name.is_empty() && self.ui.dark_follows_system && system_reports;
+        let name = if !self.ui.theme_name.is_empty() {
+            self.ui.theme_name.clone()
+        } else if follows {
+            tl!("Follow the System").to_string()
+        } else if self.ui.dark {
+            tl!("Dark").to_string()
+        } else {
+            tl!("Light").to_string()
+        };
+        (follows, name)
     }
 
     pub fn ui(&mut self, ui: &mut egui::Ui) {
@@ -4388,5 +4590,213 @@ mod download_service_tests {
         let mut app = RustGisApp::with_sample();
         assert_eq!(app.run("gp.fileDelivered", json!({"id": u64::MAX})), Err("no pending file with that id".into()));
         assert_eq!(app.session.notices.iter().filter(|n| n.error && n.text == "no pending file with that id").count(), 1);
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+mod look_tests {
+    use super::RustGisApp;
+    use crate::theme;
+
+    /// App whose preferences answer only these keys, with a theme no folder ships.
+    fn app_with(prefs: &'static [(&'static str, &'static str)]) -> RustGisApp {
+        let mut app = RustGisApp::with_sample();
+        app.themes.push(theme::Theme {
+            name: "Mine".to_string(),
+            dark: true,
+            tokens: theme::Tokens::dark(),
+            metrics: theme::Metrics::standard(),
+        });
+        app.services.load_pref = Some(Box::new(move |key: &str| prefs.iter().find(|(k, _)| *k == key).map(|(_, v)| (*v).to_string())));
+        app
+    }
+
+    #[test]
+    fn the_saved_theme_is_taken_at_start() {
+        let mut app = app_with(&[("theme", "Mine"), ("ui_scale", "9")]);
+        app.take_saved_look();
+        assert_eq!(app.ui.theme_name, "Mine");
+        assert!(app.ui.dark, "the theme brings its own brightness");
+        assert!(!app.ui.dark_follows_system, "a chosen theme does not follow the system");
+        assert_eq!(app.ui.interface_scale, 2.0, "the scale is held at 200 percent");
+        assert_eq!(app.current_theme().name, "Mine");
+    }
+
+    #[test]
+    fn a_platform_that_reports_no_theme_names_the_brightness() {
+        crate::i18n::set_current(crate::i18n::Lang::EN);
+        let mut app = app_with(&[]);
+        app.take_saved_look();
+        assert!(app.ui.dark_follows_system, "a fresh app follows the system");
+        let (follows, name) = app.theme_shown(false);
+        assert!(!follows, "a platform that reports no theme is not followed");
+        assert_eq!(name, "Light");
+        app.ui.dark = true;
+        assert_eq!(app.theme_shown(false).1, "Dark");
+        let (follows, name) = app.theme_shown(true);
+        assert!(follows, "a reported theme is followed");
+        assert_eq!(name, "Follow the System");
+    }
+
+    #[test]
+    fn a_picked_theme_file_bigger_than_the_limit_is_refused_unread() {
+        let dir = tempfile::tempdir().expect("a temporary folder");
+        let path = dir.path().join("huge.json");
+        std::fs::write(&path, "x".repeat(70 * 1024)).expect("the file");
+        let mut app = app_with(&[]);
+        let why = app.load_theme_file(&path).expect_err("a 70 KB file is refused");
+        assert!(why.contains("64 KB"), "{why}");
+    }
+
+    #[test]
+    fn the_menu_owns_the_interface_scale() {
+        let mut app = app_with(&[]);
+        app.take_saved_look();
+        let log = saved_by(&mut app);
+        let ctx = egui::Context::default();
+        // A zoom factor lands at the end of the pass that sets it.
+        let settle = |ctx: &egui::Context| {
+            let mut pass = ctx.run_ui(egui::RawInput::default(), |_| {});
+            pass.textures_delta.clear();
+        };
+        app.logic(&ctx);
+        settle(&ctx);
+        assert!(!ctx.options(|o| o.zoom_with_keyboard), "the zoom keys are off, so the scale cannot move behind the menu");
+        // A scale from the menu is drawn, and the next frame does not undo it.
+        app.run("ui.scale", serde_json::json!({ "factor": 1.25 })).expect("the command");
+        app.logic(&ctx);
+        settle(&ctx);
+        app.logic(&ctx);
+        settle(&ctx);
+        assert_eq!(app.ui.interface_scale, 1.25, "the menu scale is kept, not read back as the old zoom");
+        assert!((ctx.zoom_factor() - 1.25).abs() < 0.001, "and the interface is drawn at it");
+        assert!(log.lock().expect("the log").iter().any(|(k, v)| k == "ui_scale" && v == "1.25"));
+        // Past the limit the command holds the scale.
+        app.run("ui.scale", serde_json::json!({ "factor": 3.0 })).expect("the command");
+        app.logic(&ctx);
+        settle(&ctx);
+        app.logic(&ctx);
+        settle(&ctx);
+        assert_eq!(app.ui.interface_scale, 2.0, "the scale is held at 200 percent");
+        assert!((ctx.zoom_factor() - 2.0).abs() < 0.001, "the context is held too");
+        // A zoom from anywhere else is put back, so the menu and the drawing never disagree.
+        ctx.set_zoom_factor(1.0);
+        settle(&ctx);
+        app.logic(&ctx);
+        settle(&ctx);
+        assert_eq!(app.ui.interface_scale, 2.0, "the menu does not follow a zoom it did not make");
+        assert!((ctx.zoom_factor() - 2.0).abs() < 0.001, "and the context is put back to the menu's value");
+    }
+
+    #[test]
+    fn a_theme_that_stopped_loading_is_not_named() {
+        let mut app = app_with(&[]);
+        app.themes = vec![builtin(false), builtin(true)];
+        app.ui.theme_name = "Gone".to_string();
+        app.drop_missing_name();
+        assert!(app.ui.theme_name.is_empty(), "the name is dropped");
+        assert_eq!(app.current_theme().name, "Light", "and the button names the theme that is drawn");
+    }
+
+    #[test]
+    fn the_fallback_takes_the_brightness_asked_for() {
+        let mut app = app_with(&[]);
+        // A folder theme that calls itself Dark while it is light: nothing loaded matches dark.
+        let mut lied = builtin(false);
+        lied.name = "Dark".to_string();
+        app.themes = vec![lied];
+        app.ui.dark = true;
+        app.ui.theme_name = "Dark".to_string();
+        assert!(app.current_theme().dark, "the drawn theme is a dark one, as asked");
+    }
+
+    #[test]
+    fn the_theme_command_lands_on_the_brightness_it_is_given() {
+        let mut app = app_with(&[]);
+        app.take_saved_look();
+        let log = saved_by(&mut app);
+        // A user file reworks Light and reports itself dark: the request, not the name, decides.
+        let mut reworked = builtin(false);
+        reworked.dark = true;
+        app.themes = vec![reworked, builtin(true)];
+        app.run("ui.theme", serde_json::json!({ "dark": false })).expect("the command");
+        assert!(!app.ui.dark, "the brightness asked for is the one in force");
+        assert!(log.lock().expect("the log").iter().any(|(k, v)| k == "dark" && v == "false"));
+    }
+
+    #[test]
+    fn following_the_system_survives_a_restart() {
+        let mut app = app_with(&[("theme", ""), ("dark", "auto")]);
+        app.take_saved_look();
+        assert!(app.ui.dark_follows_system, "the choice to follow is remembered, not read as a toggle");
+        let mut app = app_with(&[("theme", ""), ("dark", "false")]);
+        app.take_saved_look();
+        assert!(!app.ui.dark_follows_system, "a saved brightness is a brightness, not a follow");
+        assert!(!app.ui.dark);
+    }
+
+    #[test]
+    fn a_parameter_of_the_wrong_type_is_refused() {
+        let mut app = app_with(&[]);
+        let why = app.run("ui.themeFile", serde_json::json!({ "name": 5 })).expect_err("a name must be a string");
+        assert!(why.contains("ui.themeFile"), "{why}");
+        let why = app.run("ui.scale", serde_json::json!({ "factor": "big" })).expect_err("a factor must be a number");
+        assert!(why.contains("ui.scale"), "{why}");
+        app.run("ui.scale", serde_json::json!({ "factor": 1.25 })).expect("a number is accepted");
+        assert_eq!(app.ui.interface_scale, 1.25);
+    }
+
+    #[test]
+    fn a_theme_saved_as_the_other_brightness_takes_the_interface_with_it() {
+        let mut app = app_with(&[]);
+        let mut file = builtin(true);
+        file.name = "Mine".to_string();
+        app.themes = vec![file];
+        app.ui.theme_name = "Mine".to_string();
+        app.ui.dark = true;
+        // The file is saved as a light theme while the app shows the dark one.
+        let mut file = builtin(true);
+        file.name = "Mine".to_string();
+        file.dark = false;
+        app.themes = vec![file];
+        app.sync_named_brightness();
+        assert!(!app.ui.dark, "the interface takes the brightness of the theme it names");
+    }
+
+    #[test]
+    fn a_saved_theme_that_is_gone_leaves_the_saved_brightness() {
+        let mut app = app_with(&[("theme", "Deleted"), ("dark", "true")]);
+        app.take_saved_look();
+        assert!(app.ui.theme_name.is_empty(), "no theme file is named");
+        assert!(app.ui.dark, "Dark Mode was on when it was last closed");
+        assert!(!app.ui.dark_follows_system);
+        assert_eq!(app.ui.interface_scale, 1.0, "no scale saved is the normal one");
+    }
+
+    fn builtin(dark: bool) -> theme::Theme {
+        theme::Theme::builtin().into_iter().find(|t| t.dark == dark).expect("a built-in theme ships")
+    }
+
+    fn saved_by(app: &mut RustGisApp) -> std::sync::Arc<std::sync::Mutex<Vec<(String, String)>>> {
+        let log = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sink = log.clone();
+        app.services.save_pref =
+            Some(Box::new(move |key: &str, value: &str| sink.lock().expect("the log").push((key.to_string(), value.to_string()))));
+        log
+    }
+
+    #[test]
+    fn choosing_a_theme_saves_the_choice() {
+        let mut app = app_with(&[]);
+        let log = saved_by(&mut app);
+        app.use_theme("Mine").expect("the theme is in the list");
+        assert_eq!(app.ui.theme_name, "Mine");
+        assert!(app.ui.dark, "the theme brings its own brightness");
+        assert!(!app.ui.dark_follows_system);
+        let written = log.lock().expect("the log").clone();
+        assert!(written.contains(&("theme".to_string(), "Mine".to_string())), "{written:?}");
+        assert!(written.contains(&("dark".to_string(), "true".to_string())), "{written:?}");
+        assert!(app.use_theme("Gone").is_err(), "a name the list does not hold");
     }
 }

@@ -38,6 +38,7 @@ nav = [
   { "Python" = "python.md" },
   { "MCP Server" = "mcp.md" },
   { "Plugins" = "plugins.md" },
+  { "Themes" = "themes.md" },
   { "Languages" = "i18n.md" },
   { "Architecture" = "architecture.md" },
   { "Contributing" = "contributing.md" },
