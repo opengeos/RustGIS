@@ -422,6 +422,15 @@ fn index_path(root: &Path, key: &str) -> io::Result<PathBuf> {
 pub fn reserve_index(root: &Path, key: &str, budget: u64) -> io::Result<Lease> {
     let directory = directory_lock(root)?;
     let path = index_path(&directory.root, key)?;
+    let reserved = reserve_locked(&directory.root, path, budget);
+    if reserved.is_err() {
+        // No lease was taken here, so no release will sweep this folder: sweep it now, so
+        // abandoned builds filling the disk don't make every later reservation fail too.
+        let _ = prune_locked(&directory.root, budget);
+    }
+    reserved
+}
+fn reserve_locked(root: &Path, path: PathBuf, budget: u64) -> io::Result<Lease> {
     // A valid generation pinned by another reader is never replaced. Concurrent
     // builders can use a private temporary index without losing functionality.
     let mut lock = open_lock(&lease_path(&path))?;
@@ -434,7 +443,7 @@ pub fn reserve_index(root: &Path, key: &str, budget: u64) -> io::Result<Lease> {
         return Ok(lease);
     }
     drop(lock);
-    let (lease, file) = create_locked(directory.root.join(format!("rg-index-work-v1-{}.sqlite", unique())), true, budget)?;
+    let (lease, file) = create_locked(root.join(format!("rg-index-work-v1-{}.sqlite", unique())), true, budget)?;
     drop(file);
     Ok(lease)
 }

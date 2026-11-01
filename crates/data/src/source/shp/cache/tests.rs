@@ -153,6 +153,29 @@ fn cache_failed_build_sweeps_abandoned_builds() {
     assert!(!failed_path.exists(), "the failed build removes its own index");
 }
 
+/// A reservation that fails takes no lease, so no release would sweep the folder: it sweeps
+/// itself, and abandoned builds are reclaimed even though no lease is taken (#1230).
+#[test]
+fn cache_failed_reservation_sweeps_abandoned_builds() {
+    let root = Folder::new();
+    let abandoned = root.0.join("rg-index-work-v1-1-2-3.sqlite");
+    std::fs::write(&abandoned, b"partial").unwrap();
+    std::fs::write(lease_path(&abandoned), b"T").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(lease_path(&abandoned), std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    // A folder where the lease file should be makes the reservation fail.
+    let blocked = lease_path(&index_path(&root.0, &key(1)).unwrap());
+    std::fs::create_dir(&blocked).unwrap();
+    let before = sweeps();
+    assert!(reserve_index(&root.0, &key(1), 4096).is_err());
+    assert_eq!(sweeps(), before + 1, "a failed reservation sweeps");
+    assert!(!abandoned.exists(), "the abandoned build is reclaimed");
+    assert!(blocked.is_dir(), "the sweep leaves what it doesn't own");
+}
+
 fn wait_removed(path: &Path) {
     let deadline = Instant::now() + Duration::from_secs(10);
     while path.exists() {

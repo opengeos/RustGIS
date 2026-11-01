@@ -58,8 +58,9 @@ impl DiskIndex {
             // A reused index adds nothing to the cache, so there is nothing to sweep (#1230).
             return Ok(Self { db: Mutex::new(db), count: u64::from(count), covered, bounds, _lease: lease });
         }
-        // Building one sweeps the cache once, when it is committed or, if it fails, released:
-        // abandoned builds and indexes past the budget go then.
+        // Building one sweeps each cache folder it tries once: when the index is committed or, if
+        // it fails, when it is released or its reservation fails. Abandoned builds and indexes past
+        // the budget go then.
         let mut lease =
             cache::reserve_index(&dir, &key, budget).or_else(|_| cache::reserve_index(&cache::index_fallback_dir(), &key, budget))?;
         let mut db = connect(lease.path(), true)?;

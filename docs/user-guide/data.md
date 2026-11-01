@@ -774,11 +774,10 @@ so another instance cannot evict their indexes; active files can temporarily exc
 budget. An index larger than the budget is session-only. Building an index, even one that
 fails, reclaims abandoned builds and temporary indexes and evicts idle ones past the budget.
 Reopening a cached index leaves the cache as it is, and releasing one removes only its own
-temporary index, unless the cache was left over budget: by indexes in use, which a release
-frees, or by files without a readable lease, which no release can free though each one still
-sweeps the folder. A corrupt cache is rebuilt, and an
-unavailable cache directory falls back to the system temporary directory (a per-user directory
-on Unix).
+temporary index. Otherwise a release sweeps the folder only while the cache is over budget:
+because of indexes in use (a release frees them) or files without a readable lease (no release
+can free them, so each release sweeps). A corrupt cache is rebuilt, and an unavailable cache
+directory falls back to the system temporary directory (a per-user directory on Unix).
 New Unix cache directories are created with mode `0700`. Existing roots must belong to
 the effective user, forbid group/other writes, and have trusted parents; symlink roots
 are rejected. These checks also apply to configured locations. Unsafe locations fall
