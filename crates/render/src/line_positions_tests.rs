@@ -391,3 +391,89 @@ fn locked_multipart_lines_do_not_follow_a_distant_parts_extension() {
     let (line, at) = line_near_anchor(&ctx, &parts, (200.0, 100.0), 5.0).unwrap();
     assert!((line.length() - 20.0).abs() < 1e-4 && (at - 10.0).abs() < 1e-4);
 }
+
+#[test]
+fn auxiliary_drawings_preserve_locked_line_anchors() {
+    let (mut map, id, view) = map_with_line(true);
+    map.layer_mut(id).unwrap().labels.default.other_positions = true;
+    map.label_display.locked = true;
+    render(&mut map, &view).unwrap();
+    let lock = map.label_lock.clone();
+    let anchors = map.label_lock_line_anchors.clone();
+    assert!(!anchors.is_empty());
+    let tilted = View { camera: Camera { pitch: 30.0, ..view.camera }, ..view };
+    assert!(!render_tilt_drape(&mut map, &tilted, 0.0, 256).is_empty());
+    assert_eq!(map.label_lock, lock);
+    assert_eq!(map.label_lock_line_anchors, anchors);
+    assert!(!render_globe_drape(&mut map, &view, &[Extent::new(-1.0, -1.0, 1.0, 1.0)], 256).is_empty());
+    assert_eq!(map.label_lock, lock);
+    assert_eq!(map.label_lock_line_anchors, anchors);
+    assert!(layout::frame_coverage(&mut map, Coord::new(0.0, 0.0), 1_000_000.0, 100.0, 100.0, 32).is_some());
+    assert_eq!(map.label_lock, lock);
+    assert_eq!(map.label_lock_line_anchors, anchors);
+}
+
+#[test]
+fn colliding_band_groups_share_a_frame_layout_budget() {
+    let mut c = curved(&[(20.0, 100.0), (380.0, 100.0)]);
+    c.line.as_mut().unwrap().deduplicate = true;
+    let blocker = PlacedLabel { y: 100.0, size: 200.0, ..label("XXXXXXXXXXXXXXXXXXXX", 200.0, None, 0.0) };
+    // Layout itself succeeds at all eight positions; collision is the reason for retrying.
+    assert!(c.curves.as_ref().unwrap().place(0, &mut c.label.clone()).is_some());
+    let candidates = (0..2600)
+        .map(|i| {
+            let mut c = c.clone();
+            c.key.1 = i;
+            let siblings = vec![c.clone(); rustgis_map::camera::MAX_TILT_BANDS - 1];
+            c.line.as_mut().unwrap().fallbacks = siblings;
+            c
+        })
+        .collect::<Vec<_>>();
+    label_places::LAYOUTS.with(|n| n.set(0));
+    let p = place_labels(candidates, vec![blocker], 400.0, 200.0, false);
+    label_places::LAYOUTS.with(|n| assert_eq!(n.get(), 20_000 * 8));
+    assert_eq!(p.labels.len(), 1);
+    assert_eq!(p.unplaced.len(), 2000);
+}
+
+#[test]
+fn successful_band_previews_do_not_consume_the_unplaced_cap() {
+    let mut bad = Candidate::from((PlacedLabel { y: 100.0, ..label("road", 100.0, None, 0.0) }, 1.0, (1, 0, 0, 0)));
+    bad.line = Some(LinePlaces { deduplicate: true, ..Default::default() });
+    let mut good = bad.clone();
+    good.label.x = 300.0;
+    good.label.collide.text_allow_overlap = true;
+    good.label.collide.text_ignore_placement = true;
+    let mut candidates = Vec::new();
+    for i in 0..2000 {
+        let mut c = bad.clone();
+        c.key.1 = i;
+        let mut sibling = good.clone();
+        sibling.key = c.key;
+        c.line.as_mut().unwrap().fallbacks.push(sibling);
+        candidates.push(c);
+    }
+    bad.key.1 = 2000;
+    candidates.push(bad);
+    let blocker = PlacedLabel { y: 100.0, ..label("BLOCKER", 100.0, None, 0.0) };
+    let p = place_labels(candidates, vec![blocker], 400.0, 200.0, false);
+    assert_eq!(p.labels.len(), 2001);
+    assert_eq!(p.unplaced.len(), 1);
+}
+
+#[test]
+fn tilted_icons_turn_once_for_both_ready_and_deferred_labels() {
+    let at = |x, y| Some((300.0 - y, x));
+    for deferred in [false, true] {
+        let mut c = curved(&[(20.0, 100.0), (380.0, 100.0)]);
+        if !deferred {
+            c.curves = None;
+        }
+        c.label.icon =
+            Some(PlacedIcon { image: Arc::new(Pixmap::new(2, 2).unwrap()), x: 200.0, y: 100.0, w: 2.0, h: 2.0, angle: Some(0.0) });
+        let c = tilt_candidate(c, &at).unwrap();
+        let icon = c.label.icon.unwrap();
+        assert!((icon.angle.unwrap() - std::f32::consts::FRAC_PI_2).abs() < 1e-4);
+        assert_eq!((icon.x, icon.y), (200.0, 200.0));
+    }
+}

@@ -52,7 +52,7 @@ impl Curves {
             if self.locked.is_some_and(|won| won != i) {
                 continue;
             }
-            let (x, y) = self.spec.line.anchor(*d)?;
+            let Some((x, y)) = self.spec.line.anchor(*d) else { continue };
             if let Some(p) = at(x, y) {
                 return Some(p);
             }

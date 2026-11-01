@@ -485,8 +485,7 @@ impl GroundLookup {
     }
 }
 
-/// The most bands a tilted view is cut into.
-/// Maximum number of flat bands used to draw one tilted view.
+/// The most flat bands a tilted view is cut into.
 pub const MAX_TILT_BANDS: usize = 8;
 
 /// The most area a band of a tilted view is drawn with, as a multiple of the screen area it

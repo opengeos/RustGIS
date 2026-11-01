@@ -4557,6 +4557,7 @@ pub fn render_globe_drape(map: &mut Map, view: &View, boxes: &[Extent], max_side
     let max_side = f64::from(max_side.clamp(64, 8192));
     let projection = std::mem::replace(&mut map.projection, rustgis_map::Projection::WebMercator);
     let (display, lock) = (map.label_display, map.label_lock.take());
+    let anchors = std::mem::take(&mut map.label_lock_line_anchors);
     map.label_display.paused = true;
     let mut out = Vec::new();
     for b in boxes {
@@ -4584,6 +4585,7 @@ pub fn render_globe_drape(map: &mut Map, view: &View, boxes: &[Extent], max_side
     map.projection = projection;
     map.label_display = display;
     map.label_lock = lock;
+    map.label_lock_line_anchors = anchors;
     out
 }
 
@@ -4615,6 +4617,7 @@ pub fn render_tilt_drape(map: &mut Map, view: &View, margin: f64, max_side: u32)
     };
     sync_tilted(map, view, &bands, false);
     let (display, lock) = (map.label_display, map.label_lock.take());
+    let anchors = std::mem::take(&mut map.label_lock_line_anchors);
     map.label_display.paused = true;
     let mut out = Vec::new();
     for b in bands {
@@ -4634,6 +4637,7 @@ pub fn render_tilt_drape(map: &mut Map, view: &View, margin: f64, max_side: u32)
     }
     map.label_display = display;
     map.label_lock = lock;
+    map.label_lock_line_anchors = anchors;
     out
 }
 
@@ -4682,6 +4686,8 @@ fn line_near_anchor(ctx: &Ctx<'_>, parts: &[Vec<Coord>], anchor: (f32, f32), ove
 /// own place, or else the first of its alternatives in sight, is where it goes; the rest in sight
 /// are left to try. Left out with none in sight, or its icon out of sight.
 fn tilt_candidate(mut c: Candidate, at: &(impl Fn(f32, f32) -> Option<(f32, f32)> + Clone + Send + Sync + 'static)) -> Option<Candidate> {
+    // turn_with handles the curved label icon angle; the ready path leaves it here.
+    let curved = c.curves.is_some();
     if let Some(curves) = &mut c.curves {
         let (x, y) = curves.anchor_in(at)?;
         turn_with(&mut c.label, at);
@@ -4703,7 +4709,7 @@ fn tilt_candidate(mut c: Candidate, at: &(impl Fn(f32, f32) -> Option<(f32, f32)
         c.alternatives = alternatives;
     }
     if let Some(i) = &mut c.label.icon {
-        if let Some(a) = i.angle {
+        if !curved && let Some(a) = i.angle {
             i.angle = Some(turned_angle(i.x, i.y, a, at).unwrap_or(a));
         }
         (i.x, i.y) = at(i.x, i.y)?;
@@ -4853,6 +4859,8 @@ fn place_labels(cands: impl IntoIterator<Item = impl Into<Candidate>>, fixed: Ve
     }
     let mut out = Placement { labels: fixed, unplaced: Vec::new(), keys: Vec::new(), line_anchors: Vec::new() };
     let outside = |b: &[f32; 4]| b[2] < 0.0 || b[3] < 0.0 || b[0] > w || b[1] > h;
+    // Same work bound as 20,000 heads with eight positions, shared across all bands.
+    let mut layouts_left = 20_000 * 8;
     let mut placed_groups = std::collections::HashSet::new();
     let mut failed_groups = std::collections::HashSet::new();
     let mut unplaced = Vec::new();
@@ -4882,7 +4890,16 @@ fn place_labels(cands: impl IntoIterator<Item = impl Into<Candidate>>, fixed: Ve
         let mut ready = std::iter::once(original).chain(alternatives);
         for i in 0..count {
             let place = match &curves {
-                Some(curves) => curves.place(i, &mut l),
+                Some(curves) => {
+                    if curves.locked.is_some_and(|won| won != i) {
+                        continue;
+                    }
+                    if layouts_left == 0 {
+                        break;
+                    }
+                    layouts_left -= 1;
+                    curves.place(i, &mut l)
+                }
                 None => ready.next(),
             };
             let Some(mut place) = place else { continue };
@@ -4906,7 +4923,7 @@ fn place_labels(cands: impl IntoIterator<Item = impl Into<Candidate>>, fixed: Ve
         let Some((i, mut place, text, icon, show_text, show_icon)) = at else { continue };
         place.swap(&mut l);
         if !show_text && !show_icon {
-            if unplaced.len() < 2000 && has_text && (!grouped || failed_groups.insert(key)) {
+            if has_text && (!grouped || failed_groups.insert(key)) {
                 unplaced.push((grouped.then_some(key), PlacedLabel { color: UNPLACED, halo: Some(halo_for(UNPLACED)), icon: None, ..l }));
             }
             continue;
@@ -4932,8 +4949,12 @@ fn place_labels(cands: impl IntoIterator<Item = impl Into<Candidate>>, fixed: Ve
         out.labels.push(l);
         out.keys.push((key, u8::try_from(i).unwrap_or(u8::MAX)));
     }
-    out.unplaced =
-        unplaced.into_iter().filter(|(key, _)| key.is_none_or(|key| !placed_groups.contains(&key))).map(|(_, label)| label).collect();
+    out.unplaced = unplaced
+        .into_iter()
+        .filter(|(key, _)| key.is_none_or(|key| !placed_groups.contains(&key)))
+        .take(2000)
+        .map(|(_, label)| label)
+        .collect();
     out
 }
 
