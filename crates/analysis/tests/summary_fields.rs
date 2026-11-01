@@ -723,3 +723,33 @@ fn rounding_check_survives_whole_numbers_past_the_i64_range() {
     let res = rustgis_analysis::run("summaryStatistics", &layers, &json!({"input": "huge", "statistics": all})).unwrap();
     assert_eq!(res.messages, ["Summary Statistics: 1 rows"]);
 }
+
+#[test]
+fn whole_numbers_written_as_text_are_counted_and_joined_exactly() {
+    // An Integer field holding whole numbers past 2^53 as text, which a decimal can't tell apart:
+    // UNIQUE, MODE, MINORITY and CONCATENATE take them exactly, as they do Integer values.
+    let geojson = collection(vec![(square(0.0, 0.0, 1.0), json!({"n": 1}))]);
+    let (mut ds, _) = read_geojson(&geojson, "codes").unwrap();
+    assert_eq!(field_ty(&ds, "n"), FieldType::Integer);
+    ds.features.clear();
+    for t in ["9007199254740993", "9.007199254740992e15", "9007199254740993", "9007199254740995.0"] {
+        ds.push(Some(rustgis_data::Geometry::Point(rustgis_geom::Coord::new(0.5, 0.5))), vec![text(t)]);
+    }
+    let statistics = json!([
+        {"field": "n", "statistic": "UNIQUE"},
+        {"field": "n", "statistic": "MODE"},
+        {"field": "n", "statistic": "MINORITY"},
+        {"field": "n", "statistic": "CONCATENATE"},
+    ]);
+    let layers = Layers::default().with(ds);
+    let res = rustgis_analysis::run("summaryStatistics", &layers, &json!({"input": "codes", "statistics": statistics})).unwrap();
+    let Output::Table(out) = res.output else { panic!("a table") };
+    assert_eq!(column(&out, "UNIQUE_n"), [&int(3)]);
+    // 2^53 + 1 twice is the mode; as decimals all four would be 2^53 or 2^53 + 4.
+    assert_eq!(column(&out, "MODE_n"), [&float(9_007_199_254_740_992.0)], "2^53 + 1, written as a decimal");
+    assert_eq!(column(&out, "MINORITY_n"), [&float(9_007_199_254_740_992.0)], "2^53, the lowest of the rarest");
+    assert_eq!(column(&out, "CONCATENATE_n"), [&text("9007199254740993, 9007199254740992, 9007199254740993, 9007199254740995")]);
+    // MODE, 2^53 + 1, comes out rounded, and the tool says so; MINORITY, 2^53, fits.
+    assert_eq!(res.messages.len(), 2, "{:?}", res.messages);
+    assert!(res.messages[1].starts_with("1 result rounded in MODE_n:"), "{:?}", res.messages);
+}
