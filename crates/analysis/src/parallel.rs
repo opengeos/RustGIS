@@ -46,12 +46,13 @@ fn cores() -> usize {
 
 /// `f` on each of a raster's `rows` (its output rows, `chunks_mut` of the bands it writes) with
 /// the row's number, on `threads` threads ([`threads_for_rows`]), this one among them. Each row
-/// is written where it lies, so the output is held once, as on one thread. A row is costly
-/// enough to be taken one at a time, so rows that cost more than others are shared out too.
+/// is written where it lies, so the output is held once, as on one thread. Rows are taken a few
+/// at a time: one each when there are few per thread, so rows that cost more than others are
+/// shared out, up to [`BATCH`] when there are many, so cheap rows don't wait on the lock.
 /// Each thread makes its own `scratch()` once; one that panics stops the others after the rows
 /// they are making, and its panic is raised again here.
 pub(crate) fn for_each_row<T: Send, S>(
-    rows: impl Iterator<Item = T> + Send,
+    rows: impl ExactSizeIterator<Item = T> + Send,
     threads: usize,
     scratch: impl Fn() -> S + Sync,
     f: impl Fn(&mut S, usize, T) + Sync,
@@ -62,15 +63,24 @@ pub(crate) fn for_each_row<T: Send, S>(
         rows.enumerate().for_each(|(i, row)| f(&mut s, i, row));
         return;
     }
+    let take = (rows.len() / threads.saturating_mul(BATCH)).clamp(1, BATCH);
     let rows = std::sync::Mutex::new(rows.enumerate());
     let failed = AtomicBool::new(false);
     let work = || {
         let _stop = StopOnPanic(&failed);
         let mut s = scratch();
+        let mut taken = Vec::with_capacity(take);
         while !failed.load(Ordering::Relaxed) {
-            // The lock is held only to take a row; a poisoned one means a thread panicked.
-            let Some((i, row)) = rows.lock().ok().and_then(|mut r| r.next()) else { break };
-            f(&mut s, i, row);
+            // The lock is held only to take rows; a poisoned one means a thread panicked.
+            if let Ok(mut r) = rows.lock() {
+                taken.extend(r.by_ref().take(take));
+            }
+            if taken.is_empty() {
+                break;
+            }
+            for (i, row) in taken.drain(..) {
+                f(&mut s, i, row);
+            }
         }
     };
     std::thread::scope(|scope| {
@@ -110,32 +120,10 @@ pub(crate) fn try_map_on<T: Sync, S, R: Send, E: Send>(
     scratch: impl Fn() -> S + Sync,
     f: impl Fn(&mut S, usize, &T) -> Result<R, E> + Sync,
 ) -> Result<Vec<R>, E> {
-    try_each_on(items.len(), threads, scratch, |s, i| f(s, i, &items[i]))
-}
-
-/// Sets the stop flag when the thread it lives on panics, so the others stop after the items
-/// they are making rather than make the rest for nothing.
-struct StopOnPanic<'a>(&'a std::sync::atomic::AtomicBool);
-
-impl Drop for StopOnPanic<'_> {
-    fn drop(&mut self) {
-        if std::thread::panicking() {
-            self.0.store(true, std::sync::atomic::Ordering::Relaxed);
-        }
-    }
-}
-
-/// [`try_map_on`] over the indices `0..len`.
-fn try_each_on<S, R: Send, E: Send>(
-    len: usize,
-    threads: usize,
-    scratch: impl Fn() -> S + Sync,
-    f: impl Fn(&mut S, usize) -> Result<R, E> + Sync,
-) -> Result<Vec<R>, E> {
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-    if threads <= 1 || len <= 1 {
+    if threads <= 1 || items.len() <= 1 {
         let mut s = scratch();
-        return (0..len).map(|i| f(&mut s, i)).collect();
+        return items.iter().enumerate().map(|(i, item)| f(&mut s, i, item)).collect();
     }
     let next = AtomicUsize::new(0);
     let failed = AtomicBool::new(false);
@@ -145,21 +133,20 @@ fn try_each_on<S, R: Send, E: Send>(
         let mut made = Vec::new();
         while !failed.load(Ordering::Relaxed) {
             let from = next.fetch_add(BATCH, Ordering::Relaxed);
-            if from >= len {
-                break;
-            }
-            for i in from..len.min(from.saturating_add(BATCH)) {
-                match f(&mut s, i) {
-                    Ok(r) => made.push((i, r)),
+            let Some(batch) = items.get(from..items.len().min(from.saturating_add(BATCH))).filter(|b| !b.is_empty()) else { break };
+            for (k, item) in batch.iter().enumerate() {
+                match f(&mut s, from + k, item) {
+                    Ok(r) => made.push((from + k, r)),
                     Err(e) => {
                         failed.store(true, Ordering::Relaxed);
-                        return Err((i, e));
+                        return Err((from + k, e));
                     }
                 }
             }
         }
         Ok(made)
     };
+
     let mut parts = Vec::with_capacity(threads);
     std::thread::scope(|scope| {
         let others: Vec<_> =
@@ -171,7 +158,7 @@ fn try_each_on<S, R: Send, E: Send>(
             parts.push(h.join().unwrap_or_else(|e| std::panic::resume_unwind(e)));
         }
     });
-    let mut made: Vec<(usize, R)> = Vec::with_capacity(len);
+    let mut made: Vec<(usize, R)> = Vec::with_capacity(items.len());
     let mut first: Option<(usize, E)> = None;
     for part in parts {
         match part {
@@ -188,6 +175,18 @@ fn try_each_on<S, R: Send, E: Send>(
     }
     made.sort_unstable_by_key(|(i, _)| *i);
     Ok(made.into_iter().map(|(_, r)| r).collect())
+}
+
+/// Sets the stop flag when the thread it lives on panics, so the others stop after the items
+/// they are making rather than make the rest for nothing.
+struct StopOnPanic<'a>(&'a std::sync::atomic::AtomicBool);
+
+impl Drop for StopOnPanic<'_> {
+    fn drop(&mut self) {
+        if std::thread::panicking() {
+            self.0.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -320,6 +319,13 @@ mod tests {
                 },
             );
             assert_eq!(out, alone, "{threads} threads");
+        }
+        // Many cheap rows per thread, taken several at a time.
+        let tall: Vec<usize> = (0..5_000).collect();
+        for threads in [2, 16] {
+            let mut out = vec![0usize; 5_000];
+            for_each_row(out.chunks_mut(1), threads, || (), |_, r, row: &mut [usize]| row[0] = r);
+            assert_eq!(out, tall, "{threads} threads");
         }
         let mut none: Vec<u8> = Vec::new();
         for_each_row(none.chunks_mut(5), 4, || (), |_, _, _: &mut [u8]| panic!("no rows"));

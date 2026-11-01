@@ -314,6 +314,11 @@ pub(crate) const MAX_IDW_WORK: usize = 400_000_000;
 
 /// Cells visible from an observer (1) or not (0) within `radius_m`; outside the radius no-data.
 pub fn viewshed(r: &Raster, b: usize, observer: Coord, height: f64, radius_m: f64) -> Result<Vec<f32>, String> {
+    viewshed_on(None, r, b, observer, height, radius_m)
+}
+
+/// [`viewshed`] on `threads` threads, or as many as its work calls for.
+fn viewshed_on(threads: Option<usize>, r: &Raster, b: usize, observer: Coord, height: f64, radius_m: f64) -> Result<Vec<f32>, String> {
     let (oc, or) = r.pixel_at(observer).ok_or("the observer is outside the raster")?;
     let z0 = r.value(b, oc, or).ok_or("the observer stands on no-data")? as f64 + height;
     let (cx, cy) = r.cell_size_m();
@@ -334,40 +339,53 @@ pub fn viewshed(r: &Raster, b: usize, observer: Coord, height: f64, radius_m: f6
     let w = r.width as usize;
     let mut out = vec![NODATA; w * r.height as usize];
     const R: f64 = 6_371_000.0 * 4.0 / 3.0;
-    for row in (or - rad_r).max(0)..=(or + rad_r).min(r.height as i64 - 1) {
-        for col in (oc - rad_c).max(0)..=(oc + rad_c).min(r.width as i64 - 1) {
-            let (dx, dy) = ((col - oc) as f64 * cx, (row - or) as f64 * cy);
-            let dist = dx.hypot(dy);
-            if dist > radius_m {
-                continue;
-            }
-            let idx = row as usize * w + col as usize;
-            let Some(zt) = r.value(b, col, row) else { continue };
-            if dist == 0.0 {
-                if let Some(o) = out.get_mut(idx) {
-                    *o = 1.0;
+    // Each cell walks its own ray and writes only itself, so the rows within the radius are made
+    // on several threads when the work is large (#1252).
+    let (first, last) = ((or - rad_r).max(0), (or + rad_r).min(r.height as i64 - 1));
+    let rows = usize::try_from(last - first + 1).unwrap_or(0);
+    let threads = threads.unwrap_or_else(|| {
+        crate::parallel::threads_for_rows(rows, usize::try_from(cells.saturating_mul(rad_c.max(rad_r) / 2 + 1)).unwrap_or(usize::MAX), 0)
+    });
+    let window = out.chunks_mut(w).skip(usize::try_from(first).unwrap_or(0)).take(rows);
+    crate::parallel::for_each_row(
+        window,
+        threads,
+        || (),
+        |_, i, line: &mut [f32]| {
+            let row = first + i as i64;
+            for col in (oc - rad_c).max(0)..=(oc + rad_c).min(r.width as i64 - 1) {
+                let (dx, dy) = ((col - oc) as f64 * cx, (row - or) as f64 * cy);
+                let dist = dx.hypot(dy);
+                if dist > radius_m {
+                    continue;
                 }
-                continue;
-            }
-            let target = (zt as f64 - dist * dist / (2.0 * R) - z0) / dist;
-            // Walk the ray from the observer; any cell higher than the line hides the target.
-            let steps = ((col - oc).abs().max((row - or).abs())) as usize;
-            let mut visible = true;
-            for s in 1..steps {
-                let t = s as f64 / steps as f64;
-                let (c, rr) = ((oc as f64 + (col - oc) as f64 * t).round() as i64, (or as f64 + (row - or) as f64 * t).round() as i64);
-                let Some(zi) = r.value(b, c, rr) else { continue };
-                let di = dist * t;
-                if (zi as f64 - di * di / (2.0 * R) - z0) / di > target {
-                    visible = false;
-                    break;
+                let Some(zt) = r.value(b, col, row) else { continue };
+                if dist == 0.0 {
+                    if let Some(o) = line.get_mut(col as usize) {
+                        *o = 1.0;
+                    }
+                    continue;
+                }
+                let target = (zt as f64 - dist * dist / (2.0 * R) - z0) / dist;
+                // Walk the ray from the observer; any cell higher than the line hides the target.
+                let steps = ((col - oc).abs().max((row - or).abs())) as usize;
+                let mut visible = true;
+                for s in 1..steps {
+                    let t = s as f64 / steps as f64;
+                    let (c, rr) = ((oc as f64 + (col - oc) as f64 * t).round() as i64, (or as f64 + (row - or) as f64 * t).round() as i64);
+                    let Some(zi) = r.value(b, c, rr) else { continue };
+                    let di = dist * t;
+                    if (zi as f64 - di * di / (2.0 * R) - z0) / di > target {
+                        visible = false;
+                        break;
+                    }
+                }
+                if let Some(o) = line.get_mut(col as usize) {
+                    *o = if visible { 1.0 } else { 0.0 };
                 }
             }
-            if let Some(o) = out.get_mut(idx) {
-                *o = if visible { 1.0 } else { 0.0 };
-            }
-        }
-    }
+        },
+    );
     Ok(out)
 }
 
@@ -1105,6 +1123,30 @@ impl Expr {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Viewshed rows made on several threads see what one thread sees (#1252), with the radius
+    /// inside the raster and reaching past its edges.
+    #[test]
+    fn viewshed_on_several_threads_is_viewshed_on_one() {
+        let (w, h) = (90u32, 70u32);
+        let data = (0..w * h)
+            .map(|i| {
+                let (x, y) = ((i % w) as f32, (i / w) as f32);
+                if i % 97 == 5 { -9999.0 } else { 300.0 + 40.0 * (x * 0.21).sin() * (y * 0.17).cos() + 25.0 * ((x + y) * 0.4).sin() }
+            })
+            .collect();
+        let transform = GeoTransform { origin_x: 0.0, origin_y: 45.0, pixel_width: 0.0003, pixel_height: -0.0003 };
+        let dem = Raster::new("dem", w, h, vec![data], transform, Crs::LonLat, Some(-9999.0), ColorHint::Gray, "Float32")
+            .unwrap_or_else(|e| panic!("{e}"));
+        for (at, radius) in [(Coord::new(0.012, 44.990), 500.0), (Coord::new(0.003, 44.985), 5_000.0)] {
+            let one = viewshed_on(Some(1), &dem, 0, at, 2.0, radius).unwrap_or_else(|e| panic!("{e}"));
+            assert!(one.contains(&1.0) && one.contains(&0.0), "{radius}");
+            for threads in [2, 7, 16] {
+                let many = viewshed_on(Some(threads), &dem, 0, at, 2.0, radius).unwrap_or_else(|e| panic!("{e}"));
+                assert!(one.iter().map(|v| v.to_bits()).eq(many.iter().map(|v| v.to_bits())), "{threads} threads, radius {radius}");
+            }
+        }
+    }
 
     /// Rows made on several threads give the same surface, bit for bit, as one thread (#1252),
     /// from every point and from the nearest few.
