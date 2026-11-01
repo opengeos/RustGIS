@@ -706,13 +706,55 @@ fn rounding_check_survives_whole_numbers_past_the_i64_range() {
     let layers = Layers::default().with(codes);
     let res = rustgis_analysis::run("summaryStatistics", &layers, &json!({"input": "codes", "field": "code"})).unwrap();
     assert_eq!(res.messages, ["Summary Statistics: 1 rows"], "decimals past the i64 range are decimals, not whole numbers");
-    // A whole number written as text past the i64 range is read as a decimal too, and isn't checked:
-    // a known limit, stated in the guide.
-    let csv = "code\n123456789012345678901\n1\nn/a\n";
+    // A whole number written as text in digits past the i64 range is read as a decimal too, which
+    // rounds it: the tool says so once for the field, and its statistics aren't checked one by one.
+    // One the decimal holds (10^20) isn't counted, nor one written with an exponent (above).
+    let csv = "code\n123456789012345678901\n100000000000000000000\n1\nn/a\n-9223372036854775809\n";
     let (codes, _) = read_csv(csv, "codes").unwrap();
+    assert_eq!(field_ty(&codes, "code"), FieldType::Text, "premise");
     let layers = Layers::default().with(codes);
     let res = rustgis_analysis::run("summaryStatistics", &layers, &json!({"input": "codes", "field": "code"})).unwrap();
-    assert_eq!(res.messages, ["Summary Statistics: 1 rows"]);
+    assert_eq!(
+        res.messages,
+        [
+            "Summary Statistics: 1 rows".to_string(),
+            "2 whole numbers written as text in code past the 64-bit integer range were read as decimals that don't hold them exactly"
+                .to_string()
+        ]
+    );
+    let Output::Table(out) = res.output else { panic!("a table") };
+    assert_eq!(column(&out, "MAX_code"), [&float(123_456_789_012_345_678_901.0)], "the decimal, not the number written");
+    // By case, the field is counted once over all its groups, and the results' notice comes first.
+    let csv = "k,code\na,123456789012345678901\nb,9007199254740993\nb,9223372036854775809\nc,n/a\n";
+    let (codes, _) = read_csv(csv, "codes").unwrap();
+    assert_eq!(field_ty(&codes, "code"), FieldType::Text, "premise");
+    let layers = Layers::default().with(codes);
+    let statistics = json!([{"field": "code", "statistic": "MAX"}, {"field": "code", "statistic": "FIRST"}]);
+    let p = json!({"input": "codes", "case": "k", "statistics": statistics});
+    assert_eq!(
+        rustgis_analysis::run("summaryStatistics", &layers, &p).unwrap().messages,
+        ["Summary Statistics: 3 rows"],
+        "a text field's statistics are text, read as they are"
+    );
+    let p = json!({"input": "codes", "case": "k", "field": "code"});
+    let res = rustgis_analysis::run("summaryStatistics", &layers, &p).unwrap();
+    assert_eq!(
+        res.messages,
+        [
+            "Summary Statistics: 3 rows".to_string(),
+            "1 result rounded in MIN_code: a decimal field holds whole numbers exactly only up to 2^53 (9007199254740992)".to_string(),
+            "2 whole numbers written as text in code past the 64-bit integer range were read as decimals that don't hold them exactly"
+                .to_string()
+        ]
+    );
+    // One such value.
+    let (codes, _) = read_csv("code\n123456789012345678901\nx\n", "codes").unwrap();
+    let res =
+        rustgis_analysis::run("summaryStatistics", &Layers::default().with(codes), &json!({"input": "codes", "field": "code"})).unwrap();
+    assert_eq!(
+        res.messages[1],
+        "1 whole number written as text in code past the 64-bit integer range was read as a decimal that doesn't hold it exactly"
+    );
     // An Integer field holding such decimals beside a whole number, through every statistic.
     let text = collection(vec![(square(0.0, 0.0, 1.0), json!({"n": 1})), (square(1.0, 0.0, 1.0), json!({"n": 2}))]);
     let (mut ds, _) = read_geojson(&text, "huge").unwrap();

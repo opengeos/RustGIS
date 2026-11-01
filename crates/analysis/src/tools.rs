@@ -1808,13 +1808,14 @@ fn dissolve(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
     let first_added = fields.len();
     fields.extend(added);
     let mut out = Dataset::new(out_name(p, format!("{}_Dissolve", ds.name)), GeometryType::Polygon, fields);
-    let mut rounded = vec![0; requests.len()];
-    for (key, parts, records) in groups {
+    let mut rounded = Rounded::new(requests.len());
+    for (key, parts, mut records) in groups {
         let n = parts.len() as i64;
         let u = union_all(parts.iter().flat_map(|m| m.0.iter()));
         let mut attrs = if fi.is_some() { vec![key, Value::Int(n)] } else { vec![Value::Int(n)] };
         if !requests.is_empty() {
-            attrs.extend(statistic_values(ds, &record_order(&records), &requests, false, separator, &mut rounded));
+            record_order(&mut records);
+            attrs.extend(statistic_values(ds, &records, &requests, false, separator, &mut rounded));
         }
         out.push(from_multipolygon(&u), attrs);
     }
@@ -2722,7 +2723,8 @@ fn count_points(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
                 *c += 1;
                 if let Some(m) = members.get_mut(*row) {
                     // One entry for each point in each polygon it meets: many overlapping polygons
-                    // can make that more than memory holds, an error rather than an abort.
+                    // can make that more than memory holds, an error rather than an abort. The
+                    // statistics then take each polygon's list as it is, one polygon at a time.
                     m.try_reserve(1).map_err(|e| {
                         format!("Summarize Within: not enough memory to keep each polygon's points for its statistics: {e}")
                     })?;
@@ -2737,16 +2739,16 @@ fn count_points(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
             *v = Value::Int(n);
         }
     }
-    let mut rounded = vec![0; requests.len()];
+    let mut rounded = Rounded::new(requests.len());
     let first = out.fields.len();
     if !requests.is_empty() {
         out.fields.extend(added);
         let width = out.fields.len();
-        for (row, f) in out.features.iter_mut().enumerate() {
+        for (f, mut records) in out.features.iter_mut().zip(members) {
             if f.attrs.len() < width {
                 f.attrs.resize(width, Value::Null);
             }
-            let records = members.get(row).map(|m| record_order(m)).unwrap_or_default();
+            record_order(&mut records);
             let values = statistic_values(pts, &records, &requests, false, separator, &mut rounded);
             for (i, v) in values.into_iter().enumerate() {
                 if let Some(slot) = f.attrs.get_mut(first + i) {
@@ -2874,7 +2876,7 @@ fn summary_statistics(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> 
     let mut rs = rows(inp, p, "input", ds);
     rs.sort_unstable();
     rs.dedup();
-    let mut rounded = vec![0; requests.len()];
+    let mut rounded = Rounded::new(requests.len());
     for group in stats::group_rows(ds, &rs, &cases) {
         let mut row = group.key;
         row.push(stats::count(group.rows.len()));
@@ -2905,18 +2907,35 @@ fn statistic_fields(ds: &Dataset, requests: &[crate::stats::Request], as_numbers
     Ok(out)
 }
 
+/// What a statistics list lost to decimals, counted over every group for [`rounded_notice`].
+struct Rounded {
+    /// For each request, how many of its results came out rounded from a whole number past 2^53.
+    results: Vec<usize>,
+    /// For each input field read as numbers that holds some, by name, how many of its values were
+    /// whole numbers written as text past the i64 range, read as decimals that don't hold them.
+    texts: Vec<(String, usize)>,
+}
+
+impl Rounded {
+    /// Nothing counted yet, for `requests` requests.
+    fn new(requests: usize) -> Rounded {
+        Rounded { results: vec![0; requests], texts: Vec::new() }
+    }
+}
+
 /// The values of a statistics list over the records `rows` of `ds`, one per request, in the
 /// requests' order. `rows` must be in record order, each once: FIRST, LAST and CONCATENATE follow
 /// it. Each field's values are read once, however many of its statistics are asked for. Each
 /// value that comes out rounded from whole numbers past 2^53 adds one to its request's count in
-/// `rounded`, for [`rounded_notice`].
+/// `rounded`, and each whole number written as text that reading its field as numbers rounded
+/// adds one to the field's, for [`rounded_notice`].
 fn statistic_values(
     ds: &Dataset,
     rows: &[usize],
     requests: &[crate::stats::Request],
     as_numbers: bool,
     separator: &str,
-    rounded: &mut [usize],
+    rounded: &mut Rounded,
 ) -> Vec<Value> {
     use crate::stats;
     let mut read: Vec<(usize, stats::Column)> = Vec::new();
@@ -2925,14 +2944,22 @@ fn statistic_values(
         let i = match read.iter().position(|(f, _)| *f == r.field) {
             Some(i) => i,
             None => {
-                read.push((r.field, stats::column(ds, rows, r.field, as_numbers)));
+                let column = stats::column(ds, rows, r.field, as_numbers);
+                if column.rounded_texts() > 0 {
+                    let name = ds.fields.get(r.field).map(|f| f.name.as_str()).unwrap_or_default();
+                    match rounded.texts.iter_mut().find(|(f, _)| f == name) {
+                        Some((_, n)) => *n += column.rounded_texts(),
+                        None => rounded.texts.push((name.to_string(), column.rounded_texts())),
+                    }
+                }
+                read.push((r.field, column));
                 read.len() - 1
             }
         };
         let value = read.get(i).map_or(Value::Null, |(_, c)| {
             let v = stats::compute(r.stat, c, separator);
             if stats::rounded(r.stat, c, &v)
-                && let Some(n) = rounded.get_mut(out.len())
+                && let Some(n) = rounded.results.get_mut(out.len())
             {
                 *n += 1;
             }
@@ -2943,20 +2970,36 @@ fn statistic_values(
     out
 }
 
-/// The notice for statistics that came out rounded, naming their output fields `fields` (one per
-/// request, as `rounded` counts them): a decimal field holds whole numbers exactly only up to 2^53.
-/// None when nothing was rounded.
-fn rounded_notice(rounded: &[usize], fields: &[Field]) -> Option<String> {
-    let total: usize = rounded.iter().sum();
-    if total == 0 {
-        return None;
+/// The notices for what a statistics list lost to decimals: the statistics that came out rounded,
+/// naming their output fields `fields` (one per request, as `rounded` counts them), as a decimal
+/// field holds whole numbers exactly only up to 2^53; and the whole numbers written as text past
+/// the i64 range that were read as decimals that don't hold them, naming their input fields.
+/// Empty when nothing was rounded.
+fn rounded_notice(rounded: &Rounded, fields: &[Field]) -> Vec<String> {
+    let mut notices = Vec::new();
+    let total: usize = rounded.results.iter().sum();
+    if total > 0 {
+        let names: Vec<&str> = rounded.results.iter().zip(fields).filter(|(n, _)| **n > 0).map(|(_, f)| f.name.as_str()).collect();
+        let results = if total == 1 { "result" } else { "results" };
+        notices.push(format!(
+            "{total} {results} rounded in {}: a decimal field holds whole numbers exactly only up to 2^53 (9007199254740992)",
+            names.join(", ")
+        ));
     }
-    let names: Vec<&str> = rounded.iter().zip(fields).filter(|(n, _)| **n > 0).map(|(_, f)| f.name.as_str()).collect();
-    let results = if total == 1 { "result" } else { "results" };
-    Some(format!(
-        "{total} {results} rounded in {}: a decimal field holds whole numbers exactly only up to 2^53 (9007199254740992)",
-        names.join(", ")
-    ))
+    let total: usize = rounded.texts.iter().map(|(_, n)| n).sum();
+    if total > 0 {
+        let names: Vec<&str> = rounded.texts.iter().map(|(f, _)| f.as_str()).collect();
+        let (numbers, were, decimals) = if total == 1 {
+            ("number", "was", "a decimal that doesn't hold it")
+        } else {
+            ("numbers", "were", "decimals that don't hold them")
+        };
+        notices.push(format!(
+            "{total} whole {numbers} written as text in {} past the 64-bit integer range {were} read as {decimals} exactly",
+            names.join(", ")
+        ));
+    }
+    notices
 }
 
 /// The statistics list of a tool that adds statistics to its own output (Dissolve, Summarize
@@ -2980,12 +3023,10 @@ fn each_once(rows: Vec<usize>) -> Vec<usize> {
     rows.into_iter().filter(|&r| seen.insert(r)).collect()
 }
 
-/// `rows` in record order, each once, as [`statistic_values`] takes them.
-fn record_order(rows: &[usize]) -> Vec<usize> {
-    let mut rs = rows.to_vec();
-    rs.sort_unstable();
-    rs.dedup();
-    rs
+/// Puts `rows` in record order, each once, as [`statistic_values`] takes them, in place.
+fn record_order(rows: &mut Vec<usize>) {
+    rows.sort_unstable();
+    rows.dedup();
 }
 
 /// The key fields a table tool groups by, such as Summary Statistics' case fields: one field's name,
@@ -7930,7 +7971,9 @@ mod tests {
         assert!(summary_requests(&ds, &serde_json::json!({"separator": long, "statistics": list})).is_err());
         let p = serde_json::json!({"separator": " | ", "statistics": list});
         assert_eq!(summary_requests(&ds, &p).map(|(r, s)| (r.len(), s.to_string())), Ok((1, " | ".to_string())));
-        assert_eq!(record_order(&[5, 2, 9, 2, 0]), [0, 2, 5, 9]);
+        let mut rows = vec![5, 2, 9, 2, 0];
+        record_order(&mut rows);
+        assert_eq!(rows, [0, 2, 5, 9]);
     }
 
     /// A selection's rows are taken once each, at their first place, whether they are listed out

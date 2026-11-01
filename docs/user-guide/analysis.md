@@ -506,8 +506,9 @@ past it (a `SUM`, `RANGE` or evenly dividing `MEAN` of whole numbers, the `MIN`,
 `LAST`, `MODE` or `MINORITY` picked, or a whole `MEDIAN`, percentile or `IQR`) is rounded, and the
 tool says how many results were rounded and in which fields. The whole numbers are an Integer
 field's values and whole numbers written as text in a numeric field, which these checks and
-`UNIQUE`, `MODE`, `MINORITY` and `CONCATENATE` take exactly up to the 64-bit integer range (longer
-ones are read as decimals). A Double field's values are decimals already, rounded as decimal
+`UNIQUE`, `MODE`, `MINORITY` and `CONCATENATE` take exactly up to the 64-bit integer range. A
+longer one is read as a decimal; when that rounds a number written in digits, the tool says how
+many and in which fields. A Double field's values are decimals already, rounded as decimal
 arithmetic rounds, and get no notice. Without `statistics`, `field` gives that field's `COUNT`,
 `SUM`, `MEAN`, `MIN`, `MAX` and `STD`, reading its values as numbers.
 
