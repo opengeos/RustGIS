@@ -414,7 +414,8 @@ pub fn nice_distance(d: f64) -> f64 {
 
 /// Formats a distance in metres as `0.2 mm` / `5 mm` / `20 cm` / `850 m` / `12.5 km`: under a
 /// metre in centimetres or millimetres, so a scale bar on a site plan (#902) doesn't read `0 m`.
-/// Non-finite values display as `—`.
+/// A negative distance keeps its sign and picks its unit by magnitude (-12.5 km). Non-finite
+/// values display as `—`.
 pub fn format_distance(m: f64) -> String {
     if !m.is_finite() {
         return "—".to_string();
@@ -426,15 +427,21 @@ pub fn format_distance(m: f64) -> String {
         // Under half a millimetre, which the closest zoom spreads over pixels: tenths, then a
         // bound rather than 0.
         let tenths = (m * 10_000.0).round() / 10.0;
-        return if tenths != 0.0 { format!("{tenths:.1} mm") } else { "< 0.1 mm".to_string() };
+        return if tenths != 0.0 {
+            format!("{tenths:.1} mm")
+        } else if m < 0.0 {
+            "> -0.1 mm".to_string()
+        } else {
+            "< 0.1 mm".to_string()
+        };
     }
     if m != 0.0 && mm.abs() < 10.0 {
         format!("{mm:.0} mm")
     } else if m != 0.0 && cm.abs() < 100.0 {
         format!("{cm:.0} cm")
-    } else if m.round() < 1000.0 {
+    } else if m.abs().round() < 1000.0 {
         format!("{m:.0} m")
-    } else if (m / 100.0).round() < 1000.0 {
+    } else if (m.abs() / 100.0).round() < 1000.0 {
         format!("{:.1} km", m / 1000.0)
     } else {
         format!("{:.0} km", m / 1000.0)
@@ -442,11 +449,12 @@ pub fn format_distance(m: f64) -> String {
 }
 
 /// Formats an area in square metres as `km²` or `m²`; `—` for non-finite values.
+/// A negative area keeps its sign and picks its unit by magnitude (-1.0 km²).
 pub fn format_area(m2: f64) -> String {
     if !m2.is_finite() {
         return "—".to_string();
     }
-    if m2.round() < 1.0e6 { format!("{m2:.0} m²") } else { format!("{:.1} km²", m2 / 1.0e6) }
+    if m2.abs().round() < 1.0e6 { format!("{m2:.0} m²") } else { format!("{:.1} km²", m2 / 1.0e6) }
 }
 
 /// Formats a lon/lat pair in decimal degrees with hemispheres: `12.345° E 45.678° N`.
@@ -760,6 +768,7 @@ mod tests {
         assert_eq!(format_distance(0.0002), "0.2 mm");
         assert_eq!(format_distance(-0.0002), "-0.2 mm");
         assert_eq!(format_distance(0.00001), "< 0.1 mm");
+        assert_eq!(format_distance(-0.00001), "> -0.1 mm");
         assert_eq!(format_distance(999.4), "999 m");
         assert_eq!(format_distance(999.6), "1.0 km");
         assert_eq!(format_distance(12_500.0), "12.5 km");
@@ -769,6 +778,17 @@ mod tests {
         assert_eq!(format_area(999_999.4), "999999 m²");
         assert_eq!(format_area(999_999.6), "1.0 km²");
         assert_eq!(format_area(1.0e6), "1.0 km²");
+        // Negative distances and areas also switch units based on magnitude.
+        assert_eq!(format_distance(-850.0), "-850 m");
+        assert_eq!(format_distance(-999.4), "-999 m");
+        assert_eq!(format_distance(-999.6), "-1.0 km");
+        assert_eq!(format_distance(-12_500.0), "-12.5 km");
+        assert_eq!(format_distance(-99_949.0), "-99.9 km");
+        assert_eq!(format_distance(-99_960.0), "-100 km");
+        assert_eq!(format_area(-999_999.4), "-999999 m²");
+        assert_eq!(format_area(-999_999.6), "-1.0 km²");
+        assert_eq!(format_area(-1.0e6), "-1.0 km²");
+        assert_eq!(format_area(-5.0e6), "-5.0 km²");
     }
 
     #[test]
