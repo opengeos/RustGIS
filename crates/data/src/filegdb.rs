@@ -309,6 +309,8 @@ fn read_table(name: &str, t: &[u8], x: &[u8], wkid: Option<u32>) -> Result<Optio
     ds.crs = crs;
     let geometry_at = table.fields.iter().position(|f| f.kind == Kind::Geometry);
     let (mut curves, mut wall_hulls, mut unmerged, mut unprojected) = (0usize, 0usize, 0usize, 0usize);
+    // Multipatches with points but no footprint (too few points, or coordinates that aren't numbers).
+    let mut no_footprint = 0usize;
     // Shapes decoded, a multipatch's too (its M values go even when it has no footprint).
     let mut decoded = 0usize;
     let mut budget = MAX_TABLE_FACES;
@@ -341,6 +343,7 @@ fn read_table(name: &str, t: &[u8], x: &[u8], wkid: Option<u32>) -> Result<Optio
                     }
                     wall_hulls += usize::from(patch.hull == Some(Hull::NoFaces));
                     unmerged += usize::from(patch.hull == Some(Hull::Unmerged));
+                    no_footprint += usize::from(patch.footprint.is_none() && patch.has_points);
                     geometry = patch.footprint;
                 }
                 Ok(Decoded::Empty) => {}
@@ -371,6 +374,11 @@ fn read_table(name: &str, t: &[u8], x: &[u8], wkid: Option<u32>) -> Result<Optio
     }
     if patches {
         report.messages.push("3D multipatches are drawn as their footprints, with their lowest and highest Z in z_min and z_max, and the difference in height".into());
+    }
+    if no_footprint > 0 {
+        report.messages.push(format!(
+            "{no_footprint} multipatches have no footprint (fewer than three usable points, or coordinates that aren't numbers): they are kept without geometry"
+        ));
     }
     if wall_hulls > 0 {
         report.messages.push(format!("{wall_hulls} multipatches with no faces seen from above are drawn as the outline of their points"));
@@ -876,6 +884,8 @@ struct Patch {
     z: Option<(f64, f64)>,
     /// Why the footprint is the hull of its points, when it is.
     hull: Option<Hull>,
+    /// Whether it has points: one without has nothing to draw, so lacks no footprint.
+    has_points: bool,
 }
 
 const HAS_Z: u64 = 0x8000_0000;
@@ -973,7 +983,7 @@ fn decode_geometry(b: &[u8], def: &GeomDef, budget: &mut usize) -> std::result::
             });
             let pts: Vec<P3> = pts.iter().enumerate().map(|(i, p)| [p.x, p.y, zs.get(i).copied().unwrap_or(0.0)]).collect();
             let (footprint, hull) = footprint(&split(&pts, &sizes), &kinds, budget);
-            Ok(Decoded::Patch(Patch { footprint, z, hull }))
+            Ok(Decoded::Patch(Patch { footprint, z, hull, has_points: !pts.is_empty() }))
         }
         _ => Err(()),
     }

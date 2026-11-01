@@ -323,6 +323,23 @@ fn a_multipatch_is_its_footprint_with_its_heights() {
     assert!((area(&rows[1].geometry) - 50.0).abs() < 1e-6, "the hull of an L of walls: {:?}", rows[1].geometry);
     assert!(report.messages.iter().any(|m| m.contains("footprints")), "{report:?}");
     assert!(report.messages.iter().any(|m| m.contains("1 multipatches with no faces")), "{report:?}");
+    assert!(!report.messages.iter().any(|m| m.contains("no footprint")), "every multipatch has one: {report:?}");
+}
+
+/// A multipatch with too few points to outline is kept without geometry, and the reader says so.
+#[test]
+fn a_multipatch_without_a_footprint_is_counted() {
+    let floor = (2, vec![(0.0, 0.0, 0.0), (0.0, 10.0, 0.0), (10.0, 10.0, 0.0), (10.0, 0.0, 0.0), (0.0, 0.0, 0.0)]);
+    let stub = (2, vec![(20.0, 20.0, 0.0), (21.0, 21.0, 0.0)]);
+    let fields = [F::Oid, F::Shape { z: true, wkt: LONLAT }];
+    let rows = vec![vec![V::Blob(multipatch(&[floor]))], vec![V::Blob(multipatch(&[stub]))]];
+    let files = geodatabase(vec![("Buildings", table(9 | 0x8000_0000, &fields, &rows))]);
+    let layers = read_files(&files).unwrap();
+    let (ds, report) = &layers[0];
+    let rows: Vec<&crate::Feature> = ds.features.iter().collect();
+    assert_eq!(rows.len(), 2, "both kept");
+    assert!(rows[0].geometry.is_some() && rows[1].geometry.is_none(), "{rows:?}");
+    assert!(report.messages.iter().any(|m| m.contains("1 multipatches have no footprint")), "{report:?}");
 }
 
 #[test]
