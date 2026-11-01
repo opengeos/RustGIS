@@ -2814,18 +2814,21 @@ fn keyed(url: &str) -> bool {
     url.contains('?') || rustgis_data::s3_address::is_wrapper(url)
 }
 
-/// A Shapefile's part that answered with a web page (a site that serves its page for any
-/// address it doesn't have): an optional part is done without, as one that isn't there, and the
-/// `.shp` or `.dbf` fails (the error without an address: `part_failed` names it). Any other answer is the
-/// part.
-fn part_page(ext: &str, b: Vec<u8>) -> Result<Option<Vec<u8>>, String> {
-    if b.iter().find(|c| !c.is_ascii_whitespace()) != Some(&b'<') {
-        return Ok(Some(b));
+/// A part that arrived: itself, or `None` for an optional one that a web page answered for (an
+/// error for the `.dbf`, which can't be done without).
+fn page_part(ext: &str, b: Vec<u8>) -> Result<Option<Vec<u8>>, String> {
+    match (is_web_page(&b), ext) {
+        (false, _) => Ok(Some(b)),
+        (true, "dbf") => Err("a web page answered, not a .dbf".into()),
+        (true, _) => Ok(None),
     }
-    if matches!(ext, "shp" | "dbf") {
-        return Err(format!("a web page answered, not a .{ext}"));
-    }
-    Ok(None)
+}
+
+/// Whether downloaded bytes are a web page, not a Shapefile's part: a site that serves its page for
+/// any address it doesn't have. A required part (`.shp`, `.dbf`) answered so fails; an optional
+/// one is done without, as one that isn't there.
+fn is_web_page(b: &[u8]) -> bool {
+    b.iter().find(|c| !c.is_ascii_whitespace()) == Some(&b'<')
 }
 
 /// Whether downloaded bytes are a zip archive (its first local file header).
@@ -2911,16 +2914,14 @@ fn download_shapefile_blocking(url: &str) -> Result<Vec<u8>, String> {
     if is_zip(&shp) {
         return Ok(shp);
     }
-    let shp = match part_page("shp", shp) {
-        Ok(Some(shp)) => shp,
-        Ok(None) => return Err(part_failed(url, "a web page answered, not a .shp".into())),
-        Err(e) => return Err(part_failed(url, e)),
-    };
+    if is_web_page(&shp) {
+        return Err(part_failed(url, "a web page answered, not a .shp".into()));
+    }
     let name = url_file_name(url, &shp).map_err(|e| part_failed(url, e))?;
     let mut left = cache::MAX_DOWNLOAD.saturating_sub(shp.len());
     let mut got = Vec::new();
     for (ext, u) in parts {
-        match within(&u, left).and_then(|b| part_page(ext, b)) {
+        match within(&u, left).and_then(|b| page_part(ext, b)) {
             Ok(None) => {}
             Ok(Some(b)) => {
                 left = left.saturating_sub(b.len());
@@ -2949,14 +2950,11 @@ pub fn download_data(url: &str, max: usize, done: crate::render::rustgis_tiles::
         Box::new(move |r| match r.and_then(|shp| url_file_name(&shp_url, &shp).map(|name| (name, shp))) {
             // Already zipped: as it is.
             Ok((_, shp)) if is_zip(&shp) => done(Ok(shp)),
-            Ok((name, shp)) => match part_page("shp", shp) {
-                Ok(Some(shp)) => {
-                    let left = max.saturating_sub(shp.len());
-                    download_parts(name, shp, parts.into_iter(), Vec::new(), left, done);
-                }
-                Ok(None) => done(Err("a web page answered, not a .shp".into())),
-                Err(e) => done(Err(e)),
-            },
+            Ok((_, shp)) if is_web_page(&shp) => done(Err("a web page answered, not a .shp".into())),
+            Ok((name, shp)) => {
+                let left = max.saturating_sub(shp.len());
+                download_parts(name, shp, parts.into_iter(), Vec::new(), left, done);
+            }
             // The app names the address it asked for (redacted), as for any download.
             Err(e) => {
                 let why = status_hint(&shp_url, &e);
@@ -2996,7 +2994,7 @@ fn download_parts(
     crate::render::rustgis_tiles::cache::download_limited(
         &next,
         left,
-        Box::new(move |r| match r.and_then(|b| part_page(ext, b)) {
+        Box::new(move |r| match r.and_then(|b| page_part(ext, b)) {
             Ok(None) => download_parts(name, shp, parts, got, left, done),
             Ok(Some(b)) => {
                 let left = left.saturating_sub(b.len());
