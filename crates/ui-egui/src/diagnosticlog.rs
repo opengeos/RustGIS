@@ -70,14 +70,15 @@ pub(crate) fn show(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
 }
 
 fn entry(ui: &mut Ui, record: &Record, t: &Tokens) {
+    // Literal labels, so each is found and translated with the interface's other strings.
     let (severity, color) = match record.severity {
-        Severity::Error => ("Error", t.red),
-        Severity::Warning => ("Warning", t.amber),
-        Severity::Info => ("Info", t.accent_text),
+        Severity::Error => (tl!("Error"), t.red),
+        Severity::Warning => (tl!("Warning"), t.amber),
+        Severity::Info => (tl!("Info"), t.accent_text),
     };
     ui.horizontal_wrapped(|ui| {
         ui.label(RichText::new(time(record.timestamp_ms)).small().monospace().color(t.text_dim));
-        ui.label(RichText::new(tl!(severity)).small().strong().color(color));
+        ui.label(RichText::new(severity).small().strong().color(color));
         ui.label(RichText::new(record.source.as_str()).small().color(t.text_dim));
     });
     ui.add(egui::Label::new(&record.message).wrap().selectable(true));

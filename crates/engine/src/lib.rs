@@ -1464,8 +1464,9 @@ impl Session {
     }
 
     fn notice(&mut self, text: String, severity: rustgis_data::diagnostics::Severity) {
-        // Redacted for the status bar and the history alike; only the history's copy is
-        // bounded to a record's message (in `push`), so a long notice reaches the user whole.
+        // Redacted for the status bar and the history alike. `redact` bounds the notice to 8 KiB
+        // (an ellipsis marks the cut) and omits one over 16 KiB whole, so a clipped credential
+        // can't survive; the history's copy is bounded further, to a record's 2 KiB, in `push`.
         let text = rustgis_data::diagnostics::redact(&text);
         self.diagnostics.push(severity, self.diagnostic_source.unwrap_or("Application"), &text, "");
         self.notices.push(Notice { text, error: severity == rustgis_data::diagnostics::Severity::Error });

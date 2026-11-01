@@ -10618,6 +10618,7 @@ fn kml_ground_overlays_become_rasters() {
     assert_eq!(r["layers"].as_array().map(Vec::len), Some(2), "{r}");
     let overlay = s.map().layer_by_name("Red").unwrap();
     assert!(overlay.raster.as_ref().is_some_and(|r| r.data.is_some()));
+    assert!(s.notices.iter().any(|n| n.text.contains("1 ground overlays without a picture or a box")));
     // The project keeps the picture.
     let text = serde_json::to_string(&s.project).unwrap();
     let mut t = Session::new(Project::default());
@@ -10628,18 +10629,14 @@ fn kml_ground_overlays_become_rasters() {
     std::fs::create_dir_all(&dir).unwrap();
     let only = r#"<kml><GroundOverlay><name>Far</name><Icon><href>../secret.png</href></Icon><LatLonBox><north>1</north><south>0</south><east>1</east><west>0</west></LatLonBox></GroundOverlay>
 <GroundOverlay><name>Web</name><Icon><href>https://example.com/x.png</href></Icon><LatLonBox><north>1</north><south>0</south><east>1</east><west>0</west></LatLonBox></GroundOverlay>
-<GroundOverlay><name>Here</name><Icon><href>red.png</href></Icon><LatLonBox><north>1</north><south>0</south><east>1</east><west>0</west></LatLonBox></GroundOverlay>
-<GroundOverlay><name>Empty</name></GroundOverlay></kml>"#;
+<GroundOverlay><name>Here</name><Icon><href>red.png</href></Icon><LatLonBox><north>1</north><south>0</south><east>1</east><west>0</west></LatLonBox></GroundOverlay></kml>"#;
     std::fs::write(dir.join("o.kml"), only).unwrap();
     std::fs::write(dir.join("red.png"), red.encode_png().unwrap()).unwrap();
     let mut u = Session::new(Project::default());
     u.run("layer.addData", &json!({"path": dir.join("o.kml").display().to_string()})).unwrap();
     assert!(u.map().layer_by_name("Here").is_some());
     assert!(u.map().layer_by_name("Far").is_none() && u.map().layer_by_name("Web").is_none());
-    // A path containing a credential word is still useful failure context, not a secret field.
-    // Match the href itself so an absolute Windows temp prefix cannot hide the regression.
-    assert!(u.notices.iter().any(|notice| notice.text.contains("../secret.png")));
-    assert!(u.notices.iter().any(|notice| notice.text.contains("1 ground overlays without a picture or a box")));
+    assert!(u.notices.iter().any(|n| n.text.contains("Far (its picture ../secret.png isn't in the file or beside it)")));
     let _ = std::fs::remove_dir_all(dir);
 }
 
