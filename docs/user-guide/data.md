@@ -826,16 +826,18 @@ incomplete read is an error, not a successful sample. In the web app, a GeoParqu
 file read in place by its web address isn't read whole: download it to load it. A tool given a
 streamed layer with a selection uses the selected features read for the view.
 
-LiDAR (LAS/LAZ, including COPC) keeps at most 2 million points on the desktop or 500,000 in the
-browser as an evenly spread display sample. The layer retains the file's original point count;
-zooming does not recover points omitted from that sample. Whole-layer tools, exports and
-**Load All Features** refuse a cloud over that limit. Use a smaller extract to process all its
-points.
-
 Edits are refused, since the features are read again as the view moves: right-click the
 layer in Layers and choose **Load All Features** (`layer.loadAll`) to load it into memory and
 edit it. Projects save the layer's file path, not its features, and read the file again when they
 open; a browser upload is kept in the project.
+
+LiDAR (LAS/LAZ, including COPC) keeps at most 2 million points on the desktop or 500,000 in the
+browser as a display sample, evenly spread across the points read. LAZ (including COPC) reads
+only the first 400 million points on the desktop or 40 million in the browser; later points
+are not read. The layer retains the file's original point count; zooming does not recover
+points omitted from the sample. Whole-layer tools, exports and **Load All Features** refuse
+clouds over 2 million points on the desktop or 500,000 in the browser. Use a smaller extract
+to process all its points.
 
 | File | Features | A view read |
 | --- | --- | --- |
