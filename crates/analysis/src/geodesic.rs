@@ -61,7 +61,8 @@ const STRAY_MARGIN: f64 = 1.6;
 /// by 1/x − cot x per radian across it), so two leaves a wide margin;
 /// [`tests::an_edge_let_pass_by_its_latitude_does_not_stray`] fails at a tenth.
 const PLANE_TURN: f64 = 2.0;
-/// The Earth's mean radius (metres), for [`may_stray`]: the one distances are measured with.
+/// The Earth's mean radius (metres), for [`may_stray`]'s sphere: the radius `haversine_m` and the
+/// planes use.
 const EARTH_R_M: f64 = rustgis_geom::EARTH_RADIUS_M;
 /// What [`may_stray`] adds to tan φ for the ellipsoid and near the equator, where tan φ is near 0:
 /// a tenth of the turn at 45°, as at about 5.7° of latitude.
@@ -199,8 +200,8 @@ fn buffers_on(geoms: &[&Geometry], metres: f64, threads: usize, limit: usize) ->
                 (1..threads).filter_map(|_| std::thread::Builder::new().stack_size(STACK_BYTES).spawn_scoped(scope, work).ok()).collect();
             place(work()?);
             for h in others {
-                // Not a new panic but the worker's, raised again here as a serial run would raise it,
-                // for `analysis::run` to catch (AGENTS.md's never-crash rule is about new ones).
+                // The worker's panic, raised again here as a serial run would raise it, for
+                // `analysis::run` to catch.
                 place(h.join().unwrap_or_else(|e| std::panic::resume_unwind(e))?);
             }
             Ok::<_, &'static str>(())

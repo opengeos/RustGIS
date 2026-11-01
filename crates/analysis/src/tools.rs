@@ -1191,10 +1191,11 @@ fn buffer_with_vertex_limit(inp: &dyn Inputs, p: &Json, limit: usize) -> Result<
     let units = if s(p, "units").is_empty() { "Kilometers" } else { s(p, "units") };
     let mut r = result(out, format!("Buffer: {n} features at {d} {units}"))?;
     if without > 0 {
-        r.messages.push(format!("{without} of {} features have no geometry, so they have no buffer", picked.len()));
+        r.messages.push(format!("{without} of {} features lack geometry, so they have no buffer", picked.len()));
     }
     if empty > 0 {
-        r.messages.push(format!("{empty} of {} features have nothing left at {d} {units}, so they have no buffer", picked.len()));
+        r.messages
+            .push(format!("{empty} of {} features made no buffer at {d} {units} (nothing left, or no finite coordinates)", picked.len()));
     }
     Ok(r)
 }
@@ -4969,7 +4970,8 @@ mod tests {
         pts.push(None, vec![Value::Int(-1)]);
         let m = Map(HashMap::from([("p".to_string(), pts)]));
         let r = crate::run("buffer", &m, &serde_json::json!({"input": "p", "distance": 5})).unwrap();
-        assert_eq!(r.messages.get(1).map(String::as_str), Some("1 of 301 features have no geometry, so they have no buffer"));
+        assert_eq!(r.messages.len(), 2);
+        assert_eq!(r.messages.get(1).map(String::as_str), Some("1 of 301 features lack geometry, so they have no buffer"));
         let b = layer(r);
         assert_eq!(b.features.len(), 300);
         for (k, f) in b.features.iter().enumerate() {
@@ -4977,14 +4979,16 @@ mod tests {
             assert_eq!(f.geometry, geodesic_buffer(&Geometry::Point(at(k as i64)), 5_000.0), "feature {k}");
         }
         let r = crate::run("buffer", &m, &serde_json::json!({"input": "p", "distance": 5, "dissolve": "All"})).unwrap();
-        assert_eq!(r.messages.get(1).map(String::as_str), Some("1 of 301 features have no geometry, so they have no buffer"));
+        assert_eq!(r.messages.len(), 2);
+        assert_eq!(r.messages.get(1).map(String::as_str), Some("1 of 301 features lack geometry, so they have no buffer"));
         assert_eq!(layer(r).features.len(), 1);
         // Points at a negative distance have nothing left, and say so.
         let r = crate::run("buffer", &clean, &serde_json::json!({"input": "p", "distance": -5})).unwrap();
         assert_eq!(
             r.messages.get(1).map(String::as_str),
-            Some("300 of 300 features have nothing left at -5 Kilometers, so they have no buffer")
+            Some("300 of 300 features made no buffer at -5 Kilometers (nothing left, or no finite coordinates)")
         );
+        assert_eq!(r.messages.len(), 2);
         assert!(layer(r).features.is_empty());
     }
 
