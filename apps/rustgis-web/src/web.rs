@@ -564,16 +564,12 @@ async fn unless_stalled(
 
 /// Downloads `url`, or the byte range it asks for (a PMTiles archive's part: see
 /// `rustgis_tiles::cache::split_range`).
-async fn fetch_bytes(url: &str, capture: Capture) -> Result<Vec<u8>, String> {
+/// A status in `omit` is an expected answer (a tile past a map's edge): its failure makes no
+/// record of its own, as on the desktop.
+async fn fetch_bytes(url: &str, capture: Capture, omit: &'static [u16]) -> Result<Vec<u8>, String> {
     use rustgis_ui_egui::rustgis_engine::render::rustgis_tiles::{cache::RequestDiagnostics, failure::Failure};
     let mut diagnostics = RequestDiagnostics::with_capture(url, "GET", capture);
-    // Tiles a server doesn't have are routine (the map asks past an area's edges): each would
-    // flood the history. A data download's 404 is a real failure and is kept. The wasm fetcher
-    // can't see the tile want, so a style's or TileJSON's 404 is omitted with the tiles' — the
-    // native transport, which sees it, keeps those (the layer's own error says so).
-    if rustgis_ui_egui::rustgis_engine::render::rustgis_tiles::cache::split_download_limit(url).1.is_none() {
-        diagnostics.omit_statuses(&[404]);
-    }
+    diagnostics.omit_statuses(omit);
     fetch_bytes_inner(url, &mut diagnostics).await.inspect_err(|error| diagnostics.failed(&Failure::new(url, error)))
 }
 
@@ -880,10 +876,10 @@ fn clipboard() -> Option<web_sys::Clipboard> {
 /// the app must not read what the user saved on the site.
 fn services(inbox: Inbox, font_inbox: Inbox, notes: Notes, ctx: egui::Context, embedded: bool) -> Services {
     // Map tiles come through the browser's fetch (the app repaints when they arrive).
-    rustgis_ui_egui::rustgis_engine::render::rustgis_tiles::cache::set_fetcher(|url, done| {
+    rustgis_ui_egui::rustgis_engine::render::rustgis_tiles::cache::set_fetcher_omitting(|url, done, omit| {
         let capture = Capture::current();
         wasm_bindgen_futures::spawn_local(async move {
-            let result = fetch_bytes(&url, capture.clone()).await;
+            let result = fetch_bytes(&url, capture.clone(), omit).await;
             let _scope = capture.enter();
             done(result);
         });
@@ -974,7 +970,7 @@ fn services(inbox: Inbox, font_inbox: Inbox, notes: Notes, ctx: egui::Context, e
             let (url, inbox, ctx) = (url.to_string(), font_sink.clone(), font_ctx.clone());
             let capture = Capture::current();
             wasm_bindgen_futures::spawn_local(async move {
-                match fetch_bytes(&url, capture).await {
+                match fetch_bytes(&url, capture, &[]).await {
                     Ok(bytes) => {
                         inbox.lock().unwrap_or_else(|e| e.into_inner()).push((url, bytes));
                         ctx.request_repaint();
@@ -1070,7 +1066,7 @@ fn services(inbox: Inbox, font_inbox: Inbox, notes: Notes, ctx: egui::Context, e
             let (url, ctx) = (url.to_string(), fetch_ctx.clone());
             let capture = Capture::current();
             wasm_bindgen_futures::spawn_local(async move {
-                let r = fetch_bytes(&url, capture).await.map_err(|e| format!("{url}: {e}"));
+                let r = fetch_bytes(&url, capture, &[]).await.map_err(|e| format!("{url}: {e}"));
                 *slot.lock().unwrap_or_else(|e| e.into_inner()) = Some(r);
                 ctx.request_repaint();
             });

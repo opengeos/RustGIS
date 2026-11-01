@@ -54,7 +54,7 @@ pub enum State {
 pub type Done = Box<dyn FnOnce(Result<Vec<u8>, String>) + Send>;
 /// Called once with a download's bytes or what is known of its failure (#509).
 pub type DoneDetailed = Box<dyn FnOnce(Result<Vec<u8>, Failure>) + Send>;
-type Fetcher = Box<dyn Fn(String, Done) + Send + Sync>;
+type Fetcher = Box<dyn Fn(String, Done, &'static [u16]) + Send + Sync>;
 /// Hands back a decoded picture: [`RAW`] pixels, or the encoded bytes it was given when it
 /// couldn't decode them (they are decoded here then).
 pub type Decoded = Box<dyn FnOnce(Result<Vec<u8>, Vec<u8>>) + Send>;
@@ -125,6 +125,13 @@ fn waker() -> &'static Mutex<Option<Arc<dyn Fn() + Send + Sync>>> {
 /// Replaces how addresses are fetched (the browser's `fetch`). `done` must be called once.
 /// Decode download markers with [`split_download_limit`] and enforce their budget while reading.
 pub fn set_fetcher(f: impl Fn(String, Done) + Send + Sync + 'static) {
+    set_fetcher_omitting(move |url, done, _| f(url, done));
+}
+
+/// Like [`set_fetcher`], also handing the fetcher the statuses its caller expects (a tile past a
+/// map's edge): a transport keeping diagnostics passes them to
+/// [`RequestDiagnostics::omit_statuses`], so it records what the native transport records.
+pub fn set_fetcher_omitting(f: impl Fn(String, Done, &'static [u16]) + Send + Sync + 'static) {
     *fetcher().lock().unwrap_or_else(|e| e.into_inner()) = Some(Arc::new(Box::new(f)));
 }
 
@@ -639,18 +646,19 @@ impl<'a> RequestDiagnostics<'a> {
         if failure.message == DROPPED {
             return;
         }
-        // A status the caller expects is an answer, not a failure for the history; a caller
-        // that treats the refusal as an error says so itself. One bounded record says the
-        // omission, so a misconfigured tile source isn't silent.
-        if let Some(status) = self.status
-            && self.omit.contains(&status)
-        {
-            self.capture.absence_said(self.url, status);
-            return;
-        }
+        // The address as asked for, without the download and range markers this module adds.
         let (url, _) = split_download_limit(self.url);
         let (url, tail) = split_tail(url);
         let (url, range) = split_range(url);
+        // A status the caller expects is an answer, not a failure for the history; a caller
+        // that treats the refusal as an error says so itself. One bounded record per server says
+        // the omission, so a misconfigured tile source isn't silent.
+        if let Some(status) = self.status
+            && self.omit.contains(&status)
+        {
+            self.capture.absence_said(url, status);
+            return;
+        }
         let mut details = match (range, tail) {
             (Some((a, b)), _) => format!("Range: bytes={a}-{b}\n"),
             (_, Some(n)) => format!("Range: bytes=-{n}\n"),
@@ -731,7 +739,7 @@ pub fn download_detailed(url: &str, max: usize, done: DoneDetailed) {
     });
     let f = fetcher().lock().unwrap_or_else(|e| e.into_inner()).clone();
     match f {
-        Some(f) => f(marked.clone(), Box::new(move |r| done(r.map_err(|e| Failure::new(&marked, e))))),
+        Some(f) => f(marked.clone(), Box::new(move |r| done(r.map_err(|e| Failure::new(&marked, e)))), &[]),
         None => native::download(marked, done),
     }
 }
@@ -751,13 +759,24 @@ pub fn download_blocking(url: &str) -> Result<Vec<u8>, String> {
 /// Like [`download_blocking`], but reads at most `max` bytes plus one overflow sentinel.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn download_blocking_limited(url: &str, max: usize) -> Result<Vec<u8>, String> {
-    download_blocking_within(url, max, BLOCKING_TIMEOUT).map_err(|e| {
-        if e.contains("timeout") || e.contains("timed out") {
-            format!("{e} (a large file: add it with Home › Add › Add Data › From URL, which downloads in the background)")
-        } else {
-            e
-        }
-    })
+    download_blocking_within(url, max, BLOCKING_TIMEOUT).map_err(large_file_hint)
+}
+
+/// Like [`download_blocking`], but a status in `omit` is an expected answer: its failure makes no
+/// network record of its own (a store's absent chunk, which the caller counts itself).
+#[cfg(not(target_arch = "wasm32"))]
+pub fn download_blocking_expecting(url: &str, omit: &'static [u16]) -> Result<Vec<u8>, String> {
+    download_blocking_omitting(url, MAX_DOWNLOAD, BLOCKING_TIMEOUT, omit).map_err(large_file_hint)
+}
+
+/// A blocking download that ran out of time says how to add a large file instead.
+#[cfg(not(target_arch = "wasm32"))]
+fn large_file_hint(e: String) -> String {
+    if e.contains("timeout") || e.contains("timed out") {
+        format!("{e} (a large file: add it with Home › Add › Add Data › From URL, which downloads in the background)")
+    } else {
+        e
+    }
 }
 
 /// Like [`download_blocking_limited`], giving up after `timeout` (with the bare error).
@@ -769,7 +788,7 @@ pub fn download_blocking_within(url: &str, max: usize, timeout: std::time::Durat
 /// Like [`download_blocking_within`], but a status in `omit` is an expected answer: its failure
 /// makes no network record (a store's absent chunk, which the caller counts itself).
 #[cfg(not(target_arch = "wasm32"))]
-pub fn download_blocking_omitting(url: &str, max: usize, timeout: std::time::Duration, omit: &'static [u16]) -> Result<Vec<u8>, String> {
+fn download_blocking_omitting(url: &str, max: usize, timeout: std::time::Duration, omit: &'static [u16]) -> Result<Vec<u8>, String> {
     crate::address::check(url, None)?;
     native::get(&native::download_agent(timeout), &download_address(url, max), omit)
 }
@@ -898,7 +917,7 @@ pub fn head(url: &str, done: HeadDone) {
 pub(crate) fn fetch_bytes(url: String, done: Done, omit: &'static [u16]) {
     let f = fetcher().lock().unwrap_or_else(|e| e.into_inner()).clone();
     match f {
-        Some(f) => f(url, done),
+        Some(f) => f(url, done, omit),
         None => native::fetch(url, done, omit),
     }
 }
@@ -1872,10 +1891,21 @@ mod tests {
         let records = network_records(&history, &url);
         assert_eq!(records.len(), 1, "a JSON want's 404 is a real failure");
         assert_eq!(records[0].network.as_ref().unwrap().status, Some(404));
-        // A later omitted 404 adds nothing.
+        // A later omitted 404 from that server adds nothing.
         let url = format!("{missing}/tiles/9/9/9.png");
         assert_eq!(native::get(&native::agent(), &url, &[404]).unwrap_err(), "http status: 404");
         assert!(network_records(&history, &url).is_empty());
+        // Another server's omitted 404 is said too: a second misconfigured source isn't silent
+        // because the first has spoken.
+        let other = serve(vec![not_found.into(), not_found.into()]);
+        let url = format!("{other}/tiles/0/0/0.png");
+        assert_eq!(native::get(&native::agent(), &url, &[404]).unwrap_err(), "http status: 404");
+        assert_eq!(network_records(&history, &url).len(), 1, "each server's omission is said");
+        // After Clear, that server is said again.
+        history.clear();
+        let url = format!("{other}/tiles/1/1/1.png");
+        assert_eq!(native::get(&native::agent(), &url, &[404]).unwrap_err(), "http status: 404");
+        assert_eq!(network_records(&history, &url).len(), 1, "cleared history says it again");
         // A refusal that is not a missing tile is kept.
         let base = serve(vec!["HTTP/1.1 503 Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".into()]);
         let url = format!("{base}/tiles/0/0/0.png");
@@ -1883,6 +1913,12 @@ mod tests {
         let records = network_records(&history, &url);
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].network.as_ref().unwrap().status, Some(503));
+        // A download's absence names the address asked for, not the module's markers.
+        let base = serve(vec![not_found.into()]);
+        let url = format!("{base}/data.zarr/zarr.json");
+        native::get(&native::download_agent(std::time::Duration::from_secs(10)), &download_address(&url, 64), &[404]).unwrap_err();
+        let report = history.report(rustgis_data::diagnostics::Filter::All);
+        assert!(!report.contains("rustgis-download"), "{report}");
     }
 
     #[cfg(not(target_arch = "wasm32"))]
