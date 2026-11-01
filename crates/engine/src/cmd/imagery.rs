@@ -839,11 +839,16 @@ fn process(s: &mut Session, p: &Value) -> CmdResult {
 /// Most inputs a mosaic takes.
 const MAX_MOSAIC_INPUTS: usize = 10_000;
 
-/// The raster layer a mosaic input names, with its cells in memory; otherwise a raster file name is
-/// read from disk. [`raster_mosaic`] and [`mosaic_stays_in_project`] both go by it, so they can't disagree.
+/// A mosaic input's name, trimmed.
+fn mosaic_name(v: &Value) -> Result<&str, &'static str> {
+    v.as_str().map(str::trim).filter(|n| !n.is_empty()).ok_or("each input is a raster layer's name or a file path")
+}
+
+/// The raster layer a mosaic input names, with its cells in memory; otherwise a raster file name
+/// is read from disk. [`raster_mosaic`] and [`mosaic_stays_in_project`] both go by it, so they
+/// can't disagree.
 fn mosaic_layer(s: &Session, v: &Value) -> Result<Arc<Raster>, String> {
-    let n = v.as_str().map(str::trim).filter(|n| !n.is_empty()).ok_or("each input is a raster layer's name or a file path")?;
-    raster_named(s, n)
+    raster_named(s, mosaic_name(v)?)
 }
 
 /// Whether a mosaic stays in the project: it has inputs, no more than it takes, each a
@@ -875,7 +880,7 @@ fn raster_mosaic(s: &mut Session, p: &Value) -> CmdResult {
     // Each input is checked as it is read, so a mismatched or oversized set fails before the
     // rest are loaded.
     for v in inputs {
-        let n = v.as_str().map(str::trim).filter(|n| !n.is_empty()).ok_or("each input is a raster layer's name or a file path")?;
+        let n = mosaic_name(v)?;
         let r = match mosaic_layer(s, v) {
             Ok(r) => r,
             Err(_) if rustgis_data::raster::is_raster_name(n) => {
