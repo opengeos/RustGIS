@@ -319,6 +319,7 @@ fn share(s: &mut Session, p: &Value, kind: &str) -> CmdResult {
     s.notify(format!("Shared {name} to {path}"), false);
     // After it, so the status bar, which shows the last notice, keeps saying it.
     note_label_classes(s, kind, p);
+    note_zm(s, kind, p, &path);
     Ok(json!({"item": id, "path": path, "bytes": bytes.len()}))
 }
 
@@ -547,6 +548,23 @@ onresize=draw;draw();
         res = if m.camera.res.is_finite() && m.camera.res > 0.0 { m.camera.res } else { 40_000.0 },
         bg = bg
     ))
+}
+
+/// Says, when a shared web map, web layer or OGC API Features item has layers that lost Z or M
+/// values on import, that `target` has none: one notice, counting them. Run once the item is made,
+/// as [`note_label_classes`] is.
+pub(crate) fn note_zm(s: &mut Session, kind: &str, p: &Value, target: &str) {
+    let note = match kind {
+        "webLayer" => s.layer_id(p).ok().and_then(|id| s.map().layer(id)).and_then(|l| rustgis_data::zm_export_note([&l.dataset], target)),
+        "webMap" | "geodataService" => map_of(s, p).ok().and_then(|m| {
+            let shared = |l: &&Layer| if kind == "webMap" { l.visible } else { !l.is_raster() && !l.graphics };
+            rustgis_data::zm_export_note(m.layers.iter().filter(shared).map(|l| &l.dataset), target)
+        }),
+        _ => None,
+    };
+    if let Some(note) = note {
+        s.notify(note, false);
+    }
 }
 
 /// Says what a web layer or style (`kind`) leaves out of the labels: it labels every feature with

@@ -335,6 +335,8 @@ impl Layer {
         if let Some(info) = src.info() {
             self.dataset.fields = info.fields.clone();
             self.dataset.crs = info.coordinate_system();
+            // The new source's Z and M, which reading it drops (see `Dataset::zm_dropped`).
+            self.dataset.zm_dropped = info.zm_dropped;
         }
         self.dataset.source = src.linked_file().map(String::from);
         self.source = Some(src);
@@ -469,6 +471,11 @@ impl Layer {
         {
             self.dataset.fields = info.fields.clone();
         }
+        // An opened source's dropped Z or M values, for a project saved without the mark (from
+        // before it was kept, or by another app).
+        if let Some(info) = self.source.as_ref().and_then(|s| s.info()) {
+            self.dataset.zm_dropped |= info.zm_dropped;
+        }
         let Some(src) = &mut self.source else { return false };
         src.window_fields = Some(self.dataset.fields.len());
         // A failed read leaves nothing drawn for it (its error shows in Layers), not the
@@ -569,6 +576,8 @@ impl Layer {
         let info = src.info();
         let mut ds = Dataset::new(self.dataset.name.clone(), info.geometry_type, info.fields.clone());
         ds.crs = info.coordinate_system();
+        // What reading the source drops, the export lacks (see `Dataset::zm_dropped`).
+        ds.zm_dropped = info.zm_dropped || self.dataset.zm_dropped;
         if !self.dataset.fields.is_empty() {
             ds.fields = self.dataset.fields.clone();
         }

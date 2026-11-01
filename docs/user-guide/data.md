@@ -774,8 +774,12 @@ Set `RUSTGIS_SHP_CACHE` to choose the cache directory and `RUSTGIS_SHP_CACHE_MIB
 the retained index budget (2048 MiB by default, clamped to 64–65536 MiB). Idle indexes are
 evicted in least-recently-used order. Open readers and builders hold operating-system leases,
 so another instance cannot evict their indexes; active files can temporarily exceed the
-budget. An index larger than the budget is session-only. Cache checkout and release reclaim
-abandoned builds and temporary indexes. A corrupt cache is rebuilt, and an unavailable cache
+budget. An index larger than the budget is session-only. Building an index, even one that
+fails, reclaims abandoned builds and temporary indexes and evicts idle ones past the budget.
+Reopening a cached index leaves the cache as it is, and releasing one removes only its own
+temporary index. Otherwise a release sweeps the folder only while the cache is over budget:
+because of indexes in use (a release frees them) or files without a readable lease (no release
+can free them, so each release sweeps). A corrupt cache is rebuilt, and an unavailable cache
 directory falls back to the system temporary directory (a per-user directory on Unix).
 New Unix cache directories are created with mode `0700`. Existing roots must belong to
 the effective user, forbid group/other writes, and have trusted parents; symlink roots

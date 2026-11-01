@@ -75,7 +75,9 @@ fn export_map(s: &mut Session, p: &Value) -> CmdResult {
 }
 
 /// `share.exportLayer`: writes a layer to a file by its extension. A streamed layer exports its
-/// whole source, a chunk at a time where the source and format allow (see `data::export`).
+/// whole source, a chunk at a time where the source and format allow (see `data::export`). Says
+/// what the file couldn't hold: features without drawable geometry, a missing `.prj`, Z or M
+/// values dropped on import.
 fn export_layer(s: &mut Session, p: &Value) -> CmdResult {
     let id = s.layer_id(p)?;
     let path = ps(p, "path").ok_or("path is required")?.to_string();
@@ -102,6 +104,7 @@ fn export_layer(s: &mut Session, p: &Value) -> CmdResult {
             (ds.features.len().saturating_sub(left_out), left_out, unread)
         }
     };
+    let zm_note = rustgis_data::zm_export_note([ds], &path);
     // FlatGeobuf, KML, GPX and Shapefile hold features with geometry only (a Shapefile, only
     // geometry it can draw).
     if left_out > 0 {
@@ -109,6 +112,9 @@ fn export_layer(s: &mut Session, p: &Value) -> CmdResult {
     }
     if skipped > 0 {
         s.notify(format!("{path}: {skipped} rows couldn't be read and were left out"), false);
+    }
+    if let Some(note) = zm_note {
+        s.notify(note, false);
     }
     if matches!(ext.as_str(), "shp" | "zip") && rustgis_data::raster::wkt::to_wkt(crs).is_none() {
         s.notify(format!("{path}: no .prj written, as {} has no WKT form", crs.label()), false);
