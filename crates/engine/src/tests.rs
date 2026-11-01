@@ -9236,6 +9236,11 @@ fn serve_files(files: Vec<(String, Vec<u8>)>) -> (String, std::sync::Arc<std::sy
                     let _ = write!(s, "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len());
                     let _ = s.write_all(body);
                 }
+                // A missing file under `/signed/` is forbidden, as S3 answers a signature that
+                // doesn't cover it.
+                None if path.starts_with("/signed/") => {
+                    let _ = write!(s, "HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+                }
                 None => {
                     let _ = write!(s, "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
                 }
@@ -9247,7 +9252,8 @@ fn serve_files(files: Vec<(String, Vec<u8>)>) -> (String, std::sync::Arc<std::sy
 
 /// A Shapefile published as loose files is added by its `.shp` address (#1238): its `.dbf`,
 /// `.shx`, `.prj` and `.cpg` are fetched beside it with the address's query, and its `.prj` places
-/// it; the parts that aren't there are done without, but not its `.dbf`. Left to the app (a
+/// it; the parts that aren't there are done without, said, but not its `.dbf`, nor a part a
+/// signed address is refused. An address answering with a zip is read as one. Left to the app (a
 /// plugin's command), the address waits for the app, which fetches the parts the same way.
 #[test]
 fn shapefile_by_its_shp_address() {
@@ -9264,10 +9270,16 @@ fn shapefile_by_its_shp_address() {
     // The same without its .prj and .cpg, and one without its .dbf.
     files.extend(parts.iter().filter(|(e, _)| !matches!(*e, "prj" | "cpg")).map(|(e, b)| (format!("/plain/rios.{e}"), b.clone())));
     files.extend(parts.iter().filter(|(e, _)| *e != "dbf").map(|(e, b)| (format!("/nodbf/rios.{e}"), b.clone())));
+    // One whose signature doesn't cover its .prj, and one whose address answers with its parts zipped.
+    files.extend(parts.iter().filter(|(e, _)| *e != "prj").map(|(e, b)| (format!("/signed/rios.{e}?sig=1"), b.clone())));
+    let shp = parts.iter().find(|(e, _)| *e == "shp").unwrap().1.clone();
+    let others = parts.iter().filter(|(e, _)| *e != "shp").map(|(e, b)| (*e, b.clone())).collect();
+    files.push(("/zipped/rios.shp".into(), rustgis_data::io::zip_shapefile_parts("rios.shp", shp, others).unwrap()));
     let (base, asked) = serve_files(files);
     let mut s = Session::new(Project::default());
     let r = s.run("layer.addUrl", &json!({"url": format!("{base}/PI/TERESINA/HIDROGRAFIA/PI_2211001_RIOS.shp?token=1")})).unwrap();
     assert_eq!(r["features"], 1, "{r}");
+    assert!(!s.notices.iter().any(|n| n.text.contains("optional files")), "{:?}", s.notices);
     let e = s.map().layer_by_name("PI_2211001_RIOS").unwrap().extent();
     assert!((-43.0..-42.6).contains(&e.min_x) && (-5.7..-5.3).contains(&e.min_y), "placed by its .prj: {e:?}");
     let asked_for = asked.lock().unwrap().clone();
@@ -9277,6 +9289,15 @@ fn shapefile_by_its_shp_address() {
     // Without a .prj or .cpg (404), it is read as a local Shapefile without them.
     let r = s.run("layer.addUrl", &json!({"url": format!("{base}/plain/rios.shp"), "name": "Sem prj"})).unwrap();
     assert_eq!(r["features"], 1, "{r}");
+    let said = &s.notices.last().unwrap().text;
+    assert!(said.contains("no .prj, .cpg beside it (2 of 3") && said.contains("longitude/latitude"), "{said}");
+    // A part a signed address is refused (403) fails it, named: the signature may not cover it.
+    let e = s.run("layer.addUrl", &json!({"url": format!("{base}/signed/rios.shp?sig=1")})).unwrap_err();
+    assert!(e.contains("/signed/rios.prj?sig=1") && e.contains("403"), "{e}");
+    // An address answering with the parts zipped is read as it is, its parts not asked for.
+    let r = s.run("layer.addUrl", &json!({"url": format!("{base}/zipped/rios.shp"), "name": "Zipado"})).unwrap();
+    assert_eq!(r["features"], 1, "{r}");
+    assert!(!asked.lock().unwrap().iter().any(|a| a.starts_with("/zipped/rios.dbf")));
     // Without its .dbf, it is refused, naming the .dbf's address.
     let e = s.run("layer.addUrl", &json!({"url": format!("{base}/nodbf/rios.shp")})).unwrap_err();
     assert!(e.contains("/nodbf/rios.dbf") && e.contains("404"), "{e}");

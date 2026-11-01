@@ -1677,7 +1677,7 @@ pub fn gather_shapefiles(files: Vec<(String, Vec<u8>)>) -> (Vec<(String, Vec<u8>
 /// The addresses of a Shapefile's files beside its `.shp`, by the `.shp`'s address (#1238): the
 /// address with each of [`SHAPEFILE_SIDECARS`] in place of `.shp`, in the same case, its query and
 /// fragment kept (a signed address stays signed). `None` for an address whose path doesn't end in
-/// a file named `.shp`.
+/// a file named `.shp`, and for one without a scheme (`rios.shp`, a file on this computer).
 pub fn shapefile_part_urls(url: &str) -> Option<Vec<(&'static str, String)>> {
     let (path, rest) = url.split_at(url.find(['?', '#']).unwrap_or(url.len()));
     let stem = path.get(..path.len().checked_sub(4)?)?;
@@ -1709,6 +1709,17 @@ pub fn zip_shapefile_parts(file_name: &str, shp: Vec<u8>, parts: Vec<(&str, Vec<
         .find(|(n, _)| n.ends_with(".zip"))
         .map(|(_, b)| b)
         .ok_or_else(|| if problems.is_empty() { format!("{stem}.shp: its files couldn't be read together") } else { problems.join("; ") })
+}
+
+/// Which of a zipped Shapefile's optional parts (`.shx`, `.prj`, `.cpg`) it lacks: what a
+/// Shapefile added by its `.shp` address (#1238) was read without, to say so. Empty for bytes that
+/// aren't a zip.
+pub fn shapefile_zip_lacks(bytes: &[u8]) -> Vec<&'static str> {
+    let ext = |n: &str| Path::new(n).extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase);
+    let Ok(have) = crate::zip::read_matching(bytes, |n| ext(n).is_some_and(|e| matches!(e.as_str(), "shx" | "prj" | "cpg"))) else {
+        return Vec::new();
+    };
+    ["shx", "prj", "cpg"].into_iter().filter(|e| !have.iter().any(|(n, _)| ext(n).as_deref() == Some(*e))).collect()
 }
 
 /// Most layers read from one zip archive.
@@ -2879,6 +2890,10 @@ mod tests {
         let zip = zip_shapefile_parts("RIOS_SIMPLES.shp", shp.clone(), others.clone()).unwrap();
         let (read, _) = read_bytes("RIOS_SIMPLES.zip", &zip).unwrap();
         assert_eq!((read.name.as_str(), read.features.len()), ("RIOS_SIMPLES", 1));
+        assert!(shapefile_zip_lacks(&zip).is_empty());
+        let no_prj: Vec<_> = others.iter().filter(|(e, _)| !matches!(*e, "prj" | "cpg")).cloned().collect();
+        assert_eq!(shapefile_zip_lacks(&zip_shapefile_parts("RIOS_SIMPLES.shp", shp.clone(), no_prj).unwrap()), ["prj", "cpg"]);
+        assert!(shapefile_zip_lacks(&shp).is_empty(), "not a zip");
         let no_dbf: Vec<_> = others.into_iter().filter(|(e, _)| *e != "dbf").collect();
         assert!(zip_shapefile_parts("RIOS_SIMPLES.shp", shp, no_dbf).unwrap_err().contains(".dbf"));
     }

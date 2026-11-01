@@ -2786,14 +2786,39 @@ pub(crate) fn add_url(s: &mut Session, p: &Value) -> CmdResult {
             crate::render::rustgis_tiles::cache::download_blocking(url).map_err(named)?
         };
         let name = url_file_name(url, &bytes).map_err(named)?;
-        super::raster::add_named_bytes(s, p, name, bytes).map_err(named)
+        let left_out = parts_left_out(url, &bytes);
+        let r = super::raster::add_named_bytes(s, p, name, bytes).map_err(named)?;
+        if let Some(n) = left_out {
+            s.notify(n, false);
+        }
+        Ok(r)
     }
 }
 
-/// Whether a download failed only because the file isn't there: 404 or 410, or 403, which S3
-/// answers for a missing object to those who can't list the bucket.
-fn not_there(e: &str) -> bool {
-    matches!(crate::render::rustgis_tiles::cache::http_status(e), Some(403 | 404 | 410))
+/// Whether a Shapefile's part other than its `.dbf` can be done without: it isn't there (404 or
+/// 410, or 403, which S3 answers for a missing object to those who can't list the bucket). A 403
+/// to a signed address (one with a query) fails instead, as its signature may not cover the part.
+fn part_not_there(ext: &str, url: &str, e: &str) -> bool {
+    ext != "dbf"
+        && match crate::render::rustgis_tiles::cache::http_status(e) {
+            Some(404 | 410) => true,
+            Some(403) => !url.contains('?'),
+            _ => false,
+        }
+}
+
+/// What a Shapefile added by its `.shp` address (#1238) was read without, said: its `.shx`, `.prj`
+/// or `.cpg` when they weren't beside it.
+fn parts_left_out(url: &str, bytes: &[u8]) -> Option<String> {
+    rustgis_data::io::shapefile_part_urls(url)?;
+    let lacks = rustgis_data::io::shapefile_zip_lacks(bytes);
+    if lacks.is_empty() {
+        return None;
+    }
+    let names = lacks.iter().map(|e| format!(".{e}")).collect::<Vec<_>>().join(", ");
+    let crs = if lacks.contains(&"prj") { "; its coordinates are read as longitude/latitude" } else { "" };
+    let them = if lacks.len() == 1 { "it" } else { "them" };
+    Some(format!("{url}: no {names} beside it ({} of 3 optional files), so it was read without {them}{crs}", lacks.len()))
 }
 
 /// A Shapefile by its `.shp` address, waited for (#1238): the `.shp`, then its `.dbf`, `.shx`,
@@ -2804,17 +2829,24 @@ fn download_shapefile_blocking(url: &str) -> Result<Vec<u8>, String> {
     use crate::render::rustgis_tiles::cache;
     let named = |u: &str, e: String| if e.starts_with(u) { e } else { format!("{u}: {e}") };
     let parts = rustgis_data::io::shapefile_part_urls(url).unwrap_or_default();
-    let shp = cache::download_blocking(url).map_err(|e| named(url, e))?;
+    // One wait for all the parts together, as for one download.
+    let until = std::time::Instant::now() + cache::BLOCKING_TIMEOUT;
+    let wait = || until.saturating_duration_since(std::time::Instant::now());
+    let shp = cache::download_blocking_within(url, cache::MAX_DOWNLOAD, wait()).map_err(|e| named(url, e))?;
+    // Already zipped (a server answering the address with its parts): read as it is.
+    if shp.starts_with(b"PK") {
+        return Ok(shp);
+    }
     let name = url_file_name(url, &shp).map_err(|e| named(url, e))?;
     let mut left = cache::MAX_DOWNLOAD.saturating_sub(shp.len());
     let mut got = Vec::new();
     for (ext, u) in parts {
-        match cache::download_blocking_limited(&u, left) {
+        match cache::download_blocking_within(&u, left, wait()) {
             Ok(b) => {
                 left = left.saturating_sub(b.len());
                 got.push((ext, b));
             }
-            Err(e) if ext != "dbf" && not_there(&e) => {}
+            Err(e) if part_not_there(ext, &u, &e) => {}
             Err(e) => return Err(named(&u, e)),
         }
     }
@@ -2835,6 +2867,8 @@ pub fn download_data(url: &str, max: usize, done: crate::render::rustgis_tiles::
         url,
         max,
         Box::new(move |r| match r.and_then(|shp| url_file_name(&shp_url, &shp).map(|name| (name, shp))) {
+            // Already zipped: as it is.
+            Ok((_, shp)) if shp.starts_with(b"PK") => done(Ok(shp)),
             Ok((name, shp)) => {
                 let left = max.saturating_sub(shp.len());
                 download_parts(name, shp, parts.into_iter(), Vec::new(), left, done);
@@ -2866,7 +2900,7 @@ fn download_parts(
                 got.push((ext, b));
                 download_parts(name, shp, parts, got, left, done);
             }
-            Err(e) if ext != "dbf" && not_there(&e) => download_parts(name, shp, parts, got, left, done),
+            Err(e) if part_not_there(ext, &url, &e) => download_parts(name, shp, parts, got, left, done),
             Err(e) => done(Err(if e.starts_with(&url) { e } else { format!("{url}: {e}") })),
         }),
     );
@@ -3007,7 +3041,11 @@ fn add_download(s: &mut Session, p: &Value) -> CmdResult {
     } else {
         url_file_name(&url, &bytes).map_err(|e| format!("{url}: {e}"))?
     };
+    let left_out = parts_left_out(&url, &bytes);
     let mut r = super::raster::add_named_bytes(s, p, name, bytes)?;
+    if let Some(n) = left_out {
+        s.notify(n, false);
+    }
     // `"zoom": true` zooms to everything added, whatever the map held (a link's data); `zoomed`
     // says whether there was anything to zoom to (a tile archive adds no layer).
     if b(p, "zoom") == Some(true) {
