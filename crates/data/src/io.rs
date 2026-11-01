@@ -1714,7 +1714,7 @@ pub fn zip_shapefile_parts(file_name: &str, shp: Vec<u8>, parts: Vec<(&str, Vec<
 
 /// Whether a zip entry is a macOS resource fork (`__MACOSX/`, `._*`), which isn't read.
 fn is_resource_fork(name: &str) -> bool {
-    name.split('/').any(|part| part.eq_ignore_ascii_case("__MACOSX") || part.starts_with("._"))
+    name.split('/').any(|part| part == "__MACOSX" || part.starts_with("._"))
 }
 
 /// Which of a zipped Shapefile's optional parts (`.shx`, `.prj`, `.cpg`) a `.shp` in it lacks,
@@ -1725,7 +1725,9 @@ pub fn shapefile_zip_lacks(bytes: &[u8]) -> Vec<&'static str> {
     // The entries' names only: `want` sees each, and none is inflated.
     let names = std::cell::RefCell::new(Vec::new());
     if crate::zip::read_matching(bytes, |n| {
-        names.borrow_mut().push(n.to_ascii_lowercase());
+        if !is_resource_fork(n) {
+            names.borrow_mut().push(n.to_ascii_lowercase());
+        }
         false
     })
     .is_err()
@@ -1734,12 +1736,7 @@ pub fn shapefile_zip_lacks(bytes: &[u8]) -> Vec<&'static str> {
     }
     // A set: a served zip may hold up to 65,535 entries.
     let names: std::collections::HashSet<String> = names.into_inner().into_iter().collect();
-    let stems: Vec<&str> = names
-        .iter()
-        .filter(|n| !is_resource_fork(n))
-        .filter_map(|n| n.strip_suffix(".shp"))
-        .filter(|s| names.contains(&format!("{s}.dbf")))
-        .collect();
+    let stems: Vec<&str> = names.iter().filter_map(|n| n.strip_suffix(".shp")).filter(|s| names.contains(&format!("{s}.dbf"))).collect();
     ["shx", "prj", "cpg"].into_iter().filter(|e| stems.iter().any(|s| !names.contains(&format!("{s}.{e}")))).collect()
 }
 

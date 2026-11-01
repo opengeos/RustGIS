@@ -2798,14 +2798,19 @@ pub(crate) fn add_url(s: &mut Session, p: &Value) -> CmdResult {
 
 /// Whether a Shapefile's part other than its `.dbf` can be done without: it isn't there (404 or
 /// 410, or 403, which S3 answers for a missing object to those who can't list the bucket). A 403
-/// to a signed address (one with a query) fails instead, as its signature may not cover the part.
+/// to an address read with keys ([`keyed`]) fails instead, as they may not cover the part.
 fn part_not_there(ext: &str, url: &str, e: &str) -> bool {
     ext != "dbf"
         && match crate::render::rustgis_tiles::cache::http_status(e) {
             Some(404 | 410) => true,
-            Some(403) => !url.contains('?'),
+            Some(403) => !keyed(url),
             _ => false,
         }
+}
+
+/// Whether an address is read with keys: signed (a query) or through a saved S3 connection.
+fn keyed(url: &str) -> bool {
+    url.contains('?') || rustgis_data::s3_address::is_wrapper(url)
 }
 
 /// Whether downloaded bytes are a zip archive (its first local file header).
@@ -2819,8 +2824,8 @@ fn part_failed(url: &str, e: String) -> String {
     let e = e.strip_prefix(url).map(|r| r.trim_start_matches(": ").to_string()).unwrap_or(e);
     // S3 answers a signed request for a file that isn't there as it answers a signature that
     // doesn't cover it.
-    let why = if url.contains('?') && crate::render::rustgis_tiles::cache::http_status(&e) == Some(403) {
-        " (to a signed address, this is also the answer for a file that isn't there)"
+    let why = if keyed(url) && crate::render::rustgis_tiles::cache::http_status(&e) == Some(403) {
+        " (to an address read with keys, this is also the answer for a file that isn't there)"
     } else {
         ""
     };
@@ -2920,7 +2925,9 @@ fn zipped_within(name: &str, shp: Vec<u8>, got: Vec<(&'static str, Vec<u8>)>, le
     Ok(zip)
 }
 
-/// The next of a Shapefile's parts for [`download_data`], then the zip once they are all in.
+/// The next of a Shapefile's parts for [`download_data`], then the zip once they are all in: the
+/// steps of `download_shapefile_blocking` as callbacks, sharing its rules (`part_not_there`,
+/// `part_failed`, `zipped_within`), so a change to one goes in both.
 fn download_parts(
     name: String,
     shp: Vec<u8>,
