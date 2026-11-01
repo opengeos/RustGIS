@@ -1292,6 +1292,21 @@ pub(super) fn fits_bytes(r: &Raster, b: usize) -> bool {
 /// when they are 8-bit, else 32-bit floats, alpha kept), so it reads back in colour; otherwise
 /// `band` (0-based) as 32-bit floats. `band` is for rasters that aren't colour ones: a colour
 /// raster always writes its colour bands, as its 8-bit form did before.
+/// The bands [`write`] writes of `r` given `band`: an RGB raster's colour bands (with a fourth as
+/// alpha when they are bytes and it is too, or when the raster says it is alpha), otherwise `band`
+/// alone.
+pub fn written_bands(r: &Raster, band: usize) -> Vec<usize> {
+    if !(matches!(r.color, ColorHint::Rgb { .. }) && r.bands.len() >= 3) {
+        return vec![band];
+    }
+    let alpha = if (0..3).all(|b| fits_bytes(r, b)) {
+        r.bands.len() >= 4 && fits_bytes(r, 3)
+    } else {
+        r.bands.len() >= 4 && matches!(r.color, ColorHint::Rgb { alpha: true })
+    };
+    (0..if alpha { 4 } else { 3 }).collect()
+}
+
 pub fn write(r: &Raster, band: usize) -> Result<Vec<u8>> {
     use tiff::encoder::{Compression, DeflateLevel, TiffEncoder, colortype};
     // A scan's place is only where it was laid on the view: not coordinates to write into a file.
@@ -1334,7 +1349,7 @@ pub fn write(r: &Raster, band: usize) -> Result<Vec<u8>> {
         }};
     }
     if rgb && let (Some(red), Some(green), Some(blue)) = (bytes(0), bytes(1), bytes(2)) {
-        let alpha = if r.bands.len() >= 4 { bytes(3) } else { None };
+        let alpha = if written_bands(r, band).contains(&3) { bytes(3) } else { None };
         let n = (w as usize) * (h as usize);
         if let Some(a) = alpha {
             let mut data = Vec::with_capacity(n * 4);
@@ -1358,7 +1373,7 @@ pub fn write(r: &Raster, band: usize) -> Result<Vec<u8>> {
         // their alpha band when they have one.
         let n = (w as usize) * (h as usize);
         let at = |b: &crate::raster::Band, i: usize| b.data.get(i).copied().unwrap_or(f32::NAN);
-        match r.bands.get(3).filter(|_| matches!(r.color, ColorHint::Rgb { alpha: true })) {
+        match r.bands.get(3).filter(|_| written_bands(r, band).contains(&3)) {
             Some(alpha) => {
                 let mut data = Vec::with_capacity(n * 4);
                 for i in 0..n {

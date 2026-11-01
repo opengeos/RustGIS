@@ -815,17 +815,15 @@ fn export(s: &mut Session, p: &Value) -> CmdResult {
         Some((fw, fh)) => format!(" (the {} × {} overview of the {fw} × {fh} raster)", r.width, r.height),
         None => String::new(),
     };
-    // Values changed when the file was read are written as they are held: those of the bands
-    // written (the colour bands of an RGB raster and its alpha, otherwise the one chosen).
-    let colour = match r.color {
-        raster::ColorHint::Rgb { alpha } if r.band_count() >= 3 => Some(if alpha { 4 } else { 3 }),
-        _ => None,
-    };
+    // Values changed when the file was read are written as they are held: those of the bands the
+    // writer writes, as it chooses them.
     let bi = band(p, "band", &r)?.unwrap_or(0);
-    let written: u64 = match colour {
-        Some(n) => r.rounded.iter().take(n).sum(),
-        None => r.rounded.get(bi).copied().unwrap_or(0),
+    let bands = if cog.is_some() {
+        raster::cogwrite::written_bands(&r, bi).map_err(|e| e.to_string())?
+    } else {
+        raster::geotiff::written_bands(&r, bi)
     };
+    let written: u64 = bands.iter().filter_map(|b| r.rounded.get(*b)).sum();
     if written > 0 {
         let (values, verb) = values_were(written);
         note.push_str(&format!("; {values} in it {verb} rounded to 32-bit floats when {} was read", r.name));

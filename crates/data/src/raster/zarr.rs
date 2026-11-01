@@ -1200,8 +1200,11 @@ pub fn assemble(store: &Store, plan: &Plan, chunks: &HashMap<String, Vec<u8>>, n
                         // by 0) is held when f32 holds the scaled value.
                         let held = match dt.whole(b) {
                             _ if !scaled => dt.held_as_f32(b),
+                            // A finite stored value scaled past f32's range (or f64's) is counted,
+                            // whatever its type; a stored infinity stays one.
+                            _ if v.is_finite() && f.is_infinite() => false,
                             Some(i) if scale != 0.0 => ((f64::from(f) - offset) / scale).round() as i128 == i,
-                            None if dt.size <= 4 => !(x.is_finite() && (f.is_infinite() || (f == 0.0 && x != 0.0))),
+                            None if dt.size <= 4 => !(f == 0.0 && x != 0.0),
                             _ => f64::from(f) == x,
                         };
                         rounded += u64::from(!held);
@@ -2085,6 +2088,9 @@ mod tests {
         // an infinity stored as such stays one.
         assert_eq!(read_scaled("<f4", (10.0, 0.0), f32s(&[3e38, 1.0, f32::INFINITY, 0.0])), vec![1]);
         assert_eq!(read_scaled("<f4", (1e-20, 0.0), f32s(&[1e-30, 1.0, 0.0, 2.0])), vec![1]);
+        // Past f64's range too, for Float32 and Float64 storage alike.
+        assert_eq!(read_scaled("<f4", (1e300, 0.0), f32s(&[1e30, 0.0, f32::INFINITY, 0.0])), vec![1]);
+        assert_eq!(read_scaled("<f8", (1e10, 0.0), f64s([1e300, 0.0, f64::INFINITY, 0.5])), vec![1]);
         // Scaled 64-bit whole numbers are compared exactly too, and a scale of 0 writes the offset.
         assert_eq!(read_scaled("<i8", (2.0, 0.0), i64s([(1 << 60) + 1, 1 << 60, 3, 0])), vec![1]);
         assert_eq!(read_scaled("<u8", (2.0, 0.0), u64s([(1 << 60) + 1, 1 << 60, 3, 0])), vec![1]);
