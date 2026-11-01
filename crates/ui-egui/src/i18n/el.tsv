@@ -330,7 +330,7 @@ Asset	Asset
 Assistant settings	Ρυθμίσεις βοηθού
 At the end	Στο τέλος
 At the start	Στην αρχή
-Atlas	Άτλαντας
+Atlas	Άτλας
 Attachments	Συνημμένα
 Attribute\nTable	Πίνακας\nγνωρισμάτων
 Attribute Rules	Κανόνες γνωρισμάτων
@@ -1537,6 +1537,7 @@ Keeps the access key ID and secret access key in this computer's credential stor
 Key	Κλειδί
 Keyboard Shortcuts	Συντομεύσεις πληκτρολογίου
 Keyboard shortcuts.	Συντομεύσεις πληκτρολογίου.
+Keyboard\nShortcuts	Συντομεύσεις\nπληκτρολογίου
 Keys are available for this session but were not remembered on this computer.	Τα κλειδιά είναι διαθέσιμα για αυτή την περίοδο λειτουργίας, αλλά δεν απομνημονεύτηκαν σε αυτόν τον υπολογιστή.
 Keys are kept for this session only: there is no credential store to remember them in here.	Τα κλειδιά διατηρούνται μόνο για αυτή την περίοδο λειτουργίας: εδώ δεν υπάρχει χώρος αποθήκευσης διαπιστευτηρίων για να απομνημονευτούν.
 Keys from	Κλειδιά από
