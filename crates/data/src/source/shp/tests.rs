@@ -147,6 +147,30 @@ fn disk_index_is_reused_and_corrupt_cache_is_rebuilt() {
     std::fs::remove_dir_all(folder).unwrap();
 }
 
+/// Opening costs the same whatever the cache holds: building an index sweeps the cache folder
+/// once, reusing one sweeps it not at all, and neither release does (#1230).
+#[test]
+fn opening_sweeps_the_cache_only_to_build_an_index() {
+    let folder = dir();
+    let source = folder.join("points.shp");
+    points_shapefile(&source);
+    let cache_root = folder.join("cache");
+    cache::with_index_dir(cache_root.clone(), || {
+        let before = cache::sweeps();
+        let built = ShpSource::open_path(&source, "points").unwrap();
+        assert!(built.info().indexed);
+        assert_eq!(cache::sweeps(), before + 1, "building an index sweeps once");
+        drop(built);
+        let reused = ShpSource::open_path(&source, "points").unwrap();
+        assert!(reused.info().indexed);
+        assert_eq!(reused.read(&Request::all()).unwrap().features.len(), 600);
+        drop(reused);
+        assert_eq!(cache::sweeps(), before + 1, "reusing an index and releasing either sweeps nothing");
+        cache::maintain(&cache_root, 0).unwrap();
+    });
+    std::fs::remove_dir_all(folder).unwrap();
+}
+
 #[test]
 fn disk_queries_match_legacy_scan_sampling_and_edges() {
     let folder = dir();
@@ -289,6 +313,38 @@ fn shapefile_disk_index_complete_chunks_preserve_full_reads_and_file_order() {
         );
         assert_eq!(calls, 1);
         assert!(source.read(&Request::all()).unwrap().complete, "cancellation must release the index lock");
+    });
+    std::fs::remove_dir_all(fixture).unwrap();
+}
+
+#[test]
+fn shapefile_record_past_the_cap_is_skipped_not_allocated() {
+    // A record whose header claims more than MAX_RECORD bytes, inside a file grown (sparse where
+    // the file system allows) to hold it: skipped and counted, never given a buffer that size.
+    let fixture = dir();
+    cache::with_index_dir(fixture.join("cache"), || {
+        let p = fixture.join("huge-record.shp");
+        let mut ds = Dataset::new("two", GeometryType::Point, vec![]);
+        ds.push(Some(Geometry::Point(Coord::new(1.0, 2.0))), vec![]);
+        ds.push(Some(Geometry::Point(Coord::new(3.0, 4.0))), vec![]);
+        write_shapefile(&ds, &p);
+        // The second record's header is at 100 + 28; its content length (16-bit words) at +4.
+        let bytes = MAX_RECORD + 2;
+        let mut shp = std::fs::read(&p).unwrap();
+        shp.splice(132..136, i32::try_from(bytes / 2).unwrap().to_be_bytes());
+        std::fs::write(&p, &shp).unwrap();
+        std::fs::OpenOptions::new().write(true).open(&p).unwrap().set_len(136 + bytes).unwrap();
+        let src = open_path(&p, None).unwrap();
+        let all = src.read(&Request::all()).unwrap();
+        assert_eq!((all.features.len(), all.skipped), (1, 1));
+        let mut chunked = 0;
+        let batch = src
+            .visit_chunks(None, 1 << 20, &mut |f| {
+                chunked += f.len();
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!((chunked, batch.skipped), (1, 1));
     });
     std::fs::remove_dir_all(fixture).unwrap();
 }

@@ -48,10 +48,11 @@ pub(super) fn merc_at(s: &Session, lon: f64, lat: f64) -> Option<(Coord, f64)> {
 }
 
 /// Whether a tile layer is a WMS layer that can be asked: drawn, and queryable or not known yet.
-fn askable(t: &rustgis_map::tiles::TileLayer) -> bool {
+/// One `picked` in the Layers pane is asked whichever it is.
+fn askable(t: &rustgis_map::tiles::TileLayer, picked: bool) -> bool {
     // As for vector tiles' features: a basemap (one from the catalog) isn't asked, an added layer is.
     t.kind == TileKind::Raster
-        && (t.id.is_empty() || t.overlay)
+        && (picked || t.id.is_empty() || t.overlay)
         && t.draws()
         && t.opacity > 0.0
         && match &t.feature_info {
@@ -79,17 +80,32 @@ fn next_fetch(t: &rustgis_map::tiles::TileLayer, lon: f64, lat: f64, at: Coord, 
 fn ask(t: &rustgis_map::tiles::TileLayer, fi: &FeatureInfo, at: Coord, m_per_px: f64) -> Option<Value> {
     // The request's address comes from the capabilities (hostile input): it must not reach into
     // the local network from a service on the web.
+    // At the time the layer draws (a WMS layer with a time dimension).
     fi.request(at.x, at.y, m_per_px)
+        .map(|url| ogc::at_map_time(url, &t.url))
         .filter(|url| crate::render::rustgis_tiles::address::check(url, Some(&t.url)).is_ok())
         .map(|url| json!({"tileLayer": t.name, "url": url}))
 }
 
 /// The WMS tile layers drawn at a point to ask what is there, topmost first (only the topmost
 /// when `first_layer`), each with what to fetch.
-pub(super) fn requests(s: &Session, lon: f64, lat: f64, first_layer: bool) -> Vec<Value> {
+pub(super) fn requests(s: &Session, lon: f64, lat: f64, first_layer: bool, picked: Option<usize>) -> Vec<Value> {
     let Some((at, m_per_px)) = merc_at(s, lon, lat) else { return Vec::new() };
     let wanted = if first_layer { 1 } else { MAX_ASKED };
-    s.map().tiles.iter().filter(|t| askable(t)).filter_map(|t| next_fetch(t, lon, lat, at, m_per_px)).take(wanted).collect()
+    s.map()
+        .tiles
+        .iter()
+        .enumerate()
+        .filter(|(i, t)| picked.is_none_or(|p| p == *i) && askable(t, picked.is_some()))
+        .filter_map(|(_, t)| next_fetch(t, lon, lat, at, m_per_px))
+        .take(wanted)
+        .collect()
+}
+
+/// The index of the topmost WMS tile layer that can be asked what is at a point (it covers it).
+pub(super) fn topmost(s: &Session, lon: f64, lat: f64) -> Option<usize> {
+    let (at, m_per_px) = merc_at(s, lon, lat)?;
+    s.map().tiles.iter().position(|t| askable(t, false) && next_fetch(t, lon, lat, at, m_per_px).is_some())
 }
 
 /// The answer's features as identify's results.

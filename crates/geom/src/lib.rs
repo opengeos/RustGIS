@@ -162,7 +162,7 @@ pub fn lonlat_to_merc(c: Coord) -> Coord {
 /// shape with it: an edge from 179.9° to 180.1° would become one across the whole map. A
 /// non-finite longitude stays broken rather than quietly becoming the prime meridian.
 pub fn lonlat_to_merc_folded(c: Coord) -> Coord {
-    let lon = if !c.x.is_finite() || (c.x >= -180.0 && c.x <= 180.0) { c.x } else { wrap_lon(c.x) };
+    let lon = if !c.x.is_finite() || (c.x >= -180.0 && c.x <= 180.0) { c.x } else { wrap_lon(c.x % 360.0) };
     lonlat_to_merc(Coord::new(lon, c.y))
 }
 
@@ -173,23 +173,18 @@ pub fn merc_to_lonlat(c: Coord) -> Coord {
     Coord::new(lon, lat)
 }
 
-/// Projects a lon/lat extent to Web Mercator.
+/// Projects a lon/lat extent to Web Mercator, preserving unwrapped longitudes for spans below
+/// 360°. A span of a full turn or more maps to the standard world bounds.
 pub fn extent_to_merc(e: &Extent) -> Extent {
     if e.is_empty() {
         return *e;
     }
-    // The west edge folds into the world, and the east edge keeps the extent's own width from it, so
-    // an extent kept unwrapped across the antimeridian (179.9° to 180.1°, a geodesic buffer) stays
-    // the sliver it is, just past the world's edge, rather than folding its east corner to the far
-    // west and spanning the whole world (#940). Within −180..180 nothing changes. A span of a full
-    // turn or more is the whole world, whichever edge it starts from.
+    // Preserve an unwrapped antimeridian extent instead of folding its corners separately.
+    // A full turn or more covers the world, independent of the starting longitude.
     let (sw, ne) = (lonlat_to_merc(Coord::new(e.min_x, e.min_y)), lonlat_to_merc(Coord::new(e.max_x, e.max_y)));
     let world = MERCATOR_R * std::f64::consts::PI;
-    let (west, east) = if e.max_x.is_finite() && e.min_x.is_finite() {
-        if e.max_x - e.min_x >= 360.0 { (-world, world) } else { (sw.x, sw.x + MERCATOR_R * (e.max_x - e.min_x).to_radians()) }
-    } else {
-        (sw.x, ne.x)
-    };
+    let (west, east) =
+        if e.max_x.is_finite() && e.min_x.is_finite() && e.max_x - e.min_x >= 360.0 { (-world, world) } else { (sw.x, ne.x) };
     Extent::from_points(Coord::new(west, sw.y), Coord::new(east, ne.y))
 }
 
@@ -294,10 +289,7 @@ pub fn wgs84_length_m(pts: &[Coord]) -> f64 {
 /// WGS 84 ellipsoid. The ring is closed along a geodesic to its first point, whatever its winding,
 /// so the perimeter and area come from one pass over the ring, not two. A ring gives the
 /// region it traces (so polar rings and globe-wide bands follow their own edges, as the sphere's
-/// [`geodesic_ring_area_m2`] does); reversing the ring gives the same magnitude. A ring with a
-/// full-turn edge (-180° to 180°) is the exception: a geodesic cannot tell that edge from no edge,
-/// so the ring is measured on the sphere, as [`geodesic_ring_area_m2`] measures it, which differs
-/// from the ellipsoid by up to about 0.5 %.
+/// [`geodesic_ring_area_m2`] does); reversing the ring gives the same magnitude.
 pub fn wgs84_ring_perimeter_area_m2(ring: &[Coord]) -> (f64, f64) {
     // A broken vertex is no place: NaN, never a plausible number (see [`haversine_m`]).
     if !ring.iter().all(|c| c.is_finite()) {
@@ -315,34 +307,9 @@ pub fn wgs84_ring_perimeter_area_m2(ring: &[Coord]) -> (f64, f64) {
     // a ring is measured on the sphere, as it always was.
     let full_turn = ring.iter().zip(ring.iter().cycle().skip(1)).any(|(a, b)| (b.x - a.x).abs() >= 360.0);
     if full_turn {
-        // A ring whose last vertex names its first one's place (a parallel traced from -180° round
-        // to 180°, back to its start) has a closing edge of no length: measured as a full turn, it
-        // would count the parallel twice.
-        let same_place = |a: &Coord, b: &Coord| a.y == b.y && (a.x - b.x) % 360.0 == 0.0;
-        let closing = ring.last().zip(ring.first()).filter(|&(l, f)| !same_place(l, f));
-        // A full-turn edge along a parallel has the parallel's length, in closed form. One that
-        // changes latitude runs along its parallels in one-degree steps (at most 3600 for a hostile
-        // edge); a single geodesic between its ends would be zero.
-        let perimeter: f64 = ring
-            .iter()
-            .zip(ring.iter().skip(1))
-            .chain(closing)
-            .map(|(a, b)| {
-                if (b.x - a.x).abs() < 360.0 {
-                    return haversine_m(*a, *b);
-                }
-                if a.y == b.y {
-                    return EARTH_RADIUS_M * a.y.to_radians().cos() * (b.x - a.x).abs().to_radians();
-                }
-                let steps = (b.x - a.x).abs().ceil().min(3600.0) as usize;
-                let at = |i: usize| {
-                    let f = i as f64 / steps as f64;
-                    Coord::new(a.x + (b.x - a.x) * f, a.y + (b.y - a.y) * f)
-                };
-                (0..steps).map(|i| haversine_m(at(i), at(i + 1))).sum::<f64>()
-            })
-            .sum();
-        return (perimeter, geodesic_ring_area_m2(ring));
+        let mut closed = ring.to_vec();
+        closed.extend(ring.first().copied());
+        return (geodesic_length_m(&closed), geodesic_ring_area_m2(ring));
     }
     let mut polygon = PolygonArea::new(&WGS84, Winding::Clockwise);
     for c in ring {
@@ -354,11 +321,12 @@ pub fn wgs84_ring_perimeter_area_m2(ring: &[Coord]) -> (f64, f64) {
     let (perimeter, area, _) = polygon.compute(true);
     let area = area.abs();
     let sphere = geodesic_ring_area_m2(ring);
-    let complement = WGS84_AREA_M2 - area;
-    (perimeter, if (sphere - complement).abs() < (sphere - area).abs() { complement } else { area })
+    // Compare a sphere area with its own hemisphere; the ellipsoid's hemisphere differs.
+    let hemisphere = 2.0 * std::f64::consts::PI * EARTH_RADIUS_M * EARTH_RADIUS_M;
+    (perimeter, if sphere > hemisphere { WGS84_AREA_M2 - area } else { area })
 }
 
-/// The surface area of the WGS 84 ellipsoid (square metres).
+/// Surface area 2πa²(1 + (1 − e²) atanh(e) / e) for WGS 84 (square metres).
 const WGS84_AREA_M2: f64 = 510_065_621_724_079.0;
 
 /// The WGS 84 ellipsoid's geodesic solver.
@@ -570,9 +538,40 @@ mod tests {
         let there = lonlat_to_merc(Coord::new(-175.0, 0.0));
         assert!((folded.x - there.x).abs() < 1e-6 && folded.y == there.y);
         assert!(folded.x.abs() <= MERCATOR_R * std::f64::consts::PI, "{}", folded.x);
+        // Reduce the longitude before adding 180 degrees: at 2^60 that addition loses bits.
+        for lon in [2f64.powi(60), -2f64.powi(60), f64::MAX, -f64::MAX, -540.0, -180.0, 180.0, 540.0] {
+            let reduced = lon % 360.0;
+            let expected = if reduced > 180.0 {
+                reduced - 360.0
+            } else if reduced < -180.0 {
+                reduced + 360.0
+            } else {
+                reduced
+            };
+            let actual = lonlat_to_merc_folded(Coord::new(lon, 0.0));
+            // Either sign of 180 degrees denotes the seam.
+            let delta = (merc_to_lonlat(actual).x - expected).abs();
+            assert!(delta < 1e-9 || (delta - 360.0).abs() < 1e-9, "{lon}: {actual:?}");
+            assert!(actual.x.abs() <= MERCATOR_R * std::f64::consts::PI);
+        }
         // A broken longitude stays broken, never a plausible place near Greenwich.
         assert!(lonlat_to_merc_folded(Coord::new(f64::NAN, 0.0)).x.is_nan());
         assert!(lonlat_to_merc_folded(Coord::new(f64::INFINITY, 0.0)).x.is_infinite());
+    }
+
+    #[test]
+    fn wgs84_near_hemisphere_rings_keep_the_spherical_side() {
+        // Both sides of the equator: the spherical and ellipsoidal hemisphere areas differ.
+        // Compare each model with its own hemisphere, independently of winding.
+        for latitude in [-0.00001, 0.00001] {
+            let ring: Vec<_> = (0..36).map(|i| Coord::new(-180.0 + f64::from(i) * 10.0, latitude)).collect();
+            let (perimeter, area) = wgs84_ring_perimeter_area_m2(&ring);
+            assert_eq!(area > WGS84_AREA_M2 / 2.0, latitude > 0.0, "{latitude}: {area}");
+            let reversed: Vec<_> = ring.iter().rev().copied().collect();
+            let (reverse_perimeter, reverse_area) = wgs84_ring_perimeter_area_m2(&reversed);
+            assert!((reverse_area - area).abs() < 1.0);
+            assert!((reverse_perimeter - perimeter).abs() < 1e-6);
+        }
     }
 
     #[test]

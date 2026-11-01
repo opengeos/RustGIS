@@ -326,8 +326,7 @@ pub fn not_covered(ds: &Dataset, rows: &[usize], by: &Dataset) -> Checked {
             _ => continue,
         };
         for c in pts {
-            // Unfolded, as the polygons are (see `polygons`), so a point across the antimeridian is found.
-            let m = rustgis_geom::lonlat_to_merc(c);
+            let m = lonlat_to_merc(c);
             let p = geo::Point::new(m.x, m.y);
             if !polys.iter().any(|(_, mp, bb)| rects_touch(bb, &geo::Rect::new(p.0, p.0)) && mp.contains(&p)) {
                 out.push(TopologyError { rows: vec![*r], at: c });
@@ -397,13 +396,8 @@ mod tests {
     fn a_point_across_the_antimeridian_is_covered_by_its_polygon() {
         // A polygon kept unwrapped (179.9° to 180.1°) covers a point at 180.05°, which is -179.95° once
         // folded: the point is covered, not reported as outside the polygon.
-        let ring = vec![
-            Coord::new(179.9, 0.0),
-            Coord::new(180.1, 0.0),
-            Coord::new(180.1, 1.0),
-            Coord::new(179.9, 1.0),
-            Coord::new(179.9, 0.0),
-        ];
+        let ring =
+            vec![Coord::new(179.9, 0.0), Coord::new(180.1, 0.0), Coord::new(180.1, 1.0), Coord::new(179.9, 1.0), Coord::new(179.9, 0.0)];
         let mut ds = Dataset::new("p", GeometryType::Polygon, vec![]);
         ds.push(Some(Geometry::Polygon(vec![vec![ring]])), vec![]);
         let mut pts = Dataset::new("pt", GeometryType::Point, vec![]);

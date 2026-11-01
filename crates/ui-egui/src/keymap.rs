@@ -7,9 +7,14 @@
 
 use egui::Key;
 use rustgis_engine::Registry;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::RustGisApp;
+
+pub(crate) const MAX_PREF_BYTES: usize = 100_000;
+const MAX_PREF_CHANGES: usize = 1_000;
+const MAX_COMMAND_LEN: usize = 200;
 
 /// The default shortcuts: (keys, command, parameters as JSON, or empty for none). Clipboard
 /// keys are not here: they arrive as copy, cut and paste events, not key presses.
@@ -31,6 +36,11 @@ const DEFAULTS: &[(&str, &str, &str)] = &[
     ("Escape", "tool.set", r#"{"tool":"explore"}"#),
     ("Delete", "edit.delete", ""),
     ("Mod+D", "layout.duplicateElement", ""),
+    // The active layer in the Layers pane's outline, as a word processor's outline keys (#836).
+    ("Alt+Shift+ArrowRight", "layer.indent", ""),
+    ("Alt+Shift+ArrowLeft", "layer.outdent", ""),
+    ("Alt+Shift+ArrowUp", "layer.moveUp", ""),
+    ("Alt+Shift+ArrowDown", "layer.moveDown", ""),
 ];
 
 /// The clipboard keys: (keys, command). They arrive as copy, cut and paste events rather than key
@@ -143,6 +153,17 @@ impl Chord {
             s + key
         }
     }
+
+    /// [`Chord::text`] for `ctx`'s keys, Option spelled out (`Opt+⇧Right`) where the interface
+    /// faces have no "⌥" (egui's own have none, so a browser without the system's faces).
+    pub fn shown(self, ctx: &egui::Context) -> String {
+        let text = self.text(ctx.os().is_mac());
+        if !text.contains('⌥') {
+            return text;
+        }
+        let ids = [egui::FontId::monospace(12.0), egui::FontId::proportional(12.0)];
+        if ctx.fonts_mut(|f| ids.iter().all(|id| f.has_glyphs(id, "⌥"))) { text } else { text.replacen('⌥', "Opt+", 1) }
+    }
 }
 
 impl std::fmt::Display for Chord {
@@ -172,6 +193,17 @@ impl Binding {
         let none = |v: &Value| v.is_null() || v.as_object().is_some_and(|o| o.is_empty());
         self.command == command && (self.params == *params || (none(&self.params) && none(params)))
     }
+}
+
+/// One user change to the defaults, stored in preferences.
+#[derive(Serialize, Deserialize)]
+pub(crate) struct Change {
+    pub(crate) keys: String,
+    pub(crate) command: String,
+    #[serde(default)]
+    pub(crate) params: Value,
+    #[serde(default)]
+    pub(crate) remove: bool,
 }
 
 /// Every shortcut.
@@ -212,6 +244,74 @@ impl Keymap {
             }
         }
         map
+    }
+
+    /// Apply stored user changes to this version's defaults. Returns false if any of them could
+    /// not be read: the valid ones still apply, but the stored text must not be overwritten.
+    pub fn apply_preferences(&mut self, text: &str) -> bool {
+        if text.len() > MAX_PREF_BYTES {
+            return false;
+        }
+        let Ok(changes) = serde_json::from_str::<Vec<Value>>(text) else { return false };
+        if changes.len() > MAX_PREF_CHANGES {
+            return false;
+        }
+        let mut readable = true;
+        for record in changes {
+            let Ok(change) = serde_json::from_value::<Change>(record) else {
+                readable = false;
+                continue;
+            };
+            let Some(chord) = Chord::parse(&change.keys) else {
+                readable = false;
+                continue;
+            };
+            if is_clipboard(chord) || change.command.is_empty() || change.command.len() > MAX_COMMAND_LEN {
+                readable = false;
+                continue;
+            }
+            if change.remove {
+                self.bindings.retain(|b| b.chord != chord || !b.runs(&change.command, &change.params));
+            } else {
+                self.bindings.retain(|b| b.chord != chord);
+                self.bindings.push(Binding { chord, command: change.command, params: change.params });
+            }
+        }
+        readable
+    }
+
+    /// Store differences only; return None if they would exceed the load limits.
+    pub fn preferences(&self, defaults: &Keymap) -> Option<String> {
+        let mut changes = Vec::new();
+        for b in &defaults.bindings {
+            if !self.bindings.contains(b) {
+                changes.push(Change { keys: b.chord.to_string(), command: b.command.clone(), params: b.params.clone(), remove: true });
+            }
+        }
+        for b in &self.bindings {
+            if !defaults.bindings.contains(b) {
+                changes.push(Change { keys: b.chord.to_string(), command: b.command.clone(), params: b.params.clone(), remove: false });
+            }
+        }
+        if changes.len() > MAX_PREF_CHANGES || changes.iter().any(|c| c.command.is_empty() || c.command.len() > MAX_COMMAND_LEN) {
+            return None;
+        }
+        serde_json::to_string(&changes).ok().filter(|text| text.len() <= MAX_PREF_BYTES)
+    }
+
+    /// Assign a chord, replacing its previous assignment. Clipboard chords are reserved.
+    pub fn assign(&mut self, chord: Chord, command: &str, params: Value) -> bool {
+        if is_clipboard(chord) || command.is_empty() {
+            return false;
+        }
+        self.bindings.retain(|b| b.chord != chord);
+        self.bindings.push(Binding { chord, command: command.to_owned(), params });
+        true
+    }
+
+    /// Remove a particular chord.
+    pub fn remove(&mut self, chord: Chord) {
+        self.bindings.retain(|b| b.chord != chord);
     }
 
     /// The binding a key combination runs.
@@ -267,7 +367,7 @@ pub fn is_clipboard(chord: Chord) -> bool {
 /// fixed key included), or empty for none.
 pub fn shortcut_text(ctx: &egui::Context, app: &RustGisApp, command: &str, params: &Value) -> String {
     let clipboard = || CLIPBOARD.iter().find(|(_, c)| *c == command).and_then(|(keys, _)| Chord::parse(keys));
-    app.ui.keymap.keys_for(command, params).next().or_else(clipboard).map(|c| c.text(ctx.os().is_mac())).unwrap_or_default()
+    app.ui.keymap.keys_for(command, params).next().or_else(clipboard).map(|c| c.shown(ctx)).unwrap_or_default()
 }
 
 /// What a binding runs, translated: the command's label, or the map tool it picks.
@@ -296,6 +396,72 @@ pub fn label(app: &RustGisApp, command: &str, params: &Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn over_limit_preferences_are_rejected_without_partial_changes() {
+        let defaults = Keymap::default();
+        let too_many =
+            serde_json::to_string(&vec![serde_json::json!({"keys":"D","command":"select.clear"}); MAX_PREF_CHANGES + 1]).unwrap();
+        let too_large = " ".repeat(MAX_PREF_BYTES + 1);
+        for saved in [&too_many, &too_large] {
+            let mut keymap = defaults.clone();
+            assert!(!keymap.apply_preferences(saved));
+            assert_eq!(keymap, defaults);
+        }
+        let mut changed = defaults.clone();
+        changed.assign(Chord::parse("D").unwrap(), "test.command", Value::String("x".repeat(MAX_PREF_BYTES)));
+        assert!(changed.preferences(&defaults).is_none(), "never save a value that cannot be loaded");
+        let mut long_id = defaults.clone();
+        long_id.assign(Chord::parse("D").unwrap(), &"x".repeat(MAX_COMMAND_LEN + 1), Value::Null);
+        assert!(long_id.preferences(&defaults).is_none(), "never save a command id that loading rejects");
+    }
+
+    #[test]
+    fn removed_registry_shortcut_stays_removed_after_preference_reload() {
+        let registry =
+            Registry { commands: vec![rustgis_engine::CommandSpec::new("test.action", "Test", "", |_, _| Ok(Value::Null)).key("F8")] };
+        let defaults = Keymap::new(&registry);
+        let chord = Chord::parse("F8").unwrap();
+        assert_eq!(defaults.command_for(chord).unwrap().command, "test.action");
+        let mut changed = defaults.clone();
+        changed.remove(chord);
+        let saved = changed.preferences(&defaults).unwrap();
+        let mut reloaded = Keymap::new(&registry);
+        reloaded.apply_preferences(&saved);
+        assert!(reloaded.command_for(chord).is_none());
+    }
+
+    #[test]
+    fn shortcut_preferences_round_trip_and_keep_new_defaults() {
+        let defaults = Keymap::default();
+        let mut changed = defaults.clone();
+        let table = Chord::parse("Mod+T").unwrap();
+        changed.remove(table);
+        let d = Chord::parse("D").unwrap();
+        assert!(changed.assign(d, "tool.set", serde_json::json!({"tool": "select"})));
+        assert!(changed.assign(table, "select.clear", Value::Null));
+        assert!(!changed.assign(Chord::parse("Mod+C").unwrap(), "select.clear", Value::Null));
+        let saved = changed.preferences(&defaults).unwrap();
+        let mut newer = defaults.clone();
+        let fresh = Chord::parse("F8").unwrap();
+        assert!(newer.assign(fresh, "new.command", Value::Null));
+        newer.apply_preferences(&saved);
+        assert_eq!(newer.command_for(d).unwrap().params, serde_json::json!({"tool": "select"}));
+        assert_eq!(newer.command_for(table).unwrap().command, "select.clear");
+        assert_eq!(newer.command_for(fresh).unwrap().command, "new.command");
+        newer.apply_preferences("not json");
+        assert_eq!(newer.command_for(table).unwrap().command, "select.clear");
+    }
+
+    #[test]
+    fn malformed_preference_records_do_not_hide_valid_bindings() {
+        let mut keymap = Keymap::default();
+        let readable =
+            keymap.apply_preferences(r#"[{"keys":"D","command":"select.clear"},{"keys":42},{"keys":"W","command":"table.open"}]"#);
+        assert!(!readable, "an unreadable record blocks saving over the stored text");
+        assert_eq!(keymap.command_for(Chord::parse("D").unwrap()).unwrap().command, "select.clear");
+        assert_eq!(keymap.command_for(Chord::parse("W").unwrap()).unwrap().command, "table.open");
+    }
 
     /// Undo and redo are a text field's own, an extra Alt or Shift aside; nothing else is.
     #[test]
@@ -356,6 +522,20 @@ mod tests {
         b.chord = Chord { command: true, alt: false, shift: false, key: Key::J };
         assert_ne!(before, app.shortcuts_fingerprint());
         assert!(crate::RustGisApp::takes_browser_key(&app.command_keys(), "j", "KeyJ", true, false, false));
+        // The same key given another command, or other parameters, changes it too.
+        let moved = app.shortcuts_fingerprint();
+        let j = Chord { command: true, alt: false, shift: false, key: Key::J };
+        app.ui.keymap.assign(j, "select.clear", Value::Null);
+        let other_command = app.shortcuts_fingerprint();
+        assert_ne!(moved, other_command);
+        // Assigning moves the binding to the end, so a second command for the same key, in the
+        // same place, isolates the command.
+        app.ui.keymap.assign(j, "select.all", Value::Null);
+        assert_ne!(other_command, app.shortcuts_fingerprint());
+        app.ui.keymap.assign(j, "tool.set", serde_json::json!({"tool": "select"}));
+        let with_params = app.shortcuts_fingerprint();
+        app.ui.keymap.assign(j, "tool.set", serde_json::json!({"tool": "measure"}));
+        assert_ne!(with_params, app.shortcuts_fingerprint());
     }
 
     #[test]

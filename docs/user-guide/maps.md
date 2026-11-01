@@ -216,21 +216,38 @@ which opens the Plugin Manager at the
 [Basemaps plugin](https://plugins.rustgis.app/catalog/basemaps/); it adds a tab of public
 basemaps. Add any other with **Add Tile Layer…** at the bottom of the Basemap gallery.
 The gallery lists the map's tile layers: show or hide them, change their opacity and order, or
-remove them. The Layers pane lists them too, under the map's layers and above the basemap: tick
+remove them. The Layers pane lists them too, at their place in the drawing order: a basemap
+under the map's layers and above the built-in basemap; an overlay (a WMS or WMTS layer, a vector
+tile service, **Overlay** ticked in Add Tile Layer) on top of the map's layers when added, as
+every new layer goes. Drag one, or right-click it and choose **Move up** or **Move down**, to put it
+between the map's layers (above a layer group, never inside one). Tick
 one to show or hide it, and right-click it for **Zoom To Layer** (when its bounds are known), opacity,
-**Blend** mode, order and **Remove**.
+**Blend** mode, order and **Remove**; a WMS or map service layer also has **Draw as**: one picture
+of the view or tiles of a size (see
+[One picture of the view, or tiles](data-formats.md#one-picture-of-the-view-or-tiles)).
 A blend mode (Multiply, Screen, Overlay, Darken, Lighten, Difference) combines a tile layer with
-the tile layers and basemap beneath it: stack imagery over a hillshade and set it to Multiply to
-let the terrain show through. Overlays (labels, roads) stay on top of the basemaps; choosing a built-in basemap
+what is drawn beneath it (tile layers, the basemap, and map layers when it's placed over them): stack imagery over a hillshade and set it to Multiply to
+let the terrain show through. Overlays stay over the basemaps; choosing a built-in basemap
 removes the web basemaps but keeps the overlays. Tile layers are saved with the project, and
 their credits are shown in the corner of the map and drawn on exports.
 
 Use Explore to click features in vector PMTiles, MBTiles or MVT layers added as data and see
 their source-layer names and attributes in a pop-up. This works with **Topmost Layer** or
-**Visible Layers** pop-up mode, not with catalog basemaps or MapLibre styles. Tiles are not
+**Visible Layers** pop-up mode, not with catalog basemaps or MapLibre styles; with **Selected in
+Layers**, click a tile layer's row to select it and a click on the map identifies that layer
+alone, whichever it is (a WMS layer too). Tiles are not
 selectable or editable; a tile not yet loaded may need another click once it arrives.
 **Reload** in the Basemap gallery (`map.reloadWebLayers`) clears cached tiles and styles and
 fetches them again.
+
+**Source layers.** A vector PMTiles or MBTiles archive lists its source layers (the
+`vector_layers` its metadata names: `water`, `roads`, `pois`…) under its row in the Layers pane:
+the arrow beside it opens them, each with its own checkbox. Untick one to hide what it draws
+(fills, lines, points and labels, in the default look and in a style given with `styleLayers`
+alike); Explore's pop-ups then skip its features too. From scripts, `map.tiles` lists a vector
+archive's `sourceLayers` once its header is read, and `map.setTiles` takes `"hiddenLayers":
+["roads", …]`, the source layers switched off (`[]` or `null` shows them all again). Switching one
+off is an edit to undo, and a project keeps which are off.
 
 Tiles load in the background and the map fills in as they arrive, with coarser tiles standing in
 meanwhile; exports and `rustgis-cli` wait for them. On the globe and in other projections the
@@ -417,5 +434,5 @@ GPU Rendering is off by default and remembered across sessions (`ui.map.gpu` is 
 `RUSTGIS_GPU=1` forces it on for development). The globe, view effects and colour-vision
 simulation stay on the CPU, and exports are unaffected. A rotated or tilted map uses the GPU
 only when every visible layer can be drawn there: tiles, rasters, terrain, transparency,
-masking, swipe, blending, aggregation, graphics, stacked strokes or labels with icons keep it
+masking, swipe, blending, aggregation, graphics, stacked strokes, fills or labels with icons keep it
 on the CPU. Extrusions use the GPU only on a tilted map.

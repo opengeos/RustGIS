@@ -199,7 +199,7 @@ fn shown(c: &Class) -> String {
 /// `l` as a layer of this map of this project: another map, or another project, may reuse its id.
 /// A map goes by its place and its name, as Define Projection's does: deleting a map moves the
 /// next one into its place, and a copy keeps its layer ids.
-fn layer_key(app: &RustGisApp, l: &Layer) -> egui::Id {
+pub(crate) fn layer_key(app: &RustGisApp, l: &Layer) -> egui::Id {
     egui::Id::unique((app.session.opened, app.session.project.active_map, app.session.map().name.as_str(), l.id))
 }
 
@@ -411,6 +411,10 @@ fn new_name(labels: &Labeling) -> String {
         .unwrap_or_default()
 }
 
+/// How a list with a search box closes: on a click outside it or a pick ([`end_search`]), not on
+/// any click (egui's default), which would close it on clicking its search box.
+pub(crate) const SEARCHED_LIST_CLOSES: egui::PopupCloseBehavior = egui::PopupCloseBehavior::CloseOnClickOutside;
+
 /// A list's search box, as its first row: the text kept for `id` while the list is reopened,
 /// lowercased to match names by. The Field and Font boxes share it, so they search alike.
 pub(crate) fn list_search(ui: &mut Ui, id: egui::Id, hint: &str) -> String {
@@ -421,9 +425,11 @@ pub(crate) fn list_search(ui: &mut Ui, id: egui::Id, hint: &str) -> String {
     text.to_lowercase()
 }
 
-/// A pick ends the search: the list opens whole next time.
+/// A pick ends the search and closes the list (a searched list stays open on other clicks, its
+/// search box's: `SEARCHED_LIST_CLOSES`): the list opens whole next time.
 pub(crate) fn end_search(ui: &Ui, id: egui::Id) {
     ui.data_mut(|d| d.remove::<String>(id));
+    ui.close();
 }
 
 /// The field the class labels with, chosen as the font is: the box shows it (or says it is gone,
@@ -444,6 +450,7 @@ fn field(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, c: &Class) {
             .selected_text(shown)
             .width(180.0)
             .height(320.0)
+            .close_behavior(SEARCHED_LIST_CLOSES)
             .show_ui(ui, |ui| {
                 let search = list_search(ui, search_id, tl!("Search fields"));
                 let mut matching = fields.iter().filter(|f| f.name.to_lowercase().contains(&search)).peekable();
@@ -560,6 +567,7 @@ fn text_symbol(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, c: &Class) {
         ui.end_row();
         letter_spacing(app, ui, l, c);
         ui.end_row();
+        wrapping(app, ui, l, c);
         if c.it.halo {
             halo_style(app, ui, l, c);
         }
@@ -644,6 +652,64 @@ fn background(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, c: &Class) {
     number(app, ui, "Padding across", b.padding[0], BACKGROUND_PADDING, "across");
     number(app, ui, "Padding up and down", b.padding[1], BACKGROUND_PADDING, "upDown");
     number(app, ui, "Corner radius", b.radius, BACKGROUND_PADDING, "radius");
+}
+
+/// Wrapping: a character the text breaks at (typed, set once the field is left), a longest line
+/// in characters (0: none), and how the lines line up.
+fn wrapping(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, c: &Class) {
+    use rustgis_engine::map::layout::TextAlign;
+    use rustgis_engine::map::symbology::MAX_WRAP_LENGTH;
+    let input_label = ui.label(tl!("Wrap at"));
+    let key = layer_key(app, l).with(("label_pane_wrap_char", c.name));
+    let current = c.it.wrap_char.clone().unwrap_or_default();
+    let mut buf = ui.data(|d| d.get_temp::<String>(key)).unwrap_or_else(|| current.clone());
+    let r = ui
+        .add(egui::TextEdit::singleline(&mut buf).char_limit(rustgis_engine::map::symbology::MAX_WRAP_CHAR).desired_width(60.0))
+        .labelled_by(input_label.id)
+        .on_hover_text(tl!("A line break wherever this occurs, left out (a space puts each word on its own line)."));
+    if r.has_focus() {
+        ui.data_mut(|d| d.insert_temp(key, buf));
+    } else {
+        ui.data_mut(|d| d.remove::<String>(key));
+        if r.lost_focus() && buf != current {
+            run(app, "labels.style", c.params(json!({"wrapChar": buf})));
+        }
+    }
+    ui.end_row();
+    let input_label = ui.label(tl!("Wrap length"));
+    let mut n = f64::from(c.it.wrap_length);
+    let r = ui
+        .add(egui::DragValue::new(&mut n).range(0..=MAX_WRAP_LENGTH).speed(0.2).max_decimals(0).custom_formatter(|v, _| {
+            if v <= 0.0 { tl!("Off").to_string() } else { crate::i18n::fmt("{n} characters", &[("n", &v.to_string())]) }
+        }))
+        .labelled_by(input_label.id)
+        .on_hover_text(tl!("Lines longer than this are broken between their words."));
+    let id = l.id;
+    crate::ribbon::live_drag(
+        app,
+        ui,
+        &r,
+        f64::from(c.it.wrap_length),
+        n,
+        |app, x| {
+            if let Some(k) = app.session.map_mut().layer_mut(id).and_then(|l| class_mut(&mut l.labels, c.name)) {
+                k.wrap_length = x.clamp(0.0, f64::from(MAX_WRAP_LENGTH)) as u32;
+            }
+        },
+        |app, x| {
+            run(app, "labels.style", c.params(json!({"wrapLength": x.round()})));
+        },
+    );
+    ui.end_row();
+    ui.label(tl!("Line alignment"));
+    ui.horizontal(|ui| {
+        for a in TextAlign::ALL {
+            if ui.selectable_label(c.it.line_align == a, tl!(a.label())).clicked() && c.it.line_align != a {
+                run(app, "labels.style", c.params(json!({"lineAlign": a.code()})));
+            }
+        }
+    });
+    ui.end_row();
 }
 
 /// The space between the letters, in points (negative: tighter).
@@ -763,6 +829,7 @@ pub(crate) fn family_picker(ui: &mut Ui, salt: impl std::hash::Hash + std::fmt::
         .selected_text(shown)
         .width(180.0)
         .height(320.0)
+        .close_behavior(SEARCHED_LIST_CLOSES)
         .show_ui(ui, |ui| {
             let search = list_search(ui, search_id, tl!("Search fonts"));
             if ui.selectable_label(cur.is_none(), tl!("Label font")).clicked() {
@@ -807,6 +874,15 @@ fn position(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, c: &Class) {
             ui.end_row();
         }
     });
+    // Points: the other places round the point, tried when the label's own is taken (#1011).
+    if l.geometry_type() == rustgis_engine::data::GeometryType::Point {
+        ui.add_space(4.0);
+        let mut on = c.it.other_positions;
+        let help = tl!("When its place is taken, the label tries the other places round the point, corners first.");
+        if ui.checkbox(&mut on, tl!("Try other places round the point")).on_hover_text(help).changed() {
+            run(app, "labels.placement", c.params(json!({"otherPositions": on})));
+        }
+    }
     // Lines: the text along them, straight or bending with them.
     if l.geometry_type() == rustgis_engine::data::GeometryType::Polyline {
         ui.add_space(4.0);
@@ -815,9 +891,59 @@ fn position(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, c: &Class) {
             pick(app, ui, LabelPlacement::Parallel);
             pick(app, ui, LabelPlacement::Curved);
         });
+        if cur.along_line() {
+            repeat(app, ui, l, c);
+        }
     }
     ui.add_space(6.0);
     offset(app, ui, l, c);
+}
+
+/// Along a line, a label every so many points, spaced out from the one at its middle; off, the one
+/// at its middle.
+fn repeat(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, c: &Class) {
+    use rustgis_engine::map::symbology::LABEL_REPEAT;
+    let id = l.id;
+    grid(ui, "repeat", |ui| {
+        let input_label = ui.label(tl!("Repeat"));
+        ui.horizontal(|ui| {
+            let mut on = c.it.repeat.is_some();
+            if ui.checkbox(&mut on, "").labelled_by(input_label.id).on_hover_text(tl!("A label every so far along the line.")).changed() {
+                // On, every 2 inches of paper (144 points) to start with.
+                let v = if on { json!(144.0) } else { json!(null) };
+                run(app, "labels.placement", c.params(json!({"repeat": v})));
+            }
+            let Some(every) = c.it.repeat else { return };
+            let mut v = f64::from(every);
+            let r = ui
+                .add(
+                    egui::DragValue::new(&mut v)
+                        .range(LABEL_REPEAT)
+                        .speed(1.0)
+                        .max_decimals(1)
+                        // The space stays out of the key: the whitespace hook strips it from catalog lines.
+                        .prefix(format!("{} ", tl!("every")))
+                        .suffix(" pt"),
+                )
+                .labelled_by(input_label.id);
+            crate::ribbon::live_drag(
+                app,
+                ui,
+                &r,
+                f64::from(every),
+                v,
+                |app, x| {
+                    if let Some(k) = app.session.map_mut().layer_mut(id).and_then(|l| class_mut(&mut l.labels, c.name)) {
+                        k.repeat = rustgis_engine::map::symbology::label_repeat(x);
+                    }
+                },
+                |app, x| {
+                    run(app, "labels.placement", c.params(json!({"repeat": x})));
+                },
+            );
+        });
+        ui.end_row();
+    });
 }
 
 /// How far the label moves from where its placement puts it, right and down, in points.
@@ -1136,6 +1262,78 @@ mod tests {
         h.get_by_label("Halo").click();
         h.run();
         assert!(h.query_by_label("Automatic").is_none() && h.query_by_label("Thin").is_none());
+    }
+
+    /// Wrapping in the Symbol tab (the character typed and set once the field is left, a length,
+    /// the lines' alignment), and in the Position tab a line's repeat, shown for a placement along
+    /// lines only.
+    #[test]
+    fn wrapping_and_the_repeat_along_lines_are_set_in_the_pane() {
+        use egui::accesskit::Role;
+        use rustgis_engine::map::layout::TextAlign;
+        super::families::installed();
+        let mut app = RustGisApp::with_sample();
+        let id = layer_id(&app, "Rivers");
+        app.session.run("layer.select", &json!({"layer": id})).unwrap();
+        let mut h = harness(app);
+        h.run();
+        let class = |h: &egui_kittest::Harness<'_, RustGisApp>| h.state().session.map().layer(id).unwrap().labels.default.clone();
+        open_tab(&mut h, "Symbol");
+        assert!(h.query_by_role_and_label(Role::SpinButton, "Wrap length").is_some());
+        h.get_by_role_and_label(Role::TextInput, "Wrap at").focus();
+        h.run();
+        h.get_by_role_and_label(Role::TextInput, "Wrap at").type_text("/");
+        h.run();
+        assert_eq!(class(&h).wrap_char, None, "not while typing");
+        h.key_press(egui::Key::Enter);
+        h.run();
+        assert_eq!(class(&h).wrap_char.as_deref(), Some("/"));
+        h.get_by_label("Center").click();
+        h.run();
+        assert_eq!(class(&h).line_align, TextAlign::Center);
+        // Repeat: only for a placement along lines.
+        open_tab(&mut h, "Position");
+        h.state_mut().session.run("labels.placement", &json!({"layer": id, "position": "above"})).unwrap();
+        h.run();
+        assert!(h.query_by_label("Repeat").is_none(), "not off the line");
+        h.state_mut().session.run("labels.placement", &json!({"layer": id, "position": "parallel"})).unwrap();
+        h.run();
+        h.get_by_role_and_label(Role::CheckBox, "Repeat").click();
+        h.run();
+        assert_eq!(class(&h).repeat, Some(144.0));
+        assert!(h.query_by_role_and_label(Role::SpinButton, "Repeat").is_some(), "its distance to set");
+        h.get_by_role_and_label(Role::CheckBox, "Repeat").click();
+        h.run();
+        assert_eq!(class(&h).repeat, None);
+    }
+
+    /// A point layer's labels can try the other places round their points (#1011); a line or
+    /// polygon layer's have no such box.
+    #[test]
+    fn other_positions_are_set_in_the_pane_for_points() {
+        use egui::accesskit::Role;
+        const BOX: &str = "Try other places round the point";
+        let mut h = harness(with_cities());
+        h.run();
+        open_tab(&mut h, "Position");
+        let on = |h: &egui_kittest::Harness<'_, RustGisApp>| {
+            h.state().session.map().layer_by_name("Cities").unwrap().labels.default.other_positions
+        };
+        assert!(!on(&h));
+        h.get_by_role_and_label(Role::CheckBox, BOX).click();
+        h.run();
+        assert!(on(&h));
+        h.get_by_role_and_label(Role::CheckBox, BOX).click();
+        h.run();
+        assert!(!on(&h));
+        let rivers = layer_id(h.state(), "Rivers");
+        h.state_mut().session.run("layer.select", &json!({"layer": rivers})).unwrap();
+        h.run();
+        assert!(h.query_by_role_and_label(Role::CheckBox, BOX).is_none(), "not for lines");
+        let countries = layer_id(h.state(), "Countries");
+        h.state_mut().session.run("layer.select", &json!({"layer": countries})).unwrap();
+        h.run();
+        assert!(h.query_by_role_and_label(Role::CheckBox, BOX).is_none(), "not for polygons");
     }
 
     #[test]
@@ -1692,6 +1890,48 @@ mod tests {
         }
         h.state_mut().run("edit.undo", json!(null)).unwrap();
         assert_eq!(labels(h.state()).class("Named").unwrap().font.as_deref(), Some("Missing test font"));
+    }
+
+    /// Clicking in a list's search box leaves the list open to type in (it closed on any click,
+    /// the box too, so nothing could be searched); a pick closes it and ends the search.
+    #[test]
+    fn a_list_stays_open_to_search_it_and_closes_on_a_pick() {
+        use egui::accesskit::Role;
+        let mut h = harness(with_cities());
+        h.run();
+        let search_for = |h: &mut egui_kittest::Harness<'static, RustGisApp>, tab: &str, list: &str, text: &str| {
+            open_tab(h, tab);
+            let before = h.query_all_by_role(Role::TextInput).count();
+            h.get_by_role_and_label(Role::ComboBox, list).click();
+            h.run();
+            // (The list's search box is the input with no label: the tab's own have theirs, and can
+            // come after it, as Wrap at does on Symbol.)
+            let search_box = |h: &egui_kittest::Harness<'static, RustGisApp>| {
+                h.query_all_by_role(Role::TextInput).find(|n| n.accesskit_node().label().is_none()).map(|n| n.accesskit_node().id())
+            };
+            let id = search_box(h).unwrap();
+            h.get_by(|n| n.id() == id).click();
+            h.run();
+            assert_eq!(h.query_all_by_role(Role::TextInput).count(), before + 1, "{list}: clicking its search box left it open");
+            let id = search_box(h).unwrap();
+            h.get_by(|n| n.id() == id).type_text(text);
+            h.run();
+            before
+        };
+        // The label's field.
+        let before = search_for(&mut h, "Content", "Field", "nam");
+        h.get_by_role_and_label(Role::Button, "name").click();
+        h.run();
+        assert_eq!(h.query_all_by_role(Role::TextInput).count(), before, "a pick closes it");
+        // The label's font: found by part of its name, and used.
+        let family = super::families::installed().iter().find(|f| f.listed).map(|f| f.name.clone());
+        let Some(family) = family else { return };
+        let part: String = family.chars().take(4).collect();
+        let before = search_for(&mut h, "Symbol", "Font", &part);
+        h.get_by_role_and_label(Role::Button, family.as_str()).click();
+        h.run();
+        assert_eq!(labels(h.state()).default.font.as_deref(), Some(family.as_str()));
+        assert_eq!(h.query_all_by_role(Role::TextInput).count(), before, "a pick closes it");
     }
 
     /// A class chosen that goes away (an undo, a script, the Assistant) leaves Default chosen.

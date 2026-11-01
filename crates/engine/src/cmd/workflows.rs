@@ -187,11 +187,15 @@ pub fn gallery_list(kind: &str) -> CmdResult {
         "ready" => &["buffer", "dissolve", "countPoints", "clip", "summaryStatistics", "selectByLocation"],
         "feature" => &[
             "buffer",
+            "near",
             "clip",
             "erase",
             "intersect",
             "identity",
             "union",
+            "symmetricalDifference",
+            "update",
+            "split",
             "dissolve",
             "convexHull",
             "featureToPoint",
@@ -373,8 +377,13 @@ fn run_steps(s: &mut Session, model: Model) -> CmdResult {
         return Err(format!("{} has no steps", model.name));
     }
     // A model that came in a file (an opened project, or an imported tool) may not touch files.
+    // Each step is checked as the `gp.run` it is, tool and all, as ModelBuilder's graphs are.
     if !s.trusted_models.contains(&model.name.to_ascii_lowercase())
-        && let Some((i, st)) = model.steps.iter().enumerate().find(|(_, st)| super::items::touches_files("gp.run", &st.params))
+        && let Some((i, st)) = model
+            .steps
+            .iter()
+            .enumerate()
+            .find(|(_, st)| super::items::touches_files("gp.run", &json!({"tool": st.tool, "params": st.params})))
     {
         return Err(format!(
             "step {} ({}) reads or writes files, which a model from a file can't do; make a new model with that step to run it",
@@ -669,6 +678,7 @@ fn interpolate(s: &mut Session, p: &Value) -> CmdResult {
     add_raster(s, r)
 }
 
+/// Creates a route layer and reports invalid source segments omitted from its network.
 fn route(s: &mut Session, p: &Value) -> CmdResult {
     let id = s.layer_id(p)?;
     let l = s.map().layer(id).ok_or("no such layer")?;
@@ -685,11 +695,18 @@ fn route(s: &mut Session, p: &Value) -> CmdResult {
         cost,
         f(p, "snapDistance").unwrap_or(1000.0).clamp(0.0, 1e6),
     )?;
+    let source_name = l.name.clone();
     let name = out_name(p, format!("Route on {}", l.name));
     let mut ds =
         Dataset::new(name, GeometryType::Polyline, vec![Field::new("length_km", FieldType::Double), Field::new("cost", FieldType::Double)]);
     ds.push(Some(Geometry::Line(vec![r.path.clone()])), vec![Attr::Float(r.length_m / 1000.0), Attr::Float(r.cost)]);
     let nid = super::layer::add_dataset(s, ds);
+    if r.skipped_segments > 0 {
+        s.notify(
+            format!("{source_name}: {} segments with invalid coordinates were omitted from the route network", r.skipped_segments),
+            false,
+        );
+    }
     Ok(json!({"layer": nid, "lengthKm": r.length_m / 1000.0, "cost": r.cost, "segments": r.rows.len()}))
 }
 
@@ -859,6 +876,8 @@ fn similar(s: &mut Session, p: &Value) -> CmdResult {
     Ok(json!({"similar": rows}))
 }
 
+/// Converts a layer to GeoJSON, CSV, KML, GPX or WKT text, written to `path` or returned; says when
+/// the layer's Z or M values were dropped on import.
 fn convert(s: &mut Session, p: &Value) -> CmdResult {
     let ds = feature_ds(s, p)?;
     let name_field =
@@ -871,11 +890,16 @@ fn convert(s: &mut Session, p: &Value) -> CmdResult {
         "wkt" => rustgis_data::interop::to_wkt_csv(ds),
         f => return Err(format!("unknown format '{f}'")),
     };
-    match ps(p, "path") {
+    let zm_note = rustgis_data::zm_export_note([ds], ps(p, "path").unwrap_or(&ds.name));
+    let out = match ps(p, "path") {
         Some(path) => {
             rustgis_data::io::write_atomic(std::path::Path::new(path), text.as_bytes()).map_err(|e| format!("{path}: {e}"))?;
-            Ok(json!({"path": path, "bytes": text.len()}))
+            json!({"path": path, "bytes": text.len()})
         }
-        None => Ok(json!({"text": text})),
+        None => json!({"text": text}),
+    };
+    if let Some(note) = zm_note {
+        s.notify(note, false);
     }
+    Ok(out)
 }

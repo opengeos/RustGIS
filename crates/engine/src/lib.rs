@@ -9,7 +9,10 @@ pub mod cmd;
 pub mod connections;
 pub mod geometry_calc;
 pub mod model;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod prefs;
 pub mod project;
+pub mod project_log;
 pub mod s3_connections;
 pub mod s3_keys;
 #[cfg(test)]
@@ -416,9 +419,16 @@ pub struct Notice {
 
 const UNDO_LIMIT: usize = 40;
 
+struct ProjectFiles {
+    identity: u64,
+    path: Option<PathBuf>,
+    opened_package: Option<PathBuf>,
+}
+
 /// An undo or redo step: the project before it, the layout open then, its label, who made it,
-/// and which state of the project it is ([`Session::dirty`]).
-type Step = (Project, Option<usize>, &'static str, Option<String>, u64);
+/// and which state of the project it is ([`Session::dirty`]). File origins accompany changes
+/// made by the command only: undoing an ordinary edit must not undo a subsequent Save As.
+type Step = (Project, Option<usize>, &'static str, Option<String>, u64, Option<ProjectFiles>);
 
 /// What a project holds in the session beside itself: what [`Session::clear_history`] forgets
 /// when another project starts, and what opening one sets (its file, layer, tool…). When another
@@ -455,10 +465,13 @@ struct PutAside {
     /// The file it was opened from or saved to: a Save after the rollback writes there, not to
     /// the file the replacement named (or none).
     path: Option<PathBuf>,
+    opened_package: Option<PathBuf>,
+    file_identity: u64,
     model_run: Option<model::RunReport>,
     /// Its work still under way (tool runs, downloads, plugin fetches, queries): the runs of
     /// the previous project mustn't land in the next one.
     pending: Vec<PendingRun>,
+    file_outputs: Vec<cmd::gp::PendingFile>,
     #[cfg(feature = "geolibre")]
     started: Vec<(u64, rustgis_geolibre::Job, serde_json::Value, u64)>,
     plugin_runs: Vec<cmd::gp::StartedRun>,
@@ -477,6 +490,15 @@ struct PutAside {
 pub struct Session {
     pub project: Project,
     pub path: Option<PathBuf>,
+    /// What was run in this session (#797), whatever project was open: kept in memory only, so
+    /// a saved or shared project carries none of it.
+    pub log: project_log::SessionLog,
+    /// Package this project was opened from, protected as an input without making it the save
+    /// destination. Kept after Save As; cleared when a different project starts.
+    opened_package: Option<PathBuf>,
+    /// Undoable identity of the project owning these origins. Allocated from the unique state
+    /// counter at reset; separate from `opened`, whose values must not be reused by undo.
+    file_identity: u64,
     /// Which state of the project is open: a new one after each change, an earlier one again
     /// after undo. Each is given once in a session (`states` counts them).
     state: u64,
@@ -535,6 +557,14 @@ pub struct Session {
     /// Edits per layer id since the project was last saved (Edit › Status). A failed command's
     /// are rolled back; undo doesn't subtract them, since they count edits made, not the net change.
     pub edit_counts: std::collections::HashMap<u32, cmd::design::EditCounts>,
+    /// The PostGIS database that layers loaded for editing work with (`pg.connect`): its
+    /// connection, never with its password. Kept for the session, not in the project.
+    pub postgis: Option<String>,
+    /// Source layers' row versions that `pg.saveEdits` or `gpkg.saveEdits` saved over: a layer back on one
+    /// (undone, or restored by a failed command, past a save) would write its edits again.
+    /// Outside the project, so undo keeps it.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    pub(crate) saved_over: Vec<rustgis_map::source::Versions>,
     /// The feature cache fills itself after projection changes (Data › Feature Cache).
     pub auto_cache: bool,
     /// Mensuration results (Analyze › Mensuration › Results).
@@ -602,6 +632,11 @@ pub struct Session {
     /// Finished asynchronous tool runs waiting for `gp.finish` (the browser's GeoLibre tools).
     pub(crate) pending: Vec<PendingRun>,
     pub(crate) next_pending: u64,
+    /// Tool files waiting for the front end to deliver and acknowledge.
+    pub(crate) file_outputs: Vec<cmd::gp::PendingFile>,
+    /// Exercises the browser delivery path with real tools in native engine tests.
+    #[cfg(test)]
+    queue_gp_files: bool,
     /// Asynchronous runs started and not yet complete: (id, job, resolved params, start time).
     #[cfg(feature = "geolibre")]
     pub(crate) started: Vec<(u64, rustgis_geolibre::Job, serde_json::Value, u64)>,
@@ -621,6 +656,9 @@ pub struct Session {
     /// Set by [`Session::request_url`] for [`Session::guarded`]: the command running changed
     /// nothing, it only left a request (a plugin's own answer can't claim that).
     request_only: bool,
+    /// Set by [`Session::run_leaving_downloads`]: `layer.addUrl` leaves what it would wait for
+    /// to the front end ([`Session::request_url`]), as in the browser.
+    leave_downloads: bool,
     /// Plugin commands waiting for their `host.fetch` answers to run again (the browser).
     pub(crate) plugin_retries: Vec<cmd::plugins::fetch::Retry>,
     /// How many times the plugin command running now has been run again for its fetches.
@@ -687,6 +725,81 @@ fn edited_streamed(before: &Project, after: &Project) -> Option<String> {
     None
 }
 
+/// New features of a layer loaded for source editing never keep the key of a row it loaded (one
+/// deleted since, whose id an editing tool can hand out again): saved, they would be that row,
+/// changed. They take ids past every key instead. Layers whose rows were loaded or saved again by
+/// the command (their versions replaced) are left alone.
+fn fresh_source_ids(before: &Project, after: &mut Project) {
+    for (mb, ma) in before.maps.iter().zip(after.maps.iter_mut()) {
+        for la in ma.layers.iter_mut() {
+            let Some(versions) = la.edit_versions() else { continue };
+            let Some(lb) = mb.layers.iter().find(|l| l.id == la.id) else { continue };
+            let same_rows = lb.edit_versions().is_some_and(|b| b.shares(versions));
+            if !same_rows || la.dataset.features.shares(&lb.dataset.features) {
+                continue;
+            }
+            // A layer bound to both sources (a hand-made project) reserves both baselines' keys.
+            let also = la.postgis.as_ref().and(la.gpkg.as_ref()).map(|g| &g.versions);
+            let loaded = |id: u64| versions.get(id).is_some() || also.is_some_and(|v| v.get(id).is_some());
+            let had: std::collections::HashSet<u64> = lb.dataset.features.iter().map(|f| f.id).collect();
+            let reused: Vec<usize> = (0..la.dataset.features.len())
+                .filter(|&i| la.dataset.features.get(i).is_some_and(|f| !had.contains(&f.id) && loaded(f.id)))
+                .collect();
+            if reused.is_empty() {
+                continue;
+            }
+            // Past the largest key that isn't negative (a negative key's bits are the largest).
+            let mut next = la
+                .dataset
+                .features
+                .iter()
+                .map(|f| f.id)
+                .chain(versions.iter().map(|(k, _)| k))
+                .chain(also.into_iter().flat_map(|v| v.iter().map(|(k, _)| k)))
+                .filter(|&k| k.cast_signed() >= 0)
+                .max()
+                .unwrap_or(0);
+            for i in reused {
+                next = next.saturating_add(1);
+                if let Some(f) = la.dataset.features.get_mut(i) {
+                    f.id = next;
+                }
+            }
+        }
+    }
+}
+
+/// A lock names each label by its feature's id, and [`rustgis_data::Dataset::push`] hands the
+/// largest id out again once its feature is deleted: the new feature would take the lock's place
+/// without having been placed (#1135). So a command that removes features removes their entries,
+/// whichever way it removes them. Undo brings them back with the rest of the project. A streamed
+/// layer holds only the window in view, so its other features aren't gone. It compares ids, so an
+/// id a single command both removes and hands out stays locked: only restoring from an archive can.
+fn forget_locks_of_removed_features(before: &Project, after: &mut Project) {
+    for (i, m) in after.maps.iter_mut().enumerate() {
+        let was = before.maps.get(i).filter(|o| o.name == m.name);
+        let Some(lock) = m.label_lock.as_mut() else { continue };
+        for l in m.layers.iter().filter(|l| !l.is_streamed()) {
+            if was.and_then(|o| o.layers.iter().find(|o| o.id == l.id)).is_some_and(|o| o.dataset.features.shares(&l.dataset.features)) {
+                continue;
+            }
+            // The lock's ids for this layer, less those it still has: sized by the lock, not the layer.
+            let mut gone: std::collections::HashSet<usize> =
+                lock.iter().filter(|((layer, ..), _)| *layer == l.id).map(|((_, id, ..), _)| *id).collect();
+            if gone.is_empty() {
+                continue;
+            }
+            for f in l.dataset.features.iter() {
+                gone.remove(&(f.id as usize));
+                if gone.is_empty() {
+                    break;
+                }
+            }
+            lock.retain(|((layer, id, ..), _)| *layer != l.id || !gone.contains(id));
+        }
+    }
+}
+
 /// Why command `label` can't edit streamed layer `layer`, refused up front or undone after.
 fn streamed_refusal(label: &str, layer: &str) -> String {
     format!("{label}: {layer} is read in place from its file; Load All Features (layer.loadAll) to edit it")
@@ -702,6 +815,9 @@ fn edits_features(id: &str) -> bool {
 
 impl Session {
     pub fn new(project: Project) -> Self {
+        // The engine's tests never add Shapefile indexes to the user's cache (#1230).
+        #[cfg(all(test, not(target_arch = "wasm32")))]
+        rustgis_data::source::shp::use_temporary_index_dir();
         // Cheap: the suite's tools load the first time a tool list is needed.
         #[cfg(feature = "geolibre")]
         rustgis_geolibre::register();
@@ -711,6 +827,9 @@ impl Session {
         Session {
             project,
             path: None,
+            log: project_log::SessionLog::default(),
+            opened_package: None,
+            file_identity: 0,
             state: 0,
             states: 0,
             saved: Some(0),
@@ -752,6 +871,8 @@ impl Session {
             topology_errors: Vec::new(),
             measurements: Vec::new(),
             auto_cache: false,
+            postgis: None,
+            saved_over: Vec::new(),
             undo: Vec::new(),
             redo: Vec::new(),
             merge: None,
@@ -773,7 +894,11 @@ impl Session {
             downloading: Vec::new(),
             downloaded: Vec::new(),
             url_requests: Vec::new(),
+            file_outputs: Vec::new(),
+            #[cfg(test)]
+            queue_gp_files: false,
             request_only: false,
+            leave_downloads: false,
             plugin_retries: Vec::new(),
             retry_tries: 0,
             quiet_failure: false,
@@ -835,11 +960,12 @@ impl Session {
 
     /// Keeps a `layer.addUrl` request for the front end to download off the frame and add when
     /// it lands (the browser, where a command may not wait): the command's answer, which says
-    /// so. An address asked for again while it waits is asked for once, and past a few waiting
+    /// so. A request made again while it waits is made once (the same address read another way,
+    /// as another layer or with other columns, is another request), and past a few waiting
     /// requests the next is refused rather than silently dropping one already promised.
     pub fn request_url(&mut self, p: &serde_json::Value) -> Result<serde_json::Value, String> {
         let url = p.get("url").and_then(serde_json::Value::as_str).unwrap_or("").to_string();
-        if !self.url_requests.iter().any(|q| q.get("url").and_then(serde_json::Value::as_str) == Some(url.as_str())) {
+        if !self.url_requests.iter().any(|q| q == p) {
             if self.url_requests.len() >= MAX_URL_REQUESTS {
                 return Err(format!("{url}: {MAX_URL_REQUESTS} downloads are already waiting; try again when they have landed"));
             }
@@ -849,9 +975,26 @@ impl Session {
         Ok(serde_json::json!({"pending": true, "url": url}))
     }
 
+    /// Runs a command as [`Session::run`] does, except that the downloads `layer.addUrl` would
+    /// wait for (on the desktop) are left to the front end, as in the browser: the app runs the
+    /// commands of plugins this way, so a plugin adding data by address doesn't freeze it. The
+    /// command line, scripts and the assistant run commands that wait, and see what was added.
+    pub fn run_leaving_downloads(&mut self, id: &str, params: &serde_json::Value) -> CmdResult {
+        let was = std::mem::replace(&mut self.leave_downloads, true);
+        let r = self.run(id, params);
+        self.leave_downloads = was;
+        r
+    }
+
     /// The `layer.addUrl` requests waiting for the front end ([`Session::request_url`]), taken.
     pub fn take_url_requests(&mut self) -> Vec<serde_json::Value> {
         std::mem::take(&mut self.url_requests)
+    }
+
+    /// Takes tool files awaiting download. Metadata stays until `gp.fileDelivered` acknowledges
+    /// delivery, so producing bytes alone never records a successful run.
+    pub fn take_gp_files(&mut self) -> Vec<(u64, String, Vec<u8>)> {
+        self.file_outputs.iter_mut().filter_map(|f| f.bytes.take().map(|bytes| (f.id, f.file_name.clone(), bytes))).collect()
     }
 
     /// Whether background work still belongs to this project.
@@ -886,8 +1029,55 @@ impl Session {
     }
 
     /// Runs a command by id. Mutating commands snapshot the project for undo; an error or a
-    /// panic restores it.
+    /// panic restores it. A command run by itself (not as a part of another) that changes the
+    /// project, or reaches a file or a service, goes into the session's log (#797).
     pub fn run(&mut self, id: &str, params: &Value) -> CmdResult {
+        if self.depth > 0 {
+            return self.run_command(id, params);
+        }
+        // Undo and redo are logged with the step they take back or bring back.
+        let step = match id {
+            "edit.undo" => self.undo_label(),
+            "edit.redo" => self.redo_label(),
+            _ => None,
+        };
+        // A step that joins the last one (a held arrow key nudging an element: `merge_undo`) is
+        // one entry too, as it is one step to undo.
+        let joins = self.merge.is_some() && self.merge == self.merged && !self.undo.is_empty();
+        let (at, start) = (project_log::now_ms(), web_time::Instant::now());
+        let res = self.run_command(id, params);
+        // A plugin's command waiting for its fetches answers `pending` and runs again when they
+        // land: logged then, once. (Another command's `pending`, a download the web app makes, is
+        // logged as it is asked for: nothing runs it again.)
+        let pending =
+            id.starts_with(rustgis_plugins::PREFIX) && res.as_ref().is_ok_and(|v| v.get("pending").and_then(Value::as_bool) == Some(true));
+        // With logging off, only its own switching and clearing go in: nothing else is clipped
+        // or redacted for nothing.
+        let wanted = self.log.on() || matches!(id, "project.logCommands" | "project.clearLog");
+        // Undo and redo go in when they take a step back or bring one back: pressed with nothing
+        // to undo, they change nothing, and each press would be an entry.
+        let stepped = !matches!(id, "edit.undo" | "edit.redo") || res.is_ok();
+        if !pending && wanted && stepped {
+            // Outside `guarded`'s catch: logging is best-effort, so a panic in it leaves the
+            // command's result as it was, without an entry, and says so in the app's log.
+            let logged = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                if project_log::is_logged(self, id, params) {
+                    let params = match step {
+                        Some(label) => serde_json::json!({"step": label}),
+                        None => project_log::kept_params(params),
+                    };
+                    let e = project_log::entry(id, params, &res, at, start.elapsed());
+                    if joins && res.is_ok() { self.log.join_last(e) } else { self.log.push(e) }
+                }
+            }));
+            if logged.is_err() {
+                log::warn!("the session log has no entry for {id}: writing it failed unexpectedly");
+            }
+        }
+        res
+    }
+
+    fn run_command(&mut self, id: &str, params: &Value) -> CmdResult {
         // The merge key asked for ([`Session::merge_undo`]) goes to this command if it runs, and is
         // gone if it's refused first, so it can't merge a later command into the last step.
         let merge = if self.depth == 0 { self.merge.take() } else { None };
@@ -939,6 +1129,12 @@ impl Session {
         }
         self.merge = merge;
         let res = self.guarded(label, mutates, |s| run(s, params));
+        if id == "layer.addDownload"
+            && res.is_ok()
+            && let Some(token) = params.get("geolibreLayer").and_then(|v| v.get("token")).and_then(serde_json::Value::as_str)
+        {
+            self.retire_import_history(token);
+        }
         // What was added, for the Data Sources pane's Recent list.
         if res.is_ok()
             && let Some(src) = sources::added_by(id, params)
@@ -946,6 +1142,16 @@ impl Session {
             self.sources.note(src);
         }
         res
+    }
+
+    /// Retires only this consumed reservation, preserving unrelated pending imports in history.
+    pub(crate) fn retire_import_history(&mut self, token: &str) {
+        if token.is_empty() {
+            return;
+        }
+        for (project, ..) in self.undo.iter_mut().chain(self.redo.iter_mut()) {
+            project.discard_import_reservation(token);
+        }
     }
 
     /// Why a command can't run on `layer`: it edits features, and the layer is read in place from
@@ -970,6 +1176,11 @@ impl Session {
         // The project's generation rolls back with it: a project opened part way (a task's step)
         // and then undone is the one before, still open.
         let opened = self.opened;
+        let files = mutates.then(|| ProjectFiles {
+            identity: self.file_identity,
+            path: self.path.clone(),
+            opened_package: self.opened_package.clone(),
+        });
         self.depth += 1;
         self.restorable += u32::from(mutates);
         // Edit counts roll back with the project when a command fails part way.
@@ -978,6 +1189,7 @@ impl Session {
         self.quiet_failure = false;
         // Requests a failed command left for the front end go with its other changes.
         let requests = self.url_requests.len();
+        let file_outputs = self.file_outputs.len();
         let said = self.notices_given;
         let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(self)))
             .unwrap_or_else(|_| Err(format!("{label} failed unexpectedly; the project was restored")));
@@ -998,6 +1210,8 @@ impl Session {
             // session's own flag says so, not the answer, which a plugin's command could forge.
             (Ok(_), Some(_)) if std::mem::take(&mut self.request_only) => {}
             (Ok(_), Some(mut snap)) => {
+                fresh_source_ids(&snap, &mut self.project);
+                forget_locks_of_removed_features(&snap, &mut self.project);
                 // An edit may change the dates the time slider's window filters on: bound layers
                 // whose features or fields the command changed (features are shared with the
                 // snapshot until written) take the window again.
@@ -1022,11 +1236,19 @@ impl Session {
                 // A step made under the same merge key as the last one is part of it: undo goes
                 // back to before the first of them. Only a command run by itself merges.
                 let key = merge;
+                let files = files.filter(|files| {
+                    files.identity != self.file_identity || files.path != self.path || files.opened_package != self.opened_package
+                });
                 if key.is_none() || key != self.merged || self.undo.is_empty() {
-                    self.undo.push((snap, open_layout, label, self.actor.clone(), state));
+                    self.undo.push((snap, open_layout, label, self.actor.clone(), state, files));
                     if self.undo.len() > UNDO_LIMIT {
                         self.undo.remove(0);
                     }
+                } else if files.is_some()
+                    && let Some(step) = self.undo.last_mut()
+                    && step.5.is_none()
+                {
+                    step.5 = files;
                 }
                 if self.depth == 0 {
                     self.merged = key;
@@ -1035,6 +1257,10 @@ impl Session {
                 self.state = self.new_state();
             }
             (Err(_), Some(snap)) => {
+                // File exports report delivery failures as history, not as a successful map
+                // edit. Keep those failure records while rolling back the command's edits.
+                let history_from = snap.gp_history.len();
+                let failed_history = if self.opened == opened { std::mem::take(&mut self.project.gp_history) } else { Vec::new() };
                 // The project as it was before the command, so the layout open then, whatever
                 // the command opened on the way (a task's steps).
                 self.project = snap;
@@ -1043,6 +1269,11 @@ impl Session {
                 // trust, its unsaved state) comes back with it.
                 if self.opened != opened {
                     self.give_back(opened);
+                }
+                if let Some(files) = files {
+                    self.file_identity = files.identity;
+                    self.path = files.path;
+                    self.opened_package = files.opened_package;
                 }
                 self.opened = opened;
                 self.state = state;
@@ -1056,11 +1287,28 @@ impl Session {
                 let errors: Vec<Notice> = self.notices.drain(start..).filter(|n| n.error).collect();
                 self.notices_given -= (new - errors.len()) as u64;
                 self.notices.extend(errors);
+                let mut recorded_failure = false;
+                for record in failed_history
+                    .into_iter()
+                    .skip(history_from)
+                    .filter(|record| !record.ok && rustgis_analysis::tool(&record.id).is_some_and(cmd::gp::writes_files))
+                {
+                    self.project.gp_history.push(record);
+                    recorded_failure = true;
+                }
+                if recorded_failure {
+                    if self.depth == 0 && self.project.gp_history.len() > 500 {
+                        let excess = self.project.gp_history.len() - 500;
+                        self.project.gp_history.drain(..excess);
+                    }
+                    self.state = self.new_state();
+                }
             }
             _ => {}
         }
         if res.is_err() {
             self.url_requests.truncate(requests);
+            self.file_outputs.truncate(file_outputs);
         }
         let quiet = std::mem::take(&mut self.quiet_failure);
         if let Err(e) = &res
@@ -1119,8 +1367,11 @@ impl Session {
             measurements: take(&mut self.measurements),
             topology_errors: take(&mut self.topology_errors),
             path: self.path.clone(),
+            opened_package: self.opened_package.clone(),
+            file_identity: self.file_identity,
             model_run: self.model_run.take(),
             pending: take(&mut self.pending),
+            file_outputs: take(&mut self.file_outputs),
             #[cfg(feature = "geolibre")]
             started: take(&mut self.started),
             plugin_runs: take(&mut self.plugin_runs),
@@ -1164,8 +1415,11 @@ impl Session {
             measurements,
             topology_errors,
             path,
+            opened_package,
+            file_identity,
             model_run,
             pending,
+            file_outputs,
             #[cfg(feature = "geolibre")]
             started,
             plugin_runs,
@@ -1188,7 +1442,10 @@ impl Session {
         (self.layer_selection, self.layer_selection_of) = (layer_selection, layer_selection_of);
         (self.measurements, self.topology_errors, self.edit_counts) = (measurements, topology_errors, edit_counts);
         (self.path, self.model_run, self.style_view) = (path, model_run, style_view);
+        self.opened_package = opened_package;
+        self.file_identity = file_identity;
         (self.pending, self.plugin_runs, self.plugin_retries) = (pending, plugin_runs, plugin_retries);
+        self.file_outputs = file_outputs;
         (self.downloading, self.downloaded, self.url_requests) = (downloading, downloaded, url_requests);
         self.trend_results = trend_results;
         #[cfg(feature = "geolibre")]
@@ -1293,26 +1550,38 @@ impl Session {
 
     pub(crate) fn undo(&mut self) -> bool {
         self.merged = None;
-        let Some((p, saved, label, actor, state)) = self.undo.pop() else { return false };
+        let Some((p, saved, label, actor, state, mut files)) = self.undo.pop() else { return false };
         let (open, was) = (self.open_layout_name(), self.active_layout);
         let cur = std::mem::replace(&mut self.project, p);
+        if let Some(files) = &mut files {
+            std::mem::swap(&mut self.file_identity, &mut files.identity);
+            std::mem::swap(&mut self.path, &mut files.path);
+            std::mem::swap(&mut self.opened_package, &mut files.opened_package);
+        }
         self.project.keep_table_ids(&cur);
         self.reopen_layout(open, saved);
         self.keep_time_position(&cur);
-        self.redo.push((cur, was, label, actor, std::mem::replace(&mut self.state, state)));
+        self.keep_tile_pick(&cur);
+        self.redo.push((cur, was, label, actor, std::mem::replace(&mut self.state, state), files));
         self.touch_all_geometry();
         true
     }
 
     pub(crate) fn redo(&mut self) -> bool {
         self.merged = None;
-        let Some((p, saved, label, actor, state)) = self.redo.pop() else { return false };
+        let Some((p, saved, label, actor, state, mut files)) = self.redo.pop() else { return false };
         let (open, was) = (self.open_layout_name(), self.active_layout);
         let cur = std::mem::replace(&mut self.project, p);
+        if let Some(files) = &mut files {
+            std::mem::swap(&mut self.file_identity, &mut files.identity);
+            std::mem::swap(&mut self.path, &mut files.path);
+            std::mem::swap(&mut self.opened_package, &mut files.opened_package);
+        }
         self.project.keep_table_ids(&cur);
         self.reopen_layout(open, saved);
         self.keep_time_position(&cur);
-        self.undo.push((cur, was, label, actor, std::mem::replace(&mut self.state, state)));
+        self.keep_tile_pick(&cur);
+        self.undo.push((cur, was, label, actor, std::mem::replace(&mut self.state, state), files));
         self.touch_all_geometry();
         true
     }
@@ -1328,6 +1597,33 @@ impl Session {
         }
         // Zarr layers that follow the slider read the step it is back at.
         cmd::zarr::follow_time(self);
+    }
+
+    /// After undo or redo swaps the project: the tile layer picked in the Layers pane stays the one
+    /// picked (picking isn't an undo step), found again on the map of its name by its address,
+    /// kind, role and name (without the name when only one layer has the rest: a rename undone);
+    /// the restored project's own picks are dropped.
+    fn keep_tile_pick(&mut self, before: &Project) {
+        for t in self.project.maps.iter_mut().flat_map(|m| m.tiles.iter_mut()) {
+            t.selected = false;
+        }
+        for m in &mut self.project.maps {
+            let Some(old) = before.maps.iter().find(|o| o.name == m.name) else { continue };
+            let Some(p) = old.tiles.iter().find(|t| t.selected) else { continue };
+            // Of the same address, kind and role (a basemap and an overlay of one service can
+            // both be there); a name that leaves more than one is too unsure to pick any.
+            let same = |t: &&mut rustgis_map::tiles::TileLayer| t.url == p.url && t.kind == p.kind && t.overlay == p.overlay;
+            let mut like: Vec<_> = m.tiles.iter_mut().filter(same).collect();
+            let named: Vec<usize> = like.iter().enumerate().filter(|(_, t)| t.name == p.name).map(|(i, _)| i).collect();
+            let at = match named[..] {
+                [at] => Some(at),
+                [] if like.len() == 1 => Some(0),
+                _ => None,
+            };
+            if let Some(t) = at.and_then(|at| like.get_mut(at)) {
+                t.selected = true;
+            }
+        }
     }
 
     fn open_layout_name(&self) -> Option<String> {
@@ -1442,6 +1738,15 @@ impl Session {
         map.layers.iter().map(|l| l.id).filter(|id| picked.contains(id) || self.active_layer == Some(*id)).collect()
     }
 
+    /// The tile layer picked in the Layers pane (`map.selectTiles`): the topmost one marked, while
+    /// no map layer is active (making one active ends it).
+    pub fn selected_tile(&self) -> Option<usize> {
+        if self.active_layer.is_some() {
+            return None;
+        }
+        self.map().tiles.iter().position(|t| t.selected)
+    }
+
     /// Makes `ids` the layer selection with `active` the active layer (one of them, else none).
     pub(crate) fn set_layer_selection(&mut self, mut ids: Vec<u32>, active: Option<u32>) {
         let mut seen = std::collections::HashSet::new();
@@ -1485,6 +1790,13 @@ impl Session {
         }
         if self.table_standalone.is_some_and(|id| self.project.table(id).is_none()) {
             self.table_standalone = None;
+        }
+        // A tile layer picked in the Layers pane stops being picked once a map layer is active,
+        // for good, as a layer selection does.
+        if self.active_layer.is_some() && self.project.map().tiles.iter().any(|t| t.selected) {
+            for t in &mut self.project.map_mut().tiles {
+                t.selected = false;
+            }
         }
     }
 

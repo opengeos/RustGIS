@@ -7,7 +7,7 @@
 //! first ([`gate`]).
 
 use rustgis_engine::cmd::plugins::{Reach, reaches, user_only};
-use rustgis_engine::{Session, analysis};
+use rustgis_engine::{Session, analysis, project};
 use serde_json::{Value, json};
 
 use crate::provider::{ToolCall, ToolDef};
@@ -29,7 +29,7 @@ pub fn defs() -> Vec<ToolDef> {
     vec![
         ToolDef {
             name: "list_layers",
-            description: "Everything about the open project in one call: its path and unsaved changes, the view (centre, lon/lat extent, scale, projection), the active layer, its layers in table-of-contents order, top first (id, name, group, type, source, lon/lat extent, feature count, selection, definition query, renderer, labels, fields, visibility), its web tile layers (XYZ, WMS, vector tiles; index 0 on top, changed with map.setTiles), basemap, tables and layouts with their map frames.",
+            description: "Everything about the open project in one call: its path and unsaved changes, the view (centre, lon/lat extent, scale, projection), the active layer, its layers in table-of-contents order, top first (id, name, group, type, source, lon/lat extent, feature count, selection, definition query, renderer, labels, fields, visibility), its web tile layers (XYZ, WMS, vector tiles; index 0 on top, each with the layer it's drawn over, changed with map.setTiles), basemap, tables and layouts with their map frames.",
             schema: json!({
                 "type": "object",
                 "properties": {
@@ -85,7 +85,7 @@ pub fn defs() -> Vec<ToolDef> {
         },
         ToolDef {
             name: "run_tool",
-            description: "Run a geoprocessing tool. Its output is added to the map as a new layer, whose name the result gives (use it as the input of a next step). One undo step.",
+            description: "Run a geoprocessing tool. Its output is added to the map as a new layer, or to the project as a standalone table (for example Summary Statistics), whose name the result gives (use it as the input of a next step; read a table with read_features). One undo step.",
             schema: json!({
                 "type": "object",
                 "properties": {
@@ -97,19 +97,19 @@ pub fn defs() -> Vec<ToolDef> {
         },
         ToolDef {
             name: "read_features",
-            description: "Read a vector layer's attribute rows, optionally only those matching a where clause (SQL-like: pop_max > 1000000 AND continent = 'Asia'). Returns the number matching and up to `limit` rows, each with its row number (_row, for select.rows) and location (_lon, _lat).",
+            description: "Read a vector layer's or a standalone table's attribute rows, optionally only those matching a where clause (SQL-like: pop_max > 1000000 AND continent = 'Asia'). Give layer or table. Returns the number matching and up to `limit` rows, each with its row number (_row; a layer's for select.rows) and a layer's location (_lon, _lat).",
             schema: json!({
                 "type": "object",
                 "properties": {
-                    "layer": {"type": "string", "description": "Layer name or id"},
+                    "layer": {"type": "string", "description": "Layer name or id (or a standalone table's name, when no layer has it)"},
+                    "table": {"type": "string", "description": "A standalone table's name or id (an id as text, \"7\"), such as a tool's output table (read instead of layer)"},
                     "where": {"type": "string", "description": "A where clause; empty for all rows"},
                     "fields": {"type": "array", "items": {"type": "string"}, "description": "Only these fields (default all)"},
                     "order_by": {"type": "string", "description": "Sort by this field"},
                     "descending": {"type": "boolean"},
                     "selected": {"type": "boolean", "description": "Only the selected rows"},
                     "limit": {"type": "integer", "description": "At most this many rows (default 20, at most 200)"}
-                },
-                "required": ["layer"]
+                }
             }),
         },
         ToolDef {
@@ -181,6 +181,9 @@ pub fn gate(s: &Session, call: &ToolCall) -> Option<String> {
     if id.starts_with(rustgis_engine::plugins::PREFIX) {
         return Some("it runs a plugin's command".into());
     }
+    if id == "ui.addUrl" && ["geolibreProject", "geolibreLayer", "geolibreZarr"].iter().any(|key| params.get(key).is_some()) {
+        return Some("it adds the files and web addresses a GeoLibre project names".into());
+    }
     if user_only(&id) && !matches!(id.as_str(), "edit.undo" | "edit.redo") {
         return Some(match id.as_str() {
             "project.new" | "project.open" | "project.openText" | "project.sample" | "project.fromTemplate" => {
@@ -188,6 +191,8 @@ pub fn gate(s: &Session, call: &ToolCall) -> Option<String> {
             }
             // Whether given a path, text or data: the project names the files and web addresses
             // its layers are added from.
+            "layer.addDownload" => "it completes a download that may import a project and its referenced sources".into(),
+            "project.importGeolibre" => "it adds the files and web addresses a GeoLibre project names".into(),
             "project.importQgis" => "it adds the files and web addresses a QGIS project names".into(),
             _ => "it is reserved to you (plugins, scripts, tasks, models and the GeoLibre runner)".into(),
         });
@@ -577,16 +582,67 @@ fn describe_tool(a: &Value) -> Result<Value, String> {
     Ok(json!({"id": t.id, "name": t.name, "toolbox": t.toolbox, "summary": t.summary, "params": params}))
 }
 
-fn read_features(s: &Session, a: &Value) -> Result<Value, String> {
-    let layer = a.get("layer").cloned().ok_or("layer is required")?;
-    let id = s.layer_id(&json!({"layer": layer}))?;
+/// The rows `read_features` reads: a vector layer's or a standalone table's.
+struct RowSource<'a> {
+    /// The reply's key for the name: `layer` or `table`.
+    kind: &'static str,
+    name: &'a str,
+    ds: &'a rustgis_engine::data::Dataset,
+    /// The layer's selected rows; a standalone table has no selection.
+    selection: Option<&'a [usize]>,
+}
+
+/// Resolves `read_features`' `table` (a standalone table's name or id) or `layer` (a layer's name
+/// or id). A `layer` text that names no layer but a standalone table reads the table: a tool's
+/// output table comes back by name, and a model passes that name as `layer` as readily as `table`.
+/// Layers come first, so a layer and a table sharing a name read the layer; that fallback matches
+/// table names only, by [`project::find_table`]'s rule (exact case first), not ids. A `table` given
+/// as null or empty text counts as absent, since models send unused optional arguments that way;
+/// otherwise it is read instead of `layer`.
+fn row_source<'a>(s: &'a Session, a: &Value) -> Result<RowSource<'a>, String> {
+    let table = |i: usize| {
+        s.project
+            .tables
+            .get(i)
+            .map(|t| RowSource { kind: "table", name: &t.name, ds: &t.dataset, selection: None })
+            .ok_or_else(|| "no such table".to_string())
+    };
+    let given = |v: &&Value| !v.is_null() && v.as_str().is_none_or(|t| !t.trim().is_empty());
+    if let Some(t) = a.get("table").filter(given) {
+        return table(s.table_index(&json!({"table": t}))?);
+    }
+    let layer = a.get("layer").cloned().ok_or("layer (or table) is required")?;
+    let id = match s.layer_id(&json!({"layer": layer})) {
+        Ok(id) => id,
+        Err(e) => {
+            // Untrimmed, as `table` and layer names are matched: `stats` and `stats ` can both exist.
+            let Some(n) = layer.as_str() else { return Err(e) };
+            let tables = &s.project.tables;
+            // `find_table` falls back to an id; keep only a name match, so `layer: "7"` can't read table 7.
+            let by_name = project::find_table(tables, n).filter(|&i| tables.get(i).is_some_and(|t| t.name.eq_ignore_ascii_case(n)));
+            return match by_name {
+                Some(i) => table(i),
+                None => Err(format!("no layer or standalone table named '{n}'")),
+            };
+        }
+    };
     let l = s.map().layer(id).ok_or("no such layer")?;
     if l.is_raster() {
         return Err(format!("{} is a raster layer; it has no rows (try the raster.info command)", l.name));
     }
-    let ds = &l.dataset;
+    Ok(RowSource { kind: "layer", name: &l.name, ds: &l.dataset, selection: Some(&l.selection) })
+}
+
+/// `read_features`: the rows of a layer or standalone table ([`row_source`]) that match `where` and
+/// `selected`, ordered by `order_by`, as `{layer | table, total, matched, rows}`. Only the first
+/// `limit` rows are returned, each with its `_row`, the chosen `fields` and a layer feature's
+/// `_lon`/`_lat`.
+fn read_features(s: &Session, a: &Value) -> Result<Value, String> {
+    let src = row_source(s, a)?;
+    let (name, ds) = (src.name, src.ds);
     let mut rows: Vec<usize> = if a.get("selected").and_then(Value::as_bool) == Some(true) {
-        l.selection.iter().copied().filter(|&r| r < ds.features.len()).collect()
+        let sel = src.selection.ok_or_else(|| format!("{name} is a standalone table; it has no selection"))?;
+        sel.iter().copied().filter(|&r| r < ds.features.len()).collect()
     } else {
         (0..ds.features.len()).collect()
     };
@@ -599,11 +655,8 @@ fn read_features(s: &Session, a: &Value) -> Result<Value, String> {
             let mut v = Vec::new();
             for n in names {
                 let n = n.as_str().ok_or("fields must be field names (strings)")?;
-                let i = ds
-                    .fields
-                    .iter()
-                    .position(|f| f.name.eq_ignore_ascii_case(n))
-                    .ok_or_else(|| format!("{} has no field '{n}'", l.name))?;
+                let i =
+                    ds.fields.iter().position(|f| f.name.eq_ignore_ascii_case(n)).ok_or_else(|| format!("{name} has no field '{n}'"))?;
                 v.push(i);
             }
             v
@@ -620,8 +673,7 @@ fn read_features(s: &Session, a: &Value) -> Result<Value, String> {
         } else {
             (by, a.get("descending").and_then(Value::as_bool) == Some(true))
         };
-        let fi =
-            ds.fields.iter().position(|f| f.name.eq_ignore_ascii_case(&by)).ok_or_else(|| format!("{} has no field '{by}'", l.name))?;
+        let fi = ds.fields.iter().position(|f| f.name.eq_ignore_ascii_case(&by)).ok_or_else(|| format!("{name} has no field '{by}'"))?;
         // A total order (a partial one can make `sort_by` panic): numbers, then text, then empty
         // values.
         let key = |r: usize| -> (u8, f64, String) {
@@ -671,7 +723,12 @@ fn read_features(s: &Session, a: &Value) -> Result<Value, String> {
             Some(Value::Object(o))
         })
         .collect();
-    Ok(json!({"layer": l.name, "total": ds.features.len(), "matched": rows.len(), "rows": out}))
+    let mut reply = serde_json::Map::new();
+    reply.insert(src.kind.into(), json!(name));
+    reply.insert("total".into(), json!(ds.features.len()));
+    reply.insert("matched".into(), json!(rows.len()));
+    reply.insert("rows".into(), Value::Array(out));
+    Ok(Value::Object(reply))
 }
 
 /// The map as the model sees it at the start of a request: one line per layer.
@@ -704,8 +761,12 @@ pub fn context(s: &Session) -> String {
         if !l.visible {
             line.push_str(", hidden");
         }
-        if let Some(g) = m.group_of(l.id) {
-            line.push_str(&format!(", in group \"{}\"{}", g.name, if g.visible { "" } else { " (hidden)" }));
+        let groups = m.groups_of(l.id);
+        if !groups.is_empty() {
+            // Outermost first: "Base map › Hydrography".
+            let path: Vec<&str> = groups.iter().rev().map(|g| g.name.as_str()).collect();
+            let hidden = if groups.iter().all(|g| g.visible) { "" } else { " (hidden)" };
+            line.push_str(&format!(", in group \"{}\"{hidden}", path.join(" › ")));
         }
         if !l.selection.is_empty() {
             line.push_str(&format!(", {} selected", l.selection.len()));
@@ -721,13 +782,18 @@ pub fn context(s: &Session) -> String {
         out.push_str(&format!("\n… and {} more (list_layers lists them all).", m.layers.len() - 60));
     }
     if !m.tiles.is_empty() {
-        out.push_str("\nWeb tile layers under them (top first, index for map.setTiles):");
+        out.push_str("\nWeb tile layers (top first, index for map.setTiles), each drawn over the layer it names, or under them all:");
     }
+    let slots = m.tile_slots();
     for (i, t) in m.tiles.iter().enumerate() {
         // The name is clipped, not the line: the index and flags after it are what the model needs.
         let mut line = format!("\n- \"{}\" (index {i}, {}", clip(&t.name, 200), t.kind.code());
         if t.overlay {
             line.push_str(", overlay");
+        }
+        match slots.get(i).copied().flatten().and_then(|id| m.layer(id)) {
+            Some(l) => line.push_str(&format!(", over \"{}\"", clip(&l.name, 200))),
+            None => line.push_str(", under the layers"),
         }
         if !t.visible {
             line.push_str(", hidden");

@@ -1,6 +1,7 @@
-//! Spatial Join's measures and merge rules: the ground distance between two features, a test that
-//! rules out features too far away to matter, the overlap a feature has with a polygon, and the
-//! rules that roll the values of several matches up into one.
+//! Spatial Join's and Near's measures, and Spatial Join's merge rules: the ground distance between
+//! two features and their nearest points, a test that rules out features too far away to matter,
+//! the overlap a feature has with a polygon, and the rules that roll the values of several matches
+//! up into one.
 //!
 //! Distances are on the WGS 84 ellipsoid, as buffers' are. The nearest points of two features are
 //! found in an azimuthal equidistant plane, centred first between the features and then between
@@ -35,12 +36,18 @@ pub fn first_coord(g: &Geometry) -> Option<Coord> {
 /// in one centred between the pair found, where the plane is true near the answer however large
 /// the features are.
 pub fn distance_m(a: &Geometry, b: &Geometry) -> Option<f64> {
+    let (p, q) = nearest_points(a, b)?;
+    let d = wgs84_distance_m(p, q);
+    d.is_finite().then_some(d)
+}
+
+/// The nearest points (lon/lat) of two features that don't intersect, as [`distance_m`] finds
+/// them: a point of `a`, then one of `b`. `None` for a geometry without a finite coordinate.
+pub fn nearest_points(a: &Geometry, b: &Geometry) -> Option<(Coord, Coord)> {
     // The features' first vertices are a pair of their points: the search starts from them.
     let (fa, fb) = (first_coord(a)?, first_coord(b)?);
     let (p, q) = nearest_pair(a, b, &Aeqd::new(geodesic_interpolate(fa, fb, 0.5)), Some((fa, fb)))?;
-    let (p, q) = nearest_pair(a, b, &Aeqd::new(geodesic_interpolate(p, q, 0.5)), Some((p, q))).unwrap_or((p, q));
-    let d = wgs84_distance_m(p, q);
-    d.is_finite().then_some(d)
+    Some(nearest_pair(a, b, &Aeqd::new(geodesic_interpolate(p, q, 0.5)), Some((p, q))).unwrap_or((p, q)))
 }
 
 /// The nearest points of two geometries (lon/lat) as found in `plane`: a point of `a`, one of `b`.
@@ -222,6 +229,17 @@ pub const RULES: &[(&str, Rule)] = &[
     ("join", Rule::Join),
 ];
 
+impl Rule {
+    /// Whether this rule can combine values of the given field type.
+    pub fn fits(self, ty: FieldType) -> bool {
+        match self {
+            Self::Sum | Self::Mean => ty.is_numeric(),
+            Self::Min | Self::Max => ty.is_numeric() || ty == FieldType::Text,
+            _ => true,
+        }
+    }
+}
+
 /// A merge rule for one join field.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Merge {
@@ -321,12 +339,7 @@ pub fn parse_merge(join: &Dataset, v: Option<&Json>) -> Result<Vec<Merge>, Strin
             )
         })?;
         let ty = join.fields.get(field).map(|f| f.ty).unwrap_or(FieldType::Text);
-        let fits = match rule {
-            Rule::Sum | Rule::Mean => ty.is_numeric(),
-            Rule::Min | Rule::Max => ty.is_numeric() || ty == FieldType::Text,
-            _ => true,
-        };
-        if !fits {
+        if !rule.fits(ty) {
             let needs = if matches!(rule, Rule::Min | Rule::Max) { "a numeric or text field" } else { "a numeric field" };
             return Err(format!("merge rule '{rule_name}' needs {needs} ('{name}' is not)"));
         }

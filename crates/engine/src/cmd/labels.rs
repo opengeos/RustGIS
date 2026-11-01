@@ -132,25 +132,55 @@ pub fn commands() -> Vec<C> {
         C::new("labels.placement", "Label Placement", "Labeling › Label Placement", |s, p| {
             let pos = match ps(p, "position") {
                 Some(code) => Some(LabelPlacement::from_code(code).ok_or_else(|| format!("unknown placement '{code}'"))?),
-                None if p.get("offset").is_some() => None,
-                None => return Err("position is required (or an offset)".into()),
+                // A position that isn't a placement name is refused, not dropped for the others (null:
+                // none, as for the other keys).
+                None if p.get("position").is_some_and(|v| !v.is_null()) => return Err("position must be a placement name".into()),
+                None if ["offset", "repeat", "otherPositions"].iter().any(|k| p.get(k).is_some()) => None,
+                None => return Err("position is required (or an offset, a repeat or otherPositions)".into()),
             };
             let offset = match p.get("offset") {
                 None => None,
                 Some(o) => Some(label_offset(o).ok_or("offset must be [right, down] in points")?),
             };
+            // Along a line, a label every so many points (null or 0: the one at its middle).
+            let repeat = match p.get("repeat") {
+                None => None,
+                Some(Value::Null) => Some(None),
+                Some(v) => match number(v) {
+                    Some(0.0) => Some(None),
+                    Some(r) if r > 0.0 => Some(rustgis_map::symbology::label_repeat(r)),
+                    _ => return Err("repeat must be a number of points, or 0 or null for none".into()),
+                },
+            };
+            // A point's label tries the other places round it when its own is taken (#1011).
+            let others = match p.get("otherPositions") {
+                None => None,
+                Some(Value::Bool(on)) => Some(*on),
+                Some(_) => return Err("otherPositions must be true or false".into()),
+            };
+            // Only a point's label goes round it: on elsewhere it would do nothing (off is taken
+            // anywhere). `layer_id` refuses a missing layer.
+            if others == Some(true) && s.map().layer(s.layer_id(p)?).is_some_and(|l| l.geometry_type() != GeometryType::Point) {
+                return Err("otherPositions is for point layers".into());
+            }
             with_class(s, p, |c| {
                 if let Some(pos) = pos {
                     c.placement = pos;
                 }
+                if let Some(on) = others {
+                    c.other_positions = on;
+                }
                 if let Some(o) = offset {
                     c.offset = o;
+                }
+                if let Some(r) = repeat {
+                    c.repeat = r;
                 }
             })
         })
         .when(need_feature_layer)
         .params(
-            r#"{"layer"?, "class"?: name (none: the Default class, by whatever name it has), "position"?: "auto"|"center"|"above"|"below"|"left"|"right"|"aboveRight"|"aboveLeft"|"belowRight"|"belowLeft"|"parallel" (along a line, straight)|"curved" (along a line, following its bends) (required without offset), "offset"?: [right, down] points (-200 to 200 each) the label moves from where its position puts it ([0, 0]: none; a label along a line isn't moved)}"#,
+            r#"{"layer"?, "class"?: name (none: the Default class, by whatever name it has), "position"?: "auto"|"center"|"above"|"below"|"left"|"right"|"aboveRight"|"aboveLeft"|"belowRight"|"belowLeft"|"parallel" (along a line, straight)|"curved" (along a line, following its bends) (required without offset, repeat or otherPositions), "offset"?: [right, down] points (-200 to 200 each) the label moves from where its position puts it ([0, 0]: none; a label along a line isn't moved), "repeat"?: points (10 to 10000) between a line's labels, spaced out from the one at its middle, at most 32 a line (0 or null: the one at its middle; parallel and curved only), "otherPositions"?: bool (a point's label whose place is taken tries the others round the point, corners first; point layers only: true is refused on lines and polygons)}"#,
         ),
         // Label classes: each labels every feature its clause takes, as in ArcGIS Pro; the classes
         // listed first, Default last, are placed first (`Labeling`, #732).
@@ -254,7 +284,7 @@ pub(crate) fn with_labels(s: &mut Session, p: &Value, f: impl FnOnce(&mut Labeli
     let l = s.map_mut().layer_mut(id).ok_or("no such layer")?;
     let mut labels = l.labels.clone();
     f(&mut labels)?;
-    let relock = !same_class_list(&l.labels, &labels);
+    let relock = !lock_holds(&l.labels, &labels);
     l.labels = labels;
     if relock {
         s.map_mut().label_lock = None;
@@ -267,6 +297,21 @@ pub(crate) fn with_labels(s: &mut Session, p: &Value, f: impl FnOnce(&mut Labeli
 /// where they are placed next (`Map::label_lock` emptied, #732).
 pub(crate) fn same_class_list(a: &Labeling, b: &Labeling) -> bool {
     a.classes.iter().map(|c| &c.name).eq(b.classes.iter().map(|c| &c.name))
+}
+
+/// Whether a lock taken with the labels `a` still names those of `b`: the same classes, listed
+/// alike and putting their point labels in the same places.
+pub(crate) fn lock_holds(a: &Labeling, b: &Labeling) -> bool {
+    same_class_list(a, b) && same_places(a, b)
+}
+
+/// Whether the classes of `a` and `b` (listed alike) put their point labels in the same places.
+/// A lock names the place round its point a label took by its number among its class's (#1011),
+/// so another position, or trying the others turned on or off, locks the labels again; with no
+/// class trying them a new position keeps the lock, as before.
+fn same_places(a: &Labeling, b: &Labeling) -> bool {
+    let classes = |l: &Labeling| l.classes.iter().chain([&l.default]).map(|c| (c.placement, c.other_positions)).collect::<Vec<_>>();
+    classes(a).into_iter().zip(classes(b)).all(|(x, y)| x == y || !(x.1 || y.1))
 }
 
 /// The place of the class named `name` among those checked before Default (of the
@@ -433,7 +478,9 @@ fn convert(s: &mut Session, p: &Value) -> CmdResult {
     labels.classes.truncate(MAX_LABEL_CLASSES);
     for c in std::iter::once(&mut labels.default).chain(labels.classes.iter_mut()) {
         c.field = "TEXT".into();
+        // On its point, never round it: an annotation stays where it is (#1011).
         c.placement = LabelPlacement::Center;
+        c.other_positions = false;
         // Each class picks the points it labelled, Default too once there are others (#732):
         // with no clause it would label theirs as well.
         c.where_ = classes.then(|| format!("\"CLASS\" = '{}'", c.name.replace('\'', "''")));

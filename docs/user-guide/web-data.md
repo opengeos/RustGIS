@@ -64,7 +64,7 @@ and `stac.addAsset` with an item returned by `stac.search` (`"item"`) or an item
 (`"url"`) and `"asset"`. API searches return one page and a `"next"` address when there is another:
 
 ```sh
-rustgis-cli run --cmd 'stac.search={"collections":"sentinel-2-l2a","bbox":[7.4,46.9,7.5,47],"datetime":"2024-07-01/2024-07-31","maxCloud":20}' --cmd 'stac.addAsset={"url":"https://earth-search.aws.element84.com/v1/collections/sentinel-2-l2a/items/S2B_32TLS_20240727_0_L2A","asset":"scl"}'
+rustgis-cli run --cmd 'stac.search={"collections":"sentinel-2-c1-l2a","bbox":[7.4,46.9,7.5,47],"datetime":"2024-07-01/2024-07-31","maxCloud":20}' --cmd 'stac.addAsset={"url":"https://earth-search.aws.element84.com/v1/collections/sentinel-2-c1-l2a/items/S2B_T32TLS_20240727T103439_L2A","asset":"scl"}'
 ```
 
 Assets can use HTTP(S) or `s3://` addresses. S3 assets use the saved connection serving their
@@ -118,7 +118,22 @@ rustgis-cli run --cmd 'stac.addCube={"url":"https://data.inpe.br/bdc/stac/v1","c
 A data cube needs more than an API's address: the right collection and band, and often a range
 to show it with and a cell size to read it at. The catalog of data cubes lists cubes ready to
 open, each with those filled in, so none of them has to be looked up in a provider's catalog.
-There is no window for it yet; it is used from commands, scripts and the assistant.
+
+**Home › Add › Web Data › Data Cubes** lists them, filtered by theme, by words, and (ticked to
+begin with) to those with data where the map is. Each shows its provider, period, step,
+resolution, source and licence, with a link to the provider's page, and two buttons:
+
+- **Add to Time Slider** (desktop) adds it as `cube.open` does (below): a STAC cube where the map
+  is, a Zarr cube whole. It is added over the period typed in **From** and **To**, or its last
+  full calendar year when both are empty.
+- **Trend Analysis…** (desktop) opens Trend Analysis on it, with the period typed: a STAC cube is
+  read where the map is, a Zarr cube whole, and **Use layers instead** goes back to the map's
+  layers. A trend over a cube needs its period.
+
+The list is kept up to date between releases with the app's other assets, so a cube can be added,
+or an address fixed, without a new version: the app reads it the first time the pane opens, and
+uses the copy built into it until then, offline, or when the list doesn't read whole. Commands,
+scripts and the assistant use the same list.
 
 - **Finding a cube** (`cube.catalog`): by `"theme"` (vegetation, land cover, water, climate, ocean,
   atmosphere or elevation), by area (`"bbox"`, or `"view"`: the entries with data there; with
@@ -155,7 +170,8 @@ Only cubes RustGIS reads today are listed. Collections whose files sit behind si
 a firewall that may ask a program making many requests in a row for a browser check for a while;
 its searches then fail until it lets them through again.
 
-An entry, as the list (`crates/tiles/src/cubes.json`) holds it; a cube is proposed by adding one:
+An entry, as the list holds it (built in from `crates/tiles/src/cubes.json`, and kept with the app's
+assets); a cube is proposed by adding one:
 
 ```json
 {"id": "bdc-mod13q1-ndvi", "name": "MODIS NDVI, 16-day composites (MOD13Q1 v6.1)",
@@ -357,22 +373,9 @@ NASA's data comes two ways: **NASA Earthdata…** adds imagery that NASA serves 
 [Global Imagery Browse Services](https://www.earthdata.nasa.gov/engage/open-data-services-software/earthdata-developer-portal/gibs-api)
 (GIBS) in Web Mercator: more than a thousand layers of satellite imagery and science data (MODIS,
 VIIRS, Landsat, sea surface temperature, aerosols, fires…), grouped by mission or instrument (the
-first part of their names) and searched by words. Most layers change day by day: **Date**
-(YYYY-MM-DD) picks the day they are added at, and empty adds the service's default (its latest).
-The same layer can be added at several dates, each a layer named with its date. A WMTS layer with a time dimension works the same way in any service,
-and with commands `service.add` takes `"time"`:
-
-```sh
-rustgis-cli run --cmd 'service.add={"url":"https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/1.0.0/WMTSCapabilities.xml","layer":"MODIS_Terra_CorrectedReflectance_TrueColor","time":"2024-06-01"}' --cmd 'share.exportMap={"path":"gibs.png"}'
-```
-
-A service may name its time instead of dating it: swisstopo's layers on
-[geo.admin.ch](https://docs.geo.admin.ch/visualize-data/wmts.html) are drawn at `current`, their
-default, so they need no `"time"`:
-
-```sh
-rustgis-cli run --cmd 'service.add={"url":"https://wmts.geo.admin.ch/EPSG/3857/1.0.0/WMTSCapabilities.xml","layer":"ch.swisstopo.pixelkarte-farbe"}' --cmd 'share.exportMap={"path":"swisstopo.png"}'
-```
+first part of their names) and searched by words. Most of them change day by day: they go on the
+time slider, as every layer with a time dimension does (see
+[Layers that change with time](#layers-that-change-with-time)).
 
 ### NASA Earthaccess
 
@@ -393,13 +396,22 @@ as GeoLibre's Earthaccess panel does, through NASA's Common Metadata Repository 
 
 Searching needs no account, but NASA's data servers ask for an
 [Earthdata Login](https://urs.earthdata.nasa.gov) token to read most files. Paste one in the pane's
-**Earthdata Login** section (or run `earthdata.login`): it is kept until RustGIS closes, never in
-the project, and sent only over HTTPS to NASA's Earthdata data servers (`*.earthdatacloud.nasa.gov`
-and `*.earthdata.nasa.gov`), never to the login server itself; a redirect away from them (to the
+**Earthdata Login** section (or run `earthdata.login`). It is never put in the project, and is sent
+only over HTTPS to NASA's Earthdata data servers (`*.earthdatacloud.nasa.gov` and
+`*.earthdata.nasa.gov`), never to the login server itself; a redirect away from them (to the
 presigned address the file is served from) goes without it. A file the token doesn't open says
 so (an expired token, or a dataset whose EULA you haven't accepted on Earthdata Login).
-`earthdata.status` reports whether a token is kept and its expiry when present;
-`earthdata.logout` forgets it.
+
+The token is kept until RustGIS closes, unless you tick **Remember on this computer** (off by
+default; `earthdata.login` with `"remember": true`). The desktop app then keeps it in the system's
+credential store (macOS Keychain, Windows Credential Manager, or the Secret Service on Linux) and
+reads it back the next time it is needed: when the pane opens or a file is read from a data
+server. A token saved without the box ticked deletes the one remembered before. An expired token
+is forgotten, here and in the credential store, and the pane asks for a new one.
+`earthdata.status` reports whether a token is kept, its expiry, whether it is remembered and
+whether an expired one was forgotten; `earthdata.logout` (**Remove token**) forgets it and deletes
+the remembered one. The command line (`--use-saved-secrets`) and Python (`use_saved_secrets=True`)
+use the remembered token too; without them, and in the web app, a token lasts for the session.
 
 In the web app, searching and footprints work, but NASA's data servers don't let web pages read
 their files (they send no CORS headers), so GeoTIFFs are added in the desktop app; **Download**
@@ -409,6 +421,7 @@ still opens a file in a new tab, where Earthdata Login asks you to sign in.
 rustgis-cli run --cmd 'earthdata.collections={"keyword":"GEDI biomass","cloudHosted":true}'
 rustgis-cli run --sample --cmd 'earthdata.granules={"shortName":"HLSL30","bbox":[-90,42.5,-89,43.5],"start":"2024-06-01","end":"2024-06-30"}' --cmd 'share.exportMap={"path":"hls.png"}'
 rustgis-cli run --sample --cmd 'earthdata.login={"token":"…"}' --cmd 'layer.addUrl={"url":"https://data.lpdaac.earthdatacloud.nasa.gov/lp-prod-protected/HLSL30.020/…/….B04.tif"}'
+rustgis-cli run --sample --use-saved-secrets --cmd 'layer.addUrl={"url":"https://data.lpdaac.earthdatacloud.nasa.gov/lp-prod-protected/HLSL30.020/…/….B04.tif"}'
 ```
 
 ## Open-data portals
@@ -480,6 +493,46 @@ those requests pass through it.
 rustgis-cli run --cmd 'portal.search={"portal":"usgs-dem","bbox":[-122.25,46.15,-122.15,46.25]}'
 rustgis-cli run --cmd 'portal.files={"dataset":"giswqs/geospatial"}'
 rustgis-cli run --sample --cmd 'portal.add={"url":"https://data.geopf.fr/telechargement/download/LiDARHD-NUALID/NUALHD_1-0__LAZ_LAMB93_KE_2025-06-06/LHD_FXX_0652_6864_PTS_LAMB93_IGN69.copc.laz","name":"LiDAR HD 0652-6864"}'
+```
+
+### Layers that change with time
+
+A WMS or WMTS layer with a time dimension, from any service, goes on the
+[time slider](workspace.md) by default: **Follow the time slider**, which the dialogs tick, and
+adding it from the Connections tree. Its requests then take the time of the slider's step, written
+as the layer writes its times (`1995`, `19951231`, `2024-06-01`, `2026-08-31T23:59:59Z`), its
+GetFeatureInfo requests too, so identify answers for that time; `time.export` animates it.
+
+- **A slider that is off** is turned on with the layer's times: every step of a period it lists
+  (`2000-02-24/2026-10-28/P1D`, a day at a time; when it lists only a period longer than the
+  slider's 20,000 steps, every second, fourth… step), or the times it lists, at the layer's default
+  (or its latest, when its default is no date). A slider already on keeps its steps; a service
+  that lists other times may draw nothing at some of them, and a notice says so.
+- **At one time instead**: untick **Follow the time slider**. **Date** then takes one of the times
+  the layer lists (hover over its "map by date" to see them, and its default), and empty adds it
+  at the service's default. The same layer can be added at several times, each a layer named
+  with its time.
+- **A WMS layer** (WMS 1.3.0 Annex C, 1.1.1) asks with `TIME`. Its default may be an interval;
+  where the service lets a layer take several times at once (`multipleValues`), a list
+  (`1990,2000`) or an interval (`1990/2020`, `1990/2020/P10Y`) can be asked for too, otherwise one
+  time.
+- **One time only**: a layer whose dimension lists a single time, a name (OGC's `current`, as most
+  of swisstopo's WMTS layers list) or one date (`1946`), has no other to show: it is listed as a
+  plain "map", without the dialogs' **Follow the time slider**, and added at its service's default
+  (usually that time).
+- **A time named, not dated**: a layer whose times are only names (`current`, `default`), whose
+  times are one period finer than the slider's hour (`…/PT30M`), or whose list of times would take
+  more than the slider's 20,000 steps, isn't stepped through: it is added at its default.
+
+With commands, `service.add` follows the slider when `"time"` is left out (or is `"slider"`, or
+`true`); a time of the layer's draws it at that time, and `"default"` (or `false`) at the service's
+default. For example, a daily layer at one day, a yearly map on the slider exported as an
+animation, and a layer whose only time is `current`:
+
+```sh
+rustgis-cli run --cmd 'service.add={"url":"https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/1.0.0/WMTSCapabilities.xml","layer":"MODIS_Terra_CorrectedReflectance_TrueColor","time":"2024-06-01"}' --cmd 'share.exportMap={"path":"gibs.png"}'
+rustgis-cli run --cmd 'service.add={"url":"https://wms.geo.admin.ch/?SERVICE=WMS&REQUEST=GetCapabilities&VERSION=1.3.0","layer":"ch.swisstopo.pixelkarte-farbe-pk25.noscale"}' --cmd 'map.goToXY={"lon":7.4474,"lat":46.948,"scale":25000}' --cmd 'time.set={"interval":15}' --cmd 'time.export={"path":"bern.gif"}'
+rustgis-cli run --cmd 'service.add={"url":"https://wmts.geo.admin.ch/EPSG/3857/1.0.0/WMTSCapabilities.xml","layer":"ch.swisstopo.pixelkarte-farbe"}' --cmd 'share.exportMap={"path":"map.png"}'
 ```
 
 ## United States

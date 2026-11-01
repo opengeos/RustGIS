@@ -17,6 +17,7 @@ const LAYERS: &[(&str, u8)] = &[
     ("map", 2),
     ("analysis", 2),
     ("tiles", 2),
+    ("keychain", 2),
     ("render", 3),
     ("geolibre", 3),
     ("plugins", 3),
@@ -193,6 +194,17 @@ mod tests {
         assert!(sw.contains("const VERSION = \"00ff\";"));
         assert!(sw.contains("  \"index.html\",\n  \"rustgis-web-1a2b.js\",\n  \"odd\\\"name\\\\.wasm\",\n]"));
         assert!(web_sw("no placeholders", &files, "00ff").is_err());
+    }
+
+    // A page opened as a local file cannot start the app: it says so instead of spinning.
+    #[test]
+    fn web_page_explains_opening_it_as_a_local_file() {
+        let page = include_str!("../../apps/rustgis-web/index.html");
+        assert!(page.contains("<div id=\"rustgis_local\" role=\"alert\" hidden>"));
+        assert!(page.contains("python3 -m http.server 8080"));
+        let check = page.find("location.protocol === \"file:\"").unwrap();
+        assert!(page.find("id=\"rustgis_local\" role").unwrap() < check, "the script needs the notice in the page");
+        assert!(page[check..].contains("document.getElementById(\"rustgis_local\").hidden = false"));
     }
 
     #[test]

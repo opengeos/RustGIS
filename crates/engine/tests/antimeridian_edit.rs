@@ -7,6 +7,7 @@ use rustgis_engine::{
 };
 use serde_json::json;
 
+/// A selected, editable polygon with unwrapped antimeridian coordinates.
 fn across_180() -> (Session, u32) {
     let c = Coord::new;
     let ring = vec![c(179.6, 10.0), c(180.2, 10.0), c(180.2, 10.3), c(179.6, 10.3), c(179.6, 10.0)];
@@ -26,7 +27,9 @@ fn small_edits_keep_a_polygon_across_180_narrow() {
         [("edit.move", json!({"dx": 1000.0, "dy": 0.0})), ("edit.rotate", json!({"angle": 10.0})), ("edit.scale", json!({"factor": 1.01}))]
     {
         let (mut s, id) = across_180();
+        let before = s.map().layer(id).unwrap().dataset.features[0].geometry.clone();
         s.run(cmd, &params).unwrap();
+        assert_ne!(s.map().layer(id).unwrap().dataset.features[0].geometry, before, "{cmd} must change coordinates");
         let Some(Geometry::Polygon(p)) = &s.map().layer(id).unwrap().dataset.features[0].geometry else { panic!("{cmd}") };
         let (lo, hi) = p[0][0].iter().fold((f64::MAX, f64::MIN), |(a, b), c| (a.min(c.x), b.max(c.x)));
         assert!(hi - lo < 1.0, "{cmd}: the polygon is now {:.1}° wide", hi - lo);

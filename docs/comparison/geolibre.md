@@ -36,8 +36,8 @@ classic desktop GIS jobs of data design, reports and print layouts. RustGIS is y
 changing quickly: expect frequent releases, new capabilities and some significant changes.
 
 The two complement each other. Both can run the 1,000+ GeoLibre/Whitebox geoprocessing suite,
-both read and write common open formats, and the plan is for RustGIS to open `.geolibre`
-projects first and for GeoLibre to open `.rgis` projects later (see
+both read and write common open formats, RustGIS imports `.geolibre` projects as new maps,
+and GeoLibre opening `.rgis` projects is planned for later (see
 [Using them together](#using-them-together)). Choose GeoLibre for web-first work, phones and
 notebooks, choose RustGIS for a scriptable desktop GIS, or use both.
 
@@ -66,7 +66,8 @@ differences in the short answer, in platform, technology and focus, are the ones
   clustering, diagrams, blend modes, layer groups, a data-defined label engine, and style
   interchange with SLD, QGIS QML and Mapbox GL JSON. RustGIS covers the common renderers and
   SQL-filtered label classes, stacked line symbols, symbol levels, blend modes and layer groups,
-  but not rule-based renderers or general data-defined styling.
+  symbol size, colours, outline width and angle by expression, but not rule-based renderers or
+  data-defined labels.
 - **3D.** GeoLibre has a Cesium globe with terrain, 3D Tiles, I3S, Gaussian splats, CZML and
   Google Photorealistic 3D Tiles. RustGIS has a globe, terrain-draped tilted views, 2.5D
   extrusion and LiDAR point layers.
@@ -161,9 +162,9 @@ The two read and write the same open formats, so data moves between them without
 GeoPackage, GeoParquet, FlatGeobuf, Shapefile, GeoJSON, KML/KMZ, GPX, CSV and cloud-optimised
 GeoTIFF (GeoPackage export is desktop only in RustGIS).
 
-Neither opens the other's project file yet; for now, move the data across and restyle it. The
-plan is for RustGIS to open `.geolibre` projects first
-([#962](https://github.com/opengeos/RustGIS/issues/962)). GeoLibre opening `.rgis` projects
+RustGIS imports `.geolibre` projects as new maps, keeping supported data, styles and views
+and reporting differences. See [GeoLibre projects](../user-guide/workspace.md#geolibre-projects)
+for supported content and limits. GeoLibre opening `.rgis` projects
 comes later, once RustGIS's project format and the data types it supports settle: RustGIS is
 still changing quickly, and GeoLibre would otherwise be reading a moving target.
 
@@ -202,9 +203,11 @@ No. GeoLibre plugins are TypeScript modules for its web interface. RustGIS has i
 WebAssembly and native process-plugin interfaces, including Python process plugins.
 
 **Can I open a GeoLibre project in RustGIS?**
-Not yet; it is planned
-([#962](https://github.com/opengeos/RustGIS/issues/962)). Until then, export
-the layers (GeoPackage or GeoParquet keep the most) and add them to RustGIS.
+Yes. **Open** or **Project › New › GeoLibre Project…** imports a `.geolibre` (or
+`.geolibre.json`) as a new map, preserving supported data, styles and the saved view.
+The command `project.importGeolibre` also accepts a URL, text or base64 JSON. It reports
+unsupported sources and appearance differences per layer; see
+[GeoLibre projects](../user-guide/workspace.md#geolibre-projects) for the limits.
 
 ## See also
 

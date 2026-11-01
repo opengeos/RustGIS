@@ -4,7 +4,7 @@
 use std::collections::{BinaryHeap, HashMap};
 
 use rustgis_data::{Dataset, Geometry};
-use rustgis_geom::{Coord, haversine_m, wgs84_distance_m};
+use rustgis_geom::{Coord, EARTH_RADIUS_M, WGS84_MIN_RADIUS_M, haversine_m, wgs84_distance_m};
 
 /// A shortest route: its path, length in metres, cost, and the line rows it uses.
 #[derive(Clone, Debug, PartialEq)]
@@ -13,6 +13,8 @@ pub struct Route {
     pub length_m: f64,
     pub cost: f64,
     pub rows: Vec<usize>,
+    /// Segments omitted because an endpoint has non-finite coordinates or an invalid latitude.
+    pub skipped_segments: usize,
 }
 
 #[derive(PartialEq)]
@@ -46,6 +48,21 @@ pub fn shortest_route(
     cost_field: Option<usize>,
     snap_m: f64,
 ) -> Result<Route, String> {
+    if !snap_m.is_finite() {
+        return Err("the snap distance must be finite".into());
+    }
+    if [from, to].iter().any(|c| !c.is_finite() || c.y.abs() > 90.0) {
+        return Err("a route end has invalid coordinates".into());
+    }
+    // Preserve clean-network errors; failed partial routes must still disclose omissions.
+    let route_error = |reason: String, skipped_segments: usize| {
+        if skipped_segments == 0 {
+            reason
+        } else {
+            format!("{reason}; {skipped_segments} segments with invalid coordinates were omitted from '{}'", ds.name)
+        }
+    };
+    let mut skipped_segments = 0;
     let mut ids: HashMap<(i64, i64), usize> = HashMap::new();
     let mut nodes: Vec<Coord> = Vec::new();
     let mut adj: Vec<Vec<(usize, f64, f64, usize)>> = Vec::new(); // (to, cost, length, row)
@@ -69,6 +86,12 @@ pub fn shortest_route(
         for part in parts {
             for w in part.windows(2) {
                 let (Some(a), Some(b)) = (w.first(), w.get(1)) else { continue };
+                // Non-finite coordinates cast to ordinary integer keys (NaN becomes zero).
+                // Keep unroutable segments out before they can corrupt a valid shared node.
+                if !a.is_finite() || !b.is_finite() || a.y.abs() > 90.0 || b.y.abs() > 90.0 {
+                    skipped_segments += 1;
+                    continue;
+                }
                 let (ia, ib) = (node(*a, &mut ids, &mut nodes, &mut adj), node(*b, &mut ids, &mut nodes, &mut adj));
                 let len = wgs84_distance_m(*a, *b);
                 if let Some(v) = adj.get_mut(ia) {
@@ -80,10 +103,13 @@ pub fn shortest_route(
                 segs.push((ia, ib, weight, *r));
                 // Checked per segment, so one huge feature can't grow the network unbounded.
                 if segs.len() > 10_000_000 || nodes.len() > 5_000_000 {
-                    return Err("the network is too large".into());
+                    return Err(route_error("the network is too large".into(), skipped_segments));
                 }
             }
         }
+    }
+    if segs.is_empty() && skipped_segments > 0 {
+        return Err(route_error("no usable network remains".into(), skipped_segments));
     }
     // The closest point on any segment: (segment, fraction along it, the point, metres away).
     let nearest = |p: Coord, nodes: &[Coord]| -> Option<(usize, f64, Coord, f64)> {
@@ -96,28 +122,33 @@ pub fn shortest_route(
                 let len2 = dx * dx + dy * dy;
                 let t = if len2 > 0.0 { (((p.x - a.x) * k * dx + (p.y - a.y) * dy) / len2).clamp(0.0, 1.0) } else { 0.0 };
                 let q = Coord::new(a.x + t * (b.x - a.x), a.y + t * (b.y - a.y));
-                let d = haversine_m(q, p);
-                // A NaN distance (a broken segment) ranks last: `min_by` treats NaN as equal to
-                // everything, so it could keep one as the minimum and hide the valid segments.
-                Some((i, t, q, if d.is_nan() { f64::INFINITY } else { d }))
+                Some((i, t, q, haversine_m(q, p)))
             })
-            .min_by(|a, b| a.3.partial_cmp(&b.3).unwrap_or(std::cmp::Ordering::Equal))
-            // The scan ranks segments by the cheap great-circle distance, which differs from the
-            // ellipsoid's by up to about 0.7 %; only the winner is solved exactly, so the segment
-            // chosen is approximate near the snap tolerance.
-            .map(|(i, t, q, _)| (i, t, q, wgs84_distance_m(q, p)))
+            .fold(None, |best: Option<(usize, f64, Coord, f64)>, (i, t, q, sphere)| {
+                // The minimum WGS 84 radius gives a lower bound, so a farther spherical
+                // candidate cannot be discarded merely because the two metrics rank it differently.
+                let lower = if (-90.0..=90.0).contains(&p.y) && (-90.0..=90.0).contains(&q.y) {
+                    sphere * WGS84_MIN_RADIUS_M / EARTH_RADIUS_M
+                } else {
+                    0.0 // The inverse solver clamps latitudes; the spherical bound would not apply.
+                };
+                if best.as_ref().is_some_and(|b| lower > b.3) {
+                    return best;
+                }
+                let distance = wgs84_distance_m(q, p);
+                if distance.is_finite() && best.as_ref().is_none_or(|b| distance < b.3) { Some((i, t, q, distance)) } else { best }
+            })
     };
     // Each end becomes a node on its segment, joined to the segment's two ends.
     let attach = |p: Coord, nodes: &mut Vec<Coord>, adj: &mut Vec<Vec<(usize, f64, f64, usize)>>| -> Result<(usize, usize, f64), String> {
-        if !p.is_finite() {
-            return Err("a route end has no place".into());
+        let (si, t, q, d) = nearest(p, nodes).ok_or_else(|| route_error("the layer has no lines".into(), skipped_segments))?;
+        if d > snap_m {
+            return Err(route_error(
+                format!("a route end is more than {} from the network", rustgis_geom::format_distance(snap_m)),
+                skipped_segments,
+            ));
         }
-        let (si, t, q, d) = nearest(p, nodes).ok_or("the layer has no lines")?;
-        // A NaN distance (a broken end) fails the check too, rather than snapping to a random segment.
-        if d.is_nan() || d > snap_m {
-            return Err(format!("a route end is more than {} from the network", rustgis_geom::format_distance(snap_m)));
-        }
-        let &(a, b, weight, row) = segs.get(si).ok_or("the layer has no lines")?;
+        let &(a, b, weight, row) = segs.get(si).ok_or_else(|| route_error("the layer has no lines".into(), skipped_segments))?;
         if t <= 0.0 {
             return Ok((a, si, t));
         }
@@ -143,7 +174,7 @@ pub fn shortest_route(
     // Both ends on one segment: they're joined directly along it.
     if s_seg == t_seg && s != t && (0.0..=1.0).contains(&s_t) && (0.0..=1.0).contains(&t_t) {
         let (Some(&(_, _, weight, row)), Some(a), Some(b)) = (segs.get(s_seg), nodes.get(s).copied(), nodes.get(t).copied()) else {
-            return Err("the layer has no lines".into());
+            return Err(route_error("the layer has no lines".into(), skipped_segments));
         };
         let len = wgs84_distance_m(a, b);
         if let Some(v) = adj.get_mut(s) {
@@ -183,7 +214,7 @@ pub fn shortest_route(
     }
     let cost = dist.get(t).copied().unwrap_or(f64::INFINITY);
     if !cost.is_finite() {
-        return Err("the two points aren't connected by the network".into());
+        return Err(route_error("the two points aren't connected by the network".into(), skipped_segments));
     }
     let mut path = Vec::new();
     let mut length = 0.0;
@@ -201,7 +232,7 @@ pub fn shortest_route(
     path.reverse();
     used.reverse();
     used.dedup();
-    Ok(Route { path, length_m: length, cost, rows: used })
+    Ok(Route { path, length_m: length, cost, rows: used, skipped_segments })
 }
 
 /// Most random points made in one call, and point-in-polygon tries spent making them.
@@ -459,12 +490,16 @@ mod tests {
         assert!((r.length_m - 3339.6).abs() < 1.0, "{}", r.length_m);
         assert!((r.path[0].x - 0.03).abs() < 1e-9 && (r.path.last().unwrap().x - 0.06).abs() < 1e-9);
         assert!(shortest_route(&ds, &[0], Coord::new(0.03, 0.01), Coord::new(0.06, 0.0), None, 50.0).is_err(), "1 km away");
-        assert!(shortest_route(&ds, &[0], Coord::new(f64::NAN, 0.0), Coord::new(0.06, 0.0), None, 50.0).is_err(), "a NaN end");
+        let error = shortest_route(&ds, &[0], Coord::new(f64::NAN, 0.0), Coord::new(0.06, 0.0), None, 50.0).unwrap_err();
+        assert!(error.contains("route end"), "{error}");
+        let error = shortest_route(&ds, &[0], Coord::new(0.0, 95.0), Coord::new(0.06, 0.0), None, 50.0).unwrap_err();
+        assert!(error.contains("route end"), "{error}");
+        assert!(shortest_route(&ds, &[0], Coord::new(0.0, 1.0), Coord::new(0.06, 1.0), None, f64::NAN).is_err());
     }
 
     #[test]
     fn a_broken_segment_listed_first_does_not_hide_a_valid_one() {
-        // The NaN vertex makes the first segment's distance NaN, which the snap must not keep.
+        // The invalid segment is excluded before graph construction and cannot hide the road.
         let mut ds = Dataset::new("roads", GeometryType::Polyline, vec![]);
         ds.push(Some(Geometry::Line(vec![vec![Coord::new(0.5, 0.5), Coord::new(f64::NAN, 0.5)]])), vec![]);
         ds.push(Some(Geometry::Line(vec![vec![Coord::new(0.0, 0.0), Coord::new(0.09, 0.0)]])), vec![]);
@@ -473,11 +508,28 @@ mod tests {
     }
 
     #[test]
-    fn a_route_end_with_no_place_is_named_as_such() {
+    fn nonfinite_vertices_do_not_alias_valid_network_nodes() {
         let mut ds = Dataset::new("roads", GeometryType::Polyline, vec![]);
-        ds.push(Some(Geometry::Line(vec![vec![Coord::new(0.0, 0.0), Coord::new(0.1, 0.0)]])), vec![]);
-        let err = shortest_route(&ds, &[0], Coord::new(f64::NAN, 0.0), Coord::new(0.05, 0.0), None, 100.0).unwrap_err();
-        assert_eq!(err, "a route end has no place");
+        ds.push(Some(Geometry::Line(vec![vec![Coord::new(f64::NAN, 0.5), Coord::new(0.5, 0.5)]])), vec![]);
+        ds.push(Some(Geometry::Line(vec![vec![Coord::new(0.0, 0.5), Coord::new(0.09, 0.5)]])), vec![]);
+        let r = shortest_route(&ds, &[0, 1], Coord::new(0.0, 0.5), Coord::new(0.09, 0.5), None, 1.0).unwrap();
+        assert!(r.path.iter().all(|c| c.is_finite()), "{:?}", r.path);
+        assert_eq!(r.rows, vec![1]);
+        assert!((r.length_m - 10_018.375).abs() < 1.0, "{}", r.length_m);
+    }
+
+    #[test]
+    fn snap_acceptance_uses_the_nearest_ellipsoidal_candidate() {
+        let mut ds = Dataset::new("roads", GeometryType::Polyline, vec![]);
+        // At the equator, 0.001 degrees east is nearer on the sphere than 0.001003
+        // degrees north. On WGS 84 only the northern segment is within 111 metres.
+        ds.push(Some(Geometry::Line(vec![vec![Coord::new(0.001, 0.0), Coord::new(0.002, 0.0)]])), vec![]);
+        ds.push(Some(Geometry::Line(vec![vec![Coord::new(0.0, 0.001003), Coord::new(0.0, 0.003)]])), vec![]);
+        let from = Coord::new(0.0, 0.0);
+        assert!(haversine_m(from, Coord::new(0.001, 0.0)) < haversine_m(from, Coord::new(0.0, 0.001003)));
+        let r = shortest_route(&ds, &[0, 1], from, Coord::new(0.0, 0.003), None, 111.0).unwrap();
+        assert_eq!(r.rows, vec![1]);
+        assert_eq!(r.path.first(), Some(&Coord::new(0.0, 0.001003)));
     }
 
     fn offset(at: Coord, x: f64, y: f64) -> Coord {

@@ -15,6 +15,13 @@ Before picking work, read [ROADMAP.md](ROADMAP.md) (check Underway) and
 - `crates/engine/src/tests.rs::hostile_params_never_panic` and the analysis equivalent run every
   command/tool with junk parameters. Keep them green; every crash fix gets a regression test.
 
+## Never silent
+- A reader, writer, tool or command that drops, truncates or approximates data says what, how
+  much and where: Z values dropped, field names cut, a CRS assumed, features skipped.
+- Report through `Session::notify` (app, CLI, Python `take_notices`) or `ToolResult::messages`,
+  one notice per kind with a count; `eprintln!` alone doesn't count. Unusable results are errors.
+- Test both ways: lossy input gives the notice, clean input none. Existing silent losses are bugs.
+
 ## Architecture
 | Layer | Crate | Job |
 |---|---|---|
@@ -22,6 +29,7 @@ Before picking work, read [ROADMAP.md](ROADMAP.md) (check Underway) and
 | L1 | `data` | features, typed attributes, GeoJSON/CSV/Shapefile/KML/GPX I/O, GeoPackage/GeoParquet/FlatGeobuf/LiDAR (LAS/LAZ)/PostGIS/MySQL providers (`source`; PostGIS through the pure-Rust `postgres` client, MySQL and MariaDB through the pure-Rust `mysql` client, desktop only; GeoPackages in the browser through the pure-Rust `sqlite` reader; GDAL formats and DuckDB queries through their programs), SQL where clauses, rasters (GeoTIFF/ASCII grid, Zarr stores, EPSG reprojection) |
 | L2 | `map`, `analysis` | layers, symbology, labels, camera, basemaps, web tile layers; geoprocessing tools |
 | L2 | `tiles` | web map tiles: XYZ/TMS/WMS rasters, Mapbox Vector Tiles, PMTiles and MBTiles archives, a MapLibre style subset; the tile cache and background fetching (see `docs/user-guide/maps.md` › Basemaps) |
+| L2 | `keychain` | the system's secret store (macOS Keychain, Windows Credential Manager, Secret Service) behind `SecretStore`; the desktop app, the CLI's `--use-saved-secrets` and Python's `use_saved_secrets` |
 | L3 | `render` | tiny-skia map renderer, label placement, PNG export, font discovery |
 | L3 | `plugins` | plugins: sandboxed WebAssembly modules (`wasmi`) adding commands and tools; `.rgplugin` packages, the plugin registry (see `docs/plugins.md`) |
 | L3 | `geolibre` | the GeoLibre/Whitebox tool suite as geoprocessing tools (engine feature `geolibre`): run by the optional `geolibre` program natively, by geolibre-rust's WASI runner in the browser |
@@ -53,6 +61,10 @@ Before picking work, read [ROADMAP.md](ROADMAP.md) (check Underway) and
 ## Assets
 - No third-party vendor icons, images, styles, fonts, help text or code. Icons are drawn in
   code (`icons.rs`). Every asset file has a row in `ATTRIBUTION.md`.
+- Never copy or translate code from GPL, LGPL or other copyleft projects (such as GRASS, QGIS or
+  GEOS) into RustGIS, by hand or with an AI tool. Implementing a published algorithm is fine: cite
+  the paper or standard. Name in the pull request any project whose code you followed (see
+  [CONTRIBUTING.md](CONTRIBUTING.md#where-code-comes-from)).
 - Screenshots and other images are not committed here: they live in
   [opengeos/rustgis-assets](https://github.com/opengeos/rustgis-assets) (WebP, served at
   `https://assets.rustgis.app/images/…`) and docs link to them by URL.
@@ -62,14 +74,16 @@ Before picking work, read [ROADMAP.md](ROADMAP.md) (check Underway) and
 A new dependency must have a licence `deny.toml` allows (CI runs `cargo deny check licenses`); after
 changing dependencies, run `cargo xtask notices` to refresh the `THIRD-PARTY-LICENSES.txt` files the
 packages ship (the release build fails on stale ones).
-Pull requests run CI on Linux; pushes to `main` add macOS and Windows. Label a pull request
-`ci:windows`, `ci:macos` or `ci:full` to test there before merging (platform-specific code, paths,
-file dialogs). The release build of the apps runs nightly (`.github/workflows/nightly.yml`), with every
-platform's tests; a failure opens a `Nightly build failed` issue. `ci:full` also runs the release
-build on the pull request.
+Pull requests run CI on Linux; pushes to `main` add macOS and Windows (x64 and ARM64). Label a
+pull request `ci:windows`, `ci:macos` or `ci:full` to test there before merging (platform-specific
+code, paths, file dialogs). The release build of the apps runs nightly
+(`.github/workflows/nightly.yml`), with every platform's tests; a failure opens a
+`Nightly build failed` issue. `ci:full` also runs the release build on the pull request.
 
 ## Looking at the app
 - `cargo run --release -p rustgis` (opens the World Atlas sample).
 - Headless screenshots: `cargo run --release -p rustgis-ui-egui --example ui_shot -- script.jsonl`
-  (see the example header). For UI work, look at the PNG.
+  (see the example header). For UI work, render the actual changed UI and look at the PNG.
+  For substantial visible changes, include screenshots in the PR (before/after where useful);
+  see [attachment guidance](docs/contributing.md#documentation).
 - CLI: `rustgis-cli run --sample --cmd 'gp.run={"tool":"buffer","params":{"input":"Cities","distance":100}}' --cmd 'share.exportMap={"path":"out.png"}'`.

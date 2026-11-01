@@ -112,8 +112,10 @@ impl Database {
         match self {
             Database::File(p) => p.file_stem().and_then(|s| s.to_str()).unwrap_or("database").to_string(),
             Database::Postgres(d) => {
-                let get = |k: &str| d.split_whitespace().find_map(|kv| kv.strip_prefix(&format!("{k}=")).map(str::to_string));
-                get("dbname")
+                // Quoted values (`dbname='my gis'`) as libpq reads them.
+                super::pgconn::keyword_pairs(d)
+                    .into_iter()
+                    .find_map(|(k, v)| (k == "dbname").then_some(v))
                     .unwrap_or_else(|| d.rsplit('/').next().unwrap_or("postgres").split('?').next().unwrap_or("postgres").to_string())
             }
             Database::Mysql(a) => super::myconn::database_name(a).unwrap_or_else(|| "mysql".into()),
@@ -207,6 +209,24 @@ pub fn forget_connection_passwords() {
 /// The password remembered for a connection this session, if any.
 pub(crate) fn remembered_password(dsn: &str) -> Option<String> {
     lock().get(dsn).map(|e| e.password.expose().to_string())
+}
+
+/// The password a database client's own environment variable gives for `kind` (`postgres`:
+/// `PGPASSWORD`, `mysql`: `MYSQL_PWD`, `sqlserver`: `SQLCMDPASSWORD`); an empty one is none. The
+/// one rule the drivers' explicit connections and the saved connections share, so an ambient
+/// password ranks the same wherever it is asked for.
+pub fn ambient_password(kind: &str) -> Option<String> {
+    ambient_password_in(kind, |name| std::env::var(name).ok())
+}
+
+fn ambient_password_in(kind: &str, get: impl Fn(&str) -> Option<String>) -> Option<String> {
+    let variable = match kind {
+        "postgres" => "PGPASSWORD",
+        "mysql" => "MYSQL_PWD",
+        "sqlserver" => "SQLCMDPASSWORD",
+        _ => return None,
+    };
+    get(variable).filter(|p| !p.is_empty())
 }
 
 /// Whether a password is remembered for a connection this session, typed or activated.
@@ -868,6 +888,22 @@ fn ours(name: &str) -> bool {
 mod tests {
     use super::*;
 
+    /// Each kind reads only its own client's variable, and an empty one is none (a fake
+    /// environment: the process's is never changed).
+    #[test]
+    fn ambient_password_follows_each_clients_variable() {
+        let env = |name: &str| match name {
+            "PGPASSWORD" => Some("pg-env".to_string()),
+            "MYSQL_PWD" => Some("my-env".to_string()),
+            "SQLCMDPASSWORD" => Some(String::new()),
+            _ => None,
+        };
+        assert_eq!(ambient_password_in("postgres", env).as_deref(), Some("pg-env"));
+        assert_eq!(ambient_password_in("mysql", env).as_deref(), Some("my-env"));
+        assert_eq!(ambient_password_in("sqlserver", env), None);
+        assert_eq!(ambient_password_in("s3", env), None);
+    }
+
     #[test]
     fn refused_password_does_not_restore_over_a_newer_login_or_forget() {
         let dsn = "host=refused_password_newer_slot";
@@ -940,6 +976,9 @@ mod tests {
         assert_eq!(d, Database::Postgres("host=db.example dbname=gis user=me".into()));
         assert_eq!(d.label(), "postgres:host=db.example dbname=gis user=me");
         assert_eq!(d.short(), "gis");
+        // Quoted values (as `pg.connect` writes them) are named without their quotes, whole.
+        assert_eq!(Database::Postgres("host='h' dbname='my gis' user='o\\'neil'".into()).short(), "my gis");
+        assert_eq!(Database::Postgres("host='h' dbname='gis'".into()).short(), "gis");
         assert_eq!(password(Some(&d)).as_deref(), Some("pw1"));
         assert_eq!(Database::parse(&d.label()), d);
         let u = Database::parse("postgresql://me:pw2@db.example:5433/osm?sslmode=require");

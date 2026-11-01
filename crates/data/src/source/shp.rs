@@ -15,6 +15,10 @@ use std::path::{Path, PathBuf};
 mod cache;
 mod index;
 
+#[doc(hidden)]
+pub use cache::use_temporary_index_dir;
+pub use cache::{Emptied, empty_index_cache};
+
 use super::{Batch, FeatureSource, Reproject, Request, SourceInfo, clamp_limit};
 use crate::io::group_rings;
 use crate::{DataError, Feature, Field, FieldType, Geometry, GeometryType, Result, Value};
@@ -68,6 +72,10 @@ pub struct ShpSource {
 
 /// Bytes read ahead from the files: shapes and rows near each other in a read share a fill.
 const BUFFER: usize = 1 << 20;
+
+/// The largest record read: one past it is skipped rather than given a buffer that size, since a
+/// record's length is only checked against the file's, which can be gigabytes (#1055).
+const MAX_RECORD: u64 = crate::io::MAX_BYTES;
 
 impl ShpSource {
     /// Opens `path` (the `.shp`) with the `.dbf` and optional `.prj` and `.cpg` beside it.
@@ -134,7 +142,7 @@ impl ShpSource {
             .zip(read_names(&dbf, table.columns.len(), &encoding.decoder())?)
             .map(|(c, n)| Field::new(n, c.out))
             .collect();
-        let info = SourceInfo {
+        let mut info = SourceInfo {
             name: name.to_string(),
             format: "Shapefile",
             geometry_type,
@@ -144,7 +152,12 @@ impl ShpSource {
             crs: crs.and_then(|c| c.custom_def()).map(|d| d.proj4.clone()).unwrap_or_else(|| reproject.label()),
             indexed: index.indexed(),
             notes,
+            zm_dropped: false,
         };
+        // PointZ … MultiPointM: the header's type says every shape carries Z or M values.
+        if matches!(shape_type, 11 | 13 | 15 | 18 | 21 | 23 | 25 | 28) {
+            info.drop_zm(Some(index.count));
+        }
         Ok(ShpSource { info, shp: path.to_path_buf(), dbf, index, table, encoding, reproject })
     }
 }
@@ -169,6 +182,10 @@ impl FeatureSource for ShpSource {
         let mut features = Vec::new();
         let mut skipped = 0;
         let (matched, complete) = self.index.visit(bounds, limit, |i, place| {
+            if u64::from(place.len) > MAX_RECORD {
+                skipped += 1;
+                return Ok(());
+            }
             buf.resize(place.len as usize, 0);
             if shp.read_at(u64::from(place.offset), &mut buf).is_err() {
                 skipped += 1;
@@ -212,20 +229,16 @@ impl FeatureSource for ShpSource {
     }
     fn visit_chunks(&self, extent: Option<Extent>, bytes: usize, visit: &mut dyn FnMut(Vec<Feature>) -> Result<()>) -> Result<Batch> {
         let encoding = self.encoding.decoder();
-        if bytes == 0 {
-            return Err(bad("the render memory budget is zero"));
-        }
+        let mut chunks = super::chunk_memory::Chunker::new(bytes, visit)?;
         let extent = extent.map(|e| self.reproject.extent_from_lonlat(&e));
         if extent.is_some_and(|e| e.is_empty()) {
             return Ok(Batch { complete: true, ..Batch::default() });
         }
         let bounds = extent.map(|e| [e.min_x as f32, e.min_y as f32, e.max_x as f32, e.max_y as f32]);
-        let mut used = 0usize;
         let mut shp = Cursor::open(&self.shp)?;
         let mut dbf = Cursor::open(&self.dbf)?;
         let mut buf = Vec::new();
         let mut row = vec![0u8; self.table.row_len];
-        let mut features = Vec::new();
         let mut skipped = 0;
         // The same directory, ordering, extent rules and read-only scan fallback as sampled
         // reads, with no interaction row cap. The index visits records without materializing
@@ -233,6 +246,10 @@ impl FeatureSource for ShpSource {
         // Every record id fits u32. This format bound visits them all while keeping SQLite's
         // LIMIT within its signed integer range on 64-bit hosts.
         let (matched, complete) = self.index.visit_complete(bounds, |i, place| {
+            if u64::from(place.len) > MAX_RECORD {
+                skipped += 1;
+                return Ok(());
+            }
             buf.resize(place.len as usize, 0);
             if shp.read_at(u64::from(place.offset), &mut buf).is_err() {
                 skipped += 1;
@@ -266,27 +283,9 @@ impl FeatureSource for ShpSource {
             } else {
                 vec![Value::Null; self.table.columns.len()]
             };
-            let feature = Feature { id: u64::from(i) + 1, geometry, attrs };
-            let size = super::chunk_memory::feature_bytes(&feature).saturating_add(std::mem::size_of::<Feature>());
-            if !features.is_empty() && used.saturating_add(size) > bytes {
-                features.shrink_to_fit();
-                visit(std::mem::take(&mut features))?;
-                used = 0;
-            }
-            // A geometry is indivisible. Preserve a valid detailed row instead of dropping it
-            // or failing the entire layer when it alone exceeds the chunk target.
-            if size > bytes {
-                visit(vec![feature])?;
-                return Ok(());
-            }
-            used = used.saturating_add(size);
-            features.push(feature);
-            Ok(())
+            chunks.push(Feature { id: u64::from(i) + 1, geometry, attrs })
         })?;
-        if !features.is_empty() {
-            features.shrink_to_fit();
-            visit(features)?;
-        }
+        chunks.flush()?;
         Ok(Batch { features: Vec::new(), matched, complete, skipped })
     }
 }
@@ -364,7 +363,7 @@ fn record_box(c: &[u8]) -> [f32; 4] {
 const MAX_PARTS: usize = 1 << 24;
 
 /// A record's shape: `Ok(None)` for a null shape, `Err` for one that doesn't parse or isn't
-/// supported (a multipatch). Z and M values are dropped.
+/// supported (a multipatch). Z and M values are dropped (opening notes it, from the header).
 fn parse_shape(c: &[u8]) -> std::result::Result<Option<Geometry>, ()> {
     let pt = |at: usize| -> std::result::Result<Coord, ()> { Ok(Coord::new(le_f64(c, at).ok_or(())?, le_f64(c, at + 8).ok_or(())?)) };
     match le_i32(c, 0).ok_or(())? {
