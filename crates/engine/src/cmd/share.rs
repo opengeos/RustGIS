@@ -22,12 +22,14 @@ pub fn commands() -> Vec<C> {
         C::new("share.exportTable", "Export Table", "Publish › Output", |s, p| {
             let path = ps(p, "path").ok_or("path is required")?;
             let t = s.project.tables.get(s.table_index(p)?).ok_or("no such table")?;
-            // A table can hold geometry (a tool's or plugin's output, a project file), so it can
-            // be a Shapefile, which cuts field names to dBase's.
+            // A table can hold geometry (a tool's or plugin's output, a project file), so what is
+            // written lacks the Z or M values dropped when it was read, and a Shapefile cuts field
+            // names to dBase's. Said once the file is written, as `share.exportLayer` says them.
+            let zm_note = rustgis_data::zm_export_note([&t.dataset], path);
             let ext = Path::new(path).extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
             let names_note = if matches!(ext.as_str(), "shp" | "zip") { rustgis_data::io::shapefile_names_note(&t.dataset.fields, path) } else { None };
             rustgis_data::io::write_path(&t.dataset, Path::new(path)).map_err(|e| e.to_string())?;
-            if let Some(note) = names_note {
+            for note in [zm_note, names_note].into_iter().flatten() {
                 s.notify(note, false);
             }
             Ok(json!({"path": path}))

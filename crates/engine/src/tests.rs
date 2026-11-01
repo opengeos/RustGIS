@@ -11080,6 +11080,75 @@ fn dropped_z_values_are_said_on_import_and_export() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// A standalone table can hold geometry whose Z values were dropped when it was read (a plugin's
+/// output, a project file): exporting it says so, to every format, once the file is written, as
+/// `share.exportLayer` does. A table read without Z, and a write that fails, say nothing of it.
+#[test]
+fn exporting_a_table_says_its_dropped_z_values() {
+    let dir = std::env::temp_dir().join(format!("rustgis-engine-table-zm-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = dir.join("wells.geojson");
+    std::fs::write(
+        &src,
+        r#"{"type":"FeatureCollection","features":[{"type":"Feature","properties":{"depth":30},"geometry":{"type":"Point","coordinates":[1,2,30]}}]}"#,
+    )
+    .unwrap();
+    isolate_plugins();
+    let mut s = Session::new(Project::default());
+    let (wells, report) = rustgis_data::io::read_path(&src).unwrap();
+    assert!(wells.zm_dropped && report.messages.iter().any(|m| m.contains("Z or M")), "premise: the reader dropped Z");
+    s.project.add_table(wells);
+    let said = |s: &Session, mark| -> Vec<String> {
+        s.notices_since(mark).iter().filter(|n| n.text.contains("Z or M")).map(|n| n.text.clone()).collect()
+    };
+    for ext in ["geojson", "csv", "shp", "zip"] {
+        let out = dir.join(format!("wells.{ext}")).display().to_string();
+        let mark = s.notice_mark();
+        s.run("share.exportTable", &json!({"table": "wells", "path": out})).unwrap();
+        assert_eq!(said(&s, mark), [format!("{out}: its geometry has no Z or M values, which were dropped when wells was read")], ".{ext}");
+    }
+    // The file holds x and y only.
+    assert!(std::fs::read_to_string(dir.join("wells.geojson")).unwrap().contains("[1.0,2.0]"));
+    // A project file keeps what the table's read lost, as it does a layer's (the Z or M values,
+    // the coordinate system, geometry lost to it), so a table opened from one says it too.
+    let crs = rustgis_data::raster::Crs::parse("EPSG:3857").unwrap();
+    {
+        let wells = s.project.tables.last_mut().unwrap();
+        wells.crs = Some(crs);
+        wells.crs_incomplete = true;
+    }
+    let project = dir.join("wells.rgis");
+    s.run("project.saveAs", &json!({"path": project.display().to_string()})).unwrap();
+    let mut t = Session::new(Project::default());
+    t.run("project.open", &json!({"path": project.display().to_string()})).unwrap();
+    let opened = &t.project.tables.get(t.table_index(&json!({"table": "wells"})).unwrap()).unwrap().dataset;
+    assert!(opened.zm_dropped && opened.crs_incomplete && opened.crs == Some(crs), "{opened:?}");
+    let out = dir.join("opened.geojson").display().to_string();
+    let mark = t.notice_mark();
+    t.run("share.exportTable", &json!({"table": "wells", "path": out})).unwrap();
+    assert_eq!(said(&t, mark), [format!("{out}: its geometry has no Z or M values, which were dropped when wells was read")]);
+    // A write that fails says nothing of what the file would have lacked.
+    let missing = dir.join("missing").join("wells.geojson").display().to_string();
+    let mark = s.notice_mark();
+    assert!(s.run("share.exportTable", &json!({"table": "wells", "path": missing})).is_err());
+    assert!(said(&s, mark).is_empty(), "{:?}", s.notices_since(mark));
+    // A table read without Z: no notice.
+    std::fs::write(
+        dir.join("flat.geojson"),
+        r#"{"type":"FeatureCollection","features":[{"type":"Feature","properties":{"depth":30},"geometry":{"type":"Point","coordinates":[1,2]}}]}"#,
+    )
+    .unwrap();
+    let (flat, _) = rustgis_data::io::read_path(&dir.join("flat.geojson")).unwrap();
+    assert!(!flat.zm_dropped, "premise");
+    s.project.add_table(flat);
+    for ext in ["geojson", "shp"] {
+        let mark = s.notice_mark();
+        s.run("share.exportTable", &json!({"table": "flat", "path": dir.join(format!("flat.{ext}"))})).unwrap();
+        assert!(said(&s, mark).is_empty(), ".{ext}: {:?}", s.notices_since(mark));
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 #[test]
 fn layers_export_to_geopackage_geoparquet_shapefile_and_kmz() {
     let dir = std::env::temp_dir().join(format!("rustgis-engine-export-{}", std::process::id()));
