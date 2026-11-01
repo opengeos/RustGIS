@@ -2831,7 +2831,7 @@ fn parts_left_out(url: &str, bytes: &[u8]) -> Option<String> {
     let crs = if lacks.contains(&"prj") { "; its coordinates are read as longitude/latitude" } else { "" };
     let them = if lacks.len() == 1 { "it" } else { "them" };
     let url = crate::sources::redact(url);
-    Some(format!("{url}: no {names} found beside it ({} of 3 optional files), so it was read without {them}{crs}", lacks.len()))
+    Some(format!("{url}: no {names} found beside it ({} of 3 optional files missing), so it was read without {them}{crs}", lacks.len()))
 }
 
 /// A Shapefile by its `.shp` address, waited for (#1238): the `.shp`, then its `.dbf`, `.shx`,
@@ -2891,7 +2891,8 @@ pub fn download_data(url: &str, max: usize, done: crate::render::rustgis_tiles::
                 let left = max.saturating_sub(shp.len());
                 download_parts(name, shp, parts.into_iter(), Vec::new(), left, done);
             }
-            Err(e) => done(Err(if e.starts_with(&shp_url) { e } else { format!("{shp_url}: {e}") })),
+            // The app names the address it asked for, as for any download.
+            Err(e) => done(Err(e)),
         }),
     );
 }
