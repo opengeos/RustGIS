@@ -1684,7 +1684,8 @@ pub fn shapefile_part_urls(url: &str) -> Option<Vec<(&'static str, String)>> {
     let stem = path.get(..path.len().checked_sub(4)?)?;
     let ext = path.get(stem.len()..)?;
     // A path after the host: `https://x.org.shp` names a host, whose parts would be other hosts.
-    let has_path = stem.split_once("://").is_some_and(|(_, rest)| rest.contains('/'));
+    // Of the address a saved S3 connection wraps, whose endpoint has its own `://`.
+    let has_path = crate::s3_address::inner(stem).split_once("://").is_some_and(|(_, rest)| rest.contains('/'));
     if !ext.eq_ignore_ascii_case(".shp") || stem.ends_with('/') || !has_path {
         return None;
     }
@@ -2895,6 +2896,8 @@ mod tests {
         );
         assert_eq!(urls("https://x.org/a/RIOS.SHP?token=1#f").unwrap()[0], "https://x.org/a/RIOS.DBF?token=1#f");
         assert_eq!(urls("s3://bucket/rios.shp").unwrap()[2], "s3://bucket/rios.prj");
+        let wrapped = "rustgis-s3:0123456789abcdef:18:https://minio.test:s3://bucket/rios.shp";
+        assert_eq!(urls(wrapped).unwrap()[0], "rustgis-s3:0123456789abcdef:18:https://minio.test:s3://bucket/rios.dbf");
         for not_shp in [
             "https://x.org/a.zip",
             "https://x.org/a.shp.zip",
@@ -2902,6 +2905,7 @@ mod tests {
             "https://x.org/a?f=x.shp",
             "https://x.org.shp",
             "s3://bucket.shp",
+            "rustgis-s3:0123456789abcdef:18:https://minio.test:s3://bucket.shp",
             "rios.shp",
             "",
         ] {
