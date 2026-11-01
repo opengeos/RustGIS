@@ -1301,12 +1301,17 @@ mod tests {
             assert_eq!(crs.lacks_datum_shift(), note.is_some(), "{}: {note:?}", crs.label());
         }
         assert!(crs_from_wkt(nad27).unwrap().lacks_datum_shift());
-        // A system known by its code, or typed without an ellipsoid or on WGS 84's, has its shift;
-        // one typed on another ellipsoid without a datum hasn't.
+        // A system known by its code, or typed without an ellipsoid, on WGS 84's or GRS 80's, or on
+        // Web Mercator's sphere, has its shift; one typed on another ellipsoid without a datum hasn't.
         assert!(!Crs::LonLat.lacks_datum_shift() && !Crs::Epsg(32616).lacks_datum_shift());
-        for (typed, lacks) in
-            [("+proj=utm +zone=16", false), ("+proj=utm +zone=16 +ellps=WGS84", false), ("+proj=utm +zone=16 +ellps=clrk66", true)]
-        {
+        for (typed, lacks) in [
+            ("+proj=utm +zone=16", false),
+            ("+proj=utm +zone=16 +ellps=WGS84", false),
+            ("+proj=utm +zone=16 +ellps=GRS80", false),
+            ("+proj=utm +zone=16 +ellps=clrk66", true),
+            ("+proj=merc +a=6378137 +b=6378137 +units=m", false),
+            ("+proj=merc +R=6378137", false),
+        ] {
             assert_eq!(Crs::parse(typed).unwrap().lacks_datum_shift(), lacks, "{typed}");
         }
     }
