@@ -215,6 +215,7 @@ pub fn read_bytes(file_name: &str, bytes: &[u8]) -> Result<(Dataset, ReadReport)
         }
         // The first layer (`read_layers` reads them all), saying what else the file holds.
         "zip" | "kml" | "kmz" | "gpx" | "gml" | "dxf" | "pbf" | "topojson" => return first_layer(file_name, bytes),
+        "las" | "laz" => crate::lidar::read_bytes(bytes, &name, None)?,
         // A copy, since only borrowed bytes are given; `read_owned` takes them without one.
         e if crate::source::EXTENSIONS.contains(&e) => return read_owned(file_name, bytes.to_vec()),
         other => return Err(DataError::Unsupported(other.to_string())),
@@ -223,8 +224,8 @@ pub fn read_bytes(file_name: &str, bytes: &[u8]) -> Result<(Dataset, ReadReport)
     Ok(out)
 }
 
-/// Reads a GeoPackage, GeoParquet or FlatGeobuf held in memory without copying it (other types go
-/// to [`read_bytes`]).
+/// Reads a GeoPackage, GeoParquet, FlatGeobuf or LAS/LAZ held in memory without copying it
+/// (other types go to [`read_bytes`]).
 pub fn read_owned(file_name: &str, bytes: Vec<u8>) -> Result<(Dataset, ReadReport)> {
     if !crate::source::is_source_name(file_name) {
         return read_bytes(file_name, &bytes);
@@ -232,7 +233,12 @@ pub fn read_owned(file_name: &str, bytes: Vec<u8>) -> Result<(Dataset, ReadRepor
     if bytes.len() as u64 > MAX_BYTES {
         return Err(DataError::Format(format!("file is too large ({} bytes)", bytes.len())));
     }
-    let mut out = crate::source::materialize(crate::source::open_bytes(file_name, bytes, None)?.as_ref())?;
+    let mut out = if crate::lidar::is_lidar_name(file_name) {
+        let name = Path::new(file_name).file_stem().and_then(|s| s.to_str()).unwrap_or("layer");
+        crate::lidar::read_bytes(&bytes, name, None)?
+    } else {
+        crate::source::materialize(crate::source::open_bytes(file_name, bytes, None)?.as_ref())?
+    };
     out.0.source = Some(file_name.to_string());
     Ok(out)
 }
@@ -282,6 +288,7 @@ pub fn read_path(path: &Path) -> Result<(Dataset, ReadReport)> {
             };
             crate::mapinfo::read_bytes(&std::fs::read(path)?, mid.as_deref(), &name)?
         }
+        "las" | "laz" => crate::lidar::read(std::io::BufReader::new(std::fs::File::open(path)?), &name, None)?,
         // Read in place by a provider, so there's no size cap on the file, only on the features.
         e if crate::source::EXTENSIONS.contains(&e) => crate::source::materialize(crate::source::open_path(path, None)?.as_ref())?,
         other => return Err(DataError::Unsupported(other.to_string())),
