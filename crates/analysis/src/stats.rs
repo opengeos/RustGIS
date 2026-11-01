@@ -615,14 +615,13 @@ fn whole_text(t: &str) -> Option<i64> {
             return None;
         }
         digits.get(..cut)?.to_string()
-    } else if digits.is_empty() {
-        String::new()
     } else {
         // An i64 has at most 19 digits.
         let zeros = usize::try_from(scale).ok().filter(|z| digits.len() + z <= 19)?;
         format!("{digits}{}", "0".repeat(zeros))
     };
-    let n: i128 = if whole.is_empty() { 0 } else { whole.parse().ok()? };
+    // Never empty: the digits start with one that isn't 0, which the fraction test keeps.
+    let n: i128 = whole.parse().ok()?;
     i64::try_from(if negative { -n } else { n }).ok()
 }
 

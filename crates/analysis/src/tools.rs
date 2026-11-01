@@ -1789,7 +1789,7 @@ fn dissolve(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
     let (requests, separator) = summary_requests(ds, p)?;
     // Each group's key, polygons and records.
     let mut groups: Vec<(Value, Vec<MultiPolygon<f64>>, Vec<usize>)> = Vec::new();
-    for r in each_once(rows(inp, p, "input", ds)) {
+    for r in each_once(rows(inp, p, "input", ds), ds) {
         let Some(mp) = ds.features.get(r).and_then(|f| f.geometry.as_ref()).and_then(to_multipolygon) else { continue };
         let key = fi.map(|fi| ds.value(r, fi).clone()).unwrap_or(Value::Null);
         match groups.iter_mut().find(|(k, _, _)| *k == key) {
@@ -2709,7 +2709,7 @@ fn count_points(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
     let mut counts = vec![0i64; out.features.len()];
     // Each polygon's points, kept only for statistics.
     let mut members: Vec<Vec<usize>> = if requests.is_empty() { Vec::new() } else { vec![Vec::new(); out.features.len()] };
-    for r in each_once(rows(inp, p, "points", pts)) {
+    for r in each_once(rows(inp, p, "points", pts), pts) {
         let Some(g) = pts.features.get(r).and_then(|f| f.geometry.as_ref()) else { continue };
         let pg = to_geo(g);
         let ext = merc_extent(&pg);
@@ -2968,11 +2968,11 @@ fn summary_requests<'a>(ds: &Dataset, p: &'a Json) -> Result<(Vec<crate::stats::
     Ok((requests, separator))
 }
 
-/// `rows` with each record once, at its first place: a selection that lists a record twice still
-/// counts it once.
-fn each_once(rows: Vec<usize>) -> Vec<usize> {
-    let mut seen = std::collections::HashSet::with_capacity(rows.len());
-    rows.into_iter().filter(|r| seen.insert(*r)).collect()
+/// `rows` of `ds` (each below its length, as [`rows`] gives them) with each record once, at its
+/// first place: a selection that lists a record twice still counts it once.
+fn each_once(rows: Vec<usize>, ds: &Dataset) -> Vec<usize> {
+    let mut seen = vec![false; ds.features.len()];
+    rows.into_iter().filter(|&r| seen.get_mut(r).is_some_and(|s| !std::mem::replace(s, true))).collect()
 }
 
 /// `rows` in record order, each once, as [`statistic_values`] takes them.
