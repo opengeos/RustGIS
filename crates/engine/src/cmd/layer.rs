@@ -2816,13 +2816,14 @@ fn keyed(url: &str) -> bool {
 
 /// A Shapefile's part that answered with a web page (a site that serves its page for any
 /// address it doesn't have): an optional part is done without, as one that isn't there, and the
-/// `.dbf` fails. Any other answer is the part.
-fn part_page(ext: &str, url: &str, b: Vec<u8>) -> Result<Option<Vec<u8>>, String> {
+/// `.dbf` fails (the error without an address: `part_failed` names it). Any other answer is the
+/// part.
+fn part_page(ext: &str, b: Vec<u8>) -> Result<Option<Vec<u8>>, String> {
     if b.iter().find(|c| !c.is_ascii_whitespace()) != Some(&b'<') {
         return Ok(Some(b));
     }
     if ext == "dbf" {
-        return Err(format!("{}: a web page answered, not a .dbf", crate::sources::redact(url)));
+        return Err("a web page answered, not a .dbf".into());
     }
     Ok(None)
 }
@@ -2857,9 +2858,14 @@ fn status_hint(url: &str, e: &str) -> &'static str {
 fn parts_left_out(url: &str, bytes: &[u8], p: &Value) -> Option<String> {
     rustgis_data::io::shapefile_part_urls(url)?;
     let given_crs = ps(p, "crs").is_some_and(|c| !c.trim().is_empty());
-    // Each Shapefile by its name: a zip the address answered with may hold several.
-    let said: Vec<String> = rustgis_data::io::shapefile_zip_lacks(bytes)
+    // Each Shapefile by its name: a zip the address answered with may hold several (the first
+    // few named, the rest counted).
+    const NAMED: usize = 5;
+    let lacking = rustgis_data::io::shapefile_zip_lacks(bytes);
+    let more = lacking.len().saturating_sub(NAMED);
+    let mut said: Vec<String> = lacking
         .into_iter()
+        .take(NAMED)
         .map(|(shp, lacks)| {
             let names = lacks.iter().map(|e| format!(".{e}")).collect::<Vec<_>>().join(", ");
             let crs = if lacks.contains(&"prj") && !given_crs { "; its coordinates are read as longitude/latitude" } else { "" };
@@ -2870,6 +2876,9 @@ fn parts_left_out(url: &str, bytes: &[u8], p: &Value) -> Option<String> {
             )
         })
         .collect();
+    if more > 0 {
+        said.push(format!("and {more} more Shapefiles without some of theirs"));
+    }
     (!said.is_empty()).then(|| format!("{}: {}", crate::sources::redact(url), said.join("; ")))
 }
 
@@ -2897,7 +2906,7 @@ fn download_shapefile_blocking(url: &str) -> Result<Vec<u8>, String> {
     let mut left = cache::MAX_DOWNLOAD.saturating_sub(shp.len());
     let mut got = Vec::new();
     for (ext, u) in parts {
-        match within(&u, left).and_then(|b| part_page(ext, &u, b)) {
+        match within(&u, left).and_then(|b| part_page(ext, b)) {
             Ok(None) => {}
             Ok(Some(b)) => {
                 left = left.saturating_sub(b.len());
@@ -2969,7 +2978,7 @@ fn download_parts(
     crate::render::rustgis_tiles::cache::download_limited(
         &next,
         left,
-        Box::new(move |r| match r.and_then(|b| part_page(ext, &url, b)) {
+        Box::new(move |r| match r.and_then(|b| part_page(ext, b)) {
             Ok(None) => download_parts(name, shp, parts, got, left, done),
             Ok(Some(b)) => {
                 let left = left.saturating_sub(b.len());

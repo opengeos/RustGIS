@@ -1724,8 +1724,8 @@ fn is_resource_fork(name: &str) -> bool {
 /// Which of its optional parts (`.shx`, `.prj`, `.cpg`) each Shapefile in a zip lacks, beside it
 /// by its name: what a Shapefile added by its `.shp` address (#1238) was read without, to say so.
 /// One entry per `.shp` that lacks any, its name as in the zip, in name order. Only the `.shp`s
-/// [`read_zip`] reads count: those with their `.dbf`, not a macOS resource fork. Empty for bytes
-/// that aren't a zip.
+/// [`read_zip`] reads count: those with their `.dbf`, not a macOS resource fork, the first
+/// [`MAX_ZIP_LAYERS`] in name order. Empty for bytes that aren't a zip.
 pub fn shapefile_zip_lacks(bytes: &[u8]) -> Vec<(String, Vec<&'static str>)> {
     // The entries' names only: `want` sees each, and none is inflated.
     let names = std::cell::RefCell::new(Vec::new());
@@ -1742,20 +1742,21 @@ pub fn shapefile_zip_lacks(bytes: &[u8]) -> Vec<(String, Vec<&'static str>)> {
     let names = names.into_inner();
     // A set: a served zip may hold up to 65,535 entries.
     let lower: std::collections::HashSet<String> = names.iter().map(|n| n.to_ascii_lowercase()).collect();
-    let mut out: Vec<(String, Vec<&'static str>)> = names
+    // The Shapefiles the reader takes: in name order, with their `.dbf`, as many as it reads.
+    let mut shps: Vec<(&String, String)> = names
         .iter()
         .filter(|n| n.to_ascii_lowercase().ends_with(".shp"))
-        .filter_map(|n| {
-            let s = n.get(..n.len() - 4)?.to_ascii_lowercase();
-            if !lower.contains(&format!("{s}.dbf")) {
-                return None;
-            }
+        .filter_map(|n| Some((n, n.get(..n.len() - 4)?.to_ascii_lowercase())))
+        .filter(|(_, s)| lower.contains(&format!("{s}.dbf")))
+        .collect();
+    shps.sort();
+    shps.into_iter()
+        .take(MAX_ZIP_LAYERS)
+        .filter_map(|(n, s)| {
             let lacks: Vec<&'static str> = ["shx", "prj", "cpg"].into_iter().filter(|e| !lower.contains(&format!("{s}.{e}"))).collect();
             (!lacks.is_empty()).then(|| (n.clone(), lacks))
         })
-        .collect();
-    out.sort();
-    out
+        .collect()
 }
 
 /// Most layers read from one zip archive.
@@ -2960,6 +2961,11 @@ mod tests {
         let two: Vec<(String, Vec<u8>)> =
             ["a.shp", "a.dbf", "a.shx", "a.prj", "a.cpg", "b.shp", "b.dbf", "b.shx", "b.cpg"].map(|n| (n.to_string(), shp.clone())).into();
         assert_eq!(lacks(&crate::zip::write(&two).unwrap()), ["b.shp: prj"]);
+        // As many as the reader reads: of 40 without a .prj, the first 32 by name.
+        let many: Vec<(String, Vec<u8>)> =
+            (0..40).flat_map(|i| ["shp", "dbf", "shx", "cpg"].map(|e| (format!("s{i:02}.{e}"), shp.clone()))).collect();
+        let said = shapefile_zip_lacks(&crate::zip::write(&many).unwrap());
+        assert_eq!((said.len(), said[0].0.as_str(), said[31].0.as_str()), (MAX_ZIP_LAYERS, "s00.shp", "s31.shp"));
         let no_dbf: Vec<_> = others.into_iter().filter(|(e, _)| *e != "dbf").collect();
         assert!(zip_shapefile_parts("RIOS_SIMPLES.shp", shp, no_dbf).unwrap_err().contains(".dbf"));
     }
