@@ -1674,6 +1674,43 @@ pub fn gather_shapefiles(files: Vec<(String, Vec<u8>)>) -> (Vec<(String, Vec<u8>
     (out, problems)
 }
 
+/// The addresses of a Shapefile's files beside its `.shp`, by the `.shp`'s address (#1238): the
+/// address with each of [`SHAPEFILE_SIDECARS`] in place of `.shp`, in the same case, its query and
+/// fragment kept (a signed address stays signed). `None` for an address whose path doesn't end in
+/// a file named `.shp`.
+pub fn shapefile_part_urls(url: &str) -> Option<Vec<(&'static str, String)>> {
+    let (path, rest) = url.split_at(url.find(['?', '#']).unwrap_or(url.len()));
+    let stem = path.get(..path.len().checked_sub(4)?)?;
+    let ext = path.get(stem.len()..)?;
+    if !ext.eq_ignore_ascii_case(".shp") || stem.is_empty() || stem.ends_with('/') || !stem.contains("://") {
+        return None;
+    }
+    let upper = ext == ".SHP";
+    Some(
+        SHAPEFILE_SIDECARS
+            .iter()
+            .map(|&e| (e, format!("{stem}.{}{rest}", if upper { e.to_ascii_uppercase() } else { e.to_string() })))
+            .collect(),
+    )
+}
+
+/// A Shapefile fetched by its files' addresses as one zipped Shapefile ([`gather_shapefiles`]):
+/// the `.shp` named `file_name`, and the parts that answered, by extension. An error when the
+/// `.dbf` isn't among them or they are too large to read together.
+pub fn zip_shapefile_parts(file_name: &str, shp: Vec<u8>, parts: Vec<(&str, Vec<u8>)>) -> std::result::Result<Vec<u8>, String> {
+    let stem = Path::new(file_name).file_stem().and_then(|s| s.to_str()).filter(|s| !s.is_empty()).unwrap_or("layer");
+    if !parts.iter().any(|(e, _)| e.eq_ignore_ascii_case("dbf")) {
+        return Err(format!("{stem}.shp: its .dbf isn't beside it"));
+    }
+    let mut files = vec![(format!("{stem}.shp"), shp)];
+    files.extend(parts.into_iter().map(|(e, b)| (format!("{stem}.{}", e.to_ascii_lowercase()), b)));
+    let (out, problems) = gather_shapefiles(files);
+    out.into_iter()
+        .find(|(n, _)| n.ends_with(".zip"))
+        .map(|(_, b)| b)
+        .ok_or_else(|| if problems.is_empty() { format!("{stem}.shp: its files couldn't be read together") } else { problems.join("; ") })
+}
+
 /// Most layers read from one zip archive.
 pub const MAX_ZIP_LAYERS: usize = 32;
 
@@ -2815,5 +2852,34 @@ mod tests {
         assert_eq!(names(&out), ["rivers.zip"]);
         assert_eq!(problems.len(), 1);
         assert!(problems[0].starts_with("huge.shp:") && problems[0].contains("MB"), "{problems:?}");
+    }
+
+    /// A Shapefile's parts by the address of its `.shp` (#1238): beside it, in its case, the query
+    /// kept; fetched, they zip into one that reads, and without the `.dbf` they don't.
+    #[test]
+    fn shapefile_parts_by_address() {
+        let urls = |u: &str| shapefile_part_urls(u).map(|v| v.into_iter().map(|(_, u)| u).collect::<Vec<_>>());
+        assert_eq!(
+            urls("https://geo.example.org/PI/TERESINA/HIDROGRAFIA/PI_2211001_RIOS_SIMPLES.shp").unwrap(),
+            ["dbf", "shx", "prj", "cpg"].map(|e| format!("https://geo.example.org/PI/TERESINA/HIDROGRAFIA/PI_2211001_RIOS_SIMPLES.{e}"))
+        );
+        assert_eq!(urls("https://x.org/a/RIOS.SHP?token=1#f").unwrap()[0], "https://x.org/a/RIOS.DBF?token=1#f");
+        assert_eq!(urls("s3://bucket/rios.shp").unwrap()[2], "s3://bucket/rios.prj");
+        for not_shp in ["https://x.org/a.zip", "https://x.org/a.shp.zip", "https://x.org/.shp", "https://x.org/a?f=x.shp", "rios.shp", ""] {
+            assert!(urls(not_shp).is_none(), "{not_shp}");
+        }
+        let (ds, _) = read_geojson(
+            r#"{"type":"FeatureCollection","features":[{"type":"Feature","properties":{"n":"a"},"geometry":{"type":"Point","coordinates":[1,2]}}]}"#,
+            "rios",
+        )
+        .unwrap();
+        let (parts, _) = shapefile_parts(&ds).unwrap();
+        let shp = parts.iter().find(|(e, _)| *e == "shp").unwrap().1.clone();
+        let others: Vec<(&str, Vec<u8>)> = parts.iter().filter(|(e, _)| *e != "shp").map(|(e, b)| (*e, b.clone())).collect();
+        let zip = zip_shapefile_parts("RIOS_SIMPLES.shp", shp.clone(), others.clone()).unwrap();
+        let (read, _) = read_bytes("RIOS_SIMPLES.zip", &zip).unwrap();
+        assert_eq!((read.name.as_str(), read.features.len()), ("RIOS_SIMPLES", 1));
+        let no_dbf: Vec<_> = others.into_iter().filter(|(e, _)| *e != "dbf").collect();
+        assert!(zip_shapefile_parts("RIOS_SIMPLES.shp", shp, no_dbf).unwrap_err().contains(".dbf"));
     }
 }

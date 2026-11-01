@@ -2500,7 +2500,8 @@ impl RustGisApp {
                 let url = url.to_string();
                 let slot: Slot<Result<Vec<u8>, String>> = Slot::default();
                 let land = slot.clone();
-                rustgis_engine::render::rustgis_tiles::cache::download_limited(
+                // A Shapefile's `.shp` address brings its `.dbf`, `.shx`, `.prj` and `.cpg` too.
+                rustgis_engine::cmd::layer::download_data(
                     &url,
                     if p.get("geolibreProject").and_then(Value::as_bool) == Some(true) {
                         rustgis_engine::map::geolibre::MAX_TEXT

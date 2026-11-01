@@ -9215,6 +9215,104 @@ pub(crate) fn serve(body: &'static [u8], n: usize) -> String {
     format!("http://{addr}")
 }
 
+/// Serves each file by its exact path and query (others are 404) on a local port, keeping the
+/// paths asked for; returns the base address and them.
+fn serve_files(files: Vec<(String, Vec<u8>)>) -> (String, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+    use std::io::{Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let asked = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let log = asked.clone();
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut s) = stream else { continue };
+            let mut buf = [0u8; 4096];
+            let read = s.read(&mut buf).unwrap_or(0);
+            let req = String::from_utf8_lossy(&buf[..read]);
+            let path = req.split_whitespace().nth(1).unwrap_or("/").to_string();
+            log.lock().unwrap().push(path.clone());
+            match files.iter().find(|(p, _)| *p == path) {
+                Some((_, body)) => {
+                    let _ = write!(s, "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len());
+                    let _ = s.write_all(body);
+                }
+                None => {
+                    let _ = write!(s, "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+                }
+            }
+        }
+    });
+    (base, asked)
+}
+
+/// A Shapefile published as loose files is added by its `.shp` address (#1238): its `.dbf`,
+/// `.shx`, `.prj` and `.cpg` are fetched beside it with the address's query, and its `.prj` places
+/// it; the parts that aren't there are done without, but not its `.dbf`. Left to the app (a
+/// plugin's command), the address waits for the app, which fetches the parts the same way.
+#[test]
+fn shapefile_by_its_shp_address() {
+    use rustgis_data::raster::Crs;
+    // A point in UTM 23S (Teresina), written as a Shapefile's parts.
+    let (utm, _) = rustgis_data::io::read_geojson(
+        r#"{"type":"FeatureCollection","features":[{"type":"Feature","properties":{"nome":"rio"},"geometry":{"type":"Point","coordinates":[742000,9390000]}}]}"#,
+        "rios",
+    )
+    .unwrap();
+    let (parts, _) = rustgis_data::io::shapefile_parts_in(&utm, Crs::from_epsg(31983).unwrap()).unwrap();
+    let mut files: Vec<(String, Vec<u8>)> =
+        parts.iter().map(|(e, b)| (format!("/PI/TERESINA/HIDROGRAFIA/PI_2211001_RIOS.{e}?token=1"), b.clone())).collect();
+    // The same without its .prj and .cpg, and one without its .dbf.
+    files.extend(parts.iter().filter(|(e, _)| !matches!(*e, "prj" | "cpg")).map(|(e, b)| (format!("/plain/rios.{e}"), b.clone())));
+    files.extend(parts.iter().filter(|(e, _)| *e != "dbf").map(|(e, b)| (format!("/nodbf/rios.{e}"), b.clone())));
+    let (base, asked) = serve_files(files);
+    let mut s = Session::new(Project::default());
+    let r = s.run("layer.addUrl", &json!({"url": format!("{base}/PI/TERESINA/HIDROGRAFIA/PI_2211001_RIOS.shp?token=1")})).unwrap();
+    assert_eq!(r["features"], 1, "{r}");
+    let e = s.map().layer_by_name("PI_2211001_RIOS").unwrap().extent();
+    assert!((-43.0..-42.6).contains(&e.min_x) && (-5.7..-5.3).contains(&e.min_y), "placed by its .prj: {e:?}");
+    let asked_for = asked.lock().unwrap().clone();
+    for ext in ["shp", "dbf", "shx", "prj", "cpg"] {
+        assert!(asked_for.contains(&format!("/PI/TERESINA/HIDROGRAFIA/PI_2211001_RIOS.{ext}?token=1")), "{ext}: {asked_for:?}");
+    }
+    // Without a .prj or .cpg (404), it is read as a local Shapefile without them.
+    let r = s.run("layer.addUrl", &json!({"url": format!("{base}/plain/rios.shp"), "name": "Sem prj"})).unwrap();
+    assert_eq!(r["features"], 1, "{r}");
+    // Without its .dbf, it is refused, naming the .dbf's address.
+    let e = s.run("layer.addUrl", &json!({"url": format!("{base}/nodbf/rios.shp")})).unwrap_err();
+    assert!(e.contains("/nodbf/rios.dbf") && e.contains("404"), "{e}");
+    // Left to the app, it is asked for as it was given; the app's download brings the parts.
+    let url = format!("{base}/PI/TERESINA/HIDROGRAFIA/PI_2211001_RIOS.shp?token=1");
+    s.leave_downloads = true;
+    assert_eq!(s.run("layer.addUrl", &json!({"url": url, "name": "Pela janela"})).unwrap()["pending"], true);
+    s.leave_downloads = false;
+    assert_eq!(s.take_url_requests()[0]["url"], json!(url));
+    let slot = std::sync::Arc::new(std::sync::Mutex::new(None));
+    let land = slot.clone();
+    crate::cmd::layer::download_data(&url, 1 << 20, Box::new(move |r| *land.lock().unwrap() = Some(r)));
+    let bytes = loop {
+        if let Some(r) = slot.lock().unwrap().take() {
+            break r.unwrap();
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    };
+    let id = s.download_started();
+    assert!(s.download_landed(id, bytes));
+    let r = s.run("layer.addDownload", &json!({"id": id, "url": url, "name": "Pela janela"})).unwrap();
+    assert_eq!(r["features"], 1, "{r}");
+    assert!(s.map().layer_by_name("Pela janela").is_some());
+    // A download too large for the budget together is refused.
+    let slot = std::sync::Arc::new(std::sync::Mutex::new(None));
+    let land = slot.clone();
+    crate::cmd::layer::download_data(&url, 200, Box::new(move |r| *land.lock().unwrap() = Some(r)));
+    let r = loop {
+        if let Some(r) = slot.lock().unwrap().take() {
+            break r;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    };
+    assert!(r.is_err(), "within 200 bytes");
+}
+
 /// Data added by its web address: the format from the address or, without one, the contents; a
 /// page that isn't data, a missing file and a forbidden address are refused.
 #[test]

@@ -38,7 +38,7 @@ pub fn commands() -> Vec<C> {
             .params(r#"{"layer"?: name|id, "crs": "EPSG:… or WKT; reinterpret native coordinates, without rewriting the source file"}"#),
         C::new("layer.loadAll", "Load All Features", "Layers", load_all).when(need_streamed).params(r#"{"layer"?: name|id}"#),
         C::new("layer.addUrl", "Add Data From URL", "Home › Add › Add Data", add_url).params(
-            r#"{"url": "https://…/data.geojson|.csv|.parquet|.fgb|.gpkg|.zip|.kml|.kmz|.gpx|.tif|.jp2 (JPEG 2000: desktop, through GDAL) (the format from the address, else the contents) | a .pmtiles archive", "name"?: text, "layer"?: "one layer of a zip, KML or GPX", "zoom"?: "bool: true zooms to what was added; false keeps the view of a GeoParquet or FlatGeobuf read in place (zoomed to only when the map was empty)", "x"?, "y"?, "wkt"?, "crs"?, "delimiter"?, "paperSpace"?, "stream"?, "as"? (as layer.addData), "whole"?: "bool: download a cloud-optimised GeoTIFF whole (as a raster layer) instead of reading it in place (an address without a file name is read in place when its first bytes are a cloud-optimised GeoTIFF)", "cog"?: "bool: the address is a cloud-optimised GeoTIFF whatever its name says (the app's probe found it so)", "start"?, "end"?, "unit"?, "interval"?, "dates"?: "a GeoTIFF address with date placeholders ({date:YYYY}, {YYYY}{MM}{DD}), one file per date: the dates it spans and steps through (as time.set), turning the time slider on"}"#,
+            r#"{"url": "https://…/data.geojson|.csv|.parquet|.fgb|.gpkg|.zip|.shp (its .dbf, .shx, .prj and .cpg fetched beside it)|.kml|.kmz|.gpx|.tif|.jp2 (JPEG 2000: desktop, through GDAL) (the format from the address, else the contents) | a .pmtiles archive", "name"?: text, "layer"?: "one layer of a zip, KML or GPX", "zoom"?: "bool: true zooms to what was added; false keeps the view of a GeoParquet or FlatGeobuf read in place (zoomed to only when the map was empty)", "x"?, "y"?, "wkt"?, "crs"?, "delimiter"?, "paperSpace"?, "stream"?, "as"? (as layer.addData), "whole"?: "bool: download a cloud-optimised GeoTIFF whole (as a raster layer) instead of reading it in place (an address without a file name is read in place when its first bytes are a cloud-optimised GeoTIFF)", "cog"?: "bool: the address is a cloud-optimised GeoTIFF whatever its name says (the app's probe found it so)", "start"?, "end"?, "unit"?, "interval"?, "dates"?: "a GeoTIFF address with date placeholders ({date:YYYY}, {YYYY}{MM}{DD}), one file per date: the dates it spans and steps through (as time.set), turning the time slider on"}"#,
         ),
         C::new("layer.addDownload", "Add Downloaded Data", "Home › Add", add_download)
             .params(r#"{"id": a download the app finished (Home › Add › Add Data › From URL), "url": its address, "name"?: text, "layer"?: text, "zoom"?: bool, "x"?, "y"?, "wkt"?, "crs"?, "delimiter"?, "paperSpace"?, "stream"?, "as"? (as layer.addData), "service"?: bool (a service's features: their axes and paging are checked), "bounds"?: [west, south, east, north] (with service: the layer's longitude/latitude bounds from its capabilities, which its axes are checked against; without bounds they are left as they come; ignored without service), "coverage"?: bool (a WCS coverage: a GeoTIFF, else the service's error), "geolibreProject"?: bool (internal: downloaded project JSON), "geolibreLayer"?: {"token", "record"} (internal: reserved imported layer and its saved style), "geolibreZarr"?: bool (internal: an imported Zarr slice as GeoTIFF)}"#),
@@ -2659,6 +2659,10 @@ pub fn url_file_name(url: &str, bytes: &[u8]) -> Result<String, String> {
     if rustgis_data::raster::is_jpeg2000_name(&last) {
         return jpeg2000_only_on_desktop(last);
     }
+    // A `.shp` address comes with its files fetched beside it, zipped ([`download_data`]).
+    if ext == "shp" && bytes.starts_with(b"PK\x03\x04") {
+        return Ok(format!("{}.zip", Path::new(&last).file_stem().and_then(|s| s.to_str()).unwrap_or("layer")));
+    }
     let known = rustgis_data::io::READ_EXTENSIONS.contains(&ext.as_str()) || rustgis_data::raster::is_raster_name(&last) || ext == "tsv";
     if known && ext != "json" {
         return Ok(last);
@@ -2776,10 +2780,96 @@ pub(crate) fn add_url(s: &mut Session, p: &Value) -> CmdResult {
                 return add_cog(s, p, url);
             }
         }
-        let bytes = crate::render::rustgis_tiles::cache::download_blocking(url).map_err(named)?;
+        let bytes = if rustgis_data::io::shapefile_part_urls(url).is_some() {
+            download_shapefile_blocking(url)?
+        } else {
+            crate::render::rustgis_tiles::cache::download_blocking(url).map_err(named)?
+        };
         let name = url_file_name(url, &bytes).map_err(named)?;
         super::raster::add_named_bytes(s, p, name, bytes).map_err(named)
     }
+}
+
+/// Whether a download failed only because the file isn't there: 404 or 410, or 403, which S3
+/// answers for a missing object to those who can't list the bucket.
+fn not_there(e: &str) -> bool {
+    matches!(crate::render::rustgis_tiles::cache::http_status(e), Some(403 | 404 | 410))
+}
+
+/// A Shapefile by its `.shp` address, waited for (#1238): the `.shp`, then its `.dbf`, `.shx`,
+/// `.prj` and `.cpg` beside it (each but the `.dbf` only when it is there), zipped, within one
+/// download's budget together.
+#[cfg(not(target_arch = "wasm32"))]
+fn download_shapefile_blocking(url: &str) -> Result<Vec<u8>, String> {
+    use crate::render::rustgis_tiles::cache;
+    let named = |u: &str, e: String| if e.starts_with(u) { e } else { format!("{u}: {e}") };
+    let parts = rustgis_data::io::shapefile_part_urls(url).unwrap_or_default();
+    let shp = cache::download_blocking(url).map_err(|e| named(url, e))?;
+    let name = url_file_name(url, &shp).map_err(|e| named(url, e))?;
+    let mut left = cache::MAX_DOWNLOAD.saturating_sub(shp.len());
+    let mut got = Vec::new();
+    for (ext, u) in parts {
+        match cache::download_blocking_limited(&u, left) {
+            Ok(b) => {
+                left = left.saturating_sub(b.len());
+                got.push((ext, b));
+            }
+            Err(e) if ext != "dbf" && not_there(&e) => {}
+            Err(e) => return Err(named(&u, e)),
+        }
+    }
+    rustgis_data::io::zip_shapefile_parts(&name, shp, got).map_err(|e| named(url, e))
+}
+
+/// Downloads a file the user named by its address off the frame, as `cache::download_limited`
+/// does, for the app to add when it lands: a Shapefile's `.shp` address brings its `.dbf`, `.shx`,
+/// `.prj` and `.cpg` too, one after another, and `done` gets them zipped (#1238), within `max`
+/// bytes together.
+pub fn download_data(url: &str, max: usize, done: crate::render::rustgis_tiles::cache::Done) {
+    use crate::render::rustgis_tiles::cache;
+    let Some(parts) = rustgis_data::io::shapefile_part_urls(url) else {
+        return cache::download_limited(url, max, done);
+    };
+    let shp_url = url.to_string();
+    cache::download_limited(
+        url,
+        max,
+        Box::new(move |r| match r.and_then(|shp| url_file_name(&shp_url, &shp).map(|name| (name, shp))) {
+            Ok((name, shp)) => {
+                let left = max.saturating_sub(shp.len());
+                download_parts(name, shp, parts.into_iter(), Vec::new(), left, done);
+            }
+            Err(e) => done(Err(e)),
+        }),
+    );
+}
+
+/// The next of a Shapefile's parts for [`download_data`], then the zip once they are all in.
+fn download_parts(
+    name: String,
+    shp: Vec<u8>,
+    mut parts: std::vec::IntoIter<(&'static str, String)>,
+    mut got: Vec<(&'static str, Vec<u8>)>,
+    left: usize,
+    done: crate::render::rustgis_tiles::cache::Done,
+) {
+    let Some((ext, url)) = parts.next() else {
+        done(rustgis_data::io::zip_shapefile_parts(&name, shp, got));
+        return;
+    };
+    crate::render::rustgis_tiles::cache::download_limited(
+        &url.clone(),
+        left,
+        Box::new(move |r| match r {
+            Ok(b) => {
+                let left = left.saturating_sub(b.len());
+                got.push((ext, b));
+                download_parts(name, shp, parts, got, left, done);
+            }
+            Err(e) if ext != "dbf" && not_there(&e) => download_parts(name, shp, parts, got, left, done),
+            Err(e) => done(Err(if e.starts_with(&url) { e } else { format!("{url}: {e}") })),
+        }),
+    );
 }
 
 /// Adds a FlatGeobuf or GeoParquet by its address as a layer read in place: a view's features at
