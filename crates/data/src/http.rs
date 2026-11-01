@@ -9,9 +9,9 @@ use std::sync::LazyLock;
 use ureq::tls::{RootCerts, TlsConfig};
 
 /// The TLS settings every native `ureq` agent takes: platform verification, except on a Linux or
-/// BSD system with no CA certificates at all (a slim container) and no `SSL_CERT_FILE` or
-/// `SSL_CERT_DIR`, where the bundled Mozilla roots keep public HTTPS working. An explicitly
-/// chosen trust source is never widened with them.
+/// BSD system with no CA certificates at all (a slim container; a store it can't read still
+/// counts) and no `SSL_CERT_FILE` or `SSL_CERT_DIR`, where the bundled Mozilla roots keep public
+/// HTTPS working. An explicitly chosen trust source is never widened with them.
 ///
 /// The platform verifier reads the system's certificates each time an agent sets up TLS, so an
 /// agent should be made once and kept, its requests leaving its TLS settings alone.
@@ -22,7 +22,11 @@ pub fn tls_config() -> TlsConfig {
 
 #[cfg(all(unix, not(target_vendor = "apple"), not(target_os = "android")))]
 fn system_roots() -> RootCerts {
-    roots(std::env::var_os("SSL_CERT_FILE"), std::env::var_os("SSL_CERT_DIR"), || rustls_native_certs::load_native_certs().certs.is_empty())
+    roots(std::env::var_os("SSL_CERT_FILE"), std::env::var_os("SSL_CERT_DIR"), || {
+        // Only paths that exist are probed, so an error is a store that failed to load.
+        let loaded = rustls_native_certs::load_native_certs();
+        loaded.certs.is_empty() && loaded.errors.is_empty()
+    })
 }
 
 #[cfg(not(all(unix, not(target_vendor = "apple"), not(target_os = "android"))))]
