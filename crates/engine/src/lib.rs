@@ -784,6 +784,9 @@ fn edits_features(id: &str) -> bool {
 
 impl Session {
     pub fn new(project: Project) -> Self {
+        // The engine's tests never add Shapefile indexes to the user's cache (#1230).
+        #[cfg(all(test, not(target_arch = "wasm32")))]
+        rustgis_data::source::shp::use_temporary_index_dir();
         // Cheap: the suite's tools load the first time a tool list is needed.
         #[cfg(feature = "geolibre")]
         rustgis_geolibre::register();
