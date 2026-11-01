@@ -21,7 +21,35 @@ pub fn index_dir() -> PathBuf {
     if let Some(root) = TEST_INDEX_DIR.with(|root| root.borrow().clone()) {
         return root;
     }
+    if let Some(root) = PROCESS_INDEX_DIR.get() {
+        return root.clone();
+    }
+    // The crate's own tests never fill the user's cache (#1230), unless a test names a folder or
+    // `RUSTGIS_SHP_CACHE` does (the cross-process tests set it).
+    #[cfg(test)]
+    if std::env::var_os("RUSTGIS_SHP_CACHE").filter(|v| !v.is_empty()).is_none() {
+        return use_temporary_index_dir();
+    }
     crate::source::external::cache_dir("RUSTGIS_SHP_CACHE", "shp-index").unwrap_or_else(index_fallback_dir)
+}
+
+static PROCESS_INDEX_DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
+/// Keeps this process's Shapefile indexes out of the user's cache: they go to a folder of its
+/// own in the system temporary directory, which it returns, even when `RUSTGIS_SHP_CACHE` is
+/// set. For test suites, which would otherwise add an index to the user's cache for every
+/// Shapefile they write (#1230). The folder is per process, so a suite's cache never grows from
+/// one run to the next; the system clears its temporary directory.
+pub fn use_temporary_index_dir() -> PathBuf {
+    PROCESS_INDEX_DIR
+        .get_or_init(|| {
+            #[cfg(unix)]
+            let user = rustix::process::geteuid().as_raw().to_string();
+            #[cfg(not(unix))]
+            let user = "user";
+            std::env::temp_dir().join(format!("rustgis-shp-index-test-{user}-{}", std::process::id()))
+        })
+        .clone()
 }
 
 // Test-local routing avoids process-wide environment mutation and interference with

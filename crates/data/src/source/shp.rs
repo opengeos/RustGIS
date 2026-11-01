@@ -15,6 +15,9 @@ use std::path::{Path, PathBuf};
 mod cache;
 mod index;
 
+#[doc(hidden)]
+pub use cache::use_temporary_index_dir;
+
 use super::{Batch, FeatureSource, Reproject, Request, SourceInfo, clamp_limit};
 use crate::io::group_rings;
 use crate::{DataError, Feature, Field, FieldType, Geometry, GeometryType, Result, Value};
