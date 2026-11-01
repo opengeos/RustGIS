@@ -3789,6 +3789,19 @@ fn terrain_is_set_from_a_dem_or_tiles() {
         t.run("layer.remove", &json!({})).unwrap();
         assert!(t.map().view.terrain.is_none());
         assert!(t.notices.last().unwrap().text.contains("was removed"), "{:?}", t.notices.last());
+        // A mobile map package keeps a hidden DEM, which still gives the heights.
+        t.run("layer.addDataBytes", &json!({"fileName": "dem.tif", "data": dem_b64()})).unwrap();
+        t.run("map.terrain", &json!({})).unwrap();
+        t.run("layer.visibility", &json!({})).unwrap();
+        assert!(t.map().layers.iter().any(|l| l.is_raster() && !l.visible));
+        let pkg = std::env::temp_dir().join(format!("rustgis-terrain-{}.rgismpk", std::process::id()));
+        t.run("map.package", &json!({"path": pkg.display().to_string(), "mobile": true})).unwrap();
+        t.run("map.import", &json!({"path": pkg.display().to_string()})).unwrap();
+        let _ = std::fs::remove_file(&pkg);
+        let packaged = t.project.maps.last().unwrap();
+        assert!(packaged.layers.iter().any(|l| l.is_raster()), "the hidden DEM is in the package");
+        assert!(packaged.view.terrain.is_some());
+        t.run("layer.remove", &json!({"layer": t.map().layers.iter().find(|l| l.is_raster()).map(|l| l.id).unwrap()})).unwrap();
         // So does removing a group that holds it.
         t.run("layer.addDataBytes", &json!({"fileName": "dem.tif", "data": dem_b64()})).unwrap();
         let dem = t.map().layers.iter().find(|l| l.is_raster()).map(|l| l.id).unwrap();
