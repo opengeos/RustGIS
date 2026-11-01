@@ -9396,6 +9396,12 @@ fn shapefile_by_its_shp_address() {
     // Within the parts' own size, the zip's records go over.
     let exact: usize = parts.iter().map(|(_, b)| b.len()).sum();
     assert_eq!(fetch(&url, exact).unwrap_err(), format!("larger than {exact} bytes, zipped"));
+    // The app's parts too: a page answering for a part leaves it out, and a keyed part refused
+    // fails, named without its signature.
+    let zip = fetch(&format!("{base}/spa/rios.shp"), 1 << 20).unwrap();
+    assert_eq!(rustgis_data::io::shapefile_zip_lacks(&zip), [("rios.shp".to_string(), vec!["prj", "cpg"])]);
+    let e = fetch(&format!("{base}/signed/rios.shp?sig=1"), 1 << 20).unwrap_err();
+    assert!(e.contains("/signed/rios.prj") && e.contains("403") && !e.contains("sig=1"), "{e}");
 }
 
 /// Data added by its web address: the format from the address or, without one, the contents; a

@@ -1725,7 +1725,8 @@ fn is_resource_fork(name: &str) -> bool {
 /// by its name: what a Shapefile added by its `.shp` address (#1238) was read without, to say so.
 /// One entry per `.shp` that lacks any, its name as in the zip, in name order. Only the `.shp`s
 /// [`read_zip`] reads count: those with their `.dbf`, not a macOS resource fork, the first
-/// [`MAX_ZIP_LAYERS`] in name order. Empty for bytes that aren't a zip.
+/// [`MAX_ZIP_LAYERS`] in name order (the reader counts those it reads, so past a damaged one it
+/// reads one more than these). Empty for bytes that aren't a zip.
 pub fn shapefile_zip_lacks(bytes: &[u8]) -> Vec<(String, Vec<&'static str>)> {
     // The entries' names only: `want` sees each, and none is inflated.
     let names = std::cell::RefCell::new(Vec::new());

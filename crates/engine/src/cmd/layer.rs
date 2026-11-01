@@ -2866,6 +2866,8 @@ fn parts_left_out(url: &str, bytes: &[u8], p: &Value) -> Option<String> {
     let mut said: Vec<String> = lacking
         .into_iter()
         .take(NAMED)
+        // A name from the archive, at most 80 characters.
+        .map(|(shp, lacks)| (if shp.chars().count() > 80 { format!("{}…", shp.chars().take(79).collect::<String>()) } else { shp }, lacks))
         .map(|(shp, lacks)| {
             let names = lacks.iter().map(|e| format!(".{e}")).collect::<Vec<_>>().join(", ");
             let crs = if lacks.contains(&"prj") && !given_crs { "; its coordinates are read as longitude/latitude" } else { "" };

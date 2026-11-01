@@ -3560,8 +3560,10 @@ impl RustGisApp {
                     rustgis_engine::cmd::geolibre::discard_pending(&mut self.session, &p);
                     // Named without the address's keys, token or signature.
                     let e = e.strip_prefix(url.as_str()).map(|r| r.trim_start_matches(": ").to_string()).unwrap_or(e);
-                    let (shown, why) = (rustgis_engine::sources::redact(&url), rustgis_engine::sources::redact_text(&e));
-                    self.session.notify(format!("{shown}: {why}"), true);
+                    let why = rustgis_engine::sources::redact_text(&e);
+                    // An error that names its own address (a Shapefile's part) isn't named again.
+                    let named = why.split_once(": ").is_some_and(|(head, _)| head.contains("://") && !head.contains(' '));
+                    self.session.notify(if named { why } else { format!("{}: {why}", rustgis_engine::sources::redact(&url)) }, true);
                 }
             }
         }
