@@ -504,8 +504,8 @@ and the statistics of a text field are text, and the others are decimal. A decim
 numbers exactly only up to 2^53 (9,007,199,254,740,992): a statistic that should be a whole number
 past it (a `SUM`, `RANGE` or evenly dividing `MEAN` of whole numbers, the `MIN`, `MAX`, `FIRST`,
 `LAST`, `MODE` or `MINORITY` picked, or a whole `MEDIAN`, percentile or `IQR`) is rounded, and the
-tool says how many values were rounded and in which fields. Without `statistics`, `field` gives that field's `COUNT`, `SUM`,
-`MEAN`, `MIN`, `MAX` and `STD`, reading its values as numbers.
+tool says how many values were rounded and in which fields. Without `statistics`, `field` gives
+that field's `COUNT`, `SUM`, `MEAN`, `MIN`, `MAX` and `STD`, reading its values as numbers.
 
 **Dissolve** (`dissolve`) merges the polygons sharing a value of `field` into one feature for
 each value, or all of them into one without a field. Each feature has the value and `count`, the
