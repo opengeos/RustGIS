@@ -72,6 +72,7 @@ mod scriptcolor;
 mod scriptcomplete;
 mod searchbox;
 mod serviceui;
+mod shortcutfile;
 mod shortcutui;
 mod showme;
 mod sourcespane;
@@ -142,6 +143,12 @@ pub const SHAPEFILE_PICK: &str = "\u{1}shapefile:";
 /// The `open_async` purpose for a tool's file parameter, followed by the extensions it offers
 /// (`toolfile:nc,nc4`; none for any file).
 pub const TOOL_FILE_PURPOSE: &str = "toolfile:";
+
+/// Marks a returned shortcut picker file; cancellation leaves no pending routing state.
+pub const SHORTCUT_PICK: &str = "\u{1}shortcuts:";
+
+/// Maximum portable shortcut document size: saved overrides plus room for version metadata.
+pub const SHORTCUT_FILE_MAX_BYTES: usize = keymap::MAX_PREF_BYTES + 100;
 
 /// Starts the name of a file the web shell's tool file picker put in the inbox: it goes to the
 /// Tools pane's file parameter, not onto the map.
@@ -1307,8 +1314,12 @@ impl RustGisApp {
 
     /// Opens a file from the inbox: one the `"text"` picker marked ([`DELIMITED_PICK`]) opens Add
     /// Delimited Text for it, or is read with a script's options; one the tool file picker marked
-    /// ([`TOOL_FILE_PICK`]) goes to the Tools pane. Source-CRS picks carry [`SHAPEFILE_PICK`].
+    /// ([`TOOL_FILE_PICK`]) goes to the Tools pane. Source-CRS picks carry [`SHAPEFILE_PICK`];
+    /// shortcut picks carry [`SHORTCUT_PICK`] and open the validated merge preview.
     pub fn open_picked(&mut self, name: &str, bytes: &[u8]) -> Result<Value, String> {
+        if name.starts_with(SHORTCUT_PICK) {
+            return shortcutfile::picked(self, bytes);
+        }
         if let Some(name) = name.strip_prefix(TOOL_FILE_PICK) {
             panes::received_file(self, name, bytes);
             return Ok(Value::Null);
@@ -1356,6 +1367,7 @@ impl RustGisApp {
             (".rgistemplate", "project.fromTemplate"),
             (".rgistask", "task.import"),
             (".rgisbookmarks", "bookmark.import"),
+            (".rgisshortcuts", "ui.shortcuts.import"),
             (".rgisreport", "report.open"),
             (".rgisrpttemplate", "report.open"),
             (".rgispres", "presentation.import"),
@@ -1374,6 +1386,9 @@ impl RustGisApp {
             return self.run(cmd, json!({"image": base64::engine::general_purpose::STANDARD.encode(bytes)}));
         }
         if let Some(cmd) = self.ui.pending_open.take().or(item) {
+            if cmd == "ui.shortcuts.import" {
+                return shortcutfile::picked(self, bytes);
+            }
             use base64::Engine;
             let mut p = json!({"data": base64::engine::general_purpose::STANDARD.encode(bytes)});
             // A colour ramp file's name tells its format and names its ramp.
@@ -2319,6 +2334,9 @@ impl RustGisApp {
                     self.map.popup = None;
                 }
             }
+            "ui.shortcuts.set" | "ui.shortcuts.reset" | "ui.shortcuts.export" | "ui.shortcuts.import" => {
+                return shortcutfile::run(self, id, p);
+            }
             "ui.shortcuts" => self.ui.shortcuts = true,
             "ui.customizeShortcuts" => self.ui.shortcut_editor.open = true,
             // Copy, cut and copy path also put their text on the system clipboard.
@@ -3198,7 +3216,8 @@ impl RustGisApp {
                     .active_layer
                     .and_then(|id| self.session.map().layer(id))
                     .ok_or("select a layer in the Layers pane first")?;
-                // Any format but GeoPackage, which needs SQLite.
+                // Any format the dialog offers here (`dialogs::export_formats`): not GeoPackage or
+                // FlatGeobuf, which the data crate refuses in the browser.
                 let ext = p.get("format").and_then(Value::as_str).unwrap_or("geojson").to_ascii_lowercase();
                 // A streamed layer exports its whole source, not the features read for the view.
                 let whole = if l.is_streamed() { Some(l.load_all()?) } else { None };
@@ -3216,13 +3235,18 @@ impl RustGisApp {
                 };
                 let ext = if ext == "shp" { "zip".to_string() } else { ext };
                 let name = format!("{}.{ext}", l.name);
+                let zm_note = rustgis_engine::data::zm_export_note([ds], &name);
                 if left_out > 0 {
                     self.session.notify(format!("{name}: {left_out} features without drawable geometry were left out"), false);
                 }
                 if ext == "zip" && rustgis_engine::data::raster::wkt::to_wkt(crs).is_none() {
                     self.session.notify(format!("{name}: no .prj written, as {} has no WKT form", crs.label()), false);
                 }
-                self.download(&name, bytes);
+                if self.download(&name, bytes)
+                    && let Some(note) = zm_note
+                {
+                    self.session.notify(note, false);
+                }
             }
             "ui.exportRaster" if self.services.download.is_some() => {
                 // The web app: encode once and download.

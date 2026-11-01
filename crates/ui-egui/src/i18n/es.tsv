@@ -31,6 +31,7 @@ A catalogue's (CSW 2.0.2) address: search its records by words and, if you like,
 A ChatGPT plan or app usage limit was reached. Review Weekly usage before trying again.	Se alcanzó un límite de uso del plan de ChatGPT o de la aplicación. Revisa el uso semanal antes de intentarlo de nuevo.
 A ChatGPT sign-in can only be used with the OpenAI API.	Un inicio de sesión de ChatGPT solo puede usarse con la API de OpenAI.
 A colour, hatch lines, markers on a grid, a gradient, or a shapeburst (shaded from the edge inwards)	Un color, líneas de trama, marcadores en una cuadrícula, un degradado o un degradado de forma (sombreado desde el borde hacia dentro)
+A command id is required.	Se requiere un identificador de comando.
 A connection has this name: give this one another name to remember its keys.	Ya hay una conexión con este nombre: asigne otro nombre a esta para recordar sus claves.
 A copy of {name} with unsaved changes was kept a minute ago.	Se guardó una copia de {name} con cambios sin guardar hace un minuto.
 A copy of {name} with unsaved changes was kept less than a minute ago.	Se guardó una copia de {name} con cambios sin guardar hace menos de un minuto.
@@ -434,6 +435,7 @@ Bike	Bicicleta
 Bilinear	Bilineal
 Bind To Time Slider	Vincular al control deslizante de tiempo
 Bind to Time Slider	Vincular al control deslizante de tiempo
+Bindings: {bindings} · Conflicts: {conflicts} · Unknown commands: {unknown}	Asignaciones: {bindings} · Conflictos: {conflicts} · Comandos desconocidos: {unknown}
 Blank	En blanco
 Blank for Amazon S3	En blanco para Amazon S3
 Blank Letter page	Página Carta en blanco
@@ -582,6 +584,7 @@ Choose a layer…	Elija una capa…
 Choose a model.	Elija un modelo.
 Choose a resampling type for the raster layer.	Elegir un tipo de remuestreo para la capa ráster.
 Choose a saved S3 connection before opening this source.	Elija una conexión S3 guardada antes de abrir esta fuente.
+Choose a shortcut file in the browser.	Elija un archivo de atajos en el navegador.
 Choose a start	Elija un origen
 Choose a stop	Elija una parada
 Choose a table to load for editing	Elija una tabla para cargarla y editarla
@@ -1211,6 +1214,7 @@ Export Features	Exportar entidades
 Export Features (tool)	Exportar entidades (herramienta)
 Export Features needs a vector layer (Data › Export Raster writes a raster)	Exportar entidades necesita una capa vectorial (Datos › Exportar ráster escribe un ráster)
 Export Features…	Exportar entidades…
+Export Keyboard Shortcuts…	Exportar atajos de teclado…
 Export Layout	Exportar diseño
 Export Map	Exportar mapa
 Export Map failed unexpectedly	Exportar mapa falló inesperadamente
@@ -1567,6 +1571,8 @@ Import Bookmarks	Importar marcadores
 Import Bookmarks…	Importar marcadores…
 Import Deep Learning Package	Importar paquete de aprendizaje profundo
 Import GeoLibre Project	Importar proyecto de GeoLibre
+Import Keyboard Shortcuts	Importar atajos de teclado
+Import Keyboard Shortcuts…	Importar atajos de teclado…
 Import Layout	Importar diseño
 Import Layout…	Importar diseño…
 Import Model	Importar modelo
@@ -1585,6 +1591,7 @@ Import Styles From…	Importar estilos desde…
 Import Task	Importar tarea
 Import Task…	Importar tarea…
 Import Thumbnail	Importar miniatura
+Imported bindings replace conflicting keys. Unknown commands are kept for later use.	Las asignaciones importadas sustituyen a las teclas en conflicto. Los comandos desconocidos se conservan para usarlos más adelante.
 Imported Zarr slice exceeds the 128 MiB download limit	El corte de Zarr importado supera el límite de descarga de 128 MiB
 Import…	Importar…
 IN	IN
@@ -1649,8 +1656,11 @@ Intersect	Intersecar
 Interval	Intervalo
 Into the group just above it, as its last item	Dentro del grupo justo encima, como su último elemento
 invalid child id	id de hijo no válido
+Invalid or reserved shortcut key.	Tecla de atajo no válida o reservada.
 Invalid selection outline · draw a smaller area	Contorno de selección no válido · dibuje un área más pequeña
 Invalid selection outline · draw a smaller radius	Contorno de selección no válido · dibuje un radio menor
+Invalid shortcut binding.	Asignación de atajo no válida.
+Invalid shortcut key.	Tecla de atajo no válida.
 Invalid: {error}	No válida: {error}
 Invert	Invertir
 Invert color scheme	Invertir esquema de color
@@ -1715,6 +1725,7 @@ Kernel Type	Tipo de kernel
 Key	Key
 Keyboard\nShortcuts	Atajos de\nteclado
 Keyboard Shortcuts	Atajos de teclado
+Keyboard shortcuts	Atajos de teclado
 Keyboard shortcuts.	Atajos de teclado.
 Keys are available for this session but were not remembered on this computer.	Las claves están disponibles para esta sesión, pero no se recordaron en este equipo.
 Keys are kept for this session only: there is no credential store to remember them in here.	Las claves se conservan solo durante esta sesión: aquí no hay ningún almacén de credenciales donde recordarlas.
@@ -2564,6 +2575,8 @@ Projects and JSON data (RustGIS, QGIS, GeoLibre)	Proyectos y datos JSON (RustGIS
 Properties	Propiedades
 Property	Propiedad
 Proportional Symbols	Símbolos proporcionales
+Provide keys to reset, or no parameters to reset all.	Indique las teclas que desea restablecer o ningún parámetro para restablecerlas todas.
+Provide shortcut file text, data or a path.	Indique el texto, los datos o la ruta del archivo de atajos.
 Provider	Proveedor
 Provinces:	Provincias:
 Proximity	Proximidad
@@ -2747,6 +2760,7 @@ Reset Default	Restablecer predeterminado
 Reset Effects	Restablecer efectos
 Reset North	Orientar al norte
 Reset north	Orientar al norte
+Reset unreadable saved shortcuts before importing.	Restablezca los atajos guardados ilegibles antes de importar.
 Reset {key}	Restablecer {key}
 Resolution (0–30)	Resolución (0–30)
 Response	Respuesta
@@ -3068,6 +3082,7 @@ Set the pixels inside a polygon	Establecer los píxeles dentro de un polígono
 Set the pixels inside a polygon.	Establecer los píxeles dentro de un polígono.
 Settings	Configuración
 Settings › Customize	Configuración › Personalizar
+Settings › Customize › Keyboard Shortcuts	Configuración › Personalizar › Atajos de teclado
 Several places	Varios lugares
 Shade from the outer edge alone	Sombrear solo desde el borde exterior
 Shade to the point deepest inside	Sombrear hasta el punto más interior
@@ -3103,6 +3118,9 @@ Shifts the mark right of the point (left when negative)	Desplaza la marca a la d
 Shifts the stroke sideways: positive to the right of the line's direction, negative to the left	Desplaza el trazo lateralmente: positivo a la derecha de la dirección de la línea, negativo a la izquierda
 Short labels	Etiquetas cortas
 Shortcut already assigned	Atajo ya asignado
+Shortcut file contains invalid or reserved bindings.	El archivo de atajos contiene asignaciones no válidas o reservadas.
+Shortcut file exceeds the size limit.	El archivo de atajos supera el límite de tamaño.
+Shortcut keys are required.	Se requieren las teclas del atajo.
 Shortcuts	Atajos
 Shortest route over a line network	Ruta más corta sobre una red de líneas
 Show	Mostrar
@@ -3633,6 +3651,7 @@ Toggle Imperial Measurements	Alternar medidas imperiales
 Token Required	Se requiere un token
 Tolerance (km)	Tolerancia (km)
 Tolls	Peajes
+Too many shortcut changes to save.	Demasiados cambios de atajos para guardar.
 Too many shortcut changes to save. Changes apply only to this session.	Demasiados cambios de atajos para guardar. Los cambios se aplican solo a esta sesión.
 Tool Gallery	Galería de herramientas
 Toolboxes	Cajas de herramientas
@@ -3718,11 +3737,14 @@ United States	Estados Unidos
 Units	Unidades
 Units per step	Unidades por paso
 unknown (an older project)	desconocido (un proyecto anterior)
+Unknown shortcut binding field.	Campo de asignación de atajo desconocido.
+Unknown shortcut command.	Comando de atajo desconocido.
 UNKNOWN TOOL	HERRAMIENTA DESCONOCIDA
 Unload the GeoLibre tools and stop loading them when RustGIS starts.	Descargar las herramientas de GeoLibre y dejar de cargarlas al iniciar RustGIS.
 Unsaved changes	Cambios sin guardar
 Unsupervised classes (k-means)	Clases no supervisadas (k-means)
 Unsupervised classes (k-means).	Clases no supervisadas (k-means).
+Unsupported shortcut file version.	Versión del archivo de atajos no admitida.
 Untitled	Sin título
 Untitled model	Modelo sin título
 Up	Subir
@@ -3745,6 +3767,7 @@ US State GIS	SIG estatal de EE. UU.
 US State GIS…	SIG estatal de EE. UU.…
 USA Contiguous Albers Equal Area	Albers de áreas iguales de EE. UU. contiguo
 Use	Usar
+Use a browser download to export shortcuts.	Use una descarga del navegador para exportar los atajos.
 Use a Single Stroke	Usar un solo trazo
 Use another account	Usar otra cuenta
 Use ArcGIS Token	Usar token de ArcGIS

@@ -31,6 +31,7 @@ A catalogue's (CSW 2.0.2) address: search its records by words and, if you like,
 A ChatGPT plan or app usage limit was reached. Review Weekly usage before trying again.	Een gebruikslimiet van het ChatGPT-abonnement of de app is bereikt. Bekijk het wekelijkse gebruik voordat je het opnieuw probeert.
 A ChatGPT sign-in can only be used with the OpenAI API.	Een ChatGPT-aanmelding kan alleen met de OpenAI-API worden gebruikt.
 A colour, hatch lines, markers on a grid, a gradient, or a shapeburst (shaded from the edge inwards)	Een kleur, arceerlijnen, markeringen op een raster, een verloop of een shapeburst (van de rand naar binnen gearceerd)
+A command id is required.	Een opdracht-id is vereist.
 A connection has this name: give this one another name to remember its keys.	Er bestaat al een verbinding met deze naam: geef deze een andere naam om de sleutels te onthouden.
 A copy of {name} with unsaved changes was kept a minute ago.	Een minuut geleden is een kopie van {name} met niet-opgeslagen wijzigingen bewaard.
 A copy of {name} with unsaved changes was kept less than a minute ago.	Minder dan een minuut geleden is een kopie van {name} met niet-opgeslagen wijzigingen bewaard.
@@ -434,6 +435,7 @@ Bike	Fietsen
 Bilinear	Bilineair
 Bind To Time Slider	Aan tijdschuifregelaar koppelen
 Bind to Time Slider	Aan tijdschuifregelaar koppelen
+Bindings: {bindings} · Conflicts: {conflicts} · Unknown commands: {unknown}	Toewijzingen: {bindings} · Conflicten: {conflicts} · Onbekende opdrachten: {unknown}
 Blank	Leeg
 Blank for Amazon S3	Leeg voor Amazon S3
 Blank Letter page	Lege Letter-pagina
@@ -582,6 +584,7 @@ Choose a layer…	Kies een laag…
 Choose a model.	Kies een model.
 Choose a resampling type for the raster layer.	Kies een resamplingtype voor de rasterlaag.
 Choose a saved S3 connection before opening this source.	Kies een opgeslagen S3-verbinding voordat je deze bron opent.
+Choose a shortcut file in the browser.	Kies een sneltoetsbestand in de browser.
 Choose a start	Kies een vertrekpunt
 Choose a stop	Kies een tussenstop
 Choose a table to load for editing	Kies een tabel om te laden voor bewerken
@@ -1211,6 +1214,7 @@ Export Features	Objecten exporteren
 Export Features (tool)	Objecten exporteren (gereedschap)
 Export Features needs a vector layer (Data › Export Raster writes a raster)	Objecten exporteren vereist een vectorlaag (Gegevens › Raster exporteren schrijft een raster)
 Export Features…	Objecten exporteren…
+Export Keyboard Shortcuts…	Sneltoetsen exporteren…
 Export Layout	Lay-out exporteren
 Export Map	Kaart exporteren
 Export Map failed unexpectedly	Kaart exporteren onverwacht mislukt
@@ -1567,6 +1571,8 @@ Import Bookmarks	Bladwijzers importeren
 Import Bookmarks…	Bladwijzers importeren…
 Import Deep Learning Package	Deep learning-pakket importeren
 Import GeoLibre Project	GeoLibre-project importeren
+Import Keyboard Shortcuts	Sneltoetsen importeren
+Import Keyboard Shortcuts…	Sneltoetsen importeren…
 Import Layout	Lay-out importeren
 Import Layout…	Lay-out importeren…
 Import Model	Model importeren
@@ -1585,6 +1591,7 @@ Import Styles From…	Stijlen importeren uit…
 Import Task	Taak importeren
 Import Task…	Taak importeren…
 Import Thumbnail	Miniatuur importeren
+Imported bindings replace conflicting keys. Unknown commands are kept for later use.	Geïmporteerde toewijzingen vervangen conflicterende toetsen. Onbekende opdrachten worden bewaard voor later gebruik.
 Imported Zarr slice exceeds the 128 MiB download limit	De geïmporteerde Zarr-doorsnede overschrijdt de downloadlimiet van 128 MiB
 Import…	Importeren…
 IN	IN
@@ -1649,8 +1656,11 @@ Intersect	Intersectie
 Interval	Interval
 Into the group just above it, as its last item	In de groep er direct boven, als laatste item
 invalid child id	ongeldige id van onderliggend proces
+Invalid or reserved shortcut key.	Ongeldige of gereserveerde sneltoets.
 Invalid selection outline · draw a smaller area	Ongeldige selectieomtrek · teken een kleiner gebied
 Invalid selection outline · draw a smaller radius	Ongeldige selectieomtrek · teken een kleinere straal
+Invalid shortcut binding.	Ongeldige sneltoetstoewijzing.
+Invalid shortcut key.	Ongeldige sneltoets.
 Invalid: {error}	Ongeldig: {error}
 Invert	Omkeren
 Invert color scheme	Kleurenschema omkeren
@@ -1715,6 +1725,7 @@ Kernel Type	Kerntype
 Key	Key
 Keyboard\nShortcuts	Snel-\ntoetsen
 Keyboard Shortcuts	Sneltoetsen
+Keyboard shortcuts	Sneltoetsen
 Keyboard shortcuts.	Sneltoetsen.
 Keys are available for this session but were not remembered on this computer.	De sleutels zijn beschikbaar voor deze sessie, maar zijn niet op deze computer onthouden.
 Keys are kept for this session only: there is no credential store to remember them in here.	De sleutels worden alleen voor deze sessie bewaard: hier is geen referentieopslag om ze in te onthouden.
@@ -2564,6 +2575,8 @@ Projects and JSON data (RustGIS, QGIS, GeoLibre)	Projecten en JSON-gegevens (Rus
 Properties	Eigenschappen
 Property	Eigenschap
 Proportional Symbols	Proportionele symbolen
+Provide keys to reset, or no parameters to reset all.	Geef de te herstellen toetsen op, of geen parameters om alles te herstellen.
+Provide shortcut file text, data or a path.	Geef de tekst, de gegevens of een pad van het sneltoetsbestand op.
 Provider	Aanbieder
 Provinces:	Provincies:
 Proximity	Nabijheid
@@ -2747,6 +2760,7 @@ Reset Default	Standaard herstellen
 Reset Effects	Effecten herstellen
 Reset North	Noorden herstellen
 Reset north	Noorden herstellen
+Reset unreadable saved shortcuts before importing.	Herstel onleesbare opgeslagen sneltoetsen vóór het importeren.
 Reset {key}	{key} herstellen
 Resolution (0–30)	Resolutie (0–30)
 Response	Antwoord
@@ -3068,6 +3082,7 @@ Set the pixels inside a polygon	De pixels binnen een polygoon instellen
 Set the pixels inside a polygon.	De pixels binnen een polygoon instellen.
 Settings	Instellingen
 Settings › Customize	Instellingen › Aanpassen
+Settings › Customize › Keyboard Shortcuts	Instellingen › Aanpassen › Sneltoetsen
 Several places	Meerdere posities
 Shade from the outer edge alone	Alleen vanaf de buitenrand arceren
 Shade to the point deepest inside	Arceren tot het punt dat het diepst binnenin ligt
@@ -3103,6 +3118,9 @@ Shifts the mark right of the point (left when negative)	Verschuift het merkteken
 Shifts the stroke sideways: positive to the right of the line's direction, negative to the left	Verschuift de streek zijwaarts: positief naar rechts van de lijnrichting, negatief naar links
 Short labels	Korte labels
 Shortcut already assigned	Sneltoets al toegewezen
+Shortcut file contains invalid or reserved bindings.	Het sneltoetsbestand bevat ongeldige of gereserveerde toewijzingen.
+Shortcut file exceeds the size limit.	Het sneltoetsbestand overschrijdt de maximale grootte.
+Shortcut keys are required.	De toetsen van de sneltoets zijn vereist.
 Shortcuts	Sneltoetsen
 Shortest route over a line network	Kortste route over een lijnennetwerk
 Show	Tonen
@@ -3633,6 +3651,7 @@ Toggle Imperial Measurements	Imperiale maateenheden omschakelen
 Token Required	Token vereist
 Tolerance (km)	Tolerantie (km)
 Tolls	Tolwegen
+Too many shortcut changes to save.	Te veel sneltoetswijzigingen om op te slaan.
 Too many shortcut changes to save. Changes apply only to this session.	Te veel sneltoetswijzigingen om op te slaan. Wijzigingen gelden alleen voor deze sessie.
 Tool Gallery	Gereedschapsgalerij
 Toolboxes	Gereedschapskisten
@@ -3718,11 +3737,14 @@ United States	Verenigde Staten
 Units	Eenheden
 Units per step	Eenheden per stap
 unknown (an older project)	onbekend (een ouder project)
+Unknown shortcut binding field.	Onbekend veld in de sneltoetstoewijzing.
+Unknown shortcut command.	Onbekende sneltoetsopdracht.
 UNKNOWN TOOL	ONBEKEND GEREEDSCHAP
 Unload the GeoLibre tools and stop loading them when RustGIS starts.	De GeoLibre-gereedschappen ontladen en ze niet meer laden bij het starten van RustGIS.
 Unsaved changes	Niet-opgeslagen wijzigingen
 Unsupervised classes (k-means)	Niet-gesuperviseerde klassen (k-means)
 Unsupervised classes (k-means).	Niet-gesuperviseerde klassen (k-means).
+Unsupported shortcut file version.	Niet-ondersteunde versie van het sneltoetsbestand.
 Untitled	Naamloos
 Untitled model	Naamloos model
 Up	Omhoog
@@ -3745,6 +3767,7 @@ US State GIS	Staats-GIS (VS)
 US State GIS…	Staats-GIS (VS)…
 USA Contiguous Albers Equal Area	VS (aaneengesloten) Albers oppervlaktegetrouw
 Use	Gebruiken
+Use a browser download to export shortcuts.	Gebruik een browserdownload om sneltoetsen te exporteren.
 Use a Single Stroke	Eén streek gebruiken
 Use another account	Ander account gebruiken
 Use ArcGIS Token	ArcGIS-token gebruiken

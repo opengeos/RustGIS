@@ -2,14 +2,14 @@
 
 use geo::{BooleanOps, Contains, ConvexHull, InteriorPoint, Intersects, MultiPolygon, Orient, Relate, Simplify, orient::Direction};
 use rustgis_data::raster::Crs;
-use rustgis_data::{Coord, Dataset, Field, FieldType, Geometry, GeometryType, Value};
+use rustgis_data::{Coord, Dataset, Feature, Field, FieldType, Geometry, GeometryType, Value};
 use rustgis_geom::Extent;
 use serde_json::Value as Json;
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet, TryReserveError};
 
 use crate::convert::{from_line, from_multipolygon, from_point, to_geo, to_multiline, to_multipolygon};
-use crate::geodesic::geodesic_buffer;
+use crate::geodesic::{geodesic_buffer, geodesic_buffers};
 use crate::{Inputs, Output, OutputLayer, ParamKind as K, ParamSpec as P, ToolResult, ToolSpec};
 
 const UNITS: &[&str] = &["Kilometers", "Meters", "Miles", "Feet"];
@@ -1146,10 +1146,16 @@ fn buffer(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
     }
     let mut out = copy_schema(ds, out_name(p, format!("{}_Buffer", ds.name)), GeometryType::Polygon);
     let mut all: Vec<MultiPolygon<f64>> = Vec::new();
-    for r in rows(inp, p, "input", ds) {
-        let Some(f) = ds.features.get(r) else { continue };
-        let Some(g) = &f.geometry else { continue };
-        let Some(geom) = geodesic_buffer(g, metres) else { continue };
+    let geoms: Vec<(&Feature, &Geometry)> = rows(inp, p, "input", ds)
+        .into_iter()
+        .filter_map(|r| {
+            let f = ds.features.get(r)?;
+            Some((f, f.geometry.as_ref()?))
+        })
+        .collect();
+    let buffers = geodesic_buffers(&geoms.iter().map(|(_, g)| *g).collect::<Vec<_>>(), metres);
+    for ((f, _), geom) in geoms.iter().zip(buffers) {
+        let Some(geom) = geom else { continue };
         if s(p, "dissolve") == "All" {
             all.extend(to_multipolygon(&geom));
         } else {
@@ -4181,6 +4187,7 @@ fn join_field_tool(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
 
     let (out, report) = crate::attribute_join::join_field(&target_ref, &source_ref, &opts)?;
     messages.push(report.message(&target.name));
+    messages.extend(report.leading_zero_notice());
 
     let output = if out.geometry_type == rustgis_data::GeometryType::None { Output::Table(out) } else { Output::Layer(out) };
 
@@ -8658,19 +8665,21 @@ mod tests {
         .unwrap_err();
         assert!(err_dup.contains("duplicate key"));
 
-        // 4. Incompatible key type error
-        let mut int_source = Dataset::new("int_source", GeometryType::None, vec![Field::new("num_key", FieldType::Integer)]);
-        int_source.push(None, vec![Value::Int(123)]);
-        let m4 =
-            Map(HashMap::from([("inventory".to_string(), m2.0.get("inventory").unwrap().clone()), ("int_source".to_string(), int_source)]));
+        // 4. Incompatible key type error (a text key matches an integer key, not a boolean one)
+        let mut bool_source = Dataset::new("bool_source", GeometryType::None, vec![Field::new("flag_key", FieldType::Boolean)]);
+        bool_source.push(None, vec![Value::Bool(true)]);
+        let m4 = Map(HashMap::from([
+            ("inventory".to_string(), m2.0.get("inventory").unwrap().clone()),
+            ("bool_source".to_string(), bool_source),
+        ]));
         let err_type = crate::run(
             "joinField",
             &m4,
             &serde_json::json!({
                 "target": "inventory",
                 "targetField": "sku",
-                "join": "int_source",
-                "joinField": "num_key"
+                "join": "bool_source",
+                "joinField": "flag_key"
             }),
         )
         .unwrap_err();

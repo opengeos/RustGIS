@@ -31,6 +31,7 @@ A catalogue's (CSW 2.0.2) address: search its records by words and, if you like,
 A ChatGPT plan or app usage limit was reached. Review Weekly usage before trying again.	მიღწეულია ChatGPT-ის გეგმის ან აპის გამოყენების ლიმიტი. ხელახლა ცდამდე გადახედეთ კვირის გამოყენებას.
 A ChatGPT sign-in can only be used with the OpenAI API.	ChatGPT-ით შესვლის გამოყენება მხოლოდ OpenAI API-სთან შეიძლება.
 A colour, hatch lines, markers on a grid, a gradient, or a shapeburst (shaded from the edge inwards)	ფერი, დაშტრიხვის ხაზები, მარკერები ბადეზე, გრადიენტი ან კიდიდან დაჩრდილვა (დაჩრდილული კიდიდან შიგნით)
+A command id is required.	საჭიროა ბრძანების ID.
 A connection has this name: give this one another name to remember its keys.	კავშირი ამ სახელით უკვე არსებობს: მისი გასაღებების დასამახსოვრებლად ამას სხვა სახელი დაარქვით.
 A copy of {name} with unsaved changes was kept a minute ago.	{name}-ის ასლი შეუნახავი ცვლილებებით ერთი წუთის წინ შეინახა.
 A copy of {name} with unsaved changes was kept less than a minute ago.	{name}-ის ასლი შეუნახავი ცვლილებებით ერთ წუთზე ნაკლები ხნის წინ შეინახა.
@@ -434,6 +435,7 @@ Bike	ველოსიპედი
 Bilinear	ბილინეარული
 Bind To Time Slider	დროის სლაიდერზე მიბმა
 Bind to Time Slider	დროის სლაიდერზე მიბმა
+Bindings: {bindings} · Conflicts: {conflicts} · Unknown commands: {unknown}	მიბმები: {bindings} · კონფლიქტები: {conflicts} · უცნობი ბრძანებები: {unknown}
 Blank	ცარიელი
 Blank for Amazon S3	ცარიელი Amazon S3-ისთვის
 Blank Letter page	ცარიელი Letter გვერდი
@@ -582,6 +584,7 @@ Choose a layer…	აირჩიეთ ფენა…
 Choose a model.	აირჩიეთ მოდელი.
 Choose a resampling type for the raster layer.	აირჩიეთ რესემპლირების ტიპი რასტრული ფენისთვის.
 Choose a saved S3 connection before opening this source.	ამ წყაროს გახსნამდე აირჩიეთ შენახული S3 კავშირი.
+Choose a shortcut file in the browser.	აირჩიეთ მალსახმობების ფაილი ბრაუზერში.
 Choose a start	აირჩიეთ საწყისი წერტილი
 Choose a stop	აირჩიეთ გაჩერება
 Choose a table to load for editing	აირჩიეთ ცხრილი რედაქტირებისთვის ჩასატვირთად
@@ -1211,6 +1214,7 @@ Export Features	ობიექტების ექსპორტი
 Export Features (tool)	ობიექტების ექსპორტი (ხელსაწყო)
 Export Features needs a vector layer (Data › Export Raster writes a raster)	ობიექტების ექსპორტისთვის საჭიროა ვექტორული ფენა (რასტრს მონაცემები › რასტრის ექსპორტი წერს)
 Export Features…	ობიექტების ექსპორტი…
+Export Keyboard Shortcuts…	კლავიატურის მალსახმობების ექსპორტი…
 Export Layout	განლაგების ექსპორტი
 Export Map	რუკის ექსპორტი
 Export Map failed unexpectedly	რუკის ექსპორტი მოულოდნელად ჩავარდა
@@ -1567,6 +1571,8 @@ Import Bookmarks	სანიშნეების იმპორტი
 Import Bookmarks…	სანიშნეების იმპორტი…
 Import Deep Learning Package	ღრმა სწავლების პაკეტის იმპორტი
 Import GeoLibre Project	GeoLibre-ის პროექტის იმპორტი
+Import Keyboard Shortcuts	კლავიატურის მალსახმობების იმპორტი
+Import Keyboard Shortcuts…	კლავიატურის მალსახმობების იმპორტი…
 Import Layout	განლაგების იმპორტი
 Import Layout…	განლაგების იმპორტი…
 Import Model	მოდელის იმპორტი
@@ -1585,6 +1591,7 @@ Import Styles From…	სტილების იმპორტი…
 Import Task	დავალების იმპორტი
 Import Task…	დავალების იმპორტი…
 Import Thumbnail	მინიატურის იმპორტი
+Imported bindings replace conflicting keys. Unknown commands are kept for later use.	იმპორტირებული მიბმები ანაცვლებს კონფლიქტურ კლავიშებს. უცნობი ბრძანებები შემდგომი გამოყენებისთვის ინახება.
 Imported Zarr slice exceeds the 128 MiB download limit	იმპორტირებული Zarr ანაჭერი 128 MiB-ის ჩამოტვირთვის ლიმიტს აღემატება
 Import…	იმპორტი…
 IN	IN
@@ -1649,8 +1656,11 @@ Intersect	კვეთა
 Interval	ინტერვალი
 Into the group just above it, as its last item	უშუალოდ ზემოთ მდებარე ჯგუფში, ბოლო ელემენტად
 invalid child id	შვილობილი პროცესის არასწორი id
+Invalid or reserved shortcut key.	მალსახმობის კლავიში არასწორია ან დარეზერვებულია.
 Invalid selection outline · draw a smaller area	მონიშვნის კონტური არასწორია · დახაზეთ უფრო მცირე არე
 Invalid selection outline · draw a smaller radius	მონიშვნის კონტური არასწორია · დახაზეთ უფრო მცირე რადიუსი
+Invalid shortcut binding.	მალსახმობის მიბმა არასწორია.
+Invalid shortcut key.	მალსახმობის კლავიში არასწორია.
 Invalid: {error}	არასწორია: {error}
 Invert	ინვერსია
 Invert color scheme	ფერთა სქემის ინვერსია
@@ -1715,6 +1725,7 @@ Kernel Type	ბირთვის ტიპი
 Key	Key
 Keyboard\nShortcuts	კლავიატურის\nმალსახმობები
 Keyboard Shortcuts	კლავიატურის მალსახმობები
+Keyboard shortcuts	კლავიატურის მალსახმობები
 Keyboard shortcuts.	კლავიატურის მალსახმობები.
 Keys are available for this session but were not remembered on this computer.	გასაღებები ხელმისაწვდომია ამ სესიისთვის, მაგრამ ამ კომპიუტერში არ დამახსოვრებულა.
 Keys are kept for this session only: there is no credential store to remember them in here.	გასაღებები ინახება მხოლოდ ამ სესიისთვის: აქ არ არის ავტორიზაციის მონაცემთა საცავი მათ დასამახსოვრებლად.
@@ -2564,6 +2575,8 @@ Projects and JSON data (RustGIS, QGIS, GeoLibre)	პროექტები დ
 Properties	თვისებები
 Property	თვისება
 Proportional Symbols	პროპორციული სიმბოლოები
+Provide keys to reset, or no parameters to reset all.	მიუთითეთ საწყისზე დასაბრუნებელი კლავიშები, ან ყველას დასაბრუნებლად ნუ მიუთითებთ პარამეტრებს.
+Provide shortcut file text, data or a path.	მიუთითეთ მალსახმობების ფაილის ტექსტი, მონაცემები ან გზა.
 Provider	პროვაიდერი
 Provinces:	პროვინციები:
 Proximity	სიახლოვე
@@ -2747,6 +2760,7 @@ Reset Default	ნაგულისხმევის აღდგენა
 Reset Effects	ეფექტების საწყისზე დაბრუნება
 Reset North	ჩრდილოეთის აღდგენა
 Reset north	ჩრდილოეთის აღდგენა
+Reset unreadable saved shortcuts before importing.	იმპორტამდე საწყისზე დააბრუნეთ შენახული მალსახმობები, რომელთა წაკითხვა შეუძლებელია.
 Reset {key}	{key}-ის საწყისზე დაბრუნება
 Resolution (0–30)	გარჩევადობა (0–30)
 Response	პასუხი
@@ -3068,6 +3082,7 @@ Set the pixels inside a polygon	პოლიგონში მოხვედ�
 Set the pixels inside a polygon.	პოლიგონში მოხვედრილი პიქსელების მნიშვნელობის დაყენება.
 Settings	პარამეტრები
 Settings › Customize	პარამეტრები › მორგება
+Settings › Customize › Keyboard Shortcuts	პარამეტრები › მორგება › კლავიატურის მალსახმობები
 Several places	რამდენიმე ადგილი
 Shade from the outer edge alone	დაჩრდილვა მხოლოდ გარე კიდიდან
 Shade to the point deepest inside	დაჩრდილვა შიგნით ყველაზე ღრმა წერტილამდე
@@ -3103,6 +3118,9 @@ Shifts the mark right of the point (left when negative)	ნიშანს წ�
 Shifts the stroke sideways: positive to the right of the line's direction, negative to the left	შტრიხის გვერდზე წანაცვლება: დადებითი ხაზის მიმართულების მარჯვნივ, უარყოფითი მარცხნივ
 Short labels	მოკლე წარწერები
 Shortcut already assigned	მალსახმობი უკვე მინიჭებულია
+Shortcut file contains invalid or reserved bindings.	მალსახმობების ფაილი შეიცავს არასწორ ან დარეზერვებულ მიბმებს.
+Shortcut file exceeds the size limit.	მალსახმობების ფაილი აჭარბებს ზომის ლიმიტს.
+Shortcut keys are required.	საჭიროა მალსახმობის კლავიშები.
 Shortcuts	მალსახმობები
 Shortest route over a line network	უმოკლესი მარშრუტი ხაზოვან ქსელზე
 Show	ჩვენება
@@ -3633,6 +3651,7 @@ Toggle Imperial Measurements	იმპერიული ერთეულე�
 Token Required	საჭიროა ტოკენი
 Tolerance (km)	ტოლერანტობა (კმ)
 Tolls	ფასიანი გზები
+Too many shortcut changes to save.	შესანახად მალსახმობების ზედმეტად ბევრი ცვლილებაა.
 Too many shortcut changes to save. Changes apply only to this session.	შესანახად ძალიან ბევრი მალსახმობის ცვლილებაა. ცვლილებები მხოლოდ ამ სესიაზე ვრცელდება.
 Tool Gallery	ხელსაწყოების გალერეა
 Toolboxes	ხელსაწყოთა ყუთები
@@ -3718,11 +3737,14 @@ United States	აშშ
 Units	ერთეულები
 Units per step	ერთეული ნაბიჯზე
 unknown (an older project)	უცნობი (ძველი პროექტი)
+Unknown shortcut binding field.	მალსახმობის მიბმის უცნობი ველი.
+Unknown shortcut command.	მალსახმობის უცნობი ბრძანება.
 UNKNOWN TOOL	უცნობი ხელსაწყო
 Unload the GeoLibre tools and stop loading them when RustGIS starts.	GeoLibre-ის ხელსაწყოების გამოტვირთვა და RustGIS-ის გაშვებისას მათი ჩატვირთვის შეწყვეტა.
 Unsaved changes	შეუნახავი ცვლილებები
 Unsupervised classes (k-means)	უკონტროლო კლასები (k-means)
 Unsupervised classes (k-means).	უკონტროლო კლასები (k-means).
+Unsupported shortcut file version.	მალსახმობების ფაილის მხარდაუჭერელი ვერსია.
 Untitled	უსახელო
 Untitled model	უსახელო მოდელი
 Up	ზემოთ
@@ -3745,6 +3767,7 @@ US State GIS	აშშ-ის შტატების GIS
 US State GIS…	აშშ-ის შტატების GIS…
 USA Contiguous Albers Equal Area	აშშ-ის კონტინენტური ალბერსის ტოლფართობიანი
 Use	გამოყენება
+Use a browser download to export shortcuts.	მალსახმობების ექსპორტისთვის გამოიყენეთ ბრაუზერის ჩამოტვირთვა.
 Use a Single Stroke	ერთი შტრიხის გამოყენება
 Use another account	სხვა ანგარიშის გამოყენება
 Use ArcGIS Token	ArcGIS-ის ტოკენის გამოყენება

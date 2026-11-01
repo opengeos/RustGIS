@@ -31,6 +31,7 @@ A catalogue's (CSW 2.0.2) address: search its records by words and, if you like,
 A ChatGPT plan or app usage limit was reached. Review Weekly usage before trying again.	Đã đạt giới hạn sử dụng của gói ChatGPT hoặc ứng dụng. Xem mức sử dụng hằng tuần trước khi thử lại.
 A ChatGPT sign-in can only be used with the OpenAI API.	Đăng nhập ChatGPT chỉ có thể dùng với API của OpenAI.
 A colour, hatch lines, markers on a grid, a gradient, or a shapeburst (shaded from the edge inwards)	Một màu, đường gạch, điểm đánh dấu trên lưới, dải màu, hoặc shapeburst (tô đậm dần từ cạnh vào trong)
+A command id is required.	Cần có ID lệnh.
 A connection has this name: give this one another name to remember its keys.	Đã có một kết nối mang tên này: hãy đặt tên khác cho kết nối này để ghi nhớ khóa của nó.
 A copy of {name} with unsaved changes was kept a minute ago.	Một bản sao của {name} có thay đổi chưa lưu đã được giữ cách đây một phút.
 A copy of {name} with unsaved changes was kept less than a minute ago.	Một bản sao của {name} có thay đổi chưa lưu đã được giữ cách đây chưa đầy một phút.
@@ -434,6 +435,7 @@ Bike	Xe đạp
 Bilinear	Song tuyến
 Bind To Time Slider	Gắn với thanh trượt thời gian
 Bind to Time Slider	Gắn với thanh trượt thời gian
+Bindings: {bindings} · Conflicts: {conflicts} · Unknown commands: {unknown}	Gán phím: {bindings} · Xung đột: {conflicts} · Lệnh không xác định: {unknown}
 Blank	Trống
 Blank for Amazon S3	Để trống cho Amazon S3
 Blank Letter page	Trang Letter trống
@@ -582,6 +584,7 @@ Choose a layer…	Chọn một lớp…
 Choose a model.	Hãy chọn một mô hình.
 Choose a resampling type for the raster layer.	Chọn kiểu lấy mẫu lại cho lớp raster.
 Choose a saved S3 connection before opening this source.	Chọn một kết nối S3 đã lưu trước khi mở nguồn này.
+Choose a shortcut file in the browser.	Chọn tệp phím tắt trong trình duyệt.
 Choose a start	Chọn điểm xuất phát
 Choose a stop	Chọn điểm dừng
 Choose a table to load for editing	Chọn một bảng để tải về chỉnh sửa
@@ -1211,6 +1214,7 @@ Export Features	Xuất đối tượng
 Export Features (tool)	Xuất đối tượng (công cụ)
 Export Features needs a vector layer (Data › Export Raster writes a raster)	Xuất đối tượng cần một lớp vector (Dữ liệu › Xuất raster ghi ra raster)
 Export Features…	Xuất đối tượng…
+Export Keyboard Shortcuts…	Xuất phím tắt…
 Export Layout	Xuất bố cục
 Export Map	Xuất bản đồ
 Export Map failed unexpectedly	Xuất bản đồ thất bại ngoài dự kiến
@@ -1567,6 +1571,8 @@ Import Bookmarks	Nhập dấu trang
 Import Bookmarks…	Nhập dấu trang…
 Import Deep Learning Package	Nhập gói học sâu
 Import GeoLibre Project	Nhập dự án GeoLibre
+Import Keyboard Shortcuts	Nhập phím tắt
+Import Keyboard Shortcuts…	Nhập phím tắt…
 Import Layout	Nhập bố cục
 Import Layout…	Nhập bố cục…
 Import Model	Nhập mô hình
@@ -1585,6 +1591,7 @@ Import Styles From…	Nhập kiểu từ…
 Import Task	Nhập nhiệm vụ
 Import Task…	Nhập nhiệm vụ…
 Import Thumbnail	Nhập ảnh thu nhỏ
+Imported bindings replace conflicting keys. Unknown commands are kept for later use.	Các phép gán được nhập sẽ thay thế các phím xung đột. Các lệnh không xác định được giữ lại để dùng sau.
 Imported Zarr slice exceeds the 128 MiB download limit	Lát cắt Zarr đã nhập vượt quá giới hạn tải xuống 128 MiB
 Import…	Nhập…
 IN	IN
@@ -1649,8 +1656,11 @@ Intersect	Giao
 Interval	Khoảng
 Into the group just above it, as its last item	Vào nhóm ngay phía trên, làm mục cuối cùng
 invalid child id	id tiến trình con không hợp lệ
+Invalid or reserved shortcut key.	Phím tắt không hợp lệ hoặc đã được dành riêng.
 Invalid selection outline · draw a smaller area	Đường viền chọn không hợp lệ · vẽ vùng nhỏ hơn
 Invalid selection outline · draw a smaller radius	Đường viền chọn không hợp lệ · vẽ bán kính nhỏ hơn
+Invalid shortcut binding.	Phép gán phím tắt không hợp lệ.
+Invalid shortcut key.	Phím tắt không hợp lệ.
 Invalid: {error}	Không hợp lệ: {error}
 Invert	Đảo ngược
 Invert color scheme	Đảo ngược bảng màu
@@ -1715,6 +1725,7 @@ Kernel Type	Loại kernel
 Key	Key
 Keyboard\nShortcuts	Phím\ntắt
 Keyboard Shortcuts	Phím tắt
+Keyboard shortcuts	Phím tắt
 Keyboard shortcuts.	Phím tắt.
 Keys are available for this session but were not remembered on this computer.	Khóa có sẵn trong phiên này nhưng không được ghi nhớ trên máy tính này.
 Keys are kept for this session only: there is no credential store to remember them in here.	Khóa chỉ được giữ trong phiên này: ở đây không có kho thông tin xác thực để ghi nhớ chúng.
@@ -2564,6 +2575,8 @@ Projects and JSON data (RustGIS, QGIS, GeoLibre)	Dự án và dữ liệu JSON (
 Properties	Thuộc tính
 Property	Thuộc tính
 Proportional Symbols	Ký hiệu tỷ lệ
+Provide keys to reset, or no parameters to reset all.	Cung cấp các phím cần đặt lại, hoặc không có tham số để đặt lại tất cả.
+Provide shortcut file text, data or a path.	Cung cấp văn bản, dữ liệu hoặc đường dẫn của tệp phím tắt.
 Provider	Nhà cung cấp
 Provinces:	Tỉnh thành:
 Proximity	Lân cận
@@ -2747,6 +2760,7 @@ Reset Default	Đặt lại mặc định
 Reset Effects	Đặt lại hiệu ứng
 Reset North	Đặt lại hướng bắc
 Reset north	Đặt lại hướng bắc
+Reset unreadable saved shortcuts before importing.	Đặt lại các phím tắt đã lưu không đọc được trước khi nhập.
 Reset {key}	Đặt lại {key}
 Resolution (0–30)	Độ phân giải (0–30)
 Response	Phản hồi
@@ -3068,6 +3082,7 @@ Set the pixels inside a polygon	Đặt các điểm ảnh bên trong một vùng
 Set the pixels inside a polygon.	Đặt các điểm ảnh bên trong một vùng.
 Settings	Thiết lập
 Settings › Customize	Thiết lập › Tùy chỉnh
+Settings › Customize › Keyboard Shortcuts	Thiết lập › Tùy chỉnh › Phím tắt
 Several places	Nhiều địa điểm
 Shade from the outer edge alone	Tô đậm chỉ từ cạnh ngoài
 Shade to the point deepest inside	Tô đậm tới điểm sâu nhất bên trong
@@ -3103,6 +3118,9 @@ Shifts the mark right of the point (left when negative)	Dịch dấu sang phải
 Shifts the stroke sideways: positive to the right of the line's direction, negative to the left	Dịch nét sang bên: dương sang phải theo hướng của đường, âm sang trái
 Short labels	Nhãn ngắn
 Shortcut already assigned	Phím tắt đã được gán
+Shortcut file contains invalid or reserved bindings.	Tệp phím tắt chứa các phép gán không hợp lệ hoặc được dành riêng.
+Shortcut file exceeds the size limit.	Tệp phím tắt vượt quá giới hạn kích thước.
+Shortcut keys are required.	Cần có các phím của phím tắt.
 Shortcuts	Phím tắt
 Shortest route over a line network	Tuyến ngắn nhất trên mạng lưới đường
 Show	Hiện
@@ -3633,6 +3651,7 @@ Toggle Imperial Measurements	Bật/tắt đơn vị đo hệ Anh
 Token Required	Cần token
 Tolerance (km)	Dung sai (km)
 Tolls	Đường thu phí
+Too many shortcut changes to save.	Có quá nhiều thay đổi phím tắt để lưu.
 Too many shortcut changes to save. Changes apply only to this session.	Có quá nhiều thay đổi phím tắt để lưu. Thay đổi chỉ áp dụng cho phiên này.
 Tool Gallery	Thư viện công cụ
 Toolboxes	Hộp công cụ
@@ -3718,11 +3737,14 @@ United States	Hoa Kỳ
 Units	Đơn vị
 Units per step	Số đơn vị mỗi bước
 unknown (an older project)	không rõ (dự án cũ hơn)
+Unknown shortcut binding field.	Trường gán phím tắt không xác định.
+Unknown shortcut command.	Lệnh phím tắt không xác định.
 UNKNOWN TOOL	CÔNG CỤ KHÔNG XÁC ĐỊNH
 Unload the GeoLibre tools and stop loading them when RustGIS starts.	Gỡ tải các công cụ GeoLibre và không tải chúng khi RustGIS khởi động nữa.
 Unsaved changes	Thay đổi chưa lưu
 Unsupervised classes (k-means)	Lớp không giám sát (k-means)
 Unsupervised classes (k-means).	Lớp không giám sát (k-means).
+Unsupported shortcut file version.	Phiên bản tệp phím tắt không được hỗ trợ.
 Untitled	Chưa đặt tên
 Untitled model	Mô hình chưa đặt tên
 Up	Lên
@@ -3745,6 +3767,7 @@ US State GIS	GIS cấp bang Hoa Kỳ
 US State GIS…	GIS cấp bang Hoa Kỳ…
 USA Contiguous Albers Equal Area	Albers đồng diện tích Hoa Kỳ lục địa
 Use	Dùng
+Use a browser download to export shortcuts.	Hãy dùng tải xuống của trình duyệt để xuất phím tắt.
 Use a Single Stroke	Dùng một nét duy nhất
 Use another account	Dùng tài khoản khác
 Use ArcGIS Token	Dùng token ArcGIS

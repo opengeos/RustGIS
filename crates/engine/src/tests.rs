@@ -6546,6 +6546,143 @@ fn view_effects_scene_and_navigation() {
     assert!(s.run("map.navigator", &Value::Null).unwrap()["navigator"].as_bool().unwrap());
 }
 
+fn offline_field_session(layers: &[&str], empty: bool) -> Session {
+    use rustgis_data::{Dataset, Field, FieldType, Geometry, GeometryType, Value as Attr};
+    use rustgis_geom::Coord;
+
+    isolate_plugins();
+    let mut s = Session::new(Project::default());
+    for name in layers.iter().rev() {
+        let mut data = Dataset::new(
+            *name,
+            GeometryType::Point,
+            vec![Field::new("name", FieldType::Text), Field::new("region", FieldType::Text), Field::new("population", FieldType::Integer)],
+        );
+        if !empty {
+            data.push_next(
+                Some(Geometry::Point(Coord::new(1.0, 1.0))),
+                vec![Attr::Text("Original".into()), Attr::Text("North".into()), Attr::Int(10)],
+            );
+        }
+        s.active_layer = Some(s.map_mut().add_dataset(data));
+    }
+    s.run("offline.download", &json!({"name": "Fieldwork", "extent": [0.0, 0.0, 2.0, 2.0]})).unwrap();
+    s.run("offline.open", &json!({"name": "Fieldwork"})).unwrap();
+    s
+}
+
+#[test]
+fn offline_sync_rejects_incompatible_fields_and_preserves_safe_refreshes() {
+    use rustgis_data::{FieldType, Geometry, Value as Attr};
+    use rustgis_geom::Coord;
+
+    for mode in ["unchanged", "display_metadata", "source_refresh", "matching_schema_changes"] {
+        let mut s = offline_field_session(&["Assets"], false);
+        if mode != "source_refresh" {
+            s.run("edit.setValue", &json!({"layer": "Assets", "row": 0, "field": "population", "value": 20})).unwrap();
+        }
+        if mode == "matching_schema_changes" {
+            s.run("edit.deleteField", &json!({"layer": "Assets", "field": "region"})).unwrap();
+        }
+        s.run("map.activate", &json!({"name": "Map"})).unwrap();
+        if mode == "display_metadata" {
+            let fields = &mut s.map_mut().layers.iter_mut().find(|l| l.name == "Assets").unwrap().dataset.fields;
+            fields[0].name = "NAME".into();
+            fields[2].alias = Some("Population estimate".into());
+        } else if mode == "source_refresh" || mode == "matching_schema_changes" {
+            s.run("edit.deleteField", &json!({"layer": "Assets", "field": "region"})).unwrap();
+        }
+        s.run("offline.sync", &json!({"name": "Fieldwork"})).unwrap();
+        let source = &s.map().layer_by_name("Assets").unwrap().dataset;
+        let expected = if mode == "source_refresh" { 10 } else { 20 };
+        assert_eq!(source.value(0, source.field_index("population").unwrap()), &Attr::Int(expected), "{mode}");
+        let offline = &s.project.maps.iter().find(|m| m.name == "Fieldwork (offline)").unwrap().layer_by_name("Assets").unwrap().dataset;
+        assert_eq!(offline.fields, source.fields, "{mode}");
+        assert_eq!(offline.features, source.features, "{mode}");
+    }
+
+    for mode in ["source_deleted", "geometry_only", "offline_added", "source_reordered", "source_type_changed", "empty_offline_schema"] {
+        let mut s = offline_field_session(&["Assets"], mode == "empty_offline_schema");
+        if mode == "geometry_only" {
+            s.map_mut().layers[0].dataset.features[0].geometry = Some(Geometry::Point(Coord::new(1.1, 1.0)));
+        } else if mode != "empty_offline_schema" {
+            s.run("edit.setValue", &json!({"layer": "Assets", "row": 0, "field": "population", "value": 20})).unwrap();
+        }
+        if mode == "offline_added" || mode == "empty_offline_schema" {
+            s.run("edit.addField", &json!({"layer": "Assets", "name": "survey", "type": "long"})).unwrap();
+        }
+        s.run("map.activate", &json!({"name": "Map"})).unwrap();
+        match mode {
+            "source_deleted" | "geometry_only" => {
+                s.run("edit.deleteField", &json!({"layer": "Assets", "field": "region"})).unwrap();
+            }
+            "source_reordered" => {
+                let source = &mut s.map_mut().layers.iter_mut().find(|l| l.name == "Assets").unwrap().dataset;
+                source.fields.swap(0, 1);
+                source.features[0].attrs.swap(0, 1);
+            }
+            "source_type_changed" => {
+                let source = &mut s.map_mut().layers.iter_mut().find(|l| l.name == "Assets").unwrap().dataset;
+                source.fields[2].ty = FieldType::Text;
+                source.features[0].attrs[2] = Attr::Text("10".into());
+            }
+            _ => {}
+        }
+        s.mark_saved();
+        let before = serde_json::to_value(&s.project).unwrap();
+        let undo_depth = s.undo_depth();
+        for _ in 0..2 {
+            let error = s.run("offline.sync", &json!({"name": "Fieldwork"})).unwrap_err();
+            assert!(error.contains("Assets") && error.contains("fields"), "{mode}: {error}");
+            assert_eq!(serde_json::to_value(&s.project).unwrap(), before, "{mode}");
+            assert_eq!(s.undo_depth(), undo_depth, "{mode}");
+            assert!(!s.dirty(), "{mode}");
+        }
+    }
+}
+
+#[test]
+fn offline_sync_schema_refusal_rolls_back_other_layers_and_can_retry() {
+    use rustgis_data::Value as Attr;
+
+    let mut s = offline_field_session(&["Other", "Assets"], false);
+    assert_eq!(s.map().layers[0].name, "Other", "sync the compatible layer before reaching the incompatible one");
+    for (name, population) in [("Other", 99), ("Assets", 20)] {
+        s.run("edit.setValue", &json!({"layer": name, "row": 0, "field": "population", "value": population})).unwrap();
+    }
+    s.run("map.activate", &json!({"name": "Map"})).unwrap();
+    s.run("edit.deleteField", &json!({"layer": "Assets", "field": "region"})).unwrap();
+    let before = serde_json::to_value(&s.project).unwrap();
+    let undo_depth = s.undo_depth();
+    assert!(s.run("offline.sync", &json!({"name": "Fieldwork"})).is_err());
+    assert_eq!(serde_json::to_value(&s.project).unwrap(), before);
+    assert_eq!(s.undo_depth(), undo_depth);
+
+    // Undo and redo invalidate map geometry caches even while restoring the same project data.
+    let undo_snapshot = |s: &Session| {
+        let mut project = s.project.clone();
+        for map in &mut project.maps {
+            for layer in &mut map.layers {
+                layer.geometry_rev = 0;
+            }
+        }
+        serde_json::to_value(project).unwrap()
+    };
+    assert!(s.undo(), "restore the source field before retrying");
+    let before_retry = undo_snapshot(&s);
+    let synced = s.run("offline.sync", &json!({"name": "Fieldwork"})).unwrap();
+    assert_eq!(synced["updated"], 2);
+    for (name, population) in [("Other", 99), ("Assets", 20)] {
+        let data = &s.map().layer_by_name(name).unwrap().dataset;
+        assert_eq!(data.value(0, data.field_index("population").unwrap()), &Attr::Int(population));
+    }
+    let after_retry = undo_snapshot(&s);
+    assert!(s.undo());
+    assert_eq!(undo_snapshot(&s), before_retry);
+    assert!(s.redo());
+    assert_eq!(undo_snapshot(&s), after_retry);
+}
+
 #[test]
 fn workspace_links_thumbnails_animation_profiles_offline_and_cache() {
     let dir = std::env::temp_dir().join(format!("rustgis-ws-{}", std::process::id()));
@@ -10769,6 +10906,41 @@ fn exporting_features_refuses_to_replace_an_existing_geopackage() {
     let error = s.run("share.exportLayer", &json!({"layer": "Countries", "path": path})).unwrap_err();
     assert!(error.to_string().contains("Choose a new filename"), "{error}");
     assert_eq!(std::fs::read(&path).unwrap(), before);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// A layer whose Z values were dropped on import says so when added, read whole or in place, and
+/// again when exported or converted; a 2D layer's export says nothing of it.
+#[test]
+fn dropped_z_values_are_said_on_import_and_export() {
+    let dir = std::env::temp_dir().join(format!("rustgis-engine-zm-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = dir.join("wells.geojson");
+    std::fs::write(
+        &src,
+        r#"{"type":"FeatureCollection","features":[{"type":"Feature","properties":{},"geometry":{"type":"Point","coordinates":[1,2,30]}}]}"#,
+    )
+    .unwrap();
+    isolate_plugins();
+    let mut s = Session::new(Project::default());
+    for stream in [false, true] {
+        let mark = s.notice_mark();
+        let id = s.run("layer.addData", &json!({"path": src, "stream": stream})).unwrap()["layer"].as_u64().unwrap();
+        assert!(s.notices_since(mark).iter().any(|n| n.text.contains("Z or M values")), "stream {stream}: {:?}", s.notices_since(mark));
+        let out = dir.join(format!("out-{stream}.geojson"));
+        let mark = s.notice_mark();
+        s.run("share.exportLayer", &json!({"layer": id, "path": out})).unwrap();
+        let said = |s: &Session, mark| s.notices_since(mark).iter().any(|n| n.text.contains("its geometry has no Z or M values"));
+        assert!(said(&s, mark), "stream {stream}: {:?}", s.notices_since(mark));
+        assert!(std::fs::read_to_string(&out).unwrap().contains("[1.0,2.0]"));
+        let mark = s.notice_mark();
+        s.run("data.convert", &json!({"layer": id, "format": "wkt"})).unwrap();
+        assert!(said(&s, mark), "stream {stream}");
+    }
+    let mut s = world();
+    let mark = s.notice_mark();
+    s.run("share.exportLayer", &json!({"layer": "Cities", "path": dir.join("cities.geojson")})).unwrap();
+    assert!(!s.notices_since(mark).iter().any(|n| n.text.contains("Z or M")), "{:?}", s.notices_since(mark));
     std::fs::remove_dir_all(dir).unwrap();
 }
 
@@ -20123,10 +20295,33 @@ impl Drop for GpkgRegressionFixture {
     }
 }
 
+/// A streamed layer's export says how many of its source's rows couldn't be read, written a
+/// chunk at a time (GeoJSON) or from a whole read (KML) alike.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_streamed_export_counts_the_rows_it_could_not_read() {
+    let fixture = GpkgRegressionFixture::new("unread-rows");
+    let path = fixture.path();
+    let db = rusqlite::Connection::open(&path).unwrap();
+    db.execute_batch("INSERT INTO roads (fid, geom, name) VALUES (4, X'4750000300000000DEAD', 'bad');").unwrap();
+    drop(db);
+    let mut s = Session::new(Project::default());
+    let loaded = s.run("layer.addData", &json!({"path": path, "stream": true})).unwrap();
+    let id = loaded["layer"].as_u64().unwrap() as u32;
+    assert!(s.map().layer(id).unwrap().is_streamed());
+    for ext in ["geojson", "kml"] {
+        let mark = s.notice_mark();
+        let exported = s.run("share.exportLayer", &json!({"layer": id, "path": fixture.dir.join(format!("out.{ext}"))})).unwrap();
+        assert_eq!(exported["features"].as_u64(), Some(3), "{ext}");
+        let notices: Vec<_> = s.notices_since(mark).iter().map(|n| n.text.clone()).collect();
+        assert!(notices.iter().any(|n| n.contains("1 rows couldn't be read")), "{ext}: {notices:?}");
+    }
+}
+
 /// Whole reads must refuse an oversized provider instead of returning its capped sample (#1108).
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
-fn oversized_geopackage_refuses_whole_reads_but_can_stream() {
+fn oversized_geopackage_refuses_whole_reads_but_streams_and_exports() {
     use rustgis_data::{Dataset, Geometry, GeometryType, source::MAX_LIMIT};
 
     let fixture = GpkgRegressionFixture::new("whole-read-limit");
@@ -20146,7 +20341,7 @@ fn oversized_geopackage_refuses_whole_reads_but_can_stream() {
     assert_eq!(
         db.execute(
             "WITH RECURSIVE rows(fid) AS (SELECT 1 UNION ALL SELECT fid+1 FROM rows WHERE fid<?1)
-             INSERT INTO roads(fid, geom) SELECT fid, ?2 FROM rows",
+             INSERT INTO roads(fid, geom, name) SELECT fid, ?2, 'road ' || fid FROM rows",
             rusqlite::params![count as i64, blob],
         )
         .unwrap(),
@@ -20184,10 +20379,25 @@ fn oversized_geopackage_refuses_whole_reads_but_can_stream() {
     assert!(s.map().layer(id).unwrap().is_streamed());
     assert_eq!(s.map().layer(id).unwrap().dataset.features.len(), resident);
 
-    let output = fixture.dir.join("refused.geojson");
-    let error = s.run("share.exportLayer", &json!({"layer": id, "path": output})).unwrap_err();
+    // Exported a chunk at a time, past the limit a whole read has.
+    let output = fixture.dir.join("whole.csv");
+    let exported = s.run("share.exportLayer", &json!({"layer": id, "path": output})).unwrap();
+    assert_eq!(exported["features"].as_u64(), Some(count as u64));
+    // A header, then every row once and in order (the first column is the road's name).
+    let mut lines = std::io::BufRead::lines(std::io::BufReader::new(std::fs::File::open(&output).unwrap()));
+    assert!(lines.next().unwrap().unwrap().starts_with("name,"));
+    let mut rows = 0;
+    for (k, line) in lines.enumerate() {
+        let line = line.unwrap();
+        assert!(line.starts_with(&format!("road {},", k + 1)), "row {k}: {line}");
+        rows += 1;
+    }
+    assert_eq!(rows, count, "every row");
+    // A format still written from a whole layer is refused, and writes nothing.
+    let refused = fixture.dir.join("refused.kml");
+    let error = s.run("share.exportLayer", &json!({"layer": id, "path": refused})).unwrap_err();
     assert_limit(&error);
-    assert!(!output.exists(), "a refused export must not write a partial file");
+    assert!(!refused.exists(), "a refused export must not write a partial file");
     assert!(s.map().layer(id).unwrap().is_streamed());
     assert_eq!(s.map().layer(id).unwrap().dataset.features.len(), resident);
     assert_eq!(s.map().layers.len(), 2);

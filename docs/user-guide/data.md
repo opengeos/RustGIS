@@ -92,7 +92,10 @@ For an editable feature layer, double-click a cell to change it. The table's too
 fields, calculates field [expressions](expressions.md) and opens **Calculate Geometry** (`edit.calculateGeometry`).
 The geometry calculator fills a new double field or an existing numeric field with area,
 perimeter, length or point X/Y, for all or selected features. Point coordinates can be WGS 84
-degrees or a supported projected EPSG system's units. See [Editing](editing.md) for field
+degrees or a supported projected EPSG system's units. Areas, perimeters and lengths measure on
+the WGS 84 ellipsoid, with the exceptions for full-turn and polar rings listed under
+[Geoprocessing](analysis.md#geoprocessing-tools).
+See [Editing](editing.md) for field
 calculations and data-design rules. Streamed layers must first be loaded with **Load All
 Features**.
 
@@ -771,8 +774,12 @@ Set `RUSTGIS_SHP_CACHE` to choose the cache directory and `RUSTGIS_SHP_CACHE_MIB
 the retained index budget (2048 MiB by default, clamped to 64–65536 MiB). Idle indexes are
 evicted in least-recently-used order. Open readers and builders hold operating-system leases,
 so another instance cannot evict their indexes; active files can temporarily exceed the
-budget. An index larger than the budget is session-only. Cache checkout and release reclaim
-abandoned builds and temporary indexes. A corrupt cache is rebuilt, and an unavailable cache
+budget. An index larger than the budget is session-only. Building an index, even one that
+fails, reclaims abandoned builds and temporary indexes and evicts idle ones past the budget.
+Reopening a cached index leaves the cache as it is, and releasing one removes only its own
+temporary index. Otherwise a release sweeps the folder only while the cache is over budget:
+because of indexes in use (a release frees them) or files without a readable lease (no release
+can free them, so each release sweeps). A corrupt cache is rebuilt, and an unavailable cache
 directory falls back to the system temporary directory (a per-user directory on Unix).
 New Unix cache directories are created with mode `0700`. Existing roots must belong to
 the effective user, forbid group/other writes, and have trusted parents; symlink roots
@@ -787,7 +794,15 @@ file over 256 MB through a buffer, so it is never held whole), and each view par
 features it shows. A single feature, a bare geometry or TopoJSON is loaded whole.
 
 A streamed layer works like any other for symbology, labels, pop-ups, selection and the
-attribute table (which lists the features read for the view). Geoprocessing tools, exports and
+attribute table (which lists the features read for the view). On the desktop, **Export Features**
+(`share.exportLayer`) of a GeoPackage, FlatGeobuf, GeoParquet or Shapefile read in place to
+GeoJSON, CSV, FlatGeobuf, GeoPackage or GeoParquet reads the source a chunk at a time, putting
+each chunk in the output's coordinate system and writing it before reading the next: the layer
+is never held whole. What stays in memory is a chunk and what the source and the output keep: a
+GeoParquet source one row group at a time (memory grows with its largest row group), a FlatGeobuf
+output a small index entry for each feature. A source read by its web address is exported whole,
+as below.
+Geoprocessing tools, other exports and
 **Load All Features** read the whole source, up to 2 million features (500,000 in the web app;
 a source that doesn't report its feature count must have fewer than that, since a read that
 reaches the limit is refused); a larger source is refused rather than processed as a sample. A

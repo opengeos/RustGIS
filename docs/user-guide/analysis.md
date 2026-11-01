@@ -228,7 +228,17 @@ use the smaller polar region in either direction; reversing a ring does not sele
 complement. Edges follow the shortest geodesics between vertices. The output fields remain
 `area_km2`, `perimeter_km` and `length_km`; point coordinates are unchanged.
 Spatial Join's **Largest overlap** still measures area on a sphere of radius 6,371 km; it can
-differ from the ellipsoid by up to about 0.9 % (a small area near a pole).
+differ from the ellipsoid by up to about 0.9 % (a small area near a pole). The same WGS 84
+measure backs the attribute table's **Calculate Geometry** (`edit.calculateGeometry`), the map's
+**Measure** tools on the Earth, and every network tool's edge and route lengths, so all of these
+read the same number for the same geometry, with two exceptions. A polygon ring with a full-turn
+(-180° to 180°) edge, such as a globe-wide band, is measured on the sphere by the attribute table
+and the Measure tools, while **Calculate Geometry Attributes** unwraps it, so it reads near zero
+there. A ring winding around a pole is measured as the region it traces by the attribute table
+and the Measure tools (a ring that goes all the way round at 60° N gives the larger region),
+while **Calculate Geometry Attributes** gives the smaller polar cap. On the Moon or another body, the Measure tools measure on
+that body's sphere. The Radius tools still measure a local Mercator distance, and **Mensuration
+Tools** (`raster.measure`) still measure on the sphere, so those can differ from the numbers above.
 
 **Merge** (`merge`, Data Management › General) appends loaded vector layers of the same geometry
 type (points, lines or polygons) into a new layer. It needs no GeoLibre runner. Choose **Input
@@ -420,7 +430,13 @@ into a `target` table or layer based on matching key values:
   `joinField` (aliases: `join_field`) names the matching key in the source table; when omitted, empty,
   or whitespace-only, it defaults to `targetField`. Numeric keys match across integer and floating-point
   types when whole numbers (e.g. `10` matches `10.0`), while non-finite floats (`NaN`, infinity) and
-  nulls never match. Incompatible key data types (e.g. text vs integer) are rejected.
+  nulls never match. A text key matches an integer key when the text is the number written out in
+  full (`"47157000100"` matches `47157000100`), so an all-digit ID typed as a number in one table and
+  as text in the other (Census GEOIDs, FIPS codes, ZIP codes) joins when the codes match exactly as
+  written. Leading zeros stay meaningful: a number that lost its zero (`1001` for `"01001"`) leaves its
+  record unmatched, and a warning says how many records missed this way, with the first pair. Other
+  incompatible key data types (e.g. text vs floating point or boolean) are rejected, and the message
+  suggests converting one key with Add Field and Calculate Field.
 - **Transferred fields:** `fields` selects specific source fields to transfer (a comma-separated list
   or a JSON array of strings, e.g. `["tax_rate", "zone_code"]`; non-string and non-array types are rejected). Repeated
   field names are deduplicated in order. When omitted or passed as a blank string (`""`), every source field except
@@ -655,6 +671,10 @@ click them on the map:
 | Exploratory Analysis | Histograms and correlations of numeric fields |
 | Embeddings | The features most like the selected one, by their numeric attributes |
 | Data Interop | KML, GPX, CSV with WKT, GeoJSON or CSV |
+
+Network routing rebuilds its graph for each request and solves each edge length on WGS 84.
+Large line networks can therefore take longer to route than with spherical lengths; repeated
+routes do not currently share a cached graph.
 
 Rasters these make are kept in the project. **Environments** (`gp.env`) set an extent from the map
 view, full extent, a layer or a longitude/latitude box (or `null` to clear it). For tools that
