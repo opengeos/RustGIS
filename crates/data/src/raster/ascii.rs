@@ -1,6 +1,6 @@
 //! ASCII grids (`.asc`): a short header, then rows of numbers.
 
-use super::{ColorHint, Crs, GeoTransform, MAX_SAMPLES, Raster};
+use super::{ColorHint, Crs, GeoTransform, MAX_SAMPLES, Raster, Uncounted};
 use crate::{DataError, Result};
 
 /// Reads an ASCII grid. Without a known coordinate system, coordinates that fit in degrees are
@@ -68,10 +68,11 @@ pub(super) fn read_with_nodata(text: &str, name: &str, crs: Option<Crs>, sidecar
     // Each value takes at least two characters, so the text bounds what to reserve.
     let mut data = Vec::with_capacity(n.min(text.len() / 2 + 1));
     let mut rounded = 0u64;
+    let uncounted = Uncounted::new(nodata, sidecar_nodata);
     for (i, t) in tokens.take(n).enumerate() {
         let v =
             t.parse::<f32>().map_err(|_| bad(&format!("value {} ('{}') isn't a number", i + 1, t.chars().take(20).collect::<String>())))?;
-        rounded += u64::from(!held(t, v, nodata.or(sidecar_nodata)));
+        rounded += u64::from(!held(t, v, uncounted));
         data.push(v);
     }
     if data.len() != n {
@@ -100,11 +101,11 @@ const TENS: [f64; 23] =
 /// `1234567.891` (1234567.875) and `16777217` (16777216) aren't, nor a nonzero value read as zero
 /// or infinity (`1e39`, `1e400`, `1e-400`). A subnormal is held at the precision it keeps
 /// (`1e-40` is; `1.234567e-40` isn't). NaN, written infinities
-/// and pixels the no-data value masks are held. One pass over the text: up to 6 significant digits
+/// and no-data values (by [`Uncounted`]'s rule) are held. One pass over the text: up to 6 significant digits
 /// are always held in `f32`'s normal range, and up to 15 are compared as a whole number, so only
 /// longer or more extreme values are read again as `f64`.
-fn held(text: &str, v: f32, nodata: Option<f64>) -> bool {
-    if v.is_nan() || nodata.is_some_and(|d| v == d as f32) {
+fn held(text: &str, v: f32, nodata: Uncounted) -> bool {
+    if v.is_nan() || nodata.covers(v, || text.parse().ok()) {
         return true;
     }
     // Short enough for 6 digits at most (a point and a sign aren't digits), and neither zero nor
@@ -228,5 +229,16 @@ mod tests {
         // Written infinities and zeros, and extra zeros, are held.
         let edges = read(&grid("inf -inf 0.000 1.500000000000000000\n0e5 -0.0 1.50000000 2"), "g", None).unwrap();
         assert!(edges.rounded.is_empty(), "{:?}", edges.rounded);
+    }
+
+    #[test]
+    fn no_data_values_are_left_out_of_the_count_by_one_rule() {
+        for c in super::super::NODATA_CASES {
+            let header = c.file.map_or(String::new(), |f| format!("NODATA_value {f}\n"));
+            let values: Vec<String> = c.samples.iter().map(|v| format!("{v:?}")).collect();
+            let text = format!("ncols 2\nnrows 2\nxllcorner 10\nyllcorner 40\ncellsize 1\n{header}{}", values.join(" "));
+            let r = read_with_nodata(&text, "c", None, c.sidecar).unwrap();
+            assert_eq!(r.rounded.iter().sum::<u64>(), c.counted, "file {:?}, sidecar {:?}", c.file, c.sidecar);
+        }
     }
 }

@@ -14,7 +14,7 @@ use tiff::tags::Tag;
 
 use super::cog::Sparse;
 use super::crs::CustomCrs;
-use super::{ColorHint, Crs, GeoTransform, MAX_SAMPLES, Raster};
+use super::{ColorHint, Crs, GeoTransform, MAX_SAMPLES, Raster, Uncounted};
 use crate::{DataError, Result};
 
 fn err(e: impl std::fmt::Display) -> DataError {
@@ -472,7 +472,7 @@ fn can_round(buf: &DecodingResult) -> bool {
 
 /// The samples of `buf` that `f32` doesn't hold (see [`held_exactly`]), a bit each: `None` for a type
 /// that holds every value, or when none changed.
-fn rounded_bits(buf: &DecodingResult, nodata: Option<f64>) -> Option<Vec<u64>> {
+fn rounded_bits(buf: &DecodingResult, nodata: Uncounted) -> Option<Vec<u64>> {
     if !can_round(buf) {
         return None;
     }
@@ -490,18 +490,16 @@ fn rounded_bits(buf: &DecodingResult, nodata: Option<f64>) -> Option<Vec<u64>> {
 
 /// Whether `f32` holds sample `j` of `buf` exactly, as [`to_f32`] converts it: whole numbers past
 /// ±16,777,216 and 64-bit floats with more precision than `f32` are rounded. NaN, a missing sample
-/// and pixels the no-data value `nodata` masks (compared in `f32`, as [`Raster::is_valid`] masks
-/// them) count as held.
-fn held_exactly(buf: &DecodingResult, j: usize, nodata: Option<f64>) -> bool {
-    let masked = nodata.map(|d| d as f32);
-    let held = |nan: bool, f: f32, exact: bool| exact || nan || masked == Some(f);
+/// and no-data samples (by [`Uncounted`]'s rule) count as held.
+fn held_exactly(buf: &DecodingResult, j: usize, nodata: Uncounted) -> bool {
+    let held = |nan: bool, f: f32, exact: bool, wide: f64| exact || nan || nodata.covers(f, || Some(wide));
     match buf {
-        DecodingResult::U32(v) => v.get(j).is_none_or(|&x| held(false, x as f32, x as f32 as u64 == u64::from(x))),
-        DecodingResult::I32(v) => v.get(j).is_none_or(|&x| held(false, x as f32, x as f32 as i64 == i64::from(x))),
+        DecodingResult::U32(v) => v.get(j).is_none_or(|&x| held(false, x as f32, x as f32 as u64 == u64::from(x), f64::from(x))),
+        DecodingResult::I32(v) => v.get(j).is_none_or(|&x| held(false, x as f32, x as f32 as i64 == i64::from(x), f64::from(x))),
         // Compared in i128, which holds every u64 and i64 and the f32 just past them.
-        DecodingResult::U64(v) => v.get(j).is_none_or(|&x| held(false, x as f32, x as f32 as i128 == i128::from(x))),
-        DecodingResult::I64(v) => v.get(j).is_none_or(|&x| held(false, x as f32, x as f32 as i128 == i128::from(x))),
-        DecodingResult::F64(v) => v.get(j).is_none_or(|&x| held(x.is_nan(), x as f32, f64::from(x as f32) == x)),
+        DecodingResult::U64(v) => v.get(j).is_none_or(|&x| held(false, x as f32, x as f32 as i128 == i128::from(x), x as f64)),
+        DecodingResult::I64(v) => v.get(j).is_none_or(|&x| held(false, x as f32, x as f32 as i128 == i128::from(x), x as f64)),
+        DecodingResult::F64(v) => v.get(j).is_none_or(|&x| held(x.is_nan(), x as f32, f64::from(x as f32) == x, x)),
         _ => true,
     }
 }
@@ -815,7 +813,7 @@ fn decimate<R: Read + Seek>(
     nbands: usize,
     planar: bool,
     k: u32,
-    nodata: Option<f64>,
+    nodata: Uncounted,
     open: Option<(Opener<'_>, usize, Limits)>,
 ) -> Result<(Vec<Vec<f32>>, &'static str, Vec<u64>)> {
     let k = k.max(1);
@@ -853,7 +851,7 @@ fn decimate_parallel(
     bands: Vec<Vec<f32>>,
     k: u32,
     ow: usize,
-    nodata: Option<f64>,
+    nodata: Uncounted,
     threads: usize,
     open: Opener<'_>,
     image: usize,
@@ -990,9 +988,8 @@ pub(super) fn read_limited_with_nodata(
     let mut dec = Decoder::new(r).map_err(err)?.with_limits(limits.clone());
     let (full_w, full_h) = dec.dimensions().map_err(err)?;
     let geo = geo_tags(&mut dec)?;
-    // The no-data value whose pixels aren't counted as rounded: the file's, or else (as
-    // `Raster::new` drops a NaN or infinite one) the sidecar's.
-    let uncounted = geo.nodata.filter(|v| v.is_finite()).or(sidecar_nodata);
+    // The no-data value whose pixels aren't counted as rounded.
+    let uncounted = Uncounted::new(geo.nodata, sidecar_nodata);
     // The bands' descriptions GDAL keeps in the file (an `.aux.xml` sidecar's are applied after).
     let described = dec
         .find_tag(Tag::Unknown(42112))
@@ -2625,5 +2622,15 @@ mod tests {
         let one = read_limited(reader(std::io::Cursor::new(&bytes)).unwrap(), "one", 100, None).unwrap();
         assert_eq!((many.width, many.overview), (8, Some((64, 64))));
         assert_eq!((many.rounded.as_slice(), one.rounded.as_slice()), (&[64u64][..], &[64u64][..]));
+    }
+
+    #[test]
+    fn no_data_samples_are_left_out_of_the_count_by_one_rule() {
+        use tiff::encoder::colortype::Gray64Float;
+        for c in crate::raster::NODATA_CASES {
+            let tif = typed::<Gray64Float>(2, 2, &c.samples, c.file);
+            let r = read_with_nodata(std::io::Cursor::new(tif), "c", c.sidecar).unwrap();
+            assert_eq!(r.rounded.iter().sum::<u64>(), c.counted, "file {:?}, sidecar {:?}", c.file, c.sidecar);
+        }
     }
 }

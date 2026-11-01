@@ -1131,7 +1131,10 @@ pub fn assemble(store: &Store, plan: &Plan, chunks: &HashMap<String, Vec<u8>>, n
     // Values meaning "no data", before any scaling, as xarray reads them: the CF attributes, and a
     // Zarr 2 array's fill_value (xarray's _FillValue encoding). A Zarr 3 array's fill_value (0 by
     // default in zarr-python) only stands for chunks that were never written, and those cells stay
-    // empty here; real zeros are kept.
+    // empty here; real zeros are kept. These become NaN before conversion, and the raster has no
+    // no-data value of its own, so exactly these cells are masked: they, and nothing that merely
+    // rounds near them, are left out of the rounded count (`Uncounted` is the same rule for the
+    // readers whose rasters mask in f32 after reading).
     let v2_fill = if a.zarr_format == 2 { a.fill } else { None };
     let mut missing: Vec<f64> = [v2_fill, attr_f64(a, "_FillValue"), attr_f64(a, "missing_value")].into_iter().flatten().collect();
     missing.dedup();
@@ -1192,12 +1195,13 @@ pub fn assemble(store: &Store, plan: &Plan, chunks: &HashMap<String, Vec<u8>>, n
                         let f = x as f32;
                         // A packed whole number is held when unscaling its f32 gives it back exactly.
                         // Float32 or narrower storage states no more precision than f32 holds, so
-                        // scaling it isn't counted; a scaled Float64 (or anything scaled by 0) is held
-                        // when f32 holds the scaled value.
+                        // scaling it is counted only when it leaves f32's range (overflowing to
+                        // infinity, or a nonzero value to 0). A scaled Float64 (or anything scaled
+                        // by 0) is held when f32 holds the scaled value.
                         let held = match dt.whole(b) {
                             _ if !scaled => dt.held_as_f32(b),
                             Some(i) if scale != 0.0 => ((f64::from(f) - offset) / scale).round() as i128 == i,
-                            None if dt.size <= 4 => true,
+                            None if dt.size <= 4 => !(x.is_finite() && (f.is_infinite() || (f == 0.0 && x != 0.0))),
                             _ => f64::from(f) == x,
                         };
                         rounded += u64::from(!held);
@@ -2008,32 +2012,51 @@ mod tests {
         (store, chunks)
     }
 
+    /// The rounded count of a 2 × 2 variable of type `dtype` holding `values` (its bytes), with
+    /// `attrs` (scaling, a fill value) added to its attributes, on latitude and longitude.
+    fn two_by_two(dtype: &str, attrs: Value, values: Vec<u8>) -> Vec<u64> {
+        let arr = |shape: &str, dtype: &str| {
+            serde_json::from_str::<Value>(&format!(
+                r#"{{"shape":{shape},"chunks":{shape},"dtype":"{dtype}","compressor":null,"fill_value":null,"filters":null,"order":"C","zarr_format":2}}"#
+            ))
+            .unwrap()
+        };
+        let mut v_attrs = serde_json::json!({"_ARRAY_DIMENSIONS": ["lat","lon"]});
+        if let (Some(to), Some(from)) = (v_attrs.as_object_mut(), attrs.as_object()) {
+            to.extend(from.clone());
+        }
+        let meta = serde_json::json!({"metadata": {
+            ".zgroup": {"zarr_format": 2},
+            "v/.zarray": arr("[2,2]", dtype),
+            "v/.zattrs": v_attrs,
+            "lat/.zarray": arr("[2]", "<f8"),
+            "lat/.zattrs": {"_ARRAY_DIMENSIONS": ["lat"], "units": "degrees_north"},
+            "lon/.zarray": arr("[2]", "<f8"),
+            "lon/.zattrs": {"_ARRAY_DIMENSIONS": ["lon"], "units": "degrees_east"},
+        }, "zarr_consolidated_format": 1});
+        let store = parse_store(&[(".zmetadata".into(), meta.to_string().into_bytes())]).unwrap();
+        let f64s = |v: [f64; 2]| v.iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<u8>>();
+        let chunks =
+            HashMap::from([("v/0.0".to_string(), values), ("lat/0".into(), f64s([10.0, 20.0])), ("lon/0".into(), f64s([30.0, 40.0]))]);
+        let p = plan(&store, &Selection { variable: "v".into(), index: vec![] }).unwrap();
+        assemble(&store, &p, &chunks, "v", None).unwrap().rounded
+    }
+
+    #[test]
+    fn no_data_values_are_left_out_of_the_count_by_one_rule() {
+        for c in crate::raster::NODATA_CASES {
+            let attrs = c.file.map_or(serde_json::json!({}), |f| serde_json::json!({"_FillValue": f}));
+            let bytes = c.samples.iter().flat_map(|x| x.to_le_bytes()).collect();
+            assert_eq!(two_by_two("<f8", attrs, bytes).iter().sum::<u64>(), c.zarr, "fill {:?}", c.file);
+        }
+    }
+
     #[test]
     fn values_f32_cannot_hold_are_counted() {
         // A 2 × 2 variable of type `dtype` holding `values`, scaled by `scale` and `offset`, on
         // latitude and longitude.
         let read_scaled = |dtype: &str, (scale, offset): (f64, f64), values: Vec<u8>| {
-            let arr = |shape: &str, dtype: &str| {
-                serde_json::from_str::<Value>(&format!(
-                    r#"{{"shape":{shape},"chunks":{shape},"dtype":"{dtype}","compressor":null,"fill_value":null,"filters":null,"order":"C","zarr_format":2}}"#
-                ))
-                .unwrap()
-            };
-            let meta = serde_json::json!({"metadata": {
-                ".zgroup": {"zarr_format": 2},
-                "v/.zarray": arr("[2,2]", dtype),
-                "v/.zattrs": {"_ARRAY_DIMENSIONS": ["lat","lon"], "scale_factor": scale, "add_offset": offset},
-                "lat/.zarray": arr("[2]", "<f8"),
-                "lat/.zattrs": {"_ARRAY_DIMENSIONS": ["lat"], "units": "degrees_north"},
-                "lon/.zarray": arr("[2]", "<f8"),
-                "lon/.zattrs": {"_ARRAY_DIMENSIONS": ["lon"], "units": "degrees_east"},
-            }, "zarr_consolidated_format": 1});
-            let store = parse_store(&[(".zmetadata".into(), meta.to_string().into_bytes())]).unwrap();
-            let f64s = |v: [f64; 2]| v.iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<u8>>();
-            let chunks =
-                HashMap::from([("v/0.0".to_string(), values), ("lat/0".into(), f64s([10.0, 20.0])), ("lon/0".into(), f64s([30.0, 40.0]))]);
-            let p = plan(&store, &Selection { variable: "v".into(), index: vec![] }).unwrap();
-            assemble(&store, &p, &chunks, "v", None).unwrap().rounded
+            two_by_two(dtype, serde_json::json!({"scale_factor": scale, "add_offset": offset}), values)
         };
         let read = |dtype: &str, values: Vec<u8>| read_scaled(dtype, (1.0, 0.0), values);
         let i64s = |v: [i64; 4]| v.iter().flat_map(|x| x.to_le_bytes()).collect();
@@ -2058,6 +2081,10 @@ mod tests {
         assert!(read_scaled("<f4", (0.1, 0.0), f32s(&[1.0, 1.5, 10.0, 0.123_456_7])).is_empty());
         let f16s = |v: [u16; 4]| v.iter().flat_map(|x| x.to_le_bytes()).collect();
         assert!(read_scaled("<f2", (0.1, 273.15), f16s([0x3c00, 0x3e00, 0x4900, 0])).is_empty());
+        // Unless scaling leaves f32's range: 3e38 × 10 overflows and 1e-30 × 1e-20 vanishes, while
+        // an infinity stored as such stays one.
+        assert_eq!(read_scaled("<f4", (10.0, 0.0), f32s(&[3e38, 1.0, f32::INFINITY, 0.0])), vec![1]);
+        assert_eq!(read_scaled("<f4", (1e-20, 0.0), f32s(&[1e-30, 1.0, 0.0, 2.0])), vec![1]);
         // Scaled 64-bit whole numbers are compared exactly too, and a scale of 0 writes the offset.
         assert_eq!(read_scaled("<i8", (2.0, 0.0), i64s([(1 << 60) + 1, 1 << 60, 3, 0])), vec![1]);
         assert_eq!(read_scaled("<u8", (2.0, 0.0), u64s([(1 << 60) + 1, 1 << 60, 3, 0])), vec![1]);
