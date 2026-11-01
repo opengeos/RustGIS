@@ -84,6 +84,8 @@ struct State {
     /// Servers whose expected absences have been said (one note each, so a second misconfigured
     /// tile source isn't silent once the first has spoken). Bounded; cleared with the records.
     absences_said: Vec<String>,
+    /// Whether servers past [`MAX_ABSENT_SERVERS`] have been said to go unlisted.
+    absences_overflow_said: bool,
 }
 
 static CLOCK: Mutex<Option<fn() -> u64>> = Mutex::new(None);
@@ -201,6 +203,7 @@ impl History {
         state.records.clear();
         // A source said before the clear is said again: the pane must not stay silent about it.
         state.absences_said.clear();
+        state.absences_overflow_said = false;
         state.generation = state.generation.wrapping_add(1);
     }
 
@@ -241,15 +244,32 @@ impl Capture {
         // The server is the address's origin (scheme, host and port): two tile sources on one
         // host but different ports are two sources.
         let server = url::Url::parse(url).map(|u| u.origin().ascii_serialization()).unwrap_or_default();
-        let first = {
+        let (first, overflow) = {
             let mut guard = lock(&state);
-            if guard.absences_said.contains(&server) || guard.absences_said.len() >= MAX_ABSENT_SERVERS {
-                false
+            if guard.absences_said.contains(&server) {
+                (false, false)
+            } else if guard.absences_said.len() >= MAX_ABSENT_SERVERS {
+                // Past the cap a new server isn't listed, and that is said once.
+                (false, !std::mem::replace(&mut guard.absences_overflow_said, true))
             } else {
                 guard.absences_said.push(server);
-                true
+                (true, false)
             }
         };
+        if overflow {
+            History(state).retain(Record {
+                id: 0,
+                timestamp_ms: timestamp_ms(),
+                severity: Severity::Warning,
+                source: "Network".to_string(),
+                message: format!(
+                    "expected absences from further servers are not listed: this history names the first {MAX_ABSENT_SERVERS} servers"
+                ),
+                details: String::new(),
+                network: None,
+            });
+            return;
+        }
         if !first {
             return;
         }
@@ -395,7 +415,7 @@ fn opens_structured(rest: &str) -> bool {
                 Some(at) => {
                     at > 0
                         && at <= 32
-                        && name[at..].starts_with('>')
+                        && name.get(at..).is_some_and(|tail| tail.starts_with('>'))
                         && name.chars().next().is_some_and(|c| c.is_alphabetic() || c == '_')
                         && !name.get(..at).is_some_and(|tag| tag.contains(|c: char| c.is_whitespace()))
                 }
@@ -494,6 +514,20 @@ pub fn redact(text: &str) -> String {
                 let url_end = rest.find(|c: char| c.is_whitespace() || matches!(c, '"' | '\'' | '<' | '>' | '`')).unwrap_or(rest.len());
                 let address = rest.get(..url_end).unwrap_or("");
                 match url::Url::parse(address) {
+                    // Nothing to take out: the address stays as written, its punctuation too
+                    // ("https://example.org: timeout"), unless it holds control characters.
+                    Ok(url)
+                        if url.has_host()
+                            && url.username().is_empty()
+                            && url.password().is_none()
+                            && url.query().is_none()
+                            && url.fragment().is_none()
+                            && !address
+                                .chars()
+                                .any(|c| c.is_control() || matches!(c, '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')) =>
+                    {
+                        out.push_str(address);
+                    }
                     Ok(mut url) if url.has_host() => {
                         let _ = url.set_username("");
                         let _ = url.set_password(None);
@@ -856,5 +890,32 @@ mod tests {
         {
             assert!(!redact(&input).contains("hidden"));
         }
+    }
+
+    #[test]
+    fn absences_past_the_server_cap_are_said_once() {
+        let history = History::default();
+        let capture = history.capture();
+        for i in 0..MAX_ABSENT_SERVERS + 3 {
+            capture.absence_said(&format!("https://tiles{i}.example.org/0/0/0.png"), 404);
+        }
+        let records = history.records();
+        // One note for each server up to the cap, then one saying further servers aren't listed.
+        assert_eq!(records.len(), MAX_ABSENT_SERVERS + 1);
+        assert!(records.last().is_some_and(|r| r.message.contains("further servers are not listed")));
+        // Clear says it again.
+        history.clear();
+        for i in 0..MAX_ABSENT_SERVERS + 3 {
+            capture.absence_said(&format!("https://tiles{i}.example.org/0/0/0.png"), 404);
+        }
+        assert_eq!(history.records().len(), MAX_ABSENT_SERVERS + 1);
+    }
+
+    #[test]
+    fn addresses_without_anything_to_take_out_stay_as_written() {
+        assert_eq!(redact("Could not reach https://example.org: timeout"), "Could not reach https://example.org: timeout");
+        assert_eq!(redact("failed https://example.org/a/b, retrying"), "failed https://example.org/a/b, retrying");
+        // User info still goes, with the address rewritten without it.
+        assert_eq!(redact("Could not reach https://alice:hidden@example.org: timeout"), "Could not reach https://example.org/ timeout");
     }
 }

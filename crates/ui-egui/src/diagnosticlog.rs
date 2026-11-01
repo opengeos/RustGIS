@@ -20,15 +20,16 @@ pub(crate) fn show(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                 .color(t.text_dim),
         );
         ui.horizontal_wrapped(|ui| {
+            // Literal labels, so each is found and translated with the interface's other strings.
             for (filter, label) in [
-                (Filter::All, "All"),
-                (Filter::Errors, "Errors"),
-                (Filter::Warnings, "Warnings"),
-                (Filter::Info, "Info"),
-                (Filter::Network, "Network failures"),
+                (Filter::All, tl_raw!("All")),
+                (Filter::Errors, tl_raw!("Errors")),
+                (Filter::Warnings, tl_raw!("Warnings")),
+                (Filter::Info, tl_raw!("Info")),
+                (Filter::Network, tl_raw!("Network failures")),
             ] {
                 let count = records.iter().filter(|r| filter.matches(r)).count();
-                let text = crate::i18n::fmt("{label} ({count})", &[("label", tl_raw!(label)), ("count", &count.to_string())]);
+                let text = crate::i18n::fmt("{label} ({count})", &[("label", label), ("count", &count.to_string())]);
                 ui.selectable_value(&mut app.ui.diagnostic_filter, filter, text);
             }
         });
@@ -86,12 +87,12 @@ fn entry(ui: &mut Ui, record: &Record, t: &Tokens) {
         egui::CollapsingHeader::new(tl!("Technical details")).show(ui, |ui| {
             if let Some(network) = &record.network {
                 let kind = match network.kind {
-                    NetworkKind::Http => "HTTP failure",
-                    NetworkKind::Connection => "Connection failure",
-                    NetworkKind::Timeout => "Timeout",
-                    NetworkKind::Other => "Request failure",
+                    NetworkKind::Http => tl!("HTTP failure"),
+                    NetworkKind::Connection => tl!("Connection failure"),
+                    NetworkKind::Timeout => tl!("Timeout"),
+                    NetworkKind::Other => tl!("Request failure"),
                 };
-                ui.label(tl!(kind));
+                ui.label(kind);
                 ui.add(
                     egui::Label::new(RichText::new(format!("{} {}", network.method, network.url)).monospace().small())
                         .wrap()
