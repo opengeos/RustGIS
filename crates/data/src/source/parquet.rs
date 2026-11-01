@@ -366,8 +366,9 @@ impl FeatureSource for ParquetSource {
             let base = starts.get(g).copied().unwrap_or(0);
             // The columns hold the taken rows only, in order: the k-th is row `r`.
             for (k, (r, _)) in take.iter().enumerate().filter(|(_, t)| **t).enumerate() {
-                let geometry = geoms.get(k).and_then(|b| b.as_deref()).and_then(wkb::decode).and_then(|g| self.reproject.geometry(g));
-                let Some(geometry) = geometry else {
+                // A row without a geometry is left out; one that can't be read is skipped and counted.
+                let Some(bytes) = geoms.get(k).and_then(|b| b.as_deref()) else { continue };
+                let Some(geometry) = wkb::decode(bytes).and_then(|g| self.reproject.geometry(g)) else {
                     skipped += 1;
                     continue;
                 };
@@ -420,7 +421,7 @@ impl FeatureSource for ParquetSource {
             }
             // A read takes at most `MAX_GROUP_ROWS` of a row group, and no more than its geometry
             // column holds. A traversal promises every row, so a group it can't read whole is an
-            // error, not a quietly shorter export; it is refused before anything is read.
+            // error, not a quietly shorter export; it is refused before this group is read.
             let readable = self.rows_in(md, g);
             if declared > self.group_rows as u64 {
                 return Err(DataError::Format(format!(
@@ -446,8 +447,9 @@ impl FeatureSource for ParquetSource {
                 return Err(DataError::Format(format!("GeoParquet: row group {g} has columns shorter than its rows")));
             }
             for (k, (r, _)) in take.iter().enumerate().filter(|(_, t)| **t).enumerate() {
-                let geometry = geoms.get(k).and_then(|b| b.as_deref()).and_then(wkb::decode).and_then(|geom| self.reproject.geometry(geom));
-                let Some(geometry) = geometry else {
+                // A row without a geometry is left out; one that can't be read is skipped and counted.
+                let Some(bytes) = geoms.get(k).and_then(|b| b.as_deref()) else { continue };
+                let Some(geometry) = wkb::decode(bytes).and_then(|geom| self.reproject.geometry(geom)) else {
                     out.skipped += 1;
                     continue;
                 };

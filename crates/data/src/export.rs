@@ -30,6 +30,8 @@ pub struct Exported {
     pub written: usize,
     /// Features the format couldn't hold (a FlatGeobuf holds only features with geometry).
     pub left_out: usize,
+    /// Rows of the source that couldn't be read, so aren't in the export.
+    pub skipped: usize,
 }
 
 /// Writes every feature of `src` to `path` in the format of its extension, in `crs` (see
@@ -58,21 +60,24 @@ fn write_chunks_in(src: &dyn FeatureSource, layer: &Dataset, path: &Path, crs: C
     }
     // A layer that declares no geometry type takes its first geometry's, as a whole read does.
     let geometry_type = match layer.geometry_type {
-        GeometryType::None => first_kind(src, bytes)?,
+        // Peeks a megabyte, not a chunk: the first geometry is usually near the start.
+        GeometryType::None => first_kind(src, 1 << 20)?,
         t => t,
     };
     let t = if crs == Crs::LonLat { None } else { Some(crs.transformer().map_err(DataError::Format)?) };
     let mut total = 0usize;
+    let mut skipped = 0usize;
     let mut feed = |add: &mut dyn FnMut(&[Feature]) -> Result<()>| -> Result<()> {
         // A GeoPackage export that starts again feeds the features again.
         total = 0;
-        src.visit_chunks(None, bytes, &mut |mut chunk| {
+        let batch = src.visit_chunks(None, bytes, &mut |mut chunk| {
             if let Some(t) = &t {
                 project_features(&mut chunk, t, crs)?;
             }
             total = total.saturating_add(chunk.len());
             add(&chunk)
         })?;
+        skipped = batch.skipped;
         Ok(())
     };
     let left_out = match ext.as_str() {
@@ -103,7 +108,7 @@ fn write_chunks_in(src: &dyn FeatureSource, layer: &Dataset, path: &Path, crs: C
             Ok::<_, DataError>(0)
         })?,
     };
-    Ok(Exported { written: total.saturating_sub(left_out), left_out })
+    Ok(Exported { written: total.saturating_sub(left_out), left_out, skipped })
 }
 
 /// The kind of a source's first geometry, read up to it; `None` for a source without any (read
