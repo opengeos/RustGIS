@@ -7296,6 +7296,24 @@ mod tests {
     }
 
     #[test]
+    fn select_by_location_says_when_selecting_features_lack_geometry() {
+        let mut polys = Dataset::new("polys", GeometryType::Polygon, vec![]);
+        polys.push(Some(sq(0.0, 0.0, 2.0)), vec![]);
+        polys.push(None, vec![]); // a selector without geometry
+        let mut pts = Dataset::new("pts", GeometryType::Point, vec![]);
+        pts.push(Some(Geometry::Point(Coord::new(1.0, 1.0))), vec![]);
+        pts.push(Some(Geometry::Point(Coord::new(10.0, 10.0))), vec![]);
+        let m = Map(HashMap::from([("polys".to_string(), polys), ("pts".to_string(), pts)]));
+        let res = crate::run("selectByLocation", &m, &serde_json::json!({"input": "pts", "select": "polys"})).unwrap();
+        // One notice for it, and the selector with geometry still selects.
+        assert_eq!(res.messages, vec!["Selected 1 features in pts", "1 of 2 selecting features lack geometry, so they select nothing"]);
+        match res.output {
+            Output::Selection { rows, .. } => assert_eq!(rows, vec![0]),
+            _ => panic!("expected selection"),
+        }
+    }
+
+    #[test]
     fn select_by_location_invert_excludes_features_without_geometry() {
         let mut polys = Dataset::new("polys", GeometryType::Polygon, vec![]);
         polys.push(Some(sq(0.0, 0.0, 2.0)), vec![]);
