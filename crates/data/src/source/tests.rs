@@ -2027,13 +2027,14 @@ fn declared_z_and_m_are_said_and_counted() {
 }
 
 /// A GeoParquet whose columns RustGIS has no field type for (a decimal too wide for a 64-bit
-/// integer, binary, a list, a struct) are said and left out, and whose dates and times, read as
-/// whole numbers, are said with their unit; a file of ordinary columns says nothing.
+/// integer, binary, a list, a struct, a leaf beside the bbox covering's box) are said and left
+/// out, and whose dates and times, read as whole numbers, are said with their unit; the box's
+/// zmin and zmax aren't, and a file of ordinary columns says nothing.
 #[test]
 fn geoparquet_columns_not_kept_or_read_as_numbers_are_said() {
     use arrow_array::builder::{Int32Builder, ListBuilder};
     use arrow_array::{
-        BinaryArray, Date32Array, Decimal128Array, RecordBatch, StringArray, StructArray, TimestampMicrosecondArray,
+        BinaryArray, Date32Array, Decimal128Array, Float64Array, RecordBatch, StringArray, StructArray, TimestampMicrosecondArray,
         TimestampMillisecondArray,
     };
     use arrow_schema::{DataType, Field as AField, Fields, Schema, TimeUnit};
@@ -2046,6 +2047,15 @@ fn geoparquet_columns_not_kept_or_read_as_numbers_are_said() {
     let tags = tags.finish();
     let inner: Fields = vec![Arc::new(AField::new("a", DataType::Int64, true))].into_iter().collect();
     let extra = StructArray::new(inner.clone(), vec![Arc::new(arrow_array::Int64Array::from(vec![1]))], None);
+    // The covering's box, with z bounds (part of the box) and a label (not).
+    let mut box_fields: Vec<Arc<AField>> =
+        ["xmin", "ymin", "xmax", "ymax", "zmin", "zmax"].map(|n| Arc::new(AField::new(n, DataType::Float64, false))).into();
+    box_fields.push(Arc::new(AField::new("label", DataType::Utf8, true)));
+    let mut box_cols: Vec<arrow_array::ArrayRef> =
+        [1.0, 2.0, 1.0, 2.0, 0.0, 0.0].map(|v| Arc::new(Float64Array::from(vec![v])) as _).into();
+    box_cols.push(Arc::new(StringArray::from(vec!["a"])));
+    let box_fields: Fields = box_fields.into_iter().collect();
+    let bbox = StructArray::new(box_fields.clone(), box_cols, None);
     let schema = Arc::new(Schema::new(vec![
         AField::new("name", DataType::Utf8, true),
         AField::new("price", DataType::Decimal128(30, 2), true),
@@ -2056,6 +2066,7 @@ fn geoparquet_columns_not_kept_or_read_as_numbers_are_said() {
         AField::new("logged", DataType::Timestamp(TimeUnit::Microsecond, None), true),
         AField::new("day", DataType::Date32, true),
         AField::new("geometry", DataType::Binary, false),
+        AField::new("geometry_bbox", DataType::Struct(box_fields), false),
     ]));
     let cols: Vec<arrow_array::ArrayRef> = vec![
         Arc::new(StringArray::from(vec!["a"])),
@@ -2067,8 +2078,10 @@ fn geoparquet_columns_not_kept_or_read_as_numbers_are_said() {
         Arc::new(TimestampMicrosecondArray::from(vec![1_790_856_000_000_000])),
         Arc::new(Date32Array::from(vec![20_727])),
         Arc::new(BinaryArray::from(vec![wkb.as_slice()])),
+        Arc::new(bbox),
     ];
-    let geo = r#"{"version":"1.0.0","primary_column":"geometry","columns":{"geometry":{"encoding":"WKB","geometry_types":["Point"]}}}"#;
+    let geo = r#"{"version":"1.1.0","primary_column":"geometry","columns":{"geometry":{"encoding":"WKB","geometry_types":["Point"],
+        "covering":{"bbox":{"xmin":["geometry_bbox","xmin"],"ymin":["geometry_bbox","ymin"],"xmax":["geometry_bbox","xmax"],"ymax":["geometry_bbox","ymax"]}}}}}"#;
     let props = ::parquet::file::properties::WriterProperties::builder()
         .set_key_value_metadata(Some(vec![::parquet::file::metadata::KeyValue::new("geo".to_string(), geo.to_string())]))
         .build();
@@ -2076,8 +2089,8 @@ fn geoparquet_columns_not_kept_or_read_as_numbers_are_said() {
     w.write(&RecordBatch::try_new(schema, cols).unwrap()).unwrap();
     w.close().unwrap();
 
-    let left_out =
-        "4 columns of types RustGIS has no field for were left out: price (decimal), photo (binary), tags (list), extra (struct)";
+    let left_out = "5 columns of types RustGIS has no field for were left out: \
+                    price (decimal), photo (binary), tags (list), extra (struct), geometry_bbox (struct)";
     let as_numbers = "3 columns of dates or times were read as whole numbers: seen (milliseconds since 1970-01-01), \
                       logged (microseconds since 1970-01-01), day (days since 1970-01-01)";
     // Read in place: the source's notes, which adding the layer gives as notices.

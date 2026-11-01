@@ -23,6 +23,7 @@ use parquet::file::reader::{FileReader, RowGroupReader, SerializedFileReader};
 use parquet::file::statistics::Statistics;
 use parquet::schema::types::ColumnDescPtr;
 use rustgis_geom::Extent;
+use std::collections::HashSet;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -193,15 +194,23 @@ impl ParquetSource {
                 field_cols.push(i);
             }
         }
-        // Top-level columns not read: neither a field, the geometry nor its covering.
-        let root = |i: usize| schema.column(i).path().parts().first().cloned();
-        let used: Vec<String> = field_cols.iter().chain([&geom_col]).chain(covering.iter().flatten()).filter_map(|&i| root(i)).collect();
+        // Top-level columns not read: those holding a leaf that is neither a field, the geometry
+        // nor its covering's box (whose struct may also hold zmin and zmax, bounds of the geometry).
+        let read: HashSet<usize> = field_cols.iter().chain([&geom_col]).chain(covering.iter().flatten()).copied().collect();
+        let box_root = covering.and_then(|[x, ..]| schema.column(x).path().parts().first().cloned());
+        let unread: HashSet<String> = (0..schema.num_columns())
+            .filter(|i| !read.contains(i))
+            .filter_map(|i| match schema.column(i).path().parts() {
+                [r, bound] if Some(r) == box_root.as_ref() && matches!(bound.as_str(), "zmin" | "zmax") => None,
+                parts => parts.first().cloned(),
+            })
+            .collect();
         let geometries = geo.as_ref().and_then(|g| g.get("columns")).and_then(|c| c.as_object());
         let left_out: Vec<(String, String)> = schema
             .root_schema()
             .get_fields()
             .iter()
-            .filter(|t| !used.iter().any(|u| u == t.name()))
+            .filter(|t| unread.contains(t.name()))
             .map(|t| {
                 let kind = if geometries.is_some_and(|g| g.contains_key(t.name())) { "geometry" } else { column_kind(t) };
                 (t.name().to_string(), kind.to_string())
