@@ -696,7 +696,7 @@ fn offline_sync(s: &mut Session, p: &Value) -> CmdResult {
                 area.map,
                 listed(&conflicts)
             ),
-            true,
+            false,
         );
     }
     if !dropped.is_empty() {
@@ -708,7 +708,7 @@ fn offline_sync(s: &mut Session, p: &Value) -> CmdResult {
                 area.map,
                 listed(&dropped)
             ),
-            true,
+            false,
         );
     }
     Ok(json!({"updated": updated, "added": added, "deleted": deleted, "skipped": skipped, "conflicts": conflicts.len()}))

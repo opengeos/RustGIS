@@ -6614,11 +6614,13 @@ fn workspace_links_thumbnails_animation_profiles_offline_and_cache() {
     s.run("select.byAttributes", &json!({"layer": "Cities", "where": "name = 'Paris'"})).unwrap();
     let row = s.map().layer_by_name("Cities").unwrap().selection[0];
     s.run("edit.setValue", &json!({"layer": "Cities", "row": row, "field": "pop_max", "value": 1})).unwrap();
-    s.run(
-        "edit.addFeature",
-        &json!({"layer": "Cities", "geometry": {"type": "Point", "coordinates": [2.0, 49.0]}, "attributes": {"name": "Field camp"}}),
-    )
-    .unwrap();
+    for (name, x) in [("Field camp", 2.0), ("Field hut", 2.2)] {
+        s.run(
+            "edit.addFeature",
+            &json!({"layer": "Cities", "geometry": {"type": "Point", "coordinates": [x, 49.0]}, "attributes": {"name": name}}),
+        )
+        .unwrap();
+    }
     // Meanwhile France is edited in the source map; the area's untouched copy mustn't undo that.
     let set_france = |s: &mut Session, v: i64| {
         let world = s.project.maps.iter_mut().find(|m| m.name == "World").unwrap();
@@ -6635,14 +6637,15 @@ fn workspace_links_thumbnails_animation_profiles_offline_and_cache() {
     let sync = s.run("offline.sync", &json!({"name": "Paris"})).unwrap();
     let clean = s.notices_since(mark);
     assert!(clean.iter().all(|n| !n.text.starts_with("Offline area")), "{clean:?}");
-    assert_eq!((sync["updated"].as_u64(), sync["added"].as_u64()), (Some(1), Some(1)), "{sync}");
+    assert_eq!((sync["updated"].as_u64(), sync["added"].as_u64()), (Some(1), Some(2)), "{sync}");
     assert_eq!(set_france(&mut s, -1), rustgis_data::Value::Int(12_345), "the source edit survives the sync");
     let world_map = s.project.maps.iter().find(|m| m.name == "World").unwrap();
     let cities = world_map.layer_by_name("Cities").unwrap();
     assert!(cities.dataset.features.iter().any(|f| f.attrs.iter().any(|v| v.to_string() == "Field camp")));
     assert_eq!(sync["conflicts"], 0, "a change made only in the source is no conflict");
     // Paris changed in both, and the field camp deleted offline but changed in the map: the area's
-    // version wins, a warning names both, and Undo restores the map's.
+    // version wins, a warning names both, and Undo restores the map's. The field hut, changed only
+    // in the map, is no conflict.
     let paris = |s: &mut Session, map: &str, v: Option<i64>| {
         let m = s.project.maps.iter_mut().find(|m| m.name == map).unwrap();
         let cities = m.layers.iter_mut().find(|l| l.name == "Cities").unwrap();
@@ -6655,28 +6658,41 @@ fn workspace_links_thumbnails_animation_profiles_offline_and_cache() {
     };
     paris(&mut s, "Paris (offline)", Some(2));
     let (id, _) = paris(&mut s, "World", Some(3));
-    /// The features of `map`'s Cities layer, and the field camp's row among them.
-    fn camp<'a>(s: &'a mut Session, map: &str) -> (&'a mut Vec<rustgis_data::Feature>, usize) {
+    /// The features of `map`'s Cities layer, and the row of the one named `name` among them.
+    fn named<'a>(s: &'a mut Session, map: &str, name: &str) -> (&'a mut Vec<rustgis_data::Feature>, usize) {
         let m = s.project.maps.iter_mut().find(|m| m.name == map).unwrap();
         let features = &mut m.layers.iter_mut().find(|l| l.name == "Cities").unwrap().dataset.features;
-        let i = features.iter().position(|f| f.attrs.iter().any(|v| v.to_string() == "Field camp")).unwrap();
+        let i = features.iter().position(|f| f.attrs.iter().any(|v| v.to_string() == name)).unwrap();
         (features, i)
     }
-    let (features, i) = camp(&mut s, "Paris (offline)");
+    let (features, i) = named(&mut s, "Paris (offline)", "Field camp");
     let camp_id = features.remove(i).id;
-    let (features, i) = camp(&mut s, "World");
+    let (features, i) = named(&mut s, "World", "Field camp");
     features[i].geometry = Some(rustgis_data::Geometry::Point(rustgis_geom::Coord::new(2.5, 49.0)));
+    let (features, i) = named(&mut s, "World", "Field hut");
+    features[i].geometry = Some(rustgis_data::Geometry::Point(rustgis_geom::Coord::new(2.2, 49.3)));
     let mark = s.notice_mark();
     let sync = s.run("offline.sync", &json!({"name": "Paris"})).unwrap();
     assert_eq!((sync["updated"].as_u64(), sync["deleted"].as_u64(), sync["conflicts"].as_u64()), (Some(1), Some(1), Some(2)), "{sync}");
     assert_eq!(paris(&mut s, "World", None).1, rustgis_data::Value::Int(2));
     let warned = s.notices_since(mark);
     assert!(
-        warned.iter().any(|n| n.error && n.text.contains(&format!("Cities #{id}")) && n.text.contains(&format!("Cities #{camp_id}"))),
+        warned.iter().any(|n| n.text.contains(&format!("Cities #{id}")) && n.text.contains(&format!("Cities #{camp_id}"))),
         "{warned:?}"
     );
     s.run("edit.undo", &Value::Null).unwrap();
     assert_eq!(paris(&mut s, "World", None).1, rustgis_data::Value::Int(3), "Undo restores the map's version");
+    let (features, i) = named(&mut s, "World", "Field camp");
+    assert_eq!(features[i].id, camp_id, "Undo restores the deleted field camp");
+    // Paris edited offline but deleted from the map meanwhile: the edit is dropped, and said.
+    let world = s.project.maps.iter_mut().find(|m| m.name == "World").unwrap();
+    let cities = world.layers.iter_mut().find(|l| l.name == "Cities").unwrap();
+    cities.dataset.features.retain(|f| f.id != id);
+    let mark = s.notice_mark();
+    let sync = s.run("offline.sync", &json!({"name": "Paris"})).unwrap();
+    assert_eq!(sync["skipped"], 1, "{sync}");
+    let warned = s.notices_since(mark);
+    assert!(warned.iter().any(|n| n.text.contains("deleted from the map") && n.text.contains(&format!("Cities #{id}"))), "{warned:?}");
     s.run("offline.remove", &json!({"name": "Paris"})).unwrap();
     assert!(s.project.maps.iter().all(|m| m.name != "Paris (offline)"));
     // Feature cache.

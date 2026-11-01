@@ -414,8 +414,8 @@ duplication and nudging have their own [layout shortcuts](layouts.md#layouts).
 - **Offline**: Download Map takes the data in view into an offline area; open it to edit, then
   Sync sends changed, new and deleted features back and refreshes it. A feature changed in the
   map since the last sync and also edited or deleted offline takes the offline version, with a
-  warning naming it (Undo restores the map's version); an offline edit to a feature since deleted
-  from the map is dropped, with a warning too. **Feature Cache** prepares
+  warning naming it (Undo reverts the whole sync, restoring the map's version); an offline edit
+  to a feature since deleted from the map is dropped, with a warning too. **Feature Cache** prepares
   every layer's geometry for the current projection (Fill, Empty, Cancel, Auto Cache).
 - **Settings › Customize** chooses the ribbon's tabs and the Quick Access Toolbar's extra
   buttons. Settings and Help always remain visible. **Help** opens the user guide and the
