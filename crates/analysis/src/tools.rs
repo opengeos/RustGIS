@@ -9,7 +9,7 @@ use std::borrow::Cow;
 use std::collections::{HashMap, HashSet, TryReserveError};
 
 use crate::convert::{from_line, from_multipolygon, from_point, to_geo, to_multiline, to_multipolygon};
-use crate::geodesic::geodesic_buffer;
+use crate::geodesic::{VERTEX_BUDGET_ERROR, geodesic_buffer, geodesic_buffer_with_limit};
 use crate::{Inputs, Output, OutputLayer, ParamKind as K, ParamSpec as P, ToolResult, ToolSpec};
 
 const UNITS: &[&str] = &["Kilometers", "Meters", "Miles", "Feet"];
@@ -1137,7 +1137,18 @@ fn union_all<'a>(polys: impl IntoIterator<Item = &'a geo::Polygon<f64>>) -> Mult
 // ---------------------------------------------------------------------------------------------
 // tools
 
+/// At most 32 MB of retained outline coordinates, before dataset/overlay overhead. The same
+/// budget applies before dissolve, so a large dissolved request cannot accumulate every disc.
+const MAX_BUFFER_VERTICES: usize = 2_000_000;
+
+/// Buffer with the output budget shared by all selected input features.
 fn buffer(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
+    buffer_with_vertex_limit(inp, p, MAX_BUFFER_VERTICES)
+}
+
+/// Runs the tool with a vertex budget; the explicit limit also lets the regression exercise
+/// exhaustion with a few features rather than allocating millions of coordinates.
+fn buffer_with_vertex_limit(inp: &dyn Inputs, p: &Json, limit: usize) -> Result<ToolResult, String> {
     let ds = input(inp, p, "input")?;
     let d = num(p, "distance").ok_or("Distance must be a number")?;
     let metres = to_metres(d, s(p, "units"))?;
@@ -1146,10 +1157,12 @@ fn buffer(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
     }
     let mut out = copy_schema(ds, out_name(p, format!("{}_Buffer", ds.name)), GeometryType::Polygon);
     let mut all: Vec<MultiPolygon<f64>> = Vec::new();
+    let mut remaining = limit;
     for r in rows(inp, p, "input", ds) {
         let Some(f) = ds.features.get(r) else { continue };
         let Some(g) = &f.geometry else { continue };
-        let Some(geom) = geodesic_buffer(g, metres) else { continue };
+        let Some(geom) = geodesic_buffer_with_limit(g, metres, remaining)? else { continue };
+        remaining = remaining.saturating_sub(geom.coord_count());
         if s(p, "dissolve") == "All" {
             all.extend(to_multipolygon(&geom));
         } else {
@@ -1160,6 +1173,9 @@ fn buffer(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
         out.fields.clear();
         let u = union_all(all.iter().flat_map(|m| m.0.iter()));
         if let Some(geom) = from_multipolygon(&u) {
+            if geom.coord_count() > limit {
+                return Err(VERTEX_BUDGET_ERROR.into());
+            }
             out.push(Some(geom), vec![]);
         }
     }
@@ -4847,6 +4863,31 @@ mod tests {
         assert!(ran * 2 >= tested, "only {ran} of {tested} layer tools ran on these inputs");
     }
 
+    /// The budget covers accumulated features and pre-union multipoint discs, including
+    /// dissolve requests. Exhaustion is an error, never a partial layer or a silent skip.
+    #[test]
+    fn buffer_vertex_budget_covers_features_and_multipoint_discs() {
+        let point = Coord::new(0.0, 0.0);
+        let vertices = geodesic_buffer(&Geometry::Point(point), 1000.0).unwrap().coord_count();
+        let mut ds = Dataset::new("p", GeometryType::Point, vec![]);
+        for c in [point, Coord::new(0.5, 0.0)] {
+            ds.push(Some(Geometry::Point(c)), vec![]);
+        }
+        let mut m = Map(HashMap::from([("p".to_string(), ds)]));
+        for dissolve in ["None", "All"] {
+            let params = serde_json::json!({"input": "p", "distance": 1, "dissolve": dissolve});
+            assert!(buffer_with_vertex_limit(&m, &params, 2 * vertices).is_ok());
+            assert!(buffer_with_vertex_limit(&m, &params, vertices).unwrap_err().contains("vertex budget"));
+        }
+        // All discs overlap: the final union fits, but collecting the discs must still stop.
+        m.0.get_mut("p").unwrap().features.clear();
+        m.0.get_mut("p").unwrap().push(Some(Geometry::MultiPoint(vec![point; 3])), vec![]);
+        for dissolve in ["None", "All"] {
+            let params = serde_json::json!({"input": "p", "distance": 1, "dissolve": dissolve});
+            assert!(buffer_with_vertex_limit(&m, &params, 2 * vertices).unwrap_err().contains("vertex budget"));
+        }
+    }
+
     #[test]
     fn dissolved_buffers_merge() {
         let mut pts = Dataset::new("p", GeometryType::Point, vec![]);
@@ -4991,7 +5032,7 @@ mod tests {
     /// sides of a 2 km buffer of a 96 km east–west line sat up to 190 m off. Every vertex, and every
     /// edge's quarter points and midpoint as the tools draw edges (straight in Web Mercator), is now
     /// within 0.012% of the distance (or 1 cm) along a line's sides, and no further inside an arc
-    /// than 0.013% of the distance in the projection plane (#1221). The old 32-edge circles
+    /// than 0.031% of the distance in the projection plane (#1221). The old 32-edge circles
     /// and 15-edge caps cut about 0.5% inside and fail these bounds.
     #[test]
     fn buffer_outlines_keep_their_distance_between_vertices() {
@@ -5000,7 +5041,7 @@ mod tests {
             polys.iter().flatten().flatten().copied().chain(along_edges(polys, &fractions)).collect()
         };
         // Bound the geometric error independently of how many vertices the buffer emits.
-        let arc_error = |d: f64| d * 1.3e-4;
+        let arc_error = |d: f64| d * 3.1e-4;
 
         let centre = Coord::new(10.125, 46.125);
         for c in points(&buffered(Geometry::Point(centre), 1.0)) {
@@ -5034,7 +5075,7 @@ mod tests {
             for c in points(&buffered(Geometry::Line(vec![vec![a, b]]), km)) {
                 let (d, beside) = m_to_geodesic(c, &samples);
                 // Along the sides, within 0.012% or 1 cm (and the sampler's millimetre); round the
-                // caps, add the 0.013% arc approximation in the projection plane.
+                // caps, add the 0.031% arc approximation in the projection plane.
                 let side = (d0 * 1.2e-4).max(0.01) + 1e-3;
                 let bound = if beside { side } else { arc_error(d0) + side };
                 assert!(d < d0 + side && d > d0 - bound, "{km} km: {c:?} is {d} m from the line");

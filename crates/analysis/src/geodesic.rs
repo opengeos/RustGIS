@@ -15,13 +15,13 @@
 //! stretch's centre, where the sides are within 0.05%. A ring gains at most [`MAX_ADDED`] points,
 //! which only a ring of thousands of long edges uses up; past that, its edges are left whole.
 //!
-//! Arcs use a 1.8° step: 200 edges to a point's circle and about 100 to a semicircular cap.
-//! Between vertices, those edges cut at most 0.013% of the distance inside the circle in the
-//! projection plane. The buffer backend rounds a corner's segment count down, so a short corner
-//! can have a step approaching 3.6° and cut up to 0.05% inside, on top of the projection error.
+//! Arcs use a 2.8125° step: 128 edges to a point's circle and 64 to a semicircular cap.
+//! Between vertices, those edges cut at most 0.031% of the distance inside the circle in the
+//! projection plane. A short corner can have a step approaching 5.625° when the backend rounds
+//! its segment count down, cutting at most 0.125% inside, on top of the projection error.
 
 use geo::{
-    BooleanOps, Buffer, Contains, Coord as GC, LineString, MultiLineString, MultiPolygon, Orient, Point, Polygon,
+    BooleanOps, Buffer, Contains, Coord as GC, CoordsIter, LineString, MultiLineString, MultiPolygon, Orient, Point, Polygon,
     algorithm::buffer::{BufferStyle, LineCap, LineJoin},
     orient::Direction,
 };
@@ -54,9 +54,11 @@ const MAX_SPLITS: u32 = 12;
 /// checked, so an arc's short edges cost nothing.
 const STRAY_PER_M2: f64 = 3e-7;
 
-/// The finest round-cap/join step supported by the buffer backend (1.8°). A circle's area
-/// deficit is under 0.017%, leaving room for projection error in the reference's 0.1% bound.
-const ARC_STEP: f64 = std::f64::consts::PI / 100.0;
+/// A circle's area deficit is under 0.041% with 128 edges: less than half the reference's
+/// 0.1% bound, leaving room for projection error without the cost of the backend's finest step.
+const ARC_STEP: f64 = std::f64::consts::PI / 64.0;
+
+pub(crate) const VERTEX_BUDGET_ERROR: &str = "Buffer exceeds its vertex budget; select fewer features";
 
 /// Round arcs at the same density for points, line caps and polygon corners, including stretches.
 fn buffer_style(metres: f64) -> BufferStyle<f64> {
@@ -66,16 +68,39 @@ fn buffer_style(metres: f64) -> BufferStyle<f64> {
 /// A feature's buffer at `metres` (negative shrinks a polygon), in lon/lat; `None` when nothing
 /// is left.
 pub fn geodesic_buffer(g: &Geometry, metres: f64) -> Option<Geometry> {
+    geodesic_buffer_with_limit(g, metres, usize::MAX).ok().flatten()
+}
+
+/// A buffer that must fit the caller's remaining vertex budget. Multipoint discs are counted
+/// before collecting them for union, so even overlapping discs cannot grow an unbounded batch.
+/// Other geometries are checked before conversion to the returned geometry; this bounds retained
+/// outlines, not all temporary allocations inside the polygon overlay backend.
+pub(crate) fn geodesic_buffer_with_limit(g: &Geometry, metres: f64, max_vertices: usize) -> Result<Option<Geometry>, &'static str> {
     if !metres.is_finite() {
-        return None;
+        return Ok(None);
     }
     let mp = match g {
         Geometry::Point(c) => point(*c, metres),
-        Geometry::MultiPoint(v) => union(v.iter().map(|c| point(*c, metres)).collect()),
+        Geometry::MultiPoint(v) => {
+            let mut remaining = max_vertices;
+            let mut discs = Vec::new();
+            for c in v {
+                let disc = point(*c, metres);
+                if disc.0.is_empty() {
+                    continue;
+                }
+                remaining = remaining.checked_sub(disc.coords_count()).ok_or(VERTEX_BUDGET_ERROR)?;
+                discs.push(disc);
+            }
+            union(discs)
+        }
         Geometry::Line(parts) => lines(&finite(parts), metres),
         Geometry::Polygon(polys) => polygons(&polys.iter().map(|rings| finite(rings)).collect::<Vec<_>>(), metres),
     };
-    to_geometry(&mp)
+    if mp.coords_count() > max_vertices {
+        return Err(VERTEX_BUDGET_ERROR);
+    }
+    Ok(to_geometry(&mp))
 }
 
 /// An azimuthal equidistant plane whose centre's longitude is within 180° of `reference`, a
@@ -350,6 +375,32 @@ fn to_geometry(mp: &MultiPolygon<f64>) -> Option<Geometry> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Samples the actual projected outlines: shallow turns exercise a rounded-down join,
+    /// while larger turns would fail this bound at the old default arc density.
+    #[test]
+    fn round_polygon_corners_and_line_joins_keep_their_error_bound() {
+        for degrees in [0.25_f64, 2.8, 2.9, 5.5, 8.3, 89.0, 179.0] {
+            let angle = degrees.to_radians();
+            let line = LineString::from(vec![(-100.0, 0.0), (0.0, 0.0), (100.0 * angle.cos(), 100.0 * angle.sin())]);
+            for shape in [geo::Geometry::LineString(line.clone()), geo::Geometry::Polygon(Polygon::new(line, vec![]))] {
+                let buffered = shape.buffer_with_style(buffer_style(1.0));
+                let mut probes = 0;
+                for edge in buffered.0.iter().flat_map(|p| p.exterior().0.windows(2)) {
+                    let [a, b] = edge else { continue };
+                    if (a.x.hypot(a.y) - 1.0).abs() > 1e-5 || (b.x.hypot(b.y) - 1.0).abs() > 1e-5 {
+                        continue;
+                    }
+                    for t in [0.0, 0.25, 0.5, 0.75, 1.0] {
+                        let distance = (a.x + t * (b.x - a.x)).hypot(a.y + t * (b.y - a.y));
+                        assert!((1.0 - 0.00125 - 1e-5..=1.0 + 1e-5).contains(&distance), "{degrees}°: {distance}");
+                        probes += 1;
+                    }
+                }
+                assert!(probes > 0, "no corner samples at {degrees}°");
+            }
+        }
+    }
 
     #[test]
     fn a_ring_gains_at_most_max_added_points() {

@@ -214,11 +214,15 @@ projection. Each feature is buffered in an azimuthal equidistant projection on t
 centred on it, so distances from a point are true; long lines and large polygon outlines are
 buffered in stretches of a few hundred kilometres to limit projection error. Up to 85° of
 latitude, a buffer's sides are within 0.012 % of the distance (or 1 cm), and within 0.05 % along
-a winding line or outline buffered in stretches. Its curves are drawn with straight edges (200
-to a point's circle, about 100 to a semicircular line end). Between vertices, those edges cut up
-to 0.013 % of the distance inside the true curve in the projection plane, and up to 0.05 % at
+a winding line or outline buffered in stretches. Its curves are drawn with straight edges (128
+to a point's circle, 64 to a semicircular line end). Between vertices, those edges cut up
+to 0.031 % of the distance inside the true curve in the projection plane, and up to 0.125 % at
 polygon corners and line joins, in addition to the projection error. Negative Buffer
 distances shrink polygons. Buffer and Select Layer By Location limit distances to 5,000 km.
+Buffer limits retained outlines to 2,000,000 vertices before dissolving and checks the dissolved
+result too. Multipoint discs count before union even when they overlap. A request that exceeds
+the budget fails with an error; select fewer features and run smaller batches. This limits retained
+geometry, not every temporary allocation inside a complex polygon operation.
 **Calculate Geometry Attributes** measures polygon areas and perimeters, and line lengths,
 on the WGS 84 ellipsoid, independently of the map's display projection. Holes are subtracted
 regardless of ring winding, and multipart measurements are summed. Ring directions are
