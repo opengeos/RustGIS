@@ -292,8 +292,9 @@ impl Drop for Lease {
     }
 }
 
-/// The cache folders whose last sweep in this process ended over budget. A sweep in another
-/// process doesn't mark them here; the next index built anywhere sweeps again.
+/// The cache folders whose last sweep in this process ended over budget or failed. Only this
+/// process's sweeps set or clear the mark: one in another process doesn't reach it until this
+/// process builds an index and sweeps again.
 static OVER_BUDGET: std::sync::Mutex<std::collections::BTreeSet<PathBuf>> = std::sync::Mutex::new(std::collections::BTreeSet::new());
 
 fn over_budget(root: &Path) -> bool {
@@ -449,10 +450,12 @@ fn prune_locked(root: &Path, budget: u64) -> io::Result<PruneStats> {
     #[cfg(test)]
     SWEEPS.with(|n| n.set(n.get() + 1));
     let stats = sweep(root, budget);
-    // A failed sweep leaves the mark as it was: the next one decides.
-    if let Ok(stats) = &stats {
-        note_budget(root, stats.remaining_bytes > budget);
-    }
+    // A failed sweep may have left the cache over budget, so the next release sweeps again.
+    let over = match &stats {
+        Ok(s) => s.remaining_bytes > budget,
+        Err(_) => true,
+    };
+    note_budget(root, over);
     stats
 }
 fn sweep(root: &Path, budget: u64) -> io::Result<PruneStats> {

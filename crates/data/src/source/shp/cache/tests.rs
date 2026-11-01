@@ -108,8 +108,8 @@ fn cache_releases_sweep_only_a_cache_left_over_budget() {
     assert_eq!(sweeps(), before, "a release within budget doesn't sweep");
     assert!(kept_path.exists(), "a ready index within budget stays");
 
-    // Both in use: the second's commit evicts the idle first index but can't evict either of
-    // these, so the cache stays over budget until one is released.
+    // The first's commit evicts the idle index; the second's can't evict either of these two in
+    // use, so the cache stays over budget until one is released.
     let first = ready(&root.0, 2, 10, 10);
     assert!(!kept_path.exists(), "the idle index went first");
     let second = ready(&root.0, 3, 10, 10);
@@ -122,6 +122,11 @@ fn cache_releases_sweep_only_a_cache_left_over_budget() {
     drop(second);
     assert_eq!(sweeps(), before, "within budget again, the next release doesn't sweep");
     assert!(second_path.exists());
+
+    // A sweep that fails may have left the cache over budget: the next release sweeps again.
+    let missing = root.0.join("missing");
+    assert!(prune_locked(&missing, 10).is_err());
+    assert!(over_budget(&missing));
 }
 
 fn wait_removed(path: &Path) {
