@@ -155,55 +155,77 @@ pub struct Feature {
 /// project) copies a pointer, and the first change through one of the copies copies the rows
 /// for it. A large layer is then held once however many undo steps leave it alone.
 #[derive(Clone, Default)]
-pub struct Features(std::sync::Arc<Vec<Feature>>);
+pub struct Features {
+    rows: std::sync::Arc<Vec<Feature>>,
+    /// The largest id, kept by [`Dataset::push`] and [`Dataset::push_next`] so that building `n`
+    /// rows doesn't search them `n` times; `None` (search once) after any other change to the rows.
+    max_id: Option<u64>,
+}
 
 impl Features {
     /// Whether two are the same rows in memory (one cloned from the other, neither changed since).
     pub fn shares(&self, other: &Features) -> bool {
-        std::sync::Arc::ptr_eq(&self.0, &other.0)
+        std::sync::Arc::ptr_eq(&self.rows, &other.rows)
     }
 
     /// A non-owning allocation identity for derived caches. Mutable access dissociates weak
     /// references through `Arc::make_mut`, even without another strong owner, so an identity
     /// stops matching after any row, geometry or attribute edit. It does not retain the rows.
     pub fn allocation_key(&self) -> std::sync::Weak<Vec<Feature>> {
-        std::sync::Arc::downgrade(&self.0)
+        std::sync::Arc::downgrade(&self.rows)
     }
 
     /// The rows, taking them out of the share (copying them only when another copy holds them).
     pub fn into_vec(self) -> Vec<Feature> {
-        std::sync::Arc::unwrap_or_clone(self.0)
+        std::sync::Arc::unwrap_or_clone(self.rows)
+    }
+
+    /// Appends a row with the id one past the largest.
+    fn push_with_new_id(&mut self, geometry: Option<Geometry>, attrs: Vec<Value>) {
+        let max = self.max_id.unwrap_or_else(|| self.rows.iter().map(|f| f.id).max().unwrap_or(0));
+        let id = max.saturating_add(1);
+        std::sync::Arc::make_mut(&mut self.rows).push(Feature { id, geometry, attrs });
+        self.max_id = Some(id);
+    }
+
+    /// Appends a row with the id one past the last row's, keeping the largest id if it is known.
+    fn push_after_last(&mut self, geometry: Option<Geometry>, attrs: Vec<Value>) {
+        let id = self.rows.last().map(|f| f.id.saturating_add(1)).unwrap_or(1);
+        std::sync::Arc::make_mut(&mut self.rows).push(Feature { id, geometry, attrs });
+        self.max_id = self.max_id.map(|m| m.max(id));
     }
 }
 
 impl std::ops::Deref for Features {
     type Target = Vec<Feature>;
     fn deref(&self) -> &Vec<Feature> {
-        &self.0
+        &self.rows
     }
 }
 
 impl std::ops::DerefMut for Features {
     fn deref_mut(&mut self) -> &mut Vec<Feature> {
-        std::sync::Arc::make_mut(&mut self.0)
+        // The caller may change ids, so the largest is searched for again on the next push.
+        self.max_id = None;
+        std::sync::Arc::make_mut(&mut self.rows)
     }
 }
 
 impl PartialEq for Features {
     fn eq(&self, other: &Features) -> bool {
-        self.shares(other) || *self.0 == *other.0
+        self.shares(other) || *self.rows == *other.rows
     }
 }
 
 impl std::fmt::Debug for Features {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.0.fmt(f)
+        self.rows.fmt(f)
     }
 }
 
 impl From<Vec<Feature>> for Features {
     fn from(v: Vec<Feature>) -> Features {
-        Features(std::sync::Arc::new(v))
+        Features { rows: std::sync::Arc::new(v), max_id: None }
     }
 }
 
@@ -225,7 +247,7 @@ impl<'a> IntoIterator for &'a Features {
     type Item = &'a Feature;
     type IntoIter = std::slice::Iter<'a, Feature>;
     fn into_iter(self) -> Self::IntoIter {
-        self.0.iter()
+        self.rows.iter()
     }
 }
 
@@ -239,7 +261,7 @@ impl<'a> IntoIterator for &'a mut Features {
 
 impl Serialize for Features {
     fn serialize<S: serde::Serializer>(&self, s: S) -> std::result::Result<S::Ok, S::Error> {
-        self.0.serialize(s)
+        self.rows.serialize(s)
     }
 }
 
@@ -339,17 +361,15 @@ impl Dataset {
     /// Pushes a feature with the next id, padding/truncating attributes to the schema.
     pub fn push(&mut self, geometry: Option<Geometry>, mut attrs: Vec<Value>) {
         attrs.resize(self.fields.len(), Value::Null);
-        let id = self.features.iter().map(|f| f.id).max().map(|m| m.saturating_add(1)).unwrap_or(1);
-        self.features.push(Feature { id, geometry, attrs });
+        self.features.push_with_new_id(geometry, attrs);
     }
 
     /// Pushes a feature with the id one past the last feature's, padding/truncating attributes:
-    /// for readers filling a new dataset, where [`Dataset::push`]'s search for the largest id
-    /// would make reading quadratic.
+    /// for readers filling a new dataset. The ids are unique only while the rows are in id order;
+    /// [`Dataset::push`] gives unique ids in any order.
     pub fn push_next(&mut self, geometry: Option<Geometry>, mut attrs: Vec<Value>) {
         attrs.resize(self.fields.len(), Value::Null);
-        let id = self.features.last().map(|f| f.id.saturating_add(1)).unwrap_or(1);
-        self.features.push(Feature { id, geometry, attrs });
+        self.features.push_after_last(geometry, attrs);
     }
 
     /// Adds a field (if missing) and returns its index.
@@ -443,5 +463,43 @@ mod tests {
         assert_eq!(d.numeric_range(0, &[false, false]), None);
         assert_eq!(d.unique_values(0, &[true, false], 10), vec!["5"]);
         assert_eq!(d.value(99, 99), &Value::Null);
+    }
+
+    #[test]
+    fn push_keeps_the_largest_id_instead_of_searching_for_it() {
+        let mut d = Dataset::new("t", GeometryType::Point, vec![]);
+        for _ in 0..3 {
+            d.push(None, vec![]);
+        }
+        assert_eq!(d.features.max_id, Some(3));
+        // A kept largest id is what the next push uses: it doesn't search the rows again,
+        // so building a layer of n features is linear, not quadratic (#1227).
+        d.features.max_id = Some(100);
+        d.push(None, vec![]);
+        assert_eq!(d.features.last().map(|f| f.id), Some(101));
+        // Any other change may change ids, so the next push searches once.
+        d.features[0].id = 500;
+        assert_eq!(d.features.max_id, None);
+        d.push(None, vec![]);
+        assert_eq!(d.features.last().map(|f| f.id), Some(501));
+        d.features.retain(|f| f.id != 501);
+        d.push(None, vec![]);
+        let ids: Vec<u64> = d.features.iter().map(|f| f.id).collect();
+        assert_eq!(ids, vec![500, 2, 3, 101, 501]);
+        // Rows built elsewhere start without one; a clone keeps it with the rows it shares.
+        let mut from: Dataset = Dataset::new("u", GeometryType::Point, vec![]);
+        from.features = vec![Feature { id: 7, geometry: None, attrs: vec![] }].into();
+        assert_eq!(from.features.max_id, None);
+        from.push(None, vec![]);
+        let mut copy = from.clone();
+        assert_eq!(copy.features.max_id, Some(8));
+        copy.push(None, vec![]);
+        assert_eq!(copy.features.last().map(|f| f.id), Some(9));
+        assert_eq!(from.features.len(), 2);
+        // push_next keeps a known largest id, so mixing it with push stays linear.
+        copy.push_next(None, vec![]);
+        assert_eq!(copy.features.max_id, Some(10));
+        copy.push(None, vec![]);
+        assert_eq!(copy.features.last().map(|f| f.id), Some(11));
     }
 }
