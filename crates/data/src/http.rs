@@ -16,15 +16,18 @@ use ureq::tls::{RootCerts, TlsConfig};
 /// The platform verifier reads the system's certificates each time an agent sets up TLS, so an
 /// agent should be made once and kept, its requests leaving its TLS settings alone.
 pub fn tls_config() -> TlsConfig {
-    static ROOTS: LazyLock<RootCerts> = LazyLock::new(|| {
-        #[cfg(all(unix, not(target_vendor = "apple"), not(target_os = "android")))]
-        return roots(std::env::var_os("SSL_CERT_FILE"), std::env::var_os("SSL_CERT_DIR"), || {
-            rustls_native_certs::load_native_certs().certs.is_empty()
-        });
-        #[cfg(not(all(unix, not(target_vendor = "apple"), not(target_os = "android"))))]
-        RootCerts::PlatformVerifier
-    });
+    static ROOTS: LazyLock<RootCerts> = LazyLock::new(system_roots);
     TlsConfig::builder().root_certs(ROOTS.clone()).build()
+}
+
+#[cfg(all(unix, not(target_vendor = "apple"), not(target_os = "android")))]
+fn system_roots() -> RootCerts {
+    roots(std::env::var_os("SSL_CERT_FILE"), std::env::var_os("SSL_CERT_DIR"), || rustls_native_certs::load_native_certs().certs.is_empty())
+}
+
+#[cfg(not(all(unix, not(target_vendor = "apple"), not(target_os = "android"))))]
+fn system_roots() -> RootCerts {
+    RootCerts::PlatformVerifier
 }
 
 /// The roots on Linux and the BSDs: the bundled ones only when neither `SSL_CERT_FILE` nor

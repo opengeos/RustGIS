@@ -133,7 +133,7 @@ fn assert_image(url: &str, trusted: bool) {
                 assert!(trusted, "untrusted HTTPS image was accepted");
                 let cache::Payload::Image(image) = &*payload else { panic!("image fetch returned another payload") };
                 assert_eq!((image.width(), image.height()), (256, 256));
-                assert!(image.data().chunks_exact(4).all(|pixel| pixel == PIXEL), "decoded PNG pixels differ");
+                assert!(image.data().as_chunks::<4>().0.iter().all(|pixel| *pixel == PIXEL), "decoded PNG pixels differ");
                 return;
             }
             cache::State::Failed(error) => {
