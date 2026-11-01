@@ -125,6 +125,58 @@ fn cache_files_without_a_lease_dont_keep_releases_sweeping() {
     assert!(open_path.exists(), "the released index stays until the next build");
 }
 
+/// Emptying the cache removes every index not in use, in each folder, and says what it freed
+/// and what stayed in use; a missing folder is skipped (#1259).
+#[test]
+fn cache_empty_removes_every_index_not_in_use() {
+    let (first, second) = (Folder::new(), Folder::new());
+    let idle = ready(&first.0, 1, 10, 4096);
+    let idle_path = idle.path().to_path_buf();
+    drop(idle);
+    let held = ready(&first.0, 2, 20, 4096);
+    let other = ready(&second.0, 3, 30, 4096);
+    let other_path = other.path().to_path_buf();
+    drop(other);
+    let missing = first.0.join("missing");
+    let emptied = empty_folders(&[first.0.clone(), second.0.clone(), missing.clone()]);
+    assert_eq!((emptied.removed, emptied.removed_bytes), (2, 40), "{emptied:?}");
+    assert_eq!((emptied.in_use, emptied.in_use_bytes, emptied.kept_bytes), (1, 20, 0), "{emptied:?}");
+    assert_eq!((emptied.folders, emptied.failed.len()), (2, 0), "{emptied:?}");
+    assert!(!idle_path.exists() && !other_path.exists());
+    assert!(held.path().exists(), "an index in use stays");
+    assert!(!missing.exists(), "a missing folder isn't created");
+}
+
+/// A root that isn't a folder is reported, not skipped as a missing one is (#1259).
+#[test]
+fn cache_empty_reports_a_root_that_is_not_a_folder() {
+    let root = Folder::new();
+    let file = root.0.join("not-a-folder");
+    std::fs::write(&file, b"keep").unwrap();
+    let emptied = empty_folders(std::slice::from_ref(&file));
+    assert_eq!((emptied.folders, emptied.failed.len()), (0, 1), "{emptied:?}");
+    assert!(emptied.failed[0].contains("not a folder"), "{emptied:?}");
+    assert_eq!(std::fs::read(&file).unwrap(), b"keep");
+}
+
+/// A folder the cache refuses (writable by others) is reported and doesn't stop the next one
+/// from being emptied: that is where the indexes are when the first is refused (#1259).
+#[cfg(unix)]
+#[test]
+fn cache_empty_goes_on_past_a_folder_it_refuses() {
+    use std::os::unix::fs::PermissionsExt;
+    let (refused, fallback) = (Folder::new(), Folder::new());
+    let idle = ready(&fallback.0, 1, 10, 4096);
+    let idle_path = idle.path().to_path_buf();
+    drop(idle);
+    std::fs::set_permissions(&refused.0, std::fs::Permissions::from_mode(0o777)).unwrap();
+    let emptied = empty_folders(&[refused.0.clone(), fallback.0.clone()]);
+    assert_eq!((emptied.folders, emptied.removed), (1, 1), "{emptied:?}");
+    assert_eq!(emptied.failed.len(), 1, "{emptied:?}");
+    assert!(emptied.failed[0].contains(&*refused.0.to_string_lossy()), "{emptied:?}");
+    assert!(!idle_path.exists());
+}
+
 #[test]
 fn cache_lru_touches_reopened_indexes_and_evicts_oldest_idle() {
     let root = Folder::new();

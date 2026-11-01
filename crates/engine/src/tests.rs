@@ -15220,6 +15220,47 @@ fn geojson_read_in_place_when_asked_or_large() {
     let _ = std::fs::remove_file(one);
 }
 
+/// Emptying the Shapefile index cache keeps the index of a layer that's open, says so, and the
+/// layer still reads (#1259).
+#[test]
+fn emptying_the_index_cache_keeps_indexes_in_use() {
+    let p = line_of_points_shp("index-cache", 20);
+    let mut s = Session::new(Project::default());
+    let r = s.run("layer.addData", &json!({"path": p.display().to_string(), "stream": true})).unwrap();
+    let mark = s.notice_mark();
+    let out = s.run("cache.emptyIndexes", &Value::Null).unwrap();
+    assert!(out["inUse"].as_u64().unwrap() >= 1, "{out}");
+    assert!(out["removed"].is_u64() && out["freedBytes"].is_u64(), "{out}");
+    let notices = s.notices_since(mark);
+    assert!(notices.iter().any(|n| n.text.contains("in use") && !n.error), "{notices:?}");
+    let layer = s.map().layer(r["layer"].as_u64().unwrap() as u32).unwrap();
+    assert_eq!(layer.load_all().unwrap().features.len(), 20);
+    drop(s);
+    for ext in ["shp", "shx", "dbf", "prj", "cpg"] {
+        let _ = std::fs::remove_file(p.with_extension(ext));
+    }
+}
+
+/// Emptying the index cache tells the user only what it couldn't do: nothing when all went (#1259).
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn emptying_the_index_cache_notices_only_what_stayed() {
+    use crate::cmd::workspace::empty_notices;
+    let mut e = rustgis_data::source::shp::Emptied::default();
+    assert!(empty_notices(&e).is_empty());
+    e.removed = 3;
+    e.removed_bytes = 4096;
+    assert!(empty_notices(&e).is_empty(), "what it freed is in the result, not a notice");
+    e.in_use = 1;
+    e.in_use_bytes = 2048;
+    e.kept_bytes = 3 * 1024 * 1024;
+    e.failed.push("/somewhere: refused".to_string());
+    let notices = empty_notices(&e);
+    assert!(notices.iter().any(|(t, error)| *error && t.contains("/somewhere: refused")), "{notices:?}");
+    assert!(notices.iter().any(|(t, error)| !*error && t.contains("1 index in use") && t.contains("2.0 KB")), "{notices:?}");
+    assert!(notices.iter().any(|(t, error)| !*error && t.contains("not removed") && t.contains("3.0 MB")), "{notices:?}");
+}
+
 /// A Shapefile of `n` points along the equator, numbered.
 fn line_of_points_shp(name: &str, n: usize) -> std::path::PathBuf {
     use rustgis_data::{Coord, Dataset, Field, FieldType, Geometry, GeometryType, Value as V};
