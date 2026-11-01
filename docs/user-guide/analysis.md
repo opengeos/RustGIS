@@ -154,10 +154,9 @@ integer attributes outside ±2^53 are rejected to avoid precision loss.
 This is an in-memory export, limited to 10,000 distinct output tiles and a conservative
 256 MiB working-memory budget, including the input, clipping/encoding temporaries and final
 archive. This budget is checked after streamed-source materialization, not during provider
-loading: the existing full-read limits (2,000,000 features on desktop, 500,000 in the browser)
-apply first, and loading may use more than 256 MiB before export refuses the input. Reduce a
-large source before loading it for export. Geometry allocation estimates are linear in the
-number of vertices and rings.
+loading: the whole-read limits ([Large files](data.md#large-files)) apply first, and loading may
+use more than 256 MiB before export refuses the input. Reduce a large source before loading it
+for export. Geometry allocation estimates are linear in the number of vertices and rings.
 Each geometry component's buffered candidate rectangle is limited to 40,000 tiles per zoom,
 including candidates where clipping produces no output. A separate **100,000,000-unit
 geometry-work budget** accumulates across all exported features, components and zooms:
@@ -214,11 +213,17 @@ projection. Each feature is buffered in an azimuthal equidistant projection on t
 centred on it, so distances from a point are true; long lines and large polygon outlines are
 buffered in stretches of a few hundred kilometres to limit projection error. Up to 85° of
 latitude, a buffer's sides are within 0.012 % of the distance (or 1 cm), and within 0.05 % along
-a winding line or outline buffered in stretches. Its curves are drawn with straight edges (32 to
-a point's circle, 15 to a half circle at a line's end or a polygon's corner, close to GEOS and
-PostGIS's 8 to a quarter circle), whose corners are at the distance and whose middles run up to
-about 0.5 % of it inside the true curve. Negative Buffer
+a winding line or outline buffered in stretches. Its curves are drawn with straight edges (128
+to a point's circle, 64 to a semicircular line end). Between vertices, those edges cut up
+to 0.031 % of the distance inside the true curve in the projection plane, and up to 0.125 % at
+polygon corners and line joins, in addition to the projection error. Negative Buffer
 distances shrink polygons. Buffer and Select Layer By Location limit distances to 5,000 km.
+Buffer limits retained outlines to 2,000,000 vertices before dissolving and checks the dissolved
+result too. Multipoint discs count before union even when they overlap, cumulatively across features. A request that exceeds
+the budget fails with an error; split large features or select fewer features and run smaller batches. This limits retained
+geometry, not every temporary allocation inside a complex polygon operation. Select Layer By
+Location applies the same shared budget to its distance-buffered selector outlines; selection at
+zero distance uses the original geometries without this buffer limit.
 **Calculate Geometry Attributes** measures polygon areas and perimeters, and line lengths,
 on the WGS 84 ellipsoid, independently of the map's display projection. Holes are subtracted
 regardless of ring winding, and multipart measurements are summed. Ring directions are
@@ -228,7 +233,17 @@ use the smaller polar region in either direction; reversing a ring does not sele
 complement. Edges follow the shortest geodesics between vertices. The output fields remain
 `area_km2`, `perimeter_km` and `length_km`; point coordinates are unchanged.
 Spatial Join's **Largest overlap** still measures area on a sphere of radius 6,371 km; it can
-differ from the ellipsoid by up to about 0.9 % (a small area near a pole).
+differ from the ellipsoid by up to about 0.9 % (a small area near a pole). The same WGS 84
+measure backs the attribute table's **Calculate Geometry** (`edit.calculateGeometry`), the map's
+**Measure** tools on the Earth, and every network tool's edge and route lengths, so all of these
+read the same number for the same geometry, with two exceptions. A polygon ring with a full-turn
+(-180° to 180°) edge, such as a globe-wide band, is measured on the sphere by the attribute table
+and the Measure tools, while **Calculate Geometry Attributes** unwraps it, so it reads near zero
+there. A ring winding around a pole is measured as the region it traces by the attribute table
+and the Measure tools (a ring that goes all the way round at 60° N gives the larger region),
+while **Calculate Geometry Attributes** gives the smaller polar cap. On the Moon or another body, the Measure tools measure on
+that body's sphere. The Radius tools still measure a local Mercator distance, and **Mensuration
+Tools** (`raster.measure`) still measure on the sphere, so those can differ from the numbers above.
 
 **Merge** (`merge`, Data Management › General) appends loaded vector layers of the same geometry
 type (points, lines or polygons) into a new layer. It needs no GeoLibre runner. Choose **Input
@@ -420,7 +435,13 @@ into a `target` table or layer based on matching key values:
   `joinField` (aliases: `join_field`) names the matching key in the source table; when omitted, empty,
   or whitespace-only, it defaults to `targetField`. Numeric keys match across integer and floating-point
   types when whole numbers (e.g. `10` matches `10.0`), while non-finite floats (`NaN`, infinity) and
-  nulls never match. Incompatible key data types (e.g. text vs integer) are rejected.
+  nulls never match. A text key matches an integer key when the text is the number written out in
+  full (`"47157000100"` matches `47157000100`), so an all-digit ID typed as a number in one table and
+  as text in the other (Census GEOIDs, FIPS codes, ZIP codes) joins when the codes match exactly as
+  written. Leading zeros stay meaningful: a number that lost its zero (`1001` for `"01001"`) leaves its
+  record unmatched, and a warning says how many records missed this way, with the first pair. Other
+  incompatible key data types (e.g. text vs floating point or boolean) are rejected, and the message
+  suggests converting one key with Add Field and Calculate Field.
 - **Transferred fields:** `fields` selects specific source fields to transfer (a comma-separated list
   or a JSON array of strings, e.g. `["tax_rate", "zone_code"]`; non-string and non-array types are rejected). Repeated
   field names are deduplicated in order. When omitted or passed as a blank string (`""`), every source field except
@@ -655,6 +676,10 @@ click them on the map:
 | Exploratory Analysis | Histograms and correlations of numeric fields |
 | Embeddings | The features most like the selected one, by their numeric attributes |
 | Data Interop | KML, GPX, CSV with WKT, GeoJSON or CSV |
+
+Network routing rebuilds its graph for each request and solves each edge length on WGS 84.
+Large line networks can therefore take longer to route than with spherical lengths; repeated
+routes do not currently share a cached graph.
 
 Rasters these make are kept in the project. **Environments** (`gp.env`) set an extent from the map
 view, full extent, a layer or a longitude/latitude box (or `null` to clear it). For tools that

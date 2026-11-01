@@ -58,6 +58,11 @@ fn dir() -> PathBuf {
 }
 
 fn write_parquet(path: &Path, covering: bool) {
+    write_parquet_typed(path, covering, r#"["Point"]"#);
+}
+
+/// [`write_parquet`], with the `geo` metadata's `geometry_types` (a JSON list) given.
+fn write_parquet_typed(path: &Path, covering: bool, types: &str) {
     use arrow_array::{BinaryArray, Float32Array, Int64Array, RecordBatch, StringArray, StructArray};
     use arrow_schema::{DataType, Field as AField, Schema};
     let pts = points();
@@ -79,10 +84,14 @@ fn write_parquet(path: &Path, covering: bool) {
     let geo = if covering {
         fields.push(AField::new("geometry_bbox", DataType::Struct(bbox_fields.iter().cloned().collect()), false));
         cols.push(Arc::new(bbox));
-        r#"{"version":"1.1.0","primary_column":"geometry","columns":{"geometry":{"encoding":"WKB","geometry_types":["Point"],
-            "covering":{"bbox":{"xmin":["geometry_bbox","xmin"],"ymin":["geometry_bbox","ymin"],"xmax":["geometry_bbox","xmax"],"ymax":["geometry_bbox","ymax"]}}}}}"#
+        format!(
+            r#"{{"version":"1.1.0","primary_column":"geometry","columns":{{"geometry":{{"encoding":"WKB","geometry_types":{types},
+            "covering":{{"bbox":{{"xmin":["geometry_bbox","xmin"],"ymin":["geometry_bbox","ymin"],"xmax":["geometry_bbox","xmax"],"ymax":["geometry_bbox","ymax"]}}}}}}}}}}"#
+        )
     } else {
-        r#"{"version":"1.0.0","primary_column":"geometry","columns":{"geometry":{"encoding":"WKB","geometry_types":["Point"]}}}"#
+        format!(
+            r#"{{"version":"1.0.0","primary_column":"geometry","columns":{{"geometry":{{"encoding":"WKB","geometry_types":{types}}}}}}}"#
+        )
     };
     let schema = Arc::new(Schema::new(fields));
     let batch = RecordBatch::try_new(schema.clone(), cols).unwrap();
@@ -237,6 +246,7 @@ fn materialize_refuses_oversized_and_incomplete_sources() {
             crs: "EPSG:4326".into(),
             indexed: false,
             notes: vec![],
+            zm_dropped: false,
         },
         batch: None,
         read: AtomicBool::new(false),
@@ -267,6 +277,33 @@ fn materialize_refuses_oversized_and_incomplete_sources() {
     let (ds, report) = materialize(&src).unwrap();
     assert!(ds.features.is_empty());
     assert_eq!(report.skipped, 1);
+}
+
+/// A whole read of a source that can be read a chunk at a time holds what one read gives, and is
+/// refused once its features outgrow the memory budget (#1111).
+#[test]
+fn whole_reads_by_chunk_stay_within_the_memory_budget() {
+    let d = dir().join("budget");
+    std::fs::create_dir_all(&d).unwrap();
+    let mut ds = Dataset::new("lines", GeometryType::Polyline, vec![Field::new("name", FieldType::Text)]);
+    for i in 0..200 {
+        let x = f64::from(i) * 0.01;
+        ds.push_next(Some(Geometry::Line(vec![vec![Coord::new(x, 1.0), Coord::new(x, 2.0)]])), vec![Value::Text(format!("line {i}"))]);
+    }
+    for ext in ["gpkg", "fgb", "parquet", "shp"] {
+        let p = d.join(format!("lines.{ext}"));
+        let _ = std::fs::remove_file(&p);
+        crate::io::write_path(&ds, &p).unwrap();
+        let src = open_path(&p, None).unwrap();
+        assert!(src.visits_chunks(), "{ext}");
+        let once = src.read(&Request::all()).unwrap().features;
+        let (whole, report) = materialize_within(src.as_ref(), MAX_READ_BYTES).unwrap();
+        assert_eq!(whole.features.to_vec(), once, "{ext}");
+        assert_eq!(report.skipped, 0, "{ext}");
+        let half = chunk_memory::features_bytes(&once) as u64 / 2;
+        let error = materialize_within(src.as_ref(), half).unwrap_err().to_string();
+        assert!(error.contains("clip or filter it first"), "{ext}: {error}");
+    }
 }
 
 #[test]
@@ -1215,6 +1252,35 @@ fn geojson_read_in_place() {
 }
 
 #[test]
+fn geojson_in_place_rejects_partial_collections_with_a_notice() {
+    let text = r#"{"type":"FeatureCollection","features":[
+        {"type":"Feature","properties":{},"geometry":{"type":"GeometryCollection","geometries":[
+            {"type":"Point","coordinates":[1,2]},
+            {"type":"Polygon","coordinates":[[[0,0],[4,0],[4,4],[0,0]]]}
+        ]}},
+        {"type":"Feature","properties":{},"geometry":{"type":"GeometryCollection","geometries":[
+            {"type":"Point","coordinates":[8,9]}
+        ]}}
+    ]}"#;
+    let p = dir().join("collections.geojson");
+    std::fs::write(&p, text).unwrap();
+    let (whole, report) = crate::io::read_geojson(text, "x").unwrap();
+    assert_eq!(whole.features.len(), 1);
+    assert_eq!(report.skipped, 1);
+    for in_memory in [crate::io::MAX_BYTES, 0] {
+        let src = geojson::GeoJsonSource::open_with(&p, "x", in_memory).unwrap();
+        assert_eq!(src.info().count, Some(1));
+        assert_eq!(src.skipped_at_open(), 1);
+        assert_eq!(src.info().notes, ["1 features had unreadable geometry"]);
+        let (ds, streamed_report) = materialize(&src).unwrap();
+        assert_eq!(ds.features, whole.features);
+        assert_eq!(streamed_report.skipped, report.skipped);
+        assert_eq!(streamed_report.messages, report.messages.iter().map(|m| format!("x: {m}")).collect::<Vec<_>>());
+    }
+    std::fs::remove_file(p).unwrap();
+}
+
+#[test]
 fn geojson_in_place_matches_one_read_whole() {
     let d = dir().join("geojson-whole");
     std::fs::create_dir_all(&d).unwrap();
@@ -1460,8 +1526,9 @@ fn geojson_crs_is_read_only_from_the_feature_collection() {
 #[test]
 fn geojson_features_that_cant_be_converted_are_skipped_and_counted() {
     // A coordinate the declared system can't convert (UTM 1e9 m east), or converts to beyond
-    // longitude/latitude (Web Mercator 1e9 m east is longitude 8983°): the feature is dropped.
-    for (crs, good, bad) in [("EPSG:32617", "[500000,4649776]", "[1e9,0]"), ("EPSG:3857", "[1000000,6000000]", "[1e9,0]")] {
+    // longitude/latitude (Web Mercator 1e9 m east is longitude 8983°): the feature is dropped, and
+    // its height with it (no Z notice for the 2D features kept).
+    for (crs, good, bad) in [("EPSG:32617", "[500000,4649776]", "[1e9,0,30]"), ("EPSG:3857", "[1000000,6000000]", "[1e9,0,30]")] {
         let text = format!(
             r#"{{"type":"FeatureCollection","crs":{},"features":[
             {{"type":"Feature","properties":{{"n":1}},"geometry":{{"type":"Point","coordinates":{good}}}}},
@@ -1476,6 +1543,7 @@ fn geojson_features_that_cant_be_converted_are_skipped_and_counted() {
         assert!(messages[0].contains(&format!("1 features couldn't be converted from {crs}")), "{}", messages[0]);
         assert_eq!(info_crs, crs);
         assert!(ds.crs_incomplete, "{crs}: a projection can't be defined again over lost features");
+        assert!(!ds.zm_dropped, "{crs}");
         let Some(Geometry::Point(c)) = ds.features.first().and_then(|f| f.geometry.clone()) else { panic!("a point") };
         assert!(c.x.abs() < 180.0 && c.y.abs() < 90.0, "{crs}: {c:?}");
         if crs == "EPSG:32617" {
@@ -1903,6 +1971,10 @@ fn geopackage_flatgeobuf_and_geoparquet_visit_what_a_whole_read_gives() {
         let error = src.visit_chunks(None, 4096, &mut |_| Ok(())).unwrap_err().to_string();
         assert!(error.contains("replaced"), "{error}");
         assert_eq!(src.read(&Request::all()).unwrap().features.len(), 600);
+        // A file removed is missing, not replaced.
+        std::fs::remove_file(&gpkg).unwrap();
+        let error = src.visit_chunks(None, 4096, &mut |_| Ok(())).unwrap_err();
+        assert!(matches!(&error, crate::DataError::Io(e) if e.kind() == std::io::ErrorKind::NotFound), "{error}");
     }
     // An unreadable geometry is skipped and counted, and a row without one left out, as a read does.
     drop(sources);
@@ -1920,4 +1992,36 @@ fn geopackage_flatgeobuf_and_geoparquet_visit_what_a_whole_read_gives() {
     assert_eq!((whole.features.len(), whole.skipped), (600, 1));
     let (rows, summary, _) = visit_all(&mem, None, 4096);
     assert_eq!((rows, summary.skipped), (whole.features, 1));
+}
+
+/// GeoPackage (desktop and web readers) and GeoParquet tables that declare Z or M for every
+/// geometry say they lose them, counting the features; the same tables declaring 2D say nothing.
+#[test]
+fn declared_z_and_m_are_said_and_counted() {
+    let d = tempfile::tempdir().unwrap();
+    let says = |info: &SourceInfo| info.zm_dropped && info.notes.contains(&crate::zm_note(Some(600)));
+    let quiet = |info: &SourceInfo| !info.zm_dropped && !info.notes.iter().any(|n| n.contains("Z or M"));
+
+    let gpkg = d.path().join("grid.gpkg");
+    write_gpkg(&gpkg, false);
+    assert!(quiet(open_path(&gpkg, None).unwrap().info()));
+    let mem = |path: &Path| gpkg_mem::GpkgMemSource::open_shared(Shared(Arc::new(std::fs::read(path).unwrap())), None).unwrap();
+    assert!(quiet(mem(&gpkg).info()));
+    rusqlite::Connection::open(&gpkg).unwrap().execute("UPDATE gpkg_geometry_columns SET z = 1", []).unwrap();
+    let info = open_path(&gpkg, None).unwrap().info().clone();
+    assert!(says(&info), "{:?}", info.notes);
+    // The web reader doesn't scan for the count, and says so without one.
+    let info = mem(&gpkg).info().clone();
+    assert!(info.zm_dropped && info.notes.contains(&crate::zm_note(None)), "{:?}", info.notes);
+
+    let parquet = d.path().join("grid.parquet");
+    write_parquet_typed(&parquet, false, r#"["Point"]"#);
+    assert!(quiet(open_path(&parquet, None).unwrap().info()));
+    write_parquet_typed(&parquet, false, r#"["Point Z"]"#);
+    let info = open_path(&parquet, None).unwrap().info().clone();
+    assert!(says(&info), "{:?}", info.notes);
+    // Some types with Z, some without: said, without a count.
+    write_parquet_typed(&parquet, false, r#"["Point", "Point Z"]"#);
+    let info = open_path(&parquet, None).unwrap().info().clone();
+    assert!(info.zm_dropped && info.notes.contains(&crate::zm_note(None)), "{:?}", info.notes);
 }
