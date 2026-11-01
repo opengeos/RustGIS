@@ -20,7 +20,7 @@ pub fn added(map: &Map, listed: &[Value], rows: &[usize]) -> Vec<Option<Removal>
     // them), and a copy of the same service added under another key is still known.
     let sources: Vec<Source<'_>> =
         map.layers.iter().filter_map(|l| l.dataset.source.as_deref().map(|s| (l.id, s, crate::sources::redact(s)))).collect();
-    let tiles: Vec<Tile<'_>> = map.tiles.iter().enumerate().map(|(i, t)| (i, t.url.as_str(), crate::sources::redact(&t.url))).collect();
+    let tiles: Vec<Tile<'_>> = map.tiles.iter().enumerate().map(|(i, t)| Tile::new(i, &t.url)).collect();
     let mut added = vec![None; listed.len()];
     for &i in rows {
         if let (Some(l), Some(slot)) = (listed.get(i), added.get_mut(i)) {
@@ -34,8 +34,19 @@ pub fn added(map: &Map, listed: &[Value], rows: &[usize]) -> Vec<Option<Removal>
 /// A map layer's id and source, as it is and without its keys.
 type Source<'a> = (u32, &'a str, String);
 
-/// A tile layer's index, address, and address without its keys.
-type Tile<'a> = (usize, &'a str, String);
+/// A map tile layer: its index (what `map.removeTiles` takes), its address, and its address
+/// without its keys.
+struct Tile<'a> {
+    index: usize,
+    url: &'a str,
+    keyless: String,
+}
+
+impl<'a> Tile<'a> {
+    fn new(index: usize, url: &'a str) -> Self {
+        Self { index, url, keyless: crate::sources::redact(url) }
+    }
+}
 
 /// The command that removes the listed layer `l` from the map, when it is there: matched by its
 /// address as it is first, then without its keys (as a saved project keeps it). The keyless form
@@ -70,20 +81,33 @@ fn removal(sources: &[Source<'_>], tiles: &[Tile<'_>], l: &Value) -> Option<Remo
     }
 }
 
-/// The tile layer a listed layer's own template matches, if any: by its address as it is, then
-/// without its keys (a saved project's, or a copy of the same service under another key).
-fn tile_match(tiles: &[Tile<'_>], l: &Value) -> Option<usize> {
+/// The listed layer's own tile template: its offer's address, when it is a tile layer's.
+fn tile_template(l: &Value) -> Option<&str> {
     let offer = l.get("offer")?;
     if !matches!(offer.get("type").and_then(Value::as_str), Some("tiles" | "vectorTiles" | "style")) {
         return None;
     }
-    let url = offer.get("url").and_then(Value::as_str).filter(|u| !u.is_empty())?;
+    offer.get("url").and_then(Value::as_str).filter(|u| !u.is_empty())
+}
+
+/// The tile layer a listed layer's own template matches, if any: by its address as it is, then
+/// without its keys (a saved project's, or a copy of the same service under another key).
+fn tile_match(tiles: &[Tile<'_>], l: &Value) -> Option<usize> {
+    let url = tile_template(l)?;
     let keyless = crate::sources::redact(url);
     tiles
         .iter()
-        .find(|(_, address, _)| template_matches(url, address))
-        .or_else(|| tiles.iter().find(|(_, _, keyless_address)| template_matches(&keyless, keyless_address)))
-        .map(|(i, ..)| *i)
+        .find(|t| template_matches(url, t.url))
+        .or_else(|| tiles.iter().find(|t| template_matches(&keyless, &t.keyless)))
+        .map(|t| t.index)
+}
+
+/// Every tile layer a listed layer's own template matches: a service added twice is two layers,
+/// and both are its own.
+fn tile_matches(tiles: &[Tile<'_>], l: &Value) -> Vec<usize> {
+    let Some(url) = tile_template(l) else { return Vec::new() };
+    let keyless = crate::sources::redact(url);
+    tiles.iter().filter(|t| template_matches(url, t.url) || template_matches(&keyless, &t.keyless)).map(|t| t.index).collect()
 }
 
 /// Gives the OGC API rows asked about (`rows`) that `added` doesn't match yet the tile layer their
@@ -95,11 +119,15 @@ fn tile_match(tiles: &[Tile<'_>], l: &Value) -> Option<usize> {
 /// layer's list, or in another tile matrix set or another path under the same list (a layer added
 /// by hand), is nobody's, so Remove never removes another layer.
 fn claim_tilesets(listed: &[Value], rows: &[usize], tiles: &[Tile<'_>], added: &mut [Option<Removal>]) {
-    // Every listed row's own match, shown or not: a tile a row's own template matched is that
-    // row's, so an asked row's advertised template never takes it.
-    let mut claimed: Vec<u64> = listed.iter().filter_map(|l| tile_match(tiles, l)).map(|i| i as u64).collect();
-    claimed.sort_unstable();
-    claimed.dedup();
+    // Every tile a listed row's own template matches, shown or not, and every copy of it: a tile
+    // a row's own template matched is that row's, so an asked row's advertised template never
+    // takes it.
+    let mut claimed = vec![false; tiles.len()];
+    for i in listed.iter().flat_map(|l| tile_matches(tiles, l)) {
+        if let Some(c) = claimed.get_mut(i) {
+            *c = true;
+        }
+    }
     // Each listed layer's tileset list and its own template (its tile matrix set and the tiles
     // under it), as listed and without their keys: a saved project keeps its addresses without
     // them.
@@ -107,15 +135,18 @@ fn claim_tilesets(listed: &[Value], rows: &[usize], tiles: &[Tile<'_>], added: &
         .iter()
         .map(|l| {
             let list = tileset_list(l)?;
-            let template = l.get("offer")?.get("url")?.as_str()?;
+            let template = tile_template(l)?;
             let start = tile_start(template);
+            let template_keyless = crate::sources::redact(template);
             (!start.is_empty()).then(|| Tileset {
                 list,
                 start,
                 template,
                 list_keyless: crate::sources::redact(list),
                 start_keyless: crate::sources::redact(start),
-                template_keyless: crate::sources::redact(template),
+                shape: Shape::of(template),
+                shape_keyless: Shape::of(&template_keyless),
+                template_keyless,
             })
         })
         .collect();
@@ -124,12 +155,12 @@ fn claim_tilesets(listed: &[Value], rows: &[usize], tiles: &[Tile<'_>], added: &
     // collection sharing a tileset list are told apart (and the same start twice counts once).
     let under: Vec<usize> = tiles
         .iter()
-        .map(|(_, url, keyless)| {
+        .map(|tile| {
             let mut starts: Vec<&str> = starts
                 .iter()
                 .flatten()
-                .filter(|t| under_list(t.list, url) || under_list(&t.list_keyless, keyless))
-                .filter(|t| url.starts_with(t.start) || keyless.starts_with(t.start_keyless.as_str()))
+                .filter(|t| under_list(t.list, tile.url) || under_list(&t.list_keyless, &tile.keyless))
+                .filter(|t| tile.url.starts_with(t.start) || tile.keyless.starts_with(t.start_keyless.as_str()))
                 .map(|t| t.start_keyless.as_str())
                 .collect();
             starts.sort_unstable();
@@ -137,25 +168,29 @@ fn claim_tilesets(listed: &[Value], rows: &[usize], tiles: &[Tile<'_>], added: &
             starts.len()
         })
         .collect();
+    // Each tile's address with its tile coordinates left out, once: whether a tile follows a
+    // listed template is asked of every (shown row, tile) pair on every refresh.
+    let shapes: Vec<(Shape, Shape)> = tiles.iter().map(|t| (Shape::of(t.url), Shape::of(&t.keyless))).collect();
     for &i in rows {
         if added.get(i).is_none_or(Option::is_some) {
             continue;
         }
         let Some(tileset) = starts.get(i).and_then(Option::as_ref) else { continue };
-        let found = tiles
-            .iter()
-            .zip(&under)
-            .zip(0u64..)
-            .find(|((tile, under), n)| {
-                **under == 1
-                    && !claimed.contains(n)
-                    && (under_list(tileset.list, tile.1) || under_list(&tileset.list_keyless, &tile.2))
-                    && (template_follows(tileset.template, tile.1) || template_follows(&tileset.template_keyless, &tile.2))
-            })
-            .map(|(_, n)| n);
-        if let (Some(n), Some(slot)) = (found, added.get_mut(i)) {
+        let found = tiles.iter().enumerate().find(|&(n, tile)| {
+            let follows = shapes.get(n).is_some_and(|(shape, shape_keyless)| {
+                template_follows(tileset.template, tile.url, &tileset.shape, shape)
+                    || template_follows(&tileset.template_keyless, &tile.keyless, &tileset.shape_keyless, shape_keyless)
+            });
+            under.get(n) == Some(&1)
+                && !claimed.get(n).copied().unwrap_or(true)
+                && (under_list(tileset.list, tile.url) || under_list(&tileset.list_keyless, &tile.keyless))
+                && follows
+        });
+        if let (Some((n, _)), Some(slot)) = (found, added.get_mut(i)) {
             *slot = Some(("map.removeTiles", json!({"index": n})));
-            claimed.push(n);
+            if let Some(c) = claimed.get_mut(n) {
+                *c = true;
+            }
         }
     }
 }
@@ -169,6 +204,8 @@ struct Tileset<'a> {
     list_keyless: String,
     start_keyless: String,
     template_keyless: String,
+    shape: Shape,
+    shape_keyless: Shape,
 }
 
 /// The address a tile template's tiles share: the template up to its first placeholder (`{z}`,
@@ -246,26 +283,37 @@ fn template_matches(template: &str, url: &str) -> bool {
     rest.is_empty()
 }
 
+/// A tile address without its tile coordinates (`{z}`, `{x}`, `{y}`), which a service may write
+/// in another order than the listing's, and whether its last path part already names a format.
+struct Shape {
+    skeleton: String,
+    format: bool,
+}
+
+impl Shape {
+    fn of(address: &str) -> Self {
+        let path = address.split(['?', '#']).next().unwrap_or(address);
+        let last = path.rsplit('/').next().unwrap_or(path);
+        Self { skeleton: address.replace("{z}", "").replace("{x}", "").replace("{y}", ""), format: last.contains('.') }
+    }
+}
+
 /// Whether the tile address `url` follows the advertised template `template`: the same address,
 /// up to the order the template writes its three coordinates in (`{z}/{y}/{x}`, or the service's
 /// own `{z}/{x}/{y}`) and the tile's format extension after them (`…/{z}/{y}/{x}` and
-/// `…/{z}/{y}/{x}.png`). A tile with anything else in between, or in another path under the
-/// tile matrix set (`…/WebMercatorQuad/custom/…`), doesn't, so a layer added by hand is left alone.
-fn template_follows(template: &str, url: &str) -> bool {
-    if template_matches(template, url) {
-        return true;
-    }
-    // What stays around the tile coordinates, which a service may write in another order: the
-    // path, the extension and the query must still be the template's.
-    let skeleton = |address: &str| address.replace("{z}", "").replace("{x}", "").replace("{y}", "");
-    let (template, url) = (skeleton(template), skeleton(url));
-    if url == template {
+/// `…/{z}/{y}/{x}.png`), which the template itself must not already name. A tile with anything
+/// else in between, or in another path under the tile matrix set (`…/WebMercatorQuad/custom/…`),
+/// doesn't, so a layer added by hand is left alone.
+fn template_follows(template: &str, url: &str, template_shape: &Shape, tile_shape: &Shape) -> bool {
+    if template_matches(template, url) || tile_shape.skeleton == template_shape.skeleton {
         return true;
     }
     // The format's extension after the template: a short run of letters and digits after a dot at
     // the address's end, never a path or a query.
-    url.rsplit_once('.')
-        .is_some_and(|(stem, ext)| !ext.is_empty() && ext.len() <= 8 && ext.chars().all(|c| c.is_ascii_alphanumeric()) && stem == template)
+    !template_shape.format
+        && tile_shape.skeleton.rsplit_once('.').is_some_and(|(stem, ext)| {
+            !ext.is_empty() && ext.len() <= 8 && ext.chars().all(|c| c.is_ascii_alphanumeric()) && stem == template_shape.skeleton
+        })
 }
 
 #[cfg(test)]
@@ -515,6 +563,35 @@ mod tests {
             "tilesets": "https://h/c/tiles?f=json",
         });
         assert_eq!(added(&map, &[row], &[0]), [Some(("map.removeTiles", json!({"index": 0})))]);
+    }
+
+    /// A template that already names a format doesn't take a hand-added tile with another format
+    /// after it.
+    #[test]
+    fn a_tiles_template_with_its_own_format_takes_no_other() {
+        let map = tiles(&["https://h/c/tiles/WebMercatorQuad/{z}/{y}/{x}.png.webp"]);
+        let row = json!({
+            "offer": {"type": "tiles", "url": "https://h/c/tiles/WebMercatorQuad/{z}/{y}/{x}.png"},
+            "tilesets": "https://h/c/tiles?f=json",
+        });
+        assert_eq!(added(&map, &[row], &[0]), [None]);
+    }
+
+    /// Every copy of a listed tile layer is that row's: an OGC API row shown alone doesn't take
+    /// the copy a listed row's own template matched too.
+    #[test]
+    fn every_copy_of_a_listed_tile_is_claimed() {
+        let tile = "https://h/c/tiles/WebMercatorQuad/{z}/{y}/{x}.png";
+        let map = tiles(&[tile, tile]);
+        let listed = [
+            json!({"offer": {"type": "tiles", "url": tile}}),
+            json!({
+                "offer": {"type": "tiles", "url": "https://h/c/tiles/WebMercatorQuad/{z}/{y}/{x}"},
+                "tilesets": "https://h/c/tiles?f=json",
+            }),
+        ];
+        assert_eq!(added(&map, &listed, &[1]), [None, None]);
+        assert_eq!(added(&map, &listed, &[0]), [Some(("map.removeTiles", json!({"index": 0}))), None]);
     }
 
     /// A project saved and reopened keeps the tileset's addresses without their keys: the OGC API

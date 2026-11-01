@@ -5,6 +5,8 @@ use egui::{Align2, vec2};
 use rustgis_engine::Session;
 use rustgis_engine::cmd::service_added::Removal;
 use serde_json::{Value, json};
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 
 use crate::RustGisApp;
 use crate::theme::{Tokens, semibold};
@@ -805,14 +807,32 @@ fn matching_rows<'a>(layers: &'a [Value], filter: &str) -> Vec<(usize, &'a Value
         .collect()
 }
 
+/// A fingerprint of what `service_added::added` reads from the map (each layer's id and source,
+/// and each tile layer's address). The UI changes them through `map_mut` and `layer_mut`, which
+/// leave the session revision alone, so Add From Service's rows are measured against this too.
+fn map_stamp(map: &rustgis_engine::map::Map) -> u64 {
+    let mut h = DefaultHasher::new();
+    map.layers.len().hash(&mut h);
+    for l in &map.layers {
+        l.id.hash(&mut h);
+        l.dataset.source.hash(&mut h);
+    }
+    map.tiles.len().hash(&mut h);
+    for t in &map.tiles {
+        t.url.hash(&mut h);
+    }
+    h.finish()
+}
+
 /// The rows Add From Service shows (the first [`SHOWN_LAYERS`] matching the filter), with the
 /// command that removes each when it is on the map (`service_added::added`), worked out again only
-/// when the session, the listing or the filter changed, not on every frame.
+/// when the session, the map, the listing or the filter changed, not on every frame.
 fn refresh_added(app: &mut RustGisApp) {
     let revision = app.session.revision;
+    let map = map_stamp(app.session.map());
     let Some(conn) = app.ui.service.as_mut() else { return };
     let filter = &app.ui.service_browse.filter;
-    if conn.added.as_ref().is_some_and(|a| a.revision == revision && a.filter == *filter) {
+    if conn.added.as_ref().is_some_and(|a| a.revision == revision && a.map == map && a.filter == *filter) {
         return;
     }
     let layers: &[Value] = conn.listing.as_ref().and_then(|v| v.get("layers")).and_then(Value::as_array).map_or(&[], Vec::as_slice);
@@ -821,7 +841,7 @@ fn refresh_added(app: &mut RustGisApp) {
     let shown: Vec<usize> = matching.into_iter().take(SHOWN_LAYERS).map(|(i, _)| i).collect();
     let removals = rustgis_engine::cmd::service_added::added(app.session.map(), layers, &shown);
     let rows = shown.into_iter().map(|i| (i, removals.get(i).cloned().flatten())).collect();
-    conn.added = Some(crate::ServiceAdded { revision, filter: filter.clone(), matched, rows });
+    conn.added = Some(crate::ServiceAdded { revision, map, filter: filter.clone(), matched, rows });
 }
 
 /// Add From Service: a WMS, WMTS, WFS, WCS, OGC API Features or ArcGIS REST service by its address
@@ -2167,7 +2187,29 @@ mod tests {
             app,
         )
     }
-    
+
+    /// The map stamp Add From Service checks: the UI changes the map through `map_mut` and
+    /// `layer_mut`, which leave the session revision alone, so the stamp follows a layer, its
+    /// source and a tile layer's address.
+    #[test]
+    fn the_map_stamp_follows_the_map() {
+        let mut map = rustgis_engine::map::Map::new("Map");
+        let empty = map_stamp(&map);
+        let mut ds = rustgis_engine::data::Dataset::new("Roads", rustgis_engine::data::GeometryType::Polyline, Vec::new());
+        ds.source = Some("https://h/items?f=json".into());
+        map.layers.push(rustgis_engine::map::Layer::new(1, ds));
+        let listed = map_stamp(&map);
+        assert_ne!(empty, listed);
+        map.layers[0].dataset.source = Some("https://h/items?f=json&api_key=k".into());
+        assert_ne!(listed, map_stamp(&map));
+        let sourced = map_stamp(&map);
+        map.tiles.push(rustgis_engine::map::TileLayer::new("T", rustgis_engine::map::TileKind::Raster, "https://h/{z}/{x}/{y}.png"));
+        assert_ne!(sourced, map_stamp(&map));
+        let tiled = map_stamp(&map);
+        map.tiles[0].url = "https://h/other/{z}/{x}/{y}.png".into();
+        assert_ne!(tiled, map_stamp(&map));
+    }
+
     /// The web app's Export Features offers only formats it can write: no GeoPackage (SQLite) or
     /// FlatGeobuf (whose writer needs a temporary file; choosing it aborted the app). The
     /// dialog's own Format list is opened and read, as a user would.

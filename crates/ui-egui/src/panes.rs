@@ -987,11 +987,17 @@ fn path_name(path: &str) -> SourceName {
 fn layer_source(l: &Layer) -> Option<SourceName> {
     // A service's downloaded raster keeps the address it came from as its dataset source, not
     // the file name it was read under: group it by that address, as a feature layer is. A layer
-    // with no raster keeps its dataset source as it is (a database's name, say).
+    // with no raster keeps its dataset source as it is (a database's name, say), and a raster
+    // read from an address is grouped by that address rather than by a dataset's other one.
     let source = l.dataset.source.as_deref();
-    let address = source.filter(|s| s.split_once("://").is_some_and(|(scheme, _)| !scheme.eq_ignore_ascii_case("file")));
     let raster = l.raster.as_ref().and_then(|r| r.path.as_deref().or(r.file_name.as_deref()));
+    let address = source.filter(|s| is_address(s) && !raster.is_some_and(is_address));
     address.or(raster).or(source).filter(|s| !s.trim().is_empty()).map(source_name)
+}
+
+/// Whether a source names a web address (`file://` paths are files, not addresses).
+fn is_address(s: &str) -> bool {
+    s.split_once("://").is_some_and(|(scheme, _)| !scheme.eq_ignore_ascii_case("file"))
 }
 
 /// A group's heading in a Layers view, with optional hover text.
@@ -6724,6 +6730,12 @@ mod tests {
         let mut local = Layer::new(8, rustgis_engine::data::Dataset::new("Local", rustgis_engine::data::GeometryType::None, Vec::new()));
         local.raster = Some(rustgis_engine::map::RasterLayer::from_path(raster(), r"C:\GIS\soil.tif"));
         assert_eq!(layer_source(&local).unwrap().label, "soil.tif");
+        // A raster read from an address is grouped by that address, not by another address its
+        // dataset names.
+        let mut remote = Layer::new(10, rustgis_engine::data::Dataset::new("Hill", rustgis_engine::data::GeometryType::None, Vec::new()));
+        remote.dataset.source = Some("https://catalog.example/items?f=json".into());
+        remote.raster = Some(rustgis_engine::map::RasterLayer::from_path(raster(), "https://files.example/hill.tif"));
+        assert_eq!(layer_source(&remote).unwrap().label, "files.example");
         // A layer with no raster keeps its dataset source, even one that names no address scheme
         // (a database connection kept by name).
         let mut db = rustgis_engine::data::Dataset::new("Roads", rustgis_engine::data::GeometryType::Polyline, Vec::new());

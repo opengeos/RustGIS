@@ -361,8 +361,8 @@ pub struct ServiceConn {
     pub pending: Option<String>,
     /// What `service.layers` made of it.
     pub listing: Option<Value>,
-    /// The listing as Add From Service shows it, worked out when the session revision or the
-    /// filter changed (see `dialogs::refresh_added`).
+    /// The listing as Add From Service shows it, worked out when the session revision, the map or
+    /// the filter changed (see `dialogs::refresh_added`).
     pub added: Option<ServiceAdded>,
     pub error: Option<String>,
     /// A capabilities request that failed, with what the server said (#509).
@@ -374,6 +374,9 @@ pub struct ServiceConn {
 pub struct ServiceAdded {
     /// The session revision this was worked out for.
     pub revision: u64,
+    /// A fingerprint of the map's layers and tile layers this was worked out for
+    /// (`dialogs::map_stamp`), which the UI can change without a new revision.
+    pub map: u64,
     /// The listing filter this was worked out with.
     pub filter: String,
     /// How many layers match the filter (the first `dialogs::SHOWN_LAYERS` are shown).
