@@ -229,9 +229,16 @@ fn point(h: &Header, rec: &[u8]) -> Option<Point> {
 }
 
 /// Reads a LAS or LAZ file in longitude/latitude when the file says its coordinate system
-/// (or `crs` gives it). Refuses files over [`MAX_POINTS`] rather than returning a sample.
+/// (or `crs` gives it). Refuses files over [`MAX_POINTS`] or missing records; coordinate
+/// conversion failures remain counted skips.
 pub fn read<R: Read + Seek + Send + Sync>(r: R, name: &str, crs: Option<Crs>) -> Result<(Dataset, ReadReport)> {
-    let (ds, report, _) = read_points(r, name, crs, false)?;
+    let (ds, report, count) = read_points(r, name, crs, false)?;
+    let read = (ds.features.len() as u64).saturating_add(report.skipped as u64);
+    if read < count {
+        return Err(DataError::Format(format!(
+            "{name}: could not read the whole cloud ({read} of {count} points; a damaged or cut-off file)"
+        )));
+    }
     Ok((ds, report))
 }
 
@@ -617,6 +624,28 @@ mod tests {
         assert!(crate::source::materialize(src.as_ref()).is_err());
         assert!(crate::io::read_bytes("oversized.las", &bytes).is_err());
         assert!(crate::io::read_owned("oversized.las", bytes).is_err());
+    }
+
+    /// Conversion losses are disclosed skips, while missing records still prevent a whole read.
+    #[test]
+    fn source_materializes_with_counted_conversion_losses() {
+        let mut bytes = las(2, 0, &[(0.0, 0.0, 3.0, 2), (1.0, 0.0, 4.0, 2)], Some("EPSG:32632"));
+        // A finite scale overflows only the second point's X during coordinate decoding.
+        bytes[131..139].copy_from_slice(&f64::MAX.to_le_bytes());
+        let (direct, report) = read_bytes(&bytes, "lossy", None).unwrap();
+        assert_eq!(direct.features.len(), 1);
+        assert_eq!(report.skipped, 1);
+        let src = crate::source::open_bytes("lossy.las", bytes.clone(), None).unwrap();
+        assert_eq!(src.info().count, Some(2));
+        let (ds, report) = crate::source::materialize(src.as_ref()).unwrap();
+        assert_eq!(ds.features, direct.features);
+        assert_eq!(report.skipped, 1);
+        assert_eq!(report.messages.len(), 1);
+        assert!(report.messages[0].contains("1 points couldn't be converted"));
+        bytes.truncate(bytes.len() - usize::from(RECORD_LEN[0]));
+        assert!(crate::io::read_bytes("truncated.las", &bytes).is_err());
+        let truncated = crate::source::open_bytes("truncated.las", bytes, None).unwrap();
+        assert!(crate::source::materialize(truncated.as_ref()).is_err());
     }
 
     #[test]

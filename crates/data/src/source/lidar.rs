@@ -12,6 +12,7 @@ use std::path::Path;
 pub struct LidarSource {
     info: SourceInfo,
     features: Vec<Feature>,
+    skipped: usize,
 }
 
 impl LidarSource {
@@ -44,13 +45,18 @@ impl LidarSource {
             notes,
             zm_dropped: false,
         };
-        Ok(LidarSource { info, features: features.into_vec() })
+        Ok(LidarSource { info, features: features.into_vec(), skipped: report.skipped })
     }
 }
 
 impl FeatureSource for LidarSource {
     fn info(&self) -> &SourceInfo {
         &self.info
+    }
+
+    /// Conversion failures were already disclosed at open, rather than omitted by sampling.
+    fn skipped_at_open(&self) -> usize {
+        self.skipped
     }
 
     /// Answers from retained points; a sample never constitutes a complete source read.
@@ -66,8 +72,10 @@ impl FeatureSource for LidarSource {
         let hits: Vec<&Feature> = self.features.iter().filter(inside).collect();
         // A window can only contain points retained in the display sample. Even when every
         // retained point matches, an oversized or damaged source has not been read whole.
-        let incomplete = self.info.count.is_some_and(|n| n > self.features.len() as u64);
-        let matched = if req.extent.is_none() { self.info.count.unwrap_or(hits.len() as u64) } else { hits.len() as u64 };
+        // Known conversion skips are accounted for separately in the whole read's report.
+        let count = self.info.count.map(|n| n.saturating_sub(self.skipped as u64));
+        let incomplete = count.is_some_and(|n| n > self.features.len() as u64);
+        let matched = if req.extent.is_none() { count.unwrap_or(hits.len() as u64) } else { hits.len() as u64 };
         let limit = req.limit.max(1);
         let step = hits.len().div_ceil(limit).max(1);
         let features: Vec<Feature> = hits.into_iter().step_by(step).take(limit).cloned().collect();
