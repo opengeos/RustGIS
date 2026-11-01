@@ -11,7 +11,7 @@ use std::borrow::Cow;
 use std::collections::{HashMap, HashSet, TryReserveError};
 
 use crate::convert::{from_line, from_multipolygon, from_point, to_geo, to_multiline, to_multipolygon};
-use crate::geodesic::{VERTEX_BUDGET_ERROR, geodesic_buffer_with_limit, geodesic_buffers_with_limit};
+use crate::geodesic::{PARALLEL_FEATURES, VERTEX_BUDGET_ERROR, charge, geodesic_buffer_with_limit, geodesic_buffers_with_limit};
 use crate::{Inputs, Output, OutputLayer, ParamKind as K, ParamSpec as P, ToolResult, ToolSpec};
 
 const UNITS: &[&str] = &["Kilometers", "Meters", "Miles", "Feet"];
@@ -2212,21 +2212,28 @@ fn select_by_location_with_vertex_limit(inp: &dyn Inputs, p: &Json, limit: usize
     if dist > 5_000_000.0 {
         return Err("Distance is too large (limit 5000 km)".into());
     }
-    let mut remaining = limit;
-    let mut selectors = Vec::new();
-    for r in rows(inp, p, "select", sel_ds) {
-        let Some(g) = sel_ds.features.get(r).and_then(|f| f.geometry.as_ref()) else { continue };
-        let b = if dist > 0.0 {
-            let buffered = geodesic_buffer_with_limit(g, dist, remaining)?;
-            remaining = remaining.saturating_sub(buffered.charged_vertices);
-            buffered.geometry
-        } else {
-            None
-        };
-        let gg = to_geo(b.as_ref().unwrap_or(g));
-        let ext = merc_extent(&gg);
-        selectors.push((gg, ext));
-    }
+    let chosen = rows(inp, p, "select", sel_ds);
+    let picked: Vec<&Geometry> = chosen.iter().filter_map(|r| sel_ds.features.get(*r)?.geometry.as_ref()).collect();
+    // Buffered, charged to the budget and converted in one step, on several cores when there are
+    // many, so each buffer is dropped once converted.
+    let remaining = std::sync::atomic::AtomicUsize::new(limit);
+    let selectors: Vec<(geo::Geometry<f64>, Extent)> = crate::parallel::try_map(
+        &picked,
+        PARALLEL_FEATURES,
+        || (),
+        |_, _, g| {
+            let b = if dist > 0.0 {
+                let buffered = geodesic_buffer_with_limit(g, dist, remaining.load(std::sync::atomic::Ordering::Relaxed))?;
+                charge(&remaining, limit, buffered.charged_vertices)?;
+                buffered.geometry
+            } else {
+                None
+            };
+            let gg = to_geo(b.as_ref().unwrap_or(g));
+            let ext = merc_extent(&gg);
+            Ok::<_, &'static str>((gg, ext))
+        },
+    )?;
     let index = ExtentIndex::new(selectors.iter().map(|(_, ext)| *ext));
     let invert = s(p, "invert") == "Yes";
     let hits: Vec<usize> = (0..ds.features.len())
@@ -2241,10 +2248,19 @@ fn select_by_location_with_vertex_limit(inp: &dyn Inputs, p: &Json, limit: usize
         })
         .collect();
     let n = hits.len();
-    Ok(ToolResult {
-        output: Output::Selection { layer: ds.name.clone(), rows: hits },
-        messages: vec![format!("Selected {n} features in {}", ds.name)],
-    })
+    let mut messages = vec![format!("Selected {n} features in {}", ds.name)];
+    let without = ds.features.iter().filter(|f| f.geometry.is_none()).count();
+    if without > 0 {
+        messages.push(format!("{without} of {} features lack geometry, so they are not selected", ds.features.len()));
+    }
+    if picked.len() < chosen.len() {
+        messages.push(format!(
+            "{} of {} selecting features lack geometry, so they select nothing",
+            chosen.len() - picked.len(),
+            chosen.len()
+        ));
+    }
+    Ok(ToolResult { output: Output::Selection { layer: ds.name.clone(), rows: hits }, messages })
 }
 
 fn select_by_attributes(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
@@ -4967,6 +4983,16 @@ mod tests {
         }
         let clean = Map(HashMap::from([("p".to_string(), pts.clone())]));
         assert_eq!(crate::run("buffer", &clean, &serde_json::json!({"input": "p", "distance": 5})).unwrap().messages.len(), 1);
+        // A point with no finite coordinates makes no buffer either, and says so.
+        let mut odd = pts.clone();
+        odd.push(Some(Geometry::Point(Coord::new(f64::NAN, 0.0))), vec![Value::Int(-2)]);
+        let odd = Map(HashMap::from([("p".to_string(), odd)]));
+        let r = crate::run("buffer", &odd, &serde_json::json!({"input": "p", "distance": 5})).unwrap();
+        assert_eq!(r.messages.len(), 2);
+        assert_eq!(
+            r.messages.get(1).map(String::as_str),
+            Some("1 of 301 features made no buffer at 5 Kilometers (nothing left, or no finite coordinates)")
+        );
         pts.push(None, vec![Value::Int(-1)]);
         let m = Map(HashMap::from([("p".to_string(), pts)]));
         let r = crate::run("buffer", &m, &serde_json::json!({"input": "p", "distance": 5})).unwrap();
@@ -7280,6 +7306,9 @@ mod tests {
         let m = Map(HashMap::from([("polys".to_string(), polys), ("pts".to_string(), pts)]));
 
         let res_normal = crate::run("selectByLocation", &m, &serde_json::json!({"input": "pts", "select": "polys"})).unwrap();
+        // The point without geometry is said, once; a selecting layer with geometry everywhere isn't.
+        assert_eq!(res_normal.messages.len(), 2);
+        assert_eq!(res_normal.messages.get(1).map(String::as_str), Some("1 of 3 features lack geometry, so they are not selected"));
         match res_normal.output {
             Output::Selection { rows, .. } => assert_eq!(rows, vec![0], "normal select should only select intersecting feature"),
             _ => panic!("expected selection"),
