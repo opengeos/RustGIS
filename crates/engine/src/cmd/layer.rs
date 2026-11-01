@@ -2833,7 +2833,7 @@ fn status_hint(url: &str, e: &str) -> &'static str {
         Some(403) if keyed(url) => {
             " (to an address read with keys, this may also mean the file isn't there, or that the keys or signature don't cover it: a presigned address signs one file, so a Shapefile's parts need addresses of their own; zip them and add the zip)"
         }
-        Some(403) => " (S3 answers this for a file that isn't there, to those who can't list its bucket)",
+        Some(403) => " (S3 also answers this for a file that isn't there, to those who can't list its bucket)",
         _ => "",
     }
 }
@@ -2851,7 +2851,10 @@ fn parts_left_out(url: &str, bytes: &[u8], p: &Value) -> Option<String> {
             let names = lacks.iter().map(|e| format!(".{e}")).collect::<Vec<_>>().join(", ");
             let crs = if lacks.contains(&"prj") && !given_crs { "; its coordinates are read as longitude/latitude" } else { "" };
             let them = if lacks.len() == 1 { "it" } else { "them" };
-            format!("{shp}: no {names} found beside it ({} of 3 optional files missing), so it was read without {them}{crs}", lacks.len())
+            format!(
+                "{shp}: no {names} found or readable beside it ({} of 3 optional files missing), so it was read without {them}{crs}",
+                lacks.len()
+            )
         })
         .collect();
     (!said.is_empty()).then(|| format!("{}: {}", crate::sources::redact(url), said.join("; ")))

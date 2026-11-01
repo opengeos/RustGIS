@@ -9292,14 +9292,16 @@ fn shapefile_by_its_shp_address() {
     let r = s.run("layer.addUrl", &json!({"url": format!("{base}/plain/rios.shp"), "name": "Sem prj"})).unwrap();
     assert_eq!(r["features"], 1, "{r}");
     let said = &s.notices.last().unwrap().text;
-    assert!(said.contains("no .prj, .cpg found beside it (2 of 3") && said.contains("longitude/latitude"), "{said}");
+    assert!(said.contains("no .prj, .cpg found or readable beside it (2 of 3") && said.contains("longitude/latitude"), "{said}");
     // With its coordinate system given, nothing is assumed of the missing .prj.
     s.run("layer.addUrl", &json!({"url": format!("{base}/plain/rios.shp"), "name": "Com crs", "crs": "EPSG:31983"})).unwrap();
     let said = &s.notices.last().unwrap().text;
-    assert!(said.contains("no .prj, .cpg found beside it") && !said.contains("longitude/latitude"), "{said}");
+    assert!(said.contains("no .prj, .cpg found or readable beside it") && !said.contains("longitude/latitude"), "{said}");
     // A long name keeps its extension (and is still a .shp's zip).
     let long = crate::cmd::layer::url_file_name(&format!("https://x.org/{}.shp", "a".repeat(200)), b"PK\x03\x04").unwrap();
     assert!(long.ends_with(".zip") && long.chars().count() <= 120, "{long}");
+    let long_json = crate::cmd::layer::url_file_name(&format!("https://x.org/{}.geojson", "a".repeat(200)), b"{}").unwrap();
+    assert!(long_json.ends_with(".geojson") && long_json.chars().count() <= 120, "{long_json}");
     // A part a signed address is refused (403) fails it, named: the signature may not cover it.
     // It names the part without the signature.
     let e = s.run("layer.addUrl", &json!({"url": format!("{base}/signed/rios.shp?sig=1")})).unwrap_err();
@@ -9316,10 +9318,10 @@ fn shapefile_by_its_shp_address() {
     // An unsigned address answered 403 for a part (S3, for a missing object) is done without.
     let r = s.run("layer.addUrl", &json!({"url": format!("{base}/s3/rios.shp"), "name": "S3"})).unwrap();
     assert_eq!(r["features"], 1, "{r}");
-    assert!(s.notices.last().unwrap().text.contains("no .prj found beside it (1 of 3"), "{:?}", s.notices.last());
+    assert!(s.notices.last().unwrap().text.contains("no .prj found or readable beside it (1 of 3"), "{:?}", s.notices.last());
     // Its .dbf answered so is refused, saying what the 403 may mean.
     let e = s.run("layer.addUrl", &json!({"url": format!("{base}/s3/sem_dbf.shp")})).unwrap_err();
-    assert!(e.contains("/s3/sem_dbf.dbf") && e.contains("S3 answers this for a file that isn't there"), "{e}");
+    assert!(e.contains("/s3/sem_dbf.dbf") && e.contains("S3 also answers this for a file that isn't there"), "{e}");
     // An address answering with the parts zipped is read as it is, its parts not asked for.
     let r = s.run("layer.addUrl", &json!({"url": format!("{base}/zipped/rios.shp"), "name": "Zipado"})).unwrap();
     assert_eq!(r["features"], 1, "{r}");
@@ -9369,7 +9371,7 @@ fn shapefile_by_its_shp_address() {
     let mark = s.notice_mark();
     s.run("layer.addDownload", &json!({"id": id, "url": plain, "name": "Sem prj pela janela"})).unwrap();
     let said = s.notices_since(mark);
-    assert!(said.iter().any(|n| n.text.contains("no .prj, .cpg found beside it (2 of 3")), "{said:?}");
+    assert!(said.iter().any(|n| n.text.contains("no .prj, .cpg found or readable beside it (2 of 3")), "{said:?}");
     // A download too large for the budget together is refused: the .shp and .dbf land, and the
     // .shx goes over the 2 bytes left, named without the address's token.
     let e = fetch(&url, 200).unwrap_err();
