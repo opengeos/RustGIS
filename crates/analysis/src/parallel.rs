@@ -12,9 +12,11 @@ pub(crate) const BATCH: usize = 16;
 /// Each worker's stack, as large as the main thread's usually is.
 const STACK_BYTES: usize = 8 << 20;
 
-/// The work below which a raster tool's rows are made on one thread (cell-point pairs, say: a
-/// few milliseconds of it).
-pub(crate) const MIN_ROW_WORK: usize = 2_000_000;
+/// The work below which a raster tool's rows are made on one thread: cell-point pairs, say,
+/// about 30 ns each for IDW, so some 5 ms of it, against tens of microseconds to start a thread.
+pub(crate) const MIN_ROW_WORK: usize = 200_000;
+/// The scratch memory a raster tool's threads may take together, beyond one thread's.
+const SCRATCH_BUDGET: usize = 256 << 20;
 
 /// How many threads to make `items` items on: one below `min_items`, always one in the browser,
 /// and no more than there are batches.
@@ -25,13 +27,16 @@ pub(crate) fn threads_for(items: usize, min_items: usize) -> usize {
     cores().min(items.div_ceil(BATCH)).max(1)
 }
 
-/// How many threads to make `rows` raster rows on, `work` in all: one below [`MIN_ROW_WORK`] and
-/// in the browser, and no more than there are rows.
-pub(crate) fn threads_for_rows(rows: usize, work: usize) -> usize {
+/// How many threads to make `rows` raster rows on, `work` in all, each thread taking
+/// `scratch_bytes` of scratch: one below [`MIN_ROW_WORK`] and in the browser, no more than there
+/// are rows, and no more than [`SCRATCH_BUDGET`] holds (a scratch per point, for millions of
+/// points, is large).
+pub(crate) fn threads_for_rows(rows: usize, work: usize, scratch_bytes: usize) -> usize {
     if cfg!(target_arch = "wasm32") || work < MIN_ROW_WORK {
         return 1;
     }
-    cores().min(rows).max(1)
+    let affordable = 1 + SCRATCH_BUDGET / scratch_bytes.max(1);
+    cores().min(rows).min(affordable).max(1)
 }
 
 /// The cores to use, at most [`MAX_THREADS`].
@@ -285,14 +290,17 @@ mod tests {
         }
         assert!(map_rows(0, 4, || (), |_, r| r).is_empty());
         // Small work, and the browser: one thread; never more threads than rows.
-        assert_eq!(threads_for_rows(100, MIN_ROW_WORK - 1), 1);
-        assert!(threads_for_rows(3, usize::MAX) <= 3);
+        assert_eq!(threads_for_rows(100, MIN_ROW_WORK - 1, 0), 1);
+        assert!(threads_for_rows(3, usize::MAX, 0) <= 3);
+        // Scratch larger than the budget: one thread more than it holds, none beyond.
+        assert!(threads_for_rows(100, usize::MAX, SCRATCH_BUDGET) <= 2);
+        assert_eq!(threads_for_rows(100, usize::MAX, usize::MAX), 1);
     }
 
     #[test]
     fn a_workers_panic_stops_the_other_threads() {
         // A worker panics on its first item; the others stop after the items they are making,
-        // far short of all of them. Unless no worker could start: then nothing panics.
+        // far short of all of them.
         let items: Vec<u32> = (0..2_000).collect();
         let caller = std::thread::current().id();
         let ran = std::sync::atomic::AtomicUsize::new(0);
@@ -311,9 +319,8 @@ mod tests {
                 },
             )
         });
-        if r.is_err() {
-            assert!(ran.load(std::sync::atomic::Ordering::Relaxed) < items.len() / 2, "{}", ran.load(std::sync::atomic::Ordering::Relaxed));
-        }
+        assert!(r.is_err(), "no worker ran an item");
+        assert!(ran.load(std::sync::atomic::Ordering::Relaxed) < items.len() / 2, "{}", ran.load(std::sync::atomic::Ordering::Relaxed));
     }
 
     #[test]

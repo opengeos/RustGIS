@@ -349,7 +349,9 @@ fn kriging_on(
 
     // Each row on its own, on several threads when the work is large (#1252); a thread has its
     // own distances and system buffers.
-    let threads = threads.unwrap_or_else(|| crate::parallel::threads_for_rows(h, w.saturating_mul(h).saturating_mul(work_per_cell)));
+    let scratch_bytes = points.len().saturating_mul(std::mem::size_of::<(f64, f64, Coord)>());
+    let threads =
+        threads.unwrap_or_else(|| crate::parallel::threads_for_rows(h, w.saturating_mul(h).saturating_mul(work_per_cell), scratch_bytes));
     let scratch = || (Vec::<(f64, f64, Coord)>::with_capacity(points.len()), KrigingBuffers::new());
     let rows = crate::parallel::map_rows(h, threads, scratch, |(near, buffers), row| {
         let mut pred_data = Vec::with_capacity(w);
@@ -376,8 +378,12 @@ fn kriging_on(
         }
         (pred_data, var_data)
     });
-    let (pred, var): (Vec<Vec<f32>>, Vec<Vec<f32>>) = rows.into_iter().unzip();
-    let (pred_data, var_data) = (pred.concat(), var.concat());
+    // Each row dropped as it is copied, so the surfaces aren't held twice.
+    let (mut pred_data, mut var_data) = (Vec::with_capacity(w * h), Vec::with_capacity(w * h));
+    for (p, v) in rows {
+        pred_data.extend(p);
+        var_data.extend(v);
+    }
 
     let gt = GeoTransform { origin_x: extent.min_x, origin_y: extent.max_y, pixel_width: cell_deg, pixel_height: -cell_deg };
     Raster::new(name, w as u32, h as u32, vec![pred_data, var_data], gt, Crs::LonLat, Some(NODATA as f64), ColorHint::Gray, "Float32")

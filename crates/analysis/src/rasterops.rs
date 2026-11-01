@@ -410,7 +410,9 @@ fn idw_on(
     let k = if neighbours == 0 { points.len() } else { neighbours.clamp(1, points.len()) };
     // Each row on its own, on several threads when the work is large (#1252); a thread's
     // distances go into its own buffer.
-    let threads = threads.unwrap_or_else(|| crate::parallel::threads_for_rows(h, w.saturating_mul(h).saturating_mul(points.len())));
+    let scratch_bytes = points.len().saturating_mul(std::mem::size_of::<(f64, f64)>());
+    let threads =
+        threads.unwrap_or_else(|| crate::parallel::threads_for_rows(h, w.saturating_mul(h).saturating_mul(points.len()), scratch_bytes));
     let rows = crate::parallel::map_rows(
         h,
         threads,
@@ -447,7 +449,9 @@ fn idw_on(
             data
         },
     );
-    let data = rows.concat();
+    // Each row dropped as it is copied, so the surface isn't held twice.
+    let mut data = Vec::with_capacity(w * h);
+    rows.into_iter().for_each(|r| data.extend(r));
     let gt = GeoTransform { origin_x: extent.min_x, origin_y: extent.max_y, pixel_width: cell_deg, pixel_height: -cell_deg };
     Raster::new(name, w as u32, h as u32, vec![data], gt, Crs::LonLat, Some(NODATA as f64), ColorHint::Gray, "Float32")
         .map_err(|e| e.to_string())
