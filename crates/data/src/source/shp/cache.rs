@@ -1,9 +1,10 @@
 //! Native disposable caches. A directory lock serializes publication and eviction;
 //! per-entry leases protect readers/builders across processes, including PID reuse.
-use std::collections::BinaryHeap;
+use std::collections::{BTreeSet, BinaryHeap};
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Seek, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -283,15 +284,51 @@ impl Drop for Lease {
         if self.temporary || !self.ready {
             let _ = remove_unpinned(&self.path);
         }
-        let _ = prune_locked(&directory.root, self.budget);
+        // Sweep only a cache the last sweep left over budget (#1230): a sweep per release made
+        // every open slower as the cache grew. Files without a readable lease can't be evicted,
+        // so while they hold the cache over budget every release still sweeps. A failed build
+        // never reached the sweep at commit, so it sweeps here: abandoned builds filling the
+        // disk would otherwise make every later build fail too.
+        if !self.ready || over_budget(&directory.root) {
+            let _ = prune_locked(&directory.root, self.budget);
+        }
     }
+}
+
+/// The cache folders whose last sweep in this process ended over budget or failed. Only this
+/// process's sweeps set or clear the mark: one in another process doesn't reach it until this
+/// process builds an index and sweeps again.
+static OVER_BUDGET: Mutex<BTreeSet<PathBuf>> = Mutex::new(BTreeSet::new());
+
+fn over_budget(root: &Path) -> bool {
+    OVER_BUDGET.lock().unwrap_or_else(|e| e.into_inner()).contains(root)
+}
+
+fn note_budget(root: &Path, over: bool) {
+    let mut roots = OVER_BUDGET.lock().unwrap_or_else(|e| e.into_inner());
+    if over {
+        roots.insert(root.to_path_buf());
+    } else {
+        roots.remove(root);
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    static SWEEPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Full sweeps of the cache folder run on this thread so far (tests only).
+#[cfg(test)]
+pub(crate) fn sweeps() -> usize {
+    SWEEPS.with(std::cell::Cell::get)
 }
 
 // Releases racing a sweep need one later pass: the sweep may already have counted
 // that entry as pinned. Coalesce roots on one bounded worker, never one thread per drop.
 fn retry_maintenance(root: &Path, budget: u64) {
     use std::collections::BTreeMap;
-    use std::sync::{Arc, Condvar, Mutex, OnceLock};
+    use std::sync::{Arc, Condvar, OnceLock};
     type Jobs = Arc<(Mutex<BTreeMap<PathBuf, u64>>, Condvar)>;
     static WORKER: OnceLock<Option<Jobs>> = OnceLock::new();
     let jobs = WORKER.get_or_init(|| {
@@ -385,6 +422,15 @@ fn index_path(root: &Path, key: &str) -> io::Result<PathBuf> {
 pub fn reserve_index(root: &Path, key: &str, budget: u64) -> io::Result<Lease> {
     let directory = directory_lock(root)?;
     let path = index_path(&directory.root, key)?;
+    let reserved = reserve_locked(&directory.root, path, budget);
+    if reserved.is_err() {
+        // No lease was taken here, so no release will sweep this folder: sweep it now, so
+        // abandoned builds filling the disk don't make every later reservation fail too.
+        let _ = prune_locked(&directory.root, budget);
+    }
+    reserved
+}
+fn reserve_locked(root: &Path, path: PathBuf, budget: u64) -> io::Result<Lease> {
     // A valid generation pinned by another reader is never replaced. Concurrent
     // builders can use a private temporary index without losing functionality.
     let mut lock = open_lock(&lease_path(&path))?;
@@ -397,7 +443,7 @@ pub fn reserve_index(root: &Path, key: &str, budget: u64) -> io::Result<Lease> {
         return Ok(lease);
     }
     drop(lock);
-    let (lease, file) = create_locked(directory.root.join(format!("rg-index-work-v1-{}.sqlite", unique())), true, budget)?;
+    let (lease, file) = create_locked(root.join(format!("rg-index-work-v1-{}.sqlite", unique())), true, budget)?;
     drop(file);
     Ok(lease)
 }
@@ -413,6 +459,18 @@ pub fn maintain(root: &Path, budget: u64) -> io::Result<PruneStats> {
     prune_locked(&directory.root, budget)
 }
 fn prune_locked(root: &Path, budget: u64) -> io::Result<PruneStats> {
+    #[cfg(test)]
+    SWEEPS.with(|n| n.set(n.get() + 1));
+    let stats = sweep(root, budget);
+    // A failed sweep may have left the cache over budget, so the next release sweeps again.
+    let over = match &stats {
+        Ok(s) => s.remaining_bytes > budget,
+        Err(_) => true,
+    };
+    note_budget(root, over);
+    stats
+}
+fn sweep(root: &Path, budget: u64) -> io::Result<PruneStats> {
     let mut stats = PruneStats::default();
     loop {
         stats.remaining_bytes = 0;
