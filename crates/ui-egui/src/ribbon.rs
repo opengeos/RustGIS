@@ -1931,6 +1931,9 @@ fn view_tab(app: &mut RustGisApp, ui: &mut Ui) {
     });
     group(ui, "Scene", |ui| {
         let on = v.terrain.is_some();
+        // The active DEM by name, so a recorded step replays on it, not on whatever is active then.
+        let dem =
+            app.session.active_layer.and_then(|id| app.session.map().layer(id)).filter(|l| l.raster.is_some()).map(|l| l.name.clone());
         big(
             ui,
             app,
@@ -1938,7 +1941,11 @@ fn view_tab(app: &mut RustGisApp, ui: &mut Ui) {
             "Terrain",
             "Drape the map over the heights of the active DEM raster layer, and tilt the map to see the relief. Click again to flatten it.",
             "map.terrain",
-            if on { json!({"off": true}) } else { json!({}) },
+            match (on, dem) {
+                (true, _) => json!({"off": true}),
+                (false, Some(layer)) => json!({"layer": layer}),
+                (false, None) => json!({}),
+            },
             on,
             false,
         );
