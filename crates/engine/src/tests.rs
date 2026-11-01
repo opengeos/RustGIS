@@ -2759,6 +2759,73 @@ fn locked_labels_stay_with_their_features_when_rows_move() {
     assert_eq!(draw(&mut s), ["Beta"], "and is locked in turn");
 }
 
+/// A feature added after locking has no label, even when it takes the id of a feature deleted
+/// since: the lock's entry for that id goes with the feature, and undo brings it back (#1135).
+#[test]
+fn a_new_feature_doesnt_take_the_locked_label_of_a_deleted_one() {
+    use crate::render::View;
+    use rustgis_data::{Dataset, Field, FieldType, Geometry, GeometryType, Value as V};
+    let mut s = world();
+    let mut d = Dataset::new("Places", GeometryType::Point, vec![Field::new("name", FieldType::Text)]);
+    for (name, lon) in [("Alpha", -30.0), ("Gamma", 30.0)] {
+        d.push(Some(Geometry::Point(rustgis_geom::Coord::new(lon, -40.0))), vec![V::Text(name.into())]);
+    }
+    let id = s.map_mut().add_dataset(d);
+    let gamma = s.map().layer(id).unwrap().dataset.features[1].id;
+    s.run("labels.enable", &json!({"layer": "Places", "on": true})).unwrap();
+    let draw = |s: &mut Session| -> Vec<String> {
+        let v = View { width: 800.0, height: 600.0, pixels_per_point: 1.0, camera: s.map().camera, sky: false };
+        let labels = crate::render::render(s.map_mut(), &v).unwrap().labels;
+        let mut texts: Vec<String> =
+            labels.into_iter().map(|l| l.text).filter(|t| ["Alpha", "Alpha 2", "Gamma", "Delta"].contains(&t.as_str())).collect();
+        texts.sort();
+        texts
+    };
+    s.run("labels.lock", &json!({"on": true})).unwrap();
+    assert_eq!(draw(&mut s), ["Alpha", "Gamma"]);
+
+    // An edit keeps the feature's id, so its label stays locked.
+    s.run("edit.setValue", &json!({"layer": "Places", "row": 0, "field": "name", "value": "Alpha 2"})).unwrap();
+    assert_eq!(draw(&mut s), ["Alpha 2", "Gamma"]);
+
+    s.map_mut().layer_mut(id).unwrap().selection = vec![1];
+    s.run("edit.delete", &Value::Null).unwrap();
+    let locked =
+        |s: &Session| s.map().label_lock.as_ref().is_some_and(|k| k.iter().any(|((l, f, ..), _)| *l == id && *f == gamma as usize));
+    assert!(!locked(&s), "the lock's entry goes with the feature");
+    let delta = json!({"layer": "Places", "geometry": {"type": "Point", "coordinates": [0.0, -40.0]}, "attributes": {"name": "Delta"}});
+    s.run("edit.addFeature", &delta).unwrap();
+    assert_eq!(s.map().layer(id).unwrap().dataset.features[1].id, gamma, "the new feature takes the deleted one's id");
+    assert_eq!(draw(&mut s), ["Alpha 2"], "and no label, as it wasn't placed when the lock was taken");
+
+    s.run("edit.undo", &Value::Null).unwrap();
+    s.run("edit.undo", &Value::Null).unwrap();
+    assert!(locked(&s), "undoing the delete brings the entry back");
+    assert_eq!(draw(&mut s), ["Alpha 2", "Gamma"]);
+
+    s.run("edit.redo", &Value::Null).unwrap();
+    assert!(!locked(&s), "redoing the delete takes it away again");
+    assert_eq!(draw(&mut s), ["Alpha 2"]);
+}
+
+/// A streamed layer holds only the window in view: a lock's entry for a feature outside it stays
+/// when the window changes (#1135).
+#[test]
+fn a_lock_holds_for_a_streamed_layers_features_outside_its_window() {
+    let p = line_of_points_shp("locked-window", 20);
+    let mut s = world();
+    let r = s.run("layer.addData", &json!({"path": p.display().to_string(), "stream": true})).unwrap();
+    let id = r["layer"].as_u64().unwrap() as u32;
+    s.map_mut().label_lock = Some(vec![((id, 1, 0, 0), Default::default())]);
+    let before = s.project.clone();
+    // The window moves off the feature: no longer shared with the copy, and without its id.
+    s.map_mut().layer_mut(id).unwrap().dataset.features = Vec::new().into();
+    crate::forget_locks_of_removed_features(&before, &mut s.project);
+    assert_eq!(s.map().label_lock.as_ref().map(Vec::len), Some(1));
+    drop(s);
+    remove_shp(&p);
+}
+
 /// A lock names each label by its class's place in the list: a change to the list (a class added,
 /// moved or removed) locks the labels again on the next frame, a change within a class keeps the
 /// lock (#732).
@@ -15249,9 +15316,7 @@ fn emptying_the_index_cache_keeps_indexes_in_use() {
     let layer = s.map().layer(r["layer"].as_u64().unwrap() as u32).unwrap();
     assert_eq!(layer.load_all().unwrap().features.len(), 20);
     drop(s);
-    for ext in ["shp", "shx", "dbf", "prj", "cpg"] {
-        let _ = std::fs::remove_file(p.with_extension(ext));
-    }
+    remove_shp(&p);
 }
 
 /// Emptying the index cache tells the user only what it couldn't do: nothing when all went (#1259).
@@ -15286,6 +15351,13 @@ fn line_of_points_shp(name: &str, n: usize) -> std::path::PathBuf {
     p
 }
 
+/// Removes a Shapefile written by [`line_of_points_shp`] with its sidecar files.
+fn remove_shp(p: &std::path::Path) {
+    for ext in ["shp", "shx", "dbf", "prj", "cpg"] {
+        let _ = std::fs::remove_file(p.with_extension(ext));
+    }
+}
+
 #[test]
 fn shapefiles_too_large_to_load_whole_still_open() {
     // Few records, but a .shp or .dbf past what the whole-file reader takes (#1055): opened and
@@ -15307,9 +15379,7 @@ fn shapefiles_too_large_to_load_whole_still_open() {
         let mut s = Session::new(Project::default());
         let e = s.run("layer.addData", &json!({"path": path, "stream": false})).unwrap_err();
         assert!(e.contains("too large"), "{grown}: {e}");
-        for ext in ["shp", "shx", "dbf", "prj", "cpg"] {
-            let _ = std::fs::remove_file(p.with_extension(ext));
-        }
+        remove_shp(&p);
     }
 }
 
@@ -15353,9 +15423,7 @@ fn large_shapefiles_are_read_in_place() {
     let r = u.run("layer.addData", &json!({"path": big.display().to_string(), "stream": false})).unwrap();
     assert!(!u.map().layer(r["layer"].as_u64().unwrap() as u32).unwrap().is_streamed());
     for p in [small, big] {
-        for ext in ["shp", "shx", "dbf", "prj", "cpg"] {
-            let _ = std::fs::remove_file(p.with_extension(ext));
-        }
+        remove_shp(&p);
     }
 }
 
