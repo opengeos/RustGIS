@@ -74,13 +74,6 @@ fn export_map(s: &mut Session, p: &Value) -> CmdResult {
     Ok(json!({"path": path, "bytes": png.len()}))
 }
 
-/// What an export of `ds` to `path` says when it is a Shapefile (`.shp`, or zipped to `.zip`)
-/// whose field names don't all fit dBase's.
-fn shapefile_note(ds: &rustgis_data::Dataset, path: &str) -> Option<String> {
-    let ext = Path::new(path).extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
-    if matches!(ext.as_str(), "shp" | "zip") { rustgis_data::io::shapefile_names_note(&ds.fields, path) } else { None }
-}
-
 /// `share.exportLayer`: writes a layer to a file by its extension. A streamed layer exports its
 /// whole source, a chunk at a time where the source and format allow (see `data::export`). Says
 /// what the file couldn't hold: features without drawable geometry, a missing `.prj`, Z or M
@@ -112,7 +105,9 @@ fn export_layer(s: &mut Session, p: &Value) -> CmdResult {
         }
     };
     let zm_note = rustgis_data::zm_export_note([ds], &path);
-    let names_note = shapefile_note(ds, &path);
+    // A Shapefile (`.shp`, or zipped to `.zip`) cuts field names to dBase's.
+    let shapefile = matches!(ext.as_str(), "shp" | "zip");
+    let names_note = if shapefile { rustgis_data::io::shapefile_names_note(&ds.fields, &path) } else { None };
     // FlatGeobuf, KML, GPX and Shapefile hold features with geometry only (a Shapefile, only
     // geometry it can draw).
     if left_out > 0 {
@@ -127,7 +122,7 @@ fn export_layer(s: &mut Session, p: &Value) -> CmdResult {
     if let Some(note) = names_note {
         s.notify(note, false);
     }
-    if matches!(ext.as_str(), "shp" | "zip") && rustgis_data::raster::wkt::to_wkt(crs).is_none() {
+    if shapefile && rustgis_data::raster::wkt::to_wkt(crs).is_none() {
         s.notify(format!("{path}: no .prj written, as {} has no WKT form", crs.label()), false);
     }
     s.notify(format!("Exported {path}"), false);
