@@ -1683,7 +1683,9 @@ pub fn shapefile_part_urls(url: &str) -> Option<Vec<(&'static str, String)>> {
     let (path, rest) = url.split_at(url.find(['?', '#']).unwrap_or(url.len()));
     let stem = path.get(..path.len().checked_sub(4)?)?;
     let ext = path.get(stem.len()..)?;
-    if !ext.eq_ignore_ascii_case(".shp") || stem.is_empty() || stem.ends_with('/') || !stem.contains("://") {
+    // A path after the host: `https://x.org.shp` names a host, whose parts would be other hosts.
+    let has_path = stem.split_once("://").is_some_and(|(_, rest)| rest.contains('/'));
+    if !ext.eq_ignore_ascii_case(".shp") || stem.ends_with('/') || !has_path {
         return None;
     }
     let upper = ext == ".SHP";
@@ -2893,7 +2895,16 @@ mod tests {
         );
         assert_eq!(urls("https://x.org/a/RIOS.SHP?token=1#f").unwrap()[0], "https://x.org/a/RIOS.DBF?token=1#f");
         assert_eq!(urls("s3://bucket/rios.shp").unwrap()[2], "s3://bucket/rios.prj");
-        for not_shp in ["https://x.org/a.zip", "https://x.org/a.shp.zip", "https://x.org/.shp", "https://x.org/a?f=x.shp", "rios.shp", ""] {
+        for not_shp in [
+            "https://x.org/a.zip",
+            "https://x.org/a.shp.zip",
+            "https://x.org/.shp",
+            "https://x.org/a?f=x.shp",
+            "https://x.org.shp",
+            "s3://bucket.shp",
+            "rios.shp",
+            "",
+        ] {
             assert!(urls(not_shp).is_none(), "{not_shp}");
         }
         let (ds, _) = read_geojson(
