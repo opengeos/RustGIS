@@ -22025,6 +22025,23 @@ fn a_window_box_takes_the_files_longitudes() {
     assert!(fit(-10.0, 10.0, 0.0, 358.4).unwrap_err().contains("seam at 0°"));
     assert_eq!(fit(-10.0, -2.0, 0.0, 358.4).unwrap(), (350.0, 358.0));
     assert_eq!(fit(1.0, 10.0, 0.0, 358.4).unwrap(), (1.0, 10.0));
+    // A box of the whole world takes all of the file, whatever its range.
+    assert_eq!(fit(-180.0, 180.0, 0.0, 360.0).unwrap(), (0.0, 360.0));
+    assert_eq!(fit(-180.0, 180.0, -180.0, 180.0).unwrap(), (-180.0, 180.0));
+    assert_eq!(fit(-180.0, 180.0, 0.0, 358.4).unwrap(), (0.0, 360.0), "past the east edge: cut, and said");
+}
+
+/// A window's bands are started within one wait for them all: the first always, the others
+/// until it is up (#1204).
+#[test]
+fn a_windows_bands_are_started_within_its_wait() {
+    use crate::cmd::layer::band_in_time;
+    use std::time::Duration;
+    let wait = Duration::from_secs(300);
+    assert!(band_in_time(0, 4, Duration::from_secs(400), wait).is_ok(), "the first band is always read");
+    assert!(band_in_time(3, 4, Duration::from_secs(299), wait).is_ok());
+    let e = band_in_time(2, 4, Duration::from_secs(301), wait).unwrap_err();
+    assert_eq!(e, "2 of 4 bands read in 5 minutes, so the window is given up: take a smaller box or a larger cellSize");
 }
 
 /// `layer.addUrl` with `"bbox"` (#1204): a window of a cloud-optimised GeoTIFF, read by range as a
@@ -22157,6 +22174,12 @@ fn a_cog_window_comes_in_as_a_raster() {
     let w2 = raster(&s, "Two");
     assert_eq!((w2.band_count(), w2.value(0, 10, 5), w2.value(1, 10, 5)), (2, Some(15.0), Some(25.0)));
     assert!(!matches!(w2.color, ColorHint::Palette(_)), "{:?}", w2.color);
+    // A file of more bands than a window reads (8 under test) is refused before any is read.
+    let (nine, nine_sent) = serve_ranges(example_with(&Example { size: 256, tile: 256, bands: 9, ..Example::default() }));
+    let e = s.run("layer.addUrl", &json!({"url": format!("{nine}/nine.tif"), "bbox": [10.0, 45.0, 10.01, 45.01]})).unwrap_err();
+    assert!(e.ends_with("the file has 9 bands; a window reads 8 at most"), "{e}");
+    let header = nine_sent.load(std::sync::atomic::Ordering::Relaxed);
+    assert!(header < 256 * 256 * 9 / 4, "only the header was read: {header} bytes");
     // A palette file, as MapBiomas's: its colour table and class names come with the window.
     let (classes, _) = serve_ranges(example_with(&Example { size: 512, tile: 256, classes: true, ..Example::default() }));
     let mark = s.notice_mark();

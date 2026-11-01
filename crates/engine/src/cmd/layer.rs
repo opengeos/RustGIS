@@ -2874,9 +2874,10 @@ pub(crate) fn add_cog(s: &mut Session, p: &Value, url: &str) -> CmdResult {
 #[cfg(not(target_arch = "wasm32"))]
 const MAX_WINDOW_VALUES: u64 = if cfg!(test) { 300_000 } else { crate::render::rustgis_tiles::cog::MAX_VALUES_READ };
 
-/// The most bands a window reads: each band is a read of its own.
+/// The most bands a window reads: each band is a read of its own (8 under test, whose examples
+/// have 16 bands at most).
 #[cfg(not(target_arch = "wasm32"))]
-const MAX_WINDOW_BANDS: usize = 256;
+const MAX_WINDOW_BANDS: usize = if cfg!(test) { 8 } else { 256 };
 
 /// How long a window's bands are read for, all together: past it, no band more is asked for.
 #[cfg(not(target_arch = "wasm32"))]
@@ -3057,12 +3058,7 @@ fn add_cog_window(s: &mut Session, p: &Value, url: &str) -> CmdResult {
     let started = std::time::Instant::now();
     let mut bands = Vec::with_capacity(count);
     for band in 0..count {
-        if band > 0 && started.elapsed() > WINDOW_WAIT {
-            let minutes = WINDOW_WAIT.as_secs() / 60;
-            return Err(named(format!(
-                "{band} of {count} bands read in {minutes} minutes, so the window is given up: take a smaller box or a larger cellSize"
-            )));
-        }
+        band_in_time(band, count, started.elapsed(), WINDOW_WAIT).map_err(named)?;
         bands.push(cog::read_values_blocking(&info, url, level, band, (c0, c1), (r0, r1)).map_err(named)?);
     }
     let lt = layout.transform_of(lv);
@@ -3137,6 +3133,19 @@ fn add_cog_window(s: &mut Session, p: &Value, url: &str) -> CmdResult {
     Ok(out)
 }
 
+/// Whether a window's band `band` (of `count`) may still be started, `elapsed` into a wait of
+/// `wait` for them all: the first always is.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn band_in_time(band: usize, count: usize, elapsed: std::time::Duration, wait: std::time::Duration) -> Result<(), String> {
+    if band > 0 && elapsed > wait {
+        let minutes = wait.as_secs() / 60;
+        return Err(format!(
+            "{band} of {count} bands read in {minutes} minutes, so the window is given up: take a smaller box or a larger cellSize"
+        ));
+    }
+    Ok(())
+}
+
 /// A window can't be read in the web app yet: nothing there may wait for the tiles.
 #[cfg(target_arch = "wasm32")]
 fn add_cog_window(_: &mut Session, _: &Value, url: &str) -> CmdResult {
@@ -3149,8 +3158,12 @@ fn add_cog_window(_: &mut Session, _: &Value, url: &str) -> CmdResult {
 /// `fx0..fx1` degrees: shifted by 360° when that puts more of it over the file (a file stored 0°
 /// to 360°, a box given −180° to 180°). A box across the file's seam, which would take columns at
 /// both of its ends (one part as given and one shifted), is refused rather than cut at the seam.
+/// A box of the whole world takes the world from the file's west edge: all of a 0° to 360° file.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn box_in_file_longitudes(x0: f64, x1: f64, fx0: f64, fx1: f64) -> Result<(f64, f64), String> {
+    if x1 - x0 >= 360.0 - 1e-9 {
+        return Ok((fx0, fx0 + 360.0));
+    }
     let over = |a: f64, b: f64| (b.min(fx1) - a.max(fx0)).max(0.0);
     let mut best = (x0, x1);
     for k in [360.0, -360.0] {
