@@ -180,7 +180,8 @@ impl Features {
         std::sync::Arc::unwrap_or_clone(self.rows)
     }
 
-    /// Appends a row with the id one past the largest.
+    /// Appends a row with the id one past the largest. `max_id` stays right only because every
+    /// other change to `rows` goes through `DerefMut`, which clears it.
     fn push_with_new_id(&mut self, geometry: Option<Geometry>, attrs: Vec<Value>) {
         let max = self.max_id.unwrap_or_else(|| self.rows.iter().map(|f| f.id).max().unwrap_or(0));
         let id = max.saturating_add(1);
@@ -366,7 +367,7 @@ impl Dataset {
 
     /// Pushes a feature with the id one past the last feature's, padding/truncating attributes:
     /// for readers filling a new dataset. The ids are unique only while the rows are in id order;
-    /// [`Dataset::push`] gives unique ids in any order.
+    /// [`Dataset::push`] gives unique ids in any order, until an id reaches `u64::MAX`.
     pub fn push_next(&mut self, geometry: Option<Geometry>, mut attrs: Vec<Value>) {
         attrs.resize(self.fields.len(), Value::Null);
         self.features.push_after_last(geometry, attrs);
