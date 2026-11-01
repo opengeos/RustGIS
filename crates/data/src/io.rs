@@ -2073,9 +2073,13 @@ pub fn shapefile_names_note(fields: &[Field], target: &str) -> Option<String> {
     if renamed.is_empty() {
         return None;
     }
-    // A name read from a file can be any length: the notice shows its start.
-    let shown = |name: &str| if name.len() > 40 { format!("{}…", cut(name, 40)) } else { name.to_string() };
-    let listed: Vec<String> = renamed.iter().take(5).map(|(old, new)| format!("'{}' → '{new}'", shown(old))).collect();
+    // A name read from a file can hold anything: line breaks and other control characters show
+    // as spaces, so the notice stays one line, and only its start is shown.
+    let shown = |name: &str| {
+        let flat: String = name.chars().map(|c| if c.is_control() || matches!(c, '\u{2028}' | '\u{2029}') { ' ' } else { c }).collect();
+        if flat.len() > 40 { format!("{}…", cut(&flat, 40)) } else { flat }
+    };
+    let listed: Vec<String> = renamed.iter().take(5).map(|(old, new)| format!("'{}' → '{}'", shown(old), shown(new))).collect();
     let more = if renamed.len() > 5 { format!(" and {} more", renamed.len() - 5) } else { String::new() };
     let count = if renamed.len() == 1 { "1 field name was".to_string() } else { format!("{} field names were", renamed.len()) };
     Some(format!("{target}: {count} changed to fit a Shapefile (10 bytes at most, unique ignoring case): {}{more}", listed.join(", ")))
@@ -3088,6 +3092,11 @@ mod tests {
         let note = shapefile_names_note(&layer(&many.iter().map(String::as_str).collect::<Vec<_>>()).fields, "m.shp").unwrap();
         assert!(note.starts_with("m.shp: 8 field names were changed"), "{note}");
         assert!(note.ends_with("'measurement_4' → 'measurem_4' and 3 more"), "{note}");
+        // Line breaks and other control characters in a name show as spaces: one line.
+        let note = shapefile_names_note(&layer(&["a\nb\r\tc\u{2028}d\u{2029}e_long_name"]).fields, "c.shp").unwrap();
+        assert!(!note.contains(['\n', '\r', '\t', '\u{2028}', '\u{2029}']), "{note:?}");
+        // U+2028 is three bytes: the ten-byte name ends at d.
+        assert!(note.ends_with("'a b  c d e_long_name' → 'a b  c d'"), "{note:?}");
         let huge = "x".repeat(5000);
         let note = shapefile_names_note(&layer(&[&huge]).fields, "h.shp").unwrap();
         assert!(note.len() < 200 && note.contains(&format!("'{}…' → 'xxxxxxxxxx'", "x".repeat(40))), "{note}");
