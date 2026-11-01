@@ -356,7 +356,13 @@ fn network_routes_report_invalid_segments_but_clean_networks_are_quiet() {
     for invalid in [false, true] {
         let mut s = Session::new(Project::default());
         let mut ds = Dataset::new("roads", GeometryType::Polyline, vec![]);
-        ds.push(Some(Geometry::Line(vec![vec![Coord::new(0.0, 0.0), Coord::new(0.01, 0.0)]])), vec![]);
+        ds.push(
+            Some(Geometry::Line(vec![
+                vec![Coord::new(0.0, 0.0), Coord::new(0.01, 0.0)],
+                vec![Coord::new(0.02, 0.0), Coord::new(0.03, 0.0)],
+            ])),
+            vec![],
+        );
         if invalid {
             ds.push(Some(Geometry::Line(vec![vec![Coord::new(f64::NAN, 0.0), Coord::new(0.02, 0.0)]])), vec![]);
             ds.push(Some(Geometry::Line(vec![vec![Coord::new(0.0, 95.0), Coord::new(0.02, 95.0)]])), vec![]);
@@ -371,6 +377,16 @@ fn network_routes_report_invalid_segments_but_clean_networks_are_quiet() {
             assert!(!notices[0].error);
         } else {
             assert!(notices.is_empty(), "{notices:?}");
+        }
+        for (to, expected) in
+            [(0.03, "the two points aren't connected by the network"), (0.1, "a route end is more than 1 m from the network")]
+        {
+            let error = s.run("analysis.route", &json!({"layer":id, "from":[0.0,0.0], "to":[to,0.0], "snapDistance":1})).unwrap_err();
+            if invalid {
+                assert!(error.contains("2 segments") && error.contains("roads"), "{error}");
+            } else {
+                assert_eq!(error, expected);
+            }
         }
     }
 }

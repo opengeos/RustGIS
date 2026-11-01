@@ -48,9 +48,20 @@ pub fn shortest_route(
     cost_field: Option<usize>,
     snap_m: f64,
 ) -> Result<Route, String> {
+    if !snap_m.is_finite() {
+        return Err("the snap distance must be finite".into());
+    }
     if [from, to].iter().any(|c| !c.is_finite() || c.y.abs() > 90.0) {
         return Err("a route end has invalid coordinates".into());
     }
+    // Preserve clean-network errors; failed partial routes must still disclose omissions.
+    let route_error = |reason: String, skipped_segments: usize| {
+        if skipped_segments == 0 {
+            reason
+        } else {
+            format!("{reason}; {skipped_segments} segments with invalid coordinates were omitted from '{}'", ds.name)
+        }
+    };
     let mut skipped_segments = 0;
     let mut ids: HashMap<(i64, i64), usize> = HashMap::new();
     let mut nodes: Vec<Coord> = Vec::new();
@@ -92,13 +103,13 @@ pub fn shortest_route(
                 segs.push((ia, ib, weight, *r));
                 // Checked per segment, so one huge feature can't grow the network unbounded.
                 if segs.len() > 10_000_000 || nodes.len() > 5_000_000 {
-                    return Err("the network is too large".into());
+                    return Err(route_error("the network is too large".into(), skipped_segments));
                 }
             }
         }
     }
     if segs.is_empty() && skipped_segments > 0 {
-        return Err(format!("no usable network remains: {skipped_segments} segments have invalid coordinates"));
+        return Err(route_error("no usable network remains".into(), skipped_segments));
     }
     // The closest point on any segment: (segment, fraction along it, the point, metres away).
     let nearest = |p: Coord, nodes: &[Coord]| -> Option<(usize, f64, Coord, f64)> {
@@ -130,11 +141,14 @@ pub fn shortest_route(
     };
     // Each end becomes a node on its segment, joined to the segment's two ends.
     let attach = |p: Coord, nodes: &mut Vec<Coord>, adj: &mut Vec<Vec<(usize, f64, f64, usize)>>| -> Result<(usize, usize, f64), String> {
-        let (si, t, q, d) = nearest(p, nodes).ok_or("the layer has no lines")?;
+        let (si, t, q, d) = nearest(p, nodes).ok_or_else(|| route_error("the layer has no lines".into(), skipped_segments))?;
         if d > snap_m {
-            return Err(format!("a route end is more than {} from the network", rustgis_geom::format_distance(snap_m)));
+            return Err(route_error(
+                format!("a route end is more than {} from the network", rustgis_geom::format_distance(snap_m)),
+                skipped_segments,
+            ));
         }
-        let &(a, b, weight, row) = segs.get(si).ok_or("the layer has no lines")?;
+        let &(a, b, weight, row) = segs.get(si).ok_or_else(|| route_error("the layer has no lines".into(), skipped_segments))?;
         if t <= 0.0 {
             return Ok((a, si, t));
         }
@@ -160,7 +174,7 @@ pub fn shortest_route(
     // Both ends on one segment: they're joined directly along it.
     if s_seg == t_seg && s != t && (0.0..=1.0).contains(&s_t) && (0.0..=1.0).contains(&t_t) {
         let (Some(&(_, _, weight, row)), Some(a), Some(b)) = (segs.get(s_seg), nodes.get(s).copied(), nodes.get(t).copied()) else {
-            return Err("the layer has no lines".into());
+            return Err(route_error("the layer has no lines".into(), skipped_segments));
         };
         let len = wgs84_distance_m(a, b);
         if let Some(v) = adj.get_mut(s) {
@@ -200,7 +214,7 @@ pub fn shortest_route(
     }
     let cost = dist.get(t).copied().unwrap_or(f64::INFINITY);
     if !cost.is_finite() {
-        return Err("the two points aren't connected by the network".into());
+        return Err(route_error("the two points aren't connected by the network".into(), skipped_segments));
     }
     let mut path = Vec::new();
     let mut length = 0.0;
@@ -480,6 +494,7 @@ mod tests {
         assert!(error.contains("route end"), "{error}");
         let error = shortest_route(&ds, &[0], Coord::new(0.0, 95.0), Coord::new(0.06, 0.0), None, 50.0).unwrap_err();
         assert!(error.contains("route end"), "{error}");
+        assert!(shortest_route(&ds, &[0], Coord::new(0.0, 1.0), Coord::new(0.06, 1.0), None, f64::NAN).is_err());
     }
 
     #[test]
