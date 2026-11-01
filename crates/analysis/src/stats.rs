@@ -540,8 +540,7 @@ pub fn rounded(stat: Stat, column: &Column, value: &Value) -> bool {
             let picked = match stat {
                 // One pass, compared exactly, as [`Column::exact`] would sort them.
                 Stat::Min | Stat::Max => {
-                    let Values::Numbers(v) = &column.values else { return false };
-                    let exact = v.iter().zip(&column.whole).map(|(x, w)| w.map_or(Value::Float(*x), Value::Int));
+                    let exact = numbers.iter().zip(&column.whole).map(|(x, w)| w.map_or(Value::Float(*x), Value::Int));
                     if stat == Stat::Min { exact.min_by(cmp_number) } else { exact.max_by(cmp_number) }
                 }
                 // MODE and MINORITY have sorted the column already.
@@ -1085,7 +1084,6 @@ mod tests {
         assert_ne!(compute(Stat::Percentile(29), &ints(&[Value::Int(0), Value::Int(100)]), ", "), Value::Float(29.0), "premise");
         assert!(!check("P29", &ints(&[Value::Int(0), Value::Int(100)])));
         assert!(!check("P14", &hundred), "with a value past 2^53 beside them too");
-        // So is an IQR's: 2 between percentiles within 2^53 comes out 0.
         // But a whole percentile or IQR of values past 2^53 is checked wherever it lies: the median
         // of −(2^53 + 1) and 2^53 + 3 is 1, computed as 2; the IQR of 2^53 + 1 and 2^53 + 3 is 1,
         // from quartiles that aren't whole, computed as 4.
@@ -1110,6 +1108,7 @@ mod tests {
         // Past 2^53 the check follows the result: marked exactly when the IQR, 2, comes out otherwise.
         let wide = ints(&[Value::Int((1 << 53) + 2), Value::Int((1 << 53) + 6)]);
         assert_eq!(check("IQR", &wide), compute(Stat::Iqr, &wide, ", ") != Value::Float(2.0));
+        // Within 2^53 an IQR's own rounding isn't reported either: 2 comes out 0 here.
         let within = ints(&[Value::Int(6_755_399_441_055_746), Value::Int(6_755_399_441_055_750)]);
         assert_eq!(compute(Stat::Iqr, &within, ", "), Value::Float(0.0), "premise");
         assert!(!check("IQR", &within));
