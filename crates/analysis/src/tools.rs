@@ -1146,16 +1146,18 @@ fn buffer(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
     }
     let mut out = copy_schema(ds, out_name(p, format!("{}_Buffer", ds.name)), GeometryType::Polygon);
     let mut all: Vec<MultiPolygon<f64>> = Vec::new();
-    let geoms: Vec<(&Feature, &Geometry)> = rows(inp, p, "input", ds)
-        .into_iter()
-        .filter_map(|r| {
-            let f = ds.features.get(r)?;
-            Some((f, f.geometry.as_ref()?))
-        })
-        .collect();
+    let picked: Vec<&Feature> = rows(inp, p, "input", ds).into_iter().filter_map(|r| ds.features.get(r)).collect();
+    let geoms: Vec<(&Feature, &Geometry)> = picked.iter().filter_map(|f| Some((*f, f.geometry.as_ref()?))).collect();
+    let without = picked.len() - geoms.len();
     let buffers = geodesic_buffers(&geoms.iter().map(|(_, g)| *g).collect::<Vec<_>>(), metres);
+    // Buffers with nothing in them: points at a negative distance, polygons that shrink away,
+    // features with no finite coordinates.
+    let mut empty = 0;
     for ((f, _), geom) in geoms.iter().zip(buffers) {
-        let Some(geom) = geom else { continue };
+        let Some(geom) = geom else {
+            empty += 1;
+            continue;
+        };
         if s(p, "dissolve") == "All" {
             all.extend(to_multipolygon(&geom));
         } else {
@@ -1170,7 +1172,15 @@ fn buffer(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
         }
     }
     let n = out.features.len();
-    result(out, format!("Buffer: {n} features at {d} {}", if s(p, "units").is_empty() { "Kilometers" } else { s(p, "units") }))
+    let units = if s(p, "units").is_empty() { "Kilometers" } else { s(p, "units") };
+    let mut r = result(out, format!("Buffer: {n} features at {d} {units}"))?;
+    if without > 0 {
+        r.messages.push(format!("{without} of {} features have no geometry, so they have no buffer", picked.len()));
+    }
+    if empty > 0 {
+        r.messages.push(format!("{empty} of {} features have nothing left at {d} {units}, so they have no buffer", picked.len()));
+    }
+    Ok(r)
 }
 
 /// A feature as the overlay can take it: a feature of several polygons, which may overlap, unioned
@@ -4852,6 +4862,38 @@ mod tests {
         }
         let _ = std::fs::remove_dir(&dir);
         assert!(ran * 2 >= tested, "only {ran} of {tested} layer tools ran on these inputs");
+    }
+
+    #[test]
+    fn buffers_made_on_threads_keep_their_features_and_say_which_had_no_geometry() {
+        // Enough features for several threads: each output keeps its own attributes and buffer.
+        let at = |i: i64| Coord::new(-150.0 + i as f64, (i % 120) as f64 - 60.0);
+        let mut pts = Dataset::new("p", GeometryType::Point, vec![Field::new("i", FieldType::Integer)]);
+        for i in 0..300 {
+            pts.push(Some(Geometry::Point(at(i))), vec![Value::Int(i)]);
+        }
+        let clean = Map(HashMap::from([("p".to_string(), pts.clone())]));
+        assert_eq!(crate::run("buffer", &clean, &serde_json::json!({"input": "p", "distance": 5})).unwrap().messages.len(), 1);
+        pts.push(None, vec![Value::Int(-1)]);
+        let m = Map(HashMap::from([("p".to_string(), pts)]));
+        let r = crate::run("buffer", &m, &serde_json::json!({"input": "p", "distance": 5})).unwrap();
+        assert_eq!(r.messages.get(1).map(String::as_str), Some("1 of 301 features have no geometry, so they have no buffer"));
+        let b = layer(r);
+        assert_eq!(b.features.len(), 300);
+        for (k, f) in b.features.iter().enumerate() {
+            assert_eq!(f.attrs, vec![Value::Int(k as i64)]);
+            assert_eq!(f.geometry, geodesic_buffer(&Geometry::Point(at(k as i64)), 5_000.0), "feature {k}");
+        }
+        let r = crate::run("buffer", &m, &serde_json::json!({"input": "p", "distance": 5, "dissolve": "All"})).unwrap();
+        assert_eq!(r.messages.get(1).map(String::as_str), Some("1 of 301 features have no geometry, so they have no buffer"));
+        assert_eq!(layer(r).features.len(), 1);
+        // Points at a negative distance have nothing left, and say so.
+        let r = crate::run("buffer", &clean, &serde_json::json!({"input": "p", "distance": -5})).unwrap();
+        assert_eq!(
+            r.messages.get(1).map(String::as_str),
+            Some("300 of 300 features have nothing left at -5 Kilometers, so they have no buffer")
+        );
+        assert!(layer(r).features.is_empty());
     }
 
     #[test]

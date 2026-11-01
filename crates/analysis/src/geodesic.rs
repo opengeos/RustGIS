@@ -59,8 +59,11 @@ const STRAY_MARGIN: f64 = 1.6;
 /// by 1/x − cot x per radian across it), so two leaves a wide margin;
 /// [`tests::an_edge_let_pass_by_its_latitude_does_not_stray`] fails at a tenth.
 const PLANE_TURN: f64 = 2.0;
-/// The Earth's mean radius (metres), for [`may_stray`].
-const EARTH_R_M: f64 = 6_371_008.8;
+/// The Earth's mean radius (metres), for [`may_stray`]: the one distances are measured with.
+const EARTH_R_M: f64 = rustgis_geom::EARTH_RADIUS_M;
+/// What [`may_stray`] adds to tan φ for the ellipsoid and near the equator, where tan φ is near 0:
+/// a tenth of the turn at 45°, as at about 5.7° of latitude.
+const FLAT_ALLOWANCE: f64 = 0.1;
 
 /// A feature's buffer at `metres` (negative shrinks a polygon), in lon/lat; `None` when nothing
 /// is left.
@@ -128,6 +131,8 @@ fn buffers_on(geoms: &[&Geometry], metres: f64, threads: usize) -> Vec<Option<Ge
             (1..threads).filter_map(|_| std::thread::Builder::new().stack_size(STACK_BYTES).spawn_scoped(scope, work).ok()).collect();
         place(work());
         for h in others {
+            // Not a new panic but the worker's, raised again here as a serial run would raise it,
+            // for `analysis::run` to catch (AGENTS.md's never-crash rule is about new ones).
             place(h.join().unwrap_or_else(|e| std::panic::resume_unwind(e)));
         }
     });
@@ -292,8 +297,8 @@ impl Plane {
 /// `tolerance` from the same edge straight in Web Mercator, so that [`Plane::strays`] must look.
 /// Straight in Web Mercator is a rhumb line, which runs off the geodesic by about L² tan φ / 8R
 /// at latitude φ, the heading of a geodesic turning by L tan φ / R along it: 2.0e-8 per square
-/// metre at 46°, 1.9e-7 at 84°, as measured for [`STRAY_PER_M2`], and a tenth of the turn at 45°
-/// more for the ellipsoid and near the equator, where tan φ is near 0. Straight in the plane is the
+/// metre at 46°, 1.9e-7 at 84°, as measured for [`STRAY_PER_M2`], plus [`FLAT_ALLOWANCE`] for the
+/// ellipsoid and near the equator. Straight in the plane is the
 /// geodesic only through the plane's centre, and turns from it as the edge lies farther out, by
 /// about ρ / R at ρ from the centre. The latitude is the edge's farthest from the equator plus its
 /// length as an angle (L / R), and ρ its end farthest from the centre plus L; both overstate, so an edge
@@ -310,7 +315,7 @@ fn may_stray(a: GC<f64>, b: GC<f64>, la: Coord, lb: Coord, tolerance: f64) -> bo
     if !(lat.is_finite() && rho.is_finite()) || lat >= 89f64.to_radians() {
         return true;
     }
-    STRAY_MARGIN * (lat.tan() + 0.1 + PLANE_TURN * rho / EARTH_R_M) / (8.0 * EARTH_R_M) * length2 > tolerance
+    STRAY_MARGIN * (lat.tan() + FLAT_ALLOWANCE + PLANE_TURN * rho / EARTH_R_M) / (8.0 * EARTH_R_M) * length2 > tolerance
 }
 
 /// A longitude difference folded into −180..180.
@@ -466,12 +471,12 @@ mod tests {
 
     #[test]
     fn an_edge_let_pass_by_its_latitude_does_not_stray() {
-        // Wherever `may_stray` lets an edge pass without looking, looking agrees: planes from 84°S
-        // to 84°N, edges of 100 m to 1,000 km in eight directions, up to 5,000 km from the centre
-        // to the side or at 45°, at the tolerances of buffers from 100 m to 5,000 km (the largest
-        // Buffer makes).
+        // Wherever `may_stray` lets an edge pass without looking, looking agrees: planes from 88°S
+        // to 88°N (past Web Mercator's 85.05° too), edges of 100 m to 1,000 km in eight directions,
+        // up to 5,000 km from the centre to the side or at 45°, at the tolerances of buffers from
+        // 100 m to 5,000 km (the largest Buffer makes).
         let mut passed = 0;
-        for lat in (-84..=84).step_by(12) {
+        for lat in (-84..=84).step_by(12).chain([-88, -86, 86, 88]) {
             let plane = Plane::new(Coord::new(10.0, f64::from(lat)), 10.0);
             for len in [100.0, 500.0, 1_000.0, 2_000.0, 5_000.0, 10_000.0, 30_000.0, 100_000.0, 300_000.0, 1_000_000.0] {
                 for k in 0..8 {
