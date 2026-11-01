@@ -406,7 +406,7 @@ fn refused(s: &Session, plugin: &Plugin, spec: &C, params: &Value) -> Option<Str
     }
     // A mosaic writes a file only when given a `path`, and reads one for an input that isn't a
     // raster layer; a mosaic of the project's layers stays in it, as `raster.project` does.
-    let reach = if spec.id == "raster.mosaic" && super::imagery::mosaics_layers(s, params) { None } else { reaches(spec, params) };
+    let reach = reaches(spec, params).filter(|_| !(spec.id == "raster.mosaic" && super::imagery::mosaic_stays_in_project(s, params)));
     match reach {
         Some(Reach::Files)
             if spec.id == "gp.run"

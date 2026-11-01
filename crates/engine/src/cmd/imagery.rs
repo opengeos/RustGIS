@@ -844,7 +844,7 @@ const MAX_MOSAIC_INPUTS: usize = 10_000;
 /// that name before a file), and nothing else names a place (no `path`, nor a name that looks like
 /// one). A layer named like a path (`~dem`, `a/../b`) counts as a place too: that errs towards
 /// asking for `files`.
-pub(crate) fn mosaics_layers(s: &Session, p: &Value) -> bool {
+pub(crate) fn mosaic_stays_in_project(s: &Session, p: &Value) -> bool {
     let in_memory = |v: &Value| v.as_str().map(str::trim).is_some_and(|n| raster_named(s, n).is_ok());
     let layers =
         p.get("inputs").and_then(Value::as_array).is_some_and(|a| !a.is_empty() && a.len() <= MAX_MOSAIC_INPUTS && a.iter().all(in_memory));
