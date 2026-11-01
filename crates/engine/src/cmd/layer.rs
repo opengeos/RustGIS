@@ -75,6 +75,19 @@ pub fn commands() -> Vec<C> {
             {
                 *t = n.clone();
             }
+            // A terrain whose DEM name two layers now share would draw the first one's heights:
+            // it is turned off, and said.
+            let ambiguous = match &s.map().view.terrain {
+                Some(rustgis_map::view::Terrain { source: rustgis_map::view::TerrainSource::Layer(t), .. }) => {
+                    let count = s.map().layers.iter().filter(|l| l.name.eq_ignore_ascii_case(t)).count();
+                    (count > 1).then(|| t.clone())
+                }
+                _ => None,
+            };
+            if let Some(t) = ambiguous {
+                s.map_mut().view.terrain = None;
+                s.notify(format!("Terrain turned off: two layers are now called '{t}'; rename one and turn Terrain on again"), false);
+            }
             // Layers masked by this one follow the new name.
             for l in &mut s.map_mut().layers {
                 if l.mask.as_deref().is_some_and(|m| m.eq_ignore_ascii_case(&old)) {
