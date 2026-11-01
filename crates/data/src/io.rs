@@ -937,11 +937,11 @@ pub(crate) fn geojson_attrs(f: &Json, fields: &[Field]) -> Vec<Value> {
 /// Whether a feature's geometry has a third value in any position (a height, which reading drops),
 /// a GeometryCollection's members included.
 pub(crate) fn geojson_has_z(f: &Json) -> bool {
-    /// Any position under `v` (nested arrays, ending in arrays of numbers) has a third value that
-    /// is a number (a `null` there isn't a height).
+    /// Any position under `v` (nested arrays, ending in arrays of numbers) has a number beyond its
+    /// first two values: a height or measure (a `null` there isn't one).
     fn positions(v: &Json) -> bool {
         match v.as_array() {
-            Some(a) if a.first().is_some_and(Json::is_number) => a.get(2).is_some_and(Json::is_number),
+            Some(a) if a.first().is_some_and(Json::is_number) => a.iter().skip(2).any(Json::is_number),
             Some(a) => a.iter().any(positions),
             None => false,
         }
@@ -2603,9 +2603,14 @@ mod tests {
         // A height past the first position counts; one only in a geometry that isn't read doesn't.
         let line = r#"{"type":"Feature","properties":{},"geometry":{"type":"LineString","coordinates":[[1,2],[3,4,5]]}}"#;
         assert!(read_geojson(line, "line").unwrap().0.zm_dropped);
-        // A `null` third value isn't a height.
+        // A `null` third value isn't a height, but a measure after it counts.
         let null_z = r#"{"type":"Feature","properties":{},"geometry":{"type":"LineString","coordinates":[[1,2,null],[3,4]]}}"#;
         assert!(!read_geojson(null_z, "line").unwrap().0.zm_dropped);
+        let null_z_m = r#"{"type":"Feature","properties":{},"geometry":{"type":"LineString","coordinates":[[1,2,null,7],[3,4]]}}"#;
+        assert!(read_geojson(null_z_m, "line").unwrap().0.zm_dropped);
+        // A height in a later collection member counts too.
+        let mixed = r#"{"type":"Feature","properties":{},"geometry":{"type":"GeometryCollection","geometries":[{"type":"LineString","coordinates":[[1,2],[3,4]]},{"type":"Point","coordinates":[5,6,7]}]}}"#;
+        assert!(read_geojson(mixed, "mixed").unwrap().0.zm_dropped);
         let curve = r#"{"type":"FeatureCollection","features":[{"type":"Feature","properties":{},"geometry":{"type":"Curve","coordinates":[[1,2,3]]}},{"type":"Feature","properties":{},"geometry":{"type":"Point","coordinates":[1,2]}}]}"#;
         let (ds, rep) = read_geojson(curve, "curve").unwrap();
         assert!(!ds.zm_dropped && !said(&rep) && rep.skipped == 1, "{rep:?}");
