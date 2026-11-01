@@ -6528,10 +6528,10 @@ mod tests {
         let mut buf = Vec::new();
         index.candidates_into(&Extent::new(0.0, 0.0, 0.02, 0.005), &mut buf);
         assert_eq!(buf, near_start);
-        let prev_cap = buf.capacity();
+        let ptr = buf.as_ptr();
         index.candidates_into(&Extent::new(5.0, 5.0, 6.0, 6.0), &mut buf);
         assert!(buf.is_empty());
-        assert!(buf.capacity() >= prev_cap);
+        assert_eq!(buf.as_ptr(), ptr, "the buffer's allocation is reused");
 
         // An index without a grid (<= 16 features) replaces the buffer with all feature indices.
         let small_index = ExtentIndex::new((0..5).map(|i| Extent::new(f64::from(i), 0.0, f64::from(i) + 0.1, 0.1)));
