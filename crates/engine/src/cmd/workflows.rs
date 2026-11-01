@@ -678,6 +678,7 @@ fn interpolate(s: &mut Session, p: &Value) -> CmdResult {
     add_raster(s, r)
 }
 
+/// Creates a route layer and reports invalid source segments omitted from its network.
 fn route(s: &mut Session, p: &Value) -> CmdResult {
     let id = s.layer_id(p)?;
     let l = s.map().layer(id).ok_or("no such layer")?;
@@ -694,11 +695,18 @@ fn route(s: &mut Session, p: &Value) -> CmdResult {
         cost,
         f(p, "snapDistance").unwrap_or(1000.0).clamp(0.0, 1e6),
     )?;
+    let source_name = l.name.clone();
     let name = out_name(p, format!("Route on {}", l.name));
     let mut ds =
         Dataset::new(name, GeometryType::Polyline, vec![Field::new("length_km", FieldType::Double), Field::new("cost", FieldType::Double)]);
     ds.push(Some(Geometry::Line(vec![r.path.clone()])), vec![Attr::Float(r.length_m / 1000.0), Attr::Float(r.cost)]);
     let nid = super::layer::add_dataset(s, ds);
+    if r.skipped_segments > 0 {
+        s.notify(
+            format!("{source_name}: {} segments with invalid coordinates were omitted from the route network", r.skipped_segments),
+            false,
+        );
+    }
     Ok(json!({"layer": nid, "lengthKm": r.length_m / 1000.0, "cost": r.cost, "segments": r.rows.len()}))
 }
 
