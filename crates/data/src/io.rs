@@ -2066,18 +2066,28 @@ pub(crate) fn cut(s: &str, max: usize) -> &str {
 
 /// What an export to a Shapefile says when field names don't fit dBase's (at most 10 bytes,
 /// unique without regard to case), or `None` when every name is kept: one notice, counting the
-/// fields renamed and naming the first few as `'old' → 'new'`. `target` names what was written.
+/// fields renamed and naming the first few as `'old' → 'new'`. Line breaks and other control
+/// characters in a name show as spaces, and a long name only its first 40 bytes. `target` names
+/// what was written.
 pub fn shapefile_names_note(fields: &[Field], target: &str) -> Option<String> {
     let renamed: Vec<(&str, String)> =
         fields.iter().zip(dbf_names(fields)).filter(|(f, n)| f.name != *n).map(|(f, n)| (f.name.as_str(), n)).collect();
     if renamed.is_empty() {
         return None;
     }
-    // A name read from a file can hold anything: line breaks and other control characters show
-    // as spaces, so the notice stays one line, and only its start is shown.
+    // A name read from a file can hold anything, at any length: the notice stays one line, and
+    // copies no more of a name than it shows.
     let shown = |name: &str| {
-        let flat: String = name.chars().map(|c| if c.is_control() || matches!(c, '\u{2028}' | '\u{2029}') { ' ' } else { c }).collect();
-        if flat.len() > 40 { format!("{}…", cut(&flat, 40)) } else { flat }
+        let mut flat = String::new();
+        for c in name.chars() {
+            let c = if c.is_control() || matches!(c, '\u{2028}' | '\u{2029}') { ' ' } else { c };
+            if flat.len() + c.len_utf8() > 40 {
+                flat.push('…');
+                break;
+            }
+            flat.push(c);
+        }
+        flat
     };
     let listed: Vec<String> = renamed.iter().take(5).map(|(old, new)| format!("'{}' → '{}'", shown(old), shown(new))).collect();
     let more = if renamed.len() > 5 { format!(" and {} more", renamed.len() - 5) } else { String::new() };
@@ -3097,6 +3107,11 @@ mod tests {
         assert!(!note.contains(['\n', '\r', '\t', '\u{2028}', '\u{2029}']), "{note:?}");
         // U+2028 is three bytes: the ten-byte name ends at d.
         assert!(note.ends_with("'a b  c d e_long_name' → 'a b  c d'"), "{note:?}");
+        // Exactly 40 bytes is shown whole; past that, cut at a character boundary.
+        let forty = format!("{}_long", "y".repeat(35));
+        assert!(shapefile_names_note(&layer(&[&forty]).fields, "f.shp").unwrap().contains(&format!("'{forty}' →")));
+        let wide = format!("{}é_long", "z".repeat(39));
+        assert!(shapefile_names_note(&layer(&[&wide]).fields, "w.shp").unwrap().contains(&format!("'{}…' →", "z".repeat(39))));
         let huge = "x".repeat(5000);
         let note = shapefile_names_note(&layer(&[&huge]).fields, "h.shp").unwrap();
         assert!(note.len() < 200 && note.contains(&format!("'{}…' → 'xxxxxxxxxx'", "x".repeat(40))), "{note}");
