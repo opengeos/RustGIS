@@ -2721,6 +2721,11 @@ fn count_points(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
             {
                 *c += 1;
                 if let Some(m) = members.get_mut(*row) {
+                    // One entry for each point in each polygon it meets: many overlapping polygons
+                    // can make that more than memory holds, an error rather than an abort.
+                    m.try_reserve(1).map_err(|e| {
+                        format!("Summarize Within: not enough memory to keep each polygon's points for its statistics: {e}")
+                    })?;
                     m.push(r);
                 }
             }

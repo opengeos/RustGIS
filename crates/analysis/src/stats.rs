@@ -572,7 +572,7 @@ pub fn rounded(stat: Stat, column: &Column, value: &Value) -> bool {
 /// values stay far within an i128.
 fn decimal_whole(x: f64) -> Option<i128> {
     const I64_LIMIT: f64 = 9_223_372_036_854_775_808.0;
-    (x.fract() == 0.0 && x.abs() < I64_LIMIT).then_some(x as i128)
+    (x.fract() == 0.0 && (-I64_LIMIT..I64_LIMIT).contains(&x)).then_some(x as i128)
 }
 
 /// 2^53, up to which a decimal holds every whole number.
@@ -1171,6 +1171,9 @@ mod tests {
         assert!(marked(Stat::Sum, &mixed([Value::Int(BIG), Value::Bool(true)])));
         assert!(marked(Stat::Mean, &mixed([Value::Int(BIG), Value::Float(1.0)])), "(2^53 + 2) / 2");
         assert!(!marked(Stat::Sum, &mixed([Value::Int(1 << 53), Value::Float(2.0)])), "2^53 + 2 fits");
+        // −2^63 is an i64 too, so checked as one: BIG − 2^63 comes out 2^53 − 2^63.
+        assert!(marked(Stat::Sum, &mixed([Value::Int(BIG), Value::Float(-9_223_372_036_854_775_808.0)])));
+        assert!(!marked(Stat::Sum, &mixed([Value::Int(1), Value::Float(9_223_372_036_854_775_808.0)])), "2^63 isn't");
         // P75 of 1.0 and BIG is 3·2^51 + 1, computed as 3·2^51.
         assert!(marked(Stat::Percentile(75), &mixed([Value::Float(1.0), Value::Int(BIG)])));
         let max = mixed([Value::Int(BIG), Value::Float(0.5)]);
