@@ -253,8 +253,7 @@ fn terrain(s: &mut Session, p: &Value) -> CmdResult {
         (None, Some(old)) => Terrain { exaggeration: exaggeration.unwrap_or(old.exaggeration), ..old },
         (None, None) => {
             return Err(
-                "make a DEM raster layer the active layer (a script can give layer, a DEM raster layer, or tiles, an elevation tile URL)"
-                    .into(),
+                "make a DEM raster layer the active layer first (a script can instead name a layer, or give elevation tiles)".into()
             );
         }
     };

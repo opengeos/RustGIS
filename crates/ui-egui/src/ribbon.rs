@@ -1939,7 +1939,7 @@ fn view_tab(app: &mut RustGisApp, ui: &mut Ui) {
             app,
             "relief",
             "Terrain",
-            "Drape the map over the heights of the active DEM raster layer, and tilt the map to see the relief. Click again to flatten it.",
+            "Drape the map over the heights of the active raster layer (a DEM, in metres), and tilt the map to see the relief. Click again to flatten it.",
             "map.terrain",
             match (on, dem) {
                 (true, _) => json!({"off": true}),
