@@ -22997,3 +22997,58 @@ fn merge_distinguishes_case_sensitive_file_paths() {
     assert_eq!(coordinates, [1.0, 2.0]);
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+/// Exporting to a Shapefile says which field names it changed to fit dBase's 10 bytes, as the
+/// file has them, from a layer read whole or in place; names that fit, and other formats, give no
+/// such notice.
+#[test]
+fn shapefile_exports_say_which_field_names_they_changed() {
+    let dir = std::env::temp_dir().join(format!("rustgis-engine-shp-names-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = dir.join("sites.geojson");
+    std::fs::write(
+        &src,
+        r#"{"type":"FeatureCollection","features":[{"type":"Feature","properties":{"population_2020":1,"Population_2021":2,"id":3},"geometry":{"type":"Point","coordinates":[1,2]}}]}"#,
+    )
+    .unwrap();
+    isolate_plugins();
+    let mut s = Session::new(Project::default());
+    let changed = |s: &Session, mark| -> Vec<String> {
+        s.notices_since(mark).iter().filter(|n| n.text.contains("changed to fit a Shapefile")).map(|n| n.text.clone()).collect()
+    };
+    for stream in [false, true] {
+        let id = s.run("layer.addData", &json!({"path": src, "stream": stream})).unwrap()["layer"].as_u64().unwrap();
+        for ext in ["shp", "zip"] {
+            let out = dir.join(format!("out-{stream}.{ext}")).display().to_string();
+            let mark = s.notice_mark();
+            s.run("share.exportLayer", &json!({"layer": id, "path": out})).unwrap();
+            assert_eq!(
+                changed(&s, mark),
+                [format!(
+                    "{out}: 2 field names were changed to fit a Shapefile (10 bytes at most, unique ignoring case): \
+                     'Population_2021' → 'Population', 'population_2020' → 'populati_1'"
+                )],
+                "stream {stream}, .{ext}"
+            );
+            // The names the notice gives are the file's.
+            let back = s.run("layer.addData", &json!({"path": out})).unwrap()["layer"].as_u64().unwrap() as u32;
+            let names: Vec<&str> = s.map().layer(back).unwrap().dataset.fields.iter().map(|f| f.name.as_str()).collect();
+            // The reader orders the fields by name, capitals first.
+            assert_eq!(names, ["Population", "id", "populati_1"], "stream {stream}, .{ext}");
+        }
+        // Other formats keep the names and say nothing of them.
+        let mark = s.notice_mark();
+        s.run("share.exportLayer", &json!({"layer": id, "path": dir.join(format!("out-{stream}.geojson"))})).unwrap();
+        assert!(changed(&s, mark).is_empty(), "{:?}", s.notices_since(mark));
+    }
+    // Names that fit: no notice.
+    let mut s = world();
+    let mark = s.notice_mark();
+    s.run("share.exportLayer", &json!({"layer": "Countries", "path": dir.join("countries.shp")})).unwrap();
+    assert!(changed(&s, mark).is_empty(), "{:?}", s.notices_since(mark));
+    // A standalone table has no geometry, so it is never a Shapefile: an error, not a notice.
+    s.run("gp.run", &json!({"tool": "summaryStatistics", "params": {"input": "Countries", "field": "pop_est"}})).unwrap();
+    let table = s.project.tables.last().unwrap().name.clone();
+    assert!(s.run("share.exportTable", &json!({"table": table, "path": dir.join("stats.shp")})).is_err());
+    std::fs::remove_dir_all(dir).unwrap();
+}

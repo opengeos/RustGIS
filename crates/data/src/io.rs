@@ -2064,6 +2064,23 @@ pub(crate) fn cut(s: &str, max: usize) -> &str {
     s.get(..end).unwrap_or("")
 }
 
+/// What an export to a Shapefile says when field names don't fit dBase's (at most 10 bytes,
+/// unique without regard to case), or `None` when every name is kept: one notice, counting the
+/// fields renamed and naming the first few as `'old' → 'new'`. `target` names what was written.
+pub fn shapefile_names_note(fields: &[Field], target: &str) -> Option<String> {
+    let renamed: Vec<(&str, String)> =
+        fields.iter().zip(dbf_names(fields)).filter(|(f, n)| f.name != *n).map(|(f, n)| (f.name.as_str(), n)).collect();
+    if renamed.is_empty() {
+        return None;
+    }
+    // A name read from a file can be any length: the notice shows its start.
+    let shown = |name: &str| if name.len() > 40 { format!("{}…", cut(name, 40)) } else { name.to_string() };
+    let listed: Vec<String> = renamed.iter().take(5).map(|(old, new)| format!("'{}' → '{new}'", shown(old))).collect();
+    let more = if renamed.len() > 5 { format!(" and {} more", renamed.len() - 5) } else { String::new() };
+    let count = if renamed.len() == 1 { "1 field name was".to_string() } else { format!("{} field names were", renamed.len()) };
+    Some(format!("{target}: {count} changed to fit a Shapefile (10 bytes at most, unique ignoring case): {}{more}", listed.join(", ")))
+}
+
 /// dBase field names (at most 10 bytes, unique without regard to case) for the fields.
 fn dbf_names(fields: &[Field]) -> Vec<String> {
     let mut out: Vec<String> = Vec::with_capacity(fields.len());
@@ -3026,5 +3043,53 @@ mod tests {
         assert_eq!(names(&out), ["rivers.zip"]);
         assert_eq!(problems.len(), 1);
         assert!(problems[0].starts_with("huge.shp:") && problems[0].contains("MB"), "{problems:?}");
+    }
+
+    /// The notice for field names a Shapefile can't hold names each change as the file has it,
+    /// and there is none when every name fits.
+    #[test]
+    fn shapefile_field_name_changes_are_said() {
+        // Each field as a Shapefile written and read back names it.
+        let written = |ds: &Dataset| -> Vec<String> {
+            let (zip, _) = write_bytes(ds, "zip").unwrap();
+            let (back, _) = read_bytes("out.zip", &zip).unwrap();
+            back.fields.iter().map(|f| f.name.clone()).collect()
+        };
+        let layer = |names: &[&str]| {
+            let fields = names.iter().map(|n| Field::new(*n, FieldType::Integer)).collect();
+            let mut ds = Dataset::new("t", GeometryType::Point, fields);
+            ds.push(Some(Geometry::Point(Coord::new(1.0, 2.0))), names.iter().map(|_| Value::Int(1)).collect());
+            ds
+        };
+        // Names that fit, ten bytes included: no notice, and the file keeps them.
+        let fits = layer(&["id", "population", "Ab_9"]);
+        assert_eq!(shapefile_names_note(&fits.fields, "out.zip"), None);
+        assert_eq!(written(&fits), ["id", "population", "Ab_9"]);
+        // Cut to ten bytes, made unique ignoring case, at a character boundary (é is two bytes):
+        // each change as the file has it.
+        let long = layer(&["population_2020", "POPULATION_2021", "kept", "éééééé"]);
+        let back = written(&long);
+        assert_eq!(back, ["population", "POPULATI_1", "kept", "ééééé"], "premise: the writer's names");
+        assert_eq!(
+            shapefile_names_note(&long.fields, "out.zip").as_deref(),
+            Some(
+                "out.zip: 3 field names were changed to fit a Shapefile (10 bytes at most, unique ignoring case): \
+                 'population_2020' → 'population', 'POPULATION_2021' → 'POPULATI_1', 'éééééé' → 'ééééé'"
+            )
+        );
+        // One: singular. A name of spaces is written FIELD, and padding is trimmed.
+        assert_eq!(
+            shapefile_names_note(&layer(&["  "]).fields, "a.shp").as_deref(),
+            Some("a.shp: 1 field name was changed to fit a Shapefile (10 bytes at most, unique ignoring case): '  ' → 'FIELD'")
+        );
+        assert!(shapefile_names_note(&layer(&[" id"]).fields, "a.shp").is_some_and(|n| n.ends_with("' id' → 'id'")));
+        // Past five, the rest are counted; a very long name shows its start.
+        let many: Vec<String> = (0..8).map(|i| format!("measurement_{i}")).collect();
+        let note = shapefile_names_note(&layer(&many.iter().map(String::as_str).collect::<Vec<_>>()).fields, "m.shp").unwrap();
+        assert!(note.starts_with("m.shp: 8 field names were changed"), "{note}");
+        assert!(note.ends_with("'measurement_4' → 'measurem_4' and 3 more"), "{note}");
+        let huge = "x".repeat(5000);
+        let note = shapefile_names_note(&layer(&[&huge]).fields, "h.shp").unwrap();
+        assert!(note.len() < 200 && note.contains(&format!("'{}…' → 'xxxxxxxxxx'", "x".repeat(40))), "{note}");
     }
 }
