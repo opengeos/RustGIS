@@ -2818,6 +2818,43 @@ fn ground_area_perimeter(g: &Geometry) -> (f64, f64) {
     (a, per)
 }
 
+/// The area (square metres, holes taken out) of a lon/lat polygon geometry on a sphere of the
+/// Earth's radius, as the map draws it: each edge a straight line in Web Mercator, which is a rhumb
+/// line, and latitudes clamped to the map's limit, as the overlay takes them. A polygon cut along
+/// any straight line on the map splits this area exactly, up to rounding, so the parts' areas add
+/// up to the whole's. Zero for any other geometry.
+fn map_area_m2(g: &Geometry) -> f64 {
+    let Geometry::Polygon(polys) = g else { return 0.0 };
+    let r2 = rustgis_geom::EARTH_RADIUS_M * rustgis_geom::EARTH_RADIUS_M;
+    polys.iter().flat_map(|rings| rings.iter().enumerate()).map(|(i, r)| if i == 0 { 1.0 } else { -1.0 } * rhumb_ring_area(r) * r2).sum()
+}
+
+/// The area of a ring of rhumb lines on the unit sphere, |∮ sin φ dλ|, for [`map_area_m2`]. Along a
+/// rhumb line the isometric latitude ψ (the Mercator y over the radius) changes linearly with the
+/// longitude λ and sin φ = tanh ψ, so an edge's integral is Δλ/Δψ × (ln cosh ψ₂ − ln cosh ψ₁); for a
+/// short Δψ, where that difference cancels, its Taylor series about the middle. An edge that jumps
+/// across the antimeridian is the short hop, as [`rustgis_geom::geodesic_ring_area_m2`] takes it.
+fn rhumb_ring_area(ring: &[Coord]) -> f64 {
+    let iso = |c: &Coord| c.y.clamp(-rustgis_geom::MAX_LAT, rustgis_geom::MAX_LAT).to_radians().tan().asinh();
+    let ln_cosh = |x: f64| x.abs() + (-2.0 * x.abs()).exp().ln_1p() - std::f64::consts::LN_2;
+    let mut total = 0.0;
+    for (a, b) in ring.iter().zip(ring.iter().cycle().skip(1)) {
+        let dlon = b.x - a.x;
+        let dlon = if dlon.abs() > 180.0 && dlon.abs() < 360.0 { dlon - 360.0 * dlon.signum() } else { dlon };
+        let (p1, p2) = (iso(a), iso(b));
+        let dpsi = p2 - p1;
+        let mean_sin = if dpsi.abs() < 1e-4 {
+            // tanh over the edge, averaged: tanh m + Δψ²/24 × tanh″ m, with tanh″ = −2 tanh sech².
+            let t = ((p1 + p2) / 2.0).tanh();
+            t - dpsi * dpsi / 12.0 * t * (1.0 - t * t)
+        } else {
+            (ln_cosh(p2) - ln_cosh(p1)) / dpsi
+        };
+        total += dlon.to_radians() * mean_sin;
+    }
+    total.abs()
+}
+
 /// Calculate Geometry Attributes: adds `area_km2` and `perimeter_km` to a polygon layer (see
 /// [`ground_area_perimeter`]), `length_km` to a line layer, and `point_x`/`point_y` (a label point)
 /// to any other, updating the layer in place.
@@ -3158,9 +3195,9 @@ struct TabulateZone {
     ext: Extent,
     /// Its features' polygons in Web Mercator, unioned when there are several, as [`mask_of`] does.
     mask: MultiPolygon<f64>,
-    /// Its area in square metres on the sphere, as [`tabulate_intersection`] compares areas (see
-    /// there), overlaps between its features counted once.
-    sphere_area_m2: f64,
+    /// Its area in square metres as the map draws it ([`map_area_m2`]), overlaps between its
+    /// features counted once.
+    map_area_m2: f64,
 }
 
 /// What one class covers of one zone: its class features' parts in the zone, and the shares of
@@ -3174,19 +3211,18 @@ struct TabulateCell {
 /// class fields, `area_km2` (the ground area of the class in the zone, class features overlapping
 /// each other counted once), `percentage` (that area as a percentage of the zone's) and each sum
 /// field's share: the sum, over the class's features, of the field's value times the part of the
-/// feature's area inside the zone. Rows follow the zones, then the classes, in record order; pairs
-/// that only touch get none. Only selected features are used when a layer has a selection. The
+/// feature's area inside the zone. Rows are sorted by the zone fields' values, then the class
+/// fields', as Summary Statistics sorts its groups; pairs that only touch get none. Only selected features are used when a layer has a selection. The
 /// messages count features without geometry (left out), zones with no rows, class features with no
 /// value in a sum field and, with sum fields, class features not wholly inside the zones, whose
 /// values are not wholly shared out.
 ///
 /// `area_km2` is measured on the ellipsoid, as Calculate Geometry Attributes measures it. The
-/// percentages and shares compare areas measured on the sphere instead ([`crate::join::area_m2`]):
-/// the overlay cuts along straight lines on the map, and that measure adds up exactly when a
-/// polygon is cut along a parallel or a meridian, where the ellipsoid's geodesic edges don't, so a
-/// feature's shares in zones that cover it without overlapping each other add up to its whole value.
+/// percentages and shares compare areas measured as the map draws the polygons instead
+/// ([`map_area_m2`]): the overlay cuts along straight lines on the map, which that measure splits
+/// exactly and the ellipsoid's geodesic edges don't, so a feature's shares in zones that cover it
+/// without overlapping each other add up to its whole value.
 fn tabulate_intersection(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
-    use crate::join::area_m2;
     let zones = input(inp, p, "zones")?;
     let classes = input(inp, p, "classes")?;
     for ds in [zones, classes] {
@@ -3226,8 +3262,8 @@ fn tabulate_intersection(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, Strin
             let shapes: Vec<&Geometry> = group.rows.iter().filter_map(|&r| zones.features.get(r)?.geometry.as_ref()).collect();
             let ext = shapes.iter().fold(Extent::EMPTY, |e, g| e.union(&g.extent()));
             let mask = mask_of(MultiPolygon::new(shapes.iter().filter_map(|g| to_multipolygon(g)).flat_map(|m| m.0).collect()));
-            let sphere_area_m2 = from_multipolygon(&mask).map_or(0.0, |g| area_m2(&g));
-            TabulateZone { key: group.key, ext, mask, sphere_area_m2 }
+            let map_area = from_multipolygon(&mask).map_or(0.0, |g| map_area_m2(&g));
+            TabulateZone { key: group.key, ext, mask, map_area_m2: map_area }
         })
         .collect();
     let class_groups = crate::stats::group_rows(classes, &class_rows, &class_keys);
@@ -3252,18 +3288,21 @@ fn tabulate_intersection(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, Strin
             let values: Vec<Option<f64>> = sum_fields.iter().map(|&f| classes.value(r, f).as_f64()).collect();
             let mut whole_area: Option<f64> = None;
             let mut inside = false;
-            // The part of the feature's area its shares took, over all zones.
+            // The part of the feature's area its shares took, over all zones, and with sum fields
+            // and several zones near, its parts, for when overlapping zones make that sum misleading.
             let mut shared = 0.0;
+            let mut own_parts: Vec<MultiPolygon<f64>> = Vec::new();
+            let keep_parts = !sum_fields.is_empty() && near.len() > 1;
             for zi in near {
                 let Some(piece) = zone_list.get(zi).and_then(|z| part(&whole, &z.mask, true)) else { continue };
-                let piece_area = area_m2(&piece);
+                let piece_area = map_area_m2(&piece);
                 if piece_area <= 0.0 || !piece_area.is_finite() {
                     continue;
                 }
                 inside = true;
                 let cell = cells.entry((zi, ci)).or_insert_with(|| TabulateCell { parts: Vec::new(), sums: vec![0.0; sum_fields.len()] });
                 if !sum_fields.is_empty() {
-                    let total = *whole_area.get_or_insert_with(|| area_m2(&whole));
+                    let total = *whole_area.get_or_insert_with(|| map_area_m2(&whole));
                     // The part inside can come out a rounding error larger than the whole.
                     let share = if total > 0.0 { (piece_area / total).min(1.0) } else { 0.0 };
                     shared += share;
@@ -3273,6 +3312,9 @@ fn tabulate_intersection(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, Strin
                         }
                     }
                 }
+                if keep_parts {
+                    own_parts.extend(to_multipolygon(&piece));
+                }
                 cell.parts.push(piece);
             }
             if inside {
@@ -3280,8 +3322,16 @@ fn tabulate_intersection(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, Strin
                     *m += usize::from(v.is_none());
                 }
             }
-            // A share is a rounding error short of the whole when zones cover the feature.
-            if !sum_fields.is_empty() && shared < 1.0 - 1e-6 {
+            // Zones that overlap each other can give shares adding up to the whole while part of the
+            // feature lies outside them all: then what they cover is measured as the union of the parts.
+            let covered = match (whole_area, own_parts.len() > 1) {
+                (Some(total), true) if total > 0.0 && shared >= 1.0 - 1e-6 => {
+                    from_multipolygon(&union_all(own_parts.iter().flat_map(|m| m.0.iter()))).map_or(0.0, |g| map_area_m2(&g)) / total
+                }
+                _ => shared,
+            };
+            // What zones cover is a rounding error short of the whole when they cover the feature.
+            if !sum_fields.is_empty() && covered < 1.0 - 1e-6 {
                 outside += 1;
             }
         }
@@ -3323,8 +3373,8 @@ fn tabulate_intersection(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, Strin
         let mut row = zone.key.clone();
         row.extend(class.key.iter().cloned());
         row.push(Value::Float(ground_area_perimeter(covered).0 / 1e6));
-        let sphere_area_m2 = area_m2(covered);
-        row.push(if zone.sphere_area_m2 > 0.0 { Value::Float(sphere_area_m2 / zone.sphere_area_m2 * 100.0) } else { Value::Null });
+        let covered_area = map_area_m2(covered);
+        row.push(if zone.map_area_m2 > 0.0 { Value::Float(covered_area / zone.map_area_m2 * 100.0) } else { Value::Null });
         row.extend(cell.sums.into_iter().map(Value::Float));
         // One past the last id: `push` would search them all for each row.
         out.push_next(None, row);
@@ -3340,7 +3390,8 @@ fn tabulate_intersection(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, Strin
             n => messages.push(format!("{n} {layer} features have no geometry and were left out")),
         }
     }
-    match zone_list.len().saturating_sub(zones_hit.len()) {
+    // Zones without geometry are counted above, not again here.
+    match zone_list.iter().enumerate().filter(|(zi, z)| !z.mask.0.is_empty() && !zones_hit.contains(zi)).count() {
         0 => {}
         1 => messages.push("1 zone overlaps no class feature, so it has no rows".into()),
         n => messages.push(format!("{n} zones overlap no class feature, so they have no rows")),

@@ -167,12 +167,57 @@ fn says_what_it_leaves_out() {
             "Tabulate Intersection: 1 row",
             "1 zone feature has no geometry and was left out",
             "1 class feature has no geometry and was left out",
-            "3 zones overlap no class feature, so they have no rows",
+            "2 zones overlap no class feature, so they have no rows",
             "1 class feature lies partly or wholly outside the zones: its value outside isn't shared out",
         ]
     );
     let got = rows(&table(result));
     assert_eq!(got.iter().map(|(t, n)| (t.join(""), n[1], n[2])).collect::<Vec<_>>(), [("B".into(), 50.0, 50.0)]);
+}
+
+/// A class feature with a long slanted edge, cut by a meridian between two zones: the cut point lies
+/// partway along the slanted edge, and its value still shares out in full.
+#[test]
+fn shares_add_up_where_a_cut_crosses_a_slanted_edge() {
+    let square = |x0: f64, x1: f64| {
+        let ring = [(x0, 40.0), (x1, 40.0), (x1, 60.0), (x0, 60.0), (x0, 40.0)].map(|(x, y)| Coord::new(x, y)).to_vec();
+        Some(Geometry::Polygon(vec![vec![ring]]))
+    };
+    let mut z = Dataset::new("zones", GeometryType::Polygon, vec![Field::new("zone", FieldType::Text)]);
+    z.push_next(square(0.0, 10.0), vec![Value::Text("A".into())]);
+    z.push_next(square(10.0, 20.0), vec![Value::Text("B".into())]);
+    let mut c = Dataset::new("classes", GeometryType::Polygon, vec![Field::new("pop", FieldType::Integer)]);
+    let triangle = [(0.0, 40.0), (20.0, 40.0), (0.0, 60.0), (0.0, 40.0)].map(|(x, y)| Coord::new(x, y)).to_vec();
+    c.push_next(Some(Geometry::Polygon(vec![vec![triangle]])), vec![Value::Int(1_000_000)]);
+    let l = layers(z, c);
+    let params = json!({"zones": "zones", "zoneFields": "zone", "classes": "classes", "sumFields": "pop"});
+    let result = rustgis_analysis::run("tabulateIntersection", &l, &params).unwrap();
+    assert_eq!(result.messages, ["Tabulate Intersection: 2 rows"]);
+    let out = table(result);
+    let pops: Vec<f64> = out.features.iter().filter_map(|f| f.attrs.get(3).and_then(Value::as_f64)).collect();
+    assert_eq!(pops.len(), 2);
+    let total: f64 = pops.iter().sum();
+    assert!((total / 1_000_000.0 - 1.0).abs() < 1e-6, "{pops:?} add up to {total}");
+}
+
+/// Zones that overlap each other give a feature shares adding up to its whole value while half of
+/// it lies outside them both: the notice still says so.
+#[test]
+fn overlapping_zones_still_say_what_lies_outside() {
+    let mut z = Dataset::new("zones", GeometryType::Polygon, vec![Field::new("zone", FieldType::Text)]);
+    z.push_next(rect(0.0, 1.0), vec![Value::Text("A".into())]);
+    z.push_next(rect(0.5, 1.5), vec![Value::Text("B".into())]);
+    let mut c = Dataset::new("classes", GeometryType::Polygon, vec![Field::new("pop", FieldType::Integer)]);
+    c.push_next(rect(0.0, 2.0), vec![Value::Int(100)]);
+    let l = layers(z, c);
+    let params = json!({"zones": "zones", "zoneFields": "zone", "classes": "classes", "sumFields": "pop"});
+    let result = rustgis_analysis::run("tabulateIntersection", &l, &params).unwrap();
+    assert_eq!(
+        result.messages,
+        ["Tabulate Intersection: 2 rows", "1 class feature lies partly or wholly outside the zones: its value outside isn't shared out"]
+    );
+    let got = rows(&table(result));
+    assert_eq!(got.iter().map(|(_, n)| n[2]).collect::<Vec<_>>(), [50.0, 50.0]);
 }
 
 #[test]
