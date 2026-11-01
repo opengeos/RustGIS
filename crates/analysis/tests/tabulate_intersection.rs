@@ -154,6 +154,8 @@ fn clean_input_gives_no_notices() {
 fn says_what_it_leaves_out() {
     let mut z = zones();
     z.push_next(None, vec![Value::Text("D".into())]);
+    // A geometry with no polygon, as GeoJSON's `"coordinates": []` reads.
+    z.push_next(Some(Geometry::Polygon(vec![])), vec![Value::Text("E".into())]);
     let mut c = Dataset::new("classes", GeometryType::Polygon, vec![Field::new("pop", FieldType::Integer)]);
     // Half in B, half outside every zone; then one without geometry.
     c.push_next(rect(1.5, 2.5), vec![Value::Int(100)]);
@@ -165,7 +167,7 @@ fn says_what_it_leaves_out() {
         result.messages,
         [
             "Tabulate Intersection: 1 row",
-            "1 zone feature has no geometry and was left out",
+            "2 zone features have no geometry and were left out",
             "1 class feature has no geometry and was left out",
             "2 zones overlap no class feature, so they have no rows",
             "1 class feature lies partly or wholly outside the zones: its value outside isn't shared out",
@@ -198,6 +200,34 @@ fn shares_add_up_where_a_cut_crosses_a_slanted_edge() {
     assert_eq!(pops.len(), 2);
     let total: f64 = pops.iter().sum();
     assert!((total / 1_000_000.0 - 1.0).abs() < 1e-6, "{pops:?} add up to {total}");
+    // Each zone's share is its part of the triangle's area, worked out here by Simpson's rule on the
+    // sphere: the slanted edge is straight on the map, so its isometric latitude ψ changes linearly
+    // with longitude, and the triangle's area at each longitude runs from 40° up to that edge.
+    let psi = |lat: f64| lat.to_radians().tan().asinh();
+    let above_40 = |lon: f64| (psi(60.0) + (psi(40.0) - psi(60.0)) * lon / 20.0).tanh() - 40f64.to_radians().sin();
+    let simpson = |a: f64, b: f64| {
+        let n = 2000;
+        let h = (b - a) / n as f64;
+        (0..=n)
+            .map(|i| {
+                above_40(a + h * i as f64)
+                    * if i == 0 || i == n {
+                        1.0
+                    } else if i % 2 == 1 {
+                        4.0
+                    } else {
+                        2.0
+                    }
+            })
+            .sum::<f64>()
+            * h
+            / 3.0
+    };
+    let (in_a, in_b) = (simpson(0.0, 10.0), simpson(10.0, 20.0));
+    let expected = [in_a, in_b].map(|part| 1_000_000.0 * part / (in_a + in_b));
+    for (got, want) in pops.iter().zip(expected) {
+        assert!((got / want - 1.0).abs() < 1e-6, "{pops:?}, not {expected:?}");
+    }
 }
 
 /// Zones that overlap each other give a feature shares adding up to its whole value while half of

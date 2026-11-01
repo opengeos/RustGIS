@@ -2820,7 +2820,8 @@ fn ground_area_perimeter(g: &Geometry) -> (f64, f64) {
 
 /// The area (square metres, holes taken out) of a lon/lat polygon geometry on a sphere of the
 /// Earth's radius, as the map draws it: each edge a straight line in Web Mercator, which is a rhumb
-/// line, and latitudes clamped to the map's limit, as the overlay takes them. A polygon cut along
+/// line, with longitudes as they are (not folded across the antimeridian) and latitudes clamped to
+/// the map's limit, as the overlay takes them. A polygon cut along
 /// any straight line on the map splits this area exactly, up to rounding, so the parts' areas add
 /// up to the whole's. Zero for any other geometry.
 fn map_area_m2(g: &Geometry) -> f64 {
@@ -2832,15 +2833,15 @@ fn map_area_m2(g: &Geometry) -> f64 {
 /// The area of a ring of rhumb lines on the unit sphere, |∮ sin φ dλ|, for [`map_area_m2`]. Along a
 /// rhumb line the isometric latitude ψ (the Mercator y over the radius) changes linearly with the
 /// longitude λ and sin φ = tanh ψ, so an edge's integral is Δλ/Δψ × (ln cosh ψ₂ − ln cosh ψ₁); for a
-/// short Δψ, where that difference cancels, its Taylor series about the middle. An edge that jumps
-/// across the antimeridian is the short hop, as [`rustgis_geom::geodesic_ring_area_m2`] takes it.
+/// short Δψ, where that difference cancels, its Taylor series about the middle. Longitudes are not
+/// folded, as on the map, so the ring's Δλ add up to 0 and no ring winds around a pole: a ring
+/// stored around one with a jump across the antimeridian is the flat shape the map draws for it.
 fn rhumb_ring_area(ring: &[Coord]) -> f64 {
     let iso = |c: &Coord| c.y.clamp(-rustgis_geom::MAX_LAT, rustgis_geom::MAX_LAT).to_radians().tan().asinh();
     let ln_cosh = |x: f64| x.abs() + (-2.0 * x.abs()).exp().ln_1p() - std::f64::consts::LN_2;
     let mut total = 0.0;
     for (a, b) in ring.iter().zip(ring.iter().cycle().skip(1)) {
         let dlon = b.x - a.x;
-        let dlon = if dlon.abs() > 180.0 && dlon.abs() < 360.0 { dlon - 360.0 * dlon.signum() } else { dlon };
         let (p1, p2) = (iso(a), iso(b));
         let dpsi = p2 - p1;
         let mean_sin = if dpsi.abs() < 1e-4 {
@@ -3252,14 +3253,21 @@ fn tabulate_intersection(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, Strin
         rs.dedup();
         rs
     };
-    let shapeless = |ds: &Dataset, rs: &[usize]| rs.iter().filter(|&&r| ds.features.get(r).is_none_or(|f| f.geometry.is_none())).count();
+    // A feature without geometry, or whose geometry holds no polygon (`"coordinates": []`), has no
+    // area to tabulate.
+    let has_shape =
+        |g: &Geometry| matches!(g, Geometry::Polygon(polys) if polys.iter().any(|rings| rings.first().is_some_and(|r| !r.is_empty())));
+    let shapeless = |ds: &Dataset, rs: &[usize]| {
+        rs.iter().filter(|&&r| ds.features.get(r).and_then(|f| f.geometry.as_ref()).is_none_or(|g| !has_shape(g))).count()
+    };
     let zone_rows = sorted_rows("zones", zones);
     let class_rows = sorted_rows("classes", classes);
     let (zones_shapeless, classes_shapeless) = (shapeless(zones, &zone_rows), shapeless(classes, &class_rows));
     let zone_list: Vec<TabulateZone> = crate::stats::group_rows(zones, &zone_rows, &zone_keys)
         .into_iter()
         .map(|group| {
-            let shapes: Vec<&Geometry> = group.rows.iter().filter_map(|&r| zones.features.get(r)?.geometry.as_ref()).collect();
+            let shapes: Vec<&Geometry> =
+                group.rows.iter().filter_map(|&r| zones.features.get(r)?.geometry.as_ref()).filter(|g| has_shape(g)).collect();
             let ext = shapes.iter().fold(Extent::EMPTY, |e, g| e.union(&g.extent()));
             let mask = mask_of(MultiPolygon::new(shapes.iter().filter_map(|g| to_multipolygon(g)).flat_map(|m| m.0).collect()));
             let map_area = from_multipolygon(&mask).map_or(0.0, |g| map_area_m2(&g));
@@ -3275,7 +3283,7 @@ fn tabulate_intersection(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, Strin
     let mut outside = 0usize;
     for (ci, group) in class_groups.iter().enumerate() {
         for &r in &group.rows {
-            let Some(g) = classes.features.get(r).and_then(|f| f.geometry.as_ref()) else { continue };
+            let Some(g) = classes.features.get(r).and_then(|f| f.geometry.as_ref()).filter(|g| has_shape(g)) else { continue };
             let ext = g.extent();
             let near: Vec<usize> =
                 index.candidates(&ext).into_iter().filter(|&zi| zone_list.get(zi).is_some_and(|z| z.ext.intersects(&ext))).collect();
@@ -3391,7 +3399,7 @@ fn tabulate_intersection(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, Strin
         }
     }
     // Zones without geometry are counted above, not again here.
-    match zone_list.iter().enumerate().filter(|(zi, z)| !z.mask.0.is_empty() && !zones_hit.contains(zi)).count() {
+    match zone_list.iter().enumerate().filter(|(zi, z)| !z.ext.is_empty() && !zones_hit.contains(zi)).count() {
         0 => {}
         1 => messages.push("1 zone overlaps no class feature, so it has no rows".into()),
         n => messages.push(format!("{n} zones overlap no class feature, so they have no rows")),
@@ -6296,6 +6304,21 @@ mod tests {
                 assert!(!matches!(&r, Err(e) if e.ends_with("failed unexpectedly")), "{} panicked on {p}", t.id);
             }
         }
+    }
+
+    /// The map measure takes rings as the map draws them: a band around the world stored as a
+    /// rectangle from −180° to 180° has its whole area, and a ring stored around a pole with a jump
+    /// across the antimeridian, which the map draws flat, has none.
+    #[test]
+    fn map_area_measures_rings_as_the_map_draws_them() {
+        let ring = |pts: &[(f64, f64)]| Geometry::Polygon(vec![vec![pts.iter().map(|&(x, y)| Coord::new(x, y)).collect()]]);
+        let r2 = rustgis_geom::EARTH_RADIUS_M * rustgis_geom::EARTH_RADIUS_M;
+        let band = map_area_m2(&ring(&[(-180.0, 0.0), (180.0, 0.0), (180.0, 60.0), (-180.0, 60.0), (-180.0, 0.0)]));
+        let expected = r2 * std::f64::consts::TAU * 60f64.to_radians().sin();
+        assert!((band / expected - 1.0).abs() < 1e-12, "{band} m², not {expected}");
+        let around_pole = map_area_m2(&ring(&[(0.0, 60.0), (90.0, 60.0), (180.0, 60.0), (-90.0, 60.0), (0.0, 60.0)]));
+        // Zero, up to rounding on the scale of the Earth's radius squared.
+        assert!(around_pole.abs() < 1.0, "{around_pole} m²");
     }
 
     /// Parcels and zones for Intersect: `p1` is a 2° square that zone `z1` covers the right half of;
