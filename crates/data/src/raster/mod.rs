@@ -364,18 +364,6 @@ impl Raster {
                 band.stats = BandStats::compute_with(&band.data, valid, stored);
             }
         }
-        // Pixels the sidecar's no-data value now masks aren't counted as rounded (as the file's own
-        // no-data value isn't): a value f32 doesn't hold exactly was counted only because the file
-        // didn't say.
-        if let Some(nd) = self.nodata.filter(|nd| recompute && f64::from(*nd as f32) != *nd && !self.rounded.is_empty()) {
-            let nd = nd as f32;
-            for (n, band) in self.rounded.iter_mut().zip(&self.bands) {
-                *n = n.saturating_sub(band.data.iter().filter(|v| **v == nd).count() as u64);
-            }
-            if self.rounded.iter().all(|n| *n == 0) {
-                self.rounded.clear();
-            }
-        }
     }
 
     /// Longitude/latitude bounds, from points along the grid's edges.
@@ -547,12 +535,16 @@ pub fn read_path(path: &Path) -> Result<Raster> {
     }
     let name = path.file_stem().and_then(|s| s.to_str()).unwrap_or("raster").to_string();
     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
+    // The `.aux.xml` sidecar, read first: a no-data value it gives (for a file that has none) keeps
+    // those pixels out of the rounded count as they are read.
+    let pam = pam::read(path);
+    let sidecar_nodata = pam.as_ref().and_then(pam::Pam::nodata);
     let mut r = match ext.as_str() {
         "tif" | "tiff" => {
             #[cfg(not(target_arch = "wasm32"))]
-            let r = geotiff::read_file(path, &name)?;
+            let r = geotiff::read_file_with_nodata(path, &name, sidecar_nodata)?;
             #[cfg(target_arch = "wasm32")]
-            let r = geotiff::read(std::io::BufReader::new(std::fs::File::open(path)?), &name)?;
+            let r = geotiff::read_with_nodata(std::io::BufReader::new(std::fs::File::open(path)?), &name, sidecar_nodata)?;
             r
         }
         "png" | "jpg" | "jpeg" => read_scan(&name, std::io::BufReader::new(std::fs::File::open(path)?))?,
@@ -561,7 +553,7 @@ pub fn read_path(path: &Path) -> Result<Raster> {
                 return Err(DataError::Format("the ASCII grid is too large to open".into()));
             }
             let text = std::fs::read_to_string(path)?;
-            ascii::read(&text, &name, sidecar_crs(path))?
+            ascii::read_with_nodata(&text, &name, sidecar_crs(path), sidecar_nodata)?
         }
         #[cfg(not(target_arch = "wasm32"))]
         _ if gdal::is_gdal_raster_name(&path.to_string_lossy()) => {
@@ -570,8 +562,8 @@ pub fn read_path(path: &Path) -> Result<Raster> {
         }
         other => return Err(DataError::Unsupported(format!(".{other}"))),
     };
-    if let Some(p) = pam::read(path) {
-        r.apply_pam(&p);
+    if let Some(p) = &pam {
+        r.apply_pam(p);
     }
     r.source = Some(path.display().to_string());
     Ok(r)

@@ -146,21 +146,30 @@ impl DType {
         }
     }
 
-    /// Whether `f32` holds the value in `b` (exactly `size` bytes) exactly. 64-bit whole numbers
-    /// are compared as integers: past 2^53, [`DType::value`]'s `f64` has already rounded them.
+    /// A whole number's exact value from its bytes (exactly `size` of them): past 2^53,
+    /// [`DType::value`]'s `f64` has already rounded 64-bit ones. `None` for floats and booleans.
+    fn whole(self, b: &[u8]) -> Option<i128> {
+        if !matches!(self.kind, Kind::Int | Kind::UInt) {
+            return None;
+        }
+        let n = self.size.min(8);
+        let src = b.get(..n)?;
+        let mut a = [0u8; 8];
+        for (i, v) in src.iter().enumerate() {
+            if let Some(slot) = a.get_mut(if self.little { i } else { n - 1 - i }) {
+                *slot = *v;
+            }
+        }
+        let u = u64::from_le_bytes(a);
+        let shift = 64 - 8 * n as u32;
+        Some(if self.kind == Kind::Int { i128::from(((u << shift) as i64) >> shift) } else { i128::from(u) })
+    }
+
+    /// Whether `f32` holds the value in `b` (exactly `size` bytes) exactly; whole numbers are
+    /// compared as integers.
     fn held_as_f32(self, b: &[u8]) -> bool {
-        if matches!(self.kind, Kind::Int | Kind::UInt) && self.size == 8 {
-            let mut a = [0u8; 8];
-            if let Some(src) = b.get(..8) {
-                a.copy_from_slice(src);
-            }
-            if !self.little {
-                a.reverse();
-            }
-            return match self.kind {
-                Kind::Int => i64::from_le_bytes(a) as f32 as i128 == i128::from(i64::from_le_bytes(a)),
-                _ => u64::from_le_bytes(a) as f32 as i128 == i128::from(u64::from_le_bytes(a)),
-            };
+        if let Some(i) = self.whole(b) {
+            return i as f32 as i128 == i;
         }
         let v = self.value(b);
         v.is_nan() || f64::from(v as f32) == v
@@ -1181,14 +1190,12 @@ pub fn assemble(store: &Store, plan: &Plan, chunks: &HashMap<String, Vec<u8>>, n
                     } else {
                         let x = v * scale + offset;
                         let f = x as f32;
-                        // A packed whole number is held when unscaling its f32 gives it back; a
-                        // scaled float, when f32 holds the scaled value.
-                        let held = if !scaled {
-                            dt.held_as_f32(b)
-                        } else if matches!(dt.kind, Kind::Float) {
-                            f64::from(f) == x
-                        } else {
-                            ((f64::from(f) - offset) / scale).round() == v
+                        // A packed whole number is held when unscaling its f32 gives it back exactly;
+                        // a scaled float (or anything scaled by 0), when f32 holds the scaled value.
+                        let held = match dt.whole(b) {
+                            _ if !scaled => dt.held_as_f32(b),
+                            Some(i) if scale != 0.0 => ((f64::from(f) - offset) / scale).round() as i128 == i,
+                            _ => f64::from(f) == x,
                         };
                         rounded += u64::from(!held);
                         f
@@ -2044,6 +2051,10 @@ mod tests {
         assert!(read_scaled("<i4", (0.01, 273.15), i32s([-32_768, 1, 2_315, 32_767])).is_empty());
         assert_eq!(read_scaled("<i4", (1.0, 0.25), i32s([100_000_001, 1, 2, 3])), vec![1]);
         assert_eq!(read_scaled("<f8", (0.1, 0.0), f64s([1.0, 5.0, 10.0, f64::NAN])), vec![1]);
+        // Scaled 64-bit whole numbers are compared exactly too, and a scale of 0 writes the offset.
+        assert_eq!(read_scaled("<i8", (2.0, 0.0), i64s([(1 << 60) + 1, 1 << 60, 3, 0])), vec![1]);
+        assert_eq!(read_scaled("<u8", (2.0, 0.0), u64s([(1 << 60) + 1, 1 << 60, 3, 0])), vec![1]);
+        assert!(read_scaled("<i4", (0.0, 5.0), i32s([1, 2, 16_777_217, 4])).is_empty());
     }
 
     #[test]

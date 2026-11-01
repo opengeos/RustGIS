@@ -489,17 +489,19 @@ fn rounded_bits(buf: &DecodingResult, nodata: Option<f64>) -> Option<Vec<u64>> {
 }
 
 /// Whether `f32` holds sample `j` of `buf` exactly, as [`to_f32`] converts it: whole numbers past
-/// ±16,777,216 and 64-bit floats with more precision than `f32` are rounded. NaN, the file's no-data
-/// value `nodata` and a missing sample count as held.
+/// ±16,777,216 and 64-bit floats with more precision than `f32` are rounded. NaN, a missing sample
+/// and pixels the no-data value `nodata` masks (compared in `f32`, as [`Raster::is_valid`] masks
+/// them) count as held.
 fn held_exactly(buf: &DecodingResult, j: usize, nodata: Option<f64>) -> bool {
-    let held = |wide: f64, exact: bool| exact || wide.is_nan() || nodata == Some(wide);
+    let masked = nodata.map(|d| d as f32);
+    let held = |nan: bool, f: f32, exact: bool| exact || nan || masked == Some(f);
     match buf {
-        DecodingResult::U32(v) => v.get(j).is_none_or(|&x| held(f64::from(x), x as f32 as u64 == u64::from(x))),
-        DecodingResult::I32(v) => v.get(j).is_none_or(|&x| held(f64::from(x), x as f32 as i64 == i64::from(x))),
+        DecodingResult::U32(v) => v.get(j).is_none_or(|&x| held(false, x as f32, x as f32 as u64 == u64::from(x))),
+        DecodingResult::I32(v) => v.get(j).is_none_or(|&x| held(false, x as f32, x as f32 as i64 == i64::from(x))),
         // Compared in i128, which holds every u64 and i64 and the f32 just past them.
-        DecodingResult::U64(v) => v.get(j).is_none_or(|&x| held(x as f64, x as f32 as i128 == i128::from(x))),
-        DecodingResult::I64(v) => v.get(j).is_none_or(|&x| held(x as f64, x as f32 as i128 == i128::from(x))),
-        DecodingResult::F64(v) => v.get(j).is_none_or(|&x| held(x, f64::from(x as f32) == x)),
+        DecodingResult::U64(v) => v.get(j).is_none_or(|&x| held(false, x as f32, x as f32 as i128 == i128::from(x))),
+        DecodingResult::I64(v) => v.get(j).is_none_or(|&x| held(false, x as f32, x as f32 as i128 == i128::from(x))),
+        DecodingResult::F64(v) => v.get(j).is_none_or(|&x| held(x.is_nan(), x as f32, f64::from(x as f32) == x)),
         _ => true,
     }
 }
@@ -914,7 +916,12 @@ fn decimate_parallel(
 /// fits, when the file has overviews; otherwise an overview is made as the image is read, a strip
 /// or tile at a time (a regular, not cloud-optimised, file).
 pub fn read<R: Read + Seek>(r: R, name: &str) -> Result<Raster> {
-    read_limited(reader(r).map_err(err)?, name, MAX_SAMPLES, None)
+    read_with_nodata(r, name, None)
+}
+
+/// [`read`], with the no-data value a sidecar gives (see [`read_limited_with_nodata`]).
+pub(super) fn read_with_nodata<R: Read + Seek>(r: R, name: &str, sidecar_nodata: Option<f64>) -> Result<Raster> {
+    read_limited_with_nodata(reader(r).map_err(err)?, name, MAX_SAMPLES, None, sidecar_nodata)
 }
 
 /// What reading a GeoTIFF from the parts of it read so far came to.
@@ -946,14 +953,32 @@ fn read_sparse_limited(parts: &Sparse, name: &str, max: usize) -> Result<Partial
 /// [`read`] from a file, decoding its strips or tiles on several threads.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn read_file(path: &std::path::Path, name: &str) -> Result<Raster> {
+    read_file_with_nodata(path, name, None)
+}
+
+/// [`read_file`], with the no-data value a sidecar gives (see [`read_limited_with_nodata`]).
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) fn read_file_with_nodata(path: &std::path::Path, name: &str, sidecar_nodata: Option<f64>) -> Result<Raster> {
     let path = path.to_path_buf();
     let open = move || -> std::io::Result<Reader<'static>> { reader(std::io::BufReader::new(std::fs::File::open(&path)?)) };
-    read_limited(open().map_err(err)?, name, MAX_SAMPLES, Some(&open))
+    read_limited_with_nodata(open().map_err(err)?, name, MAX_SAMPLES, Some(&open), sidecar_nodata)
 }
 
 /// [`read`], holding at most `max` samples (the tests' small limit exercises the overviews), with
 /// `open` making more readers of the same file for decoding it on several threads.
 pub(super) fn read_limited(r: Reader<'_>, name: &str, max: usize, open: Option<Opener<'_>>) -> Result<Raster> {
+    read_limited_with_nodata(r, name, max, open, None)
+}
+
+/// [`read_limited`], with the no-data value a sidecar gives (`.aux.xml`, applied after reading by
+/// [`Raster::apply_pam`]): when the file has none of its own, its pixels aren't counted as rounded.
+pub(super) fn read_limited_with_nodata(
+    r: Reader<'_>,
+    name: &str,
+    max: usize,
+    open: Option<Opener<'_>>,
+    sidecar_nodata: Option<f64>,
+) -> Result<Raster> {
     let palette = !r.patches.is_empty();
     let limits = {
         let mut l = Limits::default();
@@ -965,6 +990,8 @@ pub(super) fn read_limited(r: Reader<'_>, name: &str, max: usize, open: Option<O
     let mut dec = Decoder::new(r).map_err(err)?.with_limits(limits.clone());
     let (full_w, full_h) = dec.dimensions().map_err(err)?;
     let geo = geo_tags(&mut dec)?;
+    // The no-data value whose pixels aren't counted as rounded: the file's, or else the sidecar's.
+    let uncounted = geo.nodata.or(sidecar_nodata);
     // The bands' descriptions GDAL keeps in the file (an `.aux.xml` sidecar's are applied after).
     let described = dec
         .find_tag(Tag::Unknown(42112))
@@ -1102,7 +1129,7 @@ pub(super) fn read_limited(r: Reader<'_>, name: &str, max: usize, open: Option<O
         let mut rounded = vec![0u64; nbands];
         if can_round(&buf) {
             for j in 0..n.saturating_mul(nbands) {
-                if !held_exactly(&buf, j, geo.nodata) {
+                if !held_exactly(&buf, j, uncounted) {
                     let band = if planar { j / n.max(1) } else { j % nbands };
                     if let Some(c) = rounded.get_mut(band) {
                         *c += 1;
@@ -1136,7 +1163,7 @@ pub(super) fn read_limited(r: Reader<'_>, name: &str, max: usize, open: Option<O
         let (iw, ih) = if decimate_by > 1 { (full_w, full_h) } else { (w, h) };
         let open = open.map(|o| (o, image, limits));
         // Already one vector per band.
-        decimate(&mut dec, iw, ih, nbands, planar, decimate_by, geo.nodata, open)?
+        decimate(&mut dec, iw, ih, nbands, planar, decimate_by, uncounted, open)?
     };
     let rounded = if rounded.iter().any(|n| *n > 0) { rounded } else { Vec::new() };
 
@@ -2543,16 +2570,22 @@ mod tests {
         assert_eq!(r.rounded, vec![1]);
         let exact = read(std::io::Cursor::new(typed::<Gray64Float>(2, 2, &[0.5, 2.0, -3.25, 1e6], None)), "e").unwrap();
         assert!(exact.rounded.is_empty());
-        // A no-data value only a sidecar gives isn't counted once the sidecar is applied.
-        let mut side = read(std::io::Cursor::new(typed::<Gray64Float>(2, 2, &[0.1, 0.1, 0.123_456_789_012_345, 2.0], None)), "s").unwrap();
-        assert_eq!(side.rounded, vec![3]);
-        side.apply_pam(
-            &crate::raster::pam::parse(
-                r#"<PAMDataset><PAMRasterBand band="1"><NoDataValue>0.1</NoDataValue></PAMRasterBand></PAMDataset>"#,
-            )
-            .unwrap(),
-        );
-        assert_eq!(side.rounded, vec![1]);
+        // A value that rounds onto the no-data value is masked, so it isn't counted either.
+        let onto = read(std::io::Cursor::new(typed::<Gray64Float>(2, 2, &[1.000_000_01, 1.0, 0.5, 2.0], Some("1"))), "o").unwrap();
+        assert!(onto.rounded.is_empty(), "{:?}", onto.rounded);
+        // A no-data value only a sidecar gives isn't counted: 0.1 is, as no-data; the f32 nearest
+        // it, read exactly, never was; 0.123456789012345 is still counted.
+        let dir = std::env::temp_dir().join(format!("rustgis-rounded-pam-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let tif = dir.join("s.tif");
+        let px = [0.1, f64::from(0.1f32), 0.123_456_789_012_345, 2.0];
+        std::fs::write(&tif, typed::<Gray64Float>(2, 2, &px, None)).unwrap();
+        assert_eq!(crate::raster::read_path(&tif).unwrap().rounded, vec![2]);
+        let xml = r#"<PAMDataset><PAMRasterBand band="1"><NoDataValue>0.1</NoDataValue></PAMRasterBand></PAMDataset>"#;
+        std::fs::write(dir.join("s.tif.aux.xml"), xml).unwrap();
+        let side = crate::raster::read_path(&tif).unwrap();
+        assert_eq!((side.nodata, side.rounded.as_slice()), (Some(0.1), &[1u64][..]));
+        std::fs::remove_dir_all(&dir).unwrap();
         // 64-bit whole numbers are compared as integers: 2^60 + 1 changes, 2^60 doesn't.
         let big = read(std::io::Cursor::new(typed::<GrayI64>(2, 1, &[(1 << 60) + 1, 1 << 60], None)), "i64").unwrap();
         assert_eq!(big.rounded, vec![1]);

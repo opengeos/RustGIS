@@ -6,6 +6,12 @@ use crate::{DataError, Result};
 /// Reads an ASCII grid. Without a known coordinate system, coordinates that fit in degrees are
 /// taken as WGS 84 longitude/latitude.
 pub fn read(text: &str, name: &str, crs: Option<Crs>) -> Result<Raster> {
+    read_with_nodata(text, name, crs, None)
+}
+
+/// [`read`], with the no-data value a sidecar gives (`.aux.xml`): when the grid has none of its
+/// own, its pixels aren't counted as rounded.
+pub(super) fn read_with_nodata(text: &str, name: &str, crs: Option<Crs>, sidecar_nodata: Option<f64>) -> Result<Raster> {
     let bad = |m: &str| DataError::Format(format!("ASCII grid: {m}"));
     let mut tokens = text.split_ascii_whitespace().peekable();
     let (mut ncols, mut nrows, mut x, mut y, mut cell, mut dx, mut dy, mut nodata) = (None, None, None, None, None, None, None, None);
@@ -65,7 +71,7 @@ pub fn read(text: &str, name: &str, crs: Option<Crs>) -> Result<Raster> {
     for (i, t) in tokens.take(n).enumerate() {
         let v =
             t.parse::<f32>().map_err(|_| bad(&format!("value {} ('{}') isn't a number", i + 1, t.chars().take(20).collect::<String>())))?;
-        rounded += u64::from(!held(t, v, nodata));
+        rounded += u64::from(!held(t, v, nodata.or(sidecar_nodata)));
         data.push(v);
     }
     if data.len() != n {
@@ -91,8 +97,9 @@ const TENS: [f64; 23] =
 
 /// Whether `v`, `text` read as `f32`, still gives back `text` at the precision it is written: within
 /// half a unit of its last digit, so `123.4567` is held (its `f32` is 123.45670319) and
-/// `1234567.891` (1234567.875) and `16777217` (16777216) aren't. Values past `f32`'s range aren't
-/// held, nor those too small for it or for `f64` (`1e-400` reads as 0). NaN, written infinities
+/// `1234567.891` (1234567.875) and `16777217` (16777216) aren't, nor a nonzero value read as zero
+/// or infinity (`1e39`, `1e400`, `1e-400`). A subnormal is held at the precision it keeps
+/// (`1e-40` is; `1.234567e-40` isn't). NaN, written infinities
 /// and pixels the no-data value masks are held. One pass over the text: up to 6 significant digits
 /// are always held in `f32`'s normal range, and up to 15 are compared as a whole number, so only
 /// longer or more extreme values are read again as `f64`.
