@@ -8,6 +8,7 @@ type Projection = Arc<dyn Fn(f32, f32) -> Option<(f32, f32)> + Send + Sync>;
 enum Change {
     Project(Projection),
     Shift(f32, f32),
+    PlaceShifts(Vec<(f32, f32)>),
 }
 
 #[derive(Debug)]
@@ -44,6 +45,38 @@ impl Curves {
 
     pub fn shift(&mut self, dx: f32, dy: f32) {
         self.changes.push(Change::Shift(dx, dy));
+    }
+
+    /// Compute each placement's relief shift at its own transformed anchor, without laying out text.
+    pub fn shift_each(&mut self, offset: &impl Fn(f32, f32) -> Option<(f32, f32)>) {
+        let shifts = self
+            .positions
+            .iter()
+            .enumerate()
+            .map(|(i, d)| {
+                let Some((mut x, mut y)) = self.spec.line.anchor(*d) else { return (0.0, 0.0) };
+                for change in &self.changes {
+                    match change {
+                        Change::Project(at) => {
+                            let Some(p) = at(x, y) else { return (0.0, 0.0) };
+                            (x, y) = p;
+                        }
+                        Change::Shift(dx, dy) => {
+                            x += dx;
+                            y += dy;
+                        }
+                        Change::PlaceShifts(shifts) => {
+                            if let Some((dx, dy)) = shifts.get(i) {
+                                x += dx;
+                                y += dy;
+                            }
+                        }
+                    }
+                }
+                offset(x, y).unwrap_or((0.0, 0.0))
+            })
+            .collect();
+        self.changes.push(Change::PlaceShifts(shifts));
     }
 
     /// The first in-sight preview, with its own line direction projected at its source anchor;
@@ -84,6 +117,11 @@ impl Curves {
                     }
                 }
                 Change::Shift(dx, dy) => (p.x, p.y) = (p.x + dx, p.y + dy),
+                Change::PlaceShifts(shifts) => {
+                    if let Some((dx, dy)) = shifts.get(i) {
+                        (p.x, p.y) = (p.x + dx, p.y + dy);
+                    }
+                }
             }
         }
         Some(p)

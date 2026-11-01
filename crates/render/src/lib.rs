@@ -2185,16 +2185,31 @@ fn affine(src: [(f64, f64); 3], dst: [(f64, f64); 3]) -> Option<Transform> {
 fn lift_labels(view: &View, ground: &terrain::Ground, candidates: &mut [Candidate]) {
     let cam = view.camera;
     let (w, h) = (view.width, view.height);
-    for c in candidates.iter_mut() {
-        let l = &mut c.label;
-        let Some(m) = cam.try_to_map(f64::from(l.x), f64::from(l.y), w, h) else { continue };
+    let offset = |x: f32, y: f32| {
+        let m = cam.try_to_map(f64::from(x), f64::from(y), w, h)?;
         let (u, v) = cam.ground_px(m);
-        let Some((sx, sy)) = cam.project_raised(u, v, ground.up_px(m, &cam), w, h) else { continue };
-        let (dx, dy) = (sx as f32 - l.x, sy as f32 - l.y);
-        if !(dx.is_finite() && dy.is_finite()) {
-            continue;
+        let (sx, sy) = cam.project_raised(u, v, ground.up_px(m, &cam), w, h)?;
+        let (dx, dy) = (sx as f32 - x, sy as f32 - y);
+        (dx.is_finite() && dy.is_finite()).then_some((dx, dy))
+    };
+    for c in candidates.iter_mut() {
+        if let Some((dx, dy)) = offset(c.label.x, c.label.y) {
+            c.label.x += dx;
+            c.label.y += dy;
+            if let Some(icon) = &mut c.label.icon {
+                icon.x += dx;
+                icon.y += dy;
+            }
         }
-        c.shift_places(dx, dy);
+        for place in &mut c.alternatives {
+            if let Some((dx, dy)) = offset(place.x, place.y) {
+                place.x += dx;
+                place.y += dy;
+            }
+        }
+        if let Some(curves) = &mut c.curves {
+            curves.shift_each(&offset);
+        }
     }
 }
 
@@ -3834,7 +3849,7 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
                             };
                             let anchors = |positions: &[f32]| {
                                 // Back-project only while locking is requested, never on ordinary frames or replay.
-                                if !display.locked || lock.is_some() {
+                                if !display.locked || lock.is_some() || matches!(labels_to, Labels::Tilted(..)) {
                                     return Vec::new();
                                 }
                                 positions

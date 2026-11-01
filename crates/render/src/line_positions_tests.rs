@@ -231,6 +231,36 @@ fn terrain_and_roofs_translate_ready_and_deferred_places_without_changing_glyph_
 }
 
 #[test]
+fn terrain_lifts_line_places_at_their_own_height() {
+    let camera = Camera { center: Coord::new(0.0, 0.0), res: 600.0, bearing: 0.0, pitch: 45.0 };
+    let view = View { width: 400.0, height: 300.0, pixels_per_point: 1.0, camera, sky: false };
+    let mut map = crate::tests::hill_map();
+    map.view.terrain =
+        Some(rustgis_map::view::Terrain { source: rustgis_map::view::TerrainSource::Layer("dem".into()), exaggeration: 2.0 });
+    let ground = terrain::Ground::of(&map, &camera).unwrap();
+    let mut c = curved(&[(30.0, 150.0), (370.0, 150.0)]);
+    let before: Vec<_> = (0..c.curves.as_ref().unwrap().positions.len())
+        .filter_map(|i| c.curves.as_ref().unwrap().place(i, &mut c.label.clone()).map(|p| (i, p)))
+        .collect();
+    c.alternatives = before.iter().map(|(_, p)| p.clone()).collect();
+    let mut candidates = vec![c];
+    lift_labels(&view, &ground, &mut candidates);
+    let c = &candidates[0];
+    let mut shifts = Vec::new();
+    for ((i, prior), ready) in before.iter().zip(&c.alternatives) {
+        let after = c.curves.as_ref().unwrap().place(*i, &mut c.label.clone()).unwrap();
+        let m = camera.try_to_map(f64::from(prior.x), f64::from(prior.y), view.width, view.height).unwrap();
+        let (u, v) = camera.ground_px(m);
+        let (x, y) = camera.project_raised(u, v, ground.up_px(m, &camera), view.width, view.height).unwrap();
+        assert!((after.x - x as f32).abs() < 0.01 && (after.y - y as f32).abs() < 0.01);
+        assert_eq!(&after, ready);
+        assert_eq!(after.glyphs, prior.glyphs);
+        shifts.push(after.y - prior.y);
+    }
+    assert!(shifts.iter().any(|v| (v - shifts[0]).abs() > 0.1), "places must sample different heights: {shifts:?}");
+}
+
+#[test]
 fn a_rendered_curved_label_can_leave_a_sharp_middle_bend() {
     let (mut map, id, view) = map_with_line(false);
     let layer = map.layer_mut(id).unwrap();
@@ -499,10 +529,13 @@ fn an_invalid_locked_straight_slot_never_invents_a_middle_preview() {
     map.label_display.show_unplaced = true;
     render(&mut map, &view).unwrap();
     assert!(!map.label_lock.as_ref().unwrap().is_empty());
+    let anchors = map.label_lock_line_anchors.clone();
+    assert!(!anchors.is_empty());
     // A stale or malformed lock cannot name a real place. There is no accurate preview
     // to draw, even when View Unplaced is on; the valid lock's geographic anchor stays put.
     map.label_lock.as_mut().unwrap()[0].1 = u8::MAX;
     let r = render(&mut map, &view).unwrap();
     assert!(r.labels.is_empty());
     assert!(r.unplaced.is_empty());
+    assert_eq!(map.label_lock_line_anchors, anchors);
 }
