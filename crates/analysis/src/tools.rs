@@ -2839,12 +2839,16 @@ fn map_area_m2(g: &Geometry) -> f64 {
     polys.iter().flat_map(|rings| rings.iter().enumerate()).map(|(i, r)| if i == 0 { 1.0 } else { -1.0 } * rhumb_ring_area(r) * r2).sum()
 }
 
-/// The area of a ring of rhumb lines on the unit sphere, |∮ sin φ dλ|, for [`map_area_m2`]. Along a
-/// rhumb line the isometric latitude ψ (the Mercator y over the radius) changes linearly with the
-/// longitude λ and sin φ = tanh ψ, so an edge's integral is Δλ/Δψ × (ln cosh ψ₂ − ln cosh ψ₁); for a
-/// short Δψ, where that difference cancels, its Taylor series about the middle. Longitudes are not
-/// folded, as on the map, so the ring's Δλ add up to 0 and no ring winds around a pole: a ring
-/// stored around one with a jump across the antimeridian is the flat shape the map draws for it.
+/// The area of a ring of rhumb lines on the unit sphere, |∮ sin φ dλ|, for [`map_area_m2`]. The
+/// integral is the area element cos φ dφ dλ taken round the ring by Green's theorem, the one
+/// Chamberlain & Duquette (JPL, 2007) evaluate with edges straight in longitude and latitude
+/// ([`rustgis_geom::geodesic_ring_area_m2`]). Along a rhumb line the isometric latitude
+/// ψ = ln tan(π/4 + φ/2), the Mercator y over the radius (Snyder, *Map Projections: A Working
+/// Manual*, USGS Professional Paper 1395, 1987, on the Mercator projection), changes linearly with
+/// the longitude λ, and sin φ = tanh ψ, so an edge's integral is Δλ/Δψ × (ln cosh ψ₂ − ln cosh ψ₁);
+/// for a short Δψ, where that difference cancels, its Taylor series about the middle. Longitudes
+/// are not folded, as on the map, so the ring's Δλ add up to 0 and no ring winds around a pole: a
+/// ring stored around one with a jump across the antimeridian is the flat shape the map draws.
 fn rhumb_ring_area(ring: &[Coord]) -> f64 {
     let iso = |c: &Coord| c.y.clamp(-rustgis_geom::MAX_LAT, rustgis_geom::MAX_LAT).to_radians().tan().asinh();
     let ln_cosh = |x: f64| x.abs() + (-2.0 * x.abs()).exp().ln_1p() - std::f64::consts::LN_2;
@@ -3396,27 +3400,32 @@ fn tabulate_intersection(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, Strin
             let mut cut_part = false;
             for &zi in &near {
                 let Some(zone) = zone_list.get(zi) else { continue };
-                // A zone whose cut leaves nothing although the feature's interior meets its own lost
-                // that part to rounding: the feature is measured roughly, as for a part as cut. Only
-                // a feature the grid doesn't resolve can lose more than that rounding allows.
-                let meets_zone = || {
-                    !resolved
-                        && to_multipolygon(&whole).is_some_and(|w| {
-                            let m = zone.mask.relate(&w);
-                            m.is_intersects() && !m.is_touches()
-                        })
-                };
-                let Some(mut piece) = part(&whole, &zone.mask, true) else {
-                    cut_part |= meets_zone();
-                    continue;
-                };
-                let mut piece_area = map_area_m2(&piece);
-                if piece_area <= 0.0 || !piece_area.is_finite() {
-                    cut_part |= meets_zone();
-                    continue;
-                }
-                inside = true;
+                // A cut that leaves nothing, or nothing with area, when the feature's interior meets
+                // the zone's lost that part to rounding. Only a feature the grid doesn't resolve can
+                // lose more than that rounding allows, so only for one is the zone asked, by the
+                // exact predicate: if it covers the feature, the part is the whole feature; if it
+                // only meets it, the feature is measured roughly, as for a part as cut.
                 let total = *whole_area.get_or_insert_with(|| map_area_m2(&whole));
+                let lost = |cut_part: &mut bool| -> Option<Geometry> {
+                    if resolved {
+                        return None;
+                    }
+                    let m = to_multipolygon(&whole).map(|w| zone.mask.relate(&w))?;
+                    if m.is_covers() && total > 0.0 {
+                        return Some(whole.as_ref().clone());
+                    }
+                    *cut_part |= m.is_intersects() && !m.is_touches();
+                    None
+                };
+                let cut = part(&whole, &zone.mask, true).map(|p| (map_area_m2(&p), p)).filter(|(a, _)| *a > 0.0 && a.is_finite());
+                let (mut piece, mut piece_area) = match cut {
+                    Some((a, p)) => (p, a),
+                    None => match lost(&mut cut_part) {
+                        Some(w) => (w, total),
+                        None => continue,
+                    },
+                };
+                inside = true;
                 // A part within the overlay's rounding of the whole may be the whole feature, the cut
                 // only moving its vertices onto the grid: it is when nothing lies outside the zone,
                 // or, for a feature the grid resolves, nothing wider than the grid. (For one it

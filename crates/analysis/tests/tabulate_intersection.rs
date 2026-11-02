@@ -430,6 +430,13 @@ fn slivers_too_narrow_to_measure_finely_are_reported_not_counted_twice() {
         let total: f64 = table(result).features.iter().filter_map(|f| f.attrs.get(3).and_then(Value::as_f64)).sum();
         assert!(total <= 1_000_000.0 * 1.01, "{width_m} m wide shared out {total}");
     }
+    // The narrowest wholly inside A: whatever the cut leaves of it, A covers it, so it counts whole.
+    let mut c = Dataset::new("classes", GeometryType::Polygon, vec![Field::new("pop", FieldType::Integer)]);
+    c.push_next(rect(-96.0000045, 35.0, -95.9999955, 35.0 + 0.0005 / 111_000.0), vec![Value::Int(1_000_000)]);
+    let result = rustgis_analysis::run("tabulateIntersection", &layers(z, c), &params).unwrap();
+    assert_eq!(result.messages, ["Tabulate Intersection: 1 row", "1 zone overlaps no class feature, so it has no rows"]);
+    let pop = table(result).features.first().and_then(|f| f.attrs.get(3)).and_then(Value::as_f64);
+    assert_eq!(pop, Some(1_000_000.0));
 }
 
 /// A thin feature in the notch of an L-shaped zone: within the zone's extent but touching none of
