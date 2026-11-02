@@ -229,10 +229,11 @@ result too. Multipoint discs count before their union even when they overlap; fo
 their charges also accumulate across features.
 Distance-based Select Layer By Location uses the same per-selector complexity limit and
 memory budget for retained selector geometries, row capacity and a conservative spatial-index
-storage allowance. If the selector grid cannot be built, distance selection stops with an
-error after 50,000,000 actual selector checks across all target features. Early matches stop
-their scan, so this is not a limit on the product of the input counts. Indexed selection is
-unchanged. Selection at zero distance keeps its existing behavior without these buffer limits. An excessive request fails with an error, never partial output; select fewer features
+storage allowance. With more than 16 distance selectors, selection stops with an error after
+50,000,000 actual candidate checks across all target features, on both the grid and fallback
+paths. Early matches stop their scan, so large input counts alone do not refuse a request.
+Smaller selector sets keep their bounded-width linear scan. Selection at zero distance keeps
+its existing behavior without these buffer limits. An excessive request fails with an error, never partial output; select fewer features
 or split complex features. These budgets cover retained results, not total process memory:
 the input layers, temporary geometry on active workers and polygon-overlay scratch are additional.
 **Calculate Geometry Attributes** measures polygon areas and perimeters, and line lengths,
