@@ -2777,6 +2777,12 @@ fn is_wfs_query(url: &str) -> bool {
         && !is("RESULTTYPE", "hits")
 }
 
+/// Whether a feature request uses legacy WFS, whose reported totals can expose a short read.
+fn is_legacy_wfs_query(url: &str) -> bool {
+    [("SERVICE", "WFS"), ("REQUEST", "GetFeature")].iter().all(|(k, v)| query_value(url, k).is_some_and(|s| s.eq_ignore_ascii_case(v)))
+        && query_value(url, "VERSION").is_some_and(|v| v.starts_with("1."))
+}
+
 /// Replaces WFS presentation parameters, retaining the query, filters and authentication.
 /// Hits use the default XML format; feature pages retain the requested GeoJSON format.
 fn wfs_page_url(url: &str, offset: Option<usize>, size: usize) -> String {
@@ -2911,8 +2917,8 @@ enum Phase {
         overlap: bool,
         duplicates: usize,
     },
-    /// An OGC API or WFS page, which links to the next.
-    Linked,
+    /// An OGC API or WFS page, retaining the largest reported legacy total across the chain.
+    Linked { total: Option<u64> },
     /// An ArcGIS page, `size` long from an offset, in `order`. `start` is the first such page's
     /// first feature (a server that ignores the offset sends it again), once it is read; until
     /// then `first` keeps the first page as it came, to fall back on.
@@ -2995,15 +3001,13 @@ pub fn read_pages(url: &str, first: Vec<u8>, max: usize) -> Step {
         && ["resultOffset", "resultRecordCount"].iter().all(|k| query_value(url, k).is_none())
         && (is_true(&head, "exceededTransferLimit") || is_true(&tail, "exceededTransferLimit"));
     let wfs = is_wfs_query(url);
-    let legacy_wfs =
-        [("SERVICE", "WFS"), ("REQUEST", "GetFeature")].iter().all(|(k, v)| query_value(url, k).is_some_and(|s| s.eq_ignore_ascii_case(v)))
-            && query_value(url, "VERSION").is_some_and(|v| v.starts_with("1."));
+    let legacy_wfs = is_legacy_wfs_query(url);
     if !(linked || limited || wfs || legacy_wfs) {
         return Step::Done(first, None);
     }
     let Ok(Some((doc, features))) = split_page(&first) else { return Step::Done(first, None) };
     let (next, phase) = if linked && let Some(next) = next_page(url, &doc) {
-        (next, Phase::Linked)
+        (next, Phase::Linked { total: doc.get("totalFeatures").and_then(serde_json::Value::as_u64) })
     } else if limited && exceeded(&doc) {
         (arcgis_layer_url(url), Phase::Describe { first })
     } else if wfs {
@@ -3016,6 +3020,7 @@ pub fn read_pages(url: &str, first: Vec<u8>, max: usize) -> Step {
                     "{read} of {total} WFS features read: the server reported more features than it returned; the read may be incomplete"
                 ))
             } else if legacy_wfs
+                && doc.get("totalFeatures").and_then(serde_json::Value::as_u64).is_none()
                 && let Some(limit) = query_value(url, "MAXFEATURES").and_then(|s| s.parse::<usize>().ok()).filter(|n| *n > 0)
                 && read >= limit
             {
@@ -3038,7 +3043,7 @@ pub fn read_pages(url: &str, first: Vec<u8>, max: usize) -> Step {
         phase,
     };
     match pages.phase {
-        Phase::Linked | Phase::WfsHits => pages.advance(),
+        Phase::Linked { .. } | Phase::WfsHits => pages.advance(),
         _ => Step::Fetch(Box::new(pages)),
     }
 }
@@ -3169,6 +3174,10 @@ impl Pages {
                 }
                 exceeded(&page).then(|| arcgis_page_url(&self.url, read + more.len(), *size, order.as_deref()))
             }
+            Phase::Linked { total } => {
+                *total = (*total).max(page.get("totalFeatures").and_then(serde_json::Value::as_u64));
+                next_page(&self.next, &page)
+            }
             _ => next_page(&self.next, &page),
         };
         self.features.extend(more);
@@ -3180,12 +3189,21 @@ impl Pages {
                 self.from = std::mem::replace(&mut self.next, n);
                 self.advance()
             }
-            None if matches!(self.phase, Phase::Linked) && is_wfs_query(&self.url) => {
+            None if matches!(self.phase, Phase::Linked { .. }) && is_wfs_query(&self.url) => {
                 // A next-link chain can end at a server cap too; verify the accumulated total.
                 self.from = self.url.clone();
                 self.next = wfs_page_url(&self.url, None, 0);
                 self.phase = Phase::WfsHits;
                 self.advance()
+            }
+            None if let Phase::Linked { total } = self.phase
+                && is_legacy_wfs_query(&self.url) =>
+            {
+                let read = self.features.len();
+                let note = total.filter(|n| *n > read as u64).map(|total| {
+                    format!("{read} of {total} WFS features read: the server reported more features than it returned; the read may be incomplete")
+                });
+                self.finish(note)
             }
             None => self.finish(None),
         }
@@ -4030,6 +4048,52 @@ mod tests {
             requests.push(calls);
         }
         assert_eq!(requests, [0, 0]);
+    }
+
+    /// A total reported only by an intermediate linked page remains evidence of a short read.
+    #[test]
+    fn wfs_legacy_intermediate_total_is_not_forgotten() {
+        let url = "https://wfs.example.org/wfs?SERVICE=WFS&VERSION=1.1.0&REQUEST=GetFeature&MAXFEATURES=50000";
+        let first = br#"{"features":[{"id":1}],"links":[{"rel":"next","href":"?page=2"}]}"#;
+        let (bytes, note) = join_pages(url, first.to_vec(), 100, |u| {
+            if query_value(u, "page") == Some("2") {
+                Ok(br#"{"features":[{"id":2}],"totalFeatures":4,"links":[{"rel":"next","href":"?page=3"}]}"#.to_vec())
+            } else {
+                Ok(br#"{"features":[{"id":3}]}"#.to_vec())
+            }
+        });
+        assert_eq!(serde_json::from_slice::<serde_json::Value>(&bytes).unwrap()["features"].as_array().unwrap().len(), 3);
+        assert!(note.unwrap().contains("3 of 4 WFS features read"));
+    }
+
+    /// Exhausted legacy links report a known shortfall, while a matching total stays clean.
+    #[test]
+    fn wfs_legacy_linked_total_is_not_silent() {
+        let url = "https://wfs.example.org/wfs?SERVICE=WFS&VERSION=1.1.0&REQUEST=GetFeature&MAXFEATURES=50000";
+        for total in [3, 2] {
+            let first = serde_json::to_vec(&serde_json::json!({
+                "features": [{"id": 1}], "totalFeatures": total,
+                "links": [{"rel": "next", "href": "?page=2"}]
+            }))
+            .unwrap();
+            let (bytes, note) = join_pages(url, first, 100, |_| Ok(br#"{"features":[{"id":2}]}"#.to_vec()));
+            assert_eq!(serde_json::from_slice::<serde_json::Value>(&bytes).unwrap()["features"].as_array().unwrap().len(), 2);
+            if total == 3 {
+                assert!(note.unwrap().contains("2 of 3 WFS features read"));
+            } else {
+                assert_eq!(note, None);
+            }
+        }
+    }
+
+    /// A matching legacy WFS total confirms completeness even at the requested cap.
+    #[test]
+    fn wfs_legacy_matching_total_at_cap_is_complete() {
+        let url = "https://wfs.example.org/wfs?SERVICE=WFS&VERSION=1.1.0&REQUEST=GetFeature&MAXFEATURES=2";
+        let first = br#"{"features":[{"id":1},{"id":2}],"totalFeatures":2}"#;
+        let (bytes, note) = join_pages(url, first.to_vec(), 100, |_| panic!("legacy WFS has no offset paging"));
+        assert_eq!(bytes, first);
+        assert_eq!(note, None);
     }
 
     /// A reported legacy WFS total exposes truncation below the requested cap.
