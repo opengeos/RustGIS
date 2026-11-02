@@ -587,11 +587,11 @@ overlap each other can add up to more than 100. Like the other overlay tools, it
 which ends at 85.05° north and south: parts of polygons beyond that are taken as lying along it, so
 overlaps there have no area ([#1033](https://github.com/opengeos/RustGIS/issues/1033)).
 
-The tool says how many zone and class features have no geometry (they are left out), how many zones
-overlap no class feature and so have no rows, how many class features have no value in a sum field
-(they add nothing to its shares) and, with sum fields, how many class features lie partly or wholly
-outside the zones. Only selected features are used when a layer has a selection, and the table is named
-`<zones>_Tabulate` unless `output` names it.
+The tool says how many zone and class features have no polygon (no geometry, an empty one, or a line
+or point; they are left out), how many zones overlap no class feature and so have no rows, how many
+class features have no value in a sum field (they add nothing to its shares) and, with sum fields,
+how many class features lie partly or wholly outside the zones. Only selected features are used when
+a layer has a selection, and the table is named `<zones>_Tabulate` unless `output` names it.
 
 ```text
 gp.run={"tool":"tabulateIntersection","params":{"zones":"districts","zoneFields":"district","classes":"blocks","sumFields":["population"]}}

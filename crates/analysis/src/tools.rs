@@ -3213,10 +3213,11 @@ struct TabulateCell {
 /// each other counted once), `percentage` (that area as a percentage of the zone's) and each sum
 /// field's share: the sum, over the class's features, of the field's value times the part of the
 /// feature's area inside the zone. Rows are sorted by the zone fields' values, then the class
-/// fields', as Summary Statistics sorts its groups; pairs that only touch get none. Only selected features are used when a layer has a selection. The
-/// messages count features without geometry (left out), zones with no rows, class features with no
-/// value in a sum field and, with sum fields, class features not wholly inside the zones, whose
-/// values are not wholly shared out.
+/// fields', as Summary Statistics sorts its groups; pairs that only touch get none. Only selected
+/// features are used when a layer has a selection. The messages count features without a polygon
+/// (left out: no geometry, an empty one, a line or a point), zones with no rows, class features
+/// with no value in a sum field and, with sum fields, class features not wholly inside the zones,
+/// whose values are not wholly shared out.
 ///
 /// `area_km2` is measured on the ellipsoid, as Calculate Geometry Attributes measures it. The
 /// percentages and shares compare areas measured as the map draws the polygons instead
@@ -3253,8 +3254,8 @@ fn tabulate_intersection(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, Strin
         rs.dedup();
         rs
     };
-    // A feature without geometry, or whose geometry holds no polygon (`"coordinates": []`), has no
-    // area to tabulate.
+    // A feature without geometry, with an empty one (`"coordinates": []`) or with a line or point
+    // in a polygon layer has no polygon, so no area to tabulate.
     let has_shape =
         |g: &Geometry| matches!(g, Geometry::Polygon(polys) if polys.iter().any(|rings| rings.first().is_some_and(|r| !r.is_empty())));
     let shapeless = |ds: &Dataset, rs: &[usize]| {
@@ -3394,8 +3395,8 @@ fn tabulate_intersection(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, Strin
     for (n, layer) in [(zones_shapeless, "zone"), (classes_shapeless, "class")] {
         match n {
             0 => {}
-            1 => messages.push(format!("1 {layer} feature has no geometry and was left out")),
-            n => messages.push(format!("{n} {layer} features have no geometry and were left out")),
+            1 => messages.push(format!("1 {layer} feature has no polygon and was left out")),
+            n => messages.push(format!("{n} {layer} features have no polygon and were left out")),
         }
     }
     // Zones without geometry are counted above, not again here.

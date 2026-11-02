@@ -160,6 +160,8 @@ fn says_what_it_leaves_out() {
     // Half in B, half outside every zone; then one without geometry.
     c.push_next(rect(1.5, 2.5), vec![Value::Int(100)]);
     c.push_next(None, vec![Value::Int(7)]);
+    // A line in a polygon layer: it has geometry, but no polygon.
+    c.push_next(Some(Geometry::Line(vec![vec![Coord::new(1.2, 0.2), Coord::new(1.8, 0.8)]])), vec![Value::Int(9)]);
     let l = layers(z, c);
     let params = json!({"zones": "zones", "zoneFields": "zone", "classes": "classes", "sumFields": "pop"});
     let result = rustgis_analysis::run("tabulateIntersection", &l, &params).unwrap();
@@ -167,8 +169,8 @@ fn says_what_it_leaves_out() {
         result.messages,
         [
             "Tabulate Intersection: 1 row",
-            "2 zone features have no geometry and were left out",
-            "1 class feature has no geometry and was left out",
+            "2 zone features have no polygon and were left out",
+            "2 class features have no polygon and were left out",
             "2 zones overlap no class feature, so they have no rows",
             "1 class feature lies partly or wholly outside the zones: its value outside isn't shared out",
         ]
