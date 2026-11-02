@@ -2900,7 +2900,6 @@ enum Phase {
         offset: usize,
         size: usize,
         ids: std::collections::HashSet<String>,
-        start: Option<serde_json::Value>,
         unidentified: std::collections::HashSet<u64>,
         overlap: bool,
         duplicates: usize,
@@ -3064,7 +3063,6 @@ impl Pages {
                 offset,
                 size: offset.min(self.max),
                 ids,
-                start: first_value(&self.features),
                 unidentified: self.features.iter().filter_map(|f| unidentified_hash(f)).collect(),
                 overlap: false,
                 duplicates,
@@ -3094,26 +3092,16 @@ impl Pages {
             Err(e) => return self.stop(format!("the page after feature {read} couldn't be read ({e}); the rest aren't read")),
         };
         let following = match &mut self.phase {
-            Phase::WfsOffsets { matched, offset, size, ids, start, unidentified, overlap, duplicates } => {
+            Phase::WfsOffsets { matched, offset, size, ids, unidentified, overlap, duplicates } => {
                 let returned = more.len();
                 if returned == 0 {
                     return self.stop("the WFS sent an empty page before its reported total; the rest aren't read".into());
                 }
-                let page_start = first_value(&more);
-                let repeated = page_start == *start;
-                *start = page_start;
                 let hashes: Vec<_> = more.iter().filter_map(|f| unidentified_hash(f)).collect();
                 *overlap |= hashes.iter().any(|h| unidentified.contains(h));
-                let has_unidentified = !hashes.is_empty();
                 unidentified.extend(hashes);
                 more.retain(|f| feature_id(f).is_none_or(|id| ids.insert(id)));
                 *duplicates = duplicates.saturating_add(returned.saturating_sub(more.len()));
-                if repeated && has_unidentified {
-                    // Keep returned rows: identical ID-less rows can be distinct features.
-                    self.features.extend(more);
-                    self.features.truncate(self.max);
-                    return self.stop("the WFS repeated a page; possible overlap in rows without ids; the rest aren't read".into());
-                }
                 if more.is_empty() {
                     return self.stop("the WFS repeated an earlier page instead of advancing; the rest aren't read".into());
                 }
@@ -3991,6 +3979,23 @@ mod tests {
         let doc: serde_json::Value = serde_json::from_slice(&joined).unwrap();
         assert_eq!(doc["features"].as_array().unwrap().len(), 3);
         assert_eq!(note, None);
+    }
+
+    /// Identical ID-less page starts do not imply that the entire page was repeated.
+    #[test]
+    fn wfs_idless_pages_with_matching_starts_continue() {
+        let url = "https://wfs.example.org/wfs?SERVICE=WFS&VERSION=2.0.0&REQUEST=GetFeature";
+        let first = br#"{"features":[{"properties":{"n":0}},{"properties":{"n":1}}]}"#;
+        let (bytes, note) = join_pages(url, first.to_vec(), 100, |u| match query_value(u, "STARTINDEX") {
+            Some("2") => Ok(br#"{"features":[{"properties":{"n":0}},{"properties":{"n":2}}]}"#.to_vec()),
+            Some("4") => Ok(br#"{"features":[{"properties":{"n":0}},{"properties":{"n":3}}]}"#.to_vec()),
+            _ => Ok(br#"<FeatureCollection numberMatched="6"/>"#.to_vec()),
+        });
+        let doc: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(doc["features"].as_array().unwrap().len(), 6);
+        let note = note.unwrap();
+        assert!(note.contains("possible overlap"));
+        assert!(!note.contains("rest aren't read"));
     }
 
     /// Removing a repeated service id remains visible even when the unique total matches.
