@@ -96,8 +96,9 @@ pub(super) fn read_with_nodata(text: &str, name: &str, crs: Option<Crs>, sidecar
 const TENS: [f64; 23] =
     [1e0, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9, 1e10, 1e11, 1e12, 1e13, 1e14, 1e15, 1e16, 1e17, 1e18, 1e19, 1e20, 1e21, 1e22];
 
-/// Whether `v`, `text` read as `f32`, still gives back `text` at the precision it is written: within
-/// half a unit of its last digit, so `123.4567` is held (its `f32` is 123.45670319) and
+/// Whether `v`, `text` read as `f32`, still gives back `text` at the precision it is written: at most
+/// half a unit of its last digit away (a tie writes back the same text: `1234567.8` is held as
+/// 1234567.75), so `123.4567` is held (its `f32` is 123.45670319) and
 /// `1234567.891` (1234567.875) and `16777217` (16777216) aren't, nor a nonzero value read as zero
 /// or infinity (`1e39`, `1e400`, `1e-400`). A subnormal is held at the precision it keeps
 /// (`1e-40` is; `1.234567e-40` isn't). NaN, written infinities
@@ -147,10 +148,10 @@ fn held(text: &str, v: f32, nodata: Uncounted) -> bool {
     let shift = decimals.saturating_sub(exponent);
     if let (true, Some(&ten)) = (written <= 15, TENS.get(shift.unsigned_abs() as usize)) {
         let at = if shift >= 0 { f64::from(v) * ten } else { f64::from(v) / ten };
-        return (at.abs() - whole as f64).abs() < 0.5;
+        return (at.abs() - whole as f64).abs() <= 0.5;
     }
     let Ok(wide) = text.parse::<f64>() else { return true };
-    (f64::from(v) - wide).abs() * 2.0 < 10f64.powi(shift.saturating_neg())
+    (f64::from(v) - wide).abs() * 2.0 <= 10f64.powi(shift.saturating_neg())
 }
 
 #[cfg(test)]
@@ -226,6 +227,8 @@ mod tests {
         // subnormal written to one digit is held.
         let lossy = read(&grid("16777217 1234567.891 1e39 1.234567e-40\n0.123456789 1e-40 1e400 -1e-400"), "g", None).unwrap();
         assert_eq!(lossy.rounded, vec![7]);
+        // A tie is held: 1234567.8 is f32 1234567.75, which writes back as 1234567.8.
+        assert!(read(&grid("1234567.8 1 2 3\n4 5 6 7"), "g", None).unwrap().rounded.is_empty());
         // Written infinities and zeros, and extra zeros, are held.
         let edges = read(&grid("inf -inf 0.000 1.500000000000000000\n0e5 -0.0 1.50000000 2"), "g", None).unwrap();
         assert!(edges.rounded.is_empty(), "{:?}", edges.rounded);

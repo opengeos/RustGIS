@@ -581,12 +581,12 @@ pub fn write_to<W: Write + Seek>(r: &Raster, band: usize, flavour: Flavour, out:
     Ok(CogInfo { big, levels: levels.iter().map(|l| (l.w, l.h)).collect(), bytes: pos })
 }
 
-/// A raster as the bytes of a cloud-optimised GeoTIFF (for the browser, which downloads them).
 /// The bands [`write`] and [`write_file`] write of `r` given `band`, from the same plan.
 pub fn written_bands(r: &Raster, band: usize) -> Result<Vec<usize>> {
     Ok(plan(r, band)?.bands)
 }
 
+/// A raster as the bytes of a cloud-optimised GeoTIFF (for the browser, which downloads them).
 pub fn write(r: &Raster, band: usize) -> Result<Vec<u8>> {
     let mut out = std::io::Cursor::new(Vec::new());
     write_to(r, band, Flavour::Auto, &mut out)?;

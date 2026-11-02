@@ -1132,9 +1132,8 @@ pub fn assemble(store: &Store, plan: &Plan, chunks: &HashMap<String, Vec<u8>>, n
     // Zarr 2 array's fill_value (xarray's _FillValue encoding). A Zarr 3 array's fill_value (0 by
     // default in zarr-python) only stands for chunks that were never written, and those cells stay
     // empty here; real zeros are kept. These become NaN before conversion, and the raster has no
-    // no-data value of its own, so exactly these cells are masked: they, and nothing that merely
-    // rounds near them, are left out of the rounded count (`Uncounted` is the same rule for the
-    // readers whose rasters mask in f32 after reading).
+    // no-data value of its own: exactly these cells are no-data, and they are left out of the
+    // rounded count (the rule `Uncounted` gives the other readers).
     let v2_fill = if a.zarr_format == 2 { a.fill } else { None };
     let mut missing: Vec<f64> = [v2_fill, attr_f64(a, "_FillValue"), attr_f64(a, "missing_value")].into_iter().flatten().collect();
     missing.dedup();

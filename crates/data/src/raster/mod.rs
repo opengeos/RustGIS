@@ -212,10 +212,11 @@ impl BandStats {
 ///
 /// - The value is the file's when it is finite, else the sidecar's (`.aux.xml`) when that is
 ///   finite, else none: the value [`Raster::new`] and [`Raster::apply_pam`] go on to mask with.
-/// - A sample whose `f32` equals the value's `f32`, when that is finite, isn't counted:
-///   [`Raster::is_valid`] masks it, whatever it was in the file.
-/// - A sample exactly equal to the value isn't counted either, even when its `f32` overflows (a
-///   Float64 no-data of −1.8e308). Any other sample that overflows to infinity is counted.
+/// - A sample whose value in the file is exactly that value isn't counted, even when its `f32`
+///   overflows (a Float64 no-data of −1.8e308).
+/// - Any other sample is counted when it changed: one that rounds onto the no-data value too
+///   (an Int32 ID 16777217 with no-data 16777216), as it went from a value to no-data, and one
+///   that overflows to infinity.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(crate) struct Uncounted {
     exact: Option<f64>,
@@ -229,14 +230,15 @@ impl Uncounted {
         Uncounted { exact, masked: exact.map(|d| d as f32).filter(|d| d.is_finite()) }
     }
 
-    /// Whether a sample read as `f` is no-data, and so not counted. `wide` gives the sample's
-    /// value in the file; it is asked for only when `f` is infinite and the value is past `f32`'s
-    /// range.
+    /// Whether a sample read as `f` is no-data in the file, and so not counted. `wide` gives the
+    /// sample's value in the file; it is asked for only when `f` already matches the value's
+    /// `f32` (or both are infinite, for a value past `f32`'s range).
     pub(crate) fn covers(self, f: f32, wide: impl FnOnce() -> Option<f64>) -> bool {
-        match self.masked {
+        let candidate = match self.masked {
             Some(m) => f == m,
-            None => self.exact.is_some() && f.is_infinite() && wide() == self.exact,
-        }
+            None => self.exact.is_some() && f.is_infinite(),
+        };
+        candidate && wide() == self.exact
     }
 }
 
@@ -253,7 +255,7 @@ pub(crate) struct NodataCase {
     pub samples: [f64; 4],
     /// How many a GeoTIFF or ASCII grid counts as rounded.
     pub counted: u64,
-    /// How many a Zarr store counts: it masks only exact matches, and has no sidecar.
+    /// How many a Zarr store counts: it has no sidecar.
     pub zarr: u64,
 }
 
@@ -261,16 +263,18 @@ pub(crate) struct NodataCase {
 pub(crate) const NODATA_CASES: &[NodataCase] = &[
     // No no-data value: too many digits and an overflow to infinity are both counted.
     NodataCase { file: None, sidecar: None, samples: [0.123_456_789_012_345, 1.0, -1e39, 2.0], counted: 2, zarr: 2 },
-    // A NaN or infinite file value is ignored and the sidecar's is used: 0.1, and 0.1000000001,
-    // which rounds onto it, are masked; Zarr, with no sidecar, counts all three.
-    NodataCase { file: Some("nan"), sidecar: Some(0.1), samples: [0.1, 0.100_000_000_1, 0.123_456_789_012_345, 2.0], counted: 1, zarr: 3 },
-    NodataCase { file: Some("inf"), sidecar: Some(0.1), samples: [0.1, 0.100_000_000_1, 0.123_456_789_012_345, 2.0], counted: 1, zarr: 3 },
+    // A NaN or infinite file value is ignored and the sidecar's is used: 0.1 isn't counted, but
+    // 0.1000000001, a value that rounds onto it and so becomes no-data, is. Zarr, with no
+    // sidecar, counts all three.
+    NodataCase { file: Some("nan"), sidecar: Some(0.1), samples: [0.1, 0.100_000_000_1, 0.123_456_789_012_345, 2.0], counted: 2, zarr: 3 },
+    NodataCase { file: Some("inf"), sidecar: Some(0.1), samples: [0.1, 0.100_000_000_1, 0.123_456_789_012_345, 2.0], counted: 2, zarr: 3 },
     // Past f32's range: the no-data value itself isn't counted, another overflow is.
     NodataCase { file: Some("-1.7976931348623157e308"), sidecar: None, samples: [f64::MIN, -1e39, 0.5, 2.0], counted: 1, zarr: 1 },
     NodataCase { file: Some("-1e39"), sidecar: None, samples: [-1e39, -2e39, 0.5, 2.0], counted: 1, zarr: 1 },
-    // A finite file value wins over the sidecar's; 1.00000001 rounds onto it and is masked, which
-    // Zarr (masking exact matches only) doesn't do.
-    NodataCase { file: Some("1"), sidecar: Some(0.1), samples: [1.000_000_01, 0.123_456_789_012_345, 0.5, 2.0], counted: 1, zarr: 2 },
+    // A finite file value wins over the sidecar's; 1.00000001 and the ID 16777217 round onto it
+    // and become no-data, so they are counted, while the no-data value itself isn't.
+    NodataCase { file: Some("1"), sidecar: Some(0.1), samples: [1.000_000_01, 0.123_456_789_012_345, 0.5, 2.0], counted: 2, zarr: 2 },
+    NodataCase { file: Some("16777216"), sidecar: None, samples: [16_777_217.0, 16_777_216.0, 0.5, 2.0], counted: 1, zarr: 1 },
 ];
 
 /// One band of pixels, row by row.

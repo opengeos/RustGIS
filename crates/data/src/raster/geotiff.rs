@@ -1288,10 +1288,6 @@ pub(super) fn fits_bytes(r: &Raster, b: usize) -> bool {
     nodata_ok && (whole_bytes || s.count == 0)
 }
 
-/// Writes a raster as a Deflate-compressed GeoTIFF: a colour raster's colour bands (RGB(A) bytes
-/// when they are 8-bit, else 32-bit floats, alpha kept), so it reads back in colour; otherwise
-/// `band` (0-based) as 32-bit floats. `band` is for rasters that aren't colour ones: a colour
-/// raster always writes its colour bands, as its 8-bit form did before.
 /// The bands [`write`] writes of `r` given `band`: an RGB raster's colour bands (with a fourth as
 /// alpha when they are bytes and it is too, or when the raster says it is alpha), otherwise `band`
 /// alone.
@@ -1307,6 +1303,10 @@ pub fn written_bands(r: &Raster, band: usize) -> Vec<usize> {
     (0..if alpha { 4 } else { 3 }).collect()
 }
 
+/// Writes a raster as a Deflate-compressed GeoTIFF: a colour raster's colour bands (RGB(A) bytes
+/// when they are 8-bit, else 32-bit floats, alpha kept), so it reads back in colour; otherwise
+/// `band` (0-based) as 32-bit floats. `band` is for rasters that aren't colour ones: a colour
+/// raster always writes its colour bands, as its 8-bit form did before.
 pub fn write(r: &Raster, band: usize) -> Result<Vec<u8>> {
     use tiff::encoder::{Compression, DeflateLevel, TiffEncoder, colortype};
     // A scan's place is only where it was laid on the view: not coordinates to write into a file.
@@ -2583,9 +2583,10 @@ mod tests {
         assert_eq!(r.rounded, vec![1]);
         let exact = read(std::io::Cursor::new(typed::<Gray64Float>(2, 2, &[0.5, 2.0, -3.25, 1e6], None)), "e").unwrap();
         assert!(exact.rounded.is_empty());
-        // A value that rounds onto the no-data value is masked, so it isn't counted either.
+        // A value that rounds onto the no-data value becomes no-data, so it is counted; the no-data
+        // value itself isn't.
         let onto = read(std::io::Cursor::new(typed::<Gray64Float>(2, 2, &[1.000_000_01, 1.0, 0.5, 2.0], Some("1"))), "o").unwrap();
-        assert!(onto.rounded.is_empty(), "{:?}", onto.rounded);
+        assert_eq!(onto.rounded, vec![1]);
         // A no-data value only a sidecar gives isn't counted: 0.1 is, as no-data; the f32 nearest
         // it, read exactly, never was; 0.123456789012345 is still counted.
         let dir = std::env::temp_dir().join(format!("rustgis-rounded-pam-{}", std::process::id()));
