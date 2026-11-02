@@ -122,6 +122,30 @@ pub struct Style {
     /// and out beyond 1:`max_scale`. `Some(None)` clears a limit.
     pub min_scale: Option<Option<f64>>,
     pub max_scale: Option<Option<f64>>,
+    /// A rule-based renderer's rules classed by expression, in the order a feature meets them.
+    /// Not a setting: what the importer checks the layer's features against (the features
+    /// several rules pick).
+    pub rules: Vec<RuleFilter>,
+}
+
+/// One rule of a rule-based renderer classed by expression: its class (`key`), the condition it
+/// is drawn by (`when`: its filters, an else rule's siblings, its scale range), its filter alone
+/// (its filters and its parents') and the scales it draws between (RustGIS's: out to 1:`out`, in
+/// to 1:`inside`).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct RuleFilter {
+    pub key: String,
+    pub when: String,
+    pub condition: String,
+    pub out: Option<f64>,
+    pub inside: Option<f64>,
+}
+
+/// The expression that classes a feature by the first of `rules` it meets: `CASE WHEN <when>
+/// THEN '<key>' … END`.
+pub fn rules_expression(rules: &[RuleFilter]) -> String {
+    let whens: Vec<String> = rules.iter().map(|r| format!("WHEN {} THEN '{}'", r.when, r.key.replace('\'', "''"))).collect();
+    format!("CASE {} END", whens.join(" "))
 }
 
 impl Style {
@@ -275,7 +299,7 @@ pub fn read_project(text: &str, dir: &str, report: &mut Report) -> Result<Projec
             Source::File { subset: Some(q), .. } => match expr::to_sql(q) {
                 Some(sql) => Some(sql),
                 None => {
-                    report.skipped(&name, format!("its filter (subset string) `{q}`, which doesn't read as a RustGIS definition query"));
+                    report.skipped(&name, "its filter (subset string), which is too long to read");
                     None
                 }
             },

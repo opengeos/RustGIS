@@ -57,10 +57,7 @@ pub(super) fn read(l: Node, geometry: Option<&str>, layer: &str, report: &mut Re
                 let Some(where_) = where_ else {
                     report.skipped(
                         layer,
-                        format!(
-                            "the label rule \"{name}\", whose filter `{}` doesn't read as a RustGIS SQL clause",
-                            r.filters.join(" AND ")
-                        ),
+                        format!("the label rule \"{name}\", whose filter `{}` is empty or too long to read", r.filters.join(" AND ")),
                     );
                     continue;
                 };
@@ -101,7 +98,7 @@ fn is_else(f: &str) -> bool {
 struct Rule<'a, 'i> {
     node: Node<'a, 'i>,
     filters: Vec<String>,
-    else_of: Option<Vec<String>>,
+    else_of: Option<std::rc::Rc<[String]>>,
     scales: (Option<f64>, Option<f64>),
 }
 
@@ -115,9 +112,9 @@ fn flatten<'a, 'i>(
     if depth > 32 || out.len() > MAX_LABEL_CLASSES * 4 {
         return;
     }
-    let rules: Vec<Node> = node.children().filter(|c| c.has_tag_name("rule")).collect();
+    let rules: Vec<Node> = node.children().filter(|c| c.has_tag_name("rule")).take(MAX_LABEL_CLASSES * 4).collect();
     // The filters an else rule here is the rest of: its switched-on siblings', as QGIS has it.
-    let siblings: Vec<String> = rules
+    let siblings: std::rc::Rc<[String]> = rules
         .iter()
         .filter(|r| r.attribute("active") != Some("0"))
         .filter_map(|r| r.attribute("filter").map(str::trim))
@@ -125,6 +122,9 @@ fn flatten<'a, 'i>(
         .map(str::to_string)
         .collect();
     for rule in rules {
+        if out.len() > MAX_LABEL_CLASSES * 4 {
+            break;
+        }
         let mut f = filters.clone();
         let own = rule.attribute("filter").map(str::trim).filter(|f| !f.is_empty());
         let else_of = own.filter(|o| is_else(o)).map(|_| siblings.clone());
@@ -166,7 +166,7 @@ fn class(
             report.skipped(layer, "labels whose text is an expression too long to read");
             return None;
         } else {
-            by.text = Some(field.to_string()).filter(|t| !t.is_empty());
+            by.text = Some(super::expr::rustgis_scales(field)).filter(|t| !t.is_empty());
             String::new()
         }
     } else {

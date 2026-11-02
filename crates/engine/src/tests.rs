@@ -812,6 +812,109 @@ fn a_symbol_is_set_by_expressions() {
 }
 
 #[test]
+fn unique_values_class_by_an_expression() {
+    let mut s = world();
+    let e = "CASE WHEN pop_max >= 10000000 THEN 'mega' ELSE 'city' END";
+    s.run("layer.symbology", &json!({"layer": "Cities", "type": "unique", "expression": e})).unwrap();
+    let keys = |s: &Session| match &s.map().layer_by_name("Cities").unwrap().renderer {
+        rustgis_map::Renderer::Unique { classes, .. } => classes.iter().map(|c| c.0.clone()).collect::<Vec<_>>(),
+        r => panic!("{r:?}"),
+    };
+    let expression = |s: &Session| s.map().layer_by_name("Cities").unwrap().renderer.expression().map(str::to_string);
+    assert_eq!((keys(&s), expression(&s).as_deref()), (vec!["city".to_string(), "mega".to_string()], Some(e)));
+    let depth = s.undo_depth();
+    for (bad, says) in [
+        (json!({"layer": "Cities", "type": "unique", "expression": "nosuch + 1"}), "nosuch"),
+        (json!({"layer": "Cities", "type": "unique", "expression": e, "field": "name"}), "not both"),
+        (json!({"layer": "Cities", "type": "graduated", "expression": e}), "only Unique Values"),
+        (json!({"layer": "Cities", "type": "unique", "expression": 5}), "expression is text"),
+    ] {
+        let err = s.run("layer.symbology", &bad).unwrap_err();
+        assert!(err.contains(says), "{bad}: {err}");
+    }
+    assert_eq!(s.undo_depth(), depth);
+    // Applied again with neither a field nor an expression (another colour scheme): the same
+    // expression. Null or blank goes back to a field; undo brings the expression back.
+    s.run("layer.symbology", &json!({"layer": "Cities", "type": "unique", "ramp": "Ember"})).unwrap();
+    assert_eq!(expression(&s).as_deref(), Some(e));
+    s.run("layer.symbology", &json!({"layer": "Cities", "type": "unique", "expression": null})).unwrap();
+    assert!(expression(&s).is_none() && s.map().layer_by_name("Cities").unwrap().renderer.field().is_some());
+    s.undo();
+    assert_eq!(expression(&s).as_deref(), Some(e));
+    // A style shared to the web says it draws one symbol; a map draws the classes.
+    let dir = std::env::temp_dir().join(format!("rustgis-unique-by-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    s.run("share.webStyle", &json!({"layer": "Cities", "path": dir.join("cities.json").display().to_string()})).unwrap();
+    assert!(s.notices.iter().any(|n| n.text.contains("classes by expression aren't in it")), "{:?}", s.notices.last());
+    s.run("share.exportMap", &json!({"path": dir.join("map.png").display().to_string(), "width": 320, "height": 200})).unwrap();
+    std::fs::remove_dir_all(&dir).ok();
+    // Deleting a field it reads: a single symbol, as for a renderer on that field.
+    s.run("edit.deleteField", &json!({"layer": "Cities", "field": "pop_max"})).unwrap();
+    assert!(matches!(s.map().layer_by_name("Cities").unwrap().renderer, rustgis_map::Renderer::Single(_)));
+}
+
+#[test]
+fn qgis_rules_class_features_and_say_which_several_rules_pick() {
+    let mut s = world();
+    let qml = |rules: &str| {
+        format!(
+            r#"<qgis version="3.40.0"><renderer-v2 type="RuleRenderer"><rules key="r">{rules}</rules><symbols>
+            <symbol type="marker" name="0"><layer class="SimpleMarker" enabled="1"><prop k="color" v="255,0,0,255"/></layer></symbol>
+            <symbol type="marker" name="1"><layer class="SimpleMarker" enabled="1"><prop k="color" v="0,0,255,255"/></layer></symbol>
+            </symbols></renderer-v2></qgis>"#
+        )
+    };
+    let notes =
+        |r: &serde_json::Value| r["notes"].as_array().unwrap().iter().map(|n| n["text"].as_str().unwrap().to_string()).collect::<Vec<_>>();
+    // Every city of more than a million picks both rules, at the same scales.
+    let big = s.map().layer_by_name("Cities").unwrap();
+    let both = (0..big.dataset.features.len())
+        .filter(|r| big.dataset.field_index("pop_max").and_then(|f| big.dataset.value(*r, f).as_f64()).is_some_and(|v| v > 5_000_000.0))
+        .count();
+    assert!(both > 0);
+    let rules = r#"<rule filter="&quot;pop_max&quot; &gt; 1000000 AND length(name) &gt; 0" symbol="0" label="Million"/>
+        <rule filter="&quot;pop_max&quot; &gt; 5000000" symbol="1" label="Five"/>"#;
+    let r = s.run("style.importQgis", &json!({"layer": "Cities", "text": qml(rules)})).unwrap();
+    let said = notes(&r);
+    assert!(said.iter().any(|n| n.contains(&format!("{both} features that more than one of its rules picks"))), "{said:?}");
+    let l = s.map().layer_by_name("Cities").unwrap();
+    assert!(l.renderer.expression().is_some_and(|e| e.contains("THEN 'Million'")), "{:?}", l.renderer);
+    // At scales that never meet, nothing is said.
+    let apart = r#"<rule filter="&quot;pop_max&quot; &gt; 1000000 AND length(name) &gt; 0" symbol="0" scalemaxdenom="10000"/>
+        <rule filter="&quot;pop_max&quot; &gt; 5000000" symbol="1" scalemindenom="20000"/>"#;
+    let said = notes(&s.run("style.importQgis", &json!({"layer": "Cities", "text": qml(apart)})).unwrap());
+    assert!(!said.iter().any(|n| n.contains("more than one")), "{said:?}");
+    // An else rule picks what its siblings don't: nothing two rules pick.
+    let rest = r#"<rule filter="&quot;pop_max&quot; &gt; 0"><rule filter="&quot;pop_max&quot; &lt; 1000000" symbol="0"/><rule filter="ELSE" symbol="1"/></rule>"#;
+    let said = notes(&s.run("style.importQgis", &json!({"layer": "Cities", "text": qml(rest)})).unwrap());
+    assert!(!said.iter().any(|n| n.contains("more than one")), "{said:?}");
+    // A rule whose filter names a field the layer hasn't: left out by its label, the others kept.
+    let gone = r#"<rule filter="&quot;nosuch&quot; + 1 &gt; 2" symbol="0" label="Gone"/><rule filter="&quot;pop_max&quot; &gt; 5" symbol="1" label="Kept"/>"#;
+    let said = notes(&s.run("style.importQgis", &json!({"layer": "Cities", "text": qml(gone)})).unwrap());
+    assert!(said.iter().any(|n| n.contains("the rule \"Gone\"") && n.contains("nosuch")), "{said:?}");
+    let l = s.map().layer_by_name("Cities").unwrap();
+    let rustgis_map::Renderer::Unique { classes, expression: Some(e), .. } = &l.renderer else { panic!("{:?}", l.renderer) };
+    assert_eq!((classes.len(), classes[0].0.as_str()), (1, "Kept"));
+    assert!(!e.contains("nosuch"), "{e}");
+    let styler = l.styler(Some(1e6));
+    let drawn = (0..l.dataset.features.len()).filter(|r| styler.symbol(*r).fill == rustgis_map::Rgba::rgb(0, 0, 255)).count();
+    assert!(drawn > 0, "the kept rule draws");
+    // None that reads: the first rule's symbol for every feature, as before rules were classed.
+    let none = r#"<rule filter="&quot;nosuch&quot; = 1" symbol="1"/><rule filter="$area &gt; 2" symbol="0"/>"#;
+    let said = notes(&s.run("style.importQgis", &json!({"layer": "Cities", "text": qml(none)})).unwrap());
+    assert!(said.iter().any(|n| n.contains("none of whose filters fit the layer")), "{said:?}");
+    let l = s.map().layer_by_name("Cities").unwrap();
+    assert!(matches!(l.renderer, rustgis_map::Renderer::Single(sym) if sym.fill == rustgis_map::Rgba::rgb(0, 0, 255)), "{:?}", l.renderer);
+    // A layer's filter that is an expression now carries over.
+    let filtered = r#"<qgis version="3.40.0"><labeling type="rule-based"><rules key="r">
+        <rule filter="length(&quot;name&quot;) &lt;= 5"><settings><text-style fieldName="name"/></settings></rule></rules></labeling></qgis>"#;
+    let said = notes(&s.run("style.importQgis", &json!({"layer": "Cities", "text": filtered})).unwrap());
+    assert!(said.is_empty(), "{said:?}");
+    let l = s.map().layer_by_name("Cities").unwrap();
+    assert_eq!(l.labels.classes.first().and_then(|c| c.where_.as_deref()), Some("length(\"name\") <= 5"));
+}
+
+#[test]
 fn labels_are_set_by_expressions() {
     let mut s = world();
     let r = s

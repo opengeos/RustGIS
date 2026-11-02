@@ -138,7 +138,7 @@ pub fn commands() -> Vec<C> {
         .when(need_layer),
         C::new("layer.symbology", "Symbology", "Style › Drawing", symbology)
             .when(need_feature_layer)
-            .params(r#"{"layer"?, "type": "single"|"unique"|"graduated"|"proportional", "field"?, "classes"?: 1..12, "method"?: "naturalBreaks"|"equalInterval"|"quantile"|"geometricInterval"|"standardDeviation"|"arithmeticProgression"|"headTailBreaks"|"manual", "breaks"?: [numbers] (manual: the classes' upper bounds, closed by the field's largest value), "ramp"?: string}"#),
+            .params(r#"{"layer"?, "type": "single"|"unique"|"graduated"|"proportional", "field"?, "expression"?: text|null (unique: class by this expression's values instead of a field; blank or null: by a field; with neither key, Unique Values keep the layer's expression), "classes"?: 1..12, "method"?: "naturalBreaks"|"equalInterval"|"quantile"|"geometricInterval"|"standardDeviation"|"arithmeticProgression"|"headTailBreaks"|"manual", "breaks"?: [numbers] (manual: the classes' upper bounds, closed by the field's largest value), "ramp"?: string}"#),
         C::new("layer.ramp", "Color Scheme", "Style › Drawing", |s, p| {
             let r = s.ramp(s_req(p, "ramp")?)?;
             with(s, p, |l| match &mut l.raster {
@@ -1622,6 +1622,7 @@ fn apply_styles(s: &mut Session, id: u32, styles: &[(String, rustgis_data::kml::
         other_strokes: Vec::new(),
         class_fills: Default::default(),
         other_fills: Vec::new(),
+        expression: None,
     };
 }
 
@@ -3443,9 +3444,29 @@ fn symbology(s: &mut Session, p: &Value) -> CmdResult {
         }
         Ok(rows)
     };
+    // Unique Values by expression: the one given, or with no field given, the layer's own.
+    let expression = match p.get("expression") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(t)) if t.trim().is_empty() => None,
+        Some(Value::String(t)) => Some(t.trim().to_string()),
+        Some(_) => return Err("expression is text".into()),
+    };
+    if expression.is_some() && ps(p, "field").is_some() {
+        return Err("give a field or an expression, not both".into());
+    }
+    if expression.is_some() && !matches!(kind.as_str(), "unique" | "uniquevalues") {
+        return Err("only Unique Values class by an expression".into());
+    }
+    let expression = match (p.get("expression"), p.get("field")) {
+        (None, None) => l.renderer.expression().map(str::to_string),
+        _ => expression,
+    };
     let mut r = match kind.as_str() {
         "single" | "singlesymbol" => Renderer::Single(base),
-        "unique" | "uniquevalues" => Renderer::unique(&l.dataset, &rows()?, &field(false)?, ramp.unwrap_or(Ramp::Harbour), base)?,
+        "unique" | "uniquevalues" => match &expression {
+            Some(e) => Renderer::unique_by(&l.dataset, &rows()?, e, ramp.unwrap_or(Ramp::Harbour), base)?,
+            None => Renderer::unique(&l.dataset, &rows()?, &field(false)?, ramp.unwrap_or(Ramp::Harbour), base)?,
+        },
         "graduated" | "graduatedcolors" => {
             let (field, ramp) = (field(true)?, ramp.unwrap_or(Ramp::Ember));
             // Manual with no bounds keeps the layer's current ones on the same field, so switching

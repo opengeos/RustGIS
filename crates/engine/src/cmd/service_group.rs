@@ -278,6 +278,7 @@ fn refresh(s: &mut Session, p: &Value) -> CmdResult {
             layer.selection.clear();
             let invalid_renderer = match &layer.renderer {
                 rustgis_map::Renderer::Single(_) => false,
+                rustgis_map::Renderer::Unique { expression: Some(e), .. } => rustgis_data::query::parse(e, &layer.dataset).is_err(),
                 rustgis_map::Renderer::Unique { field, .. } => layer.dataset.field_index(field).is_none(),
                 rustgis_map::Renderer::Graduated { field, .. } | rustgis_map::Renderer::Proportional { field, .. } => {
                     layer.dataset.field_index(field).and_then(|i| layer.dataset.fields.get(i)).is_none_or(|f| !f.ty.is_numeric())
