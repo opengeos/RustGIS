@@ -1733,12 +1733,11 @@ fn file_layers(_s: &mut Session, p: &Value) -> CmdResult {
         let layers = rustgis_data::dxf::layers(path, &bytes).map_err(err)?;
         return Ok(json!({"count": layers.len(), "layers": layers}));
     }
-    // A CityJSON model named .json, in the coordinate system given: all its layers, as Add Data adds.
+    // A CityJSON model named .json: all its layers, as Add Data adds them by name.
     let crs = ps(p, "crs").map(str::trim).filter(|c| !c.is_empty());
-    let cityjson_given = crs.is_some()
-        && path.to_ascii_lowercase().ends_with(".json")
+    let model_json = path.to_ascii_lowercase().ends_with(".json")
         && std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.len() <= rustgis_data::io::MAX_BYTES);
-    if rustgis_data::io::is_multi_layer_name(path) || cityjson_given {
+    if rustgis_data::io::is_multi_layer_name(path) || model_json {
         let meta = std::fs::metadata(path).map_err(|e| format!("{path}: {e}"))?;
         if meta.len() > super::raster::MAX_UPLOAD_BYTES as u64 {
             return Err(format!("{path} is too large to open"));
@@ -1752,7 +1751,7 @@ fn file_layers(_s: &mut Session, p: &Value) -> CmdResult {
                     if zip { rustgis_data::io::read_zip_in(path, &bytes, crs) } else { rustgis_data::cityjson::read(path, &bytes, crs) };
                 read.map_err(err)?.into_iter().map(|(ds, _)| ds.name).collect()
             }
-            None if rustgis_data::io::is_multi_layer_name(path) => {
+            None if rustgis_data::io::is_multi_layer_name(path) || rustgis_data::io::is_cityjson(path, &bytes) => {
                 rustgis_data::io::read_layers(path, &bytes).map_err(err)?.into_iter().map(|l| l.dataset.name).collect()
             }
             // Not CityJSON: a single layer, listed below.

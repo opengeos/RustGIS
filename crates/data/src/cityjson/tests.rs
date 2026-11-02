@@ -787,6 +787,15 @@ fn raising_parents_is_bounded() {
     assert_eq!(objects[0].z, None, "the top isn't reached");
     assert_eq!(raise_parents(&mut objects, MAX_PARENT_VISITS), None, "with room, it settles");
     assert_eq!(objects[0].z, Some((0.0, 5.0)));
+    // The visits pay for twelve rounds of a fresh chain (39 a round): it stops there, short of the top.
+    let mut fresh: Vec<Built> = (0..20)
+        .map(|i| {
+            let parent = (i > 0).then(|| format!("o{}", i - 1));
+            built(&format!("o{i}"), parent.as_deref(), (i == 19).then_some((0.0, 5.0)))
+        })
+        .collect();
+    assert_eq!(raise_parents(&mut fresh, 39 * 12), Some(12));
+    assert_eq!(fresh[0].z, None);
     let mut cycle = vec![built("a", Some("b"), Some((1.0, 2.0))), built("b", Some("a"), Some((0.0, 1.0)))];
     assert_eq!(raise_parents(&mut cycle, MAX_PARENT_VISITS), None);
     assert_eq!((cycle[0].z, cycle[1].z), (Some((0.0, 2.0)), Some((0.0, 2.0))));
@@ -864,4 +873,36 @@ fn a_zipped_model_past_the_layer_limit_is_said() {
     assert_eq!(out.len(), crate::io::MAX_ZIP_LAYERS);
     assert!(says(&out, "layer limit"), "{:?}", messages_of(&out));
     assert!(says(&out, "m T33"), "{:?}", messages_of(&out));
+}
+
+/// Lines and points keep only their highest level of detail, as surfaces do, under its label.
+#[test]
+fn lines_and_points_keep_their_highest_lod() {
+    let vertices = json!([[0, 0, 0], [1, 0, 0], [5, 5, 0], [6, 5, 0]]);
+    let objects = json!({"a": {"type": "Road", "geometry": [
+        {"type": "MultiLineString", "lod": "1", "boundaries": [[0, 1]]},
+        {"type": "MultiLineString", "lod": "2", "boundaries": [[2, 3]]},
+        {"type": "MultiPoint", "lod": "2", "boundaries": [0]},
+        {"type": "MultiPoint", "lod": "1", "boundaries": [3]},
+        {"type": "MultiPoint", "lod": "2", "boundaries": [1]},
+    ]}});
+    let out = read("m.city.json", &doc(vertices, objects), None).unwrap();
+    let lines = out.iter().map(|(ds, _)| ds).find(|ds| ds.name.ends_with("lines")).unwrap();
+    assert_eq!(geometry(lines, 0), Some(&Geometry::Line(vec![vec![Coord::new(5.0, 5.0), Coord::new(6.0, 5.0)]])));
+    assert_eq!(value(lines, 0, "lod"), crate::Value::Text("2".into()));
+    let points = out.iter().map(|(ds, _)| ds).find(|ds| ds.name.ends_with("points")).unwrap();
+    assert_eq!(geometry(points, 0), Some(&Geometry::MultiPoint(vec![Coord::new(0.0, 0.0), Coord::new(1.0, 0.0)])));
+    assert_eq!(value(points, 0, "lod"), crate::Value::Text("2".into()));
+}
+
+/// A height too large to be a number is said, and left empty; others are kept and say nothing.
+#[test]
+fn a_height_too_large_to_be_a_number_is_said() {
+    let objects = json!({"a": {"type": "Road", "geometry": [{"type": "MultiPoint", "boundaries": [0, 1]}]}});
+    let out = read("m.city.json", &doc(json!([[0, 0, -1e308], [1, 1, 1e308]]), objects.clone()), None).unwrap();
+    assert!(says(&out, "1 city objects have a lowest and highest Z too far apart"), "{:?}", messages_of(&out));
+    assert_eq!(value(&out[0].0, 0, "height"), crate::Value::Null);
+    assert_eq!(value(&out[0].0, 0, "z_max"), crate::Value::Float(1e308));
+    let out = read("m.city.json", &doc(json!([[0, 0, -10], [1, 1, 20]]), objects), None).unwrap();
+    assert!(!says(&out, "too far apart"), "{:?}", messages_of(&out));
 }

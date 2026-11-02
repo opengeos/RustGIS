@@ -10600,6 +10600,9 @@ fn cityjson_layers_and_the_coordinate_system_given() {
     s.run("layer.addDataBytes", &json!({"fileName": "b.json", "data": data, "layer": "Road"})).unwrap();
     assert!(s.map().layer_by_name("b Road").is_some() && s.map().layer_by_name("b Bridge").is_none());
     assert!(s.run("layer.addData", &json!({"path": plain.display().to_string(), "layer": "Canal"})).unwrap_err().contains("no layer"));
+    // Listed as they are added, with no crs: the names a layer is picked by.
+    let listed = s.run("info.fileLayers", &json!({"path": plain.display().to_string()})).unwrap();
+    assert_eq!(listed["layers"], json!(["plain Bridge", "plain Road"]));
 
     // Zipped: a layer picked says what the model says, and the layers are listed as they're added.
     let mut zipped: Value = serde_json::from_str(&plain_text).unwrap();

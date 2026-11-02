@@ -30,7 +30,8 @@ const MAX_FILE_FACES: usize = if cfg!(target_arch = "wasm32") { 500_000 } else {
 /// The rounds of passing heights up to parents always allowed. The specification has two levels.
 const MIN_PARENT_ROUNDS: usize = 8;
 /// Most objects and parent links visited passing heights up: past it, a crafted chain stops, with a
-/// notice, rather than costing the square of its length.
+/// notice, rather than costing the square of its length. [`MIN_PARENT_ROUNDS`] are run whatever it
+/// says, so a file with more links than it pays for eight rounds of costs those eight.
 const MAX_PARENT_VISITS: usize = if cfg!(target_arch = "wasm32") { 50_000_000 } else { 200_000_000 };
 /// Most characters of an object type shown in a layer's name.
 const MAX_TYPE_IN_NAME: usize = 64;
@@ -158,6 +159,8 @@ struct Counts {
     tin_reliefs: usize,
     unconverted: usize,
     bad_heights: usize,
+    /// Objects whose lowest and highest Z are too far apart for their difference to be a number.
+    height_overflows: usize,
     /// The rounds after which passing heights up to parents stopped, when it did.
     parent_rounds: usize,
     unknown: BTreeSet<String>,
@@ -558,6 +561,7 @@ fn read_with(file_name: &str, bytes: &[u8], given: Option<Crs>, keep_named: bool
         });
     }
     counts.parent_rounds = raise_parents(&mut built, MAX_PARENT_VISITS).unwrap_or(0);
+    counts.height_overflows = built.iter().filter(|b| b.z.is_some_and(|(lo, hi)| !(hi - lo).is_finite())).count();
     let is_3d = |b: &Built| b.solid || b.z.is_some_and(|(lo, hi)| hi > lo);
     counts.footprints = rows
         .iter()
@@ -597,11 +601,30 @@ struct ObjectRows {
     solid: bool,
 }
 
-/// Keeps the level of detail of the highest of a family's geometries.
-fn keep_lod(slot: &mut Option<(f64, Option<String>)>, g: &RawGeometry) {
-    let rank = lod_number(g.lod.as_ref());
-    if slot.as_ref().is_none_or(|(highest, _)| rank >= *highest) {
-        *slot = Some((rank, lod_text(g.lod.as_ref())));
+/// A family's parts at the highest level of detail an object has: its other levels are other
+/// pictures of it, not more of it, as for its surfaces.
+struct Highest<T> {
+    rank: f64,
+    lod: Option<String>,
+    parts: Vec<T>,
+}
+
+impl<T> Default for Highest<T> {
+    fn default() -> Self {
+        Highest { rank: f64::NEG_INFINITY, lod: None, parts: Vec::new() }
+    }
+}
+
+impl<T> Highest<T> {
+    /// Adds a geometry's parts, which the caller has found aren't empty.
+    fn add(&mut self, g: &RawGeometry, parts: impl IntoIterator<Item = T>) {
+        let rank = lod_number(g.lod.as_ref());
+        if rank > self.rank {
+            *self = Highest { rank, lod: lod_text(g.lod.as_ref()), parts: Vec::new() };
+        }
+        if rank == self.rank {
+            self.parts.extend(parts);
+        }
     }
 }
 
@@ -632,9 +655,8 @@ fn object_rows(
             }
         }
     };
-    let (mut surfaces, mut points, mut lines, mut solid): (Vec<Surface>, Vec<P3>, Vec<Vec<P3>>, bool) =
-        (Vec::new(), Vec::new(), Vec::new(), false);
-    let (mut point_lod, mut line_lod) = (None, None);
+    let (mut surfaces, mut solid) = (Vec::<Surface>::new(), false);
+    let (mut points, mut lines) = (Highest::<P3>::default(), Highest::<Vec<P3>>::default());
     for g in geometries {
         let depth = match g.ty.as_str() {
             "MultiSurface" | "CompositeSurface" => 0,
@@ -645,8 +667,7 @@ fn object_rows(
                     Some(p) if p.is_empty() => {}
                     Some(p) => {
                         heights(&p);
-                        points.extend(p);
-                        keep_lod(&mut point_lod, g);
+                        points.add(g, p);
                     }
                     None => counts.bad_geometries += 1,
                 }
@@ -656,8 +677,7 @@ fn object_rows(
                 // Its template isn't placed: it is drawn at its reference point.
                 match at(&g.boundaries, vertices).as_deref() {
                     Some([p, ..]) => {
-                        points.push(*p);
-                        keep_lod(&mut point_lod, g);
+                        points.add(g, [*p]);
                         counts.instances += 1;
                     }
                     _ => counts.bad_geometries += 1,
@@ -668,11 +688,10 @@ fn object_rows(
                 let parts: Option<Vec<Vec<P3>>> = g.boundaries.as_array().and_then(|l| l.iter().map(|line| at(line, vertices)).collect());
                 match parts {
                     Some(parts) => {
-                        let before = lines.len();
-                        lines.extend(parts.into_iter().filter(|p| !p.is_empty()));
-                        lines.iter().skip(before).for_each(|p| heights(p));
-                        if lines.len() > before {
-                            keep_lod(&mut line_lod, g);
+                        let parts: Vec<Vec<P3>> = parts.into_iter().filter(|p| !p.is_empty()).collect();
+                        parts.iter().for_each(|p| heights(p));
+                        if !parts.is_empty() {
+                            lines.add(g, parts);
                         }
                     }
                     None => counts.bad_geometries += 1,
@@ -716,18 +735,20 @@ fn object_rows(
     }
     let coords = |p: &[P3]| p.iter().map(|p| Coord::new(p[0], p[1])).collect::<Vec<_>>();
     let finite = |p: &P3| p[0].is_finite() && p[1].is_finite();
+    let Highest { lod: line_lod, parts: lines, .. } = lines;
     if !lines.is_empty() {
         let geometry = lines.iter().flatten().all(finite).then(|| Geometry::Line(lines.iter().map(|l| coords(l)).collect()));
         counts.no_footprint += usize::from(geometry.is_none());
-        push(Family::Line, line_lod.and_then(|(_, lod)| lod), geometry, heights_differ(lines.iter().flatten()), counts);
+        push(Family::Line, line_lod, geometry, heights_differ(lines.iter().flatten()), counts);
     }
+    let Highest { lod: point_lod, parts: points, .. } = points;
     if !points.is_empty() {
         let geometry = points.iter().all(finite).then(|| match points.as_slice() {
             [p] => Geometry::Point(Coord::new(p[0], p[1])),
             many => Geometry::MultiPoint(coords(many)),
         });
         counts.no_footprint += usize::from(geometry.is_none());
-        push(Family::Point, point_lod.and_then(|(_, lod)| lod), geometry, heights_differ(points.iter()), counts);
+        push(Family::Point, point_lod, geometry, heights_differ(points.iter()), counts);
     }
     ObjectRows { rows, z, solid }
 }
@@ -909,6 +930,13 @@ fn messages(c: &Counts) -> Vec<String> {
     say(
         c.bad_heights,
         format!("{} city objects have heights that aren't finite numbers, which z_min, z_max and height leave out", c.bad_heights),
+    );
+    say(
+        c.height_overflows,
+        format!(
+            "{} city objects have a lowest and highest Z too far apart for their difference to be a number: their height is left empty",
+            c.height_overflows
+        ),
     );
     say(
         c.parent_rounds,
