@@ -284,7 +284,11 @@ fn refresh(s: &mut Session, p: &Value) -> CmdResult {
             if changed_type || invalid_renderer {
                 layer.renderer = rustgis_map::Renderer::Single(rustgis_map::Symbol::default_for(layer.geometry_type(), layer.id));
             }
-            if layer.dataset.field_index(&layer.labels.default.field).is_none() {
+            // (Labels by a text expression that still reads need no field.)
+            let by_text = |c: &rustgis_map::LabelClass, ds: &rustgis_data::Dataset| {
+                c.by.text.as_deref().is_some_and(|t| rustgis_data::query::parse(t, ds).is_ok())
+            };
+            if layer.dataset.field_index(&layer.labels.default.field).is_none() && !by_text(&layer.labels.default, &layer.dataset) {
                 layer.labels.enabled = false;
                 layer.labels.default.field.clear();
             }

@@ -812,6 +812,66 @@ fn a_symbol_is_set_by_expressions() {
 }
 
 #[test]
+fn labels_are_set_by_expressions() {
+    let mut s = world();
+    let r = s
+        .run(
+            "labels.by",
+            &json!({"layer": "Cities", "text": "upper(name)", "size": "scale_linear(pop_max, 0, 2e7, 8, 20)", "color": "if(pop_max > 1e7, '#ff0000', NULL)", "angle": "30"}),
+        )
+        .unwrap();
+    assert_eq!((r["text"].as_str(), r["angle"].as_str()), (Some("upper(name)"), Some("30")));
+    let l = s.map().layer_by_name("Cities").unwrap();
+    assert!(l.labels.enabled, "a text expression turns the labels on");
+    assert_eq!(l.labels.default.by.color.as_deref(), Some("if(pop_max > 1e7, '#ff0000', NULL)"));
+    let depth = s.undo_depth();
+    for (bad, says) in [
+        (json!({"layer": "Cities", "text": "nosuch || 'x'"}), "text: "),
+        (json!({"layer": "Cities", "size": "("}), "size: "),
+        (json!({"layer": "Cities", "color": 3}), "color is an expression"),
+        (json!({"layer": "Cities", "class": "Nope", "angle": "4"}), "no label class named"),
+        (json!({"layer": "Cities"}), "give text, size, color or angle"),
+    ] {
+        let err = s.run("labels.by", &bad).unwrap_err();
+        assert!(err.contains(says), "{bad}: {err}");
+    }
+    assert_eq!(s.undo_depth(), depth);
+    // A class's own; a key left out is kept, null removes one, and undo brings it back.
+    s.run("labels.class.add", &json!({"layer": "Cities", "name": "Big", "where": "pop_max > 5000000"})).unwrap();
+    s.run("labels.by", &json!({"layer": "Cities", "class": "Big", "text": "name || '!'"})).unwrap();
+    s.run("labels.by", &json!({"layer": "Cities", "angle": null, "text": ""})).unwrap();
+    let l = s.map().layer_by_name("Cities").unwrap();
+    assert_eq!(l.labels.classes[0].by.text.as_deref(), Some("name || '!'"));
+    assert!(l.labels.default.by.text.is_none() && l.labels.default.by.angle.is_none() && l.labels.default.by.size.is_some());
+    s.undo();
+    assert_eq!(s.map().layer_by_name("Cities").unwrap().labels.default.by.angle.as_deref(), Some("30"));
+    // A style shared to the web says its label expressions are left out.
+    let dir = std::env::temp_dir().join(format!("rustgis-labels-by-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    s.run("share.webStyle", &json!({"layer": "Cities", "path": dir.join("cities.json").display().to_string()})).unwrap();
+    assert!(s.notices.iter().any(|n| n.text.contains("label expressions aren't in it")), "{:?}", s.notices.last());
+    s.run("share.exportMap", &json!({"path": dir.join("map.png").display().to_string(), "width": 320, "height": 200})).unwrap();
+    std::fs::remove_dir_all(&dir).ok();
+    // Converted, each label keeps its text, size and colour: the annotation draws by its fields.
+    s.run("labels.class.clear", &json!({"layer": "Cities"})).unwrap();
+    s.run("labels.by", &json!({"layer": "Cities", "text": "upper(name)", "angle": null})).unwrap();
+    s.run("labels.convert", &json!({"layer": "Cities"})).unwrap();
+    let a = s.map().layer_by_name("Cities Annotation").unwrap();
+    let names: Vec<&str> = a.dataset.fields.iter().map(|f| f.name.as_str()).collect();
+    assert_eq!(names, ["TEXT", "SIZE", "COLOR"]);
+    let by = &a.labels.default.by;
+    assert_eq!(
+        (by.text.as_deref(), by.size.as_deref(), by.color.as_deref(), by.angle.as_deref()),
+        (None, Some("\"SIZE\""), Some("\"COLOR\""), None)
+    );
+    let fi = |n: &str| a.dataset.field_index(n).unwrap();
+    let paris = (0..a.dataset.features.len()).find(|r| a.dataset.value(*r, fi("TEXT")).to_string() == "PARIS").expect("upper-case text");
+    assert!(a.dataset.value(paris, fi("SIZE")).as_f64().is_some_and(|v| v > 8.0));
+    let red = (0..a.dataset.features.len()).filter(|r| a.dataset.value(*r, fi("COLOR")).to_string() == "255,0,0,255").count();
+    assert!(red > 0 && red < a.dataset.features.len(), "only the big cities' red, the rest the class's");
+}
+
+#[test]
 fn a_qgis_styles_data_defined_settings_are_kept_where_they_read() {
     let mut s = world();
     // Size by a field Cities has; fill by a QGIS function RustGIS lacks; outline by a field it hasn't.
@@ -17700,6 +17760,14 @@ fn ogc_refresh_reconciles_fields_and_preserves_compatible_settings() {
             let l = s.map().layer(layer).unwrap();
             assert_eq!(l.renderer, style);
             assert_eq!(l.labels, labels);
+            // Labels by a text expression that still reads stay on without their field.
+            s.map_mut().layer_mut(layer).unwrap().labels.default.by.text = Some("'#' || keep".into());
+            server.set(ITEMS, &features(json!({"replacement":"New", "keep":1})));
+            s.run("service.refresh", &target).unwrap();
+            let l = s.map().layer(layer).unwrap();
+            assert!(l.labels.enabled && l.labels.default.by.text.is_some(), "{:?}", l.labels.default);
+            s.run("edit.undo", &Value::Null).unwrap();
+            s.map_mut().layer_mut(layer).unwrap().labels.default.by.text = None;
             // Numeric renderers cannot use a field which has become text; unique values can.
             server.set(ITEMS, &features(json!({"name":"Place", "value":"text", "keep":1})));
             s.run("service.refresh", &target).unwrap();

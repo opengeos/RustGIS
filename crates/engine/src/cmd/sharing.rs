@@ -602,7 +602,18 @@ pub(crate) fn note_label_classes(s: &mut Session, kind: &str, p: &Value) {
             format!("{}'s style labels every feature with its Default class; its label classes' SQL clauses aren't in it.", l.name)
         })
     };
-    if let Some(text) = text {
+    // Its expressions have no MapLibre equivalent written for them.
+    let by = (l.labels.default.visible && !l.labels.default.by.is_empty()).then(|| {
+        if l.labels.default.field.is_empty() {
+            format!("{}'s style has no labels: its Default class's text is an expression, which isn't in it.", l.name)
+        } else {
+            format!(
+                "{}'s style labels with the Default class's field {}, size and colour; its label expressions aren't in it.",
+                l.name, l.labels.default.field
+            )
+        }
+    });
+    for text in text.into_iter().chain(by) {
         s.notify(text, false);
     }
 }
