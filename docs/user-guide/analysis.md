@@ -583,12 +583,13 @@ be shared out more than once; the value of a feature's part outside every zone i
 percentages and shares compare areas measured on a sphere with each edge as the map draws it (a
 straight line on the map), the lines the tool cuts along, so the shares of a feature that zones
 cover without overlapping each other add up to its whole value, up to the overlay's rounding of the
-cut (a few billionths of the zones' size per vertex); a feature wholly inside a zone counts whole.
-The percentages of classes that overlap each other can add up to more than 100. Like the other
-overlay tools, it works on the map, which ends at 85.05° north and south: parts of polygons beyond
-that are taken as lying along it, so overlaps there have no area
-([#1033](https://github.com/opengeos/RustGIS/issues/1033)); the tool says how many features reach
-beyond it.
+cut. The overlay rounds coordinates to a grid (the size of the zones near a feature over about a
+billion), so a part that leaves nothing outside its zone wider than that grid is the whole feature,
+and only parts outside every zone wider than the grid are reported. The percentages of classes that
+overlap each other can add up to more than 100. Like the other overlay tools, it works on the map,
+which ends at 85.05° north and south: parts of polygons beyond that are taken as lying along it, so
+overlaps there have no area ([#1033](https://github.com/opengeos/RustGIS/issues/1033)); the tool
+says how many features reach beyond it.
 
 The tool says how many zone and class features have no polygon (no geometry, an empty one, or a line
 or point; they are left out), how many zones overlap no class feature and so have no rows, how many

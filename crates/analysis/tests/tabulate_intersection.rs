@@ -325,10 +325,11 @@ fn small_features_in_large_zones_share_out_in_full() {
     }
 }
 
-/// A strip about 1 cm wide and 2° long, half inside a zone: the overlay's rounding of so thin a
-/// feature is large next to its area, but its half outside still isn't counted as inside.
+/// A strip about 1 cm wide and 2° long: the overlay's rounding of so thin a feature is large next to
+/// its area, yet half outside a zone it is reported and shares out half, and wholly inside one it
+/// counts whole.
 #[test]
-fn a_thin_strip_half_outside_a_zone_shares_out_half() {
+fn a_thin_strip_shares_out_half_when_half_outside_and_all_when_inside() {
     let rect = |x0: f64, y0: f64, x1: f64, y1: f64| {
         let ring = [(x0, y0), (x1, y0), (x1, y1), (x0, y1), (x0, y0)].map(|(x, y)| Coord::new(x, y)).to_vec();
         Some(Geometry::Polygon(vec![vec![ring]]))
@@ -347,6 +348,38 @@ fn a_thin_strip_half_outside_a_zone_shares_out_half() {
     let pop = table(result).features.first().and_then(|f| f.attrs.get(3)).and_then(Value::as_f64).unwrap();
     // About half: so thin a strip is rounded by about a percent, but not taken as wholly inside.
     assert!((pop / 500_000.0 - 1.0).abs() < 0.05, "{pop}");
+
+    // The same strip wholly inside the zone counts whole, unrounded, with no notice.
+    let mut z = Dataset::new("zones", GeometryType::Polygon, vec![Field::new("zone", FieldType::Text)]);
+    z.push_next(rect(-91.0, 34.0, -88.0, 36.0), vec![Value::Text("A".into())]);
+    let mut c = Dataset::new("classes", GeometryType::Polygon, vec![Field::new("pop", FieldType::Integer)]);
+    c.push_next(rect(-90.5, 35.0, -88.5, 35.0000001), vec![Value::Int(1_000_000)]);
+    let result = rustgis_analysis::run("tabulateIntersection", &layers(z, c), &params).unwrap();
+    assert_eq!(result.messages, ["Tabulate Intersection: 1 row"]);
+    let pop = table(result).features.first().and_then(|f| f.attrs.get(3)).and_then(Value::as_f64).unwrap();
+    assert_eq!(pop, 1_000_000.0);
+}
+
+/// A feature of about 10 m in a zone 10° wide, with 0.15% of its area across the zone's edge: more
+/// than the overlay's rounding of it, so it is reported as partly outside rather than counted whole.
+#[test]
+fn a_small_feature_just_across_a_zone_edge_is_reported() {
+    let rect = |x0: f64, y0: f64, x1: f64, y1: f64| {
+        let ring = [(x0, y0), (x1, y0), (x1, y1), (x0, y1), (x0, y0)].map(|(x, y)| Coord::new(x, y)).to_vec();
+        Some(Geometry::Polygon(vec![vec![ring]]))
+    };
+    let mut z = Dataset::new("zones", GeometryType::Polygon, vec![Field::new("zone", FieldType::Text)]);
+    z.push_next(rect(-100.0, 30.0, -90.0, 40.0), vec![Value::Text("A".into())]);
+    let mut c = Dataset::new("classes", GeometryType::Polygon, vec![Field::new("pop", FieldType::Integer)]);
+    let (side, across) = (0.00009, 0.00009 * 0.0015);
+    c.push_next(rect(-90.0 - side + across, 35.0, -90.0 + across, 35.0 + side), vec![Value::Int(1_000_000)]);
+    let l = layers(z, c);
+    let params = json!({"zones": "zones", "zoneFields": "zone", "classes": "classes", "sumFields": "pop"});
+    let result = rustgis_analysis::run("tabulateIntersection", &l, &params).unwrap();
+    assert_eq!(
+        result.messages,
+        ["Tabulate Intersection: 1 row", "1 class feature lies partly or wholly outside the zones: its value outside isn't shared out"]
+    );
 }
 
 #[test]

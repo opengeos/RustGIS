@@ -2823,7 +2823,7 @@ fn ground_area_perimeter(g: &Geometry) -> (f64, f64) {
 /// line, with longitudes as they are (not folded across the antimeridian) and latitudes clamped to
 /// the map's limit, as the overlay takes them. A polygon cut along any straight line on the map
 /// splits this area exactly, so the parts' areas add up to the whole's, up to the overlay's
-/// rounding of the cut ([`overlay_rounding`]). Zero for any other geometry.
+/// rounding of the cut ([`OverlayGrid`]). Zero for any other geometry.
 fn map_area_m2(g: &Geometry) -> f64 {
     let Geometry::Polygon(polys) = g else { return 0.0 };
     let r2 = rustgis_geom::EARTH_RADIUS_M * rustgis_geom::EARTH_RADIUS_M;
@@ -2856,20 +2856,45 @@ fn rhumb_ring_area(ring: &[Coord]) -> f64 {
     total.abs()
 }
 
-/// How far the overlay's rounding can move the area of a feature cut by masks within `domain` (a
-/// Web Mercator extent), relative to the feature's area. The overlay keeps 29 integer bits about the
-/// centre of its operands' extent (see [`clip`]), so a vertex moves by up to half a grid step and
-/// the area by up to the perimeter times a step; this allows four steps, at least 1e-9 and at most
-/// 1e-3. A feature so thin that the overlay rounds it by more than that is measured as cut, so a
-/// part of it outside its zones is never taken as inside, at worst reported as outside.
-fn overlay_rounding(g: &Geometry, domain: &Extent) -> f64 {
+/// The overlay's grid for a feature cut by masks within a Web Mercator extent. The overlay keeps 29
+/// integer bits about the centre of its operands' extent (see [`clip`]), a grid step of the extent
+/// over 2^30, so it moves each vertex by less than a step: the area by less than the perimeter times
+/// a step, and a sliver it leaves along an edge is no wider than a step.
+struct OverlayGrid {
+    /// The grid step, in Web Mercator metres, taken over the feature and all its masks.
+    step: f64,
+    /// How far rounding can move the feature's area, relative to it: twice the perimeter times the
+    /// step over the area, from 1e-9 to 1. A part closer than this to the whole may be the whole.
+    rounding: f64,
+}
+
+impl OverlayGrid {
+    /// The grid for the polygon feature `g` cut by masks within `domain`.
+    fn new(g: &Geometry, domain: &Extent) -> Self {
+        let mp = to_multipolygon(g).unwrap_or_else(|| MultiPolygon::new(vec![]));
+        let ext = domain.union(&merc_extent(&mp));
+        let step = ext.width().max(ext.height()) / f64::from(1_u32 << 30);
+        let (area, perimeter) = merc_area_perimeter(&mp);
+        let rounding = if area > 0.0 && step.is_finite() { (2.0 * perimeter * step / area).clamp(1e-9, 1.0) } else { 1e-9 };
+        OverlayGrid { step: if step.is_finite() { step } else { 0.0 }, rounding }
+    }
+
+    /// Whether a polygon part is wider on average (its area over its perimeter) than the grid step:
+    /// more than the slivers rounding leaves along an edge, which are at most a step wide and so
+    /// half a step on average.
+    fn wider(&self, g: &Geometry) -> bool {
+        to_multipolygon(g).is_some_and(|mp| {
+            let (area, perimeter) = merc_area_perimeter(&mp);
+            area > perimeter * self.step
+        })
+    }
+}
+
+/// The planar area and perimeter (holes included) of polygons in Web Mercator metres.
+fn merc_area_perimeter(mp: &MultiPolygon<f64>) -> (f64, f64) {
     use geo::{Area, Euclidean, Length};
-    let Some(mp) = to_multipolygon(g) else { return 1e-9 };
-    let ext = domain.union(&merc_extent(&mp));
-    let step = ext.width().max(ext.height()) / f64::from(1_u32 << 28);
-    let perimeter: f64 = mp.0.iter().flat_map(|p| std::iter::once(p.exterior()).chain(p.interiors())).map(|r| Euclidean.length(r)).sum();
-    let area = mp.unsigned_area();
-    if area > 0.0 && step.is_finite() { (4.0 * perimeter * step / area).clamp(1e-9, 1e-3) } else { 1e-9 }
+    let perimeter = mp.0.iter().flat_map(|p| std::iter::once(p.exterior()).chain(p.interiors())).map(|r| Euclidean.length(r)).sum();
+    (mp.unsigned_area(), perimeter)
 }
 
 /// Calculate Geometry Attributes: adds `area_km2` and `perimeter_km` to a polygon layer (see
@@ -3212,7 +3237,7 @@ struct TabulateZone {
     ext: Extent,
     /// Its features' polygons in Web Mercator, unioned when there are several, as [`mask_of`] does.
     mask: MultiPolygon<f64>,
-    /// The Web Mercator extent of its mask, for [`overlay_rounding`].
+    /// The Web Mercator extent of its mask, for [`OverlayGrid`].
     merc_ext: Extent,
     /// Its area in square metres as the map draws it ([`map_area_m2`]), overlaps between its
     /// features counted once.
@@ -3242,7 +3267,7 @@ struct TabulateCell {
 /// ([`map_area_m2`]): the overlay cuts along straight lines on the map, which that measure splits
 /// exactly and the ellipsoid's geodesic edges don't, so a feature's shares in zones that cover it
 /// without overlapping each other add up to its whole value, up to the overlay's rounding: a part
-/// within that rounding of the whole feature counts as the whole ([`overlay_rounding`]).
+/// that leaves nothing outside its zone wider than the overlay's grid is the whole ([`OverlayGrid`]).
 fn tabulate_intersection(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
     let zones = input(inp, p, "zones")?;
     let classes = input(inp, p, "classes")?;
@@ -3325,43 +3350,43 @@ fn tabulate_intersection(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, Strin
             let whole = dissolved(g);
             let values: Vec<Option<f64>> = sum_fields.iter().map(|&f| classes.value(r, f).as_f64()).collect();
             let mut whole_area: Option<f64> = None;
-            // The overlay's rounding of this feature's parts, relative to its area.
-            let mut rounding: Option<f64> = None;
+            // The overlay's grid for this feature and its zones, and how far rounding can move the
+            // feature's area relative to it: see [`OverlayGrid`].
             let near_merc = near.iter().filter_map(|&zi| zone_list.get(zi)).fold(Extent::EMPTY, |e, z| e.union(&z.merc_ext));
+            let mut grid: Option<OverlayGrid> = None;
             let mut inside = false;
-            // The part of the feature's area its shares took, over all zones, and with sum fields
-            // and several zones near, its parts, for when overlapping zones make that sum misleading.
-            let mut shared = 0.0;
-            let mut own_parts: Vec<MultiPolygon<f64>> = Vec::new();
-            let keep_parts = !sum_fields.is_empty() && near.len() > 1;
-            for zi in near {
-                let Some(mut piece) = zone_list.get(zi).and_then(|z| part(&whole, &z.mask, true)) else { continue };
+            // Whether one zone holds the whole feature, so none of it lies outside them all.
+            let mut held = false;
+            for &zi in &near {
+                let Some(zone) = zone_list.get(zi) else { continue };
+                let Some(mut piece) = part(&whole, &zone.mask, true) else { continue };
                 let mut piece_area = map_area_m2(&piece);
                 if piece_area <= 0.0 || !piece_area.is_finite() {
                     continue;
                 }
                 inside = true;
                 let total = *whole_area.get_or_insert_with(|| map_area_m2(&whole));
-                let tolerance = *rounding.get_or_insert_with(|| overlay_rounding(&whole, &near_merc));
-                // A part within the overlay's rounding of the whole feature is the whole: the
-                // feature lies inside the zone, and the cut only moved its vertices onto the grid.
-                if total > 0.0 && piece_area >= total * (1.0 - tolerance) {
+                let grid = grid.get_or_insert_with(|| OverlayGrid::new(&whole, &near_merc));
+                // A part within the overlay's rounding of the whole may be the whole feature, the cut
+                // only moving its vertices onto the grid: it is when what lies outside the zone, if
+                // anything, is no wider than the grid. Then the part is the whole, unrounded.
+                if total > 0.0
+                    && piece_area >= total * (1.0 - grid.rounding)
+                    && part(&whole, &zone.mask, false).is_none_or(|rest| !grid.wider(&rest))
+                {
                     piece = whole.as_ref().clone();
                     piece_area = total;
+                    held = true;
                 }
                 let cell = cells.entry((zi, ci)).or_insert_with(|| TabulateCell { parts: Vec::new(), sums: vec![0.0; sum_fields.len()] });
                 if !sum_fields.is_empty() {
                     // The part inside can come out a rounding error larger than the whole.
                     let share = if total > 0.0 { (piece_area / total).min(1.0) } else { 0.0 };
-                    shared += share;
                     for (sum, v) in cell.sums.iter_mut().zip(&values) {
                         if let Some(v) = v {
                             *sum += v * share;
                         }
                     }
-                }
-                if keep_parts {
-                    own_parts.extend(to_multipolygon(&piece));
                 }
                 cell.parts.push(piece);
             }
@@ -3370,19 +3395,20 @@ fn tabulate_intersection(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, Strin
                     *m += usize::from(v.is_none());
                 }
             }
-            // Zones that overlap each other can give shares adding up to the whole while part of the
-            // feature lies outside them all: then what they cover is measured as the union of the
-            // parts. The parts are rounded once by the cut and again by the union.
-            let tolerance = 2.0 * rounding.unwrap_or(0.0);
-            let covered = match (whole_area, own_parts.len() > 1) {
-                (Some(total), true) if total > 0.0 && shared >= 1.0 - tolerance => {
-                    from_multipolygon(&union_all(own_parts.iter().flat_map(|m| m.0.iter()))).map_or(0.0, |g| map_area_m2(&g)) / total
-                }
-                _ => shared,
-            };
-            // What zones cover is within the overlay's rounding of the whole when they cover it.
-            if !sum_fields.is_empty() && covered < 1.0 - tolerance {
-                outside += 1;
+            // With sum fields, a feature none of whose value is shared out, or with a part outside
+            // every zone wider than the overlay's grid, isn't wholly shared out: what is left of it
+            // once each zone near it is taken away in turn. Zones that overlap each other can't hide
+            // such a part, as shares adding up to the whole could.
+            if !sum_fields.is_empty() && !held {
+                let lies_outside = !inside || {
+                    let grid = grid.get_or_insert_with(|| OverlayGrid::new(&whole, &near_merc));
+                    let mut rest = Some(whole.as_ref().clone());
+                    for zone in near.iter().filter_map(|&zi| zone_list.get(zi)) {
+                        rest = rest.and_then(|r| part(&r, &zone.mask, false));
+                    }
+                    rest.is_some_and(|r| grid.wider(&r))
+                };
+                outside += usize::from(lies_outside);
             }
         }
     }
