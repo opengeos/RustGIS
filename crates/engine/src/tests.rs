@@ -918,8 +918,11 @@ fn unique_values_class_by_an_expression() {
     std::fs::remove_dir_all(&dir).ok();
     // Deleting a field it reads: a single symbol, as for a renderer on that field, and said.
     let mark = s.notice_mark();
+    let rustgis_map::Renderer::Unique { classes, .. } = &s.map().layer_by_name("Cities").unwrap().renderer else { panic!() };
+    let first_fill = classes[0].1.fill;
     s.run("edit.deleteField", &json!({"layer": "Cities", "field": "pop_max"})).unwrap();
-    assert!(matches!(s.map().layer_by_name("Cities").unwrap().renderer, rustgis_map::Renderer::Single(_)));
+    let rustgis_map::Renderer::Single(drawn) = &s.map().layer_by_name("Cities").unwrap().renderer else { panic!() };
+    assert_eq!(drawn.fill, first_fill, "drawn with the first class's symbol");
     assert!(s.notices_since(mark).iter().any(|n| n.text.contains("drawn with a single symbol")), "{:?}", s.notices_since(mark));
     // A field nothing draws by goes without a word about the symbols.
     let mark = s.notice_mark();
@@ -18102,6 +18105,8 @@ fn ogc_refresh_reconciles_fields_and_preserves_compatible_settings() {
             // Reordered and additional fields do not invalidate references by name.
             server.set(ITEMS, &features(json!({"extra":true, "name":"Updated", "value":20, "keep":1})));
             s.run("service.refresh", &target).unwrap();
+            let singled = |s: &Session| s.notices.iter().filter(|n| n.text.contains("drawn with a single symbol (1: Places)")).count();
+            assert_eq!(singled(&s), 0);
             let l = s.map().layer(layer).unwrap();
             assert_eq!(l.renderer, style);
             assert_eq!(l.labels, labels);
@@ -18112,6 +18117,17 @@ fn ogc_refresh_reconciles_fields_and_preserves_compatible_settings() {
             s.run("service.refresh", &target).unwrap();
             let l = s.map().layer(layer).unwrap();
             assert!(matches!(l.renderer, rustgis_map::Renderer::Single(_)));
+            assert_eq!(singled(&s), 1, "the classes going is said");
+            // Classes by an expression on a field that goes too.
+            s.run("edit.undo", &Value::Null).unwrap();
+            s.run("layer.symbology", &json!({"layer":layer, "type":"unique", "expression":"value || ''"})).unwrap();
+            s.run("service.refresh", &target).unwrap();
+            assert!(matches!(s.map().layer(layer).unwrap().renderer, rustgis_map::Renderer::Single(_)));
+            assert_eq!(singled(&s), 2);
+            s.run("edit.undo", &Value::Null).unwrap();
+            s.run("edit.undo", &Value::Null).unwrap();
+            s.run("service.refresh", &target).unwrap();
+            let l = s.map().layer(layer).unwrap();
             assert!(!l.labels.enabled);
             assert!(l.labels.default.field.is_empty());
             assert_eq!(l.labels.default.size, 19.);

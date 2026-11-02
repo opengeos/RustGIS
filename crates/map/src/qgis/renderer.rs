@@ -329,8 +329,11 @@ fn rules(r: Node, layer: &str, style: &mut Style, report: &mut Report, sym: &Sym
     for rule in drawn.iter().filter(|_| simple) {
         let label = rule.node.attribute("label").map(str::to_string);
         if !rule.else_of.is_empty() {
+            // (Only the first draws the rest; a later one's symbol isn't read.)
             if rule.filters.is_empty() && rule.else_of.len() == 1 {
-                if let Some(c) = sym(rule.node.attribute("symbol"), report) {
+                if other.is_none()
+                    && let Some(c) = sym(rule.node.attribute("symbol"), report)
+                {
                     (other, other_label) = (Some(c), else_label(rule));
                 }
                 continue;
@@ -449,13 +452,15 @@ fn by_expression(drawn: &[&Rule], style: &mut Style, report: &mut Report, sym: &
     let mut keys = std::collections::HashSet::new();
     let quoted = |f: &String| expr::to_sql(f).map(|e| format!("({e})"));
     for (i, rule) in drawn.iter().enumerate() {
+        // A top-level else rule at every scale: the rest. (A later one draws nothing more, a
+        // feature being drawn with the first rule it meets: its symbol isn't read.)
+        let rest = rule.else_of.len() == 1 && rule.filters.is_empty() && !rule.scaled();
+        if rest && other.is_some() {
+            continue;
+        }
         let Some(c) = sym(rule.node.attribute("symbol"), report) else { continue };
-        // A top-level else rule at every scale: the rest.
-        // (A later one draws nothing more: a feature is drawn with the first rule it meets.)
-        if rule.else_of.len() == 1 && rule.filters.is_empty() && !rule.scaled() {
-            if other.is_none() {
-                (other, other_label) = (Some(c), else_label(rule));
-            }
+        if rest {
+            (other, other_label) = (Some(c), else_label(rule));
             continue;
         }
         let Some(mut parts) = rule.filters.iter().map(quoted).collect::<Option<Vec<String>>>() else { return false };

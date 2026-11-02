@@ -362,7 +362,7 @@ fn note_overlapping_rules(l: &rustgis_map::Layer, name: &str, rules: &[qgis::Rul
     // (Only the features its definition query keeps are drawn.)
     let shown = l.visible_rows();
     let n = (0..ds.features.len())
-        .filter(|row| shown.get(*row).copied().unwrap_or(false))
+        .filter(|row| shown.get(*row).copied().unwrap_or(false) && ds.features.get(*row).is_some_and(|f| f.geometry.is_some()))
         .filter(|row| together(compiled.iter().filter(|(_, e)| rustgis_data::query::matches(e, ds, *row, &env)).map(|c| c.0)))
         .count();
     if n > 0 {

@@ -67,7 +67,13 @@ pub(super) fn read(l: Node, geometry: Option<&str>, layer: &str, report: &mut Re
                 let Some(where_) = where_ else {
                     report.skipped(
                         layer,
-                        format!("the label rule \"{name}\", whose filter `{}` is empty or too long to read", r.filters.join(" AND ")),
+                        if r.else_of.is_empty() {
+                            format!("the label rule \"{name}\", whose filter `{}` is empty or too long to read", r.filters.join(" AND "))
+                        } else {
+                            format!(
+                                "the label rule \"{name}\", an else rule whose siblings' filters (or its own) are too long or can't be read"
+                            )
+                        },
                     );
                     continue;
                 };
@@ -188,13 +194,13 @@ fn class(
         let bare = field.strip_prefix('"').and_then(|f| f.strip_suffix('"')).unwrap_or(field);
         if !bare.is_empty() && bare.chars().all(|c| c.is_alphanumeric() || c == '_' || c == ' ') {
             bare.to_string()
-        } else if field.len() > rustgis_data::query::MAX_LEN {
+        } else if field.chars().count() > rustgis_data::query::MAX_LEN {
             report.skipped(layer, "labels whose text is an expression too long to read");
             return None;
         } else {
             let text = super::expr::rustgis_scales(field);
             // (Its map scale read as RustGIS's lengthens it.)
-            if text.len() > rustgis_data::query::MAX_LEN {
+            if text.chars().count() > rustgis_data::query::MAX_LEN {
                 report.skipped(layer, "labels whose text is an expression too long to read");
                 return None;
             }

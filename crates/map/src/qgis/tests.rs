@@ -1468,12 +1468,25 @@ fn a_lone_else_rule_is_one_symbol() {
         <rule filter="&quot;value&quot; &gt;= 20 AND &quot;kind&quot; = 'a'" symbol="0" label="A"/>
         <rule filter="ELSE" symbol="1" label="First rest"/><rule filter="ELSE" symbol="0" label="Second rest"/></rules>
         <symbols><symbol type="marker" name="0"><layer class="SimpleMarker" enabled="1"/></symbol>
-        <symbol type="marker" name="1"><layer class="SimpleMarker" enabled="1"/></symbol></symbols></renderer-v2></qgis>"#;
+        <symbol type="marker" name="1"><layer class="SimpleMarker" enabled="1"><prop k="color" v="0,0,255,255"/></layer></symbol></symbols></renderer-v2></qgis>"#;
     let s = read_style(qml, "points", &mut Report::default()).unwrap();
     let mut l = rule_points(&[("a", 30, "q"), ("b", 30, "q")]);
     s.apply(&mut l);
     assert_eq!(rule_classes(&l, None), [Some("A".to_string()), None]);
-    assert!(matches!(&l.renderer, Renderer::Unique { other_label: Some(o), .. } if o == "First rest"), "{:?}", l.renderer);
+    assert!(
+        matches!(&l.renderer, Renderer::Unique { other, other_label: Some(o), .. } if o == "First rest" && other.fill == crate::Rgba::rgb(0, 0, 255)),
+        "{:?}",
+        l.renderer
+    );
+    // So too beside rules on one field's values (Unique Values on it).
+    let simple = qml.replace(r#"&quot;value&quot; &gt;= 20 AND &quot;kind&quot; = 'a'"#, r#"&quot;kind&quot; = 'a'"#);
+    let mut l = rule_points(&[("a", 30, "q"), ("b", 30, "q")]);
+    read_style(&simple, "points", &mut Report::default()).unwrap().apply(&mut l);
+    assert!(
+        matches!(&l.renderer, Renderer::Unique { field, other, other_label: Some(o), .. } if field == "kind" && o == "First rest" && other.fill == crate::Rgba::rgb(0, 0, 255)),
+        "{:?}",
+        l.renderer
+    );
 }
 
 #[test]
