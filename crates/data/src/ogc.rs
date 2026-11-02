@@ -2808,7 +2808,7 @@ fn wfs_matched(bytes: &[u8]) -> Option<u64> {
     if local(&root) != "FeatureCollection" {
         return None;
     }
-    root.attribute("numberMatched").or_else(|| root.attribute("numberOfFeatures"))?.parse().ok()
+    root.attribute("numberMatched").or_else(|| root.attribute("numberOfFeatures"))?.trim().parse().ok()
 }
 
 /// A feature's service id, serialized to distinguish numeric and string ids.
@@ -2819,6 +2819,19 @@ fn feature_id(feature: &RawValue) -> Option<String> {
     }
     let id = serde_json::from_str::<Id>(feature.get()).ok()?.id?;
     (id.is_string() || id.is_number()).then(|| id.to_string())
+}
+
+/// A content fingerprint for an ID-less row, used only to warn about possible overlap.
+/// Rows remain distinct: equal content (or a hash collision) never causes one to be dropped.
+fn unidentified_hash(feature: &RawValue) -> Option<u64> {
+    use std::hash::{Hash, Hasher};
+    if feature_id(feature).is_some() {
+        return None;
+    }
+    let value: serde_json::Value = serde_json::from_str(feature.get()).ok()?;
+    let mut hash = std::collections::hash_map::DefaultHasher::new();
+    value.hash(&mut hash);
+    Some(hash.finish())
 }
 
 /// A feature collection read page by page: `first` (from `url`), then each page `get` returns, up
@@ -2882,7 +2895,15 @@ enum Phase {
     /// A WFS hits response, used when its GeoJSON gives no next link.
     WfsHits,
     /// WFS offsets count returned rows, while ids prevent overlapping pages adding duplicates.
-    WfsOffsets { matched: u64, offset: usize, size: usize, ids: std::collections::HashSet<String>, start: Option<serde_json::Value> },
+    WfsOffsets {
+        matched: u64,
+        offset: usize,
+        size: usize,
+        ids: std::collections::HashSet<String>,
+        start: Option<serde_json::Value>,
+        unidentified: std::collections::HashSet<u64>,
+        overlap: bool,
+    },
     /// An OGC API or WFS page, which links to the next.
     Linked,
     /// An ArcGIS page, `size` long from an offset, in `order`. `start` is the first such page's
@@ -3036,7 +3057,15 @@ impl Pages {
             let mut ids = std::collections::HashSet::new();
             self.features.retain(|f| feature_id(f).is_none_or(|id| ids.insert(id)));
             self.next = wfs_page_url(&self.url, Some(offset), offset.min(self.max));
-            self.phase = Phase::WfsOffsets { matched, offset, size: offset.min(self.max), ids, start: first_value(&self.features) };
+            self.phase = Phase::WfsOffsets {
+                matched,
+                offset,
+                size: offset.min(self.max),
+                ids,
+                start: first_value(&self.features),
+                unidentified: self.features.iter().filter_map(|f| unidentified_hash(f)).collect(),
+                overlap: false,
+            };
             return self.advance();
         }
         if let Phase::Describe { first } = &mut self.phase {
@@ -3062,7 +3091,7 @@ impl Pages {
             Err(e) => return self.stop(format!("the page after feature {read} couldn't be read ({e}); the rest aren't read")),
         };
         let following = match &mut self.phase {
-            Phase::WfsOffsets { matched, offset, size, ids, start } => {
+            Phase::WfsOffsets { matched, offset, size, ids, start, unidentified, overlap } => {
                 let returned = more.len();
                 if returned == 0 {
                     return self.stop("the WFS sent an empty page before its reported total; the rest aren't read".into());
@@ -3070,9 +3099,18 @@ impl Pages {
                 let page_start = first_value(&more);
                 let repeated = page_start == *start;
                 *start = page_start;
-                let unidentified = more.iter().any(|f| feature_id(f).is_none());
+                let hashes: Vec<_> = more.iter().filter_map(|f| unidentified_hash(f)).collect();
+                *overlap |= hashes.iter().any(|h| unidentified.contains(h));
+                let has_unidentified = !hashes.is_empty();
+                unidentified.extend(hashes);
                 more.retain(|f| feature_id(f).is_none_or(|id| ids.insert(id)));
-                if more.is_empty() || (repeated && unidentified) {
+                if repeated && has_unidentified {
+                    // Keep returned rows: identical ID-less rows can be distinct features.
+                    self.features.extend(more);
+                    self.features.truncate(self.max);
+                    return self.stop("the WFS repeated a page; possible overlap in rows without ids; the rest aren't read".into());
+                }
+                if more.is_empty() {
                     return self.stop("the WFS repeated an earlier page instead of advancing; the rest aren't read".into());
                 }
                 *offset = offset.saturating_add(returned);
@@ -3084,12 +3122,18 @@ impl Pages {
                 }
                 if (*offset as u64) >= *matched {
                     let matched = *matched;
+                    let overlap = *overlap;
                     self.features.extend(more);
                     if self.features.len() > self.max {
                         return self.finish_at_max();
                     }
                     if self.features.len() as u64 != matched {
                         return self.stop("the WFS pages overlap or its total changed; the features read may be incomplete".into());
+                    }
+                    if overlap {
+                        return self.stop(
+                            "possible overlap in rows without ids; all returned rows are kept and the read may be incomplete".into(),
+                        );
                     }
                     return self.finish(None);
                 }
@@ -3138,7 +3182,7 @@ impl Pages {
     /// The next page fetched, unless the features are all read that may be or the pages lead
     /// back to one already read.
     fn advance(mut self) -> Step {
-        if self.features.len() >= self.max {
+        if self.features.len() > self.max || (self.features.len() == self.max && !matches!(self.phase, Phase::WfsHits)) {
             return self.finish_at_max();
         }
         if !self.seen.insert(self.next.clone()) {
@@ -3932,6 +3976,64 @@ mod tests {
         let doc: serde_json::Value = serde_json::from_slice(&joined).unwrap();
         assert_eq!(doc["features"].as_array().unwrap().len(), 3);
         assert_eq!(note, None);
+    }
+
+    #[test]
+    fn wfs_review_exact_limit_can_be_complete() {
+        let url = "https://wfs.example.org/wfs?SERVICE=WFS&VERSION=2.0.0&REQUEST=GetFeature";
+        let page = |rows: serde_json::Value| serde_json::to_vec(&serde_json::json!({"features": rows})).unwrap();
+        let first = page(serde_json::json!([{"id": 1}, {"id": 2}]));
+        let (bytes, note) = join_pages(url, first.clone(), 2, |_| Ok(br#"<FeatureCollection numberMatched="2"/>"#.to_vec()));
+        assert_eq!(serde_json::from_slice::<serde_json::Value>(&bytes).unwrap()["features"].as_array().unwrap().len(), 2);
+        assert_eq!(note, None);
+    }
+
+    #[test]
+    fn wfs_review_padded_total_continues_paging() {
+        let url = "https://wfs.example.org/wfs?SERVICE=WFS&VERSION=2.0.0&REQUEST=GetFeature";
+        let page = |rows: serde_json::Value| serde_json::to_vec(&serde_json::json!({"features": rows})).unwrap();
+        let first = page(serde_json::json!([{"id": 1}, {"id": 2}]));
+        let (bytes, note) = join_pages(url, first, 100, |u| {
+            if query_value(u, "RESULTTYPE").is_some() {
+                Ok(br#"<FeatureCollection numberMatched=" 3 "/>"#.to_vec())
+            } else {
+                Ok(page(serde_json::json!([{"id": 3}])))
+            }
+        });
+        assert_eq!(serde_json::from_slice::<serde_json::Value>(&bytes).unwrap()["features"].as_array().unwrap().len(), 3);
+        assert_eq!(note, None);
+    }
+
+    #[test]
+    fn wfs_review_idless_overlap_reports_uncertainty() {
+        let url = "https://wfs.example.org/wfs?SERVICE=WFS&VERSION=2.0.0&REQUEST=GetFeature";
+        let page = |rows: serde_json::Value| serde_json::to_vec(&serde_json::json!({"features": rows})).unwrap();
+        let first = page(serde_json::json!([{"properties": {"n": 1}}, {"id": 2}]));
+        let (bytes, note) = join_pages(url, first, 100, |u| match query_value(u, "STARTINDEX") {
+            Some("2") => Ok(page(serde_json::json!([{"id": 3}, {"id": 4}]))),
+            Some("4") => Ok(page(serde_json::json!([{"id": 5}, {"properties": {"n": 1}}]))),
+            _ => Ok(br#"<FeatureCollection numberMatched="6"/>"#.to_vec()),
+        });
+        assert_eq!(serde_json::from_slice::<serde_json::Value>(&bytes).unwrap()["features"].as_array().unwrap().len(), 6);
+        assert!(note.unwrap().contains("possible overlap"));
+    }
+
+    #[test]
+    fn wfs_review_mixed_repeat_keeps_new_identified_rows() {
+        let url = "https://wfs.example.org/wfs?SERVICE=WFS&VERSION=2.0.0&REQUEST=GetFeature";
+        let page = |rows: serde_json::Value| serde_json::to_vec(&serde_json::json!({"features": rows})).unwrap();
+        let first = page(serde_json::json!([{"id": 1}, {"properties": {"n": 2}}]));
+        let (bytes, note) = join_pages(url, first, 100, |u| {
+            if query_value(u, "RESULTTYPE").is_some() {
+                Ok(br#"<FeatureCollection numberMatched="5"/>"#.to_vec())
+            } else {
+                Ok(page(serde_json::json!([{"id": 1}, {"properties": {"n": 2}}, {"id": 3}])))
+            }
+        });
+        let doc: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert!(doc["features"].as_array().unwrap().iter().any(|f| f["id"] == 3));
+        assert_eq!(doc["features"].as_array().unwrap().len(), 4);
+        assert!(note.is_some());
     }
 
     /// Paging preserves the selection query and reports each way a service can stop short.
