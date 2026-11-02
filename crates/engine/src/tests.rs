@@ -23716,6 +23716,12 @@ fn a_cancelled_tool_leaves_the_map_as_it_was_and_says_so_in_the_history() {
     assert_eq!(s.map().layers.len(), layers, "nothing was added");
     let last = s.project.gp_history.last().map(|r| (r.ok, r.messages.clone()));
     assert_eq!(last, Some((false, vec![e])));
+    // Nothing is read for it either: a missing file among its inputs isn't reached.
+    let missing = std::env::temp_dir().join(format!("rustgis-no-such-{}.geojson", std::process::id()));
+    let merge = json!({"inputs": [missing.display().to_string(), "Cities"]});
+    let e = crate::cmd::gp::run_tool_with(&mut s, "merge", &merge, &control).err().unwrap_or_default();
+    assert_eq!(e, "Merge was cancelled before it started");
+    assert!(crate::cmd::gp::run_tool(&mut s, "merge", &merge).is_err(), "not cancelled, the missing file is read");
     // The same run, not cancelled, adds its raster.
     crate::cmd::gp::run_tool(&mut s, "idwInterpolation", &params).unwrap_or_else(|e| panic!("{e}"));
     assert_eq!(s.map().layers.len(), layers + 1);

@@ -166,16 +166,15 @@ pub(crate) fn try_map_on<T: Sync, S, R: Send, E: Send + From<Cancelled>>(
             }
             for (k, item) in batch.iter().enumerate() {
                 match f(&mut s, from + k, item) {
-                    Ok(r) => {
-                        made.push((from + k, r));
-                        control::advance(1);
-                    }
+                    Ok(r) => made.push((from + k, r)),
                     Err(e) => {
                         failed.store(true, Ordering::Relaxed);
                         return Err((from + k, e));
                     }
                 }
             }
+            // Counted a batch at a time: the threads share one count.
+            control::advance(batch.len());
         }
         Ok(made)
     };
