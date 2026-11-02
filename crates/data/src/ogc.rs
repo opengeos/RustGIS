@@ -3009,17 +3009,22 @@ pub fn read_pages(url: &str, first: Vec<u8>, max: usize) -> Step {
     } else if wfs {
         (wfs_page_url(url, None, 0), Phase::WfsHits)
     } else {
-        let note = if legacy_wfs
-            && let Some(limit) = query_value(url, "MAXFEATURES").and_then(|s| s.parse::<usize>().ok()).filter(|n| *n > 0)
-            && features.len() >= limit
-        {
-            let read = features.len();
-            Some(format!(
-                "{read} WFS features read: the requested limit of {limit} was reached without a next link; the read may be incomplete"
-            ))
-        } else {
-            None
-        };
+        let read = features.len();
+        let note =
+            if legacy_wfs && let Some(total) = doc.get("totalFeatures").and_then(serde_json::Value::as_u64).filter(|n| *n > read as u64) {
+                Some(format!(
+                    "{read} of {total} WFS features read: the server reported more features than it returned; the read may be incomplete"
+                ))
+            } else if legacy_wfs
+                && let Some(limit) = query_value(url, "MAXFEATURES").and_then(|s| s.parse::<usize>().ok()).filter(|n| *n > 0)
+                && read >= limit
+            {
+                Some(format!(
+                    "{read} WFS features read: the requested limit of {limit} was reached without a next link; the read may be incomplete"
+                ))
+            } else {
+                None
+            };
         return Step::Done(first, note);
     };
     let pages = Pages {
@@ -4025,6 +4030,22 @@ mod tests {
             requests.push(calls);
         }
         assert_eq!(requests, [0, 0]);
+    }
+
+    /// A reported legacy WFS total exposes truncation below the requested cap.
+    #[test]
+    fn wfs_legacy_reported_total_is_not_silent() {
+        let url = "https://wfs.example.org/wfs?SERVICE=WFS&VERSION=1.1.0&REQUEST=GetFeature&MAXFEATURES=50000";
+        let first = br#"{"features":[{"id":1},{"id":2}],"totalFeatures":3}"#;
+        let (bytes, note) = join_pages(url, first.to_vec(), 100, |_| panic!("legacy WFS has no offset paging"));
+        assert_eq!(bytes, first);
+        let note = note.unwrap();
+        assert!(note.contains("2 of 3 WFS features read"));
+        assert!(note.contains("incomplete"));
+        let complete = br#"{"features":[{"id":1},{"id":2}],"totalFeatures":2}"#;
+        let (bytes, note) = join_pages(url, complete.to_vec(), 100, |_| panic!("legacy WFS has no offset paging"));
+        assert_eq!(bytes, complete);
+        assert_eq!(note, None);
     }
 
     /// Legacy WFS at its requested cap warns, while a shorter response stays clean.
