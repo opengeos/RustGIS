@@ -2903,6 +2903,7 @@ enum Phase {
         start: Option<serde_json::Value>,
         unidentified: std::collections::HashSet<u64>,
         overlap: bool,
+        duplicates: usize,
     },
     /// An OGC API or WFS page, which links to the next.
     Linked,
@@ -3056,6 +3057,7 @@ impl Pages {
             }
             let mut ids = std::collections::HashSet::new();
             self.features.retain(|f| feature_id(f).is_none_or(|id| ids.insert(id)));
+            let duplicates = offset.saturating_sub(self.features.len());
             self.next = wfs_page_url(&self.url, Some(offset), offset.min(self.max));
             self.phase = Phase::WfsOffsets {
                 matched,
@@ -3065,6 +3067,7 @@ impl Pages {
                 start: first_value(&self.features),
                 unidentified: self.features.iter().filter_map(|f| unidentified_hash(f)).collect(),
                 overlap: false,
+                duplicates,
             };
             return self.advance();
         }
@@ -3091,7 +3094,7 @@ impl Pages {
             Err(e) => return self.stop(format!("the page after feature {read} couldn't be read ({e}); the rest aren't read")),
         };
         let following = match &mut self.phase {
-            Phase::WfsOffsets { matched, offset, size, ids, start, unidentified, overlap } => {
+            Phase::WfsOffsets { matched, offset, size, ids, start, unidentified, overlap, duplicates } => {
                 let returned = more.len();
                 if returned == 0 {
                     return self.stop("the WFS sent an empty page before its reported total; the rest aren't read".into());
@@ -3104,6 +3107,7 @@ impl Pages {
                 let has_unidentified = !hashes.is_empty();
                 unidentified.extend(hashes);
                 more.retain(|f| feature_id(f).is_none_or(|id| ids.insert(id)));
+                *duplicates = duplicates.saturating_add(returned.saturating_sub(more.len()));
                 if repeated && has_unidentified {
                     // Keep returned rows: identical ID-less rows can be distinct features.
                     self.features.extend(more);
@@ -3201,6 +3205,17 @@ impl Pages {
 
     /// The pages' features in the first page's collection, without its paging members.
     fn finish(mut self, note: Option<String>) -> Step {
+        let note = if let Phase::WfsOffsets { duplicates, .. } = &self.phase
+            && *duplicates > 0
+        {
+            let removed = format!("{duplicates} repeated service-id rows ignored");
+            Some(match note {
+                Some(note) => format!("{note}; {removed}"),
+                None => removed,
+            })
+        } else {
+            note
+        };
         if let Some(members) = self.doc.as_object_mut() {
             for paging in ["links", "numberMatched", "numberReturned", "exceededTransferLimit"] {
                 members.remove(paging);
@@ -3976,6 +3991,23 @@ mod tests {
         let doc: serde_json::Value = serde_json::from_slice(&joined).unwrap();
         assert_eq!(doc["features"].as_array().unwrap().len(), 3);
         assert_eq!(note, None);
+    }
+
+    /// Removing a repeated service id remains visible even when the unique total matches.
+    #[test]
+    fn wfs_duplicate_ids_are_counted_when_the_total_matches() {
+        let url = "https://wfs.example.org/wfs?SERVICE=WFS&VERSION=2.0.0&REQUEST=GetFeature";
+        let first = br#"{"features":[{"id":1},{"id":2}]}"#;
+        let (bytes, note) = join_pages(url, first.to_vec(), 100, |u| {
+            if query_value(u, "RESULTTYPE").is_some() {
+                Ok(br#"<FeatureCollection numberMatched="4"/>"#.to_vec())
+            } else {
+                Ok(br#"{"features":[{"id":2},{"id":3},{"id":4}]}"#.to_vec())
+            }
+        });
+        let doc: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(doc["features"].as_array().unwrap().len(), 4);
+        assert!(note.unwrap().contains("1 repeated service-id row"));
     }
 
     #[test]
