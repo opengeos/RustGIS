@@ -23730,3 +23730,65 @@ fn a_cancelled_tool_leaves_the_map_as_it_was_and_says_so_in_the_history() {
     crate::cmd::gp::run_tool(&mut s, "idwInterpolation", &params).unwrap_or_else(|e| panic!("{e}"));
     assert_eq!(s.map().layers.len(), layers + 1);
 }
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn built_in_tools_run_off_the_session() {
+    use crate::cmd::gp::{tool_abandon, tool_complete, tool_start, tool_waiting};
+    use rustgis_analysis::control::Control;
+    fn sends<T: Send>(_: &T) {}
+    let mut s = world();
+    // Started: what it reads is taken now; it runs elsewhere while the project goes on.
+    let run = tool_start(&mut s, "buffer", &json!({"input": "Cities", "distance": 50})).unwrap();
+    assert_eq!(run.tool, "buffer");
+    sends(&run);
+    let id = run.id;
+    assert!(tool_waiting(&s, id));
+    let made = std::thread::spawn(move || run.run(&Control::new()));
+    s.run("layer.remove", &json!({"layer": "Cities"})).unwrap();
+    let done = made.join().unwrap();
+    tool_complete(&mut s, id, done).unwrap();
+    // Applied as gp.run applies a run: its layer, its history, undo.
+    let before = s.map().layers.len();
+    s.run("gp.finish", &json!({"id": id})).unwrap();
+    assert_eq!(s.map().layers.len(), before + 1);
+    let h = s.project.gp_history.last().unwrap();
+    assert!(h.ok && h.tool == "Buffer" && h.params["input"] == "Cities", "{h:?}");
+    s.run("edit.undo", &Value::Null).unwrap();
+    assert_eq!(s.map().layers.len(), before);
+    // Cancelled while it runs, or before: it fails, saying so, and adds nothing (a failed command
+    // leaves the project as it was, as a failed gp.run does).
+    let mut s = world();
+    let layers = s.map().layers.len();
+    let run = tool_start(&mut s, "idwInterpolation", &json!({"input": "Cities", "field": "pop_max", "pixelSize": 5.0})).unwrap();
+    let control = Control::new();
+    control.cancel();
+    let id = run.id;
+    let done = run.run(&control);
+    tool_complete(&mut s, id, done).unwrap();
+    let e = s.run("gp.finish", &json!({"id": id})).unwrap_err();
+    assert_eq!(e, "IDW Interpolation was cancelled before it started");
+    assert_eq!(s.map().layers.len(), layers);
+    // Inputs it can't read fail its run, in the history, rather than its start.
+    let missing = std::env::temp_dir().join(format!("rustgis-no-such-bg-{}.geojson", std::process::id()));
+    let run = tool_start(&mut s, "merge", &json!({"inputs": [missing.display().to_string(), "Cities"]})).unwrap();
+    let id = run.id;
+    let done = run.run(&Control::new());
+    tool_complete(&mut s, id, done).unwrap();
+    let e = s.run("gp.finish", &json!({"id": id})).unwrap_err();
+    assert!(e.starts_with(&missing.display().to_string()), "{e}");
+    // Parameters are checked when it starts; plugin tools start their own way; a run completes once.
+    assert!(tool_start(&mut s, "buffer", &json!({})).err().unwrap().contains("required"));
+    assert!(tool_start(&mut s, "plugin:none/x", &json!({})).err().unwrap().contains("no tool"));
+    let again = tool_start(&mut s, "buffer", &json!({"input": "Cities", "distance": 50})).unwrap();
+    let done = again.run(&Control::new());
+    assert!(tool_complete(&mut s, id, done).unwrap_err().contains("dropped"), "completed once");
+    // Opening another project drops its runs; one whose thread couldn't start is forgotten.
+    let run = tool_start(&mut s, "buffer", &json!({"input": "Cities", "distance": 50})).unwrap();
+    s.run("project.new", &Value::Null).unwrap();
+    assert!(!tool_waiting(&s, run.id));
+    let mut s = world();
+    let run = tool_start(&mut s, "buffer", &json!({"input": "Cities", "distance": 50})).unwrap();
+    tool_abandon(&mut s, run.id);
+    assert!(!tool_waiting(&s, run.id));
+}

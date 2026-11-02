@@ -2648,6 +2648,9 @@ pub struct GpForm {
     pub web_run: Option<(u64, &'static str, crate::Slot<rustgis_engine::cmd::gp::ExternalOutput>)>,
     /// A plugin tool running on a thread of its own, so the window stays responsive.
     pub plugin_run: Option<PluginJob>,
+    /// A built-in tool running on a thread of its own, likewise (the browser runs them at once).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub tool_run: Option<ToolJob>,
     /// Files picked in the browser for file parameters, which have no paths there: (name,
     /// contents), sent with the run while the parameter still shows that name.
     pub files: HashMap<&'static str, (String, Vec<u8>)>,
@@ -2669,6 +2672,68 @@ pub struct PluginJob {
     pub slot: crate::Slot<Result<rustgis_engine::analysis::ToolResult, String>>,
     /// Stops the run, and shows what it last logged.
     pub control: std::sync::Arc<rustgis_engine::plugins::tools::Control>,
+}
+
+/// A built-in tool running on a thread of its own.
+#[cfg(not(target_arch = "wasm32"))]
+pub struct ToolJob {
+    pub id: u64,
+    pub tool: &'static str,
+    /// What the run made, once it has.
+    pub slot: crate::Slot<rustgis_engine::cmd::gp::ToolDone>,
+    /// Stops the run, and counts its progress.
+    pub control: std::sync::Arc<rustgis_engine::analysis::control::Control>,
+}
+
+/// Starts a built-in tool on a thread of its own; [`poll_tool_run`] applies what it made.
+#[cfg(not(target_arch = "wasm32"))]
+fn start_tool_run(app: &mut RustGisApp, tool: &'static str, params: &Value, ctx: &egui::Context) {
+    match rustgis_engine::cmd::gp::tool_start(&mut app.session, tool, params) {
+        Ok(run) => {
+            let slot = crate::Slot::default();
+            let control = rustgis_engine::analysis::control::Control::new();
+            let (out, ctl, ctx) = (slot.clone(), control.clone(), ctx.clone());
+            let id = run.id;
+            let spawned = std::thread::Builder::new().name(tool.into()).spawn(move || {
+                let done = run.run(&ctl);
+                // Filled even when poisoned, or the pane would wait for it forever.
+                *out.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(done);
+                ctx.request_repaint();
+            });
+            match spawned {
+                Ok(_) => {
+                    app.gp.tool_run = Some(ToolJob { id, tool, slot, control });
+                    app.gp.last = None;
+                }
+                Err(e) => {
+                    rustgis_engine::cmd::gp::tool_abandon(&mut app.session, id);
+                    app.gp.last = Some((false, vec![e.to_string()]));
+                }
+            }
+        }
+        Err(e) => app.gp.last = Some((false, vec![e])),
+    }
+}
+
+/// Applies a built-in tool run that finished on its thread.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn poll_tool_run(app: &mut RustGisApp, ctx: &egui::Context) {
+    let Some(job) = &app.gp.tool_run else { return };
+    // Its project was closed: stop it, as its result has nowhere to go.
+    if !rustgis_engine::cmd::gp::tool_waiting(&app.session, job.id) {
+        job.control.cancel();
+        app.gp.tool_run = None;
+        return;
+    }
+    let Some(done) = take(&job.slot) else {
+        // Its progress moves as it works.
+        ctx.request_repaint_after(std::time::Duration::from_millis(100));
+        return;
+    };
+    let (id, tool) = (job.id, job.tool);
+    app.gp.tool_run = None;
+    let r = rustgis_engine::cmd::gp::tool_complete(&mut app.session, id, done).and_then(|_| app.run("gp.finish", json!({"id": id})));
+    finished(app, tool, r);
 }
 
 /// Starts a plugin tool on a thread of its own; [`poll_plugin_run`] applies what it returns.
@@ -3673,8 +3738,10 @@ fn geoprocessing(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     }
     ui.add_space(8.0);
     ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
-        // One browser run at a time, and one plugin run.
+        // One browser run at a time, and one background run.
         let idle = app.gp.web_run.is_none() && app.gp.plugin_run.is_none();
+        #[cfg(not(target_arch = "wasm32"))]
+        let idle = idle && app.gp.tool_run.is_none();
         if crate::widgets::primary_button(ui, tl!("Run"), idle, vec2(96.0, 30.0)).clicked() {
             // A blank output opens Save As before any work starts. Cancelling writes nothing.
             #[cfg(not(target_arch = "wasm32"))]
@@ -3737,6 +3804,10 @@ fn geoprocessing(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                 // On a thread of its own: a plugin tool may run for minutes.
                 #[cfg(not(target_arch = "wasm32"))]
                 start_plugin_run(app, spec.id, &params, ui.ctx());
+            } else if !cfg!(target_arch = "wasm32") {
+                // A built-in tool too, with its progress and Cancel; the browser has no threads.
+                #[cfg(not(target_arch = "wasm32"))]
+                start_tool_run(app, spec.id, &params, ui.ctx());
             } else {
                 let r = app.run("gp.run", json!({"tool": spec.id, "params": params}));
                 app.gp.last = Some(match r {
@@ -3770,6 +3841,28 @@ fn geoprocessing(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         // What the tool last logged, as its progress.
         if let Some(line) = job.control.last_log() {
             ui.label(egui::RichText::new(line).size(11.0).color(t.text_dim));
+        }
+        if cancel {
+            job.control.cancel();
+        }
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(job) = &app.gp.tool_run {
+        ui.add_space(8.0);
+        let mut cancel = false;
+        ui.horizontal(|ui| {
+            ui.spinner();
+            let name = rustgis_engine::analysis::tool(job.tool).map(|t| t.name).unwrap_or(job.tool);
+            // Two labels, not one sentence put together from translated pieces.
+            ui.label(egui::RichText::new(tl!("Running…")).size(12.0));
+            ui.label(egui::RichText::new(tl!(name)).size(12.0).strong());
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                cancel = ui.add_enabled(!job.control.is_cancelled(), egui::Button::new(tl!("Cancel"))).clicked();
+            });
+        });
+        // How far its current step has come, when it counts its work.
+        if let Some((done, total)) = job.control.progress() {
+            ui.add(egui::ProgressBar::new(done as f32 / total.max(1) as f32).show_percentage().desired_height(14.0));
         }
         if cancel {
             job.control.cancel();
@@ -6332,6 +6425,46 @@ pub(crate) fn layout_menu(app: &mut RustGisApp, ui: &mut Ui, n: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Run starts a built-in tool on a thread of its own: the pane shows it running, with Cancel,
+    /// and its result lands as gp.run's would, with its layer and history.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn the_geoprocessing_pane_runs_a_tool_in_the_background() {
+        use egui_kittest::kittest::Queryable;
+        let mut app = RustGisApp::with_sample();
+        let _ = app.run("ui.gp.open", json!({"tool": "buffer"}));
+        app.gp.values.insert("input", "Cities".into());
+        app.gp.values.insert("distance", "50".into());
+        let layers = app.session.map().layers.len();
+        let mut fonts = false;
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(420.0, 1000.0)).build_ui_state(
+            move |ui, app: &mut RustGisApp| {
+                if !fonts {
+                    crate::theme::install_fonts(ui.ctx(), &[], None);
+                    fonts = true;
+                    return;
+                }
+                poll_tool_run(app, ui.ctx());
+                geoprocessing(app, ui, &Tokens::light());
+            },
+            app,
+        );
+        h.run();
+        h.get_by_label("Run").click();
+        h.step();
+        assert!(h.state().gp.tool_run.is_some(), "it runs in the background");
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        while h.state().gp.tool_run.is_some() {
+            assert!(std::time::Instant::now() < end, "the run never landed");
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            h.step();
+        }
+        let app = h.state();
+        assert_eq!(app.gp.last.as_ref().map(|l| l.0), Some(true), "{:?}", app.gp.last);
+        assert_eq!(app.session.map().layers.len(), layers + 1);
+        assert_eq!(app.session.project.gp_history.last().map(|r| (r.ok, r.tool.as_str())), Some((true, "Buffer")));
+    }
 
     #[test]
     fn field_source_uses_the_longest_input_prefix() {

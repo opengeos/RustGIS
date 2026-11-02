@@ -3764,6 +3764,8 @@ impl RustGisApp {
         rustgis_engine::plugins::set_language(self.lang().code());
         panes::poll_geolibre(self, ctx);
         panes::poll_plugin_run(self, ctx);
+        #[cfg(not(target_arch = "wasm32"))]
+        panes::poll_tool_run(self, ctx);
         self.poll_downloads();
         let _ = self.deliver_gp_files(Ok(Value::Null));
         // A value picked under Dynamic Text lasts while the text tool does, however the tool
