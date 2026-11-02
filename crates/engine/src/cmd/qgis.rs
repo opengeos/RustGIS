@@ -293,11 +293,21 @@ fn check_fields(l: &mut rustgis_map::Layer, name: &str, rules: &[qgis::RuleFilte
 /// noted. The rules kept.
 fn fit_rules(l: &mut rustgis_map::Layer, name: &str, rules: &[qgis::RuleFilter], report: &mut Report) -> Vec<qgis::RuleFilter> {
     let mut kept = Vec::new();
+    // Those that don't fit, said once: how many, and the first.
+    let mut unfit: Option<(String, usize)> = None;
     for r in rules {
         match rustgis_data::query::parse(&r.when, &l.dataset) {
             Ok(_) => kept.push(r.clone()),
-            Err(e) => report.skipped(name, format!("the rule \"{}\", whose filter `{}` doesn't fit the layer ({e})", r.key, r.condition)),
+            Err(e) => match &mut unfit {
+                Some((_, n)) => *n += 1,
+                None => unfit = Some((format!("\"{}\", whose filter `{}` doesn't fit the layer ({e})", r.key, r.condition), 1)),
+            },
         }
+    }
+    if let Some((first, n)) = unfit {
+        let what =
+            if n == 1 { format!("the rule {first}") } else { format!("{n} rules whose filters don't fit the layer, the first {first}") };
+        report.skipped(name, what);
     }
     if kept.len() == rules.len() {
         return kept;
@@ -343,7 +353,7 @@ fn note_overlapping_rules(l: &rustgis_map::Layer, name: &str, rules: &[qgis::Rul
     let what = "each with the first rule that picks it, where QGIS draws it with every one";
     // Rules read at no map scale can't be counted for one that reads it (an else rule beside a
     // rule with a scale range does too).
-    let scaled = compiled.iter().any(|(r, _)| r.condition.contains("@map_scale"));
+    let scaled = compiled.iter().any(|(r, _)| qgis::reads_scale(&r.condition));
     if scaled || compiled.len().saturating_mul(ds.features.len()) > MAX_RULE_CHECKS || l.source.is_some() {
         report.approximated(name, format!("features that more than one of its rules picks (if any), drawn {what}"));
         return;

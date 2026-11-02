@@ -141,6 +141,11 @@ pub struct RuleFilter {
     pub inside: Option<f64>,
 }
 
+/// Whether an expression reads the map's scale (`@map_scale`, `$scale`), outside quotes.
+pub fn reads_scale(expr: &str) -> bool {
+    expr::reads_scale(expr)
+}
+
 /// How many of the rules `roots` and those under them draw (`draws`): switched on, and under no
 /// rule switched off. For the rules a reader leaves out.
 pub(super) fn drawing_rules<'a, 'i: 'a>(roots: impl Iterator<Item = Node<'a, 'i>>, draws: impl Fn(Node) -> bool) -> usize {

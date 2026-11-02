@@ -3509,7 +3509,7 @@ fn symbology(s: &mut Session, p: &Value) -> CmdResult {
     if rest > 0 {
         s.notify(
             format!(
-                "{name}: {rest} features whose value is past the first {} the expression gives are drawn as <all other values>",
+                "{name}: {rest} features whose value is past the first {} values the expression gives (in text order) are drawn as <all other values>",
                 rustgis_map::symbology::MAX_UNIQUE
             ),
             false,

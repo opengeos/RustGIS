@@ -1561,8 +1561,10 @@ fn rules_under_an_else_rule_take_only_the_rest() {
     assert!(!report.notes.iter().any(|n| n.text.contains("past the")), "{:?}", report.notes);
     let mut l = rule_points(&[("a", 1, "x"), ("b", 1, "y")]);
     s.apply(&mut l);
-    // Kind a is A's, not the rest's (the rules are Unique Values on kind, the rest the others).
+    // Kind a is A's, not the rest's (the rules are Unique Values on kind, the rest the others,
+    // under the else rule's label).
     assert_eq!(rule_classes(&l, Some(5_000.0)), [Some("a".to_string()), None]);
+    assert!(matches!(&l.renderer, Renderer::Unique { other_label: Some(o), .. } if o == "Rest"), "{:?}", l.renderer);
     assert!(l.labels.class("Off").is_none(), "a label rule under a switched-off one isn't read");
     let rest = l.labels.class("Rest").expect("the label rule under the else rule");
     assert!(rest.where_.as_deref().is_some_and(|w| w.contains("NOT")), "{:?}", rest.where_);

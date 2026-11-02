@@ -857,7 +857,8 @@ fn unique_values_class_by_an_expression() {
     let (_, rest) =
         rustgis_map::Renderer::unique_by_counted(&l.dataset, &[], "name", rustgis_map::Ramp::Harbour, l.renderer.base_symbol()).unwrap();
     assert!(rest > 0);
-    let said = format!("Cities: {rest} features whose value is past the first {} the expression gives", rustgis_map::symbology::MAX_UNIQUE);
+    let said =
+        format!("Cities: {rest} features whose value is past the first {} values the expression gives", rustgis_map::symbology::MAX_UNIQUE);
     assert!(s.notices.iter().any(|n| n.text.starts_with(&said)), "{:?}", s.notices.last());
     s.undo();
     // Shared to the web, the one symbol is one that draws: not a rest without a fill or an outline
@@ -874,6 +875,14 @@ fn unique_values_class_by_an_expression() {
     let circle = style["layers"].as_array().unwrap().iter().find(|l| l["type"] == "circle").unwrap();
     assert_eq!(circle["paint"]["circle-color"], json!(first));
     assert!(s.notices.iter().any(|n| n.text.contains("one symbol (its first class's)")), "{:?}", s.notices.last());
+    // A point's rest of no size draws nothing either, however it is filled.
+    let l = s.map_mut().layer_mut(cities).unwrap();
+    let rustgis_map::Renderer::Unique { other, .. } = &mut l.renderer else { panic!() };
+    (other.fill, other.size) = (rustgis_map::Rgba::rgb(9, 9, 9), 0.0);
+    s.run("share.webStyle", &json!({"layer": "Cities", "path": path.display().to_string()})).unwrap();
+    let style: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    let circle = style["layers"].as_array().unwrap().iter().find(|l| l["type"] == "circle").unwrap();
+    assert_eq!(circle["paint"]["circle-color"], json!(first));
     // A line's colour is its stroke's, as the map draws it.
     let mut ds = rustgis_data::Dataset::new("ways", rustgis_data::GeometryType::Polyline, vec![]);
     ds.push(Some(rustgis_data::Geometry::Line(vec![vec![rustgis_data::Coord::new(0.0, 0.0), rustgis_data::Coord::new(1.0, 1.0)]])), vec![]);
@@ -948,6 +957,11 @@ fn qgis_rules_class_features_and_say_which_several_rules_pick() {
         <rule filter="&quot;pop_max&quot; &gt; 5000000" symbol="1"/>"#;
     let said = notes(&s.run("style.importQgis", &json!({"layer": "Cities", "text": qml(scaled)})).unwrap());
     assert!(said.iter().any(|n| n.contains("features that more than one of its rules picks (if any)")), "{said:?}");
+    // The scale named only in quotes is text: counted.
+    let quoted = r#"<rule filter="&quot;pop_max&quot; &gt; 1000000 AND name &lt;&gt; '@map_scale'" symbol="0"/>
+        <rule filter="&quot;pop_max&quot; &gt; 5000000" symbol="1"/>"#;
+    let said = notes(&s.run("style.importQgis", &json!({"layer": "Cities", "text": qml(quoted)})).unwrap());
+    assert!(said.iter().any(|n| n.contains(&format!("{both} features that more than one of its rules picks"))), "{said:?}");
     // An else rule picks what its siblings don't: nothing two rules pick.
     let rest = r#"<rule filter="&quot;pop_max&quot; &gt; 0"><rule filter="&quot;pop_max&quot; &lt; 1000000" symbol="0"/><rule filter="ELSE" symbol="1"/></rule>"#;
     let said = notes(&s.run("style.importQgis", &json!({"layer": "Cities", "text": qml(rest)})).unwrap());
@@ -956,6 +970,12 @@ fn qgis_rules_class_features_and_say_which_several_rules_pick() {
     let gone = r#"<rule filter="&quot;nosuch&quot; + 1 &gt; 2" symbol="0" label="Gone"/><rule filter="&quot;pop_max&quot; &gt; 5" symbol="1" label="Kept"/>"#;
     let said = notes(&s.run("style.importQgis", &json!({"layer": "Cities", "text": qml(gone)})).unwrap());
     assert!(said.iter().any(|n| n.contains("the rule \"Gone\"") && n.contains("nosuch")), "{said:?}");
+    // Several that don't fit: one note, with how many and the first.
+    let two = format!("{gone}<rule filter=\"&quot;nosuch2&quot; = 1\" symbol=\"0\" label=\"Gone too\"/>");
+    let said = notes(&s.run("style.importQgis", &json!({"layer": "Cities", "text": qml(&two)})).unwrap());
+    assert_eq!(said.iter().filter(|n| n.contains("fit the layer")).count(), 1, "{said:?}");
+    assert!(said.iter().any(|n| n.contains("2 rules whose filters don't fit the layer, the first \"Gone\"")), "{said:?}");
+    s.run("style.importQgis", &json!({"layer": "Cities", "text": qml(gone)})).unwrap();
     let l = s.map().layer_by_name("Cities").unwrap();
     let rustgis_map::Renderer::Unique { classes, expression: Some(e), .. } = &l.renderer else { panic!("{:?}", l.renderer) };
     assert_eq!((classes.len(), classes[0].0.as_str()), (1, "Kept"));

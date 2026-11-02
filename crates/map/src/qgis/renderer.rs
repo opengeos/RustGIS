@@ -331,12 +331,15 @@ fn rules(r: Node, layer: &str, style: &mut Style, report: &mut Report, sym: &Sym
     let mut field: Option<String> = None;
     let mut classes: Vec<(String, Converted, Option<String>)> = Vec::new();
     let mut other: Option<Converted> = None;
+    let mut other_label: Option<String> = None;
     let mut simple = !drawn.is_empty() && !drawn.iter().any(|l| l.scaled());
     for rule in drawn.iter().filter(|_| simple) {
         let label = rule.node.attribute("label").map(str::to_string);
         if !rule.else_of.is_empty() {
             if rule.filters.is_empty() && rule.else_of.len() == 1 {
-                other = sym(rule.node.attribute("symbol"), report).or(other);
+                if let Some(c) = sym(rule.node.attribute("symbol"), report) {
+                    (other, other_label) = (Some(c), else_label(rule));
+                }
                 continue;
             }
             simple = false;
@@ -360,7 +363,7 @@ fn rules(r: Node, layer: &str, style: &mut Style, report: &mut Report, sym: &Sym
         }
     }
     if simple && let Some(field) = field {
-        unique(style, field, None, classes, other.as_ref());
+        unique(style, field, None, classes, other.as_ref(), other_label);
         return;
     }
     // One rule (or none but an else): its symbol for every feature.
@@ -398,6 +401,7 @@ fn unique(
     expression: Option<String>,
     classes: Vec<(String, Converted, Option<String>)>,
     other: Option<&Converted>,
+    other_label: Option<String>,
 ) {
     let mut class_strokes = BTreeMap::new();
     let mut class_fills = BTreeMap::new();
@@ -425,7 +429,7 @@ fn unique(
         other: other_symbol,
         ramp: Ramp::default(),
         class_labels,
-        other_label: None,
+        other_label,
         class_strokes,
         other_strokes,
         class_fills,
@@ -460,13 +464,14 @@ fn by_expression(drawn: &[&Rule], style: &mut Style, report: &mut Report, sym: &
     let mut rules: Vec<super::RuleFilter> = Vec::new();
     let mut classes: Vec<(String, Converted, Option<String>)> = Vec::new();
     let mut other: Option<Converted> = None;
+    let mut other_label: Option<String> = None;
     let mut keys = std::collections::HashSet::new();
     let quoted = |f: &String| expr::to_sql(f).map(|e| format!("({e})"));
     for (i, rule) in drawn.iter().enumerate() {
         let Some(c) = sym(rule.node.attribute("symbol"), report) else { continue };
         // A top-level else rule at every scale: the rest.
         if rule.else_of.len() == 1 && rule.filters.is_empty() && !rule.scaled() && other.is_none() {
-            other = Some(c);
+            (other, other_label) = (Some(c), else_label(rule));
             continue;
         }
         let Some(mut parts) = rule.filters.iter().map(quoted).collect::<Option<Vec<String>>>() else { return false };
@@ -506,7 +511,7 @@ fn by_expression(drawn: &[&Rule], style: &mut Style, report: &mut Report, sym: &
     if rules.is_empty() {
         return false;
     }
-    unique(style, String::new(), Some(super::rules_expression(&rules)), classes, other.as_ref());
+    unique(style, String::new(), Some(super::rules_expression(&rules)), classes, other.as_ref(), other_label);
     style.rules = rules;
     true
 }
@@ -595,6 +600,11 @@ fn flatten<'a, 'i>(
             }
         }
     }
+}
+
+/// An else rule's legend label for `<all other values>`, if it has one.
+fn else_label(rule: &Rule) -> Option<String> {
+    rule.node.attribute("label").map(str::trim).filter(|l| !l.is_empty()).map(str::to_string)
 }
 
 fn is_else(f: &str) -> bool {

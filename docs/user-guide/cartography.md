@@ -22,9 +22,10 @@ Select a layer in Layers and open **Style › Symbology** (or the Symbology pane
   a feature where it gives null in `<all other values>`. The classes are the values it gives
   without a map; it can read `@map_scale`, so a feature can move between those classes as the map
   zooms (a value it gives only at some scales draws as `<all other values>`), and the Layers pane
-  and layout legends list the classes drawn at the map's scale. Clearing the box goes back to a
-  field. A layer classed by expression is drawn on the CPU, and a web style shared from it draws
-  every feature with one symbol, which a notice says
+  and layout legends list the classes drawn at the map's scale (on a layer too large to class
+  every feature for a legend, past 2,000,000 features × classes, all its classes). Clearing the
+  box goes back to a field. A layer classed by expression is drawn on the CPU, and a web style
+  shared from it draws every feature with one symbol, which a notice says
   (`layer.symbology={"type": "unique", "expression": "…"}`).
 - **Graduated Colors**: 1 to 12 classes of a numeric field by natural breaks (Jenks), equal
   interval, quantile, geometric interval, standard deviation, arithmetic progression or head/tail

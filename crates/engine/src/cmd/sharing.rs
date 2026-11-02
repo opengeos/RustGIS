@@ -648,6 +648,7 @@ fn one_symbol(r: &Renderer, g: GeometryType) -> rustgis_map::Symbol {
 fn draws(s: &rustgis_map::Symbol, g: GeometryType) -> bool {
     match g {
         GeometryType::Polyline => s.stroke.a() > 0,
+        GeometryType::Point if s.size <= 0.0 => false,
         _ => s.fill.a() > 0 || (s.stroke.a() > 0 && s.stroke_width > 0.0),
     }
 }

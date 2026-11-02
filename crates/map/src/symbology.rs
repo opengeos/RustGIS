@@ -902,8 +902,8 @@ impl Renderer {
         Self::unique_by_counted(ds, rows, expression, ramp, base).map(|(r, _)| r)
     }
 
-    /// [`Renderer::unique_by`], and how many kept features have a value past the first
-    /// [`MAX_UNIQUE`] (in order), drawn as `<all other values>`.
+    /// [`Renderer::unique_by`], and how many kept features with a geometry have a value past the
+    /// first [`MAX_UNIQUE`] (in text order), drawn as `<all other values>`.
     pub fn unique_by_counted(ds: &Dataset, rows: &[bool], expression: &str, ramp: Ramp, base: Symbol) -> Result<(Renderer, usize), String> {
         let text = expression.trim();
         if text.chars().count() > rustgis_data::query::MAX_LEN {
@@ -922,11 +922,13 @@ impl Renderer {
                 rustgis_data::Value::Text(t) => t,
                 v => v.to_string(),
             };
+            // (A feature without a geometry draws nothing, so it isn't counted.)
+            let drawn = usize::from(ds.features.get(r).is_some_and(|f| f.geometry.is_some()));
             if kept.len() >= MAX_UNIQUE && kept.last_key_value().is_some_and(|(last, _)| v > *last) {
-                rest += 1;
+                rest += drawn;
                 continue;
             }
-            *kept.entry(v).or_insert(0) += 1;
+            *kept.entry(v).or_insert(0) += drawn;
             if kept.len() > MAX_UNIQUE {
                 rest += kept.pop_last().map_or(0, |(_, n)| n);
             }
@@ -1357,10 +1359,16 @@ impl Renderer {
     /// Values by an expression reading `@map_scale` class by. One whose expression would take
     /// more than [`MAX_LEGEND_STEPS`] to class every kept feature lists all its classes.
     pub fn legend_at(&self, ds: &Dataset, rows: &[bool], map_scale: Option<f64>) -> Vec<LegendEntry> {
-        let Renderer::Unique { field, classes, other, class_labels, other_label, expression, .. } = self else { return self.legend() };
+        let Renderer::Unique { field, classes, other, class_labels, other_label, expression, other_fills, other_strokes, .. } = self else {
+            return self.legend();
+        };
         // A fully transparent fallback draws nothing, so it has nothing to stand for in a legend.
-        // Lines draw with their stroke only.
-        let visible = other.stroke.a() > 0 || (ds.geometry_type != GeometryType::Polyline && other.fill.a() > 0);
+        // Lines draw with their stroke only (or their stacked strokes); areas and points with
+        // their fill, outline or stacked fills.
+        let lines = ds.geometry_type == GeometryType::Polyline;
+        let strokes = other_strokes.iter().any(|s| s.color.unwrap_or(other.stroke).a() > 0 && s.width.unwrap_or(other.stroke_width) > 0.0);
+        let visible =
+            other.stroke.a() > 0 || strokes || (!lines && (other.fill.a() > 0 || other_fills.iter().any(|f| f.draws(other.fill))));
         if expression.is_some() && ds.features.len().saturating_mul(classes.len().max(1)) > MAX_LEGEND_STEPS {
             let mut all = self.legend();
             all.retain(|e| visible || !e.fallback);
@@ -3363,6 +3371,42 @@ mod tests {
         assert_eq!(rest, 2 * (100 - MAX_UNIQUE));
         let (_, rest) = Renderer::unique_by_counted(&d, &[], "n % 10", Ramp::Harbour, base).unwrap();
         assert_eq!(rest, 0);
+        // A feature without a geometry draws nothing, so it isn't counted.
+        d.push(None, vec![rustgis_data::Value::Int(99)]);
+        let (_, rest) = Renderer::unique_by_counted(&d, &[], "n", Ramp::Harbour, base).unwrap();
+        assert_eq!(rest, 2 * (100 - MAX_UNIQUE));
+    }
+
+    /// The rest is in the legend when its stacked fills or strokes draw, though its own symbol
+    /// doesn't.
+    #[test]
+    fn the_rests_stacked_fills_and_strokes_put_it_in_the_legend() {
+        for g in [GeometryType::Polygon, GeometryType::Polyline] {
+            let mut d = Dataset::new("p", g, vec![]);
+            let shape = match g {
+                GeometryType::Polygon => rustgis_data::Geometry::Polygon(vec![vec![vec![
+                    rustgis_geom::Coord::new(0.0, 0.0),
+                    rustgis_geom::Coord::new(1.0, 0.0),
+                    rustgis_geom::Coord::new(0.0, 1.0),
+                    rustgis_geom::Coord::new(0.0, 0.0),
+                ]]]),
+                _ => rustgis_data::Geometry::Line(vec![vec![rustgis_geom::Coord::new(0.0, 0.0), rustgis_geom::Coord::new(1.0, 1.0)]]),
+            };
+            d.push(Some(shape), vec![]);
+            let mut r = Renderer::unique_by(&d, &[], "NULL", Ramp::Harbour, Symbol::default_for(g, 0)).unwrap();
+            let Renderer::Unique { other, .. } = &mut r else { panic!() };
+            (other.fill, other.stroke) = (Rgba::new(0, 0, 0, 0), Rgba::new(0, 0, 0, 0));
+            let rest = |r: &Renderer| r.legend_for(&d, &[]).iter().any(|e| e.fallback);
+            assert!(!rest(&r), "{g:?}: nothing draws");
+            let Renderer::Unique { other_fills, other_strokes, .. } = &mut r else { panic!() };
+            match g {
+                GeometryType::Polygon => {
+                    other_fills.push(crate::fills::FillLayer { color: Some(Rgba::rgb(1, 2, 3)), ..Default::default() })
+                }
+                _ => other_strokes.push(LineStroke { color: Some(Rgba::rgb(1, 2, 3)), width: Some(2.0), ..Default::default() }),
+            }
+            assert!(rest(&r), "{g:?}: the stacked one draws");
+        }
     }
 
     /// Label clauses read the scale the labels are drawn at.
