@@ -2765,6 +2765,62 @@ fn arcgis_page_url(query: &str, offset: usize, size: usize, order: Option<&str>)
     }
 }
 
+/// Whether a request can use WFS 2.0 offset paging (OGC 09-025r2 §7.6.3).
+/// Explicit windows and hits requests are left as the caller asked for them.
+fn is_wfs_query(url: &str) -> bool {
+    let is = |key, value: &str| query_value(url, key).is_some_and(|v| v.eq_ignore_ascii_case(value));
+    is("SERVICE", "WFS")
+        && is("REQUEST", "GetFeature")
+        && query_value(url, "VERSION").is_some_and(|v| v.starts_with("2.0"))
+        && query_value(url, "STARTINDEX").is_none()
+        && !is("RESULTTYPE", "hits")
+}
+
+/// Replaces WFS presentation parameters, retaining the query, filters and authentication.
+/// Hits use the default XML format; feature pages retain the requested GeoJSON format.
+fn wfs_page_url(url: &str, offset: Option<usize>, size: usize) -> String {
+    let kept = url
+        .split('#')
+        .next()
+        .and_then(|u| u.split_once('?'))
+        .map(|(_, q)| q)
+        .unwrap_or_default()
+        .split('&')
+        .filter(|kv| {
+            let key = kv.split_once('=').map(|(k, _)| k).unwrap_or(kv);
+            !["STARTINDEX", "COUNT", "RESULTTYPE"].iter().any(|k| key.eq_ignore_ascii_case(k))
+                && (offset.is_some() || !key.eq_ignore_ascii_case("OUTPUTFORMAT"))
+        })
+        .collect::<Vec<_>>()
+        .join("&");
+    let url = with_query(base(url), &kept);
+    match offset {
+        Some(offset) => with_query(&url, &format!("STARTINDEX={offset}&COUNT={size}")),
+        None => with_query(&url, "RESULTTYPE=hits"),
+    }
+}
+
+/// The total from a bounded WFS hits response; unknown counts and exception reports aren't totals.
+fn wfs_matched(bytes: &[u8]) -> Option<u64> {
+    let text = std::str::from_utf8(bytes).ok()?;
+    let doc = xml(text, 1024).ok()?;
+    let root = doc.root_element();
+    if local(&root) != "FeatureCollection" {
+        return None;
+    }
+    root.attribute("numberMatched").or_else(|| root.attribute("numberOfFeatures"))?.parse().ok()
+}
+
+/// A feature's service id, serialized to distinguish numeric and string ids.
+fn feature_id(feature: &RawValue) -> Option<String> {
+    #[derive(serde::Deserialize)]
+    struct Id {
+        id: Option<serde_json::Value>,
+    }
+    let id = serde_json::from_str::<Id>(feature.get()).ok()?.id?;
+    (id.is_string() || id.is_number()).then(|| id.to_string())
+}
+
 /// A feature collection read page by page: `first` (from `url`), then each page `get` returns, up
 /// to `max` features, as [`read_pages`] leads (the blocking way to drive it). The pages' features
 /// in one collection, and a note when some features were left unread; a first page that leads
@@ -2823,6 +2879,10 @@ enum Phase {
     /// An ArcGIS layer's description, which says whether it can be read in pages; `first` is the
     /// first page as it came, kept for when it can't.
     Describe { first: Vec<u8> },
+    /// A WFS hits response, used when its GeoJSON gives no next link.
+    WfsHits,
+    /// WFS offsets count returned rows, while ids prevent overlapping pages adding duplicates.
+    WfsOffsets { matched: u64, offset: usize, size: usize, ids: std::collections::HashSet<String>, start: Option<serde_json::Value> },
     /// An OGC API or WFS page, which links to the next.
     Linked,
     /// An ArcGIS page, `size` long from an offset, in `order`. `start` is the first such page's
@@ -2890,7 +2950,8 @@ fn first_value(features: &[Box<RawValue>]) -> Option<serde_json::Value> {
 }
 
 /// Starts reading a feature collection page by page from its first page (`first`, from `url`), up
-/// to `max` features. An OGC API or WFS page leads to the next by its `next` link. An ArcGIS
+/// to `max` features. An OGC API or WFS page leads to the next by its `next` link. A WFS
+/// request without a next link uses a hits count and STARTINDEX pages (WFS 2.0). An ArcGIS
 /// query that stopped at the server's record limit (`exceededTransferLimit`) is read again in
 /// pages (`resultOffset`, `resultRecordCount`, in the order of its object ids) when the layer's
 /// description says it can be (fetched first: `advancedQueryCapabilities.supportsPagination`):
@@ -2904,7 +2965,8 @@ pub fn read_pages(url: &str, first: Vec<u8>, max: usize) -> Step {
     let limited = is_arcgis_query(url)
         && ["resultOffset", "resultRecordCount"].iter().all(|k| query_value(url, k).is_none())
         && (is_true(&head, "exceededTransferLimit") || is_true(&tail, "exceededTransferLimit"));
-    if !(linked || limited) {
+    let wfs = is_wfs_query(url);
+    if !(linked || limited || wfs) {
         return Step::Done(first, None);
     }
     let Ok(Some((doc, features))) = split_page(&first) else { return Step::Done(first, None) };
@@ -2912,6 +2974,8 @@ pub fn read_pages(url: &str, first: Vec<u8>, max: usize) -> Step {
         (next, Phase::Linked)
     } else if limited && exceeded(&doc) {
         (arcgis_layer_url(url), Phase::Describe { first })
+    } else if wfs {
+        (wfs_page_url(url, None, 0), Phase::WfsHits)
     } else {
         return Step::Done(first, None);
     };
@@ -2926,7 +2990,7 @@ pub fn read_pages(url: &str, first: Vec<u8>, max: usize) -> Step {
         phase,
     };
     match pages.phase {
-        Phase::Linked => pages.advance(),
+        Phase::Linked | Phase::WfsHits => pages.advance(),
         _ => Step::Fetch(Box::new(pages)),
     }
 }
@@ -2951,6 +3015,30 @@ impl Pages {
     /// Takes the answer to [`next_url`](Self::next_url) (or why it couldn't be fetched): the next
     /// address to fetch, or the collection as read.
     pub fn land(mut self, answer: Result<Vec<u8>, String>) -> Step {
+        if matches!(self.phase, Phase::WfsHits) {
+            let matched = answer.ok().and_then(|b| wfs_matched(&b));
+            let Some(matched) = matched else {
+                return self.stop("the WFS total couldn't be read; the features received may be incomplete".into());
+            };
+            let offset = self.features.len();
+            if offset > self.max {
+                return self.finish_at_max();
+            }
+            if matched == offset as u64 {
+                return self.finish(None);
+            }
+            if matched < offset as u64 {
+                return self.stop("the WFS total changed; the features read may be incomplete".into());
+            }
+            if offset == 0 {
+                return self.stop(format!("the WFS sent no features of its {matched}; the rest aren't read"));
+            }
+            let mut ids = std::collections::HashSet::new();
+            self.features.retain(|f| feature_id(f).is_none_or(|id| ids.insert(id)));
+            self.next = wfs_page_url(&self.url, Some(offset), offset.min(self.max));
+            self.phase = Phase::WfsOffsets { matched, offset, size: offset.min(self.max), ids, start: first_value(&self.features) };
+            return self.advance();
+        }
         if let Phase::Describe { first } = &mut self.phase {
             let first = std::mem::take(first);
             let paging = answer.ok().and_then(|b| serde_json::from_slice(&b).ok()).and_then(|l| arcgis_paging(&l));
@@ -2968,12 +3056,45 @@ impl Pages {
             return self.advance();
         }
         let read = self.features.len();
-        let (page, more) = match answer.and_then(|b| split_page(&b)) {
+        let (page, mut more) = match answer.and_then(|b| split_page(&b)) {
             Ok(Some(page)) => page,
             Ok(None) => return self.stop(format!("the page after feature {read} isn't a feature collection; the rest aren't read")),
             Err(e) => return self.stop(format!("the page after feature {read} couldn't be read ({e}); the rest aren't read")),
         };
         let following = match &mut self.phase {
+            Phase::WfsOffsets { matched, offset, size, ids, start } => {
+                let returned = more.len();
+                if returned == 0 {
+                    return self.stop("the WFS sent an empty page before its reported total; the rest aren't read".into());
+                }
+                let page_start = first_value(&more);
+                let repeated = page_start == *start;
+                *start = page_start;
+                let unidentified = more.iter().any(|f| feature_id(f).is_none());
+                more.retain(|f| feature_id(f).is_none_or(|id| ids.insert(id)));
+                if more.is_empty() || (repeated && unidentified) {
+                    return self.stop("the WFS repeated an earlier page instead of advancing; the rest aren't read".into());
+                }
+                *offset = offset.saturating_add(returned);
+                // Bound fetched rows too: overlapping pages cannot keep the browser downloading forever.
+                if *offset >= self.max && (*offset as u64) < *matched {
+                    self.features.extend(more);
+                    self.features.truncate(self.max);
+                    return self.stop("the WFS paging row limit was reached; the rest aren't read".into());
+                }
+                if (*offset as u64) >= *matched {
+                    let matched = *matched;
+                    self.features.extend(more);
+                    if self.features.len() > self.max {
+                        return self.finish_at_max();
+                    }
+                    if self.features.len() as u64 != matched {
+                        return self.stop("the WFS pages overlap or its total changed; the features read may be incomplete".into());
+                    }
+                    return self.finish(None);
+                }
+                Some(wfs_page_url(&self.url, Some(*offset), *size))
+            }
             Phase::Offsets { size, order, start, first } => {
                 // A server that doesn't honour `resultOffset` sends its first page again.
                 if start.is_some() && first_value(&more) == *start {
@@ -3003,6 +3124,11 @@ impl Pages {
     /// Done early, with a note; or, when an ArcGIS layer's paged reading stops before any of its
     /// features are read, with the first page as it came (which says it was cut off).
     fn stop(mut self, note: String) -> Step {
+        let note = match self.phase {
+            Phase::WfsOffsets { matched, .. } => format!("{} of {matched} WFS features read: {note}", self.features.len()),
+            Phase::WfsHits => format!("{} WFS features read: {note}", self.features.len()),
+            _ => note,
+        };
         if let Phase::Offsets { first: Some(first), .. } = &mut self.phase {
             return Step::Done(std::mem::take(first), None);
         }
@@ -3025,7 +3151,8 @@ impl Pages {
     fn finish_at_max(mut self) -> Step {
         let max = self.max;
         self.features.truncate(max);
-        self.finish(Some(format!("the first {max} features are read; the rest aren't")))
+        let note = format!("the first {max} features are read; the rest aren't");
+        if matches!(self.phase, Phase::WfsHits | Phase::WfsOffsets { .. }) { self.stop(note) } else { self.finish(Some(note)) }
     }
 
     /// The pages' features in the first page's collection, without its paging members.
@@ -3787,6 +3914,88 @@ mod tests {
             .is_none()
         );
         assert!(partial_note(b"").is_none());
+    }
+
+    /// A WFS server can cap a page without linking to the next one (#1262).
+    #[test]
+    fn wfs_pages_without_next_links_are_read_completely() {
+        let url = "https://wfs.example.org/wfs?SERVICE=WFS&VERSION=2.0.0&REQUEST=GetFeature&TYPENAMES=roads&COUNT=50000";
+        let first = br#"{"type":"FeatureCollection","features":[{"id":"roads.1"},{"id":"roads.2"}]}"#;
+        let (joined, note) = join_pages(url, first.to_vec(), 100, |next| {
+            if query_value(next, "RESULTTYPE").is_some_and(|v| v.eq_ignore_ascii_case("hits")) {
+                Ok(br#"<wfs:FeatureCollection xmlns:wfs="http://www.opengis.net/wfs/2.0" numberMatched="3" numberReturned="0"/>"#.to_vec())
+            } else {
+                assert_eq!(query_value(next, "STARTINDEX"), Some("2"));
+                Ok(br#"{"type":"FeatureCollection","features":[{"id":"roads.3"}]}"#.to_vec())
+            }
+        });
+        let doc: serde_json::Value = serde_json::from_slice(&joined).unwrap();
+        assert_eq!(doc["features"].as_array().unwrap().len(), 3);
+        assert_eq!(note, None);
+    }
+
+    /// Paging preserves the selection query and reports each way a service can stop short.
+    #[test]
+    fn wfs_paging_keeps_filters_and_reports_incomplete_reads() {
+        let url = "https://wfs.example.org/wfs?service=wfs&version=2.0.0&request=GetFeature&typeNames=roads&outputFormat=json&count=50000&BBOX=1,2,3,4&token=t";
+        let first = br#"{"type":"FeatureCollection","features":[{"id":1},{"id":2}]}"#;
+        let hits = br#"<FeatureCollection numberMatched="4"/>"#;
+        let count = |bytes: &[u8]| serde_json::from_slice::<serde_json::Value>(bytes).unwrap()["features"].as_array().unwrap().len();
+        let mut calls = 0;
+        let (bytes, note) = join_pages(url, first.to_vec(), 100, |next| {
+            calls += 1;
+            assert_eq!(query_value(next, "BBOX"), Some("1,2,3,4"));
+            assert_eq!(query_value(next, "token"), Some("t"));
+            if calls == 1 {
+                assert_eq!(query_value(next, "RESULTTYPE"), Some("hits"));
+                assert!(query_value(next, "OUTPUTFORMAT").is_none());
+                Ok(hits.to_vec())
+            } else {
+                assert_eq!(query_value(next, "STARTINDEX"), Some("2"));
+                assert_eq!(query_value(next, "COUNT"), Some("2"));
+                assert_eq!(query_value(next, "OUTPUTFORMAT"), Some("json"));
+                Ok(br#"{"features":[{"id":3},{"id":4}]}"#.to_vec())
+            }
+        });
+        assert_eq!((count(&bytes), note, calls), (4, None, 2));
+        for answer in
+            [Err("timeout".into()), Ok(b"<ExceptionReport/>".to_vec()), Ok(br#"<FeatureCollection numberMatched="unknown"/>"#.to_vec())]
+        {
+            let (bytes, note) = join_pages(url, first.to_vec(), 100, |_| answer.clone());
+            assert_eq!(count(&bytes), 2);
+            assert!(note.unwrap().contains("incomplete"));
+        }
+        for last in [
+            Err("timeout".into()),
+            Ok(br#"{"features":[]}"#.to_vec()),
+            Ok(first.to_vec()),
+            Ok(br#"{"features":[{"id":2},{"id":3}]}"#.to_vec()),
+        ] {
+            let mut calls = 0;
+            let (bytes, note) = join_pages(url, first.to_vec(), 100, |_| {
+                calls += 1;
+                if calls == 1 { Ok(hits.to_vec()) } else { last.clone() }
+            });
+            let n = count(&bytes);
+            assert!((2..=3).contains(&n));
+            assert!(note.unwrap().contains("of 4 WFS features read"));
+            assert_eq!(calls, 2);
+        }
+        let mut calls = 0;
+        let (bytes, note) = join_pages(url, first.to_vec(), 3, |_| {
+            calls += 1;
+            if calls == 1 { Ok(hits.to_vec()) } else { Ok(br#"{"features":[{"id":3},{"id":4}]}"#.to_vec()) }
+        });
+        assert_eq!(count(&bytes), 3);
+        assert!(note.unwrap().contains("3 of 4 WFS features read"));
+        let (bytes, note) = join_pages(url, first.to_vec(), 1, |_| panic!("limit checked before hits"));
+        assert_eq!(count(&bytes), 1);
+        assert!(note.unwrap().contains("first 1"));
+        for suffix in ["&STARTINDEX=0", "&RESULTTYPE=hits"] {
+            let (bytes, note) =
+                join_pages(&format!("{url}{suffix}"), first.to_vec(), 100, |_| panic!("explicit request must stay unchanged"));
+            assert_eq!((bytes, note), (first.to_vec(), None));
+        }
     }
 
     #[test]
