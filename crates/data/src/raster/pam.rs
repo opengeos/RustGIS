@@ -96,32 +96,38 @@ pub fn sidecar_paths(path: &Path) -> Vec<PathBuf> {
     vec![PathBuf::from(long), path.with_extension("aux.xml")]
 }
 
-/// The sidecar next to `path`: the first that parses. When one is there but none parses (too
-/// large, not text, not GDAL's), it names nothing and says why ([`Pam::losing`]).
+/// The sidecar next to `path`: the first that parses. When one is there but none parses (can't be
+/// looked at, too large, not text, not GDAL's), it names nothing and says why ([`Pam::losing`]);
+/// when the first doesn't and the other does, the other is read and says the first was left out.
 pub fn read(path: &Path) -> Option<Pam> {
-    let mut why = None;
+    let mut why: Option<(String, String)> = None;
     for p in sidecar_paths(path) {
-        let Ok(meta) = std::fs::metadata(&p) else { continue };
-        if !meta.is_file() {
-            continue;
-        }
-        let read = if meta.len() > MAX_BYTES {
-            Err(format!("it is over {} MiB", MAX_BYTES >> 20))
-        } else {
-            std::fs::read_to_string(&p).map_err(|e| format!("it isn't UTF-8 text ({e})")).and_then(|t| parse_sidecar(&t))
+        let read = match std::fs::metadata(&p) {
+            // No sidecar by that name (or none can be, the name being too long).
+            Err(e) if matches!(e.kind(), std::io::ErrorKind::NotFound | std::io::ErrorKind::InvalidFilename) => continue,
+            Err(e) => Err(format!("it can't be looked at ({e})")),
+            Ok(meta) if !meta.is_file() => continue,
+            Ok(meta) if meta.len() > MAX_BYTES => Err(format!("it is over {} MiB", MAX_BYTES >> 20)),
+            Ok(_) => std::fs::read_to_string(&p).map_err(|e| format!("it isn't UTF-8 text ({e})")).and_then(|t| parse_sidecar(&t)),
         };
+        let name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
         match read {
-            Ok(pam) => return Some(pam),
+            Ok(mut pam) => {
+                if let Some((skipped, e)) = why {
+                    pam.lost.insert(0, format!("{skipped}: {e}: left out, {name} read instead"));
+                }
+                return Some(pam);
+            }
             Err(e) => {
-                why.get_or_insert(e);
+                why.get_or_insert((name, e));
             }
         }
     }
-    why.map(|e| Pam::losing(format!("{e}: its statistics, no-data and band names are left out")))
+    why.map(|(_, e)| Pam::losing(format!("{e}: its statistics, no-data and band names are left out")))
 }
 
-/// Parses a sidecar's text. One that doesn't read as XML (or is too large to), or isn't a PAM
-/// document, names nothing: it comes back with only [`Pam::lost`] saying so.
+/// Parses a sidecar's text. One that doesn't read as XML, or isn't a PAM document, names nothing:
+/// it comes back with only [`Pam::lost`] saying so. Its size is checked by [`read`] only.
 pub fn parse(text: &str) -> Option<Pam> {
     Some(parse_sidecar(text).unwrap_or_else(|e| Pam::losing(format!("{e}: its statistics, no-data and band names are left out"))))
 }
@@ -137,9 +143,10 @@ fn parse_sidecar(text: &str) -> Result<Pam, String> {
     }
     let mut pam = Pam::default();
     // Names cut to `MAX_NAME` characters, class names past `MAX_CATEGORIES`, records for no band
-    // from 1 to `MAX_BANDS`, a band's records after its first, and the scale, offset and units
-    // that aren't read, counted.
+    // from 1 to `MAX_BANDS`, a band's records after its first, and the scale, offset, units and
+    // other band metadata items that aren't read, counted.
     let (mut cut, mut beyond, mut odd_bands, mut unscaled, mut units) = (0usize, 0usize, 0usize, 0usize, 0usize);
+    let mut items = 0usize;
     let (mut seen, mut twice) = (std::collections::HashSet::new(), 0usize);
     let mut kept = |t: &str| {
         cut += usize::from(t.chars().nth(MAX_NAME).is_some());
@@ -161,6 +168,14 @@ fn parse_sidecar(text: &str) -> Result<Pam, String> {
         unscaled += usize::from(number("Scale").is_some_and(|v| v != Some(1.0)));
         unscaled += usize::from(number("Offset").is_some_and(|v| v != Some(0.0)));
         units += usize::from(text_of("UnitType").is_some_and(|u| !u.is_empty()));
+        // A band's metadata items of any domain other than its statistics (`STATISTICS_*`, worked
+        // out again from the values when not read) aren't read, as for the GDAL tag.
+        items += b
+            .children()
+            .filter(|n| n.has_tag_name("Metadata"))
+            .flat_map(|m| m.children())
+            .filter(|n| n.has_tag_name("MDI") && n.attribute("key").is_none_or(|k| !k.starts_with("STATISTICS_")))
+            .count();
         let description = text_of("Description").filter(|d| !d.is_empty()).map(&mut kept);
         let nodata = text_of("NoDataValue").and_then(|v| v.parse::<f64>().ok()).filter(|v| v.is_finite());
         // Only the default (unnamed) metadata domain holds the statistics.
@@ -205,6 +220,9 @@ fn parse_sidecar(text: &str) -> Result<Pam, String> {
     }
     if units > 0 {
         pam.lost.push(format!("{units} band unit(s) not read: left out"));
+    }
+    if items > 0 {
+        pam.lost.push(format!("{items} band metadata item(s) not read: left out"));
     }
     if beyond > 0 {
         pam.lost.push(format!("{beyond} class name(s) past the first {MAX_CATEGORIES} of a band left out"));
@@ -532,7 +550,8 @@ mod tests {
         let odd = parse(
             r#"<PAMDataset><PAMRasterBand band="0"><Description>x</Description></PAMRasterBand>
             <PAMRasterBand band="1"><Scale>0.01</Scale><Offset>-5</Offset><UnitType>m</UnitType></PAMRasterBand>
-            <PAMRasterBand band="2"><Scale>1</Scale><Offset>0</Offset><UnitType></UnitType></PAMRasterBand>
+            <PAMRasterBand band="2"><Scale>1</Scale><Offset>0</Offset><UnitType></UnitType>
+            <Metadata domain="x"><MDI key="SOURCE">y</MDI><MDI key="STATISTICS_MEAN">1</MDI></Metadata></PAMRasterBand>
             <PAMRasterBand band="1"><Description>again</Description></PAMRasterBand></PAMDataset>"#,
         )
         .unwrap();
@@ -545,6 +564,7 @@ mod tests {
                 "1 band record(s) given again left out (the first is kept)".to_string(),
                 "2 scale or offset(s) not applied: the values are as stored".to_string(),
                 "1 band unit(s) not read: left out".to_string(),
+                "1 band metadata item(s) not read: left out".to_string(),
             ]
         );
     }
@@ -580,14 +600,23 @@ mod tests {
         std::fs::write(dir.join("x.tif.aux.xml"), [0xff, 0xfe, 0x00]).unwrap();
         let junk = read(&tif).unwrap();
         assert!(junk.bands.is_empty() && junk.lost[0].starts_with("it isn't UTF-8 text"), "{junk:?}");
-        // The other name, when it parses, is read instead.
+        // The other name, when it parses, is read instead, and says the first was left out.
         std::fs::write(
             dir.join("x.aux.xml"),
             r#"<PAMDataset><PAMRasterBand band="1"><Description>NIR</Description></PAMRasterBand></PAMDataset>"#,
         )
         .unwrap();
         let other = read(&tif).unwrap();
-        assert!(other.lost.is_empty() && other.band(1).unwrap().description.as_deref() == Some("NIR"), "{other:?}");
+        assert_eq!(other.band(1).unwrap().description.as_deref(), Some("NIR"), "{other:?}");
+        assert!(
+            other.lost.len() == 1
+                && other.lost[0].starts_with("x.tif.aux.xml: it isn't UTF-8 text")
+                && other.lost[0].ends_with(": left out, x.aux.xml read instead"),
+            "{other:?}"
+        );
+        // A sidecar that parses first says nothing of the other.
+        std::fs::write(dir.join("x.tif.aux.xml"), "<PAMDataset/>").unwrap();
+        assert!(read(&tif).unwrap().lost.is_empty());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
