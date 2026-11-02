@@ -136,8 +136,8 @@ too. A dated series of GeoTIFFs (an address with date placeholders), a data cube
 AlphaEarth's embeddings are tile layers that follow the time slider or dequantise their values;
 see [Satellite embeddings](web-data.md#satellite-embeddings).
 A GeoTIFF in strips, a rotated image or an unsupported tiled image downloads whole, as does a
-GeoTIFF added with `"whole": true` (for raster tools that need every pixel at full resolution). The web app needs the server
-to allow range requests (CORS with the `Range` header).
+GeoTIFF added with `"whole": true` (for raster tools that need every pixel at full resolution).
+The web app needs the server to allow range requests (CORS with the `Range` header).
 
 A GeoParquet or FlatGeobuf file by its address is read in place too, a view at a time, however
 large: the layer is streamed like a large local file, and the view's features are fetched in the
@@ -156,7 +156,8 @@ desktop, while in the web app they need the file downloaded first.
 
 On desktop, `layer.addUrl` waits for downloads, up to a minute; the From URL… dialog (`ui.addUrl`)
 and a plugin's `layer.addUrl` work in the background. In the web app the same dialog handles asynchronous downloads.
-`layer.addUrl` can add PMTiles archives and GeoTIFFs read in place directly, but an ordinary download returns
+`layer.addUrl` can add PMTiles archives and GeoTIFFs read in place directly, but an ordinary
+download returns
 `{"pending": true, "url": "…"}` and is added later by the app. To open a remote GeoParquet or
 FlatGeobuf whose header hasn't been fetched yet, use the From URL… dialog or a `?data=` link.
 

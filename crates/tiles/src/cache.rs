@@ -1535,12 +1535,12 @@ mod native {
         Failure::without_answer("", e.to_string(), reason)
     }
 
-    /// An answer with an error status (#509): its kept headers and the start of its body.
     /// An answer's `Retry-After` header, as sent.
     fn retry_after_header(resp: &ureq::http::Response<ureq::Body>) -> Option<&str> {
         resp.headers().get("retry-after").and_then(|v| v.to_str().ok())
     }
 
+    /// An answer with an error status (#509): its kept headers and the start of its body.
     fn refused(resp: &mut ureq::http::Response<ureq::Body>) -> Failure {
         use std::io::Read;
         let headers: Vec<(String, String)> = resp

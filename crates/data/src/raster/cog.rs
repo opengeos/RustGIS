@@ -877,6 +877,24 @@ pub(crate) mod tests {
         }
     }
 
+    /// A file holding a grey image of several bands as well as an RGB one with more bands can't
+    /// tell which is which once the RGB one is shown to the decoder as grey: neither is taken for
+    /// colour.
+    #[test]
+    fn a_file_mixing_grey_and_rgb_images_of_several_bands_stays_grey() {
+        let e = Example { size: 300, tile: 128, bands: 4, photometric: 2, ..Example::default() };
+        let mut file = example_with(&e);
+        // The overview's PhotometricInterpretation (tag 262, one short) from RGB to grey.
+        let entry = [0x06, 0x01, 0x03, 0x00, 0x01, 0x00, 0x00, 0x00, 0x02, 0x00];
+        let at: Vec<usize> = (0..file.len().saturating_sub(entry.len())).filter(|&i| file[i..i + entry.len()] == entry).collect();
+        assert_eq!(at.len(), 3, "the full image and its overviews");
+        file[at[2] + 8] = 1;
+        let (l, _) = pixel(&file, 150, 150);
+        assert_eq!((l.bands, &l.color), (4, &ColorHint::Gray));
+        let r = crate::raster::geotiff::read(std::io::Cursor::new(&file), "mixed").unwrap();
+        assert_eq!((r.band_count(), &r.color), (4, &ColorHint::Gray));
+    }
+
     /// A palette image whose colour table is missing is drawn in grey, and says so, read in place
     /// or as a file.
     #[test]

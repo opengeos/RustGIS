@@ -338,14 +338,8 @@ fn stand_in(
     let levels = &info.layout.levels;
     let Some(l) = levels.get(level) else { return };
     let ww = (cols.1 - cols.0) as usize;
-    // The pixels still to fill, by band (its place among those read), as places in the window.
-    let mut left: Vec<(usize, Vec<usize>)> = gaps
-        .iter()
-        .map(|g| {
-            let at = |y: u32, x: u32| (y - rows.0) as usize * ww + (x - cols.0) as usize;
-            (g.k, (g.rows.0..g.rows.1).flat_map(|y| (g.cols.0..g.cols.1).map(move |x| at(y, x))).collect())
-        })
-        .collect();
+    // The gaps a level kept hasn't filled yet: walked a row at a time, nothing kept per pixel.
+    let mut open: Vec<&Gap> = gaps.iter().collect();
     // The other levels, nearest first.
     let others: Vec<usize> =
         (1..levels.len()).flat_map(|d| [level.checked_sub(d), Some(level + d)]).flatten().filter(|o| *o < levels.len()).collect();
@@ -355,41 +349,43 @@ fn stand_in(
         let (tw, th) = (ol.tile_width.max(1), ol.tile_height.max(1));
         // The chunks of that level found so far (none: not kept).
         let mut found: HashMap<u32, Option<Bands>> = HashMap::new();
-        for (k, todo) in &mut left {
-            let (Some(&b), Some(dst)) = (bands.get(*k), data.get_mut(*k)) else {
-                todo.clear();
-                continue;
-            };
+        open.retain(|g| {
+            let (Some(&b), Some(dst)) = (bands.get(g.k), data.get_mut(g.k)) else { return false };
+            // Whether a pixel still empty found that level's tile not kept.
+            let mut short = false;
             // The chunk the last pixel came from: its neighbours mostly share it.
             let mut last: Option<(u32, Option<Bands>)> = None;
-            todo.retain(|&i| {
-                let (x, y) = (cols.0 as usize + i % ww, rows.0 as usize + i / ww);
-                // The pixel of that level under this one's centre.
-                let ox = (((x as f64 + 0.5) * sx) as u32).min(ol.width.saturating_sub(1));
-                let oy = (((y as f64 + 0.5) * sy) as u32).min(ol.height.saturating_sub(1));
-                let tile = (oy / th) * ol.across() + ox / tw;
-                let Some((c, at)) = info.layout.chunk(ol, tile, b) else { return true };
-                if last.as_ref().is_none_or(|(lc, _)| *lc != c) {
-                    let chunk = found.entry(c).or_insert_with(|| t.used(&(file.to_string(), o, c))).clone();
-                    last = Some((c, chunk));
-                }
-                let value = last
-                    .as_ref()
-                    .and_then(|(_, ch)| ch.as_ref())
-                    .and_then(|ch| ch.get(at))
-                    .and_then(|p| p.get(((oy % th) * tw + ox % tw) as usize));
-                match (value, dst.get_mut(i)) {
-                    // That level's value, no data included: it is what the image has there.
-                    (Some(s), Some(v)) => {
-                        *v = *s;
-                        false
+            for y in g.rows.0..g.rows.1 {
+                let oy = (((f64::from(y) + 0.5) * sy) as u32).min(ol.height.saturating_sub(1));
+                let row = (y - rows.0) as usize * ww;
+                for x in g.cols.0..g.cols.1 {
+                    let Some(v) = dst.get_mut(row + (x - cols.0) as usize).filter(|v| v.is_nan()) else { continue };
+                    // The pixel of that level under this one's centre.
+                    let ox = (((f64::from(x) + 0.5) * sx) as u32).min(ol.width.saturating_sub(1));
+                    let tile = (oy / th) * ol.across() + ox / tw;
+                    let Some((c, at)) = info.layout.chunk(ol, tile, b) else {
+                        short = true;
+                        continue;
+                    };
+                    if last.as_ref().is_none_or(|(lc, _)| *lc != c) {
+                        let chunk = found.entry(c).or_insert_with(|| t.used(&(file.to_string(), o, c))).clone();
+                        last = Some((c, chunk));
                     }
-                    _ => true,
+                    let value = last
+                        .as_ref()
+                        .and_then(|(_, ch)| ch.as_ref())
+                        .and_then(|ch| ch.get(at))
+                        .and_then(|p| p.get(((oy % th) * tw + ox % tw) as usize));
+                    match value {
+                        // That level's value, no data included: it is what the image has there.
+                        Some(s) => *v = *s,
+                        None => short = true,
+                    }
                 }
-            });
-        }
-        left.retain(|(_, todo)| !todo.is_empty());
-        if left.is_empty() {
+            }
+            short
+        });
+        if open.is_empty() {
             return;
         }
     }

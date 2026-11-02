@@ -60,15 +60,20 @@ pub struct RasterLayer {
     /// A remote reload shared with render snapshots, never serialized.
     #[serde(skip)]
     opening: Option<RasterRead>,
-    /// The style is the file's own look once its pixels land (a layer added before they have).
-    #[serde(skip)]
+    /// The style is the file's own look once its pixels land (a layer added before they have;
+    /// saved with a project saved before they did, so it opens in that look still).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     restyle: bool,
-    /// The look its address gave a layer read in place, applied when its pixels land.
-    #[serde(skip)]
+    /// The look its address gave a layer read in place, applied when its pixels land (saved, as
+    /// `restyle` is, until they have).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     look: Option<AddressLook>,
     /// What reading its pixels lost has been said (see [`RasterLayer::pixels_unsaid`]).
     #[serde(skip)]
     pixels_said: bool,
+    /// Why it couldn't be read in place has been said (see [`RasterLayer::error_unsaid`]).
+    #[serde(skip)]
+    error_said: bool,
 }
 
 /// Called once with a cloud-optimised GeoTIFF's overview, or why it couldn't be read.
@@ -208,6 +213,7 @@ impl RasterLayer {
             restyle: false,
             look: None,
             pixels_said: false,
+            error_said: false,
         })
     }
 
@@ -231,6 +237,7 @@ impl RasterLayer {
             restyle: false,
             look: None,
             pixels_said: false,
+            error_said: false,
         }
     }
 
@@ -254,6 +261,7 @@ impl RasterLayer {
             restyle: false,
             look: None,
             pixels_said: false,
+            error_said: false,
         }
     }
 
@@ -282,6 +290,7 @@ impl RasterLayer {
             restyle: true,
             look: None,
             pixels_said: false,
+            error_said: false,
         }
     }
 
@@ -321,11 +330,13 @@ impl RasterLayer {
             let Some(address) = self.path.clone() else {
                 let e = "the raster has no source".to_string();
                 self.error = Some(e.clone());
+                self.error_said = false;
                 return Err(e);
             };
             let Some(reader) = in_place_reader().lock().unwrap_or_else(|e| e.into_inner()).clone() else {
                 let e = format!("{address}: can't be read in place here");
                 self.error = Some(e.clone());
+                self.error_said = false;
                 return Err(e);
             };
             self.data = None;
@@ -434,6 +445,17 @@ impl RasterLayer {
         Some(d)
     }
 
+    /// Why a layer read in place couldn't be read, the first time it is asked for after the read
+    /// failed, so it is said once (a project, an import or the browser read it after adding it).
+    pub fn error_unsaid(&mut self) -> Option<String> {
+        if !self.in_place || self.error_said {
+            return None;
+        }
+        let e = self.error.clone()?;
+        self.error_said = true;
+        Some(e)
+    }
+
     /// Installs a completed remote read; each render copy can observe the same shared result.
     pub(crate) fn poll_reload(&mut self) -> bool {
         let Some(slot) = self.opening.as_ref() else { return false };
@@ -459,7 +481,10 @@ impl RasterLayer {
                 }
                 self.data = Some(raster);
             }
-            Err(error) => self.error = Some(error),
+            Err(error) => {
+                self.error = Some(error);
+                self.error_said = false;
+            }
         }
     }
 
@@ -935,9 +960,11 @@ fn one() -> f64 {
 /// The look an address gives a GeoTIFF read in place (`…/scene.tif#bands=5,3,2&range=0,3000`, as
 /// tile layers kept it): the bands drawn (from 0; one in grey, or red, green and blue) and a fixed
 /// stretch.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct AddressLook {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub bands: Vec<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub range: Option<(f64, f64)>,
 }
 

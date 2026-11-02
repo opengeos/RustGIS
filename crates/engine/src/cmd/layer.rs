@@ -3037,7 +3037,8 @@ fn add_in_place(s: &mut Session, name: &str, url: &str, strict: bool) -> CmdResu
     }
     r["inPlace"] = json!(true);
     r["kind"] = json!("raster");
-    r["name"] = json!(s.map().layer(r["layer"].as_u64().unwrap_or(0) as u32).map(|l| l.name.clone()));
+    let added = r["layer"].as_u64().and_then(|id| u32::try_from(id).ok()).and_then(|id| s.map().layer(id));
+    r["name"] = json!(added.map(|l| l.name.clone()));
     Ok(r)
 }
 

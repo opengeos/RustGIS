@@ -13325,6 +13325,34 @@ fn an_address_look_holds_when_the_pixels_land_later() {
     assert!(read_together(&mut [&mut stretched, &mut own]).is_empty());
     assert!(matches!(stretched.style.renderer, RasterRenderer::Stretch { band: 0, .. }), "{:?}", stretched.style.renderer);
     assert_eq!(own.style.renderer, RasterRenderer::Colormap);
+    // Saved before its pixels landed (the browser, a read that failed), a layer opens in its look,
+    // or its own one, still.
+    let mut s = Session::new(Project::default());
+    let look = AddressLook { bands: vec![4, 2, 1], range: Some((10.0, 200.0)) };
+    s.map_mut().add_raster("Scene".to_string(), RasterLayer::unread_in_place(format!("{base}/scene.tif")).with_look(look));
+    s.map_mut().add_raster("Classes".to_string(), RasterLayer::unread_in_place(format!("{classes}/classes.tif")));
+    let text = serde_json::to_string(&s.project).unwrap();
+    let mut s = Session::new(Project::default());
+    s.run("project.openText", &json!({"text": text})).unwrap();
+    let style =
+        |name: &str| s.map().layers.iter().find(|l| l.name == name).and_then(|l| l.raster.as_ref()).map(|r| r.style.clone()).unwrap();
+    assert_eq!(style("Scene").renderer, RasterRenderer::Rgb { red: 4, green: 2, blue: 1 });
+    assert_eq!(style("Scene").stretch, Stretch::custom(10.0, 200.0));
+    assert_eq!(style("Classes").renderer, RasterRenderer::Colormap);
+}
+
+/// A layer read in place that can't be read says so, once, as its project opens.
+#[test]
+fn an_in_place_layer_that_cant_be_read_says_so() {
+    let mut s = Session::new(Project::default());
+    s.map_mut().add_raster("Gone".to_string(), rustgis_map::raster::RasterLayer::unread_in_place("http://127.0.0.1:9/gone.tif"));
+    let text = serde_json::to_string(&s.project).unwrap();
+    let mut s = Session::new(Project::default());
+    s.run("project.openText", &json!({"text": text})).unwrap();
+    let said = |s: &Session| s.notices.iter().filter(|n| n.error && n.text.contains("Gone: couldn't be read in place")).count();
+    assert_eq!(said(&s), 1, "{:?}", s.notices.last());
+    s.run("map.zoomIn", &Value::Null).unwrap();
+    assert_eq!(said(&s), 1);
 }
 
 /// A palette COG without its colour table is drawn in grey and says so, also when its pixels land
@@ -13366,7 +13394,9 @@ fn in_place_layers_say_their_overview_once() {
     let (base, _) = serve_ranges(rustgis_data::raster::cog::example(2048, 256));
     let said = |s: &Session| s.notices.iter().filter(|n| n.text.contains("raster tools read a 1024 × 1024 overview")).count();
     let mut s = Session::new(Project::default());
-    s.run("layer.addUrl", &json!({"url": format!("{base}/scene.tif")})).unwrap();
+    let r = s.run("layer.addUrl", &json!({"url": format!("{base}/scene.tif")})).unwrap();
+    // The result names the full size, as a file opened from an overview's does.
+    assert_eq!((r["width"].clone(), r["overviewOf"].clone()), (json!(1024), json!([2048, 2048])), "{r}");
     s.run("map.zoomIn", &Value::Null).unwrap();
     assert_eq!(said(&s), 1, "{:?}", s.notices.last());
     let text = serde_json::to_string(&s.project).unwrap();

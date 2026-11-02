@@ -591,7 +591,9 @@ pub(crate) struct Unpaletted<R> {
     /// Every image is a palette image (transparency masks aside): one without its ColorMap is
     /// one still, its table missing.
     pub(crate) all_palette: bool,
-    /// RGB images with more samples were patched: their first three samples are red, green, blue.
+    /// RGB images with more samples were patched and the file has no grey image of three or more
+    /// bands: an image of several bands is one of them, its first three samples red, green, blue.
+    /// (In a file with both, they can't be told apart, so neither is taken for colour.)
     pub(crate) wide_rgb: bool,
     pos: u64,
 }
@@ -608,12 +610,14 @@ struct Patches {
     /// An image that isn't a palette image (nor a transparency mask) was seen.
     other: bool,
     wide_rgb: bool,
+    /// A grey image of three or more bands was seen.
+    grey_bands: bool,
 }
 
-/// Where the palette images' PhotometricInterpretation values are (and, with `wide_rgb`, those of
-/// RGB images with samples past the colour ones), walking the IFD chain (classic and BigTIFF). A
-/// file it can't walk has none: the decoder reports what's wrong.
-fn photometric_patches<R: Read + Seek>(r: &mut R, wide_rgb: bool) -> Patches {
+/// Where the palette images' PhotometricInterpretation values are, and those of RGB images with
+/// samples past the colour ones, walking the IFD chain (classic and BigTIFF). A file it can't walk
+/// has none: the decoder reports what's wrong.
+fn photometric_patches<R: Read + Seek>(r: &mut R) -> Patches {
     use std::io::SeekFrom;
     let mut patches = Patches::default();
     let mut walk = || -> Option<()> {
@@ -679,6 +683,7 @@ fn photometric_patches<R: Read + Seek>(r: &mut R, wide_rgb: bool) -> Patches {
                 }
             }
             patches.other |= photometric.is_some_and(|(_, p)| p != 3 && p != 4);
+            patches.grey_bands |= photometric.is_some_and(|(_, p)| p <= 1) && samples >= 3;
             match photometric {
                 Some((at, 3)) => {
                     patches.at.push((at, grey));
@@ -686,7 +691,7 @@ fn photometric_patches<R: Read + Seek>(r: &mut R, wide_rgb: bool) -> Patches {
                 }
                 // An RGB image whose fourth sample isn't alpha, or with five or more: RGBI
                 // orthophotos, multispectral images.
-                Some((at, 2)) if wide_rgb && (samples > 4 || (samples == 4 && !matches!(extra, Some(1 | 2)))) => {
+                Some((at, 2)) if samples > 4 || (samples == 4 && !matches!(extra, Some(1 | 2))) => {
                     patches.at.push((at, grey));
                     patches.wide_rgb = true;
                 }
@@ -713,14 +718,21 @@ pub(crate) type Reader<'a> = Unpaletted<Box<dyn ReadSeek + 'a>>;
 /// A reader for the decoder: every band of the image, an RGB image's with more too (see
 /// [`Unpaletted`]).
 pub(crate) fn reader<'a>(r: impl Read + Seek + 'a) -> std::io::Result<Reader<'a>> {
-    Unpaletted::new(Box::new(r), true)
+    Unpaletted::new(Box::new(r))
 }
 
 impl<R: Read + Seek> Unpaletted<R> {
-    fn new(mut inner: R, wide_rgb: bool) -> std::io::Result<Self> {
-        let p = photometric_patches(&mut inner, wide_rgb);
+    fn new(mut inner: R) -> std::io::Result<Self> {
+        let p = photometric_patches(&mut inner);
         inner.seek(std::io::SeekFrom::Start(0))?;
-        Ok(Unpaletted { inner, patches: p.at, palette: p.palette, all_palette: p.palette && !p.other, wide_rgb: p.wide_rgb, pos: 0 })
+        Ok(Unpaletted {
+            inner,
+            patches: p.at,
+            palette: p.palette,
+            all_palette: p.palette && !p.other,
+            wide_rgb: p.wide_rgb && !p.grey_bands,
+            pos: 0,
+        })
     }
 }
 

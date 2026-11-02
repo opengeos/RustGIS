@@ -209,9 +209,10 @@ pub(crate) fn draw_in_place(
     };
     let mut own_style = style.clone();
     own_style.renderer = renumbered(&style.renderer);
-    // Until its tiles arrive, the part in view goes over the overview: both drawn opaque, then
-    // blended once, so a see-through layer isn't darker where they overlap.
-    if w.pending {
+    // While it has gaps (tiles to come, or that couldn't be read and no level kept stands in for),
+    // the part in view goes over the overview: both drawn opaque, then blended once, so a
+    // see-through layer isn't darker where they overlap.
+    if w.pending || w.failed {
         if opacity >= 1.0 {
             whole(pm);
             draw(pm, &part, &own_style, Some(stats), view, 1.0, full_res, place);
@@ -220,13 +221,14 @@ pub(crate) fn draw_in_place(
             draw(&mut both, &part, &own_style, Some(stats), view, 1.0, full_res, place);
             pm.draw_pixmap(0, 0, both.as_ref(), &PixmapPaint { opacity, ..PixmapPaint::default() }, Transform::identity(), None);
         }
-        return Ok(true);
+    } else {
+        draw(pm, &part, &own_style, Some(stats), view, opacity, full_res, place);
     }
-    draw(pm, &part, &own_style, Some(stats), view, opacity, full_res, place);
-    if w.failed {
-        return Err("some of its tiles couldn't be read".into());
+    match (w.pending, w.failed) {
+        (true, _) => Ok(true),
+        (false, true) => Err("some of its tiles couldn't be read".into()),
+        (false, false) => Ok(false),
     }
-    Ok(false)
 }
 
 /// A renderer drawing the same bands of a raster holding only those, in its order (see
@@ -257,9 +259,9 @@ struct InView {
 /// `None` when it isn't in view.
 fn in_view(r: &Raster, view: &View, place: Place, width: u32, height: u32, full_res: bool) -> Option<InView> {
     let k = if view.pixels_per_point >= 1.5 && !full_res { view.pixels_per_point } else { 1.0 };
-    let (w, h) = (f64::from(width) / k, f64::from(height) / k);
+    let (vw, vh) = (f64::from(width) / k, f64::from(height) / k);
     let n = WINDOW_GRID;
-    let at = |i: usize, j: usize| source(r, view, place, k, w * i as f64 / (n - 1) as f64, h * j as f64 / (n - 1) as f64);
+    let at = |i: usize, j: usize| source(r, view, place, k, vw * i as f64 / (n - 1) as f64, vh * j as f64 / (n - 1) as f64);
     let grid: Vec<Option<(f64, f64)>> = (0..n * n).map(|p| at(p % n, p / n)).collect();
     let (mut c0, mut c1, mut r0, mut r1) = (f64::INFINITY, f64::NEG_INFINITY, f64::INFINITY, f64::NEG_INFINITY);
     let (rw, rh) = (f64::from(r.width), f64::from(r.height));
@@ -267,10 +269,10 @@ fn in_view(r: &Raster, view: &View, place: Place, width: u32, height: u32, full_
     // `Raster::wrap_col`): seen across that seam, the part in view is the whole width.
     let mut wrapped = false;
     for (c, row) in grid.iter().flatten() {
-        let w = r.wrap_col(*c);
-        wrapped |= w != *c;
-        c0 = c0.min(w.clamp(0.0, rw));
-        c1 = c1.max(w.clamp(0.0, rw));
+        let col = r.wrap_col(*c);
+        wrapped |= col != *c;
+        c0 = c0.min(col.clamp(0.0, rw));
+        c1 = c1.max(col.clamp(0.0, rw));
         r0 = r0.min(row.clamp(0.0, rh));
         r1 = r1.max(row.clamp(0.0, rh));
     }
@@ -282,7 +284,7 @@ fn in_view(r: &Raster, view: &View, place: Place, width: u32, height: u32, full_
     }
     // The raster's pixels a screen pixel spans: the smallest step between neighbouring points,
     // where the view is finest (a tilted or curved view is finer near its centre).
-    let step = (w / (n - 1) as f64).max(1.0);
+    let step = (vw / (n - 1) as f64).max(1.0);
     let mut per_px = f64::INFINITY;
     for j in 0..n {
         for i in 0..n - 1 {

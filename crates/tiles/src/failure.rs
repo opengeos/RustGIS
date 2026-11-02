@@ -233,7 +233,14 @@ fn http_date(s: &str) -> Option<u64> {
     let (day, year): (i64, i64) = (day.parse().ok()?, year.parse().ok()?);
     let mut hms = time.split(':').map(|p| p.parse::<i64>().ok());
     let (h, m, sec) = (hms.next()??, hms.next()??, hms.next()??);
-    if !(1..=31).contains(&day) || !(1970..=9999).contains(&year) || h > 23 || m > 59 || sec > 60 || hms.next().is_some() {
+    let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+    let days_in_month = match month {
+        2 if leap => 29,
+        2 => 28,
+        4 | 6 | 9 | 11 => 30,
+        _ => 31,
+    };
+    if !(1..=days_in_month).contains(&day) || !(1970..=9999).contains(&year) || h > 23 || m > 59 || sec > 60 || hms.next().is_some() {
         return None;
     }
     // Days since 1970 of a date in the proleptic Gregorian calendar (Howard Hinnant's algorithm).
@@ -458,6 +465,8 @@ mod tests {
         assert_eq!(retry_after_secs("Sun, 06 Nov 1994 08:49:37 GMT", 784_200_000), Some(1), "past: at once, after a second");
         assert_eq!(http_date("Sun, 06 Nov 1994 08:49:37 PST"), None);
         assert_eq!(http_date("Sun, 32 Nov 1994 08:49:37 GMT"), None);
+        assert_eq!(http_date("Wed, 31 Feb 2024 00:00:00 GMT"), None, "no 31 February");
+        assert!(http_date("Thu, 29 Feb 2024 00:00:00 GMT").is_some() && http_date("Sat, 29 Feb 2025 00:00:00 GMT").is_none());
         // A refused answer's own header.
         let headers = vec![("Retry-After".to_string(), "12".to_string())];
         assert_eq!(Failure::answered("u", 429, &headers, b"").message, "http status: 429 (retry after 12 s)");

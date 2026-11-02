@@ -1516,13 +1516,17 @@ impl Session {
 
     /// Says what reading raster layers' pixels lost when it wasn't said as each was added (pixels
     /// read in place land later: in the browser, a project, an import): a palette image without
-    /// its colour table, drawn in grey; an overview statistics and tools read. Once for each
-    /// layer's pixels, one notice of each kind; the app calls it each frame.
+    /// its colour table, drawn in grey; an overview statistics and tools read; a layer read in place
+    /// that couldn't be read, and why. Once for each layer's pixels or failure, one notice of each
+    /// kind; the app calls it each frame.
     pub fn notice_landed_rasters(&mut self) {
-        let (mut grey, mut held) = (Vec::new(), Vec::new());
+        let (mut grey, mut held, mut failed) = (Vec::new(), Vec::new(), Vec::new());
         for m in &mut self.project.maps {
             for l in &mut m.layers {
                 let Some(rl) = &mut l.raster else { continue };
+                if let Some(e) = rl.error_unsaid() {
+                    failed.push((l.name.clone(), e));
+                }
                 let in_place = rl.in_place;
                 let Some(d) = rl.pixels_unsaid() else { continue };
                 if d.palette_missing {
@@ -1540,6 +1544,14 @@ impl Session {
                 format!("{} palette rasters have no whole colour table, so they are drawn in grey: {}", many.len(), names_said(many)),
                 false,
             ),
+        }
+        match &failed[..] {
+            [] => {}
+            [(one, e)] => self.notify(format!("{}: couldn't be read in place: {e}", clip(one, 80)), true),
+            many => {
+                let names: Vec<String> = many.iter().map(|(n, _)| n.clone()).collect();
+                self.notify(format!("{} raster layers couldn't be read in place: {}", many.len(), names_said(&names)), true);
+            }
         }
         match &held[..] {
             [] => {}

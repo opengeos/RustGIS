@@ -354,11 +354,13 @@ pub fn add_raster(s: &mut Session, name: &str, mut layer: RasterLayer) -> CmdRes
     // Read in place, the map shows the full image as it draws, but statistics and tools read the
     // overview held: said so.
     let held = unsaid.filter(|_| layer.in_place).and_then(|d| crate::in_place_overview(&d));
-    let overview = overview.filter(|_| !layer.in_place);
+    let in_place = layer.in_place;
     let empty_before = s.map().layers.is_empty();
     let id = s.map_mut().add_raster(unique.clone(), layer);
     s.active_layer = Some(id);
-    if let Some((fw, fh)) = overview {
+    // Read in place, its own notice says the overview it holds (`held`); the result names the full
+    // size all the same.
+    if let Some((fw, fh)) = overview.filter(|_| !in_place) {
         s.notify(format!("{unique}: showing a {w} × {h} overview of the {fw} × {fh} raster"), false);
     }
     if palette_missing {
