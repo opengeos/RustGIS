@@ -363,7 +363,7 @@ impl Raster {
             .filter(|b| (b.band == 0 || b.band > self.bands.len()) && (b.description.is_some() || !b.categories.is_empty()))
             .count();
         if beyond > 0 {
-            self.lost.push(format!("names for {beyond} band(s) it doesn't have (it has {}) left out", self.bands.len()));
+            self.lost.push(format!("{from}: names for {beyond} band(s) it doesn't have (it has {}) left out", self.bands.len()));
         }
         let mut recompute = false;
         if self.nodata.is_none() {
@@ -986,7 +986,11 @@ pub(crate) mod tests {
             },
             pam::SIDECAR,
         );
-        assert!(one.lost.iter().any(|l| l.contains("names for 1 band(s) it doesn't have")), "{:?}", one.lost);
+        assert!(
+            one.lost.iter().any(|l| l == "its .aux.xml sidecar: names for 1 band(s) it doesn't have (it has 1) left out"),
+            "{:?}",
+            one.lost
+        );
         // What the document left out is said as the sidecar's, not the GDAL tag's.
         assert!(
             one.lost.iter().any(|l| l == "its .aux.xml sidecar: 1 band record(s) for no band from 1 to 65536 left out"),

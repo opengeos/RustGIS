@@ -316,8 +316,9 @@ pub fn parse_gdal_metadata(text: &str) -> Option<Pam> {
     if banded > 0 {
         pam.lost.push(format!("{banded} CLASS_ item(s) given for a band or a role left out (only the file's own are read)"));
     }
-    // Other band items (units, a band's own keys) aren't read either, and are counted. Statistics
-    // (`STATISTICS_*`) aren't: they are worked out again from the values.
+    // Other band items (units, a band's own keys, a `DESCRIPTION` with no description role) aren't
+    // read either, and are counted. Statistics (`STATISTICS_*`) aren't: they are worked out again
+    // from the values.
     let unread = root
         .children()
         .filter(|n| n.has_tag_name("Item") && (n.attribute("sample").is_some() || n.attribute("role").is_some()))
@@ -325,7 +326,7 @@ pub fn parse_gdal_metadata(text: &str) -> Option<Pam> {
         .filter(|n| n.attribute("name").is_none_or(|name| !name.starts_with("CLASS_") && !name.starts_with("STATISTICS_")))
         .count();
     if unread > 0 {
-        pam.lost.push(format!("{unread} band item(s) not read (units and the like): left out"));
+        pam.lost.push(format!("{unread} band item(s) not read: left out"));
     }
     for item in root.children().filter(|n| n.has_tag_name("Item") && n.attribute("sample").is_none() && n.attribute("role").is_none()) {
         // Other dataset items (AREA_OR_POINT, a file's own keys) aren't class names.
@@ -449,7 +450,7 @@ mod tests {
         // A band's units aren't read, and are said; its statistics are worked out again, and aren't.
         let units =
             parse_gdal_metadata(r#"<GDALMetadata><Item name="UNITTYPE" sample="0" role="unittype">m</Item></GDALMetadata>"#).unwrap();
-        assert_eq!(units.lost, ["1 band item(s) not read (units and the like): left out"]);
+        assert_eq!(units.lost, ["1 band item(s) not read: left out"]);
         assert!(parse_gdal_metadata(r#"<GDALMetadata><Item name="STATISTICS_MEAN" sample="0">4.5</Item></GDALMetadata>"#).is_none());
         // A signed value isn't a class's.
         let signed = parse_gdal_metadata(r#"<GDALMetadata><Item name="CLASS_+5">Water</Item></GDALMetadata>"#).unwrap();
