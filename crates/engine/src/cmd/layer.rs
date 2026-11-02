@@ -4,7 +4,9 @@ use std::path::Path;
 
 use rustgis_data::{GeometryType, photo};
 use rustgis_map::symbology::{ClassRef, ClassStyle, LABEL_SIZE, MAX_STROKES};
-use rustgis_map::{ClassMethod, Glyph, LineCap, LineJoin, LineMark, LineMarkers, LineStroke, Marker, Placements, Ramp, Renderer, Rgba};
+use rustgis_map::{
+    ClassMethod, Glyph, LineCap, LineJoin, LineMark, LineMarkers, LineStroke, Marker, NoFill, Placements, Ramp, Renderer, Rgba,
+};
 use serde_json::{Value, json};
 
 use super::{b, f, need_feature_layer, need_layer, ps, uint};
@@ -150,10 +152,9 @@ pub fn commands() -> Vec<C> {
                     other => *other = Renderer::Single(fill(&other.base_symbol())),
                 }
                 // A fill colour after No Fill is drawn (#1301).
-                if no_fill(l) == Some(NoFill::Override) {
+                if l.no_fill.take() == Some(NoFill::Override) && is_no_fill_override(&l.fill_layers) {
                     l.fill_layers.clear();
                 }
-                l.no_fill = false;
             })
         })
         .when(need_feature_layer)
@@ -164,8 +165,8 @@ pub fn commands() -> Vec<C> {
                     // Symbols are shared by geometry families. A polygon-only fill override
                     // leaves point markers and line strokes (including their markers) intact.
                     // A streamed layer may have other families outside the loaded window.
-                    let fill = rustgis_map::fills::FillLayer { color: Some(Rgba::rgb(0, 0, 0).with_alpha(0)), ..Default::default() };
-                    l.fill_layers = vec![fill];
+                    l.no_fill = Some(NoFill::Override);
+                    l.fill_layers = vec![no_fill_override()];
                     match &mut l.renderer {
                         Renderer::Unique { class_fills, other_fills, .. } => {
                             class_fills.clear();
@@ -176,8 +177,8 @@ pub fn commands() -> Vec<C> {
                     }
                 } else {
                     l.renderer.map_symbols(|sym| sym.fill = sym.fill.with_alpha(0));
+                    l.no_fill = Some(NoFill::Symbols);
                 }
-                l.no_fill = true;
             })
         })
         .when(need_polygon_features)
@@ -683,27 +684,15 @@ fn shown_fill_alpha() -> u8 {
     rustgis_map::Symbol::default_for(GeometryType::Polygon, 0).fill.a()
 }
 
-/// How `layer.noFill` hid a layer's polygon fills.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum NoFill {
-    /// One transparent fill over every symbol: on streamed layers and layers with points or lines,
-    /// whose symbols those share.
-    Override,
-    /// Every symbol's fill made transparent.
-    Symbols,
+/// The one transparent fill No Fill lays over a layer's symbols.
+fn no_fill_override() -> rustgis_map::fills::FillLayer {
+    rustgis_map::fills::FillLayer { color: Some(Rgba::rgb(0, 0, 0).with_alpha(0)), ..Default::default() }
 }
 
-/// Whether, and how, No Fill is on for the layer.
-fn no_fill(l: &rustgis_map::Layer) -> Option<NoFill> {
-    if !l.no_fill {
-        return None;
-    }
-    Some(if is_no_fill_override(&l.fill_layers) { NoFill::Override } else { NoFill::Symbols })
-}
-
-/// Whether the fills are the one transparent fill No Fill lays over a layer's symbols.
+/// Whether the fills are No Fill's own, rather than a transparent fill chosen with `layer.fillLayers`.
 fn is_no_fill_override(fills: &[rustgis_map::fills::FillLayer]) -> bool {
-    matches!(fills, [f] if matches!(f.pattern, rustgis_map::fills::FillPattern::Solid) && f.color.is_some_and(|c| c.a() == 0))
+    let o = no_fill_override();
+    matches!(fills, [f] if matches!(f.pattern, rustgis_map::fills::FillPattern::Solid) && f.color == o.color)
 }
 
 /// The symbol of one class, for its own fills.
@@ -901,7 +890,7 @@ fn fill_layers(s: &mut Session, p: &Value) -> CmdResult {
     // symbols' fills are shown again, or they would draw nothing (#1301). A class's fills show
     // that class's alone.
     let in_symbol_colour = fills.is_empty() || fills.iter().any(|f| f.color.is_none());
-    let hidden = no_fill(l);
+    let hidden = l.no_fill;
     let count = fills.len();
     match class {
         Some(c) => {
@@ -913,10 +902,10 @@ fn fill_layers(s: &mut Session, p: &Value) -> CmdResult {
         None => {
             if in_symbol_colour && hidden == Some(NoFill::Symbols) {
                 l.renderer.map_symbols(show_fill);
-                l.no_fill = false;
+                l.no_fill = None;
             }
-            if hidden == Some(NoFill::Override) {
-                l.no_fill = is_no_fill_override(&fills);
+            if hidden == Some(NoFill::Override) && !is_no_fill_override(&fills) {
+                l.no_fill = None;
             }
             l.fill_layers = fills;
         }
@@ -3334,7 +3323,7 @@ fn symbology(s: &mut Session, p: &Value) -> CmdResult {
     let l = s.map().layer(id).ok_or("no such layer")?;
     let g = l.geometry_type();
     // A new symbology after No Fill draws fills again (#1301).
-    let hidden = no_fill(l);
+    let hidden = l.no_fill;
     let base = l.renderer.base_symbol();
     let base = if matches!(l.renderer, Renderer::Graduated { .. } | Renderer::Unique { .. }) {
         rustgis_map::Symbol { ..rustgis_map::Symbol::default_for(g, id) }.with_fill(base.fill, g)
@@ -3400,12 +3389,15 @@ fn symbology(s: &mut Session, p: &Value) -> CmdResult {
     // Applied again on the same field, the classes keep the labels set by hand, and the colours
     // and outlines set by hand too while the colour scheme stays (#314).
     r.carry_edits_from(&l.renderer, g);
+    // The same field and scheme again carry the classes' alpha, which No Fill made 0.
+    if hidden == Some(NoFill::Symbols) {
+        r.map_symbols(show_fill);
+    }
     with(s, p, |l| {
         l.renderer = r;
-        if hidden == Some(NoFill::Override) {
+        if l.no_fill.take() == Some(NoFill::Override) && is_no_fill_override(&l.fill_layers) {
             l.fill_layers.clear();
         }
-        l.no_fill = false;
     })
 }
 

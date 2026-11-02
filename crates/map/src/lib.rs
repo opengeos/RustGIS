@@ -98,6 +98,16 @@ impl Basemap {
     }
 }
 
+/// How No Fill hid a layer's polygon fills ([`Layer::no_fill`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum NoFill {
+    /// One transparent fill over every symbol: on streamed layers and layers with points or lines,
+    /// whose symbols those share.
+    Override,
+    /// Every symbol's fill made transparent.
+    Symbols,
+}
+
 /// A layer: a dataset drawn with a renderer and labels.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Layer {
@@ -158,11 +168,10 @@ pub struct Layer {
     /// [`fills::FillLayer`]).
     #[serde(default, skip_serializing_if = "Vec::is_empty", deserialize_with = "fills::de_fills")]
     pub fill_layers: Vec<fills::FillLayer>,
-    /// Whether No Fill hid the polygon fills (made the symbols' fills transparent, or laid a
-    /// transparent fill over them): a new symbology, a fill colour or a fill in the symbol's
-    /// colour shows them again. A fill colour chosen transparent isn't this.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub no_fill: bool,
+    /// How No Fill hid the polygon fills, while it does: a new symbology, a fill colour or a fill
+    /// in the symbol's colour shows them again. A fill colour chosen transparent isn't this.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub no_fill: Option<NoFill>,
     /// Draws the stacked strokes in levels (symbol levels): every feature's strokes of one
     /// [`LineStroke::level`] before any of the next, so road casings join under the cores
     /// instead of cutting across them where lines meet.
@@ -382,7 +391,7 @@ impl Layer {
             extrusion: None,
             line_strokes: Vec::new(),
             fill_layers: Vec::new(),
-            no_fill: false,
+            no_fill: None,
             stroke_levels: false,
             marker_rotation: None,
             symbol_by: Default::default(),
