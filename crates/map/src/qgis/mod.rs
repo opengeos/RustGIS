@@ -141,6 +141,21 @@ pub struct RuleFilter {
     pub inside: Option<f64>,
 }
 
+/// How many of the rules `roots` and those under them draw (`draws`): switched on, and under no
+/// rule switched off. For the rules a reader leaves out.
+pub(super) fn drawing_rules<'a, 'i: 'a>(roots: impl Iterator<Item = Node<'a, 'i>>, draws: impl Fn(Node) -> bool) -> usize {
+    let on = |n: Node| n.attribute("active") != Some("0");
+    roots
+        .filter(|r| r.has_tag_name("rule"))
+        .map(|r| {
+            r.descendants()
+                .filter(|d| d.has_tag_name("rule") && draws(*d))
+                .filter(|d| d.ancestors().take_while(|a| *a != r).chain(std::iter::once(r)).all(|a| !a.has_tag_name("rule") || on(a)))
+                .count()
+        })
+        .sum()
+}
+
 /// The expression that classes a feature by the first of `rules` it meets: `CASE WHEN <when>
 /// THEN '<key>' … END`.
 pub fn rules_expression(rules: &[RuleFilter]) -> String {
@@ -297,6 +312,12 @@ pub fn read_project(text: &str, dir: &str, report: &mut Report) -> Result<Projec
         let vector = kind == "vector";
         let definition_query = match &source {
             Source::File { subset: Some(q), .. } => match expr::to_sql(q) {
+                // A definition query is read with no map scale, so one reading it would take no
+                // feature.
+                Some(_) if expr::reads_scale(q) => {
+                    report.skipped(&name, "its filter (subset string), which reads the map's scale, which a filter has none of");
+                    None
+                }
                 Some(sql) => Some(sql),
                 None => {
                     report.skipped(&name, "its filter (subset string), which is too long to read");

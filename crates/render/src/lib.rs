@@ -3617,7 +3617,7 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
                 // `render_frame`'s contract) waits for the font index; a frame on screen doesn't.
                 let find = if full_res_rasters { families::find } else { families::find_ready };
                 let class_fonts: Vec<Option<u16>> = labels.in_order().map(|c| c.font.as_deref().and_then(find)).collect();
-                let classes = rustgis_map::LabelMatcher::new(labels, ds_ptr);
+                let classes = rustgis_map::LabelMatcher::new(labels, ds_ptr, Some(label_scale));
                 let lid = layer.id;
                 // Whether a class labels lines along them: those take the stretch of a line in
                 // view, wherever its label point is.

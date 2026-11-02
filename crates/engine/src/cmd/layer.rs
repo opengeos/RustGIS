@@ -3461,10 +3461,16 @@ fn symbology(s: &mut Session, p: &Value) -> CmdResult {
         (None, None) => l.renderer.expression().map(str::to_string),
         _ => expression,
     };
+    // Features past the first values an expression's classes keep.
+    let mut rest = 0;
     let mut r = match kind.as_str() {
         "single" | "singlesymbol" => Renderer::Single(base),
         "unique" | "uniquevalues" => match &expression {
-            Some(e) => Renderer::unique_by(&l.dataset, &rows()?, e, ramp.unwrap_or(Ramp::Harbour), base)?,
+            Some(e) => {
+                let (r, n) = Renderer::unique_by_counted(&l.dataset, &rows()?, e, ramp.unwrap_or(Ramp::Harbour), base)?;
+                rest = n;
+                r
+            }
             None => Renderer::unique(&l.dataset, &rows()?, &field(false)?, ramp.unwrap_or(Ramp::Harbour), base)?,
         },
         "graduated" | "graduatedcolors" => {
@@ -3495,10 +3501,21 @@ fn symbology(s: &mut Session, p: &Value) -> CmdResult {
     if hidden == Some(NoFill::Symbols) {
         r.map_symbols(show_fill);
     }
-    with(s, p, |l| {
+    let name = l.name.clone();
+    let out = with(s, p, |l| {
         l.renderer = r;
         take_no_fill(l);
-    })
+    })?;
+    if rest > 0 {
+        s.notify(
+            format!(
+                "{name}: {rest} features whose value is past the first {} the expression gives are drawn as <all other values>",
+                rustgis_map::symbology::MAX_UNIQUE
+            ),
+            false,
+        );
+    }
+    Ok(out)
 }
 
 /// The class `value`, `index` or `other: true` name in a command's parameters, or `None` when

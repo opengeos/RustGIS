@@ -848,6 +848,65 @@ fn unique_values_class_by_an_expression() {
     assert!(s.notices.iter().any(|n| n.text.contains("classes by expression aren't in it")), "{:?}", s.notices.last());
     s.run("share.exportMap", &json!({"path": dir.join("map.png").display().to_string(), "width": 320, "height": 200})).unwrap();
     std::fs::remove_dir_all(&dir).ok();
+    // More values than classes: the features past them are said, with how many; a few values
+    // say nothing.
+    let past = |s: &Session| s.notices.iter().filter(|n| n.text.contains("past the first")).count();
+    assert_eq!(past(&s), 0);
+    s.run("layer.symbology", &json!({"layer": "Cities", "type": "unique", "expression": "name"})).unwrap();
+    let l = s.map().layer_by_name("Cities").unwrap();
+    let (_, rest) =
+        rustgis_map::Renderer::unique_by_counted(&l.dataset, &[], "name", rustgis_map::Ramp::Harbour, l.renderer.base_symbol()).unwrap();
+    assert!(rest > 0);
+    let said = format!("Cities: {rest} features whose value is past the first {} the expression gives", rustgis_map::symbology::MAX_UNIQUE);
+    assert!(s.notices.iter().any(|n| n.text.starts_with(&said)), "{:?}", s.notices.last());
+    s.undo();
+    // Shared to the web, the one symbol is one that draws: not a rest without a fill or an outline
+    // width.
+    let cities = s.map().layer_by_name("Cities").unwrap().id;
+    let l = s.map_mut().layer_mut(cities).unwrap();
+    let rustgis_map::Renderer::Unique { other, classes, .. } = &mut l.renderer else { panic!() };
+    (other.fill, other.stroke, other.stroke_width) = (rustgis_map::Rgba::new(0, 0, 0, 0), rustgis_map::Rgba::rgb(9, 9, 9), 0.0);
+    let first = classes[0].1.fill.hex();
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("one.json");
+    s.run("share.webStyle", &json!({"layer": "Cities", "path": path.display().to_string()})).unwrap();
+    let style: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    let circle = style["layers"].as_array().unwrap().iter().find(|l| l["type"] == "circle").unwrap();
+    assert_eq!(circle["paint"]["circle-color"], json!(first));
+    assert!(s.notices.iter().any(|n| n.text.contains("one symbol (its first class's)")), "{:?}", s.notices.last());
+    // A line's colour is its stroke's, as the map draws it.
+    let mut ds = rustgis_data::Dataset::new("ways", rustgis_data::GeometryType::Polyline, vec![]);
+    ds.push(Some(rustgis_data::Geometry::Line(vec![vec![rustgis_data::Coord::new(0.0, 0.0), rustgis_data::Coord::new(1.0, 1.0)]])), vec![]);
+    let ways = s.map_mut().add_dataset(ds);
+    let l = s.map_mut().layer_mut(ways).unwrap();
+    let mut sym = l.renderer.base_symbol();
+    (sym.fill, sym.stroke) = (rustgis_map::Rgba::rgb(1, 2, 3), rustgis_map::Rgba::rgb(200, 100, 50));
+    l.renderer = rustgis_map::Renderer::Single(sym);
+    s.run("share.webStyle", &json!({"layer": ways, "path": path.display().to_string()})).unwrap();
+    let style: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    let line = style["layers"].as_array().unwrap().iter().find(|l| l["type"] == "line").unwrap();
+    assert_eq!(line["paint"]["line-color"], json!(sym.stroke.hex()));
+    // By expression, a line's rest with a fill but no stroke draws nothing: the first class's.
+    let mut ds = rustgis_data::Dataset::new(
+        "kinds",
+        rustgis_data::GeometryType::Polyline,
+        vec![rustgis_data::Field::new("k", rustgis_data::FieldType::Text)],
+    );
+    ds.push(
+        Some(rustgis_data::Geometry::Line(vec![vec![rustgis_data::Coord::new(0.0, 0.0), rustgis_data::Coord::new(1.0, 1.0)]])),
+        vec![rustgis_data::Value::Text("a".into())],
+    );
+    let kinds = s.map_mut().add_dataset(ds);
+    s.run("layer.symbology", &json!({"layer": kinds, "type": "unique", "expression": "k || 'x'"})).unwrap();
+    let l = s.map_mut().layer_mut(kinds).unwrap();
+    let rustgis_map::Renderer::Unique { other, classes, .. } = &mut l.renderer else { panic!() };
+    (other.fill, other.stroke) = (rustgis_map::Rgba::rgb(1, 2, 3), rustgis_map::Rgba::new(0, 0, 0, 0));
+    let first = classes[0].1.stroke.hex();
+    s.run("share.webStyle", &json!({"layer": kinds, "path": path.display().to_string()})).unwrap();
+    let style: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    let line = style["layers"].as_array().unwrap().iter().find(|l| l["type"] == "line").unwrap();
+    assert_eq!(line["paint"]["line-color"], json!(first));
+    std::fs::remove_dir_all(&dir).ok();
     // Deleting a field it reads: a single symbol, as for a renderer on that field.
     s.run("edit.deleteField", &json!({"layer": "Cities", "field": "pop_max"})).unwrap();
     assert!(matches!(s.map().layer_by_name("Cities").unwrap().renderer, rustgis_map::Renderer::Single(_)));
@@ -884,6 +943,11 @@ fn qgis_rules_class_features_and_say_which_several_rules_pick() {
         <rule filter="&quot;pop_max&quot; &gt; 5000000" symbol="1" scalemindenom="20000"/>"#;
     let said = notes(&s.run("style.importQgis", &json!({"layer": "Cities", "text": qml(apart)})).unwrap());
     assert!(!said.iter().any(|n| n.contains("more than one")), "{said:?}");
+    // Rules reading the map's scale can't be counted at no scale: said without a count.
+    let scaled = r#"<rule filter="$scale &gt; 0 AND &quot;pop_max&quot; &gt; 1000000" symbol="0"/>
+        <rule filter="&quot;pop_max&quot; &gt; 5000000" symbol="1"/>"#;
+    let said = notes(&s.run("style.importQgis", &json!({"layer": "Cities", "text": qml(scaled)})).unwrap());
+    assert!(said.iter().any(|n| n.contains("features that more than one of its rules picks (if any)")), "{said:?}");
     // An else rule picks what its siblings don't: nothing two rules pick.
     let rest = r#"<rule filter="&quot;pop_max&quot; &gt; 0"><rule filter="&quot;pop_max&quot; &lt; 1000000" symbol="0"/><rule filter="ELSE" symbol="1"/></rule>"#;
     let said = notes(&s.run("style.importQgis", &json!({"layer": "Cities", "text": qml(rest)})).unwrap());

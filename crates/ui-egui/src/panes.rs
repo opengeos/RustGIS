@@ -4087,7 +4087,7 @@ fn symbology(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         Renderer::Unique { field, classes, ramp, expression, .. } => {
             field_combo(app, ui, "Field", if expression.is_some() { tl!("(expression)") } else { field.as_str() }, &all, "unique");
             // Or by an expression's values: blank goes back to the field.
-            let id = egui::Id::unique(("unique_expression", l.id));
+            let id = egui::Id::unique(("unique_expression", crate::labelpane::layer_key(app, &l)));
             if let Some(text) = expression_box(ui, id, tl!("Expression"), expression.as_deref(), &l.dataset, t) {
                 let e = if text.is_empty() { Value::Null } else { json!(text) };
                 let _ = app.run("layer.symbology", json!({"type": "unique", "expression": e, "ramp": ramp.name()}));

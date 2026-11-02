@@ -1540,10 +1540,42 @@ fn an_else_rule_takes_what_its_siblings_dont_draw_at_the_scale() {
     assert_eq!(legend(50_000.0), ["All", "Rest of big"]);
 }
 
+/// A rule under an else rule takes only what the else rule does: what none of its siblings
+/// draws, even before them; a label rule too.
+#[test]
+fn rules_under_an_else_rule_take_only_the_rest() {
+    let qml = r#"<qgis version="3.40.0"><renderer-v2 type="RuleRenderer"><rules key="r">
+        <rule filter="ELSE" label="Rest group"><rule symbol="1" label="Rest"/></rule>
+        <rule filter="&quot;kind&quot; = 'a'" symbol="0" label="A"/>
+      </rules><symbols>
+        <symbol type="marker" name="0"><layer class="SimpleMarker" enabled="1"/></symbol>
+        <symbol type="marker" name="1"><layer class="SimpleMarker" enabled="1"/></symbol>
+      </symbols></renderer-v2>
+      <labeling type="rule-based"><rules key="r">
+        <rule filter="ELSE"><rule description="Rest"><settings><text-style fieldName="name"/></settings></rule></rule>
+        <rule filter="&quot;kind&quot; = 'a'" description="A"><settings><text-style fieldName="name"/></settings></rule>
+        <rule active="0"><rule description="Off"><settings><text-style fieldName="name"/></settings></rule></rule>
+      </rules></labeling></qgis>"#;
+    let mut report = Report::default();
+    let s = read_style(qml, "points", &mut report).unwrap();
+    assert!(!report.notes.iter().any(|n| n.text.contains("past the")), "{:?}", report.notes);
+    let mut l = rule_points(&[("a", 1, "x"), ("b", 1, "y")]);
+    s.apply(&mut l);
+    // Kind a is A's, not the rest's (the rules are Unique Values on kind, the rest the others).
+    assert_eq!(rule_classes(&l, Some(5_000.0)), [Some("a".to_string()), None]);
+    assert!(l.labels.class("Off").is_none(), "a label rule under a switched-off one isn't read");
+    let rest = l.labels.class("Rest").expect("the label rule under the else rule");
+    assert!(rest.where_.as_deref().is_some_and(|w| w.contains("NOT")), "{:?}", rest.where_);
+}
+
 #[test]
 fn many_rules_read_quickly() {
     // Thousands of rules beside thousands of else rules: bounded, not one sibling list each.
-    let rules: String = (0..20_000).map(|i| format!(r#"<rule filter="a = {i}" symbol="0"/><rule filter="ELSE" symbol="0"/>"#)).collect();
+    // (A switched-off rule past them draws nothing, so it isn't among those said left out.)
+    let rules: String = (0..20_000)
+        .map(|i| format!(r#"<rule filter="a = {i}" symbol="0"/><rule filter="ELSE" symbol="0"/>"#))
+        .chain(std::iter::once(r#"<rule filter="a = 1" symbol="0" active="0"/>"#.to_string()))
+        .collect();
     let qml = format!(
         r#"<qgis><renderer-v2 type="RuleRenderer"><rules key="r">{rules}</rules><symbols><symbol type="marker" name="0"><layer class="SimpleMarker" enabled="1"/></symbol></symbols></renderer-v2>
         <labeling type="rule-based"><rules key="r">{}</rules></labeling></qgis>"#,
@@ -1559,4 +1591,23 @@ fn many_rules_read_quickly() {
         "{:?}",
         s.renderer.as_ref().map(|r| r.kind_label())
     );
+    // The rules past those read are said, with how many: 40,000 drawing rules, 4,096 read; 40,000
+    // label rules, 256 read.
+    assert!(report.notes.iter().any(|n| n.text.contains("35904 of its rules, past the")), "{:?}", report.notes);
+    assert!(report.notes.iter().any(|n| n.text.contains("39744 of its label rules, past the")), "{:?}", report.notes);
+}
+
+/// A layer filter (subset string) reading the map's scale can't be a definition query, which has
+/// no scale: it is left out, said, rather than kept to take no feature.
+#[test]
+fn a_subset_string_reading_the_scale_is_left_out() {
+    for (subset, kept) in [("$scale &lt; 5000", false), ("@map_scale &lt; 5000", false), ("&quot;kind&quot; = '$scale'", true)] {
+        let project = format!(
+            r#"<qgis><projectlayers><maplayer type="vector"><id>a</id><datasource>./a.gpkg|layername=a|subset={subset}</datasource><layername>A</layername><provider>ogr</provider></maplayer></projectlayers></qgis>"#
+        );
+        let mut report = Report::default();
+        let p = read_project(&project, "/maps", &mut report).unwrap();
+        assert_eq!(p.layers[0].definition_query.is_some(), kept, "{subset}");
+        assert_eq!(report.notes.iter().any(|n| n.text.contains("reads the map's scale")), !kept, "{subset}: {:?}", report.notes);
+    }
 }

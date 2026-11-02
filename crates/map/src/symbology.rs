@@ -899,36 +899,57 @@ impl Renderer {
     /// a value it gives only at some scales is a class once it is given then (as a style import
     /// makes them), else drawn as `other`. The text is checked against `ds`'s fields.
     pub fn unique_by(ds: &Dataset, rows: &[bool], expression: &str, ramp: Ramp, base: Symbol) -> Result<Renderer, String> {
+        Self::unique_by_counted(ds, rows, expression, ramp, base).map(|(r, _)| r)
+    }
+
+    /// [`Renderer::unique_by`], and how many kept features have a value past the first
+    /// [`MAX_UNIQUE`] (in order), drawn as `<all other values>`.
+    pub fn unique_by_counted(ds: &Dataset, rows: &[bool], expression: &str, ramp: Ramp, base: Symbol) -> Result<(Renderer, usize), String> {
         let text = expression.trim();
         if text.chars().count() > rustgis_data::query::MAX_LEN {
             return Err(format!("the expression is longer than {} characters", rustgis_data::query::MAX_LEN));
         }
         let e = rustgis_data::query::parse(text, ds)?;
         let env = rustgis_data::query::Env::default();
-        let vals: std::collections::BTreeSet<String> = (0..ds.features.len())
-            .filter(|r| rows.get(*r).copied().unwrap_or(true))
-            .filter_map(|r| match rustgis_data::query::value(&e, ds, r, &env) {
-                rustgis_data::Value::Null => None,
-                rustgis_data::Value::Text(t) => Some(t),
-                v => Some(v.to_string()),
-            })
-            .collect();
-        let vals: Vec<String> = vals.into_iter().take(MAX_UNIQUE).collect();
+        // The first values in order, never more than MAX_UNIQUE kept, each with its features: one
+        // put out of the first can't come back (any later one is past the last kept), so its
+        // features and every later one past the last kept are counted as the rest.
+        let mut kept: BTreeMap<String, usize> = BTreeMap::new();
+        let mut rest = 0usize;
+        for r in (0..ds.features.len()).filter(|r| rows.get(*r).copied().unwrap_or(true)) {
+            let v = match rustgis_data::query::value(&e, ds, r, &env) {
+                rustgis_data::Value::Null => continue,
+                rustgis_data::Value::Text(t) => t,
+                v => v.to_string(),
+            };
+            if kept.len() >= MAX_UNIQUE && kept.last_key_value().is_some_and(|(last, _)| v > *last) {
+                rest += 1;
+                continue;
+            }
+            *kept.entry(v).or_insert(0) += 1;
+            if kept.len() > MAX_UNIQUE {
+                rest += kept.pop_last().map_or(0, |(_, n)| n);
+            }
+        }
+        let vals: Vec<String> = kept.into_keys().collect();
         let n = vals.len();
         let classes = vals.into_iter().enumerate().map(|(k, v)| (v, base.with_ramp_fill(ramp.pick(k, n), ds.geometry_type))).collect();
-        Ok(Renderer::Unique {
-            field: String::new(),
-            classes,
-            other: base.with_ramp_fill(OTHER_FILL, ds.geometry_type),
-            ramp,
-            class_labels: BTreeMap::new(),
-            other_label: None,
-            class_strokes: BTreeMap::new(),
-            other_strokes: Vec::new(),
-            class_fills: Default::default(),
-            other_fills: Vec::new(),
-            expression: Some(text.to_string()),
-        })
+        Ok((
+            Renderer::Unique {
+                field: String::new(),
+                classes,
+                other: base.with_ramp_fill(OTHER_FILL, ds.geometry_type),
+                ramp,
+                class_labels: BTreeMap::new(),
+                other_label: None,
+                class_strokes: BTreeMap::new(),
+                other_strokes: Vec::new(),
+                class_fills: Default::default(),
+                other_fills: Vec::new(),
+                expression: Some(text.to_string()),
+            },
+            rest,
+        ))
     }
 
     /// Builds a graduated-colours renderer on a numeric `field`, classing the rows `rows` keeps (a
@@ -1337,8 +1358,13 @@ impl Renderer {
     /// more than [`MAX_LEGEND_STEPS`] to class every kept feature lists all its classes.
     pub fn legend_at(&self, ds: &Dataset, rows: &[bool], map_scale: Option<f64>) -> Vec<LegendEntry> {
         let Renderer::Unique { field, classes, other, class_labels, other_label, expression, .. } = self else { return self.legend() };
+        // A fully transparent fallback draws nothing, so it has nothing to stand for in a legend.
+        // Lines draw with their stroke only.
+        let visible = other.stroke.a() > 0 || (ds.geometry_type != GeometryType::Polyline && other.fill.a() > 0);
         if expression.is_some() && ds.features.len().saturating_mul(classes.len().max(1)) > MAX_LEGEND_STEPS {
-            return self.legend();
+            let mut all = self.legend();
+            all.retain(|e| visible || !e.fallback);
+            return all;
         }
         // A value matches its first class, as in `symbol_for`.
         let mut index: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
@@ -1386,9 +1412,6 @@ impl Renderer {
             .map(|((k, s), _)| LegendEntry { label: unique_label(class_labels, k), symbol: *s, fallback: false })
             .collect();
         v.sort_by_cached_key(|e| e.label.to_lowercase());
-        // A fully transparent fallback draws nothing, so it has nothing to stand for in a legend.
-        // Lines draw with their stroke only.
-        let visible = other.stroke.a() > 0 || (ds.geometry_type != GeometryType::Polyline && other.fill.a() > 0);
         if other_used && visible {
             v.push(LegendEntry { label: other_label.clone().unwrap_or_else(|| OTHER_VALUES.into()), symbol: *other, fallback: true });
         }
@@ -2507,18 +2530,22 @@ pub type LabelKey = (u32, u64, usize, usize);
 /// clause takes a row labels it.
 pub struct LabelMatcher<'a> {
     classes: Vec<(&'a LabelClass, Option<Option<rustgis_data::query::Expr>>)>,
+    env: rustgis_data::query::Env,
 }
 
 impl<'a> LabelMatcher<'a> {
-    pub fn new(labels: &'a Labeling, ds: &Dataset) -> Self {
-        LabelMatcher { classes: labels.in_order().map(|c| (c, c.query(ds))).collect() }
+    /// `map_scale`: the scale (1:N) the labels are drawn at, which a clause may read
+    /// (`@map_scale`); none: no map.
+    pub fn new(labels: &'a Labeling, ds: &Dataset, map_scale: Option<f64>) -> Self {
+        let env = rustgis_data::query::Env { map_scale: map_scale.filter(|s| s.is_finite() && *s > 0.0) };
+        LabelMatcher { classes: labels.in_order().map(|c| (c, c.query(ds))).collect(), env }
     }
 
     /// The classes whose clause takes `row`, each with its place in `Labeling::in_order`.
     pub fn classes_of(&self, ds: &Dataset, row: usize) -> impl Iterator<Item = (usize, &'a LabelClass)> {
         self.classes.iter().enumerate().filter_map(move |(i, (c, q))| match q {
             Some(None) => Some((i, *c)),
-            Some(Some(e)) if rustgis_data::query::eval(e, ds, row) => Some((i, *c)),
+            Some(Some(e)) if rustgis_data::query::matches(e, ds, row, &self.env) => Some((i, *c)),
             _ => None,
         })
     }
@@ -2911,7 +2938,7 @@ mod tests {
         let class = |name: &str, w: &str| LabelClass { name: name.into(), where_: Some(w.into()), ..LabelClass::default_for(&ds) };
         l.classes = vec![class("Big", "pop > 100"), class("Medium", "pop > 10"), class("Broken", "nope = 1")];
         let names = |l: &Labeling| -> Vec<Vec<(usize, String)>> {
-            let m = LabelMatcher::new(l, &ds);
+            let m = LabelMatcher::new(l, &ds, None);
             (0..3).map(|r| m.classes_of(&ds, r).map(|(i, c)| (i, c.name.clone())).collect()).collect()
         };
         let (big, medium, default) = ((0, "Big".to_string()), (1, "Medium".to_string()), (3, "Default".to_string()));
@@ -3318,6 +3345,36 @@ mod tests {
             Renderer::graduated(&d, &[], "nope", 2, ClassMethod::Quantile, Ramp::Ember, Symbol::default_for(GeometryType::Polygon, 0))
                 .is_err()
         );
+    }
+
+    #[test]
+    fn unique_values_by_an_expression_count_what_is_past_their_classes() {
+        let base = Symbol::default_for(GeometryType::Point, 0);
+        let mut d = Dataset::new("p", GeometryType::Point, vec![rustgis_data::Field::new("n", rustgis_data::FieldType::Integer)]);
+        // 100 values, each on two features, in no order: the first 64 (as text) are kept.
+        for i in (0..100i64).rev().chain(0..100) {
+            d.push(Some(rustgis_data::Geometry::Point(rustgis_geom::Coord::new(0.0, 0.0))), vec![rustgis_data::Value::Int(i)]);
+        }
+        let (r, rest) = Renderer::unique_by_counted(&d, &[], "n", Ramp::Harbour, base).unwrap();
+        let Renderer::Unique { classes, .. } = &r else { panic!() };
+        let mut all: Vec<String> = (0..100).map(|i: i64| i.to_string()).collect();
+        all.sort();
+        assert_eq!(classes.iter().map(|c| c.0.clone()).collect::<Vec<_>>(), all[..MAX_UNIQUE]);
+        assert_eq!(rest, 2 * (100 - MAX_UNIQUE));
+        let (_, rest) = Renderer::unique_by_counted(&d, &[], "n % 10", Ramp::Harbour, base).unwrap();
+        assert_eq!(rest, 0);
+    }
+
+    /// Label clauses read the scale the labels are drawn at.
+    #[test]
+    fn label_clauses_read_the_drawing_scale() {
+        let mut d = Dataset::new("p", GeometryType::Point, vec![]);
+        d.push(Some(rustgis_data::Geometry::Point(rustgis_geom::Coord::new(0.0, 0.0))), vec![]);
+        let mut l = Labeling::default_for(&d);
+        l.default.where_ = Some("@map_scale > 1000".into());
+        assert_eq!(LabelMatcher::new(&l, &d, Some(5_000.0)).classes_of(&d, 0).count(), 1);
+        assert_eq!(LabelMatcher::new(&l, &d, Some(500.0)).classes_of(&d, 0).count(), 0);
+        assert_eq!(LabelMatcher::new(&l, &d, None).classes_of(&d, 0).count(), 0);
     }
 
     #[test]

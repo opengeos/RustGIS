@@ -341,7 +341,10 @@ fn note_overlapping_rules(l: &rustgis_map::Layer, name: &str, rules: &[qgis::Rul
         return;
     }
     let what = "each with the first rule that picks it, where QGIS draws it with every one";
-    if compiled.len().saturating_mul(ds.features.len()) > MAX_RULE_CHECKS || l.source.is_some() {
+    // Rules read at no map scale can't be counted for one that reads it (an else rule beside a
+    // rule with a scale range does too).
+    let scaled = compiled.iter().any(|(r, _)| r.condition.contains("@map_scale"));
+    if scaled || compiled.len().saturating_mul(ds.features.len()) > MAX_RULE_CHECKS || l.source.is_some() {
         report.approximated(name, format!("features that more than one of its rules picks (if any), drawn {what}"));
         return;
     }

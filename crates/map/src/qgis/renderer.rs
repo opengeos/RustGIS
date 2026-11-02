@@ -287,11 +287,12 @@ struct Sibling {
 }
 
 /// A rule of a rule-based renderer that draws: its filter and its parents' (an else rule's own
-/// left out), for an else rule its siblings (it takes what none of them does), and the scale range
-/// along the way (RustGIS's scales: drawn out to 1:`.0`, in to 1:`.1`).
+/// left out), for an else rule and each else rule above it the siblings it takes the rest of (what
+/// none of them draws), and the scale range along the way (RustGIS's scales: drawn out to 1:`.0`,
+/// in to 1:`.1`).
 struct Rule<'a, 'i> {
     filters: Vec<String>,
-    else_of: Option<std::rc::Rc<[Sibling]>>,
+    else_of: Vec<std::rc::Rc<[Sibling]>>,
     node: Node<'a, 'i>,
     scales: (Option<f64>, Option<f64>),
 }
@@ -304,8 +305,12 @@ impl Rule<'_, '_> {
 
 fn rules(r: Node, layer: &str, style: &mut Style, report: &mut Report, sym: &SymbolOf) {
     let mut leaves = Vec::new();
+    let mut left = 0;
     if let Some(root) = child(r, "rules") {
-        flatten(root, Vec::new(), (None, None), &mut leaves, 0);
+        flatten(root, Vec::new(), (None, None), Vec::new(), &mut leaves, 0, &mut left);
+    }
+    if left > 0 {
+        report.skipped(layer, format!("{left} of its rules, past the {MAX_CLASSES} RustGIS reads or nested more than 32 deep"));
     }
     // Each symbol read once, however many ways the rules are tried (its notes said once).
     let seen: std::cell::RefCell<BTreeMap<Option<String>, Option<Converted>>> = Default::default();
@@ -329,8 +334,8 @@ fn rules(r: Node, layer: &str, style: &mut Style, report: &mut Report, sym: &Sym
     let mut simple = !drawn.is_empty() && !drawn.iter().any(|l| l.scaled());
     for rule in drawn.iter().filter(|_| simple) {
         let label = rule.node.attribute("label").map(str::to_string);
-        if rule.else_of.is_some() {
-            if rule.filters.is_empty() {
+        if !rule.else_of.is_empty() {
+            if rule.filters.is_empty() && rule.else_of.len() == 1 {
                 other = sym(rule.node.attribute("symbol"), report).or(other);
                 continue;
             }
@@ -359,7 +364,7 @@ fn rules(r: Node, layer: &str, style: &mut Style, report: &mut Report, sym: &Sym
         return;
     }
     // One rule (or none but an else): its symbol for every feature.
-    if drawn.len() == 1 && drawn.first().is_some_and(|r| r.filters.is_empty() && r.else_of.is_none() && !r.scaled()) || drawn.is_empty() {
+    if drawn.len() == 1 && drawn.first().is_some_and(|r| r.filters.is_empty() && r.else_of.is_empty() && !r.scaled()) || drawn.is_empty() {
         if let Some(c) = drawn.first().and_then(|r| sym(r.node.attribute("symbol"), report)) {
             single(style, &c);
         }
@@ -460,12 +465,12 @@ fn by_expression(drawn: &[&Rule], style: &mut Style, report: &mut Report, sym: &
     for (i, rule) in drawn.iter().enumerate() {
         let Some(c) = sym(rule.node.attribute("symbol"), report) else { continue };
         // A top-level else rule at every scale: the rest.
-        if rule.else_of.is_some() && rule.filters.is_empty() && !rule.scaled() && other.is_none() {
+        if rule.else_of.len() == 1 && rule.filters.is_empty() && !rule.scaled() && other.is_none() {
             other = Some(c);
             continue;
         }
         let Some(mut parts) = rule.filters.iter().map(quoted).collect::<Option<Vec<String>>>() else { return false };
-        if let Some(siblings) = rule.else_of.as_ref().filter(|s| !s.is_empty()) {
+        for siblings in rule.else_of.iter().filter(|s| !s.is_empty()) {
             // What a sibling draws: its filter (none: every feature) at its scales. A filter that
             // is unknown (null) for a feature isn't met, as QGIS has it.
             let mut drawn_by = Vec::new();
@@ -512,18 +517,27 @@ const MAX_RULES_READ: usize = MAX_CLASSES * 2;
 /// The rules under `node` that draw, each with its own filter and its parents', for an else rule
 /// its siblings, and the scale range along the way. A rule with a symbol and rules under it comes
 /// after them: a feature meets the first rule it can, and QGIS draws the inner rule's symbol on
-/// top. Bounded in depth and number.
+/// top. A rule under an else rule takes only what the else rule does (`else_of`, the sibling
+/// sets of the else rules above). Bounded in depth and number: the rules left out are counted in
+/// `left`.
+#[allow(clippy::too_many_arguments)]
 fn flatten<'a, 'i>(
     node: Node<'a, 'i>,
     filters: Vec<String>,
     scales: (Option<f64>, Option<f64>),
+    else_of: Vec<std::rc::Rc<[Sibling]>>,
     out: &mut Vec<Rule<'a, 'i>>,
     depth: usize,
+    left: &mut usize,
 ) {
+    // A rule draws with a symbol, or with none and no rules under it (as `rules` reads them).
+    let draws = |r: Node| r.attribute("symbol").is_some() || !r.children().any(|c| c.has_tag_name("rule"));
     if depth > 32 || out.len() >= MAX_CLASSES {
+        *left += super::drawing_rules(node.children(), draws);
         return;
     }
     let rules: Vec<Node> = node.children().filter(|c| c.has_tag_name("rule")).take(MAX_RULES_READ).collect();
+    *left += super::drawing_rules(node.children().filter(|c| c.has_tag_name("rule")).skip(rules.len()), draws);
     // A rule's scalemaxdenom is the out-beyond limit, its scalemindenom the in-beyond; a rule
     // inside another is drawn only within both ranges.
     let range = |rule: Node| {
@@ -549,8 +563,9 @@ fn flatten<'a, 'i>(
         .filter(|(f, _)| !f.is_some_and(is_else))
         .map(|(f, r)| Sibling { filter: f.map(str::to_string), scales: range(r) })
         .collect();
-    for rule in rules {
+    for (i, rule) in rules.iter().copied().enumerate() {
         if out.len() >= MAX_CLASSES {
+            *left += super::drawing_rules(rules.get(i..).unwrap_or_default().iter().copied(), draws);
             break;
         }
         // Switched off: neither it nor the rules under it draw.
@@ -559,17 +574,25 @@ fn flatten<'a, 'i>(
         }
         let mut f = filters.clone();
         let own = rule.attribute("filter").map(str::trim).filter(|f| !f.is_empty());
-        let else_of = own.filter(|o| is_else(o)).map(|_| siblings.clone());
+        let mut else_of = else_of.clone();
+        if own.is_some_and(is_else) {
+            else_of.push(siblings.clone());
+        }
         if let Some(filter) = own.filter(|o| !is_else(o)) {
             f.push(filter.to_string());
         }
         let s = range(rule);
         let children = rule.children().any(|c| c.has_tag_name("rule"));
         if children {
-            flatten(rule, f.clone(), s, out, depth + 1);
+            flatten(rule, f.clone(), s, else_of.clone(), out, depth + 1, left);
         }
-        if (rule.attribute("symbol").is_some() || !children) && out.len() < MAX_CLASSES {
-            out.push(Rule { filters: f, else_of, node: rule, scales: s });
+        if rule.attribute("symbol").is_some() || !children {
+            if out.len() < MAX_CLASSES {
+                out.push(Rule { filters: f, else_of, node: rule, scales: s });
+            } else {
+                // Its rules under it took the last room.
+                *left += 1;
+            }
         }
     }
 }

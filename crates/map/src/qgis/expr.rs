@@ -28,6 +28,11 @@ pub fn to_sql(expr: &str) -> Option<String> {
     Some(clause(expr).unwrap_or_else(|| rustgis_scales(expr)))
 }
 
+/// Whether a QGIS expression reads the map's scale (`@map_scale`, `$scale`), outside quotes.
+pub(super) fn reads_scale(expr: &str) -> bool {
+    rustgis_scales(expr) != expr
+}
+
 /// A QGIS expression with its map scale (`@map_scale`, `$scale`, QGIS's at 96 dpi) read as
 /// RustGIS's ([`super::QGIS_SCALE`] of it), so `@map_scale < 50000` picks the same zoom in both;
 /// text within quotes is left as it is.

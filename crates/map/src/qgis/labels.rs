@@ -26,8 +26,15 @@ pub(super) fn read(l: Node, geometry: Option<&str>, layer: &str, report: &mut Re
         }
         Some("rule-based") => {
             let mut rules = Vec::new();
+            let mut left = 0;
             if let Some(root) = child(l, "rules") {
-                flatten(root, Vec::new(), (None, None), &mut rules, 0);
+                flatten(root, Vec::new(), (None, None), Vec::new(), &mut rules, 0, &mut left);
+            }
+            if left > 0 {
+                report.skipped(
+                    layer,
+                    format!("{left} of its label rules, past the {} RustGIS reads or nested more than 32 deep", MAX_LABEL_CLASSES * 4),
+                );
             }
             for (i, r) in rules.iter().enumerate() {
                 let Some(settings) = child(r.node, "settings") else { continue };
@@ -42,7 +49,7 @@ pub(super) fn read(l: Node, geometry: Option<&str>, layer: &str, report: &mut Re
                     .map_or_else(|| format!("Rule {}", i + 1), str::to_string);
                 // Its filters and its parents', and for an else rule, none of its siblings'.
                 let mut parts: Vec<Option<String>> = r.filters.iter().map(|f| expr::to_sql(f)).collect();
-                if let Some(siblings) = &r.else_of {
+                for siblings in &r.else_of {
                     let others: Option<Vec<String>> = siblings.iter().map(|f| expr::to_sql(f)).collect();
                     parts.push(others.map(|o| if o.is_empty() { String::new() } else { format!("NOT (({}))", o.join(") OR (")) }));
                 }
@@ -93,26 +100,35 @@ fn is_else(f: &str) -> bool {
 }
 
 /// A rule-based labeling's rule with settings: its filter and its parents' (an else rule's own
-/// left out), for an else rule its siblings' filters (it takes what none of them does), and the
-/// scale range along the way (RustGIS's min and max scale).
+/// left out), for an else rule and each else rule above it the siblings' filters it takes the rest
+/// of (what none of them does), and the scale range along the way (RustGIS's min and max scale).
 struct Rule<'a, 'i> {
     node: Node<'a, 'i>,
     filters: Vec<String>,
-    else_of: Option<std::rc::Rc<[String]>>,
+    else_of: Vec<std::rc::Rc<[String]>>,
     scales: (Option<f64>, Option<f64>),
 }
 
+/// The label rules under `node`, bounded in depth and number: the rules left out are counted in
+/// `left`. A rule under an else rule takes only what the else rule does (`else_of`).
+#[allow(clippy::too_many_arguments)]
 fn flatten<'a, 'i>(
     node: Node<'a, 'i>,
     filters: Vec<String>,
     scales: (Option<f64>, Option<f64>),
+    else_of: Vec<std::rc::Rc<[String]>>,
     out: &mut Vec<Rule<'a, 'i>>,
     depth: usize,
+    left: &mut usize,
 ) {
+    // A label rule draws with its settings.
+    let draws = |r: Node| child(r, "settings").is_some();
     if depth > 32 || out.len() > MAX_LABEL_CLASSES * 4 {
+        *left += super::drawing_rules(node.children(), draws);
         return;
     }
     let rules: Vec<Node> = node.children().filter(|c| c.has_tag_name("rule")).take(MAX_LABEL_CLASSES * 4).collect();
+    *left += super::drawing_rules(node.children().filter(|c| c.has_tag_name("rule")).skip(rules.len()), draws);
     // The filters an else rule here is the rest of: its switched-on siblings', as QGIS has it.
     let siblings: std::rc::Rc<[String]> = rules
         .iter()
@@ -121,13 +137,21 @@ fn flatten<'a, 'i>(
         .filter(|f| !f.is_empty() && !is_else(f))
         .map(str::to_string)
         .collect();
-    for rule in rules {
+    for (i, rule) in rules.iter().copied().enumerate() {
         if out.len() > MAX_LABEL_CLASSES * 4 {
+            *left += super::drawing_rules(rules.get(i..).unwrap_or_default().iter().copied(), draws);
             break;
+        }
+        // Switched off: neither it nor the rules under it label.
+        if rule.attribute("active") == Some("0") {
+            continue;
         }
         let mut f = filters.clone();
         let own = rule.attribute("filter").map(str::trim).filter(|f| !f.is_empty());
-        let else_of = own.filter(|o| is_else(o)).map(|_| siblings.clone());
+        let mut else_of = else_of.clone();
+        if own.is_some_and(is_else) {
+            else_of.push(siblings.clone());
+        }
         if let Some(filter) = own.filter(|o| !is_else(o)) {
             f.push(filter.to_string());
         }
@@ -137,9 +161,9 @@ fn flatten<'a, 'i>(
         };
         let s = (denom("scalemaxdenom").or(scales.0), denom("scalemindenom").or(scales.1));
         if child(rule, "settings").is_some() {
-            out.push(Rule { node: rule, filters: f.clone(), else_of, scales: s });
+            out.push(Rule { node: rule, filters: f.clone(), else_of: else_of.clone(), scales: s });
         }
-        flatten(rule, f, s, out, depth + 1);
+        flatten(rule, f, s, else_of, out, depth + 1, left);
     }
 }
 
@@ -166,7 +190,13 @@ fn class(
             report.skipped(layer, "labels whose text is an expression too long to read");
             return None;
         } else {
-            by.text = Some(super::expr::rustgis_scales(field)).filter(|t| !t.is_empty());
+            let text = super::expr::rustgis_scales(field);
+            // (Its map scale read as RustGIS's lengthens it.)
+            if text.len() > rustgis_data::query::MAX_LEN {
+                report.skipped(layer, "labels whose text is an expression too long to read");
+                return None;
+            }
+            by.text = Some(text).filter(|t| !t.is_empty());
             String::new()
         }
     } else {
