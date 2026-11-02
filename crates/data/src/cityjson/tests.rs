@@ -659,3 +659,209 @@ fn the_general_readers_find_it() {
     let (ds, _) = crate::io::read_bytes("m.json", br#"{"type": "FeatureCollection", "features": []}"#).unwrap();
     assert_eq!(ds.features.len(), 0);
 }
+
+/// A document with the given root members over `doc`'s.
+fn doc_with(vertices: Json, objects: Json, extra: Json) -> Vec<u8> {
+    let mut root: Json = serde_json::from_slice(&doc(vertices, objects)).unwrap();
+    for (k, v) in extra.as_object().unwrap() {
+        root[k] = v.clone();
+    }
+    root.to_string().into_bytes()
+}
+
+fn one_point() -> Json {
+    json!({"a": {"type": "Road", "geometry": [{"type": "MultiPoint", "boundaries": [0]}]}})
+}
+
+/// Appearance isn't read, and that is said with how much; an empty one has nothing to say.
+#[test]
+fn appearance_left_out_is_said() {
+    let appearance = json!({"appearance": {"materials": [{"name": "brick"}, {"name": "roof"}], "textures": [{"type": "PNG"}]}});
+    let out = read("m.city.json", &doc_with(json!([[0, 0, 0]]), one_point(), appearance), None).unwrap();
+    assert!(says(&out, "2 materials and 1 textures are left out"), "{:?}", messages_of(&out));
+    let empty = json!({"appearance": {"materials": [], "textures": []}});
+    for bytes in [doc_with(json!([[0, 0, 0]]), one_point(), empty), doc(json!([[0, 0, 0]]), one_point())] {
+        let out = read("m.city.json", &bytes, None).unwrap();
+        assert!(!says(&out, "appearance"), "{:?}", messages_of(&out));
+    }
+    // One that isn't what the specification says doesn't stop the model, and is said.
+    let out = read("m.city.json", &doc_with(json!([[0, 0, 0]]), one_point(), json!({"appearance": 5})), None).unwrap();
+    assert!(says(&out, "appearance isn't read"), "{:?}", messages_of(&out));
+}
+
+/// Types that differ only past the characters a layer's name shows stay apart.
+#[test]
+fn long_types_stay_apart() {
+    let (a, b) = (format!("+{}A", "x".repeat(70)), format!("+{}B", "x".repeat(70)));
+    let geometry = json!([{"type": "MultiPoint", "boundaries": [0]}]);
+    let objects = json!({"a": {"type": a, "geometry": geometry}, "b": {"type": b, "geometry": geometry}});
+    let out = read("m.city.json", &doc(json!([[0, 0, 0]]), objects), None).unwrap();
+    assert_eq!(out.len(), 2);
+    assert_eq!(out[0].0.name.chars().count(), "m ".len() + MAX_TYPE_IN_NAME);
+    assert_eq!(value(&out[0].0, 0, "type"), crate::Value::Text(a));
+    assert_eq!(value(&out[1].0, 0, "type"), crate::Value::Text(b));
+}
+
+/// However many numbered names are taken, a renamed attribute finds a free one and loses nothing.
+#[test]
+fn a_renamed_attribute_always_finds_a_free_name() {
+    let mut attributes: serde_json::Map<String, Json> = (1..=120).map(|k| (format!("id_{k}"), json!("taken"))).collect();
+    attributes.insert("id".to_string(), json!("mine"));
+    attributes.insert("id_attribute".to_string(), json!("taken"));
+    let objects = json!({"a": {"type": "Road", "attributes": attributes, "geometry": [{"type": "MultiPoint", "boundaries": [0]}]}});
+    let out = read("m.city.json", &doc(json!([[0, 0, 0]]), objects), None).unwrap();
+    let ds = &out[0].0;
+    assert_eq!(value(ds, 0, "id_121"), crate::Value::Text("mine".to_string()));
+    assert_eq!(value(ds, 0, "id_attribute"), crate::Value::Text("taken".to_string()));
+    assert_eq!(value(ds, 0, "id_120"), crate::Value::Text("taken".to_string()));
+    assert_eq!(value(ds, 0, "id"), crate::Value::Text("a".to_string()));
+
+    // Spellings of one name take numbers of their own.
+    let objects = json!({"a": {"type": "Road", "attributes": {"ID": "upper", "id": "lower"}, "geometry": [{"type": "MultiPoint", "boundaries": [0]}]}});
+    let out = read("m.city.json", &doc(json!([[0, 0, 0]]), objects), None).unwrap();
+    assert_eq!(value(&out[0].0, 0, "ID_1"), crate::Value::Text("upper".to_string()));
+    assert_eq!(value(&out[0].0, 0, "id_2"), crate::Value::Text("lower".to_string()));
+}
+
+/// A height the transform takes past what a number holds is left out, and said; others stay.
+#[test]
+fn heights_that_are_not_numbers_are_said() {
+    let scale = json!({"transform": {"scale": [1.0, 1.0, 10.0], "translate": [0.0, 0.0, 0.0]}});
+    let objects = json!({"a": {"type": "Road", "geometry": [{"type": "MultiPoint", "boundaries": [0, 1]}]}});
+    let bytes = doc_with(json!([[0, 0, 1e308], [1, 1, 2]]), objects.clone(), scale.clone());
+    let out = read("m.city.json", &bytes, None).unwrap();
+    assert!(says(&out, "1 city objects have heights that aren't finite numbers"), "{:?}", messages_of(&out));
+    assert_eq!(value(&out[0].0, 0, "z_max"), crate::Value::Float(20.0));
+    let out = read("m.city.json", &doc_with(json!([[0, 0, 3], [1, 1, 2]]), objects, scale), None).unwrap();
+    assert!(!says(&out, "finite numbers"), "{:?}", messages_of(&out));
+}
+
+/// `count` objects, each the parent of the next in the order they're visited, with heights only at
+/// the far end: the worst order, one level a round.
+fn chain(count: usize) -> Json {
+    let mut objects = serde_json::Map::new();
+    for i in 0..count {
+        let mut object = json!({"type": "Building"});
+        if i > 0 {
+            object["parents"] = json!([format!("o{:03}", i - 1)]);
+        }
+        if i + 1 == count {
+            object["geometry"] = json!([{"type": "MultiPoint", "boundaries": [0, 1]}]);
+        }
+        objects.insert(format!("o{i:03}"), object);
+    }
+    Json::Object(objects)
+}
+
+/// Heights reach the top of a chain past the two levels of the specification, without a notice.
+#[test]
+fn heights_reach_the_top_of_a_long_chain() {
+    let out = read("m.city.json", &doc(json!([[0, 0, 1], [1, 1, 9]]), chain(40)), None).unwrap();
+    let ds = out.iter().map(|(ds, _)| ds).find(|ds| ds.features.len() > 1).unwrap();
+    assert_eq!(value(ds, 0, "id"), crate::Value::Text("o000".to_string()));
+    assert_eq!(value(ds, 0, "height"), crate::Value::Float(8.0));
+    assert!(!says(&out, "parent chains"), "{:?}", messages_of(&out));
+}
+
+fn built(id: &str, parent: Option<&str>, z: Option<(f64, f64)>) -> Built {
+    Built {
+        id: id.into(),
+        ty: "Building".into(),
+        parent_ids: parent.into_iter().map(String::from).collect(),
+        z,
+        solid: false,
+        attributes: Vec::new(),
+    }
+}
+
+/// Past what the visits allow it stops and says after how many rounds; a cycle settles.
+#[test]
+fn raising_parents_is_bounded() {
+    let mut objects: Vec<Built> = (0..20)
+        .map(|i| {
+            let parent = (i > 0).then(|| format!("o{}", i - 1));
+            built(&format!("o{i}"), parent.as_deref(), (i == 19).then_some((0.0, 5.0)))
+        })
+        .collect();
+    assert_eq!(raise_parents(&mut objects, 0), Some(MIN_PARENT_ROUNDS));
+    assert_eq!(objects[0].z, None, "the top isn't reached");
+    assert_eq!(raise_parents(&mut objects, MAX_PARENT_VISITS), None, "with room, it settles");
+    assert_eq!(objects[0].z, Some((0.0, 5.0)));
+    let mut cycle = vec![built("a", Some("b"), Some((1.0, 2.0))), built("b", Some("a"), Some((0.0, 1.0)))];
+    assert_eq!(raise_parents(&mut cycle, MAX_PARENT_VISITS), None);
+    assert_eq!((cycle[0].z, cycle[1].z), (Some((0.0, 2.0)), Some((0.0, 2.0))));
+}
+
+/// Heights in a system of feet are said, as extrusions read metres; a system in metres says nothing.
+#[test]
+fn heights_not_in_metres_are_said() {
+    let named = |code: u32| json!({"metadata": {"referenceSystem": format!("https://www.opengis.net/def/crs/EPSG/0/{code}")}});
+    let points = json!([[1000, 1000, 0], [1010, 1010, 30]]);
+    let objects = json!({"a": {"type": "Road", "geometry": [{"type": "MultiPoint", "boundaries": [0, 1]}]}});
+    let out = read("m.city.json", &doc_with(points.clone(), objects.clone(), named(2263)), None).unwrap();
+    assert!(says(&out, "measures in us-ft"), "{:?}", messages_of(&out));
+    assert_eq!(value(&out[0].0, 0, "z_max"), crate::Value::Float(30.0), "kept as the file has them");
+    let out = read("m.city.json", &doc_with(points.clone(), objects, named(28992)), None).unwrap();
+    assert!(!says(&out, "measures in"), "{:?}", messages_of(&out));
+    // The file's system given is said too, and so is a vertical unit, in a geographic system as well.
+    let given = doc(points, json!({"a": {"type": "Road", "geometry": [{"type": "MultiPoint", "boundaries": [0, 1]}]}}));
+    assert!(says(&read("m.city.json", &given, Crs::from_epsg(2263)).unwrap(), "measures in us-ft"));
+    let unit = |crs: Option<Crs>| crs.unwrap().height_unit_not_metre();
+    assert_eq!(unit(Crs::from_epsg(7406)).as_deref(), Some("us-ft"), "+proj=longlat with +vunits=us-ft");
+    assert_eq!(unit(Crs::from_epsg(2263)).as_deref(), Some("us-ft"));
+    assert_eq!(unit(Crs::from_epsg(28992)), None);
+    assert_eq!(unit(Crs::from_epsg(4326)), None);
+    assert_eq!(unit(Crs::from_epsg(3857)), None);
+    assert_eq!(unit(Crs::from_epsg(4267)), None, "geographic, with no vertical unit");
+    let typed = |d: &str| Crs::parse(d).unwrap().height_unit_not_metre();
+    assert_eq!(typed("+proj=utm +zone=18 +datum=NAD83 +to_meter=0.3048 +no_defs").as_deref(), Some("0.3048 m"));
+    assert_eq!(typed("+proj=utm +zone=18 +datum=NAD83 +units=m +vunits=us-ft +no_defs").as_deref(), Some("us-ft"));
+    assert_eq!(typed("+proj=utm +zone=18 +datum=NAD83 +units=us-ft +vunits=m +no_defs"), None, "the vertical unit goes first");
+    assert_eq!(typed("+proj=utm +zone=18 +datum=NAD83 +units=m +no_defs"), None);
+}
+
+/// In a zip a model adds every layer, under the system given.
+#[test]
+fn a_zipped_model_has_its_layers_and_takes_the_system_given() {
+    let objects = json!({
+        "a": {"type": "Bridge", "geometry": [{"type": "MultiPoint", "boundaries": [0]}]},
+        "b": {"type": "Road", "geometry": [{"type": "MultiPoint", "boundaries": [0]}]},
+    });
+    let mut root: Json = serde_json::from_slice(&doc(json!([[1000, 1000, 0]]), objects)).unwrap();
+    root.as_object_mut().unwrap().remove("metadata");
+    let zip = crate::zip::write(&[("d/m.city.json".to_string(), root.to_string().into_bytes())]).unwrap();
+    let out = crate::io::read_zip_in("x.zip", &zip, Crs::from_epsg(28992)).unwrap();
+    assert_eq!(out.len(), 2);
+    assert!(out.iter().all(|(ds, _)| ds.source.as_deref() == Some("x.zip/d/m.city.json")));
+    assert!(out.iter().all(|(ds, _)| ds.crs == Crs::from_epsg(28992)));
+    // Without one, it is said why the member is left out.
+    assert!(crate::io::read_zip_in("x.zip", &zip, None).unwrap_err().to_string().contains("names no coordinate system"));
+
+    // The system given is for what can't say its own: a model naming one it knows keeps it...
+    root["metadata"] = json!({"referenceSystem": "https://www.opengis.net/def/crs/EPSG/0/28992"});
+    let zip = crate::zip::write(&[("m.city.json".to_string(), root.to_string().into_bytes())]).unwrap();
+    let out = crate::io::read_zip_in("x.zip", &zip, Crs::from_epsg(32631)).unwrap();
+    assert!(out.iter().all(|(ds, _)| ds.crs == Crs::from_epsg(28992)));
+    // ...and one naming a system RustGIS doesn't know takes it.
+    root["metadata"] = json!({"referenceSystem": "https://www.opengis.net/def/crs/EPSG/0/999999"});
+    let zip = crate::zip::write(&[("m.city.json".to_string(), root.to_string().into_bytes())]).unwrap();
+    let out = crate::io::read_zip_in("x.zip", &zip, Crs::from_epsg(32631)).unwrap();
+    assert!(out.iter().all(|(ds, _)| ds.crs == Crs::from_epsg(32631)));
+    // Outside an archive the system given goes first, as the command asks.
+    let bare = read("m.city.json", root.to_string().as_bytes(), Crs::from_epsg(32631)).unwrap();
+    assert!(bare.iter().all(|(ds, _)| ds.crs == Crs::from_epsg(32631)));
+}
+
+/// A model past the zip's layer limit: its first layers are kept, and those left out are named.
+#[test]
+fn a_zipped_model_past_the_layer_limit_is_said() {
+    let count = crate::io::MAX_ZIP_LAYERS + 2;
+    let objects: serde_json::Map<String, Json> = (0..count)
+        .map(|i| (format!("o{i:02}"), json!({"type": format!("T{i:02}"), "geometry": [{"type": "MultiPoint", "boundaries": [0]}]})))
+        .collect();
+    let zip = crate::zip::write(&[("m.city.json".to_string(), doc(json!([[0, 0, 0]]), Json::Object(objects)))]).unwrap();
+    let out = crate::io::read_zip_in("x.zip", &zip, None).unwrap();
+    assert_eq!(out.len(), crate::io::MAX_ZIP_LAYERS);
+    assert!(says(&out, "layer limit"), "{:?}", messages_of(&out));
+    assert!(says(&out, "m T33"), "{:?}", messages_of(&out));
+}
