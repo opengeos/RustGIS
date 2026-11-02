@@ -3416,12 +3416,17 @@ fn symbology(s: &mut Session, p: &Value) -> CmdResult {
         Some(NoFill::Symbols) if base.fill.a() == 0 => rustgis_map::Symbol { fill: base.fill.with_alpha(shown_fill_alpha()), ..base },
         _ => base,
     };
+    // The field it classes by, or classed by before an expression (kept to come back to).
+    let last_field = match &l.renderer {
+        Renderer::Unique { field, .. } => Some(field.as_str()),
+        r => r.field(),
+    }
+    .filter(|f| l.dataset.field_index(f).is_some());
     let field = |numeric_only: bool| -> Result<String, String> {
         if let Some(x) = ps(p, "field") {
             return Ok(x.to_string());
         }
-        l.renderer
-            .field()
+        last_field
             .filter(|name| {
                 !numeric_only || l.dataset.field_index(name).and_then(|i| l.dataset.fields.get(i)).is_some_and(|f| f.ty.is_numeric())
             })
@@ -3467,8 +3472,12 @@ fn symbology(s: &mut Session, p: &Value) -> CmdResult {
         "single" | "singlesymbol" => Renderer::Single(base),
         "unique" | "uniquevalues" => match &expression {
             Some(e) => {
-                let (r, n) = Renderer::unique_by_counted(&l.dataset, &rows()?, e, ramp.unwrap_or(Ramp::Harbour), base)?;
+                let (mut r, n) = Renderer::unique_by_counted(&l.dataset, &rows()?, e, ramp.unwrap_or(Ramp::Harbour), base)?;
                 rest = n;
+                // (Clearing the expression goes back to the field it had.)
+                if let (Renderer::Unique { field, .. }, Some(last)) = (&mut r, last_field) {
+                    *field = last.to_string();
+                }
                 r
             }
             None => Renderer::unique(&l.dataset, &rows()?, &field(false)?, ramp.unwrap_or(Ramp::Harbour), base)?,

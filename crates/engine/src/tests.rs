@@ -815,6 +815,10 @@ fn a_symbol_is_set_by_expressions() {
 fn unique_values_class_by_an_expression() {
     let mut s = world();
     let e = "CASE WHEN pop_max >= 10000000 THEN 'mega' ELSE 'city' END";
+    // Classed by a field that isn't the first, which clearing the expression comes back to.
+    let by = s.map().layer_by_name("Cities").unwrap().dataset.fields.last().unwrap().name.clone();
+    assert_ne!(Some(&by), s.map().layer_by_name("Cities").unwrap().dataset.fields.first().map(|f| &f.name));
+    s.run("layer.symbology", &json!({"layer": "Cities", "type": "unique", "field": by})).unwrap();
     s.run("layer.symbology", &json!({"layer": "Cities", "type": "unique", "expression": e})).unwrap();
     let keys = |s: &Session| match &s.map().layer_by_name("Cities").unwrap().renderer {
         rustgis_map::Renderer::Unique { classes, .. } => classes.iter().map(|c| c.0.clone()).collect::<Vec<_>>(),
@@ -838,7 +842,8 @@ fn unique_values_class_by_an_expression() {
     s.run("layer.symbology", &json!({"layer": "Cities", "type": "unique", "ramp": "Ember"})).unwrap();
     assert_eq!(expression(&s).as_deref(), Some(e));
     s.run("layer.symbology", &json!({"layer": "Cities", "type": "unique", "expression": null})).unwrap();
-    assert!(expression(&s).is_none() && s.map().layer_by_name("Cities").unwrap().renderer.field().is_some());
+    assert!(expression(&s).is_none());
+    assert_eq!(s.map().layer_by_name("Cities").unwrap().renderer.field(), Some(by.as_str()), "back to the field it had");
     s.undo();
     assert_eq!(expression(&s).as_deref(), Some(e));
     // A style shared to the web says it draws one symbol; a map draws the classes.
@@ -18122,7 +18127,8 @@ fn ogc_refresh_reconciles_fields_and_preserves_compatible_settings() {
             s.run("edit.undo", &Value::Null).unwrap();
             s.run("layer.symbology", &json!({"layer":layer, "type":"unique", "expression":"value || ''"})).unwrap();
             s.run("service.refresh", &target).unwrap();
-            assert!(matches!(s.map().layer(layer).unwrap().renderer, rustgis_map::Renderer::Single(_)));
+            let l = s.map().layer(layer).unwrap();
+            assert_eq!(l.renderer, rustgis_map::Renderer::Single(rustgis_map::Symbol::default_for(l.geometry_type(), l.id)));
             assert_eq!(singled(&s), 2);
             s.run("edit.undo", &Value::Null).unwrap();
             s.run("edit.undo", &Value::Null).unwrap();
