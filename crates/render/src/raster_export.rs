@@ -82,8 +82,11 @@ pub fn export(layer: &RasterLayer, min_zoom: u8, max_zoom: u8, opacity: f32) -> 
                         let mut idle = 0;
                         loop {
                             let drawn_at = crate::rustgis_tiles::cache::generation();
-                            if !raster::draw_in_place(&mut image, address, r, &layer.style, stats, &view, opacity, true, place) {
-                                break;
+                            match raster::draw_in_place(&mut image, address, r, &layer.style, stats, &view, opacity, true, place) {
+                                Ok(false) => break,
+                                Ok(true) => {}
+                                // Drawn from less than the tile needs: not written in its place.
+                                Err(e) => return Err(format!("{}: {e}, so the archive isn't written", r.name)),
                             }
                             // An archive of the overview where the image is wanted isn't written.
                             let left = deadline.saturating_duration_since(web_time::Instant::now());
@@ -146,6 +149,28 @@ mod tests {
         assert_eq!(tile_range(start, start, n), (1000, 1000));
         let (first, last) = tile_range(start, end, n);
         assert_eq!((last - first + 1).pow(2), 484);
+    }
+
+    /// A raster read in place whose image can't be read isn't exported from its overview.
+    #[test]
+    #[allow(clippy::panic)]
+    fn an_in_place_raster_unread_is_not_exported_from_its_overview() {
+        let mut overview = Raster::new(
+            "gone",
+            4,
+            4,
+            vec![(0..16).map(|v| v as f32).collect()],
+            GeoTransform { origin_x: -180.0, origin_y: 80.0, pixel_width: 90.0, pixel_height: -40.0 },
+            Crs::LonLat,
+            None,
+            ColorHint::Gray,
+            "Float32",
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+        overview.overview = Some((4096, 4096));
+        let layer = RasterLayer::in_place(overview, "http://127.0.0.1:9/gone.tif");
+        let e = export(&layer, 2, 2, 1.0).err().unwrap_or_else(|| panic!("an archive of the overview"));
+        assert!(e.contains("the archive isn't written"), "{e}");
     }
 
     #[test]

@@ -32,8 +32,10 @@ pub fn overview_level(info: &Info) -> Option<usize> {
     let layout = &info.layout;
     let bands = layout.bands.max(1);
     let planes = if layout.planar { bands } else { 1 };
+    // Samples decoded, whole tiles (an edge tile's padding too), and chunks read.
     let size = |l: &rustgis_data::raster::cog::Level| {
-        let samples = (l.width as usize).saturating_mul(l.height as usize).saturating_mul(bands);
+        let tile = (l.tile_width as usize).saturating_mul(l.tile_height as usize);
+        let samples = (l.tiles() as usize).saturating_mul(tile).saturating_mul(bands);
         (samples, (l.tiles() as usize).saturating_mul(planes))
     };
     layout
@@ -169,6 +171,9 @@ pub struct Window {
     pub raster: Option<Raster>,
     /// Tiles (or the header) are still on their way: the map draws again as they land.
     pub pending: bool,
+    /// Tiles in it couldn't be read lately (other levels stand in for them, and they are asked
+    /// for again when their wait is over).
+    pub failed: bool,
 }
 
 /// Tiles whose read failed lately, and until when they aren't asked for again ([`RETRY`] after, or
@@ -182,15 +187,19 @@ fn failed() -> &'static Mutex<HashMap<(String, usize, u32), Instant>> {
 /// The most failed tiles remembered.
 const MAX_FAILED: usize = 4096;
 
-/// Remembers a failed tile until `until`. With [`MAX_FAILED`] already, the one whose wait ends
-/// soonest makes room: one forgotten would be asked for again at each draw, whatever its server
-/// asked for.
+/// Remembers a failed tile until `until`. With [`MAX_FAILED`] already, those whose wait is over go
+/// first; failing that, the one whose wait ends soonest (asked for again a little early, once)
+/// makes room, rather than the new one, which would be asked for again at each draw, whatever its
+/// server asked for.
 fn remember_failed(f: &mut HashMap<(String, usize, u32), Instant>, key: (String, usize, u32), until: Instant) {
-    if f.len() >= MAX_FAILED
-        && !f.contains_key(&key)
-        && let Some(soonest) = f.iter().min_by_key(|(_, at)| **at).map(|(k, _)| k.clone())
-    {
-        f.remove(&soonest);
+    if f.len() >= MAX_FAILED && !f.contains_key(&key) {
+        let now = Instant::now();
+        f.retain(|_, at| now < *at);
+        if f.len() >= MAX_FAILED
+            && let Some(soonest) = f.iter().min_by_key(|(_, at)| **at).map(|(k, _)| k.clone())
+        {
+            f.remove(&soonest);
+        }
     }
     f.insert(key, until);
 }
@@ -201,7 +210,7 @@ fn remember_failed(f: &mut HashMap<(String, usize, u32), Instant>, key: (String,
 /// tile cache's generation goes up as each lands, so the map is drawn again.
 pub fn window(url: &str, level: usize, cols: (u32, u32), rows: (u32, u32), bands: &[usize], color: ColorHint) -> Result<Window, String> {
     let file = split(url).0;
-    let Some(info) = super::info(file)? else { return Ok(Window { raster: None, pending: true }) };
+    let Some(info) = super::info(file)? else { return Ok(Window { raster: None, pending: true, failed: false }) };
     let l = info.layout.levels.get(level).ok_or("no such overview")?;
     let (c0, c1) = (cols.0.min(l.width), cols.1.min(l.width));
     let (r0, r1) = (rows.0.min(l.height), rows.1.min(l.height));
@@ -233,6 +242,7 @@ pub fn window(url: &str, level: usize, cols: (u32, u32), rows: (u32, u32), bands
         }
     }
     let mut pending = kept.len() < chunks.len();
+    let waiting: bool;
     {
         let mut f = failed().lock().unwrap_or_else(|e| e.into_inner());
         let now = Instant::now();
@@ -249,6 +259,7 @@ pub fn window(url: &str, level: usize, cols: (u32, u32), rows: (u32, u32), bands
         if let Some(at) = next {
             crate::cache::notify_at(at);
         }
+        waiting = next.is_some();
     }
     // Tiles that failed lately aren't waited for (the map would wait for them for nothing).
     if ask.is_empty() && pending {
@@ -297,7 +308,7 @@ pub fn window(url: &str, level: usize, cols: (u32, u32), rows: (u32, u32), bands
         info.layout.data_type,
     )
     .map_err(|e| e.to_string())?;
-    Ok(Window { raster: Some(raster), pending })
+    Ok(Window { raster: Some(raster), pending, failed: waiting })
 }
 
 /// A part of a window a chunk not kept leaves empty: the band (its place among those read), and

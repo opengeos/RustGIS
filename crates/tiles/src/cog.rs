@@ -1059,7 +1059,8 @@ fn draw(info: Arc<Info>, url: String, look: &Look, stretch: &[(f32, f32)], z: u8
     let colours = info.colour(look).len();
     let pen = Pen {
         rgb: colours >= 3,
-        alpha: (shown.len() > colours).then_some(colours),
+        // The alpha band where it is among those shown: after the colours, or one of them.
+        alpha: info.alpha.and_then(|a| shown.iter().rposition(|b| *b == a)),
         alpha_max: rustgis_data::raster::alpha_max(info.layout.data_type),
         palette: info.palette(look).map(<[[u8; 4]]>::to_vec),
         aef: look.aef,

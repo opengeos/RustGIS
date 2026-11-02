@@ -528,6 +528,11 @@ type Opening = Arc<Mutex<Option<Result<Arc<dyn FeatureSource>, String>>>>;
 /// Tells the app something landed (a read, or a source opened by its address).
 pub(crate) fn landed() {
     GENERATION.fetch_add(1, Ordering::Relaxed);
+    wake();
+}
+
+/// Asks the app for a frame (the waker), with nothing new to draw.
+pub(crate) fn wake() {
     if let Some(w) = waker().lock().ok().and_then(|w| w.clone()) {
         w();
     }

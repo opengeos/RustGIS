@@ -66,9 +66,9 @@ pub struct RasterLayer {
     /// The look its address gave a layer read in place, applied when its pixels land.
     #[serde(skip)]
     look: Option<AddressLook>,
-    /// Its pixels' missing colour table has been said (see [`RasterLayer::palette_unsaid`]).
+    /// What reading its pixels lost has been said (see [`RasterLayer::pixels_unsaid`]).
     #[serde(skip)]
-    palette_said: bool,
+    pixels_said: bool,
 }
 
 /// Called once with a cloud-optimised GeoTIFF's overview, or why it couldn't be read.
@@ -207,7 +207,7 @@ impl RasterLayer {
             opening: None,
             restyle: false,
             look: None,
-            palette_said: false,
+            pixels_said: false,
         })
     }
 
@@ -230,7 +230,7 @@ impl RasterLayer {
             opening: None,
             restyle: false,
             look: None,
-            palette_said: false,
+            pixels_said: false,
         }
     }
 
@@ -253,7 +253,7 @@ impl RasterLayer {
             opening: None,
             restyle: false,
             look: None,
-            palette_said: false,
+            pixels_said: false,
         }
     }
 
@@ -281,7 +281,7 @@ impl RasterLayer {
             opening: None,
             restyle: true,
             look: None,
-            palette_said: false,
+            pixels_said: false,
         }
     }
 
@@ -318,7 +318,11 @@ impl RasterLayer {
         // Read in place: its overview, by the reader the app installed; waited for natively (as a
         // file is read), landing later in the browser.
         if self.in_place {
-            let Some(address) = self.path.clone() else { return Err("the raster has no source".into()) };
+            let Some(address) = self.path.clone() else {
+                let e = "the raster has no source".to_string();
+                self.error = Some(e.clone());
+                return Err(e);
+            };
             let Some(reader) = in_place_reader().lock().unwrap_or_else(|e| e.into_inner()).clone() else {
                 let e = format!("{address}: can't be read in place here");
                 self.error = Some(e.clone());
@@ -385,7 +389,7 @@ impl RasterLayer {
             Ok(r) => {
                 self.style.repair(&r);
                 self.data = Some(Arc::new(r));
-                self.palette_said = false;
+                self.pixels_said = false;
                 Ok(())
             }
             Err(e) => {
@@ -418,13 +422,16 @@ impl RasterLayer {
         }
     }
 
-    /// Whether its pixels are a palette image without a whole colour table (drawn in grey) and
-    /// that is still to be said: true once for the pixels it has, whenever they landed (added with
-    /// them, or read in place later, in the browser, a project or an import).
-    pub fn palette_unsaid(&mut self) -> bool {
-        let due = !self.palette_said && self.data.as_ref().is_some_and(|d| d.palette_missing);
-        self.palette_said |= due;
-        due
+    /// Its pixels, the first time they are asked for after they landed (added with them, or read
+    /// in place later: in the browser, a project, an import), so what reading them lost (a colour
+    /// table missing, an overview held) is said once for them.
+    pub fn pixels_unsaid(&mut self) -> Option<Arc<Raster>> {
+        if self.pixels_said {
+            return None;
+        }
+        let d = self.data.clone()?;
+        self.pixels_said = true;
+        Some(d)
     }
 
     /// Installs a completed remote read; each render copy can observe the same shared result.
@@ -433,6 +440,8 @@ impl RasterLayer {
         let Some(result) = slot.lock().unwrap_or_else(|e| e.into_inner()).clone() else { return true };
         self.opening = None;
         self.land(result);
+        // Installed while the map draws: a frame after it says what reading them lost.
+        crate::source::wake();
         false
     }
 
@@ -441,7 +450,7 @@ impl RasterLayer {
     fn land(&mut self, result: Result<Arc<Raster>, String>) {
         match result {
             Ok(raster) => {
-                self.palette_said = false;
+                self.pixels_said = false;
                 if std::mem::take(&mut self.restyle) {
                     let look = self.look.take().and_then(|look| RasterStyle::for_look(&raster, &look));
                     self.style = look.unwrap_or_else(|| RasterStyle::default_for(&raster));

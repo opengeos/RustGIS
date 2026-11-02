@@ -3163,7 +3163,8 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
                 let address = rl.path.as_deref().filter(|_| rl.in_place);
                 let mut draw_it = |pm: &mut Pixmap, opacity: f32| match address {
                     Some(a) => {
-                        tile_out.pending |= raster::draw_in_place(pm, a, data, &rl.style, stats, view, opacity, full_res_rasters, place)
+                        tile_out.pending |=
+                            raster::draw_in_place(pm, a, data, &rl.style, stats, view, opacity, full_res_rasters, place) == Ok(true)
                     }
                     None => raster::draw(pm, data, &rl.style, stats, view, opacity, full_res_rasters, place),
                 };

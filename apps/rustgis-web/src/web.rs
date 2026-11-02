@@ -570,10 +570,6 @@ async fn unless_stalled(
     Some(raced)
 }
 
-/// Downloads `url`, or the byte range it asks for (a PMTiles archive's part: see
-/// `rustgis_tiles::cache::split_range`).
-/// A status in `omit` is an expected answer (a tile past a map's edge): its failure makes no
-/// record of its own, as on the desktop.
 /// A refusal's text (`HTTP 503`), with how long the server asked to be left when it says so in a
 /// `Retry-After` header the browser lets the page read (its CORS rules must expose it).
 fn refused(resp: &web_sys::Response) -> String {
@@ -585,6 +581,10 @@ fn refused(resp: &web_sys::Response) -> String {
     )
 }
 
+/// Downloads `url`, or the byte range it asks for (a PMTiles archive's part: see
+/// `rustgis_tiles::cache::split_range`).
+/// A status in `omit` is an expected answer (a tile past a map's edge): its failure makes no
+/// record of its own, as on the desktop.
 async fn fetch_bytes(url: &str, capture: Capture, omit: &'static [u16]) -> Result<Vec<u8>, String> {
     use rustgis_ui_egui::rustgis_engine::render::rustgis_tiles::{cache::RequestDiagnostics, failure::Failure};
     let mut diagnostics = RequestDiagnostics::with_capture(url, "GET", capture);

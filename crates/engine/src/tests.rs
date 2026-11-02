@@ -13304,6 +13304,23 @@ fn a_palette_without_its_table_says_so_when_its_pixels_land() {
     }
 }
 
+/// A layer read in place says its statistics and tools read an overview: once when added, once
+/// when a project with it opens (its pixels landing then), and not again for the same pixels.
+#[test]
+fn in_place_layers_say_their_overview_once() {
+    let (base, _) = serve_ranges(rustgis_data::raster::cog::example(2048, 256));
+    let said = |s: &Session| s.notices.iter().filter(|n| n.text.contains("raster tools read a 1024 × 1024 overview")).count();
+    let mut s = Session::new(Project::default());
+    s.run("layer.addUrl", &json!({"url": format!("{base}/scene.tif")})).unwrap();
+    s.run("map.zoomIn", &Value::Null).unwrap();
+    assert_eq!(said(&s), 1, "{:?}", s.notices.last());
+    let text = serde_json::to_string(&s.project).unwrap();
+    let mut s = Session::new(Project::default());
+    s.run("project.openText", &json!({"text": text})).unwrap();
+    s.notice_landed_rasters();
+    assert_eq!(said(&s), 1, "{:?}", s.notices.last());
+}
+
 /// A project saved when cloud-optimised GeoTIFFs read in place were tile layers opens them as
 /// raster layers read in place, each where it was drawn, with its name, visibility, opacity and
 /// look; a dated series stays a tile layer.
@@ -13321,9 +13338,11 @@ fn cog_tile_layers_of_older_projects_open_as_rasters() {
         t["visible"] = json!(visible);
         t
     };
+    // Tile layers list the top one first: Scene over Aerial, both under the map's layers.
     let tiles = json!([
         tile("Scene", format!("{base}/scene.tif#bands=5,3,2&range=10,200"), 0.5, false),
         tile("Series", format!("{base}/{{date:YYYY}}.tif"), 1.0, true),
+        tile("Aerial", format!("{base}/aerial.tif"), 1.0, true),
     ]);
     let maps = text.pointer_mut("/maps").and_then(Value::as_array_mut);
     match maps {
@@ -13338,8 +13357,9 @@ fn cog_tile_layers_of_older_projects_open_as_rasters() {
     assert_eq!(rl.style.renderer, RasterRenderer::Rgb { red: 4, green: 2, blue: 1 });
     assert_eq!(rl.style.stretch, Stretch::custom(10.0, 200.0));
     assert!(!scene.visible && (scene.opacity() - 0.5).abs() < 1e-6);
-    // Drawn under the map's layers, as it was.
-    assert_eq!(t.map().layers.last().map(|l| l.name.as_str()), Some("Scene"));
+    // Drawn under the map's layers, as they were, Scene over Aerial.
+    let names: Vec<&str> = t.map().layers.iter().map(|l| l.name.as_str()).collect();
+    assert_eq!(names[names.len() - 2..], ["Scene", "Aerial"], "{names:?}");
     assert_eq!(t.map().tiles.iter().map(|x| x.name.as_str()).collect::<Vec<_>>(), ["Series"]);
 }
 

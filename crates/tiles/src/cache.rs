@@ -1999,6 +1999,12 @@ mod tests {
         let records = network_records(&history, &url);
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].network.as_ref().unwrap().status, Some(503));
+        // One that says when to ask again: its wait goes with the status, read back as the wait.
+        let wait = "HTTP/1.1 503 Unavailable\r\nRetry-After: 30\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+        let base = serve(vec![wait.into()]);
+        let e = native::get(&native::agent(), &format!("{base}/tiles/0/0/0.png"), &[404]).unwrap_err();
+        assert_eq!(e, "http status: 503 (retry after 30 s)");
+        assert_eq!((http_status(&e), retry_wait(&e, RETRY)), (Some(503), Duration::from_secs(30)));
         // A download's absence names the address asked for, not the module's markers.
         let base = serve(vec![not_found.into()]);
         let url = format!("{base}/data.zarr/zarr.json");

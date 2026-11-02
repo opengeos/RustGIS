@@ -111,7 +111,9 @@ const WINDOW_GRID: usize = 17;
 /// `r` (the layer's pixels), or, zoomed in past it, the part in view read from the level the view
 /// needs, drawn over the overview until its tiles arrive. `stats` are the renderer's bands'
 /// statistics (the overview's when not given), so the part in view is stretched as the whole is.
-/// Returns whether tiles are still to come (the map is drawn again as they land).
+/// Returns whether tiles are still to come (the map is drawn again as they land), or why it drew
+/// less than the view needs (the overview, or other levels for tiles that couldn't be read): the
+/// map shows what it has, an export refuses it.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn draw_in_place(
     pm: &mut Pixmap,
@@ -123,7 +125,7 @@ pub(crate) fn draw_in_place(
     opacity: f32,
     full_res: bool,
     place: Place,
-) -> bool {
+) -> Result<bool, String> {
     let bands = style.renderer.bands();
     let own: Vec<BandStats> = bands.iter().map(|b| r.bands.get(*b).map(|b| b.stats.clone()).unwrap_or_default()).collect();
     let stats = stats.unwrap_or(&own);
@@ -132,22 +134,22 @@ pub(crate) fn draw_in_place(
     let full = r.overview.unwrap_or((r.width, r.height));
     if style.rotation.rem_euclid(360.0).abs() > 1e-6 || full.0 <= r.width {
         whole(pm);
-        return false;
+        return Ok(false);
     }
     let info = match rustgis_tiles::cog::info(address) {
         Ok(Some(info)) => info,
         Ok(None) => {
             whole(pm);
-            return true;
+            return Ok(true);
         }
-        Err(_) => {
+        Err(e) => {
             whole(pm);
-            return false;
+            return Err(e);
         }
     };
     let Some(want) = in_view(r, view, place, pm.width(), pm.height(), full_res) else {
         whole(pm);
-        return false;
+        return Ok(false);
     };
     // The coarsest level at least as fine as the view (within a quarter); zoomed in past the full
     // image, the full image.
@@ -181,12 +183,12 @@ pub(crate) fn draw_in_place(
     }
     let Some((level, cols, rows)) = window else {
         whole(pm);
-        return false;
+        return Err("the view is too large a part of the image to read at the resolution it needs".into());
     };
     // The image at the overview's level is the overview.
     if levels.get(level).is_some_and(|l| l.width <= r.width) {
         whole(pm);
-        return false;
+        return Ok(false);
     }
     let color = match (&style.renderer, &r.color) {
         (_, ColorHint::Palette(p)) => ColorHint::Palette(p.clone()),
@@ -196,14 +198,14 @@ pub(crate) fn draw_in_place(
     };
     let w = match rustgis_tiles::cog::raster::window(address, level, cols, rows, &read, color) {
         Ok(w) => w,
-        Err(_) => {
+        Err(e) => {
             whole(pm);
-            return false;
+            return Err(e);
         }
     };
     let Some(part) = w.raster else {
         whole(pm);
-        return w.pending;
+        return Ok(w.pending);
     };
     let mut own_style = style.clone();
     own_style.renderer = renumbered(&style.renderer);
@@ -218,10 +220,13 @@ pub(crate) fn draw_in_place(
             draw(&mut both, &part, &own_style, Some(stats), view, 1.0, full_res, place);
             pm.draw_pixmap(0, 0, both.as_ref(), &PixmapPaint { opacity, ..PixmapPaint::default() }, Transform::identity(), None);
         }
-        return true;
+        return Ok(true);
     }
     draw(pm, &part, &own_style, Some(stats), view, opacity, full_res, place);
-    false
+    if w.failed {
+        return Err("some of its tiles couldn't be read".into());
+    }
+    Ok(false)
 }
 
 /// A renderer drawing the same bands of a raster holding only those, in its order (see

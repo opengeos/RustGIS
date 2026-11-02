@@ -349,8 +349,11 @@ pub fn add_raster(s: &mut Session, name: &str, mut layer: RasterLayer) -> CmdRes
     let (w, h, n, overview) = layer.data.as_ref().map(|d| (d.width, d.height, d.band_count(), d.overview)).unwrap_or_default();
     let rounded = layer.data.as_deref().and_then(rounded_count);
     // Said here for pixels added with the layer; for those landing later, by `notice_landed_rasters`.
-    let palette_missing = layer.palette_unsaid();
-    // Read in place, the map shows the full image as it draws: the overview is only what's held.
+    let unsaid = layer.pixels_unsaid();
+    let palette_missing = unsaid.as_ref().is_some_and(|d| d.palette_missing);
+    // Read in place, the map shows the full image as it draws, but statistics and tools read the
+    // overview held: said so.
+    let held = unsaid.filter(|_| layer.in_place).and_then(|d| crate::in_place_overview(&d));
     let overview = overview.filter(|_| !layer.in_place);
     let empty_before = s.map().layers.is_empty();
     let id = s.map_mut().add_raster(unique.clone(), layer);
@@ -360,6 +363,9 @@ pub fn add_raster(s: &mut Session, name: &str, mut layer: RasterLayer) -> CmdRes
     }
     if palette_missing {
         s.notify(format!("{unique}: its colour table is missing or short, so it is drawn in grey"), false);
+    }
+    if let Some(held) = held {
+        s.notify(format!("{unique}: {held}"), false);
     }
     if let Some(count) = rounded {
         let held = "pixels are held as 32-bit floats, exact for whole numbers up to 16,777,216 and to about 7 significant digits";

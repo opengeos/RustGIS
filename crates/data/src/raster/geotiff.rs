@@ -588,6 +588,9 @@ pub(crate) struct Unpaletted<R> {
     patches: Vec<(u64, [u8; 2])>,
     /// Palette images were patched.
     pub(crate) palette: bool,
+    /// Every image is a palette image (transparency masks aside): one without its ColorMap is
+    /// one still, its table missing.
+    pub(crate) all_palette: bool,
     /// RGB images with more samples were patched: their first three samples are red, green, blue.
     pub(crate) wide_rgb: bool,
     pos: u64,
@@ -602,6 +605,8 @@ const MAX_ENTRIES: u64 = 4096;
 struct Patches {
     at: Vec<(u64, [u8; 2])>,
     palette: bool,
+    /// An image that isn't a palette image (nor a transparency mask) was seen.
+    other: bool,
     wide_rgb: bool,
 }
 
@@ -673,6 +678,7 @@ fn photometric_patches<R: Read + Seek>(r: &mut R, wide_rgb: bool) -> Patches {
                     _ => {}
                 }
             }
+            patches.other |= photometric.is_some_and(|(_, p)| p != 3 && p != 4);
             match photometric {
                 Some((at, 3)) => {
                     patches.at.push((at, grey));
@@ -714,7 +720,7 @@ impl<R: Read + Seek> Unpaletted<R> {
     fn new(mut inner: R, wide_rgb: bool) -> std::io::Result<Self> {
         let p = photometric_patches(&mut inner, wide_rgb);
         inner.seek(std::io::SeekFrom::Start(0))?;
-        Ok(Unpaletted { inner, patches: p.at, palette: p.palette, wide_rgb: p.wide_rgb, pos: 0 })
+        Ok(Unpaletted { inner, patches: p.at, palette: p.palette, all_palette: p.palette && !p.other, wide_rgb: p.wide_rgb, pos: 0 })
     }
 }
 
@@ -1044,7 +1050,7 @@ pub(super) fn read_limited_with_nodata(
     open: Option<Opener<'_>>,
     sidecar_nodata: Option<f64>,
 ) -> Result<Raster> {
-    let (palette, wide_rgb) = (r.palette, r.wide_rgb);
+    let (palette, all_palette, wide_rgb) = (r.palette, r.all_palette, r.wide_rgb);
     let limits = {
         let mut l = Limits::default();
         l.decoding_buffer_size = MAX_SAMPLES.saturating_mul(4);
@@ -1132,10 +1138,13 @@ pub(super) fn read_limited_with_nodata(
     let ct = dec.colortype().map_err(err)?;
     // JPEG-compressed YCbCr, the only YCbCr read (the colour match below rejects the rest).
     let ycbcr = matches!(ct, ColorType::YCbCr(_)) && dec.find_tag_unsigned::<u16>(Tag::Compression).ok().flatten() == Some(7);
-    // A palette image (shown to the decoder as grey) is coloured by its table (in grey without one,
-    // as said below).
+    // A palette image (shown to the decoder as grey) is coloured by its table: in a file of palette
+    // images, one without it is drawn in grey, as said below; in a file of others too, only one with
+    // its table is taken for one.
     let ct = match ct {
-        ColorType::Gray(bits) if palette => ColorType::Palette(bits),
+        ColorType::Gray(bits) if all_palette || (palette && dec.find_tag(Tag::ColorMap).ok().flatten().is_some()) => {
+            ColorType::Palette(bits)
+        }
         other => other,
     };
     // A palette image without a whole colour table is drawn in grey, and says so.

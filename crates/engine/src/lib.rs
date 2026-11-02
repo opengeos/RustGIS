@@ -264,6 +264,29 @@ fn clip(s: &str, n: usize) -> String {
     if s.chars().count() > n { s.chars().take(n).chain(['…']).collect() } else { s.to_string() }
 }
 
+/// The most layer names a notice lists (the rest counted), each cut to 80 characters: the notice
+/// stays well within what a notice keeps.
+const NAMES_SAID: usize = 5;
+
+/// Layer names for a notice: the first [`NAMES_SAID`], each clipped, and how many more.
+fn names_said(names: &[String]) -> String {
+    let shown: Vec<String> = names.iter().take(NAMES_SAID).map(|n| clip(n, 80)).collect();
+    match names.len().saturating_sub(NAMES_SAID) {
+        0 => shown.join(", "),
+        more => format!("{} and {more} more", shown.join(", ")),
+    }
+}
+
+/// What a raster layer read in place holds for its statistics and tools, when it holds an
+/// overview of the image the map draws.
+pub(crate) fn in_place_overview(d: &rustgis_data::raster::Raster) -> Option<String> {
+    let (fw, fh) = d.overview?;
+    Some(format!(
+        "read in place: the map draws its {fw} × {fh} pixels as it needs them, while statistics, histograms and raster tools read a {} × {} overview",
+        d.width, d.height
+    ))
+}
+
 pub struct Registry {
     pub commands: Vec<CommandSpec>,
 }
@@ -1491,28 +1514,47 @@ impl Session {
         }
     }
 
-    /// Says what reading a raster layer's pixels lost when it wasn't said as the layer was added
-    /// (pixels read in place land later: in the browser, a project, an import): a palette image
-    /// without its colour table, drawn in grey. Once for each layer's pixels; the app calls it each
-    /// frame.
+    /// Says what reading raster layers' pixels lost when it wasn't said as each was added (pixels
+    /// read in place land later: in the browser, a project, an import): a palette image without
+    /// its colour table, drawn in grey; an overview statistics and tools read. Once for each
+    /// layer's pixels, one notice of each kind; the app calls it each frame.
     pub fn notice_landed_rasters(&mut self) {
-        let mut names = Vec::new();
+        let (mut grey, mut held) = (Vec::new(), Vec::new());
         for m in &mut self.project.maps {
             for l in &mut m.layers {
-                if let Some(rl) = &mut l.raster
-                    && rl.palette_unsaid()
-                {
-                    names.push(l.name.clone());
+                let Some(rl) = &mut l.raster else { continue };
+                let in_place = rl.in_place;
+                let Some(d) = rl.pixels_unsaid() else { continue };
+                if d.palette_missing {
+                    grey.push(l.name.clone());
+                }
+                if let Some(what) = in_place.then(|| in_place_overview(&d)).flatten() {
+                    held.push((l.name.clone(), what));
                 }
             }
         }
-        match &names[..] {
+        match &grey[..] {
             [] => {}
-            [one] => self.notify(format!("{one}: its colour table is missing or short, so it is drawn in grey"), false),
+            [one] => self.notify(format!("{}: its colour table is missing or short, so it is drawn in grey", clip(one, 80)), false),
             many => self.notify(
-                format!("{} palette rasters have no whole colour table, so they are drawn in grey: {}", many.len(), many.join(", ")),
+                format!("{} palette rasters have no whole colour table, so they are drawn in grey: {}", many.len(), names_said(many)),
                 false,
             ),
+        }
+        match &held[..] {
+            [] => {}
+            [(one, what)] => self.notify(format!("{}: {what}", clip(one, 80)), false),
+            many => {
+                let names: Vec<String> = many.iter().map(|(n, _)| n.clone()).collect();
+                self.notify(
+                    format!(
+                        "{} rasters are read in place: the map draws them at full resolution as it needs it, while statistics, histograms and raster tools read an overview of each: {}",
+                        many.len(),
+                        names_said(&names)
+                    ),
+                    false,
+                )
+            }
         }
     }
 

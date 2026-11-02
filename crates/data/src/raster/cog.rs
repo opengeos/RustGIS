@@ -312,7 +312,7 @@ pub fn layout(bytes: &Sparse) -> Result<Parse> {
 
 fn read_layout(r: Sparse) -> Result<Parse> {
     let reader = super::geotiff::reader(r).map_err(err)?;
-    let (palette, wide_rgb) = (reader.palette, reader.wide_rgb);
+    let (palette, all_palette, wide_rgb) = (reader.palette, reader.all_palette, reader.wide_rgb);
     let mut dec = Decoder::new(reader).map_err(err)?.with_limits(limits());
     let Some(geo) = super::geotiff::cog_geo(&mut dec)? else {
         return Ok(Parse::NotTiled("a rotated image, or one without coordinates, is read whole".into()));
@@ -320,8 +320,9 @@ fn read_layout(r: Sparse) -> Result<Parse> {
     let ct = dec.colortype().map_err(err)?;
     let mut palette_missing = false;
     let (bands, color) = match ct {
-        // A palette image (shown to the decoder as grey) is coloured by its table, else grey.
-        ColorType::Gray(bits) if palette => (
+        // A palette image (shown to the decoder as grey) is coloured by its table, else grey (see
+        // `geotiff::read_limited_with_nodata`).
+        ColorType::Gray(bits) if all_palette || (palette && dec.find_tag(Tag::ColorMap).ok().flatten().is_some()) => (
             1,
             super::geotiff::palette_table(&mut dec, bits).map_or_else(
                 || {
