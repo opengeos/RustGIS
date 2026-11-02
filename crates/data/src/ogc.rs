@@ -3159,6 +3159,13 @@ impl Pages {
                 self.from = std::mem::replace(&mut self.next, n);
                 self.advance()
             }
+            None if matches!(self.phase, Phase::Linked) && is_wfs_query(&self.url) => {
+                // A next-link chain can end at a server cap too; verify the accumulated total.
+                self.from = self.url.clone();
+                self.next = wfs_page_url(&self.url, None, 0);
+                self.phase = Phase::WfsHits;
+                self.advance()
+            }
             None => self.finish(None),
         }
     }
@@ -3983,6 +3990,25 @@ mod tests {
             }
         });
         let doc: serde_json::Value = serde_json::from_slice(&joined).unwrap();
+        assert_eq!(doc["features"].as_array().unwrap().len(), 3);
+        assert_eq!(note, None);
+    }
+
+    /// A WFS next-link chain still checks its total when the final link disappears.
+    #[test]
+    fn wfs_linked_pages_check_the_final_total() {
+        let url = "https://wfs.example.org/wfs?SERVICE=WFS&VERSION=2.0.0&REQUEST=GetFeature";
+        let first = br#"{"features":[{"id":1}],"numberMatched":3,"links":[{"rel":"next","href":"?page=2"}]}"#;
+        let (bytes, note) = join_pages(url, first.to_vec(), 100, |u| {
+            if query_value(u, "RESULTTYPE").is_some() {
+                Ok(br#"<FeatureCollection numberMatched="3"/>"#.to_vec())
+            } else if query_value(u, "STARTINDEX") == Some("2") {
+                Ok(br#"{"features":[{"id":3}]}"#.to_vec())
+            } else {
+                Ok(br#"{"features":[{"id":2}],"numberMatched":3}"#.to_vec())
+            }
+        });
+        let doc: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(doc["features"].as_array().unwrap().len(), 3);
         assert_eq!(note, None);
     }
