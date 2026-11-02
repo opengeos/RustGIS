@@ -369,14 +369,36 @@ fn complete(
         .ok_or("the tool's run was dropped (its project was closed, or too many runs were waiting)")?;
     let run = s.plugin_runs.remove(i);
     let mut result = result;
-    // What it adds to or changes on the map belongs on the map it ran on.
-    let on_map = matches!(&result, Ok(r) if matches!(r.output, Output::Layer(_) | Output::Selection { .. } | Output::Update { .. } | Output::Layers(_)));
-    if on_map && (s.project.active_map, s.map().name.as_str()) != (run.map.0, run.map.1.as_str()) {
+    // What it adds to or changes on the map belongs on the map it ran on: where it was, if it is
+    // still there, else the one map of its name (one before it may have been removed).
+    let on_map = matches!(&result, Ok(r) if match &r.output {
+        Output::Layer(_) | Output::Selection { .. } | Output::Update { .. } => true,
+        Output::Layers(out) => out.iter().any(|o| !matches!(o, rustgis_analysis::OutputLayer::Table(_))),
+        _ => false,
+    });
+    let named = |i: usize| s.project.maps.get(i).is_some_and(|m| m.name == run.map.1);
+    let ran_on = if named(run.map.0) {
+        Some(run.map.0)
+    } else {
+        let mut same = (0..s.project.maps.len()).filter(|&i| named(i));
+        same.next().filter(|_| same.next().is_none())
+    };
+    if on_map && ran_on != Some(s.project.active_map) {
         result =
             Err(format!("{} ran on the map '{}', which is no longer the active one: open it and run the tool again", run.name, run.map.1));
     }
+    // A selection's rows of a streamed layer read whole are found by the name it was read under,
+    // whatever the layer is called now.
+    let read_as = output_layer(&result);
     fit_to_changes(s, &mut result, &run.name, &run.read);
-    fit_to_windows(s, &mut result, full_ids.as_ref().unwrap_or(&run.full_ids));
+    let mut full_ids = full_ids.unwrap_or(run.full_ids);
+    if let (Some(was), Some(now)) = (read_as, output_layer(&result))
+        && was != now
+        && let Some(ids) = full_ids.remove(&was)
+    {
+        full_ids.insert(now, ids);
+    }
+    fit_to_windows(s, &mut result, &full_ids);
     s.pending.push(crate::PendingRun {
         id,
         tool: run.name,
@@ -509,6 +531,11 @@ fn fit_to_changes(
         *res = Err(format!("{layer} was removed while {tool} ran"));
         return;
     };
+    // Another layer with its id (on a map that took the name of the one it ran on) isn't it.
+    if now.dataset.source != was.source {
+        *res = Err(format!("{layer} was removed while {tool} ran"));
+        return;
+    }
     layer.clone_from(&now.name);
     // A streamed layer's rows follow the view: only that it is still there is checked.
     let Some(dataset) = &was.dataset else { return };
@@ -524,6 +551,14 @@ fn fit_to_changes(
     }
 }
 
+/// The layer a result selects in or updates, by lowercase name.
+fn output_layer(res: &Result<rustgis_analysis::ToolResult, String>) -> Option<String> {
+    match &res.as_ref().ok()?.output {
+        Output::Selection { layer, .. } | Output::Update { layer, .. } => Some(layer.to_ascii_lowercase()),
+        _ => None,
+    }
+}
+
 /// A layer a background run read, to tell whether it changed while the run went on.
 pub(crate) struct Read {
     /// The layer, by id: renamed perhaps, but not another of the same name.
@@ -532,11 +567,13 @@ pub(crate) struct Read {
     /// however large the layer, and any edit since (which copies the rows held here too) shows.
     /// `None` for a streamed layer, whose rows follow the view.
     dataset: Option<Dataset>,
+    /// Where its data comes from: a layer with the same id and another source is another layer.
+    source: Option<String>,
 }
 
 impl Read {
     fn of(l: &rustgis_map::Layer) -> Self {
-        Read { id: l.id, dataset: (!l.is_streamed()).then(|| l.dataset.clone()) }
+        Read { id: l.id, dataset: (!l.is_streamed()).then(|| l.dataset.clone()), source: l.dataset.source.clone() }
     }
 
     /// Whether `now` is the dataset `was` as it was read: the same rows in memory, and the same

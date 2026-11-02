@@ -23830,3 +23830,66 @@ fn built_in_tools_run_off_the_session() {
     tool_abandon(&mut s, run.id);
     assert!(!tool_waiting(&s, run.id));
 }
+
+/// A background selection on a streamed layer renamed while it ran selects the features it chose
+/// where they are in the layer's window; a run whose map moved (one before it was deleted) still
+/// lands on it.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn background_runs_follow_renamed_streamed_layers_and_moved_maps() {
+    use crate::cmd::gp::{tool_complete, tool_start};
+    use rustgis_analysis::control::Control;
+    let path = grid_fgb("bgrenamed", 50);
+    let mut s = Session::new(Project::default());
+    s.run("layer.addData", &json!({"path": path.display().to_string(), "stream": true})).unwrap();
+    // Only a corner is in view: the window holds part of the source, in its own order.
+    let v = view_of(&mut s, rustgis_geom::Extent::new(0.0, 0.0, 20.0, 20.0));
+    crate::render::render_png(s.map_mut(), &v).unwrap();
+    assert!(s.map().layers[0].dataset.features.len() < 2500, "only part of the source is in the window");
+    let run = tool_start(&mut s, "selectByAttributes", &json!({"input": "bgrenamed", "where": "x > 0 AND x < 20"})).unwrap();
+    s.run("layer.rename", &json!({"layer": "bgrenamed", "name": "Renamed"})).unwrap();
+    let (id, done) = (run.id, run.run(&Control::new()));
+    tool_complete(&mut s, id, done).unwrap();
+    s.run("gp.finish", &json!({"id": id})).unwrap();
+    let l = s.map().layer_by_name("Renamed").unwrap();
+    let x = |f: &rustgis_data::Feature| f.attrs.get(1).and_then(|v| v.as_f64()).unwrap_or(f64::NAN);
+    let mut selected: Vec<u64> = l.selection.iter().map(|&r| l.dataset.features[r].id).collect();
+    let mut expected: Vec<u64> = l.dataset.features.iter().filter(|f| x(f) > 0.0 && x(f) < 20.0).map(|f| f.id).collect();
+    selected.sort_unstable();
+    expected.sort_unstable();
+    assert!(!expected.is_empty() && selected == expected, "{selected:?} vs {expected:?}");
+    let _ = std::fs::remove_file(path);
+    // A map deleted before the run's own map moves it up: the result still lands there.
+    let mut s = world();
+    s.project.maps.insert(0, rustgis_map::Map::new("Before"));
+    s.project.active_map = 1;
+    let layers = s.map().layers.len();
+    let run = tool_start(&mut s, "buffer", &json!({"input": "Cities", "distance": 50})).unwrap();
+    s.run("map.remove", &json!({"name": "Before"})).unwrap();
+    assert_eq!(s.project.active_map, 0);
+    let (id, done) = (run.id, run.run(&Control::new()));
+    tool_complete(&mut s, id, done).unwrap();
+    s.run("gp.finish", &json!({"id": id})).unwrap();
+    assert_eq!(s.map().layers.len(), layers + 1);
+    // Its map deleted and another given its name, holding a layer of the same id from another
+    // source: that isn't the layer it read, and its selection doesn't land there.
+    let path = grid_fgb("bgother", 5);
+    let mut s = world();
+    s.run("map.new", &json!({"name": "Ran"})).unwrap();
+    s.project.active_map = s.project.maps.iter().position(|m| m.name == "Ran").unwrap();
+    s.run("layer.addData", &json!({"path": path.display().to_string(), "stream": true, "name": "Points"})).unwrap();
+    let read_id = s.map().layer_by_name("Points").unwrap().id;
+    let run = tool_start(&mut s, "selectByAttributes", &json!({"input": "Points", "where": "i >= 0"})).unwrap();
+    s.run("map.remove", &json!({"name": "Ran"})).unwrap();
+    s.run("map.new", &json!({"name": "Ran"})).unwrap();
+    s.project.active_map = s.project.maps.iter().position(|m| m.name == "Ran").unwrap();
+    let other = grid_fgb("bgother2", 5);
+    s.run("layer.addData", &json!({"path": other.display().to_string(), "stream": true, "name": "Points"})).unwrap();
+    assert_eq!(s.map().layer_by_name("Points").unwrap().id, read_id, "the same id, on a map of the same name");
+    let (id, done) = (run.id, run.run(&Control::new()));
+    tool_complete(&mut s, id, done).unwrap();
+    let e = s.run("gp.finish", &json!({"id": id})).unwrap_err();
+    assert!(e.contains("was removed"), "{e}");
+    assert!(s.map().layer_by_name("Points").unwrap().selection.is_empty());
+    let _ = (std::fs::remove_file(path), std::fs::remove_file(other));
+}
