@@ -784,13 +784,13 @@ fn forget_locks_of_removed_features(before: &Project, after: &mut Project) {
                 continue;
             }
             // The lock's ids for this layer, less those it still has: sized by the lock, not the layer.
-            let mut gone: std::collections::HashSet<usize> =
+            let mut gone: std::collections::HashSet<u64> =
                 lock.iter().filter(|((layer, ..), _)| *layer == l.id).map(|((_, id, ..), _)| *id).collect();
             if gone.is_empty() {
                 continue;
             }
             for f in l.dataset.features.iter() {
-                gone.remove(&(f.id as usize));
+                gone.remove(&f.id);
                 if gone.is_empty() {
                     break;
                 }
