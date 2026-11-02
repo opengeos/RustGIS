@@ -66,6 +66,9 @@ pub struct RasterLayer {
     /// The look its address gave a layer read in place, applied when its pixels land.
     #[serde(skip)]
     look: Option<AddressLook>,
+    /// Its pixels' missing colour table has been said (see [`RasterLayer::palette_unsaid`]).
+    #[serde(skip)]
+    palette_said: bool,
 }
 
 /// Called once with a cloud-optimised GeoTIFF's overview, or why it couldn't be read.
@@ -204,6 +207,7 @@ impl RasterLayer {
             opening: None,
             restyle: false,
             look: None,
+            palette_said: false,
         })
     }
 
@@ -226,6 +230,7 @@ impl RasterLayer {
             opening: None,
             restyle: false,
             look: None,
+            palette_said: false,
         }
     }
 
@@ -248,6 +253,7 @@ impl RasterLayer {
             opening: None,
             restyle: false,
             look: None,
+            palette_said: false,
         }
     }
 
@@ -275,6 +281,7 @@ impl RasterLayer {
             opening: None,
             restyle: true,
             look: None,
+            palette_said: false,
         }
     }
 
@@ -378,6 +385,7 @@ impl RasterLayer {
             Ok(r) => {
                 self.style.repair(&r);
                 self.data = Some(Arc::new(r));
+                self.palette_said = false;
                 Ok(())
             }
             Err(e) => {
@@ -410,6 +418,15 @@ impl RasterLayer {
         }
     }
 
+    /// Whether its pixels are a palette image without a whole colour table (drawn in grey) and
+    /// that is still to be said: true once for the pixels it has, whenever they landed (added with
+    /// them, or read in place later, in the browser, a project or an import).
+    pub fn palette_unsaid(&mut self) -> bool {
+        let due = !self.palette_said && self.data.as_ref().is_some_and(|d| d.palette_missing);
+        self.palette_said |= due;
+        due
+    }
+
     /// Installs a completed remote read; each render copy can observe the same shared result.
     pub(crate) fn poll_reload(&mut self) -> bool {
         let Some(slot) = self.opening.as_ref() else { return false };
@@ -424,6 +441,7 @@ impl RasterLayer {
     fn land(&mut self, result: Result<Arc<Raster>, String>) {
         match result {
             Ok(raster) => {
+                self.palette_said = false;
                 if std::mem::take(&mut self.restyle) {
                     let look = self.look.take().and_then(|look| RasterStyle::for_look(&raster, &look));
                     self.style = look.unwrap_or_else(|| RasterStyle::default_for(&raster));

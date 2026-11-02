@@ -182,6 +182,19 @@ fn failed() -> &'static Mutex<HashMap<(String, usize, u32), Instant>> {
 /// The most failed tiles remembered.
 const MAX_FAILED: usize = 4096;
 
+/// Remembers a failed tile until `until`. With [`MAX_FAILED`] already, the one whose wait ends
+/// soonest makes room: one forgotten would be asked for again at each draw, whatever its server
+/// asked for.
+fn remember_failed(f: &mut HashMap<(String, usize, u32), Instant>, key: (String, usize, u32), until: Instant) {
+    if f.len() >= MAX_FAILED
+        && !f.contains_key(&key)
+        && let Some(soonest) = f.iter().min_by_key(|(_, at)| **at).map(|(k, _)| k.clone())
+    {
+        f.remove(&soonest);
+    }
+    f.insert(key, until);
+}
+
 /// The columns `cols` and rows `rows` (half-open, in the level's pixels) of level `level` of a
 /// file, bands `bands` (0-based, in that order, as the raster's bands), coloured as `color` says:
 /// from the tiles kept, without waiting. Those missing are fetched (each once at a time); the
@@ -252,11 +265,7 @@ pub fn window(url: &str, level: usize, cols: (u32, u32), rows: (u32, u32), bands
             Box::new(move |r| {
                 if let Err(e) = r {
                     let until = Instant::now() + crate::cache::retry_wait(&e, RETRY);
-                    let mut f = failed().lock().unwrap_or_else(|e| e.into_inner());
-                    if f.len() < MAX_FAILED {
-                        f.insert(key, until);
-                    }
-                    drop(f);
+                    remember_failed(&mut failed().lock().unwrap_or_else(|e| e.into_inner()), key, until);
                     crate::cache::notify_at(until);
                 }
                 crate::cache::notify();
@@ -479,6 +488,24 @@ mod tests {
         let at = |x: usize, y: usize| data[0][y * 32 + x];
         assert_eq!((at(0, 0), at(20, 5), at(31, 15)), (3.0, 7.0, 7.0), "tile 1 from level 1");
         assert!(at(1, 1).is_nan(), "tile 0's no-data pixel stays empty");
+    }
+
+    /// A full memory of failed tiles makes room for a new one: the one whose wait ends soonest
+    /// goes, so every tile failing waits its turn.
+    #[test]
+    fn failed_tiles_make_room_for_the_newest() {
+        let mut f = HashMap::new();
+        let now = Instant::now();
+        let key = |i: u32| ("https://x.org/a.tif".to_string(), 0usize, i);
+        for i in 0..MAX_FAILED as u32 {
+            remember_failed(&mut f, key(i), now + std::time::Duration::from_secs(60 + u64::from(i)));
+        }
+        remember_failed(&mut f, key(u32::MAX), now + std::time::Duration::from_secs(30));
+        assert_eq!(f.len(), MAX_FAILED);
+        assert!(f.contains_key(&key(u32::MAX)) && !f.contains_key(&key(0)), "the soonest gone, the newest kept");
+        // One already remembered is waited for again, nothing else goes.
+        remember_failed(&mut f, key(5), now + std::time::Duration::from_secs(90));
+        assert!(f.contains_key(&key(1)) && f.len() == MAX_FAILED);
     }
 
     #[test]

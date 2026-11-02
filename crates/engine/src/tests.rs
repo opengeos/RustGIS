@@ -13272,6 +13272,38 @@ fn an_address_look_holds_when_the_pixels_land_later() {
     assert_eq!(own.style.renderer, RasterRenderer::Colormap);
 }
 
+/// A palette COG without its colour table is drawn in grey and says so, also when its pixels land
+/// after the layer is added (a project opened, as in the browser and an import): once, and not for
+/// one with its table.
+#[test]
+fn a_palette_without_its_table_says_so_when_its_pixels_land() {
+    use rustgis_data::raster::cog::{Example, example_with};
+    let clean = example_with(&Example { size: 300, tile: 128, photometric: 3, ..Example::default() });
+    let mut lossy = clean.clone();
+    // The ColorMap entries (tag 320, of shorts) renamed to a tag nothing reads.
+    for i in 0..lossy.len().saturating_sub(4) {
+        if lossy[i..i + 4] == [0x40, 0x01, 0x03, 0x00] {
+            lossy[i..i + 2].copy_from_slice(&[0xFF, 0xFE]);
+        }
+    }
+    let said = |s: &Session| s.notices.iter().filter(|n| n.text.contains("colour table is missing")).count();
+    for (file, want) in [(lossy, 1), (clean, 0)] {
+        let (base, _) = serve_ranges(file);
+        let mut s = Session::new(Project::default());
+        let layer = rustgis_map::raster::RasterLayer::unread_in_place(format!("{base}/classes.tif"));
+        s.map_mut().add_raster("Classes".to_string(), layer);
+        let text = serde_json::to_string(&s.project).unwrap();
+        let mut s = Session::new(Project::default());
+        s.run("project.openText", &json!({"text": text})).unwrap();
+        assert!(s.map().layers.iter().any(|l| l.raster.as_ref().is_some_and(|r| r.data.is_some())), "read on opening");
+        assert_eq!(said(&s), want);
+        // Said once for these pixels, however often asked.
+        s.notice_landed_rasters();
+        s.run("map.zoomIn", &Value::Null).unwrap();
+        assert_eq!(said(&s), want);
+    }
+}
+
 /// A project saved when cloud-optimised GeoTIFFs read in place were tile layers opens them as
 /// raster layers read in place, each where it was drawn, with its name, visibility, opacity and
 /// look; a dated series stays a tile layer.

@@ -1064,6 +1064,8 @@ impl Session {
             let joins = self.merge.is_some() && self.merge == self.merged && !self.undo.is_empty();
             let (at, start) = (project_log::now_ms(), web_time::Instant::now());
             let res = self.run_command(id, params);
+            // Pixels the command read in place (a project, an import) say what they lost.
+            self.notice_landed_rasters();
             // A plugin's command waiting for its fetches answers `pending` and runs again when they
             // land: logged then, once. (Another command's `pending`, a download the web app makes, is
             // logged as it is asked for: nothing runs it again.)
@@ -1486,6 +1488,31 @@ impl Session {
         #[cfg(not(target_arch = "wasm32"))]
         {
             self.sql_results = sql_results;
+        }
+    }
+
+    /// Says what reading a raster layer's pixels lost when it wasn't said as the layer was added
+    /// (pixels read in place land later: in the browser, a project, an import): a palette image
+    /// without its colour table, drawn in grey. Once for each layer's pixels; the app calls it each
+    /// frame.
+    pub fn notice_landed_rasters(&mut self) {
+        let mut names = Vec::new();
+        for m in &mut self.project.maps {
+            for l in &mut m.layers {
+                if let Some(rl) = &mut l.raster
+                    && rl.palette_unsaid()
+                {
+                    names.push(l.name.clone());
+                }
+            }
+        }
+        match &names[..] {
+            [] => {}
+            [one] => self.notify(format!("{one}: its colour table is missing or short, so it is drawn in grey"), false),
+            many => self.notify(
+                format!("{} palette rasters have no whole colour table, so they are drawn in grey: {}", many.len(), many.join(", ")),
+                false,
+            ),
         }
     }
 

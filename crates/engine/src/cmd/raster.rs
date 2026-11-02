@@ -348,7 +348,8 @@ pub fn add_raster(s: &mut Session, name: &str, mut layer: RasterLayer) -> CmdRes
     }
     let (w, h, n, overview) = layer.data.as_ref().map(|d| (d.width, d.height, d.band_count(), d.overview)).unwrap_or_default();
     let rounded = layer.data.as_deref().and_then(rounded_count);
-    let palette_missing = layer.data.as_deref().is_some_and(|d| d.palette_missing);
+    // Said here for pixels added with the layer; for those landing later, by `notice_landed_rasters`.
+    let palette_missing = layer.palette_unsaid();
     // Read in place, the map shows the full image as it draws: the overview is only what's held.
     let overview = overview.filter(|_| !layer.in_place);
     let empty_before = s.map().layers.is_empty();
