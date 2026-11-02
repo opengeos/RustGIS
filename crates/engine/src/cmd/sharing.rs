@@ -613,7 +613,7 @@ pub(crate) fn note_label_classes(s: &mut Session, kind: &str, p: &Value) {
     // Its expressions have no MapLibre equivalent written for them.
     let by = (l.labels.default.visible && !no_field && !l.labels.default.by.is_empty()).then(|| {
         format!(
-            "{}'s style labels with the Default class's field {}, size and colour; its label expressions aren't in it.",
+            "{}'s style labels with the Default class's field and text symbol ({}); its label expressions aren't in it.",
             l.name, l.labels.default.field
         )
     });

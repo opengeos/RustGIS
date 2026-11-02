@@ -452,7 +452,7 @@ fn info(s: &mut Session, p: &Value) -> CmdResult {
                             .or(Some(d.field.as_str()).filter(|f| !f.is_empty()))
                     }).flatten(),
                     "labelClasses": label_classes_set(&l.labels)
-                        .then(|| l.labels.in_order().map(|c| json!({"name": c.name, "where": c.where_, "field": c.field, "visible": c.visible})).collect::<Vec<_>>()),
+                        .then(|| l.labels.in_order().map(|c| json!({"name": c.name, "where": c.where_, "field": c.field, "text": c.by.text, "visible": c.visible})).collect::<Vec<_>>()),
                     "fields": field_list(&l.dataset.fields),
                 }),
             };

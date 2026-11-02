@@ -897,6 +897,20 @@ fn label_expressions_say_what_they_lose() {
     assert_eq!(labels(&mut s), json!("upper(name)"));
     s.map_mut().layer_mut(cities).unwrap().labels.default.by.text = Some("upper(gone)".into());
     assert_eq!(labels(&mut s), json!("name"));
+    // Deleting the field Default labels by keeps the labels while its text expression reads, and
+    // starts Default again (labels off) once it doesn't.
+    s.run("edit.addField", &json!({"layer": "Cities", "name": "spare", "type": "text"})).unwrap();
+    for (text, on) in [("'#' || pop_max", true), ("upper(spare)", false)] {
+        let l = s.map_mut().layer_mut(cities).unwrap();
+        (l.labels.enabled, l.labels.default.field, l.labels.default.by.text) = (true, "spare".into(), Some(text.into()));
+        s.run("edit.deleteField", &json!({"layer": "Cities", "field": "spare"})).unwrap();
+        let l = s.map().layer(cities).unwrap();
+        assert_eq!(l.labels.enabled, on, "{text}");
+        assert_eq!(l.labels.default.by.text.is_some(), on, "{text}");
+        assert!(l.labels.default.field != "spare");
+        s.undo();
+    }
+    s.map_mut().layer_mut(cities).unwrap().labels.default.by.text = Some("upper(name)".into());
     // Web Style: a Default class labelling by a text expression alone says only that its style has
     // none, even with other classes; one with a size but no text or field says nothing of it.
     let dir = std::env::temp_dir().join(format!("rustgis-labels-lose-{}", std::process::id()));
@@ -910,6 +924,11 @@ fn label_expressions_say_what_they_lose() {
     l.labels.default.field.clear();
     l.labels.default.by.text = Some("upper(name)".into());
     s.run("labels.class.add", &json!({"layer": "Cities", "name": "Big", "where": "pop_max > 5000000"})).unwrap();
+    // Project Info lists each class's text expression with its field.
+    s.run("labels.by", &json!({"layer": "Cities", "class": "Big", "text": "name || '!'"})).unwrap();
+    let info = s.run("info.project", &Value::Null).unwrap();
+    let classes = &info["layers"].as_array().unwrap().iter().find(|l| l["name"] == "Cities").unwrap()["labelClasses"];
+    assert_eq!(classes[0]["text"], json!("name || '!'"), "{classes}");
     let said = share(&mut s);
     assert!(said.iter().any(|t| t.contains("has no labels: its Default class's text is an expression")), "{said:?}");
     assert!(!said.iter().any(|t| t.contains("labels every feature")), "{said:?}");
@@ -17835,13 +17854,14 @@ fn ogc_refresh_reconciles_fields_and_preserves_compatible_settings() {
             s.run("service.refresh", &target).unwrap();
             let l = s.map().layer(layer).unwrap();
             assert!(l.labels.enabled && l.labels.default.by.text.is_some(), "{:?}", l.labels.default);
-            let lost = |s: &Session| s.notices.iter().filter(|n| n.text.contains("label expressions naming a field")).count();
+            assert!(l.labels.default.field.is_empty(), "the field the service dropped isn't kept");
+            let lost = |s: &Session| s.notices.iter().filter(|n| n.text.contains("label expressions that don't read")).count();
             assert_eq!(lost(&s), 0, "every expression still reads");
             s.run("edit.undo", &Value::Null).unwrap();
             // A size by a field that goes is kept, said.
             s.map_mut().layer_mut(layer).unwrap().labels.default.by.size = Some("value / 2".into());
             s.run("service.refresh", &target).unwrap();
-            assert!(s.notices.iter().any(|n| n.text.ends_with("left out when drawing (1)")), "{:?}", s.notices.last());
+            assert!(s.notices.iter().any(|n| n.text.ends_with("left out when drawing (1, in Places)")), "{:?}", s.notices.last());
             assert_eq!(s.map().layer(layer).unwrap().labels.default.by.size.as_deref(), Some("value / 2"));
             s.run("edit.undo", &Value::Null).unwrap();
             let l = s.map_mut().layer_mut(layer).unwrap();

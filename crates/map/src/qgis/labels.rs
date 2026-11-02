@@ -312,8 +312,10 @@ fn data_defined(settings: Node, size_unit: &str, by: &mut LabelBy, layer: &str, 
     if !left.is_empty() {
         left.sort_unstable();
         left.dedup();
+        let more = left.len().saturating_sub(12);
         left.truncate(12);
-        report.skipped(layer, format!("data-defined label settings ({})", left.join(", ")));
+        let more = if more > 0 { format!(", and {more} more") } else { String::new() };
+        report.skipped(layer, format!("data-defined label settings ({}{more})", left.join(", ")));
     }
 }
 

@@ -1245,6 +1245,10 @@ fn label_expressions_and_data_defined_label_settings_carry_over() {
         read(&qml("MM", &[dd("Size", "2 + 1"), dd("Rotation", "&quot;deg&quot;"), dd("Show", "1"), dd("Family", "'Arial'")].concat()));
     assert_eq!((c.by.size.as_deref(), c.by.angle.as_deref()), (Some("(2 + 1) * 2.834646"), Some(r#"-("deg")"#)));
     assert!(report.notes.iter().any(|n| n.text.contains("data-defined label settings (Family, Show)")), "{:?}", report.notes);
+    // Past twelve names, how many more.
+    let many: String = (1..=14).map(|i| dd(&format!("Unknown{i:02}"), "1")).collect();
+    let (_, report) = read(&qml("Point", &many));
+    assert!(report.notes.iter().any(|n| n.text.contains("Unknown12, and 2 more)")), "{:?}", report.notes);
     // Both rotations: the first is kept, the other noted.
     let (c, report) = read(&qml("Point", &[dd("LabelRotation", "10"), dd("Rotation", "20")].concat()));
     assert_eq!(c.by.angle.as_deref(), Some("10"));
