@@ -2642,19 +2642,23 @@ pub const REFERENCE_SCALES: (f64, f64) = (1.0, 1e9);
 /// far in, its lines would otherwise be drawn thousands of pixels wide.
 pub const SIZE_FACTORS: (f64, f64) = (0.01, 32.0);
 
-/// Reads a layer's reference scale as `layer.referenceScale` would leave it: one out of
-/// [`REFERENCE_SCALES`] (or not a number) is none. A project file is hostile input.
-/// A [`Layer::no_fill`] this version doesn't know (a later variant, or edited by hand) reads as
-/// off, as other unreadable style values do, rather than failing the whole project.
+/// A [`Layer::no_fill`] this version doesn't know (a later variant, another type, or edited by
+/// hand) reads as off, rather than failing the whole project.
 fn de_no_fill<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<NoFill>, D::Error> {
-    let v: Option<String> = Option::deserialize(d)?;
-    Ok(match v.as_deref() {
-        Some("Override") => Some(NoFill::Override),
-        Some("Symbols") => Some(NoFill::Symbols),
-        _ => None,
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Read {
+        Known(NoFill),
+        Other(serde::de::IgnoredAny),
+    }
+    Ok(match Option::<Read>::deserialize(d)? {
+        Some(Read::Known(how)) => Some(how),
+        Some(Read::Other(_)) | None => None,
     })
 }
 
+/// Reads a layer's reference scale as `layer.referenceScale` would leave it: one out of
+/// [`REFERENCE_SCALES`] (or not a number) is none. A project file is hostile input.
 fn de_reference_scale<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<f64>, D::Error> {
     let v: Option<f64> = Option::deserialize(d)?;
     Ok(v.filter(|r| (REFERENCE_SCALES.0..=REFERENCE_SCALES.1).contains(r)))
@@ -2834,7 +2838,13 @@ mod tests {
             assert_eq!(serde_json::from_str::<Layer>(&text).unwrap().no_fill, Some(how));
         }
         let mut v = serde_json::to_value(&l).unwrap();
-        for unknown in [serde_json::json!("Later"), serde_json::Value::Null] {
+        for unknown in [
+            serde_json::json!("Later"),
+            serde_json::json!(1),
+            serde_json::json!(true),
+            serde_json::json!({"Override": 1}),
+            serde_json::Value::Null,
+        ] {
             v["no_fill"] = unknown.clone();
             assert_eq!(serde_json::from_value::<Layer>(v.clone()).unwrap().no_fill, None, "{unknown}");
         }
