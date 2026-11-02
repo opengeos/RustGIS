@@ -3367,8 +3367,10 @@ fn tabulate_intersection(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, Strin
             let near_merc = near.iter().filter_map(|&zi| zone_list.get(zi)).fold(Extent::EMPTY, |e, z| e.union(&z.merc_ext));
             let mut grid: Option<OverlayGrid> = None;
             let mut inside = false;
-            // Whether one zone holds the whole feature, so none of it lies outside them all.
+            // Whether one zone holds the whole feature, so none of it lies outside them all; and
+            // whether a zone got a part of it as cut, rounded, not the whole.
             let mut held = false;
+            let mut cut_part = false;
             for &zi in &near {
                 let Some(zone) = zone_list.get(zi) else { continue };
                 let Some(mut piece) = part(&whole, &zone.mask, true) else { continue };
@@ -3392,6 +3394,8 @@ fn tabulate_intersection(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, Strin
                     piece = whole.as_ref().clone();
                     piece_area = total;
                     held = true;
+                } else {
+                    cut_part = true;
                 }
                 let cell = cells.entry((zi, ci)).or_insert_with(|| TabulateCell { parts: Vec::new(), sums: vec![0.0; sum_fields.len()] });
                 if !sum_fields.is_empty() {
@@ -3414,12 +3418,24 @@ fn tabulate_intersection(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, Strin
             // every zone wider than the overlay's grid, isn't wholly shared out: what is left of it
             // once the zones near it, unioned, are taken away. Zones that overlap each other can't
             // hide such a part, as shares adding up to the whole could.
+            // Whether the feature's interior meets a zone's, by the exact predicate rather than the
+            // overlay: one near a zone only by its extent meets none, and one too narrow for the
+            // grid can meet a zone with no part surviving the cut.
+            let meets = inside
+                || to_multipolygon(&whole).is_some_and(|w| {
+                    near.iter().filter_map(|&zi| zone_list.get(zi)).any(|z| {
+                        let m = z.mask.relate(&w);
+                        m.is_intersects() && !m.is_touches()
+                    })
+                });
             let resolved = grid.get_or_insert_with(|| OverlayGrid::new(&whole, &near_merc)).resolves();
-            unresolved += usize::from(!held && !resolved);
+            // Rough when a zone got a part of it as cut, even if another zone holds it whole, or
+            // when it meets a zone but no part of it survived the cut.
+            unresolved += usize::from(!resolved && (cut_part || (meets && !inside)));
             if !sum_fields.is_empty() && !held {
-                // A feature the grid doesn't resolve may have parts too narrow to survive the cut,
-                // which are reported with it rather than as lying outside.
-                let lies_outside = (!inside && resolved) || {
+                // A feature meeting no zone lies wholly outside them; one whose parts didn't
+                // survive the cut is reported as roughly measured, above.
+                let lies_outside = !meets || {
                     let grid = grid.get_or_insert_with(|| OverlayGrid::new(&whole, &near_merc));
                     let rest = if let [zi] = near.as_slice() {
                         zone_list.get(*zi).and_then(|z| part(&whole, &z.mask, false))

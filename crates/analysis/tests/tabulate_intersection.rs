@@ -354,6 +354,16 @@ fn a_thin_strip_shares_out_half_when_half_outside_and_all_when_inside() {
     // About half: so thin a strip is rounded by about a percent, but not taken as wholly inside.
     assert!((pop / 500_000.0 - 1.0).abs() < 0.05, "{pop}");
 
+    // The same strip wholly inside one zone, and half inside another overlapping it: whole in the
+    // first, but the second's part is cut and rounded, which the notice still says.
+    let mut z = Dataset::new("zones", GeometryType::Polygon, vec![Field::new("zone", FieldType::Text)]);
+    z.push_next(rect(-91.0, 34.0, -88.0, 36.0), vec![Value::Text("A".into())]);
+    z.push_next(rect(-89.5, 34.0, -88.0, 36.0), vec![Value::Text("B".into())]);
+    let mut c = Dataset::new("classes", GeometryType::Polygon, vec![Field::new("pop", FieldType::Integer)]);
+    c.push_next(rect(-90.5, 35.0, -88.5, 35.0000001), vec![Value::Int(1_000_000)]);
+    let result = rustgis_analysis::run("tabulateIntersection", &layers(z, c), &params).unwrap();
+    assert!(result.messages.iter().any(|m| m.starts_with("1 class feature is so narrow next to its zones")), "{:?}", result.messages);
+
     // The same strip wholly inside the zone counts whole, unrounded, with no notice.
     let mut z = Dataset::new("zones", GeometryType::Polygon, vec![Field::new("zone", FieldType::Text)]);
     z.push_next(rect(-91.0, 34.0, -88.0, 36.0), vec![Value::Text("A".into())]);
@@ -413,6 +423,21 @@ fn slivers_too_narrow_to_measure_finely_are_reported_not_counted_twice() {
         let total: f64 = table(result).features.iter().filter_map(|f| f.attrs.get(3).and_then(Value::as_f64)).sum();
         assert!(total <= 1_000_000.0 * 1.01, "{width_m} m wide shared out {total}");
     }
+}
+
+/// A thin feature in the notch of an L-shaped zone: within the zone's extent but touching none of
+/// it, so it has no parts to measure, roughly or not, and no sum fields to share out.
+#[test]
+fn a_thin_feature_near_a_zone_only_by_its_extent_gets_no_notice() {
+    let ring = |pts: &[(f64, f64)]| Some(Geometry::Polygon(vec![vec![pts.iter().map(|&(x, y)| Coord::new(x, y)).collect()]]));
+    let mut z = Dataset::new("zones", GeometryType::Polygon, vec![Field::new("zone", FieldType::Text)]);
+    z.push_next(ring(&[(0.0, 0.0), (2.0, 0.0), (2.0, 1.0), (1.0, 1.0), (1.0, 2.0), (0.0, 2.0), (0.0, 0.0)]), vec![Value::Text("L".into())]);
+    let mut c = Dataset::new("classes", GeometryType::Polygon, vec![Field::new("kind", FieldType::Text)]);
+    c.push_next(ring(&[(1.5, 1.5), (1.9, 1.5), (1.9, 1.50000001), (1.5, 1.50000001), (1.5, 1.5)]), vec![Value::Text("river".into())]);
+    let l = layers(z, c);
+    let result =
+        rustgis_analysis::run("tabulateIntersection", &l, &json!({"zones": "zones", "zoneFields": "zone", "classes": "classes"})).unwrap();
+    assert_eq!(result.messages, ["Tabulate Intersection: 0 rows", "1 zone overlaps no class feature, so it has no rows"]);
 }
 
 #[test]
