@@ -1147,6 +1147,9 @@ const MAX_BUFFER_VERTICES: usize = 2_000_000;
 const MAX_BUFFER_BYTES: usize = if cfg!(target_arch = "wasm32") { 128 << 20 } else { 512 << 20 };
 /// Drain results regularly instead of keeping a second whole-layer result array.
 const BUFFER_BATCH: usize = 256;
+/// Distance selectors can outgrow the grid's reference limit. Bound actual fallback checks
+/// across all targets, rather than refusing a large job whose matches are found early.
+const MAX_UNINDEXED_SELECTOR_CHECKS: usize = 50_000_000;
 const BUFFER_STORAGE_ERROR: &str = "Buffer output or distance selectors exceed their memory budget; select fewer features";
 
 /// Shared retained-storage accounting; workers charge payloads before handing them back.
@@ -2325,6 +2328,11 @@ fn select_by_location(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> 
 /// Bounds each distance-buffered selector's complexity and their combined retained storage.
 /// Zero-distance selection uses original geometries without a buffer budget.
 fn select_by_location_with_limits(inp: &dyn Inputs, p: &Json, limit: usize, bytes: usize) -> Result<ToolResult, String> {
+    select_by_location_with_work_limit(inp, p, limit, bytes, MAX_UNINDEXED_SELECTOR_CHECKS)
+}
+
+/// Injects the unindexed scan allowance for small deterministic work-exhaustion regressions.
+fn select_by_location_with_work_limit(inp: &dyn Inputs, p: &Json, limit: usize, bytes: usize, checks: usize) -> Result<ToolResult, String> {
     let ds = input(inp, p, "input")?;
     let sel_ds = input(inp, p, "select")?;
     let dist = to_metres(num(p, "distance").unwrap_or(0.0).max(0.0), s(p, "units"))?;
@@ -2365,17 +2373,34 @@ fn select_by_location_with_limits(inp: &dyn Inputs, p: &Json, limit: usize, byte
         storage.charge(index.storage_bytes())?;
     }
     let invert = s(p, "invert") == "Yes";
-    let hits: Vec<usize> = (0..ds.features.len())
-        .filter(|r| {
-            let Some(g) = ds.features.get(*r).and_then(|f| f.geometry.as_ref()) else {
-                return false;
-            };
-            let gg = to_geo(g);
-            let ext = merc_extent(&gg);
-            let hit = index.any_candidate(&ext, |i| selectors.get(i).is_some_and(|(s, e)| e.intersects(&ext) && s.intersects(&gg)));
-            hit != invert
-        })
-        .collect();
+    let bounded_scan = dist > 0.0 && index.grid.is_none();
+    let mut remaining_checks = checks;
+    let mut hits = Vec::new();
+    for (r, feature) in ds.features.iter().enumerate() {
+        let Some(g) = feature.geometry.as_ref() else { continue };
+        let gg = to_geo(g);
+        let ext = merc_extent(&gg);
+        let mut exhausted = false;
+        let hit = index.any_candidate(&ext, |i| {
+            if bounded_scan {
+                if remaining_checks == 0 {
+                    exhausted = true;
+                    // Stop the candidate traversal; this sentinel is never used as a match.
+                    return true;
+                }
+                remaining_checks -= 1;
+            }
+            selectors.get(i).is_some_and(|(s, e)| e.intersects(&ext) && s.intersects(&gg))
+        });
+        if exhausted {
+            return Err(format!(
+                "Distance selection exceeds its limit of {checks} unindexed selector checks; select fewer features or selectors"
+            ));
+        }
+        if hit != invert {
+            hits.push(r);
+        }
+    }
     let n = hits.len();
     let mut messages = vec![format!("Selected {n} features in {}", ds.name)];
     let without = ds.features.iter().filter(|f| f.geometry.is_none()).count();
@@ -6646,6 +6671,42 @@ mod tests {
             let Output::Selection { rows, .. } = output.output else { panic!("expected selection") };
             assert_eq!(rows, if invert == "No" { vec![0] } else { vec![] });
         }
+    }
+
+    /// Without a grid, the first target matches immediately and the next misses both
+    /// selectors. Exhaustion must discard the earlier selection, including when inverted.
+    #[test]
+    fn distance_selection_bounds_actual_unindexed_checks() {
+        let centre = Geometry::Point(Coord::new(0.0, 0.0));
+        let mut selectors = Dataset::new("selectors", GeometryType::Point, vec![]);
+        for _ in 0..2 {
+            selectors.push(Some(centre.clone()), vec![]);
+        }
+        let mut points = Dataset::new("points", GeometryType::Point, vec![]);
+        points.push(Some(centre), vec![]);
+        points.push(Some(Geometry::Point(Coord::new(0.008, 0.008))), vec![]);
+        let m = Map(HashMap::from([("points".into(), points), ("selectors".into(), selectors)]));
+        for invert in ["No", "Yes"] {
+            let p = serde_json::json!({"input":"points", "select":"selectors", "distance":1, "invert":invert});
+            let result = select_by_location_with_work_limit(&m, &p, MAX_BUFFER_VERTICES, MAX_BUFFER_BYTES, 3).unwrap();
+            let Output::Selection { rows, .. } = result.output else { panic!("expected selection") };
+            assert_eq!(rows, if invert == "No" { vec![0] } else { vec![1] });
+            assert!(
+                select_by_location_with_work_limit(&m, &p, MAX_BUFFER_VERTICES, MAX_BUFFER_BYTES, 2)
+                    .unwrap_err()
+                    .contains("unindexed selector checks")
+            );
+        }
+        let p = serde_json::json!({"input":"points", "select":"selectors", "distance":0});
+        assert!(select_by_location_with_work_limit(&m, &p, MAX_BUFFER_VERTICES, MAX_BUFFER_BYTES, 0).is_ok());
+        // Seventeen small identical selectors fit the grid; indexed selection needs no
+        // allowance for unindexed checks, even with the same match/miss targets.
+        let mut m = m;
+        for _ in 2..17 {
+            m.0.get_mut("selectors").unwrap().push(Some(Geometry::Point(Coord::new(0.0, 0.0))), vec![]);
+        }
+        let p = serde_json::json!({"input":"points", "select":"selectors", "distance":1});
+        assert!(select_by_location_with_work_limit(&m, &p, MAX_BUFFER_VERTICES, MAX_BUFFER_BYTES, 0).is_ok());
     }
 
     #[test]
