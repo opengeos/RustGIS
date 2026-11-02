@@ -7,8 +7,9 @@
 //! both up the same way. Written from the specifications: <https://www.cityjson.org/specs/>.
 //!
 //! The file is hostile: vertex indexes are checked, the nesting is fixed by the geometry types, and
-//! the faces merged are bounded. Each object is parsed on its own and then dropped, so a large file
-//! doesn't have to fit in memory as a JSON tree.
+//! the faces merged are bounded. Each object's geometry is parsed on its own and dropped once its rows
+//! are built; its attributes and the root metadata are kept as JSON values until the layers are
+//! written.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
@@ -870,6 +871,10 @@ fn layers(stem: &str, rows: Vec<Row>, built: &[Built], crs: Crs) -> Result<Vec<(
         let z_dropped = rows.iter().filter(|r| r.z_dropped).count();
         // What couldn't be converted can't come back by defining the projection again.
         ds.crs_incomplete = rows.iter().any(|r| r.unconverted);
+        // Rows and attributes are paired by position: one missing would shift every later row.
+        if table.features.len() != rows.len() {
+            return Err(DataError::Format(format!("{name}: {} rows were built but {} have attributes", rows.len(), table.features.len())));
+        }
         for (row, feature) in rows.into_iter().zip(table.features.iter()) {
             ds.push_next(row.geometry, order.iter().map(|&i| feature.attrs.get(i).cloned().unwrap_or(Value::Null)).collect());
         }
