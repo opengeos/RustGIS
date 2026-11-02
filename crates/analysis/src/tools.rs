@@ -6123,6 +6123,49 @@ mod tests {
     }
 
     #[test]
+    fn a_tool_cancelled_while_it_runs_stops_with_how_far_it_came() {
+        // 2,000 points on 400 × 400 cells: 320 M cell-point pairs, far longer than the watcher takes
+        // to notice the first rows.
+        let mut pts = Dataset::new("pts", GeometryType::Point, vec![Field::new("v", FieldType::Double)]);
+        for i in 0..2_000 {
+            let (x, y) = (f64::from(i % 50) * 0.2, f64::from(i / 50) * 0.25);
+            pts.push(Some(Geometry::Point(Coord::new(x, y))), vec![Value::Float(f64::from(i))]);
+        }
+        let m = Map(HashMap::from([("pts".to_string(), pts)]));
+        let params = serde_json::json!({"input": "pts", "field": "v", "extent": "0,0,10,10", "pixelSize": 0.025});
+        // Asked to stop before it starts: it never does.
+        let control = crate::control::Control::new();
+        control.cancel();
+        assert_eq!(
+            crate::run_with("idwInterpolation", &m, &params, &control).err().as_deref(),
+            Some("IDW Interpolation was cancelled 0% of the way through its current step")
+        );
+        // Asked once it has made some rows: it stops well before the end.
+        let control = crate::control::Control::new();
+        let watcher = {
+            let control = control.clone();
+            std::thread::spawn(move || {
+                let end = std::time::Instant::now() + std::time::Duration::from_secs(60);
+                while control.progress().is_none_or(|(done, _)| done == 0) && std::time::Instant::now() < end {
+                    std::thread::yield_now();
+                }
+                control.cancel();
+            })
+        };
+        let r = crate::run_with("idwInterpolation", &m, &params, &control);
+        let _ = watcher.join();
+        let e = r.err().unwrap_or_default();
+        assert!(e.starts_with("IDW Interpolation was cancelled "), "{e}");
+        let (done, total) = control.progress().unwrap_or_default();
+        assert!(total == 400 && done < total, "{done} of {total} rows");
+        // Without a control nothing changes.
+        assert!(
+            crate::run("idwInterpolation", &m, &serde_json::json!({"input": "pts", "field": "v", "extent": "0,0,10,10", "pixelSize": 1.0}))
+                .is_ok()
+        );
+    }
+
+    #[test]
     fn idw_interpolation_writes_a_raster() {
         let m = inputs();
         let r =

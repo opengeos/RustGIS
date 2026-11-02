@@ -11,6 +11,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod attribute_join;
+pub mod control;
 pub mod convert;
 pub mod density;
 pub mod dggs;
@@ -414,4 +415,23 @@ pub fn run(id: &str, inputs: &dyn Inputs, params: &Value) -> Result<ToolResult, 
         None => (spec.run)(inputs, &p),
     }))
     .unwrap_or_else(|_| Err(format!("{} failed unexpectedly", spec.name)))
+}
+
+/// [`run`] under `control`: setting its flag stops the tool at its next check, and its count
+/// follows the tool's progress (see [`control`]). A run cancelled before it returns is an error
+/// saying how far it came, whatever the tool gave back: a tool may stop early however suits it,
+/// and what it made by then is never taken for its result.
+pub fn run_with(id: &str, inputs: &dyn Inputs, params: &Value, control: &std::sync::Arc<control::Control>) -> Result<ToolResult, String> {
+    let _current = control::install(Some(control.clone()));
+    let res = run(id, inputs, params);
+    if !control.is_cancelled() {
+        return res;
+    }
+    let name = tool(id).map_or(id, |t| t.name);
+    Err(match control.progress() {
+        Some((done, total)) => {
+            format!("{name} was cancelled {}% of the way through its current step", done.saturating_mul(100) / total.max(1))
+        }
+        None => format!("{name} was cancelled"),
+    })
 }

@@ -23703,3 +23703,20 @@ fn shapefile_exports_say_which_field_names_they_changed() {
     assert!(changed(&s, mark).is_empty(), "{:?}", s.notices_since(mark));
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn a_cancelled_tool_leaves_the_map_as_it_was_and_says_so_in_the_history() {
+    let mut s = world();
+    let layers = s.map().layers.len();
+    let control = rustgis_analysis::control::Control::new();
+    control.cancel();
+    let params = json!({"input": "Cities", "field": "pop_max", "pixelSize": 5.0});
+    let e = crate::cmd::gp::run_tool_with(&mut s, "idwInterpolation", &params, &control).err().unwrap_or_default();
+    assert!(e.starts_with("IDW Interpolation was cancelled"), "{e}");
+    assert_eq!(s.map().layers.len(), layers, "nothing was added");
+    let last = s.project.gp_history.last().map(|r| (r.ok, r.messages.clone()));
+    assert_eq!(last, Some((false, vec![e])));
+    // The same run, not cancelled, adds its raster.
+    crate::cmd::gp::run_tool(&mut s, "idwInterpolation", &params).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(s.map().layers.len(), layers + 1);
+}
