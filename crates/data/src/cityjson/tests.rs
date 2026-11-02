@@ -597,7 +597,8 @@ fn objects_that_cant_be_converted_mark_the_layer() {
     let bytes = doc(json!(vertices), json!({"a": triangle(0)}));
     let out = read("m.city.json", &bytes, Some(Crs::WebMercator)).unwrap();
     assert!(!out[0].0.crs_incomplete);
-    assert_eq!(messages_of(&out), Vec::<String>::new());
+    // Only that the system given goes over the one the file names (`doc`'s EPSG:4326).
+    assert_eq!(messages_of(&out), vec!["the file names EPSG:4326, and is read in EPSG:3857, the coordinate system given".to_string()]);
     let bytes = doc(json!(vertices), json!({"b": triangle(3)}));
     let e = read("m.city.json", &bytes, Some(Crs::WebMercator)).unwrap_err().to_string();
     assert!(e.contains("no object could be converted"), "{e}");
@@ -905,4 +906,44 @@ fn a_height_too_large_to_be_a_number_is_said() {
     assert_eq!(value(&out[0].0, 0, "z_max"), crate::Value::Float(1e308));
     let out = read("m.city.json", &doc(json!([[0, 0, -10], [1, 1, 20]]), objects), None).unwrap();
     assert!(!says(&out, "too far apart"), "{:?}", messages_of(&out));
+}
+
+/// A line of one point at a higher level doesn't take the place of a line drawn at a lower one, and
+/// an instance at a lower level, left out, isn't said to be drawn.
+#[test]
+fn what_draws_nothing_or_is_left_out_takes_no_place() {
+    let vertices = json!([[0, 0, 0], [1, 0, 0], [5, 5, 0]]);
+    let objects = json!({"a": {"type": "Road", "geometry": [
+        {"type": "MultiLineString", "lod": "1", "boundaries": [[0, 1]]},
+        {"type": "MultiLineString", "lod": "2", "boundaries": [[2]]},
+    ]}});
+    let out = read("m.city.json", &doc(vertices.clone(), objects), None).unwrap();
+    assert_eq!(geometry(&out[0].0, 0), Some(&Geometry::Line(vec![vec![Coord::new(0.0, 0.0), Coord::new(1.0, 0.0)]])));
+    assert_eq!(value(&out[0].0, 0, "lod"), crate::Value::Text("1".into()));
+    let instance = |lod: &str| json!({"type": "GeometryInstance", "lod": lod, "template": 0, "boundaries": [2], "transformationMatrix": [1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1]});
+    let objects = json!({"a": {"type": "SolitaryVegetationObject", "geometry": [instance("1"), {"type": "MultiPoint", "lod": "2", "boundaries": [0]}]}});
+    let out = read("m.city.json", &doc(vertices.clone(), objects), None).unwrap();
+    assert!(!says(&out, "geometry instances"), "{:?}", messages_of(&out));
+    let objects = json!({"a": {"type": "SolitaryVegetationObject", "geometry": [instance("2"), {"type": "MultiPoint", "lod": "1", "boundaries": [0]}]}});
+    let out = read("m.city.json", &doc(vertices, objects), None).unwrap();
+    assert!(says(&out, "1 geometry instances are drawn"), "{:?}", messages_of(&out));
+}
+
+/// A system given over the one the file names is said; one that is the same, or a file naming none,
+/// says nothing of it.
+#[test]
+fn a_system_given_over_the_one_named_is_said() {
+    let named = json!({"metadata": {"referenceSystem": "https://www.opengis.net/def/crs/EPSG/0/7415"}});
+    let points = json!([[85000, 447000, 0], [85010, 447010, 5]]);
+    let objects = json!({"a": {"type": "Road", "geometry": [{"type": "MultiPoint", "boundaries": [0, 1]}]}});
+    let bytes = doc_with(points.clone(), objects.clone(), named);
+    let out = read("m.city.json", &bytes, Crs::from_epsg(32631)).unwrap();
+    assert!(says(&out, "the coordinate system given"), "{:?}", messages_of(&out));
+    assert!(out.iter().all(|(ds, _)| ds.crs == Crs::from_epsg(32631)));
+    let out = read("m.city.json", &bytes, Crs::from_epsg(28992)).unwrap();
+    assert!(!says(&out, "the coordinate system given"), "{:?}", messages_of(&out));
+    let mut root: Json = serde_json::from_slice(&doc(points, objects)).unwrap();
+    root.as_object_mut().unwrap().remove("metadata");
+    let out = read("m.city.json", root.to_string().as_bytes(), Crs::from_epsg(28992)).unwrap();
+    assert!(!says(&out, "the coordinate system given"), "{:?}", messages_of(&out));
 }

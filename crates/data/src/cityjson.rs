@@ -393,7 +393,14 @@ fn coordinate_system(
 ) -> Result<Crs> {
     let within = |x: f64, y: f64| vertices.iter().all(|p| p[0].abs() <= x && p[1].abs() <= y);
     let crs = match (given, named_system(metadata)) {
-        (Some(crs), _) => crs,
+        (Some(crs), named) => {
+            if let Some(own) = named.and_then(known_system)
+                && own != crs
+            {
+                notes.push(format!("the file names {}, and is read in {}, the coordinate system given", own.label(), crs.label()));
+            }
+            crs
+        }
         (None, Some(system)) => known_system(system).ok_or_else(|| {
             let system: String = system.chars().take(80).collect();
             DataError::Format(format!("{file_name}: it names a coordinate system RustGIS doesn't know ({system})"))
@@ -602,8 +609,10 @@ struct ObjectRows {
 }
 
 /// A family's parts at the highest level of detail an object has: its other levels are other
-/// pictures of it, not more of it, as for its surfaces.
+/// pictures of it, not more of it, as for its surfaces. Parts that draw something go before any
+/// level: a line of one point at LoD 2 doesn't take the place of a road drawn at LoD 1.
 struct Highest<T> {
+    drawable: bool,
     rank: f64,
     lod: Option<String>,
     parts: Vec<T>,
@@ -611,18 +620,19 @@ struct Highest<T> {
 
 impl<T> Default for Highest<T> {
     fn default() -> Self {
-        Highest { rank: f64::NEG_INFINITY, lod: None, parts: Vec::new() }
+        Highest { drawable: false, rank: f64::NEG_INFINITY, lod: None, parts: Vec::new() }
     }
 }
 
 impl<T> Highest<T> {
     /// Adds a geometry's parts, which the caller has found aren't empty.
-    fn add(&mut self, g: &RawGeometry, parts: impl IntoIterator<Item = T>) {
+    fn add(&mut self, g: &RawGeometry, parts: impl IntoIterator<Item = T>, drawable: bool) {
         let rank = lod_number(g.lod.as_ref());
-        if rank > self.rank {
-            *self = Highest { rank, lod: lod_text(g.lod.as_ref()), parts: Vec::new() };
+        let key = |d: bool, r: f64| (d, r);
+        if key(drawable, rank) > key(self.drawable, self.rank) {
+            *self = Highest { drawable, rank, lod: lod_text(g.lod.as_ref()), parts: Vec::new() };
         }
-        if rank == self.rank {
+        if drawable == self.drawable && rank == self.rank {
             self.parts.extend(parts);
         }
     }
@@ -656,7 +666,8 @@ fn object_rows(
         }
     };
     let (mut surfaces, mut solid) = (Vec::<Surface>::new(), false);
-    let (mut points, mut lines) = (Highest::<P3>::default(), Highest::<Vec<P3>>::default());
+    // Points with whether each is a geometry instance's, which is said only when it is drawn.
+    let (mut points, mut lines) = (Highest::<(P3, bool)>::default(), Highest::<Vec<P3>>::default());
     for g in geometries {
         let depth = match g.ty.as_str() {
             "MultiSurface" | "CompositeSurface" => 0,
@@ -667,7 +678,7 @@ fn object_rows(
                     Some(p) if p.is_empty() => {}
                     Some(p) => {
                         heights(&p);
-                        points.add(g, p);
+                        points.add(g, p.into_iter().map(|p| (p, false)), true);
                     }
                     None => counts.bad_geometries += 1,
                 }
@@ -677,8 +688,7 @@ fn object_rows(
                 // Its template isn't placed: it is drawn at its reference point.
                 match at(&g.boundaries, vertices).as_deref() {
                     Some([p, ..]) => {
-                        points.add(g, [*p]);
-                        counts.instances += 1;
+                        points.add(g, [(*p, true)], true);
                     }
                     _ => counts.bad_geometries += 1,
                 }
@@ -691,7 +701,8 @@ fn object_rows(
                         let parts: Vec<Vec<P3>> = parts.into_iter().filter(|p| !p.is_empty()).collect();
                         parts.iter().for_each(|p| heights(p));
                         if !parts.is_empty() {
-                            lines.add(g, parts);
+                            let drawable = parts.iter().any(|p| p.iter().any(|q| p.first().is_some_and(|f| f[..2] != q[..2])));
+                            lines.add(g, parts, drawable);
                         }
                     }
                     None => counts.bad_geometries += 1,
@@ -742,6 +753,8 @@ fn object_rows(
         push(Family::Line, line_lod, geometry, heights_differ(lines.iter().flatten()), counts);
     }
     let Highest { lod: point_lod, parts: points, .. } = points;
+    counts.instances += points.iter().filter(|(_, instance)| *instance).count();
+    let points: Vec<P3> = points.into_iter().map(|(p, _)| p).collect();
     if !points.is_empty() {
         let geometry = points.iter().all(finite).then(|| match points.as_slice() {
             [p] => Geometry::Point(Coord::new(p[0], p[1])),
