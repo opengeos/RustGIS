@@ -23,9 +23,9 @@
 //!
 //! Refused, by name: an empty answer (a service refuses a query that way), a JSON answer (the
 //! service's error, or another format), a count, ids or an extent, curves, shape buffers,
-//! multipatches, a point with more than one vertex, coordinates without a transform, and far more
-//! attribute values than the answer's size explains. Answers are hostile input: every length is
-//! checked, and nothing is read past the end.
+//! multipatches, a point with more than one vertex, coordinates without a transform, and rows that
+//! would take more than 512 MB. Answers are hostile input: every length is checked, and nothing is
+//! read past the end.
 
 use crate::{DataError, Dataset, Field, FieldType, Geometry, GeometryType, ReadReport, Result, Value};
 use rustgis_geom::Coord;
@@ -37,10 +37,20 @@ fn invalid(message: impl std::fmt::Display) -> DataError {
 /// What every error of this reader starts with.
 const PREFIX: &str = "ArcGIS protocol buffer: ";
 
-/// Most attribute values an answer may hold whatever its size: a few bytes can declare many fields
-/// for many features, and each value takes memory of its own. Past this, an answer must be at
-/// least a byte per value, which every value it sends takes.
-const MAX_SPARSE_VALUES: usize = 4 << 20;
+/// Most memory an answer's rows may take, whatever its size: a few bytes can declare many fields
+/// for many features, and each feature and each of its values (sent or not) takes memory of its
+/// own. A page is bounded by its service's record limit, far below this.
+const MAX_ROW_BYTES: usize = 512 << 20;
+
+/// The memory `features` rows of `fields` values take, before their text and geometries.
+fn row_bytes(features: usize, fields: usize) -> usize {
+    let row = std::mem::size_of::<crate::Feature>().saturating_add(fields.saturating_mul(std::mem::size_of::<Value>()));
+    features.saturating_mul(row)
+}
+
+fn too_many_rows(features: usize, fields: usize) -> DataError {
+    invalid(format!("{features} features of {fields} fields would take more than {} MB", MAX_ROW_BYTES >> 20))
+}
 
 /// The format's geometry types (`GeometryType`).
 const POINT: u64 = 0;
@@ -72,7 +82,7 @@ pub fn read(bytes: &[u8], name: &str) -> Result<(Dataset, ReadReport)> {
     let mut page = read_page(bytes, name)?;
     if page.exceeded_transfer_limit {
         page.report.messages.push(format!(
-            "the service sent its first {} features only (its record limit); the rest aren't in this answer",
+            "the service sent {} features only (its record limit); the rest aren't in this answer",
             page.dataset.features.len()
         ));
     }
@@ -116,9 +126,25 @@ pub fn read_page(bytes: &[u8], name: &str) -> Result<Page> {
             (11, 0) => has_m = r.varint()? != 0,
             (12, 2) => transform = read_transform(r.message()?)?,
             (13, 2) => declared.push(field(r.message()?)?),
-            (15, 2) => features.push(r.message()?),
+            (15, 2) => {
+                features.push(r.message()?);
+                // Checked as features come, since even an empty one takes memory.
+                if row_bytes(features.len(), declared.len()) > MAX_ROW_BYTES {
+                    return Err(too_many_rows(features.len(), declared.len()));
+                }
+            }
             (_, wire) => r.skip(wire)?,
         }
+    }
+    // Fields may come after the features.
+    if row_bytes(features.len(), declared.len()) > MAX_ROW_BYTES {
+        return Err(too_many_rows(features.len(), declared.len()));
+    }
+    // A point layer's type is the format's default, which an answer leaves out.
+    let shape_kind = geometry_type.unwrap_or(POINT);
+    // Refused whether or not a feature has coordinates, so such a layer isn't read as empty.
+    if shape_kind == MULTIPATCH {
+        return Err(invalid("multipatch geometries aren't read"));
     }
 
     let mut report = ReadReport::default();
@@ -128,8 +154,10 @@ pub fn read_page(bytes: &[u8], name: &str) -> Result<Page> {
     let mut names = std::collections::HashSet::new();
     let (mut repeated, mut not_read) = (0usize, 0usize);
     let mut object_id_field = None;
-    for (name, number) in declared {
-        let Some(kind) = kind(number) else {
+    let mut tally = Tally::default();
+    for (name, number, utf8) in declared {
+        tally.not_utf8 += usize::from(!utf8);
+        let Some(read_as) = kind(number) else {
             not_read += 1;
             columns.push(None);
             continue;
@@ -143,8 +171,8 @@ pub fn read_page(bytes: &[u8], name: &str) -> Result<Page> {
         if number == OID && object_id_field.is_none() {
             object_id_field = Some(fields.len());
         }
-        columns.push(Some((fields.len(), kind)));
-        fields.push(Field::new(name, kind.field_type()));
+        columns.push(Some((fields.len(), read_as)));
+        fields.push(Field::new(name, read_as.field_type()));
     }
     if repeated > 0 {
         report.messages.push(format!("{repeated} fields repeat an earlier field's name and are left out"));
@@ -152,16 +180,6 @@ pub fn read_page(bytes: &[u8], name: &str) -> Result<Page> {
     if not_read > 0 {
         report.messages.push(format!("{not_read} fields hold geometries, blobs or rasters, which aren't read, and are left out"));
     }
-    let values = features.len().saturating_mul(fields.len());
-    if values > MAX_SPARSE_VALUES.max(bytes.len()) {
-        return Err(invalid(format!(
-            "{} features of {} fields are far more values than an answer of {} bytes holds",
-            features.len(),
-            fields.len(),
-            bytes.len()
-        )));
-    }
-
     let (code, wkt) = match reference {
         Some(bytes) => spatial_reference(bytes)?,
         None => (None, None),
@@ -175,18 +193,15 @@ pub fn read_page(bytes: &[u8], name: &str) -> Result<Page> {
         report.messages.push(format!("coordinate system {code} can't be used; coordinates are read as longitude/latitude"));
     }
 
-    // A point layer's type is the format's default, which an answer leaves out.
-    let kind = geometry_type.unwrap_or(POINT);
-    let layer_type = match kind {
+    let layer_type = match shape_kind {
         POINT | MULTIPOINT => GeometryType::Point,
         POLYLINE => GeometryType::Polyline,
         POLYGON => GeometryType::Polygon,
         _ => GeometryType::None,
     };
-    let shape = Shape { kind, transform: &transform, has_z, has_m };
+    let shape = Shape { kind: shape_kind, transform: &transform, has_z, has_m };
     let mut ds = Dataset::new(name, GeometryType::None, fields);
     let width = ds.fields.len();
-    let mut tally = Tally::default();
     let (mut any_geometry, mut with_zm, mut unprojected) = (false, 0usize, 0usize);
     for (n, bytes) in features.into_iter().enumerate() {
         let (values, geometry) = feature(bytes, &columns, width, &shape, &mut tally).map_err(|e| match e {
@@ -197,7 +212,7 @@ pub fn read_page(bytes: &[u8], name: &str) -> Result<Page> {
         with_zm += usize::from(geometry.is_some() && (has_z || has_m));
         let geometry = match (geometry, &to_lonlat) {
             (Some(g), Some(t)) => {
-                let g = crate::filegdb::to_lonlat_geometry(g, t);
+                let g = crate::io::geometry_to_lonlat(&g, t);
                 unprojected += usize::from(g.is_none());
                 g
             }
@@ -209,8 +224,20 @@ pub fn read_page(bytes: &[u8], name: &str) -> Result<Page> {
         ds.geometry_type = layer_type;
     }
     ds.crs = crs;
+    // What couldn't be converted can't come back by defining the projection again.
+    ds.crs_incomplete = unprojected > 0;
+    // Assumed, so said: an answer that names no coordinate system.
+    if any_geometry && code.is_none() && wkt.is_none() {
+        report.messages.push("the answer names no coordinate system; coordinates are read as longitude/latitude".into());
+    }
     if tally.unreadable > 0 {
         report.messages.push(format!("{} values don't fit their field's type and are left empty", tally.unreadable));
+    }
+    if tally.not_utf8 > 0 {
+        report.messages.push(format!(
+            "{} values or field names aren't valid UTF-8; the bytes that can't be read are replaced with U+FFFD",
+            tally.not_utf8
+        ));
     }
     if tally.flat_rings > 0 {
         report.messages.push(format!("{} polygon rings have no area and are left out", tally.flat_rings));
@@ -449,18 +476,22 @@ fn read_transform(bytes: &[u8]) -> Result<Transform> {
     Ok(t)
 }
 
-/// A field's name and its type's number (`FieldType`).
-fn field(bytes: &[u8]) -> Result<(String, u64)> {
-    let (mut name, mut number) = (String::new(), 0);
+/// A field's name, its type's number (`FieldType`) and whether the name was valid UTF-8.
+fn field(bytes: &[u8]) -> Result<(String, u64, bool)> {
+    let (mut name, mut number, mut utf8) = (String::new(), 0, true);
     let mut r = Reader::new(bytes);
     while !r.done() {
         match r.key()? {
-            (1, 2) => name = String::from_utf8_lossy(r.message()?).into_owned(),
+            (1, 2) => {
+                let raw = r.message()?;
+                utf8 = std::str::from_utf8(raw).is_ok();
+                name = String::from_utf8_lossy(raw).into_owned();
+            }
             (2, 0) => number = r.varint()?,
             (_, wire) => r.skip(wire)?,
         }
     }
-    Ok((name, number))
+    Ok((name, number, utf8))
 }
 
 /// The code of an answer's coordinate system (its `latestWkid` when RustGIS knows it, else its
@@ -528,6 +559,8 @@ struct Tally {
     unreadable: usize,
     /// Polygon rings without area.
     flat_rings: usize,
+    /// Text values and field names that aren't valid UTF-8.
+    not_utf8: usize,
 }
 
 /// A feature's values, one per kept field, and its geometry.
@@ -553,6 +586,7 @@ fn feature(
                 {
                     let (value, fits) = value(&cell, kind);
                     tally.unreadable += usize::from(!fits);
+                    tally.not_utf8 += usize::from(kind == Kind::Text && matches!(cell, Cell::Text(b) if std::str::from_utf8(b).is_err()));
                     *v = value;
                 }
             }
@@ -684,19 +718,32 @@ fn part(c: &mut Reader, count: Option<usize>, shape: &Shape) -> Result<Vec<Coord
 
 /// A geometry. One without coordinates is no geometry.
 fn read_geometry(bytes: &[u8], shape: &Shape, tally: &mut Tally) -> Result<Option<Geometry>> {
+    // Parts with vertices: an empty part adds nothing, and kept, a few bytes of them would take
+    // memory of their own. Whether the geometry gave lengths at all is kept apart.
     let mut lengths = Vec::new();
+    let mut counted = false;
     // Packed, possibly in several blocks, or one number a field. One block, the usual, isn't copied.
     let mut coords: std::borrow::Cow<[u8]> = std::borrow::Cow::Borrowed(&[]);
     let mut r = Reader::new(bytes);
     while !r.done() {
         match r.key()? {
             (2, 2) => {
+                counted = true;
                 let mut packed = Reader::new(r.message()?);
                 while !packed.done() {
-                    lengths.push(packed.varint()?);
+                    let n = packed.varint()?;
+                    if n > 0 {
+                        lengths.push(n);
+                    }
                 }
             }
-            (2, 0) => lengths.push(r.varint()?),
+            (2, 0) => {
+                counted = true;
+                let n = r.varint()?;
+                if n > 0 {
+                    lengths.push(n);
+                }
+            }
             (3, 2) => {
                 let block = r.message()?;
                 if coords.is_empty() {
@@ -710,7 +757,7 @@ fn read_geometry(bytes: &[u8], shape: &Shape, tally: &mut Tally) -> Result<Optio
         }
     }
     if coords.is_empty() {
-        if lengths.iter().any(|&n| n > 0) {
+        if !lengths.is_empty() {
             return Err(invalid("a part has vertices, but the geometry has no coordinates"));
         }
         return Ok(None);
@@ -720,7 +767,7 @@ fn read_geometry(bytes: &[u8], shape: &Shape, tally: &mut Tally) -> Result<Optio
     }
     let mut c = Reader::new(&coords);
     let mut parts = Vec::with_capacity(lengths.len().min(coords.len()));
-    if lengths.is_empty() {
+    if !counted {
         parts.push(part(&mut c, None, shape)?);
     }
     for length in lengths {
@@ -748,7 +795,6 @@ fn read_geometry(bytes: &[u8], shape: &Shape, tally: &mut Tally) -> Result<Optio
             (!parts.is_empty()).then_some(Geometry::Line(parts))
         }
         POLYGON => polygon(parts, tally),
-        MULTIPATCH => return Err(invalid("multipatch geometries aren't read")),
         kind => return Err(invalid(format!("geometries of type {kind} aren't read"))),
     })
 }

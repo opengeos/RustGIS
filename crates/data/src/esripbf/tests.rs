@@ -57,6 +57,11 @@ fn answer(result: &[Vec<u8>]) -> Vec<u8> {
     [message(1, b"10.0"), message(2, &message(1, &result.concat()))].concat()
 }
 
+/// A spatial reference of longitude/latitude (WKID 4326), as services send with `outSR=4326`.
+fn lonlat() -> Vec<u8> {
+    message(8, &number(1, 4326))
+}
+
 fn field(name: &str, ty: u64) -> Vec<u8> {
     message(13, &[message(1, name.as_bytes()), number(2, ty)].concat())
 }
@@ -126,6 +131,7 @@ fn err(bytes: &[u8]) -> String {
 fn points() -> Vec<u8> {
     answer(&[
         number(7, POINT),
+        lonlat(),
         transform(false, 0.5, 10.0, 20.0),
         field("OBJECTID", OID),
         field("NAME", 4),
@@ -194,7 +200,12 @@ fn fields_keep_the_values_the_same_query_gives_as_geojson() {
 
 #[test]
 fn line_parts_start_over_and_an_upper_left_origin_counts_down() {
-    let bytes = answer(&[number(7, POLYLINE), transform(true, 1.0, 0.0, 100.0), feature(&[geometry(&[2, 2], &[1, 1, 2, 0, 5, 5, 0, 1])])]);
+    let bytes = answer(&[
+        number(7, POLYLINE),
+        lonlat(),
+        transform(true, 1.0, 0.0, 100.0),
+        feature(&[geometry(&[2, 2], &[1, 1, 2, 0, 5, 5, 0, 1])]),
+    ]);
     let (ds, report) = read(&bytes, "t").unwrap();
     assert_eq!(ds.geometry_type, GeometryType::Polyline);
     assert_eq!(ds.features[0].geometry, Some(Geometry::Line(vec![vec![c(1.0, 99.0), c(3.0, 99.0)], vec![c(5.0, 95.0), c(5.0, 94.0)]])));
@@ -212,7 +223,7 @@ fn clockwise_rings_start_polygons_and_counterclockwise_ones_are_their_holes() {
         // A second outer ring: (20 0) (20 5) (25 5) (25 0) (20 0).
         20, 0, 0, 5, 5, 0, 0, -5, -5, 0,
     ];
-    let bytes = answer(&[number(7, POLYGON), transform(false, 1.0, 0.0, 0.0), feature(&[geometry(&[5, 5, 5], &coords)])]);
+    let bytes = answer(&[number(7, POLYGON), lonlat(), transform(false, 1.0, 0.0, 0.0), feature(&[geometry(&[5, 5, 5], &coords)])]);
     let (ds, report) = read(&bytes, "t").unwrap();
     let Some(Geometry::Polygon(polygons)) = &ds.features[0].geometry else { panic!("not a polygon") };
     assert_eq!(polygons.iter().map(Vec::len).collect::<Vec<_>>(), [2, 1]);
@@ -236,7 +247,7 @@ fn a_geometry_without_coordinates_is_no_geometry() {
 fn a_ring_without_area_is_left_out_and_said() {
     // A clockwise square, then three points on a line.
     let coords = [0, 0, 0, 10, 10, 0, 0, -10, -10, 0, 0, 0, 5, 0, 5, 0];
-    let bytes = answer(&[number(7, POLYGON), transform(false, 1.0, 0.0, 0.0), feature(&[geometry(&[5, 3], &coords)])]);
+    let bytes = answer(&[number(7, POLYGON), lonlat(), transform(false, 1.0, 0.0, 0.0), feature(&[geometry(&[5, 3], &coords)])]);
     let (ds, report) = read(&bytes, "t").unwrap();
     let Some(Geometry::Polygon(polygons)) = &ds.features[0].geometry else { panic!("not a polygon") };
     assert_eq!(polygons.len(), 1);
@@ -248,6 +259,7 @@ fn z_and_m_are_dropped_and_said_even_when_they_are_all_alike() {
     let bytes = answer(&[
         number(10, 1),
         number(11, 1),
+        lonlat(),
         transform(false, 1.0, 0.0, 0.0),
         feature(&[geometry(&[], &[4, 6, 100, 3])]),
         feature(&[geometry(&[], &[1, 1, 100, 3])]),
@@ -281,6 +293,57 @@ fn an_unknown_coordinate_system_is_said() {
 }
 
 #[test]
+fn an_answer_without_a_coordinate_system_is_said_to_be_read_as_longitude_latitude() {
+    let bytes = answer(&[transform(false, 1.0, 0.0, 0.0), feature(&[geometry(&[], &[1, 2])])]);
+    let (ds, report) = read(&bytes, "t").unwrap();
+    assert_eq!(ds.features[0].geometry, Some(Geometry::Point(c(1.0, 2.0))));
+    assert_eq!(report.messages, ["the answer names no coordinate system; coordinates are read as longitude/latitude"]);
+}
+
+#[test]
+fn coordinates_past_longitude_latitude_lose_their_geometry_and_the_layer_says_so() {
+    // Web Mercator: 1,113,195 m is 10°; 1,000,000,000 m comes out near 8,983°, beyond the world.
+    let bytes = answer(&[
+        message(8, &number(1, 3857)),
+        transform(false, 1.0, 0.0, 0.0),
+        feature(&[geometry(&[], &[1_113_195, 0])]),
+        feature(&[geometry(&[], &[1_000_000_000, 0])]),
+    ]);
+    let (ds, report) = read(&bytes, "t").unwrap();
+    assert!(ds.features[0].geometry.is_some());
+    assert_eq!(ds.features[1].geometry, None);
+    // Defining the projection again can't bring it back.
+    assert!(ds.crs_incomplete);
+    assert_eq!(report.messages, ["1 features have coordinates outside their coordinate system: they are kept without geometry"]);
+}
+
+#[test]
+fn text_that_isnt_utf8_is_read_with_replacements_and_said() {
+    let bytes = answer(&[
+        message(13, &[message(1, b"N\xffAME"), number(2, 4)].concat()),
+        feature(&[message(1, &message(1, b"a\xffb"))]),
+        feature(&[text("ok")]),
+    ]);
+    let (ds, report) = read(&bytes, "t").unwrap();
+    assert_eq!(ds.fields[0].name, "N\u{FFFD}AME");
+    assert_eq!(ds.features[0].attrs, [Value::Text("a\u{FFFD}b".into())]);
+    assert_eq!(ds.features[1].attrs, [Value::Text("ok".into())]);
+    assert_eq!(report.messages, ["2 values or field names aren't valid UTF-8; the bytes that can't be read are replaced with U+FFFD"]);
+}
+
+#[test]
+fn parts_without_vertices_add_nothing() {
+    let line = |lengths: &[u64], coords: &[i64]| {
+        answer(&[number(7, POLYLINE), lonlat(), transform(false, 1.0, 0.0, 0.0), feature(&[geometry(lengths, coords)])])
+    };
+    let (ds, report) = read(&line(&[0, 2, 0], &[1, 1, 2, 0]), "t").unwrap();
+    assert_eq!(ds.features[0].geometry, Some(Geometry::Line(vec![vec![c(1.0, 1.0), c(3.0, 1.0)]])));
+    assert!(report.messages.is_empty(), "{:?}", report.messages);
+    // Lengths that are all zero still count the coordinates: none of them belongs to a part.
+    assert!(err(&line(&[0], &[1, 1])).contains("more coordinates"));
+}
+
+#[test]
 fn repeated_names_and_unread_field_types_are_left_out_and_said() {
     let bytes = answer(&[
         field("NAME", 4),
@@ -309,7 +372,7 @@ fn a_page_cut_at_the_record_limit_says_so() {
     let bytes = answer(&[number(9, 1), field("OBJECTID", OID), feature(&[uint(1)])]);
     assert!(read_page(&bytes, "t").unwrap().exceeded_transfer_limit);
     let (_, report) = read(&bytes, "t").unwrap();
-    assert_eq!(report.messages, ["the service sent its first 1 features only (its record limit); the rest aren't in this answer"]);
+    assert_eq!(report.messages, ["the service sent 1 features only (its record limit); the rest aren't in this answer"]);
 }
 
 #[test]
@@ -329,6 +392,8 @@ fn refused_answers_say_why() {
     assert!(err(&with(geometry(&[1], &[1, 1, 1, 1]))).contains("more coordinates"));
     let multipatch = answer(&[number(7, MULTIPATCH), transform(false, 1.0, 0.0, 0.0), feature(&[geometry(&[], &[1, 1])])]);
     assert!(err(&multipatch).contains("multipatch"));
+    // Declared, without features: refused rather than read as an empty layer.
+    assert!(err(&answer(&[number(7, MULTIPATCH)])).contains("multipatch"));
     let untransformed = answer(&[feature(&[geometry(&[], &[1, 1])])]);
     assert!(err(&untransformed).contains("no transform"));
     let e = err(&answer(&[field("A", 4), feature(&[text("x"), text("y")])]));
@@ -337,10 +402,16 @@ fn refused_answers_say_why() {
 
 #[test]
 fn many_fields_times_many_empty_features_are_refused_before_they_take_memory() {
-    let mut parts: Vec<Vec<u8>> = (0..3000).map(|i| field(&format!("f{i}"), 4)).collect();
-    parts.extend((0..3000).map(|_| feature(&[])));
+    // About 50 kB that would ask for over 512 MB of rows, whatever the answer's size.
+    let mut parts: Vec<Vec<u8>> = (0..4000).map(|i| field(&format!("f{i}"), 4)).collect();
+    parts.extend((0..6000).map(|_| feature(&[])));
     let e = err(&answer(&parts));
-    assert!(e.contains("3000 features of 3000 fields"), "{e}");
+    assert!(e.contains("of 4000 fields would take more than 512 MB"), "{e}");
+    // Fields after the features count too.
+    let mut late: Vec<Vec<u8>> = (0..6000).map(|_| feature(&[])).collect();
+    late.extend((0..4000).map(|i| field(&format!("f{i}"), 4)));
+    let e = err(&answer(&late));
+    assert!(e.contains("6000 features of 4000 fields would take more than 512 MB"), "{e}");
 }
 
 #[test]

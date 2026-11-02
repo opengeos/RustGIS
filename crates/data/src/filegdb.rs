@@ -402,7 +402,7 @@ fn read_table(name: &str, t: &[u8], x: &[u8], wkid: Option<u32>) -> Result<Optio
 }
 
 /// Projects a geometry to longitude/latitude; `None` when a point can't be.
-pub(crate) fn to_lonlat_geometry(g: Geometry, t: &Transformer) -> Option<Geometry> {
+fn to_lonlat_geometry(g: Geometry, t: &Transformer) -> Option<Geometry> {
     let mut ok = true;
     let out = g.map_coords(&|c| t.to_lonlat(c).unwrap_or(Coord::new(f64::NAN, f64::NAN)));
     out.for_each_coord(|c: Coord| ok &= c.is_finite());
