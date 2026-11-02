@@ -585,9 +585,11 @@ straight line on the map), the lines the tool cuts along, so the shares of a fea
 cover without overlapping each other add up to its whole value, up to the overlay's rounding of the
 cut. The overlay rounds coordinates to a grid (the size of the zones near a feature over about a
 billion), so a part that leaves nothing outside its zone wider than that grid is the whole feature,
-and only parts outside every zone wider than the grid are reported. The percentages of classes that
-overlap each other can add up to more than 100. Like the other overlay tools, it works on the map,
-which ends at 85.05° north and south: parts of polygons beyond that are taken as lying along it, so
+and only parts outside every zone wider than the grid are reported. A feature so narrow next to its
+zones that the rounding can move its area by more than 1% is measured only roughly, unless it lies
+wholly inside a zone, and the tool says how many there are. The percentages of classes that overlap
+each other can add up to more than 100. Like the other overlay tools, it works on the map, which
+ends at 85.05° north and south: parts of polygons beyond that are taken as lying along it, so
 overlaps there have no area ([#1033](https://github.com/opengeos/RustGIS/issues/1033)); the tool
 says how many features reach beyond it.
 

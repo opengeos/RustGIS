@@ -2879,13 +2879,18 @@ impl OverlayGrid {
         OverlayGrid { step: if step.is_finite() { step } else { 0.0 }, rounding }
     }
 
-    /// Whether a polygon part is wider on average (its area over its perimeter) than the grid step:
-    /// more than the slivers rounding leaves along an edge, which are at most a step wide and so
-    /// half a step on average.
+    /// Whether the grid measures the feature finely: rounding can move its area by at most 1%.
+    fn resolves(&self) -> bool {
+        self.rounding <= 0.01
+    }
+
+    /// Whether a polygon part is wider on average than the grid step: more than the slivers
+    /// rounding leaves along an edge, which are less than a step wide. A part's average width is
+    /// twice its area over its perimeter (a long strip's perimeter is twice its length).
     fn wider(&self, g: &Geometry) -> bool {
         to_multipolygon(g).is_some_and(|mp| {
             let (area, perimeter) = merc_area_perimeter(&mp);
-            area > perimeter * self.step
+            2.0 * area > perimeter * self.step
         })
     }
 }
@@ -3336,6 +3341,13 @@ fn tabulate_intersection(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, Strin
     let mut missing = vec![0usize; sum_fields.len()];
     // With sum fields, the class features whose shares come to less than their whole value.
     let mut outside = 0usize;
+    // The class features meeting a zone, not wholly inside one, whose area the overlay's rounding
+    // can move by more than 1%: their parts are measured only roughly.
+    let mut unresolved = 0usize;
+    // The unions of the masks of the zones near a feature, for the outside check, by the zones'
+    // indices: neighbouring features near the same zones reuse them, as Clip reuses its masks.
+    const MAX_CACHED_UNIONS: usize = 8;
+    let mut near_unions: std::collections::VecDeque<(Vec<usize>, MultiPolygon<f64>)> = std::collections::VecDeque::new();
     for (ci, group) in class_groups.iter().enumerate() {
         for &r in &group.rows {
             let Some(g) = classes.features.get(r).and_then(|f| f.geometry.as_ref()).filter(|g| has_shape(g)) else { continue };
@@ -3350,8 +3362,8 @@ fn tabulate_intersection(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, Strin
             let whole = dissolved(g);
             let values: Vec<Option<f64>> = sum_fields.iter().map(|&f| classes.value(r, f).as_f64()).collect();
             let mut whole_area: Option<f64> = None;
-            // The overlay's grid for this feature and its zones, and how far rounding can move the
-            // feature's area relative to it: see [`OverlayGrid`].
+            // The overlay's grid for this feature and all the zones near it, for the outside check,
+            // which cuts it by their union: see [`OverlayGrid`].
             let near_merc = near.iter().filter_map(|&zi| zone_list.get(zi)).fold(Extent::EMPTY, |e, z| e.union(&z.merc_ext));
             let mut grid: Option<OverlayGrid> = None;
             let mut inside = false;
@@ -3366,13 +3378,16 @@ fn tabulate_intersection(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, Strin
                 }
                 inside = true;
                 let total = *whole_area.get_or_insert_with(|| map_area_m2(&whole));
-                let grid = grid.get_or_insert_with(|| OverlayGrid::new(&whole, &near_merc));
                 // A part within the overlay's rounding of the whole may be the whole feature, the cut
-                // only moving its vertices onto the grid: it is when what lies outside the zone, if
-                // anything, is no wider than the grid. Then the part is the whole, unrounded.
+                // only moving its vertices onto the grid: it is when nothing lies outside the zone,
+                // or, for a feature the grid resolves, nothing wider than the grid. (For one it
+                // doesn't, what lies outside can be as narrow as the feature itself.) Then the part
+                // is the whole, unrounded. The grid is the one this cut used, over the feature and
+                // this zone alone, so a wide zone nearby doesn't coarsen it.
+                let zone_grid = OverlayGrid::new(&whole, &zone.merc_ext);
                 if total > 0.0
-                    && piece_area >= total * (1.0 - grid.rounding)
-                    && part(&whole, &zone.mask, false).is_none_or(|rest| !grid.wider(&rest))
+                    && piece_area >= total * (1.0 - zone_grid.rounding)
+                    && part(&whole, &zone.mask, false).is_none_or(|rest| zone_grid.resolves() && !zone_grid.wider(&rest))
                 {
                     piece = whole.as_ref().clone();
                     piece_area = total;
@@ -3397,15 +3412,31 @@ fn tabulate_intersection(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, Strin
             }
             // With sum fields, a feature none of whose value is shared out, or with a part outside
             // every zone wider than the overlay's grid, isn't wholly shared out: what is left of it
-            // once each zone near it is taken away in turn. Zones that overlap each other can't hide
-            // such a part, as shares adding up to the whole could.
+            // once the zones near it, unioned, are taken away. Zones that overlap each other can't
+            // hide such a part, as shares adding up to the whole could.
+            let resolved = grid.get_or_insert_with(|| OverlayGrid::new(&whole, &near_merc)).resolves();
+            unresolved += usize::from(!held && !resolved);
             if !sum_fields.is_empty() && !held {
-                let lies_outside = !inside || {
+                // A feature the grid doesn't resolve may have parts too narrow to survive the cut,
+                // which are reported with it rather than as lying outside.
+                let lies_outside = (!inside && resolved) || {
                     let grid = grid.get_or_insert_with(|| OverlayGrid::new(&whole, &near_merc));
-                    let mut rest = Some(whole.as_ref().clone());
-                    for zone in near.iter().filter_map(|&zi| zone_list.get(zi)) {
-                        rest = rest.and_then(|r| part(&r, &zone.mask, false));
-                    }
+                    let rest = if let [zi] = near.as_slice() {
+                        zone_list.get(*zi).and_then(|z| part(&whole, &z.mask, false))
+                    } else {
+                        if let Some(pos) = near_unions.iter().position(|(ids, _)| *ids == near) {
+                            if let Some(entry) = near_unions.remove(pos) {
+                                near_unions.push_back(entry);
+                            }
+                        } else {
+                            if near_unions.len() == MAX_CACHED_UNIONS {
+                                near_unions.pop_front();
+                            }
+                            let union = union_all(near.iter().filter_map(|&zi| zone_list.get(zi)).flat_map(|z| z.mask.0.iter()));
+                            near_unions.push_back((near.clone(), union));
+                        }
+                        near_unions.back().and_then(|(_, union)| part(&whole, union, false))
+                    };
                     rest.is_some_and(|r| grid.wider(&r))
                 };
                 outside += usize::from(lies_outside);
@@ -3505,6 +3536,16 @@ fn tabulate_intersection(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, Strin
             beyond.join(" and "),
             rustgis_geom::MAX_LAT
         ));
+    }
+    match unresolved {
+        0 => {}
+        1 => messages.push(
+            "1 class feature is so narrow next to its zones that the overlay's rounding can move its area by more than 1%: its parts are measured only roughly"
+                .into(),
+        ),
+        n => messages.push(format!(
+            "{n} class features are so narrow next to their zones that the overlay's rounding can move their areas by more than 1%: their parts are measured only roughly"
+        )),
     }
     match outside {
         0 => {}

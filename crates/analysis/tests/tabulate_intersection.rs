@@ -341,9 +341,14 @@ fn a_thin_strip_shares_out_half_when_half_outside_and_all_when_inside() {
     let l = layers(z, c);
     let params = json!({"zones": "zones", "zoneFields": "zone", "classes": "classes", "sumFields": "pop"});
     let result = rustgis_analysis::run("tabulateIntersection", &l, &params).unwrap();
+    // Half outside, and so thin that rounding moves its area by more than 1%: both are said.
     assert_eq!(
         result.messages,
-        ["Tabulate Intersection: 1 row", "1 class feature lies partly or wholly outside the zones: its value outside isn't shared out"]
+        [
+            "Tabulate Intersection: 1 row",
+            "1 class feature is so narrow next to its zones that the overlay's rounding can move its area by more than 1%: its parts are measured only roughly",
+            "1 class feature lies partly or wholly outside the zones: its value outside isn't shared out",
+        ]
     );
     let pop = table(result).features.first().and_then(|f| f.attrs.get(3)).and_then(Value::as_f64).unwrap();
     // About half: so thin a strip is rounded by about a percent, but not taken as wholly inside.
@@ -380,6 +385,34 @@ fn a_small_feature_just_across_a_zone_edge_is_reported() {
         result.messages,
         ["Tabulate Intersection: 1 row", "1 class feature lies partly or wholly outside the zones: its value outside isn't shared out"]
     );
+    // The 99.85% inside the zone.
+    let pop = table(result).features.first().and_then(|f| f.attrs.get(3)).and_then(Value::as_f64).unwrap();
+    assert!((pop / 998_500.0 - 1.0).abs() < 1e-4, "{pop}");
+}
+
+/// Slivers 1 m long and 0.5 to 5 mm wide across the border of two zones 5° wide, so narrow that
+/// the overlay's rounding moves their areas by more than 1%: never taken as whole in both zones,
+/// and a notice says they are measured only roughly.
+#[test]
+fn slivers_too_narrow_to_measure_finely_are_reported_not_counted_twice() {
+    let rect = |x0: f64, y0: f64, x1: f64, y1: f64| {
+        let ring = [(x0, y0), (x1, y0), (x1, y1), (x0, y1), (x0, y0)].map(|(x, y)| Coord::new(x, y)).to_vec();
+        Some(Geometry::Polygon(vec![vec![ring]]))
+    };
+    let mut z = Dataset::new("zones", GeometryType::Polygon, vec![Field::new("zone", FieldType::Text)]);
+    z.push_next(rect(-100.0, 30.0, -95.0, 40.0), vec![Value::Text("A".into())]);
+    z.push_next(rect(-95.0, 30.0, -90.0, 40.0), vec![Value::Text("B".into())]);
+    let params = json!({"zones": "zones", "zoneFields": "zone", "classes": "classes", "sumFields": "pop"});
+    // From 0.5 mm wide, about half a grid step there, to 5 mm.
+    for width_m in [0.0005, 0.001, 0.002, 0.003, 0.005] {
+        let mut c = Dataset::new("classes", GeometryType::Polygon, vec![Field::new("pop", FieldType::Integer)]);
+        c.push_next(rect(-95.0000045, 35.0, -94.9999955, 35.0 + width_m / 111_000.0), vec![Value::Int(1_000_000)]);
+        let result = rustgis_analysis::run("tabulateIntersection", &layers(z.clone(), c), &params).unwrap();
+        let rough = result.messages.iter().any(|m| m.starts_with("1 class feature is so narrow next to its zones"));
+        assert!(rough, "{width_m} m: {:?}", result.messages);
+        let total: f64 = table(result).features.iter().filter_map(|f| f.attrs.get(3).and_then(Value::as_f64)).sum();
+        assert!(total <= 1_000_000.0 * 1.01, "{width_m} m wide shared out {total}");
+    }
 }
 
 #[test]
