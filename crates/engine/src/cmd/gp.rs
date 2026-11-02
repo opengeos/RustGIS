@@ -501,12 +501,12 @@ fn fit_to_changes(
         return;
     };
     layer.clone_from(&now.name);
-    if was.fingerprint.is_some() && fingerprint(&now.dataset) == was.fingerprint {
+    if was.unchanged(&now.dataset) {
         return;
     }
     match &mut r.output {
         Output::Selection { rows, .. } => {
-            let ids: std::collections::HashSet<u64> = rows.iter().filter_map(|r| was.ids.get(*r)).copied().collect();
+            let ids: std::collections::HashSet<u64> = rows.iter().filter_map(|r| was.dataset.features.get(*r)).map(|f| f.id).collect();
             *rows = now.dataset.features.iter().enumerate().filter(|(_, f)| ids.contains(&f.id)).map(|(i, _)| i).collect();
         }
         _ => *res = Err(format!("{} changed while {tool} ran; run it again", now.name)),
@@ -516,35 +516,20 @@ fn fit_to_changes(
 /// A layer a background run read, to tell whether it changed while the run went on.
 pub(crate) struct Read {
     id: u32,
-    /// Its features' ids, in order: what its rows were.
-    ids: Vec<u64>,
-    /// None when it couldn't be taken: the layer then counts as changed.
-    fingerprint: Option<u64>,
+    /// Its dataset as the run read it: a copy that shares the rows, so taking it costs nothing
+    /// however large the layer, and any edit since (which copies the rows held here too) shows.
+    dataset: Dataset,
 }
 
 impl Read {
     fn of(l: &rustgis_map::Layer) -> Self {
-        Read { id: l.id, ids: l.dataset.features.iter().map(|f| f.id).collect(), fingerprint: fingerprint(&l.dataset) }
+        Read { id: l.id, dataset: l.dataset.clone() }
     }
-}
 
-/// A hash of a dataset's contents, without keeping a copy of them.
-fn fingerprint(d: &Dataset) -> Option<u64> {
-    use std::hash::Hasher;
-    struct W(std::hash::DefaultHasher);
-    impl std::io::Write for W {
-        fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
-            self.0.write(b);
-            Ok(b.len())
-        }
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
+    /// Whether `now` is the dataset as it was read: the same rows in memory, and the same fields.
+    fn unchanged(&self, now: &Dataset) -> bool {
+        now.features.shares(&self.dataset.features) && now.fields == self.dataset.fields
     }
-    let mut w = W(std::hash::DefaultHasher::new());
-    // A hash of part of it would say too little.
-    serde_json::to_writer(&mut w, d).ok()?;
-    Some(w.0.finish())
 }
 
 /// Fits a tool's result to the map: a selection made on the complete streamed source becomes
@@ -1161,6 +1146,8 @@ fn apply(s: &mut Session, ran: Ran, params: Value, res: Result<rustgis_analysis:
         Output::Update { layer, dataset } => {
             let l = s.map_mut().layers.iter_mut().find(|l| l.name.eq_ignore_ascii_case(&layer)).ok_or("the input layer disappeared")?;
             l.dataset = dataset;
+            // Under the layer's name now: a background run's layer may have been renamed meanwhile.
+            l.dataset.name.clone_from(&l.name);
             // A streamed layer updated by a tool holds the whole result in memory from now on.
             l.dataset.windowed = false;
             l.source = None;

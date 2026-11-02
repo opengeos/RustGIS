@@ -61,8 +61,8 @@ Geometry Attributes updates the input layer. Each run is listed under **Analyze 
 In the desktop app a tool runs in the background, so the map and the rest of the window stay in
 use. While it runs, the Tools pane shows its name, a **Cancel** button and, for the tools that
 count their work (Viewshed, IDW Interpolation, Kriging, Kernel Density, Buffer, Select Layer By
-Location and others), a progress bar. One tool runs at a time. A cancelled run adds nothing and
-says how far it came. Edits made to its input layers while it runs are kept: a selection it makes
+Location and others), a progress bar. One tool runs at a time. A cancelled run adds nothing, and
+a tool that counts its work says how far it came. Edits made to its input layers while it runs are kept: a selection it makes
 selects the same features where they now are, and a result that would replace an edited layer is
 refused. Opening another project drops the run. Scripts, models, the AI Assistant, the command
 line and the web app wait for each tool to finish.
