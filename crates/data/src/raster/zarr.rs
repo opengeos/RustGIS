@@ -1187,7 +1187,12 @@ pub fn assemble(store: &Store, plan: &Plan, chunks: &HashMap<String, Vec<u8>>, n
                     let at = usize::try_from(i).ok().and_then(|i| i.checked_mul(dt.size));
                     let Some(b) = at.and_then(|at| vals.get(at..at + dt.size)) else { continue };
                     let v = dt.value(b);
-                    let out = if v.is_nan() || missing.contains(&v) {
+                    // Whole numbers are compared exactly: past 2^53 `v` has already been rounded.
+                    let is_missing = match dt.whole(b) {
+                        Some(i) => missing.iter().any(|m| m.is_finite() && *m as i128 == i && i as f64 == *m),
+                        None => missing.contains(&v),
+                    };
+                    let out = if v.is_nan() || is_missing {
                         f32::NAN
                     } else {
                         let x = v * scale + offset;
@@ -2064,6 +2069,9 @@ mod tests {
         let i64s = |v: [i64; 4]| v.iter().flat_map(|x| x.to_le_bytes()).collect();
         assert_eq!(read("<i8", i64s([16_777_217, 1 << 40, 3, -16_777_216])), vec![1]);
         assert!(read("<i8", i64s([16_777_216, 1, 2, 3])).is_empty());
+        // Past 2^53 a fill value is matched exactly: i64::MIN + 1 isn't missing, and is counted.
+        let fill = serde_json::json!({"_FillValue": "-9223372036854775808"});
+        assert_eq!(two_by_two("<i8", fill, i64s([i64::MIN, i64::MIN + 1, 0, 1])), vec![1]);
         // Past 2^53 too, where an f64 has already rounded 2^60 + 1 to 2^60.
         assert_eq!(read("<i8", i64s([(1 << 60) + 1, 1 << 60, 0, 0])), vec![1]);
         let u64s = |v: [u64; 4]| v.iter().flat_map(|x| x.to_le_bytes()).collect();

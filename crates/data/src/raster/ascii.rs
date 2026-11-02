@@ -106,7 +106,12 @@ const TENS: [f64; 23] =
 /// are always held in `f32`'s normal range, and up to 15 are compared as a whole number, so only
 /// longer or more extreme values are read again as `f64`.
 fn held(text: &str, v: f32, nodata: Uncounted) -> bool {
-    if v.is_nan() || nodata.covers(v, || text.parse().ok()) {
+    // A whole number is the no-data value only when an f64 holds it exactly (past 2^53 it may not).
+    let wide = || match text.parse::<i128>() {
+        Ok(i) => Some(i as f64).filter(|w| *w as i128 == i),
+        Err(_) => text.parse().ok(),
+    };
+    if v.is_nan() || nodata.covers(v, wide) {
         return true;
     }
     // Short enough for 6 digits at most (a point and a sign aren't digits), and neither zero nor
@@ -149,6 +154,10 @@ fn held(text: &str, v: f32, nodata: Uncounted) -> bool {
     if let (true, Some(&ten)) = (written <= 15, TENS.get(shift.unsigned_abs() as usize)) {
         let at = if shift >= 0 { f64::from(v) * ten } else { f64::from(v) / ten };
         return (at.abs() - whole as f64).abs() <= 0.5;
+    }
+    // A longer whole number is compared as one (an f64 rounds 2^53 + 1); a longer decimal in f64.
+    if let Ok(i) = text.parse::<i128>() {
+        return v as i128 == i;
     }
     let Ok(wide) = text.parse::<f64>() else { return true };
     (f64::from(v) - wide).abs() * 2.0 <= 10f64.powi(shift.saturating_neg())
@@ -227,6 +236,11 @@ mod tests {
         // subnormal written to one digit is held.
         let lossy = read(&grid("16777217 1234567.891 1e39 1.234567e-40\n0.123456789 1e-40 1e400 -1e-400"), "g", None).unwrap();
         assert_eq!(lossy.rounded, vec![7]);
+        // Long whole numbers are compared exactly: 2^53 + 1 is counted, 2^53 isn't; past 2^53 only
+        // the no-data value itself is left out.
+        let long = "ncols 2\nnrows 2\nxllcorner 10\nyllcorner 40\ncellsize 1\nNODATA_value -9223372036854775808\n";
+        let ids = read(&format!("{long}9007199254740993 9007199254740992 -9223372036854775808 -9223372036854775807"), "g", None).unwrap();
+        assert_eq!(ids.rounded, vec![2]);
         // A tie is held: 1234567.8 is f32 1234567.75, which writes back as 1234567.8.
         assert!(read(&grid("1234567.8 1 2 3\n4 5 6 7"), "g", None).unwrap().rounded.is_empty());
         // Written infinities and zeros, and extra zeros, are held.

@@ -493,12 +493,19 @@ fn rounded_bits(buf: &DecodingResult, nodata: Uncounted) -> Option<Vec<u64>> {
 /// and no-data samples (by [`Uncounted`]'s rule) count as held.
 fn held_exactly(buf: &DecodingResult, j: usize, nodata: Uncounted) -> bool {
     let held = |nan: bool, f: f32, exact: bool, wide: f64| exact || nan || nodata.covers(f, || Some(wide));
+    // A 64-bit whole number an f64 doesn't hold exactly can't be the (f64) no-data value: compared
+    // as NaN, it never matches.
+    let whole = |w: f64, i: i128| if w as i128 == i { w } else { f64::NAN };
     match buf {
         DecodingResult::U32(v) => v.get(j).is_none_or(|&x| held(false, x as f32, x as f32 as u64 == u64::from(x), f64::from(x))),
         DecodingResult::I32(v) => v.get(j).is_none_or(|&x| held(false, x as f32, x as f32 as i64 == i64::from(x), f64::from(x))),
         // Compared in i128, which holds every u64 and i64 and the f32 just past them.
-        DecodingResult::U64(v) => v.get(j).is_none_or(|&x| held(false, x as f32, x as f32 as i128 == i128::from(x), x as f64)),
-        DecodingResult::I64(v) => v.get(j).is_none_or(|&x| held(false, x as f32, x as f32 as i128 == i128::from(x), x as f64)),
+        DecodingResult::U64(v) => {
+            v.get(j).is_none_or(|&x| held(false, x as f32, x as f32 as i128 == i128::from(x), whole(x as f64, i128::from(x))))
+        }
+        DecodingResult::I64(v) => {
+            v.get(j).is_none_or(|&x| held(false, x as f32, x as f32 as i128 == i128::from(x), whole(x as f64, i128::from(x))))
+        }
         DecodingResult::F64(v) => v.get(j).is_none_or(|&x| held(x.is_nan(), x as f32, f64::from(x as f32) == x, x)),
         _ => true,
     }
@@ -2583,27 +2590,29 @@ mod tests {
         assert_eq!(r.rounded, vec![1]);
         let exact = read(std::io::Cursor::new(typed::<Gray64Float>(2, 2, &[0.5, 2.0, -3.25, 1e6], None)), "e").unwrap();
         assert!(exact.rounded.is_empty());
+        // Int64 past 2^53: only the no-data value itself is left out, not one an f64 can't tell from it.
+        let ids = typed::<GrayI64>(2, 2, &[i64::MIN, i64::MIN + 1, 0, 1], Some("-9223372036854775808"));
+        assert_eq!(read(std::io::Cursor::new(ids), "ids").unwrap().rounded, vec![1]);
         // A value that rounds onto the no-data value becomes no-data, so it is counted; the no-data
         // value itself isn't.
         let onto = read(std::io::Cursor::new(typed::<Gray64Float>(2, 2, &[1.000_000_01, 1.0, 0.5, 2.0], Some("1"))), "o").unwrap();
         assert_eq!(onto.rounded, vec![1]);
         // A no-data value only a sidecar gives isn't counted: 0.1 is, as no-data; the f32 nearest
         // it, read exactly, never was; 0.123456789012345 is still counted.
-        let dir = std::env::temp_dir().join(format!("rustgis-rounded-pam-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let tif = dir.join("s.tif");
+        // A directory of its own, removed even when an assertion fails, so no sidecar is left over.
+        let dir = tempfile::tempdir().unwrap();
+        let tif = dir.path().join("s.tif");
         let px = [0.1, f64::from(0.1f32), 0.123_456_789_012_345, 2.0];
         std::fs::write(&tif, typed::<Gray64Float>(2, 2, &px, None)).unwrap();
         assert_eq!(crate::raster::read_path(&tif).unwrap().rounded, vec![2]);
         let xml = r#"<PAMDataset><PAMRasterBand band="1"><NoDataValue>0.1</NoDataValue></PAMRasterBand></PAMDataset>"#;
-        std::fs::write(dir.join("s.tif.aux.xml"), xml).unwrap();
+        std::fs::write(dir.path().join("s.tif.aux.xml"), xml).unwrap();
         let side = crate::raster::read_path(&tif).unwrap();
         assert_eq!((side.nodata, side.rounded.as_slice()), (Some(0.1), &[1u64][..]));
         // The same with a NaN no-data tag, which leaves the sidecar's value in force.
         std::fs::write(&tif, typed::<Gray64Float>(2, 2, &px, Some("nan"))).unwrap();
         let nan = crate::raster::read_path(&tif).unwrap();
         assert_eq!((nan.nodata, nan.rounded.as_slice()), (Some(0.1), &[1u64][..]));
-        std::fs::remove_dir_all(&dir).unwrap();
         // 64-bit whole numbers are compared as integers: 2^60 + 1 changes, 2^60 doesn't.
         let big = read(std::io::Cursor::new(typed::<GrayI64>(2, 1, &[(1 << 60) + 1, 1 << 60], None)), "i64").unwrap();
         assert_eq!(big.rounded, vec![1]);
