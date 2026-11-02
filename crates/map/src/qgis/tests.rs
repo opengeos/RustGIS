@@ -1257,7 +1257,7 @@ fn label_expressions_and_data_defined_label_settings_carry_over() {
     assert_eq!(c.by.angle.as_deref(), Some("10"));
     assert!(report.notes.iter().any(|n| n.text.contains("data-defined label settings (Rotation)")), "{:?}", report.notes);
     // An empty expression labels nothing: the class is left out, said.
-    for empty in ["", "&quot;&quot;", "  "] {
+    for empty in ["", "&quot;&quot;", "&quot; &quot;", "  "] {
         let qml = format!(
             r#"<qgis version="3.40.0"><labeling type="simple"><settings><text-style isExpression="1" fieldName="{empty}"/></settings></labeling></qgis>"#
         );
