@@ -2773,6 +2773,7 @@ fn is_wfs_query(url: &str) -> bool {
         && is("REQUEST", "GetFeature")
         && query_value(url, "VERSION").is_some_and(|v| v.starts_with("2.0"))
         && query_value(url, "STARTINDEX").is_none()
+        && query_value(url, "COUNT").is_none_or(|c| c.trim().parse::<usize>().ok() == Some(FEATURE_LIMIT))
         && !is("RESULTTYPE", "hits")
 }
 
@@ -2984,7 +2985,8 @@ fn first_value(features: &[Box<RawValue>]) -> Option<serde_json::Value> {
 /// description says it can be (fetched first: `advancedQueryCapabilities.supportsPagination`):
 /// from the start, since the first page, asked for in no order, may not be the paged order's. The pages' features end up in one collection,
 /// with the first page's other members and without its paging ones. A first page that leads
-/// nowhere is done at once, unchanged (and [`partial_note`] says what it holds).
+/// nowhere is done at once, unchanged (and [`partial_note`] says what it holds). Legacy WFS
+/// without links warns when its requested MAXFEATURES limit is reached.
 pub fn read_pages(url: &str, first: Vec<u8>, max: usize) -> Step {
     let (head, tail) = edges(&first);
     let linked = head.contains("\"next\"") || tail.contains("\"next\"");
@@ -2993,7 +2995,10 @@ pub fn read_pages(url: &str, first: Vec<u8>, max: usize) -> Step {
         && ["resultOffset", "resultRecordCount"].iter().all(|k| query_value(url, k).is_none())
         && (is_true(&head, "exceededTransferLimit") || is_true(&tail, "exceededTransferLimit"));
     let wfs = is_wfs_query(url);
-    if !(linked || limited || wfs) {
+    let legacy_wfs =
+        [("SERVICE", "WFS"), ("REQUEST", "GetFeature")].iter().all(|(k, v)| query_value(url, k).is_some_and(|s| s.eq_ignore_ascii_case(v)))
+            && query_value(url, "VERSION").is_some_and(|v| v.starts_with("1."));
+    if !(linked || limited || wfs || legacy_wfs) {
         return Step::Done(first, None);
     }
     let Ok(Some((doc, features))) = split_page(&first) else { return Step::Done(first, None) };
@@ -3004,7 +3009,18 @@ pub fn read_pages(url: &str, first: Vec<u8>, max: usize) -> Step {
     } else if wfs {
         (wfs_page_url(url, None, 0), Phase::WfsHits)
     } else {
-        return Step::Done(first, None);
+        let note = if legacy_wfs
+            && let Some(limit) = query_value(url, "MAXFEATURES").and_then(|s| s.parse::<usize>().ok()).filter(|n| *n > 0)
+            && features.len() >= limit
+        {
+            let read = features.len();
+            Some(format!(
+                "{read} WFS features read: the requested limit of {limit} was reached without a next link; the read may be incomplete"
+            ))
+        } else {
+            None
+        };
+        return Step::Done(first, note);
     };
     let pages = Pages {
         url: url.to_string(),
@@ -3991,6 +4007,37 @@ mod tests {
         });
         let doc: serde_json::Value = serde_json::from_slice(&joined).unwrap();
         assert_eq!(doc["features"].as_array().unwrap().len(), 3);
+        assert_eq!(note, None);
+    }
+
+    /// Explicit count windows, below and above the generated request size, do not fetch more.
+    #[test]
+    fn wfs_explicit_count_windows_do_not_page() {
+        let first = br#"{"features":[{"id":1},{"id":2}]}"#;
+        let mut requests = Vec::new();
+        for count in [2, FEATURE_LIMIT + 1] {
+            let url = format!("https://wfs.example.org/wfs?SERVICE=WFS&VERSION=2.0.0&REQUEST=GetFeature&COUNT={count}");
+            let mut calls = 0;
+            let _ = join_pages(&url, first.to_vec(), 100, |_| {
+                calls += 1;
+                Err("no extra request expected".into())
+            });
+            requests.push(calls);
+        }
+        assert_eq!(requests, [0, 0]);
+    }
+
+    /// Legacy WFS at its requested cap warns, while a shorter response stays clean.
+    #[test]
+    fn wfs_legacy_requested_cap_is_not_silent() {
+        let url = "https://wfs.example.org/wfs?SERVICE=WFS&VERSION=1.1.0&REQUEST=GetFeature&MAXFEATURES=2";
+        let first = br#"{"features":[{"id":1,"properties":{"next":null}},{"id":2}]}"#;
+        let (bytes, note) = join_pages(url, first.to_vec(), 100, |_| panic!("legacy WFS has no offset paging"));
+        assert_eq!(bytes, first);
+        assert!(note.unwrap().contains("2"));
+        let short = br#"{"features":[{"id":1}]}"#;
+        let (bytes, note) = join_pages(url, short.to_vec(), 100, |_| panic!("legacy WFS has no offset paging"));
+        assert_eq!(bytes, short);
         assert_eq!(note, None);
     }
 
