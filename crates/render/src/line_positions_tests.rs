@@ -290,7 +290,8 @@ fn a_nearer_bands_unlayoutable_curve_does_not_claim_the_feature_key() {
     // No overrun: four letters cannot fit on this band's short stretch.
     Arc::get_mut(&mut bad.curves.as_mut().unwrap().spec).unwrap().overrun = 0.0;
     let good = curved(&[(20.0, 100.0), (380.0, 100.0)]);
-    let map = Map::new("bands");
+    let mut map = Map::new("bands");
+    map.label_display.show_unplaced = true;
     let view = View {
         width: 400.0,
         height: 200.0,
@@ -483,6 +484,30 @@ fn successful_band_previews_do_not_consume_the_unplaced_cap() {
     let p = place_labels(candidates, vec![blocker], 400.0, 200.0, false);
     assert_eq!(p.labels.len(), 2001);
     assert_eq!(p.unplaced.len(), 1);
+}
+
+#[test]
+fn hidden_unplaced_previews_do_not_change_placement() {
+    let candidates: Vec<_> =
+        (0..3000).map(|i| Candidate::from((PlacedLabel { y: 100.0, ..label("road", 100.0, None, 0.0) }, 1.0, (1, i, 0, 0)))).collect();
+    let blocker = PlacedLabel { y: 100.0, ..label("BLOCKER", 100.0, None, 0.0) };
+    let shown = place_labels_with_previews(candidates.clone(), vec![blocker.clone()], 400.0, 200.0, false, true);
+    let hidden = place_labels_with_previews(candidates, vec![blocker], 400.0, 200.0, false, false);
+    assert_eq!(shown.unplaced.len(), 2000);
+    assert!(hidden.unplaced.is_empty());
+    assert_eq!(shown.labels, hidden.labels);
+    assert_eq!(shown.keys, hidden.keys);
+}
+
+#[test]
+fn invalid_straight_slots_keep_their_matching_anchor() {
+    let mut c = Candidate::from((PlacedLabel { y: 100.0, ..label("road", 100.0, None, 0.0) }, 1.0, (1, 0, 0, 0)));
+    c.alternatives = vec![LabelPlace::from((f32::NAN, f32::NAN)), LabelPlace::from((300.0, 100.0))];
+    c.line = Some(LinePlaces { anchors: vec![Some(Coord::new(0.0, 0.0)), None, Some(Coord::new(2.0, 0.0))], ..Default::default() });
+    let blocker = PlacedLabel { y: 100.0, ..label("BLOCKER", 100.0, None, 0.0) };
+    let placed = place_labels(vec![c], vec![blocker], 400.0, 200.0, false);
+    assert_eq!(placed.keys, vec![((1, 0, 0, 0), 2)]);
+    assert_eq!(placed.line_anchors, vec![((1, 0, 0, 0), Coord::new(2.0, 0.0))]);
 }
 
 #[test]

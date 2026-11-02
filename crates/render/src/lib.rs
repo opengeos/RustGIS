@@ -2363,7 +2363,7 @@ fn place_tilted_labels(map: &Map, view: &View, mut candidates: Vec<Candidate>, g
         }
         groups.push(candidate);
     }
-    place_labels(groups, Vec::new(), view.width as f32, view.height as f32, false)
+    place_labels_with_previews(groups, Vec::new(), view.width as f32, view.height as f32, false, map.label_display.show_unplaced)
 }
 
 /// Whether a turned or tilted `view` of `map` may be drawn on the GPU ([`gpu_turned`]): only
@@ -3919,6 +3919,9 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
                                         } else {
                                             places.push((i, x, y, Some(angle), Vec::new()));
                                         }
+                                    } else if try_others && i > 0 {
+                                        // Keep position/anchor indices aligned even when this slot cannot fit.
+                                        line_alternatives.push(LabelPlace { x: f32::NAN, y: f32::NAN, angle: None, glyphs: Vec::new() });
                                     }
                                 }
                             }
@@ -4127,7 +4130,7 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
         }
         None => (view.width, view.height),
     };
-    let placed = place_labels(label_candidates, fixed_labels, lw as f32, lh as f32, lock.is_some());
+    let placed = place_labels_with_previews(label_candidates, fixed_labels, lw as f32, lh as f32, lock.is_some(), display.show_unplaced);
     // (The lock is never taken from a tilted view: its labels' places out of sight are dropped,
     // so the numbers of the places they take aren't those of their class's.)
     if display.locked && map.label_lock.is_none() && !matches!(labels_to, Labels::Tilted(..)) {
@@ -4868,7 +4871,20 @@ struct Placement {
 ///
 /// A label with alternatives (#1011) tries its own place, then each of them in turn, and takes
 /// the first where all of it shows; where none does, its own place shows what fits there.
+#[cfg(test)]
 fn place_labels(cands: impl IntoIterator<Item = impl Into<Candidate>>, fixed: Vec<PlacedLabel>, w: f32, h: f32, locked: bool) -> Placement {
+    place_labels_with_previews(cands, fixed, w, h, locked, true)
+}
+
+/// Places labels while retaining failed previews only when View Unplaced needs them.
+fn place_labels_with_previews(
+    cands: impl IntoIterator<Item = impl Into<Candidate>>,
+    fixed: Vec<PlacedLabel>,
+    w: f32,
+    h: f32,
+    locked: bool,
+    show_unplaced: bool,
+) -> Placement {
     let mut cands: Vec<Candidate> = cands.into_iter().map(Into::into).collect();
     // A priority of no number places last, not first (`total_cmp` puts NaN above everything).
     let rank = |p: f64| if p.is_nan() { f64::NEG_INFINITY } else { p };
@@ -4944,7 +4960,7 @@ fn place_labels(cands: impl IntoIterator<Item = impl Into<Candidate>>, fixed: Ve
         let Some((i, mut place, text, icon, show_text, show_icon)) = at else { continue };
         place.swap(&mut l);
         if !show_text && !show_icon {
-            if has_text && (!grouped || failed_groups.insert(key)) {
+            if show_unplaced && has_text && (!grouped || failed_groups.insert(key)) {
                 unplaced.push((grouped.then_some(key), PlacedLabel { color: UNPLACED, halo: Some(halo_for(UNPLACED)), icon: None, ..l }));
             }
             continue;
