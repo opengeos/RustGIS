@@ -2973,8 +2973,10 @@ pub(crate) fn add_cog_with(s: &mut Session, p: &Value, url: &str, strict: bool) 
     // (which follow the time slider) and AlphaEarth's quantised embeddings (which raster styles
     // don't dequantise) are tile layers.
     let (file, look) = crate::render::rustgis_tiles::cog::split(url);
+    // A key given as `null` (a script's unused one) asks for nothing.
+    let given = |k: &str| p.get(k).filter(|v| !v.is_null());
     let dated = rustgis_data::time::is_template(file)
-        || ["start", "end", "unit", "interval", "dates"].iter().any(|k| p.get(k).is_some())
+        || ["start", "end", "unit", "interval", "dates"].iter().any(|k| given(k).is_some())
         || b(p, "cube") == Some(true);
     if !dated && !look.aef {
         return add_in_place(s, name, url, strict);
@@ -2982,7 +2984,7 @@ pub(crate) fn add_cog_with(s: &mut Session, p: &Value, url: &str, strict: bool) 
     let mut q = json!({"url": url, "kind": "cog", "name": name, "top": true});
     // A dated address's span and steps (see map.addTiles).
     for k in ["start", "end", "unit", "interval", "dates"] {
-        if let Some(v) = p.get(k) {
+        if let Some(v) = given(k) {
             q[k] = v.clone();
         }
     }

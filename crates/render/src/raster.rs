@@ -157,6 +157,7 @@ pub(crate) fn draw_in_place(
     let full_px = want.per_px * f64::from(full.0) / f64::from(r.width.max(1));
     let fine_enough = |l: &rustgis_data::raster::cog::Level| f64::from(full.0) / f64::from(l.width.max(1)) <= full_px * 1.25;
     let mut level = levels.iter().rposition(fine_enough).unwrap_or(0);
+    let needed = level;
     // The renderer's bands, then the image's alpha band (again, when a colour draws it too), read
     // as the window's own bands, as `draw` reads a raster held whole.
     let mut read = bands.clone();
@@ -227,6 +228,9 @@ pub(crate) fn draw_in_place(
     match (w.pending, w.failed) {
         (true, _) => Ok(true),
         (false, true) => Err("some of its tiles couldn't be read".into()),
+        // Read coarser than the view needs (too large a part for the tiles kept): the map shows
+        // it, an export refuses it.
+        (false, false) if level > needed => Err("the view is too large a part of the image to read at the resolution it needs".into()),
         (false, false) => Ok(false),
     }
 }

@@ -13387,6 +13387,18 @@ fn a_palette_without_its_table_says_so_when_its_pixels_land() {
     }
 }
 
+/// Dated-series keys given as `null` (a script's unused ones) ask for nothing: the GeoTIFF is a
+/// raster layer read in place, not a tile layer.
+#[test]
+fn null_series_keys_leave_a_geotiff_read_in_place() {
+    let (base, _) = serve_ranges(rustgis_data::raster::cog::example(512, 256));
+    let mut s = Session::new(Project::default());
+    let p = json!({"url": format!("{base}/scene.tif"), "start": null, "end": null, "dates": null});
+    let r = s.run("layer.addUrl", &p).unwrap();
+    assert_eq!((r["kind"].clone(), r["inPlace"].clone()), (json!("raster"), json!(true)), "{r}");
+    assert!(s.map().tiles.is_empty());
+}
+
 /// A layer read in place says its statistics and tools read an overview: once when added, once
 /// when a project with it opens (its pixels landing then), and not again for the same pixels.
 #[test]

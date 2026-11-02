@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use rustgis_data::raster::{ColorHint, Raster};
 use web_time::Instant;
 
-use super::{BUDGET, Bands, Info, RETRY, TileState, Tiles, fetch_all, get_tile, split, tiles, with_info};
+use super::{BUDGET, Bands, Info, RETRY, TileState, fetch_all, get_tile, split, tiles, with_info};
 
 /// The most samples (every band) of the overview a layer holds.
 const OVERVIEW_SAMPLES: usize = if cfg!(target_arch = "wasm32") { 1 << 20 } else { 2 << 20 };
@@ -287,8 +287,9 @@ pub fn window(url: &str, level: usize, cols: (u32, u32), rows: (u32, u32), bands
     let (mut data, gaps) = assemble(&info, level, (c0, c1), (r0, r1), bands, |c| kept.get(&c).cloned());
     // Until they arrive, its missing tiles show the levels kept (the one zoomed from), not holes.
     if !gaps.is_empty() {
-        let mut t = tiles().lock().unwrap_or_else(|e| e.into_inner());
-        stand_in(&mut t, &info, file, level, (c0, c1), (r0, r1), bands, &mut data, &gaps);
+        // The tiles kept, looked up one at a time: the cache isn't held while the gaps fill.
+        let kept = |o: usize, c: u32| tiles().lock().unwrap_or_else(|e| e.into_inner()).used(&(file.to_string(), o, c));
+        stand_in(&info, level, (c0, c1), (r0, r1), bands, &mut data, &gaps, kept);
     }
     let t = info.layout.transform_of(l);
     let transform = rustgis_data::raster::GeoTransform {
@@ -322,18 +323,17 @@ struct Gap {
 /// Fills the `gaps` of a window of `level` from the other levels' tiles kept, the nearest first
 /// (the finer, then the coarser, then further): the level zoomed from stands in for the one zoomed
 /// to until its tiles arrive. Only the gaps are filled: a tile's own no-data pixels stay empty.
-/// Nothing is fetched.
+/// `kept` gives a level's chunk when it is kept (marking it used); nothing is fetched.
 #[allow(clippy::too_many_arguments)]
 fn stand_in(
-    t: &mut Tiles,
     info: &Info,
-    file: &str,
     level: usize,
     cols: (u32, u32),
     rows: (u32, u32),
     bands: &[usize],
     data: &mut [Vec<f32>],
     gaps: &[Gap],
+    mut kept: impl FnMut(usize, u32) -> Option<Bands>,
 ) {
     let levels = &info.layout.levels;
     let Some(l) = levels.get(level) else { return };
@@ -368,7 +368,7 @@ fn stand_in(
                         continue;
                     };
                     if last.as_ref().is_none_or(|(lc, _)| *lc != c) {
-                        let chunk = found.entry(c).or_insert_with(|| t.used(&(file.to_string(), o, c))).clone();
+                        let chunk = found.entry(c).or_insert_with(|| kept(o, c)).clone();
                         last = Some((c, chunk));
                     }
                     let value = last
@@ -438,6 +438,7 @@ fn assemble(
 mod tests {
     use super::*;
 
+    use super::super::Tiles;
     use rustgis_data::raster::cog::{Example, Level, Parse, Sparse, example_with, layout};
 
     /// A file's info, as reading its header gives it.
@@ -491,7 +492,7 @@ mod tests {
         let (cols, rows) = ((0, 32), (0, 16));
         let (mut data, gaps) = assemble(&info, 0, cols, rows, &[0], |c| (c == 0).then(|| own.clone()));
         assert_eq!(gaps.len(), 1);
-        stand_in(&mut t, &info, file, 0, cols, rows, &[0], &mut data, &gaps);
+        stand_in(&info, 0, cols, rows, &[0], &mut data, &gaps, |o, c| t.used(&(file.to_string(), o, c)));
         let at = |x: usize, y: usize| data[0][y * 32 + x];
         assert_eq!((at(0, 0), at(20, 5), at(31, 15)), (3.0, 7.0, 7.0), "tile 1 from level 1");
         assert!(at(1, 1).is_nan(), "tile 0's no-data pixel stays empty");
