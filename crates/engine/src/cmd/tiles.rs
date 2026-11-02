@@ -532,6 +532,60 @@ fn blend(p: &Value) -> Result<Option<Blend>, String> {
     ps(p, "blend").map(|m| Blend::from_code(m).ok_or_else(|| format!("unknown blend mode '{m}'"))).transpose()
 }
 
+/// Turns a project's COG tile layers (saved before GeoTIFFs read in place were raster layers) into
+/// raster layers read in place, each where it was drawn, with its name, visibility, opacity, blend
+/// and look. A dated series, a data cube's files and AlphaEarth's embeddings stay tile layers.
+pub(crate) fn cog_tiles_to_rasters(m: &mut rustgis_map::Map) {
+    use rustgis_map::raster::RasterLayer;
+    let mut i = 0;
+    while let Some(t) = m.tiles.get(i) {
+        let (file, look) = cog::split(&t.url);
+        if t.kind != TileKind::Cog || t.time_url.is_some() || !t.time_urls.is_empty() || look.aef || rustgis_data::time::is_template(file) {
+            i += 1;
+            continue;
+        }
+        let t = m.tiles.remove(i);
+        let (file, look) = cog::split(&t.url);
+        // Read now natively; in the browser its own look once it lands.
+        let mut rl = RasterLayer::opening_in_place(file);
+        if let Some(style) = rl.data.clone().and_then(|d| look_style(&look, &d)) {
+            rl.style = style;
+        }
+        let id = m.add_raster(t.name.clone(), rl);
+        if let Some(l) = m.layer_mut(id) {
+            l.visible = t.visible;
+            l.transparency = ((1.0 - t.opacity.clamp(0.0, 1.0)) * 100.0).round();
+            l.blend = t.blend;
+        }
+        // Just over the layer it was drawn over, in its group; under them all without one.
+        let group = t.over.and_then(|o| m.group_of(o).map(|g| g.id));
+        if m.place_layer(id, group, t.over).is_err() {
+            let _ = m.place_layer(id, None, None);
+        }
+    }
+}
+
+/// The raster style a GeoTIFF's look says (see [`Look`]): its bands, one grey or three as red,
+/// green and blue, and its fixed range; `None` for the file's own look. A COG tile layer becomes
+/// a raster layer read in place with it.
+pub(crate) fn look_style(look: &Look, r: &rustgis_data::raster::Raster) -> Option<rustgis_map::raster::RasterStyle> {
+    use rustgis_map::raster::{RasterRenderer, RasterStyle, Stretch};
+    if look.bands.is_empty() && look.range.is_none() {
+        return None;
+    }
+    let mut style = RasterStyle::default_for(r);
+    let n = r.band_count();
+    match look.bands[..] {
+        [b] if b < n => style.renderer = RasterRenderer::Stretch { band: b, ramp: rustgis_map::Ramp::gray(), invert: false },
+        [red, green, blue] if red < n && green < n && blue < n => style.renderer = RasterRenderer::Rgb { red, green, blue },
+        _ => {}
+    }
+    if let Some((lo, hi)) = look.range {
+        style.stretch = Stretch::custom(f64::from(lo), f64::from(hi));
+    }
+    Some(style)
+}
+
 /// A change of a COG layer's look a command asks for (`bands`, `range`, `dequantize`), applied to
 /// the look it has; `None` when it asks for none.
 #[allow(clippy::type_complexity)]

@@ -20,6 +20,11 @@ pub struct RasterLayer {
     /// The file it was read from; reopened when the project loads.
     #[serde(default)]
     pub path: Option<String>,
+    /// `path` is a cloud-optimised GeoTIFF's web address, read in place: the layer holds an
+    /// overview of it (its statistics, histograms and tools read that), and the map reads the part
+    /// in view as it draws (see [`set_in_place_reader`]).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub in_place: bool,
     /// The file's own name (for its format) when it is embedded.
     #[serde(default)]
     pub file_name: Option<String>,
@@ -55,6 +60,24 @@ pub struct RasterLayer {
     /// A remote reload shared with render snapshots, never serialized.
     #[serde(skip)]
     opening: Option<RasterRead>,
+    /// The style is the file's own look once its pixels land (a layer added before they have).
+    #[serde(skip)]
+    restyle: bool,
+}
+
+/// Called once with a cloud-optimised GeoTIFF's overview, or why it couldn't be read.
+pub type InPlaceRead = Box<dyn FnOnce(Result<Raster, String>) + Send>;
+type InPlaceReader = Arc<dyn Fn(&str, InPlaceRead) + Send + Sync>;
+
+fn in_place_reader() -> &'static Mutex<Option<InPlaceReader>> {
+    static R: std::sync::OnceLock<Mutex<Option<InPlaceReader>>> = std::sync::OnceLock::new();
+    R.get_or_init(Mutex::default)
+}
+
+/// Sets how a cloud-optimised GeoTIFF's overview is read by its address (the tile cache's reader,
+/// which checks addresses and signs requests; this crate does no networking).
+pub fn set_in_place_reader(f: impl Fn(&str, InPlaceRead) + Send + Sync + 'static) {
+    *in_place_reader().lock().unwrap_or_else(|e| e.into_inner()) = Some(Arc::new(f));
 }
 
 /// The renderer bands' statistics without the masked pixels, and what they were worked out for:
@@ -80,6 +103,9 @@ impl RasterLayer {
         if self.embedded.is_some() {
             return Err("the raster's data is kept in the project: there's no file to repair".into());
         }
+        if self.in_place {
+            return Err("the raster is read in place by its address: add the address again to change it".into());
+        }
         let sub = subdataset.or(self.subdataset.as_deref());
         let r = rustgis_data::raster::read_path_with(std::path::Path::new(path), sub, self.crs.as_deref())
             .and_then(|r| placed(r, self.placement))
@@ -100,6 +126,7 @@ impl RasterLayer {
         style.repair(&r);
         Ok(RasterLayer {
             path: Some(path.into()),
+            in_place: false,
             file_name: None,
             embedded: None,
             subdataset: sub.map(String::from),
@@ -111,6 +138,7 @@ impl RasterLayer {
             error: None,
             masked: MaskedStats::default(),
             opening: None,
+            restyle: false,
         })
     }
 
@@ -119,6 +147,7 @@ impl RasterLayer {
         let style = RasterStyle::default_for(&raster);
         RasterLayer {
             path: Some(path.into()),
+            in_place: false,
             file_name: None,
             embedded: None,
             subdataset: None,
@@ -130,6 +159,7 @@ impl RasterLayer {
             error: None,
             masked: MaskedStats::default(),
             opening: None,
+            restyle: false,
         }
     }
 
@@ -138,6 +168,7 @@ impl RasterLayer {
         let style = RasterStyle::default_for(&raster);
         RasterLayer {
             path: None,
+            in_place: false,
             file_name: Some(file_name.into()),
             embedded: Some(Arc::new(bytes)),
             subdataset: None,
@@ -149,7 +180,36 @@ impl RasterLayer {
             error: None,
             masked: MaskedStats::default(),
             opening: None,
+            restyle: false,
         }
+    }
+
+    /// A cloud-optimised GeoTIFF read in place by its address, its overview `raster` read.
+    pub fn in_place(raster: Raster, address: impl Into<String>) -> RasterLayer {
+        RasterLayer { in_place: true, ..RasterLayer::from_path(raster, address) }
+    }
+
+    /// A cloud-optimised GeoTIFF read in place by its address, its overview still to be read
+    /// (where nothing may wait: the browser): drawn, in its own look, once it lands.
+    pub fn opening_in_place(address: impl Into<String>) -> RasterLayer {
+        let mut layer = RasterLayer {
+            path: Some(address.into()),
+            in_place: true,
+            file_name: None,
+            embedded: None,
+            subdataset: None,
+            crs: None,
+            time_zarr: None,
+            placement: None,
+            style: RasterStyle::placeholder(),
+            data: None,
+            error: None,
+            masked: MaskedStats::default(),
+            opening: None,
+            restyle: true,
+        };
+        let _ = layer.reload();
+        layer
     }
 
     /// Reads the pixels again from the path or the embedded file (after a project opens). A
@@ -160,6 +220,50 @@ impl RasterLayer {
         }
         self.opening = None;
         self.error = None;
+        // Read in place: its overview, by the reader the app installed; waited for natively (as a
+        // file is read), landing later in the browser.
+        if self.in_place {
+            let Some(address) = self.path.clone() else { return Err("the raster has no source".into()) };
+            let Some(reader) = in_place_reader().lock().unwrap_or_else(|e| e.into_inner()).clone() else {
+                let e = format!("{address}: can't be read in place here");
+                self.error = Some(e.clone());
+                return Err(e);
+            };
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                let (tx, rx) = std::sync::mpsc::channel();
+                reader(&address, Box::new(move |r| tx.send(r).unwrap_or_default()));
+                let r = rx
+                    .recv_timeout(std::time::Duration::from_secs(120))
+                    .unwrap_or_else(|_| Err(format!("{address}: no answer in two minutes")));
+                return match r {
+                    Ok(raster) => {
+                        self.land(Ok(Arc::new(raster)));
+                        Ok(())
+                    }
+                    Err(e) => {
+                        self.data = None;
+                        self.land(Err(e.clone()));
+                        Err(e)
+                    }
+                };
+            }
+            #[cfg(target_arch = "wasm32")]
+            {
+                let slot = Arc::new(Mutex::new(None));
+                let land = slot.clone();
+                self.data = None;
+                self.opening = Some(slot);
+                reader(
+                    &address,
+                    Box::new(move |result| {
+                        *land.lock().unwrap_or_else(|e| e.into_inner()) = Some(result.map(Arc::new));
+                        crate::source::landed();
+                    }),
+                );
+                return Ok(());
+            }
+        }
         if self.embedded.is_none()
             && let Some(path) = self
                 .path
@@ -220,14 +324,24 @@ impl RasterLayer {
         let Some(slot) = self.opening.as_ref() else { return false };
         let Some(result) = slot.lock().unwrap_or_else(|e| e.into_inner()).clone() else { return true };
         self.opening = None;
+        self.land(result);
+        false
+    }
+
+    /// Installs pixels read (or why they couldn't be): in the file's own look for a layer added
+    /// before they arrived, else in its style, repaired for them.
+    fn land(&mut self, result: Result<Arc<Raster>, String>) {
         match result {
             Ok(raster) => {
-                self.style.repair(&raster);
+                if std::mem::take(&mut self.restyle) {
+                    self.style = RasterStyle::default_for(&raster);
+                } else {
+                    self.style.repair(&raster);
+                }
                 self.data = Some(raster);
             }
             Err(error) => self.error = Some(error),
         }
-        false
     }
 
     /// Statistics of the renderer's bands (one per band, in its order) without the pixels the
@@ -700,8 +814,26 @@ fn one() -> f64 {
 }
 
 impl RasterStyle {
-    /// The default look: the file's colours, RGB for colour images, unique values for a few
-    /// categories, otherwise a grey stretch.
+    /// A style for a layer whose pixels haven't arrived (its own look replaces it when they do).
+    pub fn placeholder() -> RasterStyle {
+        RasterStyle {
+            renderer: RasterRenderer::Stretch { band: 0, ramp: Ramp::gray(), invert: false },
+            stretch: Stretch::default(),
+            dra: false,
+            resampling: Resampling::Nearest,
+            brightness: 0.0,
+            contrast: 0.0,
+            gamma: 1.0,
+            rotation: 0.0,
+            mask: RasterMask::default(),
+        }
+    }
+
+    /// The default look, as the file's PhotometricInterpretation says: the file's colours, RGB for
+    /// colour images and for grey ones of exactly three bands (most remote sensing images are
+    /// grey, whatever their bands: three are taken as red, green and blue), unique values for a
+    /// few categories, otherwise a grey stretch of the first band (an image of more bands is
+    /// combined as the user picks).
     pub fn default_for(r: &Raster) -> RasterStyle {
         RasterStyle::default_with(r, &RasterDefaults::default())
     }
@@ -715,7 +847,7 @@ impl RasterStyle {
             ColorHint::Rgb { .. } if r.band_count() >= 3 => {
                 (RasterRenderer::Rgb { red: 0, green: 1, blue: 2 }, if byte_rgb { Stretch::None } else { Stretch::default() })
             }
-            _ if r.band_count() >= 3 => (RasterRenderer::Rgb { red: 0, green: 1, blue: 2 }, Stretch::default()),
+            ColorHint::Gray if r.band_count() == 3 => (RasterRenderer::Rgb { red: 0, green: 1, blue: 2 }, Stretch::default()),
             _ => match r.bands.first().and_then(|b| b.stats.categories.as_ref()).filter(|c| c.len() <= 16 && r.data_type.contains("Int")) {
                 Some(_) => (unique_values(r, 0, Ramp::Harbour), Stretch::None),
                 None => (RasterRenderer::Stretch { band: 0, ramp: d.ramp.clone(), invert: d.invert }, d.stretch),

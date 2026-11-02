@@ -3,23 +3,28 @@
 //! tile (`cog:{z}/{x}/{y}@<address>`) is drawn from them in Web Mercator, as a picture, so a COG is
 //! a tile layer like a PMTiles archive: drawn as its tiles land, on the desktop and in the browser.
 //!
-//! Grey images are stretched between their 2nd and 98th percentiles (from the coarsest
-//! overview); 8-bit colour images are shown as they are. An address may end with a [`Look`]
-//! (`#bands=2,17,10&range=-0.3,0.3`): the bands shown as red, green and blue (or one, grey) and
-//! their stretch. Bands stored apart (planar files, such as AlphaEarth's 64 embedding bands) are
-//! read a band at a time, only those shown. Files are hostile input: header reads, tile counts and
-//! sizes are bounded (see [`rustgis_data::raster::cog`]).
+//! A file's own look is what its PhotometricInterpretation says: RGB images in colour, palette
+//! images by their colour table, grey (MinIsBlack) ones grey, their first band, but for three bands
+//! (taken as red, green and blue), each with its alpha band. Other bands of an image with more are
+//! for the user to pick. Grey and colour images are stretched between their 2nd and 98th
+//! percentiles (from the coarsest overview); 8-bit colour images are shown as they are. An address
+//! may end with a [`Look`] (`#bands=2,17,10&range=-0.3,0.3`): the bands shown as red, green and
+//! blue (or one, grey) and their stretch. Bands stored apart (planar files, such as AlphaEarth's 64
+//! embedding bands) are read a band at a time, only those shown. Files are hostile input: header
+//! reads, tile counts and sizes are bounded (see [`rustgis_data::raster::cog`]).
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use rustgis_data::raster::ColorHint;
-use rustgis_data::raster::cog::{self, Layout, Parse, Sparse};
+use rustgis_data::raster::cog::{self, Layout, Level, Parse, Sparse};
 use rustgis_data::raster::crs::Transformer;
 use rustgis_geom::Coord;
 use web_time::{Duration, Instant};
 
 use crate::cache::{Done, MAX_BYTES, RANGE};
+
+pub mod raster;
 
 /// The scheme of a map tile drawn from a COG.
 pub const SCHEME: &str = "cog:";
@@ -168,33 +173,51 @@ pub struct Info {
     /// Stretches whose read failed, and when: drawn with the type's full range meanwhile (not
     /// kept), read again after [`RETRY`].
     stretch_failed: Mutex<HashMap<(Vec<usize>, bool), Instant>>,
-    /// The file's own bands shown as red, green, blue (or one, grey), and alpha.
-    rgb: bool,
-    alpha: bool,
+    /// The file's alpha band, shown with any look.
+    alpha: Option<usize>,
 }
 
 impl Info {
-    /// The bands a look shows (0-based): three as red, green and blue (and the file's alpha, as a
-    /// fourth, for its own), or one, grey.
-    pub fn shown(&self, look: &Look) -> Vec<usize> {
+    /// The bands a look colours the map with (0-based): three as red, green and blue, or one,
+    /// grey. Its own: an RGB image's colour bands, or a grey image's three bands (most remote
+    /// sensing images are grey, whatever their bands: three are taken as red, green and blue);
+    /// else the first band, the others for the user to pick.
+    pub fn colour(&self, look: &Look) -> Vec<usize> {
         let n = self.layout.bands.max(1);
         // Bands the file has, as many as asked (one or three); otherwise the file's own look.
         let picked: Vec<usize> = look.bands.iter().copied().filter(|b| *b < n).collect();
         match picked.len() {
             1 | 3 if picked.len() == look.bands.len() => picked,
-            _ if self.rgb && self.alpha => vec![0, 1, 2, 3],
-            _ if self.rgb => vec![0, 1, 2],
+            _ if matches!(self.layout.color, ColorHint::Rgb { .. }) && n >= 3 => vec![0, 1, 2],
+            _ if matches!(self.layout.color, ColorHint::Gray) && n == 3 => vec![0, 1, 2],
             _ => vec![0],
         }
     }
 
+    /// The bands a look reads: its colour bands, then the file's alpha band, if it has one.
+    pub fn shown(&self, look: &Look) -> Vec<usize> {
+        let mut shown = self.colour(look);
+        if let Some(a) = self.alpha.filter(|a| !shown.contains(a)) {
+            shown.push(a);
+        }
+        shown
+    }
+
+    /// The colours of a palette image's values, when its own look shows them.
+    fn palette(&self, look: &Look) -> Option<&[[u8; 4]]> {
+        match &self.layout.color {
+            ColorHint::Palette(table) if look.bands.is_empty() && look.range.is_none() && !look.aef => Some(table),
+            _ => None,
+        }
+    }
+
     /// The bands' (low, high) values for a look, when known.
-    fn stretch_for(&self, look: &Look, shown: &[usize]) -> Option<Vec<(f32, f32)>> {
-        let colour = &shown[..shown.len().min(3)];
+    fn stretch_for(&self, look: &Look) -> Option<Vec<(f32, f32)>> {
+        let colour = self.colour(look);
         if let Some(r) = look.range {
             return Some(vec![r; colour.len()]);
         }
-        self.stretch.lock().unwrap_or_else(|e| e.into_inner()).get(&(colour.to_vec(), look.aef)).cloned()
+        self.stretch.lock().unwrap_or_else(|e| e.into_inner()).get(&(colour, look.aef)).cloned()
     }
 }
 
@@ -212,7 +235,9 @@ fn infos() -> &'static Mutex<HashMap<String, State>> {
 type Bands = Arc<Vec<Vec<f32>>>;
 
 enum TileState {
-    Ready(Bands, usize),
+    /// Decoded: its bands, how many samples they hold, and when it was last used (see
+    /// [`Tiles::clock`]).
+    Ready(Bands, usize, u64),
     Loading(Vec<Box<dyn FnOnce(Result<Bands, String>) + Send>>),
 }
 
@@ -220,6 +245,48 @@ enum TileState {
 struct Tiles {
     map: HashMap<(String, usize, u32), TileState>,
     samples: usize,
+    /// Goes up with each use: past [`BUDGET`], the tile used longest ago makes room, never one
+    /// the map in view has just used (which would be read again, and make room for itself by
+    /// throwing out another in view: the view flickering between levels).
+    clock: u64,
+}
+
+impl Tiles {
+    /// A tile ready, marked as just used.
+    fn used(&mut self, key: &(String, usize, u32)) -> Option<Bands> {
+        self.clock += 1;
+        let now = self.clock;
+        match self.map.get_mut(key) {
+            Some(TileState::Ready(b, _, used)) => {
+                *used = now;
+                Some(b.clone())
+            }
+            _ => None,
+        }
+    }
+
+    /// Keeps a tile ready, making room for it past [`BUDGET`] (the tiles used longest ago go);
+    /// returns what was kept under its key before.
+    fn keep(&mut self, key: (String, usize, u32), bands: Bands, samples: usize) -> Option<TileState> {
+        while self.samples + samples > BUDGET {
+            let oldest = self
+                .map
+                .iter()
+                .filter_map(|(k, s)| match s {
+                    TileState::Ready(_, _, used) => Some((*used, k)),
+                    TileState::Loading(_) => None,
+                })
+                .min_by_key(|(used, _)| *used)
+                .map(|(_, k)| k.clone());
+            let Some(k) = oldest else { break };
+            if let Some(TileState::Ready(_, n, _)) = self.map.remove(&k) {
+                self.samples = self.samples.saturating_sub(n);
+            }
+        }
+        self.clock += 1;
+        self.samples += samples;
+        self.map.insert(key, TileState::Ready(bands, samples, self.clock))
+    }
 }
 
 fn tiles() -> &'static Mutex<Tiles> {
@@ -244,7 +311,15 @@ pub(crate) fn forget_file(url: &str) {
     }
     drop(all);
     let mut t = tiles().lock().unwrap_or_else(|e| e.into_inner());
-    t.map.retain(|(u, _, _), s| u != url || matches!(s, TileState::Loading(_)));
+    let mut freed = 0;
+    t.map.retain(|(u, _, _), s| match s {
+        TileState::Ready(_, n, _) if u == url => {
+            freed += *n;
+            false
+        }
+        _ => true,
+    });
+    t.samples = t.samples.saturating_sub(freed);
 }
 
 /// A file's info: `Ok(None)` while it is being read (asking for it starts the read).
@@ -481,8 +556,17 @@ fn stats(url: String, header: Sparse, layout: Layout, done: Box<dyn FnOnce(Resul
     // The zoom whose pixels match the full image's.
     let res = (merc[2] - merc[0]).abs() / w.max(1.0);
     let max_zoom = if res > 0.0 { (2.0 * HALF / f64::from(SIZE) / res).log2().ceil().clamp(0.0, 24.0) as u8 } else { 18 };
-    let rgb = layout.bands >= 3;
-    let alpha = matches!(layout.color, ColorHint::Rgb { alpha: true });
+    let alpha = match layout.color {
+        ColorHint::Rgb { alpha: true } if layout.bands >= 4 => Some(3),
+        ColorHint::GrayAlpha if layout.bands >= 2 => Some(1),
+        _ => None,
+    };
+    let rgb = match layout.color {
+        ColorHint::Rgb { .. } => layout.bands >= 3,
+        ColorHint::Gray => layout.bands == 3,
+        _ => false,
+    };
+    let palette = matches!(layout.color, ColorHint::Palette(_));
     let bytes = layout.data_type == "UInt8";
     let info = Arc::new(Info {
         layout,
@@ -495,14 +579,15 @@ fn stats(url: String, header: Sparse, layout: Layout, done: Box<dyn FnOnce(Resul
         stretch: Mutex::new(HashMap::new()),
         stretching: Mutex::new(HashMap::new()),
         stretch_failed: Mutex::new(HashMap::new()),
-        rgb,
         alpha,
     });
-    // 8-bit colour images are shown as they are; others between the coarsest overview's
-    // percentiles.
+    // 8-bit colour images are shown as they are, palette images by their table; others between
+    // the coarsest overview's percentiles.
     let own = Look::default();
-    if bytes && rgb {
-        info.stretch.lock().unwrap_or_else(|e| e.into_inner()).insert((vec![0, 1, 2], false), vec![(0.0, 255.0); 3]);
+    if (bytes && rgb) || palette {
+        let colour = info.colour(&own);
+        let n = colour.len();
+        info.stretch.lock().unwrap_or_else(|e| e.into_inner()).insert((colour, false), vec![(0.0, 255.0); n]);
         done(Ok(info));
         return;
     }
@@ -518,10 +603,19 @@ fn stats(url: String, header: Sparse, layout: Layout, done: Box<dyn FnOnce(Resul
     );
 }
 
-/// The image the stretch is read from: the coarsest at least 256 pixels wide (GDAL writes
-/// overviews down to a pixel, too few to take percentiles of), else the full image.
-fn stats_level(layout: &Layout) -> usize {
-    layout.levels.iter().rposition(|l| l.width >= 256 && l.height >= 256).unwrap_or(0)
+/// The image the stretch is read from: of those few enough tiles to read for it, the coarsest of
+/// at least 256 × 256 pixels (GDAL writes overviews down to a pixel, too few to take percentiles
+/// of), else the finest. A long strip's overviews are narrow: one 256 pixels wide is too many tiles
+/// long, a narrower one plenty of pixels. None small enough: the coarsest (the type's range is
+/// shown).
+fn stats_level(levels: &[Level]) -> usize {
+    let few = |l: &Level| (l.tiles() as usize) <= MAX_STATS_TILES;
+    let pixels = |l: &Level| u64::from(l.width) * u64::from(l.height);
+    levels
+        .iter()
+        .rposition(|l| few(l) && pixels(l) >= 256 * 256)
+        .or_else(|| levels.iter().position(few))
+        .unwrap_or(levels.len().saturating_sub(1))
 }
 
 /// The full range of a file's type of values, as a look shows them (floats have none: 0–255 is a
@@ -541,7 +635,7 @@ fn type_range(layout: &Layout, aef: bool) -> (f32, f32) {
 /// Keeps a look's stretch: a few looks a file (a script trying many is hostile input); past them,
 /// the others are read again when asked for.
 fn keep_stretch(info: &Info, key: (Vec<usize>, bool), s: Vec<(f32, f32)>) {
-    let own = (info.shown(&Look::default()).into_iter().take(3).collect::<Vec<_>>(), false);
+    let own = (info.colour(&Look::default()), false);
     let mut kept = info.stretch.lock().unwrap_or_else(|e| e.into_inner());
     // Past the cap one other look goes, never the file's own (an 8-bit colour image's is "as it
     // is", not read).
@@ -570,13 +664,12 @@ fn percentiles(mut v: Vec<f32>) -> (f32, f32) {
 type StretchThen = Box<dyn FnOnce(Result<Vec<(f32, f32)>, String>) + Send>;
 
 fn with_stretch(info: Arc<Info>, file: String, look: Look, then: StretchThen) {
-    let shown = info.shown(&look);
-    if let Some(s) = info.stretch_for(&look, &shown) {
+    if let Some(s) = info.stretch_for(&look) {
         then(Ok(s));
         return;
     }
-    let colour: Vec<usize> = shown.iter().copied().take(3).collect();
-    let coarsest = stats_level(&info.layout);
+    let colour = info.colour(&look);
+    let coarsest = stats_level(&info.layout.levels);
     let n = info.layout.levels.get(coarsest).map(|l| l.tiles() as usize).unwrap_or(0);
     // Too many tiles to read for it: the values' full range for the type.
     if n == 0 || n > MAX_STATS_TILES {
@@ -785,13 +878,13 @@ fn get_tile(info: Arc<Info>, url: String, level: usize, idx: u32, then: Box<dyn 
     let key = (url.clone(), level, idx);
     {
         let mut t = tiles().lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(b) = t.used(&key) {
+            drop(t);
+            then(Ok(b));
+            return;
+        }
         match t.map.get_mut(&key) {
-            Some(TileState::Ready(b, _)) => {
-                let b = b.clone();
-                drop(t);
-                then(Ok(b));
-                return;
-            }
+            Some(TileState::Ready(..)) => {}
             Some(TileState::Loading(w)) => {
                 w.push(then);
                 return;
@@ -810,19 +903,8 @@ fn get_tile(info: Arc<Info>, url: String, level: usize, idx: u32, then: Box<dyn 
             let waiting = {
                 let mut t = tiles().lock().unwrap_or_else(|e| e.into_inner());
                 let old = match &r {
-                    Ok(b) => {
-                        // Over the budget: tiles ready make room (the cache is a working set).
-                        while t.samples + samples > BUDGET {
-                            let Some(k) = t.map.iter().find(|(_, s)| matches!(s, TileState::Ready(..))).map(|(k, _)| k.clone()) else {
-                                break;
-                            };
-                            if let Some(TileState::Ready(_, n)) = t.map.remove(&k) {
-                                t.samples = t.samples.saturating_sub(n);
-                            }
-                        }
-                        t.samples += samples;
-                        t.map.insert(key, TileState::Ready(b.clone(), samples))
-                    }
+                    // Over the budget: the tiles used longest ago make room.
+                    Ok(b) => t.keep(key, b.clone(), samples),
                     // A failed tile is read again by the next map tile that needs it.
                     Err(_) => t.map.remove(&key),
                 };
@@ -974,7 +1056,15 @@ fn draw(info: Arc<Info>, url: String, look: &Look, stretch: &[(f32, f32)], z: u8
         return;
     }
     let shown = info.shown(look);
-    let pen = Pen { rgb: shown.len() >= 3, alpha: shown.len() >= 4, aef: look.aef, stretch: stretch.to_vec() };
+    let colours = info.colour(look).len();
+    let pen = Pen {
+        rgb: colours >= 3,
+        alpha: (shown.len() > colours).then_some(colours),
+        alpha_max: type_range(&info.layout, false).1.max(1.0),
+        palette: info.palette(look).map(<[[u8; 4]]>::to_vec),
+        aef: look.aef,
+        stretch: stretch.to_vec(),
+    };
     let w2 = wanted.clone();
     fetch_bands(
         info,
@@ -991,9 +1081,13 @@ fn draw(info: Arc<Info>, url: String, look: &Look, stretch: &[(f32, f32)], z: u8
 
 /// How a map tile's pixels are coloured from the bands shown.
 struct Pen {
-    /// Three bands as red, green and blue (else one, grey), and a fourth as alpha.
+    /// Three bands as red, green and blue (else one, grey).
     rgb: bool,
-    alpha: bool,
+    /// Where the alpha band is among those shown, after the colour ones, and its opaque value.
+    alpha: Option<usize>,
+    alpha_max: f32,
+    /// A palette image's colours, by value (no stretch).
+    palette: Option<Vec<[u8; 4]>>,
     aef: bool,
     stretch: Vec<(f32, f32)>,
 }
@@ -1011,23 +1105,38 @@ fn paint(pen: &Pen, spots: &[Option<(u32, usize)>], wanted: &[u32], tiles: &[Pic
         let Some((t, at)) = spot else { continue };
         let Some(bands) = wanted.binary_search(t).ok().and_then(|i| tiles.get(i)) else { continue };
         let v = |b: usize| bands.get(b).and_then(|(chunk, i)| chunk.get(*i)).and_then(|band| band.get(*at)).copied().unwrap_or(f32::NAN);
+        // The alpha band's value, 0 to 255 (opaque without one); none where it hides the pixel.
+        let a = match pen.alpha {
+            Some(i) => {
+                let a = v(i);
+                if a.is_nan() || a <= 0.0 {
+                    continue;
+                }
+                ((a / pen.alpha_max).clamp(0.0, 1.0) * 255.0).round() as u8
+            }
+            None => 255,
+        };
         let px = if pen.rgb {
             let (r, g, b) = (v(0), v(1), v(2));
             if !(r.is_finite() && g.is_finite() && b.is_finite()) {
                 continue;
             }
-            let a = if pen.alpha { v(3) } else { 255.0 };
-            if pen.alpha && (a.is_nan() || a <= 0.0) {
+            [scale(0, r), scale(1, g), scale(2, b), a]
+        } else if let Some(table) = &pen.palette {
+            let g = v(0);
+            // A value past the table: nothing.
+            let Some(c) = (g.is_finite() && g >= 0.0).then(|| table.get(g as usize)).flatten() else { continue };
+            if c[3] == 0 {
                 continue;
             }
-            [scale(0, r), scale(1, g), scale(2, b), a.clamp(0.0, 255.0) as u8]
+            [c[0], c[1], c[2], ((u16::from(c[3]) * u16::from(a)) / 255) as u8]
         } else {
             let g = v(0);
             if !g.is_finite() {
                 continue;
             }
             let g = scale(0, g);
-            [g, g, g, 255]
+            [g, g, g, a]
         };
         if let Some(out) = rgba.get_mut(k * 4..k * 4 + 4) {
             out.copy_from_slice(&px);
@@ -1239,7 +1348,28 @@ mod tests {
         let rustgis_data::raster::cog::Parse::Done(l) = cog::layout(&Sparse::default().with(0, file)).unwrap() else { panic!() };
         // Overviews down to 64 pixels: the 256-pixel one is read.
         assert_eq!(l.levels.last().map(|l| l.width), Some(64));
-        assert_eq!(l.levels[stats_level(&l)].width, 256);
+        assert_eq!(l.levels[stats_level(&l.levels)].width, 256);
+        // A long strip (a WorldView image 44 626 × 353 888 pixels, in tiles of 256): its overview
+        // 349 pixels wide is 22 tiles, too many; the one 175 wide, 6 tiles, still a quarter of a
+        // million pixels, is read.
+        let level = |width: u32, height: u32| Level {
+            ifd: 0,
+            width,
+            height,
+            tile_width: 256,
+            tile_height: 256,
+            offsets: Vec::new(),
+            counts: Vec::new(),
+        };
+        let strip: Vec<Level> = [(44_626, 353_888), (5579, 44_236), (698, 5530), (349, 2765), (175, 1383), (88, 692)]
+            .into_iter()
+            .map(|(w, h)| level(w, h))
+            .collect();
+        assert_eq!(strip[stats_level(&strip)].width, 175);
+        // Only small ones: the finest of them; none: the coarsest.
+        assert_eq!(stats_level(&[level(4096, 4096), level(200, 200), level(100, 100)]), 1);
+        assert_eq!(stats_level(&[level(8192, 8192), level(4096, 4096)]), 1);
+        assert_eq!(stats_level(&[]), 0);
     }
 
     /// Reads `file`'s layout as [`load`] and [`step`] do, a range at a time: the layout, how many
@@ -1356,7 +1486,7 @@ mod tests {
         red[1] = f32::NAN;
         let tile: Picked = vec![(Arc::new(vec![red]), 0), (chunk(20.0), 0), (chunk(30.0), 0)];
         let spots: Vec<Option<(u32, usize)>> = (0..(SIZE * SIZE) as usize).map(|k| if k < 2 { Some((7, k)) } else { None }).collect();
-        let pen = Pen { rgb: true, alpha: false, aef: false, stretch: vec![(0.0, 40.0); 3] };
+        let pen = Pen { rgb: true, alpha: None, alpha_max: 255.0, palette: None, aef: false, stretch: vec![(0.0, 40.0); 3] };
         let out = paint(&pen, &spots, &[7], &[tile]).unwrap();
         let px = &out[crate::cache::RAW.len() + 8..];
         assert_eq!(&px[..4], &[64, 128, 191, 255]);
@@ -1382,5 +1512,38 @@ mod tests {
         assert_eq!(at(s), &[0, 0, 0, 0], "the next row's first pixel");
         // Nothing there: no picture.
         assert!(paint(&pen, &vec![None; spots.len()], &[], &[]).unwrap().is_empty());
+    }
+
+    #[test]
+    fn paints_grey_with_alpha_and_palettes() {
+        let chunk = |v: Vec<f32>| -> Bands { Arc::new(vec![v]) };
+        let spots: Vec<Option<(u32, usize)>> = (0..(SIZE * SIZE) as usize).map(|k| (k < 3).then_some((7, k))).collect();
+        let px = |out: Vec<u8>| out[crate::cache::RAW.len() + 8..crate::cache::RAW.len() + 8 + 12].to_vec();
+        // A 16-bit pan band and its 16-bit alpha band: opaque, half, hidden.
+        let tile: Picked = vec![(chunk(vec![500.0, 1000.0, 1000.0, 0.0]), 0), (chunk(vec![65535.0, 32768.0, 0.0, 0.0]), 0)];
+        let pen = Pen { rgb: false, alpha: Some(1), alpha_max: 65535.0, palette: None, aef: false, stretch: vec![(0.0, 1000.0)] };
+        assert_eq!(px(paint(&pen, &spots, &[7], &[tile]).unwrap()), [128, 128, 128, 255, 255, 255, 255, 128, 0, 0, 0, 0]);
+        // A palette image: each value its colour, a transparent one or one past the table nothing.
+        let tile: Picked = vec![(chunk(vec![1.0, 2.0, 9.0, 0.0]), 0)];
+        let table = vec![[0, 0, 0, 255], [200, 10, 20, 255], [0, 0, 0, 0]];
+        let pen = Pen { rgb: false, alpha: None, alpha_max: 255.0, palette: Some(table), aef: false, stretch: vec![(0.0, 255.0)] };
+        let out = px(paint(&pen, &spots, &[7], &[tile]).unwrap());
+        assert_eq!(&out[..4], &[200, 10, 20, 255]);
+    }
+
+    #[test]
+    fn the_tiles_used_longest_ago_make_room() {
+        let mut t = Tiles::default();
+        let key = |i: u32| ("https://x.org/a.tif".to_string(), 0usize, i);
+        let bands: Bands = Arc::new(Vec::new());
+        let half = BUDGET / 2;
+        t.keep(key(1), bands.clone(), half);
+        t.keep(key(2), bands.clone(), half);
+        // Tile 1 is used again (the view still shows it): tile 2 makes room for tile 3.
+        assert!(t.used(&key(1)).is_some());
+        t.keep(key(3), bands.clone(), half);
+        assert!(t.used(&key(1)).is_some() && t.used(&key(3)).is_some());
+        assert!(t.used(&key(2)).is_none());
+        assert_eq!(t.samples, 2 * half);
     }
 }

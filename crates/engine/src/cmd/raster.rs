@@ -348,6 +348,8 @@ pub fn add_raster(s: &mut Session, name: &str, mut layer: RasterLayer) -> CmdRes
     }
     let (w, h, n, overview) = layer.data.as_ref().map(|d| (d.width, d.height, d.band_count(), d.overview)).unwrap_or_default();
     let rounded = layer.data.as_deref().and_then(rounded_count);
+    // Read in place, the map shows the full image as it draws: the overview is only what's held.
+    let overview = overview.filter(|_| !layer.in_place);
     let empty_before = s.map().layers.is_empty();
     let id = s.map_mut().add_raster(unique.clone(), layer);
     s.active_layer = Some(id);

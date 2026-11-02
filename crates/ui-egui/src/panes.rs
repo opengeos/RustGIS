@@ -5930,8 +5930,31 @@ fn raster_details(ui: &mut Ui, rl: &rustgis_engine::map::RasterLayer, t: &Tokens
         ("South", format!("{:.4}°", e.min_y)),
         ("North", format!("{:.4}°", e.max_y)),
     ];
-    if let Some((w, h)) = d.overview {
-        rows.insert(1, ("Full size", format!("{w} × {h}")));
+    match d.overview {
+        // Read in place, the map draws the full image: the overview is what the layer holds.
+        Some((w, h)) if rl.in_place => {
+            let (sx, sy) = (f64::from(d.width) / f64::from(w.max(1)), f64::from(d.height) / f64::from(h.max(1)));
+            let f = rustgis_engine::map::symbology::fmt_num;
+            if let Some(r) = rows.get_mut(0) {
+                *r = ("Size", format!("{w} × {h}"));
+            }
+            if let Some(r) = rows.get_mut(3) {
+                *r = ("Cell size", format!("{} × {}{unit}", f(cx * sx), f(cy * sy)));
+            }
+            rows.insert(
+                1,
+                (
+                    "Read",
+                    crate::i18n::fmt(
+                        "In place, holding a {w} × {h} overview",
+                        &[("w", &d.width.to_string()), ("h", &d.height.to_string())],
+                    ),
+                ),
+            );
+        }
+        Some((w, h)) => rows.insert(1, ("Full size", format!("{w} × {h}"))),
+        None if rl.in_place => rows.insert(1, ("Read", tl!("In place").to_string())),
+        None => {}
     }
     let value_w = (ui.available_width() - 140.0).max(80.0);
     egui::Grid::new("raster_details").num_columns(2).striped(true).max_col_width(value_w).spacing(vec2(12.0, 4.0)).show(ui, |ui| {

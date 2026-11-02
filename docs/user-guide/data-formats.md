@@ -100,15 +100,33 @@ unresponsive. The original JPEG 2000 byte buffer is released once it has been st
 before GDAL runs or the GeoTIFF is read back. The converted GeoTIFF and decoded raster still
 occupy memory together; the 512 MiB file limit is not a limit on total process memory.
 
-A tiled GeoTIFF is read in place rather than downloaded: its header first, then, by HTTP range
-requests, the tiles of the overview each part of the view needs. Overviews make zoomed-out reads
-smaller. It is a tile layer (`map.addTiles` kind `cog`, saved by its address), drawn under the map's
-own layers: RGB(A) 8-bit images in colour, other images stretched between the 2nd and 98th
-percentiles of their coarsest overview. Planar files (bands stored apart), signed-byte data and
-bottom-up images work too. `map.setTiles` selects one or three `"bands"` (from 1) and a fixed
-`"range"`; see [Satellite embeddings](web-data.md#satellite-embeddings).
-A GeoTIFF in strips, a rotated image or an unsupported tiled image downloads whole as a raster layer, as does a
-GeoTIFF added with `"whole": true` (for raster tools and symbology). The web app needs the server
+A tiled GeoTIFF (a cloud-optimised one) is read in place rather than downloaded: its header
+first, then, by HTTP range requests, only the parts the map needs. It is a raster layer like a
+GeoTIFF file, saved by its address: the Symbology pane, the raster commands (`raster.symbology`,
+`raster.bands`, `raster.stretch`, `raster.dra`, `raster.enhance`, `raster.mask`…), its legend,
+identify and the raster tools work on it as on a file's. The layer holds an overview of the image
+(every band, about two million values), from which its statistics, histograms and tools read, as a
+file too large to hold whole is opened from an overview; zoomed in past it, the map reads the part
+in view at the resolution it needs as it draws, and draws it with the layer's style and the
+overview's statistics, so the image looks the same at every zoom. The Properties pane says the
+image's full size and that it is read in place.
+
+Its first look is what the file's PhotometricInterpretation tag says:
+
+- **RGB:** red, green and blue, with the alpha band if there is one. Bands past the colour ones
+  (an RGB and near-infrared orthophoto, say) are read too.
+- **Palette:** its colour table (Colormap).
+- **Grey (MinIsBlack, as most remote sensing images are):** the first band stretched in grey, or
+  three bands as red, green and blue. An alpha band is shown with it.
+
+In an image with more bands (an 8-band multispectral image, say) you pick the combination in the
+Symbology pane, as for any raster. GeoTIFF files follow the same rule. Planar files (bands stored
+apart), 8- to 64-bit integer and floating-point data, signed-byte data and bottom-up images work
+too. A dated series of GeoTIFFs (an address with date placeholders), a data cube's files and
+AlphaEarth's embeddings are tile layers that follow the time slider or dequantise their values;
+see [Satellite embeddings](web-data.md#satellite-embeddings).
+A GeoTIFF in strips, a rotated image or an unsupported tiled image downloads whole, as does a
+GeoTIFF added with `"whole": true` (for raster tools that need every pixel at full resolution). The web app needs the server
 to allow range requests (CORS with the `Range` header).
 
 A GeoParquet or FlatGeobuf file by its address is read in place too, a view at a time, however
@@ -128,7 +146,7 @@ desktop, while in the web app they need the file downloaded first.
 
 On desktop, `layer.addUrl` waits for downloads, up to a minute; the From URL… dialog (`ui.addUrl`)
 and a plugin's `layer.addUrl` work in the background. In the web app the same dialog handles asynchronous downloads.
-`layer.addUrl` can add PMTiles and COG tile layers directly, but an ordinary download returns
+`layer.addUrl` can add PMTiles archives and GeoTIFFs read in place directly, but an ordinary download returns
 `{"pending": true, "url": "…"}` and is added later by the app. To open a remote GeoParquet or
 FlatGeobuf whose header hasn't been fetched yet, use the From URL… dialog or a `?data=` link.
 

@@ -102,6 +102,179 @@ pub(crate) fn draw(
     draw_with(pm, r, style, stats, view, opacity, full_res, place, threads);
 }
 
+/// Screen points a side sampled to find the part of a raster read in place that is in view, and
+/// how finely.
+const WINDOW_GRID: usize = 17;
+
+/// Draws a raster layer read in place (a cloud-optimised GeoTIFF by its address, see
+/// [`rustgis_map::raster::RasterLayer::in_place`]) as [`draw`] draws one held whole: its overview
+/// `r` (the layer's pixels), or, zoomed in past it, the part in view read from the level the view
+/// needs, drawn over the overview until its tiles arrive. `stats` are the renderer's bands'
+/// statistics (the overview's when not given), so the part in view is stretched as the whole is.
+/// Returns whether tiles are still to come (the map is drawn again as they land).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn draw_in_place(
+    pm: &mut Pixmap,
+    address: &str,
+    r: &Raster,
+    style: &RasterStyle,
+    stats: Option<&[BandStats]>,
+    view: &View,
+    opacity: f32,
+    full_res: bool,
+    place: Place,
+) -> bool {
+    let bands = style.renderer.bands();
+    let own: Vec<BandStats> = bands.iter().map(|b| r.bands.get(*b).map(|b| b.stats.clone()).unwrap_or_default()).collect();
+    let stats = stats.unwrap_or(&own);
+    let whole = |pm: &mut Pixmap| draw(pm, r, style, Some(stats), view, opacity, full_res, place);
+    // A rotated raster turns about the whole image's centre, not the part in view's.
+    let full = r.overview.unwrap_or((r.width, r.height));
+    if style.rotation.rem_euclid(360.0).abs() > 1e-6 || full.0 <= r.width {
+        whole(pm);
+        return false;
+    }
+    let info = match rustgis_tiles::cog::info(address) {
+        Ok(Some(info)) => info,
+        Ok(None) => {
+            whole(pm);
+            return true;
+        }
+        Err(_) => {
+            whole(pm);
+            return false;
+        }
+    };
+    let Some(want) = in_view(r, view, place, pm.width(), pm.height(), full_res) else {
+        whole(pm);
+        return false;
+    };
+    // The coarsest level at least as fine as the view (within a quarter); zoomed in past the full
+    // image, the full image.
+    let levels = &info.layout.levels;
+    let full_px = want.per_px * f64::from(full.0) / f64::from(r.width.max(1));
+    let fine_enough = |l: &rustgis_data::raster::cog::Level| f64::from(full.0) / f64::from(l.width.max(1)) <= full_px * 1.25;
+    let mut level = levels.iter().rposition(fine_enough).unwrap_or(0);
+    // The renderer's bands, then the image's alpha band, read as the window's own bands.
+    let mut read = bands.clone();
+    let alpha = match (&style.renderer, &r.color) {
+        (RasterRenderer::Rgb { .. }, ColorHint::Rgb { alpha: true }) if r.band_count() >= 4 && !read.contains(&3) => Some(3),
+        (RasterRenderer::Stretch { band: 0, .. } | RasterRenderer::ShadedRelief { band: 0, .. }, ColorHint::GrayAlpha) => Some(1),
+        _ => None,
+    };
+    read.extend(alpha);
+    let mut window = None;
+    while let Some(l) = levels.get(level) {
+        // The part in view, in the level's pixels, a pixel past each side (for bilinear sampling).
+        let (sx, sy) = (f64::from(l.width) / f64::from(r.width.max(1)), f64::from(l.height) / f64::from(r.height.max(1)));
+        let edge = |v: f64, k: f64, max: u32| ((v * k).floor() as i64).clamp(0, i64::from(max)) as u32;
+        let cols = (edge(want.cols.0, sx, l.width).saturating_sub(1), (edge(want.cols.1, sx, l.width) + 2).min(l.width));
+        let rows = (edge(want.rows.0, sy, l.height).saturating_sub(1), (edge(want.rows.1, sy, l.height) + 2).min(l.height));
+        if rustgis_tiles::cog::raster::fits(address, level, cols, rows, &read) {
+            window = Some((level, cols, rows));
+            break;
+        }
+        // Too large a part for the tiles kept (a view far wider than the screen, a file of many
+        // bands stored together): a coarser level.
+        level += 1;
+    }
+    let Some((level, cols, rows)) = window else {
+        whole(pm);
+        return false;
+    };
+    // The image at the overview's level is the overview.
+    if levels.get(level).is_some_and(|l| l.width <= r.width) {
+        whole(pm);
+        return false;
+    }
+    let color = match (&style.renderer, &r.color) {
+        (_, ColorHint::Palette(p)) => ColorHint::Palette(p.clone()),
+        (RasterRenderer::Rgb { .. }, _) => ColorHint::Rgb { alpha: alpha.is_some() },
+        _ if alpha.is_some() => ColorHint::GrayAlpha,
+        _ => ColorHint::Gray,
+    };
+    let w = match rustgis_tiles::cog::raster::window(address, level, cols, rows, &read, color) {
+        Ok(w) => w,
+        Err(_) => {
+            whole(pm);
+            return false;
+        }
+    };
+    let Some(part) = w.raster else {
+        whole(pm);
+        return w.pending;
+    };
+    // Until its tiles arrive, the part in view goes over the overview.
+    if w.pending {
+        whole(pm);
+    }
+    let mut own_style = style.clone();
+    own_style.renderer = renumbered(&style.renderer);
+    draw(pm, &part, &own_style, Some(stats), view, opacity, full_res, place);
+    w.pending
+}
+
+/// A renderer drawing the same bands of a raster holding only those, in its order (see
+/// [`RasterRenderer::bands`]).
+fn renumbered(renderer: &RasterRenderer) -> RasterRenderer {
+    let mut out = renderer.clone();
+    match &mut out {
+        RasterRenderer::Stretch { band, .. }
+        | RasterRenderer::Classify { band, .. }
+        | RasterRenderer::UniqueValues { band, .. }
+        | RasterRenderer::ShadedRelief { band, .. } => *band = 0,
+        RasterRenderer::Rgb { red, green, blue } => (*red, *green, *blue) = (0, 1, 2),
+        RasterRenderer::Colormap => {}
+    }
+    out
+}
+
+/// The part of a raster in view: its columns and rows (half-open, in its own pixels, possibly
+/// fractional), and how many of its pixels a pixel drawn spans.
+#[derive(Debug, PartialEq)]
+struct InView {
+    cols: (f64, f64),
+    rows: (f64, f64),
+    per_px: f64,
+}
+
+/// [`InView`] of a raster drawn into a `width × height` pixmap, from a grid of screen points;
+/// `None` when it isn't in view.
+fn in_view(r: &Raster, view: &View, place: Place, width: u32, height: u32, full_res: bool) -> Option<InView> {
+    let k = if view.pixels_per_point >= 1.5 && !full_res { view.pixels_per_point } else { 1.0 };
+    let (w, h) = (f64::from(width) / k, f64::from(height) / k);
+    let n = WINDOW_GRID;
+    let at = |i: usize, j: usize| source(r, view, place, k, w * i as f64 / (n - 1) as f64, h * j as f64 / (n - 1) as f64);
+    let grid: Vec<Option<(f64, f64)>> = (0..n * n).map(|p| at(p % n, p / n)).collect();
+    let (mut c0, mut c1, mut r0, mut r1) = (f64::INFINITY, f64::NEG_INFINITY, f64::INFINITY, f64::NEG_INFINITY);
+    let (rw, rh) = (f64::from(r.width), f64::from(r.height));
+    for (c, row) in grid.iter().flatten() {
+        c0 = c0.min(c.clamp(0.0, rw));
+        c1 = c1.max(c.clamp(0.0, rw));
+        r0 = r0.min(row.clamp(0.0, rh));
+        r1 = r1.max(row.clamp(0.0, rh));
+    }
+    if !(c0 < c1 && r0 < r1) {
+        return None;
+    }
+    // The raster's pixels a screen pixel spans: the smallest step between neighbouring points,
+    // where the view is finest (a tilted or curved view is finer near its centre).
+    let step = (w / (n - 1) as f64).max(1.0);
+    let mut per_px = f64::INFINITY;
+    for j in 0..n {
+        for i in 0..n - 1 {
+            if let (Some(Some(a)), Some(Some(b))) = (grid.get(j * n + i), grid.get(j * n + i + 1)) {
+                let d = ((b.0 - a.0).powi(2) + (b.1 - a.1).powi(2)).sqrt() / step;
+                if d > 0.0 {
+                    per_px = per_px.min(d);
+                }
+            }
+        }
+    }
+    // In the pixels drawn (a work pixel is `k` device pixels).
+    per_px.is_finite().then_some(InView { cols: (c0, c1), rows: (r0, r1), per_px })
+}
+
 /// [`draw`], its rows spread over `threads` threads.
 #[allow(clippy::too_many_arguments)]
 fn draw_with(

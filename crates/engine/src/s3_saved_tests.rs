@@ -688,15 +688,17 @@ fn s3_saved_projects_hold_no_keys_and_reload_through_their_one_connection() {
     assert!(read_view(&mut s, id) > 0, "{:?}", s.map().layer(id).unwrap().source.as_ref().unwrap().error);
     let layer = s.map().layers.iter().find(|l| l.name == "Grid").unwrap();
     assert!(layer.source.as_ref().unwrap().path.as_deref().is_some_and(|x| x.contains(s.s3_binding("c1").unwrap())));
-    // The COG's tile is drawn from its pixels.
-    let tiles = s.map().tiles.clone();
-    let scene = tiles.iter().find(|t| t.name == "Scene").unwrap();
-    assert!(scene.url.contains(s.s3_binding("c1").unwrap()));
+    // The COG, a raster layer read in place, holds its overview, read through the connection;
+    // its tiles are drawn from its pixels.
+    let scene = s.map().layers.iter().find(|l| l.name == "Scene").and_then(|l| l.raster.clone()).unwrap();
+    let address = scene.path.clone().unwrap();
+    assert!(scene.in_place && address.contains(s.s3_binding("c1").unwrap()), "{address}");
+    assert!(scene.data.is_some(), "{:?}", scene.error);
     let (z, lon, lat) = (9u32, 10.5f64, 45.5f64);
     let n = f64::from(1u32 << z);
     let x = ((lon + 180.0) / 360.0 * n) as u32;
     let y = ((1.0 - lat.to_radians().tan().asinh() / std::f64::consts::PI) / 2.0 * n) as u32;
-    let tile = format!("cog:{z}/{x}/{y}@{}", scene.url);
+    let tile = format!("cog:{z}/{x}/{y}@{address}");
     let mut got = None;
     for _ in 0..300 {
         match cache::get(&tile, cache::Want::Image) {

@@ -66,17 +66,25 @@ pub fn export(layer: &RasterLayer, min_zoom: u8, max_zoom: u8, opacity: f32) -> 
                 let center = Coord::new(-half + (f64::from(x) + 0.5) * size, half - (f64::from(y) + 0.5) * size);
                 let view =
                     View { width: 256.0, height: 256.0, pixels_per_point: 1.0, camera: Camera::new(center, size / 256.0), sky: false };
+                let place = raster::Place::Flat(&Flat::Mercator, "EPSG:3857");
+                let stats = stats.as_deref().map(Vec::as_slice);
                 let mut image = Pixmap::new(TILE_SIZE, TILE_SIZE).ok_or("couldn't allocate a raster tile")?;
-                raster::draw(
-                    &mut image,
-                    r,
-                    &layer.style,
-                    stats.as_deref().map(Vec::as_slice),
-                    &view,
-                    opacity,
-                    true,
-                    raster::Place::Flat(&Flat::Mercator, "EPSG:3857"),
-                );
+                match layer.path.as_deref().filter(|_| layer.in_place) {
+                    // Read in place: at the tile's level, once its parts have arrived (natively;
+                    // the browser draws what has).
+                    Some(address) => {
+                        let mut passes = 0;
+                        while raster::draw_in_place(&mut image, address, r, &layer.style, stats, &view, opacity, true, place)
+                            && passes < 6
+                            && cfg!(not(target_arch = "wasm32"))
+                        {
+                            crate::rustgis_tiles::cache::wait(web_time::Duration::from_secs(30));
+                            image.fill(tiny_skia::Color::TRANSPARENT);
+                            passes += 1;
+                        }
+                    }
+                    None => raster::draw(&mut image, r, &layer.style, stats, &view, opacity, true, place),
+                }
                 if image.data().as_chunks::<4>().0.iter().all(|pixel| pixel[3] == 0) {
                     continue;
                 }

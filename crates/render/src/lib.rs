@@ -3159,12 +3159,20 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
                 };
                 let stats = rl.masked_stats();
                 let stats = stats.as_ref().map(|s| s.as_slice());
+                // Read in place: the part in view, at the level the view needs.
+                let address = rl.path.as_deref().filter(|_| rl.in_place);
+                let mut draw_it = |pm: &mut Pixmap, opacity: f32| match address {
+                    Some(a) => {
+                        tile_out.pending |= raster::draw_in_place(pm, a, data, &rl.style, stats, view, opacity, full_res_rasters, place)
+                    }
+                    None => raster::draw(pm, data, &rl.style, stats, view, opacity, full_res_rasters, place),
+                };
                 if offscreen {
                     let mut target = Pixmap::new(w, h)?;
-                    raster::draw(&mut target, data, &rl.style, stats, view, 1.0, full_res_rasters, place);
+                    draw_it(&mut target, 1.0);
                     composite(&mut pm, &target);
                 } else {
-                    raster::draw(&mut pm, data, &rl.style, stats, view, opacity, full_res_rasters, place);
+                    draw_it(&mut pm, opacity);
                 }
                 cpu_dirty = true;
             }

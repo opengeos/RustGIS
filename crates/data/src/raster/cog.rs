@@ -309,12 +309,16 @@ pub fn layout(bytes: &Sparse) -> Result<Parse> {
 }
 
 fn read_layout(r: Sparse) -> Result<Parse> {
-    let mut dec = Decoder::new(super::geotiff::reader(r).map_err(err)?).map_err(err)?.with_limits(limits());
+    let reader = super::geotiff::reader_all_bands(r).map_err(err)?;
+    let (palette, wide_rgb) = (reader.palette, reader.wide_rgb);
+    let mut dec = Decoder::new(reader).map_err(err)?.with_limits(limits());
     let Some(geo) = super::geotiff::cog_geo(&mut dec)? else {
         return Ok(Parse::NotTiled("a rotated image, or one without coordinates, is read whole".into()));
     };
     let ct = dec.colortype().map_err(err)?;
     let (bands, color) = match ct {
+        // A palette image (shown to the decoder as grey) is coloured by its table.
+        ColorType::Gray(bits) if palette => (1, super::geotiff::palette_table(&mut dec, bits).map_or(ColorHint::Gray, ColorHint::Palette)),
         ColorType::Gray(_) => (1, ColorHint::Gray),
         ColorType::GrayA(_) => (2, ColorHint::GrayAlpha),
         ColorType::RGB(_) => (3, ColorHint::Rgb { alpha: false }),
@@ -322,6 +326,11 @@ fn read_layout(r: Sparse) -> Result<Parse> {
             (3, ColorHint::Rgb { alpha: false })
         }
         ColorType::RGBA(_) => (4, ColorHint::Rgb { alpha: true }),
+        // An RGB image with more bands (shown to the decoder as grey): every band, the first three
+        // red, green and blue.
+        ColorType::Multiband { num_samples, .. } if wide_rgb && num_samples >= 3 => {
+            (num_samples as usize, ColorHint::Rgb { alpha: super::geotiff::extra_alpha(&mut dec) })
+        }
         ColorType::Multiband { num_samples, .. } => {
             let color = super::geotiff::multiband_color(&mut dec, num_samples);
             (num_samples.max(1) as usize, color)
@@ -397,7 +406,7 @@ pub fn decode_tile(header: &Sparse, layout: &Layout, level: usize, index: u32, b
     let l = layout.levels.get(level).ok_or_else(|| err("no such level"))?;
     let at = *l.offsets.get(index as usize).ok_or_else(|| err("no such tile"))?;
     let r = header.clone().with(at, bytes).reader();
-    let mut dec = Decoder::new(super::geotiff::reader(r).map_err(err)?).map_err(err)?.with_limits(limits());
+    let mut dec = Decoder::new(super::geotiff::reader_all_bands(r).map_err(err)?).map_err(err)?.with_limits(limits());
     dec.seek_to_image(l.ifd).map_err(err)?;
     let values = match super::geotiff::read_chunk(&mut dec, index)? {
         DecodingResult::U8(v) => v.into_iter().map(f32::from).collect::<Vec<f32>>(),
@@ -469,11 +478,16 @@ pub struct Example {
     pub int8: bool,
     /// Stored bottom up: a positive Y pixel size, the first row the southernmost (at 45° N).
     pub bottom_up: bool,
+    /// Its PhotometricInterpretation: 1 grey, 2 RGB (the bands past the third extra samples), 3
+    /// palette (one band; colour `i` is `(i, 255 − i, 0)`).
+    pub photometric: u16,
+    /// The first extra sample (the band past the colour ones) is unassociated alpha.
+    pub alpha: bool,
 }
 
 impl Default for Example {
     fn default() -> Self {
-        Example { size: 1024, tile: 256, bands: 1, planar: false, int8: false, bottom_up: false }
+        Example { size: 1024, tile: 256, bands: 1, planar: false, int8: false, bottom_up: false, photometric: 1, alpha: false }
     }
 }
 
@@ -537,7 +551,7 @@ pub fn example_with(e: &Example) -> Vec<u8> {
             (257, V::L(vec![s])),
             (258, V::S(vec![8; nb as usize])),
             (259, V::S(vec![1])),
-            (262, V::S(vec![1])),
+            (262, V::S(vec![e.photometric])),
             (277, V::S(vec![nb as u16])),
             (284, V::S(vec![if e.planar { 2 } else { 1 }])),
             (322, V::L(vec![tile])),
@@ -545,8 +559,19 @@ pub fn example_with(e: &Example) -> Vec<u8> {
             (324, V::L(vec![0; n])),
             (325, V::L(vec![chunk_len; n])),
         ];
-        if nb > 1 {
-            t.push((338, V::S(vec![0; nb as usize - 1])));
+        let colours = if e.photometric == 2 { 3 } else { 1 };
+        if nb > colours {
+            let mut extra = vec![0; (nb - colours) as usize];
+            if e.alpha
+                && let Some(first) = extra.first_mut()
+            {
+                *first = 2;
+            }
+            t.push((338, V::S(extra)));
+        }
+        if e.photometric == 3 {
+            let ramp: Vec<u16> = (0..256u16).map(|i| i * 257).collect();
+            t.push((320, V::S([ramp.clone(), ramp.iter().rev().copied().collect(), vec![0; 256]].concat())));
         }
         if e.int8 {
             t.push((339, V::S(vec![2; nb as usize])));
@@ -706,7 +731,7 @@ pub(crate) mod tests {
     fn bands_stored_apart_signed_bytes_bottom_up() {
         // As AlphaEarth's embeddings are: planar, Int8 with no-data −128, a positive Y pixel size;
         // 600 pixels in tiles of 256, so the right and bottom tiles are cut by the image's edge.
-        let e = Example { size: 600, tile: 256, bands: 4, planar: true, int8: true, bottom_up: true };
+        let e = Example { size: 600, tile: 256, bands: 4, planar: true, int8: true, bottom_up: true, ..Example::default() };
         let file = example_with(&e);
         let (s, l) = layout_of(&file);
         assert!(l.planar && l.bands == 4 && l.data_type == "Int8" && l.chunk_bands() == 1);
@@ -762,5 +787,53 @@ pub(crate) mod tests {
             let _ = layout(&Sparse::default().with(0, file[..n].to_vec()));
         }
         let _ = layout(&Sparse::default().with(0, b"II*\0\xff\xff\xff\x7f".to_vec()));
+    }
+
+    /// Pixel (x, y)'s value in every band of an example's full image, read a tile at a time.
+    fn pixel(file: &[u8], x: u32, y: u32) -> (Box<Layout>, Vec<f32>) {
+        let (s, l) = layout_of(file);
+        let lv = &l.levels[0];
+        let tile = (y / lv.tile_height) * lv.across() + x / lv.tile_width;
+        let at = ((y % lv.tile_height) * lv.tile_width + x % lv.tile_width) as usize;
+        let values = (0..l.bands)
+            .map(|b| {
+                let (chunk, i) = l.chunk(lv, tile, b).unwrap();
+                let (o, n) = (lv.offsets[chunk as usize] as usize, lv.counts[chunk as usize] as usize);
+                decode_tile(&s, &l, 0, chunk, file[o..o + n].to_vec()).unwrap()[i][at]
+            })
+            .collect();
+        (l, values)
+    }
+
+    #[test]
+    fn every_band_whatever_the_photometric_interpretation_says() {
+        let want = |b: u32| ((300 + 10 * b) % 256) as f32;
+        let e = Example { size: 300, tile: 128, ..Example::default() };
+        // Grey, as remote sensing images mostly are: eight bands (a WorldView multispectral image),
+        // interleaved or stored apart; a panchromatic one; a pan band with alpha.
+        for planar in [false, true] {
+            let (l, v) = pixel(&example_with(&Example { bands: 8, planar, ..e }), 150, 150);
+            assert_eq!((l.bands, &l.color), (8, &ColorHint::Gray));
+            assert_eq!(v, (0..8).map(want).collect::<Vec<_>>());
+        }
+        let (l, v) = pixel(&example_with(&Example { bands: 1, ..e }), 150, 150);
+        assert_eq!((l.bands, &l.color, v), (1, &ColorHint::Gray, vec![want(0)]));
+        let (l, v) = pixel(&example_with(&Example { bands: 2, alpha: true, ..e }), 150, 150);
+        assert_eq!((l.bands, &l.color, v), (2, &ColorHint::GrayAlpha, vec![want(0), want(1)]));
+        // RGB: three bands, with alpha, and with bands past the colour ones (RGB and near-infrared,
+        // seven bands), which the decoder alone leaves out or refuses: every band, the first three
+        // red, green and blue.
+        for (bands, alpha) in [(3, false), (4, true), (4, false), (7, false), (5, true)] {
+            for planar in [false, true] {
+                let file = example_with(&Example { bands, alpha, planar, photometric: 2, ..e });
+                let (l, v) = pixel(&file, 150, 150);
+                assert_eq!((l.bands, &l.color), (usize::from(bands), &ColorHint::Rgb { alpha }), "{bands} bands, alpha {alpha}");
+                assert_eq!(v, (0..u32::from(bands)).map(want).collect::<Vec<_>>(), "{bands} bands, alpha {alpha}, planar {planar}");
+            }
+        }
+        // A palette image: its values, and its colour table.
+        let (l, v) = pixel(&example_with(&Example { photometric: 3, ..e }), 150, 150);
+        let ColorHint::Palette(table) = &l.color else { panic!("{:?}", l.color) };
+        assert_eq!((table.len(), table[44], v), (256, [44, 211, 0, 255], vec![want(0)]));
     }
 }

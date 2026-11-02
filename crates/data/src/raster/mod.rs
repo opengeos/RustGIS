@@ -418,6 +418,39 @@ impl Raster {
         color: ColorHint,
         data_type: impl Into<String>,
     ) -> Result<Raster> {
+        Raster::build(name, width, height, bands, transform, crs, nodata, color, data_type, true)
+    }
+
+    /// [`Raster::new`] without statistics (each band's are empty): a part of a larger raster,
+    /// drawn with the whole's (a cloud-optimised GeoTIFF's view, read in place).
+    #[allow(clippy::too_many_arguments)]
+    pub fn unmeasured(
+        name: impl Into<String>,
+        width: u32,
+        height: u32,
+        bands: Vec<Vec<f32>>,
+        transform: GeoTransform,
+        crs: Crs,
+        nodata: Option<f64>,
+        color: ColorHint,
+        data_type: impl Into<String>,
+    ) -> Result<Raster> {
+        Raster::build(name, width, height, bands, transform, crs, nodata, color, data_type, false)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn build(
+        name: impl Into<String>,
+        width: u32,
+        height: u32,
+        bands: Vec<Vec<f32>>,
+        transform: GeoTransform,
+        crs: Crs,
+        nodata: Option<f64>,
+        color: ColorHint,
+        data_type: impl Into<String>,
+        measure: bool,
+    ) -> Result<Raster> {
         let n = (width as usize).checked_mul(height as usize).ok_or_else(|| DataError::Format("raster too large".into()))?;
         if n == 0 || bands.is_empty() {
             return Err(DataError::Format("the raster has no pixels".into()));
@@ -434,7 +467,12 @@ impl Raster {
         let bands = bands
             .into_iter()
             .enumerate()
-            .map(|(i, data)| Band { name: format!("Band {}", i + 1), stats: BandStats::compute(&data, valid), data, classes: Vec::new() })
+            .map(|(i, data)| Band {
+                name: format!("Band {}", i + 1),
+                stats: if measure { BandStats::compute(&data, valid) } else { BandStats::default() },
+                data,
+                classes: Vec::new(),
+            })
             .collect();
         let mut r = Raster {
             name: name.into(),

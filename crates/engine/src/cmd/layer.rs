@@ -40,7 +40,7 @@ pub fn commands() -> Vec<C> {
             .params(r#"{"layer"?: name|id, "crs": "EPSG:… or WKT; reinterpret native coordinates, without rewriting the source file"}"#),
         C::new("layer.loadAll", "Load All Features", "Layers", load_all).when(need_streamed).params(r#"{"layer"?: name|id}"#),
         C::new("layer.addUrl", "Add Data From URL", "Home › Add › Add Data", add_url).params(
-            r#"{"url": "https://…/data.geojson|.csv|.parquet|.fgb|.gpkg|.zip|.kml|.kmz|.gpx|.tif|.jp2 (JPEG 2000: desktop, through GDAL) (the format from the address, else the contents) | a .pmtiles archive", "name"?: text, "layer"?: "one layer of a zip, KML or GPX", "zoom"?: "bool: true zooms to what was added; false keeps the view of a GeoParquet or FlatGeobuf read in place (zoomed to only when the map was empty)", "x"?, "y"?, "wkt"?, "crs"?, "delimiter"?, "paperSpace"?, "stream"?, "as"? (as layer.addData), "whole"?: "bool: download a cloud-optimised GeoTIFF whole (as a raster layer) instead of reading it in place (an address without a file name is read in place when its first bytes are a cloud-optimised GeoTIFF)", "cog"?: "bool: the address is a cloud-optimised GeoTIFF whatever its name says (the app's probe found it so)", "start"?, "end"?, "unit"?, "interval"?, "dates"?: "a GeoTIFF address with date placeholders ({date:YYYY}, {YYYY}{MM}{DD}), one file per date: the dates it spans and steps through (as time.set), turning the time slider on"}"#,
+            r#"{"url": "https://…/data.geojson|.csv|.parquet|.fgb|.gpkg|.zip|.kml|.kmz|.gpx|.tif|.jp2 (JPEG 2000: desktop, through GDAL) (the format from the address, else the contents) | a .pmtiles archive", "name"?: text, "layer"?: "one layer of a zip, KML or GPX", "zoom"?: "bool: true zooms to what was added; false keeps the view of a GeoParquet or FlatGeobuf read in place (zoomed to only when the map was empty)", "x"?, "y"?, "wkt"?, "crs"?, "delimiter"?, "paperSpace"?, "stream"?, "as"? (as layer.addData), "whole"?: "bool: download a cloud-optimised GeoTIFF whole instead of reading it in place (either way a raster layer; read in place it holds an overview, and the part in view is read at the resolution the map needs as it draws; an address without a file name is read in place when its first bytes are a cloud-optimised GeoTIFF)", "cog"?: "bool: the address is a cloud-optimised GeoTIFF whatever its name says (the app's probe found it so)", "cube"?: "bool: a data cube's file: a tile layer that follows the time slider (stac.addCube adds them)", "start"?, "end"?, "unit"?, "interval"?, "dates"?: "a GeoTIFF address with date placeholders ({date:YYYY}, {YYYY}{MM}{DD}), one file per date: the dates it spans and steps through (as time.set), turning the time slider on"}"#,
         ),
         C::new("layer.addDownload", "Add Downloaded Data", "Home › Add", add_download)
             .params(r#"{"id": a download the app finished (Home › Add › Add Data › From URL), "url": its address, "name"?: text, "layer"?: text, "zoom"?: bool, "x"?, "y"?, "wkt"?, "crs"?, "delimiter"?, "paperSpace"?, "stream"?, "as"? (as layer.addData), "service"?: bool (a service's features: their axes and paging are checked), "bounds"?: [west, south, east, north] (with service: the layer's longitude/latitude bounds from its capabilities, which its axes are checked against; without bounds they are left as they come; ignored without service), "coverage"?: bool (a WCS coverage: a GeoTIFF, else the service's error), "geolibreProject"?: bool (internal: downloaded project JSON), "geolibreLayer"?: {"token", "record"} (internal: reserved imported layer and its saved style), "geolibreZarr"?: bool (internal: an imported Zarr slice as GeoTIFF)}"#),
@@ -2956,8 +2956,24 @@ pub fn is_unnamed_url(url: &str) -> bool {
 /// Adds a cloud-optimised GeoTIFF by its address as a layer read in place (its tiles by range,
 /// as the view needs them), framed when its header is in.
 pub(crate) fn add_cog(s: &mut Session, p: &Value, url: &str) -> CmdResult {
+    add_cog_with(s, p, url, true)
+}
+
+/// [`add_cog`], a GeoTIFF that can't be read now added all the same (unless `strict`), showing
+/// why: a project being imported keeps its layers.
+pub(crate) fn add_cog_with(s: &mut Session, p: &Value, url: &str, strict: bool) -> CmdResult {
     let stem = cog_name(url);
     let name = ps(p, "name").map(str::trim).filter(|n| !n.is_empty()).unwrap_or(&stem);
+    // A GeoTIFF is a raster layer like a file's, read in place; a dated series, a data cube's file
+    // (which follow the time slider) and AlphaEarth's quantised embeddings (which raster styles
+    // don't dequantise) are tile layers.
+    let (file, look) = crate::render::rustgis_tiles::cog::split(url);
+    let dated = rustgis_data::time::is_template(file)
+        || ["start", "end", "unit", "interval", "dates"].iter().any(|k| p.get(k).is_some())
+        || b(p, "cube") == Some(true);
+    if !dated && !look.aef {
+        return add_in_place(s, name, url, strict);
+    }
     let mut q = json!({"url": url, "kind": "cog", "name": name, "top": true});
     // A dated address's span and steps (see map.addTiles).
     for k in ["start", "end", "unit", "interval", "dates"] {
@@ -2985,6 +3001,38 @@ pub(crate) fn add_cog(s: &mut Session, p: &Value, url: &str) -> CmdResult {
         r["warning"] = json!(format!("{url} couldn't be read yet, so the map wasn't moved to it"));
     }
     r["inPlace"] = json!(true);
+    Ok(r)
+}
+
+/// Adds a cloud-optimised GeoTIFF as a raster layer read in place: its overview held (read now,
+/// natively; in the browser as it lands), the part in view read as the map draws. A look at the
+/// address's end (`#bands=…&range=…`) is its style.
+fn add_in_place(s: &mut Session, name: &str, url: &str, strict: bool) -> CmdResult {
+    use crate::render::rustgis_tiles::cog;
+    let (file, look) = cog::split(url);
+    #[cfg(not(target_arch = "wasm32"))]
+    let mut layer = if strict {
+        rustgis_map::raster::RasterLayer::in_place(cog::raster::overview_blocking(file)?, file)
+    } else {
+        rustgis_map::raster::RasterLayer::opening_in_place(file)
+    };
+    #[cfg(target_arch = "wasm32")]
+    let mut layer = {
+        let _ = strict;
+        rustgis_map::raster::RasterLayer::opening_in_place(file)
+    };
+    if let Some(d) = layer.data.clone() {
+        layer.style = super::tiles::look_style(&look, &d).unwrap_or_else(|| layer.style.clone());
+    }
+    let mut r = super::raster::add_raster(s, name, layer)?;
+    if let Ok(Some(info)) = cog::info(file) {
+        let [w, so, e, n] = info.bounds;
+        s.zoom_to(&rustgis_geom::Extent::new(w, so, e, n));
+        r["bounds"] = json!(info.bounds);
+    }
+    r["inPlace"] = json!(true);
+    r["kind"] = json!("raster");
+    r["name"] = json!(s.map().layer(r["layer"].as_u64().unwrap_or(0) as u32).map(|l| l.name.clone()));
     Ok(r)
 }
 

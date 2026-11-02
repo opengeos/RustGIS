@@ -667,6 +667,8 @@ impl Project {
             // Tile layers with an address that can't be fetched (a hand edit) are dropped.
             m.tiles.retain_mut(|t| t.repair().map_err(|e| log::warn!("{}: {e}", m.name)).is_ok());
             m.tiles.truncate(rustgis_map::tiles::MAX_TILE_LAYERS);
+            // GeoTIFFs read in place are raster layers (a project from before saved tile layers).
+            crate::cmd::tiles::cog_tiles_to_rasters(m);
             #[cfg(not(target_arch = "wasm32"))]
             for t in &mut m.tiles {
                 if t.error.is_none()

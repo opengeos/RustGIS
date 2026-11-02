@@ -12910,17 +12910,43 @@ fn cloud_optimised_geotiffs_are_read_in_place() {
     let mut s = Session::new(Project::default());
     let r = s.run("layer.addUrl", &json!({"url": format!("{base}/scene.tif")})).unwrap();
     assert_eq!(r["inPlace"], true, "{r}");
-    let t = s.map().tiles.last().unwrap().clone();
-    assert_eq!((t.kind, t.name.as_str()), (rustgis_map::TileKind::Cog, "scene"));
+    // A raster layer like a file's: it holds an overview (1024 pixels a side of the 2048), whose
+    // statistics its symbology reads.
+    let l = s.map().layers.iter().find(|l| l.name == "scene").unwrap().clone();
+    let rl = l.raster.as_ref().unwrap();
+    assert!(rl.in_place && rl.path.as_deref() == Some(&*format!("{base}/scene.tif")));
+    let d = rl.data.as_ref().unwrap();
+    assert_eq!((d.width, d.overview), (1024, Some((2048, 2048))));
+    assert!(d.bands[0].stats.count > 0 && d.bands[0].stats.max > 200.0);
     // Framed on the file: 10–11° E, 45–46° N.
     let b = r["bounds"].as_array().unwrap().iter().map(|v| v.as_f64().unwrap()).collect::<Vec<_>>();
     assert!((b[0] - 10.0).abs() < 1e-6 && (b[3] - 46.0).abs() < 1e-6, "{b:?}");
-    // A map tile inside it (zoom 9) is drawn from a few of its tiles, not the whole file.
+    // Drawn zoomed in past the overview, the part in view is read at full resolution: a few of
+    // its tiles, not the whole file. Pixel (x, y) of the full image is (x + y) % 256: neighbouring
+    // screen pixels differ by one, finer than the overview's steps of two.
+    let before = sent.load(std::sync::atomic::Ordering::Relaxed);
+    let c = rustgis_geom::lonlat_to_merc(rustgis_geom::Coord::new(10.5, 45.5));
+    s.map_mut().camera.center = c;
+    // A metre on the ground is about 1.43 Web Mercator units here: a third of a full pixel's.
+    s.map_mut().camera.res = 25.0;
+    s.view_size = (64.0, 64.0);
+    let png = std::env::temp_dir().join(format!("rustgis-cog-in-place-{}.png", std::process::id()));
+    s.run("share.exportMap", &json!({"path": png.to_string_lossy(), "width": 64, "height": 64})).unwrap();
+    let img = image::open(&png).unwrap().to_rgba8();
+    let _ = std::fs::remove_file(&png);
+    let row: Vec<u8> = (0..64).map(|x| img.get_pixel(x, 32)[0]).collect();
+    assert!(row.iter().any(|v| *v > 0), "drawn: {row:?}");
+    assert!(row.windows(2).any(|w| w[1].abs_diff(w[0]) == 1), "full resolution (steps of one), not the overview's (of two): {row:?}");
+    let window = sent.load(std::sync::atomic::Ordering::Relaxed) - before;
+    assert!(window > 0 && window < total / 8, "{window} of {total} bytes read for the view");
+    // A map tile inside it (zoom 9) is drawn from a few of its tiles, not the whole file (a dated
+    // series of GeoTIFFs is drawn so, as a tile layer).
     let (z, lon, lat) = (9u32, 10.5f64, 45.5f64);
     let n = f64::from(1u32 << z);
     let x = ((lon + 180.0) / 360.0 * n) as u32;
     let y = ((1.0 - lat.to_radians().tan().asinh() / std::f64::consts::PI) / 2.0 * n) as u32;
     let tile = format!("cog:{z}/{x}/{y}@{base}/scene.tif");
+    let before = sent.load(std::sync::atomic::Ordering::Relaxed);
     let mut got = None;
     for _ in 0..200 {
         match cache::get(&tile, Want::Image) {
@@ -12936,13 +12962,13 @@ fn cloud_optimised_geotiffs_are_read_in_place() {
     let Payload::Image(pm) = &*p else { panic!("not a picture") };
     assert_eq!((pm.width(), pm.height()), (256, 256));
     assert!(pm.pixels().iter().any(|px| px.alpha() == 255));
-    let read = sent.load(std::sync::atomic::Ordering::Relaxed);
+    let read = sent.load(std::sync::atomic::Ordering::Relaxed) - before;
     assert!(read < total / 4, "{read} of {total} bytes read");
     // A tile outside it is empty.
     assert!(matches!(cache::get(&format!("cog:9/0/0@{base}/scene.tif"), Want::Image), State::Pending | State::Ready(_)));
     // The project keeps the address; asked to, the file is downloaded whole instead.
     let text = serde_json::to_string(&s.project).unwrap();
-    assert!(text.contains("\"kind\":\"cog\"") && text.contains("scene.tif"));
+    assert!(text.contains("\"in_place\":true") && text.contains("scene.tif"));
     let r = s.run("layer.addUrl", &json!({"url": format!("{base}/scene.tif"), "whole": true, "name": "Whole"})).unwrap();
     assert!(r.get("inPlace").is_none(), "{r}");
     let id = r["layer"].as_u64().unwrap() as u32;
@@ -13007,8 +13033,9 @@ fn unnamed_cloud_optimised_geotiffs_are_read_in_place() {
     let mut s = Session::new(Project::default());
     let r = s.run("layer.addUrl", &json!({"url": url, "name": "Ortho"})).unwrap();
     assert_eq!(r["inPlace"], true, "{r}");
-    let t = s.map().tiles.last().unwrap().clone();
-    assert_eq!((t.kind, t.name.as_str(), t.url.as_str()), (rustgis_map::TileKind::Cog, "Ortho", url.as_str()));
+    let l = s.map().layers.iter().find(|l| l.name == "Ortho").unwrap();
+    let rl = l.raster.as_ref().unwrap();
+    assert!(rl.in_place && rl.path.as_deref() == Some(url.as_str()), "{:?}", rl.path);
     let read = sent.load(std::sync::atomic::Ordering::Relaxed);
     assert!(read < total / 4, "{read} of {total} bytes read: only the header, not the whole file");
     let r = s.run("layer.addUrl", &json!({"url": url, "name": "Probed", "cog": true})).unwrap();
@@ -13026,6 +13053,140 @@ fn unnamed_cloud_optimised_geotiffs_are_read_in_place() {
     let (text, _) = serve_file(b"Unauthorized".to_vec(), false);
     let e = s.run("layer.addUrl", &json!({"url": format!("{text}/api/geotiff?key=bad")})).unwrap_err();
     assert!(e.contains("not a data format"), "{e}");
+}
+
+/// A cloud-optimised GeoTIFF read in place is a raster layer like a file's: its first look is what
+/// its PhotometricInterpretation says (RGB in colour, a palette by its table, grey (MinIsBlack, as
+/// most remote sensing images are) as its first band, but three grey bands as red, green and
+/// blue), every band there for the raster commands and the Symbology pane to combine and stretch.
+#[test]
+fn cog_layers_are_rasters_styled_as_their_photometric_interpretation_says() {
+    use rustgis_data::raster::cog::{Example, example_with};
+    use rustgis_map::raster::{RasterRenderer, Stretch};
+    let e = Example { size: 512, tile: 256, ..Example::default() };
+    let rgb = RasterRenderer::Rgb { red: 0, green: 1, blue: 2 };
+    let cases: [(&str, Example, usize, Option<RasterRenderer>); 7] = [
+        ("Pan", Example { bands: 1, ..e }, 1, None),
+        ("PanAlpha", Example { bands: 2, alpha: true, ..e }, 2, None),
+        ("Grey3", Example { bands: 3, ..e }, 3, Some(rgb.clone())),
+        ("Multispectral", Example { bands: 8, ..e }, 8, None),
+        ("Rgb", Example { bands: 3, photometric: 2, ..e }, 3, Some(rgb.clone())),
+        ("Rgbn", Example { bands: 4, photometric: 2, ..e }, 4, Some(rgb.clone())),
+        ("RgbaNir", Example { bands: 5, photometric: 2, alpha: true, planar: true, ..e }, 5, Some(rgb.clone())),
+    ];
+    let mut s = Session::new(Project::default());
+    for (name, ex, bands, renderer) in cases {
+        let (base, _) = serve_ranges(example_with(&ex));
+        let r = s.run("layer.addUrl", &json!({"url": format!("{base}/{name}.tif"), "name": name})).unwrap();
+        assert_eq!(r["inPlace"], true, "{name}: {r}");
+        let id = r["layer"].as_u64().unwrap() as u32;
+        let rl = s.map().layer(id).and_then(|l| l.raster.clone()).unwrap();
+        assert!(rl.in_place, "{name}");
+        assert_eq!(rl.data.as_ref().map(|d| d.band_count()), Some(bands), "{name}");
+        match renderer {
+            Some(want) => assert_eq!(rl.style.renderer, want, "{name}"),
+            None => assert!(matches!(rl.style.renderer, RasterRenderer::Stretch { band: 0, .. }), "{name}: {:?}", rl.style.renderer),
+        }
+        // The raster commands combine and stretch its bands, as a file's.
+        if bands >= 3 {
+            let last = bands as u64;
+            s.run("raster.bands", &json!({"layer": name, "red": last, "green": 2, "blue": 1})).unwrap();
+            let st = s.map().layer(id).and_then(|l| l.raster.as_ref()).map(|r| r.style.clone()).unwrap();
+            assert_eq!(st.renderer, RasterRenderer::Rgb { red: bands - 1, green: 1, blue: 0 }, "{name}");
+        }
+        s.run("raster.stretch", &json!({"layer": name, "type": "standardDeviation", "n": 2})).unwrap();
+        let st = s.map().layer(id).and_then(|l| l.raster.as_ref()).map(|r| r.style.clone()).unwrap();
+        assert_eq!(st.stretch, Stretch::StandardDeviation { n: 2.0 }, "{name}");
+    }
+    assert!(s.map().tiles.is_empty(), "no tile layers");
+    // A palette image, by its table.
+    let (base, _) = serve_ranges(example_with(&Example { photometric: 3, ..e }));
+    let r = s.run("layer.addUrl", &json!({"url": format!("{base}/classes.tif")})).unwrap();
+    let rl = s.map().layer(r["layer"].as_u64().unwrap() as u32).and_then(|l| l.raster.clone()).unwrap();
+    assert_eq!(rl.style.renderer, RasterRenderer::Colormap);
+    // Saved and opened again, it is read in place again, its style kept.
+    let text = serde_json::to_string(&s.project).unwrap();
+    let mut t = Session::new(Project::default());
+    t.run("project.openText", &json!({"text": text})).unwrap();
+    let ms = t.map().layers.iter().find(|l| l.name == "Multispectral").and_then(|l| l.raster.clone()).unwrap();
+    assert!(ms.in_place && ms.data.is_some() && ms.style.stretch == Stretch::StandardDeviation { n: 2.0 });
+}
+
+/// A view of a GeoTIFF read in place zoomed in past its overview shows the level zoomed from while
+/// its own tiles are on their way: no holes, no blocks of the overview, then its own pixels.
+#[test]
+fn cog_windows_stand_in_the_level_kept_until_their_tiles_arrive() {
+    use crate::render::rustgis_tiles::cog::raster::window;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let gate = std::sync::Arc::new(AtomicBool::new(true));
+    let (base, _) = serve_gated(rustgis_data::raster::cog::example(2048, 256), true, Some(gate.clone()));
+    let url = format!("{base}/scene.tif");
+    let mut s = Session::new(Project::default());
+    // Its overview: level 1 (1024 pixels a side), whose tiles are kept.
+    s.run("layer.addUrl", &json!({"url": url})).unwrap();
+    // Level 0's tiles held back: a window of it is whole, from level 1, and still to come.
+    gate.store(false, Ordering::Relaxed);
+    let (cols, rows) = ((1000, 1100), (900, 960));
+    let gray = rustgis_data::raster::ColorHint::Gray;
+    let w = window(&url, 0, cols, rows, &[0], gray.clone()).unwrap();
+    let part = w.raster.unwrap();
+    assert!(w.pending);
+    let v = |r: &rustgis_data::raster::Raster, x: u32, y: u32| r.bands[0].data[((y - rows.0) * (cols.1 - cols.0) + (x - cols.0)) as usize];
+    assert!(part.bands[0].data.iter().all(|v| v.is_finite()), "no holes");
+    // Level 1's pixel under (1001, 901) is (500, 450): full pixel (1000, 900), (1000 + 900) % 256.
+    assert_eq!(v(&part, 1001, 901), ((1000 + 900) % 256) as f32);
+    // Its own tiles arrive: its own pixels, (x + y) % 256.
+    gate.store(true, Ordering::Relaxed);
+    let mut done = None;
+    for _ in 0..200 {
+        let w = window(&url, 0, cols, rows, &[0], gray.clone()).unwrap();
+        if !w.pending {
+            done = w.raster;
+            break;
+        }
+        crate::render::rustgis_tiles::cache::wait(std::time::Duration::from_millis(50));
+    }
+    let part = done.expect("its tiles never came");
+    assert_eq!(v(&part, 1001, 901), ((1001 + 901) % 256) as f32);
+}
+
+/// A project saved when cloud-optimised GeoTIFFs read in place were tile layers opens them as
+/// raster layers read in place, each where it was drawn, with its name, visibility, opacity and
+/// look; a dated series stays a tile layer.
+#[test]
+fn cog_tile_layers_of_older_projects_open_as_rasters() {
+    use rustgis_data::raster::cog::{Example, example_with};
+    use rustgis_map::raster::{RasterRenderer, Stretch};
+    let (base, _) = serve_ranges(example_with(&Example { size: 512, tile: 256, bands: 8, ..Example::default() }));
+    let mut s = Session::new(Project::default());
+    s.run("layer.addData", &json!({"path": "points.geojson", "text": "{\"type\":\"FeatureCollection\",\"features\":[]}"})).ok();
+    let mut text: Value = serde_json::to_value(&s.project).unwrap();
+    let tile = |name: &str, url: String, opacity: f64, visible: bool| {
+        let mut t = serde_json::to_value(rustgis_map::TileLayer::new(name, rustgis_map::TileKind::Cog, url)).unwrap();
+        t["opacity"] = json!(opacity);
+        t["visible"] = json!(visible);
+        t
+    };
+    let tiles = json!([
+        tile("Scene", format!("{base}/scene.tif#bands=5,3,2&range=10,200"), 0.5, false),
+        tile("Series", format!("{base}/{{date:YYYY}}.tif"), 1.0, true),
+    ]);
+    let maps = text.pointer_mut("/maps").and_then(Value::as_array_mut);
+    match maps {
+        Some(maps) => maps[0]["tiles"] = tiles,
+        None => text["map"]["tiles"] = tiles,
+    }
+    let mut t = Session::new(Project::default());
+    t.run("project.openText", &json!({"text": text.to_string()})).unwrap();
+    let scene = t.map().layers.iter().find(|l| l.name == "Scene").unwrap();
+    let rl = scene.raster.as_ref().unwrap();
+    assert!(rl.in_place && rl.data.is_some() && rl.path.as_deref() == Some(&*format!("{base}/scene.tif")), "{:?}", rl.path);
+    assert_eq!(rl.style.renderer, RasterRenderer::Rgb { red: 4, green: 2, blue: 1 });
+    assert_eq!(rl.style.stretch, Stretch::custom(10.0, 200.0));
+    assert!(!scene.visible && (scene.opacity() - 0.5).abs() < 1e-6);
+    // Drawn under the map's layers, as it was.
+    assert_eq!(t.map().layers.last().map(|l| l.name.as_str()), Some("Scene"));
+    assert_eq!(t.map().tiles.iter().map(|x| x.name.as_str()).collect::<Vec<_>>(), ["Series"]);
 }
 
 /// A server answering every request with `body`, logging each as `HEAD`, `GET` or `GET <range>`.
@@ -23675,18 +23836,20 @@ fn geolibre_group_without_id_does_not_claim_ungrouped_layers() {
     assert!(s.map().group_of(id).is_none());
 }
 
-/// Declared COGs stream even without a TIFF suffix; a tile's folder look is baked only once.
+/// Declared COGs are raster layers read in place even without a TIFF suffix, kept when their server
+/// can't be reached at import.
 #[test]
-fn geolibre_extensionless_cog_uses_tile_storage_and_inherited_opacity() {
+fn geolibre_extensionless_cog_is_a_raster_read_in_place() {
     let mut s = world();
     let text = json!({"version":"0.2.0","name":"COG","mapView":{},"basemapStyleUrl":"","layerGroups":[{"id":"g","name":"Folder","opacity":0.5}],"layers":[{"id":"c","name":"Coverage","type":"cog","groupId":"g","opacity":0.6,"source":{"url":"http://127.0.0.1:9/extensionless-coverage"}}]}).to_string();
     let out = s.run("project.importGeolibre", &json!({"text":text})).unwrap();
-    assert_eq!(out["layers"], json!(["Coverage"]));
-    assert!(s.map().layers.is_empty());
-    assert_eq!(s.map().tiles.len(), 1);
-    assert_eq!(s.map().tiles[0].kind, rustgis_map::tiles::TileKind::Cog);
-    assert!((s.map().tiles[0].opacity - 0.3).abs() < 1e-6);
-    assert!(s.map().groups.iter().all(|g| g.children.is_empty()));
+    assert_eq!(out["layers"], json!(["Coverage"]), "{out}");
+    // A raster layer read in place, kept although its server can't be reached now (it says why).
+    assert!(s.map().tiles.is_empty());
+    let l = s.map().layers.iter().find(|l| l.name == "Coverage").unwrap();
+    let rl = l.raster.as_ref().unwrap();
+    assert!(rl.in_place && rl.data.is_none() && rl.error.is_some(), "{:?}", rl.error);
+    assert!((l.opacity() - 0.6).abs() < 1e-6 || (l.opacity() - 0.3).abs() < 1e-6, "{}", l.opacity());
     assert!(s.take_url_requests().is_empty());
 }
 

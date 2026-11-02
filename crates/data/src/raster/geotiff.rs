@@ -50,6 +50,21 @@ pub(super) fn multiband_color<R: Read + Seek>(dec: &mut Decoder<R>, n: u16) -> C
     if alpha { ColorHint::GrayAlpha } else { ColorHint::Gray }
 }
 
+/// Whether the first sample past the colour ones is declared alpha (extra sample 1, associated, or
+/// 2, unassociated).
+pub(super) fn extra_alpha<R: Read + Seek>(dec: &mut Decoder<R>) -> bool {
+    dec.find_tag_unsigned_vec::<u16>(Tag::ExtraSamples).ok().flatten().is_some_and(|v| matches!(v.first(), Some(1 | 2)))
+}
+
+/// A palette image's colours, from its ColorMap tag (16-bit red, then green, then blue values);
+/// `None` when the table is missing or short.
+pub(super) fn palette_table<R: Read + Seek>(dec: &mut Decoder<R>, bits: u8) -> Option<Vec<[u8; 4]>> {
+    let map: Vec<u16> = dec.find_tag(Tag::ColorMap).ok().flatten().and_then(|v| v.into_u16_vec().ok()).unwrap_or_default();
+    let n = 1usize << bits.min(16);
+    let c = |i: usize| (map.get(i).copied().unwrap_or(0) / 257) as u8;
+    (map.len() >= 3 * n).then(|| (0..n).map(|i| [c(i), c(n + i), c(2 * n + i), 255]).collect())
+}
+
 fn geo_tags<R: Read + Seek>(dec: &mut Decoder<R>) -> Result<Geo> {
     let doubles =
         |dec: &mut Decoder<R>, tag: u16| -> Option<Vec<f64>> { dec.find_tag(Tag::Unknown(tag)).ok().flatten()?.into_f64_vec().ok() };
@@ -562,10 +577,19 @@ fn samples<R: Read + Seek>(dec: &mut Decoder<R>) -> usize {
 /// A reader that shows palette images as grey ones: the `tiff` crate decodes no palette images, but
 /// decodes their colour indices as grey samples, and the colour table is read from the ColorMap tag
 /// as it is. The only change is the PhotometricInterpretation value (3 → 1) in each image's IFD.
+///
+/// Made by [`reader_all_bands`], it also shows RGB images with samples past the colour ones (RGB
+/// and near-infrared, or more bands, not declared alpha) as grey ones (2 → 1): the crate decodes
+/// only an RGB image's colour samples, and a fifth or later one not at all, but decodes every
+/// sample of a grey image.
 pub(crate) struct Unpaletted<R> {
     inner: R,
-    /// Where each palette image's PhotometricInterpretation value is, and what to show there.
+    /// Where each patched image's PhotometricInterpretation value is, and what to show there.
     patches: Vec<(u64, [u8; 2])>,
+    /// Palette images were patched.
+    pub(crate) palette: bool,
+    /// RGB images with more samples were patched: their first three samples are red, green, blue.
+    pub(crate) wide_rgb: bool,
     pos: u64,
 }
 
@@ -573,11 +597,20 @@ pub(crate) struct Unpaletted<R> {
 const MAX_IFDS: usize = 64;
 const MAX_ENTRIES: u64 = 4096;
 
-/// Where the palette images' PhotometricInterpretation values are, walking the IFD chain
-/// (classic and BigTIFF). A file it can't walk has none: the decoder reports what's wrong.
-fn palette_patches<R: Read + Seek>(r: &mut R) -> Vec<(u64, [u8; 2])> {
+/// What [`photometric_patches`] found to patch.
+#[derive(Default)]
+struct Patches {
+    at: Vec<(u64, [u8; 2])>,
+    palette: bool,
+    wide_rgb: bool,
+}
+
+/// Where the palette images' PhotometricInterpretation values are (and, with `wide_rgb`, those of
+/// RGB images with samples past the colour ones), walking the IFD chain (classic and BigTIFF). A
+/// file it can't walk has none: the decoder reports what's wrong.
+fn photometric_patches<R: Read + Seek>(r: &mut R, wide_rgb: bool) -> Patches {
     use std::io::SeekFrom;
-    let mut patches = Vec::new();
+    let mut patches = Patches::default();
     let mut walk = || -> Option<()> {
         let mut head = [0u8; 16];
         r.seek(SeekFrom::Start(0)).ok()?;
@@ -624,15 +657,34 @@ fn palette_patches<R: Read + Seek>(r: &mut R) -> Vec<(u64, [u8; 2])> {
             }
             let mut entries = vec![0u8; usize::try_from(n * entry_len).ok()?];
             r.read_exact(&mut entries).ok()?;
+            let value_at = if big { 12 } else { 8 };
+            let grey = if little { [1, 0] } else { [0, 1] };
+            // PhotometricInterpretation (262): where its value is, and the value; SamplesPerPixel
+            // (277); the first ExtraSamples (338) value, when it is inline. Each a SHORT.
+            let (mut photometric, mut samples, mut extra) = (None, 1u16, None);
             for (i, e) in entries.chunks(entry_len as usize).enumerate() {
-                // PhotometricInterpretation (262), a SHORT, its value inline.
-                if u16_(e)? == 262 && u16_(e.get(2..)?)? == 3 {
-                    let value_at = if big { 12 } else { 8 };
-                    if u16_(e.get(value_at..)?)? == 3 {
-                        let at = ifd + count_len + i as u64 * entry_len + value_at as u64;
-                        patches.push((at, if little { [1, 0] } else { [0, 1] }));
+                let short = u16_(e.get(2..)?)? == 3;
+                match u16_(e)? {
+                    262 if short => {
+                        photometric = Some((ifd + count_len + i as u64 * entry_len + value_at as u64, u16_(e.get(value_at..)?)?))
                     }
+                    277 if short => samples = u16_(e.get(value_at..)?)?,
+                    338 if short => extra = u16_(e.get(value_at..)?),
+                    _ => {}
                 }
+            }
+            match photometric {
+                Some((at, 3)) => {
+                    patches.at.push((at, grey));
+                    patches.palette = true;
+                }
+                // An RGB image whose fourth sample isn't alpha, or with five or more: RGBI
+                // orthophotos, multispectral images.
+                Some((at, 2)) if wide_rgb && (samples > 4 || (samples == 4 && !matches!(extra, Some(1 | 2)))) => {
+                    patches.at.push((at, grey));
+                    patches.wide_rgb = true;
+                }
+                _ => {}
             }
             let mut next = [0u8; 8];
             r.read_exact(&mut next[..next_len]).ok()?;
@@ -654,14 +706,20 @@ pub(crate) type Reader<'a> = Unpaletted<Box<dyn ReadSeek + 'a>>;
 
 /// A reader for the decoder.
 pub(crate) fn reader<'a>(r: impl Read + Seek + 'a) -> std::io::Result<Reader<'a>> {
-    Unpaletted::new(Box::new(r))
+    Unpaletted::new(Box::new(r), false)
+}
+
+/// A reader for the decoder that decodes every band of an RGB image with more (see
+/// [`Unpaletted`]).
+pub(crate) fn reader_all_bands<'a>(r: impl Read + Seek + 'a) -> std::io::Result<Reader<'a>> {
+    Unpaletted::new(Box::new(r), true)
 }
 
 impl<R: Read + Seek> Unpaletted<R> {
-    fn new(mut inner: R) -> std::io::Result<Self> {
-        let patches = palette_patches(&mut inner);
+    fn new(mut inner: R, wide_rgb: bool) -> std::io::Result<Self> {
+        let p = photometric_patches(&mut inner, wide_rgb);
         inner.seek(std::io::SeekFrom::Start(0))?;
-        Ok(Unpaletted { inner, patches, pos: 0 })
+        Ok(Unpaletted { inner, patches: p.at, palette: p.palette, wide_rgb: p.wide_rgb, pos: 0 })
     }
 }
 
@@ -991,7 +1049,7 @@ pub(super) fn read_limited_with_nodata(
     open: Option<Opener<'_>>,
     sidecar_nodata: Option<f64>,
 ) -> Result<Raster> {
-    let palette = !r.patches.is_empty();
+    let palette = r.palette;
     let limits = {
         let mut l = Limits::default();
         l.decoding_buffer_size = MAX_SAMPLES.saturating_mul(4);
@@ -1092,13 +1150,7 @@ pub(super) fn read_limited_with_nodata(
         // conversion), so it is turned into RGB below (issue #692); other YCbCr data isn't read.
         ColorType::YCbCr(_) if ycbcr => (3, ColorHint::Rgb { alpha: false }),
         ColorType::RGBA(_) => (4, ColorHint::Rgb { alpha: true }),
-        ColorType::Palette(bits) => {
-            let map: Vec<u16> = dec.find_tag(Tag::ColorMap).ok().flatten().and_then(|v| v.into_u16_vec().ok()).unwrap_or_default();
-            let n = 1usize << bits.min(16);
-            let c = |i: usize| (map.get(i).copied().unwrap_or(0) / 257) as u8;
-            let table = if map.len() >= 3 * n { (0..n).map(|i| [c(i), c(n + i), c(2 * n + i), 255]).collect() } else { Vec::new() };
-            (1, if table.is_empty() { ColorHint::Gray } else { ColorHint::Palette(table) })
-        }
+        ColorType::Palette(bits) => (1, palette_table(&mut dec, bits).map_or(ColorHint::Gray, ColorHint::Palette)),
         ColorType::Multiband { num_samples, .. } => (num_samples.max(1) as usize, multiband_color(&mut dec, num_samples)),
         other => return Err(err(format!("{other:?} images aren't supported"))),
     };
