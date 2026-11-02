@@ -17890,17 +17890,22 @@ fn fills_come_back_after_no_fill() {
             assert_eq!(l.no_fill, None, "{case}: No Fill is off");
             assert!(l.renderer.base_symbol().fill.a() > 0, "{case}: the symbol's fill is shown");
         }
-        // One class's fills after No Fill show that class alone.
-        if case == "memory" {
-            s.run("layer.symbology", &json!({"type": "unique", "field": "kind"})).unwrap();
-            s.run("layer.noFill", &Value::Null).unwrap();
-            s.run("layer.fillLayers", &json!({"value": "a", "fills": [{"pattern": "hatch"}]})).unwrap();
-            let l = s.map().layer(id).unwrap();
-            let shows = |row: usize| {
-                l.fills(row).iter().any(|f| f.draws(l.symbol(row).fill)) || (l.fills(row).is_empty() && l.symbol(row).fill.a() > 0)
-            };
-            assert!(shows(0) && shows(2), "class a is hatched");
-            assert!(!shows(1), "class b keeps No Fill");
+        // One class's fills after No Fill show that class alone: a hatch, or its symbol's own
+        // fill ([]). The streamed layer has no rows loaded to look at.
+        if case != "streamed" {
+            // Without the transparent layer fill chosen above, which a class without fills takes.
+            s.run("layer.fillLayers", &json!({"fills": []})).unwrap();
+            for fills in [json!([{"pattern": "hatch"}]), json!([])] {
+                s.run("layer.symbology", &json!({"type": "unique", "field": "kind"})).unwrap();
+                s.run("layer.noFill", &Value::Null).unwrap();
+                s.run("layer.fillLayers", &json!({"value": "a", "fills": fills})).unwrap();
+                let l = s.map().layer(id).unwrap();
+                let shows = |row: usize| {
+                    l.fills(row).iter().any(|f| f.draws(l.symbol(row).fill)) || (l.fills(row).is_empty() && l.symbol(row).fill.a() > 0)
+                };
+                assert!(shows(0) && shows(2), "{case}: class a shows with {fills}");
+                assert!(!shows(1), "{case}: class b keeps No Fill with {fills}");
+            }
         }
     }
     // A fill colour chosen transparent isn't No Fill: a new symbology keeps it.

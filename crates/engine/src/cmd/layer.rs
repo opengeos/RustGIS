@@ -120,10 +120,8 @@ pub fn commands() -> Vec<C> {
                     let g = l.geometry_type();
                     l.renderer.apply_ramp(r, g);
                     // New colours after No Fill are drawn (#1301).
-                    match l.no_fill.take() {
-                        Some(NoFill::Symbols) => l.renderer.map_symbols(show_fill),
-                        Some(NoFill::Override) if is_no_fill_override(&l.fill_layers) => l.fill_layers.clear(),
-                        _ => {}
+                    if end_no_fill(l) == Some(NoFill::Symbols) {
+                        l.renderer.map_symbols(show_fill);
                     }
                 }
             })
@@ -158,9 +156,7 @@ pub fn commands() -> Vec<C> {
                     other => *other = Renderer::Single(fill(&other.base_symbol())),
                 }
                 // A fill colour after No Fill is drawn (#1301).
-                if l.no_fill.take() == Some(NoFill::Override) && is_no_fill_override(&l.fill_layers) {
-                    l.fill_layers.clear();
-                }
+                end_no_fill(l);
             })
         })
         .when(need_feature_layer)
@@ -695,6 +691,16 @@ fn no_fill_override() -> rustgis_map::fills::FillLayer {
     rustgis_map::fills::FillLayer { color: Some(Rgba::rgb(0, 0, 0).with_alpha(0)), ..Default::default() }
 }
 
+/// Turns No Fill off, dropping its override if it laid one, and says how it was on. The caller
+/// shows the symbols' fills on the other path, where only it knows which.
+fn end_no_fill(l: &mut rustgis_map::Layer) -> Option<NoFill> {
+    let hidden = l.no_fill.take();
+    if hidden == Some(NoFill::Override) && is_no_fill_override(&l.fill_layers) {
+        l.fill_layers.clear();
+    }
+    hidden
+}
+
 /// Whether the fills are No Fill's own, rather than a transparent fill chosen with `layer.fillLayers`.
 fn is_no_fill_override(fills: &[rustgis_map::fills::FillLayer]) -> bool {
     let o = no_fill_override();
@@ -900,6 +906,10 @@ fn fill_layers(s: &mut Session, p: &Value) -> CmdResult {
     let count = fills.len();
     match class {
         Some(c) => {
+            // Without fills of its own the class takes the layer's, which No Fill's override
+            // hides: a solid fill in the symbol's colour instead.
+            let fills =
+                if fills.is_empty() && hidden == Some(NoFill::Override) { vec![rustgis_map::fills::FillLayer::default()] } else { fills };
             l.renderer.set_class_fills(&c, fills)?;
             if in_symbol_colour && hidden == Some(NoFill::Symbols) {
                 class_symbol(&mut l.renderer, &c).into_iter().for_each(show_fill);
@@ -3402,9 +3412,7 @@ fn symbology(s: &mut Session, p: &Value) -> CmdResult {
     }
     with(s, p, |l| {
         l.renderer = r;
-        if l.no_fill.take() == Some(NoFill::Override) && is_no_fill_override(&l.fill_layers) {
-            l.fill_layers.clear();
-        }
+        end_no_fill(l);
     })
 }
 

@@ -168,8 +168,8 @@ pub struct Layer {
     /// [`fills::FillLayer`]).
     #[serde(default, skip_serializing_if = "Vec::is_empty", deserialize_with = "fills::de_fills")]
     pub fill_layers: Vec<fills::FillLayer>,
-    /// How No Fill hid the polygon fills, while it does: a new symbology, a fill colour or a fill
-    /// in the symbol's colour shows them again. A fill colour chosen transparent isn't this.
+    /// How No Fill hides the polygon fills, while it is on: a new symbology, a fill colour or a
+    /// fill in the symbol's colour shows them again. A fill colour chosen transparent isn't this.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub no_fill: Option<NoFill>,
     /// Draws the stacked strokes in levels (symbol levels): every feature's strokes of one
