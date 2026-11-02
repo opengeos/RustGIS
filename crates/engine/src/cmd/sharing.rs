@@ -592,7 +592,7 @@ pub(crate) fn note_label_classes(s: &mut Session, kind: &str, p: &Value) {
     // Unique Values by expression: the style draws every feature with the other values' symbol.
     let classes = s.layer_id(p).ok().and_then(|id| s.map().layer(id)).filter(|l| l.renderer.expression().is_some()).map(|l| {
         let which = match &l.renderer {
-            Renderer::Unique { other, .. } if draws(other, l.geometry_type()) => "its other values'",
+            Renderer::Unique { other, .. } if other.draws(l.geometry_type()) => "its other values'",
             _ => "its first class's",
         };
         format!("{}'s style draws every feature with one symbol ({which}): its classes by expression aren't in it.", l.name)
@@ -638,18 +638,8 @@ pub(crate) fn note_label_classes(s: &mut Session, kind: &str, p: &Value) {
 /// stroke; an area or point its fill, or an outline with a width.
 fn one_symbol(r: &Renderer, g: GeometryType) -> rustgis_map::Symbol {
     match r {
-        Renderer::Unique { other, .. } if draws(other, g) => *other,
+        Renderer::Unique { other, .. } if other.draws(g) => *other,
         r => r.base_symbol(),
-    }
-}
-
-/// Whether a web style draws anything with `s`: a line its stroke, an area or point its fill or
-/// an outline with a width.
-fn draws(s: &rustgis_map::Symbol, g: GeometryType) -> bool {
-    match g {
-        GeometryType::Polyline => s.stroke.a() > 0,
-        GeometryType::Point if s.size <= 0.0 => false,
-        _ => s.fill.a() > 0 || (s.stroke.a() > 0 && s.stroke_width > 0.0),
     }
 }
 

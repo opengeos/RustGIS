@@ -62,6 +62,8 @@ pub(super) fn read(l: Node, geometry: Option<&str>, layer: &str, report: &mut Re
                         many => Some(format!("({})", many.join(") AND ("))),
                     }
                 });
+                // (One too long to read is left out as one unreadable.)
+                let where_ = where_.filter(|w| w.as_deref().is_none_or(|w| w.chars().count() <= rustgis_data::query::MAX_LEN));
                 let Some(where_) = where_ else {
                     report.skipped(
                         layer,
@@ -106,7 +108,7 @@ fn is_else(f: &str) -> bool {
 struct Rule<'a, 'i> {
     node: Node<'a, 'i>,
     filters: Vec<String>,
-    else_of: Vec<std::rc::Rc<[super::Sibling]>>,
+    else_of: Vec<std::rc::Rc<Option<Vec<super::Sibling>>>>,
     scales: (Option<f64>, Option<f64>),
 }
 
@@ -117,7 +119,7 @@ fn flatten<'a, 'i>(
     node: Node<'a, 'i>,
     filters: Vec<String>,
     scales: (Option<f64>, Option<f64>),
-    else_of: Vec<std::rc::Rc<[super::Sibling]>>,
+    else_of: Vec<std::rc::Rc<Option<Vec<super::Sibling>>>>,
     out: &mut Vec<Rule<'a, 'i>>,
     depth: usize,
     left: &mut usize,
@@ -130,22 +132,17 @@ fn flatten<'a, 'i>(
     }
     let rules: Vec<Node> = node.children().filter(|c| c.has_tag_name("rule")).take(MAX_LABEL_CLASSES * 4).collect();
     *left += super::drawing_rules(node.children().filter(|c| c.has_tag_name("rule")).skip(rules.len()), draws);
-    // A rule's scalemaxdenom is the out-beyond limit, its scalemindenom the in-beyond.
-    let range = |rule: Node| {
-        let denom = |k: &str| {
-            rule.attribute(k).and_then(|v| v.trim().parse::<f64>().ok()).filter(|v| v.is_finite() && *v > 0.0).map(|v| v * QGIS_SCALE)
-        };
-        (denom("scalemaxdenom").or(scales.0), denom("scalemindenom").or(scales.1))
-    };
-    // What an else rule here is the rest of: its switched-on siblings (one without a filter takes
-    // every feature), each at its scales, as QGIS has it.
-    let siblings: std::rc::Rc<[super::Sibling]> = rules
-        .iter()
-        .filter(|r| r.attribute("active") != Some("0"))
-        .map(|r| (r.attribute("filter").map(str::trim).filter(|f| !f.is_empty()), *r))
-        .filter(|(f, _)| !f.is_some_and(is_else))
-        .map(|(f, r)| super::Sibling { filter: f.map(str::to_string), scales: range(r) })
-        .collect();
+    // A rule is labelled only within its own scale range and its parents' (as the renderer has it).
+    let range = |rule: Node| super::rule_scales(rule, scales);
+    // What an else rule here is the rest of: its siblings where they label (one without a filter
+    // takes every feature), each at its scales, as QGIS has it (read only when there is one).
+    let siblings: std::rc::Rc<Option<Vec<super::Sibling>>> =
+        std::rc::Rc::new(if rules.iter().any(|r| r.attribute("filter").is_some_and(is_else)) {
+            let mut budget = MAX_LABEL_CLASSES * 4;
+            super::siblings(rules.iter().copied(), scales, &draws, false, depth, &mut budget)
+        } else {
+            Some(Vec::new())
+        });
     for (i, rule) in rules.iter().copied().enumerate() {
         if out.len() > MAX_LABEL_CLASSES * 4 {
             *left += super::drawing_rules(rules.get(i..).unwrap_or_default().iter().copied(), draws);

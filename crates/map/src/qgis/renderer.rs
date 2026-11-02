@@ -285,7 +285,7 @@ fn graduated(r: Node, layer: &str, style: &mut Style, report: &mut Report, sym: 
 /// in to 1:`.1`).
 struct Rule<'a, 'i> {
     filters: Vec<String>,
-    else_of: Vec<std::rc::Rc<[super::Sibling]>>,
+    else_of: Vec<std::rc::Rc<Option<Vec<super::Sibling>>>>,
     node: Node<'a, 'i>,
     scales: (Option<f64>, Option<f64>),
 }
@@ -455,7 +455,7 @@ fn by_expression(drawn: &[&Rule], style: &mut Style, report: &mut Report, sym: &
             continue;
         }
         let Some(mut parts) = rule.filters.iter().map(quoted).collect::<Option<Vec<String>>>() else { return false };
-        for siblings in rule.else_of.iter().filter(|s| !s.is_empty()) {
+        for siblings in rule.else_of.iter().filter(|s| s.as_ref().as_ref().is_none_or(|s| !s.is_empty())) {
             let Some(rest) = super::none_of(siblings) else { return false };
             parts.push(rest);
         }
@@ -498,7 +498,7 @@ fn flatten<'a, 'i>(
     node: Node<'a, 'i>,
     filters: Vec<String>,
     scales: (Option<f64>, Option<f64>),
-    else_of: Vec<std::rc::Rc<[super::Sibling]>>,
+    else_of: Vec<std::rc::Rc<Option<Vec<super::Sibling>>>>,
     out: &mut Vec<Rule<'a, 'i>>,
     depth: usize,
     left: &mut usize,
@@ -511,31 +511,17 @@ fn flatten<'a, 'i>(
     }
     let rules: Vec<Node> = node.children().filter(|c| c.has_tag_name("rule")).take(MAX_RULES_READ).collect();
     *left += super::drawing_rules(node.children().filter(|c| c.has_tag_name("rule")).skip(rules.len()), draws);
-    // A rule's scalemaxdenom is the out-beyond limit, its scalemindenom the in-beyond; a rule
-    // inside another is drawn only within both ranges.
-    let range = |rule: Node| {
-        let denom = |k: &str| {
-            rule.attribute(k).and_then(|v| v.trim().parse::<f64>().ok()).filter(|v| v.is_finite() && *v > 0.0).map(|v| v * QGIS_SCALE)
-        };
-        (
-            match (denom("scalemaxdenom"), scales.0) {
-                (Some(a), Some(b)) => Some(a.min(b)),
-                (a, b) => a.or(b),
-            },
-            match (denom("scalemindenom"), scales.1) {
-                (Some(a), Some(b)) => Some(a.max(b)),
-                (a, b) => a.or(b),
-            },
-        )
-    };
-    // What an else rule here is the rest of: its switched-on siblings, shared by every else rule.
-    let siblings: std::rc::Rc<[super::Sibling]> = rules
-        .iter()
-        .filter(|r| r.attribute("active") != Some("0"))
-        .map(|r| (r.attribute("filter").map(str::trim).filter(|f| !f.is_empty()), *r))
-        .filter(|(f, _)| !f.is_some_and(is_else))
-        .map(|(f, r)| super::Sibling { filter: f.map(str::to_string), scales: range(r) })
-        .collect();
+    let range = |rule: Node| super::rule_scales(rule, scales);
+    // What an else rule here is the rest of: its siblings where they draw, shared by every else
+    // rule (read only when there is one).
+    let siblings: std::rc::Rc<Option<Vec<super::Sibling>>> =
+        std::rc::Rc::new(if rules.iter().any(|r| r.attribute("filter").is_some_and(is_else)) {
+            let itself = |r: Node| r.attribute("symbol").is_some();
+            let mut budget = MAX_RULES_READ;
+            super::siblings(rules.iter().copied(), scales, &itself, false, depth, &mut budget)
+        } else {
+            Some(Vec::new())
+        });
     for (i, rule) in rules.iter().copied().enumerate() {
         if out.len() >= MAX_CLASSES {
             *left += super::drawing_rules(rules.get(i..).unwrap_or_default().iter().copied(), draws);

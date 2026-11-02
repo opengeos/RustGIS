@@ -1570,6 +1570,60 @@ fn rules_under_an_else_rule_take_only_the_rest() {
     assert!(rest.where_.as_deref().is_some_and(|w| w.contains("NOT")), "{:?}", rest.where_);
 }
 
+/// A sibling counts against an else rule only where it, or a rule under it, draws (as QGIS has
+/// it): a rule without a symbol or label settings and nothing under it takes nothing, and a group
+/// takes only what the rules under it draw.
+#[test]
+fn else_rules_take_what_siblings_that_draw_nothing_leave() {
+    let qml = r#"<qgis version="3.40.0"><renderer-v2 type="RuleRenderer"><rules key="r"><rule filter="&quot;value&quot; &gt;= 1" label="Outer">
+        <rule filter="&quot;kind&quot; = 'b'" label="Hidden"/>
+        <rule label="Group"><rule filter="&quot;kind&quot; = 'a'" symbol="0" label="A"/></rule>
+        <rule filter="ELSE" symbol="1" label="Rest"/>
+      </rule></rules><symbols>
+        <symbol type="marker" name="0"><layer class="SimpleMarker" enabled="1"/></symbol>
+        <symbol type="marker" name="1"><layer class="SimpleMarker" enabled="1"/></symbol>
+      </symbols></renderer-v2>
+      <labeling type="rule-based"><rules key="r">
+        <rule filter="&quot;kind&quot; = 'b'" description="No settings"/>
+        <rule description="Label group"><rule filter="&quot;kind&quot; = 'a'" description="A"><settings><text-style fieldName="name"/></settings></rule></rule>
+        <rule filter="ELSE" description="Rest"><settings><text-style fieldName="name"/></settings></rule>
+      </rules></labeling></qgis>"#;
+    let s = read_style(qml, "points", &mut Report::default()).unwrap();
+    let mut l = rule_points(&[("a", 1, "x"), ("b", 1, "y"), ("c", 1, "z")]);
+    s.apply(&mut l);
+    // (Kind b, which the hidden rule doesn't draw, is the rest's.)
+    let named = |v: &[&str]| v.iter().map(|k| Some(k.to_string())).collect::<Vec<_>>();
+    assert_eq!(rule_classes(&l, Some(5_000.0)), named(&["A", "Rest", "Rest"]));
+    let names = |row: usize| {
+        crate::LabelMatcher::new(&l.labels, &l.dataset, Some(5_000.0))
+            .classes_of(&l.dataset, row)
+            .filter(|(_, c)| c.visible)
+            .map(|(_, c)| c.name.clone())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(names(0), ["A"]);
+    assert_eq!(names(1), ["Rest"]);
+    assert_eq!(names(2), ["Rest"]);
+}
+
+/// A label else rule beside more siblings than one clause holds is left out, and said so.
+#[test]
+fn a_label_else_rule_too_long_to_read_is_noted() {
+    let long = "x".repeat(200);
+    let rules: String = (0..60)
+        .map(|i| format!(r#"<rule filter="&quot;name&quot; = '{long}{i}'" description="R{i}"><settings><text-style fieldName="name"/></settings></rule>"#))
+        .collect();
+    let qml = format!(
+        r#"<qgis version="3.40.0"><labeling type="rule-based"><rules key="r">{rules}<rule filter="ELSE" description="Rest"><settings><text-style fieldName="name"/></settings></rule></rules></labeling></qgis>"#
+    );
+    let mut report = Report::default();
+    let s = read_style(&qml, "points", &mut report).unwrap();
+    let mut l = rule_points(&[("a", 1, "x")]);
+    s.apply(&mut l);
+    assert!(l.labels.class("Rest").is_none());
+    assert!(report.notes.iter().any(|n| n.text.contains("\"Rest\"")), "{:?}", report.notes);
+}
+
 /// A label else rule takes what its siblings don't label, as the renderer's else rules do: at
 /// their scales, a feature a sibling's filter is unknown for, and nothing beside a sibling with
 /// no filter.
@@ -1611,6 +1665,12 @@ fn label_else_rules_take_what_their_siblings_dont_at_their_scales() {
     for row in 0..3 {
         assert_eq!(names(&l, 5_000.0, row), ["All"], "{row}");
     }
+    // A rule inside a group is labelled only within both ranges, as the renderer draws it.
+    let l = read(&format!(
+        r#"<rule description="Group" scalemaxdenom="10000"><rule filter="&quot;kind&quot; = 'a'" description="Inner" scalemaxdenom="50000">{settings}</rule></rule>"#
+    ));
+    assert_eq!(names(&l, 5_000.0, 0), ["Inner"]);
+    assert!(l.labels.class("Inner").and_then(|c| c.min_scale).is_some_and(|out| out < 20_000.0));
 }
 
 #[test]

@@ -125,6 +125,16 @@ const LAYER_COLORS: [[u8; 3]; 8] = [
 ];
 
 impl Symbol {
+    /// Whether anything is drawn with this symbol for a `g` feature: a line its stroke, an area
+    /// or point its fill or an outline with a width (a point of size 0 nothing).
+    pub fn draws(&self, g: GeometryType) -> bool {
+        match g {
+            GeometryType::Polyline => self.stroke.a() > 0,
+            GeometryType::Point if self.size <= 0.0 => false,
+            _ => self.fill.a() > 0 || (self.stroke.a() > 0 && self.stroke_width > 0.0),
+        }
+    }
+
     pub fn default_for(g: GeometryType, seed: u32) -> Symbol {
         let c = LAYER_COLORS.get(seed as usize % LAYER_COLORS.len()).copied().unwrap_or([0x4A, 0x90, 0xD9]);
         let base = Rgba::rgb(c[0], c[1], c[2]);
@@ -1362,13 +1372,13 @@ impl Renderer {
         let Renderer::Unique { field, classes, other, class_labels, other_label, expression, other_fills, other_strokes, .. } = self else {
             return self.legend();
         };
-        // A fully transparent fallback draws nothing, so it has nothing to stand for in a legend.
-        // Lines draw with their stroke only (or their stacked strokes); areas and points with
-        // their fill, outline or stacked fills.
+        // A fallback that draws nothing has nothing to stand for in a legend: its own symbol as
+        // `Symbol::draws` has it (as a web style does), else its stacked strokes, or for areas
+        // and points its stacked fills (a point of size 0 draws none of them).
         let lines = ds.geometry_type == GeometryType::Polyline;
         let strokes = other_strokes.iter().any(|s| s.color.unwrap_or(other.stroke).a() > 0 && s.width.unwrap_or(other.stroke_width) > 0.0);
-        let visible =
-            other.stroke.a() > 0 || strokes || (!lines && (other.fill.a() > 0 || other_fills.iter().any(|f| f.draws(other.fill))));
+        let sized = ds.geometry_type != GeometryType::Point || other.size > 0.0;
+        let visible = other.draws(ds.geometry_type) || (sized && (strokes || (!lines && other_fills.iter().any(|f| f.draws(other.fill)))));
         if expression.is_some() && ds.features.len().saturating_mul(classes.len().max(1)) > MAX_LEGEND_STEPS {
             let mut all = self.legend();
             all.retain(|e| visible || !e.fallback);
@@ -3131,6 +3141,34 @@ mod tests {
         };
         assert!(r3.legend_for(&lines, &[]).is_empty());
         assert_eq!(labels(&r3, &[]), ["a", OTHER_VALUES], "a polygon fill still shows");
+        // An outline without a width draws nothing, nor does a point of size 0 (as a web style has it).
+        let with_other = |r: &Renderer, o: Symbol| match r.clone() {
+            Renderer::Unique { field, classes, ramp, class_labels, other_label, class_strokes, class_fills, expression, .. } => {
+                Renderer::Unique {
+                    field,
+                    classes,
+                    other: o,
+                    ramp,
+                    class_labels,
+                    other_label,
+                    class_strokes,
+                    other_strokes: Vec::new(),
+                    class_fills,
+                    other_fills: Vec::new(),
+                    expression,
+                }
+            }
+            r => r,
+        };
+        let mut hairline = stroked;
+        hairline.stroke_width = 0.0;
+        assert_eq!(labels(&with_other(&r, hairline), &[]), ["a"]);
+        let mut points = Dataset::new("p", GeometryType::Point, vec![Field::new("g", FieldType::Text)]);
+        points.push(None, vec![Value::Text("z".into())]);
+        let mut dot = Symbol::default_for(GeometryType::Point, 3);
+        assert!(!with_other(&r, dot).legend_for(&points, &[]).is_empty(), "a sized point shows");
+        dot.size = 0.0;
+        assert!(with_other(&r, dot).legend_for(&points, &[]).is_empty());
         // The full legend (the symbology editor's list) keeps it.
         assert_eq!(r.legend().len(), 2);
     }
