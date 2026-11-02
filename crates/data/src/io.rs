@@ -2891,6 +2891,7 @@ mod tests {
 
     /// A `.dbf` whose header date is zero, as GeoLibre's runner writes, opens with its rows:
     /// read from a file, from a zip, and streamed (#1272).
+    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn a_dbf_with_a_zero_header_date_opens() {
         use shapefile::dbase::{FieldValue, Record, TableWriterBuilder};
