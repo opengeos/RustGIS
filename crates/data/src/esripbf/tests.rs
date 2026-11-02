@@ -459,9 +459,9 @@ fn text_values_take_their_memory_from_one_room_for_the_whole_answer() {
     // 1e300 is 11 bytes of the answer and 301 digits as text.
     let huge = real(1e300);
     let mut tally = Tally { text_room: 500, ..Tally::default() };
-    let (values, _) = feature(&huge, &columns, 1, &shape, &mut tally).unwrap();
+    let (values, _) = super::feature(&huge, &columns, 1, &shape, &mut tally).unwrap();
     assert_eq!(values[0], Value::Text(format!("1{}", "0".repeat(300))));
-    let e = feature(&huge, &columns, 1, &shape, &mut tally).unwrap_err().to_string();
+    let e = super::feature(&huge, &columns, 1, &shape, &mut tally).unwrap_err().to_string();
     assert!(e.contains("the text values would take more than 512 MB"), "{e}");
 }
 
