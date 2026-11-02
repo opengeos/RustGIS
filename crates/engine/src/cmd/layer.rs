@@ -3541,7 +3541,7 @@ fn symbology(s: &mut Session, p: &Value) -> CmdResult {
     if by_scale {
         s.notify(
             format!(
-                "{name}: its classes are the values the expression gives without a map scale; a value it gives only at some scales is drawn as <all other values>"
+                "{name}: its classes are the values the expression gives without a map scale; values it gives only at some scales, if any, are drawn as <all other values>"
             ),
             false,
         );
