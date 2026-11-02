@@ -946,4 +946,19 @@ fn a_system_given_over_the_one_named_is_said() {
     root.as_object_mut().unwrap().remove("metadata");
     let out = read("m.city.json", root.to_string().as_bytes(), Crs::from_epsg(28992)).unwrap();
     assert!(!says(&out, "the coordinate system given"), "{:?}", messages_of(&out));
+    // One RustGIS doesn't know is said by its name too, since the system given takes its place...
+    root["metadata"] = json!({"referenceSystem": "https://www.opengis.net/def/crs/EPSG/0/999999"});
+    let out = read("m.city.json", root.to_string().as_bytes(), Crs::from_epsg(28992)).unwrap();
+    assert!(
+        says(
+            &out,
+            "the file names a coordinate system RustGIS doesn't know (https://www.opengis.net/def/crs/EPSG/0/999999), and is read in"
+        ),
+        "{:?}",
+        messages_of(&out)
+    );
+    assert!(out.iter().all(|(ds, _)| ds.crs == Crs::from_epsg(28992)));
+    // ...and without one given, it is an error, not a note.
+    let e = read("m.city.json", root.to_string().as_bytes(), None).unwrap_err().to_string();
+    assert!(e.contains("it names a coordinate system RustGIS doesn't know"), "{e}");
 }

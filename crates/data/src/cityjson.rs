@@ -395,10 +395,19 @@ fn coordinate_system(
     let within = |x: f64, y: f64| vertices.iter().all(|p| p[0].abs() <= x && p[1].abs() <= y);
     let crs = match (given, named_system(metadata)) {
         (Some(crs), named) => {
-            if let Some(own) = named.and_then(known_system)
-                && own != crs
-            {
-                notes.push(format!("the file names {}, and is read in {}, the coordinate system given", own.label(), crs.label()));
+            // What the file names is said whenever the system given takes its place, known or not.
+            match named.map(|system| (system, known_system(system))) {
+                Some((_, Some(own))) if own != crs => {
+                    notes.push(format!("the file names {}, and is read in {}, the coordinate system given", own.label(), crs.label()));
+                }
+                Some((system, None)) => {
+                    let system: String = system.chars().take(80).collect();
+                    notes.push(format!(
+                        "the file names a coordinate system RustGIS doesn't know ({system}), and is read in {}, the coordinate system given",
+                        crs.label()
+                    ));
+                }
+                _ => {}
             }
             crs
         }
