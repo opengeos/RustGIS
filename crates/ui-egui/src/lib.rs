@@ -1883,6 +1883,20 @@ impl RustGisApp {
     /// made.
     /// `active` is the active layer's name from [`Self::layer_acted_on`], read before it ran.
     fn record_step(&mut self, id: &str, params: &Value, active: Option<(String, bool)>) {
+        if self.ws.recording.is_none() {
+            return;
+        }
+        // A tool run in the background is applied by `gp.finish`, whose run id means nothing to a
+        // replay: the step is the run itself, `gp.run` with its tool and parameters, from the
+        // history entry it has just added.
+        let finished;
+        let (id, params) = if id == "gp.finish" {
+            let Some(h) = self.session.project.gp_history.last().filter(|h| !h.id.is_empty()) else { return };
+            finished = json!({"tool": h.id, "params": h.params});
+            ("gp.run", &finished)
+        } else {
+            (id, params)
+        };
         let Some(steps) = self.ws.recording.as_mut() else { return };
         // Undo doesn't take back a recorded step (the undo history and the recording don't line
         // up step for step): say how to.
@@ -4276,6 +4290,29 @@ mod record_tests {
     }
 
     /// A step keeping a plain `key` is recorded, and that is said once a recording.
+    #[test]
+    fn a_tool_finished_in_the_background_is_recorded_as_its_run() {
+        let mut app = RustGisApp::with_sample();
+        app.ws.recording = Some(Vec::new());
+        app.session.project.gp_history.push(rustgis_engine::GpRecord {
+            tool: "Buffer".into(),
+            id: "buffer".into(),
+            params: json!({"input": "Cities", "distance": 50}),
+            command: None,
+            at: 0,
+            ok: true,
+            messages: Vec::new(),
+            millis: 0,
+            outputs: Vec::new(),
+        });
+        app.record_step("gp.finish", &json!({"id": 7}), None);
+        let steps = app.ws.recording.as_deref().unwrap_or_default();
+        assert_eq!(
+            steps.iter().map(|s| (s.command.as_str(), s.params.clone())).collect::<Vec<_>>(),
+            [("gp.run", json!({"tool": "buffer", "params": {"input": "Cities", "distance": 50}}))]
+        );
+    }
+
     #[test]
     fn a_kept_key_is_said_once() {
         let mut app = RustGisApp::with_sample();

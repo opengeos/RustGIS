@@ -2719,9 +2719,10 @@ fn start_tool_run(app: &mut RustGisApp, tool: &'static str, params: &Value, ctx:
 #[cfg(not(target_arch = "wasm32"))]
 pub fn poll_tool_run(app: &mut RustGisApp, ctx: &egui::Context) {
     let Some(job) = &app.gp.tool_run else { return };
-    // Its project was closed: stop it, as its result has nowhere to go.
+    // Its project was closed: stop it, as its result has nowhere to go, and say so.
     if !rustgis_engine::cmd::gp::tool_waiting(&app.session, job.id) {
         job.control.cancel();
+        dropped(app, job.tool);
         app.gp.tool_run = None;
         return;
     }
@@ -2769,9 +2770,10 @@ fn start_plugin_run(app: &mut RustGisApp, tool: &'static str, params: &Value, ct
 /// Applies a plugin tool run that finished on its thread.
 pub fn poll_plugin_run(app: &mut RustGisApp, ctx: &egui::Context) {
     let Some(job) = &app.gp.plugin_run else { return };
-    // Its project was closed: stop it, as its result has nowhere to go.
+    // Its project was closed: stop it, as its result has nowhere to go, and say so.
     if !rustgis_engine::cmd::gp::plugin_waiting(&app.session, job.id) {
         job.control.cancel();
+        dropped(app, job.tool);
         app.gp.plugin_run = None;
         return;
     }
@@ -2784,6 +2786,12 @@ pub fn poll_plugin_run(app: &mut RustGisApp, ctx: &egui::Context) {
     app.gp.plugin_run = None;
     let r = rustgis_engine::cmd::gp::plugin_complete(&mut app.session, id, result).and_then(|_| app.run("gp.finish", json!({"id": id})));
     finished(app, tool, r);
+}
+
+/// Says that a tool's run was dropped: its project closed while it ran.
+fn dropped(app: &mut RustGisApp, tool: &'static str) {
+    let name = rustgis_engine::analysis::tool(tool).map(|t| t.name).unwrap_or(tool);
+    app.session.notify(crate::i18n::fmt("{tool} was stopped: its project was closed while it ran.", &[("tool", tl_raw!(name))]), false);
 }
 
 /// Shows how an asynchronous tool run went: under its form when it's open, else as a notice.

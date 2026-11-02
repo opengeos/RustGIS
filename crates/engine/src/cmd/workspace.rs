@@ -340,8 +340,11 @@ pub(crate) fn fill_cache(s: &mut Session) -> usize {
 
 /// The longitude/latitude extent the flat map's view shows.
 pub fn view_extent(s: &Session) -> Extent {
-    let m = s.map();
-    let (w, h) = s.view_size;
+    view_extent_of(s.map(), s.view_size)
+}
+
+/// The longitude/latitude extent a `size` view of map `m` shows.
+pub fn view_extent_of(m: &rustgis_map::Map, (w, h): (f64, f64)) -> Extent {
     let e = m.camera.extent(w, h);
     let mut ll = Extent::EMPTY;
     for i in 0..=8 {

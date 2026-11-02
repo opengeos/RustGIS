@@ -288,8 +288,10 @@ pub(crate) struct StartedRun {
     /// The feature ids of the streamed layers it reads whole, by lowercase name (a built-in tool
     /// reads them on its thread, and hands them back with its result).
     full_ids: FullIds,
-    /// The other layers it reads, as it read them, by lowercase name.
+    /// The layers it reads, as it read them, by lowercase name.
     read: std::collections::HashMap<String, Read>,
+    /// The map it ran on: its place among the project's maps, and its name.
+    map: (usize, String),
 }
 
 /// The feature ids of the streamed layers a tool read whole, by lowercase name: what its
@@ -312,16 +314,21 @@ pub fn plugin_start(s: &mut Session, tool: &str, params: &Value) -> Result<Plugi
         .unwrap_or_else(|_| Err(format!("{} failed unexpectedly", spec.name)))?;
     let full_ids = full_ids(&inputs.loaded);
     drop(inputs);
-    let read = layer_names(Some(spec), &resolved)
-        .into_iter()
-        .filter_map(|n| s.map().layer_by_name(n))
-        .filter(|l| !l.is_streamed())
-        .map(|l| (l.name.to_ascii_lowercase(), Read::of(l)))
-        .collect();
+    let read = read_layers(s, spec, &resolved);
     s.next_pending = s.next_pending.wrapping_add(1);
     let id = s.next_pending;
     let params = recorded(Some(spec), params.clone());
-    s.plugin_runs.push(StartedRun { id, name: spec.name.to_string(), tool: spec.id.to_string(), params, t0: now_ms(), full_ids, read });
+    let map = (s.project.active_map, s.map().name.clone());
+    s.plugin_runs.push(StartedRun {
+        id,
+        name: spec.name.to_string(),
+        tool: spec.id.to_string(),
+        params,
+        t0: now_ms(),
+        full_ids,
+        read,
+        map,
+    });
     // A run that never completes is dropped eventually.
     if s.plugin_runs.len() > MAX_ASYNC_RUNS {
         s.plugin_runs.remove(0);
@@ -362,6 +369,12 @@ fn complete(
         .ok_or("the tool's run was dropped (its project was closed, or too many runs were waiting)")?;
     let run = s.plugin_runs.remove(i);
     let mut result = result;
+    // What it adds to or changes on the map belongs on the map it ran on.
+    let on_map = matches!(&result, Ok(r) if matches!(r.output, Output::Layer(_) | Output::Selection { .. } | Output::Update { .. } | Output::Layers(_)));
+    if on_map && (s.project.active_map, s.map().name.as_str()) != (run.map.0, run.map.1.as_str()) {
+        result =
+            Err(format!("{} ran on the map '{}', which is no longer the active one: open it and run the tool again", run.name, run.map.1));
+    }
     fit_to_changes(s, &mut result, &run.name, &run.read);
     fit_to_windows(s, &mut result, full_ids.as_ref().unwrap_or(&run.full_ids));
     s.pending.push(crate::PendingRun {
@@ -387,7 +400,7 @@ pub struct ToolRun {
     pub id: u64,
     /// The tool's id.
     pub tool: &'static str,
-    snap: Snapshot,
+    snap: Snapshot<'static>,
     params: Value,
 }
 
@@ -436,12 +449,7 @@ pub fn tool_start(s: &mut Session, tool: &str, params: &Value) -> Result<ToolRun
         .filter(|t| !t.id.starts_with(rustgis_plugins::PREFIX))
         .ok_or_else(|| format!("no tool '{tool}'"))?;
     let resolved = rustgis_analysis::resolve_params(spec, params)?;
-    let read = layer_names(Some(spec), &resolved)
-        .into_iter()
-        .filter_map(|n| s.map().layer_by_name(n))
-        .filter(|l| !l.is_streamed())
-        .map(|l| (l.name.to_ascii_lowercase(), Read::of(l)))
-        .collect();
+    let read = read_layers(s, spec, &resolved);
     s.next_pending = s.next_pending.wrapping_add(1);
     let id = s.next_pending;
     let recorded_params = recorded(Some(spec), params.clone());
@@ -454,12 +462,13 @@ pub fn tool_start(s: &mut Session, tool: &str, params: &Value) -> Result<ToolRun
         t0: now_ms(),
         full_ids,
         read,
+        map: (s.project.active_map, s.map().name.clone()),
     });
     // A run that never completes is dropped eventually.
     if s.plugin_runs.len() > MAX_ASYNC_RUNS {
         s.plugin_runs.remove(0);
     }
-    Ok(ToolRun { id, tool: spec.id, snap: Snapshot::of(s), params: params.clone() })
+    Ok(ToolRun { id, tool: spec.id, snap: Snapshot::owned(s), params: params.clone() })
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -501,12 +510,14 @@ fn fit_to_changes(
         return;
     };
     layer.clone_from(&now.name);
-    if was.unchanged(&now.dataset) {
+    // A streamed layer's rows follow the view: only that it is still there is checked.
+    let Some(dataset) = &was.dataset else { return };
+    if Read::unchanged(dataset, &now.dataset) {
         return;
     }
     match &mut r.output {
         Output::Selection { rows, .. } => {
-            let ids: std::collections::HashSet<u64> = rows.iter().filter_map(|r| was.dataset.features.get(*r)).map(|f| f.id).collect();
+            let ids: std::collections::HashSet<u64> = rows.iter().filter_map(|r| dataset.features.get(*r)).map(|f| f.id).collect();
             *rows = now.dataset.features.iter().enumerate().filter(|(_, f)| ids.contains(&f.id)).map(|(i, _)| i).collect();
         }
         _ => *res = Err(format!("{} changed while {tool} ran; run it again", now.name)),
@@ -515,21 +526,39 @@ fn fit_to_changes(
 
 /// A layer a background run read, to tell whether it changed while the run went on.
 pub(crate) struct Read {
+    /// The layer, by id: renamed perhaps, but not another of the same name.
     id: u32,
     /// Its dataset as the run read it: a copy that shares the rows, so taking it costs nothing
     /// however large the layer, and any edit since (which copies the rows held here too) shows.
-    dataset: Dataset,
+    /// `None` for a streamed layer, whose rows follow the view.
+    dataset: Option<Dataset>,
 }
 
 impl Read {
     fn of(l: &rustgis_map::Layer) -> Self {
-        Read { id: l.id, dataset: l.dataset.clone() }
+        Read { id: l.id, dataset: (!l.is_streamed()).then(|| l.dataset.clone()) }
     }
 
-    /// Whether `now` is the dataset as it was read: the same rows in memory, and the same fields.
-    fn unchanged(&self, now: &Dataset) -> bool {
-        now.features.shares(&self.dataset.features) && now.fields == self.dataset.fields
+    /// Whether `now` is the dataset `was` as it was read: the same rows in memory, and the same
+    /// fields, geometry type, coordinate system and source.
+    fn unchanged(was: &Dataset, now: &Dataset) -> bool {
+        now.features.shares(&was.features)
+            && now.fields == was.fields
+            && now.geometry_type == was.geometry_type
+            && now.crs == was.crs
+            && now.crs_incomplete == was.crs_incomplete
+            && now.zm_dropped == was.zm_dropped
+            && now.source == was.source
     }
+}
+
+/// The layers a tool names, as it reads them now, by lowercase name.
+fn read_layers(s: &Session, spec: &rustgis_analysis::ToolSpec, resolved: &Value) -> std::collections::HashMap<String, Read> {
+    layer_names(Some(spec), resolved)
+        .into_iter()
+        .filter_map(|n| s.map().layer_by_name(n))
+        .map(|l| (l.name.to_ascii_lowercase(), Read::of(l)))
+        .collect()
 }
 
 /// Fits a tool's result to the map: a selection made on the complete streamed source becomes
@@ -562,33 +591,42 @@ fn finish(s: &mut Session, p: &Value) -> CmdResult {
     apply(s, Ran { name: r.tool, id: r.tool_id, command: None, started: r.started }, r.params, r.result, r.millis)
 }
 
-/// What a tool reads of the session, taken when it starts: the active map (a copy, which shares
-/// the features and pixels), the standalone tables likewise, the geoprocessing environment and the
-/// view. It owns them, so a tool can run on another thread while the session goes on.
-pub struct Snapshot {
-    map: rustgis_map::Map,
-    tables: Vec<crate::project::Table>,
-    env: crate::project::GpEnvironment,
-    /// The view's longitude/latitude extent; the whole Earth on the globe.
-    view: Option<rustgis_geom::Extent>,
+/// What a tool reads of the session: the active map, the standalone tables, the geoprocessing
+/// environment and the view's size. A run on the session's own thread borrows them; one on
+/// another thread owns a copy taken when it starts, which shares the features and pixels.
+struct Snapshot<'a> {
+    map: std::borrow::Cow<'a, rustgis_map::Map>,
+    tables: std::borrow::Cow<'a, [crate::project::Table]>,
+    env: std::borrow::Cow<'a, crate::project::GpEnvironment>,
+    /// The map view's size, for its extent.
+    view_size: (f64, f64),
 }
 
-impl Snapshot {
-    pub fn of(s: &Session) -> Snapshot {
-        let view = if s.map().projection.is_globe() {
-            // The globe shows the whole Earth (the camera's flat extent means nothing there).
-            Some(rustgis_geom::Extent::new(-180.0, -90.0, 180.0, 90.0))
-        } else {
-            Some(super::workspace::view_extent(s)).filter(|e| !e.is_empty())
-        };
-        Snapshot { map: s.map().clone(), tables: s.project.tables.clone(), env: s.project.gp_env.clone(), view }
+impl<'a> Snapshot<'a> {
+    /// The session itself, for a run on its thread.
+    fn of(s: &'a Session) -> Snapshot<'a> {
+        use std::borrow::Cow::Borrowed;
+        Snapshot { map: Borrowed(s.map()), tables: Borrowed(&s.project.tables), env: Borrowed(&s.project.gp_env), view_size: s.view_size }
+    }
+
+    /// A copy of the session for a run on another thread: cheap, as the features and pixels are
+    /// shared.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn owned(s: &Session) -> Snapshot<'static> {
+        use std::borrow::Cow::Owned;
+        Snapshot {
+            map: Owned(s.map().clone()),
+            tables: Owned(s.project.tables.clone()),
+            env: Owned(s.project.gp_env.clone()),
+            view_size: s.view_size,
+        }
     }
 }
 
 /// A tool's inputs on the active map.
-struct MapInputs {
+struct MapInputs<'a> {
     /// The session as the tool started: its active map and its standalone tables.
-    snap: Snapshot,
+    snap: Snapshot<'a>,
     /// The rows of each layer (by lowercase name) the tool runs on: the selection or the
     /// environment's extent.
     rows: std::collections::HashMap<String, Vec<usize>>,
@@ -600,9 +638,12 @@ struct MapInputs {
     /// first time a tool asks for it (Tissot's indicatrix does), once for the run; `None` on the
     /// globe.
     flat: std::cell::OnceCell<Option<(String, rustgis_map::projection::Flat, f64)>>,
+    /// The view's longitude/latitude extent, worked out the first time a tool asks for it (it
+    /// inverse-projects the view, which most tools never need).
+    view: std::cell::OnceCell<Option<rustgis_geom::Extent>>,
 }
 
-impl MapInputs {
+impl MapInputs<'_> {
     /// The flat map's projection, built on first use.
     fn flat(&self) -> Option<&(String, rustgis_map::projection::Flat, f64)> {
         let map = &self.snap.map;
@@ -621,14 +662,14 @@ impl MapInputs {
     }
 }
 
-fn map_inputs(s: &Session, spec: Option<&rustgis_analysis::ToolSpec>, params: &Value) -> Result<MapInputs, String> {
+fn map_inputs<'a>(s: &'a Session, spec: Option<&rustgis_analysis::ToolSpec>, params: &Value) -> Result<MapInputs<'a>, String> {
     inputs_of(Snapshot::of(s), spec, params)
 }
 
 /// A tool's inputs from what it read of the session: the streamed layers and files it names read
 /// whole, and the rows of each layer it runs on. It reads, so a background run does this on its
 /// thread.
-fn inputs_of(snap: Snapshot, spec: Option<&rustgis_analysis::ToolSpec>, params: &Value) -> Result<MapInputs, String> {
+fn inputs_of<'a>(snap: Snapshot<'a>, spec: Option<&rustgis_analysis::ToolSpec>, params: &Value) -> Result<MapInputs<'a>, String> {
     let full = streamed_inputs(&snap.map, spec, params)?;
     let messages = Vec::new();
     #[cfg(not(target_arch = "wasm32"))]
@@ -668,7 +709,7 @@ fn inputs_of(snap: Snapshot, spec: Option<&rustgis_analysis::ToolSpec>, params: 
             .collect::<Result<Vec<_>, _>>()?;
         rows.insert(name.clone(), selected);
     }
-    Ok(MapInputs { snap, rows, loaded: full, messages, flat: std::cell::OnceCell::new() })
+    Ok(MapInputs { snap, rows, loaded: full, messages, flat: std::cell::OnceCell::new(), view: std::cell::OnceCell::new() })
 }
 
 /// Complete streamed inputs without selections, plus selected PMTiles inputs: that exporter
@@ -772,7 +813,7 @@ fn env_rows(
         .collect()
 }
 
-impl Inputs for MapInputs {
+impl Inputs for MapInputs<'_> {
     fn vector_to_pmtiles(
         &self,
         dataset: &Dataset,
@@ -816,7 +857,13 @@ impl Inputs for MapInputs {
         flat.forward(c).map(|m| rustgis_geom::Coord::new(m.x * to_meter, m.y * to_meter))
     }
     fn view_extent(&self) -> Option<rustgis_geom::Extent> {
-        self.snap.view
+        *self.view.get_or_init(|| {
+            // The globe shows the whole Earth (the camera's flat extent means nothing there).
+            if self.snap.map.projection.is_globe() {
+                return Some(rustgis_geom::Extent::new(-180.0, -90.0, 180.0, 90.0));
+            }
+            Some(super::workspace::view_extent_of(&self.snap.map, self.snap.view_size)).filter(|e| !e.is_empty())
+        })
     }
     fn raster(&self, layer: &str) -> Option<RasterInput<'_>> {
         let rl = self.snap.map.layer_by_name(layer)?.raster.as_ref()?;
