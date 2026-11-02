@@ -162,6 +162,9 @@ fn says_what_it_leaves_out() {
     c.push_next(None, vec![Value::Int(7)]);
     // A line in a polygon layer: it has geometry, but no polygon.
     c.push_next(Some(Geometry::Line(vec![vec![Coord::new(1.2, 0.2), Coord::new(1.8, 0.8)]])), vec![Value::Int(9)]);
+    // A ring collapsed onto a parallel inside B: a polygon with no area.
+    let collapsed = [(1.2, 0.5), (1.8, 0.5), (1.5, 0.5), (1.2, 0.5)].map(|(x, y)| Coord::new(x, y)).to_vec();
+    c.push_next(Some(Geometry::Polygon(vec![vec![collapsed]])), vec![Value::Int(11)]);
     let l = layers(z, c);
     let params = json!({"zones": "zones", "zoneFields": "zone", "classes": "classes", "sumFields": "pop"});
     let result = rustgis_analysis::run("tabulateIntersection", &l, &params).unwrap();
@@ -170,7 +173,7 @@ fn says_what_it_leaves_out() {
         [
             "Tabulate Intersection: 1 row",
             "2 zone features have no polygon and were left out",
-            "2 class features have no polygon and were left out",
+            "3 class features have no polygon and were left out",
             "2 zones overlap no class feature, so they have no rows",
             "1 class feature lies partly or wholly outside the zones: its value outside isn't shared out",
         ]
@@ -363,6 +366,10 @@ fn a_thin_strip_shares_out_half_when_half_outside_and_all_when_inside() {
     c.push_next(rect(-90.5, 35.0, -88.5, 35.0000001), vec![Value::Int(1_000_000)]);
     let result = rustgis_analysis::run("tabulateIntersection", &layers(z, c), &params).unwrap();
     assert!(result.messages.iter().any(|m| m.starts_with("1 class feature is so narrow next to its zones")), "{:?}", result.messages);
+    // A holds it whole; B gets the half from 89.5°W, roughly measured.
+    let pops: Vec<f64> = table(result).features.iter().filter_map(|f| f.attrs.get(3).and_then(Value::as_f64)).collect();
+    assert_eq!(pops.first(), Some(&1_000_000.0), "{pops:?}");
+    assert!(pops.get(1).is_some_and(|b| (b / 500_000.0 - 1.0).abs() < 0.05), "{pops:?}");
 
     // The same strip wholly inside the zone counts whole, unrounded, with no notice.
     let mut z = Dataset::new("zones", GeometryType::Polygon, vec![Field::new("zone", FieldType::Text)]);
@@ -438,6 +445,30 @@ fn a_thin_feature_near_a_zone_only_by_its_extent_gets_no_notice() {
     let result =
         rustgis_analysis::run("tabulateIntersection", &l, &json!({"zones": "zones", "zoneFields": "zone", "classes": "classes"})).unwrap();
     assert_eq!(result.messages, ["Tabulate Intersection: 0 rows", "1 zone overlaps no class feature, so it has no rows"]);
+}
+
+/// A zone stored with a jump across the antimeridian, unsplit: the map draws it the long way round,
+/// so a class feature at 0° falls in it, and a notice says its percentages follow the map.
+#[test]
+fn a_zone_crossing_the_antimeridian_unsplit_is_reported() {
+    let ring = |pts: &[(f64, f64)]| Some(Geometry::Polygon(vec![vec![pts.iter().map(|&(x, y)| Coord::new(x, y)).collect()]]));
+    let mut z = Dataset::new("zones", GeometryType::Polygon, vec![Field::new("zone", FieldType::Text)]);
+    z.push_next(ring(&[(179.0, 0.0), (-179.0, 0.0), (-179.0, 1.0), (179.0, 1.0), (179.0, 0.0)]), vec![Value::Text("A".into())]);
+    let mut c = Dataset::new("classes", GeometryType::Polygon, vec![Field::new("kind", FieldType::Text)]);
+    c.push_next(ring(&[(0.0, 0.2), (0.5, 0.2), (0.5, 0.8), (0.0, 0.8), (0.0, 0.2)]), vec![Value::Text("x".into())]);
+    let result = rustgis_analysis::run(
+        "tabulateIntersection",
+        &layers(z, c),
+        &json!({"zones": "zones", "zoneFields": "zone", "classes": "classes"}),
+    )
+    .unwrap();
+    assert_eq!(
+        result.messages,
+        [
+            "Tabulate Intersection: 1 row",
+            "1 zone feature crosses the antimeridian without being split there: the map draws them the long way round, and their percentages and shares follow the map, while area_km2 follows the ground",
+        ]
+    );
 }
 
 #[test]

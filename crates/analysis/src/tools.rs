@@ -2818,6 +2818,15 @@ fn ground_area_perimeter(g: &Geometry) -> (f64, f64) {
     (a, per)
 }
 
+/// The area of a ring in square degrees of longitude and latitude, by the shoelace formula: zero
+/// for a ring that has collapsed onto a line or point. Coordinates are taken from the first
+/// vertex, so a ring far from the origin keeps the precision of its own size.
+fn lonlat_ring_area(ring: &[Coord]) -> f64 {
+    let Some(o) = ring.first() else { return 0.0 };
+    let d = |c: &Coord| (c.x - o.x, c.y - o.y);
+    (ring.iter().zip(ring.iter().cycle().skip(1)).map(|(a, b)| d(a).0 * d(b).1 - d(b).0 * d(a).1).sum::<f64>() / 2.0).abs()
+}
+
 /// The area (square metres, holes taken out) of a lon/lat polygon geometry on a sphere of the
 /// Earth's radius, as the map draws it: each edge a straight line in Web Mercator, which is a rhumb
 /// line, with longitudes as they are (not folded across the antimeridian) and latitudes clamped to
@@ -3303,10 +3312,11 @@ fn tabulate_intersection(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, Strin
         rs.dedup();
         rs
     };
-    // A feature without geometry, with an empty one (`"coordinates": []`) or with a line or point
-    // in a polygon layer has no polygon, so no area to tabulate.
-    let has_shape =
-        |g: &Geometry| matches!(g, Geometry::Polygon(polys) if polys.iter().any(|rings| rings.first().is_some_and(|r| !r.is_empty())));
+    // A feature without geometry, with an empty one (`"coordinates": []`), with a line or point in
+    // a polygon layer, or whose polygons have no area in its own coordinates (a collapsed ring) has
+    // no polygon, so no area to tabulate. The area is taken in longitude and latitude, so a polygon
+    // the map's latitude limit flattens still counts as one.
+    let has_shape = |g: &Geometry| matches!(g, Geometry::Polygon(polys) if polys.iter().any(|rings| rings.first().is_some_and(|r| lonlat_ring_area(r) > 0.0)));
     let shapeless = |ds: &Dataset, rs: &[usize]| {
         rs.iter().filter(|&&r| ds.features.get(r).and_then(|f| f.geometry.as_ref()).is_none_or(|g| !has_shape(g))).count()
     };
@@ -3322,6 +3332,18 @@ fn tabulate_intersection(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, Strin
         rs.iter().filter(|&&r| ds.features.get(r).and_then(|f| f.geometry.as_ref()).is_some_and(beyond)).count()
     };
     let (zones_beyond, classes_beyond) = (beyond_limit(zones, &zone_rows), beyond_limit(classes, &class_rows));
+    // Features with a ring that jumps across the antimeridian unsplit: the overlay, like the map,
+    // takes such a ring the long way round, while `area_km2` takes its ground shape.
+    let unsplit = |ds: &Dataset, rs: &[usize]| {
+        let jumps = |g: &Geometry| {
+            has_shape(g)
+                && matches!(g, Geometry::Polygon(polys) if polys.iter().flatten().any(|r| {
+                    r.iter().zip(r.iter().cycle().skip(1)).any(|(a, b)| (b.x - a.x).abs() > 180.0)
+                }))
+        };
+        rs.iter().filter(|&&r| ds.features.get(r).and_then(|f| f.geometry.as_ref()).is_some_and(jumps)).count()
+    };
+    let (zones_unsplit, classes_unsplit) = (unsplit(zones, &zone_rows), unsplit(classes, &class_rows));
     let zone_list: Vec<TabulateZone> = crate::stats::group_rows(zones, &zone_rows, &zone_keys)
         .into_iter()
         .map(|group| {
@@ -3366,6 +3388,7 @@ fn tabulate_intersection(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, Strin
             // which cuts it by their union: see [`OverlayGrid`].
             let near_merc = near.iter().filter_map(|&zi| zone_list.get(zi)).fold(Extent::EMPTY, |e, z| e.union(&z.merc_ext));
             let mut grid: Option<OverlayGrid> = None;
+            let resolved = grid.get_or_insert_with(|| OverlayGrid::new(&whole, &near_merc)).resolves();
             let mut inside = false;
             // Whether one zone holds the whole feature, so none of it lies outside them all; and
             // whether a zone got a part of it as cut, rounded, not the whole.
@@ -3373,9 +3396,23 @@ fn tabulate_intersection(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, Strin
             let mut cut_part = false;
             for &zi in &near {
                 let Some(zone) = zone_list.get(zi) else { continue };
-                let Some(mut piece) = part(&whole, &zone.mask, true) else { continue };
+                // A zone whose cut leaves nothing although the feature's interior meets its own lost
+                // that part to rounding: the feature is measured roughly, as for a part as cut. Only
+                // a feature the grid doesn't resolve can lose more than that rounding allows.
+                let meets_zone = || {
+                    !resolved
+                        && to_multipolygon(&whole).is_some_and(|w| {
+                            let m = zone.mask.relate(&w);
+                            m.is_intersects() && !m.is_touches()
+                        })
+                };
+                let Some(mut piece) = part(&whole, &zone.mask, true) else {
+                    cut_part |= meets_zone();
+                    continue;
+                };
                 let mut piece_area = map_area_m2(&piece);
                 if piece_area <= 0.0 || !piece_area.is_finite() {
+                    cut_part |= meets_zone();
                     continue;
                 }
                 inside = true;
@@ -3428,9 +3465,8 @@ fn tabulate_intersection(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, Strin
                         m.is_intersects() && !m.is_touches()
                     })
                 });
-            let resolved = grid.get_or_insert_with(|| OverlayGrid::new(&whole, &near_merc)).resolves();
-            // Rough when a zone got a part of it as cut, even if another zone holds it whole, or
-            // when it meets a zone but no part of it survived the cut.
+            // Rough when a zone got a part of it as cut, or lost one to rounding, even if another
+            // zone holds it whole, or when it meets a zone but no part of it survived the cut.
             unresolved += usize::from(!resolved && (cut_part || (meets && !inside)));
             if !sum_fields.is_empty() && !held {
                 // A feature meeting no zone lies wholly outside them; one whose parts didn't
@@ -3551,6 +3587,18 @@ fn tabulate_intersection(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, Strin
             "{} {verb} beyond {:.2}° latitude, where the map ends: parts there are taken as lying along it, with no area",
             beyond.join(" and "),
             rustgis_geom::MAX_LAT
+        ));
+    }
+    let unsplit: Vec<String> = [(zones_unsplit, "zone"), (classes_unsplit, "class")]
+        .into_iter()
+        .filter(|(n, _)| *n > 0)
+        .map(|(n, layer)| features(n, layer))
+        .collect();
+    if !unsplit.is_empty() {
+        let verb = if zones_unsplit + classes_unsplit == 1 { "crosses" } else { "cross" };
+        messages.push(format!(
+            "{} {verb} the antimeridian without being split there: the map draws them the long way round, and their percentages and shares follow the map, while area_km2 follows the ground",
+            unsplit.join(" and ")
         ));
     }
     match unresolved {
