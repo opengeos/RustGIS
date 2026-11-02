@@ -4289,7 +4289,7 @@ mod record_tests {
         assert_eq!(app.ws.recording.as_ref().map(Vec::len), Some(1));
     }
 
-    /// A step keeping a plain `key` is recorded, and that is said once a recording.
+    /// A background run's `gp.finish` is recorded as the `gp.run` it finished.
     #[test]
     fn a_tool_finished_in_the_background_is_recorded_as_its_run() {
         let mut app = RustGisApp::with_sample();
@@ -4313,6 +4313,7 @@ mod record_tests {
         );
     }
 
+    /// A step keeping a plain `key` is recorded, and that is said once a recording.
     #[test]
     fn a_kept_key_is_said_once() {
         let mut app = RustGisApp::with_sample();

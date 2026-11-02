@@ -6444,6 +6444,7 @@ mod tests {
         let _ = app.run("ui.gp.open", json!({"tool": "buffer"}));
         app.gp.values.insert("input", "Cities".into());
         app.gp.values.insert("distance", "50".into());
+        app.ws.recording = Some(Vec::new());
         let layers = app.session.map().layers.len();
         let mut fonts = false;
         let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(420.0, 1000.0)).build_ui_state(
@@ -6472,6 +6473,9 @@ mod tests {
         assert_eq!(app.gp.last.as_ref().map(|l| l.0), Some(true), "{:?}", app.gp.last);
         assert_eq!(app.session.map().layers.len(), layers + 1);
         assert_eq!(app.session.project.gp_history.last().map(|r| (r.ok, r.tool.as_str())), Some((true, "Buffer")));
+        // Recorded once, as its run.
+        let steps = app.ws.recording.as_deref().unwrap_or_default();
+        assert_eq!(steps.iter().map(|s| s.command.as_str()).collect::<Vec<_>>(), ["gp.run"]);
     }
 
     #[test]

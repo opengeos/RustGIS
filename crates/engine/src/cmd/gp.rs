@@ -390,8 +390,8 @@ fn complete(
     // A selection's rows of a streamed layer read whole are found by the name it was read under,
     // whatever the layer is called now.
     let read_as = output_layer(&result);
-    fit_to_changes(s, &mut result, &run.name, &run.read);
     let mut full_ids = full_ids.unwrap_or(run.full_ids);
+    fit_to_changes(s, &mut result, &run.name, &run.read, &full_ids);
     if let (Some(was), Some(now)) = (read_as, output_layer(&result))
         && was != now
         && let Some(ids) = full_ids.remove(&was)
@@ -514,39 +514,55 @@ pub fn tool_complete(s: &mut Session, id: u64, done: ToolDone) -> Result<(), Str
 }
 
 /// Fits a background run's result to edits made while it ran: its layer is the one it read,
-/// whatever its name now; a selection of a layer that changed selects the same features (by id)
-/// where they now are; and an update of a layer that changed, which would discard those edits,
-/// or of one removed, is refused.
+/// whatever its name now; a selection of a layer that changed, or of a streamed layer whose
+/// window moved, selects the same features (by id) where they now are; and an update of a layer
+/// that changed, which would discard those edits, or of one removed, is refused. A streamed
+/// layer it read whole is fitted by [`fit_to_windows`].
 fn fit_to_changes(
     s: &Session,
     res: &mut Result<rustgis_analysis::ToolResult, String>,
     tool: &str,
     read: &std::collections::HashMap<String, Read>,
+    full_ids: &FullIds,
 ) {
     let Ok(r) = res else { return };
     let (Output::Selection { layer, .. } | Output::Update { layer, .. }) = &mut r.output else { return };
-    let Some(was) = read.get(&layer.to_ascii_lowercase()) else { return };
+    let key = layer.to_ascii_lowercase();
+    let Some(was) = read.get(&key) else { return };
     // The layer it read, by id: renamed perhaps, but not another of the same name.
     let Some(now) = s.map().layer(was.id) else {
         *res = Err(format!("{layer} was removed while {tool} ran"));
         return;
     };
-    // Another layer with its id (on a map that took the name of the one it ran on) isn't it.
-    if now.dataset.source != was.source {
+    // Another layer with its id (on a map that took the name of the one it ran on), or the layer
+    // relinked to another table of its file, isn't it.
+    if now.dataset.source != was.source || now.linked_table() != was.table.as_deref() {
         *res = Err(format!("{layer} was removed while {tool} ran"));
         return;
     }
     layer.clone_from(&now.name);
-    // A streamed layer's rows follow the view: only that it is still there is checked.
-    let Some(dataset) = &was.dataset else { return };
-    if Read::unchanged(dataset, &now.dataset) {
+    if Read::unchanged(&was.dataset, &now.dataset) {
         return;
     }
+    // A selection of what it read whole (rows of the whole source) is fitted to the layer later,
+    // loaded since or not. A layer still streamed has rows that follow the view: an update of it
+    // is checked there too.
+    let streamed = was.streamed && now.is_streamed();
     match &mut r.output {
+        Output::Selection { .. } if was.streamed && full_ids.contains_key(&key) => {}
         Output::Selection { rows, .. } => {
-            let ids: std::collections::HashSet<u64> = rows.iter().filter_map(|r| dataset.features.get(*r)).map(|f| f.id).collect();
+            let ids: std::collections::HashSet<u64> = rows.iter().filter_map(|r| was.dataset.features.get(*r)).map(|f| f.id).collect();
             *rows = now.dataset.features.iter().enumerate().filter(|(_, f)| ids.contains(&f.id)).map(|(i, _)| i).collect();
+            let gone = ids.len().saturating_sub(rows.len());
+            if gone > 0 {
+                let place = if now.is_streamed() { "outside the part of it read for the view" } else { "deleted" };
+                r.messages.push(format!(
+                    "{gone} of the features {tool} selected in {} are no longer there ({place} while it ran) and aren't selected",
+                    now.name
+                ));
+            }
         }
+        _ if streamed => {}
         _ => *res = Err(format!("{} changed while {tool} ran; run it again", now.name)),
     }
 }
@@ -565,15 +581,25 @@ pub(crate) struct Read {
     id: u32,
     /// Its dataset as the run read it: a copy that shares the rows, so taking it costs nothing
     /// however large the layer, and any edit since (which copies the rows held here too) shows.
-    /// `None` for a streamed layer, whose rows follow the view.
-    dataset: Option<Dataset>,
+    /// For a streamed layer, the window in view then.
+    dataset: Dataset,
+    /// Whether it was read in place from its file, its rows following the view.
+    streamed: bool,
     /// Where its data comes from: a layer with the same id and another source is another layer.
     source: Option<String>,
+    /// The table of that file it reads: a repair can relink it to another.
+    table: Option<String>,
 }
 
 impl Read {
     fn of(l: &rustgis_map::Layer) -> Self {
-        Read { id: l.id, dataset: (!l.is_streamed()).then(|| l.dataset.clone()), source: l.dataset.source.clone() }
+        Read {
+            id: l.id,
+            dataset: l.dataset.clone(),
+            streamed: l.is_streamed(),
+            source: l.dataset.source.clone(),
+            table: l.linked_table().map(String::from),
+        }
     }
 
     /// Whether `now` is the dataset `was` as it was read: the same rows in memory, and the same
@@ -617,6 +643,13 @@ fn fit_to_windows(s: &Session, res: &mut Result<rustgis_analysis::ToolResult, St
             .is_some_and(|l| l.is_streamed() && (!l.selection.is_empty() || !full_ids.contains_key(&layer.to_ascii_lowercase())))
     {
         *res = Err(format!("{layer} is read in place from its file; Load All Features (layer.loadAll) before a tool updates it"));
+    }
+}
+
+/// Keeps the runs started on a renamed map on it.
+pub(crate) fn follow_renamed_map(s: &mut Session, old: &str, new: &str) {
+    for r in s.plugin_runs.iter_mut().filter(|r| r.map.1 == old) {
+        r.map.1 = new.to_string();
     }
 }
 

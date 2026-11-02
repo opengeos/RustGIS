@@ -288,6 +288,7 @@ fn duplicate_map(s: &mut Session, p: &Value) -> CmdResult {
 /// Points layout map frames, presentation map pages and offline areas at a renamed map (#287),
 /// so they keep finding it.
 fn follow_renamed_map(s: &mut Session, old: &str, new: &str) {
+    super::gp::follow_renamed_map(s, old, new);
     let renamed = |m: &mut String| {
         if m.eq_ignore_ascii_case(old) {
             *m = new.to_string();
