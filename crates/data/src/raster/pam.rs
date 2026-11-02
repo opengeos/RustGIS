@@ -96,29 +96,51 @@ pub fn sidecar_paths(path: &Path) -> Vec<PathBuf> {
     vec![PathBuf::from(long), path.with_extension("aux.xml")]
 }
 
-/// The sidecar next to `path`, if there's one that parses.
+/// The sidecar next to `path`: the first that parses. When one is there but none parses (too
+/// large, not text, not GDAL's), it names nothing and says why ([`Pam::losing`]).
 pub fn read(path: &Path) -> Option<Pam> {
-    sidecar_paths(path).into_iter().find_map(|p| {
-        let meta = std::fs::metadata(&p).ok()?;
-        if !meta.is_file() || meta.len() > MAX_BYTES {
-            return None;
+    let mut why = None;
+    for p in sidecar_paths(path) {
+        let Ok(meta) = std::fs::metadata(&p) else { continue };
+        if !meta.is_file() {
+            continue;
         }
-        parse(&std::fs::read_to_string(&p).ok()?)
-    })
+        let read = if meta.len() > MAX_BYTES {
+            Err(format!("it is over {} MiB", MAX_BYTES >> 20))
+        } else {
+            std::fs::read_to_string(&p).map_err(|e| format!("it isn't UTF-8 text ({e})")).and_then(|t| parse_sidecar(&t))
+        };
+        match read {
+            Ok(pam) => return Some(pam),
+            Err(e) => {
+                why.get_or_insert(e);
+            }
+        }
+    }
+    why.map(|e| Pam::losing(format!("{e}: its statistics, no-data and band names are left out")))
 }
 
-/// Parses a sidecar's text (`None` when it isn't a PAM document).
+/// Parses a sidecar's text. One that doesn't read as XML (or is too large to), or isn't a PAM
+/// document, names nothing: it comes back with only [`Pam::lost`] saying so.
 pub fn parse(text: &str) -> Option<Pam> {
+    Some(parse_sidecar(text).unwrap_or_else(|e| Pam::losing(format!("{e}: its statistics, no-data and band names are left out"))))
+}
+
+/// [`parse`], with why a document isn't read as the error.
+fn parse_sidecar(text: &str) -> Result<Pam, String> {
     let opts = ParsingOptions { allow_dtd: false, nodes_limit: crate::io::XML_NODES, ..ParsingOptions::default() };
-    let doc = crate::xml::parse(text, opts).ok()?;
+    let doc = crate::xml::parse(text, opts).map_err(|e| format!("it doesn't read as XML ({e})"))?;
     let root = doc.root_element();
     if root.tag_name().name() != "PAMDataset" {
-        return None;
+        let name = root.tag_name().name().chars().take(40).collect::<String>();
+        return Err(format!("it is a <{name}> document, not GDAL's <PAMDataset>"));
     }
     let mut pam = Pam::default();
     // Names cut to `MAX_NAME` characters, class names past `MAX_CATEGORIES`, records for no band
-    // from 1 to `MAX_BANDS`, and the scale, offset and units that aren't read, counted.
+    // from 1 to `MAX_BANDS`, a band's records after its first, and the scale, offset and units
+    // that aren't read, counted.
     let (mut cut, mut beyond, mut odd_bands, mut unscaled, mut units) = (0usize, 0usize, 0usize, 0usize, 0usize);
+    let (mut seen, mut twice) = (std::collections::HashSet::new(), 0usize);
     let mut kept = |t: &str| {
         cut += usize::from(t.chars().nth(MAX_NAME).is_some());
         t.chars().take(MAX_NAME).collect::<String>()
@@ -128,6 +150,11 @@ pub fn parse(text: &str) -> Option<Pam> {
             odd_bands += 1;
             continue;
         };
+        // A band's first record is the one read ([`Pam::band`] finds the first).
+        if !seen.insert(band) {
+            twice += 1;
+            continue;
+        }
         let text_of = |tag: &str| b.children().find(|n| n.has_tag_name(tag)).and_then(|n| n.text()).map(str::trim);
         // A scale of 1 and an offset of 0 change nothing, and an empty unit says nothing.
         let number = |tag: &str| text_of(tag).map(|v| v.parse::<f64>().ok());
@@ -170,6 +197,9 @@ pub fn parse(text: &str) -> Option<Pam> {
     if odd_bands > 0 {
         pam.lost.push(format!("{odd_bands} band record(s) for no band from 1 to {MAX_BANDS} left out"));
     }
+    if twice > 0 {
+        pam.lost.push(format!("{twice} band record(s) given again left out (the first is kept)"));
+    }
     if unscaled > 0 {
         pam.lost.push(format!("{unscaled} scale or offset(s) not applied: the values are as stored"));
     }
@@ -182,7 +212,7 @@ pub fn parse(text: &str) -> Option<Pam> {
     if cut > 0 {
         pam.lost.push(format!("{cut} band or class name(s) cut to {MAX_NAME} characters"));
     }
-    Some(pam)
+    Ok(pam)
 }
 
 /// The band descriptions a GeoTIFF holds itself, in GDAL's metadata tag (`GDAL_METADATA`, 42112),
@@ -502,13 +532,17 @@ mod tests {
         let odd = parse(
             r#"<PAMDataset><PAMRasterBand band="0"><Description>x</Description></PAMRasterBand>
             <PAMRasterBand band="1"><Scale>0.01</Scale><Offset>-5</Offset><UnitType>m</UnitType></PAMRasterBand>
-            <PAMRasterBand band="2"><Scale>1</Scale><Offset>0</Offset><UnitType></UnitType></PAMRasterBand></PAMDataset>"#,
+            <PAMRasterBand band="2"><Scale>1</Scale><Offset>0</Offset><UnitType></UnitType></PAMRasterBand>
+            <PAMRasterBand band="1"><Description>again</Description></PAMRasterBand></PAMDataset>"#,
         )
         .unwrap();
+        // A band given again keeps its first record.
+        assert!(odd.bands.len() == 2 && odd.band(1).unwrap().description.is_none(), "{odd:?}");
         assert_eq!(
             odd.lost,
             [
                 format!("1 band record(s) for no band from 1 to {MAX_BANDS} left out"),
+                "1 band record(s) given again left out (the first is kept)".to_string(),
                 "2 scale or offset(s) not applied: the values are as stored".to_string(),
                 "1 band unit(s) not read: left out".to_string(),
             ]
@@ -517,11 +551,44 @@ mod tests {
 
     #[test]
     fn junk_is_not_a_sidecar() {
-        for text in ["", "not xml", "<GDALMetadata/>", "<PAMDataset><PAMRasterBand band=\"x\"/>", "<!DOCTYPE x><PAMDataset/>"] {
-            assert!(parse(text).is_none_or(|p| p.bands.is_empty()), "{text}");
+        // Each names nothing, and says why.
+        for (text, said) in [
+            ("", "doesn't read as XML"),
+            ("not xml", "doesn't read as XML"),
+            ("<GDALMetadata/>", "it is a <GDALMetadata> document, not GDAL's <PAMDataset>"),
+            ("<PAMDataset><PAMRasterBand band=\"x\"/>", "doesn't read as XML"),
+            ("<!DOCTYPE x><PAMDataset/>", "doesn't read as XML"),
+        ] {
+            let pam = parse(text).unwrap();
+            assert!(pam.bands.is_empty() && pam.lost.len() == 1 && pam.lost[0].contains(said), "{text}: {pam:?}");
+            assert!(pam.lost[0].ends_with("its statistics, no-data and band names are left out"), "{text}: {pam:?}");
         }
         let deep = format!("<PAMDataset>{}{}</PAMDataset>", "<a>".repeat(100_000), "</a>".repeat(100_000));
-        assert!(parse(&deep).is_none());
+        let deep = parse(&deep).unwrap();
+        assert!(deep.bands.is_empty() && deep.lost.len() == 1, "{deep:?}");
+        // A band record with no number is a sidecar, which says the record is left out.
+        assert_eq!(parse("<PAMDataset><PAMRasterBand band=\"x\"/></PAMDataset>").unwrap().lost.len(), 1);
+    }
+
+    #[test]
+    fn a_sidecar_that_does_not_read_says_why() {
+        let dir = std::env::temp_dir().join(format!("rustgis-pam-junk-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let tif = dir.join("x.tif");
+        assert_eq!(read(&tif), None, "no sidecar, nothing said");
+        // Not text: said.
+        std::fs::write(dir.join("x.tif.aux.xml"), [0xff, 0xfe, 0x00]).unwrap();
+        let junk = read(&tif).unwrap();
+        assert!(junk.bands.is_empty() && junk.lost[0].starts_with("it isn't UTF-8 text"), "{junk:?}");
+        // The other name, when it parses, is read instead.
+        std::fs::write(
+            dir.join("x.aux.xml"),
+            r#"<PAMDataset><PAMRasterBand band="1"><Description>NIR</Description></PAMRasterBand></PAMDataset>"#,
+        )
+        .unwrap();
+        let other = read(&tif).unwrap();
+        assert!(other.lost.is_empty() && other.band(1).unwrap().description.as_deref() == Some("NIR"), "{other:?}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
