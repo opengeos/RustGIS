@@ -194,6 +194,9 @@ fn class(
         let bare = field.strip_prefix('"').and_then(|f| f.strip_suffix('"')).unwrap_or(field);
         if !bare.is_empty() && bare.chars().all(|c| c.is_alphanumeric() || c == '_' || c == ' ') {
             bare.to_string()
+        } else if bare.trim().is_empty() {
+            report.skipped(layer, "labels whose text is an empty expression");
+            return None;
         } else if field.chars().count() > rustgis_data::query::MAX_LEN {
             report.skipped(layer, "labels whose text is an expression too long to read");
             return None;
