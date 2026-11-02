@@ -441,6 +441,14 @@ Turn labels on per layer (Labeling › Labels › **Label**), then:
   next, is left unlabelled. A text over 200 characters long is set straight rather than
   curved. Points and polygons with these placements are labelled as automatic
   (`labels.placement={"layer": "Rivers", "position": "curved"}`).
+- **Other places round points**: a point's label whose place another label takes tries the
+  other places round the point, corners first (above right, above left, below right, below left,
+  right, left, above, below, leaving out its own), and goes to the first where
+  all of it shows; where none is free it is left out, as before (Labeling pane › Position ›
+  **Try other places round the point**, for point layers). Off by default: a label that moves can
+  take the place a less important one had. The class's offset applies to every place, and Lock
+  keeps the place each label took
+  (`labels.placement={"layer": "Cities", "otherPositions": true}`).
 - **Lock** keeps the labelled features fixed while you pan and zoom; **Pause** stops drawing
   labels for faster navigation; **View Unplaced** draws the labels that didn't fit in red. They
   apply to the whole map, so they are on the ribbon (Labeling › Map Labeling), not in the pane.

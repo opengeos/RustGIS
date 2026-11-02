@@ -1725,8 +1725,12 @@ fn add_source_with(
                 s.notify(format!("{unique}: {n}"), false);
             }
             let id = s.map_mut().add_streamed(unique.clone(), layer);
-            if let (Some(r), Some(l)) = (style.clone(), s.map_mut().layer_mut(id)) {
-                l.renderer = r;
+            if let Some(l) = s.map_mut().layer_mut(id) {
+                // Kept with the layer, as a materialized read keeps it (see Dataset::zm_dropped).
+                l.dataset.zm_dropped = info.zm_dropped;
+                if let Some(r) = style.clone() {
+                    l.renderer = r;
+                }
             }
             s.active_layer = Some(id);
             ids.push(id);
@@ -2743,6 +2747,12 @@ pub(crate) fn add_url(s: &mut Session, p: &Value) -> CmdResult {
     if rustgis_data::source::is_remote_name(url) && scan {
         return Err(format!("{url}: \"as\": \"scan\" opens a TIFF, PNG or JPEG"));
     }
+    // A plugin's command run by the app (the desktop): what would wait (reading a header, a
+    // probe, a download) is left to the app, which does it off the frame, as in the browser.
+    #[cfg(not(target_arch = "wasm32"))]
+    if s.leave_downloads {
+        return s.request_url(p);
+    }
     // An address the app found to be a GeoTIFF (`"cog"`) is one whatever its name says.
     if rustgis_data::source::is_remote_name(url) && !super::b(p, "whole").unwrap_or(false) && !super::b(p, "cog").unwrap_or(false) {
         // In the browser nothing may wait: the app has fetched what opening needs already.
@@ -2806,6 +2816,9 @@ fn add_remote(s: &mut Session, p: &Value, url: &str, src: Box<dyn rustgis_data::
         s.notify(format!("{unique}: {n}"), false);
     }
     let id = s.map_mut().add_streamed(unique.clone(), layer);
+    if let Some(l) = s.map_mut().layer_mut(id) {
+        l.dataset.zm_dropped = info.zm_dropped;
+    }
     s.active_layer = Some(id);
     let count = info.count.map(|c| c.to_string()).unwrap_or_else(|| "many".into());
     s.notify(format!("{unique}: {count} features, read in place by range from its address, a view at a time"), false);
@@ -3321,10 +3334,14 @@ pub(crate) fn add_data_text(s: &mut Session, p: &Value) -> CmdResult {
     add_read(s, p, read)
 }
 
+/// Adds an imported dataset as a layer or table, forwarding reader notices for either result.
 pub(crate) fn add_read(s: &mut Session, p: &Value, read: (rustgis_data::Dataset, rustgis_data::ReadReport)) -> CmdResult {
     let (mut ds, report) = read;
     if let Some(n) = ps(p, "name").map(str::trim).filter(|n| !n.is_empty()) {
         ds.name = n.to_string();
+    }
+    for m in report.messages {
+        s.notify(m, false);
     }
     if ds.geometry_type == GeometryType::None {
         let name = ds.name.clone();
@@ -3334,9 +3351,6 @@ pub(crate) fn add_read(s: &mut Session, p: &Value, read: (rustgis_data::Dataset,
     let n = ds.features.len();
     let empty_before = s.map().layers.is_empty();
     let id = add_dataset(s, ds);
-    for m in report.messages {
-        s.notify(m, false);
-    }
     if empty_before && let Some(e) = s.map().layer(id).map(|l| l.extent()) {
         s.zoom_to(&e);
     }
