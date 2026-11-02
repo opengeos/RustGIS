@@ -420,8 +420,12 @@ pub fn run(id: &str, inputs: &dyn Inputs, params: &Value) -> Result<ToolResult, 
 /// [`run`] under `control`: setting its flag stops the tool at its next check, and its count
 /// follows the tool's progress (see [`control`]). A run cancelled before it returns is an error
 /// saying how far it came, whatever the tool gave back: a tool may stop early however suits it,
-/// and what it made by then is never taken for its result.
+/// and what it made by then is never taken for its result. One cancelled before it starts doesn't
+/// start.
 pub fn run_with(id: &str, inputs: &dyn Inputs, params: &Value, control: &std::sync::Arc<control::Control>) -> Result<ToolResult, String> {
+    if control.is_cancelled() {
+        return Err(format!("{} was cancelled before it started", tool(id).map_or(id, |t| t.name)));
+    }
     let _current = control::install(Some(control.clone()));
     let res = run(id, inputs, params);
     if !control.is_cancelled() {

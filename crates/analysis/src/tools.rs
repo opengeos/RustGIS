@@ -1287,6 +1287,7 @@ fn buffer_rows(
 ) -> Result<Vec<Feature>, &'static str> {
     let storage = BufferStorage::new(bytes);
     let mut output = Vec::new();
+    crate::control::begin(geoms.len());
     for batch in geoms.chunks(BUFFER_BATCH) {
         let made = crate::parallel::try_map(
             batch,
@@ -2429,6 +2430,7 @@ fn select_by_location_with_work_limit(inp: &dyn Inputs, p: &Json, limit: usize, 
     // budget; zero-distance selection keeps its existing unbuffered behavior.
     let storage = BufferStorage::new(if dist > 0.0 { bytes } else { usize::MAX });
     let mut selectors = Vec::new();
+    crate::control::begin(picked.len());
     for batch in picked.chunks(BUFFER_BATCH) {
         let made = crate::parallel::try_map(
             batch,
@@ -6138,7 +6140,7 @@ mod tests {
         control.cancel();
         assert_eq!(
             crate::run_with("idwInterpolation", &m, &params, &control).err().as_deref(),
-            Some("IDW Interpolation was cancelled 0% of the way through its current step")
+            Some("IDW Interpolation was cancelled before it started")
         );
         // Asked once it has made some rows: it stops well before the end.
         let control = crate::control::Control::new();
@@ -6163,6 +6165,18 @@ mod tests {
             crate::run("idwInterpolation", &m, &serde_json::json!({"input": "pts", "field": "v", "extent": "0,0,10,10", "pixelSize": 1.0}))
                 .is_ok()
         );
+    }
+
+    #[test]
+    fn buffers_count_their_features_toward_the_progress() {
+        let mut pts = Dataset::new("pts", GeometryType::Point, vec![]);
+        for i in 0..40 {
+            pts.push(Some(Geometry::Point(Coord::new(f64::from(i) * 0.1, 0.0))), vec![]);
+        }
+        let m = Map(HashMap::from([("pts".to_string(), pts)]));
+        let control = crate::control::Control::new();
+        crate::run_with("buffer", &m, &serde_json::json!({"input": "pts", "distance": 100.0}), &control).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(control.progress(), Some((40, 40)));
     }
 
     #[test]
