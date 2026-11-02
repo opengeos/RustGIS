@@ -2859,7 +2859,9 @@ fn rhumb_ring_area(ring: &[Coord]) -> f64 {
 /// How far the overlay's rounding can move the area of a feature cut by masks within `domain` (a
 /// Web Mercator extent), relative to the feature's area. The overlay keeps 29 integer bits about the
 /// centre of its operands' extent (see [`clip`]), so a vertex moves by up to half a grid step and
-/// the area by up to the perimeter times a step; this allows four steps, and at least 1e-9.
+/// the area by up to the perimeter times a step; this allows four steps, at least 1e-9 and at most
+/// 1e-3. A feature so thin that the overlay rounds it by more than that is measured as cut, so a
+/// part of it outside its zones is never taken as inside, at worst reported as outside.
 fn overlay_rounding(g: &Geometry, domain: &Extent) -> f64 {
     use geo::{Area, Euclidean, Length};
     let Some(mp) = to_multipolygon(g) else { return 1e-9 };
@@ -2867,7 +2869,7 @@ fn overlay_rounding(g: &Geometry, domain: &Extent) -> f64 {
     let step = ext.width().max(ext.height()) / f64::from(1_u32 << 28);
     let perimeter: f64 = mp.0.iter().flat_map(|p| std::iter::once(p.exterior()).chain(p.interiors())).map(|r| Euclidean.length(r)).sum();
     let area = mp.unsigned_area();
-    if area > 0.0 && step.is_finite() { (4.0 * perimeter * step / area).max(1e-9) } else { 1e-9 }
+    if area > 0.0 && step.is_finite() { (4.0 * perimeter * step / area).clamp(1e-9, 1e-3) } else { 1e-9 }
 }
 
 /// Calculate Geometry Attributes: adds `area_km2` and `perimeter_km` to a polygon layer (see
