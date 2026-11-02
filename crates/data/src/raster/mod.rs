@@ -376,6 +376,10 @@ impl Band {
     }
 }
 
+/// The longest a raster read in place is waited for natively: its overview as a layer opens, its
+/// tiles as it is exported.
+pub const IN_PLACE_WAIT: std::time::Duration = std::time::Duration::from_secs(120);
+
 /// An alpha band's opaque value for a pixel type (`UInt16`: 65535): the type's largest, 1 for
 /// floating point (as TIFF keeps it), 255 for bytes and anything else.
 pub fn alpha_max(data_type: &str) -> f32 {

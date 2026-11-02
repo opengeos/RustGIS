@@ -1520,12 +1520,16 @@ impl Session {
     /// that couldn't be read, and why. Once for each layer's pixels or failure, one notice of each
     /// kind; the app calls it each frame.
     pub fn notice_landed_rasters(&mut self) {
-        let (mut grey, mut held, mut failed) = (Vec::new(), Vec::new(), Vec::new());
+        let (mut grey, mut held, mut failed, mut dropped) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
         for m in &mut self.project.maps {
             for l in &mut m.layers {
                 let Some(rl) = &mut l.raster else { continue };
                 if let Some(e) = rl.error_unsaid() {
                     failed.push((l.name.clone(), e));
+                }
+                let lost = rl.dropped_unsaid();
+                if !lost.is_empty() {
+                    dropped.push((l.name.clone(), lost));
                 }
                 let in_place = rl.in_place;
                 let Some(d) = rl.pixels_unsaid() else { continue };
@@ -1544,6 +1548,21 @@ impl Session {
                 format!("{} palette rasters have no whole colour table, so they are drawn in grey: {}", many.len(), names_said(many)),
                 false,
             ),
+        }
+        if !dropped.is_empty() {
+            let mut kinds: Vec<&str> = dropped.iter().flat_map(|(_, k)| k.iter().copied()).collect();
+            kinds.sort_unstable();
+            kinds.dedup();
+            let names: Vec<String> = dropped.iter().map(|(n, _)| n.clone()).collect();
+            self.notify(
+                format!(
+                    "{} COG tile layer(s) opened as raster layers read in place, which have no {}: not kept for {}",
+                    dropped.len(),
+                    kinds.join(", "),
+                    names_said(&names)
+                ),
+                false,
+            );
         }
         match &failed[..] {
             [] => {}

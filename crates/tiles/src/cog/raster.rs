@@ -71,7 +71,7 @@ pub fn overview(url: &str, done: Box<dyn FnOnce(Result<Raster, String>) + Send>)
 pub fn overview_blocking(url: &str) -> Result<Raster, String> {
     let (tx, rx) = std::sync::mpsc::channel();
     overview(url, Box::new(move |r| tx.send(r).unwrap_or_default()));
-    rx.recv_timeout(std::time::Duration::from_secs(120)).map_err(|_| format!("{}: no answer in two minutes", split(url).0))?
+    rx.recv_timeout(rustgis_data::raster::IN_PLACE_WAIT).map_err(|_| format!("{}: no answer in two minutes", split(url).0))?
 }
 
 fn read_overview(info: Arc<Info>, url: String, done: Box<dyn FnOnce(Result<Raster, String>) + Send>) {

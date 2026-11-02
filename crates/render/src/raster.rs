@@ -105,6 +105,8 @@ pub(crate) fn draw(
 /// Screen points a side sampled to find the part of a raster read in place that is in view, and
 /// how finely.
 const WINDOW_GRID: usize = 17;
+/// Why a part in view was drawn from a coarser level than it needs.
+const TOO_LARGE: &str = "the view is too large a part of the image to read at the resolution it needs";
 
 /// Draws a raster layer read in place (a cloud-optimised GeoTIFF by its address, see
 /// [`rustgis_map::raster::RasterLayer::in_place`]) as [`draw`] draws one held whole: its overview
@@ -184,12 +186,14 @@ pub(crate) fn draw_in_place(
     }
     let Some((level, cols, rows)) = window else {
         whole(pm);
-        return Err("the view is too large a part of the image to read at the resolution it needs".into());
+        return Err(TOO_LARGE.into());
     };
-    // The image at the overview's level is the overview.
+    // The image at the overview's level is the overview: reached from a finer level the view
+    // needs (too large a part for the tiles kept), it is drawn but refused, as a coarser level is
+    // below.
     if levels.get(level).is_some_and(|l| l.width <= r.width) {
         whole(pm);
-        return Ok(false);
+        return if level > needed { Err(TOO_LARGE.into()) } else { Ok(false) };
     }
     let color = match (&style.renderer, &r.color) {
         (_, ColorHint::Palette(p)) => ColorHint::Palette(p.clone()),
@@ -230,7 +234,7 @@ pub(crate) fn draw_in_place(
         (false, true) => Err("some of its tiles couldn't be read".into()),
         // Read coarser than the view needs (too large a part for the tiles kept): the map shows
         // it, an export refuses it.
-        (false, false) if level > needed => Err("the view is too large a part of the image to read at the resolution it needs".into()),
+        (false, false) if level > needed => Err(TOO_LARGE.into()),
         (false, false) => Ok(false),
     }
 }

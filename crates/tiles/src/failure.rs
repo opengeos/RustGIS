@@ -195,7 +195,7 @@ impl std::fmt::Display for Failure {
 
 /// The longest a server's `Retry-After` is waited for: a longer wait (or a hostile one) is cut
 /// to it, so the read is tried again within the hour.
-const MAX_RETRY_AFTER: u64 = 3600;
+pub(crate) const MAX_RETRY_AFTER: u64 = 3600;
 
 /// A refusal's text (`http status: 503`, or the browser's `HTTP 503`), with how long the server
 /// asked to be left (`… (retry after 30 s)`) when it refused with 429 or 503 and its `Retry-After`

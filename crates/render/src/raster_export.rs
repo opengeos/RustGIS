@@ -12,8 +12,6 @@ const MAX_TILES: u64 = 512;
 const MAX_BYTES: usize = 64 * 1024 * 1024;
 const TILE_SIZE: u32 = 256;
 const MAX_LAT: f64 = 85.051_128_779_806_6;
-/// The longest an export waits for the tiles of a raster read in place, in all.
-const IN_PLACE_WAIT: web_time::Duration = web_time::Duration::from_secs(120);
 /// Waits in a row that bring nothing new before an export stops waiting for them.
 const IDLE_WAITS: usize = 6;
 
@@ -62,7 +60,7 @@ pub fn export(layer: &RasterLayer, min_zoom: u8, max_zoom: u8, opacity: f32) -> 
     }
     let stats = layer.masked_stats();
     // A raster read in place waits for its tiles natively, two minutes at most in all.
-    let deadline = web_time::Instant::now() + IN_PLACE_WAIT;
+    let deadline = web_time::Instant::now() + rustgis_data::raster::IN_PLACE_WAIT;
     let mut tiles = Vec::new();
     let mut bytes = 0usize;
     for (z, x0, x1, y0, y1) in ranges {

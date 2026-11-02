@@ -13430,7 +13430,13 @@ fn cog_tile_layers_of_older_projects_open_as_rasters() {
     s.run("layer.addData", &json!({"path": "points.geojson", "text": "{\"type\":\"FeatureCollection\",\"features\":[]}"})).ok();
     let mut text: Value = serde_json::to_value(&s.project).unwrap();
     let tile = |name: &str, url: String, opacity: f64, visible: bool| {
-        let mut t = serde_json::to_value(rustgis_map::TileLayer::new(name, rustgis_map::TileKind::Cog, url)).unwrap();
+        let mut l = rustgis_map::TileLayer::new(name, rustgis_map::TileKind::Cog, url);
+        // Scene's credit and zoom range: what a raster layer hasn't.
+        if name == "Scene" {
+            l.attribution = "© Example".into();
+            l.min_zoom = 5;
+        }
+        let mut t = serde_json::to_value(l).unwrap();
         t["opacity"] = json!(opacity);
         t["visible"] = json!(visible);
         t
@@ -13458,6 +13464,12 @@ fn cog_tile_layers_of_older_projects_open_as_rasters() {
     let names: Vec<&str> = t.map().layers.iter().map(|l| l.name.as_str()).collect();
     assert_eq!(names[names.len() - 2..], ["Scene", "Aerial"], "{names:?}");
     assert_eq!(t.map().tiles.iter().map(|x| x.name.as_str()).collect::<Vec<_>>(), ["Series"]);
+    // Scene's settings a raster layer hasn't are said to be dropped, once; Aerial had none.
+    let said = |t: &Session| t.notices.iter().filter(|n| n.text.contains("which have no attribution, zoom range")).count();
+    assert_eq!(said(&t), 1, "{:?}", t.notices.last());
+    assert!(t.notices.iter().any(|n| n.text.contains("not kept for Scene") && !n.text.contains("Aerial")), "{:?}", t.notices.last());
+    t.run("map.zoomIn", &Value::Null).unwrap();
+    assert_eq!(said(&t), 1);
 }
 
 /// A server answering every request with `body`, logging each as `HEAD`, `GET` or `GET <range>`.

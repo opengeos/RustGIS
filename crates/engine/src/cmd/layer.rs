@@ -2979,7 +2979,7 @@ pub(crate) fn add_cog_with(s: &mut Session, p: &Value, url: &str, strict: bool) 
         || ["start", "end", "unit", "interval", "dates"].iter().any(|k| given(k).is_some())
         || b(p, "cube") == Some(true);
     if !dated && !look.aef {
-        return add_in_place(s, name, url, strict);
+        return add_in_place(s, name, file, &look, strict);
     }
     let mut q = json!({"url": url, "kind": "cog", "name": name, "top": true});
     // A dated address's span and steps (see map.addTiles).
@@ -3014,9 +3014,8 @@ pub(crate) fn add_cog_with(s: &mut Session, p: &Value, url: &str, strict: bool) 
 /// Adds a cloud-optimised GeoTIFF as a raster layer read in place: its overview held (read now,
 /// natively; in the browser as it lands), the part in view read as the map draws. A look at the
 /// address's end (`#bands=…&range=…`) is its style.
-fn add_in_place(s: &mut Session, name: &str, url: &str, strict: bool) -> CmdResult {
+fn add_in_place(s: &mut Session, name: &str, file: &str, look: &crate::render::rustgis_tiles::cog::Look, strict: bool) -> CmdResult {
     use crate::render::rustgis_tiles::cog;
-    let (file, look) = cog::split(url);
     // Strict, natively: read now, failing when it can't be. Otherwise read with the other layers
     // added with it (see `project::read_in_place`); in the browser, landing later.
     #[cfg(not(target_arch = "wasm32"))]
@@ -3030,7 +3029,7 @@ fn add_in_place(s: &mut Session, name: &str, url: &str, strict: bool) -> CmdResu
         let _ = strict;
         rustgis_map::raster::RasterLayer::opening_in_place(file)
     };
-    let layer = layer.with_look(super::tiles::address_look(&look));
+    let layer = layer.with_look(super::tiles::address_look(look));
     let mut r = super::raster::add_raster(s, name, layer)?;
     if let Ok(Some(info)) = cog::info(file) {
         let [w, so, e, n] = info.bounds;

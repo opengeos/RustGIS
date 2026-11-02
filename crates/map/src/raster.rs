@@ -74,13 +74,14 @@ pub struct RasterLayer {
     /// Why it couldn't be read in place has been said (see [`RasterLayer::error_unsaid`]).
     #[serde(skip)]
     error_said: bool,
+    /// Settings of the tile layer this one was opened from that a raster layer hasn't (see
+    /// [`RasterLayer::dropped_unsaid`]).
+    #[serde(skip)]
+    dropped: Vec<&'static str>,
 }
 
 /// Called once with a cloud-optimised GeoTIFF's overview, or why it couldn't be read.
 pub type InPlaceRead = Box<dyn FnOnce(Result<Raster, String>) + Send>;
-/// The longest a layer read in place waits for its overview natively.
-#[cfg(not(target_arch = "wasm32"))]
-const IN_PLACE_WAIT: std::time::Duration = std::time::Duration::from_secs(120);
 
 /// Reads the overviews of `layers` read in place and not read yet, all at once: a project of
 /// several opens in the time of the slowest, not of them all (waited for natively, at most two
@@ -90,7 +91,7 @@ pub fn read_together(layers: &mut [&mut RasterLayer]) -> Vec<(usize, String)> {
     let mut failed = Vec::new();
     let unread = |l: &RasterLayer| l.in_place && l.data.is_none() && l.opening.is_none() && l.time_zarr.is_none();
     #[cfg(not(target_arch = "wasm32"))]
-    let deadline = std::time::Instant::now() + IN_PLACE_WAIT;
+    let deadline = std::time::Instant::now() + rustgis_data::raster::IN_PLACE_WAIT;
     #[cfg(not(target_arch = "wasm32"))]
     let mut started = Vec::new();
     for (i, l) in layers.iter_mut().enumerate() {
@@ -214,6 +215,7 @@ impl RasterLayer {
             look: None,
             pixels_said: false,
             error_said: false,
+            dropped: Vec::new(),
         })
     }
 
@@ -238,6 +240,7 @@ impl RasterLayer {
             look: None,
             pixels_said: false,
             error_said: false,
+            dropped: Vec::new(),
         }
     }
 
@@ -262,6 +265,7 @@ impl RasterLayer {
             look: None,
             pixels_said: false,
             error_said: false,
+            dropped: Vec::new(),
         }
     }
 
@@ -291,6 +295,7 @@ impl RasterLayer {
             look: None,
             pixels_said: false,
             error_said: false,
+            dropped: Vec::new(),
         }
     }
 
@@ -351,7 +356,7 @@ impl RasterLayer {
                 }),
             );
             #[cfg(not(target_arch = "wasm32"))]
-            return self.wait_for_read(std::time::Instant::now() + IN_PLACE_WAIT);
+            return self.wait_for_read(std::time::Instant::now() + rustgis_data::raster::IN_PLACE_WAIT);
             #[cfg(target_arch = "wasm32")]
             return Ok(());
         }
@@ -443,6 +448,20 @@ impl RasterLayer {
         let d = self.data.clone()?;
         self.pixels_said = true;
         Some(d)
+    }
+
+    /// The layer, opened from a tile layer whose `dropped` settings (`"attribution"`, `"zoom
+    /// range"`, `"bounds"`) a raster layer hasn't, so they aren't kept: said once, by
+    /// [`RasterLayer::dropped_unsaid`].
+    pub fn from_tiles_dropping(mut self, dropped: Vec<&'static str>) -> RasterLayer {
+        self.dropped = dropped;
+        self
+    }
+
+    /// The tile layer settings dropped when this layer was opened from one, the first time they
+    /// are asked for.
+    pub fn dropped_unsaid(&mut self) -> Vec<&'static str> {
+        std::mem::take(&mut self.dropped)
     }
 
     /// Why a layer read in place couldn't be read, the first time it is asked for after the read

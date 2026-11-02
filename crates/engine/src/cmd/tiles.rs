@@ -546,9 +546,22 @@ pub(crate) fn cog_tiles_to_rasters(m: &mut rustgis_map::Map) {
         }
         let t = m.tiles.remove(i);
         let (file, look) = cog::split(&t.url);
+        // What a raster layer hasn't, said once the project is open (see
+        // `Session::notice_landed_rasters`).
+        let plain = rustgis_map::TileLayer::new(&t.name, TileKind::Cog, file);
+        let mut dropped = Vec::new();
+        if !t.attribution.trim().is_empty() {
+            dropped.push("attribution");
+        }
+        if (t.min_zoom, t.max_zoom) != (plain.min_zoom, plain.max_zoom) {
+            dropped.push("zoom range");
+        }
+        if t.bounds.is_some() {
+            dropped.push("bounds");
+        }
         // Read with the project's other rasters read in place (see `project::read_in_place`), in
         // its look once it lands.
-        let rl = RasterLayer::unread_in_place(file).with_look(address_look(&look));
+        let rl = RasterLayer::unread_in_place(file).with_look(address_look(&look)).from_tiles_dropping(dropped);
         let id = m.add_raster(t.name.clone(), rl);
         if let Some(l) = m.layer_mut(id) {
             l.visible = t.visible;

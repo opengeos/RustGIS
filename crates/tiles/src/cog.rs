@@ -13,7 +13,7 @@
 //! embedding bands) are read a band at a time, only those shown. Files are hostile input: header
 //! reads, tile counts and sizes are bounded (see [`rustgis_data::raster::cog`]).
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use rustgis_data::raster::ColorHint;
@@ -249,6 +249,9 @@ struct Tiles {
     /// the map in view has just used (which would be read again, and make room for itself by
     /// throwing out another in view: the view flickering between levels).
     clock: u64,
+    /// The tiles ready, by when each was last used (the clock then, unique): the first is the
+    /// one to make room, found without a scan of them all.
+    order: BTreeMap<u64, (String, usize, u32)>,
 }
 
 impl Tiles {
@@ -258,7 +261,9 @@ impl Tiles {
         let now = self.clock;
         match self.map.get_mut(key) {
             Some(TileState::Ready(b, _, used)) => {
+                self.order.remove(used);
                 *used = now;
+                self.order.insert(now, key.clone());
                 Some(b.clone())
             }
             _ => None,
@@ -268,24 +273,23 @@ impl Tiles {
     /// Keeps a tile ready, making room for it past [`BUDGET`] (the tiles used longest ago go);
     /// returns what was kept under its key before.
     fn keep(&mut self, key: (String, usize, u32), bands: Bands, samples: usize) -> Option<TileState> {
+        // Kept under this key already: counted once.
+        let before = self.map.remove(&key);
+        if let Some(TileState::Ready(_, n, used)) = &before {
+            self.samples = self.samples.saturating_sub(*n);
+            self.order.remove(used);
+        }
         while self.samples + samples > BUDGET {
-            let oldest = self
-                .map
-                .iter()
-                .filter_map(|(k, s)| match s {
-                    TileState::Ready(_, _, used) => Some((*used, k)),
-                    TileState::Loading(_) => None,
-                })
-                .min_by_key(|(used, _)| *used)
-                .map(|(_, k)| k.clone());
-            let Some(k) = oldest else { break };
+            let Some((_, k)) = self.order.pop_first() else { break };
             if let Some(TileState::Ready(_, n, _)) = self.map.remove(&k) {
                 self.samples = self.samples.saturating_sub(n);
             }
         }
         self.clock += 1;
         self.samples += samples;
-        self.map.insert(key, TileState::Ready(bands, samples, self.clock))
+        self.order.insert(self.clock, key.clone());
+        self.map.insert(key, TileState::Ready(bands, samples, self.clock));
+        before
     }
 }
 
@@ -299,6 +303,7 @@ pub(crate) fn forget() {
     infos().lock().unwrap_or_else(|e| e.into_inner()).retain(|_, s| matches!(s, State::Loading(_)));
     let mut t = tiles().lock().unwrap_or_else(|e| e.into_inner());
     t.map.retain(|_, s| matches!(s, TileState::Loading(_)));
+    t.order.clear();
     t.samples = 0;
 }
 
@@ -310,7 +315,11 @@ pub(crate) fn forget_file(url: &str) {
         all.remove(url);
     }
     drop(all);
-    let mut t = tiles().lock().unwrap_or_else(|e| e.into_inner());
+    forget_file_in(&mut tiles().lock().unwrap_or_else(|e| e.into_inner()), url);
+}
+
+/// Forgets a file's tiles kept (not those loading) from `t`.
+fn forget_file_in(t: &mut Tiles, url: &str) {
     let mut freed = 0;
     t.map.retain(|(u, _, _), s| match s {
         TileState::Ready(_, n, _) if u == url => {
@@ -320,6 +329,7 @@ pub(crate) fn forget_file(url: &str) {
         _ => true,
     });
     t.samples = t.samples.saturating_sub(freed);
+    t.order.retain(|_, (u, _, _)| u != url);
 }
 
 /// A file's info: `Ok(None)` while it is being read (asking for it starts the read).
@@ -1548,5 +1558,11 @@ mod tests {
         assert!(t.used(&key(1)).is_some() && t.used(&key(3)).is_some());
         assert!(t.used(&key(2)).is_none());
         assert_eq!(t.samples, 2 * half);
+        // Kept again under its key: counted once, nothing else making room for it.
+        t.keep(key(3), bands.clone(), half);
+        assert!(t.used(&key(1)).is_some() && t.used(&key(3)).is_some());
+        assert_eq!((t.samples, t.order.len()), (2 * half, 2));
+        forget_file_in(&mut t, "https://x.org/a.tif");
+        assert_eq!((t.samples, t.order.len(), t.map.len()), (0, 0, 0));
     }
 }

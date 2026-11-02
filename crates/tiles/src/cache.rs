@@ -224,7 +224,8 @@ pub fn generation() -> u64 {
 pub fn retry_after(error: &str) -> Option<Duration> {
     let (_, rest) = error.rsplit_once("(retry after ")?;
     let secs: u64 = rest.strip_suffix(" s)")?.parse().ok()?;
-    Some(Duration::from_secs(secs))
+    // Bounded as when written: a text from elsewhere (an address echoed) can't ask for years.
+    Some(Duration::from_secs(secs.clamp(1, crate::failure::MAX_RETRY_AFTER)))
 }
 
 /// How long a failed read waits before it is tried again: what its server asked for (see
@@ -2176,6 +2177,8 @@ mod tests {
         assert_eq!(http_status("HTTP 429 (something else)"), None);
         assert_eq!(retry_after("http status: 503 (retry after 30 s)"), Some(Duration::from_secs(30)));
         assert_eq!(retry_after("http status: 503"), None);
+        assert_eq!(retry_after("x (retry after 18446744073709551615 s)"), Some(Duration::from_secs(3600)), "bounded, never overflowing");
+        assert_eq!(retry_after("x (retry after 0 s)"), Some(Duration::from_secs(1)));
         assert_eq!(retry_wait("HTTP 429 (retry after 2 s)", RETRY), Duration::from_secs(2));
         assert_eq!(retry_wait("http status: 500", RETRY), RETRY);
     }
