@@ -394,6 +394,8 @@ fn refused_answers_say_why() {
     assert!(err(&multipatch).contains("multipatch"));
     // Declared, without features: refused rather than read as an empty layer.
     assert!(err(&answer(&[number(7, MULTIPATCH)])).contains("multipatch"));
+    // So is an envelope layer, which RustGIS doesn't read either.
+    assert!(err(&answer(&[number(7, ENVELOPE)])).contains("envelope"));
     let untransformed = answer(&[feature(&[geometry(&[], &[1, 1])])]);
     assert!(err(&untransformed).contains("no transform"));
     let e = err(&answer(&[field("A", 4), feature(&[text("x"), text("y")])]));
@@ -433,7 +435,7 @@ fn geometries_take_their_memory_from_one_room_for_the_whole_answer() {
     let transform = Transform { given: true, ..Transform::default() };
     let shape = Shape { kind: POLYLINE, transform: &transform, has_z: false, has_m: false };
     // Room for ten one-vertex parts, the answer's geometries together.
-    let each = std::mem::size_of::<Vec<Coord>>() + std::mem::size_of::<Coord>();
+    let each = PART_BYTES + std::mem::size_of::<Coord>();
     let mut tally = Tally { geometry_room: 10 * each, ..Tally::default() };
     let six = line_parts(&[1; 6], &[1, 1].repeat(6));
     let Some(Geometry::Line(parts)) = read_geometry(&six, &shape, &mut tally).unwrap() else { panic!("not a line") };
@@ -635,4 +637,47 @@ fn real_pages_match_the_same_pages_as_geojson() {
         pairs += 1;
     }
     assert!(pairs > 0, "{dir}: no .pbf and .geojson pairs");
+}
+
+#[test]
+fn a_field_type_rustgis_doesnt_know_is_read_as_text_and_said() {
+    let bytes = answer(&[field("LATER", 17), field("NAME", 4), feature(&[uint(5), text("a")])]);
+    let (ds, report) = read(&bytes, "t").unwrap();
+    assert_eq!(ds.features[0].attrs, [Value::Text("5".into()), Value::Text("a".into())]);
+    assert_eq!(report.messages, ["1 fields have a type RustGIS doesn't know; their values are read as text"]);
+    // Every type the format defines today says nothing.
+    let known: Vec<Vec<u8>> = (0..=LAST_FIELD_TYPE).filter(|t| !(7..=9).contains(t)).map(|t| field(&format!("F{t}"), t)).collect();
+    let (_, report) = read(&answer(&known), "t").unwrap();
+    assert!(report.messages.is_empty(), "{:?}", report.messages);
+}
+
+#[test]
+fn text_is_taken_from_the_room_at_its_size_once_read_before_it_is_made() {
+    // Each byte that isn't UTF-8 becomes U+FFFD, three bytes.
+    for bytes in [&b"plain"[..], b"a\xffb", b"\xff\xff\xff", b"\xe2\x82", "Bogotá".as_bytes()] {
+        assert_eq!(lossy_len(bytes), String::from_utf8_lossy(bytes).len(), "{bytes:?}");
+    }
+    let transform = Transform::default();
+    let shape = Shape { kind: POINT, transform: &transform, has_z: false, has_m: false };
+    let columns = [Some((0, Kind::Text))];
+    // Ten bytes sent, thirty once read: room for the bytes sent isn't enough.
+    let cell = message(1, &message(1, &[0xff; 10]));
+    let mut tally = Tally { text_room: 20, ..Tally::default() };
+    let e = super::feature(&cell, &columns, 1, &shape, &mut tally).unwrap_err().to_string();
+    assert!(e.contains("the text values would take more than"), "{e}");
+    // A field's name counts too, twice, as it's kept lowercase as well.
+    let name = [message(1, &[0xff; 10]), number(2, 4)].concat();
+    assert!(super::field(&name, &mut Tally { text_room: 59, ..Tally::default() }).is_err());
+    assert!(super::field(&name, &mut Tally { text_room: 60, ..Tally::default() }).is_ok());
+}
+
+#[test]
+fn a_multipoint_of_one_part_keeps_its_points() {
+    let transform = Transform { given: true, upper_left: false, ..Transform::default() };
+    let shape = Shape { kind: MULTIPOINT, transform: &transform, has_z: false, has_m: false };
+    let one = line_parts(&[2], &[1, 1, 1, 1]);
+    let two = line_parts(&[1, 1], &[1, 1, 2, 2]);
+    let points = |bytes: &[u8]| read_geometry(bytes, &shape, &mut Tally::default()).unwrap();
+    assert_eq!(points(&one), Some(Geometry::MultiPoint(vec![c(1.0, 1.0), c(2.0, 2.0)])));
+    assert_eq!(points(&two), Some(Geometry::MultiPoint(vec![c(1.0, 1.0), c(2.0, 2.0)])));
 }

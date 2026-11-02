@@ -17,16 +17,17 @@
 //! - Fields: integers, object ids and dates are integers, dates in milliseconds since 1970 (UTC),
 //!   as the same query gives them as GeoJSON; single and double precision numbers are doubles;
 //!   strings, GUIDs, XML, date-only, time-only and offset timestamps are text, as the service
-//!   sends them. Geometry, blob and raster fields are left out, and said.
+//!   sends them. Geometry, blob and raster fields are left out, and said; a type the format adds
+//!   later is read as text, and said.
 //! - Features are numbered by their place, as the GeoJSON reader numbers them; the object id stays
 //!   a field ([`Page::object_id_field`]).
 //!
 //! Refused, by name: an empty answer (a service refuses a query that way), a JSON answer (the
 //! service's error, or another format), a count, ids or an extent, curves, shape buffers,
-//! multipatches, a point with more than one vertex, coordinates without a transform, fields and
-//! rows that would take more than 512 MB, geometries that would take more than 1 GB, and text
-//! values that would take more than 512 MB. Answers are hostile input: every length is checked,
-//! and nothing is read past the end.
+//! multipatches, envelopes, a point with more than one vertex, coordinates without a transform,
+//! fields and rows that would take more than 512 MB, geometries that would take more than 1 GB, and
+//! text values (field names included) that would take more than 512 MB. Answers are hostile input:
+//! every length is checked, and nothing is read past the end.
 
 use crate::{DataError, Dataset, Field, FieldType, Geometry, GeometryType, ReadReport, Result, Value};
 use rustgis_geom::Coord;
@@ -46,6 +47,11 @@ const MAX_ROW_BYTES: usize = 512 << 20;
 /// Most memory an answer's geometries may take, whatever its size: a vertex of two one-byte
 /// numbers takes 16 bytes, and each part a list of its own.
 const MAX_GEOMETRY_BYTES: usize = 1 << 30;
+
+/// What a part takes of [`MAX_GEOMETRY_BYTES`] before its vertices: its slot in the list of parts,
+/// which grows by doubling (so up to two), and a block for its vertices, which an allocator rounds
+/// up to about 32 bytes at least.
+const PART_BYTES: usize = 2 * std::mem::size_of::<Vec<Coord>>() + 32;
 
 /// Most memory an answer's text values may take, whatever its size: a number of a few bytes
 /// written as text can take hundreds (1e300 is 301 digits), and bytes that aren't UTF-8 three
@@ -72,9 +78,14 @@ const MULTIPOINT: u64 = 1;
 const POLYLINE: u64 = 2;
 const POLYGON: u64 = 3;
 const MULTIPATCH: u64 = 4;
+const ENVELOPE: u64 = 5;
 
 /// The format's object id field type (`esriFieldTypeOID`).
 const OID: u64 = 6;
+
+/// The last field type the format defines today (`esriFieldTypeTimestampOffset`); a later one is
+/// read as text, and said.
+const LAST_FIELD_TYPE: u64 = 16;
 
 /// One page of a query's answer.
 #[derive(Debug)]
@@ -131,6 +142,7 @@ pub fn read_page(bytes: &[u8], name: &str) -> Result<Page> {
     let mut transform = Transform::default();
     let mut declared = Vec::new();
     let mut features = Vec::new();
+    let mut tally = Tally::default();
     let mut r = Reader::new(result);
     while !r.done() {
         match r.key()? {
@@ -142,7 +154,7 @@ pub fn read_page(bytes: &[u8], name: &str) -> Result<Page> {
             (12, 2) => transform = read_transform(r.message()?)?,
             // Checked as fields and features come, in any order, since even an empty one takes
             // memory, with or without the other.
-            (13, 2) => declared.push(field(r.message()?)?),
+            (13, 2) => declared.push(field(r.message()?, &mut tally)?),
             (15, 2) => features.push(r.message()?),
             (_, wire) => {
                 r.skip(wire)?;
@@ -156,8 +168,10 @@ pub fn read_page(bytes: &[u8], name: &str) -> Result<Page> {
     // A point layer's type is the format's default, which an answer leaves out.
     let shape_kind = geometry_type.unwrap_or(POINT);
     // Refused whether or not a feature has coordinates, so such a layer isn't read as empty.
-    if shape_kind == MULTIPATCH {
-        return Err(invalid("multipatch geometries aren't read"));
+    match shape_kind {
+        MULTIPATCH => return Err(invalid("multipatch geometries aren't read")),
+        ENVELOPE => return Err(invalid("envelope geometries aren't read")),
+        _ => {}
     }
 
     let mut report = ReadReport::default();
@@ -165,9 +179,8 @@ pub fn read_page(bytes: &[u8], name: &str) -> Result<Page> {
     let mut columns: Vec<Option<(usize, Kind)>> = Vec::with_capacity(declared.len());
     let mut fields: Vec<Field> = Vec::new();
     let mut names = std::collections::HashSet::new();
-    let (mut repeated, mut not_read) = (0usize, 0usize);
+    let (mut repeated, mut not_read, mut unknown) = (0usize, 0usize, 0usize);
     let mut object_id_field = None;
-    let mut tally = Tally::default();
     for (name, number, utf8) in declared {
         tally.not_utf8 += usize::from(!utf8);
         let Some(read_as) = kind(number) else {
@@ -175,6 +188,7 @@ pub fn read_page(bytes: &[u8], name: &str) -> Result<Page> {
             columns.push(None);
             continue;
         };
+        unknown += usize::from(number > LAST_FIELD_TYPE);
         // Fields are found by name whatever its case, so the first of a name keeps it.
         if !names.insert(name.to_lowercase()) {
             repeated += 1;
@@ -192,6 +206,9 @@ pub fn read_page(bytes: &[u8], name: &str) -> Result<Page> {
     }
     if not_read > 0 {
         report.messages.push(format!("{not_read} fields hold geometries, blobs or rasters, which aren't read, and are left out"));
+    }
+    if unknown > 0 {
+        report.messages.push(format!("{unknown} fields have a type RustGIS doesn't know; their values are read as text"));
     }
     let (code, wkt, wkt_utf8) = match reference {
         Some(bytes) => spatial_reference(bytes)?,
@@ -508,13 +525,15 @@ fn read_transform(bytes: &[u8]) -> Result<Transform> {
 }
 
 /// A field's name, its type's number (`FieldType`) and whether the name was valid UTF-8.
-fn field(bytes: &[u8]) -> Result<(String, u64, bool)> {
+/// The name is taken from `tally`'s text room before it's made, twice: it's kept lowercase too.
+fn field(bytes: &[u8], tally: &mut Tally) -> Result<(String, u64, bool)> {
     let (mut name, mut number, mut utf8) = (String::new(), 0, true);
     let mut r = Reader::new(bytes);
     while !r.done() {
         match r.key()? {
             (1, 2) => {
                 let raw = r.message()?;
+                tally.spend_text(lossy_len(raw).saturating_mul(2))?;
                 utf8 = std::str::from_utf8(raw).is_ok();
                 name = String::from_utf8_lossy(raw).into_owned();
             }
@@ -574,9 +593,16 @@ fn kind(number: u64) -> Option<Kind> {
         2 | 3 => Some(Kind::Double),
         // Geometry, blob, raster.
         7..=9 => None,
-        // String, GUID, global id, XML, date only, time only, timestamp with offset.
+        // String, GUID, global id, XML, date only, time only, timestamp with offset, and a type
+        // the format adds later (said by `read_page`).
         _ => Some(Kind::Text),
     }
+}
+
+/// The length `String::from_utf8_lossy` gives `bytes`, without making it: each piece that isn't
+/// UTF-8 becomes U+FFFD, three bytes.
+fn lossy_len(bytes: &[u8]) -> usize {
+    bytes.utf8_chunks().map(|c| c.valid().len() + if c.invalid().is_empty() { 0 } else { 3 }).sum()
 }
 
 /// What a feature's values and geometry are read with.
@@ -649,8 +675,17 @@ fn feature(
                 if let Some((at, kind)) = slot
                     && let Some(v) = values.get_mut(at)
                 {
+                    // Text sent as text is taken from the room before it's made, at its size once
+                    // read; a number written as text, a few hundred bytes at most, once made.
+                    if kind == Kind::Text
+                        && let Cell::Text(bytes) = &cell
+                    {
+                        tally.spend_text(lossy_len(bytes))?;
+                    }
                     let (value, fits) = value(&cell, kind);
-                    if let Value::Text(s) = &value {
+                    if let Value::Text(s) = &value
+                        && !matches!(cell, Cell::Text(_))
+                    {
                         tally.spend_text(s.len())?;
                     }
                     tally.unreadable += usize::from(!fits);
@@ -704,9 +739,10 @@ fn cell(bytes: &[u8]) -> Result<Cell<'_>> {
 }
 
 impl Cell<'_> {
-    fn text(&self) -> Option<std::borrow::Cow<'_, str>> {
+    /// Text that is UTF-8, to read a number from: text that isn't holds no number, and isn't copied.
+    fn text(&self) -> Option<&str> {
         match self {
-            Cell::Text(bytes) => Some(String::from_utf8_lossy(bytes)),
+            Cell::Text(bytes) => std::str::from_utf8(bytes).ok(),
             _ => None,
         }
     }
@@ -764,7 +800,7 @@ fn value(cell: &Cell, kind: Kind) -> (Value, bool) {
 /// `tally`'s room.
 fn part(c: &mut Reader, count: Option<usize>, shape: &Shape, tally: &mut Tally) -> Result<Vec<Coord>> {
     const VERTEX: usize = std::mem::size_of::<Coord>();
-    tally.spend(std::mem::size_of::<Vec<Coord>>())?;
+    tally.spend(PART_BYTES)?;
     let dimensions = 2 + usize::from(shape.has_z) + usize::from(shape.has_m);
     let t = shape.transform;
     let ([scale_x, scale_y, ..], [translate_x, translate_y, ..]) = (t.scale, t.translate);
@@ -876,11 +912,17 @@ fn read_geometry(bytes: &[u8], shape: &Shape, tally: &mut Tally) -> Result<Optio
             point.map(Geometry::Point)
         }
         MULTIPOINT => {
-            // Sized up front: collecting would grow by doubling while the parts are still held.
-            let mut points = Vec::with_capacity(parts.iter().map(Vec::len).sum());
-            for p in parts {
-                points.extend(p);
-            }
+            // One part, the usual, is the points as they are; several are joined into a list sized
+            // up front, as collecting would grow by doubling while the parts are still held.
+            let points = if parts.len() == 1 {
+                parts.into_iter().next().unwrap_or_default()
+            } else {
+                let mut points = Vec::with_capacity(parts.iter().map(Vec::len).sum());
+                for p in parts {
+                    points.extend(p);
+                }
+                points
+            };
             (!points.is_empty()).then_some(Geometry::MultiPoint(points))
         }
         POLYLINE => {
