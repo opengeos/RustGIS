@@ -120,7 +120,7 @@ pub fn commands() -> Vec<C> {
                     let g = l.geometry_type();
                     l.renderer.apply_ramp(r, g);
                     // New colours after No Fill are drawn (#1301).
-                    if end_no_fill(l) == Some(NoFill::Symbols) {
+                    if take_no_fill(l) == Some(NoFill::Symbols) {
                         l.renderer.map_symbols(show_fill);
                     }
                 }
@@ -155,8 +155,8 @@ pub fn commands() -> Vec<C> {
                     Renderer::Proportional { base, .. } => *base = fill(base),
                     other => *other = Renderer::Single(fill(&other.base_symbol())),
                 }
-                // A fill colour after No Fill is drawn (#1301).
-                end_no_fill(l);
+                // A fill colour after No Fill is drawn, unless it is transparent itself (#1301).
+                take_no_fill(l);
             })
         })
         .when(need_feature_layer)
@@ -693,7 +693,7 @@ fn no_fill_override() -> rustgis_map::fills::FillLayer {
 
 /// Turns No Fill off, dropping its override if it laid one, and says how it was on. The caller
 /// shows the symbols' fills on the other path, where only it knows which.
-fn end_no_fill(l: &mut rustgis_map::Layer) -> Option<NoFill> {
+fn take_no_fill(l: &mut rustgis_map::Layer) -> Option<NoFill> {
     let hidden = l.no_fill.take();
     if hidden == Some(NoFill::Override) && is_no_fill_override(&l.fill_layers) {
         l.fill_layers.clear();
@@ -3412,7 +3412,7 @@ fn symbology(s: &mut Session, p: &Value) -> CmdResult {
     }
     with(s, p, |l| {
         l.renderer = r;
-        end_no_fill(l);
+        take_no_fill(l);
     })
 }
 
