@@ -1357,6 +1357,8 @@ fn buffer_with_limits(inp: &dyn Inputs, p: &Json, limit: usize, bytes: usize) ->
         }
         if !all.is_empty() {
             out.fields.clear();
+            // The union isn't counted: the buffers' count ends here rather than stand at its end.
+            crate::control::begin(0);
             let u = union_all(all.iter().flat_map(|m| m.0.iter()));
             if u.coords_count() > limit {
                 return Err(VERTEX_BUDGET_ERROR.into());
@@ -2462,7 +2464,10 @@ fn select_by_location_with_work_limit(inp: &dyn Inputs, p: &Json, limit: usize, 
     let bounded_checks = dist > 0.0 && selectors.len() > ExtentIndex::MAX_LINEAR_FEATURES;
     let mut remaining_checks = checks;
     let mut hits = Vec::new();
+    crate::control::begin(ds.features.len());
     for (r, feature) in ds.features.iter().enumerate() {
+        crate::control::check()?;
+        crate::control::reached(r);
         let Some(g) = feature.geometry.as_ref() else { continue };
         let gg = to_geo(g);
         let ext = merc_extent(&gg);
@@ -6177,6 +6182,9 @@ mod tests {
         let control = crate::control::Control::new();
         crate::run_with("buffer", &m, &serde_json::json!({"input": "pts", "distance": 100.0}), &control).unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(control.progress(), Some((40, 40)));
+        // The same control for a tool that doesn't count shows no count, not the buffers'.
+        crate::run_with("convexHull", &m, &serde_json::json!({"input": "pts"}), &control).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(control.progress(), None);
     }
 
     #[test]

@@ -427,6 +427,8 @@ pub fn run_with(id: &str, inputs: &dyn Inputs, params: &Value, control: &std::sy
         return Err(format!("{} was cancelled before it started", tool(id).map_or(id, |t| t.name)));
     }
     let _current = control::install(Some(control.clone()));
+    // No count until the tool starts one: a control used before doesn't show that run's.
+    control::begin(0);
     let res = run(id, inputs, params);
     if !control.is_cancelled() {
         return res;
