@@ -167,7 +167,7 @@ fn a_project_reads_into_layers_in_tree_order_with_their_styles() {
     let by = |n: &str| l.classes.iter().find(|c| c.name == n).unwrap();
     assert_eq!((by("Motorways").where_.as_deref(), by("Motorways").placement), (Some("\"class\" = 'motorway'"), LabelPlacement::Curved));
     let rest = by("Rest");
-    assert_eq!(rest.where_.as_deref(), Some("(\"lanes\" > 1) AND (NOT ((\"kind\" = 'x')))"));
+    assert_eq!(rest.where_.as_deref(), Some("(\"lanes\" > 1) AND (NOT coalesce(((\"kind\" = 'x')), FALSE))"));
     assert_eq!(rest.placement, LabelPlacement::Parallel);
     assert!((rest.min_scale.unwrap() - 50_000.0 * QGIS_SCALE).abs() < 1e-6);
     // A filter with a function is kept for the expression language (checked against the layer's
@@ -1568,6 +1568,49 @@ fn rules_under_an_else_rule_take_only_the_rest() {
     assert!(l.labels.class("Off").is_none(), "a label rule under a switched-off one isn't read");
     let rest = l.labels.class("Rest").expect("the label rule under the else rule");
     assert!(rest.where_.as_deref().is_some_and(|w| w.contains("NOT")), "{:?}", rest.where_);
+}
+
+/// A label else rule takes what its siblings don't label, as the renderer's else rules do: at
+/// their scales, a feature a sibling's filter is unknown for, and nothing beside a sibling with
+/// no filter.
+#[test]
+fn label_else_rules_take_what_their_siblings_dont_at_their_scales() {
+    let settings = r#"<settings><text-style fieldName="name"/></settings>"#;
+    let read = |rules: &str| {
+        let qml = format!(r#"<qgis version="3.40.0"><labeling type="rule-based"><rules key="r">{rules}</rules></labeling></qgis>"#);
+        let s = read_style(&qml, "points", &mut Report::default()).unwrap();
+        let mut l = rule_points(&[("a", 1, "x"), ("b", 1, "y"), ("c", 1, "z")]);
+        // A feature whose kind is unknown: A's filter is null for it.
+        if let Some(f) = l.dataset.features.get_mut(2).and_then(|f| f.attrs.get_mut(0)) {
+            *f = rustgis_data::Value::Null;
+        }
+        s.apply(&mut l);
+        l
+    };
+    let names = |l: &crate::Layer, scale: f64, row: usize| {
+        crate::LabelMatcher::new(&l.labels, &l.dataset, Some(scale))
+            .classes_of(&l.dataset, row)
+            .filter(|(_, c)| c.visible)
+            .map(|(_, c)| c.name.clone())
+            .collect::<Vec<_>>()
+    };
+    let l = read(&format!(
+        r#"<rule filter="&quot;kind&quot; = 'a'" description="A" scalemaxdenom="10000">{settings}</rule><rule filter="ELSE" description="Rest">{settings}</rule>"#
+    ));
+    // Zoomed in, A labels kind a; zoomed out past its range (kept on its class, which isn't drawn
+    // there), the rest does too. Kind b and the unknown one are the rest's at every scale.
+    assert_eq!(names(&l, 5_000.0, 0), ["A"]);
+    assert_eq!(names(&l, 50_000.0, 0), ["A", "Rest"]);
+    assert!(l.labels.class("A").and_then(|a| a.min_scale).is_some_and(|out| out < 50_000.0));
+    for scale in [5_000.0, 50_000.0] {
+        assert_eq!(names(&l, scale, 1), ["Rest"], "{scale}");
+        assert_eq!(names(&l, scale, 2), ["Rest"], "{scale}");
+    }
+    // Beside a rule with no filter (every feature), an else rule labels nothing.
+    let l = read(&format!(r#"<rule description="All">{settings}</rule><rule filter="ELSE" description="Never">{settings}</rule>"#));
+    for row in 0..3 {
+        assert_eq!(names(&l, 5_000.0, row), ["All"], "{row}");
+    }
 }
 
 #[test]

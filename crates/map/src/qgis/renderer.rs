@@ -279,20 +279,13 @@ fn graduated(r: Node, layer: &str, style: &mut Style, report: &mut Report, sym: 
     });
 }
 
-/// A rule beside an else rule: its filter (none: every feature) and the scales it draws between
-/// (as [`Rule::scales`]). The else rule takes what none of them draws.
-struct Sibling {
-    filter: Option<String>,
-    scales: (Option<f64>, Option<f64>),
-}
-
 /// A rule of a rule-based renderer that draws: its filter and its parents' (an else rule's own
 /// left out), for an else rule and each else rule above it the siblings it takes the rest of (what
 /// none of them draws), and the scale range along the way (RustGIS's scales: drawn out to 1:`.0`,
 /// in to 1:`.1`).
 struct Rule<'a, 'i> {
     filters: Vec<String>,
-    else_of: Vec<std::rc::Rc<[Sibling]>>,
+    else_of: Vec<std::rc::Rc<[super::Sibling]>>,
     node: Node<'a, 'i>,
     scales: (Option<f64>, Option<f64>),
 }
@@ -441,19 +434,6 @@ fn unique(
 /// The most rules classed by expression: one `WHEN` each.
 const MAX_RULE_CLASSES: usize = 200;
 
-/// `filter` with the conditions of the scale range `scales` (`@map_scale`; none, as in an export,
-/// meets every range).
-fn within(filter: String, scales: (Option<f64>, Option<f64>)) -> String {
-    let mut c = filter;
-    if let Some(out) = scales.0 {
-        c.push_str(&format!(" AND (@map_scale IS NULL OR @map_scale <= {})", out.round()));
-    }
-    if let Some(inside) = scales.1 {
-        c.push_str(&format!(" AND (@map_scale IS NULL OR @map_scale >= {})", inside.round()));
-    }
-    c
-}
-
 /// The rules as Unique Values by an expression ([`super::rules_expression`]): `CASE WHEN <rule
 /// 1> THEN 'Rule 1' … END`, each rule's condition its filters and its parents', an else rule's
 /// that none of its siblings draws, and its scale range. A feature meets the first rule it can
@@ -476,24 +456,12 @@ fn by_expression(drawn: &[&Rule], style: &mut Style, report: &mut Report, sym: &
         }
         let Some(mut parts) = rule.filters.iter().map(quoted).collect::<Option<Vec<String>>>() else { return false };
         for siblings in rule.else_of.iter().filter(|s| !s.is_empty()) {
-            // What a sibling draws: its filter (none: every feature) at its scales. A filter that
-            // is unknown (null) for a feature isn't met, as QGIS has it.
-            let mut drawn_by = Vec::new();
-            for sib in siblings.iter() {
-                let f = match &sib.filter {
-                    Some(f) => match quoted(f) {
-                        Some(q) => q,
-                        None => return false,
-                    },
-                    None => "TRUE".into(),
-                };
-                drawn_by.push(format!("({})", within(f, sib.scales)));
-            }
-            parts.push(format!("NOT coalesce({}, FALSE)", drawn_by.join(" OR ")));
+            let Some(rest) = super::none_of(siblings) else { return false };
+            parts.push(rest);
         }
         // What it picks (an else rule: what none of its siblings draws), then at its scales.
         let filter = if parts.is_empty() { "TRUE".to_string() } else { parts.join(" AND ") };
-        let when = within(filter.clone(), rule.scales);
+        let when = super::within(filter.clone(), rule.scales);
         // Its legend label, or its number, once.
         let label = rule.node.attribute("label").map(str::trim).filter(|l| !l.is_empty()).map(str::to_string);
         let mut key = label.clone().unwrap_or_else(|| format!("Rule {}", i + 1));
@@ -530,7 +498,7 @@ fn flatten<'a, 'i>(
     node: Node<'a, 'i>,
     filters: Vec<String>,
     scales: (Option<f64>, Option<f64>),
-    else_of: Vec<std::rc::Rc<[Sibling]>>,
+    else_of: Vec<std::rc::Rc<[super::Sibling]>>,
     out: &mut Vec<Rule<'a, 'i>>,
     depth: usize,
     left: &mut usize,
@@ -561,12 +529,12 @@ fn flatten<'a, 'i>(
         )
     };
     // What an else rule here is the rest of: its switched-on siblings, shared by every else rule.
-    let siblings: std::rc::Rc<[Sibling]> = rules
+    let siblings: std::rc::Rc<[super::Sibling]> = rules
         .iter()
         .filter(|r| r.attribute("active") != Some("0"))
         .map(|r| (r.attribute("filter").map(str::trim).filter(|f| !f.is_empty()), *r))
         .filter(|(f, _)| !f.is_some_and(is_else))
-        .map(|(f, r)| Sibling { filter: f.map(str::to_string), scales: range(r) })
+        .map(|(f, r)| super::Sibling { filter: f.map(str::to_string), scales: range(r) })
         .collect();
     for (i, rule) in rules.iter().copied().enumerate() {
         if out.len() >= MAX_CLASSES {

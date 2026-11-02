@@ -49,9 +49,10 @@ pub(super) fn read(l: Node, geometry: Option<&str>, layer: &str, report: &mut Re
                     .map_or_else(|| format!("Rule {}", i + 1), str::to_string);
                 // Its filters and its parents', and for an else rule, none of its siblings'.
                 let mut parts: Vec<Option<String>> = r.filters.iter().map(|f| expr::to_sql(f)).collect();
+                // (As the renderer's else rules: a sibling unknown for a feature isn't met, one
+                // without a filter takes every feature, each at its scales.)
                 for siblings in &r.else_of {
-                    let others: Option<Vec<String>> = siblings.iter().map(|f| expr::to_sql(f)).collect();
-                    parts.push(others.map(|o| if o.is_empty() { String::new() } else { format!("NOT (({}))", o.join(") OR (")) }));
+                    parts.push(super::none_of(siblings));
                 }
                 let where_ = parts.into_iter().collect::<Option<Vec<String>>>().map(|p| {
                     let p: Vec<String> = p.into_iter().filter(|c| !c.is_empty()).collect();
@@ -105,7 +106,7 @@ fn is_else(f: &str) -> bool {
 struct Rule<'a, 'i> {
     node: Node<'a, 'i>,
     filters: Vec<String>,
-    else_of: Vec<std::rc::Rc<[String]>>,
+    else_of: Vec<std::rc::Rc<[super::Sibling]>>,
     scales: (Option<f64>, Option<f64>),
 }
 
@@ -116,7 +117,7 @@ fn flatten<'a, 'i>(
     node: Node<'a, 'i>,
     filters: Vec<String>,
     scales: (Option<f64>, Option<f64>),
-    else_of: Vec<std::rc::Rc<[String]>>,
+    else_of: Vec<std::rc::Rc<[super::Sibling]>>,
     out: &mut Vec<Rule<'a, 'i>>,
     depth: usize,
     left: &mut usize,
@@ -129,13 +130,21 @@ fn flatten<'a, 'i>(
     }
     let rules: Vec<Node> = node.children().filter(|c| c.has_tag_name("rule")).take(MAX_LABEL_CLASSES * 4).collect();
     *left += super::drawing_rules(node.children().filter(|c| c.has_tag_name("rule")).skip(rules.len()), draws);
-    // The filters an else rule here is the rest of: its switched-on siblings', as QGIS has it.
-    let siblings: std::rc::Rc<[String]> = rules
+    // A rule's scalemaxdenom is the out-beyond limit, its scalemindenom the in-beyond.
+    let range = |rule: Node| {
+        let denom = |k: &str| {
+            rule.attribute(k).and_then(|v| v.trim().parse::<f64>().ok()).filter(|v| v.is_finite() && *v > 0.0).map(|v| v * QGIS_SCALE)
+        };
+        (denom("scalemaxdenom").or(scales.0), denom("scalemindenom").or(scales.1))
+    };
+    // What an else rule here is the rest of: its switched-on siblings (one without a filter takes
+    // every feature), each at its scales, as QGIS has it.
+    let siblings: std::rc::Rc<[super::Sibling]> = rules
         .iter()
         .filter(|r| r.attribute("active") != Some("0"))
-        .filter_map(|r| r.attribute("filter").map(str::trim))
-        .filter(|f| !f.is_empty() && !is_else(f))
-        .map(str::to_string)
+        .map(|r| (r.attribute("filter").map(str::trim).filter(|f| !f.is_empty()), *r))
+        .filter(|(f, _)| !f.is_some_and(is_else))
+        .map(|(f, r)| super::Sibling { filter: f.map(str::to_string), scales: range(r) })
         .collect();
     for (i, rule) in rules.iter().copied().enumerate() {
         if out.len() > MAX_LABEL_CLASSES * 4 {
@@ -155,11 +164,7 @@ fn flatten<'a, 'i>(
         if let Some(filter) = own.filter(|o| !is_else(o)) {
             f.push(filter.to_string());
         }
-        // A rule's scalemaxdenom is the out-beyond limit, its scalemindenom the in-beyond.
-        let denom = |k: &str| {
-            rule.attribute(k).and_then(|v| v.trim().parse::<f64>().ok()).filter(|v| v.is_finite() && *v > 0.0).map(|v| v * QGIS_SCALE)
-        };
-        let s = (denom("scalemaxdenom").or(scales.0), denom("scalemindenom").or(scales.1));
+        let s = range(rule);
         if child(rule, "settings").is_some() {
             out.push(Rule { node: rule, filters: f.clone(), else_of: else_of.clone(), scales: s });
         }

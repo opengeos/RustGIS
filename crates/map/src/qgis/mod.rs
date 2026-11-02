@@ -141,6 +141,40 @@ pub struct RuleFilter {
     pub inside: Option<f64>,
 }
 
+/// A rule beside an else rule: its filter (none: every feature) and the scales it draws between
+/// (RustGIS's scales: drawn out to 1:`.0`, in to 1:`.1`). The else rule takes what none of them draws.
+pub(super) struct Sibling {
+    pub(super) filter: Option<String>,
+    pub(super) scales: (Option<f64>, Option<f64>),
+}
+
+/// `filter` with the conditions of the scale range `scales` (`@map_scale`; none, as in an export,
+/// meets every range).
+pub(super) fn within(filter: String, scales: (Option<f64>, Option<f64>)) -> String {
+    let mut c = filter;
+    if let Some(out) = scales.0 {
+        c.push_str(&format!(" AND (@map_scale IS NULL OR @map_scale <= {})", out.round()));
+    }
+    if let Some(inside) = scales.1 {
+        c.push_str(&format!(" AND (@map_scale IS NULL OR @map_scale >= {})", inside.round()));
+    }
+    c
+}
+
+/// What an else rule beside `siblings` takes: none of what they draw, at their scales. A filter
+/// unknown (null) for a feature isn't met, as QGIS has it. `None` when a filter can't be read.
+pub(super) fn none_of(siblings: &[Sibling]) -> Option<String> {
+    let mut drawn_by = Vec::new();
+    for sib in siblings {
+        let f = match &sib.filter {
+            Some(f) => format!("({})", expr::to_sql(f)?),
+            None => "TRUE".into(),
+        };
+        drawn_by.push(format!("({})", within(f, sib.scales)));
+    }
+    Some(if drawn_by.is_empty() { String::new() } else { format!("NOT coalesce({}, FALSE)", drawn_by.join(" OR ")) })
+}
+
 /// Whether an expression reads the map's scale (`@map_scale`, `$scale`), outside quotes.
 pub fn reads_scale(expr: &str) -> bool {
     expr::reads_scale(expr)
