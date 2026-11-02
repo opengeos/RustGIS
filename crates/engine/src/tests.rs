@@ -2770,6 +2770,9 @@ fn a_new_feature_doesnt_take_the_locked_label_of_a_deleted_one() {
     for (name, lon) in [("Alpha", -30.0), ("Gamma", 30.0)] {
         d.push(Some(Geometry::Point(rustgis_geom::Coord::new(lon, -40.0))), vec![V::Text(name.into())]);
     }
+    // The full source id must survive lock placement, pruning and undo on wasm32 too.
+    d.features[0].id = 1_u64 << 32;
+    d.features[1].id = (1_u64 << 32) + 1;
     let id = s.map_mut().add_dataset(d);
     let gamma = s.map().layer(id).unwrap().dataset.features[1].id;
     s.run("labels.enable", &json!({"layer": "Places", "on": true})).unwrap();
@@ -2790,8 +2793,7 @@ fn a_new_feature_doesnt_take_the_locked_label_of_a_deleted_one() {
 
     s.map_mut().layer_mut(id).unwrap().selection = vec![1];
     s.run("edit.delete", &Value::Null).unwrap();
-    let locked =
-        |s: &Session| s.map().label_lock.as_ref().is_some_and(|k| k.iter().any(|((l, f, ..), _)| *l == id && *f == gamma as usize));
+    let locked = |s: &Session| s.map().label_lock.as_ref().is_some_and(|k| k.iter().any(|((l, f, ..), _)| *l == id && *f == gamma));
     assert!(!locked(&s), "the lock's entry goes with the feature");
     let delta = json!({"layer": "Places", "geometry": {"type": "Point", "coordinates": [0.0, -40.0]}, "attributes": {"name": "Delta"}});
     s.run("edit.addFeature", &delta).unwrap();
