@@ -94,16 +94,22 @@ impl LabelExprs {
     /// The row's text: `None` without a text expression, `Some(None)` where it gives null or
     /// nothing but blanks (no label).
     pub fn text(&self, ds: &Dataset, row: usize) -> Option<Option<String>> {
+        self.text_cut(ds, row).map(|t| t.map(|(t, _)| t))
+    }
+
+    /// [`LabelExprs::text`], and whether it was cut to [`MAX_LABEL_TEXT`] characters.
+    pub fn text_cut(&self, ds: &Dataset, row: usize) -> Option<Option<(String, bool)>> {
         let e = self.text.as_ref()?;
         let v = query::value(e, ds, row, &self.env);
         if v.is_null() {
             return Some(None);
         }
         let mut t = v.to_string();
-        if let Some((cut, _)) = t.char_indices().nth(MAX_LABEL_TEXT) {
-            t.truncate(cut);
+        let cut = t.char_indices().nth(MAX_LABEL_TEXT).map(|(at, _)| at);
+        if let Some(at) = cut {
+            t.truncate(at);
         }
-        Some(Some(t).filter(|t| !t.trim().is_empty()))
+        Some(Some((t, cut.is_some())).filter(|(t, _)| !t.trim().is_empty()))
     }
 
     /// The row's size in points, none where the expression gives no number.

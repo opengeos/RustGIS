@@ -304,6 +304,9 @@ fn data_defined(settings: Node, size_unit: &str, by: &mut LabelBy, layer: &str, 
         };
         if slot.is_none() {
             *slot = Some(text);
+        } else {
+            // Both rotations set: the first is kept, the other noted.
+            left.push(name);
         }
     }
     if !left.is_empty() {

@@ -869,6 +869,75 @@ fn labels_are_set_by_expressions() {
     assert!(a.dataset.value(paris, fi("SIZE")).as_f64().is_some_and(|v| v > 8.0));
     let red = (0..a.dataset.features.len()).filter(|r| a.dataset.value(*r, fi("COLOR")).to_string() == "255,0,0,255").count();
     assert!(red > 0 && red < a.dataset.features.len(), "only the big cities' red, the rest the class's");
+    assert!(!s.notices.iter().any(|n| n.text.contains("cut to")), "short texts aren't cut");
+}
+
+/// What label expressions lose is said, and what's reported or kept follows what the map draws:
+/// a text cut by Convert To Annotation, the Web Style's notices, Project Info's labels, and the
+/// angle a converted label keeps, decided for each feature.
+#[test]
+fn label_expressions_say_what_they_lose() {
+    use rustgis_data::{Coord, Dataset, Field, FieldType, Geometry, GeometryType, Value as Attr};
+    let mut s = world();
+    let cities = s.map().layer_by_name("Cities").unwrap().id;
+    // A text past its most characters is cut, said once with a count.
+    let long = format!("name || '{}'", "x".repeat(rustgis_map::label_by::MAX_LABEL_TEXT));
+    s.run("labels.by", &json!({"layer": "Cities", "text": long})).unwrap();
+    let n = s.run("labels.convert", &json!({"layer": "Cities"})).unwrap()["annotations"].as_u64().unwrap();
+    let said = format!("Cities Annotation: {n} label texts cut to {} characters", rustgis_map::label_by::MAX_LABEL_TEXT);
+    assert!(s.notices.iter().any(|x| x.text == said), "{:?}", s.notices.last());
+    s.undo();
+    // Project Info names the text expression the labels draw by, and the field once it doesn't read.
+    s.map_mut().layer_mut(cities).unwrap().labels.default.field = "name".into();
+    s.run("labels.by", &json!({"layer": "Cities", "text": "upper(name)"})).unwrap();
+    let labels = |s: &mut Session| {
+        let info = s.run("info.project", &Value::Null).unwrap();
+        info["layers"].as_array().unwrap().iter().find(|l| l["name"] == "Cities").unwrap()["labels"].clone()
+    };
+    assert_eq!(labels(&mut s), json!("upper(name)"));
+    s.map_mut().layer_mut(cities).unwrap().labels.default.by.text = Some("upper(gone)".into());
+    assert_eq!(labels(&mut s), json!("name"));
+    // Web Style: a Default class labelling by a text expression alone says only that its style has
+    // none, even with other classes; one with a size but no text or field says nothing of it.
+    let dir = std::env::temp_dir().join(format!("rustgis-labels-lose-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let share = |s: &mut Session| {
+        let before = s.notices.len();
+        s.run("share.webStyle", &json!({"layer": "Cities", "path": dir.join("c.json").display().to_string()})).unwrap();
+        s.notices[before..].iter().map(|n| n.text.clone()).collect::<Vec<_>>()
+    };
+    let l = s.map_mut().layer_mut(cities).unwrap();
+    l.labels.default.field.clear();
+    l.labels.default.by.text = Some("upper(name)".into());
+    s.run("labels.class.add", &json!({"layer": "Cities", "name": "Big", "where": "pop_max > 5000000"})).unwrap();
+    let said = share(&mut s);
+    assert!(said.iter().any(|t| t.contains("has no labels: its Default class's text is an expression")), "{said:?}");
+    assert!(!said.iter().any(|t| t.contains("labels every feature")), "{said:?}");
+    let l = s.map_mut().layer_mut(cities).unwrap();
+    (l.labels.default.by.text, l.labels.default.by.size) = (None, Some("8".into()));
+    let said = share(&mut s);
+    assert!(said.iter().any(|t| t.contains("has no labels: its Default class has no label field")), "{said:?}");
+    assert!(!said.iter().any(|t| t.contains("expression") || t.contains("labels every feature")), "{said:?}");
+    std::fs::remove_dir_all(&dir).ok();
+    // A converted label keeps its angle on a point, and none on a line it is placed along, in a
+    // layer of both; a layer of lines alone gets no ANGLE field.
+    let line = Geometry::Line(vec![vec![Coord::new(0.0, 0.0), Coord::new(5.0, 0.0)]]);
+    let point = Geometry::Point(Coord::new(1.0, 1.0));
+    for (geoms, angles) in [(vec![line.clone(), point], Some(vec![Attr::Null, Attr::Float(30.0)])), (vec![line], None)] {
+        let mut ds = Dataset::new("ways", GeometryType::Polyline, vec![Field::new("name", FieldType::Text)]);
+        for g in geoms {
+            ds.push(Some(g), vec![Attr::Text("w".into())]);
+        }
+        let id = s.map_mut().add_dataset(ds);
+        let l = s.map_mut().layer_mut(id).unwrap();
+        (l.labels.enabled, l.labels.default.field, l.labels.default.placement) =
+            (true, "name".into(), rustgis_map::LabelPlacement::Parallel);
+        l.labels.default.by.angle = Some("30".into());
+        let a = s.run("labels.convert", &json!({"layer": id})).unwrap()["layer"].as_u64().unwrap() as u32;
+        let a = &s.map().layer(a).unwrap().dataset;
+        let got = a.field_index("ANGLE").map(|fi| (0..a.features.len()).map(|r| a.value(r, fi).clone()).collect::<Vec<_>>());
+        assert_eq!(got, angles);
+    }
 }
 
 #[test]
@@ -17766,8 +17835,34 @@ fn ogc_refresh_reconciles_fields_and_preserves_compatible_settings() {
             s.run("service.refresh", &target).unwrap();
             let l = s.map().layer(layer).unwrap();
             assert!(l.labels.enabled && l.labels.default.by.text.is_some(), "{:?}", l.labels.default);
+            let lost = |s: &Session| s.notices.iter().filter(|n| n.text.contains("label expressions naming a field")).count();
+            assert_eq!(lost(&s), 0, "every expression still reads");
             s.run("edit.undo", &Value::Null).unwrap();
-            s.map_mut().layer_mut(layer).unwrap().labels.default.by.text = None;
+            // A size by a field that goes is kept, said.
+            s.map_mut().layer_mut(layer).unwrap().labels.default.by.size = Some("value / 2".into());
+            s.run("service.refresh", &target).unwrap();
+            assert!(s.notices.iter().any(|n| n.text.ends_with("left out when drawing (1)")), "{:?}", s.notices.last());
+            assert_eq!(s.map().layer(layer).unwrap().labels.default.by.size.as_deref(), Some("value / 2"));
+            s.run("edit.undo", &Value::Null).unwrap();
+            let l = s.map_mut().layer_mut(layer).unwrap();
+            (l.labels.default.by.text, l.labels.default.by.size) = (None, None);
+            // Another class labelling by a text expression that still reads keeps the labels on.
+            let mut other = rustgis_map::LabelClass::default_for(&l.dataset);
+            (other.name, other.field, other.by.text) = ("Other".into(), "name".into(), Some("'#' || keep".into()));
+            l.labels.classes.push(other);
+            s.run("service.refresh", &target).unwrap();
+            let l = s.map().layer(layer).unwrap();
+            assert!(l.labels.enabled && l.labels.default.field.is_empty(), "{:?}", l.labels);
+            s.run("edit.undo", &Value::Null).unwrap();
+            // Hidden, or on a field that goes without a text, it doesn't.
+            for (visible, text) in [(false, Some("'#' || keep")), (true, None)] {
+                let c = &mut s.map_mut().layer_mut(layer).unwrap().labels.classes[0];
+                (c.visible, c.by.text) = (visible, text.map(String::from));
+                s.run("service.refresh", &target).unwrap();
+                assert!(!s.map().layer(layer).unwrap().labels.enabled, "visible {visible}, text {text:?}");
+                s.run("edit.undo", &Value::Null).unwrap();
+            }
+            s.map_mut().layer_mut(layer).unwrap().labels.classes.clear();
             // Numeric renderers cannot use a field which has become text; unique values can.
             server.set(ITEMS, &features(json!({"name":"Place", "value":"text", "keep":1})));
             s.run("service.refresh", &target).unwrap();

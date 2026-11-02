@@ -3591,7 +3591,7 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
             // shown, in range and on a field the layer has (#618) or by a text expression. Its
             // expressions are compiled once for the drawing.
             let label_exprs: Vec<Option<rustgis_map::label_by::LabelExprs>> = if labels.enabled && !display.paused {
-                labels.in_order().map(|c| rustgis_map::label_by::LabelExprs::new(&c.by, ds_ptr, Some(scale))).collect()
+                labels.in_order().map(|c| rustgis_map::label_by::LabelExprs::new(&c.by, ds_ptr, Some(label_scale))).collect()
             } else {
                 Vec::new()
             };

@@ -445,8 +445,12 @@ fn info(s: &mut Session, p: &Value) -> CmdResult {
                     "id": l.id, "name": l.name, "type": l.geometry_type().label(), "features": l.dataset.features.len(),
                     "visible": l.visible, "renderer": l.renderer.kind_label(), "selected": l.selection.len(),
                     "definitionQuery": l.definition_query.as_deref().filter(|q| !q.trim().is_empty()),
-                    // Its field, or the text expression it labels by.
-                    "labels": l.labels.enabled.then(|| Some(l.labels.default.field.as_str()).filter(|f| !f.is_empty()).or(l.labels.default.by.text.as_deref())).flatten(),
+                    // The text expression it labels by while that reads, as the map draws, else its field.
+                    "labels": l.labels.enabled.then(|| {
+                        let d = &l.labels.default;
+                        d.by.text.as_deref().filter(|t| rustgis_data::query::parse(t, &l.dataset).is_ok())
+                            .or(Some(d.field.as_str()).filter(|f| !f.is_empty()))
+                    }).flatten(),
                     "labelClasses": label_classes_set(&l.labels)
                         .then(|| l.labels.in_order().map(|c| json!({"name": c.name, "where": c.where_, "field": c.field, "visible": c.visible})).collect::<Vec<_>>()),
                     "fields": field_list(&l.dataset.fields),

@@ -250,7 +250,7 @@ pub fn commands() -> Vec<C> {
         .params(r#"{"layer"?, "class": name (not Default), "to": number (its place among the classes listed before Default, 0 first: placed first when labels compete for room)}"#),
         C::new("labels.by", "Labels by Expression", "View › Windows › Labeling", labels_by)
             .when(need_feature_layer)
-            .params(r#"{"layer"?, "class"?: name (none: the Default class, by whatever name it has), "text"?: expression|null (each label's text, in place of the class's field; a feature it gives null or blanks for isn't labelled), "size"?: expression|null (the text's size in points, 4 to 72), "color"?: expression|null (the text's colour: '#RRGGBB', a CSS colour name or 'r,g,b[,a]' as color_rgb gives it), "angle"?: expression|null (a point's or polygon's label turned by it, in degrees clockwise; labels along lines keep the line's)} (each expression in the language of queries, per feature, @map_scale the map's scale; a key left out keeps its expression, null or "" removes it; where an expression gives null the class's own setting is used)"#),
+            .params(r#"{"layer"?, "class"?: name (none: the Default class, by whatever name it has), "text"?: expression|null (each label's text, in place of the class's field; a feature it gives null or blanks for isn't labelled), "size"?: expression|null (the text's size in points, 4 to 72), "color"?: expression|null (the text's colour: '#RRGGBB', a CSS colour name or 'r,g,b[,a]' as color_rgb gives it), "angle"?: expression|null (a point's or polygon's label turned by it, in degrees clockwise; labels along lines keep the line's)} (each expression in the language of queries, per feature, @map_scale the map's scale; a key left out keeps its expression, null or "" removes it; where a size, color or angle expression gives null the class's own setting is used)"#),
     ]
 }
 
@@ -487,8 +487,10 @@ fn convert(s: &mut Session, p: &Value) -> CmdResult {
     // Its classes' expressions, as the map draws them now (at its scale).
     let exprs: Vec<Option<rustgis_map::label_by::LabelExprs>> =
         l.labels.in_order().map(|c| rustgis_map::label_by::LabelExprs::new(&c.by, &l.dataset, Some(scale))).collect();
-    // A line's labels along it keep the line's angle, not the expression's.
-    let lines = l.geometry_type() == GeometryType::Polyline;
+    // A line's labels along it keep the line's angle, not the expression's, as the map draws
+    // them: decided for each feature by its geometry.
+    let along = |c: &LabelClass, g: Option<&Geometry>| c.placement.along_line() && matches!(g, Some(Geometry::Line(_)));
+    let only_lines = !l.has_geometry(GeometryType::Point) && !l.has_geometry(GeometryType::Polygon);
     let by_text = |i: usize| exprs.get(i).and_then(Option::as_ref).filter(|e| e.has_text());
     if fields.iter().all(Option::is_none) && (0..fields.len()).all(|i| by_text(i).is_none()) {
         return Err("the layer has no label field".into());
@@ -504,8 +506,9 @@ fn convert(s: &mut Session, p: &Value) -> CmdResult {
     // draw by, when a class has them.
     let kept = |pick: fn(&rustgis_map::label_by::LabelBy) -> bool| l.labels.in_order().any(|c| c.visible && pick(&c.by));
     let (by_size, by_color) = (kept(|b| b.size.is_some()), kept(|b| b.color.is_some()));
-    let turns = |c: &LabelClass| c.by.angle.is_some() && !(lines && c.placement.along_line());
-    let by_angle = l.labels.in_order().any(|c| c.visible && turns(c));
+    let by_angle = l.labels.in_order().any(|c| c.visible && c.by.angle.is_some() && !(only_lines && c.placement.along_line()));
+    // Texts cut to their most characters, said once.
+    let mut cut = 0usize;
     for (on, name, kind) in
         [(by_size, "SIZE", FieldType::Double), (by_color, "COLOR", FieldType::Text), (by_angle, "ANGLE", FieldType::Double)]
     {
@@ -524,8 +527,11 @@ fn convert(s: &mut Session, p: &Value) -> CmdResult {
         }
         let Some(at) = ft.geometry.as_ref().and_then(Geometry::label_point) else { continue };
         for (i, class) in matcher.classes_of(&l.dataset, row).filter(|(_, c)| c.visible) {
-            let text = match by_text(i).and_then(|e| e.text(&l.dataset, row)) {
-                Some(Some(t)) => t,
+            let text = match by_text(i).and_then(|e| e.text_cut(&l.dataset, row)) {
+                Some(Some((t, was_cut))) => {
+                    cut += usize::from(was_cut);
+                    t
+                }
                 Some(None) => continue,
                 None => {
                     let Some(fi) = fields.get(i).copied().flatten() else { continue };
@@ -550,7 +556,8 @@ fn convert(s: &mut Session, p: &Value) -> CmdResult {
                 attrs.push(c.map_or(Attr::Null, |c| Attr::Text(format!("{},{},{},{}", c.r(), c.g(), c.b(), c.a()))));
             }
             if by_angle {
-                attrs.push(number(e.filter(|_| turns(class)).and_then(|e| e.angle(&l.dataset, row))));
+                let turns = class.by.angle.is_some() && !along(class, ft.geometry.as_ref());
+                attrs.push(number(e.filter(|_| turns).and_then(|e| e.angle(&l.dataset, row))));
             }
             ds.push(Some(Geometry::Point(at)), attrs);
         }
@@ -559,6 +566,14 @@ fn convert(s: &mut Session, p: &Value) -> CmdResult {
         return Err("the layer has no labels to convert".into());
     }
     let n = ds.features.len();
+    let cut_note = (cut > 0).then(|| {
+        format!(
+            "{}: {cut} label text{} cut to {} characters",
+            ds.name,
+            if cut == 1 { "" } else { "s" },
+            rustgis_map::label_by::MAX_LABEL_TEXT
+        )
+    });
     let mut labels = l.labels.clone();
     labels.enabled = true;
     // The classes that count, as for the layer's own labels.
@@ -592,6 +607,9 @@ fn convert(s: &mut Session, p: &Value) -> CmdResult {
         a.labels = labels;
         a.min_scale = min_scale;
         a.max_scale = max_scale;
+    }
+    if let Some(note) = cut_note {
+        s.notify(note, false);
     }
     Ok(json!({"layer": new_id, "annotations": n}))
 }
