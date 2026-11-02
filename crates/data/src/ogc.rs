@@ -2811,14 +2811,20 @@ fn wfs_matched(bytes: &[u8]) -> Option<u64> {
     root.attribute("numberMatched").or_else(|| root.attribute("numberOfFeatures"))?.trim().parse().ok()
 }
 
-/// A feature's service id, serialized to distinguish numeric and string ids.
+/// A feature's service id, retaining numeric text without rounding and normalizing strings.
+/// JSON quoting distinguishes string ids from numeric ids with the same characters.
 fn feature_id(feature: &RawValue) -> Option<String> {
     #[derive(serde::Deserialize)]
-    struct Id {
-        id: Option<serde_json::Value>,
+    struct Id<'a> {
+        #[serde(borrow)]
+        id: Option<&'a RawValue>,
     }
-    let id = serde_json::from_str::<Id>(feature.get()).ok()?.id?;
-    (id.is_string() || id.is_number()).then(|| id.to_string())
+    let id = serde_json::from_str::<Id<'_>>(feature.get()).ok()?.id?.get();
+    match id.as_bytes().first()? {
+        b'"' => serde_json::from_str::<String>(id).ok().map(|s| serde_json::Value::String(s).to_string()),
+        b'-' | b'0'..=b'9' => Some(id.to_string()),
+        _ => None,
+    }
 }
 
 /// A content fingerprint for an ID-less row, used only to warn about possible overlap.
@@ -3979,6 +3985,25 @@ mod tests {
         let doc: serde_json::Value = serde_json::from_slice(&joined).unwrap();
         assert_eq!(doc["features"].as_array().unwrap().len(), 3);
         assert_eq!(note, None);
+    }
+
+    /// Numeric service IDs beyond u64 stay distinct across pages.
+    #[test]
+    fn wfs_large_numeric_ids_remain_distinct() {
+        let url = "https://wfs.example.org/wfs?SERVICE=WFS&VERSION=2.0.0&REQUEST=GetFeature";
+        let first = br#"{"features":[{"id":12345678901234567890123}]}"#;
+        let (bytes, note) = join_pages(url, first.to_vec(), 100, |u| {
+            if query_value(u, "RESULTTYPE").is_some() {
+                Ok(br#"<FeatureCollection numberMatched="2"/>"#.to_vec())
+            } else {
+                Ok(br#"{"features":[{"id":12345678901234567890124}]}"#.to_vec())
+            }
+        });
+        let doc: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(doc["features"].as_array().unwrap().len(), 2);
+        assert_eq!(note, None);
+        let text = String::from_utf8(bytes).unwrap();
+        assert!(text.contains("12345678901234567890123") && text.contains("12345678901234567890124"));
     }
 
     /// Identical ID-less page starts do not imply that the entire page was repeated.
