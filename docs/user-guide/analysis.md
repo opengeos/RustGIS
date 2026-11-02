@@ -62,13 +62,13 @@ In the desktop app a tool runs in the background, so the map and the rest of the
 use. While it runs, the Tools pane shows its name, a **Cancel** button and, for the tools that
 count their work (Viewshed, IDW Interpolation, Kriging, Kernel Density, Buffer, Select Layer By
 Location and others), a progress bar. One tool runs at a time. A cancelled run adds nothing, and
-its message says how far through its work the tool was. Edits made to its input layers while it
-runs are kept: a selection it makes selects the same features where they now are (and says how
-many are gone), and a result that would replace an edited layer, or one loaded whole meanwhile,
-is refused. Renaming the map while it runs is fine; after switching to another map, a result
-that adds to or changes the map is refused (one made only of tables or a file is still made). Opening another
-project drops the run. Scripts, models, the AI Assistant, the command
-line and the web app wait for each tool to finish.
+for a tool that counts its work, its message says how far through its current step it got. Edits
+made to its input layers while it runs are kept: a selection it makes selects the same features
+where they now are (and says how many are gone), and a result that would replace an edited
+layer, or one loaded whole meanwhile, is refused. Renaming the map while it runs is fine; after
+switching to another map, a result that adds to or changes the map is refused (one made only of
+tables or a file is still made). Opening another project drops the run. Scripts, models, the AI
+Assistant, the command line and the web app wait for each tool to finish.
 
 From the command line or a script (`gp.run`), a built-in tool's parameter with a list of choices, such as Buffer's
 units, takes one of them in any letter case (`"meters"` for `Meters`); any other value is an error

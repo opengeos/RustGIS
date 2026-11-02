@@ -23976,8 +23976,8 @@ fn background_runs_follow_a_renamed_map_a_moved_window_and_a_loaded_layer() {
     assert_eq!(selected, expected);
     let said = &s.project.gp_history.last().unwrap().messages;
     assert!(said.iter().any(|m| m.contains("no longer there")), "{said:?}");
-    // Streamed and read whole, then loaded whole while the tool ran: its selection, rows of the
-    // whole source, lands on the same features.
+    // Streamed and read whole, then loaded whole while the tool ran, and one of the features it
+    // selects deleted: its selection, rows of the whole source, lands on the others, and says so.
     s.map_mut().layers[0].selection.clear();
     let mut t = Session::new(Project::default());
     t.run("layer.addData", &json!({"path": path.display().to_string(), "stream": true})).unwrap();
@@ -23985,14 +23985,21 @@ fn background_runs_follow_a_renamed_map_a_moved_window_and_a_loaded_layer() {
     crate::render::render_png(t.map_mut(), &v).unwrap();
     let run = tool_start(&mut t, "selectByAttributes", &json!({"input": "bgwindow", "where": "i < 100"})).unwrap();
     t.run("layer.loadAll", &json!({"layer": t.map().layers[0].id})).unwrap();
+    // One of the features it selects is deleted meanwhile.
+    let i = |f: &rustgis_data::Feature| f.attrs.first().and_then(|v| v.as_f64()).unwrap_or(f64::NAN);
+    let first = t.map().layers[0].dataset.features.iter().position(|f| i(f) == 0.0).unwrap();
+    t.map_mut().layers[0].selection = vec![first];
+    t.run("edit.enable", &json!({"on": true})).unwrap();
+    t.run("edit.delete", &Value::Null).unwrap();
     let (id, done) = (run.id, run.run(&Control::new()));
     tool_complete(&mut t, id, done).unwrap();
     t.run("gp.finish", &json!({"id": id})).unwrap();
     let l = &t.map().layers[0];
     assert!(!l.is_streamed());
-    let i = |f: &rustgis_data::Feature| f.attrs.first().and_then(|v| v.as_f64()).unwrap_or(f64::NAN);
-    assert_eq!(l.selection.len(), 100);
-    assert!(l.selection.iter().all(|&r| i(&l.dataset.features[r]) < 100.0));
+    assert_eq!(l.selection.len(), 99);
+    assert!(l.selection.iter().all(|&r| i(&l.dataset.features[r]) < 100.0 && i(&l.dataset.features[r]) != 0.0));
+    let said = &t.project.gp_history.last().unwrap().messages;
+    assert!(said.iter().any(|m| m.contains("1 of the features selected in bgwindow were deleted while it ran")), "{said:?}");
     // Streamed and read whole, then loaded whole and edited while the tool ran: its update
     // would discard the edit.
     let run = tool_start(&mut s, "calculateGeometry", &json!({"input": "bgwindow"})).unwrap();

@@ -634,11 +634,11 @@ fn fit_to_windows(s: &Session, res: &mut Result<rustgis_analysis::ToolResult, St
     {
         let ids: std::collections::HashSet<u64> = rows.iter().filter_map(|r| full.get(*r)).copied().collect();
         *rows = l.dataset.features.iter().enumerate().filter(|(_, f)| ids.contains(&f.id)).map(|(i, _)| i).collect();
-        let outside = ids.len().saturating_sub(rows.len());
-        if outside > 0 {
-            r.messages.push(format!(
-                "{outside} of the features selected in {layer} are outside the part of it read for the view, and aren't selected"
-            ));
+        let gone = ids.len().saturating_sub(rows.len());
+        if gone > 0 {
+            // Still streamed: outside the window. Loaded whole since: deleted meanwhile.
+            let place = if l.is_streamed() { "are outside the part of it read for the view" } else { "were deleted while it ran" };
+            r.messages.push(format!("{gone} of the features selected in {layer} {place}, and aren't selected"));
         }
     }
     if let Ok(r) = res
