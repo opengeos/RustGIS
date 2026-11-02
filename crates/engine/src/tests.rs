@@ -7151,6 +7151,55 @@ fn plugin_data_cubes_need_files_and_network() {
     rustgis_plugins::unload("eng-cube-files");
 }
 
+/// A mosaic of the project's raster layers, written to no file, stays in the project: a plugin
+/// with `edit` alone may make one, and none without it. Writing it to a `path`, or an input that
+/// isn't a raster layer in memory (a file name, read from disk), needs `files`.
+#[test]
+fn plugin_mosaics_of_project_layers_need_no_files() {
+    use rustgis_data::raster::{ColorHint, Crs, GeoTransform, Raster, geotiff};
+    let mut s = world();
+    // A layer named like a path is still taken for a place; one named like a bare file isn't.
+    for (name, x0) in [("west", 0.0), ("east", 1.0), ("../east.tif", 2.0), ("north.tif", 3.0)] {
+        let gt = GeoTransform { origin_x: x0, origin_y: 1.0, pixel_width: 0.1, pixel_height: -0.1 };
+        let r = Raster::new(name, 10, 10, vec![vec![1.0; 100]], gt, Crs::LonLat, None, ColorHint::Gray, "Float32").unwrap();
+        let bytes = geotiff::write(&r, 0).unwrap();
+        crate::cmd::raster::add_raster(&mut s, name, rustgis_map::RasterLayer::from_bytes(r, format!("{name}.tif"), bytes)).unwrap();
+    }
+    plugin("eng-mosaic-view", &[]);
+    let e = forward(&mut s, "eng-mosaic-view", "raster.mosaic", json!({"inputs": ["west", "east"]})).unwrap_err();
+    assert!(e.contains("'edit' permission"), "{e}");
+    rustgis_plugins::unload("eng-mosaic-view");
+    plugin("eng-mosaic", &["edit"]);
+    forward(&mut s, "eng-mosaic", "raster.mosaic", json!({"inputs": ["west", " east "], "name": "Elevation"})).unwrap();
+    assert!(s.map().layer_by_name("Elevation").is_some_and(|l| l.is_raster()));
+    // The layer comes before a file of its name.
+    forward(&mut s, "eng-mosaic", "raster.mosaic", json!({"inputs": ["east", "north.tif"], "name": "East and north"})).unwrap();
+    assert!(s.map().layer_by_name("East and north").is_some());
+    for params in [
+        json!({"inputs": ["west", "east"], "name": "Elevation", "path": "elevation.tif"}),
+        json!({"inputs": ["west", "east.tif"]}),
+        json!({"inputs": ["west", "../east.tif"]}),
+        json!({"inputs": ["west", "Countries"]}),
+        json!({"inputs": ["west", "east"], "name": "../elevation"}),
+        json!({"inputs": vec!["west"; 10_001]}),
+        json!({"inputs": ["west", 3]}),
+    ] {
+        let e = forward(&mut s, "eng-mosaic", "raster.mosaic", params.clone()).unwrap_err();
+        assert!(e.contains("'files' permission"), "{params}: {e}");
+    }
+    // With `files`, the mosaic's own limit says why.
+    plugin("eng-mosaic-files", &["edit", "files"]);
+    let e = forward(&mut s, "eng-mosaic-files", "raster.mosaic", json!({"inputs": vec!["west"; 10_001]})).unwrap_err();
+    assert!(e.contains("at most 10000 inputs"), "{e}");
+    rustgis_plugins::unload("eng-mosaic-files");
+    // A raster layer whose cells aren't in memory isn't one to mosaic, so the plugin needs `files`.
+    let east = s.map().layer_by_name("east").unwrap().id;
+    s.map_mut().layer_mut(east).unwrap().raster.as_mut().unwrap().data = None;
+    let e = forward(&mut s, "eng-mosaic", "raster.mosaic", json!({"inputs": ["west", "east"]})).unwrap_err();
+    assert!(e.contains("'files' permission"), "{e}");
+    rustgis_plugins::unload("eng-mosaic");
+}
+
 #[test]
 fn plugin_tile_layers_need_network() {
     let mut s = world();

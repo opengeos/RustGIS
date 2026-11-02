@@ -836,6 +836,32 @@ fn process(s: &mut Session, p: &Value) -> CmdResult {
     }
 }
 
+/// Most inputs a mosaic takes.
+const MAX_MOSAIC_INPUTS: usize = 10_000;
+
+/// A mosaic input's name, trimmed.
+fn mosaic_name(v: &Value) -> Result<&str, &'static str> {
+    v.as_str().map(str::trim).filter(|n| !n.is_empty()).ok_or("each input is a raster layer's name or a file path")
+}
+
+/// The raster layer a mosaic input names, with its cells in memory. An error means the input isn't
+/// one: [`raster_mosaic`] then reads it as a file if it is a raster file name. It and
+/// [`mosaic_stays_in_project`] both go by this, so they can't disagree.
+fn mosaic_layer(s: &Session, v: &Value) -> Result<Arc<Raster>, String> {
+    raster_named(s, mosaic_name(v)?)
+}
+
+/// Whether a mosaic stays in the project: it has inputs, no more than it takes, each a
+/// [`mosaic_layer`], and nothing else names a place (no `path`, nor a name that looks like one).
+/// A layer named like a path (`~dem`, `a/../b`) counts as a place too: that errs towards asking
+/// for `files`.
+pub(crate) fn mosaic_stays_in_project(s: &Session, p: &Value) -> bool {
+    let in_memory = |v: &Value| mosaic_layer(s, v).is_ok();
+    let layers =
+        p.get("inputs").and_then(Value::as_array).is_some_and(|a| !a.is_empty() && a.len() <= MAX_MOSAIC_INPUTS && a.iter().all(in_memory));
+    layers && !super::items::names_place(p, super::plugins::PLACE_KEYS, 0)
+}
+
 /// Merges rasters on one grid (tiles of an elevation model, say) into one, keeping their
 /// coordinate system and cell size; where they overlap, the first input with data wins.
 fn raster_mosaic(s: &mut Session, p: &Value) -> CmdResult {
@@ -843,8 +869,8 @@ fn raster_mosaic(s: &mut Session, p: &Value) -> CmdResult {
     if inputs.len() < 2 {
         return Err("a mosaic needs two or more rasters".into());
     }
-    if inputs.len() > 10_000 {
-        return Err("a mosaic takes at most 10000 inputs".into());
+    if inputs.len() > MAX_MOSAIC_INPUTS {
+        return Err(format!("a mosaic takes at most {MAX_MOSAIC_INPUTS} inputs"));
     }
     let max = rustgis_data::raster::MAX_SAMPLES as i64;
     let mut rs: Vec<Arc<Raster>> = Vec::with_capacity(inputs.len());
@@ -854,8 +880,8 @@ fn raster_mosaic(s: &mut Session, p: &Value) -> CmdResult {
     // Each input is checked as it is read, so a mismatched or oversized set fails before the
     // rest are loaded.
     for v in inputs {
-        let n = v.as_str().map(str::trim).filter(|n| !n.is_empty()).ok_or("each input is a raster layer's name or a file path")?;
-        let r = match raster_named(s, n) {
+        let n = mosaic_name(v)?;
+        let r = match mosaic_layer(s, v) {
             Ok(r) => r,
             Err(_) if rustgis_data::raster::is_raster_name(n) => {
                 Arc::new(rustgis_data::raster::read_path(std::path::Path::new(n)).map_err(|e| format!("{n}: {e}"))?)
