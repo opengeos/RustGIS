@@ -859,6 +859,14 @@ fn unique_values_by_expression_keep_their_classes_and_say_scales() {
     // Its classes are what it gives with no scale: 'detail' only at some scales isn't one.
     let rustgis_map::Renderer::Unique { classes: kept, .. } = &s.map().layer(many).unwrap().renderer else { panic!() };
     assert_eq!(kept.iter().map(|c| c.0.as_str()).collect::<Vec<_>>(), ["overview"]);
+    // So too with the scale written right after a word, which the expression still reads.
+    let mark = s.notice_mark();
+    s.run(
+        "layer.symbology",
+        &json!({"layer": many, "type": "unique", "expression": "CASE WHEN@map_scale < 50000 THEN 'detail' ELSE 'overview' END"}),
+    )
+    .unwrap();
+    assert!(s.notices_since(mark).iter().any(|n| n.text.contains("without a map scale")), "{:?}", s.notices_since(mark));
 }
 
 #[test]
