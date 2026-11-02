@@ -1,0 +1,785 @@
+//! Answers of ArcGIS feature-service queries as protocol buffers (`f=pbf`): one page of a layer,
+//! with the fields, values and geometries the same query gives as JSON, in fewer bytes and faster
+//! to decode.
+//!
+//! Written from Esri's published description of the format, `FeatureCollection.proto` in
+//! <https://github.com/Esri/arcgis-pbf> (Apache-2.0), after Terrio's ESRIPBF reader
+//! (<https://github.com/opengeos/terrio>, MIT; see ATTRIBUTION.md), adapted to RustGIS's features.
+//!
+//! - Coordinates are integers, scaled and translated by the answer's `transform`. X and Y are
+//!   zigzag differences from the vertex before, starting over at each part; Z and M are each
+//!   vertex's own. RustGIS keeps neither Z nor M, and says so.
+//! - Polygon rings are clockwise when outer and counterclockwise when holes in the outer ring
+//!   before them, as Esri writes them and as [`crate::filegdb`] reads them. A ring with no area is
+//!   left out, and said.
+//! - The coordinate system is the answer's (`latestWkid`, `wkid`, else its WKT), read as
+//!   [`crate::filegdb`] reads one; geometry is turned to longitude/latitude.
+//! - Fields: integers, object ids and dates are integers, dates in milliseconds since 1970 (UTC),
+//!   as the same query gives them as GeoJSON; single and double precision numbers are doubles;
+//!   strings, GUIDs, XML, date-only, time-only and offset timestamps are text, as the service
+//!   sends them. Geometry, blob and raster fields are left out, and said.
+//! - Features are numbered by their place, as the GeoJSON reader numbers them; the object id stays
+//!   a field ([`Page::object_id_field`]).
+//!
+//! Refused, by name: an empty answer (a service refuses a query that way), a JSON answer (the
+//! service's error, or another format), a count, ids or an extent, curves, shape buffers,
+//! multipatches, a point with more than one vertex, coordinates without a transform, and far more
+//! attribute values than the answer's size explains. Answers are hostile input: every length is
+//! checked, and nothing is read past the end.
+
+use crate::{DataError, Dataset, Field, FieldType, Geometry, GeometryType, ReadReport, Result, Value};
+use rustgis_geom::Coord;
+
+fn invalid(message: impl std::fmt::Display) -> DataError {
+    DataError::Format(format!("{PREFIX}{message}"))
+}
+
+/// What every error of this reader starts with.
+const PREFIX: &str = "ArcGIS protocol buffer: ";
+
+/// Most attribute values an answer may hold whatever its size: a few bytes can declare many fields
+/// for many features, and each value takes memory of its own. Past this, an answer must be at
+/// least a byte per value, which every value it sends takes.
+const MAX_SPARSE_VALUES: usize = 4 << 20;
+
+/// The format's geometry types (`GeometryType`).
+const POINT: u64 = 0;
+const MULTIPOINT: u64 = 1;
+const POLYLINE: u64 = 2;
+const POLYGON: u64 = 3;
+const MULTIPATCH: u64 = 4;
+
+/// The format's object id field type (`esriFieldTypeOID`).
+const OID: u64 = 6;
+
+/// One page of a query's answer.
+#[derive(Debug)]
+pub struct Page {
+    /// Its features, in longitude/latitude.
+    pub dataset: Dataset,
+    /// What was left out or assumed while reading it.
+    pub report: ReadReport,
+    /// The service holds more features than it sent (`exceededTransferLimit`): the next page
+    /// starts after these.
+    pub exceeded_transfer_limit: bool,
+    /// The field holding the features' object ids (`esriFieldTypeOID`), by its place in
+    /// `dataset.fields`.
+    pub object_id_field: Option<usize>,
+}
+
+/// Reads an answer as a layer named `name`, saying when the service held more features than it sent.
+pub fn read(bytes: &[u8], name: &str) -> Result<(Dataset, ReadReport)> {
+    let mut page = read_page(bytes, name)?;
+    if page.exceeded_transfer_limit {
+        page.report.messages.push(format!(
+            "the service sent its first {} features only (its record limit); the rest aren't in this answer",
+            page.dataset.features.len()
+        ));
+    }
+    Ok((page.dataset, page.report))
+}
+
+/// Whether some bytes start as an answer with features: an optional version, then a query result
+/// holding a feature result whose first field is one the format defines. A count, ids or an extent
+/// aren't such an answer, nor is an OpenStreetMap or vector tile protocol buffer.
+pub fn is_esripbf(bytes: &[u8]) -> bool {
+    signs(bytes).unwrap_or(false)
+}
+
+/// Reads one page of an answer as a layer named `name`.
+pub fn read_page(bytes: &[u8], name: &str) -> Result<Page> {
+    if bytes.is_empty() {
+        return Err(invalid("the answer is empty: the service refused the query (ask for it with f=json to see why)"));
+    }
+    // A service may answer in JSON whatever was asked for: its error, or another format.
+    if is_json(bytes) {
+        return Err(json_service_error(bytes).unwrap_or_else(|| invalid("the answer is JSON, not a protocol buffer")));
+    }
+    if bytes.len() as u64 > crate::io::MAX_BYTES {
+        return Err(invalid(format!("the answer is too large ({} bytes)", bytes.len())));
+    }
+    let result = feature_result(bytes)?;
+
+    let (mut more, mut has_z, mut has_m) = (false, false, false);
+    let mut geometry_type = None;
+    let mut reference = None;
+    let mut transform = Transform::default();
+    let mut declared = Vec::new();
+    let mut features = Vec::new();
+    let mut r = Reader::new(result);
+    while !r.done() {
+        match r.key()? {
+            (7, 0) => geometry_type = Some(r.varint()?),
+            (8, 2) => reference = Some(r.message()?),
+            (9, 0) => more = r.varint()? != 0,
+            (10, 0) => has_z = r.varint()? != 0,
+            (11, 0) => has_m = r.varint()? != 0,
+            (12, 2) => transform = read_transform(r.message()?)?,
+            (13, 2) => declared.push(field(r.message()?)?),
+            (15, 2) => features.push(r.message()?),
+            (_, wire) => r.skip(wire)?,
+        }
+    }
+
+    let mut report = ReadReport::default();
+    // Values come by position, one per declared field; a column left out keeps its place.
+    let mut columns: Vec<Option<(usize, Kind)>> = Vec::with_capacity(declared.len());
+    let mut fields: Vec<Field> = Vec::new();
+    let mut names = std::collections::HashSet::new();
+    let (mut repeated, mut not_read) = (0usize, 0usize);
+    let mut object_id_field = None;
+    for (name, number) in declared {
+        let Some(kind) = kind(number) else {
+            not_read += 1;
+            columns.push(None);
+            continue;
+        };
+        // Fields are found by name whatever its case, so the first of a name keeps it.
+        if !names.insert(name.to_lowercase()) {
+            repeated += 1;
+            columns.push(None);
+            continue;
+        }
+        if number == OID && object_id_field.is_none() {
+            object_id_field = Some(fields.len());
+        }
+        columns.push(Some((fields.len(), kind)));
+        fields.push(Field::new(name, kind.field_type()));
+    }
+    if repeated > 0 {
+        report.messages.push(format!("{repeated} fields repeat an earlier field's name and are left out"));
+    }
+    if not_read > 0 {
+        report.messages.push(format!("{not_read} fields hold geometries, blobs or rasters, which aren't read, and are left out"));
+    }
+    let values = features.len().saturating_mul(fields.len());
+    if values > MAX_SPARSE_VALUES.max(bytes.len()) {
+        return Err(invalid(format!(
+            "{} features of {} fields are far more values than an answer of {} bytes holds",
+            features.len(),
+            fields.len(),
+            bytes.len()
+        )));
+    }
+
+    let (code, wkt) = match reference {
+        Some(bytes) => spatial_reference(bytes)?,
+        None => (None, None),
+    };
+    let (crs, to_lonlat) = crate::filegdb::esri_crs(code, wkt.as_deref(), &mut report);
+    if crs.is_none()
+        && wkt.is_none()
+        && let Some(code) = code
+        && crate::filegdb::crs_of_code(code) != Some(crate::raster::Crs::LonLat)
+    {
+        report.messages.push(format!("coordinate system {code} can't be used; coordinates are read as longitude/latitude"));
+    }
+
+    // A point layer's type is the format's default, which an answer leaves out.
+    let kind = geometry_type.unwrap_or(POINT);
+    let layer_type = match kind {
+        POINT | MULTIPOINT => GeometryType::Point,
+        POLYLINE => GeometryType::Polyline,
+        POLYGON => GeometryType::Polygon,
+        _ => GeometryType::None,
+    };
+    let shape = Shape { kind, transform: &transform, has_z, has_m };
+    let mut ds = Dataset::new(name, GeometryType::None, fields);
+    let width = ds.fields.len();
+    let mut tally = Tally::default();
+    let (mut any_geometry, mut with_zm, mut unprojected) = (false, 0usize, 0usize);
+    for (n, bytes) in features.into_iter().enumerate() {
+        let (values, geometry) = feature(bytes, &columns, width, &shape, &mut tally).map_err(|e| match e {
+            DataError::Format(m) => invalid(format!("feature {}: {}", n + 1, m.strip_prefix(PREFIX).unwrap_or(&m))),
+            e => e,
+        })?;
+        any_geometry |= geometry.is_some();
+        with_zm += usize::from(geometry.is_some() && (has_z || has_m));
+        let geometry = match (geometry, &to_lonlat) {
+            (Some(g), Some(t)) => {
+                let g = crate::filegdb::to_lonlat_geometry(g, t);
+                unprojected += usize::from(g.is_none());
+                g
+            }
+            (g, _) => g,
+        };
+        ds.push_next(geometry, values);
+    }
+    if geometry_type.is_some() || any_geometry {
+        ds.geometry_type = layer_type;
+    }
+    ds.crs = crs;
+    if tally.unreadable > 0 {
+        report.messages.push(format!("{} values don't fit their field's type and are left empty", tally.unreadable));
+    }
+    if tally.flat_rings > 0 {
+        report.messages.push(format!("{} polygon rings have no area and are left out", tally.flat_rings));
+    }
+    if unprojected > 0 {
+        report
+            .messages
+            .push(format!("{unprojected} features have coordinates outside their coordinate system: they are kept without geometry"));
+    }
+    ds.drop_zm(&mut report, with_zm);
+    Ok(Page { dataset: ds, report, exceeded_transfer_limit: more, object_id_field })
+}
+
+/// A reader of protocol buffer fields, which refuses what runs past its bytes.
+struct Reader<'a> {
+    bytes: &'a [u8],
+    at: usize,
+}
+
+impl<'a> Reader<'a> {
+    fn new(bytes: &'a [u8]) -> Self {
+        Self { bytes, at: 0 }
+    }
+
+    fn done(&self) -> bool {
+        self.at >= self.bytes.len()
+    }
+
+    fn remaining(&self) -> usize {
+        self.bytes.len().saturating_sub(self.at)
+    }
+
+    fn varint(&mut self) -> Result<u64> {
+        let mut value = 0u64;
+        for shift in (0..64).step_by(7) {
+            let byte = *self.bytes.get(self.at).ok_or_else(|| invalid("the data ends inside a number"))?;
+            self.at += 1;
+            // The tenth byte holds the 64th bit alone.
+            if shift == 63 && byte & 0x7e != 0 {
+                return Err(invalid("a number is too long"));
+            }
+            value |= u64::from(byte & 0x7f) << shift;
+            if byte & 0x80 == 0 {
+                return Ok(value);
+            }
+        }
+        Err(invalid("a number is too long"))
+    }
+
+    /// A field's number and wire type.
+    fn key(&mut self) -> Result<(u64, u8)> {
+        let key = self.varint()?;
+        Ok((key >> 3, (key & 7) as u8))
+    }
+
+    fn take(&mut self, n: usize) -> Result<&'a [u8]> {
+        let end = self.at.checked_add(n).ok_or_else(|| invalid("a field's length is too large"))?;
+        let taken = self.bytes.get(self.at..end).ok_or_else(|| invalid("the data ends inside a field"))?;
+        self.at = end;
+        Ok(taken)
+    }
+
+    /// A length-delimited field's bytes.
+    fn message(&mut self) -> Result<&'a [u8]> {
+        let n = usize::try_from(self.varint()?).map_err(|_| invalid("a field's length is too large"))?;
+        self.take(n)
+    }
+
+    fn fixed<const N: usize>(&mut self) -> Result<[u8; N]> {
+        <[u8; N]>::try_from(self.take(N)?).map_err(|_| invalid("the data ends inside a field"))
+    }
+
+    fn double(&mut self) -> Result<f64> {
+        Ok(f64::from_le_bytes(self.fixed()?))
+    }
+
+    fn skip(&mut self, wire: u8) -> Result<()> {
+        match wire {
+            0 => self.varint().map(|_| ()),
+            1 => self.take(8).map(|_| ()),
+            2 => self.message().map(|_| ()),
+            5 => self.take(4).map(|_| ()),
+            w => Err(invalid(format!("unknown wire type {w}"))),
+        }
+    }
+}
+
+fn zigzag(v: u64) -> i64 {
+    ((v >> 1) as i64) ^ -((v & 1) as i64)
+}
+
+/// A reader at an answer's query result, past its optional version: `None` when the bytes start
+/// otherwise. The query result's length is left to read.
+fn at_query_result(bytes: &[u8]) -> Result<Option<Reader<'_>>> {
+    let mut r = Reader::new(bytes);
+    let mut key = r.key()?;
+    if key == (1, 2) {
+        let version = r.message()?;
+        if version.len() > 32 || !version.iter().all(u8::is_ascii_graphic) {
+            return Ok(None);
+        }
+        key = r.key()?;
+    }
+    Ok((key == (2, 2)).then_some(r))
+}
+
+fn signs(bytes: &[u8]) -> Result<bool> {
+    let Some(mut r) = at_query_result(bytes)? else { return Ok(false) };
+    // These lengths may run past the bytes given: only the start of an answer may be.
+    let query = r.varint()?;
+    if r.key()? != (1, 2) {
+        return Ok(false);
+    }
+    let result = r.varint()?;
+    if result >= query {
+        return Ok(false);
+    }
+    let (field, wire) = r.key()?;
+    Ok(match field {
+        1..=6 | 8 | 12..=16 => wire == 2,
+        7 | 9..=11 => wire == 0,
+        _ => false,
+    })
+}
+
+/// The bytes of an answer's feature result.
+fn feature_result(bytes: &[u8]) -> Result<&[u8]> {
+    let mut result = None;
+    let mut top = Reader::new(bytes);
+    while !top.done() {
+        match top.key()? {
+            (2, 2) => {
+                let mut query = Reader::new(top.message()?);
+                while !query.done() {
+                    match query.key()? {
+                        (1, 2) => result = Some(query.message()?),
+                        (2..=4, 2) => return Err(invalid("the answer holds a count, ids or an extent, not features")),
+                        (_, wire) => query.skip(wire)?,
+                    }
+                }
+            }
+            (_, wire) => top.skip(wire)?,
+        }
+    }
+    result.ok_or_else(|| invalid("the answer holds no features"))
+}
+
+/// Whether an answer is JSON, as a service may answer whatever was asked for.
+fn is_json(bytes: &[u8]) -> bool {
+    bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(bytes).trim_ascii_start().first() == Some(&b'{')
+}
+
+/// A service's error answer (`{"error": {"code": …, "message": …}}`, its members in any order),
+/// found without reading the rest of the document.
+fn json_service_error(bytes: &[u8]) -> Option<DataError> {
+    use serde::de::{Error as _, MapAccess, Visitor};
+    #[derive(Default, serde::Deserialize)]
+    struct ServiceError {
+        message: Option<String>,
+        code: Option<i64>,
+    }
+    struct RootError<'a>(&'a mut Option<ServiceError>);
+    impl<'de> Visitor<'de> for RootError<'_> {
+        type Value = ();
+        fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("a JSON object")
+        }
+        fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> std::result::Result<(), A::Error> {
+            while let Some(key) = map.next_key::<String>()? {
+                if key == "error" {
+                    *self.0 = Some(map.next_value::<Option<ServiceError>>()?.unwrap_or_default());
+                    // Found: the rest isn't read.
+                    return Err(A::Error::custom("service error found"));
+                }
+                map.next_value::<serde::de::IgnoredAny>()?;
+            }
+            Ok(())
+        }
+    }
+    let bytes = bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(bytes);
+    let mut found = None;
+    let _ = serde::Deserializer::deserialize_map(&mut serde_json::Deserializer::from_slice(bytes), RootError(&mut found));
+    found.map(|error| {
+        let message = error.message.as_deref().unwrap_or("no message");
+        let code = error.code.map(|c| format!(" ({c})")).unwrap_or_default();
+        invalid(format!("the service answered with an error{code}: {message}"))
+    })
+}
+
+/// How an answer's integers become coordinates.
+struct Transform {
+    /// The answer gave one: the format sends one with every answer that has coordinates.
+    given: bool,
+    upper_left: bool,
+    /// X, Y, M and Z, as the format orders them.
+    scale: [f64; 4],
+    translate: [f64; 4],
+}
+
+impl Default for Transform {
+    fn default() -> Self {
+        Self { given: false, upper_left: true, scale: [1.0; 4], translate: [0.0; 4] }
+    }
+}
+
+/// The four numbers of a `Scale` or `Translate`; those absent keep `absent`.
+fn four(bytes: &[u8], absent: f64) -> Result<[f64; 4]> {
+    let mut out = [absent; 4];
+    let mut r = Reader::new(bytes);
+    while !r.done() {
+        match r.key()? {
+            (field @ 1..=4, 1) => {
+                let value = r.double()?;
+                if let Some(slot) = usize::try_from(field).ok().and_then(|f| f.checked_sub(1)).and_then(|i| out.get_mut(i)) {
+                    *slot = value;
+                }
+            }
+            (_, wire) => r.skip(wire)?,
+        }
+    }
+    Ok(out)
+}
+
+fn read_transform(bytes: &[u8]) -> Result<Transform> {
+    let mut t = Transform { given: true, ..Transform::default() };
+    let mut r = Reader::new(bytes);
+    while !r.done() {
+        match r.key()? {
+            (1, 0) => t.upper_left = r.varint()? == 0,
+            // A scale of zero is one the service left out.
+            (2, 2) => t.scale = four(r.message()?, 1.0)?.map(|s| if s == 0.0 { 1.0 } else { s }),
+            (3, 2) => t.translate = four(r.message()?, 0.0)?,
+            (_, wire) => r.skip(wire)?,
+        }
+    }
+    Ok(t)
+}
+
+/// A field's name and its type's number (`FieldType`).
+fn field(bytes: &[u8]) -> Result<(String, u64)> {
+    let (mut name, mut number) = (String::new(), 0);
+    let mut r = Reader::new(bytes);
+    while !r.done() {
+        match r.key()? {
+            (1, 2) => name = String::from_utf8_lossy(r.message()?).into_owned(),
+            (2, 0) => number = r.varint()?,
+            (_, wire) => r.skip(wire)?,
+        }
+    }
+    Ok((name, number))
+}
+
+/// The code of an answer's coordinate system (its `latestWkid` when RustGIS knows it, else its
+/// `wkid`) and its WKT.
+fn spatial_reference(bytes: &[u8]) -> Result<(Option<u32>, Option<String>)> {
+    let (mut wkid, mut latest, mut wkt) = (None, None, None);
+    let mut r = Reader::new(bytes);
+    while !r.done() {
+        match r.key()? {
+            (1, 0) => wkid = u32::try_from(r.varint()?).ok().filter(|&c| c > 0),
+            (2, 0) => latest = u32::try_from(r.varint()?).ok().filter(|&c| c > 0),
+            (5, 2) => wkt = Some(String::from_utf8_lossy(r.message()?).into_owned()).filter(|w| !w.trim().is_empty()),
+            (_, wire) => r.skip(wire)?,
+        }
+    }
+    let code = latest.filter(|&c| crate::filegdb::crs_of_code(c).is_some()).or(wkid).or(latest);
+    Ok((code, wkt))
+}
+
+/// How a field's values are read.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Kind {
+    Integer,
+    Double,
+    Text,
+}
+
+impl Kind {
+    fn field_type(self) -> FieldType {
+        match self {
+            Kind::Integer => FieldType::Integer,
+            Kind::Double => FieldType::Double,
+            Kind::Text => FieldType::Text,
+        }
+    }
+}
+
+/// How a field of the format's type `number` is read: `None` for geometry, blob and raster fields,
+/// which aren't. A type the format adds later is read as text.
+fn kind(number: u64) -> Option<Kind> {
+    match number {
+        // Small integer, integer, date (milliseconds since 1970), object id, big integer.
+        0 | 1 | 5 | OID | 13 => Some(Kind::Integer),
+        // Single and double precision.
+        2 | 3 => Some(Kind::Double),
+        // Geometry, blob, raster.
+        7..=9 => None,
+        // String, GUID, global id, XML, date only, time only, timestamp with offset.
+        _ => Some(Kind::Text),
+    }
+}
+
+/// What a feature's values and geometry are read with.
+struct Shape<'a> {
+    kind: u64,
+    transform: &'a Transform,
+    has_z: bool,
+    has_m: bool,
+}
+
+/// What was left out of an answer's features, to say once.
+#[derive(Default)]
+struct Tally {
+    /// Values that don't fit their field's type.
+    unreadable: usize,
+    /// Polygon rings without area.
+    flat_rings: usize,
+}
+
+/// A feature's values, one per kept field, and its geometry.
+fn feature(
+    bytes: &[u8],
+    columns: &[Option<(usize, Kind)>],
+    width: usize,
+    shape: &Shape,
+    tally: &mut Tally,
+) -> Result<(Vec<Value>, Option<Geometry>)> {
+    let mut values = vec![Value::Null; width];
+    let mut column = 0usize;
+    let mut geometry = None;
+    let mut r = Reader::new(bytes);
+    while !r.done() {
+        match r.key()? {
+            (1, 2) => {
+                let cell = cell(r.message()?)?;
+                let slot = *columns.get(column).ok_or_else(|| invalid("it has more values than the answer has fields"))?;
+                column += 1;
+                if let Some((at, kind)) = slot
+                    && let Some(v) = values.get_mut(at)
+                {
+                    let (value, fits) = value(&cell, kind);
+                    tally.unreadable += usize::from(!fits);
+                    *v = value;
+                }
+            }
+            (2, 2) => geometry = read_geometry(r.message()?, shape, tally)?,
+            (3, 2) => return Err(invalid("shape-buffer geometries aren't read")),
+            (7, 2) => return Err(invalid("curve geometries aren't read (GeoJSON gives them as straight segments)")),
+            (_, wire) => r.skip(wire)?,
+        }
+    }
+    Ok((values, geometry))
+}
+
+/// A `Value`, as the format encodes it.
+enum Cell<'a> {
+    Null,
+    Text(&'a [u8]),
+    Int(i64),
+    UInt(u64),
+    Real(f64),
+    Bool(bool),
+}
+
+fn cell(bytes: &[u8]) -> Result<Cell<'_>> {
+    let mut out = Cell::Null;
+    let mut r = Reader::new(bytes);
+    while !r.done() {
+        match r.key()? {
+            (1, 2) => out = Cell::Text(r.message()?),
+            // Through its shortest text: 0.1, not 0.10000000149011612.
+            (2, 5) => out = Cell::Real(f32::from_le_bytes(r.fixed()?).to_string().parse().unwrap_or(f64::NAN)),
+            (3, 1) => out = Cell::Real(r.double()?),
+            // sint32 and sint64.
+            (4 | 8, 0) => out = Cell::Int(zigzag(r.varint()?)),
+            // uint32 and uint64.
+            (5 | 7, 0) => out = Cell::UInt(r.varint()?),
+            // int64.
+            (6, 0) => out = Cell::Int(r.varint()? as i64),
+            (9, 0) => out = Cell::Bool(r.varint()? != 0),
+            (10, 0) => {
+                r.varint()?;
+                out = Cell::Null;
+            }
+            (_, wire) => r.skip(wire)?,
+        }
+    }
+    Ok(out)
+}
+
+impl Cell<'_> {
+    fn text(&self) -> Option<std::borrow::Cow<'_, str>> {
+        match self {
+            Cell::Text(bytes) => Some(String::from_utf8_lossy(bytes)),
+            _ => None,
+        }
+    }
+
+    /// A whole number: a real one only when it has no fraction and fits.
+    fn as_i64(&self) -> Option<i64> {
+        match self {
+            Cell::Int(i) => Some(*i),
+            Cell::UInt(u) => i64::try_from(*u).ok(),
+            Cell::Real(f) => (f.is_finite() && f.fract() == 0.0 && (-9_223_372_036_854_775_808.0..9_223_372_036_854_775_808.0).contains(f))
+                .then_some(*f as i64),
+            _ => None,
+        }
+    }
+
+    fn as_f64(&self) -> Option<f64> {
+        match self {
+            Cell::Int(i) => Some(*i as f64),
+            Cell::UInt(u) => Some(*u as f64),
+            Cell::Real(f) => Some(*f),
+            _ => None,
+        }
+    }
+
+    fn to_text(&self) -> String {
+        match self {
+            Cell::Text(bytes) => String::from_utf8_lossy(bytes).into_owned(),
+            Cell::Int(i) => i.to_string(),
+            Cell::UInt(u) => u.to_string(),
+            Cell::Real(f) => f.to_string(),
+            Cell::Bool(b) => b.to_string(),
+            Cell::Null => String::new(),
+        }
+    }
+}
+
+/// A value as its field's kind reads it, and whether it fits that kind (one that doesn't is null).
+fn value(cell: &Cell, kind: Kind) -> (Value, bool) {
+    let read = match (kind, cell) {
+        (_, Cell::Null) => return (Value::Null, true),
+        (Kind::Text, c) => Some(Value::Text(c.to_text())),
+        (Kind::Integer, c) => c.as_i64().or_else(|| c.text().and_then(|s| s.trim().parse().ok())).map(Value::Int),
+        (Kind::Double, c) => {
+            c.as_f64().or_else(|| c.text().and_then(|s| s.trim().parse::<f64>().ok())).filter(|f| f.is_finite()).map(Value::Float)
+        }
+    };
+    match read {
+        Some(v) => (v, true),
+        None => (Value::Null, false),
+    }
+}
+
+/// The vertices of a part: `count` of them, or those left without one. X and Y start over from
+/// zero at each part; Z and M are read and left out.
+fn part(c: &mut Reader, count: Option<usize>, shape: &Shape) -> Result<Vec<Coord>> {
+    let dimensions = 2 + usize::from(shape.has_z) + usize::from(shape.has_m);
+    let t = shape.transform;
+    let ([scale_x, scale_y, ..], [translate_x, translate_y, ..]) = (t.scale, t.translate);
+    let mut vertices = Vec::with_capacity(count.unwrap_or(0).min(c.remaining() / dimensions));
+    let (mut sum_x, mut sum_y) = (0i64, 0i64);
+    while count.map_or(!c.done(), |n| vertices.len() < n) {
+        sum_x = sum_x.checked_add(zigzag(c.varint()?)).ok_or_else(|| invalid("a coordinate is out of range"))?;
+        sum_y = sum_y.checked_add(zigzag(c.varint()?)).ok_or_else(|| invalid("a coordinate is out of range"))?;
+        for _ in 2..dimensions {
+            c.varint()?;
+        }
+        let x = translate_x + scale_x * sum_x as f64;
+        let dy = scale_y * sum_y as f64;
+        let y = if t.upper_left { translate_y - dy } else { translate_y + dy };
+        if !(x.is_finite() && y.is_finite()) {
+            return Err(invalid("a coordinate is not a finite number"));
+        }
+        vertices.push(Coord::new(x, y));
+    }
+    Ok(vertices)
+}
+
+/// A geometry. One without coordinates is no geometry.
+fn read_geometry(bytes: &[u8], shape: &Shape, tally: &mut Tally) -> Result<Option<Geometry>> {
+    let mut lengths = Vec::new();
+    // Packed, possibly in several blocks, or one number a field. One block, the usual, isn't copied.
+    let mut coords: std::borrow::Cow<[u8]> = std::borrow::Cow::Borrowed(&[]);
+    let mut r = Reader::new(bytes);
+    while !r.done() {
+        match r.key()? {
+            (2, 2) => {
+                let mut packed = Reader::new(r.message()?);
+                while !packed.done() {
+                    lengths.push(packed.varint()?);
+                }
+            }
+            (2, 0) => lengths.push(r.varint()?),
+            (3, 2) => {
+                let block = r.message()?;
+                if coords.is_empty() {
+                    coords = std::borrow::Cow::Borrowed(block);
+                } else {
+                    coords.to_mut().extend_from_slice(block);
+                }
+            }
+            (3, 0) => put_varint(coords.to_mut(), r.varint()?),
+            (_, wire) => r.skip(wire)?,
+        }
+    }
+    if coords.is_empty() {
+        if lengths.iter().any(|&n| n > 0) {
+            return Err(invalid("a part has vertices, but the geometry has no coordinates"));
+        }
+        return Ok(None);
+    }
+    if !shape.transform.given {
+        return Err(invalid("it has coordinates, but the answer has no transform for them"));
+    }
+    let mut c = Reader::new(&coords);
+    let mut parts = Vec::with_capacity(lengths.len().min(coords.len()));
+    if lengths.is_empty() {
+        parts.push(part(&mut c, None, shape)?);
+    }
+    for length in lengths {
+        let count = usize::try_from(length).map_err(|_| invalid("a part's length is too large"))?;
+        parts.push(part(&mut c, Some(count), shape)?);
+    }
+    if !c.done() {
+        return Err(invalid("it has more coordinates than its parts count"));
+    }
+    Ok(match shape.kind {
+        POINT => {
+            let mut vertices = parts.into_iter().flatten();
+            let point = vertices.next();
+            if vertices.next().is_some() {
+                return Err(invalid("a point has more than one vertex"));
+            }
+            point.map(Geometry::Point)
+        }
+        MULTIPOINT => {
+            let points: Vec<Coord> = parts.into_iter().flatten().collect();
+            (!points.is_empty()).then_some(Geometry::MultiPoint(points))
+        }
+        POLYLINE => {
+            let parts: Vec<Vec<Coord>> = parts.into_iter().filter(|p| !p.is_empty()).collect();
+            (!parts.is_empty()).then_some(Geometry::Line(parts))
+        }
+        POLYGON => polygon(parts, tally),
+        MULTIPATCH => return Err(invalid("multipatch geometries aren't read")),
+        kind => return Err(invalid(format!("geometries of type {kind} aren't read"))),
+    })
+}
+
+/// Rings grouped into polygons by their orientation, as Esri writes them: each clockwise ring
+/// starts a polygon, and each counterclockwise one is a hole in the polygon before it. Rings
+/// without area are counted and left out.
+fn polygon(rings: Vec<Vec<Coord>>, tally: &mut Tally) -> Option<Geometry> {
+    let rings: Vec<(Vec<Coord>, bool)> = rings
+        .into_iter()
+        .filter(|r| !r.is_empty())
+        .filter_map(|r| {
+            let area = crate::filegdb::signed_area(&r);
+            if area != 0.0 && area.is_finite() {
+                Some((r, area < 0.0))
+            } else {
+                tally.flat_rings += 1;
+                None
+            }
+        })
+        .collect();
+    (!rings.is_empty()).then(|| crate::io::group_rings(rings))
+}
+
+fn put_varint(out: &mut Vec<u8>, mut v: u64) {
+    while v >= 0x80 {
+        out.push((v as u8 & 0x7f) | 0x80);
+        v >>= 7;
+    }
+    out.push(v as u8);
+}
+
+#[cfg(test)]
+mod tests;
