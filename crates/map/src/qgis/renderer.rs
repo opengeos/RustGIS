@@ -359,8 +359,9 @@ fn rules(r: Node, layer: &str, style: &mut Style, report: &mut Report, sym: &Sym
         unique(style, field, None, classes, other.as_ref(), other_label);
         return;
     }
-    // One rule (or none but an else): its symbol for every feature.
-    if drawn.len() == 1 && drawn.first().is_some_and(|r| r.filters.is_empty() && r.else_of.is_empty() && !r.scaled()) || drawn.is_empty() {
+    // One rule (or none but an else, beside nothing that draws): its symbol for every feature.
+    let plain = |r: &&Rule| r.filters.is_empty() && r.else_of.iter().all(|s| s.as_ref().as_ref().is_some_and(Vec::is_empty)) && !r.scaled();
+    if drawn.len() == 1 && drawn.first().is_some_and(plain) || drawn.is_empty() {
         if let Some(c) = drawn.first().and_then(|r| sym(r.node.attribute("symbol"), report)) {
             single(style, &c);
         }
@@ -450,8 +451,11 @@ fn by_expression(drawn: &[&Rule], style: &mut Style, report: &mut Report, sym: &
     for (i, rule) in drawn.iter().enumerate() {
         let Some(c) = sym(rule.node.attribute("symbol"), report) else { continue };
         // A top-level else rule at every scale: the rest.
-        if rule.else_of.len() == 1 && rule.filters.is_empty() && !rule.scaled() && other.is_none() {
-            (other, other_label) = (Some(c), else_label(rule));
+        // (A later one draws nothing more: a feature is drawn with the first rule it meets.)
+        if rule.else_of.len() == 1 && rule.filters.is_empty() && !rule.scaled() {
+            if other.is_none() {
+                (other, other_label) = (Some(c), else_label(rule));
+            }
             continue;
         }
         let Some(mut parts) = rule.filters.iter().map(quoted).collect::<Option<Vec<String>>>() else { return false };

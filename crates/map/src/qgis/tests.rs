@@ -1453,6 +1453,29 @@ fn a_rule_based_renderer_classes_each_feature_by_the_first_rule_it_meets() {
     assert_eq!(at(None), named(&[Some("a"), Some("big"), Some("fn"), Some("inner"), None]));
 }
 
+/// A renderer whose only rule is an else rule draws every feature with its symbol: one symbol,
+/// nothing approximated.
+#[test]
+fn a_lone_else_rule_is_one_symbol() {
+    let qml = r#"<qgis version="3.40.0"><renderer-v2 type="RuleRenderer"><rules key="r"><rule filter="ELSE" symbol="0" label="All"/></rules>
+        <symbols><symbol type="marker" name="0"><layer class="SimpleMarker" enabled="1"/></symbol></symbols></renderer-v2></qgis>"#;
+    let mut report = Report::default();
+    let s = read_style(qml, "points", &mut report).unwrap();
+    assert!(matches!(s.renderer, Some(Renderer::Single(_))), "{:?}", s.renderer);
+    assert!(report.notes.is_empty(), "{:?}", report.notes);
+    // Of two top-level else rules, the first draws the rest; the second adds no class.
+    let qml = r#"<qgis version="3.40.0"><renderer-v2 type="RuleRenderer"><rules key="r">
+        <rule filter="&quot;value&quot; &gt;= 20 AND &quot;kind&quot; = 'a'" symbol="0" label="A"/>
+        <rule filter="ELSE" symbol="1" label="First rest"/><rule filter="ELSE" symbol="0" label="Second rest"/></rules>
+        <symbols><symbol type="marker" name="0"><layer class="SimpleMarker" enabled="1"/></symbol>
+        <symbol type="marker" name="1"><layer class="SimpleMarker" enabled="1"/></symbol></symbols></renderer-v2></qgis>"#;
+    let s = read_style(qml, "points", &mut Report::default()).unwrap();
+    let mut l = rule_points(&[("a", 30, "q"), ("b", 30, "q")]);
+    s.apply(&mut l);
+    assert_eq!(rule_classes(&l, None), [Some("A".to_string()), None]);
+    assert!(matches!(&l.renderer, Renderer::Unique { other_label: Some(o), .. } if o == "First rest"), "{:?}", l.renderer);
+}
+
 #[test]
 fn rules_keep_their_scales_else_rules_and_switched_off_groups() {
     let qml = r#"<qgis version="3.40.0"><renderer-v2 type="RuleRenderer"><rules key="r">
@@ -1621,6 +1644,7 @@ fn a_label_else_rule_too_long_to_read_is_noted() {
     let mut l = rule_points(&[("a", 1, "x")]);
     s.apply(&mut l);
     assert!(l.labels.class("Rest").is_none());
+    assert!(l.labels.class("R0").is_some() && l.labels.class("R59").is_some(), "its siblings are kept");
     assert!(report.notes.iter().any(|n| n.text.contains("\"Rest\"")), "{:?}", report.notes);
 }
 
@@ -1670,7 +1694,12 @@ fn label_else_rules_take_what_their_siblings_dont_at_their_scales() {
         r#"<rule description="Group" scalemaxdenom="10000"><rule filter="&quot;kind&quot; = 'a'" description="Inner" scalemaxdenom="50000">{settings}</rule></rule>"#
     ));
     assert_eq!(names(&l, 5_000.0, 0), ["Inner"]);
-    assert!(l.labels.class("Inner").and_then(|c| c.min_scale).is_some_and(|out| out < 20_000.0));
+    assert!(l.labels.class("Inner").and_then(|c| c.min_scale).is_some_and(|out| (out - 10_000.0 * QGIS_SCALE).abs() < 1e-6));
+    // Its settings' own range too keeps within the group's.
+    let l = read(
+        r#"<rule description="Group" scalemaxdenom="10000"><rule description="Own"><settings><text-style fieldName="name"/><rendering scaleVisibility="1" scaleMin="50000"/></settings></rule></rule>"#,
+    );
+    assert!(l.labels.class("Own").and_then(|c| c.min_scale).is_some_and(|out| (out - 10_000.0 * QGIS_SCALE).abs() < 1e-6));
 }
 
 #[test]

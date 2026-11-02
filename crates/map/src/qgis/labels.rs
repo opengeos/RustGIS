@@ -263,12 +263,19 @@ fn class(
         child(settings, "text-format").map_or((None, 0, follow_placement(placement)), |f| wrapping(f, placement, layer, report));
     let repeat = child(settings, "placement").and_then(|p| repeat(p, placement, geometry, layer, report));
     unread(settings, geometry, layer, report);
-    // The settings' own scale range, else the rule's.
+    // Within the settings' own scale range and the rule's (and its parents').
     let rendering = child(settings, "rendering");
     let (mut min_scale, mut max_scale) = scales;
     if let Some(r) = rendering.filter(|r| r.attribute("scaleVisibility") == Some("1")) {
-        min_scale = num(r, "scaleMin").filter(|v| *v > 0.0).map(|v| v * QGIS_SCALE).or(min_scale);
-        max_scale = num(r, "scaleMax").filter(|v| *v > 0.0).map(|v| v * QGIS_SCALE).or(max_scale);
+        let limit = |k: &str| num(r, k).filter(|v| *v > 0.0).map(|v| v * QGIS_SCALE);
+        min_scale = match (limit("scaleMin"), min_scale) {
+            (Some(own), Some(rule)) => Some(own.min(rule)),
+            (own, rule) => own.or(rule),
+        };
+        max_scale = match (limit("scaleMax"), max_scale) {
+            (Some(own), Some(rule)) => Some(own.max(rule)),
+            (own, rule) => own.or(rule),
+        };
     }
     Some(LabelClass {
         name: name.to_string(),

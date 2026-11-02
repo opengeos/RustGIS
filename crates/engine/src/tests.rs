@@ -916,9 +916,15 @@ fn unique_values_class_by_an_expression() {
     let line = style["layers"].as_array().unwrap().iter().find(|l| l["type"] == "line").unwrap();
     assert_eq!(line["paint"]["line-color"], json!(first));
     std::fs::remove_dir_all(&dir).ok();
-    // Deleting a field it reads: a single symbol, as for a renderer on that field.
+    // Deleting a field it reads: a single symbol, as for a renderer on that field, and said.
+    let mark = s.notice_mark();
     s.run("edit.deleteField", &json!({"layer": "Cities", "field": "pop_max"})).unwrap();
     assert!(matches!(s.map().layer_by_name("Cities").unwrap().renderer, rustgis_map::Renderer::Single(_)));
+    assert!(s.notices_since(mark).iter().any(|n| n.text.contains("drawn with a single symbol")), "{:?}", s.notices_since(mark));
+    // A field nothing draws by goes without a word about the symbols.
+    let mark = s.notice_mark();
+    s.run("edit.deleteField", &json!({"layer": "Cities", "field": "name"})).unwrap();
+    assert!(!s.notices_since(mark).iter().any(|n| n.text.contains("single symbol")), "{:?}", s.notices_since(mark));
 }
 
 #[test]
@@ -962,6 +968,18 @@ fn qgis_rules_class_features_and_say_which_several_rules_pick() {
         <rule filter="&quot;pop_max&quot; &gt; 5000000" symbol="1"/>"#;
     let said = notes(&s.run("style.importQgis", &json!({"layer": "Cities", "text": qml(quoted)})).unwrap());
     assert!(said.iter().any(|n| n.contains(&format!("{both} features that more than one of its rules picks"))), "{said:?}");
+    // Only the features its definition query keeps are counted.
+    let cities = s.map().layer_by_name("Cities").unwrap();
+    let shown = (0..cities.dataset.features.len())
+        .filter(|r| {
+            cities.dataset.field_index("pop_max").and_then(|f| cities.dataset.value(*r, f).as_f64()).is_some_and(|v| v > 10_000_000.0)
+        })
+        .count();
+    assert!(shown > 0 && shown < both);
+    s.run("layer.definitionQuery", &json!({"layer": "Cities", "where": "pop_max > 10000000"})).unwrap();
+    let said = notes(&s.run("style.importQgis", &json!({"layer": "Cities", "text": qml(rules)})).unwrap());
+    assert!(said.iter().any(|n| n.contains(&format!("{shown} features that more than one of its rules picks"))), "{said:?}");
+    s.run("layer.definitionQuery", &json!({"layer": "Cities", "where": ""})).unwrap();
     // An else rule picks what its siblings don't: nothing two rules pick.
     let rest = r#"<rule filter="&quot;pop_max&quot; &gt; 0"><rule filter="&quot;pop_max&quot; &lt; 1000000" symbol="0"/><rule filter="ELSE" symbol="1"/></rule>"#;
     let said = notes(&s.run("style.importQgis", &json!({"layer": "Cities", "text": qml(rest)})).unwrap());

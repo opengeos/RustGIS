@@ -1373,12 +1373,14 @@ impl Renderer {
             return self.legend();
         };
         // A fallback that draws nothing has nothing to stand for in a legend: its own symbol as
-        // `Symbol::draws` has it (as a web style does), else its stacked strokes, or for areas
-        // and points its stacked fills (a point of size 0 draws none of them).
-        let lines = ds.geometry_type == GeometryType::Polyline;
-        let strokes = other_strokes.iter().any(|s| s.color.unwrap_or(other.stroke).a() > 0 && s.width.unwrap_or(other.stroke_width) > 0.0);
+        // `Symbol::draws` has it (as a web style does), else its stacked strokes (on lines and
+        // points) or stacked fills (on areas); a point of size 0 draws none of them.
+        let polygon = ds.geometry_type == GeometryType::Polygon;
+        let strokes = !polygon
+            && other_strokes.iter().any(|s| s.color.unwrap_or(other.stroke).a() > 0 && s.width.unwrap_or(other.stroke_width) > 0.0);
+        let fills = polygon && other_fills.iter().any(|f| f.draws(other.fill));
         let sized = ds.geometry_type != GeometryType::Point || other.size > 0.0;
-        let visible = other.draws(ds.geometry_type) || (sized && (strokes || (!lines && other_fills.iter().any(|f| f.draws(other.fill)))));
+        let visible = other.draws(ds.geometry_type) || (sized && (strokes || fills));
         if expression.is_some() && ds.features.len().saturating_mul(classes.len().max(1)) > MAX_LEGEND_STEPS {
             let mut all = self.legend();
             all.retain(|e| visible || !e.fallback);
@@ -3163,6 +3165,8 @@ mod tests {
         let mut hairline = stroked;
         hairline.stroke_width = 0.0;
         assert_eq!(labels(&with_other(&r, hairline), &[]), ["a"]);
+        // A line's stroke draws whatever its width.
+        assert!(!with_other(&r, hairline).legend_for(&lines, &[]).is_empty());
         let mut points = Dataset::new("p", GeometryType::Point, vec![Field::new("g", FieldType::Text)]);
         points.push(None, vec![Value::Text("z".into())]);
         let mut dot = Symbol::default_for(GeometryType::Point, 3);
