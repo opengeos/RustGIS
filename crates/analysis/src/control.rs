@@ -114,6 +114,16 @@ pub(crate) fn reached(done: usize) {
     });
 }
 
+/// Counts every item of the step done: the tool has finished it (a loop counting with [`reached`]
+/// otherwise ends one short).
+pub(crate) fn finish() {
+    CURRENT.with(|c| {
+        if let Some(c) = c.borrow().as_ref() {
+            c.done.store(c.total.load(Ordering::Relaxed), Ordering::Relaxed);
+        }
+    });
+}
+
 /// Counts `n` more items of the step done.
 pub(crate) fn advance(n: usize) {
     CURRENT.with(|c| {

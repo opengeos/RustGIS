@@ -1357,6 +1357,7 @@ fn buffer_with_limits(inp: &dyn Inputs, p: &Json, limit: usize, bytes: usize) ->
         }
         if !all.is_empty() {
             out.fields.clear();
+            crate::control::check()?;
             // The union isn't counted: the buffers' count ends here rather than stand at its end.
             crate::control::begin(0);
             let u = union_all(all.iter().flat_map(|m| m.0.iter()));
@@ -6185,6 +6186,14 @@ mod tests {
         // The same control for a tool that doesn't count shows no count, not the buffers'.
         crate::run_with("convexHull", &m, &serde_json::json!({"input": "pts"}), &control).unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(control.progress(), None);
+        // Dissolved, the union after the buffers isn't counted: the buffers' count ends before it.
+        let dissolve = serde_json::json!({"input": "pts", "distance": 100.0, "dissolve": "All"});
+        crate::run_with("buffer", &m, &dissolve, &control).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(control.progress(), None);
+        // A loop counting each feature as it reaches it ends with all of them counted.
+        let near = serde_json::json!({"input": "pts", "select": "pts", "distance": 10.0});
+        crate::run_with("selectByLocation", &m, &near, &control).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(control.progress(), Some((40, 40)));
     }
 
     #[test]

@@ -431,6 +431,11 @@ pub fn run_with(id: &str, inputs: &dyn Inputs, params: &Value, control: &std::sy
     control::begin(0);
     let res = run(id, inputs, params);
     if !control.is_cancelled() {
+        // Finished: its last step is all done, however it counted. A failed one stays where it
+        // stopped.
+        if res.is_ok() {
+            control::finish();
+        }
         return res;
     }
     let name = tool(id).map_or(id, |t| t.name);
