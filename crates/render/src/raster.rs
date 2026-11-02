@@ -155,10 +155,11 @@ pub(crate) fn draw_in_place(
     let full_px = want.per_px * f64::from(full.0) / f64::from(r.width.max(1));
     let fine_enough = |l: &rustgis_data::raster::cog::Level| f64::from(full.0) / f64::from(l.width.max(1)) <= full_px * 1.25;
     let mut level = levels.iter().rposition(fine_enough).unwrap_or(0);
-    // The renderer's bands, then the image's alpha band, read as the window's own bands.
+    // The renderer's bands, then the image's alpha band (again, when a colour draws it too), read
+    // as the window's own bands, as `draw` reads a raster held whole.
     let mut read = bands.clone();
     let alpha = match (&style.renderer, &r.color) {
-        (RasterRenderer::Rgb { .. }, ColorHint::Rgb { alpha: true }) if r.band_count() >= 4 && !read.contains(&3) => Some(3),
+        (RasterRenderer::Rgb { .. }, ColorHint::Rgb { alpha: true }) if r.band_count() >= 4 => Some(3),
         (RasterRenderer::Stretch { band: 0, .. } | RasterRenderer::ShadedRelief { band: 0, .. }, ColorHint::GrayAlpha) => Some(1),
         _ => None,
     };
@@ -204,14 +205,23 @@ pub(crate) fn draw_in_place(
         whole(pm);
         return w.pending;
     };
-    // Until its tiles arrive, the part in view goes over the overview.
-    if w.pending {
-        whole(pm);
-    }
     let mut own_style = style.clone();
     own_style.renderer = renumbered(&style.renderer);
+    // Until its tiles arrive, the part in view goes over the overview: both drawn opaque, then
+    // blended once, so a see-through layer isn't darker where they overlap.
+    if w.pending {
+        if opacity >= 1.0 {
+            whole(pm);
+            draw(pm, &part, &own_style, Some(stats), view, 1.0, full_res, place);
+        } else if let Some(mut both) = Pixmap::new(pm.width(), pm.height()) {
+            draw(&mut both, r, style, Some(stats), view, 1.0, full_res, place);
+            draw(&mut both, &part, &own_style, Some(stats), view, 1.0, full_res, place);
+            pm.draw_pixmap(0, 0, both.as_ref(), &PixmapPaint { opacity, ..PixmapPaint::default() }, Transform::identity(), None);
+        }
+        return true;
+    }
     draw(pm, &part, &own_style, Some(stats), view, opacity, full_res, place);
-    w.pending
+    false
 }
 
 /// A renderer drawing the same bands of a raster holding only those, in its order (see
@@ -248,11 +258,19 @@ fn in_view(r: &Raster, view: &View, place: Place, width: u32, height: u32, full_
     let grid: Vec<Option<(f64, f64)>> = (0..n * n).map(|p| at(p % n, p / n)).collect();
     let (mut c0, mut c1, mut r0, mut r1) = (f64::INFINITY, f64::NEG_INFINITY, f64::INFINITY, f64::NEG_INFINITY);
     let (rw, rh) = (f64::from(r.width), f64::from(r.height));
+    // A geographic grid stored from 0 to 360° has the places west of 0° at its far columns (see
+    // `Raster::wrap_col`): seen across that seam, the part in view is the whole width.
+    let mut wrapped = false;
     for (c, row) in grid.iter().flatten() {
-        c0 = c0.min(c.clamp(0.0, rw));
-        c1 = c1.max(c.clamp(0.0, rw));
+        let w = r.wrap_col(*c);
+        wrapped |= w != *c;
+        c0 = c0.min(w.clamp(0.0, rw));
+        c1 = c1.max(w.clamp(0.0, rw));
         r0 = r0.min(row.clamp(0.0, rh));
         r1 = r1.max(row.clamp(0.0, rh));
+    }
+    if wrapped {
+        (c0, c1) = (0.0, rw);
     }
     if !(c0 < c1 && r0 < r1) {
         return None;
@@ -399,6 +417,7 @@ fn draw_with(
         relief,
         resampling,
         alpha_band,
+        alpha_max: rustgis_data::raster::alpha_max(&r.data_type),
         cell: r.cell_size_m(),
         mask: &style.mask,
     };
@@ -486,6 +505,8 @@ struct Pass1<'a> {
     relief: Option<(f64, f64, f64)>,
     resampling: Resampling,
     alpha_band: Option<usize>,
+    /// The alpha band's opaque value (its pixel type's: 65535 for 16 bits).
+    alpha_max: f32,
     cell: (f64, f64),
     /// Values drawn as no data.
     mask: &'a RasterMask,
@@ -558,7 +579,7 @@ impl Pass1<'_> {
                     last = Some((cell, dx));
                 }
                 if let (Some(ab), Some(a)) = (self.alpha_band, alpha.get_mut(i)) {
-                    *a = r.value(ab, cell.0, cell.1).map(|v| v.clamp(0.0, 255.0) as u8).unwrap_or(0);
+                    *a = r.value(ab, cell.0, cell.1).map(|v| ((v / self.alpha_max).clamp(0.0, 1.0) * 255.0).round() as u8).unwrap_or(0);
                     if *a == 0 {
                         continue;
                     }

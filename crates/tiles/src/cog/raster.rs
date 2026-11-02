@@ -19,24 +19,35 @@ use super::{BUDGET, Bands, Info, RETRY, TileState, Tiles, fetch_all, get_tile, s
 const OVERVIEW_SAMPLES: usize = if cfg!(target_arch = "wasm32") { 1 << 20 } else { 2 << 20 };
 /// The most chunks read for it.
 const OVERVIEW_CHUNKS: usize = 512;
+/// The most chunks of the coarsest level, held when no level fits [`OVERVIEW_SAMPLES`] (a file
+/// with few or no overviews); its samples are bounded by half the tiles kept.
+const FALLBACK_CHUNKS: usize = 4096;
 /// The most samples of one band of a view's window (a large screen's worth, and more).
 pub const WINDOW_SAMPLES: usize = 16 << 20;
 
 /// The level a layer holds as its overview: the finest whose every band fits [`OVERVIEW_SAMPLES`]
-/// in at most [`OVERVIEW_CHUNKS`] chunks, else the coarsest.
-pub fn overview_level(info: &Info) -> usize {
+/// in at most [`OVERVIEW_CHUNKS`] chunks, else the coarsest when it fits half the tiles kept in at
+/// most [`FALLBACK_CHUNKS`]; `None` when not even that does (a large image without overviews).
+pub fn overview_level(info: &Info) -> Option<usize> {
     let layout = &info.layout;
     let bands = layout.bands.max(1);
     let planes = if layout.planar { bands } else { 1 };
+    let size = |l: &rustgis_data::raster::cog::Level| {
+        let samples = (l.width as usize).saturating_mul(l.height as usize).saturating_mul(bands);
+        (samples, (l.tiles() as usize).saturating_mul(planes))
+    };
     layout
         .levels
         .iter()
         .position(|l| {
-            let samples = (l.width as usize).saturating_mul(l.height as usize).saturating_mul(bands);
-            let chunks = (l.tiles() as usize).saturating_mul(planes);
+            let (samples, chunks) = size(l);
             samples <= OVERVIEW_SAMPLES && chunks <= OVERVIEW_CHUNKS
         })
-        .unwrap_or(layout.levels.len().saturating_sub(1))
+        .or_else(|| {
+            let last = layout.levels.len().checked_sub(1)?;
+            let (samples, chunks) = size(layout.levels.get(last)?);
+            (samples <= BUDGET / 2 && chunks <= FALLBACK_CHUNKS).then_some(last)
+        })
 }
 
 /// Reads a file's overview (see [`overview_level`]) as a raster, every band, then calls `done`.
@@ -62,9 +73,16 @@ pub fn overview_blocking(url: &str) -> Result<Raster, String> {
 }
 
 fn read_overview(info: Arc<Info>, url: String, done: Box<dyn FnOnce(Result<Raster, String>) + Send>) {
-    let level = overview_level(&info);
-    let Some(l) = info.layout.levels.get(level) else {
+    let Some(coarsest) = info.layout.levels.last() else {
         done(Err(format!("{url}: the GeoTIFF has no image")));
+        return;
+    };
+    let Some((level, l)) = overview_level(&info).and_then(|i| Some((i, info.layout.levels.get(i)?))) else {
+        done(Err(format!(
+            "{url}: its smallest image, {} × {} with {} band(s), is too large to hold as the layer's overview: \
+             a GeoTIFF with overviews (as GDAL's COG driver or gdaladdo make) is read in place",
+            coarsest.width, coarsest.height, info.layout.bands
+        )));
         return;
     };
     let bands: Vec<usize> = (0..info.layout.bands.max(1)).collect();
@@ -99,6 +117,7 @@ fn read_overview(info: Arc<Info>, url: String, done: Box<dyn FnOnce(Result<Raste
                 if let Some(full) = i.layout.levels.first().filter(|_| level > 0) {
                     r.overview = Some((full.width, full.height));
                 }
+                r.palette_missing = i.layout.palette_missing;
                 r.source = Some(url.clone());
                 Ok(r)
             }))
@@ -152,8 +171,9 @@ pub struct Window {
     pub pending: bool,
 }
 
-/// Tiles whose read failed lately, and when: not asked for again until [`RETRY`] has passed, so a
-/// map drawn again and again doesn't ask for them each time.
+/// Tiles whose read failed lately, and until when they aren't asked for again ([`RETRY`] after, or
+/// as long as their server asked to be left), so a map drawn again and again doesn't ask for them
+/// each time. The map is drawn again when that time comes.
 fn failed() -> &'static Mutex<HashMap<(String, usize, u32), Instant>> {
     static F: OnceLock<Mutex<HashMap<(String, usize, u32), Instant>>> = OnceLock::new();
     F.get_or_init(Mutex::default)
@@ -202,8 +222,20 @@ pub fn window(url: &str, level: usize, cols: (u32, u32), rows: (u32, u32), bands
     let mut pending = kept.len() < chunks.len();
     {
         let mut f = failed().lock().unwrap_or_else(|e| e.into_inner());
-        f.retain(|_, at| at.elapsed() < RETRY);
-        ask.retain(|c| !f.contains_key(&(file.to_string(), level, *c)));
+        let now = Instant::now();
+        f.retain(|_, until| now < *until);
+        // Those failed lately wait; the map draws again when the first may be asked for.
+        let mut next: Option<Instant> = None;
+        ask.retain(|c| match f.get(&(file.to_string(), level, *c)) {
+            Some(until) => {
+                next = Some(next.map_or(*until, |n| n.min(*until)));
+                false
+            }
+            None => true,
+        });
+        if let Some(at) = next {
+            crate::cache::notify_at(at);
+        }
     }
     // Tiles that failed lately aren't waited for (the map would wait for them for nothing).
     if ask.is_empty() && pending {
@@ -218,22 +250,25 @@ pub fn window(url: &str, level: usize, cols: (u32, u32), rows: (u32, u32), bands
             level,
             c,
             Box::new(move |r| {
-                if r.is_err() {
+                if let Err(e) = r {
+                    let until = Instant::now() + crate::cache::retry_wait(&e, RETRY);
                     let mut f = failed().lock().unwrap_or_else(|e| e.into_inner());
                     if f.len() < MAX_FAILED {
-                        f.insert(key, Instant::now());
+                        f.insert(key, until);
                     }
+                    drop(f);
+                    crate::cache::notify_at(until);
                 }
                 crate::cache::notify();
             }),
         );
         pending = true;
     }
-    let (mut data, missing) = assemble(&info, level, (c0, c1), (r0, r1), bands, |c| kept.get(&c).cloned());
+    let (mut data, gaps) = assemble(&info, level, (c0, c1), (r0, r1), bands, |c| kept.get(&c).cloned());
     // Until they arrive, its missing tiles show the levels kept (the one zoomed from), not holes.
-    if missing {
+    if !gaps.is_empty() {
         let mut t = tiles().lock().unwrap_or_else(|e| e.into_inner());
-        stand_in(&mut t, &info, file, level, (c0, c1), (r0, r1), bands, &mut data);
+        stand_in(&mut t, &info, file, level, (c0, c1), (r0, r1), bands, &mut data, &gaps);
     }
     let t = info.layout.transform_of(l);
     let transform = rustgis_data::raster::GeoTransform {
@@ -256,9 +291,18 @@ pub fn window(url: &str, level: usize, cols: (u32, u32), rows: (u32, u32), bands
     Ok(Window { raster: Some(raster), pending })
 }
 
-/// Fills the pixels of a window of `level` that have no value (NaN) from the other levels' tiles
-/// kept, the nearest first (the finer, then the coarser, then further): the level zoomed from
-/// stands in for the one zoomed to until its tiles arrive. Nothing is fetched.
+/// A part of a window a chunk not kept leaves empty: the band (its place among those read), and
+/// its columns and rows (half-open, in the level's pixels).
+struct Gap {
+    k: usize,
+    cols: (u32, u32),
+    rows: (u32, u32),
+}
+
+/// Fills the `gaps` of a window of `level` from the other levels' tiles kept, the nearest first
+/// (the finer, then the coarser, then further): the level zoomed from stands in for the one zoomed
+/// to until its tiles arrive. Only the gaps are filled: a tile's own no-data pixels stay empty.
+/// Nothing is fetched.
 #[allow(clippy::too_many_arguments)]
 fn stand_in(
     t: &mut Tiles,
@@ -269,10 +313,19 @@ fn stand_in(
     rows: (u32, u32),
     bands: &[usize],
     data: &mut [Vec<f32>],
+    gaps: &[Gap],
 ) {
     let levels = &info.layout.levels;
     let Some(l) = levels.get(level) else { return };
     let ww = (cols.1 - cols.0) as usize;
+    // The pixels still to fill, by band (its place among those read), as places in the window.
+    let mut left: Vec<(usize, Vec<usize>)> = gaps
+        .iter()
+        .map(|g| {
+            let at = |y: u32, x: u32| (y - rows.0) as usize * ww + (x - cols.0) as usize;
+            (g.k, (g.rows.0..g.rows.1).flat_map(|y| (g.cols.0..g.cols.1).map(move |x| at(y, x))).collect())
+        })
+        .collect();
     // The other levels, nearest first.
     let others: Vec<usize> =
         (1..levels.len()).flat_map(|d| [level.checked_sub(d), Some(level + d)]).flatten().filter(|o| *o < levels.len()).collect();
@@ -282,18 +335,20 @@ fn stand_in(
         let (tw, th) = (ol.tile_width.max(1), ol.tile_height.max(1));
         // The chunks of that level found so far (none: not kept).
         let mut found: HashMap<u32, Option<Bands>> = HashMap::new();
-        let mut left = false;
-        for (k, &b) in bands.iter().enumerate() {
-            let Some(dst) = data.get_mut(k) else { continue };
+        for (k, todo) in &mut left {
+            let (Some(&b), Some(dst)) = (bands.get(*k), data.get_mut(*k)) else {
+                todo.clear();
+                continue;
+            };
             // The chunk the last pixel came from: its neighbours mostly share it.
             let mut last: Option<(u32, Option<Bands>)> = None;
-            for (i, v) in dst.iter_mut().enumerate().filter(|(_, v)| v.is_nan()) {
+            todo.retain(|&i| {
                 let (x, y) = (cols.0 as usize + i % ww, rows.0 as usize + i / ww);
                 // The pixel of that level under this one's centre.
                 let ox = (((x as f64 + 0.5) * sx) as u32).min(ol.width.saturating_sub(1));
                 let oy = (((y as f64 + 0.5) * sy) as u32).min(ol.height.saturating_sub(1));
                 let tile = (oy / th) * ol.across() + ox / tw;
-                let Some((c, at)) = info.layout.chunk(ol, tile, b) else { continue };
+                let Some((c, at)) = info.layout.chunk(ol, tile, b) else { return true };
                 if last.as_ref().is_none_or(|(lc, _)| *lc != c) {
                     let chunk = found.entry(c).or_insert_with(|| t.used(&(file.to_string(), o, c))).clone();
                     last = Some((c, chunk));
@@ -303,21 +358,26 @@ fn stand_in(
                     .and_then(|(_, ch)| ch.as_ref())
                     .and_then(|ch| ch.get(at))
                     .and_then(|p| p.get(((oy % th) * tw + ox % tw) as usize));
-                match value {
-                    Some(s) => *v = *s,
-                    None => left = true,
+                match (value, dst.get_mut(i)) {
+                    // That level's value, no data included: it is what the image has there.
+                    (Some(s), Some(v)) => {
+                        *v = *s;
+                        false
+                    }
+                    _ => true,
                 }
-            }
+            });
         }
-        if !left {
+        left.retain(|(_, todo)| !todo.is_empty());
+        if left.is_empty() {
             return;
         }
     }
 }
 
 /// The pixels of columns `cols` and rows `rows` (half-open) of a level, bands `bands` in that
-/// order, each row by row, from the chunks `chunk` gives (NaN where it gives none), and whether
-/// any was missing.
+/// order, each row by row, from the chunks `chunk` gives (NaN where it gives none), and the gaps
+/// the chunks it doesn't give leave.
 fn assemble(
     info: &Info,
     level: usize,
@@ -325,12 +385,12 @@ fn assemble(
     rows: (u32, u32),
     bands: &[usize],
     chunk: impl Fn(u32) -> Option<Bands>,
-) -> (Vec<Vec<f32>>, bool) {
+) -> (Vec<Vec<f32>>, Vec<Gap>) {
     let (ww, wh) = ((cols.1 - cols.0) as usize, (rows.1 - rows.0) as usize);
     let mut out = vec![vec![f32::NAN; ww * wh]; bands.len()];
-    let Some(l) = info.layout.levels.get(level) else { return (out, true) };
+    let mut gaps = Vec::new();
+    let Some(l) = info.layout.levels.get(level) else { return (out, gaps) };
     let (tw, th) = (l.tile_width.max(1), l.tile_height.max(1));
-    let mut missing = false;
     for ty in rows.0 / th..rows.1.div_ceil(th) {
         for tx in cols.0 / tw..cols.1.div_ceil(tw) {
             let tile = ty * l.across() + tx;
@@ -340,7 +400,7 @@ fn assemble(
             for (k, &b) in bands.iter().enumerate() {
                 let Some((c, at)) = info.layout.chunk(l, tile, b) else { continue };
                 let Some(data) = chunk(c) else {
-                    missing = true;
+                    gaps.push(Gap { k, cols: (x0, x1), rows: (y0, y1) });
                     continue;
                 };
                 let (Some(plane), Some(dst)) = (data.get(at), out.get_mut(k)) else { continue };
@@ -355,12 +415,71 @@ fn assemble(
             }
         }
     }
-    (out, missing)
+    (out, gaps)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use rustgis_data::raster::cog::{Example, Level, Parse, Sparse, example_with, layout};
+
+    /// A file's info, as reading its header gives it.
+    fn info_of(file: Vec<u8>) -> Info {
+        let Ok(Parse::Done(layout)) = layout(&Sparse::default().with(0, file)) else { panic!("not a COG") };
+        let transformer = layout.crs.transformer().unwrap();
+        Info {
+            layout: *layout,
+            header: Sparse::default(),
+            transformer,
+            bounds: [0.0; 4],
+            merc: [0.0; 4],
+            min_zoom: 0,
+            max_zoom: 0,
+            stretch: Mutex::default(),
+            stretching: Mutex::default(),
+            stretch_failed: Mutex::default(),
+            alpha: None,
+        }
+    }
+
+    /// The overview held is the finest small one; without one, the coarsest if it fits half the
+    /// tiles kept; else none, rather than reading a large image whole.
+    #[test]
+    fn the_overview_held_is_bounded() {
+        let mut info = info_of(example_with(&Example { size: 4096, tile: 256, ..Example::default() }));
+        // 4096, 2048, 1024 … a side: 1024 a side is a million values.
+        assert_eq!(overview_level(&info).and_then(|l| info.layout.levels.get(l)).map(|l| l.width), Some(1024));
+        let first = info.layout.levels[0].clone();
+        let level = |side: u32| Level { width: side, height: side, ..first.clone() };
+        // Only the full image, 4096 a side (16 million values in 256 tiles): held.
+        info.layout.levels = vec![level(4096)];
+        assert_eq!(overview_level(&info), Some(0));
+        // One 20 000 a side (400 million values in 6241 tiles): none.
+        info.layout.levels = vec![level(20_000)];
+        assert_eq!(overview_level(&info), None);
+    }
+
+    /// A window's missing tiles are filled from the level kept, but not its own no-data pixels.
+    #[test]
+    fn stand_ins_fill_only_the_tiles_missing() {
+        let info = info_of(example_with(&Example { size: 64, tile: 16, ..Example::default() }));
+        let file = "test://stand-in.tif";
+        // Level 1 (32 a side) kept: its tile 0 is level 0's pixels 0 to 32, all 7.
+        let mut t = Tiles::default();
+        let _ = t.keep((file.to_string(), 1, 0), Arc::new(vec![vec![7.0; 16 * 16]]), 256);
+        // Level 0's tile 0 here, one pixel of it no data; tile 1, right of it, not yet.
+        let mut own = vec![3.0; 16 * 16];
+        own[16 + 1] = f32::NAN;
+        let own: Bands = Arc::new(vec![own]);
+        let (cols, rows) = ((0, 32), (0, 16));
+        let (mut data, gaps) = assemble(&info, 0, cols, rows, &[0], |c| (c == 0).then(|| own.clone()));
+        assert_eq!(gaps.len(), 1);
+        stand_in(&mut t, &info, file, 0, cols, rows, &[0], &mut data, &gaps);
+        let at = |x: usize, y: usize| data[0][y * 32 + x];
+        assert_eq!((at(0, 0), at(20, 5), at(31, 15)), (3.0, 7.0, 7.0), "tile 1 from level 1");
+        assert!(at(1, 1).is_nan(), "tile 0's no-data pixel stays empty");
+    }
 
     #[test]
     fn names_from_addresses() {

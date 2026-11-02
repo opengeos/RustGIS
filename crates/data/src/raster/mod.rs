@@ -351,6 +351,20 @@ impl Band {
     }
 }
 
+/// An alpha band's opaque value for a pixel type (`UInt16`: 65535): the type's largest, 1 for
+/// floating point (as TIFF keeps it), 255 for bytes and anything else.
+pub fn alpha_max(data_type: &str) -> f32 {
+    match data_type {
+        "Int8" => 127.0,
+        "Int16" => 32767.0,
+        "UInt16" => 65535.0,
+        "Int32" => 2_147_483_647.0,
+        "UInt32" => 4_294_967_295.0,
+        "Float32" | "Float64" => 1.0,
+        _ => 255.0,
+    }
+}
+
 /// How a raster's bands were meant to be shown, from the file.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub enum ColorHint {
@@ -389,6 +403,8 @@ pub struct Raster {
     /// values with more digits than `f32` holds), by band; empty when none did. NaN and no-data
     /// values aren't counted.
     pub rounded: Vec<u64>,
+    /// A palette image whose colour table is missing or short: drawn in grey instead.
+    pub palette_missing: bool,
     transformer: Transformer,
     extent: Extent,
 }
@@ -488,6 +504,7 @@ impl Raster {
             overview: None,
             georeferenced: true,
             rounded: Vec::new(),
+            palette_missing: false,
             transformer,
             extent: Extent::EMPTY,
         };

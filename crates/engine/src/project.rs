@@ -666,9 +666,10 @@ impl Project {
             }
             // Tile layers with an address that can't be fetched (a hand edit) are dropped.
             m.tiles.retain_mut(|t| t.repair().map_err(|e| log::warn!("{}: {e}", m.name)).is_ok());
-            m.tiles.truncate(rustgis_map::tiles::MAX_TILE_LAYERS);
-            // GeoTIFFs read in place are raster layers (a project from before saved tile layers).
+            // GeoTIFFs read in place are raster layers (a project from before saved tile layers),
+            // so they don't count toward the tile layers kept.
             crate::cmd::tiles::cog_tiles_to_rasters(m);
+            m.tiles.truncate(rustgis_map::tiles::MAX_TILE_LAYERS);
             #[cfg(not(target_arch = "wasm32"))]
             for t in &mut m.tiles {
                 if t.error.is_none()
@@ -697,8 +698,10 @@ impl Project {
                         src.error = Some(error);
                     }
                 }
+                // Read in place, read together below.
                 if let Some(rl) = &mut l.raster
                     && rl.data.is_none()
+                    && !rl.in_place
                     && !rl.path.as_deref().is_some_and(crate::s3_connections::is_s3_backed)
                     && unresolved.is_none()
                     && let Err(e) = rl.reload()
@@ -726,6 +729,7 @@ impl Project {
                 }
                 l.touch_geometry();
             }
+            read_in_place(m);
         }
     }
 
@@ -920,6 +924,29 @@ impl Project {
         let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
         let dir = std::path::absolute(path).ok().and_then(|p| p.parent().map(Path::to_path_buf));
         Self::read_json(&text, true, dir.as_deref())
+    }
+}
+
+/// Reads the overviews of a map's raster layers read in place and not read yet, all at once (see
+/// [`rustgis_map::raster::read_together`]): a project or an import of several waits for the
+/// slowest, not for each in turn. One read from an S3 bucket waits for its connection (see
+/// [`crate::s3_connections::resolve_project_s3`]).
+pub(crate) fn read_in_place(m: &mut Map) {
+    let mut named: Vec<(String, &mut rustgis_map::raster::RasterLayer)> = m
+        .layers
+        .iter_mut()
+        .filter_map(|l| {
+            let name = l.name.clone();
+            let rl = l.raster.as_mut()?;
+            (rl.in_place && !rl.path.as_deref().is_some_and(crate::s3_connections::is_s3_backed)).then_some((name, rl))
+        })
+        .collect();
+    let mut layers: Vec<&mut rustgis_map::raster::RasterLayer> = named.iter_mut().map(|(_, rl)| &mut **rl).collect();
+    let failed = rustgis_map::raster::read_together(&mut layers);
+    for (i, e) in failed {
+        if let Some((name, _)) = named.get(i) {
+            log::warn!("{name}: {e}");
+        }
     }
 }
 

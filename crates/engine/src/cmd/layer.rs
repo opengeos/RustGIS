@@ -3010,20 +3010,20 @@ pub(crate) fn add_cog_with(s: &mut Session, p: &Value, url: &str, strict: bool) 
 fn add_in_place(s: &mut Session, name: &str, url: &str, strict: bool) -> CmdResult {
     use crate::render::rustgis_tiles::cog;
     let (file, look) = cog::split(url);
+    // Strict, natively: read now, failing when it can't be. Otherwise read with the other layers
+    // added with it (see `project::read_in_place`); in the browser, landing later.
     #[cfg(not(target_arch = "wasm32"))]
-    let mut layer = if strict {
+    let layer = if strict {
         rustgis_map::raster::RasterLayer::in_place(cog::raster::overview_blocking(file)?, file)
     } else {
-        rustgis_map::raster::RasterLayer::opening_in_place(file)
+        rustgis_map::raster::RasterLayer::unread_in_place(file)
     };
     #[cfg(target_arch = "wasm32")]
-    let mut layer = {
+    let layer = {
         let _ = strict;
         rustgis_map::raster::RasterLayer::opening_in_place(file)
     };
-    if let Some(d) = layer.data.clone() {
-        layer.style = super::tiles::look_style(&look, &d).unwrap_or_else(|| layer.style.clone());
-    }
+    let layer = layer.with_look(super::tiles::address_look(&look));
     let mut r = super::raster::add_raster(s, name, layer)?;
     if let Ok(Some(info)) = cog::info(file) {
         let [w, so, e, n] = info.bounds;

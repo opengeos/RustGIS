@@ -762,6 +762,9 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     WAKER.call_once(|| {
         let ctx = ui.ctx().clone();
         rustgis_engine::render::rustgis_tiles::cache::set_waker(move || ctx.request_repaint());
+        // A read that failed is tried again when its wait is over, though nothing else moves.
+        let ctx = ui.ctx().clone();
+        rustgis_engine::render::rustgis_tiles::cache::set_alarm(move |after| ctx.request_repaint_after(after));
         let ctx = ui.ctx().clone();
         rustgis_engine::map::source::set_waker(move || ctx.request_repaint());
     });

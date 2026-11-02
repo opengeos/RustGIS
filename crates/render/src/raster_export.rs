@@ -12,6 +12,10 @@ const MAX_TILES: u64 = 512;
 const MAX_BYTES: usize = 64 * 1024 * 1024;
 const TILE_SIZE: u32 = 256;
 const MAX_LAT: f64 = 85.051_128_779_806_6;
+/// The longest an export waits for the tiles of a raster read in place, in all.
+const IN_PLACE_WAIT: web_time::Duration = web_time::Duration::from_secs(120);
+/// Waits in a row that bring nothing new before an export stops waiting for them.
+const IDLE_WAITS: usize = 6;
 
 /// Half-open tile interval, retaining a tile for a zero-width extent.
 fn tile_range(start: f64, end: f64, n: u32) -> (u32, u32) {
@@ -57,6 +61,8 @@ pub fn export(layer: &RasterLayer, min_zoom: u8, max_zoom: u8, opacity: f32) -> 
         ranges.push((z, x0, x1, y0, y1));
     }
     let stats = layer.masked_stats();
+    // A raster read in place waits for its tiles natively, two minutes at most in all.
+    let deadline = web_time::Instant::now() + IN_PLACE_WAIT;
     let mut tiles = Vec::new();
     let mut bytes = 0usize;
     for (z, x0, x1, y0, y1) in ranges {
@@ -73,14 +79,25 @@ pub fn export(layer: &RasterLayer, min_zoom: u8, max_zoom: u8, opacity: f32) -> 
                     // Read in place: at the tile's level, once its parts have arrived (natively;
                     // the browser draws what has).
                     Some(address) => {
-                        let mut passes = 0;
-                        while raster::draw_in_place(&mut image, address, r, &layer.style, stats, &view, opacity, true, place)
-                            && passes < 6
-                            && cfg!(not(target_arch = "wasm32"))
-                        {
-                            crate::rustgis_tiles::cache::wait(web_time::Duration::from_secs(30));
+                        let mut idle = 0;
+                        loop {
+                            let drawn_at = crate::rustgis_tiles::cache::generation();
+                            if !raster::draw_in_place(&mut image, address, r, &layer.style, stats, &view, opacity, true, place) {
+                                break;
+                            }
+                            // An archive of the overview where the image is wanted isn't written.
+                            let left = deadline.saturating_duration_since(web_time::Instant::now());
+                            if cfg!(target_arch = "wasm32") {
+                                return Err(format!("{}: its tiles are still being read: export again once the map has drawn it", r.name));
+                            }
+                            if left.is_zero() || idle >= IDLE_WAITS {
+                                return Err(format!("{}: its tiles didn't all arrive, so the archive isn't written", r.name));
+                            }
+                            crate::rustgis_tiles::cache::wait_for_news(drawn_at, left.min(web_time::Duration::from_secs(30)));
+                            if crate::rustgis_tiles::cache::generation() == drawn_at {
+                                idle += 1;
+                            }
                             image.fill(tiny_skia::Color::TRANSPARENT);
-                            passes += 1;
                         }
                     }
                     None => raster::draw(&mut image, r, &layer.style, stats, &view, opacity, true, place),

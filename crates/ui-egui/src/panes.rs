@@ -5913,13 +5913,18 @@ fn raster_details(ui: &mut Ui, rl: &rustgis_engine::map::RasterLayer, t: &Tokens
         return;
     };
     let e = d.extent();
-    let (cx, cy) = d.cell_size();
     let unit = if d.crs.is_geographic() { "°" } else { " m" };
+    // Read in place, the map draws the full image: its size and cell size, not the overview's.
+    let full = d.overview.filter(|_| rl.in_place);
+    let (w, h) = full.unwrap_or((d.width, d.height));
+    let (cx, cy) = d.cell_size();
+    let (cx, cy) = (cx * f64::from(d.width) / f64::from(w.max(1)), cy * f64::from(d.height) / f64::from(h.max(1)));
+    let f = rustgis_engine::map::symbology::fmt_num;
     let mut rows = vec![
-        ("Size", format!("{} × {}", d.width, d.height)),
+        ("Size", format!("{w} × {h}")),
         ("Bands", d.band_count().to_string()),
         ("Pixel type", d.data_type.clone()),
-        ("Cell size", format!("{} × {}{unit}", rustgis_engine::map::symbology::fmt_num(cx), rustgis_engine::map::symbology::fmt_num(cy))),
+        ("Cell size", format!("{} × {}{unit}", f(cx), f(cy))),
         ("Coordinate system", d.crs.label()),
         ("NoData", d.nodata.map(|v| v.to_string()).unwrap_or_else(|| "—".into())),
         ("Symbology", tl!(rl.style.renderer.label()).to_string()),
@@ -5931,16 +5936,8 @@ fn raster_details(ui: &mut Ui, rl: &rustgis_engine::map::RasterLayer, t: &Tokens
         ("North", format!("{:.4}°", e.max_y)),
     ];
     match d.overview {
-        // Read in place, the map draws the full image: the overview is what the layer holds.
-        Some((w, h)) if rl.in_place => {
-            let (sx, sy) = (f64::from(d.width) / f64::from(w.max(1)), f64::from(d.height) / f64::from(h.max(1)));
-            let f = rustgis_engine::map::symbology::fmt_num;
-            if let Some(r) = rows.get_mut(0) {
-                *r = ("Size", format!("{w} × {h}"));
-            }
-            if let Some(r) = rows.get_mut(3) {
-                *r = ("Cell size", format!("{} × {}{unit}", f(cx * sx), f(cy * sy)));
-            }
+        // Read in place: the overview is what the layer holds.
+        Some(_) if rl.in_place => {
             rows.insert(
                 1,
                 (

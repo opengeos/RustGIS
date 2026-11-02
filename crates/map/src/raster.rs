@@ -63,10 +63,74 @@ pub struct RasterLayer {
     /// The style is the file's own look once its pixels land (a layer added before they have).
     #[serde(skip)]
     restyle: bool,
+    /// The look its address gave a layer read in place, applied when its pixels land.
+    #[serde(skip)]
+    look: Option<AddressLook>,
 }
 
 /// Called once with a cloud-optimised GeoTIFF's overview, or why it couldn't be read.
 pub type InPlaceRead = Box<dyn FnOnce(Result<Raster, String>) + Send>;
+/// The longest a layer read in place waits for its overview natively.
+#[cfg(not(target_arch = "wasm32"))]
+const IN_PLACE_WAIT: std::time::Duration = std::time::Duration::from_secs(120);
+
+/// Reads the overviews of `layers` read in place and not read yet, all at once: a project of
+/// several opens in the time of the slowest, not of them all (waited for natively, at most two
+/// minutes in all; landing later in the browser). Other layers are left as they are. Returns each
+/// failure, by its place in `layers`.
+pub fn read_together(layers: &mut [&mut RasterLayer]) -> Vec<(usize, String)> {
+    let mut failed = Vec::new();
+    let unread = |l: &RasterLayer| l.in_place && l.data.is_none() && l.opening.is_none() && l.time_zarr.is_none();
+    #[cfg(not(target_arch = "wasm32"))]
+    let deadline = std::time::Instant::now() + IN_PLACE_WAIT;
+    #[cfg(not(target_arch = "wasm32"))]
+    let mut started = Vec::new();
+    for (i, l) in layers.iter_mut().enumerate() {
+        if !unread(l) {
+            continue;
+        }
+        // Started without waiting: natively, each is waited for below, together.
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let address = l.path.clone();
+            let reader = in_place_reader().lock().unwrap_or_else(|e| e.into_inner()).clone();
+            match (address, reader) {
+                (Some(address), Some(reader)) => {
+                    l.error = None;
+                    let slot = Arc::new(Mutex::new(None));
+                    let land = slot.clone();
+                    l.opening = Some(slot);
+                    reader(
+                        &address,
+                        Box::new(move |result| {
+                            *land.lock().unwrap_or_else(|e| e.into_inner()) = Some(result.map(Arc::new));
+                            crate::source::landed();
+                        }),
+                    );
+                    started.push(i);
+                }
+                _ => {
+                    if let Err(e) = l.reload() {
+                        failed.push((i, e));
+                    }
+                }
+            }
+        }
+        #[cfg(target_arch = "wasm32")]
+        if let Err(e) = l.reload() {
+            failed.push((i, e));
+        }
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    for i in started {
+        if let Some(l) = layers.get_mut(i)
+            && let Err(e) = l.wait_for_read(deadline)
+        {
+            failed.push((i, e));
+        }
+    }
+    failed
+}
 type InPlaceReader = Arc<dyn Fn(&str, InPlaceRead) + Send + Sync>;
 
 fn in_place_reader() -> &'static Mutex<Option<InPlaceReader>> {
@@ -139,6 +203,7 @@ impl RasterLayer {
             masked: MaskedStats::default(),
             opening: None,
             restyle: false,
+            look: None,
         })
     }
 
@@ -160,6 +225,7 @@ impl RasterLayer {
             masked: MaskedStats::default(),
             opening: None,
             restyle: false,
+            look: None,
         }
     }
 
@@ -181,6 +247,7 @@ impl RasterLayer {
             masked: MaskedStats::default(),
             opening: None,
             restyle: false,
+            look: None,
         }
     }
 
@@ -189,10 +256,10 @@ impl RasterLayer {
         RasterLayer { in_place: true, ..RasterLayer::from_path(raster, address) }
     }
 
-    /// A cloud-optimised GeoTIFF read in place by its address, its overview still to be read
-    /// (where nothing may wait: the browser): drawn, in its own look, once it lands.
-    pub fn opening_in_place(address: impl Into<String>) -> RasterLayer {
-        let mut layer = RasterLayer {
+    /// A cloud-optimised GeoTIFF read in place by its address, its overview not read yet: drawn,
+    /// in its own look, once [`RasterLayer::reload`] (or [`read_together`]) has read it.
+    pub fn unread_in_place(address: impl Into<String>) -> RasterLayer {
+        RasterLayer {
             path: Some(address.into()),
             in_place: true,
             file_name: None,
@@ -207,9 +274,30 @@ impl RasterLayer {
             masked: MaskedStats::default(),
             opening: None,
             restyle: true,
-        };
+            look: None,
+        }
+    }
+
+    /// [`RasterLayer::unread_in_place`], its overview read now (waited for natively; landing
+    /// later in the browser, where nothing may wait).
+    pub fn opening_in_place(address: impl Into<String>) -> RasterLayer {
+        let mut layer = RasterLayer::unread_in_place(address);
         let _ = layer.reload();
         layer
+    }
+
+    /// The layer in the look its address gives (see [`AddressLook`]): now, when its pixels are
+    /// here, else once they land.
+    pub fn with_look(mut self, look: AddressLook) -> RasterLayer {
+        match self.data.clone() {
+            Some(d) => {
+                if let Some(style) = RasterStyle::for_look(&d, &look) {
+                    self.style = style;
+                }
+            }
+            None => self.look = Some(look),
+        }
+        self
     }
 
     /// Reads the pixels again from the path or the embedded file (after a project opens). A
@@ -229,40 +317,21 @@ impl RasterLayer {
                 self.error = Some(e.clone());
                 return Err(e);
             };
+            self.data = None;
+            let slot = Arc::new(Mutex::new(None));
+            let land = slot.clone();
+            self.opening = Some(slot);
+            reader(
+                &address,
+                Box::new(move |result| {
+                    *land.lock().unwrap_or_else(|e| e.into_inner()) = Some(result.map(Arc::new));
+                    crate::source::landed();
+                }),
+            );
             #[cfg(not(target_arch = "wasm32"))]
-            {
-                let (tx, rx) = std::sync::mpsc::channel();
-                reader(&address, Box::new(move |r| tx.send(r).unwrap_or_default()));
-                let r = rx
-                    .recv_timeout(std::time::Duration::from_secs(120))
-                    .unwrap_or_else(|_| Err(format!("{address}: no answer in two minutes")));
-                return match r {
-                    Ok(raster) => {
-                        self.land(Ok(Arc::new(raster)));
-                        Ok(())
-                    }
-                    Err(e) => {
-                        self.data = None;
-                        self.land(Err(e.clone()));
-                        Err(e)
-                    }
-                };
-            }
+            return self.wait_for_read(std::time::Instant::now() + IN_PLACE_WAIT);
             #[cfg(target_arch = "wasm32")]
-            {
-                let slot = Arc::new(Mutex::new(None));
-                let land = slot.clone();
-                self.data = None;
-                self.opening = Some(slot);
-                reader(
-                    &address,
-                    Box::new(move |result| {
-                        *land.lock().unwrap_or_else(|e| e.into_inner()) = Some(result.map(Arc::new));
-                        crate::source::landed();
-                    }),
-                );
-                return Ok(());
-            }
+            return Ok(());
         }
         if self.embedded.is_none()
             && let Some(path) = self
@@ -319,6 +388,28 @@ impl RasterLayer {
         }
     }
 
+    /// Waits (natively, until `deadline`) for a read under way, then installs it.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn wait_for_read(&mut self, deadline: std::time::Instant) -> Result<(), String> {
+        let Some(slot) = self.opening.clone() else { return Ok(()) };
+        loop {
+            if let Some(result) = slot.lock().unwrap_or_else(|e| e.into_inner()).clone() {
+                self.opening = None;
+                let error = result.as_ref().err().cloned();
+                self.land(result);
+                return error.map_or(Ok(()), Err);
+            }
+            if std::time::Instant::now() >= deadline {
+                let address = self.path.clone().unwrap_or_default();
+                let e = format!("{address}: no answer in two minutes");
+                self.opening = None;
+                self.land(Err(e.clone()));
+                return Err(e);
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+
     /// Installs a completed remote read; each render copy can observe the same shared result.
     pub(crate) fn poll_reload(&mut self) -> bool {
         let Some(slot) = self.opening.as_ref() else { return false };
@@ -334,7 +425,8 @@ impl RasterLayer {
         match result {
             Ok(raster) => {
                 if std::mem::take(&mut self.restyle) {
-                    self.style = RasterStyle::default_for(&raster);
+                    let look = self.look.take().and_then(|look| RasterStyle::for_look(&raster, &look));
+                    self.style = look.unwrap_or_else(|| RasterStyle::default_for(&raster));
                 } else {
                     self.style.repair(&raster);
                 }
@@ -813,7 +905,39 @@ fn one() -> f64 {
     1.0
 }
 
+/// The look an address gives a GeoTIFF read in place (`…/scene.tif#bands=5,3,2&range=0,3000`, as
+/// tile layers kept it): the bands drawn (from 0; one in grey, or red, green and blue) and a fixed
+/// stretch.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct AddressLook {
+    pub bands: Vec<usize>,
+    pub range: Option<(f64, f64)>,
+}
+
 impl RasterStyle {
+    /// The style `look` gives `r`: its own look (see [`RasterStyle::default_for`]) with the bands
+    /// and stretch the look names (bands it hasn't are left as they are); `None` for a look that
+    /// names neither. A palette image stretched by a range is drawn in grey, as its tile layer was.
+    pub fn for_look(r: &Raster, look: &AddressLook) -> Option<RasterStyle> {
+        if look.bands.is_empty() && look.range.is_none() {
+            return None;
+        }
+        let mut style = RasterStyle::default_for(r);
+        let n = r.band_count();
+        match look.bands[..] {
+            [b] if b < n => style.renderer = RasterRenderer::Stretch { band: b, ramp: Ramp::gray(), invert: false },
+            [red, green, blue] if red < n && green < n && blue < n => style.renderer = RasterRenderer::Rgb { red, green, blue },
+            [] if matches!(style.renderer, RasterRenderer::Colormap) => {
+                style.renderer = RasterRenderer::Stretch { band: 0, ramp: Ramp::gray(), invert: false };
+            }
+            _ => {}
+        }
+        if let Some((lo, hi)) = look.range {
+            style.stretch = Stretch::custom(lo, hi);
+        }
+        Some(style)
+    }
+
     /// A style for a layer whose pixels haven't arrived (its own look replaces it when they do).
     pub fn placeholder() -> RasterStyle {
         RasterStyle {

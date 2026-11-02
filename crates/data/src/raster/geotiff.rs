@@ -578,7 +578,7 @@ fn samples<R: Read + Seek>(dec: &mut Decoder<R>) -> usize {
 /// decodes their colour indices as grey samples, and the colour table is read from the ColorMap tag
 /// as it is. The only change is the PhotometricInterpretation value (3 → 1) in each image's IFD.
 ///
-/// Made by [`reader_all_bands`], it also shows RGB images with samples past the colour ones (RGB
+/// It also shows RGB images with samples past the colour ones (RGB
 /// and near-infrared, or more bands, not declared alpha) as grey ones (2 → 1): the crate decodes
 /// only an RGB image's colour samples, and a fifth or later one not at all, but decodes every
 /// sample of a grey image.
@@ -704,14 +704,9 @@ impl<T: Read + Seek> ReadSeek for T {}
 /// What the decoder reads from.
 pub(crate) type Reader<'a> = Unpaletted<Box<dyn ReadSeek + 'a>>;
 
-/// A reader for the decoder.
-pub(crate) fn reader<'a>(r: impl Read + Seek + 'a) -> std::io::Result<Reader<'a>> {
-    Unpaletted::new(Box::new(r), false)
-}
-
-/// A reader for the decoder that decodes every band of an RGB image with more (see
+/// A reader for the decoder: every band of the image, an RGB image's with more too (see
 /// [`Unpaletted`]).
-pub(crate) fn reader_all_bands<'a>(r: impl Read + Seek + 'a) -> std::io::Result<Reader<'a>> {
+pub(crate) fn reader<'a>(r: impl Read + Seek + 'a) -> std::io::Result<Reader<'a>> {
     Unpaletted::new(Box::new(r), true)
 }
 
@@ -1049,7 +1044,7 @@ pub(super) fn read_limited_with_nodata(
     open: Option<Opener<'_>>,
     sidecar_nodata: Option<f64>,
 ) -> Result<Raster> {
-    let palette = r.palette;
+    let (palette, wide_rgb) = (r.palette, r.wide_rgb);
     let limits = {
         let mut l = Limits::default();
         l.decoding_buffer_size = MAX_SAMPLES.saturating_mul(4);
@@ -1137,11 +1132,14 @@ pub(super) fn read_limited_with_nodata(
     let ct = dec.colortype().map_err(err)?;
     // JPEG-compressed YCbCr, the only YCbCr read (the colour match below rejects the rest).
     let ycbcr = matches!(ct, ColorType::YCbCr(_)) && dec.find_tag_unsigned::<u16>(Tag::Compression).ok().flatten() == Some(7);
-    // A palette image (shown to the decoder as grey) is coloured by its table.
+    // A palette image (shown to the decoder as grey) is coloured by its table (in grey without one,
+    // as said below).
     let ct = match ct {
-        ColorType::Gray(bits) if palette && dec.find_tag(Tag::ColorMap).ok().flatten().is_some() => ColorType::Palette(bits),
+        ColorType::Gray(bits) if palette => ColorType::Palette(bits),
         other => other,
     };
+    // A palette image without a whole colour table is drawn in grey, and says so.
+    let mut no_table = false;
     let (nbands, color) = match ct {
         ColorType::Gray(_) => (1, ColorHint::Gray),
         ColorType::GrayA(_) => (2, ColorHint::GrayAlpha),
@@ -1150,7 +1148,21 @@ pub(super) fn read_limited_with_nodata(
         // conversion), so it is turned into RGB below (issue #692); other YCbCr data isn't read.
         ColorType::YCbCr(_) if ycbcr => (3, ColorHint::Rgb { alpha: false }),
         ColorType::RGBA(_) => (4, ColorHint::Rgb { alpha: true }),
-        ColorType::Palette(bits) => (1, palette_table(&mut dec, bits).map_or(ColorHint::Gray, ColorHint::Palette)),
+        ColorType::Palette(bits) => (
+            1,
+            palette_table(&mut dec, bits).map_or_else(
+                || {
+                    no_table = true;
+                    ColorHint::Gray
+                },
+                ColorHint::Palette,
+            ),
+        ),
+        // An RGB image with more bands (shown to the decoder as grey, see `Unpaletted`): every
+        // band, the first three red, green and blue.
+        ColorType::Multiband { num_samples, .. } if wide_rgb && num_samples >= 3 => {
+            (num_samples as usize, ColorHint::Rgb { alpha: extra_alpha(&mut dec) })
+        }
         ColorType::Multiband { num_samples, .. } => (num_samples.max(1) as usize, multiband_color(&mut dec, num_samples)),
         other => return Err(err(format!("{other:?} images aren't supported"))),
     };
@@ -1240,6 +1252,7 @@ pub(super) fn read_limited_with_nodata(
         r.georeferenced = false;
         r.overview = overview;
         r.rounded = rounded;
+        r.palette_missing = no_table;
         if let Some(p) = &described {
             r.apply_pam(p);
         }
@@ -1290,6 +1303,7 @@ pub(super) fn read_limited_with_nodata(
     let mut r = Raster::new(name, w, h, bands, transform, crs, geo.nodata, color, data_type)?;
     r.overview = overview;
     r.rounded = rounded;
+    r.palette_missing = no_table;
     if let Some(p) = &described {
         r.apply_pam(p);
     }
@@ -1999,13 +2013,14 @@ mod tests {
     fn padded_tiles_with_an_extra_sample_stay_in_their_rows() {
         // Issue #162: an RGBI orthophoto (5000 pixels in 128-pixel tiles) opened with black
         // columns down its west edge, the padding of each row's last tile spilt into the next row.
+        // Its near-infrared band is read too, the fourth, after red, green and blue.
         let pixel = |b: u32, x: u32, y: u32| ((x + 3 * y + 60 * b) % 250 + 1) as u8;
         let bytes = rgbi_tiled(&[(40, 16), (20, 16)], pixel);
         let check = |r: &Raster, k: u32| {
-            assert_eq!((r.band_count(), r.color.clone()), (3, ColorHint::Rgb { alpha: false }));
+            assert_eq!((r.band_count(), r.color.clone()), (4, ColorHint::Rgb { alpha: false }));
             for y in 0..r.height {
                 for x in 0..r.width {
-                    for b in 0..3 {
+                    for b in 0..4 {
                         let want = f32::from(pixel(b, x * k, y * k));
                         assert_eq!(r.value(b as usize, i64::from(x), i64::from(y)), Some(want), "band {b} at {x},{y} (k {k})");
                     }

@@ -330,7 +330,7 @@ pub fn info(url: &str) -> Result<Option<Arc<Info>>, String> {
         match i.get(url) {
             Some(State::Ready(info)) => return Ok(Some(info.clone())),
             Some(State::Loading(_)) => return Ok(None),
-            Some(State::Failed(e, at)) if at.elapsed() < RETRY => return Err(e.clone()),
+            Some(State::Failed(e, at)) if at.elapsed() < crate::cache::retry_wait(e, RETRY) => return Err(e.clone()),
             _ => {}
         }
     }
@@ -352,7 +352,7 @@ fn with_info(url: &str, then: Box<dyn FnOnce(Result<Arc<Info>, String>) + Send>)
                 waiting.push(then);
                 return;
             }
-            Some(State::Failed(e, at)) if at.elapsed() < RETRY => {
+            Some(State::Failed(e, at)) if at.elapsed() < crate::cache::retry_wait(e, RETRY) => {
                 let e = e.clone();
                 drop(i);
                 then(Err(e));
@@ -1060,7 +1060,7 @@ fn draw(info: Arc<Info>, url: String, look: &Look, stretch: &[(f32, f32)], z: u8
     let pen = Pen {
         rgb: colours >= 3,
         alpha: (shown.len() > colours).then_some(colours),
-        alpha_max: type_range(&info.layout, false).1.max(1.0),
+        alpha_max: rustgis_data::raster::alpha_max(info.layout.data_type),
         palette: info.palette(look).map(<[[u8; 4]]>::to_vec),
         aef: look.aef,
         stretch: stretch.to_vec(),
@@ -1529,6 +1529,8 @@ mod tests {
         let pen = Pen { rgb: false, alpha: None, alpha_max: 255.0, palette: Some(table), aef: false, stretch: vec![(0.0, 255.0)] };
         let out = px(paint(&pen, &spots, &[7], &[tile]).unwrap());
         assert_eq!(&out[..4], &[200, 10, 20, 255]);
+        assert_eq!(&out[4..8], &[0, 0, 0, 0], "a transparent colour");
+        assert_eq!(&out[8..12], &[0, 0, 0, 0], "a value past the table");
     }
 
     #[test]

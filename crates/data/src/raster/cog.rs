@@ -223,6 +223,8 @@ pub struct Layout {
     /// The bands are stored apart (planar configuration 2): each tile's bands are chunks of their
     /// own, band `b` of tile `i` at chunk `b × tiles + i`, so a band is read without the others.
     pub planar: bool,
+    /// A palette image whose colour table is missing or short: drawn in grey instead.
+    pub palette_missing: bool,
 }
 
 impl Layout {
@@ -309,16 +311,26 @@ pub fn layout(bytes: &Sparse) -> Result<Parse> {
 }
 
 fn read_layout(r: Sparse) -> Result<Parse> {
-    let reader = super::geotiff::reader_all_bands(r).map_err(err)?;
+    let reader = super::geotiff::reader(r).map_err(err)?;
     let (palette, wide_rgb) = (reader.palette, reader.wide_rgb);
     let mut dec = Decoder::new(reader).map_err(err)?.with_limits(limits());
     let Some(geo) = super::geotiff::cog_geo(&mut dec)? else {
         return Ok(Parse::NotTiled("a rotated image, or one without coordinates, is read whole".into()));
     };
     let ct = dec.colortype().map_err(err)?;
+    let mut palette_missing = false;
     let (bands, color) = match ct {
-        // A palette image (shown to the decoder as grey) is coloured by its table.
-        ColorType::Gray(bits) if palette => (1, super::geotiff::palette_table(&mut dec, bits).map_or(ColorHint::Gray, ColorHint::Palette)),
+        // A palette image (shown to the decoder as grey) is coloured by its table, else grey.
+        ColorType::Gray(bits) if palette => (
+            1,
+            super::geotiff::palette_table(&mut dec, bits).map_or_else(
+                || {
+                    palette_missing = true;
+                    ColorHint::Gray
+                },
+                ColorHint::Palette,
+            ),
+        ),
         ColorType::Gray(_) => (1, ColorHint::Gray),
         ColorType::GrayA(_) => (2, ColorHint::GrayAlpha),
         ColorType::RGB(_) => (3, ColorHint::Rgb { alpha: false }),
@@ -396,7 +408,17 @@ fn read_layout(r: Sparse) -> Result<Parse> {
     if levels.is_empty() {
         return Ok(Parse::NotTiled("no image".into()));
     }
-    Ok(Parse::Done(Box::new(Layout { levels, crs: geo.0, transform: geo.1, nodata: geo.2, bands, color, data_type, planar })))
+    Ok(Parse::Done(Box::new(Layout {
+        levels,
+        crs: geo.0,
+        transform: geo.1,
+        nodata: geo.2,
+        bands,
+        color,
+        data_type,
+        planar,
+        palette_missing,
+    })))
 }
 
 /// Decodes one chunk (a tile, or one band of a tile when the bands are stored apart, see
@@ -406,7 +428,7 @@ pub fn decode_tile(header: &Sparse, layout: &Layout, level: usize, index: u32, b
     let l = layout.levels.get(level).ok_or_else(|| err("no such level"))?;
     let at = *l.offsets.get(index as usize).ok_or_else(|| err("no such tile"))?;
     let r = header.clone().with(at, bytes).reader();
-    let mut dec = Decoder::new(super::geotiff::reader_all_bands(r).map_err(err)?).map_err(err)?.with_limits(limits());
+    let mut dec = Decoder::new(super::geotiff::reader(r).map_err(err)?).map_err(err)?.with_limits(limits());
     dec.seek_to_image(l.ifd).map_err(err)?;
     let values = match super::geotiff::read_chunk(&mut dec, index)? {
         DecodingResult::U8(v) => v.into_iter().map(f32::from).collect::<Vec<f32>>(),
@@ -835,5 +857,45 @@ pub(crate) mod tests {
         let (l, v) = pixel(&example_with(&Example { photometric: 3, ..e }), 150, 150);
         let ColorHint::Palette(table) = &l.color else { panic!("{:?}", l.color) };
         assert_eq!((table.len(), table[44], v), (256, [44, 211, 0, 255], vec![want(0)]));
+        assert!(!l.palette_missing);
+    }
+
+    /// A GeoTIFF file is read as the same image read in place is: every band, whatever its
+    /// PhotometricInterpretation says, coloured alike.
+    #[test]
+    fn files_have_every_band_a_cog_has() {
+        let e = Example { size: 300, tile: 128, ..Example::default() };
+        for (bands, alpha, photometric) in [(8, false, 1), (2, true, 1), (4, true, 2), (4, false, 2), (7, false, 2), (5, true, 2)] {
+            for planar in [false, true] {
+                let file = example_with(&Example { bands, alpha, planar, photometric, ..e });
+                let (l, v) = pixel(&file, 150, 150);
+                let r = crate::raster::geotiff::read(std::io::Cursor::new(&file), "f").unwrap();
+                let read: Vec<f32> = (0..r.band_count()).map(|b| r.value(b, 150, 150).unwrap()).collect();
+                assert_eq!((r.band_count(), &r.color, read), (l.bands, &l.color, v), "{bands} bands, photometric {photometric}");
+            }
+        }
+    }
+
+    /// A palette image whose colour table is missing is drawn in grey, and says so, read in place
+    /// or as a file.
+    #[test]
+    fn a_palette_without_its_table_says_so() {
+        let mut file = example_with(&Example { size: 300, tile: 128, photometric: 3, ..Example::default() });
+        // The ColorMap entries (tag 320, of shorts) renamed to a tag nothing reads.
+        let mut renamed = 0;
+        for i in 0..file.len().saturating_sub(4) {
+            if file[i..i + 4] == [0x40, 0x01, 0x03, 0x00] {
+                file[i..i + 2].copy_from_slice(&[0xFF, 0xFE]);
+                renamed += 1;
+            }
+        }
+        assert!(renamed > 0);
+        let (l, _) = pixel(&file, 150, 150);
+        assert_eq!((&l.color, l.palette_missing), (&ColorHint::Gray, true));
+        let r = crate::raster::geotiff::read(std::io::Cursor::new(&file), "p").unwrap();
+        assert_eq!((&r.color, r.palette_missing), (&ColorHint::Gray, true));
+        let clean =
+            crate::raster::geotiff::read(std::io::Cursor::new(example_with(&Example { photometric: 3, ..Example::default() })), "p");
+        assert!(!clean.unwrap().palette_missing);
     }
 }

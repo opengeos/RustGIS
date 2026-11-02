@@ -546,11 +546,9 @@ pub(crate) fn cog_tiles_to_rasters(m: &mut rustgis_map::Map) {
         }
         let t = m.tiles.remove(i);
         let (file, look) = cog::split(&t.url);
-        // Read now natively; in the browser its own look once it lands.
-        let mut rl = RasterLayer::opening_in_place(file);
-        if let Some(style) = rl.data.clone().and_then(|d| look_style(&look, &d)) {
-            rl.style = style;
-        }
+        // Read with the project's other rasters read in place (see `project::read_in_place`), in
+        // its look once it lands.
+        let rl = RasterLayer::unread_in_place(file).with_look(address_look(&look));
         let id = m.add_raster(t.name.clone(), rl);
         if let Some(l) = m.layer_mut(id) {
             l.visible = t.visible;
@@ -565,25 +563,11 @@ pub(crate) fn cog_tiles_to_rasters(m: &mut rustgis_map::Map) {
     }
 }
 
-/// The raster style a GeoTIFF's look says (see [`Look`]): its bands, one grey or three as red,
-/// green and blue, and its fixed range; `None` for the file's own look. A COG tile layer becomes
-/// a raster layer read in place with it.
-pub(crate) fn look_style(look: &Look, r: &rustgis_data::raster::Raster) -> Option<rustgis_map::raster::RasterStyle> {
-    use rustgis_map::raster::{RasterRenderer, RasterStyle, Stretch};
-    if look.bands.is_empty() && look.range.is_none() {
-        return None;
-    }
-    let mut style = RasterStyle::default_for(r);
-    let n = r.band_count();
-    match look.bands[..] {
-        [b] if b < n => style.renderer = RasterRenderer::Stretch { band: b, ramp: rustgis_map::Ramp::gray(), invert: false },
-        [red, green, blue] if red < n && green < n && blue < n => style.renderer = RasterRenderer::Rgb { red, green, blue },
-        _ => {}
-    }
-    if let Some((lo, hi)) = look.range {
-        style.stretch = Stretch::custom(f64::from(lo), f64::from(hi));
-    }
-    Some(style)
+/// The look a COG tile layer's address keeps (see [`Look`]) as a raster layer's: its bands, one
+/// grey or three as red, green and blue, and its fixed range. A COG tile layer becomes a raster
+/// layer read in place with it.
+pub(crate) fn address_look(look: &Look) -> rustgis_map::raster::AddressLook {
+    rustgis_map::raster::AddressLook { bands: look.bands.clone(), range: look.range.map(|(lo, hi)| (f64::from(lo), f64::from(hi))) }
 }
 
 /// A change of a COG layer's look a command asks for (`bands`, `range`, `dequantize`), applied to

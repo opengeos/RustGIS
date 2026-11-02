@@ -574,6 +574,17 @@ async fn unless_stalled(
 /// `rustgis_tiles::cache::split_range`).
 /// A status in `omit` is an expected answer (a tile past a map's edge): its failure makes no
 /// record of its own, as on the desktop.
+/// A refusal's text (`HTTP 503`), with how long the server asked to be left when it says so in a
+/// `Retry-After` header the browser lets the page read (its CORS rules must expose it).
+fn refused(resp: &web_sys::Response) -> String {
+    let wait = resp.headers().get("retry-after").ok().flatten();
+    rustgis_ui_egui::rustgis_engine::render::rustgis_tiles::failure::with_retry_after(
+        format!("HTTP {}", resp.status()),
+        resp.status(),
+        wait.as_deref(),
+    )
+}
+
 async fn fetch_bytes(url: &str, capture: Capture, omit: &'static [u16]) -> Result<Vec<u8>, String> {
     use rustgis_ui_egui::rustgis_engine::render::rustgis_tiles::{cache::RequestDiagnostics, failure::Failure};
     let mut diagnostics = RequestDiagnostics::with_capture(url, "GET", capture);
@@ -656,7 +667,7 @@ async fn fetch_bytes_inner(
         .map_err(err)?;
     diagnostics.answered(resp.status());
     if !resp.ok() {
-        return Err(format!("HTTP {}", resp.status()));
+        return Err(refused(&resp));
     }
     // The last bytes asked for and the whole file answered: fine when it is no longer.
     let whole_tail = tail.filter(|_| resp.status() != 206);
@@ -756,7 +767,7 @@ async fn post_json_inner(
         .map_err(err)?;
     diagnostics.answered(resp.status());
     if !resp.ok() {
-        return Err(format!("HTTP {}", resp.status()));
+        return Err(refused(&resp));
     }
     let buf = wasm_bindgen_futures::JsFuture::from(resp.array_buffer().map_err(err)?).await.map_err(err)?;
     let bytes = js_sys::Uint8Array::new(&buf);
@@ -803,7 +814,7 @@ async fn head_inner(
         .map_err(err)?;
     diagnostics.answered(resp.status());
     if !resp.ok() {
-        return Err(format!("HTTP {}", resp.status()));
+        return Err(refused(&resp));
     }
     let header = |k: &str| resp.headers().get(k).ok().flatten();
     Ok(cache::Head {

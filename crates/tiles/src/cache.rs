@@ -166,9 +166,71 @@ pub fn set_waker(f: impl Fn() + Send + Sync + 'static) {
     *waker().lock().unwrap_or_else(|e| e.into_inner()) = Some(Arc::new(f));
 }
 
+/// When the map is next to draw again by itself (a failed read may be tried again then), in
+/// milliseconds after [`alarm_base`] plus one; 0 for none.
+static ALARM: AtomicU64 = AtomicU64::new(0);
+
+fn alarm_base() -> Instant {
+    static B: OnceLock<Instant> = OnceLock::new();
+    *B.get_or_init(Instant::now)
+}
+
+fn alarm_hook() -> &'static Mutex<Option<Arc<dyn Fn(Duration) + Send + Sync>>> {
+    static A: OnceLock<Mutex<Option<Arc<dyn Fn(Duration) + Send + Sync>>>> = OnceLock::new();
+    A.get_or_init(Mutex::default)
+}
+
+/// Sets how the app is asked to draw again after a while (a repaint after it): a read that failed
+/// is tried again once its wait is over, though nothing else draws the map.
+pub fn set_alarm(f: impl Fn(Duration) + Send + Sync + 'static) {
+    *alarm_hook().lock().unwrap_or_else(|e| e.into_inner()) = Some(Arc::new(f));
+}
+
+/// Draws the map again at `when` (the earliest asked for is kept): [`generation`] goes up then, so
+/// a map waiting on a failed read asks for it again.
+pub(crate) fn notify_at(when: Instant) {
+    let at = (when.saturating_duration_since(alarm_base()).as_millis() as u64).saturating_add(1);
+    let mut current = ALARM.load(Ordering::Relaxed);
+    loop {
+        if current != 0 && current <= at {
+            return;
+        }
+        match ALARM.compare_exchange_weak(current, at, Ordering::Relaxed, Ordering::Relaxed) {
+            Ok(_) => break,
+            Err(c) => current = c,
+        }
+    }
+    let hook = alarm_hook().lock().unwrap_or_else(|e| e.into_inner()).clone();
+    if let Some(hook) = hook {
+        hook(when.saturating_duration_since(Instant::now()));
+    }
+}
+
 /// Goes up each time a fetch finishes: a map drawn at an older generation may now draw more.
 pub fn generation() -> u64 {
+    let at = ALARM.load(Ordering::Relaxed);
+    if at != 0
+        && (alarm_base().elapsed().as_millis() as u64).saturating_add(1) >= at
+        && ALARM.compare_exchange(at, 0, Ordering::Relaxed, Ordering::Relaxed).is_ok()
+    {
+        GENERATION.fetch_add(1, Ordering::Relaxed);
+    }
     GENERATION.load(Ordering::Relaxed)
+}
+
+/// How long a server that refused with 429 or 503 asked to be left before it is asked again, as
+/// the error's text says it (`http status: 503 (retry after 30 s)`; see
+/// [`crate::failure::with_retry_after`]).
+pub fn retry_after(error: &str) -> Option<Duration> {
+    let (_, rest) = error.rsplit_once("(retry after ")?;
+    let secs: u64 = rest.strip_suffix(" s)")?.parse().ok()?;
+    Some(Duration::from_secs(secs))
+}
+
+/// How long a failed read waits before it is tried again: what its server asked for (see
+/// [`retry_after`]), else `default`.
+pub(crate) fn retry_wait(error: &str, default: Duration) -> Duration {
+    retry_after(error).unwrap_or(default)
 }
 
 /// How many fetches are under way. Once a fetch no longer counts, its [`generation`] shows.
@@ -209,7 +271,7 @@ fn request(url: &str, want: Want, omit: &'static [u16]) -> State {
         match &slot.entry {
             Entry::Ready(p, _) => return State::Ready(p.clone()),
             Entry::Pending => return State::Pending,
-            Entry::Failed(e, at) if at.elapsed() < RETRY => return State::Failed(e.clone()),
+            Entry::Failed(e, at) if at.elapsed() < retry_wait(e, RETRY) => return State::Failed(e.clone()),
             Entry::Failed(..) => {}
         }
     }
@@ -719,8 +781,11 @@ impl<'a> RequestDiagnostics<'a> {
 /// another message (an address can hold "404").
 pub fn http_status(error: &str) -> Option<u16> {
     let e = error.trim();
-    let code = e.strip_prefix("http status: ").or_else(|| e.strip_prefix("HTTP "))?;
-    (code.len() == 3 && code.bytes().all(|b| b.is_ascii_digit())).then(|| code.parse().ok()).flatten()
+    let rest = e.strip_prefix("http status: ").or_else(|| e.strip_prefix("HTTP "))?;
+    // The status, and nothing after it but how long to wait (see [`retry_after`]).
+    let (code, after) = rest.split_at_checked(3)?;
+    let known = after.is_empty() || (after.starts_with(" (retry after ") && retry_after(after).is_some());
+    (known && code.bytes().all(|b| b.is_ascii_digit())).then(|| code.parse().ok()).flatten()
 }
 
 /// Downloads a file the user named (data added by its web address): up to [`MAX_DOWNLOAD`]
@@ -1385,7 +1450,8 @@ mod native {
         let status = resp.status().as_u16();
         diagnostics.answered(status);
         if !(200..300).contains(&status) {
-            return Err(Failure::without_answer("", format!("http status: {status}"), Reason::Status(status)));
+            let message = crate::failure::with_retry_after(format!("http status: {status}"), status, retry_after_header(&resp));
+            return Err(Failure::without_answer("", message, Reason::Status(status)));
         }
         let mut buf = Vec::new();
         resp.body_mut()
@@ -1470,6 +1536,11 @@ mod native {
     }
 
     /// An answer with an error status (#509): its kept headers and the start of its body.
+    /// An answer's `Retry-After` header, as sent.
+    fn retry_after_header(resp: &ureq::http::Response<ureq::Body>) -> Option<&str> {
+        resp.headers().get("retry-after").and_then(|v| v.to_str().ok())
+    }
+
     fn refused(resp: &mut ureq::http::Response<ureq::Body>) -> Failure {
         use std::io::Read;
         let headers: Vec<(String, String)> = resp
@@ -1604,7 +1675,8 @@ mod native {
                 return Err(if detail && !prepared.signed {
                     refused(&mut resp)
                 } else {
-                    Failure::without_answer("", format!("http status: {status}"), Reason::Status(status))
+                    let message = crate::failure::with_retry_after(format!("http status: {status}"), status, retry_after_header(&resp));
+                    Failure::without_answer("", message, Reason::Status(status))
                 });
             }
             if !resp.status().is_redirection() {
@@ -2092,6 +2164,24 @@ mod tests {
         assert_eq!(http_status("https://x.org/404/a.zarr: timed out"), None);
         assert_eq!(http_status("HTTP 4040"), None);
         assert_eq!(http_status("io: connection reset (read 404 bytes)"), None);
+        // With how long the server asked to be left: the status, and the wait.
+        assert_eq!(http_status("http status: 503 (retry after 30 s)"), Some(503));
+        assert_eq!(http_status("HTTP 429 (retry after 2 s)"), Some(429));
+        assert_eq!(http_status("HTTP 429 (something else)"), None);
+        assert_eq!(retry_after("http status: 503 (retry after 30 s)"), Some(Duration::from_secs(30)));
+        assert_eq!(retry_after("http status: 503"), None);
+        assert_eq!(retry_wait("HTTP 429 (retry after 2 s)", RETRY), Duration::from_secs(2));
+        assert_eq!(retry_wait("http status: 500", RETRY), RETRY);
+    }
+
+    /// A read that failed asks the map to draw again when it may be tried: the generation goes up
+    /// once that time has come.
+    #[test]
+    fn the_map_draws_again_when_a_wait_is_over() {
+        let before = generation();
+        notify_at(Instant::now() + Duration::from_millis(20));
+        std::thread::sleep(std::time::Duration::from_millis(40));
+        assert!(generation() > before);
     }
 
     #[test]

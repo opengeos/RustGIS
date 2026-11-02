@@ -108,8 +108,14 @@ identify and the raster tools work on it as on a file's. The layer holds an over
 (every band, about two million values), from which its statistics, histograms and tools read, as a
 file too large to hold whole is opened from an overview; zoomed in past it, the map reads the part
 in view at the resolution it needs as it draws, and draws it with the layer's style and the
-overview's statistics, so the image looks the same at every zoom. The Properties pane says the
-image's full size and that it is read in place.
+overview's statistics, so the image looks the same at every zoom. Until a part's tiles arrive, the
+level zoomed from stands in for them. The Properties pane says the image's full size and that it
+is read in place. A file whose smallest image is too large to hold as the overview (a large image
+saved without overviews) isn't added: GDAL's COG driver or `gdaladdo` makes the overviews. A tile
+that fails to arrive is asked for again a minute later, or when its server says to in a
+`Retry-After` header (with a 429 or 503 answer, within the hour); the map draws again then.
+Exporting the layer (Raster to PMTiles) waits for its tiles on the desktop, up to two minutes,
+and isn't written without them; in the web app, export again once the map has drawn the image.
 
 Its first look is what the file's PhotometricInterpretation tag says:
 
@@ -120,7 +126,11 @@ Its first look is what the file's PhotometricInterpretation tag says:
   three bands as red, green and blue. An alpha band is shown with it.
 
 In an image with more bands (an 8-band multispectral image, say) you pick the combination in the
-Symbology pane, as for any raster. GeoTIFF files follow the same rule. Planar files (bands stored
+Symbology pane, as for any raster. GeoTIFF files follow the same rule and have every band too (an
+RGB and near-infrared file has four), and so do other rasters without colours of their own (Zarr
+stores, files read through GDAL): four or more bands open as the first in grey, where any three
+or more used to open as red, green and blue. A palette image without its colour table is drawn in
+grey, and says so. Planar files (bands stored
 apart), 8- to 64-bit integer and floating-point data, signed-byte data and bottom-up images work
 too. A dated series of GeoTIFFs (an address with date placeholders), a data cube's files and
 AlphaEarth's embeddings are tile layers that follow the time slider or dequantise their values;

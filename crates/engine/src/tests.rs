@@ -13150,6 +13150,32 @@ fn cog_windows_stand_in_the_level_kept_until_their_tiles_arrive() {
     assert_eq!(v(&part, 1001, 901), ((1001 + 901) % 256) as f32);
 }
 
+/// A GeoTIFF's address look (`#bands=…&range=…`) is its layer's once its pixels land, read later
+/// (as the browser and an import read them) as when read at once; a palette image stretched by a
+/// range is drawn in grey, as its tile layer was, and without a look in its colours.
+#[test]
+fn an_address_look_holds_when_the_pixels_land_later() {
+    use rustgis_data::raster::cog::{Example, example_with};
+    use rustgis_map::raster::{AddressLook, RasterLayer, RasterRenderer, Stretch, read_together};
+    // A session installs the reader.
+    let _s = Session::new(Project::default());
+    let (base, _) = serve_ranges(example_with(&Example { size: 512, tile: 256, bands: 8, ..Example::default() }));
+    let look = AddressLook { bands: vec![4, 2, 1], range: Some((10.0, 200.0)) };
+    let mut rl = RasterLayer::unread_in_place(format!("{base}/scene.tif")).with_look(look);
+    assert!(rl.data.is_none());
+    assert!(read_together(&mut [&mut rl]).is_empty());
+    assert!(rl.data.is_some());
+    assert_eq!(rl.style.renderer, RasterRenderer::Rgb { red: 4, green: 2, blue: 1 });
+    assert_eq!(rl.style.stretch, Stretch::custom(10.0, 200.0));
+    let (classes, _) = serve_ranges(example_with(&Example { size: 512, tile: 256, photometric: 3, ..Example::default() }));
+    let mut stretched =
+        RasterLayer::unread_in_place(format!("{classes}/classes.tif")).with_look(AddressLook { bands: vec![], range: Some((0.0, 100.0)) });
+    let mut own = RasterLayer::unread_in_place(format!("{classes}/classes.tif"));
+    assert!(read_together(&mut [&mut stretched, &mut own]).is_empty());
+    assert!(matches!(stretched.style.renderer, RasterRenderer::Stretch { band: 0, .. }), "{:?}", stretched.style.renderer);
+    assert_eq!(own.style.renderer, RasterRenderer::Colormap);
+}
+
 /// A project saved when cloud-optimised GeoTIFFs read in place were tile layers opens them as
 /// raster layers read in place, each where it was drawn, with its name, visibility, opacity and
 /// look; a dated series stays a tile layer.
@@ -23849,7 +23875,8 @@ fn geolibre_extensionless_cog_is_a_raster_read_in_place() {
     let l = s.map().layers.iter().find(|l| l.name == "Coverage").unwrap();
     let rl = l.raster.as_ref().unwrap();
     assert!(rl.in_place && rl.data.is_none() && rl.error.is_some(), "{:?}", rl.error);
-    assert!((l.opacity() - 0.6).abs() < 1e-6 || (l.opacity() - 0.3).abs() < 1e-6, "{}", l.opacity());
+    // Drawn at its own opacity in its folder's: 0.6 × 0.5.
+    assert!((s.map().layer_opacity(l) - 0.3).abs() < 1e-6, "{}", s.map().layer_opacity(l));
     assert!(s.take_url_requests().is_empty());
 }
 

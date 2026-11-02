@@ -414,7 +414,7 @@ pub fn info(archive: &str) -> Result<Option<Arc<Info>>, String> {
     match all.get(archive) {
         Some(State::Ready(i)) => return Ok(Some(i.clone())),
         Some(State::Loading(_)) => return Ok(None),
-        Some(State::Failed(e, at)) if at.elapsed() < RETRY => return Err(e.clone()),
+        Some(State::Failed(e, at)) if at.elapsed() < crate::cache::retry_wait(e, RETRY) => return Err(e.clone()),
         _ => {}
     }
     all.insert(archive.to_string(), State::Loading(Vec::new()));
@@ -442,7 +442,7 @@ fn with_info(archive: &str, f: Box<dyn FnOnce(Result<Arc<Info>, String>) + Send>
             f(Ok(i));
         }
         Some(State::Loading(waiting)) => waiting.push(f),
-        Some(State::Failed(e, at)) if at.elapsed() < RETRY => {
+        Some(State::Failed(e, at)) if at.elapsed() < crate::cache::retry_wait(e, RETRY) => {
             let e = e.clone();
             drop(all);
             f(Err(e));
