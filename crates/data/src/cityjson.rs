@@ -27,8 +27,13 @@ const MAX_FACES: usize = 200_000;
 /// Most faces merged for one file, whatever its objects ask: past it, footprints are hulls, so a
 /// crafted file can't make loading take hours.
 const MAX_FILE_FACES: usize = if cfg!(target_arch = "wasm32") { 500_000 } else { 4_000_000 };
-/// How many levels of parents an object's heights reach. The specification has two.
-const MAX_LEVELS: usize = 8;
+/// The rounds of passing heights up to parents always allowed. The specification has two levels.
+const MIN_PARENT_ROUNDS: usize = 8;
+/// Most objects and parent links visited passing heights up: past it, a crafted chain stops, with a
+/// notice, rather than costing the square of its length.
+const MAX_PARENT_VISITS: usize = if cfg!(target_arch = "wasm32") { 50_000_000 } else { 200_000_000 };
+/// Most characters of an object type shown in a layer's name.
+const MAX_TYPE_IN_NAME: usize = 64;
 /// The fields every row starts with.
 const LEAD: [&str; 4] = ["id", "type", "parent", "lod"];
 /// The fields every row ends with.
@@ -71,6 +76,8 @@ struct Doc<'a> {
     #[serde(rename = "CityObjects", borrow)]
     objects: Option<BTreeMap<String, &'a RawValue>>,
     metadata: Option<Json>,
+    #[serde(borrow)]
+    appearance: Option<&'a RawValue>,
 }
 
 #[derive(Deserialize)]
@@ -150,6 +157,9 @@ struct Counts {
     instances: usize,
     tin_reliefs: usize,
     unconverted: usize,
+    bad_heights: usize,
+    /// The rounds after which passing heights up to parents stopped, when it did.
+    parent_rounds: usize,
     unknown: BTreeSet<String>,
     renamed: BTreeSet<String>,
 }
@@ -358,6 +368,16 @@ fn horizontal_epsg(code: u32) -> u32 {
     }
 }
 
+/// The system a file's metadata names, if it names one.
+fn named_system(metadata: Option<&Json>) -> Option<&str> {
+    metadata.and_then(|m| m.get("referenceSystem")).and_then(Json::as_str).map(str::trim).filter(|s| !s.is_empty())
+}
+
+/// The system a name stands for, by its horizontal part, if RustGIS knows it.
+fn known_system(system: &str) -> Option<Crs> {
+    crate::ogc::warp::epsg_of(system).and_then(|c| Crs::from_epsg(horizontal_epsg(c)))
+}
+
 /// The coordinate system: the one given, the one the file names, or longitude/latitude when it
 /// names none and every vertex can be one. Anything else is an error, not a guess. A file only names
 /// EPSG codes: what it says is never registered as a new definition.
@@ -369,10 +389,9 @@ fn coordinate_system(
     notes: &mut Vec<String>,
 ) -> Result<Crs> {
     let within = |x: f64, y: f64| vertices.iter().all(|p| p[0].abs() <= x && p[1].abs() <= y);
-    let named = metadata.and_then(|m| m.get("referenceSystem")).and_then(Json::as_str).map(str::trim).filter(|s| !s.is_empty());
-    let crs = match (given, named) {
+    let crs = match (given, named_system(metadata)) {
         (Some(crs), _) => crs,
-        (None, Some(system)) => crate::ogc::warp::epsg_of(system).and_then(|c| Crs::from_epsg(horizontal_epsg(c))).ok_or_else(|| {
+        (None, Some(system)) => known_system(system).ok_or_else(|| {
             let system: String = system.chars().take(80).collect();
             DataError::Format(format!("{file_name}: it names a coordinate system RustGIS doesn't know ({system})"))
         })?,
@@ -392,19 +411,45 @@ fn coordinate_system(
     if crs == Crs::LonLat && !within(180.5, 90.5) {
         notes.push("coordinates are not longitude/latitude; RustGIS reads them as WGS 84 and they may draw out of place".into());
     }
+    if let Some(unit) = crs.height_unit_not_metre() {
+        notes.push(format!(
+            "{} measures in {unit}: z_min, z_max and height are kept as the file has them, and Style › Extrusion reads metres, so objects may stand at the wrong height",
+            crs.label()
+        ));
+    }
     Ok(crs)
+}
+
+/// What a file's appearance holds, which isn't read: a notice, or nothing for one that holds nothing.
+fn appearance_note(raw: &RawValue) -> Option<String> {
+    #[derive(Deserialize)]
+    struct Appearance {
+        #[serde(default)]
+        materials: Vec<IgnoredAny>,
+        #[serde(default)]
+        textures: Vec<IgnoredAny>,
+    }
+    let Ok(held) = serde_json::from_str::<Appearance>(raw.get()) else {
+        return Some("the file's appearance isn't read".to_string());
+    };
+    let (materials, textures) = (held.materials.len(), held.textures.len());
+    (materials + textures > 0)
+        .then(|| format!("the file's appearance isn't read: {materials} materials and {textures} textures are left out"))
 }
 
 /// The name a layer's type goes by: an extension's as written, but `+GenericCityObject` (1.1) and
 /// `GenericCityObject` (2.0) share one.
 fn type_name(ty: &str) -> String {
     let ty = if ty == "+GenericCityObject" { "GenericCityObject" } else { ty.trim() };
-    if ty.is_empty() { "CityObject".to_string() } else { ty.chars().take(64).collect() }
+    if ty.is_empty() { "CityObject".to_string() } else { ty.to_string() }
 }
 
 /// An object's attributes, apart from the fields every row has, and from each other.
 fn attribute_names(attributes: serde_json::Map<String, Json>, counts: &mut Counts) -> Vec<(String, Json)> {
     let mut used: BTreeSet<String> = attributes.keys().map(|k| k.to_ascii_lowercase()).collect();
+    // The number each reserved name goes on from, whatever its case: `used` is finite, so one is
+    // always free, and the spellings of a name don't each search again past the same numbers.
+    let mut next: HashMap<String, usize> = HashMap::new();
     attributes
         .into_iter()
         .map(|(name, value)| {
@@ -412,10 +457,14 @@ fn attribute_names(attributes: serde_json::Map<String, Json>, counts: &mut Count
                 return (name, value);
             }
             counts.renamed.insert(name.chars().take(64).collect());
-            let free = (1..100)
-                .map(|k| format!("{name}_{k}"))
-                .find(|n| !is_reserved(n) && used.insert(n.to_ascii_lowercase()))
-                .unwrap_or_else(|| format!("{name}_attribute"));
+            let k = next.entry(name.to_ascii_lowercase()).or_insert(1);
+            let free = loop {
+                let candidate = format!("{name}_{k}");
+                *k += 1;
+                if used.insert(candidate.to_ascii_lowercase()) {
+                    break candidate;
+                }
+            };
             (free, value)
         })
         .collect()
@@ -424,6 +473,16 @@ fn attribute_names(attributes: serde_json::Map<String, Json>, counts: &mut Count
 /// Reads a CityJSON file into a layer per object type and geometry family, those with something to
 /// draw first. `given` is its coordinate system, when the caller knows it, over the one it names.
 pub fn read(file_name: &str, bytes: &[u8], given: Option<Crs>) -> Result<Vec<(Dataset, ReadReport)>> {
+    read_with(file_name, bytes, given, false)
+}
+
+/// As [`read`], for a member of an archive, where the system given is meant for what can't say its
+/// own: a model that names one RustGIS knows keeps it.
+pub(crate) fn read_member(file_name: &str, bytes: &[u8], given: Option<Crs>) -> Result<Vec<(Dataset, ReadReport)>> {
+    read_with(file_name, bytes, given, true)
+}
+
+fn read_with(file_name: &str, bytes: &[u8], given: Option<Crs>, keep_named: bool) -> Result<Vec<(Dataset, ReadReport)>> {
     if bytes.len() as u64 > crate::io::MAX_BYTES {
         return Err(DataError::Format(format!("file is too large ({} bytes)", bytes.len())));
     }
@@ -450,7 +509,9 @@ pub fn read(file_name: &str, bytes: &[u8], given: Option<Crs>) -> Result<Vec<(Da
         *v = [v[0] * s[0] + t[0], v[1] * s[1] + t[1], v[2] * s[2] + t[2]];
     }
     let mut notes = Vec::new();
+    let given = given.filter(|_| !keep_named || named_system(doc.metadata.as_ref()).and_then(known_system).is_none());
     let crs = coordinate_system(file_name, given, doc.metadata.as_ref(), &vertices, &mut notes)?;
+    notes.extend(doc.appearance.and_then(appearance_note));
     let to_lonlat =
         if crs == Crs::LonLat { None } else { Some(crs.transformer().map_err(|e| DataError::Format(format!("{file_name}: {e}")))?) };
     let Some(objects) = doc.objects else {
@@ -496,7 +557,7 @@ pub fn read(file_name: &str, bytes: &[u8], given: Option<Crs>) -> Result<Vec<(Da
             attributes,
         });
     }
-    raise_parents(&mut built);
+    counts.parent_rounds = raise_parents(&mut built, MAX_PARENT_VISITS).unwrap_or(0);
     let is_3d = |b: &Built| b.solid || b.z.is_some_and(|(lo, hi)| hi > lo);
     counts.footprints = rows
         .iter()
@@ -561,9 +622,14 @@ fn object_rows(
     budget: &mut usize,
 ) -> ObjectRows {
     let mut z: Option<(f64, f64)> = None;
+    let mut bad_height = false;
     let mut heights = |points: &[P3]| {
-        for h in points.iter().map(|p| p[2]).filter(|h| h.is_finite()) {
-            z = Some(z.map_or((h, h), |(lo, hi): (f64, f64)| (lo.min(h), hi.max(h))));
+        for h in points.iter().map(|p| p[2]) {
+            if h.is_finite() {
+                z = Some(z.map_or((h, h), |(lo, hi): (f64, f64)| (lo.min(h), hi.max(h))));
+            } else {
+                bad_height = true;
+            }
         }
     };
     let (mut surfaces, mut points, mut lines, mut solid): (Vec<Surface>, Vec<P3>, Vec<Vec<P3>>, bool) =
@@ -630,6 +696,7 @@ fn object_rows(
         solid |= depth > 0;
         surfaces.push(Surface { lod: lod_text(g.lod.as_ref()), rank: lod_number(g.lod.as_ref()), faces });
     }
+    counts.bad_heights += usize::from(bad_height);
     let mut rows = Vec::new();
     let mut push = |family: Family, lod: Option<String>, geometry: Option<Geometry>, z_dropped: bool, counts: &mut Counts| {
         let (geometry, unconverted) = match (geometry, to_lonlat) {
@@ -666,14 +733,18 @@ fn object_rows(
 }
 
 /// An object's heights take in its children's: a building whose solids are all in its parts stands
-/// as tall as they do, though its own geometry is a flat outline or nothing. Bounded rounds, so a
-/// crafted cycle or chain costs no more than the objects times [`MAX_LEVELS`].
-fn raise_parents(built: &mut [Built]) {
+/// as tall as they do, though its own geometry is a flat outline or nothing. As many rounds as there
+/// are objects settle any chain or cycle, but only as many as `visits` pays for, and never fewer than
+/// [`MIN_PARENT_ROUNDS`], so a crafted chain's cost is bounded. Gives the rounds it stopped after,
+/// when heights were still moving.
+fn raise_parents(built: &mut [Built], visits: usize) -> Option<usize> {
     let links: Vec<Vec<usize>> = {
         let index: HashMap<&str, usize> = built.iter().enumerate().map(|(i, b)| (b.id.as_str(), i)).collect();
         built.iter().map(|b| b.parent_ids.iter().filter_map(|p| index.get(p.as_str()).copied()).collect()).collect()
     };
-    for _ in 0..MAX_LEVELS {
+    let per_round = links.iter().map(|l| l.len() + 1).sum::<usize>().max(1);
+    let rounds = built.len().min(visits / per_round).max(MIN_PARENT_ROUNDS);
+    for _ in 0..rounds {
         let mut changed = false;
         for (i, parents) in links.iter().enumerate() {
             let Some((lo, hi)) = built.get(i).and_then(|b| b.z) else { continue };
@@ -686,9 +757,11 @@ fn raise_parents(built: &mut [Built]) {
             }
         }
         if !changed {
-            break;
+            return None;
         }
     }
+    // The last round may have been the one that settled it: that says too much, never too little.
+    Some(rounds)
 }
 
 /// A row's properties as a GeoJSON feature with no geometry.
@@ -746,7 +819,8 @@ fn layers(stem: &str, rows: Vec<Row>, built: &[Built], crs: Crs) -> Result<Vec<(
             Family::Point if families.get(&ty).is_some_and(|n| *n > 1) => " points",
             _ => "",
         };
-        let name = if total == 1 { stem.to_string() } else { format!("{stem} {ty}{suffix}") };
+        let shown: String = ty.chars().take(MAX_TYPE_IN_NAME).collect();
+        let name = if total == 1 { stem.to_string() } else { format!("{stem} {shown}{suffix}") };
         let features: Vec<String> = rows.iter().filter_map(|r| built.get(r.object).map(|b| feature_text(b, r.lod.as_deref()))).collect();
         let text = format!("{{\"type\":\"FeatureCollection\",\"features\":[{}]}}", features.join(","));
         let (table, mut report) = crate::io::read_geojson(&text, &name)?;
@@ -831,6 +905,17 @@ fn messages(c: &Counts) -> Vec<String> {
     say(
         c.unconverted,
         format!("{} city objects have coordinates outside their coordinate system: they are kept without geometry", c.unconverted),
+    );
+    say(
+        c.bad_heights,
+        format!("{} city objects have heights that aren't finite numbers, which z_min, z_max and height leave out", c.bad_heights),
+    );
+    say(
+        c.parent_rounds,
+        format!(
+            "parent chains go deeper than {} levels: the heights of some parents don't take in all their descendants'",
+            c.parent_rounds
+        ),
     );
     if !c.unknown.is_empty() {
         out.push(format!("geometries of unknown types are left out: {}", listed(&c.unknown)));

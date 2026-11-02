@@ -1748,7 +1748,8 @@ pub fn read_zip(file_name: &str, bytes: &[u8]) -> Result<Vec<(Dataset, ReadRepor
 }
 
 /// Reads a ZIP, optionally overriding the source CRS of every Shapefile in it. Other formats
-/// retain their own coordinate systems. The override is applied before reading any shapes.
+/// retain their own coordinate systems; a CityJSON model takes it only when it names none RustGIS
+/// knows. The override is applied before reading any shapes.
 pub fn read_zip_in(file_name: &str, bytes: &[u8], crs: Option<Crs>) -> Result<Vec<(Dataset, ReadReport)>> {
     if bytes.len() as u64 > MAX_BYTES {
         return Err(DataError::Format(format!("file is too large ({} bytes)", bytes.len())));
@@ -1834,10 +1835,18 @@ pub fn read_zip_in(file_name: &str, bytes: &[u8], crs: Option<Crs>) -> Result<Ve
             continue;
         }
         let leaf = n.rsplit('/').next().unwrap_or(&n);
-        match read_bytes(leaf, &b) {
-            Ok(mut read) => {
-                read.0.source = Some(format!("{file_name}/{n}"));
-                out.push(read);
+        // A city model has many layers.
+        let read = if is_cityjson(leaf, &b) { crate::cityjson::read_member(leaf, &b, crs) } else { read_bytes(leaf, &b).map(|r| vec![r]) };
+        match read {
+            Ok(layers) => {
+                for (mut ds, report) in layers {
+                    if out.len() >= MAX_ZIP_LAYERS {
+                        skipped.push(format!("{n}: {} (past the {MAX_ZIP_LAYERS}-layer limit)", ds.name));
+                        continue;
+                    }
+                    ds.source = Some(format!("{file_name}/{n}"));
+                    out.push((ds, report));
+                }
             }
             Err(e) => skipped.push(format!("{n} ({e})")),
         }

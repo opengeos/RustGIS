@@ -9920,6 +9920,43 @@ fn cityjson_layers_and_the_coordinate_system_given() {
     let data = base64::engine::general_purpose::STANDARD.encode(std::fs::read(&plain).unwrap());
     s.run("layer.addDataBytes", &json!({"fileName": "up.json", "data": data, "crs": "EPSG:28992", "layer": "Road"})).unwrap();
     assert!(s.map().layer_by_name("up Road").is_some() && s.map().layer_by_name("up Bridge").is_none());
+
+    // A layer picked from a `.json` that names its system, with no `crs`: that layer, by every route.
+    let plain_text = std::fs::read_to_string(&plain).unwrap();
+    let mut s = Session::new(Project::default());
+    s.run("layer.addData", &json!({"path": plain.display().to_string(), "layer": "Road"})).unwrap();
+    assert!(s.map().layer_by_name("plain Road").is_some() && s.map().layer_by_name("plain Bridge").is_none());
+    s.run("layer.addDataText", &json!({"fileName": "t.json", "text": plain_text, "layer": "Road"})).unwrap();
+    assert!(s.map().layer_by_name("t Road").is_some() && s.map().layer_by_name("t Bridge").is_none());
+    s.run("layer.addDataBytes", &json!({"fileName": "b.json", "data": data, "layer": "Road"})).unwrap();
+    assert!(s.map().layer_by_name("b Road").is_some() && s.map().layer_by_name("b Bridge").is_none());
+    assert!(s.run("layer.addData", &json!({"path": plain.display().to_string(), "layer": "Canal"})).unwrap_err().contains("no layer"));
+
+    // Zipped: a layer picked says what the model says, and the layers are listed as they're added.
+    let mut zipped: Value = serde_json::from_str(&plain_text).unwrap();
+    zipped["CityObjects"]["c"] = json!({"type": "Bridge", "geometry": [{"type": "Blob", "boundaries": []}]});
+    let archive = dir.join("models.zip");
+    let write_zip = |model: &Value| {
+        let zip = rustgis_data::zip::write(&[("d/m.city.json".to_string(), model.to_string().into_bytes())]).unwrap();
+        std::fs::write(&archive, zip).unwrap();
+    };
+    write_zip(&zipped);
+    let zip_path = archive.display().to_string();
+    let mut s = Session::new(Project::default());
+    let mark = s.notice_mark();
+    s.run("layer.addData", &json!({"path": zip_path, "layer": "Road"})).unwrap();
+    assert!(s.map().layer_by_name("m Road").is_some() && s.map().layer_by_name("m Bridge").is_none());
+    assert!(s.notices_since(mark).iter().any(|n| n.text.contains("unknown types")), "{:?}", s.notices_since(mark));
+    zipped["CityObjects"].as_object_mut().unwrap().remove("c");
+    write_zip(&zipped);
+    let mark = s.notice_mark();
+    s.run("layer.addData", &json!({"path": zip_path, "layer": "Road", "name": "again"})).unwrap();
+    assert!(s.notices_since(mark).iter().all(|n| !n.text.contains("unknown types")), "{:?}", s.notices_since(mark));
+    zipped.as_object_mut().unwrap().remove("metadata");
+    write_zip(&zipped);
+    assert!(s.run("info.fileLayers", &json!({"path": zip_path})).is_err(), "no system to place it by");
+    let listed = s.run("info.fileLayers", &json!({"path": zip_path, "crs": "EPSG:28992"})).unwrap();
+    assert_eq!(listed["layers"], json!(["m Bridge", "m Road"]));
     let _ = std::fs::remove_dir_all(dir);
 }
 
