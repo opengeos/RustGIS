@@ -1,6 +1,6 @@
 //! ASCII grids (`.asc`): a short header, then rows of numbers.
 
-use super::{ColorHint, Crs, GeoTransform, MAX_SAMPLES, Raster, Uncounted};
+use super::{ColorHint, Crs, Exact, GeoTransform, MAX_SAMPLES, Raster, Uncounted};
 use crate::{DataError, Result};
 
 /// Reads an ASCII grid. Without a known coordinate system, coordinates that fit in degrees are
@@ -17,6 +17,8 @@ pub(super) fn read_with_nodata(text: &str, name: &str, crs: Option<Crs>, sidecar
     let (mut ncols, mut nrows, mut x, mut y, mut cell, mut dx, mut dy, mut nodata) = (None, None, None, None, None, None, None, None);
     let (mut centre_x, mut centre_y) = (false, false);
     let mut entries = 0;
+    // The no-data value exactly as the header writes it (a whole number past 2^53 stays whole).
+    let mut nodata_exact = None;
     while let Some(key) = tokens.peek().map(|k| k.to_ascii_lowercase()) {
         if key.parse::<f64>().is_ok() {
             break;
@@ -27,7 +29,8 @@ pub(super) fn read_with_nodata(text: &str, name: &str, crs: Option<Crs>, sidecar
             return Err(bad("not an ASCII grid header"));
         }
         tokens.next();
-        let value: f64 = tokens.next().and_then(|v| v.parse().ok()).ok_or_else(|| bad(&format!("bad value for {key}")))?;
+        let raw = tokens.next();
+        let value: f64 = raw.and_then(|v| v.parse().ok()).ok_or_else(|| bad(&format!("bad value for {key}")))?;
         match key.as_str() {
             "ncols" => ncols = Some(value),
             "nrows" => nrows = Some(value),
@@ -44,7 +47,10 @@ pub(super) fn read_with_nodata(text: &str, name: &str, crs: Option<Crs>, sidecar
             "cellsize" => cell = Some(value),
             "dx" => dx = Some(value),
             "dy" => dy = Some(value),
-            "nodata_value" => nodata = Some(value),
+            "nodata_value" => {
+                nodata = Some(value);
+                nodata_exact = raw.and_then(Exact::parse);
+            }
             _ => {}
         }
     }
@@ -68,7 +74,7 @@ pub(super) fn read_with_nodata(text: &str, name: &str, crs: Option<Crs>, sidecar
     // Each value takes at least two characters, so the text bounds what to reserve.
     let mut data = Vec::with_capacity(n.min(text.len() / 2 + 1));
     let mut rounded = 0u64;
-    let uncounted = Uncounted::new(nodata, sidecar_nodata);
+    let uncounted = Uncounted::new(nodata_exact, sidecar_nodata);
     for (i, t) in tokens.take(n).enumerate() {
         let v =
             t.parse::<f32>().map_err(|_| bad(&format!("value {} ('{}') isn't a number", i + 1, t.chars().take(20).collect::<String>())))?;
@@ -106,13 +112,12 @@ const TENS: [f64; 23] =
 /// are always held in `f32`'s normal range, and up to 15 are compared as a whole number, so only
 /// longer or more extreme values are read again as `f64`.
 fn held(text: &str, v: f32, nodata: Uncounted) -> bool {
-    // A whole number is the no-data value only when an f64 holds it exactly (past 2^53 it may not).
-    let wide = || match text.parse::<i128>() {
-        Ok(i) => Some(i as f64).filter(|w| *w as i128 == i),
-        Err(_) => text.parse().ok(),
-    };
-    if v.is_nan() || nodata.covers(v, wide) {
+    if v.is_nan() {
         return true;
+    }
+    // The token is compared exactly as written: a whole number as one, past 2^53 too.
+    if let Some(held) = nodata.decides(v, || Exact::parse(text)) {
+        return held;
     }
     // Short enough for 6 digits at most (a point and a sign aren't digits), and neither zero nor
     // past f32's range, so nothing underflowed or overflowed: held without looking further.
@@ -156,8 +161,9 @@ fn held(text: &str, v: f32, nodata: Uncounted) -> bool {
         return (at.abs() - whole as f64).abs() <= 0.5;
     }
     // A longer whole number is compared as one (an f64 rounds 2^53 + 1); a longer decimal in f64.
+    // (An f32 at 2^127 or past can't be an i128, which `as` would saturate to i128::MAX.)
     if let Ok(i) = text.parse::<i128>() {
-        return v as i128 == i;
+        return f64::from(v).abs() < 2f64.powi(127) && v as i128 == i;
     }
     let Ok(wide) = text.parse::<f64>() else { return true };
     (f64::from(v) - wide).abs() * 2.0 <= 10f64.powi(shift.saturating_neg())
@@ -257,5 +263,18 @@ mod tests {
             let r = read_with_nodata(&text, "c", None, c.sidecar).unwrap();
             assert_eq!(r.rounded.iter().sum::<u64>(), c.counted, "file {:?}, sidecar {:?}", c.file, c.sidecar);
         }
+    }
+
+    #[test]
+    fn whole_no_data_values_are_compared_exactly() {
+        for (file, samples, counted, _) in super::super::NODATA_WHOLE_CASES {
+            let values: Vec<String> = samples.iter().map(i64::to_string).collect();
+            let text = format!("ncols 2\nnrows 2\nxllcorner 10\nyllcorner 40\ncellsize 1\nNODATA_value {file}\n{}", values.join(" "));
+            assert_eq!(read(&text, "c", None).unwrap().rounded.iter().sum::<u64>(), *counted, "no-data {file}");
+        }
+        // i128::MAX itself reads as f32 2^127, which an i128 can't hold: it is counted.
+        let max =
+            read("ncols 1\nnrows 1\nxllcorner 10\nyllcorner 40\ncellsize 1\n170141183460469231731687303715884105727", "c", None).unwrap();
+        assert_eq!(max.rounded, vec![1]);
     }
 }

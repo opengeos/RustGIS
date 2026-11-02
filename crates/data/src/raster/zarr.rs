@@ -11,7 +11,7 @@ use std::collections::HashMap;
 
 use serde_json::{Map, Value};
 
-use super::{ColorHint, Crs, GeoTransform, MAX_SAMPLES, Raster};
+use super::{ColorHint, Crs, Exact, GeoTransform, MAX_SAMPLES, Raster};
 use crate::{DataError, Result};
 
 /// The metadata files a store may have at its root: Zarr 3's `zarr.json`, Zarr 2's consolidated
@@ -248,6 +248,8 @@ pub struct Array {
     pub chunks: Vec<u64>,
     pub dtype: DType,
     pub fill: Option<f64>,
+    /// `fill` exactly as the metadata writes it (a whole number past 2^53 stays whole).
+    pub(crate) fill_exact: Option<Exact>,
     /// Fortran order (the first dimension varies fastest).
     pub fortran: bool,
     /// The encoding, in the order it was applied.
@@ -531,6 +533,7 @@ fn array_v2(path: &str, z: &Value, attrs: Option<&Value>) -> Option<Array> {
         chunks,
         dtype,
         fill: fill_of(z.get("fill_value")),
+        fill_exact: exact_fill(z.get("fill_value")),
         fortran: z.get("order").and_then(Value::as_str) == Some("F"),
         codecs,
         attrs,
@@ -631,6 +634,7 @@ fn array_v3(path: &str, z: &Value) -> Option<Array> {
         chunks,
         dtype,
         fill: fill_of(z.get("fill_value")),
+        fill_exact: exact_fill(z.get("fill_value")),
         fortran: false,
         codecs,
         attrs: z.get("attributes").and_then(Value::as_object).cloned().unwrap_or_default(),
@@ -1056,6 +1060,32 @@ fn values_1d(a: &Array, chunks: &HashMap<String, Vec<u8>>) -> Result<Vec<f64>> {
 }
 
 /// A number attribute (`scale_factor`, `_FillValue`).
+/// A JSON number exactly: a whole one as one.
+fn exact_number(n: &serde_json::Number) -> Option<Exact> {
+    n.as_i64()
+        .map(|i| Exact::Whole(i.into()))
+        .or_else(|| n.as_u64().map(|u| Exact::Whole(u.into())))
+        .or_else(|| n.as_f64().map(Exact::Float))
+}
+
+/// [`fill_of`], with a whole number kept exact.
+fn exact_fill(v: Option<&Value>) -> Option<Exact> {
+    match v? {
+        Value::Number(n) => exact_number(n),
+        other => fill_of(Some(other)).map(Exact::Float),
+    }
+}
+
+/// [`attr_f64`], with a whole number kept exact.
+fn attr_exact(a: &Array, k: &str) -> Option<Exact> {
+    match a.attrs.get(k)? {
+        Value::Number(n) => exact_number(n),
+        Value::Array(v) => v.first().and_then(Value::as_number).and_then(exact_number),
+        Value::String(s) => Exact::parse(s),
+        _ => None,
+    }
+}
+
 fn attr_f64(a: &Array, k: &str) -> Option<f64> {
     match a.attrs.get(k)? {
         Value::Number(n) => n.as_f64(),
@@ -1134,8 +1164,9 @@ pub fn assemble(store: &Store, plan: &Plan, chunks: &HashMap<String, Vec<u8>>, n
     // empty here; real zeros are kept. These become NaN before conversion, and the raster has no
     // no-data value of its own: exactly these cells are no-data, and they are left out of the
     // rounded count (the rule `Uncounted` gives the other readers).
-    let v2_fill = if a.zarr_format == 2 { a.fill } else { None };
-    let mut missing: Vec<f64> = [v2_fill, attr_f64(a, "_FillValue"), attr_f64(a, "missing_value")].into_iter().flatten().collect();
+    // They are kept exactly as written, so a whole number past 2^53 matches only itself.
+    let v2_fill = if a.zarr_format == 2 { a.fill_exact } else { None };
+    let mut missing: Vec<Exact> = [v2_fill, attr_exact(a, "_FillValue"), attr_exact(a, "missing_value")].into_iter().flatten().collect();
     missing.dedup();
     let scale = attr_f64(a, "scale_factor").unwrap_or(1.0);
     let offset = attr_f64(a, "add_offset").unwrap_or(0.0);
@@ -1188,10 +1219,8 @@ pub fn assemble(store: &Store, plan: &Plan, chunks: &HashMap<String, Vec<u8>>, n
                     let Some(b) = at.and_then(|at| vals.get(at..at + dt.size)) else { continue };
                     let v = dt.value(b);
                     // Whole numbers are compared exactly: past 2^53 `v` has already been rounded.
-                    let is_missing = match dt.whole(b) {
-                        Some(i) => missing.iter().any(|m| m.is_finite() && *m as i128 == i && i as f64 == *m),
-                        None => missing.contains(&v),
-                    };
+                    let value = dt.whole(b).map_or(Exact::Float(v), Exact::Whole);
+                    let is_missing = missing.iter().any(|m| m.same(value));
                     let out = if v.is_nan() || is_missing {
                         f32::NAN
                     } else {
@@ -2047,6 +2076,16 @@ mod tests {
             HashMap::from([("v/0.0".to_string(), values), ("lat/0".into(), f64s([10.0, 20.0])), ("lon/0".into(), f64s([30.0, 40.0]))]);
         let p = plan(&store, &Selection { variable: "v".into(), index: vec![] }).unwrap();
         assemble(&store, &p, &chunks, "v", None).unwrap().rounded
+    }
+
+    #[test]
+    fn whole_no_data_values_are_compared_exactly() {
+        for (file, samples, _, counted) in crate::raster::NODATA_WHOLE_CASES {
+            let bytes = samples.iter().flat_map(|x| x.to_le_bytes()).collect();
+            // As a JSON number, as zarr-python writes an integer fill value.
+            let n: i64 = file.parse().unwrap();
+            assert_eq!(two_by_two("<i8", serde_json::json!({"_FillValue": n}), bytes).iter().sum::<u64>(), *counted, "fill {file}");
+        }
     }
 
     #[test]

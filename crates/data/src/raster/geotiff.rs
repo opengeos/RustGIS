@@ -14,7 +14,7 @@ use tiff::tags::Tag;
 
 use super::cog::Sparse;
 use super::crs::CustomCrs;
-use super::{ColorHint, Crs, GeoTransform, MAX_SAMPLES, Raster, Uncounted};
+use super::{ColorHint, Crs, Exact, GeoTransform, MAX_SAMPLES, Raster, Uncounted};
 use crate::{DataError, Result};
 
 fn err(e: impl std::fmt::Display) -> DataError {
@@ -33,6 +33,8 @@ struct Geo {
     unknown_epsg: Option<u32>,
     geographic_model: bool,
     nodata: Option<f64>,
+    /// The no-data value exactly as the tag writes it (a whole number past 2^53 stays whole).
+    nodata_exact: Option<Exact>,
     /// Why the file's own projection couldn't be read, if it has one.
     custom_error: Option<String>,
     /// `false` for a TIFF with no GeoTIFF tags at all: `transform` is then a stand-in.
@@ -120,13 +122,24 @@ fn geo_tags<R: Read + Seek>(dec: &mut Decoder<R>) -> Result<Geo> {
     } else {
         transform
     };
-    let nodata = dec
+    let nodata_exact = dec
         .find_tag(Tag::GdalNodata)
         .ok()
         .flatten()
         .and_then(|v| v.into_string().ok())
-        .and_then(|s| s.trim_matches(|c: char| c == '\0' || c.is_whitespace()).parse::<f64>().ok());
-    Ok(Geo { transform, affine, crs, unknown_epsg: code.filter(|_| crs.is_none()), geographic_model, nodata, custom_error, referenced })
+        .and_then(|s| Exact::parse(s.trim_matches(|c: char| c == '\0' || c.is_whitespace())));
+    let nodata = nodata_exact.map(Exact::wide);
+    Ok(Geo {
+        transform,
+        affine,
+        crs,
+        unknown_epsg: code.filter(|_| crs.is_none()),
+        geographic_model,
+        nodata,
+        nodata_exact,
+        custom_error,
+        referenced,
+    })
 }
 
 /// A cloud-optimised GeoTIFF's coordinate system, georeferencing and no-data value, from its first
@@ -492,21 +505,15 @@ fn rounded_bits(buf: &DecodingResult, nodata: Uncounted) -> Option<Vec<u64>> {
 /// ±16,777,216 and 64-bit floats with more precision than `f32` are rounded. NaN, a missing sample
 /// and no-data samples (by [`Uncounted`]'s rule) count as held.
 fn held_exactly(buf: &DecodingResult, j: usize, nodata: Uncounted) -> bool {
-    let held = |nan: bool, f: f32, exact: bool, wide: f64| exact || nan || nodata.covers(f, || Some(wide));
-    // A 64-bit whole number an f64 doesn't hold exactly can't be the (f64) no-data value: compared
-    // as NaN, it never matches.
-    let whole = |w: f64, i: i128| if w as i128 == i { w } else { f64::NAN };
+    let held = |nan: bool, f: f32, exact: bool, value: Exact| nan || nodata.decides(f, || Some(value)).unwrap_or(exact);
+    // Whole numbers are compared in i128, which holds every u64 and i64 and the f32 just past them.
+    let whole = |f: f32, i: i128| held(false, f, f as i128 == i, Exact::Whole(i));
     match buf {
-        DecodingResult::U32(v) => v.get(j).is_none_or(|&x| held(false, x as f32, x as f32 as u64 == u64::from(x), f64::from(x))),
-        DecodingResult::I32(v) => v.get(j).is_none_or(|&x| held(false, x as f32, x as f32 as i64 == i64::from(x), f64::from(x))),
-        // Compared in i128, which holds every u64 and i64 and the f32 just past them.
-        DecodingResult::U64(v) => {
-            v.get(j).is_none_or(|&x| held(false, x as f32, x as f32 as i128 == i128::from(x), whole(x as f64, i128::from(x))))
-        }
-        DecodingResult::I64(v) => {
-            v.get(j).is_none_or(|&x| held(false, x as f32, x as f32 as i128 == i128::from(x), whole(x as f64, i128::from(x))))
-        }
-        DecodingResult::F64(v) => v.get(j).is_none_or(|&x| held(x.is_nan(), x as f32, f64::from(x as f32) == x, x)),
+        DecodingResult::U32(v) => v.get(j).is_none_or(|&x| whole(x as f32, i128::from(x))),
+        DecodingResult::I32(v) => v.get(j).is_none_or(|&x| whole(x as f32, i128::from(x))),
+        DecodingResult::U64(v) => v.get(j).is_none_or(|&x| whole(x as f32, i128::from(x))),
+        DecodingResult::I64(v) => v.get(j).is_none_or(|&x| whole(x as f32, i128::from(x))),
+        DecodingResult::F64(v) => v.get(j).is_none_or(|&x| held(x.is_nan(), x as f32, f64::from(x as f32) == x, Exact::Float(x))),
         _ => true,
     }
 }
@@ -996,7 +1003,7 @@ pub(super) fn read_limited_with_nodata(
     let (full_w, full_h) = dec.dimensions().map_err(err)?;
     let geo = geo_tags(&mut dec)?;
     // The no-data value whose pixels aren't counted as rounded.
-    let uncounted = Uncounted::new(geo.nodata, sidecar_nodata);
+    let uncounted = Uncounted::new(geo.nodata_exact, sidecar_nodata);
     // The bands' descriptions GDAL keeps in the file (an `.aux.xml` sidecar's are applied after).
     let described = dec
         .find_tag(Tag::Unknown(42112))
@@ -2597,8 +2604,9 @@ mod tests {
         // value itself isn't.
         let onto = read(std::io::Cursor::new(typed::<Gray64Float>(2, 2, &[1.000_000_01, 1.0, 0.5, 2.0], Some("1"))), "o").unwrap();
         assert_eq!(onto.rounded, vec![1]);
-        // A no-data value only a sidecar gives isn't counted: 0.1 is, as no-data; the f32 nearest
-        // it, read exactly, never was; 0.123456789012345 is still counted.
+        // A no-data value only a sidecar gives isn't counted: 0.1 isn't, as no-data, but the f32
+        // nearest it, a value read exactly that the sidecar's value now masks, is, and so is
+        // 0.123456789012345.
         // A directory of its own, removed even when an assertion fails, so no sidecar is left over.
         let dir = tempfile::tempdir().unwrap();
         let tif = dir.path().join("s.tif");
@@ -2608,11 +2616,11 @@ mod tests {
         let xml = r#"<PAMDataset><PAMRasterBand band="1"><NoDataValue>0.1</NoDataValue></PAMRasterBand></PAMDataset>"#;
         std::fs::write(dir.path().join("s.tif.aux.xml"), xml).unwrap();
         let side = crate::raster::read_path(&tif).unwrap();
-        assert_eq!((side.nodata, side.rounded.as_slice()), (Some(0.1), &[1u64][..]));
+        assert_eq!((side.nodata, side.rounded.as_slice()), (Some(0.1), &[2u64][..]));
         // The same with a NaN no-data tag, which leaves the sidecar's value in force.
         std::fs::write(&tif, typed::<Gray64Float>(2, 2, &px, Some("nan"))).unwrap();
         let nan = crate::raster::read_path(&tif).unwrap();
-        assert_eq!((nan.nodata, nan.rounded.as_slice()), (Some(0.1), &[1u64][..]));
+        assert_eq!((nan.nodata, nan.rounded.as_slice()), (Some(0.1), &[2u64][..]));
         // 64-bit whole numbers are compared as integers: 2^60 + 1 changes, 2^60 doesn't.
         let big = read(std::io::Cursor::new(typed::<GrayI64>(2, 1, &[(1 << 60) + 1, 1 << 60], None)), "i64").unwrap();
         assert_eq!(big.rounded, vec![1]);
@@ -2656,6 +2664,15 @@ mod tests {
             let tif = typed::<Gray64Float>(2, 2, &c.samples, c.file);
             let r = read_with_nodata(std::io::Cursor::new(tif), "c", c.sidecar).unwrap();
             assert_eq!(r.rounded.iter().sum::<u64>(), c.counted, "file {:?}, sidecar {:?}", c.file, c.sidecar);
+        }
+    }
+
+    #[test]
+    fn whole_no_data_values_are_compared_exactly() {
+        use tiff::encoder::colortype::GrayI64;
+        for (file, samples, counted, _) in crate::raster::NODATA_WHOLE_CASES {
+            let tif = typed::<GrayI64>(2, 2, samples, Some(file));
+            assert_eq!(read(std::io::Cursor::new(tif), "c").unwrap().rounded.iter().sum::<u64>(), *counted, "no-data {file}");
         }
     }
 }

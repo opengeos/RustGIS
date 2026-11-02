@@ -214,31 +214,72 @@ impl BandStats {
 ///   finite, else none: the value [`Raster::new`] and [`Raster::apply_pam`] go on to mask with.
 /// - A sample whose value in the file is exactly that value isn't counted, even when its `f32`
 ///   overflows (a Float64 no-data of −1.8e308).
-/// - Any other sample is counted when it changed: one that rounds onto the no-data value too
-///   (an Int32 ID 16777217 with no-data 16777216), as it went from a value to no-data, and one
-///   that overflows to infinity.
+/// - Any other sample `is_valid` masks is counted, as it went from a value to no-data: one that
+///   rounds onto the no-data value (an Int32 ID 16777217 with no-data 16777216), or one `f32`
+///   holds exactly that the no-data value rounds onto (−2^63 with no-data −2^63 + 1).
+/// - Any other sample is counted when it changed, an overflow to infinity included.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(crate) struct Uncounted {
-    exact: Option<f64>,
+    exact: Option<Exact>,
     masked: Option<f32>,
+}
+
+/// A value exactly as a file states it: a whole number as one (an `f64` rounds those past 2^53),
+/// anything else as an `f64`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum Exact {
+    Whole(i128),
+    Float(f64),
+}
+
+impl Exact {
+    /// A number as text: whole when it is written as one.
+    pub(crate) fn parse(text: &str) -> Option<Exact> {
+        let text = text.trim();
+        text.parse::<i128>().map(Exact::Whole).ok().or_else(|| text.parse::<f64>().ok().map(Exact::Float))
+    }
+
+    /// The value as an `f64` (rounded, for a whole number past 2^53).
+    pub(crate) fn wide(self) -> f64 {
+        match self {
+            Exact::Whole(w) => w as f64,
+            Exact::Float(x) => x,
+        }
+    }
+
+    /// Whether two values are the same number.
+    pub(crate) fn same(self, other: Exact) -> bool {
+        match (self, other) {
+            (Exact::Whole(a), Exact::Whole(b)) => a == b,
+            (Exact::Float(a), Exact::Float(b)) => a == b,
+            // Only an integral float within i128's range (the cast saturates past it) can be one.
+            (Exact::Whole(w), Exact::Float(x)) | (Exact::Float(x), Exact::Whole(w)) => {
+                x.fract() == 0.0 && x.abs() < 2f64.powi(127) && x as i128 == w
+            }
+        }
+    }
 }
 
 impl Uncounted {
     /// The value from the file's own no-data value and the sidecar's.
-    pub(crate) fn new(file: Option<f64>, sidecar: Option<f64>) -> Uncounted {
-        let exact = file.filter(|v| v.is_finite()).or(sidecar.filter(|v| v.is_finite()));
-        Uncounted { exact, masked: exact.map(|d| d as f32).filter(|d| d.is_finite()) }
+    pub(crate) fn new(file: Option<Exact>, sidecar: Option<f64>) -> Uncounted {
+        let exact = file.filter(|v| v.wide().is_finite()).or(sidecar.filter(|v| v.is_finite()).map(Exact::Float));
+        Uncounted { exact, masked: exact.map(|d| d.wide() as f32).filter(|d| d.is_finite()) }
     }
 
-    /// Whether a sample read as `f` is no-data in the file, and so not counted. `wide` gives the
-    /// sample's value in the file; it is asked for only when `f` already matches the value's
-    /// `f32` (or both are infinite, for a value past `f32`'s range).
-    pub(crate) fn covers(self, f: f32, wide: impl FnOnce() -> Option<f64>) -> bool {
-        let candidate = match self.masked {
-            Some(m) => f == m,
-            None => self.exact.is_some() && f.is_infinite(),
-        };
-        candidate && wide() == self.exact
+    /// Whether a sample read as `f` is held, when the no-data value decides it: `Some(true)` for
+    /// the no-data value itself; `Some(false)` for any other sample [`Raster::is_valid`] masks as
+    /// no-data, exact in `f32` or not, as it went from a value to no-data; `None` otherwise (the
+    /// reader's own test decides). `value` gives the sample's value in the file; it is asked for
+    /// only when `f` matches the value's `f32` (or both are infinite, for a value past `f32`'s
+    /// range).
+    pub(crate) fn decides(self, f: f32, value: impl FnOnce() -> Option<Exact>) -> Option<bool> {
+        let is = |v: Option<Exact>| self.exact.zip(v).is_some_and(|(a, b)| a.same(b));
+        match self.masked {
+            Some(m) if f == m => Some(is(value())),
+            None if self.exact.is_some() && f.is_infinite() && is(value()) => Some(true),
+            _ => None,
+        }
     }
 }
 
@@ -275,6 +316,18 @@ pub(crate) const NODATA_CASES: &[NodataCase] = &[
     // and become no-data, so they are counted, while the no-data value itself isn't.
     NodataCase { file: Some("1"), sidecar: Some(0.1), samples: [1.000_000_01, 0.123_456_789_012_345, 0.5, 2.0], counted: 2, zarr: 2 },
     NodataCase { file: Some("16777216"), sidecar: None, samples: [16_777_217.0, 16_777_216.0, 0.5, 2.0], counted: 1, zarr: 1 },
+];
+
+/// Cases of [`Uncounted`]'s rule for 64-bit whole numbers past 2^53, which an `f64` rounds: the
+/// file's no-data value as it writes it, four Int64 samples, how many a GeoTIFF or ASCII grid
+/// counts, and how many a Zarr store (which masks exact matches only) counts.
+#[cfg(test)]
+pub(crate) const NODATA_WHOLE_CASES: &[(&str, [i64; 4], u64, u64)] = &[
+    // −2^63 + 1 is the no-data value, written and stored exactly, so it isn't counted. −2^63, which
+    // f32 holds, shares its f32: a GeoTIFF or grid masks it as no-data and counts it; Zarr keeps it.
+    ("-9223372036854775807", [i64::MIN + 1, i64::MIN + 1, i64::MIN, 1], 1, 0),
+    // −2^63 is the no-data value; −2^63 + 1 rounds onto it and is counted everywhere.
+    ("-9223372036854775808", [i64::MIN, i64::MIN + 1, 0, 1], 1, 1),
 ];
 
 /// One band of pixels, row by row.
