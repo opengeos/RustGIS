@@ -1005,12 +1005,15 @@ pub(super) fn read_limited_with_nodata(
     // The no-data value whose pixels aren't counted as rounded.
     let uncounted = Uncounted::new(geo.nodata_exact, sidecar_nodata);
     // The bands' descriptions GDAL keeps in the file (an `.aux.xml` sidecar's are applied after).
-    let described = dec
-        .find_tag(Tag::Unknown(42112))
-        .ok()
-        .flatten()
-        .and_then(|v| v.into_string().ok())
-        .and_then(|t| super::pam::parse_gdal_metadata(&t));
+    // A tag that doesn't decode is left out, and said (`Raster::lost`).
+    let described = match dec.find_tag(Tag::Unknown(42112)) {
+        Ok(None) => None,
+        Ok(Some(v)) => match v.into_string() {
+            Ok(t) => super::pam::parse_gdal_metadata(&t),
+            Err(e) => Some(super::pam::Pam::losing(format!("it isn't text ({e}): band and class names are left out"))),
+        },
+        Err(e) => Some(super::pam::Pam::losing(format!("it doesn't decode ({e}): band and class names are left out"))),
+    };
     let spp = samples(&mut dec);
     let bytes = sample_bytes(&mut dec);
     // The decoded image is held at its own pixel size before conversion to f32, so bound bytes
@@ -1189,7 +1192,7 @@ pub(super) fn read_limited_with_nodata(
         r.overview = overview;
         r.rounded = rounded;
         if let Some(p) = &described {
-            r.apply_pam(p);
+            r.apply_pam(p, super::pam::GDAL_METADATA);
         }
         return Ok(r);
     }
@@ -1239,7 +1242,7 @@ pub(super) fn read_limited_with_nodata(
     r.overview = overview;
     r.rounded = rounded;
     if let Some(p) = &described {
-        r.apply_pam(p);
+        r.apply_pam(p, super::pam::GDAL_METADATA);
     }
     Ok(r)
 }
@@ -1343,8 +1346,12 @@ pub fn write(r: &Raster, band: usize) -> Result<Vec<u8>> {
             .then(|| band.data.iter().map(|v| if r.is_valid(*v) { v.clamp(0.0, 255.0) as u8 } else { nodata.unwrap_or(0) }).collect())
     };
     let rgb = matches!(r.color, ColorHint::Rgb { .. }) && r.bands.len() >= 3;
+    // Each branch below names the bands it writes as samples (`$written`): their names, and the
+    // first one's class names (the red band's, for a colour file), go to GDAL's metadata tag,
+    // read back on open.
     macro_rules! tags {
-        ($img:expr) => {{
+        ($img:expr, $written:expr) => {{
+            let classes = super::gdal_metadata_of(r, $written);
             let e = $img.encoder();
             e.write_tag(Tag::ModelPixelScaleTag, &scale[..]).map_err(err)?;
             e.write_tag(Tag::ModelTiepointTag, &tie[..]).map_err(err)?;
@@ -1356,6 +1363,9 @@ pub fn write(r: &Raster, band: usize) -> Result<Vec<u8>> {
                 if !d.ascii.is_empty() {
                     e.write_tag(Tag::Unknown(34737), d.ascii.as_str()).map_err(err)?;
                 }
+            }
+            if let Some(xml) = &classes {
+                e.write_tag(Tag::Unknown(42112), xml.as_str()).map_err(err)?;
             }
             if let Some(nd) = r.nodata {
                 e.write_tag(Tag::GdalNodata, nd.to_string().as_str()).map_err(err)?;
@@ -1371,7 +1381,7 @@ pub fn write(r: &Raster, band: usize) -> Result<Vec<u8>> {
                 data.extend([red.get(i), green.get(i), blue.get(i), a.get(i)].map(|v| v.copied().unwrap_or(0)));
             }
             let mut img = enc.new_image::<colortype::RGBA8>(w, h).map_err(err)?;
-            tags!(img);
+            tags!(img, &[0, 1, 2, 3]);
             img.write_data(&data).map_err(err)?;
         } else {
             let mut data = Vec::with_capacity(n * 3);
@@ -1379,7 +1389,7 @@ pub fn write(r: &Raster, band: usize) -> Result<Vec<u8>> {
                 data.extend([red.get(i), green.get(i), blue.get(i)].map(|v| v.copied().unwrap_or(0)));
             }
             let mut img = enc.new_image::<colortype::RGB8>(w, h).map_err(err)?;
-            tags!(img);
+            tags!(img, &[0, 1, 2]);
             img.write_data(&data).map_err(err)?;
         }
     } else if rgb && let (Some(red), Some(green), Some(blue)) = (r.bands.first(), r.bands.get(1), r.bands.get(2)) {
@@ -1394,7 +1404,7 @@ pub fn write(r: &Raster, band: usize) -> Result<Vec<u8>> {
                     data.extend([at(red, i), at(green, i), at(blue, i), at(alpha, i)]);
                 }
                 let mut img = enc.new_image::<colortype::RGBA32Float>(w, h).map_err(err)?;
-                tags!(img);
+                tags!(img, &[0, 1, 2, 3]);
                 img.write_data(&data).map_err(err)?;
             }
             None => {
@@ -1403,14 +1413,14 @@ pub fn write(r: &Raster, band: usize) -> Result<Vec<u8>> {
                     data.extend([at(red, i), at(green, i), at(blue, i)]);
                 }
                 let mut img = enc.new_image::<colortype::RGB32Float>(w, h).map_err(err)?;
-                tags!(img);
+                tags!(img, &[0, 1, 2]);
                 img.write_data(&data).map_err(err)?;
             }
         }
     } else {
         let b = r.bands.get(band).ok_or_else(|| err(format!("the raster has no band {}", band + 1)))?;
         let mut img = enc.new_image::<colortype::Gray32Float>(w, h).map_err(err)?;
-        tags!(img);
+        tags!(img, &[band]);
         img.write_data(&b.data).map_err(err)?;
     }
     Ok(out.into_inner())
@@ -2096,6 +2106,38 @@ mod tests {
         // Without the tag, the band keeps its number.
         let plain = read(std::io::Cursor::new(grey8(2, 2, &[1, 2, 3, 4], None)), "plain").unwrap();
         assert_ne!(plain.bands[0].name, "NDVI 2024-06-01");
+    }
+
+    #[test]
+    fn what_a_files_metadata_leaves_out_is_kept_to_be_said() {
+        use crate::raster::cog::{Example, example_with};
+        // Read whole, a file with a class item past a band's values says so; a clean one doesn't.
+        let lossy = read(
+            std::io::Cursor::new(example_with(&Example { size: 256, tile: 256, classes: true, lossy: true, ..Example::default() })),
+            "lossy",
+        )
+        .unwrap();
+        assert!(lossy.lost.iter().any(|l| l.starts_with("its GDAL metadata: 1 CLASS_ item(s)")), "{:?}", lossy.lost);
+        let clean =
+            read(std::io::Cursor::new(example_with(&Example { size: 256, tile: 256, classes: true, ..Example::default() })), "clean")
+                .unwrap();
+        assert!(clean.lost.is_empty(), "{:?}", clean.lost);
+    }
+
+    #[test]
+    fn class_names_are_written_back() {
+        // In GDAL's metadata tag, as a window of MapBiomas keeps its classes in a saved project.
+        let mut r = read(std::io::Cursor::new(grey8(2, 2, &[3, 15, 3, 0], None)), "cover").unwrap();
+        r.bands[0].classes = vec![String::new(); 16];
+        r.bands[0].classes[3] = "Formação Florestal".into();
+        r.bands[0].classes[15] = "Pastagem".into();
+        r.bands[0].name = "classe_mapbiomas".into();
+        let back = read(std::io::Cursor::new(write(&r, 0).unwrap()), "back").unwrap();
+        assert_eq!((back.bands[0].class_name(3.0), back.bands[0].class_name(15.0)), (Some("Formação Florestal"), Some("Pastagem")));
+        assert_eq!(back.bands[0].name, "classe_mapbiomas");
+        // The same through the cloud-optimised writer.
+        let cog = read(std::io::Cursor::new(super::super::cogwrite::write(&r, 0).unwrap()), "cog").unwrap();
+        assert_eq!((cog.bands[0].name.as_str(), cog.bands[0].class_name(3.0)), ("classe_mapbiomas", Some("Formação Florestal")));
     }
 
     #[test]

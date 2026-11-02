@@ -385,6 +385,10 @@ pub struct Raster {
     /// `false` for a scan (a TIFF with no GeoTIFF tags, a PNG, a JPEG): `transform` is then only
     /// a stand-in until the picture is placed or georeferenced, and says nothing about the ground.
     pub georeferenced: bool,
+    /// What reading it left out or cut (a colour table, names), one line a kind with a count,
+    /// for whoever adds it to the map to say (AGENTS.md, Never silent). Empty when nothing was
+    /// left out.
+    pub lost: Vec<String>,
     /// How many values of each band changed when read as `f32` (Int32 IDs past 16,777,216, Float64
     /// values with more digits than `f32` holds), by band; empty when none did. NaN and no-data
     /// values aren't counted.
@@ -402,6 +406,19 @@ impl std::fmt::Debug for Raster {
             .field("transform", &self.transform)
             .finish_non_exhaustive()
     }
+}
+
+/// A band's own name, for a file's metadata: `None` while it keeps its number (`Band 3`).
+pub(crate) fn band_name_of(r: &Raster, band: usize) -> Option<&str> {
+    r.bands.get(band).map(|b| b.name.as_str()).filter(|n| !n.trim().is_empty() && *n != format!("Band {}", band + 1))
+}
+
+/// GDAL's metadata tag (42112) for the bands `bands` of `r`, written as samples in that order:
+/// their names, and the first one's class names. Both GeoTIFF writers take it from here.
+pub(crate) fn gdal_metadata_of(r: &Raster, bands: &[usize]) -> Option<String> {
+    let names: Vec<Option<&str>> = bands.iter().map(|b| band_name_of(r, *b)).collect();
+    let first = bands.first().and_then(|b| r.bands.get(*b)).map_or(&[][..], |b| &b.classes[..]);
+    pam::gdal_metadata(&names, first)
 }
 
 impl Raster {
@@ -449,6 +466,7 @@ impl Raster {
             source: None,
             overview: None,
             georeferenced: true,
+            lost: Vec::new(),
             rounded: Vec::new(),
             transformer,
             extent: Extent::EMPTY,
@@ -463,8 +481,19 @@ impl Raster {
     /// Applies what GDAL's `.aux.xml` sidecar says about the bands: their descriptions name them,
     /// their category names name their classes, its no-data value applies when the file has none,
     /// and its statistics stand in for those of a reduced overview (the whole band's, where the
-    /// overview's only approximate them).
-    pub fn apply_pam(&mut self, pam: &pam::Pam) {
+    /// overview's only approximate them). What it left out is said as `from`'s ("its GDAL
+    /// metadata", "its .aux.xml sidecar").
+    pub fn apply_pam(&mut self, pam: &pam::Pam, from: &str) {
+        self.lost.extend(pam.lost.iter().map(|l| format!("{from}: {l}")));
+        // Names for bands the raster doesn't have have nowhere to go.
+        let beyond = pam
+            .bands
+            .iter()
+            .filter(|b| (b.band == 0 || b.band > self.bands.len()) && (b.description.is_some() || !b.categories.is_empty()))
+            .count();
+        if beyond > 0 {
+            self.lost.push(format!("{from}: names for {beyond} band(s) it doesn't have (it has {}) left out", self.bands.len()));
+        }
         let mut recompute = false;
         if self.nodata.is_none() {
             self.nodata = pam.nodata();
@@ -685,7 +714,7 @@ pub fn read_path(path: &Path) -> Result<Raster> {
         other => return Err(DataError::Unsupported(format!(".{other}"))),
     };
     if let Some(p) = &pam {
-        r.apply_pam(p);
+        r.apply_pam(p, pam::SIDECAR);
     }
     r.source = Some(path.display().to_string());
     Ok(r)
@@ -1081,6 +1110,26 @@ pub(crate) mod tests {
             assert_eq!(b.class_name(v), None, "{v}");
         }
         assert!(small().bands[0].classes.is_empty(), "no sidecar, no names");
+        // Names for a band the raster doesn't have are said, not dropped.
+        let mut one = small();
+        one.apply_pam(
+            &pam::Pam {
+                bands: vec![pam::PamBand { band: 2, description: Some("NIR".into()), ..Default::default() }],
+                lost: vec!["1 band record(s) for no band from 1 to 65536 left out".into()],
+            },
+            pam::SIDECAR,
+        );
+        assert!(
+            one.lost.iter().any(|l| l == "its .aux.xml sidecar: names for 1 band(s) it doesn't have (it has 1) left out"),
+            "{:?}",
+            one.lost
+        );
+        // What the document left out is said as the sidecar's, not the GDAL tag's.
+        assert!(
+            one.lost.iter().any(|l| l == "its .aux.xml sidecar: 1 band record(s) for no band from 1 to 65536 left out"),
+            "{:?}",
+            one.lost
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -1092,13 +1141,14 @@ pub(crate) mod tests {
                 stats: Some(pam::Stats { min: -50.0, max: 900.0, mean: Some(300.0), std_dev: Some(40.0) }),
                 ..Default::default()
             }],
+            ..Default::default()
         };
         let mut full = small();
-        full.apply_pam(&pam);
+        full.apply_pam(&pam, pam::SIDECAR);
         assert_eq!((full.bands[0].stats.min, full.bands[0].stats.max), (1.0, 12.0), "the whole band's own statistics are exact");
         let mut ov = small();
         ov.overview = Some((400, 300));
-        ov.apply_pam(&pam);
+        ov.apply_pam(&pam, pam::SIDECAR);
         let s = &ov.bands[0].stats;
         assert_eq!((s.min, s.max, s.mean, s.std_dev, s.count), (-50.0, 900.0, 300.0, 40.0, 11));
         assert_eq!(s.histogram.iter().sum::<u64>(), 11);

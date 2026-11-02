@@ -223,6 +223,16 @@ pub struct Layout {
     /// The bands are stored apart (planar configuration 2): each tile's bands are chunks of their
     /// own, band `b` of tile `i` at chunk `b × tiles + i`, so a band is read without the others.
     pub planar: bool,
+    /// The colour table of a palette image (its pixels are indexes): kept apart from `color`,
+    /// which says how its tiles are drawn (grey), for a window read as a raster (#1204).
+    pub palette: Option<Vec<[u8; 4]>>,
+    /// What GDAL's metadata tag (`GDAL_METADATA`, 42112) says about the bands: their names, and
+    /// the class names of a categorical file.
+    pub described: Option<super::pam::Pam>,
+    /// What the header holds but isn't read: a colour table or GDAL metadata that doesn't decode,
+    /// a colour table too short for its pixels. One line each, for a window to say (AGENTS.md,
+    /// Never silent); drawing in place shows the file grey without them, as before.
+    pub lost: Vec<String>,
 }
 
 impl Layout {
@@ -309,6 +319,8 @@ pub fn layout(bytes: &Sparse) -> Result<Parse> {
 }
 
 fn read_layout(r: Sparse) -> Result<Parse> {
+    // The same bytes, to tell a tag not read yet from one that is broken.
+    let seen = r.clone();
     let mut dec = Decoder::new(super::geotiff::reader(r).map_err(err)?).map_err(err)?.with_limits(limits());
     let Some(geo) = super::geotiff::cog_geo(&mut dec)? else {
         return Ok(Parse::NotTiled("a rotated image, or one without coordinates, is read whole".into()));
@@ -343,6 +355,55 @@ fn read_layout(r: Sparse) -> Result<Parse> {
         (_, ..=8) => "UInt8",
         (_, ..=16) => "UInt16",
         _ => "UInt32",
+    };
+    // The full image's colour table and GDAL metadata. A tag whose bytes aren't read yet asks
+    // for them (the error goes up as a `Need`); one that doesn't decode is left out, and said.
+    let tag = |dec: &mut Decoder<_>, t: Tag| match dec.find_tag(t) {
+        Ok(v) => Ok(Ok(v)),
+        Err(_) if seen.missing().is_some() => Err(err("the header isn't read yet")),
+        Err(e) => Ok(Err(e.to_string())),
+    };
+    let mut lost = Vec::new();
+    let palette = match color {
+        ColorHint::Gray => match tag(&mut dec, Tag::ColorMap)? {
+            Ok(None) => None,
+            Ok(Some(v)) => match v.into_u16_vec() {
+                Ok(map) => {
+                    let table = colour_table(&map, bits);
+                    if table.is_none() {
+                        lost.push(format!(
+                            "its colour table has {} entries, short of the {} a palette of {bits}-bit pixels needs: it is left out",
+                            map.len(),
+                            3usize << bits.min(16)
+                        ));
+                    }
+                    table
+                }
+                Err(e) => {
+                    lost.push(format!("its colour table doesn't decode ({e}): it is left out"));
+                    None
+                }
+            },
+            Err(e) => {
+                lost.push(format!("its colour table doesn't decode ({e}): it is left out"));
+                None
+            }
+        },
+        _ => None,
+    };
+    let described = match tag(&mut dec, Tag::Unknown(42112))? {
+        Ok(None) => None,
+        Ok(Some(v)) => match v.into_string() {
+            Ok(t) => super::pam::parse_gdal_metadata(&t),
+            Err(e) => {
+                lost.push(format!("its GDAL metadata isn't text ({e}): band and class names are left out"));
+                None
+            }
+        },
+        Err(e) => {
+            lost.push(format!("its GDAL metadata doesn't decode ({e}): band and class names are left out"));
+            None
+        }
     };
     let mut levels = Vec::new();
     let mut index = 0usize;
@@ -387,7 +448,27 @@ fn read_layout(r: Sparse) -> Result<Parse> {
     if levels.is_empty() {
         return Ok(Parse::NotTiled("no image".into()));
     }
-    Ok(Parse::Done(Box::new(Layout { levels, crs: geo.0, transform: geo.1, nodata: geo.2, bands, color, data_type, planar })))
+    Ok(Parse::Done(Box::new(Layout {
+        levels,
+        crs: geo.0,
+        transform: geo.1,
+        nodata: geo.2,
+        bands,
+        color,
+        data_type,
+        planar,
+        palette,
+        described,
+        lost,
+    })))
+}
+
+/// A TIFF colour map (`ColorMap`: every red, then every green, then every blue, 16 bits each) as
+/// RGBA bytes: `None` when it is shorter than the `bits` it indexes.
+fn colour_table(map: &[u16], bits: u16) -> Option<Vec<[u8; 4]>> {
+    let n = 1usize << bits.min(16);
+    let c = |i: usize| (map.get(i).copied().unwrap_or(0) / 257) as u8;
+    (map.len() >= 3 * n).then(|| (0..n).map(|i| [c(i), c(n + i), c(2 * n + i), 255]).collect())
 }
 
 /// Decodes one chunk (a tile, or one band of a tile when the bands are stored apart, see
@@ -469,11 +550,17 @@ pub struct Example {
     pub int8: bool,
     /// Stored bottom up: a positive Y pixel size, the first row the southernmost (at 45° N).
     pub bottom_up: bool,
+    /// A palette image (one band of bytes) whose index `i` is the colour (i, 255 − i, 0), with
+    /// classes named in GDAL's metadata as the MapBiomas files name theirs (`CLASS_3`, `CLASS_15`).
+    pub classes: bool,
+    /// With `classes`: a colour table of 128 colours (too short for bytes) and a class item past
+    /// the values a band holds (`CLASS_70000`), for what a reader leaves out.
+    pub lossy: bool,
 }
 
 impl Default for Example {
     fn default() -> Self {
-        Example { size: 1024, tile: 256, bands: 1, planar: false, int8: false, bottom_up: false }
+        Example { size: 1024, tile: 256, bands: 1, planar: false, int8: false, bottom_up: false, classes: false, lossy: false }
     }
 }
 
@@ -537,7 +624,7 @@ pub fn example_with(e: &Example) -> Vec<u8> {
             (257, V::L(vec![s])),
             (258, V::S(vec![8; nb as usize])),
             (259, V::S(vec![1])),
-            (262, V::S(vec![1])),
+            (262, V::S(vec![if e.classes { 3 } else { 1 }])),
             (277, V::S(vec![nb as u16])),
             (284, V::S(vec![if e.planar { 2 } else { 1 }])),
             (322, V::L(vec![tile])),
@@ -560,9 +647,23 @@ pub fn example_with(e: &Example) -> Vec<u8> {
                 t.push((33922, V::D(vec![0.0, 0.0, 0.0, 10.0, 46.0, 0.0])));
             }
             t.push((34735, V::S(vec![1, 1, 0, 2, 1024, 0, 1, 2, 2048, 0, 1, 4326])));
+            if e.classes {
+                let xml = if e.lossy {
+                    r#"<GDALMetadata><Item name="CLASS_3">Forest Formation</Item><Item name="CLASS_70000">Far</Item></GDALMetadata>"#
+                } else {
+                    r#"<GDALMetadata><Item name="CLASS_3">Forest Formation</Item><Item name="CLASS_15">Pasture</Item></GDALMetadata>"#
+                };
+                t.push((42112, V::A([xml.as_bytes(), b"\0"].concat())));
+            }
         }
         if e.int8 {
             t.push((42113, V::A(b"-128\0".to_vec())));
+        }
+        if e.classes {
+            let n = if e.lossy { 128 } else { 256 };
+            let red: Vec<u16> = (0..n).map(|i| i * 257).collect();
+            let green: Vec<u16> = (0..n).map(|i| (255 - i) * 257).collect();
+            t.push((320, V::S([red, green, vec![0; n as usize]].concat())));
         }
         t.sort_by_key(|(tag, _)| *tag);
         ifds.push(t);
@@ -706,7 +807,7 @@ pub(crate) mod tests {
     fn bands_stored_apart_signed_bytes_bottom_up() {
         // As AlphaEarth's embeddings are: planar, Int8 with no-data −128, a positive Y pixel size;
         // 600 pixels in tiles of 256, so the right and bottom tiles are cut by the image's edge.
-        let e = Example { size: 600, tile: 256, bands: 4, planar: true, int8: true, bottom_up: true };
+        let e = Example { size: 600, tile: 256, bands: 4, planar: true, int8: true, bottom_up: true, classes: false, lossy: false };
         let file = example_with(&e);
         let (s, l) = layout_of(&file);
         assert!(l.planar && l.bands == 4 && l.data_type == "Int8" && l.chunk_bands() == 1);
@@ -745,6 +846,29 @@ pub(crate) mod tests {
         for n in (0..file.len().min(4000)).step_by(7) {
             let _ = layout(&Sparse::default().with(0, file[..n].to_vec()));
         }
+    }
+
+    #[test]
+    fn a_palette_and_class_names_come_with_the_layout() {
+        let file = example_with(&Example { size: 512, tile: 256, classes: true, ..Example::default() });
+        let (_, l) = layout_of(&file);
+        // Drawn grey as before; the table is kept apart, for a window read as a raster.
+        assert!(matches!(l.color, ColorHint::Gray));
+        let table = l.palette.as_ref().unwrap();
+        assert_eq!((table.len(), table[3]), (256, [3, 252, 0, 255]));
+        let classes = &l.described.as_ref().unwrap().band(1).unwrap().categories;
+        assert_eq!((classes[3].as_str(), classes[15].as_str()), ("Forest Formation", "Pasture"));
+        assert!(l.lost.is_empty(), "{:?}", l.lost);
+        let (_, plain) = layout_of(&example(512, 256));
+        assert!(plain.palette.is_none() && plain.described.is_none() && plain.lost.is_empty());
+        assert_eq!(colour_table(&[0; 6], 8), None, "shorter than 256 colours");
+        // A table too short for its pixels is left out, and said; so are odd class items.
+        let (_, lossy) = layout_of(&example_with(&Example { size: 512, tile: 256, classes: true, lossy: true, ..Example::default() }));
+        assert!(lossy.palette.is_none());
+        assert!(lossy.lost.iter().any(|n| n.contains("384 entries, short of the 768")), "{:?}", lossy.lost);
+        let described = lossy.described.as_ref().unwrap();
+        assert_eq!(described.band(1).unwrap().categories[3], "Forest Formation");
+        assert!(described.lost.iter().any(|n| n.contains("1 CLASS_ item(s)")), "{:?}", described.lost);
     }
 
     #[test]
