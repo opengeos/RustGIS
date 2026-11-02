@@ -262,6 +262,8 @@ fn one_notice_per_kind_for_missing_values_and_the_latitude_limit() {
     };
     let mut z = Dataset::new("zones", GeometryType::Polygon, vec![Field::new("zone", FieldType::Text)]);
     z.push_next(polar(0.0, 10.0, 80.0, 84.0), vec![Value::Text("A".into())]);
+    // A zone reaching 87°N, beyond the class features.
+    z.push_next(polar(20.0, 30.0, 80.0, 87.0), vec![Value::Text("B".into())]);
     let mut c = Dataset::new(
         "classes",
         GeometryType::Polygon,
@@ -278,11 +280,49 @@ fn one_notice_per_kind_for_missing_values_and_the_latitude_limit() {
         result.messages,
         [
             "Tabulate Intersection: 1 row",
+            "1 zone overlaps no class feature, so it has no rows",
             "class features with no value in a sum field are left out of its shares: 2 class features in 'pop', 1 class feature in 'income'",
-            "1 class feature reaches beyond 85.05° latitude, where the map ends: parts there are taken as lying along it, with no area",
+            "1 zone feature and 1 class feature reach beyond 85.05° latitude, where the map ends: parts there are taken as lying along it, with no area",
             "1 class feature lies partly or wholly outside the zones: its value outside isn't shared out",
         ]
     );
+}
+
+/// Features of about 10 m in zones of half a degree: the overlay rounds their parts to a grid
+/// scaled to the zones, so a feature wholly inside a zone still counts whole, and one across the
+/// border between two zones shares its value out in full within that rounding, with no notice.
+#[test]
+fn small_features_in_large_zones_share_out_in_full() {
+    let sq = |x0: f64, y0: f64, w: f64, h: f64| {
+        let ring = [(x0, y0), (x0 + w, y0), (x0 + w, y0 + h), (x0, y0 + h), (x0, y0)].map(|(x, y)| Coord::new(x, y)).to_vec();
+        Some(Geometry::Polygon(vec![vec![ring]]))
+    };
+    let mut z = Dataset::new("zones", GeometryType::Polygon, vec![Field::new("zone", FieldType::Text)]);
+    z.push_next(sq(-90.3, 34.9, 0.5, 1.0), vec![Value::Text("A".into())]);
+    z.push_next(sq(-89.8, 34.9, 0.5, 1.0), vec![Value::Text("B".into())]);
+    let mut c =
+        Dataset::new("classes", GeometryType::Polygon, vec![Field::new("id", FieldType::Integer), Field::new("pop", FieldType::Integer)]);
+    for i in 0..40 {
+        // Twenty wholly inside A, then twenty across the border at 89.8°W.
+        let x = if i < 20 { -90.2 + 0.0173 * f64::from(i) } else { -89.80005 + 0.000001 * f64::from(i - 20) };
+        c.push_next(sq(x, 35.0 + 0.0211 * f64::from(i), 0.00009, 0.00009), vec![Value::Int(i64::from(i)), Value::Int(1_000_000)]);
+    }
+    let l = layers(z, c);
+    let params = json!({"zones": "zones", "zoneFields": "zone", "classes": "classes", "classFields": "id", "sumFields": "pop"});
+    let result = rustgis_analysis::run("tabulateIntersection", &l, &params).unwrap();
+    assert_eq!(result.messages, ["Tabulate Intersection: 60 rows"]);
+    let mut shared: HashMap<i64, f64> = HashMap::new();
+    for f in &table(result).features {
+        let (Some(Value::Int(id)), Some(pop)) = (f.attrs.get(1), f.attrs.get(4).and_then(Value::as_f64)) else { panic!("{:?}", f.attrs) };
+        *shared.entry(*id).or_default() += pop;
+    }
+    for (id, pop) in shared {
+        if id < 20 {
+            assert_eq!(pop, 1_000_000.0, "feature {id} wholly inside A");
+        } else {
+            assert!((pop / 1_000_000.0 - 1.0).abs() < 1e-3, "feature {id} across the border shares {pop}");
+        }
+    }
 }
 
 #[test]
