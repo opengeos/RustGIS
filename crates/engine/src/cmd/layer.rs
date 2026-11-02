@@ -118,7 +118,13 @@ pub fn commands() -> Vec<C> {
                 Some(rl) => rl.style.set_ramp(r),
                 None => {
                     let g = l.geometry_type();
-                    l.renderer.apply_ramp(r, g)
+                    l.renderer.apply_ramp(r, g);
+                    // New colours after No Fill are drawn (#1301).
+                    match l.no_fill.take() {
+                        Some(NoFill::Symbols) => l.renderer.map_symbols(show_fill),
+                        Some(NoFill::Override) if is_no_fill_override(&l.fill_layers) => l.fill_layers.clear(),
+                        _ => {}
+                    }
                 }
             })
         }).params(r#"{"layer"?, "ramp": colour ramp name}"#)
@@ -904,7 +910,8 @@ fn fill_layers(s: &mut Session, p: &Value) -> CmdResult {
                 l.renderer.map_symbols(show_fill);
                 l.no_fill = None;
             }
-            if hidden == Some(NoFill::Override) && !is_no_fill_override(&fills) {
+            // Fills set here replace No Fill's own, even transparent ones.
+            if hidden == Some(NoFill::Override) {
                 l.no_fill = None;
             }
             l.fill_layers = fills;

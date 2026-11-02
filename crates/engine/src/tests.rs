@@ -17853,6 +17853,7 @@ fn fills_come_back_after_no_fill() {
             json!({"command": "layer.symbology", "params": {"type": "unique", "field": "kind"}}),
             json!({"command": "layer.symbology", "params": {"type": "graduated", "field": "n", "classes": 2}}),
             json!({"command": "layer.symbology", "params": {"type": "graduated", "field": "n", "classes": 2}}),
+            json!({"command": "layer.ramp", "params": {"ramp": "Harbour"}}),
             json!({"command": "layer.color", "params": {"color": "#336699"}}),
             json!({"command": "layer.fillLayers", "params": {"fills": [{"pattern": "solid"}]}}),
             json!({"command": "layer.fillLayers", "params": {"fills": [{"pattern": "hatch", "angle": 45}]}}),
@@ -17872,18 +17873,23 @@ fn fills_come_back_after_no_fill() {
             s.run(step["command"].as_str().unwrap(), &step["params"]).unwrap();
             assert!(filled(&s), "{case}: {step} after No Fill draws fills");
         }
-        // A fill given its own transparent colour leaves No Fill on.
-        s.run("layer.symbology", &json!({"type": "single"})).unwrap();
-        s.run("layer.noFill", &Value::Null).unwrap();
-        s.run("layer.fillLayers", &json!({"fills": [{"pattern": "solid", "color": "#11223300"}]})).unwrap();
-        assert!(!filled(&s), "{case}: a transparent fill stays transparent");
-        // A new symbology then keeps that fill and turns No Fill off, showing the symbols' fills
-        // under it.
-        s.run("layer.symbology", &json!({"type": "single"})).unwrap();
-        let l = s.map().layer(id).unwrap();
-        assert!(matches!(l.fill_layers.as_slice(), [f] if f.color.is_some_and(|c| c.a() == 0)), "{case}: the chosen fill stays");
-        assert_eq!(l.no_fill, None, "{case}: No Fill is off");
-        assert!(l.renderer.base_symbol().fill.a() > 0, "{case}: the symbol's fill is shown");
+        // A fill given its own transparent colour leaves the polygons unfilled.
+        for colour in ["#11223300", "#00000000"] {
+            s.run("layer.symbology", &json!({"type": "single"})).unwrap();
+            s.run("layer.noFill", &Value::Null).unwrap();
+            s.run("layer.fillLayers", &json!({"fills": [{"pattern": "solid", "color": colour}]})).unwrap();
+            assert!(!filled(&s), "{case}: a transparent fill {colour} stays transparent");
+            // A new symbology then keeps that fill and turns No Fill off, showing the symbols'
+            // fills under it.
+            s.run("layer.symbology", &json!({"type": "single"})).unwrap();
+            let l = s.map().layer(id).unwrap();
+            assert!(
+                matches!(l.fill_layers.as_slice(), [f] if f.color.is_some_and(|c| c.a() == 0)),
+                "{case}: the chosen fill {colour} stays"
+            );
+            assert_eq!(l.no_fill, None, "{case}: No Fill is off");
+            assert!(l.renderer.base_symbol().fill.a() > 0, "{case}: the symbol's fill is shown");
+        }
         // One class's fills after No Fill show that class alone.
         if case == "memory" {
             s.run("layer.symbology", &json!({"type": "unique", "field": "kind"})).unwrap();
