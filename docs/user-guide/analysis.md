@@ -585,7 +585,8 @@ straight line on the map), the lines the tool cuts along, so the shares of a fea
 cover without overlapping each other add up to its whole value. The percentages of classes that
 overlap each other can add up to more than 100. Like the other overlay tools, it works on the map,
 which ends at 85.05° north and south: parts of polygons beyond that are taken as lying along it, so
-overlaps there have no area ([#1033](https://github.com/opengeos/RustGIS/issues/1033)).
+overlaps there have no area ([#1033](https://github.com/opengeos/RustGIS/issues/1033)); the tool
+says how many features reach beyond it.
 
 The tool says how many zone and class features have no polygon (no geometry, an empty one, or a line
 or point; they are left out), how many zones overlap no class feature and so have no rows, how many
@@ -597,6 +598,7 @@ a layer has a selection, and the table is named `<zones>_Tabulate` unless `outpu
 gp.run={"tool":"tabulateIntersection","params":{"zones":"districts","zoneFields":"district","classes":"blocks","sumFields":["population"]}}
 gp.run={"tool":"tabulateIntersection","params":{"zones":"counties","zoneFields":"county","classes":"landcover","classFields":"class"}}
 ```
+
 <figure markdown="span">
   ![Tissot's indicatrix on the Robinson projection: circles of 800 km every 30°, stretched and sheared toward the poles](https://assets.rustgis.app/images/tissot.webp)
   <figcaption>Tissot's indicatrix on Robinson: equal circles, stretched and sheared by the projection.</figcaption>

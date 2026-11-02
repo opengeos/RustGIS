@@ -3264,6 +3264,15 @@ fn tabulate_intersection(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, Strin
     let zone_rows = sorted_rows("zones", zones);
     let class_rows = sorted_rows("classes", classes);
     let (zones_shapeless, classes_shapeless) = (shapeless(zones, &zone_rows), shapeless(classes, &class_rows));
+    // The map ends at the latitude limit: the overlay takes parts beyond it as lying along it.
+    let beyond_limit = |ds: &Dataset, rs: &[usize]| {
+        let beyond = |g: &Geometry| {
+            let e = g.extent();
+            has_shape(g) && (e.max_y > rustgis_geom::MAX_LAT || e.min_y < -rustgis_geom::MAX_LAT)
+        };
+        rs.iter().filter(|&&r| ds.features.get(r).and_then(|f| f.geometry.as_ref()).is_some_and(beyond)).count()
+    };
+    let (zones_beyond, classes_beyond) = (beyond_limit(zones, &zone_rows), beyond_limit(classes, &class_rows));
     let zone_list: Vec<TabulateZone> = crate::stats::group_rows(zones, &zone_rows, &zone_keys)
         .into_iter()
         .map(|group| {
@@ -3405,12 +3414,34 @@ fn tabulate_intersection(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, Strin
         1 => messages.push("1 zone overlaps no class feature, so it has no rows".into()),
         n => messages.push(format!("{n} zones overlap no class feature, so they have no rows")),
     }
-    for (&f, n) in sum_fields.iter().zip(missing) {
-        if n > 0 {
-            let name = classes.fields.get(f).map_or("", |f| f.name.as_str());
-            let features = if n == 1 { "1 class feature has".to_string() } else { format!("{n} class features have") };
-            messages.push(format!("{features} no value in '{name}', left out of its shares"));
+    let features = |n: usize, layer: &str| if n == 1 { format!("1 {layer} feature") } else { format!("{n} {layer} features") };
+    // One notice for the sum fields' missing values, naming each field that has some.
+    let missing: Vec<(usize, &str)> = sum_fields
+        .iter()
+        .zip(missing)
+        .filter(|(_, n)| *n > 0)
+        .map(|(&f, n)| (n, classes.fields.get(f).map_or("", |f| f.name.as_str())))
+        .collect();
+    match missing.as_slice() {
+        [] => {}
+        [(1, name)] => messages.push(format!("1 class feature has no value in '{name}', left out of its shares")),
+        [(n, name)] => messages.push(format!("{n} class features have no value in '{name}', left out of its shares")),
+        several => {
+            let list: Vec<String> = several.iter().map(|(n, name)| format!("{} in '{name}'", features(*n, "class"))).collect();
+            messages.push(format!("class features with no value in a sum field are left out of its shares: {}", list.join(", ")));
         }
+    }
+    let beyond: Vec<String> = [(zones_beyond, "zone"), (classes_beyond, "class")]
+        .into_iter()
+        .filter(|(n, _)| *n > 0)
+        .map(|(n, layer)| features(n, layer))
+        .collect();
+    if !beyond.is_empty() {
+        let verb = if zones_beyond + classes_beyond == 1 { "reaches" } else { "reach" };
+        messages.push(format!(
+            "{} {verb} beyond 85.05° latitude, where the map ends: parts there are taken as lying along it, with no area",
+            beyond.join(" and ")
+        ));
     }
     match outside {
         0 => {}

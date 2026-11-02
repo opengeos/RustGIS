@@ -252,6 +252,39 @@ fn overlapping_zones_still_say_what_lies_outside() {
     assert_eq!(got.iter().map(|(_, n)| n[2]).collect::<Vec<_>>(), [50.0, 50.0]);
 }
 
+/// A class feature reaching beyond the map's latitude limit, and features lacking values in two sum
+/// fields: one notice for each kind.
+#[test]
+fn one_notice_per_kind_for_missing_values_and_the_latitude_limit() {
+    let polar = |x0: f64, x1: f64, y0: f64, y1: f64| {
+        let ring = [(x0, y0), (x1, y0), (x1, y1), (x0, y1), (x0, y0)].map(|(x, y)| Coord::new(x, y)).to_vec();
+        Some(Geometry::Polygon(vec![vec![ring]]))
+    };
+    let mut z = Dataset::new("zones", GeometryType::Polygon, vec![Field::new("zone", FieldType::Text)]);
+    z.push_next(polar(0.0, 10.0, 80.0, 84.0), vec![Value::Text("A".into())]);
+    let mut c = Dataset::new(
+        "classes",
+        GeometryType::Polygon,
+        vec![Field::new("pop", FieldType::Integer), Field::new("income", FieldType::Double)],
+    );
+    c.push_next(polar(0.0, 5.0, 80.0, 84.0), vec![Value::Null, Value::Null]);
+    c.push_next(polar(5.0, 10.0, 80.0, 84.0), vec![Value::Null, Value::Float(1.0)]);
+    // Reaches 88°N; its part in the zone, below 84°N, is measured as usual.
+    c.push_next(polar(2.0, 3.0, 82.0, 88.0), vec![Value::Int(1), Value::Float(2.0)]);
+    let l = layers(z, c);
+    let params = json!({"zones": "zones", "zoneFields": "zone", "classes": "classes", "sumFields": ["pop", "income"]});
+    let result = rustgis_analysis::run("tabulateIntersection", &l, &params).unwrap();
+    assert_eq!(
+        result.messages,
+        [
+            "Tabulate Intersection: 1 row",
+            "class features with no value in a sum field are left out of its shares: 2 class features in 'pop', 1 class feature in 'income'",
+            "1 class feature reaches beyond 85.05° latitude, where the map ends: parts there are taken as lying along it, with no area",
+            "1 class feature lies partly or wholly outside the zones: its value outside isn't shared out",
+        ]
+    );
+}
+
 #[test]
 fn zones_sharing_a_value_are_one_zone() {
     let mut z = zones();
