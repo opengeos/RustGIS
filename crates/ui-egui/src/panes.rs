@@ -3322,7 +3322,14 @@ pub(crate) fn input_table<'a>(session: &'a Session, name: &str) -> Option<&'a ru
 
 fn geoprocessing(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     let Some(spec) = app.gp.tool.and_then(rustgis_engine::analysis::tool) else {
-        // Tool finder.
+        // Tool finder, under the tool running, if one is.
+        let running = app.gp.web_run.is_some() || app.gp.plugin_run.is_some();
+        #[cfg(not(target_arch = "wasm32"))]
+        let running = running || app.gp.tool_run.is_some();
+        if running {
+            run_status(app, ui, t);
+            ui.add_space(8.0);
+        }
         crate::widgets::search_field(ui, &mut app.gp.search, tl!("Find Tools"));
         ui.separator();
         ui.add_space(4.0);
@@ -3826,6 +3833,29 @@ fn geoprocessing(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             }
         }
     });
+    run_status(app, ui, t);
+    if let Some((ok, msgs)) = &app.gp.last {
+        ui.add_space(8.0);
+        let (fill, stroke, head) =
+            if *ok { (t.green.gamma_multiply(0.12), t.green, "Completed") } else { (t.red.gamma_multiply(0.12), t.red, "Failed") };
+        egui::Frame::NONE
+            .fill(fill)
+            .stroke(Stroke::new(1.0, stroke))
+            .corner_radius(CornerRadius::same(6))
+            .inner_margin(egui::Margin::same(8))
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.label(egui::RichText::new(tl!(head)).font(semibold(12.5)).color(stroke));
+                for m in msgs {
+                    ui.label(egui::RichText::new(m).size(11.5));
+                }
+            });
+    }
+}
+
+/// The tool running, if one is: in the tool's form and in the finder, so that it can be cancelled
+/// from either.
+fn run_status(app: &RustGisApp, ui: &mut Ui, t: &Tokens) {
     if app.gp.web_run.is_some() {
         ui.add_space(8.0);
         ui.horizontal(|ui| {
@@ -3875,23 +3905,6 @@ fn geoprocessing(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         if cancel {
             job.control.cancel();
         }
-    }
-    if let Some((ok, msgs)) = &app.gp.last {
-        ui.add_space(8.0);
-        let (fill, stroke, head) =
-            if *ok { (t.green.gamma_multiply(0.12), t.green, "Completed") } else { (t.red.gamma_multiply(0.12), t.red, "Failed") };
-        egui::Frame::NONE
-            .fill(fill)
-            .stroke(Stroke::new(1.0, stroke))
-            .corner_radius(CornerRadius::same(6))
-            .inner_margin(egui::Margin::same(8))
-            .show(ui, |ui| {
-                ui.set_width(ui.available_width());
-                ui.label(egui::RichText::new(tl!(head)).font(semibold(12.5)).color(stroke));
-                for m in msgs {
-                    ui.label(egui::RichText::new(m).size(11.5));
-                }
-            });
     }
 }
 
@@ -6476,6 +6489,37 @@ mod tests {
         // Recorded once, as its run.
         let steps = app.ws.recording.as_deref().unwrap_or_default();
         assert_eq!(steps.iter().map(|s| s.command.as_str()).collect::<Vec<_>>(), ["gp.run"]);
+        assert_eq!((&steps[0].params["tool"], &steps[0].params["params"]["input"]), (&json!("buffer"), &json!("Cities")));
+    }
+
+    /// The tool running stays in view, with its Cancel button, when the pane goes back to the
+    /// list of tools.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_tool_running_in_the_background_can_be_cancelled_from_the_tool_list() {
+        use egui_kittest::kittest::Queryable;
+        let mut app = RustGisApp::with_sample();
+        let run = rustgis_engine::cmd::gp::tool_start(&mut app.session, "buffer", &json!({"input": "Cities", "distance": 50})).unwrap();
+        let control = rustgis_engine::analysis::control::Control::new();
+        app.gp.tool_run = Some(ToolJob { id: run.id, tool: run.tool, slot: crate::Slot::default(), control: control.clone() });
+        app.gp.tool = None;
+        let mut fonts = false;
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(420.0, 1000.0)).build_ui_state(
+            move |ui, app: &mut RustGisApp| {
+                if !fonts {
+                    crate::theme::install_fonts(ui.ctx(), &[], None);
+                    fonts = true;
+                    return;
+                }
+                geoprocessing(app, ui, &Tokens::light());
+            },
+            app,
+        );
+        // Its spinner keeps repainting: steps, not run.
+        h.run_steps(3);
+        h.get_by_label("Cancel").click();
+        h.run_steps(2);
+        assert!(control.is_cancelled());
     }
 
     #[test]

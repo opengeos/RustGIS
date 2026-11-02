@@ -290,8 +290,8 @@ pub(crate) struct StartedRun {
     full_ids: FullIds,
     /// The layers it reads, as it read them, by lowercase name.
     read: std::collections::HashMap<String, Read>,
-    /// The map it ran on: its place among the project's maps, and its name.
-    map: (usize, String),
+    /// The map it ran on: its identity ([`rustgis_map::Map::instance_id`]), and its name.
+    map: (u64, String),
 }
 
 /// The feature ids of the streamed layers a tool read whole, by lowercase name: what its
@@ -318,7 +318,7 @@ pub fn plugin_start(s: &mut Session, tool: &str, params: &Value) -> Result<Plugi
     s.next_pending = s.next_pending.wrapping_add(1);
     let id = s.next_pending;
     let params = recorded(Some(spec), params.clone());
-    let map = (s.project.active_map, s.map().name.clone());
+    let map = (s.map().instance_id(), s.map().name.clone());
     s.plugin_runs.push(StartedRun {
         id,
         name: spec.name.to_string(),
@@ -369,23 +369,20 @@ fn complete(
         .ok_or("the tool's run was dropped (its project was closed, or too many runs were waiting)")?;
     let run = s.plugin_runs.remove(i);
     let mut result = result;
-    // What it adds to or changes on the map belongs on the map it ran on: where it was, if it is
-    // still there, else the one map of its name (one before it may have been removed).
+    // What it adds to or changes on the map belongs on the map it ran on, whatever its name or
+    // place now: not another made since with its name.
     let on_map = matches!(&result, Ok(r) if match &r.output {
         Output::Layer(_) | Output::Selection { .. } | Output::Update { .. } => true,
         Output::Layers(out) => out.iter().any(|o| !matches!(o, rustgis_analysis::OutputLayer::Table(_))),
         _ => false,
     });
-    let named = |i: usize| s.project.maps.get(i).is_some_and(|m| m.name == run.map.1);
-    let ran_on = if named(run.map.0) {
-        Some(run.map.0)
-    } else {
-        let mut same = (0..s.project.maps.len()).filter(|&i| named(i));
-        same.next().filter(|_| same.next().is_none())
-    };
+    let mut same = (0..s.project.maps.len()).filter(|&i| s.project.maps.get(i).is_some_and(|m| m.instance_id() == run.map.0));
+    let ran_on = same.next().filter(|_| same.next().is_none());
     if on_map && ran_on != Some(s.project.active_map) {
-        result =
-            Err(format!("{} ran on the map '{}', which is no longer the active one: open it and run the tool again", run.name, run.map.1));
+        result = Err(format!(
+            "{} ran on the map '{}', which was deleted or is no longer the active one: open it and run the tool again",
+            run.name, run.map.1
+        ));
     }
     // A selection's rows of a streamed layer read whole are found by the name it was read under,
     // whatever the layer is called now.
@@ -484,7 +481,7 @@ pub fn tool_start(s: &mut Session, tool: &str, params: &Value) -> Result<ToolRun
         t0: now_ms(),
         full_ids,
         read,
-        map: (s.project.active_map, s.map().name.clone()),
+        map: (s.map().instance_id(), s.map().name.clone()),
     });
     // A run that never completes is dropped eventually.
     if s.plugin_runs.len() > MAX_ASYNC_RUNS {
@@ -537,7 +534,7 @@ fn fit_to_changes(
     // Another layer with its id (on a map that took the name of the one it ran on), or the layer
     // relinked to another table of its file, isn't it.
     if now.dataset.source != was.source || now.linked_table() != was.table.as_deref() {
-        *res = Err(format!("{layer} was removed while {tool} ran"));
+        *res = Err(format!("{layer} was removed or replaced while {tool} ran"));
         return;
     }
     layer.clone_from(&now.name);
@@ -563,6 +560,8 @@ fn fit_to_changes(
             }
         }
         _ if streamed => {}
+        // Its rows since then can't be told from edits: they are another copy of the source.
+        _ if was.streamed => *res = Err(format!("{} was loaded whole or replaced while {tool} ran; run it again", now.name)),
         _ => *res = Err(format!("{} changed while {tool} ran; run it again", now.name)),
     }
 }
@@ -635,6 +634,12 @@ fn fit_to_windows(s: &Session, res: &mut Result<rustgis_analysis::ToolResult, St
     {
         let ids: std::collections::HashSet<u64> = rows.iter().filter_map(|r| full.get(*r)).copied().collect();
         *rows = l.dataset.features.iter().enumerate().filter(|(_, f)| ids.contains(&f.id)).map(|(i, _)| i).collect();
+        let outside = ids.len().saturating_sub(rows.len());
+        if outside > 0 {
+            r.messages.push(format!(
+                "{outside} of the features selected in {layer} are outside the part of it read for the view, and aren't selected"
+            ));
+        }
     }
     if let Ok(r) = res
         && let Output::Update { layer, .. } = &r.output
@@ -643,13 +648,6 @@ fn fit_to_windows(s: &Session, res: &mut Result<rustgis_analysis::ToolResult, St
             .is_some_and(|l| l.is_streamed() && (!l.selection.is_empty() || !full_ids.contains_key(&layer.to_ascii_lowercase())))
     {
         *res = Err(format!("{layer} is read in place from its file; Load All Features (layer.loadAll) before a tool updates it"));
-    }
-}
-
-/// Keeps the runs started on a renamed map on it.
-pub(crate) fn follow_renamed_map(s: &mut Session, old: &str, new: &str) {
-    for r in s.plugin_runs.iter_mut().filter(|r| r.map.1 == old) {
-        r.map.1 = new.to_string();
     }
 }
 

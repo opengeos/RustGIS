@@ -6917,6 +6917,15 @@ fn offline_sync_rejects_incompatible_fields_and_preserves_safe_refreshes() {
         let offline = &s.project.maps.iter().find(|m| m.name == "Fieldwork (offline)").unwrap().layer_by_name("Assets").unwrap().dataset;
         assert_eq!(offline.fields, source.fields, "{mode}");
         assert_eq!(offline.features, source.features, "{mode}");
+        // The synced copy is a map, with layers, of its own (a background run finds its map by it).
+        let ids: Vec<u64> = s.project.maps.iter().map(|m| m.instance_id()).collect();
+        assert!(ids.iter().enumerate().all(|(i, a)| ids[..i].iter().all(|b| a != b)), "{mode}: {ids:?}");
+        let offline_map = s.project.maps.iter().find(|m| m.name == "Fieldwork (offline)").unwrap();
+        assert_ne!(
+            offline_map.layer_by_name("Assets").unwrap().instance_id(),
+            s.map().layer_by_name("Assets").unwrap().instance_id(),
+            "{mode}"
+        );
     }
 
     for mode in ["source_deleted", "geometry_only", "offline_added", "source_reordered", "source_type_changed", "empty_offline_schema"] {
@@ -23859,6 +23868,9 @@ fn background_runs_follow_renamed_streamed_layers_and_moved_maps() {
     selected.sort_unstable();
     expected.sort_unstable();
     assert!(!expected.is_empty() && selected == expected, "{selected:?} vs {expected:?}");
+    // What it selected outside the window isn't selected, and that is said.
+    let said = &s.project.gp_history.last().unwrap().messages;
+    assert!(said.iter().any(|m| m.contains("outside the part of it read for the view")), "{said:?}");
     let _ = std::fs::remove_file(path);
     // A map deleted before the run's own map moves it up: the result still lands there.
     let mut s = world();
@@ -23890,7 +23902,7 @@ fn background_runs_follow_renamed_streamed_layers_and_moved_maps() {
     let (id, done) = (run.id, run.run(&Control::new()));
     tool_complete(&mut s, id, done).unwrap();
     let e = s.run("gp.finish", &json!({"id": id})).unwrap_err();
-    assert!(e.contains("was removed"), "{e}");
+    assert!(e.contains("was deleted or is no longer the active one"), "{e}");
     assert!(s.map().layer_by_name("Points").unwrap().selection.is_empty());
     let _ = (std::fs::remove_file(path), std::fs::remove_file(other));
 }
@@ -23911,6 +23923,28 @@ fn background_runs_follow_a_renamed_map_a_moved_window_and_a_loaded_layer() {
     tool_complete(&mut s, id, done).unwrap();
     s.run("gp.finish", &json!({"id": id})).unwrap();
     assert_eq!(s.map().layers.len(), layers + 1);
+    // Renamed and the rename undone: the same map.
+    let layers = s.map().layers.len();
+    let run = tool_start(&mut s, "buffer", &json!({"input": "Cities", "distance": 50})).unwrap();
+    s.run("map.rename", &json!({"name": "Renamed again"})).unwrap();
+    s.run("edit.undo", &Value::Null).unwrap();
+    let (id, done) = (run.id, run.run(&Control::new()));
+    tool_complete(&mut s, id, done).unwrap();
+    s.run("gp.finish", &json!({"id": id})).unwrap();
+    assert_eq!(s.map().layers.len(), layers + 1);
+    // Deleted, and another map made with its name: the new layer doesn't land there.
+    s.run("map.new", &json!({"name": "Other"})).unwrap();
+    let ran = s.project.maps[0].name.clone();
+    s.project.active_map = 0;
+    let run = tool_start(&mut s, "buffer", &json!({"input": "Cities", "distance": 50})).unwrap();
+    s.run("map.remove", &json!({"name": ran})).unwrap();
+    s.run("map.new", &json!({"name": ran})).unwrap();
+    s.project.active_map = s.project.maps.iter().position(|m| m.name == ran).unwrap();
+    let (id, done) = (run.id, run.run(&Control::new()));
+    tool_complete(&mut s, id, done).unwrap();
+    let e = s.run("gp.finish", &json!({"id": id})).unwrap_err();
+    assert!(e.contains("was deleted or is no longer the active one"), "{e}");
+    assert!(s.map().layers.is_empty());
     // A selection in the window (so the tool reads the window), then the view moves.
     let path = grid_fgb("bgwindow", 50);
     let mut s = Session::new(Project::default());
@@ -23968,7 +24002,7 @@ fn background_runs_follow_a_renamed_map_a_moved_window_and_a_loaded_layer() {
     let (id, done) = (run.id, run.run(&Control::new()));
     tool_complete(&mut s, id, done).unwrap();
     let e = s.run("gp.finish", &json!({"id": id})).unwrap_err();
-    assert!(e.contains("changed while"), "{e}");
+    assert!(e.contains("loaded whole or replaced while"), "{e}");
     assert!(s.map().layers[0].dataset.features.iter().any(|f| f.attrs.first().and_then(|v| v.as_f64()) == Some(-1.0)));
     let _ = std::fs::remove_file(path);
 }

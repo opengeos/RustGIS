@@ -64,9 +64,10 @@ count their work (Viewshed, IDW Interpolation, Kriging, Kernel Density, Buffer, 
 Location and others), a progress bar. One tool runs at a time. A cancelled run adds nothing, and
 its message says how far through its work the tool was. Edits made to its input layers while it
 runs are kept: a selection it makes selects the same features where they now are (and says how
-many are gone), and a result that would replace an edited layer is refused. Renaming the map
-while it runs is fine; switching to another map refuses the result. Opening another project
-drops the run. Scripts, models, the AI Assistant, the command
+many are gone), and a result that would replace an edited layer, or one loaded whole meanwhile,
+is refused. Renaming the map while it runs is fine; after switching to another map, a result
+that adds to or changes the map is refused (one made only of tables or a file is still made). Opening another
+project drops the run. Scripts, models, the AI Assistant, the command
 line and the web app wait for each tool to finish.
 
 From the command line or a script (`gp.run`), a built-in tool's parameter with a list of choices, such as Buffer's

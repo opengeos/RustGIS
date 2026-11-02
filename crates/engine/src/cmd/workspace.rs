@@ -268,6 +268,7 @@ pub fn commands() -> Vec<C> {
             } else {
                 let mut m = a.data.clone();
                 m.name = map_name;
+                m.renew_instance_id();
                 // Reading a project checks only maps' layers, not offline snapshots', so their
                 // selections are put right here.
                 for l in &mut m.layers {
@@ -730,6 +731,11 @@ fn offline_sync(s: &mut Session, p: &Value) -> CmdResult {
         let name = m.name.clone();
         *m = fresh.clone();
         m.name = name;
+        // A copy of the source map: a map, and layers, of its own.
+        m.renew_instance_id();
+        for l in &mut m.layers {
+            l.renew_instance_id();
+        }
     }
     if let Some(a) = s.project.offline_areas.get_mut(ai) {
         a.data = fresh;
