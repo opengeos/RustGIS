@@ -477,7 +477,7 @@ struct Canvas {
 }
 
 impl Canvas {
-    /// Its output bands on a `w × h` grid, every cell `outside` ([`crate::rasterops::grid`]).
+    /// Its output bands on a `w × h` grid, every cell `outside` ([`crate::rasterops::new_band`]).
     fn bands(&self, w: usize, h: usize) -> Result<Vec<Vec<f32>>, String> {
         (0..self.out_bands).map(|_| crate::rasterops::new_band(w, h, self.outside)).collect()
     }
