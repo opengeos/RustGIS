@@ -327,6 +327,15 @@ impl Crs {
         }
     }
 
+    /// Whether its coordinates are geocentric (X, Y and Z from the Earth's centre), not a map's.
+    pub(crate) fn is_geocentric(self) -> bool {
+        match self {
+            Crs::LonLat | Crs::WebMercator => false,
+            Crs::Epsg(c) => epsg_proj4(c).is_some_and(|d| d.contains("+proj=geocent")),
+            Crs::Custom(_) => self.custom_def().is_some_and(|d| d.proj4.contains("+proj=geocent")),
+        }
+    }
+
     /// Whether converting to WGS 84 leaves out a datum shift, so positions in longitude/latitude
     /// may be off by up to a few hundred metres: a custom system with an ellipsoid (`+ellps`, `+a`
     /// or `+R`) but no `+towgs84`, `+datum` or `+nadgrids`. That is what reading a WKT datum with

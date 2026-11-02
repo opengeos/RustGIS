@@ -57,13 +57,21 @@ pub struct LayerRead {
     pub styles: Vec<(String, crate::kml::Style)>,
 }
 
-/// Whether a file holds several layers ([`read_layers`] reads them all): a zip, KML, KMZ or GPX.
+/// Whether a file holds several layers ([`read_layers`] reads them all): a zip, KML, KMZ, GPX or
+/// `.city.json`, among others.
 pub fn is_multi_layer_name(name: &str) -> bool {
     let ext = Path::new(name).extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
-    matches!(
-        ext.as_str(),
-        "zip" | "kml" | "kmz" | "gpx" | "rss" | "atom" | "georss" | "landxml" | "xml" | "gml" | "dxf" | "pbf" | "topojson"
-    )
+    crate::cityjson::is_cityjson_name(name)
+        || matches!(
+            ext.as_str(),
+            "zip" | "kml" | "kmz" | "gpx" | "rss" | "atom" | "georss" | "landxml" | "xml" | "gml" | "dxf" | "pbf" | "topojson"
+        )
+}
+
+/// Whether a `.json` file is CityJSON, by its name or its contents.
+pub fn is_cityjson(file_name: &str, bytes: &[u8]) -> bool {
+    file_name.to_ascii_lowercase().ends_with(".json")
+        && (crate::cityjson::is_cityjson_name(file_name) || std::str::from_utf8(bytes).is_ok_and(crate::cityjson::looks_like_cityjson))
 }
 
 /// Reads every layer of a file held in memory: the Shapefiles and other files of a zip, a KML or
@@ -114,6 +122,8 @@ pub fn read_layers(file_name: &str, bytes: &[u8]) -> Result<Vec<LayerRead>> {
                 "{file_name}: a .pbf that isn't OpenStreetMap data (vector tiles are added with Add Tile Layer)"
             )));
         }
+        // A CityJSON model, named .city.json or .json.
+        "json" if is_cityjson(file_name, bytes) => plain(crate::cityjson::read(file_name, bytes, None)?),
         // A TopoJSON topology, named .topojson or .json.
         "topojson" | "json" if ext == "topojson" || std::str::from_utf8(bytes).is_ok_and(crate::topojson::looks_like_topojson) => {
             let text = std::str::from_utf8(bytes).map_err(|_| DataError::Format(format!("{file_name} is not UTF-8 text")))?;
@@ -198,7 +208,9 @@ pub fn read_bytes(file_name: &str, bytes: &[u8]) -> Result<(Dataset, ReadReport)
     }
     let text = || std::str::from_utf8(bytes).map_err(|_| DataError::Format(format!("{file_name} is not UTF-8 text")));
     let mut out = match ext.as_str() {
-        // A TopoJSON topology named .json: its first object, saying what else it holds.
+        // A CityJSON model or a TopoJSON topology named .json: its first layer, saying what else
+        // it holds.
+        "json" if is_cityjson(file_name, bytes) => return first_layer(file_name, bytes),
         "json" if crate::topojson::looks_like_topojson(text()?) => return first_layer(file_name, bytes),
         "geojson" | "json" => read_geojson(text()?, &name)?,
         "csv" | "tsv" | "txt" => read_csv(text()?, &name)?,
@@ -251,9 +263,9 @@ pub fn read_path(path: &Path) -> Result<(Dataset, ReadReport)> {
         "geojson" | "json" => {
             check_size(path)?;
             let text = std::fs::read_to_string(path)?;
-            // A TopoJSON topology named .json, as read_bytes reads it.
-            if ext == "json" && crate::topojson::looks_like_topojson(&text) {
-                let leaf = path.file_name().and_then(|n| n.to_str()).unwrap_or("layer.json");
+            // A CityJSON model or a TopoJSON topology named .json, as read_bytes reads it.
+            let leaf = path.file_name().and_then(|n| n.to_str()).unwrap_or("layer.json");
+            if ext == "json" && (is_cityjson(leaf, text.as_bytes()) || crate::topojson::looks_like_topojson(&text)) {
                 first_layer(leaf, text.as_bytes())?
             } else {
                 read_geojson(&text, &name)?
