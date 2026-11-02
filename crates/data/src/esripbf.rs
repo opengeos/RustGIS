@@ -23,9 +23,10 @@
 //!
 //! Refused, by name: an empty answer (a service refuses a query that way), a JSON answer (the
 //! service's error, or another format), a count, ids or an extent, curves, shape buffers,
-//! multipatches, a point with more than one vertex, coordinates without a transform, and rows that
-//! would take more than 512 MB. Answers are hostile input: every length is checked, and nothing is
-//! read past the end.
+//! multipatches, a point with more than one vertex, coordinates without a transform, fields and
+//! rows that would take more than 512 MB, geometries that would take more than 1 GB, and text
+//! values that would take more than 512 MB. Answers are hostile input: every length is checked,
+//! and nothing is read past the end.
 
 use crate::{DataError, Dataset, Field, FieldType, Geometry, GeometryType, ReadReport, Result, Value};
 use rustgis_geom::Coord;
@@ -37,15 +38,28 @@ fn invalid(message: impl std::fmt::Display) -> DataError {
 /// What every error of this reader starts with.
 const PREFIX: &str = "ArcGIS protocol buffer: ";
 
-/// Most memory an answer's rows may take, whatever its size: a few bytes can declare many fields
-/// for many features, and each feature and each of its values (sent or not) takes memory of its
-/// own. A page is bounded by its service's record limit, far below this.
+/// Most memory an answer's fields and rows may take, whatever its size: a few bytes can declare
+/// a field, or a feature, and each field, each feature and each of its values (sent or not) takes
+/// memory of its own. A page is bounded by its service's record limit, far below this.
 const MAX_ROW_BYTES: usize = 512 << 20;
 
-/// The memory `features` rows of `fields` values take, before their text and geometries.
+/// Most memory an answer's geometries may take, whatever its size: a vertex of two one-byte
+/// numbers takes 16 bytes, and each part a list of its own.
+const MAX_GEOMETRY_BYTES: usize = 1 << 30;
+
+/// Most memory an answer's text values may take, whatever its size: a number of a few bytes
+/// written as text can take hundreds (1e300 is 301 digits), and bytes that aren't UTF-8 three
+/// times their size.
+const MAX_TEXT_BYTES: usize = 512 << 20;
+
+/// The memory `fields` declared fields and `features` rows of their values take, before their
+/// text and geometries.
 fn row_bytes(features: usize, fields: usize) -> usize {
-    let row = std::mem::size_of::<crate::Feature>().saturating_add(fields.saturating_mul(std::mem::size_of::<Value>()));
-    features.saturating_mul(row)
+    use std::mem::size_of;
+    // Declared, kept or not, as a column, a field and a name to tell repeats by.
+    let field = size_of::<(String, u64, bool)>() + size_of::<Option<(usize, Kind)>>() + size_of::<Field>() + size_of::<String>();
+    let row = size_of::<crate::Feature>().saturating_add(fields.saturating_mul(size_of::<Value>()));
+    features.saturating_mul(row).saturating_add(fields.saturating_mul(field))
 }
 
 fn too_many_rows(features: usize, fields: usize) -> DataError {
@@ -89,9 +103,10 @@ pub fn read(bytes: &[u8], name: &str) -> Result<(Dataset, ReadReport)> {
     Ok((page.dataset, page.report))
 }
 
-/// Whether some bytes start as an answer with features: an optional version, then a query result
-/// holding a feature result whose first field is one the format defines. A count, ids or an extent
-/// aren't such an answer, nor is an OpenStreetMap or vector tile protocol buffer.
+/// Whether some bytes start as an answer: an optional version, then a query result holding a
+/// feature result, a count, object ids or an extent, whose first field is one the format defines
+/// for it. A count, ids or an extent are told so that reading them says why they're refused. An
+/// OpenStreetMap or vector tile protocol buffer isn't an answer.
 pub fn is_esripbf(bytes: &[u8]) -> bool {
     signs(bytes).unwrap_or(false)
 }
@@ -125,20 +140,18 @@ pub fn read_page(bytes: &[u8], name: &str) -> Result<Page> {
             (10, 0) => has_z = r.varint()? != 0,
             (11, 0) => has_m = r.varint()? != 0,
             (12, 2) => transform = read_transform(r.message()?)?,
+            // Checked as fields and features come, in any order, since even an empty one takes
+            // memory, with or without the other.
             (13, 2) => declared.push(field(r.message()?)?),
-            (15, 2) => {
-                features.push(r.message()?);
-                // Checked as features come, since even an empty one takes memory.
-                if row_bytes(features.len(), declared.len()) > MAX_ROW_BYTES {
-                    return Err(too_many_rows(features.len(), declared.len()));
-                }
+            (15, 2) => features.push(r.message()?),
+            (_, wire) => {
+                r.skip(wire)?;
+                continue;
             }
-            (_, wire) => r.skip(wire)?,
         }
-    }
-    // Fields may come after the features.
-    if row_bytes(features.len(), declared.len()) > MAX_ROW_BYTES {
-        return Err(too_many_rows(features.len(), declared.len()));
+        if row_bytes(features.len(), declared.len()) > MAX_ROW_BYTES {
+            return Err(too_many_rows(features.len(), declared.len()));
+        }
     }
     // A point layer's type is the format's default, which an answer leaves out.
     let shape_kind = geometry_type.unwrap_or(POINT);
@@ -180,10 +193,14 @@ pub fn read_page(bytes: &[u8], name: &str) -> Result<Page> {
     if not_read > 0 {
         report.messages.push(format!("{not_read} fields hold geometries, blobs or rasters, which aren't read, and are left out"));
     }
-    let (code, wkt) = match reference {
+    let (code, wkt, wkt_utf8) = match reference {
         Some(bytes) => spatial_reference(bytes)?,
-        None => (None, None),
+        None => (None, None, true),
     };
+    // Only when the WKT is what names the system: a code RustGIS knows goes first.
+    if !wkt_utf8 && code.and_then(crate::filegdb::crs_of_code).is_none() {
+        report.messages.push("the coordinate system's WKT isn't valid UTF-8; the bytes that can't be read are replaced with U+FFFD".into());
+    }
     let (crs, to_lonlat) = crate::filegdb::esri_crs(code, wkt.as_deref(), &mut report);
     if crs.is_none()
         && wkt.is_none()
@@ -348,17 +365,31 @@ fn signs(bytes: &[u8]) -> Result<bool> {
     let Some(mut r) = at_query_result(bytes)? else { return Ok(false) };
     // These lengths may run past the bytes given: only the start of an answer may be.
     let query = r.varint()?;
-    if r.key()? != (1, 2) {
+    // A feature result (1), a count (2), object ids (3) or an extent and its count (4).
+    let (holds, wire) = r.key()?;
+    if wire != 2 || !(1..=4).contains(&holds) {
         return Ok(false);
     }
     let result = r.varint()?;
     if result >= query {
         return Ok(false);
     }
+    // A count of zero sends nothing.
+    if result == 0 {
+        return Ok(holds == 2);
+    }
     let (field, wire) = r.key()?;
-    Ok(match field {
-        1..=6 | 8 | 12..=16 => wire == 2,
-        7 | 9..=11 => wire == 0,
+    Ok(match (holds, field) {
+        (1, 1..=6 | 8 | 12..=16) => wire == 2,
+        (1, 7 | 9..=11) => wire == 0,
+        // The count.
+        (2, 1) => wire == 0,
+        // The object id field's name, how the server makes them, the ids (packed or not).
+        (3, 1 | 2) => wire == 2,
+        (3, 3) => wire == 0 || wire == 2,
+        // The extent, the count.
+        (4, 1) => wire == 2,
+        (4, 2) => wire == 0,
         _ => false,
     })
 }
@@ -495,20 +526,24 @@ fn field(bytes: &[u8]) -> Result<(String, u64, bool)> {
 }
 
 /// The code of an answer's coordinate system (its `latestWkid` when RustGIS knows it, else its
-/// `wkid`) and its WKT.
-fn spatial_reference(bytes: &[u8]) -> Result<(Option<u32>, Option<String>)> {
-    let (mut wkid, mut latest, mut wkt) = (None, None, None);
+/// `wkid`), its WKT and whether that WKT was valid UTF-8.
+fn spatial_reference(bytes: &[u8]) -> Result<(Option<u32>, Option<String>, bool)> {
+    let (mut wkid, mut latest, mut wkt, mut utf8) = (None, None, None, true);
     let mut r = Reader::new(bytes);
     while !r.done() {
         match r.key()? {
             (1, 0) => wkid = u32::try_from(r.varint()?).ok().filter(|&c| c > 0),
             (2, 0) => latest = u32::try_from(r.varint()?).ok().filter(|&c| c > 0),
-            (5, 2) => wkt = Some(String::from_utf8_lossy(r.message()?).into_owned()).filter(|w| !w.trim().is_empty()),
+            (5, 2) => {
+                let raw = r.message()?;
+                utf8 = std::str::from_utf8(raw).is_ok();
+                wkt = Some(String::from_utf8_lossy(raw).into_owned()).filter(|w| !w.trim().is_empty());
+            }
             (_, wire) => r.skip(wire)?,
         }
     }
     let code = latest.filter(|&c| crate::filegdb::crs_of_code(c).is_some()).or(wkid).or(latest);
-    Ok((code, wkt))
+    Ok((code, wkt, utf8))
 }
 
 /// How a field's values are read.
@@ -552,8 +587,8 @@ struct Shape<'a> {
     has_m: bool,
 }
 
-/// What was left out of an answer's features, to say once.
-#[derive(Default)]
+/// What was left out of an answer's features, to say once, and the memory their geometries and
+/// text may still take.
 struct Tally {
     /// Values that don't fit their field's type.
     unreadable: usize,
@@ -561,6 +596,36 @@ struct Tally {
     flat_rings: usize,
     /// Text values and field names that aren't valid UTF-8.
     not_utf8: usize,
+    /// Bytes left of [`MAX_GEOMETRY_BYTES`].
+    geometry_room: usize,
+    /// Bytes left of [`MAX_TEXT_BYTES`].
+    text_room: usize,
+}
+
+impl Default for Tally {
+    fn default() -> Self {
+        Self { unreadable: 0, flat_rings: 0, not_utf8: 0, geometry_room: MAX_GEOMETRY_BYTES, text_room: MAX_TEXT_BYTES }
+    }
+}
+
+impl Tally {
+    /// Takes `bytes` of the geometries' memory, refusing the answer when there's no more.
+    fn spend(&mut self, bytes: usize) -> Result<()> {
+        self.geometry_room = self
+            .geometry_room
+            .checked_sub(bytes)
+            .ok_or_else(|| invalid(format!("the geometries would take more than {} MB", MAX_GEOMETRY_BYTES >> 20)))?;
+        Ok(())
+    }
+
+    /// Takes `bytes` of the text values' memory, refusing the answer when there's no more.
+    fn spend_text(&mut self, bytes: usize) -> Result<()> {
+        self.text_room = self
+            .text_room
+            .checked_sub(bytes)
+            .ok_or_else(|| invalid(format!("the text values would take more than {} MB", MAX_TEXT_BYTES >> 20)))?;
+        Ok(())
+    }
 }
 
 /// A feature's values, one per kept field, and its geometry.
@@ -585,6 +650,9 @@ fn feature(
                     && let Some(v) = values.get_mut(at)
                 {
                     let (value, fits) = value(&cell, kind);
+                    if let Value::Text(s) = &value {
+                        tally.spend_text(s.len())?;
+                    }
                     tally.unreadable += usize::from(!fits);
                     tally.not_utf8 += usize::from(kind == Kind::Text && matches!(cell, Cell::Text(b) if std::str::from_utf8(b).is_err()));
                     *v = value;
@@ -692,14 +760,19 @@ fn value(cell: &Cell, kind: Kind) -> (Value, bool) {
 }
 
 /// The vertices of a part: `count` of them, or those left without one. X and Y start over from
-/// zero at each part; Z and M are read and left out.
-fn part(c: &mut Reader, count: Option<usize>, shape: &Shape) -> Result<Vec<Coord>> {
+/// zero at each part; Z and M are read and left out. The part and each vertex are taken from
+/// `tally`'s room.
+fn part(c: &mut Reader, count: Option<usize>, shape: &Shape, tally: &mut Tally) -> Result<Vec<Coord>> {
+    const VERTEX: usize = std::mem::size_of::<Coord>();
+    tally.spend(std::mem::size_of::<Vec<Coord>>())?;
     let dimensions = 2 + usize::from(shape.has_z) + usize::from(shape.has_m);
     let t = shape.transform;
     let ([scale_x, scale_y, ..], [translate_x, translate_y, ..]) = (t.scale, t.translate);
-    let mut vertices = Vec::with_capacity(count.unwrap_or(0).min(c.remaining() / dimensions));
+    // No more than the coordinates left, nor than the room left, can hold.
+    let mut vertices = Vec::with_capacity(count.unwrap_or(0).min(c.remaining() / dimensions).min(tally.geometry_room / VERTEX));
     let (mut sum_x, mut sum_y) = (0i64, 0i64);
     while count.map_or(!c.done(), |n| vertices.len() < n) {
+        tally.spend(VERTEX)?;
         sum_x = sum_x.checked_add(zigzag(c.varint()?)).ok_or_else(|| invalid("a coordinate is out of range"))?;
         sum_y = sum_y.checked_add(zigzag(c.varint()?)).ok_or_else(|| invalid("a coordinate is out of range"))?;
         for _ in 2..dimensions {
@@ -716,34 +789,41 @@ fn part(c: &mut Reader, count: Option<usize>, shape: &Shape) -> Result<Vec<Coord
     Ok(vertices)
 }
 
+/// Hands `found` each length of a geometry's parts, in order, as they come in its fields: packed,
+/// possibly in several blocks, or one number a field.
+fn each_length(bytes: &[u8], mut found: impl FnMut(u64) -> Result<()>) -> Result<()> {
+    let mut r = Reader::new(bytes);
+    while !r.done() {
+        match r.key()? {
+            (2, 2) => {
+                let mut packed = Reader::new(r.message()?);
+                while !packed.done() {
+                    found(packed.varint()?)?;
+                }
+            }
+            (2, 0) => found(r.varint()?)?,
+            (_, wire) => r.skip(wire)?,
+        }
+    }
+    Ok(())
+}
+
 /// A geometry. One without coordinates is no geometry.
 fn read_geometry(bytes: &[u8], shape: &Shape, tally: &mut Tally) -> Result<Option<Geometry>> {
-    // Parts with vertices: an empty part adds nothing, and kept, a few bytes of them would take
-    // memory of their own. Whether the geometry gave lengths at all is kept apart.
-    let mut lengths = Vec::new();
-    let mut counted = false;
+    // Whether the geometry gives its parts' lengths, and whether one of them has vertices. They
+    // aren't kept: a few bytes of them would take memory of their own, so the parts are read
+    // from them in a second pass.
+    let (mut counted, mut with_vertices) = (false, false);
+    each_length(bytes, |n| {
+        counted = true;
+        with_vertices |= n > 0;
+        Ok(())
+    })?;
     // Packed, possibly in several blocks, or one number a field. One block, the usual, isn't copied.
     let mut coords: std::borrow::Cow<[u8]> = std::borrow::Cow::Borrowed(&[]);
     let mut r = Reader::new(bytes);
     while !r.done() {
         match r.key()? {
-            (2, 2) => {
-                counted = true;
-                let mut packed = Reader::new(r.message()?);
-                while !packed.done() {
-                    let n = packed.varint()?;
-                    if n > 0 {
-                        lengths.push(n);
-                    }
-                }
-            }
-            (2, 0) => {
-                counted = true;
-                let n = r.varint()?;
-                if n > 0 {
-                    lengths.push(n);
-                }
-            }
             (3, 2) => {
                 let block = r.message()?;
                 if coords.is_empty() {
@@ -757,7 +837,7 @@ fn read_geometry(bytes: &[u8], shape: &Shape, tally: &mut Tally) -> Result<Optio
         }
     }
     if coords.is_empty() {
-        if !lengths.is_empty() {
+        if with_vertices {
             return Err(invalid("a part has vertices, but the geometry has no coordinates"));
         }
         return Ok(None);
@@ -766,13 +846,22 @@ fn read_geometry(bytes: &[u8], shape: &Shape, tally: &mut Tally) -> Result<Optio
         return Err(invalid("it has coordinates, but the answer has no transform for them"));
     }
     let mut c = Reader::new(&coords);
-    let mut parts = Vec::with_capacity(lengths.len().min(coords.len()));
-    if !counted {
-        parts.push(part(&mut c, None, shape)?);
-    }
-    for length in lengths {
-        let count = usize::try_from(length).map_err(|_| invalid("a part's length is too large"))?;
-        parts.push(part(&mut c, Some(count), shape)?);
+    // Each part is taken from the room as it's read; an empty part adds nothing.
+    let mut parts = Vec::new();
+    if counted {
+        each_length(bytes, |length| {
+            if length > 0 {
+                // Refused at its second part, before the rest is read.
+                if shape.kind == POINT && !parts.is_empty() {
+                    return Err(invalid("a point has more than one vertex"));
+                }
+                let count = usize::try_from(length).map_err(|_| invalid("a part's length is too large"))?;
+                parts.push(part(&mut c, Some(count), shape, tally)?);
+            }
+            Ok(())
+        })?;
+    } else {
+        parts.push(part(&mut c, None, shape, tally)?);
     }
     if !c.done() {
         return Err(invalid("it has more coordinates than its parts count"));
@@ -787,7 +876,11 @@ fn read_geometry(bytes: &[u8], shape: &Shape, tally: &mut Tally) -> Result<Optio
             point.map(Geometry::Point)
         }
         MULTIPOINT => {
-            let points: Vec<Coord> = parts.into_iter().flatten().collect();
+            // Sized up front: collecting would grow by doubling while the parts are still held.
+            let mut points = Vec::with_capacity(parts.iter().map(Vec::len).sum());
+            for p in parts {
+                points.extend(p);
+            }
             (!points.is_empty()).then_some(Geometry::MultiPoint(points))
         }
         POLYLINE => {

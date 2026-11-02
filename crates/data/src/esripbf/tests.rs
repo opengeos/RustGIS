@@ -402,16 +402,100 @@ fn refused_answers_say_why() {
 
 #[test]
 fn many_fields_times_many_empty_features_are_refused_before_they_take_memory() {
-    // About 50 kB that would ask for over 512 MB of rows, whatever the answer's size.
+    // A few tens of kB that would ask for over 512 MB of rows, whatever the answer's size. The
+    // first feature past the bound comes from it (the fields count once, a row per feature), so
+    // the test doesn't hang on the size of a value.
+    let row = row_bytes(1, 4000) - row_bytes(0, 4000);
+    let features = (MAX_ROW_BYTES - row_bytes(0, 4000)) / row + 1;
     let mut parts: Vec<Vec<u8>> = (0..4000).map(|i| field(&format!("f{i}"), 4)).collect();
-    parts.extend((0..6000).map(|_| feature(&[])));
+    parts.extend((0..features).map(|_| feature(&[])));
     let e = err(&answer(&parts));
-    assert!(e.contains("of 4000 fields would take more than 512 MB"), "{e}");
-    // Fields after the features count too.
-    let mut late: Vec<Vec<u8>> = (0..6000).map(|_| feature(&[])).collect();
+    assert!(e.contains(&format!("{features} features of 4000 fields would take more than 512 MB")), "{e}");
+    // Fields after the features count too, refused as they come, before the last one.
+    let mut late: Vec<Vec<u8>> = (0..2 * features).map(|_| feature(&[])).collect();
     late.extend((0..4000).map(|i| field(&format!("f{i}"), 4)));
     let e = err(&answer(&late));
-    assert!(e.contains("6000 features of 4000 fields would take more than 512 MB"), "{e}");
+    assert!(e.contains(&format!("{} features of ", 2 * features)) && e.contains(" fields would take more than 512 MB"), "{e}");
+    assert!(!e.contains("of 4000 fields"), "{e}");
+    // Fields alone, without a feature: two bytes each (an empty field message).
+    let fields = MAX_ROW_BYTES / row_bytes(0, 1) + 1;
+    let e = err(&answer(&[[0x6a, 0x00].repeat(fields)]));
+    assert!(e.contains(&format!("0 features of {fields} fields would take more than 512 MB")), "{e}");
+}
+
+/// A polyline geometry's fields: `lengths` packed, then X and Y as differences.
+fn line_parts(lengths: &[u64], coords: &[i64]) -> Vec<u8> {
+    [message(2, &packed(lengths.iter().copied())), message(3, &packed(coords.iter().map(|&c| zz(c))))].concat()
+}
+
+#[test]
+fn geometries_take_their_memory_from_one_room_for_the_whole_answer() {
+    let transform = Transform { given: true, ..Transform::default() };
+    let shape = Shape { kind: POLYLINE, transform: &transform, has_z: false, has_m: false };
+    // Room for ten one-vertex parts, the answer's geometries together.
+    let each = std::mem::size_of::<Vec<Coord>>() + std::mem::size_of::<Coord>();
+    let mut tally = Tally { geometry_room: 10 * each, ..Tally::default() };
+    let six = line_parts(&[1; 6], &[1, 1].repeat(6));
+    let Some(Geometry::Line(parts)) = read_geometry(&six, &shape, &mut tally).unwrap() else { panic!("not a line") };
+    assert_eq!(parts.len(), 6);
+    let e = read_geometry(&six, &shape, &mut tally).unwrap_err().to_string();
+    assert!(e.contains("the geometries would take more than 1024 MB"), "{e}");
+}
+
+#[test]
+fn a_point_with_a_second_part_is_refused_before_the_rest_is_read() {
+    let transform = Transform { given: true, ..Transform::default() };
+    let shape = Shape { kind: POINT, transform: &transform, has_z: false, has_m: false };
+    // The second part's coordinates aren't even there: the refusal comes first.
+    let e = read_geometry(&line_parts(&[1, 1], &[1, 1]), &shape, &mut Tally::default()).unwrap_err().to_string();
+    assert!(e.contains("a point has more than one vertex"), "{e}");
+}
+
+#[test]
+fn text_values_take_their_memory_from_one_room_for_the_whole_answer() {
+    let transform = Transform::default();
+    let shape = Shape { kind: POINT, transform: &transform, has_z: false, has_m: false };
+    let columns = [Some((0, Kind::Text))];
+    // 1e300 is 11 bytes of the answer and 301 digits as text.
+    let huge = real(1e300);
+    let mut tally = Tally { text_room: 500, ..Tally::default() };
+    let (values, _) = feature(&huge, &columns, 1, &shape, &mut tally).unwrap();
+    assert_eq!(values[0], Value::Text(format!("1{}", "0".repeat(300))));
+    let e = feature(&huge, &columns, 1, &shape, &mut tally).unwrap_err().to_string();
+    assert!(e.contains("the text values would take more than 512 MB"), "{e}");
+}
+
+#[test]
+fn lengths_in_several_fields_keep_their_order() {
+    // Packed first, then one number after the coordinates.
+    let bytes = answer(&[
+        number(7, POLYLINE),
+        lonlat(),
+        transform(false, 1.0, 0.0, 0.0),
+        feature(&[message(2, &[message(2, &packed([2])), message(3, &packed([1, 1, 1, 0, 5, 5].map(zz))), number(2, 1)].concat())]),
+    ]);
+    let (ds, report) = read(&bytes, "t").unwrap();
+    assert_eq!(ds.features[0].geometry, Some(Geometry::Line(vec![vec![c(1.0, 1.0), c(2.0, 1.0)], vec![c(5.0, 5.0)]])));
+    assert!(report.messages.is_empty(), "{:?}", report.messages);
+}
+
+#[test]
+fn a_wkt_that_isnt_utf8_is_said() {
+    let wkt = b"GEOGCS[\"GCS_WGS_1984\xff\",DATUM[\"D_WGS_1984\",SPHEROID[\"WGS_1984\",6378137.0,298.257223563]],PRIMEM[\"Greenwich\",0.0],UNIT[\"Degree\",0.0174532925199433]]";
+    let bytes = answer(&[message(8, &message(5, wkt)), transform(false, 1.0, 0.0, 0.0), feature(&[geometry(&[], &[1, 2])])]);
+    let (_, report) = read(&bytes, "t").unwrap();
+    assert_eq!(
+        report.messages.first().map(String::as_str),
+        Some("the coordinate system's WKT isn't valid UTF-8; the bytes that can't be read are replaced with U+FFFD")
+    );
+    // Unused when a code RustGIS knows names the system: nothing to say.
+    let with_code = answer(&[
+        message(8, &[number(1, 4326), message(5, wkt)].concat()),
+        transform(false, 1.0, 0.0, 0.0),
+        feature(&[geometry(&[], &[1, 2])]),
+    ]);
+    let (_, report) = read(&with_code, "t").unwrap();
+    assert!(report.messages.is_empty(), "{:?}", report.messages);
 }
 
 #[test]
@@ -454,6 +538,11 @@ fn a_dropped_or_fetched_answer_is_read_by_its_content() {
     // A refusal names the format, not OpenStreetMap.
     let e = crate::io::read_bytes("x.pbf", &answer(&[feature(&[message(7, &[])])])).unwrap_err().to_string();
     assert!(e.contains("ArcGIS protocol buffer") && e.contains("curve"), "{e}");
+    // So does a count, saved or fetched (`returnCountOnly`).
+    let count = [message(1, b"10.0"), message(2, &message(2, &number(1, 5)))].concat();
+    assert_eq!(crate::io::sniff_extension(&count), Some("pbf"));
+    let e = crate::io::read_bytes("n.pbf", &count).unwrap_err().to_string();
+    assert!(e.contains("ArcGIS protocol buffer") && e.contains("a count, ids or an extent"), "{e}");
 }
 
 #[test]
@@ -461,7 +550,17 @@ fn answers_are_told_from_other_protocol_buffers_and_json() {
     assert!(is_esripbf(&points()));
     // Without its version too.
     assert!(is_esripbf(&message(2, &message(1, &number(7, POINT)))));
-    assert!(!is_esripbf(&[message(1, b"10.0"), message(2, &message(2, &number(1, 5)))].concat()));
+    // A count (of zero too, which sends nothing), object ids and an extent, which the reader
+    // refuses by name.
+    let query = |result: Vec<u8>| [message(1, b"10.0"), message(2, &result)].concat();
+    assert!(is_esripbf(&query(message(2, &number(1, 5)))));
+    assert!(is_esripbf(&query(message(2, &[]))));
+    assert!(is_esripbf(&query(message(3, &message(1, b"OBJECTID")))));
+    assert!(is_esripbf(&query(message(4, &message(1, &double(1, 1.0))))));
+    // A result the format doesn't define, or a field its result doesn't have.
+    assert!(!is_esripbf(&query(message(5, &number(1, 5)))));
+    assert!(!is_esripbf(&query(message(2, &message(1, b"x")))));
+    assert!(!is_esripbf(&query(message(3, &[]))));
     // OpenStreetMap: a big-endian header length, then its `OSMHeader` blob header.
     assert!(!is_esripbf(b"\x00\x00\x00\x0d\x0a\x09OSMHeader\x18\x40"));
     // A vector tile: a layer (field 3).
