@@ -559,6 +559,9 @@ pub(crate) fn cog_tiles_to_rasters(m: &mut rustgis_map::Map) {
         if t.bounds.is_some() {
             dropped.push("bounds");
         }
+        if t.overlay {
+            dropped.push("overlay");
+        }
         // Read with the project's other rasters read in place (see `project::read_in_place`), in
         // its look once it lands.
         let rl = RasterLayer::unread_in_place(file).with_look(address_look(&look)).from_tiles_dropping(dropped);

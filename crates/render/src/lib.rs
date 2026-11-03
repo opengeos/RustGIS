@@ -270,6 +270,9 @@ pub struct Rendered {
     pub data_pending: bool,
     /// Tile layers that couldn't be drawn, and why.
     pub tile_errors: Vec<String>,
+    /// Raster layers read in place drawn from less than the view needs (a coarser level, tiles
+    /// they couldn't read), by id, their errors among `tile_errors`: an export refuses them.
+    pub partial: Vec<u32>,
 }
 
 /// Which rasteriser [`render_backend`] targets: the tiny-skia CPU pixmap (the default, and the
@@ -1914,6 +1917,7 @@ fn render_tilted(map: &mut Map, view: &View, full_res_rasters: bool, sources_rea
     let mut kept: Vec<(View, (f64, f64), Pixmap)> = Vec::new();
     let last = bands_of.len().saturating_sub(1);
     let (mut attribution, mut tiles_pending, mut tile_errors) = (Vec::<String>::new(), false, Vec::<String>::new());
+    let mut partial = Vec::<u32>::new();
     for (i, b) in bands_of.into_iter().enumerate() {
         let v = band_view(view, &b);
         let Some(RenderOutput::Cpu(r)) = render_frame(map, &v, full_res_rasters, Backend::Cpu, Labels::Tilted(view, &mut candidates))
@@ -1948,6 +1952,11 @@ fn render_tilted(map: &mut Map, view: &View, full_res_rasters: bool, sources_rea
                 tile_errors.push(e);
             }
         }
+        for id in r.partial {
+            if !partial.contains(&id) {
+                partial.push(id);
+            }
+        }
         tiles_pending |= r.tiles_pending;
         if ground.is_some() {
             // The nearest band reaches the bottom of the view, the farthest the sky.
@@ -1976,7 +1985,16 @@ fn render_tilted(map: &mut Map, view: &View, full_res_rasters: bool, sources_rea
         }
     }
     let unplaced = if map.label_display.show_unplaced { placed.unplaced } else { Vec::new() };
-    Some(Rendered { pixmap: pm.into_pixmap(), labels: placed.labels, unplaced, attribution, tiles_pending, data_pending, tile_errors })
+    Some(Rendered {
+        pixmap: pm.into_pixmap(),
+        labels: placed.labels,
+        unplaced,
+        attribution,
+        tiles_pending,
+        data_pending,
+        tile_errors,
+        partial,
+    })
 }
 
 /// Lays a tilted view's bands, drawn flat, over the ground's relief: each band as a grid of
@@ -2150,6 +2168,7 @@ fn gpu_turned(map: &mut Map, view: &View, full_res_rasters: bool, sources_ready:
     let mut candidates = Vec::new();
     let (mut cmds, mut clips) = (Vec::new(), Vec::new());
     let (mut attribution, mut tiles_pending, mut tile_errors, mut clear) = (Vec::<String>::new(), false, Vec::<String>::new(), [0.0; 4]);
+    let mut partial = Vec::<u32>::new();
     let mut plain = true;
     let last = bands.len().saturating_sub(1);
     for (i, b) in bands.iter().enumerate() {
@@ -2191,6 +2210,11 @@ fn gpu_turned(map: &mut Map, view: &View, full_res_rasters: bool, sources_ready:
                 tile_errors.push(e);
             }
         }
+        for id in scene.partial {
+            if !partial.contains(&id) {
+                partial.push(id);
+            }
+        }
         tiles_pending |= scene.tiles_pending;
         // The nearest band reaches the bottom of the view and the farthest the sky, so no ground
         // falls between them.
@@ -2225,7 +2249,19 @@ fn gpu_turned(map: &mut Map, view: &View, full_res_rasters: bool, sources_ready:
         clips.push(CmdClip { upright: true, ..CmdClip::ALL });
     }
     let unplaced = if map.label_display.show_unplaced { placed.unplaced } else { Vec::new() };
-    Some(GpuScene { clear, cmds, labels: placed.labels, unplaced, attribution, tiles_pending, data_pending, tile_errors, tilt, clips })
+    Some(GpuScene {
+        clear,
+        cmds,
+        labels: placed.labels,
+        unplaced,
+        attribution,
+        tiles_pending,
+        data_pending,
+        tile_errors,
+        partial,
+        tilt,
+        clips,
+    })
 }
 
 /// Places the labels a tilted view's bands offered. A feature drawn in two bands offers its
@@ -3181,6 +3217,9 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
                             if !tile_out.errors.contains(&e) {
                                 tile_out.errors.push(e);
                             }
+                            if !tile_out.partial.contains(&layer.id) {
+                                tile_out.partial.push(layer.id);
+                            }
                         }
                     },
                     None => raster::draw(pm, data, &rl.style, stats, view, opacity, full_res_rasters, place),
@@ -3997,6 +4036,7 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
     let attribution = tile_out.attribution;
     let tiles_pending = tile_out.pending;
     let tile_errors = tile_out.errors;
+    let partial = tile_out.partial;
     match backend {
         Backend::Cpu => Some(RenderOutput::Cpu(Rendered {
             pixmap: pm.into_pixmap(),
@@ -4006,6 +4046,7 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
             tiles_pending,
             data_pending,
             tile_errors,
+            partial,
         })),
         Backend::Gpu | Backend::GpuLive => {
             flush_acc(pm.pixels(), &mut cmds, &mut cpu_dirty)?;
@@ -4024,6 +4065,7 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
                 tiles_pending,
                 data_pending,
                 tile_errors,
+                partial,
                 tilt: None,
                 clips: Vec::new(),
             }))
@@ -4874,17 +4916,16 @@ pub(crate) fn render_complete(map: &mut Map, view: &View) -> Option<Rendered> {
 pub fn render_png(map: &mut Map, view: &View) -> Result<Vec<u8>, String> {
     let r = render_complete(map, view).ok_or("could not allocate the image")?;
     // A raster read in place drawn from less than the view needs isn't written: its tiles still
-    // on their way (the browser can't wait; natively the wait ran out), or ones it couldn't read
-    // (said by the layer's name among the tile errors).
-    let in_place: Vec<&str> =
-        map.layers.iter().filter(|l| l.visible && l.raster.as_ref().is_some_and(|r| r.in_place)).map(|l| l.name.as_str()).collect();
-    if !in_place.is_empty() {
-        if r.tiles_pending {
-            return Err("a raster read in place has tiles still on their way: export again once the map has drawn it".into());
-        }
-        if let Some(e) = r.tile_errors.iter().find(|e| in_place.iter().any(|n| e.starts_with(&format!("{n}: ")))) {
-            return Err(format!("{e}, so the image isn't written"));
-        }
+    // on their way (the browser can't wait; natively the wait ran out), or a coarser level or
+    // tiles it couldn't read (`partial`).
+    if r.tiles_pending && map.layers.iter().any(|l| l.visible && l.raster.as_ref().is_some_and(|r| r.in_place)) {
+        return Err("a raster read in place has tiles still on their way: export again once the map has drawn it".into());
+    }
+    if let Some(l) = r.partial.first().and_then(|id| map.layers.iter().find(|l| l.id == *id)) {
+        return Err(format!(
+            "{}: drawn from less than the view needs (a coarser level, or tiles that couldn't be read), so the image isn't written",
+            l.name
+        ));
     }
     let mut pm = Canvas::from_pixmap(r.pixmap);
     for l in r.unplaced.iter().chain(&r.labels) {
