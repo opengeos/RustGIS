@@ -353,7 +353,8 @@ pub fn profile(r: &Raster, b: usize, path: &[Coord], samples: usize) -> Vec<(f64
 const SIGHT_RADIUS_M: f64 = 6_371_000.0 * 7.0 / 6.0;
 
 /// Whether `b` is visible from `a` (observer and target heights above the ground, in metres),
-/// and each profile sample with whether it can be seen. Earth curvature is included.
+/// and each profile sample with whether it can be seen. Earth curvature is included, with the
+/// refraction of visible light (see `SIGHT_RADIUS_M`), not the 4/3 Earth of radio links.
 pub fn line_of_sight(
     r: &Raster,
     band: usize,
@@ -400,6 +401,7 @@ const MAX_VIEWSHED_WORK: usize = 400_000_000;
 pub(crate) const MAX_IDW_WORK: usize = 400_000_000;
 
 /// Cells visible from an observer (1) or not (0) within `radius_m`; outside the radius no-data.
+/// The Earth curves as visible light sees it (`SIGHT_RADIUS_M`).
 pub fn viewshed(r: &Raster, b: usize, observer: Coord, height: f64, radius_m: f64) -> Result<Vec<f32>, String> {
     viewshed_on(None, r, b, observer, height, radius_m)
 }
