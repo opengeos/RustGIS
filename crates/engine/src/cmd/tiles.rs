@@ -568,7 +568,7 @@ pub(crate) fn cog_tiles_to_rasters(m: &mut rustgis_map::Map) {
         let id = m.add_raster(t.name.clone(), rl);
         if let Some(l) = m.layer_mut(id) {
             l.visible = t.visible;
-            l.transparency = ((1.0 - t.opacity.clamp(0.0, 1.0)) * 100.0).round();
+            l.transparency = (1.0 - t.opacity.clamp(0.0, 1.0)) * 100.0;
             l.blend = t.blend;
         }
         // Just over the layer it was drawn over, in its group; under them all without one.

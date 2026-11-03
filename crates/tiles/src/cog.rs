@@ -196,7 +196,11 @@ impl Info {
 
     /// The bands a look reads: its colour bands, then the file's alpha band, if it has one.
     pub fn shown(&self, look: &Look) -> Vec<usize> {
-        let mut shown = self.colour(look);
+        self.shown_from(self.colour(look))
+    }
+
+    /// [`Info::shown`], from the look's colours already found.
+    fn shown_from(&self, mut shown: Vec<usize>) -> Vec<usize> {
         if let Some(a) = self.alpha.filter(|a| !shown.contains(a)) {
             shown.push(a);
         }
@@ -1065,8 +1069,9 @@ fn draw(info: Arc<Info>, url: String, look: &Look, stretch: &[(f32, f32)], z: u8
         done(Err("too many GeoTIFF tiles for one map tile".into()));
         return;
     }
-    let shown = info.shown(look);
-    let colours = info.colour(look).len();
+    let colour = info.colour(look);
+    let colours = colour.len();
+    let shown = info.shown_from(colour);
     let pen = Pen {
         rgb: colours >= 3,
         // The alpha band where it is among those shown: after the colours, or one of them.

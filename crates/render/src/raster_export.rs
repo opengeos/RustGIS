@@ -97,6 +97,8 @@ pub fn export(layer: &RasterLayer, min_zoom: u8, max_zoom: u8, opacity: f32) -> 
                             crate::rustgis_tiles::cache::wait_for_news(drawn_at, left.min(web_time::Duration::from_secs(30)));
                             if crate::rustgis_tiles::cache::generation() == drawn_at {
                                 idle += 1;
+                            } else {
+                                idle = 0;
                             }
                             image.fill(tiny_skia::Color::TRANSPARENT);
                         }

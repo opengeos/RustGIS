@@ -666,6 +666,7 @@ fn photometric_patches<R: Read + Seek>(r: &mut R) -> Patches {
             // (277); the first ExtraSamples (338) value, when it is inline. Each a SHORT.
             let (mut photometric, mut samples, mut extra) = (None, 1u16, None);
             for (i, e) in entries.chunks(entry_len as usize).enumerate() {
+                // Each a SHORT, as the decoder itself requires of them.
                 let short = u16_(e.get(2..)?)? == 3;
                 match u16_(e)? {
                     262 if short => {
