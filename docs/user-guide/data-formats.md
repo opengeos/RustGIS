@@ -157,9 +157,9 @@ desktop, while in the web app they need the file downloaded first.
 On desktop, `layer.addUrl` waits for downloads, up to a minute; the From URL… dialog (`ui.addUrl`)
 and a plugin's `layer.addUrl` work in the background. In the web app the same dialog handles asynchronous downloads.
 `layer.addUrl` can add PMTiles archives and GeoTIFFs read in place directly, but an ordinary
-download returns
-`{"pending": true, "url": "…"}` and is added later by the app. To open a remote GeoParquet or
-FlatGeobuf whose header hasn't been fetched yet, use the From URL… dialog or a `?data=` link.
+download returns `{"pending": true, "url": "…"}` and is added later by the app. To open a remote
+GeoParquet or FlatGeobuf whose header hasn't been fetched yet, use the From URL… dialog or a
+`?data=` link.
 
 ## Map and feature services
 

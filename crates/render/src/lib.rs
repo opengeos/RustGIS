@@ -273,6 +273,9 @@ pub struct Rendered {
     /// Raster layers read in place drawn from less than the view needs (a coarser level, tiles
     /// they couldn't read), by id, their errors among `tile_errors`: an export refuses them.
     pub partial: Vec<u32>,
+    /// Raster layers read in place whose tiles are still on their way, by id: drawn again as
+    /// they land; an export that can't wait refuses them.
+    pub pending_in_place: Vec<u32>,
 }
 
 /// Which rasteriser [`render_backend`] targets: the tiny-skia CPU pixmap (the default, and the
@@ -1917,7 +1920,7 @@ fn render_tilted(map: &mut Map, view: &View, full_res_rasters: bool, sources_rea
     let mut kept: Vec<(View, (f64, f64), Pixmap)> = Vec::new();
     let last = bands_of.len().saturating_sub(1);
     let (mut attribution, mut tiles_pending, mut tile_errors) = (Vec::<String>::new(), false, Vec::<String>::new());
-    let mut partial = Vec::<u32>::new();
+    let (mut partial, mut pending_in_place) = (Vec::<u32>::new(), Vec::<u32>::new());
     for (i, b) in bands_of.into_iter().enumerate() {
         let v = band_view(view, &b);
         let Some(RenderOutput::Cpu(r)) = render_frame(map, &v, full_res_rasters, Backend::Cpu, Labels::Tilted(view, &mut candidates))
@@ -1957,6 +1960,11 @@ fn render_tilted(map: &mut Map, view: &View, full_res_rasters: bool, sources_rea
                 partial.push(id);
             }
         }
+        for id in r.pending_in_place {
+            if !pending_in_place.contains(&id) {
+                pending_in_place.push(id);
+            }
+        }
         tiles_pending |= r.tiles_pending;
         if ground.is_some() {
             // The nearest band reaches the bottom of the view, the farthest the sky.
@@ -1994,6 +2002,7 @@ fn render_tilted(map: &mut Map, view: &View, full_res_rasters: bool, sources_rea
         data_pending,
         tile_errors,
         partial,
+        pending_in_place,
     })
 }
 
@@ -2168,7 +2177,7 @@ fn gpu_turned(map: &mut Map, view: &View, full_res_rasters: bool, sources_ready:
     let mut candidates = Vec::new();
     let (mut cmds, mut clips) = (Vec::new(), Vec::new());
     let (mut attribution, mut tiles_pending, mut tile_errors, mut clear) = (Vec::<String>::new(), false, Vec::<String>::new(), [0.0; 4]);
-    let mut partial = Vec::<u32>::new();
+    let (mut partial, mut pending_in_place) = (Vec::<u32>::new(), Vec::<u32>::new());
     let mut plain = true;
     let last = bands.len().saturating_sub(1);
     for (i, b) in bands.iter().enumerate() {
@@ -2215,6 +2224,11 @@ fn gpu_turned(map: &mut Map, view: &View, full_res_rasters: bool, sources_ready:
                 partial.push(id);
             }
         }
+        for id in scene.pending_in_place {
+            if !pending_in_place.contains(&id) {
+                pending_in_place.push(id);
+            }
+        }
         tiles_pending |= scene.tiles_pending;
         // The nearest band reaches the bottom of the view and the farthest the sky, so no ground
         // falls between them.
@@ -2259,6 +2273,7 @@ fn gpu_turned(map: &mut Map, view: &View, full_res_rasters: bool, sources_ready:
         data_pending,
         tile_errors,
         partial,
+        pending_in_place,
         tilt,
         clips,
     })
@@ -3211,7 +3226,12 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
                     // Drawn from less than the view needs (a coarser level, tiles that couldn't be
                     // read): shown, and said with the tile errors.
                     Some(a) => match raster::draw_in_place(pm, a, data, &rl.style, stats, view, opacity, full_res_rasters, place) {
-                        Ok(pending) => tile_out.pending |= pending,
+                        Ok(pending) => {
+                            tile_out.pending |= pending;
+                            if pending && !tile_out.pending_in_place.contains(&layer.id) {
+                                tile_out.pending_in_place.push(layer.id);
+                            }
+                        }
                         Err(e) => {
                             let e = format!("{}: {e}", layer.name);
                             if !tile_out.errors.contains(&e) {
@@ -4037,6 +4057,7 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
     let tiles_pending = tile_out.pending;
     let tile_errors = tile_out.errors;
     let partial = tile_out.partial;
+    let pending_in_place = tile_out.pending_in_place;
     match backend {
         Backend::Cpu => Some(RenderOutput::Cpu(Rendered {
             pixmap: pm.into_pixmap(),
@@ -4047,6 +4068,7 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
             data_pending,
             tile_errors,
             partial,
+            pending_in_place,
         })),
         Backend::Gpu | Backend::GpuLive => {
             flush_acc(pm.pixels(), &mut cmds, &mut cpu_dirty)?;
@@ -4066,6 +4088,7 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
                 data_pending,
                 tile_errors,
                 partial,
+                pending_in_place,
                 tilt: None,
                 clips: Vec::new(),
             }))
@@ -4918,8 +4941,9 @@ pub fn render_png(map: &mut Map, view: &View) -> Result<Vec<u8>, String> {
     // A raster read in place drawn from less than the view needs isn't written: its tiles still
     // on their way (the browser can't wait; natively the wait ran out), or a coarser level or
     // tiles it couldn't read (`partial`).
-    if r.tiles_pending && map.layers.iter().any(|l| l.visible && l.raster.as_ref().is_some_and(|r| r.in_place)) {
-        return Err("a raster read in place has tiles still on their way: export again once the map has drawn it".into());
+    // Other layers' tiles pending export what has drawn, as before.
+    if let Some(l) = r.pending_in_place.first().and_then(|id| map.layers.iter().find(|l| l.id == *id)) {
+        return Err(format!("{}: its tiles are still on their way: export again once the map has drawn it", l.name));
     }
     if let Some(l) = r.partial.first().and_then(|id| map.layers.iter().find(|l| l.id == *id)) {
         return Err(format!(

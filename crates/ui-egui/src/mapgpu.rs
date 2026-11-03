@@ -1733,6 +1733,7 @@ mod tests {
             data_pending: false,
             tile_errors: vec![],
             partial: vec![],
+            pending_in_place: vec![],
             tilt: None,
             clips: vec![],
         };
@@ -2348,6 +2349,7 @@ mod tests {
             data_pending: false,
             tile_errors: vec![],
             partial: vec![],
+            pending_in_place: vec![],
             tilt: None,
             clips: vec![],
         };

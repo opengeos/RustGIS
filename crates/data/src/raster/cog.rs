@@ -312,7 +312,8 @@ pub fn layout(bytes: &Sparse) -> Result<Parse> {
 
 fn read_layout(r: Sparse) -> Result<Parse> {
     let reader = super::geotiff::reader(r).map_err(err)?;
-    let (palette, all_palette, wide_rgb) = (reader.palette, reader.all_palette, reader.wide_rgb);
+    // The full image's photometric interpretation (the first image).
+    let (palette, wide_rgb) = (reader.palette_ifds.first().copied().unwrap_or(false), reader.rgb_ifds.first().copied().unwrap_or(false));
     let mut dec = Decoder::new(reader).map_err(err)?.with_limits(limits());
     let Some(geo) = super::geotiff::cog_geo(&mut dec)? else {
         return Ok(Parse::NotTiled("a rotated image, or one without coordinates, is read whole".into()));
@@ -322,7 +323,7 @@ fn read_layout(r: Sparse) -> Result<Parse> {
     let (bands, color) = match ct {
         // A palette image (shown to the decoder as grey) is coloured by its table, else grey (see
         // `geotiff::read_limited_with_nodata`).
-        ColorType::Gray(bits) if all_palette || (palette && dec.find_tag(Tag::ColorMap).ok().flatten().is_some()) => (
+        ColorType::Gray(bits) if palette => (
             1,
             super::geotiff::palette_table(&mut dec, bits).map_or_else(
                 || {
@@ -877,11 +878,10 @@ pub(crate) mod tests {
         }
     }
 
-    /// A file holding a grey image of several bands as well as an RGB one with more bands can't
-    /// tell which is which once the RGB one is shown to the decoder as grey: neither is taken for
-    /// colour.
+    /// A file holding an RGB image with more bands and a grey image of several bands: each is
+    /// read as what its own PhotometricInterpretation says.
     #[test]
-    fn a_file_mixing_grey_and_rgb_images_of_several_bands_stays_grey() {
+    fn a_file_mixing_grey_and_rgb_images_tells_them_apart_by_image() {
         let e = Example { size: 300, tile: 128, bands: 4, photometric: 2, ..Example::default() };
         let mut file = example_with(&e);
         // The overview's PhotometricInterpretation (tag 262, one short) from RGB to grey.
@@ -889,10 +889,47 @@ pub(crate) mod tests {
         let at: Vec<usize> = (0..file.len().saturating_sub(entry.len())).filter(|&i| file[i..i + entry.len()] == entry).collect();
         assert_eq!(at.len(), 3, "the full image and its overviews");
         file[at[2] + 8] = 1;
+        // The full image: RGB (and near-infrared); the coarsest overview, read for a small limit:
+        // grey.
         let (l, _) = pixel(&file, 150, 150);
-        assert_eq!((l.bands, &l.color), (4, &ColorHint::Gray));
+        assert_eq!((l.bands, &l.color), (4, &ColorHint::Rgb { alpha: false }));
         let r = crate::raster::geotiff::read(std::io::Cursor::new(&file), "mixed").unwrap();
-        assert_eq!((r.band_count(), &r.color), (4, &ColorHint::Gray));
+        assert_eq!((r.band_count(), &r.color), (4, &ColorHint::Rgb { alpha: false }));
+        let small = crate::raster::geotiff::read_limited(
+            crate::raster::geotiff::reader(std::io::Cursor::new(&file)).unwrap(),
+            "mixed",
+            30_000,
+            None,
+        )
+        .unwrap();
+        assert_eq!((small.width, small.band_count(), &small.color), (75, 4, &ColorHint::Gray));
+    }
+
+    /// A palette image without its colour table beside grey overviews: it is drawn in grey and
+    /// says so; the overviews, grey by their own interpretation, don't.
+    #[test]
+    fn a_tableless_palette_image_beside_grey_ones_says_so() {
+        let mut file = example_with(&Example { size: 300, tile: 128, photometric: 3, ..Example::default() });
+        for i in 0..file.len().saturating_sub(4) {
+            if file[i..i + 4] == [0x40, 0x01, 0x03, 0x00] {
+                file[i..i + 2].copy_from_slice(&[0xFF, 0xFE]);
+            }
+        }
+        // The overviews' PhotometricInterpretation (tag 262) from palette to grey.
+        let entry = [0x06, 0x01, 0x03, 0x00, 0x01, 0x00, 0x00, 0x00, 0x03, 0x00];
+        let at: Vec<usize> = (0..file.len().saturating_sub(entry.len())).filter(|&i| file[i..i + entry.len()] == entry).collect();
+        assert_eq!(at.len(), 3);
+        for &i in &at[1..] {
+            file[i + 8] = 1;
+        }
+        let (l, _) = pixel(&file, 150, 150);
+        assert_eq!((&l.color, l.palette_missing), (&ColorHint::Gray, true));
+        let r = crate::raster::geotiff::read(std::io::Cursor::new(&file), "p").unwrap();
+        assert_eq!((&r.color, r.palette_missing), (&ColorHint::Gray, true));
+        let small =
+            crate::raster::geotiff::read_limited(crate::raster::geotiff::reader(std::io::Cursor::new(&file)).unwrap(), "p", 30_000, None)
+                .unwrap();
+        assert_eq!((small.width, &small.color, small.palette_missing), (150, &ColorHint::Gray, false));
     }
 
     /// A palette image whose colour table is missing is drawn in grey, and says so, read in place
