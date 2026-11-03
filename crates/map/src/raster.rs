@@ -78,6 +78,10 @@ pub struct RasterLayer {
     /// [`RasterLayer::lost_unsaid`]).
     #[serde(skip)]
     lost_said: bool,
+    /// What its address's look asked for that the file hasn't (bands past its own), said with
+    /// what the pixels lost.
+    #[serde(skip)]
+    look_lost: Option<String>,
     /// Settings of the tile layer this one was opened from that a raster layer hasn't (see
     /// [`RasterLayer::dropped_unsaid`]).
     #[serde(skip)]
@@ -222,6 +226,7 @@ impl RasterLayer {
             pixels_said: false,
             error_said: false,
             lost_said: false,
+            look_lost: None,
             dropped: Vec::new(),
         })
     }
@@ -248,6 +253,7 @@ impl RasterLayer {
             pixels_said: false,
             error_said: false,
             lost_said: false,
+            look_lost: None,
             dropped: Vec::new(),
         }
     }
@@ -274,6 +280,7 @@ impl RasterLayer {
             pixels_said: false,
             error_said: false,
             lost_said: false,
+            look_lost: None,
             dropped: Vec::new(),
         }
     }
@@ -305,6 +312,7 @@ impl RasterLayer {
             pixels_said: false,
             error_said: false,
             lost_said: false,
+            look_lost: None,
             dropped: Vec::new(),
         }
     }
@@ -322,6 +330,8 @@ impl RasterLayer {
     pub fn with_look(mut self, look: AddressLook) -> RasterLayer {
         match self.data.clone() {
             Some(d) => {
+                self.look_lost = RasterStyle::look_lost(&d, &look);
+                self.lost_said &= self.look_lost.is_none();
                 if let Some(style) = RasterStyle::for_look(&d, &look) {
                     self.style = style;
                 }
@@ -329,6 +339,13 @@ impl RasterLayer {
             None => self.look = Some(look),
         }
         self
+    }
+
+    /// Marks the layer as one that couldn't be read, and why (a project opened without the
+    /// connection its address needs), for [`RasterLayer::error_unsaid`] to say.
+    pub fn fail(&mut self, why: impl Into<String>) {
+        self.error = Some(why.into());
+        self.error_said = false;
     }
 
     /// Reads the pixels again from the path or the embedded file (after a project opens). A
@@ -488,7 +505,8 @@ impl RasterLayer {
         if self.lost_said {
             return Vec::new();
         }
-        let lost = self.data.as_ref().map(|d| d.lost.clone()).unwrap_or_default();
+        let mut lost = self.data.as_ref().map(|d| d.lost.clone()).unwrap_or_default();
+        lost.extend(self.look_lost.take());
         self.lost_said = self.data.is_some();
         lost
     }
@@ -523,7 +541,9 @@ impl RasterLayer {
                 self.pixels_said = false;
                 self.lost_said = false;
                 if std::mem::take(&mut self.restyle) {
-                    let look = self.look.take().and_then(|look| RasterStyle::for_look(&raster, &look));
+                    let look = self.look.take();
+                    self.look_lost = look.as_ref().and_then(|look| RasterStyle::look_lost(&raster, look));
+                    let look = look.and_then(|look| RasterStyle::for_look(&raster, &look));
                     self.style = look.unwrap_or_else(|| RasterStyle::default_for(&raster));
                 } else {
                     self.style.repair(&raster);
@@ -1025,6 +1045,14 @@ impl RasterStyle {
         if look.bands.is_empty() && look.range.is_none() {
             return None;
         }
+        // Bands the file hasn't: its own look (said by `look_lost`).
+        if Self::look_lost(r, look).is_some() {
+            let mut style = RasterStyle::default_for(r);
+            if let Some((lo, hi)) = look.range {
+                style.stretch = Stretch::custom(lo, hi);
+            }
+            return Some(style);
+        }
         let mut style = RasterStyle::default_for(r);
         let n = r.band_count();
         match look.bands[..] {
@@ -1039,6 +1067,16 @@ impl RasterStyle {
             style.stretch = Stretch::custom(lo, hi);
         }
         Some(style)
+    }
+
+    /// What a look asks for that `r` hasn't: bands past its own, so the file's own look is drawn
+    /// instead; `None` when the look fits.
+    pub fn look_lost(r: &Raster, look: &AddressLook) -> Option<String> {
+        let n = r.band_count();
+        let past: Vec<String> = look.bands.iter().filter(|b| **b >= n).map(|b| (b + 1).to_string()).collect();
+        (!past.is_empty()).then(|| {
+            format!("its address asks for band(s) {} (from 1), which it hasn't ({n} band(s)): drawn in its own look", past.join(", "))
+        })
     }
 
     /// A style for a layer whose pixels haven't arrived (its own look replaces it when they do).

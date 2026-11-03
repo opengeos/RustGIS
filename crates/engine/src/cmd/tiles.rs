@@ -571,7 +571,14 @@ pub(crate) fn cog_tiles_to_rasters(m: &mut rustgis_map::Map) {
         // Read with the project's other rasters read in place (see `project::read_in_place`), in
         // its look once it lands.
         let rl = RasterLayer::unread_in_place(file).with_look(address_look(&look)).from_tiles_dropping(dropped);
-        let id = m.add_raster(t.name.clone(), rl);
+        // A name another layer has: numbered, as a layer added is.
+        let mut name = t.name.clone();
+        let mut i = 1;
+        while m.layer_by_name(&name).is_some() {
+            i += 1;
+            name = format!("{} ({i})", t.name);
+        }
+        let id = m.add_raster(name, rl);
         if let Some(l) = m.layer_mut(id) {
             l.visible = t.visible;
             l.transparency = (1.0 - t.opacity.clamp(0.0, 1.0)) * 100.0;

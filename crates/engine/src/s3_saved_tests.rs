@@ -815,6 +815,24 @@ fn s3_saved_sources_without_keys_zero_matches_and_older_addresses_stay_blocked_o
     assert!(none.notices.iter().any(|n| n.error && n.text.contains("no saved connection")), "{:?}", none.notices);
     assert_eq!(none.map().layers.iter().find_map(|l| l.source.as_ref()).unwrap().error.as_deref(), Some(s3::UNRESOLVED));
     assert_eq!(p.srv.requests(), from);
+    // A GeoTIFF read in place from the bucket waits for the connection too, and says so, once.
+    let fgb = none.map().layers.iter().find_map(|l| l.source.as_ref().and_then(|src| src.path.clone())).unwrap();
+    let scene = fgb.replace("grid.fgb", "scene.tif");
+    assert_ne!(scene, fgb);
+    none.map_mut().add_raster("Scene".to_string(), rustgis_map::raster::RasterLayer::unread_in_place(scene));
+    let text = serde_json::to_string(&none.project).unwrap();
+    let mut none = session(Some(&empty));
+    none.run("project.openText", &json!({"text": text})).unwrap();
+    let scene = none.map().layers.iter().find(|l| l.name == "Scene").and_then(|l| l.raster.as_ref()).unwrap();
+    assert!(scene.data.is_none() && scene.error.as_deref() == Some(s3::UNRESOLVED), "{:?}", scene.error);
+    // One notice (the project's maps each hold the layer: one line naming them all).
+    let said = |s: &Session| {
+        s.notices.iter().filter(|n| n.error && n.text.contains("couldn't be read in place") && n.text.contains("Scene")).count()
+    };
+    assert_eq!(said(&none), 1, "{:?}", none.notices);
+    none.run("map.zoomIn", &Value::Null).unwrap();
+    assert_eq!(said(&none), 1);
+    assert_eq!(p.srv.requests(), from, "nothing fetched without the connection");
     // An older project's bare address, with a session-only connection of the bucket: as before.
     let legacy = p.text.replace(&p.fgb, "s3://sv-proj-edge/grid.fgb");
     assert!(legacy.contains("s3://sv-proj-edge/grid.fgb") && !legacy.contains(&p.fgb), "the Grid layer is an older project's");

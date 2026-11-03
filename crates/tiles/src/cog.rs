@@ -618,7 +618,6 @@ fn stats(url: String, header: Sparse, layout: Layout, done: Box<dyn FnOnce(Resul
     }
     // Any other look's stretch is read when a tile first needs it (`with_stretch`): a header read
     // for a window or an in-place overview reads nothing more.
-    let _ = own;
     done(Ok(info));
 }
 

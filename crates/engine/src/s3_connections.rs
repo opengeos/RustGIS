@@ -274,6 +274,12 @@ fn block(s: &mut Session, g: &Group) -> usize {
             src.error = Some(s3::UNRESOLVED.into());
         }
     }
+    // A raster read in place from the bucket waits for the connection too, and says so.
+    for rl in s.project.maps.iter_mut().flat_map(|m| m.layers.iter_mut()).filter_map(|l| l.raster.as_mut()) {
+        if rl.in_place && rl.data.is_none() && rl.path.as_deref().is_some_and(|p| g.has(p)) {
+            rl.fail(s3::UNRESOLVED);
+        }
+    }
     s.project.addresses_mut().into_iter().filter(|a| g.has(a)).count()
 }
 

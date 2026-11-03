@@ -13777,6 +13777,47 @@ fn a_turned_in_place_layer_is_not_exported_past_its_overview() {
     assert!(png.exists());
 }
 
+/// An address look naming bands the file hasn't (`#bands=9,8,7` on a 3-band file) is said, and
+/// the layer draws in its own look; its range is kept.
+#[test]
+fn a_look_naming_bands_the_file_hasnt_is_said() {
+    use rustgis_data::raster::cog::{Example, example_with};
+    use rustgis_map::raster::{RasterRenderer, Stretch};
+    let (base, _) = serve_ranges(example_with(&Example { size: 512, tile: 256, bands: 3, ..Example::default() }));
+    let mut s = Session::new(Project::default());
+    s.run("layer.addUrl", &json!({"url": format!("{base}/scene.tif#bands=9,8,7&range=10,200"), "name": "Scene"})).unwrap();
+    let said = |s: &Session| s.notices.iter().filter(|n| n.text.contains("asks for band(s) 9, 8, 7")).count();
+    assert_eq!(said(&s), 1, "{:?}", s.notices);
+    let rl = s.map().layer_by_name("Scene").and_then(|l| l.raster.as_ref()).unwrap();
+    assert_eq!(rl.style.renderer, RasterRenderer::Rgb { red: 0, green: 1, blue: 2 }, "the file's own look: three grey bands as RGB");
+    assert_eq!(rl.style.stretch, Stretch::custom(10.0, 200.0));
+    s.run("map.zoomIn", &Value::Null).unwrap();
+    assert_eq!(said(&s), 1);
+}
+
+/// A COG tile layer opened as a raster layer takes a numbered name when another layer has its
+/// name, as a layer added does.
+#[test]
+fn a_migrated_cog_layer_takes_a_free_name() {
+    let (base, _) = serve_ranges(rustgis_data::raster::cog::example(512, 256));
+    let mut s = Session::new(Project::default());
+    let empty =
+        r#"{"type":"FeatureCollection","features":[{"type":"Feature","geometry":{"type":"Point","coordinates":[0,0]},"properties":{}}]}"#;
+    s.run("layer.addDataText", &json!({"fileName": "scene.geojson", "text": empty, "name": "Scene"})).unwrap();
+    assert!(s.map().layer_by_name("Scene").is_some());
+    let mut text: Value = serde_json::to_value(&s.project).unwrap();
+    let tile = serde_json::to_value(rustgis_map::TileLayer::new("Scene", rustgis_map::TileKind::Cog, format!("{base}/scene.tif"))).unwrap();
+    match text.pointer_mut("/maps").and_then(Value::as_array_mut) {
+        Some(maps) => maps[0]["tiles"] = json!([tile]),
+        None => text["map"]["tiles"] = json!([tile]),
+    }
+    let mut t = Session::new(Project::default());
+    t.run("project.openText", &json!({"text": text.to_string()})).unwrap();
+    let names: Vec<&str> = t.map().layers.iter().map(|l| l.name.as_str()).collect();
+    assert!(names.contains(&"Scene") && names.contains(&"Scene (2)"), "{names:?}");
+    assert!(t.map().layer_by_name("Scene (2)").and_then(|l| l.raster.as_ref()).is_some_and(|r| r.in_place));
+}
+
 /// A layer read in place that can't be read says so, once, as its project opens.
 #[test]
 fn an_in_place_layer_that_cant_be_read_says_so() {

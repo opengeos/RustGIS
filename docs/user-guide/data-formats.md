@@ -113,7 +113,8 @@ in view at the resolution it needs as it draws, and draws it with the layer's st
 overview's statistics, so the image looks the same at every zoom. Until a part's tiles arrive, the
 level zoomed from stands in for them. A turned layer (Rotation in the Symbology pane) is drawn
 from the overview it holds: zoomed in past it, the map says so and an export refuses it. The
-Details pane says the image's full size and that it is read in place. A file whose smallest image is too large to hold as the overview (a large image
+Details pane says the image's full size and that it is read in place. A file whose smallest
+image is too large to hold as the overview (a large image
 saved without overviews) isn't added: GDAL's COG driver or `gdaladdo` makes the overviews. A tile
 that fails to arrive is asked for again a minute later, or when its server says to in a
 `Retry-After` header (with a 429 or 503 answer, within the hour); the map draws again then.
