@@ -621,7 +621,7 @@ impl TrendRun {
             // first piece is worked out, so a run cancelled or refused before then hasn't taken it.
             if let (0, Some(total)) = (piece, whole) {
                 for band in &mut bands {
-                    band.reserve_exact(total);
+                    reserve(band, total)?;
                 }
             }
             for (k, band) in bands.iter_mut().enumerate() {
@@ -1275,7 +1275,10 @@ impl Totals {
     /// error, not a crash (#1291).
     pub(crate) fn new(stat: Stat, cells: usize) -> Result<Totals, String> {
         fn each<T: Clone>(cells: usize, v: T) -> Result<Vec<T>, String> {
-            raster::filled(cells, 1, v).map_err(|e| e.to_string())
+            let mut out = Vec::new();
+            reserve(&mut out, cells)?;
+            out.resize(cells, v);
+            Ok(out)
         }
         let acc = match stat {
             Stat::Count | Stat::Mode | Stat::Variety | Stat::ModeCount | Stat::LongestRun | Stat::LongestRunLength | Stat::Frequency => {
@@ -1636,11 +1639,11 @@ impl ReduceRun {
                     (None, None) => finish(&Totals::new(self.stat, cells)?, self.min_share, dates, frequency),
                 };
                 // Their full length when the cube knows it, so they don't grow by doubling.
-                stack_columns(band, mask, columns, &piece_mask, whole);
+                stack_columns(band, mask, columns, &piece_mask, whole)?;
                 if let (0, Some(total)) = (piece, whole)
                     && frequency
                 {
-                    mask.reserve_exact(total);
+                    reserve(mask, total)?;
                 }
                 mask.extend(piece_mask);
             }
@@ -1716,7 +1719,7 @@ fn classes_over(totals: &[Option<Totals>], finished: &[Option<(Columns, Vec<f32>
 /// Puts a piece's columns under a group's so far, by key: a class the piece didn't meet gets the
 /// piece's `piece_mask`, and one met first in this piece the pieces' before it (`mask`). A column
 /// made here takes its full length, `whole` cells, when the cube knows it.
-fn stack_columns(outs: &mut Columns, mask: &[f32], columns: Columns, piece_mask: &[f32], whole: Option<usize>) {
+fn stack_columns(outs: &mut Columns, mask: &[f32], columns: Columns, piece_mask: &[f32], whole: Option<usize>) -> Result<(), String> {
     let order = |a: &Option<f32>, b: &Option<f32>| match (a, b) {
         (Some(a), Some(b)) => a.total_cmp(b),
         _ => a.is_some().cmp(&b.is_some()),
@@ -1730,7 +1733,8 @@ fn stack_columns(outs: &mut Columns, mask: &[f32], columns: Columns, piece_mask:
                 }
             }
             Err(at) => {
-                let mut b = Vec::with_capacity(whole.unwrap_or(0).max(mask.len() + column.len()));
+                let mut b = Vec::new();
+                reserve(&mut b, whole.unwrap_or(0).max(mask.len() + column.len()))?;
                 b.extend_from_slice(mask);
                 b.extend(column);
                 outs.insert(at, (key, b));
@@ -1742,6 +1746,13 @@ fn stack_columns(outs: &mut Columns, mask: &[f32], columns: Columns, piece_mask:
             b.extend_from_slice(piece_mask);
         }
     }
+    Ok(())
+}
+
+/// Room for `cells` more values in `v`, reserved first: outputs the machine can't hold are an
+/// error, not a crash (#1291).
+fn reserve<T>(v: &mut Vec<T>, cells: usize) -> Result<(), String> {
+    v.try_reserve_exact(cells).map_err(|_| format!("not enough memory for the values of {cells} cells"))
 }
 
 /// Prepares `cube.reduce`: the cube, the statistic, and the dates of the period (and months)
@@ -1944,16 +1955,16 @@ mod tests {
         let nan = f32::NAN;
         let mut outs = Vec::new();
         let mut mask = Vec::new();
-        super::stack_columns(&mut outs, &mask, vec![(Some(3.0), vec![1.0, nan])], &[0.0, nan], None);
+        super::stack_columns(&mut outs, &mask, vec![(Some(3.0), vec![1.0, nan])], &[0.0, nan], None).unwrap();
         mask.extend([0.0, nan]);
-        super::stack_columns(&mut outs, &mask, vec![(Some(5.0), vec![4.0])], &[0.0], Some(3));
+        super::stack_columns(&mut outs, &mask, vec![(Some(5.0), vec![4.0])], &[0.0], Some(3)).unwrap();
         let got: Vec<(Option<f32>, String)> = outs.iter().map(|(k, b)| (*k, format!("{b:?}"))).collect();
         assert_eq!(got, vec![(Some(3.0), "[1.0, NaN, 0.0]".to_string()), (Some(5.0), "[0.0, NaN, 4.0]".to_string())]);
         // One output, keyed None, is extended piece after piece.
         let mut one = Vec::new();
-        super::stack_columns(&mut one, &[], vec![(None, vec![1.0])], &[], Some(3));
+        super::stack_columns(&mut one, &[], vec![(None, vec![1.0])], &[], Some(3)).unwrap();
         assert!(one.first().is_some_and(|(_, b)| b.capacity() >= 3), "made at its full length");
-        super::stack_columns(&mut one, &[], vec![(None, vec![2.0, 3.0])], &[], Some(3));
+        super::stack_columns(&mut one, &[], vec![(None, vec![2.0, 3.0])], &[], Some(3)).unwrap();
         assert_eq!(one, vec![(None, vec![1.0, 2.0, 3.0])]);
     }
 

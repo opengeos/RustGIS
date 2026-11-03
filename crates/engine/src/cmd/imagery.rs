@@ -182,7 +182,7 @@ fn copied(r: &Raster) -> Result<Vec<Vec<f32>>, String> {
     r.bands
         .iter()
         .map(|b| {
-            let mut copy = raster::grid(w, h)?;
+            let mut copy = raster::room(b.data.len(), w, h)?;
             copy.extend_from_slice(&b.data);
             Ok(copy)
         })
