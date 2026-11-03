@@ -178,9 +178,9 @@ struct Faces {
     left_out: Vec<Vec<P3>>,
     /// Faces past [`MAX_FACES`] were left out.
     truncated: bool,
-    /// Some of those were marked `GroundSurface`: a footprint from the ground misses them (walls
-    /// and roofs left out don't touch it).
-    ground_truncated: bool,
+    /// The rings of those marked `GroundSurface`, apart from `left_out`: a footprint from the ground
+    /// misses them, and its outline takes their points (walls and roofs left out don't touch it).
+    ground_left_out: Vec<Vec<P3>>,
     dropped_rings: usize,
 }
 
@@ -252,8 +252,7 @@ impl Faces {
             == Some("GroundSurface");
         if self.faces.len() >= MAX_FACES {
             self.truncated = true;
-            self.ground_truncated |= ground;
-            self.left_out.append(&mut kept);
+            if ground { self.ground_left_out.append(&mut kept) } else { self.left_out.append(&mut kept) }
             return Some(());
         }
         self.faces.push(kept);
@@ -263,7 +262,7 @@ impl Faces {
 
     /// All its rings.
     fn rings(&self) -> impl Iterator<Item = &Vec<P3>> {
-        self.faces.iter().flatten().chain(&self.left_out)
+        self.faces.iter().flatten().chain(&self.left_out).chain(&self.ground_left_out)
     }
 }
 
@@ -312,12 +311,13 @@ fn lone_face(face: &[Vec<P3>]) -> Option<Geometry> {
 }
 
 /// An object's footprint and the level of detail it came from: the first of its LoD 0, the
-/// `GroundSurface` of the highest LoD with one, and the union of its highest LoD's faces, those of
+/// `GroundSurface` of the highest LoD with one (ground faces past the face cap included, which
+/// make it the outline of the ground's points), and the union of its highest LoD's faces, those of
 /// all its geometries at that level. Failing all, the outline of the highest LoD's points.
 fn object_footprint(surfaces: Vec<Surface>, counts: &mut Counts, budget: &mut usize) -> (Option<Geometry>, Option<String>) {
     let highest = |keep: fn(&Surface) -> bool| surfaces.iter().filter(|s| keep(s)).map(|s| s.rank).max_by(f64::total_cmp);
     let lod0 = surfaces.iter().any(|s| s.rank == 0.0 && !s.faces.faces.is_empty());
-    let (rank, ground_only) = match (lod0, highest(|s| s.faces.ground.contains(&true))) {
+    let (rank, ground_only) = match (lod0, highest(|s| s.faces.ground.contains(&true) || !s.faces.ground_left_out.is_empty())) {
         (true, _) => (Some(0.0), false),
         (false, Some(rank)) => (Some(rank), true),
         (false, None) => (highest(|s| !s.faces.faces.is_empty()).or_else(|| highest(|s| !s.faces.left_out.is_empty())), false),
@@ -327,13 +327,18 @@ fn object_footprint(surfaces: Vec<Surface>, counts: &mut Counts, budget: &mut us
     let (mut truncated, mut lod) = (false, None);
     for s in surfaces.into_iter().filter(|s| s.rank == rank) {
         lod = lod.or(s.lod);
-        // The ground's footprint is whole unless ground faces were left out.
-        truncated |= if ground_only { s.faces.ground_truncated } else { s.faces.truncated };
         if ground_only {
+            // The ground's footprint is whole unless ground faces were left out: walls and roofs
+            // past the cap don't change it (their points still count for the heights), so they
+            // need no notice.
+            truncated |= !s.faces.ground_left_out.is_empty();
             faces.extend(s.faces.faces.into_iter().zip(s.faces.ground).filter(|(_, ground)| *ground).map(|(face, _)| face));
+            left_out.extend(s.faces.ground_left_out);
         } else {
+            truncated |= s.faces.truncated;
             faces.extend(s.faces.faces);
             left_out.extend(s.faces.left_out);
+            left_out.extend(s.faces.ground_left_out);
         }
     }
     // From LoD 0 or the ground, one face is the footprint as it stands.
@@ -855,7 +860,8 @@ fn unique_names(names: Vec<String>) -> Vec<String> {
             if given.insert(name.to_ascii_lowercase()) {
                 return name;
             }
-            // `taken` holds at most twice as many names as there are layers: one is free.
+            // `taken` is finite (a name and a suffixed one per layer, at most 64), so a free
+            // number turns up; the fallback is never reached.
             let free = (2u32..).map(|n| format!("{name} ({n})")).find(|c| !taken.contains(&c.to_ascii_lowercase()));
             let free = free.unwrap_or(name);
             taken.insert(free.to_ascii_lowercase());

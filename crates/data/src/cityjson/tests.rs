@@ -982,43 +982,61 @@ fn a_system_given_over_the_one_named_is_said() {
     assert!(e.contains("it names a coordinate system RustGIS doesn't know"), "{e}");
 }
 
-/// One building whose geometry passes the face cap: a ground face with a courtyard first, then
-/// walls, past the cap by one, then (`late_ground`) one more ground face.
-fn courtyard_past_the_cap(late_ground: bool) -> Vec<u8> {
+/// One building whose LoD 2 geometry passes the face cap: a face with a courtyard first (marked
+/// `GroundSurface` when `ground_first`), then walls, past the cap by one, then (`late_ground`) a
+/// ground face beside it, 10 wide, left out. `lower_ground`: a 1-wide ground at LoD 1 too.
+fn courtyard_past_the_cap(ground_first: bool, late_ground: bool, lower_ground: bool) -> Vec<u8> {
     let mut boundaries = String::from("[[[0,1,2,3],[4,7,6,5]]");
-    let mut values = String::from("[0");
+    let mut values = String::from(if ground_first { "[0" } else { "[null" });
     for _ in 0..MAX_FACES {
         boundaries.push_str(",[[0,1,9,8]]");
         values.push_str(",null");
     }
     if late_ground {
-        boundaries.push_str(",[[0,1,2,3]]");
+        boundaries.push_str(",[[1,10,11,2]]");
         values.push_str(",0");
     }
     boundaries.push(']');
     values.push(']');
+    let lower = if lower_ground {
+        r#",{"type":"MultiSurface","lod":"1","boundaries":[[[12,13,14,15]]],"semantics":{"surfaces":[{"type":"GroundSurface"}],"values":[0]}}"#
+    } else {
+        ""
+    };
     format!(
         r#"{{"type":"CityJSON","version":"2.0","transform":{{"scale":[1,1,1],"translate":[0,0,0]}},
         "metadata":{{"referenceSystem":"https://www.opengis.net/def/crs/EPSG/0/4326"}},
-        "vertices":[[0,0,0],[10,0,0],[10,10,0],[0,10,0],[3,3,0],[7,3,0],[7,7,0],[3,7,0],[0,0,5],[10,0,5]],
+        "vertices":[[0,0,0],[10,0,0],[10,10,0],[0,10,0],[3,3,0],[7,3,0],[7,7,0],[3,7,0],[0,0,5],[10,0,5],
+            [20,0,0],[20,10,0],[0,0,0],[1,0,0],[1,1,0],[0,1,0]],
         "CityObjects":{{"b":{{"type":"Building","geometry":[{{"type":"MultiSurface","lod":"2","boundaries":{boundaries},
-        "semantics":{{"surfaces":[{{"type":"GroundSurface"}}],"values":{values}}}}}]}}}}}}"#
+        "semantics":{{"surfaces":[{{"type":"GroundSurface"}}],"values":{values}}}}}{lower}]}}}}}}"#
     )
     .into_bytes()
 }
 
-/// Past the face cap, a ground footprint keeps its courtyard when only walls were left out (#1374);
-/// a ground face left out makes it the outline of its points, said.
+/// Past the face cap, a ground footprint keeps its courtyard when only walls were left out (#1374).
+/// A ground face left out makes it the outline of the ground's points, those left out included,
+/// said; so does a highest LoD whose ground was all left out, over a lower LoD's ground.
 #[test]
 fn walls_past_the_face_cap_leave_the_ground_whole() {
-    let out = read("m.city.json", &courtyard_past_the_cap(false), None).unwrap();
-    let Some(Geometry::Polygon(p)) = geometry(&out[0].0, 0) else { panic!("{:?}", geometry(&out[0].0, 0)) };
+    let polygon = |out: &[(Dataset, ReadReport)]| match geometry(&out[0].0, 0) {
+        Some(Geometry::Polygon(p)) => p.clone(),
+        other => panic!("{other:?}"),
+    };
+    let out = read("m.city.json", &courtyard_past_the_cap(true, false, false), None).unwrap();
+    let p = polygon(&out);
     assert_eq!((p.len(), p[0].len()), (1, 2), "the ground with its courtyard: {p:?}");
     assert!(!says(&out, "outline of their points"), "{:?}", messages_of(&out));
 
-    let out = read("m.city.json", &courtyard_past_the_cap(true), None).unwrap();
-    let Some(Geometry::Polygon(p)) = geometry(&out[0].0, 0) else { panic!("{:?}", geometry(&out[0].0, 0)) };
+    let out = read("m.city.json", &courtyard_past_the_cap(true, true, false), None).unwrap();
+    let p = polygon(&out);
     assert_eq!((p.len(), p[0].len()), (1, 1), "the outline, without the courtyard: {p:?}");
+    assert!((area(geometry(&out[0].0, 0)) - 200.0).abs() < 1e-6, "over the ground left out too: {p:?}");
+    assert!(says(&out, "outline of their points"), "{:?}", messages_of(&out));
+
+    let out = read("m.city.json", &courtyard_past_the_cap(false, true, true), None).unwrap();
+    assert!((area(geometry(&out[0].0, 0)) - 100.0).abs() < 1e-6, "LoD 2's ground left out: {:?}", geometry(&out[0].0, 0));
+    assert_eq!(value(&out[0].0, 0, "lod"), crate::Value::Text("2".into()));
     assert!(says(&out, "outline of their points"), "{:?}", messages_of(&out));
 }
 
