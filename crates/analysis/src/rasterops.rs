@@ -1355,7 +1355,8 @@ mod tests {
         let flat = Raster::new("flat", w, h, vec![vec![0.0; (w * h) as usize]], transform, Crs::LonLat, None, ColorHint::Gray, "Float32")
             .unwrap_or_else(|e| panic!("{e}"));
         let eye = Coord::new(0.0005, 0.0);
-        let horizon = (2.0 * SIGHT_RADIUS_M * 10.0).sqrt();
+        // √(2 · 7/6 · 6,371 km · 10 m), written out so that the test pins the radius.
+        let horizon = 12_192.0;
         let vs = viewshed(&flat, 0, eye, 10.0, 20_000.0).unwrap_or_else(|e| panic!("{e}"));
         let row = &vs[w as usize..2 * w as usize];
         let last = row.iter().rposition(|v| *v == 1.0).unwrap_or(0);
