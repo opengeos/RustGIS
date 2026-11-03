@@ -309,23 +309,26 @@ fn tiles() -> &'static Mutex<Tiles> {
     T.get_or_init(Mutex::default)
 }
 
-/// Forgets every file and tile, so they are read again (with [`crate::cache::clear`]).
+/// Forgets every file and tile (those that failed too), so they are read again (with
+/// [`crate::cache::clear`]).
 pub(crate) fn forget() {
     infos().lock().unwrap_or_else(|e| e.into_inner()).retain(|_, s| matches!(s, State::Loading(_)));
+    raster::forget_failed(None);
     let mut t = tiles().lock().unwrap_or_else(|e| e.into_inner());
     t.map.retain(|_, s| matches!(s, TileState::Loading(_)));
     t.order.clear();
     t.samples = 0;
 }
 
-/// Forgets what was read of one file (its info and its tiles), but not a read under way: a
-/// failed read is made again with whatever login now signs the file's address.
+/// Forgets what was read of one file (its info and its tiles, those that failed too), but not a
+/// read under way: a failed read is made again with whatever login now signs the file's address.
 pub(crate) fn forget_file(url: &str) {
     let mut all = infos().lock().unwrap_or_else(|e| e.into_inner());
     if all.get(url).is_some_and(|s| !matches!(s, State::Loading(_))) {
         all.remove(url);
     }
     drop(all);
+    raster::forget_failed(Some(url));
     forget_file_in(&mut tiles().lock().unwrap_or_else(|e| e.into_inner()), url);
 }
 

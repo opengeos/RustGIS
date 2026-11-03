@@ -1066,6 +1066,7 @@ pub(crate) mod tests {
         }
         let _ = layout(&Sparse::default().with(0, b"II*\0\xff\xff\xff\x7f".to_vec()));
     }
+
     #[test]
     fn every_band_whatever_the_photometric_interpretation_says() {
         let want = |b: u32| ((300 + 10 * b) % 256) as f32;

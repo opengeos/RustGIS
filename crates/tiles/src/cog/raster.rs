@@ -187,13 +187,44 @@ pub struct Window {
 /// Tiles whose read failed lately, and until when they aren't asked for again ([`RETRY`] after, or
 /// as long as their server asked to be left), so a map drawn again and again doesn't ask for them
 /// each time. The map is drawn again when that time comes.
-fn failed() -> &'static Mutex<HashMap<(String, usize, u32), Instant>> {
+pub(super) fn failed() -> &'static Mutex<HashMap<(String, usize, u32), Instant>> {
     static F: OnceLock<Mutex<HashMap<(String, usize, u32), Instant>>> = OnceLock::new();
     F.get_or_init(Mutex::default)
 }
 
 /// The most failed tiles remembered.
 const MAX_FAILED: usize = 4096;
+
+/// What a tile's arrival leaves: the map draws again. One that failed is remembered until its
+/// wait is over (a minute, or what its server's `Retry-After` said), the map asked to draw again
+/// then; one the fetch queue dropped (the view moved on, see [`crate::cache::DROPPED`]) is no
+/// failure: not remembered, it is asked for again when it is drawn next, and the tiles that
+/// pushed it out draw the map as they land.
+fn tile_landed(key: (String, usize, u32), r: &Result<Bands, String>) {
+    match r {
+        Err(e) if e == crate::cache::DROPPED => return,
+        Err(e) => {
+            let until = Instant::now() + crate::cache::retry_wait(e, RETRY);
+            remember_failed(&mut failed().lock().unwrap_or_else(|e| e.into_inner()), key, until);
+            crate::cache::notify_at(until);
+        }
+        Ok(_) => {}
+    }
+    crate::cache::notify();
+}
+
+/// Forgets the failed tiles of `file` (`None`: of every file), so they are asked for at once: a
+/// login or a connection changed (see [`crate::cache::forget`] and [`crate::cache::clear`]).
+pub(super) fn forget_failed(file: Option<&str>) {
+    forget_failed_in(&mut failed().lock().unwrap_or_else(|e| e.into_inner()), file);
+}
+
+fn forget_failed_in(f: &mut HashMap<(String, usize, u32), Instant>, file: Option<&str>) {
+    match file {
+        None => f.clear(),
+        Some(file) => f.retain(|(u, _, _), _| u != file),
+    }
+}
 
 /// Remembers a failed tile until `until`. With [`MAX_FAILED`] already, those whose wait is over go
 /// first; failing that, the one whose wait ends soonest (asked for again a little early, once)
@@ -270,20 +301,7 @@ pub fn window(url: &str, level: usize, cols: (u32, u32), rows: (u32, u32), bands
     }
     for c in ask {
         let key = (file.to_string(), level, c);
-        get_tile(
-            info.clone(),
-            file.to_string(),
-            level,
-            c,
-            Box::new(move |r| {
-                if let Err(e) = r {
-                    let until = Instant::now() + crate::cache::retry_wait(&e, RETRY);
-                    remember_failed(&mut failed().lock().unwrap_or_else(|e| e.into_inner()), key, until);
-                    crate::cache::notify_at(until);
-                }
-                crate::cache::notify();
-            }),
-        );
+        get_tile(info.clone(), file.to_string(), level, c, Box::new(move |r| tile_landed(key, &r)));
         // A tile the file leaves out (a sparse file's) is kept at once: not waited for.
         if let Some(b) = tiles().lock().unwrap_or_else(|e| e.into_inner()).used(&(file.to_string(), level, c)) {
             kept.insert(c, b);
@@ -534,6 +552,35 @@ mod tests {
         // One already remembered is waited for again, nothing else goes.
         remember_failed(&mut f, key(5), now + std::time::Duration::from_secs(90));
         assert!(f.contains_key(&key(1)) && f.len() == MAX_FAILED);
+    }
+
+    /// A tile the fetch queue dropped (the view moved on) is no failure: not remembered, so it is
+    /// asked for again when it is drawn next; one its server refused is, until its wait is over.
+    #[test]
+    fn a_dropped_tile_isnt_remembered_as_failed() {
+        let key = |c: u32| ("test://dropped.tif".to_string(), 0usize, c);
+        tile_landed(key(1), &Err(crate::cache::DROPPED.to_string()));
+        assert!(!failed().lock().unwrap().contains_key(&key(1)));
+        tile_landed(key(2), &Err("HTTP 503".to_string()));
+        assert!(failed().lock().unwrap().contains_key(&key(2)));
+        tile_landed(key(3), &Ok(Arc::new(vec![vec![0.0f32]].into())));
+        assert!(!failed().lock().unwrap().contains_key(&key(3)));
+    }
+
+    /// Failed tiles are forgotten with their file (a login or a connection changed: asked for at
+    /// once), and all of them when the cache is cleared.
+    #[test]
+    fn failed_tiles_are_forgotten_with_their_file() {
+        let until = Instant::now() + std::time::Duration::from_secs(60);
+        let a = ("test://forgotten-a.tif".to_string(), 0usize, 1u32);
+        let b = ("test://forgotten-b.tif".to_string(), 0usize, 1u32);
+        let mut f = HashMap::new();
+        remember_failed(&mut f, a.clone(), until);
+        remember_failed(&mut f, b.clone(), until);
+        forget_failed_in(&mut f, Some("test://forgotten-a.tif"));
+        assert!(!f.contains_key(&a) && f.contains_key(&b));
+        forget_failed_in(&mut f, None);
+        assert!(f.is_empty());
     }
 
     /// A level as wide as `u32` allows (a hostile header): its last tile's end doesn't wrap, so

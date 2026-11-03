@@ -1597,6 +1597,27 @@ impl Session {
         }
     }
 
+    /// Reads again the overview of a raster layer read in place whose read failed, once its wait
+    /// is over: a minute, or what its server's `Retry-After` said, as a tile or a file's header is
+    /// read again (see `rustgis_tiles::cache::retry_wait`); until then the map is asked to draw
+    /// again when the wait is over. The app calls it each frame, with
+    /// [`Session::notice_landed_rasters`]; the pixels land as the map draws.
+    pub fn read_in_place_again(&mut self) {
+        use render::rustgis_tiles::cache;
+        for m in &mut self.project.maps {
+            for l in &mut m.layers {
+                let Some(rl) = &mut l.raster else { continue };
+                let Some((e, at)) = rl.read_failure() else { continue };
+                let wait = cache::retry_wait(e, cache::RETRY);
+                if at.elapsed() < wait {
+                    cache::notify_at(at + wait);
+                } else {
+                    rl.read_again();
+                }
+            }
+        }
+    }
+
     pub fn notify(&mut self, text: impl Into<String>, error: bool) {
         use rustgis_data::diagnostics::Severity;
         self.notice(text.into(), if error { Severity::Error } else { Severity::Info });

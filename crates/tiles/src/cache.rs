@@ -63,7 +63,7 @@ type ImageDecoder = Box<dyn Fn(Vec<u8>, Decoded) + Send + Sync>;
 /// Bytes the cache keeps before dropping the least recently used entries.
 const BUDGET: usize = if cfg!(target_arch = "wasm32") { 160 << 20 } else { 384 << 20 };
 /// A failed address is tried again after this long.
-pub(crate) const RETRY: Duration = Duration::from_secs(60);
+pub const RETRY: Duration = Duration::from_secs(60);
 /// The largest tile or document fetched.
 pub const MAX_BYTES: usize = 16 << 20;
 /// The error a fetcher gives a request it dropped unfetched (the view moved on): the address is
@@ -188,7 +188,7 @@ pub fn set_alarm(f: impl Fn(Duration) + Send + Sync + 'static) {
 
 /// Draws the map again at `when` (the earliest asked for is kept): [`generation`] goes up then, so
 /// a map waiting on a failed read asks for it again.
-pub(crate) fn notify_at(when: Instant) {
+pub fn notify_at(when: Instant) {
     let at = (when.saturating_duration_since(alarm_base()).as_millis() as u64).saturating_add(1);
     let mut current = ALARM.load(Ordering::Relaxed);
     loop {
@@ -230,7 +230,7 @@ pub fn retry_after(error: &str) -> Option<Duration> {
 
 /// How long a failed read waits before it is tried again: what its server asked for (see
 /// [`retry_after`]), else `default`.
-pub(crate) fn retry_wait(error: &str, default: Duration) -> Duration {
+pub fn retry_wait(error: &str, default: Duration) -> Duration {
     retry_after(error).unwrap_or(default)
 }
 

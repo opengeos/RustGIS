@@ -12847,6 +12847,12 @@ fn serve_file(body: Vec<u8>, ranges: bool) -> (String, std::sync::Arc<std::sync:
     serve_gated(body, ranges, None)
 }
 
+/// [`serve_ranges`] refusing the first `n` requests with a 503 and `Retry-After: 1` (a server
+/// busy for a moment), answering the rest.
+fn serve_refusing_first(body: Vec<u8>, n: usize) -> (String, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+    serve_with(body, true, None, n)
+}
+
 /// [`serve_file`] holding every answer until `gate` is set (a request still under way, for as long
 /// as a test needs).
 fn serve_gated(
@@ -12854,7 +12860,18 @@ fn serve_gated(
     ranges: bool,
     gate: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 ) -> (String, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+    serve_with(body, ranges, gate, 0)
+}
+
+/// [`serve_gated`], refusing the first `refuse` requests (see [`serve_refusing_first`]).
+fn serve_with(
+    body: Vec<u8>,
+    ranges: bool,
+    gate: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    refuse: usize,
+) -> (String, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
     use std::io::{Read, Write};
+    let refusals = std::sync::Arc::new(std::sync::Mutex::new(refuse));
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
     let sent = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
@@ -12866,10 +12883,22 @@ fn serve_gated(
         // (the fetch workers are shared by every test in the process).
         for stream in listener.incoming() {
             let Ok(mut s) = stream else { continue };
-            let (body, count, gate) = (body.clone(), count.clone(), gate.clone());
+            let (body, count, gate, refusals) = (body.clone(), count.clone(), gate.clone(), refusals.clone());
             std::thread::spawn(move || {
                 let mut buf = [0u8; 4096];
                 let read = s.read(&mut buf).unwrap_or(0);
+                // Refused while there are refusals left: busy, ask again in a second.
+                let refused = {
+                    let mut left = refusals.lock().unwrap();
+                    let refused = *left > 0;
+                    *left = left.saturating_sub(1);
+                    refused
+                };
+                if refused {
+                    let _ = s
+                        .write_all(b"HTTP/1.1 503 Service Unavailable\r\nRetry-After: 1\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+                    return;
+                }
                 if let Some(g) = &gate {
                     let start = std::time::Instant::now();
                     while !g.load(std::sync::atomic::Ordering::Relaxed) && start.elapsed() < std::time::Duration::from_secs(60) {
@@ -13932,6 +13961,58 @@ fn a_look_naming_bands_the_file_hasnt_is_said() {
     let rl = s.map().layer_by_name("Pair").and_then(|l| l.raster.as_ref()).unwrap();
     assert_eq!(rl.style.renderer, RasterRenderer::Rgb { red: 0, green: 1, blue: 2 });
     assert_eq!(rl.style.stretch, Stretch::custom(10.0, 200.0));
+    // A palette image: in grey with the range, as its tile layer draws one whose address names
+    // bands (its colours are of one band alone), not in its colours without the range.
+    let (classes, _) = serve_ranges(example_with(&Example { size: 512, tile: 256, classes: true, ..Example::default() }));
+    s.run("layer.addUrl", &json!({"url": format!("{classes}/classes.tif#bands=9,8,7&range=10,200"), "name": "Classes"})).unwrap();
+    let said = s
+        .notices
+        .iter()
+        .filter(|n| n.text.contains("Classes") && n.text.contains("asks for band(s) 9, 8, 7") && n.text.contains("drawn in grey"));
+    assert_eq!(said.count(), 1, "{:?}", s.notices);
+    let rl = s.map().layer_by_name("Classes").and_then(|l| l.raster.as_ref()).unwrap();
+    assert!(matches!(rl.style.renderer, RasterRenderer::Stretch { band: 0, .. }), "{:?}", rl.style.renderer);
+    assert_eq!(rl.style.stretch, Stretch::custom(10.0, 200.0));
+}
+
+/// A layer read in place whose overview couldn't be read (its server refused the file's header,
+/// saying when to ask again) is read again once its wait is over, as the app draws, and lands then:
+/// not before, and failing was said once.
+#[test]
+fn an_in_place_layers_failed_overview_is_read_again_when_its_wait_is_over() {
+    use rustgis_map::raster::RasterLayer;
+    use std::sync::atomic::Ordering;
+    use std::time::Duration;
+    let (base, sent) = serve_refusing_first(rustgis_data::raster::cog::example(512, 256), 1);
+    let mut s = Session::new(Project::default());
+    s.map_mut().add_raster("Scene".to_string(), RasterLayer::unread_in_place(format!("{base}/scene.tif")));
+    let text = serde_json::to_string(&s.project).unwrap();
+    let mut s = Session::new(Project::default());
+    s.run("project.openText", &json!({"text": text})).unwrap();
+    let layer = |s: &Session| s.map().layer_by_name("Scene").and_then(|l| l.raster.clone()).unwrap();
+    let rl = layer(&s);
+    assert!(rl.data.is_none());
+    assert!(rl.error.as_deref().is_some_and(|e| e.contains("retry after 1 s")), "{:?}", rl.error);
+    let said = |s: &Session| s.notices.iter().filter(|n| n.error && n.text.contains("Scene: couldn't be read in place")).count();
+    assert_eq!(said(&s), 1, "{:?}", s.notices);
+    // Not before its wait is over.
+    s.read_in_place_again();
+    assert!(layer(&s).data.is_none());
+    assert_eq!(sent.load(Ordering::Relaxed), 0, "read again before its wait was over");
+    // Then read again, landing as the map draws.
+    let view = rustgis_geom::Extent::new(10.0, 45.9, 10.1, 46.0);
+    let start = std::time::Instant::now();
+    while layer(&s).data.is_none() && start.elapsed() < Duration::from_secs(20) {
+        crate::render::rustgis_tiles::cache::wait(Duration::from_millis(50));
+        s.read_in_place_again();
+        s.map_mut().sync_sources(&view, 1000.0, false);
+        s.notice_landed_rasters();
+    }
+    let rl = layer(&s);
+    assert!(rl.data.is_some(), "{:?}", rl.error);
+    assert!(rl.error.is_none());
+    assert!(sent.load(Ordering::Relaxed) > 0);
+    assert_eq!(said(&s), 1, "{:?}", s.notices);
 }
 
 /// A COG tile layer opened as a raster layer takes a numbered name when another layer has its

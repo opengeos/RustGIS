@@ -5945,7 +5945,18 @@ fn raster_legend_rows(ui: &mut Ui, entries: &[RasterLegend], indent: f32, t: &To
 
 fn raster_details(ui: &mut Ui, rl: &rustgis_engine::map::RasterLayer, t: &Tokens) {
     let Some(d) = &rl.data else {
-        ui.label(egui::RichText::new(tl!("The raster's data couldn't be read.")).color(t.red));
+        // Read in place, its overview is on its way until it lands, or fails (said why).
+        match &rl.error {
+            None if rl.in_place => {
+                ui.label(egui::RichText::new(tl!("Reading in place…")).color(t.text_dim));
+            }
+            error => {
+                ui.label(egui::RichText::new(tl!("The raster's data couldn't be read.")).color(t.red));
+                if let Some(e) = error {
+                    ui.label(egui::RichText::new(e).size(11.0));
+                }
+            }
+        }
         if let Some(p) = &rl.path {
             ui.label(egui::RichText::new(p).monospace().size(11.0));
         }
@@ -5988,7 +5999,7 @@ fn raster_details(ui: &mut Ui, rl: &rustgis_engine::map::RasterLayer, t: &Tokens
                 ),
             );
         }
-        Some((w, h)) => rows.insert(1, ("Full size", format!("{w} × {h}"))),
+        Some((fw, fh)) => rows.insert(1, ("Full size", format!("{fw} × {fh}"))),
         None if rl.in_place => rows.insert(1, ("Read", tl!("In place").to_string())),
         None => {}
     }

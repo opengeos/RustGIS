@@ -532,9 +532,12 @@ fn blend(p: &Value) -> Result<Option<Blend>, String> {
     ps(p, "blend").map(|m| Blend::from_code(m).ok_or_else(|| format!("unknown blend mode '{m}'"))).transpose()
 }
 
-/// Turns a project's COG tile layers (saved before GeoTIFFs read in place were raster layers) into
-/// raster layers read in place, each where it was drawn, with its name, visibility, opacity, blend
-/// and look. A dated series, a data cube's files and AlphaEarth's embeddings stay tile layers.
+/// Turns a map's plain COG tile layers into raster layers read in place, each where it was drawn,
+/// with its name, visibility, opacity, blend and look: those of projects saved before GeoTIFFs read
+/// in place were raster layers, and those `map.addTiles` (kind `cog`) still adds, on every open (a
+/// plain GeoTIFF is one kind of layer, however it was added; what a tile layer had that a raster
+/// layer hasn't is said once, see `Session::notice_landed_rasters`). A dated series, a data cube's
+/// files and AlphaEarth's embeddings stay tile layers.
 pub(crate) fn cog_tiles_to_rasters(m: &mut rustgis_map::Map) {
     use rustgis_map::raster::RasterLayer;
     let mut i = 0;

@@ -116,9 +116,9 @@ from the overview it holds: zoomed in past it, the map says so and an export ref
 Details pane says the image's full size and that it is read in place. A file whose smallest
 image is too large to hold as the overview (a large image saved without overviews) isn't added:
 GDAL's COG driver or `gdaladdo` makes the overviews. A tile a sparse file leaves out is empty. A
-tile, or the file's header, that fails to arrive is asked for again a minute later, or when its
-server says to in a `Retry-After` header (with a 429 or 503 answer, within the hour); the map
-draws again then.
+tile, the file's header or the overview a layer holds, that fails to arrive is asked for again a
+minute later, or when its server says to in a `Retry-After` header (with a 429 or 503 answer,
+within the hour); the map draws again then.
 Exporting the layer (Raster to PMTiles) waits for its tiles on the desktop, up to two minutes,
 and isn't written without them; in the web app, export again once the map has drawn the image.
 
