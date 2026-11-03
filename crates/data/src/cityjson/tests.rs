@@ -379,7 +379,7 @@ fn walls_are_an_outline_or_said_to_have_none() {
     assert!((area(geometry(&out[0].0, 0)) - 50.0).abs() < 1e-6, "{:?}", geometry(&out[0].0, 0));
     assert!(geometry(&out[0].0, 1).is_none());
     assert!(says(&out, "1 city objects with no faces seen from above"), "{:?}", messages_of(&out));
-    assert!(says(&out, "1 city objects have no footprint"), "{:?}", messages_of(&out));
+    assert!(says(&out, "1 city objects have a shape that can't be drawn"), "{:?}", messages_of(&out));
 }
 
 /// Hostile geometry never panics: what can't be read is left out and counted, the rest stays.
@@ -443,7 +443,7 @@ fn coordinates_a_transform_overflows_are_said() {
     v["transform"]["scale"] = json!([1e308, 1.0, 1.0]);
     let out = read("m.city.json", v.to_string().as_bytes(), Crs::from_epsg(4326)).unwrap();
     assert!(geometry(&out[0].0, 0).is_none());
-    assert!(says(&out, "have no footprint"), "{:?}", messages_of(&out));
+    assert!(says(&out, "have a shape that can't be drawn"), "{:?}", messages_of(&out));
 }
 
 /// Geometries of the same level of detail are one footprint; a level with nothing but degenerate rings
@@ -516,7 +516,7 @@ fn a_lone_face_seen_edge_on_has_no_footprint() {
     );
     let out = read("m.city.json", &bytes, None).unwrap();
     assert!(geometry(&out[0].0, 0).is_none(), "{:?}", geometry(&out[0].0, 0));
-    assert!(says(&out, "1 city objects have no footprint"), "{:?}", messages_of(&out));
+    assert!(says(&out, "1 city objects have a shape that can't be drawn"), "{:?}", messages_of(&out));
 }
 
 /// Lines and points show the level of detail they came from, not the footprint's. Their own heights
@@ -558,7 +558,7 @@ fn objects_with_empty_geometries_are_said() {
         }),
     );
     let out = read("m.city.json", &bytes, None).unwrap();
-    assert!(says(&out, "1 city objects have no footprint"), "{:?}", messages_of(&out));
+    assert!(says(&out, "1 city objects have a shape that can't be drawn"), "{:?}", messages_of(&out));
     assert!(says(&out, "1 city objects have no geometry of their own"), "{:?}", messages_of(&out));
     assert!(says(&out, "the addresses of 1 city objects are left out"), "{:?}", messages_of(&out));
 }
@@ -602,6 +602,25 @@ fn objects_that_cant_be_converted_mark_the_layer() {
     let bytes = doc(json!(vertices), json!({"b": triangle(3)}));
     let e = read("m.city.json", &bytes, Some(Crs::WebMercator)).unwrap_err().to_string();
     assert!(e.contains("no object could be converted"), "{e}");
+}
+
+/// An object is counted once in a notice, however many of its geometry families it loses.
+#[test]
+fn an_object_losing_several_families_is_counted_once() {
+    let near = [[0.0, 0.0, 0.0], [1000.0, 0.0, 0.0], [1000.0, 1000.0, 0.0]];
+    let far = [[1e12, 0.0, 0.0], [1e12 + 1000.0, 0.0, 0.0], [1e12 + 1000.0, 1000.0, 0.0]];
+    let vertices: Vec<[f64; 3]> = near.iter().chain(&far).copied().collect();
+    let surface = |a: i64| json!({"type": "MultiSurface", "lod": "1", "boundaries": [[[a, a + 1, a + 2]]]});
+    let line = json!({"type": "MultiLineString", "lod": "1", "boundaries": [[3, 4, 5]]});
+    let bytes = doc(
+        json!(vertices),
+        json!({
+            "a": {"type": "LandUse", "geometry": [surface(0)]},
+            "b": {"type": "LandUse", "geometry": [surface(3), line]},
+        }),
+    );
+    let out = read("m.city.json", &bytes, Some(Crs::WebMercator)).unwrap();
+    assert!(says(&out, "1 city objects have coordinates outside their coordinate system"), "{:?}", messages_of(&out));
 }
 
 /// A byte order mark doesn't hide a model, and a file named only `.city.json` still names its layer.

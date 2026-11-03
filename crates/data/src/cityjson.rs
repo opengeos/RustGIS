@@ -318,10 +318,7 @@ fn object_footprint(surfaces: Vec<Surface>, counts: &mut Counts, budget: &mut us
         (false, Some(rank)) => (Some(rank), true),
         (false, None) => (highest(|s| !s.faces.faces.is_empty()).or_else(|| highest(|s| !s.faces.left_out.is_empty())), false),
     };
-    let Some(rank) = rank else {
-        counts.no_footprint += 1;
-        return (None, None);
-    };
+    let Some(rank) = rank else { return (None, None) };
     let (mut faces, mut left_out): (Vec<Vec<Vec<P3>>>, Vec<Vec<P3>>) = (Vec::new(), Vec::new());
     let (mut truncated, mut lod) = (false, None);
     for s in surfaces.into_iter().filter(|s| s.rank == rank) {
@@ -346,7 +343,6 @@ fn object_footprint(surfaces: Vec<Surface>, counts: &mut Counts, budget: &mut us
     let (geometry, hull) = footprint(&faces, truncated, std::slice::from_ref(&points), budget);
     counts.wall_hulls += usize::from(hull == Some(Hull::NoFaces));
     counts.unmerged += usize::from(hull == Some(Hull::Unmerged));
-    counts.no_footprint += usize::from(geometry.is_none());
     (geometry, lod)
 }
 
@@ -738,12 +734,14 @@ fn object_rows(
     }
     counts.bad_heights += usize::from(bad_height);
     let mut rows = Vec::new();
-    let mut push = |family: Family, lod: Option<String>, geometry: Option<Geometry>, z_dropped: bool, counts: &mut Counts| {
+    // Counted once for the object, whichever of its families are lost.
+    let mut shapeless = false;
+    let mut push = |family: Family, lod: Option<String>, geometry: Option<Geometry>, z_dropped: bool| {
+        shapeless |= geometry.is_none();
         let (geometry, unconverted) = match (geometry, to_lonlat) {
             (Some(g), Some(t)) => {
                 let converted = crate::io::geometry_to_lonlat(&g, t);
                 let failed = converted.is_none();
-                counts.unconverted += usize::from(failed);
                 (converted, failed)
             }
             (g, _) => (g, false),
@@ -752,15 +750,14 @@ fn object_rows(
     };
     if !surfaces.is_empty() {
         let (geometry, lod) = object_footprint(surfaces, counts, budget);
-        push(Family::Polygon, lod, geometry, false, counts);
+        push(Family::Polygon, lod, geometry, false);
     }
     let coords = |p: &[P3]| p.iter().map(|p| Coord::new(p[0], p[1])).collect::<Vec<_>>();
     let finite = |p: &P3| p[0].is_finite() && p[1].is_finite();
     let Highest { lod: line_lod, parts: lines, .. } = lines;
     if !lines.is_empty() {
         let geometry = lines.iter().flatten().all(finite).then(|| Geometry::Line(lines.iter().map(|l| coords(l)).collect()));
-        counts.no_footprint += usize::from(geometry.is_none());
-        push(Family::Line, line_lod, geometry, heights_differ(lines.iter().flatten()), counts);
+        push(Family::Line, line_lod, geometry, heights_differ(lines.iter().flatten()));
     }
     let Highest { lod: point_lod, parts: points, .. } = points;
     counts.instances += points.iter().filter(|(_, instance)| *instance).count();
@@ -770,9 +767,10 @@ fn object_rows(
             [p] => Geometry::Point(Coord::new(p[0], p[1])),
             many => Geometry::MultiPoint(coords(many)),
         });
-        counts.no_footprint += usize::from(geometry.is_none());
-        push(Family::Point, point_lod, geometry, heights_differ(points.iter()), counts);
+        push(Family::Point, point_lod, geometry, heights_differ(points.iter()));
     }
+    counts.no_footprint += usize::from(shapeless);
+    counts.unconverted += usize::from(rows.iter().any(|r| r.unconverted));
     ObjectRows { rows, z, solid }
 }
 
@@ -936,7 +934,7 @@ fn messages(c: &Counts) -> Vec<String> {
     say(
         c.no_footprint,
         format!(
-            "{} city objects have no footprint (their points don't outline an area: fewer than three, all on one line, or not finite numbers): they are kept without geometry",
+            "{} city objects have a shape that can't be drawn (a footprint whose points don't outline an area, fewer than three or all on one line, or points that aren't finite numbers): the shape is kept without geometry",
             c.no_footprint
         ),
     );
