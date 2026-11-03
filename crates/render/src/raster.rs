@@ -169,14 +169,19 @@ pub(crate) fn draw_in_place(
         _ => None,
     };
     read.extend(alpha);
+    // The strips in view: one, or two across a 0–360° grid's seam.
+    let strips: Vec<(f64, f64)> = std::iter::once(want.cols).chain(want.cols2).collect();
     let mut window = None;
     while let Some(l) = levels.get(level) {
         // The part in view, in the level's pixels, a pixel past each side (for bilinear sampling).
         let (sx, sy) = (f64::from(l.width) / f64::from(r.width.max(1)), f64::from(l.height) / f64::from(r.height.max(1)));
         let edge = |v: f64, k: f64, max: u32| ((v * k).floor() as i64).clamp(0, i64::from(max)) as u32;
-        let cols = (edge(want.cols.0, sx, l.width).saturating_sub(1), edge(want.cols.1, sx, l.width).saturating_add(2).min(l.width));
+        let cols: Vec<(u32, u32)> = strips
+            .iter()
+            .map(|c| (edge(c.0, sx, l.width).saturating_sub(1), edge(c.1, sx, l.width).saturating_add(2).min(l.width)))
+            .collect();
         let rows = (edge(want.rows.0, sy, l.height).saturating_sub(1), edge(want.rows.1, sy, l.height).saturating_add(2).min(l.height));
-        if rustgis_tiles::cog::raster::fits(address, level, cols, rows, &read) {
+        if cols.iter().all(|cols| rustgis_tiles::cog::raster::fits(address, level, *cols, rows, &read)) {
             window = Some((level, cols, rows));
             break;
         }
@@ -201,35 +206,49 @@ pub(crate) fn draw_in_place(
         _ if alpha.is_some() => ColorHint::GrayAlpha,
         _ => ColorHint::Gray,
     };
-    let w = match rustgis_tiles::cog::raster::window(address, level, cols, rows, &read, color) {
-        Ok(w) => w,
-        Err(e) => {
-            whole(pm);
-            return Err(e);
+    // Each strip read from the tiles kept, the missing ones asked for.
+    let (mut parts, mut pending, mut failed) = (Vec::new(), false, false);
+    for cols in cols {
+        match rustgis_tiles::cog::raster::window(address, level, cols, rows, &read, color.clone()) {
+            Ok(w) => {
+                pending |= w.pending;
+                failed |= w.failed;
+                parts.extend(w.raster);
+            }
+            Err(e) => {
+                whole(pm);
+                return Err(e);
+            }
         }
-    };
-    let Some(part) = w.raster else {
+    }
+    if parts.is_empty() {
         whole(pm);
-        return Ok(w.pending);
-    };
+        return Ok(pending);
+    }
     let mut own_style = style.clone();
     own_style.renderer = renumbered(&style.renderer);
     // While it has gaps (tiles to come, or that couldn't be read and no level kept stands in for),
     // the part in view goes over the overview: both drawn opaque, then blended once, so a
     // see-through layer isn't darker where they overlap.
-    if w.pending || w.failed {
+    if pending || failed {
         if opacity >= 1.0 {
             whole(pm);
-            draw(pm, &part, &own_style, Some(stats), view, 1.0, full_res, place);
+            for part in &parts {
+                draw(pm, part, &own_style, Some(stats), view, 1.0, full_res, place);
+            }
         } else if let Some(mut both) = Pixmap::new(pm.width(), pm.height()) {
             draw(&mut both, r, style, Some(stats), view, 1.0, full_res, place);
-            draw(&mut both, &part, &own_style, Some(stats), view, 1.0, full_res, place);
+            for part in &parts {
+                draw(&mut both, part, &own_style, Some(stats), view, 1.0, full_res, place);
+            }
             pm.draw_pixmap(0, 0, both.as_ref(), &PixmapPaint { opacity, ..PixmapPaint::default() }, Transform::identity(), None);
         }
     } else {
-        draw(pm, &part, &own_style, Some(stats), view, opacity, full_res, place);
+        for part in &parts {
+            draw(pm, part, &own_style, Some(stats), view, opacity, full_res, place);
+        }
     }
-    match (w.pending, w.failed) {
+    match (pending, failed) {
         (true, _) => Ok(true),
         (false, true) => Err("some of its tiles couldn't be read".into()),
         // Read coarser than the view needs (too large a part for the tiles kept): the map shows
@@ -259,6 +278,9 @@ fn renumbered(renderer: &RasterRenderer) -> RasterRenderer {
 #[derive(Debug, PartialEq)]
 struct InView {
     cols: (f64, f64),
+    /// A second run of columns: a geographic grid stored from 0 to 360° seen across its seam has
+    /// the places west of 0° at its far columns, so the part in view is two strips, not the width.
+    cols2: Option<(f64, f64)>,
     rows: (f64, f64),
     per_px: f64,
 }
@@ -274,18 +296,30 @@ fn in_view(r: &Raster, view: &View, place: Place, width: u32, height: u32, full_
     let (mut c0, mut c1, mut r0, mut r1) = (f64::INFINITY, f64::NEG_INFINITY, f64::INFINITY, f64::NEG_INFINITY);
     let (rw, rh) = (f64::from(r.width), f64::from(r.height));
     // A geographic grid stored from 0 to 360° has the places west of 0° at its far columns (see
-    // `Raster::wrap_col`): seen across that seam, the part in view is the whole width.
-    let mut wrapped = false;
+    // `Raster::wrap_col`): seen across that seam, the part in view is two strips, one at each end.
+    let (mut w0, mut w1) = (f64::INFINITY, f64::NEG_INFINITY);
     for (c, row) in grid.iter().flatten() {
         let col = r.wrap_col(*c);
-        wrapped |= col != *c;
-        c0 = c0.min(col.clamp(0.0, rw));
-        c1 = c1.max(col.clamp(0.0, rw));
+        if col != *c {
+            w0 = w0.min(col.clamp(0.0, rw));
+            w1 = w1.max(col.clamp(0.0, rw));
+        } else {
+            c0 = c0.min(col.clamp(0.0, rw));
+            c1 = c1.max(col.clamp(0.0, rw));
+        }
         r0 = r0.min(row.clamp(0.0, rh));
         r1 = r1.max(row.clamp(0.0, rh));
     }
-    if wrapped {
-        (c0, c1) = (0.0, rw);
+    let mut cols2 = None;
+    if w0 < w1 {
+        if c0 < c1 {
+            // Both sides: the seam is in view, so each strip runs to it (the sample points stop
+            // short of it by up to a grid step).
+            cols2 = Some((w0, rw));
+            c0 = 0.0;
+        } else {
+            (c0, c1) = (w0, w1);
+        }
     }
     if !(c0 < c1 && r0 < r1) {
         return None;
@@ -305,7 +339,7 @@ fn in_view(r: &Raster, view: &View, place: Place, width: u32, height: u32, full_
         }
     }
     // In the pixels drawn (a work pixel is `k` device pixels).
-    per_px.is_finite().then_some(InView { cols: (c0, c1), rows: (r0, r1), per_px })
+    per_px.is_finite().then_some(InView { cols: (c0, c1), cols2, rows: (r0, r1), per_px })
 }
 
 /// [`draw`], its rows spread over `threads` threads.
@@ -740,6 +774,31 @@ mod tests {
         let expected = Colorizer::new(&style, &r, None).color(&[0.0], Some(shade)).unwrap();
         let actual = pm.pixel(0, 0).unwrap();
         assert_eq!([actual.red(), actual.green(), actual.blue(), actual.alpha()], expected);
+    }
+
+    /// A 0–360° grid seen across its seam: the part in view is two strips, one at each end of
+    /// the grid, not the whole width.
+    #[test]
+    fn a_view_across_the_seam_of_a_full_turn_grid_is_two_strips() {
+        let gt = GeoTransform { origin_x: 0.0, origin_y: 90.0, pixel_width: 10.0, pixel_height: -10.0 };
+        let r = Raster::new("turn", 36, 18, vec![vec![1.0; 36 * 18]], gt, Crs::LonLat, None, ColorHint::Gray, "Float32").unwrap();
+        // About 90° to each side of 0°: the east strip from column 0, the west one to column 36.
+        let view = View {
+            width: 400.0,
+            height: 200.0,
+            pixels_per_point: 1.0,
+            camera: Camera { center: Coord::new(0.0, 0.0), res: 50_000.0, bearing: 0.0, pitch: 0.0 },
+            sky: false,
+        };
+        let w = in_view(&r, &view, Place::Flat(&Flat::Mercator, "mercator"), 400, 200, true).unwrap();
+        assert!(w.cols.0 == 0.0 && w.cols.1 > 5.0 && w.cols.1 < 18.0, "{:?}", w.cols);
+        let (a, b) = w.cols2.unwrap();
+        assert!(a > 18.0 && a < 31.0 && b == 36.0, "{:?}", (a, b));
+        // East of 0° only: one strip.
+        let east =
+            View { camera: Camera { center: lonlat_to_merc(Coord::new(100.0, 0.0)), res: 50_000.0, bearing: 0.0, pitch: 0.0 }, ..view };
+        let w = in_view(&r, &east, Place::Flat(&Flat::Mercator, "mercator"), 400, 200, true).unwrap();
+        assert!(w.cols2.is_none() && w.cols.0 > 0.0, "{:?}", (w.cols, w.cols2));
     }
 
     #[test]
