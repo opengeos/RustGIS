@@ -5015,8 +5015,9 @@ fn zonal_stats_on(inp: &dyn Inputs, p: &Json, threads: Option<usize>) -> Result<
     let target_rows: Vec<usize> = rows(inp, p, poly_param, poly_ds).into_iter().filter(|&r| r < poly_ds.features.len()).collect();
     // Each feature's statistics are its own, its cells summed in the same order on any thread, so
     // the features are worked out on several threads when there are many (#1252). A thread holds
-    // a feature's mask, up to the raster's size, so their memory bounds the threads too.
-    let mask_bytes = (r.width as usize).saturating_mul(r.height as usize);
+    // a feature's mask, up to the raster's size, and briefly its trimmed copy too, so their memory
+    // bounds the threads too.
+    let mask_bytes = (r.width as usize).saturating_mul(r.height as usize).saturating_mul(2);
     let threads = threads.unwrap_or_else(|| crate::parallel::threads_for_scratch(target_rows.len(), PARALLEL_FEATURES, mask_bytes));
     crate::control::begin(target_rows.len());
     // A feature's statistics by band, whether its geometry was read, its parts that couldn't be
