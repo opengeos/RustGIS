@@ -581,7 +581,7 @@ impl Canvas {
 struct Rows<'a>(Vec<std::slice::ChunksMut<'a, f32>>);
 
 impl<'a> Rows<'a> {
-    /// None when `w` is 0 (a row of no cells).
+    /// No rows when `w` is 0 (a row of no cells).
     fn of(bands: &'a mut [Vec<f32>], w: usize) -> Rows<'a> {
         Rows(if w == 0 { Vec::new() } else { bands.iter_mut().map(|b| b.chunks_mut(w)).collect() })
     }
