@@ -252,7 +252,11 @@ impl Faces {
             == Some("GroundSurface");
         if self.faces.len() >= MAX_FACES {
             self.truncated = true;
-            if ground { self.ground_left_out.append(&mut kept) } else { self.left_out.append(&mut kept) }
+            if ground {
+                self.ground_left_out.append(&mut kept)
+            } else {
+                self.left_out.append(&mut kept)
+            }
             return Some(());
         }
         self.faces.push(kept);
