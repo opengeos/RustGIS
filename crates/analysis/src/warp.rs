@@ -516,8 +516,8 @@ impl Canvas {
         Canvas { nb, alpha_src, add_alpha, out_bands: nb + usize::from(add_alpha), clear, outside, color }
     }
 
-    /// Cell `at` of `bands` set to `values` (no value where NaN), and opaque when an alpha band
-    /// was added.
+    /// Cell `at` of `bands` set to `values` (no value where NaN), and, when an alpha band was
+    /// added, opaque unless no band has a value.
     fn set(&self, bands: &mut [Vec<f32>], at: usize, values: &[f32]) {
         for (band, v) in bands.iter_mut().zip(values) {
             if let Some(o) = band.get_mut(at) {
@@ -525,11 +525,13 @@ impl Canvas {
                 *o = if v.is_nan() { if self.clear { 0.0 } else { self.outside } } else { *v };
             }
         }
-        // Alpha is read as 0–255 whatever the pixel type.
+        // Alpha is read as 0–255 whatever the pixel type. A cell with no value in any band (a
+        // NaN pixel under its centre in a float image without no-data) is see-through like one
+        // outside, not opaque black.
         if self.add_alpha
             && let Some(o) = bands.get_mut(self.nb).and_then(|b| b.get_mut(at))
         {
-            *o = 255.0;
+            *o = if values.iter().take(self.nb).all(|v| v.is_nan()) { 0.0 } else { 255.0 };
         }
     }
 
@@ -1088,6 +1090,29 @@ mod tests {
             let cell = |c, row| (0..3).map(|b| out.value(b, c, row)).collect::<Vec<_>>();
             assert_eq!(cell(2, 1), [Some(100.0), Some(150.0), Some(200.0)], "{method:?}");
             assert_eq!(cell(4, 3), [None, None, None], "{method:?}");
+        }
+    }
+
+    /// A colour image without no-data gains an alpha band; a cell over a pixel with no value in
+    /// any band (NaN in a float image) is see-through there, not opaque black.
+    #[test]
+    fn an_added_alpha_is_clear_over_a_pixel_with_no_value() {
+        // 6 × 6 pixels of (100, 150, 200), Float32 without no-data, pixel (2, 2) NaN in every
+        // band. Cells shifted a quarter pixel, so cell (k, r) is centred in pixel (k, r + 1).
+        let mut bands = vec![vec![100.0f32; 36], vec![150.0; 36], vec![200.0; 36]];
+        for band in &mut bands {
+            band[14] = f32::NAN;
+        }
+        let gt = GeoTransform { origin_x: 0.0, origin_y: 6.0, pixel_width: 1.0, pixel_height: -1.0 };
+        let crs = Crs::from_epsg(32613).unwrap();
+        let r = Raster::new("rgb", 6, 6, bands, gt, crs, None, ColorHint::Rgb { alpha: false }, "Float32").unwrap();
+        let g = Grid::snapped(r.crs, [0.25, 0.25, 5.25, 5.25], (1.0, 1.0), (0.25, 0.25)).unwrap();
+        for method in [Resampling::Nearest, Resampling::Bilinear, Resampling::Cubic] {
+            let out = project(&r, &g, Method::Sample(method), "o".into()).unwrap();
+            assert_eq!(out.bands.len(), 4, "{method:?}: an alpha band is added");
+            let alpha = |c: usize, row: usize| out.bands[3].data[row * 5 + c];
+            assert_eq!(alpha(2, 1), 0.0, "{method:?}: over the NaN pixel");
+            assert_eq!(alpha(1, 1), 255.0, "{method:?}: next to it");
         }
     }
 
