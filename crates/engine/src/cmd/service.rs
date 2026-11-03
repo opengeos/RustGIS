@@ -259,42 +259,51 @@ pub(crate) fn bounds_of(v: Option<&Value>) -> Result<Option<[f64; 4]>, String> {
     Ok(Some(b))
 }
 
-/// Longest [`download_features`] waits for an ArcGIS layer's description, read before its features.
-#[cfg(not(target_arch = "wasm32"))]
-const DESCRIPTION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
-
 /// A service's features at `url`, with the pages that follow (its `next` links, or an ArcGIS
 /// layer's pages, its description read first, see [`begin`](rustgis_data::ogc::begin)): at most
-/// `max` bytes and [`BLOCKING_TIMEOUT`](crate::render::rustgis_tiles::cache::BLOCKING_TIMEOUT) in
-/// all. A page is fetched only where the page before it may point.
+/// `max` bytes of features. The description waits at most
+/// [`DESCRIPTION_TIMEOUT`](rustgis_data::ogc::DESCRIPTION_TIMEOUT) apart, and the features
+/// [`BLOCKING_TIMEOUT`](crate::render::rustgis_tiles::cache::BLOCKING_TIMEOUT) in all after it
+/// (75 s at most). A page is fetched only where the page before it may point.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn download_features(s: &mut Session, name: &str, url: &str, max: usize) -> Result<Vec<u8>, String> {
     use crate::render::rustgis_tiles::{address, cache};
-    let until = std::time::Instant::now() + cache::BLOCKING_TIMEOUT;
+    use rustgis_data::ogc::{DESCRIPTION_TIMEOUT, Step, begin, max_paged_features};
+    let mut until = std::time::Instant::now() + cache::BLOCKING_TIMEOUT;
     let mut left = max;
-    let mut step = rustgis_data::ogc::begin(url, rustgis_data::ogc::max_paged_features());
+    let mut step = begin(url, max_paged_features());
     let (bytes, note) = loop {
         let pages = match step {
-            rustgis_data::ogc::Step::Done(bytes, note) => break (bytes, note),
-            rustgis_data::ogc::Step::Failed(e) => return Err(format!("{url}: {e}")),
-            rustgis_data::ogc::Step::Fetch(pages) => pages,
+            Step::Done(bytes, note) => break (bytes, note),
+            // A first answer that timed out says how to add a large layer instead.
+            Step::Failed(e) => return Err(format!("{url}: {}", cache::large_file_hint(e))),
+            Step::Fetch(pages) => pages,
         };
+        let describing = pages.describing();
         let answer = address::check(pages.next_url(), Some(pages.referrer())).and_then(|()| {
             let wait = until.saturating_duration_since(std::time::Instant::now());
-            // A layer's description is small: one that hangs leaves the rest of the time to its
-            // features, asked for as they are.
-            let wait = if pages.describing() { wait.min(DESCRIPTION_TIMEOUT) } else { wait };
+            // A layer's description is small: one that hangs is given up on, and its features
+            // asked for as they are.
+            let wait = if describing { wait.min(DESCRIPTION_TIMEOUT) } else { wait };
+            // Said as a timeout, so its error says how to add the layer instead.
             if wait.is_zero() {
-                return Err("the pages took too long".to_string());
+                return Err("the pages timed out".to_string());
             }
             let page = cache::download_blocking_within(pages.next_url(), left, wait)?;
             if page.len() > left {
                 return Err("the pages are larger than RustGIS downloads".into());
             }
-            left -= page.len();
+            // The description isn't the features: it leaves them the whole budget.
+            if !describing {
+                left -= page.len();
+            }
             Ok(page)
         });
         step = (*pages).land(answer);
+        // Nor their time: the features have all of it from when the description is in.
+        if describing {
+            until = std::time::Instant::now() + cache::BLOCKING_TIMEOUT;
+        }
     };
     if let Some(note) = note {
         s.notify(format!("{name}: {note}"), false);

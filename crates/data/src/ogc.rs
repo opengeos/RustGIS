@@ -3096,6 +3096,11 @@ fn read_first(url: &str, first: Vec<u8>, max: usize, paging: Option<ArcgisPaging
     pages.advance()
 }
 
+/// Longest a reader of [`Pages`] waits for an ArcGIS layer's description, read before its
+/// features ([`Pages::describing`]): one that hangs is given up on, and the layer's query is
+/// fetched as it is.
+pub const DESCRIPTION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+
 impl Pages {
     /// Whether the answer to fetch now is an ArcGIS layer's description, read before its features.
     pub fn describing(&self) -> bool {

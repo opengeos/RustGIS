@@ -797,7 +797,7 @@ pub fn download_blocking_omitting(url: &str, omit: &'static [u16]) -> Result<Vec
 
 /// A blocking download that ran out of time says how to add a large file instead.
 #[cfg(not(target_arch = "wasm32"))]
-fn large_file_hint(e: String) -> String {
+pub fn large_file_hint(e: String) -> String {
     if e.contains("timeout") || e.contains("timed out") {
         format!("{e} (a large file: add it with Home › Add › Add Data › From URL, which downloads in the background)")
     } else {

@@ -288,9 +288,12 @@ pub(crate) struct Landed {
 pub struct PageRead {
     landed: Landed,
     pages: Box<Pages>,
-    /// The bytes the answers still to come may take (the download's budget, less those read).
+    /// The bytes the answers still to come may take (the download's budget, less the features
+    /// read).
     left: usize,
     slot: Slot<Result<Vec<u8>, String>>,
+    /// When the answer was asked for: a layer's description that hangs is given up on.
+    asked: web_time::Instant,
 }
 
 /// Starts reading a service's features (`landed`, its download started but nothing fetched yet)
@@ -313,9 +316,17 @@ pub fn poll_pages(app: &mut RustGisApp, ctx: &egui::Context) {
             continue;
         }
         let answer = read.slot.lock().unwrap_or_else(|e| e.into_inner()).take();
+        // A layer's description that doesn't come in time is given up on (its download left to
+        // end on its own), and the layer's query fetched as it is.
+        let describing = read.pages.describing();
+        let answer = answer.or_else(|| {
+            (describing && read.asked.elapsed() >= ogc::DESCRIPTION_TIMEOUT)
+                .then(|| Err("the layer's description took too long".to_string()))
+        });
         match answer {
             Some(answer) => {
-                let left = read.left.saturating_sub(answer.as_ref().map_or(0, Vec::len));
+                // The description isn't the features: it leaves them the whole budget.
+                let left = if describing { read.left } else { read.left.saturating_sub(answer.as_ref().map_or(0, Vec::len)) };
                 let step = (*read.pages).land(answer);
                 go_on(app, read.landed, left, step);
             }
@@ -341,7 +352,7 @@ fn go_on(app: &mut RustGisApp, landed: Landed, left: usize, step: Step) {
                 Ok(()) => fetch_into_limited(pages.next_url(), left),
                 Err(e) => Slot::new(std::sync::Mutex::new(Some(Err(e)))),
             };
-            app.ui.service_pages.push(PageRead { landed, pages, left, slot });
+            app.ui.service_pages.push(PageRead { landed, pages, left, slot, asked: web_time::Instant::now() });
         }
         Step::Done(bytes, note) => {
             if let Some(note) = note {
