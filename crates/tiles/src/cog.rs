@@ -73,6 +73,9 @@ pub struct Look {
     pub range: Option<(f32, f32)>,
     /// Values are AlphaEarth's quantised embeddings, shown as `sign(v)·(v/127.5)²`.
     pub aef: bool,
+    /// A data cube's file (`stac.addCube`): a tile layer that follows the time slider, kept one
+    /// when its project opens again.
+    pub cube: bool,
 }
 
 impl Look {
@@ -87,6 +90,9 @@ impl Look {
         }
         if self.aef {
             parts.push("dequantize=aef".into());
+        }
+        if self.cube {
+            parts.push("cube=1".into());
         }
         if parts.is_empty() { String::new() } else { format!("#{}", parts.join("&")) }
     }
@@ -113,6 +119,7 @@ impl Look {
                     look.range = Some((lo, hi));
                 }
                 "dequantize" => look.aef = v == "aef",
+                "cube" => look.cube = v == "1",
                 _ => return None,
             }
         }
@@ -1476,7 +1483,7 @@ mod tests {
     #[test]
     fn looks_in_addresses() {
         let u = "https://x.org/a.tiff";
-        let look = Look { bands: vec![1, 16, 9], range: Some((-0.3, 0.3)), aef: true };
+        let look = Look { bands: vec![1, 16, 9], range: Some((-0.3, 0.3)), aef: true, cube: false };
         let shown = with_look(u, &look);
         assert_eq!(shown, "https://x.org/a.tiff#bands=2,17,10&range=-0.3,0.3&dequantize=aef");
         assert_eq!(split(&shown), (u, look));

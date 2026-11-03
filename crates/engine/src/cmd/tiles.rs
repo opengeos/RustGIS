@@ -540,7 +540,13 @@ pub(crate) fn cog_tiles_to_rasters(m: &mut rustgis_map::Map) {
     let mut i = 0;
     while let Some(t) = m.tiles.get(i) {
         let (file, look) = cog::split(&t.url);
-        if t.kind != TileKind::Cog || t.time_url.is_some() || !t.time_urls.is_empty() || look.aef || rustgis_data::time::is_template(file) {
+        if t.kind != TileKind::Cog
+            || t.time_url.is_some()
+            || !t.time_urls.is_empty()
+            || look.aef
+            || look.cube
+            || rustgis_data::time::is_template(file)
+        {
             i += 1;
             continue;
         }
@@ -626,6 +632,7 @@ fn cog_look(p: &Value) -> Result<Option<Box<dyn Fn(Look) -> Look>>, String> {
         bands: bands.clone().unwrap_or(old.bands),
         range: range.unwrap_or(old.range),
         aef: aef.unwrap_or(old.aef),
+        cube: old.cube,
     })))
 }
 

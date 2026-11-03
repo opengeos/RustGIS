@@ -2972,15 +2972,16 @@ pub(crate) fn add_cog_with(s: &mut Session, p: &Value, url: &str, strict: bool) 
     // A GeoTIFF is a raster layer like a file's, read in place; a dated series, a data cube's file
     // (which follow the time slider) and AlphaEarth's quantised embeddings (which raster styles
     // don't dequantise) are tile layers.
-    let (file, look) = crate::render::rustgis_tiles::cog::split(url);
+    let (file, mut look) = crate::render::rustgis_tiles::cog::split(url);
     // A key given as `null` (a script's unused one) asks for nothing.
     let given = |k: &str| p.get(k).filter(|v| !v.is_null());
-    let dated = rustgis_data::time::is_template(file)
-        || ["start", "end", "unit", "interval", "dates"].iter().any(|k| given(k).is_some())
-        || b(p, "cube") == Some(true);
-    if !dated && !look.aef {
+    // A data cube's file stays a tile layer, its project opened again too: its address says so.
+    look.cube |= b(p, "cube") == Some(true);
+    let dated = rustgis_data::time::is_template(file) || ["start", "end", "unit", "interval", "dates"].iter().any(|k| given(k).is_some());
+    if !dated && !look.aef && !look.cube {
         return add_in_place(s, name, file, &look, strict);
     }
+    let url = crate::render::rustgis_tiles::cog::with_look(url, &look);
     let mut q = json!({"url": url, "kind": "cog", "name": name, "top": true});
     // A dated address's span and steps (see map.addTiles).
     for k in ["start", "end", "unit", "interval", "dates"] {

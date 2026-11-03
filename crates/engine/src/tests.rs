@@ -12444,40 +12444,47 @@ fn serve_gated(
     let addr = listener.local_addr().unwrap();
     let sent = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let count = sent.clone();
+    let body = std::sync::Arc::new(body);
     std::thread::spawn(move || {
+        // Each connection on its own thread: a layer read in place asks for its tiles together,
+        // and answering them one by one would hold a fetch worker for each while the others wait
+        // (the fetch workers are shared by every test in the process).
         for stream in listener.incoming() {
             let Ok(mut s) = stream else { continue };
-            let mut buf = [0u8; 4096];
-            let read = s.read(&mut buf).unwrap_or(0);
-            if let Some(g) = &gate {
-                let start = std::time::Instant::now();
-                while !g.load(std::sync::atomic::Ordering::Relaxed) && start.elapsed() < std::time::Duration::from_secs(60) {
-                    std::thread::sleep(std::time::Duration::from_millis(5));
+            let (body, count, gate) = (body.clone(), count.clone(), gate.clone());
+            std::thread::spawn(move || {
+                let mut buf = [0u8; 4096];
+                let read = s.read(&mut buf).unwrap_or(0);
+                if let Some(g) = &gate {
+                    let start = std::time::Instant::now();
+                    while !g.load(std::sync::atomic::Ordering::Relaxed) && start.elapsed() < std::time::Duration::from_secs(60) {
+                        std::thread::sleep(std::time::Duration::from_millis(5));
+                    }
                 }
-            }
-            let req = String::from_utf8_lossy(&buf[..read]).to_ascii_lowercase();
-            // A HEAD request is answered with the length alone.
-            if req.starts_with("head ") {
-                let _ = write!(s, "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len());
-                continue;
-            }
-            let range = req.lines().filter(|_| ranges).find_map(|l| l.strip_prefix("range: bytes=")).and_then(|r| {
-                let (a, b) = r.trim().split_once('-')?;
-                // A suffix (`-n`): the last n bytes.
-                if a.is_empty() {
-                    let n = b.parse::<usize>().ok()?.min(body.len());
-                    return Some((body.len() - n, body.len().saturating_sub(1)));
+                let req = String::from_utf8_lossy(&buf[..read]).to_ascii_lowercase();
+                // A HEAD request is answered with the length alone.
+                if req.starts_with("head ") {
+                    let _ = write!(s, "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len());
+                    return;
                 }
-                Some((a.parse::<usize>().ok()?, b.parse::<usize>().ok()?))
+                let range = req.lines().filter(|_| ranges).find_map(|l| l.strip_prefix("range: bytes=")).and_then(|r| {
+                    let (a, b) = r.trim().split_once('-')?;
+                    // A suffix (`-n`): the last n bytes.
+                    if a.is_empty() {
+                        let n = b.parse::<usize>().ok()?.min(body.len());
+                        return Some((body.len() - n, body.len().saturating_sub(1)));
+                    }
+                    Some((a.parse::<usize>().ok()?, b.parse::<usize>().ok()?))
+                });
+                let (status, part) = match range {
+                    Some((a, b)) if a < body.len() => ("206 Partial Content", &body[a..=b.min(body.len() - 1)]),
+                    Some(_) => ("416 Range Not Satisfiable", &body[..0]),
+                    None => ("200 OK", &body[..]),
+                };
+                count.fetch_add(part.len(), std::sync::atomic::Ordering::Relaxed);
+                let _ = write!(s, "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", part.len());
+                let _ = s.write_all(part);
             });
-            let (status, part) = match range {
-                Some((a, b)) if a < body.len() => ("206 Partial Content", &body[a..=b.min(body.len() - 1)]),
-                Some(_) => ("416 Range Not Satisfiable", &body[..0]),
-                None => ("200 OK", &body[..]),
-            };
-            count.fetch_add(part.len(), std::sync::atomic::Ordering::Relaxed);
-            let _ = write!(s, "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", part.len());
-            let _ = s.write_all(part);
         }
     });
     (format!("http://{addr}"), sent)
@@ -13432,6 +13439,22 @@ fn a_palette_without_its_table_says_so_when_its_pixels_land() {
         s.run("map.zoomIn", &Value::Null).unwrap();
         assert_eq!(said(&s), want);
     }
+}
+
+/// A data cube's file (`"cube": true`) is a tile layer, and stays one when its project opens
+/// again: its address keeps the marker, which the migration respects.
+#[test]
+fn a_data_cubes_file_stays_a_tile_layer_when_its_project_reopens() {
+    let (base, _) = serve_ranges(rustgis_data::raster::cog::example(512, 256));
+    let mut s = Session::new(Project::default());
+    let r = s.run("layer.addUrl", &json!({"url": format!("{base}/cube-2020.tif"), "cube": true})).unwrap();
+    assert_eq!(r["kind"], "cog", "{r}");
+    assert_eq!(s.map().tiles.len(), 1);
+    assert!(s.map().tiles[0].url.ends_with("#cube=1"), "{}", s.map().tiles[0].url);
+    let text = serde_json::to_string(&s.project).unwrap();
+    let mut t = Session::new(Project::default());
+    t.run("project.openText", &json!({"text": text})).unwrap();
+    assert_eq!((t.map().tiles.len(), t.map().layers.iter().filter(|l| l.raster.is_some()).count()), (1, 0));
 }
 
 /// Dated-series keys given as `null` (a script's unused ones) ask for nothing: the GeoTIFF is a

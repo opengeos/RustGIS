@@ -411,8 +411,10 @@ fn assemble(
         for tx in cols.0 / tw..cols.1.div_ceil(tw) {
             let tile = ty * l.across() + tx;
             // The tile's part of the window, in the level's pixels.
-            let (x0, x1) = ((tx * tw).max(cols.0), ((tx + 1) * tw).min(cols.1));
-            let (y0, y1) = ((ty * th).max(rows.0), ((ty + 1) * th).min(rows.1));
+            // The tile's end saturates: a width near `u32::MAX` (the header bounds the tiles,
+            // not the width) stays a tile, not a wrapped, empty one.
+            let (x0, x1) = ((tx * tw).max(cols.0), tx.saturating_add(1).saturating_mul(tw).min(cols.1));
+            let (y0, y1) = ((ty * th).max(rows.0), ty.saturating_add(1).saturating_mul(th).min(rows.1));
             for (k, &b) in bands.iter().enumerate() {
                 let Some((c, at)) = info.layout.chunk(l, tile, b) else { continue };
                 let Some(data) = chunk(c) else {
@@ -514,6 +516,17 @@ mod tests {
         // One already remembered is waited for again, nothing else goes.
         remember_failed(&mut f, key(5), now + std::time::Duration::from_secs(90));
         assert!(f.contains_key(&key(1)) && f.len() == MAX_FAILED);
+    }
+
+    /// A level as wide as `u32` allows (a hostile header): its last tile's end doesn't wrap, so
+    /// the window is assembled, its missing tiles gaps.
+    #[test]
+    fn a_window_at_the_far_edge_of_a_huge_level_doesnt_overflow() {
+        let mut info = info_of(example_with(&Example { size: 64, tile: 16, ..Example::default() }));
+        info.layout.levels[0].width = u32::MAX;
+        let (data, gaps) = assemble(&info, 0, (u32::MAX - 15, u32::MAX), (0, 16), &[0], |_| None);
+        assert_eq!((data.len(), data[0].len()), (1, 16 * 15));
+        assert!(gaps.iter().all(|g| g.cols.0 <= g.cols.1 && g.rows.0 <= g.rows.1));
     }
 
     #[test]
