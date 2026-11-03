@@ -442,7 +442,7 @@ fn keys_from_proj4(proj4: &str, label: &str) -> Option<(Vec<u16>, Vec<f64>, Stri
 }
 
 /// The samples as `f32`, with their type's name. Their memory is reserved first: when it can't be
-/// had, the error names the `w × h` raster being read.
+/// had, the error names the `w × h` raster being made (a decimated read's, smaller than the file).
 fn to_f32(buf: DecodingResult, (w, h): (usize, usize)) -> Result<(Vec<f32>, &'static str)> {
     fn held<T>(v: Vec<T>, f: impl Fn(T) -> f32, (w, h): (usize, usize)) -> Result<Vec<f32>> {
         let mut out = super::room(v.len(), w, h)?;
