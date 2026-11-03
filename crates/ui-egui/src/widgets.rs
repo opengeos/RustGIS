@@ -101,10 +101,17 @@ pub(crate) fn note_escape(ctx: &egui::Context) {
         let (before, escaped) = d.get_temp::<(Option<egui::Id>, Option<(egui::Id, u64)>)>(escape_key()).unwrap_or_default();
         let escaped = match before {
             Some(id) if escape && now != Some(id) => Some((id, pass)),
-            _ => escaped,
+            // The field taken back: what it sets from here on is not what Escape dropped.
+            _ => escaped.filter(|(id, _)| now != Some(*id)),
         };
         d.insert_temp(escape_key(), (now, escaped));
     });
+}
+
+/// The widget that had the focus when the pass began, as [`note_escape`] noted it: egui may have
+/// taken the focus from a field drawn earlier in the pass, which sets its number only in the next.
+pub(crate) fn focused_at_pass_start(ctx: &egui::Context) -> Option<egui::Id> {
+    ctx.data(|d| d.get_temp::<(Option<egui::Id>, Option<(egui::Id, u64)>)>(escape_key())).and_then(|(now, _)| now)
 }
 
 /// Whether a change of `r` is egui setting the text typed into it before Escape. egui sets it on a

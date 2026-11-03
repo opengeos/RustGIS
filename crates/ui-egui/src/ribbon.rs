@@ -5033,6 +5033,28 @@ mod tests {
         h.run();
     }
 
+    /// A number typed right after an Escape, the field taken back at once, is kept: the Escape
+    /// drops only what it cancelled (#1194).
+    #[test]
+    fn a_number_typed_straight_after_an_escape_is_kept() {
+        let mut h = drawing_harness();
+        let id = h.state().session.active_layer.unwrap();
+        let size = |app: &RustGisApp| app.session.map().layer(id).unwrap().renderer.base_symbol().size;
+        let before = size(h.state());
+        type_into(&mut h, 1, "30");
+        h.key_press(egui::Key::Escape);
+        h.step();
+        assert_eq!(size(h.state()), before, "Escape dropped it");
+        // The two passes after the Escape's: the field back, then a number and Enter together.
+        h.query_all_by_role(egui::accesskit::Role::SpinButton).nth(1).unwrap().focus();
+        h.step();
+        h.event(egui::Event::Text("12.5".into()));
+        h.key_press(egui::Key::Enter);
+        h.step();
+        h.run();
+        assert_eq!(size(h.state()), 12.5);
+    }
+
     /// A number typed for one layer, then a click on another layer drawn before the Style tab (as
     /// the Layers pane is): the number is set on the layer it was typed for, never on the other,
     /// even when the other had the same value (#1194).

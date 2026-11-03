@@ -6297,7 +6297,7 @@ fn raster_symbology(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, t: &Tokens) {
                     if lo.is_finite() && hi.is_finite() && lo < hi && done {
                         ui.data_mut(|d| d.remove::<([f64; 2], [f64; 2])>(key));
                         let _ = app.run("raster.stretch", json!({"type": "custom", "min": lo, "max": hi}));
-                    } else if a.changed() || b.changed() {
+                    } else if crate::widgets::changed(&a) || crate::widgets::changed(&b) {
                         ui.data_mut(|d| d.insert_temp(key, ([min, max], [lo, hi])));
                     }
                 });
@@ -6463,7 +6463,7 @@ fn raster_masking(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, d: &rustgis_engi
                         ui.data_mut(|d| d.remove::<([f64; 2], [f64; 2])>(key));
                         let bound = |v: f64| if v.is_finite() { json!(v) } else { Value::Null };
                         let _ = app.run("raster.mask", json!({"min": bound(lo), "max": bound(hi)}));
-                    } else if a.changed() || b.changed() {
+                    } else if crate::widgets::changed(&a) || crate::widgets::changed(&b) {
                         ui.data_mut(|d| d.insert_temp(key, ([min, max], [lo, hi])));
                     }
                 });
