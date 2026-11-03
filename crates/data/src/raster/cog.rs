@@ -639,6 +639,9 @@ pub struct Example {
     pub stray: bool,
     /// With `classes`: a palette image with no colour table.
     pub no_table: bool,
+    /// The full image's first tile left out, as GDAL's sparse files leave out tiles of no-data
+    /// (no bytes, no offset).
+    pub sparse: bool,
 }
 
 impl Default for Example {
@@ -658,6 +661,7 @@ impl Default for Example {
             huge: false,
             stray: false,
             no_table: false,
+            sparse: false,
         }
     }
 }
@@ -708,6 +712,12 @@ pub fn example_with(e: &Example) -> Vec<u8> {
                     chunks.push(c);
                 }
             }
+            if e.sparse
+                && k == 1
+                && let Some(first) = chunks.first_mut()
+            {
+                first.clear();
+            }
             chunks
         })
         .collect();
@@ -756,7 +766,7 @@ pub fn example_with(e: &Example) -> Vec<u8> {
             (322, V::L(vec![tile])),
             (323, V::L(vec![tile])),
             (324, V::L(vec![0; n])),
-            (325, V::L(vec![chunk_len; n])),
+            (325, V::L(images.get(i).map_or(vec![chunk_len; n], |c| c.iter().map(|c| c.len() as u32).collect()))),
         ];
         // The samples past the colour ones (three of an RGB image, else one): the first alpha
         // when asked, the others undefined.
@@ -822,14 +832,16 @@ pub fn example_with(e: &Example) -> Vec<u8> {
     let mut data_at = at;
     let mut out = vec![b'I', b'I', 42, 0];
     out.extend_from_slice(&header_len.to_le_bytes());
-    for t in ifds.iter_mut() {
+    for (lvl, t) in ifds.iter_mut().enumerate() {
         for (tag, v) in t.iter_mut() {
             if *tag == 324
                 && let V::L(offs) = v
             {
-                for o in offs.iter_mut() {
-                    *o = data_at as u32;
-                    data_at += chunk_len as usize;
+                for (j, o) in offs.iter_mut().enumerate() {
+                    // A chunk left out has no offset, as GDAL writes a sparse file.
+                    let len = images.get(lvl).and_then(|c| c.get(j)).map_or(0, Vec::len);
+                    *o = if len == 0 { 0 } else { data_at as u32 };
+                    data_at += len;
                 }
             }
         }

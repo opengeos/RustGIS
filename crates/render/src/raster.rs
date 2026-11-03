@@ -131,7 +131,10 @@ pub(crate) fn draw_in_place(
     place: Place,
 ) -> Result<bool, String> {
     let bands = style.renderer.bands();
-    let own: Vec<BandStats> = bands.iter().map(|b| r.bands.get(*b).map(|b| b.stats.clone()).unwrap_or_default()).collect();
+    let own: Vec<BandStats> = match stats {
+        Some(_) => Vec::new(),
+        None => bands.iter().map(|b| r.bands.get(*b).map(|b| b.stats.clone()).unwrap_or_default()).collect(),
+    };
     let stats = stats.unwrap_or(&own);
     let whole = |pm: &mut Pixmap| draw(pm, r, style, Some(stats), view, opacity, full_res, place);
     let full = r.overview.unwrap_or((r.width, r.height));

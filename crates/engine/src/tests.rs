@@ -13721,6 +13721,83 @@ fn cog_windows_stand_in_the_level_kept_until_their_tiles_arrive() {
     assert_eq!(v(&part, 1001, 901), ((1001 + 901) % 256) as f32);
 }
 
+/// A tile a sparse file leaves out (GDAL's: no bytes) is empty, not waited for: a window over it
+/// is whole at once and asks for nothing more, and an export of the view over it is written rather
+/// than refused after waiting for the tile.
+#[test]
+fn a_tile_a_sparse_file_leaves_out_is_empty_not_waited_for() {
+    use crate::render::rustgis_tiles::cog::raster::window;
+    use rustgis_data::raster::cog::{Example, example_with};
+    use std::sync::atomic::Ordering;
+    let (base, sent) = serve_ranges(example_with(&Example { size: 2048, tile: 256, sparse: true, ..Example::default() }));
+    let url = format!("{base}/scene.tif");
+    let mut s = Session::new(Project::default());
+    // Its overview is level 1 (1024 pixels a side); level 0's first tile has no bytes.
+    let r = s.run("layer.addUrl", &json!({"url": url.clone(), "name": "Scene"})).unwrap();
+    assert_eq!(r["width"], 1024, "{r}");
+    let before = sent.load(Ordering::Relaxed);
+    let gray = rustgis_data::raster::ColorHint::Gray;
+    for _ in 0..2 {
+        let w = window(&url, 0, (0, 64), (0, 64), &[0], gray.clone()).unwrap();
+        assert!(!w.pending, "an empty tile isn't waited for");
+        assert!(w.raster.unwrap().bands[0].data.iter().all(|v| v.is_nan()), "empty");
+    }
+    assert_eq!(sent.load(Ordering::Relaxed), before, "nothing is fetched for it");
+    // The view over it (the image's north-west corner), zoomed in past the overview: written.
+    s.view_size = (64.0, 64.0);
+    s.zoom_to(&rustgis_geom::Extent::new(10.02, 45.92, 10.08, 45.98));
+    s.map_mut().camera.res = 12.0;
+    let png = std::env::temp_dir().join(format!("rustgis-sparse-{}.png", std::process::id()));
+    s.run("share.exportMap", &json!({"path": png.to_string_lossy(), "width": 64, "height": 64})).unwrap();
+    assert!(png.exists());
+    let _ = std::fs::remove_file(png);
+}
+
+/// A GeoTIFF whose server refuses its header with a 429 or 503 and a `Retry-After` isn't asked
+/// for again before then, and the map is asked to draw again by then (as for a tile), so the
+/// layer doesn't stay failed until something else draws the map.
+#[test]
+fn a_header_refused_with_retry_after_is_read_again_when_it_says() {
+    use crate::render::rustgis_tiles::{cache, cog};
+    use std::io::{Read, Write};
+    use std::sync::{Arc, Mutex};
+    use std::time::Duration;
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut s) = stream else { continue };
+            let mut buf = [0u8; 4096];
+            let _ = s.read(&mut buf);
+            let _ = s.write_all(b"HTTP/1.1 503 Service Unavailable\r\nRetry-After: 1\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+        }
+    });
+    // The app's alarm: each wait asked for is noted.
+    let asked = Arc::new(Mutex::new(Vec::new()));
+    let noted = asked.clone();
+    cache::set_alarm(move |d| noted.lock().unwrap().push(d));
+    let url = format!("http://{addr}/scene.tif");
+    let mut s = Session::new(Project::default());
+    let e = s.run("layer.addUrl", &json!({"url": url.clone(), "name": "Scene"})).unwrap_err();
+    assert!(e.contains("retry after 1 s"), "{e}");
+    // Not asked for again before then (the error stands), and the map is asked to draw again by
+    // then: on the failure, and on each draw while it waits (another alarm may have fired since).
+    let mut seen = None;
+    for _ in 0..30 {
+        let _ = cache::generation();
+        // The error stands until then; its wait over, it is read again.
+        if let Err(e) = cog::info(&url) {
+            assert!(e.contains("retry after 1 s"), "{e}");
+        }
+        seen = asked.lock().unwrap().iter().find(|d| **d <= Duration::from_secs(1)).copied();
+        if seen.is_some() {
+            break;
+        }
+        cache::wait(Duration::from_millis(50));
+    }
+    assert!(seen.is_some(), "no alarm within a second: {:?}", asked.lock().unwrap());
+}
+
 /// A GeoTIFF's address look (`#bands=…&range=…`) is its layer's once its pixels land, read later
 /// (as the browser and an import read them) as when read at once; a palette image stretched by a
 /// range is drawn in grey, as its tile layer was, and without a look in its colours.
@@ -13773,7 +13850,7 @@ fn an_unchecked_in_place_address_is_refused() {
     let mut s = Session::new(Project::default());
     s.run("project.openText", &json!({"text": text})).unwrap();
     let rl = s.map().layers.iter().find(|l| l.name == "Odd").and_then(|l| l.raster.as_ref()).unwrap();
-    assert!(rl.data.is_none() && rl.error.as_deref().is_some_and(|e| !e.contains("no answer")), "{:?}", rl.error);
+    assert!(rl.data.is_none() && rl.error.as_deref().is_some_and(|e| e.contains("tile addresses start with")), "{:?}", rl.error);
     assert_eq!(s.notices.iter().filter(|n| n.error && n.text.contains("Odd: couldn't be read in place")).count(), 1);
     // Added directly (the browser's path), refused before the reader is asked.
     let added = RasterLayer::opening_in_place(bad);
@@ -13832,8 +13909,9 @@ fn a_turned_in_place_layer_is_not_exported_past_its_overview() {
     assert!(png.exists());
 }
 
-/// An address look naming bands the file hasn't (`#bands=9,8,7` on a 3-band file) is said, and
-/// the layer draws in its own look; its range is kept.
+/// An address look naming bands the file hasn't (`#bands=9,8,7` on a 3-band file), or two bands
+/// (`#bands=1,2`, which no raster look draws), is said, and the layer draws in its own look; its
+/// range is kept.
 #[test]
 fn a_look_naming_bands_the_file_hasnt_is_said() {
     use rustgis_data::raster::cog::{Example, example_with};
@@ -13848,6 +13926,12 @@ fn a_look_naming_bands_the_file_hasnt_is_said() {
     assert_eq!(rl.style.stretch, Stretch::custom(10.0, 200.0));
     s.run("map.zoomIn", &Value::Null).unwrap();
     assert_eq!(said(&s), 1);
+    // Two bands: neither grey nor RGB, said as such.
+    s.run("layer.addUrl", &json!({"url": format!("{base}/scene.tif#bands=1,2&range=10,200"), "name": "Pair"})).unwrap();
+    assert_eq!(s.notices.iter().filter(|n| n.text.contains("Pair") && n.text.contains("asks for 2 bands")).count(), 1, "{:?}", s.notices);
+    let rl = s.map().layer_by_name("Pair").and_then(|l| l.raster.as_ref()).unwrap();
+    assert_eq!(rl.style.renderer, RasterRenderer::Rgb { red: 0, green: 1, blue: 2 });
+    assert_eq!(rl.style.stretch, Stretch::custom(10.0, 200.0));
 }
 
 /// A COG tile layer opened as a raster layer takes a numbered name when another layer has its

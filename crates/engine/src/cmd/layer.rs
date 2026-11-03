@@ -3157,6 +3157,8 @@ pub(crate) fn add_cog_with(s: &mut Session, p: &Value, url: &str, strict: bool) 
 /// address's end (`#bands=…&range=…`) is its style.
 fn add_in_place(s: &mut Session, name: &str, file: &str, look: &crate::render::rustgis_tiles::cog::Look, strict: bool) -> CmdResult {
     use crate::render::rustgis_tiles::cog;
+    // Judged as an address a project keeps is (a host, no spaces, not too long) before it is read.
+    rustgis_map::tiles::check_url(file)?;
     // Strict, natively: read now, failing when it can't be. Otherwise read with the other layers
     // added with it (see `project::read_in_place`); in the browser, landing later.
     #[cfg(not(target_arch = "wasm32"))]

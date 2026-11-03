@@ -351,7 +351,14 @@ pub fn info(url: &str) -> Result<Option<Arc<Info>>, String> {
         match i.get(url) {
             Some(State::Ready(info)) => return Ok(Some(info.clone())),
             Some(State::Loading(_)) => return Ok(None),
-            Some(State::Failed(e, at)) if at.elapsed() < crate::cache::retry_wait(e, RETRY) => return Err(e.clone()),
+            Some(State::Failed(e, at)) => {
+                // Not read again until its wait is over: the map draws again then.
+                let wait = crate::cache::retry_wait(e, RETRY);
+                if at.elapsed() < wait {
+                    crate::cache::notify_at(*at + wait);
+                    return Err(e.clone());
+                }
+            }
             _ => {}
         }
     }
@@ -374,6 +381,7 @@ fn with_info(url: &str, then: Box<dyn FnOnce(Result<Arc<Info>, String>) + Send>)
                 return;
             }
             Some(State::Failed(e, at)) if at.elapsed() < crate::cache::retry_wait(e, RETRY) => {
+                crate::cache::notify_at(*at + crate::cache::retry_wait(e, RETRY));
                 let e = e.clone();
                 drop(i);
                 then(Err(e));
@@ -392,7 +400,12 @@ fn with_info(url: &str, then: Box<dyn FnOnce(Result<Arc<Info>, String>) + Send>)
                 let mut i = infos().lock().unwrap_or_else(|e| e.into_inner());
                 let next = match &r {
                     Ok(info) => State::Ready(info.clone()),
-                    Err(e) => State::Failed(e.clone(), Instant::now()),
+                    Err(e) => {
+                        // Read again once its wait is over: the map draws again then (a 429
+                        // or 503 says when).
+                        crate::cache::notify_at(Instant::now() + crate::cache::retry_wait(e, RETRY));
+                        State::Failed(e.clone(), Instant::now())
+                    }
                 };
                 match i.insert(key, next) {
                     Some(State::Loading(w)) => w,
@@ -883,9 +896,21 @@ fn get_tile(info: Arc<Info>, url: String, level: usize, idx: u32, then: Box<dyn 
     let nb = info.layout.chunk_bands();
     let per_band = (l.tile_width as usize) * (l.tile_height as usize);
     let samples = per_band * nb;
-    // A tile the file leaves out (GDAL's sparse files: no bytes) is empty.
+    // A tile the file leaves out (GDAL's sparse files: no bytes) is empty: kept as any other, so
+    // a window over it is whole at once rather than asking for it at every draw.
     if len == 0 {
-        then(Ok(Arc::new(vec![vec![f32::NAN; per_band]; nb].into())));
+        let key = (url.clone(), level, idx);
+        let mut t = tiles().lock().unwrap_or_else(|e| e.into_inner());
+        let empty = match t.used(&key) {
+            Some(b) => b,
+            None => {
+                let b: Bands = Arc::new(vec![vec![f32::NAN; per_band]; nb].into());
+                t.keep(key, b.clone(), samples);
+                b
+            }
+        };
+        drop(t);
+        then(Ok(empty));
         return;
     }
     // Bytes at offset 0 would be the file's header: a broken index, said rather than drawn blank.

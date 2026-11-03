@@ -1069,13 +1069,24 @@ impl RasterStyle {
         Some(style)
     }
 
-    /// What a look asks for that `r` hasn't: bands past its own, so the file's own look is drawn
-    /// instead; `None` when the look fits.
+    /// What a look asks for that `r` can't draw: bands past its own, or two bands (one is drawn
+    /// in grey, three as red, green and blue), so the file's own look is drawn instead; `None`
+    /// when the look fits.
     pub fn look_lost(r: &Raster, look: &AddressLook) -> Option<String> {
         let n = r.band_count();
         let past: Vec<String> = look.bands.iter().filter(|b| **b >= n).map(|b| (b + 1).to_string()).collect();
-        (!past.is_empty()).then(|| {
-            format!("its address asks for band(s) {} (from 1), which it hasn't ({n} band(s)): drawn in its own look", past.join(", "))
+        if !past.is_empty() {
+            return Some(format!(
+                "its address asks for band(s) {} (from 1), which it hasn't ({n} band(s)): drawn in its own look",
+                past.join(", ")
+            ));
+        }
+        // An address written by hand: `map.setTiles` takes one band or three.
+        (!matches!(look.bands.len(), 0 | 1 | 3)).then(|| {
+            format!(
+                "its address asks for {} bands; one is drawn in grey, three as red, green and blue: drawn in its own look",
+                look.bands.len()
+            )
         })
     }
 

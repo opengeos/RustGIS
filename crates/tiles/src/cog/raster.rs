@@ -249,7 +249,6 @@ pub fn window(url: &str, level: usize, cols: (u32, u32), rows: (u32, u32), bands
             }
         }
     }
-    let mut pending = kept.len() < chunks.len();
     let waiting: bool;
     {
         let mut f = failed().lock().unwrap_or_else(|e| e.into_inner());
@@ -269,11 +268,6 @@ pub fn window(url: &str, level: usize, cols: (u32, u32), rows: (u32, u32), bands
         }
         waiting = next.is_some();
     }
-    // Tiles that failed lately aren't waited for (the map would wait for them for nothing).
-    if ask.is_empty() && pending {
-        let t = tiles().lock().unwrap_or_else(|e| e.into_inner());
-        pending = chunks.iter().any(|c| matches!(t.map.get(&(file.to_string(), level, *c)), Some(TileState::Loading(_))));
-    }
     for c in ask {
         let key = (file.to_string(), level, c);
         get_tile(
@@ -290,8 +284,24 @@ pub fn window(url: &str, level: usize, cols: (u32, u32), rows: (u32, u32), bands
                 crate::cache::notify();
             }),
         );
-        pending = true;
+        // A tile the file leaves out (a sparse file's) is kept at once: not waited for.
+        if let Some(b) = tiles().lock().unwrap_or_else(|e| e.into_inner()).used(&(file.to_string(), level, c)) {
+            kept.insert(c, b);
+        }
     }
+    // The tiles still missing are on their way (the map draws again as they land) or failed lately
+    // (not waited for: the map would wait for them for nothing; asked for again when their wait is
+    // over).
+    let missing: Vec<u32> = chunks.iter().copied().filter(|c| !kept.contains_key(c)).collect();
+    let pending = !missing.is_empty() && {
+        let t = tiles().lock().unwrap_or_else(|e| e.into_inner());
+        missing.iter().any(|c| matches!(t.map.get(&(file.to_string(), level, *c)), Some(TileState::Loading(_))))
+    };
+    let waiting = waiting
+        || !missing.is_empty() && {
+            let f = failed().lock().unwrap_or_else(|e| e.into_inner());
+            missing.iter().any(|c| f.contains_key(&(file.to_string(), level, *c)))
+        };
     let (mut data, gaps) = assemble(&info, level, (c0, c1), (r0, r1), bands, |c| kept.get(&c).cloned());
     // Until they arrive, its missing tiles show the levels kept (the one zoomed from), not holes.
     if !gaps.is_empty() {

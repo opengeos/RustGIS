@@ -573,10 +573,10 @@ pub(crate) fn cog_tiles_to_rasters(m: &mut rustgis_map::Map) {
         let rl = RasterLayer::unread_in_place(file).with_look(address_look(&look)).from_tiles_dropping(dropped);
         // A name another layer has: numbered, as a layer added is.
         let mut name = t.name.clone();
-        let mut i = 1;
+        let mut nth = 1;
         while m.layer_by_name(&name).is_some() {
-            i += 1;
-            name = format!("{} ({i})", t.name);
+            nth += 1;
+            name = format!("{} ({nth})", t.name);
         }
         let id = m.add_raster(name, rl);
         if let Some(l) = m.layer_mut(id) {
