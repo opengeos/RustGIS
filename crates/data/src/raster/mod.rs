@@ -43,6 +43,13 @@ pub fn filled<T: Clone>(w: usize, h: usize, fill: T) -> Result<Vec<T>> {
     Ok(v)
 }
 
+/// A `w × h` band of `values` (at most `w × h` of them), its memory reserved first ([`grid`]).
+pub fn collected<T>(w: usize, h: usize, values: impl IntoIterator<Item = T>) -> Result<Vec<T>> {
+    let mut v = grid(w, h)?;
+    v.extend(values.into_iter().take(w * h));
+    Ok(v)
+}
+
 /// Room for `n` samples of a `w × h` band (fewer than all of them, when fewer can come).
 pub(crate) fn room<T>(n: usize, w: usize, h: usize) -> Result<Vec<T>> {
     let mut v = Vec::new();
@@ -1136,6 +1143,9 @@ pub(crate) mod tests {
         assert!(room::<f64>(usize::MAX / 2, 1, 1).is_err(), "too many bytes to ask for");
         assert_eq!(filled(3, 2, f32::NAN).map(|v| v.len()).ok(), Some(6));
         assert!(grid::<u16>(4, 5).is_ok_and(|g| g.is_empty() && g.capacity() >= 20));
+        assert!(collected(huge, huge, std::iter::repeat(0.0f32)).is_err());
+        assert_eq!(collected(3, 2, 0..10).ok(), Some(vec![0, 1, 2, 3, 4, 5]), "no more than w × h");
+        assert_eq!(collected(3, 2, 0..4).ok(), Some(vec![0, 1, 2, 3]));
     }
 
     /// A PNG of `w`×`h` pixels, red in its top half and blue below.

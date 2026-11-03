@@ -684,7 +684,8 @@ impl TrendRun {
                     if let Some(e) = too_long.and_then(|f| f(cells)) {
                         return Err(e);
                     }
-                    block = vec![f32::NAN; cells * n];
+                    // Reserved first: a block the machine can't hold is an error, not a crash (#1291).
+                    block = raster::filled(cells, n, f32::NAN).map_err(|e| e.to_string())?;
                     grid = Some(r.clone());
                 }
                 Some(g) => off_grid(self.cube.as_ref(), i, g, &r)?,
@@ -723,7 +724,7 @@ impl TrendRun {
         done: &AtomicUsize,
     ) -> Result<Vec<f32>, String> {
         let n = self.steps.len();
-        let mut out = vec![f32::NAN; cells * OUTPUTS];
+        let mut out = raster::filled(cells, OUTPUTS, f32::NAN).map_err(|e| e.to_string())?;
         let stopped = AtomicBool::new(false);
         // Cancel is looked at after about the same work whatever the dates: a cell compares n²⁄2
         // pairs, so every 4096 cells for a short series, every cell for a long one.
@@ -1270,19 +1271,24 @@ pub(crate) struct Totals {
 }
 
 impl Totals {
-    pub(crate) fn new(stat: Stat, cells: usize) -> Totals {
+    /// Totals for `cells` cells, their memory reserved first: totals the machine can't hold are an
+    /// error, not a crash (#1291).
+    pub(crate) fn new(stat: Stat, cells: usize) -> Result<Totals, String> {
+        fn each<T: Clone>(cells: usize, v: T) -> Result<Vec<T>, String> {
+            raster::filled(cells, 1, v).map_err(|e| e.to_string())
+        }
         let acc = match stat {
             Stat::Count | Stat::Mode | Stat::Variety | Stat::ModeCount | Stat::LongestRun | Stat::LongestRunLength | Stat::Frequency => {
                 Vec::new()
             }
-            Stat::Min => vec![f64::INFINITY; cells],
-            Stat::Max => vec![f64::NEG_INFINITY; cells],
-            _ => vec![0.0; cells],
+            Stat::Min => each(cells, f64::INFINITY)?,
+            Stat::Max => each(cells, f64::NEG_INFINITY)?,
+            _ => each(cells, 0.0)?,
         };
-        let m2 = if matches!(stat, Stat::Std) { vec![0.0; cells] } else { Vec::new() };
-        let last = if stat.in_order() { vec![f32::NAN; cells] } else { Vec::new() };
-        let (run, longest) = if stat.runs() { (vec![0; cells], vec![(f32::NAN, 0); cells]) } else { (Vec::new(), Vec::new()) };
-        Totals { stat, n: vec![0; cells], acc, m2, last, run, longest, classes: Vec::new(), counts: Vec::new(), refused: None }
+        let m2 = if matches!(stat, Stat::Std) { each(cells, 0.0)? } else { Vec::new() };
+        let last = if stat.in_order() { each(cells, f32::NAN)? } else { Vec::new() };
+        let (run, longest) = if stat.runs() { (each(cells, 0)?, each(cells, (f32::NAN, 0))?) } else { (Vec::new(), Vec::new()) };
+        Ok(Totals { stat, n: each(cells, 0)?, acc, m2, last, run, longest, classes: Vec::new(), counts: Vec::new(), refused: None })
     }
 
     /// How many class counts it holds: its cells × the classes it has met.
@@ -1577,7 +1583,11 @@ impl ReduceRun {
                         }
                         Some(first) => off_grid(self.cube.as_ref(), i, first, &r)?,
                     }
-                    let t = totals.get_mut(g).ok_or("a date in no group")?.get_or_insert_with(|| Totals::new(self.stat, vals.len()));
+                    let slot = totals.get_mut(g).ok_or("a date in no group")?;
+                    if slot.is_none() {
+                        *slot = Some(Totals::new(self.stat, vals.len())?);
+                    }
+                    let t = slot.as_mut().ok_or("a date in no group")?;
                     let nodata = r.nodata.map(|v| v as f32);
                     for (c, v) in vals.iter().enumerate().take(t.cells()) {
                         if v.is_finite() && Some(*v) != nodata {
@@ -1623,7 +1633,7 @@ impl ReduceRun {
                 let (columns, piece_mask) = match (finished.get_mut(g).and_then(Option::take), totals.get_mut(g).and_then(Option::take)) {
                     (Some(out), _) => out,
                     (None, Some(t)) => finish(&t, self.min_share, dates, frequency),
-                    (None, None) => finish(&Totals::new(self.stat, cells), self.min_share, dates, frequency),
+                    (None, None) => finish(&Totals::new(self.stat, cells)?, self.min_share, dates, frequency),
                 };
                 // Their full length when the cube knows it, so they don't grow by doubling.
                 stack_columns(band, mask, columns, &piece_mask, whole);
@@ -1952,7 +1962,7 @@ mod tests {
     #[test]
     fn groups_being_read_share_the_class_cap() {
         let group = |classes: &[f64]| {
-            let mut t = super::Totals::new(super::Stat::Mode, 10);
+            let mut t = super::Totals::new(super::Stat::Mode, 10).unwrap();
             for (c, v) in classes.iter().enumerate() {
                 t.add(c, *v);
             }
