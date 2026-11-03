@@ -4952,6 +4952,31 @@ mod tests {
         assert_eq!(size(h.state()), first);
     }
 
+    /// A key pressed during a drag, in the frames the number changes, leaves the drag one undo
+    /// step (#1194).
+    #[test]
+    fn a_key_pressed_during_a_drag_leaves_it_one_undo_step() {
+        let mut h = drawing_harness();
+        let id = h.state().session.active_layer.unwrap();
+        let size = |app: &RustGisApp| app.session.map().layer(id).unwrap().renderer.base_symbol().size;
+        let before = size(h.state());
+        let undo = h.state().session.undo_depth();
+        // Outline, then Size.
+        let at = h.query_all_by_role(egui::accesskit::Role::SpinButton).nth(1).unwrap().rect().center();
+        h.hover_at(at);
+        h.drag_at(at);
+        h.step();
+        for dx in [16.0, 32.0, 48.0] {
+            h.hover_at(at + vec2(dx, 0.0));
+            h.key_press(egui::Key::F20);
+            h.step();
+        }
+        h.drop_at(at + vec2(48.0, 0.0));
+        h.run();
+        assert!(size(h.state()) > before);
+        assert_eq!(h.state().session.undo_depth(), undo + 1);
+    }
+
     /// A drag in the colour picker is one undo step back to the colour from before it (#1194).
     #[test]
     fn ribbon_colour_drag_is_one_undo_step() {

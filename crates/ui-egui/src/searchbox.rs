@@ -391,8 +391,10 @@ fn row_button(ui: &mut Ui, active: bool, icon: &str, label: &str, detail: Option
     let g = ui.painter().layout(label.to_string(), regular(12.5), t.text, w - 44.0);
     let h = g.size().y + if detail.is_some() { 20.0 } else { 8.0 };
     let (r, resp) = ui.allocate_exact_size(vec2(w, h.max(26.0)), Sense::click());
-    // Named for screen readers (and scripted clicks), as the box is.
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, label));
+    // Named for screen readers (and scripted clicks), as the box is: with the line under it, which
+    // tells apart rows of the same text.
+    let name = detail.map_or_else(|| label.to_string(), |d| format!("{label}, {d}"));
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &name));
     let p = ui.painter();
     if active || resp.hovered() {
         p.rect_filled(r.shrink2(vec2(4.0, 0.0)), CornerRadius::same(4), if active { t.selection } else { t.hover });
@@ -506,6 +508,18 @@ mod tests {
     use egui_kittest::kittest::Queryable;
 
     use super::*;
+
+    /// A row's name carries the line under it, which tells apart rows of the same text.
+    #[test]
+    fn a_row_is_named_with_the_line_under_it() {
+        let h = egui_kittest::Harness::new_ui(|ui| {
+            let t = Tokens::get(ui.ctx());
+            row_button(ui, false, "table", "Bogota", Some("name"), &t);
+            row_button(ui, false, "contents", "Cities", None, &t);
+        });
+        assert!(h.query_by_role_and_label(Role::Button, "Bogota, name").is_some());
+        assert!(h.query_by_role_and_label(Role::Button, "Cities").is_some());
+    }
 
     /// A number typed for one layer, then another layer picked in a list a places search left
     /// open: the number is set on the layer it was typed for, even when the other had the same

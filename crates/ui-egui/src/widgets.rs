@@ -55,14 +55,12 @@ impl<T: Copy + Default + PartialEq + Send + Sync + 'static> Dragged<T> {
 
 /// Makes the command the caller runs next, for a change of `r`, part of the undo step of the
 /// pointer press making it: a number dragged, or a colour picked in its picker, is one step to
-/// undo however many changes it makes (#1194). A change made with the keyboard, such as a number
-/// typed, is a step of its own, even while a button is held elsewhere.
+/// undo however many changes it makes (#1194). A number typed into `r` is a step of its own, even
+/// while a button is held elsewhere; a key pressed during a drag elsewhere doesn't split the drag.
 /// Called just before the command runs, so the merge can't reach another command.
 pub(crate) fn one_step_per_press(app: &mut RustGisApp, r: &Response) {
-    let press = r.ctx.input(|i| {
-        let typed = i.events.iter().any(|e| matches!(e, egui::Event::Key { pressed: true, .. } | egui::Event::Text(_)));
-        i.pointer.press_start_time().filter(|_| !typed)
-    });
+    let typed = r.has_focus() || r.lost_focus();
+    let press = r.ctx.input(|i| i.pointer.press_start_time()).filter(|_| !typed);
     if let Some(t) = press {
         app.session.merge_undo(format!("press {:?} {t}", r.id));
     }
@@ -86,7 +84,11 @@ pub(crate) fn let_go_on_panel_press(ctx: &egui::Context) {
     }
 }
 
-/// Where [`note_escape`] keeps the field that had the focus, and the one Escape took it from.
+/// What [`note_escape`] keeps: the widget that had the focus, and the field Escape took it from
+/// with the pass it did.
+type EscapeNote = (Option<egui::Id>, Option<(egui::Id, u64)>);
+
+/// Where [`note_escape`] keeps its [`EscapeNote`].
 fn escape_key() -> egui::Id {
     egui::Id::unique("escaped_field")
 }
@@ -98,7 +100,7 @@ pub(crate) fn note_escape(ctx: &egui::Context) {
     let pass = ctx.cumulative_pass_nr();
     let escape = ctx.input(|i| i.key_pressed(egui::Key::Escape));
     ctx.data_mut(|d| {
-        let (before, escaped) = d.get_temp::<(Option<egui::Id>, Option<(egui::Id, u64)>)>(escape_key()).unwrap_or_default();
+        let (before, escaped) = d.get_temp::<EscapeNote>(escape_key()).unwrap_or_default();
         let escaped = match before {
             Some(id) if escape && now != Some(id) => Some((id, pass)),
             // The field taken back: what it sets from here on is not what Escape dropped.
@@ -111,7 +113,7 @@ pub(crate) fn note_escape(ctx: &egui::Context) {
 /// The widget that had the focus when the pass began, as [`note_escape`] noted it: egui may have
 /// taken the focus from a field drawn earlier in the pass, which sets its number only in the next.
 pub(crate) fn focused_at_pass_start(ctx: &egui::Context) -> Option<egui::Id> {
-    ctx.data(|d| d.get_temp::<(Option<egui::Id>, Option<(egui::Id, u64)>)>(escape_key())).and_then(|(now, _)| now)
+    ctx.data(|d| d.get_temp::<EscapeNote>(escape_key())).and_then(|(now, _)| now)
 }
 
 /// Whether a change of `r` is egui setting the text typed into it before Escape. egui sets it on a
@@ -120,7 +122,7 @@ pub(crate) fn focused_at_pass_start(ctx: &egui::Context) -> Option<egui::Id> {
 /// without the Escape. The caller drops the change, so Escape brings back the value from before
 /// (#1194).
 pub(crate) fn escaped(r: &Response) -> bool {
-    let escaped = r.ctx.data(|d| d.get_temp::<(Option<egui::Id>, Option<(egui::Id, u64)>)>(escape_key())).and_then(|(_, e)| e);
+    let escaped = r.ctx.data(|d| d.get_temp::<EscapeNote>(escape_key())).and_then(|(_, e)| e);
     // The Escape's pass or one of the two after it.
     escaped.is_some_and(|(id, pass)| id == r.id && (pass..=pass + 2).contains(&r.ctx.cumulative_pass_nr()))
 }

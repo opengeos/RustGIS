@@ -291,7 +291,7 @@ fn header(app: &mut RustGisApp, ui: &mut Ui, t: &TimeSlider, steps: &[f64], tk: 
         if crate::widgets::changed(&r) {
             app.time.interval = Some(every);
         }
-        let done = r.drag_stopped() || r.lost_focus() || (r.changed() && !r.dragged() && !r.has_focus());
+        let done = r.drag_stopped() || r.lost_focus() || (crate::widgets::changed(&r) && !r.dragged() && !r.has_focus());
         if done && let Some(n) = app.time.interval.take() {
             let _ = app.run("time.set", json!({"interval": n}));
         }
