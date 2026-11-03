@@ -13339,6 +13339,25 @@ fn an_address_look_holds_when_the_pixels_land_later() {
     assert_eq!(style("Classes").renderer, RasterRenderer::Colormap);
 }
 
+/// An in-place address a project keeps is checked as a tile layer's is before anything is asked
+/// for: a hand-edited one that isn't http(s) or s3 is refused, and said, on opening and on adding.
+#[test]
+fn an_unchecked_in_place_address_is_refused() {
+    use rustgis_map::raster::RasterLayer;
+    let bad = "ftp://127.0.0.1/scene.tif";
+    let mut s = Session::new(Project::default());
+    s.map_mut().add_raster("Odd".to_string(), RasterLayer::unread_in_place(bad));
+    let text = serde_json::to_string(&s.project).unwrap();
+    let mut s = Session::new(Project::default());
+    s.run("project.openText", &json!({"text": text})).unwrap();
+    let rl = s.map().layers.iter().find(|l| l.name == "Odd").and_then(|l| l.raster.as_ref()).unwrap();
+    assert!(rl.data.is_none() && rl.error.as_deref().is_some_and(|e| !e.contains("no answer")), "{:?}", rl.error);
+    assert_eq!(s.notices.iter().filter(|n| n.error && n.text.contains("Odd: couldn't be read in place")).count(), 1);
+    // Added directly (the browser's path), refused before the reader is asked.
+    let added = RasterLayer::opening_in_place(bad);
+    assert!(added.error.is_some() && added.data.is_none());
+}
+
 /// A layer read in place that can't be read says so, once, as its project opens.
 #[test]
 fn an_in_place_layer_that_cant_be_read_says_so() {

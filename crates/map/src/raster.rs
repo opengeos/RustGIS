@@ -104,7 +104,9 @@ pub fn read_together(layers: &mut [&mut RasterLayer]) -> Vec<(usize, String)> {
             let address = l.path.clone();
             let reader = in_place_reader().lock().unwrap_or_else(|e| e.into_inner()).clone();
             match (address, reader) {
-                (Some(address), Some(reader)) => {
+                // An address checked as a tile layer's is (http(s) or s3, a host, no control
+                // characters): a project edited by hand asks for nothing else.
+                (Some(address), Some(reader)) if crate::tiles::check_url(&address).is_ok() => {
                     l.error = None;
                     let slot = Arc::new(Mutex::new(None));
                     let land = slot.clone();
@@ -338,6 +340,12 @@ impl RasterLayer {
                 self.error_said = false;
                 return Err(e);
             };
+            // Checked as a tile layer's address is: a project edited by hand asks for nothing else.
+            if let Err(e) = crate::tiles::check_url(&address) {
+                self.error = Some(e.clone());
+                self.error_said = false;
+                return Err(e);
+            }
             let Some(reader) = in_place_reader().lock().unwrap_or_else(|e| e.into_inner()).clone() else {
                 let e = format!("{address}: can't be read in place here");
                 self.error = Some(e.clone());
