@@ -71,8 +71,8 @@ tables or a file is still made). Opening another project drops the run. Scripts,
 Assistant, the command line and the web app wait for each tool to finish.
 
 **Viewshed**, **IDW Interpolation** and **Kriging** refuse a run that would take more than a second
-or two of work on one thread (a ray step, a cell-point pair), and **Kernel Density** one that
-reaches more than 50 million cells with the points' kernels. On the desktop they run on several
+or two of work on one thread (a ray step, a cell-point pair), and **Kernel Density** one whose
+points' search windows (the square around each point's radius) cover more than 50 million cells. On the desktop they run on several
 cores (up to 16), and they take as many times more work as the threads they run on. Threads share
 cores and memory, so a run at that limit can take up to about twice as long as a one-thread run at
 its own (measured on one machine, a Xeon Silver 4114; it can be longer on others); in the web app,

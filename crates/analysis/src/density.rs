@@ -185,7 +185,7 @@ where
     let strip_rows = h_rows.div_ceil(strips.max(1)).max(1);
     // The strips the rows make (fewer than asked for when they don't divide evenly).
     let strips = h_rows.div_ceil(strip_rows);
-    // Each strip counts its points as it goes, and once more when done.
+    // Each strip counts its points as it goes; `for_each_row` counts the strip itself once more.
     crate::control::begin(strips.saturating_mul(points.len().saturating_add(1)));
     crate::parallel::for_each_row(
         grid.chunks_mut(w * strip_rows),
@@ -654,5 +654,18 @@ mod tests {
         assert_eq!(r.height, 101);
         let (done, total) = run.progress().unwrap();
         assert_eq!((done, total), (total, 51 * 5001));
+    }
+
+    /// A cancelled run comes back as cancelled, on one thread and on several, not as a grid.
+    #[test]
+    fn a_cancelled_kernel_density_is_no_grid() {
+        let points: Vec<(Coord, f64)> = (0..200).map(|i| (Coord::new(f64::from(i) * 5.0, f64::from(i % 20) * 5.0), 1.0)).collect();
+        for threads in [1, 4] {
+            let run = crate::control::Control::new();
+            run.cancel();
+            let _installed = crate::control::install(Some(run));
+            let e = kernel_density_on(Some(threads), &points, None, 5.0, 50.0, KernelType::Quartic, "c", Crs::WebMercator).unwrap_err();
+            assert_eq!(e, crate::control::CANCELLED, "{threads}");
+        }
     }
 }

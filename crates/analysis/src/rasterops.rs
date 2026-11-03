@@ -1301,6 +1301,11 @@ mod tests {
         let one = bits(kmeans_on(Some(1), &r, &[0, 1, 2], 7, 10).unwrap());
         assert_eq!(one, bits(kmeans_on(Some(4), &r, &[0, 1, 2], 7, 10).unwrap()));
         assert!(one.contains(&NODATA.to_bits()) && one.contains(&7.0f32.to_bits()));
+        // A cancelled run gives no classes.
+        let run = crate::control::Control::new();
+        run.cancel();
+        let _installed = crate::control::install(Some(run));
+        assert_eq!(kmeans_on(Some(4), &r, &[0, 1, 2], 7, 10).unwrap_err(), crate::control::CANCELLED);
     }
 
     /// Band math and per-cell rows made on several threads give the same cells, bit for bit, as
