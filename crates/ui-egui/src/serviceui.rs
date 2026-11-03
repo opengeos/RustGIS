@@ -282,9 +282,9 @@ pub(crate) struct Landed {
     pub origin: Option<String>,
 }
 
-/// A service layer's features read page by page off the frame, after its first page landed (#764):
-/// each further answer [`Pages`] asks for is fetched in the background and handed to it, until
-/// the collection is read; then it is added as the download it began as.
+/// A service layer's features read page by page off the frame (#764), from the start (#1326): each
+/// answer [`Pages`] asks for is fetched in the background and handed to it, until the collection
+/// is read; then it is added as the download it began as.
 pub struct PageRead {
     landed: Landed,
     pages: Box<Pages>,
@@ -293,15 +293,11 @@ pub struct PageRead {
     slot: Slot<Result<Vec<u8>, String>>,
 }
 
-/// Starts reading a service's features past their first page (`first`, landed): added now when it
-/// leads nowhere, else read on in the background ([`poll_pages`]).
-pub(crate) fn read_pages(app: &mut RustGisApp, landed: Landed, first: Vec<u8>) {
-    let left = rustgis_engine::render::rustgis_tiles::cache::MAX_DOWNLOAD.saturating_sub(first.len());
-    let step = ogc::read_pages(&landed.url, first, ogc::max_paged_features());
-    if matches!(step, Step::Fetch(_)) {
-        app.session.notify(i18n::fmt("Reading {url} page by page…", &[("url", &landed.url)]), false);
-    }
-    go_on(app, landed, left, step);
+/// Starts reading a service's features (`landed`, its download started but nothing fetched yet)
+/// in the background ([`poll_pages`]).
+pub(crate) fn read_pages(app: &mut RustGisApp, landed: Landed) {
+    let step = ogc::begin(&landed.url, ogc::max_paged_features());
+    go_on(app, landed, rustgis_engine::render::rustgis_tiles::cache::MAX_DOWNLOAD, step);
 }
 
 /// Hands each page that landed to its read, and adds the layers whose features are all read. A
@@ -332,9 +328,14 @@ pub fn poll_pages(app: &mut RustGisApp, ctx: &egui::Context) {
 }
 
 /// The next answer fetched, or the collection added (with a note when some features were left
-/// unread).
+/// unread), or why it couldn't be fetched said.
 fn go_on(app: &mut RustGisApp, landed: Landed, left: usize, step: Step) {
     match step {
+        Step::Failed(e) => {
+            app.session.download_failed(landed.id);
+            let url = &landed.url;
+            app.session.notify(if e.starts_with(url.as_str()) { e } else { format!("{url}: {e}") }, true);
+        }
         Step::Fetch(pages) => {
             let slot = match rustgis_engine::render::rustgis_tiles::address::check(pages.next_url(), Some(pages.referrer())) {
                 Ok(()) => fetch_into_limited(pages.next_url(), left),

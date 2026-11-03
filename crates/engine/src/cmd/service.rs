@@ -260,19 +260,19 @@ pub(crate) fn bounds_of(v: Option<&Value>) -> Result<Option<[f64; 4]>, String> {
 }
 
 /// A service's features at `url`, with the pages that follow (its `next` links, or an ArcGIS
-/// layer's pages past its record limit, see [`read_pages`](rustgis_data::ogc::read_pages)): at
-/// most `max` bytes and [`BLOCKING_TIMEOUT`](crate::render::rustgis_tiles::cache::BLOCKING_TIMEOUT)
-/// in all. A page is fetched only where the page before it may point.
+/// layer's pages, its description read first, see [`begin`](rustgis_data::ogc::begin)): at most
+/// `max` bytes and [`BLOCKING_TIMEOUT`](crate::render::rustgis_tiles::cache::BLOCKING_TIMEOUT) in
+/// all. A page is fetched only where the page before it may point.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn download_features(s: &mut Session, name: &str, url: &str, max: usize) -> Result<Vec<u8>, String> {
     use crate::render::rustgis_tiles::{address, cache};
     let until = std::time::Instant::now() + cache::BLOCKING_TIMEOUT;
-    let first = cache::download_blocking_limited(url, max).map_err(|e| format!("{url}: {e}"))?;
-    let mut left = max.saturating_sub(first.len());
-    let mut step = rustgis_data::ogc::read_pages(url, first, rustgis_data::ogc::max_paged_features());
+    let mut left = max;
+    let mut step = rustgis_data::ogc::begin(url, rustgis_data::ogc::max_paged_features());
     let (bytes, note) = loop {
         let pages = match step {
             rustgis_data::ogc::Step::Done(bytes, note) => break (bytes, note),
+            rustgis_data::ogc::Step::Failed(e) => return Err(format!("{url}: {e}")),
             rustgis_data::ogc::Step::Fetch(pages) => pages,
         };
         let answer = address::check(pages.next_url(), Some(pages.referrer())).and_then(|()| {

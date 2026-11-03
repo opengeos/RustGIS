@@ -11644,10 +11644,10 @@ fn ogc_api_features_follow_next_pages() {
     assert!(s.notices.iter().any(|n| n.text.starts_with("Inward: ") && n.text.contains("never fetched")));
 }
 
-/// An ArcGIS layer past its record limit is read again in pages ordered by its object ids, from
-/// the start (its first page, in the server's own order, may hold other features than the ordered
-/// first: Hawaii's zoning did), when its description says it can be; a layer that can't keeps its
-/// first page, and says so.
+/// An ArcGIS layer's description is read first: a layer that pages is read in pages ordered by its
+/// object ids, from the start, and its query as it is (whose first page, in the server's own
+/// order, may hold other features than the ordered first: Hawaii's zoning did) isn't fetched; a
+/// layer that can't page keeps its first page, and says so.
 #[test]
 fn arcgis_features_read_past_the_record_limit() {
     use ogc_server::{Route, Server, arcgis_layer, arcgis_page};
@@ -11655,7 +11655,8 @@ fn arcgis_features_read_past_the_record_limit() {
     let parcels = "/arcgis/rest/services/P/MapServer/0";
     let page = |offset: u32| format!("{parcels}/query?{q}&resultOffset={offset}&resultRecordCount=2&orderByFields=OBJECTID");
     let server = Server::new(vec![
-        // The first page in the server's own order: two of the five, not the ordered first two.
+        // The first page in the server's own order: two of the five, not the ordered first two
+        // (never asked for).
         Route::new(&format!("{parcels}/query?{q}"), &arcgis_page(&[3, 0], true)),
         Route::new(parcels, &arcgis_layer(2, true)),
         Route::new(&page(0), &arcgis_page(&[0, 1], true)),
@@ -11675,8 +11676,8 @@ fn arcgis_features_read_past_the_record_limit() {
     let r = s.run("service.add", &json!({"url": url, "layer": "Zoning", "text": service})).unwrap();
     assert_eq!(r["features"], 2);
     assert!(s.notices.iter().any(|n| n.text.starts_with("Zoning: ") && n.text.contains("record limit")));
-    // The description once, then the pages from the start; a layer that can't page, its
-    // description alone.
+    // The description, then the pages from the start; a layer that can't page, its description,
+    // then its query as it is.
     let asked: Vec<_> = server
         .requests()
         .iter()
@@ -11689,13 +11690,12 @@ fn arcgis_features_read_past_the_record_limit() {
     assert_eq!(
         asked,
         [
-            at("/0/query", None),
             at("/0", None),
             at("/0/query", Some("0")),
             at("/0/query", Some("2")),
             at("/0/query", Some("4")),
-            at("/1/query", None),
-            at("/1", None)
+            at("/1", None),
+            at("/1/query", None)
         ]
     );
 }
