@@ -30,6 +30,12 @@ pub(crate) fn threads_for(items: usize, min_items: usize) -> usize {
     cores().min(items.div_ceil(BATCH)).max(1)
 }
 
+/// [`threads_for`], each thread holding `scratch_bytes` at once (a feature's raster mask, say): no
+/// more than [`SCRATCH_BUDGET`] holds.
+pub(crate) fn threads_for_scratch(items: usize, min_items: usize, scratch_bytes: usize) -> usize {
+    threads_for(items, min_items).min(1 + SCRATCH_BUDGET / scratch_bytes.max(1))
+}
+
 /// How many threads to make `rows` raster rows on, `work` in all, each thread taking
 /// `scratch_bytes` of scratch: one below [`MIN_ROW_WORK`] and in the browser, no more than there
 /// are rows, and no more than [`SCRATCH_BUDGET`] holds (a scratch per point, for millions of
