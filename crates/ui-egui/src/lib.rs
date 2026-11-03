@@ -1940,6 +1940,15 @@ impl RustGisApp {
             let Some(h) = self.session.project.gp_history.last().filter(|h| !h.id.is_empty()) else { return };
             finished = json!({"tool": h.id, "params": h.params});
             ("gp.run", &finished)
+        } else if matches!(id, "analysis.viewshed" | "analysis.interpolate") && params.get("ran").is_some() {
+            // A raster an Analysis workflow made on a thread (`ran`): the step is the command
+            // itself, which a replay runs again from its parameters.
+            let mut again = params.clone();
+            if let Some(o) = again.as_object_mut() {
+                o.remove("ran");
+            }
+            finished = again;
+            (id, &finished)
         } else {
             (id, params)
         };
