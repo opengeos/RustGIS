@@ -63,13 +63,6 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
     } else {
         clear_pending_symbology(ui.ctx());
     }
-    // A Zarr summary, a trend or a workflow running on its thread lands whatever pane is in view
-    // (all are looked at: `|`, not `||`), and the frames go on while one runs so it's taken when it
-    // ends.
-    #[cfg(not(target_arch = "wasm32"))]
-    if crate::workspacepanes::land_summary(app) | crate::analysispane::land_trend(app) | crate::analysispane::land_job(app) {
-        ui.ctx().request_repaint_after(std::time::Duration::from_millis(200));
-    }
     // The pane in view always has its tab, however it was set.
     if let Some(right) = app.ui.right
         && !app.ui.right_open.contains(&right)

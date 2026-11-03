@@ -131,7 +131,6 @@ pub struct Made {
     bytes: Vec<u8>,
     extra: Option<Value>,
     /// Made on another thread: the command's name and the map it was started on.
-    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     ran: Option<(&'static str, u64)>,
 }
 
@@ -162,10 +161,15 @@ fn add_made(s: &mut Session, m: Made) -> CmdResult {
 
 /// A workflow's raster made here, or the one the app made on a thread ([`raster_start`]) and
 /// handed over as `ran`.
-fn made_or_ran(s: &mut Session, p: &Value, work: fn(&Session, &Value) -> Result<Work, String>) -> CmdResult {
+/// `name` is the command's, as [`raster_start`] gives it: a raster another command made isn't
+/// taken.
+fn made_or_ran(s: &mut Session, p: &Value, name: &str, work: fn(&Session, &Value) -> Result<Work, String>) -> CmdResult {
     if let Some(ran) = p.get("ran").filter(|v| !v.is_null()) {
         let id = ran.as_u64().ok_or("ran is the number of a run the app worked out")?;
         let at = s.raster_results.iter().position(|(k, _)| *k == id).ok_or("that run is no longer kept: run it again")?;
+        if s.raster_results[at].1.ran.is_some_and(|(made_by, _)| made_by != name) {
+            return Err(format!("that run made another command's raster, not {name}'s"));
+        }
         let (_, m) = s.raster_results.remove(at);
         return add_made(s, m);
     }
@@ -205,22 +209,44 @@ impl RasterRun {
 /// now. The run belongs to this project: [`raster_land`] refuses it once another project is open.
 pub fn raster_start(s: &mut Session, command: &str, p: &Value) -> Result<RasterRun, String> {
     let (name, work): (&'static str, Work) = match command {
-        "analysis.viewshed" => ("Viewshed", viewshed_work(s, p)?),
-        "analysis.interpolate" => ("Interpolate (IDW)", interpolate_work(s, p)?),
+        "analysis.viewshed" => (VIEWSHED, viewshed_work(s, p)?),
+        "analysis.interpolate" => (INTERPOLATE, interpolate_work(s, p)?),
         _ => return Err(format!("{command} doesn't run in the background")),
     };
-    Ok(RasterRun { id: s.download_started(), name, work, map: s.map().instance_id() })
+    s.next_pending = s.next_pending.wrapping_add(1);
+    let id = s.next_pending;
+    // One runs at a time from the app; a few are kept, apart from the downloads' list, so no
+    // number of downloads meanwhile pushes a run out.
+    if s.raster_runs.len() >= 8 {
+        s.raster_runs.remove(0);
+    }
+    s.raster_runs.push(id);
+    Ok(RasterRun { id, name, work, map: s.map().instance_id() })
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+/// Whether a run from [`raster_start`] still waits for its raster: opening or creating a project
+/// drops the runs of the previous one.
+pub fn raster_waiting(s: &Session, id: u64) -> bool {
+    s.raster_runs.contains(&id)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+/// Forgets a run from [`raster_start`] that won't land (it failed, or its thread couldn't start).
+pub fn raster_abandon(s: &mut Session, id: u64) {
+    s.raster_runs.retain(|r| *r != id);
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 /// Hands over a raster [`RasterRun::run`] made, for its command run again with `{"ran": id}`:
 /// `Ok(false)` when the run was dropped (another project is open), and an error when another map
 /// is active than the one it started on, as for a tool run in the background. A run that failed
-/// is forgotten with [`Session::download_failed`].
+/// is forgotten with [`raster_abandon`].
 pub fn raster_land(s: &mut Session, id: u64, m: Made) -> Result<bool, String> {
-    if !s.download_done(id) {
+    if !raster_waiting(s, id) {
         return Ok(false);
     }
+    raster_abandon(s, id);
     if let Some((name, map)) = m.ran
         && map != s.map().instance_id()
     {
@@ -718,8 +744,13 @@ fn suitability(s: &mut Session, p: &Value) -> CmdResult {
     add_raster(s, r)
 }
 
+/// What a viewshed and an IDW surface are called, in a cancelled run's error and to tell their
+/// rasters apart.
+const VIEWSHED: &str = "Viewshed";
+const INTERPOLATE: &str = "Interpolate (IDW)";
+
 fn viewshed(s: &mut Session, p: &Value) -> CmdResult {
-    made_or_ran(s, p, viewshed_work)
+    made_or_ran(s, p, VIEWSHED, viewshed_work)
 }
 
 /// What a viewshed reads of the session, and the work that makes it.
@@ -776,7 +807,7 @@ fn line_of_sight(s: &mut Session, p: &Value) -> CmdResult {
 }
 
 fn interpolate(s: &mut Session, p: &Value) -> CmdResult {
-    made_or_ran(s, p, interpolate_work)
+    made_or_ran(s, p, INTERPOLATE, interpolate_work)
 }
 
 /// What an IDW surface reads of the session, and the work that makes it.

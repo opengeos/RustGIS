@@ -154,6 +154,7 @@ fn run(app: &mut RustGisApp, id: &str, p: Value) {
 /// in the background, the pane opened at `section` to show its progress, Cancel and result; one
 /// that can't start (another is under way) is said in the status bar too. The rest run here, a
 /// failure said in the status bar.
+#[cfg_attr(target_arch = "wasm32", allow(unused_variables))]
 pub fn run_elsewhere(app: &mut RustGisApp, section: &str, id: &str, p: Value) {
     #[cfg(not(target_arch = "wasm32"))]
     if let Some((command, name)) = background(id) {
@@ -165,7 +166,6 @@ pub fn run_elsewhere(app: &mut RustGisApp, section: &str, id: &str, p: Value) {
         }
         return;
     }
-    let _ = section;
     if let Err(e) = app.run(id, p) {
         app.session.notify(e, true);
     }
@@ -229,7 +229,7 @@ fn start(app: &mut RustGisApp, command: &'static str, name: &'static str, p: Val
             let out = slot.clone();
             spawn(name, move || fill(&out, run.run(&ctl)))
                 .map(|()| JobKind::Raster { id, command, params: p, slot })
-                .inspect_err(|_| app.session.download_failed(id))
+                .inspect_err(|_| workflows::raster_abandon(&mut app.session, id))
         })
     };
     match kind {
@@ -273,7 +273,7 @@ pub fn land_job(app: &mut RustGisApp) -> bool {
         }
         JobKind::Raster { id, slot, .. } => {
             // Likewise: its project was closed, so the raster it is making has nowhere to go.
-            if !app.session.download_is_pending(*id) {
+            if !workflows::raster_waiting(&app.session, *id) {
                 job.control.cancel();
                 let name = job.name;
                 app.workflow.job = None;
@@ -304,7 +304,7 @@ pub fn land_job(app: &mut RustGisApp) -> bool {
                 Err(e) => show(app, Err(e)),
             },
             Some(Err(e)) => {
-                app.session.download_failed(id);
+                workflows::raster_abandon(&mut app.session, id);
                 show(app, Err(e));
             }
             None => {}
@@ -315,12 +315,12 @@ pub fn land_job(app: &mut RustGisApp) -> bool {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn filled<T>(slot: &crate::Slot<T>) -> bool {
-    slot.lock().is_ok_and(|s| s.is_some())
+    slot.lock().unwrap_or_else(std::sync::PoisonError::into_inner).is_some()
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 fn take<T>(slot: &crate::Slot<T>) -> Option<T> {
-    slot.lock().ok().and_then(|mut s| s.take())
+    slot.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take()
 }
 
 /// Says that a workflow's run was dropped: its project closed while it ran.

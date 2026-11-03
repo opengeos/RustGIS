@@ -25553,6 +25553,11 @@ fn analysis_workflows_run_on_another_thread() {
     let mut s = world();
     s.run("layer.addDataBytes", &json!({"fileName": "dem.tif", "data": dem_b64()})).unwrap();
     let dem = s.map().layers.iter().find(|l| l.is_raster()).unwrap().name.clone();
+    let with_ran = |p: &Value, id: u64| {
+        let mut q = p.clone();
+        q["ran"] = json!(id);
+        q
+    };
     let pixels = |s: &Session, v: &Value| -> Vec<u32> {
         let l = s.map().layer(v["layer"].as_u64().unwrap() as u32).unwrap();
         l.raster.as_ref().unwrap().data.as_ref().unwrap().bands[0].data.iter().map(|x| x.to_bits()).collect()
@@ -25574,6 +25579,21 @@ fn analysis_workflows_run_on_another_thread() {
         assert_eq!(here["visibleCells"], there["visibleCells"], "{command}");
         // Used up: a second hand-over is refused, not worked out again.
         assert!(s.run(command, &with).unwrap_err().contains("no longer kept"), "{command}");
+        // Another command's raster isn't taken, and stays for its own.
+        let run = raster_start(&mut s, command, &p).unwrap();
+        let id = run.id;
+        assert_eq!(raster_land(&mut s, id, run.run(&Control::new()).unwrap()), Ok(true));
+        let other = if command == "analysis.viewshed" { "analysis.interpolate" } else { "analysis.viewshed" };
+        assert!(s.run(other, &with_ran(&p, id)).unwrap_err().contains("another command"), "{command}");
+        s.run(command, &with_ran(&p, id)).unwrap();
+        // Downloads meanwhile, however many, don't push a run out.
+        let run = raster_start(&mut s, command, &p).unwrap();
+        let id = run.id;
+        for _ in 0..100 {
+            s.download_started();
+        }
+        assert_eq!(raster_land(&mut s, id, run.run(&Control::new()).unwrap()), Ok(true), "{command}");
+        s.run(command, &with_ran(&p, id)).unwrap();
         // Cancelled: an error saying so, and nothing kept.
         let run = raster_start(&mut s, command, &p).unwrap();
         let control = Control::new();
