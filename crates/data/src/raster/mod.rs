@@ -66,12 +66,16 @@ fn no_memory(w: usize, h: usize) -> DataError {
     DataError::Format(format!("not enough memory for a {w} × {h} raster"))
 }
 
-/// The fewest samples (pixels × bands) [`max_samples`] allows: 120 million (480 MB), or 32
-/// million in the browser, whose memory is much tighter (its limit there).
+/// Most samples (pixels × bands) held in memory in the browser, whose memory is much tighter: 32
+/// million. The parts of a GeoTIFF the web app saves are read with it anywhere, so that the same
+/// overview is chosen.
+pub const BROWSER_SAMPLES: usize = 32_000_000;
+/// The fewest samples [`max_samples`] allows: 120 million (480 MB) on the desktop, and
+/// [`BROWSER_SAMPLES`] (its limit) in the browser.
 #[cfg(not(target_arch = "wasm32"))]
 pub const SAMPLES_FLOOR: usize = 120_000_000;
 #[cfg(target_arch = "wasm32")]
-pub const SAMPLES_FLOOR: usize = 32_000_000;
+pub const SAMPLES_FLOOR: usize = BROWSER_SAMPLES;
 /// The most [`max_samples`] allows, however much memory the computer has: a billion (4 GB).
 pub const SAMPLES_CEILING: usize = 1_000_000_000;
 
@@ -1110,7 +1114,7 @@ pub fn read_bytes(file_name: &str, bytes: &[u8]) -> Result<Raster> {
         // The parts of a large GeoTIFF the web app read (see `geotiff::read_sparse`).
         "tif" | "tiff" if cog::Sparse::is_container(bytes) => {
             let parts = cog::Sparse::from_container(bytes).ok_or_else(|| DataError::Format("a damaged GeoTIFF part file".into()))?;
-            match geotiff::read_sparse(&parts, &name)? {
+            match geotiff::read_saved_parts(&parts, &name)? {
                 geotiff::Partial::Done(r) => Ok(*r),
                 geotiff::Partial::Need(..) => Err(DataError::Format("the parts of the GeoTIFF kept don't hold the whole overview".into())),
             }

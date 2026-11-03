@@ -975,6 +975,13 @@ pub fn read_sparse(parts: &Sparse, name: &str) -> Result<Partial> {
     read_sparse_limited(parts, name, max_samples())
 }
 
+/// [`read_sparse`] of the parts the web app saved, with its limit ([`super::BROWSER_SAMPLES`]): it
+/// kept the overview it chose with that, which a larger limit could pass over for a finer one the
+/// parts don't hold.
+pub fn read_saved_parts(parts: &Sparse, name: &str) -> Result<Partial> {
+    read_sparse_limited(parts, name, super::BROWSER_SAMPLES)
+}
+
 fn read_sparse_limited(parts: &Sparse, name: &str, max: usize) -> Result<Partial> {
     let r = parts.reader();
     let watch = r.clone();
@@ -1821,7 +1828,8 @@ mod tests {
     #[test]
     fn a_part_container_opens_as_a_tif() {
         let file = super::super::cog::example(512, 256);
-        let (r, parts) = read_in_parts(&file, 4096, max_samples());
+        // Read as the web app reads, with its limit, as the saved parts are read back anywhere.
+        let (r, parts) = read_in_parts(&file, 4096, super::super::BROWSER_SAMPLES);
         let back = super::super::read_bytes("parts.tif", &parts.container()).unwrap();
         assert_eq!((back.width, back.height, back.value(0, 300, 200)), (r.width, r.height, r.value(0, 300, 200)));
     }
