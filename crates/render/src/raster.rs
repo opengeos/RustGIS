@@ -174,8 +174,8 @@ pub(crate) fn draw_in_place(
         // The part in view, in the level's pixels, a pixel past each side (for bilinear sampling).
         let (sx, sy) = (f64::from(l.width) / f64::from(r.width.max(1)), f64::from(l.height) / f64::from(r.height.max(1)));
         let edge = |v: f64, k: f64, max: u32| ((v * k).floor() as i64).clamp(0, i64::from(max)) as u32;
-        let cols = (edge(want.cols.0, sx, l.width).saturating_sub(1), (edge(want.cols.1, sx, l.width) + 2).min(l.width));
-        let rows = (edge(want.rows.0, sy, l.height).saturating_sub(1), (edge(want.rows.1, sy, l.height) + 2).min(l.height));
+        let cols = (edge(want.cols.0, sx, l.width).saturating_sub(1), edge(want.cols.1, sx, l.width).saturating_add(2).min(l.width));
+        let rows = (edge(want.rows.0, sy, l.height).saturating_sub(1), edge(want.rows.1, sy, l.height).saturating_add(2).min(l.height));
         if rustgis_tiles::cog::raster::fits(address, level, cols, rows, &read) {
             window = Some((level, cols, rows));
             break;

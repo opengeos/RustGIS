@@ -13358,6 +13358,36 @@ fn an_unchecked_in_place_address_is_refused() {
     assert!(added.error.is_some() && added.data.is_none());
 }
 
+/// A PNG export of a raster read in place whose image can't be read (its tiles, past the overview
+/// it holds) is refused, not written from the overview.
+#[test]
+fn a_png_export_of_an_unreadable_in_place_layer_is_refused() {
+    use rustgis_data::raster::{ColorHint, Crs, GeoTransform, Raster};
+    let mut overview = Raster::new(
+        "gone",
+        4,
+        4,
+        vec![(0..16).map(|v| v as f32).collect()],
+        GeoTransform { origin_x: -180.0, origin_y: 80.0, pixel_width: 90.0, pixel_height: -40.0 },
+        Crs::LonLat,
+        None,
+        ColorHint::Gray,
+        "Float32",
+    )
+    .unwrap();
+    overview.overview = Some((4096, 4096));
+    let mut s = Session::new(Project::default());
+    s.map_mut().add_raster("Gone".to_string(), rustgis_map::raster::RasterLayer::in_place(overview, "http://127.0.0.1:9/gone.tif"));
+    // Zoomed in far past the overview: the image's tiles are needed, and can't be read.
+    s.map_mut().camera.center = rustgis_geom::Coord::new(0.0, 0.0);
+    s.map_mut().camera.res = 25.0;
+    s.view_size = (64.0, 64.0);
+    let png = std::env::temp_dir().join(format!("rustgis-in-place-refused-{}.png", std::process::id()));
+    let e = s.run("share.exportMap", &json!({"path": png.to_string_lossy(), "width": 64, "height": 64})).unwrap_err();
+    assert!(e.contains("isn't written") || e.contains("still on their way"), "{e}");
+    assert!(!png.exists());
+}
+
 /// A layer read in place that can't be read says so, once, as its project opens.
 #[test]
 fn an_in_place_layer_that_cant_be_read_says_so() {

@@ -3172,10 +3172,17 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
                 // Read in place: the part in view, at the level the view needs.
                 let address = rl.path.as_deref().filter(|_| rl.in_place);
                 let mut draw_it = |pm: &mut Pixmap, opacity: f32| match address {
-                    Some(a) => {
-                        tile_out.pending |=
-                            raster::draw_in_place(pm, a, data, &rl.style, stats, view, opacity, full_res_rasters, place) == Ok(true)
-                    }
+                    // Drawn from less than the view needs (a coarser level, tiles that couldn't be
+                    // read): shown, and said with the tile errors.
+                    Some(a) => match raster::draw_in_place(pm, a, data, &rl.style, stats, view, opacity, full_res_rasters, place) {
+                        Ok(pending) => tile_out.pending |= pending,
+                        Err(e) => {
+                            let e = format!("{}: {e}", layer.name);
+                            if !tile_out.errors.contains(&e) {
+                                tile_out.errors.push(e);
+                            }
+                        }
+                    },
                     None => raster::draw(pm, data, &rl.style, stats, view, opacity, full_res_rasters, place),
                 };
                 if offscreen {
@@ -4866,6 +4873,19 @@ pub(crate) fn render_complete(map: &mut Map, view: &View) -> Option<Rendered> {
 /// Renders a map with its labels, a scale bar and a north arrow to PNG bytes.
 pub fn render_png(map: &mut Map, view: &View) -> Result<Vec<u8>, String> {
     let r = render_complete(map, view).ok_or("could not allocate the image")?;
+    // A raster read in place drawn from less than the view needs isn't written: its tiles still
+    // on their way (the browser can't wait; natively the wait ran out), or ones it couldn't read
+    // (said by the layer's name among the tile errors).
+    let in_place: Vec<&str> =
+        map.layers.iter().filter(|l| l.visible && l.raster.as_ref().is_some_and(|r| r.in_place)).map(|l| l.name.as_str()).collect();
+    if !in_place.is_empty() {
+        if r.tiles_pending {
+            return Err("a raster read in place has tiles still on their way: export again once the map has drawn it".into());
+        }
+        if let Some(e) = r.tile_errors.iter().find(|e| in_place.iter().any(|n| e.starts_with(&format!("{n}: ")))) {
+            return Err(format!("{e}, so the image isn't written"));
+        }
+    }
     let mut pm = Canvas::from_pixmap(r.pixmap);
     for l in r.unplaced.iter().chain(&r.labels) {
         text::draw(&mut pm, l, view.pixels_per_point as f32);
