@@ -2069,12 +2069,16 @@ fn service_features_that_cant_be_fetched_are_said() {
     h.step();
     let url = format!("{}/collections/missing/items", server.base);
     let before = h.state().session.map().layers.len();
+    // Downloads are numbered in turn: the next one is the service's.
+    let probe = h.state_mut().session.download_started();
+    h.state_mut().session.download_failed(probe);
     h.state_mut().run("ui.addUrl", json!({"url": url, "name": "Missing", "service": true})).unwrap();
+    assert!(h.state().session.download_is_pending(probe + 1));
     wait_for_ogc(&mut h, |app| app.ui.service_pages.is_empty());
     let app = h.state();
     assert!(app.session.notices.iter().any(|n| n.error && n.text.starts_with(&url)), "{:?}", app.session.notices);
     assert_eq!(app.session.map().layers.len(), before);
-    assert!(app.ui.downloads.is_empty());
+    assert!(!app.session.download_is_pending(probe + 1), "the failed download is forgotten");
 }
 
 /// A project by its web address (a `?project=` link) downloads off the frame and replaces the

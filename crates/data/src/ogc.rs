@@ -2918,8 +2918,8 @@ enum Phase {
     /// can be read in pages, and how long they may be.
     Describe,
     /// The address asked for, as it is: the first page. `paging`: how the ArcGIS layer it queries
-    /// is read in pages when this one is cut off (its description named no page size, so the
-    /// pages are as long as this one).
+    /// is read in pages when this one is cut off (its description named no page size RustGIS
+    /// asks for, so the pages are as long as this one).
     First { paging: Option<ArcgisPaging> },
     /// A WFS hits response, used when its GeoJSON gives no next link.
     WfsHits,
@@ -3097,6 +3097,11 @@ fn read_first(url: &str, first: Vec<u8>, max: usize, paging: Option<ArcgisPaging
 }
 
 impl Pages {
+    /// Whether the answer to fetch now is an ArcGIS layer's description, read before its features.
+    pub fn describing(&self) -> bool {
+        matches!(self.phase, Phase::Describe)
+    }
+
     /// The address to fetch now.
     pub fn next_url(&self) -> &str {
         &self.next

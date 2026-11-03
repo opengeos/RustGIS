@@ -259,6 +259,10 @@ pub(crate) fn bounds_of(v: Option<&Value>) -> Result<Option<[f64; 4]>, String> {
     Ok(Some(b))
 }
 
+/// Longest [`download_features`] waits for an ArcGIS layer's description, read before its features.
+#[cfg(not(target_arch = "wasm32"))]
+const DESCRIPTION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+
 /// A service's features at `url`, with the pages that follow (its `next` links, or an ArcGIS
 /// layer's pages, its description read first, see [`begin`](rustgis_data::ogc::begin)): at most
 /// `max` bytes and [`BLOCKING_TIMEOUT`](crate::render::rustgis_tiles::cache::BLOCKING_TIMEOUT) in
@@ -277,6 +281,9 @@ pub(crate) fn download_features(s: &mut Session, name: &str, url: &str, max: usi
         };
         let answer = address::check(pages.next_url(), Some(pages.referrer())).and_then(|()| {
             let wait = until.saturating_duration_since(std::time::Instant::now());
+            // A layer's description is small: one that hangs leaves the rest of the time to its
+            // features, asked for as they are.
+            let wait = if pages.describing() { wait.min(DESCRIPTION_TIMEOUT) } else { wait };
             if wait.is_zero() {
                 return Err("the pages took too long".to_string());
             }
