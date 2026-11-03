@@ -74,6 +74,10 @@ pub struct RasterLayer {
     /// Why it couldn't be read in place has been said (see [`RasterLayer::error_unsaid`]).
     #[serde(skip)]
     error_said: bool,
+    /// What reading its pixels left out (`Raster::lost`) has been said (see
+    /// [`RasterLayer::lost_unsaid`]).
+    #[serde(skip)]
+    lost_said: bool,
     /// Settings of the tile layer this one was opened from that a raster layer hasn't (see
     /// [`RasterLayer::dropped_unsaid`]).
     #[serde(skip)]
@@ -217,6 +221,7 @@ impl RasterLayer {
             look: None,
             pixels_said: false,
             error_said: false,
+            lost_said: false,
             dropped: Vec::new(),
         })
     }
@@ -242,6 +247,7 @@ impl RasterLayer {
             look: None,
             pixels_said: false,
             error_said: false,
+            lost_said: false,
             dropped: Vec::new(),
         }
     }
@@ -267,6 +273,7 @@ impl RasterLayer {
             look: None,
             pixels_said: false,
             error_said: false,
+            lost_said: false,
             dropped: Vec::new(),
         }
     }
@@ -297,6 +304,7 @@ impl RasterLayer {
             look: None,
             pixels_said: false,
             error_said: false,
+            lost_said: false,
             dropped: Vec::new(),
         }
     }
@@ -414,6 +422,7 @@ impl RasterLayer {
                 self.style.repair(&r);
                 self.data = Some(Arc::new(r));
                 self.pixels_said = false;
+                self.lost_said = false;
                 Ok(())
             }
             Err(e) => {
@@ -472,6 +481,18 @@ impl RasterLayer {
         std::mem::take(&mut self.dropped)
     }
 
+    /// What reading its pixels left out (`Raster::lost`), the first time it is asked for after
+    /// they landed, so it is said once: as the layer is added, as its project opens, or when they
+    /// land later (the browser).
+    pub fn lost_unsaid(&mut self) -> Vec<String> {
+        if self.lost_said {
+            return Vec::new();
+        }
+        let lost = self.data.as_ref().map(|d| d.lost.clone()).unwrap_or_default();
+        self.lost_said = self.data.is_some();
+        lost
+    }
+
     /// Why a layer read in place couldn't be read, the first time it is asked for after the read
     /// failed, so it is said once (a project, an import or the browser read it after adding it).
     pub fn error_unsaid(&mut self) -> Option<String> {
@@ -500,6 +521,7 @@ impl RasterLayer {
         match result {
             Ok(raster) => {
                 self.pixels_said = false;
+                self.lost_said = false;
                 if std::mem::take(&mut self.restyle) {
                     let look = self.look.take().and_then(|look| RasterStyle::for_look(&raster, &look));
                     self.style = look.unwrap_or_else(|| RasterStyle::default_for(&raster));

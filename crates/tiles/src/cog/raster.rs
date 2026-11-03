@@ -119,7 +119,15 @@ fn read_overview(info: Arc<Info>, url: String, done: Box<dyn FnOnce(Result<Raste
                 if let Some(full) = i.layout.levels.first().filter(|_| level > 0) {
                     r.overview = Some((full.width, full.height));
                 }
-                r.palette_missing = i.layout.palette_missing;
+                // What the header holds for a raster: its colour table (drawn grey in place; the
+                // layer's symbology colours it), the bands' and classes' names, and what was lost.
+                if let Some(table) = &i.layout.palette {
+                    r.color = ColorHint::Palette(table.clone());
+                }
+                if let Some(described) = &i.layout.described {
+                    r.apply_pam(described, rustgis_data::raster::pam::GDAL_METADATA);
+                }
+                r.lost = i.layout.lost.clone();
                 r.source = Some(url.clone());
                 Ok(r)
             }))
@@ -486,11 +494,11 @@ mod tests {
         let file = "test://stand-in.tif";
         // Level 1 (32 a side) kept: its tile 0 is level 0's pixels 0 to 32, all 7.
         let mut t = Tiles::default();
-        let _ = t.keep((file.to_string(), 1, 0), Arc::new(vec![vec![7.0; 16 * 16]]), 256);
+        let _ = t.keep((file.to_string(), 1, 0), Arc::new(vec![vec![7.0; 16 * 16]].into()), 256);
         // Level 0's tile 0 here, one pixel of it no data; tile 1, right of it, not yet.
         let mut own = vec![3.0; 16 * 16];
         own[16 + 1] = f32::NAN;
-        let own: Bands = Arc::new(vec![own]);
+        let own: Bands = Arc::new(vec![own].into());
         let (cols, rows) = ((0, 32), (0, 16));
         let (mut data, gaps) = assemble(&info, 0, cols, rows, &[0], |c| (c == 0).then(|| own.clone()));
         assert_eq!(gaps.len(), 1);

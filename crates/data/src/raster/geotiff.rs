@@ -14,7 +14,7 @@ use tiff::tags::Tag;
 
 use super::cog::Sparse;
 use super::crs::CustomCrs;
-use super::{ColorHint, Crs, Exact, GeoTransform, MAX_SAMPLES, Raster, Uncounted};
+use super::{ColorHint, Crs, Exact, GeoTransform, Raster, Uncounted, max_samples};
 use crate::{DataError, Result};
 
 fn err(e: impl std::fmt::Display) -> DataError {
@@ -44,25 +44,16 @@ struct Geo {
 /// How `n` samples of a grey image the decoder calls multiband are shown: grey with alpha when
 /// there are two and the second is declared alpha (extra sample 1, associated, or 2, unassociated),
 /// else grey. GDAL marks the second band of an ordinary two-band file as 0, unspecified data.
-pub(super) fn multiband_color<R: Read + Seek>(dec: &mut Decoder<R>, n: u16) -> ColorHint {
-    let alpha =
-        n == 2 && dec.find_tag_unsigned_vec::<u16>(Tag::ExtraSamples).ok().flatten().is_some_and(|v| matches!(v.first(), Some(1 | 2)));
-    if alpha { ColorHint::GrayAlpha } else { ColorHint::Gray }
-}
-
 /// Whether the first sample past the colour ones is declared alpha (extra sample 1, associated, or
 /// 2, unassociated).
 pub(super) fn extra_alpha<R: Read + Seek>(dec: &mut Decoder<R>) -> bool {
     dec.find_tag_unsigned_vec::<u16>(Tag::ExtraSamples).ok().flatten().is_some_and(|v| matches!(v.first(), Some(1 | 2)))
 }
 
-/// A palette image's colours, from its ColorMap tag (16-bit red, then green, then blue values);
-/// `None` when the table is missing or short.
-pub(super) fn palette_table<R: Read + Seek>(dec: &mut Decoder<R>, bits: u8) -> Option<Vec<[u8; 4]>> {
-    let map: Vec<u16> = dec.find_tag(Tag::ColorMap).ok().flatten().and_then(|v| v.into_u16_vec().ok()).unwrap_or_default();
-    let n = 1usize << bits.min(16);
-    let c = |i: usize| (map.get(i).copied().unwrap_or(0) / 257) as u8;
-    (map.len() >= 3 * n).then(|| (0..n).map(|i| [c(i), c(n + i), c(2 * n + i), 255]).collect())
+pub(super) fn multiband_color<R: Read + Seek>(dec: &mut Decoder<R>, n: u16) -> ColorHint {
+    let alpha =
+        n == 2 && dec.find_tag_unsigned_vec::<u16>(Tag::ExtraSamples).ok().flatten().is_some_and(|v| matches!(v.first(), Some(1 | 2)));
+    if alpha { ColorHint::GrayAlpha } else { ColorHint::Gray }
 }
 
 fn geo_tags<R: Read + Seek>(dec: &mut Decoder<R>) -> Result<Geo> {
@@ -160,7 +151,7 @@ fn geo_tags<R: Read + Seek>(dec: &mut Decoder<R>) -> Result<Geo> {
 /// A cloud-optimised GeoTIFF's coordinate system, georeferencing and no-data value, from its first
 /// image (as [`read`] finds them); `None` for a rotated or skewed image, or one with no GeoTIFF
 /// tags (a scan), which is read whole.
-pub(crate) fn cog_geo<R: Read + Seek>(dec: &mut Decoder<R>) -> Result<Option<(Crs, GeoTransform, Option<f64>)>> {
+pub(crate) fn cog_geo<R: Read + Seek>(dec: &mut Decoder<R>) -> Result<Option<(Crs, GeoTransform, Option<Exact>)>> {
     let geo = geo_tags(dec)?;
     if geo.affine.is_some() || !geo.referenced {
         return Ok(None);
@@ -178,7 +169,7 @@ pub(crate) fn cog_geo<R: Read + Seek>(dec: &mut Decoder<R>) -> Result<Option<(Cr
             }
         },
     };
-    Ok(Some((crs, geo.transform, geo.nodata)))
+    Ok(Some((crs, geo.transform, geo.nodata_exact)))
 }
 
 #[cfg(test)]
@@ -456,20 +447,28 @@ fn keys_from_proj4(proj4: &str, label: &str) -> Option<(Vec<u16>, Vec<f64>, Stri
     same_projection(proj4, &back).then_some((keys, doubles, ascii))
 }
 
-fn to_f32(buf: DecodingResult) -> (Vec<f32>, &'static str) {
-    match buf {
-        DecodingResult::U8(v) => (v.into_iter().map(f32::from).collect(), "UInt8"),
-        DecodingResult::I8(v) => (v.into_iter().map(f32::from).collect(), "Int8"),
-        DecodingResult::U16(v) => (v.into_iter().map(f32::from).collect(), "UInt16"),
-        DecodingResult::I16(v) => (v.into_iter().map(f32::from).collect(), "Int16"),
-        DecodingResult::U32(v) => (v.into_iter().map(|x| x as f32).collect(), "UInt32"),
-        DecodingResult::I32(v) => (v.into_iter().map(|x| x as f32).collect(), "Int32"),
-        DecodingResult::U64(v) => (v.into_iter().map(|x| x as f32).collect(), "UInt64"),
-        DecodingResult::I64(v) => (v.into_iter().map(|x| x as f32).collect(), "Int64"),
-        DecodingResult::F16(v) => (v.into_iter().map(f32::from).collect(), "Float16"),
-        DecodingResult::F32(v) => (v, "Float32"),
-        DecodingResult::F64(v) => (v.into_iter().map(|x| x as f32).collect(), "Float64"),
+/// The samples as `f32`, with their type's name. Their memory is reserved first: when it can't be
+/// had, the error names the `w × h` raster being made (a decimated read's, smaller than the file).
+fn to_f32(buf: DecodingResult, (w, h): (usize, usize)) -> Result<(Vec<f32>, &'static str)> {
+    fn held<T>(v: Vec<T>, f: impl Fn(T) -> f32, (w, h): (usize, usize)) -> Result<Vec<f32>> {
+        let mut out = super::room(v.len(), w, h)?;
+        out.extend(v.into_iter().map(f));
+        Ok(out)
     }
+    let at = (w, h);
+    Ok(match buf {
+        DecodingResult::U8(v) => (held(v, f32::from, at)?, "UInt8"),
+        DecodingResult::I8(v) => (held(v, f32::from, at)?, "Int8"),
+        DecodingResult::U16(v) => (held(v, f32::from, at)?, "UInt16"),
+        DecodingResult::I16(v) => (held(v, f32::from, at)?, "Int16"),
+        DecodingResult::U32(v) => (held(v, |x| x as f32, at)?, "UInt32"),
+        DecodingResult::I32(v) => (held(v, |x| x as f32, at)?, "Int32"),
+        DecodingResult::U64(v) => (held(v, |x| x as f32, at)?, "UInt64"),
+        DecodingResult::I64(v) => (held(v, |x| x as f32, at)?, "Int64"),
+        DecodingResult::F16(v) => (held(v, f32::from, at)?, "Float16"),
+        DecodingResult::F32(v) => (v, "Float32"),
+        DecodingResult::F64(v) => (held(v, |x| x as f32, at)?, "Float64"),
+    })
 }
 
 /// How many samples were decoded.
@@ -500,7 +499,7 @@ fn can_round(buf: &DecodingResult) -> bool {
 
 /// The samples of `buf` that `f32` doesn't hold (see [`held_exactly`]), a bit each: `None` for a type
 /// that holds every value, or when none changed.
-fn rounded_bits(buf: &DecodingResult, nodata: Uncounted) -> Option<Vec<u64>> {
+pub(crate) fn rounded_bits(buf: &DecodingResult, nodata: Uncounted) -> Option<Vec<u64>> {
     if !can_round(buf) {
         return None;
     }
@@ -577,21 +576,15 @@ fn samples<R: Read + Seek>(dec: &mut Decoder<R>) -> usize {
 /// A reader that shows palette images as grey ones: the `tiff` crate decodes no palette images, but
 /// decodes their colour indices as grey samples, and the colour table is read from the ColorMap tag
 /// as it is. The only change is the PhotometricInterpretation value (3 → 1) in each image's IFD.
-///
-/// It also shows RGB images with samples past the colour ones (RGB
-/// and near-infrared, or more bands, not declared alpha) as grey ones (2 → 1): the crate decodes
-/// only an RGB image's colour samples, and a fifth or later one not at all, but decodes every
-/// sample of a grey image.
 pub(crate) struct Unpaletted<R> {
     inner: R,
-    /// Where each patched image's PhotometricInterpretation value is, and what to show there.
+    /// Where each palette image's PhotometricInterpretation value is, and what to show there.
     patches: Vec<(u64, [u8; 2])>,
-    /// Which images (in the file's order) are palette images: shown to the decoder as grey, one
-    /// without its ColorMap is one still, its table missing.
-    pub(crate) palette_ifds: Vec<bool>,
-    /// Which images are RGB with more samples (shown to the decoder as grey): their first three
-    /// samples are red, green and blue.
-    pub(crate) rgb_ifds: Vec<bool>,
+    /// Whether the first image (the full one) is a palette image.
+    first_palette: bool,
+    /// Whether the first image is an RGB image with samples past the colour ones (shown to the
+    /// decoder as grey): its first three samples are red, green and blue, every sample read.
+    first_wide_rgb: bool,
     pos: u64,
 }
 
@@ -599,21 +592,16 @@ pub(crate) struct Unpaletted<R> {
 const MAX_IFDS: usize = 64;
 const MAX_ENTRIES: u64 = 4096;
 
-/// What [`photometric_patches`] found to patch.
-#[derive(Default)]
-struct Patches {
-    at: Vec<(u64, [u8; 2])>,
-    /// By image: a palette image; an RGB image with more samples.
-    palette_ifds: Vec<bool>,
-    rgb_ifds: Vec<bool>,
-}
-
 /// Where the palette images' PhotometricInterpretation values are, and those of RGB images with
-/// samples past the colour ones, walking the IFD chain (classic and BigTIFF). A file it can't walk
-/// has none: the decoder reports what's wrong.
-fn photometric_patches<R: Read + Seek>(r: &mut R) -> Patches {
+/// samples past the colour ones (which the decoder would leave out, or refuse), walking the IFD
+/// chain (classic and BigTIFF). A file it can't walk has none: the decoder reports what's wrong.
+/// Returns the patches, whether the first image is a palette image, and whether it is such an RGB
+/// image.
+fn palette_patches<R: Read + Seek>(r: &mut R) -> (Vec<(u64, [u8; 2])>, bool, bool) {
     use std::io::SeekFrom;
-    let mut patches = Patches::default();
+    let mut patches = Vec::new();
+    // Whether the first image is one of them, and whether it is an RGB image with more samples.
+    let (mut first, mut first_wide) = (false, false);
     let mut walk = || -> Option<()> {
         let mut head = [0u8; 16];
         r.seek(SeekFrom::Start(0)).ok()?;
@@ -647,7 +635,7 @@ fn photometric_patches<R: Read + Seek>(r: &mut R) -> Patches {
             u64::from(u32_(head.get(4..)?)?)
         };
         let (count_len, entry_len, next_len) = if big { (8u64, 20u64, 8usize) } else { (2, 12, 4) };
-        for _ in 0..MAX_IFDS {
+        for k in 0..MAX_IFDS {
             if ifd == 0 {
                 break;
             }
@@ -663,10 +651,10 @@ fn photometric_patches<R: Read + Seek>(r: &mut R) -> Patches {
             let value_at = if big { 12 } else { 8 };
             let grey = if little { [1, 0] } else { [0, 1] };
             // PhotometricInterpretation (262): where its value is, and the value; SamplesPerPixel
-            // (277); the first ExtraSamples (338) value, when it is inline. Each a SHORT.
+            // (277); the first ExtraSamples (338) value, when it is inline. Each a SHORT, as the
+            // decoder itself requires of them.
             let (mut photometric, mut samples, mut extra) = (None, 1u16, None);
             for (i, e) in entries.chunks(entry_len as usize).enumerate() {
-                // Each a SHORT, as the decoder itself requires of them.
                 let short = u16_(e.get(2..)?)? == 3;
                 match u16_(e)? {
                     262 if short => {
@@ -677,22 +665,19 @@ fn photometric_patches<R: Read + Seek>(r: &mut R) -> Patches {
                     _ => {}
                 }
             }
-            let (mut is_palette, mut is_rgb) = (false, false);
             match photometric {
                 Some((at, 3)) => {
-                    patches.at.push((at, grey));
-                    is_palette = true;
+                    patches.push((at, grey));
+                    first |= k == 0;
                 }
                 // An RGB image whose fourth sample isn't alpha, or with five or more: RGBI
                 // orthophotos, multispectral images.
                 Some((at, 2)) if samples > 4 || (samples == 4 && !matches!(extra, Some(1 | 2))) => {
-                    patches.at.push((at, grey));
-                    is_rgb = true;
+                    patches.push((at, grey));
+                    first_wide |= k == 0;
                 }
                 _ => {}
             }
-            patches.palette_ifds.push(is_palette);
-            patches.rgb_ifds.push(is_rgb);
             let mut next = [0u8; 8];
             r.read_exact(&mut next[..next_len]).ok()?;
             ifd = if big { u64_(&next)? } else { u64::from(u32_(&next)?) };
@@ -700,7 +685,7 @@ fn photometric_patches<R: Read + Seek>(r: &mut R) -> Patches {
         Some(())
     };
     let _ = walk();
-    patches
+    (patches, first, first_wide)
 }
 
 /// Any reader, boxed: the decoder is compiled once for every kind of source (a file, bytes in
@@ -711,17 +696,29 @@ impl<T: Read + Seek> ReadSeek for T {}
 /// What the decoder reads from.
 pub(crate) type Reader<'a> = Unpaletted<Box<dyn ReadSeek + 'a>>;
 
-/// A reader for the decoder: every band of the image, an RGB image's with more too (see
-/// [`Unpaletted`]).
+/// A reader for the decoder.
 pub(crate) fn reader<'a>(r: impl Read + Seek + 'a) -> std::io::Result<Reader<'a>> {
     Unpaletted::new(Box::new(r))
 }
 
+impl<R> Unpaletted<R> {
+    /// Whether the file's first image (the full one) is a palette image (PhotometricInterpretation
+    /// 3), shown as grey.
+    pub(crate) fn first_is_palette(&self) -> bool {
+        self.first_palette
+    }
+
+    /// Whether the first image is an RGB image with more samples than its colours.
+    pub(crate) fn first_is_wide_rgb(&self) -> bool {
+        self.first_wide_rgb
+    }
+}
+
 impl<R: Read + Seek> Unpaletted<R> {
     fn new(mut inner: R) -> std::io::Result<Self> {
-        let p = photometric_patches(&mut inner);
+        let (patches, first_palette, first_wide_rgb) = palette_patches(&mut inner);
         inner.seek(std::io::SeekFrom::Start(0))?;
-        Ok(Unpaletted { inner, patches: p.at, palette_ifds: p.palette_ifds, rgb_ifds: p.rgb_ifds, pos: 0 })
+        Ok(Unpaletted { inner, patches, first_palette, first_wide_rgb, pos: 0 })
     }
 }
 
@@ -892,7 +889,7 @@ fn decimate<R: Read + Seek>(
 ) -> Result<(Vec<Vec<f32>>, &'static str, Vec<u64>)> {
     let k = k.max(1);
     let (ow, oh) = (w.div_ceil(k) as usize, h.div_ceil(k) as usize);
-    let mut bands = vec![vec![f32::NAN; ow * oh]; nbands];
+    let mut bands = (0..nbands).map(|_| super::filled(ow, oh, f32::NAN)).collect::<Result<Vec<_>>>()?;
     let chunks = Chunks::new(dec, w, h, nbands, planar);
     #[cfg(not(target_arch = "wasm32"))]
     if let Some((open, image, limits)) = open
@@ -900,7 +897,7 @@ fn decimate<R: Read + Seek>(
     {
         let threads = std::thread::available_parallelism().map_or(1, |n| n.get()).min(16);
         if threads > 1 {
-            return decimate_parallel(chunks, bands, k, ow, nodata, threads, open, image, limits);
+            return decimate_parallel(chunks, bands, k, (ow, oh), nodata, threads, open, image, limits);
         }
     }
     let _ = open;
@@ -910,7 +907,7 @@ fn decimate<R: Read + Seek>(
         let Some((plane, index)) = chunks.wanted(i, k) else { continue };
         let buf = read_chunk(dec, index)?;
         let changed = rounded_bits(&buf, nodata);
-        let (values, dt) = to_f32(buf);
+        let (values, dt) = to_f32(buf, (ow, oh))?;
         data_type = dt;
         chunks.place(&mut bands, &values, changed.as_deref(), &mut rounded, plane, index, k, ow);
     }
@@ -924,7 +921,7 @@ fn decimate_parallel(
     chunks: Chunks,
     bands: Vec<Vec<f32>>,
     k: u32,
-    ow: usize,
+    (ow, oh): (usize, usize),
     nodata: Uncounted,
     threads: usize,
     open: Opener<'_>,
@@ -959,7 +956,10 @@ fn decimate_parallel(
             match read_chunk(&mut dec, index) {
                 Ok(buf) => {
                     let changed = rounded_bits(&buf, nodata);
-                    let (values, dt) = to_f32(buf);
+                    let (values, dt) = match to_f32(buf, (ow, oh)) {
+                        Ok(v) => v,
+                        Err(e) => return fail(e),
+                    };
                     if let Ok(mut o) = out.lock() {
                         let (bands, data_type, rounded) = &mut *o;
                         *data_type = dt;
@@ -984,7 +984,7 @@ fn decimate_parallel(
     out.into_inner().map_err(|_| err("a chunk couldn't be decoded"))
 }
 
-/// Reads a GeoTIFF. Images too large for [`MAX_SAMPLES`] are read from their largest overview that
+/// Reads a GeoTIFF. Images too large for [`max_samples`] are read from their largest overview that
 /// fits, when the file has overviews; otherwise an overview is made as the image is read, a strip
 /// or tile at a time (a regular, not cloud-optimised, file).
 pub fn read<R: Read + Seek>(r: R, name: &str) -> Result<Raster> {
@@ -993,7 +993,7 @@ pub fn read<R: Read + Seek>(r: R, name: &str) -> Result<Raster> {
 
 /// [`read`], with the no-data value a sidecar gives (see [`read_limited_with_nodata`]).
 pub(super) fn read_with_nodata<R: Read + Seek>(r: R, name: &str, sidecar_nodata: Option<f64>) -> Result<Raster> {
-    read_limited_with_nodata(reader(r).map_err(err)?, name, MAX_SAMPLES, None, sidecar_nodata)
+    read_limited_with_nodata(reader(r).map_err(err)?, name, max_samples(), None, sidecar_nodata)
 }
 
 /// What reading a GeoTIFF from the parts of it read so far came to.
@@ -1008,7 +1008,14 @@ pub enum Partial {
 /// to read next. The web app reads a large file so, a part at a time, keeping only its header and
 /// the overview it opens from (or the strips or tiles an overview made as it is read needs).
 pub fn read_sparse(parts: &Sparse, name: &str) -> Result<Partial> {
-    read_sparse_limited(parts, name, MAX_SAMPLES)
+    read_sparse_limited(parts, name, max_samples())
+}
+
+/// [`read_sparse`] of the parts the web app saved, with its limit ([`super::BROWSER_SAMPLES`]): it
+/// kept the overview it chose with that, which a larger limit could pass over for a finer one the
+/// parts don't hold.
+pub fn read_saved_parts(parts: &Sparse, name: &str) -> Result<Partial> {
+    read_sparse_limited(parts, name, super::BROWSER_SAMPLES)
 }
 
 fn read_sparse_limited(parts: &Sparse, name: &str, max: usize) -> Result<Partial> {
@@ -1033,7 +1040,7 @@ pub fn read_file(path: &std::path::Path, name: &str) -> Result<Raster> {
 pub(super) fn read_file_with_nodata(path: &std::path::Path, name: &str, sidecar_nodata: Option<f64>) -> Result<Raster> {
     let path = path.to_path_buf();
     let open = move || -> std::io::Result<Reader<'static>> { reader(std::io::BufReader::new(std::fs::File::open(&path)?)) };
-    read_limited_with_nodata(open().map_err(err)?, name, MAX_SAMPLES, Some(&open), sidecar_nodata)
+    read_limited_with_nodata(open().map_err(err)?, name, max_samples(), Some(&open), sidecar_nodata)
 }
 
 /// [`read`], holding at most `max` samples (the tests' small limit exercises the overviews), with
@@ -1051,10 +1058,14 @@ pub(super) fn read_limited_with_nodata(
     open: Option<Opener<'_>>,
     sidecar_nodata: Option<f64>,
 ) -> Result<Raster> {
-    let (palette_ifds, rgb_ifds) = (r.palette_ifds.clone(), r.rgb_ifds.clone());
+    // The full image says whether it is read as a palette image, whichever image is read, as a
+    // COG window has it: a grey full image's stray colour table colours nothing, nor do palette
+    // overviews of it.
+    let palette = r.first_is_palette();
+    let wide_rgb = r.first_is_wide_rgb();
     let limits = {
         let mut l = Limits::default();
-        l.decoding_buffer_size = MAX_SAMPLES.saturating_mul(4);
+        l.decoding_buffer_size = max_samples().saturating_mul(4);
         l.intermediate_buffer_size = 256 << 20;
         l.ifd_value_size = 64 << 20;
         l
@@ -1065,12 +1076,15 @@ pub(super) fn read_limited_with_nodata(
     // The no-data value whose pixels aren't counted as rounded.
     let uncounted = Uncounted::new(geo.nodata_exact, sidecar_nodata);
     // The bands' descriptions GDAL keeps in the file (an `.aux.xml` sidecar's are applied after).
-    let described = dec
-        .find_tag(Tag::Unknown(42112))
-        .ok()
-        .flatten()
-        .and_then(|v| v.into_string().ok())
-        .and_then(|t| super::pam::parse_gdal_metadata(&t));
+    // A tag that doesn't decode is left out, and said (`Raster::lost`).
+    let described = match dec.find_tag(Tag::Unknown(42112)) {
+        Ok(None) => None,
+        Ok(Some(v)) => match v.into_string() {
+            Ok(t) => super::pam::parse_gdal_metadata(&t),
+            Err(e) => Some(super::pam::Pam::losing(format!("it isn't text ({e}): band and class names are left out"))),
+        },
+        Err(e) => Some(super::pam::Pam::losing(format!("it doesn't decode ({e}): band and class names are left out"))),
+    };
     let spp = samples(&mut dec);
     let bytes = sample_bytes(&mut dec);
     // The decoded image is held at its own pixel size before conversion to f32, so bound bytes
@@ -1139,16 +1153,23 @@ pub(super) fn read_limited_with_nodata(
     let ct = dec.colortype().map_err(err)?;
     // JPEG-compressed YCbCr, the only YCbCr read (the colour match below rejects the rest).
     let ycbcr = matches!(ct, ColorType::YCbCr(_)) && dec.find_tag_unsigned::<u16>(Tag::Compression).ok().flatten() == Some(7);
-    // The image read is a palette image (shown to the decoder as grey): coloured by its table, or
-    // in grey without one, as said below.
-    let palette = palette_ifds.get(image).copied().unwrap_or(false);
-    let wide_rgb = rgb_ifds.get(image).copied().unwrap_or(false);
+    // A palette image (shown to the decoder as grey) is coloured by its table. One whose table
+    // doesn't decode, or is too short, is drawn grey, and says so (`Raster::lost`).
+    let (colour_map, map_why) = if palette {
+        match dec.find_tag(Tag::ColorMap) {
+            Ok(Some(v)) => (Some(v), None),
+            Ok(None) => (None, Some("it is a palette image with no colour table: drawn grey".to_string())),
+            Err(e) => (None, Some(format!("its colour table doesn't decode ({e}): it is left out"))),
+        }
+    } else {
+        (None, None)
+    };
+    // Said for a grey image, which a table would colour (an RGB overview of a palette file isn't).
+    let mut table_lost = map_why.filter(|_| matches!(ct, ColorType::Gray(_)));
     let ct = match ct {
-        ColorType::Gray(bits) if palette => ColorType::Palette(bits),
+        ColorType::Gray(bits) if colour_map.is_some() => ColorType::Palette(bits),
         other => other,
     };
-    // A palette image without a whole colour table is drawn in grey, and says so.
-    let mut no_table = false;
     let (nbands, color) = match ct {
         ColorType::Gray(_) => (1, ColorHint::Gray),
         ColorType::GrayA(_) => (2, ColorHint::GrayAlpha),
@@ -1157,16 +1178,27 @@ pub(super) fn read_limited_with_nodata(
         // conversion), so it is turned into RGB below (issue #692); other YCbCr data isn't read.
         ColorType::YCbCr(_) if ycbcr => (3, ColorHint::Rgb { alpha: false }),
         ColorType::RGBA(_) => (4, ColorHint::Rgb { alpha: true }),
-        ColorType::Palette(bits) => (
-            1,
-            palette_table(&mut dec, bits).map_or_else(
-                || {
-                    no_table = true;
-                    ColorHint::Gray
-                },
-                ColorHint::Palette,
-            ),
-        ),
+        ColorType::Palette(bits) => {
+            let table = match colour_map.map(|v| v.into_u16_vec()) {
+                Some(Ok(map)) => {
+                    let table = super::cog::colour_table(&map, u16::from(bits));
+                    if table.is_none() {
+                        table_lost = Some(format!(
+                            "its colour table has {} entries, short of the {} a palette of {bits}-bit pixels needs: it is left out",
+                            map.len(),
+                            3usize << bits.min(16)
+                        ));
+                    }
+                    table
+                }
+                Some(Err(e)) => {
+                    table_lost = Some(format!("its colour table doesn't decode ({e}): it is left out"));
+                    None
+                }
+                None => None,
+            };
+            (1, table.map_or(ColorHint::Gray, ColorHint::Palette))
+        }
         // An RGB image with more bands (shown to the decoder as grey, see `Unpaletted`): every
         // band, the first three red, green and blue.
         ColorType::Multiband { num_samples, .. } if wide_rgb && num_samples >= 3 => {
@@ -1222,7 +1254,7 @@ pub(super) fn read_limited_with_nodata(
                 }
             }
         }
-        let (values, dt) = to_f32(buf);
+        let (values, dt) = to_f32(buf, (w as usize, h as usize))?;
         if values.len() < n.saturating_mul(nbands) {
             return Err(err("couldn't read every band"));
         }
@@ -1231,10 +1263,16 @@ pub(super) fn read_limited_with_nodata(
             v.truncate(n);
             vec![v]
         } else if planar {
-            values.chunks(n).take(nbands).map(<[f32]>::to_vec).collect()
+            let mut bands = Vec::new();
+            for plane in values.chunks(n).take(nbands) {
+                let mut band = super::room(n, w as usize, h as usize)?;
+                band.extend_from_slice(plane);
+                bands.push(band);
+            }
+            bands
         } else {
             // One pass over the interleaved pixels.
-            let mut bands: Vec<Vec<f32>> = (0..nbands).map(|_| Vec::with_capacity(n)).collect();
+            let mut bands = (0..nbands).map(|_| super::room(n, w as usize, h as usize)).collect::<Result<Vec<Vec<f32>>>>()?;
             for px in values.chunks(nbands).take(n) {
                 for (band, v) in bands.iter_mut().zip(px) {
                     band.push(*v);
@@ -1261,9 +1299,9 @@ pub(super) fn read_limited_with_nodata(
         r.georeferenced = false;
         r.overview = overview;
         r.rounded = rounded;
-        r.palette_missing = no_table;
+        r.lost.extend(table_lost);
         if let Some(p) = &described {
-            r.apply_pam(p);
+            r.apply_pam(p, super::pam::GDAL_METADATA);
         }
         return Ok(r);
     }
@@ -1312,9 +1350,9 @@ pub(super) fn read_limited_with_nodata(
     let mut r = Raster::new(name, w, h, bands, transform, crs, geo.nodata, color, data_type)?;
     r.overview = overview;
     r.rounded = rounded;
-    r.palette_missing = no_table;
+    r.lost.extend(table_lost);
     if let Some(p) = &described {
-        r.apply_pam(p);
+        r.apply_pam(p, super::pam::GDAL_METADATA);
     }
     Ok(r)
 }
@@ -1418,8 +1456,12 @@ pub fn write(r: &Raster, band: usize) -> Result<Vec<u8>> {
             .then(|| band.data.iter().map(|v| if r.is_valid(*v) { v.clamp(0.0, 255.0) as u8 } else { nodata.unwrap_or(0) }).collect())
     };
     let rgb = matches!(r.color, ColorHint::Rgb { .. }) && r.bands.len() >= 3;
+    // Each branch below names the bands it writes as samples (`$written`): their names, and the
+    // first one's class names (the red band's, for a colour file), go to GDAL's metadata tag,
+    // read back on open.
     macro_rules! tags {
-        ($img:expr) => {{
+        ($img:expr, $written:expr) => {{
+            let classes = super::gdal_metadata_of(r, $written);
             let e = $img.encoder();
             e.write_tag(Tag::ModelPixelScaleTag, &scale[..]).map_err(err)?;
             e.write_tag(Tag::ModelTiepointTag, &tie[..]).map_err(err)?;
@@ -1431,6 +1473,9 @@ pub fn write(r: &Raster, band: usize) -> Result<Vec<u8>> {
                 if !d.ascii.is_empty() {
                     e.write_tag(Tag::Unknown(34737), d.ascii.as_str()).map_err(err)?;
                 }
+            }
+            if let Some(xml) = &classes {
+                e.write_tag(Tag::Unknown(42112), xml.as_str()).map_err(err)?;
             }
             if let Some(nd) = r.nodata {
                 e.write_tag(Tag::GdalNodata, nd.to_string().as_str()).map_err(err)?;
@@ -1446,7 +1491,7 @@ pub fn write(r: &Raster, band: usize) -> Result<Vec<u8>> {
                 data.extend([red.get(i), green.get(i), blue.get(i), a.get(i)].map(|v| v.copied().unwrap_or(0)));
             }
             let mut img = enc.new_image::<colortype::RGBA8>(w, h).map_err(err)?;
-            tags!(img);
+            tags!(img, &[0, 1, 2, 3]);
             img.write_data(&data).map_err(err)?;
         } else {
             let mut data = Vec::with_capacity(n * 3);
@@ -1454,7 +1499,7 @@ pub fn write(r: &Raster, band: usize) -> Result<Vec<u8>> {
                 data.extend([red.get(i), green.get(i), blue.get(i)].map(|v| v.copied().unwrap_or(0)));
             }
             let mut img = enc.new_image::<colortype::RGB8>(w, h).map_err(err)?;
-            tags!(img);
+            tags!(img, &[0, 1, 2]);
             img.write_data(&data).map_err(err)?;
         }
     } else if rgb && let (Some(red), Some(green), Some(blue)) = (r.bands.first(), r.bands.get(1), r.bands.get(2)) {
@@ -1469,7 +1514,7 @@ pub fn write(r: &Raster, band: usize) -> Result<Vec<u8>> {
                     data.extend([at(red, i), at(green, i), at(blue, i), at(alpha, i)]);
                 }
                 let mut img = enc.new_image::<colortype::RGBA32Float>(w, h).map_err(err)?;
-                tags!(img);
+                tags!(img, &[0, 1, 2, 3]);
                 img.write_data(&data).map_err(err)?;
             }
             None => {
@@ -1478,14 +1523,14 @@ pub fn write(r: &Raster, band: usize) -> Result<Vec<u8>> {
                     data.extend([at(red, i), at(green, i), at(blue, i)]);
                 }
                 let mut img = enc.new_image::<colortype::RGB32Float>(w, h).map_err(err)?;
-                tags!(img);
+                tags!(img, &[0, 1, 2]);
                 img.write_data(&data).map_err(err)?;
             }
         }
     } else {
         let b = r.bands.get(band).ok_or_else(|| err(format!("the raster has no band {}", band + 1)))?;
         let mut img = enc.new_image::<colortype::Gray32Float>(w, h).map_err(err)?;
-        tags!(img);
+        tags!(img, &[band]);
         img.write_data(&b.data).map_err(err)?;
     }
     Ok(out.into_inner())
@@ -1825,7 +1870,8 @@ mod tests {
     #[test]
     fn a_part_container_opens_as_a_tif() {
         let file = super::super::cog::example(512, 256);
-        let (r, parts) = read_in_parts(&file, 4096, MAX_SAMPLES);
+        // Read as the web app reads, with its limit, as the saved parts are read back anywhere.
+        let (r, parts) = read_in_parts(&file, 4096, super::super::BROWSER_SAMPLES);
         let back = super::super::read_bytes("parts.tif", &parts.container()).unwrap();
         assert_eq!((back.width, back.height, back.value(0, 300, 200)), (r.width, r.height, r.value(0, 300, 200)));
     }
@@ -1833,7 +1879,7 @@ mod tests {
     #[test]
     fn damaged_part_containers_never_panic() {
         let file = super::super::cog::example(512, 256);
-        let (_, parts) = read_in_parts(&file, 4096, MAX_SAMPLES);
+        let (_, parts) = read_in_parts(&file, 4096, max_samples());
         let good = parts.container();
         for cut in (0..good.len()).step_by(97) {
             let _ = super::super::read_bytes("x.tif", &good[..cut]);
@@ -1883,6 +1929,18 @@ mod tests {
         }
         assert_eq!(r.value(0, 1, 0), Some(1.0));
         assert_eq!(r.value(0, 2, 0), Some(2.0));
+        assert!(r.lost.is_empty(), "{:?}", r.lost);
+        // A table too short for its bytes: drawn grey, and said.
+        let mut short = grey8(8, 8, &data, Some(&map[..384]));
+        set_photometric(&mut short, 3);
+        let grey = read(std::io::Cursor::new(&short), "short").unwrap();
+        assert!(matches!(grey.color, ColorHint::Gray), "{:?}", grey.color);
+        assert_eq!(grey.lost, ["its colour table has 384 entries, short of the 768 a palette of 8-bit pixels needs: it is left out"]);
+        let mut none = grey8(8, 8, &data, None);
+        set_photometric(&mut none, 3);
+        let none = read(std::io::Cursor::new(&none), "none").unwrap();
+        assert_eq!(none.lost, ["it is a palette image with no colour table: drawn grey"]);
+        assert!(matches!(none.color, ColorHint::Gray), "{:?}", none.color);
         // Every truncation of a palette file is an error, not a panic.
         for n in (0..bytes.len()).step_by(11) {
             let _ = read(std::io::Cursor::new(&bytes[..n]), "x");
@@ -1922,7 +1980,7 @@ mod tests {
         let data: Vec<u8> = (0..w * h).map(|i| ((i % w * 7 + i / w * 3) % 253) as u8).collect();
         let bytes = grey8(w, h, &data, None);
         let one = read(std::io::Cursor::new(&bytes), "one").unwrap();
-        let many = read_threaded(&bytes, MAX_SAMPLES).unwrap();
+        let many = read_threaded(&bytes, max_samples()).unwrap();
         assert_eq!((many.width, many.height), (w, h));
         assert!(many.bands.iter().zip(&one.bands).all(|(a, b)| a.data == b.data) && many.bands.len() == one.bands.len());
         assert_eq!(many.data_type, one.data_type);
@@ -1941,7 +1999,7 @@ mod tests {
         // Cut off partway: the strips past the end can't be read.
         let bytes = grey8(w, h, &data, None);
         let cut = &bytes[..bytes.len() / 2];
-        assert!(read_threaded(cut, MAX_SAMPLES).is_err());
+        assert!(read_threaded(cut, max_samples()).is_err());
         assert!(read_threaded(cut, 100_000).is_err());
     }
 
@@ -2022,9 +2080,9 @@ mod tests {
     fn padded_tiles_with_an_extra_sample_stay_in_their_rows() {
         // Issue #162: an RGBI orthophoto (5000 pixels in 128-pixel tiles) opened with black
         // columns down its west edge, the padding of each row's last tile spilt into the next row.
-        // Its near-infrared band is read too, the fourth, after red, green and blue.
         let pixel = |b: u32, x: u32, y: u32| ((x + 3 * y + 60 * b) % 250 + 1) as u8;
         let bytes = rgbi_tiled(&[(40, 16), (20, 16)], pixel);
+        // Its near-infrared band is read too, the fourth, after red, green and blue.
         let check = |r: &Raster, k: u32| {
             assert_eq!((r.band_count(), r.color.clone()), (4, ColorHint::Rgb { alpha: false }));
             for y in 0..r.height {
@@ -2122,7 +2180,7 @@ mod tests {
         for (w, h, tile) in [(40, 24, (16, 16)), (32, 32, (16, 16)), (17, 9, (16, 16)), (24, 40, (16, 16)), (40, 20, (16, 8))] {
             let bytes = planar_tiled(w, h, tile, 8, pixel);
             // The whole image, and every 2nd pixel of it (a limit it doesn't fit).
-            for (k, max) in [(1, MAX_SAMPLES), (2, (w * h) as usize)] {
+            for (k, max) in [(1, max_samples()), (2, (w * h) as usize)] {
                 let r = read_limited(reader(std::io::Cursor::new(&bytes)).unwrap(), "planar", max, None).unwrap();
                 assert_eq!((r.width, r.height, r.band_count()), (w.div_ceil(k), h.div_ceil(k), 3));
                 for y in 0..r.height {
@@ -2172,6 +2230,38 @@ mod tests {
         // Without the tag, the band keeps its number.
         let plain = read(std::io::Cursor::new(grey8(2, 2, &[1, 2, 3, 4], None)), "plain").unwrap();
         assert_ne!(plain.bands[0].name, "NDVI 2024-06-01");
+    }
+
+    #[test]
+    fn what_a_files_metadata_leaves_out_is_kept_to_be_said() {
+        use crate::raster::cog::{Example, example_with};
+        // Read whole, a file with a class item past a band's values says so; a clean one doesn't.
+        let lossy = read(
+            std::io::Cursor::new(example_with(&Example { size: 256, tile: 256, classes: true, lossy: true, ..Example::default() })),
+            "lossy",
+        )
+        .unwrap();
+        assert!(lossy.lost.iter().any(|l| l.starts_with("its GDAL metadata: 1 CLASS_ item(s)")), "{:?}", lossy.lost);
+        let clean =
+            read(std::io::Cursor::new(example_with(&Example { size: 256, tile: 256, classes: true, ..Example::default() })), "clean")
+                .unwrap();
+        assert!(clean.lost.is_empty(), "{:?}", clean.lost);
+    }
+
+    #[test]
+    fn class_names_are_written_back() {
+        // In GDAL's metadata tag, as a window of MapBiomas keeps its classes in a saved project.
+        let mut r = read(std::io::Cursor::new(grey8(2, 2, &[3, 15, 3, 0], None)), "cover").unwrap();
+        r.bands[0].classes = vec![String::new(); 16];
+        r.bands[0].classes[3] = "Formação Florestal".into();
+        r.bands[0].classes[15] = "Pastagem".into();
+        r.bands[0].name = "classe_mapbiomas".into();
+        let back = read(std::io::Cursor::new(write(&r, 0).unwrap()), "back").unwrap();
+        assert_eq!((back.bands[0].class_name(3.0), back.bands[0].class_name(15.0)), (Some("Formação Florestal"), Some("Pastagem")));
+        assert_eq!(back.bands[0].name, "classe_mapbiomas");
+        // The same through the cloud-optimised writer.
+        let cog = read(std::io::Cursor::new(super::super::cogwrite::write(&r, 0).unwrap()), "cog").unwrap();
+        assert_eq!((cog.bands[0].name.as_str(), cog.bands[0].class_name(3.0)), ("classe_mapbiomas", Some("Formação Florestal")));
     }
 
     #[test]
@@ -2385,8 +2475,8 @@ mod tests {
         };
         check(&read(std::io::Cursor::new(&bytes), "dtm").unwrap());
         // From a file, a chunk at a time; and in the browser, in parts.
-        check(&read_threaded(&bytes, MAX_SAMPLES).unwrap());
-        check(&read_in_parts(&bytes, 512, MAX_SAMPLES).0);
+        check(&read_threaded(&bytes, max_samples()).unwrap());
+        check(&read_in_parts(&bytes, 512, max_samples()).0);
         // The same tile of a larger image, as one of the tiles a COG is shown with.
         let wide = lzw_tiled(232, 200, 128, 1, |x, y| if x < 128 && y < 128 { pixel(x, y) } else { (x + y) as f32 });
         let r = read(std::io::Cursor::new(&wide), "wide").unwrap();
@@ -2531,7 +2621,7 @@ mod tests {
         check(&scan, 32, 32);
         // A million pixels in 16 strips, read a chunk at a time on several threads.
         let big = ycbcr_jpeg_tiff(&[(1024, 1024, 64)], colors, true);
-        check(&read_threaded(&big, MAX_SAMPLES).unwrap(), 1024, 1024);
+        check(&read_threaded(&big, max_samples()).unwrap(), 1024, 1024);
         // An image too large for the limit is shown by its overview, a JPEG of its own.
         let cog = ycbcr_jpeg_tiff(&[(64, 64, 64), (32, 32, 32)], colors, true);
         let r = read_limited(reader(std::io::Cursor::new(&cog)).unwrap(), "cog", 4_000, None).unwrap();
@@ -2578,7 +2668,7 @@ mod tests {
             dec.seek_to_image(image).unwrap();
             for i in 0..dec.strip_count().unwrap() {
                 let (theirs, ours) = (dec.read_chunk(i).unwrap(), super::super::lzw::chunk(&mut dec, i).unwrap());
-                assert_eq!(to_f32(ours), to_f32(theirs), "image {image}, strip {i}");
+                assert_eq!(to_f32(ours, (1, 1)).unwrap(), to_f32(theirs, (1, 1)).unwrap(), "image {image}, strip {i}");
             }
         }
     }
@@ -2697,6 +2787,15 @@ mod tests {
         std::fs::write(&tif, typed::<Gray64Float>(2, 2, &px, Some("nan"))).unwrap();
         let nan = crate::raster::read_path(&tif).unwrap();
         assert_eq!((nan.nodata, nan.rounded.as_slice()), (Some(0.1), &[2u64][..]));
+        // A record for a band the file lacks, with another no-data value, doesn't stop band 1's
+        // from applying, nor from being left out of the count: 0.1 isn't counted, 0.1234… is.
+        let px = [0.1, 0.5, 0.123_456_789_012_345, 2.0];
+        std::fs::write(&tif, typed::<Gray64Float>(2, 2, &px, None)).unwrap();
+        let xml = r#"<PAMDataset><PAMRasterBand band="1"><NoDataValue>0.1</NoDataValue></PAMRasterBand>
+            <PAMRasterBand band="2"><NoDataValue>5</NoDataValue></PAMRasterBand></PAMDataset>"#;
+        std::fs::write(dir.path().join("s.tif.aux.xml"), xml).unwrap();
+        let other = crate::raster::read_path(&tif).unwrap();
+        assert_eq!((other.nodata, other.rounded.as_slice()), (Some(0.1), &[1u64][..]), "{:?}", other.lost);
         // 64-bit whole numbers are compared as integers: 2^60 + 1 changes, 2^60 doesn't.
         let big = read(std::io::Cursor::new(typed::<GrayI64>(2, 1, &[(1 << 60) + 1, 1 << 60], None)), "i64").unwrap();
         assert_eq!(big.rounded, vec![1]);

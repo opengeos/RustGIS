@@ -314,6 +314,10 @@ pub enum Tool {
     CreatePolygon,
     /// Moves, inserts and deletes the vertices of the selected features.
     EditVertices,
+    /// Draws a line across the selected polygons to cut them (`edit.cutPolygon`).
+    CutPolygon,
+    /// Draws a line across the selected feature's boundary to reshape it (`edit.reshape`).
+    Reshape,
     /// Draws a graphic: the shape is one of [`GRAPHIC_TOOLS`]' shapes.
     Graphic(&'static str),
 }
@@ -348,6 +352,8 @@ impl Tool {
             Tool::CreateLine => "createLine",
             Tool::CreatePolygon => "createPolygon",
             Tool::EditVertices => "editVertices",
+            Tool::CutPolygon => "cutPolygon",
+            Tool::Reshape => "reshape",
             Tool::Graphic(shape) => GRAPHIC_TOOLS.iter().find(|g| g.0 == shape).map_or("graphicPoint", |g| g.1),
         }
     }
@@ -368,6 +374,8 @@ impl Tool {
             Tool::CreateLine,
             Tool::CreatePolygon,
             Tool::EditVertices,
+            Tool::CutPolygon,
+            Tool::Reshape,
         ]
         .into_iter()
         .find(|t| t.code().eq_ignore_ascii_case(s.trim()))
@@ -386,11 +394,18 @@ impl Tool {
             Tool::CreateLine => "Create Line",
             Tool::CreatePolygon => "Create Polygon",
             Tool::EditVertices => "Edit Vertices",
+            Tool::CutPolygon => "Cut Polygon",
+            Tool::Reshape => "Reshape",
             Tool::Graphic(shape) => GRAPHIC_TOOLS.iter().find(|g| g.0 == shape).map_or("Point", |g| g.2),
         }
     }
     pub fn creates(self) -> bool {
         matches!(self, Tool::CreatePoint | Tool::CreateLine | Tool::CreatePolygon)
+    }
+    /// Whether the tool draws a line or polygon that edits features: vertices snap, and can
+    /// follow an edge with Trace.
+    pub fn draws_edit(self) -> bool {
+        matches!(self, Tool::CreateLine | Tool::CreatePolygon | Tool::CutPolygon | Tool::Reshape)
     }
 }
 
@@ -1515,40 +1530,33 @@ impl Session {
     }
 
     /// Says what reading raster layers' pixels lost when it wasn't said as each was added (pixels
-    /// read in place land later: in the browser, a project, an import): a palette image without
-    /// its colour table, drawn in grey; an overview statistics and tools read; a layer read in place
-    /// that couldn't be read, and why. Once for each layer's pixels or failure, one notice of each
-    /// kind; the app calls it each frame.
+    /// read in place land later: in the browser, a project, an import): what the file's header
+    /// left out (`Raster::lost`: a colour table missing or short, GDAL metadata that doesn't
+    /// decode), an overview statistics and tools read, a layer read in place that couldn't be
+    /// read, and why. Once for each layer's pixels or failure, one notice of each kind; the app
+    /// calls it each frame.
     pub fn notice_landed_rasters(&mut self) {
-        let (mut grey, mut held, mut failed, mut dropped) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+        let (mut lost, mut held, mut failed, mut dropped) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
         for m in &mut self.project.maps {
             for l in &mut m.layers {
                 let Some(rl) = &mut l.raster else { continue };
                 if let Some(e) = rl.error_unsaid() {
                     failed.push((l.name.clone(), e));
                 }
-                let lost = rl.dropped_unsaid();
-                if !lost.is_empty() {
-                    dropped.push((l.name.clone(), lost));
+                let dropped_here = rl.dropped_unsaid();
+                if !dropped_here.is_empty() {
+                    dropped.push((l.name.clone(), dropped_here));
                 }
                 let in_place = rl.in_place;
+                lost.extend(rl.lost_unsaid().into_iter().map(|what| (l.name.clone(), what)));
                 let Some(d) = rl.pixels_unsaid() else { continue };
-                if d.palette_missing {
-                    grey.push(l.name.clone());
-                }
                 if let Some(what) = in_place.then(|| in_place_overview(&d)).flatten() {
                     held.push((l.name.clone(), what));
                 }
             }
         }
-        match &grey[..] {
-            [] => {}
-            [one] => self.notify(format!("{}: its colour table is missing or short, so it is drawn in grey", clip(one, 80)), false),
-            many => self.notify(
-                format!("{} palette rasters have no whole colour table, so they are drawn in grey: {}", many.len(), names_said(many)),
-                false,
-            ),
-        }
+        // What a header left out, as adding the layer says it (one notice a kind, with counts).
+        cmd::raster::say_losses(self, lost);
         if !dropped.is_empty() {
             let mut kinds: Vec<&str> = dropped.iter().flat_map(|(_, k)| k.iter().copied()).collect();
             kinds.sort_unstable();
