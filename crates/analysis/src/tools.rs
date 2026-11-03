@@ -3714,9 +3714,20 @@ fn ground_area_perimeter(g: &Geometry) -> (f64, f64) {
             let mut ring = lonlat_line(r);
             ring.close();
             // Orient in continuous longitude space, including small dateline crossings.
+            // A step of a full turn (-180° to 180°, an edge along a parallel or the pole) is kept as
+            // written: unwrapped the short way it would be no edge at all.
             let mut longitude = ring.0.first().map_or(0.0, |c| c.x);
+            let mut full_turn = false;
+            let mut previous = longitude;
             for c in &mut ring.0 {
-                longitude += (c.x - longitude + 180.0).rem_euclid(360.0) - 180.0;
+                let step = c.x - previous;
+                previous = c.x;
+                if step.abs() >= 360.0 && step.is_finite() {
+                    longitude += step;
+                    full_turn = true;
+                } else {
+                    longitude += (c.x - longitude + 180.0).rem_euclid(360.0) - 180.0;
+                }
                 c.x = longitude;
             }
             let polar = ring.0.first().zip(ring.0.last()).is_some_and(|(a, b)| (a.x - b.x).abs() > 180.0);
@@ -3729,6 +3740,10 @@ fn ground_area_perimeter(g: &Geometry) -> (f64, f64) {
                 let (perimeter, area) = polygon.geodesic_perimeter_area_signed();
                 (perimeter, area.abs())
             };
+            // A ring with a full-turn edge is measured on the ellipsoid along its edges' parallels and
+            // meridians, as the Measure Area panel does; the geodesic area above has no such edge.
+            let ra =
+                if full_turn { Some(rustgis_geom::wgs84_ring_perimeter_area_m2(r).1).filter(|m| m.is_finite()).unwrap_or(ra) } else { ra };
             a += if i == 0 { ra } else { -ra };
             per += rp;
         }
@@ -3955,7 +3970,8 @@ fn statistic_fields(ds: &Dataset, requests: &[crate::stats::Request], as_numbers
     Ok(out)
 }
 
-/// What a statistics list lost to decimals, counted over every group for [`rounded_notice`].
+/// What a statistics list lost to decimals, counted over every group for [`rounded_notice`]. Pivot
+/// Table counts its statistic's results by pivot field, as one request each.
 struct Rounded {
     /// For each request, how many of its results came out rounded from a whole number past 2^53.
     results: Vec<usize>,
@@ -4151,9 +4167,10 @@ const MAX_PIVOT_NAME: usize = 64;
 /// a field for each value of the pivot field, sorted by value, holding the value field's values in
 /// that row. Without a statistic, a row and column can hold one record at most, and its value is
 /// copied with the value field's type; with one, the statistic combines that cell's records, as in
-/// Summary Statistics. A cell with no records is null. A record without a pivot value is an error.
+/// Summary Statistics, which says how many cells came out rounded from whole numbers past 2^53. A
+/// cell with no records is null. A record without a pivot value is an error.
 fn pivot_table(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
-    use crate::stats::{self, Stat};
+    use crate::stats::{self, Request, Stat};
     let ds = input(inp, p, "input")?;
     let keys = key_fields(ds, p.get("fields"), "Row Field")?;
     let named = |k: &str, label: &str| -> Result<usize, String> {
@@ -4213,7 +4230,14 @@ fn pivot_table(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
     let ty = stat.map_or(value_type, |st| st.output_type(value_type.is_numeric()));
     let values = columns.iter().map(|c| c.key.first().unwrap_or(&Value::Null));
     let names = pivot_field_names(field_name(pivot), values, &fields);
+    let first_pivot_field = fields.len();
     fields.extend(names.into_iter().map(|name| Field::new(name, ty)));
+    // Cells rounded from whole numbers past 2^53, counted for each pivot field, and the whole
+    // numbers written as text past the i64 range that a statistic read as decimals, each once.
+    let mut rounded = Rounded::new(columns.len());
+    if let Some(stat) = stat {
+        rounded.count_texts(ds, &rs, &[Request { field: value, stat }], false);
+    }
     let mut column_of: HashMap<usize, usize> = HashMap::with_capacity(rs.len());
     for (c, column) in columns.iter().enumerate() {
         column_of.extend(column.rows.iter().map(|&r| (r, c)));
@@ -4241,7 +4265,14 @@ fn pivot_table(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
                 None => ds.value(r, value).clone(),
                 Some(st) => {
                     let records: Vec<usize> = cell.iter().map(|&(_, r)| r).collect();
-                    stats::compute(st, &stats::column(ds, &records, value, false), separator)
+                    let column = stats::column(ds, &records, value, false);
+                    let v = stats::compute(st, &column, separator);
+                    if stats::rounded(st, &column, &v)
+                        && let Some(n) = rounded.results.get_mut(c)
+                    {
+                        *n += 1;
+                    }
+                    v
                 }
             };
             row.resize(pivot_start + c, Value::Null);
@@ -4252,7 +4283,9 @@ fn pivot_table(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
         out.push_next(None, row);
     }
     let n = out.features.len();
-    Ok(ToolResult { output: Output::Table(out), messages: vec![format!("Pivot Table: {n} rows, {} pivot fields", columns.len())] })
+    let mut messages = vec![format!("Pivot Table: {n} rows, {} pivot fields", columns.len())];
+    messages.extend(rounded_notice(&rounded, out.fields.get(first_pivot_field..).unwrap_or_default()));
+    Ok(ToolResult { output: Output::Table(out), messages })
 }
 
 /// Whether a pivot value is missing: null, or a number that isn't one.
@@ -7057,6 +7090,35 @@ mod tests {
         let out = layer(crate::run("calculateGeometry", &inputs, &serde_json::json!({"input":"island"})).unwrap());
         assert!((out.value(0, out.field_index("area_km2").unwrap()).as_f64().unwrap() - 242.50305444813918).abs() < 1e-6);
         assert!((out.value(0, out.field_index("perimeter_km").unwrap()).as_f64().unwrap() - 65.97062684618793).abs() < 1e-6);
+    }
+
+    /// A cap above 80° N cut at ±180° and closed along the pole (#1353): a 360° edge along 80° N was
+    /// unwrapped to no edge, so the ring measured 0 km². The WGS 84 zone is 3,908,572.76 km².
+    #[test]
+    fn calculate_geometry_measures_a_cap_closed_along_the_pole() {
+        let box_cap = vec![
+            Coord::new(-180.0, 80.0),
+            Coord::new(180.0, 80.0),
+            Coord::new(180.0, 90.0),
+            Coord::new(-180.0, 90.0),
+            Coord::new(-180.0, 80.0),
+        ];
+        let mut dense: Vec<Coord> = (-180..=180).map(|x| Coord::new(f64::from(x), 80.0)).collect();
+        dense.extend([Coord::new(180.0, 90.0), Coord::new(-180.0, 90.0), Coord::new(-180.0, 80.0)]);
+        for ring in [box_cap, dense] {
+            for reverse in [false, true] {
+                let mut ring = ring.clone();
+                if reverse {
+                    ring.reverse();
+                }
+                let mut ds = Dataset::new("cap", GeometryType::Polygon, vec![]);
+                ds.push(Some(Geometry::Polygon(vec![vec![ring]])), vec![]);
+                let inputs = Map(HashMap::from([("cap".into(), ds)]));
+                let out = layer(crate::run("calculateGeometry", &inputs, &serde_json::json!({"input":"cap"})).unwrap());
+                let area = out.value(0, out.field_index("area_km2").unwrap()).as_f64().unwrap();
+                assert!((area - 3_908_572.76).abs() < 1.0, "reversed={reverse}: {area}");
+            }
+        }
     }
 
     #[test]
