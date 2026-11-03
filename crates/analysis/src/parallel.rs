@@ -166,11 +166,13 @@ pub(crate) fn try_map_on<T: Sync, S, R: Send, E: Send + From<Cancelled>>(
         while !failed.load(Ordering::Relaxed) {
             let from = next.fetch_add(BATCH, Ordering::Relaxed);
             let Some(batch) = items.get(from..items.len().min(from.saturating_add(BATCH))).filter(|b| !b.is_empty()) else { break };
-            if control::cancelled() {
-                failed.store(true, Ordering::Relaxed);
-                return Err((from, Cancelled.into()));
-            }
+            // Cancel is looked at, and progress counted, item by item, as on one thread: an item
+            // can take long (a large zone, say), so a batch of them would hold both back.
             for (k, item) in batch.iter().enumerate() {
+                if control::cancelled() {
+                    failed.store(true, Ordering::Relaxed);
+                    return Err((from + k, Cancelled.into()));
+                }
                 match f(&mut s, from + k, item) {
                     Ok(r) => made.push((from + k, r)),
                     Err(e) => {
@@ -178,9 +180,8 @@ pub(crate) fn try_map_on<T: Sync, S, R: Send, E: Send + From<Cancelled>>(
                         return Err((from + k, e));
                     }
                 }
+                control::advance(1);
             }
-            // Counted a batch at a time: the threads share one count.
-            control::advance(batch.len());
         }
         Ok(made)
     };
