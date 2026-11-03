@@ -681,3 +681,23 @@ fn a_multipoint_of_one_part_keeps_its_points() {
     assert_eq!(points(&one), Some(Geometry::MultiPoint(vec![c(1.0, 1.0), c(2.0, 2.0)])));
     assert_eq!(points(&two), Some(Geometry::MultiPoint(vec![c(1.0, 1.0), c(2.0, 2.0)])));
 }
+
+#[test]
+fn a_multipoint_of_several_parts_takes_its_joined_points_from_the_room() {
+    let transform = Transform { given: true, upper_left: false, ..Transform::default() };
+    let shape = Shape { kind: MULTIPOINT, transform: &transform, has_z: false, has_m: false };
+    let two = line_parts(&[1, 1], &[1, 1, 2, 2]);
+    let vertex = std::mem::size_of::<Coord>();
+    // The two parts fit; the joined list of their two points doesn't.
+    let parts = 2 * (PART_BYTES + vertex);
+    assert!(read_geometry(&two, &shape, &mut Tally { geometry_room: parts + 2 * vertex - 1, ..Tally::default() }).is_err());
+    assert!(read_geometry(&two, &shape, &mut Tally { geometry_room: parts + 2 * vertex, ..Tally::default() }).is_ok());
+}
+
+#[test]
+fn a_wkt_is_taken_from_the_text_room_at_its_size_once_read() {
+    // 10 bytes, 2 of them not UTF-8: 8 + 2 × 3 = 14 once read.
+    let reference = message(5, b"GEOGCS\xff\xfe[]");
+    assert!(spatial_reference(&reference, &mut Tally { text_room: 13, ..Tally::default() }).is_err());
+    assert!(spatial_reference(&reference, &mut Tally { text_room: 14, ..Tally::default() }).is_ok());
+}

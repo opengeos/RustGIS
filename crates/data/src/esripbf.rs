@@ -26,8 +26,8 @@
 //! service's error, or another format), a count, ids or an extent, curves, shape buffers,
 //! multipatches, envelopes, a point with more than one vertex, coordinates without a transform,
 //! fields and rows that would take more than 512 MB, geometries that would take more than 1 GB, and
-//! text values (field names included) that would take more than 512 MB. Answers are hostile input:
-//! every length is checked, and nothing is read past the end.
+//! text values (field names and the WKT included) that would take more than 512 MB. Answers are
+//! hostile input: every length is checked, and nothing is read past the end.
 
 use crate::{DataError, Dataset, Field, FieldType, Geometry, GeometryType, ReadReport, Result, Value};
 use rustgis_geom::Coord;
@@ -211,7 +211,7 @@ pub fn read_page(bytes: &[u8], name: &str) -> Result<Page> {
         report.messages.push(format!("{unknown} fields have a type RustGIS doesn't know; their values are read as text"));
     }
     let (code, wkt, wkt_utf8) = match reference {
-        Some(bytes) => spatial_reference(bytes)?,
+        Some(bytes) => spatial_reference(bytes, &mut tally)?,
         None => (None, None, true),
     };
     // Only when the WKT is what names the system: a code RustGIS knows goes first.
@@ -545,8 +545,9 @@ fn field(bytes: &[u8], tally: &mut Tally) -> Result<(String, u64, bool)> {
 }
 
 /// The code of an answer's coordinate system (its `latestWkid` when RustGIS knows it, else its
-/// `wkid`), its WKT and whether that WKT was valid UTF-8.
-fn spatial_reference(bytes: &[u8]) -> Result<(Option<u32>, Option<String>, bool)> {
+/// `wkid`), its WKT and whether that WKT was valid UTF-8. The WKT is taken from the text room
+/// before it's made.
+fn spatial_reference(bytes: &[u8], tally: &mut Tally) -> Result<(Option<u32>, Option<String>, bool)> {
     let (mut wkid, mut latest, mut wkt, mut utf8) = (None, None, None, true);
     let mut r = Reader::new(bytes);
     while !r.done() {
@@ -556,6 +557,7 @@ fn spatial_reference(bytes: &[u8]) -> Result<(Option<u32>, Option<String>, bool)
             (5, 2) => {
                 let raw = r.message()?;
                 utf8 = std::str::from_utf8(raw).is_ok();
+                tally.spend_text(lossy_len(raw))?;
                 wkt = Some(String::from_utf8_lossy(raw).into_owned()).filter(|w| !w.trim().is_empty());
             }
             (_, wire) => r.skip(wire)?,
@@ -917,7 +919,10 @@ fn read_geometry(bytes: &[u8], shape: &Shape, tally: &mut Tally) -> Result<Optio
             let points = if parts.len() == 1 {
                 parts.into_iter().next().unwrap_or_default()
             } else {
-                let mut points = Vec::with_capacity(parts.iter().map(Vec::len).sum());
+                let total: usize = parts.iter().map(Vec::len).sum();
+                // Taken from the room too, as the parts are still held while it's filled.
+                tally.spend(total.saturating_mul(std::mem::size_of::<Coord>()))?;
+                let mut points = Vec::with_capacity(total);
                 for p in parts {
                     points.extend(p);
                 }
