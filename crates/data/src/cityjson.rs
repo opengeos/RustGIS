@@ -11,7 +11,7 @@
 //! are built; its attributes and the root metadata are kept as JSON values until the layers are
 //! written.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use serde::Deserialize;
 use serde::de::IgnoredAny;
@@ -178,6 +178,9 @@ struct Faces {
     left_out: Vec<Vec<P3>>,
     /// Faces past [`MAX_FACES`] were left out.
     truncated: bool,
+    /// Some of those were marked `GroundSurface`: a footprint from the ground misses them (walls
+    /// and roofs left out don't touch it).
+    ground_truncated: bool,
     dropped_rings: usize,
 }
 
@@ -241,17 +244,18 @@ impl Faces {
             self.left_out.append(&mut kept);
             return Some(());
         }
-        if self.faces.len() >= MAX_FACES {
-            self.truncated = true;
-            self.left_out.append(&mut kept);
-            return Some(());
-        }
         let ground = value
             .and_then(Json::as_u64)
             .and_then(|m| marks.get(usize::try_from(m).ok()?))
             .and_then(|m| m.get("type"))
             .and_then(Json::as_str)
             == Some("GroundSurface");
+        if self.faces.len() >= MAX_FACES {
+            self.truncated = true;
+            self.ground_truncated |= ground;
+            self.left_out.append(&mut kept);
+            return Some(());
+        }
         self.faces.push(kept);
         self.ground.push(ground);
         Some(())
@@ -323,7 +327,8 @@ fn object_footprint(surfaces: Vec<Surface>, counts: &mut Counts, budget: &mut us
     let (mut truncated, mut lod) = (false, None);
     for s in surfaces.into_iter().filter(|s| s.rank == rank) {
         lod = lod.or(s.lod);
-        truncated |= s.faces.truncated;
+        // The ground's footprint is whole unless ground faces were left out.
+        truncated |= if ground_only { s.faces.ground_truncated } else { s.faces.truncated };
         if ground_only {
             faces.extend(s.faces.faces.into_iter().zip(s.faces.ground).filter(|(_, ground)| *ground).map(|(face, _)| face));
         } else {
@@ -838,6 +843,28 @@ fn field_order(fields: &[Field]) -> Vec<usize> {
     order
 }
 
+/// Layer names made distinct, in order and ignoring case (as a `layer` pick reads them): types cut
+/// to [`MAX_TYPE_IN_NAME`] may share a name, as may a type's lines and a type named so. A name
+/// already given becomes the first `name (n)` no layer has.
+fn unique_names(names: Vec<String>) -> Vec<String> {
+    let mut taken: HashSet<String> = names.iter().map(|n| n.to_ascii_lowercase()).collect();
+    let mut given: HashSet<String> = HashSet::new();
+    names
+        .into_iter()
+        .map(|name| {
+            if given.insert(name.to_ascii_lowercase()) {
+                return name;
+            }
+            // `taken` holds at most twice as many names as there are layers: one is free.
+            let free = (2u32..).map(|n| format!("{name} ({n})")).find(|c| !taken.contains(&c.to_ascii_lowercase()));
+            let free = free.unwrap_or(name);
+            taken.insert(free.to_ascii_lowercase());
+            given.insert(free.to_ascii_lowercase());
+            free
+        })
+        .collect()
+}
+
 /// The rows as layers: their fields found as GeoJSON's are, so a CityJSON attribute reads like any.
 /// Those with something to draw come first: a file named `.json` adds only the first layer, and the
 /// cap leaves out the last.
@@ -854,15 +881,23 @@ fn layers(stem: &str, rows: Vec<Row>, built: &[Built], crs: Crs) -> Result<Vec<(
     }
     let mut sorted: Vec<_> = groups.into_iter().collect();
     sorted.sort_by_key(|(_, rows)| !rows.iter().any(|r| r.geometry.is_some()));
+    sorted.truncate(MAX_LAYERS);
+    let names = unique_names(
+        sorted
+            .iter()
+            .map(|((ty, family), _)| {
+                let suffix = match family {
+                    Family::Line if families.get(ty).is_some_and(|n| *n > 1) => " lines",
+                    Family::Point if families.get(ty).is_some_and(|n| *n > 1) => " points",
+                    _ => "",
+                };
+                let shown: String = ty.chars().take(MAX_TYPE_IN_NAME).collect();
+                if total == 1 { stem.to_string() } else { format!("{stem} {shown}{suffix}") }
+            })
+            .collect(),
+    );
     let mut out = Vec::with_capacity(total.min(MAX_LAYERS));
-    for ((ty, family), rows) in sorted.into_iter().take(MAX_LAYERS) {
-        let suffix = match family {
-            Family::Line if families.get(&ty).is_some_and(|n| *n > 1) => " lines",
-            Family::Point if families.get(&ty).is_some_and(|n| *n > 1) => " points",
-            _ => "",
-        };
-        let shown: String = ty.chars().take(MAX_TYPE_IN_NAME).collect();
-        let name = if total == 1 { stem.to_string() } else { format!("{stem} {shown}{suffix}") };
+    for (((_, family), rows), name) in sorted.into_iter().zip(names) {
         let features: Vec<String> = rows.iter().filter_map(|r| built.get(r.object).map(|b| feature_text(b, r.lod.as_deref()))).collect();
         let text = format!("{{\"type\":\"FeatureCollection\",\"features\":[{}]}}", features.join(","));
         let (table, mut report) = crate::io::read_geojson(&text, &name)?;

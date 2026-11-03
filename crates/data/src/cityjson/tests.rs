@@ -981,3 +981,88 @@ fn a_system_given_over_the_one_named_is_said() {
     let e = read("m.city.json", root.to_string().as_bytes(), None).unwrap_err().to_string();
     assert!(e.contains("it names a coordinate system RustGIS doesn't know"), "{e}");
 }
+
+/// One building whose geometry passes the face cap: a ground face with a courtyard first, then
+/// walls, past the cap by one, then (`late_ground`) one more ground face.
+fn courtyard_past_the_cap(late_ground: bool) -> Vec<u8> {
+    let mut boundaries = String::from("[[[0,1,2,3],[4,7,6,5]]");
+    let mut values = String::from("[0");
+    for _ in 0..MAX_FACES {
+        boundaries.push_str(",[[0,1,9,8]]");
+        values.push_str(",null");
+    }
+    if late_ground {
+        boundaries.push_str(",[[0,1,2,3]]");
+        values.push_str(",0");
+    }
+    boundaries.push(']');
+    values.push(']');
+    format!(
+        r#"{{"type":"CityJSON","version":"2.0","transform":{{"scale":[1,1,1],"translate":[0,0,0]}},
+        "metadata":{{"referenceSystem":"https://www.opengis.net/def/crs/EPSG/0/4326"}},
+        "vertices":[[0,0,0],[10,0,0],[10,10,0],[0,10,0],[3,3,0],[7,3,0],[7,7,0],[3,7,0],[0,0,5],[10,0,5]],
+        "CityObjects":{{"b":{{"type":"Building","geometry":[{{"type":"MultiSurface","lod":"2","boundaries":{boundaries},
+        "semantics":{{"surfaces":[{{"type":"GroundSurface"}}],"values":{values}}}}}]}}}}}}"#
+    )
+    .into_bytes()
+}
+
+/// Past the face cap, a ground footprint keeps its courtyard when only walls were left out (#1374);
+/// a ground face left out makes it the outline of its points, said.
+#[test]
+fn walls_past_the_face_cap_leave_the_ground_whole() {
+    let out = read("m.city.json", &courtyard_past_the_cap(false), None).unwrap();
+    let Some(Geometry::Polygon(p)) = geometry(&out[0].0, 0) else { panic!("{:?}", geometry(&out[0].0, 0)) };
+    assert_eq!((p.len(), p[0].len()), (1, 2), "the ground with its courtyard: {p:?}");
+    assert!(!says(&out, "outline of their points"), "{:?}", messages_of(&out));
+
+    let out = read("m.city.json", &courtyard_past_the_cap(true), None).unwrap();
+    let Some(Geometry::Polygon(p)) = geometry(&out[0].0, 0) else { panic!("{:?}", geometry(&out[0].0, 0)) };
+    assert_eq!((p.len(), p[0].len()), (1, 1), "the outline, without the courtyard: {p:?}");
+    assert!(says(&out, "outline of their points"), "{:?}", messages_of(&out));
+}
+
+/// Types that read the same once cut, the same but for case, or a type named as another's lines,
+/// still give layers of their own names (#1375); the rest keep theirs, and a name a type already
+/// has isn't given again.
+#[test]
+fn layers_of_types_cut_to_one_name_are_told_apart() {
+    let long = "+".to_string() + &"A".repeat(MAX_TYPE_IN_NAME);
+    let cut: String = long.chars().take(MAX_TYPE_IN_NAME).collect();
+    let face = json!([{"type": "MultiSurface", "lod": "1", "boundaries": [[[0, 1, 2, 3]]]}]);
+    let bytes = doc(
+        box_vertices(),
+        json!({
+            "a": {"type": format!("{long}x"), "geometry": face},
+            "b": {"type": format!("{long}y"), "geometry": face},
+            "c": {"type": "+Road", "geometry": [
+                {"type": "MultiSurface", "lod": "1", "boundaries": [[[0, 1, 2, 3]]]},
+                {"type": "MultiLineString", "lod": "0", "boundaries": [[0, 1]]},
+            ]},
+            "d": {"type": "+Road lines", "geometry": face},
+            "e": {"type": "+Shed", "geometry": face},
+            "f": {"type": "+shed", "geometry": face},
+            "g": {"type": "+shed (2)", "geometry": face},
+            "h": {"type": "Building", "geometry": face},
+        }),
+    );
+    let out = read("m.city.json", &bytes, None).unwrap();
+    let names: Vec<&str> = out.iter().map(|(d, _)| d.name.as_str()).collect();
+    let (one, two) = (format!("m {cut}"), format!("m {cut} (2)"));
+    assert_eq!(
+        names,
+        [
+            one.as_str(),
+            two.as_str(),
+            "m +Road",
+            "m +Road lines",
+            "m +Road lines (2)",
+            "m +Shed",
+            "m +shed (3)",
+            "m +shed (2)",
+            "m Building"
+        ]
+    );
+    assert!(out.iter().all(|(d, _)| d.features.len() == 1));
+    assert_eq!(unique_names(vec!["x".into(), "y".into()]), ["x", "y"], "names that differ are kept");
+}
