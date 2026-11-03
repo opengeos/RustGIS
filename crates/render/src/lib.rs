@@ -4946,10 +4946,12 @@ pub fn render_png(map: &mut Map, view: &View) -> Result<Vec<u8>, String> {
         return Err(format!("{}: its tiles are still on their way: export again once the map has drawn it", l.name));
     }
     if let Some(l) = r.partial.first().and_then(|id| map.layers.iter().find(|l| l.id == *id)) {
-        return Err(format!(
-            "{}: drawn from less than the view needs (a coarser level, or tiles that couldn't be read), so the image isn't written",
-            l.name
-        ));
+        // Its own error, named by the layer, says why; else the general one.
+        let why = r.tile_errors.iter().find(|e| e.starts_with(&format!("{}: ", l.name))).cloned();
+        let why = why.unwrap_or_else(|| {
+            format!("{}: drawn from less than the view needs (a coarser level, or tiles that couldn't be read)", l.name)
+        });
+        return Err(format!("{why}, so the image isn't written"));
     }
     let mut pm = Canvas::from_pixmap(r.pixmap);
     for l in r.unplaced.iter().chain(&r.labels) {

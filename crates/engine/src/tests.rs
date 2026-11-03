@@ -13395,6 +13395,28 @@ fn a_png_export_of_an_unreadable_in_place_layer_is_refused() {
     assert!(!png.exists());
 }
 
+/// A turned layer read in place is drawn from its overview: zoomed in past it, an export is
+/// refused rather than written from the overview; zoomed out, it is written.
+#[test]
+fn a_turned_in_place_layer_is_not_exported_past_its_overview() {
+    let (base, _) = serve_ranges(rustgis_data::raster::cog::example(2048, 256));
+    let mut s = Session::new(Project::default());
+    let r = s.run("layer.addUrl", &json!({"url": format!("{base}/scene.tif"), "name": "Scene"})).unwrap();
+    assert_eq!(r["width"], 1024, "{r}");
+    let id = s.map().layer_by_name("Scene").unwrap().id;
+    s.map_mut().layer_mut(id).and_then(|l| l.raster.as_mut()).unwrap().style.rotation = 15.0;
+    let png = std::env::temp_dir().join(format!("rustgis-turned-{}.png", std::process::id()));
+    // Zoomed in past the overview (its pixels are about 50 m): refused.
+    s.map_mut().camera.res = 12.0;
+    s.view_size = (64.0, 64.0);
+    let e = s.run("share.exportMap", &json!({"path": png.to_string_lossy(), "width": 64, "height": 64})).unwrap_err();
+    assert!(e.contains("turned") && e.contains("isn't written"), "{e}");
+    // Zoomed out to the overview's resolution and beyond: written.
+    s.map_mut().camera.res = 200.0;
+    s.run("share.exportMap", &json!({"path": png.to_string_lossy(), "width": 64, "height": 64})).unwrap();
+    assert!(png.exists());
+}
+
 /// A layer read in place that can't be read says so, once, as its project opens.
 #[test]
 fn an_in_place_layer_that_cant_be_read_says_so() {

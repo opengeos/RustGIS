@@ -107,6 +107,8 @@ pub(crate) fn draw(
 const WINDOW_GRID: usize = 17;
 /// Why a part in view was drawn from a coarser level than it needs.
 const TOO_LARGE: &str = "the view is too large a part of the image to read at the resolution it needs";
+/// Why a turned layer is drawn from its overview.
+const TURNED: &str = "turned, it is drawn from its overview, not at the resolution the view needs";
 
 /// Draws a raster layer read in place (a cloud-optimised GeoTIFF by its address, see
 /// [`rustgis_map::raster::RasterLayer::in_place`]) as [`draw`] draws one held whole: its overview
@@ -132,11 +134,18 @@ pub(crate) fn draw_in_place(
     let own: Vec<BandStats> = bands.iter().map(|b| r.bands.get(*b).map(|b| b.stats.clone()).unwrap_or_default()).collect();
     let stats = stats.unwrap_or(&own);
     let whole = |pm: &mut Pixmap| draw(pm, r, style, Some(stats), view, opacity, full_res, place);
-    // A rotated raster turns about the whole image's centre, not the part in view's.
     let full = r.overview.unwrap_or((r.width, r.height));
-    if style.rotation.rem_euclid(360.0).abs() > 1e-6 || full.0 <= r.width {
+    if full.0 <= r.width {
         whole(pm);
         return Ok(false);
+    }
+    // A rotated raster turns about the whole image's centre, not the part in view's: the
+    // overview is drawn, and zoomed in past it (a screen pixel under 0.8 of its pixels) that is
+    // less than the view needs: said, and refused by exports.
+    if style.rotation.rem_euclid(360.0).abs() > 1e-6 {
+        whole(pm);
+        let zoomed_in = in_view(r, view, place, pm.width(), pm.height(), full_res).is_some_and(|w| w.per_px < 0.8);
+        return if zoomed_in { Err(TURNED.into()) } else { Ok(false) };
     }
     let info = match rustgis_tiles::cog::info(address) {
         Ok(Some(info)) => info,

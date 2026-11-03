@@ -231,7 +231,8 @@ fn http_date(s: &str) -> Option<u64> {
     const MONTHS: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
     let month = MONTHS.iter().position(|m| *m == month)? as i64 + 1;
     let (day, year): (i64, i64) = (day.parse().ok()?, year.parse().ok()?);
-    let mut hms = time.split(':').map(|p| p.parse::<i64>().ok());
+    // Each field unsigned: a sign isn't a time.
+    let mut hms = time.split(':').map(|p| p.parse::<u8>().ok().map(i64::from));
     let (h, m, sec) = (hms.next()??, hms.next()??, hms.next()??);
     let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
     let days_in_month = match month {
@@ -466,6 +467,7 @@ mod tests {
         assert_eq!(http_date("Sun, 06 Nov 1994 08:49:37 PST"), None);
         assert_eq!(http_date("Sun, 32 Nov 1994 08:49:37 GMT"), None);
         assert_eq!(http_date("Wed, 31 Feb 2024 00:00:00 GMT"), None, "no 31 February");
+        assert_eq!(http_date("Sun, 06 Nov 1994 -8:49:37 GMT"), None, "no negative hour");
         assert!(http_date("Thu, 29 Feb 2024 00:00:00 GMT").is_some() && http_date("Sat, 29 Feb 2025 00:00:00 GMT").is_none());
         // A refused answer's own header.
         let headers = vec![("Retry-After".to_string(), "12".to_string())];
