@@ -347,7 +347,8 @@ pub fn train(
 }
 
 /// Classifies every pixel: class numbers (1-based, `nodata` where a band has no data) and each
-/// pixel's probability of that class. Rows go on several threads when the work is large (#1252).
+/// pixel's probability of that class. Rows go on several threads when the work is large, except in
+/// the browser, which uses one (#1252).
 pub fn classify(r: &Raster, model: &Mlp, nodata: f32) -> Result<(Vec<f32>, Vec<f32>), String> {
     classify_on(r, model, nodata, None)
 }
@@ -365,7 +366,9 @@ fn classify_on(r: &Raster, model: &Mlp, nodata: f32, threads: Option<usize>) -> 
     }
     let (w, h) = (r.width as usize, r.height as usize);
     let (mut class, mut prob) = (crate::rasterops::new_band(w, h, nodata)?, crate::rasterops::new_band(w, h, nodata)?);
-    let work = w.saturating_mul(h).saturating_mul(weights);
+    // In [`crate::parallel::MIN_ROW_WORK`]'s units (about 30 ns each): a weight of a pixel costs
+    // about 1 ns.
+    let work = w.saturating_mul(h).saturating_mul(weights) / 30;
     let threads = threads.unwrap_or_else(|| crate::parallel::threads_for_rows(h, work, model.bands.len() * 4));
     crate::control::begin(h);
     // Each row writes only its own pixels of both bands; each thread reads into its own buffer.
@@ -424,11 +427,16 @@ mod tests {
         let r = Raster::new("img", w, h, vec![a, b], transform, Crs::LonLat, None, ColorHint::Gray, "Float32").unwrap();
         let (c1, p1) = classify_on(&r, &model, -1.0, Some(1)).unwrap();
         assert!(c1.contains(&1.0) && c1.contains(&2.0) && c1.contains(&-1.0), "both classes and no data");
+        // A classified pixel has its class's probability; one with no data has none.
+        assert!(c1.iter().zip(&p1).all(|(c, p)| if *c == -1.0 { *p == -1.0 } else { (0.0..=1.0).contains(p) && *p >= 0.5 }));
         for threads in [2, 7, 16] {
             let (c, p) = classify_on(&r, &model, -1.0, Some(threads)).unwrap();
             let bits = |v: &[f32]| v.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
             assert_eq!((bits(&c), bits(&p)), (bits(&c1), bits(&p1)), "{threads} threads");
         }
+        // As many threads as pay off, which `classify` picks, give the same.
+        let (c, p) = classify(&r, &model, -1.0).unwrap();
+        assert_eq!((c, p), (c1, p1));
     }
 
     #[test]
