@@ -103,6 +103,10 @@ pub struct Page {
     /// What its features lost, counted (also said in `report`): a reader joining pages sums them
     /// and says each once ([`Losses::messages`]).
     pub losses: Losses,
+    /// About the memory its fields, rows, text values and geometries take, in bytes, as counted
+    /// against [`MAX_ROW_BYTES`], [`MAX_TEXT_BYTES`] and [`MAX_GEOMETRY_BYTES`]: a reader joining
+    /// pages sums them against a budget of its own.
+    pub memory: usize,
 }
 
 /// What a page's features lost or had assumed, counted.
@@ -227,6 +231,7 @@ pub fn read_page(bytes: &[u8], name: &str) -> Result<Page> {
             return Err(too_many_rows(features.len(), declared.len()));
         }
     }
+    let rows = row_bytes(features.len(), declared.len());
     // A point layer's type is the format's default, which an answer leaves out.
     let shape_kind = geometry_type.unwrap_or(POINT);
     // Refused whether or not a feature has coordinates, so such a layer isn't read as empty.
@@ -333,7 +338,10 @@ pub fn read_page(bytes: &[u8], name: &str) -> Result<Page> {
     };
     report.messages.extend(losses.messages());
     ds.zm_dropped = with_zm > 0;
-    Ok(Page { dataset: ds, report, exceeded_transfer_limit: more, object_id_field, losses })
+    let memory = rows
+        .saturating_add(MAX_GEOMETRY_BYTES.saturating_sub(tally.geometry_room))
+        .saturating_add(MAX_TEXT_BYTES.saturating_sub(tally.text_room));
+    Ok(Page { dataset: ds, report, exceeded_transfer_limit: more, object_id_field, losses, memory })
 }
 
 /// A reader of protocol buffer fields, which refuses what runs past its bytes.

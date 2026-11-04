@@ -2694,6 +2694,18 @@ pub fn max_paged_features() -> usize {
     crate::memory::scaled(crate::memory::physical(), PAGED_FEATURES_FLOOR, PAGED_FEATURES_CEILING, 20 << 10)
 }
 
+/// The least memory [`max_decoded_bytes`] allows, and its limit in the browser.
+pub const DECODED_FLOOR: usize = 512 << 20;
+/// The most memory [`max_decoded_bytes`] allows, however much the computer has.
+pub const DECODED_CEILING: usize = 3 << 30;
+
+/// Most memory, in bytes, an ArcGIS layer's protocol buffer pages may take once read: on the
+/// desktop a quarter of the computer's memory, from [`DECODED_FLOOR`] up to [`DECODED_CEILING`].
+/// The download budget doesn't bound it: a vertex takes 1 to 3 bytes in a page and 16 read.
+pub fn max_decoded_bytes() -> usize {
+    crate::memory::scaled(crate::memory::physical(), DECODED_FLOOR, DECODED_CEILING, 1)
+}
+
 /// A feature collection page's JSON `next` link, resolved against the page's address.
 fn next_page(url: &str, page: &serde_json::Value) -> Option<String> {
     let link = page.get("links")?.as_array()?.iter().find(|l| {
@@ -2931,6 +2943,9 @@ pub struct Pages {
     phase: Phase,
     /// The protocol buffer pages read, as one layer, and what reading them said.
     decoded: Option<(crate::Dataset, crate::ReadReport, crate::esripbf::Losses)>,
+    /// The memory those pages take, in bytes, and the most they may ([`max_decoded_bytes`]).
+    decoded_bytes: usize,
+    decoded_budget: usize,
 }
 
 /// What the answer being fetched is.
@@ -3087,6 +3102,8 @@ fn start(url: &str, max: usize, pbf: bool) -> Step {
         from: url.to_string(),
         phase,
         decoded: None,
+        decoded_bytes: 0,
+        decoded_budget: max_decoded_bytes(),
     }))
 }
 
@@ -3149,6 +3166,8 @@ fn read_first(url: &str, first: Vec<u8>, max: usize, paging: Option<ArcgisPaging
         from: url.to_string(),
         phase,
         decoded: None,
+        decoded_bytes: 0,
+        decoded_budget: max_decoded_bytes(),
     };
     pages.advance()
 }
@@ -3377,6 +3396,14 @@ impl Pages {
         if start.is_none() {
             *start = mark;
         }
+        // The first page is kept whatever it takes (the reader bounds a page); a later one that
+        // would take the layer past its memory budget isn't joined.
+        let bytes = self.decoded_bytes.saturating_add(page.memory);
+        if self.decoded.is_some() && bytes > self.decoded_budget {
+            let mb = self.decoded_budget >> 20;
+            return self.stop(format!("the page after feature {read} would take the layer past {mb} MB of memory; the rest aren't read"));
+        }
+        self.decoded_bytes = bytes;
         let returned = page.dataset.features.len();
         let following =
             page.exceeded_transfer_limit.then(|| with_format(&arcgis_page_url(&self.url, read + returned, *size, order.as_deref()), "pbf"));
@@ -4831,6 +4858,8 @@ mod tests {
             from: String::new(),
             phase: Phase::Offsets { size: 2, order: None, start: None, first: None, pbf: true },
             decoded: None,
+            decoded_bytes: 0,
+            decoded_budget: max_decoded_bytes(),
         };
         // A page in another coordinate system, or of another geometry type, isn't joined; one
         // that doesn't say its system is.
@@ -4867,6 +4896,23 @@ mod tests {
         let Step::Fetch(first) = fresh().join_page(blank(&[0, 1])) else { panic!("the first page") };
         let Step::Fetch(p) = (*first).join_page(blank(&[2, 3])) else { panic!("an empty object id taken for a page sent again") };
         assert_eq!(p.read(), 4);
+        // A page that would take the layer past its memory budget isn't joined, and says so; the
+        // first page is kept whatever it takes, and one within the budget is joined.
+        let first = page(&[0, 1], lonlat, point);
+        assert!(first.memory > 0);
+        let budget = first.memory * 3 / 2;
+        let Step::Fetch(mut p) = fresh().join_page(first) else { panic!("the first page") };
+        p.decoded_budget = budget;
+        let Step::Decoded(ds, _, Some(note)) = (*p).join_page(page(&[2, 3], lonlat, point)) else { panic!("past the budget") };
+        assert_eq!(ids(&ds), [0.0, 1.0]);
+        assert!(note.contains("after feature 2 would take the layer past 0 MB of memory"), "{note}");
+        let mut p = fresh();
+        p.decoded_budget = 0;
+        let Step::Fetch(mut p) = p.join_page(page(&[0, 1], lonlat, point)) else { panic!("the first page, over the budget") };
+        p.decoded_budget = usize::MAX;
+        let Step::Fetch(p) = (*p).join_page(page(&[2, 3], lonlat, point)) else { panic!("within the budget") };
+        assert_eq!(p.read(), 4);
+        assert!(p.decoded_bytes > 0);
         // What the features lost, summed over the pages and said once.
         let mut pages = fresh();
         for (ids, more, rings) in [(&[0, 1][..], true, 2), (&[2, 3][..], false, 3)] {
