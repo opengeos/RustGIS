@@ -3385,8 +3385,18 @@ impl Pages {
                 if ds.fields != page.dataset.fields {
                     return self.stop(format!("the page after feature {read} has other fields than the first; the rest aren't read"));
                 }
+                // Each page's positions are in its own system, and its geometries of its own type;
+                // a page that doesn't say one is joined.
+                let other_crs = ds.crs.is_some() && page.dataset.crs.is_some() && ds.crs != page.dataset.crs;
+                let none = crate::GeometryType::None;
+                let other_type =
+                    ds.geometry_type != none && page.dataset.geometry_type != none && ds.geometry_type != page.dataset.geometry_type;
+                if other_crs || other_type {
+                    let what = if other_crs { "coordinate system" } else { "geometry type" };
+                    return self.stop(format!("the page after feature {read} has another {what} than the first; the rest aren't read"));
+                }
                 // A page without features may not say its geometry type.
-                if ds.geometry_type == crate::GeometryType::None {
+                if ds.geometry_type == none {
                     ds.geometry_type = page.dataset.geometry_type;
                 }
                 ds.zm_dropped |= page.dataset.zm_dropped;
@@ -4674,8 +4684,8 @@ mod tests {
     /// order of its object ids, into one layer (#1326); [`begin`] keeps reading it in GeoJSON. A
     /// first page that comes but can't be read as one has the layer read in GeoJSON pages, and one
     /// that can't be fetched has the query fetched as it is; a later one that fails, a server that
-    /// sends its first page again, a page of other fields and the limit end the read with the pages
-    /// read so far, and a note. What the pages' features lost is said once, summed.
+    /// sends its first page again, a page of other fields, coordinate system or geometry type and
+    /// the limit end the read with the pages read so far, and a note. What the pages' features lost is said once, summed.
     #[test]
     fn arcgis_pbf_pages_joined_when_the_layer_lists_them() {
         use crate::esripbf::tests::page as pbf;
@@ -4785,8 +4795,7 @@ mod tests {
         assert_eq!(ids(&ds), [0.0, 1.0, 2.0]);
         assert!(note.contains("first 3 features"), "{note}");
 
-        // What the features lost, summed over the pages and said once.
-        let mut pages = Pages {
+        let fresh = || Pages {
             url: query.into(),
             doc: serde_json::Value::Null,
             features: Vec::new(),
@@ -4797,6 +4806,33 @@ mod tests {
             phase: Phase::Offsets { size: 2, order: None, start: None, first: None, pbf: true },
             decoded: None,
         };
+        // A page in another coordinate system, or of another geometry type, isn't joined; one
+        // that doesn't say its system is.
+        let page = |ids: &[u64], crs: Option<crate::raster::Crs>, geometry_type: crate::GeometryType| {
+            let mut page = crate::esripbf::read_page(&pbf(ids, true, "OBJECTID"), "query").unwrap();
+            page.dataset.crs = crs;
+            page.dataset.geometry_type = geometry_type;
+            page
+        };
+        let (lonlat, point) = (Some(crate::raster::Crs::LonLat), crate::GeometryType::Point);
+        for (crs, geometry_type, stopped) in [
+            (Some(crate::raster::Crs::WebMercator), point, Some("another coordinate system")),
+            (lonlat, crate::GeometryType::Polyline, Some("another geometry type")),
+            (None, point, None),
+            (lonlat, crate::GeometryType::None, None),
+        ] {
+            let Step::Fetch(first) = fresh().join_page(page(&[0, 1], lonlat, point)) else { panic!("the first page") };
+            match ((*first).join_page(page(&[2, 3], crs, geometry_type)), stopped) {
+                (Step::Decoded(ds, _, Some(note)), Some(what)) => {
+                    assert_eq!(ds.features.len(), 2);
+                    assert!(note.contains(what), "{note}");
+                }
+                (Step::Fetch(p), None) => assert_eq!(p.read(), 4),
+                (other, _) => panic!("{crs:?} {geometry_type:?}: {other:?}"),
+            }
+        }
+        // What the features lost, summed over the pages and said once.
+        let mut pages = fresh();
         for (ids, more, rings) in [(&[0, 1][..], true, 2), (&[2, 3][..], false, 3)] {
             let mut page = crate::esripbf::read_page(&pbf(ids, more, "OBJECTID"), "query").unwrap();
             page.losses.flat_rings = rings;
