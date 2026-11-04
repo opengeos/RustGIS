@@ -217,7 +217,7 @@ fn add_layer(s: &mut Session, layer: &qgis::ProjectLayer, has_dir: bool, report:
             Err(e) => report.skipped(name, format!("its filter `{q}` ({e})")),
         }
     }
-    check_fields(l, name, &layer.style.rules, report);
+    check_fields(l, name, &layer.style.rules, layer.style.categories_by.as_ref(), report);
     Ok(Some(added_name))
 }
 
@@ -233,7 +233,7 @@ fn parse_imported(text: &str, ds: &rustgis_data::Dataset) -> Result<rustgis_data
 /// Checks what a style names against the layer's fields: its label classes' clauses and fields
 /// (a class that can't label is switched off) and the field a Unique Values or Graduated Colors
 /// renderer classes by.
-fn check_fields(l: &mut rustgis_map::Layer, name: &str, rules: &[qgis::RuleFilter], report: &mut Report) {
+fn check_fields(l: &mut rustgis_map::Layer, name: &str, rules: &[qgis::RuleFilter], by: Option<&qgis::CategoriesBy>, report: &mut Report) {
     for c in std::iter::once(&mut l.labels.default).chain(l.labels.classes.iter_mut()) {
         if let Some(w) = c.where_.clone()
             && let Err(e) = parse_imported(&w, &l.dataset)
@@ -263,6 +263,26 @@ fn check_fields(l: &mut rustgis_map::Layer, name: &str, rules: &[qgis::RuleFilte
     if l.renderer.expression().is_some() && !rules.is_empty() {
         let kept = fit_rules(l, name, rules, report);
         note_overlapping_rules(l, name, &kept, report);
+    } else if let Some(by) = by
+        && let Some(e) = l.renderer.expression().map(str::to_string)
+        && let Err(why) = parse_imported(&e, &l.dataset)
+    {
+        // The style's categorized renderer by an expression that doesn't read here: every
+        // feature drawn with its first drawn category's symbol, as before such renderers were
+        // classed (none: as the rest).
+        let mut drawn = "as the rest";
+        if let Some((symbol, strokes, fills)) = &by.first {
+            l.renderer = rustgis_map::Renderer::Single(*symbol);
+            l.line_strokes.clone_from(strokes);
+            if l.geometry_type() == rustgis_data::GeometryType::Polygon {
+                l.fill_layers.clone_from(fills);
+            }
+            drawn = "with its first category's symbol (of those switched on)";
+        }
+        report.approximated(
+            name,
+            format!("its classes by the expression `{}`, which doesn't fit the layer ({why}): every feature drawn {drawn}", by.qgis),
+        );
     }
     let field = match &l.renderer {
         rustgis_map::Renderer::Unique { expression: Some(_), .. } => None,
@@ -540,7 +560,7 @@ fn import_style(s: &mut Session, p: &Value) -> CmdResult {
             report.skipped(&name, "a raster's colouring, which a feature layer hasn't (only its opacity and scale range are taken)");
         }
         style.apply(l);
-        check_fields(l, &name, &style.rules, &mut report);
+        check_fields(l, &name, &style.rules, style.categories_by.as_ref(), &mut report);
     }
     Ok(json!({"notes": report.notes.iter().map(note_json).collect::<Vec<_>>()}))
 }

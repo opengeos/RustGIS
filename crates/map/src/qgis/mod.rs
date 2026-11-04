@@ -126,6 +126,18 @@ pub struct Style {
     /// Not a setting: what the importer checks the layer's features against (the features
     /// several rules pick).
     pub rules: Vec<RuleFilter>,
+    /// A categorized renderer classed by expression: the expression as QGIS wrote it, and what
+    /// the layer is drawn with where it doesn't read on the layer's fields. Not a setting.
+    pub categories_by: Option<CategoriesBy>,
+}
+
+/// A categorized renderer by an expression, for where the expression doesn't read on the layer:
+/// every feature is drawn with its first drawn category's symbol, strokes and fills (`first`;
+/// none: as the rest), noted with the expression as QGIS wrote it (`qgis`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct CategoriesBy {
+    pub qgis: String,
+    pub first: Option<(crate::symbology::Symbol, Vec<LineStroke>, Vec<crate::fills::FillLayer>)>,
 }
 
 /// One rule of a rule-based renderer classed by expression: its class (`key`), the condition it

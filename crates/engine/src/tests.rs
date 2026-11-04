@@ -1178,6 +1178,75 @@ fn qgis_measures_in_project_units_are_left_out() {
     assert!(!r["notes"].to_string().contains("project's units"), "{r}");
 }
 
+/// A QGIS categorized renderer by an expression classes by it where the expression reads on the
+/// layer; where it doesn't, every feature draws with the first category's symbol, noted, as before.
+#[test]
+fn qgis_categories_by_an_expression_class_by_it_where_it_reads() {
+    let mut s = world();
+    let qml = |attr: &str, cats: &str| {
+        format!(
+            r#"<qgis version="3.40.0"><renderer-v2 type="categorizedSymbol" attr="{attr}"><categories>{cats}</categories><symbols>
+            <symbol type="marker" name="0"><layer class="SimpleMarker" enabled="1"><prop k="color" v="255,0,0,255"/></layer></symbol>
+            <symbol type="marker" name="1"><layer class="SimpleMarker" enabled="1"><prop k="color" v="0,0,255,255"/></layer></symbol>
+            </symbols></renderer-v2></qgis>"#
+        )
+    };
+    let notes =
+        |r: &serde_json::Value| r["notes"].as_array().unwrap().iter().map(|n| n["text"].as_str().unwrap().to_string()).collect::<Vec<_>>();
+    let cats = r#"<category value="Big" symbol="0" label="Over 5 M"/><category value="" symbol="1" label="Others"/>"#;
+    let big = "CASE WHEN &quot;pop_max&quot; &gt; 5000000 THEN 'Big' END";
+    let r = s.run("style.importQgis", &json!({"layer": "Cities", "text": qml(big, cats)})).unwrap();
+    let said = notes(&r);
+    assert!(!said.iter().any(|n| n.contains("expression")), "{said:?}");
+    let l = s.map().layer_by_name("Cities").unwrap();
+    assert_eq!(l.renderer.expression(), Some("CASE WHEN \"pop_max\" > 5000000 THEN 'Big' END"));
+    let c = l.renderer.classer(&l.dataset, None);
+    let pop = l.dataset.field_index("pop_max").unwrap();
+    for row in 0..l.dataset.features.len() {
+        let over = l.dataset.value(row, pop).as_f64().is_some_and(|v| v > 5_000_000.0);
+        assert_eq!(l.renderer.unique_class(&l.dataset, row, &c).is_some(), over, "row {row}");
+    }
+    // Naming a field the layer hasn't: the first category's symbol for every feature, noted
+    // with the expression as QGIS wrote it.
+    let r = s.run("style.importQgis", &json!({"layer": "Cities", "text": qml("upper(&quot;nosuch&quot;)", cats)})).unwrap();
+    let said = notes(&r);
+    assert!(
+        said.iter()
+            .any(|n| n.contains("upper(\"nosuch\")") && n.contains("doesn't fit the layer") && n.contains("first category's symbol")),
+        "{said:?}"
+    );
+    let fill = |s: &Session| match &s.map().layer_by_name("Cities").unwrap().renderer {
+        rustgis_map::Renderer::Single(sym) => sym.fill.0,
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(fill(&s), [255, 0, 0, 255]);
+    // The first category is the first listed, "all other values" too.
+    let rest_first = r#"<category value="" symbol="1"/><category value="Big" symbol="0"/>"#;
+    s.run("style.importQgis", &json!({"layer": "Cities", "text": qml("upper(&quot;nosuch&quot;)", rest_first)})).unwrap();
+    assert_eq!(fill(&s), [0, 0, 255, 255]);
+    // Undone, the style before.
+    s.run("edit.undo", &Value::Null).unwrap();
+    assert_eq!(fill(&s), [255, 0, 0, 255]);
+    // A switched-off first category is passed over; with no category to draw, said so.
+    let off_first = r#"<category value="X" symbol="1" render="false"/><category value="Big" symbol="0"/>"#;
+    s.run("style.importQgis", &json!({"layer": "Cities", "text": qml("upper(&quot;nosuch&quot;)", off_first)})).unwrap();
+    assert_eq!(fill(&s), [255, 0, 0, 255]);
+    let none = r#"<category value="Big" symbol="9"/>"#;
+    let r = s.run("style.importQgis", &json!({"layer": "Cities", "text": qml("upper(&quot;nosuch&quot;)", none)})).unwrap();
+    assert!(notes(&r).iter().any(|n| n.contains("every feature drawn as the rest")), "{:?}", notes(&r));
+    s.run("edit.undo", &Value::Null).unwrap();
+
+    // The layer's own classes by an expression are left alone by a style that sets no renderer,
+    // even one an import couldn't take (it measures: QGIS's measures are in the project's units).
+    s.run("layer.symbology", &json!({"layer": "Countries", "type": "unique", "expression": "CASE WHEN $area >= 0 THEN 'Big' END"}))
+        .unwrap();
+    assert!(s.map().layer_by_name("Countries").unwrap().renderer.expression().is_some_and(|e| e.contains("$area")));
+    let before = s.map().layer_by_name("Countries").unwrap().renderer.clone();
+    let labels_only = r#"<qgis version="3.40.0"><renderer-v2 type="heatmapRenderer"/></qgis>"#;
+    s.run("style.importQgis", &json!({"layer": "Countries", "text": labels_only})).unwrap();
+    assert_eq!(s.map().layer_by_name("Countries").unwrap().renderer, before);
+}
+
 #[test]
 fn qgis_rules_class_features_and_say_which_several_rules_pick() {
     let mut s = world();

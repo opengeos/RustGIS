@@ -1463,6 +1463,72 @@ fn a_rule_based_renderer_classes_each_feature_by_the_first_rule_it_meets() {
     assert_eq!(at(None), named(&[Some("a"), Some("big"), Some("fn"), Some("inner"), None]));
 }
 
+/// A categorized renderer by an expression is Unique Values by that expression (as RustGIS reads
+/// it), each category a class; graduated ranges by an expression are still left out, noted.
+#[test]
+fn a_categorized_renderer_by_an_expression_classes_by_it() {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/qgis/generated/qml");
+    let mut report = Report::default();
+    let qml = std::fs::read_to_string(dir.join("renderer-categorizedSymbol-expression.qml")).unwrap();
+    let s = read_style(&qml, "points", &mut report).unwrap();
+    let Some(Renderer::Unique { field, classes, expression: Some(e), .. }) = &s.renderer else { panic!("{:?}", s.renderer) };
+    assert!(field.is_empty(), "by expression, not a field");
+    assert_eq!(e, "upper(\"kind\")");
+    assert_eq!(classes.iter().map(|c| c.0.as_str()).collect::<Vec<_>>(), ["A"]);
+    assert!(!report.notes.iter().any(|n| n.text.contains("expression")), "{:?}", report.notes);
+    let mut l = rule_points(&[("a", 1, "x"), ("b", 2, "y"), ("A", 3, "z")]);
+    s.apply(&mut l);
+    let named = |v: &[Option<&str>]| v.iter().map(|k| k.map(str::to_string)).collect::<Vec<_>>();
+    assert_eq!(rule_classes(&l, None), named(&[Some("A"), None, Some("A")]));
+
+    // The map's scale reads as RustGIS's; a field alone (quoted or not) is still a field.
+    let by = |attr: &str| {
+        let qml = format!(
+            r#"<qgis version="3.40.0"><renderer-v2 type="categorizedSymbol" attr="{attr}"><categories><category value="1" symbol="0" label="One"/></categories>
+            <symbols><symbol type="marker" name="0"><layer class="SimpleMarker" enabled="1"><prop k="color" v="255,0,0,255"/></layer></symbol></symbols></renderer-v2></qgis>"#
+        );
+        let mut report = Report::default();
+        (read_style(&qml, "points", &mut report).unwrap().renderer, report)
+    };
+    let (r, _) = by("if(@map_scale &lt; 10000, 1, 2)");
+    assert_eq!(r.as_ref().and_then(|r| r.expression()), Some(format!("if((@map_scale / {QGIS_SCALE}) < 10000, 1, 2)").as_str()));
+    for attr in ["kind", "&quot;kind&quot;"] {
+        let (r, _) = by(attr);
+        assert!(matches!(&r, Some(Renderer::Unique { field, expression: None, .. }) if field == "kind"), "{r:?}");
+    }
+    // Too long to read: drawn with the first category's symbol, noted.
+    let (r, report) = by(&format!("{}1", "1 + ".repeat(5000)));
+    assert!(matches!(r, Some(Renderer::Single(_))), "{r:?}");
+    assert!(report.notes.iter().any(|n| n.text.contains("too long to read")), "{:?}", report.notes);
+
+    // Boolean categories (as QGIS writes them) match the values as RustGIS prints them.
+    let qml = r#"<qgis version="3.40.0"><renderer-v2 type="categorizedSymbol" attr="&quot;value&quot; &gt; 50"><categories>
+        <category value="true" type="bool" symbol="0"/><category value="false" type="bool" symbol="0"/><category value="true" type="string" symbol="0"/></categories>
+        <symbols><symbol type="marker" name="0"><layer class="SimpleMarker" enabled="1"/></symbol></symbols></renderer-v2></qgis>"#;
+    let s = read_style(qml, "points", &mut Report::default()).unwrap();
+    let Some(Renderer::Unique { classes, .. }) = &s.renderer else { panic!("{:?}", s.renderer) };
+    assert_eq!(classes.iter().map(|c| c.0.as_str()).collect::<Vec<_>>(), ["True", "False", "true"]);
+    let mut l = rule_points(&[("a", 10, "x"), ("a", 60, "y")]);
+    s.apply(&mut l);
+    assert_eq!(rule_classes(&l, None), named(&[Some("False"), Some("True")]));
+
+    // By a field, a boolean category matches the field's text as it is.
+    let qml = r#"<qgis version="3.40.0"><renderer-v2 type="categorizedSymbol" attr="kind"><categories>
+        <category value="true" type="bool" symbol="0"/></categories>
+        <symbols><symbol type="marker" name="0"><layer class="SimpleMarker" enabled="1"/></symbol></symbols></renderer-v2></qgis>"#;
+    let s = read_style(qml, "points", &mut Report::default()).unwrap();
+    assert!(
+        matches!(&s.renderer, Some(Renderer::Unique { classes, .. }) if classes.first().is_some_and(|c| c.0 == "true")),
+        "{:?}",
+        s.renderer
+    );
+
+    let mut report = Report::default();
+    let qml = std::fs::read_to_string(dir.join("renderer-graduatedSymbol-size-expression.qml")).unwrap();
+    read_style(&qml, "points", &mut report).unwrap();
+    assert!(report.notes.iter().any(|n| n.text.contains("ranges by the expression `value * 2` (only by a field)")), "{:?}", report.notes);
+}
+
 /// A renderer whose only rule is an else rule draws every feature with its symbol: one symbol,
 /// nothing approximated.
 #[test]
