@@ -12,7 +12,7 @@ use rustgis_geom::Coord;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use super::imagery::{add, bands_param, name, raster};
+use super::imagery::{bands_param, class_layer, name, raster};
 use super::{f, ps};
 use crate::{CmdResult, CommandSpec as C, Session};
 
@@ -56,7 +56,7 @@ pub fn commands() -> Vec<C> {
         .when(need_raster)
         .params(r#"{"layer": raster, "training": polygon layer, "classField": field naming each polygon's class, "bands"?: [1-based], "hidden"?: [units per hidden layer] (default [32, 16]), "epochs"?: 1..500 (default 60), "model"?: name}"#),
         C::new("dl.classify", "Deep Learning Tools", "Analyze › Image Classification", classify).when(need_raster).params(
-            r#"{"layer": raster, "model"?: a trained model's name, "training"?: polygon layer, "classField"?: field, "bands"?: [1-based], "hidden"?: [units], "epochs"?: 1..500 (without a model: train one first, as dl.train), "name"?: output}"#,
+            r#"{"layer": raster, "model"?: a trained model's name, "training"?: polygon layer, "classField"?: field, "bands"?: [1-based], "hidden"?: [units], "epochs"?: 1..500 (without a model: train one first, as dl.train), "name"?: output, "ran"?: (internal: classes the app has worked out)}"#,
         ),
         C::new("dl.package", "Deep Learning Package", "Publish › Package", |s, p| {
             let path = ps(p, "path").ok_or("path is required")?;
@@ -149,6 +149,34 @@ fn model_index(s: &Session, p: &Value) -> Result<usize, String> {
 
 /// Trains a model from the pixels under training polygons.
 fn train(s: &Session, p: &Value) -> Result<DlModel, String> {
+    training(s, p)?.fit()
+}
+
+/// A model to train: the pixels under the training polygons and its classes, read of the session,
+/// and how to train it ([`Training::fit`], which reads nothing more and runs on any thread).
+struct Training {
+    bands: Vec<usize>,
+    classes: Vec<String>,
+    samples: Vec<(Vec<f32>, usize)>,
+    hidden: Vec<usize>,
+    epochs: usize,
+    name: String,
+    /// No name was given: the name's base, for a name of its own when the model is kept (a model
+    /// kept meanwhile may have taken this one).
+    auto: Option<String>,
+}
+
+impl Training {
+    fn fit(self) -> Result<DlModel, String> {
+        let Training { bands, classes, samples, hidden, epochs, name, .. } = self;
+        let t = neural::train(&bands, classes, &samples, &hidden, epochs)?;
+        Ok(DlModel { name, model: t.model, accuracy: t.accuracy, epochs: t.epochs })
+    }
+}
+
+/// What training reads of the session: the samples under the training polygons, the classes and
+/// the model's name.
+fn training(s: &Session, p: &Value) -> Result<Training, String> {
     let r = raster(s, p)?;
     r.require_coordinates()?;
     let bands = bands_param(p, &r)?;
@@ -205,50 +233,78 @@ fn train(s: &Session, p: &Value) -> Result<DlModel, String> {
         None => vec![32, 16],
     };
     let epochs = f(p, "epochs").unwrap_or(60.0).clamp(1.0, neural::MAX_EPOCHS as f64) as usize;
-    let t = neural::train(&bands, classes, &samples, &hidden, epochs)?;
     // Without a name given, a new model never replaces one: it gets a name of its own.
-    let name = match ps(p, "model") {
-        Some(_) => name(&json!({"name": p.get("model")}), format!("{}_model", r.name)),
+    let (name, auto) = match ps(p, "model") {
+        Some(_) => (name(&json!({"name": p.get("model")}), format!("{}_model", r.name)), None),
         None => {
             let base = format!("{}_model", r.name);
-            let taken = |n: &str| s.project.dl_models.iter().any(|x| x.name.eq_ignore_ascii_case(n));
-            let mut n = base.clone();
-            let mut k = 1;
-            while taken(&n) {
-                k += 1;
-                n = format!("{base} {k}");
-            }
-            n
+            (free_name(s, &base), Some(base))
         }
     };
-    Ok(DlModel { name, model: t.model, accuracy: t.accuracy, epochs: t.epochs })
+    Ok(Training { bands, classes, samples, hidden, epochs, name, auto })
+}
+
+/// `base`, or `base 2`, `base 3`… : the first no model of the project has (whatever its case).
+fn free_name(s: &Session, base: &str) -> String {
+    let taken = |n: &str| s.project.dl_models.iter().any(|x| x.name.eq_ignore_ascii_case(n));
+    let mut n = base.to_string();
+    let mut k = 1;
+    while taken(&n) {
+        k += 1;
+        n = format!("{base} {k}");
+    }
+    n
 }
 
 fn classify(s: &mut Session, p: &Value) -> CmdResult {
+    super::workflows::made_or_ran(s, p, super::workflows::DEEP_LEARNING, classify_work)
+}
+
+/// What a deep learning classification reads of the session (the raster, and the model or what
+/// trains one), and the work that trains the model if need be and classifies the pixels. A model
+/// trained is kept in the project once the classes are added.
+pub(crate) fn classify_work(s: &Session, p: &Value) -> Result<super::workflows::Work, String> {
     let r = raster(s, p)?;
     r.require_coordinates()?;
-    let (m, trained) = if p.get("training").is_some() {
-        (train(s, p)?, true)
+    let model = if p.get("training").is_some() {
+        let t = training(s, p)?;
+        let auto = t.auto.clone();
+        Err((t, auto))
     } else {
         let i = model_index(s, p)?;
-        (s.project.dl_models.get(i).cloned().ok_or("no model")?, false)
+        Ok(s.project.dl_models.get(i).cloned().ok_or("no model")?)
     };
-    let (class, prob) = neural::classify(&r, &m.model, rasterops::NODATA)?;
-    let mut counts = vec![0usize; m.model.classes.len()];
-    for v in class.iter().filter(|v| **v >= 1.0) {
-        if let Some(c) = counts.get_mut(*v as usize - 1) {
-            *c += 1;
+    let out = name(p, format!("{}_dl", r.name));
+    Ok(Box::new(move || {
+        let (m, trained) = match model {
+            Ok(m) => (m, None),
+            Err((t, auto)) => (t.fit()?, Some(auto)),
+        };
+        let (class, prob) = neural::classify(&r, &m.model, rasterops::NODATA)?;
+        let mut counts = vec![0usize; m.model.classes.len()];
+        for v in class.iter().filter(|v| **v >= 1.0) {
+            if let Some(c) = counts.get_mut(*v as usize - 1) {
+                *c += 1;
+            }
         }
-    }
-    let out = rasterops::derive(&r, &name(p, format!("{}_dl", r.name)), vec![class, prob])?;
-    let v = add(s, out, true)?;
-    let legend: Vec<Value> =
-        m.model.classes.iter().zip(&counts).enumerate().map(|(i, (c, n))| json!({"value": i + 1, "class": c, "pixels": n})).collect();
-    let mut r = json!({"layer": v["layer"], "model": m.name, "accuracy": m.accuracy, "classes": legend});
-    if trained {
-        r["replaced"] = json!(store(s, m));
-    }
-    Ok(r)
+        let layer = class_layer(rasterops::derive(&r, &out, vec![class, prob])?)?;
+        let legend: Vec<Value> =
+            m.model.classes.iter().zip(&counts).enumerate().map(|(i, (c, n))| json!({"value": i + 1, "class": c, "pixels": n})).collect();
+        let extra = json!({"model": m.name, "accuracy": m.accuracy, "classes": legend});
+        // Kept once its classes are added. One that was given no name is named then, so it never
+        // replaces a model kept while it trained.
+        let then: Option<super::workflows::Then> = trained.map(|auto| {
+            Box::new(move |s: &mut Session, v: &mut Value| {
+                let mut m = m;
+                if let Some(base) = auto {
+                    m.name = free_name(s, &base);
+                    v["model"] = json!(m.name);
+                }
+                v["replaced"] = json!(store(s, m));
+            }) as super::workflows::Then
+        });
+        Ok(super::workflows::made_layer(out, layer, Some(extra), then))
+    }))
 }
 
 /// A deep learning package: the model and a description of its inputs and classes.
