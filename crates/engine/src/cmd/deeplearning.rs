@@ -152,12 +152,15 @@ fn train(s: &Session, p: &Value) -> Result<DlModel, String> {
     training(s, p)?.fit()
 }
 
-/// A model to train: the pixels under the training polygons and its classes, read of the session,
-/// and how to train it ([`Training::fit`], which reads nothing more and runs on any thread).
+/// A model to train: the raster, the training polygons and their classes, read of the session, and
+/// how to train it ([`Training::fit`], which reads nothing more and runs on any thread: the pixels
+/// under the polygons are sampled there, as the network learns).
 struct Training {
+    raster: std::sync::Arc<rustgis_data::raster::Raster>,
     bands: Vec<usize>,
     classes: Vec<String>,
-    samples: Vec<(Vec<f32>, usize)>,
+    /// Each polygon's outline, its class and its share of the class's samples.
+    polygons: Vec<(Vec<Vec<Coord>>, usize, usize)>,
     hidden: Vec<usize>,
     epochs: usize,
     name: String,
@@ -168,14 +171,28 @@ struct Training {
 
 impl Training {
     fn fit(self) -> Result<DlModel, String> {
-        let Training { bands, classes, samples, hidden, epochs, name, .. } = self;
+        let Training { raster, bands, classes, polygons, hidden, epochs, name, .. } = self;
+        let mut samples: Vec<(Vec<f32>, usize)> = Vec::new();
+        let mut per_class = vec![0usize; classes.len()];
+        for (rings, ci, share) in &polygons {
+            let room = MAX_SAMPLES_PER_CLASS.saturating_sub(per_class.get(*ci).copied().unwrap_or(0)).min(*share);
+            let got = neural::polygon_samples(&raster, &bands, rings, room);
+            if let Some(n) = per_class.get_mut(*ci) {
+                *n += got.len();
+            }
+            samples.extend(got.into_iter().map(|x| (x, *ci)));
+        }
+        // Every class needs pixels of its own (its polygons may miss the raster or cover no data).
+        if let Some((c, _)) = classes.iter().zip(&per_class).find(|(_, n)| **n < 5) {
+            return Err(format!("the class '{c}' has fewer than 5 pixels with data under its polygons"));
+        }
         let t = neural::train(&bands, classes, &samples, &hidden, epochs)?;
         Ok(DlModel { name, model: t.model, accuracy: t.accuracy, epochs: t.epochs })
     }
 }
 
-/// What training reads of the session: the samples under the training polygons, the classes and
-/// the model's name.
+/// What training reads of the session: the training polygons and their classes, and the model's
+/// name.
 fn training(s: &Session, p: &Value) -> Result<Training, String> {
     let r = raster(s, p)?;
     r.require_coordinates()?;
@@ -188,8 +205,7 @@ fn training(s: &Session, p: &Value) -> Result<Training, String> {
         .ok_or_else(|| format!("no polygon layer '{tl}'"))?;
     let fi = l.dataset.field_index(ps(p, "classField").ok_or("classField is required")?).ok_or("no such class field")?;
     let mut classes: Vec<String> = Vec::new();
-    let mut samples: Vec<(Vec<f32>, usize)> = Vec::new();
-    let mut per_class: Vec<usize> = Vec::new();
+    let mut parts: Vec<(Vec<Vec<Coord>>, usize, usize)> = Vec::new();
     // Polygons per class, so each polygon of a class gets a fair share of its samples.
     let mut polygons: HashMap<String, usize> = HashMap::new();
     for (row, ft) in l.dataset.features.iter().enumerate() {
@@ -210,23 +226,11 @@ fn training(s: &Session, p: &Value) -> Result<Training, String> {
             Some(i) => i,
             None if classes.len() < neural::MAX_CLASSES => {
                 classes.push(key);
-                per_class.push(0);
                 classes.len() - 1
             }
             None => return Err(format!("training holds at most {} classes", neural::MAX_CLASSES)),
         };
-        for rings in polys {
-            let room = MAX_SAMPLES_PER_CLASS.saturating_sub(per_class.get(ci).copied().unwrap_or(0)).min(share);
-            let got = neural::polygon_samples(&r, &bands, rings, room);
-            if let Some(n) = per_class.get_mut(ci) {
-                *n += got.len();
-            }
-            samples.extend(got.into_iter().map(|x| (x, ci)));
-        }
-    }
-    // Every class needs pixels of its own (its polygons may miss the raster or cover no data).
-    if let Some((c, _)) = classes.iter().zip(&per_class).find(|(_, n)| **n < 5) {
-        return Err(format!("the class '{c}' has fewer than 5 pixels with data under its polygons"));
+        parts.extend(polys.iter().map(|rings| (rings.clone(), ci, share)));
     }
     let hidden: Vec<usize> = match p.get("hidden").and_then(Value::as_array) {
         Some(a) => a.iter().filter_map(Value::as_u64).map(|u| u as usize).take(neural::MAX_LAYERS).collect(),
@@ -241,7 +245,7 @@ fn training(s: &Session, p: &Value) -> Result<Training, String> {
             (free_name(s, &base), Some(base))
         }
     };
-    Ok(Training { bands, classes, samples, hidden, epochs, name, auto })
+    Ok(Training { raster: r, bands, classes, polygons: parts, hidden, epochs, name, auto })
 }
 
 /// `base`, or `base 2`, `base 3`… : the first no model of the project has (whatever its case).
@@ -260,6 +264,12 @@ fn classify(s: &mut Session, p: &Value) -> CmdResult {
     super::workflows::made_or_ran(s, p, super::workflows::DEEP_LEARNING, classify_work)
 }
 
+/// The model a classification uses: one of the project's, or one it trains first.
+enum Model {
+    Saved(DlModel),
+    Train(Training),
+}
+
 /// What a deep learning classification reads of the session (the raster, and the model or what
 /// trains one), and the work that trains the model if need be and classifies the pixels. A model
 /// trained is kept in the project once the classes are added.
@@ -267,18 +277,19 @@ pub(crate) fn classify_work(s: &Session, p: &Value) -> Result<super::workflows::
     let r = raster(s, p)?;
     r.require_coordinates()?;
     let model = if p.get("training").is_some() {
-        let t = training(s, p)?;
-        let auto = t.auto.clone();
-        Err((t, auto))
+        Model::Train(training(s, p)?)
     } else {
         let i = model_index(s, p)?;
-        Ok(s.project.dl_models.get(i).cloned().ok_or("no model")?)
+        Model::Saved(s.project.dl_models.get(i).cloned().ok_or("no model")?)
     };
     let out = name(p, format!("{}_dl", r.name));
     Ok(Box::new(move || {
         let (m, trained) = match model {
-            Ok(m) => (m, None),
-            Err((t, auto)) => (t.fit()?, Some(auto)),
+            Model::Saved(m) => (m, None),
+            Model::Train(t) => {
+                let auto = t.auto.clone();
+                (t.fit()?, Some(auto))
+            }
         };
         let (class, prob) = neural::classify(&r, &m.model, rasterops::NODATA)?;
         let mut counts = vec![0usize; m.model.classes.len()];

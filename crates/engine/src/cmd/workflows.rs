@@ -194,10 +194,10 @@ pub(crate) fn made_or_ran(s: &mut Session, p: &Value, name: &str, work: fn(&Sess
 
 #[cfg(not(target_arch = "wasm32"))]
 /// A command that makes a raster (`analysis.viewshed`, `analysis.interpolate`, `raster.classify`,
-/// `dl.classify`), started to make it
-/// on another thread ([`RasterRun::run`]) while the session goes on: its inputs are read now
-/// (cheaply: the pixels are shared), and [`raster_land`] hands the raster to the command, which
-/// adds it with undo and history when run again with `ran` (#1291 step 3).
+/// `dl.classify`), started to make it on another thread ([`RasterRun::run`]) while the session
+/// goes on: its inputs are read now (cheaply: the pixels are shared), and [`raster_land`] hands
+/// the raster to the command, which adds it with undo and history when run again with `ran`
+/// (#1291 step 3).
 pub struct RasterRun {
     pub id: u64,
     /// What the command is called, for a cancelled run's error.

@@ -25845,6 +25845,21 @@ fn raster_classes_run_on_another_thread() {
             assert_eq!(s.project.dl_models.iter().map(|m| m.name.as_str()).collect::<Vec<_>>(), ["landcover"]);
         }
     }
+    // A cancelled training keeps no model.
+    s.project.dl_models.clear();
+    let run = raster_start(&mut s, "dl.classify", &json!({"layer": "scene", "training": "training", "classField": "class"})).unwrap();
+    let control = Control::new();
+    control.cancel();
+    assert!(run.run(&control).err().is_some_and(|e| e.contains("was cancelled")));
+    assert!(s.project.dl_models.is_empty());
+    // Sampling the training polygons is part of the work: a class whose polygons miss the raster
+    // is said when the run ends, not when it starts.
+    let lost = json!({"type": "FeatureCollection", "features": [
+        {"type": "Feature", "properties": {"class": "water"}, "geometry": {"type": "Polygon", "coordinates": [[[10.002, 45.002], [10.015, 45.002], [10.015, 45.035], [10.002, 45.035], [10.002, 45.002]]]}},
+        {"type": "Feature", "properties": {"class": "lost"}, "geometry": {"type": "Polygon", "coordinates": [[[-60.0, -10.0], [-59.0, -10.0], [-59.0, -9.0], [-60.0, -9.0], [-60.0, -10.0]]]}}]});
+    s.run("layer.addDataText", &json!({"fileName": "lost.geojson", "text": lost.to_string()})).unwrap();
+    let run = raster_start(&mut s, "dl.classify", &json!({"layer": "scene", "training": "lost", "classField": "class"})).unwrap();
+    assert!(run.run(&Control::new()).err().is_some_and(|e| e.contains("'lost'")));
     // A model given no name doesn't replace one kept while it trained: it's named when it is kept.
     s.project.dl_models.clear();
     let p = json!({"layer": "scene", "training": "training", "classField": "class", "bands": [1, 2], "epochs": 5});
