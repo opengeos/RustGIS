@@ -2706,11 +2706,15 @@ pub fn finish_graphic(app: &mut RustGisApp, shape: &str, pts: Vec<Coord>) {
     }
 }
 
-/// The credit in the map's corner: Natural Earth's for the built-in world outline, drawn only where
-/// a map's land and water differ (so not on `Blank` or another body), then the sources drawn.
+/// The credit in the map's corner: Natural Earth's where the built-in world outline is drawn, then
+/// the sources drawn.
 fn attribution(map: &rustgis_engine::map::Map, sources: &[String]) -> String {
-    let (water, land, ..) = map.palette();
-    (land != water).then_some("Natural Earth").into_iter().chain(sources.iter().map(String::as_str)).collect::<Vec<_>>().join(" | ")
+    map.draws_world_outline()
+        .then_some("Natural Earth")
+        .into_iter()
+        .chain(sources.iter().map(String::as_str))
+        .collect::<Vec<_>>()
+        .join(" | ")
 }
 
 /// Paints map decorations and interactive readouts, including measurements on the map's body.
