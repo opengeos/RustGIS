@@ -156,15 +156,13 @@ fn categorized(r: Node, layer: &str, style: &mut Style, report: &mut Report, sym
             let Some(e) = expr::to_sql(attr) else {
                 report.skipped(layer, format!("classes by the expression `{}` (empty or too long to read)", attr.trim()));
                 // Drawn as one: the first switched-on category's symbol.
-                if let Some(c) =
-                    cats.iter().filter(|c| c.attribute("render") != Some("false")).find_map(|c| sym(c.attribute("symbol"), report))
-                {
-                    single(style, &c);
-                }
+                // (None to draw: nothing drawn, as where a readable expression has none.)
+                let c = cats.iter().filter(|c| c.attribute("render") != Some("false")).find_map(|c| sym(c.attribute("symbol"), report));
+                single(style, &c.unwrap_or_else(switched_off));
                 return;
             };
             // Its first drawn category is taken below, for where the expression can't be read.
-            style.categories_by = Some(super::CategoriesBy { qgis: attr.trim().to_string(), first: None });
+            style.categories_by = Some(super::CategoriesBy { qgis: attr.trim().to_string(), first: None, bools: false });
             (String::new(), Some(e))
         }
     };
@@ -198,10 +196,16 @@ fn categorized(r: Node, layer: &str, style: &mut Style, report: &mut Report, sym
         // expression only (a field's text "true" matches as it is).
         if expression.is_some() && cat.attribute("type") == Some("bool") {
             for v in &mut values {
-                if v.eq_ignore_ascii_case("true") {
-                    *v = "True".into();
+                let printed = if v.eq_ignore_ascii_case("true") {
+                    "True"
                 } else if v.eq_ignore_ascii_case("false") {
-                    *v = "False".into();
+                    "False"
+                } else {
+                    continue;
+                };
+                *v = printed.into();
+                if let Some(by) = style.categories_by.as_mut() {
+                    by.bools = true;
                 }
             }
         }

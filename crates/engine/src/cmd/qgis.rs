@@ -268,11 +268,30 @@ fn check_fields(l: &mut rustgis_map::Layer, name: &str, rules: &[qgis::RuleFilte
         && let Some(fi) = l.dataset.field_index(&by.qgis)
     {
         // QGIS classes by a field when its attribute names one, as it writes a name with spaces
-        // or other characters (unquoted): classed by that field.
-        let field = l.dataset.fields.get(fi).map(|f| f.name.clone()).unwrap_or_else(|| by.qgis.clone());
-        if let rustgis_map::Renderer::Unique { field: f, expression, .. } = &mut l.renderer {
-            *f = field;
+        // or other characters (unquoted): classed by that field. Boolean categories read as
+        // RustGIS prints a boolean go back to QGIS's text for a field that isn't boolean.
+        if let Some(field) = l.dataset.fields.get(fi)
+            && let rustgis_map::Renderer::Unique { field: f, expression, classes, class_labels, class_strokes, class_fills, .. } =
+                &mut l.renderer
+        {
+            *f = field.name.clone();
             *expression = None;
+            if by.bools && field.ty != rustgis_data::FieldType::Boolean {
+                for (printed, qgis) in [("True", "true"), ("False", "false")] {
+                    for c in classes.iter_mut().filter(|c| c.0 == printed) {
+                        c.0 = qgis.into();
+                    }
+                    if let Some(v) = class_labels.remove(printed) {
+                        class_labels.insert(qgis.into(), v);
+                    }
+                    if let Some(v) = class_strokes.remove(printed) {
+                        class_strokes.insert(qgis.into(), v);
+                    }
+                    if let Some(v) = class_fills.remove(printed) {
+                        class_fills.insert(qgis.into(), v);
+                    }
+                }
+            }
         }
     } else if let Some(by) = by
         && let Some(e) = l.renderer.expression().map(str::to_string)
@@ -285,6 +304,7 @@ fn check_fields(l: &mut rustgis_map::Layer, name: &str, rules: &[qgis::RuleFilte
         if let Some((symbol, strokes, fills)) = &by.first {
             l.renderer = rustgis_map::Renderer::Single(*symbol);
             l.line_strokes.clone_from(strokes);
+            // (Only a polygon layer's fills draw, as `Style::apply` sets them.)
             if l.geometry_type() == rustgis_data::GeometryType::Polygon {
                 l.fill_layers.clone_from(fills);
             }

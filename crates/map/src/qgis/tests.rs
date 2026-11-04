@@ -1509,6 +1509,15 @@ fn a_categorized_renderer_by_an_expression_classes_by_it() {
     );
     let s = read_style(&qml, "points", &mut Report::default()).unwrap();
     assert!(matches!(s.renderer, Some(Renderer::Single(sym)) if sym.fill == Rgba::rgb(0, 0, 255)), "{:?}", s.renderer);
+    // ... nothing, with no category to draw (rather than the layer's own look).
+    let qml = format!(
+        r#"<qgis version="3.10"><renderer-v2 type="categorizedSymbol" attr="{}1"><categories><category value="1" symbol="0" render="false"/></categories>
+        <symbols><symbol type="marker" name="0"><layer class="SimpleMarker" enabled="1"/></symbol></symbols></renderer-v2></qgis>"#,
+        "1 + ".repeat(5000)
+    );
+    let s = read_style(&qml, "points", &mut Report::default()).unwrap();
+    assert!(matches!(s.renderer, Some(Renderer::Single(sym)) if sym.fill.0[3] == 0 && sym.stroke.0[3] == 0), "{:?}", s.renderer);
+    assert_eq!((s.line_strokes.as_deref(), s.fill_layers.as_deref()), (Some(&[][..]), Some(&[][..])));
     // ... a line category of stacked strokes with them.
     let long = format!("{}1", "1 + ".repeat(5000));
     let qml = format!(

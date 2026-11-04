@@ -133,11 +133,14 @@ pub struct Style {
 
 /// A categorized renderer by an expression, for where the expression doesn't read on the layer:
 /// every feature is drawn with its first drawn category's symbol, strokes and fills (`first`;
-/// none: as the rest), noted with the expression as QGIS wrote it (`qgis`).
+/// none: as the rest), noted with the expression as QGIS wrote it (`qgis`). `bools`: some boolean
+/// categories' values were written as RustGIS prints a boolean (`True`, `False`), to be put back
+/// should the attribute turn out to name a field that isn't boolean.
 #[derive(Clone, Debug, PartialEq)]
 pub struct CategoriesBy {
     pub qgis: String,
     pub first: Option<(crate::symbology::Symbol, Vec<LineStroke>, Vec<crate::fills::FillLayer>)>,
+    pub bools: bool,
 }
 
 /// One rule of a rule-based renderer classed by expression: its class (`key`), the condition it

@@ -1256,12 +1256,47 @@ fn qgis_categories_by_an_expression_class_by_it_where_it_reads() {
         "{:?}",
         l.renderer
     );
-    let c = l.renderer.classer(&l.dataset, None);
-    let big = (0..l.dataset.features.len()).filter(|r| l.renderer.unique_class(&l.dataset, *r, &c).is_some()).count();
-    let over = (0..l.dataset.features.len())
-        .filter(|r| l.dataset.field_index("pop_max").and_then(|f| l.dataset.value(*r, f).as_f64()).is_some_and(|v| v > 5_000_000.0))
-        .count();
-    assert!(big > 0 && big == over, "{big} {over}");
+    // Each feature over five million is "Big", every other the rest.
+    let picks = |l: &rustgis_map::Layer| {
+        let c = l.renderer.classer(&l.dataset, None);
+        let Some(pop) = l.dataset.field_index("pop_max") else { panic!("pop_max") };
+        let Some(classes) = (match &l.renderer {
+            rustgis_map::Renderer::Unique { classes, .. } => Some(classes.clone()),
+            _ => None,
+        }) else {
+            panic!("{:?}", l.renderer)
+        };
+        (0..l.dataset.features.len())
+            .map(|row| {
+                let over = l.dataset.value(row, pop).as_f64().is_some_and(|v| v > 5_000_000.0);
+                (over, l.renderer.unique_class(&l.dataset, row, &c).and_then(|i| classes.get(i)).map(|k| k.0.clone()))
+            })
+            .collect::<Vec<_>>()
+    };
+    let rows = picks(l);
+    assert!(rows.iter().any(|r| r.0));
+    for (row, (over, class)) in rows.iter().enumerate() {
+        assert_eq!(class.as_deref(), over.then_some("Big"), "row {row}");
+    }
+    // Boolean categories (as QGIS writes them) by such a field: matching its text "true" and
+    // "false" as they are, a boolean field's values as RustGIS prints them.
+    let bools = r#"<category value="true" type="bool" symbol="0"/><category value="false" type="bool" symbol="1"/>"#;
+    for (ty, name) in [("text", "Is Big"), ("boolean", "Big Flag")] {
+        let tmp = name.replace(' ', "_");
+        s.run("edit.addField", &json!({"layer": "Cities", "name": tmp, "type": ty})).unwrap();
+        let e = if ty == "text" { "CASE WHEN pop_max > 5000000 THEN 'true' ELSE 'false' END" } else { "pop_max > 5000000" };
+        s.run("edit.calculateField", &json!({"layer": "Cities", "field": tmp, "expression": e})).unwrap();
+        if let Some(f) = s.map_mut().layer_mut(id).and_then(|l| l.dataset.fields.iter_mut().find(|f| f.name == tmp)) {
+            f.name = name.into();
+        }
+        let r = s.run("style.importQgis", &json!({"layer": "Cities", "text": qml(name, bools)})).unwrap();
+        assert!(notes(&r).is_empty(), "{:?}", notes(&r));
+        let rows = picks(s.map().layer_by_name("Cities").unwrap());
+        let (yes, no) = if ty == "text" { ("true", "false") } else { ("True", "False") };
+        for (row, (over, class)) in rows.iter().enumerate() {
+            assert_eq!(class.as_deref(), Some(if *over { yes } else { no }), "{ty} row {row}");
+        }
+    }
 
     // The layer's own classes by an expression are left alone by a style that sets no renderer,
     // even one an import couldn't take (it measures: QGIS's measures are in the project's units).
