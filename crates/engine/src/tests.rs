@@ -3209,9 +3209,9 @@ fn labels_take_wrapping_and_a_repeat_along_lines() {
 }
 
 /// A point label class tries the other places round its point when told to (#1011): alone it keeps
-/// the position, junk is refused (in it or in the position) and so is turning it on for lines and
-/// polygons, it undoes, the project keeps it, and turning it on or off while the labels are locked
-/// locks them again (the places they took no longer stand).
+/// the position, junk is refused (in it or in the position) and so is turning it on for lines at a
+/// position off them and for polygons, it undoes, the project keeps it, and turning it on or off
+/// while the labels are locked locks them again (the places they took no longer stand).
 #[test]
 fn labels_take_other_positions_round_points() {
     use crate::render::View;
@@ -3237,7 +3237,8 @@ fn labels_take_other_positions_round_points() {
     assert!(!class(&s).0);
     s.run("labels.placement", &json!({"layer": "Cities", "position": null, "otherPositions": false})).unwrap();
     assert_eq!(class(&s), (false, placement), "null is no position");
-    // Only a point's label goes round it: on is refused for lines and polygons, off taken anywhere.
+    // Only a point's label goes round it: on is refused for a line off its line (along it, see
+    // labels_take_other_positions_along_lines) and for polygons, off taken anywhere.
     for layer in ["Rivers", "Countries"] {
         assert!(s.run("labels.placement", &json!({"layer": layer, "otherPositions": true})).is_err(), "{layer}");
         s.run("labels.placement", &json!({"layer": layer, "otherPositions": false})).unwrap();
@@ -3257,6 +3258,71 @@ fn labels_take_other_positions_round_points() {
     assert!(s.map().label_lock.is_some());
     s.run("labels.placement", &json!({"layer": "Cities", "otherPositions": true})).unwrap();
     assert!(s.map().label_lock.is_none(), "turned on: locked again");
+}
+
+/// A line label class tries other places along its line when told to (#1187): only placed parallel
+/// or curved and without a repeat, judged on what the call leaves, in the class it names. A refusal
+/// changes nothing, a later position or repeat keeps the flag, it undoes, the project keeps it, and
+/// turning it on or off locks the labels again.
+#[test]
+fn labels_take_other_positions_along_lines() {
+    use rustgis_map::LabelPlacement::{Above, Auto, Curved, Parallel};
+    let mut s = world();
+    let id = s.map().layer_by_name("Rivers").unwrap().id;
+    let class = |s: &Session| {
+        let c = &s.map().layer(id).unwrap().labels.default;
+        (c.other_positions, c.placement, c.repeat)
+    };
+    assert_eq!(class(&s), (false, Auto, None));
+    // Not at a position off the line, nor with a repeat: each refusal leaves all of the call undone.
+    assert!(s.run("labels.placement", &json!({"layer": "Rivers", "otherPositions": true})).is_err());
+    assert!(s.run("labels.placement", &json!({"layer": "Rivers", "position": "above", "otherPositions": true})).is_err());
+    assert!(s.run("labels.placement", &json!({"layer": "Rivers", "position": "curved", "repeat": 144, "otherPositions": true})).is_err());
+    assert_eq!(class(&s), (false, Auto, None), "refused: nothing changes");
+    // Along the line it's taken, the position given with it counting, and it undoes in one step.
+    s.run("labels.placement", &json!({"layer": "Rivers", "position": "curved", "otherPositions": true})).unwrap();
+    assert_eq!(class(&s), (true, Curved, None));
+    s.run("edit.undo", &json!({})).unwrap();
+    assert_eq!(class(&s), (false, Auto, None), "undoes");
+    s.run("labels.placement", &json!({"layer": "Rivers", "position": "parallel"})).unwrap();
+    s.run("labels.placement", &json!({"layer": "Rivers", "otherPositions": true})).unwrap();
+    assert_eq!(class(&s), (true, Parallel, None), "alone it keeps the position");
+    // Set on, a later position or repeat keeps it: it does nothing there, and is back on returning.
+    s.run("labels.placement", &json!({"layer": "Rivers", "position": "above"})).unwrap();
+    assert_eq!(class(&s), (true, Above, None));
+    assert!(s.run("labels.placement", &json!({"layer": "Rivers", "otherPositions": true})).is_err(), "still refused there");
+    s.run("labels.placement", &json!({"layer": "Rivers", "position": "curved", "repeat": 144})).unwrap();
+    assert_eq!(class(&s), (true, Curved, Some(144.0)));
+    assert!(s.run("labels.placement", &json!({"layer": "Rivers", "otherPositions": true})).is_err(), "a repeat is in the way");
+    // A repeat taken away in the same call counts too.
+    s.run("labels.placement", &json!({"layer": "Rivers", "repeat": null, "otherPositions": true})).unwrap();
+    assert_eq!(class(&s), (true, Curved, None));
+    for bad in [json!("yes"), json!(1), Value::Null] {
+        assert!(s.run("labels.placement", &json!({"layer": "Rivers", "otherPositions": bad})).is_err(), "{bad}");
+    }
+    // Polygons have no such places, even placed parallel.
+    assert!(s.run("labels.placement", &json!({"layer": "Countries", "position": "parallel", "otherPositions": true})).is_err());
+    s.run("labels.placement", &json!({"layer": "Countries", "otherPositions": false})).unwrap();
+    // Judged in the class named, not in Default; a class that isn't there is refused.
+    s.run("labels.placement", &json!({"layer": "Rivers", "position": "above", "otherPositions": false})).unwrap();
+    s.run("labels.class.add", &json!({"layer": "Rivers", "name": "Big"})).unwrap();
+    s.run("labels.placement", &json!({"layer": "Rivers", "class": "Big", "position": "curved", "otherPositions": true})).unwrap();
+    let labels = &s.map().layer(id).unwrap().labels;
+    assert!(labels.classes[0].other_positions && !labels.default.other_positions);
+    assert!(s.run("labels.placement", &json!({"layer": "Rivers", "otherPositions": true})).is_err(), "Default is off the line");
+    assert!(s.run("labels.placement", &json!({"layer": "Rivers", "class": "Nope", "otherPositions": true})).is_err());
+    assert!(s.run("labels.placement", &json!({"layer": "Rivers", "class": 7, "otherPositions": true})).is_err());
+    // The project keeps it.
+    let text = serde_json::to_string(&s.project).unwrap();
+    assert!(Session::new(serde_json::from_str(&text).unwrap()).map().layer_by_name("Rivers").unwrap().labels.classes[0].other_positions);
+    // Turned on or off, the labels are locked again, with the anchors of their places on the line.
+    let key = (id, 0, 0, 0);
+    for on in [false, true] {
+        s.map_mut().label_lock = Some(vec![(key, 1)]);
+        s.map_mut().label_lock_line_anchors.insert(key, Default::default());
+        s.run("labels.placement", &json!({"layer": "Rivers", "class": "Big", "otherPositions": on})).unwrap();
+        assert!(s.map().label_lock.is_none() && s.map().label_lock_line_anchors.is_empty(), "{on}: locked again");
+    }
 }
 
 /// A label class takes an offset with its placement and a background with its text symbol; junk
