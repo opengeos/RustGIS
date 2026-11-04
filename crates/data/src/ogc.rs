@@ -3424,8 +3424,9 @@ impl Pages {
             Ok(page) => page,
             Err(e) if self.decoded.is_none() => {
                 *pbf = false;
-                // A service's own error message, said in a notice: not all of a long one.
-                let mut why = e;
+                // Said in a notice: without the credentials an address or a service's own error
+                // message may hold, and not all of a long one.
+                let mut why = crate::diagnostics::redact(&e);
                 crate::diagnostics::cut_with_ellipsis(&mut why, MAX_REASON);
                 self.pbf_failed = Some(why);
                 // A query that asked for protocol buffers itself is read in GeoJSON too.
@@ -4886,6 +4887,16 @@ mod tests {
         });
         let Step::Done(_, Some(note)) = step else { panic!("{step:?}") };
         assert!(note.len() < 300 && note.contains("x…)"), "{note}");
+        // A credential in the reason isn't said (an address's query isn't, nor what follows it).
+        let (step, _) = run(true, 100, &|u: &str| {
+            if query_value(u, "f") == Some("pbf") {
+                Err("timed out: https://x.org/q?token=hidden".into())
+            } else {
+                json_page(u).ok_or_else(|| "404".to_string())
+            }
+        });
+        let Step::Done(_, Some(note)) = step else { panic!("{step:?}") };
+        assert!(!note.contains("hidden") && note.contains("(timed out: https://x.org/q"), "{note}");
 
         // A later page that fails: the pages read, said.
         let (step, _) = run(true, 100, &|u: &str| if offset(u) == Some(2) { Err("http status: 500".into()) } else { pbf_server(u) });
