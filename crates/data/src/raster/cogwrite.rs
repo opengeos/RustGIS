@@ -617,6 +617,8 @@ pub fn write_file(r: &Raster, band: usize, path: &Path) -> Result<CogInfo> {
         let f = w.into_inner().map_err(|e| err(e.error()))?;
         f.sync_all()?;
         drop(f);
+        // A cancel that came while it was written leaves the file there before as it was.
+        crate::progress::check()?;
         std::fs::rename(&tmp, path)?;
         Ok(info)
     })();

@@ -65,8 +65,9 @@ fn said(s: &mut Session, wrote: Wrote) -> Value {
 
 #[cfg(not(target_arch = "wasm32"))]
 /// An export ([`IN_BACKGROUND`]) started to write its file on another thread ([`ExportRun::run`])
-/// while the session goes on: its inputs are read now (cheaply: the features and pixels are
-/// shared), and [`export_land`] says what it wrote.
+/// while the session goes on: its inputs are taken now (cheaply: the features and pixels are
+/// shared, and a streamed layer's source is read on the export's thread), and [`export_land`]
+/// says what it wrote.
 pub struct ExportRun {
     /// What the export is called, for its progress and a cancelled run's error.
     pub name: &'static str,
@@ -88,7 +89,7 @@ impl ExportRun {
 
 #[cfg(not(target_arch = "wasm32"))]
 /// Starts `command` (one of [`IN_BACKGROUND`]'s) with `p`, to write its file on another thread:
-/// its parameters checked and its inputs read now.
+/// its parameters checked and its inputs taken now.
 pub fn export_start(s: &mut Session, command: &str, p: &Value) -> Result<ExportRun, String> {
     let &(_, name, start) =
         IN_BACKGROUND.iter().find(|(c, ..)| *c == command).ok_or_else(|| format!("{command} doesn't run in the background"))?;

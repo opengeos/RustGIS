@@ -545,11 +545,12 @@ pub fn write_path_in(ds: &Dataset, path: &Path, crs: Crs) -> Result<usize> {
                 }
                 result
             });
-            if let Err(e) = staged {
+            // A cancel before the parts land leaves the old Shapefile as it was.
+            if let Err(e) = staged.map_err(DataError::from).and_then(|()| crate::progress::check()) {
                 for (tmp, _) in &written {
                     let _ = std::fs::remove_file(tmp);
                 }
-                return Err(e.into());
+                return Err(e);
             }
             written.sort_by_key(|(_, target)| target == path);
             // The old parts are moved aside first and put back if any new part fails to land, so
@@ -676,6 +677,10 @@ pub fn write_atomic_with<T, E: From<std::io::Error>>(
     out.get_ref().sync_all()?;
     // Closed before the rename, including on Windows.
     drop(out);
+    // A cancel that came while it was written leaves the file there before as it was.
+    if crate::progress::check().is_err() {
+        return Err(std::io::Error::other(DataError::Cancelled).into());
+    }
     std::fs::rename(&tmp, path)?;
     std::mem::forget(staged);
     Ok(value)
@@ -3685,6 +3690,26 @@ mod tests {
                 write_path_in(&ds, &path, Crs::LonLat)
             };
             assert!(matches!(res, Err(DataError::Cancelled)), "{ext}: {res:?}");
+            let left: Vec<_> = std::fs::read_dir(dir.path()).unwrap().map(|e| e.unwrap().file_name()).collect();
+            assert!(left.is_empty(), "{ext} left {left:?}");
+        }
+        // Cancelled once every feature is written, before the file is moved into place: a file
+        // there before stays as it was (a GeoPackage export never replaces one).
+        for ext in exts {
+            let path = dir.path().join(format!("old.{ext}"));
+            if ext != "gpkg" {
+                std::fs::write(&path, b"old").unwrap();
+            }
+            let probe = Counted::cancelling_after(ds.features.len() as u64);
+            let res = {
+                let _g = crate::progress::install(Some(probe.clone()));
+                write_path_in(&ds, &path, Crs::LonLat)
+            };
+            assert!(matches!(res, Err(DataError::Cancelled)), "{ext}: {res:?}");
+            if ext != "gpkg" {
+                assert_eq!(std::fs::read(&path).unwrap(), b"old", "{ext}");
+                std::fs::remove_file(&path).unwrap();
+            }
             let left: Vec<_> = std::fs::read_dir(dir.path()).unwrap().map(|e| e.unwrap().file_name()).collect();
             assert!(left.is_empty(), "{ext} left {left:?}");
         }

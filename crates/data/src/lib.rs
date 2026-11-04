@@ -56,7 +56,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, thiserror::Error)]
 pub enum DataError {
     #[error("i/o: {0}")]
-    Io(#[from] std::io::Error),
+    Io(std::io::Error),
     #[error("{0}")]
     Format(String),
     /// The server refused the login: no password, or a wrong one.
@@ -74,6 +74,17 @@ pub enum DataError {
 }
 
 pub type Result<T> = std::result::Result<T, DataError>;
+
+/// An I/O error, or [`DataError::Cancelled`] when it carries one: a write that only returns I/O
+/// errors stops with it for a cancelled run ([`progress`]).
+impl From<std::io::Error> for DataError {
+    fn from(e: std::io::Error) -> Self {
+        if e.get_ref().and_then(|inner| inner.downcast_ref::<DataError>()).is_some_and(|d| matches!(d, DataError::Cancelled)) {
+            return DataError::Cancelled;
+        }
+        DataError::Io(e)
+    }
+}
 
 /// Replaces `secret` in `message` with asterisks; the text itself when it holds none.
 fn without_secret(message: String, secret: &str) -> String {
