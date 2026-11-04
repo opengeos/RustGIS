@@ -1434,14 +1434,14 @@ fn legend(pm: &mut Canvas, r: Rect, map: &Map, title: &str, drawn: Option<&[(u32
         }
         match row {
             LegendRow::Plain(l) => {
-                swatch(pm, (r.x(), y, sw, line), l, &l.renderer.symbol_for(&l.dataset, 0), ppp);
+                swatch(pm, (r.x(), y, sw, line), l, &l.renderer.symbol_for(&l.dataset, 0), map.layer_opacity(l), ppp);
                 text::text_at(pm, &l.name, r.x() + sw + 6.0 * ppp, y + line / 2.0, 9.0 * 1.33 * ppp, dark, false, text::Align::Left, false);
             }
             LegendRow::Head(name) => {
                 text::text_at(pm, name, r.x(), y + line / 2.0, 9.0 * 1.33 * ppp, dark, true, text::Align::Left, false);
             }
             LegendRow::Class(l, en) => {
-                swatch(pm, (r.x() + 6.0 * ppp, y, sw, line), l, &en.symbol, ppp);
+                swatch(pm, (r.x() + 6.0 * ppp, y, sw, line), l, &en.symbol, map.layer_opacity(l), ppp);
                 text::text_at(
                     pm,
                     &en.label,
@@ -1578,12 +1578,12 @@ pub fn frame_coverage(map: &mut Map, center: Coord, scale: f64, w_mm: f64, h_mm:
     Some((gw, gh, drawn))
 }
 
-/// A legend entry's symbol `s` of the layer `l` in the box (`x`, `y`, `w`, `h`): a point as the
-/// map draws it (its stacked marks or its marker, unturned), a line or a filled box.
-fn swatch(pm: &mut Canvas, (x, y, w, h): (f32, f32, f32, f32), l: &rustgis_map::Layer, s: &rustgis_map::Symbol, ppp: f32) {
+/// A legend entry's symbol `s` of the layer `l` in the box (`x`, `y`, `w`, `h`): a point as
+/// [`point_swatch`] draws it, a line or a filled box.
+fn swatch(pm: &mut Canvas, (x, y, w, h): (f32, f32, f32, f32), l: &rustgis_map::Layer, s: &rustgis_map::Symbol, opacity: f32, ppp: f32) {
     let cy = y + h / 2.0;
     match l.geometry_type() {
-        GeometryType::Point => point_marks::draw(pm, x + w / 2.0, cy, s, &l.line_strokes, 0.0, None, ppp),
+        GeometryType::Point => point_swatch(pm, (x, y, w, h), l, s, opacity, ppp),
         GeometryType::Polyline => {
             let mut pb = PathBuilder::new();
             pb.move_to(x, cy + h * 0.2);
@@ -1612,6 +1612,30 @@ fn swatch(pm: &mut Canvas, (x, y, w, h): (f32, f32, f32, f32), l: &rustgis_map::
                 );
             }
         }
+    }
+}
+
+/// A point layer's symbol in the middle of the box, as the map draws its points: its stacked marks
+/// or its marker, at `ppp`, unturned. See-through, the marks are
+/// composited as one, as the map composites the layer, in a picture no larger than the page.
+fn point_swatch(
+    pm: &mut Canvas,
+    (x, y, w, h): (f32, f32, f32, f32),
+    l: &rustgis_map::Layer,
+    s: &rustgis_map::Symbol,
+    opacity: f32,
+    ppp: f32,
+) {
+    let (cx, cy) = (x + w / 2.0, y + h / 2.0);
+    if opacity >= 0.999 {
+        point_marks::draw(pm, cx, cy, s, &l.line_strokes, 0.0, None, ppp);
+        return;
+    }
+    let (left, top) = (x.floor(), y.floor());
+    let (cw, ch) = (((x + w).ceil() - left) as u32, ((y + h).ceil() - top) as u32);
+    if let Some(mut picture) = pm.sub(cw.min(pm.width()), ch.min(pm.height())) {
+        point_marks::draw(&mut picture, cx - left, cy - top, s, &l.line_strokes, 0.0, None, ppp);
+        pm.place(picture, Transform::from_translate(left, top), opacity, rustgis_map::effects::Blend::Normal, None);
     }
 }
 
@@ -3032,5 +3056,35 @@ mod tests {
         });
         // 12 pt squares reach 7.2 pt: the row is 15 points tall still.
         assert!(same_corner(&point_legend(&map), &drawn_point(&s, &strokes, (8.0, 7.5), 1.0), 16, 15));
+    }
+
+    #[test]
+    fn a_see_through_point_is_composited_as_one_with_its_groups() {
+        let s = rustgis_map::Symbol { size: 10.0, stroke_width: 0.0, ..rustgis_map::Symbol::default_for(GeometryType::Point, 0) };
+        let strokes = vec![square_mark(Rgba::rgb(255, 0, 0), 12.0), square_mark(Rgba::rgb(0, 0, 0), 12.0)];
+        let mut map = point_legend_map(|l| {
+            l.renderer = rustgis_map::Renderer::Single(s);
+            l.line_strokes = strokes.clone();
+            l.transparency = 50.0;
+        });
+        let middle = |map: &Map| point_legend(map).pixel(8, 7).map(|p| (p.red(), p.green(), p.blue())).unwrap();
+        // Black at half over white: grey, with none of the red under it showing.
+        let (r, g, b) = middle(&map);
+        assert!((120..=135).contains(&r) && r == g && g == b, "{r} {g} {b}");
+        // Its group's transparency applies too: half of half.
+        let id = map.layers[0].id;
+        let mut group = rustgis_map::LayerGroup::new("g");
+        group.transparency = 50.0;
+        group.children.push(id);
+        map.add_group(group);
+        let (r, g, b) = middle(&map);
+        assert!((185..=197).contains(&r) && r == g && g == b, "{r} {g} {b}");
+        // On a page recorded for a vector export, the symbol is placed too (without a name, it is
+        // all there is).
+        map.layers[0].name.clear();
+        let mut c = Canvas::recording(200, 200).unwrap();
+        let opts = LegendOptions { hide_other: false, exclude: &[], scale: 1e6 };
+        legend(&mut c, Rect::from_xywh(0.0, 0.0, 200.0, 200.0).unwrap(), &map, "", None, opts, 1.0);
+        assert!(c.into_drawing().is_some_and(|d| !d.is_empty()));
     }
 }
