@@ -2914,7 +2914,8 @@ pub enum Step {
     /// The next answer to fetch ([`Pages::next_url`]), to hand to [`Pages::land`].
     Fetch(Box<Pages>),
     /// The collection as read (the pages joined, or the first page as it came) and a note when
-    /// some features were left unread.
+    /// some features were left unread, or it was read in GeoJSON because its protocol buffer
+    /// pages couldn't be read.
     Done(Vec<u8>, Option<String>),
     /// An ArcGIS layer read in protocol buffer pages (`f=pbf`, see [`begin_with_pbf`]): its
     /// features, what reading them said, and a note when some were left unread.
@@ -2946,6 +2947,9 @@ pub struct Pages {
     /// The memory those pages take, in bytes, and the most they may ([`max_decoded_bytes`]).
     decoded_bytes: usize,
     decoded_budget: usize,
+    /// Why the layer's first protocol buffer page couldn't be read, when it is read in GeoJSON
+    /// pages instead: said in the note it ends with.
+    pbf_failed: Option<String>,
 }
 
 /// What the answer being fetched is.
@@ -3104,6 +3108,7 @@ fn start(url: &str, max: usize, pbf: bool) -> Step {
         decoded: None,
         decoded_bytes: 0,
         decoded_budget: max_decoded_bytes(),
+        pbf_failed: None,
     }))
 }
 
@@ -3168,6 +3173,7 @@ fn read_first(url: &str, first: Vec<u8>, max: usize, paging: Option<ArcgisPaging
         decoded: None,
         decoded_bytes: 0,
         decoded_budget: max_decoded_bytes(),
+        pbf_failed: None,
     };
     pages.advance()
 }
@@ -3205,8 +3211,20 @@ impl Pages {
     }
 
     /// Takes the answer to [`next_url`](Self::next_url) (or why it couldn't be fetched): the next
-    /// address to fetch, or the collection as read.
-    pub fn land(mut self, answer: Result<Vec<u8>, String>) -> Step {
+    /// address to fetch, or the collection as read. A layer read in GeoJSON because its protocol
+    /// buffer pages couldn't be read says so in its note.
+    pub fn land(self, answer: Result<Vec<u8>, String>) -> Step {
+        let Some(why) = self.pbf_failed.clone() else { return self.land_page(answer) };
+        let said = format!("its protocol buffer pages couldn't be read ({why}), so it is read in GeoJSON");
+        let with = |note: Option<String>| Some(note.map_or_else(|| said.clone(), |n| format!("{said}; {n}")));
+        match self.land_page(answer) {
+            Step::Done(bytes, note) => Step::Done(bytes, with(note)),
+            Step::Decoded(ds, report, note) => Step::Decoded(ds, report, with(note)),
+            step => step,
+        }
+    }
+
+    fn land_page(mut self, answer: Result<Vec<u8>, String>) -> Step {
         if matches!(self.phase, Phase::WfsHits) {
             let matched = answer.ok().and_then(|b| wfs_matched(&b));
             let Some(matched) = matched else {
@@ -3370,8 +3388,9 @@ impl Pages {
         let page = answer.and_then(|bytes| crate::esripbf::read_page(&bytes, "query").map_err(|e| e.to_string()));
         let page = match page {
             Ok(page) => page,
-            Err(_) if self.decoded.is_none() => {
+            Err(e) if self.decoded.is_none() => {
                 *pbf = false;
+                self.pbf_failed = Some(e);
                 // A query that asked for protocol buffers itself is read in GeoJSON too.
                 if query_value(&self.url, "f").is_some_and(|f| f.eq_ignore_ascii_case("pbf")) {
                     self.url = with_format(&self.url, "geojson");
@@ -4772,7 +4791,7 @@ mod tests {
 
         // `begin` reads the same layer in GeoJSON.
         let (step, asked) = run(false, 100, &|u: &str| json_page(u).ok_or_else(|| "404".to_string()));
-        assert!(matches!(step, Step::Done(..)), "{step:?}");
+        assert!(matches!(step, Step::Done(_, None)), "{step:?}");
         assert!(asked[1..].iter().all(|u| query_value(u, "f") == Some("geojson")), "{asked:?}");
 
         // A first page refused as a protocol buffer: GeoJSON pages from the start.
@@ -4783,7 +4802,8 @@ mod tests {
                 json_page(u).ok_or_else(|| "404".to_string())
             }
         });
-        let Step::Done(joined, None) = step else { panic!("{step:?}") };
+        let Step::Done(joined, Some(note)) = step else { panic!("{step:?}") };
+        assert!(note.starts_with("its protocol buffer pages couldn't be read (") && note.ends_with("so it is read in GeoJSON"), "{note}");
         let v: serde_json::Value = serde_json::from_slice(&joined).unwrap();
         assert_eq!(v["features"].as_array().map(Vec::len), Some(5));
         assert_eq!(asked.len(), 5, "the description, the refused page, then three in GeoJSON: {asked:?}");
@@ -4806,7 +4826,8 @@ mod tests {
             asked.push(u);
             step = (*pages).land(a);
         }
-        let Step::Done(joined, None) = step else { panic!("{step:?}") };
+        let Step::Done(joined, Some(note)) = step else { panic!("{step:?}") };
+        assert!(note.starts_with("its protocol buffer pages couldn't be read (") && note.ends_with("so it is read in GeoJSON"), "{note}");
         let v: serde_json::Value = serde_json::from_slice(&joined).unwrap();
         assert_eq!(v["features"].as_array().map(Vec::len), Some(5));
         assert!(asked.len() == 5 && asked[2..].iter().all(|u| query_value(u, "f") == Some("geojson")), "{asked:?}");
@@ -4816,11 +4837,13 @@ mod tests {
         let (step, asked) = run(true, 100, &|u: &str| {
             if query_value(u, "f") == Some("pbf") { Err("http status: 500".into()) } else { json_page(u).ok_or_else(|| "404".to_string()) }
         });
-        let Step::Done(joined, None) = step else { panic!("{step:?}") };
+        let Step::Done(joined, Some(note)) = step else { panic!("{step:?}") };
+        assert!(note.starts_with("its protocol buffer pages couldn't be read (") && note.ends_with("so it is read in GeoJSON"), "{note}");
         let v: serde_json::Value = serde_json::from_slice(&joined).unwrap();
         assert_eq!(v["features"].as_array().map(Vec::len), Some(5));
         assert!(asked.len() == 5 && asked[2..].iter().all(|u| query_value(u, "f") == Some("geojson")), "{asked:?}");
         assert!(!asked.iter().any(|u| u == query), "{asked:?}");
+        assert!(note.contains("(http status: 500)"), "{note}");
 
         // A later page that fails: the pages read, said.
         let (step, _) = run(true, 100, &|u: &str| if offset(u) == Some(2) { Err("http status: 500".into()) } else { pbf_server(u) });
@@ -4860,6 +4883,7 @@ mod tests {
             decoded: None,
             decoded_bytes: 0,
             decoded_budget: max_decoded_bytes(),
+            pbf_failed: None,
         };
         // A page in another coordinate system, or of another geometry type, isn't joined; one
         // that doesn't say its system is.
