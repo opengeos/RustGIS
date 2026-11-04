@@ -2694,6 +2694,19 @@ pub fn max_paged_features() -> usize {
     crate::memory::scaled(crate::memory::physical(), PAGED_FEATURES_FLOOR, PAGED_FEATURES_CEILING, 20 << 10)
 }
 
+/// The most bytes of why a layer's protocol buffer pages couldn't be read that its note says.
+const MAX_REASON: usize = 200;
+
+/// The note of a layer read in GeoJSON because its protocol buffer pages couldn't be read (`why`),
+/// before the reading's own `note`.
+fn read_in_geojson(why: &str, note: Option<String>) -> String {
+    let said = format!("its protocol buffer pages couldn't be read ({why}), so it is read in GeoJSON");
+    match note {
+        Some(note) => format!("{said}; {note}"),
+        None => said,
+    }
+}
+
 /// The least memory [`max_decoded_bytes`] allows, and its limit in the browser.
 pub const DECODED_FLOOR: usize = 512 << 20;
 /// The most memory [`max_decoded_bytes`] allows, however much the computer has.
@@ -2781,10 +2794,7 @@ fn with_format(query: &str, format: &str) -> String {
     let kept: Vec<&str> =
         q.split('&').filter(|kv| !kv.is_empty() && !kv.split('=').next().is_some_and(|k| k.eq_ignore_ascii_case("f"))).collect();
     let asked = with_query(&with_query(base, &kept.join("&")), &format!("f={format}"));
-    match fragment {
-        Some(f) => format!("{asked}#{f}"),
-        None => asked,
-    }
+    if let Some(f) = fragment { format!("{asked}#{f}") } else { asked }
 }
 
 /// The description of the layer an ArcGIS query reads (`…/FeatureServer/0?f=json`), with the
@@ -3232,13 +3242,16 @@ impl Pages {
     /// Takes the answer to [`next_url`](Self::next_url) (or why it couldn't be fetched): the next
     /// address to fetch, or the collection as read. A layer read in GeoJSON because its protocol
     /// buffer pages couldn't be read says so in its note.
-    pub fn land(self, answer: Result<Vec<u8>, String>) -> Step {
-        let Some(why) = self.pbf_failed.clone() else { return self.land_page(answer) };
-        let said = format!("its protocol buffer pages couldn't be read ({why}), so it is read in GeoJSON");
-        let with = |note: Option<String>| Some(note.map_or_else(|| said.clone(), |n| format!("{said}; {n}")));
+    pub fn land(mut self, answer: Result<Vec<u8>, String>) -> Step {
+        let Some(why) = self.pbf_failed.take() else { return self.land_page(answer) };
         match self.land_page(answer) {
-            Step::Done(bytes, note) => Step::Done(bytes, with(note)),
-            Step::Decoded(ds, report, note) => Step::Decoded(ds, report, with(note)),
+            // Carried to the next page, whichever reading goes on with it.
+            Step::Fetch(mut pages) => {
+                pages.pbf_failed = Some(why);
+                Step::Fetch(pages)
+            }
+            Step::Done(bytes, note) => Step::Done(bytes, Some(read_in_geojson(&why, note))),
+            Step::Decoded(ds, report, note) => Step::Decoded(ds, report, Some(read_in_geojson(&why, note))),
             step => step,
         }
     }
@@ -3411,7 +3424,10 @@ impl Pages {
             Ok(page) => page,
             Err(e) if self.decoded.is_none() => {
                 *pbf = false;
-                self.pbf_failed = Some(e);
+                // A service's own error message, said in a notice: not all of a long one.
+                let mut why = e;
+                crate::diagnostics::cut_with_ellipsis(&mut why, MAX_REASON);
+                self.pbf_failed = Some(why);
                 // A query that asked for protocol buffers itself is read in GeoJSON too.
                 if query_value(&self.url, "f").is_some_and(|f| f.eq_ignore_ascii_case("pbf")) {
                     self.url = with_format(&self.url, "geojson");
@@ -4760,7 +4776,7 @@ mod tests {
     /// the limit end the read with the pages read so far, and a note. What the pages' features lost is said once, summed.
     #[test]
     fn arcgis_pbf_pages_joined_when_the_layer_lists_them() {
-        use crate::esripbf::tests::page as pbf;
+        use crate::esripbf::tests::{page as pbf, page_with_z as pbf_z};
         let query = "https://x.org/arcgis/rest/services/P/FeatureServer/0/query?where=1%3D1&outFields=*&f=geojson&token=t";
         let description = "https://x.org/arcgis/rest/services/P/FeatureServer/0?f=json&token=t";
         let layer = br#"{"objectIdField": "OBJECTID", "maxRecordCount": 2, "supportedQueryFormats": "JSON, geoJSON, PBF",
@@ -4864,6 +4880,12 @@ mod tests {
         assert!(asked.len() == 5 && asked[2..].iter().all(|u| query_value(u, "f") == Some("geojson")), "{asked:?}");
         assert!(!asked.iter().any(|u| u == query), "{asked:?}");
         assert!(note.contains("(http status: 500)"), "{note}");
+        // A long reason is said cut.
+        let (step, _) = run(true, 100, &|u: &str| {
+            if query_value(u, "f") == Some("pbf") { Err("x".repeat(1000)) } else { json_page(u).ok_or_else(|| "404".to_string()) }
+        });
+        let Step::Done(_, Some(note)) = step else { panic!("{step:?}") };
+        assert!(note.len() < 300 && note.contains("x…)"), "{note}");
 
         // A later page that fails: the pages read, said.
         let (step, _) = run(true, 100, &|u: &str| if offset(u) == Some(2) { Err("http status: 500".into()) } else { pbf_server(u) });
@@ -4890,6 +4912,16 @@ mod tests {
         let Step::Decoded(ds, _, Some(note)) = step else { panic!("{step:?}") };
         assert_eq!(ids(&ds), [0.0, 1.0, 2.0]);
         assert!(note.contains("first 3 features"), "{note}");
+        // A page cut at the limit: what the features left out lost isn't counted.
+        let z_server = |u: &str| -> Result<Vec<u8>, String> {
+            let o = offset(u).ok_or_else(|| "404".to_string())?;
+            Ok(pbf_z(&(o..(o + 2).min(5)).collect::<Vec<_>>(), o + 2 < 5, "OBJECTID"))
+        };
+        let (step, _) = run(true, 3, &z_server);
+        let Step::Decoded(ds, report, Some(note)) = step else { panic!("{step:?}") };
+        assert_eq!(ids(&ds), [0.0, 1.0, 2.0]);
+        assert!(note.contains("first 3 features"), "{note}");
+        assert_eq!(report.messages, [crate::zm_note(Some(3))]);
 
         let fresh = || Pages {
             url: query.into(),
@@ -4983,11 +5015,11 @@ mod tests {
         let page = br#"{"type": "FeatureCollection", "features": [{"type": "Feature", "id": 0, "properties": {}}]}"#;
         for (layer, first) in [
             // No page size: the query as it is first, in GeoJSON.
-            (r#"{"supportedQueryFormats": "JSON, geoJSON, PBF", "advancedQueryCapabilities": {"supportsPagination": true}}"#, query),
+            (r#"{"supportedQueryFormats": "JSON, geoJSON, PBF", "advancedQueryCapabilities": {"supportsPagination": true}}"#, Some(query)),
             // Protocol buffers not listed: GeoJSON pages from the start.
             (
                 r#"{"maxRecordCount": 1, "supportedQueryFormats": "JSON, geoJSON", "advancedQueryCapabilities": {"supportsPagination": true}}"#,
-                "",
+                None,
             ),
         ] {
             let mut asked = Vec::new();
@@ -5001,7 +5033,7 @@ mod tests {
             assert!(matches!(step, Step::Done(_, None)), "{layer}: {step:?}");
             assert!(asked.len() == 2 && asked[0] == description, "{layer}: {asked:?}");
             assert!(query_value(&asked[1], "f") == Some("geojson"), "{layer}: {asked:?}");
-            if !first.is_empty() {
+            if let Some(first) = first {
                 assert_eq!(asked[1], first);
             }
         }

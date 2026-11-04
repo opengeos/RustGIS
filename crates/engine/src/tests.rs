@@ -12959,7 +12959,9 @@ fn arcgis_layer_read_in_protocol_buffer_pages() {
     let texts: Vec<_> = s.notices.iter().map(|n| n.text.as_str()).collect();
     assert!(!texts.iter().any(|t| t.contains("aren't read") || t.starts_with("Parcels")), "{texts:?}");
     assert!(
-        texts.iter().any(|t| t.starts_with("Zoning: its protocol buffer pages couldn't be read (") && t.ends_with("so it is read in GeoJSON")),
+        texts
+            .iter()
+            .any(|t| t.starts_with("Zoning: its protocol buffer pages couldn't be read (") && t.ends_with("so it is read in GeoJSON")),
         "{texts:?}"
     );
     // Each layer's description, then its pages: in protocol buffers, or in GeoJSON after the one

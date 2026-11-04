@@ -4,7 +4,7 @@ use crate::raster::Crs;
 // Encoding, as `FeatureCollection.proto` lays answers out: shared with the engine's tests.
 #[path = "../../../../tests/support/esripbf.rs"]
 mod encode;
-pub(crate) use encode::page;
+pub(crate) use encode::{page, page_with_z};
 // Named, so they come before the reader's own functions of the same names (`field`, `feature`).
 use encode::{
     answer, double, feature, field, geometry, lonlat, message, null, number, packed, real, single, sint64, text, transform, uint, uint64,
@@ -168,7 +168,8 @@ fn z_and_m_are_dropped_and_said_even_when_they_are_all_alike() {
 
 #[test]
 fn field_aliases_are_kept_unless_empty_or_the_name() {
-    let declared = |name: &str, alias: &str| message(13, &[message(1, name.as_bytes()), number(2, 4), message(3, alias.as_bytes())].concat());
+    let declared =
+        |name: &str, alias: &str| message(13, &[message(1, name.as_bytes()), number(2, 4), message(3, alias.as_bytes())].concat());
     let bytes = answer(&[
         lonlat(),
         transform(false, 1.0, 0.0, 0.0),
