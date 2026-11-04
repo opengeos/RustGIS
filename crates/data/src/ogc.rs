@@ -2773,13 +2773,18 @@ fn supports_pbf(layer: &serde_json::Value) -> bool {
     layer.get("supportedQueryFormats").and_then(|f| f.as_str()).is_some_and(|f| f.split(',').any(|f| f.trim().eq_ignore_ascii_case("pbf")))
 }
 
-/// An ArcGIS query asking for its answer as `format` (`f`), in place of the format it named.
+/// An ArcGIS query asking for its answer as `format` (`f`, in any case), in place of the format
+/// it named; its fragment kept, as [`with_query`] keeps it.
 fn with_format(query: &str, format: &str) -> String {
-    let url = query.split('#').next().unwrap_or(query);
+    let (url, fragment) = query.split_once('#').map_or((query, None), |(u, f)| (u, Some(f)));
     let (base, q) = url.split_once('?').unwrap_or((url, ""));
     let kept: Vec<&str> =
         q.split('&').filter(|kv| !kv.is_empty() && !kv.split('=').next().is_some_and(|k| k.eq_ignore_ascii_case("f"))).collect();
-    with_query(&with_query(base, &kept.join("&")), &format!("f={format}"))
+    let asked = with_query(&with_query(base, &kept.join("&")), &format!("f={format}"));
+    match fragment {
+        Some(f) => format!("{asked}#{f}"),
+        None => asked,
+    }
 }
 
 /// The description of the layer an ArcGIS query reads (`…/FeatureServer/0?f=json`), with the
@@ -3043,10 +3048,12 @@ fn first_value(features: &[Box<RawValue>]) -> Option<serde_json::Value> {
 }
 
 /// What tells a protocol buffer page from another, to find a page sent again: its first feature's
-/// object id, or else (no id, or an empty one) its length and its first and last features'
-/// geometries and values (ids are numbered within each page, and two pages may start with the same
-/// row).
+/// object id, or else (no id, or an empty one) its length and a hash of its first and last
+/// features' geometries and values (ids are numbered within each page, and two pages may start
+/// with the same row). The hash is taken as they're written, so a large geometry isn't held twice.
 fn first_mark(page: &crate::esripbf::Page) -> Option<serde_json::Value> {
+    use std::fmt::Write as _;
+    use std::hash::Hasher as _;
     let features = &page.dataset.features;
     let (f, l) = (features.first()?, features.last()?);
     let id = page
@@ -3055,8 +3062,20 @@ fn first_mark(page: &crate::esripbf::Page) -> Option<serde_json::Value> {
         .filter(|id| **id != crate::Value::Null)
         .and_then(|id| serde_json::to_value(id).ok());
     id.or_else(|| {
-        Some(serde_json::Value::String(format!("{} {:?} {:?} {:?} {:?}", features.len(), f.geometry, f.attrs, l.geometry, l.attrs)))
+        let mut hash = Hashing(std::collections::hash_map::DefaultHasher::new());
+        write!(hash, "{:?} {:?} {:?} {:?}", f.geometry, f.attrs, l.geometry, l.attrs).ok()?;
+        Some(serde_json::Value::String(format!("{} {:016x}", features.len(), hash.0.finish())))
     })
+}
+
+/// Hashes what is written to it, without keeping it.
+struct Hashing(std::collections::hash_map::DefaultHasher);
+
+impl std::fmt::Write for Hashing {
+    fn write_str(&mut self, s: &str) -> std::fmt::Result {
+        std::hash::Hasher::write(&mut self.0, s.as_bytes());
+        Ok(())
+    }
 }
 
 /// Starts reading a service's features at `url`, up to `max`, before anything is fetched.
@@ -3431,9 +3450,7 @@ impl Pages {
             page.exceeded_transfer_limit.then(|| with_format(&arcgis_page_url(&self.url, read + returned, *size, order.as_deref()), "pbf"));
         // What the features lost is summed over the pages, and said once (in `finish`); the
         // page's other messages, about its fields and system, once each.
-        let counted = page.losses.messages();
-        let mut report = page.report;
-        report.messages.retain(|m| !counted.contains(m));
+        let report = page.report;
         match &mut self.decoded {
             None => self.decoded = Some((page.dataset, report, page.losses)),
             Some((ds, joined, losses)) => {
@@ -4945,7 +4962,6 @@ mod tests {
         for (ids, more, rings) in [(&[0, 1][..], true, 2), (&[2, 3][..], false, 3)] {
             let mut page = crate::esripbf::read_page(&pbf(ids, more, "OBJECTID"), "query").unwrap();
             page.losses.flat_rings = rings;
-            page.report.messages.extend(page.losses.messages());
             pages = match pages.join_page(page) {
                 Step::Fetch(p) => *p,
                 Step::Decoded(_, report, None) => {
@@ -4955,6 +4971,48 @@ mod tests {
                 other => panic!("{other:?}"),
             };
         }
+    }
+
+    /// Protocol buffer pages only when the layer's description lists them and names its page
+    /// size: a layer that names none, or doesn't list them, is read in GeoJSON as before.
+    #[test]
+    fn arcgis_pbf_pages_only_when_listed_with_a_page_size() {
+        let query = "https://x.org/arcgis/rest/services/P/FeatureServer/0/query?where=1%3D1&outFields=*&f=geojson";
+        let description = "https://x.org/arcgis/rest/services/P/FeatureServer/0?f=json";
+        // One page that holds the whole layer.
+        let page = br#"{"type": "FeatureCollection", "features": [{"type": "Feature", "id": 0, "properties": {}}]}"#;
+        for (layer, first) in [
+            // No page size: the query as it is first, in GeoJSON.
+            (r#"{"supportedQueryFormats": "JSON, geoJSON, PBF", "advancedQueryCapabilities": {"supportsPagination": true}}"#, query),
+            // Protocol buffers not listed: GeoJSON pages from the start.
+            (
+                r#"{"maxRecordCount": 1, "supportedQueryFormats": "JSON, geoJSON", "advancedQueryCapabilities": {"supportsPagination": true}}"#,
+                "",
+            ),
+        ] {
+            let mut asked = Vec::new();
+            let mut step = begin_with_pbf(query, 100);
+            while let Step::Fetch(pages) = step {
+                let u = pages.next_url().to_string();
+                let a = if u == description { Ok(layer.as_bytes().to_vec()) } else { Ok(page.to_vec()) };
+                asked.push(u);
+                step = (*pages).land(a);
+            }
+            assert!(matches!(step, Step::Done(_, None)), "{layer}: {step:?}");
+            assert!(asked.len() == 2 && asked[0] == description, "{layer}: {asked:?}");
+            assert!(query_value(&asked[1], "f") == Some("geojson"), "{layer}: {asked:?}");
+            if !first.is_empty() {
+                assert_eq!(asked[1], first);
+            }
+        }
+    }
+
+    #[test]
+    fn with_format_replaces_the_format_in_any_case_and_keeps_the_fragment() {
+        let q = "https://x.org/FeatureServer/0/query?F=geojson&where=1%3D1&f=json#part";
+        assert_eq!(with_format(q, "pbf"), "https://x.org/FeatureServer/0/query?where=1%3D1&f=pbf#part");
+        assert_eq!(with_format("https://x.org/FeatureServer/0/query", "pbf"), "https://x.org/FeatureServer/0/query?f=pbf");
+        assert_eq!(with_format("https://x.org/q?f=pbf", "geojson"), "https://x.org/q?f=geojson");
     }
 
     /// An ArcGIS layer's description first: a layer that pages is read from the start in pages of

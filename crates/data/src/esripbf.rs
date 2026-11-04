@@ -92,7 +92,8 @@ const LAST_FIELD_TYPE: u64 = 16;
 pub struct Page {
     /// Its features, in longitude/latitude.
     pub dataset: Dataset,
-    /// What was left out or assumed while reading it.
+    /// What was left out or assumed while reading it, but for what its features lost
+    /// ([`losses`](Self::losses)).
     pub report: ReadReport,
     /// The service holds more features than it sent (`exceededTransferLimit`): the next page
     /// starts after these.
@@ -100,8 +101,8 @@ pub struct Page {
     /// The field holding the features' object ids (`esriFieldTypeOID`), by its place in
     /// `dataset.fields`.
     pub object_id_field: Option<usize>,
-    /// What its features lost, counted (also said in `report`): a reader joining pages sums them
-    /// and says each once ([`Losses::messages`]).
+    /// What its features lost, counted: a reader joining pages sums them and says each once
+    /// ([`Losses::messages`]), as [`read`] says a single page's.
     pub losses: Losses,
     /// About the memory its fields, rows, text values and geometries take, in bytes, as counted
     /// against [`MAX_ROW_BYTES`], [`MAX_TEXT_BYTES`] and [`MAX_GEOMETRY_BYTES`]: a reader joining
@@ -140,7 +141,7 @@ impl Losses {
         self.with_zm = self.with_zm.saturating_add(other.with_zm);
     }
 
-    /// What they say, one message per kind (as [`read_page`] says them).
+    /// What they say, one message per kind (as [`read`] says them).
     pub fn messages(&self) -> Vec<String> {
         let mut out = Vec::new();
         if self.no_crs {
@@ -174,6 +175,7 @@ impl Losses {
 /// Reads an answer as a layer named `name`, saying when the service held more features than it sent.
 pub fn read(bytes: &[u8], name: &str) -> Result<(Dataset, ReadReport)> {
     let mut page = read_page(bytes, name)?;
+    page.report.messages.extend(page.losses.messages());
     if page.exceeded_transfer_limit {
         page.report.messages.push(format!(
             "the service sent {} features only (its record limit); the rest aren't in this answer",
@@ -348,7 +350,6 @@ pub fn read_page_within(bytes: &[u8], name: &str, limit: usize) -> Result<Page> 
         unprojected,
         with_zm,
     };
-    report.messages.extend(losses.messages());
     ds.zm_dropped = with_zm > 0;
     let memory = rows
         .saturating_add(MAX_GEOMETRY_BYTES.saturating_sub(tally.geometry_room))

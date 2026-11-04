@@ -178,7 +178,8 @@ fn a_page_read_within_a_limit_counts_what_the_features_kept_lost() {
     ]);
     let page = read_page_within(&bytes, "t", 1).unwrap();
     assert_eq!((page.dataset.features.len(), page.left_out, page.losses.with_zm), (1, 2, 1));
-    assert_eq!(page.report.messages, [crate::zm_note(Some(1))]);
+    assert_eq!(page.losses.messages(), [crate::zm_note(Some(1))]);
+    assert!(page.report.messages.is_empty(), "the losses are said apart: {:?}", page.report.messages);
     // Within a limit it doesn't reach, the whole page.
     let page = read_page_within(&bytes, "t", 3).unwrap();
     assert_eq!((page.dataset.features.len(), page.left_out, page.losses.with_zm), (3, 0, 3));
