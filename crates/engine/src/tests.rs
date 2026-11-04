@@ -15549,6 +15549,60 @@ fn binding_a_connection_reads_its_in_place_rasters_together() {
     t.run("connection.remove", &json!({"id": "Together"})).unwrap();
 }
 
+/// Where the session doesn't wait for reads in place (the desktop), a saved S3 connection chosen
+/// for a project's rasters read in place starts their overviews reading and says so: they count
+/// as `reading` in `connection.resolveS3`'s answer, not as `reopened`, until they land as the map
+/// draws. Waiting, the same choice reads them before it answers, and they are reopened.
+#[test]
+fn a_connection_chosen_without_waiting_counts_its_in_place_rasters_as_reading() {
+    use rustgis_map::raster::RasterLayer;
+    use std::time::Duration;
+    let base = serve_s3_together(vec![
+        ("a.tif", rustgis_data::raster::cog::example(512, 256)),
+        ("b.tif", rustgis_data::raster::cog::example(256, 512)),
+    ]);
+    let mut s = Session::new(Project::default());
+    s.map_mut().add_raster("A".to_string(), RasterLayer::unread_in_place("s3://s3-chosen-bucket/a.tif"));
+    s.map_mut().add_raster("B".to_string(), RasterLayer::unread_in_place("s3://s3-chosen-bucket/b.tif"));
+    let text = serde_json::to_string(&s.project).unwrap();
+    let layer = |s: &Session, name: &str| s.map().layer_by_name(name).and_then(|l| l.raster.clone()).unwrap();
+    // The connection lists no bucket, so the project's sources wait for the user's choice of it.
+    let open = |wait: bool| {
+        let mut t = Session::new(Project::default());
+        t.in_place_wait = wait;
+        let c =
+            t.run("connection.new", &json!({"kind": "s3", "name": "Chosen", "address": base, "options": {"credentials": "none"}})).unwrap();
+        let id = c["id"].as_str().unwrap_or_default().to_string();
+        assert!(!id.is_empty(), "{c}");
+        t.run("project.openText", &json!({"text": text})).unwrap();
+        let source = t.s3_pending.first().map(|p| p.source.clone()).unwrap_or_default();
+        assert!(!source.is_empty(), "nothing waited for a choice: {:?}", t.notices);
+        let r = t.run("connection.resolveS3", &json!({"source": source, "id": id})).unwrap();
+        (t, r, id)
+    };
+    let counts = |r: &Value| (r["reopened"].as_u64(), r["reading"].as_u64(), r["failed"].as_u64());
+    let (mut t, r, id) = open(false);
+    assert_eq!(counts(&r), (Some(0), Some(2), Some(0)), "{r}");
+    assert!(layer(&t, "A").data.is_none() && layer(&t, "B").data.is_none(), "chosen before the overviews are in");
+    let view = rustgis_geom::Extent::new(10.0, 45.0, 11.0, 46.0);
+    let start = std::time::Instant::now();
+    while (layer(&t, "A").data.is_none() || layer(&t, "B").data.is_none()) && start.elapsed() < Duration::from_secs(60) {
+        crate::render::rustgis_tiles::cache::wait(Duration::from_millis(50));
+        t.read_in_place_again();
+        t.map_mut().sync_sources(&view, 1000.0, false);
+        t.notice_landed_rasters();
+    }
+    for (name, width) in [("A", 512), ("B", 256)] {
+        assert_eq!(layer(&t, name).data.as_ref().map(|d| d.width), Some(width), "{name}: {:?}", layer(&t, name).error);
+    }
+    t.run("connection.remove", &json!({"id": id})).unwrap();
+    // Waiting, the choice answers once the overviews are in.
+    let (mut t, r, id) = open(true);
+    assert_eq!(counts(&r), (Some(2), Some(0), Some(0)), "{r}");
+    assert!(layer(&t, "A").data.is_some() && layer(&t, "B").data.is_some());
+    t.run("connection.remove", &json!({"id": id})).unwrap();
+}
+
 /// A stand-in S3 endpoint serving `files` (key, bytes) by range, answering nothing until each key
 /// has been asked for once: reads made together get their answers, reads made one after the other
 /// never get the first.
