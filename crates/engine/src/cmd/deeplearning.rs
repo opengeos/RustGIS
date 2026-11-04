@@ -172,16 +172,7 @@ struct Training {
 impl Training {
     fn fit(self) -> Result<DlModel, String> {
         let Training { raster, bands, classes, polygons, hidden, epochs, name, .. } = self;
-        let mut samples: Vec<(Vec<f32>, usize)> = Vec::new();
-        let mut per_class = vec![0usize; classes.len()];
-        for (rings, ci, share) in &polygons {
-            let room = MAX_SAMPLES_PER_CLASS.saturating_sub(per_class.get(*ci).copied().unwrap_or(0)).min(*share);
-            let got = neural::polygon_samples(&raster, &bands, rings, room);
-            if let Some(n) = per_class.get_mut(*ci) {
-                *n += got.len();
-            }
-            samples.extend(got.into_iter().map(|x| (x, *ci)));
-        }
+        let (samples, per_class) = neural::training_samples(&raster, &bands, &polygons, classes.len(), MAX_SAMPLES_PER_CLASS)?;
         // Every class needs pixels of its own (its polygons may miss the raster or cover no data).
         if let Some((c, _)) = classes.iter().zip(&per_class).find(|(_, n)| **n < 5) {
             return Err(format!("the class '{c}' has fewer than 5 pixels with data under its polygons"));

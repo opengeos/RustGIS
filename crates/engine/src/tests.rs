@@ -25845,12 +25845,21 @@ fn raster_classes_run_on_another_thread() {
             assert_eq!(s.project.dl_models.iter().map(|m| m.name.as_str()).collect::<Vec<_>>(), ["landcover"]);
         }
     }
-    // A cancelled training keeps no model.
+    // A training cancelled once under way keeps no model, and says how far it came.
     s.project.dl_models.clear();
-    let run = raster_start(&mut s, "dl.classify", &json!({"layer": "scene", "training": "training", "classField": "class"})).unwrap();
+    let p = json!({"layer": "scene", "training": "training", "classField": "class", "epochs": 500, "hidden": [64, 64]});
+    let run = raster_start(&mut s, "dl.classify", &p).unwrap();
     let control = Control::new();
+    let ctl = control.clone();
+    let worker = std::thread::spawn(move || run.run(&ctl));
+    let end = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    while control.progress().is_none() {
+        assert!(std::time::Instant::now() < end, "the run never counted its work");
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
     control.cancel();
-    assert!(run.run(&control).err().is_some_and(|e| e.contains("was cancelled")));
+    let e = worker.join().unwrap().err().unwrap_or_default();
+    assert!(e.contains("was cancelled") && !e.contains("before it started"), "{e}");
     assert!(s.project.dl_models.is_empty());
     // Sampling the training polygons is part of the work: a class whose polygons miss the raster
     // is said when the run ends, not when it starts.
