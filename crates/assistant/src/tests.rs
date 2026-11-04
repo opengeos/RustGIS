@@ -845,6 +845,8 @@ fn missing_settings_are_reported() {
 fn model_lists() {
     let r = |v: Value| HttpResponse { status: 200, body: v.to_string().into_bytes(), headers: vec![] };
     assert_eq!(parse_models(Api::OpenAi, &r(json!({"data": [{"id": "b"}, {"id": "a"}]}))), Ok(vec!["a".to_string(), "b".to_string()]));
+    let garbled = json!({"data": [{"id": "openai/gpt-4o-mini", "api": "chat"}, {"id": "bad\u{1b}[31m"}]});
+    assert_eq!(parse_models(Api::OpenAi, &r(garbled)), Ok(vec!["openai/gpt-4o-mini".to_string()]));
     let g = json!({"models": [
         {"name": "models/gemini-x", "supportedGenerationMethods": ["generateContent"]},
         {"name": "models/embed", "supportedGenerationMethods": ["embedContent"]}
