@@ -1281,7 +1281,8 @@ fn qgis_categories_by_an_expression_class_by_it_where_it_reads() {
     // Boolean categories (as QGIS writes them) by such a field: matching its text "true" and
     // "false" as they are, a boolean field's values as RustGIS prints them.
     let bools = r#"<category value="true" type="bool" symbol="0"/><category value="false" type="bool" symbol="1"/>"#;
-    for (ty, name) in [("text", "Is Big"), ("boolean", "Big Flag")] {
+    // (A bare name is a field to the importer itself; one with a space is matched here.)
+    for (ty, name) in [("text", "Is Big"), ("boolean", "Big Flag"), ("boolean", "big_bool")] {
         let tmp = name.replace(' ', "_");
         s.run("edit.addField", &json!({"layer": "Cities", "name": tmp, "type": ty})).unwrap();
         let e = if ty == "text" { "CASE WHEN pop_max > 5000000 THEN 'true' ELSE 'false' END" } else { "pop_max > 5000000" };
@@ -1294,9 +1295,39 @@ fn qgis_categories_by_an_expression_class_by_it_where_it_reads() {
         let rows = picks(s.map().layer_by_name("Cities").unwrap());
         let (yes, no) = if ty == "text" { ("true", "false") } else { ("True", "False") };
         for (row, (over, class)) in rows.iter().enumerate() {
-            assert_eq!(class.as_deref(), Some(if *over { yes } else { no }), "{ty} row {row}");
+            assert_eq!(class.as_deref(), Some(if *over { yes } else { no }), "{ty} {name} row {row}");
         }
     }
+    // A text category "True" beside boolean ones by a text field: each keeps its own value, the
+    // boolean ones matching the field's "true" and "false", the text one only "True".
+    let mixed = format!(r#"<category value="True" type="string" symbol="1" label="Text"/>{bools}"#);
+    let r = s.run("style.importQgis", &json!({"layer": "Cities", "text": qml("Is Big", &mixed)})).unwrap();
+    assert!(notes(&r).is_empty(), "{:?}", notes(&r));
+    let l = s.map().layer_by_name("Cities").unwrap();
+    let rustgis_map::Renderer::Unique { classes, class_labels, .. } = &l.renderer else { panic!("{:?}", l.renderer) };
+    assert_eq!(classes.iter().map(|c| c.0.as_str()).collect::<Vec<_>>(), ["True", "true", "false"], "{:?}", notes(&r));
+    assert_eq!(class_labels.get("True").map(String::as_str), Some("Text"));
+    for (row, (over, class)) in picks(l).iter().enumerate() {
+        assert_eq!(class.as_deref(), Some(if *over { "true" } else { "false" }), "mixed row {row}");
+    }
+    // By an expression, boolean categories match its value as RustGIS prints it.
+    let by_expr = "&quot;pop_max&quot; &gt; 5000000";
+    let r = s.run("style.importQgis", &json!({"layer": "Cities", "text": qml(by_expr, bools)})).unwrap();
+    assert!(notes(&r).is_empty(), "{:?}", notes(&r));
+    for (row, (over, class)) in picks(s.map().layer_by_name("Cities").unwrap()).iter().enumerate() {
+        assert_eq!(class.as_deref(), Some(if *over { "True" } else { "False" }), "expression row {row}");
+    }
+    // ... unless another category has that value: kept as written, said once with a count.
+    let r = s.run("style.importQgis", &json!({"layer": "Cities", "text": qml(by_expr, &mixed)})).unwrap();
+    let said = notes(&r);
+    assert!(said.iter().any(|n| n.contains("1 boolean category kept as written (the first: true), as another category")), "{said:?}");
+    let l = s.map().layer_by_name("Cities").unwrap();
+    let rustgis_map::Renderer::Unique { classes, .. } = &l.renderer else { panic!("{:?}", l.renderer) };
+    assert_eq!(classes.iter().map(|c| c.0.as_str()).collect::<Vec<_>>(), ["True", "true", "False"]);
+    // ... or when two categories list the value: drawn as the rest, said.
+    let twice = r#"<category value="true" type="bool" symbol="0"/><category value="true" type="bool" symbol="1"/>"#;
+    let said = notes(&s.run("style.importQgis", &json!({"layer": "Cities", "text": qml(by_expr, twice)})).unwrap());
+    assert!(said.iter().any(|n| n.contains("its value listed by more than one category: its features drawn as the rest")), "{said:?}");
 
     // The layer's own classes by an expression are left alone by a style that sets no renderer,
     // even one an import couldn't take (it measures: QGIS's measures are in the project's units).

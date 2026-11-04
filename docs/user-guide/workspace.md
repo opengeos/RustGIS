@@ -186,7 +186,7 @@ Each layer keeps its look:
   class, its "all other values" category the rest; by a field, or by an expression as Unique
   Values by that [expression](cartography.md), its boolean categories matching true and false;
   one that can't be read on the layer draws every feature with the first category's symbol
-  that's switched on, noted),
+  that's switched on, or nothing when no category is, noted),
   graduated (as Graduated Colors, by a field: ranges by an expression are noted and drawn with
   the first range's symbol), and
   rule-based: as Unique Values on a field where every rule picks values of that field at every

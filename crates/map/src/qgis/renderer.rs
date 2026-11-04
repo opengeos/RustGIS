@@ -154,15 +154,27 @@ fn categorized(r: Node, layer: &str, style: &mut Style, report: &mut Report, sym
         Some(f) => (f, None),
         None => {
             let Some(e) = expr::to_sql(attr) else {
-                report.skipped(layer, format!("classes by the expression `{}` (empty or too long to read)", attr.trim()));
-                // Drawn as one: the first switched-on category's symbol.
-                // (None to draw: nothing drawn, as where a readable expression has none.)
+                // Drawn as one: the first switched-on category's symbol (none: nothing drawn, as
+                // where a readable expression has none).
                 let c = cats.iter().filter(|c| c.attribute("render") != Some("false")).find_map(|c| sym(c.attribute("symbol"), report));
+                let drawn = if c.is_some() {
+                    "with its first category's symbol (of those switched on)"
+                } else {
+                    "as nothing: no category is drawn"
+                };
+                // (Quoted up to 80 characters: one too long to read is longer than `expr::MAX_LEN`.)
+                let a = attr.trim();
+                let shown: String = a.chars().take(80).collect();
+                let shown = if shown.len() < a.len() { format!("{shown}…") } else { shown };
+                report.approximated(
+                    layer,
+                    format!("its classes by the expression `{shown}`, empty or too long to read: every feature drawn {drawn}"),
+                );
                 single(style, &c.unwrap_or_else(switched_off));
                 return;
             };
             // Its first drawn category is taken below, for where the expression can't be read.
-            style.categories_by = Some(super::CategoriesBy { qgis: attr.trim().to_string(), first: None, bools: false });
+            style.categories_by = Some(super::CategoriesBy { qgis: attr.trim().to_string(), first: None });
             (String::new(), Some(e))
         }
     };
@@ -171,6 +183,7 @@ fn categorized(r: Node, layer: &str, style: &mut Style, report: &mut Report, sym
     let mut other = symbol::hidden();
     let mut other_strokes = Vec::new();
     let (mut class_fills, mut other_fills) = (BTreeMap::new(), Vec::new());
+    let mut bools: Vec<String> = Vec::new();
     for cat in &cats {
         // A switched-off class draws nothing; its symbol isn't read (its field would turn the rest).
         let c = if cat.attribute("render") == Some("false") {
@@ -192,22 +205,10 @@ fn categorized(r: Node, layer: &str, style: &mut Style, report: &mut Report, sym
         if values.is_empty() {
             values.push(cat.attribute("value").unwrap_or_default().to_string());
         }
-        // A boolean category (`true`, `false`) as RustGIS prints a boolean value, by an
-        // expression only (a field's text "true" matches as it is).
-        if expression.is_some() && cat.attribute("type") == Some("bool") {
-            for v in &mut values {
-                let printed = if v.eq_ignore_ascii_case("true") {
-                    "True"
-                } else if v.eq_ignore_ascii_case("false") {
-                    "False"
-                } else {
-                    continue;
-                };
-                *v = printed.into();
-                if let Some(by) = style.categories_by.as_mut() {
-                    by.bools = true;
-                }
-            }
+        // A boolean category's values (`true`, `false`), matched to the layer's field or the
+        // expression's value below and where the layer is added.
+        if cat.attribute("type") == Some("bool") {
+            bools.extend(values.iter().filter(|v| super::bool_key(v, false).is_some()).cloned());
         }
         for v in values {
             // An empty value is QGIS's "all other values".
@@ -248,6 +249,17 @@ fn categorized(r: Node, layer: &str, style: &mut Style, report: &mut Report, sym
         other_fills,
         expression,
     });
+    // Its boolean categories, matched to the layer's field or the expression's value where the
+    // layer is added (each value once).
+    bools.retain(|k| classes_has(style, k));
+    let mut seen = std::collections::BTreeSet::new();
+    bools.retain(|k| seen.insert(k.clone()));
+    style.bool_classes = bools;
+}
+
+/// Whether `style`'s Unique Values renderer has a class `key`.
+fn classes_has(style: &Style, key: &str) -> bool {
+    matches!(&style.renderer, Some(Renderer::Unique { classes, .. }) if classes.iter().any(|c| c.0 == key))
 }
 
 fn graduated(r: Node, layer: &str, style: &mut Style, report: &mut Report, sym: &SymbolOf) {

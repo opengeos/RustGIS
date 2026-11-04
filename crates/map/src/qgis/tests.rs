@@ -1499,7 +1499,7 @@ fn a_categorized_renderer_by_an_expression_classes_by_it() {
     // Too long to read: drawn with the first category's symbol, noted.
     let (r, report) = by(&format!("{}1", "1 + ".repeat(5000)));
     assert!(matches!(r, Some(Renderer::Single(_))), "{r:?}");
-    assert!(report.notes.iter().any(|n| n.text.contains("too long to read")), "{:?}", report.notes);
+    assert!(report.notes.iter().any(|n| n.text.contains("too long to read") && n.text.len() < 300), "{:?}", report.notes);
     // ... passing over a switched-off category.
     let qml = format!(
         r#"<qgis version="3.10"><renderer-v2 type="categorizedSymbol" attr="{}1"><categories><category value="1" symbol="0" render="false"/><category value="2" symbol="1"/></categories>
@@ -1529,16 +1529,38 @@ fn a_categorized_renderer_by_an_expression_classes_by_it() {
     assert!(matches!(s.renderer, Some(Renderer::Single(_))), "{:?}", s.renderer);
     assert_eq!(s.line_strokes.as_ref().map(Vec::len), Some(2), "{:?}", s.line_strokes);
 
-    // Boolean categories (as QGIS writes them) match the values as RustGIS prints them.
+    // Boolean categories are recorded, each value once, to be matched where the layer is added;
+    // their classes keep QGIS's values until then.
     let qml = r#"<qgis version="3.40.0"><renderer-v2 type="categorizedSymbol" attr="&quot;value&quot; &gt; 50"><categories>
-        <category value="true" type="bool" symbol="0"/><category value="false" type="bool" symbol="0"/><category value="true" type="string" symbol="0"/></categories>
+        <category value="true" type="bool" symbol="0"/><category value="false" type="bool" symbol="0"/><category value="true" type="string" symbol="0"/>
+        <category type="bool" symbol="0"><val value="true"/><val value="false"/></category></categories>
         <symbols><symbol type="marker" name="0"><layer class="SimpleMarker" enabled="1"/></symbol></symbols></renderer-v2></qgis>"#;
     let s = read_style(qml, "points", &mut Report::default()).unwrap();
     let Some(Renderer::Unique { classes, .. }) = &s.renderer else { panic!("{:?}", s.renderer) };
-    assert_eq!(classes.iter().map(|c| c.0.as_str()).collect::<Vec<_>>(), ["True", "False", "true"]);
-    let mut l = rule_points(&[("a", 10, "x"), ("a", 60, "y")]);
-    s.apply(&mut l);
-    assert_eq!(rule_classes(&l, None), named(&[Some("False"), Some("True")]));
+    assert_eq!(classes.iter().map(|c| c.0.as_str()).collect::<Vec<_>>(), ["true", "false", "true", "true", "false"]);
+    assert_eq!(s.bool_classes, ["true", "false"]);
+
+    // Renaming a class takes its label, strokes and fills along, and never onto another class.
+    let mut r = Renderer::Unique {
+        field: String::new(),
+        classes: vec![("true".into(), symbol::hidden()), ("x".into(), symbol::hidden())],
+        other: symbol::hidden(),
+        ramp: crate::color::Ramp::default(),
+        class_labels: [("true".to_string(), "Yes".to_string())].into(),
+        other_label: None,
+        class_strokes: [("true".to_string(), Vec::new())].into(),
+        other_strokes: Vec::new(),
+        class_fills: Default::default(),
+        other_fills: Vec::new(),
+        expression: None,
+    };
+    assert!(!rename_class(&mut r, "true", "x") && !rename_class(&mut r, "nosuch", "y"));
+    assert!(rename_class(&mut r, "true", "True"));
+    let Renderer::Unique { classes, class_labels, class_strokes, .. } = &r else { panic!("{r:?}") };
+    assert_eq!(classes.iter().map(|c| c.0.as_str()).collect::<Vec<_>>(), ["True", "x"]);
+    assert_eq!((class_labels.get("True").map(String::as_str), class_strokes.contains_key("True")), (Some("Yes"), true));
+    assert!(!class_labels.contains_key("true"));
+    assert_eq!((bool_key("TRUE", true), bool_key("false", false), bool_key("yes", true)), (Some("True"), Some("false"), None));
 
     // By a field, a boolean category matches the field's text as it is.
     let qml = r#"<qgis version="3.40.0"><renderer-v2 type="categorizedSymbol" attr="kind"><categories>
@@ -1550,6 +1572,7 @@ fn a_categorized_renderer_by_an_expression_classes_by_it() {
         "{:?}",
         s.renderer
     );
+    assert_eq!(s.bool_classes, ["true"]);
 
     let mut report = Report::default();
     let qml = std::fs::read_to_string(dir.join("renderer-graduatedSymbol-size-expression.qml")).unwrap();
