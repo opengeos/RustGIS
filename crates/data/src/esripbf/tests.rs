@@ -167,6 +167,30 @@ fn z_and_m_are_dropped_and_said_even_when_they_are_all_alike() {
 }
 
 #[test]
+fn field_aliases_are_kept_unless_empty_or_the_name() {
+    let declared = |name: &str, alias: &str| message(13, &[message(1, name.as_bytes()), number(2, 4), message(3, alias.as_bytes())].concat());
+    let bytes = answer(&[
+        lonlat(),
+        transform(false, 1.0, 0.0, 0.0),
+        declared("POP_2020", "Population 2020"),
+        declared("NAME", "NAME"),
+        declared("CODE", ""),
+        field("PLAIN", 4),
+        feature(&[geometry(&[], &[1, 2])]),
+    ]);
+    let (ds, report) = read(&bytes, "t").unwrap();
+    let aliases: Vec<_> = ds.fields.iter().map(|f| f.alias.as_deref()).collect();
+    assert_eq!(aliases, [Some("Population 2020"), None, None, None]);
+    assert_eq!(ds.fields[0].display(), "Population 2020");
+    assert!(report.messages.is_empty(), "{:?}", report.messages);
+    // An alias that isn't UTF-8 is read as it can be, and said.
+    let bytes = answer(&[lonlat(), message(13, &[message(1, b"A"), number(2, 4), message(3, b"Pop\xff")].concat())]);
+    let (ds, report) = read(&bytes, "t").unwrap();
+    assert_eq!(ds.fields[0].alias.as_deref(), Some("Pop\u{fffd}"));
+    assert!(report.messages.iter().any(|m| m.contains("aren't valid UTF-8")), "{:?}", report.messages);
+}
+
+#[test]
 fn a_page_read_within_a_limit_counts_what_the_features_kept_lost() {
     let bytes = answer(&[
         number(10, 1),

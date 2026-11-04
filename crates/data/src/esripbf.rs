@@ -63,7 +63,7 @@ const MAX_TEXT_BYTES: usize = 512 << 20;
 fn row_bytes(features: usize, fields: usize) -> usize {
     use std::mem::size_of;
     // Declared, kept or not, as a column, a field and a name to tell repeats by.
-    let field = size_of::<(String, u64, bool)>() + size_of::<Option<(usize, Kind)>>() + size_of::<Field>() + size_of::<String>();
+    let field = size_of::<(String, u64, bool, Option<String>)>() + size_of::<Option<(usize, Kind)>>() + size_of::<Field>() + size_of::<String>();
     let row = size_of::<crate::Feature>().saturating_add(fields.saturating_mul(size_of::<Value>()));
     features.saturating_mul(row).saturating_add(fields.saturating_mul(field))
 }
@@ -262,7 +262,7 @@ pub fn read_page_within(bytes: &[u8], name: &str, limit: usize) -> Result<Page> 
     let mut names = std::collections::HashSet::new();
     let (mut repeated, mut not_read, mut unknown) = (0usize, 0usize, 0usize);
     let mut object_id_field = None;
-    for (name, number, utf8) in declared {
+    for (name, number, utf8, alias) in declared {
         tally.not_utf8 += usize::from(!utf8);
         let Some(read_as) = kind(number) else {
             not_read += 1;
@@ -280,7 +280,7 @@ pub fn read_page_within(bytes: &[u8], name: &str, limit: usize) -> Result<Page> 
             object_id_field = Some(fields.len());
         }
         columns.push(Some((fields.len(), read_as)));
-        fields.push(Field::new(name, read_as.field_type()));
+        fields.push(Field { name, ty: read_as.field_type(), alias });
     }
     if repeated > 0 {
         report.messages.push(format!("{repeated} fields repeat an earlier field's name and are left out"));
@@ -596,10 +596,12 @@ fn read_transform(bytes: &[u8]) -> Result<Transform> {
     Ok(t)
 }
 
-/// A field's name, its type's number (`FieldType`) and whether the name was valid UTF-8.
-/// The name is taken from `tally`'s text room before it's made, twice: it's kept lowercase too.
-fn field(bytes: &[u8], tally: &mut Tally) -> Result<(String, u64, bool)> {
+/// A field's name, its type's number (`FieldType`), whether the name and alias were valid UTF-8,
+/// and its alias (none when empty or the name itself). The name is taken from `tally`'s text room
+/// before it's made, twice: it's kept lowercase too; the alias once.
+fn field(bytes: &[u8], tally: &mut Tally) -> Result<(String, u64, bool, Option<String>)> {
     let (mut name, mut number, mut utf8) = (String::new(), 0, true);
+    let (mut alias, mut alias_utf8) = (String::new(), true);
     let mut r = Reader::new(bytes);
     while !r.done() {
         match r.key()? {
@@ -610,10 +612,17 @@ fn field(bytes: &[u8], tally: &mut Tally) -> Result<(String, u64, bool)> {
                 name = String::from_utf8_lossy(raw).into_owned();
             }
             (2, 0) => number = r.varint()?,
+            (3, 2) => {
+                let raw = r.message()?;
+                tally.spend_text(lossy_len(raw))?;
+                alias_utf8 = std::str::from_utf8(raw).is_ok();
+                alias = String::from_utf8_lossy(raw).into_owned();
+            }
             (_, wire) => r.skip(wire)?,
         }
     }
-    Ok((name, number, utf8))
+    let alias = Some(alias).filter(|a| !a.is_empty() && *a != name);
+    Ok((name, number, utf8 && alias_utf8, alias))
 }
 
 /// The code of an answer's coordinate system (its `latestWkid` when RustGIS knows it, else its
