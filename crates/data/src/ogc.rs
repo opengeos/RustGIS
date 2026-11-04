@@ -3024,17 +3024,20 @@ fn first_value(features: &[Box<RawValue>]) -> Option<serde_json::Value> {
 }
 
 /// What tells a protocol buffer page from another, to find a page sent again: its first feature's
-/// object id, or else its length and its first and last features' geometries and values (ids are
-/// numbered within each page, and two pages may start with the same row).
+/// object id, or else (no id, or an empty one) its length and its first and last features'
+/// geometries and values (ids are numbered within each page, and two pages may start with the same
+/// row).
 fn first_mark(page: &crate::esripbf::Page) -> Option<serde_json::Value> {
     let features = &page.dataset.features;
     let (f, l) = (features.first()?, features.last()?);
-    match page.object_id_field.and_then(|i| f.attrs.get(i)) {
-        Some(id) => serde_json::to_value(id).ok(),
-        None => {
-            Some(serde_json::Value::String(format!("{} {:?} {:?} {:?} {:?}", features.len(), f.geometry, f.attrs, l.geometry, l.attrs)))
-        }
-    }
+    let id = page
+        .object_id_field
+        .and_then(|i| f.attrs.get(i))
+        .filter(|id| **id != crate::Value::Null)
+        .and_then(|id| serde_json::to_value(id).ok());
+    id.or_else(|| {
+        Some(serde_json::Value::String(format!("{} {:?} {:?} {:?} {:?}", features.len(), f.geometry, f.attrs, l.geometry, l.attrs)))
+    })
 }
 
 /// Starts reading a service's features at `url`, up to `max`, before anything is fetched.
@@ -3349,6 +3352,10 @@ impl Pages {
                 Ok(page) => page,
                 Err(_) if self.decoded.is_none() => {
                     *pbf = false;
+                    // A query that asked for protocol buffers itself is read in GeoJSON too.
+                    if query_value(&self.url, "f").is_some_and(|f| f.eq_ignore_ascii_case("pbf")) {
+                        self.url = with_format(&self.url, "geojson");
+                    }
                     self.next = arcgis_page_url(&self.url, 0, *size, order.as_deref());
                     return self.advance();
                 }
@@ -4756,6 +4763,28 @@ mod tests {
         assert_eq!(asked.len(), 5, "the description, the refused page, then three in GeoJSON: {asked:?}");
         assert!(asked[2].contains("resultOffset=0&") && query_value(&asked[2], "f") == Some("geojson"), "{asked:?}");
 
+        // A query that asks for protocol buffers itself is read in GeoJSON pages, when its first
+        // page can't be read as one.
+        let pbf_query = query.replace("f=geojson", "f=pbf");
+        let mut asked = Vec::new();
+        let mut step = begin_with_pbf(&pbf_query, 100);
+        while let Step::Fetch(pages) = step {
+            let u = pages.next_url().to_string();
+            let a = if u == description {
+                Ok(layer.to_vec())
+            } else if query_value(&u, "f") == Some("pbf") {
+                Ok(br#"{"error": {"code": 400}}"#.to_vec())
+            } else {
+                json_page(&u).ok_or_else(|| "404".to_string())
+            };
+            asked.push(u);
+            step = (*pages).land(a);
+        }
+        let Step::Done(joined, None) = step else { panic!("{step:?}") };
+        let v: serde_json::Value = serde_json::from_slice(&joined).unwrap();
+        assert_eq!(v["features"].as_array().map(Vec::len), Some(5));
+        assert!(asked.len() == 5 && asked[2..].iter().all(|u| query_value(u, "f") == Some("geojson")), "{asked:?}");
+
         // A first page that can't be fetched: the query as it is, as a GeoJSON page's failure.
         let (step, asked) = run(true, 100, &|u: &str| {
             if query_value(u, "f") == Some("pbf") {
@@ -4831,6 +4860,16 @@ mod tests {
                 (other, _) => panic!("{crs:?} {geometry_type:?}: {other:?}"),
             }
         }
+        // An empty object id doesn't mark a page: two pages that start with one are both read.
+        let blank = |ids: &[u64]| {
+            let mut p = page(ids, lonlat, point);
+            let i = p.object_id_field.unwrap();
+            p.dataset.features[0].attrs[i] = crate::Value::Null;
+            p
+        };
+        let Step::Fetch(first) = fresh().join_page(blank(&[0, 1])) else { panic!("the first page") };
+        let Step::Fetch(p) = (*first).join_page(blank(&[2, 3])) else { panic!("an empty object id taken for a page sent again") };
+        assert_eq!(p.read(), 4);
         // What the features lost, summed over the pages and said once.
         let mut pages = fresh();
         for (ids, more, rings) in [(&[0, 1][..], true, 2), (&[2, 3][..], false, 3)] {
