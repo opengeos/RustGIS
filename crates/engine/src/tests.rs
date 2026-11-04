@@ -13993,6 +13993,42 @@ fn an_overview_of_more_tiles_than_the_fetch_queue_holds_lands() {
     assert_eq!((at(0, 1), at(1023, 1023), at(500, 700)), (1.0, 254.0, 176.0));
 }
 
+/// A window over more tiles than the fetch queue holds (small tiles) asks for them a batch at a
+/// time, the next as the map draws again, rather than all at once (which would push its own first
+/// requests out of the queue, to ask for them all again at the next draw), and is pending until
+/// the last lands. (The tile cache is one for the process: other tests' reads may evict some of
+/// these tiles meanwhile, so how many are fetched in all isn't checked.)
+#[test]
+fn a_window_of_more_tiles_than_the_fetch_queue_holds_asks_for_them_in_batches() {
+    use crate::render::rustgis_tiles::{cache, cog};
+    use rustgis_data::raster::ColorHint;
+    use rustgis_data::raster::cog::{Example, example_with};
+    use std::time::Duration;
+    let _s = Session::new(Project::default());
+    let (base, _) = serve_ranges(example_with(&Example { size: 1024, tile: 32, no_overviews: true, ..Example::default() }));
+    let url = format!("{base}/flat.tif");
+    // The header first; then the window asks for its first batch.
+    let start = std::time::Instant::now();
+    let mut w = cog::raster::window(&url, 0, (0, 1024), (0, 1024), &[0], ColorHint::Gray).unwrap();
+    while w.raster.is_none() && start.elapsed() < Duration::from_secs(20) {
+        cache::wait(Duration::from_millis(20));
+        w = cog::raster::window(&url, 0, (0, 1024), (0, 1024), &[0], ColorHint::Gray).unwrap();
+    }
+    assert!(w.raster.is_some() && w.pending && !w.failed);
+    let asked = cog::raster::asked(&url, 0);
+    assert!(asked <= 256, "{asked} asked for at once");
+    // Drawn again as tiles land, the window asks for the rest, and is whole in the end.
+    while w.pending && start.elapsed() < Duration::from_secs(60) {
+        cache::wait(Duration::from_millis(20));
+        w = cog::raster::window(&url, 0, (0, 1024), (0, 1024), &[0], ColorHint::Gray).unwrap();
+    }
+    assert!(!w.pending && !w.failed, "still pending after {:?}", start.elapsed());
+    let r = w.raster.unwrap();
+    let at = |x: u32, y: u32| r.bands[0].data[(y * r.width + x) as usize];
+    assert_eq!((at(0, 1), at(1023, 1023), at(500, 700)), (1.0, 254.0, 176.0));
+    assert!(r.bands[0].data.iter().all(|v| v.is_finite()), "a gap");
+}
+
 /// A palette image's overview without a colour table under a grey full image is read as the full
 /// image is, in grey, and nothing is said: a file is what its full image says (as `main` reads a
 /// grey full image with a stray colour table as grey), a window over it is read the same way, and

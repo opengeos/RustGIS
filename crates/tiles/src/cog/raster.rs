@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use rustgis_data::raster::{ColorHint, Raster};
 use web_time::Instant;
 
-use super::{BUDGET, Bands, Info, RETRY, TileState, fetch_all, get_tile, split, tiles, with_info};
+use super::{AT_ONCE, BUDGET, Bands, Info, RETRY, TileState, fetch_all, get_tile, split, tiles, with_info};
 
 /// The most samples (every band) of the overview a layer holds.
 const OVERVIEW_SAMPLES: usize = if cfg!(target_arch = "wasm32") { 1 << 20 } else { 2 << 20 };
@@ -213,6 +213,14 @@ fn tile_landed(key: (String, usize, u32), r: &Result<Bands, String>) {
     crate::cache::notify();
 }
 
+/// How many tiles of level `level` of a file have been asked for and not forgotten (kept, or on
+/// their way): for tests of how a window asks for them.
+#[doc(hidden)]
+pub fn asked(file: &str, level: usize) -> usize {
+    let t = tiles().lock().unwrap_or_else(|e| e.into_inner());
+    t.map.iter().filter(|((u, l, _), s)| u == file && *l == level && matches!(s, TileState::Ready(..) | TileState::Loading(_))).count()
+}
+
 /// Forgets the failed tiles of `file` (`None`: of every file), so they are asked for at once: a
 /// login or a connection changed (see [`crate::cache::forget`] and [`crate::cache::clear`]).
 pub(super) fn forget_failed(file: Option<&str>) {
@@ -245,8 +253,9 @@ fn remember_failed(f: &mut HashMap<(String, usize, u32), Instant>, key: (String,
 
 /// The columns `cols` and rows `rows` (half-open, in the level's pixels) of level `level` of a
 /// file, bands `bands` (0-based, in that order, as the raster's bands), coloured as `color` says:
-/// from the tiles kept, without waiting. Those missing are fetched (each once at a time); the
-/// tile cache's generation goes up as each lands, so the map is drawn again.
+/// from the tiles kept, without waiting. Those missing are fetched (each once at a time, and
+/// [`AT_ONCE`] of them at a time: the rest as the map draws again); the tile cache's generation
+/// goes up as each lands, so the map is drawn again.
 pub fn window(url: &str, level: usize, cols: (u32, u32), rows: (u32, u32), bands: &[usize], color: ColorHint) -> Result<Window, String> {
     let file = split(url).0;
     let Some(info) = super::info(file)? else { return Ok(Window { raster: None, pending: true, failed: false }) };
@@ -299,7 +308,11 @@ pub fn window(url: &str, level: usize, cols: (u32, u32), rows: (u32, u32), bands
         }
         waiting = next.is_some();
     }
-    for c in ask {
+    // Asked for `AT_ONCE` at a time (half the fetch queue, as a joint read asks): a view of small
+    // tiles needing more would push its own first requests out of the queue, to ask for them all
+    // again at the next draw. The rest are asked for as the map draws again (a tile landing draws
+    // it), and are on their way till then.
+    for c in ask.into_iter().take(AT_ONCE) {
         let key = (file.to_string(), level, c);
         get_tile(info.clone(), file.to_string(), level, c, Box::new(move |r| tile_landed(key, &r)));
         // A tile the file leaves out (a sparse file's) is kept at once: not waited for.
@@ -307,19 +320,15 @@ pub fn window(url: &str, level: usize, cols: (u32, u32), rows: (u32, u32), bands
             kept.insert(c, b);
         }
     }
-    // The tiles still missing are on their way (the map draws again as they land) or failed lately
-    // (not waited for: the map would wait for them for nothing; asked for again when their wait is
-    // over).
+    // The tiles still missing are on their way (asked for, or to be asked for at the next draw;
+    // the map draws again as they land) or failed lately (not waited for: the map would wait for
+    // them for nothing; asked for again when their wait is over).
     let missing: Vec<u32> = chunks.iter().copied().filter(|c| !kept.contains_key(c)).collect();
-    let pending = !missing.is_empty() && {
-        let t = tiles().lock().unwrap_or_else(|e| e.into_inner());
-        missing.iter().any(|c| matches!(t.map.get(&(file.to_string(), level, *c)), Some(TileState::Loading(_))))
+    let (pending, waiting) = {
+        let f = failed().lock().unwrap_or_else(|e| e.into_inner());
+        let failed_now = |c: &u32| f.contains_key(&(file.to_string(), level, *c));
+        (missing.iter().any(|c| !failed_now(c)), waiting || missing.iter().any(failed_now))
     };
-    let waiting = waiting
-        || !missing.is_empty() && {
-            let f = failed().lock().unwrap_or_else(|e| e.into_inner());
-            missing.iter().any(|c| f.contains_key(&(file.to_string(), level, *c)))
-        };
     let (mut data, gaps) = assemble(&info, level, (c0, c1), (r0, r1), bands, |c| kept.get(&c).cloned());
     // Until they arrive, its missing tiles show the levels kept (the one zoomed from), not holes.
     if !gaps.is_empty() {

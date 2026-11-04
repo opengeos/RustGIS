@@ -841,7 +841,7 @@ type Gathered = Box<dyn FnOnce(Result<Vec<Bands>, String>) + Send>;
 
 /// Tiles a joint read ([`fetch_all`]) has under way at once: half the fetch queue, so a read of
 /// many (the overview of a file with few overviews) doesn't push its own requests out of it.
-const AT_ONCE: usize = 256;
+pub(super) const AT_ONCE: usize = 256;
 
 /// Reads tiles of a level (each once, shared by the map tiles that need it), then calls `then`
 /// with their bands in the order asked. [`AT_ONCE`] are under way at a time, and a tile the fetch
