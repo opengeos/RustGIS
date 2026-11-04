@@ -130,6 +130,18 @@ pub const PRESETS: &[Preset] = &[
         key_url: "",
         login: false,
     },
+    Preset {
+        id: "requesty",
+        label: "Requesty",
+        api: Api::OpenAi,
+        base_url: "https://router.requesty.ai/v1",
+        model: "anthropic/claude-sonnet-5-5",
+        key_env: &["REQUESTY_API_KEY"],
+        url_env: "",
+        keyless: false,
+        key_url: "https://app.requesty.ai/api-keys",
+        login: false,
+    },
 ];
 
 /// The preset with this id.
