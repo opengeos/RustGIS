@@ -1500,6 +1500,25 @@ fn a_categorized_renderer_by_an_expression_classes_by_it() {
     let (r, report) = by(&format!("{}1", "1 + ".repeat(5000)));
     assert!(matches!(r, Some(Renderer::Single(_))), "{r:?}");
     assert!(report.notes.iter().any(|n| n.text.contains("too long to read")), "{:?}", report.notes);
+    // ... passing over a switched-off category.
+    let qml = format!(
+        r#"<qgis version="3.10"><renderer-v2 type="categorizedSymbol" attr="{}1"><categories><category value="1" symbol="0" render="false"/><category value="2" symbol="1"/></categories>
+        <symbols><symbol type="marker" name="0"><layer class="SimpleMarker" enabled="1"><prop k="color" v="255,0,0,255"/></layer></symbol>
+        <symbol type="marker" name="1"><layer class="SimpleMarker" enabled="1"><prop k="color" v="0,0,255,255"/></layer></symbol></symbols></renderer-v2></qgis>"#,
+        "1 + ".repeat(5000)
+    );
+    let s = read_style(&qml, "points", &mut Report::default()).unwrap();
+    assert!(matches!(s.renderer, Some(Renderer::Single(sym)) if sym.fill == Rgba::rgb(0, 0, 255)), "{:?}", s.renderer);
+    // ... a line category of stacked strokes with them.
+    let long = format!("{}1", "1 + ".repeat(5000));
+    let qml = format!(
+        r#"<qgis version="3.10"><renderer-v2 type="categorizedSymbol" attr="{long}"><categories><category value="1" symbol="0"/></categories>
+        <symbols><symbol type="line" name="0" alpha="1"><layer class="SimpleLine" enabled="1" pass="0"><prop k="line_color" v="90,40,20,255"/><prop k="line_width" v="1.2"/></layer>
+        <layer class="SimpleLine" enabled="1" pass="0"><prop k="line_color" v="240,140,40,255"/><prop k="line_width" v="0.8"/></layer></symbol></symbols></renderer-v2></qgis>"#
+    );
+    let s = read_style(&qml, "roads", &mut Report::default()).unwrap();
+    assert!(matches!(s.renderer, Some(Renderer::Single(_))), "{:?}", s.renderer);
+    assert_eq!(s.line_strokes.as_ref().map(Vec::len), Some(2), "{:?}", s.line_strokes);
 
     // Boolean categories (as QGIS writes them) match the values as RustGIS prints them.
     let qml = r#"<qgis version="3.40.0"><renderer-v2 type="categorizedSymbol" attr="&quot;value&quot; &gt; 50"><categories>

@@ -147,17 +147,19 @@ type SymbolOf<'a> = dyn Fn(Option<&str>, &mut Report) -> Option<Converted> + 'a;
 fn categorized(r: Node, layer: &str, style: &mut Style, report: &mut Report, sym: &SymbolOf) {
     let cats: Vec<Node> = child(r, "categories").map(|c| c.children().filter(|n| n.has_tag_name("category")).collect()).unwrap_or_default();
     // By a field, or by an expression (as RustGIS reads it; whether it reads on the layer's
-    // fields is checked where the layer is added).
+    // fields is checked where the layer is added, and a field's name with spaces or other
+    // characters, which QGIS writes unquoted, is taken as that field there).
     let attr = r.attribute("attr").unwrap_or_default();
     let (field, expression) = match field_name(attr) {
         Some(f) => (f, None),
         None => {
             let Some(e) = expr::to_sql(attr) else {
                 report.skipped(layer, format!("classes by the expression `{}` (empty or too long to read)", attr.trim()));
-                // Drawn as one: the first category's symbol.
-                if let Some(c) = cats.first().and_then(|c| sym(c.attribute("symbol"), report)) {
-                    style.fill_layers = Some(c.fills.clone());
-                    style.renderer = Some(Renderer::Single(c.symbol));
+                // Drawn as one: the first switched-on category's symbol.
+                if let Some(c) =
+                    cats.iter().filter(|c| c.attribute("render") != Some("false")).find_map(|c| sym(c.attribute("symbol"), report))
+                {
+                    single(style, &c);
                 }
                 return;
             };

@@ -231,8 +231,8 @@ fn parse_imported(text: &str, ds: &rustgis_data::Dataset) -> Result<rustgis_data
 }
 
 /// Checks what a style names against the layer's fields: its label classes' clauses and fields
-/// (a class that can't label is switched off) and the field a Unique Values or Graduated Colors
-/// renderer classes by.
+/// (a class that can't label is switched off), the field a Unique Values or Graduated Colors
+/// renderer classes by, and the expression its classes (rules or categories, `by`) are picked by.
 fn check_fields(l: &mut rustgis_map::Layer, name: &str, rules: &[qgis::RuleFilter], by: Option<&qgis::CategoriesBy>, report: &mut Report) {
     for c in std::iter::once(&mut l.labels.default).chain(l.labels.classes.iter_mut()) {
         if let Some(w) = c.where_.clone()
@@ -264,13 +264,24 @@ fn check_fields(l: &mut rustgis_map::Layer, name: &str, rules: &[qgis::RuleFilte
         let kept = fit_rules(l, name, rules, report);
         note_overlapping_rules(l, name, &kept, report);
     } else if let Some(by) = by
+        && l.renderer.expression().is_some()
+        && let Some(fi) = l.dataset.field_index(&by.qgis)
+    {
+        // QGIS classes by a field when its attribute names one, as it writes a name with spaces
+        // or other characters (unquoted): classed by that field.
+        let field = l.dataset.fields.get(fi).map(|f| f.name.clone()).unwrap_or_else(|| by.qgis.clone());
+        if let rustgis_map::Renderer::Unique { field: f, expression, .. } = &mut l.renderer {
+            *f = field;
+            *expression = None;
+        }
+    } else if let Some(by) = by
         && let Some(e) = l.renderer.expression().map(str::to_string)
         && let Err(why) = parse_imported(&e, &l.dataset)
     {
         // The style's categorized renderer by an expression that doesn't read here: every
         // feature drawn with its first drawn category's symbol, as before such renderers were
         // classed (none: as the rest).
-        let mut drawn = "as the rest";
+        let mut drawn = "as the rest, which draws nothing: no category is drawn";
         if let Some((symbol, strokes, fills)) = &by.first {
             l.renderer = rustgis_map::Renderer::Single(*symbol);
             l.line_strokes.clone_from(strokes);

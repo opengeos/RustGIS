@@ -1233,8 +1233,35 @@ fn qgis_categories_by_an_expression_class_by_it_where_it_reads() {
     assert_eq!(fill(&s), [255, 0, 0, 255]);
     let none = r#"<category value="Big" symbol="9"/>"#;
     let r = s.run("style.importQgis", &json!({"layer": "Cities", "text": qml("upper(&quot;nosuch&quot;)", none)})).unwrap();
-    assert!(notes(&r).iter().any(|n| n.contains("every feature drawn as the rest")), "{:?}", notes(&r));
+    assert!(notes(&r).iter().any(|n| n.contains("every feature drawn as the rest, which draws nothing")), "{:?}", notes(&r));
     s.run("edit.undo", &Value::Null).unwrap();
+
+    // A field's name with a space, as QGIS writes it (unquoted): classed by that field.
+    // (Add Field takes no space; a file's field can have one.)
+    s.run("edit.addField", &json!({"layer": "Cities", "name": "size_class", "type": "text"})).unwrap();
+    s.run(
+        "edit.calculateField",
+        &json!({"layer": "Cities", "field": "size_class", "expression": "CASE WHEN pop_max > 5000000 THEN 'Big' END"}),
+    )
+    .unwrap();
+    let id = s.map().layer_by_name("Cities").unwrap().id;
+    if let Some(f) = s.map_mut().layer_mut(id).and_then(|l| l.dataset.fields.iter_mut().find(|f| f.name == "size_class")) {
+        f.name = "Size Class".into();
+    }
+    let r = s.run("style.importQgis", &json!({"layer": "Cities", "text": qml("size class", cats)})).unwrap();
+    assert!(notes(&r).is_empty(), "{:?}", notes(&r));
+    let l = s.map().layer_by_name("Cities").unwrap();
+    assert!(
+        matches!(&l.renderer, rustgis_map::Renderer::Unique { field, expression: None, .. } if field == "Size Class"),
+        "{:?}",
+        l.renderer
+    );
+    let c = l.renderer.classer(&l.dataset, None);
+    let big = (0..l.dataset.features.len()).filter(|r| l.renderer.unique_class(&l.dataset, *r, &c).is_some()).count();
+    let over = (0..l.dataset.features.len())
+        .filter(|r| l.dataset.field_index("pop_max").and_then(|f| l.dataset.value(*r, f).as_f64()).is_some_and(|v| v > 5_000_000.0))
+        .count();
+    assert!(big > 0 && big == over, "{big} {over}");
 
     // The layer's own classes by an expression are left alone by a style that sets no renderer,
     // even one an import couldn't take (it measures: QGIS's measures are in the project's units).
