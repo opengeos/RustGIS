@@ -15513,6 +15513,19 @@ fn an_in_place_layers_failed_overview_is_read_again_when_its_wait_is_over() {
     s.read_in_place_again();
     assert!(layer(&s).data.is_none());
     assert_eq!(sent.load(Ordering::Relaxed), 0, "read again before its wait was over");
+    // Nor by a repair of the project (a layer file added, maps imported), which reads the layers
+    // not read yet together: a failed read is paced, not started over.
+    let at = layer(&s).read_failure().map(|(_, at, _)| at).unwrap();
+    let mut other = rustgis_map::Map::new("Other");
+    let id = other.add_dataset(crate::data::Dataset::new("Empty", crate::data::GeometryType::Point, Vec::new()));
+    crate::cmd::layer::add_layer_text(&mut s, &serde_json::to_string(other.layer(id).unwrap()).unwrap()).unwrap();
+    assert_eq!(
+        layer(&s).read_failure().map(|(_, at, failures)| (at, failures)),
+        Some((at, 1)),
+        "started over by the repair: {:?}",
+        layer(&s).error
+    );
+    assert_eq!(sent.load(Ordering::Relaxed), 0);
     // Then read again, as the map draws: refused again, it waits twice as long this time (see
     // `cache::backoff`), and isn't said again.
     let view = rustgis_geom::Extent::new(10.0, 45.9, 10.1, 46.0);
@@ -15909,6 +15922,44 @@ fn cog_tile_layers_of_older_projects_open_as_rasters() {
     assert!(t.notices.iter().any(|n| n.text.contains("not kept for Scene") && !n.text.contains("Aerial")), "{:?}", t.notices.last());
     t.run("map.zoomIn", &Value::Null).unwrap();
     assert_eq!(said(&t), 1);
+}
+
+/// A plain COG tile layer added this session (`map.addTiles`, kind `cog`) stays a tile layer, with
+/// what a raster layer hasn't, through a layer file added and maps imported (each repairs the
+/// project): it opens as a raster layer read in place once the project is saved and opened again,
+/// as an older project's does. A map file's plain COG tile layers open as raster layers as the map
+/// is imported, as a project's do.
+#[test]
+fn a_cog_tile_layer_added_this_session_stays_one_until_the_project_opens_again() {
+    use rustgis_map::{TileKind, TileLayer};
+    let (base, _) = serve_ranges(rustgis_data::raster::cog::example(512, 256));
+    let url = format!("{base}/scene.tif");
+    let _ = crate::render::rustgis_tiles::cog::probe_blocking(&url);
+    let mut s = Session::new(Project::default());
+    s.run("map.addTiles", &json!({"url": url, "kind": "cog", "name": "Scene", "attribution": "© Example"})).unwrap();
+    let scene = |s: &Session| s.project.maps[0].tiles.iter().find(|t| t.name == "Scene").map(|t| (t.kind, t.attribution.clone()));
+    assert_eq!(scene(&s), Some((TileKind::Cog, "© Example".to_string())), "{:?}", s.project.maps[0].tiles);
+    let mut other = rustgis_map::Map::new("Other");
+    let id = other.add_dataset(crate::data::Dataset::new("Empty", crate::data::GeometryType::Point, Vec::new()));
+    crate::cmd::layer::add_layer_text(&mut s, &serde_json::to_string(other.layer(id).unwrap()).unwrap()).unwrap();
+    s.run("map.import", &json!({"text": serde_json::to_string(&other).unwrap()})).unwrap();
+    assert_eq!(scene(&s), Some((TileKind::Cog, "© Example".to_string())), "converted by a repair");
+    assert!(s.project.maps[0].layer_by_name("Scene").is_none());
+    assert!(!s.notices.iter().any(|n| n.text.contains("which have no attribution")), "{:?}", s.notices);
+    // An older map file's plain COG tile layer opens as a raster layer read in place as it is
+    // imported.
+    let mut old = serde_json::to_value(rustgis_map::Map::new("Old")).unwrap();
+    old["tiles"] = json!([serde_json::to_value(TileLayer::new("Aerial", TileKind::Cog, format!("{base}/aerial.tif"))).unwrap()]);
+    s.run("map.import", &json!({"text": old.to_string()})).unwrap();
+    let imported = s.project.maps.iter().find(|m| m.name == "Old").unwrap();
+    let rl = imported.layer_by_name("Aerial").and_then(|l| l.raster.as_ref()).unwrap();
+    assert!(imported.tiles.is_empty() && rl.in_place && rl.data.is_some(), "{:?}", rl.error);
+    // Saved and opened again, Scene is a raster layer read in place too.
+    let text = serde_json::to_string(&s.project).unwrap();
+    let mut t = Session::new(Project::default());
+    t.run("project.openText", &json!({"text": text})).unwrap();
+    let rl = t.project.maps[0].layer_by_name("Scene").and_then(|l| l.raster.as_ref()).unwrap();
+    assert!(t.project.maps[0].tiles.is_empty() && rl.in_place && rl.data.is_some(), "{:?}", rl.error);
 }
 
 /// A server answering every request with `body`, logging each as `HEAD`, `GET` or `GET <range>`.

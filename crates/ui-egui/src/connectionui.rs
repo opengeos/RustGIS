@@ -904,9 +904,9 @@ fn choose_s3(app: &mut RustGisApp, source: &str, id: &str) -> Result<(), String>
     let args: &[(&str, &str)] = &[("name", &name), ("n", &n), ("failed", &failed_n), ("reading", &reading_n)];
     let text = match (failed, reading) {
         (0, 0) => i18n::fmt("{name} now reads {n} project sources", args),
-        (0, _) => i18n::fmt("{name} now reads {n} project sources; {reading} are still being read", args),
+        (0, _) => i18n::fmt("{name} now reads {n} project sources; {reading} still being read", args),
         (_, 0) => i18n::fmt("{name} now reads {n} project sources; {failed} could not be read", args),
-        _ => i18n::fmt("{name} now reads {n} project sources; {reading} are still being read and {failed} could not be read", args),
+        _ => i18n::fmt("{name} now reads {n} project sources; {reading} still being read and {failed} could not be read", args),
     };
     app.session.notify(text, failed > 0);
     Ok(())

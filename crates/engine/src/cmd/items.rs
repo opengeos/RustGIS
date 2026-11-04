@@ -434,6 +434,9 @@ fn import_maps(s: &mut Session, p: &Value) -> CmdResult {
             if let Some(d) = dir.as_deref().and_then(Path::to_str) {
                 crate::project::resolve_file_paths(d, m.file_paths_mut());
             }
+            // An older map file's plain COG tile layers open as raster layers read in place, as a
+            // project's do (a project imported had them opened as it was read).
+            super::tiles::cog_tiles_to_rasters(&mut m);
             vec![m]
         }
         Err(_) => match Project::from_import_json(&text, dir.as_deref()) {

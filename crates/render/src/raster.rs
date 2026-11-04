@@ -110,6 +110,13 @@ const TOO_LARGE: &str = "the view is too large a part of the image to read at th
 /// Why a turned layer is drawn from its overview.
 const TURNED: &str = "turned, it is drawn from its overview, not at the resolution the view needs";
 
+/// Whether `rotation` (degrees) turns the raster: anything but a whole number of turns. A hair
+/// either side of none (`-1e-7` as much as `1e-7`) isn't one.
+fn turned(rotation: f64) -> bool {
+    let r = rotation.rem_euclid(360.0);
+    r.min(360.0 - r) > 1e-6
+}
+
 /// Why a see-through layer with tiles to come is drawn from its overview alone: no memory for
 /// the image that blends the part in view with it.
 const UNBLENDED: &str = "no memory to blend the part in view with its overview, so it is drawn from its overview";
@@ -149,7 +156,7 @@ pub(crate) fn draw_in_place(
     // A rotated raster turns about the whole image's centre, not the part in view's: the
     // overview is drawn, and zoomed in past it (a screen pixel under 0.8 of its pixels) that is
     // less than the view needs: said, and refused by exports.
-    if style.rotation.rem_euclid(360.0).abs() > 1e-6 {
+    if turned(style.rotation) {
         whole(pm);
         let zoomed_in = in_view(r, view, place, pm.width(), pm.height(), full_res).is_some_and(|w| w.per_px < 0.8);
         return if zoomed_in { Err(TURNED.into()) } else { Ok(false) };
@@ -727,6 +734,18 @@ mod tests {
     use rustgis_map::raster::RasterStyle;
 
     use super::*;
+
+    /// A raster turned by a hair either side of none isn't turned: it is drawn at the view's
+    /// resolution, not from its overview.
+    #[test]
+    fn a_hair_of_rotation_either_way_isnt_a_turn() {
+        for r in [0.0, 1e-7, -1e-7, 360.0, -360.0, 720.0 + 1e-7, f64::NAN] {
+            assert!(!turned(r), "{r}");
+        }
+        for r in [1.0, -1.0, 359.0, 180.0, 1e-5, -1e-5] {
+            assert!(turned(r), "{r}");
+        }
+    }
 
     fn sampling_grid(pixel_width: f64, crs: Crs, nodata: Option<f64>) -> Raster {
         let gt = GeoTransform { origin_x: 0.0, origin_y: 90.0, pixel_width, pixel_height: -60.0 };

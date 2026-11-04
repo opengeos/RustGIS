@@ -557,6 +557,19 @@ impl Project {
 
     /// Repairs invariants after loading (at least one map; a valid active index).
     pub fn normalize(&mut self) {
+        self.repair(false);
+    }
+
+    /// [`Project::normalize`] for a project read from its file, which also opens its plain COG
+    /// tile layers (a project saved before GeoTIFFs read in place were raster layers, or with
+    /// those `map.addTiles` adds) as raster layers read in place: as the project opens only. A
+    /// later repair (a layer file added, maps imported) leaves a tile layer added this session
+    /// as it is.
+    pub(crate) fn normalize_opened(&mut self) {
+        self.repair(true);
+    }
+
+    fn repair(&mut self, opened: bool) {
         if self.maps.is_empty() {
             self.maps.push(Map::new("Map"));
         }
@@ -667,8 +680,11 @@ impl Project {
             // Tile layers with an address that can't be fetched (a hand edit) are dropped.
             m.tiles.retain_mut(|t| t.repair().map_err(|e| log::warn!("{}: {e}", m.name)).is_ok());
             // GeoTIFFs read in place are raster layers (a project from before saved tile layers),
-            // so they don't count toward the tile layers kept.
-            crate::cmd::tiles::cog_tiles_to_rasters(m);
+            // so they don't count toward the tile layers kept. As the project opens only: a tile
+            // layer added this session stays one until the project is opened again.
+            if opened {
+                crate::cmd::tiles::cog_tiles_to_rasters(m);
+            }
             m.tiles.truncate(rustgis_map::tiles::MAX_TILE_LAYERS);
             #[cfg(not(target_arch = "wasm32"))]
             for t in &mut m.tiles {
@@ -915,7 +931,7 @@ impl Project {
         if let Some(d) = dir.and_then(Path::to_str) {
             p.resolve_paths(d);
         }
-        p.normalize();
+        p.normalize_opened();
         Ok(p)
     }
 
@@ -933,7 +949,10 @@ impl Project {
 /// once (see [`rustgis_map::raster::read_together`]): a project or an import of several waits for
 /// the slowest, not for each in turn, where the session waits for them
 /// ([`crate::Session::wait_in_place_reads`]); elsewhere they land as the map draws. One read from
-/// an S3 bucket waits for its connection (see [`crate::s3_connections::resolve_project_s3`]).
+/// an S3 bucket waits for its connection (see [`crate::s3_connections::resolve_project_s3`]). One
+/// that failed is left to [`crate::Session::read_in_place_again`], which reads it again once its
+/// wait is over: a repair of the project (a layer file added, maps imported) doesn't start that
+/// wait over.
 pub(crate) fn read_in_place(m: &mut Map) {
     let mut named: Vec<(String, &mut rustgis_map::raster::RasterLayer)> = m
         .layers
@@ -941,7 +960,8 @@ pub(crate) fn read_in_place(m: &mut Map) {
         .filter_map(|l| {
             let name = l.name.clone();
             let rl = l.raster.as_mut()?;
-            (rl.in_place && !rl.path.as_deref().is_some_and(crate::s3_connections::is_s3_backed)).then_some((name, rl))
+            (rl.in_place && rl.read_failure().is_none() && !rl.path.as_deref().is_some_and(crate::s3_connections::is_s3_backed))
+                .then_some((name, rl))
         })
         .collect();
     let mut layers: Vec<&mut rustgis_map::raster::RasterLayer> = named.iter_mut().map(|(_, rl)| &mut **rl).collect();
