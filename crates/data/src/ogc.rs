@@ -3384,8 +3384,10 @@ impl Pages {
     /// with the pages read.
     fn land_pbf(mut self, answer: Result<Vec<u8>, String>) -> Step {
         let read = self.read();
+        // The features past the limit aren't read, so what they lost isn't counted.
+        let room = self.max.saturating_sub(read);
         let Phase::Offsets { size, order, pbf, .. } = &mut self.phase else { return self.finish(None) };
-        let page = answer.and_then(|bytes| crate::esripbf::read_page(&bytes, "query").map_err(|e| e.to_string()));
+        let page = answer.and_then(|bytes| crate::esripbf::read_page_within(&bytes, "query", room).map_err(|e| e.to_string()));
         let page = match page {
             Ok(page) => page,
             Err(e) if self.decoded.is_none() => {
@@ -3423,6 +3425,7 @@ impl Pages {
             return self.stop(format!("the page after feature {read} would take the layer past {mb} MB of memory; the rest aren't read"));
         }
         self.decoded_bytes = bytes;
+        let cut = page.left_out > 0;
         let returned = page.dataset.features.len();
         let following =
             page.exceeded_transfer_limit.then(|| with_format(&arcgis_page_url(&self.url, read + returned, *size, order.as_deref()), "pbf"));
@@ -3465,7 +3468,7 @@ impl Pages {
                 losses.add(&page.losses);
             }
         }
-        if self.read() > self.max {
+        if cut || self.read() > self.max {
             return self.finish_at_max();
         }
         match following {

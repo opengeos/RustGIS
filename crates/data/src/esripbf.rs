@@ -107,6 +107,9 @@ pub struct Page {
     /// against [`MAX_ROW_BYTES`], [`MAX_TEXT_BYTES`] and [`MAX_GEOMETRY_BYTES`]: a reader joining
     /// pages sums them against a budget of its own.
     pub memory: usize,
+    /// Features it holds past the limit it was read within ([`read_page_within`]), not read: what
+    /// they lost isn't counted.
+    pub left_out: usize,
 }
 
 /// What a page's features lost or had assumed, counted.
@@ -190,6 +193,13 @@ pub fn is_esripbf(bytes: &[u8]) -> bool {
 
 /// Reads one page of an answer as a layer named `name`.
 pub fn read_page(bytes: &[u8], name: &str) -> Result<Page> {
+    read_page_within(bytes, name, usize::MAX)
+}
+
+/// Reads one page of an answer as a layer named `name`, its first `limit` features only (the
+/// rest are counted in [`Page::left_out`]): a reader joining pages up to a number of features
+/// counts what those it keeps lost, and no others.
+pub fn read_page_within(bytes: &[u8], name: &str, limit: usize) -> Result<Page> {
     if bytes.is_empty() {
         return Err(invalid("the answer is empty: the service refused the query (ask for it with f=json to see why)"));
     }
@@ -231,6 +241,8 @@ pub fn read_page(bytes: &[u8], name: &str) -> Result<Page> {
             return Err(too_many_rows(features.len(), declared.len()));
         }
     }
+    let left_out = features.len().saturating_sub(limit);
+    features.truncate(limit);
     let rows = row_bytes(features.len(), declared.len());
     // A point layer's type is the format's default, which an answer leaves out.
     let shape_kind = geometry_type.unwrap_or(POINT);
@@ -341,7 +353,7 @@ pub fn read_page(bytes: &[u8], name: &str) -> Result<Page> {
     let memory = rows
         .saturating_add(MAX_GEOMETRY_BYTES.saturating_sub(tally.geometry_room))
         .saturating_add(MAX_TEXT_BYTES.saturating_sub(tally.text_room));
-    Ok(Page { dataset: ds, report, exceeded_transfer_limit: more, object_id_field, losses, memory })
+    Ok(Page { dataset: ds, report, exceeded_transfer_limit: more, object_id_field, losses, memory, left_out })
 }
 
 /// A reader of protocol buffer fields, which refuses what runs past its bytes.

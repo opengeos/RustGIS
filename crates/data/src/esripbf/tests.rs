@@ -167,6 +167,27 @@ fn z_and_m_are_dropped_and_said_even_when_they_are_all_alike() {
 }
 
 #[test]
+fn a_page_read_within_a_limit_counts_what_the_features_kept_lost() {
+    let bytes = answer(&[
+        number(10, 1),
+        lonlat(),
+        transform(false, 1.0, 0.0, 0.0),
+        feature(&[geometry(&[], &[4, 6, 100])]),
+        feature(&[geometry(&[], &[1, 1, 100])]),
+        feature(&[geometry(&[], &[2, 2, 100])]),
+    ]);
+    let page = read_page_within(&bytes, "t", 1).unwrap();
+    assert_eq!((page.dataset.features.len(), page.left_out, page.losses.with_zm), (1, 2, 1));
+    assert_eq!(page.report.messages, [crate::zm_note(Some(1))]);
+    // Within a limit it doesn't reach, the whole page.
+    let page = read_page_within(&bytes, "t", 3).unwrap();
+    assert_eq!((page.dataset.features.len(), page.left_out, page.losses.with_zm), (3, 0, 3));
+    let all = read_page(&bytes, "t").unwrap();
+    assert_eq!((all.left_out, all.memory), (0, page.memory));
+    assert!(read_page_within(&bytes, "t", 1).unwrap().memory < all.memory);
+}
+
+#[test]
 fn web_mercator_answers_are_turned_to_longitude_latitude() {
     let bytes = answer(&[
         message(8, &[number(1, 102_100), number(2, 3857)].concat()),
