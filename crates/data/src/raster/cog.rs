@@ -642,6 +642,8 @@ pub struct Example {
     /// The full image's first tile left out, as GDAL's sparse files leave out tiles of no-data
     /// (no bytes, no offset).
     pub sparse: bool,
+    /// Without overviews: the full image alone (a file saved without them).
+    pub no_overviews: bool,
 }
 
 impl Default for Example {
@@ -662,6 +664,7 @@ impl Default for Example {
             stray: false,
             no_table: false,
             sparse: false,
+            no_overviews: false,
         }
     }
 }
@@ -674,7 +677,7 @@ pub fn example_with(e: &Example) -> Vec<u8> {
     let planes = if e.planar { nb } else { 1 };
     let per_chunk = nb / planes;
     let mut sizes = vec![size];
-    while *sizes.last().unwrap_or(&tile) > tile {
+    while !e.no_overviews && *sizes.last().unwrap_or(&tile) > tile {
         sizes.push(sizes.last().unwrap_or(&tile).div_ceil(2));
     }
     let value = |x: u32, y: u32, b: u32| -> u8 {

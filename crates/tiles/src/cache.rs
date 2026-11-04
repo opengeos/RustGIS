@@ -277,7 +277,15 @@ fn request(url: &str, want: Want, omit: &'static [u16]) -> State {
         match &slot.entry {
             Entry::Ready(p, _) => return State::Ready(p.clone()),
             Entry::Pending => return State::Pending,
-            Entry::Failed(e, at) if at.elapsed() < retry_wait(e, RETRY) => return State::Failed(e.clone()),
+            Entry::Failed(e, at) if at.elapsed() < retry_wait(e, RETRY) => {
+                // A server that said when to come back (429 or 503 with `Retry-After`) is asked
+                // again then: the map draws again at that time, though nothing else draws it.
+                // One that didn't is asked again by the next draw after a minute, as before.
+                if let Some(wait) = retry_after(e) {
+                    notify_at(*at + wait);
+                }
+                return State::Failed(e.clone());
+            }
             Entry::Failed(..) => {}
         }
     }
@@ -566,6 +574,10 @@ fn fetch_tile(url: String, host: String, want: Want, omit: &'static [u16]) {
                 }
                 Err(e) => {
                     log::debug!("{}: {e}", answer.key);
+                    // Refused until a time its server gave: the map draws again then.
+                    if let Some(wait) = retry_after(&e) {
+                        notify_at(Instant::now() + wait);
+                    }
                     Entry::Failed(e, Instant::now())
                 }
             });
@@ -2236,6 +2248,29 @@ mod tests {
         assert_eq!(retry_after("x (retry after 0 s)"), Some(Duration::from_secs(1)));
         assert_eq!(retry_wait("HTTP 429 (retry after 2 s)", RETRY), Duration::from_secs(2));
         assert_eq!(retry_wait("http status: 500", RETRY), RETRY);
+    }
+
+    /// A tile its server refused saying when to come back (429 or 503 with `Retry-After`) has the
+    /// map asked to draw again then, from the gate, on each draw while it waits (the alarm is
+    /// one-shot, and another may have fired since; the failure arms it first). The alarm is the
+    /// earliest pending one, read here as the map reads it. The entry is stored as a failed fetch
+    /// stores it: the fetcher is one for the process, and another test's may be in.
+    #[test]
+    fn a_tile_refused_with_retry_after_has_the_map_drawn_again_then() {
+        let within = |secs: u64| {
+            let at = ALARM.load(Ordering::Relaxed);
+            at != 0 && at <= (Instant::now() + Duration::from_secs(secs)).saturating_duration_since(alarm_base()).as_millis() as u64 + 1
+        };
+        let url = "test://cache/busy.json";
+        store(url, Entry::Failed("http status: 503 (retry after 2 s)".into(), Instant::now()));
+        ALARM.store(0, Ordering::Relaxed);
+        let State::Failed(e) = get(url, Want::Json) else { panic!("not failed") };
+        assert!(e.contains("retry after 2 s"), "{e}");
+        assert!(within(2), "no alarm on a draw while waiting: {}", ALARM.load(Ordering::Relaxed));
+        // Again on the next draw: the alarm fired (or was consumed) before the wait was over.
+        ALARM.store(0, Ordering::Relaxed);
+        assert!(matches!(get(url, Want::Json), State::Failed(_)));
+        assert!(within(2), "not armed again: {}", ALARM.load(Ordering::Relaxed));
     }
 
     /// A read that failed asks the map to draw again when it may be tried: the generation goes up

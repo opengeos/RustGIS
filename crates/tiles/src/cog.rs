@@ -839,50 +839,109 @@ fn fetch_bands(
 
 type Gathered = Box<dyn FnOnce(Result<Vec<Bands>, String>) + Send>;
 
+/// Tiles a joint read ([`fetch_all`]) has under way at once: half the fetch queue, so a read of
+/// many (the overview of a file with few overviews) doesn't push its own requests out of it.
+const AT_ONCE: usize = 256;
+
 /// Reads tiles of a level (each once, shared by the map tiles that need it), then calls `then`
-/// with their bands in the order asked.
+/// with their bands in the order asked. [`AT_ONCE`] are under way at a time, and a tile the fetch
+/// queue dropped (other reads filled it: see [`crate::cache::DROPPED`]) is asked for again, so a
+/// drop is a delay, not a failure.
 fn fetch_all(info: Arc<Info>, url: String, level: usize, wanted: Vec<u32>, then: Gathered) {
     if wanted.is_empty() {
         then(Ok(Vec::new()));
         return;
     }
     struct Gather {
+        info: Arc<Info>,
+        url: String,
+        level: usize,
+        wanted: Vec<u32>,
         got: Vec<Option<Bands>>,
-        left: usize,
+        /// Places in `wanted` not asked for yet (or dropped, to ask for again), the next last.
+        to_ask: Vec<usize>,
+        in_flight: usize,
+        /// Someone is asking for the next tiles, and asks again after: a tile answered at once
+        /// leaves it to them (asking from the answer would nest as deep as the tiles kept).
+        asking: bool,
         failed: Option<String>,
         then: Option<Gathered>,
     }
-    let g = Arc::new(Mutex::new(Gather { got: vec![None; wanted.len()], left: wanted.len(), failed: None, then: Some(then) }));
-    for (k, idx) in wanted.into_iter().enumerate() {
-        let g = g.clone();
-        get_tile(
-            info.clone(),
-            url.clone(),
-            level,
-            idx,
-            Box::new(move |r| {
+    let n = wanted.len();
+    let g = Arc::new(Mutex::new(Gather {
+        info,
+        url,
+        level,
+        wanted,
+        got: vec![None; n],
+        to_ask: (0..n).rev().collect(),
+        in_flight: 0,
+        asking: false,
+        failed: None,
+        then: Some(then),
+    }));
+    ask(&g);
+
+    /// Asks for the next tiles, [`AT_ONCE`] under way at most, until all are here or one failed
+    /// (then once the rest have answered), and answers `then` once.
+    fn ask(g: &Arc<Mutex<Gather>>) {
+        loop {
+            let (info, url, level, batch) = {
                 let mut s = g.lock().unwrap_or_else(|e| e.into_inner());
-                match r {
-                    Ok(b) => {
-                        if let Some(slot) = s.got.get_mut(k) {
-                            *slot = Some(b);
-                        }
+                if s.asking {
+                    return;
+                }
+                if s.in_flight == 0 && (s.to_ask.is_empty() || s.failed.is_some()) {
+                    if let Some(then) = s.then.take() {
+                        let r = match s.failed.take() {
+                            Some(e) => Err(e),
+                            None => Ok(s.got.iter_mut().filter_map(Option::take).collect()),
+                        };
+                        drop(s);
+                        then(r);
                     }
-                    Err(e) => s.failed = Some(e),
+                    return;
                 }
-                s.left = s.left.saturating_sub(1);
-                if s.left == 0
-                    && let Some(then) = s.then.take()
-                {
-                    let r = match s.failed.take() {
-                        Some(e) => Err(e),
-                        None => Ok(s.got.iter_mut().filter_map(Option::take).collect()),
-                    };
-                    drop(s);
-                    then(r);
+                let mut batch = Vec::new();
+                while s.in_flight < AT_ONCE && s.failed.is_none() {
+                    let Some(k) = s.to_ask.pop() else { break };
+                    let Some(&idx) = s.wanted.get(k) else { continue };
+                    s.in_flight += 1;
+                    batch.push((k, idx));
                 }
-            }),
-        );
+                if batch.is_empty() {
+                    return;
+                }
+                s.asking = true;
+                (s.info.clone(), s.url.clone(), s.level, batch)
+            };
+            for (k, idx) in batch {
+                let g = g.clone();
+                get_tile(
+                    info.clone(),
+                    url.clone(),
+                    level,
+                    idx,
+                    Box::new(move |r| {
+                        {
+                            let mut s = g.lock().unwrap_or_else(|e| e.into_inner());
+                            s.in_flight = s.in_flight.saturating_sub(1);
+                            match r {
+                                Ok(b) => {
+                                    if let Some(slot) = s.got.get_mut(k) {
+                                        *slot = Some(b);
+                                    }
+                                }
+                                Err(e) if e == crate::cache::DROPPED => s.to_ask.push(k),
+                                Err(e) => s.failed = Some(e),
+                            }
+                        }
+                        ask(&g);
+                    }),
+                );
+            }
+            g.lock().unwrap_or_else(|e| e.into_inner()).asking = false;
+        }
     }
 }
 

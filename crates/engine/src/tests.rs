@@ -13975,6 +13975,45 @@ fn a_look_naming_bands_the_file_hasnt_is_said() {
     assert_eq!(rl.style.stretch, Stretch::custom(10.0, 200.0));
 }
 
+/// A file without overviews whose only image has more tiles than the fetch queue holds (small
+/// tiles) is read in place all the same: its overview is asked for a batch at a time, and a tile
+/// the queue dropped is asked for again, so the layer lands rather than failing with "dropped".
+#[test]
+fn an_overview_of_more_tiles_than_the_fetch_queue_holds_lands() {
+    use rustgis_data::raster::cog::{Example, example_with};
+    let (base, _) = serve_ranges(example_with(&Example { size: 1024, tile: 32, no_overviews: true, ..Example::default() }));
+    let mut s = Session::new(Project::default());
+    s.run("layer.addUrl", &json!({"url": format!("{base}/flat.tif"), "name": "Flat"})).unwrap();
+    let rl = s.map().layer_by_name("Flat").and_then(|l| l.raster.as_ref()).unwrap();
+    assert!(rl.in_place);
+    let d = rl.data.as_ref().unwrap();
+    assert_eq!((d.width, d.height), (1024, 1024));
+    // Every tile, not a stand-in: pixel (x, y) of band 0 is (x + y) % 256.
+    let at = |x: u32, y: u32| d.bands[0].data[(y * d.width + x) as usize];
+    assert_eq!((at(0, 1), at(1023, 1023), at(500, 700)), (1.0, 254.0, 176.0));
+}
+
+/// A palette image's overview without a colour table under a grey full image is read as the full
+/// image is, in grey, and nothing is said: a file is what its full image says (as `main` reads a
+/// grey full image with a stray colour table as grey), a window over it is read the same way, and
+/// the overview's own say is the one thing the reader doesn't take over the full image's.
+#[test]
+fn a_palette_overview_under_a_grey_full_image_is_read_grey_as_the_full_image_is() {
+    use rustgis_data::raster::cog::{Example, example_with};
+    use rustgis_map::raster::RasterRenderer;
+    // 4096 × 4096 in 256 px tiles: the overview held is the 1024 × 1024 one (a palette image
+    // without a table), not the full image (grey, 16 M samples).
+    let file = example_with(&Example { size: 4096, tile: 256, classes: true, stray: true, no_table: true, ..Example::default() });
+    let (base, _) = serve_ranges(file);
+    let mut s = Session::new(Project::default());
+    s.run("layer.addUrl", &json!({"url": format!("{base}/stray.tif"), "name": "Stray"})).unwrap();
+    let rl = s.map().layer_by_name("Stray").and_then(|l| l.raster.as_ref()).unwrap();
+    let d = rl.data.as_ref().unwrap();
+    assert_eq!((d.width, d.overview), (1024, Some((4096, 4096))), "the overview held");
+    assert!(matches!(rl.style.renderer, RasterRenderer::Stretch { band: 0, .. }), "{:?}", rl.style.renderer);
+    assert!(!s.notices.iter().any(|n| n.text.contains("colour table")), "{:?}", s.notices);
+}
+
 /// A layer read in place whose overview couldn't be read (its server refused the file's header,
 /// saying when to ask again) is read again once its wait is over, as the app draws, and lands then:
 /// not before, and failing was said once.
