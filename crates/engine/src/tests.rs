@@ -25869,6 +25869,9 @@ fn raster_tools_run_on_another_thread() {
     // Their inputs are read when they start: a missing one is refused then.
     assert!(raster_start(&mut s, "raster.change", &json!({"before": dem, "after": "nowhere"})).err().unwrap().contains("nowhere"));
     assert!(raster_start(&mut s, "imagery.mosaic", &json!({"name": "Hill"})).err().unwrap().contains("Hill"));
+    assert!(raster_start(&mut s, "raster.change", &json!({"before": dem, "after": "dem_later", "band": 2})).is_err());
+    let none = json!({"layer": dem, "training": "Training", "classField": "name", "bands": []});
+    assert!(raster_start(&mut s, "raster.classifySupervised", &none).err().unwrap().contains("at least one band"));
     // Pixels edited by hand stay immediate.
     assert!(runs_in_background("raster.editPixels").is_none());
 }

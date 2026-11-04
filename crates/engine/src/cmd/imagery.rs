@@ -583,6 +583,7 @@ pub(crate) fn change_work(s: &Session, p: &Value) -> Result<super::workflows::Wo
     }
     let band = uint(p, "band").unwrap_or(1).saturating_sub(1) as usize;
     a.bands.get(band).ok_or("no such band")?;
+    bfr.bands.get(band).ok_or_else(|| format!("{} has no band {}", bfr.name, band + 1))?;
     let out_name = name(p, format!("{}_change", a.name));
     Ok(Box::new(move || {
         let av = &a.bands.get(band).ok_or("no such band")?.data;
@@ -646,6 +647,10 @@ pub(crate) fn supervised_work(s: &Session, p: &Value) -> Result<super::workflows
     // Training polygons on the map mean nothing on a scan laid there to look at.
     r.require_coordinates()?;
     let bands = bands_param(p, &r)?;
+    // With none, every pixel would be equally near every class.
+    if bands.is_empty() {
+        return Err("give at least one band".into());
+    }
     let tl = ps(p, "training").ok_or("training (a polygon layer) is required")?;
     let l = s
         .map()
