@@ -706,7 +706,7 @@ pub struct Session {
     /// Set where nothing waits on a command but a shell (`rustgis-cli run`): long runs a command
     /// works out where it's called (a trend over a state from a data cube) take the app's larger
     /// bounds, as its panes do on a thread, and tell their progress (a share, 0 to 1, and 1 when
-    /// one succeeds) through this. Python leaves it unset: a run there holds the interpreter's
+    /// one succeeds) through this; tools and rasters take no work cap, since Ctrl-C stops them. Python leaves it unset: a run there holds the interpreter's
     /// lock and can't be interrupted, so it keeps the Script pane's bounds.
     pub long_runs: Option<fn(&str, f64)>,
 }

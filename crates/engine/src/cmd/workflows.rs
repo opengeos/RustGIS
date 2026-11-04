@@ -208,7 +208,14 @@ pub(crate) fn made_or_ran(s: &mut Session, p: &Value, command: &str) -> CmdResul
         let (_, m) = s.raster_results.remove(at);
         return add_made(s, m);
     }
-    add_made(s, work(s, p)?()?)
+    let made = work(s, p)?;
+    // Where only a shell waits on it, Ctrl-C stops it: no work cap, as on the app's thread.
+    let made = if s.long_runs.is_some() {
+        rustgis_analysis::run_under(name, &rustgis_analysis::control::Control::stoppable(), made)?
+    } else {
+        made()?
+    };
+    add_made(s, made)
 }
 
 #[cfg(not(target_arch = "wasm32"))]

@@ -142,9 +142,16 @@ fn model_index(s: &Session, p: &Value) -> Result<usize, String> {
     }
 }
 
-/// Trains a model from the pixels under training polygons.
+/// Trains a model from the pixels under training polygons. Where only a shell waits on it
+/// ([`Session::long_runs`](crate::Session::long_runs)), Ctrl-C stops it, so it takes no work cap,
+/// as from the pane.
 fn train(s: &Session, p: &Value) -> Result<DlModel, String> {
-    training(s, p)?.fit()
+    let t = training(s, p)?;
+    if s.long_runs.is_some() {
+        rustgis_analysis::run_under("Train Deep Learning Model", &rustgis_analysis::control::Control::stoppable(), || t.fit())
+    } else {
+        t.fit()
+    }
 }
 
 /// A model to train: the raster, the training polygons and their classes, read of the session, and

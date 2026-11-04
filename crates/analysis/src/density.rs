@@ -47,8 +47,8 @@ pub fn max_density_cells() -> usize {
 }
 
 /// Upper limit on aggregate cell visits across all points on one thread, to prevent CPU
-/// exhaustion; a run on several threads may take as many times more
-/// ([`crate::parallel::work_cap`]).
+/// exhaustion; a run on several threads may take as many times more, and one that can be
+/// cancelled any amount ([`crate::parallel::work_cap`]).
 pub const MAX_DENSITY_WORK: usize = 50_000_000;
 
 /// The points between two counts of a strip's progress and checks for a cancel.
@@ -335,8 +335,9 @@ fn kernel_density_on(
     let cap = crate::parallel::work_cap(MAX_DENSITY_WORK, threads);
     if total_work > cap {
         return Err(format!(
-            "{w} × {h_rows} cells from {} points is too much work, more than the {cap} cell visits this computer takes on {threads} thread(s); choose a larger pixel size or a smaller search radius",
-            points.len()
+            "{w} × {h_rows} cells from {} points is too much work, more than the {cap} cell visits this computer takes on {threads} thread(s); choose a larger pixel size or a smaller search radius{}",
+            points.len(),
+            crate::parallel::UNCAPPED_HINT
         ));
     }
 
@@ -552,6 +553,12 @@ mod tests {
             err.contains("too much work") && err.contains(&format!("the {MAX_DENSITY_WORK} cell visits")) && err.contains("1 thread(s)"),
             "{err}"
         );
+        // A run that can be cancelled takes it on: cancelled before it starts, it says so.
+        let run = crate::control::Control::stoppable();
+        run.cancel();
+        let _installed = crate::control::install(Some(run));
+        let err = kernel_density_on(Some(1), &pts, Some(&ext), 10.0, 1000.0, KernelType::Quartic, "huge", Crs::WebMercator).unwrap_err();
+        assert_eq!(err, crate::control::CANCELLED);
     }
 
     #[test]
