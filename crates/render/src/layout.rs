@@ -1248,9 +1248,9 @@ enum LegendRow<'a> {
 }
 
 impl LegendRow<'_> {
-    /// The side of the square its point symbol takes, in points, as far as its marks reach
-    /// ([`point_marks::reach`]); 0 for any other row. No larger than a legend picture.
-    fn symbol_side(&self) -> f32 {
+    /// The side of the square its point symbol takes at 1:`scale`, in points, as far as its marks
+    /// reach ([`point_marks::reach`]); 0 for any other row. No larger than a legend picture.
+    fn symbol_side(&self, scale: f64) -> f32 {
         let (l, s) = match self {
             LegendRow::Plain(l) => (*l, l.renderer.symbol_for(&l.dataset, 0)),
             LegendRow::Class(l, en) => (*l, en.symbol),
@@ -1259,23 +1259,23 @@ impl LegendRow<'_> {
         if l.geometry_type() != GeometryType::Point {
             return 0.0;
         }
-        (2.0 * point_marks::reach(&s, &l.line_strokes)).min(MAX_LEGEND_SIDE as f32)
+        (2.0 * point_marks::reach(&s, &l.line_strokes) * l.size_factor(scale)).min(MAX_LEGEND_SIDE as f32)
     }
 
-    /// Its height, in points: a picture's a pixel a point, as the Layers pane shows it; a row
-    /// grows to hold its point symbol.
-    fn height(&self) -> f32 {
+    /// Its height at 1:`scale`, in points: a picture's a pixel a point, as the Layers pane shows
+    /// it; a row grows to hold its point symbol.
+    fn height(&self, scale: f64) -> f32 {
         match self {
             LegendRow::Picture(p) => picture_size(p).1,
-            _ => LEGEND_ROW.max(self.symbol_side()),
+            _ => LEGEND_ROW.max(self.symbol_side(scale)),
         }
     }
 }
 
-/// The width of a legend's column of swatches, in points: it grows to hold the widest point
-/// symbol, so the labels line up.
-fn swatch_column(rows: &[LegendRow]) -> f32 {
-    rows.iter().map(LegendRow::symbol_side).fold(LEGEND_SWATCH, f32::max)
+/// The width of a legend's column of swatches at 1:`scale`, in points: it grows to hold the widest
+/// point symbol, so the labels line up.
+fn swatch_column(rows: &[LegendRow], scale: f64) -> f32 {
+    rows.iter().map(|row| row.symbol_side(scale)).fold(LEGEND_SWATCH, f32::max)
 }
 
 /// A legend picture's size in points (a pixel a point).
@@ -1428,7 +1428,7 @@ fn legend(pm: &mut Canvas, r: Rect, map: &Map, title: &str, drawn: Option<&[(u32
         y += line * 1.3;
     }
     let rows = legend_rows(map, drawn, &opts);
-    let sw = swatch_column(&rows) * ppp;
+    let sw = swatch_column(&rows, opts.scale) * ppp;
     let mut rows = rows.into_iter().peekable();
     while let Some(row) = rows.next() {
         if let LegendRow::Picture(p) = &row {
@@ -1444,7 +1444,7 @@ fn legend(pm: &mut Canvas, r: Rect, map: &Map, title: &str, drawn: Option<&[(u32
         }
         // The rectangle's own bottom, which a sum of its top and height can miss by a rounding,
         // and a thousandth of a row's slack: a legend sized to its rows keeps the last one.
-        let height = row.height() * ppp;
+        let height = row.height(opts.scale) * ppp;
         if y + height > r.bottom() + line * 1e-3 {
             break;
         }
@@ -1457,7 +1457,7 @@ fn legend(pm: &mut Canvas, r: Rect, map: &Map, title: &str, drawn: Option<&[(u32
         }
         match row {
             LegendRow::Plain(l) => {
-                swatch(pm, (r.x(), y, sw, height), l, &l.renderer.symbol_for(&l.dataset, 0), map.layer_opacity(l), ppp);
+                swatch(pm, (r.x(), y, sw, height), l, &l.renderer.symbol_for(&l.dataset, 0), map.layer_opacity(l), opts.scale, ppp);
                 text::text_at(
                     pm,
                     &l.name,
@@ -1474,7 +1474,7 @@ fn legend(pm: &mut Canvas, r: Rect, map: &Map, title: &str, drawn: Option<&[(u32
                 text::text_at(pm, name, r.x(), y + line / 2.0, 9.0 * 1.33 * ppp, dark, true, text::Align::Left, false);
             }
             LegendRow::Class(l, en) => {
-                swatch(pm, (r.x() + 6.0 * ppp, y, sw, height), l, &en.symbol, map.layer_opacity(l), ppp);
+                swatch(pm, (r.x() + 6.0 * ppp, y, sw, height), l, &en.symbol, map.layer_opacity(l), opts.scale, ppp);
                 text::text_at(
                     pm,
                     &en.label,
@@ -1539,7 +1539,7 @@ fn legend_picture(pm: &mut Canvas, r: Rect, y: f32, pic: &Pixmap, ppp: f32) -> O
 pub fn legend_size_mm(map: &mut Map, scale: f64, all_classes: bool, hide_other: bool, exclude: &[String]) -> Option<(f64, f64)> {
     let drawn = if all_classes { None } else { Some(complete_shown_legends(map, scale)?) };
     let rows = legend_rows(map, drawn.as_deref(), &LegendOptions { hide_other, exclude, scale });
-    let column = swatch_column(&rows);
+    let column = swatch_column(&rows, scale);
     let width = rows
         .iter()
         .map(|row| match row {
@@ -1550,7 +1550,7 @@ pub fn legend_size_mm(map: &mut Map, scale: f64, all_classes: bool, hide_other: 
         })
         .fold(0.0f32, f32::max);
     let mm = 25.4 / 96.0;
-    let height: f32 = rows.iter().map(LegendRow::height).sum();
+    let height: f32 = rows.iter().map(|row| row.height(scale)).sum();
     Some((f64::from(width) * mm, f64::from(height) * mm))
 }
 
@@ -1614,10 +1614,18 @@ pub fn frame_coverage(map: &mut Map, center: Coord, scale: f64, w_mm: f64, h_mm:
 
 /// A legend entry's symbol `s` of the layer `l` in the box (`x`, `y`, `w`, `h`): a point as
 /// [`point_swatch`] draws it, or a line or a filled box a swatch wide, in the middle of the box.
-fn swatch(pm: &mut Canvas, (x, y, w, h): (f32, f32, f32, f32), l: &rustgis_map::Layer, s: &rustgis_map::Symbol, opacity: f32, ppp: f32) {
+fn swatch(
+    pm: &mut Canvas,
+    (x, y, w, h): (f32, f32, f32, f32),
+    l: &rustgis_map::Layer,
+    s: &rustgis_map::Symbol,
+    opacity: f32,
+    scale: f64,
+    ppp: f32,
+) {
     let gt = l.geometry_type();
     if gt == GeometryType::Point {
-        point_swatch(pm, (x, y, w, h), l, s, opacity, ppp);
+        point_swatch(pm, (x, y, w, h), l, s, opacity, ppp * l.size_factor(scale));
         return;
     }
     let (x, w) = (x + (w - LEGEND_SWATCH * ppp) / 2.0, LEGEND_SWATCH * ppp);
@@ -1655,7 +1663,7 @@ fn swatch(pm: &mut Canvas, (x, y, w, h): (f32, f32, f32, f32), l: &rustgis_map::
 }
 
 /// A point layer's symbol in the middle of the box, as the map draws its points: its stacked marks
-/// or its marker, at `ppp`, unturned. See-through, the marks are
+/// or its marker, at `ppp` (with the layer's reference scale), unturned. See-through, the marks are
 /// composited as one, as the map composites the layer, in a picture no larger than the page.
 fn point_swatch(
     pm: &mut Canvas,
@@ -3154,5 +3162,16 @@ mod tests {
         let mut map = point_legend_map(|l| l.renderer = rustgis_map::Renderer::Single(s(f32::MAX)));
         let (w, h) = legend_size_mm(&mut map, 1e6, true, false, &[]).unwrap();
         assert!(w.is_finite() && h.is_finite(), "{w} × {h} mm");
+    }
+
+    #[test]
+    fn a_legend_scales_a_point_with_its_reference_scale() {
+        let s = rustgis_map::Symbol { size: 10.0, stroke_width: 0.0, ..rustgis_map::Symbol::default_for(GeometryType::Point, 0) };
+        // Twice as large at 1:1e6: 10 pt reaches 12 pt from its point, in a row of 24.
+        let map = point_legend_map(|l| {
+            l.renderer = rustgis_map::Renderer::Single(s);
+            l.reference_scale = Some(2e6);
+        });
+        assert!(same_corner(&point_legend(&map), &drawn_point(&s, &[], (12.0, 12.0), 2.0), 24, 24));
     }
 }
