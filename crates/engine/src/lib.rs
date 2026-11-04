@@ -1674,21 +1674,22 @@ impl Session {
         if !self.in_place_wait {
             return;
         }
-        for m in &mut self.project.maps {
-            let mut named: Vec<(String, &mut rustgis_map::raster::RasterLayer)> = m
-                .layers
-                .iter_mut()
-                .filter_map(|l| {
-                    let name = l.name.clone();
-                    let rl = l.raster.as_mut()?;
-                    rl.in_place.then_some((name, rl))
-                })
-                .collect();
-            let mut layers: Vec<&mut rustgis_map::raster::RasterLayer> = named.iter_mut().map(|(_, rl)| &mut **rl).collect();
-            for (i, e) in rustgis_map::raster::wait_for_reads(&mut layers) {
-                if let Some((name, _)) = named.get(i) {
-                    log::warn!("{name}: {e}");
-                }
+        // Every map's at once: one wait bounds them all, not each map's in turn.
+        let mut named: Vec<(String, &mut rustgis_map::raster::RasterLayer)> = self
+            .project
+            .maps
+            .iter_mut()
+            .flat_map(|m| m.layers.iter_mut())
+            .filter_map(|l| {
+                let name = l.name.clone();
+                let rl = l.raster.as_mut()?;
+                rl.in_place.then_some((name, rl))
+            })
+            .collect();
+        let mut layers: Vec<&mut rustgis_map::raster::RasterLayer> = named.iter_mut().map(|(_, rl)| &mut **rl).collect();
+        for (i, e) in rustgis_map::raster::wait_for_reads(&mut layers) {
+            if let Some((name, _)) = named.get(i) {
+                log::warn!("{name}: {e}");
             }
         }
     }

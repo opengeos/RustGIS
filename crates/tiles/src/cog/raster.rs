@@ -149,7 +149,8 @@ fn chunks_of(info: &Info, level: usize, cols: (u32, u32), rows: (u32, u32), band
     let (tw, th) = (l.tile_width.max(1), l.tile_height.max(1));
     for ty in rows.0 / th..rows.1.min(l.height).div_ceil(th) {
         for tx in cols.0 / tw..cols.1.min(l.width).div_ceil(tw) {
-            let tile = ty * l.across() + tx;
+            // A level too large for `u32` to count its tiles (a hostile header) has none past it.
+            let Some(tile) = ty.checked_mul(l.across()).and_then(|t| t.checked_add(tx)) else { continue };
             for &b in bands {
                 if let Some((c, _)) = info.layout.chunk(l, tile, b) {
                     chunks.insert(c);
@@ -454,7 +455,9 @@ fn assemble(
     let (tw, th) = (l.tile_width.max(1), l.tile_height.max(1));
     for ty in rows.0 / th..rows.1.div_ceil(th) {
         for tx in cols.0 / tw..cols.1.div_ceil(tw) {
-            let tile = ty * l.across() + tx;
+            // A level too large for `u32` to count its tiles (a hostile header) has none past it:
+            // left empty, as a tile the header has no chunk for is.
+            let Some(tile) = ty.checked_mul(l.across()).and_then(|t| t.checked_add(tx)) else { continue };
             // The tile's part of the window, in the level's pixels.
             // The tile's end saturates: a width near `u32::MAX` (the header bounds the tiles,
             // not the width) stays a tile, not a wrapped, empty one.
@@ -593,7 +596,8 @@ mod tests {
     }
 
     /// A level as wide as `u32` allows (a hostile header): its last tile's end doesn't wrap, so
-    /// the window is assembled, its missing tiles gaps.
+    /// the window is assembled, its missing tiles gaps. As tall too, its far tiles are more than
+    /// `u32` counts: a window there is assembled all the same (empty), and asks for no chunk.
     #[test]
     fn a_window_at_the_far_edge_of_a_huge_level_doesnt_overflow() {
         let mut info = info_of(example_with(&Example { size: 64, tile: 16, ..Example::default() }));
@@ -601,6 +605,12 @@ mod tests {
         let (data, gaps) = assemble(&info, 0, (u32::MAX - 15, u32::MAX), (0, 16), &[0], |_| None);
         assert_eq!((data.len(), data[0].len()), (1, 16 * 15));
         assert!(gaps.iter().all(|g| g.cols.0 <= g.cols.1 && g.rows.0 <= g.rows.1));
+        info.layout.levels[0].height = u32::MAX;
+        let far = ((u32::MAX - 15, u32::MAX), (u32::MAX - 15, u32::MAX));
+        let (data, gaps) = assemble(&info, 0, far.0, far.1, &[0], |_| None);
+        assert_eq!((data.len(), data[0].len()), (1, 15 * 15));
+        assert!(data[0].iter().all(|v| v.is_nan()) && gaps.is_empty());
+        assert!(chunks_of(&info, 0, far.0, far.1, &[0]).is_empty());
     }
 
     #[test]

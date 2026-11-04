@@ -839,6 +839,13 @@ fn fetch_bands(
 
 type Gathered = Box<dyn FnOnce(Result<Vec<Bands>, String>) + Send>;
 
+/// How many times the fetch queue may drop the tiles of a joint read of `tiles` before it fails:
+/// eight a tile, 64 at least, so a busy queue delays a read but one that never gets its turn ends
+/// (the browser has no other end to it).
+fn drops_allowed(tiles: usize) -> usize {
+    tiles.saturating_mul(8).max(64)
+}
+
 /// Tiles a joint read ([`fetch_all`]) has under way at once: half the fetch queue, so a read of
 /// many (the overview of a file with few overviews) doesn't push its own requests out of it.
 pub(super) const AT_ONCE: usize = 256;
@@ -846,13 +853,23 @@ pub(super) const AT_ONCE: usize = 256;
 /// Reads tiles of a level (each once, shared by the map tiles that need it), then calls `then`
 /// with their bands in the order asked. [`AT_ONCE`] are under way at a time, and a tile the fetch
 /// queue dropped (other reads filled it: see [`crate::cache::DROPPED`]) is asked for again, so a
-/// drop is a delay, not a failure.
+/// drop is a delay, not a failure, until the drops pass [`drops_allowed`]: then the read fails,
+/// saying so, rather than asking without end (the layer reads again later).
 fn fetch_all(info: Arc<Info>, url: String, level: usize, wanted: Vec<u32>, then: Gathered) {
+    fetch_all_with(Arc::new(get_tile), info, url, level, wanted, then)
+}
+
+/// How [`fetch_all_with`] gets a tile: [`get_tile`], or a test's stand-in.
+type GetTile = Arc<dyn Fn(Arc<Info>, String, usize, u32, Box<dyn FnOnce(Result<Bands, String>) + Send>) + Send + Sync>;
+
+/// [`fetch_all`] through `get`.
+fn fetch_all_with(get: GetTile, info: Arc<Info>, url: String, level: usize, wanted: Vec<u32>, then: Gathered) {
     if wanted.is_empty() {
         then(Ok(Vec::new()));
         return;
     }
     struct Gather {
+        get: GetTile,
         info: Arc<Info>,
         url: String,
         level: usize,
@@ -864,11 +881,14 @@ fn fetch_all(info: Arc<Info>, url: String, level: usize, wanted: Vec<u32>, then:
         /// Someone is asking for the next tiles, and asks again after: a tile answered at once
         /// leaves it to them (asking from the answer would nest as deep as the tiles kept).
         asking: bool,
+        /// Tiles the fetch queue dropped so far, bounded by [`drops_allowed`].
+        dropped: usize,
         failed: Option<String>,
         then: Option<Gathered>,
     }
     let n = wanted.len();
     let g = Arc::new(Mutex::new(Gather {
+        get,
         info,
         url,
         level,
@@ -877,6 +897,7 @@ fn fetch_all(info: Arc<Info>, url: String, level: usize, wanted: Vec<u32>, then:
         to_ask: (0..n).rev().collect(),
         in_flight: 0,
         asking: false,
+        dropped: 0,
         failed: None,
         then: Some(then),
     }));
@@ -886,7 +907,7 @@ fn fetch_all(info: Arc<Info>, url: String, level: usize, wanted: Vec<u32>, then:
     /// (then once the rest have answered), and answers `then` once.
     fn ask(g: &Arc<Mutex<Gather>>) {
         loop {
-            let (info, url, level, batch) = {
+            let (get, info, url, level, batch) = {
                 let mut s = g.lock().unwrap_or_else(|e| e.into_inner());
                 if s.asking {
                     return;
@@ -913,11 +934,11 @@ fn fetch_all(info: Arc<Info>, url: String, level: usize, wanted: Vec<u32>, then:
                     return;
                 }
                 s.asking = true;
-                (s.info.clone(), s.url.clone(), s.level, batch)
+                (s.get.clone(), s.info.clone(), s.url.clone(), s.level, batch)
             };
             for (k, idx) in batch {
                 let g = g.clone();
-                get_tile(
+                get(
                     info.clone(),
                     url.clone(),
                     level,
@@ -932,7 +953,21 @@ fn fetch_all(info: Arc<Info>, url: String, level: usize, wanted: Vec<u32>, then:
                                         *slot = Some(b);
                                     }
                                 }
-                                Err(e) if e == crate::cache::DROPPED => s.to_ask.push(k),
+                                // Dropped: asked for again, within the drops allowed (a batch
+                                // already asked for answers after the read failed: not counted).
+                                Err(e) if e == crate::cache::DROPPED => {
+                                    if s.failed.is_none() {
+                                        s.dropped += 1;
+                                        if s.dropped > drops_allowed(s.wanted.len()) {
+                                            s.failed = Some(format!(
+                                                "the fetch queue dropped its tiles {} times (other reads filled it): busy",
+                                                s.dropped
+                                            ));
+                                        } else {
+                                            s.to_ask.push(k);
+                                        }
+                                    }
+                                }
                                 Err(e) => s.failed = Some(e),
                             }
                         }
@@ -1449,6 +1484,48 @@ pub fn read_values_counted_blocking(
 
 #[cfg(test)]
 mod tests {
+    /// A joint read whose tiles the fetch queue keeps dropping ends, saying so, rather than
+    /// asking without end: within eight drops a tile (64 at least).
+    #[test]
+    fn a_read_the_queue_keeps_dropping_ends() {
+        use rustgis_data::raster::cog::{Parse, Sparse, example, layout};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::{Arc, Mutex};
+        let Ok(Parse::Done(layout)) = layout(&Sparse::default().with(0, example(64, 16))) else { panic!("not a COG") };
+        let transformer = layout.crs.transformer().unwrap();
+        let info = Arc::new(super::Info {
+            layout: *layout,
+            header: Sparse::default(),
+            transformer,
+            bounds: [0.0; 4],
+            merc: [0.0; 4],
+            min_zoom: 0,
+            max_zoom: 0,
+            stretch: Mutex::default(),
+            stretching: Mutex::default(),
+            stretch_failed: Mutex::default(),
+            alpha: None,
+        });
+        let asked = Arc::new(AtomicUsize::new(0));
+        let a = asked.clone();
+        let get: super::GetTile = Arc::new(
+            move |_: Arc<super::Info>, _: String, _: usize, _: u32, done: Box<dyn FnOnce(Result<super::Bands, String>) + Send>| {
+                a.fetch_add(1, Ordering::Relaxed);
+                done(Err(crate::cache::DROPPED.into()));
+            },
+        );
+        let (tx, rx) = std::sync::mpsc::channel();
+        let wanted: Vec<u32> = (0..16).collect();
+        super::fetch_all_with(get, info, "test://dropping.tif".into(), 0, wanted, Box::new(move |r| tx.send(r).unwrap_or_default()));
+        let r = rx.recv_timeout(std::time::Duration::from_secs(10)).expect("the read ended");
+        let e = r.map(|_| ()).unwrap_err();
+        // Eight drops a tile, then the read fails on the next; the rest of that batch isn't counted.
+        assert!(e.contains("dropped its tiles 129 times"), "{e}");
+        let asked = asked.load(Ordering::Relaxed);
+        assert!((129..=129 + 15).contains(&asked), "{asked}");
+        assert_eq!((super::drops_allowed(1), super::drops_allowed(16), super::drops_allowed(4096)), (64, 128, 32768));
+    }
+
     #[test]
     fn announced_header_lengths_and_types() {
         use super::{HEAD, header_length, named_tiff, not_tiff_type};

@@ -336,7 +336,6 @@ impl RasterLayer {
         match self.data.clone() {
             Some(d) => {
                 self.look_lost = RasterStyle::look_lost(&d, &look);
-                self.lost_said &= self.look_lost.is_none();
                 if let Some(style) = RasterStyle::for_look(&d, &look) {
                     self.style = style;
                 }
@@ -553,7 +552,9 @@ impl RasterLayer {
     /// land later (the browser).
     pub fn lost_unsaid(&mut self) -> Vec<String> {
         if self.lost_said {
-            return Vec::new();
+            // A look applied after the pixels' losses were said: what it asked for that the file
+            // hasn't, on its own, not the pixels' losses again.
+            return self.look_lost.take().into_iter().collect();
         }
         let mut lost = self.data.as_ref().map(|d| d.lost.clone()).unwrap_or_default();
         lost.extend(self.look_lost.take());
@@ -1607,6 +1608,28 @@ mod tests {
         let gt = GeoTransform { origin_x: 0.0, origin_y: 4.0, pixel_width: 1.0, pixel_height: -1.0 };
         let data: Vec<f32> = (0..16).map(|i| (i % 4 + i / 4) as f32).collect();
         Raster::new("dem", 4, 4, vec![data], gt, Crs::LonLat, None, ColorHint::Gray, "Float32").unwrap()
+    }
+
+    /// What reading the pixels lost is said once; a look applied after that (bands the file
+    /// hasn't) says what it lost on its own, not the pixels' losses again.
+    #[test]
+    fn a_look_applied_after_the_losses_were_said_says_its_own_alone() {
+        let mut r = dem();
+        r.lost.push("its colour table is left out".into());
+        let mut rl = RasterLayer::in_place(r, "test://look-later.tif");
+        assert_eq!(rl.lost_unsaid(), vec!["its colour table is left out".to_string()]);
+        assert!(rl.lost_unsaid().is_empty());
+        let mut rl = rl.with_look(AddressLook { bands: vec![9], range: None });
+        let said = rl.lost_unsaid();
+        assert_eq!(said.len(), 1, "{said:?}");
+        assert!(!said[0].contains("colour table"), "{said:?}");
+        assert!(rl.lost_unsaid().is_empty());
+        // A look applied before they are said is said with them, once.
+        let mut r = dem();
+        r.lost.push("its colour table is left out".into());
+        let mut rl = RasterLayer::in_place(r, "test://look-first.tif").with_look(AddressLook { bands: vec![9], range: None });
+        assert_eq!(rl.lost_unsaid().len(), 2);
+        assert!(rl.lost_unsaid().is_empty());
     }
 
     #[test]
