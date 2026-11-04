@@ -468,24 +468,12 @@ fn projected_bytes(ds: &Dataset, ext: &str, crs: Crs) -> Result<(Vec<u8>, usize)
         "csv" => (to_csv(ds)?.into_bytes(), 0),
         "fgb" => (crate::source::fgb::write_in(ds, crs)?, without_geometry(ds)),
         "parquet" | "geoparquet" => (crate::source::parquet::write(ds)?, 0),
-        "kml" => {
-            let kml = crate::interop::to_kml(ds, name_field(ds));
-            // A cancelled run cuts the document short: it is never written.
-            crate::progress::check()?;
-            (kml.into_bytes(), without_geometry(ds))
-        }
+        "kml" => (crate::interop::to_kml(ds, name_field(ds))?.into_bytes(), without_geometry(ds)),
         "kmz" => {
-            let kml = crate::interop::to_kml(ds, name_field(ds)).into_bytes();
-            // A cancelled run cuts the document short: it is never written.
-            crate::progress::check()?;
+            let kml = crate::interop::to_kml(ds, name_field(ds))?.into_bytes();
             (crate::zip::write(&[("doc.kml".to_string(), kml)]).map_err(DataError::Format)?, without_geometry(ds))
         }
-        "gpx" => {
-            let gpx = crate::interop::to_gpx(ds, name_field(ds));
-            // A cancelled run cuts the document short: it is never written.
-            crate::progress::check()?;
-            (gpx.into_bytes(), without_geometry(ds))
-        }
+        "gpx" => (crate::interop::to_gpx(ds, name_field(ds))?.into_bytes(), without_geometry(ds)),
         "shp" | "zip" => {
             let (parts, left_out) = shapefile_parts_in(ds, crs)?;
             let base: String = ds.name.chars().map(|c| if c.is_alphanumeric() || matches!(c, '-' | '_' | ' ') { c } else { '_' }).collect();
@@ -559,6 +547,11 @@ pub fn write_path_in(ds: &Dataset, path: &Path, crs: Crs) -> Result<usize> {
             let mut placed: Vec<std::path::PathBuf> = Vec::new();
             let mut result = Ok(());
             for (tmp, target) in &written {
+                // A cancel before the last part lands rolls back like a failed rename.
+                if crate::progress::check().is_err() {
+                    result = Err(std::io::Error::other(DataError::Cancelled));
+                    break;
+                }
                 if target.exists() {
                     // Any failure here rolls back like a failed rename.
                     let bak = match temp_beside(target) {
@@ -677,7 +670,8 @@ pub fn write_atomic_with<T, E: From<std::io::Error>>(
     out.get_ref().sync_all()?;
     // Closed before the rename, including on Windows.
     drop(out);
-    // A cancel that came while it was written leaves the file there before as it was.
+    // A cancel that came while it was written leaves the file there before as it was. This is
+    // the last look: the rename commits the file, and a Cancel after it finds it written.
     if crate::progress::check().is_err() {
         return Err(std::io::Error::other(DataError::Cancelled).into());
     }

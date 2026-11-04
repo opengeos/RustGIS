@@ -61,6 +61,18 @@ pub fn land(app: &mut RustGisApp) -> bool {
     false
 }
 
+/// Cancels the export under way and waits up to `wait` for its thread to stop: the writers stop
+/// within a moment and remove their temporary file. One that is still going then is left to the
+/// process's end.
+pub fn stop(app: &mut RustGisApp, wait: std::time::Duration) {
+    let Some(job) = app.export_job.take() else { return };
+    job.control.cancel();
+    let end = std::time::Instant::now() + wait;
+    while job.slot.lock().unwrap_or_else(std::sync::PoisonError::into_inner).is_none() && std::time::Instant::now() < end {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+
 /// The export under way in the status bar: its name, progress and Cancel.
 pub fn status(app: &RustGisApp, ui: &mut Ui, t: &Tokens) {
     let Some(job) = &app.export_job else { return };
@@ -108,6 +120,13 @@ mod tests {
         assert!(!other.exists(), "the refused export wrote nothing");
         let (written, _) = rustgis_engine::data::io::read_path(&path).unwrap();
         assert_eq!(written.features.len(), app.session.map().layer_by_name("Cities").unwrap().dataset.features.len());
+        // Closing the app cancels an export under way and waits for it: no temporary file is left.
+        pick(&other);
+        app.run("ui.exportLayer", json!({"format": "geojson"})).unwrap();
+        stop(&mut app, std::time::Duration::from_secs(60));
+        assert!(app.export_job.is_none());
+        let left: Vec<_> = std::fs::read_dir(&dir).unwrap().filter_map(|e| e.ok()).map(|e| e.file_name()).collect();
+        assert!(left.iter().all(|n| !n.to_string_lossy().ends_with(".tmp")), "{left:?}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

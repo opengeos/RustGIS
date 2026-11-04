@@ -615,7 +615,8 @@ fn install(conn: Connection, tmp: tempfile::TempPath, path: &Path) -> Result<()>
     conn.close().map_err(|(_, e)| err(e))?;
     // Built without syncing (fast); synced once before installation. Windows needs a write handle.
     std::fs::OpenOptions::new().write(true).open(&tmp)?.sync_all()?;
-    // A cancel that came while it was built leaves no file (the temporary one is removed).
+    // A cancel that came while it was built leaves no file (the temporary one is removed). This
+    // is the last look: persisting commits the file, and a Cancel after it finds it written.
     crate::progress::check()?;
     // Refuse journals that appeared during the build; persistence also closes the file race.
     check_new_destination(path)?;
