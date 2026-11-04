@@ -849,7 +849,8 @@ fn model_lists() {
     assert_eq!(parse_models(Api::OpenAi, &r(garbled)), Ok(vec!["openai/gpt-4o-mini".to_string()]));
     let g = json!({"models": [
         {"name": "models/gemini-x", "supportedGenerationMethods": ["generateContent"]},
-        {"name": "models/embed", "supportedGenerationMethods": ["embedContent"]}
+        {"name": "models/embed", "supportedGenerationMethods": ["embedContent"]},
+        {"name": "models/bad\u{1b}[31m", "supportedGenerationMethods": ["generateContent"]}
     ]});
     assert_eq!(parse_models(Api::Gemini, &r(g)), Ok(vec!["gemini-x".to_string()]));
     let req = models_request(&cfg("anthropic"));

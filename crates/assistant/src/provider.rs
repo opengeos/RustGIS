@@ -1619,8 +1619,6 @@ pub fn parse_models(api: Api, resp: &HttpResponse) -> Result<Vec<String>, String
             .into_iter()
             .flatten()
             .filter_map(|m| m.get("id").and_then(Value::as_str))
-            // An id with control characters could not be sent back, and would garble a terminal.
-            .filter(|id| !id.chars().any(char::is_control))
             .map(str::to_string)
             .collect(),
         // A ChatGPT plan's catalog lists its models with a slug and whether they are shown.
@@ -1647,6 +1645,8 @@ pub fn parse_models(api: Api, resp: &HttpResponse) -> Result<Vec<String>, String
             .map(|n| n.trim_start_matches("models/").to_string())
             .collect(),
     };
+    // An id with control characters could not be sent back, and would garble a terminal.
+    ids.retain(|id| !id.chars().any(char::is_control));
     // The ChatGPT catalog comes in its own order (the first is the one to suggest).
     if api != Api::Responses {
         ids.sort();
