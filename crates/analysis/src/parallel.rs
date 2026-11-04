@@ -71,7 +71,7 @@ pub(crate) fn work_cap(one_thread: usize, threads: usize) -> usize {
 pub(crate) const UNCAPPED_HINT: &str = if cfg!(target_arch = "wasm32") {
     ""
 } else {
-    " (or run it from its pane in the desktop app, or with rustgis-cli run, which take any amount of work and can be cancelled)"
+    " (or run it from its pane in the desktop app, which takes any amount of work and can be cancelled)"
 };
 
 /// The cores to use, at most [`MAX_THREADS`].

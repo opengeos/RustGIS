@@ -198,8 +198,8 @@ where
     crate::parallel::for_each_row(
         grid.chunks_mut(w * strip_rows),
         threads,
-        || (),
-        |_, s, strip: &mut [f64]| {
+        crate::control::Pace::default,
+        |pace, s, strip: &mut [f64]| {
             let first = s * strip_rows;
             let last = first + strip.len() / w - 1;
             let (mut counted, mut cells) = (0, 0usize);
@@ -232,6 +232,11 @@ where
                     }
                     let rem_sq = h_sq - dy_sq;
                     let row_offset = (row - first) * w;
+                    // One point's window can span the grid without a cap: Cancel is looked at
+                    // within it.
+                    if pace.stop(col_max + 1 - col_min) {
+                        return;
+                    }
 
                     for col in col_min..=col_max {
                         let x_cell = origin_x + (col as f64 + 0.5) * cell_size;

@@ -209,12 +209,9 @@ pub(crate) fn made_or_ran(s: &mut Session, p: &Value, command: &str) -> CmdResul
         return add_made(s, m);
     }
     let made = work(s, p)?;
-    // Where only a shell waits on it, Ctrl-C stops it: no work cap, as on the app's thread.
-    let made = if s.long_runs.is_some() {
-        rustgis_analysis::run_under(name, &rustgis_analysis::control::Control::stoppable(), made)?
-    } else {
-        made()?
-    };
+    // Where a person at a terminal can stop it with Ctrl-C: no work cap, as on the app's thread.
+    let made =
+        if s.stoppable { rustgis_analysis::run_under(name, &rustgis_analysis::control::Control::stoppable(), made)? } else { made()? };
     add_made(s, made)
 }
 

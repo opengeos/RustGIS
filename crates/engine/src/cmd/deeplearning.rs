@@ -142,12 +142,12 @@ fn model_index(s: &Session, p: &Value) -> Result<usize, String> {
     }
 }
 
-/// Trains a model from the pixels under training polygons. Where only a shell waits on it
-/// ([`Session::long_runs`](crate::Session::long_runs)), Ctrl-C stops it, so it takes no work cap,
-/// as from the pane.
+/// Trains a model from the pixels under training polygons. Where a person at a terminal can stop
+/// it with Ctrl-C ([`Session::stoppable`](crate::Session::stoppable)), it takes no work cap, as
+/// from the pane.
 fn train(s: &Session, p: &Value) -> Result<DlModel, String> {
     let t = training(s, p)?;
-    if s.long_runs.is_some() {
+    if s.stoppable {
         rustgis_analysis::run_under("Train Deep Learning Model", &rustgis_analysis::control::Control::stoppable(), || t.fit())
     } else {
         t.fit()

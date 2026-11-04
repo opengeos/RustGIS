@@ -81,23 +81,24 @@ Assistant, the command line and the web app wait for each tool to finish.
 **Viewshed**, **IDW Interpolation** and **Kriging** have no work limit when you run them from their
 pane in the desktop app (the Tools or Analysis pane), nor does **Kernel Density** or **Deep
 Learning**: a large run shows its progress, and **Cancel** stops it within a moment, however wide
-its rows. Neither does `rustgis-cli run`, which Ctrl-C stops. Where a run can't be stopped while it
-goes (a script, a model, the AI Assistant, Python and the web app), Viewshed, IDW Interpolation and
-Kriging refuse a run that would take more than a second or two of work on one thread (a ray step, a
-cell-point pair), Kernel Density one whose points' search windows (the square around each point's
-radius) cover more than 50 million cells, and Deep Learning a model too large for its raster; its
-training fits a share of the sampled pixels, or fewer epochs, instead (`dl.train` reports the epochs
-it ran). A task or model recorded from a pane run keeps these limits when it runs again in the app,
-so a step the pane took on can be refused there, and a model trained again can differ. On the
-desktop these limits grow with the cores the run takes (up to 16), as many times more work as the
-threads it runs on. Threads share cores and memory, so a run at that limit can take up to about
-twice as long as a one-thread run at its own (measured on one machine, a Xeon Silver 4114; it can be
-longer on others); in the web app, on one thread, the limits stay as they are. The error names the
-limit on this computer and the threads it counted. The limits on memory (the cells a grid may have,
-and those on the following pages) hold everywhere, as does Viewshed's on its window: a radius
-covering more than 25 million cells, or 100,000 cells across, is refused. A tool's own default cell
-size still follows the one-thread limit, so it makes the same grid on any computer and from any
-caller; a finer cell size given is what a larger limit, or none, lets through.
+its rows. Neither does `rustgis-cli run` typed at a terminal, which Ctrl-C stops. Where a run can't
+be stopped while it goes (a script, a model, the AI Assistant, Python, the web app, and `rustgis-cli
+run` called from another program, such as an agent or a CI job, which may wait with a timeout),
+Viewshed, IDW Interpolation and Kriging refuse a run that would take more than a second or two of
+work on one thread (a ray step, a cell-point pair), Kernel Density one whose points' search windows
+(the square around each point's radius) cover more than 50 million cells, and Deep Learning a model
+too large for its raster; its training fits a share of the sampled pixels, or fewer epochs, instead
+(`dl.train` reports the epochs it ran). A task or model recorded from a pane run keeps these limits
+when it runs again in the app, so a step the pane took on can be refused there, and a model trained
+again can differ. On the desktop these limits grow with the cores the run takes (up to 16), as many
+times more work as the threads it runs on. Threads share cores and memory, so a run at that limit
+can take up to about twice as long as a one-thread run at its own (measured on one machine, a Xeon
+Silver 4114; it can be longer on others); in the web app, on one thread, the limits stay as they
+are. The error names the limit on this computer and the threads it counted. The limits on memory
+(the cells a grid may have, and those on the following pages) hold everywhere, as does Viewshed's on
+its window: a radius covering more than 25 million cells, or 100,000 cells across, is refused. A
+tool's own default cell size still follows the one-thread limit, so it makes the same grid on any
+computer and from any caller; a finer cell size given is what a larger limit, or none, lets through.
 
 From the command line or a script (`gp.run`), a built-in tool's parameter with a list of choices, such as Buffer's
 units, takes one of them in any letter case (`"meters"` for `Meters`); any other value is an error

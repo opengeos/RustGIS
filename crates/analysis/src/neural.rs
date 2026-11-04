@@ -375,6 +375,8 @@ pub fn train(
             }
         }
     }
+    // A cancelled run makes no model: the accuracy check on held-back samples can take long too.
+    crate::control::check()?;
     if !layers.iter().all(|l| l.w.iter().chain(&l.b).all(|v| v.is_finite())) {
         return Err("training diverged; try fewer epochs or smaller layers".into());
     }

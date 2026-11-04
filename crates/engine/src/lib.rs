@@ -706,9 +706,14 @@ pub struct Session {
     /// Set where nothing waits on a command but a shell (`rustgis-cli run`): long runs a command
     /// works out where it's called (a trend over a state from a data cube) take the app's larger
     /// bounds, as its panes do on a thread, and tell their progress (a share, 0 to 1, and 1 when
-    /// one succeeds) through this; tools and rasters take no work cap, since Ctrl-C stops them. Python leaves it unset: a run there holds the interpreter's
+    /// one succeeds) through this. Python leaves it unset: a run there holds the interpreter's
     /// lock and can't be interrupted, so it keeps the Script pane's bounds.
     pub long_runs: Option<fn(&str, f64)>,
+    /// Set where a person at a terminal waits on a command (`rustgis-cli run` with stdin and
+    /// stderr a terminal), who can stop it with Ctrl-C: tools and rasters take no work cap
+    /// ([`rustgis_analysis::control::Control::stoppable`]). A program that calls it (an agent, a
+    /// CI job) may wait with a timeout, so there they keep their caps.
+    pub stoppable: bool,
 }
 
 /// The most `layer.addUrl` requests kept for the front end at a time.
@@ -944,6 +949,7 @@ impl Session {
             raster_results: Vec::new(),
             raster_runs: Vec::new(),
             long_runs: None,
+            stoppable: false,
         }
     }
 
