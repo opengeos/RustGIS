@@ -348,6 +348,7 @@ fn forget_file_in(t: &mut Tiles, url: &str) {
 
 /// A file's info: `Ok(None)` while it is being read (asking for it starts the read).
 pub fn info(url: &str) -> Result<Option<Arc<Info>>, String> {
+    crate::logins::check(url).map_err(str::to_string)?;
     let url = split(url).0;
     {
         let i = infos().lock().unwrap_or_else(|e| e.into_inner());
@@ -370,6 +371,10 @@ pub fn info(url: &str) -> Result<Option<Arc<Info>>, String> {
 }
 
 fn with_info(url: &str, then: Box<dyn FnOnce(Result<Arc<Info>, String>) + Send>) {
+    if let Err(e) = crate::logins::check(url) {
+        then(Err(e.to_string()));
+        return;
+    }
     {
         let mut i = infos().lock().unwrap_or_else(|e| e.into_inner());
         match i.get_mut(url) {
@@ -399,6 +404,10 @@ fn with_info(url: &str, then: Box<dyn FnOnce(Result<Arc<Info>, String>) + Send>)
     load(
         url.to_string(),
         Box::new(move |r| {
+            let r = crate::logins::check(&key)
+                .map_err(str::to_string)
+                .and(r)
+                .map_err(|e| if rustgis_data::login_address::is_wrapper(&key) { crate::logins::scrub(&e) } else { e });
             let waiting = {
                 let mut i = infos().lock().unwrap_or_else(|e| e.into_inner());
                 let next = match &r {
@@ -982,6 +991,10 @@ fn fetch_all_with(get: GetTile, info: Arc<Info>, url: String, level: usize, want
 
 /// One tile of a level, decoded: from the tiles kept, or read.
 fn get_tile(info: Arc<Info>, url: String, level: usize, idx: u32, then: Box<dyn FnOnce(Result<Bands, String>) + Send>) {
+    if let Err(e) = crate::logins::check(&url) {
+        then(Err(e.to_string()));
+        return;
+    }
     let Some(l) = info.layout.levels.get(level) else {
         then(Err("no such overview".into()));
         return;
@@ -1042,6 +1055,7 @@ fn get_tile(info: Arc<Info>, url: String, level: usize, idx: u32, then: Box<dyn 
             let r = r
                 .and_then(|b| cog::decode_tile_counted(&info.header, &info.layout, level, idx, b).map_err(|e| e.to_string()))
                 .map(Arc::new);
+            let r = crate::logins::check(&key.0).map_err(str::to_string).and(r);
             let waiting = {
                 let mut t = tiles().lock().unwrap_or_else(|e| e.into_inner());
                 let old = match &r {
