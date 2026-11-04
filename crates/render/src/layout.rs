@@ -3170,12 +3170,13 @@ mod tests {
         let mut map = point_legend_map(|l| l.renderer = rustgis_map::Renderer::Single(s(10.0)));
         let (w, h) = legend_size_mm(&mut map, 1e6, true, false, &[]).unwrap();
         assert!((h - f64::from(LEGEND_ROW) * mm).abs() < 1e-6, "{h} mm");
-        assert!((w - (f64::from(LEGEND_SWATCH) + label) * mm).abs() < 1e-6, "{w} mm");
+        // Its width within a rounding: it is summed in f32, past a name as wide as its font makes it.
+        assert!((w - (f64::from(LEGEND_SWATCH) + label) * mm).abs() < 1e-4, "{w} mm");
         // One of 40 pt reaches 24 pt from its point: 48 pt each way.
         let mut map = point_legend_map(|l| l.renderer = rustgis_map::Renderer::Single(s(40.0)));
         let (w, h) = legend_size_mm(&mut map, 1e6, true, false, &[]).unwrap();
         assert!((h - 48.0 * mm).abs() < 1e-6, "{h} mm");
-        assert!((w - (48.0 + label) * mm).abs() < 1e-6, "{w} mm");
+        assert!((w - (48.0 + label) * mm).abs() < 1e-4, "{w} mm");
         assert!(same_corner(&point_legend(&map), &drawn_point(&s(40.0), &[], (24.0, 24.0), 1.0), 48, 48));
         // A frame too short for the row draws no part of it.
         let mut pm = Pixmap::new(200, 200).unwrap();
@@ -3321,6 +3322,6 @@ mod tests {
         // The layer's name over the class: a row of 15 and one of 48, 6 + 48 + 6 before its label.
         let (w, h) = legend_size_mm(&mut map, 1e6, true, true, &[]).unwrap();
         assert!((h - f64::from(LEGEND_ROW + 48.0) * mm).abs() < 1e-6, "{h} mm");
-        assert!((w - f64::from(48.0 + 12.0 + text::measure("a", 8.5, false)) * mm).abs() < 1e-6, "{w} mm");
+        assert!((w - f64::from(48.0 + 12.0 + text::measure("a", 8.5, false)) * mm).abs() < 1e-4, "{w} mm");
     }
 }
