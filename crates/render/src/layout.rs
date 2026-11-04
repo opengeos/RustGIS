@@ -1681,7 +1681,8 @@ fn swatch(
 /// A point layer's symbol in the middle of the box, as the map draws its points: `strokes`' stacked
 /// marks or its marker, at `ppp` (with the layer's reference scale), unturned. See-through, the
 /// marks are composited as one, as the map composites the layer, in a picture no larger than the
-/// page.
+/// page. So are those too large for the box (past [`LegendRow::symbol_side`]'s limit), which the
+/// picture cuts to it.
 fn point_swatch(
     pm: &mut Canvas,
     (x, y, w, h): (f32, f32, f32, f32),
@@ -1690,15 +1691,24 @@ fn point_swatch(
     ppp: f32,
 ) {
     let (cx, cy) = (x + w / 2.0, y + h / 2.0);
-    if opacity >= 0.999 {
+    // A thousandth of slack: the box's size went through a rounding of its own.
+    let fits = 2.0 * point_marks::reach(s, strokes) * ppp <= w.min(h) * 1.001;
+    if opacity >= 0.999 && fits {
         point_marks::draw(pm, cx, cy, s, strokes, 0.0, None, ppp);
         return;
     }
     let (left, top) = (x.floor(), y.floor());
     let (cw, ch) = (((x + w).ceil() - left) as u32, ((y + h).ceil() - top) as u32);
-    if let Some(mut picture) = pm.sub(cw.min(pm.width()), ch.min(pm.height())) {
+    let (cw, ch) = (cw.min(pm.width()), ch.min(pm.height()));
+    if let Some(mut picture) = pm.sub(cw, ch) {
         point_marks::draw(&mut picture, cx - left, cy - top, s, strokes, 0.0, None, ppp);
-        pm.place(picture, Transform::from_translate(left, top), opacity, rustgis_map::effects::Blend::Normal, None);
+        // A recording keeps what lies past its picture's edge, so it is cut here.
+        let clip = Rect::from_xywh(left, top, cw as f32, ch as f32).map(|r| crate::vector::Clip {
+            path: PathBuilder::from_rect(r),
+            rule: FillRule::Winding,
+            transform: Transform::identity(),
+        });
+        pm.place(picture, Transform::from_translate(left, top), opacity, rustgis_map::effects::Blend::Normal, clip);
     }
 }
 
@@ -3258,6 +3268,34 @@ mod tests {
             // Both names start past the column, where the blue point has no part in it.
             let names = columns(&|r, g, b| r < 100 && g < 100 && b < 100);
             assert!(names.first().is_some_and(|x| (53..60).contains(x)), "{gt:?}: {names:?}");
+        }
+    }
+
+    #[test]
+    fn an_oversized_point_stays_in_its_row() {
+        let blue = Rgba::rgb(0, 0, 255);
+        let s = rustgis_map::Symbol {
+            fill: blue,
+            size: 3000.0,
+            stroke_width: 0.0,
+            marker: rustgis_map::Marker::Square,
+            ..rustgis_map::Symbol::default_for(GeometryType::Point, 0)
+        };
+        // Opaque and see-through: a row and a column of 2048 pt, which the square fills.
+        for transparency in [0.0, 50.0] {
+            let map = point_legend_map(|l| {
+                l.renderer = rustgis_map::Renderer::Single(s);
+                l.transparency = transparency;
+            });
+            let mut pm = Pixmap::new(2100, 2100).unwrap();
+            pm.fill(tiny_skia::Color::WHITE);
+            let opts = LegendOptions { hide_other: false, exclude: &[], scale: 1e6 };
+            crate::canvas::with_canvas(&mut pm, |c| {
+                legend(c, Rect::from_xywh(0.0, 0.0, 2100.0, 2100.0).unwrap(), &map, "", None, opts, 1.0)
+            });
+            let white = |x, y| pm.pixel(x, y).is_some_and(|p| (p.red(), p.green(), p.blue()) == (255, 255, 255));
+            assert!(!white(10, 10) && !white(2040, 2040), "transparency {transparency}: it fills the box");
+            assert!(white(10, 2060) && white(2060, 10), "transparency {transparency}: it stays in the box");
         }
     }
 
