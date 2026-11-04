@@ -32,9 +32,12 @@ pub fn start(app: &mut RustGisApp, command: &'static str, p: Value) -> Result<Va
     let control = Control::stoppable();
     let (ctl, slot) = (control.clone(), crate::Slot::default());
     let out = slot.clone();
+    // A streamed layer's source read on the thread keeps its requests in the session's diagnostics.
+    let diagnostics = app.session.diagnostics.capture();
     std::thread::Builder::new()
         .name(name.into())
         .spawn(move || {
+            let _diagnostics = diagnostics.enter();
             let wrote = run.run(&ctl);
             // Filled even when its lock is poisoned, or the export would show as running forever.
             *out.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(wrote);
