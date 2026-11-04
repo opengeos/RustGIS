@@ -1539,6 +1539,15 @@ fn a_categorized_renderer_by_an_expression_classes_by_it() {
     let Some(Renderer::Unique { classes, .. }) = &s.renderer else { panic!("{:?}", s.renderer) };
     assert_eq!(classes.iter().map(|c| c.0.as_str()).collect::<Vec<_>>(), ["true", "false", "true", "true", "false"]);
     assert_eq!(s.bool_classes, ["true", "false"]);
+    // A boolean category past the class limit isn't recorded: a text class of its value stays text.
+    let many: String = (0..renderer::MAX_CLASSES).map(|i| format!(r#"<category value="v{i}" type="string" symbol="0"/>"#)).collect();
+    let qml = format!(
+        r#"<qgis version="3.40.0"><renderer-v2 type="categorizedSymbol" attr="&quot;value&quot; &gt; 50"><categories>
+        <category value="true" type="string" symbol="0"/>{many}<category value="true" type="bool" symbol="0"/></categories>
+        <symbols><symbol type="marker" name="0"><layer class="SimpleMarker" enabled="1"/></symbol></symbols></renderer-v2></qgis>"#
+    );
+    let s = read_style(&qml, "points", &mut Report::default()).unwrap();
+    assert!(s.bool_classes.is_empty(), "{:?}", s.bool_classes);
 
     // Renaming a class takes its label, strokes and fills along, and never onto another class.
     let mut r = Renderer::Unique {
@@ -1550,16 +1559,17 @@ fn a_categorized_renderer_by_an_expression_classes_by_it() {
         other_label: None,
         class_strokes: [("true".to_string(), Vec::new())].into(),
         other_strokes: Vec::new(),
-        class_fills: Default::default(),
+        class_fills: [("true".to_string(), Vec::new())].into(),
         other_fills: Vec::new(),
         expression: None,
     };
     assert!(!rename_class(&mut r, "true", "x") && !rename_class(&mut r, "nosuch", "y"));
     assert!(rename_class(&mut r, "true", "True"));
-    let Renderer::Unique { classes, class_labels, class_strokes, .. } = &r else { panic!("{r:?}") };
+    let Renderer::Unique { classes, class_labels, class_strokes, class_fills, .. } = &r else { panic!("{r:?}") };
     assert_eq!(classes.iter().map(|c| c.0.as_str()).collect::<Vec<_>>(), ["True", "x"]);
     assert_eq!((class_labels.get("True").map(String::as_str), class_strokes.contains_key("True")), (Some("Yes"), true));
     assert!(!class_labels.contains_key("true"));
+    assert!(class_fills.contains_key("True") && !class_fills.contains_key("true") && !class_strokes.contains_key("true"));
     assert_eq!((bool_key("TRUE", true), bool_key("false", false), bool_key("yes", true)), (Some("True"), Some("false"), None));
 
     // By a field, a boolean category matches the field's text as it is.

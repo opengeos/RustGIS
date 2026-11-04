@@ -14,7 +14,7 @@ use crate::symbol_by::SymbolBy;
 use crate::symbology::{ClassMethod, LineStroke, Renderer, Symbol};
 
 /// The most classes a renderer is imported with: every feature is matched against them.
-const MAX_CLASSES: usize = 4096;
+pub(super) const MAX_CLASSES: usize = 4096;
 
 /// Reads the renderer `r` into `style`: its renderer, a line layer's strokes, and its reference
 /// scale and symbol levels.
@@ -205,11 +205,9 @@ fn categorized(r: Node, layer: &str, style: &mut Style, report: &mut Report, sym
         if values.is_empty() {
             values.push(cat.attribute("value").unwrap_or_default().to_string());
         }
-        // A boolean category's values (`true`, `false`), matched to the layer's field or the
-        // expression's value below and where the layer is added.
-        if cat.attribute("type") == Some("bool") {
-            bools.extend(values.iter().filter(|v| super::bool_key(v, false).is_some()).cloned());
-        }
+        // A boolean category's values (`true`, `false`) are matched to the layer's field or the
+        // expression's value where the layer is added: recorded for each class it makes.
+        let boolean = cat.attribute("type") == Some("bool");
         for v in values {
             // An empty value is QGIS's "all other values".
             if v.is_empty() || v == "NULL" {
@@ -231,6 +229,9 @@ fn categorized(r: Node, layer: &str, style: &mut Style, report: &mut Report, sym
             if !c.fills.is_empty() {
                 class_fills.insert(v.clone(), c.fills.clone());
             }
+            if boolean && super::bool_key(&v, false).is_some() {
+                bools.push(v.clone());
+            }
             classes.push((v, c.symbol));
         }
     }
@@ -251,15 +252,9 @@ fn categorized(r: Node, layer: &str, style: &mut Style, report: &mut Report, sym
     });
     // Its boolean categories, matched to the layer's field or the expression's value where the
     // layer is added (each value once).
-    bools.retain(|k| classes_has(style, k));
     let mut seen = std::collections::BTreeSet::new();
     bools.retain(|k| seen.insert(k.clone()));
     style.bool_classes = bools;
-}
-
-/// Whether `style`'s Unique Values renderer has a class `key`.
-fn classes_has(style: &Style, key: &str) -> bool {
-    matches!(&style.renderer, Some(Renderer::Unique { classes, .. }) if classes.iter().any(|c| c.0 == key))
 }
 
 fn graduated(r: Node, layer: &str, style: &mut Style, report: &mut Report, sym: &SymbolOf) {
