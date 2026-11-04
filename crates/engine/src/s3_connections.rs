@@ -284,9 +284,12 @@ fn block(s: &mut Session, g: &Group) -> usize {
 }
 
 /// Opens (again) the streamed sources whose address `which` accepts; how many opened and how
-/// many failed.
+/// many failed. Rasters read in place read their overviews together (see
+/// [`rustgis_map::raster::read_together`]): a bucket of several waits for the slowest, not for
+/// each in turn, and on the desktop for none (they land as the map draws).
 fn reopen_where(s: &mut Session, which: impl Fn(&str) -> bool) -> (usize, usize) {
     let (mut opened, mut failed) = (0, 0);
+    let wait = s.in_place_wait;
     for src in s.project.maps.iter_mut().flat_map(|m| m.layers.iter_mut()).filter_map(|l| l.source.as_mut()) {
         let Some(path) = src.path.clone() else { continue };
         if (!src.is_open() || src.error.is_some()) && which(&path) {
@@ -296,14 +299,22 @@ fn reopen_where(s: &mut Session, which: impl Fn(&str) -> bool) -> (usize, usize)
             }
         }
     }
+    let mut in_place = Vec::new();
     for raster in s.project.maps.iter_mut().flat_map(|m| m.layers.iter_mut()).filter_map(|l| l.raster.as_mut()) {
         if raster.data.is_none() && raster.time_zarr.is_none() && raster.path.as_deref().is_some_and(&which) {
+            if raster.in_place {
+                in_place.push(raster);
+                continue;
+            }
             match raster.reload() {
                 Ok(()) => opened += 1,
                 Err(_) => failed += 1,
             }
         }
     }
+    let unread = rustgis_map::raster::read_together(&mut in_place, wait).len();
+    failed += unread;
+    opened += in_place.len().saturating_sub(unread);
     (opened, failed)
 }
 

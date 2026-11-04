@@ -171,6 +171,9 @@ fn reset(s: &mut Session, p: Project) {
     // nothing of the new project is fetched before.
     s.s3_pending.clear();
     crate::s3_connections::resolve_project_s3(s);
+    // Its rasters read in place, begun together as it was read: waited for where the session
+    // waits (the command line, Python), landing as the map draws on the desktop.
+    s.wait_in_place_reads();
     // What reading a raster left out (a colour table, names, a sidecar's scale) is said again as
     // the project opens, as when it was added. One still read in the background isn't here yet.
     let mut lost: Vec<(String, String)> = Vec::new();

@@ -14183,7 +14183,13 @@ fn serve_file(body: Vec<u8>, ranges: bool) -> (String, std::sync::Arc<std::sync:
 /// [`serve_ranges`] refusing the first `n` requests with a 503 and `Retry-After: 1` (a server
 /// busy for a moment), answering the rest.
 fn serve_refusing_first(body: Vec<u8>, n: usize) -> (String, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
-    serve_with(body, true, None, n)
+    serve_with(body, true, None, n, 0)
+}
+
+/// [`serve_ranges`], answering the first `n - 1` requests (a file's header) and refusing the rest
+/// with a 500: a file whose header reads but whose tiles can't be.
+fn serve_refusing_from(body: Vec<u8>, n: usize) -> (String, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+    serve_with(body, true, None, 0, n)
 }
 
 /// [`serve_file`] holding every answer until `gate` is set (a request still under way, for as long
@@ -14193,18 +14199,21 @@ fn serve_gated(
     ranges: bool,
     gate: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 ) -> (String, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
-    serve_with(body, ranges, gate, 0)
+    serve_with(body, ranges, gate, 0, 0)
 }
 
-/// [`serve_gated`], refusing the first `refuse` requests (see [`serve_refusing_first`]).
+/// [`serve_gated`], refusing the first `refuse` requests (see [`serve_refusing_first`]), and every
+/// request from the `refuse_from`th on (see [`serve_refusing_from`]; 0 for none).
 fn serve_with(
     body: Vec<u8>,
     ranges: bool,
     gate: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     refuse: usize,
+    refuse_from: usize,
 ) -> (String, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
     use std::io::{Read, Write};
     let refusals = std::sync::Arc::new(std::sync::Mutex::new(refuse));
+    let seen = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
     let sent = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
@@ -14216,10 +14225,16 @@ fn serve_with(
         // (the fetch workers are shared by every test in the process).
         for stream in listener.incoming() {
             let Ok(mut s) = stream else { continue };
-            let (body, count, gate, refusals) = (body.clone(), count.clone(), gate.clone(), refusals.clone());
+            let (body, count, gate, refusals, seen) = (body.clone(), count.clone(), gate.clone(), refusals.clone(), seen.clone());
             std::thread::spawn(move || {
                 let mut buf = [0u8; 4096];
                 let read = s.read(&mut buf).unwrap_or(0);
+                // Refused from the `refuse_from`th request on: a file whose tiles can't be read.
+                let nth = seen.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+                if refuse_from > 0 && nth >= refuse_from {
+                    let _ = s.write_all(b"HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+                    return;
+                }
                 // Refused while there are refusals left: busy, ask again in a second.
                 let refused = {
                     let mut left = refusals.lock().unwrap();
@@ -15173,7 +15188,7 @@ fn an_address_look_holds_when_the_pixels_land_later() {
     let look = AddressLook { bands: vec![4, 2, 1], range: Some((10.0, 200.0)) };
     let mut rl = RasterLayer::unread_in_place(format!("{base}/scene.tif")).with_look(look);
     assert!(rl.data.is_none());
-    assert!(read_together(&mut [&mut rl]).is_empty());
+    assert!(read_together(&mut [&mut rl], true).is_empty());
     assert!(rl.data.is_some());
     assert_eq!(rl.style.renderer, RasterRenderer::Rgb { red: 4, green: 2, blue: 1 });
     assert_eq!(rl.style.stretch, Stretch::custom(10.0, 200.0));
@@ -15181,7 +15196,7 @@ fn an_address_look_holds_when_the_pixels_land_later() {
     let mut stretched =
         RasterLayer::unread_in_place(format!("{classes}/classes.tif")).with_look(AddressLook { bands: vec![], range: Some((0.0, 100.0)) });
     let mut own = RasterLayer::unread_in_place(format!("{classes}/classes.tif"));
-    assert!(read_together(&mut [&mut stretched, &mut own]).is_empty());
+    assert!(read_together(&mut [&mut stretched, &mut own], true).is_empty());
     assert!(matches!(stretched.style.renderer, RasterRenderer::Stretch { band: 0, .. }), "{:?}", stretched.style.renderer);
     assert_eq!(own.style.renderer, RasterRenderer::Colormap);
     // Saved before its pixels landed (the browser, a read that failed), a layer opens in its look,
@@ -15391,7 +15406,7 @@ fn an_in_place_layers_failed_overview_is_read_again_when_its_wait_is_over() {
     use rustgis_map::raster::RasterLayer;
     use std::sync::atomic::Ordering;
     use std::time::Duration;
-    let (base, sent) = serve_refusing_first(rustgis_data::raster::cog::example(512, 256), 1);
+    let (base, sent) = serve_refusing_first(rustgis_data::raster::cog::example(512, 256), 2);
     let mut s = Session::new(Project::default());
     s.map_mut().add_raster("Scene".to_string(), RasterLayer::unread_in_place(format!("{base}/scene.tif")));
     let text = serde_json::to_string(&s.project).unwrap();
@@ -15401,26 +15416,190 @@ fn an_in_place_layers_failed_overview_is_read_again_when_its_wait_is_over() {
     let rl = layer(&s);
     assert!(rl.data.is_none());
     assert!(rl.error.as_deref().is_some_and(|e| e.contains("retry after 1 s")), "{:?}", rl.error);
+    assert_eq!(rl.read_failure().map(|(_, _, failures)| failures), Some(1));
     let said = |s: &Session| s.notices.iter().filter(|n| n.error && n.text.contains("Scene: couldn't be read in place")).count();
     assert_eq!(said(&s), 1, "{:?}", s.notices);
     // Not before its wait is over.
     s.read_in_place_again();
     assert!(layer(&s).data.is_none());
     assert_eq!(sent.load(Ordering::Relaxed), 0, "read again before its wait was over");
-    // Then read again, landing as the map draws.
+    // Then read again, as the map draws: refused again, it waits twice as long this time (see
+    // `cache::backoff`), and isn't said again.
     let view = rustgis_geom::Extent::new(10.0, 45.9, 10.1, 46.0);
-    let start = std::time::Instant::now();
-    while layer(&s).data.is_none() && start.elapsed() < Duration::from_secs(20) {
+    let draw = |s: &mut Session| {
         crate::render::rustgis_tiles::cache::wait(Duration::from_millis(50));
         s.read_in_place_again();
         s.map_mut().sync_sources(&view, 1000.0, false);
         s.notice_landed_rasters();
+    };
+    let start = std::time::Instant::now();
+    while layer(&s).read_failure().is_none_or(|(_, _, failures)| failures < 2) && start.elapsed() < Duration::from_secs(20) {
+        draw(&mut s);
+    }
+    let rl = layer(&s);
+    let (_, at, failures) = rl.read_failure().expect("refused again");
+    assert_eq!(failures, 2);
+    assert_eq!(sent.load(Ordering::Relaxed), 0);
+    assert_eq!(said(&s), 1, "{:?}", s.notices);
+    // Not before twice its wait is over (looked at while that is still ahead).
+    if at.elapsed() < Duration::from_millis(1800) {
+        s.read_in_place_again();
+        assert!(layer(&s).read_failure().is_some(), "read again before twice its wait was over");
+    }
+    // Then read a third time, landing as the map draws.
+    let start = std::time::Instant::now();
+    while layer(&s).data.is_none() && start.elapsed() < Duration::from_secs(20) {
+        draw(&mut s);
     }
     let rl = layer(&s);
     assert!(rl.data.is_some(), "{:?}", rl.error);
-    assert!(rl.error.is_none());
+    assert!(rl.error.is_none() && rl.read_failure().is_none());
     assert!(sent.load(Ordering::Relaxed) > 0);
     assert_eq!(said(&s), 1, "{:?}", s.notices);
+}
+
+/// Where the session doesn't wait for reads in place (the desktop app, whose commands run on the
+/// window's own thread), a cloud-optimised GeoTIFF is added at once, its header probed as the app
+/// does, and its overview lands as the map draws; one that can't be read is added too, and says so
+/// once its read fails. A project opens the same way. Waiting, the command fails instead.
+#[test]
+fn a_cog_added_without_waiting_lands_as_the_map_draws() {
+    use std::time::Duration;
+    let (base, _) = serve_ranges(rustgis_data::raster::cog::example(512, 256));
+    let url = format!("{base}/scene.tif");
+    let mut s = Session::new(Project::default());
+    s.in_place_wait = false;
+    let _ = crate::render::rustgis_tiles::cog::probe_blocking(&url);
+    let r = s.run("layer.addUrl", &json!({"url": url, "name": "Scene"})).unwrap();
+    assert_eq!((r["inPlace"].as_bool(), r["kind"].as_str()), (Some(true), Some("raster")), "{r}");
+    assert_eq!(r["bounds"], json!([10.0, 45.0, 11.0, 46.0]), "framed on the header read: {r}");
+    let layer = |s: &Session, name: &str| s.map().layer_by_name(name).and_then(|l| l.raster.clone()).unwrap();
+    let rl = layer(&s, "Scene");
+    assert!(rl.in_place && rl.data.is_none() && rl.error.is_none(), "added before its overview is in: {rl:?}");
+    let view = rustgis_geom::Extent::new(10.0, 45.0, 11.0, 46.0);
+    let draw = |s: &mut Session| {
+        crate::render::rustgis_tiles::cache::wait(Duration::from_millis(50));
+        s.read_in_place_again();
+        s.map_mut().sync_sources(&view, 1000.0, false);
+        s.notice_landed_rasters();
+    };
+    let start = std::time::Instant::now();
+    while layer(&s, "Scene").data.is_none() && start.elapsed() < Duration::from_secs(20) {
+        draw(&mut s);
+    }
+    let rl = layer(&s, "Scene");
+    assert_eq!(rl.data.as_ref().map(|d| (d.width, d.height)), Some((512, 512)), "{:?}", rl.error);
+    // One whose header reads (the first request) but whose tiles can't be is added, and says so
+    // once its read fails.
+    let (broken, _) = serve_refusing_from(rustgis_data::raster::cog::example(512, 256), 2);
+    let broken = format!("{broken}/broken.tif");
+    s.run("layer.addUrl", &json!({"url": broken, "name": "Broken"})).unwrap();
+    let start = std::time::Instant::now();
+    while layer(&s, "Broken").error.is_none() && start.elapsed() < Duration::from_secs(20) {
+        draw(&mut s);
+    }
+    assert!(layer(&s, "Broken").error.as_deref().is_some_and(|e| e.contains("500")), "{:?}", layer(&s, "Broken").error);
+    let said = |s: &Session| s.notices.iter().filter(|n| n.error && n.text.contains("Broken: couldn't be read in place")).count();
+    assert_eq!(said(&s), 1, "{:?}", s.notices);
+    // Waiting, the same address fails the command.
+    s.in_place_wait = true;
+    assert!(s.run("layer.addUrl", &json!({"url": broken, "name": "Again"})).unwrap_err().contains("500"));
+    // A project opens the same way: its layers read in place land as the map draws.
+    let text = serde_json::to_string(&s.project).unwrap();
+    let mut t = Session::new(Project::default());
+    t.in_place_wait = false;
+    t.run("project.openText", &json!({"text": text})).unwrap();
+    assert!(layer(&t, "Scene").data.is_none(), "opened before its overview is in");
+    let start = std::time::Instant::now();
+    while layer(&t, "Scene").data.is_none() && start.elapsed() < Duration::from_secs(20) {
+        draw(&mut t);
+    }
+    assert!(layer(&t, "Scene").data.is_some(), "{:?}", layer(&t, "Scene").error);
+}
+
+/// Binding a saved S3 connection to a project's rasters read in place reads their overviews
+/// together, in the time of the slowest (see `s3_connections::reopen_where`), not one after the
+/// other: the stand-in bucket answers nothing until both files have been asked for, so reads made
+/// one at a time would never get their first answer.
+#[test]
+fn binding_a_connection_reads_its_in_place_rasters_together() {
+    use rustgis_map::raster::RasterLayer;
+    use std::time::Duration;
+    let base = serve_s3_together(vec![
+        ("a.tif", rustgis_data::raster::cog::example(512, 256)),
+        ("b.tif", rustgis_data::raster::cog::example(256, 512)),
+    ]);
+    let mut s = Session::new(Project::default());
+    s.map_mut().add_raster("A".to_string(), RasterLayer::unread_in_place("s3://s3-together-bucket/a.tif"));
+    s.map_mut().add_raster("B".to_string(), RasterLayer::unread_in_place("s3://s3-together-bucket/b.tif"));
+    let text = serde_json::to_string(&s.project).unwrap();
+    let mut t = Session::new(Project::default());
+    t.run(
+        "connection.new",
+        &json!({"kind": "s3", "name": "Together", "address": base, "options": {"credentials": "none", "buckets": "s3-together-bucket"}}),
+    )
+    .unwrap();
+    let start = std::time::Instant::now();
+    t.run("project.openText", &json!({"text": text})).unwrap();
+    for (name, width) in [("A", 512), ("B", 256)] {
+        let rl = t.map().layer_by_name(name).and_then(|l| l.raster.clone()).unwrap();
+        assert_eq!(rl.data.as_ref().map(|d| d.width), Some(width), "{name}: {:?}", rl.error);
+    }
+    assert!(start.elapsed() < Duration::from_secs(60), "read one after the other: {:?}", start.elapsed());
+    t.run("connection.remove", &json!({"id": "Together"})).unwrap();
+}
+
+/// A stand-in S3 endpoint serving `files` (key, bytes) by range, answering nothing until each key
+/// has been asked for once: reads made together get their answers, reads made one after the other
+/// never get the first.
+fn serve_s3_together(files: Vec<(&'static str, Vec<u8>)>) -> String {
+    use std::io::{Read, Write};
+    use std::time::Duration;
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let files = std::sync::Arc::new(files);
+    let asked: std::sync::Arc<std::sync::Mutex<std::collections::HashSet<&'static str>>> = Default::default();
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut s) = stream else { continue };
+            let (files, asked) = (files.clone(), asked.clone());
+            std::thread::spawn(move || {
+                let mut buf = [0u8; 8192];
+                let read = s.read(&mut buf).unwrap_or(0);
+                let req = String::from_utf8_lossy(&buf[..read]).to_ascii_lowercase();
+                let path = req.split_whitespace().nth(1).unwrap_or("/").split(['?', '#']).next().unwrap_or("/").to_string();
+                let Some((key, body)) = files.iter().find(|(k, _)| path.ends_with(&format!("/{k}"))) else {
+                    let _ = s.write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+                    return;
+                };
+                asked.lock().unwrap().insert(key);
+                let start = std::time::Instant::now();
+                while asked.lock().unwrap().len() < files.len() && start.elapsed() < Duration::from_secs(150) {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                if req.starts_with("head ") {
+                    let _ = write!(s, "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len());
+                    return;
+                }
+                let range = req.lines().find_map(|l| l.strip_prefix("range: bytes=")).and_then(|r| {
+                    let (a, b) = r.trim().split_once('-')?;
+                    if a.is_empty() {
+                        let n = b.parse::<usize>().ok()?.min(body.len());
+                        return Some((body.len() - n, body.len().saturating_sub(1)));
+                    }
+                    Some((a.parse::<usize>().ok()?, b.parse::<usize>().ok()?))
+                });
+                let (status, part) = match range {
+                    Some((a, b)) if a < body.len() => ("206 Partial Content", &body[a..=b.min(body.len() - 1)]),
+                    Some(_) => ("416 Range Not Satisfiable", &body[..0]),
+                    None => ("200 OK", &body[..]),
+                };
+                let _ = write!(s, "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", part.len());
+                let _ = s.write_all(part);
+            });
+        }
+    });
+    base
 }
 
 /// A COG tile layer opened as a raster layer takes a numbered name when another layer has its

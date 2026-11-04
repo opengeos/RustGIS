@@ -929,10 +929,11 @@ impl Project {
     }
 }
 
-/// Reads the overviews of a map's raster layers read in place and not read yet, all at once (see
-/// [`rustgis_map::raster::read_together`]): a project or an import of several waits for the
-/// slowest, not for each in turn. One read from an S3 bucket waits for its connection (see
-/// [`crate::s3_connections::resolve_project_s3`]).
+/// Starts reading the overviews of a map's raster layers read in place and not read yet, all at
+/// once (see [`rustgis_map::raster::read_together`]): a project or an import of several waits for
+/// the slowest, not for each in turn, where the session waits for them
+/// ([`crate::Session::wait_in_place_reads`]); elsewhere they land as the map draws. One read from
+/// an S3 bucket waits for its connection (see [`crate::s3_connections::resolve_project_s3`]).
 pub(crate) fn read_in_place(m: &mut Map) {
     let mut named: Vec<(String, &mut rustgis_map::raster::RasterLayer)> = m
         .layers
@@ -944,7 +945,7 @@ pub(crate) fn read_in_place(m: &mut Map) {
         })
         .collect();
     let mut layers: Vec<&mut rustgis_map::raster::RasterLayer> = named.iter_mut().map(|(_, rl)| &mut **rl).collect();
-    let failed = rustgis_map::raster::read_together(&mut layers);
+    let failed = rustgis_map::raster::read_together(&mut layers, false);
     for (i, e) in failed {
         if let Some((name, _)) = named.get(i) {
             log::warn!("{name}: {e}");

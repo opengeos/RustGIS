@@ -79,6 +79,10 @@ pub struct RasterLayer {
     /// over (see [`RasterLayer::read_failure`]).
     #[serde(skip)]
     failed_at: Option<Instant>,
+    /// How many reads of its overview in place have failed in a row: each waits longer than the
+    /// last (see [`RasterLayer::read_failure`]).
+    #[serde(skip)]
+    failures: u32,
     /// What reading its pixels left out (`Raster::lost`) has been said (see
     /// [`RasterLayer::lost_unsaid`]).
     #[serde(skip)]
@@ -97,48 +101,50 @@ pub struct RasterLayer {
 pub type InPlaceRead = Box<dyn FnOnce(Result<Raster, String>) + Send>;
 
 /// Reads the overviews of `layers` read in place and not read yet, all at once: a project of
-/// several opens in the time of the slowest, not of them all (waited for natively, at most two
-/// minutes in all; landing later in the browser). Other layers are left as they are. Returns each
-/// failure, by its place in `layers`.
-pub fn read_together(layers: &mut [&mut RasterLayer]) -> Vec<(usize, String)> {
+/// several opens in the time of the slowest, not of them all. Waited for natively when `wait`
+/// (at most two minutes in all); otherwise, as always in the browser, they land as the map draws
+/// (see [`wait_for_reads`]). Other layers are left as they are. Returns each failure, by its
+/// place in `layers`: without waiting, the reads that couldn't start.
+pub fn read_together(layers: &mut [&mut RasterLayer], wait: bool) -> Vec<(usize, String)> {
     let mut failed = Vec::new();
     let unread = |l: &RasterLayer| l.in_place && l.data.is_none() && l.opening.is_none() && l.time_zarr.is_none();
-    #[cfg(not(target_arch = "wasm32"))]
-    let deadline = Instant::now() + rustgis_data::raster::IN_PLACE_WAIT;
-    #[cfg(not(target_arch = "wasm32"))]
-    let mut started = Vec::new();
     for (i, l) in layers.iter_mut().enumerate() {
-        if !unread(l) {
-            continue;
-        }
-        // Started without waiting: natively, each is waited for below, together.
-        #[cfg(not(target_arch = "wasm32"))]
+        // Started without waiting: waited for below, together.
+        if unread(l)
+            && let Err(e) = l.begin_reload()
         {
-            l.error = None;
-            l.failed_at = None;
-            match l.begin_in_place_read() {
-                Ok(()) => started.push(i),
-                Err(e) => {
-                    l.error = Some(e.clone());
-                    l.error_said = false;
-                    failed.push((i, e));
-                }
-            }
-        }
-        #[cfg(target_arch = "wasm32")]
-        if let Err(e) = l.reload() {
             failed.push((i, e));
         }
     }
-    #[cfg(not(target_arch = "wasm32"))]
-    for i in started {
-        if let Some(l) = layers.get_mut(i)
-            && let Err(e) = l.wait_for_read(deadline)
-        {
-            failed.push((i, e));
-        }
+    if wait {
+        failed.extend(wait_for_reads(layers));
     }
     failed
+}
+
+/// Waits (natively; at most two minutes for all) for the overviews of `layers` being read in
+/// place (see [`read_together`]), installing them. Returns each failure, by its place in
+/// `layers`. In the browser, where nothing may wait, they land as the map draws.
+pub fn wait_for_reads(layers: &mut [&mut RasterLayer]) -> Vec<(usize, String)> {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = layers;
+        Vec::new()
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let deadline = Instant::now() + rustgis_data::raster::IN_PLACE_WAIT;
+        let mut failed = Vec::new();
+        for (i, l) in layers.iter_mut().enumerate() {
+            if l.in_place
+                && l.opening.is_some()
+                && let Err(e) = l.wait_for_read(deadline)
+            {
+                failed.push((i, e));
+            }
+        }
+        failed
+    }
 }
 type InPlaceReader = Arc<dyn Fn(&str, InPlaceRead) + Send + Sync>;
 
@@ -216,6 +222,7 @@ impl RasterLayer {
             pixels_said: false,
             error_said: false,
             failed_at: None,
+            failures: 0,
             lost_said: false,
             look_lost: None,
             dropped: Vec::new(),
@@ -244,6 +251,7 @@ impl RasterLayer {
             pixels_said: false,
             error_said: false,
             failed_at: None,
+            failures: 0,
             lost_said: false,
             look_lost: None,
             dropped: Vec::new(),
@@ -272,6 +280,7 @@ impl RasterLayer {
             pixels_said: false,
             error_said: false,
             failed_at: None,
+            failures: 0,
             lost_said: false,
             look_lost: None,
             dropped: Vec::new(),
@@ -305,17 +314,19 @@ impl RasterLayer {
             pixels_said: false,
             error_said: false,
             failed_at: None,
+            failures: 0,
             lost_said: false,
             look_lost: None,
             dropped: Vec::new(),
         }
     }
 
-    /// [`RasterLayer::unread_in_place`], its overview read now (waited for natively; landing
-    /// later in the browser, where nothing may wait).
+    /// [`RasterLayer::unread_in_place`], its overview being read: it lands as the map draws
+    /// ([`RasterLayer::poll_reload`]), in the browser and on the desktop alike, and failing is
+    /// said then (see [`RasterLayer::error_unsaid`]).
     pub fn opening_in_place(address: impl Into<String>) -> RasterLayer {
         let mut layer = RasterLayer::unread_in_place(address);
-        let _ = layer.reload();
+        let _ = layer.begin_reload();
         layer
     }
 
@@ -369,15 +380,16 @@ impl RasterLayer {
         Ok(())
     }
 
-    /// Why reading its overview in place failed, and when: for the read to be made again once its
-    /// wait is over (see [`RasterLayer::read_again`]), as a tile or a file's header is. `None` for
-    /// a layer with its pixels, one being read, and one that waits for something other than time
-    /// (its bucket's connection: see [`RasterLayer::fail`]).
-    pub fn read_failure(&self) -> Option<(&str, Instant)> {
+    /// Why reading its overview in place failed, when, and how many reads in a row have failed:
+    /// for the read to be made again once its wait is over (see [`RasterLayer::read_again`]), as a
+    /// tile or a file's header is, waiting longer each time. `None` for a layer with its pixels,
+    /// one being read, and one that waits for something other than time (its bucket's connection:
+    /// see [`RasterLayer::fail`]).
+    pub fn read_failure(&self) -> Option<(&str, Instant, u32)> {
         if !self.in_place || self.data.is_some() || self.opening.is_some() {
             return None;
         }
-        Some((self.error.as_deref()?, self.failed_at?))
+        Some((self.error.as_deref()?, self.failed_at?, self.failures))
     }
 
     /// Reads its overview again after a read that failed (see [`RasterLayer::read_failure`]),
@@ -394,16 +406,29 @@ impl RasterLayer {
     }
 
     /// Reads the pixels again from the path or the embedded file (after a project opens). A
-    /// layer that follows the time slider is left to the engine, which reads the step shown.
+    /// layer that follows the time slider is left to the engine, which reads the step shown. A
+    /// layer read in place is waited for natively (at most two minutes), as a file is read.
     pub fn reload(&mut self) -> Result<(), String> {
+        self.reload_in(true)
+    }
+
+    /// [`RasterLayer::reload`] without waiting for a layer read in place: its overview lands as
+    /// the map draws ([`RasterLayer::poll_reload`]), natively as in the browser, so a command on
+    /// the desktop's own thread isn't held by a slow host. The error is a read that can't start.
+    pub fn begin_reload(&mut self) -> Result<(), String> {
+        self.reload_in(false)
+    }
+
+    fn reload_in(&mut self, wait: bool) -> Result<(), String> {
         if self.time_zarr.is_some() {
             return Ok(());
         }
         self.opening = None;
         self.error = None;
         self.failed_at = None;
-        // Read in place: its overview, by the reader the app installed; waited for natively (as a
-        // file is read), landing later in the browser.
+        self.failures = 0;
+        // Read in place: its overview, by the reader the app installed; waited for natively when
+        // asked to (as a file is read), else landing later, as always in the browser.
         if self.in_place {
             if let Err(e) = self.begin_in_place_read() {
                 self.error = Some(e.clone());
@@ -411,8 +436,11 @@ impl RasterLayer {
                 return Err(e);
             }
             #[cfg(not(target_arch = "wasm32"))]
-            return self.wait_for_read(Instant::now() + rustgis_data::raster::IN_PLACE_WAIT);
+            if wait {
+                return self.wait_for_read(Instant::now() + rustgis_data::raster::IN_PLACE_WAIT);
+            }
             #[cfg(target_arch = "wasm32")]
+            let _ = wait;
             return Ok(());
         }
         if self.embedded.is_none()
@@ -573,12 +601,14 @@ impl RasterLayer {
                 self.data = Some(raster);
                 self.error = None;
                 self.failed_at = None;
+                self.failures = 0;
             }
             Err(error) => {
                 // A read made again that fails as before (see `read_again`) isn't said again.
                 self.error_said = self.error_said && self.error.as_deref() == Some(error.as_str());
                 self.error = Some(error);
                 self.failed_at = Some(Instant::now());
+                self.failures = self.failures.saturating_add(1);
             }
         }
     }

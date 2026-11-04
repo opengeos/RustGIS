@@ -110,6 +110,10 @@ const TOO_LARGE: &str = "the view is too large a part of the image to read at th
 /// Why a turned layer is drawn from its overview.
 const TURNED: &str = "turned, it is drawn from its overview, not at the resolution the view needs";
 
+/// Why a see-through layer with tiles to come is drawn from its overview alone: no memory for
+/// the image that blends the part in view with it.
+const UNBLENDED: &str = "no memory to blend the part in view with its overview, so it is drawn from its overview";
+
 /// Draws a raster layer read in place (a cloud-optimised GeoTIFF by its address, see
 /// [`rustgis_map::raster::RasterLayer::in_place`]) as [`draw`] draws one held whole: its overview
 /// `r` (the layer's pixels), or, zoomed in past it, the part in view read from the level the view
@@ -254,6 +258,11 @@ pub(crate) fn draw_in_place(
                 draw(&mut both, part, &own_style, Some(stats), view, 1.0, full_res, place);
             }
             pm.draw_pixmap(0, 0, both.as_ref(), &PixmapPaint { opacity, ..PixmapPaint::default() }, Transform::identity(), None);
+        } else {
+            // No image to blend in: the overview alone, and said (the map shows it, an export
+            // refuses it), rather than nothing.
+            whole(pm);
+            return Err(UNBLENDED.into());
         }
     } else {
         for part in &parts {

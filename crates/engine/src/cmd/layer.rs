@@ -2660,6 +2660,7 @@ pub(crate) fn add_layer_text(s: &mut Session, text: &str) -> CmdResult {
     super::connections::clear_active();
     s.project.normalize();
     super::connections::restore_active(s);
+    s.wait_in_place_reads();
     // Only the database the added layer reads can change here.
     let keys: Vec<_> = s.map().layer(id).and_then(|l| l.source.as_ref()).map(super::connections::layer_keys).unwrap_or_default();
     super::connections::resolve_keys(s, &keys);
@@ -3434,9 +3435,11 @@ pub(crate) fn add_cog_with(s: &mut Session, p: &Value, url: &str, strict: bool) 
     Ok(r)
 }
 
-/// Adds a cloud-optimised GeoTIFF as a raster layer read in place: its overview held (read now,
-/// natively; in the browser as it lands), the part in view read as the map draws. A look at the
-/// address's end (`#bands=…&range=…`) is its style. `zoom` is the adding command's `"zoom"`:
+/// Adds a cloud-optimised GeoTIFF as a raster layer read in place: its overview held (read now
+/// where the session waits for reads in place, failing the command when it can't be; landing as
+/// the map draws on the desktop and in the browser, see [`Session::in_place_wait`]), the part in
+/// view read as the map draws. A look at the address's end (`#bands=…&range=…`) is its style.
+/// `zoom` is the adding command's `"zoom"`:
 /// `Some(true)` frames it, `Some(false)` keeps the view, `None` frames it only as the first content
 /// on an empty map.
 fn add_in_place(
@@ -3451,11 +3454,15 @@ fn add_in_place(
     // Judged as an address a project keeps is (a host, no spaces, not too long) before it is read.
     rustgis_map::tiles::check_url(file)?;
     let empty_before = super::map_is_empty(s);
-    // Strict, natively: read now, failing when it can't be. Otherwise read with the other layers
-    // added with it (see `project::read_in_place`); in the browser, landing later.
+    // Strict, where the session waits: read now, failing when it can't be. Strict on the desktop:
+    // added now, its overview landing as the map draws (and failing there, said), so a slow host
+    // doesn't hold the window. Otherwise read with the other layers added with it (see
+    // `project::read_in_place`); in the browser, landing later.
     #[cfg(not(target_arch = "wasm32"))]
-    let layer = if strict {
+    let layer = if strict && s.in_place_wait {
         rustgis_map::raster::RasterLayer::in_place(cog::raster::overview_blocking(file)?, file)
+    } else if strict {
+        rustgis_map::raster::RasterLayer::opening_in_place(file)
     } else {
         rustgis_map::raster::RasterLayer::unread_in_place(file)
     };

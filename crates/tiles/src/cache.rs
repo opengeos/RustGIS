@@ -234,6 +234,16 @@ pub fn retry_wait(error: &str, default: Duration) -> Duration {
     retry_after(error).unwrap_or(default)
 }
 
+/// How long a read that has failed `failures` times in a row waits before the next try: `wait`,
+/// doubled for each failure past the first, within the hour (see [`retry_after`]'s bound), so a
+/// file that never reads isn't asked for every minute all session.
+pub fn backoff(wait: Duration, failures: u32) -> Duration {
+    let most = Duration::from_secs(crate::failure::MAX_RETRY_AFTER);
+    // Past twelve doublings the wait is over the hour whatever it was (it is a second at least).
+    let doublings = failures.saturating_sub(1).min(12);
+    wait.saturating_mul(1u32 << doublings).min(most)
+}
+
 /// How many fetches are under way. Once a fetch no longer counts, its [`generation`] shows.
 pub fn in_flight() -> usize {
     IN_FLIGHT.load(Ordering::Acquire)
@@ -2284,6 +2294,22 @@ mod tests {
         assert_eq!(retry_after("x (retry after 0 s)"), Some(Duration::from_secs(1)));
         assert_eq!(retry_wait("HTTP 429 (retry after 2 s)", RETRY), Duration::from_secs(2));
         assert_eq!(retry_wait("http status: 500", RETRY), RETRY);
+    }
+
+    /// A read that fails again waits twice as long each time, within the hour: a file that never
+    /// reads isn't asked for every minute all session.
+    #[test]
+    fn a_read_that_fails_again_waits_longer_each_time() {
+        let minute = Duration::from_secs(60);
+        assert_eq!(backoff(minute, 0), minute);
+        assert_eq!(backoff(minute, 1), minute);
+        assert_eq!(backoff(minute, 2), Duration::from_secs(120));
+        assert_eq!(backoff(minute, 3), Duration::from_secs(240));
+        assert_eq!(backoff(minute, 7), Duration::from_secs(3600), "within the hour");
+        assert_eq!(backoff(minute, u32::MAX), Duration::from_secs(3600), "bounded, never overflowing");
+        // A server's own wait is doubled the same way, within the hour.
+        assert_eq!(backoff(Duration::from_secs(1), 2), Duration::from_secs(2));
+        assert_eq!(backoff(Duration::from_secs(3600), 2), Duration::from_secs(3600));
     }
 
     /// A tile its server refused saying when to come back (429 or 503 with `Retry-After`) has the

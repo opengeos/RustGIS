@@ -159,6 +159,7 @@ fn import_project(s: &mut Session, p: &Value) -> CmdResult {
     }
     // Its GeoTIFFs read in place, read together rather than one after another.
     crate::project::read_in_place(s.map_mut());
+    s.wait_in_place_reads();
     order.reverse();
     s.map_mut().layers.sort_by_key(|l| order.iter().position(|id| *id == l.id).unwrap_or(usize::MAX));
     s.request_only = false;
