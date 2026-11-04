@@ -31,6 +31,7 @@ pub mod memory;
 pub mod ogc;
 pub mod osm;
 pub mod photo;
+pub mod progress;
 pub mod query;
 pub mod raster;
 pub mod s3_address;
@@ -67,6 +68,9 @@ pub enum DataError {
     /// which Zarr reads as its fill value, told apart from a slice that can't be read.
     #[error("{0}: none of the slice's chunks could be read")]
     NoChunks(String),
+    /// Stopped because its run was cancelled ([`progress`]).
+    #[error("cancelled")]
+    Cancelled,
 }
 
 pub type Result<T> = std::result::Result<T, DataError>;
@@ -102,6 +106,7 @@ impl DataError {
                 DataError::Io(std::io::Error::new(e.kind(), without_secret(e.to_string(), secret)))
             }
             DataError::Io(e) => DataError::Io(e),
+            DataError::Cancelled => DataError::Cancelled,
         }
     }
 }

@@ -825,6 +825,7 @@ fn insert(conn: &Connection, layout: &Layout, features: &[crate::Feature], keep_
     let mut index =
         if has_geom { Some(conn.prepare_cached(&format!("INSERT INTO {rt} VALUES (?1, ?2, ?3, ?4, ?5)")).map_err(err)?) } else { None };
     for f in features {
+        crate::progress::step(1)?;
         if has_geom && !multi_points && matches!(f.geometry, Some(crate::Geometry::MultiPoint(_))) && layout.geom_type == "POINT" {
             return Ok(Some(Redo::MultiPoints));
         }

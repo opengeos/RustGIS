@@ -62,6 +62,10 @@ pub fn to_kml(ds: &Dataset, name_field: Option<usize>) -> String {
         xml(&ds.name)
     );
     for (r, f) in ds.features.iter().enumerate() {
+        // A cancelled export stops here; its caller then writes nothing.
+        if crate::progress::step(1).is_err() {
+            break;
+        }
         let Some(g) = &f.geometry else { continue };
         let name = name_field.map(|fi| ds.value(r, fi).to_string()).unwrap_or_else(|| f.id.to_string());
         let data: String = ds
@@ -89,6 +93,10 @@ pub fn to_gpx(ds: &Dataset, name_field: Option<usize>) -> String {
     let pt = |c: &Coord| format!("lat=\"{}\" lon=\"{}\"", c.y, c.x);
     let mut tracks = String::new();
     for (r, f) in ds.features.iter().enumerate() {
+        // A cancelled export stops here; its caller then writes nothing.
+        if crate::progress::step(1).is_err() {
+            break;
+        }
         let Some(g) = &f.geometry else { continue };
         let name = xml(&name_field.map(|fi| ds.value(r, fi).to_string()).unwrap_or_else(|| f.id.to_string()));
         match g {

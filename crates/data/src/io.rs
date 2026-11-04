@@ -373,9 +373,22 @@ pub fn project(ds: &Dataset, crs: Crs) -> Result<Dataset> {
 }
 
 /// Converts features' longitude/latitude geometry in place to the coordinates of `crs`, through
-/// its transformer `t`. Fails on a coordinate the system can't hold, naming its feature.
+/// its transformer `t`, as a step of the progress. Fails on a coordinate the system can't hold,
+/// naming its feature.
 pub(crate) fn project_features(features: &mut [crate::Feature], t: &crate::raster::Transformer, crs: Crs) -> Result<()> {
+    crate::progress::begin(features.len());
+    project_each(features, t, crs, true)
+}
+
+/// [`project_features`] without a step of its own: it counts each feature in the step under way
+/// when `count` is set, and otherwise only stops once the run is cancelled.
+pub(crate) fn project_each(features: &mut [crate::Feature], t: &crate::raster::Transformer, crs: Crs, count: bool) -> Result<()> {
     for f in features {
+        if count {
+            crate::progress::step(1)?;
+        } else {
+            crate::progress::check()?;
+        }
         if let Some(g) = f.geometry.take() {
             let mut ok = true;
             let p = g.map_coords(&|c| t.from_lonlat(c).unwrap_or(Coord::new(f64::NAN, f64::NAN)));
@@ -445,6 +458,7 @@ pub fn write_bytes_in(ds: &Dataset, ext: &str, crs: Crs) -> Result<(Vec<u8>, usi
 
 /// [`write_bytes_in`] for a dataset already in `crs`'s coordinates.
 fn projected_bytes(ds: &Dataset, ext: &str, crs: Crs) -> Result<(Vec<u8>, usize)> {
+    crate::progress::begin(ds.features.len());
     Ok(match ext {
         "geojson" | "json" => {
             let mut w = GeoJsonWriter::new(Vec::new(), &ds.name, &ds.fields)?;
@@ -454,12 +468,24 @@ fn projected_bytes(ds: &Dataset, ext: &str, crs: Crs) -> Result<(Vec<u8>, usize)
         "csv" => (to_csv(ds)?.into_bytes(), 0),
         "fgb" => (crate::source::fgb::write_in(ds, crs)?, without_geometry(ds)),
         "parquet" | "geoparquet" => (crate::source::parquet::write(ds)?, 0),
-        "kml" => (crate::interop::to_kml(ds, name_field(ds)).into_bytes(), without_geometry(ds)),
+        "kml" => {
+            let kml = crate::interop::to_kml(ds, name_field(ds));
+            // A cancelled run cuts the document short: it is never written.
+            crate::progress::check()?;
+            (kml.into_bytes(), without_geometry(ds))
+        }
         "kmz" => {
             let kml = crate::interop::to_kml(ds, name_field(ds)).into_bytes();
+            // A cancelled run cuts the document short: it is never written.
+            crate::progress::check()?;
             (crate::zip::write(&[("doc.kml".to_string(), kml)]).map_err(DataError::Format)?, without_geometry(ds))
         }
-        "gpx" => (crate::interop::to_gpx(ds, name_field(ds)).into_bytes(), without_geometry(ds)),
+        "gpx" => {
+            let gpx = crate::interop::to_gpx(ds, name_field(ds));
+            // A cancelled run cuts the document short: it is never written.
+            crate::progress::check()?;
+            (gpx.into_bytes(), without_geometry(ds))
+        }
         "shp" | "zip" => {
             let (parts, left_out) = shapefile_parts_in(ds, crs)?;
             let base: String = ds.name.chars().map(|c| if c.is_alphanumeric() || matches!(c, '-' | '_' | ' ') { c } else { '_' }).collect();
@@ -496,6 +522,7 @@ pub fn write_path_in(ds: &Dataset, path: &Path, crs: Crs) -> Result<usize> {
         "gpkg" => {
             #[cfg(not(target_arch = "wasm32"))]
             {
+                crate::progress::begin(ds.features.len());
                 crate::source::gpkg::write_in(ds, path, crs)?;
                 Ok(0)
             }
@@ -503,6 +530,7 @@ pub fn write_path_in(ds: &Dataset, path: &Path, crs: Crs) -> Result<usize> {
             Err(DataError::Unsupported("GeoPackage in the browser".into()))
         }
         "shp" => {
+            crate::progress::begin(ds.features.len());
             let (parts, left_out) = shapefile_parts_in(ds, crs)?;
             // Every part is written to a temporary file first and renamed into place only once all
             // are written, the .shp last, so a failed write leaves the old Shapefile whole.
@@ -1198,6 +1226,7 @@ impl<W: std::io::Write> GeoJsonWriter<W> {
     /// Writes the next features.
     pub(crate) fn write(&mut self, features: &[crate::Feature]) -> Result<()> {
         for f in features {
+            crate::progress::step(1)?;
             if !std::mem::take(&mut self.first) {
                 self.out.write_all(b",")?;
             }
@@ -1668,6 +1697,7 @@ impl<W: std::io::Write> CsvWriter<W> {
     /// Writes the next features, a row each.
     pub(crate) fn write(&mut self, features: &[crate::Feature]) -> Result<()> {
         for f in features {
+            crate::progress::step(1)?;
             let mut row: Vec<String> = f.attrs.iter().map(csv_cell).collect();
             if self.point {
                 let c = f.geometry.as_ref().and_then(|g| g.label_point());
@@ -2472,6 +2502,7 @@ pub fn shapefile_parts_in(ds: &Dataset, crs: Crs) -> Result<(Vec<(&'static str, 
         let mut w = shapefile::Writer::new(shapes, table.build_with_dest(&mut dbf));
         let multi_points = ds.features.iter().any(|f| matches!(f.geometry, Some(Geometry::MultiPoint(_))));
         for f in &ds.features {
+            crate::progress::step(1)?;
             let ok = match (&f.geometry, ds.geometry_type) {
                 (Some(Geometry::Point(c)), GeometryType::Point) if !multi_points && finite(&c) => {
                     w.write_shape_and_record(&pt(c), &record(f)).map_err(fmt)?;
@@ -3626,5 +3657,44 @@ mod tests {
         let huge = "x".repeat(5000);
         let note = shapefile_names_note(&layer(&[&huge]).fields, "h.shp").unwrap();
         assert!(note.len() < 200 && note.contains(&format!("'{}…' → 'xxxxxxxxxx'", "x".repeat(40))), "{note}");
+    }
+
+    /// A cancelled export stops with [`DataError::Cancelled`] and leaves nothing at (or beside)
+    /// its destination, in every format; without a probe the same exports are written.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_cancelled_export_leaves_no_file() {
+        use crate::progress::tests::Counted;
+        let fields = vec![Field::new("name", FieldType::Text), Field::new("n", FieldType::Integer)];
+        let mut ds = Dataset::new("points", GeometryType::Point, fields);
+        for i in 0..3000u64 {
+            let c = Coord::new(i as f64 / 100.0, (i % 80) as f64);
+            ds.features.push(crate::Feature {
+                id: i + 1,
+                geometry: Some(Geometry::Point(c)),
+                attrs: vec![Value::Text(format!("p{i}")), Value::Int(i as i64)],
+            });
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let exts = ["geojson", "csv", "fgb", "gpkg", "parquet", "shp", "kml", "gpx"];
+        for ext in exts {
+            let path = dir.path().join(format!("out.{ext}"));
+            let probe = Counted::cancelling_after(100);
+            let res = {
+                let _g = crate::progress::install(Some(probe.clone()));
+                write_path_in(&ds, &path, Crs::LonLat)
+            };
+            assert!(matches!(res, Err(DataError::Cancelled)), "{ext}: {res:?}");
+            let left: Vec<_> = std::fs::read_dir(dir.path()).unwrap().map(|e| e.unwrap().file_name()).collect();
+            assert!(left.is_empty(), "{ext} left {left:?}");
+        }
+        for ext in exts {
+            let path = dir.path().join(format!("out.{ext}"));
+            write_path_in(&ds, &path, Crs::LonLat).unwrap();
+            assert!(path.exists(), "{ext}");
+        }
+        for e in ["shp", "shx", "dbf"] {
+            assert!(dir.path().join(format!("out.{e}")).exists());
+        }
     }
 }
