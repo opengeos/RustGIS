@@ -1027,17 +1027,21 @@ fn walls_past_the_face_cap_leave_the_ground_whole() {
     let p = polygon(&out);
     assert_eq!((p.len(), p[0].len()), (1, 2), "the ground with its courtyard: {p:?}");
     assert!(!says(&out, "outline of their points"), "{:?}", messages_of(&out));
+    // Faces past the cap, said as such: not as faces that couldn't be merged.
+    let capped = |out: &[(Dataset, ReadReport)]| {
+        says(out, "1 city objects have a geometry of more than 200000 faces") && !says(out, "couldn't be merged")
+    };
 
     let out = read("m.city.json", &courtyard_past_the_cap(true, true, false), None).unwrap();
     let p = polygon(&out);
     assert_eq!((p.len(), p[0].len()), (1, 1), "the outline, without the courtyard: {p:?}");
     assert!((area(geometry(&out[0].0, 0)) - 200.0).abs() < 1e-6, "over the ground left out too: {p:?}");
-    assert!(says(&out, "outline of their points"), "{:?}", messages_of(&out));
+    assert!(capped(&out), "{:?}", messages_of(&out));
 
     let out = read("m.city.json", &courtyard_past_the_cap(false, true, true), None).unwrap();
     assert!((area(geometry(&out[0].0, 0)) - 100.0).abs() < 1e-6, "LoD 2's ground left out: {:?}", geometry(&out[0].0, 0));
     assert_eq!(value(&out[0].0, 0, "lod"), crate::Value::Text("2".into()));
-    assert!(says(&out, "outline of their points"), "{:?}", messages_of(&out));
+    assert!(capped(&out), "{:?}", messages_of(&out));
 }
 
 /// Types that read the same once cut, the same but for case, or a type named as another's lines,

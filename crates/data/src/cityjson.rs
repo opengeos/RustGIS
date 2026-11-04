@@ -150,6 +150,8 @@ struct Counts {
     footprints: usize,
     wall_hulls: usize,
     unmerged: usize,
+    /// Hulls because faces past [`MAX_FACES`] were left out, said apart from `unmerged`.
+    capped: usize,
     no_footprint: usize,
     no_geometry: usize,
     bad_geometries: usize,
@@ -356,7 +358,11 @@ fn object_footprint(surfaces: Vec<Surface>, counts: &mut Counts, budget: &mut us
     let points: Vec<P3> = faces.iter().flatten().chain(&left_out).flatten().copied().collect();
     let (geometry, hull) = footprint(&faces, truncated, std::slice::from_ref(&points), budget);
     counts.wall_hulls += usize::from(hull == Some(Hull::NoFaces));
-    counts.unmerged += usize::from(hull == Some(Hull::Unmerged));
+    // Faces left out past the cap are why it is a hull: said as such, not as faces that couldn't
+    // be merged.
+    let unmerged = hull == Some(Hull::Unmerged);
+    counts.capped += usize::from(unmerged && truncated);
+    counts.unmerged += usize::from(unmerged && !truncated);
     (geometry, lod)
 }
 
@@ -975,6 +981,13 @@ fn messages(c: &Counts) -> Vec<String> {
         } else {
             format!("{} city objects whose faces couldn't be merged are drawn as the outline of their points", c.unmerged)
         },
+    );
+    say(
+        c.capped,
+        format!(
+            "{} city objects have a geometry of more than {MAX_FACES} faces, past which faces aren't merged: they are drawn as the outline of their points",
+            c.capped
+        ),
     );
     say(
         c.no_footprint,
