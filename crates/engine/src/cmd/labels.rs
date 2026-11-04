@@ -160,7 +160,7 @@ pub fn commands() -> Vec<C> {
                 Some(_) => return Err("otherPositions must be true or false".into()),
             };
             let id = s.layer_id(p)?;
-            let geometry = s.map().layer(id).ok_or("no such layer")?.geometry_type();
+            let (points, lines) = points_and_lines(s.map().layer(id).ok_or("no such layer")?);
             with_labels(s, p, |labels| {
                 let c = class_in(labels, p)?;
                 if let Some(pos) = pos {
@@ -177,7 +177,7 @@ pub fn commands() -> Vec<C> {
                 }
                 // Asked of the class as this call leaves it, so a position or a repeat given with
                 // it counts. On where it would do nothing is refused; off is taken anywhere.
-                if others == Some(true) && !tries_other_places(geometry, c) {
+                if others == Some(true) && !tries_other_places(points, lines, c) {
                     return Err("otherPositions is for points, and for lines placed parallel or curved without a repeat".into());
                 }
                 Ok(())
@@ -259,15 +259,17 @@ pub fn commands() -> Vec<C> {
     ]
 }
 
-/// Whether a class on a layer of this geometry has other places to try when its label's own is
-/// taken: round a point (#1011), or along a line for a label at its middle (#1187). Each repeat is
-/// already a place of its own, so repeats get none.
-fn tries_other_places(geometry: GeometryType, c: &LabelClass) -> bool {
-    match geometry {
-        GeometryType::Point => true,
-        GeometryType::Polyline => c.placement.along_line() && c.repeat.is_none(),
-        GeometryType::Polygon | GeometryType::None => false,
-    }
+/// Whether the layer holds points and lines: declared so, or among its features, as the renderer
+/// goes by each feature's geometry.
+fn points_and_lines(l: &Layer) -> (bool, bool) {
+    (l.has_geometry(GeometryType::Point), l.has_geometry(GeometryType::Polyline))
+}
+
+/// Whether a class on a layer holding these has other places to try when its label's own is taken:
+/// round a point at any position (#1011), or along a line for a label at its middle (#1187). Each
+/// repeat is already a place of its own, so repeats get none.
+fn tries_other_places(points: bool, lines: bool, c: &LabelClass) -> bool {
+    points || (lines && c.placement.along_line() && c.repeat.is_none())
 }
 
 /// `labels.by`: sets a label class's expressions, each checked against the layer's fields.
@@ -373,13 +375,13 @@ pub(crate) fn lock_holds(l: &Layer, b: &Labeling) -> bool {
 /// Whether the layer's classes and those of `b` (listed alike) put their labels in the same places.
 /// A lock names the place round its point or along its line a label took by its number among its
 /// class's (#1011, #1187), so another position, or trying the others turned on or off, locks the
-/// labels again; with no class trying them a new position keeps the lock, as before. A class only
-/// tries them where it has them: a line's flag kept at a position off the line, or with a repeat,
-/// does nothing, unless the layer also holds points, which go round whatever the layer's family.
+/// labels again; with no class trying them a new position keeps the lock, as before. The flag only
+/// counts where it has an effect: kept on a line's class at a position off the line, or with a
+/// repeat, it does nothing ([`tries_other_places`]).
 fn same_places(l: &Layer, b: &Labeling) -> bool {
-    let points = l.has_geometry(GeometryType::Point);
+    let (points, lines) = points_and_lines(l);
     let classes = |labels: &Labeling| {
-        let tries = |c: &LabelClass| c.other_positions && (points || (c.placement.along_line() && c.repeat.is_none()));
+        let tries = |c: &LabelClass| c.other_positions && tries_other_places(points, lines, c);
         labels.classes.iter().chain([&labels.default]).map(|c| (c.placement, tries(c), c.repeat.is_some())).collect::<Vec<_>>()
     };
     classes(&l.labels).into_iter().zip(classes(b)).all(|(x, y)| x == y || !(x.1 || y.1))

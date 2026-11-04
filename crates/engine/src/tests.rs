@@ -3468,12 +3468,12 @@ fn a_line_class_flag_with_no_effect_keeps_the_lock() {
     assert!(held(&mut s, id, "Rivers", json!({"repeat": 144})), "nor with a repeat added there");
     assert!(held(&mut s, id, "Rivers", json!({"position": "curved"})), "nor along the line with that repeat");
     assert!(!held(&mut s, id, "Rivers", json!({"repeat": null})), "the repeat gone, its places are back");
-    // A layer of lines holding a point: the point's label goes round it at any position.
+    // A layer of lines holding a point: the point's label goes round it at any position, so the
+    // command takes the flag there and it counts for the lock.
     let mut d = Dataset::new("Mixed", GeometryType::Polyline, vec![Field::new("name", FieldType::Text)]);
     d.push(Some(Geometry::Point(rustgis_geom::Coord::new(0.0, 0.0))), vec![rustgis_data::Value::Text("Spot".into())]);
     let mixed = s.map_mut().add_dataset(d);
-    s.map_mut().layer_mut(mixed).unwrap().labels.default.other_positions = true;
-    s.map_mut().layer_mut(mixed).unwrap().labels.default.placement = rustgis_map::LabelPlacement::Above;
+    s.run("labels.placement", &json!({"layer": "Mixed", "position": "above", "otherPositions": true})).unwrap();
     assert!(!held(&mut s, mixed, "Mixed", json!({"position": "below"})), "its point's places change");
 }
 
