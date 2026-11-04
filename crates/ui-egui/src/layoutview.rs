@@ -57,7 +57,7 @@ pub struct LayoutView {
     /// still on its way (in the browser, which doesn't wait for them): drawn again once a fetch
     /// lands.
     legends_wait: Option<u64>,
-    /// Page zoom (1 = fit) and pan, in screen points, of the layout `viewed` names.
+    /// Page zoom (0 or 1 = fit) and pan, in screen points, of the layout `viewed` names.
     zoom: f32,
     pan: egui::Vec2,
     /// The layout `zoom` and `pan` are for, by name (unique, unlike an index, which shifts when
@@ -146,7 +146,7 @@ pub(crate) fn follow_project(app: &mut RustGisApp) {
     }
     app.layout.project = Some(opened);
     // A page view stays with its layout: one removed or renamed leaves none for a new layout
-    // given that name.
+    // given that name, and comes back fitted to the page if that's undone.
     let layouts = &app.session.project.layouts;
     let named = |name: &str| layouts.iter().any(|l| l.name == name);
     app.layout.views.retain(|name, _| named(name));
