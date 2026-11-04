@@ -3223,4 +3223,65 @@ mod tests {
             assert!((top..top + 15).all(|y| (6..22).all(|x| got.pixel(x, y) == want.pixel(x, y))), "row {row}");
         }
     }
+
+    #[test]
+    fn a_wide_column_keeps_lines_and_boxes_a_swatch_wide_in_its_middle() {
+        use rustgis_data::Dataset;
+        let blue = Rgba::rgb(0, 0, 255);
+        let point =
+            rustgis_map::Symbol { fill: blue, size: 40.0, stroke_width: 0.0, ..rustgis_map::Symbol::default_for(GeometryType::Point, 0) };
+        for gt in [GeometryType::Polyline, GeometryType::Polygon] {
+            // A point of 40 pt makes the column 48 wide: a swatch of 16 in its middle runs from 16 to 32.
+            let mut map = point_legend_map(|l| l.renderer = rustgis_map::Renderer::Single(point));
+            let id = map.add_dataset(Dataset::new("line", gt, vec![]));
+            let red = Rgba::rgb(255, 0, 0);
+            if let Some(l) = map.layer_mut(id) {
+                l.renderer = rustgis_map::Renderer::Single(rustgis_map::Symbol {
+                    fill: red,
+                    stroke: red,
+                    stroke_width: 2.0,
+                    ..rustgis_map::Symbol::default_for(gt, 0)
+                });
+            }
+            let pm = point_legend(&map);
+            let columns = |ink: &dyn Fn(u8, u8, u8) -> bool| -> Vec<u32> {
+                (0..pm.width())
+                    .filter(|&x| {
+                        (0..pm.height()).any(|y| pm.pixel(x, y).is_some_and(|p| p.alpha() > 0 && ink(p.red(), p.green(), p.blue())))
+                    })
+                    .collect()
+            };
+            let swatch = columns(&|r, g, b| r > 200 && g < 60 && b < 60);
+            let (left, right) = (swatch.first().copied().unwrap_or(0), swatch.last().copied().unwrap_or(0));
+            assert!((14..=17).contains(&left) && (31..=34).contains(&right), "{gt:?}: {left} to {right}");
+            // Both names start past the column, where the blue point has no part in it.
+            let names = columns(&|r, g, b| r < 100 && g < 100 && b < 100);
+            assert!(names.first().is_some_and(|x| (53..60).contains(x)), "{gt:?}: {names:?}");
+        }
+    }
+
+    #[test]
+    fn a_class_row_takes_the_wide_column_in_a_legends_size() {
+        let mm = 25.4 / 96.0;
+        let s = rustgis_map::Symbol { size: 40.0, stroke_width: 0.0, ..rustgis_map::Symbol::default_for(GeometryType::Point, 0) };
+        let mut map = point_legend_map(|l| {
+            l.renderer = rustgis_map::Renderer::Unique {
+                field: "g".into(),
+                classes: vec![("a".to_string(), s)],
+                other: s,
+                ramp: rustgis_map::Ramp::Ember,
+                class_labels: Default::default(),
+                other_label: None,
+                class_strokes: Default::default(),
+                other_strokes: Vec::new(),
+                class_fills: Default::default(),
+                other_fills: Vec::new(),
+                expression: None,
+            };
+        });
+        // The layer's name over the class: a row of 15 and one of 48, 6 + 48 + 6 before its label.
+        let (w, h) = legend_size_mm(&mut map, 1e6, true, true, &[]).unwrap();
+        assert!((h - f64::from(LEGEND_ROW + 48.0) * mm).abs() < 1e-6, "{h} mm");
+        assert!((w - f64::from(48.0 + 12.0 + text::measure("a", 8.5, false)) * mm).abs() < 1e-6, "{w} mm");
+    }
 }
