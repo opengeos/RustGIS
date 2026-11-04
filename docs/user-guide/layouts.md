@@ -165,11 +165,14 @@ Layouts open as tabs next to the maps; while one is open, its groups lead the Pu
   the legend in either mode (the features it stands for are still drawn). A point layer's symbol
   is drawn as the map draws it: its marker or the stacked marks of its class or layer, its size
   and outline, the transparency of the layer and its groups, and its reference scale at the
-  frame's scale, unturned; the row and the column of symbols grow to hold a large one. A visible
-  WMS or WMTS layer with a legend is listed by its name over its service's legend picture, the
-  one for the frame's scale (as the Layers pane shows it), a pixel a point and narrowed to fit
-  the legend's width, in the order the map draws its layers (as the Layers pane lists them); one whose picture
-  can't be loaded (or is wider or taller than 2048 pixels) is left out. Exporting waits up to
+  frame's scale, unturned; the row and the column of symbols grow to hold a large one, up to
+  2048 points, past which the symbol is cut. A legend already on the page keeps its size, so
+  with a larger symbol its last rows may be cut and its labels run past its right edge: make it
+  larger to fit. A visible WMS or WMTS layer with a legend is listed by its name over its
+  service's legend picture, the one for the frame's scale (as the Layers pane shows it), a pixel
+  a point and narrowed to fit the legend's width, in the order the map draws its layers (as the
+  Layers pane lists them); one whose picture can't be loaded (or is wider or taller than 2048
+  pixels) is left out. Exporting waits up to
   half a minute for the pictures, as it waits for the map's tiles; in the browser the page is
   drawn with those that have arrived, and again as the others arrive. Its **Layers** section
   has a checkbox for each layer of the frame's map (and each WMS or WMTS layer with a legend): untick one to leave it out of the legend
