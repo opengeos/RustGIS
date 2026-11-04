@@ -3,7 +3,7 @@
 
 use rustgis_data::{Dataset, Field, FieldType, Geometry, GeometryType, Value as Attr};
 use rustgis_map::symbology::{MAX_LABEL_CLASSES, label_class_name};
-use rustgis_map::{LabelBackground, LabelClass, LabelMatcher, LabelPlacement, Labeling, Renderer, Rgba, Symbol};
+use rustgis_map::{LabelBackground, LabelClass, LabelMatcher, LabelPlacement, Labeling, Layer, Renderer, Rgba, Symbol};
 use serde_json::{Value, json};
 
 use super::layer::s_req;
@@ -348,7 +348,7 @@ pub(crate) fn with_labels(s: &mut Session, p: &Value, f: impl FnOnce(&mut Labeli
     let l = s.map_mut().layer_mut(id).ok_or("no such layer")?;
     let mut labels = l.labels.clone();
     f(&mut labels)?;
-    let relock = !lock_holds(&l.labels, &labels);
+    let relock = !lock_holds(l, &labels);
     l.labels = labels;
     if relock {
         s.map_mut().label_lock = None;
@@ -364,21 +364,25 @@ pub(crate) fn same_class_list(a: &Labeling, b: &Labeling) -> bool {
     a.classes.iter().map(|c| &c.name).eq(b.classes.iter().map(|c| &c.name))
 }
 
-/// Whether a lock taken with the labels `a` still names those of `b`: the same classes, listed
+/// Whether a lock taken with the layer's labels still names those of `b`: the same classes, listed
 /// alike and putting their labels in the same places.
-pub(crate) fn lock_holds(a: &Labeling, b: &Labeling) -> bool {
-    same_class_list(a, b) && same_places(a, b)
+pub(crate) fn lock_holds(l: &Layer, b: &Labeling) -> bool {
+    same_class_list(&l.labels, b) && same_places(l, b)
 }
 
-/// Whether the classes of `a` and `b` (listed alike) put their labels in the same places. A lock
-/// names the place round its point or along its line a label took by its number among its class's
-/// (#1011, #1187), so another position, or trying the others turned on or off, locks the labels
-/// again; with no class trying them a new position keeps the lock, as before.
-fn same_places(a: &Labeling, b: &Labeling) -> bool {
-    let classes = |l: &Labeling| {
-        l.classes.iter().chain([&l.default]).map(|c| (c.placement, c.other_positions, c.repeat.is_some())).collect::<Vec<_>>()
+/// Whether the layer's classes and those of `b` (listed alike) put their labels in the same places.
+/// A lock names the place round its point or along its line a label took by its number among its
+/// class's (#1011, #1187), so another position, or trying the others turned on or off, locks the
+/// labels again; with no class trying them a new position keeps the lock, as before. A class only
+/// tries them where it has them: a line's flag kept at a position off the line, or with a repeat,
+/// does nothing, unless the layer also holds points, which go round whatever the layer's family.
+fn same_places(l: &Layer, b: &Labeling) -> bool {
+    let points = l.has_geometry(GeometryType::Point);
+    let classes = |labels: &Labeling| {
+        let tries = |c: &LabelClass| c.other_positions && (points || (c.placement.along_line() && c.repeat.is_none()));
+        labels.classes.iter().chain([&labels.default]).map(|c| (c.placement, tries(c), c.repeat.is_some())).collect::<Vec<_>>()
     };
-    classes(a).into_iter().zip(classes(b)).all(|(x, y)| x == y || !(x.1 || y.1))
+    classes(&l.labels).into_iter().zip(classes(b)).all(|(x, y)| x == y || !(x.1 || y.1))
 }
 
 /// The place of the class named `name` among those checked before Default (of the

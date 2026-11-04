@@ -3437,10 +3437,44 @@ fn a_change_to_where_point_labels_go_locks_them_again() {
 fn changing_line_repeat_relocks_alternative_positions() {
     let mut s = world();
     let id = s.map().layer_by_name("Rivers").unwrap().id;
-    s.map_mut().layer_mut(id).unwrap().labels.default.other_positions = true;
+    let c = &mut s.map_mut().layer_mut(id).unwrap().labels.default;
+    c.other_positions = true;
+    c.placement = rustgis_map::LabelPlacement::Parallel;
     s.map_mut().label_lock = Some(vec![((id, 0, 0, 0), 1)]);
     s.run("labels.placement", &json!({"layer": "Rivers", "repeat": 144})).unwrap();
     assert!(s.map().label_lock.is_none());
+}
+
+/// A line class's flag counts for the lock only where it does something (#1187): set but off the
+/// line or with a repeat it keeps the lock, as a class without it does; a change to or from the
+/// places it has locks the labels again. A layer also holding points keeps its flag in effect.
+#[test]
+fn a_line_class_flag_with_no_effect_keeps_the_lock() {
+    use rustgis_data::{Dataset, Field, FieldType, Geometry, GeometryType};
+    let mut s = world();
+    let id = s.map().layer_by_name("Rivers").unwrap().id;
+    s.run("labels.placement", &json!({"layer": "Rivers", "position": "curved", "otherPositions": true})).unwrap();
+    let held = |s: &mut Session, layer: u32, name: &str, change: Value| {
+        s.map_mut().label_lock = Some(vec![((layer, 0, 0, 0), 1)]);
+        let mut p = change;
+        p["layer"] = json!(name);
+        s.run("labels.placement", &p).unwrap();
+        s.map().label_lock.is_some()
+    };
+    assert!(!held(&mut s, id, "Rivers", json!({"position": "parallel"})), "another place along the line");
+    assert!(!held(&mut s, id, "Rivers", json!({"position": "above"})), "off the line: its places are gone");
+    assert!(s.map().layer(id).unwrap().labels.default.other_positions, "the flag is kept");
+    assert!(held(&mut s, id, "Rivers", json!({"position": "below"})), "off the line it does nothing");
+    assert!(held(&mut s, id, "Rivers", json!({"repeat": 144})), "nor with a repeat added there");
+    assert!(held(&mut s, id, "Rivers", json!({"position": "curved"})), "nor along the line with that repeat");
+    assert!(!held(&mut s, id, "Rivers", json!({"repeat": null})), "the repeat gone, its places are back");
+    // A layer of lines holding a point: the point's label goes round it at any position.
+    let mut d = Dataset::new("Mixed", GeometryType::Polyline, vec![Field::new("name", FieldType::Text)]);
+    d.push(Some(Geometry::Point(rustgis_geom::Coord::new(0.0, 0.0))), vec![rustgis_data::Value::Text("Spot".into())]);
+    let mixed = s.map_mut().add_dataset(d);
+    s.map_mut().layer_mut(mixed).unwrap().labels.default.other_positions = true;
+    s.map_mut().layer_mut(mixed).unwrap().labels.default.placement = rustgis_map::LabelPlacement::Above;
+    assert!(!held(&mut s, mixed, "Mixed", json!({"position": "below"})), "its point's places change");
 }
 
 /// A lock names each label by its feature's id, not its row: deleting a feature (the rows after
