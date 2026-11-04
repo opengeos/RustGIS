@@ -303,6 +303,20 @@ pub(crate) fn read_pages(app: &mut RustGisApp, landed: Landed) {
     go_on(app, landed, rustgis_engine::render::rustgis_tiles::cache::MAX_DOWNLOAD, step);
 }
 
+/// An ArcGIS layer's description fetched in the background: at most `max` bytes, its download
+/// given up on natively after [`ogc::DESCRIPTION_TIMEOUT`].
+fn fetch_description(url: &str, max: usize) -> Slot<Result<Vec<u8>, String>> {
+    let slot: Slot<Result<Vec<u8>, String>> = Slot::default();
+    let land = slot.clone();
+    rustgis_engine::render::rustgis_tiles::cache::download_within(
+        url,
+        max,
+        ogc::DESCRIPTION_TIMEOUT,
+        Box::new(move |r| *land.lock().unwrap_or_else(|e| e.into_inner()) = Some(r)),
+    );
+    slot
+}
+
 /// Hands each page that landed to its read, and adds the layers whose features are all read. A
 /// read whose project was closed meanwhile is dropped.
 pub fn poll_pages(app: &mut RustGisApp, ctx: &egui::Context) {
@@ -316,8 +330,9 @@ pub fn poll_pages(app: &mut RustGisApp, ctx: &egui::Context) {
             continue;
         }
         let answer = read.slot.lock().unwrap_or_else(|e| e.into_inner()).take();
-        // A layer's description that doesn't come in time is given up on (its download left to
-        // end on its own), and the layer's query fetched as it is.
+        // A layer's description that doesn't come in time is given up on, and the layer's query
+        // fetched as it is (natively its download ends then too; the browser's fetch keeps its
+        // own time, and what it brings is dropped).
         let describing = read.pages.describing();
         let answer = answer.or_else(|| {
             (describing && read.asked.elapsed() >= ogc::DESCRIPTION_TIMEOUT)
@@ -349,6 +364,8 @@ fn go_on(app: &mut RustGisApp, landed: Landed, left: usize, step: Step) {
         }
         Step::Fetch(pages) => {
             let slot = match rustgis_engine::render::rustgis_tiles::address::check(pages.next_url(), Some(pages.referrer())) {
+                // A layer's description: small, and soon given up on.
+                Ok(()) if pages.describing() => fetch_description(pages.next_url(), left.min(ogc::DESCRIPTION_MAX)),
                 Ok(()) => fetch_into_limited(pages.next_url(), left),
                 Err(e) => Slot::new(std::sync::Mutex::new(Some(Err(e)))),
             };

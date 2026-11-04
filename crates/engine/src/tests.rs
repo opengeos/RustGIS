@@ -11719,6 +11719,31 @@ fn arcgis_description_leaves_the_features_their_budget() {
     assert!(crate::cmd::service::download_features(&mut s, "Zoning", &url, answer.len() - 1).is_err());
 }
 
+/// An ArcGIS layer's description larger than its cap is given up on: the layer's query is
+/// fetched as it is, its features read whole (#1326).
+#[test]
+fn arcgis_description_past_its_cap_leaves_the_query_as_it_is() {
+    use ogc_server::{Route, Server, arcgis_page};
+    let layer = "/arcgis/rest/services/P/MapServer/1";
+    // A layer that pages, padded past the cap: read, it would be asked for in pages.
+    let described = json!({"currentVersion": 11.5, "maxRecordCount": 2, "advancedQueryCapabilities": {"supportsPagination": true},
+        "fields": [{"name": "OBJECTID", "type": "esriFieldTypeOID"}], "description": "x".repeat(rustgis_data::ogc::DESCRIPTION_MAX)})
+    .to_string();
+    let server = Server::new(vec![Route::new(&format!("{layer}/query"), &arcgis_page(&[0, 1], false)), Route::new(layer, &described)]);
+    let url = format!("{}{layer}/query?where=1%3D1&outFields=*&f=geojson", server.base);
+    let mut s = Session::new(Project::default());
+    let max = crate::render::rustgis_tiles::cache::MAX_DOWNLOAD;
+    let bytes = crate::cmd::service::download_features(&mut s, "Zoning", &url, max).unwrap();
+    let read: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(read["features"].as_array().map(Vec::len), Some(2));
+    let asked: Vec<_> = server
+        .requests()
+        .iter()
+        .map(|r| (r.path.trim_start_matches(layer).to_string(), r.query.iter().any(|(k, _)| k == "resultOffset")))
+        .collect();
+    assert_eq!(asked, [(String::new(), false), ("/query".to_string(), false)]);
+}
+
 /// WFS 2.0 without next links reads every page through service.add, with no loss notice.
 #[test]
 fn wfs_service_reads_offset_pages_without_next_links() {

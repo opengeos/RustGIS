@@ -747,10 +747,24 @@ pub fn download_limited(url: &str, max: usize, done: Done) {
     download_detailed(url, max, Box::new(move |r| done(r.map_err(|f| f.message))));
 }
 
+/// Like [`download_limited`], giving up after `timeout` natively (the browser's fetch keeps its
+/// own): a small answer that mustn't hold a thread for long (an ArcGIS layer's description).
+pub fn download_within(url: &str, max: usize, timeout: std::time::Duration, done: Done) {
+    download_detailed_within(url, max, timeout, Box::new(move |r| done(r.map_err(|f| f.message))));
+}
+
+/// How long a download off the frame may take natively.
+const DOWNLOAD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(900);
+
 /// Like [`download_limited`], telling what is known of a failure (#509): the status, the headers
 /// that say who answered and an excerpt of the answer. The browser's fetch tells only the
 /// status, read back from its error.
 pub fn download_detailed(url: &str, max: usize, done: DoneDetailed) {
+    download_detailed_within(url, max, DOWNLOAD_TIMEOUT, done);
+}
+
+/// Like [`download_detailed`], giving up after `timeout` natively.
+fn download_detailed_within(url: &str, max: usize, timeout: std::time::Duration, done: DoneDetailed) {
     if let Err(e) = crate::address::check(url, None) {
         done(Err(Failure::new(url, e)));
         return;
@@ -766,7 +780,7 @@ pub fn download_detailed(url: &str, max: usize, done: DoneDetailed) {
     let f = fetcher().lock().unwrap_or_else(|e| e.into_inner()).clone();
     match f {
         Some(f) => f(marked.clone(), Box::new(move |r| done(r.map_err(|e| Failure::new(&marked, e)))), &[]),
-        None => native::download(marked, done),
+        None => native::download_within(marked, timeout, done),
     }
 }
 
@@ -1402,11 +1416,16 @@ mod native {
     }
 
     /// Downloads on a thread of its own, so a large file doesn't hold up the tiles.
+    #[cfg(test)]
     pub(super) fn download(url: String, done: DoneDetailed) {
+        download_within(url, super::DOWNLOAD_TIMEOUT, done);
+    }
+
+    pub(super) fn download_within(url: String, timeout: std::time::Duration, done: DoneDetailed) {
         let capture = Capture::current();
         std::thread::spawn(move || {
             let _scope = capture.enter();
-            done(get_detailed(&download_agent(std::time::Duration::from_secs(900)), &url));
+            done(get_detailed(&download_agent(timeout), &url));
         });
     }
 
@@ -1694,7 +1713,7 @@ mod native {
         done(Err(format!("{url}: this build has no way to fetch tiles")));
     }
 
-    pub(super) fn download(url: String, done: DoneDetailed) {
+    pub(super) fn download_within(url: String, _timeout: std::time::Duration, done: DoneDetailed) {
         let message = format!("{url}: this build has no way to fetch tiles");
         done(Err(crate::failure::Failure::new(&url, message)));
     }

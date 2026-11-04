@@ -3101,6 +3101,11 @@ fn read_first(url: &str, first: Vec<u8>, max: usize, paging: Option<ArcgisPaging
 /// fetched as it is.
 pub const DESCRIPTION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
 
+/// Most bytes a reader of [`Pages`] takes for an ArcGIS layer's description, which doesn't count
+/// against the features' budget: a few kilobytes as a rule, so one larger than this is given up
+/// on, and the layer's query fetched as it is.
+pub const DESCRIPTION_MAX: usize = 4 << 20;
+
 impl Pages {
     /// Whether the answer to fetch now is an ArcGIS layer's description, read before its features.
     pub fn describing(&self) -> bool {

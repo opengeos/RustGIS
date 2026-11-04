@@ -262,13 +262,14 @@ pub(crate) fn bounds_of(v: Option<&Value>) -> Result<Option<[f64; 4]>, String> {
 /// A service's features at `url`, with the pages that follow (its `next` links, or an ArcGIS
 /// layer's pages, its description read first, see [`begin`](rustgis_data::ogc::begin)): at most
 /// `max` bytes of features. The description waits at most
-/// [`DESCRIPTION_TIMEOUT`](rustgis_data::ogc::DESCRIPTION_TIMEOUT) apart, and the features
+/// [`DESCRIPTION_TIMEOUT`](rustgis_data::ogc::DESCRIPTION_TIMEOUT) and takes at most
+/// [`DESCRIPTION_MAX`](rustgis_data::ogc::DESCRIPTION_MAX) bytes, apart; the features
 /// [`BLOCKING_TIMEOUT`](crate::render::rustgis_tiles::cache::BLOCKING_TIMEOUT) in all after it
 /// (75 s at most). A page is fetched only where the page before it may point.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn download_features(s: &mut Session, name: &str, url: &str, max: usize) -> Result<Vec<u8>, String> {
     use crate::render::rustgis_tiles::{address, cache};
-    use rustgis_data::ogc::{DESCRIPTION_TIMEOUT, Step, begin, max_paged_features};
+    use rustgis_data::ogc::{DESCRIPTION_MAX, DESCRIPTION_TIMEOUT, Step, begin, max_paged_features};
     let mut until = std::time::Instant::now() + cache::BLOCKING_TIMEOUT;
     let mut left = max;
     let mut step = begin(url, max_paged_features());
@@ -289,7 +290,9 @@ pub(crate) fn download_features(s: &mut Session, name: &str, url: &str, max: usi
             if wait.is_zero() {
                 return Err("the pages timed out".to_string());
             }
-            let page = cache::download_blocking_within(pages.next_url(), left, wait)?;
+            // A description has a small budget of its own.
+            let budget = if describing { left.min(DESCRIPTION_MAX) } else { left };
+            let page = cache::download_blocking_within(pages.next_url(), budget, wait)?;
             if page.len() > left {
                 return Err("the pages are larger than RustGIS downloads".into());
             }
