@@ -1251,15 +1251,15 @@ impl LegendRow<'_> {
     /// The side of the square its point symbol takes at 1:`scale`, in points, as far as its marks
     /// reach ([`point_marks::reach`]); 0 for any other row. No larger than a legend picture.
     fn symbol_side(&self, scale: f64) -> f32 {
-        let (l, s) = match self {
-            LegendRow::Plain(l) => (*l, l.renderer.symbol_for(&l.dataset, 0)),
-            LegendRow::Class(l, en) => (*l, en.symbol),
+        let (l, s, strokes) = match self {
+            LegendRow::Plain(l) => (*l, l.renderer.symbol_for(&l.dataset, 0), l.line_strokes.as_slice()),
+            LegendRow::Class(l, en) => (*l, en.symbol, class_strokes(l, en)),
             _ => return 0.0,
         };
         if l.geometry_type() != GeometryType::Point {
             return 0.0;
         }
-        (2.0 * point_marks::reach(&s, &l.line_strokes) * l.size_factor(scale)).min(MAX_LEGEND_SIDE as f32)
+        (2.0 * point_marks::reach(&s, strokes) * l.size_factor(scale)).min(MAX_LEGEND_SIDE as f32)
     }
 
     /// Its height at 1:`scale`, in points: a picture's a pixel a point, as the Layers pane shows
@@ -1270,6 +1270,12 @@ impl LegendRow<'_> {
             _ => LEGEND_ROW.max(self.symbol_side(scale)),
         }
     }
+}
+
+/// The stacked strokes a legend's class row draws: its class's own, else its layer's, as
+/// [`rustgis_map::Layer::strokes`] finds them for a feature.
+fn class_strokes<'a>(l: &'a rustgis_map::Layer, en: &'a LegendEntry) -> &'a [rustgis_map::LineStroke] {
+    if en.strokes.is_empty() { &l.line_strokes } else { &en.strokes }
 }
 
 /// The width of a legend's column of swatches at 1:`scale`, in points: it grows to hold the widest
@@ -1457,7 +1463,8 @@ fn legend(pm: &mut Canvas, r: Rect, map: &Map, title: &str, drawn: Option<&[(u32
         }
         match row {
             LegendRow::Plain(l) => {
-                swatch(pm, (r.x(), y, sw, height), l, &l.renderer.symbol_for(&l.dataset, 0), map.layer_opacity(l), opts.scale, ppp);
+                let s = l.renderer.symbol_for(&l.dataset, 0);
+                swatch(pm, (r.x(), y, sw, height), l, (&s, l.line_strokes.as_slice()), map.layer_opacity(l), opts.scale, ppp);
                 text::text_at(
                     pm,
                     &l.name,
@@ -1474,7 +1481,15 @@ fn legend(pm: &mut Canvas, r: Rect, map: &Map, title: &str, drawn: Option<&[(u32
                 text::text_at(pm, name, r.x(), y + line / 2.0, 9.0 * 1.33 * ppp, dark, true, text::Align::Left, false);
             }
             LegendRow::Class(l, en) => {
-                swatch(pm, (r.x() + 6.0 * ppp, y, sw, height), l, &en.symbol, map.layer_opacity(l), opts.scale, ppp);
+                swatch(
+                    pm,
+                    (r.x() + 6.0 * ppp, y, sw, height),
+                    l,
+                    (&en.symbol, class_strokes(l, &en)),
+                    map.layer_opacity(l),
+                    opts.scale,
+                    ppp,
+                );
                 text::text_at(
                     pm,
                     &en.label,
@@ -1613,19 +1628,20 @@ pub fn frame_coverage(map: &mut Map, center: Coord, scale: f64, w_mm: f64, h_mm:
 }
 
 /// A legend entry's symbol `s` of the layer `l` in the box (`x`, `y`, `w`, `h`): a point as
-/// [`point_swatch`] draws it, or a line or a filled box a swatch wide, in the middle of the box.
+/// [`point_swatch`] draws it with `strokes`, or a line or a filled box a swatch wide, in the middle
+/// of the box.
 fn swatch(
     pm: &mut Canvas,
     (x, y, w, h): (f32, f32, f32, f32),
     l: &rustgis_map::Layer,
-    s: &rustgis_map::Symbol,
+    (s, strokes): (&rustgis_map::Symbol, &[rustgis_map::LineStroke]),
     opacity: f32,
     scale: f64,
     ppp: f32,
 ) {
     let gt = l.geometry_type();
     if gt == GeometryType::Point {
-        point_swatch(pm, (x, y, w, h), l, s, opacity, ppp * l.size_factor(scale));
+        point_swatch(pm, (x, y, w, h), (s, strokes), opacity, ppp * l.size_factor(scale));
         return;
     }
     let (x, w) = (x + (w - LEGEND_SWATCH * ppp) / 2.0, LEGEND_SWATCH * ppp);
@@ -1662,26 +1678,25 @@ fn swatch(
     }
 }
 
-/// A point layer's symbol in the middle of the box, as the map draws its points: its stacked marks
-/// or its marker, at `ppp` (with the layer's reference scale), unturned. See-through, the marks are
+/// A point layer's symbol in the middle of the box, as the map draws its points: `strokes`' stacked
+/// marks or its marker, at `ppp` (with the layer's reference scale), unturned. See-through, the marks are
 /// composited as one, as the map composites the layer, in a picture no larger than the page.
 fn point_swatch(
     pm: &mut Canvas,
     (x, y, w, h): (f32, f32, f32, f32),
-    l: &rustgis_map::Layer,
-    s: &rustgis_map::Symbol,
+    (s, strokes): (&rustgis_map::Symbol, &[rustgis_map::LineStroke]),
     opacity: f32,
     ppp: f32,
 ) {
     let (cx, cy) = (x + w / 2.0, y + h / 2.0);
     if opacity >= 0.999 {
-        point_marks::draw(pm, cx, cy, s, &l.line_strokes, 0.0, None, ppp);
+        point_marks::draw(pm, cx, cy, s, strokes, 0.0, None, ppp);
         return;
     }
     let (left, top) = (x.floor(), y.floor());
     let (cw, ch) = (((x + w).ceil() - left) as u32, ((y + h).ceil() - top) as u32);
     if let Some(mut picture) = pm.sub(cw.min(pm.width()), ch.min(pm.height())) {
-        point_marks::draw(&mut picture, cx - left, cy - top, s, &l.line_strokes, 0.0, None, ppp);
+        point_marks::draw(&mut picture, cx - left, cy - top, s, strokes, 0.0, None, ppp);
         pm.place(picture, Transform::from_translate(left, top), opacity, rustgis_map::effects::Blend::Normal, None);
     }
 }
@@ -3173,5 +3188,39 @@ mod tests {
             l.reference_scale = Some(2e6);
         });
         assert!(same_corner(&point_legend(&map), &drawn_point(&s, &[], (12.0, 12.0), 2.0), 24, 24));
+    }
+
+    #[test]
+    fn a_legend_draws_a_class_with_its_own_marks() {
+        let s = rustgis_map::Symbol::default_for(GeometryType::Point, 0);
+        let (own, others, layers) = (
+            vec![square_mark(Rgba::rgb(255, 0, 0), 12.0)],
+            vec![square_mark(Rgba::rgb(0, 255, 0), 12.0)],
+            vec![square_mark(Rgba::rgb(0, 0, 255), 12.0)],
+        );
+        let map = point_legend_map(|l| {
+            l.line_strokes = layers.clone();
+            l.renderer = rustgis_map::Renderer::Unique {
+                field: "g".into(),
+                classes: vec![("a".to_string(), s), ("b".to_string(), s)],
+                other: s,
+                ramp: rustgis_map::Ramp::Ember,
+                class_labels: Default::default(),
+                other_label: None,
+                class_strokes: [("a".to_string(), own.clone())].into_iter().collect(),
+                other_strokes: others.clone(),
+                class_fills: Default::default(),
+                other_fills: Vec::new(),
+                expression: None,
+            };
+        });
+        let got = point_legend(&map);
+        // Under the layer's name, each row 15 points tall, its swatch 6 in: class a has its own,
+        // class b takes the layer's, and the fallback has its own.
+        for (row, strokes) in [(1u32, &own), (2, &layers), (3, &others)] {
+            let top = row * 15;
+            let want = drawn_point(&s, strokes, (14.0, top as f32 + 7.5), 1.0);
+            assert!((top..top + 15).all(|y| (6..22).all(|x| got.pixel(x, y) == want.pixel(x, y))), "row {row}");
+        }
     }
 }
