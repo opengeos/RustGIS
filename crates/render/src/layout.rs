@@ -1679,8 +1679,9 @@ fn swatch(
 }
 
 /// A point layer's symbol in the middle of the box, as the map draws its points: `strokes`' stacked
-/// marks or its marker, at `ppp` (with the layer's reference scale), unturned. See-through, the marks are
-/// composited as one, as the map composites the layer, in a picture no larger than the page.
+/// marks or its marker, at `ppp` (with the layer's reference scale), unturned. See-through, the
+/// marks are composited as one, as the map composites the layer, in a picture no larger than the
+/// page.
 fn point_swatch(
     pm: &mut Canvas,
     (x, y, w, h): (f32, f32, f32, f32),
