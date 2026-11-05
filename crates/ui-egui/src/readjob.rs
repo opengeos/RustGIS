@@ -108,9 +108,10 @@ enum Gone {
 impl std::fmt::Display for Gone {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
-            Gone::Project => tl!("another project was opened"),
-            Gone::Map => tl!("the map it was asked for isn't open"),
-            Gone::Layer => tl!("its layer was removed"),
+            // Filled into a notice's template: in logical order (`tl_raw!`).
+            Gone::Project => tl_raw!("another project was opened"),
+            Gone::Map => tl_raw!("the map it was asked for isn't open"),
+            Gone::Layer => tl_raw!("its layer was removed"),
         })
     }
 }

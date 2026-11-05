@@ -2701,12 +2701,9 @@ fn load_all(s: &mut Session, p: &Value) -> CmdResult {
     let ahead = super::reads::take::<LoadedAll>(s, &key);
     let l = s.map().layer(id).ok_or("no such layer")?;
     let (mut ds, unread) = match ahead {
-        // Read from the source the layer still reads, with the fields it lists now: one opened
-        // afresh since, or a field added or deleted meanwhile, is read again.
-        Some((copied, read))
-            if l.source.as_ref().is_some_and(|src| src.same_opening(&copied))
-                && read.as_ref().is_ok_and(|(ds, _)| l.dataset.fields.is_empty() || ds.fields == l.dataset.fields) =>
-        {
+        // Read (or failed) from the source the layer still reads, listing the fields it lists
+        // now: one opened afresh since, or with other fields, is read again.
+        Some((copied, fields, read)) if l.source.as_ref().is_some_and(|src| src.same_opening(&copied)) && fields == l.dataset.fields => {
             read?
         }
         _ => l.load_all_counted()?,
@@ -2726,9 +2723,9 @@ fn load_all(s: &mut Session, p: &Value) -> CmdResult {
     Ok(json!({"layer": id, "features": n}))
 }
 
-/// Load All's read made before it runs: the source it read, and what it read with the number of
-/// rows that couldn't be read.
-type LoadedAll = (rustgis_map::source::SourceLayer, Result<(rustgis_data::Dataset, usize), String>);
+/// Load All's read made before it runs: the source it read, the fields the layer listed then, and
+/// what it read with the number of rows that couldn't be read.
+type LoadedAll = (rustgis_map::source::SourceLayer, Vec<rustgis_data::Field>, Result<(rustgis_data::Dataset, usize), String>);
 
 /// The key Load All's read of `l` is taken by (see [`super::reads`]).
 fn load_all_key(l: &rustgis_map::Layer) -> String {
@@ -2743,8 +2740,8 @@ pub(crate) fn load_all_ahead(s: &Session, p: &Value) -> Option<super::reads::Rea
     let source = copy.source.as_mut()?;
     // Its own read: the live layer keeps the one under way.
     source.detach_read();
-    let copied = source.clone();
-    Some(super::reads::ahead("Load All Features", load_all_key(l), move || (copied, copy.load_all_counted())))
+    let (copied, fields) = (source.clone(), l.dataset.fields.clone());
+    Some(super::reads::ahead("Load All Features", load_all_key(l), move || (copied, fields, copy.load_all_counted())))
 }
 
 /// Adds a layer file: a layer with its data, symbology and labels.
