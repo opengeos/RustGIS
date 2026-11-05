@@ -2701,8 +2701,14 @@ fn load_all(s: &mut Session, p: &Value) -> CmdResult {
     let ahead = super::reads::take::<LoadedAll>(s, &key);
     let l = s.map().layer(id).ok_or("no such layer")?;
     let (mut ds, unread) = match ahead {
-        // Read from the source the layer still reads: one opened afresh since is read again.
-        Some((copied, read)) if l.source.as_ref().is_some_and(|src| src.same_opening(&copied)) => read?,
+        // Read from the source the layer still reads, with the fields it lists now: one opened
+        // afresh since, or a field added or deleted meanwhile, is read again.
+        Some((copied, read))
+            if l.source.as_ref().is_some_and(|src| src.same_opening(&copied))
+                && read.as_ref().is_ok_and(|(ds, _)| l.dataset.fields.is_empty() || ds.fields == l.dataset.fields) =>
+        {
+            read?
+        }
         _ => l.load_all_counted()?,
     };
     // Named as the layer is now: it may have been renamed while the read ran.
