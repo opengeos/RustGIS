@@ -85,6 +85,9 @@ pub struct ModelBuilder {
     pub search: String,
     pub log: Vec<(String, LogKind)>,
     pub status: HashMap<String, Status>,
+    /// The graph of the run under way, until it lands: another one on the canvas by then (edited,
+    /// or another model opened) isn't marked with what it did.
+    running: Option<ModelGraph>,
     /// What to do once the user agrees to drop unsaved changes.
     confirm: Option<Pending>,
     /// The problems of the graph, kept until it or the project changes (the project's
@@ -386,7 +389,8 @@ fn save(app: &mut RustGisApp) -> bool {
     }
 }
 
-/// Runs the model on the canvas, node statuses and messages from the engine's report.
+/// Runs the model on the canvas: on the desktop its tools on a thread of their own ([`readjob`]),
+/// the status bar showing it and Cancel; [`landed`] puts what it did in the canvas once it lands.
 fn run_model(app: &mut RustGisApp) {
     app.mb.status.clear();
     app.mb.log.clear();
@@ -400,8 +404,37 @@ fn run_model(app: &mut RustGisApp) {
         }
         p = json!({"name": saved});
     }
-    let res = app.run("model.run", p);
-    let report = app.session.model_run.clone().unwrap_or_default();
+    app.mb.running = Some(app.mb.graph.clone());
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _ = crate::readjob::run_then(app, "model.run", p, Some(landed));
+        // Not landed yet: it says so until it does.
+        if app.mb.log.is_empty() {
+            app.mb.log(tl!("Running…").to_string(), LogKind::Info);
+        }
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let r = app.run("model.run", p);
+        landed(app, crate::Landed::Ran(r));
+    }
+}
+
+/// A model's run in the canvas: node statuses and messages from the engine's report, when it ran
+/// on the graph still there; why it didn't run, when it didn't.
+fn landed(app: &mut RustGisApp, landed: crate::Landed) {
+    app.mb.status.clear();
+    app.mb.log.clear();
+    let same = app.mb.running.take().is_some_and(|g| g == app.mb.graph);
+    let res = match landed {
+        crate::Landed::Ran(res) => res,
+        crate::Landed::NotRun(why) => {
+            app.mb.log(crate::i18n::fmt("Run failed: {error}", &[("error", &why)]), LogKind::Error);
+            return;
+        }
+    };
+    // (Another graph on the canvas: only how the run ended.)
+    let report = if same { app.session.model_run.clone().unwrap_or_default() } else { Default::default() };
     let titles: HashMap<String, String> = app.mb.graph.nodes.iter().map(|n| (n.id.clone(), model::title(n))).collect();
     for n in &report.nodes {
         let title = titles.get(&n.node).cloned().unwrap_or_default();
@@ -1805,6 +1838,36 @@ mod tests {
         assert!(app.session.map().layer_by_name("Dissolve").is_some(), "{:?}", app.mb.log);
         assert_eq!(app.session.map().layers.len(), layers + 1);
         assert!(app.mb.graph.nodes.iter().all(|n| app.mb.status.get(&n.id) == Some(&Status::Done)));
+
+        // On the desktop its tools run on a thread of their own: the canvas says so until it lands.
+        app.reads_off_frame = true;
+        run_model(&mut app);
+        assert_eq!(app.mb.log, vec![("Running…".to_string(), LogKind::Info)]);
+        assert!(app.mb.status.is_empty());
+        assert_eq!(app.session.map().layers.len(), layers + 1, "nothing added before it lands");
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        while crate::readjob::land(&mut app) {
+            assert!(std::time::Instant::now() < end, "the model never landed");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert_eq!(app.session.map().layers.len(), layers + 2);
+        assert!(app.mb.graph.nodes.iter().all(|n| app.mb.status.get(&n.id) == Some(&Status::Done)));
+        assert!(
+            app.mb.log.last().is_some_and(|(line, kind)| *kind == LogKind::Ok && line.starts_with("Run finished.")),
+            "{:?}",
+            app.mb.log
+        );
+        // Cancelled: nothing added, and the canvas says so without the last run's marks.
+        run_model(&mut app);
+        app.reads.cancel_for_tests();
+        while crate::readjob::land(&mut app) {
+            assert!(std::time::Instant::now() < end, "the model never landed");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert_eq!(app.session.map().layers.len(), layers + 2);
+        assert!(app.mb.status.is_empty());
+        assert_eq!(app.mb.log, vec![("Run failed: Run Model of Model was cancelled".to_string(), LogKind::Error)]);
+        app.reads_off_frame = false;
 
         app.mb.name = "Dissolved cities".into();
         assert!(app.mb.dirty());
