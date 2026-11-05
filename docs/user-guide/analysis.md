@@ -1181,7 +1181,7 @@ Import checks declared model and web-tool versions before interpreting their con
 versions, unreadable nodes or connections, and unknown node or connection fields are refused. Graphs
 that would lose nodes or connections during import are refused with a count and advice to fix the
 file, leaving the current project unchanged. Supported files and legacy files without a version
-marker continue to import.
+marker continue to import, including repeated sources in multi-input tools such as Merge.
 
 The Workflows pane's Models section lists the project's models, and New Model From History turns
 the geoprocessing you've run into one. Models made as steps (`model.new` with `steps`, where `%1`

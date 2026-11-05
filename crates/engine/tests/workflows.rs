@@ -133,6 +133,31 @@ fn model_import_preserves_supported_and_legacy_files() {
     }
 }
 
+/// Repeated merge inputs emitted by the graph writer retain their multiplicity after import.
+#[test]
+fn model_import_round_trips_repeated_step_inputs() {
+    let mut original = Session::new(Project::new("Original"));
+    let steps = json!([{"tool": "merge", "params": {"inputs": "A;A"}}]);
+    original.run("model.new", &json!({"name": "Repeated", "steps": steps})).unwrap();
+    let exported = original.run("model.export", &json!({"name": "Repeated"})).unwrap();
+    let mut file: Value = serde_json::from_str(exported["text"].as_str().unwrap()).unwrap();
+    assert_eq!(file["graph"]["edges"].as_array().unwrap().len(), 2);
+    for legacy in [false, true] {
+        if legacy {
+            file.as_object_mut().unwrap().remove("version");
+        }
+        let mut loaded = Session::new(Project::new("Loaded"));
+        loaded.run("model.import", &json!({"text": file.to_string()})).unwrap();
+        let model = &loaded.project.models[0];
+        assert_eq!(serde_json::to_value(&model.steps).unwrap(), steps);
+        assert_eq!(serde_json::to_value(model.graph.as_ref().unwrap()).unwrap(), file["graph"]);
+        assert!(loaded.notices.is_empty(), "supported files need no warning");
+        let reexported = loaded.run("model.export", &json!({"name": "Repeated"})).unwrap();
+        let reexported: Value = serde_json::from_str(reexported["text"].as_str().unwrap()).unwrap();
+        assert_eq!(reexported["graph"], file["graph"]);
+    }
+}
+
 /// The parcels' south-west corner, in Memphis, and their size in degrees: 4 columns by 3 rows.
 const WEST: f64 = -90.05;
 const SOUTH: f64 = 35.10;
