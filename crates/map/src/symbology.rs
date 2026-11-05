@@ -1528,6 +1528,8 @@ impl Renderer {
         rustgis_data::value::numeric_classes(classes.iter().map(|(k, _)| k.as_str()))
     }
 
+    /// Every row of its legend, whatever the features: the classes, then a Unique Values'
+    /// `<all other values>`; none for a single symbol.
     pub fn legend(&self) -> Vec<LegendEntry> {
         match self {
             Renderer::Single(_) => Vec::new(),

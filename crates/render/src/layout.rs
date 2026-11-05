@@ -3090,6 +3090,7 @@ mod tests {
         (0..h).all(|y| (0..w).all(|x| a.pixel(x, y) == b.pixel(x, y)))
     }
 
+    /// A stacked stroke: a square of `size` points in `color`, with no outline.
     fn square_mark(color: Rgba, size: f32) -> rustgis_map::LineStroke {
         let markers = rustgis_map::LineMarkers {
             mark: rustgis_map::LineMark::Marker(rustgis_map::Marker::Square),
