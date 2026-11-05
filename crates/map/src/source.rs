@@ -918,9 +918,11 @@ impl SourceLayer {
     /// Leaves a read under way to the layer this one was copied from, which takes it when it
     /// lands: a copy drawn elsewhere (an export on a thread of its own) reads what it needs for
     /// itself. The two would otherwise share the read, and the one that didn't take it would wait
-    /// for it forever.
+    /// for it forever. The copy decides its thinning by itself too, so the map's redraws never
+    /// wait for the export's.
     pub fn detach_read(&mut self) {
         self.pending = None;
+        self.render_lod = Default::default();
     }
 
     /// Whether `other` (a copy of this one) reads the same source the same way: the same file and

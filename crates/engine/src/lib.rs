@@ -1659,6 +1659,11 @@ impl Session {
         }
     }
 
+    /// How many notices were given in this session, including ones no longer kept.
+    pub(crate) fn notices_given(&self) -> u64 {
+        self.notices_given
+    }
+
     /// A mark to pass to [`Session::notices_since`].
     pub fn notice_mark(&self) -> u64 {
         self.notices_given
