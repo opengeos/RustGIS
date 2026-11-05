@@ -352,6 +352,12 @@ pub fn poll(app: &mut RustGisApp, ctx: &egui::Context) {
     }
 }
 
+/// An address as a message names it: redacted on its own first, so a query naming a secret takes
+/// only itself away when the whole message is redacted, not the reason that follows it.
+pub(crate) fn address_in_message(url: &str) -> String {
+    rustgis_engine::Session::redacted(url).as_str().to_string()
+}
+
 /// The add-service dialog's line for a layer on its way: what the dialog shows when a layer's
 /// download starts, and what [`RustGisApp::landed_in_dialog`] looks for when it lands (#1453).
 pub(crate) fn downloading(name: &str) -> String {
@@ -416,7 +422,7 @@ pub fn poll_pages(app: &mut RustGisApp, ctx: &egui::Context) {
     }
     for read in std::mem::take(&mut app.ui.service_pages) {
         if !app.session.download_is_pending(read.landed.id) {
-            let url = &read.landed.url;
+            let url = &address_in_message(&read.landed.url);
             let why = i18n::fmt("{url}: downloaded after its project was closed, so it wasn't added", &[("url", url)]);
             app.landed_in_dialog(&read.landed.params, Err(&why));
             app.session.notify(why, false);

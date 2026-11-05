@@ -2129,8 +2129,8 @@ impl RustGisApp {
             // its layer never lands in the new one, and said, as a download landing late is.
             for (p, _) in std::mem::take(&mut self.ui.cog_probes) {
                 let url = p.get("url").and_then(Value::as_str).unwrap_or("");
-                let url = rustgis_engine::data::s3_address::inner(url);
-                let why = i18n::fmt("{url}: its project was closed while it was read, so it wasn't added", &[("url", url)]);
+                let url = serviceui::address_in_message(rustgis_engine::data::s3_address::inner(url));
+                let why = i18n::fmt("{url}: its project was closed while it was read, so it wasn't added", &[("url", &url)]);
                 self.landed_in_dialog(&p, Err(&why));
                 self.session.notify(why, false);
             }
@@ -4211,7 +4211,8 @@ impl RustGisApp {
     fn add_download(&mut self, landed: serviceui::Landed, current: bool) {
         let serviceui::Landed { id, url, params: mut p, origin } = landed;
         if !current {
-            let why = i18n::fmt("{url}: downloaded after its project was closed, so it wasn't added", &[("url", &url)]);
+            let shown = serviceui::address_in_message(&url);
+            let why = i18n::fmt("{url}: downloaded after its project was closed, so it wasn't added", &[("url", &shown)]);
             self.landed_in_dialog(&p, Err(&why));
             self.session.notify(why, false);
             return;
@@ -5255,13 +5256,14 @@ mod record_tests {
         assert!(app.ui.cog_probes.is_empty());
         assert_eq!(app.dialogs.info, None);
         let why = app.dialogs.error.as_deref().unwrap_or("");
-        assert!(why.contains("elevation.tif") && !why.contains("hidden-758"), "{why}");
-        // The new project's notices: the one for the dropped probe comes after it opened. (A
-        // query naming a secret takes the rest of the text with it when redacted.)
-        let said = |n: &rustgis_engine::Notice| n.text.contains("elevation.tif") && !n.text.contains("hidden-758");
-        assert!(app.session.notices.iter().any(said), "{:?}", app.session.notices);
-        // Without a secret, the reason stays.
-        assert!(app.session.notices.iter().any(|n| n.text.contains("slope.tif") && n.text.contains("project was closed")));
+        // The reason stays, though the address's query names a secret.
+        assert!(why.contains("elevation.tif") && why.contains("project was closed") && !why.contains("hidden-758"), "{why}");
+        // The new project's notices: the one for each dropped probe comes after it opened.
+        for file in ["elevation.tif", "slope.tif"] {
+            let said = |n: &rustgis_engine::Notice| n.text.contains(file) && n.text.contains("project was closed");
+            assert!(app.session.notices.iter().any(said), "{file}: {:?}", app.session.notices);
+        }
+        assert!(app.session.notices.iter().all(|n| !n.text.contains("hidden-758")));
     }
 
     #[test]
