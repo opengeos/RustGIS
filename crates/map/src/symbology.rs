@@ -766,6 +766,13 @@ pub struct LegendEntry {
     pub fallback: bool,
 }
 
+impl LegendEntry {
+    /// A class's row, with the stacked strokes it has of its own, if any.
+    fn class(label: String, symbol: Symbol, strokes: Option<&Vec<LineStroke>>) -> Self {
+        LegendEntry { label, symbol, strokes: strokes.cloned().unwrap_or_default(), fallback: false }
+    }
+}
+
 /// Most unique-value classes created automatically.
 pub const MAX_UNIQUE: usize = 64;
 /// The most classes by an expression: a QGIS rule-based style's rules (one class each), kept when
@@ -1483,12 +1490,7 @@ impl Renderer {
             .into_iter()
             .filter(|i| used.get(*i).copied().unwrap_or(false))
             .filter_map(|i| classes.get(i))
-            .map(|(k, s)| LegendEntry {
-                label: unique_label(class_labels, k),
-                symbol: *s,
-                strokes: class_strokes.get(k).cloned().unwrap_or_default(),
-                fallback: false,
-            })
+            .map(|(k, s)| LegendEntry::class(unique_label(class_labels, k), *s, class_strokes.get(k)))
             .collect();
         if other_used && visible {
             v.push(LegendEntry {
@@ -1535,12 +1537,7 @@ impl Renderer {
                     .class_order()
                     .into_iter()
                     .filter_map(|i| classes.get(i))
-                    .map(|(k, s)| LegendEntry {
-                        label: unique_label(class_labels, k),
-                        symbol: *s,
-                        strokes: class_strokes.get(k).cloned().unwrap_or_default(),
-                        fallback: false,
-                    })
+                    .map(|(k, s)| LegendEntry::class(unique_label(class_labels, k), *s, class_strokes.get(k)))
                     .collect();
                 v.push(LegendEntry {
                     label: other_label.clone().unwrap_or_else(|| OTHER_VALUES.into()),
@@ -1559,7 +1556,7 @@ impl Renderer {
                     .map(|(i, (b, s))| {
                         let label = class_labels.get(&i).cloned().unwrap_or_else(|| range_label(lo, *b));
                         lo = *b;
-                        LegendEntry { label, symbol: *s, strokes: class_strokes.get(&i).cloned().unwrap_or_default(), fallback: false }
+                        LegendEntry::class(label, *s, class_strokes.get(&i))
                     })
                     .collect()
             }
@@ -1634,12 +1631,7 @@ impl Renderer {
                 }
                 return classes
                     .get(i)
-                    .map(|(k, s)| LegendEntry {
-                        label: unique_label(class_labels, k),
-                        symbol: *s,
-                        strokes: class_strokes.get(k).cloned().unwrap_or_default(),
-                        fallback: false,
-                    })
+                    .map(|(k, s)| LegendEntry::class(unique_label(class_labels, k), *s, class_strokes.get(k)))
                     .ok_or_else(|| "the class has no legend row".into());
             }
             (Renderer::Unique { classes, other, other_label, .. }, ClassRef::Other) => {
