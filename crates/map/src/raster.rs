@@ -373,7 +373,7 @@ impl RasterLayer {
             &address,
             Box::new(move |result| {
                 *land.lock().unwrap_or_else(|e| e.into_inner()) = Some(result.map(Arc::new));
-                crate::source::landed();
+                crate::source::wake();
             }),
         );
         Ok(())
@@ -475,7 +475,7 @@ impl RasterLayer {
                                 .map_err(|e| e.to_string())
                         });
                     *land.lock().unwrap_or_else(|e| e.into_inner()) = Some(result);
-                    crate::source::landed();
+                    crate::source::wake();
                 }),
             );
             return Ok(());
@@ -586,7 +586,7 @@ impl RasterLayer {
         self.opening = None;
         self.land(result);
         // Installed while the map draws: a frame after it says what reading them lost.
-        crate::source::wake();
+        crate::source::another_frame();
         false
     }
 

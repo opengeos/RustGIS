@@ -525,14 +525,9 @@ struct Pending {
 /// A source being opened off the frame.
 type Opening = Arc<Mutex<Option<Result<Arc<dyn FeatureSource>, String>>>>;
 
-/// Tells the app something landed (a read, or a source opened by its address).
-pub(crate) fn landed() {
-    GENERATION.fetch_add(1, Ordering::Relaxed);
-    wake();
-}
-
-/// Asks the app for a frame (the waker), with nothing new to draw.
-pub(crate) fn wake() {
+/// Asks the app for a frame (the waker) with nothing new to draw: what landed while the map drew
+/// is said a frame after (see [`wake`] for something new to draw).
+pub(crate) fn another_frame() {
     if let Some(w) = waker().lock().ok().and_then(|w| w.clone()) {
         w();
     }
@@ -805,7 +800,7 @@ impl SourceLayer {
                         if let Ok(mut s) = land.lock() {
                             *s = Some(r.map(Arc::from).map_err(|e| e.to_string()));
                         }
-                        landed();
+                        wake();
                     }),
                 );
                 Ok(())
@@ -838,7 +833,7 @@ impl SourceLayer {
                 if let Ok(mut s) = land.lock() {
                     *s = Some(r);
                 }
-                landed();
+                wake();
             }),
         );
         Ok(())
@@ -920,6 +915,34 @@ impl SourceLayer {
         self.open()
     }
 
+    /// Leaves a read under way to the layer this one was copied from, which takes it when it
+    /// lands: a copy drawn elsewhere (an export on a thread of its own) reads what it needs for
+    /// itself. The two would otherwise share the read, and the one that didn't take it would wait
+    /// for it forever. The copy decides its thinning by itself too, so the map's redraws never
+    /// wait for the export's.
+    pub fn detach_read(&mut self) {
+        self.pending = None;
+        self.render_lod = Default::default();
+    }
+
+    /// Whether `other` (a copy of this one) reads the same source the same way: the same file and
+    /// table, opened by the same open. One opened afresh since (`reopen`, a table replaced) is
+    /// another, whatever its path.
+    pub fn same_opening(&self, other: &SourceLayer) -> bool {
+        let handles = match (&self.handle, &other.handle) {
+            (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+            (None, None) => true,
+            _ => false,
+        };
+        // A source by its web address still opening: the same open shares its slot.
+        let openings = match (&self.opening, &other.opening) {
+            (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+            (None, None) => true,
+            _ => false,
+        };
+        handles && openings && self.path == other.path && self.table == other.table
+    }
+
     /// Forgets the window, so the next view reads again (after the source changes).
     pub fn reset(&mut self) {
         self.render_lod = Default::default();
@@ -992,7 +1015,7 @@ impl SourceLayer {
                     if let Ok(mut slot) = p2.result.lock() {
                         *slot = Some(r.map_err(|e| e.to_string()));
                     }
-                    landed();
+                    wake();
                 }),
             );
             self.pending = Some(pending);
@@ -1111,6 +1134,16 @@ static GENERATION: AtomicU64 = AtomicU64::new(0);
 fn waker() -> &'static Mutex<Option<Arc<dyn Fn() + Send + Sync>>> {
     static W: OnceLock<Mutex<Option<Arc<dyn Fn() + Send + Sync>>>> = OnceLock::new();
     W.get_or_init(|| Mutex::new(None))
+}
+
+/// Something read in the background (a feature read, a source opened by its address, a raster's
+/// pixels read in place; outside this module, a Zarr step) has landed: the map redraws
+/// ([`generation`]) and the UI is woken.
+pub fn wake() {
+    GENERATION.fetch_add(1, Ordering::Relaxed);
+    if let Some(w) = waker().lock().ok().and_then(|w| w.clone()) {
+        w();
+    }
 }
 
 /// Called whenever a background read finishes (the UI asks for a repaint).

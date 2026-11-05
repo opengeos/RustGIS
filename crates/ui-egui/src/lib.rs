@@ -583,6 +583,10 @@ pub struct UiState {
     /// `panes::web_data_name`).
     pub web_data: &'static str,
     pub dark: bool,
+    /// The theme file in use, by name. Empty follows `dark` and the system.
+    pub theme_name: String,
+    /// The interface scale, 0.8 to 2.0, applied as egui's zoom factor.
+    pub interface_scale: f32,
     /// Live measurement and map scale-bar units, chosen in Home › Measure.
     pub measurement_imperial: bool,
     /// The theme follows the system's light or dark setting until the user picks one.
@@ -822,6 +826,8 @@ impl Default for UiState {
             diagnostic_snapshot: None,
             web_data: "opendata",
             dark: false,
+            theme_name: String::new(),
+            interface_scale: 1.0,
             measurement_imperial: false,
             dark_follows_system: true,
             language: i18n::AUTO.into(),
@@ -917,6 +923,13 @@ impl Default for UiState {
     }
 }
 
+/// The resolution of a layout copied to the clipboard.
+const CAPTURE_DPI: f64 = 192.0;
+/// The most pixels a layout copied to the clipboard has (a page above it is copied at a lower dpi).
+const CAPTURE_PIXELS: f64 = 16_000_000.0;
+/// The lowest dpi a layout is copied at: a page that would need less is an error.
+const CAPTURE_MIN_DPI: f64 = 36.0;
+
 pub struct RustGisApp {
     pub session: Session,
     pub ui: UiState,
@@ -951,7 +964,18 @@ pub struct RustGisApp {
     fonts_frames: u32,
     /// When this frame's `logic` began, for the double-click delay `ui` sets when it ends.
     frame_start: Option<web_time::Instant>,
-    applied_dark: Option<bool>,
+    applied_theme: Option<(String, bool)>,
+    /// The themes the app can offer: built in, then the ones in the user's themes folder.
+    pub themes: Vec<theme::Theme>,
+    /// The theme files that did not load, with the reason.
+    pub theme_errors: Vec<String>,
+    /// What the reader changed in the loaded theme files, as the menu lists it.
+    pub theme_notes: Vec<String>,
+    themes_stamp: u64,
+    /// Changes on every folder read, including explicit reloads with unchanged metadata.
+    themes_revision: u64,
+    themes_checked: f64,
+
     sent_title: String,
     pub quit_requested: bool,
     logo: Option<egui::TextureHandle>,
@@ -1113,6 +1137,8 @@ impl RustGisApp {
         // The installed fonts a label can be drawn in, indexed while the app starts.
         rustgis_engine::render::families::warm_up();
         let mut s = session;
+        // A time slider move doesn't wait for a Zarr step to be read (#1291 step 3).
+        s.zarr_off_frame = cfg!(not(target_arch = "wasm32"));
         if s.active_layer.is_none() {
             s.active_layer = s.map().layers.first().map(|l| l.id);
         }
@@ -1143,7 +1169,14 @@ impl RustGisApp {
             assistant: assistantpane::AssistantState::default(),
             fonts_frames: 0,
             frame_start: None,
-            applied_dark: None,
+            applied_theme: None,
+            themes: theme::Theme::builtin(),
+            theme_errors: Vec::new(),
+            theme_notes: Vec::new(),
+            themes_stamp: 0,
+            themes_revision: 0,
+            themes_checked: 0.0,
+
             sent_title: String::new(),
             quit_requested: false,
             logo: None,
@@ -1190,6 +1223,8 @@ impl RustGisApp {
         if let Some(lang) = self.services.load_pref.as_ref().and_then(|load| load("language")) {
             self.ui.language = lang;
         }
+        // Theme readers and startup notices keep translated text, so select the language before reading.
+        i18n::set_current(self.chosen_lang());
         // A stored value that is neither `auto` nor a known worldview means `auto`.
         if let Some(w) = self.services.load_pref.as_ref().and_then(|load| load("worldview"))
             && rustgis_engine::sample::Worldview::from_code(&w).is_some()
@@ -1264,6 +1299,9 @@ impl RustGisApp {
         let list = |s: Option<String>| -> Vec<String> {
             s.map(|v| v.split(',').map(str::trim).filter(|x| !x.is_empty()).map(String::from).collect()).unwrap_or_default()
         };
+        // take_saved_look finds a saved theme only once the folder is read.
+        self.load_themes();
+        self.take_saved_look();
         self.ui.hidden_tabs = ribbon::current_hidden_tabs(list(self.services.load_pref.as_ref().and_then(|load| load("hidden_tabs"))));
         self.ui.quick_access = list(self.services.load_pref.as_ref().and_then(|load| load("quick_access")));
         // The browser's GeoLibre tools, loaded in an earlier visit: load them again (the runner
@@ -1700,6 +1738,190 @@ impl RustGisApp {
         }
     }
 
+    /// Reloads available theme files from the user folder, retaining built-ins when it is absent.
+    fn load_themes(&mut self) {
+        self.load_themes_from(theme::Theme::user_dir().as_deref());
+    }
+
+    /// Reads the folder; the stamp is taken first, so a save during the read is picked up next time.
+    fn load_themes_from(&mut self, dir: Option<&std::path::Path>) {
+        self.themes_stamp = theme::Theme::folder_signature(dir);
+        self.themes_revision = self.themes_revision.wrapping_add(1);
+        let (themes, errors) = theme::Theme::available_in(dir);
+        let notes: Vec<String> = themes.iter().flat_map(|t| t.notes.iter().cloned()).collect();
+        // Said before the new lists are kept, so only what the last read did not report is said.
+        self.announce_theme_errors(&errors);
+        let fresh: Vec<String> = notes.iter().filter(|note| !self.theme_notes.contains(note)).cloned().collect();
+        self.announce_theme_notes(&fresh);
+        self.themes = themes;
+        self.theme_errors = errors;
+        self.theme_notes = notes;
+        // The choice outlives the file: a theme that stopped loading keeps its name.
+        self.sync_named_brightness();
+        // Reset so a file that reads differently is applied again on the next frame.
+        self.applied_theme = None;
+    }
+
+    /// A refused file is said once, with a count; the menu keeps the reason for each.
+    fn announce_theme_errors(&mut self, errors: &[String]) {
+        let fresh = errors.iter().filter(|e| !self.theme_errors.contains(*e)).count();
+        if fresh == 0 {
+            return;
+        }
+        let text = if fresh == 1 {
+            tl!("A theme file was refused. Open Settings > Theme for the reason.").to_string()
+        } else {
+            i18n::fmt("{n} theme files were refused. Open Settings > Theme for the reason.", &[("n", &fresh.to_string())])
+        };
+        self.session.notify(text, true);
+    }
+
+    /// Reports this read's adjustments; folder refreshes filter unchanged notes before calling.
+    fn announce_theme_notes(&mut self, notes: &[String]) {
+        if !notes.is_empty() {
+            let details = notes.iter().take(8).map(String::as_str).collect::<Vec<_>>().join("; ");
+            self.session.notify(
+                i18n::fmt(
+                    "{n} theme adjustment notice(s): {details}. Open Settings > Theme for all details.",
+                    &[("n", &notes.len().to_string()), ("details", &details)],
+                ),
+                false,
+            );
+        }
+    }
+
+    /// A file saved as the other brightness takes the interface with it, so name and look agree.
+    fn sync_named_brightness(&mut self) {
+        if self.ui.theme_name.is_empty() {
+            return;
+        }
+        if let Some(dark) = self.themes.iter().find(|t| t.name == self.ui.theme_name).map(|t| t.dark) {
+            if self.ui.dark != dark {
+                self.ui.dark = dark;
+                if let Some(save) = &self.services.save_pref {
+                    save("dark", if dark { "true" } else { "false" });
+                }
+            }
+            // The loaded theme owns its brightness; following the platform would overwrite it.
+            self.ui.dark_follows_system = false;
+        }
+    }
+
+    /// Reloads when file names, sizes or modification times change, at most once a second.
+    /// A save preserving size and timestamp needs Reload Themes.
+    fn refresh_themes(&mut self, ctx: &egui::Context) {
+        let Some(dir) = theme::Theme::user_dir() else { return };
+        let now = ctx.input(|i| i.time);
+        if now >= self.themes_checked + 1.0 {
+            self.themes_checked = now;
+            if theme::Theme::folder_signature(Some(&dir)) != self.themes_stamp {
+                self.load_themes();
+            }
+        }
+        // Zero means no readable folder. Without one, let the app sleep until another event.
+        if self.themes_stamp != 0 {
+            ctx.request_repaint_after(web_time::Duration::from_secs(1));
+        }
+    }
+
+    /// The theme drawn: the one named while it loads, else the nearest of the brightness in force.
+    fn drawn(&self) -> Option<&theme::Theme> {
+        self.themes.iter().find(|t| t.name == self.ui.theme_name).or_else(|| self.themes.iter().find(|t| t.dark == self.ui.dark))
+    }
+
+    /// The theme in use: the one named, else the nearest built-in for the current brightness.
+    pub fn current_theme(&self) -> theme::Theme {
+        self.drawn().cloned().unwrap_or_else(|| {
+            let builtin = theme::Theme::builtin();
+            let wanted = builtin.iter().find(|t| t.dark == self.ui.dark).or_else(|| builtin.first());
+            wanted.cloned().unwrap_or(theme::Theme {
+                name: "Light".to_string(),
+                dark: false,
+                tokens: theme::Tokens::light(),
+                metrics: theme::Metrics::standard(),
+                notes: Vec::new(),
+            })
+        })
+    }
+
+    /// A saved theme name wins; one that no longer loads follows the system.
+    fn take_saved_look(&mut self) {
+        let pref = |app: &Self, key: &str| -> Option<String> {
+            app.services.load_pref.as_ref().and_then(|load| load(key)).filter(|v| !v.is_empty())
+        };
+        let wanted = pref(self, "theme");
+        let picked = wanted.as_ref().and_then(|name| self.themes.iter().find(|t| t.name == *name).cloned());
+        if let Some(picked) = picked {
+            self.ui.theme_name = picked.name;
+            self.ui.dark = picked.dark;
+            self.ui.dark_follows_system = false;
+        } else {
+            // A saved theme keeps its name until its file loads, so a fixed file is drawn again.
+            self.ui.theme_name = wanted.unwrap_or_default();
+            if let Some(dark) = pref(self, "dark") {
+                // "auto" was Follow the System; a toggle stores the brightness it left.
+                self.ui.dark_follows_system = dark == "auto";
+                self.ui.dark = if self.ui.dark_follows_system {
+                    pref(self, "dark_fallback").map_or(self.ui.dark, |value| value == "true")
+                } else {
+                    dark == "true"
+                };
+            }
+        }
+        let saved = pref(self, "ui_scale");
+        let scale = saved.as_deref().and_then(|v| v.parse::<f32>().ok());
+        self.ui.interface_scale = scale.map_or(1.0, theme::clamp_scale);
+        if saved.is_some() && scale.is_none_or(|factor| factor != self.ui.interface_scale) {
+            i18n::set_current(self.chosen_lang());
+            self.session.notify(
+                i18n::fmt("Interface scale held to {percent}%", &[("percent", &format!("{:.0}", self.ui.interface_scale * 100.0))]),
+                false,
+            );
+        }
+    }
+
+    /// Selects a loaded theme and saves its name and brightness; unknown names leave the choice unchanged.
+    fn use_theme(&mut self, name: &str) -> Result<(), String> {
+        let Some(picked) = self.themes.iter().find(|t| t.name == name).cloned() else {
+            return Err(i18n::fmt("No theme is named {name}.", &[("name", name)]));
+        };
+        self.ui.theme_name = picked.name.clone();
+        self.ui.dark = picked.dark;
+        self.ui.dark_follows_system = false;
+        if let Some(save) = &self.services.save_pref {
+            save("theme", &picked.name);
+            save("dark", if picked.dark { "true" } else { "false" });
+        }
+        Ok(())
+    }
+
+    /// Validates a bounded theme file, preserves its source in the user folder, then selects it.
+    fn load_theme_file(&mut self, path: &std::path::Path) -> Result<(), String> {
+        let said = |reason: &str| i18n::fmt("{path}: {reason}", &[("path", &path.display().to_string()), ("reason", reason)]);
+        let text = match theme::read_text(path) {
+            Ok(text) => text,
+            Err(theme::Over::TooBig) => return Err(theme::too_big(path)),
+            Err(theme::Over::Reason(reason)) => return Err(said(&reason)),
+        };
+        let stem = path.file_stem().map_or_else(String::new, |s| s.to_string_lossy().into_owned());
+        let theme = theme::Theme::parse(&stem, &text).map_err(|e| said(&e))?;
+        // Keep the original file text. Remember its notes before reloading so they are announced once.
+        let kept = theme.save_user(&text)?;
+        self.announce_theme_notes(&theme.notes);
+        for note in &theme.notes {
+            if !self.theme_notes.contains(note) {
+                self.theme_notes.push(note.clone());
+            }
+        }
+        self.load_themes();
+        self.use_theme(&theme.name)?;
+        let kept = kept.display().to_string();
+        let name = theme.name.clone();
+        let text = i18n::fmt("Theme {name} loaded and kept at {path}", &[("name", &name), ("path", &kept)]);
+        self.session.notify(text, false);
+        Ok(())
+    }
+
     /// Sets up the project the app opens with, from the Settings › Start-up preferences; a shell
     /// passes its own overrides (the web app's `?blank`, `?projection=` and `?extent=`). Call it
     /// once, after [`Self::with_services`] and before opening files. The start is not an edit to
@@ -1904,8 +2126,14 @@ impl RustGisApp {
                 self.session.notify(text, true);
             }
             // A probe still under way is for an address added to the old project: dropped, so
-            // its layer never lands in the new one.
-            self.ui.cog_probes.clear();
+            // its layer never lands in the new one, and said, as a download landing late is.
+            for (p, _) in std::mem::take(&mut self.ui.cog_probes) {
+                let url = p.get("url").and_then(Value::as_str).unwrap_or("");
+                let url = serviceui::address_in_message(rustgis_engine::data::s3_address::inner(url));
+                let why = i18n::fmt("{url}: its project was closed while it was read, so it wasn't added", &[("url", &url)]);
+                self.landed_in_dialog(&p, Err(&why));
+                self.session.notify(why, false);
+            }
         }
         // Undo and redo can move vertices: an index chosen before may now name another vertex.
         // A step moved or deleted, from the pane, Command Search, the assistant or a script: the
@@ -2376,10 +2604,84 @@ impl RustGisApp {
                     save("ribbon_minimized", if self.ui.ribbon_minimized { "true" } else { "false" });
                 }
             }
+            // The theme list in Settings is the one control for brightness; this picks its entry.
             "ui.theme" => {
-                self.ui.dark = p.get("dark").and_then(Value::as_bool).unwrap_or(!self.ui.dark);
+                if !p.is_null() && !p.as_object().is_some_and(|params| params.keys().all(|key| key == "dark")) {
+                    return Err(i18n::fmt("ui.theme accepts only the dark parameter", &[]));
+                }
+                let dark = match p.get("dark") {
+                    None => !self.ui.dark,
+                    Some(Value::Bool(dark)) => *dark,
+                    Some(_) => return Err(i18n::fmt("ui.theme needs true or false at dark", &[])),
+                };
+                // The brightness asked for wins: a user file may rework Light or Dark.
+                self.ui.dark = dark;
+                let wanted = if dark { "Dark" } else { "Light" };
+                // The name is the theme that will be drawn, so the button and the menu agree.
+                self.ui.theme_name = self
+                    .themes
+                    .iter()
+                    .find(|t| t.name == wanted && t.dark == dark)
+                    .or_else(|| self.themes.iter().find(|t| t.dark == dark))
+                    .map(|t| t.name.clone())
+                    .unwrap_or_default();
                 self.ui.dark_follows_system = false;
+                if let Some(save) = &self.services.save_pref {
+                    save("theme", &self.ui.theme_name);
+                    save("dark", if dark { "true" } else { "false" });
+                }
             }
+            // Picks a theme by name; no name follows the system again.
+            "ui.themeFile" => {
+                if !p.is_null() && !p.as_object().is_some_and(|params| params.keys().all(|key| key == "name")) {
+                    return Err(i18n::fmt("ui.themeFile accepts only the name parameter", &[]));
+                }
+                let name = match p.get("name") {
+                    Some(given) => given.as_str().ok_or_else(|| i18n::fmt("ui.themeFile needs a name string", &[]))?.trim().to_string(),
+                    None => String::new(),
+                };
+                if name.is_empty() {
+                    self.ui.theme_name.clear();
+                    self.ui.dark_follows_system = true;
+                    if let Some(save) = &self.services.save_pref {
+                        save("theme", "");
+                        save("dark_fallback", if self.ui.dark { "true" } else { "false" });
+                        save("dark", "auto");
+                    }
+                } else {
+                    self.use_theme(&name)?;
+                }
+            }
+            "ui.themeLoad" => {
+                if cfg!(target_arch = "wasm32") {
+                    return Err(i18n::fmt("Loading a theme file needs the desktop app", &[]));
+                }
+                let Some(path) = dialogs::pick_open(&["json"], tl!("A theme file")) else { return Ok(Value::Null) };
+                self.load_theme_file(std::path::Path::new(&path))?;
+            }
+            "ui.scale" => {
+                if !p.is_null() && !p.as_object().is_some_and(|params| params.keys().all(|key| key == "factor")) {
+                    return Err(i18n::fmt("ui.scale accepts only the factor parameter", &[]));
+                }
+                let factor = match p.get("factor") {
+                    Some(given) => given
+                        .as_f64()
+                        .ok_or_else(|| i18n::fmt("ui.scale needs a number at factor", &[]))?
+                        .clamp(f64::from(f32::MIN), f64::from(f32::MAX)) as f32,
+                    None => 1.0,
+                };
+                self.ui.interface_scale = theme::clamp_scale(factor);
+                if self.ui.interface_scale != factor {
+                    self.session.notify(
+                        i18n::fmt("Interface scale held to {percent}%", &[("percent", &format!("{:.0}", self.ui.interface_scale * 100.0))]),
+                        false,
+                    );
+                }
+                if let Some(save) = &self.services.save_pref {
+                    save("ui_scale", &self.ui.interface_scale.to_string());
+                }
+            }
+            "ui.themeReload" => self.load_themes(),
             "ui.measurementUnits" => {
                 let imperial = match p.get("units") {
                     None => !self.ui.measurement_imperial,
@@ -2992,6 +3294,10 @@ impl RustGisApp {
                     let (exts, kinds): (&[&str], _) =
                         if pdf_only { (&["pdf"], tl!("PDF")) } else { (&["pdf", "png", "svg"], tl!("PDF, PNG or SVG")) };
                     if let Some(path) = dialogs::pick_save(&format!("{name}.pdf"), exts, kinds) {
+                        // Drawn on a thread of its own, with progress and Cancel in the status bar.
+                        #[cfg(not(target_arch = "wasm32"))]
+                        return exportjob::start(self, "layout.export", json!({"layout": li, "path": path, "dpi": 200}));
+                        #[cfg(target_arch = "wasm32")]
                         return self.run("layout.export", json!({"layout": li, "path": path, "dpi": 200}));
                     }
                 }
@@ -3132,6 +3438,45 @@ impl RustGisApp {
                 let size = [pm.width() as usize, pm.height() as usize];
                 self.ui.copy_image = Some(egui::ColorImage::from_rgba_premultiplied(size, pm.data()));
                 self.session.notify(tl!("Copied the map to the clipboard"), false);
+            }
+            // Copies the open layout's page as an image: at 192 dpi, lower for a page that would
+            // pass the app's own pixel budget or the renderer's largest side (and says so). A page
+            // that would be copied below 36 dpi is an error.
+            "ui.captureLayout" => {
+                let li = self.session.active_layout.ok_or("open a layout first")?;
+                // Text still being typed into the Format pane is part of the page.
+                layoutview::commit_drafts(self);
+                let (w_mm, h_mm) = self.session.project.layouts.get(li).map(|l| (l.width, l.height)).ok_or("open a layout first")?;
+                let area = (w_mm / 25.4) * (h_mm / 25.4);
+                let side = rustgis_engine::render::layout::MAX_SIDE * 25.4 / w_mm.max(h_mm);
+                let dpi = CAPTURE_DPI.min((CAPTURE_PIXELS / area).sqrt()).min(side);
+                if dpi < CAPTURE_MIN_DPI {
+                    return Err("the page is too large to copy to the clipboard: export it instead".into());
+                }
+                let session = &mut self.session;
+                let png = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    rustgis_engine::cmd::layout::layout_bytes(session, li, false, dpi, false)
+                }))
+                .unwrap_or_else(|_| Err("the capture failed unexpectedly".into()))?;
+                let pm = rustgis_engine::render::decode_png(&png).ok_or("could not draw the layout")?;
+                let size = [pm.width() as usize, pm.height() as usize];
+                self.ui.copy_image = Some(egui::ColorImage::from_rgba_premultiplied(size, pm.data()));
+                // The dpi reported is the one the image has, on its smaller scale (a whole pixel
+                // short is only rounding).
+                let (px_w, px_h) = (f64::from(pm.width()), f64::from(pm.height()));
+                let short = (w_mm / 25.4 * dpi).floor() - px_w > 1.0 || (h_mm / 25.4 * dpi).floor() - px_h > 1.0;
+                if dpi < CAPTURE_DPI || short {
+                    let got = (px_w * 25.4 / w_mm).min(px_h * 25.4 / h_mm).floor();
+                    self.session.notify(
+                        i18n::fmt(
+                            "Copied the layout to the clipboard at {dpi} dpi, not {wanted}: the page is too large for a larger image",
+                            &[("dpi", &format!("{got:.0}")), ("wanted", &format!("{CAPTURE_DPI:.0}"))],
+                        ),
+                        false,
+                    );
+                } else {
+                    self.session.notify(tl!("Copied the layout to the clipboard"), false);
+                }
             }
             "ui.printMap" => {
                 let session = &mut self.session;
@@ -3502,6 +3847,15 @@ impl RustGisApp {
             "ui.exportMap" => {
                 let name = format!("{}.png", self.session.map().name);
                 if let Some(path) = dialogs::pick_save(&name, &["png"], tl!("PNG image")) {
+                    // Drawn on a thread of its own, with progress and Cancel in the status bar;
+                    // here while a style added with its own view loads, as the command waits for
+                    // it to move the map there first.
+                    #[cfg(not(target_arch = "wasm32"))]
+                    if self.session.style_view.is_none() {
+                        return exportjob::start(self, "share.exportMap", json!({"path": path, "dpi": 192}));
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    exportjob::idle(self)?;
                     return self.run("share.exportMap", json!({"path": path, "dpi": 192}));
                 }
             }
@@ -3781,16 +4135,29 @@ impl RustGisApp {
                         p["cog"] = json!(true);
                     }
                     let before = self.session.sources.generation;
-                    if self.run("layer.addUrl", p).is_ok() {
-                        connectiontree::name_recent(self, before, origin.as_deref());
-                        self.map.invalidate();
+                    let pending = p.clone();
+                    match self.run("layer.addUrl", p) {
+                        Ok(_) => {
+                            connectiontree::name_recent(self, before, origin.as_deref());
+                            self.map.invalidate();
+                            self.landed_in_dialog(&pending, Ok(()));
+                        }
+                        Err(e) => self.landed_in_dialog(&pending, Err(&e)),
                     }
                 }
                 Ok(false) => {
                     p["whole"] = json!(true);
-                    let _ = connectiontree::run_add_url(self, p, origin.as_deref());
+                    let pending = p.clone();
+                    // Downloaded whole: the line waits for the download (`add_download`).
+                    if let Err(e) = connectiontree::run_add_url(self, p, origin.as_deref()) {
+                        self.landed_in_dialog(&pending, Err(&e));
+                    }
                 }
-                Err(e) => self.session.notify(if e.starts_with(&url) { e } else { format!("{url}: {e}") }, true),
+                Err(e) => {
+                    let e = if e.starts_with(&url) { e } else { format!("{url}: {e}") };
+                    self.landed_in_dialog(&p, Err(&e));
+                    self.session.notify(e, true);
+                }
             }
         }
         let mut landed = Vec::new();
@@ -3813,7 +4180,9 @@ impl RustGisApp {
                     let why = rustgis_engine::sources::redact_text(&e);
                     // An error that names its own address (a Shapefile's part) isn't named again.
                     let named = why.split_once(": ").is_some_and(|(head, _)| head.contains("://") && !head.contains(' '));
-                    self.session.notify(if named { why } else { format!("{}: {why}", rustgis_engine::sources::redact(&url)) }, true);
+                    let why = if named { why } else { format!("{}: {why}", rustgis_engine::sources::redact(&url)) };
+                    self.landed_in_dialog(&p, Err(&why));
+                    self.session.notify(why, true);
                 }
             }
         }
@@ -3842,7 +4211,10 @@ impl RustGisApp {
     fn add_download(&mut self, landed: serviceui::Landed, current: bool) {
         let serviceui::Landed { id, url, params: mut p, origin } = landed;
         if !current {
-            self.session.notify(i18n::fmt("{url}: downloaded after its project was closed, so it wasn't added", &[("url", &url)]), false);
+            let shown = serviceui::address_in_message(&url);
+            let why = i18n::fmt("{url}: downloaded after its project was closed, so it wasn't added", &[("url", &shown)]);
+            self.landed_in_dialog(&p, Err(&why));
+            self.session.notify(why, false);
             return;
         }
         p["id"] = json!(id);
@@ -3860,10 +4232,38 @@ impl RustGisApp {
                     self.ui.link_zoomed = true;
                 }
                 self.map.invalidate();
+                self.landed_in_dialog(&pending, Ok(()));
             }
             Err(e) => {
                 rustgis_engine::cmd::geolibre::discard_pending(&mut self.session, &pending);
-                self.session.notify(if e.starts_with(&url) { e } else { format!("{url}: {e}") }, true);
+                let e = if e.starts_with(&url) { e } else { format!("{url}: {e}") };
+                self.landed_in_dialog(&pending, Err(&e));
+                self.session.notify(e, true);
+            }
+        }
+    }
+
+    /// Says in the add-service dialog's line how a download it showed on its way went (#1453):
+    /// the layer added, or why not, scrubbed and redacted as the notices are (a login's address or
+    /// a token in the URL never shows). Only while the line still says that layer is downloading,
+    /// so a line another dialog or a later add has taken over is left alone; the notices say it
+    /// either way.
+    pub(crate) fn landed_in_dialog(&mut self, params: &Value, r: Result<(), &str>) {
+        let Some(name) = params.get("name").and_then(Value::as_str).filter(|n| !n.is_empty()) else {
+            return;
+        };
+        if self.dialogs.info.as_deref() != Some(serviceui::downloading(name).as_str()) {
+            return;
+        }
+        match r {
+            // As a layer added at once says it.
+            Ok(()) => {
+                self.dialogs.info = Some(serviceui::added(name));
+                self.dialogs.error = None;
+            }
+            Err(e) => {
+                self.dialogs.info = None;
+                self.dialogs.error = Some(connectionui::translated(rustgis_engine::Session::redacted(e).as_str()));
             }
         }
     }
@@ -3918,8 +4318,7 @@ impl RustGisApp {
                     let mut p = resolve.params;
                     p["tiles"] = json!(template);
                     let title = p["name"].as_str().unwrap_or("").to_string();
-                    let r =
-                        connectiontree::run_named(self, "service.add", p, origin.as_deref()).map(|_| format!("{} {title}", tl!("Added")));
+                    let r = connectiontree::run_named(self, "service.add", p, origin.as_deref()).map(|_| serviceui::added(&title));
                     self.report_step(dialog, r);
                     self.map.invalidate();
                 }
@@ -3941,7 +4340,7 @@ impl RustGisApp {
                         }
                         connectiontree::run_add_url(self, p, origin.as_deref())
                     });
-                    self.report_step(dialog, r.map(|_| format!("{} {title}", tl!("Downloading…"))));
+                    self.report_step(dialog, r.map(|_| serviceui::downloading(&title)));
                 }
             }
         }
@@ -4015,7 +4414,11 @@ impl RustGisApp {
                 }
                 // A snapshot can capture the screen while the map is on it.
                 relay.set_screen(relayshot::map_shown(self, ctx));
-                relay.poll(&mut self.session);
+                // Only a request that changed the project ends a label move: a read-only one leaves it.
+                let state = self.session.state();
+                if relay.poll(&mut self.session) > 0 && self.session.state() != state {
+                    self.map.cancel_label_drag();
+                }
             }
             relayshot::drive(self, ctx);
             // A script an agent wrote to the file bridge.
@@ -4024,7 +4427,12 @@ impl RustGisApp {
                     let ctx = ctx.clone();
                     bridge.set_wake(Box::new(move || ctx.request_repaint()));
                 }
-                match bridge.poll(&mut self.session) {
+                // A script may replace the features a label move is for: it ends the move.
+                let ran = bridge.poll(&mut self.session);
+                if ran.is_some() {
+                    self.map.cancel_label_drag();
+                }
+                match ran {
                     Some(o) if o.success => self.session.notify(tl!("File bridge: the script ran").to_string(), false),
                     Some(o) => {
                         let text = i18n::fmt("File bridge: {error}", &[("error", o.error.as_deref().unwrap_or(""))]);
@@ -4071,6 +4479,12 @@ impl RustGisApp {
         // A frame may not come until the user moves: look again while commands wait.
         if self.session.plugin_retries_waiting() {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
+        }
+        // Zarr steps the time slider moved to, read off the frame, show once they land.
+        if self.session.follow_time_landed() {
+            self.map.invalidate();
+            // A layout page showing the map draws the step too.
+            self.layout.redraw();
         }
         // A style added with `"view": true` moves the map once it has loaded.
         if self.session.style_view.is_some() {
@@ -4243,6 +4657,7 @@ impl RustGisApp {
                 ctx.request_repaint();
             }
         }
+        self.refresh_themes(ctx);
         if self.ui.dark_follows_system
             && let Some(system) = ctx.system_theme()
         {
@@ -4250,12 +4665,40 @@ impl RustGisApp {
         }
         widgets::let_go_on_panel_press(ctx);
         widgets::note_escape(ctx);
-        if self.applied_dark != Some(self.ui.dark) {
-            let t = if self.ui.dark { theme::Tokens::dark() } else { theme::Tokens::light() };
-            theme::apply(ctx, &t);
-            self.applied_dark = Some(self.ui.dark);
+        if self.applied_theme.as_ref() != Some(&(self.ui.theme_name.clone(), self.ui.dark)) {
+            let chosen = self.current_theme();
+            theme::apply(ctx, &chosen.tokens, &chosen.metrics);
+            self.applied_theme = Some((self.ui.theme_name.clone(), self.ui.dark));
             self.map.invalidate();
         }
+        // egui's own zoom keys would change the zoom behind the Interface Scale menu.
+        ctx.options_mut(|o| o.zoom_with_keyboard = false);
+        // The menu is the only control, so a zoom from anywhere else is put back the same frame.
+        if (ctx.zoom_factor() - self.ui.interface_scale).abs() > 0.001 {
+            ctx.set_zoom_factor(self.ui.interface_scale);
+            self.map.invalidate();
+        }
+    }
+
+    /// The Theme button's entry: the drawn name, or Follow the System where the platform reports one.
+    pub fn theme_shown(&self, system_reports: bool) -> (bool, String) {
+        let follows = self.ui.theme_name.is_empty() && self.ui.dark_follows_system && system_reports;
+        let name = if follows {
+            tl!("Follow the System").to_string()
+        } else if let Some(drawn) = self.drawn() {
+            // The drawn theme is named: a file that stopped loading is not.
+            theme::label(&drawn.name)
+        } else if self.ui.dark {
+            theme::label("Dark")
+        } else {
+            theme::label("Light")
+        };
+        (follows, name)
+    }
+
+    /// A number that changes when the theme files are read again, for a caller that caches a look.
+    pub fn theme_revision(&self) -> u64 {
+        self.themes_revision
     }
 
     pub fn ui(&mut self, ui: &mut egui::Ui) {
@@ -4730,6 +5173,103 @@ mod record_tests {
         assert!(logins::apply(layer.dataset.source.as_deref().unwrap()).unwrap().is_none());
     }
 
+    /// The add-service dialog's "Downloading… {layer}" line says how the download went when it
+    /// lands (#1453): the layer added, or why not in the error line; a line no longer about that
+    /// layer is left alone.
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn a_landed_download_says_how_it_went_in_the_dialog() {
+        use rustgis_engine::render::rustgis_tiles::cache;
+        use std::io::{Read, Write};
+        // A server answering one request with `status` and a point's GeoJSON.
+        let serve = |status: &'static str| {
+            let server = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let origin = format!("http://{}", server.local_addr().unwrap());
+            let reply = std::thread::spawn(move || {
+                // A request that never comes fails the test instead of hanging it.
+                server.set_nonblocking(true).unwrap();
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+                let mut stream = loop {
+                    match server.accept() {
+                        Ok((stream, _)) => break stream,
+                        Err(e) if e.kind() == std::io::ErrorKind::WouldBlock && std::time::Instant::now() < deadline => {
+                            std::thread::sleep(std::time::Duration::from_millis(10));
+                        }
+                        Err(e) => panic!("no request reached the test server: {e}"),
+                    }
+                };
+                stream.set_nonblocking(false).unwrap();
+                stream.set_read_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
+                let mut request = Vec::new();
+                let mut chunk = [0; 1024];
+                while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+                    let count = stream.read(&mut chunk).unwrap();
+                    if count == 0 {
+                        break;
+                    }
+                    request.extend_from_slice(&chunk[..count]);
+                }
+                let body = br#"{"type":"FeatureCollection","features":[{"type":"Feature","geometry":{"type":"Point","coordinates":[1,2]},"properties":{}}]}"#;
+                write!(
+                    stream,
+                    "HTTP/1.1 {status}\r\nContent-Type: application/geo+json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                )
+                .unwrap();
+                stream.write_all(body).unwrap();
+            });
+            (origin, reply)
+        };
+        // Adds "Roads" from a server answering `status`, with `line` in the dialog meanwhile.
+        let add = |status: &'static str, line: String| {
+            let (origin, reply) = serve(status);
+            let mut app = RustGisApp::with_sample();
+            let url = format!("{origin}/roads.geojson?token=hidden-757");
+            app.run("ui.addUrl", json!({"url": url, "name": "Roads", "service": true})).unwrap();
+            app.dialogs.info = Some(line);
+            cache::wait(std::time::Duration::from_secs(5));
+            app.poll_data_downloads();
+            crate::serviceui::poll_pages(&mut app, &egui::Context::default());
+            reply.join().unwrap();
+            app
+        };
+        let added = add("200 OK", crate::serviceui::downloading("Roads"));
+        assert!(added.session.map().layers.iter().any(|l| l.name == "Roads"));
+        assert_eq!(added.dialogs.info, Some(crate::serviceui::added("Roads")));
+        assert_eq!(added.dialogs.error, None);
+        let failed = add("404 Not Found", crate::serviceui::downloading("Roads"));
+        assert!(!failed.session.map().layers.iter().any(|l| l.name == "Roads"));
+        assert_eq!(failed.dialogs.info, None);
+        // Why, redacted as the notice is: the address, not its token.
+        let why = failed.dialogs.error.as_deref().unwrap_or("");
+        assert!(why.contains("roads.geojson") && !why.contains("hidden-757"), "{why}");
+        // The line has moved on to another layer (or another dialog): it stays as it is.
+        let other = add("200 OK", crate::serviceui::downloading("Rivers"));
+        assert_eq!(other.dialogs.info, Some(crate::serviceui::downloading("Rivers")));
+        assert_eq!(other.dialogs.error, None);
+    }
+
+    #[test]
+    fn a_probe_dropped_by_another_project_says_so() {
+        let mut app = RustGisApp::with_sample();
+        let url = "https://example.com/elevation.tif?token=hidden-758";
+        app.ui.cog_probes.push((json!({"url": url, "name": "Elevation"}), Default::default()));
+        app.ui.cog_probes.push((json!({"url": "https://example.com/slope.tif", "name": "Slope"}), Default::default()));
+        app.dialogs.info = Some(crate::serviceui::downloading("Elevation"));
+        app.run("project.new", json!({})).unwrap();
+        assert!(app.ui.cog_probes.is_empty());
+        assert_eq!(app.dialogs.info, None);
+        let why = app.dialogs.error.as_deref().unwrap_or("");
+        // The reason stays, though the address's query names a secret.
+        assert!(why.contains("elevation.tif") && why.contains("project was closed") && !why.contains("hidden-758"), "{why}");
+        // The new project's notices: the one for each dropped probe comes after it opened.
+        for file in ["elevation.tif", "slope.tif"] {
+            let said = |n: &rustgis_engine::Notice| n.text.contains(file) && n.text.contains("project was closed");
+            assert!(app.session.notices.iter().any(said), "{file}: {:?}", app.session.notices);
+        }
+        assert!(app.session.notices.iter().all(|n| !n.text.contains("hidden-758")));
+    }
+
     #[test]
     #[cfg(not(target_arch = "wasm32"))]
     fn whitespace_downloads_keep_their_login_choice_and_read_options() {
@@ -4999,5 +5539,413 @@ mod download_service_tests {
         let mut app = RustGisApp::with_sample();
         assert_eq!(app.run("gp.fileDelivered", json!({"id": u64::MAX})), Err("no pending file with that id".into()));
         assert_eq!(app.session.notices.iter().filter(|n| n.error && n.text == "no pending file with that id").count(), 1);
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+mod look_tests {
+    use super::RustGisApp;
+    use crate::theme;
+
+    /// App whose preferences answer only these keys, with a theme no folder ships.
+    fn app_with(prefs: &'static [(&'static str, &'static str)]) -> RustGisApp {
+        let mut app = RustGisApp::with_sample();
+        app.themes.push(theme::Theme {
+            name: "Mine".to_string(),
+            dark: true,
+            tokens: theme::Tokens::dark(),
+            metrics: theme::Metrics::standard(),
+            notes: Vec::new(),
+        });
+        app.services.load_pref = Some(Box::new(move |key: &str| prefs.iter().find(|(k, _)| *k == key).map(|(_, v)| (*v).to_string())));
+        app
+    }
+
+    #[test]
+    fn theme_startup_reads_after_the_saved_language_is_selected() {
+        struct RestoreLanguage(crate::i18n::Lang);
+        impl Drop for RestoreLanguage {
+            /// Restores this test thread's caller language even if the startup assertion fails.
+            fn drop(&mut self) {
+                crate::i18n::set_current(self.0);
+            }
+        }
+        let _restore = RestoreLanguage(crate::i18n::current());
+        crate::i18n::set_current(crate::i18n::Lang::EN);
+        let app = RustGisApp::with_sample();
+        assert_eq!(app.themes_revision, 0, "construction must not read user themes or emit their notices");
+        assert_eq!(app.themes.len(), 2, "built-in themes remain available before platform services");
+        let services = super::Services {
+            load_pref: Some(Box::new(|key| {
+                if key == "language" {
+                    return Some("de".to_string());
+                }
+                if key == "theme" {
+                    assert_eq!(crate::i18n::current().code(), "de", "the theme folder was read in the chosen language");
+                }
+                None
+            })),
+            ..super::Services::default()
+        };
+        let app = app.with_services(services);
+        assert_eq!(app.themes_revision, 1, "the folder is read once during preference restoration");
+        assert_eq!(crate::i18n::current().code(), "de");
+    }
+
+    #[test]
+    fn the_saved_theme_is_taken_at_start() {
+        let mut app = app_with(&[("theme", "Mine"), ("ui_scale", "9")]);
+        app.take_saved_look();
+        assert_eq!(app.ui.theme_name, "Mine");
+        assert!(app.ui.dark, "the theme brings its own brightness");
+        assert!(!app.ui.dark_follows_system, "a chosen theme does not follow the system");
+        assert_eq!(app.ui.interface_scale, 2.0, "the scale is held at 200 percent");
+        assert_eq!(app.current_theme().name, "Mine");
+    }
+
+    #[test]
+    fn a_platform_that_reports_no_theme_names_the_brightness() {
+        crate::i18n::set_current(crate::i18n::Lang::EN);
+        let mut app = app_with(&[]);
+        app.take_saved_look();
+        assert!(app.ui.dark_follows_system, "a fresh app follows the system");
+        let (follows, name) = app.theme_shown(false);
+        assert!(!follows, "a platform that reports no theme is not followed");
+        assert_eq!(name, "Light");
+        app.ui.dark = true;
+        assert_eq!(app.theme_shown(false).1, "Dark");
+        let (follows, name) = app.theme_shown(true);
+        assert!(follows, "a reported theme is followed");
+        assert_eq!(name, "Follow the System");
+    }
+
+    #[test]
+    fn a_picked_theme_file_bigger_than_the_limit_is_refused_unread() {
+        let dir = tempfile::tempdir().expect("a temporary folder");
+        let path = dir.path().join("huge.json");
+        std::fs::write(&path, "x".repeat(70 * 1024)).expect("the file");
+        let mut app = app_with(&[]);
+        let why = app.load_theme_file(&path).expect_err("a 70 KB file is refused");
+        assert!(why.contains("64 KB"), "{why}");
+    }
+
+    #[test]
+    fn the_menu_owns_the_interface_scale() {
+        let mut app = app_with(&[]);
+        app.take_saved_look();
+        let log = saved_by(&mut app);
+        let ctx = egui::Context::default();
+        // A zoom factor lands at the end of the pass that sets it.
+        let settle = |ctx: &egui::Context| {
+            let mut pass = ctx.run_ui(egui::RawInput::default(), |_| {});
+            pass.textures_delta.clear();
+        };
+        app.logic(&ctx);
+        settle(&ctx);
+        assert!(!ctx.options(|o| o.zoom_with_keyboard), "the zoom keys are off, so the scale cannot move behind the menu");
+        // A scale from the menu is drawn, and the next frame does not undo it.
+        app.run("ui.scale", serde_json::json!({ "factor": 1.25 })).expect("the command");
+        app.logic(&ctx);
+        settle(&ctx);
+        app.logic(&ctx);
+        settle(&ctx);
+        assert_eq!(app.ui.interface_scale, 1.25, "the menu scale is kept, not read back as the old zoom");
+        assert!((ctx.zoom_factor() - 1.25).abs() < 0.001, "and the interface is drawn at it");
+        assert!(log.lock().expect("the log").iter().any(|(k, v)| k == "ui_scale" && v == "1.25"));
+        app.run("ui.scale", serde_json::json!({ "factor": 1.234 })).expect("a fractional scale");
+        let kept = log.lock().expect("the log").iter().rev().find(|(k, _)| k == "ui_scale").unwrap().1.clone();
+        assert_eq!(kept.parse::<f32>().expect("saved scale"), app.ui.interface_scale, "restart retains full precision");
+        let before = app.ui.interface_scale;
+        assert!(app.run("ui.scale", serde_json::json!({"factr": 1.5})).is_err());
+        assert_eq!(app.ui.interface_scale, before, "an unknown parameter does not reset the scale");
+        // Past the limit the command holds the scale.
+        app.run("ui.scale", serde_json::json!({ "factor": 3.0 })).expect("the command");
+        app.logic(&ctx);
+        settle(&ctx);
+        app.logic(&ctx);
+        settle(&ctx);
+        assert_eq!(app.ui.interface_scale, 2.0, "the scale is held at 200 percent");
+        assert!((ctx.zoom_factor() - 2.0).abs() < 0.001, "the context is held too");
+        // A zoom from anywhere else is put back, so the menu and the drawing never disagree.
+        ctx.set_zoom_factor(1.0);
+        settle(&ctx);
+        app.logic(&ctx);
+        settle(&ctx);
+        assert_eq!(app.ui.interface_scale, 2.0, "the menu does not follow a zoom it did not make");
+        assert!((ctx.zoom_factor() - 2.0).abs() < 0.001, "and the context is put back to the menu's value");
+    }
+
+    /// A persisted out-of-range scale reports its adjustment; a clean setting stays quiet.
+    #[test]
+    fn a_saved_scale_adjustment_is_reported() {
+        crate::i18n::set_current(crate::i18n::Lang::EN);
+        let mut held = app_with(&[("ui_scale", "9")]);
+        held.session.notices.clear();
+        held.take_saved_look();
+        assert_eq!(held.ui.interface_scale, 2.0);
+        assert_eq!(held.session.notices.iter().filter(|n| n.text == "Interface scale held to 200%").count(), 1);
+        let mut clean = app_with(&[("ui_scale", "1.25")]);
+        clean.session.notices.clear();
+        clean.take_saved_look();
+        assert_eq!(clean.ui.interface_scale, 1.25);
+        assert!(clean.session.notices.is_empty());
+        let mut malformed = app_with(&[("ui_scale", "1,25")]);
+        malformed.session.notices.clear();
+        malformed.take_saved_look();
+        assert_eq!(malformed.ui.interface_scale, 1.0);
+        assert_eq!(malformed.session.notices.iter().filter(|n| n.text == "Interface scale held to 100%").count(), 1);
+    }
+
+    #[test]
+    fn a_choice_outlives_a_file_that_stops_loading() {
+        let dir = tempfile::tempdir().expect("a temporary folder");
+        let path = dir.path().join("cobalt.json");
+        let mut cobalt = builtin(true);
+        cobalt.name = "Cobalt".to_string();
+        let good = cobalt.to_json().expect("json");
+        std::fs::write(&path, &good).expect("the file");
+        let mut app = app_with(&[]);
+        app.load_themes_from(Some(dir.path()));
+        app.use_theme("Cobalt").expect("the file loads");
+        assert_eq!(app.theme_shown(true).1, "Cobalt");
+        // A save that does not parse: the folder drops the theme, the choice stays.
+        std::fs::write(&path, "{\"schema\": 1, ").expect("the broken file");
+        app.load_themes_from(Some(dir.path()));
+        assert_eq!(app.ui.theme_name, "Cobalt", "the choice outlives the file");
+        assert_eq!(app.current_theme().name, "Dark", "the nearest theme is drawn");
+        assert_eq!(app.theme_shown(true).1, "Dark", "and the button names it");
+        // The typo is fixed: the choice is drawn again without picking it again.
+        std::fs::write(&path, &good).expect("the file");
+        app.load_themes_from(Some(dir.path()));
+        assert_eq!(app.current_theme().name, "Cobalt", "the choice is restored");
+        assert_eq!(app.theme_shown(true).1, "Cobalt");
+    }
+
+    #[test]
+    fn a_live_edit_that_changes_the_brightness_is_followed() {
+        let dir = tempfile::tempdir().expect("a temporary folder");
+        let path = dir.path().join("cobalt.json");
+        let mut cobalt = builtin(true);
+        cobalt.name = "Cobalt".to_string();
+        std::fs::write(&path, cobalt.to_json().expect("json")).expect("the file");
+        let mut app = app_with(&[]);
+        let log = saved_by(&mut app);
+        app.load_themes_from(Some(dir.path()));
+        app.use_theme("Cobalt").expect("the file loads");
+        let stamp = app.themes_stamp;
+        let revision = app.theme_revision();
+        app.load_themes_from(Some(dir.path()));
+        assert_eq!(app.themes_stamp, stamp, "metadata remains unchanged");
+        assert_ne!(app.theme_revision(), revision, "an explicit reload invalidates a caller's cached appearance");
+        // The same file saved as a light theme: the interface takes its brightness with it.
+        cobalt.dark = false;
+        cobalt.tokens = theme::Tokens::light();
+        std::fs::write(&path, cobalt.to_json().expect("json")).expect("the file");
+        app.load_themes_from(Some(dir.path()));
+        assert!(!app.ui.dark, "the interface takes the brightness of the theme it names");
+        assert!(
+            log.lock().expect("the log").iter().any(|(key, value)| key == "dark" && value == "false"),
+            "restart retains the adopted brightness"
+        );
+        assert_eq!(app.current_theme().name, "Cobalt", "the named theme is drawn");
+        assert_eq!(app.theme_shown(true).1, "Cobalt");
+    }
+
+    #[test]
+    fn the_fallback_takes_the_brightness_asked_for() {
+        let mut app = app_with(&[]);
+        // Only a light theme loads and the interface asks for dark: the built-in dark is drawn.
+        app.themes = vec![builtin(false)];
+        app.ui.dark = true;
+        app.ui.theme_name = "Gone".to_string();
+        assert!(app.current_theme().dark, "the drawn theme is a dark one, as asked");
+    }
+
+    #[test]
+    fn the_theme_command_lands_on_the_brightness_it_is_given() {
+        let mut app = app_with(&[]);
+        app.take_saved_look();
+        let log = saved_by(&mut app);
+        // A user file reworks Light and reports itself dark: the request, not the name, decides.
+        let mut reworked = builtin(false);
+        reworked.dark = true;
+        app.themes = vec![reworked, builtin(true)];
+        app.run("ui.theme", serde_json::json!({ "dark": false })).expect("the command");
+        assert!(!app.ui.dark, "the brightness asked for is the one in force");
+        assert!(log.lock().expect("the log").iter().any(|(k, v)| k == "dark" && v == "false"));
+    }
+
+    #[test]
+    fn following_the_system_survives_a_restart() {
+        let mut app = app_with(&[("theme", ""), ("dark", "auto")]);
+        app.take_saved_look();
+        assert!(app.ui.dark_follows_system, "the choice to follow is remembered, not read as a toggle");
+        app.ui.dark = true;
+        let log = saved_by(&mut app);
+        app.run("ui.themeFile", serde_json::json!({})).expect("follow the system");
+        assert!(log.lock().expect("the log").iter().any(|(key, value)| key == "dark_fallback" && value == "true"));
+        let mut restarted = app_with(&[("theme", ""), ("dark", "auto"), ("dark_fallback", "true")]);
+        restarted.take_saved_look();
+        assert!(restarted.ui.dark_follows_system);
+        assert!(restarted.ui.dark, "no reported system theme retains the saved fallback brightness");
+        let mut app = app_with(&[("theme", ""), ("dark", "false")]);
+        app.take_saved_look();
+        assert!(!app.ui.dark_follows_system, "a saved brightness is a brightness, not a follow");
+        assert!(!app.ui.dark);
+    }
+
+    #[test]
+    fn a_parameter_of_the_wrong_type_is_refused() {
+        let mut app = app_with(&[]);
+        let log = saved_by(&mut app);
+        app.ui.dark = false;
+        app.ui.theme_name = "Custom".to_string();
+        app.ui.dark_follows_system = true;
+        for dark in [serde_json::json!("false"), serde_json::json!(0), serde_json::Value::Null] {
+            let why = app.run("ui.theme", serde_json::json!({ "dark": dark })).expect_err("dark must be a boolean");
+            assert!(why.contains("ui.theme"), "{why}");
+            assert!(!app.ui.dark);
+            assert_eq!(app.ui.theme_name, "Custom");
+            assert!(app.ui.dark_follows_system);
+            assert!(log.lock().expect("the log").is_empty(), "rejection saves no preferences");
+        }
+        for params in [serde_json::json!({"nmae":"Mine"}), serde_json::json!("Mine"), serde_json::json!({"name":"Mine", "extra":true})] {
+            assert!(app.run("ui.themeFile", params).is_err());
+            assert_eq!(app.ui.theme_name, "Custom");
+            assert!(!app.ui.dark);
+            assert!(app.ui.dark_follows_system);
+            assert!(log.lock().expect("the log").is_empty(), "malformed parameters save no preferences");
+        }
+        for params in [serde_json::json!({"drak":false}), serde_json::json!("Dark")] {
+            assert!(app.run("ui.theme", params).is_err());
+            assert_eq!(app.ui.theme_name, "Custom");
+            assert!(!app.ui.dark);
+            assert!(log.lock().expect("the log").is_empty());
+        }
+        app.run("ui.theme", serde_json::json!({})).expect("omitting dark still toggles");
+        assert!(app.ui.dark);
+        let why = app.run("ui.themeFile", serde_json::json!({ "name": 5 })).expect_err("a name must be a string");
+        assert!(why.contains("ui.themeFile"), "{why}");
+        let why = app.run("ui.scale", serde_json::json!({ "factor": "big" })).expect_err("a factor must be a number");
+        assert!(why.contains("ui.scale"), "{why}");
+        app.run("ui.scale", serde_json::json!({ "factor": 1.25 })).expect("a number is accepted");
+        assert_eq!(app.ui.interface_scale, 1.25);
+    }
+
+    #[test]
+    fn a_theme_saved_as_the_other_brightness_takes_the_interface_with_it() {
+        let mut app = app_with(&[]);
+        let mut file = builtin(true);
+        file.name = "Mine".to_string();
+        app.themes = vec![file];
+        app.ui.theme_name = "Mine".to_string();
+        app.ui.dark = true;
+        // The file is saved as a light theme while the app shows the dark one.
+        let mut file = builtin(true);
+        file.name = "Mine".to_string();
+        file.dark = false;
+        app.themes = vec![file];
+        app.sync_named_brightness();
+        assert!(!app.ui.dark, "the interface takes the brightness of the theme it names");
+    }
+
+    #[test]
+    fn a_saved_theme_that_is_gone_leaves_the_saved_brightness() {
+        let mut app = app_with(&[("theme", "Deleted"), ("dark", "true")]);
+        app.take_saved_look();
+        assert_eq!(app.ui.theme_name, "Deleted", "the choice waits for a file of that name");
+        assert!(app.ui.dark, "Dark Mode was on when it was last closed");
+        assert!(!app.ui.dark_follows_system);
+        assert_eq!(app.theme_shown(true).1, "Dark", "the button names the theme drawn");
+        assert_eq!(app.ui.interface_scale, 1.0, "no scale saved is the normal one");
+        // The file appears later: the saved choice is drawn without picking it again.
+        let dir = tempfile::tempdir().expect("a temporary folder");
+        let mut saved = builtin(false);
+        saved.name = "Deleted".to_string();
+        std::fs::write(dir.path().join("deleted.json"), saved.to_json().expect("json")).expect("the file");
+        app.load_themes_from(Some(dir.path()));
+        assert_eq!(app.current_theme().name, "Deleted", "the saved choice is restored");
+    }
+
+    #[test]
+    fn the_theme_command_names_the_theme_it_draws() {
+        let mut app = app_with(&[]);
+        app.take_saved_look();
+        // The built-in Dark replaced by a light-flagged file, and a dark user theme beside it.
+        let mut dark_named_light = builtin(false);
+        dark_named_light.name = "Dark".to_string();
+        let mut cobalt = builtin(true);
+        cobalt.name = "Cobalt".to_string();
+        app.themes = vec![builtin(false), dark_named_light, cobalt];
+        app.run("ui.theme", serde_json::json!({ "dark": true })).expect("the command");
+        assert_eq!(app.ui.theme_name, "Cobalt", "the name follows the theme drawn");
+        assert_eq!(app.current_theme().name, "Cobalt");
+        assert_eq!(app.theme_shown(true).1, "Cobalt");
+    }
+
+    #[test]
+    fn a_refused_theme_file_is_said_once() {
+        crate::i18n::set_current(crate::i18n::Lang::EN);
+        let dir = tempfile::tempdir().expect("a temporary folder");
+        std::fs::write(dir.path().join("half.json"), "{\"schema\": 1}").expect("the file");
+        let mut app = app_with(&[]);
+        let said = |app: &RustGisApp| app.session.notices.iter().filter(|n| n.text.contains("refused")).count();
+        let before = said(&app);
+        app.load_themes_from(Some(dir.path()));
+        assert_eq!(said(&app) - before, 1, "the refusal is said");
+        app.load_themes_from(Some(dir.path()));
+        assert_eq!(said(&app) - before, 1, "the same refusal is not repeated");
+    }
+
+    #[test]
+    fn a_held_size_is_said_once() {
+        crate::i18n::set_current(crate::i18n::Lang::EN);
+        let dir = tempfile::tempdir().expect("a temporary folder");
+        let text = r#"{"schema": 1, "name": "Mine", "extends": "Light", "metrics": {"body": 1e9}}"#;
+        std::fs::write(dir.path().join("mine.json"), text).expect("the file");
+        std::fs::write(dir.path().join("other.json"), text.replace("Mine", "Other")).expect("another file");
+        let mut app = app_with(&[]);
+        let said = |app: &RustGisApp| app.session.notices.iter().filter(|n| n.text.contains("theme adjustment notice")).count();
+        let before = said(&app);
+        app.load_themes_from(Some(dir.path()));
+        assert_eq!(said(&app) - before, 1, "the adjustments are reported together");
+        assert!(app.session.notices.iter().any(|n| n.text.starts_with("2 theme adjustment notice")));
+        app.load_themes_from(Some(dir.path()));
+        assert_eq!(said(&app) - before, 1, "and not again on the next watch tick");
+        let notes = app.themes.iter().find(|t| t.name == "Mine").expect("the lossy theme loaded").notes.clone();
+        for expected in [2, 3] {
+            app.announce_theme_notes(&notes);
+            assert_eq!(said(&app) - before, expected, "an explicit read reports even previously held adjustments");
+        }
+        app.announce_theme_notes(&[]);
+        app.load_themes_from(Some(dir.path()));
+        assert_eq!(said(&app) - before, 3, "a clean read and unchanged folder refresh remain quiet");
+    }
+
+    fn builtin(dark: bool) -> theme::Theme {
+        theme::Theme::builtin().into_iter().find(|t| t.dark == dark).expect("a built-in theme ships")
+    }
+
+    fn saved_by(app: &mut RustGisApp) -> std::sync::Arc<std::sync::Mutex<Vec<(String, String)>>> {
+        let log = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sink = log.clone();
+        app.services.save_pref =
+            Some(Box::new(move |key: &str, value: &str| sink.lock().expect("the log").push((key.to_string(), value.to_string()))));
+        log
+    }
+
+    #[test]
+    fn choosing_a_theme_saves_the_choice() {
+        let mut app = app_with(&[]);
+        let log = saved_by(&mut app);
+        app.use_theme("Mine").expect("the theme is in the list");
+        assert_eq!(app.ui.theme_name, "Mine");
+        assert!(app.ui.dark, "the theme brings its own brightness");
+        assert!(!app.ui.dark_follows_system);
+        let written = log.lock().expect("the log").clone();
+        assert!(written.contains(&("theme".to_string(), "Mine".to_string())), "{written:?}");
+        assert!(written.contains(&("dark".to_string(), "true".to_string())), "{written:?}");
+        assert!(app.use_theme("Gone").is_err(), "a name the list does not hold");
     }
 }
