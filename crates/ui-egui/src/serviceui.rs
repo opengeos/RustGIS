@@ -354,6 +354,12 @@ pub fn poll(app: &mut RustGisApp, ctx: &egui::Context) {
 
 /// A download that landed, with what it is added with: its id, address and `layer.addDownload`
 /// parameters, and the connection it came from (named in Recent).
+/// The add-service dialog's line for a layer on its way: what the dialog shows when a layer's
+/// download starts, and what [`RustGisApp::landed_in_dialog`] looks for when it lands (#1453).
+pub(crate) fn downloading(name: &str) -> String {
+    format!("{} {name}", tl!("Downloading…"))
+}
+
 pub(crate) struct Landed {
     pub id: u64,
     pub url: String,
@@ -455,7 +461,9 @@ fn go_on(app: &mut RustGisApp, landed: Landed, left: usize, step: Step) {
         Step::Failed(e) => {
             app.session.download_failed(landed.id);
             let url = &landed.url;
-            app.session.notify(if e.starts_with(url.as_str()) { e } else { format!("{url}: {e}") }, true);
+            let e = if e.starts_with(url.as_str()) { e } else { format!("{url}: {e}") };
+            app.landed_in_dialog(&landed.params, Err(&e));
+            app.session.notify(e, true);
         }
         Step::Fetch(pages) => {
             let next = next_request(app, &landed.params, &pages);
