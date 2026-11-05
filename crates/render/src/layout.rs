@@ -1711,8 +1711,8 @@ fn point_swatch(
     let (cw, ch) = (cw.min(pm.width()), ch.min(pm.height()));
     if let Some(mut picture) = pm.sub(cw, ch) {
         draw_point(&mut picture, (cx - left, cy - top), s, strokes, ppp);
-        // A recording keeps what lies past its picture's edge, so it is cut here.
-        let clip = Rect::from_xywh(left, top, cw as f32, ch as f32).map(|r| crate::vector::Clip {
+        // A recording keeps what lies past its picture's edge, so it is cut here, at the box.
+        let clip = Rect::from_xywh(x, y, w, h).map(|r| crate::vector::Clip {
             path: PathBuilder::from_rect(r),
             rule: FillRule::Winding,
             transform: Transform::identity(),
@@ -3340,6 +3340,32 @@ mod tests {
         // The layer's name, then a row each, the swatch 6 points in.
         assert_eq!(at(14, 22), Some((255, 0, 0)));
         assert_eq!(at(14, 37), Some((0, 255, 0)));
+    }
+
+    /// A box off the pixel grid: a recording cuts its symbol at the box, not at the whole pixels
+    /// round it, so the pixel its edge crosses is half covered.
+    #[test]
+    fn a_recorded_point_is_cut_at_its_box() {
+        let s = rustgis_map::Symbol {
+            fill: Rgba::rgb(0, 0, 255),
+            size: 3000.0,
+            stroke_width: 0.0,
+            marker: rustgis_map::Marker::Square,
+            ..rustgis_map::Symbol::default_for(GeometryType::Point, 0)
+        };
+        let map = point_legend_map(|l| l.renderer = rustgis_map::Renderer::Single(s));
+        let mut c = Canvas::recording(2100, 2100).unwrap();
+        let opts = LegendOptions { hide_other: false, exclude: &[], scale: 1e6 };
+        legend(&mut c, Rect::from_xywh(0.5, 0.5, 2099.0, 2099.0).unwrap(), &map, "", None, opts, 1.0);
+        let (_, _, items) = c.into_drawing().unwrap().finish();
+        let mut pm = Pixmap::new(2100, 2100).unwrap();
+        pm.fill(tiny_skia::Color::WHITE);
+        crate::vector::replay(&items, &mut pm, Transform::identity());
+        // The box runs from 0.5 to 2048.5.
+        let red = |x, y| pm.pixel(x, y).map_or(0, |p| p.red());
+        assert_eq!(red(10, 10), 0);
+        assert!((60..200).contains(&red(2048, 10)), "{}", red(2048, 10));
+        assert!((60..200).contains(&red(10, 2048)), "{}", red(10, 2048));
     }
 
     /// A class's row draws the marks the map gives its features, else its layer's.
