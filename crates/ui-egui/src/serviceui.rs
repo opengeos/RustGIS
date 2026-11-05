@@ -352,14 +352,14 @@ pub fn poll(app: &mut RustGisApp, ctx: &egui::Context) {
     }
 }
 
-/// A download that landed, with what it is added with: its id, address and `layer.addDownload`
-/// parameters, and the connection it came from (named in Recent).
 /// The add-service dialog's line for a layer on its way: what the dialog shows when a layer's
 /// download starts, and what [`RustGisApp::landed_in_dialog`] looks for when it lands (#1453).
 pub(crate) fn downloading(name: &str) -> String {
     format!("{} {name}", tl!("Downloading…"))
 }
 
+/// A download that landed, with what it is added with: its id, address and `layer.addDownload`
+/// parameters, and the connection it came from (named in Recent).
 pub(crate) struct Landed {
     pub id: u64,
     pub url: String,
@@ -412,7 +412,9 @@ pub fn poll_pages(app: &mut RustGisApp, ctx: &egui::Context) {
     for read in std::mem::take(&mut app.ui.service_pages) {
         if !app.session.download_is_pending(read.landed.id) {
             let url = &read.landed.url;
-            app.session.notify(i18n::fmt("{url}: downloaded after its project was closed, so it wasn't added", &[("url", url)]), false);
+            let why = i18n::fmt("{url}: downloaded after its project was closed, so it wasn't added", &[("url", url)]);
+            app.landed_in_dialog(&read.landed.params, Err(&why));
+            app.session.notify(why, false);
             continue;
         }
         let answer = read.slot.lock().unwrap_or_else(|e| e.into_inner()).take();

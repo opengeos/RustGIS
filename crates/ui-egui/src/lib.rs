@@ -4144,7 +4144,9 @@ impl RustGisApp {
     fn add_download(&mut self, landed: serviceui::Landed, current: bool) {
         let serviceui::Landed { id, url, params: mut p, origin } = landed;
         if !current {
-            self.session.notify(i18n::fmt("{url}: downloaded after its project was closed, so it wasn't added", &[("url", &url)]), false);
+            let why = i18n::fmt("{url}: downloaded after its project was closed, so it wasn't added", &[("url", &url)]);
+            self.landed_in_dialog(&p, Err(&why));
+            self.session.notify(why, false);
             return;
         }
         p["id"] = json!(id);
@@ -4174,8 +4176,9 @@ impl RustGisApp {
     }
 
     /// Says in the add-service dialog's line how a download it showed on its way went (#1453):
-    /// the layer added, or why not. Only while the line still says that layer is downloading, so
-    /// a line another dialog or a later add has taken over is left alone; the notices say it
+    /// the layer added, or why not, scrubbed and redacted as the notices are (a login's address or
+    /// a token in the URL never shows). Only while the line still says that layer is downloading,
+    /// so a line another dialog or a later add has taken over is left alone; the notices say it
     /// either way.
     pub(crate) fn landed_in_dialog(&mut self, params: &Value, r: Result<(), &str>) {
         let Some(name) = params.get("name").and_then(Value::as_str).filter(|n| !n.is_empty()) else {
@@ -4185,10 +4188,14 @@ impl RustGisApp {
             return;
         }
         match r {
-            Ok(()) => self.dialogs.info = Some(i18n::fmt("Added {name}", &[("name", name)])),
+            // As a layer added at once says it.
+            Ok(()) => {
+                self.dialogs.info = Some(format!("{} {name}", tl!("Added")));
+                self.dialogs.error = None;
+            }
             Err(e) => {
                 self.dialogs.info = None;
-                self.dialogs.error = Some(connectionui::translated(e));
+                self.dialogs.error = Some(connectionui::translated(rustgis_engine::Session::redacted(e).as_str()));
             }
         }
     }
@@ -5119,7 +5126,8 @@ mod record_tests {
         let add = |status: &'static str, line: String| {
             let (origin, reply) = serve(status);
             let mut app = RustGisApp::with_sample();
-            app.run("ui.addUrl", json!({"url": format!("{origin}/roads.geojson"), "name": "Roads", "service": true})).unwrap();
+            let url = format!("{origin}/roads.geojson?token=hidden-757");
+            app.run("ui.addUrl", json!({"url": url, "name": "Roads", "service": true})).unwrap();
             app.dialogs.info = Some(line);
             cache::wait(std::time::Duration::from_secs(5));
             app.poll_data_downloads();
@@ -5129,12 +5137,14 @@ mod record_tests {
         };
         let added = add("200 OK", crate::serviceui::downloading("Roads"));
         assert!(added.session.map().layers.iter().any(|l| l.name == "Roads"));
-        assert_eq!(added.dialogs.info.as_deref(), Some(crate::i18n::fmt("Added {name}", &[("name", "Roads")]).as_str()));
+        assert_eq!(added.dialogs.info, Some(format!("{} Roads", tl!("Added"))));
         assert_eq!(added.dialogs.error, None);
         let failed = add("404 Not Found", crate::serviceui::downloading("Roads"));
         assert!(!failed.session.map().layers.iter().any(|l| l.name == "Roads"));
         assert_eq!(failed.dialogs.info, None);
-        assert!(failed.dialogs.error.as_deref().is_some_and(|e| e.contains("roads.geojson")), "{:?}", failed.dialogs.error);
+        // Why, redacted as the notice is: the address, not its token.
+        let why = failed.dialogs.error.as_deref().unwrap_or("");
+        assert!(why.contains("roads.geojson") && !why.contains("hidden-757"), "{why}");
         // The line has moved on to another layer (or another dialog): it stays as it is.
         let other = add("200 OK", crate::serviceui::downloading("Rivers"));
         assert_eq!(other.dialogs.info, Some(crate::serviceui::downloading("Rivers")));

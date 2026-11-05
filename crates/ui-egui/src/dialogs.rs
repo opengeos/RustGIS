@@ -1257,6 +1257,8 @@ fn add_service(app: &mut RustGisApp, ui: &mut egui::Ui) -> bool {
         let features = l["offer"]["type"] == "features";
         let area =
             (features && app.ui.service_browse.area).then(|| rustgis_engine::cmd::catalogs::area(&app.session, &Value::Null)).transpose();
+        // A new add's line replaces the last one's, error included (#1453).
+        app.dialogs.error = None;
         match area.and_then(|area| crate::serviceui::add_layer(app, &src, &l, &time, area, true)) {
             Ok(m) => app.dialogs.info = Some(format!("{m} {title}")),
             Err(e) => app.dialogs.error = Some(e),
