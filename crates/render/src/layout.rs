@@ -2998,10 +2998,11 @@ mod tests {
         let mut pm = Pixmap::new(300, 60).unwrap();
         pm.fill(tiny_skia::Color::WHITE);
         type Px = tiny_skia::PremultipliedColorU8;
-        let (red, blue) = (Rgba::rgb(0xD0, 0x10, 0x10), Rgba::rgb(0x10, 0x10, 0xD0));
+        // A red colour and a blue fill.
+        let colors = (Rgba::rgb(0xD0, 0x10, 0x10), Rgba::rgb(0x10, 0x10, 0xD0));
         let bar = (ScaleUnits::Auto, 4, ScaleBarStyle::Alternating);
         let r = Rect::from_xywh(0.0, 0.0, 300.0, 60.0).unwrap();
-        crate::canvas::with_canvas(&mut pm, |c| scale_bar(c, r, 100.0, bar, (red, blue), 1.0, false));
+        crate::canvas::with_canvas(&mut pm, |c| scale_bar(c, r, 100.0, bar, colors, 1.0, false));
         let count = |hit: fn(Px) -> bool, y: u32| (0..300).filter(|&x| pm.pixel(x, y).is_some_and(hit)).count();
         let y = (60.0 * 0.62) as u32;
         // Along the bar: the dark divisions in the colour, the light ones in the fill, nothing in
