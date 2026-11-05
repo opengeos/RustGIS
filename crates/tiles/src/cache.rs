@@ -2367,6 +2367,35 @@ mod tests {
         (format!("http://{addr}"), received)
     }
 
+    /// Serves every connection to the returned address with what `answer` gives for its request
+    /// path, sending each request's head to the receiver.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn serve_by_path(answer: impl Fn(&str) -> Vec<u8> + Send + 'static) -> (String, std::sync::mpsc::Receiver<String>) {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (sent, received) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { return };
+                let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(5)));
+                let mut request = Vec::new();
+                let mut buf = [0u8; 2048];
+                while !request.windows(4).any(|w| w == b"\r\n\r\n") {
+                    match stream.read(&mut buf) {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => request.extend_from_slice(&buf[..n]),
+                    }
+                }
+                let request = String::from_utf8_lossy(&request).into_owned();
+                let path = request.split_whitespace().nth(1).unwrap_or("").to_string();
+                let _ = sent.send(request);
+                let _ = stream.write_all(&answer(&path));
+            }
+        });
+        (format!("http://{addr}"), received)
+    }
+
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn logins_headers_follow_same_origin_redirects() {
@@ -2621,13 +2650,18 @@ mod tests {
         let tilejson = serde_json::json!({"tiles": ["./tile/{z}/{x}/{y}.pbf"]});
         let answer =
             |body: String| format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).into_bytes();
-        let (base, asked) = serve_recorded(vec![
-            answer(style.to_string()),
-            answer(tilejson.to_string()),
-            answer("{}".into()),
-            answer("{}".into()),
-            answer("{}".into()),
-        ]);
+        // Answered by path, for as many connections as come: a test running at once may clear the
+        // shared cache, and resolving then fetches the style again in the background, so the
+        // requests are neither five nor in a fixed order.
+        let (base, asked) = serve_by_path(move |path| {
+            if path.starts_with("/style.json") {
+                answer(style.to_string())
+            } else if path.starts_with("/tiles.json") {
+                answer(tilejson.to_string())
+            } else {
+                answer("{}".into())
+            }
+        });
         let binding =
             logins::activate(&base, "derived-style", Method::Header("X-Service-Key".into()), "derived-style-secret", true).unwrap();
         let url = logins::bind(&binding, &format!("{base}/style.json")).unwrap();
