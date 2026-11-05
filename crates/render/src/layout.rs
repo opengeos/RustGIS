@@ -3259,7 +3259,6 @@ mod tests {
             stroke_width: 1.0,
             size: 8.0,
             marker: rustgis_map::Marker::Square,
-            ..rustgis_map::Symbol::default_for(GeometryType::Point, 0)
         };
         let map = point_legend_map(|l| {
             l.renderer = rustgis_map::Renderer::Single(s);
