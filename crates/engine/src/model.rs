@@ -845,6 +845,9 @@ pub(crate) fn check_file(v: &Value) -> Result<(), String> {
                 ));
             }
         }
+        if topological_order(&normalized).is_none() {
+            return Err("this model contains a loop and cannot be converted to steps. Fix the loop before importing it.".into());
+        }
     } else if let Some(steps) = v.get("steps") {
         let steps = steps.as_array().ok_or("model steps must be an array")?;
         if steps.len() > MAX_NODES {

@@ -1183,7 +1183,8 @@ fields are refused. A file containing both a graph and steps is refused rather t
 Graphs that would lose nodes or connections during import are refused with a count and
 advice to fix the file, leaving the current project unchanged. Supported files and legacy files
 without a version marker continue to import, including repeated sources in multi-input tools such
-as Merge. IDs that need trimming or exceed 100 characters, and positions outside the supported
+as Merge. Graphs containing a loop are refused rather than becoming empty steps. IDs that need
+trimming or exceed 100 characters, and positions outside the supported
 canvas bounds, are refused before they can be changed. Repeated inputs stay intact when an imported
 model is saved or renamed. If import must trim, shorten or replace a model name, or make it unique,
 it reports the change with a notice.

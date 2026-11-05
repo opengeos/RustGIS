@@ -90,6 +90,14 @@ fn model_import_refuses_unsupported_files_without_changing_session() {
             "edges": [{"from": "a", "fromPort": "future", "to": "b", "toPort": "in"}]}}),
             "connection 1 refers to an unsupported port",
         ),
+        (
+            json!({"graph": {"nodes": [{"id": "a", "kind": "tool", "tool": "buffer"},
+            {"id": "b", "kind": "tool", "tool": "buffer"}], "edges": [
+                {"from": "a", "fromPort": "out", "to": "b", "toPort": "input"},
+                {"from": "b", "fromPort": "out", "to": "a", "toPort": "input"}
+            ]}}),
+            "contains a loop",
+        ),
     ] {
         let text = file.to_string();
         let path = scratch.path("unsupported.model.json");
@@ -234,6 +242,16 @@ fn model_import_reports_changed_names() {
         assert!(!loaded.notices[0].error && loaded.notices[0].text.contains("1 model name"));
         assert_eq!(serde_json::to_value(loaded.project.models[0].graph.as_ref().unwrap()).unwrap(), file["graph"]);
     }
+    file.as_object_mut().unwrap().remove("name");
+    let mut loaded = Session::new(Project::new("Loaded"));
+    loaded.run("model.import", &json!({"text": file.to_string()})).unwrap();
+    assert_eq!(loaded.project.models[0].name, "Tool");
+    assert!(loaded.notices.is_empty(), "a missing name alone needs no warning");
+    loaded.run("model.import", &json!({"text": file.to_string()})).unwrap();
+    assert_eq!(loaded.project.models[1].name, "Tool 2");
+    assert_eq!(loaded.notices.len(), 1);
+    assert!(!loaded.notices[0].error && loaded.notices[0].text.contains("1 model name"));
+    assert_eq!(serde_json::to_value(loaded.project.models[1].graph.as_ref().unwrap()).unwrap(), file["graph"]);
 }
 
 /// Repeated merge inputs survive import, saving under a new name and re-export.
