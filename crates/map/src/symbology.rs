@@ -3293,6 +3293,8 @@ mod tests {
         assert_eq!(r.legend().len(), 2);
     }
 
+    /// Each row keeps its class's strokes, its class stored in either order, in both renderers
+    /// with classes.
     #[test]
     fn a_legend_row_has_its_class_own_strokes() {
         let mut d = Dataset::new("t", GeometryType::Point, vec![Field::new("g", FieldType::Text)]);

@@ -3134,6 +3134,8 @@ mod tests {
         rustgis_map::LineStroke { color: Some(color), width: Some(0.0), markers: Some(markers), ..rustgis_map::LineStroke::default() }
     }
 
+    /// Every marker, tiny and ordinary, with an outline and without, at the pixels the map's code
+    /// gives it.
     #[test]
     fn a_legend_draws_a_point_as_the_map_does() {
         let red = Rgba::rgb(255, 0, 0);
@@ -3171,6 +3173,7 @@ mod tests {
         assert!((15..30).all(|y| (6..22).all(|x| got.pixel(x, y) == want.pixel(x, y))), "the class's triangle");
     }
 
+    /// An outline under half a pixel is as thin in a legend as on the map.
     #[test]
     fn a_legend_draws_a_hairline_outline_as_the_map_does() {
         // Thinner than half a pixel: the map's marker strokes it at its width, with no minimum.
@@ -3184,6 +3187,7 @@ mod tests {
         assert!(same_corner(&point_legend(&map), &drawn_point(&s, &[], (8.0, 7.5), 1.0), 16, 15));
     }
 
+    /// A layer's stacked marks replace its marker, in a row that holds them.
     #[test]
     fn a_legend_draws_a_points_stacked_marks() {
         let strokes = vec![square_mark(Rgba::rgb(255, 0, 0), 12.0), square_mark(Rgba::rgb(0, 0, 0), 4.0)];
@@ -3196,6 +3200,7 @@ mod tests {
         assert!(same_corner(&point_legend(&map), &drawn_point(&s, &strokes, (8.0, 7.5), 1.0), 16, 15));
     }
 
+    /// Stacked marks at the opacity of a layer and its groups, on pixels and in a recording.
     #[test]
     fn a_see_through_point_is_composited_as_one_with_its_groups() {
         let s = rustgis_map::Symbol { size: 10.0, stroke_width: 0.0, ..rustgis_map::Symbol::default_for(GeometryType::Point, 0) };
@@ -3263,6 +3268,8 @@ mod tests {
         assert!(near_corner(&point_legend(&map), &drawn_see_through(&s, &[], (8.0, 7.5), 1.0, 0.5), 16, 15));
     }
 
+    /// A large symbol takes a taller row and a wider column in a legend's size; an ordinary one
+    /// doesn't.
     #[test]
     fn a_legend_grows_to_hold_a_large_point() {
         let mm = 25.4 / 96.0;
@@ -3293,6 +3300,7 @@ mod tests {
         assert!(w.is_finite() && h.is_finite(), "{w} × {h} mm");
     }
 
+    /// A layer's reference scale sizes its symbol at the frame's scale.
     #[test]
     fn a_legend_scales_a_point_with_its_reference_scale() {
         let s = rustgis_map::Symbol { size: 10.0, stroke_width: 0.0, ..rustgis_map::Symbol::default_for(GeometryType::Point, 0) };
@@ -3304,6 +3312,7 @@ mod tests {
         assert!(same_corner(&point_legend(&map), &drawn_point(&s, &[], (12.0, 12.0), 2.0), 24, 24));
     }
 
+    /// A class's row draws the marks the map gives its features, else its layer's.
     #[test]
     fn a_legend_draws_a_class_with_its_own_marks() {
         let s = rustgis_map::Symbol::default_for(GeometryType::Point, 0);
@@ -3338,6 +3347,7 @@ mod tests {
         }
     }
 
+    /// A large point widens the column: a line or a box stays a swatch wide, and the names line up.
     #[test]
     fn a_wide_column_keeps_lines_and_boxes_a_swatch_wide_in_its_middle() {
         use rustgis_data::Dataset;
@@ -3374,6 +3384,7 @@ mod tests {
         }
     }
 
+    /// A symbol past the limit fills its box and stays in it, on pixels and in a recording.
     #[test]
     fn an_oversized_point_stays_in_its_row() {
         let blue = Rgba::rgb(0, 0, 255);
@@ -3405,6 +3416,7 @@ mod tests {
         }
     }
 
+    /// A legend starting off the canvas: a symbol larger than the canvas still covers all of it.
     #[test]
     fn a_see_through_point_larger_than_the_canvas_covers_it_from_off_its_edge() {
         let s = rustgis_map::Symbol {
@@ -3431,6 +3443,7 @@ mod tests {
         }
     }
 
+    /// A class's large symbol counts in a legend's size as a plain row's does.
     #[test]
     fn a_class_row_takes_the_wide_column_in_a_legends_size() {
         let mm = 25.4 / 96.0;
