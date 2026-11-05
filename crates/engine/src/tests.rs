@@ -5303,6 +5303,8 @@ fn layout_surrounds_take_cartographic_options() {
         ElementKind::ScaleBar { color, fill, .. } if color == Rgba::rgb(0x22, 0x22, 0x22) && fill == Rgba::rgb(0xFF, 0xFF, 0xFF)
     ));
     s.run("layout.update", &json!({"element": bar, "color": "#1F4E79"})).unwrap();
+    s.run("layout.update", &json!({"element": bar, "fill": "#00000080"})).unwrap();
+    assert!(matches!(find(&s, "scaleBar").kind, ElementKind::ScaleBar { fill, .. } if fill == Rgba::new(0, 0, 0, 0x80)));
     s.run("layout.update", &json!({"element": bar, "fill": "#FDE68A"})).unwrap();
     assert!(matches!(
         find(&s, "scaleBar").kind,
@@ -5315,6 +5317,8 @@ fn layout_surrounds_take_cartographic_options() {
         json!({"style": "zigzag"}),
         json!({"color": "red"}),
         json!({"fill": "#12"}),
+        json!({"fill": 5}),
+        json!({"color": [255, 0, 0]}),
     ];
     for bad in bad {
         let mut p = bad.clone();

@@ -1057,8 +1057,8 @@ fn scale_number(v: f64, step: f64) -> String {
 }
 
 /// A scale bar filling most of the element's width, in `units`, with `divisions` labelled steps.
-/// `ground_per_pt` is ground metres per logical point of paper.
-/// A scale bar: `colors` are its lines, dark divisions and labels, then its light divisions.
+/// `ground_per_pt` is ground metres per logical point of paper; `colors` are its lines, dark
+/// divisions and labels, then the alternating bar's light divisions.
 fn scale_bar(
     pm: &mut Canvas,
     r: Rect,
@@ -3006,7 +3006,7 @@ mod tests {
         let y = (60.0 * 0.62) as u32;
         // Along the bar: the dark divisions in the colour, the light ones in the fill, nothing in
         // the old ink.
-        assert!(count(|p| p.red() > 180 && p.green() < 90 && p.blue() < 90, y) > 40, "red divisions");
+        assert!(count(red, y) > 40, "red divisions");
         assert!(count(|p| p.blue() > 180 && p.red() < 90 && p.green() < 90, y) > 40, "blue divisions");
         assert_eq!(count(ink, y), 0, "no default ink left");
         // The labels above the bar are in the colour too.

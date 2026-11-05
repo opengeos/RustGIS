@@ -1729,8 +1729,10 @@ fn properties(app: &mut RustGisApp, ui: &mut Ui, layout: &Layout, li: usize) {
                             update(app, json!({"divisions": n}));
                         }
                         ui.end_row();
-                        // The fill is the alternating bar's light divisions; the other styles draw none.
-                        for (label, key, current) in [("Color", "color", *color), ("Fill", "fill", *fill)] {
+                        // The fill is the alternating bar's light divisions: the other styles draw none.
+                        let colors = [("Color", "color", *color), ("Fill", "fill", *fill)];
+                        let shown = if *style == ScaleBarStyle::Alternating { 2 } else { 1 };
+                        for (label, key, current) in colors.into_iter().take(shown) {
                             ui.label(tl!(label));
                             let mut c = crate::theme::c32(current);
                             let resp = crate::widgets::color_button(ui, &mut c);
