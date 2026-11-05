@@ -75,9 +75,10 @@ Then ask, for example:
 ## Managing the open desktop app
 
 By default each agent gets its own project in memory. To drive the project that is open in the
-desktop app instead, tick **Let your Agents Control RustGIS** in the AI Assistant's settings. It
-starts the relay and shows what an agent needs to connect: the MCP server configuration, and the
-`claude mcp add` / `codex mcp add` commands. While it's ticked, attached agents may also read and
+desktop app instead, go to **Analyze → AI Assistant → Assistant settings → Let your Agents Control RustGIS**
+and tick the checkbox below **Skills**. These are the AI Assistant's settings, separate from the
+main **Settings** ribbon tab. This starts the relay and shows what an agent needs to connect: the
+MCP server configuration, and the `claude mcp add` / `codex mcp add` commands. While it's ticked, attached agents may also read and
 write files and use the network, without `--yes`. RustGIS remembers the choice and starts the
 relay with the app. The **MCP Relay** command (Help menu, or Command Search with Ctrl+K) starts the
 relay too, without that: attached agents then have the access their `--yes` asks for.
