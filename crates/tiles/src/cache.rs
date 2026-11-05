@@ -2329,38 +2329,43 @@ mod tests {
         serve_recorded(answers).0
     }
 
+    /// Reads a whole request from `stream`, body too: answering and closing while a POST's body
+    /// is still arriving resets the connection, and the client sees that instead of the answer.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn read_request(stream: &mut std::net::TcpStream) -> String {
+        use std::io::Read;
+        let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(5)));
+        let mut request = Vec::new();
+        let mut buf = [0u8; 2048];
+        while let Ok(n) = stream.read(&mut buf) {
+            if n == 0 {
+                break;
+            }
+            request.extend_from_slice(&buf[..n]);
+            let Some(head_end) = request.windows(4).position(|w| w == b"\r\n\r\n") else { continue };
+            let head = String::from_utf8_lossy(&request[..head_end]).to_ascii_lowercase();
+            let length = head
+                .lines()
+                .find_map(|line| line.strip_prefix("content-length:"))
+                .and_then(|v| v.trim().parse::<usize>().ok())
+                .unwrap_or(0);
+            if request.len() >= head_end + 4 + length {
+                break;
+            }
+        }
+        String::from_utf8_lossy(&request).into_owned()
+    }
+
     #[cfg(not(target_arch = "wasm32"))]
     fn serve_recorded(answers: Vec<Vec<u8>>) -> (String, std::sync::mpsc::Receiver<String>) {
-        use std::io::{Read, Write};
+        use std::io::Write;
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
         let (sent, received) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             for answer in answers {
                 let Ok((mut stream, _)) = listener.accept() else { return };
-                // The whole request, body too, before answering: answering and closing while a
-                // POST's body is still arriving resets the connection, and the client sees that
-                // instead of the answer.
-                let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(5)));
-                let mut request = Vec::new();
-                let mut buf = [0u8; 2048];
-                while let Ok(n) = stream.read(&mut buf) {
-                    if n == 0 {
-                        break;
-                    }
-                    request.extend_from_slice(&buf[..n]);
-                    let Some(head_end) = request.windows(4).position(|w| w == b"\r\n\r\n") else { continue };
-                    let head = String::from_utf8_lossy(&request[..head_end]).to_ascii_lowercase();
-                    let length = head
-                        .lines()
-                        .find_map(|line| line.strip_prefix("content-length:"))
-                        .and_then(|v| v.trim().parse::<usize>().ok())
-                        .unwrap_or(0);
-                    if request.len() >= head_end + 4 + length {
-                        break;
-                    }
-                }
-                let _ = sent.send(String::from_utf8_lossy(&request).into_owned());
+                let _ = sent.send(read_request(&mut stream));
                 let _ = stream.write_all(&answer);
             }
         });
@@ -2368,26 +2373,18 @@ mod tests {
     }
 
     /// Serves every connection to the returned address with what `answer` gives for its request
-    /// path, sending each request's head to the receiver.
+    /// path, sending each request to the receiver. It answers until the test binary exits, so its
+    /// thread and listener live that long.
     #[cfg(not(target_arch = "wasm32"))]
     fn serve_by_path(answer: impl Fn(&str) -> Vec<u8> + Send + 'static) -> (String, std::sync::mpsc::Receiver<String>) {
-        use std::io::{Read, Write};
+        use std::io::Write;
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
         let (sent, received) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             for stream in listener.incoming() {
                 let Ok(mut stream) = stream else { return };
-                let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(5)));
-                let mut request = Vec::new();
-                let mut buf = [0u8; 2048];
-                while !request.windows(4).any(|w| w == b"\r\n\r\n") {
-                    match stream.read(&mut buf) {
-                        Ok(0) | Err(_) => break,
-                        Ok(n) => request.extend_from_slice(&buf[..n]),
-                    }
-                }
-                let request = String::from_utf8_lossy(&request).into_owned();
+                let request = read_request(&mut stream);
                 let path = request.split_whitespace().nth(1).unwrap_or("").to_string();
                 let _ = sent.send(request);
                 let _ = stream.write_all(&answer(&path));
