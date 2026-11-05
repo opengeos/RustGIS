@@ -131,7 +131,13 @@ fn model_import_preserves_supported_and_legacy_files() {
         )
         .unwrap();
     original
-        .run("model.new", &json!({"name": "Steps", "steps": [{"tool": "buffer", "params": {"input": "Points", "distance": 37}}]}))
+        .run(
+            "model.new",
+            &json!({"name": "Steps", "steps": [
+                {"tool": "buffer", "params": {"input": "Points", "distance": 37}},
+                {"tool": "buffer", "params": {"input": "%1", "distance": 74}}
+            ]}),
+        )
         .unwrap();
     let graph = original.run("model.export", &json!({"name": "Graph"})).unwrap();
     let (_, web, _) = rustgis_engine::cmd::sharing::share_bytes(&mut original, "webTool", &json!({"model": "Steps"})).unwrap();
@@ -158,6 +164,13 @@ fn model_import_preserves_supported_and_legacy_files() {
                 loaded.run("model.import", &params).unwrap();
                 assert_eq!(loaded.project.models[0], original.project.models[index]);
                 assert!(loaded.notices.is_empty(), "supported files need no warning");
+                if index == 1 {
+                    let graph = loaded.run("model.export", &json!({})).unwrap();
+                    let mut reopened = Session::new(Project::new("Graph"));
+                    reopened.run("model.import", &json!({"text": graph["text"]})).unwrap();
+                    assert_eq!(reopened.project.models[0].steps, original.project.models[index].steps);
+                    assert!(reopened.notices.is_empty(), "supported references need no warning");
+                }
                 if index == 2 {
                     let output = scratch.path("keep.model.json");
                     std::fs::write(&output, "keep").unwrap();
@@ -179,15 +192,23 @@ fn model_import_preserves_supported_and_legacy_files() {
         assert!(error.contains("graph limits"), "{error}");
         assert_eq!(original.project.models, before);
     }
-    for reference in ["%0", "%2"] {
+    for (steps, reference, message) in [
+        (json!([{"tool": "buffer", "params": {"input": "%0"}}]), "%0", "not an earlier step"),
+        (json!([{"tool": "buffer", "params": {"input": "%2"}}]), "%2", "not an earlier step"),
+        (
+            json!([{"tool": "vectorToPmtiles", "params": {"input": "Points"}}, {"tool": "buffer", "params": {"input": "%1"}}]),
+            "%1",
+            "has no layer output",
+        ),
+    ] {
         let mut loaded = Session::new(Project::new("Invalid reference"));
-        let file = json!({"steps": [{"tool": "buffer", "params": {"input": reference}}]});
+        let file = json!({"steps": steps});
         loaded.run("model.import", &json!({"text": file.to_string()})).unwrap();
         let before = loaded.project.models.clone();
         let output = scratch.path("keep-reference.model.json");
         std::fs::write(&output, "keep").unwrap();
         let error = loaded.run("model.export", &json!({"path": output})).unwrap_err();
-        assert!(error.contains(reference) && error.contains("not an earlier step"), "{error}");
+        assert!(error.contains(reference) && error.contains(message), "{error}");
         assert_eq!(std::fs::read_to_string(output).unwrap(), "keep");
         assert_eq!(loaded.project.models, before);
     }

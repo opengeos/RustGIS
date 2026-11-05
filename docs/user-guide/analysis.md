@@ -1190,8 +1190,9 @@ it reports the change with a notice.
 
 Step files keep the existing 2,000-step limit. Converting steps to a ModelBuilder graph has a
 1,000-step limit: opening or exporting a larger model as a graph gives an error and leaves the
-original steps intact. References to a step that is not earlier in the model also stop graph
-conversion before data can be dropped. Larger models can still run as steps or be shared as a web tool.
+original steps intact. References to a step that is not earlier in the model, or has no layer
+output, also stop graph conversion before data can be dropped. Larger models can still run as
+steps or be shared as a web tool.
 
 The Workflows pane's Models section lists the project's models, and New Model From History turns
 the geoprocessing you've run into one. Models made as steps (`model.new` with `steps`, where `%1`

@@ -381,6 +381,7 @@ pub fn steps_to_graph(steps: &[ModelStep]) -> ModelGraph {
 }
 
 /// Converts steps within the graph's supported limits, returning an error instead of truncating.
+/// Referenced steps must be earlier and have a layer output.
 pub fn checked_steps_to_graph(steps: &[ModelStep]) -> Result<ModelGraph, String> {
     let limit = MAX_NODES / 2;
     if steps.len() > limit {
@@ -409,7 +410,18 @@ pub fn checked_steps_to_graph(steps: &[ModelStep]) -> Result<ModelGraph, String>
                             index + 1
                         ));
                     }
-                    Some(_) => {}
+                    Some(n) => {
+                        let has_no_output = steps.get(n.saturating_sub(1)).is_some_and(|previous| {
+                            let node = ModelNode { tool: Some(previous.tool.clone()), kind: ModelNodeKind::Tool, ..Default::default() };
+                            output_ports(&node).is_empty()
+                        });
+                        if has_no_output {
+                            return Err(format!(
+                                "model step {} uses %{n}, but step {n} has no layer output. The original steps have not been changed.",
+                                index + 1
+                            ));
+                        }
+                    }
                     None => {
                         inputs.insert(part.to_ascii_lowercase());
                     }
