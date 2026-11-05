@@ -159,7 +159,9 @@ impl GpkgMemSource {
             fields,
             extent: Extent::EMPTY,
             count: Some(count),
-            crs: reproject.label(),
+            // A system the definition gives, by its PROJ definition, so the layer keeps it
+            // (`SourceInfo::coordinate_system`), as a Shapefile's .prj does (#1476).
+            crs: reproject.crs.custom_def().map(|d| d.proj4.clone()).unwrap_or_else(|| reproject.label()),
             indexed: false,
             notes,
             zm_dropped: false,

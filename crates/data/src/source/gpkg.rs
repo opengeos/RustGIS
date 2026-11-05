@@ -143,14 +143,11 @@ impl GpkgSource {
             .map_err(err)?;
         // Its row, with the definition when the table has that column (some writers leave it out).
         let row = conn
-            .query_row(
-                "SELECT organization, organization_coordsys_id, definition FROM gpkg_spatial_ref_sys WHERE srs_id = ?1",
-                [srs_id],
-                |r| Ok(super::GpkgSrs { organization: r.get(0)?, code: r.get(1)?, definition: r.get(2)? }),
-            )
-            .or_else(|_| {
-                conn.query_row("SELECT organization, organization_coordsys_id FROM gpkg_spatial_ref_sys WHERE srs_id = ?1", [srs_id], |r| {
-                    Ok(super::GpkgSrs { organization: r.get(0)?, code: r.get(1)?, definition: None })
+            .query_row("SELECT * FROM gpkg_spatial_ref_sys WHERE srs_id = ?1", [srs_id], |r| {
+                Ok(super::GpkgSrs {
+                    organization: r.get("organization")?,
+                    code: r.get("organization_coordsys_id")?,
+                    definition: r.get("definition").ok().flatten(),
                 })
             })
             .ok();
@@ -231,7 +228,9 @@ impl GpkgSource {
             fields,
             extent,
             count,
-            crs: reproject.label(),
+            // A system the definition gives, by its PROJ definition, so the layer keeps it
+            // (`SourceInfo::coordinate_system`), as a Shapefile's .prj does (#1476).
+            crs: reproject.crs.custom_def().map(|d| d.proj4.clone()).unwrap_or_else(|| reproject.label()),
             indexed: rtree.is_some(),
             notes,
             zm_dropped: false,

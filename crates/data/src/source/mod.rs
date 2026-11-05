@@ -769,32 +769,31 @@ pub(crate) struct GpkgSrs {
 /// definition, else longitude/latitude, with a note. With no row for `srs_id`, it is taken as an
 /// EPSG code only for WGS 84 and Web Mercator, the ids writers commonly use without defining.
 pub(crate) fn gpkg_reproject(srs_id: i64, row: Option<GpkgSrs>, notes: &mut Vec<String>) -> Reproject {
-    let Some(row) = row else {
-        return Reproject::from_epsg(u32::try_from(srs_id).ok().filter(|c| matches!(c, 4326 | 3857)), notes);
+    // An EPSG code: the row's when its organization is EPSG (a table-local id such as 100001
+    // isn't one); with no row, the id itself for WGS 84 and Web Mercator only.
+    let epsg = match &row {
+        Some(GpkgSrs { organization: Some(org), code: Some(code), .. }) if org.eq_ignore_ascii_case("epsg") => u32::try_from(*code).ok(),
+        Some(_) => None,
+        None => u32::try_from(srs_id).ok().filter(|c| matches!(c, 4326 | 3857)),
     };
-    // An EPSG code (a table-local id such as 100001 isn't one).
-    let epsg = row
-        .organization
-        .as_deref()
-        .filter(|org| org.eq_ignore_ascii_case("epsg"))
-        .and_then(|_| row.code)
-        .and_then(|code| u32::try_from(code).ok());
-    if let Some(code) = epsg.filter(|c| Crs::from_epsg(*c).is_some()) {
-        return Reproject::from_epsg(Some(code), notes);
+    if let Some(crs) = epsg.and_then(Crs::from_epsg) {
+        return Reproject::from_crs(crs, notes);
     }
     // Else the WKT the row defines it with: a custom system, or a code this build doesn't know.
-    let definition = row.definition.as_deref().map(str::trim).filter(|d| !d.is_empty() && !d.eq_ignore_ascii_case("undefined"));
+    // ("undefined", or a writer's "undefined geographic …", defines nothing.)
+    let definition = row
+        .as_ref()
+        .and_then(|r| r.definition.as_deref())
+        .map(str::trim)
+        .filter(|d| !d.is_empty() && !d.get(..9).is_some_and(|p| p.eq_ignore_ascii_case("undefined")));
     if let Some(definition) = definition {
-        match crate::raster::wkt::read_wkt(definition) {
-            Ok((crs, note)) => {
-                notes.extend(note.map(|n| format!("its coordinate system (srs_id {srs_id}): {n}")));
-                return Reproject::from_crs(crs, notes);
-            }
-            Err(e) => {
-                notes.push(format!("its coordinate system (srs_id {srs_id}) can't be read ({e}); read as longitude/latitude"));
-                return Reproject::from_crs(Crs::LonLat, notes);
-            }
-        }
+        let (crs, note) = crate::raster::wkt::read_wkt(definition)
+            .map(|(crs, note)| (crs, note.map(|n| format!("its coordinate system (srs_id {srs_id}): {n}"))))
+            .unwrap_or_else(|e| {
+                (Crs::LonLat, Some(format!("its coordinate system (srs_id {srs_id}) can't be read ({e}); read as longitude/latitude")))
+            });
+        notes.extend(note);
+        return Reproject::from_crs(crs, notes);
     }
     if epsg.is_some() {
         // A code this build doesn't know, and no definition to fall back on: said by its code.
