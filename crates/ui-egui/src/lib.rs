@@ -2117,8 +2117,14 @@ impl RustGisApp {
                 self.session.notify(text, true);
             }
             // A probe still under way is for an address added to the old project: dropped, so
-            // its layer never lands in the new one.
-            self.ui.cog_probes.clear();
+            // its layer never lands in the new one, and said, as a download landing late is.
+            for (p, _) in std::mem::take(&mut self.ui.cog_probes) {
+                let url = p.get("url").and_then(Value::as_str).unwrap_or("");
+                let url = rustgis_engine::data::s3_address::inner(url);
+                let why = i18n::fmt("{url}: its project was closed while it was read, so it wasn't added", &[("url", url)]);
+                self.landed_in_dialog(&p, Err(&why));
+                self.session.notify(why, false);
+            }
         }
         // Undo and redo can move vertices: an index chosen before may now name another vertex.
         // A step moved or deleted, from the pane, Command Search, the assistant or a script: the
@@ -5182,6 +5188,26 @@ mod record_tests {
         let other = add("200 OK", crate::serviceui::downloading("Rivers"));
         assert_eq!(other.dialogs.info, Some(crate::serviceui::downloading("Rivers")));
         assert_eq!(other.dialogs.error, None);
+    }
+
+    #[test]
+    fn a_probe_dropped_by_another_project_says_so() {
+        let mut app = RustGisApp::with_sample();
+        let url = "https://example.com/elevation.tif?token=hidden-758";
+        app.ui.cog_probes.push((json!({"url": url, "name": "Elevation"}), Default::default()));
+        app.ui.cog_probes.push((json!({"url": "https://example.com/slope.tif", "name": "Slope"}), Default::default()));
+        app.dialogs.info = Some(crate::serviceui::downloading("Elevation"));
+        app.run("project.new", json!({})).unwrap();
+        assert!(app.ui.cog_probes.is_empty());
+        assert_eq!(app.dialogs.info, None);
+        let why = app.dialogs.error.as_deref().unwrap_or("");
+        assert!(why.contains("elevation.tif") && !why.contains("hidden-758"), "{why}");
+        // The new project's notices: the one for the dropped probe comes after it opened. (A
+        // query naming a secret takes the rest of the text with it when redacted.)
+        let said = |n: &rustgis_engine::Notice| n.text.contains("elevation.tif") && !n.text.contains("hidden-758");
+        assert!(app.session.notices.iter().any(said), "{:?}", app.session.notices);
+        // Without a secret, the reason stays.
+        assert!(app.session.notices.iter().any(|n| n.text.contains("slope.tif") && n.text.contains("project was closed")));
     }
 
     #[test]
