@@ -3368,6 +3368,28 @@ mod tests {
         assert!((60..200).contains(&red(10, 2048)), "{}", red(10, 2048));
     }
 
+    /// An upright square's and triangle's corners lie further than 0.6 of their size from their
+    /// centre, but along each axis, which is what the box holds, they stay inside it.
+    #[test]
+    fn an_upright_mark_stays_in_its_row() {
+        let s = rustgis_map::Symbol { size: 10.0, stroke_width: 0.0, ..rustgis_map::Symbol::default_for(GeometryType::Point, 0) };
+        for marker in [rustgis_map::Marker::Square, rustgis_map::Marker::Triangle] {
+            let mut mark = square_mark(Rgba::rgb(0, 0, 255), 40.0);
+            if let Some(m) = &mut mark.markers {
+                m.mark = rustgis_map::LineMark::Marker(marker);
+            }
+            let map = point_legend_map(|l| {
+                l.renderer = rustgis_map::Renderer::Single(s);
+                l.line_strokes = vec![mark];
+            });
+            let pm = point_legend(&map);
+            let white = |x, y| pm.pixel(x, y).is_some_and(|p| (p.red(), p.green(), p.blue()) == (255, 255, 255));
+            // A box of 48 points: its edges are clear, and the mark is in it.
+            assert!((0..48).all(|i| white(i, 0) && white(i, 47) && white(0, i) && white(47, i)), "{marker:?}");
+            assert!(!white(24, 24), "{marker:?}");
+        }
+    }
+
     /// A class's row draws the marks the map gives its features, else its layer's.
     #[test]
     fn a_legend_draws_a_class_with_its_own_marks() {
