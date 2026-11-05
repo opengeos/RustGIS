@@ -802,7 +802,9 @@ pub(crate) fn gpkg_reproject(srs_id: i64, row: Option<GpkgSrs>, notes: &mut Vec<
         // A code this build doesn't know, and no definition to fall back on: said by its code.
         return Reproject::from_epsg(epsg, notes);
     }
-    if srs_id > 0 && srs_id != 4326 {
+    // Longitude/latitude is what WGS 84 and the spec's "undefined geographic" id 0 mean; any other
+    // id, the "undefined cartesian" -1 too, is assumed to be it.
+    if srs_id != 0 && srs_id != 4326 {
         notes.push(format!("its coordinate system (srs_id {srs_id}) has no EPSG code; read as longitude/latitude"));
     }
     Reproject::from_crs(Crs::LonLat, notes)
