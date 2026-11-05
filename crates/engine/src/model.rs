@@ -822,6 +822,17 @@ pub(crate) fn check_file(v: &Value) -> Result<(), String> {
                 "this model would discard {lost_nodes} node(s) and {lost_edges} connection(s). Fix empty or duplicate node IDs and invalid connections before importing it."
             ));
         }
+        let by_id: HashMap<&str, &ModelNode> = normalized.nodes.iter().map(|n| (n.id.as_str(), n)).collect();
+        for (index, edge) in normalized.edges.iter().enumerate() {
+            let from_known = by_id.get(edge.from.as_str()).is_some_and(|n| output_ports(n).iter().any(|p| p.id == edge.from_port));
+            let to_known = by_id.get(edge.to.as_str()).is_some_and(|n| input_ports(n).iter().any(|p| p.id == edge.to_port));
+            if !from_known || !to_known {
+                return Err(format!(
+                    "model connection {} refers to an unsupported port. Update RustGIS or fix the connection before importing this model.",
+                    index + 1
+                ));
+            }
+        }
     } else if let Some(steps) = v.get("steps") {
         let steps = steps.as_array().ok_or("model steps must be an array")?;
         if steps.len() > MAX_NODES {

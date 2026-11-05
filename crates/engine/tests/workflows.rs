@@ -74,6 +74,22 @@ fn model_import_refuses_unsupported_files_without_changing_session() {
             "edges": [{"from": "a", "to": "b", "toPort": "in", "future": true}]}}),
             "unsupported fields",
         ),
+        (
+            json!({"graph": {"nodes": [{"id": "a", "kind": "input", "layer": "Points"},
+            {"id": "b", "kind": "tool", "tool": "buffer"}],
+            "edges": [{"from": "a", "fromPort": "out", "to": "b", "toPort": "future"}]}}),
+            "connection 1 refers to an unsupported port",
+        ),
+        (
+            json!({"graph": {"nodes": [{"id": "a", "kind": "input"}, {"id": "b", "kind": "output"}],
+            "edges": [{"from": "a", "fromPort": "out", "to": "b", "toPort": "future"}]}}),
+            "connection 1 refers to an unsupported port",
+        ),
+        (
+            json!({"graph": {"nodes": [{"id": "a", "kind": "input"}, {"id": "b", "kind": "output"}],
+            "edges": [{"from": "a", "fromPort": "future", "to": "b", "toPort": "in"}]}}),
+            "connection 1 refers to an unsupported port",
+        ),
     ] {
         let text = file.to_string();
         let path = scratch.path("unsupported.model.json");

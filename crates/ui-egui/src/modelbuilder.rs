@@ -317,7 +317,7 @@ pub fn open(app: &mut RustGisApp, name: Option<&str>) -> Result<(), String> {
     forget_old_project(app);
     if let Some(n) = name {
         if !app.session.project.models.iter().any(|m| m.name.eq_ignore_ascii_case(n)) {
-            return Err(format!("no model '{n}'"));
+            return Err(crate::i18n::fmt("no model '{name}'", &[("name", n)]));
         }
         if app.mb.open && app.mb.dirty() && !app.mb.saved_as.as_deref().is_some_and(|s| s.eq_ignore_ascii_case(n)) {
             app.mb.confirm = Some(Pending::Open(n.to_string()));
@@ -355,7 +355,7 @@ fn untitled(app: &RustGisApp) -> String {
 /// Loads a saved model only when its graph can be shown without truncating its steps.
 fn load_saved(app: &mut RustGisApp, name: &str) -> Result<(), String> {
     let Some(m) = app.session.project.models.iter().find(|m| m.name.eq_ignore_ascii_case(name)) else {
-        return Err(format!("no model '{name}'"));
+        return Err(crate::i18n::fmt("no model '{name}'", &[("name", name)]));
     };
     let graph = match &m.graph {
         Some(graph) => graph.clone(),
