@@ -35,6 +35,9 @@ fn model_import_refuses_unsupported_files_without_changing_session() {
         (json!({"version": 2, "steps": "unreadable future steps"}), "unsupported version"),
         (json!({"version": null, "graph": {"nodes": []}}), "unsupported version"),
         (json!({"version": "1", "steps": []}), "unsupported version"),
+        (json!({"graph": {"nodes": []}, "description": "Keep this"}), "file has unsupported fields"),
+        (json!({"steps": [], "future": true}), "file has unsupported fields"),
+        (json!({"graph": {"nodes": []}, "steps": [{"tool": "buffer", "params": {}}]}), "both a graph and steps"),
         (json!({"steps": [{"tool": "buffer", "params": {}, "when": {"enabled": true}}]}), "step 1 has unsupported fields"),
         (json!({"steps": [{"tool": "buffer", "params": ["input"]}]}), "step 1 needs an object"),
         (json!({"steps": vec![json!({"tool": "buffer", "params": {}}); 2001]}), "at most 2000 steps"),
@@ -159,6 +162,40 @@ fn model_import_preserves_supported_and_legacy_files() {
         let error = original.run("model.export", &json!({"name": name})).unwrap_err();
         assert!(error.contains("graph limits"), "{error}");
         assert_eq!(original.project.models, before);
+    }
+    for reference in ["%0", "%2"] {
+        let mut loaded = Session::new(Project::new("Invalid reference"));
+        let file = json!({"steps": [{"tool": "buffer", "params": {"input": reference}}]});
+        loaded.run("model.import", &json!({"text": file.to_string()})).unwrap();
+        let before = loaded.project.models.clone();
+        let output = scratch.path("keep-reference.model.json");
+        std::fs::write(&output, "keep").unwrap();
+        let error = loaded.run("model.export", &json!({"path": output})).unwrap_err();
+        assert!(error.contains(reference) && error.contains("not an earlier step"), "{error}");
+        assert_eq!(std::fs::read_to_string(output).unwrap(), "keep");
+        assert_eq!(loaded.project.models, before);
+    }
+}
+
+/// Even a name emitted by the writer can exceed the import naming limit after disambiguation.
+#[test]
+fn model_import_reports_changed_names() {
+    let mut original = Session::new(Project::new("Original"));
+    for _ in 0..2 {
+        original.run("model.new", &json!({"name": "N".repeat(200), "steps": [{"tool": "buffer", "params": {"input": "Cities"}}]})).unwrap();
+    }
+    let name = original.project.models[1].name.clone();
+    assert!(name.chars().count() > 200);
+    let exported = original.run("model.export", &json!({"name": name})).unwrap();
+    let mut file: Value = serde_json::from_str(exported["text"].as_str().unwrap()).unwrap();
+    for name in [file["name"].clone(), json!(" Padded "), json!(17)] {
+        file["name"] = name.clone();
+        let mut loaded = Session::new(Project::new("Loaded"));
+        loaded.run("model.import", &json!({"text": file.to_string()})).unwrap();
+        assert_ne!(Some(loaded.project.models[0].name.as_str()), name.as_str());
+        assert_eq!(loaded.notices.len(), 1);
+        assert!(!loaded.notices[0].error && loaded.notices[0].text.contains("1 model name"));
+        assert_eq!(serde_json::to_value(loaded.project.models[0].graph.as_ref().unwrap()).unwrap(), file["graph"]);
     }
 }
 

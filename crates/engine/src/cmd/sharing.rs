@@ -162,11 +162,16 @@ pub fn commands() -> Vec<C> {
             crate::model::check_file(&v)?;
             let name = v["name"].as_str().unwrap_or("Tool").chars().take(200).collect::<String>();
             // A model file (`*.model.json`) holds a graph; a web tool its steps.
-            if let Some(graph) = v.get("graph") {
-                return s.run("model.new", &json!({"name": name, "graph": graph, "imported": true}));
+            let imported = if let Some(graph) = v.get("graph") {
+                s.run("model.new", &json!({"name": name, "graph": graph, "imported": true}))?
+            } else {
+                let steps = v.get("steps").cloned().ok_or("not a RustGIS model or web tool (no graph or steps)")?;
+                s.run("model.new", &json!({"name": name, "steps": steps, "imported": true}))?
+            };
+            if v.get("name").is_some_and(|name| name.as_str() != imported.get("model").and_then(Value::as_str)) {
+                s.notify("1 model name was trimmed, shortened, replaced or made unique during import.", false);
             }
-            let steps = v.get("steps").cloned().ok_or("not a RustGIS model or web tool (no graph or steps)")?;
-            s.run("model.new", &json!({"name": name, "steps": steps, "imported": true}))
+            Ok(imported)
         })
         .params(r#"{"path"?: "*.model.json" | "*.rgistool", "text"?: file JSON, "data"?: base64 file}"#),
     ]

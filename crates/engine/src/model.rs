@@ -403,7 +403,12 @@ pub fn checked_steps_to_graph(steps: &[ModelStep]) -> Result<ModelGraph, String>
                     continue;
                 }
                 match part.strip_prefix('%').and_then(|n| n.parse::<usize>().ok()) {
-                    Some(n) if !(1..=index).contains(&n) => continue,
+                    Some(n) if !(1..=index).contains(&n) => {
+                        return Err(format!(
+                            "model step {} uses %{n}, which is not an earlier step. The original steps have not been changed.",
+                            index + 1
+                        ));
+                    }
                     Some(_) => {}
                     None => {
                         inputs.insert(part.to_ascii_lowercase());
@@ -755,6 +760,14 @@ pub(crate) fn check_file(v: &Value) -> Result<(), String> {
         if !supported {
             return Err("this model or web tool has an unsupported version. Update RustGIS to import it.".into());
         }
+    }
+    if graph.is_some() && v.get("steps").is_some() {
+        return Err("a model file cannot contain both a graph and steps. Choose one representation before importing it.".into());
+    }
+    let fields: &[&str] =
+        if graph.is_some() { &["$schema", "version", "name", "graph"] } else { &["format", "version", "name", "steps", "parameters"] };
+    if v.as_object().is_some_and(|file| file.keys().any(|key| !fields.contains(&key.as_str()))) {
+        return Err("model file has unsupported fields. Update RustGIS to import this model.".into());
     }
     if let Some(graph) = graph {
         let nodes = graph.get("nodes").and_then(Value::as_array).ok_or("a model graph needs \"nodes\"")?;
