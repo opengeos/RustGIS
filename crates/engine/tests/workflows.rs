@@ -9,6 +9,101 @@ use rustgis_engine::{Project, Session};
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 
+/// Declared versions are checked before payloads, and unreadable nodes cannot disappear on import.
+#[test]
+fn model_import_refuses_unsupported_files_without_changing_session() {
+    use base64::Engine;
+    let scratch = Scratch::new("model-compatibility");
+    let mut s = Session::new(Project::new("Original"));
+    s.run("model.new", &json!({"name": "Keep", "steps": []})).unwrap();
+    s.run("project.rename", &json!({"name": "Redo"})).unwrap();
+    s.run("edit.undo", &Value::Null).unwrap();
+    s.path = Some(scratch.path("original.rgis"));
+    s.mark_saved();
+    let before = serde_json::to_value(&s.project).unwrap();
+    let history = (s.undo_depth(), s.undo_label(), s.redo_label());
+    let graph = json!({"nodes": [
+        {"id": "i", "kind": "input", "layer": "Points"},
+        {"id": "future", "kind": "branch"},
+        {"id": "o", "kind": "output", "name": "Result"}
+    ], "edges": [
+        {"from": "i", "fromPort": "out", "to": "future", "toPort": "input"},
+        {"from": "future", "fromPort": "out", "to": "o", "toPort": "in"}
+    ]});
+    for (file, message) in [
+        (json!({"version": "2.0.0", "graph": "unreadable future graph"}), "unsupported version"),
+        (json!({"version": 2, "steps": "unreadable future steps"}), "unsupported version"),
+        (json!({"version": null, "graph": {"nodes": []}}), "unsupported version"),
+        (json!({"version": "1", "steps": []}), "unsupported version"),
+        (json!({"version": "1.0.0", "graph": graph}), "node 2"),
+        (json!({"graph": {"nodes": [{"id": "t", "kind": "tool", "tool": {}}]}}), "node 1"),
+    ] {
+        let text = file.to_string();
+        let path = scratch.path("unsupported.model.json");
+        std::fs::write(&path, &text).unwrap();
+        for params in
+            [json!({"text": text}), json!({"data": base64::engine::general_purpose::STANDARD.encode(&text)}), json!({"path": path})]
+        {
+            let error = s.run("model.import", &params).unwrap_err();
+            assert!(error.contains(message) && error.contains("Update RustGIS"), "{error}");
+            assert_eq!(serde_json::to_value(&s.project).unwrap(), before);
+            assert_eq!((s.undo_depth(), s.undo_label(), s.redo_label()), history);
+            assert!(s.can_undo() && s.can_redo());
+            assert_eq!(s.path.as_ref(), Some(&scratch.path("original.rgis")));
+            assert!(!s.dirty());
+        }
+    }
+    // Direct graph commands retain their existing sanitization, outside the file boundary.
+    s.run("model.new", &json!({"name": "Direct", "graph": graph})).unwrap();
+}
+
+/// Actual graph and web-tool writers still round-trip, with or without their legacy version marker.
+#[test]
+fn model_import_preserves_supported_and_legacy_files() {
+    use base64::Engine;
+    let scratch = Scratch::new("model-roundtrip");
+    let mut original = Session::new(Project::new("Original"));
+    original
+        .run(
+            "model.new",
+            &json!({"name": "Graph", "graph": {"nodes": [
+                {"id": "i", "kind": "input", "layer": "Points"},
+                {"id": "t", "kind": "tool", "tool": "buffer", "params": {"distance": 37}},
+                {"id": "o", "kind": "output", "name": "Near points"}
+            ], "edges": [
+                {"from": "i", "fromPort": "out", "to": "t", "toPort": "input"},
+                {"from": "t", "fromPort": "out", "to": "o", "toPort": "in"}
+            ]}}),
+        )
+        .unwrap();
+    original
+        .run("model.new", &json!({"name": "Steps", "steps": [{"tool": "buffer", "params": {"input": "Points", "distance": 37}}]}))
+        .unwrap();
+    let graph = original.run("model.export", &json!({"name": "Graph"})).unwrap();
+    let (_, web, _) = rustgis_engine::cmd::sharing::share_bytes(&mut original, "webTool", &json!({"model": "Steps"})).unwrap();
+    for (index, text) in [graph["text"].as_str().unwrap().to_string(), String::from_utf8(web).unwrap()].into_iter().enumerate() {
+        let file: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(file["version"], if index == 0 { json!("1.0.0") } else { json!(1) });
+        for legacy in [false, true] {
+            let mut file = file.clone();
+            if legacy {
+                file.as_object_mut().unwrap().remove("version");
+            }
+            let text = file.to_string();
+            let path = scratch.path(if index == 0 { "graph.model.json" } else { "steps.rgistool" });
+            std::fs::write(&path, &text).unwrap();
+            for params in
+                [json!({"text": text}), json!({"data": base64::engine::general_purpose::STANDARD.encode(&text)}), json!({"path": path})]
+            {
+                let mut loaded = Session::new(Project::new("Loaded"));
+                loaded.run("model.import", &params).unwrap();
+                assert_eq!(loaded.project.models[0], original.project.models[index]);
+                assert!(loaded.notices.is_empty(), "supported files need no warning");
+            }
+        }
+    }
+}
+
 /// The parcels' south-west corner, in Memphis, and their size in degrees: 4 columns by 3 rows.
 const WEST: f64 = -90.05;
 const SOUTH: f64 = 35.10;

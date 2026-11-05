@@ -10,7 +10,7 @@
 use std::collections::{HashMap, HashSet};
 
 use rustgis_analysis::{ParamKind, ToolSpec};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::Session;
@@ -685,8 +685,37 @@ fn rename(s: &mut Session, id: u32, wanted: &str) -> Option<String> {
 /// The JSON a model file holds (`*.model.json`).
 pub const SCHEMA: &str = "https://rustgis.app/schemas/model-graph-v1.json";
 
+/// The model-file version understood by this reader and emitted by this writer.
+pub(crate) const FILE_VERSION: &str = "1.0.0";
+/// Web tools store steps under a separate, integer version marker.
+pub(crate) const WEB_TOOL_VERSION: u64 = 1;
+
+/// Check declared file versions and node representations before import can discard nodes.
+/// Missing versions are legacy files. Direct graph commands keep their existing sanitization.
+pub(crate) fn check_file(v: &Value) -> Result<(), String> {
+    let graph = v.get("graph");
+    if let Some(version) = v.get("version") {
+        let supported = if graph.is_some() { version.as_str() == Some(FILE_VERSION) } else { version.as_u64() == Some(WEB_TOOL_VERSION) };
+        if !supported {
+            return Err("this model or web tool has an unsupported version. Update RustGIS to import it.".into());
+        }
+    }
+    if let Some(graph) = graph {
+        let nodes = graph.get("nodes").and_then(Value::as_array).ok_or("a model graph needs \"nodes\"")?;
+        if nodes.len() > MAX_NODES {
+            return Err(format!("a model can have at most {MAX_NODES} nodes"));
+        }
+        for (index, node) in nodes.iter().enumerate() {
+            ModelNode::deserialize(node)
+                .map_err(|_| format!("model node {} is unsupported or malformed. Update RustGIS to import this model.", index + 1))?;
+        }
+    }
+    Ok(())
+}
+
+/// A graph's current file envelope; imports also accept legacy envelopes without a version.
 pub fn to_file(name: &str, g: &ModelGraph) -> Value {
-    json!({"$schema": SCHEMA, "version": "1.0.0", "name": name, "graph": g})
+    json!({"$schema": SCHEMA, "version": FILE_VERSION, "name": name, "graph": g})
 }
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]

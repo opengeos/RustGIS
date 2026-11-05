@@ -1177,6 +1177,10 @@ their name.
   or write files. **Copy Command** copies a `model.run` command that runs the model from the
   Script pane, the command line or Python.
 
+Import checks declared model and web-tool versions before interpreting their contents. Unsupported
+versions or unreadable graph nodes are refused with advice to update RustGIS, leaving the current
+project unchanged. Supported files and legacy files without a version marker continue to import.
+
 The Workflows pane's Models section lists the project's models, and New Model From History turns
 the geoprocessing you've run into one. Models made as steps (`model.new` with `steps`, where `%1`
 stands for step 1's output) run as they always have until they are saved from ModelBuilder, which

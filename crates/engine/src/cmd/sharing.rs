@@ -126,6 +126,7 @@ fn web_link_chart(s: &mut Session, p: &Value) -> CmdResult {
 }
 const MANAGE: &str = r#"{"item"?: id|name (default: the last of its kind), "map"?: re-share from another map}"#;
 
+/// Publish shared items and import models, checking file compatibility before creating a model.
 pub fn commands() -> Vec<C> {
     let share_as = |id: &'static str, label: &'static str, run: fn(&mut Session, &Value) -> CmdResult, params: &'static str| {
         C::new(id, label, "Publish › Share As", run).params(params)
@@ -158,6 +159,7 @@ pub fn commands() -> Vec<C> {
         C::new("model.import", "Import Model", "Analyze › Geoprocessing", |s, p| {
             let text = super::items::read_text(p)?;
             let v: Value = serde_json::from_str(&text).map_err(|e| format!("not a RustGIS web tool: {e}"))?;
+            crate::model::check_file(&v)?;
             let name = v["name"].as_str().unwrap_or("Tool").chars().take(200).collect::<String>();
             // A model file (`*.model.json`) holds a graph; a web tool its steps.
             if let Some(graph) = v.get("graph") {
@@ -221,7 +223,7 @@ pub fn share_bytes(s: &mut Session, kind: &str, p: &Value) -> Result<(String, Ve
                         .map(move |(k, v)| json!({"step": i + 1, "tool": st.tool, "name": k, "default": v}))
                 })
                 .collect();
-            let tool = json!({"format": "RustGIS web tool", "version": 1, "name": m.name, "steps": m.steps, "parameters": params});
+            let tool = json!({"format": "RustGIS web tool", "version": crate::model::WEB_TOOL_VERSION, "name": m.name, "steps": m.steps, "parameters": params});
             Ok((m.name.clone(), serde_json::to_vec_pretty(&tool).map_err(|e| e.to_string())?, m.name.clone()))
         }
         "webScene" => {
