@@ -1130,6 +1130,8 @@ impl RustGisApp {
         // The installed fonts a label can be drawn in, indexed while the app starts.
         rustgis_engine::render::families::warm_up();
         let mut s = session;
+        // A time slider move doesn't wait for a Zarr step to be read (#1291 step 3).
+        s.zarr_off_frame = cfg!(not(target_arch = "wasm32"));
         if s.active_layer.is_none() {
             s.active_layer = s.map().layers.first().map(|l| l.id);
         }
@@ -4376,6 +4378,10 @@ impl RustGisApp {
         // A frame may not come until the user moves: look again while commands wait.
         if self.session.plugin_retries_waiting() {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
+        }
+        // Zarr steps the time slider moved to, read off the frame, show once they land.
+        if self.session.follow_time_landed() {
+            self.map.invalidate();
         }
         // A style added with `"view": true` moves the map once it has loaded.
         if self.session.style_view.is_some() {

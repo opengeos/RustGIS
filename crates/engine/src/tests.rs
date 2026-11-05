@@ -16948,6 +16948,52 @@ fn a_zarr_variable_follows_the_time_slider() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+/// In the app a time slider move doesn't wait for a Zarr step (#1291 step 3): the step is read on
+/// a thread of its own, the layer showing the step before until it lands; one that fails says why
+/// once it lands. An animation's frames still read each step before they draw.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_zarr_step_is_read_off_the_frame_in_the_app() {
+    let (dir, path) = zarr_store_over_time("offframe");
+    let mut s = Session::new(Project::default());
+    s.zarr_off_frame = true;
+    let id = s.run("layer.addZarr", &json!({"path": path, "variable": "t", "time": true})).unwrap()["layer"].as_u64().unwrap() as u32;
+    let first = |s: &Session| s.map().layer(id).and_then(|l| l.raster.as_ref()).and_then(|r| r.data.as_ref()).map(|d| d.bands[0].data[0]);
+    assert_eq!(first(&s), Some(8.0));
+    let landed = |s: &mut Session, want: Option<f32>| {
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while first(s) != want {
+            assert!(std::time::Instant::now() < end, "the step never landed: {:?}", first(s));
+            s.follow_time_landed();
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    };
+    // The move returns at once: the layer shows the step before, then step 2 once it lands;
+    // playing waits for it meanwhile.
+    s.run("time.goTo", &json!({"step": 2})).unwrap();
+    landed(&mut s, Some(208.0));
+    assert!(!s.zarr_waiting(), "the step shown is the slider's");
+    // A step read before shows at once.
+    s.run("time.goTo", &json!({"step": 0})).unwrap();
+    assert_eq!(first(&s), Some(8.0), "a kept step shows without waiting");
+    // A step that can't be read empties the layer and says why, once.
+    std::fs::write(std::path::Path::new(&path).join("t/1.0.0"), b"short").unwrap();
+    let mark = s.notice_mark();
+    s.run("time.goTo", &json!({"step": 1})).unwrap();
+    landed(&mut s, None);
+    let errors: Vec<_> = s.notices_since(mark).iter().filter(|n| n.error).map(|n| n.text.clone()).collect();
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    s.follow_time_landed();
+    assert_eq!(s.notices_since(mark).iter().filter(|n| n.error).count(), 1, "said once");
+    // The animation's frames draw their own steps: step 2 is read before its frame.
+    let zip = std::env::temp_dir().join(format!("rustgis-zarr-offframe-{}.zip", std::process::id()));
+    s.run("time.goTo", &json!({"step": 0})).unwrap();
+    let r = s.run("time.export", &json!({"path": zip.display().to_string(), "width": 64, "height": 48, "from": "2001-03-01"})).unwrap();
+    assert_eq!(r["frames"], 1, "{r}");
+    let _ = std::fs::remove_file(zip);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 /// A Zarr store in a folder: its variables listed (with time labels), a slice added by command
 /// and by Add Data, saved by folder and selection and read again when the project opens; a slice
 /// the app read itself handed over by id.

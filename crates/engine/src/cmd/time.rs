@@ -316,8 +316,9 @@ fn frames(s: &mut Session, steps: &[f64], w: f64, h: f64, gif: Option<u32>) -> R
                 sl.current = *t;
             }
             s.map_mut().apply_time();
-            // Zarr layers that follow the slider read this step's slice.
-            super::zarr::follow_time(s);
+            // Zarr layers that follow the slider read this step's slice, here: each frame draws
+            // its own step.
+            super::zarr::follow_time_now(s);
             // Dated tile layers have this step's address now: natively, map_png (through
             // rustgis_render::render_complete) fetches the tiles it lacks and waits for them
             // before it draws, so each frame shows its own date's imagery.
