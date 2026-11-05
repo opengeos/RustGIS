@@ -3244,6 +3244,25 @@ mod tests {
         assert!(near_corner(&point_legend(&map), &drawn, side.ceil() as u32, side.ceil() as u32));
     }
 
+    /// A plain point at half its opacity, its outline over its fill: composited as one, so the fill
+    /// doesn't show through the outline.
+    #[test]
+    fn a_see_through_plain_point_is_composited_as_the_map_composites_a_layer() {
+        let s = rustgis_map::Symbol {
+            fill: Rgba::rgb(255, 0, 0),
+            stroke: Rgba::rgb(0, 0, 255),
+            stroke_width: 1.0,
+            size: 8.0,
+            marker: rustgis_map::Marker::Square,
+            ..rustgis_map::Symbol::default_for(GeometryType::Point, 0)
+        };
+        let map = point_legend_map(|l| {
+            l.renderer = rustgis_map::Renderer::Single(s);
+            l.transparency = 50.0;
+        });
+        assert!(near_corner(&point_legend(&map), &drawn_see_through(&s, &[], (8.0, 7.5), 1.0, 0.5), 16, 15));
+    }
+
     #[test]
     fn a_legend_grows_to_hold_a_large_point() {
         let mm = 25.4 / 96.0;
