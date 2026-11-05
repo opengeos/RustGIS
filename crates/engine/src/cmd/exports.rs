@@ -1,8 +1,8 @@
 //! Exports that write a file from what the session shares (a layer's features, a raster's
-//! pixels, a copy of the map or project to draw). A script or the command line writes it where the command is called; the app writes it
-//! on a thread of its own with progress and Cancel (#1291 step 3): [`export_start`] reads the
-//! session, [`ExportRun::run`] writes the file, and [`export_land`] says what was written, as the
-//! command would have. It lands whatever layer is active or project is open by then: the file is
+//! pixels, a copy of the map or project to draw). A script or the command line writes it where
+//! the command is called; the app writes it on a thread of its own with progress and Cancel
+//! (#1291 step 3): [`export_start`] reads the session, [`ExportRun::run`] writes the file, and
+//! [`export_land`] says what was written, as the command would have. It lands whatever layer is active or project is open by then: the file is
 //! written either way, and an export changes nothing in the project.
 
 use serde_json::Value;
@@ -27,15 +27,15 @@ pub(crate) type Then = Box<dyn FnOnce(&mut Session, &mut Value) -> Result<(), St
 pub(crate) type Work = Box<dyn FnOnce() -> Result<Wrote, String> + Send>;
 
 /// What an export reads of the session, and the work that writes its file.
-type Start = fn(&mut Session, &Value) -> Result<Work, String>;
+type Start = fn(&Session, &Value) -> Result<Work, String>;
 
 /// The exports the app writes on another thread ([`export_start`]), each with what it is called
 /// (in its progress, and a cancelled run's error) and what it reads of the session.
 const IN_BACKGROUND: &[(&str, &str, Start)] = &[
-    ("share.exportLayer", "Export Features", |s, p| super::share::layer_work(s, p)),
-    ("share.exportRaster", "Export Raster", |s, p| super::raster::export_work(s, p)),
-    ("share.exportMap", "Export Map", |s, p| super::share::map_work(s, p)),
-    ("layout.export", "Export Layout", |s, p| super::layout::export_work(s, p)),
+    ("share.exportLayer", "Export Features", super::share::layer_work),
+    ("share.exportRaster", "Export Raster", super::raster::export_work),
+    ("share.exportMap", "Export Map", super::share::map_work),
+    ("layout.export", "Export Layout", super::layout::export_work),
 ];
 
 /// `command` and what it is called, when the app writes its file on another thread (see
@@ -82,7 +82,7 @@ fn said(s: &mut Session, wrote: Wrote) -> CmdResult {
 /// to `path`, or why not. A cancelled one says only that it was cancelled.
 pub(crate) fn drawn(
     maps: &[rustgis_map::Map],
-    said: Vec<(rustgis_data::diagnostics::Severity, String)>,
+    notices: Vec<(rustgis_data::diagnostics::Severity, String)>,
     written: Result<Value, String>,
     path: String,
 ) -> Result<Wrote, String> {
@@ -90,31 +90,30 @@ pub(crate) fn drawn(
         return Err(e.clone());
     }
     // Each by its live layer, with the source it failed on: one the user removed, or opened
-    // afresh meanwhile, is left as it is.
+    // afresh meanwhile (`SourceLayer::same_opening`), is left as it is.
     let failed: Vec<_> = maps
         .iter()
         .flat_map(|m| &m.layers)
         .filter_map(|l| {
             let src = l.source.as_ref()?;
-            Some((l.instance_id(), src.error.clone()?, src.path.clone(), src.table.clone()))
+            Some((l.instance_id(), src.error.clone()?, src.clone()))
         })
         .collect();
     let answer = written.as_ref().map_or(Value::Null, Value::clone);
     let then: Then = Box::new(move |s: &mut Session, _: &mut Value| {
         use rustgis_data::diagnostics::Severity;
-        for (severity, text) in said {
+        for (severity, text) in notices {
             match severity {
                 Severity::Error => s.notify(text, true),
                 Severity::Warning => s.warn(text),
                 Severity::Info => s.notify(text, false),
             }
         }
-        for (instance, error, path, table) in failed {
+        for (instance, error, copied) in failed {
             let live = s.project.maps.iter_mut().flat_map(|m| m.layers.iter_mut()).find(|l| l.instance_id() == instance);
             if let Some(src) = live.and_then(|l| l.source.as_mut())
                 && src.error.is_none()
-                && src.path == path
-                && src.table == table
+                && src.same_opening(&copied)
             {
                 src.error = Some(error);
             }

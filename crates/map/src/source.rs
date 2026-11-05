@@ -923,6 +923,24 @@ impl SourceLayer {
         self.pending = None;
     }
 
+    /// Whether `other` (a copy of this one) reads the same source the same way: the same file and
+    /// table, opened by the same open. One opened afresh since (`reopen`, a table replaced) is
+    /// another, whatever its path.
+    pub fn same_opening(&self, other: &SourceLayer) -> bool {
+        let handles = match (&self.handle, &other.handle) {
+            (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+            (None, None) => true,
+            _ => false,
+        };
+        // A source by its web address still opening: the same open shares its slot.
+        let openings = match (&self.opening, &other.opening) {
+            (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+            (None, None) => true,
+            _ => false,
+        };
+        handles && openings && self.path == other.path && self.table == other.table
+    }
+
     /// Forgets the window, so the next view reads again (after the source changes).
     pub fn reset(&mut self) {
         self.render_lod = Default::default();
