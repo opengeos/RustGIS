@@ -1182,7 +1182,13 @@ versions, unreadable nodes, connections or steps, and unknown graph, node, conne
 are refused. Graphs that would lose nodes or connections during import are refused with a count and
 advice to fix the file, leaving the current project unchanged. Supported files and legacy files
 without a version marker continue to import, including repeated sources in multi-input tools such
-as Merge. Repeated inputs stay intact when an imported model is saved or renamed.
+as Merge. IDs that need trimming or exceed 100 characters, and positions outside the supported
+canvas bounds, are refused before they can be changed. Repeated inputs stay intact when an imported
+model is saved or renamed.
+
+Step files keep the existing 2,000-step limit. Converting steps to a ModelBuilder graph has a
+1,000-step limit: opening or exporting a larger model as a graph gives an error and leaves the
+original steps intact. The model can still run as steps or be shared as a web tool.
 
 The Workflows pane's Models section lists the project's models, and New Model From History turns
 the geoprocessing you've run into one. Models made as steps (`model.new` with `steps`, where `%1`

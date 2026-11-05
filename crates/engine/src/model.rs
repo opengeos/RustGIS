@@ -19,6 +19,9 @@ use crate::project::{ModelEdge, ModelGraph, ModelNode, ModelNodeKind, ModelStep}
 /// The most nodes and edges a graph may have (files and parameters are hostile).
 pub const MAX_NODES: usize = 2000;
 pub const MAX_EDGES: usize = 4000;
+/// Identifier length and canvas coordinate limits used by graph commands and file checks.
+const MAX_NODE_ID: usize = 100;
+const MAX_NODE_POSITION: f32 = 1e6;
 /// The output port of input and tool nodes.
 pub const OUT: &str = "out";
 /// The input port of output nodes.
@@ -377,6 +380,47 @@ pub fn steps_to_graph(steps: &[ModelStep]) -> ModelGraph {
     g
 }
 
+/// Converts steps within the graph's supported limits, returning an error instead of truncating.
+pub fn checked_steps_to_graph(steps: &[ModelStep]) -> Result<ModelGraph, String> {
+    let limit = MAX_NODES / 2;
+    if steps.len() > limit {
+        return Err(format!(
+            "this model has {} steps; graph conversion supports at most {limit}. The original steps have not been changed.",
+            steps.len()
+        ));
+    }
+    let mut inputs = HashSet::new();
+    let mut edges = 0;
+    for (index, step) in steps.iter().enumerate() {
+        if !step.params.is_null() && !step.params.is_object() {
+            return Err(format!("model step {} needs an object for its parameters", index + 1));
+        }
+        let node = ModelNode { tool: Some(step.tool.clone()), kind: ModelNodeKind::Tool, ..Default::default() };
+        for port in input_ports(&node) {
+            let Some(value) = step.params.get(port.id).and_then(Value::as_str) else { continue };
+            for part in value.split(|c| port.many && c == ';').map(str::trim) {
+                if port.many && part.is_empty() {
+                    continue;
+                }
+                match part.strip_prefix('%').and_then(|n| n.parse::<usize>().ok()) {
+                    Some(n) if !(1..=index).contains(&n) => continue,
+                    Some(_) => {}
+                    None => {
+                        inputs.insert(part.to_ascii_lowercase());
+                    }
+                }
+                edges += 1;
+                if steps.len() + inputs.len() > MAX_NODES || edges > MAX_EDGES {
+                    return Err(format!(
+                        "this model exceeds the graph limits of {MAX_NODES} nodes and {MAX_EDGES} connections. The original steps have not been changed."
+                    ));
+                }
+            }
+        }
+    }
+    Ok(steps_to_graph(steps))
+}
+
 /// The graph's tools as steps in run order, edges as layer names (from inputs) and `%n` (from
 /// step n); empty when the graph has a loop.
 pub fn graph_to_steps(g: &ModelGraph) -> Vec<ModelStep> {
@@ -427,7 +471,7 @@ pub fn graph_from_json(v: &Value) -> Result<ModelGraph, String> {
     let mut g = ModelGraph::default();
     for n in nodes {
         let Ok(mut node) = serde_json::from_value::<ModelNode>(n.clone()) else { continue };
-        node.id = node.id.trim().chars().take(100).collect();
+        node.id = node.id.trim().chars().take(MAX_NODE_ID).collect();
         if node.id.is_empty() || g.nodes.iter().any(|m| m.id == node.id) {
             continue;
         }
@@ -435,8 +479,8 @@ pub fn graph_from_json(v: &Value) -> Result<ModelGraph, String> {
             node.x = 0.0;
             node.y = 0.0;
         }
-        node.x = node.x.clamp(-1e6, 1e6);
-        node.y = node.y.clamp(-1e6, 1e6);
+        node.x = node.x.clamp(-MAX_NODE_POSITION, MAX_NODE_POSITION);
+        node.y = node.y.clamp(-MAX_NODE_POSITION, MAX_NODE_POSITION);
         if !node.params.is_object() {
             node.params = Value::Null;
         }
@@ -726,6 +770,20 @@ pub(crate) fn check_file(v: &Value) -> Result<(), String> {
             if !node.extra.is_empty() {
                 return Err(format!("model node {} has unsupported fields. Update RustGIS to import this model.", index + 1));
             }
+            if node.known.id.trim() != node.known.id || node.known.id.chars().nth(MAX_NODE_ID).is_some() {
+                return Err(format!(
+                    "model node {} has an ID that would be trimmed or truncated. Use at most {MAX_NODE_ID} characters without surrounding whitespace.",
+                    index + 1
+                ));
+            }
+            if !(-MAX_NODE_POSITION..=MAX_NODE_POSITION).contains(&node.known.x)
+                || !(-MAX_NODE_POSITION..=MAX_NODE_POSITION).contains(&node.known.y)
+            {
+                return Err(format!(
+                    "model node {} has a position outside the supported canvas bounds (-{MAX_NODE_POSITION} to {MAX_NODE_POSITION})",
+                    index + 1
+                ));
+            }
             if !node.known.params.is_null() && !node.known.params.is_object() {
                 return Err(format!("model node {} needs an object for its parameters", index + 1));
             }
@@ -761,6 +819,9 @@ pub(crate) fn check_file(v: &Value) -> Result<(), String> {
                 .map_err(|_| format!("model step {} is unsupported or malformed. Update RustGIS to import this model.", index + 1))?;
             if !step.extra.is_empty() {
                 return Err(format!("model step {} has unsupported fields. Update RustGIS to import this model.", index + 1));
+            }
+            if !step.known.params.is_null() && !step.known.params.is_object() {
+                return Err(format!("model step {} needs an object for its parameters", index + 1));
             }
         }
     }

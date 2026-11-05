@@ -36,11 +36,16 @@ fn model_import_refuses_unsupported_files_without_changing_session() {
         (json!({"version": null, "graph": {"nodes": []}}), "unsupported version"),
         (json!({"version": "1", "steps": []}), "unsupported version"),
         (json!({"steps": [{"tool": "buffer", "params": {}, "when": {"enabled": true}}]}), "step 1 has unsupported fields"),
+        (json!({"steps": [{"tool": "buffer", "params": ["input"]}]}), "step 1 needs an object"),
         (json!({"steps": vec![json!({"tool": "buffer", "params": {}}); 2001]}), "at most 2000 steps"),
         (json!({"graph": {"nodes": [], "edges": [], "future": {"enabled": true}}}), "graph has unsupported fields"),
         (json!({"version": "1.0.0", "graph": graph}), "node 2"),
         (json!({"graph": {"nodes": [{"id": "t", "kind": "tool", "tool": {}}]}}), "node 1"),
-        (json!({"graph": {"nodes": [{"id": "  ", "kind": "input"}]}}), "discard 1 node(s)"),
+        (json!({"graph": {"nodes": [{"id": "", "kind": "input"}]}}), "discard 1 node(s)"),
+        (json!({"graph": {"nodes": [{"id": " padded ", "kind": "input"}]}}), "would be trimmed or truncated"),
+        (json!({"graph": {"nodes": [{"id": "a".repeat(101), "kind": "input"}]}}), "would be trimmed or truncated"),
+        (json!({"graph": {"nodes": [{"id": "a", "kind": "input", "x": 1000001}]}}), "outside the supported canvas bounds"),
+        (json!({"graph": {"nodes": [{"id": "a", "kind": "input", "y": 1e300}]}}), "outside the supported canvas bounds"),
         (json!({"graph": {"nodes": [{"id": "t", "kind": "tool"}, {"id": "t", "kind": "output"}]}}), "discard 1 node(s)"),
         (json!({"graph": {"nodes": [{"id": "t", "kind": "tool", "parms": {"distance": 37}}]}}), "unsupported fields"),
         (json!({"graph": {"nodes": [{"id": "t", "kind": "tool", "params": [37]}]}}), "needs an object"),
@@ -85,8 +90,6 @@ fn model_import_refuses_unsupported_files_without_changing_session() {
             assert!(!s.dirty());
         }
     }
-    // Direct graph commands retain their existing sanitization, outside the file boundary.
-    s.run("model.new", &json!({"name": "Direct", "graph": graph})).unwrap();
 }
 
 /// Actual graph and web-tool writers still round-trip, with or without their legacy version marker.
@@ -113,7 +116,12 @@ fn model_import_preserves_supported_and_legacy_files() {
         .unwrap();
     let graph = original.run("model.export", &json!({"name": "Graph"})).unwrap();
     let (_, web, _) = rustgis_engine::cmd::sharing::share_bytes(&mut original, "webTool", &json!({"model": "Steps"})).unwrap();
-    for (index, text) in [graph["text"].as_str().unwrap().to_string(), String::from_utf8(web).unwrap()].into_iter().enumerate() {
+    original.run("model.new", &json!({"name": "Long Steps", "steps": vec![json!({"tool": "buffer", "params": {}}); 1001]})).unwrap();
+    let (_, long, _) = rustgis_engine::cmd::sharing::share_bytes(&mut original, "webTool", &json!({"model": "Long Steps"})).unwrap();
+    for (index, text) in [graph["text"].as_str().unwrap().to_string(), String::from_utf8(web).unwrap(), String::from_utf8(long).unwrap()]
+        .into_iter()
+        .enumerate()
+    {
         let file: Value = serde_json::from_str(&text).unwrap();
         assert_eq!(file["version"], if index == 0 { json!("1.0.0") } else { json!(1) });
         for legacy in [false, true] {
@@ -131,8 +139,26 @@ fn model_import_preserves_supported_and_legacy_files() {
                 loaded.run("model.import", &params).unwrap();
                 assert_eq!(loaded.project.models[0], original.project.models[index]);
                 assert!(loaded.notices.is_empty(), "supported files need no warning");
+                if index == 2 {
+                    let output = scratch.path("keep.model.json");
+                    std::fs::write(&output, "keep").unwrap();
+                    let error = loaded.run("model.export", &json!({"path": output})).unwrap_err();
+                    assert!(error.contains("1001 steps") && error.contains("at most 1000"), "{error}");
+                    assert_eq!(std::fs::read_to_string(output).unwrap(), "keep");
+                    assert_eq!(loaded.project.models[0], original.project.models[index]);
+                }
             }
         }
+    }
+    // Graph capacity is checked before building or laying out a large multi-input step.
+    for (name, inputs) in
+        [("Connections", "A;".repeat(4001)), ("Nodes", (0..2001).map(|i| format!("Layer{i}")).collect::<Vec<_>>().join(";"))]
+    {
+        original.run("model.new", &json!({"name": name, "steps": [{"tool": "merge", "params": {"inputs": inputs}}]})).unwrap();
+        let before = original.project.models.clone();
+        let error = original.run("model.export", &json!({"name": name})).unwrap_err();
+        assert!(error.contains("graph limits"), "{error}");
+        assert_eq!(original.project.models, before);
     }
 }
 
