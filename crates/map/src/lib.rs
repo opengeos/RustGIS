@@ -1410,10 +1410,16 @@ impl Map {
     /// identities, and its streamed layers read for themselves (see [`source::SourceLayer::detach_read`]).
     pub fn detached(&self) -> Map {
         let mut copy = self.clone();
-        for source in copy.layers.iter_mut().filter_map(|l| l.source.as_mut()) {
+        copy.detach_reads();
+        copy
+    }
+
+    /// [`Map::detached`] for a map that is already a copy: its streamed layers leave a read under
+    /// way to the map it was copied from.
+    pub fn detach_reads(&mut self) {
+        for source in self.layers.iter_mut().filter_map(|l| l.source.as_mut()) {
             source.detach_read();
         }
-        copy
     }
 
     /// Identifies this live map, whatever its name or place among the project's maps.

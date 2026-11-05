@@ -3491,7 +3491,7 @@ pub(crate) fn export_work(s: &Session, p: &Value) -> Result<super::exports::Work
     let (dpi, all) = (f(p, "dpi").unwrap_or(150.0), b(p, "allPages").unwrap_or(true));
     let mut project = s.project.clone();
     for m in &mut project.maps {
-        *m = m.detached();
+        m.detach_reads();
     }
     Ok(Box::new(move || {
         let mut copy = Session::new(project);

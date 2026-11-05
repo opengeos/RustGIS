@@ -80,8 +80,8 @@ fn said(s: &mut Session, wrote: Wrote) -> CmdResult {
 /// Lands an export drawn on a copy of the map or project (Export Map, Export Layout): what
 /// drawing it said, with each notice's severity; the streamed layers whose source failed on the
 /// copy, marked on their live layers as drawing them there would have (or, where that layer is
-/// gone or opened afresh, said to be missing from the file); then that it was written
-/// to `path`, or why not. A cancelled one says only that it was cancelled.
+/// gone or opened afresh, said in one notice to be missing from the file); then that it was
+/// written to `path`, or why not. A cancelled one says only that it was cancelled.
 pub(crate) fn drawn(
     maps: &[rustgis_map::Map],
     notices: Vec<(rustgis_data::diagnostics::Severity, String)>,
@@ -111,14 +111,25 @@ pub(crate) fn drawn(
                 Severity::Info => s.notify(text, false),
             }
         }
+        let mut missing = Vec::new();
         for (instance, name, error, copied) in failed {
             let live = s.project.maps.iter_mut().flat_map(|m| m.layers.iter_mut()).find(|l| l.instance_id() == instance);
             match live.and_then(|l| l.source.as_mut()) {
-                // Its failure already shows on the layer.
-                Some(src) if src.error.is_some() => {}
-                Some(src) if src.same_opening(&copied) => src.error = Some(error),
-                _ => s.warn(format!("{path}: {name} isn't in the file, as its source couldn't be read: {error}")),
+                // The same open: its failure shows on the layer (it may already).
+                Some(src) if src.same_opening(&copied) => {
+                    src.error.get_or_insert(error);
+                }
+                _ => missing.push((name, error)),
             }
+        }
+        // One notice for them all, with a count, naming the first.
+        if let Some((name, error)) = missing.first() {
+            let n = missing.len();
+            s.warn(if n == 1 {
+                format!("{path}: {name} isn't in the file, as its source couldn't be read: {error}")
+            } else {
+                format!("{path}: {n} layers aren't in the file, as their sources couldn't be read; the first, {name}: {error}")
+            });
         }
         written?;
         s.notify(format!("Exported {path}"), false);

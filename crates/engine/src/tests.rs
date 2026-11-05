@@ -28166,6 +28166,22 @@ fn exports_run_on_another_thread() {
     assert_eq!(land(&mut s, &copy), None, "a source opened afresh keeps its own state");
     let said = s.notices_since(mark).iter().map(|n| n.text.clone()).collect::<Vec<_>>().join("\n");
     assert!(said.contains("Countries isn't in the file") && said.contains("gone.fgb: not found"), "and the file's gap is said: {said}");
+    // Opened afresh and failing again: still said, as the file lacks the layer either way.
+    s.map_mut().layers[li].source.as_mut().unwrap().error = Some("found.fgb: not found".into());
+    let mark = s.notice_mark();
+    land(&mut s, &copy);
+    assert!(s.notices_since(mark).iter().any(|n| n.text.contains("Countries isn't in the file")));
+    // Several left out: one notice, with a count.
+    let mut two = copy.clone();
+    let other = two.layers.iter().position(|l| l.name != "Countries").unwrap();
+    let mut gone = rustgis_map::source::SourceLayer::default();
+    gone.path = Some("gone.fgb".into());
+    gone.error = Some("gone.fgb: not found".into());
+    two.layers[other].source = Some(gone);
+    let mark = s.notice_mark();
+    land(&mut s, &two);
+    let missing: Vec<_> = s.notices_since(mark).iter().filter(|n| n.text.contains("in the file")).map(|n| n.text.clone()).collect();
+    assert!(missing.len() == 1 && missing[0].contains("2 layers aren't in the file"), "{missing:?}");
     s.map_mut().layers[li].source = None;
     let _ = std::fs::remove_dir_all(&dir);
 }
