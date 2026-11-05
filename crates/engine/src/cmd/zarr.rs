@@ -654,8 +654,9 @@ fn read_off_frame(zt: &ZarrTime, i: usize, key: String) -> Result<(), String> {
 /// ([`Session::follow_time_landed`]). Scripts and the command line wait for it here.
 pub(crate) fn follow_time(s: &mut Session) {
     // Only the user's own move, a command of its own: an agent, a model's or a task's step, a
-    // notebook and a script run from it wait for the step, as their next command may read it.
-    let wait = !s.zarr_off_frame || s.actor.is_some() || s.depth > 1 || s.task_running || s.notebook_running;
+    // notebook, a script's line and a plugin's call wait for the step, as their next command may
+    // read it.
+    let wait = !s.zarr_off_frame || s.actor.is_some() || s.depth > 1 || s.task_running || s.notebook_running || s.steps_running > 0;
     follow(s, wait);
 }
 
@@ -771,7 +772,7 @@ fn follow(s: &mut Session, wait: bool) {
         for (e, names) in causes {
             let text = match names.as_slice() {
                 [one] => format!("{one}: {e}"),
-                [first, rest @ ..] => format!("{first} and {} more layers: {e}", rest.len()),
+                [first, rest @ ..] => format!("{first} and {} more layer{}: {e}", rest.len(), if rest.len() == 1 { "" } else { "s" }),
                 [] => e,
             };
             s.notify(text, true);

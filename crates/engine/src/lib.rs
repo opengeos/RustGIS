@@ -641,6 +641,10 @@ pub struct Session {
     /// A notebook is running: it may not start another, even through a task or model (no
     /// unbounded recursion).
     pub(crate) notebook_running: bool,
+    /// How many commands are running other commands as their steps by calling them directly
+    /// (a script's lines, a plugin's host calls): what those steps do is the script's, not the
+    /// user's own move, so a Zarr step they move to is read before the next line runs.
+    pub(crate) steps_running: u32,
     /// How many geoprocessing history records came with the opened project (from its file).
     pub history_from_file: usize,
     /// The report open in the Report pane, if any.
@@ -949,6 +953,7 @@ impl Session {
             project_starts: 0,
             trusted_notebooks: Default::default(),
             notebook_running: false,
+            steps_running: 0,
             history_from_file: 0,
             active_report: None,
             active_presentation: None,

@@ -16959,6 +16959,12 @@ fn a_zarr_variable_follows_the_time_slider() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+/// Step `k`'s cells of [`zarr_store_at`]'s variable (`100 k + cell`), as its chunk file holds them.
+#[cfg(not(target_arch = "wasm32"))]
+fn f32s_of(base: i32) -> Vec<u8> {
+    (0..12).flat_map(|i| ((base + i) as f32).to_le_bytes()).collect()
+}
+
 /// In the app a time slider move doesn't wait for a Zarr step (#1291 step 3): the step is read on
 /// a thread of its own, the layer showing the step before until it lands; one that fails says why
 /// once it lands. An animation's frames still read each step before they draw.
@@ -17009,7 +17015,13 @@ fn a_zarr_step_is_read_off_the_frame_in_the_app() {
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
     let errors: Vec<_> = s.notices_since(mark).iter().filter(|n| n.error).map(|n| n.text.clone()).collect();
-    assert!(errors.len() == 1 && errors[0].contains("and 1 more layers"), "{errors:?}");
+    assert!(errors.len() == 1 && errors[0].contains("and 1 more layer:"), "{errors:?}");
+    // A script's line waits for its step, so the next line reads it.
+    s.run("time.goTo", &json!({"step": 0})).unwrap();
+    std::fs::write(std::path::Path::new(&path).join("t/1.0.0"), f32s_of(100)).unwrap();
+    let ran = s.run("script.run", &json!({"script": "time.goTo {\"step\": 1}"})).unwrap();
+    assert!(ran["ran"].as_array().is_some_and(|r| r.len() == 1), "{ran}");
+    assert_eq!(first(&s), Some(108.0), "a script's move is read before its next line");
     // The animation's frames draw their own steps: step 2 is read before its frame.
     let zip = std::env::temp_dir().join(format!("rustgis-zarr-offframe-{}.zip", std::process::id()));
     s.run("time.goTo", &json!({"step": 0})).unwrap();
