@@ -3098,6 +3098,34 @@ mod tests {
         pm
     }
 
+    /// What the map's code draws for a point at (`x`, `y`), composited as one at `opacity`, on
+    /// white.
+    fn drawn_see_through(
+        s: &rustgis_map::Symbol,
+        strokes: &[rustgis_map::LineStroke],
+        (x, y): (f32, f32),
+        ppp: f32,
+        opacity: f32,
+    ) -> Pixmap {
+        let mut own = Pixmap::new(200, 200).unwrap();
+        crate::canvas::with_canvas(&mut own, |c| draw_point(c, (x, y), s, strokes, ppp));
+        let mut pm = Pixmap::new(200, 200).unwrap();
+        pm.fill(tiny_skia::Color::WHITE);
+        pm.draw_pixmap(0, 0, own.as_ref(), &PixmapPaint { opacity, ..PixmapPaint::default() }, Transform::identity(), None);
+        pm
+    }
+
+    /// Whether two pictures differ by no more than a rounding over `w` × `h` from the top left
+    /// corner.
+    fn near_corner(a: &Pixmap, b: &Pixmap, w: u32, h: u32) -> bool {
+        (0..h).all(|y| {
+            (0..w).all(|x| match (a.pixel(x, y), b.pixel(x, y)) {
+                (Some(p), Some(q)) => p.red().abs_diff(q.red()).max(p.green().abs_diff(q.green())).max(p.blue().abs_diff(q.blue())) <= 2,
+                _ => false,
+            })
+        })
+    }
+
     /// Whether two pictures are the same over `w` × `h` from the top left corner.
     fn same_corner(a: &Pixmap, b: &Pixmap, w: u32, h: u32) -> bool {
         (0..h).all(|y| (0..w).all(|x| a.pixel(x, y) == b.pixel(x, y)))
@@ -3200,6 +3228,27 @@ mod tests {
         let p = recorded_legend(&map, 200).pixel(8, 7).unwrap();
         let (r, g, b) = (p.red(), p.green(), p.blue());
         assert!((185..=197).contains(&r) && r == g && g == b, "recorded: {r} {g} {b}");
+    }
+
+    /// A square turned by its own angle reaches past 0.6 of its size: its row holds its corners,
+    /// which the picture of a see-through symbol would cut.
+    #[test]
+    fn a_see_through_mark_with_its_own_angle_keeps_its_corners() {
+        let s = rustgis_map::Symbol { size: 10.0, stroke_width: 0.0, ..rustgis_map::Symbol::default_for(GeometryType::Point, 0) };
+        let mut mark = square_mark(Rgba::rgb(0, 0, 255), 40.0);
+        if let Some(m) = &mut mark.markers {
+            m.angle = 45.0;
+        }
+        let strokes = vec![mark];
+        let map = point_legend_map(|l| {
+            l.renderer = rustgis_map::Renderer::Single(s);
+            l.line_strokes = strokes.clone();
+            l.transparency = 50.0;
+        });
+        let side = 2.0 * point_marks::reach(&s, &strokes);
+        assert!(side > 50.0, "{side}");
+        let drawn = drawn_see_through(&s, &strokes, (side / 2.0, side / 2.0), 1.0, 0.5);
+        assert!(near_corner(&point_legend(&map), &drawn, side.ceil() as u32, side.ceil() as u32));
     }
 
     #[test]
