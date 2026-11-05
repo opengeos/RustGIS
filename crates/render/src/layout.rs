@@ -1707,7 +1707,8 @@ fn point_swatch(
         draw_point(pm, (cx, cy), s, strokes, ppp);
         return;
     }
-    let (left, top) = (x.floor(), y.floor());
+    // Kept on the canvas: a picture as large as the canvas then covers all of it that shows.
+    let (left, top) = (x.floor().max(0.0), y.floor().max(0.0));
     let (cw, ch) = (((x + w).ceil() - left) as u32, ((y + h).ceil() - top) as u32);
     let (cw, ch) = (cw.min(pm.width()), ch.min(pm.height()));
     if let Some(mut picture) = pm.sub(cw, ch) {
@@ -3326,6 +3327,32 @@ mod tests {
             let white = |x, y| pm.pixel(x, y).is_some_and(|p| (p.red(), p.green(), p.blue()) == (255, 255, 255));
             assert!(!white(10, 10) && !white(2040, 2040), "transparency {transparency}: it fills the box");
             assert!(white(10, 2060) && white(2060, 10), "transparency {transparency}: it stays in the box");
+        }
+    }
+
+    #[test]
+    fn a_see_through_point_larger_than_the_canvas_covers_it_from_off_its_edge() {
+        let s = rustgis_map::Symbol {
+            fill: Rgba::rgb(0, 0, 255),
+            size: 3000.0,
+            stroke_width: 0.0,
+            marker: rustgis_map::Marker::Square,
+            ..rustgis_map::Symbol::default_for(GeometryType::Point, 0)
+        };
+        let map = point_legend_map(|l| {
+            l.renderer = rustgis_map::Renderer::Single(s);
+            l.transparency = 50.0;
+        });
+        let mut pm = Pixmap::new(300, 300).unwrap();
+        pm.fill(tiny_skia::Color::WHITE);
+        let opts = LegendOptions { hide_other: false, exclude: &[], scale: 1e6 };
+        crate::canvas::with_canvas(&mut pm, |c| {
+            legend(c, Rect::from_xywh(-50.0, -50.0, 2100.0, 2100.0).unwrap(), &map, "", None, opts, 1.0)
+        });
+        // Its box runs from -50 to 1998: every corner of the canvas is in it.
+        for (x, y) in [(5, 5), (295, 5), (5, 295), (295, 295)] {
+            let white = pm.pixel(x, y).is_some_and(|p| (p.red(), p.green(), p.blue()) == (255, 255, 255));
+            assert!(!white, "({x}, {y})");
         }
     }
 
