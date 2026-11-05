@@ -52,7 +52,9 @@ and the rest of the window stay in use: the status bar shows **Add Data**, how m
 after it, and **Cancel**. Files dropped or added together are read one at a time and added in
 that order; one that asks which layers to add joins them once you choose. Cancel leaves the file being read and those waiting; opening another project, or
 switching to another map, leaves them too, and a message says which. A file read in place, a web
-service or a database adds as before, and scripts read the file where the command runs.
+service or a database adds as before, and scripts read the file where the command runs. So does
+**Delimited Text…**: it reads the file with the columns picked as you press **Add**, so a column
+that doesn't hold coordinates keeps the dialog open for another try.
 **Home › Add › Add Data › Delimited Text…** asks for a CSV or a spreadsheet first, then lists its columns to pick the x and y (or WKT)
 ones from, with the coordinate system (such as `EPSG:2263`) and the separator (changing it reads
 the columns again); `info.fileColumns` lists them for scripts. Add Data finds them itself
