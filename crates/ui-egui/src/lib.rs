@@ -4382,6 +4382,8 @@ impl RustGisApp {
         // Zarr steps the time slider moved to, read off the frame, show once they land.
         if self.session.follow_time_landed() {
             self.map.invalidate();
+            // A layout page showing the map draws the step too.
+            self.layout.redraw();
         }
         // A style added with `"view": true` moves the map once it has loaded.
         if self.session.style_view.is_some() {

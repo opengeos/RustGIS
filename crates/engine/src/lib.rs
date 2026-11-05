@@ -665,7 +665,7 @@ pub struct Session {
     /// What the project replaced during the command running held beside itself, to give back if
     /// the command fails ([`PutAside`]); and how deep commands run within commands now.
     put_aside: Option<Box<PutAside>>,
-    depth: u32,
+    pub(crate) depth: u32,
     /// Only the command's registered id, never its parameters. Nested commands restore this.
     pub(crate) diagnostic_source: Option<&'static str>,
     /// How many of the commands running now restore the project if they fail: a replacement is
