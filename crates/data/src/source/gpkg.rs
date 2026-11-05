@@ -141,14 +141,21 @@ impl GpkgSource {
                 Ok((r.get(0)?, r.get(1)?, r.get(2)?))
             })
             .map_err(err)?;
-        // Its row, with the definition when the table has that column (some writers leave it out).
+        // Its row, read cell by cell as the browser reader reads it: a code stored as a whole REAL
+        // (9377.0) is that code, and a column a writer left out (the definition) or a value of
+        // another type is that cell missing, never the whole row.
         let row = conn
             .query_row("SELECT * FROM gpkg_spatial_ref_sys WHERE srs_id = ?1", [srs_id], |r| {
-                Ok(super::GpkgSrs {
-                    organization: r.get("organization")?,
-                    code: r.get("organization_coordsys_id")?,
-                    definition: r.get("definition").ok().flatten(),
-                })
+                let text = |col: &str| match r.get_ref(col) {
+                    Ok(ValueRef::Text(t)) => Some(String::from_utf8_lossy(t).into_owned()),
+                    _ => None,
+                };
+                let code = match r.get_ref("organization_coordsys_id") {
+                    Ok(ValueRef::Integer(i)) => Some(i),
+                    Ok(ValueRef::Real(x)) if x.fract() == 0.0 && x.abs() < 9e15 => Some(x as i64),
+                    _ => None,
+                };
+                Ok(super::GpkgSrs { organization: text("organization"), code, definition: text("definition") })
             })
             .ok();
         let reproject = super::gpkg_reproject(srs_id, row, &mut notes);

@@ -621,6 +621,21 @@ fn a_gpkg_system_without_an_epsg_code_is_read_from_its_definition() {
     for (_, notes) in custom_srs_reads(&p) {
         assert!(notes.iter().any(|n| n.contains("srs_id 300001") && n.contains("can't be read")), "{notes:?}");
     }
+    // An EPSG code stored as a REAL (9377.0, in a column a writer declared DOUBLE) is that code on
+    // both readers, with no definition.
+    write_custom_srs_gpkg(&p, "EPSG", 0, "undefined");
+    rusqlite::Connection::open(&p)
+        .unwrap()
+        .execute_batch(
+            "DROP TABLE gpkg_spatial_ref_sys;
+             CREATE TABLE gpkg_spatial_ref_sys (srs_name TEXT, srs_id INTEGER PRIMARY KEY, organization TEXT, organization_coordsys_id DOUBLE, definition TEXT, description TEXT);
+             INSERT INTO gpkg_spatial_ref_sys VALUES ('Origen-Nacional', 300001, 'EPSG', 9377.0, 'undefined', '');",
+        )
+        .unwrap();
+    for (geometry, notes) in custom_srs_reads(&p) {
+        assert!(matches!(geometry, Some(Geometry::Point(c)) if (-74.3..-74.0).contains(&c.x)), "{geometry:?}");
+        assert!(notes.is_empty(), "{notes:?}");
+    }
     // An EPSG code this build doesn't know falls back to the definition.
     write_custom_srs_gpkg(&p, "EPSG", 9_999_999, ORIGEN_NACIONAL);
     for (geometry, notes) in custom_srs_reads(&p) {
