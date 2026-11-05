@@ -3316,6 +3316,32 @@ mod tests {
         assert!(same_corner(&point_legend(&map), &drawn_point(&s, &[], (12.0, 12.0), 2.0), 24, 24));
     }
 
+    /// A diagram's categories on a point layer with stacked marks: each row shows its own colour,
+    /// not the layer's marks.
+    #[test]
+    fn a_diagrams_rows_keep_their_own_mark_on_a_layer_with_stacked_marks() {
+        let (red, green) = (Rgba::rgb(255, 0, 0), Rgba::rgb(0, 255, 0));
+        let category = |field: &str, colour| rustgis_map::DiagramCategory { field: field.into(), colour };
+        let map = point_legend_map(|l| {
+            l.line_strokes = vec![square_mark(Rgba::rgb(0, 0, 0), 12.0)];
+            l.diagram = Some(rustgis_map::DiagramSettings {
+                kind: rustgis_map::DiagramKind::Pie,
+                categories: vec![category("a", red), category("b", green)],
+                size: rustgis_map::DiagramSize::Fixed(12.0),
+                start_angle: 0.0,
+                background: None,
+                stroke: rustgis_map::DiagramSettings::default_stroke(),
+                stroke_width: 0.75,
+                labels: rustgis_map::DiagramLabel::None,
+            });
+        });
+        let pm = point_legend(&map);
+        let at = |x, y| pm.pixel(x, y).map(|p| (p.red(), p.green(), p.blue()));
+        // The layer's name, then a row each, the swatch 6 points in.
+        assert_eq!(at(14, 22), Some((255, 0, 0)));
+        assert_eq!(at(14, 37), Some((0, 255, 0)));
+    }
+
     /// A class's row draws the marks the map gives its features, else its layer's.
     #[test]
     fn a_legend_draws_a_class_with_its_own_marks() {
