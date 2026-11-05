@@ -2709,7 +2709,11 @@ mod tests {
             ..Default::default()
         };
         native::get(&native::agent(), &info.request(0.0, 0.0, 10.0).unwrap(), &[]).unwrap();
-        for request in asked.iter().take(5) {
+        // Every request sent so far, background fetches included. Each of the test's own requests
+        // was sent on before its answer came back, so all of them are among these.
+        let requests: Vec<String> = asked.try_iter().collect();
+        assert!(requests.len() >= 5);
+        for request in &requests {
             assert!(request.to_ascii_lowercase().contains("x-service-key: derived-style-secret\r\n"));
             assert!(!request.contains("rustgis-login:"));
         }
