@@ -1360,7 +1360,8 @@ fn wait_for_tile_legends(map: &Map, scale: f64, exclude: &[String]) {
     }
 }
 
-/// The widest and tallest legend picture shown, in pixels, as in the Layers pane.
+/// The widest and tallest legend picture shown, in pixels, as in the Layers pane, and the largest
+/// side of a legend's point symbol, in points.
 const MAX_LEGEND_SIDE: u32 = 2048;
 
 /// A legend row's height, in points.
