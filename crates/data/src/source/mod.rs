@@ -757,6 +757,55 @@ impl Reproject {
     }
 }
 
+/// A GeoPackage table's `gpkg_spatial_ref_sys` row: organization, its code, and the definition.
+pub(crate) struct GpkgSrs {
+    pub(crate) organization: Option<String>,
+    pub(crate) code: Option<i64>,
+    pub(crate) definition: Option<String>,
+}
+
+/// A GeoPackage table's coordinate system, decided the same way on the desktop and in the browser
+/// (#1476): by its EPSG code when its organization is EPSG and the code is known, else by its WKT
+/// definition, else longitude/latitude, with a note. With no row for `srs_id`, it is taken as an
+/// EPSG code only for WGS 84 and Web Mercator, the ids writers commonly use without defining.
+pub(crate) fn gpkg_reproject(srs_id: i64, row: Option<GpkgSrs>, notes: &mut Vec<String>) -> Reproject {
+    let Some(row) = row else {
+        return Reproject::from_epsg(u32::try_from(srs_id).ok().filter(|c| matches!(c, 4326 | 3857)), notes);
+    };
+    // An EPSG code (a table-local id such as 100001 isn't one).
+    let epsg = row
+        .organization
+        .as_deref()
+        .filter(|org| org.eq_ignore_ascii_case("epsg"))
+        .and_then(|_| row.code)
+        .and_then(|code| u32::try_from(code).ok());
+    if let Some(code) = epsg.filter(|c| Crs::from_epsg(*c).is_some()) {
+        return Reproject::from_epsg(Some(code), notes);
+    }
+    // Else the WKT the row defines it with: a custom system, or a code this build doesn't know.
+    let definition = row.definition.as_deref().map(str::trim).filter(|d| !d.is_empty() && !d.eq_ignore_ascii_case("undefined"));
+    if let Some(definition) = definition {
+        match crate::raster::wkt::read_wkt(definition) {
+            Ok((crs, note)) => {
+                notes.extend(note.map(|n| format!("its coordinate system (srs_id {srs_id}): {n}")));
+                return Reproject::from_crs(crs, notes);
+            }
+            Err(e) => {
+                notes.push(format!("its coordinate system (srs_id {srs_id}) can't be read ({e}); read as longitude/latitude"));
+                return Reproject::from_crs(Crs::LonLat, notes);
+            }
+        }
+    }
+    if epsg.is_some() {
+        // A code this build doesn't know, and no definition to fall back on: said by its code.
+        return Reproject::from_epsg(epsg, notes);
+    }
+    if srs_id > 0 && srs_id != 4326 {
+        notes.push(format!("its coordinate system (srs_id {srs_id}) has no EPSG code; read as longitude/latitude"));
+    }
+    Reproject::from_crs(Crs::LonLat, notes)
+}
+
 /// The extent of an extent's edges (sampled, since edges curve when reprojected) through `f`.
 fn around(e: &Extent, f: impl Fn(Coord) -> Option<Coord>) -> Extent {
     let mut out = Extent::EMPTY;

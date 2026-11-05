@@ -141,23 +141,20 @@ impl GpkgSource {
                 Ok((r.get(0)?, r.get(1)?, r.get(2)?))
             })
             .map_err(err)?;
-        let epsg: Option<u32> = conn
-            .query_row("SELECT organization, organization_coordsys_id FROM gpkg_spatial_ref_sys WHERE srs_id = ?1", [srs_id], |r| {
-                Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
+        // Its row, with the definition when the table has that column (some writers leave it out).
+        let row = conn
+            .query_row(
+                "SELECT organization, organization_coordsys_id, definition FROM gpkg_spatial_ref_sys WHERE srs_id = ?1",
+                [srs_id],
+                |r| Ok(super::GpkgSrs { organization: r.get(0)?, code: r.get(1)?, definition: r.get(2)? }),
+            )
+            .or_else(|_| {
+                conn.query_row("SELECT organization, organization_coordsys_id FROM gpkg_spatial_ref_sys WHERE srs_id = ?1", [srs_id], |r| {
+                    Ok(super::GpkgSrs { organization: r.get(0)?, code: r.get(1)?, definition: None })
+                })
             })
-            .ok()
-            .map_or_else(
-                // No row for it: the srs_id is taken as an EPSG code only for WGS 84 and Web
-                // Mercator, the ids writers commonly use without defining.
-                || u32::try_from(srs_id).ok().filter(|c| matches!(c, 4326 | 3857)),
-                // A row: an EPSG code only when the organization is EPSG (a table-local id such as
-                // 100001 isn't one).
-                |(org, id)| if org.eq_ignore_ascii_case("epsg") { u32::try_from(id).ok() } else { None },
-            );
-        if epsg.is_none() && srs_id > 0 && srs_id != 4326 {
-            notes.push(format!("its coordinate system (srs_id {srs_id}) has no EPSG code; read as longitude/latitude"));
-        }
-        let reproject = Reproject::from_epsg(epsg, &mut notes);
+            .ok();
+        let reproject = super::gpkg_reproject(srs_id, row, &mut notes);
 
         // Columns: the primary key, the geometry and the attribute fields.
         let mut pk = None;
