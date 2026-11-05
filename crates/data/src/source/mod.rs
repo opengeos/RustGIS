@@ -770,11 +770,14 @@ pub(crate) struct GpkgSrs {
 /// EPSG code only for WGS 84 and Web Mercator, the ids writers commonly use without defining.
 pub(crate) fn gpkg_reproject(srs_id: i64, row: Option<GpkgSrs>, notes: &mut Vec<String>) -> Reproject {
     // An EPSG code: the row's when its organization is EPSG (a table-local id such as 100001
-    // isn't one); with no row, the id itself for WGS 84 and Web Mercator only.
+    // isn't one, nor is 0); with no row, or a row naming neither organization nor code, the id
+    // itself for WGS 84 and Web Mercator only.
     let epsg = match &row {
-        Some(GpkgSrs { organization: Some(org), code: Some(code), .. }) if org.eq_ignore_ascii_case("epsg") => u32::try_from(*code).ok(),
+        Some(GpkgSrs { organization: Some(org), code: Some(code), .. }) if org.eq_ignore_ascii_case("epsg") => {
+            u32::try_from(*code).ok().filter(|c| *c != 0)
+        }
+        Some(GpkgSrs { organization: None, code: None, .. }) | None => u32::try_from(srs_id).ok().filter(|c| matches!(c, 4326 | 3857)),
         Some(_) => None,
-        None => u32::try_from(srs_id).ok().filter(|c| matches!(c, 4326 | 3857)),
     };
     if let Some(crs) = epsg.and_then(Crs::from_epsg) {
         return Reproject::from_crs(crs, notes);

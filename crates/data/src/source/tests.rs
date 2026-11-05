@@ -621,6 +621,26 @@ fn a_gpkg_system_without_an_epsg_code_is_read_from_its_definition() {
     for (_, notes) in custom_srs_reads(&p) {
         assert!(notes.iter().any(|n| n.contains("srs_id 300001") && n.contains("can't be read")), "{notes:?}");
     }
+    // EPSG code 0 is no code: said, not read as longitude/latitude in silence.
+    write_custom_srs_gpkg(&p, "EPSG", 0, "undefined");
+    for (_, notes) in custom_srs_reads(&p) {
+        assert!(notes.iter().any(|n| n.contains("srs_id 300001") && n.contains("has no EPSG code")), "{notes:?}");
+    }
+    // A row naming neither organization nor code leaves Web Mercator to its id, as a missing row.
+    write_custom_srs_gpkg(&p, "NONE", 0, "undefined");
+    rusqlite::Connection::open(&p)
+        .unwrap()
+        .execute_batch(
+            "UPDATE gpkg_spatial_ref_sys SET srs_id = 3857, organization = NULL, organization_coordsys_id = NULL;
+             UPDATE gpkg_contents SET srs_id = 3857;
+             UPDATE gpkg_geometry_columns SET srs_id = 3857;",
+        )
+        .unwrap();
+    for (geometry, notes) in custom_srs_reads(&p) {
+        // Those metres in Web Mercator: about 43.8° E, 22.6° N.
+        assert!(matches!(geometry, Some(Geometry::Point(c)) if (43.0..45.0).contains(&c.x) && (22.0..23.0).contains(&c.y)), "{geometry:?}");
+        assert!(notes.is_empty(), "{notes:?}");
+    }
     // An EPSG code stored as a REAL (9377.0, in a column a writer declared DOUBLE) is that code on
     // both readers, with no definition.
     write_custom_srs_gpkg(&p, "EPSG", 0, "undefined");
