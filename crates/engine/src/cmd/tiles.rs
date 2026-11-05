@@ -776,7 +776,7 @@ fn set(s: &mut Session, p: &Value) -> CmdResult {
             if let Ok(Some(info)) = cog::info(&t.url)
                 && let Some(b) = new.bands.iter().find(|b| **b >= info.layout.bands)
             {
-                return Err(format!("the GeoTIFF has {} bands, not {}", info.layout.bands, b + 1));
+                return Err(format!("the GeoTIFF has {} bands, not {}", info.layout.bands, b.saturating_add(1)));
             }
             Some(cog::with_look(&t.url, &new))
         }

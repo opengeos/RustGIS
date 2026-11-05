@@ -1179,6 +1179,12 @@ impl Session {
             let joins = self.merge.is_some() && self.merge == self.merged && !self.undo.is_empty();
             let (at, start) = (project_log::now_ms(), web_time::Instant::now());
             let res = self.run_command(id, params);
+            // A failed overview whose wait is over is read again (the app does this each frame;
+            // a session that doesn't draw, the command line or Python, as its next command runs),
+            // waited for where the session waits for reads in place.
+            if self.read_in_place_again() {
+                self.wait_in_place_reads();
+            }
             // Pixels the command read in place (a project, an import) say what they lost.
             self.notice_landed_rasters();
             // A plugin's command waiting for its fetches answers `pending` and runs again when they
@@ -1697,12 +1703,6 @@ impl Session {
         }
     }
 
-    /// Reads again the overview of a raster layer read in place whose read failed, once its wait
-    /// is over: a minute, or what its server's `Retry-After` said, as a tile or a file's header is
-    /// read again (see `rustgis_tiles::cache::retry_wait`), doubled each time it fails again,
-    /// within the hour (`cache::backoff`: a file that never reads isn't asked for every minute all
-    /// session); until then the map is asked to draw again when the wait is over. The app calls it
-    /// each frame, with [`Session::notice_landed_rasters`]; the pixels land as the map draws.
     /// Waits for the overviews of the rasters read in place that a project, an import or a layer
     /// file began reading together (see [`crate::project::read_in_place`]), where the session
     /// waits for them ([`Session::in_place_wait`]: natively, two minutes at most for all); where
@@ -1732,8 +1732,18 @@ impl Session {
         }
     }
 
-    pub fn read_in_place_again(&mut self) {
+    /// Reads again the overview of a raster layer read in place whose read failed, once its wait
+    /// is over: a minute, or what its server's `Retry-After` said, as a tile or a file's header is
+    /// read again (see `rustgis_tiles::cache::retry_wait`), doubled each time it fails again,
+    /// within the hour (`cache::backoff`: a file that never reads isn't asked for every minute all
+    /// session); until then the map is asked to draw again when the wait is over. The app calls it
+    /// each frame, with [`Session::notice_landed_rasters`], and [`Session::run`] after each command
+    /// (a session that doesn't draw, the command line or Python, asks again that way); the pixels
+    /// land as the map draws, or are waited for where the session waits for reads in place
+    /// ([`Session::in_place_wait`]). Whether a read was started.
+    pub fn read_in_place_again(&mut self) -> bool {
         use render::rustgis_tiles::cache;
+        let mut started = false;
         for m in &mut self.project.maps {
             for l in &mut m.layers {
                 let Some(rl) = &mut l.raster else { continue };
@@ -1743,9 +1753,11 @@ impl Session {
                     cache::notify_at(at + wait);
                 } else {
                     rl.read_again();
+                    started = true;
                 }
             }
         }
+        started
     }
 
     pub fn notify(&mut self, text: impl Into<String>, error: bool) {

@@ -15569,6 +15569,97 @@ fn an_in_place_layers_failed_overview_is_read_again_when_its_wait_is_over() {
     assert_eq!(said(&s), 1, "{:?}", s.notices);
 }
 
+/// A cloud-optimised GeoTIFF added without waiting before its header is in (the browser, where
+/// nothing may wait, so an address isn't probed first as it is natively) answers that it is still
+/// being read, with no size yet rather than none; the size comes with the header (see
+/// `a_cog_added_without_waiting_lands_as_the_map_draws`).
+#[test]
+fn a_cog_added_before_its_header_is_in_says_it_is_being_read() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::time::Duration;
+    let gate = std::sync::Arc::new(AtomicBool::new(false));
+    let (base, _) = serve_gated(rustgis_data::raster::cog::example(512, 256), true, Some(gate.clone()));
+    let url = format!("{base}/scene.tif");
+    let mut s = Session::new(Project::default());
+    s.in_place_wait = false;
+    // As the browser adds it: straight in place, its header read with its overview.
+    let r = crate::cmd::layer::add_cog(&mut s, &json!({"name": "Scene"}), &url).unwrap();
+    assert_eq!((r["inPlace"].clone(), r["reading"].clone()), (json!(true), json!(true)), "{r}");
+    assert!(r["width"].is_null() && r["height"].is_null() && r["bands"].is_null(), "sized before its header is in: {r}");
+    assert!(r.get("bounds").is_none(), "{r}");
+    // Its header and overview arrive as the map draws.
+    gate.store(true, Ordering::Relaxed);
+    let layer = |s: &Session| s.map().layer_by_name("Scene").and_then(|l| l.raster.clone()).unwrap();
+    let view = rustgis_geom::Extent::new(10.0, 45.0, 11.0, 46.0);
+    let start = std::time::Instant::now();
+    while layer(&s).data.is_none() && start.elapsed() < Duration::from_secs(20) {
+        crate::render::rustgis_tiles::cache::wait(Duration::from_millis(50));
+        s.map_mut().sync_sources(&view, 1000.0, false);
+        s.notice_landed_rasters();
+    }
+    let rl = layer(&s);
+    assert_eq!(rl.data.as_ref().map(|d| (d.width, d.band_count())), Some((512, 1)), "{:?}", rl.error);
+}
+
+/// A raster layer read in place whose read can't start (a project edited by hand keeps an address
+/// that can't be read) says so once, and a repair of the project (a layer file added, maps
+/// imported) leaves it as it is: not started over, not said again.
+#[test]
+fn a_read_in_place_that_couldnt_start_isnt_started_over_by_a_repair() {
+    use rustgis_map::raster::RasterLayer;
+    let mut s = Session::new(Project::default());
+    s.map_mut().add_raster("Scene".to_string(), RasterLayer::unread_in_place("ftp://files.example.org/scene.tif"));
+    let text = serde_json::to_string(&s.project).unwrap();
+    let mut s = Session::new(Project::default());
+    s.run("project.openText", &json!({"text": text})).unwrap();
+    let layer = |s: &Session| s.project.maps[0].layer_by_name("Scene").and_then(|l| l.raster.clone()).unwrap();
+    let rl = layer(&s);
+    assert!(rl.data.is_none() && rl.read_failure().is_none(), "{rl:?}");
+    let error = rl.error.clone().expect("couldn't start");
+    assert!(error.contains("start with https://"), "{error}");
+    let said = |s: &Session| s.notices.iter().filter(|n| n.error && n.text.contains("Scene: couldn't be read in place")).count();
+    assert_eq!(said(&s), 1, "{:?}", s.notices);
+    let mut other = rustgis_map::Map::new("Other");
+    let id = other.add_dataset(crate::data::Dataset::new("Empty", crate::data::GeometryType::Point, Vec::new()));
+    crate::cmd::layer::add_layer_text(&mut s, &serde_json::to_string(other.layer(id).unwrap()).unwrap()).unwrap();
+    s.run("map.import", &json!({"text": serde_json::to_string(&rustgis_map::Map::new("Other")).unwrap()})).unwrap();
+    s.notice_landed_rasters();
+    let rl = layer(&s);
+    assert_eq!((rl.error.as_deref(), rl.read_failure().is_none()), (Some(error.as_str()), true), "started over: {rl:?}");
+    assert_eq!(said(&s), 1, "said again: {:?}", s.notices);
+}
+
+/// Where the session waits for reads in place (the command line, Python), a failed overview is
+/// read again by the next command run once its wait is over, and waited for: a long-lived session
+/// that doesn't draw has nothing else to ask again.
+#[test]
+fn a_waiting_sessions_next_command_reads_a_failed_overview_again() {
+    use std::sync::atomic::Ordering;
+    use std::time::Duration;
+    let (base, sent) = serve_refusing_first(rustgis_data::raster::cog::example(512, 256), 1);
+    let mut s = Session::new(Project::default());
+    s.map_mut().add_raster("Scene".to_string(), rustgis_map::raster::RasterLayer::unread_in_place(format!("{base}/scene.tif")));
+    let text = serde_json::to_string(&s.project).unwrap();
+    let mut s = Session::new(Project::default());
+    s.run("project.openText", &json!({"text": text})).unwrap();
+    let layer = |s: &Session| s.map().layer_by_name("Scene").and_then(|l| l.raster.clone()).unwrap();
+    assert_eq!(layer(&s).read_failure().map(|(_, _, failures)| failures), Some(1), "{:?}", layer(&s).error);
+    let said = |s: &Session| s.notices.iter().filter(|n| n.error && n.text.contains("Scene: couldn't be read in place")).count();
+    assert_eq!(said(&s), 1, "{:?}", s.notices);
+    // A command run before its wait is over doesn't read it.
+    s.run("info.project", &json!({})).unwrap();
+    assert!(layer(&s).data.is_none() && layer(&s).read_failure().is_some());
+    assert_eq!(sent.load(Ordering::Relaxed), 0, "read again before its wait was over");
+    // One run after does, waiting for it: the layer holds its overview as the command answers.
+    std::thread::sleep(Duration::from_millis(1100));
+    s.run("info.project", &json!({})).unwrap();
+    let rl = layer(&s);
+    assert!(rl.data.is_some(), "{:?}", rl.error);
+    assert!(rl.error.is_none() && rl.read_failure().is_none());
+    assert!(sent.load(Ordering::Relaxed) > 0);
+    assert_eq!(said(&s), 1, "{:?}", s.notices);
+}
+
 /// Where the session doesn't wait for reads in place (the desktop app, whose commands run on the
 /// window's own thread), a cloud-optimised GeoTIFF is added at once, its header probed as the app
 /// does, and its overview lands as the map draws; one that can't be read is added too, and says so
@@ -15584,6 +15675,13 @@ fn a_cog_added_without_waiting_lands_as_the_map_draws() {
     let r = s.run("layer.addUrl", &json!({"url": url, "name": "Scene"})).unwrap();
     assert_eq!((r["inPlace"].as_bool(), r["kind"].as_str()), (Some(true), Some("raster")), "{r}");
     assert_eq!(r["bounds"], json!([10.0, 45.0, 11.0, 46.0]), "framed on the header read: {r}");
+    // Sized by the header read, as the answer is once the overview has landed (512 a side: held
+    // whole, so not an overview of anything).
+    assert_eq!(
+        (r["width"].clone(), r["height"].clone(), r["bands"].clone(), r["reading"].clone(), r.get("overviewOf")),
+        (json!(512), json!(512), json!(1), json!(true), None),
+        "{r}"
+    );
     let layer = |s: &Session, name: &str| s.map().layer_by_name(name).and_then(|l| l.raster.clone()).unwrap();
     let rl = layer(&s, "Scene");
     assert!(rl.in_place && rl.data.is_none() && rl.error.is_none(), "added before its overview is in: {rl:?}");

@@ -270,7 +270,7 @@ pub fn window(url: &str, level: usize, cols: (u32, u32), rows: (u32, u32), bands
         return Err("the view is too large a part of the GeoTIFF to read at once".into());
     }
     if let Some(b) = bands.iter().find(|b| **b >= info.layout.bands.max(1)) {
-        return Err(format!("the GeoTIFF has {} bands, not {}", info.layout.bands, b + 1));
+        return Err(format!("the GeoTIFF has {} bands, not {}", info.layout.bands, b.saturating_add(1)));
     }
     // The chunks the window needs: those kept (marked as used, so they stay), and the others
     // asked for.
@@ -525,6 +525,17 @@ mod tests {
         // One 20 000 a side (400 million values in 6241 tiles): none.
         info.layout.levels = vec![level(20_000)];
         assert_eq!(overview_level(&info), None);
+    }
+
+    /// A project file may ask a window for any band number (its layer's renderer): the one past
+    /// the last `usize` is refused by number, not overflowed.
+    #[test]
+    fn a_window_of_the_band_past_the_last_usize_is_refused() {
+        let file = "test://past-last-band.tif";
+        let info = info_of(example_with(&Example { size: 64, tile: 16, ..Example::default() }));
+        super::super::infos().lock().unwrap().insert(file.to_string(), super::super::State::Ready(Arc::new(info)));
+        let e = window(file, 0, (0, 16), (0, 16), &[usize::MAX], ColorHint::Gray).unwrap_err();
+        assert_eq!(e, format!("the GeoTIFF has 1 bands, not {}", usize::MAX));
     }
 
     /// A window's missing tiles are filled from the level kept, but not its own no-data pixels.

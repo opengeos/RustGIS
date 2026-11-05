@@ -132,7 +132,9 @@ the overview (a large image saved without overviews) isn't added: GDAL's COG dri
 makes the overviews. A tile a sparse file leaves out is empty. A tile, the file's header or the
 overview a layer holds, that fails to arrive is asked for again a minute later, or when its server
 says to in a `Retry-After` header (with a 429 or 503 answer, within the hour); the map draws again
-then. An overview that fails again waits twice as long each time, up to an hour.
+then. An overview that fails again waits twice as long each time, up to an hour. On the command
+line and in Python, which don't draw, the next command run once the wait is over reads a failed
+overview again, waiting for it as the project did.
 Exporting the layer (Raster to PMTiles) waits for its tiles on the desktop, up to two minutes,
 and isn't written without them; in the web app, export again once the map has drawn the image.
 

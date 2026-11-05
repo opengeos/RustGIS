@@ -1145,7 +1145,7 @@ impl RasterStyle {
         let n = r.band_count();
         // A palette image's colours are of one band alone: in grey, as its tile layer drew it.
         let own = if matches!(r.color, ColorHint::Palette(_)) { "drawn in grey" } else { "drawn in its own look" };
-        let past: Vec<String> = look.bands.iter().filter(|b| **b >= n).map(|b| (b + 1).to_string()).collect();
+        let past: Vec<String> = look.bands.iter().filter(|b| **b >= n).map(|b| b.saturating_add(1).to_string()).collect();
         if !past.is_empty() {
             return Some(format!("its address asks for band(s) {} (from 1), which it hasn't ({n} band(s)): {own}", past.join(", ")));
         }
@@ -1636,6 +1636,14 @@ mod tests {
         let mut rl = RasterLayer::in_place(r, "test://look-first.tif").with_look(AddressLook { bands: vec![9], range: None });
         assert_eq!(rl.lost_unsaid().len(), 2);
         assert!(rl.lost_unsaid().is_empty());
+    }
+
+    /// A project file may ask for any band number: the one past the last `usize` is said by
+    /// number, not overflowed.
+    #[test]
+    fn a_look_asking_for_the_band_past_the_last_usize_is_said() {
+        let lost = RasterStyle::look_lost(&dem(), &AddressLook { bands: vec![usize::MAX], range: None }).unwrap();
+        assert!(lost.contains(&format!("band(s) {} (from 1)", usize::MAX)), "{lost}");
     }
 
     #[test]

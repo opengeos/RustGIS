@@ -3478,6 +3478,7 @@ fn add_in_place(
         rustgis_map::raster::RasterLayer::opening_in_place(file)
     };
     let layer = layer.with_look(super::tiles::address_look(look));
+    let landed = layer.data.is_some();
     let mut r = super::raster::add_raster_after(s, name, layer, zoom)?;
     if let Ok(Some(info)) = cog::info(file) {
         let [w, so, e, n] = info.bounds;
@@ -3487,6 +3488,30 @@ fn add_in_place(
             s.zoom_to(&rustgis_geom::Extent::new(w, so, e, n));
         }
         r["bounds"] = json!(info.bounds);
+        // Added before its overview is in: sized by the header as the answer would be once the
+        // overview had landed (the level the layer holds, every band, and the full size when the
+        // level isn't it).
+        if !landed && let Some(level) = cog::raster::overview_level(&info) {
+            let levels = &info.layout.levels;
+            if let Some(l) = levels.get(level) {
+                r["width"] = json!(l.width);
+                r["height"] = json!(l.height);
+                r["bands"] = json!(info.layout.bands);
+            }
+            if let Some(full) = levels.first().filter(|_| level > 0) {
+                r["overviewOf"] = json!([full.width, full.height]);
+            }
+        }
+    }
+    if !landed {
+        // Its overview is still being read (it lands as the map draws): a size the answer can't
+        // give yet (the header not in, or no level small enough to hold) is null, not 0.
+        r["reading"] = json!(true);
+        if r["width"].as_u64() == Some(0) {
+            for key in ["width", "height", "bands"] {
+                r[key] = Value::Null;
+            }
+        }
     }
     r["inPlace"] = json!(true);
     r["kind"] = json!("raster");

@@ -1143,8 +1143,9 @@ impl Project {
 /// ([`crate::Session::wait_in_place_reads`]); elsewhere they land as the map draws. One read from
 /// an S3 bucket waits for its connection (see [`crate::s3_connections::resolve_project_s3`]). One
 /// that failed is left to [`crate::Session::read_in_place_again`], which reads it again once its
-/// wait is over: a repair of the project (a layer file added, maps imported) doesn't start that
-/// wait over.
+/// wait is over, and one that couldn't start (an address the project keeps that can't be read)
+/// stays as it is, said once: a repair of the project (a layer file added, maps imported) doesn't
+/// start either over.
 pub(crate) fn read_in_place(m: &mut Map) {
     let mut named: Vec<(String, &mut rustgis_map::raster::RasterLayer)> = m
         .layers
@@ -1152,7 +1153,7 @@ pub(crate) fn read_in_place(m: &mut Map) {
         .filter_map(|l| {
             let name = l.name.clone();
             let rl = l.raster.as_mut()?;
-            (rl.in_place && rl.read_failure().is_none() && !rl.path.as_deref().is_some_and(crate::s3_connections::is_s3_backed))
+            (rl.in_place && rl.error.is_none() && !rl.path.as_deref().is_some_and(crate::s3_connections::is_s3_backed))
                 .then_some((name, rl))
         })
         .collect();

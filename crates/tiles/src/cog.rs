@@ -83,7 +83,7 @@ impl Look {
     pub fn suffix(&self) -> String {
         let mut parts = Vec::new();
         if !self.bands.is_empty() {
-            parts.push(format!("bands={}", self.bands.iter().map(|b| (b + 1).to_string()).collect::<Vec<_>>().join(",")));
+            parts.push(format!("bands={}", self.bands.iter().map(|b| b.saturating_add(1).to_string()).collect::<Vec<_>>().join(",")));
         }
         if let Some((lo, hi)) = self.range {
             parts.push(format!("range={lo},{hi}"));
