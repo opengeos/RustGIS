@@ -1251,14 +1251,14 @@ impl LegendRow<'_> {
     /// The side of the square its point symbol takes at 1:`scale`, in points, as far as its marks
     /// reach ([`point_marks::reach`]); 0 for any other row. No larger than a legend picture.
     fn symbol_side(&self, scale: f64) -> f32 {
-        let (l, s, strokes) = match self {
-            LegendRow::Plain(l) => (*l, l.renderer.symbol_for(&l.dataset, 0), l.line_strokes.as_slice()),
-            LegendRow::Class(l, en) => (*l, en.symbol, class_strokes(l, en)),
-            _ => return 0.0,
-        };
+        let (LegendRow::Plain(l) | LegendRow::Class(l, _)) = self else { return 0.0 };
         if l.geometry_type() != GeometryType::Point {
             return 0.0;
         }
+        let (s, strokes) = match self {
+            LegendRow::Class(_, en) => (en.symbol, class_strokes(l, en)),
+            _ => (l.renderer.symbol_for(&l.dataset, 0), l.line_strokes.as_slice()),
+        };
         (2.0 * point_marks::reach(&s, strokes) * l.size_factor(scale)).min(MAX_LEGEND_SIDE as f32)
     }
 
