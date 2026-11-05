@@ -91,6 +91,14 @@ fn model_import_refuses_unsupported_files_without_changing_session() {
             "connection 1 refers to an unsupported port",
         ),
         (
+            json!({"graph": {"nodes": [{"id": "a", "kind": "input", "layer": "A"},
+            {"id": "b", "kind": "input", "layer": "B"}, {"id": "t", "kind": "tool", "tool": "buffer"}], "edges": [
+                {"from": "a", "fromPort": "out", "to": "t", "toPort": "input"},
+                {"from": "b", "fromPort": "out", "to": "t", "toPort": "input"}
+            ]}}),
+            "connection 2 duplicates a single-valued input port",
+        ),
+        (
             json!({"graph": {"nodes": [{"id": "a", "kind": "tool", "tool": "buffer"},
             {"id": "b", "kind": "tool", "tool": "buffer"}], "edges": [
                 {"from": "a", "fromPort": "out", "to": "b", "toPort": "input"},

@@ -835,12 +835,19 @@ pub(crate) fn check_file(v: &Value) -> Result<(), String> {
             ));
         }
         let by_id: HashMap<&str, &ModelNode> = normalized.nodes.iter().map(|n| (n.id.as_str(), n)).collect();
+        let mut single_inputs = HashSet::new();
         for (index, edge) in normalized.edges.iter().enumerate() {
             let from_known = by_id.get(edge.from.as_str()).is_some_and(|n| output_ports(n).iter().any(|p| p.id == edge.from_port));
-            let to_known = by_id.get(edge.to.as_str()).is_some_and(|n| input_ports(n).iter().any(|p| p.id == edge.to_port));
-            if !from_known || !to_known {
+            let to_port = by_id.get(edge.to.as_str()).and_then(|n| input_ports(n).into_iter().find(|p| p.id == edge.to_port));
+            if !from_known || to_port.is_none() {
                 return Err(format!(
                     "model connection {} refers to an unsupported port. Update RustGIS or fix the connection before importing this model.",
+                    index + 1
+                ));
+            }
+            if to_port.is_some_and(|p| !p.many) && !single_inputs.insert((edge.to.as_str(), edge.to_port.as_str())) {
+                return Err(format!(
+                    "model connection {} duplicates a single-valued input port. Keep one connection to this port before importing this model.",
                     index + 1
                 ));
             }
