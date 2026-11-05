@@ -1256,7 +1256,7 @@ impl LegendRow<'_> {
             return 0.0;
         }
         let (s, strokes) = match self {
-            LegendRow::Class(_, en) => (en.symbol, class_strokes(l, en)),
+            LegendRow::Class(_, en) => (en.symbol, row_strokes(l, en)),
             _ => (l.renderer.symbol_for(&l.dataset, 0), l.line_strokes.as_slice()),
         };
         (2.0 * point_marks::reach(&s, strokes) * l.size_factor(scale)).min(MAX_LEGEND_SIDE as f32)
@@ -1274,7 +1274,7 @@ impl LegendRow<'_> {
 
 /// The stacked strokes a legend's class row draws: its class's own, else its layer's, as
 /// [`rustgis_map::Layer::strokes`] finds them for a feature.
-fn class_strokes<'a>(l: &'a rustgis_map::Layer, en: &'a LegendEntry) -> &'a [rustgis_map::LineStroke] {
+fn row_strokes<'a>(l: &'a rustgis_map::Layer, en: &'a LegendEntry) -> &'a [rustgis_map::LineStroke] {
     if en.strokes.is_empty() { &l.line_strokes } else { &en.strokes }
 }
 
@@ -1481,15 +1481,7 @@ fn legend(pm: &mut Canvas, r: Rect, map: &Map, title: &str, drawn: Option<&[(u32
                 text::text_at(pm, name, r.x(), y + line / 2.0, 9.0 * 1.33 * ppp, dark, true, text::Align::Left, false);
             }
             LegendRow::Class(l, en) => {
-                swatch(
-                    pm,
-                    (r.x() + 6.0 * ppp, y, sw, height),
-                    l,
-                    (&en.symbol, class_strokes(l, &en)),
-                    map.layer_opacity(l),
-                    opts.scale,
-                    ppp,
-                );
+                swatch(pm, (r.x() + 6.0 * ppp, y, sw, height), l, (&en.symbol, row_strokes(l, &en)), map.layer_opacity(l), opts.scale, ppp);
                 text::text_at(
                     pm,
                     &en.label,
