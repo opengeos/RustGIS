@@ -1678,6 +1678,16 @@ fn swatch(
     }
 }
 
+/// A point's symbol at (`x`, `y`), unturned, by the path the map takes for it: its marker, or
+/// `strokes`' stacked marks.
+fn draw_point(pm: &mut Canvas, (x, y): (f32, f32), s: &rustgis_map::Symbol, strokes: &[rustgis_map::LineStroke], ppp: f32) {
+    if point_marks::plain(strokes, 0.0) {
+        crate::draw_marker(pm, x, y, s, 1.0, None, ppp);
+    } else {
+        point_marks::draw(pm, x, y, s, strokes, 0.0, None, ppp);
+    }
+}
+
 /// A point layer's symbol in the middle of the box, as the map draws its points: `strokes`' stacked
 /// marks or its marker, at `ppp` (with the layer's reference scale), unturned. See-through, the
 /// marks are composited as one, as the map composites the layer, in a picture no larger than the
@@ -1694,14 +1704,14 @@ fn point_swatch(
     // A thousandth of slack: the box's size went through a rounding of its own.
     let fits = 2.0 * point_marks::reach(s, strokes) * ppp <= w.min(h) * 1.001;
     if opacity >= 0.999 && fits {
-        point_marks::draw(pm, cx, cy, s, strokes, 0.0, None, ppp);
+        draw_point(pm, (cx, cy), s, strokes, ppp);
         return;
     }
     let (left, top) = (x.floor(), y.floor());
     let (cw, ch) = (((x + w).ceil() - left) as u32, ((y + h).ceil() - top) as u32);
     let (cw, ch) = (cw.min(pm.width()), ch.min(pm.height()));
     if let Some(mut picture) = pm.sub(cw, ch) {
-        point_marks::draw(&mut picture, cx - left, cy - top, s, strokes, 0.0, None, ppp);
+        draw_point(&mut picture, (cx - left, cy - top), s, strokes, ppp);
         // A recording keeps what lies past its picture's edge, so it is cut here.
         let clip = Rect::from_xywh(left, top, cw as f32, ch as f32).map(|r| crate::vector::Clip {
             path: PathBuilder::from_rect(r),
@@ -3064,7 +3074,13 @@ mod tests {
     fn drawn_point(s: &rustgis_map::Symbol, strokes: &[rustgis_map::LineStroke], (x, y): (f32, f32), ppp: f32) -> Pixmap {
         let mut pm = Pixmap::new(200, 200).unwrap();
         pm.fill(tiny_skia::Color::WHITE);
-        crate::canvas::with_canvas(&mut pm, |c| point_marks::draw(c, x, y, s, strokes, 0.0, None, ppp));
+        crate::canvas::with_canvas(&mut pm, |c| {
+            if strokes.is_empty() {
+                crate::draw_marker(c, x, y, s, 1.0, None, ppp);
+            } else {
+                point_marks::draw(c, x, y, s, strokes, 0.0, None, ppp);
+            }
+        });
         pm
     }
 
@@ -3117,6 +3133,19 @@ mod tests {
         let got = point_legend(&map);
         let want = drawn_point(&s, &[], (6.0 + 8.0, 15.0 + 7.5), 1.0);
         assert!((15..30).all(|y| (6..22).all(|x| got.pixel(x, y) == want.pixel(x, y))), "the class's triangle");
+    }
+
+    #[test]
+    fn a_legend_draws_a_hairline_outline_as_the_map_does() {
+        // Thinner than half a pixel: the map's marker strokes it at its width, with no minimum.
+        let s = rustgis_map::Symbol {
+            size: 10.0,
+            stroke: Rgba::rgb(0, 0, 255),
+            stroke_width: 0.1,
+            ..rustgis_map::Symbol::default_for(GeometryType::Point, 0)
+        };
+        let map = point_legend_map(|l| l.renderer = rustgis_map::Renderer::Single(s));
+        assert!(same_corner(&point_legend(&map), &drawn_point(&s, &[], (8.0, 7.5), 1.0), 16, 15));
     }
 
     #[test]
