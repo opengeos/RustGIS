@@ -3301,23 +3301,27 @@ mod tests {
         }
         let s = |c| Symbol::default_for(GeometryType::Point, c);
         let stroke = |width| LineStroke { width: Some(width), ..LineStroke::default() };
-        let r = Renderer::Unique {
-            field: "g".into(),
-            classes: vec![("a".into(), s(0)), ("b".into(), s(1))],
-            other: s(2),
-            ramp: Ramp::Ember,
-            class_labels: Default::default(),
-            other_label: None,
-            class_strokes: [("a".to_string(), vec![stroke(1.0)])].into_iter().collect(),
-            other_strokes: vec![stroke(2.0)],
-            class_fills: Default::default(),
-            other_fills: Vec::new(),
-            expression: None,
-        };
-        // The whole list and the classes of the features kept.
-        for rows in [r.legend(), r.legend_for(&d, &[])] {
-            let strokes: Vec<_> = rows.iter().map(|e| e.strokes.clone()).collect();
-            assert_eq!(strokes, [vec![stroke(1.0)], vec![], vec![stroke(2.0)]]);
+        // Stored in either order, the rows come by label and each keeps its class's strokes.
+        let (a, b) = (("a".to_string(), s(0)), ("b".to_string(), s(1)));
+        for classes in [vec![a.clone(), b.clone()], vec![b, a]] {
+            let r = Renderer::Unique {
+                field: "g".into(),
+                classes,
+                other: s(2),
+                ramp: Ramp::Ember,
+                class_labels: Default::default(),
+                other_label: None,
+                class_strokes: [("a".to_string(), vec![stroke(1.0)])].into_iter().collect(),
+                other_strokes: vec![stroke(2.0)],
+                class_fills: Default::default(),
+                other_fills: Vec::new(),
+                expression: None,
+            };
+            // The whole list and the classes of the features kept.
+            for rows in [r.legend(), r.legend_for(&d, &[])] {
+                let strokes: Vec<_> = rows.iter().map(|e| e.strokes.clone()).collect();
+                assert_eq!(strokes, [vec![stroke(1.0)], vec![], vec![stroke(2.0)]]);
+            }
         }
         let g = Renderer::Graduated {
             field: "v".into(),
