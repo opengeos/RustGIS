@@ -1,7 +1,7 @@
-//! Export Features and Export Raster on the desktop write their file on a thread of their own
-//! (#1291 step 3), so a large layer or raster doesn't hold the window: the status bar shows the
-//! export under way, how far it has come and Cancel, and [`land`] says what it wrote, as the
-//! command says when it runs here.
+//! Export Features, Export Raster, Export Map and Export Layout on the desktop write their file
+//! on a thread of their own (#1291 step 3), so a large layer, raster or map doesn't hold the
+//! window: the status bar shows the export under way, how far it has come and Cancel, and
+//! [`land`] says what it wrote, as the command says when it runs here.
 
 use std::sync::Arc;
 
@@ -57,7 +57,9 @@ pub fn land(app: &mut RustGisApp) -> bool {
     match done {
         // Its notices are the command's; the answer was for a script, which waits for its own.
         Ok(wrote) => {
-            exports::export_land(&mut app.session, wrote);
+            if let Err(e) = exports::export_land(&mut app.session, wrote) {
+                app.session.notify(e, true);
+            }
         }
         Err(e) => app.session.notify(e, true),
     }
@@ -130,6 +132,28 @@ mod tests {
         assert!(app.export_job.is_none());
         let left: Vec<_> = std::fs::read_dir(&dir).unwrap().filter_map(|e| e.ok()).map(|e| e.file_name()).collect();
         assert!(left.iter().all(|n| !n.to_string_lossy().ends_with(".tmp")), "{left:?}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn export_map_and_export_layout_draw_on_a_thread() {
+        let mut app = RustGisApp::with_sample();
+        app.run("layout.new", json!({"page": "a4", "template": "map"})).unwrap();
+        let dir = std::env::temp_dir().join(format!("rustgis-export-drawn-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        for (command, name, file) in [("ui.exportMap", "Export Map", "map.png"), ("ui.exportLayout", "Export Layout", "layout.png")] {
+            let path = dir.join(file);
+            crate::dialogs::PICKED.with(|c| *c.borrow_mut() = Some(path.display().to_string()));
+            assert_eq!(app.run(command, Value::Null).unwrap()["started"], name);
+            let end = std::time::Instant::now() + std::time::Duration::from_secs(120);
+            while land(&mut app) {
+                assert!(std::time::Instant::now() < end, "{name} never landed");
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            let exported = format!("Exported {}", path.display());
+            assert!(app.session.notices.iter().any(|n| n.text == exported && !n.error), "{:?}", app.session.notices.last());
+            assert!(std::fs::metadata(&path).is_ok_and(|m| m.len() > 100), "{file}");
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

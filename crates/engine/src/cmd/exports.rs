@@ -1,5 +1,5 @@
 //! Exports that write a file from what the session shares (a layer's features, a raster's
-//! pixels). A script or the command line writes it where the command is called; the app writes it
+//! pixels, a copy of the map or project to draw). A script or the command line writes it where the command is called; the app writes it
 //! on a thread of its own with progress and Cancel (#1291 step 3): [`export_start`] reads the
 //! session, [`ExportRun::run`] writes the file, and [`export_land`] says what was written, as the
 //! command would have. It lands whatever layer is active or project is open by then: the file is
@@ -10,7 +10,7 @@ use serde_json::Value;
 use crate::{CmdResult, Session};
 
 /// What an export wrote: the command's answer, and what it says of the file (the last says it
-/// was exported).
+/// was exported, unless `then` says it).
 pub struct Wrote {
     pub(crate) answer: Value,
     pub(crate) notes: Vec<String>,
@@ -19,20 +19,23 @@ pub struct Wrote {
     pub(crate) then: Option<Then>,
 }
 
-/// What an export does to the session once its file is written, and adds to its answer.
-pub(crate) type Then = Box<dyn FnOnce(&mut Session, &mut Value) + Send>;
+/// What an export does to the session once its file is written, and adds to its answer; or the
+/// failure it says once what came before it was said (a layout's warnings, then its error).
+pub(crate) type Then = Box<dyn FnOnce(&mut Session, &mut Value) -> Result<(), String> + Send>;
 
 /// The writing of an export, its inputs read: it needs no session.
 pub(crate) type Work = Box<dyn FnOnce() -> Result<Wrote, String> + Send>;
 
 /// What an export reads of the session, and the work that writes its file.
-type Start = fn(&Session, &Value) -> Result<Work, String>;
+type Start = fn(&mut Session, &Value) -> Result<Work, String>;
 
 /// The exports the app writes on another thread ([`export_start`]), each with what it is called
 /// (in its progress, and a cancelled run's error) and what it reads of the session.
 const IN_BACKGROUND: &[(&str, &str, Start)] = &[
-    ("share.exportLayer", "Export Features", super::share::layer_work),
-    ("share.exportRaster", "Export Raster", super::raster::export_work),
+    ("share.exportLayer", "Export Features", |s, p| super::share::layer_work(s, p)),
+    ("share.exportRaster", "Export Raster", |s, p| super::raster::export_work(s, p)),
+    ("share.exportMap", "Export Map", |s, p| super::share::map_work(s, p)),
+    ("layout.export", "Export Layout", |s, p| super::layout::export_work(s, p)),
 ];
 
 /// `command` and what it is called, when the app writes its file on another thread (see
@@ -47,7 +50,7 @@ pub(crate) fn write_here(s: &mut Session, p: &Value, command: &str) -> CmdResult
     let work = start(s, p)?;
     // Where a person at a terminal can stop it with Ctrl-C, as on the app's thread.
     let wrote = if s.stoppable { written_under(name, &rustgis_analysis::control::Control::stoppable(), work)? } else { work()? };
-    Ok(said(s, wrote))
+    said(s, wrote)
 }
 
 /// `work` under `control`, as [`rustgis_analysis::run_under`] runs it, except that a file once
@@ -61,16 +64,16 @@ fn written_under(name: &str, control: &std::sync::Arc<rustgis_analysis::control:
     }
 }
 
-/// Says what an export wrote, and gives its answer.
-fn said(s: &mut Session, wrote: Wrote) -> Value {
+/// Says what an export wrote, and gives its answer (or the failure its `then` says).
+fn said(s: &mut Session, wrote: Wrote) -> CmdResult {
     let Wrote { mut answer, notes, then } = wrote;
     for note in notes {
         s.notify(note, false);
     }
     if let Some(then) = then {
-        then(s, &mut answer);
+        then(s, &mut answer)?;
     }
-    answer
+    Ok(answer)
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -107,8 +110,9 @@ pub fn export_start(s: &mut Session, command: &str, p: &Value) -> Result<ExportR
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-/// Says what [`ExportRun::run`] wrote, as its command would have, and gives its answer.
-pub fn export_land(s: &mut Session, wrote: Wrote) -> Value {
+/// Says what [`ExportRun::run`] wrote, as its command would have, and gives its answer (or its
+/// failure).
+pub fn export_land(s: &mut Session, wrote: Wrote) -> CmdResult {
     said(s, wrote)
 }
 

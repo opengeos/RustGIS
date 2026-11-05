@@ -28047,7 +28047,12 @@ fn exports_run_on_another_thread() {
     let dir = std::env::temp_dir().join(format!("rustgis-exports-thread-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let at = |name: &str| dir.join(name).display().to_string();
+    s.run("layout.new", &json!({"page": "a4", "orientation": "landscape", "template": "map"})).unwrap();
     for (command, file, p) in [
+        ("share.exportMap", "map.png", json!({"width": 64, "height": 48})),
+        ("layout.export", "layout.png", json!({"dpi": 48})),
+        ("layout.export", "layout.pdf", json!({"dpi": 48})),
+        ("layout.export", "layout.svg", json!({"dpi": 48})),
         ("share.exportLayer", "countries.geojson", json!({"layer": "Countries"})),
         ("share.exportLayer", "countries.shp", json!({"layer": "Countries"})),
         ("share.exportLayer", "countries.gpkg", json!({"layer": "Countries", "crs": "EPSG:3857"})),
@@ -28071,7 +28076,7 @@ fn exports_run_on_another_thread() {
         let mark = s.notice_mark();
         let wrote = std::thread::spawn(move || run.run(&Control::new())).join().unwrap().unwrap();
         assert!(s.notices_since(mark).is_empty(), "{command}: nothing is said before it lands");
-        let answer_there = export_land(&mut s, wrote);
+        let answer_there = export_land(&mut s, wrote).unwrap();
         assert_eq!(said(&s, mark, &there), said_here, "{command} {file}");
         // The path as it appears in JSON: on Windows its backslashes are escaped there.
         let unpathed = |v: &Value, path: &str| {
@@ -28096,8 +28101,29 @@ fn exports_run_on_another_thread() {
     assert!(export_start(&mut s, "share.exportLayer", &json!({"layer": "nowhere", "path": at("x.geojson")})).is_err());
     assert!(export_start(&mut s, "share.exportLayer", &json!({"layer": "Countries", "path": at("x.gpkg"), "crs": "EPSG:nope"})).is_err());
     assert!(export_start(&mut s, "share.exportRaster", &json!({"layer": dem, "path": at("x.tif"), "band": 99})).is_err());
-    // Map and layout exports draw the map: they still run where they're called.
-    assert!(runs_in_background("share.exportMap").is_none() && runs_in_background("layout.export").is_none());
+    assert!(export_start(&mut s, "layout.export", &json!({"path": at("x.jpg")})).is_err(), "a format it can't write");
+    // Map and layout exports draw a copy of what was there when they started: moving the map or
+    // removing the layout meanwhile changes nothing in the file.
+    let (here, there) = (at("still_here.png"), at("still_there.png"));
+    s.run("share.exportMap", &json!({"path": here, "width": 64, "height": 48})).unwrap();
+    let run = export_start(&mut s, "share.exportMap", &json!({"path": there, "width": 64, "height": 48})).unwrap();
+    s.map_mut().camera.res *= 4.0;
+    run.run(&Control::new()).unwrap();
+    assert_eq!(std::fs::read(&there).unwrap(), std::fs::read(&here).unwrap());
+    let (here, there) = (at("still_here.svg"), at("still_there.svg"));
+    s.map_mut().camera.res /= 4.0;
+    s.run("layout.export", &json!({"path": here, "dpi": 48})).unwrap();
+    let run = export_start(&mut s, "layout.export", &json!({"path": there, "dpi": 48})).unwrap();
+    let layouts = std::mem::take(&mut s.project.layouts);
+    run.run(&Control::new()).unwrap();
+    assert_eq!(std::fs::read(&there).unwrap(), std::fs::read(&here).unwrap());
+    s.project.layouts = layouts;
+    // A layout export that fails says why when it lands, as it does here.
+    let nowhere = dir.join("no").join("such.png").display().to_string();
+    let here = s.run("layout.export", &json!({"path": nowhere, "dpi": 48})).unwrap_err();
+    let run = export_start(&mut s, "layout.export", &json!({"path": nowhere, "dpi": 48})).unwrap();
+    let wrote = run.run(&Control::new()).unwrap();
+    assert_eq!(export_land(&mut s, wrote).unwrap_err(), here);
     let _ = std::fs::remove_dir_all(&dir);
 }
 
