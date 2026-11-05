@@ -769,26 +769,30 @@ pub(crate) struct GpkgSrs {
 /// definition, else longitude/latitude, with a note. With no row for `srs_id`, it is taken as an
 /// EPSG code only for WGS 84 and Web Mercator, the ids writers commonly use without defining.
 pub(crate) fn gpkg_reproject(srs_id: i64, row: Option<GpkgSrs>, notes: &mut Vec<String>) -> Reproject {
+    // The WKT the row defines the system with, if any. ("undefined", or a writer's "undefined
+    // geographic …", defines nothing.)
+    let definition = row
+        .as_ref()
+        .and_then(|r| r.definition.as_deref())
+        .map(str::trim)
+        .filter(|d| !d.is_empty() && !d.get(..9).is_some_and(|p| p.eq_ignore_ascii_case("undefined")));
     // An EPSG code: the row's when its organization is EPSG (a table-local id such as 100001
-    // isn't one, nor is 0); with no row, or a row naming neither organization nor code, the id
-    // itself for WGS 84 and Web Mercator only.
+    // isn't one, nor is 0); with no row, or a row naming neither organization nor code nor a
+    // definition, the id itself for WGS 84 and Web Mercator only.
     let epsg = match &row {
         Some(GpkgSrs { organization: Some(org), code: Some(code), .. }) if org.eq_ignore_ascii_case("epsg") => {
             u32::try_from(*code).ok().filter(|c| *c != 0)
         }
-        Some(GpkgSrs { organization: None, code: None, .. }) | None => u32::try_from(srs_id).ok().filter(|c| matches!(c, 4326 | 3857)),
+        Some(GpkgSrs { organization: None, code: None, .. }) if definition.is_none() => {
+            u32::try_from(srs_id).ok().filter(|c| matches!(c, 4326 | 3857))
+        }
+        None => u32::try_from(srs_id).ok().filter(|c| matches!(c, 4326 | 3857)),
         Some(_) => None,
     };
     if let Some(crs) = epsg.and_then(Crs::from_epsg) {
         return Reproject::from_crs(crs, notes);
     }
     // Else the WKT the row defines it with: a custom system, or a code this build doesn't know.
-    // ("undefined", or a writer's "undefined geographic …", defines nothing.)
-    let definition = row
-        .as_ref()
-        .and_then(|r| r.definition.as_deref())
-        .map(str::trim)
-        .filter(|d| !d.is_empty() && !d.get(..9).is_some_and(|p| p.eq_ignore_ascii_case("undefined")));
     if let Some(definition) = definition {
         let (crs, note) = crate::raster::wkt::read_wkt(definition)
             .map(|(crs, note)| (crs, note.map(|n| format!("its coordinate system (srs_id {srs_id}): {n}"))))
