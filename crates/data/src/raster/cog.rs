@@ -347,7 +347,11 @@ fn read_layout(r: Sparse) -> Result<Parse> {
         }
         ColorType::RGBA(_) => (4, ColorHint::Rgb { alpha: true }),
         ColorType::Multiband { num_samples, .. } => {
-            let color = super::geotiff::multiband_color(&mut dec, num_samples);
+            let color = if super::geotiff::is_rgbi(&mut dec) {
+                ColorHint::Rgb { alpha: false }
+            } else {
+                super::geotiff::multiband_color(&mut dec, num_samples)
+            };
             (num_samples.max(1) as usize, color)
         }
         other => return Ok(Parse::NotTiled(format!("{other:?} images are read whole"))),
@@ -427,6 +431,10 @@ fn read_layout(r: Sparse) -> Result<Parse> {
         let subfile = dec.find_tag_unsigned::<u32>(Tag::NewSubfileType).ok().flatten().unwrap_or(0);
         // Transparency masks are skipped.
         if subfile & 4 == 0 {
+            let samples = dec.find_tag_unsigned::<u16>(Tag::SamplesPerPixel).map_err(err)?.unwrap_or(1);
+            if usize::from(samples) != bands {
+                return Err(err(format!("image {index} has {samples} samples per pixel, but the full image has {bands}")));
+            }
             let Some(tw) = dec.find_tag_unsigned::<u32>(Tag::TileWidth).ok().flatten() else {
                 if index == 0 {
                     return Ok(Parse::NotTiled("a GeoTIFF in strips is read whole".into()));

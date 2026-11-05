@@ -567,13 +567,17 @@ fn samples<R: Read + Seek>(dec: &mut Decoder<R>) -> usize {
     dec.find_tag_unsigned::<u16>(Tag::SamplesPerPixel).ok().flatten().unwrap_or(1).max(1) as usize
 }
 
-/// A reader that shows palette images as grey ones: the `tiff` crate decodes no palette images, but
-/// decodes their colour indices as grey samples, and the colour table is read from the ColorMap tag
-/// as it is. The only change is the PhotometricInterpretation value (3 → 1) in each image's IFD.
+/// A reader that shows palette and RGBI images as grey/multiband ones to the TIFF decoder.
+/// Palette indices are coloured from ColorMap afterwards. RGB with an unspecified fourth sample
+/// is decoded with all four bands: `tiff` otherwise drops the fourth before undoing the predictor,
+/// corrupting RGB (https://github.com/image-rs/image-tiff/issues/425). Only the in-memory view of
+/// PhotometricInterpretation is changed; RGBI is still shown as RGB, without an alpha band.
 pub(crate) struct Unpaletted<R> {
     inner: R,
-    /// Where each palette image's PhotometricInterpretation value is, and what to show there.
+    /// Where each patched image's PhotometricInterpretation value is, and what to show there.
     patches: Vec<(u64, [u8; 2])>,
+    /// IFDs whose RGB plus unspecified sample is shown to the decoder as multiband.
+    rgb_ifds: Vec<u64>,
     /// Whether the first image (the full one) is a palette image.
     first_palette: bool,
     pos: u64,
@@ -583,13 +587,18 @@ pub(crate) struct Unpaletted<R> {
 const MAX_IFDS: usize = 64;
 const MAX_ENTRIES: u64 = 4096;
 
-/// Where the palette images' PhotometricInterpretation values are, walking the IFD chain
-/// (classic and BigTIFF). A file it can't walk has none: the decoder reports what's wrong.
-fn palette_patches<R: Read + Seek>(r: &mut R) -> (Vec<(u64, [u8; 2])>, bool) {
+#[derive(Default)]
+struct HeaderPatches {
+    bytes: Vec<(u64, [u8; 2])>,
+    first_palette: bool,
+    rgb_ifds: Vec<u64>,
+}
+
+/// Where the images' PhotometricInterpretation values are, walking the IFD chain (classic and
+/// BigTIFF). A file it can't walk is left to the decoder to report what's wrong.
+fn header_patches<R: Read + Seek>(r: &mut R) -> HeaderPatches {
     use std::io::SeekFrom;
-    let mut patches = Vec::new();
-    // Whether the first image is one of them.
-    let mut first = false;
+    let mut patches = HeaderPatches::default();
     let mut walk = || -> Option<()> {
         let mut head = [0u8; 16];
         r.seek(SeekFrom::Start(0)).ok()?;
@@ -636,15 +645,24 @@ fn palette_patches<R: Read + Seek>(r: &mut R) -> (Vec<(u64, [u8; 2])>, bool) {
             }
             let mut entries = vec![0u8; usize::try_from(n * entry_len).ok()?];
             r.read_exact(&mut entries).ok()?;
-            for (i, e) in entries.chunks(entry_len as usize).enumerate() {
-                // PhotometricInterpretation (262), a SHORT, its value inline.
-                if u16_(e)? == 262 && u16_(e.get(2..)?)? == 3 {
-                    let value_at = if big { 12 } else { 8 };
-                    if u16_(e.get(value_at..)?)? == 3 {
-                        let at = ifd + count_len + i as u64 * entry_len + value_at as u64;
-                        patches.push((at, if little { [1, 0] } else { [0, 1] }));
-                        first |= k == 0;
-                    }
+            let value_at = if big { 12 } else { 8 };
+            // These tags are a single SHORT stored inline. Do not reinterpret malformed tags.
+            let short = |tag: u16| -> Option<u16> {
+                let e = entries.chunks(entry_len as usize).find(|e| u16_(e) == Some(tag))?;
+                let count = if big { u64_(e.get(4..)?)? } else { u64::from(u32_(e.get(4..)?)?) };
+                (u16_(e.get(2..)?)? == 3 && count == 1).then(|| u16_(e.get(value_at..)?)).flatten()
+            };
+            let palette = short(262) == Some(3);
+            let rgbi = short(262) == Some(2) && short(277) == Some(4) && short(338) == Some(0);
+            if palette || rgbi {
+                // Patch only the entry inspected by `short`, even if a hostile IFD repeats it.
+                if let Some(i) = entries.chunks(entry_len as usize).position(|e| u16_(e) == Some(262)) {
+                    let at = ifd + count_len + i as u64 * entry_len + value_at as u64;
+                    patches.bytes.push((at, if little { [1, 0] } else { [0, 1] }));
+                }
+                patches.first_palette |= palette && k == 0;
+                if rgbi {
+                    patches.rgb_ifds.push(ifd);
                 }
             }
             let mut next = [0u8; 8];
@@ -654,7 +672,7 @@ fn palette_patches<R: Read + Seek>(r: &mut R) -> (Vec<(u64, [u8; 2])>, bool) {
         Some(())
     };
     let _ = walk();
-    (patches, first)
+    patches
 }
 
 /// Any reader, boxed: the decoder is compiled once for every kind of source (a file, bytes in
@@ -680,9 +698,9 @@ impl<R> Unpaletted<R> {
 
 impl<R: Read + Seek> Unpaletted<R> {
     fn new(mut inner: R) -> std::io::Result<Self> {
-        let (patches, first_palette) = palette_patches(&mut inner);
+        let patches = header_patches(&mut inner);
         inner.seek(std::io::SeekFrom::Start(0))?;
-        Ok(Unpaletted { inner, patches, first_palette, pos: 0 })
+        Ok(Unpaletted { inner, patches: patches.bytes, rgb_ifds: patches.rgb_ifds, first_palette: patches.first_palette, pos: 0 })
     }
 }
 
@@ -711,6 +729,11 @@ impl<R: Seek> Seek for Unpaletted<R> {
         self.pos = self.inner.seek(to)?;
         Ok(self.pos)
     }
+}
+
+/// Whether the current image's multiband samples came from RGB plus unspecified data.
+pub(super) fn is_rgbi(dec: &mut Decoder<Reader<'_>>) -> bool {
+    dec.ifd_pointer().is_some_and(|at| dec.inner().rgb_ifds.contains(&at.0))
 }
 
 /// Opens another reader on the same file, for decoding its chunks on more than one thread.
@@ -1162,15 +1185,17 @@ pub(super) fn read_limited_with_nodata(
             };
             (1, table.map_or(ColorHint::Gray, ColorHint::Palette))
         }
-        ColorType::Multiband { num_samples, .. } => (num_samples.max(1) as usize, multiband_color(&mut dec, num_samples)),
+        ColorType::Multiband { num_samples, .. } => {
+            let color = if is_rgbi(&mut dec) { ColorHint::Rgb { alpha: false } } else { multiband_color(&mut dec, num_samples) };
+            (num_samples.max(1) as usize, color)
+        }
         other => return Err(err(format!("{other:?} images aren't supported"))),
     };
     let planar = dec.find_tag_unsigned::<u16>(Tag::PlanarConfiguration).ok().flatten() == Some(2);
     let n = (w as usize) * (h as usize);
-    // The decoder leaves out samples past the colour ones (RGB with an undefined fourth band, as
-    // in RGBI orthophotos) a tile row at a time, and writes a padded edge tile's whole width into
-    // the image: past its edge, over the start of the next row (issue #162). Such tiled images
-    // are read a tile at a time, as their chunks come back only as wide as the image.
+    // Extra samples the decoder leaves out can make padded edge tiles spill into the next row
+    // when read whole (issue #162). Read those tile by tile. RGBI now keeps its fourth sample
+    // through the patched reader, so it no longer needs this workaround.
     let tile_rows = dec.find_tag_unsigned::<u32>(Tag::TileLength).ok().flatten();
     let tiled = dec.find_tag_unsigned::<u32>(Tag::TileWidth).ok().flatten().is_some();
     let extra_samples = !planar && samples(&mut dec) > nbands && tiled;
@@ -1373,19 +1398,14 @@ pub(super) fn fits_bytes(r: &Raster, b: usize) -> bool {
     nodata_ok && (whole_bytes || s.count == 0)
 }
 
-/// The bands [`write`] writes of `r` given `band`: an RGB raster's colour bands (with a fourth as
-/// alpha when they are bytes and it is too, or when the raster says it is alpha), otherwise `band`
-/// alone.
+/// The bands [`write`] writes of `r` given `band`: RGB and its fourth sample (alpha only when
+/// declared alpha), otherwise `band` alone.
 pub fn written_bands(r: &Raster, band: usize) -> Vec<usize> {
     if !(matches!(r.color, ColorHint::Rgb { .. }) && r.bands.len() >= 3) {
         return vec![band];
     }
-    let alpha = if (0..3).all(|b| fits_bytes(r, b)) {
-        r.bands.len() >= 4 && fits_bytes(r, 3)
-    } else {
-        r.bands.len() >= 4 && matches!(r.color, ColorHint::Rgb { alpha: true })
-    };
-    (0..if alpha { 4 } else { 3 }).collect()
+    let fourth = r.bands.len() == 4 || (r.bands.len() > 4 && matches!(r.color, ColorHint::Rgb { alpha: true }));
+    (0..if fourth { 4 } else { 3 }).collect()
 }
 
 /// Writes a raster as a Deflate-compressed GeoTIFF: a colour raster's colour bands (RGB(A) bytes
@@ -1452,6 +1472,9 @@ fn encode(r: &Raster, band: usize) -> Result<Vec<u8>> {
         ($img:expr, $written:expr) => {{
             let classes = super::gdal_metadata_of(r, $written);
             let e = $img.encoder();
+            if $written.len() == 4 && matches!(r.color, ColorHint::Rgb { alpha: false }) {
+                e.write_tag(Tag::ExtraSamples, &[0u16][..]).map_err(err)?;
+            }
             e.write_tag(Tag::ModelPixelScaleTag, &scale[..]).map_err(err)?;
             e.write_tag(Tag::ModelTiepointTag, &tie[..]).map_err(err)?;
             e.write_tag(Tag::GeoKeyDirectoryTag, &keys[..]).map_err(err)?;
@@ -1471,7 +1494,16 @@ fn encode(r: &Raster, band: usize) -> Result<Vec<u8>> {
             }
         }};
     }
-    if rgb && let (Some(red), Some(green), Some(blue)) = (bytes(0), bytes(1), bytes(2)) {
+    // Without alpha or a no-data marker, byte samples cannot keep NaN holes (for example the
+    // cells outside a reprojected RGBI image). Keep those samples as floats instead.
+    let byte_holes = r.nodata.is_none()
+        && matches!(r.color, ColorHint::Rgb { alpha: false })
+        && written_bands(r, band).iter().any(|b| r.bands.get(*b).is_some_and(|b| b.stats.count < (w as usize) * (h as usize)));
+    if rgb
+        && !byte_holes
+        && (!written_bands(r, band).contains(&3) || fits_bytes(r, 3))
+        && let (Some(red), Some(green), Some(blue)) = (bytes(0), bytes(1), bytes(2))
+    {
         let alpha = if written_bands(r, band).contains(&3) { bytes(3) } else { None };
         let n = (w as usize) * (h as usize);
         if let Some(a) = alpha {
@@ -1626,6 +1658,28 @@ mod tests {
         assert_eq!(back.color, ColorHint::Rgb { alpha: false });
         assert_eq!(back.value(2, 1, 0), Some(60.0));
         assert_eq!(back.data_type, "UInt8");
+    }
+
+    #[test]
+    fn rgbi_byte_export_does_not_turn_nir_into_alpha() {
+        let gt = GeoTransform { origin_x: 0.0, origin_y: 2.0, pixel_width: 1.0, pixel_height: -1.0 };
+        let r = Raster::new(
+            "rgbi",
+            2,
+            2,
+            vec![vec![200.0; 4], vec![100.0; 4], vec![50.0; 4], vec![0.0; 4]],
+            gt,
+            Crs::LonLat,
+            None,
+            ColorHint::Rgb { alpha: false },
+            "UInt8",
+        )
+        .unwrap();
+        assert_eq!(written_bands(&r, 0), vec![0, 1, 2, 3]);
+        let back = read(std::io::Cursor::new(write(&r, 0).unwrap()), "rgb").unwrap();
+        assert_eq!((back.band_count(), back.color.clone()), (4, ColorHint::Rgb { alpha: false }));
+        assert_eq!(back.value(0, 0, 0), Some(200.0));
+        assert_eq!(back.value(3, 0, 0), Some(0.0));
     }
 
     /// An Equi7 tile (a Sentinel-1 product on TU Wien's grid, say) names its system by its EPSG
@@ -1997,43 +2051,64 @@ mod tests {
     /// it. Sample `b` of pixel (x, y) at a `k`-times overview is `pixel(b, x·k, y·k)`; edge tiles
     /// are padded with zeros.
     fn rgbi_tiled(images: &[(u32, u32)], pixel: impl Fn(u32, u32, u32) -> u8) -> Vec<u8> {
+        rgbi_tiled_encoded(images, 8, 1, |b, x, y| u16::from(pixel(b, x, y)))
+    }
+
+    fn rgbi_tiled_encoded(images: &[(u32, u32)], bits: u16, predictor: u16, pixel: impl Fn(u32, u32, u32) -> u16) -> Vec<u8> {
+        rgb_tiled_samples(&images.iter().map(|&(size, tile)| (size, tile, 4)).collect::<Vec<_>>(), bits, predictor, pixel)
+    }
+
+    fn rgb_tiled_samples(images: &[(u32, u32, u16)], bits: u16, predictor: u16, pixel: impl Fn(u32, u32, u32) -> u16) -> Vec<u8> {
         let full = images.first().map_or(1, |i| i.0);
         let mut out = vec![b'I', b'I', 42, 0, 0, 0, 0, 0];
         let mut next_link = 4;
-        for (i, &(size, tile)) in images.iter().enumerate() {
+        for (i, &(size, tile, samples)) in images.iter().enumerate() {
             let k = full / size;
             let n = size.div_ceil(tile);
             // The tiles' data first, then the IFD pointing at it.
             let mut offsets = Vec::new();
+            let mut counts = Vec::new();
             for t in 0..n * n {
                 offsets.push(out.len() as u32);
-                for p in 0..tile * tile {
-                    let (x, y) = ((t % n) * tile + p % tile, (t / n) * tile + p / tile);
-                    for b in 0..4 {
-                        out.push(if x < size && y < size { pixel(b, x * k, y * k) } else { 0 });
+                let mut raw = Vec::new();
+                for y in 0..tile {
+                    let mut prev = [0u16; 4];
+                    for x in 0..tile {
+                        let (x, y) = ((t % n) * tile + x, (t / n) * tile + y);
+                        for b in 0..u32::from(samples) {
+                            let value = if x < size && y < size { pixel(b, x * k, y * k) } else { 0 };
+                            let encoded = if predictor == 2 { value.wrapping_sub(prev[b as usize]) } else { value };
+                            prev[b as usize] = value;
+                            raw.extend_from_slice(&encoded.to_le_bytes()[..usize::from(bits / 8)]);
+                        }
                     }
                 }
+                let encoded = if predictor == 1 { raw } else { miniz_oxide::deflate::compress_to_vec_zlib(&raw, 6) };
+                counts.push(encoded.len() as u32);
+                out.extend(encoded);
             }
             // Out-of-line values: (tag, type, count, bytes); type 3 short, 4 long, 12 double.
             let shorts = |v: &[u16]| v.iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<u8>>();
             let longs = |v: &[u32]| v.iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<u8>>();
             let doubles = |v: &[f64]| v.iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<u8>>();
-            let counts = vec![tile * tile * 4; offsets.len()];
             let mut e: Vec<(u16, u16, u32, Vec<u8>)> = vec![
                 (254, 4, 1, longs(&[u32::from(i > 0)])),
                 (256, 4, 1, longs(&[size])),
                 (257, 4, 1, longs(&[size])),
-                (258, 3, 4, shorts(&[8; 4])),
-                (259, 3, 1, shorts(&[1])),
+                (258, 3, u32::from(samples), shorts(&vec![bits; usize::from(samples)])),
+                (259, 3, 1, shorts(&[if predictor == 1 { 1 } else { 8 }])),
                 (262, 3, 1, shorts(&[2])),
-                (277, 3, 1, shorts(&[4])),
+                (277, 3, 1, shorts(&[samples])),
                 (284, 3, 1, shorts(&[1])),
+                (317, 3, 1, shorts(&[predictor])),
                 (322, 4, 1, longs(&[tile])),
                 (323, 4, 1, longs(&[tile])),
                 (324, 4, offsets.len() as u32, longs(&offsets)),
                 (325, 4, counts.len() as u32, longs(&counts)),
-                (338, 3, 1, shorts(&[0])),
             ];
+            if samples == 4 {
+                e.push((338, 3, 1, shorts(&[0])));
+            }
             if i == 0 {
                 e.push((33550, 12, 3, doubles(&[0.2, 0.2, 0.0])));
                 e.push((33922, 12, 6, doubles(&[0.0, 0.0, 0.0, 641_000.0, 5_650_000.0, 0.0])));
@@ -2066,16 +2141,193 @@ mod tests {
     }
 
     #[test]
+    fn rgbi_header_patches_handle_both_byte_orders_and_tiff_sizes() {
+        for big in [false, true] {
+            for little in [false, true] {
+                let short = |v: u16| if little { v.to_le_bytes() } else { v.to_be_bytes() };
+                let long = |v: u32| if little { v.to_le_bytes() } else { v.to_be_bytes() };
+                let wide = |v: u64| if little { v.to_le_bytes() } else { v.to_be_bytes() };
+                let mut bytes = if little { b"II".to_vec() } else { b"MM".to_vec() };
+                bytes.extend(short(if big { 43 } else { 42 }));
+                let at = if big { 16 } else { 8 };
+                if big {
+                    bytes.extend(short(8));
+                    bytes.extend(short(0));
+                    bytes.extend(wide(at));
+                    bytes.extend(wide(3));
+                } else {
+                    bytes.extend(long(at as u32));
+                    bytes.extend(short(3));
+                }
+                let photo_at = bytes.len() + if big { 12 } else { 8 };
+                for (tag, value) in [(262, 2), (277, 4), (338, 0)] {
+                    bytes.extend(short(tag));
+                    bytes.extend(short(3));
+                    bytes.extend(if big { wide(1).to_vec() } else { long(1).to_vec() });
+                    bytes.extend(short(value));
+                    bytes.extend(vec![0; if big { 6 } else { 2 }]);
+                }
+                bytes.extend(vec![0; if big { 8 } else { 4 }]);
+                let original = bytes.clone();
+                let mut r = Unpaletted::new(std::io::Cursor::new(bytes)).unwrap();
+                assert_eq!(r.rgb_ifds, vec![at]);
+                assert!(!r.first_is_palette());
+                let mut patched = Vec::new();
+                // Reading a byte at a time exercises patches split between reads.
+                let mut byte = [0u8; 1];
+                while r.read(&mut byte).unwrap() != 0 {
+                    patched.push(byte[0]);
+                }
+                let mut want = original.clone();
+                want[photo_at..photo_at + 2].copy_from_slice(&short(1));
+                assert_eq!(patched, want);
+                assert_eq!(r.inner.into_inner(), original);
+            }
+        }
+    }
+
+    #[test]
+    fn rgbi_strips_preserve_samples_and_real_alpha_is_unchanged() {
+        use tiff::encoder::{Compression, DeflateLevel, TiffEncoder, colortype};
+        fn image<K: tiff::encoder::TiffKind>(mut enc: TiffEncoder<std::io::Cursor<&mut Vec<u8>>, K>, extra: u16) {
+            let mut image = enc.new_image::<colortype::RGBA16>(7, 5).unwrap();
+            image.encoder().write_tag(Tag::ExtraSamples, &[extra][..]).unwrap();
+            image.rows_per_strip(2).unwrap();
+            let values: Vec<u16> = (0..7 * 5).flat_map(|p| [1000 + p * 11, 2000 + p * 13, 3000 + p * 17, p % 3]).collect();
+            image.write_data(&values).unwrap();
+        }
+        for big in [false, true] {
+            for extra in [0, 1, 2] {
+                let mut bytes = Vec::new();
+                if big {
+                    image(
+                        TiffEncoder::new_big(std::io::Cursor::new(&mut bytes))
+                            .unwrap()
+                            .with_compression(Compression::Deflate(DeflateLevel::Balanced))
+                            .with_predictor(tiff::encoder::Predictor::Horizontal),
+                        extra,
+                    );
+                } else {
+                    image(
+                        TiffEncoder::new(std::io::Cursor::new(&mut bytes))
+                            .unwrap()
+                            .with_compression(Compression::Deflate(DeflateLevel::Balanced))
+                            .with_predictor(tiff::encoder::Predictor::Horizontal),
+                        extra,
+                    );
+                }
+                let r = read(std::io::Cursor::new(&bytes), "strips").unwrap();
+                assert_eq!(r.color, ColorHint::Rgb { alpha: extra != 0 });
+                assert_eq!(r.band_count(), 4);
+                for p in 0u16..7 * 5 {
+                    for (b, value) in [1000 + p * 11, 2000 + p * 13, 3000 + p * 17, p % 3].iter().enumerate() {
+                        assert_eq!(r.value(b, (p % 7).into(), (p / 7).into()), Some(f32::from(*value)));
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn cog_overviews_require_matching_sample_counts() {
+        use super::super::cog::{self, Parse, Sparse};
+        for full in [3, 4] {
+            for overview in [3, 4] {
+                let bytes = rgb_tiled_samples(&[(40, 16, full), (20, 16, overview)], 8, 1, |b, x, y| (b * 10 + x + y) as u16);
+                let whole = Sparse::default().with_len(bytes.len() as u64).with(0, bytes);
+                if full == overview {
+                    let Parse::Done(layout) = cog::layout(&whole).unwrap() else { panic!("not a COG") };
+                    assert_eq!(layout.levels.len(), 2);
+                    assert_eq!(layout.bands, usize::from(full));
+                } else {
+                    let error = cog::layout(&whole).unwrap_err().to_string();
+                    assert!(error.contains(&format!("image 1 has {overview} samples per pixel")), "{error}");
+                    assert!(error.contains(&format!("full image has {full}")), "{error}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn rgbi_cog_tiles_keep_the_fourth_band_without_alpha() {
+        use super::super::cog::{self, Parse, Sparse};
+        let pixel = |b: u32, x: u32, y: u32| (1000 + x * 19 + y * 37 + b * 53) as u16;
+        let bytes = rgbi_tiled_encoded(&[(40, 16), (20, 16)], 16, 2, pixel);
+        let whole = Sparse::default().with(0, bytes.clone()).with_len(bytes.len() as u64);
+        let Parse::Done(layout) = cog::layout(&whole).unwrap() else { panic!("not a COG") };
+        // Hold only the IFDs and their values, as a range reader does. This fixture writes each
+        // IFD after its tiles and before the following level's tiles.
+        let mut header = Sparse::default().with(0, bytes[..8].to_vec()).with_len(bytes.len() as u64);
+        let mut ifd = u32::from_le_bytes(bytes[4..8].try_into().unwrap()) as usize;
+        for i in 0..layout.levels.len() {
+            let count = u16::from_le_bytes(bytes[ifd..ifd + 2].try_into().unwrap()) as usize;
+            let next_at = ifd + 2 + count * 12;
+            let end = layout.levels.get(i + 1).map_or(bytes.len(), |l| l.offsets[0] as usize);
+            header = header.with(ifd as u64, bytes[ifd..end].to_vec());
+            ifd = u32::from_le_bytes(bytes[next_at..next_at + 4].try_into().unwrap()) as usize;
+        }
+        let Parse::Done(layout) = cog::layout(&header).unwrap() else { panic!("not a COG header") };
+        assert_eq!(layout.bands, 4);
+        assert_eq!(layout.color, ColorHint::Rgb { alpha: false });
+        for (level, k) in [(0, 1), (1, 2)] {
+            let l = &layout.levels[level];
+            for t in 0..l.tiles() {
+                let at = l.offsets[t as usize] as usize;
+                let count = l.counts[t as usize] as usize;
+                let bands = cog::decode_tile(&header, &layout, level, t, bytes[at..at + count].to_vec()).unwrap();
+                assert_eq!(bands.len(), 4);
+                for y in 0..l.tile_height {
+                    for x in 0..l.tile_width {
+                        let (px, py) = ((t % l.across()) * l.tile_width + x, (t / l.across()) * l.tile_height + y);
+                        for (b, band) in bands.iter().enumerate() {
+                            let v = band[(y * l.tile_width + x) as usize];
+                            if px < l.width && py < l.height {
+                                assert_eq!(v, f32::from(pixel(b as u32, px * k, py * k)));
+                            } else {
+                                assert!(v.is_nan());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn horizontal_predictor_keeps_rgb_and_the_unspecified_fourth_band() {
+        for bits in [8, 16] {
+            let pixel = |b: u32, x: u32, y: u32| ((x * 19 + y * 37 + b * 53) % 251 + 1) as u16 * (if bits == 16 { 200 } else { 1 });
+            let bytes = rgbi_tiled_encoded(&[(40, 16), (20, 16)], bits, 2, pixel);
+            for (max, k) in [(100_000, 1), (2_000, 2)] {
+                let r = read_limited(reader(std::io::Cursor::new(&bytes)).unwrap(), "rgbi", max, None).unwrap();
+                assert_eq!(r.color, ColorHint::Rgb { alpha: false });
+                assert_eq!(r.band_count(), 4);
+                for y in 0..r.height {
+                    for x in 0..r.width {
+                        for b in 0..4 {
+                            assert_eq!(
+                                r.value(b as usize, x.into(), y.into()),
+                                Some(f32::from(pixel(b, x * k, y * k))),
+                                "{bits} bits, band {b}, pixel {x},{y}, scale {k}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn padded_tiles_with_an_extra_sample_stay_in_their_rows() {
         // Issue #162: an RGBI orthophoto (5000 pixels in 128-pixel tiles) opened with black
         // columns down its west edge, the padding of each row's last tile spilt into the next row.
         let pixel = |b: u32, x: u32, y: u32| ((x + 3 * y + 60 * b) % 250 + 1) as u8;
         let bytes = rgbi_tiled(&[(40, 16), (20, 16)], pixel);
         let check = |r: &Raster, k: u32| {
-            assert_eq!((r.band_count(), r.color.clone()), (3, ColorHint::Rgb { alpha: false }));
+            assert_eq!((r.band_count(), r.color.clone()), (4, ColorHint::Rgb { alpha: false }));
             for y in 0..r.height {
                 for x in 0..r.width {
-                    for b in 0..3 {
+                    for b in 0..4 {
                         let want = f32::from(pixel(b, x * k, y * k));
                         assert_eq!(r.value(b as usize, i64::from(x), i64::from(y)), Some(want), "band {b} at {x},{y} (k {k})");
                     }
