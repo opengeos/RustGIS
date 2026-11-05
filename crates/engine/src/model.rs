@@ -690,6 +690,15 @@ pub(crate) const FILE_VERSION: &str = "1.0.0";
 /// Web tools store steps under a separate, integer version marker.
 pub(crate) const WEB_TOOL_VERSION: u64 = 1;
 
+/// Keep unknown fields visible at the file boundary without changing the command data types.
+#[derive(Deserialize)]
+struct ImportItem<T> {
+    #[serde(flatten)]
+    known: T,
+    #[serde(flatten)]
+    extra: HashMap<String, Value>,
+}
+
 /// Check declared file versions and node representations before import can discard nodes.
 /// Missing versions are legacy files. Direct graph commands keep their existing sanitization.
 pub(crate) fn check_file(v: &Value) -> Result<(), String> {
@@ -706,8 +715,35 @@ pub(crate) fn check_file(v: &Value) -> Result<(), String> {
             return Err(format!("a model can have at most {MAX_NODES} nodes"));
         }
         for (index, node) in nodes.iter().enumerate() {
-            ModelNode::deserialize(node)
+            let node = ImportItem::<ModelNode>::deserialize(node)
                 .map_err(|_| format!("model node {} is unsupported or malformed. Update RustGIS to import this model.", index + 1))?;
+            if !node.extra.is_empty() {
+                return Err(format!("model node {} has unsupported fields. Update RustGIS to import this model.", index + 1));
+            }
+            if !node.known.params.is_null() && !node.known.params.is_object() {
+                return Err(format!("model node {} needs an object for its parameters", index + 1));
+            }
+        }
+        let edges = match graph.get("edges") {
+            None => &[][..],
+            Some(edges) => edges.as_array().map(Vec::as_slice).ok_or("a model graph's connections must be an array")?,
+        };
+        if edges.len() > MAX_EDGES {
+            return Err(format!("a model can have at most {MAX_EDGES} connections"));
+        }
+        for (index, edge) in edges.iter().enumerate() {
+            let edge = ImportItem::<ModelEdge>::deserialize(edge).map_err(|_| format!("model connection {} is malformed", index + 1))?;
+            if !edge.extra.is_empty() {
+                return Err(format!("model connection {} has unsupported fields. Update RustGIS to import this model.", index + 1));
+            }
+        }
+        let normalized = graph_from_json(graph)?;
+        let lost_nodes = nodes.len().saturating_sub(normalized.nodes.len());
+        let lost_edges = edges.len().saturating_sub(normalized.edges.len());
+        if lost_nodes > 0 || lost_edges > 0 {
+            return Err(format!(
+                "this model would discard {lost_nodes} node(s) and {lost_edges} connection(s). Fix empty or duplicate node IDs and invalid connections before importing it."
+            ));
         }
     }
     Ok(())

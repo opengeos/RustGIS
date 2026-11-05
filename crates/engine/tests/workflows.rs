@@ -37,6 +37,32 @@ fn model_import_refuses_unsupported_files_without_changing_session() {
         (json!({"version": "1", "steps": []}), "unsupported version"),
         (json!({"version": "1.0.0", "graph": graph}), "node 2"),
         (json!({"graph": {"nodes": [{"id": "t", "kind": "tool", "tool": {}}]}}), "node 1"),
+        (json!({"graph": {"nodes": [{"id": "  ", "kind": "input"}]}}), "discard 1 node(s)"),
+        (json!({"graph": {"nodes": [{"id": "t", "kind": "tool"}, {"id": "t", "kind": "output"}]}}), "discard 1 node(s)"),
+        (json!({"graph": {"nodes": [{"id": "t", "kind": "tool", "parms": {"distance": 37}}]}}), "unsupported fields"),
+        (json!({"graph": {"nodes": [{"id": "t", "kind": "tool", "params": [37]}]}}), "needs an object"),
+        (json!({"graph": {"nodes": [], "edges": {}}}), "connections must be an array"),
+        (json!({"graph": {"nodes": [], "edges": ["bad edge"]}}), "connection 1 is malformed"),
+        (
+            json!({"graph": {"nodes": [{"id": "a", "kind": "input"}, {"id": "b", "kind": "output"}],
+            "edges": [{"from": "a", "to": "b"}]}}),
+            "1 connection(s)",
+        ),
+        (
+            json!({"graph": {"nodes": [{"id": "a", "kind": "input"}],
+            "edges": [{"from": "a", "to": "missing", "toPort": "input"}]}}),
+            "1 connection(s)",
+        ),
+        (
+            json!({"graph": {"nodes": [{"id": "a", "kind": "input"}, {"id": "b", "kind": "output"}],
+            "edges": [{"from": "a", "to": "b", "toPort": "in"}, {"from": "a", "to": "b", "toPort": "in"}]}}),
+            "1 connection(s)",
+        ),
+        (
+            json!({"graph": {"nodes": [{"id": "a", "kind": "input"}, {"id": "b", "kind": "output"}],
+            "edges": [{"from": "a", "to": "b", "toPort": "in", "future": true}]}}),
+            "unsupported fields",
+        ),
     ] {
         let text = file.to_string();
         let path = scratch.path("unsupported.model.json");
@@ -45,7 +71,10 @@ fn model_import_refuses_unsupported_files_without_changing_session() {
             [json!({"text": text}), json!({"data": base64::engine::general_purpose::STANDARD.encode(&text)}), json!({"path": path})]
         {
             let error = s.run("model.import", &params).unwrap_err();
-            assert!(error.contains(message) && error.contains("Update RustGIS"), "{error}");
+            assert!(error.contains(message), "{error}");
+            if message == "unsupported version" || message.starts_with("node ") || message == "unsupported fields" {
+                assert!(error.contains("Update RustGIS"), "{error}");
+            }
             assert_eq!(serde_json::to_value(&s.project).unwrap(), before);
             assert_eq!((s.undo_depth(), s.undo_label(), s.redo_label()), history);
             assert!(s.can_undo() && s.can_redo());
