@@ -4190,7 +4190,7 @@ impl RustGisApp {
         match r {
             // As a layer added at once says it.
             Ok(()) => {
-                self.dialogs.info = Some(format!("{} {name}", tl!("Added")));
+                self.dialogs.info = Some(serviceui::added(name));
                 self.dialogs.error = None;
             }
             Err(e) => {
@@ -4250,8 +4250,7 @@ impl RustGisApp {
                     let mut p = resolve.params;
                     p["tiles"] = json!(template);
                     let title = p["name"].as_str().unwrap_or("").to_string();
-                    let r =
-                        connectiontree::run_named(self, "service.add", p, origin.as_deref()).map(|_| format!("{} {title}", tl!("Added")));
+                    let r = connectiontree::run_named(self, "service.add", p, origin.as_deref()).map(|_| serviceui::added(&title));
                     self.report_step(dialog, r);
                     self.map.invalidate();
                 }
@@ -5100,7 +5099,19 @@ mod record_tests {
             let server = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
             let origin = format!("http://{}", server.local_addr().unwrap());
             let reply = std::thread::spawn(move || {
-                let (mut stream, _) = server.accept().unwrap();
+                // A request that never comes fails the test instead of hanging it.
+                server.set_nonblocking(true).unwrap();
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+                let mut stream = loop {
+                    match server.accept() {
+                        Ok((stream, _)) => break stream,
+                        Err(e) if e.kind() == std::io::ErrorKind::WouldBlock && std::time::Instant::now() < deadline => {
+                            std::thread::sleep(std::time::Duration::from_millis(10));
+                        }
+                        Err(e) => panic!("no request reached the test server: {e}"),
+                    }
+                };
+                stream.set_nonblocking(false).unwrap();
                 stream.set_read_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
                 let mut request = Vec::new();
                 let mut chunk = [0; 1024];
@@ -5137,7 +5148,7 @@ mod record_tests {
         };
         let added = add("200 OK", crate::serviceui::downloading("Roads"));
         assert!(added.session.map().layers.iter().any(|l| l.name == "Roads"));
-        assert_eq!(added.dialogs.info, Some(format!("{} Roads", tl!("Added"))));
+        assert_eq!(added.dialogs.info, Some(crate::serviceui::added("Roads")));
         assert_eq!(added.dialogs.error, None);
         let failed = add("404 Not Found", crate::serviceui::downloading("Roads"));
         assert!(!failed.session.map().layers.iter().any(|l| l.name == "Roads"));

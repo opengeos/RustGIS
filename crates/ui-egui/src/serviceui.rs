@@ -80,7 +80,7 @@ pub(crate) fn add_layer(
     time: &str,
     area: Option<[f64; 4]>,
     dialog: bool,
-) -> Result<&'static str, String> {
+) -> Result<String, String> {
     let connection = dialog.then(|| app.ui.service.as_ref().and_then(|source| source.connection.clone())).flatten();
     add_layer_from(app, src, l, time, area, dialog, None, connection.as_deref())
 }
@@ -97,7 +97,7 @@ pub(crate) fn add_layer_from(
     dialog: bool,
     origin: Option<&str>,
     connection: Option<&str>,
-) -> Result<&'static str, String> {
+) -> Result<String, String> {
     let connection = connection_for(app, connection, &src.url);
     let name = l.get("name").and_then(Value::as_str).unwrap_or("").to_string();
     let title = l.get("title").and_then(Value::as_str).unwrap_or(&name).to_string();
@@ -124,7 +124,7 @@ pub(crate) fn add_layer_from(
         if asked.is_some() {
             params["zoom"] = json!(false);
         }
-        return crate::connectiontree::run_add_url(app, params, origin).map(|_| tl!("Downloading…"));
+        return crate::connectiontree::run_add_url(app, params, origin).map(|_| downloading(&title));
     }
     let origin = origin.map(str::to_string);
     if offer.get("type").and_then(Value::as_str) == Some("coverage") {
@@ -140,7 +140,7 @@ pub(crate) fn add_layer_from(
         let describe = request_from(app, connection, &src.url, &describe)?;
         let slot = crate::fetch_into(&describe);
         app.ui.service_steps.push(crate::ServiceStep::Coverage { params: p, slot, dialog, origin });
-        return Ok(tl!("Describing"));
+        return Ok(i18n::fmt("Describing {name}", &[("name", &title)]));
     }
     let mut p = json!({"url": src.url, "layer": name, "text": src.text, "documents": src.documents, "source_url": l.get("source_url")});
     if src.kind != "auto" {
@@ -163,9 +163,9 @@ pub(crate) fn add_layer_from(
             let slot = crate::fetch_into(&list);
             let resolve = crate::TilesResolve { params: p, list: list.clone(), doc: list, read: 0, vector, fallback, slot };
             app.ui.service_steps.push(crate::ServiceStep::Tiles { resolve, dialog, origin });
-            Ok(tl!("Reading the tileset of"))
+            Ok(i18n::fmt("Reading the tileset of {name}", &[("name", &title)]))
         }
-        None => crate::connectiontree::run_named(app, "service.add", p, origin.as_deref()).map(|_| tl!("Added")),
+        None => crate::connectiontree::run_named(app, "service.add", p, origin.as_deref()).map(|_| added(&title)),
     }
 }
 
@@ -355,7 +355,12 @@ pub fn poll(app: &mut RustGisApp, ctx: &egui::Context) {
 /// The add-service dialog's line for a layer on its way: what the dialog shows when a layer's
 /// download starts, and what [`RustGisApp::landed_in_dialog`] looks for when it lands (#1453).
 pub(crate) fn downloading(name: &str) -> String {
-    format!("{} {name}", tl!("Downloading…"))
+    i18n::fmt("Downloading… {name}", &[("name", name)])
+}
+
+/// The add-service dialog's line for a layer added, at once or when its download lands.
+pub(crate) fn added(name: &str) -> String {
+    i18n::fmt("Added {name}", &[("name", name)])
 }
 
 /// A download that landed, with what it is added with: its id, address and `layer.addDownload`
