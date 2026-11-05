@@ -2,8 +2,9 @@
 //! pixels, a copy of the map or project to draw). A script or the command line writes it where
 //! the command is called; the app writes it on a thread of its own with progress and Cancel
 //! (#1291 step 3): [`export_start`] reads the session, [`ExportRun::run`] writes the file, and
-//! [`export_land`] says what was written, as the command would have. It lands whatever layer is active or project is open by then: the file is
-//! written either way, and an export changes nothing in the project.
+//! [`export_land`] says what was written, as the command would have. It lands whatever layer is
+//! active or project is open by then: the file is written either way, and an export changes
+//! nothing in the project.
 
 use serde_json::Value;
 
@@ -78,7 +79,8 @@ fn said(s: &mut Session, wrote: Wrote) -> CmdResult {
 
 /// Lands an export drawn on a copy of the map or project (Export Map, Export Layout): what
 /// drawing it said, with each notice's severity; the streamed layers whose source failed on the
-/// copy, marked on their live layers as drawing them there would have; then that it was written
+/// copy, marked on their live layers as drawing them there would have (or, where that layer is
+/// gone or opened afresh, said to be missing from the file); then that it was written
 /// to `path`, or why not. A cancelled one says only that it was cancelled.
 pub(crate) fn drawn(
     maps: &[rustgis_map::Map],
@@ -96,7 +98,7 @@ pub(crate) fn drawn(
         .flat_map(|m| &m.layers)
         .filter_map(|l| {
             let src = l.source.as_ref()?;
-            Some((l.instance_id(), src.error.clone()?, src.clone()))
+            Some((l.instance_id(), l.name.clone(), src.error.clone()?, src.clone()))
         })
         .collect();
     let answer = written.as_ref().map_or(Value::Null, Value::clone);
@@ -109,13 +111,13 @@ pub(crate) fn drawn(
                 Severity::Info => s.notify(text, false),
             }
         }
-        for (instance, error, copied) in failed {
+        for (instance, name, error, copied) in failed {
             let live = s.project.maps.iter_mut().flat_map(|m| m.layers.iter_mut()).find(|l| l.instance_id() == instance);
-            if let Some(src) = live.and_then(|l| l.source.as_mut())
-                && src.error.is_none()
-                && src.same_opening(&copied)
-            {
-                src.error = Some(error);
+            match live.and_then(|l| l.source.as_mut()) {
+                // Its failure already shows on the layer.
+                Some(src) if src.error.is_some() => {}
+                Some(src) if src.same_opening(&copied) => src.error = Some(error),
+                _ => s.warn(format!("{path}: {name} isn't in the file, as its source couldn't be read: {error}")),
             }
         }
         written?;
@@ -178,12 +180,20 @@ pub fn export_start(s: &mut Session, command: &str, p: &Value) -> Result<ExportR
 
 #[cfg(not(target_arch = "wasm32"))]
 /// Says what [`ExportRun::run`] wrote (or why it failed), as its command would have, and gives
-/// its answer: the troubleshooting history files what it says under that command, and the
-/// session's log has its entry, as when it runs here.
+/// its answer: the troubleshooting history files what it says (its failure too) under that
+/// command, and the session's log has its entry, as when it runs here.
 pub fn export_land(s: &mut Session, started: Started, done: Result<Wrote, String>) -> CmdResult {
     let Started { command, params, at, start } = started;
     let before = s.diagnostic_source.replace(command);
+    let mark = s.notice_mark();
     let landed = done.and_then(|wrote| said(s, wrote));
+    // Its failure said once, under the command, as `Session::run` says one.
+    if let Err(e) = &landed {
+        let text = Session::redacted(e);
+        if !s.notices_since(mark).iter().any(|n| n.error && n.text == text.as_str()) {
+            s.notify_redacted(text, true);
+        }
+    }
     s.diagnostic_source = before;
     if s.log.on() && crate::project_log::is_logged(s, command, &params) {
         let entry = crate::project_log::entry(command, crate::project_log::kept_params(&params), &landed, at, start.elapsed());

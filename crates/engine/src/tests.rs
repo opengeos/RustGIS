@@ -28136,7 +28136,12 @@ fn exports_run_on_another_thread() {
     let here = s.run("layout.export", &json!({"path": nowhere, "dpi": 48})).unwrap_err();
     let run = export_start(&mut s, "layout.export", &json!({"path": nowhere, "dpi": 48})).unwrap();
     let started = run.started();
+    let mark = s.notice_mark();
     assert_eq!(export_land(&mut s, started, run.run(&Control::new())).unwrap_err(), here);
+    let errors: Vec<_> = s.notices_since(mark).iter().filter(|n| n.error).map(|n| n.text.clone()).collect();
+    assert_eq!(errors, std::slice::from_ref(&here), "its failure is said once");
+    let filed = s.diagnostics.records().last().map(|r| (r.source.clone(), r.severity));
+    assert_eq!(filed, Some(("layout.export".to_string(), rustgis_data::diagnostics::Severity::Error)), "under the command");
     assert!(s.log.entries().last().is_some_and(|e| e.command == "layout.export" && !e.ok), "a failed one is logged as failed");
     // A streamed layer's source that failed on the copy is marked on its live layer, unless that
     // was opened from somewhere else meanwhile.
@@ -28157,7 +28162,10 @@ fn exports_run_on_another_thread() {
     assert_eq!(land(&mut s, &copy).as_deref(), Some("gone.fgb: not found"));
     s.map_mut().layers[li].source.as_mut().unwrap().error = None;
     s.map_mut().layers[li].source.as_mut().unwrap().path = Some("found.fgb".into());
+    let mark = s.notice_mark();
     assert_eq!(land(&mut s, &copy), None, "a source opened afresh keeps its own state");
+    let said = s.notices_since(mark).iter().map(|n| n.text.clone()).collect::<Vec<_>>().join("\n");
+    assert!(said.contains("Countries isn't in the file") && said.contains("gone.fgb: not found"), "and the file's gap is said: {said}");
     s.map_mut().layers[li].source = None;
     let _ = std::fs::remove_dir_all(&dir);
 }

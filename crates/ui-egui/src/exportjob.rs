@@ -62,10 +62,9 @@ pub fn land(app: &mut RustGisApp) -> bool {
     let Some(done) = done else { return true };
     let started = job.started.clone();
     app.export_job = None;
-    // Its notices are the command's; the answer was for a script, which waits for its own.
-    if let Err(e) = exports::export_land(&mut app.session, started, done) {
-        app.session.notify(e, true);
-    }
+    // Its notices (a failure among them) are the command's; the answer was for a script, which
+    // waits for its own.
+    let _ = exports::export_land(&mut app.session, started, done);
     false
 }
 
