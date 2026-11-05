@@ -512,6 +512,8 @@ fn main() -> eframe::Result {
     let app = {
         let mut app = app;
         app.ui.reserved_shortcuts = menu::reserved();
+        // Add Data and Load All read on a thread of their own, so a large file doesn't hold the window.
+        app.reads_off_frame = true;
         app
     };
     let mut app = app.with_services(services);
