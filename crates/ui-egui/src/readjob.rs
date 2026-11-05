@@ -61,7 +61,8 @@ pub fn run(app: &mut RustGisApp, command: &'static str, p: Value) -> Result<Valu
         .flatten();
     // Load All asked again for a layer it is reading already.
     if let Some((instance, _)) = &layer
-        && app.reads.job.iter().map(|j| &j.asked).chain(&app.reads.waiting).any(|a| a.layer == Some(*instance))
+        // (One whose map or project went never loads it: a new request waits behind it.)
+        && app.reads.job.iter().filter(|j| j.gone.is_none()).map(|j| &j.asked).chain(&app.reads.waiting).any(|a| a.layer == Some(*instance))
     {
         return Ok(json!({"reading": instance}));
     }
@@ -200,7 +201,7 @@ pub fn land(app: &mut RustGisApp) -> bool {
                             app.map.invalidate();
                         }
                         // A bug in a reader: said, and the next goes on.
-                        Err(e) => app.session.notify(format!("{}: {e}", job.asked.what), true),
+                        Err(e) => app.session.notify(crate::i18n::fmt("{what}: {e}", &[("what", &job.asked.what), ("e", &e)]), true),
                     }
                 }
             }
