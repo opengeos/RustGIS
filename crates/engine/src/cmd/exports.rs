@@ -76,12 +76,64 @@ fn said(s: &mut Session, wrote: Wrote) -> CmdResult {
     Ok(answer)
 }
 
+/// Lands an export drawn on a copy of the map or project (Export Map, Export Layout): what
+/// drawing it said, with each notice's severity; the streamed layers whose source failed on the
+/// copy, marked on their live layers as drawing them there would have; then that it was written
+/// to `path`, or why not. A cancelled one says only that it was cancelled.
+pub(crate) fn drawn(
+    maps: &[rustgis_map::Map],
+    said: Vec<(rustgis_data::diagnostics::Severity, String)>,
+    written: Result<Value, String>,
+    path: String,
+) -> Result<Wrote, String> {
+    if let (Err(e), Err(_)) = (&written, rustgis_data::progress::check()) {
+        return Err(e.clone());
+    }
+    // Each by its live layer, with the source it failed on: one the user removed, or opened
+    // afresh meanwhile, is left as it is.
+    let failed: Vec<_> = maps
+        .iter()
+        .flat_map(|m| &m.layers)
+        .filter_map(|l| {
+            let src = l.source.as_ref()?;
+            Some((l.instance_id(), src.error.clone()?, src.path.clone(), src.table.clone()))
+        })
+        .collect();
+    let answer = written.as_ref().map_or(Value::Null, Value::clone);
+    let then: Then = Box::new(move |s: &mut Session, _: &mut Value| {
+        use rustgis_data::diagnostics::Severity;
+        for (severity, text) in said {
+            match severity {
+                Severity::Error => s.notify(text, true),
+                Severity::Warning => s.warn(text),
+                Severity::Info => s.notify(text, false),
+            }
+        }
+        for (instance, error, path, table) in failed {
+            let live = s.project.maps.iter_mut().flat_map(|m| m.layers.iter_mut()).find(|l| l.instance_id() == instance);
+            if let Some(src) = live.and_then(|l| l.source.as_mut())
+                && src.error.is_none()
+                && src.path == path
+                && src.table == table
+            {
+                src.error = Some(error);
+            }
+        }
+        written?;
+        s.notify(format!("Exported {path}"), false);
+        Ok(())
+    });
+    Ok(Wrote { answer, notes: Vec::new(), then: Some(then) })
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 /// An export ([`IN_BACKGROUND`]) started to write its file on another thread ([`ExportRun::run`])
 /// while the session goes on: its inputs are taken now (cheaply: the features and pixels are
 /// shared, and a streamed layer's source is read on the export's thread), and [`export_land`]
 /// says what it wrote.
 pub struct ExportRun {
+    /// The command it runs, which [`export_land`] says what it wrote as.
+    pub command: &'static str,
     /// What the export is called, for its progress and a cancelled run's error.
     pub name: &'static str,
     work: Work,
@@ -93,7 +145,7 @@ impl ExportRun {
     /// (see [`rustgis_analysis::control`]). A cancelled export leaves no file, or the one there
     /// before.
     pub fn run(self, control: &std::sync::Arc<rustgis_analysis::control::Control>) -> Result<Wrote, String> {
-        let ExportRun { name, work } = self;
+        let ExportRun { name, work, .. } = self;
         // A bug in a writer must not take the app down.
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| written_under(name, control, work)))
             .unwrap_or_else(|_| Err(format!("{name} failed unexpectedly")))
@@ -104,16 +156,20 @@ impl ExportRun {
 /// Starts `command` (one of [`IN_BACKGROUND`]'s) with `p`, to write its file on another thread:
 /// its parameters checked and its inputs taken now.
 pub fn export_start(s: &mut Session, command: &str, p: &Value) -> Result<ExportRun, String> {
-    let &(_, name, start) =
+    let &(command, name, start) =
         IN_BACKGROUND.iter().find(|(c, ..)| *c == command).ok_or_else(|| format!("{command} doesn't run in the background"))?;
-    Ok(ExportRun { name, work: start(s, p)? })
+    Ok(ExportRun { command, name, work: start(s, p)? })
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-/// Says what [`ExportRun::run`] wrote, as its command would have, and gives its answer (or its
-/// failure).
-pub fn export_land(s: &mut Session, wrote: Wrote) -> CmdResult {
-    said(s, wrote)
+/// Says what [`ExportRun::run`] wrote, as its `command` ([`ExportRun::command`]) would have, and
+/// gives its answer (or its failure): the troubleshooting history files what it says under that
+/// command, as when it runs here.
+pub fn export_land(s: &mut Session, command: &'static str, wrote: Wrote) -> CmdResult {
+    let before = s.diagnostic_source.replace(command);
+    let landed = said(s, wrote);
+    s.diagnostic_source = before;
+    landed
 }
 
 #[cfg(test)]

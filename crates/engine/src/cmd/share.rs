@@ -196,13 +196,15 @@ pub fn map_pdf(s: &mut Session, dpi: f64) -> Result<Vec<u8>, String> {
 pub(crate) fn map_work(s: &Session, p: &Value) -> Result<Work, String> {
     let path = ps(p, "path").ok_or("path is required")?.to_string();
     let (width, height, dpi) = (f(p, "width"), f(p, "height"), f(p, "dpi"));
-    let (mut map, view_size) = (s.map().clone(), s.view_size);
+    let (mut map, view_size) = (s.map().detached(), s.view_size);
     Ok(Box::new(move || {
-        let png = png_of(&mut map, view_size, width, height, dpi)?;
-        rustgis_data::progress::check().map_err(|e| e.to_string())?;
-        rustgis_data::io::write_atomic(Path::new(&path), &png).map_err(|e| format!("{path}: {e}"))?;
-        let answer = json!({"path": path, "bytes": png.len()});
-        Ok(Wrote { answer, notes: vec![format!("Exported {path}")], then: None })
+        let written = (|| {
+            let png = png_of(&mut map, view_size, width, height, dpi)?;
+            rustgis_data::progress::check().map_err(|e| e.to_string())?;
+            rustgis_data::io::write_atomic(Path::new(&path), &png).map_err(|e| format!("{path}: {e}"))?;
+            Ok(json!({"path": path, "bytes": png.len()}))
+        })();
+        super::exports::drawn(std::slice::from_ref(&map), Vec::new(), written, path)
     }))
 }
 

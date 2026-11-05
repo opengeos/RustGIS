@@ -915,6 +915,14 @@ impl SourceLayer {
         self.open()
     }
 
+    /// Leaves a read under way to the layer this one was copied from, which takes it when it
+    /// lands: a copy drawn elsewhere (an export on a thread of its own) reads what it needs for
+    /// itself. The two would otherwise share the read, and the one that didn't take it would wait
+    /// for it forever.
+    pub fn detach_read(&mut self) {
+        self.pending = None;
+    }
+
     /// Forgets the window, so the next view reads again (after the source changes).
     pub fn reset(&mut self) {
         self.render_lod = Default::default();

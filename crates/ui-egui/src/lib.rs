@@ -3800,6 +3800,8 @@ impl RustGisApp {
                     if self.session.style_view.is_none() {
                         return exportjob::start(self, "share.exportMap", json!({"path": path, "dpi": 192}));
                     }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    exportjob::idle(self)?;
                     return self.run("share.exportMap", json!({"path": path, "dpi": 192}));
                 }
             }

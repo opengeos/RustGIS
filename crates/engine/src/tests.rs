@@ -28076,7 +28076,9 @@ fn exports_run_on_another_thread() {
         let mark = s.notice_mark();
         let wrote = std::thread::spawn(move || run.run(&Control::new())).join().unwrap().unwrap();
         assert!(s.notices_since(mark).is_empty(), "{command}: nothing is said before it lands");
-        let answer_there = export_land(&mut s, wrote).unwrap();
+        let answer_there = export_land(&mut s, command, wrote).unwrap();
+        let filed = s.diagnostics.records().last().map(|r| r.source.clone());
+        assert_eq!(filed.as_deref(), Some(command), "the history files what it said under the command");
         assert_eq!(said(&s, mark, &there), said_here, "{command} {file}");
         // The path as it appears in JSON: on Windows its backslashes are escaped there.
         let unpathed = |v: &Value, path: &str| {
@@ -28123,7 +28125,27 @@ fn exports_run_on_another_thread() {
     let here = s.run("layout.export", &json!({"path": nowhere, "dpi": 48})).unwrap_err();
     let run = export_start(&mut s, "layout.export", &json!({"path": nowhere, "dpi": 48})).unwrap();
     let wrote = run.run(&Control::new()).unwrap();
-    assert_eq!(export_land(&mut s, wrote).unwrap_err(), here);
+    assert_eq!(export_land(&mut s, "layout.export", wrote).unwrap_err(), here);
+    // A streamed layer's source that failed on the copy is marked on its live layer, unless that
+    // was opened from somewhere else meanwhile.
+    let li = s.map().layers.iter().position(|l| l.name == "Countries").unwrap();
+    let mut src = rustgis_map::source::SourceLayer::default();
+    src.path = Some("gone.fgb".into());
+    s.map_mut().layers[li].source = Some(src.clone());
+    let mut copy = s.map().detached();
+    let mut failed = src.clone();
+    failed.error = Some("gone.fgb: not found".into());
+    copy.layers[li].source = Some(failed);
+    let land = |s: &mut Session, copy: &rustgis_map::Map| {
+        let wrote = crate::cmd::exports::drawn(std::slice::from_ref(copy), Vec::new(), Ok(json!({})), at("drawn.png")).unwrap();
+        export_land(s, "share.exportMap", wrote).unwrap();
+        s.map().layers[li].source.as_ref().and_then(|src| src.error.clone())
+    };
+    assert_eq!(land(&mut s, &copy).as_deref(), Some("gone.fgb: not found"));
+    s.map_mut().layers[li].source.as_mut().unwrap().error = None;
+    s.map_mut().layers[li].source.as_mut().unwrap().path = Some("found.fgb".into());
+    assert_eq!(land(&mut s, &copy), None, "a source opened afresh keeps its own state");
+    s.map_mut().layers[li].source = None;
     let _ = std::fs::remove_dir_all(&dir);
 }
 

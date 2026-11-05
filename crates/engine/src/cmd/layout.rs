@@ -3489,40 +3489,22 @@ pub(crate) fn export_work(s: &Session, p: &Value) -> Result<super::exports::Work
         return Err("export to a .png, .pdf or .svg file".into());
     }
     let (dpi, all) = (f(p, "dpi").unwrap_or(150.0), b(p, "allPages").unwrap_or(true));
-    let project = s.project.clone();
+    let mut project = s.project.clone();
+    for m in &mut project.maps {
+        *m = m.detached();
+    }
     Ok(Box::new(move || {
         let mut copy = Session::new(project);
         let written = (|| {
             let bytes = if svg { layout_svg(&mut copy, li, dpi)?.into_bytes() } else { layout_bytes(&mut copy, li, pdf, dpi, all)? };
             rustgis_data::progress::check().map_err(|e| e.to_string())?;
             rustgis_data::io::write_atomic(Path::new(&path), &bytes).map_err(|e| format!("{path}: {e}"))?;
-            Ok::<_, String>(bytes.len())
+            Ok(json!({"path": path, "bytes": bytes.len()}))
         })();
-        // A cancelled export says only that it was cancelled.
-        if let (Err(e), Err(_)) = (&written, rustgis_data::progress::check()) {
-            return Err(e.clone());
-        }
         // What drawing it said (frames drawn as pictures, fonts it lacks), as the command says it
-        // here, then that it was written or why not: each notice whole, with the severity its
-        // history record has (the two are kept together, the history's text shortened).
-        let severities: Vec<_> = copy.diagnostics.records().into_iter().rev().map(|r| r.severity).collect();
-        let mut said: Vec<_> = copy.notices.into_iter().rev().zip(severities).map(|(n, severity)| (severity, n.text)).collect();
-        said.reverse();
-        let answer = written.as_ref().map_or(Value::Null, |bytes| json!({"path": path, "bytes": bytes}));
-        let then: super::exports::Then = Box::new(move |s: &mut Session, _: &mut Value| {
-            use rustgis_data::diagnostics::Severity;
-            for (severity, text) in said {
-                match severity {
-                    Severity::Error => s.notify(text, true),
-                    Severity::Warning => s.warn(text),
-                    Severity::Info => s.notify(text, false),
-                }
-            }
-            written?;
-            s.notify(format!("Exported {path}"), false);
-            Ok(())
-        });
-        Ok(super::exports::Wrote { answer, notes: Vec::new(), then: Some(then) })
+        // here.
+        let said = std::mem::take(&mut copy.notices).into_iter().map(|n| (n.severity, n.text)).collect();
+        super::exports::drawn(&copy.project.maps, said, written, path)
     }))
 }
 

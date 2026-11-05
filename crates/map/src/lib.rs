@@ -1406,6 +1406,16 @@ impl Map {
         }
     }
 
+    /// A copy to draw elsewhere (an export on a thread of its own): its layers keep this map's
+    /// identities, and its streamed layers read for themselves (see [`source::SourceLayer::detach_read`]).
+    pub fn detached(&self) -> Map {
+        let mut copy = self.clone();
+        for source in copy.layers.iter_mut().filter_map(|l| l.source.as_mut()) {
+            source.detach_read();
+        }
+        copy
+    }
+
     /// Identifies this live map, whatever its name or place among the project's maps.
     pub fn instance_id(&self) -> u64 {
         self.instance_id

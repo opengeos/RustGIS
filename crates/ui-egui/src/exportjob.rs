@@ -15,19 +15,26 @@ use crate::theme::Tokens;
 
 /// An export under way: what it is called, its Cancel and progress, and what it wrote once done.
 pub struct ExportJob {
+    command: &'static str,
     name: &'static str,
     control: Arc<Control>,
     slot: crate::Slot<Result<Wrote, String>>,
 }
 
+/// Refuses another export while one runs, whichever way it would run (one at a time).
+pub fn idle(app: &RustGisApp) -> Result<(), String> {
+    match &app.export_job {
+        Some(job) => Err(crate::i18n::fmt("{tool} is still running: wait for it, or cancel it.", &[("tool", tl_raw!(job.name))])),
+        None => Ok(()),
+    }
+}
+
 /// Starts `command` ([`exports::runs_in_background`]) with `p` on a thread of its own. One at a
 /// time: a second is refused while the first runs.
 pub fn start(app: &mut RustGisApp, command: &'static str, p: Value) -> Result<Value, String> {
-    if let Some(job) = &app.export_job {
-        return Err(crate::i18n::fmt("{tool} is still running: wait for it, or cancel it.", &[("tool", tl_raw!(job.name))]));
-    }
+    idle(app)?;
     let run = exports::export_start(&mut app.session, command, &p)?;
-    let name = run.name;
+    let (command, name) = (run.command, run.name);
     // Cancel stops it.
     let control = Control::stoppable();
     let (ctl, slot) = (control.clone(), crate::Slot::default());
@@ -43,7 +50,7 @@ pub fn start(app: &mut RustGisApp, command: &'static str, p: Value) -> Result<Va
             *out.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(wrote);
         })
         .map_err(|e| e.to_string())?;
-    app.export_job = Some(ExportJob { name, control, slot });
+    app.export_job = Some(ExportJob { command, name, control, slot });
     Ok(json!({"started": name}))
 }
 
@@ -53,11 +60,12 @@ pub fn land(app: &mut RustGisApp) -> bool {
     let Some(job) = &app.export_job else { return false };
     let done = job.slot.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take();
     let Some(done) = done else { return true };
+    let command = job.command;
     app.export_job = None;
     match done {
         // Its notices are the command's; the answer was for a script, which waits for its own.
         Ok(wrote) => {
-            if let Err(e) = exports::export_land(&mut app.session, wrote) {
+            if let Err(e) = exports::export_land(&mut app.session, command, wrote) {
                 app.session.notify(e, true);
             }
         }
