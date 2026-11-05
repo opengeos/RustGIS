@@ -666,7 +666,9 @@ impl Reproject {
             Some(c) => match Crs::from_epsg(c) {
                 Some(crs) => crs,
                 None => {
-                    notes.push(format!("unknown coordinate system EPSG:{c}; read as longitude/latitude"));
+                    // Unknown, or one only the desktop app can use (an azimuthal equidistant one in
+                    // the web app), which it says.
+                    notes.push(format!("{}; read as longitude/latitude", crate::raster::crs::unusable_epsg(c)));
                     Crs::LonLat
                 }
             },
