@@ -3058,34 +3058,17 @@ fn first_value(features: &[Box<RawValue>]) -> Option<serde_json::Value> {
 }
 
 /// What tells a protocol buffer page from another, to find a page sent again: its first feature's
-/// object id, or else (no id, or an empty one) its length and a hash of its first and last
-/// features' geometries and values (ids are numbered within each page, and two pages may start
-/// with the same row). The hash is taken as they're written, so a large geometry isn't held twice.
+/// object id, or else (no id, or an empty one) its fingerprint, taken from the page as it was sent
+/// (ids are numbered within each page, two pages may start with the same row, and a page sent
+/// again may be cut shorter by the limit).
 fn first_mark(page: &crate::esripbf::Page) -> Option<serde_json::Value> {
-    use std::fmt::Write as _;
-    use std::hash::Hasher as _;
-    let features = &page.dataset.features;
-    let (f, l) = (features.first()?, features.last()?);
+    let f = page.dataset.features.first()?;
     let id = page
         .object_id_field
         .and_then(|i| f.attrs.get(i))
         .filter(|id| **id != crate::Value::Null)
         .and_then(|id| serde_json::to_value(id).ok());
-    id.or_else(|| {
-        let mut hash = Hashing(std::collections::hash_map::DefaultHasher::new());
-        write!(hash, "{:?} {:?} {:?} {:?}", f.geometry, f.attrs, l.geometry, l.attrs).ok()?;
-        Some(serde_json::Value::String(format!("{} {:016x}", features.len(), hash.0.finish())))
-    })
-}
-
-/// Hashes what is written to it, without keeping it.
-struct Hashing(std::collections::hash_map::DefaultHasher);
-
-impl std::fmt::Write for Hashing {
-    fn write_str(&mut self, s: &str) -> std::fmt::Result {
-        std::hash::Hasher::write(&mut self.0, s.as_bytes());
-        Ok(())
-    }
+    id.or_else(|| Some(serde_json::Value::String(format!("{:016x}", page.fingerprint))))
 }
 
 /// Starts reading a service's features at `url`, up to `max`, before anything is fetched.
@@ -3471,7 +3454,9 @@ impl Pages {
         match &mut self.decoded {
             None => self.decoded = Some((page.dataset, report, page.losses)),
             Some((ds, joined, losses)) => {
-                if ds.fields != page.dataset.fields {
+                // By name and type: the first page's aliases are kept.
+                let same = |a: &crate::Field, b: &crate::Field| a.name == b.name && a.ty == b.ty;
+                if ds.fields.len() != page.dataset.fields.len() || !ds.fields.iter().zip(&page.dataset.fields).all(|(a, b)| same(a, b)) {
                     return self.stop(format!("the page after feature {read} has other fields than the first; the rest aren't read"));
                 }
                 // Each page's positions are in its own system, and its geometries of its own type;
@@ -4982,6 +4967,22 @@ mod tests {
         };
         let Step::Fetch(first) = fresh().join_page(blank(&[0, 1])) else { panic!("the first page") };
         let Step::Fetch(p) = (*first).join_page(blank(&[2, 3])) else { panic!("an empty object id taken for a page sent again") };
+        assert_eq!(p.read(), 4);
+        // A page without object ids sent again is told so, even cut shorter by the limit.
+        let idless = |limit: usize| {
+            let mut p = crate::esripbf::read_page_within(&pbf(&[0, 1], true, "OBJECTID"), "query", limit).unwrap();
+            p.object_id_field = None;
+            p
+        };
+        let Step::Fetch(first) = fresh().join_page(idless(usize::MAX)) else { panic!("the first page") };
+        let Step::Decoded(ds, _, Some(note)) = (*first).join_page(idless(1)) else { panic!("a page sent again, cut, joined") };
+        assert_eq!(ds.features.len(), 2);
+        assert!(note.contains("first features again"), "{note}");
+        // Pages are joined by their fields' names and types: another alias doesn't stop the read.
+        let Step::Fetch(first) = fresh().join_page(page(&[0, 1], lonlat, point)) else { panic!("the first page") };
+        let mut aliased = page(&[2, 3], lonlat, point);
+        aliased.dataset.fields[0].alias = Some("Object id".into());
+        let Step::Fetch(p) = (*first).join_page(aliased) else { panic!("another alias taken for other fields") };
         assert_eq!(p.read(), 4);
         // A page that would take the layer past its memory budget isn't joined, and says so; the
         // first page is kept whatever it takes, and one within the budget is joined.

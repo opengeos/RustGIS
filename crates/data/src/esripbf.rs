@@ -111,6 +111,10 @@ pub struct Page {
     /// Features it holds past the limit it was read within ([`read_page_within`]), not read: what
     /// they lost isn't counted.
     pub left_out: usize,
+    /// A hash of how many features it holds and of its first and last features as they were sent,
+    /// taken before any limit: a reader of pages tells a page sent again by it when the features
+    /// have no object id.
+    pub fingerprint: u64,
 }
 
 /// What a page's features lost or had assumed, counted.
@@ -243,6 +247,15 @@ pub fn read_page_within(bytes: &[u8], name: &str, limit: usize) -> Result<Page> 
             return Err(too_many_rows(features.len(), declared.len()));
         }
     }
+    let fingerprint = {
+        use std::hash::Hasher as _;
+        let mut hash = std::collections::hash_map::DefaultHasher::new();
+        hash.write_usize(features.len());
+        for f in [features.first(), features.last()].into_iter().flatten() {
+            hash.write(f);
+        }
+        hash.finish()
+    };
     let left_out = features.len().saturating_sub(limit);
     features.truncate(limit);
     let rows = row_bytes(features.len(), declared.len());
@@ -354,7 +367,7 @@ pub fn read_page_within(bytes: &[u8], name: &str, limit: usize) -> Result<Page> 
     let memory = rows
         .saturating_add(MAX_GEOMETRY_BYTES.saturating_sub(tally.geometry_room))
         .saturating_add(MAX_TEXT_BYTES.saturating_sub(tally.text_room));
-    Ok(Page { dataset: ds, report, exceeded_transfer_limit: more, object_id_field, losses, memory, left_out })
+    Ok(Page { dataset: ds, report, exceeded_transfer_limit: more, object_id_field, losses, memory, left_out, fingerprint })
 }
 
 /// A reader of protocol buffer fields, which refuses what runs past its bytes.
