@@ -3071,6 +3071,19 @@ mod tests {
         pm
     }
 
+    /// The legend of `map` at 1:1e6 recorded for a vector export, on a page of `side` pixels, drawn
+    /// back on white.
+    fn recorded_legend(map: &Map, side: u32) -> Pixmap {
+        let mut c = Canvas::recording(side, side).unwrap();
+        let opts = LegendOptions { hide_other: false, exclude: &[], scale: 1e6 };
+        legend(&mut c, Rect::from_xywh(0.0, 0.0, side as f32, side as f32).unwrap(), map, "", None, opts, 1.0);
+        let (_, _, items) = c.into_drawing().unwrap().finish();
+        let mut pm = Pixmap::new(side, side).unwrap();
+        pm.fill(tiny_skia::Color::WHITE);
+        crate::vector::replay(&items, &mut pm, Transform::identity());
+        pm
+    }
+
     /// What the map's code draws for a point at (`x`, `y`) on white.
     fn drawn_point(s: &rustgis_map::Symbol, strokes: &[rustgis_map::LineStroke], (x, y): (f32, f32), ppp: f32) -> Pixmap {
         let mut pm = Pixmap::new(200, 200).unwrap();
@@ -3183,13 +3196,10 @@ mod tests {
         map.add_group(group);
         let (r, g, b) = middle(&map);
         assert!((185..=197).contains(&r) && r == g && g == b, "{r} {g} {b}");
-        // On a page recorded for a vector export, the symbol is placed too (without a name, it is
-        // all there is).
-        map.layers[0].name.clear();
-        let mut c = Canvas::recording(200, 200).unwrap();
-        let opts = LegendOptions { hide_other: false, exclude: &[], scale: 1e6 };
-        legend(&mut c, Rect::from_xywh(0.0, 0.0, 200.0, 200.0).unwrap(), &map, "", None, opts, 1.0);
-        assert!(c.into_drawing().is_some_and(|d| !d.is_empty()));
+        // Recorded for a vector export, it is half of half too.
+        let p = recorded_legend(&map, 200).pixel(8, 7).unwrap();
+        let (r, g, b) = (p.red(), p.green(), p.blue());
+        assert!((185..=197).contains(&r) && r == g && g == b, "recorded: {r} {g} {b}");
     }
 
     #[test]
@@ -3325,9 +3335,12 @@ mod tests {
             crate::canvas::with_canvas(&mut pm, |c| {
                 legend(c, Rect::from_xywh(0.0, 0.0, 2100.0, 2100.0).unwrap(), &map, "", None, opts, 1.0)
             });
-            let white = |x, y| pm.pixel(x, y).is_some_and(|p| (p.red(), p.green(), p.blue()) == (255, 255, 255));
-            assert!(!white(10, 10) && !white(2040, 2040), "transparency {transparency}: it fills the box");
-            assert!(white(10, 2060) && white(2060, 10), "transparency {transparency}: it stays in the box");
+            // Drawn, and recorded for a vector export, where only its clip cuts it.
+            for pm in [pm, recorded_legend(&map, 2100)] {
+                let white = |x, y| pm.pixel(x, y).is_some_and(|p| (p.red(), p.green(), p.blue()) == (255, 255, 255));
+                assert!(!white(10, 10) && !white(2040, 2040), "transparency {transparency}: it fills the box");
+                assert!(white(10, 2060) && white(2060, 10), "transparency {transparency}: it stays in the box");
+            }
         }
     }
 
