@@ -1286,6 +1286,8 @@ fn add_data(s: &mut Session, p: &Value) -> CmdResult {
     #[cfg(not(target_arch = "wasm32"))]
     if is_geojson(path)
         && !rustgis_data::cityjson::is_cityjson_name(path)
+        // One read whole ahead keeps that route, though the file grew since.
+        && !super::reads::placed_for(s, &whole_key(path))
         && b(p, "stream").unwrap_or_else(|| {
             std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.len() > rustgis_data::source::geojson::IN_PLACE_ABOVE)
         })
@@ -2698,12 +2700,17 @@ fn load_all(s: &mut Session, p: &Value) -> CmdResult {
     let key = load_all_key(s.map().layer(id).ok_or("no such layer")?);
     let ahead = super::reads::take::<LoadedAll>(s, &key);
     let l = s.map().layer(id).ok_or("no such layer")?;
-    let ds = match ahead {
+    let (mut ds, unread) = match ahead {
         // Read from the source the layer still reads: one opened afresh since is read again.
-        Some((copied, ds)) if l.source.as_ref().is_some_and(|src| src.same_opening(&copied)) => ds?,
-        _ => l.load_all()?,
+        Some((copied, read)) if l.source.as_ref().is_some_and(|src| src.same_opening(&copied)) => read?,
+        _ => l.load_all_counted()?,
     };
-    let n = ds.features.len();
+    // Named as the layer is now: it may have been renamed while the read ran.
+    ds.name = l.dataset.name.clone();
+    let (n, name) = (ds.features.len(), l.name.clone());
+    if unread > 0 {
+        s.warn(format!("{name}: {unread} rows couldn't be read and were left out"));
+    }
     let l = s.map_mut().layer_mut(id).ok_or("no such layer")?;
     l.dataset = ds;
     l.dataset.windowed = false;
@@ -2713,8 +2720,9 @@ fn load_all(s: &mut Session, p: &Value) -> CmdResult {
     Ok(json!({"layer": id, "features": n}))
 }
 
-/// Load All's read made before it runs: the source it read, and what it read.
-type LoadedAll = (rustgis_map::source::SourceLayer, Result<rustgis_data::Dataset, String>);
+/// Load All's read made before it runs: the source it read, and what it read with the number of
+/// rows that couldn't be read.
+type LoadedAll = (rustgis_map::source::SourceLayer, Result<(rustgis_data::Dataset, usize), String>);
 
 /// The key Load All's read of `l` is taken by (see [`super::reads`]).
 fn load_all_key(l: &rustgis_map::Layer) -> String {
@@ -2730,7 +2738,7 @@ pub(crate) fn load_all_ahead(s: &Session, p: &Value) -> Option<super::reads::Rea
     // Its own read: the live layer keeps the one under way.
     source.detach_read();
     let copied = source.clone();
-    Some(super::reads::ahead("Load All Features", load_all_key(l), move || (copied, copy.load_all())))
+    Some(super::reads::ahead("Load All Features", load_all_key(l), move || (copied, copy.load_all_counted())))
 }
 
 /// Adds a layer file: a layer with its data, symbology and labels.

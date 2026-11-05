@@ -40,6 +40,9 @@ struct Asked {
 /// A read under way: what it is for, its Cancel and progress, and what it read once done.
 struct ReadJob {
     asked: Asked,
+    /// What it was for went while it read: cancelled, it keeps its place until its thread ends
+    /// (a reader that doesn't stop for Cancel still runs), so reads still go one at a time.
+    gone: Option<Gone>,
     name: &'static str,
     control: Arc<Control>,
     slot: crate::Slot<Result<reads::Read, String>>,
@@ -131,7 +134,9 @@ fn placed(app: &RustGisApp, asked: &Asked) -> Result<Value, Gone> {
 /// Starts `asked`'s read with `p`, or runs it here when it reads nothing ahead (or its thread
 /// can't start).
 fn start(app: &mut RustGisApp, asked: Asked, p: Value) -> Result<Value, String> {
-    let Some(ahead) = reads::read_ahead(&app.session, asked.command, &p) else { return app.run(asked.command, p) };
+    // Picked on this thread, so a bug in the picking must not take the app down: it reads here.
+    let picked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| reads::read_ahead(&app.session, asked.command, &p)));
+    let Ok(Some(ahead)) = picked else { return app.run(asked.command, p) };
     let name = ahead.name;
     let control = Control::stoppable();
     let (ctl, slot) = (control.clone(), crate::Slot::default());
@@ -148,7 +153,7 @@ fn start(app: &mut RustGisApp, asked: Asked, p: Value) -> Result<Value, String> 
         log::warn!("{name} reads here: its thread didn't start: {e}");
         return app.run(asked.command, p);
     }
-    app.reads.job = Some(ReadJob { asked, name, control, slot });
+    app.reads.job = Some(ReadJob { asked, gone: None, name, control, slot });
     Ok(json!({"started": name}))
 }
 
@@ -159,19 +164,19 @@ pub fn land(app: &mut RustGisApp) -> bool {
         return false;
     }
     let mut left: Vec<(String, Gone)> = Vec::new();
+    // What it was for is gone: it is cancelled, and said with the rest below once it stops.
+    let gone = app.reads.job.as_ref().filter(|j| j.gone.is_none()).and_then(|j| placed(app, &j.asked).err());
+    if let (Some(why), Some(job)) = (gone, app.reads.job.as_mut()) {
+        job.control.cancel();
+        job.gone = Some(why);
+    }
     if let Some(job) = &app.reads.job {
-        match placed(app, &job.asked) {
-            // What it was for is gone: it stops, and is said with the rest below.
-            Err(why) => {
-                job.control.cancel();
-                if let Some(job) = app.reads.job.take() {
-                    left.push((job.asked.what, why));
-                }
-            }
-            Ok(p) => {
-                let done = job.slot.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take();
-                let Some(done) = done else { return true };
-                let Some(job) = app.reads.job.take() else { return false };
+        let done = job.slot.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take();
+        let Some(done) = done else { return true };
+        let Some(job) = app.reads.job.take() else { return false };
+        match (job.gone, placed(app, &job.asked)) {
+            (Some(why), _) | (None, Err(why)) => left.push((job.asked.what, why)),
+            (None, Ok(p)) => {
                 if job.control.is_cancelled() {
                     // Cancelled (once it had read too): it adds nothing, and nor does what waits.
                     app.session.notify(

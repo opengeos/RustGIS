@@ -50,7 +50,7 @@ On the desktop, a file Add Data reads whole (a GeoTIFF or another raster, one GD
 GeoJSON of up to 32 MB, delimited text or a spreadsheet) is read in the background, so the map
 and the rest of the window stay in use: the status bar shows **Add Data**, how many files wait
 after it, and **Cancel**. Files dropped or added together are read one at a time and added in
-that order. Cancel leaves the file being read and those waiting; opening another project, or
+that order; one that asks which layers to add joins them once you choose. Cancel leaves the file being read and those waiting; opening another project, or
 switching to another map, leaves them too, and a message says which. A file read in place, a web
 service or a database adds as before, and scripts read the file where the command runs.
 **Home › Add › Add Data › Delimited Text…** asks for a CSV or a spreadsheet first, then lists its columns to pick the x and y (or WKT)

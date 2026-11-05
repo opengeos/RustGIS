@@ -79,3 +79,9 @@ pub(crate) fn take<T: 'static>(s: &mut Session, key: &str) -> Option<T> {
     let read = s.read_ahead.take()?;
     read.value.downcast::<T>().ok().map(|v| *v)
 }
+
+/// Whether a read is placed for `key`, without taking it.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn placed_for(s: &Session, key: &str) -> bool {
+    s.read_ahead.as_ref().is_some_and(|r| r.key == key)
+}
