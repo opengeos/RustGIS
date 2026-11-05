@@ -522,10 +522,10 @@ pub(crate) fn model_ahead(s: &Session, p: &Value) -> super::reads::ReadAhead {
     let (view_size, active_layer, p) = (s.view_size, s.active_layer, p.clone());
     // What its tools ask of servers and files goes in this session's Diagnostics, as when they
     // run here: the run here takes their results and asks nothing.
-    let diagnostics = s.diagnostics.clone();
+    let requests = s.diagnostics.capture();
     super::reads::ahead("Run Model", MODEL_AHEAD.into(), move || {
         let mut copy = Session::new(project);
-        copy.diagnostics = diagnostics;
+        copy.requests_into = Some(requests);
         copy.trusted_models = trusted;
         copy.view_size = view_size;
         copy.active_layer = active_layer;

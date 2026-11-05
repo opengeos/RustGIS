@@ -176,9 +176,15 @@ fn run_now(app: &mut RustGisApp, id: &str, p: Value) {
     show(app, r);
 }
 
-/// Shows how a model's run from the Models section went, or why it didn't run.
+/// Shows how a model's run from the Models section went, or why it didn't run, while that
+/// section is open: in another, its result isn't that section's (a failure is said in the
+/// status bar either way).
 #[cfg(not(target_arch = "wasm32"))]
 fn model_ran(app: &mut RustGisApp, landed: crate::Landed) {
+    if app.workflow.section != "models" {
+        app.map.invalidate();
+        return;
+    }
     match landed {
         crate::Landed::Ran(r) => show(app, r),
         crate::Landed::NotRun(why) => show(app, Err(why)),

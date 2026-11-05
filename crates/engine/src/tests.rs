@@ -28632,6 +28632,7 @@ fn reads_made_ahead_are_taken_by_the_command() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn a_models_tools_run_ahead_are_taken_by_its_run() {
     use rustgis_analysis::control::Control;

@@ -85,9 +85,10 @@ pub struct ModelBuilder {
     pub search: String,
     pub log: Vec<(String, LogKind)>,
     pub status: HashMap<String, Status>,
-    /// The graph of the run under way, until it lands: another one on the canvas by then (edited,
-    /// or another model opened) isn't marked with what it did.
-    running: Option<ModelGraph>,
+    /// The graphs of the runs under way and waiting, in the order asked, until each lands:
+    /// another one on the canvas by then (edited, or another model opened) isn't marked with
+    /// what it did.
+    running: std::collections::VecDeque<ModelGraph>,
     /// What to do once the user agrees to drop unsaved changes.
     confirm: Option<Pending>,
     /// The problems of the graph, kept until it or the project changes (the project's
@@ -404,7 +405,7 @@ fn run_model(app: &mut RustGisApp) {
         }
         p = json!({"name": saved});
     }
-    app.mb.running = Some(app.mb.graph.clone());
+    app.mb.running.push_back(app.mb.graph.clone());
     #[cfg(not(target_arch = "wasm32"))]
     {
         let _ = crate::readjob::run_then(app, "model.run", p, Some(landed));
@@ -425,7 +426,7 @@ fn run_model(app: &mut RustGisApp) {
 fn landed(app: &mut RustGisApp, landed: crate::Landed) {
     app.mb.status.clear();
     app.mb.log.clear();
-    let same = app.mb.running.take().is_some_and(|g| g == app.mb.graph);
+    let same = app.mb.running.pop_front().is_some_and(|g| g == app.mb.graph);
     let res = match landed {
         crate::Landed::Ran(res) => res,
         crate::Landed::NotRun(why) => {
@@ -433,8 +434,10 @@ fn landed(app: &mut RustGisApp, landed: crate::Landed) {
             return;
         }
     };
-    // (Another graph on the canvas: only how the run ended.)
-    let report = if same { app.session.model_run.clone().unwrap_or_default() } else { Default::default() };
+    // Its report, when the run made one (one refused before it ran, a model removed meanwhile,
+    // leaves the last run's); and only on the graph it ran: for another, only how it ended.
+    let report = app.session.model_run.clone().filter(|r| same && (res.is_ok() || r.error.as_ref() == res.as_ref().err()));
+    let report = report.unwrap_or_default();
     let titles: HashMap<String, String> = app.mb.graph.nodes.iter().map(|n| (n.id.clone(), model::title(n))).collect();
     for n in &report.nodes {
         let title = titles.get(&n.node).cloned().unwrap_or_default();
@@ -1857,6 +1860,17 @@ mod tests {
             "{:?}",
             app.mb.log
         );
+        // Run pressed twice: the second waits for the first, and each marks the canvas as it lands.
+        run_model(&mut app);
+        run_model(&mut app);
+        while crate::readjob::land(&mut app) {
+            assert!(std::time::Instant::now() < end, "the models never landed");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert_eq!(app.session.map().layers.len(), layers + 4);
+        assert!(app.mb.graph.nodes.iter().all(|n| app.mb.status.get(&n.id) == Some(&Status::Done)));
+        assert!(app.mb.log.iter().any(|(line, _)| line.starts_with("Buffer made")), "{:?}", app.mb.log);
+        assert!(app.mb.running.is_empty());
         // Cancelled: nothing added, and the canvas says so without the last run's marks.
         run_model(&mut app);
         app.reads.cancel_for_tests();
@@ -1864,7 +1878,7 @@ mod tests {
             assert!(std::time::Instant::now() < end, "the model never landed");
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
-        assert_eq!(app.session.map().layers.len(), layers + 2);
+        assert_eq!(app.session.map().layers.len(), layers + 4);
         assert!(app.mb.status.is_empty());
         assert_eq!(app.mb.log, vec![("Run failed: Run Model of Model was cancelled".to_string(), LogKind::Error)]);
         app.reads_off_frame = false;

@@ -1180,8 +1180,9 @@ their name.
   has that tool and those after it run again as the results are added, and so does a tool that
   writes a file, a plugin tool or a GeoLibre tool, with those after it. Those run as a model
   always has, holding the window until they finish, with the work limits of a run that can't
-  be cancelled. A model run from a script, the command line or the assistant runs where the
-  command runs.
+  be cancelled. A file a tool reads by its path isn't compared: one changed during the run
+  gives the result from what was read. A model run from a script, the command line or the
+  assistant runs where the command runs.
 - **Save** keeps the model in the project; **Export** writes it as a `*.model.json` file, which
   **Import** (or dropping the file on the window) opens again. A model from a file may not read
   or write files. **Copy Command** copies a `model.run` command that runs the model from the

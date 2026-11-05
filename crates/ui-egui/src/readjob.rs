@@ -258,7 +258,13 @@ pub fn land(app: &mut RustGisApp) -> bool {
                         // A bug in a model's run on a copy of the session: it runs here, as it would
                         // have.
                         Err(e) if job.asked.command == "model.run" => {
-                            log::warn!("{}: {e}; it runs here", job.name);
+                            app.session.notify(
+                                crate::i18n::fmt(
+                                    "{tool} couldn't work in the background ({e}): it ran here",
+                                    &[("tool", tl_raw!(job.name)), ("e", &e)],
+                                ),
+                                false,
+                            );
                             let r = app.run(job.asked.command, p);
                             let _ = answered(app, job.asked.then, r);
                             app.map.invalidate();
