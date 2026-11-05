@@ -845,6 +845,15 @@ pub(crate) fn check_file(v: &Value) -> Result<(), String> {
                     index + 1
                 ));
             }
+            if by_id
+                .get(edge.from.as_str())
+                .is_some_and(|n| n.kind == ModelNodeKind::Input && n.layer.as_deref().is_none_or(|layer| layer.trim().is_empty()))
+            {
+                return Err(format!(
+                    "model connection {} has an input without a layer. Choose a layer for this input before importing this model.",
+                    index + 1
+                ));
+            }
             if to_port.is_some_and(|p| !p.many) && !single_inputs.insert((edge.to.as_str(), edge.to_port.as_str())) {
                 return Err(format!(
                     "model connection {} duplicates a single-valued input port. Keep one connection to this port before importing this model.",

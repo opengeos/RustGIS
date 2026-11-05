@@ -1181,6 +1181,7 @@ Import checks declared model and web-tool versions before interpreting their con
 versions, unreadable nodes, connections or steps, and unknown file, graph, node, connection or step
 fields are refused. A file containing both a graph and steps is refused rather than choosing one.
 Connections using unknown ports or feeding multiple sources into a single-valued port are refused.
+Connections from inputs with missing or blank layer names are also refused.
 Graphs that would lose nodes or connections during import are refused with a count and
 advice to fix the file, leaving the current project unchanged. Supported files and legacy files
 without a version marker continue to import, including repeated sources in multi-input tools such

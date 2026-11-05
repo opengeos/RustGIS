@@ -99,6 +99,16 @@ fn model_import_refuses_unsupported_files_without_changing_session() {
             "connection 2 duplicates a single-valued input port",
         ),
         (
+            json!({"graph": {"nodes": [{"id": "a", "kind": "input"}, {"id": "t", "kind": "tool", "tool": "buffer"}],
+            "edges": [{"from": "a", "fromPort": "out", "to": "t", "toPort": "input"}]}}),
+            "connection 1 has an input without a layer",
+        ),
+        (
+            json!({"graph": {"nodes": [{"id": "a", "kind": "input", "layer": ""}, {"id": "t", "kind": "tool", "tool": "buffer"}],
+            "edges": [{"from": "a", "fromPort": "out", "to": "t", "toPort": "input"}]}}),
+            "connection 1 has an input without a layer",
+        ),
+        (
             json!({"graph": {"nodes": [{"id": "a", "kind": "tool", "tool": "buffer"},
             {"id": "b", "kind": "tool", "tool": "buffer"}], "edges": [
                 {"from": "a", "fromPort": "out", "to": "b", "toPort": "input"},
