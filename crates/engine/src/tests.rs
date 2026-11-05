@@ -5296,17 +5296,37 @@ fn layout_surrounds_take_cartographic_options() {
     ));
     s.run("layout.update", &json!({"element": bar, "divisions": "2"})).unwrap();
     assert!(matches!(find(&s, "scaleBar").kind, ElementKind::ScaleBar { units: ScaleUnits::Miles, divisions: 2, .. }));
-    for bad in [json!({"units": "parsecs"}), json!({"divisions": "many"}), json!({"style": "zigzag"})] {
+    // Its colours: the lines and labels, and the alternating bar's light divisions; one given
+    // leaves the other as it was.
+    assert!(matches!(
+        find(&s, "scaleBar").kind,
+        ElementKind::ScaleBar { color, fill, .. } if color == Rgba::rgb(0x22, 0x22, 0x22) && fill == Rgba::rgb(0xFF, 0xFF, 0xFF)
+    ));
+    s.run("layout.update", &json!({"element": bar, "color": "#1F4E79"})).unwrap();
+    s.run("layout.update", &json!({"element": bar, "fill": "#FDE68A"})).unwrap();
+    assert!(matches!(
+        find(&s, "scaleBar").kind,
+        ElementKind::ScaleBar { color, fill, divisions: 2, .. }
+            if color == Rgba::rgb(0x1F, 0x4E, 0x79) && fill == Rgba::rgb(0xFD, 0xE6, 0x8A)
+    ));
+    let bad = [
+        json!({"units": "parsecs"}),
+        json!({"divisions": "many"}),
+        json!({"style": "zigzag"}),
+        json!({"color": "red"}),
+        json!({"fill": "#12"}),
+    ];
+    for bad in bad {
         let mut p = bad.clone();
         p["element"] = json!(bar);
         assert!(s.run("layout.update", &p).is_err(), "{bad}");
     }
-    let added = s.run("layout.addElement", &json!({"kind": "scaleBar", "units": "feet", "style": "line"})).unwrap()["element"]
-        .as_u64()
-        .unwrap() as u32;
+    let added = s.run("layout.addElement", &json!({"kind": "scaleBar", "units": "feet", "style": "line", "color": "#B91C1C"})).unwrap();
+    let added = added["element"].as_u64().unwrap() as u32;
     assert!(matches!(
         s.project.layouts[0].element(added).unwrap().kind,
-        ElementKind::ScaleBar { units: ScaleUnits::Feet, divisions: 4, style: ScaleBarStyle::Line, .. }
+        ElementKind::ScaleBar { units: ScaleUnits::Feet, divisions: 4, style: ScaleBarStyle::Line, color, fill, .. }
+            if color == Rgba::rgb(0xB9, 0x1C, 0x1C) && fill == Rgba::rgb(0xFF, 0xFF, 0xFF)
     ));
     // The page draws with them all, and they survive a save.
     let out = std::env::temp_dir().join(format!("rustgis-surrounds-{}.png", std::process::id()));
