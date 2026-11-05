@@ -35,6 +35,9 @@ fn model_import_refuses_unsupported_files_without_changing_session() {
         (json!({"version": 2, "steps": "unreadable future steps"}), "unsupported version"),
         (json!({"version": null, "graph": {"nodes": []}}), "unsupported version"),
         (json!({"version": "1", "steps": []}), "unsupported version"),
+        (json!({"steps": [{"tool": "buffer", "params": {}, "when": {"enabled": true}}]}), "step 1 has unsupported fields"),
+        (json!({"steps": vec![json!({"tool": "buffer", "params": {}}); 2001]}), "at most 2000 steps"),
+        (json!({"graph": {"nodes": [], "edges": [], "future": {"enabled": true}}}), "graph has unsupported fields"),
         (json!({"version": "1.0.0", "graph": graph}), "node 2"),
         (json!({"graph": {"nodes": [{"id": "t", "kind": "tool", "tool": {}}]}}), "node 1"),
         (json!({"graph": {"nodes": [{"id": "  ", "kind": "input"}]}}), "discard 1 node(s)"),
@@ -72,7 +75,7 @@ fn model_import_refuses_unsupported_files_without_changing_session() {
         {
             let error = s.run("model.import", &params).unwrap_err();
             assert!(error.contains(message), "{error}");
-            if message == "unsupported version" || message.starts_with("node ") || message == "unsupported fields" {
+            if message == "unsupported version" || message.starts_with("node ") || message.contains("unsupported fields") {
                 assert!(error.contains("Update RustGIS"), "{error}");
             }
             assert_eq!(serde_json::to_value(&s.project).unwrap(), before);
@@ -133,7 +136,7 @@ fn model_import_preserves_supported_and_legacy_files() {
     }
 }
 
-/// Repeated merge inputs emitted by the graph writer retain their multiplicity after import.
+/// Repeated merge inputs survive import, saving under a new name and re-export.
 #[test]
 fn model_import_round_trips_repeated_step_inputs() {
     let mut original = Session::new(Project::new("Original"));
@@ -151,10 +154,15 @@ fn model_import_round_trips_repeated_step_inputs() {
         let model = &loaded.project.models[0];
         assert_eq!(serde_json::to_value(&model.steps).unwrap(), steps);
         assert_eq!(serde_json::to_value(model.graph.as_ref().unwrap()).unwrap(), file["graph"]);
+        loaded.run("model.save", &json!({"name": "Repeated", "rename": "Resaved", "graph": file["graph"]})).unwrap();
+        assert_eq!(serde_json::to_value(&loaded.project.models[0].steps).unwrap(), steps);
+        assert_eq!(serde_json::to_value(loaded.project.models[0].graph.as_ref().unwrap()).unwrap(), file["graph"]);
         assert!(loaded.notices.is_empty(), "supported files need no warning");
-        let reexported = loaded.run("model.export", &json!({"name": "Repeated"})).unwrap();
-        let reexported: Value = serde_json::from_str(reexported["text"].as_str().unwrap()).unwrap();
-        assert_eq!(reexported["graph"], file["graph"]);
+        for params in [json!({"name": "Resaved"}), json!({"name": "Resaved", "graph": file["graph"]})] {
+            let reexported = loaded.run("model.export", &params).unwrap();
+            let reexported: Value = serde_json::from_str(reexported["text"].as_str().unwrap()).unwrap();
+            assert_eq!(reexported["graph"], file["graph"]);
+        }
     }
 }
 

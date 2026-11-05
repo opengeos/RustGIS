@@ -413,8 +413,7 @@ pub fn gallery_list(kind: &str) -> CmdResult {
 
 fn new_model(s: &mut Session, p: &Value) -> CmdResult {
     let base = ps(p, "name").map(str::trim).filter(|n| !n.is_empty()).unwrap_or("Model").chars().take(200).collect::<String>();
-    let read_graph = if b(p, "imported").unwrap_or(false) { crate::model::graph_from_import } else { crate::model::graph_from_json };
-    let graph = p.get("graph").filter(|g| !g.is_null()).map(read_graph).transpose()?;
+    let graph = p.get("graph").filter(|g| !g.is_null()).map(crate::model::graph_from_json).transpose()?;
     let steps: Vec<ModelStep> = match p.get("steps") {
         _ if graph.is_some() => graph.as_ref().map(crate::model::graph_to_steps).unwrap_or_default(),
         Some(v) => serde_json::from_value(v.clone()).map_err(|e| format!("steps: {e}"))?,
