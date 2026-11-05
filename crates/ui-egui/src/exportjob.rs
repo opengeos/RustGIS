@@ -15,7 +15,7 @@ use crate::theme::Tokens;
 
 /// An export under way: what it is called, its Cancel and progress, and what it wrote once done.
 pub struct ExportJob {
-    command: &'static str,
+    started: exports::Started,
     name: &'static str,
     control: Arc<Control>,
     slot: crate::Slot<Result<Wrote, String>>,
@@ -34,7 +34,7 @@ pub fn idle(app: &RustGisApp) -> Result<(), String> {
 pub fn start(app: &mut RustGisApp, command: &'static str, p: Value) -> Result<Value, String> {
     idle(app)?;
     let run = exports::export_start(&mut app.session, command, &p)?;
-    let (command, name) = (run.command, run.name);
+    let (started, name) = (run.started(), run.name);
     // Cancel stops it.
     let control = Control::stoppable();
     let (ctl, slot) = (control.clone(), crate::Slot::default());
@@ -50,7 +50,7 @@ pub fn start(app: &mut RustGisApp, command: &'static str, p: Value) -> Result<Va
             *out.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(wrote);
         })
         .map_err(|e| e.to_string())?;
-    app.export_job = Some(ExportJob { command, name, control, slot });
+    app.export_job = Some(ExportJob { started, name, control, slot });
     Ok(json!({"started": name}))
 }
 
@@ -60,16 +60,11 @@ pub fn land(app: &mut RustGisApp) -> bool {
     let Some(job) = &app.export_job else { return false };
     let done = job.slot.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take();
     let Some(done) = done else { return true };
-    let command = job.command;
+    let started = job.started.clone();
     app.export_job = None;
-    match done {
-        // Its notices are the command's; the answer was for a script, which waits for its own.
-        Ok(wrote) => {
-            if let Err(e) = exports::export_land(&mut app.session, command, wrote) {
-                app.session.notify(e, true);
-            }
-        }
-        Err(e) => app.session.notify(e, true),
+    // Its notices are the command's; the answer was for a script, which waits for its own.
+    if let Err(e) = exports::export_land(&mut app.session, started, done) {
+        app.session.notify(e, true);
     }
     false
 }

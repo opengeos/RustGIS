@@ -28040,6 +28040,11 @@ fn raster_tools_run_on_another_thread() {
 #[test]
 fn exports_run_on_another_thread() {
     use crate::cmd::exports::{export_land, export_start, runs_in_background};
+    // A path as it appears in JSON, as `PATH`: on Windows its backslashes are escaped there.
+    let unpathed_json = |v: &Value, path: &str| {
+        let escaped = json!(path).to_string();
+        v.to_string().replace(escaped.trim_matches('"'), "PATH")
+    };
     use rustgis_analysis::control::Control;
     let mut s = world();
     s.run("layer.addDataBytes", &json!({"fileName": "dem.tif", "data": dem_b64()})).unwrap();
@@ -28072,11 +28077,17 @@ fn exports_run_on_another_thread() {
         let mark = s.notice_mark();
         let answer_here = s.run(command, &with(&here)).unwrap();
         let said_here = said(&s, mark, &here);
+        let logged = |s: &Session| s.log.entries().last().map(|e| (e.command.clone(), e.params.clone(), e.ok));
+        let logged_here = logged(&s);
+        assert!(logged_here.as_ref().is_some_and(|(c, ..)| c == command), "{command}: logged where it's called");
         let run = export_start(&mut s, command, &with(&there)).unwrap();
-        let mark = s.notice_mark();
-        let wrote = std::thread::spawn(move || run.run(&Control::new())).join().unwrap().unwrap();
+        let (mark, started) = (s.notice_mark(), run.started());
+        let wrote = std::thread::spawn(move || run.run(&Control::new())).join().unwrap();
         assert!(s.notices_since(mark).is_empty(), "{command}: nothing is said before it lands");
-        let answer_there = export_land(&mut s, command, wrote).unwrap();
+        let answer_there = export_land(&mut s, started, wrote).unwrap();
+        // The session's log has it as it has the export run here.
+        let there_params = logged(&s).map(|(c, p, ok)| (c, unpathed_json(&p, &there), ok));
+        assert_eq!(there_params, logged_here.map(|(c, p, ok)| (c, unpathed_json(&p, &here), ok)), "{command} {file}");
         let filed = s.diagnostics.records().last().map(|r| r.source.clone());
         assert_eq!(filed.as_deref(), Some(command), "the history files what it said under the command");
         assert_eq!(said(&s, mark, &there), said_here, "{command} {file}");
@@ -28124,8 +28135,9 @@ fn exports_run_on_another_thread() {
     let nowhere = dir.join("no").join("such.png").display().to_string();
     let here = s.run("layout.export", &json!({"path": nowhere, "dpi": 48})).unwrap_err();
     let run = export_start(&mut s, "layout.export", &json!({"path": nowhere, "dpi": 48})).unwrap();
-    let wrote = run.run(&Control::new()).unwrap();
-    assert_eq!(export_land(&mut s, "layout.export", wrote).unwrap_err(), here);
+    let started = run.started();
+    assert_eq!(export_land(&mut s, started, run.run(&Control::new())).unwrap_err(), here);
+    assert!(s.log.entries().last().is_some_and(|e| e.command == "layout.export" && !e.ok), "a failed one is logged as failed");
     // A streamed layer's source that failed on the copy is marked on its live layer, unless that
     // was opened from somewhere else meanwhile.
     let li = s.map().layers.iter().position(|l| l.name == "Countries").unwrap();
@@ -28137,8 +28149,9 @@ fn exports_run_on_another_thread() {
     failed.error = Some("gone.fgb: not found".into());
     copy.layers[li].source = Some(failed);
     let land = |s: &mut Session, copy: &rustgis_map::Map| {
-        let wrote = crate::cmd::exports::drawn(std::slice::from_ref(copy), Vec::new(), Ok(json!({})), at("drawn.png")).unwrap();
-        export_land(s, "share.exportMap", wrote).unwrap();
+        let wrote = crate::cmd::exports::drawn(std::slice::from_ref(copy), Vec::new(), Ok(json!({})), at("drawn.png"));
+        let started = export_start(s, "share.exportMap", &json!({"path": at("drawn.png")})).unwrap().started();
+        export_land(s, started, wrote).unwrap();
         s.map().layers[li].source.as_ref().and_then(|src| src.error.clone())
     };
     assert_eq!(land(&mut s, &copy).as_deref(), Some("gone.fgb: not found"));

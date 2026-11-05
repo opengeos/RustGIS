@@ -131,15 +131,30 @@ pub(crate) fn drawn(
 /// shared, and a streamed layer's source is read on the export's thread), and [`export_land`]
 /// says what it wrote.
 pub struct ExportRun {
-    /// The command it runs, which [`export_land`] says what it wrote as.
-    pub command: &'static str,
     /// What the export is called, for its progress and a cancelled run's error.
     pub name: &'static str,
+    started: Started,
     work: Work,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+/// The command an export started on another thread runs, with what and when: [`export_land`]
+/// says what it wrote as that command, and puts it in the session's log as `Session::run` does.
+#[derive(Clone)]
+pub struct Started {
+    pub(crate) command: &'static str,
+    pub(crate) params: Value,
+    pub(crate) at: u64,
+    pub(crate) start: web_time::Instant,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 impl ExportRun {
+    /// What [`export_land`] needs of it once it has run.
+    pub fn started(&self) -> Started {
+        self.started.clone()
+    }
+
     /// Writes the file, blocking until it's written; `control` stops it and counts its progress
     /// (see [`rustgis_analysis::control`]). A cancelled export leaves no file, or the one there
     /// before.
@@ -157,17 +172,23 @@ impl ExportRun {
 pub fn export_start(s: &mut Session, command: &str, p: &Value) -> Result<ExportRun, String> {
     let &(command, name, start) =
         IN_BACKGROUND.iter().find(|(c, ..)| *c == command).ok_or_else(|| format!("{command} doesn't run in the background"))?;
-    Ok(ExportRun { command, name, work: start(s, p)? })
+    let started = Started { command, params: p.clone(), at: crate::project_log::now_ms(), start: web_time::Instant::now() };
+    Ok(ExportRun { name, started, work: start(s, p)? })
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-/// Says what [`ExportRun::run`] wrote, as its `command` ([`ExportRun::command`]) would have, and
-/// gives its answer (or its failure): the troubleshooting history files what it says under that
-/// command, as when it runs here.
-pub fn export_land(s: &mut Session, command: &'static str, wrote: Wrote) -> CmdResult {
+/// Says what [`ExportRun::run`] wrote (or why it failed), as its command would have, and gives
+/// its answer: the troubleshooting history files what it says under that command, and the
+/// session's log has its entry, as when it runs here.
+pub fn export_land(s: &mut Session, started: Started, done: Result<Wrote, String>) -> CmdResult {
+    let Started { command, params, at, start } = started;
     let before = s.diagnostic_source.replace(command);
-    let landed = said(s, wrote);
+    let landed = done.and_then(|wrote| said(s, wrote));
     s.diagnostic_source = before;
+    if s.log.on() && crate::project_log::is_logged(s, command, &params) {
+        let entry = crate::project_log::entry(command, crate::project_log::kept_params(&params), &landed, at, start.elapsed());
+        s.log.push(entry);
+    }
     landed
 }
 
