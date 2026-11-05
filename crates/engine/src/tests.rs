@@ -5325,6 +5325,21 @@ fn layout_surrounds_take_cartographic_options() {
         p["element"] = json!(bar);
         assert!(s.run("layout.update", &p).is_err(), "{bad}");
     }
+    // A text's colour is refused as anything but text, when updated as when added; null keeps it.
+    let text = s.run("layout.addElement", &json!({"kind": "text", "text": "T", "color": "#1F4E79"})).unwrap();
+    let text = text["element"].as_u64().unwrap() as u32;
+    let text_color = |s: &Session| match &s.project.layouts[0].element(text).unwrap().kind {
+        ElementKind::Text { color, .. } => *color,
+        _ => panic!("a text"),
+    };
+    for bad in [json!(5), json!([255, 0, 0]), json!(true)] {
+        assert!(s.run("layout.addElement", &json!({"kind": "text", "text": "U", "color": bad})).is_err(), "{bad}");
+        assert!(s.run("layout.update", &json!({"element": text, "color": bad})).is_err(), "{bad}");
+    }
+    s.run("layout.update", &json!({"element": text, "color": null, "text": "V"})).unwrap();
+    assert_eq!(text_color(&s), Rgba::rgb(0x1F, 0x4E, 0x79));
+    s.run("layout.update", &json!({"element": text, "color": "#B91C1C"})).unwrap();
+    assert_eq!(text_color(&s), Rgba::rgb(0xB9, 0x1C, 0x1C));
     let added = s.run("layout.addElement", &json!({"kind": "scaleBar", "units": "feet", "style": "line", "color": "#B91C1C"})).unwrap();
     let added = added["element"].as_u64().unwrap() as u32;
     assert!(matches!(

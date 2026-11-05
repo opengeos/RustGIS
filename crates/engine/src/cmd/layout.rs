@@ -2985,8 +2985,9 @@ fn update(s: &mut Session, p: &Value) -> CmdResult {
         ),
         None => None,
     };
-    let col = match ps(p, "color") {
-        Some(c) => Some(Rgba::from_hex(c).ok_or("color must be #RRGGBB or #RRGGBBAA")?),
+    // A colour that isn't text is refused, as `color` does when adding (the default is unused).
+    let col = match p.get("color").filter(|v| !v.is_null()) {
+        Some(_) => Some(color(p, "color", Rgba::rgb(0, 0, 0))?),
         None => None,
     };
     // A text element's italic, alignment and spacing, checked before anything changes.

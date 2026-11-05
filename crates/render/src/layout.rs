@@ -3016,6 +3016,49 @@ mod tests {
         assert_eq!((0..y.saturating_sub(8)).map(|row| count(ink, row)).sum::<usize>(), 0, "no ink labels");
     }
 
+    /// A page draws a scale bar in its own colour and fill: the element's, through `draw_page`.
+    #[test]
+    fn a_page_draws_its_scale_bar_in_its_colours() {
+        let mut maps = vec![Map::new("m")];
+        let mut l = Layout::new("Layout", 100.0, 60.0);
+        let frame = l.add(
+            "Map",
+            (5.0, 35.0, 90.0, 20.0),
+            ElementKind::MapFrame {
+                map: "m".into(),
+                center: Coord::new(0.0, 0.0),
+                scale: 10_000_000.0,
+                shape: FrameShape::Rectangle,
+                grid: None,
+                extent_of: None,
+                extent_color: rustgis_map::layout::INDICATOR_COLOR,
+                extent_width: rustgis_map::layout::INDICATOR_WIDTH,
+                bearing: 0.0,
+                pitch: 0.0,
+            },
+        );
+        let (crimson, navy) = (Rgba::rgb(0xD0, 0x10, 0x10), Rgba::rgb(0x10, 0x10, 0xD0));
+        let bar = ElementKind::ScaleBar {
+            frame,
+            units: ScaleUnits::Auto,
+            divisions: 4,
+            style: ScaleBarStyle::Alternating,
+            color: crimson,
+            fill: navy,
+        };
+        l.add("Scale Bar", (5.0, 5.0, 90.0, 20.0), bar);
+        let pm = render(&l, &mut maps, 96.0, &PageInfo::default()).unwrap();
+        // Above the frame (30 mm of the page's 60): the bar's divisions in its colour and fill, and
+        // nothing in the default ink.
+        let above = pm.height() / 2;
+        let count = |hit: fn(tiny_skia::PremultipliedColorU8) -> bool| {
+            (0..above).flat_map(|y| (0..pm.width()).map(move |x| (x, y))).filter(|&(x, y)| pm.pixel(x, y).is_some_and(hit)).count()
+        };
+        assert!(count(red) > 100, "red divisions and labels");
+        assert!(count(|p| p.blue() > 180 && p.red() < 90 && p.green() < 90) > 100, "blue divisions");
+        assert_eq!(count(ink), 0, "no default ink");
+    }
+
     #[test]
     fn scale_numbers_are_short() {
         assert_eq!(scale_number(5.0, 1.25), "5");
