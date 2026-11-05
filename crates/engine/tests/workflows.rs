@@ -109,6 +109,21 @@ fn model_import_refuses_unsupported_files_without_changing_session() {
             "connection 1 has an input without a layer",
         ),
         (
+            json!({"graph": {"nodes": [{"id": "a", "kind": "input", "layer": "East;West"}, {"id": "t", "kind": "tool", "tool": "merge"}],
+            "edges": [{"from": "a", "fromPort": "out", "to": "t", "toPort": "inputs"}]}}),
+            "connection 1 has an input layer name that cannot be represented in steps",
+        ),
+        (
+            json!({"graph": {"nodes": [{"id": "a", "kind": "input", "layer": "%1"}, {"id": "t", "kind": "tool", "tool": "buffer"}],
+            "edges": [{"from": "a", "fromPort": "out", "to": "t", "toPort": "input"}]}}),
+            "connection 1 has an input layer name that cannot be represented in steps",
+        ),
+        (
+            json!({"graph": {"nodes": [{"id": "a", "kind": "input", "layer": " Points "}, {"id": "t", "kind": "tool", "tool": "buffer"}],
+            "edges": [{"from": "a", "fromPort": "out", "to": "t", "toPort": "input"}]}}),
+            "connection 1 has an input layer name that cannot be represented in steps",
+        ),
+        (
             json!({"graph": {"nodes": [{"id": "a", "kind": "tool", "tool": "buffer"},
             {"id": "b", "kind": "tool", "tool": "buffer"}], "edges": [
                 {"from": "a", "fromPort": "out", "to": "b", "toPort": "input"},
@@ -207,6 +222,21 @@ fn model_import_preserves_supported_and_legacy_files() {
                 }
             }
         }
+    }
+    // Step syntax stays literal for semicolons on single-input ports and nonnumeric percent names.
+    for (layer, tool, port) in [("East;West", "buffer", "input"), ("%north", "merge", "inputs")] {
+        let graph = json!({"nodes": [{"id": "i", "kind": "input", "layer": layer}, {"id": "t", "kind": "tool", "tool": tool}],
+            "edges": [{"from": "i", "fromPort": "out", "to": "t", "toPort": port}]});
+        let mut loaded = Session::new(Project::default());
+        loaded.run("model.import", &json!({"text": json!({"graph": graph}).to_string()})).unwrap();
+        assert_eq!(loaded.project.models[0].steps[0].params[port], layer);
+        let (_, web, _) = rustgis_engine::cmd::sharing::share_bytes(&mut loaded, "webTool", &json!({})).unwrap();
+        let mut reopened = Session::new(Project::default());
+        reopened.run("model.import", &json!({"text": String::from_utf8(web).unwrap()})).unwrap();
+        let exported = reopened.run("model.export", &json!({})).unwrap();
+        let file: Value = serde_json::from_str(exported["text"].as_str().unwrap()).unwrap();
+        assert!(file["graph"]["nodes"].as_array().unwrap().iter().any(|node| node["layer"] == layer));
+        assert!(loaded.notices.is_empty() && reopened.notices.is_empty());
     }
     // Graph capacity is checked before building or laying out a large multi-input step.
     for (name, inputs) in

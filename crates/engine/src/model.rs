@@ -845,14 +845,23 @@ pub(crate) fn check_file(v: &Value) -> Result<(), String> {
                     index + 1
                 ));
             }
-            if by_id
-                .get(edge.from.as_str())
-                .is_some_and(|n| n.kind == ModelNodeKind::Input && n.layer.as_deref().is_none_or(|layer| layer.trim().is_empty()))
-            {
-                return Err(format!(
-                    "model connection {} has an input without a layer. Choose a layer for this input before importing this model.",
-                    index + 1
-                ));
+            if let Some(input) = by_id.get(edge.from.as_str()).filter(|n| n.kind == ModelNodeKind::Input) {
+                let layer = input.layer.as_deref().filter(|layer| !layer.trim().is_empty()).ok_or_else(|| {
+                    format!(
+                        "model connection {} has an input without a layer. Choose a layer for this input before importing this model.",
+                        index + 1
+                    )
+                })?;
+                if by_id.get(edge.to.as_str()).is_some_and(|n| n.kind == ModelNodeKind::Tool)
+                    && (layer.trim() != layer
+                        || to_port.as_ref().is_some_and(|port| port.many && layer.contains(';'))
+                        || layer.strip_prefix('%').and_then(|n| n.parse::<usize>().ok()).is_some())
+                {
+                    return Err(format!(
+                        "model connection {} has an input layer name that cannot be represented in steps. Rename the layer to avoid surrounding whitespace, numeric %n references, or semicolons on multi-input ports before importing this model.",
+                        index + 1
+                    ));
+                }
             }
             if to_port.is_some_and(|p| !p.many) && !single_inputs.insert((edge.to.as_str(), edge.to_port.as_str())) {
                 return Err(format!(

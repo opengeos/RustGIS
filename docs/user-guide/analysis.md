@@ -1181,7 +1181,9 @@ Import checks declared model and web-tool versions before interpreting their con
 versions, unreadable nodes, connections or steps, and unknown file, graph, node, connection or step
 fields are refused. A file containing both a graph and steps is refused rather than choosing one.
 Connections using unknown ports or feeding multiple sources into a single-valued port are refused.
-Connections from inputs with missing or blank layer names are also refused.
+Connections from inputs with missing or blank layer names are also refused. For connections to tools,
+layer names must have no surrounding whitespace, must not look like numeric step references (`%1`),
+and must not contain semicolons on multi-input ports; these names cannot be preserved in steps.
 Graphs that would lose nodes or connections during import are refused with a count and
 advice to fix the file, leaving the current project unchanged. Supported files and legacy files
 without a version marker continue to import, including repeated sources in multi-input tools such
@@ -1192,7 +1194,8 @@ model is saved or renamed. If import must trim, shorten or replace a model name,
 it reports the change with a notice.
 
 Step files keep the existing 2,000-step limit. Converting steps to a ModelBuilder graph has a
-1,000-step limit: opening or exporting a larger model as a graph gives an error and leaves the
+1,000-step limit: opening, exporting or checking (`model.validate`) a larger model as a graph
+gives an error and leaves the
 original steps intact. References to a step that is not earlier in the model, or has no layer
 output, also stop graph conversion before data can be dropped. Larger models can still run as
 steps or be shared as a web tool.
