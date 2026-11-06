@@ -1039,6 +1039,7 @@ mod tests {
     /// origin inherits it, one at another origin goes without, and a revoked login reads none.
     #[test]
     fn every_sprite_at_the_styles_origin_inherits_its_login() {
+        let _turn = crate::cache::turn();
         use crate::logins::{self, Method};
         let origin = "https://sprites-login.example.com";
         let binding = logins::activate(origin, "sprites", Method::Header("X-Key".into()), "sprites-secret", false).unwrap();
