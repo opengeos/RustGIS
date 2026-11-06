@@ -4163,6 +4163,7 @@ fn a_removed_layers_locked_labels_go_with_it() {
     // The last locked layer gone, the lock holds, with nothing in it.
     s.run("layer.remove", &json!({"layer": b})).unwrap();
     assert!(s.map().label_lock.as_ref().is_some_and(Vec::is_empty));
+    assert!(s.map().label_lock_line_anchors.is_empty());
 }
 
 /// A deleted feature's lock entry and line anchor go with it, not those of another layer's feature
