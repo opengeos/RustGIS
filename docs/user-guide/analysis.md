@@ -1113,7 +1113,8 @@ the old project. A script that opens a project itself stays, with its results, a
 project's Run #1. On the desktop, a script's tools and models, with selections, layer renames and
 definition queries, the environment and the projection between them, are worked out in the
 background first, so the map and the rest of the window stay in use: the status bar shows
-**Run Script** and **Cancel**, and the results say **Running…** until the run is added. From the first line of any other kind (an edit, Add Data, a save, an export,
+**Run Script** and **Cancel**, and the results say **Running…** until the run is added. From
+the first line of any other kind (an edit, Add Data, a save, an export,
 a style or a zoom, a plugin or GeoLibre tool, a tool that writes a file) the rest runs as a
 script always has, holding the window until it finishes. A tool whose inputs change meanwhile runs again as the
 results are added, as in a model's run. It colours the commands as you type, in both
