@@ -4953,6 +4953,25 @@ mod record_tests {
     use super::{DEFAULTS_TO_ACTIVE_LAYER, RustGisApp};
     use serde_json::json;
 
+    /// The first request `server` gets, waited for up to 10 s: a request that never comes fails the
+    /// test instead of hanging it.
+    fn first_request(server: &std::net::TcpListener) -> std::net::TcpStream {
+        server.set_nonblocking(true).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            match server.accept() {
+                Ok((stream, _)) => {
+                    stream.set_nonblocking(false).unwrap();
+                    return stream;
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock && std::time::Instant::now() < deadline => {
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                Err(e) => panic!("no request reached the test server: {e}"),
+            }
+        }
+    }
+
     /// Terrain run with nothing named (from command search) records the DEM it took, so the
     /// step replays on it; a change of exaggeration on a terrain already on records none.
     #[test]
@@ -5145,10 +5164,11 @@ mod record_tests {
     fn an_anonymous_download_never_acquires_a_saved_login() {
         use rustgis_engine::render::rustgis_tiles::{cache, logins};
         use std::io::{Read, Write};
+        let _turn = crate::fetching::turn();
         let server = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let origin = format!("http://{}", server.local_addr().unwrap());
         let reply = std::thread::spawn(move || {
-            let (mut stream, _) = server.accept().unwrap();
+            let mut stream = first_request(&server);
             stream.set_read_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
             let mut request = Vec::new();
             let mut chunk = [0; 1024];
@@ -5195,24 +5215,13 @@ mod record_tests {
     fn a_landed_download_says_how_it_went_in_the_dialog() {
         use rustgis_engine::render::rustgis_tiles::cache;
         use std::io::{Read, Write};
+        let _turn = crate::fetching::turn();
         // A server answering one request with `status` and a point's GeoJSON.
         let serve = |status: &'static str| {
             let server = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
             let origin = format!("http://{}", server.local_addr().unwrap());
             let reply = std::thread::spawn(move || {
-                // A request that never comes fails the test instead of hanging it.
-                server.set_nonblocking(true).unwrap();
-                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-                let mut stream = loop {
-                    match server.accept() {
-                        Ok((stream, _)) => break stream,
-                        Err(e) if e.kind() == std::io::ErrorKind::WouldBlock && std::time::Instant::now() < deadline => {
-                            std::thread::sleep(std::time::Duration::from_millis(10));
-                        }
-                        Err(e) => panic!("no request reached the test server: {e}"),
-                    }
-                };
-                stream.set_nonblocking(false).unwrap();
+                let mut stream = first_request(&server);
                 stream.set_read_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
                 let mut request = Vec::new();
                 let mut chunk = [0; 1024];
@@ -5289,11 +5298,12 @@ mod record_tests {
     fn whitespace_downloads_keep_their_login_choice_and_read_options() {
         use rustgis_engine::render::rustgis_tiles::{cache, logins};
         use std::io::{Read, Write};
+        let _turn = crate::fetching::turn();
         for anonymous in [false, true] {
             let server = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
             let origin = format!("http://{}", server.local_addr().unwrap());
             let reply = std::thread::spawn(move || {
-                let (mut stream, _) = server.accept().unwrap();
+                let mut stream = first_request(&server);
                 stream.set_read_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
                 let mut request = Vec::new();
                 let mut chunk = [0; 1024];
