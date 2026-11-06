@@ -105,6 +105,7 @@ fn lock() -> std::sync::MutexGuard<'static, Cache> {
 }
 
 static GENERATION: AtomicU64 = AtomicU64::new(0);
+static CLEARS: AtomicU64 = AtomicU64::new(0);
 static IN_FLIGHT: AtomicUsize = AtomicUsize::new(0);
 
 fn fetcher() -> &'static Mutex<Option<Arc<Fetcher>>> {
@@ -194,6 +195,13 @@ pub fn set_waker(f: impl Fn() + Send + Sync + 'static) {
 /// Goes up each time a fetch finishes: a map drawn at an older generation may now draw more.
 pub fn generation() -> u64 {
     GENERATION.load(Ordering::Relaxed)
+}
+
+/// How many times [`clear`] has run. What was read through the downloads before it and is kept
+/// elsewhere (the identify pop-up's pictures) goes too: it may have been read with a login that
+/// has since ended.
+pub fn clears() -> u64 {
+    CLEARS.load(Ordering::Relaxed)
 }
 
 /// How many fetches are under way. Once a fetch no longer counts, its [`generation`] shows.
@@ -305,6 +313,7 @@ pub fn clear() {
     crate::cog::forget();
     crate::warp::forget();
     rustgis_data::source::remote::forget();
+    CLEARS.fetch_add(1, Ordering::Relaxed);
     GENERATION.fetch_add(1, Ordering::Relaxed);
 }
 
@@ -811,9 +820,32 @@ pub fn download_detailed(url: &str, max: usize, done: DoneDetailed) {
     download_detailed_within(url, max, DOWNLOAD_TIMEOUT, &[], done);
 }
 
+/// Like [`download_limited`], connecting natively only to internet addresses (as
+/// [`download_public_within`], off the frame): a name, or a redirect to one, that resolves to this
+/// computer or the local network is refused when it is resolved. For an address that comes from
+/// data rather than the user (a picture named in a feature's values), which mustn't be able to
+/// reach local services. An installed fetcher (the browser's) fetches as it always does.
+pub fn download_public_limited(url: &str, max: usize, done: Done) {
+    download_reaching(url, max, DOWNLOAD_TIMEOUT, &[], Reaching::Public, Box::new(move |r| done(r.map_err(|f| f.message))));
+}
+
+/// Which addresses a native download may connect to.
+#[derive(Clone, Copy)]
+enum Reaching {
+    /// Wherever the address's name resolves (the user named it).
+    Any,
+    /// Only internet addresses, judged where names resolve and redirects lead.
+    Public,
+}
+
 /// Like [`download_detailed`], giving up after `timeout` natively; a status in `omit` isn't
 /// recorded as a failure.
 fn download_detailed_within(url: &str, max: usize, timeout: std::time::Duration, omit: &'static [u16], done: DoneDetailed) {
+    download_reaching(url, max, timeout, omit, Reaching::Any, done);
+}
+
+/// [`download_detailed_within`], natively connecting only where `reaching` allows.
+fn download_reaching(url: &str, max: usize, timeout: std::time::Duration, omit: &'static [u16], reaching: Reaching, done: DoneDetailed) {
     if let Err(e) = crate::address::check(url, None) {
         done(Err(Failure::new(url, e)));
         return;
@@ -830,7 +862,10 @@ fn download_detailed_within(url: &str, max: usize, timeout: std::time::Duration,
     let f = fetcher().lock().unwrap_or_else(|e| e.into_inner()).clone();
     match f {
         Some(f) => f(marked.clone(), Box::new(move |r| done(r.map_err(|e| Failure::new(&marked, e)))), omit),
-        None => native::download_within(marked, timeout, omit, done),
+        None => match reaching {
+            Reaching::Any => native::download_within(marked, timeout, omit, done),
+            Reaching::Public => native::download_public_within(marked, timeout, done),
+        },
     }
 }
 
@@ -1532,6 +1567,15 @@ mod native {
         });
     }
 
+    /// Like [`download_within`], connecting only to internet addresses ([`public_agent`]).
+    pub(super) fn download_public_within(url: String, timeout: std::time::Duration, done: DoneDetailed) {
+        let capture = Capture::current();
+        std::thread::spawn(move || {
+            let _scope = capture.enter();
+            done(get_detailed_omitting(&public_agent(timeout), &url, &[]));
+        });
+    }
+
     fn work() {
         let agent = shared_agent();
         let q = queue();
@@ -1847,6 +1891,10 @@ mod native {
     pub(super) fn download_within(url: String, _timeout: std::time::Duration, _omit: &'static [u16], done: DoneDetailed) {
         let message = format!("{url}: this build has no way to fetch tiles");
         done(Err(crate::failure::Failure::new(&url, message)));
+    }
+
+    pub(super) fn download_public_within(url: String, timeout: std::time::Duration, done: DoneDetailed) {
+        download_within(url, timeout, &[], done);
     }
 
     pub(super) fn post(url: String, _body: String, done: Done) {
@@ -2212,6 +2260,18 @@ mod tests {
     #[test]
     fn public_downloads_refuse_names_that_resolve_locally() {
         let err = download_public_within("http://localhost:9/doc.json", 1024, std::time::Duration::from_secs(5)).unwrap_err();
+        assert!(err.contains("resolves to this computer or the local network"), "{err}");
+    }
+
+    /// The same off the frame ([`download_public_limited`] without a fetcher installed, called
+    /// directly: other tests here install theirs): one that resolves locally is refused there.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn public_downloads_off_the_frame_refuse_names_that_resolve_locally() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let url = download_address("http://localhost:9/picture.png", 1024);
+        native::download_public_within(url, std::time::Duration::from_secs(5), Box::new(move |r| drop(tx.send(r))));
+        let err = rx.recv_timeout(std::time::Duration::from_secs(30)).unwrap().unwrap_err().message;
         assert!(err.contains("resolves to this computer or the local network"), "{err}");
     }
 
