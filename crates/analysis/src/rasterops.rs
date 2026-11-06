@@ -786,9 +786,11 @@ fn means_under(
 /// its outline placed on the raster's grid, with two cells to spare. Each side is sampled, and
 /// each stretch between samples near the raster is halved until its ends are at most a cell
 /// apart, so a side that curves on the grid (a parallel on a polar raster) bows only a fraction
-/// of a cell between them, whatever the zone's size. A stretch farther from the raster than its
-/// own length can't bow into it, and isn't halved. The whole raster when a point can't be placed;
-/// none when `e` is empty.
+/// of a cell between them, whatever the zone's size. A stretch whose ends are farther from the
+/// raster than the distance between them isn't halved: that takes the side not to fold back
+/// within one stretch (a sixty-fourth of the side at first), which a projection's smooth image of
+/// a parallel or meridian doesn't. The whole raster when a point can't be placed; none when `e` is
+/// empty.
 fn zone_window(r: &Raster, e: &Extent) -> (Range<u32>, Range<u32>) {
     if e.is_empty() {
         return (0..0, 0..0);
