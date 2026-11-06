@@ -17043,8 +17043,8 @@ fn in_place_layers_say_their_overview_once() {
 }
 
 /// A project saved when cloud-optimised GeoTIFFs read in place were tile layers opens them as
-/// raster layers read in place, each where it was drawn, with its name, visibility, opacity and
-/// look; a dated series stays a tile layer.
+/// raster layers read in place, each where it was drawn, with its name, visibility, opacity,
+/// look, connection and anonymity; a dated series stays a tile layer.
 #[test]
 fn cog_tile_layers_of_older_projects_open_as_rasters() {
     use rustgis_data::raster::cog::{Example, example_with};
@@ -17060,6 +17060,10 @@ fn cog_tile_layers_of_older_projects_open_as_rasters() {
             l.attribution = "© Example".into();
             l.min_zoom = 5;
             l.overlay = true;
+            l.connection = "conn-scene".into();
+        }
+        if name == "Aerial" {
+            l.anonymous = true;
         }
         let mut t = serde_json::to_value(l).unwrap();
         t["opacity"] = json!(opacity);
@@ -17085,6 +17089,10 @@ fn cog_tile_layers_of_older_projects_open_as_rasters() {
     assert_eq!(rl.style.renderer, RasterRenderer::Rgb { red: 4, green: 2, blue: 1 });
     assert_eq!(rl.style.stretch, Stretch::custom(10.0, 200.0));
     assert!(!scene.visible && (scene.opacity() - 0.5).abs() < 1e-6);
+    // Read again through the connection it came from; an anonymous layer stays one.
+    assert_eq!((scene.connection.as_str(), scene.anonymous), ("conn-scene", false));
+    let aerial = t.map().layers.iter().find(|l| l.name == "Aerial").unwrap();
+    assert!(aerial.anonymous && aerial.connection.is_empty(), "{aerial:?}");
     // Drawn under the map's layers, as they were, Scene over Aerial.
     let names: Vec<&str> = t.map().layers.iter().map(|l| l.name.as_str()).collect();
     assert_eq!(names[names.len() - 2..], ["Scene", "Aerial"], "{names:?}");

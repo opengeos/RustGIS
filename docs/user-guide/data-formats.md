@@ -136,7 +136,9 @@ then. An overview that fails again waits twice as long each time, up to an hour.
 line and in Python, which don't draw, the next command run once the wait is over reads a failed
 overview again, waiting for it as the project did.
 Exporting the layer (Raster to PMTiles) waits for its tiles on the desktop, up to two minutes,
-and isn't written without them; in the web app, export again once the map has drawn the image.
+and isn't written without them; the web app can't wait, so an export whose tiles aren't all in
+says so and asks for the rest: export again once they are in (a large archive may take a few
+tries).
 
 Its first look is what the file's PhotometricInterpretation tag says:
 

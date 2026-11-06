@@ -89,7 +89,10 @@ pub fn export(layer: &RasterLayer, min_zoom: u8, max_zoom: u8, opacity: f32) -> 
                             // An archive of the overview where the image is wanted isn't written.
                             let left = deadline.saturating_duration_since(web_time::Instant::now());
                             if cfg!(target_arch = "wasm32") {
-                                return Err(format!("{}: its tiles are still being read: export again once the map has drawn it", r.name));
+                                return Err(format!(
+                                    "{}: its tiles are still being read (this export asked for the rest): export again once they are in",
+                                    r.name
+                                ));
                             }
                             if left.is_zero() || idle >= IDLE_WAITS {
                                 return Err(format!("{}: its tiles didn't all arrive, so the archive isn't written", r.name));

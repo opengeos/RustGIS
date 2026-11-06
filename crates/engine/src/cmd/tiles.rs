@@ -564,7 +564,7 @@ fn blend(p: &Value) -> Result<Option<Blend>, String> {
 }
 
 /// Turns a map's plain COG tile layers into raster layers read in place, each where it was drawn,
-/// with its name, visibility, opacity, blend and look: those of projects saved before GeoTIFFs read
+/// with its name, visibility, opacity, blend, look, connection and anonymity: those of projects saved before GeoTIFFs read
 /// in place were raster layers, and those `map.addTiles` (kind `cog`) still adds, as a project or
 /// a map file opens, and then only: a tile layer added this session stays one until then (a
 /// plain GeoTIFF is one kind of layer, however it was added; what a tile layer had that a raster
@@ -618,6 +618,10 @@ pub(crate) fn cog_tiles_to_rasters(m: &mut rustgis_map::Map) {
             l.visible = t.visible;
             l.transparency = (1.0 - t.opacity.clamp(0.0, 1.0)) * 100.0;
             l.blend = t.blend;
+            // Read again through the saved connection it came from, as the tile layer was; one an
+            // anonymous plugin command added takes no saved login, as before.
+            l.connection = t.connection.clone();
+            l.anonymous = t.anonymous;
         }
         // Just over the layer it was drawn over, in its group; under them all without one.
         let group = t.over.and_then(|o| m.group_of(o).map(|g| g.id));

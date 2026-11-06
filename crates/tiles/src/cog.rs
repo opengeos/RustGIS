@@ -216,10 +216,7 @@ impl Info {
 
     /// The colours of a palette image's values, when its own look shows them.
     fn palette(&self, look: &Look) -> Option<&[[u8; 4]]> {
-        match &self.layout.color {
-            ColorHint::Palette(table) if look.bands.is_empty() && look.range.is_none() && !look.aef => Some(table),
-            _ => None,
-        }
+        self.layout.palette.as_deref().filter(|_| look.bands.is_empty() && look.range.is_none() && !look.aef)
     }
 
     /// The bands' (low, high) values for a look, when known.
@@ -616,7 +613,6 @@ fn stats(url: String, header: Sparse, layout: Layout, done: Box<dyn FnOnce(Resul
         ColorHint::Gray => layout.bands == 3,
         _ => false,
     };
-    let palette = matches!(layout.color, ColorHint::Palette(_));
     let bytes = layout.data_type == "UInt8";
     let info = Arc::new(Info {
         layout,
@@ -631,10 +627,11 @@ fn stats(url: String, header: Sparse, layout: Layout, done: Box<dyn FnOnce(Resul
         stretch_failed: Mutex::new(HashMap::new()),
         alpha,
     });
-    // 8-bit colour images are shown as they are, palette images by their table; others between
-    // the coarsest overview's percentiles.
+    // 8-bit colour images are shown as they are; others between the coarsest overview's
+    // percentiles (a palette image's own look needs none: its table colours its values, see
+    // `with_stretch`).
     let own = Look::default();
-    if (bytes && rgb) || palette {
+    if bytes && rgb {
         let colour = info.colour(&own);
         let n = colour.len();
         info.stretch.lock().unwrap_or_else(|e| e.into_inner()).insert((colour, false), vec![(0.0, 255.0); n]);
@@ -709,6 +706,12 @@ type StretchThen = Box<dyn FnOnce(Result<Vec<(f32, f32)>, String>) + Send>;
 fn with_stretch(info: Arc<Info>, file: String, look: Look, then: StretchThen) {
     if let Some(s) = info.stretch_for(&look) {
         then(Ok(s));
+        return;
+    }
+    // A palette image's own look colours its values by its table (see `paint`): no stretch to
+    // read, and none kept, which a look of its bands would take for its own.
+    if info.palette(&look).is_some() {
+        then(Ok(vec![(0.0, 255.0)]));
         return;
     }
     let colour = info.colour(&look);
@@ -1498,6 +1501,38 @@ pub fn read_values_counted_blocking(
 
 #[cfg(test)]
 mod tests {
+    /// A palette image's own look colours its values by the table the header keeps apart from its
+    /// colour hint (`Layout::palette`), with no stretch read or kept; a look of its bands doesn't.
+    #[test]
+    fn a_palette_images_own_look_has_its_table() {
+        use rustgis_data::raster::cog::{Parse, Sparse, example, layout};
+        use std::sync::{Arc, Mutex};
+        let Ok(Parse::Done(mut layout)) = layout(&Sparse::default().with(0, example(64, 16))) else { panic!("not a COG") };
+        layout.palette = Some(vec![[1, 2, 3, 255]; 256]);
+        let transformer = layout.crs.transformer().unwrap();
+        let info = Arc::new(super::Info {
+            layout: *layout,
+            header: Sparse::default(),
+            transformer,
+            bounds: [0.0; 4],
+            merc: [0.0; 4],
+            min_zoom: 0,
+            max_zoom: 0,
+            stretch: Mutex::default(),
+            stretching: Mutex::default(),
+            stretch_failed: Mutex::default(),
+            alpha: None,
+        });
+        let own = super::Look::default();
+        assert_eq!(info.palette(&own).map(<[[u8; 4]]>::len), Some(256));
+        assert!(info.palette(&super::Look { bands: vec![0], ..super::Look::default() }).is_none());
+        let (tx, rx) = std::sync::mpsc::channel();
+        super::with_stretch(info.clone(), "test://palette.tif".into(), own.clone(), Box::new(move |r| tx.send(r).unwrap_or_default()));
+        let stretch = rx.recv_timeout(std::time::Duration::from_secs(5)).expect("answered at once").unwrap();
+        assert_eq!(stretch, vec![(0.0, 255.0)]);
+        assert!(info.stretch_for(&own).is_none(), "kept, which a look of its bands would take for its own");
+    }
+
     /// A joint read whose tiles the fetch queue keeps dropping ends, saying so, rather than
     /// asking without end: within eight drops a tile (64 at least).
     #[test]

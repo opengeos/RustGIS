@@ -2431,6 +2431,7 @@ mod tests {
     /// stores it: the fetcher is one for the process, and another test's may be in.
     #[test]
     fn a_tile_refused_with_retry_after_has_the_map_drawn_again_then() {
+        let _alarm = alarm_test_lock().lock().unwrap_or_else(|e| e.into_inner());
         let within = |secs: u64| {
             let at = ALARM.load(Ordering::Relaxed);
             at != 0 && at <= (Instant::now() + Duration::from_secs(secs)).saturating_duration_since(alarm_base()).as_millis() as u64 + 1
@@ -2451,10 +2452,18 @@ mod tests {
     /// once that time has come.
     #[test]
     fn the_map_draws_again_when_a_wait_is_over() {
+        let _alarm = alarm_test_lock().lock().unwrap_or_else(|e| e.into_inner());
         let before = generation();
         notify_at(Instant::now() + Duration::from_millis(20));
         std::thread::sleep(std::time::Duration::from_millis(40));
         assert!(generation() > before);
+    }
+
+    /// Held by the tests that arm or read the process-wide alarm: they run in parallel threads of
+    /// one process, and one's clearing would erase another's.
+    fn alarm_test_lock() -> &'static std::sync::Mutex<()> {
+        static L: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+        L.get_or_init(std::sync::Mutex::default)
     }
 
     #[test]
