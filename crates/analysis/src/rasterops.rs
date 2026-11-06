@@ -783,26 +783,57 @@ fn means_under(
 }
 
 /// The columns and rows of `r` whose cell centres can fall in the longitude/latitude extent `e`:
-/// its outline, sampled along each side and placed on the raster's grid, with two cells to
-/// spare (a projected side bows between its samples). The whole raster when a sample can't be
-/// placed; none when `e` is empty.
+/// its outline placed on the raster's grid, with two cells to spare. Each side is sampled, and
+/// each stretch between samples near the raster is halved until its ends are at most a cell
+/// apart, so a side that curves on the grid (a parallel on a polar raster) bows only a fraction
+/// of a cell between them, whatever the zone's size. A stretch farther from the raster than its
+/// own length can't bow into it, and isn't halved. The whole raster when a point can't be placed;
+/// none when `e` is empty.
 fn zone_window(r: &Raster, e: &Extent) -> (Range<u32>, Range<u32>) {
     if e.is_empty() {
         return (0..0, 0..0);
     }
     const SAMPLES: u32 = 64;
+    // Halvings of a stretch: past 2^-40 of a side it is far below a cell.
+    const DEPTH: u32 = 40;
     let whole = (0..r.width, 0..r.height);
+    let (w, h) = (f64::from(r.width), f64::from(r.height));
+    let place = |ll: Coord| {
+        let (col, row) = r.transform.to_pixel(r.transformer().from_lonlat(ll)?);
+        (col.is_finite() && row.is_finite()).then_some((col, row))
+    };
+    let sides: [(Coord, Coord); 4] = [
+        (Coord::new(e.min_x, e.min_y), Coord::new(e.max_x, e.min_y)),
+        (Coord::new(e.max_x, e.min_y), Coord::new(e.max_x, e.max_y)),
+        (Coord::new(e.max_x, e.max_y), Coord::new(e.min_x, e.max_y)),
+        (Coord::new(e.min_x, e.max_y), Coord::new(e.min_x, e.min_y)),
+    ];
     let (mut c0, mut r0, mut c1, mut r1) = (f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
-    for i in 0..=SAMPLES {
-        let t = f64::from(i) / f64::from(SAMPLES);
-        let (x, y) = (e.min_x + t * (e.max_x - e.min_x), e.min_y + t * (e.max_y - e.min_y));
-        for ll in [Coord::new(x, e.min_y), Coord::new(x, e.max_y), Coord::new(e.min_x, y), Coord::new(e.max_x, y)] {
-            let Some(w) = r.transformer().from_lonlat(ll) else { return whole };
-            let (col, row) = r.transform.to_pixel(w);
-            if !(col.is_finite() && row.is_finite()) {
-                return whole;
+    let mut stretches = Vec::new();
+    for (a, b) in sides {
+        let at = |t: f64| Coord::new(a.x + t * (b.x - a.x), a.y + t * (b.y - a.y));
+        let mut last = None;
+        for i in 0..=SAMPLES {
+            let t = f64::from(i) / f64::from(SAMPLES);
+            let Some(p) = place(at(t)) else { return whole };
+            if let Some((t0, p0)) = last {
+                stretches.push((t0, p0, t, p, 0));
             }
-            (c0, r0, c1, r1) = (c0.min(col), r0.min(row), c1.max(col), r1.max(row));
+            last = Some((t, p));
+        }
+        while let Some((t0, p0, t1, p1, depth)) = stretches.pop() {
+            for (col, row) in [p0, p1] {
+                (c0, r0, c1, r1) = (c0.min(col), r0.min(row), c1.max(col), r1.max(row));
+            }
+            let len = (p1.0 - p0.0).hypot(p1.1 - p0.1);
+            let far = p0.0.max(p1.0) + len < 0.0 || p0.0.min(p1.0) - len > w || p0.1.max(p1.1) + len < 0.0 || p0.1.min(p1.1) - len > h;
+            if len <= 1.0 || depth >= DEPTH || far {
+                continue;
+            }
+            let tm = (t0 + t1) / 2.0;
+            let Some(pm) = place(at(tm)) else { return whole };
+            stretches.push((t0, p0, tm, pm, depth + 1));
+            stretches.push((tm, pm, t1, p1, depth + 1));
         }
     }
     let clamp = |v: f64, n: u32| v.clamp(0.0, f64::from(n)) as u32;
@@ -1618,6 +1649,18 @@ mod tests {
                 assert_eq!(got, want, "{} zone {z}", r.name);
             }
         }
+        // A wide zone on a polar raster (EPSG:3031): its outer side, the parallel at 60° S, is
+        // a circle on the grid, and the raster's 100 m cells straddle it where it reaches
+        // furthest, between two of the side's first samples.
+        let polar = Crs::Epsg(3031);
+        let top = polar.transformer().unwrap().from_lonlat(Coord::new(-0.06, -60.0)).unwrap();
+        let gt = GeoTransform { origin_x: top.x - 20_000.0, origin_y: top.y + 15_000.0, pixel_width: 100.0, pixel_height: -100.0 };
+        let r = Raster::new("polar", w, h, vec![band(0), band(1)], gt, polar, None, ColorHint::Gray, "Float32").unwrap();
+        let wide = vec![ring(&[(-61.0, -70.0), (59.0, -70.0), (59.0, -60.0), (-61.0, -60.0)])];
+        let got = zonal_means(&r, &[0, 1], &wide).map(|(m, n)| (m.iter().map(|v| v.to_bits()).collect::<Vec<_>>(), n));
+        let want = every_cell(&r, &wide);
+        assert!(want.as_ref().is_some_and(|(_, n)| *n > 1000 && *n < (w * h) as usize), "{want:?}");
+        assert_eq!(got, want, "polar");
         // A zone off the raster has none.
         assert!(zonal_means(&rasters[0], &[0, 1], &[ring(&[(20.0, 10.0), (21.0, 10.0), (21.0, 11.0)])]).is_none());
     }
