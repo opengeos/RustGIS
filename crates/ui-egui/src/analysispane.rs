@@ -38,8 +38,9 @@ pub struct Workflow {
     /// The last run's Details window is open.
     pub script_details: bool,
     /// When each Script pane run under way or waiting started (seconds since 1970, and the
-    /// instant), in the order asked, for [`script_ran`] to tell as each lands.
-    script_started: std::collections::VecDeque<(u64, web_time::Instant)>,
+    /// instant), and the project it was asked in ([`rustgis_engine::Session::opened`]), in the
+    /// order asked, for [`script_ran`] to tell as each lands.
+    script_started: std::collections::VecDeque<(u64, web_time::Instant, u64)>,
     /// When the last Script pane run landed: one waiting behind it started then, not when asked.
     script_landed: Option<web_time::Instant>,
     /// The project the Script pane's script, results and count are for
@@ -1561,21 +1562,17 @@ pub fn script_pane(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
 
 /// Another project replaced the Script pane's, however it came (the interface, a script, the
 /// assistant, an agent): the pane starts blank, as the project does (#1511). Its script, results
-/// and count were for what was closed. A run still to land waits for it first; the notice it
-/// gives when left stays among the session's notices.
+/// and count were for what was closed. A run still to land from it is left by the read jobs, and
+/// [`script_ran`] keeps it out of the pane; its notice stays among the session's.
 fn start_over_in_another_project(app: &mut RustGisApp) {
     let opened = app.session.opened;
     let w = &mut app.workflow;
-    match w.script_project {
-        Some(p) if p != opened && w.script_started.is_empty() => {
-            w.script.clear();
-            w.script_out.clear();
-            w.script_last = None;
-            w.script_project = Some(opened);
-        }
-        None => w.script_project = Some(opened),
-        Some(_) => {}
+    if w.script_project.is_some_and(|p| p != opened) {
+        w.script.clear();
+        w.script_out.clear();
+        w.script_last = None;
     }
+    w.script_project = Some(opened);
 }
 
 /// The height of the Script box's first lines.
@@ -1599,7 +1596,7 @@ fn start_script(app: &mut RustGisApp, script: String) {
     // When it started and how long it took: a tool run outside the app in the browser
     // (`gp.finish`) ends later.
     let at = web_time::SystemTime::now().duration_since(web_time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
-    app.workflow.script_started.push_back((at, web_time::Instant::now()));
+    app.workflow.script_started.push_back((at, web_time::Instant::now(), app.session.opened));
     app.workflow.script_out = vec![(tl!("Running…").to_string(), false)];
     #[cfg(not(target_arch = "wasm32"))]
     let _ = crate::readjob::run_then(app, "script.run", json!({"script": script}), Some(script_ran));
@@ -1614,17 +1611,25 @@ fn start_script(app: &mut RustGisApp, script: String) {
 /// result, or why it didn't run.
 fn script_ran(app: &mut RustGisApp, landed: crate::Landed) {
     let now = web_time::Instant::now();
-    let (asked_at, asked) = app.workflow.script_started.pop_front().unwrap_or((0, now));
+    let opened = app.session.opened;
+    let (asked_at, asked, asked_in) = app.workflow.script_started.pop_front().unwrap_or((0, now, opened));
+    // Asked in a project since replaced and not run (left as another opened, or cancelled): the
+    // pane started blank for the new one, and its notice is the session's.
+    if asked_in != opened && !matches!(landed, crate::Landed::Ran(_)) {
+        app.workflow.script_landed = Some(now);
+        return;
+    }
     // One that waited for the run before it started as that one landed.
     let started = app.workflow.script_landed.filter(|&l| l > asked).unwrap_or(asked);
     let at = if asked_at == 0 { 0 } else { asked_at.saturating_add(started.duration_since(asked).as_secs()) };
     app.workflow.script_landed = Some(now);
-    let n = app.workflow.script_last.as_ref().map_or(1, |r| r.n.saturating_add(1));
-    // A script that opened a project itself is kept with its results, in the project it opened.
-    // One left as another opened isn't: it goes, its notice saying so.
-    if matches!(landed, crate::Landed::Ran(_)) {
-        app.workflow.script_project = Some(app.session.opened);
-    }
+    // A script that opened a project itself is kept with its results, in the project it opened,
+    // as its first run there.
+    let n = match app.workflow.script_last.as_ref() {
+        Some(r) if asked_in == opened => r.n.saturating_add(1),
+        _ => 1,
+    };
+    app.workflow.script_project = Some(opened);
     // A run that stops is undone whole (`Session::guarded` restores the project), so its error
     // is all it has to tell.
     let (ran, error) = match landed {
@@ -1980,30 +1985,46 @@ mod tests {
         landed(&mut app);
         assert_eq!(app.session.map().layers.len(), layers + 3);
         assert_eq!(app.workflow.script_out, vec![("Run Script was cancelled".to_string(), true)]);
-        // Another project opened meanwhile: it is left, and the notice names it as a script.
+        // Another project opened meanwhile: it is left, and the notice names it as a script; the
+        // pane starts blank for the new project (#1511).
         start_script(&mut app, script);
         app.session.run("project.new", &Value::Null).unwrap();
         landed(&mut app);
-        assert_eq!(app.workflow.script_out, vec![("Run Script was left: another project was opened".to_string(), true)]);
+        start_over_in_another_project(&mut app);
+        assert!(app.workflow.script_out.is_empty() && app.workflow.script_last.is_none());
         assert!(app.session.notices.iter().any(|n| n.text == "Run Script was left: another project was opened"));
     }
 
     /// Another project opening starts the Script pane blank, whoever opened it (#1511): the
-    /// script, written or run, its results and the count. A script that opened a project itself
-    /// stays, with its results; one still to land waits for it, and goes once left.
+    /// script, written or run, its results and the count, at once, a run still to land or not. A
+    /// script that opened a project itself stays, with its results, as its first run there.
     #[test]
     fn another_project_starts_the_script_pane_blank() {
         let mut app = RustGisApp::with_sample();
         let blank =
             |app: &RustGisApp| app.workflow.script.is_empty() && app.workflow.script_out.is_empty() && app.workflow.script_last.is_none();
         let ran = |line: &str| crate::Landed::Ran(Ok(json!({"ran": [{"line": 1, "command": line, "result": null}]})));
-        // Shown first: its own project's results stay.
+        let ask = |app: &mut RustGisApp| app.workflow.script_started.push_back((0, web_time::Instant::now(), app.session.opened));
+        // Shown first: its own project's results stay, and the count goes on.
         start_over_in_another_project(&mut app);
         app.workflow.script = "select.all".to_string();
-        app.workflow.script_started.push_back((0, web_time::Instant::now()));
-        script_ran(&mut app, ran("select.all"));
+        for _ in 0..3 {
+            ask(&mut app);
+            script_ran(&mut app, ran("select.all"));
+        }
         start_over_in_another_project(&mut app);
         assert_eq!(app.workflow.script_out.len(), 1, "kept in its own project");
+        assert_eq!(app.workflow.script_last.as_ref().map(|r| r.n), Some(3));
+        // A script that opened the project itself, after Run #3: it stays, with its results, as
+        // Run #1 of the project it opened.
+        app.workflow.script = "project.sample".to_string();
+        ask(&mut app);
+        app.session.run("project.sample", &Value::Null).unwrap();
+        script_ran(&mut app, ran("project.sample"));
+        start_over_in_another_project(&mut app);
+        assert_eq!(app.workflow.script, "project.sample");
+        assert_eq!(app.workflow.script_out.len(), 1);
+        assert_eq!(app.workflow.script_last.as_ref().map(|r| r.n), Some(1));
         // Opened by a command (an agent, the assistant), the pane hidden and Details open:
         // everything goes, the window too.
         app.workflow.script_details = true;
@@ -2015,23 +2036,24 @@ mod tests {
         app.session.run("project.sample", &Value::Null).unwrap();
         start_over_in_another_project(&mut app);
         assert!(blank(&app));
-        // A script that opened the project itself: it stays, with its results, as Run #1.
-        app.workflow.script = "project.sample".to_string();
-        app.workflow.script_started.push_back((0, web_time::Instant::now()));
-        app.session.run("project.sample", &Value::Null).unwrap();
-        script_ran(&mut app, ran("project.sample"));
-        start_over_in_another_project(&mut app);
-        assert_eq!(app.workflow.script, "project.sample");
-        assert_eq!(app.workflow.script_out.len(), 1);
-        assert_eq!(app.workflow.script_last.as_ref().map(|r| r.n), Some(1));
-        // A run under way when another project opens: nothing goes until it lands, then all does.
-        app.workflow.script_started.push_back((0, web_time::Instant::now()));
+        // A run under way when another project opens: the pane goes at once, so its script can't
+        // be run again in the new project, and the run, left, adds nothing when it lands.
+        app.workflow.script = "select.all".to_string();
+        ask(&mut app);
         app.session.run("project.new", &Value::Null).unwrap();
         start_over_in_another_project(&mut app);
-        assert_eq!(app.workflow.script, "project.sample");
-        script_ran(&mut app, crate::Landed::NotRun("Run Script was left: another project was opened".into()));
-        start_over_in_another_project(&mut app);
         assert!(blank(&app));
+        // A script written meanwhile in the new project, and run: the old one lands first, left,
+        // then the new one, as Run #1.
+        app.workflow.script = "map.zoomFull".to_string();
+        ask(&mut app);
+        script_ran(&mut app, crate::Landed::NotRun("Run Script was left: another project was opened".into()));
+        assert!(app.workflow.script_last.is_none(), "the left run adds nothing");
+        script_ran(&mut app, ran("map.zoomFull"));
+        start_over_in_another_project(&mut app);
+        assert_eq!(app.workflow.script, "map.zoomFull");
+        assert_eq!(app.workflow.script_last.as_ref().map(|r| r.n), Some(1));
+        assert_eq!(app.workflow.script_out.len(), 1);
     }
 
     /// A Script pane run that waited for the one before it is timed from when that one landed,
@@ -2040,7 +2062,7 @@ mod tests {
     fn a_queued_script_run_is_timed_from_its_start() {
         let mut app = RustGisApp::with_sample();
         let asked = web_time::Instant::now() - std::time::Duration::from_secs(10);
-        app.workflow.script_started.extend([(1_000, asked), (1_000, asked)]);
+        app.workflow.script_started.extend([(1_000, asked, app.session.opened), (1_000, asked, app.session.opened)]);
         let ran: Vec<Value> = (1..=8).map(|n| json!({"line": n, "command": "select.all", "result": null})).collect();
         script_ran(&mut app, crate::Landed::Ran(Ok(json!({"ran": ran}))));
         let first = app.workflow.script_last.as_ref().map(|r| (r.secs, r.at)).unwrap();
