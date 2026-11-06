@@ -90,11 +90,13 @@ pub struct ScriptRun {
     pub error: Option<String>,
 }
 
-/// A line a Script pane run ran, with its whole result, laid out once as it lands.
+/// A line a Script pane run ran, with its whole result. `text`, the result laid out to read a
+/// line of text a row, is made the first time its Details section opens, not as the run lands.
 pub struct ScriptLine {
     pub line: u64,
     pub command: String,
-    pub result: String,
+    pub result: Value,
+    pub text: Vec<String>,
 }
 
 /// The Trend Analysis section's inputs (#579), and a run under way.
@@ -1595,8 +1597,13 @@ fn script_ran(app: &mut RustGisApp, landed: crate::Landed) {
     let at = if asked_at == 0 { 0 } else { asked_at.saturating_add(started.duration_since(asked).as_secs()) };
     app.workflow.script_landed = Some(now);
     let n = app.workflow.script_last.as_ref().map_or(1, |r| r.n.saturating_add(1));
+    // A run that stops is undone whole (`Session::guarded` restores the project), so its error
+    // is all it has to tell.
     let (ran, error) = match landed {
-        crate::Landed::Ran(Ok(v)) => (v["ran"].as_array().cloned().unwrap_or_default(), None),
+        crate::Landed::Ran(Ok(mut v)) => match v.get_mut("ran").map(Value::take) {
+            Some(Value::Array(a)) => (a, None),
+            _ => (Vec::new(), None),
+        },
         crate::Landed::Ran(Err(e)) | crate::Landed::NotRun(e) => (Vec::new(), Some(e)),
     };
     app.workflow.script_out = match &error {
@@ -1604,11 +1611,12 @@ fn script_ran(app: &mut RustGisApp, landed: crate::Landed) {
         Some(e) => vec![(e.clone(), true)],
     };
     let ran = ran
-        .iter()
-        .map(|r| ScriptLine {
+        .into_iter()
+        .map(|mut r| ScriptLine {
             line: r["line"].as_u64().unwrap_or(0),
             command: r["command"].as_str().unwrap_or("").to_string(),
-            result: serde_json::to_string_pretty(&r["result"]).unwrap_or_default(),
+            result: r.get_mut("result").map(Value::take).unwrap_or_default(),
+            text: Vec::new(),
         })
         .collect();
     app.workflow.script_last = Some(ScriptRun { n, secs: now.duration_since(started).as_secs_f64(), at, ran, error });
@@ -1738,6 +1746,14 @@ fn run_time(r: &ScriptRun) -> Option<String> {
     (r.at > 0).then(|| crate::i18n::fmt("{time} UTC", &[("time", &rustgis_engine::map::graphics::civil(r.at).1)]))
 }
 
+/// The most rows a result shows at once in the Details window; a longer one scrolls.
+const SCRIPT_DETAILS_ROWS: f32 = 24.0;
+
+/// A result laid out to read: indented JSON, a key a line.
+fn pretty(v: &Value) -> String {
+    serde_json::to_string_pretty(v).unwrap_or_default()
+}
+
 /// A run's line as the Details window heads it: `line 3: raster.gcpFit`.
 fn line_head(l: &ScriptLine) -> String {
     crate::i18n::fmt("line {n}: {command}", &[("n", &l.line.to_string()), ("command", &l.command)])
@@ -1755,7 +1771,7 @@ fn run_text(r: &ScriptRun) -> String {
         out.push_str("\n\n");
         out.push_str(&line_head(l));
         out.push('\n');
-        out.push_str(&l.result);
+        out.push_str(&pretty(&l.result));
     }
     if let Some(e) = &r.error {
         out.push_str("\n\n");
@@ -1771,7 +1787,7 @@ pub fn script_details(app: &mut RustGisApp, ctx: &egui::Context) {
     if !app.workflow.script_details {
         return;
     }
-    let Some(r) = &app.workflow.script_last else {
+    let Some(r) = app.workflow.script_last.as_mut() else {
         app.workflow.script_details = false;
         return;
     };
@@ -1794,17 +1810,33 @@ pub fn script_details(app: &mut RustGisApp, ctx: &egui::Context) {
                 });
             });
             ui.separator();
-            egui::ScrollArea::both().id_salt("script_details_scroll").auto_shrink([false, false]).show(ui, |ui| {
-                for (i, l) in r.ran.iter().enumerate() {
-                    // A run of its own each time: what was folded in the last one opens again.
+            let n = r.n;
+            let row = ui.text_style_height(&egui::TextStyle::Monospace);
+            egui::ScrollArea::vertical().id_salt("script_details_scroll").auto_shrink([false, false]).show(ui, |ui| {
+                for (i, l) in r.ran.iter_mut().enumerate() {
+                    // Folded, one line each, a click opening one; a run of its own each time, so
+                    // what was opened in the last one folds again.
                     egui::CollapsingHeader::new(egui::RichText::new(line_head(l)).monospace())
-                        .id_salt(("script_details_line", r.n, i))
-                        .default_open(true)
+                        .id_salt(("script_details_line", n, i))
+                        .default_open(false)
                         .show(ui, |ui| {
-                            if ui.small_button(tl!("Copy")).clicked() {
-                                ui.ctx().copy_text(l.result.clone());
+                            if l.text.is_empty() {
+                                l.text = pretty(&l.result).lines().map(str::to_owned).collect();
                             }
-                            ui.add(egui::Label::new(egui::RichText::new(&l.result).monospace()).extend());
+                            if ui.small_button(tl!("Copy")).clicked() {
+                                ui.ctx().copy_text(l.text.join("\n"));
+                            }
+                            // Only the rows in view are laid out, however long the result: in a
+                            // scroll of its own, at most SCRIPT_DETAILS_ROWS rows tall.
+                            egui::ScrollArea::both()
+                                .id_salt(("script_details_result", n, i))
+                                .max_height(row * SCRIPT_DETAILS_ROWS)
+                                .auto_shrink([false, true])
+                                .show_rows(ui, row, l.text.len(), |ui, rows| {
+                                    for text in l.text.get(rows).unwrap_or_default() {
+                                        ui.add(egui::Label::new(egui::RichText::new(text).monospace()).extend());
+                                    }
+                                });
                         });
                 }
                 if let Some(e) = &r.error {
@@ -1894,8 +1926,9 @@ mod tests {
         assert_eq!(app.workflow.script_out, vec![("cancelled".to_string(), true)]);
     }
 
-    /// Details… opens the last run in a window of its own: a result the pane cuts shows whole there,
-    /// laid out to read, and Copy All copies the run; a run that stopped shows why.
+    /// Details… opens the last run in a window of its own, each line folded: a result the pane cuts
+    /// shows whole there, laid out to read, Copy copies it and Copy All the run; a run that stopped
+    /// shows why.
     #[test]
     fn script_details_show_a_runs_whole_results() {
         let mut app = RustGisApp::with_sample();
@@ -1922,16 +1955,31 @@ mod tests {
         h.get_by_label("Details…").click();
         h.run();
         assert!(h.state().workflow.script_details);
-        assert!(h.query_by_label_contains("\"k59\": \"xxxxxxxxxx\"").is_some(), "the whole result, one key a line");
+        // Each line folded, its result shown when it's opened.
         assert!(h.query_by_label("line 3: map.zoomFull").is_some());
+        assert!(h.query_by_label_contains("\"k59\"").is_none(), "folded");
+        h.get_by_label("line 1: raster.gcpFit").click();
+        h.run();
+        // A key a row, only the rows in view laid out; its Copy has them all.
+        assert!(h.query_by_label_contains("\"k00\": \"xxxxxxxxxx\"").is_some(), "laid out to read, one key a row");
+        assert!(h.query_by_label_contains("\"k59\"").is_none(), "a row out of view isn't laid out");
+        let copied = |h: &egui_kittest::Harness<'_, RustGisApp>| {
+            h.output().platform_output.commands.iter().find_map(|c| match c {
+                egui::OutputCommand::CopyText(t) => Some(t.clone()),
+                _ => None,
+            })
+        };
+        h.get_by_label("Copy").click();
+        h.step();
+        let one = copied(&h).expect("Copy copies");
+        assert!(one.starts_with("{\n  \"k00\"") && one.contains("\"k59\": \"xxxxxxxxxx\"\n}"), "{one}");
         h.get_by_label("Copy All").click();
         h.step();
-        let copied = h.output().platform_output.commands.iter().find_map(|c| match c {
-            egui::OutputCommand::CopyText(t) => Some(t.clone()),
-            _ => None,
-        });
-        let copied = copied.expect("Copy All copies");
-        assert!(copied.starts_with("Run #1 (") && copied.contains("line 1: raster.gcpFit\n{") && copied.contains("\"k59\""), "{copied}");
+        let all = copied(&h).expect("Copy All copies");
+        assert!(
+            all.starts_with("Run #1 (") && all.contains("line 1: raster.gcpFit\n{") && all.contains("line 3: map.zoomFull\nnull"),
+            "{all}"
+        );
         // A run that stopped: the window, still open, shows why.
         script_ran(h.state_mut(), crate::Landed::Ran(Err("line 2: raster.gcpFit: needs 3 points".into())));
         h.run();
