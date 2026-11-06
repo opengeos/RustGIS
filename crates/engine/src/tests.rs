@@ -10779,7 +10779,7 @@ fn duckdb_queries_and_databases() {
         assert!(e.contains("need DuckDB"), "{e}");
         return;
     }
-    // A result mixing geometry types: a layer per type.
+    // A result mixing geometry types: a layer per type, its points on top (#1488).
     let r = s.run("layer.addSql", &json!({"sql": query, "name": "Trip"})).unwrap();
     let names: Vec<String> = s.map().layers.iter().map(|l| l.name.clone()).collect();
     assert_eq!(names, vec!["Trip (points)", "Trip (lines)"], "{r}");
@@ -10864,6 +10864,74 @@ fn duckdb_queries_and_databases() {
     let r = s.run("layer.addSql", &json!({"sql": projected, "name": "Utm2", "crs": "EPSG:32633"})).unwrap();
     let e = s.map().layer(r["layer"].as_u64().unwrap() as u32).unwrap().extent();
     assert!((e.min_x - 15.0).abs() < 0.01 && (e.min_y - 37.95).abs() < 0.05, "{e:?}");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// A source split by geometry type is added polygons first, so its points end on top and none hides
+/// under its own polygons, whether DuckDB or GDAL split it (#1488). Neither program is needed: the
+/// parts are files already written, as they would have converted them.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn split_sources_keep_their_points_on_top() {
+    use crate::cmd::layer::{add_converted, duckdb_parts, gdal_parts};
+    use rustgis_data::source::{Family, duckdb, gdal};
+    let dir = std::env::temp_dir().join(format!("rustgis-split-order-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let geometry = |f: Family| match f {
+        Family::Points => r#"{"type": "Point", "coordinates": [10, 50]}"#,
+        Family::Lines => r#"{"type": "LineString", "coordinates": [[10, 50], [11, 51]]}"#,
+        Family::Polygons => r#"{"type": "Polygon", "coordinates": [[[10, 50], [11, 50], [11, 51], [10, 50]]]}"#,
+    };
+    // A file per part, in the order both programs give them: points first (`Family::ALL`).
+    let write = |stem: &str, f: Family| {
+        let path = dir.join(format!("{stem}-{}.geojson", f.label()));
+        let feature = format!(r#"{{"type": "Feature", "properties": {{}}, "geometry": {}}}"#, geometry(f));
+        std::fs::write(&path, format!(r#"{{"type": "FeatureCollection", "features": [{feature}]}}"#)).unwrap();
+        path
+    };
+    let names = |s: &Session| s.map().layers.iter().map(|l| l.name.clone()).collect::<Vec<_>>();
+
+    // A DuckDB query.
+    let mut s = Session::new(Project::default());
+    let parts = Family::ALL.iter().map(|f| duckdb::Part { path: write("query", *f), family: *f, count: 1 }).collect();
+    let origin =
+        |family| rustgis_map::source::DuckdbOrigin { sql: Some("SELECT 1".into()), database: None, table: None, crs: None, family };
+    let parts = duckdb_parts(&mut s, "Trip", duckdb::Output { parts, skipped: 0 }, origin);
+    add_converted(&mut s, &json!({}), "the query", "DuckDB query", parts).unwrap();
+    assert_eq!(names(&s), ["Trip (points)", "Trip (lines)", "Trip (polygons)"]);
+
+    // A GDAL file with two mixed layers: each keeps its points on top, and the file's second layer
+    // goes above its first, as any layer added after another does.
+    let mut s = Session::new(Project::default());
+    let converted = ["a", "b"]
+        .into_iter()
+        .flat_map(|layer| Family::ALL.map(|f| (layer, f)))
+        .map(|(layer, f)| gdal::Converted {
+            path: write(layer, f),
+            name: format!("{layer} ({})", f.label()),
+            layer: layer.to_string(),
+            family: Some(f),
+            unprojected: false,
+        })
+        .collect();
+    let original = dir.join("file.gpx").display().to_string();
+    add_converted(&mut s, &json!({}), &original, &original, gdal_parts(converted, &original, None)).unwrap();
+    assert_eq!(names(&s), ["b (points)", "b (lines)", "b (polygons)", "a (points)", "a (lines)", "a (polygons)"]);
+
+    // A file the built-in readers split by type (a KML here, as GPX, OSM or DXF): the same order,
+    // and the first layer added (the polygons) still frames an empty map.
+    let kml = r#"<kml xmlns="http://www.opengis.net/kml/2.2"><Document>
+<Placemark><name>p</name><Point><coordinates>10.5,50.5</coordinates></Point></Placemark>
+<Placemark><name>l</name><LineString><coordinates>10,50 11,51</coordinates></LineString></Placemark>
+<Placemark><name>a</name><Polygon><outerBoundaryIs><LinearRing><coordinates>10,50 11,50 11,51 10,50</coordinates></LinearRing></outerBoundaryIs></Polygon></Placemark>
+</Document></kml>"#;
+    let path = dir.join("trip.kml");
+    std::fs::write(&path, kml).unwrap();
+    let mut s = Session::new(Project::default());
+    s.run("layer.addData", &json!({"path": path.display().to_string()})).unwrap();
+    assert_eq!(names(&s), ["trip points", "trip lines", "trip polygons"]);
+    let c = s.map().center_lonlat();
+    assert!((c.x - 10.5).abs() < 0.1 && (c.y - 50.5).abs() < 0.2, "{c:?}");
     let _ = std::fs::remove_dir_all(dir);
 }
 
