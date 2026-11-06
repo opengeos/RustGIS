@@ -1607,7 +1607,7 @@ fn script_ran(app: &mut RustGisApp, landed: crate::Landed) {
         crate::Landed::Ran(Err(e)) | crate::Landed::NotRun(e) => (Vec::new(), Some(e)),
     };
     app.workflow.script_out = match &error {
-        None => ran.iter().map(|r| (format!("{} → {}", r["command"].as_str().unwrap_or(""), r["result"]), false)).collect(),
+        None => ran.iter().map(|r| (format!("{} → {}", r["command"].as_str().unwrap_or(""), preview(&r["result"])), false)).collect(),
         Some(e) => vec![(e.clone(), true)],
     };
     let ran = ran
@@ -1728,7 +1728,7 @@ fn script(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, fit: bool) {
     egui::ScrollArea::vertical().id_salt("script_out").max_height(out_h).auto_shrink([false, true]).show(ui, |ui| {
         for (line, err) in &app.workflow.script_out {
             let c = if *err { SCRIPT_ERROR } else { ui.visuals().text_color() };
-            ui.label(egui::RichText::new(line.chars().take(400).collect::<String>()).monospace().small().color(c));
+            ui.label(egui::RichText::new(line.chars().take(SCRIPT_PREVIEW).collect::<String>()).monospace().small().color(c));
         }
     });
 }
@@ -1749,9 +1749,60 @@ fn run_time(r: &ScriptRun) -> Option<String> {
 /// The most rows a result shows at once in the Details window; a longer one scrolls.
 const SCRIPT_DETAILS_ROWS: f32 = 24.0;
 
+/// The most characters of a result, or of an error, the pane shows: a line of the results.
+const SCRIPT_PREVIEW: usize = 400;
+
+/// The most characters in a row of the Details window: a longer line is split into rows.
+const SCRIPT_ROW_CHARS: usize = 200;
+
 /// A result laid out to read: indented JSON, a key a line.
 fn pretty(v: &Value) -> String {
     serde_json::to_string_pretty(v).unwrap_or_default()
+}
+
+/// A result as the pane shows it: its JSON on one line, written no further than the pane shows
+/// (SCRIPT_PREVIEW characters), so a long one (an export's text) isn't written out whole only to
+/// be cut.
+fn preview(v: &Value) -> String {
+    /// Takes bytes until it holds enough for SCRIPT_PREVIEW characters (at most 4 bytes each),
+    /// then refuses the rest, which stops the writing.
+    struct Capped(Vec<u8>);
+    impl std::io::Write for Capped {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            let room = (SCRIPT_PREVIEW * 4).saturating_sub(self.0.len());
+            if room == 0 {
+                return Err(std::io::ErrorKind::WriteZero.into());
+            }
+            let taken = bytes.get(..bytes.len().min(room)).unwrap_or_default();
+            self.0.extend_from_slice(taken);
+            Ok(taken.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut out = Capped(Vec::new());
+    // Stopped by Capped once it's full: what was written is the preview.
+    let _ = serde_json::to_writer(&mut out, v);
+    // A character cut at the end lies past the SCRIPT_PREVIEW kept.
+    String::from_utf8_lossy(&out.0).chars().take(SCRIPT_PREVIEW).collect()
+}
+
+/// A result's text as the Details window's rows: a line of the indented JSON a row, and a line
+/// longer than SCRIPT_ROW_CHARS (a long string, such as an export's text, which JSON keeps on one
+/// line) split into rows of that many characters, so no row in view is long to lay out.
+fn rows(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for line in text.lines() {
+        let mut chars = line.chars().peekable();
+        if chars.peek().is_none() {
+            out.push(String::new());
+        }
+        while chars.peek().is_some() {
+            out.push(chars.by_ref().take(SCRIPT_ROW_CHARS).collect());
+        }
+    }
+    out
 }
 
 /// A run's line as the Details window heads it: `line 3: raster.gcpFit`.
@@ -1821,13 +1872,14 @@ pub fn script_details(app: &mut RustGisApp, ctx: &egui::Context) {
                         .default_open(false)
                         .show(ui, |ui| {
                             if l.text.is_empty() {
-                                l.text = pretty(&l.result).lines().map(str::to_owned).collect();
+                                l.text = rows(&pretty(&l.result));
                             }
+                            // The result as it is, not its rows: a long line isn't split.
                             if ui.small_button(tl!("Copy")).clicked() {
-                                ui.ctx().copy_text(l.text.join("\n"));
+                                ui.ctx().copy_text(pretty(&l.result));
                             }
-                            // Only the rows in view are laid out, however long the result: in a
-                            // scroll of its own, at most SCRIPT_DETAILS_ROWS rows tall.
+                            // Only the rows in view are laid out, each short, however long the
+                            // result: in a scroll of its own, at most SCRIPT_DETAILS_ROWS rows tall.
                             egui::ScrollArea::both()
                                 .id_salt(("script_details_result", n, i))
                                 .max_height(row * SCRIPT_DETAILS_ROWS)
@@ -1994,6 +2046,55 @@ mod tests {
         h.run();
         assert!(!h.state().workflow.script_details);
         assert!(h.query_by_label("Copy All").is_none());
+    }
+
+    /// A long result is cut as the pane writes it, not after; and in Details a long line (an
+    /// export's text, one JSON string) is split into short rows, while Copy keeps it whole.
+    #[test]
+    fn long_results_are_bounded_where_they_show() {
+        let long = json!({"text": "a".repeat(100_000)});
+        let shown = preview(&long);
+        assert_eq!(shown.chars().count(), SCRIPT_PREVIEW);
+        assert!(shown.starts_with("{\"text\":\"aaa"), "{shown}");
+        assert_eq!(preview(&json!({"a": 1})), "{\"a\":1}", "a short one whole, as before");
+        let wide = preview(&json!("é".repeat(1_000)));
+        assert!(wide.chars().count() == SCRIPT_PREVIEW && !wide.contains('\u{FFFD}'), "cut between characters");
+        // In rows of at most SCRIPT_ROW_CHARS characters, nothing lost or added.
+        let text = pretty(&long);
+        let split = rows(&text);
+        assert!(split.len() > 500 && split.iter().all(|r| r.chars().count() <= SCRIPT_ROW_CHARS));
+        assert_eq!(split.concat(), text.lines().collect::<String>());
+        let counts: Vec<usize> = rows(&"é".repeat(450)).iter().map(|r| r.chars().count()).collect();
+        assert_eq!(counts, vec![200, 200, 50]);
+        assert_eq!(rows("{\n\n}"), vec!["{", "", "}"], "a blank line stays a row");
+        // In the window: the long line's rows, and Copy with the whole text.
+        let mut app = RustGisApp::with_sample();
+        script_ran(&mut app, crate::Landed::Ran(Ok(json!({"ran": [{"line": 1, "command": "data.convert", "result": long}]}))));
+        app.workflow.script_details = true;
+        let mut fonts = false;
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(900.0, 800.0)).build_ui_state(
+            move |ui, app: &mut RustGisApp| {
+                if !fonts {
+                    crate::theme::install_fonts(ui.ctx(), &[], None);
+                    fonts = true;
+                    return;
+                }
+                script_details(app, ui.ctx());
+            },
+            app,
+        );
+        h.run();
+        h.get_by_label("line 1: data.convert").click();
+        h.run();
+        let made = h.state().workflow.script_last.as_ref().map_or(0, |r| r.ran.iter().map(|l| l.text.len()).sum());
+        assert!(made > 500, "laid out in rows: {made}");
+        h.get_by_label("Copy").click();
+        h.step();
+        let copied = h.output().platform_output.commands.iter().find_map(|c| match c {
+            egui::OutputCommand::CopyText(t) => Some(t.clone()),
+            _ => None,
+        });
+        assert_eq!(copied, Some(pretty(&long)), "Copy keeps the long line whole");
     }
 
     /// Interpolate runs on a thread of its own from the pane (#1291 step 3): the pane goes on while
