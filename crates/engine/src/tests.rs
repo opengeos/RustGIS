@@ -15666,6 +15666,30 @@ fn a_plugins_dated_cog_is_added_without_waiting() {
     drop(server);
 }
 
+/// A GeoTIFF whose header was just read is framed even if the cache forgot it since (a login
+/// ended), and one that can't be read again says why the map wasn't moved to it.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_probed_cog_is_framed_after_the_cache_forgets_it() {
+    use crate::render::rustgis_tiles::{cache, cog};
+    let (base, _) = serve_ranges(rustgis_data::raster::cog::example(512, 128));
+    let url = format!("{base}/scene.tif");
+    assert_eq!(cog::probe_blocking(&url), Ok(true));
+    cache::forget(&url);
+    let mut s = Session::new(Project::default());
+    let r = crate::cmd::layer::add_cog(&mut s, &json!({}), &url, true).unwrap();
+    assert!(r["bounds"].is_array(), "{r}");
+    assert!(r.get("warning").is_none(), "{r}");
+    // Nothing answers at this address any more.
+    let gone = {
+        let server = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        format!("http://{}/gone.tif", server.local_addr().unwrap())
+    };
+    let r = crate::cmd::layer::add_cog(&mut s, &json!({}), &gone, true).unwrap();
+    let warning = r["warning"].as_str().unwrap_or_default();
+    assert!(warning.contains("couldn't be read (") && warning.contains("wasn't moved"), "{r}");
+}
+
 /// A cloud-optimised GeoTIFF by its address is read in place: its header, then only the tiles a
 /// map tile needs, by range; a GeoTIFF in strips is downloaded whole as a raster layer.
 #[test]

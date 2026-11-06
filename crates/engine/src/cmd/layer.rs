@@ -3550,18 +3550,17 @@ pub(crate) fn add_cog(s: &mut Session, p: &Value, url: &str, probed: bool) -> Cm
     let mut r = super::tiles::add(s, &q)?;
     // A plugin's command in the app doesn't wait (it runs on the frame), as in the browser.
     let probed = probed && !s.leave_downloads;
-    // A dated address is framed on the file of the date it shows.
-    let (url, probed) = match r.get("url").and_then(Value::as_str) {
+    // A dated address is framed on the file of the date it shows; why its file couldn't be read.
+    let (url, probed, mut why) = match r.get("url").and_then(Value::as_str) {
         Some(dated) => {
-            // Its header read now (natively) as an undated address's is before it is added. A
-            // plugin's command in the app doesn't wait (it runs on the frame), as in the browser.
+            // Its header read now (natively) as an undated address's is before it is added.
             #[cfg(not(target_arch = "wasm32"))]
-            let read = !s.leave_downloads && crate::render::rustgis_tiles::cog::probe_blocking(dated) == Ok(true);
+            let probe = if s.leave_downloads { Ok(false) } else { crate::render::rustgis_tiles::cog::probe_blocking(dated) };
             #[cfg(target_arch = "wasm32")]
-            let read = false;
-            (dated.to_string(), read)
+            let probe: Result<bool, String> = Ok(false);
+            (dated.to_string(), probe == Ok(true), probe.err())
         }
-        None => (url.to_string(), probed),
+        None => (url.to_string(), probed, None),
     };
     #[cfg(not(target_arch = "wasm32"))]
     let info = if probed {
@@ -3571,7 +3570,14 @@ pub(crate) fn add_cog(s: &mut Session, p: &Value, url: &str, probed: bool) -> Cm
     };
     #[cfg(target_arch = "wasm32")]
     let info = crate::render::rustgis_tiles::cog::info(&url);
-    if let Ok(Some(info)) = info {
+    let info = match info {
+        Ok(info) => info,
+        Err(e) => {
+            why.get_or_insert(e);
+            None
+        }
+    };
+    if let Some(info) = info {
         let [w, so, e, n] = info.bounds;
         // A cloud-optimised GeoTIFF read in place is framed when it is the first content on the
         // map, as other data is; `"zoom"` says otherwise (`true`, or `false` to keep the view).
@@ -3600,8 +3606,16 @@ pub(crate) fn add_cog(s: &mut Session, p: &Value, url: &str, probed: bool) -> Cm
             s.notify(format!("{shown}: {line}"), false);
         }
     } else if probed || r.get("dated").is_some() {
-        // Added, but its (first date's) file couldn't be read: the view stays where it was.
-        r["warning"] = json!(format!("{url} couldn't be read yet, so the map wasn't moved to it"));
+        // Added, but its (first date's) file couldn't be read: the view stays where it was, and
+        // the answer says why when the read said (its keys left out).
+        r["warning"] = json!(match why {
+            Some(e) => format!(
+                "{} couldn't be read ({}), so the map wasn't moved to it",
+                crate::sources::redact(&url),
+                crate::sources::redact_text(&e)
+            ),
+            None => format!("{url} couldn't be read yet, so the map wasn't moved to it"),
+        });
     }
     r["inPlace"] = json!(true);
     Ok(r)
