@@ -15646,6 +15646,25 @@ fn a_trend_over_a_stac_collection() {
     assert_eq!(s.map().layers.len(), layers);
 }
 
+/// A plugin's command in the app (`leave_downloads`) runs on the frame: a dated GeoTIFF's first
+/// file isn't waited for, and the answer says the map wasn't moved to it.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_plugins_dated_cog_is_added_without_waiting() {
+    // A server that takes the connection and never answers: a probe would wait its minute.
+    let server = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let base = format!("http://{}", server.local_addr().unwrap());
+    let mut s = Session::new(Project::default());
+    s.leave_downloads = true;
+    let start = std::time::Instant::now();
+    let r = s.run("layer.addUrl", &json!({"url": format!("{base}/{{date:YYYY}}.tif"), "start": 2020, "end": 2021})).unwrap();
+    s.leave_downloads = false;
+    assert!(start.elapsed() < std::time::Duration::from_secs(10), "waited {:?}", start.elapsed());
+    assert_eq!(r["inPlace"], true, "{r}");
+    assert!(r["warning"].as_str().is_some_and(|w| w.contains("wasn't moved")), "{r}");
+    drop(server);
+}
+
 /// A cloud-optimised GeoTIFF by its address is read in place: its header, then only the tiles a
 /// map tile needs, by range; a GeoTIFF in strips is downloaded whole as a raster layer.
 #[test]

@@ -3551,9 +3551,10 @@ pub(crate) fn add_cog(s: &mut Session, p: &Value, url: &str, probed: bool) -> Cm
     // A dated address is framed on the file of the date it shows.
     let (url, probed) = match r.get("url").and_then(Value::as_str) {
         Some(dated) => {
-            // Its header read now (natively) as an undated address's is before it is added.
+            // Its header read now (natively) as an undated address's is before it is added. A
+            // plugin's command in the app doesn't wait (it runs on the frame), as in the browser.
             #[cfg(not(target_arch = "wasm32"))]
-            let read = crate::render::rustgis_tiles::cog::probe_blocking(dated) == Ok(true);
+            let read = !s.leave_downloads && crate::render::rustgis_tiles::cog::probe_blocking(dated) == Ok(true);
             #[cfg(target_arch = "wasm32")]
             let read = false;
             (dated.to_string(), read)
