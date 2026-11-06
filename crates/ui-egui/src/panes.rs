@@ -2230,6 +2230,10 @@ fn layer_menu(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, reorder: bool) {
         ui.close();
     }
     if l.is_streamed() && ui.button(tl!("Load All Features")).clicked() {
+        // Read on a thread of its own in the desktop app (see `readjob`).
+        #[cfg(not(target_arch = "wasm32"))]
+        let _ = crate::readjob::run(app, "layer.loadAll", json!({"layer": l.id}));
+        #[cfg(target_arch = "wasm32")]
         let _ = app.run("layer.loadAll", json!({"layer": l.id}));
         ui.close();
     }
@@ -7218,6 +7222,7 @@ mod tests {
     fn a_vector_archives_source_layers_open_under_it() {
         use egui_kittest::kittest::{NodeT, Queryable};
         use rustgis_engine::render::rustgis_tiles::{mvt, pmtiles};
+        let _turn = crate::fetching::turn();
         let new = pmtiles::NewArchive {
             tile_type: pmtiles::TileType::Mvt,
             gzipped_tiles: false,

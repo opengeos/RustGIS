@@ -140,6 +140,31 @@ pub fn clear_fetcher() {
     *fetcher().lock().unwrap_or_else(|e| e.into_inner()) = None;
 }
 
+/// Tests that fetch through the cache take turns. It has one fetcher for the whole process, so a
+/// test that replaces it ([`set_fetcher`]) would answer another's fetches. It also starts fetches
+/// on whichever thread is starting them already, so one test's fetch may run on another's thread,
+/// later. Tests that end a login take turns too, as that empties the cache ([`clear`]), and so do
+/// tests that wait for or plant what the cache holds (an archive read, a style resolved), which
+/// that would drop. The turn puts the native fetcher back when it ends.
+#[cfg(test)]
+pub(crate) fn turn() -> Turn {
+    static TURN: Mutex<()> = Mutex::new(());
+    Turn { _held: TURN.lock().unwrap_or_else(|e| e.into_inner()) }
+}
+
+/// A test's turn at the cache ([`turn`]).
+#[cfg(test)]
+pub(crate) struct Turn {
+    _held: std::sync::MutexGuard<'static, ()>,
+}
+
+#[cfg(test)]
+impl Drop for Turn {
+    fn drop(&mut self) {
+        clear_fetcher();
+    }
+}
+
 /// Replaces how tile pictures (PNG, JPEG, WebP) are decoded: the browser's own decoder works
 /// off the page's thread, where decoding them here held up every frame tiles arrived in. `done`
 /// must be called once, with the picture as [`RAW`] pixels, or with the bytes given back.
@@ -2495,39 +2520,65 @@ mod tests {
         serve_recorded(answers).0
     }
 
+    /// Reads a whole request from `stream`, body too: answering and closing while a POST's body
+    /// is still arriving resets the connection, and the client sees that instead of the answer.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn read_request(stream: &mut std::net::TcpStream) -> String {
+        use std::io::Read;
+        let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(5)));
+        let mut request = Vec::new();
+        let mut buf = [0u8; 2048];
+        while let Ok(n) = stream.read(&mut buf) {
+            if n == 0 {
+                break;
+            }
+            request.extend_from_slice(&buf[..n]);
+            let Some(head_end) = request.windows(4).position(|w| w == b"\r\n\r\n") else { continue };
+            let head = String::from_utf8_lossy(&request[..head_end]).to_ascii_lowercase();
+            let length = head
+                .lines()
+                .find_map(|line| line.strip_prefix("content-length:"))
+                .and_then(|v| v.trim().parse::<usize>().ok())
+                .unwrap_or(0);
+            if request.len() >= head_end + 4 + length {
+                break;
+            }
+        }
+        String::from_utf8_lossy(&request).into_owned()
+    }
+
     #[cfg(not(target_arch = "wasm32"))]
     fn serve_recorded(answers: Vec<Vec<u8>>) -> (String, std::sync::mpsc::Receiver<String>) {
-        use std::io::{Read, Write};
+        use std::io::Write;
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
         let (sent, received) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             for answer in answers {
                 let Ok((mut stream, _)) = listener.accept() else { return };
-                // The whole request, body too, before answering: answering and closing while a
-                // POST's body is still arriving resets the connection, and the client sees that
-                // instead of the answer.
-                let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(5)));
-                let mut request = Vec::new();
-                let mut buf = [0u8; 2048];
-                while let Ok(n) = stream.read(&mut buf) {
-                    if n == 0 {
-                        break;
-                    }
-                    request.extend_from_slice(&buf[..n]);
-                    let Some(head_end) = request.windows(4).position(|w| w == b"\r\n\r\n") else { continue };
-                    let head = String::from_utf8_lossy(&request[..head_end]).to_ascii_lowercase();
-                    let length = head
-                        .lines()
-                        .find_map(|line| line.strip_prefix("content-length:"))
-                        .and_then(|v| v.trim().parse::<usize>().ok())
-                        .unwrap_or(0);
-                    if request.len() >= head_end + 4 + length {
-                        break;
-                    }
-                }
-                let _ = sent.send(String::from_utf8_lossy(&request).into_owned());
+                let _ = sent.send(read_request(&mut stream));
                 let _ = stream.write_all(&answer);
+            }
+        });
+        (format!("http://{addr}"), received)
+    }
+
+    /// Serves every connection to the returned address with what `answer` gives for its request
+    /// path, sending each request to the receiver. It answers until the test binary exits, so its
+    /// thread and listener live that long.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn serve_by_path(answer: impl Fn(&str) -> Vec<u8> + Send + 'static) -> (String, std::sync::mpsc::Receiver<String>) {
+        use std::io::Write;
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (sent, received) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { return };
+                let request = read_request(&mut stream);
+                let path = request.split_whitespace().nth(1).unwrap_or("").to_string();
+                let _ = sent.send(request);
+                let _ = stream.write_all(&answer(&path));
             }
         });
         (format!("http://{addr}"), received)
@@ -2536,6 +2587,7 @@ mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn logins_headers_follow_same_origin_redirects() {
+        let _turn = crate::cache::turn();
         use crate::logins::{self, Method};
         let (base, asked) = serve_recorded(
             [
@@ -2558,6 +2610,7 @@ mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn logins_redirects_never_pick_up_another_origins_login() {
+        let _turn = crate::cache::turn();
         use crate::logins::{self, Method};
         let (other, asked) = serve_recorded(vec![b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\ntile".to_vec()]);
         let base = serve(vec![format!("HTTP/1.1 302 Found\r\nLocation: {other}/tile\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")]);
@@ -2577,6 +2630,7 @@ mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn logins_diagnostics_never_record_the_binding_or_the_secret() {
+        let _turn = crate::cache::turn();
         use crate::failure::Reason;
         use crate::logins::{self, Method};
         use rustgis_data::diagnostics::{Filter, History};
@@ -2623,6 +2677,7 @@ mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn delayed_head_refusal_after_cross_origin_redirect_is_status_only() {
+        let _turn = crate::cache::turn();
         use crate::logins::{self, Method};
         use rustgis_data::diagnostics::{Capture, Filter, History};
         use std::io::{Read, Write};
@@ -2686,6 +2741,7 @@ mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn logins_head_and_post_carry_the_login() {
+        let _turn = crate::cache::turn();
         use crate::logins::{self, Method};
         let answer = b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_vec();
         let (base, asked) = serve_recorded(vec![answer.clone(), answer]);
@@ -2704,6 +2760,7 @@ mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn live_connection_bindings_separate_requests_and_cache_entries() {
+        let _turn = crate::cache::turn();
         use crate::logins::{self, Method};
         let answer = b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}".to_vec();
         let (base, asked) = serve_recorded(vec![answer.clone(), answer.clone(), answer]);
@@ -2735,6 +2792,7 @@ mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn logout_during_pending_download_discards_old_authenticated_body() {
+        let _turn = crate::cache::turn();
         use crate::logins::{self, Method};
         use std::io::{Read, Write};
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -2774,6 +2832,7 @@ mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn derived_style_tilejson_sprite_and_feature_requests_carry_the_binding() {
+        let _turn = crate::cache::turn();
         use crate::{
             logins::{self, Method},
             source,
@@ -2787,13 +2846,18 @@ mod tests {
         let tilejson = serde_json::json!({"tiles": ["./tile/{z}/{x}/{y}.pbf"]});
         let answer =
             |body: String| format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).into_bytes();
-        let (base, asked) = serve_recorded(vec![
-            answer(style.to_string()),
-            answer(tilejson.to_string()),
-            answer("{}".into()),
-            answer("{}".into()),
-            answer("{}".into()),
-        ]);
+        // Answered by path, for as many connections as come: a test running at once may clear the
+        // shared cache, and resolving then fetches the style again in the background, so the
+        // requests are neither five nor in a fixed order.
+        let (base, asked) = serve_by_path(move |path| {
+            if path.starts_with("/style.json") {
+                answer(style.to_string())
+            } else if path.starts_with("/tiles.json") {
+                answer(tilejson.to_string())
+            } else {
+                answer("{}".into())
+            }
+        });
         let binding =
             logins::activate(&base, "derived-style", Method::Header("X-Service-Key".into()), "derived-style-secret", true).unwrap();
         let url = logins::bind(&binding, &format!("{base}/style.json")).unwrap();
@@ -2844,7 +2908,11 @@ mod tests {
             ..Default::default()
         };
         native::get(&native::agent(), &info.request(0.0, 0.0, 10.0).unwrap(), &[]).unwrap();
-        for request in asked.iter().take(5) {
+        // Every request sent so far, background fetches included. Each of the test's own requests
+        // was sent on before its answer came back, so all of them are among these.
+        let requests: Vec<String> = asked.try_iter().collect();
+        assert!(requests.len() >= 5);
+        for request in &requests {
             assert!(request.to_ascii_lowercase().contains("x-service-key: derived-style-secret\r\n"));
             assert!(!request.contains("rustgis-login:"));
         }
@@ -3034,6 +3102,7 @@ mod tests {
 
     #[test]
     fn fetches_through_the_fetcher_once() {
+        let _turn = crate::cache::turn();
         static CALLS: AtomicUsize = AtomicUsize::new(0);
         set_fetcher(|url, done| {
             CALLS.fetch_add(1, Ordering::Relaxed);
