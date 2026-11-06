@@ -1302,8 +1302,11 @@ fn topology_validate(s: &mut Session, p: &Json) -> CmdResult {
     use rustgis_analysis::topology as t;
     let tol = f(p, "toleranceM").unwrap_or(1.0).clamp(0.0, 10_000.0);
     let mut errors = Vec::new();
-    // Rules whose check stopped early (an error or work limit): their counts are partial.
+    // Rules whose check stopped early (an error or work limit), or measured some part more coarsely
+    // than it's meant to (a line winding round a pole many times): their counts may be off.
     let mut incomplete = Vec::new();
+    // Polygons a check had to leave out, by rule.
+    let mut skipped = Vec::new();
     for rule in s.map().editing.topology.clone() {
         let Some(l) = s.map().layer_by_name(rule.layer()) else { continue };
         let rows: Vec<usize> = l.visible_rows().iter().enumerate().filter(|(_, v)| **v).map(|(i, _)| i).collect();
@@ -1320,6 +1323,14 @@ fn topology_validate(s: &mut Session, p: &Json) -> CmdResult {
         if !found.complete {
             incomplete.push(rule.label().to_string());
         }
+        if found.skipped > 0 {
+            // The features left out are the covering layer's.
+            let of = match &rule {
+                TopologyRule::MustBeCoveredBy { by, .. } => by.as_str(),
+                _ => l.name.as_str(),
+            };
+            skipped.push(format!("{} on '{}': {} feature(s) of '{}'", rule.label(), l.name, found.skipped, of));
+        }
         errors.extend(found.errors.into_iter().map(|e| crate::TopologyIssue {
             rule: rule.label().to_string(),
             layer: l.name.clone(),
@@ -1327,6 +1338,18 @@ fn topology_validate(s: &mut Session, p: &Json) -> CmdResult {
             lon: e.at.x,
             lat: e.at.y,
         }));
+    }
+    if !incomplete.is_empty() {
+        s.warn(format!(
+            "Checks that stopped early (an error or work limit) or measured a line round a pole coarsely, so their counts may be off: {}",
+            incomplete.join(", ")
+        ));
+    }
+    if !skipped.is_empty() {
+        s.warn(format!(
+            "Polygons left out of the check at a pole (a coordinate missing or infinite, or a million turns around), so its result there may be wrong: {}",
+            skipped.join("; ")
+        ));
     }
     let n = errors.len();
     let out: Vec<Json> =
