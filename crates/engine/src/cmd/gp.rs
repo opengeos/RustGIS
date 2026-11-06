@@ -1148,10 +1148,7 @@ pub fn run_tool_with(
             #[cfg(not(target_arch = "wasm32"))]
             let recording = matches!(s.tools_ahead, Some(Ahead::Recording(_)));
             #[cfg(not(target_arch = "wasm32"))]
-            if recording
-                && !rustgis_analysis::tool(&tool)
-                    .is_some_and(|t| !t.id.starts_with(rustgis_plugins::PREFIX) && !is_geolibre_tool(t) && !writes_files(t))
-            {
+            if recording && !rustgis_analysis::tool(&tool).is_some_and(|t| !rustgis_analysis::is_external(t) && !writes_files(t)) {
                 return Err(NOT_AHEAD.into());
             }
             // A copy of the session runs under the control of the thread it runs on, which Cancel stops.

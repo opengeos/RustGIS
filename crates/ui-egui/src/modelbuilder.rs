@@ -85,10 +85,10 @@ pub struct ModelBuilder {
     pub search: String,
     pub log: Vec<(String, LogKind)>,
     pub status: HashMap<String, Status>,
-    /// The graphs of the runs under way and waiting, in the order asked, until each lands:
-    /// another one on the canvas by then (edited, or another model opened) isn't marked with
-    /// what it did.
-    running: std::collections::VecDeque<ModelGraph>,
+    /// The graphs of the runs under way and waiting, in the order asked, with the project each
+    /// was asked in, until each lands: another one on the canvas by then (edited, or another
+    /// model opened) isn't marked with what it did, and one from another project leaves it be.
+    running: std::collections::VecDeque<(u64, ModelGraph)>,
     /// What to do once the user agrees to drop unsaved changes.
     confirm: Option<Pending>,
     /// The problems of the graph, kept until it or the project changes (the project's
@@ -405,7 +405,7 @@ fn run_model(app: &mut RustGisApp) {
         }
         p = json!({"name": saved});
     }
-    app.mb.running.push_back(app.mb.graph.clone());
+    app.mb.running.push_back((app.session.project_starts, app.mb.graph.clone()));
     #[cfg(not(target_arch = "wasm32"))]
     {
         let _ = crate::readjob::run_then(app, "model.run", p, Some(landed));
@@ -424,9 +424,14 @@ fn run_model(app: &mut RustGisApp) {
 /// A model's run in the canvas: node statuses and messages from the engine's report, when it ran
 /// on the graph still there; why it didn't run, when it didn't.
 fn landed(app: &mut RustGisApp, landed: crate::Landed) {
+    let Some((project, graph)) = app.mb.running.pop_front() else { return };
+    // Asked in a project closed since: this canvas isn't the one it ran from.
+    if project != app.session.project_starts {
+        return;
+    }
     app.mb.status.clear();
     app.mb.log.clear();
-    let same = app.mb.running.pop_front().is_some_and(|g| g == app.mb.graph);
+    let same = graph == app.mb.graph;
     let res = match landed {
         crate::Landed::Ran(res) => res,
         crate::Landed::NotRun(why) => {
@@ -1780,7 +1785,13 @@ fn confirm(app: &mut RustGisApp, ctx: &egui::Context) {
 /// Drops the canvas of a project no longer open (its model would be saved into this one).
 fn forget_old_project(app: &mut RustGisApp) {
     if app.mb.project != app.session.project_starts {
-        app.mb = ModelBuilder { project: app.session.project_starts, search: std::mem::take(&mut app.mb.search), ..Default::default() };
+        // The runs still to land stay, so each one's landing is still matched with its own.
+        app.mb = ModelBuilder {
+            project: app.session.project_starts,
+            search: std::mem::take(&mut app.mb.search),
+            running: std::mem::take(&mut app.mb.running),
+            ..Default::default()
+        };
     }
 }
 
@@ -1954,9 +1965,18 @@ mod tests {
         app.run("ui.modelBuilder", Value::Null).unwrap();
         app.mb.add(&Add::Tool("buffer"), pos2(0.0, 0.0));
         app.mb.saved_as = Some("Old".into());
+        // A run under way when the project changes still lands after the reset.
+        app.mb.running.push_back((app.session.project_starts, app.mb.graph.clone()));
         app.run("project.new", Value::Null).unwrap();
         follow_view(&mut app);
         assert!(!app.mb.open && app.mb.graph.nodes.is_empty() && app.mb.saved_as.is_none());
+        // Its landing takes its own place, not that of a run asked in this project, and leaves
+        // this canvas as it is.
+        app.mb.running.push_back((app.session.project_starts, app.mb.graph.clone()));
+        app.mb.log("Running…", LogKind::Info);
+        landed(&mut app, crate::Landed::NotRun("another project was opened".into()));
+        assert_eq!(app.mb.log, vec![("Running…".to_string(), LogKind::Info)]);
+        assert_eq!(app.mb.running.len(), 1);
     }
 
     /// Old models (steps with `%n`) open on the canvas as graphs.
