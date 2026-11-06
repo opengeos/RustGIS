@@ -148,10 +148,9 @@ fn add(s: &mut Session, p: &Value) -> CmdResult {
             });
             // Its header read first, so its bands are known; the layer is framed only when it is the
             // map's first content (no "zoom" is passed, so add_cog defaults it to that). In the
-            // browser nothing may wait, nor in a plugin's command in the app (it runs on the
-            // frame), and it is read as the map draws.
+            // browser nothing may wait, and it is read as the map draws.
             #[cfg(not(target_arch = "wasm32"))]
-            if !s.leave_downloads && !crate::render::rustgis_tiles::cog::probe_blocking(file)? {
+            if !crate::render::rustgis_tiles::cog::probe_blocking(file)? {
                 return Err(format!("{file}: not a cloud-optimised GeoTIFF"));
             }
             let look = crate::render::rustgis_tiles::cog::with_look(file, &look);
