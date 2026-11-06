@@ -193,6 +193,13 @@ pub(crate) enum KeyPart<'a> {
     Bool(bool),
 }
 
+/// The key under which `v` is equal to the values `==` finds equal to it (−0 to 0), or `None`
+/// for a NaN, which `==` finds equal to no value: each one is a group of its own (Dissolve's).
+/// [`group_rows`] groups every NaN together instead, with [`key_part`].
+pub(crate) fn equal_key(v: &Value) -> Option<KeyPart<'_>> {
+    (!matches!(v, Value::Float(f) if f.is_nan())).then(|| key_part(v))
+}
+
 /// A value's group key.
 pub(crate) fn key_part(v: &Value) -> KeyPart<'_> {
     match v {

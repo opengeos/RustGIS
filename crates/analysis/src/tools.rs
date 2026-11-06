@@ -2109,7 +2109,7 @@ fn dissolve(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
         let Some(mp) = ds.features.get(r).and_then(|f| f.geometry.as_ref()).and_then(to_multipolygon) else { continue };
         let value = fi.map_or(&Value::Null, |fi| ds.value(r, fi));
         // A NaN equals no value, so each one stays a group of its own; −0 is 0, as it compares.
-        let part = (!matches!(value, Value::Float(f) if f.is_nan())).then(|| crate::stats::key_part(value));
+        let part = crate::stats::equal_key(value);
         match part.as_ref().and_then(|k| index.get(k)).and_then(|&g| groups.get_mut(g)) {
             Some(g) => {
                 g.1.push(mp);
@@ -6161,7 +6161,8 @@ mod tests {
     }
 
     /// Dissolve's groups, found by their keys' hash: in the order first met, −0 with 0, each NaN
-    /// on its own (it equals no value), and a number apart from the same text.
+    /// on its own (it equals no value), and a number apart from the same text and a whole number
+    /// apart from the same fraction.
     #[test]
     fn dissolve_groups_as_values_compare() {
         let mut polys = Dataset::new("polys", GeometryType::Polygon, vec![Field::new("k", FieldType::Double)]);
@@ -6174,6 +6175,7 @@ mod tests {
             Value::Float(-0.0),
             Value::Float(0.0),
             Value::Text("1".into()),
+            Value::Int(1),
             Value::Null,
             Value::Null,
         ];
@@ -6192,6 +6194,7 @@ mod tests {
                 "Float(NaN)×Int(1)",
                 "Float(-0.0)×Int(2)",
                 "Text(\"1\")×Int(1)",
+                "Int(1)×Int(1)",
                 "Null×Int(2)"
             ]
         );
