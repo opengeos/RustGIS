@@ -89,6 +89,9 @@ pub struct ModelBuilder {
     /// was asked in, until each lands: another one on the canvas by then (edited, or another
     /// model opened) isn't marked with what it did, and one from another project leaves it be.
     running: std::collections::VecDeque<(u64, ModelGraph)>,
+    /// The log shows Running… for a run still to land: another graph's landing may say how it
+    /// ended in its place, but once a run's ending is shown it stays.
+    waiting: bool,
     /// What to do once the user agrees to drop unsaved changes.
     confirm: Option<Pending>,
     /// The problems of the graph, kept until it or the project changes (the project's
@@ -411,6 +414,7 @@ fn run_model(app: &mut RustGisApp) {
         let _ = crate::readjob::run_then(app, "model.run", p, Some(landed));
         // Not landed yet: it says so until it does.
         if app.mb.log.is_empty() {
+            app.mb.waiting = true;
             app.mb.log(tl!("Running…").to_string(), LogKind::Info);
         }
     }
@@ -421,6 +425,19 @@ fn run_model(app: &mut RustGisApp) {
     }
 }
 
+/// Whether `a` and `b` run alike: the same nodes and edges, wherever the nodes sit on the canvas
+/// (a node moved while its run is under way still gets its marks).
+fn same_run(a: &ModelGraph, b: &ModelGraph) -> bool {
+    let placed = |g: &ModelGraph| {
+        let mut g = g.clone();
+        for n in &mut g.nodes {
+            (n.x, n.y) = (0.0, 0.0);
+        }
+        g
+    };
+    placed(a) == placed(b)
+}
+
 /// A model's run in the canvas: node statuses and messages from the engine's report, when it ran
 /// on the graph still there; why it didn't run, when it didn't.
 fn landed(app: &mut RustGisApp, landed: crate::Landed) {
@@ -429,11 +446,13 @@ fn landed(app: &mut RustGisApp, landed: crate::Landed) {
     if project != app.session.project_starts {
         return;
     }
-    let same = graph == app.mb.graph;
-    // Another graph's run, with a run of the canvas still to land: that one's Running… stays.
-    if !same && !app.mb.running.is_empty() {
+    let same = same_run(&graph, &app.mb.graph);
+    // Another graph's run leaves the canvas as it is while a run of it is still to land (its
+    // Running… stays), or once a run's ending is shown there.
+    if !same && (!app.mb.running.is_empty() || !app.mb.waiting) {
         return;
     }
+    app.mb.waiting = false;
     app.mb.status.clear();
     app.mb.log.clear();
     let res = match landed {
@@ -1863,6 +1882,8 @@ mod tests {
         assert_eq!(app.mb.log, vec![("Running…".to_string(), LogKind::Info)]);
         assert!(app.mb.status.is_empty());
         assert_eq!(app.session.map().layers.len(), layers + 1, "nothing added before it lands");
+        // A node moved meanwhile still gets its mark: the graph runs the same.
+        app.mb.graph.nodes[0].x += 40.0;
         let end = std::time::Instant::now() + std::time::Duration::from_secs(60);
         while crate::readjob::land(&mut app) {
             assert!(std::time::Instant::now() < end, "the model never landed");
@@ -1984,10 +2005,18 @@ mod tests {
         // Another model's run landing first, in this project, leaves it too.
         let mut other = app.mb.graph.clone();
         other.nodes.push(Default::default());
-        app.mb.running.push_front((app.session.project_starts, other));
+        app.mb.running.push_front((app.session.project_starts, other.clone()));
         landed(&mut app, crate::Landed::NotRun("cancelled".into()));
         assert_eq!(app.mb.log, vec![("Running…".to_string(), LogKind::Info)]);
         assert_eq!(app.mb.running.len(), 1);
+        // The canvas's own run lands; another graph's landing after it leaves its ending shown.
+        app.mb.waiting = true;
+        landed(&mut app, crate::Landed::NotRun("cancelled".into()));
+        let shown = app.mb.log.clone();
+        assert_eq!(shown, vec![("Run failed: cancelled".to_string(), LogKind::Error)]);
+        app.mb.running.push_back((app.session.project_starts, other));
+        landed(&mut app, crate::Landed::NotRun("cancelled".into()));
+        assert_eq!(app.mb.log, shown);
     }
 
     /// Old models (steps with `%n`) open on the canvas as graphs.

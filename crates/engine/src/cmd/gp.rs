@@ -1167,6 +1167,11 @@ pub fn run_tool_with(
             #[cfg(not(target_arch = "wasm32"))]
             let view = inputs.view.get().copied();
             drop(inputs);
+            // A file made, with a SaveFile parameter or not, is written where the model runs.
+            #[cfg(not(target_arch = "wasm32"))]
+            if recording && matches!(&res, Ok(r) if matches!(r.output, Output::File { .. })) {
+                return Err(NOT_AHEAD.into());
+            }
             let millis = now_ms().saturating_sub(t0);
             #[cfg(not(target_arch = "wasm32"))]
             if let (Some(read), Some(Ahead::Recording(ran))) = (read, &mut s.tools_ahead) {
