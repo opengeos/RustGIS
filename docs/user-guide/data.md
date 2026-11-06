@@ -44,11 +44,12 @@ double-clicked in the Browser: **Choose Layers** lists them, all ticked, with **
 **Select None** and a filter for a long list. Turn **Ask Which Layers to Add** off in the Add Data
 menu to add every layer, as before. Scripts pick one with `layer.addData`'s `"layer"`;
 `info.fileLayers` lists them.
-A file RustGIS reads itself whose layers are of several geometry types (a KML, GPX, OpenStreetMap
-or DXF file, a zip of Shapefiles…) adds its polygons first and its points last, so its points are
-drawn on top, and a KML's ground overlays go under them. A name given goes to the first layer
-added, the bottom one. A file read through GDAL keeps its layers in the file's order and orders only
-the types within each layer.
+A KML, KMZ, GPX, OpenStreetMap, DXF, LandXML or GeoRSS file, a zip of Shapefiles or a File
+Geodatabase that RustGIS reads itself, with layers of several geometry types, adds its polygons
+first and its points last, so its points are drawn on top, and a KML's ground overlays go under
+them. A name given goes to the first map layer added, the bottom one (a standalone table only gets
+it when the file has no map layer). A GeoPackage adds its tables in name order, and a file read
+through GDAL keeps its layers in the file's order and orders only the types within each layer.
 On the desktop, **Home › Add › Add Data › Add Folder…** connects a folder to the Browser; the web
 app does not offer folder connections.
 On the desktop, a file Add Data reads whole (a GeoTIFF or another raster, one GDAL converts, a

@@ -10919,11 +10919,12 @@ fn split_sources_keep_their_points_on_top() {
     assert_eq!(names(&s), ["b (points)", "b (lines)", "b (polygons)", "a (points)", "a (lines)", "a (polygons)"]);
 
     // A file the built-in readers split by type (a KML here, as GPX, OSM or DXF): the same order,
-    // and the first layer added (the polygons) still frames an empty map.
+    // and the first layer added (the polygons, away from the rest) still frames an empty map on
+    // its own extent, not on all the data's.
     let kml = r#"<kml xmlns="http://www.opengis.net/kml/2.2"><Document>
 <Placemark><name>p</name><Point><coordinates>10.5,50.5</coordinates></Point></Placemark>
 <Placemark><name>l</name><LineString><coordinates>10,50 11,51</coordinates></LineString></Placemark>
-<Placemark><name>a</name><Polygon><outerBoundaryIs><LinearRing><coordinates>10,50 11,50 11,51 10,50</coordinates></LinearRing></outerBoundaryIs></Polygon></Placemark>
+<Placemark><name>a</name><Polygon><outerBoundaryIs><LinearRing><coordinates>12,52 13,52 13,53 12,52</coordinates></LinearRing></outerBoundaryIs></Polygon></Placemark>
 </Document></kml>"#;
     let path = dir.join("trip.kml");
     std::fs::write(&path, kml).unwrap();
@@ -10931,7 +10932,27 @@ fn split_sources_keep_their_points_on_top() {
     s.run("layer.addData", &json!({"path": path.display().to_string()})).unwrap();
     assert_eq!(names(&s), ["trip points", "trip lines", "trip polygons"]);
     let c = s.map().center_lonlat();
-    assert!((c.x - 10.5).abs() < 0.1 && (c.y - 50.5).abs() < 0.2, "{c:?}");
+    assert!((c.x - 12.5).abs() < 0.1 && (c.y - 52.5).abs() < 0.2, "{c:?}");
+
+    // A KMZ's ground overlay goes under its layers, and the empty map is framed on the layers, not
+    // on the picture.
+    let mut red = tiny_skia::Pixmap::new(8, 8).unwrap();
+    red.fill(tiny_skia::Color::from_rgba8(255, 0, 0, 255));
+    let doc = r#"<kml xmlns="http://www.opengis.net/kml/2.2"><Document>
+<GroundOverlay><name>Over</name><Icon><href>files/red.png</href></Icon><LatLonBox><north>41</north><south>40</south><east>11</east><west>10</west></LatLonBox></GroundOverlay>
+<Placemark><name>l</name><LineString><coordinates>30,30 31,31</coordinates></LineString></Placemark>
+</Document></kml>"#;
+    let kmz = rustgis_data::zip::write(&[("doc.kml".into(), doc.as_bytes().to_vec()), ("files/red.png".into(), red.encode_png().unwrap())])
+        .unwrap();
+    let path = dir.join("site.kmz");
+    std::fs::write(&path, kmz).unwrap();
+    let mut s = Session::new(Project::default());
+    s.run("layer.addData", &json!({"path": path.display().to_string()})).unwrap();
+    let all = names(&s);
+    assert_eq!(all.last().map(String::as_str), Some("Over"), "{all:?}");
+    assert_eq!(all.len(), 2, "{all:?}");
+    let c = s.map().center_lonlat();
+    assert!((c.x - 30.5).abs() < 0.1 && (c.y - 30.5).abs() < 0.2, "{c:?}");
     let _ = std::fs::remove_dir_all(dir);
 }
 

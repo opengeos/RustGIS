@@ -1624,14 +1624,23 @@ fn add_reads(
                 if let Some(id) = r.get("layer").and_then(Value::as_u64).and_then(|i| u32::try_from(i).ok()) {
                     apply_styles(s, id, &styles);
                 }
+                // A standalone table isn't drawn, so it frames nothing.
+                if r.get("layer").is_some() {
+                    read_zoom = zoom;
+                }
                 added.push(r);
-                read_zoom = zoom;
                 if let Some(o) = q.as_object_mut() {
                     o.remove("name");
                 }
             }
             Err(e) => failed.push(format!("{name}: {e}")),
         }
+    }
+    // No layer was added to frame the empty map: the first image frames it, as it did before.
+    if read_zoom == Some(true)
+        && let Some(first) = images.first()
+    {
+        zoom_to_added(s, first);
     }
     added.extend(images);
     if added.is_empty() {
@@ -2160,15 +2169,17 @@ pub(crate) fn gdal_parts(mut converted: Vec<rustgis_data::source::gdal::Converte
         .collect()
 }
 
-/// Where a layer of this geometry type goes among the layers one file or source gives: tables
-/// and polygons first, points last. Each new layer goes on top, so the points end on top and none
-/// of them hides under the source's own polygons. Every command that adds a source as several
-/// layers adds them in this order (#1488).
+/// Where a layer of this geometry type goes among the layers one file or source gives: polygons
+/// first, then lines, then points, and standalone tables (which aren't drawn) last, so a name
+/// given goes to a map layer. Each new layer goes on top, so the points end on top and none of
+/// them hides under the source's own polygons. Every command that adds a source as several layers
+/// adds them in this order (#1488).
 pub(crate) fn stack_rank(geometry: GeometryType) -> u8 {
     match geometry {
-        GeometryType::None | GeometryType::Polygon => 0,
+        GeometryType::Polygon => 0,
         GeometryType::Polyline => 1,
         GeometryType::Point => 2,
+        GeometryType::None => 3,
     }
 }
 
