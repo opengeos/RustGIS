@@ -185,7 +185,7 @@ pub struct Group {
 /// A value as a group key: equal keys are equal values. Numbers compare by their bits, with −0 as
 /// 0, so every NaN is one key. Text is borrowed from the dataset.
 #[derive(Hash, PartialEq, Eq)]
-enum KeyPart<'a> {
+pub(crate) enum KeyPart<'a> {
     Null,
     Int(i64),
     Float(u64),
@@ -194,7 +194,7 @@ enum KeyPart<'a> {
 }
 
 /// A value's group key.
-fn key_part(v: &Value) -> KeyPart<'_> {
+pub(crate) fn key_part(v: &Value) -> KeyPart<'_> {
     match v {
         Value::Null => KeyPart::Null,
         Value::Int(i) => KeyPart::Int(*i),
