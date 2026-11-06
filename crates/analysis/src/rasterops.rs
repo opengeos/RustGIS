@@ -1841,20 +1841,36 @@ mod tests {
                     let c = Coord::new(extent.min_x + (col as f64 + 0.5) * 0.1, extent.max_y - (row as f64 + 0.5) * 0.1);
                     let mut near: Vec<(f64, f64)> = pts.iter().map(|(p, v)| (((p.x - c.x) * kx).hypot(p.y - c.y), *v)).collect();
                     near.sort_by(|a, b| a.0.total_cmp(&b.0));
-                    near.truncate(k);
-                    let want = match near.iter().find(|(d, _)| *d < 1e-12) {
-                        Some(on) => on.1,
-                        None => {
-                            let nearest = near[0].0;
-                            let (n, d) = near.iter().fold((0.0, 0.0), |(n, d), (dist, v)| {
-                                let wgt = (nearest / dist).powf(2.0);
-                                (n + wgt * v, d + wgt)
-                            });
-                            n / d
-                        }
-                    } as f32;
+                    // Points tied with the last one kept (as far as rounding goes): either may be
+                    // the one picked, so each is a right answer.
+                    let last = near[k - 1].0;
+                    let tied: Vec<(f64, f64)> = near[k - 1..].iter().copied().filter(|(d, _)| (d - last).abs() <= last * 1e-12).collect();
+                    let surface = |chosen: &[(f64, f64)]| {
+                        (match chosen.iter().find(|(d, _)| *d < 1e-12) {
+                            Some(on) => on.1,
+                            None => {
+                                let nearest = chosen.iter().map(|(d, _)| *d).fold(f64::INFINITY, f64::min);
+                                let (n, d) = chosen.iter().fold((0.0, 0.0), |(n, d), (dist, v)| {
+                                    let wgt = (nearest / dist).powf(2.0);
+                                    (n + wgt * v, d + wgt)
+                                });
+                                n / d
+                            }
+                        }) as f32
+                    };
                     let got = fast.bands[0].data[row * w + col];
-                    assert!((got - want).abs() <= want.abs() * 1e-6 + 1e-6, "({col}, {row}), {neighbours} neighbours: {got} vs {want}");
+                    let wants: Vec<f32> = tied
+                        .iter()
+                        .map(|t| {
+                            let mut chosen = near[..k - 1].to_vec();
+                            chosen.push(*t);
+                            surface(&chosen)
+                        })
+                        .collect();
+                    assert!(
+                        wants.iter().any(|want| (got - want).abs() <= want.abs() * 1e-6 + 1e-6),
+                        "({col}, {row}), {neighbours} neighbours: {got} vs {wants:?}"
+                    );
                 }
             }
             // The cell centred on the last point takes its value.
