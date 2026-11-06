@@ -16295,49 +16295,37 @@ fn a_tile_a_sparse_file_leaves_out_is_empty_not_waited_for() {
     let _ = std::fs::remove_file(png);
 }
 
-/// A GeoTIFF whose server refuses its header with a 429 or 503 and a `Retry-After` isn't asked
-/// for again before then, and the map is asked to draw again by then (as for a tile), so the
-/// layer doesn't stay failed until something else draws the map.
+/// A GeoTIFF whose server refuses its header with a 429 or 503 and a `Retry-After` fails to be
+/// added, saying when to ask again, and is read again on a draw once the wait is over. (That it
+/// isn't asked for before then, and that the map is asked to draw again by then, so the layer
+/// doesn't stay failed until something else draws it: `rustgis_tiles::cog`'s
+/// `a_header_refused_with_retry_after_has_the_map_drawn_again_then`, where the gate's state and
+/// the alarm can be read; here another test may empty the cache meanwhile.)
 #[test]
 fn a_header_refused_with_retry_after_is_read_again_when_it_says() {
     use crate::render::rustgis_tiles::{cache, cog};
-    use std::io::{Read, Write};
-    use std::sync::{Arc, Mutex};
+    use std::sync::atomic::Ordering;
     use std::time::Duration;
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let addr = listener.local_addr().unwrap();
-    std::thread::spawn(move || {
-        for stream in listener.incoming() {
-            let Ok(mut s) = stream else { continue };
-            let mut buf = [0u8; 4096];
-            let _ = s.read(&mut buf);
-            let _ = s.write_all(b"HTTP/1.1 503 Service Unavailable\r\nRetry-After: 1\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
-        }
-    });
-    // The app's alarm: each wait asked for is noted.
-    let asked = Arc::new(Mutex::new(Vec::new()));
-    let noted = asked.clone();
-    cache::set_alarm(move |d| noted.lock().unwrap().push(d));
-    let url = format!("http://{addr}/scene.tif");
+    // Refused once (busy: ask again in a second), answered after.
+    let (base, sent) = serve_refusing_first(rustgis_data::raster::cog::example(512, 256), 1);
+    let url = format!("{base}/scene.tif");
     let mut s = Session::new(Project::default());
     let e = s.run("layer.addUrl", &json!({"url": url.clone(), "name": "Scene"})).unwrap_err();
     assert!(e.contains("retry after 1 s"), "{e}");
-    // Not asked for again before then (the error stands), and the map is asked to draw again by
-    // then: on the failure, and on each draw while it waits (another alarm may have fired since).
-    let mut seen = None;
-    for _ in 0..30 {
+    assert_eq!(sent.load(Ordering::Relaxed), 0, "refused: nothing sent");
+    // Its wait over, it is read again on a draw, and answered.
+    let start = std::time::Instant::now();
+    let mut read = None;
+    while read.is_none() && start.elapsed() < Duration::from_secs(10) {
         let _ = cache::generation();
-        // The error stands until then; its wait over, it is read again.
-        if let Err(e) = cog::info(&url) {
-            assert!(e.contains("retry after 1 s"), "{e}");
-        }
-        seen = asked.lock().unwrap().iter().find(|d| **d <= Duration::from_secs(1)).copied();
-        if seen.is_some() {
-            break;
+        if let Ok(Some(info)) = cog::info(&url) {
+            read = Some(info);
         }
         cache::wait(Duration::from_millis(50));
     }
-    assert!(seen.is_some(), "no alarm within a second: {:?}", asked.lock().unwrap());
+    let width = read.as_ref().and_then(|i| i.layout.levels.first()).map(|l| l.width);
+    assert_eq!(width, Some(512), "not read again once its wait was over");
+    assert!(sent.load(Ordering::Relaxed) > 0);
 }
 
 /// A GeoTIFF's address look (`#bands=…&range=…`) is its layer's once its pixels land, read later
@@ -16969,6 +16957,25 @@ fn an_in_place_layer_that_cant_be_read_says_so() {
     assert_eq!(said(&s), 1);
 }
 
+/// A project an older RustGIS saved again (it didn't know `in_place`: the layer was missing there,
+/// and saved without the key) reads its cloud-optimised GeoTIFF in place again: a raster layer
+/// whose path is a plain web address is read no other way.
+#[test]
+fn a_project_an_older_rustgis_saved_again_reads_its_cog_in_place() {
+    let (base, _) = serve_ranges(rustgis_data::raster::cog::example(512, 256));
+    let mut s = Session::new(Project::default());
+    s.map_mut().add_raster("Scene".to_string(), rustgis_map::raster::RasterLayer::unread_in_place(format!("{base}/scene.tif")));
+    let mut text: Value = serde_json::to_value(&s.project).unwrap();
+    // As the older RustGIS saved it: the path, without `in_place`.
+    let raster = text.pointer_mut("/maps/0/layers/0/raster").and_then(Value::as_object_mut).unwrap();
+    assert_eq!(raster.remove("in_place"), Some(json!(true)));
+    let mut s = Session::new(Project::default());
+    s.run("project.openText", &json!({"text": text.to_string()})).unwrap();
+    let rl = s.map().layer_by_name("Scene").and_then(|l| l.raster.clone()).unwrap();
+    assert!(rl.in_place && rl.error.is_none(), "{:?}", rl.error);
+    assert_eq!(rl.data.as_ref().map(|d| d.width), Some(512));
+}
+
 /// A palette COG without its colour table is drawn in grey and says so, also when its pixels land
 /// after the layer is added (a project opened, as in the browser and an import): once, and not for
 /// one with its table.
@@ -17055,11 +17062,12 @@ fn cog_tile_layers_of_older_projects_open_as_rasters() {
     let mut text: Value = serde_json::to_value(&s.project).unwrap();
     let tile = |name: &str, url: String, opacity: f64, visible: bool| {
         let mut l = rustgis_map::TileLayer::new(name, rustgis_map::TileKind::Cog, url);
-        // Scene's credit, zoom range and overlay flag: what a raster layer hasn't.
+        // Scene's credit, zoom range, overlay flag and legend: what a raster layer hasn't.
         if name == "Scene" {
             l.attribution = "© Example".into();
             l.min_zoom = 5;
             l.overlay = true;
+            l.legends = vec![rustgis_data::ogc::Legend { url: format!("{base}/legend.png"), min_scale: None, max_scale: None }];
             l.connection = "conn-scene".into();
         }
         if name == "Aerial" {
@@ -17098,7 +17106,7 @@ fn cog_tile_layers_of_older_projects_open_as_rasters() {
     assert_eq!(names[names.len() - 2..], ["Scene", "Aerial"], "{names:?}");
     assert_eq!(t.map().tiles.iter().map(|x| x.name.as_str()).collect::<Vec<_>>(), ["Series"]);
     // Scene's settings a raster layer hasn't are said to be dropped, once; Aerial had none.
-    let said = |t: &Session| t.notices.iter().filter(|n| n.text.contains("which have no attribution, overlay, zoom range")).count();
+    let said = |t: &Session| t.notices.iter().filter(|n| n.text.contains("which have no attribution, legend, overlay, zoom range")).count();
     assert_eq!(said(&t), 1, "{:?}", t.notices.last());
     assert!(t.notices.iter().any(|n| n.text.contains("not kept for Scene") && !n.text.contains("Aerial")), "{:?}", t.notices.last());
     t.run("map.zoomIn", &Value::Null).unwrap();

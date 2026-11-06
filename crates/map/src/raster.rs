@@ -539,9 +539,9 @@ impl RasterLayer {
         Some(d)
     }
 
-    /// The layer, opened from a tile layer whose `dropped` settings (`"attribution"`, `"zoom
-    /// range"`, `"bounds"`) a raster layer hasn't, so they aren't kept: said once, by
-    /// [`RasterLayer::dropped_unsaid`].
+    /// The layer, opened from a tile layer whose `dropped` settings (`"attribution"`, `"legend"`,
+    /// `"zoom range"`, `"bounds"`, `"overlay"`) a raster layer hasn't, so they aren't kept: said
+    /// once, by [`RasterLayer::dropped_unsaid`].
     pub fn from_tiles_dropping(mut self, dropped: Vec<&'static str>) -> RasterLayer {
         self.dropped = dropped;
         self

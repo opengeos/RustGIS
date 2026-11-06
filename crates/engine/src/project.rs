@@ -588,6 +588,13 @@ pub(crate) fn resolve_file_paths<'a>(dir: &str, paths: impl IntoIterator<Item = 
     }
 }
 
+/// Whether `path` is a plain `http://` or `https://` address: not a login or S3 wrapper, which a
+/// raster layer downloads whole.
+fn plain_web_address(path: &str) -> bool {
+    let scheme = path.get(..8).map(str::to_ascii_lowercase).unwrap_or_default();
+    scheme.starts_with("https://") || scheme.starts_with("http://")
+}
+
 /// Read only compatibility metadata before interpreting any saved payload.
 #[derive(Deserialize)]
 struct FileFormat {
@@ -899,6 +906,22 @@ impl Project {
             // layer added this session stays one until the project is opened again.
             if opened {
                 crate::cmd::tiles::cog_tiles_to_rasters(m);
+                // A raster layer whose path is a plain web address, from no saved connection, is
+                // read in place, the one way such a path is read (a login or S3 wrapper is
+                // downloaded whole, as is a connection's address, plain here until its login is
+                // made again): one saved by an older RustGIS, which didn't know `in_place` (it
+                // showed the layer as missing and saved it again without the key), reads in
+                // place again here, losing a pending look at most.
+                for l in &mut m.layers {
+                    if l.connection.is_empty()
+                        && let Some(rl) = &mut l.raster
+                        && !rl.in_place
+                        && rl.embedded.is_none()
+                        && rl.path.as_deref().is_some_and(plain_web_address)
+                    {
+                        rl.in_place = true;
+                    }
+                }
             }
             m.tiles.truncate(rustgis_map::tiles::MAX_TILE_LAYERS);
             #[cfg(not(target_arch = "wasm32"))]

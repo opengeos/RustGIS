@@ -127,8 +127,9 @@ layer at once and reads its overview as the map draws (the Details pane says so 
 so a slow host doesn't hold the window; the command line and Python wait for it, up to two
 minutes, so a command's result is complete. A saved S3 connection chosen for such layers (Choose
 S3 connection…) counts them as still being read until their overview is in, apart from what it
-opened. A file whose smallest image is too large to hold as
-the overview (a large image saved without overviews) isn't added: GDAL's COG driver or `gdaladdo`
+opened. A file whose smallest image is too large to hold as the overview (a large image saved
+without overviews) is refused where the session waits for it (the command line, Python); the desktop
+app and the browser add the layer, which says why it can't be read. GDAL's COG driver or `gdaladdo`
 makes the overviews. A tile a sparse file leaves out is empty. A tile, the file's header or the
 overview a layer holds, that fails to arrive is asked for again a minute later, or when its server
 says to in a `Retry-After` header (with a 429 or 503 answer, within the hour); the map draws again

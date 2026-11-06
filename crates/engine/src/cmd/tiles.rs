@@ -594,6 +594,9 @@ pub(crate) fn cog_tiles_to_rasters(m: &mut rustgis_map::Map) {
         if !t.attribution.trim().is_empty() {
             dropped.push("attribution");
         }
+        if !t.legends.is_empty() {
+            dropped.push("legend");
+        }
         if (t.min_zoom, t.max_zoom) != (plain.min_zoom, plain.max_zoom) {
             dropped.push("zoom range");
         }

@@ -1831,4 +1831,31 @@ mod tests {
         forget_file_in(&mut t, "https://x.org/a.tif");
         assert_eq!((t.samples, t.order.len(), t.map.len()), (0, 0, 0));
     }
+
+    /// A file's header refused with a `Retry-After` (429 or 503) isn't asked for again before
+    /// then (the failure stands, no read starts), and the map is asked to draw again by then, on
+    /// each draw while it waits (as a tile's is), so a layer whose header failed doesn't stay
+    /// failed until something else draws the map. (That the file is read again then: the
+    /// engine's `a_header_refused_with_retry_after_is_read_again_when_it_says`.)
+    #[test]
+    fn a_header_refused_with_retry_after_has_the_map_drawn_again_then() {
+        // Its turn at the cache (another test's clearing would forget the failure) and the alarms.
+        let _turn = crate::cache::turn();
+        let _alarm = crate::cache::alarm_turn();
+        let file = "test://cog/busy.tif";
+        let refused = || super::State::Failed("http status: 503 (retry after 2 s)".into(), Instant::now());
+        super::infos().lock().unwrap().insert(file.to_string(), refused());
+        crate::cache::clear_alarms();
+        let within = || crate::cache::next_alarm().is_some_and(|d| d <= Duration::from_secs(2));
+        let waiting = || matches!(super::infos().lock().unwrap().get(file), Some(super::State::Failed(..)));
+        let Err(e) = super::info(file) else { panic!("read while waiting") };
+        assert!(e.contains("retry after 2 s"), "{e}");
+        assert!(waiting(), "asked for again before its wait was over");
+        assert!(within(), "no alarm on a draw while waiting: {:?}", crate::cache::next_alarm());
+        // Again on the next draw: the alarm fired (or was consumed) before the wait was over.
+        crate::cache::clear_alarms();
+        assert!(super::info(file).is_err() && waiting());
+        assert!(within(), "not armed again: {:?}", crate::cache::next_alarm());
+        super::infos().lock().unwrap().remove(file);
+    }
 }
