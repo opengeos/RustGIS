@@ -35,6 +35,8 @@ pub struct Workflow {
     pub script_out: Vec<(String, bool)>,
     /// The Script pane's last run, shown above its results.
     pub script_last: Option<ScriptRun>,
+    /// The last run's Details window is open.
+    pub script_details: bool,
     /// When each Script pane run under way or waiting started (seconds since 1970, and the
     /// instant), in the order asked, for [`script_ran`] to tell as each lands.
     script_started: std::collections::VecDeque<(u64, web_time::Instant)>,
@@ -77,11 +79,22 @@ pub struct ZonalStatsForm {
 
 /// A Script pane run, as the line above its results tells it: its number this session (so a run
 /// made again by mistake shows), how long it took and when it started (seconds since 1970; 0 for
-/// a clock that can't tell).
+/// a clock that can't tell). Its lines' whole results, or why it didn't run, for its Details
+/// window.
+#[derive(Default)]
 pub struct ScriptRun {
     pub n: u32,
     pub secs: f64,
     pub at: u64,
+    pub ran: Vec<ScriptLine>,
+    pub error: Option<String>,
+}
+
+/// A line a Script pane run ran, with its whole result, laid out once as it lands.
+pub struct ScriptLine {
+    pub line: u64,
+    pub command: String,
+    pub result: String,
 }
 
 /// The Trend Analysis section's inputs (#579), and a run under way.
@@ -1582,14 +1595,23 @@ fn script_ran(app: &mut RustGisApp, landed: crate::Landed) {
     let at = if asked_at == 0 { 0 } else { asked_at.saturating_add(started.duration_since(asked).as_secs()) };
     app.workflow.script_landed = Some(now);
     let n = app.workflow.script_last.as_ref().map_or(1, |r| r.n.saturating_add(1));
-    app.workflow.script_last = Some(ScriptRun { n, secs: now.duration_since(started).as_secs_f64(), at });
-    app.workflow.script_out = match landed {
-        crate::Landed::Ran(Ok(v)) => v["ran"]
-            .as_array()
-            .map(|a| a.iter().map(|r| (format!("{} → {}", r["command"].as_str().unwrap_or(""), r["result"]), false)).collect())
-            .unwrap_or_default(),
-        crate::Landed::Ran(Err(e)) | crate::Landed::NotRun(e) => vec![(e, true)],
+    let (ran, error) = match landed {
+        crate::Landed::Ran(Ok(v)) => (v["ran"].as_array().cloned().unwrap_or_default(), None),
+        crate::Landed::Ran(Err(e)) | crate::Landed::NotRun(e) => (Vec::new(), Some(e)),
     };
+    app.workflow.script_out = match &error {
+        None => ran.iter().map(|r| (format!("{} → {}", r["command"].as_str().unwrap_or(""), r["result"]), false)).collect(),
+        Some(e) => vec![(e.clone(), true)],
+    };
+    let ran = ran
+        .iter()
+        .map(|r| ScriptLine {
+            line: r["line"].as_u64().unwrap_or(0),
+            command: r["command"].as_str().unwrap_or("").to_string(),
+            result: serde_json::to_string_pretty(&r["result"]).unwrap_or_default(),
+        })
+        .collect();
+    app.workflow.script_last = Some(ScriptRun { n, secs: now.duration_since(started).as_secs_f64(), at, ran, error });
     // Another still to land: the results say so first, above this one's, where their scroll
     // starts, however many lines it ran.
     if !app.workflow.script_started.is_empty() {
@@ -1680,25 +1702,122 @@ fn script(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, fit: bool) {
     // Above the results' scroll, so it stays in view: its number and how long it took, and on
     // the right when it started, as the Geoprocessing History tells it (UTC: the app has no time
     // zone).
+    let mut details = false;
     if let Some(r) = &app.workflow.script_last {
         ui.horizontal(|ui| {
-            let text = crate::i18n::fmt("Run #{n} ({secs} s)", &[("n", &r.n.to_string()), ("secs", &format!("{:.2}", r.secs))]);
-            ui.label(egui::RichText::new(text).small().strong());
-            if r.at > 0 {
-                let (_, time) = rustgis_engine::map::graphics::civil(r.at);
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.label(egui::RichText::new(crate::i18n::fmt("{time} UTC", &[("time", &time)])).small().weak())
-                });
-            }
+            ui.label(egui::RichText::new(run_line(r)).small().strong());
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                details = ui.small_button(tl!("Details…")).on_hover_text(tl!("Each line's whole result, to read or copy")).clicked();
+                if let Some(time) = run_time(r) {
+                    ui.label(egui::RichText::new(time).small().weak());
+                }
+            });
         });
     }
-    // In a scroll of their own, so a long error (it wraps) can't push them out of the pane.
+    app.workflow.script_details |= details;
+    // In a scroll of their own, so a long error (it wraps) can't push them out of the pane. A
+    // result is cut here; Details… shows it whole.
     egui::ScrollArea::vertical().id_salt("script_out").max_height(out_h).auto_shrink([false, true]).show(ui, |ui| {
         for (line, err) in &app.workflow.script_out {
-            let c = if *err { egui::Color32::from_rgb(0xC0, 0x30, 0x30) } else { ui.visuals().text_color() };
+            let c = if *err { SCRIPT_ERROR } else { ui.visuals().text_color() };
             ui.label(egui::RichText::new(line.chars().take(400).collect::<String>()).monospace().small().color(c));
         }
     });
+}
+
+/// The colour of a Script pane run's error.
+const SCRIPT_ERROR: egui::Color32 = egui::Color32::from_rgb(0xC0, 0x30, 0x30);
+
+/// A run's number and how long it took: `Run #2 (0.84 s)`.
+fn run_line(r: &ScriptRun) -> String {
+    crate::i18n::fmt("Run #{n} ({secs} s)", &[("n", &r.n.to_string()), ("secs", &format!("{:.2}", r.secs))])
+}
+
+/// When a run started, in UTC (the app has no time zone), if the clock could tell.
+fn run_time(r: &ScriptRun) -> Option<String> {
+    (r.at > 0).then(|| crate::i18n::fmt("{time} UTC", &[("time", &rustgis_engine::map::graphics::civil(r.at).1)]))
+}
+
+/// A run's line as the Details window heads it: `line 3: raster.gcpFit`.
+fn line_head(l: &ScriptLine) -> String {
+    crate::i18n::fmt("line {n}: {command}", &[("n", &l.line.to_string()), ("command", &l.command)])
+}
+
+/// The whole of a run as Copy All gives it: its line, then each line's head and result, then why
+/// it stopped.
+fn run_text(r: &ScriptRun) -> String {
+    let mut out = run_line(r);
+    if let Some(time) = run_time(r) {
+        out.push(' ');
+        out.push_str(&time);
+    }
+    for l in &r.ran {
+        out.push_str("\n\n");
+        out.push_str(&line_head(l));
+        out.push('\n');
+        out.push_str(&l.result);
+    }
+    if let Some(e) = &r.error {
+        out.push_str("\n\n");
+        out.push_str(e);
+    }
+    out
+}
+
+/// The Script pane's last run in a window of its own (Details…), as View Details in ArcGIS Pro's
+/// Geoprocessing History: each line's whole result laid out to read, to copy one or all, where
+/// the pane cuts each to a line.
+pub fn script_details(app: &mut RustGisApp, ctx: &egui::Context) {
+    if !app.workflow.script_details {
+        return;
+    }
+    let Some(r) = &app.workflow.script_last else {
+        app.workflow.script_details = false;
+        return;
+    };
+    let mut open = true;
+    egui::Window::new(tl!("Script Results"))
+        .id(egui::Id::unique("script_details"))
+        .open(&mut open)
+        .resizable(true)
+        .default_size(vec2(560.0, 420.0))
+        .show(ctx, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new(run_line(r)).strong());
+                if let Some(time) = run_time(r) {
+                    ui.label(egui::RichText::new(time).weak());
+                }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.button(tl!("Copy All")).clicked() {
+                        ui.ctx().copy_text(run_text(r));
+                    }
+                });
+            });
+            ui.separator();
+            egui::ScrollArea::both().id_salt("script_details_scroll").auto_shrink([false, false]).show(ui, |ui| {
+                for (i, l) in r.ran.iter().enumerate() {
+                    // A run of its own each time: what was folded in the last one opens again.
+                    egui::CollapsingHeader::new(egui::RichText::new(line_head(l)).monospace())
+                        .id_salt(("script_details_line", r.n, i))
+                        .default_open(true)
+                        .show(ui, |ui| {
+                            if ui.small_button(tl!("Copy")).clicked() {
+                                ui.ctx().copy_text(l.result.clone());
+                            }
+                            ui.add(egui::Label::new(egui::RichText::new(&l.result).monospace()).extend());
+                        });
+                }
+                if let Some(e) = &r.error {
+                    ui.label(egui::RichText::new(e).monospace().color(SCRIPT_ERROR));
+                } else if r.ran.is_empty() {
+                    // A script of comments or blank lines only.
+                    ui.label(egui::RichText::new(tl!("Nothing ran: the script has no commands.")).weak());
+                }
+            });
+        });
+    if !open {
+        app.workflow.script_details = false;
+    }
 }
 
 #[cfg(test)]
@@ -1773,6 +1892,60 @@ mod tests {
         let second = app.workflow.script_last.as_ref().map(|r| (r.secs, r.at)).unwrap();
         assert!(second.0 < 5.0 && second.1 >= 1_010, "{second:?}");
         assert_eq!(app.workflow.script_out, vec![("cancelled".to_string(), true)]);
+    }
+
+    /// Details… opens the last run in a window of its own: a result the pane cuts shows whole there,
+    /// laid out to read, and Copy All copies the run; a run that stopped shows why.
+    #[test]
+    fn script_details_show_a_runs_whole_results() {
+        let mut app = RustGisApp::with_sample();
+        let long: serde_json::Map<String, Value> = (0..60).map(|i| (format!("k{i:02}"), json!("xxxxxxxxxx"))).collect();
+        let ran = json!([{"line": 1, "command": "raster.gcpFit", "result": long}, {"line": 3, "command": "map.zoomFull", "result": null}]);
+        script_ran(&mut app, crate::Landed::Ran(Ok(json!({"ran": ran}))));
+        assert!(!app.workflow.script_out[0].0.chars().take(400).collect::<String>().contains("k59"), "the pane cuts it");
+        let mut fonts = false;
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(900.0, 800.0)).build_ui_state(
+            move |ui, app: &mut RustGisApp| {
+                // The app's fonts, for the results' arrow.
+                if !fonts {
+                    crate::theme::install_fonts(ui.ctx(), &[], None);
+                    fonts = true;
+                    return;
+                }
+                script_pane(app, ui, &Tokens::light());
+                script_details(app, ui.ctx());
+            },
+            app,
+        );
+        h.run();
+        assert!(h.query_by_label("Copy All").is_none(), "closed until asked");
+        h.get_by_label("Details…").click();
+        h.run();
+        assert!(h.state().workflow.script_details);
+        assert!(h.query_by_label_contains("\"k59\": \"xxxxxxxxxx\"").is_some(), "the whole result, one key a line");
+        assert!(h.query_by_label("line 3: map.zoomFull").is_some());
+        h.get_by_label("Copy All").click();
+        h.step();
+        let copied = h.output().platform_output.commands.iter().find_map(|c| match c {
+            egui::OutputCommand::CopyText(t) => Some(t.clone()),
+            _ => None,
+        });
+        let copied = copied.expect("Copy All copies");
+        assert!(copied.starts_with("Run #1 (") && copied.contains("line 1: raster.gcpFit\n{") && copied.contains("\"k59\""), "{copied}");
+        // A run that stopped: the window, still open, shows why.
+        script_ran(h.state_mut(), crate::Landed::Ran(Err("line 2: raster.gcpFit: needs 3 points".into())));
+        h.run();
+        assert_eq!(h.query_all_by_label("line 2: raster.gcpFit: needs 3 points").count(), 2, "in the pane and the window");
+        assert!(h.query_by_label_contains("\"k59\"").is_none(), "the last run only");
+        // A script of comments only: the window says nothing ran rather than staying blank.
+        script_ran(h.state_mut(), crate::Landed::Ran(Ok(json!({"ran": []}))));
+        h.run();
+        assert!(h.query_by_label("Nothing ran: the script has no commands.").is_some());
+        // Its ✕ closes it, until Details… again.
+        h.get_by_label("Close window").click();
+        h.run();
+        assert!(!h.state().workflow.script_details);
+        assert!(h.query_by_label("Copy All").is_none());
     }
 
     /// Interpolate runs on a thread of its own from the pane (#1291 step 3): the pane goes on while
