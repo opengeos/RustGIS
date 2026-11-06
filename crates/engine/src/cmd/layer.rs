@@ -3148,7 +3148,7 @@ fn add_url_as_given(s: &mut Session, p: &Value) -> CmdResult {
         }
         let web = lower.starts_with("https://") || lower.starts_with("http://");
         return if is_tiff_url(url) && web {
-            add_cog(s, p, url)
+            add_cog(s, p, url, false)
         } else {
             Err(format!(
                 "{url}: dated addresses work for cloud-optimised GeoTIFFs on the web (http, https) here, and for tile layers (map.addTiles)"
@@ -3189,7 +3189,7 @@ fn add_url_as_given(s: &mut Session, p: &Value) -> CmdResult {
     {
         // Nothing may wait here: a GeoTIFF is taken to be cloud-optimised (the layer says if not).
         if tiff && !scan && !super::b(p, "whole").unwrap_or(false) {
-            return add_cog(s, p, url);
+            return add_cog(s, p, url, false);
         }
         // Downloaded by the app off the frame and added when it lands.
         s.request_url(p)
@@ -3213,7 +3213,7 @@ fn add_url_as_given(s: &mut Session, p: &Value) -> CmdResult {
                 Err(e) => return Err(named(e)),
             };
             if cog {
-                return add_cog(s, p, url);
+                return add_cog(s, p, url, true);
             }
         }
         let bytes = if rustgis_data::io::shapefile_part_urls(url).is_some() {
@@ -3533,8 +3533,10 @@ pub fn is_unnamed_url(url: &str) -> bool {
 }
 
 /// Adds a cloud-optimised GeoTIFF by its address as a layer read in place (its tiles by range,
-/// as the view needs them), framed when its header is in.
-pub(crate) fn add_cog(s: &mut Session, p: &Value, url: &str) -> CmdResult {
+/// as the view needs them), framed when its header is in. `probed`: its header was just read
+/// (natively), so it is waited for if something emptied the tile cache since (a login ended): the
+/// layer would go unframed. One not read yet isn't waited for (a project opening its files).
+pub(crate) fn add_cog(s: &mut Session, p: &Value, url: &str, probed: bool) -> CmdResult {
     let stem = cog_name(url);
     let name = ps(p, "name").map(str::trim).filter(|n| !n.is_empty()).unwrap_or(&stem);
     let empty_before = super::map_is_empty(s);
@@ -3547,16 +3549,29 @@ pub(crate) fn add_cog(s: &mut Session, p: &Value, url: &str) -> CmdResult {
     }
     let mut r = super::tiles::add(s, &q)?;
     // A dated address is framed on the file of the date it shows.
-    let url = match r.get("url").and_then(Value::as_str) {
+    let (url, probed) = match r.get("url").and_then(Value::as_str) {
         Some(dated) => {
             // Its header read now (natively) as an undated address's is before it is added.
             #[cfg(not(target_arch = "wasm32"))]
-            let _ = crate::render::rustgis_tiles::cog::probe_blocking(dated);
-            dated.to_string()
+            let read = crate::render::rustgis_tiles::cog::probe_blocking(dated) == Ok(true);
+            #[cfg(target_arch = "wasm32")]
+            let read = false;
+            (dated.to_string(), read)
         }
-        None => url.to_string(),
+        None => (url.to_string(), probed),
     };
-    if let Ok(Some(info)) = crate::render::rustgis_tiles::cog::info(&url) {
+    #[cfg(not(target_arch = "wasm32"))]
+    let info = if probed {
+        crate::render::rustgis_tiles::cog::info_blocking(&url).map(Some)
+    } else {
+        crate::render::rustgis_tiles::cog::info(&url)
+    };
+    #[cfg(target_arch = "wasm32")]
+    let info = {
+        let _ = probed;
+        crate::render::rustgis_tiles::cog::info(&url)
+    };
+    if let Ok(Some(info)) = info {
         let [w, so, e, n] = info.bounds;
         // A cloud-optimised GeoTIFF read in place is framed when it is the first content on the
         // map, as other data is; `"zoom"` says otherwise (`true`, or `false` to keep the view).
