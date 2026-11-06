@@ -107,6 +107,34 @@ pub(crate) fn forget() {
     rustgis_data::mbtiles::close_all();
 }
 
+/// Called under the cache's archive-revision lock.
+pub(crate) fn reload_archive(archive: &str) {
+    infos().lock().unwrap_or_else(|e| e.into_inner()).remove(archive);
+    #[cfg(not(target_arch = "wasm32"))]
+    rustgis_data::mbtiles::close(std::path::Path::new(archive.strip_prefix("file://").unwrap_or(archive)));
+}
+
+fn info_epoch(archive: &str) -> (u64, u64) {
+    (EPOCH.load(Ordering::SeqCst), crate::cache::archive_epoch(archive))
+}
+
+/// Reads the current file using a fresh, unpooled connection and retains nothing.
+pub fn read_info_local(archive: &str) -> Result<Arc<Info>, String> {
+    check(archive)?;
+    if is_upload(archive) {
+        return Err(format!("{archive}: an upload is not a local MBTiles file"));
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let path = std::path::Path::new(archive.strip_prefix("file://").unwrap_or(archive));
+        rustgis_data::mbtiles::read_info_path(path).map(Arc::new)
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        Err(format!("{archive}: the web app cannot reload local MBTiles paths"))
+    }
+}
+
 /// An archive's metadata.
 pub fn info(archive: &str) -> Result<Arc<Info>, String> {
     check(archive)?;
@@ -118,7 +146,7 @@ pub fn info(archive: &str) -> Result<Arc<Info>, String> {
     if let Some(result) = cached_info(archive) {
         return result;
     }
-    let epoch = EPOCH.load(Ordering::SeqCst);
+    let epoch = info_epoch(archive);
     let r = read_info(archive);
     remember_info(archive, &r, epoch);
     r
@@ -126,21 +154,27 @@ pub fn info(archive: &str) -> Result<Arc<Info>, String> {
 
 /// Keeps a completion only if no clear happened since its read started; check and insert share
 /// the same lock as the clear, so an old completion cannot repopulate the new cache.
-fn remember_info(archive: &str, result: &Result<Arc<Info>, String>, epoch: u64) {
-    let mut all = infos().lock().unwrap_or_else(|e| e.into_inner());
-    if EPOCH.load(Ordering::SeqCst) != epoch {
-        return;
-    }
-    if all.len() >= 64 {
-        all.clear();
-    }
-    all.insert(archive.to_string(), result.clone().map_err(|e| (e, Instant::now())));
+fn remember_info(archive: &str, result: &Result<Arc<Info>, String>, epoch: (u64, u64)) {
+    crate::cache::if_archive_current(archive, epoch.1, || {
+        let mut all = infos().lock().unwrap_or_else(|e| e.into_inner());
+        if EPOCH.load(Ordering::SeqCst) != epoch.0 {
+            return;
+        }
+        if all.len() >= 64 {
+            all.clear();
+        }
+        all.insert(archive.to_string(), result.clone().map_err(|e| (e, Instant::now())));
+    });
 }
 
 /// An existing read has its own deadline. An unadmitted read reports saturation once a worker
 /// has stalled; workers keep their slots until the OS returns, never spawning unbounded threads.
 #[cfg(not(target_arch = "wasm32"))]
-fn metadata_stalled(reads: &HashMap<String, Instant>, archive: &str) -> bool {
+fn metadata_stalled<K, Q>(reads: &HashMap<K, Instant>, archive: &Q) -> bool
+where
+    K: Eq + std::hash::Hash + std::borrow::Borrow<Q>,
+    Q: Eq + std::hash::Hash + ?Sized,
+{
     reads.get(archive).map_or_else(
         || reads.len() >= 8 && reads.values().any(|start| start.elapsed() >= READ_DEADLINE),
         |start| start.elapsed() >= READ_DEADLINE,
@@ -180,43 +214,49 @@ pub fn info_ready(archive: &str, timeout: Duration) -> Result<Option<Arc<Info>>,
     #[cfg(not(target_arch = "wasm32"))]
     {
         use std::sync::Condvar;
-        static LOADING: OnceLock<(Mutex<HashMap<String, Instant>>, Condvar)> = OnceLock::new();
-        let (pending, ready) = LOADING.get_or_init(|| (Mutex::new(HashMap::new()), Condvar::new()));
+        type Pending = HashMap<(String, u64), Instant>;
+        static LOADING: std::sync::LazyLock<(Mutex<Pending>, Condvar)> =
+            std::sync::LazyLock::new(|| (Mutex::new(HashMap::new()), Condvar::new()));
+        let (pending, ready) = &*LOADING;
+        let epoch = info_epoch(archive);
+        let key = (archive.to_string(), epoch.1);
         let mut all = pending.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(result) = cached_info(archive) {
             return result.map(Some);
         }
-        if metadata_stalled(&all, archive) {
+        if metadata_stalled(&all, &key) {
             return Err(format!(
                 "{archive}: MBTiles metadata read exceeded 30 seconds or all eight workers are occupied by stalled storage; retry after the storage responds"
             ));
         }
-        if !all.contains_key(archive) {
+        if !all.contains_key(&key) {
             if all.len() >= 8 {
                 return Ok(None);
             }
-            all.insert(archive.to_string(), Instant::now());
+            all.insert(key.clone(), Instant::now());
             let address = archive.to_string();
+            let worker_key = key.clone();
             let spawned = std::thread::Builder::new().name("rustgis-mbtiles-info".into()).spawn(move || {
-                let _ = info(&address);
-                pending.lock().unwrap_or_else(|e| e.into_inner()).remove(&address);
+                let result = read_info(&address);
+                remember_info(&address, &result, epoch);
+                pending.lock().unwrap_or_else(|e| e.into_inner()).remove(&worker_key);
                 ready.notify_all();
                 crate::cache::notify();
             });
             if let Err(error) = spawned {
-                all.remove(archive);
+                all.remove(&key);
                 return Err(format!("could not start an MBTiles metadata read: {error}"));
             }
         }
         if !timeout.is_zero() {
-            let wait = all.get(archive).map_or(Duration::ZERO, |start| metadata_wait(*start, timeout));
-            let (reads, _) = ready.wait_timeout_while(all, wait, |all| all.contains_key(archive)).unwrap_or_else(|e| e.into_inner());
+            let wait = all.get(&key).map_or(Duration::ZERO, |start| metadata_wait(*start, timeout));
+            let (reads, _) = ready.wait_timeout_while(all, wait, |all| all.contains_key(&key)).unwrap_or_else(|e| e.into_inner());
             all = reads;
         }
         if let Some(result) = cached_info(archive) {
             return result.map(Some);
         }
-        if metadata_stalled(&all, archive) {
+        if metadata_stalled(&all, &key) {
             return Err(format!("{archive}: MBTiles metadata read exceeded 30 seconds; retry after the storage responds"));
         }
         Ok(None)
@@ -281,12 +321,22 @@ mod tests {
 
     #[test]
     fn cleared_metadata_rejects_an_older_completion() {
-        let epoch = EPOCH.load(Ordering::SeqCst);
+        let epoch = info_epoch("/old-completion.mbtiles");
         forget();
         remember_info("/old-completion.mbtiles", &Err("obsolete read".into()), epoch);
         assert!(cached_info("/old-completion.mbtiles").is_none());
-        remember_info("/fresh-completion.mbtiles", &Err("current read".into()), EPOCH.load(Ordering::SeqCst));
+        remember_info("/fresh-completion.mbtiles", &Err("current read".into()), info_epoch("/fresh-completion.mbtiles"));
         assert!(cached_info("/fresh-completion.mbtiles").is_some());
+        let archive = "/mbtiles-source-generation.mbtiles";
+        let epoch = info_epoch(archive);
+        crate::cache::reload_archive(archive);
+        let current = info_epoch(archive);
+        remember_info(archive, &Err("current error".into()), current);
+        remember_info(archive, &Err("obsolete error".into()), epoch);
+        assert_eq!(cached_info(archive).unwrap().unwrap_err(), "current error");
+        crate::cache::reload_archive(archive);
+        remember_info(archive, &Err("obsolete failure after retry".into()), current);
+        assert!(cached_info(archive).is_none());
     }
 
     #[cfg(not(target_arch = "wasm32"))]

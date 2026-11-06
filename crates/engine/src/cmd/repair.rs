@@ -11,6 +11,8 @@ pub fn commands() -> Vec<C> {
             r#"{"layer"?: name|id (default: the active layer), "path": "the file or folder (a Zarr store, a File Geodatabase) the layer's data moved to", "table"?: "the dataset in a GeoPackage, GDAL or DuckDB file, or a raster's subdataset (default: the one the layer reads now)"}"#),
         C::new("map.repairTiles", "Repair Tile Archive", "Layers", repair_tiles).params(
             r#"{"name"?: text | "index"?: number (0 = top) | "id"?: catalog id, "path": "the .pmtiles or .mbtiles file the archive moved to"}"#),
+        C::new("map.reloadTiles", "Reload Data", "Layers", reload_tiles).params(
+            r#"{"name": text | "index": number (0 = top) | "id": catalog id} (give one selector) — rereads a local PMTiles or MBTiles archive at its linked path, keeping its presentation; undo cannot restore overwritten file contents"#),
     ]
 }
 
@@ -125,30 +127,70 @@ fn repair_tiles(s: &mut Session, p: &Value) -> CmdResult {
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
-        use rustgis_render::rustgis_tiles::{cache, mbtiles, pmtiles};
         let i = super::tiles::find(s, p)?.ok_or("name, index or id is required")?;
         let t = s.map().tiles.get(i).ok_or("the tile layer no longer exists")?;
         if t.archive_file().is_none() {
             return Err(format!("{}: only a tile archive read from a file (PMTiles or MBTiles) can be repaired", t.name));
         }
         let full = replacement(p)?;
-        let mut new = t.clone();
-        new.url = full.clone();
-        new.error = None;
-        new.repair()?;
-        let vector = match new.kind {
-            rustgis_map::TileKind::MbTiles => mbtiles::info(&full)?.format.is_vector(),
-            _ => pmtiles::info_blocking(&full, web_time::Duration::from_secs(10))?.tile_type.is_vector(),
-        };
-        if (!t.layers.is_empty() || !t.style_layers.is_empty()) && !vector {
-            return Err(format!(
-                "{full} holds raster tiles; {} draws vector tiles with its own layers or style: choose a vector tile archive",
-                t.name
-            ));
+        let new = archive_candidate(t, &full)?;
+        rustgis_render::rustgis_tiles::cache::reload_archive(&t.url);
+        // The replacement path may already have been drawn by another layer.
+        if t.url != full {
+            rustgis_render::rustgis_tiles::cache::reload_archive(&full);
         }
-        cache::forget(&t.url);
         let slot = s.map_mut().tiles.get_mut(i).ok_or("the tile layer no longer exists")?;
         *slot = new;
         Ok(json!({"index": i, "path": full}))
+    }
+}
+
+/// Repair and reload share one validation policy. Reading a candidate must not evict retained
+/// tiles/metadata or reuse a connection to an archive replaced at the same path.
+#[cfg(not(target_arch = "wasm32"))]
+fn archive_candidate(t: &rustgis_map::TileLayer, path: &str) -> Result<rustgis_map::TileLayer, String> {
+    use rustgis_render::rustgis_tiles::{mbtiles, pmtiles};
+    let mut new = t.clone();
+    new.url = path.to_string();
+    new.error = None;
+    new.repair()?;
+    let vector = match new.kind {
+        rustgis_map::TileKind::MbTiles => mbtiles::read_info_local(path)?.format.is_vector(),
+        _ => pmtiles::read_info_local(path)?.tile_type.is_vector(),
+    };
+    if (!t.layers.is_empty() || !t.style_layers.is_empty()) && !vector {
+        return Err(format!(
+            "{path} holds raster tiles; {} draws vector tiles with its own layers or style: choose a vector tile archive",
+            t.name
+        ));
+    }
+    Ok(new)
+}
+
+fn reload_tiles(s: &mut Session, p: &Value) -> CmdResult {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = (s, p);
+        Err("the web app can't reload files on this computer: add the file again with Add Data".into())
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let i = super::tiles::find(s, p)?.ok_or("name, index or id is required")?;
+        let t = s.map().tiles.get(i).ok_or("the tile layer no longer exists")?;
+        let path = t.archive_file().ok_or_else(|| {
+            format!(
+                "{}: Reload Data needs a linked local PMTiles or MBTiles file; add snapshots/uploads again, or use Reload Web Layers for web addresses",
+                t.name
+            )
+        })?.to_string();
+        let new = archive_candidate(t, &path).map_err(|e| {
+            format!("{} ({path}): {e}; correct the file and retry Reload Data, or use Repair Data Source if it moved", t.name)
+        })?;
+        rustgis_render::rustgis_tiles::cache::reload_archive(&path);
+        let slot = s.map_mut().tiles.get_mut(i).ok_or("the tile layer no longer exists")?;
+        *slot = new;
+        let message = format!("Reloaded {} from {path}; undo cannot restore overwritten file contents", slot.name);
+        s.notify(message, false);
+        Ok(json!({"index": i, "path": path}))
     }
 }

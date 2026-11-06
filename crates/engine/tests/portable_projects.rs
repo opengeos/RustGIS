@@ -2,6 +2,8 @@
 
 #[path = "portable_projects/common.rs"]
 mod common;
+#[path = "portable_projects/reload_tiles.rs"]
+mod reload_tiles;
 #[path = "portable_projects/repair.rs"]
 mod repair;
 

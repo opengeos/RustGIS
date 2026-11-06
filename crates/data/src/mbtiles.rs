@@ -287,8 +287,7 @@ mod file {
 
     use std::collections::HashMap;
     use std::path::{Path, PathBuf};
-    use std::sync::atomic::{AtomicU64, Ordering};
-    use std::sync::{Mutex, OnceLock};
+    use std::sync::Mutex;
 
     use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 
@@ -296,12 +295,16 @@ mod file {
 
     /// Open connections kept per file, for the tile readers to share.
     const POOL: usize = 4;
-    /// Goes up when connections are closed, so one in use then isn't put back for reuse.
-    static GENERATION: AtomicU64 = AtomicU64::new(0);
+    #[derive(Default)]
+    struct Pool {
+        connections: HashMap<PathBuf, Vec<Connection>>,
+        epochs: HashMap<PathBuf, u64>,
+        generation: u64,
+    }
 
-    fn pool() -> &'static Mutex<HashMap<PathBuf, Vec<Connection>>> {
-        static P: OnceLock<Mutex<HashMap<PathBuf, Vec<Connection>>>> = OnceLock::new();
-        P.get_or_init(Mutex::default)
+    fn pool() -> &'static Mutex<Pool> {
+        static P: std::sync::LazyLock<Mutex<Pool>> = std::sync::LazyLock::new(Mutex::default);
+        &P
     }
 
     fn open(path: &Path) -> Result<Connection, String> {
@@ -316,8 +319,10 @@ mod file {
 
     /// Runs `f` with a connection to `path`, from the pool or newly opened, and puts it back.
     fn with<T>(path: &Path, f: impl FnOnce(&Connection) -> Result<T, String>) -> Result<T, String> {
-        let generation = GENERATION.load(Ordering::SeqCst);
-        let pooled = pool().lock().unwrap_or_else(|e| e.into_inner()).get_mut(path).and_then(Vec::pop);
+        let (generation, epoch, pooled) = {
+            let mut all = pool().lock().unwrap_or_else(|e| e.into_inner());
+            (all.generation, all.epochs.get(path).copied().unwrap_or(0), all.connections.get_mut(path).and_then(Vec::pop))
+        };
         let conn = match pooled {
             Some(c) => c,
             None => open(path)?,
@@ -325,14 +330,14 @@ mod file {
         let r = f(&conn);
         let mut all = pool().lock().unwrap_or_else(|e| e.into_inner());
         // Closed while in use (the file changed, or the cache was cleared): not reused.
-        if GENERATION.load(Ordering::SeqCst) != generation {
+        if all.generation != generation || all.epochs.get(path).copied().unwrap_or(0) != epoch {
             return r;
         }
         // A few files are open at a time: past that many, start again rather than grow.
-        if all.len() >= 16 && !all.contains_key(path) {
-            all.clear();
+        if all.connections.len() >= 16 && !all.connections.contains_key(path) {
+            all.connections.clear();
         }
-        let slot = all.entry(path.to_path_buf()).or_default();
+        let slot = all.connections.entry(path.to_path_buf()).or_default();
         if slot.len() < POOL {
             slot.push(conn);
         }
@@ -342,55 +347,76 @@ mod file {
     /// Forgets the open connections to `path` (it changed on disk, or was closed).
     pub fn close(path: &Path) {
         let mut all = pool().lock().unwrap_or_else(|e| e.into_inner());
-        GENERATION.fetch_add(1, Ordering::SeqCst);
-        all.remove(path);
+        let epoch = all.epochs.entry(path.to_path_buf()).or_default();
+        *epoch = epoch.wrapping_add(1);
+        all.connections.remove(path);
     }
 
     /// Forgets every open connection.
     pub fn close_all() {
         let mut all = pool().lock().unwrap_or_else(|e| e.into_inner());
-        GENERATION.fetch_add(1, Ordering::SeqCst);
-        all.clear();
+        all.generation = all.generation.wrapping_add(1);
+        all.connections.clear();
     }
 
     /// The metadata of the MBTiles file at `path`.
     pub fn open_path(path: &Path) -> Result<Info, String> {
-        with(path, |c| {
-            let sql = |e: rusqlite::Error| format!("{}: not a readable MBTiles file ({e})", path.display());
-            let mut meta = Vec::new();
-            if let Ok(mut st) = c.prepare("SELECT name, value FROM metadata LIMIT 1000") {
-                let rows = st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))).map_err(sql)?;
-                meta.extend(rows.filter_map(Result::ok));
+        with(path, |c| read_info(c, path))
+    }
+
+    /// Validates a new connection without borrowing or populating the retained pool.
+    pub fn read_info_path(path: &Path) -> Result<Info, String> {
+        let c = open(path)?;
+        let info = read_info(&c, path)?;
+        // Even complete metadata must not hide a damaged first tile page. This bounded read
+        // checks the table/view is usable without scanning or decoding the tile set.
+        let _: Option<Option<Vec<u8>>> = c
+            .query_row("SELECT substr(tile_data, 1, 16) FROM tiles LIMIT 1", [], |row| row.get(0))
+            .optional()
+            .map_err(|e| format!("{}: not a readable MBTiles file ({e})", path.display()))?;
+        Ok(info)
+    }
+
+    fn read_info(c: &Connection, path: &Path) -> Result<Info, String> {
+        let sql = |e: rusqlite::Error| format!("{}: not a readable MBTiles file ({e})", path.display());
+        let mut meta = Vec::new();
+        let has_metadata: bool = c
+            .query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name = 'metadata' COLLATE NOCASE)", [], |r| r.get(0))
+            .map_err(sql)?;
+        if has_metadata {
+            let mut st = c.prepare("SELECT name, value FROM metadata LIMIT 1000").map_err(sql)?;
+            let rows = st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))).map_err(sql)?;
+            for row in rows {
+                meta.push(row.map_err(sql)?);
             }
-            // That it is an MBTiles file: the tiles table (or view) has its columns. Nothing is read.
-            c.prepare("SELECT zoom_level, tile_column, tile_row, tile_data FROM tiles LIMIT 0").map_err(sql)?;
-            // What the metadata says, if it is usable: a zoom that reads as a number, a format
-            // RustGIS knows.
-            let says = |k: &str, ok: &dyn Fn(&str) -> bool| {
-                meta.iter().find(|(n, _)| n.eq_ignore_ascii_case(k)).is_some_and(|(_, v)| ok(v.trim()))
-            };
-            let zoom = |v: &str| v.parse::<f64>().is_ok_and(f64::is_finite);
-            let format = |v: &str| super::Format::from_name(v) != super::Format::Unknown;
-            // The tiles are looked at only for what the metadata leaves out: finding the zooms can
-            // scan the whole table (or join a deduplicated layout's view).
-            let zooms = if says("minzoom", &zoom) && says("maxzoom", &zoom) {
-                None
-            } else {
-                let z: (Option<i64>, Option<i64>) =
-                    c.query_row("SELECT min(zoom_level), max(zoom_level) FROM tiles", [], |r| Ok((r.get(0)?, r.get(1)?))).map_err(sql)?;
-                match z {
-                    (Some(a), Some(b)) => Some((a.clamp(0, 24) as u8, b.clamp(0, 24) as u8)),
-                    _ => None,
-                }
-            };
-            // A tile's first bytes say its format when the metadata doesn't.
-            let first: Option<Vec<u8>> = if says("format", &format) {
-                None
-            } else {
-                c.query_row("SELECT substr(tile_data, 1, 16) FROM tiles LIMIT 1", [], |r| r.get(0)).optional().map_err(sql)?
-            };
-            Ok(Info::from_metadata(&meta, zooms, first.as_deref()))
-        })
+        }
+        // That it is an MBTiles file: the tiles table (or view) has its columns. Nothing is read.
+        c.prepare("SELECT zoom_level, tile_column, tile_row, tile_data FROM tiles LIMIT 0").map_err(sql)?;
+        // What the metadata says, if it is usable: a zoom that reads as a number, a format
+        // RustGIS knows.
+        let says =
+            |k: &str, ok: &dyn Fn(&str) -> bool| meta.iter().find(|(n, _)| n.eq_ignore_ascii_case(k)).is_some_and(|(_, v)| ok(v.trim()));
+        let zoom = |v: &str| v.parse::<f64>().is_ok_and(f64::is_finite);
+        let format = |v: &str| super::Format::from_name(v) != super::Format::Unknown;
+        // The tiles are looked at only for what the metadata leaves out: finding the zooms can
+        // scan the whole table (or join a deduplicated layout's view).
+        let zooms = if says("minzoom", &zoom) && says("maxzoom", &zoom) {
+            None
+        } else {
+            let z: (Option<i64>, Option<i64>) =
+                c.query_row("SELECT min(zoom_level), max(zoom_level) FROM tiles", [], |r| Ok((r.get(0)?, r.get(1)?))).map_err(sql)?;
+            match z {
+                (Some(a), Some(b)) => Some((a.clamp(0, 24) as u8, b.clamp(0, 24) as u8)),
+                _ => None,
+            }
+        };
+        // A tile's first bytes say its format when the metadata doesn't.
+        let first: Option<Vec<u8>> = if says("format", &format) {
+            None
+        } else {
+            c.query_row("SELECT substr(tile_data, 1, 16) FROM tiles LIMIT 1", [], |r| r.get(0)).optional().map_err(sql)?
+        };
+        Ok(Info::from_metadata(&meta, zooms, first.as_deref()))
     }
 
     /// The tile at z/x/y (`y` from the north) of the file at `path`, `None` when it has none.
@@ -414,10 +440,60 @@ mod file {
             }
         })
     }
+
+    #[cfg(test)]
+    mod reload_tests {
+        use super::*;
+
+        #[test]
+        fn closing_one_file_rejects_its_old_connection_but_keeps_another_file() {
+            let root = std::env::temp_dir().join(format!("rustgis-mbtiles-pool-reload-{}", std::process::id()));
+            std::fs::create_dir_all(&root).unwrap();
+            let path = root.join("reload.mbtiles");
+            let other = root.join("other.mbtiles");
+            for p in [&path, &other] {
+                let c = Connection::open(p).unwrap();
+                c.execute_batch(
+                    "CREATE TABLE IF NOT EXISTS tiles(zoom_level INTEGER,tile_column INTEGER,tile_row INTEGER,tile_data BLOB);
+                    DELETE FROM tiles; INSERT INTO tiles VALUES(0,0,0,x'01');",
+                )
+                .unwrap();
+            }
+            assert_eq!(tile_path(&other, 0, 0, 0).unwrap(), Some(vec![1]));
+            let (started_tx, started_rx) = std::sync::mpsc::channel();
+            let (release_tx, release_rx) = std::sync::mpsc::channel();
+            let read_path = path.clone();
+            let worker = std::thread::spawn(move || {
+                with(&read_path, |c| {
+                    let tile: Vec<u8> = c.query_row("SELECT tile_data FROM tiles LIMIT 1", [], |r| r.get(0)).map_err(|e| e.to_string())?;
+                    started_tx.send(()).unwrap();
+                    release_rx.recv().unwrap();
+                    Ok(tile)
+                })
+                .unwrap()
+            });
+            started_rx.recv_timeout(std::time::Duration::from_secs(10)).unwrap();
+            close(&path);
+            assert!(pool().lock().unwrap().connections.get(&other).is_some_and(|v| !v.is_empty()));
+            release_tx.send(()).unwrap();
+            assert_eq!(worker.join().unwrap(), vec![1]);
+            assert!(
+                pool().lock().unwrap().connections.get(&path).is_none_or(Vec::is_empty),
+                "a read admitted before close returned its obsolete connection"
+            );
+            let c = Connection::open(&path).unwrap();
+            c.execute_batch("UPDATE tiles SET tile_data=x'02'").unwrap();
+            drop(c);
+            assert_eq!(tile_path(&path, 0, 0, 0).unwrap(), Some(vec![2]));
+            close(&path);
+            close(&other);
+            std::fs::remove_dir_all(root).unwrap();
+        }
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub use file::{close, close_all, open_path, tile_path};
+pub use file::{close, close_all, open_path, read_info_path, tile_path};
 
 #[cfg(test)]
 mod tests {

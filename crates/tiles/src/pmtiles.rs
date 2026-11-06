@@ -68,6 +68,7 @@ pub struct Info {
     data_length: u64,
     internal: Compression,
     tile: Compression,
+    epoch: u64,
 }
 
 impl Info {
@@ -410,21 +411,41 @@ pub(crate) fn forget_archive(archive: &str) {
     leaves().lock().unwrap_or_else(|e| e.into_inner()).retain(|(a, _), l| a != archive || matches!(l, Leaf::Loading(_)));
 }
 
+/// Pending callbacks are returned for disposal outside the revision lock: dropping a tile's
+/// answer may immediately launch another read.
+pub(crate) fn reload_archive(archive: &str) -> impl Sized {
+    let state = archives().lock().unwrap_or_else(|e| e.into_inner()).remove(archive);
+    let mut all = leaves().lock().unwrap_or_else(|e| e.into_inner());
+    let keys: Vec<_> = all.keys().filter(|(a, _)| a == archive).cloned().collect();
+    let removed: Vec<_> = keys.into_iter().filter_map(|key| all.remove(&key)).collect();
+    (state, removed)
+}
+
 /// An archive's header and metadata: `Ok(None)` while they are read (the map draws again once
 /// they arrive).
 pub fn info(archive: &str) -> Result<Option<Arc<Info>>, String> {
     crate::logins::check(archive).map_err(str::to_string)?;
-    let mut all = archives().lock().unwrap_or_else(|e| e.into_inner());
-    match all.get(archive) {
-        Some(State::Ready(i)) => return Ok(Some(i.clone())),
-        Some(State::Loading(_)) => return Ok(None),
-        Some(State::Failed(e, at)) if at.elapsed() < RETRY => return Err(e.clone()),
-        _ => {}
+    let epoch = crate::cache::archive_epoch(archive);
+    let result = crate::cache::if_archive_current(archive, epoch, || {
+        let mut all = archives().lock().unwrap_or_else(|e| e.into_inner());
+        match all.get(archive) {
+            Some(State::Ready(i)) => return (Ok(Some(i.clone())), false),
+            Some(State::Loading(_)) => return (Ok(None), false),
+            Some(State::Failed(e, at)) if at.elapsed() < RETRY => return (Err(e.clone()), false),
+            _ => {}
+        }
+        all.insert(archive.to_string(), State::Loading(Vec::new()));
+        (Ok(None), true)
+    });
+    match result {
+        Some((result, start)) => {
+            if start {
+                load(archive.to_string(), epoch);
+            }
+            result
+        }
+        None => Ok(None),
     }
-    all.insert(archive.to_string(), State::Loading(Vec::new()));
-    drop(all);
-    load(archive.to_string());
-    Ok(None)
 }
 
 /// The archive's info, read now if it hasn't been, waiting up to `timeout` (natively: the
@@ -442,29 +463,34 @@ fn with_info(archive: &str, f: Box<dyn FnOnce(Result<Arc<Info>, String>) + Send>
         f(Err(e.to_string()));
         return;
     }
-    let mut all = archives().lock().unwrap_or_else(|e| e.into_inner());
-    match all.get_mut(archive) {
-        Some(State::Ready(i)) => {
-            let i = i.clone();
-            drop(all);
-            f(Ok(i));
+    let epoch = crate::cache::archive_epoch(archive);
+    let result = crate::cache::if_archive_current(archive, epoch, || {
+        let mut all = archives().lock().unwrap_or_else(|e| e.into_inner());
+        match all.get_mut(archive) {
+            Some(State::Ready(i)) => (Some((f, Ok(i.clone()))), false),
+            Some(State::Loading(waiting)) => {
+                waiting.push(f);
+                (None, false)
+            }
+            Some(State::Failed(e, at)) if at.elapsed() < RETRY => (Some((f, Err(e.clone()))), false),
+            _ => {
+                all.insert(archive.to_string(), State::Loading(vec![f]));
+                (None, true)
+            }
         }
-        Some(State::Loading(waiting)) => waiting.push(f),
-        Some(State::Failed(e, at)) if at.elapsed() < RETRY => {
-            let e = e.clone();
-            drop(all);
-            f(Err(e));
+    });
+    if let Some((answer, start)) = result {
+        if let Some((f, result)) = answer {
+            f(result);
         }
-        _ => {
-            all.insert(archive.to_string(), State::Loading(vec![f]));
-            drop(all);
-            load(archive.to_string());
+        if start {
+            load(archive.to_string(), epoch);
         }
     }
 }
 
 /// Reads an archive's header, root directory and metadata, then answers whoever waits.
-fn load(archive: String) {
+fn load(archive: String, epoch: u64) {
     let a = archive.clone();
     read(
         &archive,
@@ -473,10 +499,11 @@ fn load(archive: String) {
         Box::new(move |head| {
             let parsed = head.and_then(|b| parse_head(&b));
             match parsed {
-                Err(e) => finish(&a, Err(e)),
+                Err(e) => finish(&a, Err(e), epoch),
                 Ok((mut info, meta_at, meta_len)) => {
+                    info.epoch = epoch;
                     if meta_len == 0 {
-                        finish(&a, Ok(info));
+                        finish(&a, Ok(info), epoch);
                         return;
                     }
                     let a2 = a.clone();
@@ -485,12 +512,8 @@ fn load(archive: String) {
                         meta_at,
                         meta_len,
                         Box::new(move |m| {
-                            // Unreadable metadata only loses the layer names and credits.
-                            if let Ok(m) = m {
-                                let m = info.internal.decode(m).unwrap_or_default();
-                                info.set_metadata(serde_json::from_slice(&m).unwrap_or(Value::Null));
-                            }
-                            finish(&a2, Ok(info));
+                            let result = m.and_then(|m| metadata(&mut info, m, meta_len)).map(|()| info);
+                            finish(&a2, result, epoch);
                         }),
                     );
                 }
@@ -499,13 +522,13 @@ fn load(archive: String) {
     );
 }
 
-fn finish(archive: &str, r: Result<Info, String>) {
+fn finish(archive: &str, r: Result<Info, String>, epoch: u64) {
     let r = crate::logins::check(archive)
         .map_err(str::to_string)
         .and(r)
         .map(Arc::new)
         .map_err(|e| if rustgis_data::login_address::is_wrapper(archive) { crate::logins::scrub(&e) } else { e });
-    let waiting = {
+    let waiting = crate::cache::if_archive_current(archive, epoch, || {
         let mut all = archives().lock().unwrap_or_else(|e| e.into_inner());
         let old = match &r {
             Ok(i) => all.insert(archive.to_string(), State::Ready(i.clone())),
@@ -518,7 +541,8 @@ fn finish(archive: &str, r: Result<Info, String>) {
             Some(State::Loading(w)) => w,
             _ => Vec::new(),
         }
-    };
+    })
+    .unwrap_or_default();
     for w in waiting {
         w(r.clone());
     }
@@ -533,11 +557,16 @@ pub(crate) fn fetch(url: &str, done: Done) {
         return;
     };
     let a = archive.clone();
+    let epoch = crate::cache::archive_epoch(&archive);
     with_info(
         &archive,
         Box::new(move |info| match info {
             Err(e) => done(Err(e)),
             Ok(info) => {
+                if crate::cache::archive_epoch(&a) != epoch {
+                    done(Err(crate::cache::DROPPED.into()));
+                    return;
+                }
                 // Outside the archive's zooms, or not a tile of its zoom: none.
                 let n = 1u64 << z;
                 if z < info.min_zoom || z > info.max_zoom || u64::from(x) >= n || u64::from(y) >= n {
@@ -554,6 +583,11 @@ pub(crate) fn fetch(url: &str, done: Done) {
 
 /// Looks `id` up in a directory, reading leaf directories as needed, then reads the tile.
 fn find(archive: String, info: Arc<Info>, id: u64, dir: Arc<Vec<Entry>>, depth: usize, done: Done) {
+    let epoch = info.epoch;
+    if crate::cache::archive_epoch(&archive) != epoch {
+        done(Err(crate::cache::DROPPED.into()));
+        return;
+    }
     let Some(e) = lookup(&dir, id) else {
         done(Ok(Vec::new()));
         return;
@@ -589,18 +623,17 @@ fn find(archive: String, info: Arc<Info>, id: u64, dir: Arc<Vec<Entry>>, depth: 
         })
     };
     // One read per leaf: tiles needing a leaf already on its way wait for it.
-    {
+    let admitted = crate::cache::if_archive_current(&archive, epoch, || {
         let mut l = leaves().lock().unwrap_or_else(|e| e.into_inner());
         match l.get_mut(&key) {
             Some(Leaf::Ready(leaf)) => {
                 let leaf = leaf.clone();
                 drop(l);
-                next(Ok(leaf));
-                return;
+                return (Some((next, leaf)), false);
             }
             Some(Leaf::Loading(waiting)) => {
                 waiting.push(next);
-                return;
+                return (None, false);
             }
             None => {
                 // Full: one ready leaf makes room (the cache is a working set, not a history).
@@ -612,6 +645,16 @@ fn find(archive: String, info: Arc<Info>, id: u64, dir: Arc<Vec<Entry>>, depth: 
                 l.insert(key.clone(), Leaf::Loading(vec![next]));
             }
         }
+        (None, true)
+    });
+    match admitted {
+        None => return,
+        Some((Some((next, leaf)), _)) => {
+            next(Ok(leaf));
+            return;
+        }
+        Some((None, false)) => return,
+        Some((None, true)) => {}
     }
     read(
         &archive,
@@ -619,23 +662,27 @@ fn find(archive: String, info: Arc<Info>, id: u64, dir: Arc<Vec<Entry>>, depth: 
         e.length,
         Box::new(move |b| {
             let leaf = b.and_then(|b| info.internal.decode(b)).and_then(|b| parse_dir(&b)).map(Arc::new);
-            let waiting = {
-                let mut l = leaves().lock().unwrap_or_else(|e| e.into_inner());
-                let w = match &leaf {
-                    Ok(leaf) => l.insert(key.clone(), Leaf::Ready(leaf.clone())),
-                    // A failed leaf is read again by the next tile that needs it.
-                    Err(_) => l.remove(&key),
-                };
-                match w {
-                    Some(Leaf::Loading(w)) => w,
-                    _ => Vec::new(),
-                }
-            };
-            for w in waiting {
-                w(leaf.clone());
-            }
+            finish_leaf(key, leaf, epoch);
         }),
     );
+}
+
+fn finish_leaf(key: (String, u64), leaf: Result<Arc<Vec<Entry>>, String>, epoch: u64) {
+    let waiting = crate::cache::if_archive_current(&key.0, epoch, || {
+        let mut all = leaves().lock().unwrap_or_else(|e| e.into_inner());
+        let old = match &leaf {
+            Ok(leaf) => all.insert(key.clone(), Leaf::Ready(leaf.clone())),
+            Err(_) => all.remove(&key),
+        };
+        match old {
+            Some(Leaf::Loading(waiting)) => waiting,
+            _ => Vec::new(),
+        }
+    })
+    .unwrap_or_default();
+    for callback in waiting {
+        callback(leaf.clone());
+    }
 }
 
 /// The entry holding `id`: the last at or before it, when it is a leaf directory or its run
@@ -691,6 +738,49 @@ pub(crate) fn read_file(archive: &str, at: u64, len: u64) -> Result<Vec<u8>, Str
     let mut buf = Vec::with_capacity(usize::try_from(len).unwrap_or(0).min(MAX_BYTES));
     f.take(len).read_to_end(&mut buf).map_err(|e| e.to_string())?;
     Ok(buf)
+}
+
+fn metadata(info: &mut Info, bytes: Vec<u8>, expected: u64) -> Result<(), String> {
+    if bytes.len() as u64 != expected {
+        return Err("truncated PMTiles metadata".into());
+    }
+    let bytes = info.internal.decode(bytes)?;
+    let value: Value = serde_json::from_slice(&bytes).map_err(|e| format!("PMTiles metadata: {e}"))?;
+    if !value.is_object() {
+        return Err("PMTiles metadata must be a JSON object".into());
+    }
+    info.set_metadata(value);
+    Ok(())
+}
+
+/// Reads the current local file without consulting or changing retained caches. All ranges
+/// are bounded and freshly opened; failed validation leaves the displayed archive intact.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn read_info_local(archive: &str) -> Result<Arc<Info>, String> {
+    check_local(archive)?;
+    let head = read_file(archive, 0, HEAD)?;
+    let path = archive.strip_prefix("file://").unwrap_or(archive);
+    let file_len = std::fs::metadata(path).map_err(|e| format!("{path}: {e}"))?.len();
+    if head.len() < 127 {
+        return Err("a truncated PMTiles header".into());
+    }
+    let (mut info, at, len) = parse_head(&head)?;
+    for (offset, length) in [(8, 16), (24, 32), (40, 48), (56, 64)] {
+        let start = u64_at(&head, offset).ok_or("a truncated PMTiles header")?;
+        let size = u64_at(&head, length).ok_or("a truncated PMTiles header")?;
+        if start.checked_add(size).is_none_or(|end| end > file_len) {
+            return Err("a PMTiles section outside the local file".into());
+        }
+    }
+    if len != 0 {
+        metadata(&mut info, read_file(archive, at, len)?, len)?;
+    }
+    Ok(Arc::new(info))
+}
+
+#[cfg(target_arch = "wasm32")]
+pub fn read_info_local(archive: &str) -> Result<Arc<Info>, String> {
+    Err(format!("{archive}: the web app cannot reload local PMTiles paths"))
 }
 
 fn u64_at(b: &[u8], i: usize) -> Option<u64> {
@@ -754,8 +844,12 @@ fn parse_head(b: &[u8]) -> Result<(Info, u64, u64), String> {
         data_length,
         internal,
         tile,
+        epoch: 0,
     };
-    Ok((info, meta_at, meta_len.min(MAX_BYTES as u64)))
+    if meta_len > MAX_BYTES as u64 || meta_at.checked_add(meta_len).is_none() {
+        return Err("PMTiles metadata is too large or has an invalid range".into());
+    }
+    Ok((info, meta_at, meta_len))
 }
 
 /// A directory: delta-coded tile ids, then run lengths, lengths and offsets, all varints.
@@ -819,6 +913,61 @@ fn gunzip(b: &[u8]) -> Result<Vec<u8>, String> {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+
+    #[test]
+    fn reloaded_archive_rejects_old_metadata_and_leaf_answers() {
+        let source = "/pmtiles-stale-completion-regression.pmtiles";
+        let old_epoch = crate::cache::archive_epoch(source);
+        let bytes = archive(&[(0, 0, 0, vec![1])], 1, true, "{}");
+        let (old_info, _, _) = parse_head(&bytes).unwrap();
+        crate::cache::reload_archive(source);
+        let (tx, rx) = std::sync::mpsc::channel();
+        archives()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(source.into(), State::Loading(vec![Box::new(move |result| tx.send(result.map(|info| info.attribution())).unwrap())]));
+        let key = (source.to_string(), HEAD);
+        let (leaf_tx, leaf_rx) = std::sync::mpsc::channel();
+        leaves()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(key.clone(), Leaf::Loading(vec![Box::new(move |result| leaf_tx.send(result.map(|leaf| leaf.len())).unwrap())]));
+        finish(source, Ok(old_info), old_epoch);
+        finish_leaf(key.clone(), Ok(Arc::new(Vec::new())), old_epoch);
+        assert!(matches!(rx.try_recv(), Err(std::sync::mpsc::TryRecvError::Empty)));
+        assert!(matches!(leaf_rx.try_recv(), Err(std::sync::mpsc::TryRecvError::Empty)));
+        // Global clears retain pending reads, so this regression is independent of other tests.
+        assert!(matches!(archives().lock().unwrap_or_else(|e| e.into_inner()).get(source), Some(State::Loading(_))));
+        assert!(matches!(leaves().lock().unwrap_or_else(|e| e.into_inner()).get(&key), Some(Leaf::Loading(_))));
+        let (mut current, _, _) = parse_head(&bytes).unwrap();
+        current.set_metadata(serde_json::json!({"attribution": "fresh credits"}));
+        let epoch = crate::cache::archive_epoch(source);
+        finish(source, Ok(current), epoch);
+        finish_leaf(key, Ok(Arc::new(vec![Entry { tile_id: 0, offset: 0, length: 1, run_length: 1 }])), epoch);
+        assert_eq!(rx.recv().unwrap().unwrap(), "fresh credits");
+        assert_eq!(leaf_rx.recv().unwrap().unwrap(), 1);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn fresh_local_validation_rejects_bad_metadata_and_truncated_sections() {
+        let path = std::env::temp_dir().join(format!("rustgis-pmtiles-validation-{}.pmtiles", std::process::id()));
+        let source = path.to_str().unwrap();
+        let valid = archive(&[(0, 0, 0, vec![1, 2, 3])], 1, true, r#"{"attribution":"fresh"}"#);
+        std::fs::write(&path, &valid).unwrap();
+        assert_eq!(read_info_local(source).unwrap().attribution(), "fresh");
+        for metadata in ["{", "null", "[]"] {
+            std::fs::write(&path, archive(&[(0, 0, 0, vec![1])], 1, false, metadata)).unwrap();
+            assert!(read_info_local(source).is_err(), "{metadata}");
+        }
+        std::fs::write(&path, &valid[..valid.len() - 1]).unwrap();
+        assert!(read_info_local(source).is_err());
+        let mut truncated_metadata = valid.clone();
+        truncated_metadata[24..32].copy_from_slice(&(valid.len() as u64 - 1).to_le_bytes());
+        std::fs::write(&path, truncated_metadata).unwrap();
+        assert!(read_info_local(source).is_err());
+        std::fs::remove_file(path).unwrap();
+    }
 
     #[test]
     fn tile_ids_follow_the_spec() {

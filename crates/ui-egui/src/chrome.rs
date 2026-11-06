@@ -974,7 +974,7 @@ pub fn command_search(app: &mut RustGisApp, ctx: &egui::Context) {
             }
         }
         for c in &app.session.registry.commands {
-            if command_matches(c, &ql) {
+            if command_matches(c, &ql) && !(cfg!(target_arch = "wasm32") && matches!(c.id, "map.reloadTiles" | "map.repairTiles")) {
                 hits.push((c.id.to_string(), tl!(c.label).to_string(), crate::i18n::location(c.location)));
             }
         }

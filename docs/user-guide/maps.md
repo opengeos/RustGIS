@@ -259,6 +259,26 @@ selectable or editable; a tile not yet loaded may need another click once it arr
 **Reload** in the Basemap gallery (`map.reloadWebLayers`) clears cached tiles and styles and
 fetches them again.
 
+**Reloading a local tile archive (desktop).** After changing a PMTiles or MBTiles file on disk,
+right-click its row in Layers and choose **Reload Data**. CLI, Python, MCP and the Assistant use
+`map.reloadTiles={"index":0}`; `"name"` or catalog `"id"` can select the archive instead.
+No replacement path is accepted. This is a manual action: RustGIS does not watch the file or detect changes.
+It rereads that archive's metadata and tiles without clearing other archives or web layers.
+The layer keeps its name, visibility, opacity, blend, drawing order, source-layer visibility,
+style and other presentation settings; the map's view stays where it is. Undo cannot restore
+file contents that another program has overwritten.
+
+Reload first checks that the file can be read. If it is missing, unreadable or invalid, a notice
+explains the failure and the existing layer and retained cached data are left unchanged.
+Finish writing or restore the file, then choose **Reload Data** again. If the file has moved,
+choose **Repair Data Source…** instead and select its new location. Repair also checks the
+replacement before changing the source; cancelling or choosing an unreadable or invalid archive
+leaves the existing source and layer unchanged, so you can retry with a valid file.
+Neither action is available for local archives in the web app, or for remote tile services.
+On Windows, an open MBTiles file may not be replaceable while RustGIS holds it open: reload
+does not bypass that operating-system restriction. Close RustGIS before replacing the file,
+then reopen the project, or write to a different path and use **Repair Data Source…**.
+
 **Source layers.** A vector PMTiles or MBTiles archive lists its source layers (the
 `vector_layers` its metadata names: `water`, `roads`, `pois`…) under its row in the Layers pane:
 the arrow beside it opens them, each with its own checkbox. Untick one to hide what it draws
