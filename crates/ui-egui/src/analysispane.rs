@@ -38,6 +38,8 @@ pub struct Workflow {
     /// When each Script pane run under way or waiting started (seconds since 1970, and the
     /// instant), in the order asked, for [`script_ran`] to tell as each lands.
     script_started: std::collections::VecDeque<(u64, web_time::Instant)>,
+    /// When the last Script pane run landed: one waiting behind it started then, not when asked.
+    script_landed: Option<web_time::Instant>,
     pub trend: TrendForm,
     pub selected_only: Option<bool>,
     pub zonal_stats: ZonalStatsForm,
@@ -1573,9 +1575,14 @@ fn start_script(app: &mut RustGisApp, script: String) {
 /// A Script pane run as it lands, in the pane: its number, how long it took, and each line's
 /// result, or why it didn't run.
 fn script_ran(app: &mut RustGisApp, landed: crate::Landed) {
-    let (at, started) = app.workflow.script_started.pop_front().unwrap_or((0, web_time::Instant::now()));
+    let now = web_time::Instant::now();
+    let (asked_at, asked) = app.workflow.script_started.pop_front().unwrap_or((0, now));
+    // One that waited for the run before it started as that one landed.
+    let started = app.workflow.script_landed.filter(|&l| l > asked).unwrap_or(asked);
+    let at = if asked_at == 0 { 0 } else { asked_at.saturating_add(started.duration_since(asked).as_secs()) };
+    app.workflow.script_landed = Some(now);
     let n = app.workflow.script_last.as_ref().map_or(1, |r| r.n.saturating_add(1));
-    app.workflow.script_last = Some(ScriptRun { n, secs: started.elapsed().as_secs_f64(), at });
+    app.workflow.script_last = Some(ScriptRun { n, secs: now.duration_since(started).as_secs_f64(), at });
     app.workflow.script_out = match landed {
         crate::Landed::Ran(Ok(v)) => v["ran"]
             .as_array()
@@ -1583,6 +1590,10 @@ fn script_ran(app: &mut RustGisApp, landed: crate::Landed) {
             .unwrap_or_default(),
         crate::Landed::Ran(Err(e)) | crate::Landed::NotRun(e) => vec![(e, true)],
     };
+    // Another still to land: the results say so below this one's.
+    if !app.workflow.script_started.is_empty() {
+        app.workflow.script_out.push((tl!("Running…").to_string(), false));
+    }
     app.map.invalidate();
 }
 
@@ -1741,6 +1752,23 @@ mod tests {
         landed(&mut app);
         assert_eq!(app.workflow.script_out, vec![("Run Script was left: another project was opened".to_string(), true)]);
         assert!(app.session.notices.iter().any(|n| n.text == "Run Script was left: another project was opened"));
+    }
+
+    /// A Script pane run that waited for the one before it is timed from when that one landed,
+    /// and the results say Running… while another is still to land.
+    #[test]
+    fn a_queued_script_run_is_timed_from_its_start() {
+        let mut app = RustGisApp::with_sample();
+        let asked = web_time::Instant::now() - std::time::Duration::from_secs(10);
+        app.workflow.script_started.extend([(1_000, asked), (1_000, asked)]);
+        script_ran(&mut app, crate::Landed::Ran(Ok(json!({"ran": []}))));
+        let first = app.workflow.script_last.as_ref().map(|r| (r.secs, r.at)).unwrap();
+        assert!(first.0 >= 10.0 && first.1 == 1_000, "{first:?}");
+        assert_eq!(app.workflow.script_out, vec![("Running…".to_string(), false)]);
+        script_ran(&mut app, crate::Landed::NotRun("cancelled".into()));
+        let second = app.workflow.script_last.as_ref().map(|r| (r.secs, r.at)).unwrap();
+        assert!(second.0 < 5.0 && second.1 >= 1_010, "{second:?}");
+        assert_eq!(app.workflow.script_out, vec![("cancelled".to_string(), true)]);
     }
 
     /// Interpolate runs on a thread of its own from the pane (#1291 step 3): the pane goes on while

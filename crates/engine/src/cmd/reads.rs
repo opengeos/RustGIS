@@ -66,7 +66,7 @@ pub fn read_ahead(s: &Session, command: &str, p: &Value) -> Option<ReadAhead> {
         #[cfg(not(target_arch = "wasm32"))]
         "model.run" => Some(super::workflows::ahead_on_copy(s, "model.run", p)),
         #[cfg(not(target_arch = "wasm32"))]
-        "script.run" => Some(super::workflows::ahead_on_copy(s, "script.run", p)),
+        "script.run" => super::workflows::script_ahead(s, p),
         _ => None,
     }
 }

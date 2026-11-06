@@ -28911,6 +28911,10 @@ fn a_scripts_tools_run_ahead_are_taken_by_its_run() {
     s.map_mut().layers[0].selection = vec![0];
     s.run("script.run", &p).unwrap();
     assert_eq!(s.tools_taken, 0);
+    // A script whose first line would stop the copy runs here, with no copy made.
+    let p = json!({"script": format!("edit.addField {{\"layer\": \"Points\", \"name\": \"m\", \"type\": \"long\"}}\n{}", tool(1000))});
+    assert!(crate::cmd::reads::read_ahead(&s, "script.run", &p).is_none());
+    assert!(crate::cmd::reads::read_ahead(&s, "script.run", &json!({"script": "# nothing"})).is_none());
     // Each command a line may run on the copy is one the session has.
     for id in crate::cmd::workflows::ON_A_COPY {
         assert!(s.registry.get(id).is_some(), "{id}");

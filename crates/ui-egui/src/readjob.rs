@@ -55,10 +55,10 @@ struct ReadJob {
     slot: crate::Slot<Result<reads::Read, String>>,
 }
 
-/// Runs `command` (`layer.addData`, `layer.loadAll`, `model.run` or `script.run`) with `p`: its read on a
-/// thread of its own when the desktop app makes it so ([`reads::read_ahead`]), after any under
-/// way; here and now otherwise, as the command does. While one is under way or waiting it answers
-/// that, not what the command adds, which comes as it lands.
+/// Runs `command` (`layer.addData`, `layer.loadAll`, `model.run` or `script.run`) with `p`: its
+/// read on a thread of its own when the desktop app makes it so ([`reads::read_ahead`]), after
+/// any under way; here and now otherwise, as the command does. While one is under way or waiting
+/// it answers that, not what the command adds, which comes as it lands.
 pub fn run(app: &mut RustGisApp, command: &'static str, p: Value) -> Result<Value, String> {
     run_then(app, command, p, None)
 }
@@ -122,6 +122,13 @@ fn not_run(app: &mut RustGisApp, then: Option<Then>, why: String) {
     if let Some(then) = then {
         then(app, Landed::NotRun(why));
     }
+}
+
+/// `asked` left for `why`: its `then` told now, and kept in `left` for the notice.
+fn leave(app: &mut RustGisApp, left: &mut Vec<(String, Gone)>, asked: &Asked, why: Gone) {
+    let what = called(asked.command, &asked.what).to_string();
+    not_run(app, asked.then, crate::i18n::fmt("{what} was left: {why}", &[("what", &what), ("why", &why.to_string())]));
+    left.push((what, why));
 }
 
 /// What a command asked for is called in a notice: a script, or an unnamed model, by the
@@ -215,7 +222,9 @@ pub fn land(app: &mut RustGisApp) -> bool {
     if !busy(app) {
         return false;
     }
-    let mut left: Vec<(String, Gone, Option<Then>)> = Vec::new();
+    // Those left, for the notices below; each one's `then` is told as it is left, so callers
+    // hear in the order asked, before a later one starts.
+    let mut left: Vec<(String, Gone)> = Vec::new();
     // What it was for is gone: it is cancelled, and said with the rest below once it stops.
     let gone = app.reads.job.as_ref().filter(|j| j.gone.is_none()).and_then(|j| placed(app, &j.asked).err());
     if let (Some(why), Some(job)) = (gone, app.reads.job.as_mut()) {
@@ -227,7 +236,7 @@ pub fn land(app: &mut RustGisApp) -> bool {
         let Some(done) = done else { return true };
         let Some(job) = app.reads.job.take() else { return false };
         match (job.gone, placed(app, &job.asked)) {
-            (Some(why), _) | (None, Err(why)) => left.push((called(job.asked.command, &job.asked.what).to_string(), why, job.asked.then)),
+            (Some(why), _) | (None, Err(why)) => leave(app, &mut left, &job.asked, why),
             (None, Ok(p)) => {
                 if job.control.is_cancelled() {
                     // Cancelled (once it had read too): it adds nothing, and nor does what waits.
@@ -294,15 +303,12 @@ pub fn land(app: &mut RustGisApp) -> bool {
                 let _ = start(app, asked, p);
                 app.map.invalidate();
             }
-            Err(why) => left.push((called(asked.command, &asked.what).to_string(), why, asked.then)),
+            Err(why) => leave(app, &mut left, &asked, why),
         }
     }
     // Those left, one notice for each reason, with a count, naming the first.
-    for (what, why, then) in &left {
-        not_run(app, *then, crate::i18n::fmt("{what} was left: {why}", &[("what", what), ("why", &why.to_string())]));
-    }
     for why in [Gone::Project, Gone::Map, Gone::Layer] {
-        let of: Vec<&String> = left.iter().filter(|(_, w, _)| *w == why).map(|(what, ..)| what).collect();
+        let of: Vec<&String> = left.iter().filter(|(_, w)| *w == why).map(|(what, _)| what).collect();
         let reason = why.to_string();
         match of.as_slice() {
             [] => {}
