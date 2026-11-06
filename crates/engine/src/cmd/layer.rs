@@ -3548,6 +3548,8 @@ pub(crate) fn add_cog(s: &mut Session, p: &Value, url: &str, probed: bool) -> Cm
         }
     }
     let mut r = super::tiles::add(s, &q)?;
+    // A plugin's command in the app doesn't wait (it runs on the frame), as in the browser.
+    let probed = probed && !s.leave_downloads;
     // A dated address is framed on the file of the date it shows.
     let (url, probed) = match r.get("url").and_then(Value::as_str) {
         Some(dated) => {
