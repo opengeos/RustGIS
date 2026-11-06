@@ -15688,6 +15688,14 @@ fn a_probed_cog_is_framed_after_the_cache_forgets_it() {
     let r = crate::cmd::layer::add_cog(&mut s, &json!({}), &gone, true).unwrap();
     let warning = r["warning"].as_str().unwrap_or_default();
     assert!(warning.contains("couldn't be read (") && warning.contains("wasn't moved"), "{r}");
+    // Not waited for, its failure (recorded, not yet tried again) is said too. Another test's
+    // login ending forgets the record, so it is made again for each try.
+    let said = (0..3).any(|_| {
+        let _ = crate::cmd::layer::add_cog(&mut s, &json!({}), &gone, true);
+        let r = crate::cmd::layer::add_cog(&mut s, &json!({}), &gone, false).unwrap();
+        r["warning"].as_str().is_some_and(|w| w.contains("couldn't be read (") && w.contains("wasn't moved"))
+    });
+    assert!(said, "a recorded failure went unsaid");
 }
 
 /// A cloud-optimised GeoTIFF by its address is read in place: its header, then only the tiles a

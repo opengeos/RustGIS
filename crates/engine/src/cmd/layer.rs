@@ -3605,7 +3605,7 @@ pub(crate) fn add_cog(s: &mut Session, p: &Value, url: &str, probed: bool) -> Cm
         for line in said {
             s.notify(format!("{shown}: {line}"), false);
         }
-    } else if probed || r.get("dated").is_some() {
+    } else if probed || why.is_some() || r.get("dated").is_some() {
         // Added, but its (first date's) file couldn't be read: the view stays where it was, and
         // the answer says why when the read said (its keys left out).
         r["warning"] = json!(match why {
