@@ -143,8 +143,9 @@ pub fn clear_fetcher() {
 /// Tests that fetch through the cache take turns. It has one fetcher for the whole process, so a
 /// test that replaces it ([`set_fetcher`]) would answer another's fetches. It also starts fetches
 /// on whichever thread is starting them already, so one test's fetch may run on another's thread,
-/// later. Tests that end a login take turns too: that empties the cache ([`clear`]). The turn puts
-/// the native fetcher back when it ends.
+/// later. Tests that end a login take turns too, as that empties the cache ([`clear`]), and so do
+/// tests that wait for or plant what the cache holds (an archive read, a style resolved), which
+/// that would drop. The turn puts the native fetcher back when it ends.
 #[cfg(test)]
 pub(crate) fn turn() -> Turn {
     static TURN: Mutex<()> = Mutex::new(());
