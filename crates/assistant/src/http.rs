@@ -2,6 +2,7 @@
 
 use crate::provider::{HttpRequest, HttpResponse, allowed_url, reply_limit};
 use crate::{Error, error::TransportFailure};
+use rustgis_engine::data::diagnostics;
 
 /// Sends `req` and reads the response, whatever its status.
 pub fn send(req: &HttpRequest) -> Result<HttpResponse, Error> {
@@ -23,7 +24,9 @@ fn send_with(req: &HttpRequest, timeout: std::time::Duration, mut on_chunk: Opti
     // The address checked is the one used.
     let url = req.url.trim();
     if !allowed_url(url) {
-        return Err(format!("{url}: only HTTPS addresses, or plain HTTP on this computer or network, are allowed").into());
+        return Err(
+            diagnostics::message_with_address(url, "only HTTPS addresses, or plain HTTP on this computer or network, are allowed").into()
+        );
     }
     let agent: ureq::Agent = ureq::Agent::config_builder()
         // Models can think for minutes on a hard request.
@@ -95,7 +98,11 @@ fn transport_error(e: &ureq::Error, url: &str) -> Error {
         }
         _ => TransportFailure::Interrupted,
     };
-    Error::transport(kind, format!("couldn't reach {}: {e}", host(url)))
+    // Establish known-address boundaries before applying the stricter host-only display policy.
+    // Replacing raw text first could match a prefix of another address's longer credential.
+    let message = diagnostics::message_with_address(url, &e.to_string());
+    let message = message.replace(&diagnostics::address_in_message(url), &host(url));
+    Error::transport(kind, format!("couldn't reach {message}"))
 }
 
 #[cfg(test)]
@@ -106,6 +113,45 @@ mod tests {
         net::TcpListener,
         time::Duration,
     };
+
+    #[test]
+    fn rejected_secret_addresses_keep_the_policy_reason() {
+        let req = HttpRequest { method: "GET", url: "ftp://models.test/private?token=secret value".into(), headers: vec![], body: None };
+        let error = send(&req).unwrap_err().to_string();
+        let error = diagnostics::redact(&diagnostics::redact(&error));
+        assert!(error.contains("only HTTPS addresses"), "{error}");
+        assert!(!error.contains("secret") && !error.contains("value"), "{error}");
+    }
+
+    #[test]
+    fn transport_errors_keep_reasons_without_revealing_request_paths() {
+        let url = "https://user:password@models.test/private-key?token=secret value";
+        let cause = ureq::Error::Io(std::io::Error::other(format!("request {url} failed; retry {url}: connection closed")));
+        let error = transport_error(&cause, url);
+        assert_eq!(error.transport, Some(TransportFailure::Interrupted));
+        let error = diagnostics::redact(&diagnostics::redact(&error.to_string()));
+        assert!(error.contains("couldn't reach https://models.test") && error.contains("connection closed"), "{error}");
+        for hidden in ["user", "password", "private-key", "secret", "value"] {
+            assert!(!error.contains(hidden), "{error}");
+        }
+    }
+
+    #[test]
+    fn unknown_transport_addresses_keep_conservative_credential_boundaries() {
+        let url = "https://models.test/private-key?token=abc";
+        for reason in [
+            format!("request {url}XYZ credential tail: connection closed"),
+            "request https://other.test/a?token=unknown credential tail: connection closed".into(),
+        ] {
+            let cause = ureq::Error::Io(std::io::Error::other(reason));
+            let error = transport_error(&cause, url).to_string();
+            let error = diagnostics::redact(&diagnostics::redact(&error));
+            assert!(error.contains("couldn't reach https://models.test"), "{error}");
+            for hidden in ["abc", "XYZ", "unknown", "credential", "tail", "connection closed"] {
+                assert!(!error.contains(hidden), "{error}");
+            }
+        }
+    }
 
     #[test]
     fn native_transport_preserves_connection_timeout_and_interruption_types() {

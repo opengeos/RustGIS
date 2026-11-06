@@ -151,14 +151,17 @@ pub fn checked(url: &str) -> Result<String, String> {
     }
     let lower = url.to_ascii_lowercase();
     if !(lower.starts_with("https://") || lower.starts_with("http://")) {
-        let shown: String = url.chars().take(80).collect();
-        return Err(format!("{shown}: plugins fetch only http:// and https:// addresses"));
+        let shown: String = crate::sources::address_in_message(url).chars().take(80).collect();
+        return Err(crate::sources::message_with_address(&shown, "plugins fetch only http:// and https:// addresses"));
     }
     // A fragment never reaches the server (and RustGIS marks byte ranges with one).
     let url = url.split('#').next().unwrap_or(url);
     address::check(url, None)?;
     if address::reach(url) != address::Reach::Public && !allow_local() {
-        return Err(format!("{url}: plugins fetch only from the internet, not this computer or the local network"));
+        return Err(crate::sources::message_with_address(
+            url,
+            "plugins fetch only from the internet, not this computer or the local network",
+        ));
     }
     Ok(url.to_string())
 }
@@ -167,10 +170,10 @@ pub fn checked(url: &str) -> Result<String, String> {
 /// or array.
 pub fn answer(url: &str, bytes: &[u8]) -> Result<Value, String> {
     if bytes.len() > MAX_BYTES {
-        return Err(format!("{url}: larger than {MAX_BYTES} bytes"));
+        return Err(crate::sources::message_with_address(url, &format!("larger than {MAX_BYTES} bytes")));
     }
     let bytes = bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(bytes);
-    let text = std::str::from_utf8(bytes).map_err(|_| format!("{url}: the answer isn't UTF-8 text"))?;
+    let text = std::str::from_utf8(bytes).map_err(|_| crate::sources::message_with_address(url, "the answer isn't UTF-8 text"))?;
     let trimmed = text.trim_start();
     let parsed = if trimmed.starts_with('{') || trimmed.starts_with('[') { serde_json::from_str::<Value>(text).ok() } else { None };
     Ok(match parsed {
@@ -201,7 +204,7 @@ fn start(key: &str, url: &str) {
         &s3::anonymous(&url),
         MAX_BYTES,
         Box::new(move |r| {
-            let answer = r.map_err(|e| format!("{url}: {e}")).and_then(|bytes| answer(&url, &bytes));
+            let answer = r.map_err(|e| crate::sources::message_with_address(&url, &e)).and_then(|bytes| answer(&url, &bytes));
             cache().keep(&key, answer);
         }),
     );
@@ -253,7 +256,10 @@ impl Calls {
         let started = *self.started.get_or_insert_with(Instant::now);
         let left = CALL_BUDGET.saturating_sub(started.elapsed());
         if left.is_zero() {
-            return Err(format!("{url}: this plugin call's fetches took longer than {} s in all", CALL_BUDGET.as_secs()));
+            return Err(crate::sources::message_with_address(
+                url,
+                &format!("this plugin call's fetches took longer than {} s in all", CALL_BUDGET.as_secs()),
+            ));
         }
         // Names are checked again where they resolve: a public-looking name for a local address
         // (or a redirect to one) is refused there. Tests fetch from a server on this computer.
@@ -265,7 +271,7 @@ impl Calls {
         };
         // Errors are kept too (for `ERROR_TTL`), so a plugin run again and again on an address
         // that doesn't answer doesn't wait for it each time.
-        let answer = bytes.map_err(|e| format!("{url}: {e}")).and_then(|bytes| answer(url, &bytes));
+        let answer = bytes.map_err(|e| crate::sources::message_with_address(url, &e)).and_then(|bytes| answer(url, &bytes));
         cache().keep(key, answer.clone());
         answer
     }
@@ -273,7 +279,7 @@ impl Calls {
     #[cfg(target_arch = "wasm32")]
     fn blocking(&mut self, _key: &str, url: &str) -> CmdResult {
         let _ = self.started;
-        Err(format!("{url}: the web app can't wait for a fetch"))
+        Err(crate::sources::message_with_address(url, "the web app can't wait for a fetch"))
     }
 }
 

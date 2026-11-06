@@ -1176,7 +1176,10 @@ impl Session {
         // (Even with the same request queued under another number: nothing else lands this one.)
         if (handed_back && waiting != Some(number)) || (waiting.is_none() && !self.url_waits.has(number)) {
             if self.url_requests.len() >= MAX_URL_REQUESTS {
-                return Err(format!("{url}: {MAX_URL_REQUESTS} downloads are already waiting; try again when they have landed"));
+                return Err(sources::message_with_address(
+                    &url,
+                    &format!("{MAX_URL_REQUESTS} downloads are already waiting; try again when they have landed"),
+                ));
             }
             let mut q = asked.clone();
             q["request"] = serde_json::json!(number);
@@ -1205,7 +1208,11 @@ impl Session {
         if let Some(n) = p.get("request").and_then(serde_json::Value::as_u64) {
             if self.url_waits.holds(n, p) {
                 // Its command gets this as its answer: without the address's keys.
-                self.url_waits.land(n, Err(sources::redact_text(error)), cmd::plugins::fetch::Added::default());
+                let error = p
+                    .get("url")
+                    .and_then(serde_json::Value::as_str)
+                    .map_or_else(|| Self::redacted(error).into_string(), |url| sources::message_with_address(url, error));
+                self.url_waits.land(n, Err(error), cmd::plugins::fetch::Added::default());
             }
             // One given up won't land now: nothing left to refuse.
             if self.url_waits.given_up(n, p) {
@@ -1331,7 +1338,7 @@ impl Session {
                     self.landed_reads.retain(|(k, _)| *k != d);
                 }
                 // Redacted here too: the assistant and MCP get the error as it is.
-                let url = sources::redact_text(params.get("url").and_then(Value::as_str).unwrap_or("download"));
+                let url = sources::address_in_message(params.get("url").and_then(Value::as_str).unwrap_or("download"));
                 Some(if self.url_waits.added_already(n, params) {
                     Err(format!("{url}: it was added already for its plugin command, so it wasn't added again"))
                 } else {

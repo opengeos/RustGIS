@@ -307,23 +307,33 @@ pub fn holds_plain_key(params: &serde_json::Value) -> bool {
     walk(params, 0)
 }
 
-/// Text with every web address in it redacted (`sources::redact`): an error's text may quote the
-/// address asked for, or one a redirect led to, keys and all. Each address is redacted alone, so
-/// the words around it stay; punctuation that ends a sentence isn't taken as part of it.
-pub fn redact_text(text: &str) -> String {
-    text.split_inclusive(char::is_whitespace)
-        .map(|piece| {
-            let word = piece.trim_end();
-            let Some(at) = word.find("://") else { return piece.to_string() };
-            // The address starts at its scheme, after any quote or bracket before it.
-            let scheme = |c: &char| c.is_ascii_alphanumeric() || "+.-".contains(*c);
-            let start = word.get(..at).and_then(|b| b.char_indices().rev().find(|(_, c)| !scheme(c))).map_or(0, |(i, c)| i + c.len_utf8());
-            let end = word.trim_end_matches([':', ',', ';', '.', ')', ']', '>', '"', '\'', '»', '›', '”', '’']).len().max(at + 3);
-            let (before, address, after) =
-                (word.get(..start).unwrap_or(""), word.get(start..end).unwrap_or(""), word.get(end..).unwrap_or(""));
-            format!("{before}{}{after}{}", redact(address), piece.get(word.len()..).unwrap_or(""))
-        })
-        .collect()
+/// A known source address safe to compose into a repeatedly redacted diagnostic, without
+/// publishing a web-login runtime binding or the credentials inside a source wrapper.
+pub fn address_in_message(address: &str) -> String {
+    rustgis_data::diagnostics::address_in_message(&redact(address))
+}
+
+/// Names a known source while keeping its failure reason. Exact address occurrences are
+/// sanitized before the conservative free-text redactor sees any unescaped secret whitespace.
+pub fn message_with_address(address: &str, reason: &str) -> String {
+    let message = rustgis_data::diagnostics::message_with_address(address, reason);
+    let raw_shown = rustgis_data::diagnostics::address_in_message(address);
+    let shown = address_in_message(address);
+    let message = if raw_shown.is_empty() || raw_shown == shown { message } else { message.replace(&raw_shown, &shown) };
+    // Reusing this helper must not prepend the same safe source label on every hop.
+    // A part failure may already name a different address; inspect only the sanitized text.
+    let reason = message.strip_prefix(&shown).and_then(|tail| tail.strip_prefix(": "));
+    let message = match reason.filter(|reason| {
+        reason.strip_prefix(&shown).is_some_and(|tail| tail.is_empty() || tail.starts_with(": "))
+            || reason.split_once(": ").is_some_and(|(label, _)| {
+                let label = label.strip_suffix("[query omitted]").unwrap_or(label);
+                label.contains("://") && !label.contains(char::is_whitespace)
+            })
+    }) {
+        Some(reason) => reason,
+        None => &message,
+    };
+    crate::render::rustgis_tiles::logins::scrub(message)
 }
 
 /// A PMTiles or COG tile template (`pmtiles:{z}/{x}/{y}@archive`, `cog:…@archive`): what comes
@@ -690,6 +700,24 @@ MIIE
         s.note(svc(json!({"layer": "x"})));
         assert_eq!(s.recent.len(), 1);
         assert!(s.recent[0].is("service", "https://h/wms"));
+    }
+
+    #[test]
+    fn address_messages_stay_private_and_named_once_across_hops() {
+        for address in [
+            "https://alice:hidden@host.example/data?token=hidden hidden-tail",
+            "https://host.example/data?page=2&token=hidden",
+            "https://host.example/data?custom=hidden hidden-tail",
+        ] {
+            let mut message = message_with_address(address, "HTTP 503 Service Unavailable");
+            for _ in 0..3 {
+                message = message_with_address(address, &message);
+                let clean = crate::Session::redacted(&message);
+                assert!(clean.as_str().contains("HTTP 503 Service Unavailable"), "{clean:?}");
+                assert_eq!(clean.as_str().matches("host.example/data").count(), 1, "{clean:?}");
+                assert!(!clean.as_str().contains("hidden") && !clean.as_str().contains("alice"), "{clean:?}");
+            }
+        }
     }
 
     #[test]

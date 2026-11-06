@@ -455,7 +455,10 @@ fn open_postgis(pg: &PostgisOrigin) -> rustgis_data::Result<Box<dyn FeatureSourc
     {
         use rustgis_data::source::{duckdb::Database, postgis};
         let Database::Postgres(dsn) = Database::parse(&pg.database) else {
-            return Err(rustgis_data::DataError::Format(format!("{}: not a PostgreSQL connection", pg.database)));
+            return Err(rustgis_data::DataError::Format(rustgis_data::diagnostics::message_with_address(
+                &pg.database,
+                "not a PostgreSQL connection",
+            )));
         };
         let conn = postgis::connect(&dsn, false).map_err(database_open_error)?;
         let table = postgis::find_table(&conn, &pg.table)?;
@@ -475,7 +478,10 @@ fn open_mysql(my: &MysqlOrigin) -> rustgis_data::Result<Box<dyn FeatureSource>> 
     {
         use rustgis_data::source::{duckdb::Database, mysql};
         let Database::Mysql(address) = Database::parse(&my.database) else {
-            return Err(rustgis_data::DataError::Format(format!("{}: not a MySQL or MariaDB connection", my.database)));
+            return Err(rustgis_data::DataError::Format(rustgis_data::diagnostics::message_with_address(
+                &my.database,
+                "not a MySQL or MariaDB connection",
+            )));
         };
         let conn = mysql::connect(&address, false).map_err(database_open_error)?;
         let table = mysql::find_table(&conn, &my.table)?;
@@ -495,7 +501,10 @@ fn open_sqlserver(ms: &SqlServerOrigin) -> rustgis_data::Result<Box<dyn FeatureS
     {
         use rustgis_data::source::{duckdb::Database, sqlserver};
         let Database::Sqlserver(address) = Database::parse(&ms.database) else {
-            return Err(rustgis_data::DataError::Format(format!("{}: not a SQL Server connection", ms.database)));
+            return Err(rustgis_data::DataError::Format(rustgis_data::diagnostics::message_with_address(
+                &ms.database,
+                "not a SQL Server connection",
+            )));
         };
         let conn = sqlserver::connect(&address, false).map_err(database_open_error)?;
         let table = sqlserver::find_table(&conn, &ms.table)?;
@@ -613,7 +622,7 @@ impl SourceLayer {
                 }
             }
         }
-        new.open().map_err(|e| format!("{path}: {e}"))?;
+        new.open().map_err(|e| rustgis_data::diagnostics::message_with_address(path, &e))?;
         Ok(new)
     }
 
@@ -826,9 +835,9 @@ impl SourceLayer {
                 let r = match r {
                     Ok(bytes) => rustgis_data::source::open_shared(&name, Arc::new(bytes), table.as_deref())
                         .map(Arc::from)
-                        .map_err(|e| format!("{url}: {e}")),
-                    Err(rustgis_data::source::remote::Failed::Other(e)) => Err(format!("{url}: {e}")),
-                    Err(e) => Err(format!("{url}: couldn't be downloaded ({e:?})")),
+                        .map_err(|e| rustgis_data::diagnostics::message_with_address(&url, &e.to_string())),
+                    Err(rustgis_data::source::remote::Failed::Other(e)) => Err(rustgis_data::diagnostics::message_with_address(&url, &e)),
+                    Err(e) => Err(rustgis_data::diagnostics::message_with_address(&url, &format!("couldn't be downloaded ({e:?})"))),
                 };
                 if let Ok(mut s) = land.lock() {
                     *s = Some(r);

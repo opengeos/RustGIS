@@ -63,6 +63,8 @@ impl LoginFile {
                     }
                     Err(_) => break,
                 };
+                // Accepted sockets can inherit the listener's nonblocking mode.
+                stream.set_nonblocking(false).unwrap();
                 stream.set_read_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
                 let mut request = Vec::new();
                 let mut chunk = [0u8; 4096];

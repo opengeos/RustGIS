@@ -216,7 +216,7 @@ fn resolve_anew(spec: &Spec, key: String) -> Resolve {
                 }
             }
             Ok(None) => return Resolve::Pending,
-            Err(e) => return Resolve::Failed(format!("{}: {e}", crate::logins::inner(&spec.url))),
+            Err(e) => return Resolve::Failed(crate::logins::scrub(&rustgis_data::diagnostics::message_with_address(&spec.url, &e))),
         },
         Kind::Cog => match cog::info(&spec.url) {
             Ok(Some(info)) => {
@@ -257,7 +257,7 @@ fn resolve_anew(spec: &Spec, key: String) -> Resolve {
     };
     let mut style = match Style::parse(&doc) {
         Ok(s) => s,
-        Err(e) => return Resolve::Failed(format!("{}: {e}", crate::logins::inner(&spec.url))),
+        Err(e) => return Resolve::Failed(crate::logins::scrub(&rustgis_data::diagnostics::message_with_address(&spec.url, &e))),
     };
     if !spec.hidden_layers.is_empty() {
         style.layers.retain(|l| l.source_layer.as_ref().is_none_or(|s| !spec.hidden_layers.contains(s)));
@@ -390,7 +390,7 @@ fn resolve_source(src: &mut Source, spec: &Spec, base: &str) -> Result<bool, Str
         && let Some(u) = url.clone()
     {
         if u.starts_with("mapbox://") {
-            return Err(format!("{u}: mapbox:// addresses need Mapbox's own library"));
+            return Err(rustgis_data::diagnostics::message_with_address(&u, "mapbox:// addresses need Mapbox's own library"));
         }
         let u = template::join(base, &u);
         // An ArcGIS vector tile service answers its TileJSON-like description as JSON only
@@ -467,10 +467,10 @@ fn fetch_json(url: &str) -> Result<Option<Value>, String> {
     match cache::get(url, Want::Json) {
         State::Ready(p) => match &*p {
             Payload::Json(v) => Ok(Some(v.clone())),
-            _ => Err(format!("{}: not a JSON document", crate::logins::inner(url))),
+            _ => Err(rustgis_data::diagnostics::message_with_address(url, "not a JSON document")),
         },
         State::Pending => Ok(None),
-        State::Failed(e) => Err(format!("{}: {e}", crate::logins::inner(url))),
+        State::Failed(e) => Err(crate::logins::scrub(&rustgis_data::diagnostics::message_with_address(url, &e))),
     }
 }
 

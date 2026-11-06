@@ -249,7 +249,7 @@ fn parse_url(url: &str) -> Option<(u8, u32, u32, &str)> {
 /// is read on the fetch workers, never on the frame.
 pub(crate) fn fetch(url: &str, done: Done) {
     let Some((z, x, y, archive)) = parse_url(url) else {
-        done(Err(format!("{url}: not an MBTiles tile address")));
+        done(Err(rustgis_data::diagnostics::message_with_address(url, "not an MBTiles tile address")));
         return;
     };
     if let Err(e) = check(archive) {
@@ -269,7 +269,8 @@ pub(crate) fn fetch(url: &str, done: Done) {
 /// Reads a tile from a file (on a fetch worker).
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn read_local(url: &str) -> Result<Vec<u8>, String> {
-    let (z, x, y, archive) = parse_url(url).ok_or_else(|| format!("{url}: not an MBTiles tile address"))?;
+    let (z, x, y, archive) =
+        parse_url(url).ok_or_else(|| rustgis_data::diagnostics::message_with_address(url, "not an MBTiles tile address"))?;
     check(archive)?;
     let path = std::path::Path::new(archive.strip_prefix("file://").unwrap_or(archive));
     Ok(rustgis_data::mbtiles::tile_path(path, z, x, y)?.unwrap_or_default())

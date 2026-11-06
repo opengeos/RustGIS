@@ -5,7 +5,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use rustgis_ui_egui::rustgis_engine::data::diagnostics::Capture;
+use rustgis_ui_egui::rustgis_engine::{data::diagnostics::Capture, sources::message_with_address};
 use rustgis_ui_egui::{Inbox, RustGisApp, Services, Slot};
 
 use crate::parts::Notes;
@@ -164,7 +164,7 @@ pub fn start() {
                     // to different maps depending on when the import completes.
                     if let Some(url) = &project {
                         if let Err(e) = app.run("ui.openUrl", serde_json::json!({"url": url})) {
-                            app.session.notify(format!("?project={url}: {e}"), true);
+                            app.session.notify(format!("?project={}", message_with_address(url, &e)), true);
                         }
                         let skipped: Vec<&str> =
                             ["data", "stac", "style", "tiles", "zarr"].into_iter().filter(|k| !params(&q, k, 1).is_empty()).collect();
@@ -199,7 +199,7 @@ pub fn start() {
                     // in a notice.
                     for url in params(links, "data", 16) {
                         if let Err(e) = app.run("ui.addUrl", serde_json::json!({"url": url, "zoom": !linked})) {
-                            app.session.notify(format!("?data={url}: {e}"), true);
+                            app.session.notify(format!("?data={}", message_with_address(&url, &e)), true);
                         }
                     }
                     // `?stac=<url>`: a STAC item (its default asset is added, signed when it is a
@@ -210,7 +210,7 @@ pub fn start() {
                     if let Some(url) = stac.first()
                         && let Err(e) = app.run("ui.stacLink", serde_json::json!({"url": url}))
                     {
-                        app.session.notify(format!("?stac={url}: {e}"), true);
+                        app.session.notify(format!("?stac={}", message_with_address(url, &e)), true);
                     }
                     if stac.len() > 1 {
                         app.session.notify(format!("only the first ?stac= link is opened ({} more were left out)", stac.len() - 1), false);
@@ -228,7 +228,7 @@ pub fn start() {
                             match app.run("map.addTiles", p) {
                                 // The first style added opens at its view, not one that failed.
                                 Ok(_) => style_view &= kind.is_none(),
-                                Err(e) => app.session.notify(format!("?{key}={url}: {e}"), true),
+                                Err(e) => app.session.notify(format!("?{key}={}", message_with_address(&url, &e)), true),
                             }
                         }
                     }
@@ -237,7 +237,7 @@ pub fn start() {
                     if let Some(url) = params(links, "zarr", 1).into_iter().next()
                         && let Err(e) = app.run("ui.addZarr", serde_json::json!({"address": url}))
                     {
-                        app.session.notify(format!("?zarr={url}: {e}"), true);
+                        app.session.notify(format!("?zarr={}", message_with_address(&url, &e)), true);
                     }
                     // `?registry=<url>` opens the Plugin Manager on another plugin registry for this
                     // visit (a pull request's preview, say); installing still asks as usual.
@@ -682,7 +682,7 @@ async fn fetch_bytes(url: &str, capture: Capture, omit: &'static [u16]) -> Resul
             // holds the whole file (a small archive), checked once it's read; else no ranges.
             let whole = range.is_some() && resp.status() != 206;
             if range.is_some_and(|(a, _)| whole && a > 0) {
-                return Err(format!("{url}: {}", cache::NO_RANGES));
+                return Err(message_with_address(url, cache::NO_RANGES));
             }
             // Fonts are at most about 10 MB and plugins 64 MB; refuse anything larger than allowed, by
             // header when there is one and by the downloaded size otherwise.
@@ -691,7 +691,7 @@ async fn fetch_bytes(url: &str, capture: Capture, omit: &'static [u16]) -> Resul
             {
                 // The last bytes asked for and a longer file answered: no ranges, so it is downloaded whole.
                 if whole_tail.is_some() {
-                    return Err(format!("{url}: {}", cache::NO_RANGES));
+                    return Err(message_with_address(url, cache::NO_RANGES));
                 }
                 return Err(format!("{len} bytes is too large"));
             }
@@ -719,7 +719,7 @@ async fn fetch_bytes(url: &str, capture: Capture, omit: &'static [u16]) -> Resul
                     if (bytes.len() + n) as u64 > max {
                         let _ = reader.cancel();
                         if whole_tail.is_some() {
-                            return Err(format!("{url}: {}", cache::NO_RANGES));
+                            return Err(message_with_address(url, cache::NO_RANGES));
                         }
                         return Err(format!("larger than {max} bytes"));
                     }
@@ -731,16 +731,16 @@ async fn fetch_bytes(url: &str, capture: Capture, omit: &'static [u16]) -> Resul
             if let Some((a, b)) = range.filter(|_| whole)
                 && bytes.len() as u64 > b - a + 1
             {
-                return Err(format!("{url}: {}", cache::NO_RANGES));
+                return Err(message_with_address(url, cache::NO_RANGES));
             }
             if whole_tail.is_some_and(|n| bytes.len() as u64 > n) {
-                return Err(format!("{url}: {}", cache::NO_RANGES));
+                return Err(message_with_address(url, cache::NO_RANGES));
             }
             Ok(bytes)
         }
         .await;
         logins::check(bound).map_err(str::to_string)?;
-        result.map_err(|error| if login.is_some() { logins::scrub(&format!("{url}: {error}")) } else { error })
+        result.map_err(|error| if login.is_some() { message_with_address(url, &logins::scrub(&error)) } else { error })
     }
     .await;
     diagnostics.record(answer.map_err(|e| Failure::new(url, e))).map_err(|failure| failure.message)
@@ -804,7 +804,7 @@ async fn post_json(url: &str, body: &str, capture: Capture) -> Result<Vec<u8>, S
         }
         .await;
         logins::check(url).map_err(str::to_string)?;
-        result.map_err(|error| if login.is_some() { logins::scrub(&format!("{url}: {error}")) } else { error })
+        result.map_err(|error| if login.is_some() { message_with_address(url, &logins::scrub(&error)) } else { error })
     }
     .await;
     diagnostics.record(answer.map_err(|e| Failure::new(url, e))).map_err(|failure| failure.message)
@@ -873,7 +873,7 @@ async fn head(url: &str, capture: Capture) -> Result<rustgis_ui_egui::rustgis_en
         }
         .await;
         logins::check(bound).map_err(str::to_string)?;
-        result.map_err(|error| if login.is_some() { logins::scrub(&format!("{url}: {error}")) } else { error })
+        result.map_err(|error| if login.is_some() { message_with_address(url, &logins::scrub(&error)) } else { error })
     }
     .await;
     diagnostics.record(answer.map_err(|e| Failure::new(url, e))).map_err(|failure| failure.message)
@@ -1142,7 +1142,7 @@ fn services(inbox: Inbox, font_inbox: Inbox, notes: Notes, ctx: egui::Context, e
             let (url, ctx) = (url.to_string(), fetch_ctx.clone());
             let capture = Capture::current();
             wasm_bindgen_futures::spawn_local(async move {
-                let r = fetch_bytes(&url, capture, &[]).await.map_err(|e| format!("{url}: {e}"));
+                let r = fetch_bytes(&url, capture, &[]).await.map_err(|e| message_with_address(&url, &e));
                 *slot.lock().unwrap_or_else(|e| e.into_inner()) = Some(r);
                 ctx.request_repaint();
             });

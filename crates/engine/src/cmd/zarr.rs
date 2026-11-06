@@ -113,7 +113,10 @@ fn fetch(root: &str, keys: &[String]) -> Result<(HashMap<String, Vec<u8>>, usize
                             let len = b.len() as u64;
                             if total.fetch_add(len, std::sync::atomic::Ordering::Relaxed).saturating_add(len) > zarr::MAX_READ {
                                 if let Ok(mut f) = failure.lock() {
-                                    f.get_or_insert(format!("{root}: more than {} GB to read: take a smaller part", zarr::MAX_READ >> 30));
+                                    f.get_or_insert(crate::sources::message_with_address(
+                                        root,
+                                        &format!("more than {} GB to read: take a smaller part", zarr::MAX_READ >> 30),
+                                    ));
                                 }
                                 break;
                             }
@@ -128,7 +131,7 @@ fn fetch(root: &str, keys: &[String]) -> Result<(HashMap<String, Vec<u8>>, usize
                         }
                         Err(e) => {
                             if let Ok(mut f) = failure.lock() {
-                                f.get_or_insert(format!("{root}/{k}: {e}"));
+                                f.get_or_insert(crate::sources::message_with_address(&format!("{root}/{k}"), &e));
                             }
                         }
                     }
@@ -150,10 +153,10 @@ fn store_at(url: &str) -> Result<zarr::Store, String> {
     let (got, forbidden) = fetch(url, &keys)?;
     // Every metadata file refused: access is denied, not a store without metadata.
     if got.is_empty() && forbidden > 0 {
-        return Err(format!("{url}: access denied (HTTP 403)"));
+        return Err(crate::sources::message_with_address(url, "access denied (HTTP 403)"));
     }
     let docs: Vec<(String, Vec<u8>)> = got.into_iter().collect();
-    zarr::parse_store(&docs).map_err(|e| format!("{url}: {e}"))
+    zarr::parse_store(&docs).map_err(|e| crate::sources::message_with_address(url, &e.to_string()))
 }
 
 fn info(_s: &mut Session, p: &Value) -> CmdResult {
@@ -257,13 +260,17 @@ pub(crate) fn add(s: &mut Session, p: &Value) -> CmdResult {
         Source::Url(u) => {
             let store = store_at(&u)?;
             pick_variable(&store, &mut sel)?;
-            let plan = zarr::plan(&store, &sel).map_err(|e| format!("{u}: {e}"))?;
+            let plan = zarr::plan(&store, &sel).map_err(|e| crate::sources::message_with_address(&u, &e.to_string()))?;
             let (chunks, forbidden) = fetch(&u, &plan.keys)?;
             if forbidden > 0 {
-                return Err(format!("{u}: access denied (HTTP 403) to {forbidden} of the slice's chunks"));
+                return Err(crate::sources::message_with_address(
+                    &u,
+                    &format!("access denied (HTTP 403) to {forbidden} of the slice's chunks"),
+                ));
             }
             let name = ps(p, "name").map(str::to_string).unwrap_or_else(|| layer_name(&u, &sel, &[]));
-            let mut r = zarr::assemble(&store, &plan, &chunks, &name, crs_parsed).map_err(|e| format!("{u}: {e}"))?;
+            let mut r = zarr::assemble(&store, &plan, &chunks, &name, crs_parsed)
+                .map_err(|e| crate::sources::message_with_address(&u, &e.to_string()))?;
             r.source = Some(u.clone());
             // Kept in the project as a GeoTIFF: a web store isn't fetched again when it opens.
             let tif = raster::geotiff::write(&r, 0).map_err(|e| e.to_string())?;
@@ -464,7 +471,9 @@ pub(crate) fn read_step(zt: &ZarrTime, i: usize, key: String) -> Result<std::syn
     if let Some(r) = kept_slice(&key) {
         return Ok(r);
     }
-    let r = std::sync::Arc::new(read_slice(zt, i)?.ok_or_else(|| format!("{}: step {i} has no data written", zt.store))?);
+    let r = std::sync::Arc::new(
+        read_slice(zt, i)?.ok_or_else(|| crate::sources::message_with_address(&zt.store, &format!("step {i} has no data written")))?,
+    );
     // Read now: a failure kept for it from before is stale.
     #[cfg(not(target_arch = "wasm32"))]
     {
@@ -504,7 +513,10 @@ pub(crate) fn read_slice(zt: &ZarrTime, i: usize) -> Result<Option<raster::Raste
         let (chunks, forbidden) = fetch(&zt.store, &plan.keys)?;
         // A chunk refused (HTTP 403) isn't one never written: it's said, not read as fill.
         if forbidden > 0 {
-            return Err(format!("{}: access denied (HTTP 403) to {forbidden} of the slice's chunks", zt.store));
+            return Err(crate::sources::message_with_address(
+                &zt.store,
+                &format!("access denied (HTTP 403) to {forbidden} of the slice's chunks"),
+            ));
         }
         let crs = crs.map(Crs::parse).transpose()?;
         zarr::assemble(&st, &plan, &chunks, &sel, crs)
@@ -1000,12 +1012,12 @@ fn store_files(root: &str, keys: &[String]) -> Result<HashMap<String, Vec<u8>>, 
             let (got, forbidden) = fetch(root, batch)?;
             // A file refused (HTTP 403) isn't one never written: said, not read as missing.
             if forbidden > 0 {
-                return Err(format!("{root}: access denied (HTTP 403) to {forbidden} of its files"));
+                return Err(crate::sources::message_with_address(root, &format!("access denied (HTTP 403) to {forbidden} of its files")));
             }
             for (k, b) in got {
                 total = total.saturating_add(b.len() as u64);
                 if total > zarr::MAX_READ {
-                    return Err(format!("{root}: the series is too large to read: take a shorter period"));
+                    return Err(crate::sources::message_with_address(root, "the series is too large to read: take a shorter period"));
                 }
                 out.insert(k, b);
             }

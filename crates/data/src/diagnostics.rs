@@ -622,6 +622,113 @@ fn base64_shaped(word: &str) -> bool {
     credential_shaped(word) || (word.chars().count() >= 8 && word.chars().skip(1).any(char::is_uppercase))
 }
 
+/// A slash before `@` can disguise userinfo as an authority and path.
+fn ambiguous_userinfo(address: &str) -> bool {
+    let Some((_, rest)) = address.split_once("://") else { return false };
+    let Some((authority, path)) = rest.split_once('/') else { return false };
+    let Some((before_at, _)) = path.split_once('@') else { return false };
+    !authority.contains('@') && !authority.starts_with('[') && (authority.contains(':') || before_at.contains(':'))
+}
+
+/// Sanitizes a known address on its own, before composing it with diagnostic prose.
+/// Unlike a raw URL with a secret query, this result can be redacted again without losing
+/// the reason that follows it. This does not establish a boundary for unknown URLs in prose.
+pub fn address_in_message(address: &str) -> String {
+    if address.len() > MAX_INPUT_BYTES {
+        return redact(address);
+    }
+    let address = match crate::s3_address::parse(address) {
+        Ok(Some(bound)) => bound.url,
+        Err(_) => return "[address omitted]".to_string(),
+        Ok(None) => address,
+    };
+    let address = match crate::login_address::parse(address) {
+        Ok(Some(bound)) => bound.url,
+        Err(_) => return "[address omitted]".to_string(),
+        Ok(None) => address,
+    };
+    if address.contains(crate::login_address::PREFIX) || address.contains(crate::s3_address::PREFIX) {
+        return "[address omitted]".to_string();
+    }
+    // A malformed userinfo value can contain a URL-token boundary before its `@`. The generic
+    // scanner cannot know those later words belong to the address; here the whole input does.
+    let before_query = address.split(['?', '#']).next().unwrap_or("");
+    if before_query.contains('@')
+        && before_query.chars().any(|c| c.is_whitespace() || hostile_control(c) || matches!(c, '"' | '\'' | '<' | '>' | '`'))
+    {
+        return "[address omitted]".to_string();
+    }
+    // Do not guess which interpretation of a slash-containing authority held a password.
+    if ambiguous_userinfo(before_query) {
+        return "[address omitted]".to_string();
+    }
+    let url = address.contains("://");
+    // Every remaining byte belongs to this known address, even if a value has unescaped
+    // whitespace and an unfamiliar signing name. None of that suffix is diagnostic prose.
+    let mut shown = redact(if url { before_query } else { address });
+    if url && shown.starts_with("[address omitted]") {
+        // A malformed authority is omitted whole, including words after its first token.
+        shown.truncate("[address omitted]".len());
+    }
+    if url && before_query.len() < address.len() {
+        shown.push_str("[query omitted]");
+    }
+    shown
+}
+
+/// Composes a known address and its failure reason without exposing credentials or swallowing
+/// the reason after a secret query. Exact address occurrences (including unescaped whitespace)
+/// are sanitized first; unrelated URLs and credential fields still use conservative [`redact`].
+pub fn message_with_address(address: &str, reason: &str) -> String {
+    if address.is_empty() {
+        return redact(reason);
+    }
+    if reason.len() > MAX_INPUT_BYTES {
+        return redact(reason);
+    }
+    let shown = address_in_message(address);
+    let mut safe_reason = String::with_capacity(reason.len());
+    let mut copied = 0;
+    // Lower-level transports may name the inner resource of a runtime binding instead.
+    let inner = crate::login_address::inner(crate::s3_address::inner(address));
+    let mut outer_matches = reason.match_indices(address).peekable();
+    let mut inner_matches = reason.match_indices(inner).filter(|_| inner != address).peekable();
+    loop {
+        let occurrence = match (outer_matches.peek(), inner_matches.peek()) {
+            (Some(outer), Some(inner)) if outer.0 <= inner.0 => outer_matches.next(),
+            (Some(_), Some(_)) | (None, Some(_)) => inner_matches.next(),
+            (Some(_), None) => outer_matches.next(),
+            (None, None) => break,
+        };
+        let Some((start, matched)) = occurrence else { break };
+        if start < copied {
+            continue;
+        }
+        let end = start + matched.len();
+        let before = reason.get(..start).and_then(|s| s.chars().next_back());
+        let after = reason.get(end..).unwrap_or("");
+        let begins = before.is_none_or(|c| c.is_whitespace() || matches!(c, '"' | '\'' | '<' | '(' | '[' | '{' | ':' | '=' | ',' | ';'));
+        let ends = after.chars().next().is_none_or(|c| {
+            c.is_whitespace()
+                || matches!(c, '"' | '\'' | '>' | ')' | ']' | '}')
+                || (matches!(c, ':' | ',' | ';' | '.')
+                    && after.get(c.len_utf8()..).is_some_and(|s| s.is_empty() || s.starts_with(char::is_whitespace)))
+        });
+        // A known address must not match the prefix of another address's longer secret.
+        if begins && ends {
+            safe_reason.push_str(reason.get(copied..start).unwrap_or(""));
+            safe_reason.push_str(&shown);
+            copied = end;
+        }
+    }
+    safe_reason.push_str(reason.get(copied..).unwrap_or(""));
+    let reason = safe_reason;
+    let named = reason
+        .strip_prefix(&shown)
+        .is_some_and(|tail| tail.is_empty() || tail.starts_with(':') || tail.chars().next().is_some_and(char::is_whitespace));
+    if named { redact(&reason) } else { redact(&format!("{shown}: {reason}")) }
+}
+
 /// Sanitizes before bounding. Oversized input is omitted *whole*, so a secret can never be
 /// retained because its identifying key lay beyond a clipped prefix. URL queries/fragments
 /// are all omitted, including unknown/encoded signing schemes. JSON/XML bodies are not logged.
@@ -630,6 +737,17 @@ fn base64_shaped(word: &str) -> bool {
 /// counts as a field is narrower in the middle of a line: `name: several words` there reads as
 /// prose and is kept (see `docs/privacy.md`).
 pub fn redact(text: &str) -> String {
+    redact_impl(text, true)
+}
+
+/// Sanitizes a replay parameter without treating innocent JSON/XML syntax or public URL
+/// queries as diagnostic payloads. Credential fields and secret query continuations still
+/// discard their remaining text; the same input and scanning bounds apply.
+pub fn redact_parameter(text: &str) -> String {
+    redact_impl(text, false)
+}
+
+fn redact_impl(text: &str, diagnostic: bool) -> String {
     if text.len() > MAX_INPUT_BYTES {
         return "[oversized diagnostic omitted]".to_string();
     }
@@ -657,8 +775,20 @@ pub fn redact(text: &str) -> String {
             continue;
         }
         if matches!(c, '{' | '[' | '<') && opens_structured(rest) {
-            out.push_str("[structured content omitted]");
-            break;
+            if diagnostic {
+                out.push_str("[structured content omitted]");
+                break;
+            }
+            // A parameter may legitimately be markup. A credential-bearing tag is not
+            // innocent syntax: its value can span words and lines, so omit the remainder.
+            if c == '<' {
+                let tag =
+                    rest.trim_start_matches(['<', '/']).split(|c: char| c.is_whitespace() || matches!(c, '>' | '/')).next().unwrap_or("");
+                if secret_name(tag.rsplit(':').next().unwrap_or(tag)) {
+                    out.push_str(REDACTED);
+                    break;
+                }
+            }
         }
         if matches!(c, '"' | '\'') {
             let quote = c;
@@ -700,6 +830,18 @@ pub fn redact(text: &str) -> String {
             if after.starts_with("://") {
                 let url_end = rest.find(|c: char| c.is_whitespace() || matches!(c, '"' | '\'' | '<' | '>' | '`')).unwrap_or(rest.len());
                 let address = rest.get(..url_end).unwrap_or("");
+                if !diagnostic && ambiguous_userinfo(address.split(['?', '#']).next().unwrap_or("")) {
+                    out.push_str("[address omitted]");
+                    break;
+                }
+                let query = address.split_once(['?', '#']).map_or("", |(_, q)| q);
+                let names = || query.split(['&', ';', '#']).map(|pair| pair.split('=').next().unwrap_or(""));
+                let has_name = |name: &str| {
+                    names().any(|key| {
+                        key.eq_ignore_ascii_case(name) || (key.contains(['%', '\\']) && decoded_name(key).eq_ignore_ascii_case(name))
+                    })
+                };
+                let secret = names().any(secret_name) || (!diagnostic && has_name("code") && has_name("state"));
                 match url::Url::parse(address) {
                     // Nothing to take out: the address stays as written, its punctuation too
                     // ("https://example.org: timeout"), unless it holds control characters.
@@ -707,7 +849,7 @@ pub fn redact(text: &str) -> String {
                         if url.has_host()
                             && url.username().is_empty()
                             && url.password().is_none()
-                            && url.query().is_none()
+                            && (url.query().is_none() || (!diagnostic && !secret))
                             && url.fragment().is_none()
                             && !address.chars().any(hostile_control) =>
                     {
@@ -728,7 +870,9 @@ pub fn redact(text: &str) -> String {
                         }
                         let _ = url.set_username("");
                         let _ = url.set_password(None);
-                        url.set_query(None);
+                        if diagnostic || secret {
+                            url.set_query(None);
+                        }
                         url.set_fragment(None);
                         out.push_str(&path_secrets_redacted(url.as_str()));
                         out.extend(kept);
@@ -737,13 +881,11 @@ pub fn redact(text: &str) -> String {
                 }
                 i += url_end;
                 field_before = false;
-                if address.contains(['?', '#']) {
+                if address.contains(['?', '#']) && (diagnostic || secret || address.contains('#')) {
                     // Its query or fragment is gone, and that is said. When a pair in it named a
                     // secret, an unescaped value may run on past whitespace: the rest of the text
                     // goes too, said. Otherwise the rest keeps going through the field rules, so a
                     // failure's reason after the address isn't lost.
-                    let query = address.split_once(['?', '#']).map_or("", |(_, q)| q);
-                    let secret = query.split(['&', ';', '#']).any(|pair| secret_name(pair.split('=').next().unwrap_or("")));
                     if secret {
                         out.push_str("[query and the rest omitted]");
                         break;
@@ -954,6 +1096,127 @@ mod tests {
     }
 
     #[test]
+    fn replay_parameters_keep_public_structure_but_not_credentials() {
+        for public in ["<div> https://example.org?format=plain </div>", r#"{"label":"public","link":"https://example.org?format=json"}"#] {
+            assert_eq!(redact_parameter(public), public);
+            assert_eq!(redact(public), "[structured content omitted]");
+        }
+        for private in [
+            "<Password>hidden hidden-tail</Password> https://example.org",
+            "<x:Password>hidden hidden-tail</x:Password> https://example.org",
+            r#"{"password":"hidden hidden-tail","link":"https://example.org"}"#,
+            "GET https://example.org?%2574oken=hidden hidden-tail",
+            "GET https://example.org?code=hidden&state=hidden hidden-tail",
+            "GET https://example.org?%2563ode=hidden&%2573tate=hidden hidden-tail",
+            "GET https://alice:hidden@example.org?format=json",
+            "GET https://u:123/w@host/x",
+            "GET https://alice/part:123@host/x",
+        ] {
+            let clean = redact_parameter(private);
+            assert!(!clean.contains("hidden") && !clean.contains("alice") && !clean.contains("123"), "{private} -> {clean}");
+        }
+    }
+
+    #[test]
+    fn known_addresses_preserve_reasons_through_repeated_redaction() {
+        for address in [
+            "https://example.org/data?token=hidden",
+            "https://example.org/data?sig=hidden#hidden",
+            "https://example.org/data?%256bey=hidden",
+            "https://example.org/data#%2574oken=hidden",
+            "https://alice:hidden@example.org/data?key=hidden",
+            "https://example.org/data?token=hidden unescaped hidden",
+            "https://example.org/data#sig=hidden unescaped hidden",
+            "https://example.org/data?custom=hidden unescaped hidden",
+            "https://example.org/data#hidden unescaped hidden",
+        ] {
+            let clean = message_with_address(address, "HTTP 503 Service Unavailable");
+            assert!(clean.contains("HTTP 503 Service Unavailable"), "{address} -> {clean}");
+            assert!(!clean.contains("hidden") && !clean.contains("alice"), "{address} -> {clean}");
+            assert_eq!(redact(&clean), clean);
+            assert_eq!(redact(&redact(&clean)), clean);
+            assert_eq!(message_with_address(address, &format!("{address}: HTTP 503 Service Unavailable")), clean);
+            assert_eq!(message_with_address(address, &clean), clean);
+        }
+    }
+
+    #[test]
+    fn every_known_address_occurrence_is_sanitized_before_the_reason() {
+        let address = "https://alice:hidden@example.org/data?%74oken=hidden unescaped hidden";
+        let reason = format!("HTTP 404 fetching {address}; retry of {address} failed");
+        let clean = message_with_address(address, &reason);
+        assert!(clean.contains("HTTP 404 fetching") && clean.contains("; retry of") && clean.ends_with(" failed"), "{clean}");
+        assert_eq!(clean.matches("https://example.org/data").count(), 3);
+        assert!(!clean.contains("hidden") && !clean.contains("alice"), "{clean}");
+        assert_eq!(redact(&clean), clean);
+        let history = History::default();
+        history.push(Severity::Error, "Network", &clean, &clean);
+        assert!(history.report(Filter::All).contains("HTTP 404 fetching"));
+        assert!(!history.report(Filter::All).contains("hidden"));
+    }
+
+    #[test]
+    fn known_address_helpers_do_not_relax_unknown_credentials() {
+        let raw = "https://example.org/data?token=hidden unescaped hidden: HTTP 503";
+        assert_eq!(redact(raw), "https://example.org/data[query and the rest omitted]");
+        let clean = message_with_address("https://known.example.org/data?key=hidden", raw);
+        assert!(!clean.contains("hidden") && !clean.contains("HTTP 503"), "{clean}");
+        let clean = message_with_address("https://known.example.org/data?key=hidden", "HTTP 503; Password=hidden more hidden");
+        assert!(clean.contains("HTTP 503") && !clean.contains("hidden"), "{clean}");
+        assert_eq!(message_with_address("", raw), redact(raw));
+        assert_eq!(message_with_address("/data/a", &"x".repeat(MAX_INPUT_BYTES + 1)), "[oversized diagnostic omitted]");
+    }
+
+    #[test]
+    fn known_address_prefixes_do_not_expose_extended_credentials() {
+        for address in ["https://example.org/data?token=abc", "https://example.org/data#sig=abc"] {
+            for suffix in ["XYZhidden", "&other=hidden", "#hidden", "%20hidden", "/hidden", ":hidden"] {
+                let reason = format!("{address}{suffix}: HTTP 503");
+                let clean = message_with_address(address, &reason);
+                assert!(!clean.contains("hidden") && !clean.contains("XYZ"), "{reason} -> {clean}");
+                assert!(!clean.contains("HTTP 503"), "{reason} -> {clean}");
+            }
+        }
+    }
+
+    #[test]
+    fn known_malformed_userinfo_never_leaks_its_remaining_words() {
+        for address in [
+            "https://alice:hidden more-hidden@example.org/data",
+            "https://alice:hidden\tmore-hidden@example.org/data",
+            "https://alice:hidden\"more-hidden@example.org/data",
+            "https://alice:hidden<more-hidden@example.org/data",
+            "alice:hidden more-hidden@example.org",
+            "https://alice:hidden@/data",
+            "https://alice:hidden more-hidden",
+            "https://u:123/w@host/x",
+            "https://u:123/w@host/x?token=hidden",
+            "https://alice:hidden/path@host/x",
+            "https://alice/part:123@host/x",
+        ] {
+            let shown = address_in_message(address);
+            let clean = message_with_address(address, &format!("{address}: HTTP 401"));
+            assert!(!shown.contains("hidden") && !shown.contains("alice"), "{address} -> {shown}");
+            assert!(!clean.contains("hidden") && !clean.contains("alice"), "{address} -> {clean}");
+            assert!(!shown.contains("123") && !clean.contains("123"), "{address} -> {clean}");
+            assert!(clean.ends_with(": HTTP 401"), "{clean}");
+            assert_eq!(redact(&clean), clean);
+        }
+    }
+
+    #[test]
+    fn unambiguous_ports_and_path_at_signs_keep_address_context() {
+        for address in
+            ["https://host:123/data", "https://host/data@edition", "https://host/data@edition:123", "https://[::1]:8080/data@edition"]
+        {
+            assert_eq!(address_in_message(address), address);
+            assert_eq!(message_with_address(address, "HTTP 503"), format!("{address}: HTTP 503"));
+        }
+        let clean = message_with_address("https://alice:123%2Fw@host/x", "HTTP 503");
+        assert!(clean.contains("HTTP 503") && !clean.contains("alice") && !clean.contains("123"), "{clean}");
+    }
+
+    #[test]
     fn credential_words_in_file_paths_preserve_failure_context() {
         let path = "../token-cache/secret.png";
         let clean = redact(&format!("{path}: open failed"));
@@ -963,6 +1226,21 @@ mod tests {
         assert_eq!(redact(windows), windows);
         assert_eq!(redact(r"Loaded 50% of tiles"), "Loaded 50% of tiles");
         assert_eq!(redact(r"Progress 12% complete"), "Progress 12% complete");
+    }
+
+    #[test]
+    fn known_runtime_bindings_sanitize_outer_and_inner_address_occurrences() {
+        let inner = "https://example.org/data?token=hidden";
+        let login = crate::login_address::bind("0123456789abcdef", "https://example.org", inner).unwrap();
+        let s3 = crate::s3_address::bind("0123456789abcdef", "", inner).unwrap();
+        for address in [&login, &s3] {
+            let clean = message_with_address(address, &format!("HTTP 503 for {inner}; retrying {address} failed"));
+            assert!(clean.contains("HTTP 503") && clean.contains("; retrying") && clean.ends_with(" failed"), "{clean}");
+            for private in ["hidden", "0123456789abcdef", crate::login_address::PREFIX, crate::s3_address::PREFIX] {
+                assert!(!clean.contains(private), "{private} in {clean}");
+            }
+            assert_eq!(redact(&clean), clean);
+        }
     }
 
     #[test]

@@ -365,13 +365,14 @@ pub fn is_s3(url: &str) -> bool {
 
 /// The bucket and key of an `s3://bucket/key` address.
 pub fn parse(url: &str) -> Result<(String, String), String> {
-    let rest = url.get(5..).filter(|_| is_s3(url)).ok_or_else(|| format!("{url}: not an s3:// address"))?;
+    let rest =
+        url.get(5..).filter(|_| is_s3(url)).ok_or_else(|| rustgis_data::diagnostics::message_with_address(url, "not an s3:// address"))?;
     let (bucket, key) = rest.split_once('/').unwrap_or((rest, ""));
     if !valid_bucket(bucket) {
-        return Err(format!("{url}: '{bucket}' isn't a bucket name"));
+        return Err(rustgis_data::diagnostics::message_with_address(url, &format!("'{bucket}' isn't a bucket name")));
     }
     if key.len() > 1024 || key.chars().any(char::is_control) {
-        return Err(format!("{url}: the key isn't one S3 takes"));
+        return Err(rustgis_data::diagnostics::message_with_address(url, "the key isn't one S3 takes"));
     }
     Ok((bucket.to_string(), key.to_string()))
 }
@@ -626,7 +627,7 @@ pub fn prepare(url: &str) -> Result<Prepared, String> {
 
 /// A web address with its path in S3's canonical form: each part decoded, then encoded.
 fn canonical_url(url: &str) -> Result<String, String> {
-    let (scheme, rest) = url.split_once("://").ok_or_else(|| format!("{url}: not a web address"))?;
+    let (scheme, rest) = url.split_once("://").ok_or_else(|| rustgis_data::diagnostics::message_with_address(url, "not a web address"))?;
     let rest = rest.split('#').next().unwrap_or(rest);
     let end = rest.find(['/', '?']).unwrap_or(rest.len());
     let (authority, path_query) = rest.split_at(end);
@@ -776,7 +777,8 @@ fn sign_get(url: &str, region: &str, cr: &Credentials, date: &str) -> Result<Vec
 
 /// A web address's host (with its port), path and query.
 fn split_url(url: &str) -> Result<(String, String, String), String> {
-    let rest = url.split_once("://").map(|(_, r)| r).ok_or_else(|| format!("{url}: not a web address"))?;
+    let rest =
+        url.split_once("://").map(|(_, r)| r).ok_or_else(|| rustgis_data::diagnostics::message_with_address(url, "not a web address"))?;
     let rest = rest.split('#').next().unwrap_or(rest);
     let (authority, path_query) = match rest.find('/') {
         Some(i) => (rest.get(..i).unwrap_or(""), rest.get(i..).unwrap_or("/")),
