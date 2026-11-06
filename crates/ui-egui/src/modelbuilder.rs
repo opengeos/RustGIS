@@ -429,9 +429,13 @@ fn landed(app: &mut RustGisApp, landed: crate::Landed) {
     if project != app.session.project_starts {
         return;
     }
+    let same = graph == app.mb.graph;
+    // Another graph's run, with a run of the canvas still to land: that one's Running… stays.
+    if !same && !app.mb.running.is_empty() {
+        return;
+    }
     app.mb.status.clear();
     app.mb.log.clear();
-    let same = graph == app.mb.graph;
     let res = match landed {
         crate::Landed::Ran(res) => res,
         crate::Landed::NotRun(why) => {
@@ -1975,6 +1979,13 @@ mod tests {
         app.mb.running.push_back((app.session.project_starts, app.mb.graph.clone()));
         app.mb.log("Running…", LogKind::Info);
         landed(&mut app, crate::Landed::NotRun("another project was opened".into()));
+        assert_eq!(app.mb.log, vec![("Running…".to_string(), LogKind::Info)]);
+        assert_eq!(app.mb.running.len(), 1);
+        // Another model's run landing first, in this project, leaves it too.
+        let mut other = app.mb.graph.clone();
+        other.nodes.push(Default::default());
+        app.mb.running.push_front((app.session.project_starts, other));
+        landed(&mut app, crate::Landed::NotRun("cancelled".into()));
         assert_eq!(app.mb.log, vec![("Running…".to_string(), LogKind::Info)]);
         assert_eq!(app.mb.running.len(), 1);
     }
