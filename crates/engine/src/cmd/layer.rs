@@ -3567,10 +3567,7 @@ pub(crate) fn add_cog(s: &mut Session, p: &Value, url: &str, probed: bool) -> Cm
         crate::render::rustgis_tiles::cog::info(&url)
     };
     #[cfg(target_arch = "wasm32")]
-    let info = {
-        let _ = probed;
-        crate::render::rustgis_tiles::cog::info(&url)
-    };
+    let info = crate::render::rustgis_tiles::cog::info(&url);
     if let Ok(Some(info)) = info {
         let [w, so, e, n] = info.bounds;
         // A cloud-optimised GeoTIFF read in place is framed when it is the first content on the
@@ -3599,8 +3596,8 @@ pub(crate) fn add_cog(s: &mut Session, p: &Value, url: &str, probed: bool) -> Cm
         for line in said {
             s.notify(format!("{shown}: {line}"), false);
         }
-    } else if r.get("dated").is_some() {
-        // Added, but its first date's file couldn't be read: the view stays where it was.
+    } else if probed || r.get("dated").is_some() {
+        // Added, but its (first date's) file couldn't be read: the view stays where it was.
         r["warning"] = json!(format!("{url} couldn't be read yet, so the map wasn't moved to it"));
     }
     r["inPlace"] = json!(true);
