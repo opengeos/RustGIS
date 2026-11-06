@@ -4160,6 +4160,9 @@ fn a_removed_layers_locked_labels_go_with_it() {
     assert_eq!(locked_layers(&s), (vec![a, b], vec![a, b]));
     s.run("edit.redo", &Value::Null).unwrap();
     assert_eq!(locked_layers(&s), (vec![b], vec![b]));
+    // The last locked layer gone, the lock holds, with nothing in it.
+    s.run("layer.remove", &json!({"layer": b})).unwrap();
+    assert!(s.map().label_lock.as_ref().is_some_and(Vec::is_empty));
 }
 
 /// A deleted feature's lock entry and line anchor go with it, not those of another layer's feature
@@ -4174,6 +4177,36 @@ fn a_deleted_feature_leaves_another_layers_lock_alone() {
     assert_eq!(locked_layers(&s), (vec![a, b], vec![a, b]));
     s.run("edit.redo", &Value::Null).unwrap();
     assert_eq!(locked_layers(&s), (vec![b], vec![b]));
+}
+
+/// Deleting one of a layer's locked features keeps the lock entry and line anchor of the other.
+#[test]
+fn a_deleted_feature_leaves_its_neighbours_lock_alone() {
+    use rustgis_data::{Dataset, Field, FieldType, Geometry, GeometryType, Value as V};
+    let mut s = Session::new(Project::default());
+    let mut d = Dataset::new("A", GeometryType::Point, vec![Field::new("name", FieldType::Text)]);
+    for name in ["one", "two"] {
+        d.push(Some(Geometry::Point(rustgis_geom::Coord::new(0.0, 0.0))), vec![V::Text(name.into())]);
+    }
+    let a = s.map_mut().add_dataset(d);
+    let keys = [(a, 1, 0, 0), (a, 2, 0, 0)];
+    s.map_mut().label_lock = Some(keys.map(|k| (k, Default::default())).to_vec());
+    s.map_mut().label_lock_line_anchors = keys.map(|k| (k, Default::default())).into_iter().collect();
+    // The feature ids the lock and the anchors name, each sorted.
+    let ids = |s: &Session| {
+        let mut lock: Vec<u64> = s.map().label_lock.iter().flatten().map(|((_, f, ..), _)| *f).collect();
+        let mut anchors: Vec<u64> = s.map().label_lock_line_anchors.keys().map(|(_, f, ..)| *f).collect();
+        lock.sort_unstable();
+        anchors.sort_unstable();
+        (lock, anchors)
+    };
+    s.map_mut().layer_mut(a).unwrap().selection = vec![0];
+    s.run("edit.delete", &Value::Null).unwrap();
+    assert_eq!(ids(&s), (vec![2], vec![2]));
+    s.run("edit.undo", &Value::Null).unwrap();
+    assert_eq!(ids(&s), (vec![1, 2], vec![1, 2]));
+    s.run("edit.redo", &Value::Null).unwrap();
+    assert_eq!(ids(&s), (vec![2], vec![2]));
 }
 
 /// A streamed layer holds only the window in view: a lock's entry for a feature outside it stays
