@@ -1590,9 +1590,10 @@ fn script_ran(app: &mut RustGisApp, landed: crate::Landed) {
             .unwrap_or_default(),
         crate::Landed::Ran(Err(e)) | crate::Landed::NotRun(e) => vec![(e, true)],
     };
-    // Another still to land: the results say so below this one's.
+    // Another still to land: the results say so first, above this one's, where their scroll
+    // starts, however many lines it ran.
     if !app.workflow.script_started.is_empty() {
-        app.workflow.script_out.push((tl!("Running…").to_string(), false));
+        app.workflow.script_out.insert(0, (tl!("Running…").to_string(), false));
     }
     app.map.invalidate();
 }
@@ -1761,10 +1762,13 @@ mod tests {
         let mut app = RustGisApp::with_sample();
         let asked = web_time::Instant::now() - std::time::Duration::from_secs(10);
         app.workflow.script_started.extend([(1_000, asked), (1_000, asked)]);
-        script_ran(&mut app, crate::Landed::Ran(Ok(json!({"ran": []}))));
+        let ran: Vec<Value> = (1..=8).map(|n| json!({"line": n, "command": "select.all", "result": null})).collect();
+        script_ran(&mut app, crate::Landed::Ran(Ok(json!({"ran": ran}))));
         let first = app.workflow.script_last.as_ref().map(|r| (r.secs, r.at)).unwrap();
         assert!(first.0 >= 10.0 && first.1 == 1_000, "{first:?}");
-        assert_eq!(app.workflow.script_out, vec![("Running…".to_string(), false)]);
+        // First, where the results' scroll starts, above its eight lines.
+        assert_eq!(app.workflow.script_out.len(), 9);
+        assert_eq!(app.workflow.script_out[0], ("Running…".to_string(), false));
         script_ran(&mut app, crate::Landed::NotRun("cancelled".into()));
         let second = app.workflow.script_last.as_ref().map(|r| (r.secs, r.at)).unwrap();
         assert!(second.0 < 5.0 && second.1 >= 1_010, "{second:?}");
