@@ -377,6 +377,7 @@ impl Layer {
         self.labels.default.moved.clear();
         self.labels.classes.iter_mut().for_each(|class| class.moved.clear());
         if let Some(info) = src.info() {
+            self.dataset.geometry_type = info.geometry_type;
             self.dataset.fields = info.fields.clone();
             self.dataset.crs = info.coordinate_system();
             // The new source's Z and M, which reading it drops (see `Dataset::zm_dropped`).

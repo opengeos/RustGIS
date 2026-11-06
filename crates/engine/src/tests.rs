@@ -9445,7 +9445,7 @@ fn geopackage_plugin_writes_are_user_only_and_reload_needs_files() {
     use crate::cmd::plugins::{Reach, reaches};
     let mut s = world();
     plugin("eng-gpkg-edit", &["edit"]);
-    for id in ["gpkg.addLayer", "gpkg.discardEdits"] {
+    for id in ["gpkg.addLayer", "gpkg.discardEdits", "layer.reloadData"] {
         let spec = s.registry.get(id).copied().unwrap();
         assert_eq!(reaches(&spec, &json!({})), Some(Reach::Files));
         let e = forward(&mut s, "eng-gpkg-edit", id, json!({})).unwrap_err();
@@ -10923,6 +10923,11 @@ fn duckdb_queries_and_databases() {
     let r = s.run("layer.addSql", &json!({"sql": query, "name": "Trip"})).unwrap();
     let names: Vec<String> = s.map().layers.iter().map(|l| l.name.clone()).collect();
     assert_eq!(names, vec!["Trip (points)", "Trip (lines)"], "{r}");
+    let point = s.map().layer_by_name("Trip (points)").unwrap();
+    assert_eq!(point.dataset.features[0].geometry, Some(rustgis_data::Geometry::Point(rustgis_data::Coord::new(7.0, 45.0))));
+    let line = s.map().layer_by_name("Trip (lines)").unwrap();
+    assert_eq!(line.dataset.geometry_type, rustgis_data::GeometryType::Polyline);
+    assert_eq!(line.dataset.features[0].geometry.as_ref().unwrap().extent().center(), rustgis_data::Coord::new(7.5, 45.5));
     // Streamed, a layer remembers its query; a project never runs it again when the result is gone
     // (a project file is hostile input), and says how to.
     let r = s
@@ -14688,6 +14693,14 @@ fn rounded_raster_values_are_said_on_import_and_export() {
         assert_eq!(said(&s, mark, "3 values in it were rounded to 32-bit floats"), rounded, "{:?}", s.notices_since(mark));
         // The exported file holds the values as they were held: 16777217 is 16777216.
         assert_eq!(rustgis_data::raster::read_path(&out).unwrap().value(0, 0, 0), Some(16_777_216.0));
+        // A fresh candidate discloses the new file's losses, not the previous pixels' report.
+        let values = if rounded { "9 2\n3 4" } else { "16777217 100000001\n1234567.891 7" };
+        std::fs::write(&path, format!("ncols 2\nnrows 2\nxllcorner 10\nyllcorner 40\ncellsize 1\n{values}")).unwrap();
+        let mark = s.notice_mark();
+        s.run("layer.reloadData", &json!({"layer": id})).unwrap();
+        assert_eq!(said(&s, mark, "3 values were rounded as the file was read"), !rounded, "{:?}", s.notices_since(mark));
+        let pixel = s.map().layer(id as u32).unwrap().raster.as_ref().unwrap().data.as_ref().unwrap().value(0, 0, 0);
+        assert_eq!(pixel, Some(if rounded { 9.0 } else { 16_777_216.0 }));
     }
     std::fs::remove_dir_all(dir).unwrap();
 }
@@ -17338,6 +17351,46 @@ fn a_zarr_variable_follows_the_time_slider() {
     let _ = std::fs::remove_dir_all(dir3);
     let _ = std::fs::remove_dir_all(dir2);
     let _ = std::fs::remove_dir_all(dir);
+}
+
+/// Manual reload reads changed chunks even when folder metadata is unchanged, and later time
+/// steps cannot revive a cached pre-reload slice.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn manual_zarr_reload_reads_fresh_chunks_and_keeps_the_time_variable() {
+    let _cache = zarr_cache_lock();
+    let (dir, path) = zarr_store_over_time("manual-reload");
+    let mut s = Session::new(Project::default());
+    let id = s.run("layer.addZarr", &json!({"path": path, "variable": "t", "time": true})).unwrap()["layer"].as_u64().unwrap() as u32;
+    let snapshot =
+        s.run("layer.addZarr", &json!({"path": path, "variable": "t[time=0]", "name": "Slice"})).unwrap()["layer"].as_u64().unwrap() as u32;
+    let first = |s: &Session, id| s.map().layer(id).unwrap().raster.as_ref().unwrap().data.as_ref().unwrap().bands[0].data[0];
+    assert_eq!(first(&s, id), 8.0);
+    s.run("time.goTo", &json!({"step": 1})).unwrap();
+    assert_eq!(first(&s, id), 108.0);
+    s.run("time.goTo", &json!({"step": 0})).unwrap();
+    let style = serde_json::to_value(&s.map().layer(id).unwrap().raster.as_ref().unwrap().style).unwrap();
+    for step in 0..3 {
+        let chunk: Vec<u8> = std::iter::repeat_n(500.0f32 + step as f32, 12).flat_map(|v| v.to_le_bytes()).collect();
+        std::fs::write(std::path::Path::new(&path).join(format!("t/{step}.0.0")), chunk).unwrap();
+    }
+    s.run("layer.reloadData", &json!({"layer": id})).unwrap();
+    assert_eq!(first(&s, id), 500.0);
+    assert_eq!(first(&s, snapshot), 8.0, "each target reloads independently");
+    let summary = s.run("zarr.reduce", &json!({"layer": id, "stat": "mean"})).unwrap()["layer"].as_u64().unwrap() as u32;
+    assert_eq!(first(&s, summary), 501.0, "summaries must not reuse pre-reload slices");
+    s.run("layer.reloadData", &json!({"layer": snapshot})).unwrap();
+    assert_eq!(first(&s, snapshot), 500.0);
+    s.run("time.goTo", &json!({"step": 1})).unwrap();
+    assert_eq!(first(&s, id), 501.0);
+    let rl = s.map().layer(id).unwrap().raster.as_ref().unwrap();
+    assert_eq!(rl.time_zarr.as_ref().unwrap().variable, "t");
+    assert_eq!(serde_json::to_value(&rl.style).unwrap(), style);
+    let old = rl.data.clone().unwrap();
+    std::fs::write(std::path::Path::new(&path).join("t/1.0.0"), b"truncated").unwrap();
+    assert!(s.run("layer.reloadData", &json!({"layer": id})).is_err());
+    assert!(std::sync::Arc::ptr_eq(&old, s.map().layer(id).unwrap().raster.as_ref().unwrap().data.as_ref().unwrap()));
+    std::fs::remove_dir_all(dir).unwrap();
 }
 
 /// Step `k`'s cells of [`zarr_store_at`]'s variable (`100 k + cell`), as its chunk file holds them.

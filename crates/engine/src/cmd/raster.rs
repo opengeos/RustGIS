@@ -354,22 +354,12 @@ pub(crate) fn add_raster_after(s: &mut Session, name: &str, mut layer: RasterLay
         unique = format!("{name} ({i})");
     }
     let (w, h, n, overview) = layer.data.as_ref().map(|d| (d.width, d.height, d.band_count(), d.overview)).unwrap_or_default();
-    // What reading it left out (a colour table, names), said once the layer has its name.
-    let lost = layer.data.as_ref().map(|d| d.lost.clone()).unwrap_or_default();
-    let rounded = layer.data.as_deref().and_then(rounded_count);
+    if let Some(data) = layer.data.as_deref() {
+        read_notices(s, &unique, data);
+    }
     let empty_before = super::map_is_empty(s);
     let id = s.map_mut().add_raster(unique.clone(), layer);
     s.active_layer = Some(id);
-    if let Some((fw, fh)) = overview {
-        s.notify(format!("{unique}: showing a {w} × {h} overview of the {fw} × {fh} raster"), false);
-    }
-    for l in lost {
-        s.notify(format!("{unique}: {l}"), false);
-    }
-    if let Some(count) = rounded {
-        let held = "pixels are held as 32-bit floats, exact for whole numbers up to 16,777,216 and to about 7 significant digits";
-        s.notify(format!("{unique}: {count} rounded as the file was read: {held}, so an export writes the rounded values"), false);
-    }
     if zoom.unwrap_or(empty_before)
         && let Some(e) = s.map().layer(id).map(|l| l.extent())
     {
@@ -388,6 +378,20 @@ pub(crate) fn add_raster_after(s: &mut Session, name: &str, mut layer: RasterLay
         o.insert("overviewOf".into(), json!([fw, fh]));
     }
     Ok(v)
+}
+
+/// Loader approximations must also be disclosed when replacing an existing layer.
+pub(super) fn read_notices(s: &mut Session, name: &str, r: &Raster) {
+    if let Some((fw, fh)) = r.overview {
+        s.notify(format!("{name}: showing a {} × {} overview of the {fw} × {fh} raster", r.width, r.height), false);
+    }
+    for lost in &r.lost {
+        s.notify(format!("{name}: {lost}"), false);
+    }
+    if let Some(count) = rounded_count(r) {
+        let held = "pixels are held as 32-bit floats, exact for whole numbers up to 16,777,216 and to about 7 significant digits";
+        s.notify(format!("{name}: {count} rounded as the file was read: {held}, so an export writes the rounded values"), false);
+    }
 }
 
 /// How many of a raster's values changed when read as 32-bit floats, as notices say it: "3 values

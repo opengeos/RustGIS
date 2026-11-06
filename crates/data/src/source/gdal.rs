@@ -78,6 +78,7 @@ struct LayerInfo {
     count: Option<i64>,
     /// Whether the layer says its coordinate system.
     has_srs: bool,
+    has_zm: bool,
 }
 
 /// The vector layers of a dataset, from `ogrinfo -json`.
@@ -98,9 +99,11 @@ fn list(src: &Path) -> Result<Vec<LayerInfo>> {
         .filter_map(|l| {
             let name = l.get("name")?.as_str()?.to_string();
             let geom = l.get("geometryFields").and_then(|g| g.as_array()).and_then(|g| g.first())?;
-            let family = Family::of_ogr_type(geom.get("type").and_then(|t| t.as_str()).unwrap_or("Geometry"));
+            let geometry = geom.get("type").and_then(|t| t.as_str()).unwrap_or("Geometry");
+            let family = Family::of_ogr_type(geometry);
+            let has_zm = geometry.ends_with(['Z', 'M']) || geometry.starts_with("3D ");
             let has_srs = geom.get("coordinateSystem").is_some_and(|c| !c.is_null());
-            Some(LayerInfo { name, family, count: l.get("featureCount").and_then(|c| c.as_i64()), has_srs })
+            Some(LayerInfo { name, family, count: l.get("featureCount").and_then(|c| c.as_i64()), has_srs, has_zm })
         })
         .take(MAX_LAYERS)
         .collect())
@@ -149,10 +152,10 @@ fn convert_in(dir: &Path, src: &Path, layer: Option<&str>, crs: Option<&str>) ->
         let mut errors = Vec::new();
         let families: Vec<Option<Family>> = if l.family.is_some() { vec![None] } else { Family::ALL.iter().copied().map(Some).collect() };
         for family in families {
-            match convert_one_in(dir, src, &l.name, family, l.family, crs, l.has_srs) {
-                Ok(Some((path, unprojected))) => out.push(Converted {
-                    path,
-                    unprojected,
+            match convert_one_in(dir, src, &l.name, ConversionRequest { family, kind: l.family, crs, has_srs: l.has_srs, fresh: false }) {
+                Ok(Some(converted)) => out.push(Converted {
+                    path: converted.path,
+                    unprojected: converted.unprojected,
                     name: match family {
                         Some(f) => format!("{} ({})", l.name, f.label()),
                         None => l.name.clone(),
@@ -193,7 +196,68 @@ pub fn convert_one(src: &Path, layer: &str, family: Option<Family>, crs: Option<
     let has_srs = info.is_none_or(|l| l.has_srs);
     let kind = info.and_then(|l| l.family);
     let layer = info.map_or(layer, |l| l.name.as_str());
-    Ok(convert_one_in(&dir, src, layer, family, kind, crs, has_srs)?.map(|(p, _)| p))
+    Ok(convert_one_in(&dir, src, layer, ConversionRequest { family, kind, crs, has_srs, fresh: false })?.map(|c| c.path))
+}
+
+/// A freshly converted candidate and diagnostics from reading its original source.
+#[derive(Debug)]
+pub struct FreshConverted {
+    pub path: PathBuf,
+    pub notes: Vec<String>,
+    /// A successful read confirmed that this declared layer contains no features.
+    pub empty: bool,
+    pub zm_dropped: bool,
+}
+
+#[derive(Debug)]
+struct Conversion {
+    path: PathBuf,
+    unprojected: bool,
+    notes: Vec<String>,
+    empty: bool,
+}
+
+/// Converts only the selected layer afresh, without reusing or replacing a retained conversion.
+/// A declared empty layer is valid; a missing layer or incompatible declared family is not.
+/// Successful GDAL diagnostics are returned too, including features skipped by the driver.
+pub fn convert_one_fresh(src: &Path, layer: &str, family: Option<Family>, crs: Option<&str>) -> Result<FreshConverted> {
+    let dir = cache_dir().ok_or_else(|| DataError::Format("no cache folder for GDAL conversions".into()))?;
+    convert_one_fresh_in(&dir, src, layer, family, crs)
+}
+
+fn convert_one_fresh_in(dir: &Path, src: &Path, layer: &str, family: Option<Family>, crs: Option<&str>) -> Result<FreshConverted> {
+    let all = list(src)?;
+    let info = all
+        .iter()
+        .find(|l| l.name == layer)
+        .or_else(|| all.iter().find(|l| l.name.eq_ignore_ascii_case(layer)))
+        .ok_or_else(|| DataError::Format(format!("no layer '{layer}'")))?;
+    if let (Some(wanted), Some(actual)) = (family, info.family)
+        && wanted != actual
+    {
+        return Err(DataError::Format(format!("layer '{layer}' declares {}, not {}", actual.label(), wanted.label())));
+    }
+    let mut converted =
+        convert_one_in(dir, src, &info.name, ConversionRequest { family, kind: info.family, crs, has_srs: info.has_srs, fresh: true })?
+            .ok_or_else(|| DataError::Format(format!("layer '{layer}' has no compatible declared geometry")))?;
+    if converted.unprojected {
+        converted.notes.push(format!("GDAL: '{layer}' has no declared coordinate system; its coordinates were left unprojected"));
+    }
+    if info.has_zm && !converted.empty {
+        let count = info.count.filter(|n| *n >= 0).map_or_else(|| "an unknown number of".into(), |n| n.to_string());
+        converted.notes.push(format!(
+            "GDAL: '{layer}' declares Z or M coordinates on {count} source feature(s); conversion keeps only XY coordinates"
+        ));
+    }
+    Ok(FreshConverted { path: converted.path, notes: converted.notes, empty: converted.empty, zm_dropped: info.has_zm && !converted.empty })
+}
+
+struct ConversionRequest<'a> {
+    family: Option<Family>,
+    kind: Option<Family>,
+    crs: Option<&'a str>,
+    has_srs: bool,
+    fresh: bool,
 }
 
 /// The conversion and whether it is unprojected (see [`Converted::unprojected`]).
@@ -203,22 +267,17 @@ pub fn convert_one(src: &Path, layer: &str, family: Option<Family>, crs: Option<
 ///   a polyhedral surface) to plain lines and polygons, which the FlatGeobuf reader takes.
 /// - `has_srs` says whether the layer gives its coordinate system: one that doesn't (and has no
 ///   `crs` given) is taken as it is, unprojected.
-fn convert_one_in(
-    dir: &Path,
-    src: &Path,
-    layer: &str,
-    family: Option<Family>,
-    kind: Option<Family>,
-    crs: Option<&str>,
-    has_srs: bool,
-) -> Result<Option<(PathBuf, bool)>> {
+fn convert_one_in(dir: &Path, src: &Path, layer: &str, request: ConversionRequest<'_>) -> Result<Option<Conversion>> {
+    let ConversionRequest { family, kind, crs, has_srs, fresh } = request;
     // A name GDAL would take for an option (a file can name its own layers).
     if layer.starts_with('-') {
         return Err(DataError::Format(format!("layer '{layer}': a name starting with '-' isn't read")));
     }
     let ogr2ogr = program("ogr2ogr").ok_or_else(missing)?;
     std::fs::create_dir_all(dir)?;
-    external::prune(dir, ours, KEEP);
+    if !fresh {
+        external::prune(dir, ours, KEEP);
+    }
     let full = std::path::absolute(src).unwrap_or_else(|_| src.to_path_buf());
     let (len, modified) = stamp(&full)?;
     // The cache key, spelled out: kept beside the conversion and checked, so a hash collision
@@ -226,7 +285,17 @@ fn convert_one_in(
     let nlt = family.or(kind).map_or("PROMOTE_TO_MULTI", Family::ogr_type);
     // The type is part of the key: conversions made before surfaces were kept are made again.
     let key = format!("{}\n{layer}\n{:?}\n{:?}\n{nlt}\n{len}\n{modified}", full.display(), family.map(Family::label), crs);
-    let tag = format!("{:016x}", fnv1a(key.as_bytes()));
+    // Manual replacements get a distinct final name too: old snapshots may still read the old
+    // file, even when the source's size and timestamp haven't changed.
+    static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let nonce = if fresh {
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+        format!("\n{now}\n{}\n{n}", std::process::id())
+    } else {
+        String::new()
+    };
+    let tag = format!("{:016x}", fnv1a(format!("{key}{nonce}").as_bytes()));
     let out = dir.join(format!("{tag}.fgb"));
     let empty = dir.join(format!("{tag}.empty"));
     let keyfile = dir.join(format!("{tag}.key"));
@@ -237,25 +306,27 @@ fn convert_one_in(
     let same = stored == key || stored.strip_suffix(UNPROJECTED) == Some(key.as_str());
     let was_unprojected = stored.ends_with(UNPROJECTED);
     // A hit is touched, so pruning removes what isn't used rather than what is old.
-    if same && empty.exists() {
+    if !fresh && same && empty.exists() {
         touch(&empty);
         touch(&keyfile);
         return Ok(None);
     }
-    if same && out.metadata().is_ok_and(|m| m.len() > 0) {
+    if !fresh && same && out.metadata().is_ok_and(|m| m.len() > 0) {
         touch(&out);
         touch(&keyfile);
-        return Ok(Some((out, was_unprojected)));
+        return Ok(Some(Conversion { path: out, unprojected: was_unprojected, notes: Vec::new(), empty: false }));
     }
     // Unique to this conversion, even with others of the same layer running in this process.
-    static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let tmp = dir.join(format!("{tag}.{}{n:04}.tmp.fgb", std::process::id()));
     // Reprojected to WGS 84 from its own coordinate system, or from the one given; a layer with
     // neither is taken as it is.
     let unprojected = crs.is_none() && !has_srs;
     let mut c = Command::new(&ogr2ogr);
-    c.args(["-f", "FlatGeobuf", "-skipfailures", "-nlt", nlt, "-dim", "XY", "-lco", "SPATIAL_INDEX=YES"]);
+    c.args(["-f", "FlatGeobuf", "-nlt", nlt, "-dim", "XY", "-lco", "SPATIAL_INDEX=YES"]);
+    // Fresh replacements must fail rather than install a partial conversion.
+    if !fresh {
+        c.arg("-skipfailures");
+    }
     if let Some(crs) = crs {
         c.args(["-s_srs", crs]);
     }
@@ -281,14 +352,21 @@ fn convert_one_in(
     }
     // Whether it holds anything: a feature read, not the header's count (which FlatGeobuf may leave
     // out, as 0). A filter matching nothing leaves no file at all.
-    let any = tmp.exists()
-        && super::open_path(&tmp, None)
-            .ok()
-            .is_some_and(|s| s.read(&super::Request { extent: None, limit: 1 }).is_ok_and(|b| !b.features.is_empty()));
+    let any = if fresh {
+        // A read failure is not an empty dataset. Never install a corrupt or partially readable
+        // conversion as a successful replacement.
+        let source = super::open_path(&tmp, None)?;
+        !source.read(&super::Request { extent: None, limit: 1 })?.features.is_empty()
+    } else {
+        tmp.exists()
+            && super::open_path(&tmp, None)
+                .ok()
+                .is_some_and(|s| s.read(&super::Request { extent: None, limit: 1 }).is_ok_and(|b| !b.features.is_empty()))
+    };
     // The entry is replaced in an order that never leaves it naming a missing file: the new state
     // first, then the key that vouches for it.
     let _ = std::fs::remove_file(&keyfile);
-    if !any {
+    if !any && !(fresh && family.or(kind).is_some()) {
         // An empty family is remembered, so the file isn't converted again for it.
         std::fs::write(&empty, b"")?;
         let _ = std::fs::remove_file(&out);
@@ -302,7 +380,16 @@ fn convert_one_in(
     tmp_guard.0 = None;
     let _ = std::fs::remove_file(&empty);
     std::fs::write(&keyfile, if unprojected { format!("{key}{UNPROJECTED}") } else { key.clone() })?;
-    Ok(Some((out, unprojected)))
+    let notes = if fresh {
+        String::from_utf8_lossy(&res.stderr)
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .map(|line| format!("GDAL: {}", line.trim()))
+            .collect()
+    } else {
+        Vec::new()
+    };
+    Ok(Some(Conversion { path: out, unprojected, notes, empty: !any }))
 }
 
 /// The longest a conversion may run, and the longest a layer listing may.
@@ -336,7 +423,13 @@ mod tests {
         );
         assert!(!is_gdal_name("a.geojson") && !is_gdal_name("a.fgb") && !is_gdal_name("noext"));
         // A layer named like an option never reaches GDAL.
-        let e = convert_one_in(&std::env::temp_dir(), Path::new("x.kml"), "-overwrite", None, None, None, true).unwrap_err();
+        let e = convert_one_in(
+            &std::env::temp_dir(),
+            Path::new("x.kml"),
+            "-overwrite",
+            ConversionRequest { family: None, kind: None, crs: None, has_srs: true, fresh: false },
+        )
+        .unwrap_err();
         assert!(e.to_string().contains("starting with '-'"), "{e}");
         // Pruning touches only the cache's own files.
         assert!(ours("0123456789abcdef.fgb") && ours("0123456789abcdef.key") && ours("0123456789abcdef.empty"));
@@ -442,5 +535,27 @@ mod tests {
         let (again, _) = convert_in(&cache, &kml, Some("mixed"), None).unwrap();
         assert_eq!(again.iter().map(|c| &c.path).collect::<Vec<_>>(), out.iter().map(|c| &c.path).collect::<Vec<_>>());
         let _ = std::fs::remove_dir_all(dir);
+    }
+    #[test]
+    fn fresh_conversion_reports_dropped_dimensions_but_not_for_clean_xy_data() {
+        if !available() {
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("rustgis-gdal-fresh-dimensions-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("points.geojson");
+        for (coordinates, lossy) in [("[2,48,100]", true), ("[8,48]", false)] {
+            let input = format!(
+                r#"{{"type":"FeatureCollection","name":"points","features":[{{"type":"Feature","properties":{{"rank":1}},"geometry":{{"type":"Point","coordinates":{coordinates}}}}}]}}"#
+            );
+            std::fs::write(&path, input).unwrap();
+            let fresh = convert_one_fresh_in(&dir.join("cache"), &path, "points", None, None).unwrap();
+            assert_eq!(fresh.notes.iter().any(|n| n.contains("Z or M coordinates on 1 source feature")), lossy);
+            assert_eq!(fresh.zm_dropped, lossy);
+            let source = crate::source::open_path(&fresh.path, None).unwrap();
+            let batch = source.read(&crate::source::Request { extent: None, limit: 10 }).unwrap();
+            assert_eq!(batch.features[0].geometry.as_ref().unwrap().extent().center().x, if lossy { 2.0 } else { 8.0 });
+        }
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

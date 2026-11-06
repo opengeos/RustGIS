@@ -225,6 +225,51 @@ CLI and Python use the same commands: `layer.repairSource` with
 with `{"index":0,"path":"/data/tiles.pmtiles"}`. Tile archives can also be selected by
 `"name"` or catalog `"id"`.
 
+### Reload Data
+
+On the desktop, right-click a linked layer and choose **Reload Data**, beside **Repair Data
+Source…**. For the active layer, use **Data › Data Source › Reload Data**, or **Reload Data**
+in Command Search. Reload rereads the same local source, table or raster subdataset without
+adding other tables from its container. It retains the layer's name, identity, drawing order,
+group, visibility, opacity, styling, labels, filters and map camera.
+
+Supported targets are linked vectors, rasters (including time-following Zarr variables),
+GDAL/DuckDB file-backed layers and editable local GeoPackage tables. GDAL-linked File
+Geodatabases and Zarr folders can be reloaded manually. **This is manual reload only**:
+RustGIS does not detect or notify about changes on disk. Folder sources are not monitored;
+use Reload Data even when the folder's timestamp has not changed.
+
+Reload does not turn snapshots into live links. Embedded uploads, generated layers, ordinary
+imports without linked provenance, arbitrary SQL results and layers detached by **Load All
+Features** must be added again. A source name in a snapshot's history is not a live link.
+Server databases and remote URLs use their separate discard/refresh actions. The web app
+cannot reread a local file; add the file again with **Add Data**.
+
+For an editable GeoPackage with pending inserts, updates or deletions, reload first shows
+their counts. **Cancel** keeps the edits; **Discard Edits and Reload** explicitly abandons
+them and rereads the selected table, without writing to the file. A successful reload updates
+the baseline used to detect conflicts when subsequently saving edits.
+
+Reload checks a fresh candidate before replacing the layer. Incompatible geometry, missing
+fields or invalidated configured expressions, missing tables/subdatasets and insufficient
+raster bands or palettes are rejected. An unreadable or missing source leaves the existing
+configuration and retained in-memory data in place; correct the file and retry, or use
+**Repair Data Source…** if it moved. A streamed source may itself already be affected by an
+external overwrite: its retained handle is not a complete last-good copy.
+
+Selections, saved feature-specific label moves and label locks/callout anchors are reset
+because feature IDs may now identify different data. A notice counts reset saved label
+moves and reports loader losses. Successful reload is one undo step; failure adds none.
+Undo restores in-memory edits and configuration, including saved label moves, but cannot
+recover overwritten files or promise historical streamed features or pixels.
+
+CLI, Python, MCP and the Assistant use `layer.reloadData` with
+`{"layer":"Cities","discardEdits":false}`. Both parameters are optional: the active layer is
+the default and discarding edits defaults to false. Only an explicit
+`"discardEdits":true` permits losing pending GeoPackage edits. Success returns, for example,
+`{"layer":42,"path":"/data/cities.fgb","table":null}`; `table` is a string for a selected table
+or raster subdataset.
+
 ## Keyboard shortcuts
 
 | Keys | Action |

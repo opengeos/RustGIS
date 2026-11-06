@@ -825,7 +825,8 @@ fn edited_streamed(before: &Project, after: &Project) -> Option<String> {
         for la in ma.layers.iter().filter(|l| l.is_streamed()) {
             let Some(lb) = mb.layers.iter().find(|l| l.id == la.id && l.is_streamed()) else { continue };
             let reads = |l: &rustgis_map::Layer| l.source.as_ref().map(|s| s.reads);
-            if reads(la) == reads(lb) && (la.dataset.features != lb.dataset.features || schema(la) != schema(lb)) {
+            let same_source = la.source.as_ref().zip(lb.source.as_ref()).is_some_and(|(a, b)| a.same_opening(b));
+            if same_source && reads(la) == reads(lb) && (la.dataset.features != lb.dataset.features || schema(la) != schema(lb)) {
                 return Some(la.name.clone());
             }
         }

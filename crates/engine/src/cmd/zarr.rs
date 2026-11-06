@@ -333,7 +333,7 @@ pub(crate) fn slice_key(zt: &ZarrTime, i: usize) -> String {
             .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
             .map_or_else(String::new, |d| d.as_millis().to_string())
     };
-    format!("{}\u{0}{}\u{0}{}\u{0}{changed}", zt.store, zt.selection(i), zt.crs.as_deref().unwrap_or(""))
+    format!("{}\u{0}{}\u{0}{}\u{0}{changed}\u{0}{}", zt.store, zt.selection(i), zt.crs.as_deref().unwrap_or(""), zt.read_generation)
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -528,12 +528,31 @@ pub(crate) fn relink_following(s: &Session, rl: &RasterLayer, full: &str) -> Res
     if !store.variables().iter().any(|v| v.path == zt.variable) {
         return Err(format!("{full} has no variable '{}': choose the store the layer was added from", zt.variable));
     }
-    let mut zt = ZarrTime { store: full.into(), shown: None, ..zt.clone() };
+    let coords = store_files(full, &zarr::coordinate_keys(&store, &zt.variable))?;
+    let (dim, dates) =
+        zarr::time_axis(&store, &zt.variable, &coords).ok_or_else(|| format!("{full}: {} no longer has a time axis", zt.variable))?;
+    if dim != zt.dim || !dates.iter().all(|d| d.is_finite()) || !dates.windows(2).all(|w| w[0] < w[1]) {
+        return Err(format!("{full}: {}'s time axis is incompatible with the layer", zt.variable));
+    }
+    let start = usize::try_from(zt.offset).map_err(|_| format!("{full}: time period is out of range"))?;
+    let dates = dates
+        .get(start..start.saturating_add(zt.dates.len()))
+        .ok_or_else(|| format!("{full}: {} no longer contains the selected time period", zt.variable))?
+        .to_vec();
+    static GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    let mut zt = ZarrTime {
+        store: full.into(),
+        shown: None,
+        read_generation: GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+        dates,
+        ..zt.clone()
+    };
     zt.repair();
     let window = s.map().time.as_ref().map(rustgis_map::time::TimeSlider::window);
     let want = zt.step_for(window);
     let i = want.unwrap_or(0);
     let r = read_step(&zt, i, slice_key(&zt, i))?;
+    rl.validate_replacement(&r, full)?;
     zt.shown = want;
     let mut new = rl.clone();
     new.path = Some(full.into());
@@ -886,6 +905,7 @@ fn add_following(s: &mut Session, p: &Value) -> CmdResult {
             dates: picked,
             crs,
             shown: None,
+            read_generation: 0,
         };
         zt.repair();
         // The first step read before the slider is touched, so a store that can't be read leaves
@@ -954,6 +974,7 @@ struct SeriesSource {
     /// A layer's period of the axis (a following layer's offset and dates), else the whole axis.
     period: Option<(u64, usize)>,
     crs: Option<String>,
+    read_generation: u64,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -969,6 +990,7 @@ fn series_source(s: &Session, p: &Value) -> Result<SeriesSource, String> {
                 sel: zarr::Selection { variable: zt.variable.clone(), index: zt.index.clone() },
                 period: Some((zt.offset, zt.dates.len())),
                 crs: zt.crs.clone(),
+                read_generation: zt.read_generation,
             });
         }
         // A slice: its store is its folder, or the address it was read from.
@@ -978,13 +1000,13 @@ fn series_source(s: &Session, p: &Value) -> Result<SeriesSource, String> {
             .clone()
             .or_else(|| rl.data.as_ref().and_then(|d| d.source.clone()))
             .ok_or_else(|| format!("{}: its store isn't known", l.name))?;
-        return Ok(SeriesSource { root, sel: zarr::Selection::parse(&label), period: None, crs: rl.crs.clone() });
+        return Ok(SeriesSource { root, sel: zarr::Selection::parse(&label), period: None, crs: rl.crs.clone(), read_generation: 0 });
     }
     let root = match source(p)? {
         Source::Dir(d) | Source::Url(d) => d,
     };
     let crs = ps(p, "crs").map(str::trim).filter(|c| !c.is_empty()).map(str::to_string);
-    Ok(SeriesSource { root, sel: selection(p), period: None, crs })
+    Ok(SeriesSource { root, sel: selection(p), period: None, crs, read_generation: 0 })
 }
 
 /// A store's metadata, and its files `keys`: a folder's read (files only, bounded), a web
@@ -1307,6 +1329,7 @@ pub fn zarr_cube(s: &Session, p: &Value) -> Result<ZarrCube, String> {
         dates,
         crs: src.crs.clone(),
         shown: None,
+        read_generation: src.read_generation,
     };
     Ok(ZarrCube { zt, period })
 }

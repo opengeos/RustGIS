@@ -53,6 +53,9 @@ pub struct SourceLayer {
     pub embedded: Option<Arc<Vec<u8>>>,
     #[serde(skip)]
     handle: Option<Arc<dyn FeatureSource>>,
+    /// Runtime metadata from a fresh provenance conversion, including its loader diagnostics.
+    #[serde(skip)]
+    conversion_info: Option<SourceInfo>,
     #[serde(skip)]
     window: Option<Window>,
     /// Whole-source thinning decisions shared by render snapshots, independent of view rows.
@@ -568,6 +571,9 @@ impl SourceLayer {
         }
         let mut new =
             SourceLayer { shapefile_crs: self.shapefile_crs, limit: self.limit, byte_budget: self.byte_budget, ..Default::default() };
+        let mut conversion_notes = Vec::new();
+        let declared_empty;
+        let conversion_zm_dropped;
         if let Some(g) = &self.gdal {
             #[cfg(target_arch = "wasm32")]
             {
@@ -577,10 +583,12 @@ impl SourceLayer {
             #[cfg(not(target_arch = "wasm32"))]
             {
                 let layer = table.unwrap_or(&g.layer);
-                let fresh = rustgis_data::source::gdal::convert_one(std::path::Path::new(path), layer, g.family, g.crs.as_deref())
-                    .map_err(|e| format!("{path}: {e}"))?
-                    .ok_or_else(|| format!("{path}: {layer} has no features"))?;
-                new.path = Some(fresh.display().to_string());
+                let fresh = rustgis_data::source::gdal::convert_one_fresh(std::path::Path::new(path), layer, g.family, g.crs.as_deref())
+                    .map_err(|e| format!("{path}: {e}"))?;
+                conversion_notes = fresh.notes;
+                declared_empty = fresh.empty;
+                conversion_zm_dropped = fresh.zm_dropped;
+                new.path = Some(fresh.path.display().to_string());
                 new.gdal = Some(GdalOrigin { path: path.into(), layer: layer.into(), ..g.clone() });
             }
         } else if let Some(d) = &self.duckdb {
@@ -593,10 +601,24 @@ impl SourceLayer {
             {
                 let d =
                     DuckdbOrigin { database: Some(path.into()), table: table.map(String::from).or_else(|| d.table.clone()), ..d.clone() };
-                new.path = Some(rerun(&d).map_err(|e| format!("{path}: {e}"))?.display().to_string());
+                use rustgis_data::source::duckdb;
+                let database = duckdb::Database::File(path.into());
+                let name = d.table.as_deref().ok_or_else(|| format!("{path}: the DuckDB layer has no table"))?;
+                let table = duckdb::find_table_of(&database, name).map_err(|e| format!("{path}: {e}"))?;
+                let out = duckdb::convert_table_fresh(std::path::Path::new(path), &table, d.family, d.crs.as_deref())
+                    .map_err(|e| format!("{path}: {e}"))?;
+                if out.skipped > 0 {
+                    conversion_notes.push(format!("DuckDB: {} rows without a geometry were left out", out.skipped));
+                }
+                let part = out.parts.first().ok_or_else(|| format!("{path}: the table returns no {}", d.family.label()))?;
+                declared_empty = part.count == 0;
+                new.path = Some(part.path.display().to_string());
+                conversion_zm_dropped = false;
                 new.duckdb = Some(d);
             }
         } else {
+            declared_empty = false;
+            conversion_zm_dropped = false;
             new.path = Some(path.into());
             new.table = table.map(String::from).or_else(|| self.table.clone());
             if path.to_ascii_lowercase().ends_with(".gpkg")
@@ -614,6 +636,40 @@ impl SourceLayer {
             }
         }
         new.open().map_err(|e| format!("{path}: {e}"))?;
+        // Opening a header alone doesn't establish that its payload is readable. Probe the
+        // candidate, never the live source, before the caller commits the replacement.
+        let handle = new.handle.as_deref().ok_or_else(|| format!("{path}: the replacement source didn't open"))?;
+        let probe = handle.read(&Request { extent: None, limit: 1 }).map_err(|e| format!("{path}: {e}"))?;
+        if probe.features.is_empty() && probe.skipped > 0 {
+            return Err(format!(
+                "{path}: no readable features found while checking the replacement ({} rows could not be read)",
+                probe.skipped
+            ));
+        }
+        if probe.skipped > 0 {
+            conversion_notes.push(format!("{} rows could not be read while checking the replacement", probe.skipped));
+        }
+        if let Some(info) = new.info() {
+            let mut info = info.clone();
+            info.notes.extend(conversion_notes);
+            info.zm_dropped |= conversion_zm_dropped;
+            if declared_empty && probe.complete && probe.features.is_empty() && probe.skipped == 0 {
+                info.count = Some(0);
+            }
+            // Empty GeoParquet has no observed geometry_types. Only an actual, complete zero-row
+            // conversion may inherit its selected family's declaration.
+            if info.count == Some(0)
+                && info.geometry_type == rustgis_data::GeometryType::None
+                && let Some(d) = &new.duckdb
+            {
+                info.geometry_type = match d.family {
+                    rustgis_data::source::Family::Points => rustgis_data::GeometryType::Point,
+                    rustgis_data::source::Family::Lines => rustgis_data::GeometryType::Polyline,
+                    rustgis_data::source::Family::Polygons => rustgis_data::GeometryType::Polygon,
+                };
+            }
+            new.conversion_info = Some(info);
+        }
         Ok(new)
     }
 
@@ -746,6 +802,7 @@ impl SourceLayer {
         };
         match src {
             Ok(s) => {
+                self.conversion_info = None;
                 self.handle = Some(Arc::from(s));
                 self.window = None;
                 self.error = None;
@@ -874,7 +931,7 @@ impl SourceLayer {
     }
 
     pub fn info(&self) -> Option<&SourceInfo> {
-        self.handle.as_deref().map(|h| h.info())
+        self.conversion_info.as_ref().or_else(|| self.handle.as_deref().map(|h| h.info()))
     }
 
     /// Every feature of the source, up to the read limit (a source by its web address fetching

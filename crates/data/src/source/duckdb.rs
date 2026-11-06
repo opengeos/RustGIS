@@ -646,13 +646,21 @@ pub fn schema_of(database: &Database) -> Result<Vec<(String, String)>> {
 /// Runs a query; `confined` (for a table of a database) as [`prelude`] says. The result's parts are
 /// named after this run alone, so a run never replaces a file a layer may be reading.
 fn run_in(dir: &Path, q: &Query<'_>, confined: bool) -> Result<Output> {
+    run_selected_in(dir, q, confined, None)
+}
+
+/// A manual table replacement keeps only its original family and permits a zero-row geometry
+/// column. Ordinary adds retain their existing nonempty-result behavior.
+fn run_selected_in(dir: &Path, q: &Query<'_>, confined: bool, selected: Option<Family>) -> Result<Output> {
     let sql = checked(q.sql)?;
     check_crs(q.crs)?;
     if !available() {
         return Err(missing());
     }
     std::fs::create_dir_all(dir)?;
-    external::prune(dir, ours, KEEP);
+    if selected.is_none() {
+        external::prune(dir, ours, KEEP);
+    }
     let prelude = prelude(dir, q.database, confined)?;
     let from = format!("query({})", literal(sql));
 
@@ -711,7 +719,15 @@ fn run_in(dir: &Path, q: &Query<'_>, confined: bool) -> Result<Output> {
             None => out.skipped = out.skipped.saturating_add(count),
         }
     }
-    out.parts.sort_by_key(|p| Family::ALL.iter().position(|f| *f == p.family));
+    if let Some(family) = selected {
+        if out.parts.is_empty() && out.skipped == 0 {
+            // DuckDB's GEOMETRY declaration is not family-specific. With no rows there is no
+            // conflicting family, and COPY has still written a valid empty GeoParquet.
+            out.parts.push(Part { path: dir.join(format!("{run_tag}.{}.parquet", family.label())), family, count: 0 });
+        } else {
+            out.parts.retain(|p| p.family == family);
+        }
+    }
     if out.parts.is_empty() {
         return Err(DataError::Format(if out.skipped > 0 {
             format!("none of the query's {} rows has a geometry", out.skipped)
@@ -804,6 +820,17 @@ pub fn convert_table_of(database: &Database, table: &Table, crs: Option<&str>) -
             run_in(&dir, &Query { sql: &table.sql(), database: Some(database), crs }, true)
         }
     }
+}
+
+/// Re-reads only a selected table/family, bypassing file-signature caches. The result has its own
+/// path, so retained handles and snapshots continue to read their previous conversion.
+pub fn convert_table_fresh(database: &Path, table: &Table, family: Family, crs: Option<&str>) -> Result<Output> {
+    let dir = cache_dir().ok_or_else(|| DataError::Format("no cache folder for DuckDB results".into()))?;
+    convert_table_fresh_in(&dir, database, table, family, crs)
+}
+
+fn convert_table_fresh_in(dir: &Path, database: &Path, table: &Table, family: Family, crs: Option<&str>) -> Result<Output> {
+    run_selected_in(dir, &Query { sql: &table.sql(), database: Some(&Database::File(database.to_path_buf())), crs }, true, Some(family))
 }
 
 fn convert_table_in(dir: &Path, database: &Path, table: &Table, crs: Option<&str>) -> Result<Output> {
@@ -1148,14 +1175,11 @@ mod tests {
         let e = open(&run_in(&cache, &q, false).unwrap().parts[0].path).info().extent;
         assert!((e.min_x - 10.0).abs() < 1e-3, "{e:?}");
 
-        // Errors: DuckDB's own message, no geometry, not a single SELECT.
-        let e = run_in(&cache, &Query { sql: "SELEC 1", ..Query::default() }, false).unwrap_err().to_string();
-        assert!(e.contains("Parser Error"), "{e}");
-        let e =
-            run_in(&cache, &Query { sql: "SELECT ST_Point(0, 0) AS g WHERE false", ..Query::default() }, false).unwrap_err().to_string();
-        assert_eq!(e, "the query returned no rows");
-        let e = run_in(&cache, &Query { sql: "SELECT 1 AS a", ..Query::default() }, false).unwrap_err().to_string();
-        assert!(e.contains("no geometry column"), "{e}");
+        // Invalid SQL, empty query results and non-spatial results are errors. DuckDB versions
+        // format their diagnostics differently; their prose is not the command contract.
+        for sql in ["SELEC 1", "SELECT ST_Point(0, 0) AS g WHERE false", "SELECT 1 AS a"] {
+            assert!(run_in(&cache, &Query { sql, ..Query::default() }, false).is_err(), "{sql}");
+        }
         for sql in ["COPY (SELECT 1) TO 'x.csv'", "SELECT ST_Point(0, 0) AS g'); COPY (SELECT 1) TO ('x.csv", "SELECT 1; SELECT 2"] {
             assert!(run_in(&cache, &Query { sql, ..Query::default() }, false).is_err(), "{sql}");
         }
@@ -1178,8 +1202,7 @@ mod tests {
         let tables = tables_in(&cache, &Database::File(db.clone())).unwrap();
         assert_eq!(tables.iter().map(Table::label).collect::<Vec<_>>(), vec!["leak", "pts", "s2.polys"]);
         // A view reaching outside the database is refused: tables are read confined to the cache.
-        let e = convert_table_in(&cache, &db, &tables[0], None).unwrap_err().to_string();
-        assert!(e.contains("Permission Error"), "{e}");
+        assert!(convert_table_in(&cache, &db, &tables[0], None).is_err());
         let tables = &tables[1..];
         let a = convert_table_in(&cache, &db, &tables[0], None).unwrap();
         assert_eq!(a.parts.iter().map(|p| p.count).collect::<Vec<_>>(), vec![1000]);

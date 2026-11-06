@@ -84,18 +84,7 @@ impl RasterLayer {
         let r = rustgis_data::raster::read_path_with(std::path::Path::new(path), sub, self.crs.as_deref())
             .and_then(|r| placed(r, self.placement))
             .map_err(|e| format!("{path}: {e}"))?;
-        let need = self.style.renderer.bands().into_iter().max().map_or(1, |b| b.saturating_add(1));
-        if r.band_count() < need {
-            return Err(format!(
-                "{path} has {} band(s); the layer's style draws band {need}: choose a raster with at least {need} bands",
-                r.band_count()
-            ));
-        }
-        if matches!(self.style.renderer, RasterRenderer::Colormap) && !matches!(r.color, ColorHint::Palette(_)) {
-            return Err(format!(
-                "{path} has no color palette; the layer's Colormap style uses the file's palette: choose a raster with a color palette"
-            ));
-        }
+        self.validate_replacement(&r, path)?;
         let mut style = self.style.clone();
         style.repair(&r);
         Ok(RasterLayer {
@@ -112,6 +101,23 @@ impl RasterLayer {
             masked: MaskedStats::default(),
             opening: None,
         })
+    }
+
+    /// Checks a fresh candidate without changing the configured renderer or its palette.
+    pub fn validate_replacement(&self, r: &Raster, path: &str) -> Result<(), String> {
+        let need = self.style.renderer.bands().into_iter().max().map_or(1, |b| b.saturating_add(1));
+        if r.band_count() < need {
+            return Err(format!(
+                "{path} has {} band(s); the layer's style draws band {need}: choose a raster with at least {need} bands",
+                r.band_count()
+            ));
+        }
+        if matches!(self.style.renderer, RasterRenderer::Colormap) && !matches!(r.color, ColorHint::Palette(_)) {
+            return Err(format!(
+                "{path} has no color palette; the layer's Colormap style uses the file's palette: choose a raster with a color palette"
+            ));
+        }
+        Ok(())
     }
 
     /// A raster read from a file on disk.
@@ -300,6 +306,9 @@ pub struct ZarrTime {
     /// The step whose slice the layer holds (an index into `dates`); `None` when none is.
     #[serde(skip)]
     pub shown: Option<usize>,
+    /// Process-local read generation: explicit reload must not reuse old slices or pending reads.
+    #[serde(skip)]
+    pub read_generation: u64,
 }
 
 fn is_zero(v: &u64) -> bool {
@@ -1133,6 +1142,7 @@ mod tests {
                 dates,
                 crs: None,
                 shown: Some(1),
+                read_generation: 0,
             };
             z.repair();
             z

@@ -77,6 +77,8 @@ pub enum Landed {
 }
 #[cfg(not(target_arch = "wasm32"))]
 mod relayshot;
+#[cfg(not(target_arch = "wasm32"))]
+mod reloaddata;
 mod repairsource;
 mod reportpane;
 mod ribbon;
@@ -2429,6 +2431,12 @@ impl RustGisApp {
         }
         let toggle_right = |ui: &mut UiState, pane: RightPane| ui.toggle_right(pane);
         match id {
+            "ui.reloadData" => {
+                #[cfg(not(target_arch = "wasm32"))]
+                return reloaddata::request(self, p);
+                #[cfg(target_arch = "wasm32")]
+                return Err(tl!("Reload Data from local files requires the desktop app.").into());
+            }
             "ui.pane.contents" => self.ui.left = if self.ui.left == Some(LeftPane::Contents) { None } else { Some(LeftPane::Contents) },
             "ui.pane.catalog" => self.ui.left = if self.ui.left == Some(LeftPane::Catalog) { None } else { Some(LeftPane::Catalog) },
             "ui.pane.sources" => self.ui.left = if self.ui.left == Some(LeftPane::Sources) { None } else { Some(LeftPane::Sources) },
@@ -4960,6 +4968,7 @@ const DEFAULTS_TO_ACTIVE_LAYER: &[&str] = &[
     "data.similar",
     "layer.geocode",
     "layer.repairSource",
+    "layer.reloadData",
     "report.new",
     "report.open",
     "share.webLayer",
