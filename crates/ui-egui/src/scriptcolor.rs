@@ -114,6 +114,11 @@ fn line_spans(script: &str, range: Range<usize>, unknown: &[String], out: &mut V
 fn json_spans(text: &str, at: usize, broken: bool, out: &mut Vec<Span>) {
     let b = text.as_bytes();
     let mut i = 0;
+    // Whether the next token is a value: after a colon, until a comma or a bracket.
+    let mut value = false;
+    // Where the last chain of `|` alternatives read ends, and whether a key's colon ends it: the
+    // chain's other strings take the same answer, so a long chain is read once.
+    let mut chain = (0, false);
     let push = |r: Range<usize>, kind: Kind, out: &mut Vec<Span>| {
         if !r.is_empty() {
             out.push(Span { range: at + r.start..at + r.end, kind, broken });
@@ -126,11 +131,21 @@ fn json_spans(text: &str, at: usize, broken: bool, out: &mut Vec<Span>) {
                 // Past its closing quote, or to the end when nothing closes it.
                 i = text.get(i + 1..).and_then(string_end).map_or(text.len(), |n| i + n + 2);
                 // A key is a string with a colon after it.
-                let after = text.get(i..).map(str::trim_start);
+                let after = text.get(i..).map(str::trim_start).unwrap_or_default();
                 // (A command's parameter description marks a key that may be left out with `?`:
-                // `"size"?: number`, `"layer"?,`. A script's JSON never has one there.)
-                let kind = if after.is_some_and(|a| a.starts_with(':') || a.starts_with('?')) { Kind::Key } else { Kind::Str };
-                push(s..i, kind, out);
+                // `"size"?: number`, `"layer"?,`, and alternative keys with `|`: `"lon" | "x":
+                // number`. A script's JSON never has either there. Values have alternatives too,
+                // `"path": "*.gif" | "*.zip"`, so `|` makes a key only where no value is due.)
+                let key = after.starts_with(':')
+                    || after.starts_with('?')
+                    || (!value && {
+                        if s >= chain.0 {
+                            let (end, keys) = alternatives(after);
+                            chain = (text.len() - end.len(), keys);
+                        }
+                        chain.1
+                    });
+                push(s..i, if key { Kind::Key } else { Kind::Str }, out);
             }
             b'-' | b'0'..=b'9' => {
                 i += 1;
@@ -141,6 +156,7 @@ fn json_spans(text: &str, at: usize, broken: bool, out: &mut Vec<Span>) {
             }
             b'{' | b'}' | b'[' | b']' | b':' | b',' => {
                 i += 1;
+                value = c == b':';
                 push(s..i, Kind::Punct, out);
             }
             c if c.is_ascii_alphabetic() => {
@@ -163,6 +179,18 @@ fn json_spans(text: &str, at: usize, broken: bool, out: &mut Vec<Span>) {
             }
         }
     }
+}
+
+/// The alternatives `after`, what follows a string, goes on with: what is left past them, and
+/// whether a key's colon (or `?`) ends them: ` | "x": number` after `"lon"`, not
+/// ` | "*.zip" (PNG frames)`.
+fn alternatives(mut after: &str) -> (&str, bool) {
+    while let Some(rest) = after.strip_prefix('|').map(str::trim_start) {
+        // Past the next string's closing quote; a string nothing closes ends them.
+        let Some(next) = rest.strip_prefix('"').and_then(|r| r.get(string_end(r)? + 1..)) else { return (after, false) };
+        after = next.trim_start();
+    }
+    (after, after.starts_with(':') || after.starts_with('?'))
 }
 
 /// The colours of a script, one per kind. The theme's text, dimmed text and accent, and colours
@@ -641,5 +669,51 @@ mod tests {
         let p = super::help_job(None, r#""name"?: "earth"|"moon" (map.bodies lists them)"#, palette, &font);
         assert_eq!(colour(&p, r#""name""#), Some(palette.text), "a key, `?` and all");
         assert_eq!(colour(&p, r#""moon""#), Some(palette.string));
+    }
+
+    /// A description's alternatives: keys (`"lon" | "x": number`) are keys, each of them, and
+    /// values (`"path": "*.gif" | "*.zip"`) stay strings, even when a key follows them.
+    #[test]
+    fn alternative_keys_are_keys_and_alternative_values_strings() {
+        // The quoted pieces of `desc` and whether each reads as a key.
+        let keys = |desc: &str| {
+            let mut sp = Vec::new();
+            super::json_spans(desc, 0, false, &mut sp);
+            sp.into_iter()
+                .filter(|s| matches!(s.kind, Kind::Key | Kind::Str))
+                .map(|s| (desc[s.range].to_string(), s.kind == Kind::Key))
+                .collect::<Vec<_>>()
+        };
+        let q = |pieces: &[(&str, bool)]| pieces.iter().map(|&(p, k)| (format!("\"{p}\""), k)).collect::<Vec<_>>();
+        // map.goToXY
+        assert_eq!(
+            keys(r#"{"lon" | "x": number, "lat" | "y": number, "scale"?: number}"#),
+            q(&[("lon", true), ("x", true), ("lat", true), ("y", true), ("scale", true)])
+        );
+        // map.save, time.export: the values' alternatives.
+        assert_eq!(
+            keys(r#"{"path"?: "*.model.json" | "*.rgistool", "text"?: file JSON}"#),
+            q(&[("path", true), ("*.model.json", false), ("*.rgistool", false), ("text", true)])
+        );
+        assert_eq!(
+            keys(r#"{"path": "*.gif" | "*.zip" (PNG frames), "width"?}"#),
+            q(&[("path", true), ("*.gif", false), ("*.zip", false), ("width", true)])
+        );
+        // raster.zarrInfo, map.import: a value, then a key as the other choice.
+        assert_eq!(
+            keys(r#"{"path": "a Zarr store's folder" | "url": "https://…"}"#),
+            q(&[("path", true), ("a Zarr store's folder", false), ("url", true), ("https://…", false)])
+        );
+        assert_eq!(
+            keys(r#"{"path": "*.rgismap|*.rgis" | "text": map file JSON | "data": base64 file}"#),
+            q(&[("path", true), ("*.rgismap|*.rgis", false), ("text", true), ("data", true)])
+        );
+        // Three choices, and a chain that ends at a comma before one that ends at a key.
+        assert_eq!(
+            keys(r#"{"a" | "b" | "c": number, "d" | "e", "f" | "g": number}"#),
+            q(&[("a", true), ("b", true), ("c", true), ("d", false), ("e", false), ("f", true), ("g", true)])
+        );
+        // Unclosed: no key out of a string nothing closes.
+        assert_eq!(keys(r#""a" | "b"#), [(r#""a""#.to_string(), false), (r#""b"#.to_string(), false)]);
     }
 }
