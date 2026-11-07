@@ -65,6 +65,7 @@ jobs:
     needs: changed
     if: needs.changed.outputs.run == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     outputs:
       tested: ${{ steps.data.outputs.ok }}
     steps:
@@ -87,7 +88,7 @@ jobs:
           while read -r sum url; do
             file="${url##*/}"
             if ! echo "$sum  $file" | sha256sum -c --status 2>/dev/null; then
-              curl -sSfL --retry 3 -o "$file" "$url" || { echo "::warning::could not download $url"; ok=false; continue; }
+              curl -sSfL --retry 3 --connect-timeout 30 --max-time 600 -o "$file" "$url" || { echo "::warning::could not download $url"; ok=false; continue; }
               echo "$sum  $file" | sha256sum -c || { echo "::error::$file has changed: update its checksum and check the test"; exit 1; }
             fi
           done <<'LIST'
