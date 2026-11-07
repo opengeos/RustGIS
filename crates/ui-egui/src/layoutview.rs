@@ -49,14 +49,31 @@ const SNAP_COLOR: Color32 = Color32::from_rgb(0xE0, 0x3E, 0x8C);
 /// An element's box: x, y, width, height (mm).
 type Box4 = (f64, f64, f64, f64);
 
+/// Seconds at least between two drawings of the page while its map frames' tiles land: each one
+/// landing would draw the whole page again.
+const TILES_REDRAW_S: f64 = 0.25;
+
+/// A page drawn in the browser while something it shows was still on its way: a map frame's tiles,
+/// or a legend's pictures (WMS, WMTS).
+#[derive(Clone, Copy)]
+struct PageWait {
+    /// The tile cache's generation when it was drawn: a fetch landing since changes it.
+    generation: u64,
+    /// Whether a frame's tiles were among what was missing: the page is drawn again as they land,
+    /// at most every [`TILES_REDRAW_S`]. Legend pictures alone draw it again only once they all
+    /// have, not on every fetch (the map's own tiles change the generation too).
+    tiles: bool,
+    /// When it was drawn (egui's time, seconds).
+    drawn: f64,
+}
+
 #[derive(Default)]
 pub struct LayoutView {
     texture: Option<egui::TextureHandle>,
     key: Option<(u64, usize, [usize; 2], i64, i64, i64)>,
-    /// The tile cache's generation the page was drawn at while a legend picture it shows was
-    /// still on its way (in the browser, which doesn't wait for them): drawn again once a fetch
+    /// What the page was drawn without (in the browser, which doesn't wait): drawn again once it
     /// lands.
-    legends_wait: Option<u64>,
+    page_wait: Option<PageWait>,
     /// Page zoom (0 or 1 = fit) and pan, in screen points, of the layout `viewed` names.
     zoom: f32,
     pan: egui::Vec2,
@@ -613,14 +630,22 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
     let dpi = (px_per_mm as f64 * 25.4).min(max_side / layout.width.max(layout.height) * 25.4).clamp(20.0, 300.0);
     let size = [(page.width() * ppp) as usize, (page.height() * ppp) as usize];
     let key = (app.session.revision, li, size, (dpi * 10.0) as i64, layout.width as i64, layout.height as i64);
-    // Only once the pictures have: any other fetch landing (the map's tiles) bumps the generation.
-    let landed = app.layout.legends_wait.is_some_and(|g| g != rustgis_engine::render::rustgis_tiles::cache::generation())
-        && !rustgis_engine::render::layout::legends_pending(&layout, &app.session.project.maps);
+    // Read before drawing: a fetch landing while it draws is a reason to draw again.
+    let generation = rustgis_engine::render::rustgis_tiles::cache::generation();
+    let now = ui.input(|i| i.time);
+    let landed = app.layout.page_wait.is_some_and(|w| {
+        w.generation != generation
+            && if w.tiles {
+                now - w.drawn >= TILES_REDRAW_S
+            } else {
+                !rustgis_engine::render::layout::legends_pending(&layout, &app.session.project.maps)
+            }
+    });
     if (app.layout.key != Some(key) || landed) && size[0] > 2 && size[1] > 2 {
         let info = page_info(app, li);
-        // Before drawing: a fetch landing while it draws is a reason to draw again.
-        let generation = rustgis_engine::render::rustgis_tiles::cache::generation();
-        if let Some(pm) = rustgis_engine::render::layout::render(&layout, &mut app.session.project.maps, dpi, &info) {
+        if let Some((pm, tiles_pending)) =
+            rustgis_engine::render::layout::render_pending(&layout, &mut app.session.project.maps, dpi, &info)
+        {
             let img = egui::ColorImage::from_rgba_premultiplied([pm.width() as usize, pm.height() as usize], pm.data());
             match &mut app.layout.texture {
                 Some(tex) => tex.set(img, egui::TextureOptions::LINEAR),
@@ -628,12 +653,13 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
             }
             app.layout.key = Some(key);
             // Natively the page waited for them already: drawn again, it would wait again.
-            app.layout.legends_wait = (cfg!(target_arch = "wasm32")
-                && rustgis_engine::render::layout::legends_pending(&layout, &app.session.project.maps))
-            .then_some(generation);
+            let web = cfg!(target_arch = "wasm32");
+            let legends = web && rustgis_engine::render::layout::legends_pending(&layout, &app.session.project.maps);
+            let tiles = web && tiles_pending;
+            app.layout.page_wait = (legends || tiles).then_some(PageWait { generation, tiles, drawn: now });
         }
     }
-    if app.layout.legends_wait.is_some() {
+    if app.layout.page_wait.is_some() {
         ui.ctx().request_repaint_after(std::time::Duration::from_millis(250));
     }
     // A pan's preview is drawn as the pan starts, and let go when it ends.
