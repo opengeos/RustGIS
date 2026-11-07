@@ -1654,8 +1654,9 @@ fn script_ran(app: &mut RustGisApp, landed: crate::Landed) {
         .collect();
     app.workflow.script_last = Some(ScriptRun { n, secs: now.duration_since(started).as_secs_f64(), at, ran, error });
     // Another still to land: the results say so first, above this one's, where their scroll
-    // starts, however many lines it ran.
-    if !app.workflow.script_started.is_empty() {
+    // starts, however many lines it ran. One asked in a project this run replaced is left, not
+    // run, so it isn't told.
+    if app.workflow.script_started.iter().any(|&(_, _, asked_in)| asked_in == opened) {
         app.workflow.script_out.insert(0, (tl!("Running…").to_string(), false));
     }
     app.map.invalidate();
@@ -2025,6 +2026,17 @@ mod tests {
         assert_eq!(app.workflow.script, "project.sample");
         assert_eq!(app.workflow.script_out.len(), 1);
         assert_eq!(app.workflow.script_last.as_ref().map(|r| r.n), Some(1));
+        // The same with another run of the old project waiting behind it: that one is left, so
+        // the results don't say Running… for it, and it adds nothing when it lands.
+        ask(&mut app);
+        ask(&mut app);
+        app.session.run("project.sample", &Value::Null).unwrap();
+        script_ran(&mut app, ran("project.sample"));
+        assert_eq!(app.workflow.script_out.len(), 1, "no Running… for a run that will be left: {:?}", app.workflow.script_out);
+        script_ran(&mut app, crate::Landed::NotRun("Run Script was left: another project was opened".into()));
+        assert_eq!(app.workflow.script_out.len(), 1);
+        assert_eq!(app.workflow.script_last.as_ref().map(|r| r.n), Some(1));
+        assert!(app.workflow.script_started.is_empty());
         // Opened by a command (an agent, the assistant), the pane hidden and Details open:
         // everything goes, the window too.
         app.workflow.script_details = true;
