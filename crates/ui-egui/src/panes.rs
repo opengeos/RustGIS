@@ -5019,9 +5019,12 @@ fn legend_list(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, t: &Tokens) {
             }
             if unlisted > 0 {
                 let note = if unlisted == 1 {
-                    tl!("1 more class isn't listed: it's still drawn").to_string()
+                    tl!("1 more class isn't listed: the list's limit doesn't change how it's drawn").to_string()
                 } else {
-                    crate::i18n::fmt("{n} more classes aren't listed: they're still drawn", &[("n", &unlisted.to_string())])
+                    crate::i18n::fmt(
+                        "{n} more classes aren't listed: the list's limit doesn't change how they're drawn",
+                        &[("n", &unlisted.to_string())],
+                    )
                 };
                 ui.label(egui::RichText::new(note).size(11.5).color(t.text_dim));
             }
