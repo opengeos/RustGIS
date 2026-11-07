@@ -60,6 +60,12 @@ fn check_current() -> Result<(), String> {
     check_still(&current_still())
 }
 
+/// Only a live request's failure describes the shared resource. A dropped or retired read
+/// must let the next caller retry immediately under its own authority, without classifying cancellation by error text.
+pub(crate) fn keep_failure(message: &str, still: &Option<Still>) -> bool {
+    message != DROPPED && check_still(still).is_ok()
+}
+
 type Fetcher = Box<dyn Fn(String, Done, &'static [u16]) + Send + Sync>;
 /// Hands back a decoded picture: [`RAW`] pixels, or the encoded bytes it was given when it
 /// couldn't decode them (they are decoded here then).
@@ -684,9 +690,15 @@ impl Drop for Answer {
     }
 }
 
+/// Retains the initiating lifetime through deferred decoding, so only resource failures are
+/// shared with later callers; a retired owner's unanswered slot is released by `Answer`.
 fn fetch_tile(url: String, host: String, want: Want, omit: &'static [u16]) {
+    let owner = current_still();
     let answer = Answer { key: url.clone(), host, entry: None };
     let done: Done = Box::new(move |bytes| {
+        // Shared archive reads can answer under another loader's narrower lifetime. Retain
+        // that floor with this tile's owner before a browser decoder suspends completion.
+        let still = with_optional_still(owner, current_still);
         if matches!(&bytes, Err(e) if e == DROPPED) {
             return;
         }
@@ -699,6 +711,8 @@ fn fetch_tile(url: String, host: String, want: Want, omit: &'static [u16]) {
                     let size = payload_bytes(&p);
                     Entry::Ready(Arc::new(p), size)
                 }
+                // The browser's decoder may answer after the initiating owner was retired.
+                Err(e) if !keep_failure(&e, &still) => return,
                 Err(e) => {
                     log::debug!("{}", crate::logins::scrub_error(&format!("{}: {e}", answer.key)));
                     // Refused until a time its server gave: the map draws again then.
@@ -3343,6 +3357,53 @@ mod tests {
         assert!(most <= native::cap(&addr.to_string()), "{most} at a time");
     }
 
+    /// Revocation belongs to the caller, while a genuine server failure belongs to the resource.
+    /// Header caches must let a later caller retry immediately under its own lifetime.
+    #[test]
+    fn revoked_archive_headers_do_not_delay_live_callers() {
+        let _turn = crate::cache::turn();
+        let _alarm = crate::cache::alarm_turn();
+        let held = Arc::new(Mutex::new(Vec::<Done>::new()));
+        let hold = held.clone();
+        set_fetcher(move |_, done| hold.lock().unwrap().push(done));
+        let mut failures = Vec::new();
+        for cog in [false, true] {
+            let url = if cog { "https://revoked-header.invalid/retry.tif" } else { "https://revoked-header.invalid/retry.pmtiles" };
+            let ask = || if cog { crate::cog::info(url).map(|i| i.is_some()) } else { crate::pmtiles::info(url).map(|i| i.is_some()) };
+            let live = Arc::new(std::sync::atomic::AtomicBool::new(true));
+            let flag = live.clone();
+            let still: Still = Arc::new(move || flag.load(Ordering::SeqCst));
+            assert_eq!(with_still(still, ask), Ok(false));
+            // A distinct live tile joins the scoped header read. Its resource must not keep
+            // the loader's cancellation, even though its own initiating lifetime is current.
+            let tile = format!("{}:0/0/0@{url}", if cog { "cog" } else { "pmtiles" });
+            assert!(matches!(get(&tile, Want::Image), State::Pending));
+            live.store(false, Ordering::SeqCst);
+            held.lock().unwrap().pop().unwrap()(Err("HTTP 503".into()));
+            if lock().slots.contains_key(&tile) {
+                failures.push(format!("{tile}: a joining live tile cached the retired loader's failure"));
+            }
+            let retry = ask();
+            let tile_retry = get(&tile, Want::Image);
+            if !matches!(tile_retry, State::Pending) {
+                failures.push(format!("{tile}: the next live draw could not retry immediately"));
+            }
+            let next = held.lock().unwrap().pop();
+            if retry != Ok(false) || next.is_none() {
+                failures.push(format!("{url}: a revoked owner's error delayed a live caller: {retry:?}"));
+            }
+            if let Some(done) = next {
+                done(Err("HTTP 503".into()));
+                assert!(ask().is_err(), "a live owner's server failure keeps its retry delay");
+                assert!(matches!(get(&tile, Want::Image), State::Failed(_)), "live tile failures still keep the server's retry delay");
+                assert!(held.lock().unwrap().is_empty());
+            }
+        }
+        assert!(failures.is_empty(), "{failures:?}");
+    }
+
+    /// A shared tile slot and its server queue retain their owners, release retired reads,
+    /// and let live callers retry without inheriting another request's cancellation.
     #[test]
     fn fetches_through_the_fetcher_once() {
         #[cfg(not(target_arch = "wasm32"))]
@@ -3424,8 +3485,6 @@ mod tests {
             let Some((_, done)) = HELD.lock().unwrap().pop() else { break };
             done(Ok(b"3".to_vec()));
         };
-        let cancelled =
-            |url: &str| lock().slots.get(url).is_some_and(|slot| matches!(&slot.entry, Entry::Failed(e, _) if e.contains("cancelled")));
         let owner = rustgis_data::diagnostics::History::default();
         let launcher = rustgis_data::diagnostics::History::default();
         let live = Arc::new(std::sync::atomic::AtomicBool::new(true));
@@ -3452,7 +3511,10 @@ mod tests {
         assert_eq!(held_before, crate::schedule::PER_HOST);
         assert!(admitted.iter().all(|state| matches!(state, State::Pending)) && matches!(control, State::Pending));
         assert!(!seen.lock().unwrap().iter().any(|url| url == revoked), "a revoked waiting request reached the fetcher");
-        assert!(cancelled(revoked), "the refused request keeps its cached cancellation");
+        assert!(!lock().slots.contains_key(revoked), "a revoked owner must not leave a shared tile failure");
+        assert!(matches!(get(revoked, Want::Json), State::Pending), "a live caller starts its own fetch immediately");
+        drain_held();
+        assert!(matches!(get(revoked, Want::Json), State::Ready(_)));
         assert!(peek(healthy).is_some(), "the unscoped waiting control still completes");
         assert_eq!(network_records(&owner, diagnostic).len(), 1);
         assert!(launcher.records().is_empty(), "a queued request keeps its original diagnostics owner");
@@ -3467,7 +3529,10 @@ mod tests {
         with_still(Arc::new(|| false), drain_held);
         assert!(matches!(admitted, State::Pending));
         assert!(!seen.lock().unwrap().iter().any(|url| url == floor));
-        assert!(cancelled(floor), "the unrelated launcher's revocation still applies");
+        assert!(!lock().slots.contains_key(floor), "the launcher's revocation must not leave a shared tile failure");
+        assert!(matches!(get(floor, Want::Json), State::Pending));
+        drain_held();
+        assert!(matches!(get(floor, Want::Json), State::Ready(_)));
         assert!(current_still().is_none());
 
         // A fetcher that drops a request unanswered (or panics) gives its server's place back:

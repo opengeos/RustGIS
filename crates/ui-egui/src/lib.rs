@@ -455,6 +455,21 @@ pub enum ServiceStep {
     Coverage { params: Value, slot: Slot<Result<Vec<u8>, String>>, dialog: bool, origin: Option<String>, opened: u64 },
 }
 
+impl ServiceStep {
+    /// The dialog's progress text is shared with its writer, so a retired step clears only
+    /// its own message even when another project is reading a service with the same name.
+    fn pending_message(&self) -> Option<String> {
+        match self {
+            Self::Tiles { resolve, dialog, .. } => {
+                dialog.then(|| serviceui::reading_tileset(resolve.params.get("name").and_then(Value::as_str).unwrap_or("")))
+            }
+            Self::Coverage { params, dialog, .. } => {
+                dialog.then(|| serviceui::describing(params.get("name").and_then(Value::as_str).unwrap_or("")))
+            }
+        }
+    }
+}
+
 /// Fetches an address into a slot, off the frame.
 pub(crate) fn fetch_into(url: &str) -> Slot<Result<Vec<u8>, String>> {
     fetch_into_limited(url, rustgis_engine::render::rustgis_tiles::cache::MAX_DOWNLOAD)
@@ -4543,26 +4558,15 @@ impl RustGisApp {
         // progress belonging to that live generation, even before its answer has landed.
         let current: std::collections::HashSet<String> = steps
             .iter()
-            .filter_map(|step| {
-                let (params, dialog, opened, message) = match step {
-                    ServiceStep::Tiles { resolve, dialog, opened, .. } => {
-                        (&resolve.params, *dialog, *opened, "Reading the tileset of {name}")
-                    }
-                    ServiceStep::Coverage { params, dialog, opened, .. } => (params, *dialog, *opened, "Describing {name}"),
-                };
-                (dialog && opened == self.session.opened)
-                    .then(|| i18n::fmt(message, &[("name", params.get("name").and_then(Value::as_str).unwrap_or(""))]))
+            .filter(|step| match step {
+                ServiceStep::Tiles { opened, .. } | ServiceStep::Coverage { opened, .. } => *opened == self.session.opened,
             })
+            .filter_map(ServiceStep::pending_message)
             .collect();
         for step in steps {
+            let pending = step.pending_message();
             match step {
                 ServiceStep::Tiles { mut resolve, dialog, origin, opened } => {
-                    let pending = dialog.then(|| {
-                        i18n::fmt(
-                            "Reading the tileset of {name}",
-                            &[("name", resolve.params.get("name").and_then(Value::as_str).unwrap_or(""))],
-                        )
-                    });
                     if !self.service_read_current(opened, &resolve.doc, pending.as_deref().filter(|message| !current.contains(*message))) {
                         continue;
                     }
@@ -4622,8 +4626,6 @@ impl RustGisApp {
                     self.map.invalidate();
                 }
                 ServiceStep::Coverage { mut params, slot, dialog, origin, opened } => {
-                    let pending = dialog
-                        .then(|| i18n::fmt("Describing {name}", &[("name", params.get("name").and_then(Value::as_str).unwrap_or(""))]));
                     if !self.service_read_current(
                         opened,
                         params.get("url").and_then(Value::as_str).unwrap_or(""),

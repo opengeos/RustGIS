@@ -507,19 +507,21 @@ fn load(archive: String) {
     );
 }
 
+/// Settles archive waiters and keeps resource failures, forgetting dropped or retired reads.
 fn finish(archive: &str, r: Result<Info, String>) {
     let r = crate::logins::check(archive)
         .map_err(str::to_string)
         .and(r)
         .map(Arc::new)
         .map_err(|e| if rustgis_data::login_address::is_wrapper(archive) { crate::logins::scrub_error(&e) } else { e });
+    let transient = r.as_ref().err().is_some_and(|e| !crate::cache::keep_failure(e, &crate::cache::current_still()));
     let waiting = {
         let mut all = archives().lock().unwrap_or_else(|e| e.into_inner());
         let old = match &r {
             Ok(i) => all.insert(archive.to_string(), State::Ready(i.clone())),
-            // A read the busy queue dropped isn't the archive's fault: forgotten, so the next
-            // draw reads it again, rather than kept as a failure.
-            Err(e) if e == crate::cache::DROPPED => all.remove(archive),
+            // A dropped or retired owner's read isn't the archive's fault: the next caller
+            // starts its own read instead of inheriting a shared retry delay.
+            Err(_) if transient => all.remove(archive),
             Err(e) => {
                 // Read again once its wait is over: the map draws again then (a 429 or 503 says
                 // when).

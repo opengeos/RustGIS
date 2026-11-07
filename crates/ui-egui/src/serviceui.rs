@@ -34,6 +34,16 @@ pub struct ServiceSource {
     pub documents: Vec<Value>,
 }
 
+/// Uses the same translated tileset progress text when discovery starts and when it retires.
+pub(crate) fn reading_tileset(name: &str) -> String {
+    i18n::fmt("Reading the tileset of {name}", &[("name", name)])
+}
+
+/// Uses the same translated coverage progress text when discovery starts and when it retires.
+pub(crate) fn describing(name: &str) -> String {
+    i18n::fmt("Describing {name}", &[("name", name)])
+}
+
 /// A service type as the add dialog and `ui.addService` name it, `auto` for any other text.
 pub(crate) fn kind_of(t: &str) -> &'static str {
     match t {
@@ -153,7 +163,7 @@ pub(crate) fn add_layer_from(
         };
         let slot = crate::fetch_into(&describe);
         app.ui.service_steps.push(crate::ServiceStep::Coverage { params: p, slot, dialog, origin, opened: app.session.opened });
-        return Ok(i18n::fmt("Describing {name}", &[("name", &title)]));
+        return Ok(describing(&title));
     }
     let mut p = json!({"url": src.url, "layer": name, "text": src.text, "documents": src.documents, "source_url": l.get("source_url")});
     if src.kind != "auto" {
@@ -196,7 +206,7 @@ pub(crate) fn add_layer_from(
                 slot,
             };
             app.ui.service_steps.push(crate::ServiceStep::Tiles { resolve, dialog, origin, opened: app.session.opened });
-            Ok(i18n::fmt("Reading the tileset of {name}", &[("name", &title)]))
+            Ok(reading_tileset(&title))
         }
         None => crate::connectiontree::run_named(app, "service.add", p, origin.as_deref()).map(|_| added(&title)),
     }
