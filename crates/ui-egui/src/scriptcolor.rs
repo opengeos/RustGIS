@@ -140,6 +140,7 @@ fn json_spans(text: &str, at: usize, broken: bool, out: &mut Vec<Span>) {
                 if !key && !value {
                     if s >= chain.0 {
                         let (end, keys) = alternatives(after);
+                        // `end` is the tail of `text` past the chain: where it starts is the chain's end.
                         chain = (text.len() - end.len(), keys);
                     }
                     key = chain.1;
@@ -181,17 +182,19 @@ fn json_spans(text: &str, at: usize, broken: bool, out: &mut Vec<Span>) {
 }
 
 /// The spans of a help's signature keys (` {layer?, size?}`), `text` starting at byte `at`: each
-/// name a key, as the same key is in the script; brackets and commas punctuation; `?` and spaces
-/// plain.
+/// name a key, as the same key is in the script; brackets and commas punctuation; spaces and the
+/// `?` that marks a key optional plain. That `?` ends a name (`signature` writes `name?`), so a
+/// `?` inside one (a plugin's `{"a?b": text}`) stays part of the key.
 fn signature_spans(text: &str, at: usize, out: &mut Vec<Span>) {
-    let kind = |c: char| match c {
+    let kind = |c: char, next: Option<char>| match c {
         '{' | '}' | '[' | ']' | ',' => Kind::Punct,
-        '?' => Kind::Plain,
+        '?' if matches!(next, Some(',' | '}') | None) => Kind::Plain,
         c if c.is_whitespace() => Kind::Plain,
         _ => Kind::Key,
     };
-    for (i, c) in text.char_indices() {
-        let (range, k) = (at + i..at + i + c.len_utf8(), kind(c));
+    let mut chars = text.char_indices().peekable();
+    while let Some((i, c)) = chars.next() {
+        let (range, k) = (at + i..at + i + c.len_utf8(), kind(c, chars.peek().map(|&(_, n)| n)));
         match out.last_mut() {
             // A run of one kind is one span.
             Some(last) if last.kind == k && last.range.end == range.start => last.range.end = range.end,
@@ -699,6 +702,10 @@ mod tests {
         assert_eq!(colour(&sig, "?"), Some(palette.text));
         assert_eq!(colour(&sig, "{"), Some(palette.dim));
         assert_eq!(colour(&sig, ","), Some(palette.dim));
+        // A `?` inside a name (a plugin's key) is part of the key; the one after it marks it optional.
+        let odd = super::help_job(Some("plugin:x/y"), " {a?b, c?}", palette, &font);
+        assert_eq!(colour(&odd, "?b"), Some(palette.key));
+        assert_eq!(colour(&odd, "?}"), Some(palette.text));
         let p = super::help_job(None, r#""name"?: "earth"|"moon" (map.bodies lists them)"#, palette, &font);
         assert_eq!(colour(&p, r#""name""#), Some(palette.key), "a key, `?` and all");
         assert_eq!(colour(&p, r#""moon""#), Some(palette.string));
