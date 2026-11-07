@@ -169,6 +169,34 @@ fn png_of(
 /// The most points a side an export of the map draws; a larger view is cut to its middle.
 pub const MOST_POINTS: f64 = 8000.0;
 
+/// What [`export_view`]'s limit of [`MOST_POINTS`] a side does to an export to `path` of a view
+/// of `(vw, vh)` points, for it to say: with no size given, a larger view is cut to its middle;
+/// a size given past the limit is drawn at the limit, over the same ground.
+fn size_notes(
+    path: &str,
+    (vw, vh): (f64, f64),
+    width: Option<f64>,
+    height: Option<f64>,
+) -> Vec<(rustgis_data::diagnostics::Severity, String)> {
+    let fin = |v: Option<f64>| v.filter(|x| x.is_finite());
+    let (width, height) = (fin(width), fin(height));
+    let mut notes = Vec::new();
+    let note = |text: String| (rustgis_data::diagnostics::Severity::Info, format!("{path}: {text}"));
+    if width.is_none() && height.is_none() && (vw > MOST_POINTS || vh > MOST_POINTS) {
+        notes.push(note(format!(
+            "the view is {vw:.0} × {vh:.0} points, more than the {MOST_POINTS:.0} a side an export holds, so it is cut to its middle: give a width or height of at most {MOST_POINTS:.0} to draw it whole"
+        )));
+    }
+    for (name, v) in [("width", width), ("height", height)] {
+        if let Some(v) = v.filter(|v| *v > MOST_POINTS) {
+            notes.push(note(format!(
+                "a {name} of {v:.0} points is more than the {MOST_POINTS:.0} an export holds, so it is drawn at {MOST_POINTS:.0} over the same ground: a higher dpi gives more pixels"
+            )));
+        }
+    }
+    notes
+}
+
 /// The view an export of the map at `camera` draws, in a view of `(vw, vh)` points: a requested
 /// size keeps the same ground extent, and `dpi` sets the pixels per point.
 fn export_view(
@@ -225,19 +253,9 @@ pub(crate) fn map_work(s: &Session, p: &Value) -> Result<Work, String> {
         None | Some(Value::Null) => false,
         Some(v) => v.as_bool().ok_or("cog must be true or false")?,
     };
-    // A view past the most an export draws (and no size given) is cut to its middle: said.
-    let (vw, vh) = s.view_size;
-    let cut = (width.is_none() && vw > MOST_POINTS) || (height.is_none() && vh > MOST_POINTS);
-    let cut = cut.then(|| {
-        (
-            rustgis_data::diagnostics::Severity::Info,
-            format!(
-                "{path}: the view is {vw:.0} × {vh:.0} points, more than the {MOST_POINTS:.0} a side an export holds, so it is cut to its middle: give a width and height to fit it whole"
-            ),
-        )
-    });
+    let sized = size_notes(&path, s.view_size, width, height);
     if matches!(ext.as_str(), "tif" | "tiff") {
-        return geotiff_work(s, path, export_view(s.map().camera, s.view_size, width, height, dpi), cog, cut);
+        return geotiff_work(s, path, export_view(s.map().camera, s.view_size, width, height, dpi), cog, sized);
     }
     if cog {
         return Err("cog is for a GeoTIFF (.tif) export".into());
@@ -250,7 +268,7 @@ pub(crate) fn map_work(s: &Session, p: &Value) -> Result<Work, String> {
             rustgis_data::io::write_atomic(Path::new(&path), &png).map_err(|e| format!("{path}: {e}"))?;
             Ok(json!({"path": path, "bytes": png.len()}))
         })();
-        super::exports::drawn(std::slice::from_ref(&map), cut.into_iter().collect(), written, path)
+        super::exports::drawn(std::slice::from_ref(&map), sized, written, path)
     }))
 }
 
@@ -266,7 +284,7 @@ fn geotiff_work(
     path: String,
     view: View,
     cog: bool,
-    cut: Option<(rustgis_data::diagnostics::Severity, String)>,
+    sized: Vec<(rustgis_data::diagnostics::Severity, String)>,
 ) -> Result<Work, String> {
     let m = s.map();
     let crs = map_crs(m)?;
@@ -277,7 +295,7 @@ fn geotiff_work(
         ));
     }
     let mut view = view;
-    let mut notices: Vec<_> = cut.into_iter().collect();
+    let mut notices = sized;
     let bearing = view.camera.bearing;
     let turned = bearing.rem_euclid(360.0).min(360.0 - bearing.rem_euclid(360.0)) > 1e-9;
     if turned {
@@ -331,6 +349,13 @@ fn geotiff_work(
             let mut out = json!({"path": path, "width": r.width, "height": r.height, "crs": crs.label(), "bytes": bytes});
             if let Some(c) = &r.copyright {
                 out["copyright"] = json!(c);
+                // Credits with nothing a tag can hold (control characters only) write no tag.
+                if rustgis_data::raster::tag_text(c).is_empty() {
+                    notices.push((
+                        rustgis_data::diagnostics::Severity::Info,
+                        format!("{path}: the credits hold nothing a Copyright tag can, so the file has none: {c:?}"),
+                    ));
+                }
                 if let Some(note) = rustgis_data::raster::tag_text_note(c) {
                     notices.push((rustgis_data::diagnostics::Severity::Info, format!("{path}: {note} (the credits: {c})")));
                 }

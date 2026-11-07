@@ -33155,7 +33155,21 @@ fn export_map_to_geotiff_places_the_view_on_the_ground() {
         s.run("share.exportMap", &json!({"path": dir.join(file).display().to_string()})).unwrap();
         assert!(s.notices[n..].iter().any(|x| x.text.contains("9000 × 300 points") && x.text.contains("cut to its middle")), "{file}");
     }
+    // A size given draws the whole view, so nothing is cut.
+    let n = s.notices.len();
+    s.run("share.exportMap", &json!({"path": dir.join("fit.tif").display().to_string(), "width": 4000})).unwrap();
+    assert!(!s.notices[n..].iter().any(|x| x.text.contains("cut to its middle") || x.text.contains("points is more than")));
     s.view_size = (400.0, 300.0);
+    // A size given past the limit is drawn at the limit, and says so.
+    let n = s.notices.len();
+    let out = s.run("share.exportMap", &json!({"path": dir.join("big.tif").display().to_string(), "width": 9000, "height": 150})).unwrap();
+    assert_eq!(out["width"], 8000);
+    assert!(
+        s.notices[n..].iter().any(|x| x.text.contains("a width of 9000 points") && x.text.contains("drawn at 8000")),
+        "{:?}",
+        &s.notices[n..]
+    );
+    assert!(!s.notices[n..].iter().any(|x| x.text.contains("height of")));
     // Too many pixels a side is refused, saying how many.
     let e = s.run("share.exportMap", &json!({"path": path.display().to_string(), "width": 8000, "dpi": 192})).unwrap_err();
     assert!(e.contains("16000") && e.contains("8192") && !e.contains("turned"), "{e}");
@@ -33280,8 +33294,10 @@ fn export_map_to_geotiff_draws_tile_layers_and_keeps_their_credits() {
     s.map_mut().tiles[0].url = gone.replace("broken", "gone");
     let n = s.notices.len();
     s.run("share.exportMap", &json!({"path": path.display().to_string()})).unwrap();
+    // Said as a tile layer that couldn't be drawn, or (where the reader is slower to give up)
+    // tiles still on their way: either way a warning that parts are empty.
     assert!(
-        s.notices[n..].iter().any(|n| n.severity == rustgis_data::diagnostics::Severity::Warning && n.text.contains("couldn't be drawn")),
+        s.notices[n..].iter().any(|n| n.severity == rustgis_data::diagnostics::Severity::Warning && n.text.contains("empty")),
         "{:?}",
         &s.notices[n..]
     );

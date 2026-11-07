@@ -15,9 +15,10 @@ gives them in full as `copyright`. `"cog": true` writes a
 cloud-optimised GeoTIFF. A turned map is drawn north up over the box around the view (and says
 so). A tilted map, the globe and a map of another body are refused: export a PNG of those. One
 side holds at most 8192 pixels, so a large `width` or `height` needs a lower `dpi`; the ribbon
-draws a GeoTIFF of a view too large for 192 DPI at the most that fits, and says so. A view wider
-or taller than 8000 points, PNG or GeoTIFF, is cut to its middle unless `width` and `height` are
-given, and the export says so. Tiles still
+draws a GeoTIFF of a view too large for 192 DPI at the most that fits, and says so. An export holds
+at most 8000 points a side, PNG or GeoTIFF: with no `width` or `height`, a larger view is cut to
+its middle; a `width` or `height` past 8000 is drawn at 8000 over the same ground. Either way the
+export says so. Tiles still
 on their way when the export stops waiting, streamed layers still reading the view, and tile
 layers that can't be drawn leave gaps that would pass for data, so the export warns about them. The web app's Export Map downloads a PNG. A projection
 whose parameters GeoTIFF's keys can't hold (Mollweide or Robinson, for example) is refused too:
