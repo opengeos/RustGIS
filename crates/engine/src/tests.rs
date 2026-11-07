@@ -31821,7 +31821,14 @@ fn rgbi_mosaics_keep_nir_without_alpha_and_reject_mixed_band_roles() {
         s.run("imagery.workspace", &json!({"kind":"ortho", "name":name, "images":images, "cellSize":1})).unwrap();
         let e = s.run("imagery.mosaic", &json!({"name":name})).unwrap_err().to_string();
         assert!(e.contains("matching band roles"), "{e}");
+        // Mosaic Rasters refuses the same mix rather than giving one input's role to both.
+        let e = s.run("raster.mosaic", &json!({"inputs": images, "name": format!("{name} raster")})).unwrap_err().to_string();
+        assert!(e.contains("matching band roles"), "{e}");
     }
+    // Matching roles still mosaic, keeping them.
+    let v = s.run("raster.mosaic", &json!({"inputs": ["nir", "nir2"], "name": "nir raster"})).unwrap();
+    let r = s.map().layer(v["layer"].as_u64().unwrap() as u32).unwrap().raster.as_ref().unwrap().data.clone().unwrap();
+    assert_eq!((r.band_count(), r.color.clone()), (4, ColorHint::Rgb { alpha: false }));
 }
 
 /// Add Data's and Load All's reads made before the command runs (the desktop app's, on a thread

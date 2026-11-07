@@ -1259,7 +1259,9 @@ pub(super) fn read_limited_with_nodata(
             }
             let Ok((ow, oh)) = dec.dimensions() else { continue };
             let (ospp, obytes) = (samples(&mut dec), sample_bytes(&mut dec));
-            if fits(ow, oh, ospp, obytes) && best.is_none_or(|(_, bw, bh)| ow as u64 * oh as u64 > bw as u64 * bh as u64) {
+            // An overview with another sample count (three of an RGBI image's four) would read
+            // as another kind of image: the full image is read sparsely instead.
+            if ospp == spp && fits(ow, oh, ospp, obytes) && best.is_none_or(|(_, bw, bh)| ow as u64 * oh as u64 > bw as u64 * bh as u64) {
                 best = Some((index, ow, oh));
             }
         }
@@ -2417,10 +2419,20 @@ mod tests {
                     let Parse::Done(layout) = cog::layout(&whole).unwrap() else { panic!("not a COG") };
                     assert_eq!(layout.levels.len(), 2);
                     assert_eq!(layout.bands, usize::from(full));
+                    assert!(layout.lost.iter().all(|n| !n.contains("overview(s)")), "{:?}", layout.lost);
                 } else {
-                    let error = cog::layout(&whole).unwrap_err().to_string();
-                    assert!(error.contains(&format!("image 1 has {overview} samples per pixel")), "{error}");
-                    assert!(error.contains(&format!("full image has {full}")), "{error}");
+                    // The overview is left out, and said; the full image is still read.
+                    let Parse::Done(layout) = cog::layout(&whole).unwrap() else { panic!("not a COG") };
+                    assert_eq!((layout.levels.len(), layout.bands), (1, usize::from(full)));
+                    assert!(
+                        layout
+                            .lost
+                            .iter()
+                            .any(|n| n.contains(&format!("1 overview(s) with samples per pixel other than the full image's {full}"))
+                                && n.contains(&format!("image 1 ({overview})"))),
+                        "{:?}",
+                        layout.lost
+                    );
                 }
             }
         }
@@ -2430,6 +2442,18 @@ mod tests {
         let whole = Sparse::default().with_len(bytes.len() as u64).with(0, bytes);
         let Parse::Done(layout) = cog::layout(&whole).unwrap() else { panic!("not a COG") };
         assert_eq!((layout.levels.len(), layout.bands), (2, 4));
+        assert!(layout.lost.iter().all(|n| !n.contains("overview(s)")), "{:?}", layout.lost);
+    }
+
+    /// An RGBI image too large to read whole, with a three-sample overview that would fit: the
+    /// overview would lose the fourth band, so the full image is read sparsely instead.
+    #[test]
+    fn whole_file_reads_skip_overviews_with_other_sample_counts() {
+        let pixel = |b: u32, x: u32, y: u32| (b * 10 + x + y) as u16;
+        let bytes = rgb_tiled_samples(&[(40, 16, 4), (20, 16, 3)], 8, 1, pixel);
+        let r = read_limited(reader(std::io::Cursor::new(&bytes)).unwrap(), "rgbi", 2_000, None).unwrap();
+        assert_eq!((r.band_count(), r.color.clone()), (4, ColorHint::Rgb { alpha: false }));
+        assert_eq!(r.value(3, 0, 0), Some(f32::from(pixel(3, 0, 0))));
     }
 
     #[test]

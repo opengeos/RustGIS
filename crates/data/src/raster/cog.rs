@@ -430,6 +430,8 @@ fn read_layout(r: Sparse) -> Result<Parse> {
     let mut levels = Vec::new();
     let mut index = 0usize;
     let mut allowance = MAX_TOTAL_TILES;
+    // Overviews left out for a sample count other than the full image's.
+    let mut mismatched: Vec<String> = Vec::new();
     loop {
         let subfile = dec.find_tag_unsigned::<u32>(Tag::NewSubfileType).ok().flatten().unwrap_or(0);
         // Transparency masks are skipped.
@@ -458,12 +460,14 @@ fn read_layout(r: Sparse) -> Result<Parse> {
             counts.truncate(n);
             // An overview a little larger than the one before isn't an overview of it.
             if levels.last().is_none_or(|l: &Level| w < l.width) {
-                // A level decodes as the full image does: with as many samples.
-                let samples = dec.find_tag_unsigned::<u16>(Tag::SamplesPerPixel).map_err(err)?.unwrap_or(1);
-                if usize::from(samples) != bands {
-                    return Err(err(format!("image {index} has {samples} samples per pixel, but the full image has {bands}")));
+                // A level decodes as the full image does, with as many samples: an overview with
+                // another count (three of an RGBI image's four) is left out, and said.
+                let samples = dec.find_tag_unsigned::<u16>(Tag::SamplesPerPixel).ok().flatten().unwrap_or(1);
+                if usize::from(samples) == bands {
+                    levels.push(Level { ifd: index, width: w, height: h, tile_width: tw, tile_height: th, offsets, counts });
+                } else {
+                    mismatched.push(format!("image {index} ({samples})"));
                 }
-                levels.push(Level { ifd: index, width: w, height: h, tile_width: tw, tile_height: th, offsets, counts });
             }
         }
         if levels.len() >= MAX_LEVELS || !dec.more_images() {
@@ -471,6 +475,13 @@ fn read_layout(r: Sparse) -> Result<Parse> {
         }
         dec.next_image().map_err(err)?;
         index += 1;
+    }
+    if !mismatched.is_empty() {
+        lost.push(format!(
+            "{} overview(s) with samples per pixel other than the full image's {bands} are left out: {}",
+            mismatched.len(),
+            mismatched.join(", ")
+        ));
     }
     if levels.is_empty() {
         return Ok(Parse::NotTiled("no image".into()));

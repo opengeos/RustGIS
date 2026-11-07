@@ -993,7 +993,11 @@ mod tests {
     #[test]
     fn rgbi_writers_keep_nir_without_marking_it_as_alpha() {
         for (dt, factor) in [("UInt8", 1.0), ("UInt16", 100.0), ("Float32", 0.01)] {
-            let bands: Vec<Vec<f32>> = [200.0, 100.0, 50.0, 0.0].iter().map(|v| vec![v * factor; 16]).collect();
+            let mut bands: Vec<Vec<f32>> = [200.0, 100.0, 50.0, 0.0].iter().map(|v| vec![v * factor; 16]).collect();
+            // Measured NIR next to zeros: a writer that zeroes the band fails.
+            if let Some(v) = bands[3].first_mut() {
+                *v = 75.0 * factor;
+            }
             let r = utm(4, 4, bands, ColorHint::Rgb { alpha: false }, dt, None);
             for bytes in [geotiff::write(&r, 0).unwrap(), write(&r, 0).unwrap()] {
                 let back = geotiff::read(Cursor::new(bytes), "rgbi").unwrap();
