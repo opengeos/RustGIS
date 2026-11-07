@@ -222,9 +222,9 @@ fn object_footprint(surfaces: Vec<Surface>, counts: &mut Counts, budget: &mut us
     let lod0 = surfaces.iter().any(|s| s.rank == 0.0 && !s.faces.faces.is_empty());
     let ground = highest(|s| s.faces.ground.contains(&true) || !s.faces.ground_left_out.is_empty());
     let all = highest(|s| !s.faces.faces.is_empty()).or_else(|| highest(|s| !s.faces.left_out.is_empty()));
-    // LoD 0 tried whole holds its ground and is the union of its faces too: neither tried twice.
-    let not_lod0 = |rank: &f64| !(lod0 && *rank == 0.0);
-    let (ground, all) = (ground.filter(not_lod0), all.filter(not_lod0));
+    // LoD 0 tried whole is the union of its faces too: not tried twice. Its ground alone is, as a
+    // wall past the coordinate limit fails the whole and not the ground.
+    let all = all.filter(|rank| !(lod0 && *rank == 0.0));
     let sources = [lod0.then_some((0.0, false, true)), ground.map(|rank| (rank, true, true)), all.map(|rank| (rank, false, false))];
     let (mut first_lod, mut passed_unusable) = (None, false);
     for (i, (rank, ground_only, lone)) in sources.into_iter().flatten().enumerate() {

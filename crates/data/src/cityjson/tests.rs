@@ -1139,6 +1139,14 @@ fn a_lone_face_past_the_coordinate_limit_has_no_footprint() {
     let out = read("m.city.json", &doc(vertices, objects), Crs::from_epsg(3857)).unwrap();
     assert!(out.iter().all(|(ds, _)| geometry(ds, 0).is_none()), "{:?}", messages_of(&out));
     assert!(says(&out, "2 city objects have a shape that can't be drawn"), "{:?}", messages_of(&out));
+    // A wall past the limit fails LoD 0 whole, and its ground alone is drawn.
+    let vertices = json!([[0, 0, 0], [10, 0, 0], [10, 10, 0], [0, 10, 0], [0, 0, 5], [1e200, 0, 5]]);
+    let lod0 = json!({"type": "MultiSurface", "lod": "0", "boundaries": [[[0, 1, 2, 3]], [[0, 1, 5, 4]]],
+        "semantics": {"surfaces": [{"type": "GroundSurface"}, {"type": "WallSurface"}], "values": [0, 1]}});
+    let out = read("m.city.json", &doc(vertices, json!({"a": {"type": "Building", "geometry": [lod0]}})), Crs::from_epsg(3857)).unwrap();
+    assert!(geometry(&out[0].0, 0).is_some(), "{:?}", messages_of(&out));
+    assert_eq!(value(&out[0].0, 0, "lod"), crate::Value::Text("0".into()));
+    assert!(says(&out, "1 city objects have a geometry whose X or Y can't be drawn"), "{:?}", messages_of(&out));
 }
 
 /// A level 0 face that outlines no area gives way to the ground, and the ground to the union.
