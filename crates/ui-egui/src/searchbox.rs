@@ -605,6 +605,8 @@ mod tests {
         // The Persian face, as the app installs it for Persian: the interface face alone has no
         // Persian glyphs on macOS (San Francisco) or with the built-in fonts.
         let Some((bytes, _)) = script_font(ScriptFont::Arabic) else {
+            // On CI a missing face fails, so the check is never skipped there unseen.
+            assert!(std::env::var_os("CI").is_none(), "no installed face draws Persian");
             eprintln!("skipped: no installed face draws Persian");
             return;
         };
