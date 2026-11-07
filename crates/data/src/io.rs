@@ -1053,6 +1053,11 @@ impl Schema {
         }
     }
 
+    /// A property's field, once seen.
+    pub(crate) fn index(&self, k: &str) -> Option<usize> {
+        self.index.get(k).copied()
+    }
+
     /// The fields, typed by every value seen.
     pub(crate) fn fields(&self) -> Vec<Field> {
         self.order.iter().map(|(k, ty)| Field::new(k.clone(), ty.unwrap_or(FieldType::Text))).collect()
@@ -1232,7 +1237,7 @@ fn widen(a: FieldType, b: Option<FieldType>) -> FieldType {
     }
 }
 
-fn coerce(v: Value, ty: FieldType) -> Value {
+pub(crate) fn coerce(v: Value, ty: FieldType) -> Value {
     match (ty, v) {
         (_, Value::Null) => Value::Null,
         (FieldType::Double, Value::Int(i)) => Value::Float(i as f64),
