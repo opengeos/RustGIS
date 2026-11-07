@@ -1410,6 +1410,8 @@ impl RustGisApp {
             i18n::Script::Arabic => Some(ScriptFont::Arabic),
             i18n::Script::Bengali => Some(ScriptFont::Bengali),
             i18n::Script::Alphabetic => None,
+            i18n::Script::Lao => Some(ScriptFont::Lao),
+            i18n::Script::Alphabetic => None,
         }
     }
 

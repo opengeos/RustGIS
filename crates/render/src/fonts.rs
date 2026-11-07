@@ -337,11 +337,35 @@ const ARABIC_CANDIDATES: &[&str] = &[
     "/usr/share/fonts/dejavu-sans-fonts/DejaVuSans.ttf",
 ];
 
+/// Installed faces with Lao letters (checked by [`covers_lao`]).
+const LAO_CANDIDATES: &[&str] = &[
+    // Windows 10/11
+    "C:\\Windows\\Fonts\\leelawad.ttf",
+    "C:\\Windows\\Fonts\\leelawdb.ttf",
+    "C:\\Windows\\Fonts\\dokchamp.ttf",
+    // macOS
+    "/System/Library/Fonts/Supplemental/Lao Sangam MN.ttf",
+    "/System/Library/Fonts/Supplemental/Lao MN.ttf",
+    // Linux
+    "/usr/share/fonts/truetype/noto/NotoSansLao-Regular.ttf",
+    "/usr/share/fonts/truetype/noto/NotoSansLao[wdth,wght].ttf",
+    "/usr/share/fonts/opentype/noto/NotoSansLao-Regular.otf",
+    "/usr/share/fonts/TTF/NotoSansLao-Regular.ttf",
+    "/usr/share/fonts/truetype/lao/Phetsarath_OT.ttf",
+];
+
 /// Whether a face draws Persian letters (farsi yeh, gaf) and Latin ones.
 fn covers_arabic(bytes: &[u8], index: u32) -> bool {
     use ab_glyph::Font;
     ab_glyph::FontRef::try_from_slice_and_index(bytes, index)
         .is_ok_and(|f| ['\u{6CC}', '\u{6AF}', 'A', 'z'].iter().all(|c| f.glyph_id(*c).0 != 0))
+}
+
+/// Whether a face draws Lao letters (ko kai, kho khai) and Latin ones.
+fn covers_lao(bytes: &[u8], index: u32) -> bool {
+    use ab_glyph::Font;
+    ab_glyph::FontRef::try_from_slice_and_index(bytes, index)
+        .is_ok_and(|f| ['\u{0E81}', '\u{0E82}', 'A', 'z'].iter().all(|c| f.glyph_id(*c).0 != 0))
 }
 
 /// An installed face for `script` (bytes and face index), found once. `None` on the web or when
@@ -396,6 +420,10 @@ pub fn script_font_url(script: ScriptFont) -> Option<&'static str> {
         ScriptFont::Bengali => None,
     }
 }
+ScriptFont::Lao => {
+            static FOUND: OnceLock<Option<(&'static [u8], u32)>> = OnceLock::new();
+            FOUND.get_or_init(|| LAO_CANDIDATES.iter().find_map(|p| read(p).filter(|b| covers_lao(b, 0)).map(|b| (b, 0)))).as_ref()
+        }
 
 #[cfg(test)]
 mod tests {
