@@ -2424,6 +2424,12 @@ mod tests {
                 }
             }
         }
+        // An image no smaller than the level before isn't an overview: skipped, whatever its
+        // samples, rather than failing the file.
+        let bytes = rgb_tiled_samples(&[(40, 16, 4), (20, 16, 4), (20, 16, 3)], 8, 1, |b, x, y| (b * 10 + x + y) as u16);
+        let whole = Sparse::default().with_len(bytes.len() as u64).with(0, bytes);
+        let Parse::Done(layout) = cog::layout(&whole).unwrap() else { panic!("not a COG") };
+        assert_eq!((layout.levels.len(), layout.bands), (2, 4));
     }
 
     #[test]
