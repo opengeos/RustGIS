@@ -1572,11 +1572,10 @@ fn start_over_in_another_project(app: &mut RustGisApp) {
     app.workflow.script_project = Some(opened);
 }
 
-/// Clear: the pane emptied, as one undo step of the box, which keeps the focus, so its own Ctrl+Z
-/// brings the script back at once. The box records undo steps only while it has the focus, so
-/// the script is kept as one here, as a suggestion picked keeps the text it replaced
-/// (`scriptcomplete::accept`).
-fn clear_script_pane(app: &mut RustGisApp, ui: &Ui, box_id: egui::Id) {
+/// The Clear button: [`clear_script`], with the script first kept as an undo step of the box and
+/// the focus given to the box, so Ctrl+Z brings the script back. The box records undo steps only
+/// while focused, so the step is added here, as `scriptcomplete::accept` does.
+fn clear_keeping_undo(app: &mut RustGisApp, ui: &Ui, box_id: egui::Id) {
     use egui::text::{CCursor, CCursorRange};
     let mut state = egui::widgets::text_edit::TextEditState::load(ui.ctx(), box_id).unwrap_or_default();
     let mut undoer = state.undoer();
@@ -1777,7 +1776,7 @@ fn script(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, fit: bool) {
             clear = clear.on_disabled_hover_text(tl!("Wait for the run to finish"));
         }
         if clear.clicked() {
-            clear_script_pane(app, ui, box_id);
+            clear_keeping_undo(app, ui, box_id);
         }
     });
     // Above the results' scroll, so it stays in view: its number and how long it took, and on
