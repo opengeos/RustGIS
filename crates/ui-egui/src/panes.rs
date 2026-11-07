@@ -4896,9 +4896,7 @@ fn legend_list(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, t: &Tokens) {
                     let rows = (0..classes).take(MAX_EXPRESSION_CLASSES).chain(legend.len().checked_sub(1)).collect();
                     (rows, classes.saturating_sub(MAX_EXPRESSION_CLASSES))
                 }
-                _ => {
-                    ((0..legend.len()).take(MAX_EXPRESSION_CLASSES + 1).collect(), legend.len().saturating_sub(MAX_EXPRESSION_CLASSES + 1))
-                }
+                _ => ((0..legend.len()).take(MAX_EXPRESSION_CLASSES).collect(), legend.len().saturating_sub(MAX_EXPRESSION_CLASSES)),
             };
             let mut seen = std::collections::HashSet::new();
             for i in rows {
@@ -5021,12 +5019,9 @@ fn legend_list(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, t: &Tokens) {
             }
             if unlisted > 0 {
                 let note = if unlisted == 1 {
-                    tl!("1 more class isn't listed: it's drawn with its own symbol").to_string()
+                    tl!("1 more class isn't listed: it's still drawn").to_string()
                 } else {
-                    crate::i18n::fmt(
-                        "{n} more classes aren't listed: they're drawn with their own symbols",
-                        &[("n", &unlisted.to_string())],
-                    )
+                    crate::i18n::fmt("{n} more classes aren't listed: they're still drawn", &[("n", &unlisted.to_string())])
                 };
                 ui.label(egui::RichText::new(note).size(11.5).color(t.text_dim));
             }
@@ -8019,6 +8014,9 @@ mod tests {
         grow_to(h.state_mut(), MAX_EXPRESSION_CLASSES + 37);
         h.run_steps(2);
         assert_eq!(h.query_all_by_role(Role::TextInput).count(), MAX_EXPRESSION_CLASSES + 1);
+        // `<all other values>` keeps the last row.
+        let last = h.query_all_by_role(Role::TextInput).last().and_then(|n| n.value()).unwrap_or_default();
+        assert_eq!(last, OTHER_VALUES);
         assert!(h.query_by_label_contains("37 more classes aren't listed").is_some());
         // One left out is said as one.
         if let Some(l) = h.state_mut().session.map_mut().layers.iter_mut().find(|l| l.id == id)

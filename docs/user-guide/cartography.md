@@ -155,7 +155,8 @@ pane and in layout legends instead of the value or range (for example `High inco
 `1. High income: OECD`); clear it to show the value again. `<all other values>` can be edited the
 same way. The list shows up to 200 classes, as many as an imported QGIS rule style keeps. A
 categorized style imported with more says below the list how many it leaves out: those classes are
-still drawn with their own symbols, and `layer.classStyle` edits them by value. Applying the
+still drawn, and `layer.classStyle` edits them by value (a value listed twice is drawn, and edited,
+as its first class). Applying the
 symbology again on the same field keeps the colours, outlines and labels you set by hand on the
 classes that are still there (the others take the scheme's colours again); picking another colour
 scheme recolours every class but keeps the labels. A Graduated Colors class keeps its colour and
