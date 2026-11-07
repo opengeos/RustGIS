@@ -38,6 +38,8 @@ be checked. The open session keeps its credentials, but a saved workflow or prot
 need them again when reopened. User notes, feature data and opaque content are preserved; see
 [Sharing projects and generated items](https://github.com/opengeos/RustGIS/blob/main/SECURITY.md#sharing-projects-and-generated-items)
 before sharing a file. Review addresses before sharing too: an unrecognized credential can remain unchanged.
+A cloud-optimised GeoTIFF's look in its address (`#bands=…`, `#range=…`, `#dequantize=aef`, a data
+cube's fixed range too) is saved; any other `#` part isn't.
 
 ### Autosave and recovery
 
