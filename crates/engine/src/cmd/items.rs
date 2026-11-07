@@ -845,8 +845,14 @@ pub(crate) fn touches_files(command: &str, params: &Value) -> bool {
         || ["import", "export", "open", "save", "add", "package", "upload", "download"].iter().any(|w| verb.starts_with(w))
         // Its inputs may be bare file names, which don't look like paths.
         || id == "raster.mosaic"
-        || (id == "gp.run" && params.get("tool").and_then(Value::as_str).and_then(super::gp::tool_id)
-            .and_then(rustgis_analysis::tool).is_some_and(super::gp::writes_files))
+        || (id == "gp.run"
+            && params
+                .get("tool")
+                .and_then(Value::as_str)
+                .and_then(super::gp::tool_id)
+                .and_then(rustgis_analysis::tool)
+                .is_some_and(super::gp::writes_files))
+        || (id == "gp.batch" && super::gp::batch_touches_files(params))
         || reaches(params)
 }
 
@@ -869,6 +875,28 @@ pub(crate) fn layer_name_left_out<'a>(command: &str, params: &'a Value) -> std::
     };
     let plain = |t: &str| !t.trim().is_empty() && !t.contains(['/', '\\', '.', ':']) && !looks_like_path(t);
     let named = || params.pointer("/params/output").and_then(Value::as_str).is_some_and(plain);
+    if command == "gp.batch" {
+        let has_builtin_plain_output = built_in()
+            && params.get("params").and_then(Value::as_object).and_then(|p| p.get("output")).and_then(Value::as_str).is_some_and(plain);
+        let has_null_folder = params.get("folder").is_some_and(Value::is_null);
+        let has_null_inputs = params.get("inputs").is_some_and(Value::is_null);
+
+        if !has_builtin_plain_output && !has_null_folder && !has_null_inputs {
+            return Cow::Borrowed(params);
+        }
+
+        let mut out = params.clone();
+        if has_builtin_plain_output && let Some(p) = out.get_mut("params").and_then(Value::as_object_mut) {
+            p.remove("output");
+        }
+        if has_null_folder && let Some(obj) = out.as_object_mut() {
+            obj.remove("folder");
+        }
+        if has_null_inputs && let Some(obj) = out.as_object_mut() {
+            obj.remove("inputs");
+        }
+        return Cow::Owned(out);
+    }
     // Copied only when there is a name to leave out: other commands' parameters (a file's
     // contents, say) are read as they are.
     if command != "gp.run" || !built_in() || !named() {
