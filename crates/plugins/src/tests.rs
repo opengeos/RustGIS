@@ -213,6 +213,22 @@ fn plugin_tool_and_parameter_limits_stay_bounded() {
     assert!(e.contains("more than 32 parameters"), "{e}");
 }
 
+/// A command may ask for more time than the two minutes a command normally gets.
+#[test]
+fn command_timeouts_are_bounded() {
+    let manifest = |timeout: Value| {
+        json!({"id": "timed", "name": "Timed", "version": "1.0.0",
+            "commands": [{"id": "c", "label": "C", "timeout": timeout}]})
+    };
+    let m = Manifest::parse(&manifest(json!(600)).to_string()).unwrap();
+    assert_eq!(m.commands[0].timeout, Some(600));
+    assert_eq!(Manifest::parse(&manifest(Value::Null).to_string()).unwrap().commands[0].timeout, None);
+    let e = Manifest::parse(&manifest(json!(0)).to_string()).unwrap_err();
+    assert!(e.contains("timeout of 0 seconds"), "{e}");
+    let e = Manifest::parse(&manifest(json!(86_401)).to_string()).unwrap_err();
+    assert!(e.contains("timeout of 86401 seconds"), "{e}");
+}
+
 /// Enabled plugin tools register with geoprocessing and return layers or selections.
 #[test]
 fn tools_join_the_geoprocessing_tools() {

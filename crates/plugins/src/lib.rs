@@ -39,7 +39,7 @@ use serde_json::{Value, json};
 
 pub use manifest::{CommandDecl, Entry, GroupDecl, ItemDecl, Layout, Manifest, MenuDecl, Permission, Runtime, TabDecl, ToolDecl};
 pub use package::Package;
-pub use panel::{PanelDecl, PanelItemDecl, PanelState, TreeNode};
+pub use panel::{FormField, PanelDecl, PanelItemDecl, PanelState, TreeNode};
 pub use runtime::{Host, NoHost};
 
 /// Plugin command and tool ids start with this: `plugin:<plugin>/<command>`.
@@ -379,15 +379,26 @@ pub fn run_command_with_panel(cmd: &PluginCommand, host: &mut dyn Host, params: 
     if let (Some(panel), Some(o)) = (panel, request.as_object_mut()) {
         o.insert("panel".into(), panel);
     }
-    call(&cmd.plugin, host, &request, false).map_err(|e| format!("{}: {e}", cmd.decl.label))
+    let timeout = cmd.decl.timeout.map(std::time::Duration::from_secs);
+    call_with_timeout(&cmd.plugin, host, &request, false, timeout).map_err(|e| format!("{}: {e}", cmd.decl.label))
 }
 
 /// Calls a plugin directly (tools, tests): a command's limits, or a tool's.
 pub(crate) fn call(plugin: &Plugin, host: &mut dyn Host, request: &Value, tool: bool) -> Result<Value, String> {
+    call_with_timeout(plugin, host, request, tool, None)
+}
+
+fn call_with_timeout(
+    plugin: &Plugin,
+    host: &mut dyn Host,
+    request: &Value,
+    tool: bool,
+    timeout: Option<std::time::Duration>,
+) -> Result<Value, String> {
     match &plugin.code {
         Code::Wasm(module) => runtime::call(module, host, request, if tool { runtime::TOOL_FUEL } else { runtime::COMMAND_FUEL }),
         #[cfg(not(target_arch = "wasm32"))]
-        Code::Process(spec) => process::call(spec, host, request, (!tool).then_some(process::COMMAND_TIMEOUT)),
+        Code::Process(spec) => process::call(spec, host, request, (!tool).then_some(timeout.unwrap_or(process::COMMAND_TIMEOUT))),
         Code::None => Err(format!("{} has only skills, nothing to run", plugin.manifest.name)),
     }
 }

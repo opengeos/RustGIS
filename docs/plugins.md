@@ -180,6 +180,8 @@ cargo build --release --target wasm32-unknown-unknown
   not a JSON object or a form definition; it defaults to `"{}"`.
 - `commands[].icon`: the name of one of RustGIS's own icons (`stats`, `zoom_full`, `bookmark`,
   `buffer`…), or a puzzle piece when it isn't one.
+- `commands[].timeout`: seconds the command may run, from 1 to 86400; unset is 120. Set it for
+  a command that does long work, such as downloading a dataset.
 - Tool parameter `kind`s: `layer`, `vectorLayer`, `polygonLayer`, `pointLayer`, `field`,
   `numericField`, `number`, `text`, `choice` (with 1 to 64 `choices`), `bool` and `file` (see
   [File parameters](#file-parameters)). Each has `name`, `label`, optional `help`, `required`
@@ -312,7 +314,7 @@ an example.
 ### A panel
 
 A plugin can have a panel: a pane on the right of the map with texts, checkboxes, sliders,
-buttons and trees bound to its commands. Declare it in `plugin.json`:
+buttons, trees and forms bound to its commands. Declare it in `plugin.json`:
 
 ```json
 "panel": {
@@ -348,10 +350,18 @@ buttons and trees bound to its commands. Declare it in `plugin.json`:
       with its triangle or a double click. `search: true` adds a box above it that keeps the
       nodes whose label holds every word typed (case and accents aside), with the branches
       above them open; a branch found with nothing found below it opens to all its children.
+    - `form`: a grid of fields the plugin gives, one per parameter, with a label and its widget.
+      A field's `kind` is `text`, `number` (a whole number when `integer` is true), `checkbox`,
+      `select` (one of `choices`) or `multi` (several of them). A field has an `id` (unique in
+      the form), a `label`, and optionally `help`, `choices`, `default`, `required` (shown with
+      `*`) and `integer`. A form holds at most 64 fields, a field id 64 characters and 256
+      choices. A label wraps in a narrow column so the value box stays reachable: keep a long
+      description in `help`, which shows on hover.
 - A checkbox runs its `command` when it changes, a slider when it is let go, or stepped
-  (never while it is dragged, while the pane shows the label of the value it would take), and a
-  tree when a node is chosen. Without a `command`, a widget's value just goes with the plugin's
-  next request.
+  (never while it is dragged, while the pane shows the label of the value it would take), a
+  tree when a node is chosen, and a form's text and number fields when they lose focus (so the
+  plugin is not run on every keystroke), its other fields at once. Without a `command`, a
+  widget's value just goes with the plugin's next request.
 - `state` (optional) is a command RustGIS runs each time the panel is opened, to answer its
   state.
 - Every `command` reference, including `state`, must name one of the plugin's own commands.
@@ -366,11 +376,11 @@ button, a script or the command line):
 "panel": { "values": { "local": false, "release": 196 }, "changed": ["release"] }
 ```
 
-`values` has each checkbox (`true` or `false`), slider (a whole number) and tree (the chosen
-node's id, or `null`), and `changed` the ones this call set: the widget the user just moved. A
-widget's command is run with `{"panel": {"release": 196}}` as its parameters, which sets the
-values before the call and is taken out of the request's `params`, so a script or `rustgis-cli`
-can do the same:
+`values` has each checkbox (`true` or `false`), slider (a whole number), tree (the chosen
+node's id, or `null`) and form (an object of its fields' values, by field id), and `changed` the
+ones this call set: the widget the user just moved. A widget's command is run with
+`{"panel": {"release": 196}}` as its parameters, which sets the values before the call and is
+taken out of the request's `params`, so a script or `rustgis-cli` can do the same:
 
 ```sh
 rustgis-cli run --sample --cmd 'plugin:historical-imagery/go-to-release={"panel": {"release": 40}}'
@@ -394,17 +404,23 @@ Any command can answer the panel's new state, beside the rest of its answer:
 
 - An item can set `label` (`null` brings back the declared one), `enabled` and `visible`; a text
   its `text`; a slider its `min`, `max` and `labels`, one per value from `min` (the numbers when
-  there are none); a tree its `nodes`. What an answer leaves out stays as it was.
+  there are none); a tree its `nodes`; a form its `fields`. What an answer leaves out stays as
+  it was.
 - A tree's `nodes` are `[{"id": "env", "label": "Environment", "count": 67, "children": [...]}]`:
   `id` is the value the node gives when chosen, unique in the tree; `label` defaults to the id;
   `count` (a whole number) shows at the right of the row. The nodes come before the values in an
   answer, so one can give a tree and choose a node of it; a chosen node no longer among them
   leaves nothing chosen.
+- A form's `fields` are `[{"id": "method", "kind": "select", "label": "Method", "choices":
+  ["fast", "careful"], "default": "fast", "required": true}]`. A value is kept by field id: a
+  field the new form does not have is dropped and a new one takes its default, so switching a
+  module cannot carry a stale value into a run.
 - RustGIS checks the answer like any other: unknown ids and fields and values of the wrong type
-  are ignored, a slider's value stays within its ends and a tree's among its nodes, texts are
-  clipped to 4,000 characters, labels to 200, and a slider has at most 2,000 labels of 80
-  characters. A tree holds at most 5,000 nodes, 8 levels deep; a node without an id, or with one
-  longer than 200 characters or taken already, is left out with its children.
+  are ignored, a slider's value stays within its ends, a tree's among its nodes, and a form's
+  among its fields and their choices, texts are clipped to 4,000 characters, labels to 200, and
+  a slider has at most 2,000 labels of 80 characters. A tree holds at most 5,000 nodes, 8 levels
+  deep; a node without an id, or with one longer than 200 characters or taken already, is left
+  out with its children.
 - A plugin words what it sets in the request's `lang`; RustGIS translates only what the
   manifest declares.
 - A command that fails leaves the values as they were. The panel's state command is no undo
@@ -632,9 +648,9 @@ requests and replies over its standard input and output, one JSON object per lin
    stopped.
 
 Output lines that aren't protocol messages are logged and skipped, since libraries print (even
-JSON), and so is the program's error output. A command is stopped after 2 minutes; a tool runs
-until it finishes or is cancelled (the desktop app runs it in the background: see
-[What a plugin can ask for](#what-a-plugin-can-ask-for)).
+JSON), and so is the program's error output. A command is stopped after 2 minutes unless its
+`timeout` says otherwise; a tool runs until it finishes or is cancelled (the desktop app runs
+it in the background: see [What a plugin can ask for](#what-a-plugin-can-ask-for)).
 
 The plugin above, in Python with no SDK:
 
