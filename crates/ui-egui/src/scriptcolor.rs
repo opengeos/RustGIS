@@ -136,15 +136,14 @@ fn json_spans(text: &str, at: usize, broken: bool, out: &mut Vec<Span>) {
                 // `"size"?: number`, `"layer"?,`, and alternative keys with `|`: `"lon" | "x":
                 // number`. A script's JSON never has either there. Values have alternatives too,
                 // `"path": "*.gif" | "*.zip"`, so `|` makes a key only where no value is due.)
-                let key = after.starts_with(':')
-                    || after.starts_with('?')
-                    || (!value && {
-                        if s >= chain.0 {
-                            let (end, keys) = alternatives(after);
-                            chain = (text.len() - end.len(), keys);
-                        }
-                        chain.1
-                    });
+                let mut key = after.starts_with(':') || after.starts_with('?');
+                if !key && !value {
+                    if s >= chain.0 {
+                        let (end, keys) = alternatives(after);
+                        chain = (text.len() - end.len(), keys);
+                    }
+                    key = chain.1;
+                }
                 push(s..i, if key { Kind::Key } else { Kind::Str }, out);
             }
             b'-' | b'0'..=b'9' => {
@@ -201,9 +200,9 @@ fn signature_spans(text: &str, at: usize, out: &mut Vec<Span>) {
     }
 }
 
-/// The alternatives `after`, what follows a string, goes on with: what is left past them, and
-/// whether a key's colon (or `?`) ends them: ` | "x": number` after `"lon"`, not
-/// ` | "*.zip" (PNG frames)`.
+/// Reads the `| "…"` alternatives at the start of `after` (the text after a string). Returns the
+/// text past them, and whether a key's colon (or `?`) follows them: true for ` | "x": number`
+/// after `"lon"`, false for ` | "*.zip" (PNG frames)`.
 fn alternatives(mut after: &str) -> (&str, bool) {
     while let Some(rest) = after.strip_prefix('|').map(str::trim_start) {
         // Past the next string's closing quote; a string nothing closes ends them.
