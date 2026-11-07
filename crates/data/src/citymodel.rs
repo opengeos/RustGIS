@@ -553,9 +553,10 @@ impl Highest<Vec<P3>> {
     pub(crate) fn add_lines(&mut self, rank: f64, lod: impl FnOnce() -> Option<String>, lines: Vec<Vec<P3>>) {
         let usable = lines.iter().flatten().all(usable_xy);
         // Two points that differ, told apart only by X and Y that are numbers: NaN differs from itself.
-        let comparable = |p: &P3| !p[0].is_nan() && !p[1].is_nan();
-        let drawable =
-            lines.iter().any(|p| p.iter().any(|q| p.first().is_some_and(|f| comparable(f) && comparable(q) && f[..2] != q[..2])));
+        let drawable = lines.iter().any(|line| {
+            let mut points = line.iter().filter(|p| !p[0].is_nan() && !p[1].is_nan());
+            points.next().is_some_and(|first| points.any(|p| first[..2] != p[..2]))
+        });
         self.add(rank, lod, lines, usable, drawable);
     }
 }

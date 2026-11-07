@@ -1266,8 +1266,10 @@ fn attributes_are_typed_by_every_value_in_their_layer() {
             "big": 18446744073709551615_u64, "none": null, "exact": 1e300}, "geometry": solid},
         "b": {"type": "Building", "attributes": {"count": 3, "share": 0.5, "mixed": "x", "flag": false, "big": 1, "exact": 0.1}, "geometry": solid},
     });
-    let out = read("m.city.json", &doc(box_vertices(), objects), None).unwrap();
+    // From 2 to 9 high: each height its own value, so none can stand in another's place.
+    let out = read("m.city.json", &doc(Json::Array([square(2), square(9)].concat()), objects), None).unwrap();
     let ds = &out[0].0;
+    assert_eq!([value(ds, 0, "z_min"), value(ds, 0, "z_max"), value(ds, 0, "height")], [2.0, 9.0, 7.0].map(crate::Value::Float));
     let ty = |name: &str| ds.fields.iter().find(|f| f.name == name).map(|f| f.ty);
     assert_eq!(ty("count"), Some(crate::FieldType::Integer));
     assert_eq!(ty("share"), Some(crate::FieldType::Double));
@@ -1290,4 +1292,18 @@ fn attributes_are_typed_by_every_value_in_their_layer() {
         names,
         ["id", "type", "parent", "lod", "big", "count", "exact", "flag", "mixed", "nested", "none", "share", "z_min", "z_max", "height"]
     );
+}
+
+/// A line whose first point's X is NaN still has two different points to draw from: left out for
+/// its coordinates, beside a line of one point kept, it is said. (A CityGML reader can meet NaN,
+/// whose numbers are text; CityJSON's can't be.)
+#[test]
+fn a_line_starting_at_nan_is_said_when_lost() {
+    let mut parts = ObjectParts::default();
+    parts.lines.add_lines(1.0, || Some("1".into()), vec![vec![[f64::NAN, 0.0, 0.0], [1.0, 0.0, 0.0], [2.0, 0.0, 0.0]]]);
+    parts.lines.add_lines(2.0, || Some("2".into()), vec![vec![[0.0, 0.0, 0.0]]]);
+    let (mut counts, mut budget) = (Counts::default(), MAX_FILE_FACES);
+    let made = object_rows(parts, 0, &mut counts, &mut budget);
+    assert_eq!(made.rows.first().and_then(|r| r.lod.as_deref()), Some("2"));
+    assert_eq!((counts.unusable_lost, counts.no_footprint), (1, 0));
 }
