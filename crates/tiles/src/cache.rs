@@ -10,6 +10,7 @@
 //! map stopped asking for is dropped unfetched ([`crate::schedule`]). Natively they are fetched on
 //! worker threads; the browser app installs its own fetcher with [`set_fetcher`].
 
+use std::cell::{Cell, RefCell};
 use std::collections::{BTreeSet, HashMap};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -606,42 +607,64 @@ fn forget_dropped(c: &mut Cache, dropped: &[Waiting<Job>]) {
     IN_FLIGHT.fetch_sub(dropped.len(), Ordering::Release);
 }
 
+/// Releases tiles that were selected to start but never launched (e.g. when launch is unwound
+/// by a panic). Forgets their pending cache entries, frees their host reservations, and balances
+/// in_flight() accounting.
+fn release_unstarted(unstarted: Vec<Waiting<Job>>) {
+    if unstarted.is_empty() {
+        return;
+    }
+    let count = unstarted.len();
+    {
+        let mut q = queue().lock().unwrap_or_else(|e| e.into_inner());
+        let mut c = lock();
+        for w in &unstarted {
+            if matches!(c.slots.get(&w.url), Some(Slot { entry: Entry::Pending, .. })) {
+                c.slots.remove(&w.url);
+            }
+            q.cancel(&w.host);
+        }
+    }
+    IN_FLIGHT.fetch_sub(count, Ordering::Release);
+    notify();
+}
+
+thread_local! {
+    static TO_START: RefCell<Vec<Waiting<Job>>> = const { RefCell::new(Vec::new()) };
+    static STARTING: Cell<bool> = const { Cell::new(false) };
+}
+
 /// Starts fetches one after another, never inside each other: a fetch can be over at once (a
 /// local read, an archive that failed), and each one over starts the next waiting tile, so a
 /// long queue would otherwise go as deep into the stack as it is long.
 fn launch(jobs: Vec<Waiting<Job>>) {
-    static TO_START: Mutex<Vec<Waiting<Job>>> = Mutex::new(Vec::new());
-    static STARTING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-    let pop = || TO_START.lock().unwrap_or_else(|e| e.into_inner()).pop();
     if !jobs.is_empty() {
         // Newest first: `pop` takes from the end.
-        TO_START.lock().unwrap_or_else(|e| e.into_inner()).extend(jobs.into_iter().rev());
+        TO_START.with(|q| q.borrow_mut().extend(jobs.into_iter().rev()));
     }
-    loop {
-        // Another call (this thread further up, or another thread) is starting them already.
-        if STARTING.swap(true, Ordering::AcqRel) {
+    STARTING.with(|starting| {
+        // Another call further up this thread is starting them already.
+        if starting.replace(true) {
             return;
         }
-        {
-            // Lowered however this ends: a fetcher that panics must not stop every later fetch.
-            struct Lower;
-            impl Drop for Lower {
-                fn drop(&mut self) {
-                    STARTING.store(false, Ordering::Release);
-                }
-            }
-            let _lower = Lower;
-            while let Some(w) = pop() {
-                let (want, capture, omit) = w.job;
-                let _scope = capture.enter();
-                fetch_tile(w.url, w.host, want, omit);
+        // Lowered however this ends: a fetcher that panics must not stop every later fetch,
+        // and any selected but unstarted jobs must be released so pending states, host slots,
+        // and in_flight() stay consistent.
+        struct Lower<'a>(&'a Cell<bool>);
+        impl Drop for Lower<'_> {
+            fn drop(&mut self) {
+                self.0.set(false);
+                let unstarted = TO_START.with(|q| std::mem::take(&mut *q.borrow_mut()));
+                release_unstarted(unstarted);
             }
         }
-        // A tile queued after the last `pop` and before the flag went down is started here.
-        if TO_START.lock().unwrap_or_else(|e| e.into_inner()).is_empty() {
-            return;
+        let _lower = Lower(starting);
+        while let Some(w) = TO_START.with(|q| q.borrow_mut().pop()) {
+            let (want, capture, omit) = w.job;
+            let _scope = capture.enter();
+            fetch_tile(w.url, w.host, want, omit);
         }
-    }
+    });
 }
 
 /// A tile fetch's answer: stored once it comes, and however the fetch ends (answered, dropped
@@ -3244,6 +3267,10 @@ mod tests {
         });
         let g = generation();
         assert!(matches!(get("test://cache/ok.json", Want::Json), State::Pending));
+        let t = Instant::now();
+        while generation() <= g && t.elapsed() < Duration::from_secs(5) {
+            wait_for_news(g, Duration::from_secs(5));
+        }
         assert!(generation() > g);
         assert!(matches!(get("test://cache/ok.json", Want::Json), State::Ready(_)));
         assert!(peek("test://cache/ok.json").is_some());
@@ -3348,5 +3375,97 @@ mod tests {
         assert_eq!(omit("tile.pbf"), Some(&[404, 410][..]));
         assert_eq!(omit("picture.png"), Some(&[][..]));
         assert_eq!(omit("style.json"), Some(&[][..]));
+    }
+
+    #[test]
+    fn concurrent_fetch_starts_without_waiting_for_another_threads_launch() {
+        let _turn = crate::cache::turn();
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let release_rx = Mutex::new(release_rx);
+        set_fetcher(move |url, done| {
+            if url.starts_with("test://slow/") {
+                started_tx.send(()).unwrap();
+                release_rx.lock().unwrap().recv_timeout(Duration::from_secs(5)).unwrap();
+                done(Ok(b"{\"slow\": true}".to_vec()));
+            } else {
+                done(Ok(b"{\"fast\": true}".to_vec()));
+            }
+        });
+        let thread_a = std::thread::spawn(|| {
+            assert!(matches!(get("test://slow/1.json", Want::Json), State::Pending));
+        });
+        started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+
+        assert!(matches!(get("test://fast/1.json", Want::Json), State::Pending));
+        let fast_ready_immediately = matches!(get("test://fast/1.json", Want::Json), State::Ready(_));
+
+        release_tx.send(()).unwrap();
+        thread_a.join().unwrap();
+
+        assert!(fast_ready_immediately, "fast fetch on thread B was parked behind thread A's in-flight launch");
+        assert!(matches!(get("test://fast/1.json", Want::Json), State::Ready(_)));
+    }
+
+    #[test]
+    fn fetcher_panic_unwinds_launch_and_releases_queued_replacement() {
+        let _turn = crate::cache::turn();
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (panic_started_tx, panic_started_rx) = std::sync::mpsc::channel();
+        let (panic_trigger_tx, panic_trigger_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let release_rx = Arc::new(Mutex::new(release_rx));
+        let panic_trigger_rx = Arc::new(Mutex::new(panic_trigger_rx));
+
+        let cap = crate::schedule::PER_HOST;
+        let rx = release_rx.clone();
+        let p_rx = panic_trigger_rx.clone();
+        set_fetcher(move |url, done| {
+            if url.contains("/slow_") {
+                started_tx.send(()).unwrap();
+                rx.lock().unwrap().recv_timeout(Duration::from_secs(5)).unwrap();
+                done(Ok(b"{\"slow\": true}".to_vec()));
+            } else if url.contains("/panic.json") {
+                panic_started_tx.send(()).unwrap();
+                p_rx.lock().unwrap().recv_timeout(Duration::from_secs(5)).unwrap();
+                panic!("simulated fetcher panic during launch");
+            } else {
+                done(Ok(b"{\"replacement\": true}".to_vec()));
+            }
+        });
+
+        let mut threads = Vec::new();
+        for i in 0..(cap - 1) {
+            threads.push(std::thread::spawn(move || {
+                let _ = get(&format!("test://samehost/slow_{i}.json"), Want::Json);
+            }));
+            started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        }
+
+        let panic_thread = std::thread::spawn(|| {
+            let _ = get("test://samehost/panic.json", Want::Json);
+        });
+        panic_started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+
+        let waiting_url = "test://samehost/waiting.json";
+        assert!(matches!(get(waiting_url, Want::Json), State::Pending));
+
+        panic_trigger_tx.send(()).unwrap();
+        let _ = panic_thread.join();
+
+        assert!(lock().slots.get(waiting_url).is_none());
+        assert_eq!(in_flight(), cap - 1);
+
+        assert!(matches!(get(waiting_url, Want::Json), State::Pending));
+        assert!(matches!(get(waiting_url, Want::Json), State::Ready(_)));
+
+        for _ in 0..(cap - 1) {
+            release_tx.send(()).unwrap();
+        }
+        for t in threads {
+            t.join().unwrap();
+        }
+
+        assert_eq!(in_flight(), 0);
     }
 }

@@ -134,6 +134,16 @@ impl<T> Queue<T> {
         self.next(host, asked, latest)
     }
 
+    /// Cancels one active reservation for `host` without starting another tile.
+    pub fn cancel(&mut self, host: &str) {
+        if let Some(n) = self.active.get_mut(host) {
+            *n = n.saturating_sub(1);
+            if *n == 0 {
+                self.active.remove(host);
+            }
+        }
+    }
+
     /// The newest waiting tile of `host` to take the place it freed, and the stale tiles passed
     /// on the way to it (dropped). Only `host` has a place free (the others were full when their
     /// tiles waited), so the walk stops once it is taken: a long queue of tiles still wanted
