@@ -50,7 +50,9 @@ const SNAP_COLOR: Color32 = Color32::from_rgb(0xE0, 0x3E, 0x8C);
 type Box4 = (f64, f64, f64, f64);
 
 /// Seconds at least between two drawings of the page while what its map frames show lands: each
-/// tile or read landing would draw the whole page again.
+/// tile or read landing would draw the whole page again. Anything landing counts, the page's or
+/// another map's: telling them apart would mean working out what each frame asks for, and the
+/// wait ends once the page is whole.
 const FRAMES_REDRAW_S: f64 = 0.25;
 
 /// What has landed so far: the tile cache's generation (tiles, styles, legend pictures, a raster's
@@ -664,8 +666,10 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
             app.layout.key = Some(key);
             // Natively the page waited for them already: drawn again, it would wait again.
             let web = cfg!(target_arch = "wasm32");
-            let legends = web && rustgis_engine::render::layout::legends_pending(&layout, &app.session.project.maps);
             let frames = web && frames_pending;
+            // Waiting for the frames draws it again anyway: the legends are asked about once
+            // they are whole.
+            let legends = web && !frames && rustgis_engine::render::layout::legends_pending(&layout, &app.session.project.maps);
             app.layout.page_wait = (legends || frames).then_some(PageWait { landed, frames, drawn: now });
         }
     }
