@@ -6,6 +6,7 @@
 
 pub mod address;
 pub mod cityjson;
+mod citymodel;
 pub mod color;
 mod dbf;
 pub mod diagnostics;
