@@ -22,7 +22,7 @@ use rustgis_data::raster::crs::Transformer;
 use rustgis_geom::Coord;
 use web_time::{Duration, Instant};
 
-use crate::cache::{Done, MAX_BYTES, RANGE};
+use crate::cache::{Done, MAX_BYTES, RANGE, caller_callback};
 
 pub mod raster;
 
@@ -368,17 +368,6 @@ pub fn info(url: &str) -> Result<Option<Arc<Info>>, String> {
     Ok(None)
 }
 
-/// Shared cache callbacks keep each caller's lifetime, including ready hits and follow-on
-/// reads. An ambient caller may narrow the captured owner, but never replace it.
-fn caller_callback<T: Send + 'static>(then: Box<dyn FnOnce(Result<T, String>) + Send>) -> Box<dyn FnOnce(Result<T, String>) + Send> {
-    let still = crate::cache::current_still();
-    Box::new(move |result| {
-        crate::cache::with_optional_still(still, || {
-            then(crate::cache::check_still(&crate::cache::current_still()).and(result));
-        });
-    })
-}
-
 /// Shares parsed headers and loading waiters, retaining retry delays only for resource failures.
 fn with_info(url: &str, then: Box<dyn FnOnce(Result<Arc<Info>, String>) + Send>) {
     let then = caller_callback(then);
@@ -419,6 +408,7 @@ fn with_info(url: &str, then: Box<dyn FnOnce(Result<Arc<Info>, String>) + Send>)
     load(
         url.to_string(),
         Box::new(move |r| {
+            let r = crate::cache::check_still(&crate::cache::current_still()).and(r);
             let r = crate::logins::check(&key)
                 .map_err(str::to_string)
                 .and(r)
@@ -770,6 +760,7 @@ fn with_stretch(info: Arc<Info>, file: String, look: Look, then: StretchThen) {
     let shown_bands = colour.len();
     let key_aef = look.aef;
     let done = move |r: Result<Vec<(f32, f32)>, String>| {
+        let r = crate::cache::check_still(&crate::cache::current_still()).and(r);
         let waiting = i.stretching.lock().unwrap_or_else(|e| e.into_inner()).remove(&key).unwrap_or_default();
         // A server error uses the type's full range until RETRY passes. Dropped or retired
         // reads propagate their refusal without leaving a shared stretch or retry delay.
@@ -1090,6 +1081,7 @@ fn get_tile(info: Arc<Info>, url: String, level: usize, idx: u32, then: Box<dyn 
             let r = r
                 .and_then(|b| cog::decode_tile_counted(&info.header, &info.layout, level, idx, b).map_err(|e| e.to_string()))
                 .map(Arc::new);
+            let r = crate::cache::check_still(&crate::cache::current_still()).and(r);
             let r = crate::logins::check(&key.0).map_err(str::to_string).and(r);
             let waiting = {
                 let mut t = tiles().lock().unwrap_or_else(|e| e.into_inner());
@@ -1534,7 +1526,8 @@ pub fn read_values_counted_blocking(
 #[cfg(test)]
 mod tests {
     /// Two callers share cached bytes, but a joining callback never borrows the loader's
-    /// lifetime. Both metadata-to-overview and tile-to-next-tile run the real range reader.
+    /// lifetime. Both metadata-to-overview and tile-to-next-tile run the real range reader;
+    /// a retired loader also leaves no successful header or raw tile for later callers.
     #[test]
     fn permission_policy_shared_cog_waiters_keep_their_own_lifetime() {
         use std::sync::atomic::{AtomicBool, Ordering::SeqCst};
@@ -1640,6 +1633,37 @@ mod tests {
                 failures.push("a live stretch caller received the cancelled read's fallback".into());
             }
         }
+        let url = "https://shared-cog.invalid/retired-loader.tif";
+        let live = Arc::new(AtomicBool::new(true));
+        let flag = live.clone();
+        let still: crate::cache::Still = Arc::new(move || flag.load(SeqCst));
+        let (done, result) = std::sync::mpsc::channel();
+        crate::cache::with_still(still.clone(), || with_info(url, Box::new(move |r| done.send(r).unwrap())));
+        live.store(false, SeqCst);
+        drain();
+        assert!(result.recv().unwrap().is_err());
+        if infos().lock().unwrap().contains_key(url) {
+            failures.push("a retired loader cached a successful header".into());
+            forget_file(url);
+        }
+        let (done, result) = std::sync::mpsc::channel();
+        with_info(url, Box::new(move |r| done.send(r).unwrap()));
+        drain();
+        let info = result.recv().unwrap().unwrap();
+        live.store(true, SeqCst);
+        let (done, result) = std::sync::mpsc::channel();
+        crate::cache::with_still(still, || get_tile(info.clone(), url.into(), 0, 0, Box::new(move |r| done.send(r).unwrap())));
+        live.store(false, SeqCst);
+        drain();
+        assert!(result.recv().unwrap().is_err());
+        if tiles().lock().unwrap().map.contains_key(&(url.into(), 0, 0)) {
+            failures.push("a retired loader cached successful raw samples".into());
+            forget_file(url);
+        }
+        let (done, result) = std::sync::mpsc::channel();
+        get_tile(info, url.into(), 0, 0, Box::new(move |r| done.send(r).unwrap()));
+        assert!(drain() > 0, "the live caller reads fresh raw samples");
+        assert!(result.recv().unwrap().is_ok());
         assert!(failures.is_empty(), "{failures:?}");
     }
 

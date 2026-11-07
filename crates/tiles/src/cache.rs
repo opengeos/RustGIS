@@ -66,6 +66,19 @@ pub(crate) fn keep_failure(message: &str, still: &Option<Still>) -> bool {
     message != DROPPED && check_still(still).is_ok()
 }
 
+/// Shared cache callbacks retain their caller across ready hits and loading waiters. A loader
+/// may narrow that lifetime, but cannot replace it when the callback starts another read.
+pub(crate) fn caller_callback<T: Send + 'static>(
+    then: Box<dyn FnOnce(Result<T, String>) + Send>,
+) -> Box<dyn FnOnce(Result<T, String>) + Send> {
+    let still = current_still();
+    Box::new(move |result| {
+        with_optional_still(still, || {
+            then(check_still(&current_still()).and(result));
+        });
+    })
+}
+
 type Fetcher = Box<dyn Fn(String, Done, &'static [u16]) + Send + Sync>;
 /// Hands back a decoded picture: [`RAW`] pixels, or the encoded bytes it was given when it
 /// couldn't decode them (they are decoded here then).
@@ -690,8 +703,8 @@ impl Drop for Answer {
     }
 }
 
-/// Retains the initiating lifetime through deferred decoding, so only resource failures are
-/// shared with later callers; a retired owner's unanswered slot is released by `Answer`.
+/// Retains the initiating lifetime through deferred decoding. Retired results are forgotten;
+/// only live successes and resource failures are shared with later callers.
 fn fetch_tile(url: String, host: String, want: Want, omit: &'static [u16]) {
     let owner = current_still();
     let answer = Answer { key: url.clone(), host, entry: None };
@@ -707,6 +720,7 @@ fn fetch_tile(url: String, host: String, want: Want, omit: &'static [u16]) {
         let settle = move |decoded: Result<Payload, String>| {
             let mut answer = answer;
             answer.set(match decoded {
+                Ok(_) if check_still(&still).is_err() => return,
                 Ok(p) => {
                     let size = payload_bytes(&p);
                     Entry::Ready(Arc::new(p), size)
@@ -3355,6 +3369,63 @@ mod tests {
         let most = most.load(Ordering::SeqCst);
         assert!(most > 8, "only {most} at a time");
         assert!(most <= native::cap(&addr.to_string()), "{most} at a time");
+    }
+
+    /// Successful bytes and browser decodes cannot populate a shared cache after their owner
+    /// retires, including a decode held across reload; active owners still populate it.
+    #[test]
+    fn retired_successes_do_not_populate_the_tile_cache() {
+        let _turn = turn();
+        let held = Arc::new(Mutex::new(Vec::<Done>::new()));
+        let hold = held.clone();
+        set_fetcher(move |_, done| hold.lock().unwrap().push(done));
+        let decoded = Arc::new(Mutex::new(Vec::<(Vec<u8>, Decoded)>::new()));
+        let hold = decoded.clone();
+        let old = image_decoder().lock().unwrap().clone();
+        struct RestoreDecoder(Option<Arc<ImageDecoder>>);
+        impl Drop for RestoreDecoder {
+            fn drop(&mut self) {
+                *image_decoder().lock().unwrap() = self.0.take();
+            }
+        }
+        let _restore = RestoreDecoder(old);
+        set_image_decoder(move |bytes, done| hold.lock().unwrap().push((bytes, done)));
+        let png = Pixmap::new(1, 1).unwrap().encode_png().unwrap();
+        let mut failures = Vec::new();
+        for want in [Want::Image, Want::Json, Want::Vector] {
+            for revoke in [false, true] {
+                let url = format!("https://retired-success.invalid/{want:?}-{revoke}");
+                let live = Arc::new(std::sync::atomic::AtomicBool::new(true));
+                let flag = live.clone();
+                assert!(matches!(with_still(Arc::new(move || flag.load(Ordering::SeqCst)), || get(&url, want)), State::Pending));
+                let done = held.lock().unwrap().pop().unwrap();
+                if want == Want::Image {
+                    done(Ok(png.clone()));
+                    assert_eq!(decoded.lock().unwrap().len(), 1, "real cache entry waits for browser decoding");
+                    clear();
+                    live.store(!revoke, Ordering::SeqCst);
+                    let (bytes, done) = decoded.lock().unwrap().pop().unwrap();
+                    done(Err(bytes));
+                } else {
+                    live.store(!revoke, Ordering::SeqCst);
+                    done(Ok(if want == Want::Json { b"1".to_vec() } else { Vec::new() }));
+                }
+                if peek(&url).is_some() == revoke {
+                    failures.push(format!("{want:?}: cached success with revoke={revoke}"));
+                    if revoke {
+                        forget(&url);
+                    }
+                }
+                if revoke {
+                    assert!(matches!(get(&url, want), State::Pending));
+                    // A fresh live caller can finish immediately, with no inherited failure.
+                    let done = held.lock().unwrap().pop().unwrap();
+                    done(Ok(Vec::new()));
+                    assert!(matches!(get(&url, want), State::Ready(_)));
+                }
+            }
+        }
+        assert!(failures.is_empty(), "{failures:?}");
     }
 
     /// Revocation belongs to the caller, while a genuine server failure belongs to the resource.

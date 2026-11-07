@@ -1561,9 +1561,11 @@ fn permission_policy_remote_range_reads_need_only_network() {
             crs: None,
         });
         s.map_mut().layer_mut(id).unwrap().source = Some(source);
-        for call in
-            [Call::command("layer.loadAll", json!({"layer":"Cities"})), Call::tool("buffer", json!({"input":"Cities","distance":10}))]
-        {
+        for call in [
+            Call::command("layer.loadAll", json!({"layer":"Cities"})),
+            Call::tool("buffer", json!({"input":"Cities","distance":10})),
+            Call::command("gp.spatialJoin", json!({"target":"Cities","join":"Countries","output":"Joined"})),
+        ] {
             let approved = pending(&s, &scope, &call);
             let why = &approved.review().why;
             assert_eq!(why.contains("files"), files, "{path}: {why}");
