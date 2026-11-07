@@ -33144,6 +33144,18 @@ fn export_map_to_geotiff_places_the_view_on_the_ground() {
     assert!(e.contains("cog is for a GeoTIFF"), "{e}");
     let e = s.run("share.exportMap", &json!({"path": cog.display().to_string(), "cog": "yes"})).unwrap_err();
     assert!(e.contains("cog must be true or false"), "{e}");
+    // A view past 8000 points (no size given) is cut to its middle, and says so, as a PNG does;
+    // one that fits says nothing.
+    let n = s.notices.len();
+    s.run("share.exportMap", &json!({"path": path.display().to_string()})).unwrap();
+    assert!(!s.notices[n..].iter().any(|x| x.text.contains("cut to its middle")));
+    s.view_size = (9000.0, 300.0);
+    for file in ["wide.tif", "wide.png"] {
+        let n = s.notices.len();
+        s.run("share.exportMap", &json!({"path": dir.join(file).display().to_string()})).unwrap();
+        assert!(s.notices[n..].iter().any(|x| x.text.contains("9000 × 300 points") && x.text.contains("cut to its middle")), "{file}");
+    }
+    s.view_size = (400.0, 300.0);
     // Too many pixels a side is refused, saying how many.
     let e = s.run("share.exportMap", &json!({"path": path.display().to_string(), "width": 8000, "dpi": 192})).unwrap_err();
     assert!(e.contains("16000") && e.contains("8192") && !e.contains("turned"), "{e}");
@@ -33229,18 +33241,26 @@ fn export_map_to_geotiff_draws_tile_layers_and_keeps_their_credits() {
     assert_eq!(out["copyright"], "© Röd");
     let r = geotiff::read(std::io::Cursor::new(std::fs::read(&path).unwrap()), "tiles").unwrap();
     assert_eq!(r.copyright.as_deref(), Some("(c) R?d"));
-    assert!(s.notices.iter().any(|n| n.text.contains("written with 1 character as ?: © Röd")), "{:?}", s.notices);
+    assert!(
+        s.notices.iter().any(|n| n.text.contains("written with 1 © or ® as (c) or (R), 1 character as ? (the credits: © Röd)")),
+        "{:?}",
+        s.notices
+    );
     // The tiles had all come: nothing says the picture has gaps.
     assert!(!s.notices.iter().any(|n| n.text.contains("export again once")), "{:?}", s.notices);
     // The middle pixel is the tile's red.
     let i = 100 * r.width as usize + 150;
     let px: Vec<f32> = r.bands.iter().map(|b| b.data[i]).collect();
     assert_eq!(px, [255.0, 0.0, 0.0]);
-    // Credits that are ASCII but for © say nothing.
+    // ASCII credits say nothing; a © alone says it is written as (c).
+    let n = s.notices.len();
+    s.map_mut().tiles[0].attribution = "(c) Red".into();
+    s.run("share.exportMap", &json!({"path": path.display().to_string()})).unwrap();
+    assert!(!s.notices[n..].iter().any(|n| n.text.contains("Copyright tag")), "{:?}", &s.notices[n..]);
     let n = s.notices.len();
     s.map_mut().tiles[0].attribution = "© Red".into();
     s.run("share.exportMap", &json!({"path": path.display().to_string()})).unwrap();
-    assert!(!s.notices[n..].iter().any(|n| n.text.contains("Copyright tag")), "{:?}", &s.notices[n..]);
+    assert!(s.notices[n..].iter().any(|n| n.text.contains("written with 1 © or ® as (c) or (R) (the credits")), "{:?}", &s.notices[n..]);
     // A tile layer that can't be drawn (its archive gone) leaves a gap that would pass for data:
     // said, as a warning.
     let broken = dir.join("broken.mbtiles");

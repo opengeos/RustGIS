@@ -166,6 +166,9 @@ fn png_of(
     rustgis_render::render_png(map, &view)
 }
 
+/// The most points a side an export of the map draws; a larger view is cut to its middle.
+pub const MOST_POINTS: f64 = 8000.0;
+
 /// The view an export of the map at `camera` draws, in a view of `(vw, vh)` points: a requested
 /// size keeps the same ground extent, and `dpi` sets the pixels per point.
 fn export_view(
@@ -178,8 +181,8 @@ fn export_view(
     // NaN would pass through `clamp`; non-finite values fall back to the defaults.
     let fin = |v: Option<f64>| v.filter(|x| x.is_finite());
     let (width, height, dpi) = (fin(width), fin(height), fin(dpi));
-    let w = width.unwrap_or(vw).clamp(16.0, 8000.0);
-    let h = height.unwrap_or(vh).clamp(16.0, 8000.0);
+    let w = width.unwrap_or(vw).clamp(16.0, MOST_POINTS);
+    let h = height.unwrap_or(vh).clamp(16.0, MOST_POINTS);
     let ppp = (dpi.unwrap_or(96.0) / 96.0).clamp(0.5, 6.0);
     let mut camera = camera;
     // Keep the same ground extent when the size differs from the view.
@@ -222,8 +225,19 @@ pub(crate) fn map_work(s: &Session, p: &Value) -> Result<Work, String> {
         None | Some(Value::Null) => false,
         Some(v) => v.as_bool().ok_or("cog must be true or false")?,
     };
+    // A view past the most an export draws (and no size given) is cut to its middle: said.
+    let (vw, vh) = s.view_size;
+    let cut = (width.is_none() && vw > MOST_POINTS) || (height.is_none() && vh > MOST_POINTS);
+    let cut = cut.then(|| {
+        (
+            rustgis_data::diagnostics::Severity::Info,
+            format!(
+                "{path}: the view is {vw:.0} × {vh:.0} points, more than the {MOST_POINTS:.0} a side an export holds, so it is cut to its middle: give a width and height to fit it whole"
+            ),
+        )
+    });
     if matches!(ext.as_str(), "tif" | "tiff") {
-        return geotiff_work(s, path, export_view(s.map().camera, s.view_size, width, height, dpi), cog);
+        return geotiff_work(s, path, export_view(s.map().camera, s.view_size, width, height, dpi), cog, cut);
     }
     if cog {
         return Err("cog is for a GeoTIFF (.tif) export".into());
@@ -236,7 +250,7 @@ pub(crate) fn map_work(s: &Session, p: &Value) -> Result<Work, String> {
             rustgis_data::io::write_atomic(Path::new(&path), &png).map_err(|e| format!("{path}: {e}"))?;
             Ok(json!({"path": path, "bytes": png.len()}))
         })();
-        super::exports::drawn(std::slice::from_ref(&map), Vec::new(), written, path)
+        super::exports::drawn(std::slice::from_ref(&map), cut.into_iter().collect(), written, path)
     }))
 }
 
@@ -247,7 +261,13 @@ pub(crate) fn map_work(s: &Session, p: &Value) -> Result<Work, String> {
 /// data. A turned view is drawn north up over the box around it, and says so; a tilted view, the
 /// globe and a map of another body are refused, as no grid of square pixels in one coordinate
 /// system holds them.
-fn geotiff_work(s: &Session, path: String, view: View, cog: bool) -> Result<Work, String> {
+fn geotiff_work(
+    s: &Session,
+    path: String,
+    view: View,
+    cog: bool,
+    cut: Option<(rustgis_data::diagnostics::Severity, String)>,
+) -> Result<Work, String> {
     let m = s.map();
     let crs = map_crs(m)?;
     if view.camera.pitch.abs() > 1e-6 {
@@ -257,7 +277,7 @@ fn geotiff_work(s: &Session, path: String, view: View, cog: bool) -> Result<Work
         ));
     }
     let mut view = view;
-    let mut notices = Vec::new();
+    let mut notices: Vec<_> = cut.into_iter().collect();
     let bearing = view.camera.bearing;
     let turned = bearing.rem_euclid(360.0).min(360.0 - bearing.rem_euclid(360.0)) > 1e-9;
     if turned {
@@ -311,21 +331,8 @@ fn geotiff_work(s: &Session, path: String, view: View, cog: bool) -> Result<Work
             let mut out = json!({"path": path, "width": r.width, "height": r.height, "crs": crs.label(), "bytes": bytes});
             if let Some(c) = &r.copyright {
                 out["copyright"] = json!(c);
-                let (questioned, spaced) = rustgis_data::raster::tag_text_changes(c);
-                let count = |n: usize| if n == 1 { "1 character".to_string() } else { format!("{n} characters") };
-                let changes: Vec<String> = [(questioned, "as ?"), (spaced, "(control characters) as spaces")]
-                    .into_iter()
-                    .filter(|(n, _)| *n > 0)
-                    .map(|(n, how)| format!("{} {how}", count(n)))
-                    .collect();
-                if !changes.is_empty() {
-                    notices.push((
-                        rustgis_data::diagnostics::Severity::Info,
-                        format!(
-                            "{path}: the Copyright tag holds ASCII only, so the credits are written with {}: {c}",
-                            changes.join(" and ")
-                        ),
-                    ));
+                if let Some(note) = rustgis_data::raster::tag_text_note(c) {
+                    notices.push((rustgis_data::diagnostics::Severity::Info, format!("{path}: {note} (the credits: {c})")));
                 }
             }
             Ok(out)

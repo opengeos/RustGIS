@@ -1771,9 +1771,16 @@ mod tests {
         r.copyright = Some("© OpenStreetMap contributors | Bundesamt für Landestopografie\0\n".into());
         let want = Some("(c) OpenStreetMap contributors | Bundesamt f?r Landestopografie".to_string());
         // One written as ?; the NUL and line break at the end are trimmed, not counted.
-        assert_eq!(super::super::tag_text_changes(r.copyright.as_deref().unwrap()), (1, 0));
+        assert_eq!(super::super::tag_text_changes(r.copyright.as_deref().unwrap()), (1, 1, 0));
         // Inside, a line break and U+0085 (a control character outside ASCII) are spaces.
-        assert_eq!(super::super::tag_text_changes("a\nb\u{85}c ü"), (1, 2));
+        assert_eq!(super::super::tag_text_changes("a\nb\u{85}c ü"), (0, 1, 2));
+        assert_eq!(
+            super::super::tag_text_note("© a\nb ü").as_deref(),
+            Some(
+                "the Copyright tag holds ASCII only, so it is written with 1 © or ® as (c) or (R), 1 character as ?, 1 control character as a space"
+            )
+        );
+        assert_eq!(super::super::tag_text_note("plain"), None);
         assert_eq!(super::super::tag_text("a\nb\u{85}c ü"), "a b c ?");
         // A scan (a TIFF with no GeoTIFF tags) keeps it too.
         let mut buf = std::io::Cursor::new(Vec::new());

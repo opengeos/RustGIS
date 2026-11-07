@@ -630,13 +630,31 @@ pub fn tag_text(s: &str) -> String {
     out.trim().to_string()
 }
 
-/// How many characters of `s` [`tag_text`] writes as `?`, and how many control characters it
-/// writes as spaces, line breaks and tabs among them (the trimmed ends not counted): for a
-/// writer to say.
-pub fn tag_text_changes(s: &str) -> (usize, usize) {
+/// What [`tag_text`] changes in `s` (the trimmed ends not counted): how many `©` and `®` it
+/// writes as `(c)` and `(R)`, how many characters as `?`, and how many control characters as
+/// spaces, line breaks and tabs among them.
+pub fn tag_text_changes(s: &str) -> (usize, usize, usize) {
     let inner = s.trim_matches(|c: char| c.is_control() || c.is_ascii_whitespace());
+    let symbols = inner.chars().filter(|c| matches!(c, '©' | '®')).count();
     let questioned = inner.chars().filter(|c| !c.is_ascii() && !c.is_control() && !matches!(c, '©' | '®')).count();
-    (questioned, inner.chars().filter(|c| c.is_control()).count())
+    (symbols, questioned, inner.chars().filter(|c| c.is_control()).count())
+}
+
+/// What writing `s` to a TIFF ASCII tag ([`tag_text`]) changes, for an export to say: `None`
+/// when it is written as it is.
+pub fn tag_text_note(s: &str) -> Option<String> {
+    let (symbols, questioned, spaced) = tag_text_changes(s);
+    let count = |n: usize, one: &str, many: &str| if n == 1 { format!("1 {one}") } else { format!("{n} {many}") };
+    let parts: Vec<String> = [
+        (symbols, count(symbols, "© or ® as (c) or (R)", "© or ® as (c) or (R)")),
+        (questioned, count(questioned, "character as ?", "characters as ?")),
+        (spaced, count(spaced, "control character as a space", "control characters as spaces")),
+    ]
+    .into_iter()
+    .filter(|(n, _)| *n > 0)
+    .map(|(_, part)| part)
+    .collect();
+    (!parts.is_empty()).then(|| format!("the Copyright tag holds ASCII only, so it is written with {}", parts.join(", ")))
 }
 
 /// How many of the names [`gdal_metadata_of`] writes for `bands` hold a character XML can't (a

@@ -1132,7 +1132,9 @@ impl RustGisApp {
             .extension()
             .and_then(|e| e.to_str())
             .is_some_and(|e| e.eq_ignore_ascii_case("tif") || e.eq_ignore_ascii_case("tiff"));
-        let (vw, vh) = self.session.view_size;
+        // As the export clamps it.
+        let most_points = rustgis_engine::cmd::share::MOST_POINTS;
+        let (vw, vh) = (self.session.view_size.0.clamp(16.0, most_points), self.session.view_size.1.clamp(16.0, most_points));
         let camera = self.session.map().camera;
         // As the export works it out: a turned view's box, rounded up to whole points; the pixels
         // rounded.
@@ -1146,7 +1148,12 @@ impl RustGisApp {
         }
         // Whole DPI, rounded down so the side fits; the export's own limit (48) refuses smaller.
         let dpi = (most * 96.0 / side).floor().max(48.0);
-        self.session.notify(format!("{path}: drawn at {dpi} DPI, the most a GeoTIFF of this view holds (8192 pixels a side)"), false);
+        let shown = dpi.to_string();
+        let note = crate::i18n::fmt(
+            "{path}: drawn at {dpi} DPI, the most a GeoTIFF of this view holds (8192 pixels a side)",
+            &[("path", path), ("dpi", &shown)],
+        );
+        self.session.notify(note, false);
         dpi
     }
 

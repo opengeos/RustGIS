@@ -174,6 +174,9 @@ mod tests {
         // 8192 × 96 / 5000 = 157.3: whole DPI, down.
         assert_eq!(app.export_map_dpi("wide.tif"), 157.0);
         assert!(app.session.notices[n..].iter().any(|x| x.text.contains("drawn at 157 DPI")), "{:?}", &app.session.notices[n..]);
+        // A view past 8000 points is clamped as the export clamps it: 16000 wide fits 98 DPI.
+        app.session.view_size = (16000.0, 3000.0);
+        assert_eq!(app.export_map_dpi("huge.tif"), 98.0);
         // A turned view counts its box: 3000 points square fits at 192 DPI (6000 pixels), turned
         // 45° its box is 4243 points (8486 pixels), which doesn't.
         app.session.view_size = (3000.0, 3000.0);
