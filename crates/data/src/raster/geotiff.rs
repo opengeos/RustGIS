@@ -1356,8 +1356,8 @@ pub(super) fn read_limited_with_nodata(
     let planar = dec.find_tag_unsigned::<u16>(Tag::PlanarConfiguration).ok().flatten() == Some(2);
     let n = (w as usize) * (h as usize);
     // Extra samples the decoder leaves out can make padded edge tiles spill into the next row
-    // when read whole (issue #162). Read those tile by tile. RGBI now keeps its fourth sample
-    // through the patched reader, so it no longer needs this workaround.
+    // when read whole (issue #162). Read those tile by tile. An RGBI image the patched reader
+    // shows as grey (see `Unpaletted`) keeps its fourth sample and doesn't need this.
     let tile_rows = dec.find_tag_unsigned::<u32>(Tag::TileLength).ok().flatten();
     let tiled = dec.find_tag_unsigned::<u32>(Tag::TileWidth).ok().flatten().is_some();
     let extra_samples = !planar && samples(&mut dec) > nbands && tiled;
@@ -2453,7 +2453,10 @@ mod tests {
         let bytes = rgb_tiled_samples(&[(40, 16, 4), (20, 16, 3)], 8, 1, pixel);
         let r = read_limited(reader(std::io::Cursor::new(&bytes)).unwrap(), "rgbi", 2_000, None).unwrap();
         assert_eq!((r.band_count(), r.color.clone()), (4, ColorHint::Rgb { alpha: false }));
+        // Every other pixel of the full image, not the full image whole.
+        assert_eq!((r.width, r.height, r.overview), (20, 20, Some((40, 40))));
         assert_eq!(r.value(3, 0, 0), Some(f32::from(pixel(3, 0, 0))));
+        assert_eq!(r.value(3, 1, 1), Some(f32::from(pixel(3, 2, 2))));
     }
 
     #[test]

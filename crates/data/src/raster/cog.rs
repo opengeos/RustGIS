@@ -430,8 +430,11 @@ fn read_layout(r: Sparse) -> Result<Parse> {
     let mut levels = Vec::new();
     let mut index = 0usize;
     let mut allowance = MAX_TOTAL_TILES;
-    // Overviews left out for a sample count other than the full image's.
+    // Overviews left out for a sample count other than the full image's (its tag's, which a
+    // JPEG YCbCr image's decoded bands may differ from), and how many.
+    let full_samples = dec.find_tag_unsigned::<u16>(Tag::SamplesPerPixel).ok().flatten().unwrap_or(1);
     let mut mismatched: Vec<String> = Vec::new();
+    let mut mismatched_count = 0usize;
     loop {
         let subfile = dec.find_tag_unsigned::<u32>(Tag::NewSubfileType).ok().flatten().unwrap_or(0);
         // Transparency masks are skipped.
@@ -463,10 +466,13 @@ fn read_layout(r: Sparse) -> Result<Parse> {
                 // A level decodes as the full image does, with as many samples: an overview with
                 // another count (three of an RGBI image's four) is left out, and said.
                 let samples = dec.find_tag_unsigned::<u16>(Tag::SamplesPerPixel).ok().flatten().unwrap_or(1);
-                if usize::from(samples) == bands {
+                if samples == full_samples {
                     levels.push(Level { ifd: index, width: w, height: h, tile_width: tw, tile_height: th, offsets, counts });
                 } else {
-                    mismatched.push(format!("image {index} ({samples})"));
+                    mismatched_count += 1;
+                    if mismatched.len() < 5 {
+                        mismatched.push(format!("image {index} ({samples})"));
+                    }
                 }
             }
         }
@@ -476,10 +482,10 @@ fn read_layout(r: Sparse) -> Result<Parse> {
         dec.next_image().map_err(err)?;
         index += 1;
     }
-    if !mismatched.is_empty() {
+    if mismatched_count > 0 {
+        let more = if mismatched_count > mismatched.len() { ", …" } else { "" };
         lost.push(format!(
-            "{} overview(s) with samples per pixel other than the full image's {bands} are left out: {}",
-            mismatched.len(),
+            "{mismatched_count} overview(s) with samples per pixel other than the full image's {full_samples} are left out: {}{more}",
             mismatched.join(", ")
         ));
     }
