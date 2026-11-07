@@ -543,7 +543,7 @@ fn layout_export_keeps_all_drawn_legend_classes() {
     page.add(
         "legend",
         (90.0, 0.0, 45.0, 95.0),
-        ElementKind::Legend { frame, title: "classes".into(), all_classes: false, hide_other: false, exclude: vec![] },
+        ElementKind::Legend { frame, title: "classes".into(), all_classes: false, hide_other: false, exclude: vec![], columns: 1 },
     );
     let expected = layout::render(&page, &mut [base.clone()], 96.0, &layout::PageInfo::default()).unwrap();
     for size in [1, 3, 20] {
@@ -1001,7 +1001,7 @@ fn pitched_plain_chunks_bypass_depth_budget_alone_and_with_upright_markers() {
                 for layer in &mut failed.layers {
                     *layer = streamed(layer, if layer.id == ground { 0 } else { 1 });
                 }
-                let lock = Some(vec![((ground, 0, 0, 0), 0)]);
+                let lock = Some(vec![((ground, 0, 0, 0), rustgis_map::LockedPlace::default())]);
                 failed.label_lock = lock.clone();
                 assert!(render_with_backend(&mut failed, &view, true, backend).is_none());
                 assert_eq!(failed.label_lock, lock);

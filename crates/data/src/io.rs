@@ -4,7 +4,7 @@ use std::path::Path;
 
 use serde_json::{Map, Value as Json, json};
 
-use crate::raster::Crs;
+use crate::raster::{Crs, planetary};
 use crate::{Coord, DataError, Dataset, Field, FieldType, Geometry, GeometryType, ReadReport, Result, Value};
 
 /// Largest file read into memory (256 MiB). Parsing JSON can take several times the file size.
@@ -373,9 +373,22 @@ pub fn project(ds: &Dataset, crs: Crs) -> Result<Dataset> {
 }
 
 /// Converts features' longitude/latitude geometry in place to the coordinates of `crs`, through
-/// its transformer `t`. Fails on a coordinate the system can't hold, naming its feature.
+/// its transformer `t`, as a step of the progress. Fails on a coordinate the system can't hold,
+/// naming its feature.
 pub(crate) fn project_features(features: &mut [crate::Feature], t: &crate::raster::Transformer, crs: Crs) -> Result<()> {
+    crate::progress::begin(features.len());
+    project_each(features, t, crs, true)
+}
+
+/// [`project_features`] without a step of its own: it counts each feature in the step under way
+/// when `count` is set, and otherwise only stops once the run is cancelled.
+pub(crate) fn project_each(features: &mut [crate::Feature], t: &crate::raster::Transformer, crs: Crs, count: bool) -> Result<()> {
     for f in features {
+        if count {
+            crate::progress::step(1)?;
+        } else {
+            crate::progress::check()?;
+        }
         if let Some(g) = f.geometry.take() {
             let mut ok = true;
             let p = g.map_coords(&|c| t.from_lonlat(c).unwrap_or(Coord::new(f64::NAN, f64::NAN)));
@@ -445,6 +458,7 @@ pub fn write_bytes_in(ds: &Dataset, ext: &str, crs: Crs) -> Result<(Vec<u8>, usi
 
 /// [`write_bytes_in`] for a dataset already in `crs`'s coordinates.
 fn projected_bytes(ds: &Dataset, ext: &str, crs: Crs) -> Result<(Vec<u8>, usize)> {
+    crate::progress::begin(ds.features.len());
     Ok(match ext {
         "geojson" | "json" => {
             let mut w = GeoJsonWriter::new(Vec::new(), &ds.name, &ds.fields)?;
@@ -454,12 +468,12 @@ fn projected_bytes(ds: &Dataset, ext: &str, crs: Crs) -> Result<(Vec<u8>, usize)
         "csv" => (to_csv(ds)?.into_bytes(), 0),
         "fgb" => (crate::source::fgb::write_in(ds, crs)?, without_geometry(ds)),
         "parquet" | "geoparquet" => (crate::source::parquet::write(ds)?, 0),
-        "kml" => (crate::interop::to_kml(ds, name_field(ds)).into_bytes(), without_geometry(ds)),
+        "kml" => (crate::interop::to_kml(ds, name_field(ds))?.into_bytes(), without_geometry(ds)),
         "kmz" => {
-            let kml = crate::interop::to_kml(ds, name_field(ds)).into_bytes();
+            let kml = crate::interop::to_kml(ds, name_field(ds))?.into_bytes();
             (crate::zip::write(&[("doc.kml".to_string(), kml)]).map_err(DataError::Format)?, without_geometry(ds))
         }
-        "gpx" => (crate::interop::to_gpx(ds, name_field(ds)).into_bytes(), without_geometry(ds)),
+        "gpx" => (crate::interop::to_gpx(ds, name_field(ds))?.into_bytes(), without_geometry(ds)),
         "shp" | "zip" => {
             let (parts, left_out) = shapefile_parts_in(ds, crs)?;
             let base: String = ds.name.chars().map(|c| if c.is_alphanumeric() || matches!(c, '-' | '_' | ' ') { c } else { '_' }).collect();
@@ -480,9 +494,44 @@ pub fn write_path(ds: &Dataset, path: &Path) -> Result<usize> {
     write_path_in(ds, path, Crs::LonLat)
 }
 
+/// How a GeoPackage export treats a GeoPackage already at its path.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum GpkgMode {
+    /// Writes a new file; an existing one is refused, as it may hold other tables.
+    #[default]
+    NewFile,
+    /// Adds the table to the GeoPackage (a new file when there is none); refuses a table of its
+    /// name.
+    AddTable,
+    /// Replaces the GeoPackage's feature or attribute table of its name, which must be there.
+    ReplaceTable,
+}
+
+/// Where a GeoPackage export puts its table: how, and under what name (default: the layer's).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct GpkgTable {
+    pub mode: GpkgMode,
+    pub name: Option<String>,
+}
+
+/// The table a GeoPackage export wrote: its name in the file (a reserved name is prefixed),
+/// whether it replaced one, and the views and triggers on other tables that name a replaced one.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GpkgWritten {
+    pub table: String,
+    pub replaced: bool,
+    pub dependents: Vec<String>,
+}
+
 /// As [`write_path`], in the coordinate system `crs` (a GeoPackage, Shapefile or FlatGeobuf; see
 /// [`write_bytes_in`]).
 pub fn write_path_in(ds: &Dataset, path: &Path, crs: Crs) -> Result<usize> {
+    write_path_to(ds, path, crs, &GpkgTable::default()).map(|(left_out, _)| left_out)
+}
+
+/// As [`write_path_in`], a GeoPackage's table placed as `gpkg` says (other formats ignore it):
+/// also returns the table written.
+pub fn write_path_to(ds: &Dataset, path: &Path, crs: Crs, gpkg: &GpkgTable) -> Result<(usize, Option<GpkgWritten>)> {
     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
     let projected;
     let ds = if crs == Crs::LonLat || !PROJECTED_FORMATS.contains(&ext.as_str()) {
@@ -496,13 +545,18 @@ pub fn write_path_in(ds: &Dataset, path: &Path, crs: Crs) -> Result<usize> {
         "gpkg" => {
             #[cfg(not(target_arch = "wasm32"))]
             {
-                crate::source::gpkg::write_in(ds, path, crs)?;
-                Ok(0)
+                crate::progress::begin(ds.features.len());
+                let table = crate::source::gpkg::write_table_in(ds, path, crs, gpkg)?;
+                Ok((0, Some(table)))
             }
             #[cfg(target_arch = "wasm32")]
-            Err(DataError::Unsupported("GeoPackage in the browser".into()))
+            {
+                let _ = gpkg;
+                Err(DataError::Unsupported("GeoPackage in the browser".into()))
+            }
         }
         "shp" => {
+            crate::progress::begin(ds.features.len());
             let (parts, left_out) = shapefile_parts_in(ds, crs)?;
             // Every part is written to a temporary file first and renamed into place only once all
             // are written, the .shp last, so a failed write leaves the old Shapefile whole.
@@ -517,11 +571,12 @@ pub fn write_path_in(ds: &Dataset, path: &Path, crs: Crs) -> Result<usize> {
                 }
                 result
             });
-            if let Err(e) = staged {
+            // A cancel before the parts land leaves the old Shapefile as it was.
+            if let Err(e) = staged.map_err(DataError::from).and_then(|()| crate::progress::check()) {
                 for (tmp, _) in &written {
                     let _ = std::fs::remove_file(tmp);
                 }
-                return Err(e.into());
+                return Err(e);
             }
             written.sort_by_key(|(_, target)| target == path);
             // The old parts are moved aside first and put back if any new part fails to land, so
@@ -530,6 +585,11 @@ pub fn write_path_in(ds: &Dataset, path: &Path, crs: Crs) -> Result<usize> {
             let mut placed: Vec<std::path::PathBuf> = Vec::new();
             let mut result = Ok(());
             for (tmp, target) in &written {
+                // A cancel before the last part lands rolls back like a failed rename.
+                if crate::progress::check().is_err() {
+                    result = Err(std::io::Error::other(DataError::Cancelled));
+                    break;
+                }
                 if target.exists() {
                     // Any failure here rolls back like a failed rename.
                     let bak = match temp_beside(target) {
@@ -570,7 +630,7 @@ pub fn write_path_in(ds: &Dataset, path: &Path, crs: Crs) -> Result<usize> {
             for stale in ["qix", "sbn", "sbx"] {
                 let _ = std::fs::remove_file(path.with_extension(stale));
             }
-            Ok(left_out)
+            Ok((left_out, None))
         }
         _ if crs != Crs::LonLat && !PROJECTED_FORMATS.contains(&ext.as_str()) => {
             Err(DataError::Unsupported(format!(".{ext} in {} (it holds longitude/latitude only)", crs.label())))
@@ -578,7 +638,7 @@ pub fn write_path_in(ds: &Dataset, path: &Path, crs: Crs) -> Result<usize> {
         _ => {
             let (bytes, left_out) = projected_bytes(ds, &ext, crs)?;
             write_atomic(path, &bytes)?;
-            Ok(left_out)
+            Ok((left_out, None))
         }
     }
 }
@@ -648,6 +708,11 @@ pub fn write_atomic_with<T, E: From<std::io::Error>>(
     out.get_ref().sync_all()?;
     // Closed before the rename, including on Windows.
     drop(out);
+    // A cancel that came while it was written leaves the file there before as it was. This is
+    // the last look: the rename commits the file, and a Cancel after it finds it written.
+    if crate::progress::check().is_err() {
+        return Err(std::io::Error::other(DataError::Cancelled).into());
+    }
     std::fs::rename(&tmp, path)?;
     std::mem::forget(staged);
     Ok(value)
@@ -732,7 +797,7 @@ pub fn read_geojson(text: &str, name: &str) -> Result<(Dataset, ReadReport)> {
     let mut features = Collector::default();
     match stream_features(text, &mut features) {
         Ok(rest) => match rest.get("type").and_then(Json::as_str) {
-            Some("FeatureCollection") => Ok(features.finish(name, &rest)),
+            Some("FeatureCollection") => features.finish(name, &rest),
             Some(_) => read_geojson_value(Json::Object(rest), name),
             None => Err(DataError::Format("GeoJSON: missing \"type\"".into())),
         },
@@ -762,9 +827,25 @@ fn clip(s: &str) -> String {
 /// Only named EPSG codes and CRS84 are honoured (not links, WKT or PROJ strings in the name, nor
 /// codes RustGIS doesn't know). The coordinates are x/y (easting/northing, longitude/latitude)
 /// whatever the axis order of the EPSG definition, as the legacy GeoJSON text says.
-pub(crate) fn declared_crs(root: &Map<String, Json>, messages: &mut Vec<String>) -> Option<(Crs, crate::raster::Transformer)> {
-    let decl = root.get("crs").filter(|v| !v.is_null())?;
-    match legacy_crs(decl) {
+///
+/// An IAU code (another body's system, as GDAL writes `urn:ogc:def:crs:IAU_2015::49900`) is read
+/// as longitude/latitude with a notice when it is planetocentric. Any other IAU code is an error,
+/// because its coordinates would land in the wrong place ([`planetary::declared`]).
+pub(crate) fn declared_crs(root: &Map<String, Json>, messages: &mut Vec<String>) -> Result<Option<(Crs, crate::raster::Transformer)>> {
+    let Some(decl) = root.get("crs").filter(|v| !v.is_null()) else { return Ok(None) };
+    if let Some(name) = decl.get("properties").and_then(|p| p.get("name")).and_then(Json::as_str).filter(|n| n.len() <= CRS_NAME_MAX)
+        && let Some((authority, code)) = iau_name(name)
+        && let Some(found) = planetary::declared(Some(&authority), Some(code), None)
+    {
+        return match found {
+            planetary::Declared::LonLat { note, .. } => {
+                messages.push(format!("GeoJSON crs \"{}\": {note}", clip(name)));
+                Ok(None)
+            }
+            planetary::Declared::Refused(e) => Err(DataError::Format(format!("GeoJSON crs \"{}\": {e}", clip(name)))),
+        };
+    }
+    Ok(match legacy_crs(decl) {
         Ok(found) => found,
         Err(why) => {
             let shown = match decl.get("properties").and_then(|p| p.get("name")).and_then(Json::as_str) {
@@ -777,7 +858,24 @@ pub(crate) fn declared_crs(root: &Map<String, Json>, messages: &mut Vec<String>)
             messages.push(format!("GeoJSON crs {shown}: {why}; coordinates are read as longitude/latitude"));
             None
         }
+    })
+}
+
+/// The authority and code of a `crs` name whose authority is the IAU's: `IAU_2015:49900`,
+/// `urn:ogc:def:crs:IAU_2015::49900`, `urn:ogc:def:crs:IAU:2015:49900` or
+/// `http(s)://www.opengis.net/def/crs/IAU/2015/49900` (any case, whitespace around).
+fn iau_name(name: &str) -> Option<(String, i64)> {
+    let up = name.trim().to_ascii_uppercase();
+    let rest = ["URN:OGC:DEF:CRS:", "HTTP://WWW.OPENGIS.NET/DEF/CRS/", "HTTPS://WWW.OPENGIS.NET/DEF/CRS/"]
+        .iter()
+        .find_map(|p| up.strip_prefix(p))
+        .unwrap_or(&up);
+    let authority = rest.split([':', '/']).next().filter(|a| planetary::is_iau(a))?;
+    let code = rest.rsplit([':', '/']).next()?;
+    if code.is_empty() || !code.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
     }
+    Some((authority.to_string(), code.parse().ok()?))
 }
 
 fn legacy_crs(decl: &Json) -> std::result::Result<Option<(Crs, crate::raster::Transformer)>, String> {
@@ -1042,14 +1140,14 @@ impl Collector {
     }
 
     /// The dataset; `root` is the document's top level (for its `crs`, see [`declared_crs`]).
-    fn finish(self, name: &str, root: &Map<String, Json>) -> (Dataset, ReadReport) {
+    fn finish(self, name: &str, root: &Map<String, Json>) -> Result<(Dataset, ReadReport)> {
         let mut report = ReadReport { skipped: self.skipped, ..ReadReport::default() };
         let mut ds = Dataset::new(name, GeometryType::None, self.schema.fields());
         ds.features.reserve(self.features.len());
         if report.skipped > 0 {
             report.messages.push(format!("{} features had unreadable geometry", report.skipped));
         }
-        let declared = declared_crs(root, &mut report.messages);
+        let declared = declared_crs(root, &mut report.messages)?;
         let mut unconverted = 0usize;
         // Only features kept count toward the heights dropped.
         let mut zm = 0usize;
@@ -1090,7 +1188,7 @@ impl Collector {
         }
         // Last, as a source read in place notes it.
         ds.drop_zm(&mut report, zm);
-        (ds, report)
+        Ok((ds, report))
     }
 }
 
@@ -1112,7 +1210,7 @@ fn read_geojson_value(root: Json, name: &str) -> Result<(Dataset, ReadReport)> {
         Some(_) => features.add(&json!({"type": "Feature", "geometry": &root, "properties": {}})),
         None => return Err(DataError::Format("GeoJSON: missing \"type\"".into())),
     }
-    Ok(features.finish(name, &top))
+    features.finish(name, &top)
 }
 
 fn json_type(v: &Json) -> Option<FieldType> {
@@ -1198,6 +1296,7 @@ impl<W: std::io::Write> GeoJsonWriter<W> {
     /// Writes the next features.
     pub(crate) fn write(&mut self, features: &[crate::Feature]) -> Result<()> {
         for f in features {
+            crate::progress::step(1)?;
             if !std::mem::take(&mut self.first) {
                 self.out.write_all(b",")?;
             }
@@ -1668,6 +1767,7 @@ impl<W: std::io::Write> CsvWriter<W> {
     /// Writes the next features, a row each.
     pub(crate) fn write(&mut self, features: &[crate::Feature]) -> Result<()> {
         for f in features {
+            crate::progress::step(1)?;
             let mut row: Vec<String> = f.attrs.iter().map(csv_cell).collect();
             if self.point {
                 let c = f.geometry.as_ref().and_then(|g| g.label_point());
@@ -2048,7 +2148,7 @@ fn read_shapefile_parts(mut parts: ShapefileParts, name: &str, crs: Option<Crs>)
             ds.crs = Some(c);
             Some(c.transformer().map_err(DataError::Format)?)
         }
-        None => shapefile_crs(parts.prj.as_deref(), &mut report).map(|(crs, t)| {
+        None => shapefile_crs(parts.prj.as_deref(), &mut report)?.map(|(crs, t)| {
             ds.crs = Some(crs);
             t
         }),
@@ -2150,9 +2250,11 @@ fn read_shapefile_parts(mut parts: ShapefileParts, name: &str, crs: Option<Crs>)
 
 /// Converts a Shapefile's coordinates to longitude/latitude, from the coordinate system in its
 /// `.prj`: `None` for longitude/latitude, or when there's no `.prj` or it isn't understood (said in
-/// the report).
-fn shapefile_crs(prj: Option<&str>, report: &mut ReadReport) -> Option<(Crs, crate::raster::Transformer)> {
-    let crs = match crate::raster::wkt::read_wkt(prj?) {
+/// the report). Another body's system that can't be read is an error, because its coordinates
+/// would land in the wrong place as longitude/latitude.
+fn shapefile_crs(prj: Option<&str>, report: &mut ReadReport) -> Result<Option<(Crs, crate::raster::Transformer)>> {
+    let Some(prj) = prj else { return Ok(None) };
+    let crs = match crate::raster::wkt::read_wkt(prj) {
         Ok((c, note)) => {
             if let Some(n) = note {
                 report.messages.push(format!("the .prj file: {n}"));
@@ -2160,18 +2262,21 @@ fn shapefile_crs(prj: Option<&str>, report: &mut ReadReport) -> Option<(Crs, cra
             c
         }
         Err(e) => {
+            if let Some(refused) = planetary::refused_wkt(prj, &e) {
+                return Err(DataError::Format(format!("the .prj file: {refused}")));
+            }
             report.messages.push(format!("the .prj file: {e}; coordinates are read as longitude/latitude"));
-            return None;
+            return Ok(None);
         }
     };
     if crs == crate::raster::Crs::LonLat {
-        return None;
+        return Ok(None);
     }
     match crs.transformer() {
-        Ok(t) => Some((crs, t)),
+        Ok(t) => Ok(Some((crs, t))),
         Err(e) => {
             report.messages.push(format!("the .prj file: {e}; coordinates are read as longitude/latitude"));
-            None
+            Ok(None)
         }
     }
 }
@@ -2472,6 +2577,7 @@ pub fn shapefile_parts_in(ds: &Dataset, crs: Crs) -> Result<(Vec<(&'static str, 
         let mut w = shapefile::Writer::new(shapes, table.build_with_dest(&mut dbf));
         let multi_points = ds.features.iter().any(|f| matches!(f.geometry, Some(Geometry::MultiPoint(_))));
         for f in &ds.features {
+            crate::progress::step(1)?;
             let ok = match (&f.geometry, ds.geometry_type) {
                 (Some(Geometry::Point(c)), GeometryType::Point) if !multi_points && finite(&c) => {
                     w.write_shape_and_record(&pt(c), &record(f)).map_err(fmt)?;
@@ -3626,5 +3732,64 @@ mod tests {
         let huge = "x".repeat(5000);
         let note = shapefile_names_note(&layer(&[&huge]).fields, "h.shp").unwrap();
         assert!(note.len() < 200 && note.contains(&format!("'{}…' → 'xxxxxxxxxx'", "x".repeat(40))), "{note}");
+    }
+
+    /// A cancelled export stops with [`DataError::Cancelled`] and leaves nothing at (or beside)
+    /// its destination, in every format; without a probe the same exports are written.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_cancelled_export_leaves_no_file() {
+        use crate::progress::tests::Counted;
+        let fields = vec![Field::new("name", FieldType::Text), Field::new("n", FieldType::Integer)];
+        let mut ds = Dataset::new("points", GeometryType::Point, fields);
+        for i in 0..3000u64 {
+            let c = Coord::new(i as f64 / 100.0, (i % 80) as f64);
+            ds.features.push(crate::Feature {
+                id: i + 1,
+                geometry: Some(Geometry::Point(c)),
+                attrs: vec![Value::Text(format!("p{i}")), Value::Int(i as i64)],
+            });
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let exts = ["geojson", "csv", "fgb", "gpkg", "parquet", "shp", "kml", "gpx"];
+        for ext in exts {
+            let path = dir.path().join(format!("out.{ext}"));
+            let probe = Counted::cancelling_after(100);
+            let res = {
+                let _g = crate::progress::install(Some(probe.clone()));
+                write_path_in(&ds, &path, Crs::LonLat)
+            };
+            assert!(matches!(res, Err(DataError::Cancelled)), "{ext}: {res:?}");
+            let left: Vec<_> = std::fs::read_dir(dir.path()).unwrap().map(|e| e.unwrap().file_name()).collect();
+            assert!(left.is_empty(), "{ext} left {left:?}");
+        }
+        // Cancelled once every feature is written, before the file is moved into place: a file
+        // there before stays as it was (a GeoPackage export never replaces one).
+        for ext in exts {
+            let path = dir.path().join(format!("old.{ext}"));
+            if ext != "gpkg" {
+                std::fs::write(&path, b"old").unwrap();
+            }
+            let probe = Counted::cancelling_after(ds.features.len() as u64);
+            let res = {
+                let _g = crate::progress::install(Some(probe.clone()));
+                write_path_in(&ds, &path, Crs::LonLat)
+            };
+            assert!(matches!(res, Err(DataError::Cancelled)), "{ext}: {res:?}");
+            if ext != "gpkg" {
+                assert_eq!(std::fs::read(&path).unwrap(), b"old", "{ext}");
+                std::fs::remove_file(&path).unwrap();
+            }
+            let left: Vec<_> = std::fs::read_dir(dir.path()).unwrap().map(|e| e.unwrap().file_name()).collect();
+            assert!(left.is_empty(), "{ext} left {left:?}");
+        }
+        for ext in exts {
+            let path = dir.path().join(format!("out.{ext}"));
+            write_path_in(&ds, &path, Crs::LonLat).unwrap();
+            assert!(path.exists(), "{ext}");
+        }
+        for e in ["shp", "shx", "dbf"] {
+            assert!(dir.path().join(format!("out.{e}")).exists());
+        }
     }
 }

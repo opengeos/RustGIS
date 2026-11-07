@@ -163,6 +163,26 @@ impl Symbol {
         self
     }
 
+    /// The colours a ramp gives a class, taken from `src`: the fill and the outline (a point's too,
+    /// which a ramp never sets, so it is one picked by hand). A polygon keeps its own fill opacity.
+    fn with_colors_of(mut self, src: &Symbol, g: GeometryType) -> Symbol {
+        match g {
+            GeometryType::Polyline => {
+                self.fill = src.fill;
+                self.stroke = src.stroke;
+            }
+            GeometryType::Polygon => {
+                self.fill = src.fill.with_alpha(self.fill.a());
+                self.stroke = src.stroke;
+            }
+            _ => {
+                self.fill = src.fill;
+                self.stroke = src.stroke;
+            }
+        }
+        self
+    }
+
     /// Ramp colours change hue, not a polygon's existing fill opacity (even below 150).
     fn with_ramp_fill(self, c: Rgba, g: GeometryType) -> Symbol {
         let mut out = self.with_fill(c, g);
@@ -337,6 +357,30 @@ pub struct LineStroke {
     /// and dash don't apply.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub markers: Option<LineMarkers>,
+}
+
+/// Whether a stack of fills (a polygon's) or strokes (a line's or a point's) hides the colors a
+/// color scheme sets on a symbol (#1355): the stack is drawn for the geometry (a polygon's stacked
+/// strokes and a line's stacked fills are not) and every layer of it sets a color of its own. A layer
+/// without one takes the symbol's (`FillLayer::color`, `LineStroke::color`), so the class still shows
+/// its color through it: a road's black casing over a core that follows the class. An empty stack is
+/// no stack. Used for a class's own stack and for the layer's.
+pub fn stack_hides_symbol(g: GeometryType, fills: &[FillLayer], strokes: &[LineStroke]) -> bool {
+    match g {
+        GeometryType::Polygon => !fills.is_empty() && fills.iter().all(|f| f.color.is_some()),
+        _ => !strokes.is_empty() && strokes.iter().all(|s| s.color.is_some()),
+    }
+}
+
+/// What [`Renderer::reverse_ramp`] did.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RampReversal {
+    /// How many classes changed colors with another: 0 when fewer than two classes show the scheme.
+    pub reversed: usize,
+    /// How many classes were left as they were, their own stack hiding their symbol.
+    pub kept: usize,
+    /// How many of the `reversed` classes have no stack of their own, so they are drawn from the layer's.
+    pub on_layer_stack: usize,
 }
 
 impl Default for LineStroke {
@@ -759,9 +803,18 @@ pub const MAX_LEGEND_STEPS: usize = 2_000_000;
 pub struct LegendEntry {
     pub label: String,
     pub symbol: Symbol,
+    /// The stacked strokes its class has of its own; empty, it takes the layer's `line_strokes`.
+    pub strokes: Vec<LineStroke>,
     /// The Unique Values fallback row (`<all other values>`), told apart from a class whatever
     /// its label: a legend can leave it out without touching a class that bears the same name.
     pub fallback: bool,
+}
+
+impl LegendEntry {
+    /// A class's row, with the stacked strokes it has of its own, if any.
+    fn class(label: String, symbol: Symbol, strokes: Option<&Vec<LineStroke>>) -> Self {
+        LegendEntry { label, symbol, strokes: strokes.cloned().unwrap_or_default(), fallback: false }
+    }
 }
 
 /// Most unique-value classes created automatically.
@@ -1408,7 +1461,19 @@ impl Renderer {
     /// Values by an expression reading `@map_scale` class by. One whose expression would take
     /// more than [`MAX_LEGEND_STEPS`] to class every kept feature lists all its classes.
     pub fn legend_at(&self, ds: &Dataset, rows: &[bool], map_scale: Option<f64>) -> Vec<LegendEntry> {
-        let Renderer::Unique { field, classes, other, class_labels, other_label, expression, other_fills, other_strokes, .. } = self else {
+        let Renderer::Unique {
+            field,
+            classes,
+            other,
+            class_labels,
+            other_label,
+            expression,
+            other_fills,
+            other_strokes,
+            class_strokes,
+            ..
+        } = self
+        else {
             return self.legend();
         };
         // A fallback that draws nothing has nothing to stand for in a legend: its own symbol as
@@ -1469,10 +1534,15 @@ impl Renderer {
             .into_iter()
             .filter(|i| used.get(*i).copied().unwrap_or(false))
             .filter_map(|i| classes.get(i))
-            .map(|(k, s)| LegendEntry { label: unique_label(class_labels, k), symbol: *s, fallback: false })
+            .map(|(k, s)| LegendEntry::class(unique_label(class_labels, k), *s, class_strokes.get(k)))
             .collect();
         if other_used && visible {
-            v.push(LegendEntry { label: other_label.clone().unwrap_or_else(|| OTHER_VALUES.into()), symbol: *other, fallback: true });
+            v.push(LegendEntry {
+                label: other_label.clone().unwrap_or_else(|| OTHER_VALUES.into()),
+                symbol: *other,
+                strokes: other_strokes.clone(),
+                fallback: true,
+            });
         }
         v
     }
@@ -1502,21 +1572,28 @@ impl Renderer {
         rustgis_data::value::numeric_classes(classes.iter().map(|(k, _)| k.as_str()))
     }
 
+    /// Every row of its legend, whatever the features: the classes, then a Unique Values'
+    /// `<all other values>`; none for a single symbol.
     pub fn legend(&self) -> Vec<LegendEntry> {
         match self {
             Renderer::Single(_) => Vec::new(),
-            Renderer::Unique { classes, other, class_labels, other_label, .. } => {
+            Renderer::Unique { classes, other, class_labels, other_label, class_strokes, other_strokes, .. } => {
                 // Keep symbols attached to their classes in `class_order` and the fallback at the end.
                 let mut v: Vec<LegendEntry> = self
                     .class_order()
                     .into_iter()
                     .filter_map(|i| classes.get(i))
-                    .map(|(k, s)| LegendEntry { label: unique_label(class_labels, k), symbol: *s, fallback: false })
+                    .map(|(k, s)| LegendEntry::class(unique_label(class_labels, k), *s, class_strokes.get(k)))
                     .collect();
-                v.push(LegendEntry { label: other_label.clone().unwrap_or_else(|| OTHER_VALUES.into()), symbol: *other, fallback: true });
+                v.push(LegendEntry {
+                    label: other_label.clone().unwrap_or_else(|| OTHER_VALUES.into()),
+                    symbol: *other,
+                    strokes: other_strokes.clone(),
+                    fallback: true,
+                });
                 v
             }
-            Renderer::Graduated { breaks, symbols, min, class_labels, .. } => {
+            Renderer::Graduated { breaks, symbols, min, class_labels, class_strokes, .. } => {
                 let mut lo = *min;
                 breaks
                     .iter()
@@ -1525,20 +1602,104 @@ impl Renderer {
                     .map(|(i, (b, s))| {
                         let label = class_labels.get(&i).cloned().unwrap_or_else(|| range_label(lo, *b));
                         lo = *b;
-                        LegendEntry { label, symbol: *s, fallback: false }
+                        LegendEntry::class(label, *s, class_strokes.get(&i))
                     })
                     .collect()
             }
             Renderer::Proportional { base, min_size, max_size, min, max, .. } => vec![
-                LegendEntry { label: fmt_num(*min), symbol: Symbol { size: *min_size, ..*base }, fallback: false },
+                LegendEntry { label: fmt_num(*min), symbol: Symbol { size: *min_size, ..*base }, strokes: Vec::new(), fallback: false },
                 LegendEntry {
                     label: fmt_num((min + max) / 2.0),
                     symbol: Symbol { size: min_size + (max_size - min_size) * 0.707, ..*base },
+                    strokes: Vec::new(),
                     fallback: false,
                 },
-                LegendEntry { label: fmt_num(*max), symbol: Symbol { size: *max_size, ..*base }, fallback: false },
+                LegendEntry { label: fmt_num(*max), symbol: Symbol { size: *max_size, ..*base }, strokes: Vec::new(), fallback: false },
             ],
         }
+    }
+
+    /// The classes whose colors a ramp gives, in the order the legend lists them, and how many
+    /// more the ramp can't recolor: a class whose own stack hides its symbol's colors. The stack
+    /// that is drawn depends on the geometry (a polygon's fills; a line's strokes or a point's
+    /// marks; see the drawing in `rustgis-render`, which doesn't draw a polygon's stacked strokes
+    /// or a line's stacked fills), an empty stack is no stack, and a layer of a stack without a
+    /// color of its own takes the symbol's (`FillLayer::color`, `LineStroke::color`), so the
+    /// class still shows its ramp color through it: a road's black casing over a core that follows
+    /// the class. Only a stack whose every layer sets its own color hides the symbol. Only the
+    /// first entry of a Unique Values value is drawn, so a repeated value counts once. They are
+    /// indices into `classes` (Unique Values) or `symbols` (Graduated Colors). `None` for the
+    /// other renderers.
+    fn ramp_slots(&self, g: GeometryType) -> Option<(Vec<usize>, usize, usize)> {
+        // Whether a class's own stacks hide its symbol's colors, for the geometry the layer draws.
+        let replaced = |fills: Option<&Vec<FillLayer>>, strokes: Option<&Vec<LineStroke>>| {
+            stack_hides_symbol(g, fills.map_or(&[][..], Vec::as_slice), strokes.map_or(&[][..], Vec::as_slice))
+        };
+        // A class's own stack, of the kind the layer draws, replaces the layer's whenever it isn't empty.
+        let bare = |fills: Option<&Vec<FillLayer>>, strokes: Option<&Vec<LineStroke>>| {
+            if g == GeometryType::Polygon { fills.is_none_or(|f| f.is_empty()) } else { strokes.is_none_or(|s| s.is_empty()) }
+        };
+        let (mut slots, mut kept, mut on_layer) = (Vec::new(), 0, 0);
+        match self {
+            Renderer::Unique { classes, class_fills, class_strokes, .. } => {
+                let mut seen = std::collections::HashSet::new();
+                for i in self.class_order() {
+                    let Some((value, _)) = classes.get(i) else { continue };
+                    if !seen.insert(value.as_str()) {
+                        continue;
+                    }
+                    if replaced(class_fills.get(value), class_strokes.get(value)) {
+                        kept += 1;
+                    } else {
+                        slots.push(i);
+                        on_layer += usize::from(bare(class_fills.get(value), class_strokes.get(value)));
+                    }
+                }
+            }
+            Renderer::Graduated { symbols, class_fills, class_strokes, .. } => {
+                for i in 0..symbols.len() {
+                    if replaced(class_fills.get(&i), class_strokes.get(&i)) {
+                        kept += 1;
+                    } else {
+                        slots.push(i);
+                        on_layer += usize::from(bare(class_fills.get(&i), class_strokes.get(&i)));
+                    }
+                }
+            }
+            _ => return None,
+        }
+        Some((slots, kept, on_layer))
+    }
+
+    fn class_symbol_mut(&mut self, i: usize) -> Option<&mut Symbol> {
+        match self {
+            Renderer::Unique { classes, .. } => classes.get_mut(i).map(|c| &mut c.1),
+            Renderer::Graduated { symbols, .. } => symbols.get_mut(i),
+            _ => None,
+        }
+    }
+
+    /// Reverses the colours of the classes (#1355), in the order the legend lists them: the first
+    /// class takes the last one's colour, and so on. Colours edited by hand travel with their
+    /// class's old position, and a polygon fill keeps its own opacity. Applied twice it gives the
+    /// original back. A class whose own stack hides its symbol (every layer of its fills, for a
+    /// polygon, or strokes, for a line or a point, sets a color of its own), and a repeat of a Unique
+    /// Values value (which no feature draws), keep theirs and take no part in the reversal. The
+    /// `<all other values>` symbol is no ramp color and stays. Says how many classes changed places
+    /// and how many were kept for their own stacks, or `None` for a renderer without classes
+    /// coloured from a ramp.
+    pub fn reverse_ramp(&mut self, g: GeometryType) -> Option<RampReversal> {
+        let (slots, kept, on_layer_stack) = self.ramp_slots(g)?;
+        let old: Vec<Symbol> = slots.iter().filter_map(|&i| self.class_symbol_mut(i).map(|s| *s)).collect();
+        for (pos, &i) in slots.iter().enumerate() {
+            let from = old.len().checked_sub(1 + pos).and_then(|k| old.get(k));
+            if let (Some(sym), Some(from)) = (self.class_symbol_mut(i), from) {
+                *sym = sym.with_colors_of(from, g);
+            }
+        }
+        // One class, or none, has no other to change places with.
+        let moved = slots.len() > 1;
+        Some(RampReversal { reversed: if moved { slots.len() } else { 0 }, kept, on_layer_stack: if moved { on_layer_stack } else { 0 } })
     }
 
     /// Recolours every class from a ramp, preserving each polygon fill's opacity.
@@ -1582,7 +1743,7 @@ impl Renderer {
         // The class's row in `legend()`, which lists the classes and then `other`. Unique Values
         // rows are sorted by label, so that class's row is built here rather than looked up.
         let row = match (&mut *self, class) {
-            (Renderer::Unique { classes, class_labels, .. }, ClassRef::Value(v)) => {
+            (Renderer::Unique { classes, class_labels, class_strokes, .. }, ClassRef::Value(v)) => {
                 let i = classes.iter().position(|(k, _)| k == v).ok_or_else(|| format!("no class with the value '{v}'"))?;
                 if let Some((k, s)) = classes.get_mut(i) {
                     restyle(s);
@@ -1599,7 +1760,7 @@ impl Renderer {
                 }
                 return classes
                     .get(i)
-                    .map(|(k, s)| LegendEntry { label: unique_label(class_labels, k), symbol: *s, fallback: false })
+                    .map(|(k, s)| LegendEntry::class(unique_label(class_labels, k), *s, class_strokes.get(k)))
                     .ok_or_else(|| "the class has no legend row".into());
             }
             (Renderer::Unique { classes, other, other_label, .. }, ClassRef::Other) => {
@@ -2156,10 +2317,144 @@ pub struct LabelClass {
     /// the one at its middle, as QGIS's repeat distance; none is the one at its middle.
     #[serde(default, deserialize_with = "de_repeat", skip_serializing_if = "Option::is_none")]
     pub repeat: Option<f32>,
+    /// Every label drawn, over the others where they crowd, rather than some left out.
+    #[serde(default, deserialize_with = "de_flag", skip_serializing_if = "std::ops::Not::not")]
+    pub show_all: bool,
+    /// Callouts: a label crowded off its spot moves to a free one nearby, a line drawn from its
+    /// feature to it at most this long (points, within [`CALLOUT_REACH`]), as QGIS's callouts;
+    /// none keeps every label in its spot. Labels along lines aren't moved.
+    #[serde(default, deserialize_with = "de_callout", skip_serializing_if = "Option::is_none")]
+    pub callout: Option<f32>,
+    /// Labels moved by hand (the Move Label tool, as QGIS's): each feature's, by its id, drawn
+    /// where it was put, a callout's line back to the feature when the class has callouts. At
+    /// most [`MAX_MOVED_LABELS`], kept in order of id (so a label's is found without a scan).
+    #[serde(default, deserialize_with = "de_moved", skip_serializing_if = "Vec::is_empty")]
+    pub moved: Vec<MovedLabel>,
     /// Its text, size, colour and angle per feature, each by an expression (none set: the field,
     /// size and colour above alone).
     #[serde(default, skip_serializing_if = "crate::label_by::LabelBy::is_empty", deserialize_with = "crate::label_by::de_label_by")]
     pub by: crate::label_by::LabelBy,
+}
+
+/// A label moved by hand: its feature's id, and where its text is centred, in the layer's
+/// coordinates (longitude and latitude), so it stays put on the map as the view moves.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct MovedLabel {
+    pub id: u64,
+    pub at: [f64; 2],
+}
+
+/// Most labels a class keeps moved by hand.
+pub const MAX_MOVED_LABELS: usize = 10_000;
+
+/// Whether `at` is a place a label can be moved to: a longitude within ±540° (a view's worth
+/// past the antimeridian either way) and a latitude within ±90°.
+pub fn is_label_place(at: [f64; 2]) -> bool {
+    let [x, y] = at;
+    x.is_finite() && y.is_finite() && x.abs() <= 540.0 && y.abs() <= 90.0
+}
+
+/// A project file's moved labels: those with a place ([`is_label_place`]), one a feature (the
+/// last wins), at most [`MAX_MOVED_LABELS`], in order of id.
+fn de_moved<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<MovedLabel>, D::Error> {
+    /// Reads one entry at a time, retaining only the capped map of valid label positions.
+    struct Moves;
+    impl<'de> serde::de::Visitor<'de> for Moves {
+        type Value = Vec<MovedLabel>;
+
+        fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("an array of moved labels")
+        }
+
+        /// Buffers only one entry and the capped, deduplicated set of valid positions.
+        fn visit_seq<A: serde::de::SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
+            let mut by_id = std::collections::BTreeMap::new();
+            while let Some(value) = seq.next_element::<serde_json::Value>()? {
+                if let Ok(m) = serde_json::from_value::<MovedLabel>(value)
+                    && is_label_place(m.at)
+                    && (by_id.len() < MAX_MOVED_LABELS || by_id.contains_key(&m.id))
+                {
+                    by_id.insert(m.id, m.at);
+                }
+            }
+            Ok(by_id.into_iter().map(|(id, at)| MovedLabel { id, at }).collect())
+        }
+
+        /// Skips a damaged object without allocating it or rejecting the surrounding class.
+        fn visit_map<A: serde::de::MapAccess<'de>>(self, mut map: A) -> Result<Self::Value, A::Error> {
+            while map.next_entry::<serde::de::IgnoredAny, serde::de::IgnoredAny>()?.is_some() {}
+            Ok(Vec::new())
+        }
+
+        fn visit_bool<E: serde::de::Error>(self, _: bool) -> Result<Self::Value, E> {
+            Ok(Vec::new())
+        }
+        fn visit_i64<E: serde::de::Error>(self, _: i64) -> Result<Self::Value, E> {
+            Ok(Vec::new())
+        }
+        fn visit_u64<E: serde::de::Error>(self, _: u64) -> Result<Self::Value, E> {
+            Ok(Vec::new())
+        }
+        fn visit_f64<E: serde::de::Error>(self, _: f64) -> Result<Self::Value, E> {
+            Ok(Vec::new())
+        }
+        fn visit_str<E: serde::de::Error>(self, _: &str) -> Result<Self::Value, E> {
+            Ok(Vec::new())
+        }
+        fn visit_unit<E: serde::de::Error>(self) -> Result<Self::Value, E> {
+            Ok(Vec::new())
+        }
+    }
+    d.deserialize_any(Moves)
+}
+
+impl LabelClass {
+    /// Where feature `id`'s label was moved to by hand, if it was.
+    pub fn moved_to(&self, id: u64) -> Option<[f64; 2]> {
+        self.moved.binary_search_by_key(&id, |m| m.id).ok().and_then(|i| self.moved.get(i)).map(|m| m.at)
+    }
+
+    /// Keeps feature `id`'s label at `at` (longitude, latitude), or where its class puts it
+    /// again with none. False when `at` isn't a place ([`is_label_place`]), or the class already
+    /// keeps the most.
+    pub fn move_label(&mut self, id: u64, at: Option<[f64; 2]>) -> bool {
+        let found = self.moved.binary_search_by_key(&id, |m| m.id);
+        match (at, found) {
+            (None, Ok(i)) => {
+                self.moved.remove(i);
+                true
+            }
+            (None, Err(_)) => true,
+            (Some(at), _) if !is_label_place(at) => false,
+            (Some(at), Ok(i)) => {
+                if let Some(m) = self.moved.get_mut(i) {
+                    m.at = at;
+                }
+                true
+            }
+            (Some(at), Err(i)) if self.moved.len() < MAX_MOVED_LABELS => {
+                self.moved.insert(i, MovedLabel { id, at });
+                true
+            }
+            (Some(_), Err(_)) => false,
+        }
+    }
+}
+
+/// How long a callout's line may be (points): from about a letter to a few centimetres of paper.
+pub const CALLOUT_REACH: std::ops::RangeInclusive<f64> = 5.0..=500.0;
+/// A callout's longest line when none is given (points).
+pub const DEFAULT_CALLOUT: f32 = 40.0;
+
+/// A callout's longest line as a class keeps it, within [`CALLOUT_REACH`]; none for no number.
+pub fn callout_reach(v: f64) -> Option<f32> {
+    v.is_finite().then(|| v.clamp(*CALLOUT_REACH.start(), *CALLOUT_REACH.end()) as f32)
+}
+
+/// Reads positive finite lengths within the supported range; damaged and disabled values stay off.
+fn de_callout<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<f32>, D::Error> {
+    // (0 turns callouts off, as the command has it; a negative isn't a length either.)
+    Ok(lenient::<D, f64>(d)?.filter(|v| *v > 0.0).and_then(callout_reach))
 }
 
 /// The longest wrap character kept (characters).
@@ -2589,6 +2884,9 @@ impl LabelClass {
             wrap_length: 0,
             line_align: crate::layout::TextAlign::Left,
             repeat: None,
+            show_all: false,
+            callout: None,
+            moved: Vec::new(),
             by: Default::default(),
         }
     }
@@ -3259,6 +3557,54 @@ mod tests {
         assert_eq!(r.legend().len(), 2);
     }
 
+    /// Each row keeps its class's strokes, its class stored in either order, in both renderers
+    /// with classes.
+    #[test]
+    fn a_legend_row_has_its_class_own_strokes() {
+        let mut d = Dataset::new("t", GeometryType::Point, vec![Field::new("g", FieldType::Text)]);
+        for g in ["a", "b", "z"] {
+            d.push(None, vec![Value::Text(g.into())]);
+        }
+        let s = |c| Symbol::default_for(GeometryType::Point, c);
+        let stroke = |width| LineStroke { width: Some(width), ..LineStroke::default() };
+        // Stored in either order, the rows come by label and each keeps its class's strokes.
+        let (a, b) = (("a".to_string(), s(0)), ("b".to_string(), s(1)));
+        for classes in [vec![a.clone(), b.clone()], vec![b, a]] {
+            let r = Renderer::Unique {
+                field: "g".into(),
+                classes,
+                other: s(2),
+                ramp: Ramp::Ember,
+                class_labels: Default::default(),
+                other_label: None,
+                class_strokes: [("a".to_string(), vec![stroke(1.0)])].into_iter().collect(),
+                other_strokes: vec![stroke(2.0)],
+                class_fills: Default::default(),
+                other_fills: Vec::new(),
+                expression: None,
+            };
+            // The whole list and the classes of the features kept.
+            for rows in [r.legend(), r.legend_for(&d, &[])] {
+                let strokes: Vec<_> = rows.iter().map(|e| e.strokes.clone()).collect();
+                assert_eq!(strokes, [vec![stroke(1.0)], vec![], vec![stroke(2.0)]]);
+            }
+        }
+        let g = Renderer::Graduated {
+            field: "v".into(),
+            breaks: vec![1.0, 2.0],
+            symbols: vec![s(0), s(1)],
+            ramp: Ramp::Ember,
+            method: ClassMethod::Quantile,
+            min: 0.0,
+            classes: 2,
+            class_labels: Default::default(),
+            class_strokes: [(1, vec![stroke(1.0)])].into_iter().collect(),
+            class_fills: Default::default(),
+        };
+        let strokes: Vec<_> = g.legend().into_iter().map(|e| e.strokes).collect();
+        assert_eq!(strokes, [vec![], vec![stroke(1.0)]]);
+    }
+
     #[test]
     fn categorical_children_sort_case_insensitively_without_changing_symbols() {
         let names = ["Zulu", "alpha", "Bravo", "ALPHA", "éclair", "École"];
@@ -3856,6 +4202,47 @@ mod tests {
     }
 
     #[test]
+    fn labels_are_moved_by_hand_and_put_back() {
+        let ds = rustgis_data::Dataset::new(
+            "d",
+            rustgis_data::GeometryType::Point,
+            vec![rustgis_data::Field::new("name", rustgis_data::FieldType::Text)],
+        );
+        let mut c = LabelClass::default_for(&ds);
+        assert!(c.move_label(7, Some([10.0, 20.0])) && c.move_label(8, Some([1.0, 2.0])));
+        assert!(c.move_label(7, Some([11.0, 21.0])), "moved again, the same feature's");
+        assert_eq!((c.moved_to(7), c.moved_to(8), c.moved.len()), (Some([11.0, 21.0]), Some([1.0, 2.0]), 2));
+        assert!(!c.move_label(9, Some([f64::NAN, 0.0])), "not a place");
+        assert!(!c.move_label(9, Some([1000.0, 0.0])) && !c.move_label(9, Some([0.0, 95.0])), "off the map");
+        assert!(c.move_label(2, Some([0.0, 0.0])) && c.moved.windows(2).all(|w| w[0].id < w[1].id), "kept in order of id");
+        assert!(c.move_label(2, None) && c.move_label(2, None), "putting back one not moved is fine");
+        assert!(c.move_label(8, None) && c.moved_to(8).is_none(), "put back");
+        // Read from a file: bad entries dropped, the rest kept, a feature's last place wins.
+        let mut v = serde_json::to_value(&c).unwrap();
+        v["moved"] = serde_json::json!([{"id": 1, "at": [1, 1]}, {"id": "x"}, 7, {"id": 1, "at": [2, 2]}, {"id": 3, "at": [3, 3]}, {"id": 0, "at": [1000, 95]}]);
+        let read: LabelClass = serde_json::from_value(v.clone()).unwrap();
+        assert_eq!(read.moved, vec![MovedLabel { id: 1, at: [2.0, 2.0] }, MovedLabel { id: 3, at: [3.0, 3.0] }]);
+        // Out of order in the file: put in order, so each is still found.
+        v["moved"] = serde_json::json!([{"id": 9, "at": [9, 9]}, {"id": 4, "at": [4, 4]}]);
+        let read: LabelClass = serde_json::from_value(v.clone()).unwrap();
+        assert_eq!((read.moved_to(4), read.moved_to(9)), (Some([4.0, 4.0]), Some([9.0, 9.0])));
+        // A huge list reads quickly, and keeps the first the file lists, up to the most kept.
+        let many: Vec<_> = (0..50_000u64).rev().map(|i| serde_json::json!({"id": i, "at": [0, 0]})).collect();
+        v["moved"] = serde_json::Value::Array(many);
+        let read: LabelClass = serde_json::from_value(v.clone()).unwrap();
+        assert_eq!(read.moved.len(), MAX_MOVED_LABELS);
+        v["moved"] = serde_json::json!("nonsense");
+        assert!(serde_json::from_value::<LabelClass>(v.clone()).unwrap().moved.is_empty(), "the rest still reads");
+        v["show_all"] = serde_json::json!("yes");
+        v["moved"] = serde_json::json!({"damaged": [1, 2, 3]});
+        let read: LabelClass = serde_json::from_str(&v.to_string()).unwrap();
+        assert!(!read.show_all && read.moved.is_empty(), "damaged optional fields leave the class usable");
+        // None moved: none saved.
+        let none = serde_json::to_value(LabelClass::default_for(&ds)).unwrap();
+        assert!(none.get("moved").is_none());
+    }
+
+    #[test]
     fn class_labels_are_saved_and_older_renderers_still_load() {
         let g = GeometryType::Point;
         let s = |c| Symbol::default_for(g, c);
@@ -3958,5 +4345,157 @@ mod tests {
         let mut more = fresh.clone();
         more.carry_edits_from(&gold, g);
         assert_eq!(more, fresh, "another number of classes starts fresh");
+    }
+
+    fn unique_with(values: &[(&str, u8)]) -> Renderer {
+        let sym = |v: u8| Symbol { fill: Rgba::rgb(v, 0, 0), ..Symbol::default_for(GeometryType::Point, 0) };
+        Renderer::Unique {
+            field: "f".into(),
+            classes: values.iter().map(|(k, v)| (k.to_string(), sym(*v))).collect(),
+            other: sym(0),
+            ramp: Ramp::Greys,
+            class_labels: BTreeMap::new(),
+            other_label: None,
+            class_strokes: BTreeMap::new(),
+            other_strokes: Vec::new(),
+            class_fills: Default::default(),
+            other_fills: Vec::new(),
+            expression: None,
+        }
+    }
+
+    /// #1355: Invert Color Ramp reverses the colours along the legend's order, which is not the
+    /// order the classes are stored in; a value repeated in the classes isn't drawn, so it takes
+    /// no part; and a class with a stack of its own keeps its colours without shifting the rest.
+    #[test]
+    fn reverse_ramp_follows_the_legend_and_skips_what_is_not_drawn() {
+        let reds = |r: &Renderer| match r {
+            Renderer::Unique { classes, .. } => classes.iter().map(|c| (c.0.clone(), c.1.fill.r())).collect::<Vec<_>>(),
+            _ => vec![],
+        };
+        let g = GeometryType::Point;
+        // Stored 10, 100, 9: the legend lists 9, 10, 100 (numbers), so 9 and 100 swap colours.
+        let mut r = unique_with(&[("10", 1), ("100", 2), ("9", 3)]);
+        assert_eq!(r.reverse_ramp(g), Some(RampReversal { reversed: 3, kept: 0, on_layer_stack: 3 }));
+        assert_eq!(reds(&r), vec![("10".into(), 1), ("100".into(), 3), ("9".into(), 2)]);
+        assert!(matches!(&r, Renderer::Unique { other, .. } if other.fill.r() == 0), "<all other values> is no ramp color");
+        r.reverse_ramp(g);
+        assert_eq!(reds(&r), vec![("10".into(), 1), ("100".into(), 2), ("9".into(), 3)], "twice is the original");
+        // A repeat of a value is not drawn: it stays, and the drawn entries reverse among themselves.
+        let mut r = unique_with(&[("a", 1), ("b", 2), ("a", 9), ("c", 3)]);
+        r.reverse_ramp(g);
+        assert_eq!(reds(&r), vec![("a".into(), 3), ("b".into(), 2), ("a".into(), 9), ("c".into(), 1)]);
+        // A class with a stack of its own is kept, counted, and the others reverse among themselves.
+        let mut r = unique_with(&[("a", 1), ("b", 2), ("c", 3), ("d", 4)]);
+        if let Renderer::Unique { class_strokes, .. } = &mut r {
+            class_strokes.insert("a".into(), vec![LineStroke { color: Some(Rgba::rgb(9, 9, 9)), ..LineStroke::default() }]);
+        }
+        assert_eq!(r.reverse_ramp(g), Some(RampReversal { reversed: 3, kept: 1, on_layer_stack: 3 }));
+        assert_eq!(reds(&r), vec![("a".into(), 1), ("b".into(), 4), ("c".into(), 3), ("d".into(), 2)]);
+        // A point's hand-picked outline travels with its fill.
+        let mut r = unique_with(&[("a", 1), ("b", 2)]);
+        if let Renderer::Unique { classes, .. } = &mut r
+            && let Some(c) = classes.first_mut()
+        {
+            c.1.stroke = Rgba::rgb(200, 0, 0);
+        }
+        r.reverse_ramp(g);
+        let strokes = |r: &Renderer| match r {
+            Renderer::Unique { classes, .. } => classes.iter().map(|c| (c.1.fill.r(), c.1.stroke.r())).collect::<Vec<_>>(),
+            _ => vec![],
+        };
+        assert_eq!(strokes(&r), vec![(2, 255), (1, 200)]);
+        r.reverse_ramp(g);
+        assert_eq!(strokes(&r), vec![(1, 200), (2, 255)], "twice is the original");
+        // A lone class has no other to change places with.
+        assert_eq!(unique_with(&[("a", 1)]).reverse_ramp(g), Some(RampReversal { reversed: 0, kept: 0, on_layer_stack: 0 }));
+        // Nothing to reverse for a single symbol.
+        assert_eq!(Renderer::Single(Symbol::default_for(g, 0)).reverse_ramp(g), None);
+    }
+
+    /// #1355: which stack replaces a class's symbol depends on what the layer draws: a polygon's
+    /// own fills, a line's or a point's own strokes. The other kind is not drawn, and an empty
+    /// stack is no stack, so those classes take part in the reversal.
+    #[test]
+    fn reverse_ramp_keeps_only_the_classes_whose_stack_is_drawn() {
+        let reds = |r: &Renderer| match r {
+            Renderer::Unique { classes, .. } => classes.iter().map(|c| c.1.fill.r()).collect::<Vec<_>>(),
+            _ => vec![],
+        };
+        let with = |fills: bool, strokes: bool, empty: bool| {
+            let mut r = unique_with(&[("a", 1), ("b", 2), ("c", 3)]);
+            if let Renderer::Unique { class_fills, class_strokes, .. } = &mut r {
+                let own = Some(Rgba::rgb(9, 9, 9));
+                if fills {
+                    class_fills.insert("a".into(), if empty { vec![] } else { vec![FillLayer { color: own, ..FillLayer::default() }] });
+                }
+                if strokes {
+                    class_strokes.insert("a".into(), if empty { vec![] } else { vec![LineStroke { color: own, ..LineStroke::default() }] });
+                }
+            }
+            r
+        };
+        let (kept, reversed) = (vec![1, 3, 2], vec![3, 2, 1]);
+        // (stacks of class a, geometry) -> the classes that reverse, and how many are kept.
+        for (fills, strokes, empty, g, take_part) in [
+            (true, false, false, GeometryType::Polygon, false),
+            (false, true, false, GeometryType::Polygon, true),
+            (false, true, false, GeometryType::Polyline, false),
+            (true, false, false, GeometryType::Polyline, true),
+            (false, true, false, GeometryType::Point, false),
+            (true, false, false, GeometryType::Point, true),
+            (true, true, true, GeometryType::Polygon, true),
+            (true, true, true, GeometryType::Polyline, true),
+        ] {
+            let mut r = with(fills, strokes, empty);
+            let n = r.reverse_ramp(g).map(|x| x.kept);
+            let case = format!("fills {fills}, strokes {strokes}, empty {empty}, {g:?}");
+            if take_part {
+                assert_eq!(n, Some(0), "{case}");
+                assert_eq!(reds(&r), reversed, "{case}");
+            } else {
+                assert_eq!(n, Some(1), "{case}");
+                assert_eq!(reds(&r), kept, "{case}");
+            }
+        }
+    }
+
+    /// #1355: a stack layer without a color of its own takes the symbol's, so the class still shows
+    /// its ramp color through it and takes part in the reversal: a road's black casing over a core
+    /// that follows the class. Only a stack whose every layer has its own color hides the symbol.
+    #[test]
+    fn reverse_ramp_reverses_the_classes_a_stack_inherits_from() {
+        let reds = |r: &Renderer| match r {
+            Renderer::Unique { classes, .. } => classes.iter().map(|c| c.1.fill.r()).collect::<Vec<_>>(),
+            _ => vec![],
+        };
+        let own = Some(Rgba::rgb(9, 9, 9));
+        let casing = LineStroke { color: own, width: Some(6.0), ..LineStroke::default() };
+        let core = LineStroke::default();
+        let (solid_own, solid_inherit) = (FillLayer { color: own, ..FillLayer::default() }, FillLayer::default());
+        for (stack_of_strokes, g, hides) in [
+            (vec![casing], GeometryType::Polyline, true),
+            (vec![casing, core], GeometryType::Polyline, false),
+            (vec![core], GeometryType::Polyline, false),
+            (vec![casing], GeometryType::Point, true),
+            (vec![casing, core], GeometryType::Point, false),
+        ] {
+            let mut r = unique_with(&[("a", 1), ("b", 2), ("c", 3)]);
+            if let Renderer::Unique { class_strokes, .. } = &mut r {
+                class_strokes.insert("a".into(), stack_of_strokes.clone());
+            }
+            let n = r.reverse_ramp(g).map(|x| x.kept);
+            let case = format!("{} strokes, {g:?}", stack_of_strokes.len());
+            assert_eq!((n, reds(&r)), if hides { (Some(1), vec![1, 3, 2]) } else { (Some(0), vec![3, 2, 1]) }, "{case}");
+        }
+        for (fills, hides) in [(vec![solid_own], true), (vec![solid_own, solid_inherit], false), (vec![solid_inherit], false)] {
+            let mut r = unique_with(&[("a", 1), ("b", 2), ("c", 3)]);
+            if let Renderer::Unique { class_fills, .. } = &mut r {
+                class_fills.insert("a".into(), fills.clone());
+            }
+            let n = r.reverse_ramp(GeometryType::Polygon).map(|x| x.kept);
+            let case = format!("{} fills", fills.len());
+            assert_eq!((n, reds(&r)), if hides { (Some(1), vec![1, 3, 2]) } else { (Some(0), vec![3, 2, 1]) }, "{case}");
+        }
     }
 }

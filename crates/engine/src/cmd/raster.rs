@@ -33,12 +33,12 @@ pub(crate) fn need_raster(s: &Session) -> Option<&'static str> {
 
 pub fn commands() -> Vec<C> {
     vec![
-        C::new("layer.addDataBytes", "Add Data (from file contents)", "Home › Add", add_bytes)
+        C::new("layer.addDataBytes", "Add Data (from file contents)", "Home › Add", add_bytes).roles(&[]).effects(crate::policy::Effects::NONE)
             .params(r#"{"fileName": "name.tif|.tiff|.asc|.geojson|.csv|.zip|.kml|.kmz|.gpx|.parquet|.fgb|.gpkg|.mbtiles|.jp2|.j2k (JPEG 2000: desktop, through GDAL)", "data": base64, "zoom"?: bool, "layer"?: "one layer of a zip, KML or GPX by name", "name"?: text, "x"?, "y"?, "wkt"?, "crs"?, "delimiter"?, "paperSpace"?, "stream"?, "as"? (as layer.addData)}"#),
-        C::new("raster.symbology", "Symbology", "Style › Rendering", symbology).when(need_raster).params(
+        C::new("raster.symbology", "Symbology", "Style › Rendering", symbology).when(need_raster).roles(&[]).effects(crate::policy::Effects::NONE).params(
             r#"{"layer"?, "type": "stretch"|"rgb"|"classify"|"unique"|"colormap"|"shadedRelief", "band"?: 1.., "ramp"?, "invert"?: bool, "classes"?: 1..32, "method"?, "azimuth"?, "altitude"?, "zFactor"?, "grey"?: bool (shadedRelief without its colour ramp)}"#,
         ),
-        C::new("raster.stretch", "Stretch Type", "Style › Rendering", stretch)
+        C::new("raster.stretch", "Stretch Type", "Style › Rendering", stretch).inputs(stretch_inputs).roles(&[]).effects(crate::policy::Effects::NONE)
         .when(need_raster)
         .params(r#"{"layer"?, "type": "none"|"minMax"|"custom"|"percentClip"|"standardDeviation"|"histogramEqualize", "low"?: %, "high"?: %, "n"?: deviations, "min"?, "max"?: custom bounds in the data's units, a number for every band or [red, green, blue] on an RGB layer, null for a band's own (a missing one is the range now drawn; the layer's own on one band), "like"?: raster layer (instead of type: that layer's stretch as fixed bounds, so tiles match at their joins)}"#),
         C::new("raster.dra", "DRA", "Style › Rendering", |s, p| {
@@ -47,10 +47,10 @@ pub fn commands() -> Vec<C> {
                 rl.style.dra = on.unwrap_or(!rl.style.dra);
                 Ok(())
             })
-        })
+        }).roles(&[]).effects(crate::policy::Effects::NONE)
         .when(need_raster)
         .params(r#"{"layer"?, "on"?: bool}"#),
-        C::new("raster.mask", "Mask Values", "Style › Rendering", mask).when(need_raster).params(
+        C::new("raster.mask", "Mask Values", "Style › Rendering", mask).roles(&[]).effects(crate::policy::Effects::NONE).when(need_raster).params(
             r#"{"layer"?, "values"?: [numbers] or "0, 254, 255" (drawn as no data; [] for none), "min"?, "max"?: hide values outside this range (null for no bound), "inside"?: bool (hide those inside it instead), "clear"?: bool}"#,
         ),
         C::new("raster.resampling", "Resampling Type", "Style › Rendering", |s, p| {
@@ -60,10 +60,10 @@ pub fn commands() -> Vec<C> {
                 rl.style.resampling = r;
                 Ok(())
             })
-        })
+        }).roles(&[]).effects(crate::policy::Effects::NONE)
         .when(need_raster)
         .params(r#"{"layer"?, "type": "nearest"|"bilinear"}"#),
-        C::new("raster.bands", "Band Combination", "Style › Rendering", bands)
+        C::new("raster.bands", "Band Combination", "Style › Rendering", bands).roles(&[]).effects(crate::policy::Effects::NONE)
             .when(need_raster)
             .params(r#"{"layer"?, "red"?: 1.., "green"?: 1.., "blue"?: 1.., "preset"?: "natural"|"colorInfrared"}"#),
         C::new("raster.enhance", "Enhancement", "Style › Enhancement", |s, p| {
@@ -80,14 +80,14 @@ pub fn commands() -> Vec<C> {
                 }
                 Ok(())
             })
-        })
+        }).roles(&[]).effects(crate::policy::Effects::NONE)
         .when(need_raster)
         .params(r#"{"layer"?, "brightness"?: -100..100, "contrast"?: -100..100, "gamma"?: 0.1..10}"#),
-        C::new("raster.setDefaultStyle", "Save as Default Raster Style", "Style › Rendering", set_default_style).view().params(
+        C::new("raster.setDefaultStyle", "Save as Default Raster Style", "Style › Rendering", set_default_style).roles(&[]).effects(crate::policy::Effects::NONE).view().params(
             r#"{"fromLayer"?: bool (the active or named layer's colour ramp stretch; the settings apply to every raster added later that would be a grey stretch, opened files and analysis results alike), "layer"?, "ramp"?, "invert"?: bool, "stretch"?: "none"|"minMax"|"percentClip"|"standardDeviation"|"histogramEqualize", "low"?, "high"?: %, "n"?: deviations, "resampling"?: "nearest"|"bilinear", "reset"?: bool (back to the black-to-white grey stretch)}"#,
         ),
-        C::new("raster.info", "Raster Information", "Data › Information", info).view().when(need_raster).params(r#"{"layer"?}"#),
-        C::new("share.exportRaster", "Export Raster", "Data › Information", export).view().when(need_raster).params(
+        C::new("raster.info", "Raster Information", "Data › Information", info).view().when(need_raster).roles(&[]).effects(crate::policy::Effects::NONE).params(r#"{"layer"?}"#),
+        C::new("share.exportRaster", "Export Raster", "Data › Information", |s, p| super::exports::write_here(s, p, "share.exportRaster")).view().when(need_raster).roles(&[]).effects(crate::policy::Effects::NONE.with(crate::policy::Effect::Files)).params(
             r#"{"layer"?, "path": "*.tif", "band"?: 1.. (rasters that aren't colour ones; a colour raster writes its colour bands), "cog"?: bool (a cloud-optimised GeoTIFF: 512 px tiles, Deflate, overviews; default false, an untiled GeoTIFF)}"#,
         ),
     ]
@@ -179,8 +179,7 @@ fn like_stretch(s: &Session, name: &str) -> Result<Stretch, String> {
 }
 
 fn stretch(s: &mut Session, p: &Value) -> CmdResult {
-    if let Some(like) = p.get("like").filter(|v| !v.is_null()) {
-        let like = like.as_str().ok_or("like is a raster layer's name")?;
+    if let Some(like) = like_name(p)? {
         let st = like_stretch(s, like)?;
         return with(s, p, |rl, _| {
             rl.style.stretch = st;
@@ -355,16 +354,27 @@ pub(crate) fn add_raster_after(s: &mut Session, name: &str, mut layer: RasterLay
     }
     let (w, h, n, overview) = layer.data.as_ref().map(|d| (d.width, d.height, d.band_count(), d.overview)).unwrap_or_default();
     // What reading it left out (a colour table, names), said once the layer has its name.
-    let lost = layer.data.as_ref().map(|d| d.lost.clone()).unwrap_or_default();
     let rounded = layer.data.as_deref().and_then(rounded_count);
+    // Said here for pixels added with the layer; for those landing later, by `notice_landed_rasters`.
+    let lost = layer.lost_unsaid();
+    let unsaid = layer.pixels_unsaid();
+    // Read in place, the map shows the full image as it draws, but statistics and tools read the
+    // overview held: said so.
+    let held = unsaid.filter(|_| layer.in_place).and_then(|d| crate::in_place_overview(&d));
+    let in_place = layer.in_place;
     let empty_before = super::map_is_empty(s);
     let id = s.map_mut().add_raster(unique.clone(), layer);
     s.active_layer = Some(id);
-    if let Some((fw, fh)) = overview {
+    // Read in place, its own notice says the overview it holds (`held`); the result names the full
+    // size all the same.
+    if let Some((fw, fh)) = overview.filter(|_| !in_place) {
         s.notify(format!("{unique}: showing a {w} × {h} overview of the {fw} × {fh} raster"), false);
     }
     for l in lost {
         s.notify(format!("{unique}: {l}"), false);
+    }
+    if let Some(held) = held {
+        s.notify(format!("{unique}: {held}"), false);
     }
     if let Some(count) = rounded {
         let held = "pixels are held as 32-bit floats, exact for whole numbers up to 16,777,216 and to about 7 significant digits";
@@ -536,7 +546,10 @@ pub(crate) fn say_losses(s: &mut Session, losses: Vec<(String, String)>) {
 
 /// Opens a raster file by path.
 pub fn add_path(s: &mut Session, path: &str, name: Option<&str>, scan: bool) -> CmdResult {
-    let mut r = raster::read_path(Path::new(path)).map_err(|e| format!("{path}: {e}"))?;
+    let mut r = match super::reads::take(s, &read_key(path)) {
+        Some(r) => r,
+        None => read_raster(path),
+    }?;
     if scan {
         r = r.into_scan().map_err(|e| format!("{path}: {e}"))?;
     }
@@ -547,14 +560,45 @@ pub fn add_path(s: &mut Session, path: &str, name: Option<&str>, scan: bool) -> 
     add_raster(s, &name, RasterLayer::from_path(r, full))
 }
 
+/// The raster at `path`, read whole.
+pub(crate) fn read_raster(path: &str) -> Result<Raster, String> {
+    raster::read_path(Path::new(path)).map_err(|e| format!("{path}: {e}"))
+}
+
+/// The key [`add_path`]'s read of `path` is taken by (see [`super::reads`]).
+pub(crate) fn read_key(path: &str) -> String {
+    format!("raster:{path}")
+}
+
+/// A raster GDAL converts and the conversion it read.
+#[cfg(not(target_arch = "wasm32"))]
+type GdalRead = Result<(rustgis_data::raster::gdal::Converted, Raster), String>;
+
+/// The raster GDAL converts from `path` (`layer` its subdataset, `crs` a coordinate system the
+/// file doesn't say), with the conversion.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn read_gdal(path: &str, layer: Option<&str>, crs: Option<&str>) -> GdalRead {
+    use rustgis_data::raster::gdal;
+    let c = gdal::convert(Path::new(path), layer, crs).map_err(|e| format!("{path}: {e}"))?;
+    let r = raster::read_converted(Path::new(path), &c).map_err(|e| format!("{path}: {e}"))?;
+    Ok((c, r))
+}
+
+/// The key [`add_gdal_path`]'s read of `path` is taken by (see [`super::reads`]).
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn gdal_key(path: &str) -> String {
+    format!("gdal:{path}")
+}
+
 /// Adds a raster GDAL reads (converted once to a GeoTIFF in the cache): `"layer"` picks a
 /// subdataset (a NetCDF variable) and `"crs"` gives a coordinate system the file doesn't say.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn add_gdal_path(s: &mut Session, p: &Value, path: &str) -> CmdResult {
-    use rustgis_data::raster::gdal;
     let text = |k: &str| ps(p, k).map(str::trim).filter(|v| !v.is_empty());
-    let c = gdal::convert(Path::new(path), text("layer"), text("crs")).map_err(|e| format!("{path}: {e}"))?;
-    let r = raster::read_converted(Path::new(path), &c).map_err(|e| format!("{path}: {e}"))?;
+    let (c, r) = match super::reads::take::<GdalRead>(s, &gdal_key(path)) {
+        Some(read) => read,
+        None => read_gdal(path, text("layer"), text("crs")),
+    }?;
     if c.assumed_lonlat {
         s.notify(format!("{path} doesn't say its coordinate system; its coordinates look like longitude/latitude, so it's read as WGS 84 (give \"crs\" if not)"), false);
     }
@@ -900,29 +944,36 @@ pub fn geotiff_bytes(s: &Session, p: &Value) -> Result<(String, Vec<u8>), String
     Ok((r.name.clone(), bytes.map_err(|e| e.to_string())?))
 }
 
-fn export(s: &mut Session, p: &Value) -> CmdResult {
+/// `share.exportRaster`'s inputs, and the work that writes the raster as a GeoTIFF (a
+/// cloud-optimised one with `cog`).
+pub(crate) fn export_work(s: &Session, p: &Value) -> Result<super::exports::Work, String> {
     let path = ps(p, "path").ok_or("path is required")?.to_string();
     let (_, r) = get(s, p)?;
-    let mut cog = None;
-    if b(p, "cog") == Some(true) {
+    let bi = band(p, "band", &r)?.unwrap_or(0);
+    let cog = b(p, "cog") == Some(true);
+    Ok(Box::new(move || write_geotiff(&r, bi, cog, &path)))
+}
+
+/// Writes raster `r` (band `bi`, or its colour bands) to `path`, and says what the file holds.
+fn write_geotiff(r: &Raster, bi: usize, cog: bool, path: &str) -> Result<super::exports::Wrote, String> {
+    let cog = if cog {
         // Tiles go to the file as they are made: the whole file is never held in memory.
-        let bi = band(p, "band", &r)?.unwrap_or(0);
-        cog = Some(raster::cogwrite::write_file(&r, bi, Path::new(&path)).map_err(|e| format!("{path}: {e}"))?);
+        Some(raster::cogwrite::write_file(r, bi, Path::new(path)).map_err(|e| format!("{path}: {e}"))?)
     } else {
-        let (_, bytes) = geotiff_bytes(s, p)?;
-        rustgis_data::io::write_atomic(Path::new(&path), &bytes).map_err(|e| format!("{path}: {e}"))?;
-    }
+        let bytes = raster::geotiff::write(r, bi).map_err(|e| e.to_string())?;
+        rustgis_data::io::write_atomic(Path::new(path), &bytes).map_err(|e| format!("{path}: {e}"))?;
+        None
+    };
     let mut note = match r.overview {
         Some((fw, fh)) => format!(" (the {} × {} overview of the {fw} × {fh} raster)", r.width, r.height),
         None => String::new(),
     };
     // Values changed when the file was read are written as they are held: those of the bands the
     // writer writes, as it chooses them.
-    let bi = band(p, "band", &r)?.unwrap_or(0);
     let bands = if cog.is_some() {
-        raster::cogwrite::written_bands(&r, bi).map_err(|e| e.to_string())?
+        raster::cogwrite::written_bands(r, bi).map_err(|e| e.to_string())?
     } else {
-        raster::geotiff::written_bands(&r, bi)
+        raster::geotiff::written_bands(r, bi)
     };
     let written: u64 = bands.iter().filter_map(|b| r.rounded.get(*b)).sum();
     if written > 0 {
@@ -941,11 +992,10 @@ fn export(s: &mut Session, p: &Value) -> CmdResult {
     if !unnamed.is_empty() {
         note.push_str(&format!("; the class names of band(s) {} aren't written: a GeoTIFF keeps the first band's", unnamed.join(", ")));
     }
-    let spaced = raster::gdal_metadata_changed(&r, &bands);
+    let spaced = raster::gdal_metadata_changed(r, &bands);
     if spaced > 0 {
         note.push_str(&format!("; {spaced} band or class name(s) held control characters, written as spaces"));
     }
-    s.notify(format!("Exported {path}{note}"), false);
     let mut v = match r.overview {
         Some((fw, fh)) => json!({"path": path, "width": r.width, "height": r.height, "overviewOf": [fw, fh]}),
         None => json!({"path": path}),
@@ -953,7 +1003,14 @@ fn export(s: &mut Session, p: &Value) -> CmdResult {
     if let (Some(o), Some(c)) = (v.as_object_mut(), cog) {
         o.insert("cog".into(), json!({"overviews": c.levels.len().saturating_sub(1), "bigTiff": c.big, "bytes": c.bytes}));
     }
-    Ok(v)
+    Ok(super::exports::Wrote {
+        answer: v,
+        notes: vec![format!("Exported {path}{note}")],
+        written_path: Some(path.to_string()),
+        then: None,
+        #[cfg(not(target_arch = "wasm32"))]
+        owner: None,
+    })
 }
 
 /// Pixel values of the topmost visible raster under a longitude/latitude point.
@@ -974,6 +1031,21 @@ pub fn identify(s: &Session, lon: f64, lat: f64) -> Option<Value> {
         attrs.insert("Pixel".into(), json!(format!("{col}, {row}")));
         Some(json!({"layer": l.name, "layerId": l.id, "raster": true, "attributes": attrs}))
     })
+}
+
+/// Binds the primary raster and optional actual like raster without copying pixel data.
+fn stretch_inputs(input: &super::InputContext<'_>, p: &Value) -> Result<super::Inputs, String> {
+    let s = input;
+    let mut inputs = super::Inputs::single_layer(s, p)?;
+    if let Some(name) = like_name(p)? {
+        inputs.extend(super::Inputs::named(s.map(), [name])?);
+    }
+    Ok(inputs)
+}
+
+/// Selects only the literal like raster consumed by stretch.
+fn like_name(p: &Value) -> Result<Option<&str>, String> {
+    p.get("like").filter(|v| !v.is_null()).map(|v| v.as_str().ok_or_else(|| "like is a raster layer's name".to_string())).transpose()
 }
 
 #[cfg(test)]

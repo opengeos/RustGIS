@@ -8,23 +8,23 @@ use crate::{CmdResult, CommandSpec as C, Session};
 
 pub fn commands() -> Vec<C> {
     vec![
-        C::new("edit.calculateGeometry", "Calculate Geometry", "Attribute Table", crate::geometry_calc::run)
+        C::new("edit.calculateGeometry", "Calculate Geometry", "Attribute Table", crate::geometry_calc::run).roles(&[]).effects(crate::policy::Effects::NONE)
             .when(super::design::need_editable)
             .params(r#"{"layer"?, "field": string, "create": bool, "overwrite": bool, "property": string, "unit": string, "epsg"?: number, "scope": "all"|"selected"}"#),
-        C::new("edit.addFeature", "Create Feature", "Edit › Features", add_feature)
+        C::new("edit.addFeature", "Create Feature", "Edit › Features", add_feature).inputs(super::design::new_feature_inputs).roles(&[]).effects(crate::policy::Effects::NONE)
             .when(super::design::need_editable)
             .params(r#"{"layer"?, "geometry": GeoJSON geometry (lon/lat), "attributes"?: {field: value}, "template"?: feature template}"#),
-        C::new("edit.delete", "Delete", "Edit › Features", delete).key("Delete").when(super::design::need_editable_selection),
-        C::new("edit.setValue", "Edit Attribute", "Attribute Table", set_value)
+        C::new("edit.delete", "Delete", "Edit › Features", delete).roles(&[]).effects(crate::policy::Effects::NONE).key("Delete").when(super::design::need_editable_selection),
+        C::new("edit.setValue", "Edit Attribute", "Attribute Table", set_value).roles(&[]).effects(crate::policy::Effects::NONE)
             .when(super::design::need_editable)
             .params(r#"{"layer"?, "row": number, "field": string, "value": any}"#),
-        C::new("edit.addField", "Add Field", "Data › Data Design › Fields", add_field)
+        C::new("edit.addField", "Add Field", "Data › Data Design › Fields", add_field).roles(&[]).effects(crate::policy::Effects::NONE)
             .when(need_layer)
             .params(r#"{"layer"?, "name": string, "type": "long"|"double"|"text"|"boolean"}"#),
-        C::new("edit.deleteField", "Delete Field", "Data › Data Design › Fields", delete_field)
+        C::new("edit.deleteField", "Delete Field", "Data › Data Design › Fields", delete_field).roles(&[]).effects(crate::policy::Effects::NONE)
             .when(need_layer)
             .params(r#"{"layer"?, "field": string}"#),
-        C::new("edit.calculateField", "Calculate Field", "Attribute Table", calculate_field)
+        C::new("edit.calculateField", "Calculate Field", "Attribute Table", calculate_field).roles(&[]).effects(crate::policy::Effects::NONE)
             .when(super::design::need_editable)
             .params(r#"{"layer"?, "field": string, "expression": "an expression: fields, 'text', numbers, + - * / % ^ ||, functions (see the Expressions page)"}"#),
     ]
@@ -346,6 +346,27 @@ fn delete_field(s: &mut Session, p: &Json) -> CmdResult {
             }
     });
     let removed_rules = before - d.rules.len();
+    // Nor its diagram: the field's slice or bar goes, the range of sums a scaled size grows over is
+    // measured again without it, and a diagram left with no field goes too. Said once.
+    let mut diagram_note = None;
+    if let Some(dg) = &mut l.diagram
+        && dg.categories.iter().any(|c| c.field.eq_ignore_ascii_case(&removed))
+    {
+        dg.categories.retain(|c| !c.field.eq_ignore_ascii_case(&removed));
+        if dg.categories.is_empty() {
+            l.diagram = None;
+            diagram_note = Some(format!("{}: its diagram drew only the deleted field {removed}, so it is removed", l.name));
+        } else {
+            if let rustgis_map::DiagramSize::Scaled { min_size, max_size, .. } = dg.size {
+                let (min, max) = super::diagram::sum_range(dg, &l.dataset);
+                dg.size = rustgis_map::DiagramSize::Scaled { min_size, max_size, min, max };
+            }
+            diagram_note = Some(format!("{}: its diagram drew the deleted field {removed}, so that slice or bar is removed", l.name));
+        }
+    }
+    if let Some(note) = diagram_note {
+        s.notify(note, false);
+    }
     if let Some(name) = single {
         s.notify(format!("{name}: its classes read the deleted field {removed}, so it is drawn with a single symbol"), false);
     }
