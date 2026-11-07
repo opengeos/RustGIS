@@ -75,6 +75,7 @@ pub enum Landed {
     Ran(Result<Value, String>),
     NotRun(String),
 }
+mod boxedit;
 #[cfg(not(target_arch = "wasm32"))]
 mod relayshot;
 mod repairsource;
@@ -955,6 +956,7 @@ pub struct RustGisApp {
     pub layout: layoutview::LayoutView,
     /// The text graphic the Format pane edits (#516).
     pub(crate) graphic_format: graphicformat::GraphicFormat,
+    pub(crate) boxes: boxedit::State,
     pub forms: editpanes::Forms,
     pub workflow: analysispane::Workflow,
     /// An export writing its file on its own thread (see [`exportjob`]).
@@ -1176,6 +1178,7 @@ impl RustGisApp {
             table: table::TableState::default(),
             layout: layoutview::LayoutView::default(),
             graphic_format: graphicformat::GraphicFormat::default(),
+            boxes: boxedit::State::default(),
             forms: editpanes::Forms { distance_units: "Meters".into(), ..editpanes::Forms::default() },
             workflow: analysispane::Workflow::default(),
             #[cfg(not(target_arch = "wasm32"))]
@@ -2168,6 +2171,7 @@ impl RustGisApp {
         r = self.deliver_gp_files(r);
         if r.is_ok() && id == "tool.set" {
             self.map.cancel_sketch();
+            boxedit::cancel(&mut self.boxes);
         }
         if let Err(e) = &r {
             self.command_failed(id, e, notice_mark);
