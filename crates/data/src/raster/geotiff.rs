@@ -1228,11 +1228,12 @@ pub(super) fn read_limited_with_nodata(
         },
         Err(e) => Some(super::pam::Pam::losing(format!("it doesn't decode ({e}): band and class names are left out"))),
     };
-    // Who holds the rights to the picture, kept so an export of it says so too; one that doesn't
-    // read as text is left out, and said.
+    // Who holds the rights to the picture, kept as it reads so an export of it says so too (the
+    // writers make it the ASCII a tag holds, and the exports say what that changed); one that
+    // doesn't read as text is left out, and said.
     let (copyright, copyright_lost) = match dec.find_tag(Tag::Copyright).map(|v| v.map(|v| v.into_string())) {
         Ok(None) => (None, None),
-        Ok(Some(Ok(c))) => (Some(super::tag_text(&c)), None),
+        Ok(Some(Ok(c))) => (Some(c.trim().to_string()), None),
         Ok(Some(Err(e))) | Err(e) => (None, Some(format!("its Copyright tag: it isn't ASCII text ({e}), so it is left out"))),
     };
     let spp = samples(&mut dec);
@@ -1450,6 +1451,8 @@ pub(super) fn read_limited_with_nodata(
         r.georeferenced = false;
         r.overview = overview;
         r.rounded = rounded;
+        r.copyright = copyright.filter(|c| !c.is_empty());
+        r.lost.extend(copyright_lost);
         r.lost.extend(table_lost);
         if let Some(p) = &described {
             r.apply_pam(p, super::pam::GDAL_METADATA);
@@ -1536,7 +1539,10 @@ pub(super) fn geo_keys(r: &Raster) -> Result<GeoKeys> {
         Some(d) if d.geokeys.is_empty() => {
             return Err(err(format!("{}: a coordinate system without GeoTIFF keys can't be written", d.label)));
         }
-        Some(d) => d.geokeys.clone(),
+        // The tiepoint is written at the corner of the first pixel, so the raster type is area: a
+        // system first read from a point file (whose grid was moved to the corner on reading) is
+        // written as one too, or readers would place it half a pixel off.
+        Some(d) => as_area(&d.geokeys),
         None => vec![
             1,
             1,
@@ -1557,6 +1563,20 @@ pub(super) fn geo_keys(r: &Raster) -> Result<GeoKeys> {
         ],
     };
     Ok(GeoKeys { keys, custom })
+}
+
+/// GeoKey directory `keys` with the raster type (1025) as area (1), as the writers' corner
+/// tiepoint says.
+fn as_area(keys: &[u16]) -> Vec<u16> {
+    let mut keys = keys.to_vec();
+    // After the 4-short header, 4 shorts a key: its id, where its value is (0: in place), its
+    // count and its value.
+    for entry in keys.get_mut(4..).into_iter().flat_map(|k| k.as_chunks_mut::<4>().0) {
+        if let [1025, 0, _, value] = entry {
+            *value = 1;
+        }
+    }
+    keys
 }
 
 /// Whether band `b` is written as bytes: whole numbers within 0–255 (or no valid pixels at all),
@@ -1750,10 +1770,35 @@ mod tests {
         assert_eq!(read(std::io::Cursor::new(write(&r, 0).unwrap()), "none").unwrap().copyright, None);
         r.copyright = Some("© OpenStreetMap contributors | Bundesamt für Landestopografie\0\n".into());
         let want = Some("(c) OpenStreetMap contributors | Bundesamt f?r Landestopografie".to_string());
-        assert_eq!(super::super::tag_text_lost(r.copyright.as_deref().unwrap()), 1);
+        // One written as ?; the NUL and line break at the end are trimmed, not counted.
+        assert_eq!(super::super::tag_text_changes(r.copyright.as_deref().unwrap()), (1, 0));
+        // Inside, a line break and U+0085 (a control character outside ASCII) are spaces.
+        assert_eq!(super::super::tag_text_changes("a\nb\u{85}c ü"), (1, 2));
+        assert_eq!(super::super::tag_text("a\nb\u{85}c ü"), "a b c ?");
+        // A scan (a TIFF with no GeoTIFF tags) keeps it too.
+        let mut buf = std::io::Cursor::new(Vec::new());
+        {
+            let mut enc = tiff::encoder::TiffEncoder::new(&mut buf).unwrap();
+            let mut img = enc.new_image::<tiff::encoder::colortype::Gray8>(2, 2).unwrap();
+            img.encoder().write_tag(Tag::Copyright, "(c) Scan").unwrap();
+            img.write_data(&[1, 2, 3, 4]).unwrap();
+        }
+        let scan = read(std::io::Cursor::new(buf.into_inner()), "scan").unwrap();
+        assert_eq!((scan.georeferenced, scan.copyright.as_deref()), (false, Some("(c) Scan")));
         assert_eq!(read(std::io::Cursor::new(write(&r, 0).unwrap()), "tif").unwrap().copyright, want);
         let cog = super::super::cogwrite::write(&r, 0).unwrap();
         assert_eq!(read(std::io::Cursor::new(cog), "cog").unwrap().copyright, want);
+    }
+
+    /// A user-defined system's keys are written with the raster type as area, as the corner
+    /// tiepoint is: one first read from a point file isn't placed half a pixel off.
+    #[test]
+    fn custom_keys_are_written_as_area() {
+        let point = [1u16, 1, 0, 3, 1024, 0, 1, 1, 1025, 0, 1, 2, 3072, 0, 1, 32767];
+        assert_eq!(as_area(&point), [1, 1, 0, 3, 1024, 0, 1, 1, 1025, 0, 1, 1, 3072, 0, 1, 32767]);
+        // A key whose value is elsewhere (not in place) is left alone, as is a short directory.
+        assert_eq!(as_area(&[1, 1, 0, 1, 1025, 34737, 1, 2]), [1, 1, 0, 1, 1025, 34737, 1, 2]);
+        assert_eq!(as_area(&[1, 1]), [1, 1]);
     }
 
     #[test]

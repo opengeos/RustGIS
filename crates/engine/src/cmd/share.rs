@@ -242,10 +242,11 @@ pub(crate) fn map_work(s: &Session, p: &Value) -> Result<Work, String> {
 
 /// `share.exportMap` to a GeoTIFF: the view drawn as data (its layers and labels, without the
 /// scale bar and credits, which sit on the screen), RGB (a drawn view is opaque), placed on the
-/// ground in the map's
-/// projection, the credits in its Copyright tag. A turned view is drawn north up over the box
-/// around it, and says so; a tilted view, the globe and a map of another body are refused, as
-/// no grid of square pixels in one coordinate system holds them.
+/// ground in the map's projection, the credits in its Copyright tag. What may have left gaps in
+/// it (tiles still on their way, tile layers that failed) is said: on the ground a gap looks like
+/// data. A turned view is drawn north up over the box around it, and says so; a tilted view, the
+/// globe and a map of another body are refused, as no grid of square pixels in one coordinate
+/// system holds them.
 fn geotiff_work(s: &Session, path: String, view: View, cog: bool) -> Result<Work, String> {
     let m = s.map();
     let crs = map_crs(m)?;
@@ -287,10 +288,15 @@ fn geotiff_work(s: &Session, path: String, view: View, cog: bool) -> Result<Work
     Ok(Box::new(move || {
         let mut notices = notices;
         let written = (|| {
-            let (pm, credits) = rustgis_render::render_placed(&mut map, &view)?;
+            let placed = rustgis_render::render_placed(&mut map, &view)?;
             rustgis_data::progress::check().map_err(|e| e.to_string())?;
-            // The drawn picture goes as the raster is made: both at once would double the memory.
-            let mut r = placed_raster(&name, pm, &view, crs)?;
+            for gap in &placed.gaps {
+                notices.push((rustgis_data::diagnostics::Severity::Warning, format!("{path}: {gap}")));
+            }
+            let credits = placed.credits;
+            // The drawn picture is dropped once its bands are made, before the raster's
+            // statistics and the file's encoding.
+            let mut r = placed_raster(&name, placed.pixmap, &view, crs)?;
             r.copyright = (!credits.is_empty()).then(|| credits.join(" | "));
             rustgis_data::progress::check().map_err(|e| e.to_string())?;
             let bytes = if cog {
@@ -305,16 +311,20 @@ fn geotiff_work(s: &Session, path: String, view: View, cog: bool) -> Result<Work
             let mut out = json!({"path": path, "width": r.width, "height": r.height, "crs": crs.label(), "bytes": bytes});
             if let Some(c) = &r.copyright {
                 out["copyright"] = json!(c);
-                let lost = rustgis_data::raster::tag_text_lost(c);
-                if lost > 0 {
-                    let chars = if lost == 1 {
-                        "1 character of the credits is".to_string()
-                    } else {
-                        format!("{lost} characters of the credits are")
-                    };
+                let (questioned, spaced) = rustgis_data::raster::tag_text_changes(c);
+                let count = |n: usize| if n == 1 { "1 character".to_string() } else { format!("{n} characters") };
+                let changes: Vec<String> = [(questioned, "as ?"), (spaced, "(control characters) as spaces")]
+                    .into_iter()
+                    .filter(|(n, _)| *n > 0)
+                    .map(|(n, how)| format!("{} {how}", count(n)))
+                    .collect();
+                if !changes.is_empty() {
                     notices.push((
                         rustgis_data::diagnostics::Severity::Info,
-                        format!("{path}: the Copyright tag holds ASCII only, so {chars} written as ?: {c}"),
+                        format!(
+                            "{path}: the Copyright tag holds ASCII only, so the credits are written with {}: {c}",
+                            changes.join(" and ")
+                        ),
                     ));
                 }
             }
@@ -358,11 +368,15 @@ fn map_crs(m: &rustgis_map::Map) -> Result<Crs, String> {
 
 /// The drawn view `pm` as an RGB raster placed on the ground: the view's centre at the image's
 /// centre, each pixel `res / pixels_per_point` map units a side. A drawn view is opaque (its
-/// background is filled), so it has no alpha band.
+/// background is filled), so it has no alpha band. While the bands are filled the picture is
+/// held too, 16 bytes a pixel in all (about 1 GiB at 8192 a side); a machine that can't hold
+/// them gets an error, not a crash.
 fn placed_raster(name: &str, pm: tiny_skia::Pixmap, view: &View, crs: Crs) -> Result<rustgis_data::raster::Raster, String> {
     let (w, h) = (pm.width(), pm.height());
-    let n = w as usize * h as usize;
-    let mut bands: Vec<Vec<f32>> = (0..3).map(|_| Vec::with_capacity(n)).collect();
+    let mut bands: Vec<Vec<f32>> = (0..3)
+        .map(|_| rustgis_data::raster::grid::<f32>(w as usize, h as usize))
+        .collect::<Result<_, _>>()
+        .map_err(|e| format!("{name}: {e}"))?;
     for px in pm.pixels() {
         // tiny-skia keeps colours premultiplied; a file keeps them straight.
         let c = px.demultiply();
@@ -373,6 +387,9 @@ fn placed_raster(name: &str, pm: tiny_skia::Pixmap, view: &View, crs: Crs) -> Re
     drop(pm);
     let cam = view.camera;
     let cell = cam.res / view.pixels_per_point;
+    // The renderer puts the centre at half the view's width in points, times the pixels per
+    // point, unrounded: the corner is half the view from it, whatever whole number of pixels the
+    // picture is.
     let transform = rustgis_data::raster::GeoTransform {
         origin_x: cam.center.x - view.width / 2.0 * cam.res,
         origin_y: cam.center.y + view.height / 2.0 * cam.res,

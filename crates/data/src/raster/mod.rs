@@ -615,7 +615,7 @@ pub(crate) fn gdal_metadata_of(r: &Raster, bands: &[usize]) -> Option<String> {
 
 /// Text for a TIFF ASCII tag, which holds 7-bit ASCII only: control characters (a NUL would end
 /// it early) as spaces, `©` and `®` as `(c)` and `(R)`, any other character outside ASCII as `?`
-/// ([`tag_text_lost`] counts them), trimmed.
+/// ([`tag_text_changes`] counts them), trimmed.
 pub fn tag_text(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
@@ -630,9 +630,13 @@ pub fn tag_text(s: &str) -> String {
     out.trim().to_string()
 }
 
-/// How many characters of `s` [`tag_text`] writes as `?`: for a writer to say.
-pub fn tag_text_lost(s: &str) -> usize {
-    s.chars().filter(|c| !c.is_ascii() && !matches!(c, '©' | '®')).count()
+/// How many characters of `s` [`tag_text`] writes as `?`, and how many control characters it
+/// writes as spaces, line breaks and tabs among them (the trimmed ends not counted): for a
+/// writer to say.
+pub fn tag_text_changes(s: &str) -> (usize, usize) {
+    let inner = s.trim_matches(|c: char| c.is_control() || c.is_ascii_whitespace());
+    let questioned = inner.chars().filter(|c| !c.is_ascii() && !c.is_control() && !matches!(c, '©' | '®')).count();
+    (questioned, inner.chars().filter(|c| c.is_control()).count())
 }
 
 /// How many of the names [`gdal_metadata_of`] writes for `bands` hold a character XML can't (a

@@ -33229,7 +33229,9 @@ fn export_map_to_geotiff_draws_tile_layers_and_keeps_their_credits() {
     assert_eq!(out["copyright"], "© Röd");
     let r = geotiff::read(std::io::Cursor::new(std::fs::read(&path).unwrap()), "tiles").unwrap();
     assert_eq!(r.copyright.as_deref(), Some("(c) R?d"));
-    assert!(s.notices.iter().any(|n| n.text.contains("1 character of the credits is written as ?: © Röd")), "{:?}", s.notices);
+    assert!(s.notices.iter().any(|n| n.text.contains("written with 1 character as ?: © Röd")), "{:?}", s.notices);
+    // The tiles had all come: nothing says the picture has gaps.
+    assert!(!s.notices.iter().any(|n| n.text.contains("export again once")), "{:?}", s.notices);
     // The middle pixel is the tile's red.
     let i = 100 * r.width as usize + 150;
     let px: Vec<f32> = r.bands.iter().map(|b| b.data[i]).collect();
@@ -33238,6 +33240,30 @@ fn export_map_to_geotiff_draws_tile_layers_and_keeps_their_credits() {
     let n = s.notices.len();
     s.map_mut().tiles[0].attribution = "© Red".into();
     s.run("share.exportMap", &json!({"path": path.display().to_string()})).unwrap();
-    assert!(!s.notices[n..].iter().any(|n| n.text.contains("written as ?")), "{:?}", &s.notices[n..]);
+    assert!(!s.notices[n..].iter().any(|n| n.text.contains("Copyright tag")), "{:?}", &s.notices[n..]);
+    // A tile layer that can't be drawn (its archive gone) leaves a gap that would pass for data:
+    // said, as a warning.
+    let broken = dir.join("broken.mbtiles");
+    let c = rusqlite::Connection::open(&broken).unwrap();
+    c.execute_batch(
+        "CREATE TABLE metadata (name text, value text); CREATE TABLE tiles (zoom_level integer, tile_column integer, tile_row integer, tile_data blob);
+         INSERT INTO metadata VALUES ('name', 'Broken'), ('format', 'png'), ('minzoom', '0'), ('maxzoom', '0');
+         INSERT INTO tiles VALUES (0, 0, 0, x'00010203');",
+    )
+    .unwrap();
+    drop(c);
+    s.map_mut().tiles.clear();
+    s.run("layer.addData", &json!({"path": broken.display().to_string()})).unwrap();
+    // Its file gone before the map is drawn.
+    let gone = s.map().tiles[0].url.clone();
+    std::fs::remove_file(&broken).unwrap();
+    s.map_mut().tiles[0].url = gone.replace("broken", "gone");
+    let n = s.notices.len();
+    s.run("share.exportMap", &json!({"path": path.display().to_string()})).unwrap();
+    assert!(
+        s.notices[n..].iter().any(|n| n.severity == rustgis_data::diagnostics::Severity::Warning && n.text.contains("couldn't be drawn")),
+        "{:?}",
+        &s.notices[n..]
+    );
     std::fs::remove_dir_all(&dir).ok();
 }

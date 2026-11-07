@@ -158,4 +158,44 @@ mod tests {
         }
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    /// The ribbon's Export Map to a `.tif` draws at 192 DPI where that fits a GeoTIFF's 8192
+    /// pixels a side, and at the most that fits (said) where it doesn't; a PNG keeps 192. The
+    /// GeoTIFF is written on a thread like the PNG.
+    #[test]
+    fn export_map_to_a_geotiff_fits_its_dpi_to_the_view() {
+        let mut app = RustGisApp::with_sample();
+        app.session.view_size = (1200.0, 800.0);
+        assert_eq!(app.export_map_dpi("small.tif"), 192.0);
+        app.session.view_size = (5000.0, 3000.0);
+        let n = app.session.notices.len();
+        assert_eq!(app.export_map_dpi("wide.png"), 192.0);
+        assert_eq!(app.session.notices.len(), n);
+        // 8192 × 96 / 5000 = 157.3: whole DPI, down.
+        assert_eq!(app.export_map_dpi("wide.tif"), 157.0);
+        assert!(app.session.notices[n..].iter().any(|x| x.text.contains("drawn at 157 DPI")), "{:?}", &app.session.notices[n..]);
+        // A turned view counts its box: 3000 points square fits at 192 DPI (6000 pixels), turned
+        // 45° its box is 4243 points (8486 pixels), which doesn't.
+        app.session.view_size = (3000.0, 3000.0);
+        assert_eq!(app.export_map_dpi("square.tif"), 192.0);
+        app.session.map_mut().camera.bearing = 45.0;
+        assert_eq!(app.export_map_dpi("square.TIF"), 185.0);
+        app.session.map_mut().camera.bearing = 0.0;
+
+        app.session.view_size = (400.0, 300.0);
+        let dir = std::env::temp_dir().join(format!("rustgis-export-tif-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("map.tif");
+        crate::dialogs::PICKED.with(|c| *c.borrow_mut() = Some(path.display().to_string()));
+        assert_eq!(app.run("ui.exportMap", Value::Null).unwrap()["started"], "Export Map");
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(120);
+        while land(&mut app) {
+            assert!(std::time::Instant::now() < end, "Export Map never landed");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let r = rustgis_engine::data::raster::geotiff::read(std::io::Cursor::new(std::fs::read(&path).unwrap()), "map").unwrap();
+        // 400 × 300 points at 192 DPI.
+        assert_eq!((r.width, r.height, r.bands.len()), (800, 600, 3));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

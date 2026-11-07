@@ -10,10 +10,13 @@ Export Map to a `.tif` path writes the view as a GeoTIFF instead: an RGB image p
 ground in the map's projection, so another GIS opens it where it belongs. It holds the layers,
 tile and WMS layers included, and the labels, but not the scale bar or the credits. The credits go
 into the file's Copyright tag, which holds plain ASCII (`©` is written as `(c)`, and the export
-says when other characters are written as `?`); its answer gives them in full as `copyright`. `"cog": true` writes a
+says when other characters are written as `?`, or control characters as spaces); its answer gives them in full as `copyright`. `"cog": true` writes a
 cloud-optimised GeoTIFF. A turned map is drawn north up over the box around the view (and says
 so). A tilted map, the globe and a map of another body are refused: export a PNG of those. One
-side holds at most 8192 pixels, so a large `width` or `height` needs a lower `dpi`. A projection
+side holds at most 8192 pixels, so a large `width` or `height` needs a lower `dpi`; the ribbon
+draws a GeoTIFF of a view too large for 192 DPI at the most that fits, and says so. Tiles still
+on their way when the export stops waiting, streamed layers still reading the view, and tile
+layers that can't be drawn leave gaps that would pass for data, so the export warns about them. The web app's Export Map downloads a PNG. A projection
 whose parameters GeoTIFF's keys can't hold (Mollweide or Robinson, for example) is refused too:
 switch the map to an EPSG projection first.
 

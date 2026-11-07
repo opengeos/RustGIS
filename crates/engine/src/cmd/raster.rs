@@ -992,6 +992,15 @@ fn write_geotiff(r: &Raster, bi: usize, cog: bool, path: &str) -> Result<super::
     if !unnamed.is_empty() {
         note.push_str(&format!("; the class names of band(s) {} aren't written: a GeoTIFF keeps the first band's", unnamed.join(", ")));
     }
+    // Who holds the rights goes into a tag that holds ASCII only: what that changed is said.
+    if let Some(c) = &r.copyright {
+        let (questioned, spaced) = raster::tag_text_changes(c);
+        if questioned + spaced > 0 {
+            note.push_str(&format!(
+                "; its Copyright tag holds ASCII only, so {questioned} character(s) are written as ? and {spaced} control character(s) as spaces"
+            ));
+        }
+    }
     let spaced = raster::gdal_metadata_changed(r, &bands);
     if spaced > 0 {
         note.push_str(&format!("; {spaced} band or class name(s) held control characters, written as spaces"));

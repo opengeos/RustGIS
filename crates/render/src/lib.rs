@@ -5724,18 +5724,47 @@ pub fn render_png(map: &mut Map, view: &View) -> Result<Vec<u8>, String> {
     pm.into_pixmap().encode_png().map_err(|e| e.to_string())
 }
 
+/// A map drawn as data ([`render_placed`]), with what it holds besides its pixels.
+pub struct Placed {
+    /// The pixels, premultiplied as tiny-skia keeps them.
+    pub pixmap: Pixmap,
+    /// The credits the map's tile layers ask for, for the file to keep.
+    pub credits: Vec<String>,
+    /// Why parts of it may be empty: tiles or streamed data still on their way when the wait
+    /// ran out, tile layers that couldn't be drawn. In a picture placed on the ground a gap looks
+    /// like data, so an export says these.
+    pub gaps: Vec<String>,
+}
+
 /// A map drawn as data, for an image placed on the ground (a GeoTIFF of the view): its layers
 /// and labels (the unplaced ones too, when the map shows them, as [`render_png`] draws them),
-/// without the scale bar and the credits, which sit on the screen, not the ground. Gives back the
-/// pixels (premultiplied, as tiny-skia keeps them) and the credits the map's tile layers ask for,
-/// for the file to keep. Refuses what [`render_png`] refuses.
-pub fn render_placed(map: &mut Map, view: &View) -> Result<(Pixmap, Vec<String>), String> {
+/// without the scale bar and the credits, which sit on the screen, not the ground. Refuses what
+/// [`render_png`] refuses.
+pub fn render_placed(map: &mut Map, view: &View) -> Result<Placed, String> {
     let r = render_exported(map, view)?;
+    let mut gaps = Vec::new();
+    if r.tiles_pending {
+        gaps.push("some tiles were still on their way when the export stopped waiting, so parts of tile layers are empty: export again once the map has drawn them".to_string());
+    }
+    if r.data_pending {
+        gaps.push(
+            "streamed layers were still reading the view, so some features are missing: export again once the map has drawn them"
+                .to_string(),
+        );
+    }
+    if let Some(first) = r.tile_errors.first() {
+        let n = r.tile_errors.len();
+        gaps.push(if n == 1 {
+            format!("a tile layer couldn't be drawn, so its part is empty: {first}")
+        } else {
+            format!("{n} tile layers couldn't be drawn, so their parts are empty; the first: {first}")
+        });
+    }
     let mut pm = Canvas::from_pixmap(r.pixmap);
     for l in r.unplaced.iter().chain(&r.labels) {
         text::draw(&mut pm, l, view.pixels_per_point as f32);
     }
-    Ok((pm.into_pixmap(), r.attribution))
+    Ok(Placed { pixmap: pm.into_pixmap(), credits: r.attribution, gaps })
 }
 
 /// The map drawn whole for an export, or why it can't be written: a raster read in place whose

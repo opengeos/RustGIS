@@ -1123,6 +1123,33 @@ pub struct RustGisApp {
 }
 
 impl RustGisApp {
+    /// The DPI the ribbon's Export Map draws `path` at: 192, or for a GeoTIFF of a view too large
+    /// for that (one side past 8192 pixels, a turned view's box counted), the most that fits, said
+    /// in a notice. A PNG keeps 192.
+    fn export_map_dpi(&mut self, path: &str) -> f64 {
+        const DPI: f64 = 192.0;
+        let tif = std::path::Path::new(path)
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| e.eq_ignore_ascii_case("tif") || e.eq_ignore_ascii_case("tiff"));
+        let (vw, vh) = self.session.view_size;
+        let camera = self.session.map().camera;
+        // As the export works it out: a turned view's box, rounded up to whole points; the pixels
+        // rounded.
+        let b = camera.bearing.rem_euclid(360.0);
+        let turned = b.min(360.0 - b) > 1e-9;
+        let (bw, bh) = if turned { camera.rotated_size(vw, vh) } else { (vw, vh) };
+        let side = if turned { bw.ceil().max(bh.ceil()) } else { bw.max(bh) };
+        let most = f64::from(rustgis_engine::render::MAX_SIDE);
+        if !tif || !side.is_finite() || (side * DPI / 96.0).round() <= most {
+            return DPI;
+        }
+        // Whole DPI, rounded down so the side fits; the export's own limit (48) refuses smaller.
+        let dpi = (most * 96.0 / side).floor().max(48.0);
+        self.session.notify(format!("{path}: drawn at {dpi} DPI, the most a GeoTIFF of this view holds (8192 pixels a side)"), false);
+        dpi
+    }
+
     /// The layer to export: `layer` (an id or name, as commands take it; the dialog's is checked
     /// against its `instance`, so a reused id isn't taken for it), else the active layer.
     fn export_target(&self, p: &Value) -> Result<u32, String> {
@@ -3961,16 +3988,17 @@ impl RustGisApp {
                 let name = format!("{}.png", self.session.map().name);
                 // A .tif is the view placed on the ground (a GeoTIFF), without the scale bar.
                 if let Some(path) = dialogs::pick_save(&name, &["png", "tif", "tiff"], tl!("PNG image or GeoTIFF")) {
+                    let dpi = self.export_map_dpi(&path);
                     // Drawn on a thread of its own, with progress and Cancel in the status bar;
                     // here while a style added with its own view loads, as the command waits for
                     // it to move the map there first.
                     #[cfg(not(target_arch = "wasm32"))]
                     if self.session.style_view.is_none() {
-                        return exportjob::start(self, "share.exportMap", json!({"path": path, "dpi": 192}));
+                        return exportjob::start(self, "share.exportMap", json!({"path": path, "dpi": dpi}));
                     }
                     #[cfg(not(target_arch = "wasm32"))]
                     exportjob::idle(self)?;
-                    return self.run("share.exportMap", json!({"path": path, "dpi": 192}));
+                    return self.run("share.exportMap", json!({"path": path, "dpi": dpi}));
                 }
             }
             "ui.exportLayer" => {
