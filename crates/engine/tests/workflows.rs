@@ -523,6 +523,10 @@ fn join_overlay_summarise_map_save_reopen_and_share() {
     let zoned = layer(&s, "zoned").clone();
     // Every piece keeps its parcel's value through the overlay, "00103"'s two pieces none.
     assert_eq!(check_values(&zoned), 13);
+    let (id, value) = (zoned.field_index("parcel_id").unwrap(), zoned.field_index("value_usd").unwrap());
+    let split = (0..zoned.features.len()).filter(|&r| zoned.value(r, id).to_string() == "00103").collect::<Vec<_>>();
+    assert_eq!(split.len(), 2, "the overlay splits 00103");
+    assert!(split.iter().all(|&r| zoned.value(r, value) == &Field::Null), "00103 has no assessment");
 
     let png = dir.path("map.png");
     s.run("share.exportMap", &json!({"path": png, "width": 320, "height": 200})).unwrap();
