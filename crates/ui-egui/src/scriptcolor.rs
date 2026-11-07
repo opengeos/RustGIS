@@ -181,6 +181,26 @@ fn json_spans(text: &str, at: usize, broken: bool, out: &mut Vec<Span>) {
     }
 }
 
+/// The spans of a help's signature keys (` {layer?, size?}`), `text` starting at byte `at`: each
+/// name a key, as the same key is in the script; brackets and commas punctuation; `?` and spaces
+/// plain.
+fn signature_spans(text: &str, at: usize, out: &mut Vec<Span>) {
+    let kind = |c: char| match c {
+        '{' | '}' | '[' | ']' | ',' => Kind::Punct,
+        '?' => Kind::Plain,
+        c if c.is_whitespace() => Kind::Plain,
+        _ => Kind::Key,
+    };
+    for (i, c) in text.char_indices() {
+        let (range, k) = (at + i..at + i + c.len_utf8(), kind(c));
+        match out.last_mut() {
+            // A run of one kind is one span.
+            Some(last) if last.kind == k && last.range.end == range.start => last.range.end = range.end,
+            _ => out.push(Span { range, kind: k, broken: false }),
+        }
+    }
+}
+
 /// The alternatives `after`, what follows a string, goes on with: what is left past them, and
 /// whether a key's colon (or `?`) ends them: ` | "x": number` after `"lon"`, not
 /// ` | "*.zip" (PNG frames)`.
@@ -196,7 +216,8 @@ fn alternatives(mut after: &str) -> (&str, bool) {
 /// The colours of a script, one per kind. The theme's text, dimmed text and accent, and colours
 /// of the script's own for the rest: the theme's green and amber are made for icons and marks and
 /// read poorly as small text on the light theme's white, and comments are a colour of their own,
-/// not the dimmed one that reads as disabled. Every one is at least 4.5:1 on the box (WCAG AA).
+/// not the dimmed one that reads as disabled. Keys take a teal of their own, apart from the
+/// strings they are written as. Every one is at least 4.5:1 on the box (WCAG AA).
 #[derive(Clone, Copy, Hash)]
 pub struct Palette {
     pub text: Color32,
@@ -205,6 +226,7 @@ pub struct Palette {
     pub comment: Color32,
     pub id: Color32,
     pub bad: Color32,
+    pub key: Color32,
     pub string: Color32,
     pub number: Color32,
 }
@@ -212,12 +234,12 @@ pub struct Palette {
 impl Palette {
     pub fn of(t: &crate::theme::Tokens) -> Self {
         let rgb = Color32::from_rgb;
-        let (comment, bad, string, number) = if t.dark {
-            (rgb(0x7F, 0xBF, 0x8F), rgb(0xF0, 0x6A, 0x6A), rgb(0xE0, 0xA0, 0x60), rgb(0xC6, 0xA0, 0xF6))
+        let (comment, bad, key, string, number) = if t.dark {
+            (rgb(0x7F, 0xBF, 0x8F), rgb(0xF0, 0x6A, 0x6A), rgb(0x5E, 0xD3, 0xE6), rgb(0xE0, 0xA0, 0x60), rgb(0xC6, 0xA0, 0xF6))
         } else {
-            (rgb(0x2E, 0x7D, 0x4F), rgb(0xC6, 0x28, 0x28), rgb(0x8A, 0x4B, 0x08), rgb(0x7B, 0x3F, 0xB5))
+            (rgb(0x2E, 0x7D, 0x4F), rgb(0xC6, 0x28, 0x28), rgb(0x0F, 0x76, 0x6E), rgb(0x8A, 0x4B, 0x08), rgb(0x7B, 0x3F, 0xB5))
         };
-        Palette { text: t.text, dim: t.text_dim, comment, id: t.accent_text, bad, string, number }
+        Palette { text: t.text, dim: t.text_dim, comment, id: t.accent_text, bad, key, string, number }
     }
 }
 
@@ -232,7 +254,8 @@ pub fn job(script: &str, unknown: &[String], palette: Palette, font: &FontId) ->
 
 /// A command's signature or one of its parameters, for the Script suggestions' help (#662),
 /// coloured as the script colours a command and its JSON, so the help reads as what's typed.
-/// `id` leads, in the id's colour, when given.
+/// `id` leads, in the id's colour, when given, and `text` is then the signature's keys
+/// (` {layer?, size?}`); otherwise a parameter's description.
 pub fn help_job(id: Option<&str>, text: &str, palette: Palette, font: &FontId) -> LayoutJob {
     let full = format!("{}{text}", id.unwrap_or_default());
     let at = full.len() - text.len();
@@ -240,7 +263,11 @@ pub fn help_job(id: Option<&str>, text: &str, palette: Palette, font: &FontId) -
     if at > 0 {
         spans.push(Span { range: 0..at, kind: Kind::Id, broken: false });
     }
-    json_spans(text, at, false, &mut spans);
+    if id.is_some() {
+        signature_spans(text, at, &mut spans);
+    } else {
+        json_spans(text, at, false, &mut spans);
+    }
     let mut job = LayoutJob::default();
     for s in &spans {
         append(&mut job, &full, s, palette, font);
@@ -251,7 +278,8 @@ pub fn help_job(id: Option<&str>, text: &str, palette: Palette, font: &FontId) -
 /// `s` of `text` appended to `job` in its colour.
 fn append(job: &mut LayoutJob, text: &str, s: &Span, palette: Palette, font: &FontId) {
     let color = match s.kind {
-        Kind::Plain | Kind::Key => palette.text,
+        Kind::Plain => palette.text,
+        Kind::Key => palette.key,
         Kind::Comment => palette.comment,
         Kind::Punct | Kind::Unread => palette.dim,
         Kind::Id => palette.id,
@@ -493,6 +521,7 @@ mod tests {
                 ("comment", p.comment),
                 ("id", p.id),
                 ("bad", p.bad),
+                ("key", p.key),
                 ("string", p.string),
                 ("number", p.number),
             ] {
@@ -666,9 +695,34 @@ mod tests {
         };
         let sig = super::help_job(Some("map.body"), " {name?, basemap?}", palette, &font);
         assert_eq!(colour(&sig, "map.body"), Some(palette.id));
+        assert_eq!(colour(&sig, "name"), Some(palette.key), "the signature's keys are keys");
+        assert_eq!(colour(&sig, "basemap"), Some(palette.key));
+        assert_eq!(colour(&sig, "?"), Some(palette.text));
+        assert_eq!(colour(&sig, "{"), Some(palette.dim));
+        assert_eq!(colour(&sig, ","), Some(palette.dim));
         let p = super::help_job(None, r#""name"?: "earth"|"moon" (map.bodies lists them)"#, palette, &font);
-        assert_eq!(colour(&p, r#""name""#), Some(palette.text), "a key, `?` and all");
+        assert_eq!(colour(&p, r#""name""#), Some(palette.key), "a key, `?` and all");
         assert_eq!(colour(&p, r#""moon""#), Some(palette.string));
+        assert_eq!(colour(&p, "lists"), Some(palette.text), "a description's words stay text");
+    }
+
+    /// Keys have a colour of their own, apart from strings and plain text, in both themes.
+    #[test]
+    fn keys_have_their_own_colour() {
+        for t in [crate::theme::Tokens::light(), crate::theme::Tokens::dark()] {
+            let p = super::Palette::of(&t);
+            assert!(p.key != p.text && p.key != p.string && p.key != p.comment && p.key != p.id);
+        }
+        let font = egui::FontId::monospace(12.0);
+        let palette = super::Palette::of(&crate::theme::Tokens::light());
+        let script = r#"labels.style {"size": 12, "halo": {"width": 1}}"#;
+        let job = super::job(script, &[], palette, &font);
+        let colour = |piece: &str| {
+            let at = script.find(piece)?;
+            job.sections.iter().find(|s| (s.byte_range.start.0..s.byte_range.end.0).contains(&at)).map(|s| s.format.color)
+        };
+        assert_eq!(colour(r#""size""#), Some(palette.key));
+        assert_eq!(colour(r#""width""#), Some(palette.key), "a nested key too");
     }
 
     /// A description's alternatives: keys (`"lon" | "x": number`) are keys, each of them, and
