@@ -47,11 +47,12 @@ pub(crate) enum Hull {
 /// above. Faces standing on edge, such as walls, show nothing and are left out. The footprint is the
 /// hull of `points` when no face shows, or when its faces aren't merged: `truncated` (the reader left
 /// some out, or can't vouch for them, as with a height that isn't a finite number), more seen from
-/// above than [`MAX_UNION_FACES`] or than `budget` has left (which they then take from it). `points` are all the shape's points, in any grouping: they also set the scale
-/// below which a face is too narrow to show. A shape with a point or a face whose X or Y isn't a
-/// finite number, or passes [`MAX_COORDINATE`], has no footprint: the hull, and orienting a face,
-/// panic on NaN. A height that isn't a finite number (or passes the limit) can't say which way a face looks: all of them
-/// go, not only that one (which would drop it silently), and the hull stands in.
+/// above than [`MAX_UNION_FACES`] or than `budget` has left (which they then take from it).
+/// `points` are all the shape's points, in any grouping: they also set the scale below which a face
+/// is too narrow to show. A shape with a point or a face whose X or Y isn't a finite number, or
+/// passes [`MAX_COORDINATE`], has no footprint: the hull, and orienting a face, panic on NaN. A
+/// height that isn't a finite number (or passes the limit) can't say which way a face looks: all of
+/// them go, not only that one (which would drop it silently), and the hull stands in.
 pub(crate) fn footprint<F: AsRef<[Vec<P3>]>>(
     faces: &[F],
     truncated: bool,

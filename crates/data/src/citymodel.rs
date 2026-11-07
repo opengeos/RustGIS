@@ -476,42 +476,42 @@ pub(crate) struct ObjectRows {
 /// A family's parts at the highest level of detail an object has: its other levels are other
 /// pictures of it, not more of it, as for its surfaces. Parts that draw something go before any
 /// level: a line of one point at LoD 2 doesn't take the place of a road drawn at LoD 1, nor do
-/// points that a transform took past finite numbers take the place of good ones.
+/// points that a transform took past the numbers [`usable_xy`] takes take the place of good ones.
 pub(crate) struct Highest<T> {
     drawable: bool,
     rank: f64,
     lod: Option<String>,
     parts: Vec<T>,
-    /// The highest level of detail with a geometry whose X or Y isn't a finite number.
-    unfinite: Option<f64>,
+    /// The highest level of detail with a geometry whose X or Y can't be drawn ([`usable_xy`]).
+    unusable: Option<f64>,
 }
 
 impl<T> Default for Highest<T> {
     fn default() -> Self {
-        Highest { drawable: false, rank: f64::NEG_INFINITY, lod: None, parts: Vec::new(), unfinite: None }
+        Highest { drawable: false, rank: f64::NEG_INFINITY, lod: None, parts: Vec::new(), unusable: None }
     }
 }
 
 impl<T> Highest<T> {
     /// Adds a geometry's parts at the level of detail `rank` (a number to compare), written `lod`.
-    fn add(&mut self, rank: f64, lod: impl FnOnce() -> Option<String>, parts: Vec<T>, finite: bool, drawable: bool) {
-        if !finite {
-            self.unfinite = Some(self.unfinite.map_or(rank, |r| r.max(rank)));
+    fn add(&mut self, rank: f64, lod: impl FnOnce() -> Option<String>, parts: Vec<T>, usable: bool, drawable: bool) {
+        if !usable {
+            self.unusable = Some(self.unusable.map_or(rank, |r| r.max(rank)));
         }
-        let drawable = finite && drawable;
+        let drawable = usable && drawable;
         let key = |d: bool, r: f64| (d, r);
         if key(drawable, rank) > key(self.drawable, self.rank) {
-            *self = Highest { drawable, rank, lod: lod(), parts: Vec::new(), unfinite: self.unfinite };
+            *self = Highest { drawable, rank, lod: lod(), parts: Vec::new(), unusable: self.unusable };
         }
         if drawable == self.drawable && rank == self.rank {
             self.parts.extend(parts);
         }
     }
 
-    /// A geometry whose X or Y isn't a finite number was left out, at this level or above, though
+    /// A geometry whose X or Y can't be drawn was left out, at this level or above, though
     /// the family draws: no notice says so otherwise.
-    fn left_unfinite(&self) -> bool {
-        self.drawable && self.unfinite.is_some_and(|r| r >= self.rank)
+    fn left_unusable(&self) -> bool {
+        self.drawable && self.unusable.is_some_and(|r| r >= self.rank)
     }
 }
 
@@ -519,9 +519,9 @@ impl Highest<Vec<P3>> {
     /// Adds a geometry's lines, which the caller has found aren't empty. They draw when one has two
     /// different points.
     pub(crate) fn add_lines(&mut self, rank: f64, lod: impl FnOnce() -> Option<String>, lines: Vec<Vec<P3>>) {
-        let finite = lines.iter().flatten().all(finite_xy);
+        let usable = lines.iter().flatten().all(usable_xy);
         let drawable = lines.iter().any(|p| p.iter().any(|q| p.first().is_some_and(|f| f[..2] != q[..2])));
-        self.add(rank, lod, lines, finite, drawable);
+        self.add(rank, lod, lines, usable, drawable);
     }
 }
 
@@ -529,8 +529,8 @@ impl Highest<(P3, bool)> {
     /// Adds a geometry's points, which the caller has found aren't empty, each with whether it is
     /// a geometry instance's.
     pub(crate) fn add_points(&mut self, rank: f64, lod: impl FnOnce() -> Option<String>, points: Vec<(P3, bool)>) {
-        let finite = points.iter().all(|(p, _)| finite_xy(p));
-        self.add(rank, lod, points, finite, true);
+        let usable = points.iter().all(|(p, _)| usable_xy(p));
+        self.add(rank, lod, points, usable, true);
     }
 }
 
@@ -567,11 +567,6 @@ pub(crate) struct ObjectParts {
     pub(crate) solid: bool,
 }
 
-/// Whether a point's X and Y are numbers it can be drawn at.
-fn finite_xy(p: &P3) -> bool {
-    p[0].is_finite() && p[1].is_finite()
-}
-
 /// Whether the heights of some points differ.
 fn heights_differ<'a>(mut points: impl Iterator<Item = &'a P3>) -> bool {
     let finite = points.by_ref().map(|p| p[2]).find(|h| h.is_finite());
@@ -592,7 +587,7 @@ pub(crate) fn object_rows(
     // Counted once for the object, whichever of its families are lost.
     let mut shapeless = false;
     // A geometry with X or Y that can't be drawn was passed over for another: counted once too.
-    let mut unusable = lines.left_unfinite() || points.left_unfinite();
+    let mut unusable = lines.left_unusable() || points.left_unusable();
     let mut push = |family: Family, lod: Option<String>, geometry: Option<Geometry>, z_dropped: bool, drawable: bool| {
         shapeless |= geometry.is_none();
         let (geometry, unconverted) = match (geometry, to_lonlat) {
@@ -614,14 +609,14 @@ pub(crate) fn object_rows(
     let coords = |p: &[P3]| p.iter().map(|p| Coord::new(p[0], p[1])).collect::<Vec<_>>();
     let Highest { lod: line_lod, parts: lines, drawable: lines_draw, .. } = lines;
     if !lines.is_empty() {
-        let geometry = lines.iter().flatten().all(finite_xy).then(|| Geometry::Line(lines.iter().map(|l| coords(l)).collect()));
+        let geometry = lines.iter().flatten().all(usable_xy).then(|| Geometry::Line(lines.iter().map(|l| coords(l)).collect()));
         push(Family::Line, line_lod, geometry, heights_differ(lines.iter().flatten()), lines_draw);
     }
     let Highest { lod: point_lod, parts: points, .. } = points;
     counts.instances += points.iter().filter(|(_, instance)| *instance).count();
     let points: Vec<P3> = points.into_iter().map(|(p, _)| p).collect();
     if !points.is_empty() {
-        let geometry = points.iter().all(finite_xy).then(|| match points.as_slice() {
+        let geometry = points.iter().all(usable_xy).then(|| match points.as_slice() {
             [p] => Geometry::Point(Coord::new(p[0], p[1])),
             many => Geometry::MultiPoint(coords(many)),
         });
@@ -835,7 +830,7 @@ fn messages(c: &Counts) -> Vec<String> {
     say(
         c.no_footprint,
         format!(
-            "{} city objects have a shape that can't be drawn (a footprint whose points don't outline an area, fewer than three or all on one line, or points that aren't finite numbers): the shape is kept without geometry",
+            "{} city objects have a shape that can't be drawn (a footprint whose points don't outline an area, fewer than three or all on one line, or points whose X or Y isn't a finite number or is too large): the shape is kept without geometry",
             c.no_footprint
         ),
     );

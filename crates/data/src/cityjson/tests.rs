@@ -1129,6 +1129,16 @@ fn a_lone_face_past_the_coordinate_limit_has_no_footprint() {
     assert!(geometry(&out[0].0, 1).is_some(), "near");
     assert_eq!(value(&out[0].0, 1, "lod"), crate::Value::Text("2".into()));
     assert!(says(&out, "1 city objects have a geometry whose X or Y can't be drawn"), "{:?}", messages_of(&out));
+    // A lone ground face is held to the same limit, and so are points.
+    let vertices = json!([[0, 0, 0], [2e150, 0, 0], [2e150, 2e150, 0], [0, 2e150, 0]]);
+    let objects = json!({
+        "ground": {"type": "Building", "geometry": [{"type": "MultiSurface", "lod": "2", "boundaries": [[[0, 1, 2, 3]]],
+            "semantics": {"surfaces": [{"type": "GroundSurface"}], "values": [0]}}]},
+        "point": {"type": "Tree", "geometry": [{"type": "MultiPoint", "lod": "1", "boundaries": [2]}]},
+    });
+    let out = read("m.city.json", &doc(vertices, objects), Crs::from_epsg(3857)).unwrap();
+    assert!(out.iter().all(|(ds, _)| geometry(ds, 0).is_none()), "{:?}", messages_of(&out));
+    assert!(says(&out, "2 city objects have a shape that can't be drawn"), "{:?}", messages_of(&out));
 }
 
 /// A level 0 face that outlines no area gives way to the ground, and the ground to the union.
