@@ -23015,12 +23015,15 @@ fn fills_come_back_after_no_fill() {
         let id = s.active_layer.unwrap();
         assert!(filled(&s), "{case}: filled to begin with");
         let steps = [
+            json!({"command": "layer.restoreFill", "params": {}}),
             json!({"command": "layer.symbology", "params": {"type": "single"}}),
             json!({"command": "layer.symbology", "params": {"type": "unique", "field": "kind"}}),
             // Again on the same field and scheme, which carries the classes over.
             json!({"command": "layer.symbology", "params": {"type": "unique", "field": "kind"}}),
+            json!({"command": "layer.restoreFill", "params": {}}),
             json!({"command": "layer.symbology", "params": {"type": "graduated", "field": "n", "classes": 2}}),
             json!({"command": "layer.symbology", "params": {"type": "graduated", "field": "n", "classes": 2}}),
+            json!({"command": "layer.restoreFill", "params": {}}),
             json!({"command": "layer.ramp", "params": {"ramp": "Harbour"}}),
             json!({"command": "layer.color", "params": {"color": "#336699"}}),
             json!({"command": "layer.fillLayers", "params": {"fills": [{"pattern": "solid"}]}}),
@@ -23040,6 +23043,13 @@ fn fills_come_back_after_no_fill() {
             assert_eq!(l.no_fill, Some(if over { rustgis_map::NoFill::Override } else { rustgis_map::NoFill::Symbols }));
             s.run(step["command"].as_str().unwrap(), &step["params"]).unwrap();
             assert!(filled(&s), "{case}: {step} after No Fill draws fills");
+            if step["command"] == "layer.restoreFill" {
+                assert!(s.map().layer(id).unwrap().no_fill.is_none());
+                s.run("edit.undo", &Value::Null).unwrap();
+                assert!(!filled(&s), "{case}: undo restores No Fill");
+                s.run("edit.redo", &Value::Null).unwrap();
+                assert!(filled(&s), "{case}: redo restores fills");
+            }
         }
         // A fill given its own transparent colour leaves the polygons unfilled.
         for colour in ["#11223300", "#00000000"] {
@@ -23083,6 +23093,8 @@ fn fills_come_back_after_no_fill() {
     s.run("layer.color", &json!({"color": "#33669900"})).unwrap();
     s.run("layer.symbology", &json!({"type": "unique", "field": "kind"})).unwrap();
     assert!(!filled(&s), "a chosen transparent fill stays");
+    s.run("layer.restoreFill", &Value::Null).unwrap();
+    assert!(!filled(&s), "Restore Fill leaves an explicit transparent colour unchanged");
 }
 
 /// #1456: a definition query on a streamed source the view filters as it reads (FlatGeobuf)

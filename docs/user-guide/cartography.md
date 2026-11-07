@@ -129,10 +129,12 @@ For polygons, **No Fill** in the Symbology pane or **Style › Drawing** draws o
 It keeps each symbol's outline colour and width, including in Unique Values and Graduated Colors,
 without changing the classes. Change the outline with **Outline color** and **Outline width** in
 the Single Symbol editor, or `layer.outline` for all classes. Undo restores the previous fills;
-the colour picker's opacity control can also make a fill visible again. By command:
+the button also changes to **Restore Fill**, which shows the existing colours again. Symbols
+made transparent by No Fill use the default polygon opacity. By command:
 
 ```text
 layer.noFill={"layer":"Countries"}
+layer.restoreFill={"layer":"Countries"}
 ```
 
 A GeoJSON with mixed geometry keeps its points, lines and polygons in one layer, classified by its

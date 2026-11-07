@@ -212,6 +212,16 @@ pub fn commands() -> Vec<C> {
         }).roles(&[])
         .when(need_polygon_features)
         .params(r#"{"layer"?: name|id (default: the active layer containing polygons; hides polygon fills, keeping outlines and point/line symbols)}"#),
+        C::new("layer.restoreFill", "Restore Fill", "Style › Drawing", |s, p| {
+            with(s, p, |l| {
+                if take_no_fill(l) == Some(NoFill::Symbols) {
+                    l.renderer.map_symbols(show_fill);
+                }
+            })
+        })
+        .roles(&[])
+        .when(need_polygon_features)
+        .params(r#"{"layer"?: name|id (default: the active layer containing polygons; restores fills hidden by layer.noFill in their own colours; symbols made transparent use the default polygon opacity)}"#),
         C::new("layer.outline", "Outline", "Style › Drawing", |s, p| {
             let c = s.get_color(p, "color")?;
             let w = f(p, "width").map(|w| w.clamp(0.0, 20.0) as f32);
