@@ -1196,6 +1196,17 @@ impl Session {
         Ok(serde_json::json!({"pending": true, "url": url}))
     }
 
+    /// The MBTiles files the project's layers read.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn mbtiles_files(&self) -> impl Iterator<Item = &str> {
+        self.project
+            .maps
+            .iter()
+            .flat_map(|m| &m.tiles)
+            .filter(|t| t.kind == rustgis_map::TileKind::MbTiles)
+            .filter_map(|t| t.archive_file())
+    }
+
     /// Says a download the front end was asked for ([`Session::request_url`]) failed before
     /// anything could add it (it didn't download, or its project was closed): a plugin command
     /// waiting for it runs again, and its `layer.addUrl` answers this error. `p` is the request
@@ -1317,6 +1328,8 @@ impl Session {
             // one entry too, as it is one step to undo.
             let joins = self.merge.is_some() && self.merge == self.merged && !self.undo.is_empty();
             let (at, start) = (project_log::now_ms(), web_time::Instant::now());
+            #[cfg(not(target_arch = "wasm32"))]
+            let files_before: Vec<String> = self.mbtiles_files().map(str::to_string).collect();
             // A download that lands after its plugin command gave up waiting (it ran again with
             // that error) isn't added: no command is left to go on with it. Nor is one landing
             // again, added already (a caller gave its number itself, then the app's own download
@@ -1346,6 +1359,16 @@ impl Session {
                 Some(refused) => refused,
                 None => self.run_command(id, params),
             };
+            // Whichever command took its last layer away (removed, undone, the project closed):
+            // the file can now be moved or replaced, so what was read of it is forgotten too.
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                let files: Vec<&str> = self.mbtiles_files().collect();
+                for gone in files_before.iter().filter(|f| !files.contains(&f.as_str())) {
+                    render::rustgis_tiles::cache::forget(gone);
+                }
+                render::rustgis_tiles::mbtiles::close_unused(files.into_iter());
+            }
             // A download a plugin command left to the app, added: what it answered is kept for the
             // command to run again with (#1202).
             if matches!(id, "layer.addUrl" | "layer.addDownload")
