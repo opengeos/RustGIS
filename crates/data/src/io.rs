@@ -1237,6 +1237,8 @@ fn widen(a: FieldType, b: Option<FieldType>) -> FieldType {
     }
 }
 
+/// A value as its field's type holds it: an integer in a decimal field as a decimal, anything in
+/// a text field as its text.
 pub(crate) fn coerce(v: Value, ty: FieldType) -> Value {
     match (ty, v) {
         (_, Value::Null) => Value::Null,

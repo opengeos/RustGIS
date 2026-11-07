@@ -425,7 +425,8 @@ fn attribute_names<'a>(objects: impl Iterator<Item = &'a Built>, counts: &mut Co
 }
 
 /// The rows, heights and solids of a file's objects as layers, with the file's notes and one notice
-/// per kind of what was left out. `stem` names the layers.
+/// per kind of what was left out. `stem` names the layers. The rows' geometries come in `crs` and
+/// are converted to longitude/latitude here.
 pub(crate) fn finish(
     file_name: &str,
     stem: &str,
@@ -703,6 +704,7 @@ fn properties<'a>(b: &'a Built, lod: Option<&'a str>, names: &'a HashMap<String,
     fixed.into_iter().map(|(k, v)| (k, Cow::Owned(v))).chain(own).chain(heights.into_iter().map(|(k, v)| (k, Cow::Owned(v)))).collect()
 }
 
+/// A height as JSON: null when there is none, or it isn't a finite number.
 fn number(v: Option<f64>) -> Json {
     v.and_then(serde_json::Number::from_f64).map_or(Json::Null, Json::Number)
 }
