@@ -56,14 +56,15 @@ pub fn render(layout: &Layout, maps: &mut [Map], dpi: f64, info: &PageInfo) -> O
     render_pending(layout, maps, dpi, info).map(|(pm, _)| pm)
 }
 
-/// [`render`], and whether a map frame on the page drew while some of its tiles were still on
-/// their way: in the browser, which doesn't wait for them, the page is drawn again once they land.
+/// [`render`], and whether a map frame on the page drew while some of its tiles, or a read of its
+/// streamed layers or rasters, were still on their way: in the browser, which doesn't wait for
+/// them, the page is drawn again once they land.
 pub fn render_pending(layout: &Layout, maps: &mut [Map], dpi: f64, info: &PageInfo) -> Option<(Pixmap, bool)> {
     let (w, h, k) = page_geometry(layout, dpi);
     let bounds = tiny_skia::IntRect::from_xywh(0, 0, w, h)?;
-    let mut tiles_pending = false;
-    let pm = draw_page(layout, maps, info, k, bounds, None, None, &mut tiles_pending)?.into_pixmap();
-    Some((pm, tiles_pending))
+    let mut pending = false;
+    let pm = draw_page(layout, maps, info, k, bounds, None, None, &mut pending)?.into_pixmap();
+    Some((pm, pending))
 }
 
 /// [`render`] kept as vectors (for a vector PDF): text, shapes, surrounds and flat, north-up map
@@ -133,8 +134,8 @@ fn element_bounds(layout: &Layout, id: u32, dpi: f64) -> Option<Option<(tiny_ski
 
 /// Draws the selected region with the full layout's frame and dynamic-text context, recorded
 /// when `record` holds a list (see [`render_drawing`]), which gets the names of the frames
-/// drawn as pictures. `tiles_pending` is set when a frame drew while some of its tiles were still
-/// on their way (see [`render_pending`]).
+/// drawn as pictures. `pending` is set when a frame drew while some of what it shows was still on
+/// its way (see [`render_pending`]).
 fn draw_page(
     layout: &Layout,
     maps: &mut [Map],
@@ -143,7 +144,7 @@ fn draw_page(
     bounds: tiny_skia::IntRect,
     element: Option<u32>,
     mut record: Option<&mut Vec<(u32, String)>>,
-    tiles_pending: &mut bool,
+    pending: &mut bool,
 ) -> Option<Canvas> {
     let ppp = k / PT_PER_MM;
     let mut pm =
@@ -197,7 +198,7 @@ fn draw_page(
                 // A frame larger than the page budget is drawn at a lower resolution and scaled up.
                 let fppp = ppp.min((MAX_PIXELS / (fw * fh).max(1.0)).sqrt()).max(0.01);
                 let view = View { width: fw, height: fh, pixels_per_point: fppp, camera: cam, sky: false };
-                let Some(mut frame_pm) = frame_canvas(map, cam, fw, fh, fppp, pm.is_recording(), tiles_pending) else {
+                let Some(mut frame_pm) = frame_canvas(map, cam, fw, fh, fppp, pm.is_recording(), pending) else {
                     if frame_requires_complete(map, &view) {
                         return None;
                     }
@@ -210,7 +211,7 @@ fn draw_page(
                     frame_pm.overflowed() || pm.recorded_cost().saturating_add(frame_pm.recorded_cost()) > crate::vector::max_cost();
                 if frame_pm.is_recording()
                     && too_large
-                    && let Some(pixels) = frame_canvas(map, cam, fw, fh, fppp, false, tiles_pending)
+                    && let Some(pixels) = frame_canvas(map, cam, fw, fh, fppp, false, pending)
                 {
                     frame_pm = pixels;
                     if let Some(list) = record.as_deref_mut() {
@@ -441,20 +442,12 @@ pub fn frame_map(map: &mut Map, camera: rustgis_map::Camera, w: f64, h: f64, ppp
 
 /// [`frame_map`] on a canvas: one that records (see [`crate::canvas`]) when `record` and the
 /// frame can be kept as vectors (flat, north up, without view effects), else its pixels.
-/// `tiles_pending` is set when some of its tiles were still on their way (in the browser, which
-/// doesn't wait for them).
-fn frame_canvas(
-    map: &mut Map,
-    camera: rustgis_map::Camera,
-    w: f64,
-    h: f64,
-    ppp: f64,
-    record: bool,
-    tiles_pending: &mut bool,
-) -> Option<Canvas> {
+/// `pending` is set when some of its tiles, or a read of its streamed layers or rasters, were
+/// still on their way (in the browser, which doesn't wait for them).
+fn frame_canvas(map: &mut Map, camera: rustgis_map::Camera, w: f64, h: f64, ppp: f64, record: bool, pending: &mut bool) -> Option<Canvas> {
     let view = View { width: w, height: h, pixels_per_point: ppp, camera, sky: false };
     let img = if record { crate::render_complete_recorded(map, &view) } else { crate::render_complete(map, &view) }?;
-    *tiles_pending |= img.tiles_pending;
+    *pending |= img.tiles_pending || img.data_pending;
     Some(finish_frame(img, ppp))
 }
 

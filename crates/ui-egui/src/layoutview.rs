@@ -49,30 +49,37 @@ const SNAP_COLOR: Color32 = Color32::from_rgb(0xE0, 0x3E, 0x8C);
 /// An element's box: x, y, width, height (mm).
 type Box4 = (f64, f64, f64, f64);
 
-/// Seconds at least between two drawings of the page while its map frames' tiles land: each one
-/// landing would draw the whole page again.
-const TILES_REDRAW_S: f64 = 0.25;
+/// Seconds at least between two drawings of the page while what its map frames show lands: each
+/// tile or read landing would draw the whole page again.
+const FRAMES_REDRAW_S: f64 = 0.25;
 
-/// A page drawn in the browser while something it shows was still on its way: a map frame's tiles,
-/// or a legend's pictures (WMS, WMTS).
+/// What has landed so far: the tile cache's generation (tiles, styles, legend pictures, a raster's
+/// parts read in place) and the background reads' (a streamed layer's features, a source or
+/// raster opened by its address). Each goes up as something lands.
+fn landings() -> (u64, u64) {
+    (rustgis_engine::render::rustgis_tiles::cache::generation(), rustgis_engine::map::source::generation())
+}
+
+/// A page drawn in the browser while something it shows was still on its way: a map frame's tiles
+/// or streamed reads, or a legend's pictures (WMS, WMTS).
 #[derive(Clone, Copy)]
 struct PageWait {
-    /// The tile cache's generation when it was drawn: a fetch landing since changes it.
-    generation: u64,
-    /// Whether a frame's tiles were among what was missing: the page is drawn again as they land,
-    /// at most every [`TILES_REDRAW_S`]. Legend pictures alone draw it again only once they all
-    /// have, not on every fetch (the map's own tiles change the generation too).
-    tiles: bool,
+    /// [`landings`] when it was drawn: anything landing since changes it.
+    landed: (u64, u64),
+    /// Whether a frame's tiles or reads were among what was missing: the page is drawn again as
+    /// they land, at most every [`FRAMES_REDRAW_S`]. Legend pictures alone draw it again only once
+    /// they all have, not on every fetch (the map's own tiles land too).
+    frames: bool,
     /// When it was drawn (egui's time, seconds).
     drawn: f64,
 }
 
-/// Whether a page drawn while `w` was missing is due to be drawn again: a fetch has landed since
-/// (the cache is at `generation`), and either the frames' tiles were missing and the last drawing
-/// is at least [`TILES_REDRAW_S`] old at `now`, or only legend pictures were and none is still on
-/// its way (`legends_pending`, asked only then).
-fn redraw_due(w: PageWait, generation: u64, now: f64, legends_pending: impl FnOnce() -> bool) -> bool {
-    w.generation != generation && if w.tiles { now - w.drawn >= TILES_REDRAW_S } else { !legends_pending() }
+/// Whether a page drawn while `w` was missing is due to be drawn again: something has landed since
+/// (it is now at `landed`), and either a frame was drawn short and the last drawing is at least
+/// [`FRAMES_REDRAW_S`] old at `now`, or only legend pictures were missing and none is still on its
+/// way (`legends_pending`, asked only then).
+fn redraw_due(w: PageWait, landed: (u64, u64), now: f64, legends_pending: impl FnOnce() -> bool) -> bool {
+    w.landed != landed && if w.frames { now - w.drawn >= FRAMES_REDRAW_S } else { !legends_pending() }
 }
 
 #[derive(Default)]
@@ -638,15 +645,15 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
     let dpi = (px_per_mm as f64 * 25.4).min(max_side / layout.width.max(layout.height) * 25.4).clamp(20.0, 300.0);
     let size = [(page.width() * ppp) as usize, (page.height() * ppp) as usize];
     let key = (app.session.revision, li, size, (dpi * 10.0) as i64, layout.width as i64, layout.height as i64);
-    // Read before drawing: a fetch landing while it draws is a reason to draw again.
-    let generation = rustgis_engine::render::rustgis_tiles::cache::generation();
+    // Read before drawing: something landing while it draws is a reason to draw again.
+    let landed = landings();
     let now = ui.input(|i| i.time);
-    let landed = app.layout.page_wait.is_some_and(|w| {
-        redraw_due(w, generation, now, || rustgis_engine::render::layout::legends_pending(&layout, &app.session.project.maps))
+    let due = app.layout.page_wait.is_some_and(|w| {
+        redraw_due(w, landed, now, || rustgis_engine::render::layout::legends_pending(&layout, &app.session.project.maps))
     });
-    if (app.layout.key != Some(key) || landed) && size[0] > 2 && size[1] > 2 {
+    if (app.layout.key != Some(key) || due) && size[0] > 2 && size[1] > 2 {
         let info = page_info(app, li);
-        if let Some((pm, tiles_pending)) =
+        if let Some((pm, frames_pending)) =
             rustgis_engine::render::layout::render_pending(&layout, &mut app.session.project.maps, dpi, &info)
         {
             let img = egui::ColorImage::from_rgba_premultiplied([pm.width() as usize, pm.height() as usize], pm.data());
@@ -658,8 +665,8 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
             // Natively the page waited for them already: drawn again, it would wait again.
             let web = cfg!(target_arch = "wasm32");
             let legends = web && rustgis_engine::render::layout::legends_pending(&layout, &app.session.project.maps);
-            let tiles = web && tiles_pending;
-            app.layout.page_wait = (legends || tiles).then_some(PageWait { generation, tiles, drawn: now });
+            let frames = web && frames_pending;
+            app.layout.page_wait = (legends || frames).then_some(PageWait { landed, frames, drawn: now });
         }
     }
     if app.layout.page_wait.is_some() {
@@ -2095,31 +2102,40 @@ pub(crate) fn locked_delete() -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::{PageWait, RULER, TILES_REDRAW_S, landing, page_rect, redraw_due, resized, rotate_handle, snap_to, to_screen, turned};
+    use super::{FRAMES_REDRAW_S, PageWait, RULER, landing, page_rect, redraw_due, resized, rotate_handle, snap_to, to_screen, turned};
     use crate::RustGisApp;
     use egui::{Event, Key, Modifiers, PointerButton, Pos2, Rect, vec2};
     use serde_json::json;
     use std::{cell::Cell, rc::Rc};
 
     /// In the browser, a page drawn while its frames' tiles were on their way is drawn again as
-    /// they land, at most every `TILES_REDRAW_S`, without asking about legends.
+    /// they land, at most every `FRAMES_REDRAW_S`, without asking about legends.
     #[test]
     fn a_page_missing_tiles_is_drawn_again_as_they_land() {
-        let w = PageWait { generation: 7, tiles: true, drawn: 10.0 };
-        let legends = || panic!("the tiles' wait doesn't ask about legends");
-        assert!(redraw_due(w, 8, 10.0 + TILES_REDRAW_S, legends), "a tile landed, long enough since the last drawing");
-        assert!(!redraw_due(w, 8, 10.0 + TILES_REDRAW_S / 2.0, legends), "a tile landed, but too soon after the last drawing");
-        assert!(!redraw_due(w, 7, 60.0, legends), "nothing landed");
+        let w = PageWait { landed: (7, 3), frames: true, drawn: 10.0 };
+        let legends = || panic!("the frames' wait doesn't ask about legends");
+        assert!(redraw_due(w, (8, 3), 10.0 + FRAMES_REDRAW_S, legends), "a tile landed, long enough since the last drawing");
+        assert!(!redraw_due(w, (8, 3), 10.0 + FRAMES_REDRAW_S / 2.0, legends), "a tile landed, but too soon after the last drawing");
+        assert!(!redraw_due(w, (7, 3), 60.0, legends), "nothing landed");
+    }
+
+    /// A streamed layer's read, or a source opened by its address, lands outside the tile cache:
+    /// a frame drawn short of it is drawn again too (#1534).
+    #[test]
+    fn a_page_missing_a_streamed_read_is_drawn_again_as_it_lands() {
+        let w = PageWait { landed: (7, 3), frames: true, drawn: 10.0 };
+        assert!(redraw_due(w, (7, 4), 10.0 + FRAMES_REDRAW_S, || false), "a read landed");
+        assert!(!redraw_due(w, (7, 4), 10.0 + FRAMES_REDRAW_S / 2.0, || false), "a read landed, but too soon");
     }
 
     /// A page waiting only for legend pictures is drawn again once they have all landed, not on
-    /// every fetch: the map's own tiles landing change the generation too (#1177).
+    /// every fetch: the map's own tiles land too (#1177).
     #[test]
     fn a_page_missing_legend_pictures_is_drawn_again_once_they_land() {
-        let w = PageWait { generation: 7, tiles: false, drawn: 10.0 };
-        assert!(redraw_due(w, 8, 10.0, || false), "the pictures landed");
-        assert!(!redraw_due(w, 8, 60.0, || true), "a fetch landed, but a picture is still on its way");
-        assert!(!redraw_due(w, 7, 60.0, || false), "nothing landed");
+        let w = PageWait { landed: (7, 3), frames: false, drawn: 10.0 };
+        assert!(redraw_due(w, (8, 3), 10.0, || false), "the pictures landed");
+        assert!(!redraw_due(w, (8, 3), 60.0, || true), "a fetch landed, but a picture is still on its way");
+        assert!(!redraw_due(w, (7, 3), 60.0, || false), "nothing landed");
     }
 
     #[test]
