@@ -580,6 +580,11 @@ pub struct Raster {
     /// values with more digits than `f32` holds), by band; empty when none did. NaN and no-data
     /// values aren't counted.
     pub rounded: Vec<u64>,
+    /// Who holds the rights to the picture (the TIFF Copyright tag): the credits a map's tile
+    /// layers ask for, on a GeoTIFF of the view. Read from a GeoTIFF that has it, and written
+    /// when this raster is exported; a raster made from it (clipped, reprojected) starts
+    /// without.
+    pub copyright: Option<String>,
     transformer: Transformer,
     extent: Extent,
 }
@@ -606,6 +611,28 @@ pub(crate) fn gdal_metadata_of(r: &Raster, bands: &[usize]) -> Option<String> {
     let names: Vec<Option<&str>> = bands.iter().map(|b| band_name_of(r, *b)).collect();
     let first = bands.first().and_then(|b| r.bands.get(*b)).map_or(&[][..], |b| &b.classes[..]);
     pam::gdal_metadata(&names, first)
+}
+
+/// Text for a TIFF ASCII tag, which holds 7-bit ASCII only: control characters (a NUL would end
+/// it early) as spaces, `©` and `®` as `(c)` and `(R)`, any other character outside ASCII as `?`
+/// ([`tag_text_lost`] counts them), trimmed.
+pub fn tag_text(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '©' => out.push_str("(c)"),
+            '®' => out.push_str("(R)"),
+            c if c.is_control() => out.push(' '),
+            c if c.is_ascii() => out.push(c),
+            _ => out.push('?'),
+        }
+    }
+    out.trim().to_string()
+}
+
+/// How many characters of `s` [`tag_text`] writes as `?`: for a writer to say.
+pub fn tag_text_lost(s: &str) -> usize {
+    s.chars().filter(|c| !c.is_ascii() && !matches!(c, '©' | '®')).count()
 }
 
 /// How many of the names [`gdal_metadata_of`] writes for `bands` hold a character XML can't (a
@@ -701,6 +728,7 @@ impl Raster {
             georeferenced: true,
             lost: Vec::new(),
             rounded: Vec::new(),
+            copyright: None,
             transformer,
             extent: Extent::EMPTY,
         };

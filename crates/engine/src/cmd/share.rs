@@ -1,4 +1,4 @@
-//! Publish tab: export the map as PNG and layers as GeoJSON, CSV, FlatGeobuf, GeoPackage,
+//! Publish tab: export the map as PNG or GeoTIFF and layers as GeoJSON, CSV, FlatGeobuf, GeoPackage,
 //! GeoParquet, Shapefile, KML/KMZ or GPX.
 
 use std::path::Path;
@@ -26,7 +26,7 @@ pub fn commands() -> Vec<C> {
             super::exports::write_here(s, p, "share.exportMap")
         }).inputs(map_inputs).roles(&[]).effects(crate::policy::Effects::NONE.with(crate::policy::Effect::Files))
         .view()
-            .params(r#"{"path": "*.png", "width"?: px, "height"?: px, "dpi"?: 96..600}"#),
+            .params(r#"{"path": "*.png|*.tif|*.tiff", "width"?: px, "height"?: px, "dpi"?: 96..600, "cog"?: "true for a cloud-optimised GeoTIFF"}"#),
         C::new("share.exportLayer", "Export Features", "Publish › Output", |s, p| super::exports::write_here(s, p, "share.exportLayer")).roles(&[]).effects(crate::policy::Effects::NONE.with(crate::policy::Effect::Files))
             .view()
             .when(need_layer)
@@ -157,25 +157,37 @@ pub fn map_png(s: &mut Session, width: Option<f64>, height: Option<f64>, dpi: Op
 /// Renders `map` at its camera in a view of `(vw, vh)` points (or a requested size) to PNG bytes.
 fn png_of(
     map: &mut rustgis_map::Map,
-    (vw, vh): (f64, f64),
+    view_size: (f64, f64),
     width: Option<f64>,
     height: Option<f64>,
     dpi: Option<f64>,
 ) -> Result<Vec<u8>, String> {
+    let view = export_view(map.camera, view_size, width, height, dpi);
+    rustgis_render::render_png(map, &view)
+}
+
+/// The view an export of the map at `camera` draws, in a view of `(vw, vh)` points: a requested
+/// size keeps the same ground extent, and `dpi` sets the pixels per point.
+fn export_view(
+    camera: rustgis_map::camera::Camera,
+    (vw, vh): (f64, f64),
+    width: Option<f64>,
+    height: Option<f64>,
+    dpi: Option<f64>,
+) -> View {
     // NaN would pass through `clamp`; non-finite values fall back to the defaults.
     let fin = |v: Option<f64>| v.filter(|x| x.is_finite());
     let (width, height, dpi) = (fin(width), fin(height), fin(dpi));
     let w = width.unwrap_or(vw).clamp(16.0, 8000.0);
     let h = height.unwrap_or(vh).clamp(16.0, 8000.0);
     let ppp = (dpi.unwrap_or(96.0) / 96.0).clamp(0.5, 6.0);
-    let mut camera = map.camera;
+    let mut camera = camera;
     // Keep the same ground extent when the size differs from the view.
     if width.is_some() || height.is_some() {
         camera.res *= (vw / w).max(vh / h);
         camera.clamp();
     }
-    let view = View { width: w, height: h, pixels_per_point: ppp, camera, sky: false };
-    rustgis_render::render_png(map, &view)
+    View { width: w, height: h, pixels_per_point: ppp, camera, sky: false }
 }
 
 /// The map view on one PDF page (for printing): the page is the view's shape at 96 points per
@@ -205,6 +217,17 @@ pub fn map_pdf(s: &mut Session, dpi: f64) -> Result<Vec<u8>, String> {
 pub(crate) fn map_work(s: &Session, p: &Value) -> Result<Work, String> {
     let path = ps(p, "path").ok_or("path is required")?.to_string();
     let (width, height, dpi) = (f(p, "width"), f(p, "height"), f(p, "dpi"));
+    let ext = Path::new(&path).extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
+    let cog = match p.get("cog") {
+        None | Some(Value::Null) => false,
+        Some(v) => v.as_bool().ok_or("cog must be true or false")?,
+    };
+    if matches!(ext.as_str(), "tif" | "tiff") {
+        return geotiff_work(s, path, export_view(s.map().camera, s.view_size, width, height, dpi), cog);
+    }
+    if cog {
+        return Err("cog is for a GeoTIFF (.tif) export".into());
+    }
     let (mut map, view_size) = (s.map().detached(), s.view_size);
     Ok(Box::new(move || {
         let written = (|| {
@@ -215,6 +238,149 @@ pub(crate) fn map_work(s: &Session, p: &Value) -> Result<Work, String> {
         })();
         super::exports::drawn(std::slice::from_ref(&map), Vec::new(), written, path)
     }))
+}
+
+/// `share.exportMap` to a GeoTIFF: the view drawn as data (its layers and labels, without the
+/// scale bar and credits, which sit on the screen), RGB (a drawn view is opaque), placed on the
+/// ground in the map's
+/// projection, the credits in its Copyright tag. A turned view is drawn north up over the box
+/// around it, and says so; a tilted view, the globe and a map of another body are refused, as
+/// no grid of square pixels in one coordinate system holds them.
+fn geotiff_work(s: &Session, path: String, view: View, cog: bool) -> Result<Work, String> {
+    let m = s.map();
+    let crs = map_crs(m)?;
+    if view.camera.pitch.abs() > 1e-6 {
+        return Err(format!(
+            "the map is tilted {:.0}°: a GeoTIFF needs it looking straight down (pitch 0), or export a PNG",
+            view.camera.pitch
+        ));
+    }
+    let mut view = view;
+    let mut notices = Vec::new();
+    let bearing = view.camera.bearing;
+    let turned = bearing.rem_euclid(360.0).min(360.0 - bearing.rem_euclid(360.0)) > 1e-9;
+    if turned {
+        // North up over the box around the turned view: everything it shows, and more at the
+        // corners.
+        let (bw, bh) = view.camera.rotated_size(view.width, view.height);
+        view.width = bw.ceil();
+        view.height = bh.ceil();
+        view.camera.bearing = 0.0;
+        notices.push((
+            rustgis_data::diagnostics::Severity::Info,
+            format!("{path}: the map is turned {bearing:.0}°, so the GeoTIFF is drawn north up over the box around the view"),
+        ));
+    }
+    let (pw, ph) = (view.width * view.pixels_per_point, view.height * view.pixels_per_point);
+    let most = f64::from(rustgis_render::MAX_SIDE);
+    if pw.round() > most || ph.round() > most {
+        // A turned view's box is larger than the view: say so, as the fix differs.
+        let turned = if turned { " (the box around the turned view; or set the bearing to 0)" } else { "" };
+        return Err(format!(
+            "{} × {} pixels{turned} is more than the {most} a side an export draws: give a smaller width, height or dpi",
+            pw.round(),
+            ph.round()
+        ));
+    }
+    let name = m.name.clone();
+    let mut map = m.detached();
+    Ok(Box::new(move || {
+        let mut notices = notices;
+        let written = (|| {
+            let (pm, credits) = rustgis_render::render_placed(&mut map, &view)?;
+            rustgis_data::progress::check().map_err(|e| e.to_string())?;
+            // The drawn picture goes as the raster is made: both at once would double the memory.
+            let mut r = placed_raster(&name, pm, &view, crs)?;
+            r.copyright = (!credits.is_empty()).then(|| credits.join(" | "));
+            rustgis_data::progress::check().map_err(|e| e.to_string())?;
+            let bytes = if cog {
+                // Tiles go to the file as they are made.
+                let c = rustgis_data::raster::cogwrite::write_file(&r, 0, Path::new(&path)).map_err(|e| format!("{path}: {e}"))?;
+                c.bytes
+            } else {
+                let bytes = rustgis_data::raster::geotiff::write(&r, 0).map_err(|e| format!("{path}: {e}"))?;
+                rustgis_data::io::write_atomic(Path::new(&path), &bytes).map_err(|e| format!("{path}: {e}"))?;
+                bytes.len() as u64
+            };
+            let mut out = json!({"path": path, "width": r.width, "height": r.height, "crs": crs.label(), "bytes": bytes});
+            if let Some(c) = &r.copyright {
+                out["copyright"] = json!(c);
+                let lost = rustgis_data::raster::tag_text_lost(c);
+                if lost > 0 {
+                    let chars = if lost == 1 {
+                        "1 character of the credits is".to_string()
+                    } else {
+                        format!("{lost} characters of the credits are")
+                    };
+                    notices.push((
+                        rustgis_data::diagnostics::Severity::Info,
+                        format!("{path}: the Copyright tag holds ASCII only, so {chars} written as ?: {c}"),
+                    ));
+                }
+            }
+            Ok(out)
+        })();
+        super::exports::drawn(std::slice::from_ref(&map), notices, written, path)
+    }))
+}
+
+/// The coordinate system a GeoTIFF of map `m`'s view is in: its flat projection's.
+fn map_crs(m: &rustgis_map::Map) -> Result<Crs, String> {
+    let body = m.body();
+    if !body.is_earth() {
+        return Err(format!("a map of {} can't be saved as a GeoTIFF yet: export a PNG", body.name));
+    }
+    match &m.projection {
+        rustgis_map::Projection::Globe => {
+            Err("the globe can't be saved as a GeoTIFF: switch to a flat projection (View › Projection), or export a PNG".into())
+        }
+        rustgis_map::Projection::WebMercator => Ok(Crs::WebMercator),
+        rustgis_map::Projection::Custom(code) => {
+            let (proj4, label) = rustgis_map::projection::lookup(code)?;
+            // An EPSG system is written by its code; any other by its definition.
+            if let Some(n) = label.strip_prefix("EPSG:").and_then(|n| n.parse::<u32>().ok())
+                && let Some(crs) = Crs::from_epsg(n)
+            {
+                return Ok(crs);
+            }
+            let shown = label.clone();
+            let def = rustgis_data::raster::crs::CustomCrs { proj4, label, geokeys: Vec::new(), doubles: Vec::new(), ascii: String::new() };
+            let crs = Crs::custom(def)?;
+            if !rustgis_data::raster::geotiff::describes(crs) {
+                return Err(format!(
+                    "the map's projection, {shown}, can't be described in a GeoTIFF: switch the map to an EPSG projection, or export a PNG"
+                ));
+            }
+            Ok(crs)
+        }
+    }
+}
+
+/// The drawn view `pm` as an RGB raster placed on the ground: the view's centre at the image's
+/// centre, each pixel `res / pixels_per_point` map units a side. A drawn view is opaque (its
+/// background is filled), so it has no alpha band.
+fn placed_raster(name: &str, pm: tiny_skia::Pixmap, view: &View, crs: Crs) -> Result<rustgis_data::raster::Raster, String> {
+    let (w, h) = (pm.width(), pm.height());
+    let n = w as usize * h as usize;
+    let mut bands: Vec<Vec<f32>> = (0..3).map(|_| Vec::with_capacity(n)).collect();
+    for px in pm.pixels() {
+        // tiny-skia keeps colours premultiplied; a file keeps them straight.
+        let c = px.demultiply();
+        for (band, v) in bands.iter_mut().zip([c.red(), c.green(), c.blue()]) {
+            band.push(f32::from(v));
+        }
+    }
+    drop(pm);
+    let cam = view.camera;
+    let cell = cam.res / view.pixels_per_point;
+    let transform = rustgis_data::raster::GeoTransform {
+        origin_x: cam.center.x - view.width / 2.0 * cam.res,
+        origin_y: cam.center.y + view.height / 2.0 * cam.res,
+        pixel_width: cell,
+        pixel_height: -cell,
+    };
+    let color = rustgis_data::raster::ColorHint::Rgb { alpha: false };
+    rustgis_data::raster::Raster::new(name, w, h, bands, transform, crs, None, color, "UInt8").map_err(|e| e.to_string())
 }
 
 /// `share.exportLayer`: writes a layer to a file by its extension. A streamed layer exports its

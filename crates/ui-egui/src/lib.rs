@@ -3959,7 +3959,8 @@ impl RustGisApp {
             }
             "ui.exportMap" => {
                 let name = format!("{}.png", self.session.map().name);
-                if let Some(path) = dialogs::pick_save(&name, &["png"], tl!("PNG image")) {
+                // A .tif is the view placed on the ground (a GeoTIFF), without the scale bar.
+                if let Some(path) = dialogs::pick_save(&name, &["png", "tif", "tiff"], tl!("PNG image or GeoTIFF")) {
                     // Drawn on a thread of its own, with progress and Cancel in the status bar;
                     // here while a style added with its own view loads, as the command waits for
                     // it to move the map there first.

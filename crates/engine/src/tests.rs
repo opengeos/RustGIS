@@ -33084,3 +33084,160 @@ fn topology_refuses_latitudes_past_the_poles() {
         }
     }
 }
+
+/// `share.exportMap` to a `.tif` writes the view placed on the ground (#1561): in the map's
+/// projection, each pixel where the view drew it, RGBA; a turned view north up over its box, and
+/// says so; a tilted view, the globe and junk refused.
+#[test]
+fn export_map_to_geotiff_places_the_view_on_the_ground() {
+    use rustgis_data::raster::{Crs, geotiff};
+    use rustgis_geom::{Coord, lonlat_to_merc};
+    let mut s = world();
+    s.map_mut().basemap = rustgis_map::Basemap::Blank;
+    // The export's size is the view's, so its pixel is the camera's resolution.
+    s.view_size = (400.0, 300.0);
+    s.run("map.goToXY", &json!({"lon": 5.0, "lat": 47.0, "scale": 20_000_000})).unwrap();
+    let dir = std::env::temp_dir().join(format!("rustgis-map-tif-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("view.tif");
+    let read = |p: &std::path::Path| geotiff::read(std::io::Cursor::new(std::fs::read(p).unwrap()), "view").unwrap();
+    let out = s.run("share.exportMap", &json!({"path": path.display().to_string(), "width": 400, "height": 300})).unwrap();
+    assert_eq!((out["width"].as_u64(), out["height"].as_u64(), out["crs"].as_str()), (Some(400), Some(300), Some("EPSG:3857")));
+    let r = read(&path);
+    // RGB: a drawn view is opaque.
+    assert_eq!((r.width, r.height, r.crs, r.bands.len()), (400, 300, Crs::WebMercator, 3));
+    // Its grid is the view's: the centre in the middle, the camera's resolution a pixel.
+    let cam = s.map().camera;
+    let t = r.transform;
+    assert!((t.pixel_width - cam.res).abs() < 1e-6 * cam.res && (t.pixel_height + cam.res).abs() < 1e-6 * cam.res, "{t:?}");
+    assert!((t.origin_x + 200.0 * cam.res - cam.center.x).abs() < 1e-3 && (t.origin_y - 150.0 * cam.res - cam.center.y).abs() < 1e-3);
+    // Land and sea where they are: the pixel at a place inland differs from one at sea.
+    let at = |r: &rustgis_data::raster::Raster, lon: f64, lat: f64| {
+        let m = lonlat_to_merc(Coord::new(lon, lat));
+        let (c, row) = (
+            ((m.x - r.transform.origin_x) / r.transform.pixel_width) as usize,
+            ((m.y - r.transform.origin_y) / r.transform.pixel_height) as usize,
+        );
+        let i = row * r.width as usize + c;
+        r.bands.iter().map(|b| b.data[i]).collect::<Vec<f32>>()
+    };
+    let (land, sea) = (at(&r, 10.0, 50.0), at(&r, -20.0, 45.0));
+    assert_ne!(land, sea, "land {land:?}, sea {sea:?}");
+    // The same view exported twice is the same picture: a turned one is a different grid.
+    s.run("map.setBearing", &json!({"bearing": 30})).unwrap();
+    let turned = dir.join("turned.tif");
+    let out = s.run("share.exportMap", &json!({"path": turned.display().to_string(), "width": 400, "height": 300})).unwrap();
+    let r2 = read(&turned);
+    assert!(r2.width > 400 && r2.height > 300, "{} × {}", r2.width, r2.height);
+    assert!(s.notices.iter().any(|n| n.text.contains("turned 30°")), "{out}");
+    // North up over the box: the same place lands on the same ground.
+    assert_eq!(at(&r2, 10.0, 50.0), land);
+    assert!((r2.transform.pixel_width - cam.res).abs() < 1e-6 * cam.res);
+    s.run("map.setBearing", &json!({"bearing": 0})).unwrap();
+    // `cog` writes a cloud-optimised one; it's for a GeoTIFF only.
+    let cog = dir.join("view-cog.tif");
+    let out = s.run("share.exportMap", &json!({"path": cog.display().to_string(), "width": 400, "height": 300, "cog": true})).unwrap();
+    assert!(out["bytes"].as_u64().unwrap() > 0);
+    assert_eq!(read(&cog).width, 400);
+    let png = dir.join("view.png");
+    let e = s.run("share.exportMap", &json!({"path": png.display().to_string(), "cog": true})).unwrap_err();
+    assert!(e.contains("cog is for a GeoTIFF"), "{e}");
+    let e = s.run("share.exportMap", &json!({"path": cog.display().to_string(), "cog": "yes"})).unwrap_err();
+    assert!(e.contains("cog must be true or false"), "{e}");
+    // Too many pixels a side is refused, saying how many.
+    let e = s.run("share.exportMap", &json!({"path": path.display().to_string(), "width": 8000, "dpi": 192})).unwrap_err();
+    assert!(e.contains("16000") && e.contains("8192") && !e.contains("turned"), "{e}");
+    // A tilted map and the globe are refused, and write nothing.
+    let none = dir.join("none.tif");
+    s.run("map.setPitch", &json!({"pitch": 40})).unwrap();
+    let e = s.run("share.exportMap", &json!({"path": none.display().to_string()})).unwrap_err();
+    assert!(e.contains("tilted 40°"), "{e}");
+    s.run("map.setPitch", &json!({"pitch": 0})).unwrap();
+    s.run("map.projection", &json!({"type": "globe"})).unwrap();
+    let e = s.run("share.exportMap", &json!({"path": none.display().to_string()})).unwrap_err();
+    assert!(e.contains("globe can't be saved as a GeoTIFF"), "{e}");
+    s.run("map.projection", &json!({"type": "mercator"})).unwrap();
+    // So is a map of another body, whose ground no Earth system holds.
+    s.run("map.body", &json!({"name": "mars", "basemap": false})).unwrap();
+    let e = s.run("share.exportMap", &json!({"path": none.display().to_string()})).unwrap_err();
+    assert!(e.contains("a map of Mars can't be saved as a GeoTIFF"), "{e}");
+    assert!(!none.exists());
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// A GeoTIFF of a map in another projection is in that projection: an EPSG one by its code,
+/// another by its definition; one the GeoTIFF keys can't say is refused.
+#[test]
+fn export_map_to_geotiff_keeps_the_maps_projection() {
+    use rustgis_data::raster::{Crs, geotiff};
+    let mut s = world();
+    s.map_mut().basemap = rustgis_map::Basemap::Blank;
+    s.run("map.goToXY", &json!({"lon": 7.45, "lat": 46.95, "scale": 2_000_000})).unwrap();
+    let dir = std::env::temp_dir().join(format!("rustgis-map-tif-crs-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let read = |p: &std::path::Path| geotiff::read(std::io::Cursor::new(std::fs::read(p).unwrap()), "view").unwrap();
+    s.run("map.projection", &json!({"type": "EPSG:2056"})).unwrap();
+    let lv95 = dir.join("lv95.tif");
+    let out = s.run("share.exportMap", &json!({"path": lv95.display().to_string(), "width": 200, "height": 200})).unwrap();
+    assert_eq!(out["crs"], "EPSG:2056");
+    let r = read(&lv95);
+    assert_eq!(r.crs, Crs::Epsg(2056));
+    // Bern's centre in LV95 metres (about 2 600 000, 1 200 000) is near the middle of the image.
+    let (cx, cy) = (r.transform.origin_x + 100.0 * r.transform.pixel_width, r.transform.origin_y + 100.0 * r.transform.pixel_height);
+    assert!((cx - 2_600_000.0).abs() < 5_000.0 && (cy - 1_200_000.0).abs() < 5_000.0, "{cx} {cy}");
+    // A local view (azimuthal equidistant about Bern) by its definition.
+    s.run("map.projection", &json!({"type": "local:7.45,46.95"})).unwrap();
+    let local = dir.join("local.tif");
+    s.run("share.exportMap", &json!({"path": local.display().to_string(), "width": 200, "height": 200})).unwrap();
+    let r = read(&local);
+    assert!(r.crs.custom_def().is_some_and(|d| d.proj4.contains("+proj=aeqd")), "{:?}", r.crs);
+    // One the GeoTIFF keys can't say is refused before anything is drawn, saying what to do.
+    s.run("map.projection", &json!({"type": "mollweide"})).unwrap();
+    let moll = dir.join("moll.tif");
+    let e = s.run("share.exportMap", &json!({"path": moll.display().to_string()})).unwrap_err();
+    assert!(e.contains("can't be described in a GeoTIFF") && e.contains("export a PNG"), "{e}");
+    assert!(!moll.exists());
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// A tile layer's pictures are in a GeoTIFF of the view where they lie, and its credits in the
+/// file's Copyright tag (#1561).
+#[test]
+fn export_map_to_geotiff_draws_tile_layers_and_keeps_their_credits() {
+    use rustgis_data::raster::geotiff;
+    let dir = std::env::temp_dir().join(format!("rustgis-map-tif-tiles-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let archive = dir.join("red.mbtiles");
+    let mut red = tiny_skia::Pixmap::new(256, 256).unwrap();
+    red.fill(tiny_skia::Color::from_rgba8(255, 0, 0, 255));
+    let c = rusqlite::Connection::open(&archive).unwrap();
+    c.execute_batch(
+        "CREATE TABLE metadata (name text, value text); CREATE TABLE tiles (zoom_level integer, tile_column integer, tile_row integer, tile_data blob);
+         INSERT INTO metadata VALUES ('name', 'Red'), ('format', 'png'), ('minzoom', '0'), ('maxzoom', '0'), ('attribution', '© Röd');",
+    )
+    .unwrap();
+    c.execute("INSERT INTO tiles VALUES (0, 0, 0, ?1)", [red.encode_png().unwrap()]).unwrap();
+    drop(c);
+    let mut s = Session::new(Project::default());
+    s.map_mut().basemap = rustgis_map::Basemap::Blank;
+    s.view_size = (300.0, 200.0);
+    s.run("layer.addData", &json!({"path": archive.display().to_string()})).unwrap();
+    s.run("map.goToXY", &json!({"lon": 10.0, "lat": 20.0, "scale": 50_000_000})).unwrap();
+    let path = dir.join("tiles.tif");
+    let out = s.run("share.exportMap", &json!({"path": path.display().to_string()})).unwrap();
+    // The answer has the credits whole; the tag holds ASCII, and the export says what it changed.
+    assert_eq!(out["copyright"], "© Röd");
+    let r = geotiff::read(std::io::Cursor::new(std::fs::read(&path).unwrap()), "tiles").unwrap();
+    assert_eq!(r.copyright.as_deref(), Some("(c) R?d"));
+    assert!(s.notices.iter().any(|n| n.text.contains("1 character of the credits is written as ?: © Röd")), "{:?}", s.notices);
+    // The middle pixel is the tile's red.
+    let i = 100 * r.width as usize + 150;
+    let px: Vec<f32> = r.bands.iter().map(|b| b.data[i]).collect();
+    assert_eq!(px, [255.0, 0.0, 0.0]);
+    // Credits that are ASCII but for © say nothing.
+    let n = s.notices.len();
+    s.map_mut().tiles[0].attribution = "© Red".into();
+    s.run("share.exportMap", &json!({"path": path.display().to_string()})).unwrap();
+    assert!(!s.notices[n..].iter().any(|n| n.text.contains("written as ?")), "{:?}", &s.notices[n..]);
+    std::fs::remove_dir_all(&dir).ok();
+}

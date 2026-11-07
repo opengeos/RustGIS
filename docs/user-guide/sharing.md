@@ -4,7 +4,20 @@
 
 **Publish › Output › Export Map** writes the map view as a PNG with labels, the scale bar and
 tile credits. The ribbon exports at 192 DPI; `share.exportMap` accepts `width` and `height`
-in pixels and a `dpi` value (96 by default). **Print Map** opens a PDF of the map view, kept as
+in pixels and a `dpi` value (96 by default).
+
+Export Map to a `.tif` path writes the view as a GeoTIFF instead: an RGB image placed on the
+ground in the map's projection, so another GIS opens it where it belongs. It holds the layers,
+tile and WMS layers included, and the labels, but not the scale bar or the credits. The credits go
+into the file's Copyright tag, which holds plain ASCII (`©` is written as `(c)`, and the export
+says when other characters are written as `?`); its answer gives them in full as `copyright`. `"cog": true` writes a
+cloud-optimised GeoTIFF. A turned map is drawn north up over the box around the view (and says
+so). A tilted map, the globe and a map of another body are refused: export a PNG of those. One
+side holds at most 8192 pixels, so a large `width` or `height` needs a lower `dpi`. A projection
+whose parameters GeoTIFF's keys can't hold (Mollweide or Robinson, for example) is refused too:
+switch the map to an EPSG projection first.
+
+**Print Map** opens a PDF of the map view, kept as
 vectors as a layout's PDF is (see Layouts), in the system viewer on desktop; **Capture To
 Clipboard** copies a map image. **Export To 3D** writes a layer as a Wavefront OBJ or binary STL model
 with polygons extruded by a field (`share.export3d` writes STL when `path` ends in `.stl`). STL

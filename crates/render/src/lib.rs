@@ -5714,6 +5714,33 @@ pub fn render_drawing(map: &mut Map, view: &View) -> Option<vector::Drawing> {
 
 /// Renders a map with its labels, a scale bar and a north arrow to PNG bytes.
 pub fn render_png(map: &mut Map, view: &View) -> Result<Vec<u8>, String> {
+    let r = render_exported(map, view)?;
+    let mut pm = Canvas::from_pixmap(r.pixmap);
+    for l in r.unplaced.iter().chain(&r.labels) {
+        text::draw(&mut pm, l, view.pixels_per_point as f32);
+    }
+    text::scale_bar(&mut pm, view, map.ground_res_at(&view.camera));
+    draw_attribution(&mut pm, &r.attribution, view.pixels_per_point as f32);
+    pm.into_pixmap().encode_png().map_err(|e| e.to_string())
+}
+
+/// A map drawn as data, for an image placed on the ground (a GeoTIFF of the view): its layers
+/// and labels (the unplaced ones too, when the map shows them, as [`render_png`] draws them),
+/// without the scale bar and the credits, which sit on the screen, not the ground. Gives back the
+/// pixels (premultiplied, as tiny-skia keeps them) and the credits the map's tile layers ask for,
+/// for the file to keep. Refuses what [`render_png`] refuses.
+pub fn render_placed(map: &mut Map, view: &View) -> Result<(Pixmap, Vec<String>), String> {
+    let r = render_exported(map, view)?;
+    let mut pm = Canvas::from_pixmap(r.pixmap);
+    for l in r.unplaced.iter().chain(&r.labels) {
+        text::draw(&mut pm, l, view.pixels_per_point as f32);
+    }
+    Ok((pm.into_pixmap(), r.attribution))
+}
+
+/// The map drawn whole for an export, or why it can't be written: a raster read in place whose
+/// tiles haven't come, or that is drawn from less than the view needs.
+fn render_exported(map: &mut Map, view: &View) -> Result<Rendered, String> {
     let r = render_complete(map, view).ok_or("could not allocate the image")?;
     // A raster read in place drawn from less than the view needs isn't written: its tiles still
     // on their way (the browser can't wait; natively the wait ran out), or a coarser level or
@@ -5730,13 +5757,7 @@ pub fn render_png(map: &mut Map, view: &View) -> Result<Vec<u8>, String> {
         });
         return Err(format!("{why}, so the image isn't written"));
     }
-    let mut pm = Canvas::from_pixmap(r.pixmap);
-    for l in r.unplaced.iter().chain(&r.labels) {
-        text::draw(&mut pm, l, view.pixels_per_point as f32);
-    }
-    text::scale_bar(&mut pm, view, map.ground_res_at(&view.camera));
-    draw_attribution(&mut pm, &r.attribution, view.pixels_per_point as f32);
-    pm.into_pixmap().encode_png().map_err(|e| e.to_string())
+    Ok(r)
 }
 
 /// The tile layers' credits, small, in the bottom-right corner.

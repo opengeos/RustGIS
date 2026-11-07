@@ -466,6 +466,13 @@ fn same_projection(a: &str, b: &str) -> bool {
     })
 }
 
+/// Whether a raster in `crs` can be written as a GeoTIFF: an EPSG system always, a user-defined
+/// one when it came with GeoKeys or its PROJ definition can be said as them (see
+/// [`keys_from_proj4`]).
+pub fn describes(crs: Crs) -> bool {
+    crs.custom_def().is_none_or(|d| !d.geokeys.is_empty() || keys_from_proj4(&d.proj4, &d.label).is_some())
+}
+
 /// GeoKeys for a user-defined projection from its PROJ definition (one read from WKT, which
 /// came with no keys), the inverse of [`custom_crs`]: the key directory, its double parameters and
 /// its ASCII parameters. `None` for a projection the keys can't say.
@@ -1221,6 +1228,13 @@ pub(super) fn read_limited_with_nodata(
         },
         Err(e) => Some(super::pam::Pam::losing(format!("it doesn't decode ({e}): band and class names are left out"))),
     };
+    // Who holds the rights to the picture, kept so an export of it says so too; one that doesn't
+    // read as text is left out, and said.
+    let (copyright, copyright_lost) = match dec.find_tag(Tag::Copyright).map(|v| v.map(|v| v.into_string())) {
+        Ok(None) => (None, None),
+        Ok(Some(Ok(c))) => (Some(super::tag_text(&c)), None),
+        Ok(Some(Err(e))) | Err(e) => (None, Some(format!("its Copyright tag: it isn't ASCII text ({e}), so it is left out"))),
+    };
     let spp = samples(&mut dec);
     let bytes = sample_bytes(&mut dec);
     // The decoded image is held at its own pixel size before conversion to f32, so bound bytes
@@ -1487,6 +1501,8 @@ pub(super) fn read_limited_with_nodata(
     let mut r = Raster::new(name, w, h, bands, transform, crs, geo.nodata, color, data_type)?;
     r.overview = overview;
     r.rounded = rounded;
+    r.copyright = copyright.filter(|c| !c.is_empty());
+    r.lost.extend(copyright_lost);
     r.lost.extend(super::planetary::note_of(crs));
     r.lost.extend(table_lost);
     if let Some(p) = &described {
@@ -1623,6 +1639,7 @@ fn encode(r: &Raster, band: usize) -> Result<Vec<u8>> {
     // Each branch below names the bands it writes as samples (`$written`): their names, and the
     // first one's class names (the red band's, for a colour file), go to GDAL's metadata tag,
     // read back on open.
+    let copyright = r.copyright.as_deref().map(super::tag_text).filter(|c| !c.is_empty());
     macro_rules! tags {
         ($img:expr, $written:expr) => {{
             let classes = super::gdal_metadata_of(r, $written);
@@ -1647,6 +1664,9 @@ fn encode(r: &Raster, band: usize) -> Result<Vec<u8>> {
             }
             if let Some(xml) = &classes {
                 e.write_tag(Tag::Unknown(42112), xml.as_str()).map_err(err)?;
+            }
+            if let Some(c) = &copyright {
+                e.write_tag(Tag::Copyright, c.as_str()).map_err(err)?;
             }
             if let Some(nd) = r.nodata {
                 e.write_tag(Tag::GdalNodata, nd.to_string().as_str()).map_err(err)?;
@@ -1720,6 +1740,21 @@ fn encode(r: &Raster, band: usize) -> Result<Vec<u8>> {
 mod tests {
     use super::*;
     use crate::raster::tests::small;
+
+    /// Who holds the rights (the Copyright tag) is written by both writers and read back, as the
+    /// ASCII a TIFF tag holds (`©` as `(c)`, control characters as spaces, others as `?`); a
+    /// raster without it writes none.
+    #[test]
+    fn copyright_round_trips() {
+        let mut r = small();
+        assert_eq!(read(std::io::Cursor::new(write(&r, 0).unwrap()), "none").unwrap().copyright, None);
+        r.copyright = Some("© OpenStreetMap contributors | Bundesamt für Landestopografie\0\n".into());
+        let want = Some("(c) OpenStreetMap contributors | Bundesamt f?r Landestopografie".to_string());
+        assert_eq!(super::super::tag_text_lost(r.copyright.as_deref().unwrap()), 1);
+        assert_eq!(read(std::io::Cursor::new(write(&r, 0).unwrap()), "tif").unwrap().copyright, want);
+        let cog = super::super::cogwrite::write(&r, 0).unwrap();
+        assert_eq!(read(std::io::Cursor::new(cog), "cog").unwrap().copyright, want);
+    }
 
     #[test]
     fn float_colour_round_trip() {
