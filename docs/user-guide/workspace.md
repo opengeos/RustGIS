@@ -99,10 +99,10 @@ the Script pane (`layer.buffer {"distance": 10}`; undo and redo as themselves). 
 **Copy Script** and **Open in Script Pane** instead, which puts the script in the Script pane in
 place of its own (Ctrl+Z, ⌘+Z on a Mac, brings that back; not while the pane runs one). Where the
 log cut an entry's parameters short or took secrets out of them, copying its command or its
-parameters says so, as it may not run as it ran, and its script can be neither copied nor opened: it would run only in
-part. **Save Log As…** writes the whole log as CSV or JSON Lines, as
-the name's extension says (CSV without one; in the browser it is downloaded as CSV, and the
-download isn't itself an entry in the log, as a saved file is). **Clear Log** empties it and
+parameters says so, as it may not run as it ran, and its script can be neither copied nor opened:
+it would run only in part. **Save Log As…** writes the whole log as CSV or JSON Lines, as the
+name's extension says (CSV without one; in the browser it is downloaded as CSV, and the download
+isn't itself an entry in the log, as a saved file is). **Clear Log** empties it and
 **Log Commands** turns it off or on.
 
 - **What goes in:** each command that changes the project, and each that names a file, folder,
@@ -141,9 +141,10 @@ From scripts: `project.log {"since"?, "until"?, "command"?, "failed"?, "limit"?}
 newest last (`command` is an id, or the start of one ending in a dot, `layer.`; `limit` is a whole
 number, 100 by default and at most 1,000, with `count` saying how many match), and
 `project.exportLog {"path": "log.csv"}` writes it out as CSV (one row an entry, the parameters as a
-JSON column, the project last) or JSON Lines (`.jsonl` or `.ndjson`), as the path's extension says; any other
-extension (a `.json`, a project) is refused, whatever `format` is given. `project.clearLog` empties
-it (leaving its own entry) and `project.logCommands {"on": false}` stops it (what is there stays).
+JSON column, the project last) or JSON Lines (`.jsonl` or `.ndjson`), as the path's extension says;
+any other extension (a `.json`, a project) is refused, whatever `format` is given.
+`project.clearLog` empties it (leaving its own entry) and `project.logCommands {"on": false}` stops
+it (what is there stays).
 
 ### GeoLibre projects
 

@@ -86,7 +86,7 @@ pub fn tabs(app: &mut RustGisApp, ui: &mut Ui) -> bool {
 
 /// Whether entry `e` is one the filters keep: `query` already in lower case; `project`, the
 /// project its entries are the only ones kept ([`rustgis_engine::Session::opened`]).
-fn kept(e: &LogEntry, query: &str, failed: bool, project: Option<u64>) -> bool {
+fn listed(e: &LogEntry, query: &str, failed: bool, project: Option<u64>) -> bool {
     (!failed || !e.ok) && (query.is_empty() || e.command.to_lowercase().contains(query)) && project.is_none_or(|p| e.opened == p)
 }
 
@@ -109,7 +109,7 @@ pub fn pane(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     let same = cache.as_ref().is_some_and(|(k, ..)| k.0 == log.changes() && k.1 == raw && k.2 == *failed && k.3 == project);
     if !same {
         let lower = raw.to_lowercase();
-        let (shown, count, total) = log.select(|e| kept(e, &lower, *failed, project), SHOWN);
+        let (shown, count, total) = log.select(|e| listed(e, &lower, *failed, project), SHOWN);
         let rows = shown.into_iter().map(|e| Row::of(e, registry)).collect();
         *cache = Some(((log.changes(), raw.to_string(), *failed, project), rows, count, total));
     }
@@ -201,7 +201,8 @@ fn script_of(e: &LogEntry) -> Option<&str> {
 enum Picked {
     /// Open in Script Pane, with this script.
     Open(String),
-    /// Copy Command or Copy Parameters, of parameters the log cut short or took secrets out of: said.
+    /// Copy Command or Copy Parameters, of parameters the log cut short or took secrets out of:
+    /// said.
     CopiedPartial,
 }
 
@@ -662,8 +663,9 @@ mod tests {
     }
 
     /// Undo copies as itself (the log keeps its step's label, no parameter); a command that can't
-    /// run in a script (refused there, or a plugin's) isn't copied as a line; parameters the log cut or took secrets out of say
-    /// so when copied, and such a script is neither copied nor opened.
+    /// run in a script (refused there, or a plugin's) isn't copied as a line; parameters the log
+    /// cut or took secrets out of say so when copied, and such a script is neither copied nor
+    /// opened.
     #[test]
     fn partial_and_unscriptable_entries_are_copied_as_they_can_run() {
         use egui_kittest::kittest::NodeT;
