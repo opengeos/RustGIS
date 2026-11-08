@@ -523,8 +523,9 @@ const SAME_DEG: f64 = 1e-9;
 /// west into the edge or out of it is travelling across the antimeridian there, so the edge is a
 /// seam: taken as a turn, it would double back over the parallel the ring was just following. So a
 /// band, a cap and the whole globe keep their full turns, and a 1° cell with vertices at 180° and
-/// -180° is the cell. A seam's step is 0. Steps of more than a full turn (longitudes beyond ±180°)
-/// are kept as written, as full turns.
+/// -180° is the cell. And the full turns must not make the ring wind further round the globe than
+/// it does with them as seams (see below). A seam's step is 0. Steps of more than a full turn
+/// (longitudes beyond ±180°) are kept as written, as full turns, under the same condition.
 fn ring_lon_steps(ring: &[Coord]) -> Vec<(f64, bool)> {
     let n = ring.len();
     let raw: Vec<f64> = (0..n).map(|i| ring.get((i + 1) % n).zip(ring.get(i)).map_or(0.0, |(b, a)| b.x - a.x)).collect();
@@ -543,19 +544,35 @@ fn ring_lon_steps(ring: &[Coord]) -> Vec<(f64, bool)> {
         }
         j
     };
-    (0..n)
+    // Each edge's step, and whether it is a 360° edge that may be a full turn (`Some(d)`).
+    let candidates: Vec<(f64, Option<f64>)> = (0..n)
         .map(|i| {
             let d = raw.get(i).copied().unwrap_or(0.0);
             if d.is_nan() || d.abs() < 360.0 - SAME_DEG {
-                return (if d.abs() > 180.0 { wrap_lon(d) } else { d }, false);
+                return (if d.abs() > 180.0 { wrap_lon(d) } else { d }, None);
             }
             if (d.abs() - 360.0).abs() > SAME_DEG {
-                return (d, true);
+                return (d, Some(d));
             }
-            let (Some(p), Some(r)) = (ring.get(i), ring.get((i + 1) % n)) else { return (0.0, false) };
+            let (Some(p), Some(r)) = (ring.get(i), ring.get((i + 1) % n)) else { return (0.0, None) };
             let along_parallel = (r.y - p.y).abs() <= SAME_DEG;
             let full = along_parallel && !moves(neighbour(i, n - 1)) && !moves(neighbour(i, 1));
-            (if full { d } else { 0.0 }, full)
+            (0.0, full.then_some(d))
+        })
+        .collect();
+    // A polygon's ring winds 0° in longitude, or 360° round a pole it encloses. The full turns must
+    // bring it nearer that, not take it further: a band's two turns cancel, and a cap's turn along
+    // the pole closes the turn its coastline makes, but a lone turn between meridians in a split
+    // polygon (`(180, -1), (180, 0), (-180, 0), (-180, 1), …`) would wind the ring once more, so
+    // it is a seam there too.
+    let seams: f64 = candidates.iter().map(|(d, _)| d).sum();
+    let turns: f64 = candidates.iter().map(|(d, t)| t.unwrap_or(*d)).sum();
+    let keep = turns.abs() <= seams.abs() + SAME_DEG;
+    candidates
+        .into_iter()
+        .map(|(d, t)| match t {
+            Some(t) if keep => (t, true),
+            _ => (d, false),
         })
         .collect()
 }
@@ -962,6 +979,15 @@ mod tests {
             assert!((geodesic_ring_area_m2(&ring) / want_a - 1.0).abs() < 0.01, "{}", geodesic_ring_area_m2(&ring));
             assert!((geodesic_ring_perimeter_m(&ring) / want_p - 1.0).abs() < 0.01);
         }
+        // A 1° × 2° polygon east of the antimeridian with its vertex at 0° written on both sides: the
+        // 180° to -180° edge between two meridians is a lone turn that would wind the ring once
+        // round the globe, so it is a seam of no length, not the equator.
+        let spike = [c(180.0, -1.0), c(180.0, 0.0), c(-180.0, 0.0), c(-180.0, 1.0), c(-179.0, 1.0), c(-179.0, -1.0)];
+        let (want_p, want_a) = reference(&[c(180.0, -1.0), c(180.0, 0.0), c(180.0, 1.0), c(181.0, 1.0), c(181.0, -1.0)]);
+        let (perimeter, area) = wgs84_ring_perimeter_area_m2(&spike);
+        assert!((area / want_a - 1.0).abs() < 1e-9, "{area} vs {want_a}");
+        assert!((perimeter / want_p - 1.0).abs() < 1e-9, "{perimeter} vs {want_p}");
+        assert!((geodesic_ring_perimeter_m(&spike) / want_p - 1.0).abs() < 0.01);
         // The cell closed with its first vertex repeated is still the cell.
         let mut closed = across.to_vec();
         closed.push(across[0]);
