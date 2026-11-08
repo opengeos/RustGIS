@@ -673,9 +673,7 @@ fn authalic_q(lat_deg: f64) -> f64 {
 /// (Snyder 1987, eqs. 3-11 to 3-13), which is Green's theorem on the equal-area sphere. Along a
 /// parallel (no change of latitude) the integral is sin ξ × Δλ, in closed form; an edge that
 /// changes latitude is straight in longitude and latitude, integrated by Simpson's rule. Steps of
-/// longitude are [`ring_lon_steps`]': the short way, a full turn kept, a seam none. A degenerate
-/// ring that winds past the whole surface (only possible through both poles) is reduced modulo
-/// the ellipsoid's area: a reduction, not a measurement, of a ring that bounds no single region.
+/// longitude are [`ring_lon_steps`]': the short way, a full turn kept, a seam none.
 fn authalic_ring_area_m2(ring: &[Coord]) -> f64 {
     let a = WGS84_A;
     let q_pole = authalic_q(90.0);
@@ -700,10 +698,7 @@ fn authalic_ring_area_m2(ring: &[Coord]) -> f64 {
         };
         total += dlon.to_radians() * mean;
     }
-    // More than the whole surface is extra winding (a degenerate ring through both poles): no
-    // region is larger than the globe.
-    let area = (total * rq2).abs();
-    if area > WGS84_AREA_M2 * (1.0 + 1e-6) { area % WGS84_AREA_M2 } else { area }
+    (total * rq2).abs()
 }
 
 /// Surface area 2πa²(1 + (1 − e²) atanh(e) / e) for WGS 84 (square metres).
@@ -784,9 +779,7 @@ pub fn geodesic_ring_area_m2(ring: &[Coord]) -> f64 {
     sphere_ring_area_m2(ring, steps.into_iter().map(|(d, _)| d), full)
 }
 
-/// [`geodesic_ring_area_m2`] with each edge's step in longitude (degrees) given. A degenerate
-/// full-turn ring that winds past the whole surface (only possible through both poles) is reduced
-/// modulo the globe: a reduction, not a measurement, of a ring that bounds no single region. In a ring with a
+/// [`geodesic_ring_area_m2`] with each edge's step in longitude (degrees) given. In a ring with a
 /// full turn (`full`), an edge to or from a pole takes its step at the pole ([`pole_sine`]), as the
 /// ellipsoid's [`authalic_ring_area_m2`] does; other rings keep each edge straight in longitude and
 /// latitude.
@@ -807,11 +800,7 @@ fn sphere_ring_area_m2(ring: &[Coord], steps: impl Iterator<Item = f64>, full: b
             dlon.to_radians() * (2.0 + sines)
         })
         .sum();
-    let area = (total * EARTH_RADIUS_M * EARTH_RADIUS_M / 2.0).abs();
-    // In a ring with a full turn, more than the whole surface is extra winding (a degenerate ring
-    // through both poles), as in [`authalic_ring_area_m2`].
-    let globe = 4.0 * std::f64::consts::PI * EARTH_RADIUS_M * EARTH_RADIUS_M;
-    if full && area > globe * (1.0 + 1e-6) { area % globe } else { area }
+    (total * EARTH_RADIUS_M * EARTH_RADIUS_M / 2.0).abs()
 }
 
 /// Map scale denominator (1:N) for a Web Mercator resolution (metres per screen pixel) at a latitude.
@@ -1098,10 +1087,6 @@ mod tests {
         // A ring through both poles measures the same from whichever vertex it starts.
         let both = [c(-180.0, -90.0), c(180.0, -90.0), c(-90.0, 90.0), c(90.0, 90.0)];
         let (sphere0, wgs0) = (geodesic_ring_area_m2(&both), wgs84_ring_perimeter_area_m2(&both).1);
-        let globe = 4.0 * std::f64::consts::PI * EARTH_RADIUS_M * EARTH_RADIUS_M;
-        assert!(sphere0 <= globe && wgs0 <= WGS84_AREA_M2, "{sphere0} {wgs0}");
-        let other = [c(-180.0, 90.0), c(180.0, 90.0), c(-90.0, -90.0), c(90.0, -80.0)];
-        assert!(geodesic_ring_area_m2(&other) <= globe && wgs84_ring_perimeter_area_m2(&other).1 <= WGS84_AREA_M2);
         for k in 1..both.len() {
             let mut turned = both.to_vec();
             turned.rotate_left(k);
