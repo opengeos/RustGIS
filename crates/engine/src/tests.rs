@@ -34174,7 +34174,7 @@ fn a_diagram_that_wont_show_says_why() {
 /// (#1596).
 #[test]
 fn opening_a_diagram_that_wont_show_says_why() {
-    let about = |s: &Session| -> Vec<String> { s.notices.iter().map(|n| n.text.clone()).filter(|t| t.contains("its diagram")).collect() };
+    let about = |s: &Session| -> Vec<String> { s.notices.iter().map(|n| n.text.clone()).filter(|t| t.contains("the diagram")).collect() };
     let mut s = world();
     s.run("layer.diagram", &json!({"layer": "Cities", "kind": "pie", "fields": ["pop_max"], "size": 8})).unwrap();
     s.run("layer.diagram", &json!({"layer": "Countries", "kind": "pie", "fields": ["pop_est"], "size": 8})).unwrap();
@@ -34186,8 +34186,8 @@ fn opening_a_diagram_that_wont_show_says_why() {
     let hidden = serde_json::to_string(&s.project).unwrap();
     let check = |said: Vec<String>| {
         assert_eq!(said.len(), 2, "{said:?}");
-        assert!(said.iter().any(|t| t.contains("Layer 'Cities'") && t.contains("aggregated into bins")), "{said:?}");
-        assert!(said.iter().any(|t| t.contains("Layer 'Countries'") && t.contains("when a flat map is tilted")), "{said:?}");
+        assert!(said.iter().any(|t| t.starts_with("1 layer(s) ('Cities')") && t.contains("aggregated into bins")), "{said:?}");
+        assert!(said.iter().any(|t| t.starts_with("1 layer(s) ('Countries')") && t.contains("when a flat map is tilted")), "{said:?}");
     };
     check(about(&Session::new(Project::from_json(&hidden).unwrap())));
     let mut reopened = Session::new(Project::default());
@@ -34220,6 +34220,13 @@ fn opening_a_diagram_that_wont_show_says_why() {
     let mut added = Session::new(Project::default());
     crate::cmd::layer::add_layer_text(&mut added, &odd.to_string()).unwrap();
     assert_eq!(about(&added).len(), 1, "{:?}", about(&added));
+    let mut odd_map: Value = serde_json::from_str(&map(&s)).unwrap();
+    for l in odd_map["layers"].as_array_mut().unwrap() {
+        l["labels"]["classes"] = json!([["Extra", true, null, "pop_max", 10, [0, 0, 0, 255], false, false]]);
+    }
+    let mut imported = Session::new(Project::default());
+    imported.run("map.import", &json!({"text": odd_map.to_string()})).unwrap();
+    check(about(&imported));
     // An offline snapshot: quiet with the project, said when it opens as a map.
     let mut offline = Session::new(Project::from_json(&clean).unwrap());
     let snapshot = s.map().clone();
@@ -34235,7 +34242,7 @@ fn opening_a_diagram_that_wont_show_says_why() {
     assert!(about(&reread).is_empty(), "{:?}", about(&reread));
     reread.run("offline.open", &json!({"name": "Trip"})).unwrap();
     check(about(&reread));
-    // Many such layers: the first 20 by name, the rest counted in one notice.
+    // Many such layers: one notice, counting them and naming the first three.
     let mut many = s.project.clone();
     let template = many.maps[0].layer_by_name("Cities").cloned().unwrap();
     many.maps[0].layers = (0..25)
@@ -34247,8 +34254,7 @@ fn opening_a_diagram_that_wont_show_says_why() {
         })
         .collect();
     let said = about(&Session::new(Project::from_json(&serde_json::to_string(&many).unwrap()).unwrap()));
-    assert_eq!(said.len(), 21, "{said:?}");
-    assert!(said.iter().any(|t| t.starts_with("5 more layer(s)")), "{said:?}");
+    assert!(said.len() == 1 && said[0].starts_with("25 layer(s) ('Cities 0', 'Cities 1', 'Cities 2' and 22 more)"), "{said:?}");
 }
 
 #[test]
