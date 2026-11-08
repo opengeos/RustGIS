@@ -1739,18 +1739,20 @@ impl StyleLayer {
     }
 
     /// Whether it is a `color-relief` layer drawn at some zoom it shows at without a
-    /// [`color_relief_ramp`](Self::color_relief_ramp), and so skipped there: checked at each
-    /// whole zoom in its range and at its ends.
+    /// [`color_relief_ramp`](Self::color_relief_ramp), and so skipped there: checked at its
+    /// `minzoom` and each whole zoom from there up to, but not at, its `maxzoom`.
     pub fn color_relief_undrawable(&self) -> bool {
         if self.kind != LayerKind::ColorRelief || !self.visible {
             return false;
         }
         let (lo, hi) = (self.min_zoom.clamp(0.0, MAX_ZOOM_CHECKED), self.max_zoom.clamp(0.0, MAX_ZOOM_CHECKED));
-        if lo > hi {
+        // `maxzoom` itself is left out (see `visible_at`): it shows at `lo` and the whole zooms
+        // after it below `hi`.
+        if lo >= hi {
             return false;
         }
-        let whole = (lo.ceil() as u32..=hi.floor() as u32).map(|z| z as f32);
-        std::iter::once(lo).chain(whole).chain(std::iter::once(hi)).any(|z| self.color_relief_ramp(z).is_none())
+        let whole = (lo.ceil() as u32..hi.ceil() as u32).map(|z| z as f32);
+        std::iter::once(lo).chain(whole).any(|z| self.color_relief_ramp(z).is_none())
     }
 
     /// `color-relief-opacity` (default 1).

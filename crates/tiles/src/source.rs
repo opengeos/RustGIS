@@ -891,7 +891,7 @@ mod tests {
         assert!(relief_left_out(&style).is_some_and(|s| s.ends_with(": z")));
         // ...but not when it is hidden or only shown where it can be coloured.
         let style = Style::parse(&serde_json::json!({"version": 8, "sources": {}, "layers": [
-            {"id": "z", "type": "color-relief", "source": "dem", "maxzoom": 7,
+            {"id": "z", "type": "color-relief", "source": "dem", "maxzoom": 8,
                 "paint": {"color-relief-color": ["interpolate", ["linear"], ["elevation"], 0, ["step", ["zoom"], "#00f", 8, "nope"], 10, "#fff"]}},
             {"id": "h", "type": "color-relief", "source": "dem", "layout": {"visibility": "none"}, "paint": {"color-relief-color": "nope"}}]}))
         .unwrap();
