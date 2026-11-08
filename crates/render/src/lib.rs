@@ -2747,6 +2747,10 @@ const MAX_UPRIGHT_POINTS: usize = 50_000;
 /// nears or recedes from the camera.
 const UPRIGHT_SCALE: (f64, f64) = (0.25, 2.0);
 
+/// The most charts an extruded layer holds back to draw over its extrusions once they are all
+/// drawn; any more draw as they come.
+const MAX_HELD_DIAGRAMS: usize = 50_000;
+
 /// Whether a tilted view of `map` stands `layer`'s point markers up, facing the viewer (as
 /// MapLibre's circles do), rather than drawing them flat on the ground. A masked, swiped or
 /// blended layer, an aggregation, graphics or a diagram keep theirs on the ground.
@@ -3774,7 +3778,16 @@ fn render_frame(
                     // all, or straight after these.
                     if let Some(spool) = &mut extrusions {
                         spool.add(ctx, ds_ptr, &geoms, &rows, x, px_per_m, |r| styler.symbol(r))?;
-                        extruded_diagrams.extend(placed_diagrams());
+                        // Held in memory up to a bound: past it (charts packed far too densely to
+                        // read) the rest draw now, under the extrusion, rather than pile up.
+                        let placed = placed_diagrams();
+                        if extruded_diagrams.len() + placed.len() <= MAX_HELD_DIAGRAMS {
+                            extruded_diagrams.extend(placed);
+                        } else if let Some(d) = layer.diagram.as_ref() {
+                            for (x, y, values, total) in placed {
+                                diagrams::draw(dest, x, y, d, &values, total, if direct { opacity } else { 1.0 }, ctx.ppp, display.paused);
+                            }
+                        }
                     } else {
                         effects::extrude(dest, ctx, ds_ptr, &geoms, &rows, x, px_per_m, |r| styler.symbol(r));
                         if let Some(d) = layer.diagram.as_ref() {
@@ -7888,6 +7901,11 @@ mod tests {
             View { width: 400.0, height: 300.0, pixels_per_point: 1.0, camera: Camera::new(Coord::new(0.0, 0.0), 2000.0), sky: false };
         let r = render(&mut m, &flat).unwrap();
         assert!(magentas(&r) > 100, "the extruded square's chart: {} px", magentas(&r));
+        // Tilted, the square stands up and shows no chart (the notice says so).
+        let camera = Camera { center: Coord::new(0.0, 0.0), res: 2000.0, bearing: 30.0, pitch: 45.0 };
+        let tilted = View { width: 400.0, height: 300.0, pixels_per_point: 1.0, camera, sky: false };
+        let r = render(&mut m, &tilted).unwrap();
+        assert_eq!(magentas(&r), 0, "no chart on a tilted extrusion");
         // A point in a tilted view.
         let mut m = Map::new("Map");
         m.basemap = rustgis_map::Basemap::Blank;
@@ -7898,10 +7916,14 @@ mod tests {
             l.diagram = Some(diagram);
         }
         assert!(!stands_up(&m, &m.layers[0]), "a point layer with a diagram lies on the ground");
-        let camera = Camera { center: Coord::new(0.0, 0.0), res: 2000.0, bearing: 30.0, pitch: 45.0 };
-        let tilted = View { width: 400.0, height: 300.0, pixels_per_point: 1.0, camera, sky: false };
         let r = render(&mut m, &tilted).unwrap();
         assert!(magentas(&r) > 30, "the tilted point's chart: {} px", magentas(&r));
+        // Aggregated, the points draw their bins and no chart (the notice says so).
+        if let Some(l) = m.layer_mut(id) {
+            l.aggregation = Some(rustgis_map::effects::Aggregation { hexagons: true, size: 24.0 });
+        }
+        let r = render(&mut m, &flat).unwrap();
+        assert_eq!(magentas(&r), 0, "no chart on aggregated points");
     }
 
     #[test]

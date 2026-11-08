@@ -236,11 +236,10 @@ fn set(s: &mut Session, p: &Value) -> CmdResult {
 }
 
 /// Says when the layer's diagram won't show because of how the layer is drawn (#1596): binned
-/// points draw their bins, not their features, and an extruded polygon in a tilted view stands
-/// up in perspective where a flat chart has no place. Called by `layer.diagram` and by the
+/// points draw their bins, not their features, and an extruded polygon in a tilted flat map
+/// stands up in perspective where a flat chart has no place. Called by `layer.diagram` and by the
 /// aggregation and extrusion commands, whichever comes second.
 pub(crate) fn hidden_notice(s: &mut Session, id: u32) {
-    let globe = s.map().projection.is_globe();
     let Some(l) = s.map().layer(id) else { return };
     if l.diagram.is_none() {
         return;
@@ -250,10 +249,12 @@ pub(crate) fn hidden_notice(s: &mut Session, id: u32) {
             "Layer '{}': its diagram doesn't show while its points are aggregated into bins; turn Aggregation off to see it",
             l.name
         ),
-        // The globe draws extruded polygons flat, chart and all.
-        GeometryType::Polygon if l.extrusion.is_some() && !globe => {
-            format!("Layer '{}': its diagram shows in a flat view only, not while the map is tilted and its polygons are extruded", l.name)
-        }
+        // Given on the globe too, which draws the polygons flat with their charts: the map may
+        // be made flat and tilted later.
+        GeometryType::Polygon if l.extrusion.is_some() => format!(
+            "Layer '{}': while its polygons are extruded, its diagram doesn't show when a flat map is tilted (it shows untilted, and on the globe)",
+            l.name
+        ),
         _ => return,
     };
     s.notify(text, false);
