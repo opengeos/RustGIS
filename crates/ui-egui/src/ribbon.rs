@@ -5000,12 +5000,13 @@ mod tests {
     }
 
     /// The language list names every language in English while the interface is English, with the
-    /// language's own name as the tooltip; in another language each keeps its own name.
+    /// language's own name as the tooltip; in another language each keeps its own name, or its
+    /// English one where no font can draw it.
     #[test]
     fn the_language_list_follows_the_interface_language() {
         use crate::i18n::{self, Lang};
-        let names = |lang: Lang| {
-            let mut fonts = false;
+        let names = |lang: Lang, install: bool| {
+            let mut fonts = !install;
             let mut h = egui_kittest::Harness::builder().build_ui_state(
                 move |ui, out: &mut Vec<(&'static str, &'static str)>| {
                     if !fonts {
@@ -5022,18 +5023,23 @@ mod tests {
             h.run();
             h.state().clone()
         };
-        let en = names(Lang::EN);
+        let en = names(Lang::EN, true);
         let english: Vec<_> = Lang::all().map(Lang::english).collect();
         assert_eq!(en.iter().map(|n| n.0).collect::<Vec<_>>(), english);
         let fr = Lang::from_code("fr").unwrap();
-        let az = Lang::from_code("az").unwrap();
         let tip = |names: &[(&'static str, &'static str)], l: Lang| -> &'static str {
             names.iter().find(|n| n.0 == l.english() || n.0 == l.name()).unwrap().1
         };
         assert_eq!(tip(&en, fr), "Français", "the tooltip gives the language's own name");
-        let de = names(Lang::from_code("de").unwrap());
-        assert!(de.contains(&("Français", "French")), "in German, French keeps its own name: {de:?}");
-        assert!(de.iter().any(|n| n.0 == az.name() || n.0 == az.english()));
+        let de = Lang::from_code("de").unwrap();
+        let names_de = names(de, true);
+        assert!(names_de.contains(&("Français", "French")), "in German, French keeps its own name: {names_de:?}");
+        // egui's own fonts have no Bengali letters, so without the interface fonts Bengali falls back.
+        let bn = Lang::from_code("bn").unwrap();
+        let bare = names(de, false);
+        assert!(bare.contains(&("Bengali", "Bengali")), "an undrawable name falls back to English: {bare:?}");
+        assert!(bare.contains(&("Français", "French")), "a drawable one doesn't: {bare:?}");
+        assert!(!bare.iter().any(|n| n.0 == bn.name()));
     }
 
     /// The Labeling tab holds every label group (#897): a feature layer's, then the map's, which
