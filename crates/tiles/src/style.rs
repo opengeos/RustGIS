@@ -308,6 +308,9 @@ impl Expr {
     }
 }
 
+/// The highest zoom [`StyleLayer::color_relief_undrawable`] checks a layer at.
+const MAX_ZOOM_CHECKED: f32 = 24.0;
+
 /// Colours by height, from a `color-relief-color` (see [`Expr::elevation_ramp`]).
 #[derive(Clone, Debug, PartialEq)]
 pub struct ElevationRamp {
@@ -1733,6 +1736,21 @@ impl StyleLayer {
     /// can draw (see [`Expr::elevation_ramp`]).
     pub fn color_relief_ramp(&self, zoom: f32) -> Option<ElevationRamp> {
         self.paint.get("color-relief-color")?.elevation_ramp(zoom)
+    }
+
+    /// Whether it is a `color-relief` layer drawn at some zoom it shows at without a
+    /// [`color_relief_ramp`](Self::color_relief_ramp), and so skipped there: checked at each
+    /// whole zoom in its range and at its ends.
+    pub fn color_relief_undrawable(&self) -> bool {
+        if self.kind != LayerKind::ColorRelief || !self.visible {
+            return false;
+        }
+        let (lo, hi) = (self.min_zoom.clamp(0.0, MAX_ZOOM_CHECKED), self.max_zoom.clamp(0.0, MAX_ZOOM_CHECKED));
+        if lo > hi {
+            return false;
+        }
+        let whole = (lo.ceil() as u32..=hi.floor() as u32).map(|z| z as f32);
+        std::iter::once(lo).chain(whole).chain(std::iter::once(hi)).any(|z| self.color_relief_ramp(z).is_none())
     }
 
     /// `color-relief-opacity` (default 1).
