@@ -33096,6 +33096,9 @@ fn importing_a_file_that_is_neither_map_nor_project_says_so() {
     let mut s = world();
     let e = s.run("map.import", &json!({"text": r#"{"name": 5, "layers": 3}"#})).unwrap_err();
     assert!(e.contains("not a RustGIS map file, project or package"), "{e}");
+    // Text that isn't JSON at all is said to be none of them the same way.
+    let e = s.run("map.import", &json!({"text": "not json"})).unwrap_err();
+    assert!(e.contains("not a RustGIS map file, project or package"), "{e}");
     assert!(!e.contains("not a RustGIS project"), "{e}");
     let e = s.run("style.import", &json!({"text": r#"{"name": 5, "layers": 3}"#})).unwrap_err();
     assert!(e.contains("not a RustGIS layer file, map file or project"), "{e}");
@@ -33112,6 +33115,10 @@ fn model_import_refusals_name_their_cause() {
         let e = s.run("model.import", &json!({"text": text})).unwrap_err();
         assert!(e.contains("not a RustGIS model or web tool (no graph or steps)"), "{e}");
     }
+    // A model by its schema from a newer RustGIS that holds something else is told to update.
+    let text = json!({"$schema": crate::model::SCHEMA, "version": "2.0.0", "name": "New", "nodes": []}).to_string();
+    let e = s.run("model.import", &json!({"text": text})).unwrap_err();
+    assert!(e.contains("Update RustGIS"), "{e}");
     // A model whose nodes would be dropped says the causes it may have.
     let graph = json!({"nodes": [{"id": "a", "kind": "input", "layer": "Cities"}, {"id": "a", "kind": "input", "layer": "Countries"}], "edges": []});
     let text = json!({"$schema": crate::model::SCHEMA, "version": "1.0.0", "name": "Dup", "graph": graph}).to_string();

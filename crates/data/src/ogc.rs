@@ -463,9 +463,10 @@ pub struct Service {
 }
 
 /// Most layers or collections `service.layers` lists from one document. In an OGC document the
-/// others are still read ([`Service::listed`]), so that they can be added by name: which ones come
-/// first is up to the server, and some change their order between answers (#1519). An ArcGIS
-/// list is read only as far as it is listed.
+/// others are still read up to [`MAX_READ_LAYERS`] ([`Service::listed`]), so that they can be
+/// added by name: which ones come first is up to the server, and some change their order between
+/// answers (#1519). Past that read limit none is read. An ArcGIS list is read only as far as it is
+/// listed.
 const MAX_LISTED_LAYERS: usize = 2_000;
 /// Most layers or collections read from one document, which is hostile input.
 const MAX_READ_LAYERS: usize = if cfg!(test) { 3_000 } else { 100_000 };

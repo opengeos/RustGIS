@@ -1776,8 +1776,11 @@ fn ground_overlays(s: &mut Session, file_name: &str, bytes: &[u8]) -> Vec<(Strin
                 return Err(None);
             }
             let p = dir.ok_or(None)?.join(rel);
-            if std::fs::symlink_metadata(&p).is_err() {
-                return Err(None);
+            // Only a missing picture isn't beside it; one that can't be looked at says why.
+            match std::fs::symlink_metadata(&p) {
+                Ok(_) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Err(None),
+                Err(e) => return Err(Some(e.to_string())),
             }
             crate::project::read_file(&p, (256 << 20) - 1).map_err(Some)
         });

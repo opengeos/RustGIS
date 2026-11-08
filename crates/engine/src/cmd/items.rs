@@ -422,7 +422,7 @@ fn embedded_map(m: &Map, budget: &mut u64) -> Map {
 /// Adds maps from a map file, project or package.
 fn import_maps(s: &mut Session, p: &Value) -> CmdResult {
     let text = read_text(p)?;
-    crate::project::check_format(&text, "map file or project")?;
+    crate::project::check_format(&text, "map file, project or package")?;
     let dir = ps(p, "path").and_then(|path| std::path::absolute(path).ok()).and_then(|p| p.parent().map(Path::to_path_buf));
     super::connections::clear_active();
     let maps: Vec<Map> = match serde_json::from_str::<Map>(&text) {

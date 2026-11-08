@@ -760,15 +760,20 @@ struct ImportItem<T> {
 /// Missing versions are legacy files. The stricter field checks apply only to file import.
 pub(crate) fn check_file(v: &Value) -> Result<(), String> {
     let graph = v.get("graph");
+    // A model by its schema even when a newer RustGIS changed what it holds: told to update.
+    let model = graph.is_some() || v.get("$schema").and_then(Value::as_str) == Some(SCHEMA);
     // Some other file (GeoJSON, a project) is said to be one, not told to update RustGIS.
-    if graph.is_none() && v.get("steps").is_none() {
+    if !model && v.get("steps").is_none() {
         return Err("not a RustGIS model or web tool (no graph or steps)".into());
     }
     if let Some(version) = v.get("version") {
-        let supported = if graph.is_some() { version.as_str() == Some(FILE_VERSION) } else { version.as_u64() == Some(WEB_TOOL_VERSION) };
+        let supported = if model { version.as_str() == Some(FILE_VERSION) } else { version.as_u64() == Some(WEB_TOOL_VERSION) };
         if !supported {
             return Err("this model or web tool has an unsupported version. Update RustGIS to import it.".into());
         }
+    }
+    if graph.is_none() && v.get("steps").is_none() {
+        return Err("not a RustGIS model or web tool (no graph or steps)".into());
     }
     if graph.is_some() && v.get("steps").is_some() {
         return Err("a model file cannot contain both a graph and steps. Choose one representation before importing it.".into());

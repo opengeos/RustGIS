@@ -1412,6 +1412,7 @@ mod tests {
             assert_eq!(withheld, 0);
             // A tile set that couldn't be read is said; one read gives no notice.
             assert_eq!(resolved.fallback.as_ref().is_some_and(|n| n.contains("couldn't be read")), fail, "{:?}", resolved.fallback);
+            assert!(fail || resolved.fallback.is_none(), "{:?}", resolved.fallback);
             let chosen = resolved.template.unwrap_or_else(|| tiles::logins::inherit(&source, &template));
             if !fail {
                 assert_eq!(chosen, template, "returning to A must not recover its binding");

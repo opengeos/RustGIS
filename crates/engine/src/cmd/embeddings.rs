@@ -325,6 +325,11 @@ mod tests {
         s.leave_downloads = true;
         let r = s.run("embeddings.add", &json!({"dataset": "alphaearth", "url": url}));
         assert!(r.is_ok(), "{r:?}");
+        // The tile is added with its AlphaEarth look.
+        let tile = s.map().tiles.last().map(|t| t.url.clone()).unwrap_or_default();
+        let (file, look) = crate::render::rustgis_tiles::cog::split(&tile);
+        assert_eq!(file, url);
+        assert!(look.aef, "{tile}");
         // Elsewhere its header is read first, so an unreadable tile is refused.
         let mut t = Session::new(Project::default());
         assert!(t.run("embeddings.add", &json!({"dataset": "alphaearth", "url": url})).is_err());
