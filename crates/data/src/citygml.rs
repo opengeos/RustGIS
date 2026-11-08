@@ -165,7 +165,7 @@ struct Index {
     system: Option<String>,
     /// The appearances the model holds, which aren't read.
     appearances: usize,
-    /// The file ends inside a member, which is left out.
+    /// The file ends before its root closes: what came after is left out.
     cut: bool,
 }
 
@@ -196,8 +196,8 @@ impl Index {
         let mut index = Index::default();
         // Open elements, where the member being read starts, and whether the root has been seen.
         let (mut depth, mut member, mut rooted) = (0usize, None, false);
-        // The file ends inside a tag that opens an element (not one that closes it).
-        let mut in_start_tag = false;
+        // The file ends inside the root's end tag, every member in.
+        let mut in_root_end = false;
         loop {
             let start = position(&reader);
             let event = match reader.read_event() {
@@ -206,7 +206,7 @@ impl Index {
                 // cut short, as one cut between tags is.
                 Err(quick_xml::Error::Syntax(_)) => {
                     let at = usize::try_from(reader.error_position()).unwrap_or(usize::MAX);
-                    in_start_tag = !text.get(at..).is_some_and(|rest| rest.starts_with("</"));
+                    in_root_end = depth == 1 && text.get(at..).is_some_and(|rest| rest.starts_with("</"));
                     break;
                 }
                 Err(e) => return Err(invalid(e)),
@@ -249,9 +249,8 @@ impl Index {
                 depth += 1;
             }
         }
-        // A file cut short: the member open at its end, or one whose start tag it cuts, is left
-        // out, and said.
-        index.cut = depth > 0 && (member.is_some() || in_start_tag);
+        // A file cut short, its root not closed: what came after the cut is left out, and said.
+        index.cut = depth > 0 && !in_root_end;
         Ok(index)
     }
 
@@ -460,7 +459,9 @@ impl Said {
     fn notes(&self, cut: bool) -> Vec<String> {
         let mut out = Vec::new();
         if cut {
-            out.push("the file ends inside a city object, as if cut short: that object is left out".to_string());
+            out.push(
+                "the file ends before its city model closes, as if cut short: any city object from the cut on is left out".to_string(),
+            );
         }
         let mut say = |n: usize, text: String| {
             if n > 0 {

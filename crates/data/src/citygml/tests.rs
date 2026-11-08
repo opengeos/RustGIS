@@ -303,12 +303,13 @@ fn a_file_cut_short_says_so_and_keeps_what_came_before() {
     let whole = String::from_utf8(lonlat(&[building("b1", &box_surfaces("b1")), building("b2", &box_surfaces("b2"))].concat())).unwrap();
     let start = r#"<bldg:Building gml:id="b2">"#;
     let cut = whole.find(start).map(|at| at + start.len()).unwrap();
-    // Cut after a tag, inside one that opens an object, and inside a member's own start tag.
+    // Cut after a tag, inside one that opens an object, inside a member's own start tag, and
+    // between members: the root never closes.
     let member = whole.find(start).and_then(|at| whole.get(..at)).and_then(|head| head.rfind("<core:cityObjectMember")).unwrap();
-    for cut in [cut, cut - 5, member + 6] {
+    for cut in [cut, cut - 5, member + 6, member] {
         let out = read("model.gml", &whole.as_bytes()[..cut], None).unwrap();
         assert_eq!(out[0].0.features.len(), 1, "cut at {cut}");
-        assert!(says(&out, "the file ends inside a city object, as if cut short"), "cut at {cut}: {:?}", messages_of(&out));
+        assert!(says(&out, "the file ends before its city model closes, as if cut short"), "cut at {cut}: {:?}", messages_of(&out));
     }
     // Cut inside the root's end tag: every object is in, and nothing is said.
     let end = whole.rfind("</core:CityModel>").unwrap();
