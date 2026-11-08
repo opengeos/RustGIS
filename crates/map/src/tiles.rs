@@ -203,15 +203,6 @@ pub struct TileLayer {
 /// The longest legend address kept.
 pub const MAX_LEGEND_URL: usize = 4096;
 
-/// The length of an address's URL with each percent escape counted as the one byte it stands
-/// for, so a same-origin link that inherited a login and had its spaces encoded on the way
-/// (`rustgis_data::login_address::inherit`) is held to the limit it was advertised under.
-fn advertised_len(address: &str) -> usize {
-    let url = rustgis_data::login_address::inner(address).as_bytes();
-    let escapes = url.windows(3).filter(|w| w.first() == Some(&b'%') && w.iter().skip(1).all(u8::is_ascii_hexdigit)).count();
-    url.len().saturating_sub(2 * escapes)
-}
-
 /// Legend pictures as a tile layer keeps them: web addresses of a sane length, scales that are
 /// positive numbers (others are open-ended), at most [`MAX_LEGENDS`](rustgis_data::ogc::MAX_LEGENDS).
 pub fn checked_legends(legends: impl IntoIterator<Item = rustgis_data::ogc::Legend>) -> Vec<rustgis_data::ogc::Legend> {
@@ -219,7 +210,7 @@ pub fn checked_legends(legends: impl IntoIterator<Item = rustgis_data::ogc::Lege
     legends
         .into_iter()
         .map(|l| rustgis_data::ogc::Legend { url: l.url.trim().to_string(), min_scale: scale(l.min_scale), max_scale: scale(l.max_scale) })
-        .filter(|l| is_web(&l.url) && advertised_len(&l.url) <= MAX_LEGEND_URL)
+        .filter(|l| is_web(&l.url) && rustgis_data::login_address::inner(&l.url).len() <= MAX_LEGEND_URL)
         .take(rustgis_data::ogc::MAX_LEGENDS)
         .collect()
 }
@@ -469,11 +460,11 @@ impl TileLayer {
     pub fn repair(&mut self) -> Result<(), String> {
         self.url = self.url.trim().to_string();
         // A dated address is a web address whose date is filled in after the scheme and host.
-        if self.time_url.as_ref().is_some_and(|u| !is_web(u) || advertised_len(u) > 4096) {
+        if self.time_url.as_ref().is_some_and(|u| !is_web(u) || rustgis_data::login_address::inner(u).len() > 4096) {
             self.time_url = None;
         }
         // A file per date: web addresses, finite dates, in order.
-        self.time_urls.retain(|(d, u)| d.is_finite() && is_web(u) && advertised_len(u) <= 4096);
+        self.time_urls.retain(|(d, u)| d.is_finite() && is_web(u) && rustgis_data::login_address::inner(u).len() <= 4096);
         // Sorted before the cap, so a list out of order keeps its first dates, not any.
         self.time_urls.sort_by(|a, b| a.0.total_cmp(&b.0));
         self.time_urls.dedup_by(|a, b| a.0 == b.0);
@@ -688,18 +679,6 @@ mod tests {
         assert_eq!(checked_legends([legend]).first().map(|l| l.url.as_str()), Some(url.as_str()));
         assert_eq!(rustgis_data::login_address::inner(&url), "https://maps.test/legend?LAYER=a%20b");
         assert!(check_url(&url).is_ok());
-        // The limit applies to the link as advertised, not to its longer encoded form.
-        let near = format!("https://maps.test/l?x={}", "a ".repeat((MAX_LEGEND_URL - 22) / 2));
-        assert!(near.len() <= MAX_LEGEND_URL);
-        let url = rustgis_data::login_address::inherit(&document, &near);
-        assert!(rustgis_data::login_address::inner(&url).len() > MAX_LEGEND_URL);
-        assert_eq!(checked_legends([rustgis_data::ogc::Legend { url: url.clone(), ..Default::default() }]).len(), 1);
-        let mut layer = TileLayer::new("T", TileKind::Raster, "https://maps.test/{z}/{x}/{y}.png");
-        layer.time_url = Some(url.clone());
-        layer.time_urls = vec![(0.0, url)];
-        assert!(layer.repair().is_ok());
-        assert!(layer.time_url.is_some());
-        assert_eq!(layer.time_urls.len(), 1);
     }
 
     #[test]
