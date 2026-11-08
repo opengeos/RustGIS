@@ -1228,6 +1228,13 @@ pub(crate) fn layout_notices(
             layout_names(repairs, |r| r.elements_adjusted)
         ));
     }
+    let cut = total(|r| r.elements_cut);
+    if cut > 0 {
+        notices.push(format!(
+            "{name}: {cut} layout element(s) with a name, text, polygon points or legend exclusions cut to their limits {when} (in {})",
+            layout_names(repairs, |r| r.elements_cut)
+        ));
+    }
     let removed = total(|r| r.elements_removed);
     if removed > 0 {
         notices.push(format!(
@@ -1238,8 +1245,15 @@ pub(crate) fn layout_notices(
     let pages = total(|r| r.page_adjusted);
     if pages > 0 {
         notices.push(format!(
-            "{name}: the page size, guides or map series of {pages} layout(s) adjusted {when} (in {})",
+            "{name}: the page size, guides or map series margin of {pages} layout(s) adjusted {when} (in {})",
             layout_names(repairs, |r| r.page_adjusted)
+        ));
+    }
+    let series = total(|r| r.series_removed);
+    if series > 0 {
+        notices.push(format!(
+            "{name}: the map series of {series} layout(s) removed, its map frame missing, {when} (in {})",
+            layout_names(repairs, |r| r.series_removed)
         ));
     }
     notices

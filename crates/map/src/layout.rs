@@ -1324,6 +1324,7 @@ impl Layout {
             e.h = finite_or(e.h, 20.0).clamp(MIN_ELEMENT_MM, 5000.0);
             e.x = finite_or(e.x, 0.0).clamp(-5000.0, 5000.0);
             e.y = finite_or(e.y, 0.0).clamp(-5000.0, 5000.0);
+            let mut cut = e.name.chars().nth(200).is_some();
             e.name = e.name.chars().take(200).collect();
             match &mut e.kind {
                 ElementKind::MapFrame { center, scale, shape, grid, bearing, pitch, extent_width, .. } => {
@@ -1337,8 +1338,10 @@ impl Layout {
                     center.x = center.x.clamp(-540.0, 540.0);
                     center.y = center.y.clamp(-85.0, 85.0);
                     if let FrameShape::Polygon(p) = shape {
+                        let points = p.len();
                         p.retain(|(u, v)| u.is_finite() && v.is_finite());
                         p.truncate(10_000);
+                        cut |= p.len() < points;
                         p.iter_mut().for_each(|(u, v)| (*u, *v) = (u.clamp(0.0, 1.0), v.clamp(0.0, 1.0)));
                         if p.len() < 3 {
                             *shape = FrameShape::Rectangle;
@@ -1359,13 +1362,16 @@ impl Layout {
                 ElementKind::Legend { exclude, columns, .. } => {
                     // Names stay whole: a layer's own name isn't cut, and a cut one would no
                     // longer match it.
+                    cut |= exclude.len() > MAX_LEGEND_EXCLUDED;
                     exclude.truncate(MAX_LEGEND_EXCLUDED);
                     *columns = (*columns).clamp(1, MAX_LEGEND_COLUMNS);
                 }
                 ElementKind::Text { text, size, letter_spacing, .. } => {
                     *size = finite_or(*size, 12.0).clamp(*crate::graphics::FONT_SIZE.start(), *crate::graphics::FONT_SIZE.end());
                     *letter_spacing = finite_or(*letter_spacing, 0.0).clamp(MIN_LETTER_SPACING, MAX_LETTER_SPACING);
-                    text.truncate(text.char_indices().nth(5000).map_or(text.len(), |(i, _)| i));
+                    let end = text.char_indices().nth(5000).map_or(text.len(), |(i, _)| i);
+                    cut |= end < text.len();
+                    text.truncate(end);
                 }
                 ElementKind::Table { rows, .. } => *rows = (*rows).clamp(1, 500),
                 ElementKind::ScaleBar { divisions, .. } => *divisions = (*divisions).clamp(1, MAX_SCALE_DIVISIONS),
@@ -1376,19 +1382,20 @@ impl Layout {
                 _ => {}
             }
             let kind_changed = !matches!(e.kind, ElementKind::Picture { .. }) && e.kind != before.kind;
-            changed.push(
+            changed.push((
                 kind_changed
                     || (e.id, &e.name, e.x, e.y, e.w, e.h, e.visible, e.locked)
                         != (before.id, &before.name, before.x, before.y, before.w, before.h, before.visible, before.locked),
-            );
+                cut,
+            ));
         }
         self.next_id = next;
         // References must point at map frames that exist.
         let frames: std::collections::HashSet<u32> =
             self.elements.iter().filter(|e| matches!(e.kind, ElementKind::MapFrame { .. })).map(|e| e.id).collect();
-        let mut adjusted = 0usize;
+        let (mut adjusted, mut cut_count) = (0usize, 0usize);
         let elements = std::mem::take(&mut self.elements);
-        for (mut e, mut changed) in elements.into_iter().zip(changed) {
+        for (mut e, (mut changed, cut)) in elements.into_iter().zip(changed) {
             if e.kind.frame().is_some_and(|f| !frames.contains(&f)) {
                 continue;
             }
@@ -1399,20 +1406,26 @@ impl Layout {
                 changed = true;
             }
             adjusted = adjusted.saturating_add(usize::from(changed));
+            cut_count = cut_count.saturating_add(usize::from(cut));
             self.elements.push(e);
         }
+        let mut series_removed = false;
         if let Some(s) = &mut self.series {
             if !frames.contains(&s.frame) {
                 self.series = None;
+                series_removed = true;
             } else {
                 s.margin = finite_or(s.margin, 0.1).clamp(0.0, 5.0);
             }
         }
-        let page_adjusted = (self.width, self.height, &self.guides, &self.series) != (page.0, page.1, &page.2, &page.3);
+        let series_adjusted = !series_removed && self.series != page.3;
+        let page_adjusted = series_adjusted || (self.width, self.height, &self.guides) != (page.0, page.1, &page.2);
         LayoutRepairs {
             elements_adjusted: adjusted,
+            elements_cut: cut_count,
             elements_removed: count.saturating_sub(self.elements.len()),
             page_adjusted: usize::from(page_adjusted),
+            series_removed: usize::from(series_removed),
         }
     }
 }
@@ -1422,10 +1435,15 @@ impl Layout {
 pub struct LayoutRepairs {
     /// Elements kept with a value brought into range, a new id, or a reference cleared.
     pub elements_adjusted: usize,
+    /// Elements with a name, text, polygon points or legend exclusions cut to their limits (the
+    /// same element may count as adjusted too).
+    pub elements_cut: usize,
     /// Elements removed: beyond the 500 a layout holds, or tied to a map frame it doesn't have.
     pub elements_removed: usize,
-    /// Whether the page size, guides or map series changed (0 or 1).
+    /// Whether the page size, guides or map series margin changed (0 or 1).
     pub page_adjusted: usize,
+    /// Whether the map series was removed, its map frame missing (0 or 1).
+    pub series_removed: usize,
 }
 
 impl LayoutRepairs {
@@ -1689,7 +1707,11 @@ mod tests {
             "series":{"frame":77,"layer":"x"}}"#;
         let mut l: Layout = serde_json::from_str(text).unwrap_or_else(|e| panic!("{e}"));
         let repairs = l.clamp();
-        assert_eq!(repairs, LayoutRepairs { elements_adjusted: 2, elements_removed: 1, page_adjusted: 1 }, "what changed is counted");
+        assert_eq!(
+            repairs,
+            LayoutRepairs { elements_adjusted: 2, elements_cut: 0, elements_removed: 1, page_adjusted: 1, series_removed: 1 },
+            "what changed is counted"
+        );
         assert!(l.clamp().is_empty(), "a repaired layout needs nothing more");
         if let ElementKind::MapFrame { bearing, .. } = &mut l.elements[0].kind {
             *bearing = 270.0;

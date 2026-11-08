@@ -3705,12 +3705,24 @@ pub(crate) fn import(s: &mut Session, text: &str) -> CmdResult {
     // Frames showing maps this project lacks show the active map instead.
     let fallback = s.map().name.clone();
     let names: Vec<String> = s.project.maps.iter().map(|m| m.name.to_ascii_lowercase()).collect();
+    let mut swapped = 0usize;
     for e in &mut l.elements {
         if let ElementKind::MapFrame { map, .. } = &mut e.kind
             && !names.contains(&map.to_ascii_lowercase())
         {
             *map = fallback.clone();
+            swapped = swapped.saturating_add(1);
         }
+    }
+    if swapped > 0 {
+        s.notify(
+            format!(
+                "{}: {swapped} map frame(s) showing a map this project lacks show \"{}\" instead",
+                crate::project::short_name(&l.name),
+                crate::project::short_name(&fallback)
+            ),
+            false,
+        );
     }
     let name = l.name.clone();
     if s.project.layouts.len() >= crate::project::MAX_LAYOUTS {

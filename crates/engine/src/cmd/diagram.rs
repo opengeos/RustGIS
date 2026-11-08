@@ -581,6 +581,14 @@ mod tests {
         cats.push(blank);
         crate::cmd::layer::add_layer_text(&mut added, &damaged_layer.to_string()).unwrap();
         assert_eq!(added.notices.iter().filter(|n| n.text.contains("1 diagram category(ies) with a blank field name")).count(), 1);
+        let kept: Vec<Vec<&str>> = added
+            .map()
+            .layers
+            .iter()
+            .filter_map(|l| l.diagram.as_ref())
+            .map(|d| d.categories.iter().map(|c| c.field.as_str()).collect())
+            .collect();
+        assert_eq!(kept, [["pop_male", "pop_female"], ["pop_male", "pop_female"]], "the blank category goes, the rest stay");
         // A layout file imported says what it repaired, and a clean one nothing.
         let layout = v["layouts"][0].to_string();
         let mut imports = Session::new(Project::default());

@@ -316,7 +316,8 @@ pub struct DiagramAudit {
     /// Categories kept that repeat an earlier one's field (ignoring case), each drawn again as
     /// its own slice or bar.
     pub repeated_fields: usize,
-    /// Diagrams whose size, start angle or outline width was brought into range (0 or 1).
+    /// Diagrams whose size, data range or outline width was brought into range or order (0 or
+    /// 1). A start angle is turned into 0 to 360, the same direction, so isn't counted.
     pub adjusted: usize,
 }
 
