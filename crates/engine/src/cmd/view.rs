@@ -271,7 +271,7 @@ fn terrain(s: &mut Session, p: &Value) -> CmdResult {
         && m.layers.iter().filter(|l| l.name.eq_ignore_ascii_case(n)).count() > 1
     {
         let e = format!(
-            "two layers are called '{n}': rename one, then try again with the DEM named or made the active layer (Terrain stays as it was)"
+            "more than one layer is called '{n}': give the DEM a name of its own, then try again naming it (Terrain stays as it was)"
         );
         // A terrain that was on stays as it was.
         if let Some(old) = old_terrain {
