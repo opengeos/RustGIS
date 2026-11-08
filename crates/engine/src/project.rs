@@ -56,8 +56,69 @@ pub fn open_command(path: &str) -> &'static str {
 /// Saved-document compatibility version, independent of the RustGIS release version.
 /// Advance it when an older reader would lose meaningful saved information on resaving.
 pub const FORMAT: u32 = 1;
-/// Largest project file read or saved (512 MiB).
-pub const MAX_BYTES: u64 = 512 << 20;
+/// Largest project file read or saved in the browser, or on a computer whose memory isn't known
+/// (512 MiB): the floor of [`max_bytes`].
+pub const BYTES_FLOOR: u64 = 512 << 20;
+
+/// The most [`max_bytes`] grows to, however much memory the computer has (4 GiB).
+pub const BYTES_CEILING: u64 = 4 << 30;
+
+/// The memory an open project takes for each byte of its file. Measured at about 2: a 337 MiB
+/// project of four GeoJSON layers (240,000 polygons) took 731 MiB to open in the command line, and
+/// 576 MiB more than an empty app to open and draw. Planned at 4, for the recovery copy written
+/// while it is open and for data heavier to hold than to write.
+const MEMORY_PER_BYTE: u64 = 4;
+
+/// Largest project file read or saved on this computer (#1615): on the desktop as much as a
+/// quarter of its memory holds open at [`MEMORY_PER_BYTE`] a byte, from [`BYTES_FLOOR`] up to
+/// [`BYTES_CEILING`], as the other memory limits follow it (#1291 step 2); [`BYTES_FLOOR`] in the
+/// browser. Save and open use the same limit, so a project saved here opens here; one saved on a
+/// computer with more memory may need one like it.
+pub fn max_bytes() -> u64 {
+    #[cfg(test)]
+    if let Some(max) = TEST_MAX.with(std::cell::Cell::get) {
+        return max;
+    }
+    max_bytes_for(rustgis_data::memory::physical())
+}
+
+/// [`max_bytes`] on a computer with `memory` bytes (`None`: not known).
+fn max_bytes_for(memory: Option<u64>) -> u64 {
+    let (floor, ceiling) = (usize::try_from(BYTES_FLOOR).unwrap_or(usize::MAX), usize::try_from(BYTES_CEILING).unwrap_or(usize::MAX));
+    rustgis_data::memory::scaled(memory, floor, ceiling, MEMORY_PER_BYTE) as u64
+}
+
+/// The limit as a refusal says it: in MiB and, where it follows the computer's memory, that it
+/// does, so a project refused here but opened elsewhere is understood.
+pub fn limit_said(max: u64) -> String {
+    if rustgis_data::memory::physical().is_some() {
+        format!("{} MiB on this computer, a limit that follows its memory", max >> 20)
+    } else {
+        format!("{} MiB", max >> 20)
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// A smaller [`max_bytes`] for the tests on this thread ([`with_max_bytes`]), so a test of
+    /// the limit doesn't build a project of gigabytes.
+    static TEST_MAX: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) };
+}
+
+/// Runs `f` with [`max_bytes`] at `max` on the calling thread only (work `f` hands to another
+/// thread sees the real limit); the limit is restored even if `f` panics.
+#[cfg(test)]
+pub(crate) fn with_max_bytes<T>(max: u64, f: impl FnOnce() -> T) -> T {
+    struct Restore;
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            TEST_MAX.with(|m| m.set(None));
+        }
+    }
+    TEST_MAX.with(|m| m.set(Some(max)));
+    let _restore = Restore;
+    f()
+}
 
 /// Runtime capabilities never survive a project boundary, including an in-process save restore.
 /// `None` for an address that holds none, and for a wrapper that doesn't parse (kept as it is,
@@ -544,8 +605,9 @@ struct FileFormat {
 /// metadata is legacy content; arrays include legacy style files. Writers remain unchanged
 /// until a change needs a newer format, at which point it must declare that format.
 pub(crate) fn check_format(text: &str, kind: &str) -> Result<(), String> {
-    if text.len() as u64 > MAX_BYTES {
-        return Err(format!("the {kind} file is too large"));
+    let max = max_bytes();
+    if text.len() as u64 > max {
+        return Err(format!("the {kind} file is too large (maximum {})", limit_said(max)));
     }
     if text.trim_start().starts_with('[') {
         return Ok(());
@@ -1020,8 +1082,9 @@ impl Project {
         let unrecorded = self.bound_address_losses(false);
         let (text, mut report) = crate::durable::output_owned(self, project_text)?;
         report.addresses = report.addresses.saturating_add(u32::try_from(unrecorded).unwrap_or(u32::MAX));
-        if text.len() as u64 > MAX_BYTES {
-            return Err("the project is too large to keep a recovery copy".into());
+        let max = max_bytes();
+        if text.len() as u64 > max {
+            return Err(format!("the project is too large to keep a recovery copy (maximum {})", limit_said(max)));
         }
         Ok((text, report))
     }
@@ -1084,10 +1147,31 @@ impl Project {
         Ok(p)
     }
 
-    /// Opens a project file (a regular file within [`MAX_BYTES`]; see `read_file`), resolving
+    /// Opens a project file (a regular file within [`max_bytes`]; see `read_file`), resolving
     /// its relative paths against its folder.
     pub fn load(path: &Path) -> Result<Project, String> {
-        let bytes = read_file(path, MAX_BYTES)?;
+        let max = max_bytes();
+        // Past the limit: said with its size and the limit here, before anything is read.
+        if let Ok(meta) = std::fs::metadata(path)
+            && meta.is_file()
+            && meta.len() > max
+        {
+            // A computer with more memory opens it, up to the ceiling; past that none does.
+            let more = if meta.len() > BYTES_CEILING {
+                format!(": no computer opens a project past {} MiB", BYTES_CEILING >> 20)
+            } else if rustgis_data::memory::physical().is_some() {
+                ": a computer with more memory opens it".to_string()
+            } else {
+                String::new()
+            };
+            return Err(format!(
+                "{} is {} MiB, more than a project can be (maximum {}){more}",
+                path.display(),
+                meta.len() >> 20,
+                limit_said(max)
+            ));
+        }
+        let bytes = read_file(path, max)?;
         let text = String::from_utf8(bytes).map_err(|_| format!("{} isn't a RustGIS project", path.display()))?;
         let dir = std::path::absolute(path).ok().and_then(|p| p.parent().map(Path::to_path_buf));
         Self::read_json(&text, true, dir.as_deref(), true)
@@ -1354,10 +1438,34 @@ impl Durable for ModelGraph {
 /// Enforces the opening bound inside the formatter, before any destination is replaced.
 fn project_text(p: &Project) -> Result<String, String> {
     let text = serde_json::to_string(p).map_err(|e| e.to_string())?;
-    if text.len() as u64 > MAX_BYTES {
-        return Err(format!("the project is too large to save (maximum {} MiB)", MAX_BYTES >> 20));
+    let max = max_bytes();
+    if text.len() as u64 > max {
+        return Err(format!("the project is too large to save (maximum {})", limit_said(max)));
     }
     Ok(text)
+}
+
+#[cfg(test)]
+mod limit_tests {
+    use super::*;
+
+    const GIB: u64 = 1 << 30;
+
+    /// A quarter of the memory, at 4 bytes a byte of project: a sixteenth of it, from 512 MiB to
+    /// 4 GiB; 512 MiB where the memory isn't known (the browser).
+    #[test]
+    fn the_project_limit_follows_the_memory() {
+        assert_eq!(max_bytes_for(None), BYTES_FLOOR);
+        assert_eq!(max_bytes_for(Some(4 * GIB)), BYTES_FLOOR, "never below the floor");
+        assert_eq!(max_bytes_for(Some(8 * GIB)), 512 << 20);
+        assert_eq!(max_bytes_for(Some(16 * GIB)), GIB);
+        assert_eq!(max_bytes_for(Some(64 * GIB)), 4 * GIB);
+        assert_eq!(max_bytes_for(Some(1024 * GIB)), BYTES_CEILING, "never above the ceiling");
+        // The 659 MiB project of #1615 opens on a computer with 12 GiB.
+        assert!(max_bytes_for(Some(12 * GIB)) > 659 << 20);
+        let max = max_bytes();
+        assert!((BYTES_FLOOR..=BYTES_CEILING).contains(&max), "{max}");
+    }
 }
 
 #[cfg(test)]

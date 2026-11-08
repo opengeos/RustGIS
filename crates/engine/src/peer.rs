@@ -480,7 +480,7 @@ impl Session {
 /// The same opening bound applies to peers; no destination is written on a formatting failure.
 fn text(p: &Project) -> Result<String, String> {
     let text = serde_json::to_string(p).map_err(|e| e.to_string())?;
-    if text.len() as u64 > crate::project::MAX_BYTES {
+    if text.len() as u64 > crate::project::max_bytes() {
         return Err("the project is too large to exchange".into());
     }
     Ok(text)

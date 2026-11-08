@@ -15,8 +15,16 @@ use super::{b, f, need_feature_layer, need_layer, ps};
 use crate::project::{StyleItem, Task, TaskStep};
 use crate::{CmdResult, CommandSpec as C, Project, Session};
 
-/// Largest item file read (512 MiB, like projects).
-const MAX_FILE: u64 = 512 << 20;
+/// Largest item file read: a project's ([`crate::project::max_bytes`]), as an item file may be
+/// a whole project (Import Maps reads `.rgis` files).
+fn max_file() -> u64 {
+    crate::project::max_bytes()
+}
+
+/// What an item past [`max_file`] is told.
+fn too_large() -> String {
+    format!("the file is too large (maximum {})", crate::project::limit_said(max_file()))
+}
 
 pub fn commands() -> Vec<C> {
     vec![
@@ -368,10 +376,10 @@ pub(crate) fn read_text(p: &Value) -> Result<String, String> {
         return Ok(text);
     }
     match (ps(p, "text"), ps(p, "path")) {
-        (Some(t), _) if t.len() as u64 <= MAX_FILE => Ok(t.to_string()),
-        (Some(_), _) => Err("the file is too large".into()),
+        (Some(t), _) if t.len() as u64 <= max_file() => Ok(t.to_string()),
+        (Some(_), _) => Err(too_large()),
         (None, Some(path)) => {
-            let bytes = crate::project::read_file(Path::new(path), MAX_FILE)?;
+            let bytes = crate::project::read_file(Path::new(path), max_file())?;
             // Packages are zip archives holding the project.
             if bytes.starts_with(b"PK") {
                 return package_text(&bytes);
@@ -659,7 +667,7 @@ fn package_project(s: &mut Session) -> Result<Vec<u8>, String> {
     let name = p.name.clone();
     let (text, report) = crate::durable::output_owned(p, |p| serde_json::to_string(p).map_err(|e| e.to_string()))?;
     crate::durable::notify(s, &report);
-    let limit = crate::project::MAX_BYTES.min(rustgis_data::zip::MAX_TOTAL as u64);
+    let limit = crate::project::max_bytes().min(rustgis_data::zip::MAX_TOTAL as u64);
     if text.len() as u64 > limit {
         return Err(format!("the project is too large to package (maximum {} MiB)", limit >> 20));
     }
@@ -1617,8 +1625,8 @@ fn durable_bytes<T: crate::durable::Durable + serde::Serialize>(s: &mut Session,
 pub(crate) fn inline_text(p: &Value) -> Result<Option<String>, String> {
     if let Some(d) = ps(p, "data") {
         use base64::Engine;
-        if d.len() as u64 > MAX_FILE / 3 * 4 {
-            return Err("the file is too large".into());
+        if d.len() as u64 > max_file() / 3 * 4 {
+            return Err(too_large());
         }
         let bytes = base64::engine::general_purpose::STANDARD.decode(d.trim()).map_err(|_| "data must be base64".to_string())?;
         if bytes.starts_with(b"PK") {
@@ -1627,8 +1635,8 @@ pub(crate) fn inline_text(p: &Value) -> Result<Option<String>, String> {
         return String::from_utf8(bytes).map(Some).map_err(|_| "not a RustGIS file".to_string());
     }
     match ps(p, "text") {
-        Some(t) if t.len() as u64 <= MAX_FILE => Ok(Some(t.to_string())),
-        Some(_) => Err("the file is too large".into()),
+        Some(t) if t.len() as u64 <= max_file() => Ok(Some(t.to_string())),
+        Some(_) => Err(too_large()),
         None => Ok(None),
     }
 }
