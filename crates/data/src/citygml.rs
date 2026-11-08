@@ -372,9 +372,10 @@ fn insert(map: &mut Map<String, Json>, key: &str, value: Json) {
 
 /// A number, or text with its unit when that isn't the metre.
 fn measure(text: &str, uom: Option<&str>) -> Option<Json> {
-    match uom.filter(|u| !is_metre(u)) {
+    // A blank unit is no unit.
+    match uom.map(str::trim).filter(|u| !u.is_empty() && !is_metre(u)) {
         None => text.parse::<f64>().ok().and_then(serde_json::Number::from_f64).map(Json::Number),
-        Some(uom) => Some(Json::from(format!("{text} {}", uom.trim()))),
+        Some(uom) => Some(Json::from(format!("{text} {uom}"))),
     }
 }
 

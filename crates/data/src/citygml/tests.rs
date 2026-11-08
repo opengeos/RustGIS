@@ -379,6 +379,10 @@ fn a_measure_attribute_keeps_a_unit_that_isnt_the_metre() {
     let out = read("model.gml", &lonlat(&building("b1", &inner)), None).unwrap();
     assert_eq!(value(&out[0].0, 0, "h"), Value::Text("40 ft".into()));
     assert_eq!(value(&out[0].0, 0, "m"), Value::Float(12.0));
+    // A blank unit is no unit: a number.
+    let blank = format!(r#"<bldg:measuredHeight uom="">12</bldg:measuredHeight>{}"#, box_surfaces("b2"));
+    let out = read("model.gml", &lonlat(&building("b2", &blank)), None).unwrap();
+    assert_eq!(value(&out[0].0, 0, "measuredHeight"), Value::Float(12.0));
 }
 
 /// An empty `srsName` names nothing; one system written with its axes in another order is refused.
