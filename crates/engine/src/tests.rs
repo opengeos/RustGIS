@@ -34242,6 +34242,14 @@ fn opening_a_diagram_that_wont_show_says_why() {
     assert!(about(&reread).is_empty(), "{:?}", about(&reread));
     reread.run("offline.open", &json!({"name": "Trip"})).unwrap();
     check(about(&reread));
+    // A project's map past the 100 `map.import` takes gives no notice there.
+    let mut wide = Session::new(Project::from_json(&clean).unwrap()).project;
+    let plain_map = wide.maps[0].clone();
+    let hidden_map = s.map().clone();
+    wide.maps = (0..100).map(|_| plain_map.clone()).chain(std::iter::once(hidden_map)).collect();
+    let mut imported = Session::new(Project::default());
+    imported.run("map.import", &json!({"text": serde_json::to_string(&wide).unwrap()})).unwrap();
+    assert!(about(&imported).is_empty(), "{:?}", about(&imported));
     // Many such layers: one notice, counting them and naming the first three.
     let mut many = s.project.clone();
     let template = many.maps[0].layer_by_name("Cities").cloned().unwrap();

@@ -197,7 +197,7 @@ pub(crate) fn hidden<'a>(layers: impl Iterator<Item = &'a rustgis_map::Layer>) -
             names(&extruded)
         ));
     }
-    notices.into_iter().map(|m| (ReadPart::Diagrams, m)).collect()
+    notices.into_iter().map(|m| (ReadPart::HiddenDiagrams, m)).collect()
 }
 
 /// The layers a hidden-diagram notice names; the rest are counted.
@@ -205,7 +205,11 @@ const MAX_NAMED: usize = 3;
 
 /// The notices of the parts asked for.
 fn only(notices: Vec<(ReadPart, String)>, diagrams: bool) -> Vec<String> {
-    notices.into_iter().filter(|(part, _)| diagrams || *part != ReadPart::Diagrams).map(|(_, m)| m).collect()
+    notices
+        .into_iter()
+        .filter(|(part, _)| diagrams || !matches!(part, ReadPart::Diagrams | ReadPart::HiddenDiagrams))
+        .map(|(_, m)| m)
+        .collect()
 }
 
 /// One notice per kind of change reading the layers' diagrams made.
