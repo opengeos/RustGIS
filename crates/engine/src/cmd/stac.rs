@@ -251,8 +251,8 @@ fn add_asset(s: &mut Session, p: &Value) -> CmdResult {
     let i = item(p)?;
     let (key, href) = i.asset_href(ps(p, "asset"))?;
     // Codes for a failed retrieval (JAXA Earth's `dn.error`), which a data cube skips but a
-    // single file draws as values.
-    let codes = i.pick(Some(&key)).ok().map(|a| (a.invalid.clone(), a.codes_unread)).unwrap_or_default();
+    // single file draws as values: of the asset `asset_href` picked, by the same selector.
+    let codes = i.pick(ps(p, "asset")).ok().map(|a| (a.invalid.clone(), a.codes_unread)).unwrap_or_default();
     let name = ps(p, "name").map(str::trim).filter(|n| !n.is_empty()).map(str::to_string).unwrap_or_else(|| format!("{} {key}", i.id));
     // A Planetary Computer asset is read with its storage container's token.
     #[cfg(not(target_arch = "wasm32"))]
@@ -267,11 +267,16 @@ fn add_asset(s: &mut Session, p: &Value) -> CmdResult {
             "{name}: its metadata marks failed retrievals with codes that couldn't be read whole, and the map draws them as values"
         )),
         (invalid, false) if !invalid.is_empty() => {
-            let listed: Vec<String> = invalid.iter().map(f64::to_string).collect();
+            // The first few, large ones (a float's lowest, -3.4e38) in exponent form.
+            const SHOWN: usize = 5;
+            let code = |v: &f64| if v.abs() >= 1e6 { format!("{v:e}") } else { v.to_string() };
+            let mut listed = invalid.iter().take(SHOWN).map(code).collect::<Vec<_>>().join(", ");
+            if invalid.len() > SHOWN {
+                listed.push_str(&format!(" and {} more", invalid.len() - SHOWN));
+            }
             s.warn(format!(
-                "{name}: its metadata marks failed retrievals with {} code(s) ({}), which the map draws as values",
-                invalid.len(),
-                listed.join(", ")
+                "{name}: its metadata marks failed retrievals with {} code(s) ({listed}), which the map draws as values",
+                invalid.len()
             ));
         }
         _ => {}

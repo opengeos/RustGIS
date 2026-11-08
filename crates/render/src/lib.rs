@@ -3160,13 +3160,13 @@ fn render_frame(
 ) -> Option<RenderOutput> {
     let (w, h) = view.pixel_size();
     // Kept as vectors (`record`) on the CPU, for a flat frame without view effects or a
-    // colour-vision simulation (pixel filters over the whole frame); anything else draws its
-    // pixels.
+    // colour-vision simulation it applies (pixel filters over the whole frame; an export,
+    // `full_res_rasters`, never simulates colour vision); anything else draws its pixels.
     let record = record
         && !backend.is_gpu()
         && !map.projection.is_globe()
         && map.view.effects.is_none()
-        && map.view.color_vision == rustgis_map::view::ColorVision::Normal;
+        && (full_res_rasters || map.view.color_vision == rustgis_map::view::ColorVision::Normal);
     let mut pm = if record { Canvas::recording(w, h)? } else { Canvas::new(w, h)? };
     // Streamed layers read the view: in the background for the screen, in place for an export
     // (the full-resolution render), which waits for them; only the layers drawn at the view's

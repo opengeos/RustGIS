@@ -15977,9 +15977,10 @@ fn a_stac_asset_with_retrieval_codes_says_they_draw_as_values() {
         vec![
             ("/items/clean", item("clean", "")),
             ("/items/coded", item("coded", r#", "je:rasters": {"dn": {"error": [5.0, 7.0]}}"#)),
+            ("/items/unread", item("unread", r#", "je:rasters": {"dn": {"error": [5.0, "x"]}}"#)),
             ("/data/places.geojson", geojson.to_string()),
         ],
-        4,
+        6,
     );
     let mut s = Session::new(Project::default());
     let mark = s.notice_mark();
@@ -15990,6 +15991,30 @@ fn a_stac_asset_with_retrieval_codes_says_they_draw_as_values() {
     s.run("stac.addAsset", &json!({"url": format!("{base}/items/coded"), "name": "Coded"})).unwrap();
     let said: Vec<String> = s.notices_since(mark).iter().map(|n| n.text.clone()).collect();
     assert!(said.iter().any(|t| t.contains("Coded: its metadata marks failed retrievals with 2 code(s) (5, 7)")), "{said:?}");
+    // Codes that can't be read whole (a word among them) say so.
+    let mark = s.notice_mark();
+    s.run("stac.addAsset", &json!({"url": format!("{base}/items/unread"), "name": "Unread"})).unwrap();
+    let said: Vec<String> = s.notices_since(mark).iter().map(|n| n.text.clone()).collect();
+    assert!(
+        said.iter().any(|t| t.contains("Unread: its metadata marks failed retrievals with codes that couldn't be read whole")),
+        "{said:?}"
+    );
+}
+
+/// The Print Map PDF keeps a map within the vector budget as vectors and says nothing, a
+/// colour-vision view too (exports don't simulate it, so it needn't be a picture).
+#[test]
+fn the_map_pdf_keeps_vectors_and_says_nothing_with_or_without_colour_vision() {
+    let mut s = Session::new(crate::sample::world_project());
+    for mode in ["normal", "deuteranopia"] {
+        s.run("map.colorVision", &json!({"mode": mode})).unwrap();
+        let mark = s.notice_mark();
+        let pdf = crate::cmd::share::map_pdf(&mut s, 96.0).unwrap();
+        let said: Vec<String> = s.notices_since(mark).iter().map(|n| n.text.clone()).collect();
+        assert!(!said.iter().any(|t| t.contains("one picture")), "{mode}: {said:?}");
+        let text = String::from_utf8_lossy(&pdf);
+        assert!(!text.contains("/Subtype /Image"), "{mode}: the map as vectors, not a picture");
+    }
 }
 
 /// Directions through a routing server of one's own (a local Valhalla answer here): the route

@@ -47,7 +47,7 @@ pub const CHOOSE_CONNECTION: &str = "Several saved connections match this addres
 /// A `connection` that is not a saved web-service connection's id.
 pub const NO_SUCH_CONNECTION: &str = "No saved web-service connection with this id.";
 /// A request's `connection` that isn't text.
-const CONNECTION_TEXT: &str = "connection must be a saved web-service connection id (text)";
+pub const CONNECTION_TEXT: &str = "connection must be a saved web-service connection id (text)";
 /// The commands that add layers from a service, and so may record the connection they came from
 /// (their `connection` parameter, or the connection whose login their address is read with).
 pub const ADD_COMMANDS: &[&str] = &[

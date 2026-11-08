@@ -420,6 +420,25 @@ mod tests {
     }
 
     #[test]
+    fn placing_pixels_cuts_to_the_clip_where_its_own_transform_puts_it() {
+        let mut c = Canvas::new(40, 20).unwrap();
+        let mut child = c.sub(10, 20).unwrap();
+        child.pixels().fill(Color::from_rgba8(200, 0, 0, 255));
+        // The clip covers x 20 to 30, the child x 15 to 25: only 20 to 25 is drawn.
+        let clip = Clip {
+            path: PathBuilder::from_rect(Rect::from_xywh(0.0, 0.0, 10.0, 20.0).unwrap()),
+            rule: FillRule::Winding,
+            transform: Transform::from_translate(20.0, 0.0),
+        };
+        c.place(child, Transform::from_translate(15.0, 0.0), 1.0, Blend::Normal, Some(clip));
+        let pm = c.into_pixmap();
+        let alpha = |x| pm.pixel(x, 10).map(|p| p.alpha());
+        assert_eq!(alpha(22), Some(255), "the child inside the clip");
+        assert_eq!(alpha(17), Some(0), "the child outside the clip");
+        assert_eq!(alpha(27), Some(0), "the clip past the child");
+    }
+
+    #[test]
     fn a_label_keeps_its_halo_as_a_shape_and_its_text_once() {
         let label = crate::PlacedLabel {
             text: "Memphis".into(),
