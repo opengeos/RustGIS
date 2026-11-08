@@ -28961,7 +28961,9 @@ fn session_log_entries_name_their_project_and_say_when_their_params_are_partial(
     assert!(last(&s).partial);
     // An address without its token: partial too.
     let _ = s.run("service.layers", &json!({"url": "https://x.org/wms?token=S3CRET&layers=a", "text": "not a capabilities document"}));
-    assert!(last(&s).partial, "{:?}", last(&s));
+    let service = last(&s);
+    assert_eq!(service.command, "service.layers", "{service:?}");
+    assert!(!service.params.to_string().contains("S3CRET") && service.partial, "{service:?}");
     // Saved: the project's name last in a CSV row; in JSON, the name, and `partial` only when so.
     let mut csv = Vec::new();
     s.log.write(&mut csv, true).unwrap();

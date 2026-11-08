@@ -84,8 +84,8 @@ pub fn tabs(app: &mut RustGisApp, ui: &mut Ui) -> bool {
     app.ui.session_log.open
 }
 
-/// Whether entry `e` is one the filters keep: `query` already in lower case; `project`, the
-/// project its entries are the only ones kept ([`rustgis_engine::Session::opened`]).
+/// Whether entry `e` is one the filters keep: `query` already in lower case; `project`, when
+/// only one project's entries are listed, that project ([`rustgis_engine::Session::opened`]).
 fn listed(e: &LogEntry, query: &str, failed: bool, project: Option<u64>) -> bool {
     (!failed || !e.ok) && (query.is_empty() || e.command.to_lowercase().contains(query)) && project.is_none_or(|p| e.opened == p)
 }
@@ -582,23 +582,25 @@ mod tests {
         assert!(h.query_by_label("Copy Command").is_some());
     }
 
-    /// Each row says the project it ran in; This project lists only the project open now's.
+    /// Each row says the project it ran in; This project lists only the project open now's, not
+    /// another of the same name.
     #[test]
     fn each_entry_names_its_project_and_this_project_lists_the_open_ones() {
         let mut app = RustGisApp::with_sample();
         app.session.log.clear();
+        app.run("project.rename", json!({"name": "Same"})).unwrap();
         app.run("map.new", json!({"name": "Before"})).unwrap();
-        app.run("project.new", json!({"name": "Second project"})).unwrap();
+        app.run("project.new", json!({"name": "Same"})).unwrap();
         app.run("map.new", json!({"name": "After"})).unwrap();
         app.ui.session_log.open = true;
         let mut h = harness(app);
         h.run();
-        assert!(h.query_by_label("3 entries").is_some());
-        assert_eq!(h.query_all_by_label_contains("UTC · Second project").count(), 2, "the open and what came after");
+        assert!(h.query_by_label("4 entries").is_some());
+        assert_eq!(h.query_all_by_label_contains("UTC · Same").count(), 4, "both projects, by one name");
         h.get_by_label("This project").click();
         h.run();
         assert!(h.state().ui.session_log.this_project);
-        assert!(h.query_by_label("2 of 3 entries").is_some());
+        assert!(h.query_by_label("2 of 4 entries").is_some(), "the open and what came after, not the other Same");
         assert!(h.query_by_label(r#"{"name":"Before"}"#).is_none() && h.query_by_label(r#"{"name":"After"}"#).is_some());
     }
 
