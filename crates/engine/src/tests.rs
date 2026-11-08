@@ -33179,6 +33179,9 @@ fn export_map_to_geotiff_places_the_view_on_the_ground() {
     assert_eq!((fit.width, fit.height), (4000, 300));
     assert!((fit.transform.pixel_width - 2.25 * cam.res).abs() < 1e-6 * cam.res, "{:?}", fit.transform);
     assert!((fit.transform.origin_x + 2000.0 * fit.transform.pixel_width - cam.center.x).abs() < 1e-3);
+    // Square pixels, and the centre down the middle too.
+    assert!((fit.transform.pixel_height + fit.transform.pixel_width).abs() < 1e-9 * cam.res, "{:?}", fit.transform);
+    assert!((fit.transform.origin_y + 150.0 * fit.transform.pixel_height - cam.center.y).abs() < 1e-3);
     s.view_size = (400.0, 300.0);
     // A size given past the limit is drawn at the limit, and says so.
     let n = s.notices.len();
