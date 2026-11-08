@@ -240,6 +240,7 @@ fn set(s: &mut Session, p: &Value) -> CmdResult {
 /// up in perspective where a flat chart has no place. Called by `layer.diagram` and by the
 /// aggregation and extrusion commands, whichever comes second.
 pub(crate) fn hidden_notice(s: &mut Session, id: u32) {
+    let globe = s.map().projection.is_globe();
     let Some(l) = s.map().layer(id) else { return };
     if l.diagram.is_none() {
         return;
@@ -249,7 +250,8 @@ pub(crate) fn hidden_notice(s: &mut Session, id: u32) {
             "Layer '{}': its diagram doesn't show while its points are aggregated into bins; turn Aggregation off to see it",
             l.name
         ),
-        GeometryType::Polygon if l.extrusion.is_some() => {
+        // The globe draws extruded polygons flat, chart and all.
+        GeometryType::Polygon if l.extrusion.is_some() && !globe => {
             format!("Layer '{}': its diagram shows in a flat view only, not while the map is tilted and its polygons are extruded", l.name)
         }
         _ => return,

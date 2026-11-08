@@ -33925,4 +33925,9 @@ fn a_diagram_that_wont_show_says_why() {
     let mark = s.notice_mark();
     s.run("layer.extrusion", &json!({"layer": "Countries", "type": "none"})).unwrap();
     assert!(!said(&s, mark, "diagram"), "extrusion off: {:?}", s.notices_since(mark));
+    // The globe draws extruded polygons flat, so their charts show there.
+    s.map_mut().projection = rustgis_map::Projection::Globe;
+    let mark = s.notice_mark();
+    s.run("layer.extrusion", &json!({"layer": "Countries", "type": "height", "height": 1000})).unwrap();
+    assert!(!said(&s, mark, "flat view only"), "globe: {:?}", s.notices_since(mark));
 }
