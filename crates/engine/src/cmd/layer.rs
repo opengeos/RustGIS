@@ -1777,7 +1777,8 @@ fn ground_overlays(s: &mut Session, file_name: &str, bytes: &[u8]) -> Vec<(Strin
             }
             let p = dir.ok_or(None)?.join(rel);
             // Only a missing picture isn't beside it; one that can't be looked at says why.
-            match std::fs::symlink_metadata(&p) {
+            // (Followed as the read follows it: a link to nothing is missing too.)
+            match std::fs::metadata(&p) {
                 Ok(_) => {}
                 // (A file named as a folder on its way, `a.png/b.png`, isn't beside it either.)
                 Err(e) if matches!(e.kind(), std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory) => return Err(None),
