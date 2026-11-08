@@ -155,9 +155,16 @@ pub fn map_png_fitted(s: &mut Session, dpi: f64) -> Result<Vec<u8>, String> {
     let view = export_view(s.map().camera, s.view_size, None, None, Some(dpi));
     let fitted = fitted_dpi(&view, dpi, false);
     let png = map_png(s, None, None, Some(fitted.unwrap_or(dpi)))?;
-    // A view past 8000 points is cut to its middle, as Export Map's is: said too.
-    for (_, note) in size_notes("The map image", s.view_size, None, None) {
-        s.notify(note, false);
+    // A view past 8000 points is cut to its middle, as Export Map's is: said too, with where a
+    // size can be given (this image takes none).
+    let (vw, vh) = s.view_size;
+    if vw > MOST_POINTS || vh > MOST_POINTS {
+        s.notify(
+            format!(
+                "The map image: the view is {vw:.0} × {vh:.0} points, more than the {MOST_POINTS:.0} a side an image holds, so it is cut to its middle: Export Map (share.exportMap) with a width or height of at most {MOST_POINTS:.0} draws it whole"
+            ),
+            false,
+        );
     }
     if let Some(lower) = fitted {
         s.notify(
@@ -273,7 +280,9 @@ fn fitted_dpi(view: &View, dpi: f64, tif: bool) -> Option<f64> {
     if !side.is_finite() || side <= 0.0 || px <= most {
         return None;
     }
-    Some((most * 96.0 / side).floor().clamp(DPI_RANGE.0, dpi))
+    // Never above the DPI asked, nor below the least: `max` keeps the bounds in order (clamp
+    // panics otherwise) for a caller asking below it.
+    Some((most * 96.0 / side).floor().clamp(DPI_RANGE.0, dpi.max(DPI_RANGE.0)))
 }
 
 /// Whether a view at `bearing` is turned (not north up).

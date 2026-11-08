@@ -33151,7 +33151,7 @@ fn export_map_to_geotiff_places_the_view_on_the_ground() {
     let out = s.run("share.exportMap", &json!({"path": cog.display().to_string(), "width": 400, "height": 300, "cog": true})).unwrap();
     assert!(out["bytes"].as_u64().unwrap() > 0);
     // Written by the tiled writer: its tiling is in the answer, as Export Raster gives it.
-    assert!(out["cog"]["overviews"].is_u64(), "{out}");
+    assert!(out["cog"]["overviews"].is_u64() && out["cog"]["bigTiff"] == false, "{out}");
     assert_eq!(read(&cog).width, 400);
     let png = dir.join("view.png");
     let e = s.run("share.exportMap", &json!({"path": png.display().to_string(), "cog": true})).unwrap_err();
@@ -33237,8 +33237,16 @@ fn export_map_to_geotiff_places_the_view_on_the_ground() {
     // A view past 8000 points is cut to its middle, and said.
     s.view_size = (9000.0, 300.0);
     let n = s.notices.len();
-    crate::cmd::share::map_png_fitted(&mut s, 96.0).unwrap();
-    assert!(s.notices[n..].iter().any(|x| x.text.contains("cut to its middle")), "{:?}", &s.notices[n..]);
+    let png = crate::cmd::share::map_png_fitted(&mut s, 96.0).unwrap();
+    assert_eq!(rustgis_render::decode_png(&png).map(|p| (p.width(), p.height())), Some((8000, 300)));
+    assert!(
+        s.notices[n..].iter().any(|x| x.text.contains("cut to its middle") && x.text.contains("share.exportMap")),
+        "{:?}",
+        &s.notices[n..]
+    );
+    // A DPI below the least is drawn at 48 (export_view clamps it before the fit looks at it).
+    s.view_size = (6000.0, 300.0);
+    crate::cmd::share::map_png_fitted(&mut s, 30.0).unwrap();
     s.view_size = (400.0, 300.0);
     let e = s.run("share.exportMap", &json!({"path": path.display().to_string(), "fit": "yes"})).unwrap_err();
     assert!(e.contains("fit must be true or false"), "{e}");
