@@ -74,6 +74,34 @@ pub fn is_cityjson(file_name: &str, bytes: &[u8]) -> bool {
         && (crate::cityjson::is_cityjson_name(file_name) || std::str::from_utf8(bytes).is_ok_and(crate::cityjson::looks_like_cityjson))
 }
 
+/// Whether a `.gml` or `.xml` file is a CityGML city model, by its root.
+pub fn is_citygml(file_name: &str, bytes: &[u8]) -> bool {
+    let ext = Path::new(file_name).extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
+    matches!(ext.as_str(), "gml" | "xml") && crate::citygml::looks_like_citygml(bytes)
+}
+
+/// Whether a file is a city model, CityJSON or CityGML: its layers all come from one reading, which
+/// takes the coordinate system a caller gives ([`read_city_model`]).
+pub fn is_city_model(file_name: &str, bytes: &[u8]) -> bool {
+    is_cityjson(file_name, bytes) || is_citygml(file_name, bytes)
+}
+
+/// Reads a city model's layers (see [`is_city_model`]); `crs`, when given, goes over the system it
+/// names.
+pub fn read_city_model(file_name: &str, bytes: &[u8], crs: Option<Crs>) -> Result<Vec<(Dataset, ReadReport)>> {
+    if is_citygml(file_name, bytes) { crate::citygml::read(file_name, bytes, crs) } else { crate::cityjson::read(file_name, bytes, crs) }
+}
+
+/// As [`read_city_model`], for a member of an archive: a model that names a system RustGIS knows
+/// keeps it over `crs`.
+fn read_city_member(file_name: &str, bytes: &[u8], crs: Option<Crs>) -> Result<Vec<(Dataset, ReadReport)>> {
+    if is_citygml(file_name, bytes) {
+        crate::citygml::read_member(file_name, bytes, crs)
+    } else {
+        crate::cityjson::read_member(file_name, bytes, crs)
+    }
+}
+
 /// Reads every layer of a file held in memory: the Shapefiles and other files of a zip, a KML or
 /// KMZ's points, lines and polygons (with their styles), or a GPX's waypoints, routes, tracks and
 /// track points. Other files give their one layer.
@@ -96,7 +124,9 @@ pub fn read_layers(file_name: &str, bytes: &[u8]) -> Result<Vec<LayerRead>> {
         // Plain XML: whichever of the XML formats its contents say.
         "xml" => {
             let text = String::from_utf8_lossy(bytes.get(..bytes.len().min(8192)).unwrap_or(bytes));
-            if crate::landxml::looks_like_landxml(&text) {
+            if crate::citygml::looks_like_citygml(bytes) {
+                plain(crate::citygml::read(file_name, bytes, None)?)
+            } else if crate::landxml::looks_like_landxml(&text) {
                 plain(crate::landxml::read(file_name, bytes, None)?)
             } else if crate::georss::looks_like_georss(&text) {
                 plain(crate::georss::read(file_name, bytes)?)
@@ -109,10 +139,12 @@ pub fn read_layers(file_name: &str, bytes: &[u8]) -> Result<Vec<LayerRead>> {
                     .collect()
             } else {
                 return Err(DataError::Format(format!(
-                    "{file_name}: an XML file RustGIS doesn't read (it reads GeoRSS, LandXML, KML and GPX)"
+                    "{file_name}: an XML file RustGIS doesn't read (it reads GeoRSS, LandXML, CityGML, KML and GPX)"
                 )));
             }
         }
+        // A CityGML city model, or the features of a collection.
+        "gml" if crate::citygml::looks_like_citygml(bytes) => plain(crate::citygml::read(file_name, bytes, None)?),
         "gml" => plain(crate::gml::read(file_name, bytes)?),
         "dxf" => plain(crate::dxf::read(file_name, bytes, &crate::dxf::Options::default())?),
         // OpenStreetMap PBF, not a vector tile (`.pbf` too).
@@ -2074,7 +2106,7 @@ pub fn read_zip_in(file_name: &str, bytes: &[u8], crs: Option<Crs>) -> Result<Ve
         }
         let leaf = n.rsplit('/').next().unwrap_or(&n);
         // A city model has many layers.
-        let read = if is_cityjson(leaf, &b) { crate::cityjson::read_member(leaf, &b, crs) } else { read_bytes(leaf, &b).map(|r| vec![r]) };
+        let read = if is_city_model(leaf, &b) { read_city_member(leaf, &b, crs) } else { read_bytes(leaf, &b).map(|r| vec![r]) };
         match read {
             Ok(layers) => {
                 for (mut ds, report) in layers {

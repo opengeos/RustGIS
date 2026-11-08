@@ -1594,10 +1594,11 @@ pub(crate) fn add_layers(s: &mut Session, p: &Value, file_name: &str, bytes: &[u
                 .map(|(dataset, report)| rustgis_data::io::LayerRead { dataset, report, styles: Vec::new() })
                 .collect()
         }
-        // A CityJSON model that names no coordinate system, or names one it doesn't have.
-        _ if crs.is_some() && rustgis_data::io::is_cityjson(file_name, bytes) => {
+        // A city model (CityJSON or CityGML) that names no coordinate system, or names one it
+        // doesn't have.
+        _ if crs.is_some() && rustgis_data::io::is_city_model(file_name, bytes) => {
             let crs = crs.map(rustgis_data::raster::Crs::parse).transpose()?;
-            rustgis_data::cityjson::read(file_name, bytes, crs)
+            rustgis_data::io::read_city_model(file_name, bytes, crs)
                 .map_err(|e| e.to_string())?
                 .into_iter()
                 .map(|(mut dataset, report)| {
@@ -1639,10 +1640,10 @@ pub(crate) fn add_layers(s: &mut Session, p: &Value, file_name: &str, bytes: &[u
         let names: Vec<String> = reads.iter().map(|r| r.dataset.name.clone()).collect();
         // By its full name or its last word ("tracks" for "walk tracks").
         let pick = |n: &str| n.eq_ignore_ascii_case(want) || n.rsplit(' ').next().is_some_and(|w| w.eq_ignore_ascii_case(want));
-        // A CityJSON model's first layer holds what the file as a whole says, after its own one
+        // A city model's first layer holds what the file as a whole says, after its own one
         // notice: that its heights were dropped (it has no other). In a zip, a model is the one
         // member that gives several layers, and it says so for its own layers only.
-        let whole = rustgis_data::io::is_cityjson(file_name, bytes);
+        let whole = rustgis_data::io::is_city_model(file_name, bytes);
         let same = |a: &rustgis_data::io::LayerRead, b: &rustgis_data::io::LayerRead| a.dataset.source == b.dataset.source;
         let file_wide: Vec<(Option<String>, rustgis_data::ReadReport)> = reads
             .iter()
@@ -1936,11 +1937,14 @@ fn file_layers(_s: &mut Session, p: &Value) -> CmdResult {
         }
         let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
         let zip = path.to_ascii_lowercase().ends_with(".zip");
-        let layers: Vec<String> = match crs.filter(|_| zip || rustgis_data::io::is_cityjson(path, &bytes)) {
+        let layers: Vec<String> = match crs.filter(|_| zip || rustgis_data::io::is_city_model(path, &bytes)) {
             Some(crs) => {
                 let crs = Some(rustgis_data::raster::Crs::parse(crs)?);
-                let read =
-                    if zip { rustgis_data::io::read_zip_in(path, &bytes, crs) } else { rustgis_data::cityjson::read(path, &bytes, crs) };
+                let read = if zip {
+                    rustgis_data::io::read_zip_in(path, &bytes, crs)
+                } else {
+                    rustgis_data::io::read_city_model(path, &bytes, crs)
+                };
                 read.map_err(err)?.into_iter().map(|(ds, _)| ds.name).collect()
             }
             None if rustgis_data::io::is_multi_layer_name(path) || rustgis_data::io::is_cityjson(path, &bytes) => {
@@ -4525,8 +4529,9 @@ pub(crate) fn add_data_text(s: &mut Session, p: &Value) -> CmdResult {
 pub(crate) fn add_data_text_after(s: &mut Session, p: &Value, zoom: Option<bool>) -> CmdResult {
     let name = s_req(p, "fileName")?;
     let text = s_req(p, "text")?;
-    // A CityJSON model: all its layers, in the coordinate system given or with a layer picked.
+    // A city model: all its layers, in the coordinate system given or with a layer picked.
     if rustgis_data::cityjson::is_cityjson_name(name)
+        || rustgis_data::io::is_citygml(name, text.as_bytes())
         || (["crs", "layer"].iter().any(|k| ps(p, k).is_some_and(|c| !c.trim().is_empty()))
             && rustgis_data::io::is_cityjson(name, text.as_bytes()))
     {
