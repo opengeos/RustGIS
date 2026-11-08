@@ -33482,6 +33482,9 @@ fn export_raster_puts_a_tile_layer_s_tiles_together() {
     s.run("map.selectTiles", &json!({"index": 0})).unwrap();
     let out = s.run("share.exportRaster", &json!({"path": at(&path)})).unwrap();
     assert!(out["zoom"].as_u64().is_some_and(|z| z <= 1), "{out}");
+    // A raster layer named beside the tile layer is refused, not dropped.
+    let e = s.run("share.exportRaster", &json!({"tiles": 0, "layer": "Cities", "path": at(&path)})).unwrap_err();
+    assert!(e.contains("name one layer"), "{e}");
     // Named wrongly, or with a band, it is refused.
     assert!(s.run("share.exportRaster", &json!({"tiles": "Nowhere", "path": at(&path)})).unwrap_err().contains("no tile layer 'Nowhere'"));
     assert!(s.run("share.exportRaster", &json!({"tiles": 0, "path": at(&path), "band": 1})).is_err());
@@ -33556,7 +33559,9 @@ fn export_raster_puts_a_tile_layer_s_tiles_together() {
     let n = s.notices.len();
     let out = s.run("share.exportRaster", &json!({"tiles": b, "path": at(&path), "bbox": [-170, -60, 50, 60], "zoom": 4})).unwrap();
     assert!(out["width"].as_u64().is_some_and(|w| w > 2048), "{out}");
+    // 11 columns (pixels 113 to 2617 of 4096) by 8 rows (1189 to 2907) of 256-pixel tiles.
     let fetched = out["tiles"].as_u64().unwrap();
+    assert_eq!(fetched, 88);
     assert!(
         warned(&s, n, &format!("in 2 of its 2 block(s), Bad couldn't be drawn whole ({fetched} tile(s)"))
             || warned(&s, n, &format!("in 2 of its 2 block(s), bad couldn't be drawn whole ({fetched} tile(s)")),

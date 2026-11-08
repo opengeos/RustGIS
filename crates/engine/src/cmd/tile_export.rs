@@ -83,6 +83,10 @@ pub(crate) fn export_work(s: &Session, p: &Value, i: usize) -> Result<Work, Stri
     }
     let path = ps(p, "path").ok_or("path is required")?.to_string();
     let t = s.map().tiles.get(i).ok_or("no tile layer at that index")?.clone();
+    // One layer is written: a raster named beside it would be dropped.
+    if !matches!(p.get("layer"), None | Some(Value::Null)) {
+        return Err(format!("{}: name one layer: \"tiles\" for a tile layer, or \"layer\" for a raster", t.name));
+    }
     if p.get("band").is_some_and(|b| !b.is_null()) {
         return Err(format!("{}: a tile layer is written in colour; band is for a raster layer", t.name));
     }
@@ -238,10 +242,9 @@ fn failed_tiles(templates: &[String], frame: &Frame, w: u32, h: u32, z: u8) -> V
     urls.sort();
     urls.dedup();
     urls.into_iter()
-        .filter_map(|url| match cache::get_tile(&url, cache::Want::Image) {
-            cache::State::Failed(e) => Some((url, e)),
-            _ => None,
-        })
+        // Only what the drawing asked for: a tile it didn't (a style layer out of its zooms) isn't
+        // fetched now.
+        .filter_map(|url| cache::peek_failure(&url).map(|e| (url, e)))
         .collect()
 }
 
