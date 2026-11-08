@@ -1848,11 +1848,12 @@ fn rivers_are_labelled_along_their_lines_in_italics() {
 }
 
 /// A true/false parameter reads true, false, yes, no, on, off, 1 and 0 in any case; other text is
-/// read as false and named in a notice, once per command (#1600).
+/// read as false and another number ignored, each named in one notice per command (#1600).
 #[test]
 fn unread_boolean_parameter_text_is_said() {
     let mut s = world();
-    let unread = |s: &Session| s.notices.iter().filter(|n| n.text.starts_with("Read as false:")).count();
+    const SAID: &str = "Not read as true or false:";
+    let unread = |s: &Session| s.notices.iter().filter(|n| n.text.starts_with(SAID)).count();
     let style = |s: &Session| {
         let c = &s.map().layer_by_name("Rivers").unwrap().labels.default;
         (c.bold, c.italic)
@@ -1867,11 +1868,17 @@ fn unread_boolean_parameter_text_is_said() {
     s.run("labels.style", &json!({"layer": "Rivers", "italic": "auto", "bold": "ture"})).unwrap();
     assert_eq!(style(&s), (false, false));
     assert_eq!(unread(&s), 1, "{:?}", s.notices.last());
-    let said = s.notices.iter().find(|n| n.text.starts_with("Read as false:")).map(|n| n.text.clone()).unwrap();
-    assert!(said.contains("italic = \"auto\"") && said.contains("bold = \"ture\""), "{said}");
+    let said = s.notices.iter().find(|n| n.text.starts_with(SAID)).map(|n| n.text.clone()).unwrap();
+    assert!(said.contains("italic = \"auto\" (read as false)") && said.contains("bold = \"ture\" (read as false)"), "{said}");
+    // A number other than 1 or 0 leaves the setting as it was, and says so.
+    s.run("labels.style", &json!({"layer": "Rivers", "italic": true})).unwrap();
+    s.run("labels.style", &json!({"layer": "Rivers", "italic": 5})).unwrap();
+    assert_eq!(style(&s), (false, true));
+    assert_eq!(unread(&s), 2, "{:?}", s.notices.last());
+    assert!(s.notices.iter().any(|n| n.text.contains("italic = 5 (ignored)")), "{:?}", s.notices.last());
     // The next clean command says nothing more.
     s.run("labels.style", &json!({"layer": "Rivers", "italic": true})).unwrap();
-    assert_eq!(unread(&s), 1);
+    assert_eq!(unread(&s), 2);
 }
 
 #[test]
@@ -5805,8 +5812,8 @@ fn layout_legends_list_what_the_frame_draws() {
     // <all other values> can be left out on its own, in either mode.
     s.run("layout.update", &json!({"element": id, "hideOther": true})).unwrap();
     assert!(matches!(legend(&s).1, rustgis_map::layout::ElementKind::Legend { all_classes: true, hide_other: true, .. }));
-    // Read like every other on/off parameter (`b`): a value that is neither a bool nor text keeps
-    // the setting, and text other than true/yes/1/on turns it off.
+    // Read like every other on/off parameter (`b`): a value that is neither a bool, 1 or 0 nor
+    // text keeps the setting, and text other than true/yes/1/on turns it off.
     s.run("layout.update", &json!({"element": id, "hideOther": 5})).unwrap();
     assert!(matches!(legend(&s).1, rustgis_map::layout::ElementKind::Legend { hide_other: true, .. }), "a number keeps the setting");
     s.run("layout.update", &json!({"element": id, "hideOther": "off"})).unwrap();

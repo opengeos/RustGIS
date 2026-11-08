@@ -209,18 +209,18 @@ pub fn bool_value(v: &Value) -> Option<bool> {
     }
 }
 
-/// A true/false parameter, as [`bool_value`] reads it. Any other value given (text such as
-/// `"auto"`, another number) is read as false, and the command's notice names it (#1600); a
-/// missing or null parameter is `None`.
+/// A true/false parameter, as [`bool_value`] reads it. Other text (such as `"auto"`) is read as
+/// false, as before; another number, a list or an object is `None` (left as it was), as before;
+/// either way the command's notice names it (#1600). A missing or null parameter is `None`.
 pub(crate) fn b(p: &Value, k: &str) -> Option<bool> {
     let v = p.get(k).filter(|v| !v.is_null())?;
     let read = bool_value(v);
     if read.is_none() {
         let shown: String = match v {
-            Value::String(s) => format!("\"{}\"", s.chars().take(MAX_UNREAD_BOOL_TEXT).collect::<String>()),
-            Value::Array(_) => "a list".to_string(),
-            Value::Object(_) => "an object".to_string(),
-            other => other.to_string().chars().take(MAX_UNREAD_BOOL_TEXT).collect(),
+            Value::String(s) => format!("\"{}\" (read as false)", s.chars().take(MAX_UNREAD_BOOL_TEXT).collect::<String>()),
+            Value::Array(_) => "a list (ignored)".to_string(),
+            Value::Object(_) => "an object (ignored)".to_string(),
+            other => format!("{} (ignored)", other.to_string().chars().take(MAX_UNREAD_BOOL_TEXT).collect::<String>()),
         };
         let key: String = k.chars().take(MAX_UNREAD_BOOL_TEXT).collect();
         UNREAD_BOOLS.with(|u| {
@@ -234,7 +234,7 @@ pub(crate) fn b(p: &Value, k: &str) -> Option<bool> {
             }
         });
     }
-    Some(read.unwrap_or(false))
+    read.or_else(|| v.is_string().then_some(false))
 }
 
 /// Forgets unread true/false parameters left from outside a command.
@@ -252,7 +252,7 @@ pub(crate) fn take_unread_bools() -> Option<String> {
     if more > 0 {
         list.push(format!("{more} more"));
     }
-    Some(format!("Read as false: {} (a true/false parameter takes true, false, yes, no, on, off, 1 or 0)", list.join(", ")))
+    Some(format!("Not read as true or false: {} (a true/false parameter takes true, false, yes, no, on, off, 1 or 0)", list.join(", ")))
 }
 
 pub(crate) fn need_layer(s: &Session) -> Option<&'static str> {
