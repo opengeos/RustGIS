@@ -1175,6 +1175,10 @@ pub(crate) fn is_wildcard_inputs(v: Option<&Value>) -> bool {
 /// The most inputs one `gp.batch` runs over.
 pub(crate) const MAX_BATCH_ITEMS: usize = 10_000;
 
+/// The most directory entries a folder batch reads: room for each file's sidecars.
+#[cfg(not(target_arch = "wasm32"))]
+const MAX_FOLDER_ENTRIES: usize = MAX_BATCH_ITEMS * 10;
+
 /// Runs a geoprocessing tool in batch across multiple layers or files.
 fn batch(s: &mut Session, p: &Value) -> CmdResult {
     use rustgis_analysis::control::Control;
@@ -1279,9 +1283,13 @@ pub fn run_batch_with(s: &mut Session, p: &Value, control: &std::sync::Arc<rustg
         .copied()
         .filter(|alias| *alias != batch_param && base_params.get(*alias).is_some_and(|v| !v.is_null()))
         .collect();
-    if let Some(first) = shadowed.first() {
+    if !shadowed.is_empty() {
         s.notify(
-            format!("gp.batch: {} other name(s) for '{batch_param}' in 'params' replaced by the batch inputs ({first})", shadowed.len()),
+            format!(
+                "gp.batch: {} other name(s) for '{batch_param}' in 'params' replaced by the batch inputs ({})",
+                shadowed.len(),
+                shadowed.join(", ")
+            ),
             false,
         );
     }
@@ -1373,7 +1381,14 @@ pub fn run_batch_with(s: &mut Session, p: &Value, control: &std::sync::Arc<rustg
                 let mut dir_entries = Vec::new();
                 let mut shp_stems = std::collections::HashSet::new();
                 let mut gpkg_stems = std::collections::HashSet::new();
-                for entry in entries {
+                for (scanned, entry) in entries.enumerate() {
+                    // A folder far past the batch limit is refused while it is read, not after
+                    // every name in it is held and sorted (sidecar files allowed for).
+                    if scanned >= MAX_FOLDER_ENTRIES {
+                        return Err(format!(
+                            "folder '{folder}' has more than {MAX_FOLDER_ENTRIES} entries, more than a batch runs; split it into smaller folders"
+                        ));
+                    }
                     match entry {
                         Ok(entry) => match entry.file_type() {
                             Ok(ft) => {
@@ -1452,6 +1467,12 @@ pub fn run_batch_with(s: &mut Session, p: &Value, control: &std::sync::Arc<rustg
         }
         if unreadable > 0 {
             s.notify(format!("folder '{folder}': {unreadable} unreadable directory entries skipped"), true);
+        }
+        if files.len() > MAX_BATCH_ITEMS {
+            return Err(format!(
+                "folder '{folder}' has {} supported files, more than a batch runs (at most {MAX_BATCH_ITEMS}); split it into smaller folders",
+                files.len()
+            ));
         }
         files.sort();
         targets.extend(files);
@@ -5331,6 +5352,32 @@ mod batch_tests {
         let err = s.run("gp.batch", &json!({"tool": "buffer", "inputs": inputs, "params": {"distance": 1}})).unwrap_err();
         assert!(err.contains(&format!("{} inputs", super::MAX_BATCH_ITEMS + 1)), "{err}");
         assert_eq!(s.map().layers.len(), before, "nothing ran");
+    }
+
+    #[test]
+    fn a_batch_at_the_input_limit_is_accepted() {
+        let mut s = test_session();
+        let control = rustgis_analysis::control::Control::new();
+        control.cancel();
+        let inputs = vec![json!("Cities"); super::MAX_BATCH_ITEMS];
+        let res = super::run_batch_with(&mut s, &json!({"tool": "buffer", "inputs": inputs, "params": {"distance": 1}}), &control).unwrap();
+        assert_eq!(res["total"], super::MAX_BATCH_ITEMS);
+        assert_eq!(res["cancelled"], true);
+    }
+
+    #[test]
+    fn a_folder_over_the_limit_is_refused_before_any_item_runs() {
+        let dir = std::env::temp_dir().join(format!("rustgis-batch-limit-{}-{}", std::process::id(), now_ms()));
+        std::fs::create_dir_all(&dir).unwrap();
+        for i in 0..=super::MAX_BATCH_ITEMS {
+            std::fs::write(dir.join(format!("{i}.csv")), "x,y\n").unwrap();
+        }
+        let mut s = test_session();
+        let before = s.map().layers.len();
+        let err = s.run("gp.batch", &json!({"tool": "buffer", "folder": dir, "params": {"distance": 1}})).unwrap_err();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(err.contains(&format!("{} supported files", super::MAX_BATCH_ITEMS + 1)), "{err}");
+        assert_eq!(s.map().layers.len(), before);
     }
 
     #[test]
