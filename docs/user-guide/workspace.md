@@ -98,8 +98,8 @@ A right-click on an entry offers **Copy Parameters** and **Copy Command**, the e
 the Script pane (`layer.buffer {"distance": 10}`; undo and redo as themselves). A script run offers
 **Copy Script** and **Open in Script Pane** instead, which puts the script in the Script pane in
 place of its own (Ctrl+Z, ⌘+Z on a Mac, brings that back; not while the pane runs one). Where the
-log cut an entry's parameters short or took secrets out of them, copying its command says so, as
-it may not run as it ran, and its script can be neither copied nor opened: it would run only in
+log cut an entry's parameters short or took secrets out of them, copying its command or its
+parameters says so, as it may not run as it ran, and its script can be neither copied nor opened: it would run only in
 part. **Save Log As…** writes the whole log as CSV or JSON Lines, as
 the name's extension says (CSV without one; in the browser it is downloaded as CSV, and the
 download isn't itself an entry in the log, as a saved file is). **Clear Log** empties it and

@@ -201,7 +201,7 @@ fn script_of(e: &LogEntry) -> Option<&str> {
 enum Picked {
     /// Open in Script Pane, with this script.
     Open(String),
-    /// Copy Command, of parameters the log cut short or took secrets out of: said.
+    /// Copy Command or Copy Parameters, of parameters the log cut short or took secrets out of: said.
     CopiedPartial,
 }
 
@@ -246,6 +246,7 @@ fn row(ui: &mut Ui, item: &Row, t: &Tokens, running: bool) -> Option<Picked> {
     r.response.context_menu(|ui| {
         if ui.add_enabled(!params.is_empty(), egui::Button::new(tl!("Copy Parameters"))).clicked() {
             ui.ctx().copy_text(params.to_string());
+            picked = e.partial.then_some(Picked::CopiedPartial);
             ui.close();
         }
         if let Some(script) = script_of(e) {
@@ -680,7 +681,13 @@ mod tests {
         h.run();
         assert_eq!(pick(&mut h, "edit.undo", "Copy Command"), ["edit.undo"]);
         assert_eq!(pick(&mut h, "map.new", "Copy Command"), [r#"map.new {"name":"S…"}"#]);
-        assert!(h.state().session.notices.iter().any(|n| n.text.contains("may not run as it ran")), "{:?}", h.state().session.notices);
+        let said = |h: &egui_kittest::Harness<'_, RustGisApp>| {
+            h.state().session.notices.iter().filter(|n| n.text.contains("may not run as it ran")).count()
+        };
+        assert_eq!(said(&h), 1, "{:?}", h.state().session.notices);
+        // Its parameters alone, copied, say it too.
+        assert_eq!(pick(&mut h, "map.new", "Copy Parameters"), [r#"{"name":"S…"}"#]);
+        assert_eq!(said(&h), 2, "{:?}", h.state().session.notices);
         h.get_by_label("notebook.run").click_secondary();
         h.run();
         assert!(h.get_by_label("Copy Command").accesskit_node().is_disabled());

@@ -28944,8 +28944,10 @@ fn session_log_entries_name_their_project_and_say_when_their_params_are_partial(
         r#"map.new {"name": "M", "key": "AKIAIOSFODNN7S3CRET", "key": ""}"#,
         r#"map.new {"name": "M", "style": {"token": "S3CRET", "token": ""}}"#,
     ] {
+        let before = s.log.len();
         let _ = s.run("script.run", &json!({"script": script}));
         let e = last(&s);
+        assert_eq!((s.log.len(), e.command.as_str()), (before + 1, "script.run"), "{script}: its own entry");
         assert!(!e.params.to_string().contains("S3CRET") && e.partial, "{script}: {e:?}");
     }
     // A name past the bound is cut, and says so.
