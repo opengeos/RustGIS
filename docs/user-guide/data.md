@@ -863,8 +863,9 @@ Relative links, including parent paths, resolve against the document's address w
 template placeholders or query values, including proxy parameters containing `https://` URLs.
 KVP requests replace capabilities operation parameters, keeping unrelated parameters such as
 MapServer's `map=`.
-If a service supplies a same-origin link too long to carry its login, the request is refused
-instead of being fetched anonymously. Addresses that cannot be rebound to a login are left
+If a service supplies a same-origin link too long to carry its login, or one whose path or query
+holds a space, backslash or control character, the request is refused instead of being fetched
+anonymously. Addresses that cannot be rebound to a login are left
 unchanged and reported.
 A plain `http://` address sends the login unencrypted, so the form asks for confirmation
 and the command needs `"allowInsecure": true`. Error messages, notices, the preferences,

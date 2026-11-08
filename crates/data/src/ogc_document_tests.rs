@@ -159,6 +159,39 @@ fn oversized_same_origin_document_targets_fail_closed() {
     }
 }
 
+#[test]
+fn same_origin_document_links_with_unsafe_characters_fail_closed() {
+    let base = crate::login_address::bind(BASE_BINDING, ORIGIN, BASE).unwrap();
+    let prefix = format!("rustgis-login:{BASE_BINDING}:{}:{ORIGIN}:", ORIGIN.len());
+    for (href, target) in [
+        ("https://maps.example.org/a b/advertised", "https://maps.example.org/a b/advertised"),
+        ("/a b/advertised", "https://maps.example.org/a b/advertised"),
+        ("a b/advertised", "https://maps.example.org/folder/a b/advertised"),
+        ("a\\b/advertised", "https://maps.example.org/folder/a\\b/advertised"),
+        ("?map=a b", "https://maps.example.org/folder/caps.xml?map=a b"),
+    ] {
+        for (boundary, document) in documents::documents(href) {
+            let service = parse(&base, document.as_bytes()).unwrap();
+            assert_eq!(service.layers.len(), 1, "{boundary}");
+            let layer = &service.layers[0];
+            let mut requests = match &layer.offer {
+                Offer::Tiles { template } => vec![template.clone()],
+                Offer::Features { url } => vec![url.clone()],
+                Offer::Coverage(c) => vec![describe_coverage_url(c)],
+                other => panic!("unexpected offer: {other:?}"),
+            };
+            requests.extend(layer.legends.iter().map(|legend| legend.url.clone()));
+            for request in requests {
+                let context = format!("{boundary} {href}");
+                let kept = request.strip_prefix(&prefix);
+                assert!(kept.is_some_and(|url| url.starts_with(target)), "{context}: must keep the login and target: {request}");
+                assert!(crate::login_address::parse(&request).is_err(), "{context}");
+                assert!(crate::login_address::check(&request).is_err(), "{context}");
+            }
+        }
+    }
+}
+
 fn assert_operation(request: &str, service: &str, operation: &str, version: &str) {
     let inner = crate::login_address::inner(request);
     let url = url::Url::parse(inner).unwrap();
