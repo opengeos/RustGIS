@@ -69,16 +69,52 @@ pub struct State {
     cache: Option<(Key, Vec<Row>, usize, usize)>,
 }
 
-/// The switch at the top of the History pane, between its two records (named as Mavrick-F
-/// proposed on opengeos/RustGIS#1216): the tool runs and the session log; whether the log is the
-/// one shown.
-pub fn tabs(app: &mut RustGisApp, ui: &mut Ui) -> bool {
+/// Which of the History pane's three records its top tabs show.
+#[derive(Clone, Copy, PartialEq)]
+enum View {
+    ToolRuns,
+    SessionLog,
+    ThisProject,
+}
+
+/// The tabs at the top of the History pane, between its records (named as Mavrick-F proposed on
+/// opengeos/RustGIS#1216): the tool runs, the whole session log, and the session log's entries
+/// for the project open now; whether a log view (not the tool runs) is shown.
+pub fn tabs(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) -> bool {
     ui.horizontal(|ui| {
         let s = &mut app.ui.session_log;
-        ui.selectable_value(&mut s.open, false, tl!("Tool runs"))
-            .on_hover_text(tl!("The tools run on this project: saved with it, and each can run again"));
-        ui.selectable_value(&mut s.open, true, tl!("Session log"))
-            .on_hover_text(tl!("Everything done in this session, from the app, scripts, the AI Assistant or plugins"));
+        let mut view = if s.open { if s.this_project { View::ThisProject } else { View::SessionLog } } else { View::ToolRuns };
+        crate::widgets::tabs(
+            ui,
+            t,
+            egui::Id::unique("session_log_tabs"),
+            &mut view,
+            &[
+                crate::widgets::Tab {
+                    label: "Tool runs",
+                    icon: "toolbox",
+                    hover: Some("The tools run on this project: saved with it, and each can run again"),
+                    value: View::ToolRuns,
+                },
+                crate::widgets::Tab {
+                    label: "This project",
+                    icon: "filter",
+                    hover: Some("Only the commands run in the project open now"),
+                    value: View::ThisProject,
+                },
+                crate::widgets::Tab {
+                    label: "Session log",
+                    icon: "history",
+                    hover: Some("Everything done in this session, from the app, scripts, the AI Assistant or plugins"),
+                    value: View::SessionLog,
+                },
+            ],
+        );
+        (s.open, s.this_project) = match view {
+            View::ToolRuns => (false, false),
+            View::SessionLog => (true, false),
+            View::ThisProject => (true, true),
+        };
     });
     ui.add_space(4.0);
     app.ui.session_log.open
@@ -97,7 +133,6 @@ pub fn pane(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         let s = &mut app.ui.session_log;
         ui.add(egui::TextEdit::singleline(&mut s.query).hint_text(tl!("Filter by command")).desired_width(170.0))
             .on_hover_text(tl!("Words in the command's id, such as layer. or export"));
-        ui.toggle_value(&mut s.this_project, tl!("This project")).on_hover_text(tl!("Only the commands run in the project open now"));
         ui.checkbox(&mut s.failed, tl!("Failed only"));
     });
     // Compared in place, so a repaint that changes nothing picks, formats and clones nothing;
