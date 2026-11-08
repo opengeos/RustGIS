@@ -71,8 +71,27 @@ pub(crate) fn left_out(r: &Resolved, frame: &Frame, mesh: bool) -> Option<String
     let unread = sprite_notes(shown(StyleLayer::draws_icons), shown(StyleLayer::draws_patterns), hi_dpi, hi_dpi && !mesh, |hi, what| {
         sprite::unread_note(&r.sprites, r.style.sprites_listed, &sprite::load(&r.sprites, hi), what)
     });
-    let all: Vec<&str> = r.left_out.iter().map(String::as_str).chain(unread.iter().map(String::as_str)).collect();
+    let relief = relief_note(&r.style.layers, zoom);
+    let all: Vec<&str> = r.left_out.iter().map(String::as_str).chain(unread.iter().map(String::as_str)).chain(relief.as_deref()).collect();
     (!all.is_empty()).then(|| all.join("; "))
+}
+
+/// What to say of the `color-relief` layers shown at `zoom` that can't be coloured there (their
+/// `color-relief-color` isn't a ramp on the height there), which [`draw_layers`] skips: one note
+/// naming them all.
+fn relief_note(layers: &[StyleLayer], zoom: f32) -> Option<String> {
+    let ids: Vec<&str> = layers
+        .iter()
+        .filter(|l| l.kind == LayerKind::ColorRelief && l.visible_at(zoom) && l.color_relief_ramp(zoom).is_none())
+        .map(|l| l.id.as_str())
+        .collect();
+    (!ids.is_empty()).then(|| {
+        format!(
+            "{} color-relief layer(s) skipped at this zoom, because their color-relief-color isn't a ramp on [\"elevation\"] RustGIS can draw here: {}",
+            ids.len(),
+            ids.join(", ")
+        )
+    })
 }
 
 /// What to say of sprites that couldn't be read (`note`, at a density), for what is shown: a style's
@@ -1152,6 +1171,37 @@ fn area(r: &[(f32, f32)]) -> f32 {
 
 #[cfg(test)]
 pub(crate) mod tests {
+    #[test]
+    fn a_relief_layer_rustgis_cant_colour_is_said_where_it_is_skipped() {
+        use crate::style::StyleLayer;
+        let layer = |id: &str, extra: serde_json::Value| {
+            let mut j = serde_json::json!({"id": id, "type": "color-relief", "source": "dem"});
+            if let (Some(o), Some(e)) = (j.as_object_mut(), extra.as_object()) {
+                o.extend(e.clone());
+            }
+            StyleLayer::parse(&j).unwrap()
+        };
+        let ramp =
+            serde_json::json!({"paint": {"color-relief-color": ["interpolate", ["linear"], ["elevation"], 0, "#00f", 1000, "#fff"]}});
+        let one = serde_json::json!({"paint": {"color-relief-color": "#336699"}});
+        let on_zoom = serde_json::json!({"paint": {"color-relief-color": ["interpolate", ["linear"], ["zoom"], 0, "#00f", 10, "#fff"]}});
+        // A ramp on the height, or one colour, says nothing.
+        assert_eq!(relief_note(&[layer("a", ramp.clone()), layer("b", one)], 5.0), None);
+        // Not on the height: one note naming each skipped layer.
+        let said = relief_note(&[layer("r0", on_zoom.clone()), layer("r1", ramp), layer("r2", on_zoom)], 5.0).unwrap();
+        assert!(said.starts_with("2 color-relief layer(s) skipped at this zoom"), "{said}");
+        assert!(said.ends_with(": r0, r2"), "{said}");
+        // A colour that fails from zoom 8.5 is said there, and not below it, nor where the layer
+        // isn't shown (past its maxzoom, or hidden).
+        let late = serde_json::json!({"maxzoom": 9, "paint": {"color-relief-color":
+            ["interpolate", ["linear"], ["elevation"], 0, ["step", ["zoom"], "#00f", 8.5, "nope"], 1000, "#fff"]}});
+        assert_eq!(relief_note(&[layer("late", late.clone())], 8.4), None);
+        assert!(relief_note(&[layer("late", late.clone())], 8.6).is_some_and(|s| s.ends_with(": late")));
+        assert_eq!(relief_note(&[layer("late", late)], 9.0), None);
+        let hidden = serde_json::json!({"layout": {"visibility": "none"}, "paint": {"color-relief-color": "nope"}});
+        assert_eq!(relief_note(&[layer("h", hidden)], 5.0), None);
+    }
+
     use super::*;
 
     #[test]

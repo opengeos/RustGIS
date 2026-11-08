@@ -284,7 +284,6 @@ fn resolve_anew(spec: &Spec, key: String) -> Resolve {
     }
     let (sprites, sprites_left_out) = resolve_sprites(&style, &base);
     left_out.extend(sprites_left_out);
-    left_out.extend(relief_left_out(&style));
     let r = Arc::new(Resolved { style, attribution, sprites, left_out, made: Mutex::new(Instant::now()), waiting });
     if let Err(e) = crate::logins::check(&spec.url) {
         return Resolve::Failed(e.to_string());
@@ -328,19 +327,6 @@ fn resolve_sprites(style: &Style, base: &str) -> (Vec<(String, String)>, Vec<Str
         left_out.clear();
     }
     (sprites, left_out)
-}
-
-/// What was left out of the style's `color-relief` layers: those RustGIS can't colour at some zoom
-/// they show at, said once for all of them with their ids.
-fn relief_left_out(style: &Style) -> Option<String> {
-    let ids: Vec<&str> = style.layers.iter().filter(|l| l.color_relief_undrawable()).map(|l| l.id.as_str()).collect();
-    (!ids.is_empty()).then(|| {
-        format!(
-            "{} color-relief layer(s) left out, so their relief isn't drawn (their color-relief-color isn't a ramp on [\"elevation\"] RustGIS can draw at every zoom): {}",
-            ids.len(),
-            ids.join(", ")
-        )
-    })
 }
 
 /// What resolving a style's sources left out of it.
@@ -864,50 +850,6 @@ mod tests {
         let drawn = crate::draw::draw(&mut pm, &s, 1.0, &frame, false);
         assert!(drawn.pending && drawn.error.is_none());
         assert_eq!(pm.pixel(1, 1).map(|p| (p.red(), p.alpha())), Some((255, 255)), "the rest is drawn");
-    }
-
-    #[test]
-    fn a_relief_layer_rustgis_cant_colour_is_left_out_and_said() {
-        let style_with = |colors: &[serde_json::Value]| {
-            let layers: Vec<_> = colors
-                .iter()
-                .enumerate()
-                .map(|(i, c)| serde_json::json!({"id": format!("relief{i}"), "type": "color-relief", "source": "dem", "paint": {"color-relief-color": c}}))
-                .collect();
-            Style::parse(&serde_json::json!({"version": 8, "sources": {"dem": {"type": "raster-dem", "tiles": ["https://t.example.com/{z}/{x}/{y}.png"]}}, "layers": layers})).unwrap()
-        };
-        let ramp = serde_json::json!(["interpolate", ["linear"], ["elevation"], 0, "#00f", 1000, "#fff"]);
-        let on_zoom = serde_json::json!(["interpolate", ["linear"], ["zoom"], 0, "#00f", 10, "#fff"]);
-        // A ramp on the height, or one colour, leaves nothing out.
-        assert_eq!(relief_left_out(&style_with(&[ramp.clone(), serde_json::json!("#336699")])), None);
-        // Not on the height: said once, with each layer's id.
-        let said = relief_left_out(&style_with(&[on_zoom.clone(), ramp, on_zoom])).unwrap();
-        assert!(said.starts_with("2 color-relief layer(s) left out"), "{said}");
-        assert!(said.ends_with(": relief0, relief2"), "{said}");
-        // Per zoom: one that can't be coloured at some zoom it shows at is said too.
-        let style = Style::parse(&serde_json::json!({"version": 8, "sources": {}, "layers": [
-            {"id": "z", "type": "color-relief", "source": "dem", "paint": {"color-relief-color": ["interpolate", ["linear"], ["elevation"], 0, ["step", ["zoom"], "#00f", 8, "nope"], 10, "#fff"]}}]}))
-        .unwrap();
-        assert!(relief_left_out(&style).is_some_and(|s| s.ends_with(": z")));
-        // Between whole zooms too.
-        let style = Style::parse(&serde_json::json!({"version": 8, "sources": {}, "layers": [
-            {"id": "half", "type": "color-relief", "source": "dem", "minzoom": 7, "maxzoom": 9,
-                "paint": {"color-relief-color": ["interpolate", ["linear"], ["elevation"], 0, ["step", ["zoom"], "#00f", 8.5, "nope"], 1000, "#fff"]}},
-            {"id": "odd", "type": "color-relief", "source": "dem", "minzoom": 7, "maxzoom": 9,
-                "paint": {"color-relief-color": ["case", [">", ["zoom"], 8.51], "nope", ["interpolate", ["linear"], ["elevation"], 0, "#00f", 10, "#fff"]]}}]}))
-        .unwrap();
-        assert!(
-            relief_left_out(&style).is_some_and(|s| s.starts_with("2 ") && s.ends_with(": half, odd")),
-            "{:?}",
-            relief_left_out(&style)
-        );
-        // ...but not when it is hidden or only shown where it can be coloured.
-        let style = Style::parse(&serde_json::json!({"version": 8, "sources": {}, "layers": [
-            {"id": "z", "type": "color-relief", "source": "dem", "maxzoom": 8,
-                "paint": {"color-relief-color": ["interpolate", ["linear"], ["elevation"], 0, ["step", ["zoom"], "#00f", 8, "nope"], 10, "#fff"]}},
-            {"id": "h", "type": "color-relief", "source": "dem", "layout": {"visibility": "none"}, "paint": {"color-relief-color": "nope"}}]}))
-        .unwrap();
-        assert_eq!(relief_left_out(&style), None);
     }
 
     #[test]
