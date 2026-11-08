@@ -502,18 +502,15 @@ fn wgs84_parallel_m(lat_deg: f64, dlon_deg: f64) -> f64 {
     WGS84_A / (1.0 - WGS84_E2 * s * s).sqrt() * c.abs() * dlon_deg.to_radians().abs()
 }
 
-/// Longitudes closer than this (degrees, about 0.1 mm) are the same, for [`ring_lon_steps`].
-const SAME_DEG: f64 = 1e-9;
-
-/// The two ends of a 360° edge this close in latitude (degrees, about 0.1 m) are on one parallel,
-/// for [`ring_lon_steps`]: a band written with rounded latitudes keeps its full turns.
-const PARALLEL_DEG: f64 = 1e-6;
+/// Coordinates closer than this (degrees, about 0.1 m) are the same, for [`ring_lon_steps`]: a band
+/// written with rounded coordinates keeps its full turns.
+const NEAR_DEG: f64 = 1e-6;
 
 /// Each edge of a lon/lat ring, closed back to its first vertex, as its step in longitude
 /// (degrees) and whether that step is a full turn around the globe.
 ///
 /// A step of less than a full turn is taken the short way (179° to -179° is 2° east), as the
-/// antimeridian convention of GeoJSON (RFC 7946 §3.1.9) has it. An edge of exactly 360° joins two
+/// antimeridian convention of GeoJSON (RFC 7946 §3.1.9) has it. An edge of 360° joins two
 /// coordinates on the same meridian, ±180°, and means one of two things:
 ///
 /// - a **full turn**, the whole parallel, as a globe-wide band (`[-180, -10]` to `[180, -10]`) or
@@ -522,62 +519,73 @@ const PARALLEL_DEG: f64 = 1e-6;
 ///   antimeridian writes it when one ring has vertices on both 180° and -180°.
 ///
 /// The rule: a full turn runs along a parallel (both ends at one latitude: a path that winds the
-/// globe while changing latitude is a spiral, which no format writes as a polygon edge) and the ring
-/// comes to it and leaves it along meridians, with no step in longitude. A ring that steps east or
-/// west into the edge or out of it is travelling across the antimeridian there, so the edge is a
-/// seam: taken as a turn, it would double back over the parallel the ring was just following. So a
-/// band, a cap and the whole globe keep their full turns, and a 1° cell with vertices at 180° and
-/// -180° is the cell. And the full turns must not make the ring wind further round the globe than
-/// it does with them as seams (see below). A seam's step is 0. Steps of more than a full turn
-/// (longitudes beyond ±180°, which no antimeridian split writes) are always kept as written, as
-/// full turns, as before.
+/// globe while changing latitude is a spiral, which no format writes as a polygon edge), and the
+/// ring comes to it along a meridian and leaves it along a meridian back the way it came, north
+/// and then south or south and then north, with no step in longitude. That is how a band, a cap
+/// and the whole globe turn: down the -180° meridian, round the parallel, up the 180° meridian. A
+/// ring that steps east or west into the edge or out of it is travelling across the antimeridian
+/// there, and one that goes on north (or south) past it is following the seam, so the edge is a
+/// seam: taken as a turn, it would double back over the parallel or the meridian the ring was just
+/// following. An edge to or from a pole runs along a meridian whatever the pole's longitude.
+///
+/// The full turns must also not make the ring wind further round the globe than it does with them
+/// as seams: a polygon's ring winds 0° in longitude, or 360° round a pole it encloses. A band's two
+/// turns cancel, and a cap's turn along the pole closes the turn its coastline makes; a turn that
+/// would wind the ring once more is a seam. So a band, a cap and the whole globe keep their full
+/// turns, and a 1° cell with vertices at 180° and -180° is the cell. A seam's step is 0. Steps of
+/// more than a full turn (longitudes beyond ±180°, which no antimeridian split writes) are always
+/// kept as written, as full turns, as before.
 fn ring_lon_steps(ring: &[Coord]) -> Vec<(f64, bool)> {
     let n = ring.len();
-    let raw: Vec<f64> = (0..n).map(|i| ring.get((i + 1) % n).zip(ring.get(i)).map_or(0.0, |(b, a)| b.x - a.x)).collect();
-    // Whether an edge moves in longitude at all, other than by whole turns.
-    let moves = |i: usize| raw.get(i).is_some_and(|d| wrap_lon(*d).abs() > SAME_DEG);
+    let edge = |i: usize| ring.get(i).zip(ring.get((i + 1) % n));
+    let at_pole = |c: &Coord| c.y.abs() >= 90.0 - NEAR_DEG;
+    // An edge's step north (+) or south (-), and whether it moves in longitude, other than by whole
+    // turns. An edge to or from a pole is a meridian.
+    let dlat = |i: usize| edge(i).map_or(0.0, |(a, b)| b.y - a.y);
+    let moves = |i: usize| edge(i).is_some_and(|(a, b)| !at_pole(a) && !at_pole(b) && wrap_lon(b.x - a.x).abs() > NEAR_DEG);
     // An edge from a vertex to a copy of itself (a closing vertex repeated) is no neighbour: look
     // past it to the next edge that goes somewhere, `step` edges at a time (1 forward, n - 1 back).
-    let same = |a: &Coord, b: &Coord| (a.x - b.x).abs() <= SAME_DEG && (a.y - b.y).abs() <= SAME_DEG;
+    let same = |a: &Coord, b: &Coord| (a.x - b.x).abs() <= NEAR_DEG && (a.y - b.y).abs() <= NEAR_DEG;
     let neighbour = |i: usize, step: usize| {
         let mut j = (i + step) % n;
         for _ in 0..n {
-            if !ring.get(j).zip(ring.get((j + 1) % n)).is_some_and(|(a, b)| same(a, b)) {
+            if !edge(j).is_some_and(|(a, b)| same(a, b)) {
                 break;
             }
             j = (j + step) % n;
         }
         j
     };
-    // Each edge's step, and whether it is a 360° edge that may be a full turn (`Some(d)`).
+    // Each edge's step as a seam, and the step it would take as a full turn: `Some` for a 360° edge
+    // that may be one.
     let candidates: Vec<(f64, Option<f64>)> = (0..n)
         .map(|i| {
-            let d = raw.get(i).copied().unwrap_or(0.0);
-            if d.is_nan() || d.abs() < 360.0 - SAME_DEG {
+            let Some((p, r)) = edge(i) else { return (0.0, None) };
+            let d = r.x - p.x;
+            if d.is_nan() || d.abs() < 360.0 - NEAR_DEG {
                 return (if d.abs() > 180.0 { wrap_lon(d) } else { d }, None);
             }
-            if (d.abs() - 360.0).abs() > SAME_DEG {
-                return (d, Some(d));
+            if d.abs() > 360.0 + NEAR_DEG {
+                return (d, None);
             }
-            let (Some(p), Some(r)) = (ring.get(i), ring.get((i + 1) % n)) else { return (0.0, None) };
-            let along_parallel = (r.y - p.y).abs() <= PARALLEL_DEG;
-            let full = along_parallel && !moves(neighbour(i, n - 1)) && !moves(neighbour(i, 1));
+            let (before, after) = (neighbour(i, n - 1), neighbour(i, 1));
+            let full = (r.y - p.y).abs() <= NEAR_DEG
+                && !moves(before)
+                && !moves(after)
+                && dlat(before) * dlat(after) < 0.0
+                && dlat(before).abs() > NEAR_DEG
+                && dlat(after).abs() > NEAR_DEG;
             (0.0, full.then_some(d))
         })
         .collect();
-    // A polygon's ring winds 0° in longitude, or 360° round a pole it encloses. The full turns must
-    // bring it nearer that, not take it further: a band's two turns cancel, and a cap's turn along
-    // the pole closes the turn its coastline makes, but a lone turn between meridians in a split
-    // polygon (`(180, -1), (180, 0), (-180, 0), (-180, 1), …`) would wind the ring once more, so
-    // it is a seam there too.
     let seams: f64 = candidates.iter().map(|(d, _)| d).sum();
     let turns: f64 = candidates.iter().map(|(d, t)| t.unwrap_or(*d)).sum();
-    let keep = turns.abs() <= seams.abs() + SAME_DEG;
+    let keep = turns.abs() <= seams.abs() + NEAR_DEG;
     candidates
         .into_iter()
         .map(|(d, t)| match t {
             Some(t) if keep => (t, true),
-            _ => (d, false),
+            _ => (d, d.abs() > 360.0 + NEAR_DEG),
         })
         .collect()
 }
@@ -590,6 +598,10 @@ fn ring_lon_steps(ring: &[Coord]) -> Vec<(f64, bool)> {
 pub fn geodesic_ring_perimeter_m(ring: &[Coord]) -> f64 {
     if ring.len() < 2 {
         return 0.0;
+    }
+    // A two-vertex ring is a segment there and back, as on the ellipsoid.
+    if let [a, b] = ring {
+        return 2.0 * haversine_m(*a, *b);
     }
     ring.iter()
         .zip(ring.iter().cycle().skip(1))
@@ -630,7 +642,12 @@ fn authalic_ring_area_m2(ring: &[Coord]) -> f64 {
     let mut total = 0.0;
     for ((p, r), (dlon, _)) in ring.iter().zip(ring.iter().cycle().skip(1)).zip(ring_lon_steps(ring)) {
         let dlat = r.y - p.y;
-        let mean = if dlat.abs() < 1e-12 {
+        // An edge to or from a pole runs along a meridian, and its step in longitude is taken at the
+        // pole, where sin ξ is ±1.
+        let pole = [p.y, r.y].into_iter().find(|y| y.abs() >= 90.0);
+        let mean = if let Some(y) = pole {
+            y.signum()
+        } else if dlat.abs() < 1e-12 {
             sin_xi(p.y)
         } else {
             const N: usize = 32;
@@ -957,11 +974,27 @@ mod tests {
                 assert!((geodesic_ring_perimeter_m(&ring) / sphere - 1.0).abs() < 1e-9);
             }
         }
-        // A band whose latitudes were rounded to 7 decimals at one end of a full turn is the band.
-        let rounded = [c(-180.0, -10.0), c(180.0, -10.000_000_1), c(180.0, 10.0), c(-180.0, 10.0)];
-        let (perimeter, area) = wgs84_ring_perimeter_area_m2(&rounded);
-        assert!((area / BAND_10_M2 - 1.0).abs() < 1e-6, "{area}");
-        assert!((perimeter / BAND_10_PERIMETER_M - 1.0).abs() < 1e-6, "{perimeter}");
+        // A band whose coordinates were rounded to 7 decimals at one end of a full turn is the band.
+        for rounded in [
+            [c(-180.0, -10.0), c(180.0, -10.000_000_1), c(180.0, 10.0), c(-180.0, 10.0)],
+            [c(-180.0, -10.0), c(180.0, -10.0), c(180.0, 10.0), c(-180.000_000_1, 10.0)],
+        ] {
+            let (perimeter, area) = wgs84_ring_perimeter_area_m2(&rounded);
+            assert!((area / BAND_10_M2 - 1.0).abs() < 1e-6, "{area}");
+            assert!((perimeter / BAND_10_PERIMETER_M - 1.0).abs() < 1e-6, "{perimeter}");
+        }
+        // The sphere's band: 2πR²(sin 10° − sin −10°).
+        let sphere = 4.0 * std::f64::consts::PI * EARTH_RADIUS_M * EARTH_RADIUS_M * 10f64.to_radians().sin();
+        assert!((geodesic_ring_area_m2(&band) / sphere - 1.0).abs() < 1e-9);
+        // A cap closed at the pole by one vertex (whose longitude names no place): the full turn along
+        // 80° N is kept, and the edges to the pole are meridians.
+        let tip = [c(-180.0, 80.0), c(180.0, 80.0), c(0.0, 90.0)];
+        let area = wgs84_ring_perimeter_area_m2(&tip).1;
+        assert!((area / CAP_80N_M2 - 1.0).abs() < 1e-9, "{area}");
+        // A two-vertex ring is a segment there and back on the sphere, as on the ellipsoid.
+        let two = [c(-180.0, 10.0), c(180.0, 10.0)];
+        assert!(geodesic_ring_perimeter_m(&two) < 1e-3);
+        assert!(wgs84_ring_perimeter_area_m2(&two).0 < 1e-3);
         // GeographicLib's measure of a ring wholly on one side of the antimeridian.
         let reference = |ring: &[Coord]| {
             let mut polygon = PolygonArea::new(&WGS84, Winding::Clockwise);
@@ -998,6 +1031,14 @@ mod tests {
         assert!((area / want_a - 1.0).abs() < 1e-9, "{area} vs {want_a}");
         assert!((perimeter / want_p - 1.0).abs() < 1e-9, "{perimeter} vs {want_p}");
         assert!((geodesic_ring_perimeter_m(&spike) / want_p - 1.0).abs() < 0.01);
+        // Up the seam with a zero-length crossing at 0° and another back at 1°: both edges go on north
+        // along the meridian, so they are seams, not a band from 0° to 1° (their turns would cancel).
+        let zigzag =
+            [c(180.0, -1.0), c(180.0, 0.0), c(-180.0, 0.0), c(-180.0, 1.0), c(180.0, 1.0), c(180.0, 2.0), c(179.0, 2.0), c(179.0, -1.0)];
+        let (want_p, want_a) = reference(&[c(180.0, -1.0), c(180.0, 0.0), c(180.0, 1.0), c(180.0, 2.0), c(179.0, 2.0), c(179.0, -1.0)]);
+        let (perimeter, area) = wgs84_ring_perimeter_area_m2(&zigzag);
+        assert!((area / want_a - 1.0).abs() < 1e-9, "{area} vs {want_a}");
+        assert!((perimeter / want_p - 1.0).abs() < 1e-9, "{perimeter} vs {want_p}");
         // The cell closed with its first vertex repeated is still the cell.
         let mut closed = across.to_vec();
         closed.push(across[0]);
