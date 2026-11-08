@@ -33214,8 +33214,24 @@ fn export_map_to_geotiff_places_the_view_on_the_ground() {
     s.run("map.setBearing", &json!({"bearing": 45})).unwrap();
     assert_eq!(fitted(&mut s, "square-turned.tif").1.as_deref(), Some("185"));
     assert_eq!(fitted(&mut s, "square-turned.png").1, None);
+    // A box just past 8192 pixels (8192.2) is rounded out, as the GeoTIFF's canvas is: lowered to
+    // 95 DPI, and written.
+    s.view_size = (5792.76, 5792.76);
+    let n = s.notices.len();
+    let out = s.run("share.exportMap", &json!({"path": dir.join("edge.tif").display().to_string(), "dpi": 96, "fit": true})).unwrap();
+    assert!(s.notices[n..].iter().any(|x| x.text.contains("drawn at 95 DPI")), "{out}");
     s.run("map.setBearing", &json!({"bearing": 0})).unwrap();
+    // The app's download and clipboard copy (no size given) fit too: 5000 points at 192 DPI is
+    // drawn at 157, and said.
+    s.view_size = (5000.0, 3000.0);
+    let n = s.notices.len();
+    let png = crate::cmd::share::map_png_fitted(&mut s, 192.0).unwrap();
+    assert_eq!(rustgis_render::decode_png(&png).map(|p| p.width()), Some(8177));
+    assert!(s.notices[n..].iter().any(|x| x.text.contains("drawn at 157 DPI")));
+    let n = s.notices.len();
     s.view_size = (400.0, 300.0);
+    crate::cmd::share::map_png_fitted(&mut s, 192.0).unwrap();
+    assert!(!s.notices[n..].iter().any(|x| x.text.contains("DPI")));
     let e = s.run("share.exportMap", &json!({"path": path.display().to_string(), "fit": "yes"})).unwrap_err();
     assert!(e.contains("fit must be true or false"), "{e}");
     // A size below 16 points, and a dpi outside 48 to 600, are drawn at the limit, and say so.

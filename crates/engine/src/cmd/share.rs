@@ -148,6 +148,22 @@ fn report_table(s: &mut Session, path: &str, gpkg: &GpkgTable, table: Option<Gpk
     out["replaced"] = json!(table.replaced);
 }
 
+/// The active map's view as PNG bytes at `dpi`, or, for a view too large for it, at the most that
+/// fits 8192 pixels a side, said: for the app's Export Map download and Capture To Clipboard,
+/// which offer no size.
+pub fn map_png_fitted(s: &mut Session, dpi: f64) -> Result<Vec<u8>, String> {
+    let view = export_view(s.map().camera, s.view_size, None, None, Some(dpi));
+    let fitted = fitted_dpi(&view, dpi, false);
+    let png = map_png(s, None, None, Some(fitted.unwrap_or(dpi)))?;
+    if let Some(lower) = fitted {
+        s.notify(
+            format!("The map is drawn at {lower} DPI, the most an image of this view holds ({} pixels a side)", rustgis_render::MAX_SIDE),
+            false,
+        );
+    }
+    Ok(png)
+}
+
 /// Renders the active map at the current view (or a requested size) to PNG bytes.
 pub fn map_png(s: &mut Session, width: Option<f64>, height: Option<f64>, dpi: Option<f64>) -> Result<Vec<u8>, String> {
     let view_size = s.view_size;
@@ -247,7 +263,10 @@ fn fitted_dpi(view: &View, dpi: f64, tif: bool) -> Option<f64> {
         if tif && is_turned(view.camera.bearing) { view.camera.rotated_size(view.width, view.height) } else { (view.width, view.height) };
     let side = w.max(h);
     let most = f64::from(rustgis_render::MAX_SIDE);
-    if !side.is_finite() || side <= 0.0 || (side * view.pixels_per_point).round() <= most {
+    // As the export sizes its canvas: a turned GeoTIFF's box rounded out, else rounded.
+    let px = side * view.pixels_per_point;
+    let px = if tif && is_turned(view.camera.bearing) { px.ceil() } else { px.round() };
+    if !side.is_finite() || side <= 0.0 || px <= most {
         return None;
     }
     Some((most * 96.0 / side).floor().clamp(DPI_RANGE.0, dpi))
