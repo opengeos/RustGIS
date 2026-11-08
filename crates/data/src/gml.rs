@@ -501,8 +501,10 @@ pub fn read(file_name: &str, bytes: &[u8]) -> Result<Vec<(Dataset, ReadReport)>>
         }
         // Said with the layer it happened in, which may be the only one added.
         if kind.lost > 0 {
+            let what =
+                if kind.lost == 1 { "ring or surface patch of a geometry was" } else { "rings or surface patches of geometries were" };
             rep.messages.push(format!(
-                "{}: {} rings or surface patches of geometries were left out: too few points, unreadable coordinates, a patch with no exterior ring, or an exterior ring past the first",
+                "{}: {} {what} left out: too few points, unreadable coordinates, a patch with no exterior ring, or an exterior ring past the first",
                 ds.name, kind.lost
             ));
         }
@@ -634,7 +636,11 @@ mod tests {
 </wfs:FeatureCollection>"#;
         let layers = read("p.gml", gml.as_bytes()).unwrap();
         assert!(!layers[0].0.zm_dropped, "{:?}", layers[0].1.messages);
-        assert!(layers[0].1.messages.iter().any(|m| m.contains(": 1 rings or surface patches")), "{:?}", layers[0].1.messages);
+        assert!(
+            layers[0].1.messages.iter().any(|m| m.contains(": 1 ring or surface patch of a geometry was left out")),
+            "{:?}",
+            layers[0].1.messages
+        );
         assert!(matches!(&layers[0].0.features[0].geometry, Some(Geometry::Polygon(p)) if p.len() == 1 && p[0].len() == 1));
     }
 
@@ -643,11 +649,7 @@ mod tests {
     #[test]
     fn rings_and_parts_left_out_are_counted() {
         let layers = read("w.gml", WFS.as_bytes()).unwrap();
-        assert!(
-            layers.iter().all(|(_, r)| !r.messages.iter().any(|m| m.contains("rings or surface patches"))),
-            "{:?}",
-            layers[0].1.messages
-        );
+        assert!(layers.iter().all(|(_, r)| !r.messages.iter().any(|m| m.contains("or surface patch"))), "{:?}", layers[0].1.messages);
         // A second exterior ring is a ring left out; a multi-surface's polygon whose only ring is
         // two points is a part left out, said once, by the parts notice.
         let gml = r#"<wfs:FeatureCollection xmlns:wfs="http://www.opengis.net/wfs/2.0" xmlns:gml="http://www.opengis.net/gml/3.2" xmlns:app="http://example.com/app">
@@ -663,9 +665,9 @@ mod tests {
         let layers = read("p.gml", gml.as_bytes()).unwrap();
         let (ds, rep) = &layers[0];
         assert_eq!((ds.features.len(), rep.skipped), (2, 0));
-        let said: Vec<&String> = rep.messages.iter().filter(|m| m.contains("rings or surface patches")).collect();
+        let said: Vec<&String> = rep.messages.iter().filter(|m| m.contains("or surface patch")).collect();
         assert_eq!(said.len(), 1, "{:?}", rep.messages);
-        assert!(said[0].contains(": 1 rings or surface patches"), "{said:?}");
+        assert!(said[0].contains(": 1 ring or surface patch of a geometry was left out"), "{said:?}");
         assert!(rep.messages.iter().any(|m| m.contains(": 1 part of multi-geometries")), "{:?}", rep.messages);
 
         // With two feature types, the notice goes with the one that lost a part, not the first.
@@ -692,7 +694,7 @@ mod tests {
 </wfs:FeatureCollection>"#;
         let layers = read("hole.gml", gml.as_bytes()).unwrap();
         let messages = &layers[0].1.messages;
-        assert!(!messages.iter().any(|m| m.contains("rings or surface patches")), "{messages:?}");
+        assert!(!messages.iter().any(|m| m.contains("or surface patch")), "{messages:?}");
         assert!(messages.iter().any(|m| m.contains(": 1 part of multi-geometries")), "{messages:?}");
     }
 
