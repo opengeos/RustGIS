@@ -15996,7 +15996,7 @@ fn a_stac_asset_with_retrieval_codes_says_they_draw_as_values() {
     s.run("stac.addAsset", &json!({"url": format!("{base}/items/unread"), "name": "Unread"})).unwrap();
     let said: Vec<String> = s.notices_since(mark).iter().map(|n| n.text.clone()).collect();
     assert!(
-        said.iter().any(|t| t.contains("Unread: its metadata marks failed retrievals with codes that couldn't be read whole")),
+        said.iter().any(|t| t.contains("Unread: its metadata's codes for a failed retrieval (je:rasters dn.error) couldn't be read whole")),
         "{said:?}"
     );
 }

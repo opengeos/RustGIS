@@ -264,7 +264,7 @@ fn add_asset(s: &mut Session, p: &Value) -> CmdResult {
     let added = super::layer::add_url(s, &add)?;
     match codes {
         (_, true) => s.warn(format!(
-            "{name}: its metadata marks failed retrievals with codes that couldn't be read whole, and the map draws them as values"
+            "{name}: its metadata's codes for a failed retrieval (je:rasters dn.error) couldn't be read whole (not a list of numbers, or too many), so the map draws any such codes in the file as values"
         )),
         (invalid, false) if !invalid.is_empty() => {
             // The first few, large ones (a float's lowest, -3.4e38) in exponent form.
