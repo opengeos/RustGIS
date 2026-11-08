@@ -379,6 +379,12 @@ fn a_measure_attribute_keeps_a_unit_that_isnt_the_metre() {
     let out = read("model.gml", &lonlat(&building("b1", &inner)), None).unwrap();
     assert_eq!(value(&out[0].0, 0, "h"), Value::Text("40 ft".into()));
     assert_eq!(value(&out[0].0, 0, "m"), Value::Float(12.0));
+    // The URN and URL forms of the metre are metres.
+    for uom in ["urn:ogc:def:uom:OGC:1.0:metre", "http://www.opengis.net/def/uom/OGC/1.0/metre", "urn:ogc:def:uom:EPSG::9001"] {
+        let given = format!(r#"<bldg:measuredHeight uom="{uom}">12</bldg:measuredHeight>{}"#, box_surfaces("b3"));
+        let out = read("model.gml", &lonlat(&building("b3", &given)), None).unwrap();
+        assert_eq!(value(&out[0].0, 0, "measuredHeight"), Value::Float(12.0), "{uom}");
+    }
     // A blank unit is no unit: a number.
     let blank = format!(r#"<bldg:measuredHeight uom="">12</bldg:measuredHeight>{}"#, box_surfaces("b2"));
     let out = read("model.gml", &lonlat(&building("b2", &blank)), None).unwrap();
@@ -452,4 +458,43 @@ fn a_system_given_reads_the_coordinates_as_written() {
     let out = read("model.gml", &model("urn:ogc:def:crs:EPSG::4326", &building("b1", &inner)), Some(Crs::LonLat)).unwrap();
     let e = out[0].0.extent();
     assert_eq!((e.min_x, e.max_x, e.min_y, e.max_y), (0.0, 4.0, 10.0, 12.0));
+}
+
+/// The objects of a `gml:featureMembers` are read one at a time: one that can't be read is counted
+/// alone, and a cut inside the element keeps the objects before it.
+#[test]
+fn objects_of_feature_members_are_read_one_at_a_time() {
+    let many = |second: &str| {
+        lonlat(&format!(
+            r#"<gml:featureMembers xmlns:x="urn:x"><bldg:Building gml:id="f1"><x:note>n</x:note>{}</bldg:Building>{second}</gml:featureMembers>"#,
+            box_surfaces("f1")
+        ))
+    };
+    // The second is nested past the limit.
+    let broken = format!(r#"<bldg:Building gml:id="f2">{}{}</bldg:Building>"#, "<gen:a>".repeat(300), "</gen:a>".repeat(300));
+    let out = read("model.gml", &many(&broken), None).unwrap();
+    assert_eq!(out[0].0.features.len(), 1);
+    assert!(says(&out, "1 city objects couldn't be read"), "{:?}", messages_of(&out));
+    // Cut inside the second: the first is read, and the cut said.
+    let whole = String::from_utf8(many(&format!(r#"<bldg:Building gml:id="f2">{}</bldg:Building>"#, box_surfaces("f2")))).unwrap();
+    let cut = whole.find(r#"gml:id="f2-w""#).unwrap();
+    let out = read("model.gml", &whole.as_bytes()[..cut], None).unwrap();
+    assert_eq!(out[0].0.features.len(), 1);
+    assert!(says(&out, "as if cut short"), "{:?}", messages_of(&out));
+    // Whole, both, and a namespace the element declares is kept for each.
+    let out = read("model.gml", whole.as_bytes(), None).unwrap();
+    assert_eq!(out[0].0.features.len(), 2);
+    assert_eq!(value(&out[0].0, 0, "note"), Value::Text("n".into()));
+}
+
+/// A file broken in the middle (an end tag that doesn't match) is refused, not taken for one cut
+/// short.
+#[test]
+fn a_file_broken_in_the_middle_is_refused() {
+    let bytes = lonlat(
+        &[building("b1", &box_surfaces("b1")), "<core:cityObjectMember><bldg:Building></bldg:Wrong></core:cityObjectMember>".to_string()]
+            .concat(),
+    );
+    let err = read("model.gml", &bytes, None).unwrap_err().to_string();
+    assert!(!err.contains("cut short"), "{err}");
 }

@@ -115,17 +115,21 @@ fn read_with(file_name: &str, bytes: &[u8], given: Option<Crs>, keep_named: bool
     let mut reading = Reading { budget: MAX_FILE_FACES, swap, ..Reading::default() };
     reading.said.appearances = index.appearances;
     let mut wrapped = String::new();
-    for &(start, end) in &index.members {
-        // A member is parsed with the root's namespaces, as it stands in the document.
+    for &(start, end, holder) in &index.members {
+        // A member is parsed with the root's namespaces, as it stands in the document; an object of a
+        // `featureMembers`, inside a copy of that element's start and end tags.
         let Some(member) = text.get(start..end) else {
             reading.counts.skipped += 1;
             continue;
         };
+        let (open, close) = holder.and_then(|k| index.holders.get(k)).map_or(("", ""), |(o, c)| (o.as_str(), c.as_str()));
         wrapped.clear();
         wrapped.push_str("<m");
         wrapped.push_str(&index.namespaces);
         wrapped.push('>');
+        wrapped.push_str(open);
         wrapped.push_str(member);
+        wrapped.push_str(close);
         wrapped.push_str("</m>");
         let opts = ParsingOptions { allow_dtd: false, nodes_limit: crate::io::XML_NODES, ..ParsingOptions::default() };
         let Ok(doc) = crate::xml::parse(&wrapped, opts) else {
@@ -157,8 +161,11 @@ fn read_with(file_name: &str, bytes: &[u8], given: Option<Crs>, keep_named: bool
 /// Where a document's members lie, the namespaces its root declares, and the system it names.
 #[derive(Default)]
 struct Index {
-    /// Each member's byte range.
-    members: Vec<(usize, usize)>,
+    /// Each member's byte range, and the `featureMembers` holding it in `holders`, when it is an
+    /// object of one: that element holds many, each read on its own.
+    members: Vec<(usize, usize, Option<usize>)>,
+    /// Each `featureMembers` element's start tag as written, and its end tag.
+    holders: Vec<(String, String)>,
     /// The root's namespace declarations, written out as attributes.
     namespaces: String,
     /// The first `srsName`.
@@ -194,8 +201,12 @@ impl Index {
         let invalid = |e: quick_xml::Error| DataError::Format(format!("{file_name}: {e}"));
         let mut reader = Reader::from_str(text);
         let mut index = Index::default();
-        // Open elements, where the member being read starts, and whether the root has been seen.
-        let (mut depth, mut member, mut rooted) = (0usize, None, false);
+        // Open elements, and whether the root has been seen.
+        let (mut depth, mut rooted) = (0usize, false);
+        // The member being read: where it starts, and the depth its end tag brings back.
+        let mut member: Option<(usize, usize)> = None;
+        // The `featureMembers` being read, by its place in `holders`.
+        let mut holder: Option<usize> = None;
         // The file ends inside the root's end tag, every member in.
         let mut in_root_end = false;
         loop {
@@ -216,10 +227,12 @@ impl Index {
                 Event::Empty(e) => (e, true),
                 Event::End(_) => {
                     depth = depth.saturating_sub(1);
-                    if depth == 1
-                        && let Some(start) = member.take()
-                    {
-                        index.members.push((start, position(&reader)));
+                    if let Some((start, _)) = member.filter(|&(_, at)| at == depth) {
+                        member = None;
+                        index.members.push((start, position(&reader), holder));
+                    }
+                    if depth == 1 {
+                        holder = None;
                     }
                     continue;
                 }
@@ -237,13 +250,22 @@ impl Index {
             if let Some(srs) = raw_attribute(e, "srsName").filter(|s| !s.trim().is_empty()) {
                 index.see_system(file_name, srs.trim())?;
             }
-            if depth == 1 {
-                match e.local_name().into_inner() {
-                    "cityObjectMember" | "featureMember" | "featureMembers" if empty => index.members.push((start, position(&reader))),
-                    "cityObjectMember" | "featureMember" | "featureMembers" => member = Some(start),
+            match (depth, holder) {
+                (1, _) => match e.local_name().into_inner() {
+                    "cityObjectMember" | "featureMember" if empty => index.members.push((start, position(&reader), None)),
+                    "cityObjectMember" | "featureMember" => member = Some((start, 1)),
+                    "featureMembers" if !empty => {
+                        let open = text.get(start..position(&reader)).unwrap_or_default().to_string();
+                        index.holders.push((open, format!("</{}>", e.name().into_inner())));
+                        holder = Some(index.holders.len() - 1);
+                    }
                     "appearanceMember" => index.appearances += 1,
                     _ => {}
-                }
+                },
+                // An object of a `featureMembers`.
+                (2, Some(_)) if empty => index.members.push((start, position(&reader), holder)),
+                (2, Some(_)) => member = Some((start, 2)),
+                _ => {}
             }
             if !empty {
                 depth += 1;
@@ -407,7 +429,8 @@ fn generic_value(a: &Node) -> Json {
 /// Whether a unit of measure is the metre.
 fn is_metre(uom: &str) -> bool {
     let u = uom.trim().to_ascii_lowercase();
-    matches!(u.as_str(), "m" | "#m" | "metre" | "meter") || u.ends_with(":m") || u.ends_with("#m") || u.ends_with("::9001")
+    matches!(u.as_str(), "m" | "#m" | "metre" | "meter")
+        || [":m", "#m", "::9001", ":metre", "/metre", "#metre"].iter().any(|end| u.ends_with(end))
 }
 
 /// A simple property's value: a number for the standard's lengths and counts (a length in another
