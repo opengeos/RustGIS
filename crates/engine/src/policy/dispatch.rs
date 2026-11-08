@@ -411,7 +411,7 @@ impl Session {
                 }
                 let node = self.admit(node)?;
                 // Its lines run nested: what they couldn't read as true or false is said here (#1600).
-                self.with_unread_bools(None, |s| {
+                self.with_unread_bools(Some("script.run"), |s| {
                     s.with_node(node, |s| {
                         s.guarded("Run Script", true, |s| crate::cmd::workflows::run_script(s, &json!({"script":script})))
                     })
