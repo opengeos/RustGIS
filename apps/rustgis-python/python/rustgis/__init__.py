@@ -355,23 +355,25 @@ class _Api:
 
     def _outputs(self, result: Any) -> Any:
         """A command's result as layers: the :class:`Layer` it added, a list when it added
-        several, else the result as it is.
+        several, else the result as it is (when it added no layer, only tables, say).
+
+        A file of several layers (the tables of a GeoPackage, a GDAL file split by geometry
+        type) reports the first as ``"layer"`` and every one as ``"layers"``, so ``"layers"``
+        decides. Standalone tables added with the layers are in :meth:`info`, not returned.
 
         Args:
             result: The command's result.
         """
         if isinstance(result, dict):
-            # A file with several layers (a GeoPackage read through GDAL, say) reports the
-            # first as "layer" and all of them as "layers": every one of them is returned.
             many = result.get("layers")
             ids = [i for i in many if isinstance(i, int) and not isinstance(i, bool)] if isinstance(many, list) else []
-            if len(ids) > 1 and not result.get("tables"):
+            if len(ids) > 1:
                 return [Layer._of(self, i) for i in ids]
             added = result.get("layer")
             if isinstance(added, int) and not isinstance(added, bool):
                 return Layer._of(self, added)
-            if ids and not result.get("tables"):
-                return [Layer._of(self, i) for i in ids]
+            if ids:
+                return Layer._of(self, ids[0])
         return result
 
     # Commands ------------------------------------------------------------------------------

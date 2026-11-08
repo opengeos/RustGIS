@@ -2,6 +2,7 @@
 
 import json
 import shutil
+import subprocess
 
 import pytest
 
@@ -281,25 +282,55 @@ def test_adding_data_returns_the_layer(sample, tmp_path):
 
 def test_adding_a_file_of_several_layers_returns_them_all(sample, tmp_path):
     sites = sample.add_geojson(POINTS, name="Sites")
+    more = sample.add_geojson({"type": "FeatureCollection", "features": POINTS["features"][:1]}, name="More")
     out = tmp_path / "two.gpkg"
     sites.to_file(out)
-    sites.to_file(out, mode="addTable", table_name="more_sites")
+    more.to_file(out, mode="addTable", table_name="more_sites")
     added = sample.add_data(out)
-    assert isinstance(added, list) and len(added) == 2
-    assert all(isinstance(layer, rustgis.Layer) and layer.count == 2 for layer in added)
+    assert isinstance(added, list)
+    assert len(added) == 2
+    assert all(isinstance(layer, rustgis.Layer) for layer in added)
+    assert len({layer.id for layer in added}) == 2
+    assert sorted(layer.count for layer in added) == [1, 2]
     # One table of it is a single layer.
     one = sample.add_data(out, layer="more_sites")
-    assert isinstance(one, rustgis.Layer) and one.count == 2
+    assert isinstance(one, rustgis.Layer)
+    assert one.count == 1
 
 
-@pytest.mark.skipif(shutil.which("ogr2ogr") is None or shutil.which("ogrinfo") is None, reason="needs GDAL")
+def test_layers_added_with_tables_are_all_returned(sample):
+    # Standalone tables read with the layers (or a count of tables left out) don't hide them.
+    ids = [layer["id"] for layer in sample.layers()][:2]
+    for tables in (["notes"], 40):
+        added = sample._outputs({"layer": ids[0], "layers": ids, "tables": tables})
+        assert [layer.id for layer in added] == ids
+    one = sample._outputs({"layers": ids[:1], "tables": []})
+    assert isinstance(one, rustgis.Layer)
+    assert one.id == ids[0]
+    assert sample._outputs({"tables": ["notes"]}) == {"tables": ["notes"]}
+
+
+def _gdal_reads(driver):
+    """Whether the GDAL programs the engine runs are on the PATH and read ``driver``."""
+    ogrinfo = shutil.which("ogrinfo")
+    if ogrinfo is None or shutil.which("ogr2ogr") is None:
+        return False
+    try:
+        formats = subprocess.run([ogrinfo, "--formats"], capture_output=True, text=True, timeout=60).stdout
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return any(line.strip().startswith(f"{driver} ") for line in formats.splitlines())
+
+
+@pytest.mark.skipif(not _gdal_reads("GeoJSONSeq"), reason="needs GDAL with GeoJSONSeq")
 def test_adding_a_gdal_file_of_several_layers_returns_them_all(sample, tmp_path):
     # GeoJSON Sequence is read through GDAL; points and a line in one file are two layers.
     line = {"type": "Feature", "geometry": {"type": "LineString", "coordinates": [[0, 0], [1, 1]]}, "properties": {}}
     path = tmp_path / "mixed.geojsonl"
     path.write_text("\n".join(json.dumps(f) for f in [*POINTS["features"], line]) + "\n")
     added = sample.add_data(path)
-    assert isinstance(added, list) and len(added) == 2
+    assert isinstance(added, list)
+    assert len({layer.id for layer in added}) == 2
     assert sorted(layer.count for layer in added) == [1, 2]
 
 
