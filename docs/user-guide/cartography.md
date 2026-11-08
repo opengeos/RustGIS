@@ -438,6 +438,11 @@ dark text; culling makes room for it, so labelled charts stay visible to their l
 The categories list under the layer's classes in layout legends — the printed map's legend lists
 them the same way. Clearing the diagram leaves the renderer as it is.
 
+Charts lie flat on the map. On extruded polygons they draw over the extrusion in a flat view, but
+not while the map is tilted; on a point layer in a tilted view the markers stay on the ground under
+their charts rather than standing up; and aggregated points draw their bins, not the charts. Setting
+a diagram, aggregation or extrusion that hides the charts says so.
+
 ## Labeling
 
 The **Labeling pane** brings together the label classes and the chosen class's field, SQL

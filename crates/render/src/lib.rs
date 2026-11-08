@@ -2768,6 +2768,8 @@ fn stands_up(map: &Map, layer: &rustgis_map::Layer) -> bool {
         && !layer.has_strokes()
         && layer.marker_rotation.is_none()
         && layer.symbol_by.angle.is_none()
+        // A diagram is a flat chart on the ground: its markers lie under it there (#1596).
+        && layer.diagram.is_none()
         && rows.is_some_and(|n| n <= MAX_UPRIGHT_POINTS as u64)
 }
 
@@ -3584,6 +3586,8 @@ fn render_frame(
             scaled_ctx = Ctx { ppp: ctx.ppp * size_factor, sprites: Default::default(), bursts: std::rc::Rc::clone(&ctx.bursts), ..ctx };
             &scaled_ctx
         };
+        // An extruded layer's diagrams, held until the spool has drawn its polygons.
+        let mut extruded_diagrams: Vec<(f32, f32, Vec<(f64, rustgis_map::Rgba)>, f64)> = Vec::new();
         let mut draw_chunk = |layer: &mut rustgis_map::Layer| -> rustgis_data::Result<()> {
             // The definition query and the display filters that apply at this scale (a feature draws
             // only if it matches all of them).
@@ -3723,6 +3727,30 @@ fn render_frame(
                 };
                 gpu_done = collected.is_ok();
             }
+            // Where the layer's diagrams go in the view, and what each shows: (x, y, values, total).
+            // Graphics take none (`layer.diagram` refuses them).
+            let placed_diagrams = || -> Vec<(f32, f32, Vec<(f64, rustgis_map::Rgba)>, f64)> {
+                let Some(d) = layer.diagram.as_ref().filter(|_| !layer.graphics) else { return Vec::new() };
+                let fields = d.field_indices(ds_ptr);
+                // Grown by the largest diagram, as a point's marks are (in map units).
+                let r = f64::from(diagrams::reach(d) * ctx.ppp) * map_per_px;
+                let mut out = Vec::new();
+                for (row, g) in geoms.iter().enumerate() {
+                    let Some(g) = g else { continue };
+                    if rows.get(row) != Some(&true) {
+                        continue;
+                    }
+                    let e = extents.get(row).copied().unwrap_or_else(|| g.extent());
+                    if !visible(&Extent::new(e.min_x - r, e.min_y - r, e.max_x + r, e.max_y + r)) {
+                        continue;
+                    }
+                    let Some(c) = diagrams::anchor(g) else { continue };
+                    let (x, y) = ctx.px(c);
+                    let Some((values, total)) = d.values_at(ds_ptr, row, &fields) else { continue };
+                    out.push((x, y, values, total));
+                }
+                out
+            };
             // False for a layer drawn elsewhere: nothing goes into the picture for it.
             let mut drawn_here = true;
             if !gpu_done {
@@ -3742,10 +3770,18 @@ fn render_frame(
                     drawn_here = false;
                 } else if let Some(x) = extrude.filter(|_| !matches!(labels_to, Labels::Shared)) {
                     let px_per_m = view.pixels_per_point / (map_ground_res(view, &flat) * body);
+                    // The diagrams go over the extruded polygons (#1596): after the spool draws them
+                    // all, or straight after these.
                     if let Some(spool) = &mut extrusions {
                         spool.add(ctx, ds_ptr, &geoms, &rows, x, px_per_m, |r| styler.symbol(r))?;
+                        extruded_diagrams.extend(placed_diagrams());
                     } else {
                         effects::extrude(dest, ctx, ds_ptr, &geoms, &rows, x, px_per_m, |r| styler.symbol(r));
+                        if let Some(d) = layer.diagram.as_ref() {
+                            for (x, y, values, total) in placed_diagrams() {
+                                diagrams::draw(dest, x, y, d, &values, total, if direct { opacity } else { 1.0 }, ctx.ppp, display.paused);
+                            }
+                        }
                     }
                 } else {
                     let mut stroke_paths = stroke_paths::Paths::default();
@@ -3846,22 +3882,8 @@ fn render_frame(
                     }
                     // Diagrams: a small chart on each feature from several fields, over the
                     // renderer's own symbol (pie or bars, as ArcGIS Pro's Chart symbology draws).
-                    if let Some(d) = layer.diagram.as_ref().filter(|_| !layer.graphics) {
-                        let fields = d.field_indices(ds_ptr);
-                        for (row, g) in geoms.iter().enumerate() {
-                            let Some(g) = g else { continue };
-                            if rows.get(row) != Some(&true) {
-                                continue;
-                            }
-                            let e = extents.get(row).copied().unwrap_or_else(|| g.extent());
-                            // Grown by the largest diagram, as a point's marks are (in map units).
-                            let r = f64::from(diagrams::reach(d) * ctx.ppp) * map_per_px;
-                            if !visible(&Extent::new(e.min_x - r, e.min_y - r, e.max_x + r, e.max_y + r)) {
-                                continue;
-                            }
-                            let Some(c) = diagrams::anchor(g) else { continue };
-                            let (x, y) = ctx.px(c);
-                            let Some((values, total)) = d.values_at(ds_ptr, row, &fields) else { continue };
+                    if let Some(d) = layer.diagram.as_ref() {
+                        for (x, y, values, total) in placed_diagrams() {
                             diagrams::draw(dest, x, y, d, &values, total, if direct { opacity } else { 1.0 }, ctx.ppp, display.paused);
                         }
                     }
@@ -4383,6 +4405,12 @@ fn render_frame(
                 source.error = Some(e.to_string());
             }
             return None;
+        }
+        if let Some(d) = layer.diagram.as_ref() {
+            let dest = if direct { &mut pm } else { &mut target };
+            for (x, y, values, total) in extruded_diagrams {
+                diagrams::draw(dest, x, y, d, &values, total, if direct { opacity } else { 1.0 }, ctx.ppp, display.paused);
+            }
         }
         if complete_source {
             if let (Some(a), Some(base)) = (layer.aggregation, aggregate_symbol) {
@@ -7813,6 +7841,64 @@ mod tests {
             l.aggregation = Some(rustgis_map::effects::Aggregation { hexagons: true, size: 20.0 });
         }
         assert!(upright_markers(&mut m, &view, 0.3).is_empty());
+    }
+
+    /// A diagram shows on an extruded polygon in a flat view, over the extrusion, and on a point
+    /// layer in a tilted view, where its markers lie on the ground with it rather than stand up
+    /// (#1596: both drew no chart at all).
+    #[test]
+    fn diagrams_show_on_extruded_polygons_and_tilted_points() {
+        let magenta = rustgis_map::Rgba::rgb(255, 0, 255);
+        let diagram = rustgis_map::DiagramSettings {
+            kind: rustgis_map::DiagramKind::Pie,
+            categories: vec![rustgis_map::DiagramCategory { field: "n".into(), colour: magenta }],
+            size: rustgis_map::DiagramSize::Fixed(12.0),
+            start_angle: 0.0,
+            background: None,
+            stroke: rustgis_map::DiagramSettings::default_stroke(),
+            stroke_width: 0.75,
+            labels: rustgis_map::DiagramLabel::None,
+        };
+        let magentas = |r: &Rendered| {
+            r.pixmap.pixels().iter().filter(|p| p.red() > 200 && p.green() < 60 && p.blue() > 200 && p.alpha() > 200).count()
+        };
+        // An extruded square in a flat view, its chart at the centre.
+        let mut m = Map::new("Map");
+        m.basemap = rustgis_map::Basemap::Blank;
+        let mut d = Dataset::new("blocks", GeometryType::Polygon, vec![Field::new("n", FieldType::Double)]);
+        let s = 0.9;
+        let ring = vec![Coord::new(-s, -s), Coord::new(s, -s), Coord::new(s, s), Coord::new(-s, s), Coord::new(-s, -s)];
+        d.push(Some(Geometry::Polygon(vec![vec![ring]])), vec![Value::Float(5.0)]);
+        let id = m.add_dataset(d);
+        if let Some(l) = m.layer_mut(id) {
+            l.diagram = Some(diagram.clone());
+            l.extrusion = Some(rustgis_map::effects::Extrusion {
+                field: None,
+                height: 20_000.0,
+                factor: 1.0,
+                face_culling: true,
+                lighting: true,
+                shadows: false,
+            });
+        }
+        let flat =
+            View { width: 400.0, height: 300.0, pixels_per_point: 1.0, camera: Camera::new(Coord::new(0.0, 0.0), 2000.0), sky: false };
+        let r = render(&mut m, &flat).unwrap();
+        assert!(magentas(&r) > 100, "the extruded square's chart: {} px", magentas(&r));
+        // A point in a tilted view.
+        let mut m = Map::new("Map");
+        m.basemap = rustgis_map::Basemap::Blank;
+        let mut d = Dataset::new("towns", GeometryType::Point, vec![Field::new("n", FieldType::Double)]);
+        d.push(Some(Geometry::Point(Coord::new(0.0, 0.0))), vec![Value::Float(5.0)]);
+        let id = m.add_dataset(d);
+        if let Some(l) = m.layer_mut(id) {
+            l.diagram = Some(diagram);
+        }
+        assert!(!stands_up(&m, &m.layers[0]), "a point layer with a diagram lies on the ground");
+        let camera = Camera { center: Coord::new(0.0, 0.0), res: 2000.0, bearing: 30.0, pitch: 45.0 };
+        let tilted = View { width: 400.0, height: 300.0, pixels_per_point: 1.0, camera, sky: false };
+        let r = render(&mut m, &tilted).unwrap();
+        assert!(magentas(&r) > 30, "the tilted point's chart: {} px", magentas(&r));
     }
 
     #[test]
