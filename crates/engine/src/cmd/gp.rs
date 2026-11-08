@@ -5348,12 +5348,12 @@ mod batch_tests {
         join.push_next(None, vec![rustgis_data::Value::Text("01".into())]);
         s.project.add_table(join);
         let shared = json!({"targetField": "GEOID", "joinTable": "Census", "joinField": "FIPS"});
-        let mark = s.notices.len() as u64;
+        let mark = s.notice_mark();
         s.run("gp.batch", &json!({"tool": "joinField", "inputs": ["Tracts"], "params": shared})).unwrap();
         assert!(!s.notices_since(mark).iter().any(|n| n.text.contains("other name(s)")), "a clean run says nothing");
         let mut with_alias = shared.clone();
         with_alias["input"] = json!("Tracts");
-        let mark = s.notices.len() as u64;
+        let mark = s.notice_mark();
         s.run("gp.batch", &json!({"tool": "joinField", "inputs": ["Tracts"], "params": with_alias})).unwrap();
         assert!(
             s.notices_since(mark)
