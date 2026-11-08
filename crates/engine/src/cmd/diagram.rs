@@ -566,6 +566,20 @@ mod tests {
         assert!(full.run("layout.new", &json!({})).is_err());
         assert!(full.run("layout.duplicate", &json!({"layout": 0})).is_err());
         assert_eq!(full.project.layouts.len(), 200);
+        // A layout file imported says what it repaired, and a clean one nothing.
+        let layout = v["layouts"][0].to_string();
+        let mut imports = Session::new(Project::default());
+        imports.run("layout.import", &json!({"text": serde_json::to_string(&quiet.project.layouts[0]).unwrap()})).unwrap();
+        assert!(imports.notices.iter().all(|n| !n.text.contains("layout")));
+        imports.run("layout.import", &json!({"text": layout})).unwrap();
+        assert_eq!(
+            imports
+                .notices
+                .iter()
+                .filter(|n| n.text.contains("1 layout element(s)") && n.text.contains("while importing the layout file"))
+                .count(),
+            1
+        );
         // Importing its styles takes no diagrams or layouts, so says nothing of them.
         let mut styled = Session::new(Project::default());
         let mark = styled.notices.len();

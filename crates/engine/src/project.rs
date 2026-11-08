@@ -1185,21 +1185,21 @@ pub(crate) const ALL_PARTS: [ReadPart; 3] = [ReadPart::Labels, ReadPart::Diagram
 pub(crate) const MAX_LAYOUTS: usize = 200;
 
 /// The layouts named in a notice, the first few of them.
+/// A name cut to 100 characters for a notice, so a long one can't crowd out the count (a
+/// notice too long is withheld whole).
+pub(crate) fn short_name(name: &str) -> String {
+    match name.char_indices().nth(100) {
+        Some((i, _)) => format!("{}…", name.get(..i).unwrap_or_default()),
+        None => name.to_string(),
+    }
+}
+
 fn layout_names(
     repairs: &[(String, rustgis_map::layout::LayoutRepairs)],
     of: impl Fn(&rustgis_map::layout::LayoutRepairs) -> usize,
 ) -> String {
     let names: Vec<&str> = repairs.iter().filter(|(_, r)| of(r) > 0).map(|(n, _)| n.as_str()).collect();
-    // A name is cut to 100 characters, so a long one can't crowd out the count.
-    let mut text = names
-        .iter()
-        .take(3)
-        .map(|n| match n.char_indices().nth(100) {
-            Some((i, _)) => format!("\"{}…\"", n.get(..i).unwrap_or_default()),
-            None => format!("\"{n}\""),
-        })
-        .collect::<Vec<_>>()
-        .join(", ");
+    let mut text = names.iter().take(3).map(|n| format!("\"{}\"", short_name(n))).collect::<Vec<_>>().join(", ");
     if names.len() > 3 {
         text.push_str(&format!(" and {} more", names.len() - 3));
     }
@@ -1208,12 +1208,13 @@ fn layout_names(
 
 /// One notice per kind of change [`Project::repair`] made to the layouts of a project read from
 /// its file: layouts beyond the limit, elements brought into range or removed, page settings.
-fn layout_notices(name: &str, when: &str, dropped: usize, repairs: &[(String, rustgis_map::layout::LayoutRepairs)]) -> Vec<String> {
-    // The project's name is cut too, so a long one can't crowd out the count.
-    let name: String = match name.char_indices().nth(100) {
-        Some((i, _)) => format!("{}…", name.get(..i).unwrap_or_default()),
-        None => name.to_string(),
-    };
+pub(crate) fn layout_notices(
+    name: &str,
+    when: &str,
+    dropped: usize,
+    repairs: &[(String, rustgis_map::layout::LayoutRepairs)],
+) -> Vec<String> {
+    let name = short_name(name);
     let mut notices = Vec::new();
     if dropped > 0 {
         notices.push(format!("{name}: {dropped} layout(s) beyond the {MAX_LAYOUTS} a project holds removed {when}"));

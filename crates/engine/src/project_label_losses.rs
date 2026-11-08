@@ -174,6 +174,7 @@ fn only(notices: Vec<(ReadPart, String)>, diagrams: bool) -> Vec<String> {
 
 /// One notice per kind of change reading the layers' diagrams made.
 fn diagram_messages(d: rustgis_map::diagram::DiagramAudit, name: &str, what: &str, messages: &mut Vec<String>) {
+    let name = crate::project::short_name(name);
     if d.dropped > 0 {
         messages.push(format!("{name}: {} diagram(s) that could not be read or named no field removed while opening {what}", d.dropped));
     }

@@ -3691,7 +3691,12 @@ pub(crate) fn import(s: &mut Session, text: &str) -> CmdResult {
         return Err("the layout file is too large".into());
     }
     let mut l: Layout = serde_json::from_str(text).map_err(|e| format!("not a RustGIS layout: {e}"))?;
-    l.clamp();
+    let repairs = l.clamp();
+    if !repairs.is_empty() {
+        for notice in crate::project::layout_notices(&l.name, "while importing the layout file", 0, &[(l.name.clone(), repairs)]) {
+            s.notify(notice, false);
+        }
+    }
     l.name = unique_name(s, &l.name);
     // Frames showing maps this project lacks show the active map instead.
     let fallback = s.map().name.clone();
