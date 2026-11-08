@@ -360,8 +360,8 @@ impl<'de> Deserialize<'de> for DiagramAudit {
                 seen.push(&c.field);
             }
         }
-        // An angle of a whole turn (360) is the same as 0, so isn't counted.
-        let angle_adjusted = !(0.0..=360.0).contains(&s.start_angle);
+        // Any finite angle names the same direction after a whole number of turns: not counted.
+        let angle_adjusted = !s.start_angle.is_finite();
         let adjusted = kept.size != s.size || angle_adjusted || kept.stroke_width != s.stroke_width;
         Ok(DiagramAudit {
             dropped: 0,
@@ -558,8 +558,14 @@ mod tests {
         let audit = |v: serde_json::Value| serde_json::from_value::<DiagramAudit>(v).expect("an audit always reads");
         assert_eq!(audit(serde_json::Value::Null), DiagramAudit::default(), "no diagram, nothing changed");
         assert_eq!(audit(serde_json::to_value(settings()).unwrap()), DiagramAudit::default(), "a clean diagram reads as it is");
-        let whole_turn = DiagramSettings { start_angle: 360.0, ..settings() };
-        assert_eq!(audit(serde_json::to_value(whole_turn).unwrap()), DiagramAudit::default(), "360 is a whole turn, not out of range");
+        for angle in [360.0, 720.0, -360.0, -10.0] {
+            let turned = DiagramSettings { start_angle: angle, ..settings() };
+            assert_eq!(
+                audit(serde_json::to_value(turned).unwrap()),
+                DiagramAudit::default(),
+                "{angle} names a direction, not out of range"
+            );
+        }
         for junk in [serde_json::json!("nonsense"), serde_json::json!({"kind": "hexagon"}), serde_json::json!({"categories": []})] {
             assert_eq!(audit(junk.clone()).dropped, 1, "dropped: {junk}");
         }

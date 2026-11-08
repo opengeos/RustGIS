@@ -565,7 +565,22 @@ mod tests {
         // The cap the reader keeps is the one commands keep: no 201st layout to lose.
         assert!(full.run("layout.new", &json!({})).is_err());
         assert!(full.run("layout.duplicate", &json!({"layout": 0})).is_err());
+        let mark = full.notices.len();
+        assert!(full.run("layout.import", &json!({"text": v["layouts"][0].to_string()})).is_err());
+        assert!(full.notices[mark..].iter().all(|n| !n.text.contains("while importing the layout file")), "refused, so nothing repaired");
         assert_eq!(full.project.layouts.len(), 200);
+        // A layer file added says what reading its diagram changed, and a clean one nothing.
+        let layer_text = serde_json::to_string(s.map().layer(id).unwrap()).unwrap();
+        let mut added = Session::new(Project::default());
+        crate::cmd::layer::add_layer_text(&mut added, &layer_text).unwrap();
+        assert!(added.notices.iter().all(|n| !n.text.contains("diagram")));
+        let mut damaged_layer: serde_json::Value = serde_json::from_str(&layer_text).unwrap();
+        let cats = damaged_layer["diagram"]["categories"].as_array_mut().unwrap();
+        let mut blank = cats[0].clone();
+        blank["field"] = json!(" ");
+        cats.push(blank);
+        crate::cmd::layer::add_layer_text(&mut added, &damaged_layer.to_string()).unwrap();
+        assert_eq!(added.notices.iter().filter(|n| n.text.contains("1 diagram category(ies) with a blank field name")).count(), 1);
         // A layout file imported says what it repaired, and a clean one nothing.
         let layout = v["layouts"][0].to_string();
         let mut imports = Session::new(Project::default());
