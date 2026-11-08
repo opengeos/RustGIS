@@ -1175,9 +1175,25 @@ pub(crate) fn is_wildcard_inputs(v: Option<&Value>) -> bool {
 /// The most inputs one `gp.batch` runs over.
 pub(crate) const MAX_BATCH_ITEMS: usize = 10_000;
 
-/// The most directory entries a folder batch reads: room for each file's sidecars.
-#[cfg(not(target_arch = "wasm32"))]
+/// The most data and sidecar files a folder batch holds while it reads the folder: room for
+/// each file's sidecars. Other entries are only counted.
+#[cfg(all(not(target_arch = "wasm32"), not(test)))]
 const MAX_FOLDER_ENTRIES: usize = MAX_BATCH_ITEMS * 10;
+/// A smaller limit under test, so the tests don't write 100,000 files.
+#[cfg(all(not(target_arch = "wasm32"), test))]
+const MAX_FOLDER_ENTRIES: usize = MAX_BATCH_ITEMS + 10;
+
+/// Whether a folder batch runs files with this lowercase extension.
+#[cfg(not(target_arch = "wasm32"))]
+fn is_folder_target_ext(ext: &str) -> bool {
+    matches!(ext, "shp" | "geojson" | "json" | "gpkg" | "fgb" | "parquet" | "geoparquet" | "kml" | "kmz" | "gpx" | "csv")
+}
+
+/// Whether a file with this lowercase extension may be a Shapefile or GeoPackage sidecar.
+#[cfg(not(target_arch = "wasm32"))]
+fn is_folder_sidecar_ext(ext: &str) -> bool {
+    matches!(ext, "dbf" | "shx" | "prj" | "cpg" | "qpj" | "sbn" | "sbx" | "qix" | "xml" | "gpkg-wal" | "gpkg-shm" | "wal" | "shm")
+}
 
 /// Runs a geoprocessing tool in batch across multiple layers or files.
 fn batch(s: &mut Session, p: &Value) -> CmdResult {
@@ -1381,39 +1397,49 @@ pub fn run_batch_with(s: &mut Session, p: &Value, control: &std::sync::Arc<rustg
                 let mut dir_entries = Vec::new();
                 let mut shp_stems = std::collections::HashSet::new();
                 let mut gpkg_stems = std::collections::HashSet::new();
-                for (scanned, entry) in entries.enumerate() {
-                    // A folder far past the batch limit is refused while it is read, not after
-                    // every name in it is held and sorted (sidecar files allowed for).
-                    if scanned >= MAX_FOLDER_ENTRIES {
-                        return Err(format!(
-                            "folder '{folder}' has more than {MAX_FOLDER_ENTRIES} entries, more than a batch runs; split it into smaller folders"
-                        ));
-                    }
+                for entry in entries {
                     match entry {
                         Ok(entry) => match entry.file_type() {
                             Ok(ft) => {
                                 if ft.is_symlink() {
                                     symlinks += 1;
-                                } else {
-                                    let path = entry.path();
-                                    if path.to_str().is_none() {
-                                        non_utf8 += 1;
-                                        continue;
-                                    }
-                                    if ft.is_file() {
-                                        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
-                                        if ext == "shp"
-                                            && let Some(stem) = path.file_stem().and_then(|stem| stem.to_str())
-                                        {
-                                            shp_stems.insert(stem.to_ascii_lowercase());
-                                        } else if ext == "gpkg"
-                                            && let Some(stem) = path.file_stem().and_then(|stem| stem.to_str())
-                                        {
-                                            gpkg_stems.insert(stem.to_ascii_lowercase());
-                                        }
-                                    }
-                                    dir_entries.push((path, ft));
+                                    continue;
                                 }
+                                let path = entry.path();
+                                if path.to_str().is_none() {
+                                    non_utf8 += 1;
+                                    continue;
+                                }
+                                if ft.is_dir() {
+                                    subfolders += 1;
+                                    continue;
+                                }
+                                if !ft.is_file() {
+                                    unreadable += 1;
+                                    continue;
+                                }
+                                let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
+                                // Only files that can be run or be a sidecar are held; the rest are
+                                // counted as skipped, so a folder of other files isn't refused.
+                                if !is_folder_target_ext(&ext) && !is_folder_sidecar_ext(&ext) {
+                                    skipped += 1;
+                                    continue;
+                                }
+                                if dir_entries.len() >= MAX_FOLDER_ENTRIES {
+                                    return Err(format!(
+                                        "folder '{folder}' has more than {MAX_FOLDER_ENTRIES} data and sidecar files to read; split it into smaller folders"
+                                    ));
+                                }
+                                if ext == "shp"
+                                    && let Some(stem) = path.file_stem().and_then(|stem| stem.to_str())
+                                {
+                                    shp_stems.insert(stem.to_ascii_lowercase());
+                                } else if ext == "gpkg"
+                                    && let Some(stem) = path.file_stem().and_then(|stem| stem.to_str())
+                                {
+                                    gpkg_stems.insert(stem.to_ascii_lowercase());
+                                }
+                                dir_entries.push((path, ext));
                             }
                             Err(_) => {
                                 unreadable += 1;
@@ -1424,30 +1450,19 @@ pub fn run_batch_with(s: &mut Session, p: &Value, control: &std::sync::Arc<rustg
                         }
                     }
                 }
-                for (path, ft) in dir_entries {
-                    if ft.is_file() {
-                        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
-                        if matches!(
-                            ext.as_str(),
-                            "shp" | "geojson" | "json" | "gpkg" | "fgb" | "parquet" | "geoparquet" | "kml" | "kmz" | "gpx" | "csv"
-                        ) {
-                            files.push(path.display().to_string());
-                        } else {
-                            let stem = path.file_stem().and_then(|stem| stem.to_str()).unwrap_or("").to_ascii_lowercase();
-                            let is_shp_sidecar = (matches!(ext.as_str(), "dbf" | "shx" | "prj" | "cpg" | "qpj" | "sbn" | "sbx" | "qix")
-                                && shp_stems.contains(&stem))
-                                || (ext == "xml" && stem.strip_suffix(".shp").map(|s| shp_stems.contains(s)).unwrap_or(false));
-                            let is_gpkg_sidecar = matches!(ext.as_str(), "gpkg-wal" | "gpkg-shm" | "wal" | "shm")
-                                && (gpkg_stems.contains(&stem)
-                                    || stem.strip_suffix(".gpkg").map(|s| gpkg_stems.contains(s)).unwrap_or(false));
-                            if !is_shp_sidecar && !is_gpkg_sidecar {
-                                skipped += 1;
-                            }
-                        }
-                    } else if ft.is_dir() {
-                        subfolders += 1;
+                for (path, ext) in dir_entries {
+                    if is_folder_target_ext(&ext) {
+                        files.push(path.display().to_string());
                     } else {
-                        unreadable += 1;
+                        let stem = path.file_stem().and_then(|stem| stem.to_str()).unwrap_or("").to_ascii_lowercase();
+                        let is_shp_sidecar = (matches!(ext.as_str(), "dbf" | "shx" | "prj" | "cpg" | "qpj" | "sbn" | "sbx" | "qix")
+                            && shp_stems.contains(&stem))
+                            || (ext == "xml" && stem.strip_suffix(".shp").map(|s| shp_stems.contains(s)).unwrap_or(false));
+                        let is_gpkg_sidecar = matches!(ext.as_str(), "gpkg-wal" | "gpkg-shm" | "wal" | "shm")
+                            && (gpkg_stems.contains(&stem) || stem.strip_suffix(".gpkg").map(|s| gpkg_stems.contains(s)).unwrap_or(false));
+                        if !is_shp_sidecar && !is_gpkg_sidecar {
+                            skipped += 1;
+                        }
                     }
                 }
             }
@@ -5378,6 +5393,43 @@ mod batch_tests {
         let _ = std::fs::remove_dir_all(&dir);
         assert!(err.contains(&format!("{} supported files", super::MAX_BATCH_ITEMS + 1)), "{err}");
         assert_eq!(s.map().layers.len(), before);
+    }
+
+    #[test]
+    fn a_folder_of_many_other_files_still_runs_its_data_files() {
+        let dir = std::env::temp_dir().join(format!("rustgis-batch-other-{}-{}", std::process::id(), now_ms()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("pts.csv"), "x,y\n1,2\n").unwrap();
+        for i in 0..=super::MAX_FOLDER_ENTRIES {
+            std::fs::write(dir.join(format!("{i}.txt")), "").unwrap();
+        }
+        let mut s = test_session();
+        let res = s.run("gp.batch", &json!({"tool": "buffer", "folder": dir, "params": {"distance": 1}}));
+        let _ = std::fs::remove_dir_all(&dir);
+        let res = res.unwrap();
+        assert_eq!(res["total"], 1, "{res}");
+        let skipped = format!("{} unsupported files skipped", super::MAX_FOLDER_ENTRIES + 1);
+        assert!(s.notices.iter().any(|n| n.text.contains(&skipped)), "{:?}", s.notices);
+    }
+
+    #[test]
+    fn a_folder_over_the_entry_limit_is_refused_before_any_item_runs() {
+        let dir = std::env::temp_dir().join(format!("rustgis-batch-entries-{}-{}", std::process::id(), now_ms()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("pts.csv"), "x,y\n1,2\n").unwrap();
+        for i in 0..=super::MAX_FOLDER_ENTRIES {
+            std::fs::write(dir.join(format!("{i}.dbf")), "").unwrap();
+        }
+        let mut s = test_session();
+        let layers = s.map().layers.len();
+        let history = s.project.gp_history.len();
+        let control = rustgis_analysis::control::Control::new();
+        let err =
+            super::run_batch_with(&mut s, &json!({"tool": "buffer", "folder": dir, "params": {"distance": 1}}), &control).unwrap_err();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(err.contains(&format!("more than {} data and sidecar files", super::MAX_FOLDER_ENTRIES)), "{err}");
+        assert_eq!(s.map().layers.len(), layers, "no item ran");
+        assert_eq!(s.project.gp_history.len(), history, "no item was attempted");
     }
 
     #[test]
