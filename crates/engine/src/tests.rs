@@ -1847,6 +1847,61 @@ fn rivers_are_labelled_along_their_lines_in_italics() {
     assert!(!text.contains("italic"), "{text}");
 }
 
+/// A true/false parameter reads true, false, yes, no, on, off, 1 and 0 in any case; other text is
+/// read as false and another number ignored, each named in one notice per command (#1600).
+#[test]
+fn unread_boolean_parameter_text_is_said() {
+    let mut s = world();
+    const SAID: &str = "Not read as true or false:";
+    let unread = |s: &Session| s.notices.iter().filter(|n| n.text.starts_with(SAID)).count();
+    let style = |s: &Session| {
+        let c = &s.map().layer_by_name("Rivers").unwrap().labels.default;
+        (c.bold, c.italic)
+    };
+    for (given, expect) in
+        [("True", true), (" YES ", true), ("On", true), ("1", true), ("False", false), ("no", false), ("OFF", false), ("0", false)]
+    {
+        s.run("labels.style", &json!({"layer": "Rivers", "italic": given, "bold": given})).unwrap();
+        assert_eq!(style(&s), (expect, expect), "{given}");
+    }
+    s.run("labels.style", &json!({"layer": "Rivers", "italic": 1, "bold": true})).unwrap();
+    assert_eq!(style(&s), (true, true));
+    s.run("labels.style", &json!({"layer": "Rivers", "italic": 0, "bold": 0.0})).unwrap();
+    assert_eq!(style(&s), (false, false));
+    s.run("labels.style", &json!({"layer": "Rivers", "italic": 1, "bold": true})).unwrap();
+    assert_eq!(unread(&s), 0, "clean input gives no notice: {:?}", s.notices.last());
+    s.run("labels.style", &json!({"layer": "Rivers", "italic": "auto", "bold": "ture"})).unwrap();
+    assert_eq!(style(&s), (false, false));
+    assert_eq!(unread(&s), 1, "{:?}", s.notices.last());
+    let said = s.notices.iter().find(|n| n.text.starts_with(SAID)).map(|n| n.text.clone()).unwrap();
+    assert!(said.contains("italic = \"auto\" (read as false)") && said.contains("bold = \"ture\" (read as false)"), "{said}");
+    // A number other than 1 or 0 leaves the setting as it was, and says so.
+    s.run("labels.style", &json!({"layer": "Rivers", "italic": true})).unwrap();
+    s.run("labels.style", &json!({"layer": "Rivers", "italic": 5})).unwrap();
+    assert_eq!(style(&s), (false, true));
+    assert_eq!(unread(&s), 2, "{:?}", s.notices.last());
+    assert!(s.notices.iter().any(|n| n.text.contains("italic = 5 (ignored)")), "{:?}", s.notices.last());
+    // A long value is said by its length, not quoted in part; ten distinct values name eight
+    // and count the rest once each, however often a command reads them.
+    let long = "k".repeat(41);
+    s.run("labels.style", &json!({"layer": "Rivers", "italic": long})).unwrap();
+    let said = s.notices.iter().rev().find(|n| n.text.starts_with(SAID)).map(|n| n.text.clone()).unwrap();
+    assert!(said.contains("italic = a value of 41 characters (read as false)") && !said.contains("kkk"), "{said}");
+    let p: Value = (0..10).map(|i| (format!("k{i}"), json!(format!("v{i}")))).collect::<serde_json::Map<_, _>>().into();
+    crate::cmd::clear_unread_bools();
+    for _ in 0..3 {
+        for i in 0..10 {
+            assert_eq!(crate::cmd::b(&p, &format!("k{i}")), Some(false));
+        }
+    }
+    let said = crate::cmd::take_unread_bools().unwrap();
+    assert!(said.contains("k7 = \"v7\"") && !said.contains("k8 =") && said.contains(", 2 more ("), "{said}");
+    // The next clean command says nothing more.
+    let before = unread(&s);
+    s.run("labels.style", &json!({"layer": "Rivers", "italic": true})).unwrap();
+    assert_eq!(unread(&s), before);
+}
+
 #[test]
 fn a_qgis_project_in_degrees_opens_in_equirectangular() {
     // QGIS draws a project in degrees as plate carrée, longitude and latitude as x and y.
@@ -5778,8 +5833,8 @@ fn layout_legends_list_what_the_frame_draws() {
     // <all other values> can be left out on its own, in either mode.
     s.run("layout.update", &json!({"element": id, "hideOther": true})).unwrap();
     assert!(matches!(legend(&s).1, rustgis_map::layout::ElementKind::Legend { all_classes: true, hide_other: true, .. }));
-    // Read like every other on/off parameter (`b`): a value that is neither a bool nor text keeps
-    // the setting, and text other than true/yes/1/on turns it off.
+    // Read like every other on/off parameter (`b`): a value that is neither a bool, 1 or 0 nor
+    // text keeps the setting, and text other than true/yes/1/on turns it off.
     s.run("layout.update", &json!({"element": id, "hideOther": 5})).unwrap();
     assert!(matches!(legend(&s).1, rustgis_map::layout::ElementKind::Legend { hide_other: true, .. }), "a number keeps the setting");
     s.run("layout.update", &json!({"element": id, "hideOther": "off"})).unwrap();
@@ -8215,6 +8270,10 @@ fn analysis_workflows_models_scripts_and_raster_functions() {
     }
     assert!(s.run("raster.function", &json!({"layer": dem, "function": "warp"})).is_err());
     assert!(s.run("raster.function", &json!({"layer": dem, "function": "bandMath", "expression": "b2"})).is_err());
+    // A remap's `keep`, read off the command's thread, is still said when it can't be read (#1600).
+    let remap = json!({"layer": dem, "function": "remap", "ranges": [[0, 300, 1]], "keep": "auto"});
+    s.run("raster.function", &remap).unwrap();
+    assert!(s.notices.iter().any(|n| n.text.contains("keep = \"auto\" (read as false)")), "{:?}", s.notices.last());
     let r = s
         .run(
             "raster.functionChain",
@@ -13888,6 +13947,28 @@ fn wms_layers_draw_as_one_picture_or_tiles_of_a_size() {
     assert!(t.url.contains("&size=512,512&") && t.tile_size == 512 && !t.single_image, "{}", t.url);
 }
 
+/// #1592: a legend picture the layer cannot keep (an address too long, as a same-origin link can
+/// become once its spaces are encoded for the login) is counted in a notice, not dropped silently.
+#[test]
+fn service_legends_left_out_are_reported() {
+    const WMS: &str = r#"<WMS_Capabilities version="1.3.0" xmlns="http://www.opengis.net/wms" xmlns:xlink="http://www.w3.org/1999/xlink">
+<Service><Title>Test WMS</Title></Service>
+<Capability><Request><GetMap><Format>image/png</Format><DCPType><HTTP><Get><OnlineResource xlink:href="https://maps.example.com/wms?"/></Get></HTTP></DCPType></GetMap></Request>
+<Layer><CRS>EPSG:3857</CRS><Layer><Name>roads</Name><Title>Roads</Title>
+<Style><Name>default</Name><LegendURL><Format>image/png</Format><OnlineResource xlink:href="LEGEND"/></LegendURL></Style></Layer></Layer></Capability></WMS_Capabilities>"#;
+    let long = format!("https://maps.example.com/legends/{}.png", "a".repeat(rustgis_map::tiles::MAX_LEGEND_URL));
+    for (legend, left_out) in [(long.as_str(), true), ("https://maps.example.com/legends/roads.png", false)] {
+        let mut s = Session::new(Project::default());
+        let mark = s.notice_mark();
+        s.run("service.add", &json!({"url": "https://maps.example.com/wms", "layer": "roads", "text": WMS.replace("LEGEND", legend)}))
+            .unwrap();
+        let notices = s.notices_since(mark);
+        let reported = notices.iter().any(|n| n.text.contains("1 legend picture(s) the service listed were left out"));
+        assert_eq!(reported, left_out, "{notices:?}");
+        assert_eq!(s.map().tiles.first().map(|t| t.legends.len()), Some(usize::from(!left_out)));
+    }
+}
+
 /// A WMS layer added from its service takes its legends (the service's GetLegendGraphic, then
 /// its style's picture); any tile layer can be given one, or several for their scales; they and
 /// whether they show are kept with the project and undo; junk is refused.
@@ -15868,6 +15949,53 @@ fn rounded_raster_values_are_said_on_import_and_export() {
         assert_eq!(said(&s, mark, "3 values in it were rounded to 32-bit floats"), rounded, "{:?}", s.notices_since(mark));
         // The exported file holds the values as they were held: 16777217 is 16777216.
         assert_eq!(rustgis_data::raster::read_path(&out).unwrap().value(0, 0, 0), Some(16_777_216.0));
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// A raster clipped, resampled, mosaicked, warped or pixel-edited from one with values rounded when it
+/// was read keeps a mark
+/// of them, with no count (it holds an unknown share), and its export says so; one made from a
+/// clean raster says nothing of rounding (#1614).
+#[test]
+fn rasters_made_from_rounded_ones_keep_the_rounded_note() {
+    let dir = std::env::temp_dir().join(format!("rustgis-engine-rounded-part-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    const SOME: &str = "some values in it may have been rounded to 32-bit floats";
+    let raster = |s: &Session, name: &str| s.map().layer_by_name(name).and_then(|l| l.raster.as_ref()?.data.clone()).unwrap();
+    let mut s = Session::new(Project::default());
+    for (file, values, rounded) in
+        [("ids.asc", "16777217 100000001\n1234567.891 7", true), ("clean.asc", "16777216 12.3\n123.4567 7", false)]
+    {
+        let path = dir.join(file);
+        std::fs::write(&path, format!("ncols 2\nnrows 2\nxllcorner 10\nyllcorner 40\ncellsize 1\n{values}")).unwrap();
+        let id = s.run("layer.addData", &json!({"path": path})).unwrap()["layer"].as_u64().unwrap();
+        let name = s.map().layer(id as u32).unwrap().name.clone();
+        let clip = format!("{name}_part");
+        s.run("raster.process", &json!({"layer": name, "operation": "clip", "extent": [10.2, 41.2, 10.8, 41.8], "name": clip})).unwrap();
+        let clipped = raster(&s, &clip);
+        assert_eq!((clipped.width, clipped.height, clipped.rounded.is_empty()), (1, 1, true), "{file}");
+        assert_eq!(clipped.rounded_some, if rounded { vec![true] } else { vec![] }, "{file}");
+        let (half, joined) = (format!("{name}_half"), format!("{name}_joined"));
+        s.run("raster.process", &json!({"layer": name, "operation": "resample", "factor": 2, "name": half})).unwrap();
+        s.run("raster.mosaic", &json!({"inputs": [clip, name], "name": joined})).unwrap();
+        let warped = format!("{name}_warped");
+        let points = [[0, 0, 10, 42], [2, 0, 12, 42], [0, 2, 10, 40]];
+        let fit = json!({"layer": name, "transform": "affine", "crs": 4326, "pointsCrs": 4326, "points": points, "name": warped});
+        s.run("raster.georeference", &fit).unwrap();
+        s.run(
+            "raster.editPixels",
+            &json!({"layer": name, "polygon": [[10.1, 40.1], [10.9, 40.1], [10.9, 40.9], [10.1, 40.9]], "value": 1}),
+        )
+        .unwrap();
+        for layer in [clip.as_str(), half.as_str(), joined.as_str(), warped.as_str(), name.as_str()] {
+            let mark = s.notice_mark();
+            s.run("share.exportRaster", &json!({"layer": layer, "path": dir.join(format!("{layer}.tif"))})).unwrap();
+            let notes = s.notices_since(mark);
+            assert_eq!(notes.iter().any(|n| n.text.contains(SOME)), rounded, "{layer}: {notes:?}");
+            // No count is given: the whole file's would be wrong for a part of it.
+            assert!(!notes.iter().any(|n| n.text.contains("3 values in it")), "{layer}: {notes:?}");
+        }
     }
     std::fs::remove_dir_all(dir).unwrap();
 }
@@ -31771,6 +31899,30 @@ fn calculate_field_keeps_decimals_and_says_what_whole_numbers_cut() {
     assert!(s.notices_since(mark).iter().all(|n| !n.text.starts_with("Attribute rule")), "{:?}", s.notices_since(mark));
 }
 
+/// A raster function started on another thread says a `keep` it can't read when it starts, and a
+/// function that doesn't read `keep` says nothing of it (#1600).
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn background_raster_function_says_unread_keep() {
+    use crate::cmd::workflows::raster_start;
+    let mut s = world();
+    s.run("layer.addDataBytes", &json!({"fileName": "dem.tif", "data": dem_b64()})).unwrap();
+    let dem = s.map().layers.iter().find(|l| l.is_raster()).unwrap().name.clone();
+    let said = |s: &Session| s.notices.iter().filter(|n| n.text.contains("keep = \"auto\" (read as false)")).count();
+    s.run("raster.function", &json!({"layer": dem, "function": "slope", "keep": "auto"})).unwrap();
+    assert_eq!(said(&s), 0, "slope doesn't read keep");
+    let p = json!({"layer": dem, "function": "remap", "ranges": [[0, 300, 1]], "keep": "auto"});
+    raster_start(&mut s, "raster.function", &p).unwrap();
+    assert_eq!(said(&s), 1, "{:?}", s.notices.last());
+    let notice = s.notices.iter().rev().find(|n| n.text.contains("keep = \"auto\"")).unwrap().clone();
+    let records = s.diagnostics.records();
+    assert!(records.iter().any(|r| r.message == notice.text && r.source == "raster.function"), "{records:?}");
+    // Each step of a chain, likewise.
+    let chain = json!({"layer": dem, "steps": [{"function": "slope", "keep": "auto"}, {"function": "remap", "ranges": [[0, 90, 1]], "keep": "auto"}]});
+    raster_start(&mut s, "raster.functionChain", &chain).unwrap();
+    assert_eq!(said(&s), 2, "{:?}", s.notices.last());
+}
+
 /// Viewshed and Interpolate made on another thread, as the Analysis pane runs them (#1291 step 3):
 /// the raster handed over (`ran`) is the one the command makes here, a cancelled run is an error
 /// saying so, and a run whose project was closed meanwhile adds nothing.
@@ -32279,6 +32431,15 @@ fn exports_run_on_another_thread() {
     assert!(export_start(&mut s, "share.exportLayer", &json!({"layer": "Countries", "path": at("x.gpkg"), "crs": "EPSG:nope"})).is_err());
     assert!(export_start(&mut s, "share.exportRaster", &json!({"layer": dem, "path": at("x.tif"), "band": 99})).is_err());
     assert!(export_start(&mut s, "layout.export", &json!({"path": at("x.jpg")})).is_err(), "a format it can't write");
+    // A true/false value it can't read is said when it starts, under the command (#1600); a clean
+    // start says nothing.
+    let unread = |s: &Session, mark: u64| s.notices_since(mark).iter().filter(|n| n.text.contains("allPages = \"typo\"")).count();
+    let mark = s.notice_mark();
+    export_start(&mut s, "layout.export", &json!({"path": at("pages.pdf"), "dpi": 48, "allPages": "yes"})).unwrap();
+    assert!(s.notices_since(mark).is_empty(), "{:?}", s.notices_since(mark));
+    export_start(&mut s, "layout.export", &json!({"path": at("pages.pdf"), "dpi": 48, "allPages": "typo"})).unwrap();
+    assert_eq!(unread(&s, mark), 1, "{:?}", s.notices_since(mark));
+    assert_eq!(s.diagnostics.records().last().map(|r| r.source.clone()).as_deref(), Some("layout.export"));
     // Map and layout exports draw a copy of what was there when they started: moving the map or
     // removing the layout meanwhile changes nothing in the file.
     let (here, there) = (at("still_here.png"), at("still_there.png"));
