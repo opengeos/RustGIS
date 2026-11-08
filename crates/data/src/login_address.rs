@@ -122,14 +122,44 @@ fn authority_origin(url: &str) -> Option<String> {
     raw_origin(url.get(..scheme.len() + 3 + end)?)
 }
 
+/// A URL whose path, query or fragment holds whitespace, controls or backslashes, written the
+/// way a WHATWG URL parser (browsers, the `url` crate) sends it: trailing spaces and controls,
+/// tabs and line breaks are dropped, a backslash before the query is a `/`, and the rest are
+/// percent-encoded. Only called once the authority is known to be clean, which this keeps.
+fn as_sent(url: &str) -> String {
+    let url = url.trim_end_matches(|c: char| c <= ' ');
+    let mut out = String::with_capacity(url.len());
+    let mut in_path = true;
+    for c in url.chars() {
+        match c {
+            '\t' | '\n' | '\r' => {}
+            '?' | '#' => {
+                in_path = false;
+                out.push(c);
+            }
+            '\\' if in_path => out.push('/'),
+            c if c == '\\' || c.is_whitespace() || c.is_control() => {
+                let mut buf = [0; 4];
+                for b in c.encode_utf8(&mut buf).bytes() {
+                    out.push_str(&format!("%{b:02X}"));
+                }
+            }
+            c => out.push(c),
+        }
+    }
+    out
+}
+
 /// Retains a document's binding for same-origin derived addresses only.
 pub fn inherit(base: &str, url: &str) -> String {
     let url = inner(url);
     let Ok(Some(b)) = parse(base) else { return url.to_string() };
-    // Compare on the authority alone: a same-origin link whose path or query holds a space, a
-    // backslash or a control character keeps its binding rather than silently going anonymous.
+    // Compare on the authority alone, so a same-origin link whose path or query holds a space,
+    // a backslash or a control character keeps its login instead of silently going anonymous.
+    // Such a link is written as it would be sent; the authority, and so the origin, is unchanged.
     if authority_origin(url).as_deref() == Some(b.origin) {
-        // Keep the actual derived binding even when its size or characters fail the parser.
+        let url = if raw_origin(url).is_some() { url.to_string() } else { as_sent(url) };
+        // Keep the actual derived binding even when its size exceeds the parser's bound.
         // Request validation then refuses it instead of sending an anonymous request.
         format!("{PREFIX}{}:{}:{}:{url}", b.binding, b.origin.len(), b.origin)
     } else {
@@ -185,27 +215,29 @@ mod tests {
     }
 
     #[test]
-    fn same_origin_link_with_unsafe_characters_is_refused_not_anonymous() {
+    fn same_origin_link_with_unsafe_characters_keeps_its_login() {
         let base = bind("0123456789abcdef", "https://a.test", "https://a.test/wms?SERVICE=WMS").unwrap();
-        for derived in [
-            "https://a.test/wms?LAYERS=a b",
-            "https://a.test/dir\\file.png",
-            "https://a.test/x?y=1\u{7}",
-            "https://A.TEST:443/x#frag ment",
-            "https://a.test?LAYERS=a b",
+        for (derived, sent) in [
+            ("https://a.test/wms?LAYERS=a b", "https://a.test/wms?LAYERS=a%20b"),
+            ("https://a.test/a b/{z}/{x}/{y}.png", "https://a.test/a%20b/{z}/{x}/{y}.png"),
+            ("https://a.test/dir\\file.png?q=a\\b", "https://a.test/dir/file.png?q=a%5Cb"),
+            ("https://a.test/x?y=1\u{7}2", "https://a.test/x?y=1%072"),
+            ("https://a.test/x\ty?z=\n1 ", "https://a.test/xy?z=1"),
+            ("https://A.TEST:443/x#frag ment", "https://A.TEST:443/x#frag%20ment"),
+            ("https://a.test?LAYERS=a\u{a0}b", "https://a.test?LAYERS=a%C2%A0b"),
         ] {
             let inherited = inherit(&base, derived);
-            assert!(is_wrapper(&inherited), "{derived}");
-            assert!(inherited.ends_with(derived), "{derived}");
-            assert_eq!(parse(&inherited).unwrap_err(), BAD, "{derived}");
-            assert_eq!(check(&inherited).unwrap_err(), BAD, "{derived}");
+            let bound = parse(&inherited).unwrap().unwrap();
+            assert_eq!((bound.binding, bound.origin, bound.url), ("0123456789abcdef", "https://a.test", sent), "{derived}");
         }
-        // The authority itself still has to be a canonical origin: these never keep the login.
+        // The authority itself still has to be the same canonical origin: these never keep the login.
         for foreign in [
             "https://b.test/wms?LAYERS=a b",
             "https://a.test.evil.test/x y",
             "https://a.test\\@evil.test/x",
+            "https://a.test\\.evil.test/x",
             "https://a.te st/x",
+            "https://a.test\t.evil.test/x",
             "https://u@a.test/x y",
             "http://a.test/x y",
             "https://a.test:8443/x y",
@@ -213,8 +245,8 @@ mod tests {
         ] {
             assert_eq!(inherit(&base, foreign), foreign, "{foreign}");
         }
-        // Clean same-origin links keep a valid binding.
-        assert_eq!(parse(&inherit(&base, "https://a.test/wms?LAYERS=a%20b")).unwrap().unwrap().url, "https://a.test/wms?LAYERS=a%20b");
+        // Clean same-origin links are kept exactly.
+        assert_eq!(parse(&inherit(&base, "https://a.test/wms?LAYERS=a+b")).unwrap().unwrap().url, "https://a.test/wms?LAYERS=a+b");
     }
 
     #[test]
