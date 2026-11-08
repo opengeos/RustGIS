@@ -311,6 +311,48 @@ impl Expr {
 /// The highest zoom [`StyleLayer::color_relief_undrawable`] checks a layer at.
 const MAX_ZOOM_CHECKED: f32 = 24.0;
 
+/// The steps a zoom at which [`StyleLayer::color_relief_undrawable`] checks a layer, between the
+/// zooms its colours name.
+const ZOOM_GRID: f32 = 16.0;
+
+/// Collects every number `n` names: its literals and the stops of its steps and ramps.
+fn numbers(n: &Node, out: &mut Vec<f64>) {
+    // A style's expressions are small; past this many numbers the grid still checks between.
+    if out.len() >= 4096 {
+        return;
+    }
+    let stops = |list: &[(f64, Node)], out: &mut Vec<f64>| {
+        for (at, o) in list {
+            out.push(*at);
+            numbers(o, out);
+        }
+    };
+    match n {
+        Node::Lit(Val::Num(v)) => out.push(*v),
+        Node::Lit(_) | Node::Var(_) | Node::LegacyGet(_) | Node::LegacyHas(_) => {}
+        Node::Call(_, args) => args.iter().for_each(|a| numbers(a, out)),
+        Node::Match(input, arms, default) => {
+            numbers(input, out);
+            arms.iter().for_each(|(_, o)| numbers(o, out));
+            numbers(default, out);
+        }
+        Node::Step(input, first, list) => {
+            numbers(input, out);
+            numbers(first, out);
+            stops(list, out);
+        }
+        Node::Interp(_, input, list) => {
+            numbers(input, out);
+            stops(list, out);
+        }
+        Node::Let(binds, body) => {
+            binds.iter().for_each(|(_, v)| numbers(v, out));
+            numbers(body, out);
+        }
+        Node::Tokens(inner) | Node::LegacyIn(inner, _) => numbers(inner, out),
+    }
+}
+
 /// Colours by height, from a `color-relief-color` (see [`Expr::elevation_ramp`]).
 #[derive(Clone, Debug, PartialEq)]
 pub struct ElevationRamp {
@@ -1739,8 +1781,9 @@ impl StyleLayer {
     }
 
     /// Whether it is a `color-relief` layer drawn at some zoom it shows at without a
-    /// [`color_relief_ramp`](Self::color_relief_ramp), and so skipped there: checked at its
-    /// `minzoom` and each whole zoom from there up to, but not at, its `maxzoom`.
+    /// [`color_relief_ramp`](Self::color_relief_ramp), and so skipped there: checked from its
+    /// `minzoom` up to, but not at, its `maxzoom`, at each zoom its colours name and on a grid of
+    /// [`ZOOM_GRID`] steps a zoom.
     pub fn color_relief_undrawable(&self) -> bool {
         if self.kind != LayerKind::ColorRelief || !self.visible {
             return false;
@@ -1751,8 +1794,18 @@ impl StyleLayer {
         if lo >= hi {
             return false;
         }
-        let whole = (lo.ceil() as u32..hi.ceil() as u32).map(|z| z as f32);
-        std::iter::once(lo).chain(whole).any(|z| self.color_relief_ramp(z).is_none())
+        let Some(expr) = self.paint.get("color-relief-color") else { return true };
+        if !expr.uses_zoom() {
+            return expr.elevation_ramp(lo).is_none();
+        }
+        // Where the colours can change with the zoom: at each number the expression names (the
+        // stops and thresholds of zoom steps, ramps and comparisons) and, for anything worked
+        // out from the zoom, on a fine grid between.
+        let mut zooms = Vec::new();
+        numbers(&expr.0, &mut zooms);
+        let grid = (0..=((hi - lo) * ZOOM_GRID) as u32).map(|i| lo + i as f32 / ZOOM_GRID);
+        let named = zooms.into_iter().filter(|z| z.is_finite()).map(|z| z as f32);
+        std::iter::once(lo).chain(grid).chain(named).filter(|z| (lo..hi).contains(z)).any(|z| expr.elevation_ramp(z).is_none())
     }
 
     /// `color-relief-opacity` (default 1).

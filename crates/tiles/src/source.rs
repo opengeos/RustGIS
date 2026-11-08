@@ -889,6 +889,18 @@ mod tests {
             {"id": "z", "type": "color-relief", "source": "dem", "paint": {"color-relief-color": ["interpolate", ["linear"], ["elevation"], 0, ["step", ["zoom"], "#00f", 8, "nope"], 10, "#fff"]}}]}))
         .unwrap();
         assert!(relief_left_out(&style).is_some_and(|s| s.ends_with(": z")));
+        // Between whole zooms too.
+        let style = Style::parse(&serde_json::json!({"version": 8, "sources": {}, "layers": [
+            {"id": "half", "type": "color-relief", "source": "dem", "minzoom": 7, "maxzoom": 9,
+                "paint": {"color-relief-color": ["interpolate", ["linear"], ["elevation"], 0, ["step", ["zoom"], "#00f", 8.5, "nope"], 1000, "#fff"]}},
+            {"id": "odd", "type": "color-relief", "source": "dem", "minzoom": 7, "maxzoom": 9,
+                "paint": {"color-relief-color": ["case", [">", ["zoom"], 8.51], "nope", ["interpolate", ["linear"], ["elevation"], 0, "#00f", 10, "#fff"]]}}]}))
+        .unwrap();
+        assert!(
+            relief_left_out(&style).is_some_and(|s| s.starts_with("2 ") && s.ends_with(": half, odd")),
+            "{:?}",
+            relief_left_out(&style)
+        );
         // ...but not when it is hidden or only shown where it can be coloured.
         let style = Style::parse(&serde_json::json!({"version": 8, "sources": {}, "layers": [
             {"id": "z", "type": "color-relief", "source": "dem", "maxzoom": 8,
