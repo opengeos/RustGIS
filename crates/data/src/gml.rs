@@ -74,6 +74,43 @@ const GEOMETRIES: &[&str] = &[
     "LinearRing",
 ];
 
+/// Whether a GML element under a property is a shape (read, or of a kind not read). GML's values
+/// that aren't geometry are few: times, definitions, dictionaries and units, metadata, measures
+/// and value objects.
+fn is_shape(name: &str) -> bool {
+    !(name.starts_with("Time")
+        || name.ends_with("Definition")
+        || name.ends_with("Dictionary")
+        || name.ends_with("Unit")
+        || name.ends_with("MetaData")
+        || matches!(
+            name,
+            "DefinitionCollection"
+                | "Null"
+                | "Boolean"
+                | "Category"
+                | "Count"
+                | "Quantity"
+                | "BooleanList"
+                | "CategoryList"
+                | "CountList"
+                | "QuantityList"
+                | "CategoryExtent"
+                | "CountExtent"
+                | "QuantityExtent"
+                | "CompositeValue"
+                | "ValueArray"
+                | "ValueExtent"
+                | "Measure"
+                | "Length"
+                | "Angle"
+                | "Scale"
+                | "Area"
+                | "Volume"
+                | "Speed"
+        ))
+}
+
 /// The coordinates under a node: `gml:pos`/`gml:posList` (with `srsDimension`),
 /// `gml:coordinates` (`cs`, `ts`) or `gml:coord` (`X`, `Y`). `zm` is set when a third or fourth
 /// value (a height or measure) is dropped.
@@ -167,24 +204,15 @@ fn polygon(p: &Node, zm: &Cell<bool>, lost: &Cell<usize>) -> Option<Vec<Vec<Coor
 }
 
 /// A GML geometry element as a geometry; `zm` is set when Z or M values are dropped, and `lost`
-/// counts the rings and parts left out (too few points, or unreadable).
+/// counts the rings and surface patches left out (too few points, or unreadable). Members of a
+/// multi-geometry left out are counted by `parts_lost`.
 fn geometry(g: &Node, zm: &Cell<bool>, lost: &Cell<usize>) -> Option<Geometry> {
-    let left_out = || lost.set(lost.get() + 1);
     let kids =
         |names: &[&str]| -> Vec<Node> { g.descendants().filter(|d| d.is_element() && is_gml(d) && names.contains(&local(d))).collect() };
     match local(g) {
         "Point" => coords(g, zm)?.first().map(|c| Geometry::Point(*c)),
         "MultiPoint" => {
-            let pts: Vec<Coord> = kids(&["Point"])
-                .iter()
-                .filter_map(|p| {
-                    let c = coords(p, zm).and_then(|c| c.first().copied());
-                    if c.is_none() {
-                        left_out();
-                    }
-                    c
-                })
-                .collect();
+            let pts: Vec<Coord> = kids(&["Point"]).iter().filter_map(|p| coords(p, zm)?.first().copied()).collect();
             (!pts.is_empty()).then_some(Geometry::MultiPoint(pts))
         }
         "LineString" | "Curve" | "LinearRing" => {
@@ -195,10 +223,7 @@ fn geometry(g: &Node, zm: &Cell<bool>, lost: &Cell<usize>) -> Option<Geometry> {
             // Only a part kept (two points or more) marks Z or M.
             let kept = |l: &Node| {
                 let dims = Cell::new(false);
-                let Some(c) = coords(l, &dims).filter(|c| c.len() >= 2) else {
-                    left_out();
-                    return None;
-                };
+                let c = coords(l, &dims).filter(|c| c.len() >= 2)?;
                 zm.set(zm.get() || dims.get());
                 Some(c)
             };
@@ -210,10 +235,12 @@ fn geometry(g: &Node, zm: &Cell<bool>, lost: &Cell<usize>) -> Option<Geometry> {
             let polys: Vec<Vec<Vec<Coord>>> = kids(&["Polygon", "PolygonPatch"])
                 .iter()
                 .filter_map(|p| {
-                    // A polygon left out whole counts once, not by its rings.
+                    // A polygon left out whole counts once, not by its rings; a multi-geometry's
+                    // member left out is counted by `parts_lost`, so only a surface's patch here.
                     let rings = Cell::new(0);
                     let poly = polygon(p, zm, &rings);
-                    lost.set(lost.get() + if poly.is_some() { rings.get() } else { 1 });
+                    let whole = usize::from(!local(g).starts_with("Multi"));
+                    lost.set(lost.get() + if poly.is_some() { rings.get() } else { whole });
                     poly
                 })
                 .collect();
@@ -237,6 +264,43 @@ fn geometry(g: &Node, zm: &Cell<bool>, lost: &Cell<usize>) -> Option<Geometry> {
     }
 }
 
+/// How many members of a multi-geometry give nothing to keep: a member that is only a reference
+/// (`xlink:href`), or a part too short (a line of one point). 0 for other geometries.
+fn parts_lost(g: &Node) -> usize {
+    let kind = local(g);
+    if !kind.starts_with("Multi") {
+        return 0;
+    }
+    let scratch = Cell::new(false);
+    let gives = |part: &Node| {
+        part.descendants().any(|x| {
+            x.is_element()
+                && is_gml(&x)
+                && match (kind, local(&x)) {
+                    ("MultiPoint", "Point") => coords(&x, &scratch).is_some_and(|c| !c.is_empty()),
+                    ("MultiLineString" | "MultiCurve", "LineString" | "Curve") => coords(&x, &scratch).is_some_and(|c| c.len() >= 2),
+                    ("MultiPolygon" | "MultiSurface", "Polygon" | "PolygonPatch") => polygon(&x, &scratch, &Cell::new(0)).is_some(),
+                    _ => false,
+                }
+        })
+    };
+    // A member property holds one part (`curveMember`), a members property several (`curveMembers`).
+    g.children()
+        .filter(|m| m.is_element())
+        .flat_map(|m| {
+            let n = local(&m);
+            if n.ends_with("Members") {
+                m.children().filter(|c| c.is_element()).collect()
+            } else if n.ends_with("Member") {
+                vec![m]
+            } else {
+                Vec::new()
+            }
+        })
+        .filter(|p| !gives(p))
+        .count()
+}
+
 /// A feature type being read: its attribute columns in order of appearance, and its rows.
 #[derive(Default)]
 struct Kind {
@@ -244,7 +308,15 @@ struct Kind {
     rows: Vec<(Option<Geometry>, BTreeMap<String, String>)>,
     /// Features whose Z or M values were dropped.
     zm: usize,
-    /// Rings and parts of its geometries left out.
+    /// Properties not read (a nested record, a time, a shape past the one kept): how many, and the
+    /// first few names.
+    unread: usize,
+    unread_names: Vec<String>,
+    /// More distinct properties were left unread than are named.
+    unread_more: bool,
+    /// Members of multi-geometries that gave nothing to keep.
+    parts_lost: usize,
+    /// Rings and surface patches of its geometries left out.
     lost: usize,
 }
 
@@ -288,7 +360,13 @@ pub fn read(file_name: &str, bytes: &[u8]) -> Result<Vec<(Dataset, ReadReport)>>
         let mut bad = false;
         // Whether the geometry kept had Z or M values.
         let mut zm = false;
-        let mut parts_lost = 0;
+        // Rings and surface patches left out of the geometry kept.
+        let mut rings_lost = 0;
+        // Properties not read, and those holding GML of a kind not read (another kind of
+        // geometry): the feature's unreadable shape when it has none, else not read.
+        let (mut unread, mut shapes_not_read) = (Vec::new(), Vec::new());
+        // Geometry properties that couldn't be read: said as not read when another gave the shape.
+        let mut failed = Vec::new();
         for p in f.children().filter(|c| c.is_element()) {
             // A property holding a geometry, or a simple value.
             // A feature's bounding box (gml:boundedBy) is neither its shape nor an attribute.
@@ -297,6 +375,7 @@ pub fn read(file_name: &str, bytes: &[u8]) -> Result<Vec<(Dataset, ReadReport)>>
             }
             if let Some(g) = p.children().find(|c| c.is_element() && is_gml(c) && GEOMETRIES.contains(&local(c))) {
                 if geom.is_some() {
+                    unread.push(local(&p).to_string());
                     continue;
                 }
                 let s = g.attribute("srsName").or_else(|| g.descendants().find_map(|d| d.attribute("srsName")));
@@ -312,22 +391,47 @@ pub fn read(file_name: &str, bytes: &[u8]) -> Result<Vec<(Dataset, ReadReport)>>
                 match geometry(&g, &dims, &lost) {
                     Some(gm) => {
                         zm = dims.get();
-                        parts_lost += lost.get();
+                        rings_lost += lost.get();
                         geom = Some(gm);
+                        kind.parts_lost += parts_lost(&g);
                     }
-                    None => bad = true,
+                    None => {
+                        bad = true;
+                        failed.push(local(&p).to_string());
+                    }
                 }
-            } else if p.children().any(|c| c.is_element() && is_gml(&c)) {
-                // A geometry of a kind not read (a CompositeCurve, a Solid…): said as unreadable.
-                if geom.is_none() {
-                    bad = true;
-                }
-            } else if !(p.children().any(|c| c.is_element()) || is_gml(&p) && local(&p) == "boundedBy") {
+            } else if let Some(c) = p.children().find(|c| c.is_element() && is_gml(c)) {
+                // A geometry of a kind not read (a CompositeCurve, a Solid…) may be the feature's
+                // only shape; another GML value (a time, a definition) is no shape.
+                if is_shape(local(&c)) { &mut shapes_not_read } else { &mut unread }.push(local(&p).to_string());
+            } else if p.children().any(|c| c.is_element()) {
+                // A nested record isn't an attribute.
+                unread.push(local(&p).to_string());
+            } else {
                 let key = local(&p).to_string();
                 if !kind.columns.contains(&key) && kind.columns.len() < 500 {
                     kind.columns.push(key.clone());
                 }
                 attrs.insert(key, text_of(&p).trim().to_string());
+            }
+        }
+        // With no shape read, the first one that failed or isn't read is the feature's unreadable
+        // shape; any others are said as not read.
+        failed.append(&mut shapes_not_read);
+        if geom.is_none() && !failed.is_empty() {
+            bad = true;
+            unread.extend(failed.drain(..).skip(1));
+        } else {
+            unread.append(&mut failed);
+        }
+        for p in unread {
+            kind.unread += 1;
+            if !kind.unread_names.contains(&p) {
+                if kind.unread_names.len() < 3 {
+                    kind.unread_names.push(p);
+                } else {
+                    kind.unread_more = true;
+                }
             }
         }
         // A gml:id is a feature's id when it has no other.
@@ -340,7 +444,7 @@ pub fn read(file_name: &str, bytes: &[u8]) -> Result<Vec<(Dataset, ReadReport)>>
         // A geometry that couldn't be read, unless another property gave the feature its shape.
         skipped += usize::from(bad && geom.is_none());
         kind.zm += usize::from(zm && geom.is_some());
-        kind.lost += parts_lost;
+        kind.lost += rings_lost;
         kind.rows.push((geom, attrs));
     }
     let mut report = ReadReport { skipped, ..ReadReport::default() };
@@ -368,7 +472,8 @@ pub fn read(file_name: &str, bytes: &[u8]) -> Result<Vec<(Dataset, ReadReport)>>
             .collect();
         let title = if single { stem.clone() } else { format!("{stem} {name}") };
         let mut ds = Dataset::new(title, GeometryType::None, fields);
-        let zm = kind.zm;
+        let (zm, unread, parts) = (kind.zm, kind.unread, kind.parts_lost);
+        let unread_names = kind.unread_names.join(", ") + if kind.unread_more { ", …" } else { "" };
         let mut outside = false;
         for (g, attrs) in kind.rows {
             let g = g.map(|g| match &transform {
@@ -397,13 +502,25 @@ pub fn read(file_name: &str, bytes: &[u8]) -> Result<Vec<(Dataset, ReadReport)>>
         // Said with the layer it happened in, which may be the only one added.
         if kind.lost > 0 {
             rep.messages.push(format!(
-                "{}: {} rings or parts of geometries were left out: too few points, unreadable coordinates, a polygon with no exterior ring, or an exterior ring past the first",
+                "{}: {} rings or surface patches of geometries were left out: too few points, unreadable coordinates, a patch with no exterior ring, or an exterior ring past the first",
                 ds.name, kind.lost
             ));
         }
         if zm > 0 {
             ds.zm_dropped = true;
             rep.messages.push(format!("{}: {}", ds.name, crate::zm_note(Some(zm as u64))));
+        }
+        if parts > 0 {
+            let what = if parts == 1 { "part" } else { "parts" };
+            rep.messages
+                .push(format!("{}: {parts} {what} of multi-geometries not read (a reference, too short, or of a kind not read)", ds.name));
+        }
+        if unread > 0 {
+            let what = if unread == 1 { "property" } else { "properties" };
+            rep.messages.push(format!(
+                "{}: {unread} {what} not read: nested records, other GML values or further shapes ({unread_names})",
+                ds.name
+            ));
         }
         out.push((ds, rep));
     }
@@ -443,6 +560,7 @@ mod tests {
         );
         assert!(matches!(&layers[1].0.features[0].geometry, Some(Geometry::Polygon(p)) if p[0].len() == 2));
         assert_eq!(layers[0].1.skipped, 0, "a feature's boundedBy is no failed geometry");
+        assert!(layers.iter().all(|(_, r)| !r.messages.iter().any(|m| m.contains("nested"))), "{layers:?}");
     }
 
     #[test]
@@ -478,8 +596,13 @@ mod tests {
         let (ds, rep) = &layers[0];
         assert_eq!((ds.features.len(), rep.skipped), (1, 0));
         assert_eq!(ds.features[0].geometry, Some(Geometry::Point(Coord::new(10.0, 48.0))));
-        // Its height is dropped, and said.
+        // Its height is dropped, and said; so is the nested `member` property, not an attribute.
         assert!(ds.zm_dropped && rep.messages.iter().any(|m| m.contains("Z or M values")), "{:?}", rep.messages);
+        assert!(
+            rep.messages.iter().any(|m| m == "n: 1 property not read: nested records, other GML values or further shapes (member)"),
+            "{:?}",
+            rep.messages
+        );
 
         // A one-point 3D part is left out, and its height with it: the 2D line kept drops no Z,
         // and the part left out is said.
@@ -489,7 +612,16 @@ mod tests {
 </wfs:FeatureCollection>"#;
         let layers = read("r.gml", gml.as_bytes()).unwrap();
         assert!(!layers[0].0.zm_dropped, "{:?}", layers[0].1.messages);
-        assert!(layers[0].1.messages.iter().any(|m| m.contains(": 1 rings or parts")), "{:?}", layers[0].1.messages);
+        // The part left out is said.
+        assert!(
+            layers[0]
+                .1
+                .messages
+                .iter()
+                .any(|m| m == "r: 1 part of multi-geometries not read (a reference, too short, or of a kind not read)"),
+            "{:?}",
+            layers[0].1.messages
+        );
         assert_eq!(layers[0].0.features[0].geometry, Some(Geometry::Line(vec![vec![Coord::new(10.0, 48.0), Coord::new(11.0, 49.0)]])));
 
         // A two-point 3D interior ring is left out: the 2D polygon kept drops no Z, and the ring
@@ -502,18 +634,22 @@ mod tests {
 </wfs:FeatureCollection>"#;
         let layers = read("p.gml", gml.as_bytes()).unwrap();
         assert!(!layers[0].0.zm_dropped, "{:?}", layers[0].1.messages);
-        assert!(layers[0].1.messages.iter().any(|m| m.contains(": 1 rings or parts")), "{:?}", layers[0].1.messages);
+        assert!(layers[0].1.messages.iter().any(|m| m.contains(": 1 rings or surface patches")), "{:?}", layers[0].1.messages);
         assert!(matches!(&layers[0].0.features[0].geometry, Some(Geometry::Polygon(p)) if p.len() == 1 && p[0].len() == 1));
     }
 
-    /// Rings and parts with too few points are left out and counted, once a kind; a clean file
-    /// says nothing of them.
+    /// Rings with too few points are left out and counted, once a kind, and a multi-geometry's
+    /// member left out only as a part; a clean file says nothing of them.
     #[test]
     fn rings_and_parts_left_out_are_counted() {
         let layers = read("w.gml", WFS.as_bytes()).unwrap();
-        assert!(layers.iter().all(|(_, r)| !r.messages.iter().any(|m| m.contains("rings or parts"))), "{:?}", layers[0].1.messages);
-        // A second exterior ring, and a surface with a polygon whose only ring is two points, beside
-        // one that draws: two left out, one notice.
+        assert!(
+            layers.iter().all(|(_, r)| !r.messages.iter().any(|m| m.contains("rings or surface patches"))),
+            "{:?}",
+            layers[0].1.messages
+        );
+        // A second exterior ring is a ring left out; a multi-surface's polygon whose only ring is
+        // two points is a part left out, said once, by the parts notice.
         let gml = r#"<wfs:FeatureCollection xmlns:wfs="http://www.opengis.net/wfs/2.0" xmlns:gml="http://www.opengis.net/gml/3.2" xmlns:app="http://example.com/app">
 <wfs:member><app:parcels gml:id="p.1"><app:geom><gml:Polygon srsName="EPSG:4326">
   <gml:exterior><gml:LinearRing><gml:posList>10 48 11 48 11 49 10 48</gml:posList></gml:LinearRing></gml:exterior>
@@ -527,9 +663,10 @@ mod tests {
         let layers = read("p.gml", gml.as_bytes()).unwrap();
         let (ds, rep) = &layers[0];
         assert_eq!((ds.features.len(), rep.skipped), (2, 0));
-        let said: Vec<&String> = rep.messages.iter().filter(|m| m.contains("rings or parts")).collect();
+        let said: Vec<&String> = rep.messages.iter().filter(|m| m.contains("rings or surface patches")).collect();
         assert_eq!(said.len(), 1, "{:?}", rep.messages);
-        assert!(said[0].contains(": 2 rings or parts"), "{said:?}");
+        assert!(said[0].contains(": 1 rings or surface patches"), "{said:?}");
+        assert!(rep.messages.iter().any(|m| m.contains(": 1 part of multi-geometries")), "{:?}", rep.messages);
 
         // With two feature types, the notice goes with the one that lost a part, not the first.
         let gml = r#"<wfs:FeatureCollection xmlns:wfs="http://www.opengis.net/wfs/2.0" xmlns:gml="http://www.opengis.net/gml/3.2" xmlns:app="http://example.com/app">
@@ -540,16 +677,13 @@ mod tests {
 </gml:MultiSurface></app:geom></app:parcels></wfs:member>
 </wfs:FeatureCollection>"#;
         let layers = read("two.gml", gml.as_bytes()).unwrap();
-        let said = |i: usize| layers[i].1.messages.iter().any(|m| m.contains("rings or parts"));
+        let said = |i: usize| layers[i].1.messages.iter().any(|m| m.contains("multi-geometries"));
         assert_eq!(layers.len(), 2);
         assert!(!said(0) && said(1), "{:?}", layers.iter().map(|l| &l.1.messages).collect::<Vec<_>>());
-        assert!(
-            layers[1].1.messages.iter().any(|m| m.starts_with(&format!("{}: 1 rings", layers[1].0.name))),
-            "{:?}",
-            layers[1].1.messages
-        );
+        assert!(layers[1].1.messages.iter().any(|m| m.starts_with(&format!("{}: 1 part", layers[1].0.name))), "{:?}", layers[1].1.messages);
 
-        // A surface's polygon with only an interior ring is left out and counted once.
+        // A multi-surface's polygon with only an interior ring is left out and counted once, as a
+        // part, not again as a ring.
         let gml = r#"<wfs:FeatureCollection xmlns:wfs="http://www.opengis.net/wfs/2.0" xmlns:gml="http://www.opengis.net/gml/3.2" xmlns:app="http://example.com/app">
 <wfs:member><app:parcels gml:id="p.1"><app:geom><gml:MultiSurface srsName="EPSG:4326">
   <gml:surfaceMember><gml:Polygon><gml:exterior><gml:LinearRing><gml:posList>10 48 11 48 11 49 10 48</gml:posList></gml:LinearRing></gml:exterior></gml:Polygon></gml:surfaceMember>
@@ -557,8 +691,68 @@ mod tests {
 </gml:MultiSurface></app:geom></app:parcels></wfs:member>
 </wfs:FeatureCollection>"#;
         let layers = read("hole.gml", gml.as_bytes()).unwrap();
-        let said: Vec<&String> = layers[0].1.messages.iter().filter(|m| m.contains("rings or parts")).collect();
-        assert!(said.len() == 1 && said[0].contains(": 1 rings") && said[0].contains("no exterior ring"), "{said:?}");
+        let messages = &layers[0].1.messages;
+        assert!(!messages.iter().any(|m| m.contains("rings or surface patches")), "{messages:?}");
+        assert!(messages.iter().any(|m| m.contains(": 1 part of multi-geometries")), "{messages:?}");
+    }
+
+    /// A multi-geometry member that is only a reference gives nothing, and is said; a whole one
+    /// says nothing.
+    #[test]
+    fn referenced_members_are_said() {
+        let gml = r##"<wfs:FeatureCollection xmlns:wfs="http://www.opengis.net/wfs/2.0" xmlns:gml="http://www.opengis.net/gml/3.2" xmlns:xlink="http://www.w3.org/1999/xlink" xmlns:app="http://example.com/app">
+<wfs:member><app:r gml:id="r.1"><app:geom><gml:MultiCurve><gml:curveMember><gml:LineString><gml:posList>10 48 11 49</gml:posList></gml:LineString></gml:curveMember>
+<gml:curveMember><gml:OrientableCurve><gml:baseCurve xlink:href="#c.9"/></gml:OrientableCurve></gml:curveMember></gml:MultiCurve></app:geom></app:r></wfs:member>
+<wfs:member><app:r gml:id="r.2"><app:geom><gml:MultiCurve><gml:curveMembers><gml:LineString><gml:posList>20 48 21 49</gml:posList></gml:LineString>
+<gml:OrientableCurve><gml:baseCurve><gml:LineString><gml:posList>22 48 23 49</gml:posList></gml:LineString></gml:baseCurve></gml:OrientableCurve></gml:curveMembers></gml:MultiCurve></app:geom></app:r></wfs:member>
+</wfs:FeatureCollection>"##;
+        let layers = read("m.gml", gml.as_bytes()).unwrap();
+        let (ds, rep) = &layers[0];
+        assert_eq!((ds.features.len(), rep.skipped), (2, 0));
+        assert!(matches!(&ds.features[1].geometry, Some(Geometry::Line(l)) if l.len() == 2));
+        let said: Vec<&String> = rep.messages.iter().filter(|m| m.contains("multi-geometries")).collect();
+        assert_eq!(said, ["m: 1 part of multi-geometries not read (a reference, too short, or of a kind not read)"]);
+    }
+
+    /// Properties that aren't attributes (a nested record, a time, a second shape) are said on
+    /// their own feature type's layer, counted.
+    #[test]
+    fn unread_properties_are_said_on_their_layer() {
+        let gml = r#"<wfs:FeatureCollection xmlns:wfs="http://www.opengis.net/wfs/2.0" xmlns:gml="http://www.opengis.net/gml/3.2" xmlns:app="http://example.com/app">
+<wfs:member><app:roads gml:id="r.1"><app:name>A</app:name><app:geom><gml:LineString><gml:posList>10 48 11 49</gml:posList></gml:LineString></app:geom></app:roads></wfs:member>
+<wfs:member><app:parks gml:id="p.1"><app:owner><app:who>Ann</app:who></app:owner><app:built><gml:TimeInstant><gml:timePosition>2020</gml:timePosition></gml:TimeInstant></app:built>
+  <app:geom><gml:Point><gml:pos>10 48</gml:pos></gml:Point></app:geom><app:entrance><gml:Point><gml:pos>10 49</gml:pos></gml:Point></app:entrance></app:parks></wfs:member>
+</wfs:FeatureCollection>"#;
+        let layers = read("t.gml", gml.as_bytes()).unwrap();
+        // The file's skipped count goes with the first layer: no shape was unreadable.
+        assert_eq!(layers[0].1.skipped, 0, "{:?}", layers[0].1.messages);
+        assert!(!layers[0].1.messages.iter().any(|m| m.contains("not read")), "{:?}", layers[0].1.messages);
+        let (ds, rep) = &layers[1];
+        assert_eq!(ds.features.len(), 1);
+        // The first shape is the one kept; the second is said as not read.
+        assert_eq!(ds.features[0].geometry, Some(Geometry::Point(Coord::new(10.0, 48.0))));
+        assert!(
+            rep.messages
+                .iter()
+                .any(|m| m == "t parks: 3 properties not read: nested records, other GML values or further shapes (owner, built, entrance)"),
+            "{:?}",
+            rep.messages
+        );
+
+        // A GML value that isn't a shape (a definition) on a feature without one is a property not
+        // read, not an unreadable shape; past three names the list says it goes on.
+        let gml = r#"<wfs:FeatureCollection xmlns:wfs="http://www.opengis.net/wfs/2.0" xmlns:gml="http://www.opengis.net/gml/3.2" xmlns:app="http://example.com/app">
+<wfs:member><app:notes gml:id="n.1"><app:a><app:x>1</app:x></app:a><app:b><app:x>2</app:x></app:b><app:c><app:x>3</app:x></app:c>
+  <app:d><gml:Definition gml:id="d.1"><gml:identifier codeSpace="x">d</gml:identifier></gml:Definition></app:d></app:notes></wfs:member>
+</wfs:FeatureCollection>"#;
+        let layers = read("d.gml", gml.as_bytes()).unwrap();
+        let (ds, rep) = &layers[0];
+        assert_eq!((ds.features.len(), rep.skipped), (1, 0), "{:?}", rep.messages);
+        assert!(
+            rep.messages.iter().any(|m| m == "d: 4 properties not read: nested records, other GML values or further shapes (a, b, c, …)"),
+            "{:?}",
+            rep.messages
+        );
     }
 
     #[test]
@@ -571,6 +765,35 @@ mod tests {
         let (ds, rep) = &layers[0];
         assert_eq!((ds.features.len(), rep.skipped), (2, 1));
         assert!(ds.features[0].geometry.is_none());
+        // A surface patch as the only shape is an unreadable shape too, not a property not read.
+        let gml = r#"<wfs:FeatureCollection xmlns:wfs="http://www.opengis.net/wfs/2.0" xmlns:gml="http://www.opengis.net/gml/3.2" xmlns:app="http://example.com/app">
+<wfs:member><app:plots gml:id="t.1"><app:geom><gml:Triangle><gml:exterior><gml:LinearRing><gml:posList>10 48 11 48 10 49 10 48</gml:posList></gml:LinearRing></gml:exterior></gml:Triangle></app:geom></app:plots></wfs:member>
+</wfs:FeatureCollection>"#;
+        let layers = read("t.gml", gml.as_bytes()).unwrap();
+        let (ds, rep) = &layers[0];
+        assert_eq!((ds.features.len(), rep.skipped), (1, 1), "{:?}", rep.messages);
+        assert!(!rep.messages.iter().any(|m| m.contains("not read:")), "{:?}", rep.messages);
+        // Two such shapes and metadata: one unreadable shape, the second shape and the metadata said.
+        let gml = r#"<wfs:FeatureCollection xmlns:wfs="http://www.opengis.net/wfs/2.0" xmlns:gml="http://www.opengis.net/gml/3.2" xmlns:app="http://example.com/app">
+<wfs:member><app:plots gml:id="t.1"><app:a><gml:Triangle/></app:a><app:b><gml:Solid/></app:b><app:m><gml:GenericMetaData>x</gml:GenericMetaData></app:m></app:plots></wfs:member>
+</wfs:FeatureCollection>"#;
+        let layers = read("u.gml", gml.as_bytes()).unwrap();
+        let (_, rep) = &layers[0];
+        assert_eq!(rep.skipped, 1, "{:?}", rep.messages);
+        assert!(rep.messages.iter().any(|m| m.ends_with("further shapes (m, b)")), "{:?}", rep.messages);
+        // A shape that can't be read, with another that can: the feature has its shape, and the
+        // one left out is said.
+        let gml = r#"<wfs:FeatureCollection xmlns:wfs="http://www.opengis.net/wfs/2.0" xmlns:gml="http://www.opengis.net/gml/3.2" xmlns:app="http://example.com/app">
+<wfs:member><app:sites gml:id="s.1"><app:a><gml:LineString><gml:posList>x y</gml:posList></gml:LineString></app:a><app:b><gml:Point><gml:pos>10 48</gml:pos></gml:Point></app:b></app:sites></wfs:member>
+</wfs:FeatureCollection>"#;
+        let layers = read("s.gml", gml.as_bytes()).unwrap();
+        let (ds, rep) = &layers[0];
+        assert_eq!((rep.skipped, ds.features[0].geometry.clone()), (0, Some(Geometry::Point(Coord::new(10.0, 48.0)))));
+        assert!(
+            rep.messages.iter().any(|m| m.ends_with("not read: nested records, other GML values or further shapes (a)")),
+            "{:?}",
+            rep.messages
+        );
     }
 
     #[test]
