@@ -76,6 +76,9 @@ pub fn commands() -> Vec<C> {
             let mut l = s.project.layouts.get(i).ok_or("open a layout first")?.clone();
             l.name = super::copy_name(ps(p, "newName"), &l.name, |n| s.project.layouts.iter().any(|x| x.name.eq_ignore_ascii_case(n)));
             let name = l.name.clone();
+            if s.project.layouts.len() >= crate::project::MAX_LAYOUTS {
+                return Err(format!("a project holds at most {} layouts; remove one first", crate::project::MAX_LAYOUTS));
+            }
             s.project.layouts.insert(i + 1, l);
             s.active_layout = Some(i + 1);
             Ok(json!({"name": name, "layout": i + 1}))

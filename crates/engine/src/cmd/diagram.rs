@@ -564,6 +564,8 @@ mod tests {
         assert_eq!(said.iter().filter(|t| t.contains("1 diagram category(ies) with a blank field name")).count(), 1, "{said:?}");
         // The cap the reader keeps is the one commands keep: no 201st layout to lose.
         assert!(full.run("layout.new", &json!({})).is_err());
+        assert!(full.run("layout.duplicate", &json!({"layout": 0})).is_err());
+        assert_eq!(full.project.layouts.len(), 200);
         // Importing its styles takes no diagrams or layouts, so says nothing of them.
         let mut styled = Session::new(Project::default());
         let mark = styled.notices.len();
