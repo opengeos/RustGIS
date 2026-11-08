@@ -28938,6 +28938,21 @@ fn session_log_entries_name_their_project_and_say_when_their_params_are_partial(
         s.run("script.run", &json!({"script": "map.new {\"name\": \"M\", \"secretAccessKey\": \"S3CRET\", \"secretAccessKey\": \"\"}"}));
     let twice = last(&s);
     assert!(!twice.params.to_string().contains("S3CRET") && twice.partial, "{twice:?}");
+    // Nor with its name escaped, nor a key a plain name blanks only for its value, nor deeper in.
+    for script in [
+        r#"map.new {"name": "M", "\u0074oken": "S3CRET", "\u0074oken": ""}"#,
+        r#"map.new {"name": "M", "key": "AKIAIOSFODNN7S3CRET", "key": ""}"#,
+        r#"map.new {"name": "M", "style": {"token": "S3CRET", "token": ""}}"#,
+    ] {
+        let _ = s.run("script.run", &json!({"script": script}));
+        let e = last(&s);
+        assert!(!e.params.to_string().contains("S3CRET") && e.partial, "{script}: {e:?}");
+    }
+    // A name past the bound is cut, and says so.
+    s.project.name = "n".repeat(crate::cmd::MAX_NAME + 5);
+    s.run("map.new", &json!({"name": "Long"})).unwrap();
+    assert_eq!(last(&s).project, format!("{}…", "n".repeat(crate::cmd::MAX_NAME)));
+    s.project.name = "Atlas".into();
     // A script past the log's bound is cut: partial, so it isn't run again as a part.
     let long = format!("# {}", "x".repeat(crate::project_log::LOG_PARAMS_BYTES * 2));
     s.run("script.run", &json!({"script": long})).unwrap();

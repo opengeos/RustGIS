@@ -258,6 +258,56 @@ fn embedded_redacted(v: &Value, depth: usize) -> Value {
     }
 }
 
+/// JSON whose every object has each of its keys once, as its text is read: deserializing one with
+/// a key written twice (at any depth) fails.
+struct OnceEach;
+
+impl<'de> Deserialize<'de> for OnceEach {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        d.deserialize_any(OnceEach)
+    }
+}
+
+impl<'de> serde::de::Visitor<'de> for OnceEach {
+    type Value = OnceEach;
+
+    fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str("JSON")
+    }
+    fn visit_bool<E>(self, _: bool) -> Result<Self, E> {
+        Ok(self)
+    }
+    fn visit_i64<E>(self, _: i64) -> Result<Self, E> {
+        Ok(self)
+    }
+    fn visit_u64<E>(self, _: u64) -> Result<Self, E> {
+        Ok(self)
+    }
+    fn visit_f64<E>(self, _: f64) -> Result<Self, E> {
+        Ok(self)
+    }
+    fn visit_str<E>(self, _: &str) -> Result<Self, E> {
+        Ok(self)
+    }
+    fn visit_unit<E>(self) -> Result<Self, E> {
+        Ok(self)
+    }
+    fn visit_seq<A: serde::de::SeqAccess<'de>>(self, mut items: A) -> Result<Self, A::Error> {
+        while items.next_element::<OnceEach>()?.is_some() {}
+        Ok(self)
+    }
+    fn visit_map<A: serde::de::MapAccess<'de>>(self, mut keys: A) -> Result<Self, A::Error> {
+        let mut seen = std::collections::HashSet::new();
+        while let Some(key) = keys.next_key::<String>()? {
+            if !seen.insert(key) {
+                return Err(serde::de::Error::custom("a key written twice"));
+            }
+            keys.next_value::<OnceEach>()?;
+        }
+        Ok(self)
+    }
+}
+
 /// `t` with each JSON object it holds (from a `{` to where the object ends) redacted. Texts are
 /// clipped before this, so trying each `{` stays cheap; the secret names are looked for once.
 pub(crate) fn json_in_text_redacted(t: &str) -> String {
@@ -274,11 +324,12 @@ pub(crate) fn json_in_text_redacted(t: &str) -> String {
             Some(Ok(v @ Value::Object(_))) => {
                 let end = objects.byte_offset();
                 // Nothing taken out: the object as written, so a script copied back from the log
-                // is the one run, and isn't said to be partial for its spacing. Not one naming a
-                // secret: a key written twice is read as its last, and the text keeps the first.
+                // is the one run, and isn't said to be partial for its spacing. Only one with no
+                // key written twice: it is read as its last value, and its text keeps the others
+                // (a secret's first, its last left empty, its name escaped or not).
                 let kept = crate::cmd::history::redacted(&v);
                 let written = from.get(..end).unwrap_or("");
-                if kept == v && last_secret_name(written).is_none() {
+                if kept == v && serde_json::from_str::<OnceEach>(written).is_ok() {
                     out.push_str(written);
                 } else {
                     out.push_str(&serde_json::to_string(&kept).unwrap_or_default());
@@ -450,10 +501,17 @@ pub(crate) fn entry(s: &Session, id: &str, params: Value, partial: bool, res: &C
         ok: res.is_ok(),
         error,
         millis: u64::try_from(took.as_millis()).unwrap_or(u64::MAX),
-        project: s.title().chars().take(200).collect(),
+        project: kept_name(&s.title()),
         opened: s.opened,
         partial,
     }
+}
+
+/// A project's name as the log keeps it: cut at [`crate::cmd::MAX_NAME`] characters and a `…`, as
+/// a name read from a file may be longer than one given to `project.rename`.
+fn kept_name(name: &str) -> String {
+    let max = crate::cmd::MAX_NAME;
+    if name.chars().nth(max).is_some() { format!("{}…", name.chars().take(max).collect::<String>()) } else { name.to_string() }
 }
 
 /// `params` as the log keeps them ([`kept_params`]), and whether that is less than they were:
