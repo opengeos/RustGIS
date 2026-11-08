@@ -698,7 +698,10 @@ fn authalic_ring_area_m2(ring: &[Coord]) -> f64 {
         };
         total += dlon.to_radians() * mean;
     }
-    (total * rq2).abs()
+    // More than the whole surface is extra winding (a degenerate ring through both poles): no
+    // region is larger than the globe.
+    let area = (total * rq2).abs();
+    if area > WGS84_AREA_M2 * (1.0 + 1e-6) { area % WGS84_AREA_M2 } else { area }
 }
 
 /// Surface area 2πa²(1 + (1 − e²) atanh(e) / e) for WGS 84 (square metres).
@@ -800,7 +803,11 @@ fn sphere_ring_area_m2(ring: &[Coord], steps: impl Iterator<Item = f64>, full: b
             dlon.to_radians() * (2.0 + sines)
         })
         .sum();
-    (total * EARTH_RADIUS_M * EARTH_RADIUS_M / 2.0).abs()
+    let area = (total * EARTH_RADIUS_M * EARTH_RADIUS_M / 2.0).abs();
+    // In a ring with a full turn, more than the whole surface is extra winding (a degenerate ring
+    // through both poles), as in [`authalic_ring_area_m2`].
+    let globe = 4.0 * std::f64::consts::PI * EARTH_RADIUS_M * EARTH_RADIUS_M;
+    if full && area > globe * (1.0 + 1e-6) { area % globe } else { area }
 }
 
 /// Map scale denominator (1:N) for a Web Mercator resolution (metres per screen pixel) at a latitude.
@@ -1087,6 +1094,10 @@ mod tests {
         // A ring through both poles measures the same from whichever vertex it starts.
         let both = [c(-180.0, -90.0), c(180.0, -90.0), c(-90.0, 90.0), c(90.0, 90.0)];
         let (sphere0, wgs0) = (geodesic_ring_area_m2(&both), wgs84_ring_perimeter_area_m2(&both).1);
+        let globe = 4.0 * std::f64::consts::PI * EARTH_RADIUS_M * EARTH_RADIUS_M;
+        assert!(sphere0 <= globe && wgs0 <= WGS84_AREA_M2, "{sphere0} {wgs0}");
+        let other = [c(-180.0, 90.0), c(180.0, 90.0), c(-90.0, -90.0), c(90.0, -80.0)];
+        assert!(geodesic_ring_area_m2(&other) <= globe && wgs84_ring_perimeter_area_m2(&other).1 <= WGS84_AREA_M2);
         for k in 1..both.len() {
             let mut turned = both.to_vec();
             turned.rotate_left(k);
