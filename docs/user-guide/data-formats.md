@@ -581,7 +581,7 @@ were rounded, and Export Raster, which writes the rounded values, says so again.
 | FlatGeobuf | Data › Export to `.fgb` | In the layer's coordinate system (see below), with a spatial index; features without geometry are left out (and reported). Desktop only: the writer needs a temporary file, which the browser doesn't have. |
 | KML, KMZ, GPX | Data › Export to `.kml`, `.kmz` or `.gpx` | Placemarks named by a `name` field, if there is one; features without geometry are left out. |
 | GeoJSON, KML, GPX, CSV, CSV with WKT | Analyze › Workflows › Data Interop (`data.convert`; `"format": "geojson"`, `"kml"`, `"gpx"`, `"csv"` or `"wkt"`) | Returns text when `"path"` is omitted; writes a file on desktop when it is given. |
-| GeoTIFF / Cloud-optimised GeoTIFF | Data › Export Raster (`share.exportRaster`) | Untiled GeoTIFF by default; `"cog": true` writes 512-pixel tiles, Deflate compression and overviews. Writes the loaded raster's resolution (an overview when that is what was opened), the selected band or its colour bands. The web app's Export Raster downloads an ordinary GeoTIFF. |
+| GeoTIFF / Cloud-optimised GeoTIFF | Data › Export Raster (`share.exportRaster`) | Untiled GeoTIFF by default; `"cog": true` writes 512-pixel tiles, Deflate compression and overviews. Writes the loaded raster's resolution (an overview when that is what was opened), the selected band or its colour bands. A WMS, WMTS or XYZ tile layer (`"tiles"`) is written as its tiles at one zoom, RGBA in Web Mercator (see [Sharing](sharing.md#exporting)). The web app's Export Raster downloads an ordinary GeoTIFF. |
 | PNG | Publish › Export Map (`share.exportMap`) | Configurable DPI, with labels, scale bar and tile credits. |
 | GeoTIFF of the map view | Publish › Export Map to `.tif` (`share.exportMap`) | The view as an RGB GeoTIFF in the map's projection, with labels but no scale bar; tile credits in the Copyright tag; `"cog": true` for a cloud-optimised one. Flat, untilted maps of the Earth only (see [Exporting](sharing.md#exporting)). |
 | PDF | Layouts, reports, presentations and the map view (Print Map), as vectors | |
@@ -600,9 +600,9 @@ RustGIS keeps x and y only. When a source has Z or M values (heights or measures
 they were dropped, and exporting or converting the layer (or exporting a standalone table that
 holds geometry), or sharing it as a web map, web layer or OGC API Features, says what's written
 lacks them.
-Shapefile, GeoPackage, GeoParquet, FlatGeobuf, PostGIS, File Geodatabase, GeoJSON, KML (altitudes
-other than 0), GML and CSV WKT columns are checked; sources read through GDAL or DuckDB, and SQL
-Server tables, aren't yet. GPX elevations and LiDAR heights are kept as fields, and a File
+Shapefile, GeoPackage, GeoParquet, FlatGeobuf, PostGIS, SQL Server, File Geodatabase, GeoJSON, KML
+(altitudes other than 0), GML and CSV WKT columns are checked; sources read through GDAL or DuckDB
+aren't yet. GPX elevations and LiDAR heights are kept as fields, and a File
 Geodatabase multipatch's heights as `z_min` and `z_max`. Where a source doesn't declare its
 dimensions, only a sample is checked: the first 16 rows of a GeoParquet file without geometry types
 (in its first row group), and the first 16 rows with a geometry of a GeoPackage table with optional
