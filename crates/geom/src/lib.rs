@@ -507,9 +507,6 @@ fn wgs84_parallel_m(lat_deg: f64, dlon_deg: f64) -> f64 {
 /// decimals or more keeps its full turns.
 const NEAR_DEG: f64 = 1e-4;
 
-/// A vertex this close to the one before it (degrees) repeats it, for [`ring_lon_steps`].
-const SAME_DEG: f64 = 1e-9;
-
 /// Whether a latitude is at a pole, within [`NEAR_DEG`].
 fn at_pole(lat: f64) -> bool {
     lat.is_finite() && lat.abs() >= 90.0 - NEAR_DEG
