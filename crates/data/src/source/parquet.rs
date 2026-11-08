@@ -1259,7 +1259,7 @@ fn bool_cell(value: &Value) -> Option<bool> {
 }
 
 /// Whether the GeoParquet writer writes `value` as null in a column of type `ty` although it
-/// isn't null.
+/// isn't null (in a Double column: text that isn't a number, NaN or an infinity).
 fn unfit(ty: FieldType, value: &Value) -> bool {
     !value.is_null()
         && match ty {
@@ -1279,18 +1279,16 @@ pub fn unfit_note(fields: &[Field], counts: &[usize], target: &str) -> Option<St
         return None;
     }
     let named: Vec<&str> = fields.iter().zip(counts).filter(|(_, n)| **n > 0).map(|(f, _)| f.name.as_str()).collect();
-    let mut list: Vec<String> =
-        named.iter().take(5).map(|n| format!("'{}'", n.chars().filter(|c| !c.is_control()).take(64).collect::<String>())).collect();
-    if named.len() > 5 {
-        list.push(format!("and {} more", named.len() - 5));
-    }
+    // Names and the target flattened and bounded as the Shapefile notices' are, on one line.
+    let list: Vec<String> = named.iter().take(5).map(|n| format!("'{}'", crate::io::dbf_notice_name(n))).collect();
+    let more = if named.len() > 5 { format!(" and {} more", named.len() - 5) } else { String::new() };
     let what = if total == 1 {
-        "1 value didn't fit its column's type and was".to_string()
+        "1 value couldn't be written as its column's type and was".to_string()
     } else {
-        format!("{total} values didn't fit their columns' types and were")
+        format!("{total} values couldn't be written as their columns' types and were")
     };
-    let target: String = target.chars().filter(|c| !c.is_control()).collect();
-    Some(format!("{target}: {what} written as null, in {}", list.join(", ")))
+    let target: String = target.chars().map(crate::io::dbf_notice_char).collect();
+    Some(format!("{target}: {what} written as null, in {}{more}", list.join(", ")))
 }
 
 /// [`unfit_note`] for writing the whole of `ds` as GeoParquet.

@@ -342,11 +342,15 @@ fn geoparquet_counts_values_written_as_null() {
     ds.features[3].attrs[3] = Value::Text("yes".into());
     ds.features[4].attrs[0] = Value::Int(4);
     ds.features[5].attrs[1] = Value::Null;
+    ds.features[6].attrs[2] = Value::Float(f64::NAN);
     let layer = Dataset::new("squares", ds.geometry_type, ds.fields.clone());
     let streamed = write_chunks_in(&Runs::new(&ds, 40), &layer, &d.join("lossy.parquet"), Crs::LonLat, 2048).unwrap();
-    assert_eq!(streamed.unfit, vec![0, 2, 0, 1]);
+    assert_eq!(streamed.unfit, vec![0, 2, 1, 1]);
     let note = crate::source::parquet::unfit_note(&layer.fields, &streamed.unfit, "lossy.parquet").unwrap();
-    assert_eq!(note, "lossy.parquet: 3 values didn't fit their columns' types and were written as null, in 'count', 'open'");
+    assert_eq!(
+        note,
+        "lossy.parquet: 4 values couldn't be written as their columns' types and were written as null, in 'count', 'share', 'open'"
+    );
     assert_eq!(crate::source::parquet::values_note(&ds, "lossy.parquet").as_deref(), Some(note.as_str()));
     let back = read_back(&d.join("lossy.parquet"));
     assert_eq!((&back.features[1].attrs[1], &back.features[3].attrs[3]), (&Value::Null, &Value::Null));
@@ -359,5 +363,10 @@ fn geoparquet_counts_values_written_as_null() {
     // Other formats count nothing.
     let csv = write_chunks_in(&Runs::new(&ds, 40), &layer, &d.join("lossy.csv"), Crs::LonLat, 2048).unwrap();
     assert!(csv.unfit.is_empty());
+    // Names and the target are flattened and bounded, so the notice stays one line in order.
+    let fields = vec![Field::new("a\u{202E}b\nc", FieldType::Integer), Field::new("x".repeat(60), FieldType::Integer)];
+    let note = crate::source::parquet::unfit_note(&fields, &[1, 1], "out\u{2028}.parquet").unwrap();
+    let want = "out .parquet: 2 values couldn't be written as their columns' types and were written as null, in 'a b c'";
+    assert_eq!(note, format!("{want}, '{}…'", "x".repeat(40)));
     let _ = std::fs::remove_dir_all(d);
 }
