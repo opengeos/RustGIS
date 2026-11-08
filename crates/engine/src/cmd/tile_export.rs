@@ -23,13 +23,23 @@ pub(crate) const MOST_TILES: u64 = 1024;
 /// written, 1 GiB at this size.
 const MOST_SIDE: u64 = rustgis_render::MAX_SIDE as u64;
 
-/// The side of the blocks the picture is drawn in, each with at most a few dozen tiles (a
-/// drawing places at most [`rustgis_tiles::template::MAX_TILES`]).
+/// The side of the blocks the picture is drawn in, each with at most a few dozen tiles of 256
+/// pixels ([`block_side`] makes it smaller for smaller tiles).
 const BLOCK: u32 = 2048;
+
+/// The side of the blocks for `tile_size`-pixel tiles: a block touches at most 20 tiles a side,
+/// 400 in all, the most a drawing places ([`rustgis_tiles::template::MAX_TILES`]); more would be
+/// left out.
+fn block_side(tile_size: u32) -> u32 {
+    BLOCK.min(tile_size.max(1).saturating_mul(19))
+}
 
 /// How long a block waits for its tiles, and the layer's description (a TileJSON, an archive's
 /// header) for its tile grid.
 const WAIT: Duration = Duration::from_secs(60);
+
+/// The most different drawing errors an export names in full.
+const SHOWN_ERRORS: usize = 3;
 
 /// Waits for tiles in a row that bring nothing new before a block is written with what came.
 const IDLE_PASSES: u32 = 3;
@@ -117,7 +127,8 @@ pub(crate) fn export_work(s: &Session, p: &Value, i: usize) -> Result<Work, Stri
 
 /// A `bbox` of `[west, south, east, north]` in degrees.
 fn bbox(v: &Value) -> Result<Extent, String> {
-    let n: Vec<f64> = v.as_array().map(|a| a.iter().filter_map(Value::as_f64).collect()).unwrap_or_default();
+    // Every element a number: one that isn't is refused, not skipped.
+    let n: Vec<f64> = v.as_array().and_then(|a| a.iter().map(Value::as_f64).collect()).unwrap_or_default();
     let [w, s, e, n] = n[..] else { return Err("bbox is [west, south, east, north] in degrees".into()) };
     if !(w < e && s < n && (-90.0..=90.0).contains(&s) && (-90.0..=90.0).contains(&n) && w >= -540.0 && e <= 540.0) {
         return Err("bbox is [west, south, east, north] in degrees, west below east and south below north".into());
@@ -127,12 +138,14 @@ fn bbox(v: &Value) -> Result<Extent, String> {
     Ok(Extent::new(w - turn, s, e - turn, n))
 }
 
-/// The tile grid a layer's tiles are on: their pixels a side and the zooms they come at.
-#[derive(Clone, Copy, Debug, PartialEq)]
+/// The tile grid a layer's tiles are on: their pixels a side and the zooms they come at, and
+/// their addresses (templates the tiles' drawing fills in).
+#[derive(Clone, Debug, PartialEq)]
 struct Grid {
     tile_size: u32,
     min_zoom: u8,
     max_zoom: u8,
+    tiles: Vec<String>,
 }
 
 /// The tile grid of a resolved layer that draws raster tiles only; why it can't be exported
@@ -144,12 +157,21 @@ fn grid_of(name: &str, r: &source::Resolved) -> Result<Grid, String> {
             "{name} draws vector tiles (shapes and labels in a style), not pictures: Export Map (share.exportMap) to a .tif writes what the map draws"
         ));
     }
-    shown
-        .iter()
-        .filter_map(|l| r.style.sources.iter().find(|(id, _)| Some(id) == l.source.as_ref()).map(|(_, s)| s))
-        .find_map(|s| match s {
-            style::Source::Raster { tile_size, min_zoom, max_zoom, .. } => {
-                Some(Grid { tile_size: (*tile_size).max(1), min_zoom: *min_zoom, max_zoom: *max_zoom })
+    // One source: the tiles of several, each on its own grid, aren't one grid of pixels.
+    let mut ids: Vec<&String> = shown.iter().filter_map(|l| l.source.as_ref()).collect();
+    ids.sort();
+    ids.dedup();
+    if ids.len() > 1 {
+        return Err(format!(
+            "{name} draws tiles from {} sources: Export Raster writes one source's tiles; Export Map (share.exportMap) to a .tif writes what the map draws",
+            ids.len()
+        ));
+    }
+    ids.first()
+        .and_then(|id| r.style.sources.iter().find(|(s, _)| s == *id))
+        .and_then(|(_, s)| match s {
+            style::Source::Raster { tiles, tile_size, min_zoom, max_zoom, .. } => {
+                Some(Grid { tile_size: (*tile_size).max(1), min_zoom: *min_zoom, max_zoom: *max_zoom, tiles: tiles.clone() })
             }
             _ => None,
         })
@@ -194,6 +216,33 @@ fn first_zoom(g: &Grid) -> u8 {
     (g.min_zoom..=g.max_zoom.max(g.min_zoom))
         .find(|z| f64::from(rustgis_tiles::template::style_zoom(res_at(*z, g.tile_size))) + 0.5 >= f64::from(g.min_zoom))
         .unwrap_or(g.min_zoom)
+}
+
+/// The tiles at zoom `z` over a `w × h` block at `frame` that failed (fetched, or read, without
+/// a picture), as the cache keeps them: one error each. A tile the server hasn't (a 404 past its
+/// coverage) is one too: on the ground its gap passes for data.
+fn failed_tiles(templates: &[String], frame: &Frame, w: u32, h: u32, z: u8) -> Vec<String> {
+    if templates.is_empty() {
+        return Vec::new();
+    }
+    let (right, bottom) = (frame.left + f64::from(w) * frame.m_per_px, frame.top - f64::from(h) * frame.m_per_px);
+    let view = Extent::new(frame.left, bottom, right, frame.top);
+    // Each tile once: at the world's edge a tile is placed again a world over.
+    let mut urls: Vec<String> = rustgis_tiles::template::covering(&view, z)
+        .into_iter()
+        .filter_map(|p| {
+            let i = (p.id.x as usize).wrapping_add(p.id.y as usize) % templates.len();
+            Some(rustgis_tiles::template::expand(templates.get(i)?, p.id, 256, false, &[]))
+        })
+        .collect();
+    urls.sort();
+    urls.dedup();
+    urls.into_iter()
+        .filter_map(|url| match cache::get_tile(&url, cache::Want::Image) {
+            cache::State::Failed(e) => Some(e),
+            _ => None,
+        })
+        .collect()
 }
 
 /// Metres a pixel of zoom `z`'s `tile_size`-pixel tiles.
@@ -302,13 +351,17 @@ fn write(t: &TileLayer, path: &str, area: Extent, zoom: Option<u8>, shown: Optio
         .map(|_| rustgis_data::raster::filled::<f32>(w as usize, h as usize, 0.0))
         .collect::<Result<_, _>>()
         .map_err(|e| format!("{name}: {e}"))?;
-    let (bx, by) = (w.div_ceil(BLOCK), h.div_ceil(BLOCK));
+    let side = block_side(g.tile_size);
+    let (bx, by) = (w.div_ceil(side), h.div_ceil(side));
     rustgis_data::progress::begin((bx * by) as usize);
-    let (mut credits, mut pending, mut errors, mut drew) = (Vec::<String>::new(), false, Vec::<String>::new(), false);
+    let (mut credits, mut errors, mut drew) = (Vec::<String>::new(), Vec::<String>::new(), false);
+    // The blocks with tiles still on their way when the wait ended, and those with tiles that
+    // couldn't be drawn.
+    let (mut pending, mut failed, mut lost) = (0u32, 0u32, 0u64);
     for j in 0..by {
         for i in 0..bx {
-            let (x0, y0) = (i * BLOCK, j * BLOCK);
-            let (bw, bh) = (BLOCK.min(w - x0), BLOCK.min(h - y0));
+            let (x0, y0) = (i * side, j * side);
+            let (bw, bh) = (side.min(w - x0), side.min(h - y0));
             let frame = Frame { left: left + f64::from(x0) * res, top: top - f64::from(y0) * res, m_per_px: res, ppp: 1.0 };
             let (pm, d) = block(&spec, &frame, bw, bh)?;
             for c in d.attribution {
@@ -316,11 +369,17 @@ fn write(t: &TileLayer, path: &str, area: Extent, zoom: Option<u8>, shown: Optio
                     credits.push(c);
                 }
             }
-            pending |= d.pending;
-            if let Some(e) = d.error
-                && !errors.contains(&e)
-            {
-                errors.push(e);
+            pending += u32::from(d.pending);
+            // The drawing leaves out a tile that failed without saying so: the cache does.
+            let missing = failed_tiles(&g.tiles, &frame, bw, bh, fetched);
+            if d.error.is_some() || !missing.is_empty() {
+                failed += 1;
+            }
+            lost += missing.len() as u64;
+            for e in d.error.into_iter().chain(missing) {
+                if !errors.contains(&e) {
+                    errors.push(e);
+                }
             }
             for (k, px) in pm.pixels().iter().enumerate() {
                 let (col, row) = (x0 as usize + k % bw as usize, y0 as usize + k / bw as usize);
@@ -359,17 +418,26 @@ fn write(t: &TileLayer, path: &str, area: Extent, zoom: Option<u8>, shown: Optio
     }
     // On the ground a gap passes for data: said, as a warning.
     let mut gaps = Vec::new();
-    if pending {
+    let blocks = bx * by;
+    if pending > 0 {
         gaps.push(format!(
-            "{path}: some of {name}'s tiles didn't come within {} s, so parts of it are empty: export again later",
-            WAIT.as_secs()
+            "{path}: in {pending} of its {blocks} block(s) of up to {side} × {side} pixels, some of {name}'s tiles hadn't come after the wait, so parts of it are empty: export again later"
         ));
     }
-    if !drew && !pending && errors.is_empty() {
+    if !drew && pending == 0 && errors.is_empty() {
         gaps.push(format!("{path}: {name} drew nothing in the box at zoom {z}: its service may have no tiles there"));
     }
-    if let Some(first) = errors.first() {
-        gaps.push(format!("{path}: some of {name} couldn't be drawn, so parts of it may be empty: {first}"));
+    if !errors.is_empty() {
+        // Each different error, a few in full.
+        let shown: Vec<&str> = errors.iter().take(SHOWN_ERRORS).map(String::as_str).collect();
+        let more = errors.len().saturating_sub(SHOWN_ERRORS);
+        let more = if more > 0 { format!(" (and {more} more)") } else { String::new() };
+        let tiles = if lost > 0 { format!(" ({lost} tile(s) couldn't be fetched or read)") } else { String::new() };
+        gaps.push(format!(
+            "{path}: in {failed} of its {blocks} block(s), {name} couldn't be drawn whole{tiles}, so parts of it are empty; {} different error(s): {}{more}",
+            errors.len(),
+            shown.join(" | ")
+        ));
     }
     if !gaps.is_empty() {
         wrote.then = Some(Box::new(move |s: &mut Session, _: &mut Value| {
@@ -413,9 +481,11 @@ mod tests {
     /// 512-pixel zoom against it); 512-pixel ones from their first.
     #[test]
     fn the_first_zoom_is_the_first_drawn() {
-        let g = |tile_size, min_zoom| Grid { tile_size, min_zoom, max_zoom: 18 };
+        let g = |tile_size, min_zoom| Grid { tile_size, min_zoom, max_zoom: 18, tiles: Vec::new() };
         assert_eq!(first_zoom(&g(256, 10)), 11);
         assert_eq!(first_zoom(&g(512, 10)), 10);
         assert_eq!(first_zoom(&g(256, 0)), 0);
+        // Blocks touch at most 400 tiles, however small the tiles.
+        assert_eq!((block_side(256), block_side(64), block_side(0)), (2048, 1216, 19));
     }
 }

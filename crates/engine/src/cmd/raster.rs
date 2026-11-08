@@ -968,6 +968,10 @@ pub(crate) fn export_work(s: &Session, p: &Value) -> Result<super::exports::Work
         return super::tile_export::export_work(s, p, i);
     }
     let path = ps(p, "path").ok_or("path is required")?.to_string();
+    // A raster layer is written whole: a box or zoom asked for would be dropped.
+    if [p.get("bbox"), p.get("zoom")].into_iter().flatten().any(|v| !v.is_null()) {
+        return Err("bbox and zoom are for a tile layer: name it with \"tiles\", or pick it in the Layers pane".into());
+    }
     // No layer named or active, nor a tile layer picked: what to pick.
     if matches!(p.get("layer"), None | Some(Value::Null))
         && let Some(why) = need_raster(s)

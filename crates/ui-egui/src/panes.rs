@@ -1748,7 +1748,11 @@ fn tile_row(app: &mut RustGisApp, ui: &mut Ui, i: usize, moves: [bool; 2], reord
             ui.close();
         }
         // Its raster tiles over the view, as a GeoTIFF placed on the ground.
-        if matches!(tile.kind, TileKind::Raster | TileKind::PmTiles | TileKind::MbTiles) && ui.button(tl!("Export Raster…")).clicked() {
+        // Not a vector archive (one whose source layers its header names).
+        if matches!(tile.kind, TileKind::Raster | TileKind::PmTiles | TileKind::MbTiles)
+            && sources.is_none()
+            && ui.button(tl!("Export Raster…")).clicked()
+        {
             action = Some(("ui.exportRaster", json!({"tiles": i})));
             ui.close();
         }

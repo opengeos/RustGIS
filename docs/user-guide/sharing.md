@@ -41,9 +41,11 @@ at the top), `"bbox"` (`[west, south, east, north]` in degrees, the view's by de
 says so. An export fetches at most 1024 tiles and holds at most 8192 pixels a side: past either it
 is refused, naming a zoom that fits, as many tile services' terms forbid bulk downloads
 (OpenStreetMap's tile usage policy, for one). Tiles that haven't come after a wait (up to a minute for
-each 2048-pixel block), or can't be drawn, leave gaps, and the export warns; so does a box where
-it drew nothing. Vector tiles and styles are refused: Export Map to a
-`.tif` writes what they draw. The web app exports the view with Export Map instead.
+each block of up to 2048 pixels), or can't be fetched or drawn (a server's "no tile here"
+included), leave gaps, and the export warns with how many; so does a box where it drew nothing.
+The layer's opacity is a display setting and isn't applied: the file keeps the tiles' own alpha. Vector tiles, and styles that draw them or draw tiles from more
+than one source, are refused: Export Map to a `.tif` writes what they draw. A style drawing only
+one source's raster tiles is written as those tiles. The web app exports the view with Export Map instead.
 
 **Print Map** opens a PDF of the map view, kept as
 vectors as a layout's PDF is (see Layouts), in the system viewer on desktop; **Capture To
