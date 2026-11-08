@@ -14,7 +14,7 @@ templates, packages and files for individual items.
 A project file holds the features of every layer loaded whole (GeoJSON, KML/KMZ, GPX, and
 Shapefiles of up to 100,000 features), so a project of many such layers grows large. How large a
 project can be saved and opened follows the computer's memory: on the desktop, as much as a
-quarter of it holds open (about 680 MiB of project for every 16 GB), from 512 MiB up to 4 GiB; in
+quarter of it holds open (about 800 MiB of project for every 16 GB), from 512 MiB up to 4 GiB; in
 the web app, 512 MiB. Save refuses a project past it, rather than writing one that can't be opened
 again, and Open refuses a larger file, saying its size and the limit. A project saved on a
 computer with more memory may need one like it to open. A project package (`.rgispkg`) stays

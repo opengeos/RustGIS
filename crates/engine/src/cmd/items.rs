@@ -15,8 +15,9 @@ use super::{b, f, need_feature_layer, need_layer, ps};
 use crate::project::{StyleItem, Task, TaskStep};
 use crate::{CmdResult, CommandSpec as C, Project, Session};
 
-/// Largest item file read: a project's ([`crate::project::max_bytes`]), as an item file may be
-/// a whole project (Import Maps reads `.rgis` files).
+/// Largest item file read: a project's ([`crate::project::max_bytes`]), for every kind of item
+/// (maps, layers, styles, tasks, packages), as each was bounded like a project before and an
+/// item file may be a whole project (Import Maps reads `.rgis` files).
 fn max_file() -> u64 {
     crate::project::max_bytes()
 }

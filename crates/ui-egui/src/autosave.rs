@@ -733,8 +733,8 @@ mod folder {
                 .and_then(|f| f.take(max + 1).read_to_end(&mut bytes))
                 .map_err(|e| format!("{}: {e}", path.display()))?;
             if bytes.len() as u64 > max {
-                let limit = rustgis_engine::project::limit_said(max - MAX_HEADER);
-                return Err(crate::i18n::fmt("the recovery copy is too large (maximum {limit})", &[("limit", &limit)]));
+                let mib = ((max - MAX_HEADER) >> 20).to_string();
+                return Err(crate::i18n::fmt("the recovery copy is too large (maximum {mib} MiB on this computer)", &[("mib", &mib)]));
             }
             // The description line goes in place: a copy near the size limit isn't held twice.
             let mut text = String::from_utf8(bytes).map_err(|_| "the recovery copy isn't text".to_string())?;

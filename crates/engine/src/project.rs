@@ -71,8 +71,10 @@ pub const BYTES_CEILING: u64 = 4 << 30;
 /// - points with 30 one-letter attributes, about the most a byte of file costs: about 5.2
 ///   (87 MiB took 453 MiB).
 ///
-/// Planned at 6, above the most measured.
-const MEMORY_PER_BYTE: u64 = 6;
+/// Planned at 5: at the limit, even the most measured takes little more than a quarter of the
+/// memory, and a project of the size in #1615 (659 MiB) opens on a computer sold as 16 GB, which
+/// reports a little less than 16 GiB.
+const MEMORY_PER_BYTE: u64 = 5;
 
 /// Largest project file read or saved on this computer (#1615): on the desktop as much as a
 /// quarter of its memory holds open at [`MEMORY_PER_BYTE`] a byte, from [`BYTES_FLOOR`] up to
@@ -90,7 +92,13 @@ pub fn max_bytes() -> u64 {
 /// [`max_bytes`] on a computer with `memory` bytes (`None`: not known), as
 /// [`rustgis_data::memory::scaled`] works it out, in `u64` so it is the same on a 32-bit build.
 fn max_bytes_for(memory: Option<u64>) -> u64 {
-    memory.map_or(BYTES_FLOOR, |m| (m / rustgis_data::memory::SHARE / MEMORY_PER_BYTE).clamp(BYTES_FLOOR, BYTES_CEILING))
+    memory.map_or(BYTES_FLOOR, |m| (m / rustgis_data::memory::SHARE / MEMORY_PER_BYTE).clamp(BYTES_FLOOR, ceiling()))
+}
+
+/// [`BYTES_CEILING`], within what a buffer can hold here: on a 32-bit build a buffer holds at
+/// most `isize::MAX` bytes and grows by doubling, so a project's text stops at half of that.
+fn ceiling() -> u64 {
+    BYTES_CEILING.min(u64::try_from(isize::MAX).unwrap_or(u64::MAX) / 2).max(BYTES_FLOOR)
 }
 
 /// `value` as JSON text, or `None` as soon as it passes `max` bytes: the text of a project too
@@ -107,6 +115,8 @@ pub(crate) fn json_within<T: Serialize + ?Sized>(value: &T, max: u64) -> Result<
                 self.over = true;
                 return Err(std::io::Error::other("past the limit"));
             }
+            // A machine short of memory gets an error, not an abort.
+            self.buf.try_reserve(b.len()).map_err(|_| std::io::Error::other("out of memory"))?;
             self.buf.extend_from_slice(b);
             Ok(b.len())
         }
@@ -1201,7 +1211,8 @@ impl Project {
             return Err(format!(
                 "{} is {} MiB, more than a project can be (maximum {}){more}",
                 path.display(),
-                meta.len() >> 20,
+                // Rounded up: a file a byte past 512 MiB isn't "512 MiB".
+                meta.len().div_ceil(1 << 20),
                 limit_said(max)
             ));
         }
@@ -1481,21 +1492,40 @@ mod limit_tests {
 
     const GIB: u64 = 1 << 30;
 
-    /// A quarter of the memory, at 6 bytes a byte of project: a twenty-fourth of it, from 512 MiB
-    /// to 4 GiB; 512 MiB where the memory isn't known (the browser).
+    /// A quarter of the memory, at 5 bytes a byte of project: a twentieth of it, from 512 MiB to
+    /// 4 GiB; 512 MiB where the memory isn't known (the browser).
     #[test]
     fn the_project_limit_follows_the_memory() {
         assert_eq!(max_bytes_for(None), BYTES_FLOOR);
         assert_eq!(max_bytes_for(Some(8 * GIB)), BYTES_FLOOR, "never below the floor");
-        assert_eq!(max_bytes_for(Some(16 * GIB)), 16 * GIB / 24);
-        assert_eq!(max_bytes_for(Some(64 * GIB)), 64 * GIB / 24);
-        assert_eq!(max_bytes_for(Some(96 * GIB)), 4 * GIB);
-        assert_eq!(max_bytes_for(Some(1024 * GIB)), BYTES_CEILING, "never above the ceiling");
-        assert_eq!(max_bytes_for(Some(u64::MAX)), BYTES_CEILING, "no overflow");
-        // The 659 MiB project of #1615 opens on a computer with 16 GiB.
-        assert!(max_bytes_for(Some(16 * GIB)) > 659 << 20);
+        assert_eq!(max_bytes_for(Some(16 * GIB)), 16 * GIB / 20);
+        assert_eq!(max_bytes_for(Some(64 * GIB)), 64 * GIB / 20);
+        assert_eq!(max_bytes_for(Some(80 * GIB)), ceiling());
+        assert_eq!(max_bytes_for(Some(1024 * GIB)), ceiling(), "never above the ceiling");
+        assert_eq!(max_bytes_for(Some(u64::MAX)), ceiling(), "no overflow");
+        // The 659 MiB project of #1615 opens on a computer sold as 16 GB, which reports less.
+        assert!(max_bytes_for(Some(15 * GIB)) > 659 << 20);
+        // A 32-bit build stops where its buffers can grow to.
+        assert!(ceiling() <= u64::try_from(isize::MAX).unwrap_or(u64::MAX) / 2 || ceiling() == BYTES_FLOOR);
         let max = max_bytes();
         assert!((BYTES_FLOOR..=BYTES_CEILING).contains(&max), "{max}");
+    }
+
+    /// Writing stops at the limit: what comes after it is never serialized.
+    #[test]
+    fn serializing_stops_at_the_limit() {
+        struct Probe<'a>(&'a std::cell::Cell<bool>);
+        impl Serialize for Probe<'_> {
+            fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+                self.0.set(true);
+                s.serialize_unit()
+            }
+        }
+        let visited = std::cell::Cell::new(false);
+        let v = ("x".repeat(100), Probe(&visited));
+        assert_eq!(json_within(&v, 50).ok(), Some(None));
+        assert!(!visited.get(), "the value after the limit was serialized");
+        assert!(json_within(&v, 1000).ok().flatten().is_some() && visited.get());
     }
 
     /// The text stops at the limit: whole within it, none past it, never built past it.
