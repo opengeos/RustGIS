@@ -163,7 +163,22 @@ fn png_of(
     dpi: Option<f64>,
 ) -> Result<Vec<u8>, String> {
     let view = export_view(map.camera, view_size, width, height, dpi);
+    // Past the canvas's limit the picture would be cut off at its top left: refused instead.
+    fits_pixels(&view, false)?;
     rustgis_render::render_png(map, &view)
+}
+
+/// Refuses an export of `view` with a side past the [`rustgis_render::MAX_SIDE`] pixels a canvas
+/// holds, saying how many it would be (and, for the box around a `turned` view, that the box is
+/// why).
+fn fits_pixels(view: &View, turned: bool) -> Result<(), String> {
+    let (pw, ph) = ((view.width * view.pixels_per_point).round(), (view.height * view.pixels_per_point).round());
+    let most = f64::from(rustgis_render::MAX_SIDE);
+    if pw <= most && ph <= most {
+        return Ok(());
+    }
+    let why = if turned { " (the box around the turned view; or set the bearing to 0)" } else { "" };
+    Err(format!("{pw} × {ph} pixels{why} is more than the {most} a side an export draws: give a smaller width, height or dpi"))
 }
 
 /// The most characters of the credits a GeoTIFF export's notice shows; its answer has them all.
@@ -215,7 +230,8 @@ fn export_view(
     let (width, height, dpi) = (fin(width), fin(height), fin(dpi));
     let w = width.unwrap_or(vw).clamp(16.0, MOST_POINTS);
     let h = height.unwrap_or(vh).clamp(16.0, MOST_POINTS);
-    let ppp = (dpi.unwrap_or(96.0) / 96.0).clamp(0.5, 6.0);
+    // 48 to 600 DPI, as the command says.
+    let ppp = (dpi.unwrap_or(96.0) / 96.0).clamp(0.5, 6.25);
     let mut camera = camera;
     // Keep the same ground extent when the size differs from the view.
     if width.is_some() || height.is_some() {
@@ -247,7 +263,8 @@ pub fn map_pdf(s: &mut Session, dpi: f64) -> Result<Vec<u8>, String> {
     Ok(rustgis_render::pdf::write(&[page], &s.map().name))
 }
 
-/// `share.exportMap`: draws the active map as it is now to a PNG. It draws a copy of the map, so
+/// `share.exportMap`: draws the active map as it is now to a PNG, or a GeoTIFF for a `.tif` or
+/// `.tiff` path ([`geotiff_work`]). It draws a copy of the map, so
 /// the map can move meanwhile; a cancelled export stops waiting for tiles and writes nothing.
 pub(crate) fn map_work(s: &Session, p: &Value) -> Result<Work, String> {
     let path = ps(p, "path").ok_or("path is required")?.to_string();
@@ -262,7 +279,7 @@ pub(crate) fn map_work(s: &Session, p: &Value) -> Result<Work, String> {
         return geotiff_work(s, path, export_view(s.map().camera, s.view_size, width, height, dpi), cog, sized);
     }
     if cog {
-        return Err("cog is for a GeoTIFF (.tif) export".into());
+        return Err("cog is for a GeoTIFF (.tif or .tiff) export".into());
     }
     let (mut map, view_size) = (s.map().detached(), s.view_size);
     Ok(Box::new(move || {
@@ -318,17 +335,8 @@ fn geotiff_work(
             format!("{path}: the map is turned {bearing:.0}°, so the GeoTIFF is drawn north up over the box around the view"),
         ));
     }
-    let (pw, ph) = (view.width * view.pixels_per_point, view.height * view.pixels_per_point);
-    let most = f64::from(rustgis_render::MAX_SIDE);
-    if pw.round() > most || ph.round() > most {
-        // A turned view's box is larger than the view: say so, as the fix differs.
-        let turned = if turned { " (the box around the turned view; or set the bearing to 0)" } else { "" };
-        return Err(format!(
-            "{} × {} pixels{turned} is more than the {most} a side an export draws: give a smaller width, height or dpi",
-            pw.round(),
-            ph.round()
-        ));
-    }
+    // A turned view's box is larger than the view: said, as the fix differs.
+    fits_pixels(&view, turned)?;
     let name = m.name.clone();
     let mut map = m.detached();
     Ok(Box::new(move || {

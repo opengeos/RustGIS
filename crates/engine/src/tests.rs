@@ -33188,6 +33188,13 @@ fn export_map_to_geotiff_places_the_view_on_the_ground() {
         &s.notices[n..]
     );
     assert!(!s.notices[n..].iter().any(|x| x.text.contains("height of")));
+    // 600 DPI is 6.25 pixels a point, as the command says, not cut to 576.
+    let fine = dir.join("fine.tif");
+    let out = s.run("share.exportMap", &json!({"path": fine.display().to_string(), "width": 100, "height": 100, "dpi": 600})).unwrap();
+    assert_eq!((out["width"].as_u64(), out["height"].as_u64()), (Some(625), Some(625)));
+    // A PNG past the canvas's 8192 pixels a side is refused too, not cut off at its top left.
+    let e = s.run("share.exportMap", &json!({"path": dir.join("big.png").display().to_string(), "width": 5000, "dpi": 192})).unwrap_err();
+    assert!(e.contains("10000") && e.contains("8192"), "{e}");
     // Too many pixels a side is refused, saying how many.
     let e = s.run("share.exportMap", &json!({"path": path.display().to_string(), "width": 8000, "dpi": 192})).unwrap_err();
     assert!(e.contains("16000") && e.contains("8192") && !e.contains("turned"), "{e}");

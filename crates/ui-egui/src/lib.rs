@@ -1123,9 +1123,9 @@ pub struct RustGisApp {
 }
 
 impl RustGisApp {
-    /// The DPI the ribbon's Export Map draws `path` at: 192, or for a GeoTIFF of a view too large
-    /// for that (one side past 8192 pixels, a turned view's box counted), the most that fits, said
-    /// in a notice. A PNG keeps 192.
+    /// The DPI the ribbon's Export Map draws `path` at: 192, or for a view too large for that (one
+    /// side past 8192 pixels; a GeoTIFF of a turned view counts the box around it), the most that
+    /// fits, said in a notice.
     fn export_map_dpi(&mut self, path: &str) -> f64 {
         const DPI: f64 = 192.0;
         let tif = std::path::Path::new(path)
@@ -1141,16 +1141,17 @@ impl RustGisApp {
         let b = camera.bearing.rem_euclid(360.0);
         let turned = b.min(360.0 - b) > 1e-9;
         let (bw, bh) = if turned { camera.rotated_size(vw, vh) } else { (vw, vh) };
-        let side = if turned { bw.ceil().max(bh.ceil()) } else { bw.max(bh) };
+        // A PNG is drawn turned in the view's own size; a GeoTIFF north up over the box.
+        let side = if turned && tif { bw.ceil().max(bh.ceil()) } else { vw.max(vh) };
         let most = f64::from(rustgis_engine::render::MAX_SIDE);
-        if !tif || !side.is_finite() || (side * DPI / 96.0).round() <= most {
+        if !side.is_finite() || (side * DPI / 96.0).round() <= most {
             return DPI;
         }
         // Whole DPI, rounded down so the side fits; the export's own limit (48) refuses smaller.
         let dpi = (most * 96.0 / side).floor().max(48.0);
         let shown = dpi.to_string();
         let note = crate::i18n::fmt(
-            "{path}: drawn at {dpi} DPI, the most a GeoTIFF of this view holds (8192 pixels a side)",
+            "{path}: drawn at {dpi} DPI, the most an export of this view holds (8192 pixels a side)",
             &[("path", path), ("dpi", &shown)],
         );
         self.session.notify(note, false);

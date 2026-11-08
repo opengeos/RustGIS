@@ -167,10 +167,13 @@ mod tests {
         let mut app = RustGisApp::with_sample();
         app.session.view_size = (1200.0, 800.0);
         assert_eq!(app.export_map_dpi("small.tif"), 192.0);
+        assert_eq!(app.export_map_dpi("small.png"), 192.0);
         app.session.view_size = (5000.0, 3000.0);
         let n = app.session.notices.len();
-        assert_eq!(app.export_map_dpi("wide.png"), 192.0);
-        assert_eq!(app.session.notices.len(), n);
+        // A PNG too: 10000 pixels wouldn't fit either.
+        assert_eq!(app.export_map_dpi("wide.png"), 157.0);
+        assert!(app.session.notices[n..].iter().any(|x| x.text.contains("drawn at 157 DPI")));
+        let n = app.session.notices.len();
         // 8192 × 96 / 5000 = 157.3: whole DPI, down.
         assert_eq!(app.export_map_dpi("wide.tif"), 157.0);
         assert!(app.session.notices[n..].iter().any(|x| x.text.contains("drawn at 157 DPI")), "{:?}", &app.session.notices[n..]);
@@ -183,6 +186,8 @@ mod tests {
         assert_eq!(app.export_map_dpi("square.tif"), 192.0);
         app.session.map_mut().camera.bearing = 45.0;
         assert_eq!(app.export_map_dpi("square.TIF"), 185.0);
+        // A PNG of it is drawn turned in the view's own size, which fits.
+        assert_eq!(app.export_map_dpi("square.png"), 192.0);
         app.session.map_mut().camera.bearing = 0.0;
 
         app.session.view_size = (400.0, 300.0);

@@ -650,7 +650,7 @@ pub fn tag_text_note(s: &str) -> Option<String> {
     let (symbols, questioned, spaced) = tag_text_changes(s);
     let count = |n: usize, one: &str, many: &str| if n == 1 { format!("1 {one}") } else { format!("{n} {many}") };
     let parts: Vec<String> = [
-        (symbols, count(symbols, "© or ® as (c) or (R)", "© or ® as (c) or (R)")),
+        (symbols, count(symbols, "© or ® as (c) or (R)", "©s or ®s as (c) or (R)")),
         (questioned, count(questioned, "character as ?", "characters as ?")),
         (spaced, count(spaced, "control character as a space", "control characters as spaces")),
     ]
