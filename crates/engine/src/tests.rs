@@ -4198,7 +4198,7 @@ fn opening_projects_reports_moved_label_and_callout_adjustments() {
     let mut opened = Session::new(Project::default());
     opened.run("project.openText", &json!({"text":text})).unwrap();
     assert_eq!(opened.notices.iter().filter(|n| n.text.contains("while opening the project")).count(), 3);
-    assert!(!serde_json::to_string(&opened.project).unwrap().contains("label_read_notices"));
+    assert!(!serde_json::to_string(&opened.project).unwrap().contains("read_notices"));
     let mut excess: Value = serde_json::from_str(&clean).unwrap();
     excess["styles"][0]["labels"]["moved"] =
         Value::Array((0..=rustgis_map::symbology::MAX_MOVED_LABELS).map(|id| json!({"id":id,"at":[0.0,0.0]})).collect());
@@ -7788,7 +7788,7 @@ fn custom_colour_ramps_add_apply_save_and_travel() {
     if let Some(Renderer::Graduated { ramp, .. }) = graduated(&mut p) {
         *ramp = Ramp::Custom(Box::new(jet.clone()));
     }
-    p.normalize();
+    let _ = p.normalize();
     // The matplotlib library's names are built-in too: an older project's own "jet" is kept as
     // "jet (custom)", while layers keep the copy of it they hold.
     assert_eq!(p.ramps.iter().map(|r| r.name()).collect::<Vec<_>>(), ["Brand", "brand 2", "Ember (custom)", "jet (custom)"]);
@@ -34174,6 +34174,73 @@ fn export_raster_puts_a_tile_layer_s_tiles_together() {
         assert!(warned(&s, n, "couldn't be drawn whole") || warned(&s, n, "hadn't come after the wait"), "{:?}", &s.notices[n..]);
     }
     std::fs::remove_dir_all(&dir).ok();
+}
+
+/// A diagram on aggregated points or extruded polygons says when it won't show, once, naming the
+/// layer, whichever of the two is set second; a diagram on a plain layer says nothing of the kind
+/// (#1596).
+#[test]
+fn a_diagram_that_wont_show_says_why() {
+    let mut s = world();
+    // The diagram notices since `mark` are exactly one, about `layer`'s diagram for `why`.
+    let said = |s: &Session, mark: u64, layer: &str, why: &str| {
+        let about: Vec<&str> = s.notices_since(mark).iter().map(|n| n.text.as_str()).filter(|t| t.contains("its diagram")).collect();
+        about.len() == 1 && about.iter().all(|t| t.contains(&format!("Layer '{layer}'")) && t.contains(why))
+    };
+    let any = |s: &Session, mark: u64| s.notices_since(mark).iter().any(|n| n.text.contains("its diagram"));
+    let (binned, tilted) = ("aggregated into bins", "when a flat map is tilted");
+    // Plain layers: no notice.
+    let mark = s.notice_mark();
+    s.run("layer.diagram", &json!({"layer": "Cities", "kind": "pie", "fields": ["pop_max"], "size": 8})).unwrap();
+    s.run("layer.diagram", &json!({"layer": "Countries", "kind": "pie", "fields": ["pop_est"], "size": 8})).unwrap();
+    assert!(!any(&s, mark), "{:?}", s.notices_since(mark));
+    // Aggregation after the diagram, and a diagram after aggregation.
+    let mark = s.notice_mark();
+    s.run("layer.aggregation", &json!({"layer": "Cities", "shape": "hexagon"})).unwrap();
+    assert!(said(&s, mark, "Cities", binned), "{:?}", s.notices_since(mark));
+    let mark = s.notice_mark();
+    s.run("layer.diagram", &json!({"layer": "Cities", "kind": "bar", "fields": ["pop_max"], "size": 8})).unwrap();
+    assert!(said(&s, mark, "Cities", binned), "{:?}", s.notices_since(mark));
+    let mark = s.notice_mark();
+    s.run("layer.aggregation", &json!({"layer": "Cities", "shape": "none"})).unwrap();
+    assert!(!any(&s, mark), "aggregation off: {:?}", s.notices_since(mark));
+    assert!(s.map().layer_by_name("Cities").is_some_and(|l| l.diagram.is_some() && l.aggregation.is_none()), "binning off, diagram kept");
+    // Extrusion: not shown in a tilted flat map.
+    let mark = s.notice_mark();
+    s.run("layer.extrusion", &json!({"layer": "Countries", "type": "height", "height": 1000})).unwrap();
+    assert!(said(&s, mark, "Countries", tilted), "{:?}", s.notices_since(mark));
+    let mark = s.notice_mark();
+    s.run("layer.diagram", &json!({"layer": "Countries", "kind": "pie", "fields": ["pop_est"], "size": 8})).unwrap();
+    assert!(said(&s, mark, "Countries", tilted), "{:?}", s.notices_since(mark));
+    let mark = s.notice_mark();
+    s.run("layer.extrusion", &json!({"layer": "Countries", "type": "none"})).unwrap();
+    assert!(!any(&s, mark), "extrusion off: {:?}", s.notices_since(mark));
+    assert!(
+        s.map().layer_by_name("Countries").is_some_and(|l| l.diagram.is_some() && l.extrusion.is_none()),
+        "extrusion off, diagram kept"
+    );
+    // A layer's first diagram, set after the effect, says so too.
+    s.run("layer.clearDiagram", &json!({"layer": "Cities"})).unwrap();
+    let mark = s.notice_mark();
+    s.run("layer.aggregation", &json!({"layer": "Cities", "shape": "square"})).unwrap();
+    assert!(!any(&s, mark), "no diagram yet: {:?}", s.notices_since(mark));
+    let mark = s.notice_mark();
+    s.run("layer.diagram", &json!({"layer": "Cities", "kind": "pie", "fields": ["pop_max"], "size": 8})).unwrap();
+    assert!(said(&s, mark, "Cities", binned), "{:?}", s.notices_since(mark));
+    s.run("layer.clearDiagram", &json!({"layer": "Countries"})).unwrap();
+    let mark = s.notice_mark();
+    s.run("layer.extrusion", &json!({"layer": "Countries", "type": "height", "height": 1000})).unwrap();
+    assert!(!any(&s, mark), "no diagram yet: {:?}", s.notices_since(mark));
+    let mark = s.notice_mark();
+    s.run("layer.diagram", &json!({"layer": "Countries", "kind": "pie", "fields": ["pop_est"], "size": 8})).unwrap();
+    assert!(said(&s, mark, "Countries", tilted), "{:?}", s.notices_since(mark));
+    s.run("layer.extrusion", &json!({"layer": "Countries", "type": "none"})).unwrap();
+    // On the globe too: the map may be made flat and tilted later, and the notice says the globe
+    // shows the chart.
+    s.map_mut().projection = rustgis_map::Projection::Globe;
+    let mark = s.notice_mark();
+    s.run("layer.extrusion", &json!({"layer": "Countries", "type": "height", "height": 1000})).unwrap();
+    assert!(said(&s, mark, "Countries", "on the globe"), "globe: {:?}", s.notices_since(mark));
 }
 
 #[test]
