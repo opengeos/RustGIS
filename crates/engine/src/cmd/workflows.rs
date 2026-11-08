@@ -946,8 +946,11 @@ fn function_work(s: &Session, p: &Value) -> Result<Work, String> {
     let target = resample_target(s, p)?;
     let name = out_name(p, format!("{}_{}", src.name, ps(p, "function").unwrap_or("")));
     let mut p = p.clone();
-    // Read here, on the command's thread, where an unreadable value is said (#1600).
-    super::settle_bool(&mut p, "keep");
+    // Read here, on the command's thread, where an unreadable value is said (#1600); only a remap
+    // or threshold reads it.
+    if matches!(ps(&p, "function"), Some("remap" | "threshold")) {
+        super::settle_bool(&mut p, "keep");
+    }
     Ok(Box::new(move || {
         let pixels = apply_function(&src, &p, target.as_deref())?;
         // Only a resample takes another raster's grid.
@@ -969,7 +972,7 @@ fn function_chain_work(s: &Session, p: &Value) -> Result<Work, String> {
         return Err("give 1 to 20 steps".into());
     }
     // Read here, on the command's thread, where an unreadable value is said (#1600).
-    for st in &mut steps {
+    for st in steps.iter_mut().filter(|st| matches!(ps(st, "function"), Some("remap" | "threshold"))) {
         super::settle_bool(st, "keep");
     }
     let func = |st: &Value| st.get("function").and_then(Value::as_str).unwrap_or("?").to_string();

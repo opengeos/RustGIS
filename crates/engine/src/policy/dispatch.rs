@@ -196,7 +196,11 @@ impl Session {
         }
         let op = self.authorize(command, params)?;
         let node = op.node.clone();
-        self.with_node(node, |s| crate::cmd::exports::export_start_raw(s, op))
+        // Prepared outside a command: what it couldn't read as true or false is said here (#1600).
+        crate::cmd::clear_unread_bools();
+        let run = self.with_node(node, |s| crate::cmd::exports::export_start_raw(s, op));
+        self.say_unread_bools();
+        run
     }
     /// Exports own their input snapshot. Native delivery may report it after a layer/map switch;
     /// restricted delivery still binds the original live map and source identities.
@@ -747,7 +751,11 @@ impl Session {
         }
         let node = op.node;
         let op = Authorized { op: RasterOp { spec, params }, node: node.clone() };
-        self.with_node(node, |s| crate::cmd::workflows::raster_start_raw(s, op))
+        // Prepared outside a command: what it couldn't read as true or false is said here (#1600).
+        crate::cmd::clear_unread_bools();
+        let run = self.with_node(node, |s| crate::cmd::workflows::raster_start_raw(s, op));
+        self.say_unread_bools();
+        run
     }
     /// A UI completion resumes the stored owner; scoped callers must already be that owner.
     pub fn finish_raster(&mut self, command: &str, id: u64, params: &Value) -> CmdResult {

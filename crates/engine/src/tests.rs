@@ -31717,6 +31717,23 @@ fn calculate_field_keeps_decimals_and_says_what_whole_numbers_cut() {
     assert!(s.notices_since(mark).iter().all(|n| !n.text.starts_with("Attribute rule")), "{:?}", s.notices_since(mark));
 }
 
+/// A raster function started on another thread says a `keep` it can't read when it starts, and a
+/// function that doesn't read `keep` says nothing of it (#1600).
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn background_raster_function_says_unread_keep() {
+    use crate::cmd::workflows::raster_start;
+    let mut s = world();
+    s.run("layer.addDataBytes", &json!({"fileName": "dem.tif", "data": dem_b64()})).unwrap();
+    let dem = s.map().layers.iter().find(|l| l.is_raster()).unwrap().name.clone();
+    let said = |s: &Session| s.notices.iter().filter(|n| n.text.contains("keep = \"auto\" (read as false)")).count();
+    s.run("raster.function", &json!({"layer": dem, "function": "slope", "keep": "auto"})).unwrap();
+    assert_eq!(said(&s), 0, "slope doesn't read keep");
+    let p = json!({"layer": dem, "function": "remap", "ranges": [[0, 300, 1]], "keep": "auto"});
+    raster_start(&mut s, "raster.function", &p).unwrap();
+    assert_eq!(said(&s), 1, "{:?}", s.notices.last());
+}
+
 /// Viewshed and Interpolate made on another thread, as the Analysis pane runs them (#1291 step 3):
 /// the raster handed over (`ran`) is the one the command makes here, a cancelled run is an error
 /// saying so, and a run whose project was closed meanwhile adds nothing.

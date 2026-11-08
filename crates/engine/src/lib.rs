@@ -1469,10 +1469,7 @@ impl Session {
             let files_before: Vec<String> = self.mbtiles_files().map(str::to_string).collect();
             cmd::clear_unread_bools();
             let res = run(self);
-            // A true/false parameter given as text no rule reads was taken as false: said (#1600).
-            if let Some(text) = cmd::take_unread_bools() {
-                self.warn(text);
-            }
+            self.say_unread_bools();
             // Whichever command took its last layer away (removed, undone, the project closed):
             // the file can now be moved or replaced, so what was read of it is forgotten too.
             #[cfg(not(target_arch = "wasm32"))]
@@ -2081,6 +2078,14 @@ impl Session {
     pub fn notify(&mut self, text: impl Into<String>, error: bool) {
         use rustgis_data::diagnostics::Severity;
         self.notice(text.into(), if error { Severity::Error } else { Severity::Info });
+    }
+
+    /// Says the true/false parameters the command (or the background work it prepared) just
+    /// read could not read: text taken as false, other values ignored (#1600).
+    pub(crate) fn say_unread_bools(&mut self) {
+        if let Some(text) = cmd::take_unread_bools() {
+            self.warn(text);
+        }
     }
 
     /// A nonfatal problem: existing notice consumers still see it as a non-error, while
