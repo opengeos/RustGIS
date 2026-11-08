@@ -33188,6 +33188,46 @@ fn export_map_to_geotiff_places_the_view_on_the_ground() {
         &s.notices[n..]
     );
     assert!(!s.notices[n..].iter().any(|x| x.text.contains("height of")));
+    // `fit` lowers the DPI to what fits 8192 pixels a side, and says so; one that fits stays.
+    let fitted = |s: &mut Session, file: &str| {
+        let n = s.notices.len();
+        let out = s.run("share.exportMap", &json!({"path": dir.join(file).display().to_string(), "dpi": 192, "fit": true})).unwrap();
+        let said =
+            s.notices[n..].iter().find_map(|x| x.text.split("drawn at ").nth(1).and_then(|t| t.split(' ').next()).map(str::to_string));
+        (out, said)
+    };
+    s.view_size = (1200.0, 800.0);
+    assert_eq!(fitted(&mut s, "small.tif").1, None);
+    assert_eq!(fitted(&mut s, "small.png").1, None);
+    s.view_size = (5000.0, 3000.0);
+    // 8192 × 96 / 5000 = 157.3: whole DPI, down.
+    let (out, said) = fitted(&mut s, "wide.tif");
+    assert_eq!((said.as_deref(), out["width"].as_u64()), (Some("157"), Some(8177)));
+    assert_eq!(fitted(&mut s, "wide.png").1.as_deref(), Some("157"));
+    // Past 8000 points the view is clamped first: 16000 wide fits 98 DPI.
+    s.view_size = (16000.0, 3000.0);
+    assert_eq!(fitted(&mut s, "huge.tif").1.as_deref(), Some("98"));
+    // A GeoTIFF of a turned view counts its box (3000 points square turned 45° is 4243); a PNG
+    // is drawn turned in the view's own size.
+    s.view_size = (3000.0, 3000.0);
+    assert_eq!(fitted(&mut s, "square.tif").1, None);
+    s.run("map.setBearing", &json!({"bearing": 45})).unwrap();
+    assert_eq!(fitted(&mut s, "square-turned.tif").1.as_deref(), Some("185"));
+    assert_eq!(fitted(&mut s, "square-turned.png").1, None);
+    s.run("map.setBearing", &json!({"bearing": 0})).unwrap();
+    s.view_size = (400.0, 300.0);
+    let e = s.run("share.exportMap", &json!({"path": path.display().to_string(), "fit": "yes"})).unwrap_err();
+    assert!(e.contains("fit must be true or false"), "{e}");
+    // A size below 16 points, and a dpi outside 48 to 600, are drawn at the limit, and say so.
+    let n = s.notices.len();
+    let out = s
+        .run("share.exportMap", &json!({"path": dir.join("tiny.tif").display().to_string(), "width": 5, "height": 100, "dpi": 30}))
+        .unwrap();
+    assert_eq!(out["width"], 8);
+    let said: Vec<&str> = s.notices[n..].iter().map(|x| x.text.as_str()).collect();
+    assert!(said.iter().any(|t| t.contains("a width of 5 points is less than the 16")), "{said:?}");
+    assert!(said.iter().any(|t| t.contains("a dpi of 30 is outside 48 to 600, so it is drawn at 48")), "{said:?}");
+    assert!(!said.iter().any(|t| t.contains("height of")), "{said:?}");
     // 600 DPI is 6.25 pixels a point, as the command says, not cut to 576.
     let fine = dir.join("fine.tif");
     let out = s.run("share.exportMap", &json!({"path": fine.display().to_string(), "width": 100, "height": 100, "dpi": 600})).unwrap();

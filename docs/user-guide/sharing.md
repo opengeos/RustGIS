@@ -16,8 +16,10 @@ gives them in full as `copyright`. `"cog": true` writes a
 cloud-optimised GeoTIFF. A turned map is drawn north up over the box around the view (and says
 so). A tilted map, the globe and a map of another body are refused: export a PNG of those. One
 side holds at most 8192 pixels, so a large `width` or `height` needs a lower `dpi`; this holds for a
-PNG too, which is refused past it rather than cut off. The ribbon draws a view too large for
-192 DPI at the most that fits, and says so. An export holds
+PNG too, which is refused past it rather than cut off. With `"fit": true` an export too large for
+its `dpi` is drawn at the most that fits, and says so; the ribbon exports that way, at 192 DPI.
+`dpi` runs from 48 to 600 and a side from 16 points; a value outside is drawn at the limit, and
+said. An export holds
 at most 8000 points a side, PNG or GeoTIFF: with no `width` or `height`, a larger view is cut to
 its middle; a `width` or `height` past 8000 is drawn at 8000, holding less ground than asked (the whole
 view still fits). Either way the

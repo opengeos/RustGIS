@@ -159,37 +159,11 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// The ribbon's Export Map to a `.tif` draws at 192 DPI where that fits a GeoTIFF's 8192
-    /// pixels a side, and at the most that fits (said) where it doesn't; a PNG keeps 192. The
-    /// GeoTIFF is written on a thread like the PNG.
+    /// The ribbon's Export Map to a `.tif` writes a GeoTIFF on a thread like the PNG, at 192 DPI
+    /// where that fits (the engine's `fit`).
     #[test]
-    fn export_map_to_a_geotiff_fits_its_dpi_to_the_view() {
+    fn export_map_to_a_geotiff_runs_on_a_thread() {
         let mut app = RustGisApp::with_sample();
-        app.session.view_size = (1200.0, 800.0);
-        assert_eq!(app.export_map_dpi("small.tif"), 192.0);
-        assert_eq!(app.export_map_dpi("small.png"), 192.0);
-        app.session.view_size = (5000.0, 3000.0);
-        let n = app.session.notices.len();
-        // A PNG too: 10000 pixels wouldn't fit either.
-        assert_eq!(app.export_map_dpi("wide.png"), 157.0);
-        assert!(app.session.notices[n..].iter().any(|x| x.text.contains("drawn at 157 DPI")));
-        let n = app.session.notices.len();
-        // 8192 × 96 / 5000 = 157.3: whole DPI, down.
-        assert_eq!(app.export_map_dpi("wide.tif"), 157.0);
-        assert!(app.session.notices[n..].iter().any(|x| x.text.contains("drawn at 157 DPI")), "{:?}", &app.session.notices[n..]);
-        // A view past 8000 points is clamped as the export clamps it: 16000 wide fits 98 DPI.
-        app.session.view_size = (16000.0, 3000.0);
-        assert_eq!(app.export_map_dpi("huge.tif"), 98.0);
-        // A turned view counts its box: 3000 points square fits at 192 DPI (6000 pixels), turned
-        // 45° its box is 4243 points (8486 pixels), which doesn't.
-        app.session.view_size = (3000.0, 3000.0);
-        assert_eq!(app.export_map_dpi("square.tif"), 192.0);
-        app.session.map_mut().camera.bearing = 45.0;
-        assert_eq!(app.export_map_dpi("square.TIF"), 185.0);
-        // A PNG of it is drawn turned in the view's own size, which fits.
-        assert_eq!(app.export_map_dpi("square.png"), 192.0);
-        app.session.map_mut().camera.bearing = 0.0;
-
         app.session.view_size = (400.0, 300.0);
         let dir = std::env::temp_dir().join(format!("rustgis-export-tif-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();

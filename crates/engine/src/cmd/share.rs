@@ -26,7 +26,7 @@ pub fn commands() -> Vec<C> {
             super::exports::write_here(s, p, "share.exportMap")
         }).inputs(map_inputs).roles(&[]).effects(crate::policy::Effects::NONE.with(crate::policy::Effect::Files))
         .view()
-            .params(r#"{"path": "*.png|*.tif|*.tiff", "width"?: "points (pixels at 96 dpi), the view fitted in it", "height"?: points, "dpi"?: 96..600, "cog"?: "true for a cloud-optimised GeoTIFF"}"#),
+            .params(r#"{"path": "*.png|*.tif|*.tiff", "width"?: "points (pixels at 96 dpi), the view fitted in it", "height"?: points, "dpi"?: "48..600 (default 96)", "fit"?: "true to lower the dpi until a side fits 8192 pixels, saying so", "cog"?: "true for a cloud-optimised GeoTIFF"}"#),
         C::new("share.exportLayer", "Export Features", "Publish › Output", |s, p| super::exports::write_here(s, p, "share.exportLayer")).roles(&[]).effects(crate::policy::Effects::NONE.with(crate::policy::Effect::Files))
             .view()
             .when(need_layer)
@@ -212,8 +212,51 @@ fn size_notes(
                 "a {name} of {v:.0} points is more than the {MOST_POINTS:.0} an export holds, so it is drawn at {MOST_POINTS:.0}, holding less ground than asked (the whole view still fits): a higher dpi gives more pixels"
             )));
         }
+        if let Some(v) = v.filter(|v| *v < LEAST_POINTS) {
+            notes.push(note(format!(
+                "a {name} of {v} points is less than the {LEAST_POINTS:.0} an export draws, so it is drawn at {LEAST_POINTS:.0}"
+            )));
+        }
     }
     notes
+}
+
+/// The fewest points a side an export of the map draws.
+const LEAST_POINTS: f64 = 16.0;
+/// The DPI an export of the map draws at, at least and at most.
+const DPI_RANGE: (f64, f64) = (48.0, 600.0);
+
+/// What the DPI range does to an export to `path` asked at `dpi`, for it to say.
+fn dpi_note(path: &str, dpi: Option<f64>) -> Option<(rustgis_data::diagnostics::Severity, String)> {
+    let dpi = dpi.filter(|d| d.is_finite())?;
+    let (least, most) = DPI_RANGE;
+    let drawn = dpi.clamp(least, most);
+    (drawn != dpi).then(|| {
+        (
+            rustgis_data::diagnostics::Severity::Info,
+            format!("{path}: a dpi of {dpi} is outside {least:.0} to {most:.0}, so it is drawn at {drawn:.0}"),
+        )
+    })
+}
+
+/// With `fit`, the DPI an export of the view (at `dpi`) is lowered to so that no side passes the
+/// [`rustgis_render::MAX_SIDE`] pixels a canvas holds, a GeoTIFF of a turned view counting the
+/// box around it: the most whole DPI that fits, `None` when `dpi` already does.
+fn fitted_dpi(view: &View, dpi: f64, tif: bool) -> Option<f64> {
+    let (w, h) =
+        if tif && is_turned(view.camera.bearing) { view.camera.rotated_size(view.width, view.height) } else { (view.width, view.height) };
+    let side = w.max(h);
+    let most = f64::from(rustgis_render::MAX_SIDE);
+    if !side.is_finite() || side <= 0.0 || (side * view.pixels_per_point).round() <= most {
+        return None;
+    }
+    Some((most * 96.0 / side).floor().clamp(DPI_RANGE.0, dpi))
+}
+
+/// Whether a view at `bearing` is turned (not north up).
+fn is_turned(bearing: f64) -> bool {
+    let b = bearing.rem_euclid(360.0);
+    b.min(360.0 - b) > 1e-9
 }
 
 /// The view an export of the map at `camera` draws, in a view of `(vw, vh)` points: a requested
@@ -228,10 +271,9 @@ fn export_view(
     // NaN would pass through `clamp`; non-finite values fall back to the defaults.
     let fin = |v: Option<f64>| v.filter(|x| x.is_finite());
     let (width, height, dpi) = (fin(width), fin(height), fin(dpi));
-    let w = width.unwrap_or(vw).clamp(16.0, MOST_POINTS);
-    let h = height.unwrap_or(vh).clamp(16.0, MOST_POINTS);
-    // 48 to 600 DPI, as the command says.
-    let ppp = (dpi.unwrap_or(96.0) / 96.0).clamp(0.5, 6.25);
+    let w = width.unwrap_or(vw).clamp(LEAST_POINTS, MOST_POINTS);
+    let h = height.unwrap_or(vh).clamp(LEAST_POINTS, MOST_POINTS);
+    let ppp = dpi.unwrap_or(96.0).clamp(DPI_RANGE.0, DPI_RANGE.1) / 96.0;
     let mut camera = camera;
     // Keep the same ground extent when the size differs from the view.
     if width.is_some() || height.is_some() {
@@ -274,8 +316,26 @@ pub(crate) fn map_work(s: &Session, p: &Value) -> Result<Work, String> {
         None | Some(Value::Null) => false,
         Some(v) => v.as_bool().ok_or("cog must be true or false")?,
     };
-    let sized = size_notes(&path, s.view_size, width, height);
-    if matches!(ext.as_str(), "tif" | "tiff") {
+    let tif = matches!(ext.as_str(), "tif" | "tiff");
+    let fit = match p.get("fit") {
+        None | Some(Value::Null) => false,
+        Some(v) => v.as_bool().ok_or("fit must be true or false")?,
+    };
+    let mut sized = size_notes(&path, s.view_size, width, height);
+    sized.extend(dpi_note(&path, dpi));
+    // `fit`: a view too large for the DPI asked is drawn at the most that fits, and says so.
+    let asked = dpi.filter(|d| d.is_finite()).unwrap_or(96.0).clamp(DPI_RANGE.0, DPI_RANGE.1);
+    let dpi = match fit.then(|| fitted_dpi(&export_view(s.map().camera, s.view_size, width, height, Some(asked)), asked, tif)).flatten() {
+        Some(lower) => {
+            sized.push((
+                rustgis_data::diagnostics::Severity::Info,
+                format!("{path}: drawn at {lower} DPI, the most an export of this view holds ({} pixels a side)", rustgis_render::MAX_SIDE),
+            ));
+            Some(lower)
+        }
+        None => dpi,
+    };
+    if tif {
         return geotiff_work(s, path, export_view(s.map().camera, s.view_size, width, height, dpi), cog, sized);
     }
     if cog {
@@ -320,7 +380,7 @@ fn geotiff_work(
     let mut view = view;
     let mut notices = Vec::new();
     let bearing = view.camera.bearing;
-    let turned = bearing.rem_euclid(360.0).min(360.0 - bearing.rem_euclid(360.0)) > 1e-9;
+    let turned = is_turned(bearing);
     if turned {
         // North up over the box around the turned view: everything it shows, and more at the
         // corners.
