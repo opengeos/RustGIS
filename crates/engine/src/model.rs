@@ -512,6 +512,11 @@ pub fn graph_from_json_counted(v: &Value) -> Result<(ModelGraph, GraphDropped), 
     // Ids trimmed or cut, from what the file gave to what is kept: connections naming a node by
     // the id it was given still reach it.
     let mut renamed: Vec<(String, String)> = Vec::new();
+    // The ids given to the nodes kept, and to those left out for repeating a kept one's id once
+    // trimmed or cut: a connection naming only a left-out node is left out with it, rather than
+    // moved onto the node that kept the id.
+    let mut given_kept: Vec<String> = Vec::new();
+    let mut given_dropped: Vec<String> = Vec::new();
     for n in nodes {
         let Ok(mut node) = serde_json::from_value::<ModelNode>(n.clone()) else {
             dropped.nodes += 1;
@@ -520,8 +525,12 @@ pub fn graph_from_json_counted(v: &Value) -> Result<(ModelGraph, GraphDropped), 
         let id: String = node.id.trim().chars().take(MAX_NODE_ID).collect();
         if id.is_empty() || g.nodes.iter().any(|m| m.id == id) {
             dropped.nodes += 1;
+            if !id.is_empty() {
+                given_dropped.push(node.id);
+            }
             continue;
         }
+        given_kept.push(node.id.clone());
         if id != node.id {
             dropped.ids += 1;
             renamed.push((std::mem::take(&mut node.id), id.clone()));
@@ -548,6 +557,11 @@ pub fn graph_from_json_counted(v: &Value) -> Result<(ModelGraph, GraphDropped), 
             dropped.edges += 1;
             continue;
         };
+        let left_out = |end: &String| given_dropped.contains(end) && !given_kept.contains(end);
+        if left_out(&e.from) || left_out(&e.to) {
+            dropped.edges += 1;
+            continue;
+        }
         for end in [&mut e.from, &mut e.to] {
             if let Some((_, id)) = renamed.iter().find(|(given, _)| given == end) {
                 *end = id.clone();

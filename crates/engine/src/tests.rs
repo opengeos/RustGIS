@@ -25747,7 +25747,9 @@ fn model_graph_drops_are_noticed() {
             {"id": "  ", "kind": "input", "x": 20, "y": 0, "layer": "Cities"},
             {"kind": 7},
             {"id": "o1", "kind": "output", "x": 240, "y": 0, "name": "Kept"},
-            {"id": " i2 ", "kind": "input", "x": 5e7, "y": 0, "layer": "Cities", "params": "not an object"}
+            {"id": " i2 ", "kind": "input", "x": 5e7, "y": 0, "layer": "Cities", "params": "not an object"},
+            // Repeats " i2 " once trimmed: left out, and so is the connection naming it.
+            {"id": "i2", "kind": "input", "x": 30, "y": 0, "layer": "Countries"}
         ],
         "edges": [
             {"from": "i1", "fromPort": "out", "to": "o1", "toPort": "in"},
@@ -25756,6 +25758,7 @@ fn model_graph_drops_are_noticed() {
             {"from": "i1", "fromPort": "out", "to": "o1", "toPort": ""},
             // Names the node by the id it was given: it follows the trimmed id, so it is kept.
             {"from": " i2 ", "fromPort": "out", "to": "o1", "toPort": "in"},
+            {"from": "i2", "fromPort": "out", "to": "o1", "toPort": "in"},
             "not an edge"
         ]
     });
@@ -25767,8 +25770,8 @@ fn model_graph_drops_are_noticed() {
     ] {
         let mark = s.notice_mark();
         s.run(cmd, &params).unwrap();
-        assert_eq!(said(&s, mark, "3 node(s) left out"), 1, "{cmd}: {:?}", s.notices_since(mark));
-        assert_eq!(said(&s, mark, "4 connection(s) left out"), 1, "{cmd}: {:?}", s.notices_since(mark));
+        assert_eq!(said(&s, mark, "4 node(s) left out"), 1, "{cmd}: {:?}", s.notices_since(mark));
+        assert_eq!(said(&s, mark, "5 connection(s) left out"), 1, "{cmd}: {:?}", s.notices_since(mark));
         assert_eq!(said(&s, mark, "1 node id(s) changed"), 1, "{cmd}: {:?}", s.notices_since(mark));
         assert_eq!(said(&s, mark, "1 node position(s) changed"), 1, "{cmd}: {:?}", s.notices_since(mark));
         assert_eq!(said(&s, mark, "1 node(s) had parameters"), 1, "{cmd}: {:?}", s.notices_since(mark));
@@ -25776,8 +25779,12 @@ fn model_graph_drops_are_noticed() {
     // A command that fails says nothing about the graph it was passed.
     let mark = s.notice_mark();
     assert!(s.run("model.save", &json!({"name": "Lossy", "rename": "Clean", "graph": lossy})).is_err());
-    let unwritable = std::env::temp_dir().join("rustgis-no-such-folder").join("nested").join("lossy.model.json");
+    // A path under a regular file can't be written.
+    let blocker = std::env::temp_dir().join(format!("rustgis-model-export-{}", std::process::id()));
+    std::fs::write(&blocker, b"not a folder").unwrap();
+    let unwritable = blocker.join("lossy.model.json");
     assert!(s.run("model.export", &json!({"graph": lossy, "path": unwritable.to_string_lossy()})).is_err());
+    let _ = std::fs::remove_file(&blocker);
     assert_eq!(said(&s, mark, "model graph"), 0, "{:?}", s.notices_since(mark));
     let saved = s.project.models.iter().find(|m| m.name == "Lossy").and_then(|m| m.graph.as_ref()).map(|g| g.edges.len());
     assert_eq!(saved, Some(2), "the connection naming \" i2 \" follows its trimmed id");
