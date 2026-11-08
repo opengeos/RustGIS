@@ -15145,6 +15145,9 @@ fn kml_ground_overlays_become_rasters() {
     assert!(u.map().layer_by_name("Here").is_some());
     assert!(u.map().layer_by_name("Far").is_none() && u.map().layer_by_name("Web").is_none());
     assert!(u.notices.iter().any(|n| n.text.contains("Far (its picture ../secret.png isn't in the file or beside it)")));
+    for name in ["Folder", "Gone", "Through"] {
+        assert!(u.map().layer_by_name(name).is_none(), "{name}");
+    }
     // A picture beside it that can't be read says why, not that it's missing.
     assert!(u.notices.iter().any(|n| n.text.contains("Folder (its picture folder.png can't be read:") && n.text.contains("isn't a file")));
     assert!(!u.notices.iter().any(|n| n.text.contains("folder.png isn't in the file")));
@@ -33179,10 +33182,15 @@ fn model_import_refusals_name_their_cause() {
         let e = s.run("model.import", &json!({"text": text})).unwrap_err();
         assert!(e.contains("not a RustGIS model or web tool (no graph or steps)"), "{e}");
     }
-    // A model by its schema from a newer RustGIS that holds something else is told to update.
-    let text = json!({"$schema": crate::model::SCHEMA, "version": "2.0.0", "name": "New", "nodes": []}).to_string();
-    let e = s.run("model.import", &json!({"text": text})).unwrap_err();
-    assert!(e.contains("Update RustGIS"), "{e}");
+    // A model by its schema, or a web tool by its format, from a newer RustGIS that holds
+    // something else is told to update.
+    for text in [
+        json!({"$schema": crate::model::SCHEMA, "version": "2.0.0", "name": "New", "nodes": []}),
+        json!({"format": "RustGIS web tool", "version": 2, "name": "New"}),
+    ] {
+        let e = s.run("model.import", &json!({"text": text.to_string()})).unwrap_err();
+        assert!(e.contains("Update RustGIS"), "{e}");
+    }
     // A model whose nodes would be dropped says the causes it may have.
     let graph = json!({"nodes": [{"id": "a", "kind": "input", "layer": "Cities"}, {"id": "a", "kind": "input", "layer": "Countries"}], "edges": []});
     let text = json!({"$schema": crate::model::SCHEMA, "version": "1.0.0", "name": "Dup", "graph": graph}).to_string();

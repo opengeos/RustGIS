@@ -760,10 +760,12 @@ struct ImportItem<T> {
 /// Missing versions are legacy files. The stricter field checks apply only to file import.
 pub(crate) fn check_file(v: &Value) -> Result<(), String> {
     let graph = v.get("graph");
-    // A model by its schema even when a newer RustGIS changed what it holds: told to update.
+    // A model by its schema, a web tool by its format, even when a newer RustGIS changed what it
+    // holds: told to update.
     let model = graph.is_some() || v.get("$schema").and_then(Value::as_str) == Some(SCHEMA);
+    let tool = v.get("steps").is_some() || v.get("format").and_then(Value::as_str) == Some("RustGIS web tool");
     // Some other file (GeoJSON, a project) is said to be one, not told to update RustGIS.
-    if !model && v.get("steps").is_none() {
+    if !model && !tool {
         return Err("not a RustGIS model or web tool (no graph or steps)".into());
     }
     if let Some(version) = v.get("version") {
