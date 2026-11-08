@@ -308,6 +308,10 @@ def test_layers_added_with_tables_are_all_returned(sample):
     assert isinstance(one, rustgis.Layer)
     assert one.id == ids[0]
     assert sample._outputs({"tables": ["notes"]}) == {"tables": ["notes"]}
+    # Entries that aren't layer ids are left out before counting.
+    one = sample._outputs({"layers": [ids[0], "x", True, None]})
+    assert isinstance(one, rustgis.Layer)
+    assert one.id == ids[0]
 
 
 def _gdal_reads(driver):

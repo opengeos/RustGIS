@@ -291,12 +291,14 @@ big.to_file("big-cities.gpkg", mode="replaceTable")   # its table named for the 
 
 `add_geojson` also takes any object with `__geo_interface__` (a Shapely geometry, a GeoSeries).
 `add_data`, `add_geojson` and `add_geopandas` return a `Layer` for a single layer, a list for
-multiple layers (every table of a GeoPackage, or the layers GDAL reads from one file, such as
-points and lines split into a layer each), or the command result when the file adds only
-standalone tables. For example, a CSV without geometry is a table. Tables added together with
-layers are listed in `s.info()["tables"]`. A GeoPackage or database of more than 32 tables adds
-the first 32 (a notice says so); add the others by name with `layer=`. Extra `add_data` keyword arguments go to `layer.addData`, such as `layer=`
-to choose a GeoPackage table, or `x=` and `y=` to choose coordinate columns.
+multiple layers (every feature table of a GeoPackage, or the layers GDAL reads from one file,
+such as points and lines split into a layer each), or the command result when the file adds
+only standalone tables. For example, a CSV without geometry is a table. Standalone tables added
+together with layers are listed in `s.info()["tables"]`; a GeoPackage's attribute-only tables
+are not added when the whole file is. A GeoPackage or database of more than 32 tables adds the
+first 32 (a notice says so); add the others by name with `layer=`. Extra `add_data` keyword
+arguments go to `layer.addData`, such as `layer=` to choose a GeoPackage table, or `x=` and `y=`
+to choose coordinate columns.
 
 Every format the app reads works here: GeoJSON, CSV, Shapefile, GeoPackage, GeoParquet,
 FlatGeobuf, KML/KMZ, GPX, GeoTIFF and the rest of [Supported Data
