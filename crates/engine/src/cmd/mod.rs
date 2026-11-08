@@ -172,8 +172,87 @@ pub(crate) fn copy_name(given: Option<&str>, original: &str, taken: impl Fn(&str
     numbered(&base, taken)
 }
 
+/// The most unread true/false parameters one command keeps to name in its notice.
+const MAX_UNREAD_BOOLS: usize = 8;
+/// The longest value a notice quotes for an unread true/false parameter.
+const MAX_UNREAD_BOOL_TEXT: usize = 40;
+
+thread_local! {
+    /// True/false parameters given as text no rule reads (`"auto"`, a typo) while the outermost
+    /// command runs: `(parameter, value)`, and how many more there were. Said by
+    /// [`take_unread_bools`] once the command is done.
+    static UNREAD_BOOLS: std::cell::RefCell<(Vec<(String, String)>, usize)> = const { std::cell::RefCell::new((Vec::new(), 0)) };
+}
+
+/// Text read as a true/false parameter: true, false, yes, no, on, off, 1 or 0, in any case and
+/// with spaces around it; anything else is `None`.
+pub fn bool_text(s: &str) -> Option<bool> {
+    match s.trim().to_ascii_lowercase().as_str() {
+        "true" | "yes" | "on" | "1" => Some(true),
+        "false" | "no" | "off" | "0" => Some(false),
+        _ => None,
+    }
+}
+
+/// A true/false parameter's value: a JSON boolean, the number 1 or 0, or text [`bool_text`]
+/// reads; anything else is `None`.
+pub fn bool_value(v: &Value) -> Option<bool> {
+    match v {
+        Value::Bool(x) => Some(*x),
+        Value::String(s) => bool_text(s),
+        Value::Number(n) => match n.as_f64() {
+            Some(1.0) => Some(true),
+            Some(0.0) => Some(false),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// A true/false parameter, as [`bool_value`] reads it. Any other value given (text such as
+/// `"auto"`, another number) is read as false, and the command's notice names it (#1600); a
+/// missing or null parameter is `None`.
 pub(crate) fn b(p: &Value, k: &str) -> Option<bool> {
-    p.get(k).and_then(|v| v.as_bool().or_else(|| v.as_str().map(|s| matches!(s, "true" | "yes" | "1" | "on"))))
+    let v = p.get(k).filter(|v| !v.is_null())?;
+    let read = bool_value(v);
+    if read.is_none() {
+        let shown: String = match v {
+            Value::String(s) => format!("\"{}\"", s.chars().take(MAX_UNREAD_BOOL_TEXT).collect::<String>()),
+            Value::Array(_) => "a list".to_string(),
+            Value::Object(_) => "an object".to_string(),
+            other => other.to_string().chars().take(MAX_UNREAD_BOOL_TEXT).collect(),
+        };
+        let key: String = k.chars().take(MAX_UNREAD_BOOL_TEXT).collect();
+        UNREAD_BOOLS.with(|u| {
+            let (seen, more) = &mut *u.borrow_mut();
+            if !seen.iter().any(|(sk, sv)| *sk == key && *sv == shown) {
+                if seen.len() < MAX_UNREAD_BOOLS {
+                    seen.push((key, shown));
+                } else {
+                    *more = more.saturating_add(1);
+                }
+            }
+        });
+    }
+    Some(read.unwrap_or(false))
+}
+
+/// Forgets unread true/false parameters left from outside a command.
+pub(crate) fn clear_unread_bools() {
+    UNREAD_BOOLS.with(|u| *u.borrow_mut() = (Vec::new(), 0));
+}
+
+/// The notice for the true/false parameters the command just run could not read, if any.
+pub(crate) fn take_unread_bools() -> Option<String> {
+    let (seen, more) = UNREAD_BOOLS.with(|u| std::mem::take(&mut *u.borrow_mut()));
+    if seen.is_empty() {
+        return None;
+    }
+    let mut list: Vec<String> = seen.iter().map(|(k, v)| format!("{k} = {v}")).collect();
+    if more > 0 {
+        list.push(format!("{more} more"));
+    }
+    Some(format!("Read as false: {} (a true/false parameter takes true, false, yes, no, on, off, 1 or 0)", list.join(", ")))
 }
 
 pub(crate) fn need_layer(s: &Session) -> Option<&'static str> {
