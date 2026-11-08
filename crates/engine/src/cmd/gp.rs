@@ -1421,7 +1421,10 @@ pub fn run_batch_with(s: &mut Session, p: &Value, control: &std::sync::Arc<rustg
                                 let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
                                 // Only files that can be run or be a sidecar are held; the rest are
                                 // counted as skipped, so a folder of other files isn't refused.
-                                if !is_folder_target_ext(&ext) && !is_folder_sidecar_ext(&ext) {
+                                // Only `<name>.shp.xml` can be a Shapefile's metadata sidecar.
+                                let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("").to_ascii_lowercase();
+                                let may_be_sidecar = is_folder_sidecar_ext(&ext) && (ext != "xml" || name.ends_with(".shp.xml"));
+                                if !is_folder_target_ext(&ext) && !may_be_sidecar {
                                     skipped += 1;
                                     continue;
                                 }
@@ -5389,8 +5392,9 @@ mod batch_tests {
         }
         let mut s = test_session();
         let before = s.map().layers.len();
-        let err = s.run("gp.batch", &json!({"tool": "buffer", "folder": dir, "params": {"distance": 1}})).unwrap_err();
+        let res = s.run("gp.batch", &json!({"tool": "buffer", "folder": dir, "params": {"distance": 1}}));
         let _ = std::fs::remove_dir_all(&dir);
+        let err = res.unwrap_err();
         assert!(err.contains(&format!("{} supported files", super::MAX_BATCH_ITEMS + 1)), "{err}");
         assert_eq!(s.map().layers.len(), before);
     }
@@ -5401,7 +5405,8 @@ mod batch_tests {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("pts.csv"), "x,y\n1,2\n").unwrap();
         for i in 0..=super::MAX_FOLDER_ENTRIES {
-            std::fs::write(dir.join(format!("{i}.txt")), "").unwrap();
+            // `.xml` files that aren't `<name>.shp.xml` can't be sidecars, so they aren't held.
+            std::fs::write(dir.join(format!("{i}.xml")), "").unwrap();
         }
         let mut s = test_session();
         let res = s.run("gp.batch", &json!({"tool": "buffer", "folder": dir, "params": {"distance": 1}}));
@@ -5424,9 +5429,9 @@ mod batch_tests {
         let layers = s.map().layers.len();
         let history = s.project.gp_history.len();
         let control = rustgis_analysis::control::Control::new();
-        let err =
-            super::run_batch_with(&mut s, &json!({"tool": "buffer", "folder": dir, "params": {"distance": 1}}), &control).unwrap_err();
+        let res = super::run_batch_with(&mut s, &json!({"tool": "buffer", "folder": dir, "params": {"distance": 1}}), &control);
         let _ = std::fs::remove_dir_all(&dir);
+        let err = res.unwrap_err();
         assert!(err.contains(&format!("more than {} data and sidecar files", super::MAX_FOLDER_ENTRIES)), "{err}");
         assert_eq!(s.map().layers.len(), layers, "no item ran");
         assert_eq!(s.project.gp_history.len(), history, "no item was attempted");
