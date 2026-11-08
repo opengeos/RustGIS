@@ -363,6 +363,12 @@ fn faces_with_no_ground_are_united() {
     let inner = format!("<bldg:lod2MultiSurface><gml:MultiSurface>{members}</gml:MultiSurface></bldg:lod2MultiSurface>");
     let out = read("model.gml", &lonlat(&building("b1", &inner)), None).unwrap();
     assert!((area(out[0].0.features[0].geometry.as_ref()) - 150.0).abs() < 1e-6, "{:?}", out[0].0.features[0].geometry);
+    // Corner to corner: their union is 175, their hull would be 200.
+    let faces = [polygon("a", &square(0.0, 0.0, 10.0, 5.0)), polygon("b", &square(5.0, 5.0, 10.0, 5.0))];
+    let members: String = faces.iter().map(|p| format!("<gml:surfaceMember>{p}</gml:surfaceMember>")).collect();
+    let inner = format!("<bldg:lod2MultiSurface><gml:MultiSurface>{members}</gml:MultiSurface></bldg:lod2MultiSurface>");
+    let out = read("model.gml", &lonlat(&building("b1", &inner)), None).unwrap();
+    assert!((area(out[0].0.features[0].geometry.as_ref()) - 175.0).abs() < 1e-6, "{:?}", out[0].0.features[0].geometry);
 }
 
 /// Positions as `gml:coordinates` (with their separators), and in two dimensions where a geometry
@@ -399,7 +405,12 @@ fn a_measure_attribute_keeps_a_unit_that_isnt_the_metre() {
     assert_eq!(value(&out[0].0, 0, "h"), Value::Text("40 ft".into()));
     assert_eq!(value(&out[0].0, 0, "m"), Value::Float(12.0));
     // The URN and URL forms of the metre are metres.
-    for uom in ["urn:ogc:def:uom:OGC:1.0:metre", "http://www.opengis.net/def/uom/OGC/1.0/metre", "urn:ogc:def:uom:EPSG::9001"] {
+    for uom in [
+        "urn:ogc:def:uom:OGC:1.0:metre",
+        "http://www.opengis.net/def/uom/OGC/1.0/metre",
+        "urn:ogc:def:uom:EPSG::9001",
+        "http://www.opengis.net/def/uom/EPSG/0/9001",
+    ] {
         let given = format!(r#"<bldg:measuredHeight uom="{uom}">12</bldg:measuredHeight>{}"#, box_surfaces("b3"));
         let out = read("model.gml", &lonlat(&building("b3", &given)), None).unwrap();
         assert_eq!(value(&out[0].0, 0, "measuredHeight"), Value::Float(12.0), "{uom}");
@@ -589,4 +600,157 @@ fn a_decimal_comma_is_read_where_it_is_declared() {
     let out = read("model.gml", &lonlat(&building("b1", &inner)), None).unwrap();
     assert!((area(out[0].0.features[0].geometry.as_ref()) - 10.0).abs() < 1e-6, "{:?}", messages_of(&out));
     assert_eq!(value(&out[0].0, 0, "z_max"), Value::Float(0.5));
+}
+
+/// A CityGML 1.0 model is read as a 2.0 one, and a namespace written with a character reference is
+/// the one it stands for.
+#[test]
+fn version_one_and_namespaces_with_references() {
+    let two = String::from_utf8(lonlat(&building("b1", &box_surfaces("b1")))).unwrap();
+    let one = two.replace("citygml/2.0", "citygml/1.0").replace("building/2.0", "building/1.0");
+    assert!(looks_like_citygml(one.as_bytes()));
+    let out = read("model.gml", one.as_bytes(), None).unwrap();
+    assert!((area(out[0].0.features[0].geometry.as_ref()) - 100.0).abs() < 1e-6);
+    let referenced =
+        two.replace(r#"xmlns:core="http://www.opengis.net/citygml/2.0""#, r#"xmlns:core="http://www.opengis.net/citygml/2.&#48;""#);
+    assert_ne!(referenced, two);
+    assert!(looks_like_citygml(referenced.as_bytes()));
+    assert_eq!(read("model.gml", referenced.as_bytes(), None).unwrap()[0].0.features.len(), 1);
+}
+
+/// The footprint comes from the highest level of detail, which the row names.
+#[test]
+fn the_highest_level_of_detail_gives_the_footprint() {
+    let at = |lod: u32, side: f64| {
+        format!(
+            "<bldg:lod{lod}MultiSurface><gml:MultiSurface><gml:surfaceMember>{}</gml:surfaceMember></gml:MultiSurface></bldg:lod{lod}MultiSurface>",
+            polygon(&format!("l{lod}"), &square(0.0, 0.0, side, 2.0))
+        )
+    };
+    for inner in [at(1, 1.0) + &at(2, 3.0), at(2, 3.0) + &at(1, 1.0)] {
+        let out = read("model.gml", &lonlat(&building("b1", &inner)), None).unwrap();
+        let ds = &out[0].0;
+        assert!((area(ds.features[0].geometry.as_ref()) - 9.0).abs() < 1e-6, "{:?}", ds.features[0].geometry);
+        assert_eq!(value(ds, 0, "lod"), Value::Text("2".into()));
+    }
+}
+
+/// Geometries as GML writes them less often: a curve given backwards, `gml:coord`, a point with more
+/// than one position, a solid with no exterior, a line with a point given by a link, and a relief's
+/// points with no id.
+#[test]
+fn less_common_geometries() {
+    let lod2 = |surface: &str| {
+        format!(
+            "<bldg:lod2MultiSurface><gml:MultiSurface><gml:surfaceMember>{surface}</gml:surfaceMember></gml:MultiSurface></bldg:lod2MultiSurface>"
+        )
+    };
+    // A concave ring of two curves, the second written backwards: 75, not a crossed ring.
+    let ring = r#"<gml:Polygon><gml:exterior><gml:Ring>
+        <gml:curveMember><gml:LineString><gml:posList>0 0 0 10 0 0 10 10 0</gml:posList></gml:LineString></gml:curveMember>
+        <gml:curveMember><gml:OrientableCurve orientation="-"><gml:baseCurve><gml:LineString><gml:posList>0 0 0 0 10 0 5 5 0 10 10 0</gml:posList></gml:LineString></gml:baseCurve></gml:OrientableCurve></gml:curveMember>
+        </gml:Ring></gml:exterior></gml:Polygon>"#;
+    let out = read("model.gml", &lonlat(&building("b1", &lod2(ring))), None).unwrap();
+    assert!((area(out[0].0.features[0].geometry.as_ref()) - 75.0).abs() < 1e-6, "{:?}", out[0].0.features[0].geometry);
+
+    // GML 2's `gml:coord`.
+    let coords: String = [(0, 0), (4, 0), (4, 4), (0, 4), (0, 0)]
+        .iter()
+        .map(|(x, y)| format!("<gml:coord><gml:X>{x}</gml:X><gml:Y>{y}</gml:Y><gml:Z>1</gml:Z></gml:coord>"))
+        .collect();
+    let face = format!("<gml:Polygon><gml:exterior><gml:LinearRing>{coords}</gml:LinearRing></gml:exterior></gml:Polygon>");
+    let out = read("model.gml", &lonlat(&building("b2", &lod2(&face))), None).unwrap();
+    assert!((area(out[0].0.features[0].geometry.as_ref()) - 16.0).abs() < 1e-6);
+    assert!(!says(&out, "can't be read"), "{:?}", messages_of(&out));
+
+    // A point is its first position, heights included.
+    let point = r#"<core:cityObjectMember><frn:CityFurniture gml:id="f1"><frn:lod1Geometry><gml:Point><gml:pos>1 1 10</gml:pos><gml:pos>2 2 100</gml:pos></gml:Point></frn:lod1Geometry></frn:CityFurniture></core:cityObjectMember>"#;
+    let out = read("model.gml", &lonlat(point), None).unwrap();
+    assert_eq!(value(&out[0].0, 0, "z_max"), Value::Float(10.0));
+
+    // A solid with only a cavity lacks its exterior, and is said.
+    let cavity = format!(
+        "<bldg:lod1Solid><gml:Solid><gml:interior><gml:CompositeSurface><gml:surfaceMember>{}</gml:surfaceMember></gml:CompositeSurface></gml:interior></gml:Solid></bldg:lod1Solid>{}",
+        polygon("c", &square(2.0, 2.0, 2.0, 0.0)),
+        box_surfaces("b3")
+    );
+    let out = read("model.gml", &lonlat(&building("b3", &cavity)), None).unwrap();
+    assert!(says(&out, "lack a part they need"), "{:?}", messages_of(&out));
+    assert!((area(out[0].0.features[0].geometry.as_ref()) - 100.0).abs() < 1e-6);
+
+    // A line with a point given by a link isn't whole: said as a link, and left out.
+    let line = format!(
+        r##"<bldg:lod1MultiCurve><gml:MultiCurve><gml:curveMember><gml:LineString><gml:pos>0 0 0</gml:pos><gml:pointProperty xlink:href="#p"/><gml:pos>9 9 0</gml:pos></gml:LineString></gml:curveMember></gml:MultiCurve></bldg:lod1MultiCurve>{}"##,
+        box_surfaces("b4")
+    );
+    let out = read("model.gml", &lonlat(&building("b4", &line)), None).unwrap();
+    assert!(says(&out, "1 geometries or objects are given only by a link"), "{:?}", messages_of(&out));
+    // So is a ring with a curve whose base curve is a link.
+    let ring = r##"<gml:Polygon><gml:exterior><gml:Ring>
+        <gml:curveMember><gml:LineString><gml:posList>0 0 0 10 0 0 10 10 0</gml:posList></gml:LineString></gml:curveMember>
+        <gml:curveMember><gml:OrientableCurve orientation="-"><gml:baseCurve xlink:href="#c"/></gml:OrientableCurve></gml:curveMember>
+        </gml:Ring></gml:exterior></gml:Polygon>"##;
+    let out = read("model.gml", &lonlat(&building("b5", &(lod2(ring) + &box_surfaces("b5")))), None).unwrap();
+    assert!(says(&out, "1 geometries or objects are given only by a link"), "{:?}", messages_of(&out));
+    assert!((area(out[0].0.features[0].geometry.as_ref()) - 100.0).abs() < 1e-6);
+
+    // A relief's mass points with no id are an object of their relief.
+    let relief = r#"<core:cityObjectMember><dem:ReliefFeature gml:id="r1"><dem:reliefComponent><dem:MassPointRelief><dem:reliefPoints><gml:MultiPoint><gml:pointMember><gml:Point><gml:pos>1 1 3</gml:pos></gml:Point></gml:pointMember></gml:MultiPoint></dem:reliefPoints></dem:MassPointRelief></dem:reliefComponent></dem:ReliefFeature></core:cityObjectMember>"#;
+    let out = read("model.gml", &lonlat(relief), None).unwrap();
+    let points = &out
+        .iter()
+        .find(|(ds, _)| ds.name == "model MassPointRelief" || ds.name == "model")
+        .unwrap_or_else(|| panic!("{:?}", out.iter().map(|(d, _)| &d.name).collect::<Vec<_>>()))
+        .0;
+    assert_eq!(value(points, 0, "parent"), Value::Text("r1".into()));
+}
+
+/// Ids are `gml:id`s, an extension's metadata named for a level of detail is a value, a terrain
+/// intersection doesn't make a feature an object, and a file cut inside a character is read up to it.
+#[test]
+fn ids_values_and_a_cut_inside_a_character() {
+    // An extension's `id` before `gml:id`: the object's id is the GML one.
+    let named = format!(
+        r#"<core:cityObjectMember><bldg:Building xmlns:x="urn:x" id="plain" x:id="ext" gml:id="b1">{}</bldg:Building></core:cityObjectMember>"#,
+        box_surfaces("b1")
+    );
+    let out = read("model.gml", &lonlat(&named), None).unwrap();
+    assert_eq!(value(&out[0].0, 0, "id"), Value::Text("b1".into()));
+
+    // Metadata named for a level of detail is kept as a value, and isn't taken for a geometry.
+    let meta = format!("<bldg:lod2Metadata><bldg:source>survey</bldg:source></bldg:lod2Metadata>{}", box_surfaces("b2"));
+    let out = read("model.gml", &lonlat(&building("b2", &meta)), None).unwrap();
+    assert_ne!(value(&out[0].0, 0, "lod2Metadata"), Value::Null);
+    assert!(!says(&out, "unknown types"), "{:?}", messages_of(&out));
+
+    // A part with no id holding only a terrain intersection isn't an object: it is said.
+    let curve = "<gml:MultiCurve><gml:curveMember><gml:LineString><gml:posList>0 0 0 1 0 0</gml:posList></gml:LineString></gml:curveMember></gml:MultiCurve>";
+    let inner = format!(
+        "<bldg:consistsOfBuildingPart><bldg:BuildingPart>{}</bldg:BuildingPart><bldg:BuildingPart><bldg:lod2TerrainIntersection>{curve}</bldg:lod2TerrainIntersection></bldg:BuildingPart></bldg:consistsOfBuildingPart>",
+        box_surfaces("p")
+    );
+    let out = read("model.gml", &lonlat(&building("b3", &inner)), None).unwrap();
+    assert!(says(&out, "1 nested features with no gml:id and no geometry"), "{:?}", messages_of(&out));
+
+    // Cut inside the "é" of the second building's name: the first is read, and the cut said.
+    let whole = lonlat(
+        &[building("b4", &box_surfaces("b4")), building("b5", &format!("<gml:name>Café</gml:name>{}", box_surfaces("b5")))].concat(),
+    );
+    let at = whole.windows(2).position(|w| w == "é".as_bytes()).unwrap() + 1;
+    let out = read("model.gml", &whole[..at], None).unwrap();
+    assert_eq!(out[0].0.features.len(), 1);
+    assert!(says(&out, "as if cut short"), "{:?}", messages_of(&out));
+    // Text that isn't UTF-8 in the middle is still refused.
+    let mut broken = whole.clone();
+    broken[at] = b'x';
+    assert!(read("model.gml", &broken, None).is_err());
+
+    // A latitude-first EPSG:4326 model, given EPSG:4326 by its code: read latitude first.
+    let inner = format!(
+        r#"<bldg:lod2MultiSurface><gml:MultiSurface srsName="urn:ogc:def:crs:EPSG::4326"><gml:surfaceMember>{}</gml:surfaceMember></gml:MultiSurface></bldg:lod2MultiSurface>"#,
+        polygon("q", &square(52.0, 4.0, 0.001, 0.0))
+    );
+    let out = read("model.gml", &model("urn:ogc:def:crs:EPSG::4326", &building("b6", &inner)), Some(Crs::Epsg(4326))).unwrap();
+    let e = out[0].0.extent();
+    assert!((e.min_x - 4.0).abs() < 0.01 && (e.min_y - 52.0).abs() < 0.01, "{e:?}");
 }

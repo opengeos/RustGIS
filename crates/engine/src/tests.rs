@@ -13757,6 +13757,20 @@ fn citygml_layers_and_the_coordinate_system_given() {
     s.run("layer.addData", &json!({"path": archive.display().to_string(), "crs": "EPSG:28992"})).unwrap();
     assert_eq!(both(&s, "m"), (true, true));
     placed(&s, "m Building");
+
+    // A model naming its system: as text with no options, every layer; zipped with another system
+    // given, the one it names.
+    let named = model.replace("<gml:MultiSurface>", r#"<gml:MultiSurface srsName="EPSG:28992">"#);
+    let mut s = Session::new(Project::default());
+    s.run("layer.addDataText", &json!({"fileName": "n.gml", "text": named})).unwrap();
+    assert_eq!(both(&s, "n"), (true, true));
+    placed(&s, "n Building");
+    let archive = dir.join("named.zip");
+    std::fs::write(&archive, rustgis_data::zip::write(&[("d/z.gml".to_string(), named.clone().into_bytes())]).unwrap()).unwrap();
+    let mut s = Session::new(Project::default());
+    s.run("layer.addData", &json!({"path": archive.display().to_string(), "crs": "EPSG:3857"})).unwrap();
+    assert_eq!(both(&s, "z"), (true, true));
+    placed(&s, "z Building");
     let _ = std::fs::remove_dir_all(dir);
 }
 

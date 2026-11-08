@@ -67,6 +67,31 @@ const VALUES: [&str; 4] = ["Envelope", "Null", "Address", "Appearance"];
 /// The standard's properties typed as numbers, by name: lengths (`gml:LengthType`) and counts or
 /// years.
 const LENGTHS: [&str; 5] = ["measuredHeight", "height", "trunkDiameter", "crownDiameter", "averageHeight"];
+/// The GML geometries read, by local name.
+const GEOMETRIES: [&str; 22] = [
+    "Point",
+    "MultiPoint",
+    "LineString",
+    "Curve",
+    "LinearRing",
+    "MultiCurve",
+    "CompositeCurve",
+    "Polygon",
+    "Triangle",
+    "Rectangle",
+    "Surface",
+    "PolyhedralSurface",
+    "TriangulatedSurface",
+    "Tin",
+    "OrientableSurface",
+    "TexturedSurface",
+    "CompositeSurface",
+    "MultiSurface",
+    "Solid",
+    "CompositeSolid",
+    "MultiSolid",
+    "MultiGeometry",
+];
 const COUNTS: [&str; 4] = ["storeysAboveGround", "storeysBelowGround", "yearOfConstruction", "yearOfDemolition"];
 
 /// Whether a file is a CityGML city model, by its root: a `CityModel` in one of CityGML's
@@ -104,7 +129,12 @@ fn read_with(file_name: &str, bytes: &[u8], given: Option<Crs>, keep_named: bool
     if bytes.len() as u64 > crate::io::MAX_BYTES {
         return Err(DataError::Format(format!("file is too large ({} bytes)", bytes.len())));
     }
-    let text = std::str::from_utf8(bytes).map_err(|_| DataError::Format(format!("{file_name} is not UTF-8 text")))?;
+    // A file cut inside a character is read up to it, as one cut inside a tag is.
+    let text = match std::str::from_utf8(bytes) {
+        Ok(text) => text,
+        Err(e) if e.error_len().is_none() => std::str::from_utf8(bytes.get(..e.valid_up_to()).unwrap_or_default()).unwrap_or_default(),
+        Err(_) => return Err(DataError::Format(format!("{file_name} is not UTF-8 text"))),
+    };
     let text = text.trim_start_matches('\u{feff}');
     let stem = std::path::Path::new(file_name).file_stem().and_then(|s| s.to_str()).filter(|s| !s.is_empty()).unwrap_or("city model");
     let index = Index::of(file_name, text)?;
@@ -117,7 +147,7 @@ fn read_with(file_name: &str, bytes: &[u8], given: Option<Crs>, keep_named: bool
     let swap = index
         .system
         .as_deref()
-        .is_some_and(|n| known_system(horizontal(n)).is_some_and(|crs| lat_first(n, crs) && given.is_none_or(|g| g == crs)));
+        .is_some_and(|n| known_system(horizontal(n)).is_some_and(|crs| lat_first(n, crs) && given.is_none_or(|g| g.epsg() == crs.epsg())));
     let mut reading = Reading { budget: MAX_FILE_FACES, swap, ..Reading::default() };
     reading.said.appearances = index.appearances;
     let mut wrapped = String::new();
@@ -202,13 +232,15 @@ fn start_attribute<'a>(e: &'a BytesStart, local: &str) -> Option<Cow<'a, str>> {
     Some(a.normalized_value(quick_xml::XmlVersion::Implicit1_0).unwrap_or(a.value))
 }
 
-/// The namespace an element's own name is in, by the declarations it makes itself (as a root does).
+/// The namespace an element's own name is in, by the declarations it makes itself (as a root does),
+/// its references expanded.
 fn root_namespace<'a>(e: &'a BytesStart) -> Option<Cow<'a, str>> {
     let declaration = match e.name().into_inner().split_once(':') {
         Some((prefix, _)) => format!("xmlns:{prefix}"),
         None => "xmlns".to_string(),
     };
-    e.attributes().flatten().find(|a| a.key.into_inner() == declaration).map(|a| a.value)
+    let a = e.attributes().flatten().find(|a| a.key.into_inner() == declaration)?;
+    Some(a.normalized_value(quick_xml::XmlVersion::Implicit1_0).unwrap_or(a.value))
 }
 
 impl Index {
@@ -380,8 +412,26 @@ fn is_gml(n: &Node) -> bool {
 
 /// The level of detail a geometry property names (`lod2Solid` is 2), when it holds a geometry or
 /// links to one: a property so named that holds text is a value.
+/// An element's `gml:id` (not an extension's `id`).
+fn gml_id<'a>(n: &Node<'a, '_>) -> Option<&'a str> {
+    n.attributes()
+        .find(|a| a.name() == "id" && a.namespace().is_some_and(|ns| ns.starts_with("http://www.opengis.net/gml")))
+        .map(|a| a.value())
+}
+
+/// Whether an element is a GML geometry this reader draws.
+fn is_geometry(g: &Node) -> bool {
+    is_gml(g) && GEOMETRIES.contains(&local(g))
+}
+
+/// Whether a line or ring holds a point or curve given only by a link, so it isn't whole.
+fn has_linked_part(n: &Node) -> bool {
+    n.descendants().any(|d| matches!(local(&d), "curveMember" | "baseCurve" | "pointProperty" | "pointRep") && only_link(&d))
+}
+
 fn property_lod(p: &Node) -> Option<u32> {
-    let holds = elements(*p).next().is_some() || attribute(p, "href").is_some();
+    // A geometry, an implicit one, or a link: not an extension's structured value (`lod2Metadata`).
+    let holds = elements(*p).next().is_some_and(|g| is_gml(&g) || local(&g) == "ImplicitGeometry") || attribute(p, "href").is_some();
     local(p).strip_prefix("lod").and_then(|rest| rest.chars().next()).and_then(|c| c.to_digit(10)).filter(|_| holds)
 }
 
@@ -392,10 +442,15 @@ fn is_object(e: &Node) -> bool {
     local(e).starts_with(char::is_uppercase)
         && !is_gml(e)
         && !VALUES.contains(&local(e))
-        && (attribute(e, "id").is_some()
+        && (gml_id(e).is_some()
             || local(e) == "TINRelief"
-            || elements(*e)
-                .any(|p| property_lod(&p).is_some() || (SURFACE_PROPERTIES.contains(&local(&p)) && elements(p).any(|s| !is_gml(&s)))))
+            || elements(*e).any(|p| {
+                // A terrain intersection is an auxiliary line, not the feature's geometry.
+                !local(&p).ends_with("TerrainIntersection")
+                    && (property_lod(&p).is_some()
+                        || elements(p).next().is_some_and(|g| is_geometry(&g))
+                        || (SURFACE_PROPERTIES.contains(&local(&p)) && elements(p).any(|s| !is_gml(&s))))
+            }))
 }
 
 /// Adds a value, a key given again making a list.
@@ -451,7 +506,7 @@ fn generic_value(a: &Node) -> Json {
 fn is_metre(uom: &str) -> bool {
     let u = uom.trim().to_ascii_lowercase();
     matches!(u.as_str(), "m" | "#m" | "metre" | "meter")
-        || [":m", "#m", "::9001", ":metre", "/metre", "#metre"].iter().any(|end| u.ends_with(end))
+        || [":m", "#m", "::9001", "/epsg/0/9001", ":metre", "/metre", "#metre"].iter().any(|end| u.ends_with(end))
 }
 
 /// A simple property's value: a number for the standard's lengths and counts (a length in another
@@ -589,7 +644,7 @@ impl Reading {
             self.counts.tin_reliefs += 1;
             return;
         }
-        let id = attribute(&e, "id").map(str::trim).filter(|id| !id.is_empty());
+        let id = gml_id(&e).map(str::trim).filter(|id| !id.is_empty());
         let mut parts = ObjectParts::default();
         let mut attributes = Map::new();
         let mut children = Vec::new();
@@ -777,14 +832,27 @@ impl Walk<'_> {
     fn shape(&mut self, g: &Node) -> Option<()> {
         match local(g) {
             "Point" => {
+                // A point is its first position, and its height that one's alone.
+                let before = self.got.heights.len();
                 let p = self.positions(g)?;
-                self.got.points.push((*p.first()?, false));
+                let first = *p.first()?;
+                let had = self.got.heights.len() > before;
+                self.got.heights.truncate(before);
+                if had {
+                    self.got.heights.push(first);
+                }
+                self.got.points.push((first, false));
             }
             "MultiPoint" => self.members(g, &["pointMember"], "pointMembers")?,
             name @ ("LineString" | "Curve" | "LinearRing") => {
                 if name == "Curve" {
                     let mut segments = elements(*g).filter(|c| local(c) == "segments").flat_map(elements);
                     self.said.curved += usize::from(segments.any(|s| local(&s) != "LineStringSegment"));
+                }
+                // A line with a point or curve given by a link isn't whole, and is left out.
+                if has_linked_part(g) {
+                    self.said.links += 1;
+                    return Some(());
                 }
                 let line = self.positions(g)?;
                 self.got.lines.push(line);
@@ -809,6 +877,8 @@ impl Walk<'_> {
             }
             "CompositeSurface" | "MultiSurface" | "Shell" => self.members(g, &["surfaceMember"], "surfaceMembers")?,
             "Solid" => {
+                // A solid with no exterior shell (its cavities only) lacks the part it needs.
+                elements(*g).find(|c| local(c) == "exterior")?;
                 self.got.solid = true;
                 self.members(g, &["exterior", "interior"], "")?;
             }
@@ -868,8 +938,9 @@ impl Walk<'_> {
                 continue;
             }
             let ring = elements(b).next()?;
-            // A ring of curves, one given by a link: the ring isn't whole, and is left out as one.
-            if ring.descendants().any(|d| local(&d) == "curveMember" && only_link(&d)) {
+            // A ring with a curve or point given by a link: the ring isn't whole, and is left out
+            // as one.
+            if has_linked_part(&ring) {
                 self.said.links += 1;
                 if k == 0 {
                     return Some(());
@@ -886,7 +957,24 @@ impl Walk<'_> {
     /// `gml:coordinates`. `None` when one isn't numbers, or not as many as its dimension asks for.
     fn positions(&mut self, n: &Node) -> Option<Vec<P3>> {
         let mut out = Vec::new();
+        // A curve given in the opposite direction (`orientation="-"`) is read and reversed whole.
+        let mut reversed: Option<Node> = None;
         for c in n.descendants().filter(Node::is_element) {
+            if reversed.is_some_and(|r| c.ancestors().any(|a| a == r)) {
+                continue;
+            }
+            if c != *n && local(&c) == "OrientableCurve" && attribute(&c, "orientation").map(str::trim) == Some("-") {
+                let outer = self.dim;
+                let mut between = c.ancestors().skip(1).take_while(|a| a != n).chain(std::iter::once(*n));
+                if let Some(d) = between.find_map(|a| attribute(&a, "srsDimension")) {
+                    self.dim = Some(d.trim().parse().ok()?);
+                }
+                let curve = self.positions(&c);
+                self.dim = outer;
+                out.extend(curve?.into_iter().rev());
+                reversed = Some(c);
+                continue;
+            }
             let (values, dim): (Vec<f64>, usize) = match local(&c) {
                 "pos" | "posList" => {
                     let values: Vec<f64> = text(&c).split_ascii_whitespace().map(|v| v.parse().ok()).collect::<Option<_>>()?;
@@ -921,6 +1009,16 @@ impl Walk<'_> {
                         values.extend(v);
                     }
                     (values, dim.unwrap_or(3))
+                }
+                // GML 2's position, its ordinates as elements.
+                "coord" => {
+                    let get = |k: &str| elements(c).find(|x| local(x) == k).map(|x| text(&x).trim().parse::<f64>().ok());
+                    let mut values = vec![get("X").flatten()?, get("Y").flatten()?];
+                    if let Some(z) = get("Z") {
+                        values.push(z?);
+                    }
+                    let dim = values.len();
+                    (values, dim)
                 }
                 _ => continue,
             };
