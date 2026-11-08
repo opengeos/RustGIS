@@ -4902,10 +4902,22 @@ fn feature_data_groups(app: &mut RustGisApp, ui: &mut Ui) {
     });
 }
 
-/// A language's own name, or its English name when no installed font can draw it (CJK names on the
-/// web before a CJK font has been downloaded).
+/// Whether an installed font can draw `text` (CJK names on the web before a CJK font has been
+/// downloaded can't be).
+fn drawable(ui: &Ui, text: &str) -> bool {
+    ui.ctx().fonts_mut(|f| f.has_glyphs(&regular(12.5), text))
+}
+
+/// How the language picker names `l`: in English while the interface is English, otherwise in the
+/// language itself, or in English when no installed font can draw that.
 fn shown_name(ui: &Ui, l: crate::i18n::Lang) -> &'static str {
-    if ui.ctx().fonts_mut(|f| f.has_glyphs(&regular(12.5), l.name())) { l.name() } else { l.english() }
+    if crate::i18n::current() == crate::i18n::Lang::EN || !drawable(ui, l.name()) { l.english() } else { l.name() }
+}
+
+/// The picker's tooltip for `l`: whichever of its two names the list doesn't show, if it can be drawn.
+fn other_name(ui: &Ui, l: crate::i18n::Lang) -> &'static str {
+    let shown = shown_name(ui, l);
+    if shown == l.english() && drawable(ui, l.name()) { l.name() } else { l.english() }
 }
 
 /// Whose view of disputed borders the built-in countries and world outline show (Settings › Language).
@@ -4947,7 +4959,7 @@ fn language_menu(app: &mut RustGisApp, ui: &mut Ui) {
         ui.separator();
         for l in crate::i18n::Lang::all() {
             let sel = !auto && l == current;
-            if ui.selectable_label(sel, shown_name(ui, l)).on_hover_text(l.english()).clicked() {
+            if ui.selectable_label(sel, shown_name(ui, l)).on_hover_text(other_name(ui, l)).clicked() {
                 let _ = app.run("ui.language", json!({"code": l.code()}));
                 ui.close();
             }
@@ -4985,6 +4997,41 @@ mod tests {
         );
         h.run();
         h
+    }
+
+    /// The language list names every language in English while the interface is English, with the
+    /// language's own name as the tooltip; in another language each keeps its own name.
+    #[test]
+    fn the_language_list_follows_the_interface_language() {
+        use crate::i18n::{self, Lang};
+        let names = |lang: Lang| {
+            let mut fonts = false;
+            let mut h = egui_kittest::Harness::builder().build_ui_state(
+                move |ui, out: &mut Vec<(&'static str, &'static str)>| {
+                    if !fonts {
+                        crate::theme::install_fonts(ui.ctx(), &[], None);
+                        fonts = true;
+                        return;
+                    }
+                    i18n::set_current(lang);
+                    *out = Lang::all().map(|l| (shown_name(ui, l), other_name(ui, l))).collect();
+                    i18n::set_current(Lang::EN);
+                },
+                Vec::new(),
+            );
+            h.run();
+            h.state().clone()
+        };
+        let en = names(Lang::EN);
+        let english: Vec<_> = Lang::all().map(Lang::english).collect();
+        assert_eq!(en.iter().map(|n| n.0).collect::<Vec<_>>(), english);
+        let fr = Lang::from_code("fr").unwrap();
+        let az = Lang::from_code("az").unwrap();
+        let tip = |names: &[(&'static str, &'static str)], l: Lang| -> &'static str { names.iter().find(|n| n.0 == l.english() || n.0 == l.name()).unwrap().1 };
+        assert_eq!(tip(&en, fr), "Français", "the tooltip gives the language's own name");
+        let de = names(Lang::from_code("de").unwrap());
+        assert!(de.contains(&("Français", "French")), "in German, French keeps its own name: {de:?}");
+        assert!(de.iter().any(|n| n.0 == az.name() || n.0 == az.english()));
     }
 
     /// The Labeling tab holds every label group (#897): a feature layer's, then the map's, which
