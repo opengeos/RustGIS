@@ -30,6 +30,21 @@ about them. The web app's Export Map downloads a PNG. A projection
 whose parameters GeoTIFF's keys can't hold (Mollweide, for example) is refused too:
 switch the map to an EPSG projection first.
 
+**Export Raster** writes a tile layer alone too: right-click a WMS, WMTS or XYZ layer (or a
+raster tile archive) in the Layers pane and choose **Export Raster…**, or pick it and use
+**Data › Export Raster**. Its own tiles over the view, at the zoom of the view's scale, are put together
+as an RGBA GeoTIFF in Web Mercator (EPSG:3857): a pixel of the file for a pixel of a tile, not
+resampled, with the layer's transparency and its credits in the Copyright tag. In a script,
+`share.exportRaster` takes `"tiles"` (the tile layer's name, or its index in the Layers pane, 0
+at the top), `"bbox"` (`[west, south, east, north]` in degrees, the view's by default), `"zoom"`
+(the tiles' zoom, 0 to 30) and `"cog"`. A zoom past the service's deepest enlarges its tiles, and
+says so. An export fetches at most 1024 tiles and holds at most 8192 pixels a side: past either it
+is refused, naming a zoom that fits, as many tile services' terms forbid bulk downloads
+(OpenStreetMap's tile usage policy, for one). Tiles that haven't come after a wait (up to a minute for
+each 2048-pixel block), or can't be drawn, leave gaps, and the export warns; so does a box where
+it drew nothing. Vector tiles and styles are refused: Export Map to a
+`.tif` writes what they draw. The web app exports the view with Export Map instead.
+
 **Print Map** opens a PDF of the map view, kept as
 vectors as a layout's PDF is (see Layouts), in the system viewer on desktop; **Capture To
 Clipboard** copies a map image. **Export To 3D** writes a layer as a Wavefront OBJ or binary STL model
