@@ -204,7 +204,7 @@ impl SourceInfo {
     }
 
     /// The source's coordinate system, when it isn't longitude/latitude: one known by its EPSG
-    /// code or a custom one without.
+    /// code or a custom one without. `None` also when `crs` isn't one RustGIS can parse.
     pub fn coordinate_system(&self) -> Option<Crs> {
         Crs::parse(&self.crs).ok().filter(|c| *c != Crs::LonLat)
     }
