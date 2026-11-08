@@ -33086,7 +33086,7 @@ fn topology_refuses_latitudes_past_the_poles() {
 }
 
 /// `share.exportMap` to a `.tif` writes the view placed on the ground (#1561): in the map's
-/// projection, each pixel where the view drew it, RGBA; a turned view north up over its box, and
+/// projection, each pixel where the view drew it, RGB; a turned view north up over its box, and
 /// says so; a tilted view, the globe and junk refused.
 #[test]
 fn export_map_to_geotiff_places_the_view_on_the_ground() {
@@ -33159,6 +33159,12 @@ fn export_map_to_geotiff_places_the_view_on_the_ground() {
     let n = s.notices.len();
     s.run("share.exportMap", &json!({"path": dir.join("fit.tif").display().to_string(), "width": 4000})).unwrap();
     assert!(!s.notices[n..].iter().any(|x| x.text.contains("cut to its middle") || x.text.contains("points is more than")));
+    // The whole 9000-point view in 4000 points: each pixel 2.25 of the camera's, the same centre.
+    let fit = read(&dir.join("fit.tif"));
+    let cam = s.map().camera;
+    assert_eq!((fit.width, fit.height), (4000, 300));
+    assert!((fit.transform.pixel_width - 2.25 * cam.res).abs() < 1e-6 * cam.res, "{:?}", fit.transform);
+    assert!((fit.transform.origin_x + 2000.0 * fit.transform.pixel_width - cam.center.x).abs() < 1e-3);
     s.view_size = (400.0, 300.0);
     // A size given past the limit is drawn at the limit, and says so.
     let n = s.notices.len();

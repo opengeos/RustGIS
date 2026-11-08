@@ -26,7 +26,7 @@ pub fn commands() -> Vec<C> {
             super::exports::write_here(s, p, "share.exportMap")
         }).inputs(map_inputs).roles(&[]).effects(crate::policy::Effects::NONE.with(crate::policy::Effect::Files))
         .view()
-            .params(r#"{"path": "*.png|*.tif|*.tiff", "width"?: px, "height"?: px, "dpi"?: 96..600, "cog"?: "true for a cloud-optimised GeoTIFF"}"#),
+            .params(r#"{"path": "*.png|*.tif|*.tiff", "width"?: "points (pixels at 96 dpi), the view fitted in it", "height"?: points, "dpi"?: 96..600, "cog"?: "true for a cloud-optimised GeoTIFF"}"#),
         C::new("share.exportLayer", "Export Features", "Publish › Output", |s, p| super::exports::write_here(s, p, "share.exportLayer")).roles(&[]).effects(crate::policy::Effects::NONE.with(crate::policy::Effect::Files))
             .view()
             .when(need_layer)
@@ -171,7 +171,8 @@ pub const MOST_POINTS: f64 = 8000.0;
 
 /// What [`export_view`]'s limit of [`MOST_POINTS`] a side does to an export to `path` of a view
 /// of `(vw, vh)` points, for it to say: with no size given, a larger view is cut to its middle;
-/// a size given past the limit is drawn at the limit, over the same ground.
+/// a size given past the limit is drawn at the limit: the view still fits whole, with less ground
+/// around it than the size asked for.
 fn size_notes(
     path: &str,
     (vw, vh): (f64, f64),
@@ -190,7 +191,7 @@ fn size_notes(
     for (name, v) in [("width", width), ("height", height)] {
         if let Some(v) = v.filter(|v| *v > MOST_POINTS) {
             notes.push(note(format!(
-                "a {name} of {v:.0} points is more than the {MOST_POINTS:.0} an export holds, so it is drawn at {MOST_POINTS:.0} over the same ground: a higher dpi gives more pixels"
+                "a {name} of {v:.0} points is more than the {MOST_POINTS:.0} an export holds, so it is drawn at {MOST_POINTS:.0}, holding less ground than asked (the whole view still fits): a higher dpi gives more pixels"
             )));
         }
     }
@@ -268,6 +269,8 @@ pub(crate) fn map_work(s: &Session, p: &Value) -> Result<Work, String> {
             rustgis_data::io::write_atomic(Path::new(&path), &png).map_err(|e| format!("{path}: {e}"))?;
             Ok(json!({"path": path, "bytes": png.len()}))
         })();
+        // What the size limit did is said of a file written.
+        let sized = if written.is_ok() { sized } else { Vec::new() };
         super::exports::drawn(std::slice::from_ref(&map), sized, written, path)
     }))
 }
@@ -295,7 +298,7 @@ fn geotiff_work(
         ));
     }
     let mut view = view;
-    let mut notices = sized;
+    let mut notices = Vec::new();
     let bearing = view.camera.bearing;
     let turned = bearing.rem_euclid(360.0).min(360.0 - bearing.rem_euclid(360.0)) > 1e-9;
     if turned {
@@ -349,19 +352,16 @@ fn geotiff_work(
             let mut out = json!({"path": path, "width": r.width, "height": r.height, "crs": crs.label(), "bytes": bytes});
             if let Some(c) = &r.copyright {
                 out["copyright"] = json!(c);
-                // Credits with nothing a tag can hold (control characters only) write no tag.
-                if rustgis_data::raster::tag_text(c).is_empty() {
-                    notices.push((
-                        rustgis_data::diagnostics::Severity::Info,
-                        format!("{path}: the credits hold nothing a Copyright tag can, so the file has none: {c:?}"),
-                    ));
-                }
                 if let Some(note) = rustgis_data::raster::tag_text_note(c) {
                     notices.push((rustgis_data::diagnostics::Severity::Info, format!("{path}: {note} (the credits: {c})")));
                 }
             }
             Ok(out)
         })();
+        // What the size limit did is said of a file written, first.
+        if written.is_ok() {
+            notices.splice(0..0, sized);
+        }
         super::exports::drawn(std::slice::from_ref(&map), notices, written, path)
     }))
 }

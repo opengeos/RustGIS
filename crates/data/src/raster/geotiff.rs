@@ -1781,6 +1781,26 @@ mod tests {
             )
         );
         assert_eq!(super::super::tag_text_note("plain"), None);
+        assert_eq!(super::super::tag_text_note(""), None);
+        // Nothing a tag can hold: no tag is written, and that is said.
+        assert_eq!(
+            super::super::tag_text_note("\0\n").as_deref(),
+            Some("the credits hold nothing a Copyright tag can, so the file has none")
+        );
+        let mut blank = small();
+        blank.copyright = Some("\0\n".into());
+        assert_eq!(read(std::io::Cursor::new(write(&blank, 0).unwrap()), "none").unwrap().copyright, None);
+        // A Copyright tag that isn't text (bytes, not ASCII) is left out, and said.
+        let mut buf = std::io::Cursor::new(Vec::new());
+        {
+            let mut enc = tiff::encoder::TiffEncoder::new(&mut buf).unwrap();
+            let mut img = enc.new_image::<tiff::encoder::colortype::Gray8>(2, 2).unwrap();
+            img.encoder().write_tag(Tag::Copyright, &[0xA9u8, 0x20, 0x58][..]).unwrap();
+            img.write_data(&[1, 2, 3, 4]).unwrap();
+        }
+        let odd = read(std::io::Cursor::new(buf.into_inner()), "odd").unwrap();
+        assert_eq!(odd.copyright, None);
+        assert!(odd.lost.iter().any(|l| l.starts_with("its Copyright tag: it isn't ASCII text")), "{:?}", odd.lost);
         assert_eq!(super::super::tag_text("a\nb\u{85}c ü"), "a b c ?");
         // A scan (a TIFF with no GeoTIFF tags) keeps it too.
         let mut buf = std::io::Cursor::new(Vec::new());

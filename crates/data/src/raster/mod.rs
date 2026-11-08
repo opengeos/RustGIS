@@ -641,8 +641,12 @@ pub fn tag_text_changes(s: &str) -> (usize, usize, usize) {
 }
 
 /// What writing `s` to a TIFF ASCII tag ([`tag_text`]) changes, for an export to say: `None`
-/// when it is written as it is.
+/// when it is written as it is (or is empty); that no tag is written when nothing of it is left.
 pub fn tag_text_note(s: &str) -> Option<String> {
+    // Nothing a tag can hold (control characters only): the writers write no tag.
+    if tag_text(s).is_empty() {
+        return (!s.is_empty()).then(|| "the credits hold nothing a Copyright tag can, so the file has none".to_string());
+    }
     let (symbols, questioned, spaced) = tag_text_changes(s);
     let count = |n: usize, one: &str, many: &str| if n == 1 { format!("1 {one}") } else { format!("{n} {many}") };
     let parts: Vec<String> = [
