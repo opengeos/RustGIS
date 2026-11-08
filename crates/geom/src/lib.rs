@@ -502,9 +502,13 @@ fn wgs84_parallel_m(lat_deg: f64, dlon_deg: f64) -> f64 {
     WGS84_A / (1.0 - WGS84_E2 * s * s).sqrt() * c.abs() * dlon_deg.to_radians().abs()
 }
 
-/// Coordinates closer than this (degrees, about 0.1 m) are the same, for [`ring_lon_steps`]: a band
-/// written with rounded coordinates keeps its full turns.
-const NEAR_DEG: f64 = 1e-6;
+/// Coordinates closer than this (degrees, about 11 m, half a unit in the fourth decimal) are on one
+/// parallel or meridian, for [`ring_lon_steps`]: a band written with coordinates rounded to four
+/// decimals or more keeps its full turns.
+const NEAR_DEG: f64 = 1e-4;
+
+/// A vertex this close to the one before it (degrees) repeats it, for [`ring_lon_steps`].
+const SAME_DEG: f64 = 1e-9;
 
 /// Each edge of a lon/lat ring, closed back to its first vertex, as its step in longitude
 /// (degrees) and whether that step is a full turn around the globe.
@@ -550,7 +554,7 @@ fn ring_lon_steps(ring: &[Coord]) -> Vec<(f64, bool)> {
     let moves = |i: usize| edge(i).is_some_and(|(a, b)| !at_pole(a) && !at_pole(b) && wrap_lon(b.x - a.x).abs() > NEAR_DEG);
     // An edge from a vertex to a copy of itself (a closing vertex repeated) is no neighbour: look
     // past it to the next edge that goes somewhere, `step` edges at a time (1 forward, n - 1 back).
-    let same = |a: &Coord, b: &Coord| (a.x - b.x).abs() <= NEAR_DEG && (a.y - b.y).abs() <= NEAR_DEG;
+    let same = |a: &Coord, b: &Coord| (a.x - b.x).abs() <= SAME_DEG && (a.y - b.y).abs() <= SAME_DEG;
     let neighbour = |i: usize, step: usize| {
         let mut j = (i + step) % n;
         for _ in 0..n {
@@ -984,13 +988,16 @@ mod tests {
             }
         }
         // A band whose coordinates were rounded to 7 decimals at one end of a full turn is the band.
-        for rounded in [
-            [c(-180.0, -10.0), c(180.0, -10.000_000_1), c(180.0, 10.0), c(-180.0, 10.0)],
-            [c(-180.0, -10.0), c(180.0, -10.0), c(180.0, 10.0), c(-180.000_000_1, 10.0)],
-        ] {
-            let (perimeter, area) = wgs84_ring_perimeter_area_m2(&rounded);
-            assert!((area / BAND_10_M2 - 1.0).abs() < 1e-6, "{area}");
-            assert!((perimeter / BAND_10_PERIMETER_M - 1.0).abs() < 1e-6, "{perimeter}");
+        for off in [1e-7, 5e-5] {
+            for rounded in [
+                [c(-180.0, -10.0), c(180.0, -10.0 - off), c(180.0, 10.0), c(-180.0, 10.0)],
+                [c(-180.0, -10.0), c(180.0, -10.0), c(180.0, 10.0), c(-180.0 - off, 10.0)],
+                [c(-180.0, -10.0), c(180.0, -10.0), c(180.0 - off, 10.0), c(-180.0, 10.0)],
+            ] {
+                let (perimeter, area) = wgs84_ring_perimeter_area_m2(&rounded);
+                assert!((area / BAND_10_M2 - 1.0).abs() < 1e-5, "{off}: {area}");
+                assert!((perimeter / BAND_10_PERIMETER_M - 1.0).abs() < 1e-5, "{off}: {perimeter}");
+            }
         }
         // The sphere's band: 2πR²(sin 10° − sin −10°).
         let sphere = 4.0 * std::f64::consts::PI * EARTH_RADIUS_M * EARTH_RADIUS_M * 10f64.to_radians().sin();
