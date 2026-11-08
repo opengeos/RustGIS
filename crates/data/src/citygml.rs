@@ -13,9 +13,10 @@
 //! geographic system are latitude first, as GML 3 says.
 //!
 //! Attributes: generic attributes (`gen:stringAttribute` and its kin) typed by their element, the
-//! measures and counts the standard types so (`measuredHeight`, `storeysAboveGround`, …) as numbers,
-//! a measure in another unit than the metre as text with its unit, and every other simple property
-//! as text. A property given twice is a list, and a structured one (an external reference) its JSON.
+//! measures and counts the standard types so (`measuredHeight`, `storeysAboveGround`, …) and any
+//! property with a unit (`uom`) in metres as numbers, a measure in another unit than the metre as
+//! text with its unit, and every other simple property as text; a code's list (`codeSpace`) isn't
+//! kept, and is said. A property given twice is a list, and a structured one (an external reference) its JSON.
 //!
 //! No tree of the whole model is built: one pass indexes the document (where each member lies, and
 //! the systems its `srsName`s name), and each member is then parsed on its own and its tree dropped
@@ -32,6 +33,7 @@ use std::borrow::Cow;
 use std::collections::HashSet;
 
 use quick_xml::Reader;
+use quick_xml::errors::SyntaxError;
 use quick_xml::events::{BytesStart, Event};
 use roxmltree::{Node, ParsingOptions};
 use serde_json::{Map, Value as Json};
@@ -159,6 +161,7 @@ fn read_with(file_name: &str, bytes: &[u8], given: Option<Crs>, keep_named: bool
             match local(&object) {
                 "Appearance" => reading.said.appearances += 1,
                 value if VALUES.contains(&value) => {}
+                _ if only_link(&object) => reading.said.links += 1,
                 _ => reading.object(object, None),
             }
         }
@@ -227,9 +230,10 @@ impl Index {
             let start = position(&reader);
             let event = match reader.read_event() {
                 Ok(event) => event,
-                // Every syntax error is the text ending inside markup (a tag, a comment): a file
-                // cut short, as one cut between tags is.
-                Err(quick_xml::Error::Syntax(_)) => {
+                // A syntax error is the text ending inside markup (a tag, a comment): a file cut
+                // short, as one cut between tags is. But for `<!` followed by what no markup
+                // starts with, which is a file broken there.
+                Err(quick_xml::Error::Syntax(e)) if !matches!(e, SyntaxError::InvalidBangMarkup) || text.ends_with("<!") => {
                     let at = usize::try_from(reader.error_position()).unwrap_or(usize::MAX);
                     in_root_end = depth == 1 && text.get(at..).is_some_and(|rest| rest.starts_with("</"));
                     break;
@@ -468,7 +472,7 @@ fn value(p: &Node) -> Option<Json> {
         return None;
     }
     let name = local(p);
-    let typed = if LENGTHS.contains(&name) {
+    let typed = if LENGTHS.contains(&name) || attribute(p, "uom").is_some() {
         measure(text, attribute(p, "uom"))
     } else if COUNTS.contains(&name) {
         text.parse::<i64>().ok().map(Json::from)
@@ -495,6 +499,8 @@ struct Said {
     curved: usize,
     /// Features beside city objects in a property that have no id and no geometry.
     not_objects: usize,
+    /// Values naming the code list they are taken from (`codeSpace`), which isn't kept.
+    code_spaces: usize,
 }
 
 impl Said {
@@ -548,6 +554,13 @@ impl Said {
         say(
             self.not_objects,
             format!("{} nested features with no gml:id and no geometry, beside city objects, are left out", self.not_objects),
+        );
+        say(
+            self.code_spaces,
+            format!(
+                "{} values name the code list they are taken from (codeSpace), which isn't kept: the code is kept on its own",
+                self.code_spaces
+            ),
         );
         out
     }
@@ -624,6 +637,7 @@ impl Reading {
                     }
                 }
             } else if let Some(v) = value(&p) {
+                self.said.code_spaces += p.descendants().filter(|n| n.is_element() && attribute(n, "codeSpace").is_some()).count();
                 insert(&mut attributes, name, v);
             }
         }

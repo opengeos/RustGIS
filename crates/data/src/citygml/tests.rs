@@ -408,6 +408,18 @@ fn a_measure_attribute_keeps_a_unit_that_isnt_the_metre() {
     let blank = format!(r#"<bldg:measuredHeight uom="">12</bldg:measuredHeight>{}"#, box_surfaces("b2"));
     let out = read("model.gml", &lonlat(&building("b2", &blank)), None).unwrap();
     assert_eq!(value(&out[0].0, 0, "measuredHeight"), Value::Float(12.0));
+    assert!(!says(&out, "codeSpace"), "{:?}", messages_of(&out));
+    // Any property with a unit is a measure; a code keeps its value, and its list is said.
+    let other = format!(
+        r#"<bldg:span uom="ft">40</bldg:span><bldg:depth uom="m">3</bldg:depth>
+        <bldg:function codeSpace="http://example.com/functions.xml">1000</bldg:function>{}"#,
+        box_surfaces("b4")
+    );
+    let out = read("model.gml", &lonlat(&building("b4", &other)), None).unwrap();
+    assert_eq!(value(&out[0].0, 0, "span"), Value::Text("40 ft".into()));
+    assert_eq!(value(&out[0].0, 0, "depth"), Value::Float(3.0));
+    assert_eq!(value(&out[0].0, 0, "function"), Value::Text("1000".into()));
+    assert!(says(&out, "1 values name the code list they are taken from (codeSpace)"), "{:?}", messages_of(&out));
 }
 
 /// An empty `srsName` names nothing; one system written with its axes in another order is refused.
@@ -508,6 +520,11 @@ fn objects_of_feature_members_are_read_one_at_a_time() {
     let out = read("model.gml", whole.as_bytes(), None).unwrap();
     assert_eq!(out[0].0.features.len(), 2);
     assert_eq!(value(&out[0].0, 0, "note"), Value::Text("n".into()));
+    // An object given only by a link is said, not read as an empty one.
+    let out = read("model.gml", &many(r##"<bldg:Building xlink:href="#f1"/>"##), None).unwrap();
+    assert_eq!(out[0].0.features.len(), 1);
+    assert!(says(&out, "1 geometries or objects are given only by a link"), "{:?}", messages_of(&out));
+    assert!(!says(&out, "no geometry"), "{:?}", messages_of(&out));
 }
 
 /// A file broken in the middle (an end tag that doesn't match) is refused, not taken for one cut
@@ -520,6 +537,14 @@ fn a_file_broken_in_the_middle_is_refused() {
     );
     let err = read("model.gml", &bytes, None).unwrap_err().to_string();
     assert!(!err.contains("cut short"), "{err}");
+    // Markup that `<!` starts and nothing knows, in the middle: refused too. Ending at `<!`: cut.
+    let bang = lonlat(&[building("b1", &box_surfaces("b1")), "<!x>".to_string(), building("b2", &box_surfaces("b2"))].concat());
+    assert!(read("model.gml", &bang, None).is_err());
+    let whole = lonlat(&[building("b1", &box_surfaces("b1")), "<!-- n -->".to_string(), building("b2", &box_surfaces("b2"))].concat());
+    let cut = whole.windows(4).position(|w| w == b"<!--").unwrap() + 2;
+    let out = read("model.gml", &whole[..cut], None).unwrap();
+    assert_eq!(out[0].0.features.len(), 1);
+    assert!(says(&out, "as if cut short"), "{:?}", messages_of(&out));
 }
 
 /// Nested objects are known without an id: a part drawn only by its thematic surfaces, a TIN relief.
