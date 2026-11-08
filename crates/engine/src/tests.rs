@@ -33900,9 +33900,10 @@ fn export_raster_puts_a_tile_layer_s_tiles_together() {
 #[test]
 fn a_diagram_that_wont_show_says_why() {
     let mut s = world();
-    // The notices since `mark` about `layer`'s diagram for `why`.
+    // The diagram notices since `mark` are exactly one, about `layer`'s diagram for `why`.
     let said = |s: &Session, mark: u64, layer: &str, why: &str| {
-        s.notices_since(mark).iter().filter(|n| n.text.contains(&format!("Layer '{layer}'")) && n.text.contains(why)).count()
+        let about: Vec<&str> = s.notices_since(mark).iter().map(|n| n.text.as_str()).filter(|t| t.contains("its diagram")).collect();
+        about.len() == 1 && about.iter().all(|t| t.contains(&format!("Layer '{layer}'")) && t.contains(why))
     };
     let any = |s: &Session, mark: u64| s.notices_since(mark).iter().any(|n| n.text.contains("its diagram"));
     let (binned, tilted) = ("aggregated into bins", "when a flat map is tilted");
@@ -33914,20 +33915,20 @@ fn a_diagram_that_wont_show_says_why() {
     // Aggregation after the diagram, and a diagram after aggregation.
     let mark = s.notice_mark();
     s.run("layer.aggregation", &json!({"layer": "Cities", "shape": "hexagon"})).unwrap();
-    assert_eq!(said(&s, mark, "Cities", binned), 1, "{:?}", s.notices_since(mark));
+    assert!(said(&s, mark, "Cities", binned), "{:?}", s.notices_since(mark));
     let mark = s.notice_mark();
     s.run("layer.diagram", &json!({"layer": "Cities", "kind": "bar", "fields": ["pop_max"], "size": 8})).unwrap();
-    assert_eq!(said(&s, mark, "Cities", binned), 1, "{:?}", s.notices_since(mark));
+    assert!(said(&s, mark, "Cities", binned), "{:?}", s.notices_since(mark));
     let mark = s.notice_mark();
     s.run("layer.aggregation", &json!({"layer": "Cities", "shape": "none"})).unwrap();
     assert!(!any(&s, mark), "aggregation off: {:?}", s.notices_since(mark));
     // Extrusion: not shown in a tilted flat map.
     let mark = s.notice_mark();
     s.run("layer.extrusion", &json!({"layer": "Countries", "type": "height", "height": 1000})).unwrap();
-    assert_eq!(said(&s, mark, "Countries", tilted), 1, "{:?}", s.notices_since(mark));
+    assert!(said(&s, mark, "Countries", tilted), "{:?}", s.notices_since(mark));
     let mark = s.notice_mark();
     s.run("layer.diagram", &json!({"layer": "Countries", "kind": "pie", "fields": ["pop_est"], "size": 8})).unwrap();
-    assert_eq!(said(&s, mark, "Countries", tilted), 1, "{:?}", s.notices_since(mark));
+    assert!(said(&s, mark, "Countries", tilted), "{:?}", s.notices_since(mark));
     let mark = s.notice_mark();
     s.run("layer.extrusion", &json!({"layer": "Countries", "type": "none"})).unwrap();
     assert!(!any(&s, mark), "extrusion off: {:?}", s.notices_since(mark));
@@ -33936,7 +33937,7 @@ fn a_diagram_that_wont_show_says_why() {
     s.map_mut().projection = rustgis_map::Projection::Globe;
     let mark = s.notice_mark();
     s.run("layer.extrusion", &json!({"layer": "Countries", "type": "height", "height": 1000})).unwrap();
-    assert_eq!(said(&s, mark, "Countries", "on the globe"), 1, "globe: {:?}", s.notices_since(mark));
+    assert!(said(&s, mark, "Countries", "on the globe"), "globe: {:?}", s.notices_since(mark));
 }
 
 #[test]

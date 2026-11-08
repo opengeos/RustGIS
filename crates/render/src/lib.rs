@@ -2747,10 +2747,6 @@ const MAX_UPRIGHT_POINTS: usize = 50_000;
 /// nears or recedes from the camera.
 const UPRIGHT_SCALE: (f64, f64) = (0.25, 2.0);
 
-/// The most charts an extruded layer holds back to draw over its extrusions once they are all
-/// drawn; any more draw as they come.
-const MAX_HELD_DIAGRAMS: usize = 50_000;
-
 /// Whether a tilted view of `map` stands `layer`'s point markers up, facing the viewer (as
 /// MapLibre's circles do), rather than drawing them flat on the ground. A masked, swiped or
 /// blended layer, an aggregation, graphics or a diagram keep theirs on the ground.
@@ -3590,8 +3586,9 @@ fn render_frame(
             scaled_ctx = Ctx { ppp: ctx.ppp * size_factor, sprites: Default::default(), bursts: std::rc::Rc::clone(&ctx.bursts), ..ctx };
             &scaled_ctx
         };
-        // An extruded layer's diagrams, held until the spool has drawn its polygons.
-        let mut extruded_diagrams: Vec<(f32, f32, Vec<(f64, rustgis_map::Rgba)>, f64)> = Vec::new();
+        // An extruded layer's diagrams, drawn on a sheet of their own until the spool has drawn its
+        // polygons.
+        let mut extruded_charts: Option<Canvas> = None;
         let mut draw_chunk = |layer: &mut rustgis_map::Layer| -> rustgis_data::Result<()> {
             // The definition query and the display filters that apply at this scale (a feature draws
             // only if it matches all of them).
@@ -3731,14 +3728,13 @@ fn render_frame(
                 };
                 gpu_done = collected.is_ok();
             }
-            // Where the layer's diagrams go in the view, and what each shows: (x, y, values, total).
-            // Graphics take none (`layer.diagram` refuses them).
-            let placed_diagrams = || -> Vec<(f32, f32, Vec<(f64, rustgis_map::Rgba)>, f64)> {
-                let Some(d) = layer.diagram.as_ref().filter(|_| !layer.graphics) else { return Vec::new() };
+            // Draws the layer's diagrams on `on`, a feature at a time. Graphics take none
+            // (`layer.diagram` refuses them).
+            let draw_diagrams = |on: &mut Canvas| {
+                let Some(d) = layer.diagram.as_ref().filter(|_| !layer.graphics) else { return };
                 let fields = d.field_indices(ds_ptr);
                 // Grown by the largest diagram, as a point's marks are (in map units).
                 let r = f64::from(diagrams::reach(d) * ctx.ppp) * map_per_px;
-                let mut out = Vec::new();
                 for (row, g) in geoms.iter().enumerate() {
                     let Some(g) = g else { continue };
                     if rows.get(row) != Some(&true) {
@@ -3751,9 +3747,8 @@ fn render_frame(
                     let Some(c) = diagrams::anchor(g) else { continue };
                     let (x, y) = ctx.px(c);
                     let Some((values, total)) = d.values_at(ds_ptr, row, &fields) else { continue };
-                    out.push((x, y, values, total));
+                    diagrams::draw(on, x, y, d, &values, total, if direct { opacity } else { 1.0 }, ctx.ppp, display.paused);
                 }
-                out
             };
             // False for a layer drawn elsewhere: nothing goes into the picture for it.
             let mut drawn_here = true;
@@ -3778,23 +3773,20 @@ fn render_frame(
                     // all, or straight after these.
                     if let Some(spool) = &mut extrusions {
                         spool.add(ctx, ds_ptr, &geoms, &rows, x, px_per_m, |r| styler.symbol(r))?;
-                        // Held in memory up to a bound: past it (charts packed far too densely to
-                        // read) the rest draw now, under the extrusion, rather than pile up.
-                        let placed = placed_diagrams();
-                        if extruded_diagrams.len() + placed.len() <= MAX_HELD_DIAGRAMS {
-                            extruded_diagrams.extend(placed);
-                        } else if let Some(d) = layer.diagram.as_ref() {
-                            for (x, y, values, total) in placed {
-                                diagrams::draw(dest, x, y, d, &values, total, if direct { opacity } else { 1.0 }, ctx.ppp, display.paused);
+                        // On a sheet of their own the size of the view (recording if the layer's
+                        // picture does), laid over the extrusions once the spool has drawn them.
+                        if layer.diagram.is_some() {
+                            if extruded_charts.is_none() {
+                                extruded_charts = dest.sub(dest.width(), dest.height());
+                            }
+                            match &mut extruded_charts {
+                                Some(sheet) => draw_diagrams(sheet),
+                                None => draw_diagrams(dest),
                             }
                         }
                     } else {
                         effects::extrude(dest, ctx, ds_ptr, &geoms, &rows, x, px_per_m, |r| styler.symbol(r));
-                        if let Some(d) = layer.diagram.as_ref() {
-                            for (x, y, values, total) in placed_diagrams() {
-                                diagrams::draw(dest, x, y, d, &values, total, if direct { opacity } else { 1.0 }, ctx.ppp, display.paused);
-                            }
-                        }
+                        draw_diagrams(dest);
                     }
                 } else {
                     let mut stroke_paths = stroke_paths::Paths::default();
@@ -3898,10 +3890,8 @@ fn render_frame(
                     // Not on an extruded layer in the tilt drape: at rest the tilted view stands
                     // its polygons up and shows no chart, so a moving view shows none either.
                     let tilted_extrusion = extrude.is_some() && matches!(labels_to, Labels::Shared);
-                    if let Some(d) = layer.diagram.as_ref().filter(|_| !tilted_extrusion) {
-                        for (x, y, values, total) in placed_diagrams() {
-                            diagrams::draw(dest, x, y, d, &values, total, if direct { opacity } else { 1.0 }, ctx.ppp, display.paused);
-                        }
+                    if !tilted_extrusion {
+                        draw_diagrams(dest);
                     }
                 }
                 cpu_dirty |= drawn_here;
@@ -4422,11 +4412,9 @@ fn render_frame(
             }
             return None;
         }
-        if let Some(d) = layer.diagram.as_ref() {
+        if let Some(sheet) = extruded_charts {
             let dest = if direct { &mut pm } else { &mut target };
-            for (x, y, values, total) in extruded_diagrams {
-                diagrams::draw(dest, x, y, d, &values, total, if direct { opacity } else { 1.0 }, ctx.ppp, display.paused);
-            }
+            dest.place(sheet, Transform::identity(), 1.0, rustgis_map::effects::Blend::Normal, None);
         }
         if complete_source {
             if let (Some(a), Some(base)) = (layer.aggregation, aggregate_symbol) {
