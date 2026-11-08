@@ -15134,7 +15134,9 @@ fn kml_ground_overlays_become_rasters() {
     let only = r#"<kml><GroundOverlay><name>Far</name><Icon><href>../secret.png</href></Icon><LatLonBox><north>1</north><south>0</south><east>1</east><west>0</west></LatLonBox></GroundOverlay>
 <GroundOverlay><name>Web</name><Icon><href>https://example.com/x.png</href></Icon><LatLonBox><north>1</north><south>0</south><east>1</east><west>0</west></LatLonBox></GroundOverlay>
 <GroundOverlay><name>Here</name><Icon><href>red.png</href></Icon><LatLonBox><north>1</north><south>0</south><east>1</east><west>0</west></LatLonBox></GroundOverlay>
-<GroundOverlay><name>Folder</name><Icon><href>folder.png</href></Icon><LatLonBox><north>1</north><south>0</south><east>1</east><west>0</west></LatLonBox></GroundOverlay></kml>"#;
+<GroundOverlay><name>Folder</name><Icon><href>folder.png</href></Icon><LatLonBox><north>1</north><south>0</south><east>1</east><west>0</west></LatLonBox></GroundOverlay>
+<GroundOverlay><name>Gone</name><Icon><href>gone.png</href></Icon><LatLonBox><north>1</north><south>0</south><east>1</east><west>0</west></LatLonBox></GroundOverlay>
+<GroundOverlay><name>Through</name><Icon><href>red.png/x.png</href></Icon><LatLonBox><north>1</north><south>0</south><east>1</east><west>0</west></LatLonBox></GroundOverlay></kml>"#;
     std::fs::write(dir.join("o.kml"), only).unwrap();
     std::fs::create_dir_all(dir.join("folder.png")).unwrap();
     std::fs::write(dir.join("red.png"), red.encode_png().unwrap()).unwrap();
@@ -15146,6 +15148,10 @@ fn kml_ground_overlays_become_rasters() {
     // A picture beside it that can't be read says why, not that it's missing.
     assert!(u.notices.iter().any(|n| n.text.contains("Folder (its picture folder.png can't be read:") && n.text.contains("isn't a file")));
     assert!(!u.notices.iter().any(|n| n.text.contains("folder.png isn't in the file")));
+    // One missing beside it (or under a file named as a folder) is said to be missing.
+    for name in ["Gone (its picture gone.png", "Through (its picture red.png/x.png"] {
+        assert!(u.notices.iter().any(|n| n.text.contains(&format!("{name} isn't in the file or beside it)"))), "{name}: {:?}", u.notices);
+    }
     let _ = std::fs::remove_dir_all(dir);
 }
 
@@ -33157,6 +33163,8 @@ fn importing_a_file_that_is_neither_map_nor_project_says_so() {
     assert!(e.contains("not a RustGIS map file, project or package"), "{e}");
     assert!(!e.contains("not a RustGIS project"), "{e}");
     let e = s.run("style.import", &json!({"text": r#"{"name": 5, "layers": 3}"#})).unwrap_err();
+    assert!(e.contains("not a RustGIS layer file, map file or project"), "{e}");
+    let e = s.run("style.import", &json!({"text": "not json"})).unwrap_err();
     assert!(e.contains("not a RustGIS layer file, map file or project"), "{e}");
     // A project from a newer RustGIS keeps its advice.
     let e = s.run("map.import", &json!({"text": r#"{"format": 99999, "maps": 3}"#})).unwrap_err();

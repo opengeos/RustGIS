@@ -1779,7 +1779,8 @@ fn ground_overlays(s: &mut Session, file_name: &str, bytes: &[u8]) -> Vec<(Strin
             // Only a missing picture isn't beside it; one that can't be looked at says why.
             match std::fs::symlink_metadata(&p) {
                 Ok(_) => {}
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Err(None),
+                // (A file named as a folder on its way, `a.png/b.png`, isn't beside it either.)
+                Err(e) if matches!(e.kind(), std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory) => return Err(None),
                 Err(e) => return Err(Some(e.to_string())),
             }
             crate::project::read_file(&p, (256 << 20) - 1).map_err(Some)
