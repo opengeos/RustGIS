@@ -756,7 +756,7 @@ fn a_mars_projection_in_a_geotiff_is_said_or_refused() {
     // On the Earth, such a citation changes nothing.
     let earth = cited_on(6_378_137.0, 3073, "Ographic test grid|").unwrap();
     assert!(!earth.crs.is_planetary() && earth.lost.is_empty(), "{:?}", earth.lost);
-    // A transformation RustGIS doesn't read (23, the New Zealand Map Grid's): refused on Mars, even
+    // A transformation RustGIS doesn't read (26, the New Zealand Map Grid's): refused on Mars, even
     // where the numbers look like degrees, as they are metres.
     let mut unread = eqc.clone();
     let at = unread.chunks(4).position(|k| k[0] == 3075).unwrap() * 4 + 3;
