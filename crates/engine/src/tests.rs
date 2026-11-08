@@ -29504,9 +29504,10 @@ fn session_log_entries_name_their_project_and_say_when_their_params_are_partial(
     let twice = last(&s);
     assert!(!twice.params.to_string().contains("S3CRET") && twice.partial, "{twice:?}");
     // Nor with its name escaped, nor a key a plain name blanks only for its value, nor deeper in;
-    // and a key only logs leave out (`passphrase`) isn't kept either.
+    // and a key only logs leave out (`passphrase`) isn't kept either, nor one past eight levels.
     for script in [
         r#"map.new {"name": "M", "passphrase": "S3CRET"}"#,
+        r#"map.new {"name": "M", "a": [[[[[[[[[{"passphrase": "S3CRET"}]]]]]]]]]}"#,
         r#"map.new {"name": "M", "\u0074oken": "S3CRET", "\u0074oken": ""}"#,
         r#"map.new {"name": "M", "key": "AKIAIOSFODNN7S3CRET", "key": ""}"#,
         r#"map.new {"name": "M", "style": {"token": "S3CRET", "token": ""}}"#,

@@ -247,13 +247,16 @@ fn embedded_redacted(v: &Value, depth: usize) -> Value {
             o.iter()
                 .map(|(k, x)| {
                     // Preserve History's plain-key refinement; the log-only fields share diagnostics'
-                    // canonical list. Clipping already bounds recursion and text before this pass.
+                    // canonical list.
                     let sensitive =
                         rustgis_data::address::normalized_name(k).as_deref() != Some("key") && rustgis_data::address::log_sensitive(k);
                     (k.clone(), if sensitive { Value::String(String::new()) } else { embedded_redacted(x, depth + 1) })
                 })
                 .collect(),
         ),
+        // Past eight levels, left out, as `clip` does: JSON read from a text wasn't clipped, and
+        // what is that deep isn't looked at.
+        Value::Array(_) | Value::Object(_) => Value::String("…".into()),
         other => other.clone(),
     }
 }
@@ -323,11 +326,12 @@ pub(crate) fn json_in_text_redacted(t: &str) -> String {
         match objects.next() {
             Some(Ok(v @ Value::Object(_))) => {
                 let end = objects.byte_offset();
-                // Nothing taken out: the object as written, so a script copied back from the log
-                // is the one run, and isn't said to be partial for its spacing. Only one with no
-                // key written twice: it is read as its last value, and its text keeps the others
-                // (a secret's first, its last left empty, its name escaped or not).
-                // The log's own rule, as for its parameters: a key only logs leave out too.
+                // Redacted by the log's own rule, as its parameters are. When that takes nothing
+                // out, the object is kept as written: a script copied back from the log is the
+                // one that ran, and its spacing doesn't make it partial. Not when a key is written
+                // twice, though: the value read is the last one, but the text still holds the
+                // first (a secret, perhaps, under an escaped name), so that object is written
+                // out again from what was read.
                 let kept = redacted(&v);
                 let written = from.get(..end).unwrap_or("");
                 if kept == v && serde_json::from_str::<UniqueKeys>(written).is_ok() {

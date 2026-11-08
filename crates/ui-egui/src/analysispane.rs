@@ -1603,8 +1603,12 @@ pub(crate) fn script_running(app: &RustGisApp) -> bool {
 /// Opens `script` in the Script pane (the session log's Open in Script Pane), in place of the
 /// pane's script and results, as Clear empties them: the script that was there comes back with
 /// Ctrl+Z, even one left from a project since replaced (kept first, then the pane started over,
-/// so that doesn't empty it when it next shows).
+/// so that doesn't empty it when it next shows). Nothing while a run is under way
+/// ([`script_running`]).
 pub(crate) fn open_script(app: &mut RustGisApp, ctx: &egui::Context, script: String) {
+    if script_running(app) {
+        return;
+    }
     let box_id = egui::Id::unique("script_text");
     keep_for_undo(app, ctx, box_id);
     start_over_in_another_project(app);
