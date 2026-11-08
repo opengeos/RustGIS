@@ -650,8 +650,27 @@ impl SqlServerSource {
             if src.info.extent.is_empty() {
                 src.info.notes.push("the table's extent couldn't be measured in time: zooming to the layer does nothing".into());
             }
+            src.check_zm();
         }
         Ok(src)
+    }
+
+    /// Notes the Z and M values reading drops: `STAsBinary` writes x and y only. Counts the rows
+    /// with them when that finishes in time, else looks for one; says so when neither does.
+    fn check_zm(&mut self) {
+        let (count, any) = zm_probes(&self.table.sql_from(), &ident(&self.table.column), &self.filter(None));
+        let probe = |sql: &str| self.conn.query_within(sql, &[], PROBE_TIMEOUT).ok().flatten();
+        match probe(&count).as_deref().map(first_count) {
+            Some(Some(0)) => {}
+            Some(Some(n)) => self.info.drop_zm(Some(n)),
+            _ => match probe(&any) {
+                Some(rows) if rows.is_empty() => {}
+                Some(_) => self.info.drop_zm(None),
+                None => self.info.notes.push(
+                    "the table couldn't be checked for Z or M values (heights or measures) in time: any it has are dropped, as RustGIS keeps x and y only".into(),
+                ),
+            },
+        }
     }
 
     fn has_index(&self) -> bool {
@@ -784,6 +803,13 @@ impl SqlServerSource {
         out.complete = stride(matched, limit) <= 1 && rows.len() as u64 >= matched;
         Ok(out)
     }
+}
+
+/// The queries that count the rows of `from` matching `filter` whose geometry column `g` has Z or M
+/// values, and that find one such row.
+fn zm_probes(from: &str, g: &str, filter: &str) -> (String, String) {
+    let zm = format!("{filter} AND ({g}.HasZ = 1 OR {g}.HasM = 1)");
+    (format!("SELECT COUNT_BIG(*) FROM {from} WHERE {zm}"), format!("SELECT TOP (1) 1 FROM {from} WHERE {zm}"))
 }
 
 fn first_count(rows: &[Row]) -> Option<u64> {
@@ -980,6 +1006,16 @@ mod tests {
 
     #[cfg(not(windows))]
     #[test]
+    fn zm_probes_look_for_heights_and_measures() {
+        let (count, any) = zm_probes("[dbo].[t]", "[g]", "[g] IS NOT NULL AND [g].STSrid = 4326");
+        assert_eq!(
+            count,
+            "SELECT COUNT_BIG(*) FROM [dbo].[t] WHERE [g] IS NOT NULL AND [g].STSrid = 4326 AND ([g].HasZ = 1 OR [g].HasM = 1)"
+        );
+        assert_eq!(any, "SELECT TOP (1) 1 FROM [dbo].[t] WHERE [g] IS NOT NULL AND [g].STSrid = 4326 AND ([g].HasZ = 1 OR [g].HasM = 1)");
+    }
+
+    #[test]
     fn windows_auth_requires_windows() {
         assert!(auth_method(&Login::Windows("CORP\\ana".into()), Some("pw")).is_err());
         assert!(auth_method(&Login::Integrated, None).is_err());
@@ -1035,5 +1071,35 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// `RUSTGIS_TEST_MSSQL=… cargo test -- --ignored sqlserver_live_zm`: creates and drops two
+    /// tables in the database.
+    #[test]
+    #[ignore]
+    fn sqlserver_live_zm() {
+        let Ok(address) = std::env::var("RUSTGIS_TEST_MSSQL") else { return };
+        let super::super::duckdb::Database::Sqlserver(address) = super::super::duckdb::Database::parse(&address) else {
+            panic!("not a connection")
+        };
+        let conn = connect(&address, true).unwrap_or_else(|e| panic!("{e}"));
+        let run = |sql: &str| conn.query(sql, &[]).unwrap_or_else(|e| panic!("{sql}: {e}"));
+        for (name, rows) in
+            [("rustgis_zm", &["POINT (1 2 3)", "POINT (1 2 NULL 4)", "POINT (5 6)"][..]), ("rustgis_flat", &["POINT (1 2)", "POINT (5 6)"])]
+        {
+            run(&format!("IF OBJECT_ID('dbo.{name}') IS NOT NULL DROP TABLE dbo.{name}"));
+            run(&format!("CREATE TABLE dbo.{name} (id INT PRIMARY KEY IDENTITY, g geometry)"));
+            let values = rows.iter().map(|w| format!("(geometry::STGeomFromText('{w}', 4326))")).collect::<Vec<_>>().join(", ");
+            run(&format!("INSERT INTO dbo.{name} (g) VALUES {values}"));
+        }
+        let open = |name: &str| {
+            let t = find_table(&conn, name).unwrap_or_else(|e| panic!("{e}"));
+            SqlServerSource::open(conn.clone(), t, Some(Family::Points), None).unwrap_or_else(|e| panic!("{e}")).info
+        };
+        let zm = open("rustgis_zm");
+        let flat = open("rustgis_flat");
+        run("DROP TABLE dbo.rustgis_zm; DROP TABLE dbo.rustgis_flat");
+        assert!(zm.zm_dropped && zm.notes.contains(&crate::zm_note(Some(2))), "{:?}", zm.notes);
+        assert!(!flat.zm_dropped && !flat.notes.iter().any(|n| n.contains("Z or M")), "{:?}", flat.notes);
     }
 }
