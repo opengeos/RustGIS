@@ -89,16 +89,18 @@ pub fn max_bytes() -> u64 {
     max_bytes_for(rustgis_data::memory::physical())
 }
 
-/// [`max_bytes`] on a computer with `memory` bytes (`None`: not known), as
-/// [`rustgis_data::memory::scaled`] works it out, in `u64` so it is the same on a 32-bit build.
+/// [`max_bytes`] on a computer with `memory` bytes (`None`: not known). The formula is
+/// [`rustgis_data::memory::scaled`]'s, worked out here in `u64`, as that one counts in `usize`,
+/// which doesn't hold 4 GiB on a 32-bit build.
 fn max_bytes_for(memory: Option<u64>) -> u64 {
     memory.map_or(BYTES_FLOOR, |m| (m / rustgis_data::memory::SHARE / MEMORY_PER_BYTE).clamp(BYTES_FLOOR, ceiling()))
 }
 
-/// [`BYTES_CEILING`], within what a buffer can hold here: on a 32-bit build a buffer holds at
-/// most `isize::MAX` bytes and grows by doubling, so a project's text stops at half of that.
+/// The most [`max_bytes`] grows to in this build: [`BYTES_CEILING`] on a 64-bit build. A 32-bit
+/// build stays at [`BYTES_FLOOR`] whatever the memory: an open project takes 2 to 5 times its file
+/// in address space, which 4 GiB doesn't hold for a larger one.
 fn ceiling() -> u64 {
-    BYTES_CEILING.min(u64::try_from(isize::MAX).unwrap_or(u64::MAX) / 2).max(BYTES_FLOOR)
+    if usize::BITS >= 64 { BYTES_CEILING } else { BYTES_FLOOR }
 }
 
 /// `value` as JSON text, or `None` as soon as it passes `max` bytes: the text of a project too
@@ -1203,6 +1205,9 @@ impl Project {
             // A computer with more memory opens it, up to the ceiling; past that none does.
             let more = if meta.len() > BYTES_CEILING {
                 format!(": no computer opens a project past {} MiB", BYTES_CEILING >> 20)
+            } else if meta.len() > ceiling() {
+                // Only a 32-bit build stops below the ceiling.
+                ": a 64-bit RustGIS on a computer with more memory opens it".to_string()
             } else if rustgis_data::memory::physical().is_some() {
                 ": a computer with more memory opens it".to_string()
             } else {
@@ -1498,15 +1503,21 @@ mod limit_tests {
     fn the_project_limit_follows_the_memory() {
         assert_eq!(max_bytes_for(None), BYTES_FLOOR);
         assert_eq!(max_bytes_for(Some(8 * GIB)), BYTES_FLOOR, "never below the floor");
-        assert_eq!(max_bytes_for(Some(16 * GIB)), 16 * GIB / 20);
-        assert_eq!(max_bytes_for(Some(64 * GIB)), 64 * GIB / 20);
+        // Within this build's ceiling: a 32-bit build stays at the floor.
+        let within = |v: u64| v.clamp(BYTES_FLOOR, ceiling());
+        assert_eq!(max_bytes_for(Some(16 * GIB)), within(16 * GIB / 20));
+        assert_eq!(max_bytes_for(Some(64 * GIB)), within(64 * GIB / 20));
         assert_eq!(max_bytes_for(Some(80 * GIB)), ceiling());
         assert_eq!(max_bytes_for(Some(1024 * GIB)), ceiling(), "never above the ceiling");
         assert_eq!(max_bytes_for(Some(u64::MAX)), ceiling(), "no overflow");
-        // The 659 MiB project of #1615 opens on a computer sold as 16 GB, which reports less.
-        assert!(max_bytes_for(Some(15 * GIB)) > 659 << 20);
-        // A 32-bit build stops where its buffers can grow to.
-        assert!(ceiling() <= u64::try_from(isize::MAX).unwrap_or(u64::MAX) / 2 || ceiling() == BYTES_FLOOR);
+        // The 659 MiB project of #1615 opens on a computer sold as 16 GB, which reports less (in a
+        // 64-bit build, as the app is).
+        if usize::BITS >= 64 {
+            assert!(max_bytes_for(Some(15 * GIB)) > 659 << 20);
+            assert_eq!(ceiling(), BYTES_CEILING);
+        } else {
+            assert_eq!(ceiling(), BYTES_FLOOR);
+        }
         let max = max_bytes();
         assert!((BYTES_FLOOR..=BYTES_CEILING).contains(&max), "{max}");
     }

@@ -670,8 +670,8 @@ fn package_project(s: &mut Session) -> Result<Vec<u8>, String> {
     // The package as unzipped, the README with it, within what a zip and a project may hold.
     let limit = crate::project::max_bytes().min(rustgis_data::zip::MAX_TOTAL as u64);
     let room = limit.saturating_sub(readme.len() as u64);
-    let too_large = || format!("the project is too large to package (maximum {} MiB)", limit >> 20);
-    let (text, report) = crate::durable::output_owned(p, |p| crate::project::json_within(p, room)?.ok_or_else(too_large))?;
+    let package_too_large = || format!("the project is too large to package (maximum {} MiB)", limit >> 20);
+    let (text, report) = crate::durable::output_owned(p, |p| crate::project::json_within(p, room)?.ok_or_else(package_too_large))?;
     crate::durable::notify(s, &report);
     rustgis_data::zip::write(&[
         (format!("{}.{}", safe(&name), crate::project::EXTENSION), text.into_bytes()),
