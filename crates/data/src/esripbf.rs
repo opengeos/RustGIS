@@ -276,7 +276,6 @@ pub fn read_page_within(bytes: &[u8], name: &str, limit: usize) -> Result<Page> 
     let (mut repeated, mut not_read, mut unknown) = (0usize, 0usize, 0usize);
     let mut object_id_field = None;
     for Declared { name, number, utf8, alias } in declared {
-        tally.not_utf8 += usize::from(!utf8);
         let Some(read_as) = kind(number) else {
             not_read += 1;
             columns.push(None);
@@ -292,6 +291,8 @@ pub fn read_page_within(bytes: &[u8], name: &str, limit: usize) -> Result<Page> 
         if number == OID && object_id_field.is_none() {
             object_id_field = Some(fields.len());
         }
+        // Only a field that's kept counts toward the UTF-8 notice: a left-out name isn't shown.
+        tally.not_utf8 += usize::from(!utf8);
         columns.push(Some((fields.len(), read_as)));
         fields.push(Field { name, ty: read_as.field_type(), alias });
     }

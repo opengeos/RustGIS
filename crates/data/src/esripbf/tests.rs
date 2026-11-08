@@ -607,6 +607,18 @@ fn a_repeated_field_of_an_unknown_type_is_only_said_left_out() {
 }
 
 #[test]
+fn a_left_out_field_whose_name_isnt_utf8_is_only_said_left_out() {
+    // The name isn't shown, so it isn't said to be read with replacements.
+    let repeat = message(13, &[message(1, b"N\xffame"), number(2, 4)].concat());
+    let bytes = answer(&[field("N\u{FFFD}AME", 4), repeat, feature(&[text("a"), text("b")])]);
+    let (_, report) = read(&bytes, "t").unwrap();
+    assert_eq!(report.messages, ["1 fields repeat an earlier field's name and are left out"]);
+    let geometry = message(13, &[message(1, b"G\xff"), number(2, 7)].concat());
+    let (_, report) = read(&answer(&[field("NAME", 4), geometry, feature(&[text("a")])]), "t").unwrap();
+    assert_eq!(report.messages, ["1 fields hold geometries, blobs or rasters, which aren't read, and are left out"]);
+}
+
+#[test]
 fn text_is_taken_from_the_room_at_its_size_once_read_before_it_is_made() {
     // Each byte that isn't UTF-8 becomes U+FFFD, three bytes.
     for bytes in [&b"plain"[..], b"a\xffb", b"\xff\xff\xff", b"\xe2\x82", "Bogotá".as_bytes()] {
