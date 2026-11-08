@@ -488,7 +488,7 @@ pub fn wgs84_ring_perimeter_area_m2(ring: &[Coord]) -> (f64, f64) {
     // ring traces.
     let (perimeter, area, _) = polygon.compute(true);
     let area = area.abs();
-    let sphere = geodesic_ring_area_m2(ring);
+    let sphere = sphere_ring_area_m2(ring, steps.iter().map(|&(d, _)| d));
     // Compare a sphere area with its own hemisphere; the ellipsoid's hemisphere differs.
     let hemisphere = 2.0 * std::f64::consts::PI * EARTH_RADIUS_M * EARTH_RADIUS_M;
     (perimeter, if sphere > hemisphere { WGS84_AREA_M2 - area } else { area })
@@ -538,6 +538,11 @@ const NEAR_DEG: f64 = 1e-6;
 fn ring_lon_steps(ring: &[Coord]) -> Vec<(f64, bool)> {
     let n = ring.len();
     let edge = |i: usize| ring.get(i).zip(ring.get((i + 1) % n));
+    // Most rings have no 360° edge: their steps are the short way round, with nothing to decide.
+    let short = |d: f64| if d.abs() > 180.0 { wrap_lon(d) } else { d };
+    if ring.iter().zip(ring.iter().cycle().skip(1)).all(|(a, b)| (b.x - a.x).abs() < 360.0 - NEAR_DEG) {
+        return ring.iter().zip(ring.iter().cycle().skip(1)).map(|(a, b)| (short(b.x - a.x), false)).collect();
+    }
     let at_pole = |c: &Coord| c.y.abs() >= 90.0 - NEAR_DEG;
     // An edge's step north (+) or south (-), and whether it moves in longitude, other than by whole
     // turns. An edge to or from a pole is a meridian.
@@ -563,7 +568,7 @@ fn ring_lon_steps(ring: &[Coord]) -> Vec<(f64, bool)> {
             let Some((p, r)) = edge(i) else { return (0.0, None) };
             let d = r.x - p.x;
             if d.is_nan() || d.abs() < 360.0 - NEAR_DEG {
-                return (if d.abs() > 180.0 { wrap_lon(d) } else { d }, None);
+                return (short(d), None);
             }
             if d.abs() > 360.0 + NEAR_DEG {
                 return (d, None);
@@ -722,27 +727,31 @@ impl Aeqd {
 ///
 /// Uses the spherical-excess approximation from Chamberlain & Duquette (JPL, 2007).
 pub fn geodesic_ring_area_m2(ring: &[Coord]) -> f64 {
-    let n = ring.len();
-    if n < 3 {
+    if ring.len() < 3 {
         return 0.0;
     }
-    // With n >= 3, first() and get(i) always succeed, maintaining the carried-over sin1 across edges.
-    let Some(p0) = ring.first() else {
-        return 0.0;
-    };
-    let mut sin1 = p0.y.to_radians().sin();
-    let mut total = 0.0;
     // An edge that jumps across the antimeridian (179° to -179°) is a short hop east, not 358°
     // west. A full turn (-180° to 180° along a parallel, as a world-wide rectangle has) is kept as
-    // it is, and a seam along ±180° is no step in longitude ([`ring_lon_steps`]).
-    let steps = ring_lon_steps(ring);
-    for i in 0..n {
-        let Some(p2) = ring.get((i + 1) % n) else { continue };
-        let sin2 = p2.y.to_radians().sin();
-        let dlon = steps.get(i).map_or(0.0, |s| s.0);
-        total += dlon.to_radians() * (2.0 + sin1 + sin2);
-        sin1 = sin2;
+    // it is, and a seam along ±180° is no step in longitude ([`ring_lon_steps`]). A ring without a
+    // 360° edge needs none of that: its steps are the short way round.
+    if ring.iter().zip(ring.iter().cycle().skip(1)).all(|(a, b)| (b.x - a.x).abs() < 360.0 - NEAR_DEG) {
+        let short = |(a, b): (&Coord, &Coord)| {
+            let d = b.x - a.x;
+            if d.abs() > 180.0 { wrap_lon(d) } else { d }
+        };
+        return sphere_ring_area_m2(ring, ring.iter().zip(ring.iter().cycle().skip(1)).map(short));
     }
+    sphere_ring_area_m2(ring, ring_lon_steps(ring).into_iter().map(|(d, _)| d))
+}
+
+/// [`geodesic_ring_area_m2`] with each edge's step in longitude (degrees) given.
+fn sphere_ring_area_m2(ring: &[Coord], steps: impl Iterator<Item = f64>) -> f64 {
+    if ring.len() < 3 {
+        return 0.0;
+    }
+    let sin = |c: &Coord| c.y.to_radians().sin();
+    let total: f64 =
+        ring.iter().zip(ring.iter().cycle().skip(1)).zip(steps).map(|((p1, p2), dlon)| dlon.to_radians() * (2.0 + sin(p1) + sin(p2))).sum();
     (total * EARTH_RADIUS_M * EARTH_RADIUS_M / 2.0).abs()
 }
 
