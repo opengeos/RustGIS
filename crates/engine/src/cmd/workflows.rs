@@ -1063,13 +1063,14 @@ fn interpolate_work(s: &Session, p: &Value) -> Result<Work, String> {
     Ok(Box::new(move || {
         // A surface that can't be made says what was left out of it, so the input can be fixed.
         let left_out = |e: String| {
-            if no_point == 0 && no_value == 0 {
-                e
-            } else {
-                format!(
-                    "{e} ({no_point} features with no geometry or no finite coordinates, {no_value} whose value isn't a number left out)"
-                )
+            let mut why = Vec::new();
+            if no_point > 0 {
+                why.push(format!("{no_point} features with no geometry or no usable point"));
             }
+            if no_value > 0 {
+                why.push(format!("{no_value} whose value isn't a number"));
+            }
+            if why.is_empty() { e } else { format!("{e} ({} left out)", why.join(", ")) }
         };
         let m = made(rasterops::idw(&pts, &e, cell, power, neighbors, &name).map_err(left_out)?, None)?;
         if no_point == 0 && no_value == 0 {
@@ -1078,7 +1079,7 @@ fn interpolate_work(s: &Session, p: &Value) -> Result<Work, String> {
         let then: Then = Box::new(move |s: &mut Session, v: &mut Value| {
             let mut why = Vec::new();
             if no_point > 0 {
-                why.push(format!("{no_point} with no geometry or no finite coordinates"));
+                why.push(format!("{no_point} with no geometry or no usable point"));
             }
             if no_value > 0 {
                 why.push(format!("{no_value} whose {field_name} isn't a number"));

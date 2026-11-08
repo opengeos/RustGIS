@@ -33113,16 +33113,17 @@ fn interpolation_says_the_features_it_leaves_out() {
     let said: Vec<_> = s.notices_since(mark).iter().filter(|n| n.text.contains("left out")).map(|n| n.text.clone()).collect();
     assert_eq!(
         said,
-        ["lossy wells: features left out of the surface: 2 with no geometry or no finite coordinates, 1 whose depth isn't a number"]
+        ["lossy wells: features left out of the surface: 2 with no geometry or no usable point, 1 whose depth isn't a number"]
     );
 
     // A surface with no usable points left fails, and the error says what was left out.
     let mut bad = Dataset::new("bad wells", GeometryType::Point, vec![Field::new("depth", FieldType::Double)]);
     bad.push(Some(Geometry::Point(Coord::new(f64::NAN, 1.0))), vec![V::Float(1.0)]);
     bad.push(None, vec![V::Float(2.0)]);
+    bad.push(Some(Geometry::Point(Coord::new(1.0, 1.0))), vec![V::Null]);
     crate::cmd::layer::add_dataset(&mut s, bad);
     let e = s.run("analysis.interpolate", &json!({"layer": "bad wells", "field": "depth", "cellSize": 0.5})).unwrap_err();
-    assert!(e.contains("2 features with no geometry or no finite coordinates"), "{e}");
+    assert!(e.contains("(2 features with no geometry or no usable point, 1 whose value isn't a number left out)"), "{e}");
 }
 
 /// `share.exportMap` to a `.tif` writes the view placed on the ground (#1561): in the map's
