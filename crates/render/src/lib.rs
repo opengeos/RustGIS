@@ -3728,26 +3728,34 @@ fn render_frame(
                 };
                 gpu_done = collected.is_ok();
             }
-            // Draws the layer's diagrams on `on`, a feature at a time. Graphics take none
-            // (`layer.diagram` refuses them).
+            // The layer's diagram, its fields, and how far a chart reaches past its feature (map
+            // units). Graphics take none (`layer.diagram` refuses them).
+            let diagram = layer.diagram.as_ref().filter(|_| !layer.graphics).map(|d| {
+                // Grown by the largest diagram, as a point's marks are.
+                (d, d.field_indices(ds_ptr), f64::from(diagrams::reach(d) * ctx.ppp) * map_per_px)
+            });
+            // Where row's chart goes in the view, and what it shows; `None` when it has none there.
+            let chart_at = |row: usize| -> Option<(f32, f32, Vec<(f64, rustgis_map::Rgba)>, f64)> {
+                let (d, fields, r) = diagram.as_ref()?;
+                let g = geoms.get(row).copied().flatten()?;
+                if rows.get(row) != Some(&true) {
+                    return None;
+                }
+                let e = extents.get(row).copied().unwrap_or_else(|| g.extent());
+                if !visible(&Extent::new(e.min_x - r, e.min_y - r, e.max_x + r, e.max_y + r)) {
+                    return None;
+                }
+                let (x, y) = ctx.px(diagrams::anchor(g)?);
+                let (values, total) = d.values_at(ds_ptr, row, fields)?;
+                Some((x, y, values, total))
+            };
+            // Draws the layer's diagrams on `on`, a feature at a time.
             let draw_diagrams = |on: &mut Canvas| {
-                let Some(d) = layer.diagram.as_ref().filter(|_| !layer.graphics) else { return };
-                let fields = d.field_indices(ds_ptr);
-                // Grown by the largest diagram, as a point's marks are (in map units).
-                let r = f64::from(diagrams::reach(d) * ctx.ppp) * map_per_px;
-                for (row, g) in geoms.iter().enumerate() {
-                    let Some(g) = g else { continue };
-                    if rows.get(row) != Some(&true) {
-                        continue;
+                let Some((d, ..)) = diagram.as_ref() else { return };
+                for row in 0..geoms.len() {
+                    if let Some((x, y, values, total)) = chart_at(row) {
+                        diagrams::draw(on, x, y, d, &values, total, if direct { opacity } else { 1.0 }, ctx.ppp, display.paused);
                     }
-                    let e = extents.get(row).copied().unwrap_or_else(|| g.extent());
-                    if !visible(&Extent::new(e.min_x - r, e.min_y - r, e.max_x + r, e.max_y + r)) {
-                        continue;
-                    }
-                    let Some(c) = diagrams::anchor(g) else { continue };
-                    let (x, y) = ctx.px(c);
-                    let Some((values, total)) = d.values_at(ds_ptr, row, &fields) else { continue };
-                    diagrams::draw(on, x, y, d, &values, total, if direct { opacity } else { 1.0 }, ctx.ppp, display.paused);
                 }
             };
             // False for a layer drawn elsewhere: nothing goes into the picture for it.
@@ -3774,15 +3782,16 @@ fn render_frame(
                     if let Some(spool) = &mut extrusions {
                         spool.add(ctx, ds_ptr, &geoms, &rows, x, px_per_m, |r| styler.symbol(r))?;
                         // On a sheet of their own the size of the view (recording if the layer's
-                        // picture does), laid over the extrusions once the spool has drawn them.
-                        if layer.diagram.is_some() {
-                            if extruded_charts.is_none() {
-                                extruded_charts = dest.sub(dest.width(), dest.height());
-                            }
-                            match &mut extruded_charts {
-                                Some(sheet) => draw_diagrams(sheet),
-                                None => draw_diagrams(dest),
-                            }
+                        // picture does), laid over the extrusions once the spool has drawn them;
+                        // made only once a chart shows.
+                        if extruded_charts.is_none() && (0..geoms.len()).any(|row| chart_at(row).is_some()) {
+                            extruded_charts = Some(
+                                dest.sub(dest.width(), dest.height())
+                                    .ok_or_else(|| rustgis_data::DataError::Format("cannot allocate the layer's diagrams".into()))?,
+                            );
+                        }
+                        if let Some(sheet) = &mut extruded_charts {
+                            draw_diagrams(sheet);
                         }
                     } else {
                         effects::extrude(dest, ctx, ds_ptr, &geoms, &rows, x, px_per_m, |r| styler.symbol(r));
