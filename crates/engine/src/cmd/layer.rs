@@ -2933,7 +2933,9 @@ pub(crate) fn add_layer_text(s: &mut Session, text: &str) -> CmdResult {
     }
     let id = s.map_mut().add_layer(layer);
     super::connections::clear_active();
-    s.project.normalize();
+    for notice in s.project.normalize() {
+        s.notify(notice, false);
+    }
     super::connections::restore_active(s);
     s.wait_in_place_reads();
     // Only the database the added layer reads can change here.

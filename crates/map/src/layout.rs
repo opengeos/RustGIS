@@ -1294,7 +1294,7 @@ impl Layout {
         let mut changed = Vec::with_capacity(self.elements.len());
         for e in &mut self.elements {
             // A picture's image (often large) is never changed here, so it isn't copied.
-            let before = Element {
+            let mut before = Element {
                 name: e.name.clone(),
                 kind: match &e.kind {
                     ElementKind::Picture { .. } => ElementKind::Picture { image: String::new() },
@@ -1302,6 +1302,12 @@ impl Layout {
                 },
                 ..*e
             };
+            // A bearing past half a turn names the same direction once normalized: not a change.
+            if let ElementKind::MapFrame { bearing, .. } = &mut before.kind
+                && bearing.is_finite()
+            {
+                *bearing = crate::camera::normalize_bearing(*bearing);
+            }
             // Ids stay well below u32::MAX so new elements never run out of numbers. A repeated id
             // (only a hand-edited file has one) is renumbered; references to it keep meaning the
             // first element with that id, as they did when the file was written.
@@ -1681,6 +1687,10 @@ mod tests {
         let repairs = l.clamp();
         assert_eq!(repairs, LayoutRepairs { elements_adjusted: 2, elements_removed: 1, page_adjusted: 1 }, "what changed is counted");
         assert!(l.clamp().is_empty(), "a repaired layout needs nothing more");
+        if let ElementKind::MapFrame { bearing, .. } = &mut l.elements[0].kind {
+            *bearing = 270.0;
+        }
+        assert!(l.clamp().is_empty(), "a bearing of 270 is -90 by another name, not a repair");
         let ids: Vec<u32> = l.elements.iter().map(|e| e.id).collect();
         assert_eq!(ids.len(), 2, "the legend of a missing frame goes");
         assert_ne!(ids[0], ids[1], "duplicate ids are renumbered");

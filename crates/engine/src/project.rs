@@ -734,9 +734,11 @@ impl Project {
         std::mem::take(&mut self.read_notices).into_iter().filter(|(part, _)| parts.contains(part)).map(|(_, n)| n).collect()
     }
 
-    /// Repairs invariants after loading (at least one map; a valid active index).
-    pub fn normalize(&mut self) {
-        let _ = self.repair(false);
+    /// Repairs invariants after loading (at least one map; a valid active index). Returns a
+    /// notice for each kind of change made to the project's layouts, for the session to show.
+    #[must_use]
+    pub fn normalize(&mut self) -> Vec<String> {
+        self.repair(false)
     }
 
     /// [`Project::normalize`] for a project read from its file, which also opens its plain COG
@@ -782,7 +784,8 @@ impl Project {
                 repairs.push((l.name.clone(), r));
             }
         }
-        let notices = layout_notices(&self.name, layouts_dropped, &repairs);
+        let when = if opened { "while opening the project" } else { "while checking the project" };
+        let notices = layout_notices(&self.name, when, layouts_dropped, &repairs);
         // Files skip the commands' limits, and notebooks and presentations are found (and
         // notebooks trusted) by name, so names are made unique.
         for r in &mut self.reports {
@@ -1205,31 +1208,31 @@ fn layout_names(
 
 /// One notice per kind of change [`Project::repair`] made to the layouts of a project read from
 /// its file: layouts beyond the limit, elements brought into range or removed, page settings.
-fn layout_notices(name: &str, dropped: usize, repairs: &[(String, rustgis_map::layout::LayoutRepairs)]) -> Vec<String> {
+fn layout_notices(name: &str, when: &str, dropped: usize, repairs: &[(String, rustgis_map::layout::LayoutRepairs)]) -> Vec<String> {
     let mut notices = Vec::new();
     if dropped > 0 {
-        notices.push(format!("{name}: {dropped} layout(s) beyond the {MAX_LAYOUTS} a project holds removed while opening the project"));
+        notices.push(format!("{name}: {dropped} layout(s) beyond the {MAX_LAYOUTS} a project holds removed {when}"));
     }
     let total =
         |of: fn(&rustgis_map::layout::LayoutRepairs) -> usize| repairs.iter().map(|(_, r)| of(r)).fold(0usize, usize::saturating_add);
     let adjusted = total(|r| r.elements_adjusted);
     if adjusted > 0 {
         notices.push(format!(
-            "{name}: {adjusted} layout element(s) with a value out of range or a repeated id adjusted while opening the project (in {})",
+            "{name}: {adjusted} layout element(s) with a value out of range or a repeated id adjusted {when} (in {})",
             layout_names(repairs, |r| r.elements_adjusted)
         ));
     }
     let removed = total(|r| r.elements_removed);
     if removed > 0 {
         notices.push(format!(
-            "{name}: {removed} layout element(s) beyond the 500 a layout holds or tied to a missing map frame removed while opening the project (in {})",
+            "{name}: {removed} layout element(s) beyond the 500 a layout holds or tied to a missing map frame removed {when} (in {})",
             layout_names(repairs, |r| r.elements_removed)
         ));
     }
     let pages = total(|r| r.page_adjusted);
     if pages > 0 {
         notices.push(format!(
-            "{name}: the page size, guides or map series of {pages} layout(s) adjusted while opening the project (in {})",
+            "{name}: the page size, guides or map series of {pages} layout(s) adjusted {when} (in {})",
             layout_names(repairs, |r| r.page_adjusted)
         ));
     }

@@ -472,7 +472,9 @@ fn import_maps(s: &mut Session, p: &Value) -> CmdResult {
     }
     // Repair what was read (rasters reopen, cameras clamp); the sources that read S3 wait for
     // the saved connection that is to read them.
-    s.project.normalize();
+    for notice in s.project.normalize() {
+        s.notify(notice, false);
+    }
     super::connections::restore_active(s);
     super::connections::resolve_project(s);
     crate::s3_connections::resolve_project_s3(s);

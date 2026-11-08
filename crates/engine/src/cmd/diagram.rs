@@ -528,6 +528,29 @@ mod tests {
             assert_eq!(layer.diagram.as_ref().map(|d| d.categories.len()), Some(3), "the blank category goes, the repeat stays");
             assert!(s.map().layer(9999).unwrap().diagram.is_none());
         }
+        // A peer open (an embedding page) says the same, and a clean one nothing.
+        let mut peer = Session::new(Project::default());
+        let mark = peer.notices.len();
+        peer.open_peer_text(crate::Peer::Embedder, &clean).unwrap();
+        assert!(peer.notices[mark..].iter().all(|n| !n.text.contains("while opening the project")));
+        let mark = peer.notices.len();
+        peer.open_peer_text(crate::Peer::Embedder, &v.to_string()).unwrap();
+        assert_eq!(peer.notices[mark..].iter().filter(|n| n.text.contains("while opening the project")).count(), 4);
+        // Layouts past the most a project keeps, removed when a map import checks the project,
+        // are said too, and an import into a project within the limit says nothing of layouts.
+        let map = serde_json::to_string(s.map()).unwrap();
+        let mut full = Session::new(Project::default());
+        full.run("map.import", &json!({"text": map})).unwrap();
+        assert!(full.notices.iter().all(|n| !n.text.contains("layout")));
+        let one = full.project.layouts.first().cloned().unwrap_or_else(|| rustgis_map::layout::Layout::new("L", 210.0, 297.0));
+        full.project.layouts = vec![one; 201];
+        let mark = full.notices.len();
+        full.run("map.import", &json!({"text": map})).unwrap();
+        let said: Vec<&str> = full.notices[mark..].iter().map(|n| n.text.as_str()).collect();
+        assert!(
+            said.iter().any(|t| t.contains("1 layout(s) beyond the 200 a project holds removed while checking the project")),
+            "{said:?}"
+        );
         // Importing its styles takes no diagrams or layouts, so says nothing of them.
         let mut styled = Session::new(Project::default());
         let mark = styled.notices.len();

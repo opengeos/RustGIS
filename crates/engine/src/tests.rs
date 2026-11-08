@@ -7733,7 +7733,7 @@ fn custom_colour_ramps_add_apply_save_and_travel() {
     if let Some(Renderer::Graduated { ramp, .. }) = graduated(&mut p) {
         *ramp = Ramp::Custom(Box::new(jet.clone()));
     }
-    p.normalize();
+    let _ = p.normalize();
     // The matplotlib library's names are built-in too: an older project's own "jet" is kept as
     // "jet (custom)", while layers keep the copy of it they hold.
     assert_eq!(p.ramps.iter().map(|r| r.name()).collect::<Vec<_>>(), ["Brand", "brand 2", "Ember (custom)", "jet (custom)"]);
