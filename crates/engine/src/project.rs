@@ -202,7 +202,7 @@ pub(crate) fn public_login_params(value: &serde_json::Value) -> Option<serde_jso
 pub struct Project {
     /// Read-time label adjustments, consumed by the session and never saved.
     #[serde(skip)]
-    pub(crate) label_read_notices: Vec<String>,
+    pub(crate) read_notices: Vec<String>,
     /// The format read from disk; serialization always declares the current writer's format.
     #[serde(default = "format", serialize_with = "write_format")]
     pub format: u32,
@@ -582,7 +582,7 @@ impl Project {
 
     pub fn new(name: impl Into<String>) -> Self {
         Project {
-            label_read_notices: Vec::new(),
+            read_notices: Vec::new(),
             format: FORMAT,
             name: name.into(),
             maps: vec![Map::new("Map")],
@@ -730,19 +730,20 @@ impl Project {
 
     /// Repairs invariants after loading (at least one map; a valid active index).
     pub fn normalize(&mut self) {
-        self.repair(false);
+        let _ = self.repair(false);
     }
 
     /// [`Project::normalize`] for a project read from its file, which also opens its plain COG
     /// tile layers (a project saved before GeoTIFFs read in place were raster layers, or with
     /// those `map.addTiles` adds) as raster layers read in place: as the project opens only. A
     /// later repair (a layer file added, maps imported) leaves a tile layer added this session
-    /// as it is.
-    pub(crate) fn normalize_opened(&mut self) {
-        self.repair(true);
+    /// as it is. Returns a notice for each kind of change made to the project's layouts.
+    pub(crate) fn normalize_opened(&mut self) -> Vec<String> {
+        self.repair(true)
     }
 
-    fn repair(&mut self, opened: bool) {
+    /// Repairs the project; returns a notice per kind of change made to its layouts.
+    fn repair(&mut self, opened: bool) -> Vec<String> {
         if self.maps.is_empty() {
             self.maps.push(Map::new("Map"));
         }
@@ -766,10 +767,16 @@ impl Project {
         }
         let top = self.tables.iter().map(|t| t.id).max().unwrap_or(0);
         self.next_table_id = self.next_table_id.max(top.wrapping_add(1)).max(1);
-        self.layouts.truncate(200);
+        let layouts_dropped = self.layouts.len().saturating_sub(MAX_LAYOUTS);
+        self.layouts.truncate(MAX_LAYOUTS);
+        let mut repairs = Vec::new();
         for l in &mut self.layouts {
-            l.clamp();
+            let r = l.clamp();
+            if !r.is_empty() {
+                repairs.push((l.name.clone(), r));
+            }
         }
+        let notices = layout_notices(&self.name, layouts_dropped, &repairs);
         // Files skip the commands' limits, and notebooks and presentations are found (and
         // notebooks trusted) by name, so names are made unique.
         for r in &mut self.reports {
@@ -936,6 +943,7 @@ impl Project {
             }
             read_in_place(m);
         }
+        notices
     }
 
     pub fn map(&self) -> &Map {
@@ -1077,10 +1085,9 @@ impl Project {
         if let Some(d) = dir.and_then(Path::to_str) {
             p.resolve_paths(d);
         }
-        if normalize {
-            p.normalize_opened();
-        }
-        p.label_read_notices = label_losses::notices(text, &p)?;
+        let layout_notices = if normalize { p.normalize_opened() } else { Vec::new() };
+        p.read_notices = label_losses::notices(text, &p)?;
+        p.read_notices.extend(layout_notices);
         Ok(p)
     }
 
@@ -1154,6 +1161,55 @@ fn empty_map() -> &'static Map {
 /// Most reports, presentations and notebooks a project file may hold.
 pub const MAX_ITEMS: usize = 1000;
 
+/// The most layouts a project keeps.
+const MAX_LAYOUTS: usize = 200;
+
+/// The layouts named in a notice, the first few of them.
+fn layout_names(
+    repairs: &[(String, rustgis_map::layout::LayoutRepairs)],
+    of: impl Fn(&rustgis_map::layout::LayoutRepairs) -> usize,
+) -> String {
+    let names: Vec<&str> = repairs.iter().filter(|(_, r)| of(r) > 0).map(|(n, _)| n.as_str()).collect();
+    let mut text = names.iter().take(3).map(|n| format!("\"{n}\"")).collect::<Vec<_>>().join(", ");
+    if names.len() > 3 {
+        text.push_str(&format!(" and {} more", names.len() - 3));
+    }
+    text
+}
+
+/// One notice per kind of change [`Project::repair`] made to the layouts of a project read from
+/// its file: layouts beyond the limit, elements brought into range or removed, page settings.
+fn layout_notices(name: &str, dropped: usize, repairs: &[(String, rustgis_map::layout::LayoutRepairs)]) -> Vec<String> {
+    let mut notices = Vec::new();
+    if dropped > 0 {
+        notices.push(format!("{name}: {dropped} layout(s) beyond the {MAX_LAYOUTS} a project holds removed while opening the project"));
+    }
+    let total =
+        |of: fn(&rustgis_map::layout::LayoutRepairs) -> usize| repairs.iter().map(|(_, r)| of(r)).fold(0usize, usize::saturating_add);
+    let adjusted = total(|r| r.elements_adjusted);
+    if adjusted > 0 {
+        notices.push(format!(
+            "{name}: {adjusted} layout element(s) with a value out of range or a repeated id adjusted while opening the project (in {})",
+            layout_names(repairs, |r| r.elements_adjusted)
+        ));
+    }
+    let removed = total(|r| r.elements_removed);
+    if removed > 0 {
+        notices.push(format!(
+            "{name}: {removed} layout element(s) beyond the 500 a layout holds or tied to a missing map frame removed while opening the project (in {})",
+            layout_names(repairs, |r| r.elements_removed)
+        ));
+    }
+    let pages = total(|r| r.page_adjusted);
+    if pages > 0 {
+        notices.push(format!(
+            "{name}: the page size, guides or map series of {pages} layout(s) adjusted while opening the project (in {})",
+            layout_names(repairs, |r| r.page_adjusted)
+        ));
+    }
+    notices
+}
+
 /// Renames names repeated (ignoring case) after their first use: "Tour", "Tour 2", …. Each base
 /// name remembers the last number it gave, so many repeats cost no more than a few each.
 fn unique_names<'a>(names: impl Iterator<Item = &'a mut String>) {
@@ -1182,7 +1238,7 @@ impl Durable for Project {
     /// Offers classified whole fields once, before any live mutation.
     fn prepare(&self, p: &mut Prepare<'_>) {
         let Self {
-            label_read_notices: _,
+            read_notices: _,
             format: _,
             name: _,
             maps,

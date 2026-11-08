@@ -444,7 +444,7 @@ fn import_maps(s: &mut Session, p: &Value) -> CmdResult {
         }
         Err(_) => match Project::from_import_json(&text, dir.as_deref()) {
             Ok(mut project) => {
-                for notice in std::mem::take(&mut project.label_read_notices) {
+                for notice in std::mem::take(&mut project.read_notices) {
                     s.notify(notice, false);
                 }
                 project.maps
@@ -526,7 +526,7 @@ fn import_styles(s: &mut Session, p: &Value) -> CmdResult {
         let project = Project::from_import_json(&text, None);
         super::connections::restore_active(s);
         let mut project = project.map_err(|e| not_a(e, "layer file, map file or project"))?;
-        for notice in std::mem::take(&mut project.label_read_notices) {
+        for notice in std::mem::take(&mut project.read_notices) {
             s.notify(notice, false);
         }
         project.maps.into_iter().flat_map(|m| m.layers).collect()

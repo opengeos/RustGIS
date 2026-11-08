@@ -1276,8 +1276,11 @@ impl Layout {
     }
 
     /// Keeps the page and elements sane after loading or editing (layout files are untrusted):
-    /// sizes in range, unique element ids, and no references to missing frames.
-    pub fn clamp(&mut self) {
+    /// sizes in range, unique element ids, and no references to missing frames. Returns what it
+    /// changed, so a project reader can say so.
+    pub fn clamp(&mut self) -> LayoutRepairs {
+        let page = (self.width, self.height, self.guides.clone(), self.series.clone());
+        let count = self.elements.len();
         self.width = finite_or(self.width, 210.0).clamp(20.0, 5000.0);
         self.height = finite_or(self.height, 297.0).clamp(20.0, 5000.0);
         // The same limits `layout.guides` sets: the view walks these lists every frame.
@@ -1288,7 +1291,9 @@ impl Layout {
         self.elements.truncate(500);
         let mut seen = std::collections::HashSet::new();
         let mut next = self.elements.iter().map(|e| e.id).filter(|id| *id <= MAX_ID).max().unwrap_or(0).saturating_add(1);
+        let mut changed = Vec::with_capacity(self.elements.len());
         for e in &mut self.elements {
+            let before = e.clone();
             // Ids stay well below u32::MAX so new elements never run out of numbers. A repeated id
             // (only a hand-edited file has one) is renumbered; references to it keep meaning the
             // first element with that id, as they did when the file was written.
@@ -1352,18 +1357,26 @@ impl Layout {
                 ElementKind::Line { width, .. } => *width = finite_or(*width, 1.0).clamp(0.1, 50.0),
                 _ => {}
             }
+            changed.push(*e != before);
         }
         self.next_id = next;
         // References must point at map frames that exist.
         let frames: std::collections::HashSet<u32> =
             self.elements.iter().filter(|e| matches!(e.kind, ElementKind::MapFrame { .. })).map(|e| e.id).collect();
-        self.elements.retain(|e| e.kind.frame().is_none_or(|f| frames.contains(&f)));
-        for e in &mut self.elements {
+        let mut adjusted = 0usize;
+        let elements = std::mem::take(&mut self.elements);
+        for (mut e, mut changed) in elements.into_iter().zip(changed) {
+            if e.kind.frame().is_some_and(|f| !frames.contains(&f)) {
+                continue;
+            }
             if let ElementKind::MapFrame { extent_of, .. } = &mut e.kind
                 && extent_of.is_some_and(|o| !frames.contains(&o) || o == e.id)
             {
                 *extent_of = None;
+                changed = true;
             }
+            adjusted = adjusted.saturating_add(usize::from(changed));
+            self.elements.push(e);
         }
         if let Some(s) = &mut self.series {
             if !frames.contains(&s.frame) {
@@ -1372,6 +1385,30 @@ impl Layout {
                 s.margin = finite_or(s.margin, 0.1).clamp(0.0, 5.0);
             }
         }
+        let page_adjusted = (self.width, self.height, &self.guides, &self.series) != (page.0, page.1, &page.2, &page.3);
+        LayoutRepairs {
+            elements_adjusted: adjusted,
+            elements_removed: count.saturating_sub(self.elements.len()),
+            page_adjusted: usize::from(page_adjusted),
+        }
+    }
+}
+
+/// What [`Layout::clamp`] changed in a layout.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct LayoutRepairs {
+    /// Elements kept with a value brought into range, a new id, or a reference cleared.
+    pub elements_adjusted: usize,
+    /// Elements removed: beyond the 500 a layout holds, or tied to a map frame it doesn't have.
+    pub elements_removed: usize,
+    /// Whether the page size, guides or map series changed (0 or 1).
+    pub page_adjusted: usize,
+}
+
+impl LayoutRepairs {
+    /// Whether nothing was changed.
+    pub fn is_empty(&self) -> bool {
+        *self == LayoutRepairs::default()
     }
 }
 
@@ -1628,7 +1665,9 @@ mod tests {
             {"id":9,"name":"c","x":0,"y":0,"w":10,"h":10,"kind":{"Legend":{"frame":42,"title":"L"}}}],
             "series":{"frame":77,"layer":"x"}}"#;
         let mut l: Layout = serde_json::from_str(text).unwrap_or_else(|e| panic!("{e}"));
-        l.clamp();
+        let repairs = l.clamp();
+        assert_eq!(repairs, LayoutRepairs { elements_adjusted: 2, elements_removed: 1, page_adjusted: 1 }, "what changed is counted");
+        assert!(l.clamp().is_empty(), "a repaired layout needs nothing more");
         let ids: Vec<u32> = l.elements.iter().map(|e| e.id).collect();
         assert_eq!(ids.len(), 2, "the legend of a missing frame goes");
         assert_ne!(ids[0], ids[1], "duplicate ids are renumbered");

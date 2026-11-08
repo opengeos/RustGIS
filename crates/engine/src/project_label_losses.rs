@@ -1,4 +1,5 @@
-//! Count label-setting losses while skipping feature data and retaining no moved-label arrays.
+//! Count label-setting and diagram losses while skipping feature data and retaining no
+//! moved-label arrays or diagrams.
 
 use serde::Deserialize;
 
@@ -85,6 +86,8 @@ struct Labels {
 struct Layer {
     #[serde(default)]
     labels: Labels,
+    #[serde(default)]
+    diagram: rustgis_map::diagram::DiagramAudit,
 }
 
 #[derive(Default, Deserialize)]
@@ -130,7 +133,9 @@ fn count<'a>(
     what: &str,
 ) -> Vec<String> {
     let (mut moves, mut callouts, mut flags) = (0usize, 0usize, 0usize);
+    let mut diagrams = rustgis_map::diagram::DiagramAudit::default();
     for layer in raw {
+        diagrams = diagrams.plus(layer.diagram);
         let labels = &layer.labels;
         moves = moves.saturating_add(labels.moved.0);
         callouts = callouts.saturating_add(usize::from(adjusted_callout(labels.callout.as_ref())));
@@ -154,7 +159,34 @@ fn count<'a>(
         messages
             .push(format!("{name}: {flags} \"show all labels\" setting(s) that were not true or false read as off while opening {what}"));
     }
+    diagram_messages(diagrams, name, what, &mut messages);
     messages
+}
+
+/// One notice per kind of change reading the layers' diagrams made.
+fn diagram_messages(d: rustgis_map::diagram::DiagramAudit, name: &str, what: &str, messages: &mut Vec<String>) {
+    if d.dropped > 0 {
+        messages.push(format!("{name}: {} diagram(s) that could not be read or named no field removed while opening {what}", d.dropped));
+    }
+    if d.categories_removed > 0 {
+        messages.push(format!(
+            "{name}: {} diagram category(ies) with a blank field name or beyond the {} a diagram holds removed while opening {what}",
+            d.categories_removed,
+            rustgis_map::diagram::MAX_CATEGORIES
+        ));
+    }
+    if d.repeated_fields > 0 {
+        messages.push(format!(
+            "{name}: {} diagram category(ies) repeating an earlier field kept while opening {what}; each draws its own slice or bar",
+            d.repeated_fields
+        ));
+    }
+    if d.adjusted > 0 {
+        messages.push(format!(
+            "{name}: {} diagram(s) with a size, start angle or outline width out of range adjusted while opening {what}",
+            d.adjusted
+        ));
+    }
 }
 
 /// Compare raw record counts with retained state, including offline snapshots; one notice per kind.

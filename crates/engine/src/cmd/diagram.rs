@@ -469,4 +469,53 @@ mod tests {
         let said: Vec<&str> = s.notices_since(mark).iter().map(|n| n.text.as_str()).collect();
         assert_eq!(said, ["1 value(s) in 1 field(s) ('v') are zero, negative or not numbers, and are not drawn"]);
     }
+
+    /// A project's diagrams and layouts read as saved say nothing; a damaged diagram or a layout
+    /// value out of range is said once per kind, with a count (#1597, #1599).
+    #[test]
+    fn opening_a_project_reports_diagram_and_layout_repairs() {
+        let (mut s, id) = regions();
+        s.run("layer.diagram", &json!({"kind": "pie", "fields": ["pop_male", "pop_female"]})).unwrap();
+        s.run("layout.new", &json!({"name": "Poster"})).unwrap();
+        let clean = serde_json::to_string(&s.project).unwrap();
+        let quiet = Session::new(Project::from_json(&clean).unwrap());
+        assert!(quiet.notices.is_empty(), "{:?}", quiet.notices.iter().map(|n| &n.text).collect::<Vec<_>>());
+
+        let mut v: serde_json::Value = serde_json::from_str(&clean).unwrap();
+        let layers = v["maps"][0]["layers"].as_array_mut().unwrap();
+        let at = layers.iter().position(|l| l["id"] == json!(id)).unwrap();
+        let mut broken = layers[at].clone();
+        broken["id"] = json!(9999);
+        broken["diagram"] = json!({"kind": "hexagon"});
+        let cats = layers[at]["diagram"]["categories"].as_array_mut().unwrap();
+        let first = cats[0].clone();
+        let mut repeat = first.clone();
+        repeat["field"] = json!("POP_MALE");
+        let mut blank = first;
+        blank["field"] = json!(" ");
+        cats.push(repeat);
+        cats.push(blank);
+        layers.push(broken);
+        let legend = v["layouts"][0]["elements"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|e| e["kind"].get("Legend").is_some())
+            .expect("the map template has a legend");
+        legend["kind"]["Legend"]["columns"] = json!(999);
+        let opened = Session::new(Project::from_json(&v.to_string()).unwrap());
+        let said: Vec<&str> = opened.notices.iter().map(|n| n.text.as_str()).collect();
+        assert_eq!(said.len(), 4, "{said:?}");
+        for text in [
+            "1 diagram(s) that could not be read or named no field removed",
+            "1 diagram category(ies) with a blank field name",
+            "1 diagram category(ies) repeating an earlier field kept",
+            "1 layout element(s) with a value out of range or a repeated id adjusted while opening the project (in \"Poster\")",
+        ] {
+            assert!(said.iter().any(|t| t.contains(text)), "{text}: {said:?}");
+        }
+        let mut reopened = Session::new(Project::default());
+        reopened.run("project.openText", &json!({"text": v.to_string()})).unwrap();
+        assert_eq!(reopened.notices.iter().filter(|n| n.text.contains("while opening the project")).count(), 4);
+    }
 }

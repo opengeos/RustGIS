@@ -436,7 +436,7 @@ impl Session {
             }
         }
         crate::cmd::connections::clear_active();
-        p.normalize_opened();
+        let _ = p.normalize_opened();
         let mut report = Report::default();
 
         if let (Some(exchange), Some(raw)) = (exchange, raw) {
