@@ -58,7 +58,7 @@ and the rest of the window stay in use: the status bar shows **Add Data**, how m
 after it, and **Cancel**. Files dropped or added together are read one at a time and added in
 that order; one that asks which layers to add joins them once you choose. Cancel drops the file
 being read and those waiting; opening another project, or switching to another map, drops them
-too, and a message says which. A file read in place, a web
+too, and a message says so (the files waiting are counted, not named). A file read in place, a web
 service or a database adds as before, and scripts read the file where the command runs. So does
 **Delimited Text…**: it reads the file with the columns picked as you press **Add**, so a read
 that fails (a column that isn't in the file, a coordinate system it doesn't know) keeps the

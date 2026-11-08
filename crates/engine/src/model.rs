@@ -20,7 +20,7 @@ use crate::project::{ModelEdge, ModelGraph, ModelNode, ModelNodeKind, ModelStep}
 pub const MAX_NODES: usize = 2000;
 pub const MAX_EDGES: usize = 4000;
 /// Identifier length and canvas coordinate limits used by graph commands and file checks.
-const MAX_NODE_ID: usize = 100;
+pub(crate) const MAX_NODE_ID: usize = 100;
 const MAX_NODE_POSITION: f32 = 1e6;
 /// The output port of input and tool nodes.
 pub const OUT: &str = "out";
@@ -485,12 +485,19 @@ pub fn graph_from_json(v: &Value) -> Result<ModelGraph, String> {
 pub struct GraphDropped {
     /// Nodes that could not be read, had no id, or repeated another's id.
     pub nodes: usize,
-    /// Connections that could not be read, joined a missing node or itself, or repeated another.
+    /// Connections that could not be read, joined a missing node or itself, had no input port,
+    /// or repeated another.
     pub edges: usize,
+    /// Kept nodes whose id was trimmed of spaces or cut to its longest length.
+    pub ids: usize,
+    /// Kept nodes whose position was not a number (moved to 0, 0) or out of range (clamped).
+    pub positions: usize,
+    /// Kept nodes whose parameters were not an object, so they were left out.
+    pub params: usize,
 }
 
-/// Reads a graph as [`graph_from_json`] does, and counts the nodes and connections it left out,
-/// so a command can say so. Errors when `nodes` is missing or either list is too long.
+/// Reads a graph as [`graph_from_json`] does, and counts the nodes and connections it left out
+/// and the nodes it changed, so a command can say so. Errors when `nodes` is missing or either list is too long.
 pub fn graph_from_json_counted(v: &Value) -> Result<(ModelGraph, GraphDropped), String> {
     let nodes = v.get("nodes").and_then(Value::as_array).ok_or("a model graph needs \"nodes\"")?;
     if nodes.len() > MAX_NODES {
@@ -507,18 +514,27 @@ pub fn graph_from_json_counted(v: &Value) -> Result<(ModelGraph, GraphDropped), 
             dropped.nodes += 1;
             continue;
         };
-        node.id = node.id.trim().chars().take(MAX_NODE_ID).collect();
-        if node.id.is_empty() || g.nodes.iter().any(|m| m.id == node.id) {
+        let id: String = node.id.trim().chars().take(MAX_NODE_ID).collect();
+        if id.is_empty() || g.nodes.iter().any(|m| m.id == id) {
             dropped.nodes += 1;
             continue;
         }
+        if id != node.id {
+            dropped.ids += 1;
+            node.id = id;
+        }
+        let (x, y) = (node.x, node.y);
         if !node.x.is_finite() || !node.y.is_finite() {
             node.x = 0.0;
             node.y = 0.0;
         }
         node.x = node.x.clamp(-MAX_NODE_POSITION, MAX_NODE_POSITION);
         node.y = node.y.clamp(-MAX_NODE_POSITION, MAX_NODE_POSITION);
-        if !node.params.is_object() {
+        if node.x.to_bits() != x.to_bits() || node.y.to_bits() != y.to_bits() {
+            dropped.positions += 1;
+        }
+        if !node.params.is_object() && !node.params.is_null() {
+            dropped.params += 1;
             node.params = Value::Null;
         }
         g.nodes.push(node);

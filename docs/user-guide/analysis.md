@@ -190,7 +190,7 @@ gp.batch={"tool":"buffer","inputs":["Cities","Rivers"],"outputPattern":"{input}_
   with a notice). In the browser, add a file as a layer first and use its layer name.
 - `"folder"`: on desktop and the command line, a folder whose `.shp`, `.geojson`, `.json`,
   `.gpkg`, `.fgb`, `.parquet`, `.geoparquet`, `.kml`, `.kmz`, `.gpx` and `.csv` files are run over
-  in file-name order (byte order, so capitals come first). Subfolders and symbolic links are skipped, with a count.
+  in file-name order (byte order, so ASCII capitals come before lowercase letters). Subfolders and symbolic links are skipped, with a count.
 - `"outputPattern"` (or `"output_pattern"`): the name of each output layer, `"{input}_{tool}"` by
   default, where `{input}` is the layer's name or the file's name without its extension and
   `{tool}` the tool's id. It must include `{input}`. A name already taken gets a number (`_2`).

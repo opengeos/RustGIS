@@ -25738,7 +25738,7 @@ fn model_graph_drops_are_noticed() {
     s.run("model.new", &json!({"name": "Clean", "graph": clean})).unwrap();
     s.run("model.save", &json!({"name": "Clean", "graph": clean})).unwrap();
     s.run("model.validate", &json!({"graph": clean})).unwrap();
-    assert_eq!(said(&s, mark, "left out"), 0, "{:?}", s.notices_since(mark));
+    assert_eq!(said(&s, mark, "model graph"), 0, "{:?}", s.notices_since(mark));
 
     let lossy = json!({
         "nodes": [
@@ -25746,12 +25746,14 @@ fn model_graph_drops_are_noticed() {
             {"id": "i1", "kind": "input", "x": 10, "y": 0, "layer": "Countries"},
             {"id": "  ", "kind": "input", "x": 20, "y": 0, "layer": "Cities"},
             {"kind": 7},
-            {"id": "o1", "kind": "output", "x": 240, "y": 0, "name": "Kept"}
+            {"id": "o1", "kind": "output", "x": 240, "y": 0, "name": "Kept"},
+            {"id": " i2 ", "kind": "input", "x": 5e7, "y": 0, "layer": "Cities", "params": "not an object"}
         ],
         "edges": [
             {"from": "i1", "fromPort": "out", "to": "o1", "toPort": "in"},
             {"from": "i1", "fromPort": "out", "to": "missing", "toPort": "in"},
             {"from": "o1", "fromPort": "out", "to": "o1", "toPort": "in"},
+            {"from": "i1", "fromPort": "out", "to": "o1", "toPort": ""},
             "not an edge"
         ]
     });
@@ -25764,8 +25766,15 @@ fn model_graph_drops_are_noticed() {
         let mark = s.notice_mark();
         s.run(cmd, &params).unwrap();
         assert_eq!(said(&s, mark, "3 node(s) left out"), 1, "{cmd}: {:?}", s.notices_since(mark));
-        assert_eq!(said(&s, mark, "3 connection(s) left out"), 1, "{cmd}: {:?}", s.notices_since(mark));
+        assert_eq!(said(&s, mark, "4 connection(s) left out"), 1, "{cmd}: {:?}", s.notices_since(mark));
+        assert_eq!(said(&s, mark, "1 node id(s) changed"), 1, "{cmd}: {:?}", s.notices_since(mark));
+        assert_eq!(said(&s, mark, "1 node position(s) changed"), 1, "{cmd}: {:?}", s.notices_since(mark));
+        assert_eq!(said(&s, mark, "1 node(s) had parameters"), 1, "{cmd}: {:?}", s.notices_since(mark));
     }
+    // A command that fails says nothing about the graph it was passed.
+    let mark = s.notice_mark();
+    assert!(s.run("model.save", &json!({"name": "Lossy", "rename": "Clean", "graph": lossy})).is_err());
+    assert_eq!(said(&s, mark, "model graph"), 0, "{:?}", s.notices_since(mark));
 }
 
 /// ModelBuilder graphs: validated, run in flow order, intermediate results dropped, outputs named.

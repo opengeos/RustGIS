@@ -444,26 +444,48 @@ pub fn gallery_list(kind: &str) -> CmdResult {
     Ok(Value::Array(out))
 }
 
-/// Tells the user what a graph passed to a command lost when it was read: one notice for the
-/// nodes and one for the connections, each with a count.
+/// Tells the user what a graph passed to a command lost or changed when it was read: one notice
+/// per kind, each with a count.
 fn notify_graph_dropped(s: &mut Session, dropped: crate::model::GraphDropped) {
     if dropped.nodes > 0 {
         s.notify(format!("model graph: {} node(s) left out: unreadable, without an id, or with the id of another", dropped.nodes), false);
     }
     if dropped.edges > 0 {
         s.notify(
-            format!("model graph: {} connection(s) left out: unreadable, to a missing node or itself, or repeating another", dropped.edges),
+            format!(
+                "model graph: {} connection(s) left out: unreadable, to a missing node or itself, without an input port, or repeating another",
+                dropped.edges
+            ),
             false,
         );
     }
+    if dropped.ids > 0 {
+        s.notify(
+            format!(
+                "model graph: {} node id(s) changed: trimmed of spaces or cut to {} characters (connections must use the changed id)",
+                dropped.ids,
+                crate::model::MAX_NODE_ID
+            ),
+            false,
+        );
+    }
+    if dropped.positions > 0 {
+        s.notify(
+            format!("model graph: {} node position(s) changed: not a number (moved to 0, 0) or out of range (clamped)", dropped.positions),
+            false,
+        );
+    }
+    if dropped.params > 0 {
+        s.notify(format!("model graph: {} node(s) had parameters that were not an object; they were left out", dropped.params), false);
+    }
 }
 
-/// Reads the `graph` a command was passed, if any, and says what reading it left out.
-fn read_graph(s: &mut Session, p: &Value) -> Result<Option<crate::project::ModelGraph>, String> {
-    let Some(g) = p.get("graph").filter(|g| !g.is_null()) else { return Ok(None) };
+/// Reads the `graph` a command was passed, if any, with what reading it left out or changed. The
+/// command reports that once it succeeds, so a command that fails says nothing about it.
+fn read_graph(p: &Value) -> Result<(Option<crate::project::ModelGraph>, crate::model::GraphDropped), String> {
+    let Some(g) = p.get("graph").filter(|g| !g.is_null()) else { return Ok((None, Default::default())) };
     let (graph, dropped) = crate::model::graph_from_json_counted(g)?;
-    notify_graph_dropped(s, dropped);
-    Ok(Some(graph))
+    Ok((Some(graph), dropped))
 }
 
 /// Says what the graph a command was passed (rather than a saved model's) lost when read.
@@ -475,7 +497,7 @@ fn note_passed_graph(s: &mut Session, p: &Value) {
 
 fn new_model(s: &mut Session, p: &Value) -> CmdResult {
     let base = ps(p, "name").map(str::trim).filter(|n| !n.is_empty()).unwrap_or("Model").chars().take(200).collect::<String>();
-    let graph = read_graph(s, p)?;
+    let (graph, dropped) = read_graph(p)?;
     let steps: Vec<ModelStep> = match p.get("steps") {
         _ if graph.is_some() => graph.as_ref().map(crate::model::graph_to_steps).unwrap_or_default(),
         Some(v) => serde_json::from_value(v.clone()).map_err(|e| format!("steps: {e}"))?,
@@ -536,6 +558,7 @@ fn new_model(s: &mut Session, p: &Value) -> CmdResult {
     }
     let n = steps.len();
     s.project.models.push(Model { name: name.clone(), steps, graph });
+    notify_graph_dropped(s, dropped);
     Ok(json!({"model": name, "steps": n}))
 }
 
@@ -685,7 +708,8 @@ pub(crate) fn model_save_names(p: &Value) -> Result<(String, String), String> {
 /// Saves a graph as a model, replacing the one of that name (or adding it).
 fn save_model(s: &mut Session, p: &Value) -> CmdResult {
     let (name, new_name) = model_save_names(p)?;
-    let g = read_graph(s, p)?.ok_or("graph is required")?;
+    let (g, dropped) = read_graph(p)?;
+    let g = g.ok_or("graph is required")?;
     let i = s.project.models.iter().position(|m| m.name.eq_ignore_ascii_case(&name));
     if !new_name.eq_ignore_ascii_case(&name) && s.project.models.iter().any(|m| m.name.eq_ignore_ascii_case(&new_name)) {
         return Err(format!("a model named '{new_name}' already exists"));
@@ -698,6 +722,7 @@ fn save_model(s: &mut Session, p: &Value) -> CmdResult {
         None => s.project.models.push(model),
     }
     s.trusted_models.remove(&name.to_ascii_lowercase());
+    notify_graph_dropped(s, dropped);
     Ok(json!({"model": new_name}))
 }
 
