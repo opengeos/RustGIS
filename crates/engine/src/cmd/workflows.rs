@@ -462,7 +462,7 @@ fn notify_graph_dropped(s: &mut Session, dropped: crate::model::GraphDropped) {
     if dropped.ids > 0 {
         s.notify(
             format!(
-                "model graph: {} node id(s) changed: trimmed of spaces or cut to {} characters (connections must use the changed id)",
+                "model graph: {} node id(s) changed: trimmed of spaces or cut to {} characters (connections naming the old id follow it)",
                 dropped.ids,
                 crate::model::MAX_NODE_ID
             ),
@@ -689,13 +689,15 @@ fn run_model_here(s: &mut Session, p: &Value) -> CmdResult {
         }
     }
     let (name, _, trusted) = model_graph(s, p)?;
-    note_passed_graph(s, p);
     let op = s.authorize_model(p)?;
-    if trusted || p.get("graph").is_some_and(|g| !g.is_null()) {
-        crate::model::run(s, op)
+    let out = if trusted || p.get("graph").is_some_and(|g| !g.is_null()) {
+        crate::model::run(s, op)?
     } else {
-        s.narrowed(crate::policy::Narrow::Item { kind: "model", name }, |s| crate::model::run(s, op))?
-    }
+        s.narrowed(crate::policy::Narrow::Item { kind: "model", name }, |s| crate::model::run(s, op))??
+    };
+    // Said once the run went ahead, not for one that was refused.
+    note_passed_graph(s, p);
+    Ok(out)
 }
 
 /// The stored source and destination names used by graph saving and its provenance check.
@@ -729,7 +731,6 @@ fn save_model(s: &mut Session, p: &Value) -> CmdResult {
 /// A model as a `*.model.json` file: written to `path`, or its text returned.
 fn export_model(s: &mut Session, p: &Value) -> CmdResult {
     let (name, g, _) = model_graph(s, p)?;
-    note_passed_graph(s, p);
     let (text, report) =
         crate::durable::output_owned(g, |g| serde_json::to_string_pretty(&crate::model::to_file(&name, g)).map_err(|e| e.to_string()))?;
     crate::durable::notify(s, &report);
@@ -737,9 +738,13 @@ fn export_model(s: &mut Session, p: &Value) -> CmdResult {
     match ps(p, "path") {
         Some(path) => {
             rustgis_data::io::write_atomic(std::path::Path::new(path), text.as_bytes()).map_err(|e| format!("{path}: {e}"))?;
+            note_passed_graph(s, p);
             Ok(json!({"model": name, "path": path}))
         }
-        None => Ok(json!({"model": name, "fileName": format!("{file}.model.json"), "text": text})),
+        None => {
+            note_passed_graph(s, p);
+            Ok(json!({"model": name, "fileName": format!("{file}.model.json"), "text": text}))
+        }
     }
 }
 

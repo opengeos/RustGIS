@@ -25754,6 +25754,8 @@ fn model_graph_drops_are_noticed() {
             {"from": "i1", "fromPort": "out", "to": "missing", "toPort": "in"},
             {"from": "o1", "fromPort": "out", "to": "o1", "toPort": "in"},
             {"from": "i1", "fromPort": "out", "to": "o1", "toPort": ""},
+            // Names the node by the id it was given: it follows the trimmed id, so it is kept.
+            {"from": " i2 ", "fromPort": "out", "to": "o1", "toPort": "in"},
             "not an edge"
         ]
     });
@@ -25774,7 +25776,11 @@ fn model_graph_drops_are_noticed() {
     // A command that fails says nothing about the graph it was passed.
     let mark = s.notice_mark();
     assert!(s.run("model.save", &json!({"name": "Lossy", "rename": "Clean", "graph": lossy})).is_err());
+    let unwritable = std::env::temp_dir().join("rustgis-no-such-folder").join("nested").join("lossy.model.json");
+    assert!(s.run("model.export", &json!({"graph": lossy, "path": unwritable.to_string_lossy()})).is_err());
     assert_eq!(said(&s, mark, "model graph"), 0, "{:?}", s.notices_since(mark));
+    let saved = s.project.models.iter().find(|m| m.name == "Lossy").and_then(|m| m.graph.as_ref()).map(|g| g.edges.len());
+    assert_eq!(saved, Some(2), "the connection naming \" i2 \" follows its trimmed id");
 }
 
 /// ModelBuilder graphs: validated, run in flow order, intermediate results dropped, outputs named.
