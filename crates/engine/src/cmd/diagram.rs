@@ -249,16 +249,18 @@ pub(crate) fn hidden_notice(s: &mut Session, id: u32) {
 /// for each such layer a project, map file or layer file opens with.
 pub(crate) fn hidden_text(l: &rustgis_map::Layer) -> Option<String> {
     l.diagram.as_ref()?;
+    // A name read from a file may be any length.
+    let name = crate::project::short_name(&l.name);
     match l.geometry_type() {
         GeometryType::Point if l.aggregation.is_some() => Some(format!(
             "Layer '{}': its diagram doesn't show while its points are aggregated into bins; turn Aggregation off to see it",
-            l.name
+            name
         )),
         // Given on the globe too, which draws the polygons flat with their charts: the map may
         // be made flat and tilted later.
         GeometryType::Polygon if l.extrusion.is_some() => Some(format!(
             "Layer '{}': while its polygons are extruded, its diagram doesn't show when a flat map is tilted (it shows untilted, and on the globe)",
-            l.name
+            name
         )),
         _ => None,
     }

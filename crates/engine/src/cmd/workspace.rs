@@ -277,7 +277,7 @@ pub fn commands() -> Vec<C> {
                     l.normalize_selection();
                 }
                 // As a project's maps say when opened (#1596).
-                for text in m.layers.iter().filter_map(super::diagram::hidden_text) {
+                for (_, text) in crate::project::label_losses::hidden(m.layers.iter()) {
                     s.notify(text, false);
                 }
                 s.project.maps.push(m);

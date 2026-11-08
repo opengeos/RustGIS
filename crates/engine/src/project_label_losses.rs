@@ -169,9 +169,25 @@ fn count<'a>(
 
 /// One notice per layer read whose diagram won't show for its aggregation or extrusion (#1596),
 /// as `layer.diagram` gives when it is set.
-fn hidden<'a>(layers: impl Iterator<Item = &'a rustgis_map::Layer>) -> impl Iterator<Item = (ReadPart, String)> {
-    layers.filter_map(crate::cmd::diagram::hidden_text).map(|m| (ReadPart::Diagrams, m))
+/// Past [`MAX_HIDDEN`] layers, the rest are counted in one more notice.
+pub(crate) fn hidden<'a>(layers: impl Iterator<Item = &'a rustgis_map::Layer>) -> Vec<(ReadPart, String)> {
+    let mut texts: Vec<String> = Vec::new();
+    let mut more = 0usize;
+    for text in layers.filter_map(crate::cmd::diagram::hidden_text) {
+        if texts.len() < MAX_HIDDEN {
+            texts.push(text);
+        } else {
+            more = more.saturating_add(1);
+        }
+    }
+    if more > 0 {
+        texts.push(format!("{more} more layer(s) each with its diagram hidden by its aggregation or extrusion"));
+    }
+    texts.into_iter().map(|m| (ReadPart::Diagrams, m)).collect()
 }
+
+/// The layers a read names one by one for a hidden diagram.
+const MAX_HIDDEN: usize = 20;
 
 /// The notices of the parts asked for.
 fn only(notices: Vec<(ReadPart, String)>, diagrams: bool) -> Vec<String> {
@@ -227,7 +243,7 @@ pub(super) fn notices(text: &str, project: &Project) -> Result<Vec<(ReadPart, St
 /// (an import that takes the layers' diagrams).
 pub(crate) fn map_notices(text: &str, map: &rustgis_map::Map, diagrams: bool) -> Vec<String> {
     // The layers' own state still says whether a diagram is hidden when the audit can't read them.
-    let Ok(raw) = serde_json::from_str::<Map>(text) else { return only(hidden(map.layers.iter()).collect(), diagrams) };
+    let Ok(raw) = serde_json::from_str::<Map>(text) else { return only(hidden(map.layers.iter()), diagrams) };
     let mut notices = count(raw.layers.iter(), map.layers.iter().map(|l| &l.labels), &map.name, "the map file");
     notices.extend(hidden(map.layers.iter()));
     only(notices, diagrams)
@@ -235,7 +251,7 @@ pub(crate) fn map_notices(text: &str, map: &rustgis_map::Map, diagrams: bool) ->
 
 /// The same audit for a layer file read on its own.
 pub(crate) fn layer_notices(text: &str, layer: &rustgis_map::Layer, diagrams: bool) -> Vec<String> {
-    let Ok(raw) = serde_json::from_str::<Layer>(text) else { return only(hidden(std::iter::once(layer)).collect(), diagrams) };
+    let Ok(raw) = serde_json::from_str::<Layer>(text) else { return only(hidden(std::iter::once(layer)), diagrams) };
     let mut notices = count(std::iter::once(&raw), std::iter::once(&layer.labels), &layer.name, "the layer file");
     notices.extend(hidden(std::iter::once(layer)));
     only(notices, diagrams)

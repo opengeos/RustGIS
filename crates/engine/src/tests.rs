@@ -34231,10 +34231,24 @@ fn opening_a_diagram_that_wont_show_says_why() {
         synced: 0.0,
         data: snapshot,
     });
-    let reread = Session::new(Project::from_json(&serde_json::to_string(&offline.project).unwrap()).unwrap());
+    let mut reread = Session::new(Project::from_json(&serde_json::to_string(&offline.project).unwrap()).unwrap());
     assert!(about(&reread).is_empty(), "{:?}", about(&reread));
-    offline.run("offline.open", &json!({"name": "Trip"})).unwrap();
-    check(about(&offline));
+    reread.run("offline.open", &json!({"name": "Trip"})).unwrap();
+    check(about(&reread));
+    // Many such layers: the first 20 by name, the rest counted in one notice.
+    let mut many = s.project.clone();
+    let template = many.maps[0].layer_by_name("Cities").cloned().unwrap();
+    many.maps[0].layers = (0..25)
+        .map(|i| {
+            let mut l = template.clone();
+            l.id = 1000 + i;
+            l.name = format!("Cities {i}");
+            l
+        })
+        .collect();
+    let said = about(&Session::new(Project::from_json(&serde_json::to_string(&many).unwrap()).unwrap()));
+    assert_eq!(said.len(), 21, "{said:?}");
+    assert!(said.iter().any(|t| t.starts_with("5 more layer(s)")), "{said:?}");
 }
 
 #[test]
