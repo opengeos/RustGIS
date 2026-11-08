@@ -170,8 +170,11 @@ fn latitude_comes_first_where_the_system_says_so() {
         ("urn:ogc:def:crs:EPSG::4326", (0.0, 4.0), (10.0, 12.0)),
         ("http://www.opengis.net/def/crs/EPSG/0/4979", (0.0, 4.0), (10.0, 12.0)),
         ("EPSG:4326", (10.0, 12.0), (0.0, 4.0)),
-        // CRS84 is longitude first, though its URN names a geographic system.
+        // CRS84 is longitude first, though its URN names a geographic system; a compound system
+        // is as its horizontal part.
         ("urn:ogc:def:crs:OGC:1.3:CRS84", (10.0, 12.0), (0.0, 4.0)),
+        ("urn:ogc:def:crs,crs:OGC:1.3:CRS84,crs:EPSG::5783", (10.0, 12.0), (0.0, 4.0)),
+        ("urn:ogc:def:crs,crs:EPSG::4326,crs:EPSG::5783", (0.0, 4.0), (10.0, 12.0)),
     ] {
         let out = read("model.gml", &model(srs, &building("b1", &inner)), None).unwrap();
         let e = out[0].0.extent();
@@ -300,9 +303,17 @@ fn a_file_cut_short_says_so_and_keeps_what_came_before() {
     let whole = String::from_utf8(lonlat(&[building("b1", &box_surfaces("b1")), building("b2", &box_surfaces("b2"))].concat())).unwrap();
     let start = r#"<bldg:Building gml:id="b2">"#;
     let cut = whole.find(start).map(|at| at + start.len()).unwrap();
-    let out = read("model.gml", &whole.as_bytes()[..cut], None).unwrap();
-    assert_eq!(out[0].0.features.len(), 1);
-    assert!(says(&out, "the file ends inside a city object, as if cut short"), "{:?}", messages_of(&out));
+    // Cut after a tag, inside one that opens an object, and inside a member's own start tag.
+    let member = whole.find(start).and_then(|at| whole.get(..at)).and_then(|head| head.rfind("<core:cityObjectMember")).unwrap();
+    for cut in [cut, cut - 5, member + 6] {
+        let out = read("model.gml", &whole.as_bytes()[..cut], None).unwrap();
+        assert_eq!(out[0].0.features.len(), 1, "cut at {cut}");
+        assert!(says(&out, "the file ends inside a city object, as if cut short"), "cut at {cut}: {:?}", messages_of(&out));
+    }
+    // Cut inside the root's end tag: every object is in, and nothing is said.
+    let end = whole.rfind("</core:CityModel>").unwrap();
+    let out = read("model.gml", &whole.as_bytes()[..end + 5], None).unwrap();
+    assert!(!says(&out, "cut short"), "{:?}", messages_of(&out));
     let out = read("model.gml", whole.as_bytes(), None).unwrap();
     assert!(!says(&out, "cut short"));
 }
@@ -420,4 +431,20 @@ fn other_gml_isnt_taken_for_a_city_model() {
     assert!(!looks_like_citygml(gml));
     let layers = crate::io::read_layers("towns.gml", gml).unwrap();
     assert_eq!(layers[0].dataset.features.len(), 1);
+}
+
+/// A system given in place of the one the file names reads the coordinates as written: the file's
+/// latitude-first order goes with its system. Given as the same system, the order stays.
+#[test]
+fn a_system_given_reads_the_coordinates_as_written() {
+    let ground = square(500_000.0, 5_500_000.0, 10.0, 0.0);
+    let bytes = model("urn:ogc:def:crs:EPSG::4258", &building("b1", &surface("GroundSurface", &[polygon("g", &ground)])));
+    let out = read("model.gml", &bytes, Some(Crs::Epsg(25832))).unwrap();
+    let e = out[0].0.extent();
+    assert!((e.min_x - 9.0).abs() < 0.01 && (e.min_y - 49.6).abs() < 0.1, "{e:?}");
+    // Latitude 10 to 12, longitude 0 to 4, given as the system the file names.
+    let inner = surface("GroundSurface", &[polygon("g", "10 0 0 10 4 0 12 4 0 12 0 0 10 0 0")]);
+    let out = read("model.gml", &model("urn:ogc:def:crs:EPSG::4326", &building("b1", &inner)), Some(Crs::LonLat)).unwrap();
+    let e = out[0].0.extent();
+    assert_eq!((e.min_x, e.max_x, e.min_y, e.max_y), (0.0, 4.0, 10.0, 12.0));
 }

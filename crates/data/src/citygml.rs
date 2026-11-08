@@ -17,9 +17,9 @@
 //! a measure in another unit than the metre as text with its unit, and every other simple property
 //! as text. A property given twice is a list, and a structured one (an external reference) its JSON.
 //!
-//! Memory follows the largest member, not the model: the document is indexed in one pass that
-//! builds no tree (where each member lies, and the systems its `srsName`s name), and each member is
-//! then parsed on its own and dropped once its rows are built. The file is hostile: each member's
+//! No tree of the whole model is built: one pass indexes the document (where each member lies, and
+//! the systems its `srsName`s name), and each member is then parsed on its own and its tree dropped
+//! once its rows are built. The text and the rows are still the whole model's. The file is hostile: each member's
 //! nesting and node count are bounded as every XML reader's are, no DTD is read, and the faces
 //! merged are bounded.
 //!
@@ -38,7 +38,7 @@ use serde_json::{Map, Value as Json};
 
 use crate::citymodel::*;
 use crate::footprint::P3;
-use crate::gml::{lat_first, local};
+use crate::gml::{horizontal, lat_first, local};
 use crate::raster::Crs;
 use crate::{DataError, Dataset, ReadReport, Result};
 
@@ -106,7 +106,12 @@ fn read_with(file_name: &str, bytes: &[u8], given: Option<Crs>, keep_named: bool
         return Err(DataError::Format(format!("{file_name}: no city objects (cityObjectMember elements)")));
     }
     let named = index.system.as_deref().map(horizontal);
-    let swap = index.system.as_deref().is_some_and(|n| known_system(horizontal(n)).is_some_and(|crs| lat_first(n, crs)));
+    let given = given.filter(|_| !keep_named || named.and_then(known_system).is_none());
+    // Latitude first as the file's system says, when that is the system its coordinates are read in.
+    let swap = index
+        .system
+        .as_deref()
+        .is_some_and(|n| known_system(horizontal(n)).is_some_and(|crs| lat_first(n, crs) && given.is_none_or(|g| g == crs)));
     let mut reading = Reading { budget: MAX_FILE_FACES, swap, ..Reading::default() };
     reading.said.appearances = index.appearances;
     let mut wrapped = String::new();
@@ -127,7 +132,10 @@ fn read_with(file_name: &str, bytes: &[u8], given: Option<Crs>, keep_named: bool
             reading.counts.skipped += 1;
             continue;
         };
-        let Some(member) = elements(doc.root_element()).next() else { continue };
+        let Some(member) = elements(doc.root_element()).next() else {
+            reading.counts.skipped += 1;
+            continue;
+        };
         if only_link(&member) {
             reading.said.links += 1;
         }
@@ -140,7 +148,6 @@ fn read_with(file_name: &str, bytes: &[u8], given: Option<Crs>, keep_named: bool
         }
     }
     let Reading { counts, built, rows, reach, said, .. } = reading;
-    let given = given.filter(|_| !keep_named || named.and_then(known_system).is_none());
     let mut notes = Vec::new();
     let crs = coordinate_system(file_name, given, named, &reach, &mut notes)?;
     notes.extend(said.notes(index.cut));
@@ -189,9 +196,21 @@ impl Index {
         let mut index = Index::default();
         // Open elements, where the member being read starts, and whether the root has been seen.
         let (mut depth, mut member, mut rooted) = (0usize, None, false);
+        // The file ends inside a tag that opens an element (not one that closes it).
+        let mut in_start_tag = false;
         loop {
             let start = position(&reader);
-            let event = reader.read_event().map_err(invalid)?;
+            let event = match reader.read_event() {
+                Ok(event) => event,
+                // Every syntax error is the text ending inside markup (a tag, a comment): a file
+                // cut short, as one cut between tags is.
+                Err(quick_xml::Error::Syntax(_)) => {
+                    let at = usize::try_from(reader.error_position()).unwrap_or(usize::MAX);
+                    in_start_tag = !text.get(at..).is_some_and(|rest| rest.starts_with("</"));
+                    break;
+                }
+                Err(e) => return Err(invalid(e)),
+            };
             let (e, empty) = match &event {
                 Event::Start(e) => (e, false),
                 Event::Empty(e) => (e, true),
@@ -230,8 +249,9 @@ impl Index {
                 depth += 1;
             }
         }
-        // A file cut short: the member open at its end is left out, and said.
-        index.cut = depth > 0 && member.is_some();
+        // A file cut short: the member open at its end, or one whose start tag it cuts, is left
+        // out, and said.
+        index.cut = depth > 0 && (member.is_some() || in_start_tag);
         Ok(index)
     }
 
@@ -288,18 +308,6 @@ fn declarations(e: &BytesStart) -> String {
         }
     }
     out
-}
-
-/// The horizontal system of a compound URN (`urn:ogc:def:crs,crs:EPSG::25832,crs:EPSG::5783`, its
-/// first part), or the name as it is.
-fn horizontal(name: &str) -> &str {
-    let name = name.trim();
-    match name.get(..16) {
-        Some(head) if head.eq_ignore_ascii_case("urn:ogc:def:crs,") => {
-            name.get(16..).and_then(|rest| rest.split(',').next()).unwrap_or(name)
-        }
-        _ => name,
-    }
 }
 
 fn elements<'a, 'i>(n: Node<'a, 'i>) -> impl Iterator<Item = Node<'a, 'i>> {
