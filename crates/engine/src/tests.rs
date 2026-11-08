@@ -15986,7 +15986,7 @@ fn a_stac_asset_with_retrieval_codes_says_they_draw_as_values() {
     let mark = s.notice_mark();
     s.run("stac.addAsset", &json!({"url": format!("{base}/items/clean"), "name": "Clean"})).unwrap();
     let said: Vec<String> = s.notices_since(mark).iter().map(|n| n.text.clone()).collect();
-    assert!(!said.iter().any(|t| t.contains("failed retrievals")), "clean input tells nothing: {said:?}");
+    assert!(!said.iter().any(|t| t.contains("failed retrieval")), "clean input tells nothing: {said:?}");
     let mark = s.notice_mark();
     s.run("stac.addAsset", &json!({"url": format!("{base}/items/coded"), "name": "Coded"})).unwrap();
     let said: Vec<String> = s.notices_since(mark).iter().map(|n| n.text.clone()).collect();
