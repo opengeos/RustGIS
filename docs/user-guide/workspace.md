@@ -97,7 +97,7 @@ and says how many there are; type part of a command's id (`layer.`, `export`) to
 name are told apart), or tick **Failed only**.
 
 A right-click on an entry offers **Copy Parameters** and **Copy Command**, the entry as a line for
-the Script pane (`layer.buffer {"distance": 10}`; undo and redo as themselves). A script run offers
+the Script pane (`layer.buffer {"distance":10}`; undo and redo as themselves). A script run offers
 **Copy Script** and **Open in Script Pane** instead, which puts the script in the Script pane in
 place of its own (Ctrl+Z, ⌘+Z on a Mac, brings that back; not while the pane runs one). Where the
 log cut an entry's parameters short or took secrets out of them, copying its command or its

@@ -32112,6 +32112,15 @@ fn exports_run_on_another_thread() {
     let missing: Vec<_> = s.notices_since(mark).iter().filter(|n| n.text.contains("in the file")).map(|n| n.text.clone()).collect();
     assert!(missing.len() == 1 && missing[0].contains("2 layers aren't in the file"), "{missing:?}");
     s.map_mut().layers[li].source = None;
+    // One that lands after another project opened is logged under the project it started in.
+    let (name, opened) = (s.project.name.clone(), s.opened);
+    let run = export_start(&mut s, "share.exportMap", &json!({"path": at("before_new.png"), "width": 64, "height": 48})).unwrap();
+    let started = run.started();
+    let wrote = run.run(&Control::new());
+    s.run("project.new", &json!({"name": "Opened meanwhile"})).unwrap();
+    let _ = export_land(&mut s, started, wrote);
+    let e = s.log.entries().last().cloned().unwrap();
+    assert_eq!((e.command.as_str(), e.project.as_str(), e.opened), ("share.exportMap", name.as_str(), opened), "{e:?}");
     let _ = std::fs::remove_dir_all(&dir);
 }
 

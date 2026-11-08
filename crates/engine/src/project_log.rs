@@ -509,7 +509,7 @@ pub(crate) fn entry(s: &Session, id: &str, params: Value, partial: bool, res: &C
 
 /// A project's name as the log keeps it: cut at [`crate::cmd::MAX_NAME`] characters and a `…`, as
 /// a name read from a file may be longer than one given to `project.rename`.
-fn kept_name(name: &str) -> String {
+pub(crate) fn kept_name(name: &str) -> String {
     let max = crate::cmd::MAX_NAME;
     if name.chars().nth(max).is_some() { format!("{}…", name.chars().take(max).collect::<String>()) } else { name.to_string() }
 }
