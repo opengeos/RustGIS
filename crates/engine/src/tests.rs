@@ -33991,7 +33991,7 @@ fn a_diagram_that_wont_show_says_why() {
     let mark = s.notice_mark();
     s.run("layer.aggregation", &json!({"layer": "Cities", "shape": "none"})).unwrap();
     assert!(!any(&s, mark), "aggregation off: {:?}", s.notices_since(mark));
-    assert!(s.map().layer_by_name("Cities").is_some_and(|l| l.diagram.is_some()), "the diagram is kept");
+    assert!(s.map().layer_by_name("Cities").is_some_and(|l| l.diagram.is_some() && l.aggregation.is_none()), "binning off, diagram kept");
     // Extrusion: not shown in a tilted flat map.
     let mark = s.notice_mark();
     s.run("layer.extrusion", &json!({"layer": "Countries", "type": "height", "height": 1000})).unwrap();
@@ -34002,15 +34002,22 @@ fn a_diagram_that_wont_show_says_why() {
     let mark = s.notice_mark();
     s.run("layer.extrusion", &json!({"layer": "Countries", "type": "none"})).unwrap();
     assert!(!any(&s, mark), "extrusion off: {:?}", s.notices_since(mark));
-    assert!(s.map().layer_by_name("Countries").is_some_and(|l| l.diagram.is_some()), "the diagram is kept");
+    assert!(
+        s.map().layer_by_name("Countries").is_some_and(|l| l.diagram.is_some() && l.extrusion.is_none()),
+        "extrusion off, diagram kept"
+    );
     // A layer's first diagram, set after the effect, says so too.
     s.run("layer.clearDiagram", &json!({"layer": "Cities"})).unwrap();
+    let mark = s.notice_mark();
     s.run("layer.aggregation", &json!({"layer": "Cities", "shape": "square"})).unwrap();
+    assert!(!any(&s, mark), "no diagram yet: {:?}", s.notices_since(mark));
     let mark = s.notice_mark();
     s.run("layer.diagram", &json!({"layer": "Cities", "kind": "pie", "fields": ["pop_max"], "size": 8})).unwrap();
     assert!(said(&s, mark, "Cities", binned), "{:?}", s.notices_since(mark));
     s.run("layer.clearDiagram", &json!({"layer": "Countries"})).unwrap();
+    let mark = s.notice_mark();
     s.run("layer.extrusion", &json!({"layer": "Countries", "type": "height", "height": 1000})).unwrap();
+    assert!(!any(&s, mark), "no diagram yet: {:?}", s.notices_since(mark));
     let mark = s.notice_mark();
     s.run("layer.diagram", &json!({"layer": "Countries", "kind": "pie", "fields": ["pop_est"], "size": 8})).unwrap();
     assert!(said(&s, mark, "Countries", tilted), "{:?}", s.notices_since(mark));
