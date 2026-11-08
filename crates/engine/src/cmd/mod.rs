@@ -172,16 +172,27 @@ pub(crate) fn copy_name(given: Option<&str>, original: &str, taken: impl Fn(&str
     numbered(&base, taken)
 }
 
-/// The most unread true/false parameters one command keeps to name in its notice.
+/// The most unread true/false parameters one command names in its notice.
 const MAX_UNREAD_BOOLS: usize = 8;
-/// The longest value a notice quotes for an unread true/false parameter.
+/// The most further unread parameters one command counts after those it names.
+const MAX_UNREAD_BOOLS_COUNTED: usize = 256;
+/// The longest value a notice quotes for an unread true/false parameter; a longer one is said by
+/// its length, so no part of it (a key pasted by mistake) shows.
 const MAX_UNREAD_BOOL_TEXT: usize = 40;
 
+/// The true/false parameters the running command could not read: each distinct parameter and
+/// value (by a hash of both) with what the notice says of it, then the hashes of those past
+/// [`MAX_UNREAD_BOOLS`], counted once each.
+#[derive(Default)]
+struct UnreadBools {
+    named: Vec<(u64, String)>,
+    more: Vec<u64>,
+}
+
 thread_local! {
-    /// True/false parameters given as text no rule reads (`"auto"`, a typo) while the outermost
-    /// command runs: `(parameter, value)`, and how many more there were. Said by
+    /// What [`b`] could not read while the outermost command runs on this thread; said by
     /// [`take_unread_bools`] once the command is done.
-    static UNREAD_BOOLS: std::cell::RefCell<(Vec<(String, String)>, usize)> = const { std::cell::RefCell::new((Vec::new(), 0)) };
+    static UNREAD_BOOLS: std::cell::RefCell<UnreadBools> = std::cell::RefCell::default();
 }
 
 /// Text read as a true/false parameter: true, false, yes, no, on, off, 1 or 0, in any case and
@@ -216,41 +227,62 @@ pub(crate) fn b(p: &Value, k: &str) -> Option<bool> {
     let v = p.get(k).filter(|v| !v.is_null())?;
     let read = bool_value(v);
     if read.is_none() {
-        let shown: String = match v {
-            Value::String(s) => format!("\"{}\" (read as false)", s.chars().take(MAX_UNREAD_BOOL_TEXT).collect::<String>()),
-            Value::Array(_) => "a list (ignored)".to_string(),
-            Value::Object(_) => "an object (ignored)".to_string(),
-            other => format!("{} (ignored)", other.to_string().chars().take(MAX_UNREAD_BOOL_TEXT).collect::<String>()),
-        };
-        let key: String = k.chars().take(MAX_UNREAD_BOOL_TEXT).collect();
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        (k, v.to_string()).hash(&mut h);
+        let id = h.finish();
         UNREAD_BOOLS.with(|u| {
-            let (seen, more) = &mut *u.borrow_mut();
-            if !seen.iter().any(|(sk, sv)| *sk == key && *sv == shown) {
-                if seen.len() < MAX_UNREAD_BOOLS {
-                    seen.push((key, shown));
-                } else {
-                    *more = more.saturating_add(1);
-                }
+            let mut u = u.borrow_mut();
+            if u.named.iter().any(|(n, _)| *n == id) || u.more.contains(&id) {
+                return;
+            }
+            if u.named.len() < MAX_UNREAD_BOOLS {
+                let quoted = |t: &str, q: &str| {
+                    let n = t.chars().count();
+                    if n <= MAX_UNREAD_BOOL_TEXT { format!("{q}{t}{q}") } else { format!("a value of {n} characters") }
+                };
+                let shown = match v {
+                    Value::String(t) => format!("{} (read as false)", quoted(t, "\"")),
+                    Value::Array(_) => "a list (ignored)".to_string(),
+                    Value::Object(_) => "an object (ignored)".to_string(),
+                    other => format!("{} (ignored)", quoted(&other.to_string(), "")),
+                };
+                u.named.push((id, format!("{k} = {shown}")));
+            } else if u.more.len() < MAX_UNREAD_BOOLS_COUNTED {
+                u.more.push(id);
             }
         });
     }
     read.or_else(|| v.is_string().then_some(false))
 }
 
+/// Reads the true/false parameter `k` of `p` now, on the command's thread (where an unreadable
+/// value is said), and puts what was read back as a JSON boolean, for work done on another
+/// thread to read without a word. A value read as nothing (null, or ignored) is left as it is.
+pub(crate) fn settle_bool(p: &mut Value, k: &str) {
+    if let Some(v) = b(p, k)
+        && let Some(o) = p.as_object_mut()
+    {
+        o.insert(k.to_string(), Value::Bool(v));
+    }
+}
+
 /// Forgets unread true/false parameters left from outside a command.
 pub(crate) fn clear_unread_bools() {
-    UNREAD_BOOLS.with(|u| *u.borrow_mut() = (Vec::new(), 0));
+    UNREAD_BOOLS.with(|u| *u.borrow_mut() = UnreadBools::default());
 }
 
 /// The notice for the true/false parameters the command just run could not read, if any.
 pub(crate) fn take_unread_bools() -> Option<String> {
-    let (seen, more) = UNREAD_BOOLS.with(|u| std::mem::take(&mut *u.borrow_mut()));
-    if seen.is_empty() {
+    let UnreadBools { named, more } = UNREAD_BOOLS.with(|u| std::mem::take(&mut *u.borrow_mut()));
+    if named.is_empty() {
         return None;
     }
-    let mut list: Vec<String> = seen.iter().map(|(k, v)| format!("{k} = {v}")).collect();
-    if more > 0 {
-        list.push(format!("{more} more"));
+    let mut list: Vec<String> = named.into_iter().map(|(_, said)| said).collect();
+    match more.len() {
+        0 => {}
+        n if n >= MAX_UNREAD_BOOLS_COUNTED => list.push(format!("{n} or more others")),
+        n => list.push(format!("{n} more")),
     }
     Some(format!("Not read as true or false: {} (a true/false parameter takes true, false, yes, no, on, off, 1 or 0)", list.join(", ")))
 }

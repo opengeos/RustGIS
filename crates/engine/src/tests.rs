@@ -1858,12 +1858,17 @@ fn unread_boolean_parameter_text_is_said() {
         let c = &s.map().layer_by_name("Rivers").unwrap().labels.default;
         (c.bold, c.italic)
     };
-    for (given, expect) in [("True", true), (" YES ", true), ("On", true), ("1", true), ("False", false), ("no", false), ("OFF", false)] {
+    for (given, expect) in
+        [("True", true), (" YES ", true), ("On", true), ("1", true), ("False", false), ("no", false), ("OFF", false), ("0", false)]
+    {
         s.run("labels.style", &json!({"layer": "Rivers", "italic": given, "bold": given})).unwrap();
         assert_eq!(style(&s), (expect, expect), "{given}");
     }
     s.run("labels.style", &json!({"layer": "Rivers", "italic": 1, "bold": true})).unwrap();
     assert_eq!(style(&s), (true, true));
+    s.run("labels.style", &json!({"layer": "Rivers", "italic": 0, "bold": 0.0})).unwrap();
+    assert_eq!(style(&s), (false, false));
+    s.run("labels.style", &json!({"layer": "Rivers", "italic": 1, "bold": true})).unwrap();
     assert_eq!(unread(&s), 0, "clean input gives no notice: {:?}", s.notices.last());
     s.run("labels.style", &json!({"layer": "Rivers", "italic": "auto", "bold": "ture"})).unwrap();
     assert_eq!(style(&s), (false, false));
@@ -1876,9 +1881,25 @@ fn unread_boolean_parameter_text_is_said() {
     assert_eq!(style(&s), (false, true));
     assert_eq!(unread(&s), 2, "{:?}", s.notices.last());
     assert!(s.notices.iter().any(|n| n.text.contains("italic = 5 (ignored)")), "{:?}", s.notices.last());
+    // A long value is said by its length, not quoted in part; ten distinct values name eight
+    // and count the rest once each, however often a command reads them.
+    let long = "k".repeat(41);
+    s.run("labels.style", &json!({"layer": "Rivers", "italic": long})).unwrap();
+    let said = s.notices.iter().rev().find(|n| n.text.starts_with(SAID)).map(|n| n.text.clone()).unwrap();
+    assert!(said.contains("italic = a value of 41 characters (read as false)") && !said.contains("kkk"), "{said}");
+    let p: Value = (0..10).map(|i| (format!("k{i}"), json!(format!("v{i}")))).collect::<serde_json::Map<_, _>>().into();
+    crate::cmd::clear_unread_bools();
+    for _ in 0..3 {
+        for i in 0..10 {
+            assert_eq!(crate::cmd::b(&p, &format!("k{i}")), Some(false));
+        }
+    }
+    let said = crate::cmd::take_unread_bools().unwrap();
+    assert!(said.contains("k7 = \"v7\"") && !said.contains("k8 =") && said.contains(", 2 more ("), "{said}");
     // The next clean command says nothing more.
+    let before = unread(&s);
     s.run("labels.style", &json!({"layer": "Rivers", "italic": true})).unwrap();
-    assert_eq!(unread(&s), 2);
+    assert_eq!(unread(&s), before);
 }
 
 #[test]
@@ -8249,6 +8270,10 @@ fn analysis_workflows_models_scripts_and_raster_functions() {
     }
     assert!(s.run("raster.function", &json!({"layer": dem, "function": "warp"})).is_err());
     assert!(s.run("raster.function", &json!({"layer": dem, "function": "bandMath", "expression": "b2"})).is_err());
+    // A remap's `keep`, read off the command's thread, is still said when it can't be read (#1600).
+    let remap = json!({"layer": dem, "function": "remap", "ranges": [[0, 300, 1]], "keep": "auto"});
+    s.run("raster.function", &remap).unwrap();
+    assert!(s.notices.iter().any(|n| n.text.contains("keep = \"auto\" (read as false)")), "{:?}", s.notices.last());
     let r = s
         .run(
             "raster.functionChain",
