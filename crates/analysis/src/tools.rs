@@ -3933,11 +3933,7 @@ fn ground_area_perimeter(g: &Geometry) -> (f64, f64) {
             // ([`rustgis_geom::wgs84_ring_perimeter_area_m2`]): a full turn along a parallel (a band, a
             // cap) is the whole parallel, which the geodesic perimeter and area above count as no edge,
             // and an edge along the ±180° meridian (a split polygon) is that meridian (#1598).
-            let (rp, ra) = if full_turn {
-                Some(rustgis_geom::wgs84_ring_perimeter_area_m2(r)).filter(|(p, m)| p.is_finite() && m.is_finite()).unwrap_or((rp, ra))
-            } else {
-                (rp, ra)
-            };
+            let (rp, ra) = if full_turn { rustgis_geom::wgs84_ring_perimeter_area_m2(r) } else { (rp, ra) };
             a += if i == 0 { ra } else { -ra };
             per += rp;
         }

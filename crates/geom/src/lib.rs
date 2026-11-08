@@ -612,7 +612,12 @@ fn ring_lon_steps(ring: &[Coord]) -> Vec<(f64, bool)> {
             _ => (d, d.abs() > 360.0 + NEAR_DEG),
         })
         .collect();
-    if through_pole && steps.iter().any(|&(_, full)| full) {
+    // A ring through both poles could close its winding at either, an area apart by the whole
+    // globe's worth of sin ξ: no step is the right one there, so its steps stay as they are, the
+    // same from whichever vertex the ring starts.
+    let poles = ring.iter().filter(|c| at_pole(c.y)).map(|c| c.y.signum());
+    let one_pole = poles.clone().all(|s| s > 0.0) || poles.clone().all(|s| s < 0.0);
+    if through_pole && one_pole && steps.iter().any(|&(_, full)| full) {
         let turns = (steps.iter().map(|(d, _)| d).sum::<f64>() / 360.0).round();
         let first = (0..n).find(|&i| edge(i).is_some_and(|(a, b)| pole_sine(a.y, b.y).is_some_and(|s| s != 0.0)));
         if let Some(step) = first.and_then(|i| steps.get_mut(i))
@@ -1079,6 +1084,15 @@ mod tests {
         back.reverse();
         assert!((geodesic_ring_area_m2(&poles) - geodesic_ring_area_m2(&back)).abs() < 1.0);
         assert!((wgs84_ring_perimeter_area_m2(&poles).1 - wgs84_ring_perimeter_area_m2(&back).1).abs() < 1.0);
+        // A ring through both poles measures the same from whichever vertex it starts.
+        let both = [c(-180.0, -90.0), c(180.0, -90.0), c(-90.0, 90.0), c(90.0, 90.0)];
+        let (sphere0, wgs0) = (geodesic_ring_area_m2(&both), wgs84_ring_perimeter_area_m2(&both).1);
+        for k in 1..both.len() {
+            let mut turned = both.to_vec();
+            turned.rotate_left(k);
+            assert!((geodesic_ring_area_m2(&turned) - sphere0).abs() < 1.0, "{k}");
+            assert!((wgs84_ring_perimeter_area_m2(&turned).1 - wgs0).abs() < 1.0, "{k}");
+        }
         // A latitude that isn't finite next to a pole stays NaN.
         assert!(geodesic_ring_area_m2(&[c(0.0, f64::NAN), c(90.0, 90.0), c(180.0, 90.0)]).is_nan());
         assert!(geodesic_ring_area_m2(&[c(-180.0, f64::NAN), c(180.0, 80.0), c(180.0, 90.0), c(-180.0, 90.0)]).is_nan());
