@@ -100,8 +100,11 @@ fn report_table(s: &mut Session, path: &str, gpkg: &GpkgTable, default: &str, ta
     let asked = gpkg.name.as_deref().unwrap_or(default);
     if gpkg.mode == GpkgMode::NewFile && asked != table.table {
         let note = if asked.trim().is_empty() {
-            format!("{path}: wrote the table {}, as the layer has no name", table.table)
+            format!("{path}: wrote the table {}, as there was no name to give it", table.table)
         } else {
+            // Escaped: a control character in the name would otherwise reach the terminal.
+            let asked: String =
+                asked.chars().map(|c| if c.is_control() { c.escape_default().to_string() } else { c.to_string() }).collect();
             format!(
                 "{path}: wrote the table {} instead of '{asked}' (GeoPackage table names can't start with gpkg_, sqlite_ or rtree_, and lose control characters and edge spaces)",
                 table.table

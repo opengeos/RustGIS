@@ -15471,6 +15471,12 @@ fn a_new_geopackage_says_when_its_table_name_was_changed() {
     assert_eq!(out["table"].as_str(), Some("layer_gpkg_cities"), "{out}");
     assert!(both(&s, mark), "{:?}", s.notices_since(mark));
     s.run("layer.rename", &json!({"layer": "gpkg_cities", "name": "Cities"})).unwrap();
+    // A control character in the name asked for is dropped, and shown escaped in the notice.
+    let mark = s.notice_mark();
+    let path = dir.join("control.gpkg");
+    let out = s.run("share.exportLayer", &json!({"layer": "Cities", "path": path, "tableName": "road\nnetwork"})).unwrap();
+    assert_eq!(out["table"].as_str(), Some("roadnetwork"), "{out}");
+    assert!(s.notices_since(mark).iter().any(|n| n.text.contains("instead of 'road\\nnetwork'")), "{:?}", s.notices_since(mark));
     let mark = s.notice_mark();
     let path = dir.join("plain.gpkg");
     let out = s.run("share.exportLayer", &json!({"layer": "Cities", "path": path, "tableName": "towns"})).unwrap();
