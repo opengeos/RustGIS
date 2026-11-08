@@ -27,7 +27,7 @@ export says so. In a GeoTIFF,
 tiles still on their way when the export stops waiting, streamed layers still reading the view,
 and tile layers that can't be drawn leave gaps that would pass for data, so its export warns
 about them. The web app's Export Map downloads a PNG. A projection
-whose parameters GeoTIFF's keys can't hold (Mollweide or Robinson, for example) is refused too:
+whose parameters GeoTIFF's keys can't hold (Mollweide, for example) is refused too:
 switch the map to an EPSG projection first.
 
 **Print Map** opens a PDF of the map view, kept as

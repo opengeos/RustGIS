@@ -155,6 +155,10 @@ pub fn map_png_fitted(s: &mut Session, dpi: f64) -> Result<Vec<u8>, String> {
     let view = export_view(s.map().camera, s.view_size, None, None, Some(dpi));
     let fitted = fitted_dpi(&view, dpi, false);
     let png = map_png(s, None, None, Some(fitted.unwrap_or(dpi)))?;
+    // A view past 8000 points is cut to its middle, as Export Map's is: said too.
+    for (_, note) in size_notes("The map image", s.view_size, None, None) {
+        s.notify(note, false);
+    }
     if let Some(lower) = fitted {
         s.notify(
             format!("The map is drawn at {lower} DPI, the most an image of this view holds ({} pixels a side)", rustgis_render::MAX_SIDE),
@@ -432,16 +436,20 @@ fn geotiff_work(
             let mut r = placed_raster(&name, placed.pixmap, &view, crs)?;
             r.copyright = (!credits.is_empty()).then(|| credits.join(" | "));
             rustgis_data::progress::check().map_err(|e| e.to_string())?;
-            let bytes = if cog {
-                // Tiles go to the file as they are made.
+            let (bytes, tiled) = if cog {
+                // Tiles go to the file as they are made; its tiling is in the answer, as Export
+                // Raster gives it.
                 let c = rustgis_data::raster::cogwrite::write_file(&r, 0, Path::new(&path)).map_err(|e| format!("{path}: {e}"))?;
-                c.bytes
+                (c.bytes, Some(json!({"overviews": c.levels.len().saturating_sub(1), "bigTiff": c.big})))
             } else {
                 let bytes = rustgis_data::raster::geotiff::write(&r, 0).map_err(|e| format!("{path}: {e}"))?;
                 rustgis_data::io::write_atomic(Path::new(&path), &bytes).map_err(|e| format!("{path}: {e}"))?;
-                bytes.len() as u64
+                (bytes.len() as u64, None)
             };
             let mut out = json!({"path": path, "width": r.width, "height": r.height, "crs": crs.label(), "bytes": bytes});
+            if let Some(t) = tiled {
+                out["cog"] = t;
+            }
             if let Some(c) = &r.copyright {
                 out["copyright"] = json!(c);
                 if let Some(note) = rustgis_data::raster::tag_text_note(c) {

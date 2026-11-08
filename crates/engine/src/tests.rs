@@ -33150,6 +33150,8 @@ fn export_map_to_geotiff_places_the_view_on_the_ground() {
     let cog = dir.join("view-cog.tif");
     let out = s.run("share.exportMap", &json!({"path": cog.display().to_string(), "width": 400, "height": 300, "cog": true})).unwrap();
     assert!(out["bytes"].as_u64().unwrap() > 0);
+    // Written by the tiled writer: its tiling is in the answer, as Export Raster gives it.
+    assert!(out["cog"]["overviews"].is_u64(), "{out}");
     assert_eq!(read(&cog).width, 400);
     let png = dir.join("view.png");
     let e = s.run("share.exportMap", &json!({"path": png.display().to_string(), "cog": true})).unwrap_err();
@@ -33231,7 +33233,13 @@ fn export_map_to_geotiff_places_the_view_on_the_ground() {
     let n = s.notices.len();
     s.view_size = (400.0, 300.0);
     crate::cmd::share::map_png_fitted(&mut s, 192.0).unwrap();
-    assert!(!s.notices[n..].iter().any(|x| x.text.contains("DPI")));
+    assert!(!s.notices[n..].iter().any(|x| x.text.contains("DPI") || x.text.contains("cut")));
+    // A view past 8000 points is cut to its middle, and said.
+    s.view_size = (9000.0, 300.0);
+    let n = s.notices.len();
+    crate::cmd::share::map_png_fitted(&mut s, 96.0).unwrap();
+    assert!(s.notices[n..].iter().any(|x| x.text.contains("cut to its middle")), "{:?}", &s.notices[n..]);
+    s.view_size = (400.0, 300.0);
     let e = s.run("share.exportMap", &json!({"path": path.display().to_string(), "fit": "yes"})).unwrap_err();
     assert!(e.contains("fit must be true or false"), "{e}");
     // A size below 16 points, and a dpi outside 48 to 600, are drawn at the limit, and say so.
