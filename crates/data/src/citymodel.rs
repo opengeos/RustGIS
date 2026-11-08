@@ -499,7 +499,8 @@ pub(crate) struct ObjectRows {
 /// points that a transform took past the numbers [`usable_xy`] takes take the place of good ones.
 pub(crate) struct Highest<T> {
     drawable: bool,
-    /// Its parts' X and Y are all ones [`usable_xy`] takes.
+    /// Its parts' X and Y are all ones [`usable_xy`] takes: the parts kept share it, as they share
+    /// `drawable` and `rank`.
     usable: bool,
     rank: f64,
     lod: Option<String>,
@@ -634,17 +635,17 @@ pub(crate) fn object_rows(parts: ObjectParts, object: usize, counts: &mut Counts
     }
     let coords = |p: &[P3]| p.iter().map(|p| Coord::new(p[0], p[1])).collect::<Vec<_>>();
     let lines_lost = lines.lost_unusable();
-    let Highest { lod: line_lod, parts: lines, drawable: lines_draw, .. } = lines;
+    let Highest { lod: line_lod, parts: lines, drawable: lines_draw, usable: lines_usable, .. } = lines;
     if !lines.is_empty() {
-        let geometry = lines.iter().flatten().all(usable_xy).then(|| Geometry::Line(lines.iter().map(|l| coords(l)).collect()));
+        let geometry = lines_usable.then(|| Geometry::Line(lines.iter().map(|l| coords(l)).collect()));
         lost |= lines_lost && geometry.is_some();
         push(Family::Line, line_lod, geometry, heights_differ(lines.iter().flatten()), lines_draw);
     }
-    let Highest { lod: point_lod, parts: points, .. } = points;
+    let Highest { lod: point_lod, parts: points, usable: points_usable, .. } = points;
     counts.instances += points.iter().filter(|(_, instance)| *instance).count();
     let points: Vec<P3> = points.into_iter().map(|(p, _)| p).collect();
     if !points.is_empty() {
-        let geometry = points.iter().all(usable_xy).then(|| match points.as_slice() {
+        let geometry = points_usable.then(|| match points.as_slice() {
             [p] => Geometry::Point(Coord::new(p[0], p[1])),
             many => Geometry::MultiPoint(coords(many)),
         });

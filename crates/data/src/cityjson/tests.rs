@@ -1261,15 +1261,21 @@ fn a_line_lost_to_its_coordinates_is_said_when_what_is_kept_draws_nothing() {
 #[test]
 fn attributes_are_typed_by_every_value_in_their_layer() {
     let solid = json!([{"type": "Solid", "lod": "2", "boundaries": box_shell()}]);
+    // The same box on the vertices after the first eight.
+    let higher = json!([{"type": "Solid", "lod": "2", "boundaries": [[[[8, 11, 10, 9]], [[12, 13, 14, 15]], [[8, 9, 13, 12]]]]}]);
     let objects = json!({
         "a": {"type": "Building", "attributes": {"count": null, "share": 1, "mixed": 1, "flag": true, "nested": {"k": 1, "a": [2]},
             "big": 18446744073709551615_u64, "none": null, "exact": 1e300}, "geometry": solid},
-        "b": {"type": "Building", "attributes": {"count": 3, "share": 0.5, "mixed": "x", "flag": false, "big": 1, "exact": 0.1}, "geometry": solid},
+        "b": {"type": "Building", "attributes": {"count": 3, "share": 0.5, "mixed": "x", "flag": false, "big": 1, "exact": 0.1}, "geometry": higher},
     });
-    // From 2 to 9 high: each height its own value, so none can stand in another's place.
-    let out = read("m.city.json", &doc(Json::Array([square(2), square(9)].concat()), objects), None).unwrap();
+    // From 2 to 9 high and from 20 to 30: each height its own value, in each row, so none can stand
+    // in another's place.
+    let vertices = Json::Array([square(2), square(9), square(20), square(30)].concat());
+    let out = read("m.city.json", &doc(vertices, objects), None).unwrap();
     let ds = &out[0].0;
-    assert_eq!([value(ds, 0, "z_min"), value(ds, 0, "z_max"), value(ds, 0, "height")], [2.0, 9.0, 7.0].map(crate::Value::Float));
+    let heights = |row| [value(ds, row, "z_min"), value(ds, row, "z_max"), value(ds, row, "height")];
+    assert_eq!(heights(0), [2.0, 9.0, 7.0].map(crate::Value::Float));
+    assert_eq!(heights(1), [20.0, 30.0, 10.0].map(crate::Value::Float));
     let ty = |name: &str| ds.fields.iter().find(|f| f.name == name).map(|f| f.ty);
     assert_eq!(ty("count"), Some(crate::FieldType::Integer));
     assert_eq!(ty("share"), Some(crate::FieldType::Double));
@@ -1306,4 +1312,12 @@ fn a_line_starting_at_nan_is_said_when_lost() {
     let made = object_rows(parts, 0, &mut counts, &mut budget);
     assert_eq!(made.rows.first().and_then(|r| r.lod.as_deref()), Some("2"));
     assert_eq!((counts.unusable_lost, counts.no_footprint), (1, 0));
+    // With NaN and one point that is a number, it has no two points to draw from: nothing is lost.
+    let mut parts = ObjectParts::default();
+    parts.lines.add_lines(1.0, || Some("1".into()), vec![vec![[f64::NAN, 0.0, 0.0], [1.0, 0.0, 0.0], [f64::NAN, 5.0, 0.0]]]);
+    parts.lines.add_lines(2.0, || Some("2".into()), vec![vec![[0.0, 0.0, 0.0]]]);
+    let mut counts = Counts::default();
+    let made = object_rows(parts, 0, &mut counts, &mut budget);
+    assert_eq!(made.rows.first().and_then(|r| r.lod.as_deref()), Some("2"));
+    assert_eq!(counts.unusable_lost, 0);
 }
