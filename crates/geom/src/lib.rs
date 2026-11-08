@@ -673,7 +673,9 @@ fn authalic_q(lat_deg: f64) -> f64 {
 /// (Snyder 1987, eqs. 3-11 to 3-13), which is Green's theorem on the equal-area sphere. Along a
 /// parallel (no change of latitude) the integral is sin ξ × Δλ, in closed form; an edge that
 /// changes latitude is straight in longitude and latitude, integrated by Simpson's rule. Steps of
-/// longitude are [`ring_lon_steps`]': the short way, a full turn kept, a seam none.
+/// longitude are [`ring_lon_steps`]': the short way, a full turn kept, a seam none. A degenerate
+/// ring that winds past the whole surface (only possible through both poles) is reduced modulo
+/// the ellipsoid's area: a reduction, not a measurement, of a ring that bounds no single region.
 fn authalic_ring_area_m2(ring: &[Coord]) -> f64 {
     let a = WGS84_A;
     let q_pole = authalic_q(90.0);
@@ -782,7 +784,9 @@ pub fn geodesic_ring_area_m2(ring: &[Coord]) -> f64 {
     sphere_ring_area_m2(ring, steps.into_iter().map(|(d, _)| d), full)
 }
 
-/// [`geodesic_ring_area_m2`] with each edge's step in longitude (degrees) given. In a ring with a
+/// [`geodesic_ring_area_m2`] with each edge's step in longitude (degrees) given. A degenerate
+/// full-turn ring that winds past the whole surface (only possible through both poles) is reduced
+/// modulo the globe: a reduction, not a measurement, of a ring that bounds no single region. In a ring with a
 /// full turn (`full`), an edge to or from a pole takes its step at the pole ([`pole_sine`]), as the
 /// ellipsoid's [`authalic_ring_area_m2`] does; other rings keep each edge straight in longitude and
 /// latitude.

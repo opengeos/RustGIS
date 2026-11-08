@@ -3935,7 +3935,8 @@ fn ground_area_perimeter(g: &Geometry) -> (f64, f64) {
             // and an edge along the ±180° meridian (a split polygon) is that meridian (#1598).
             // A latitude beyond ±90° is no place: such a ring keeps the measure above, as one without
             // a full turn does, rather than the helper's, which would take it to the pole.
-            let valid = r.iter().all(|c| (-90.0..=90.0).contains(&c.y));
+            // A NaN latitude still goes to the helper, which gives NaN for it.
+            let valid = !r.iter().any(|c| c.y.abs() > 90.0);
             let (rp, ra) = if full_turn && valid { rustgis_geom::wgs84_ring_perimeter_area_m2(r) } else { (rp, ra) };
             a += if i == 0 { ra } else { -ra };
             per += rp;
