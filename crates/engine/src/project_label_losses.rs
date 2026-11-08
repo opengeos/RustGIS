@@ -167,6 +167,12 @@ fn count<'a>(
     messages
 }
 
+/// One notice per layer read whose diagram won't show for its aggregation or extrusion (#1596),
+/// as `layer.diagram` gives when it is set.
+fn hidden<'a>(layers: impl Iterator<Item = &'a rustgis_map::Layer>) -> impl Iterator<Item = (ReadPart, String)> {
+    layers.filter_map(crate::cmd::diagram::hidden_text).map(|m| (ReadPart::Diagrams, m))
+}
+
 /// The notices of the parts asked for.
 fn only(notices: Vec<(ReadPart, String)>, diagrams: bool) -> Vec<String> {
     notices.into_iter().filter(|(part, _)| diagrams || *part != ReadPart::Diagrams).map(|(_, m)| m).collect()
@@ -210,7 +216,9 @@ pub(super) fn notices(text: &str, project: &Project) -> Result<Vec<(ReadPart, St
         .flat_map(|m| &m.layers)
         .map(|l| &l.labels)
         .chain(project.styles.iter().map(|s| &s.labels));
-    Ok(count(raw, retained, &project.name, "the project"))
+    let mut notices = count(raw, retained, &project.name, "the project");
+    notices.extend(hidden(project.maps.iter().flat_map(|m| &m.layers)));
+    Ok(notices)
 }
 
 /// The same audit for a map file read on its own; unreadable label settings give no notice
@@ -218,11 +226,15 @@ pub(super) fn notices(text: &str, project: &Project) -> Result<Vec<(ReadPart, St
 /// (an import that takes the layers' diagrams).
 pub(crate) fn map_notices(text: &str, map: &rustgis_map::Map, diagrams: bool) -> Vec<String> {
     let Ok(raw) = serde_json::from_str::<Map>(text) else { return Vec::new() };
-    only(count(raw.layers.iter(), map.layers.iter().map(|l| &l.labels), &map.name, "the map file"), diagrams)
+    let mut notices = count(raw.layers.iter(), map.layers.iter().map(|l| &l.labels), &map.name, "the map file");
+    notices.extend(hidden(map.layers.iter()));
+    only(notices, diagrams)
 }
 
 /// The same audit for a layer file read on its own.
 pub(crate) fn layer_notices(text: &str, layer: &rustgis_map::Layer, diagrams: bool) -> Vec<String> {
     let Ok(raw) = serde_json::from_str::<Layer>(text) else { return Vec::new() };
-    only(count(std::iter::once(&raw), std::iter::once(&layer.labels), &layer.name, "the layer file"), diagrams)
+    let mut notices = count(std::iter::once(&raw), std::iter::once(&layer.labels), &layer.name, "the layer file");
+    notices.extend(hidden(std::iter::once(layer)));
+    only(notices, diagrams)
 }

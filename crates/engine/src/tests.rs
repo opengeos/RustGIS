@@ -34169,6 +34169,38 @@ fn a_diagram_that_wont_show_says_why() {
     assert!(said(&s, mark, "Countries", "on the globe"), "globe: {:?}", s.notices_since(mark));
 }
 
+/// A project or layer file opened with a diagram on aggregated points or extruded polygons says
+/// so once per such layer, as setting it does; one with plain diagrams says nothing of the kind
+/// (#1596).
+#[test]
+fn opening_a_diagram_that_wont_show_says_why() {
+    let about = |s: &Session| -> Vec<String> { s.notices.iter().map(|n| n.text.clone()).filter(|t| t.contains("its diagram")).collect() };
+    let mut s = world();
+    s.run("layer.diagram", &json!({"layer": "Cities", "kind": "pie", "fields": ["pop_max"], "size": 8})).unwrap();
+    s.run("layer.diagram", &json!({"layer": "Countries", "kind": "pie", "fields": ["pop_est"], "size": 8})).unwrap();
+    let clean = serde_json::to_string(&s.project).unwrap();
+    let quiet = Session::new(Project::from_json(&clean).unwrap());
+    assert!(about(&quiet).is_empty(), "{:?}", about(&quiet));
+    s.run("layer.aggregation", &json!({"layer": "Cities", "shape": "hexagon"})).unwrap();
+    s.run("layer.extrusion", &json!({"layer": "Countries", "type": "height", "height": 1000})).unwrap();
+    let hidden = serde_json::to_string(&s.project).unwrap();
+    let check = |said: Vec<String>| {
+        assert_eq!(said.len(), 2, "{said:?}");
+        assert!(said.iter().any(|t| t.contains("Layer 'Cities'") && t.contains("aggregated into bins")), "{said:?}");
+        assert!(said.iter().any(|t| t.contains("Layer 'Countries'") && t.contains("when a flat map is tilted")), "{said:?}");
+    };
+    check(about(&Session::new(Project::from_json(&hidden).unwrap())));
+    let mut reopened = Session::new(Project::default());
+    reopened.run("project.openText", &json!({"text": hidden})).unwrap();
+    check(about(&reopened));
+    // A layer file: one notice for its layer.
+    let cities = s.map().layer_by_name("Cities").map(|l| serde_json::to_string(l).unwrap()).unwrap();
+    let mut added = Session::new(Project::default());
+    crate::cmd::layer::add_layer_text(&mut added, &cities).unwrap();
+    let said = about(&added);
+    assert!(said.len() == 1 && said[0].contains("aggregated into bins"), "{said:?}");
+}
+
 #[test]
 fn bundled_ca_roots_are_said_once_a_session() {
     // #1591: a Linux system without CA certificates makes native HTTPS trust the bundled roots.
