@@ -517,5 +517,21 @@ mod tests {
         let mut reopened = Session::new(Project::default());
         reopened.run("project.openText", &json!({"text": v.to_string()})).unwrap();
         assert_eq!(reopened.notices.iter().filter(|n| n.text.contains("while opening the project")).count(), 4);
+        // The repairs are kept, not only reported.
+        for s in [&opened, &reopened] {
+            let columns = s.project.layouts[0].elements.iter().find_map(|e| match &e.kind {
+                rustgis_map::layout::ElementKind::Legend { columns, .. } => Some(*columns),
+                _ => None,
+            });
+            assert_eq!(columns, Some(rustgis_map::layout::MAX_LEGEND_COLUMNS));
+            let layer = s.map().layer(id).unwrap();
+            assert_eq!(layer.diagram.as_ref().map(|d| d.categories.len()), Some(3), "the blank category goes, the repeat stays");
+            assert!(s.map().layer(9999).unwrap().diagram.is_none());
+        }
+        // Importing its styles takes no diagrams or layouts, so says nothing of them.
+        let mut styled = Session::new(Project::default());
+        let mark = styled.notices.len();
+        styled.run("style.import", &json!({"text": v.to_string()})).unwrap();
+        assert!(styled.notices[mark..].iter().all(|n| !n.text.contains("diagram") && !n.text.contains("layout")));
     }
 }

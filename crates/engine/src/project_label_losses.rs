@@ -4,6 +4,7 @@
 use serde::Deserialize;
 
 use crate::Project;
+use crate::project::ReadPart;
 
 #[derive(Default)]
 struct MoveCount(usize);
@@ -131,7 +132,7 @@ fn count<'a>(
     retained: impl Iterator<Item = &'a rustgis_map::symbology::Labeling>,
     name: &str,
     what: &str,
-) -> Vec<String> {
+) -> Vec<(ReadPart, String)> {
     let (mut moves, mut callouts, mut flags) = (0usize, 0usize, 0usize);
     let mut diagrams = rustgis_map::diagram::DiagramAudit::default();
     for layer in raw {
@@ -159,8 +160,16 @@ fn count<'a>(
         messages
             .push(format!("{name}: {flags} \"show all labels\" setting(s) that were not true or false read as off while opening {what}"));
     }
-    diagram_messages(diagrams, name, what, &mut messages);
+    let mut messages: Vec<(ReadPart, String)> = messages.into_iter().map(|m| (ReadPart::Labels, m)).collect();
+    let mut found = Vec::new();
+    diagram_messages(diagrams, name, what, &mut found);
+    messages.extend(found.into_iter().map(|m| (ReadPart::Diagrams, m)));
     messages
+}
+
+/// The notices of the parts asked for.
+fn only(notices: Vec<(ReadPart, String)>, diagrams: bool) -> Vec<String> {
+    notices.into_iter().filter(|(part, _)| diagrams || *part != ReadPart::Diagrams).map(|(_, m)| m).collect()
 }
 
 /// One notice per kind of change reading the layers' diagrams made.
@@ -190,7 +199,7 @@ fn diagram_messages(d: rustgis_map::diagram::DiagramAudit, name: &str, what: &st
 }
 
 /// Compare raw record counts with retained state, including offline snapshots; one notice per kind.
-pub(super) fn notices(text: &str, project: &Project) -> Result<Vec<String>, String> {
+pub(super) fn notices(text: &str, project: &Project) -> Result<Vec<(ReadPart, String)>, String> {
     let file: File = serde_json::from_str(text).map_err(|e| format!("could not read project label settings: {e}"))?;
     let raw = file.maps.iter().chain(file.offline_areas.iter().map(|a| &a.data)).flat_map(|m| &m.layers).chain(file.styles.iter());
     let retained = project
@@ -204,14 +213,15 @@ pub(super) fn notices(text: &str, project: &Project) -> Result<Vec<String>, Stri
 }
 
 /// The same audit for a map file read on its own; unreadable label settings give no notice
-/// (the map itself was read, so its labels were too).
-pub(crate) fn map_notices(text: &str, map: &rustgis_map::Map) -> Vec<String> {
+/// (the map itself was read, so its labels were too). Diagram notices only with `diagrams`
+/// (an import that takes the layers' diagrams).
+pub(crate) fn map_notices(text: &str, map: &rustgis_map::Map, diagrams: bool) -> Vec<String> {
     let Ok(raw) = serde_json::from_str::<Map>(text) else { return Vec::new() };
-    count(raw.layers.iter(), map.layers.iter().map(|l| &l.labels), &map.name, "the map file")
+    only(count(raw.layers.iter(), map.layers.iter().map(|l| &l.labels), &map.name, "the map file"), diagrams)
 }
 
 /// The same audit for a layer file read on its own.
-pub(crate) fn layer_notices(text: &str, layer: &rustgis_map::Layer) -> Vec<String> {
+pub(crate) fn layer_notices(text: &str, layer: &rustgis_map::Layer, diagrams: bool) -> Vec<String> {
     let Ok(raw) = serde_json::from_str::<Layer>(text) else { return Vec::new() };
-    count(std::iter::once(&raw), std::iter::once(&layer.labels), &layer.name, "the layer file")
+    only(count(std::iter::once(&raw), std::iter::once(&layer.labels), &layer.name, "the layer file"), diagrams)
 }

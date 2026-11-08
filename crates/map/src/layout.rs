@@ -1293,7 +1293,15 @@ impl Layout {
         let mut next = self.elements.iter().map(|e| e.id).filter(|id| *id <= MAX_ID).max().unwrap_or(0).saturating_add(1);
         let mut changed = Vec::with_capacity(self.elements.len());
         for e in &mut self.elements {
-            let before = e.clone();
+            // A picture's image (often large) is never changed here, so it isn't copied.
+            let before = Element {
+                name: e.name.clone(),
+                kind: match &e.kind {
+                    ElementKind::Picture { .. } => ElementKind::Picture { image: String::new() },
+                    kind => kind.clone(),
+                },
+                ..*e
+            };
             // Ids stay well below u32::MAX so new elements never run out of numbers. A repeated id
             // (only a hand-edited file has one) is renumbered; references to it keep meaning the
             // first element with that id, as they did when the file was written.
@@ -1357,7 +1365,12 @@ impl Layout {
                 ElementKind::Line { width, .. } => *width = finite_or(*width, 1.0).clamp(0.1, 50.0),
                 _ => {}
             }
-            changed.push(*e != before);
+            let kind_changed = !matches!(e.kind, ElementKind::Picture { .. }) && e.kind != before.kind;
+            changed.push(
+                kind_changed
+                    || (e.id, &e.name, e.x, e.y, e.w, e.h, e.visible, e.locked)
+                        != (before.id, &before.name, before.x, before.y, before.w, before.h, before.visible, before.locked),
+            );
         }
         self.next_id = next;
         // References must point at map frames that exist.

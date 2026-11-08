@@ -200,9 +200,9 @@ pub(crate) fn public_login_params(value: &serde_json::Value) -> Option<serde_jso
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Project {
-    /// Read-time label adjustments, consumed by the session and never saved.
+    /// Read-time adjustments (labels, diagrams, layouts), consumed by the session and never saved.
     #[serde(skip)]
-    pub(crate) read_notices: Vec<String>,
+    pub(crate) read_notices: Vec<(ReadPart, String)>,
     /// The format read from disk; serialization always declares the current writer's format.
     #[serde(default = "format", serialize_with = "write_format")]
     pub format: u32,
@@ -728,6 +728,12 @@ impl Project {
         id
     }
 
+    /// Takes the notices of what reading the project changed, keeping those of the parts given
+    /// (an import says only what it takes); the rest are dropped.
+    pub(crate) fn take_read_notices(&mut self, parts: &[ReadPart]) -> Vec<String> {
+        std::mem::take(&mut self.read_notices).into_iter().filter(|(part, _)| parts.contains(part)).map(|(_, n)| n).collect()
+    }
+
     /// Repairs invariants after loading (at least one map; a valid active index).
     pub fn normalize(&mut self) {
         let _ = self.repair(false);
@@ -1087,7 +1093,7 @@ impl Project {
         }
         let layout_notices = if normalize { p.normalize_opened() } else { Vec::new() };
         p.read_notices = label_losses::notices(text, &p)?;
-        p.read_notices.extend(layout_notices);
+        p.read_notices.extend(layout_notices.into_iter().map(|n| (ReadPart::Layouts, n)));
         Ok(p)
     }
 
@@ -1161,6 +1167,17 @@ fn empty_map() -> &'static Map {
 /// Most reports, presentations and notebooks a project file may hold.
 pub const MAX_ITEMS: usize = 1000;
 
+/// The part of a project a read notice is about, so an import says only what it takes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ReadPart {
+    Labels,
+    Diagrams,
+    Layouts,
+}
+
+/// Every part: a whole project opened.
+pub(crate) const ALL_PARTS: [ReadPart; 3] = [ReadPart::Labels, ReadPart::Diagrams, ReadPart::Layouts];
+
 /// The most layouts a project keeps.
 const MAX_LAYOUTS: usize = 200;
 
@@ -1170,7 +1187,16 @@ fn layout_names(
     of: impl Fn(&rustgis_map::layout::LayoutRepairs) -> usize,
 ) -> String {
     let names: Vec<&str> = repairs.iter().filter(|(_, r)| of(r) > 0).map(|(n, _)| n.as_str()).collect();
-    let mut text = names.iter().take(3).map(|n| format!("\"{n}\"")).collect::<Vec<_>>().join(", ");
+    // A name is cut to 100 characters, so a long one can't crowd out the count.
+    let mut text = names
+        .iter()
+        .take(3)
+        .map(|n| match n.char_indices().nth(100) {
+            Some((i, _)) => format!("\"{}…\"", n.get(..i).unwrap_or_default()),
+            None => format!("\"{n}\""),
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
     if names.len() > 3 {
         text.push_str(&format!(" and {} more", names.len() - 3));
     }
