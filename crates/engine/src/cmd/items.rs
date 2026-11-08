@@ -665,13 +665,13 @@ fn package_project(s: &mut Session) -> Result<Vec<u8>, String> {
         *m = embedded_map(m, &mut budget);
     }
     let name = p.name.clone();
-    let (text, report) = crate::durable::output_owned(p, |p| serde_json::to_string(p).map_err(|e| e.to_string()))?;
-    crate::durable::notify(s, &report);
-    let limit = crate::project::max_bytes().min(rustgis_data::zip::MAX_TOTAL as u64);
-    if text.len() as u64 > limit {
-        return Err(format!("the project is too large to package (maximum {} MiB)", limit >> 20));
-    }
     let readme = format!("{} — a RustGIS project package.\nOpen it with RustGIS (Project › Open), or unzip it for {}.rgis.\n", name, name);
+    // The package as unzipped, the README with it, within what a zip and a project may hold.
+    let limit = crate::project::max_bytes().min(rustgis_data::zip::MAX_TOTAL as u64);
+    let room = limit.saturating_sub(readme.len() as u64);
+    let too_large = || format!("the project is too large to package (maximum {} MiB)", limit >> 20);
+    let (text, report) = crate::durable::output_owned(p, |p| crate::project::json_within(p, room)?.ok_or_else(too_large))?;
+    crate::durable::notify(s, &report);
     rustgis_data::zip::write(&[
         (format!("{}.{}", safe(&name), crate::project::EXTENSION), text.into_bytes()),
         ("README.txt".into(), readme.into_bytes()),

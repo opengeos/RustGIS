@@ -63,11 +63,16 @@ pub const BYTES_FLOOR: u64 = 512 << 20;
 /// The most [`max_bytes`] grows to, however much memory the computer has (4 GiB).
 pub const BYTES_CEILING: u64 = 4 << 30;
 
-/// The memory an open project takes for each byte of its file. Measured at about 2: a 337 MiB
-/// project of four GeoJSON layers (240,000 polygons) took 731 MiB to open in the command line, and
-/// 576 MiB more than an empty app to open and draw. Planned at 4, for the recovery copy written
-/// while it is open and for data heavier to hold than to write.
-const MEMORY_PER_BYTE: u64 = 4;
+/// The memory an open project takes for each byte of its file, as measured opening projects of
+/// GeoJSON layers from the command line:
+/// - polygons of 40 vertices and 8 attributes: about 2 (337 MiB took 731 MiB; 674 MiB, 1.41 GiB;
+///   the app took 576 MiB more than empty to open and draw the first);
+/// - points with 12 short text attributes: about 4.4 (101 MiB took 449 MiB);
+/// - points with 30 one-letter attributes, about the most a byte of file costs: about 5.2
+///   (87 MiB took 453 MiB).
+///
+/// Planned at 6, above the most measured.
+const MEMORY_PER_BYTE: u64 = 6;
 
 /// Largest project file read or saved on this computer (#1615): on the desktop as much as a
 /// quarter of its memory holds open at [`MEMORY_PER_BYTE`] a byte, from [`BYTES_FLOOR`] up to
@@ -82,10 +87,39 @@ pub fn max_bytes() -> u64 {
     max_bytes_for(rustgis_data::memory::physical())
 }
 
-/// [`max_bytes`] on a computer with `memory` bytes (`None`: not known).
+/// [`max_bytes`] on a computer with `memory` bytes (`None`: not known), as
+/// [`rustgis_data::memory::scaled`] works it out, in `u64` so it is the same on a 32-bit build.
 fn max_bytes_for(memory: Option<u64>) -> u64 {
-    let (floor, ceiling) = (usize::try_from(BYTES_FLOOR).unwrap_or(usize::MAX), usize::try_from(BYTES_CEILING).unwrap_or(usize::MAX));
-    rustgis_data::memory::scaled(memory, floor, ceiling, MEMORY_PER_BYTE) as u64
+    memory.map_or(BYTES_FLOOR, |m| (m / rustgis_data::memory::SHARE / MEMORY_PER_BYTE).clamp(BYTES_FLOOR, BYTES_CEILING))
+}
+
+/// `value` as JSON text, or `None` as soon as it passes `max` bytes: the text of a project too
+/// large to keep is never built whole, only up to the limit.
+pub(crate) fn json_within<T: Serialize + ?Sized>(value: &T, max: u64) -> Result<Option<String>, String> {
+    struct Capped {
+        buf: Vec<u8>,
+        max: usize,
+        over: bool,
+    }
+    impl std::io::Write for Capped {
+        fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+            if self.buf.len().saturating_add(b.len()) > self.max {
+                self.over = true;
+                return Err(std::io::Error::other("past the limit"));
+            }
+            self.buf.extend_from_slice(b);
+            Ok(b.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut w = Capped { buf: Vec::new(), max: usize::try_from(max).unwrap_or(usize::MAX), over: false };
+    match serde_json::to_writer(&mut w, value) {
+        Ok(()) => String::from_utf8(w.buf).map(Some).map_err(|e| e.to_string()),
+        Err(_) if w.over => Ok(None),
+        Err(e) => Err(e.to_string()),
+    }
 }
 
 /// The limit as a refusal says it: in MiB and, where it follows the computer's memory, that it
@@ -1437,12 +1471,8 @@ impl Durable for ModelGraph {
 
 /// Enforces the opening bound inside the formatter, before any destination is replaced.
 fn project_text(p: &Project) -> Result<String, String> {
-    let text = serde_json::to_string(p).map_err(|e| e.to_string())?;
     let max = max_bytes();
-    if text.len() as u64 > max {
-        return Err(format!("the project is too large to save (maximum {})", limit_said(max)));
-    }
-    Ok(text)
+    json_within(p, max)?.ok_or_else(|| format!("the project is too large to save (maximum {})", limit_said(max)))
 }
 
 #[cfg(test)]
@@ -1451,20 +1481,30 @@ mod limit_tests {
 
     const GIB: u64 = 1 << 30;
 
-    /// A quarter of the memory, at 4 bytes a byte of project: a sixteenth of it, from 512 MiB to
-    /// 4 GiB; 512 MiB where the memory isn't known (the browser).
+    /// A quarter of the memory, at 6 bytes a byte of project: a twenty-fourth of it, from 512 MiB
+    /// to 4 GiB; 512 MiB where the memory isn't known (the browser).
     #[test]
     fn the_project_limit_follows_the_memory() {
         assert_eq!(max_bytes_for(None), BYTES_FLOOR);
-        assert_eq!(max_bytes_for(Some(4 * GIB)), BYTES_FLOOR, "never below the floor");
-        assert_eq!(max_bytes_for(Some(8 * GIB)), 512 << 20);
-        assert_eq!(max_bytes_for(Some(16 * GIB)), GIB);
-        assert_eq!(max_bytes_for(Some(64 * GIB)), 4 * GIB);
+        assert_eq!(max_bytes_for(Some(8 * GIB)), BYTES_FLOOR, "never below the floor");
+        assert_eq!(max_bytes_for(Some(16 * GIB)), 16 * GIB / 24);
+        assert_eq!(max_bytes_for(Some(64 * GIB)), 64 * GIB / 24);
+        assert_eq!(max_bytes_for(Some(96 * GIB)), 4 * GIB);
         assert_eq!(max_bytes_for(Some(1024 * GIB)), BYTES_CEILING, "never above the ceiling");
-        // The 659 MiB project of #1615 opens on a computer with 12 GiB.
-        assert!(max_bytes_for(Some(12 * GIB)) > 659 << 20);
+        assert_eq!(max_bytes_for(Some(u64::MAX)), BYTES_CEILING, "no overflow");
+        // The 659 MiB project of #1615 opens on a computer with 16 GiB.
+        assert!(max_bytes_for(Some(16 * GIB)) > 659 << 20);
         let max = max_bytes();
         assert!((BYTES_FLOOR..=BYTES_CEILING).contains(&max), "{max}");
+    }
+
+    /// The text stops at the limit: whole within it, none past it, never built past it.
+    #[test]
+    fn json_is_never_built_past_the_limit() {
+        let v = serde_json::json!({"a": "x".repeat(100)});
+        let whole = serde_json::to_string(&v).unwrap_or_default();
+        assert_eq!(json_within(&v, whole.len() as u64).ok().flatten(), Some(whole.clone()));
+        assert_eq!(json_within(&v, whole.len() as u64 - 1).ok(), Some(None));
     }
 }
 
