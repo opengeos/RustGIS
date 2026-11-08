@@ -505,6 +505,10 @@ fn wgs84_parallel_m(lat_deg: f64, dlon_deg: f64) -> f64 {
 /// Longitudes closer than this (degrees, about 0.1 mm) are the same, for [`ring_lon_steps`].
 const SAME_DEG: f64 = 1e-9;
 
+/// The two ends of a 360° edge this close in latitude (degrees, about 0.1 m) are on one parallel,
+/// for [`ring_lon_steps`]: a band written with rounded latitudes keeps its full turns.
+const PARALLEL_DEG: f64 = 1e-6;
+
 /// Each edge of a lon/lat ring, closed back to its first vertex, as its step in longitude
 /// (degrees) and whether that step is a full turn around the globe.
 ///
@@ -525,7 +529,8 @@ const SAME_DEG: f64 = 1e-9;
 /// band, a cap and the whole globe keep their full turns, and a 1° cell with vertices at 180° and
 /// -180° is the cell. And the full turns must not make the ring wind further round the globe than
 /// it does with them as seams (see below). A seam's step is 0. Steps of more than a full turn
-/// (longitudes beyond ±180°) are kept as written, as full turns, under the same condition.
+/// (longitudes beyond ±180°, which no antimeridian split writes) are always kept as written, as
+/// full turns, as before.
 fn ring_lon_steps(ring: &[Coord]) -> Vec<(f64, bool)> {
     let n = ring.len();
     let raw: Vec<f64> = (0..n).map(|i| ring.get((i + 1) % n).zip(ring.get(i)).map_or(0.0, |(b, a)| b.x - a.x)).collect();
@@ -555,7 +560,7 @@ fn ring_lon_steps(ring: &[Coord]) -> Vec<(f64, bool)> {
                 return (d, Some(d));
             }
             let (Some(p), Some(r)) = (ring.get(i), ring.get((i + 1) % n)) else { return (0.0, None) };
-            let along_parallel = (r.y - p.y).abs() <= SAME_DEG;
+            let along_parallel = (r.y - p.y).abs() <= PARALLEL_DEG;
             let full = along_parallel && !moves(neighbour(i, n - 1)) && !moves(neighbour(i, 1));
             (0.0, full.then_some(d))
         })
@@ -952,6 +957,11 @@ mod tests {
                 assert!((geodesic_ring_perimeter_m(&ring) / sphere - 1.0).abs() < 1e-9);
             }
         }
+        // A band whose latitudes were rounded to 7 decimals at one end of a full turn is the band.
+        let rounded = [c(-180.0, -10.0), c(180.0, -10.000_000_1), c(180.0, 10.0), c(-180.0, 10.0)];
+        let (perimeter, area) = wgs84_ring_perimeter_area_m2(&rounded);
+        assert!((area / BAND_10_M2 - 1.0).abs() < 1e-6, "{area}");
+        assert!((perimeter / BAND_10_PERIMETER_M - 1.0).abs() < 1e-6, "{perimeter}");
         // GeographicLib's measure of a ring wholly on one side of the antimeridian.
         let reference = |ring: &[Coord]| {
             let mut polygon = PolygonArea::new(&WGS84, Winding::Clockwise);
