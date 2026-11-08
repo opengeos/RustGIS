@@ -47,7 +47,7 @@ pub fn commands() -> Vec<C> {
         C::new("layer.addEncodedPolyline", "Add Encoded Polyline", "Home › Add", add_encoded_polyline).roles(&[]).effects(crate::policy::Effects::NONE).params(
             r#"{"polyline": "encoded polyline text" | [texts] (one line each), "precision"?: 5 (Google) | 6 (OSRM, Valhalla), "name"?: text}"#,
         ),
-        C::new("layer.addDataText", "Add Data (from text)", "Home › Add", add_data_text).roles(&[]).effects(crate::policy::Effects::NONE).params(r#"{"fileName": "name.geojson|.csv|.tsv", "text": string, "name"?: text, "x"?, "y"?, "wkt"?, "crs"?, "delimiter"? (as layer.addData, for delimited text), "layer"?, "paperSpace"? (as layer.addData, for a file of several layers)}"#),
+        C::new("layer.addDataText", "Add Data (from text)", "Home › Add", add_data_text).roles(&[]).effects(crate::policy::Effects::NONE).params(r#"{"fileName": "name.geojson|.csv|.tsv|.city.json (CityJSON: all its layers)", "text": string, "name"?: text, "x"?, "y"?, "wkt"?, "crs"?, "delimiter"? (as layer.addData, for delimited text; crs also for a CityJSON model that doesn't say), "layer"?, "paperSpace"? (as layer.addData, for a file of several layers)}"#),
         C::new("layer.addSample", "Add Sample Data", "Home › Add › Add Data", add_sample).roles(&[]).effects(crate::policy::Effects::NONE).params(r#"{"name": "countries"|"cities"|"rivers"|"lakes"}"#),
         C::new("layer.remove", "Remove", "Layers", remove).roles(&[]).effects(crate::policy::Effects::NONE)
             .key("Delete")
@@ -1764,7 +1764,8 @@ fn ground_overlays(s: &mut Session, file_name: &str, bytes: &[u8]) -> Vec<(Strin
     let dir = Path::new(file_name).parent().filter(|d| d.is_absolute());
     for (g, picture) in found {
         let href = g.href.trim();
-        let picture = picture.or_else(|| {
+        // `Err(None)`: not in the file or beside it; `Err(Some(why))`: beside it but unreadable.
+        let picture = picture.ok_or(None::<String>).or_else(|_| {
             // Beside the document: no web addresses, absolute paths or climbing out of its folder.
             let rel = Path::new(href);
             let safe = !href.contains("://")
@@ -1773,14 +1774,29 @@ fn ground_overlays(s: &mut Session, file_name: &str, bytes: &[u8]) -> Vec<(Strin
                     // Windows too (`C:x`, `\\x`).
                     && rel.components().all(|c| matches!(c, std::path::Component::Normal(_) | std::path::Component::CurDir));
             if !safe {
-                return None;
+                return Err(None);
             }
-            let p = dir?.join(rel);
-            crate::project::read_file(&p, (256 << 20) - 1).ok()
+            let p = dir.ok_or(None)?.join(rel);
+            // Only a missing picture isn't beside it; one that can't be looked at says why.
+            // (Followed as the read follows it: a link to nothing is missing too.)
+            match std::fs::metadata(&p) {
+                Ok(_) => {}
+                // (A file named as a folder on its way, `a.png/b.png`, isn't beside it either.)
+                Err(e) if matches!(e.kind(), std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory) => return Err(None),
+                Err(e) => return Err(Some(e.to_string())),
+            }
+            crate::project::read_file(&p, (256 << 20) - 1).map_err(Some)
         });
-        let Some(picture) = picture else {
-            notes.push(format!("{} (its picture {href} isn't in the file or beside it)", g.name));
-            continue;
+        let picture = match picture {
+            Ok(p) => p,
+            Err(None) => {
+                notes.push(format!("{} (its picture {href} isn't in the file or beside it)", g.name));
+                continue;
+            }
+            Err(Some(why)) => {
+                notes.push(format!("{} (its picture {href} can't be read: {why})", g.name));
+                continue;
+            }
         };
         match rustgis_data::raster::from_image(&g.name, &picture, g.bbox, g.rotation) {
             Ok(r) => out.push((g.name.clone(), r)),
@@ -3230,10 +3246,10 @@ fn add_url_as_given(s: &mut Session, p: &Value) -> CmdResult {
             .and_then(Value::as_u64)
             .is_some_and(|id| u32::try_from(id).ok().and_then(|id| s.map().layer(id)).is_none());
         if missing || added.gone(s.map()) {
-            return Err(format!("{url}: the layer its download added was taken away (undone) before the command ran again"));
+            return Err(format!("{url}: the layer its download added was removed or undone before the command ran again"));
         }
         if super::plugins::fetch::table_gone(&answer, &s.project) {
-            return Err(format!("{url}: the table its download added was taken away (undone) before the command ran again"));
+            return Err(format!("{url}: the table its download added was removed or undone before the command ran again"));
         }
         return added.answer_now(s.map(), &answer);
     }
