@@ -31732,6 +31732,13 @@ fn background_raster_function_says_unread_keep() {
     let p = json!({"layer": dem, "function": "remap", "ranges": [[0, 300, 1]], "keep": "auto"});
     raster_start(&mut s, "raster.function", &p).unwrap();
     assert_eq!(said(&s), 1, "{:?}", s.notices.last());
+    let notice = s.notices.iter().rev().find(|n| n.text.contains("keep = \"auto\"")).unwrap().clone();
+    let records = s.diagnostics.records();
+    assert!(records.iter().any(|r| r.message == notice.text && r.source == "raster.function"), "{records:?}");
+    // Each step of a chain, likewise.
+    let chain = json!({"layer": dem, "steps": [{"function": "slope", "keep": "auto"}, {"function": "remap", "ranges": [[0, 90, 1]], "keep": "auto"}]});
+    raster_start(&mut s, "raster.functionChain", &chain).unwrap();
+    assert_eq!(said(&s), 2, "{:?}", s.notices.last());
 }
 
 /// Viewshed and Interpolate made on another thread, as the Analysis pane runs them (#1291 step 3):

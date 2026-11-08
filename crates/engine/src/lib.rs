@@ -1467,9 +1467,7 @@ impl Session {
             let (at, start) = (project_log::now_ms(), web_time::Instant::now());
             #[cfg(not(target_arch = "wasm32"))]
             let files_before: Vec<String> = self.mbtiles_files().map(str::to_string).collect();
-            cmd::clear_unread_bools();
-            let res = run(self);
-            self.say_unread_bools();
+            let res = self.with_unread_bools(source, run);
             // Whichever command took its last layer away (removed, undone, the project closed):
             // the file can now be moved or replaced, so what was read of it is forgotten too.
             #[cfg(not(target_arch = "wasm32"))]
@@ -2080,12 +2078,19 @@ impl Session {
         self.notice(text.into(), if error { Severity::Error } else { Severity::Info });
     }
 
-    /// Says the true/false parameters the command (or the background work it prepared) just
-    /// read could not read: text taken as false, other values ignored (#1600).
-    pub(crate) fn say_unread_bools(&mut self) {
-        if let Some(text) = cmd::take_unread_bools() {
+    /// Runs `f`, then says the true/false parameters it could not read: text taken as false,
+    /// other values ignored (#1600), as `source`'s notice. Inside another such run (a command's
+    /// script, a command run by a command) they are left for the outer one to say.
+    pub(crate) fn with_unread_bools<T>(&mut self, source: Option<&'static str>, f: impl FnOnce(&mut Self) -> T) -> T {
+        let scope = cmd::UnreadBoolsScope::open();
+        let r = f(self);
+        if let Some(text) = scope.close() {
+            let said_by = source.or(self.diagnostic_source);
+            let previous = std::mem::replace(&mut self.diagnostic_source, said_by);
             self.warn(text);
+            self.diagnostic_source = previous;
         }
+        r
     }
 
     /// A nonfatal problem: existing notice consumers still see it as a non-error, while

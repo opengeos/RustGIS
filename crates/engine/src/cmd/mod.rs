@@ -183,10 +183,12 @@ const MAX_UNREAD_BOOL_TEXT: usize = 40;
 /// The true/false parameters the running command could not read: each distinct parameter and
 /// value (by a hash of both) with what the notice says of it, then the hashes of those past
 /// [`MAX_UNREAD_BOOLS`], counted once each.
+/// `open` counts the [`UnreadBoolsScope`]s open, so only the outermost one says them.
 #[derive(Default)]
 struct UnreadBools {
     named: Vec<(u64, String)>,
     more: Vec<u64>,
+    open: u32,
 }
 
 thread_local! {
@@ -269,12 +271,54 @@ pub(crate) fn settle_bool(p: &mut Value, k: &str) {
 
 /// Forgets unread true/false parameters left from outside a command.
 pub(crate) fn clear_unread_bools() {
-    UNREAD_BOOLS.with(|u| *u.borrow_mut() = UnreadBools::default());
+    UNREAD_BOOLS.with(|u| {
+        let mut u = u.borrow_mut();
+        *u = UnreadBools { open: u.open, ..UnreadBools::default() };
+    });
+}
+
+/// A stretch of work (a command, a script, a background start) whose unread true/false
+/// parameters are said together when it ends: opened by [`UnreadBoolsScope::open`]; only the
+/// outermost one collects and says them, so one opened inside another changes nothing. Dropping
+/// it (a panic included) closes it.
+pub(crate) struct UnreadBoolsScope {
+    outermost: bool,
+}
+
+impl UnreadBoolsScope {
+    pub(crate) fn open() -> Self {
+        let outermost = UNREAD_BOOLS.with(|u| {
+            let mut u = u.borrow_mut();
+            u.open = u.open.saturating_add(1);
+            u.open == 1
+        });
+        if outermost {
+            clear_unread_bools();
+        }
+        Self { outermost }
+    }
+
+    /// Closes it: the notice for what it couldn't read when it is the outermost one.
+    pub(crate) fn close(self) -> Option<String> {
+        if self.outermost { take_unread_bools() } else { None }
+    }
+}
+
+impl Drop for UnreadBoolsScope {
+    fn drop(&mut self) {
+        UNREAD_BOOLS.with(|u| {
+            let mut u = u.borrow_mut();
+            u.open = u.open.saturating_sub(1);
+        });
+    }
 }
 
 /// The notice for the true/false parameters the command just run could not read, if any.
 pub(crate) fn take_unread_bools() -> Option<String> {
-    let UnreadBools { named, more } = UNREAD_BOOLS.with(|u| std::mem::take(&mut *u.borrow_mut()));
+    let (named, more) = UNREAD_BOOLS.with(|u| {
+        let mut u = u.borrow_mut();
+        (std::mem::take(&mut u.named), std::mem::take(&mut u.more))
+    });
     if named.is_empty() {
         return None;
     }
