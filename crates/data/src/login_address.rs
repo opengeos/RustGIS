@@ -122,10 +122,14 @@ fn authority_origin(url: &str) -> Option<String> {
     raw_origin(url.get(..scheme.len() + 3 + end)?)
 }
 
-/// A URL whose path, query or fragment holds whitespace, controls or backslashes, written the
-/// way a WHATWG URL parser (browsers, the `url` crate) sends it: trailing spaces and controls,
-/// tabs and line breaks are dropped, a backslash before the query is a `/`, and the rest are
-/// percent-encoded. Only called once the authority is known to be clean, which this keeps.
+/// A URL whose path, query or fragment holds whitespace, controls or backslashes, rewritten only
+/// in those characters so the bound wrapper accepts it: trailing spaces and controls, tabs and
+/// line breaks are dropped and a backslash in the path is a `/` (as a WHATWG URL parser such as
+/// the `url` crate does on sending); other whitespace, controls and a backslash in the query or
+/// fragment are percent-encoded (WHATWG sends a query backslash raw, which the wrapper refuses).
+/// Other characters, template braces included, are left as they are; the HTTP client encodes
+/// them as it would for any address. Only called once the authority is known to be clean,
+/// which this keeps.
 fn as_sent(url: &str) -> String {
     let url = url.trim_end_matches(|c: char| c <= ' ');
     let mut out = String::with_capacity(url.len());
