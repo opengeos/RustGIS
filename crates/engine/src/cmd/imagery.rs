@@ -278,6 +278,7 @@ fn georeference(s: &mut Session, p: &Value) -> CmdResult {
     let mut out = rebuild(&r, gt, Crs::LonLat, copied(&r)?)?;
     // The same pixels, so the same values rounded when the file was read.
     out.rounded = r.rounded.clone();
+    out.rounded_some = r.rounded_some.clone();
     let e = out.extent();
     let v = replace(s, &layer, out)?;
     Ok(json!({"layer": v["layer"], "extent": [e.min_x, e.min_y, e.max_x, e.max_y]}))
@@ -1380,6 +1381,8 @@ fn clip_window(
     let gt = GeoTransform { origin_x: o.x, origin_y: o.y, ..r.transform };
     let mut out = Raster::new(name, w, h, bands, gt, r.crs, nodata, r.color.clone(), r.data_type.clone()).map_err(|e| e.to_string())?;
     out.bands.iter_mut().zip(&r.bands).for_each(|(o, i)| o.name = i.name.clone());
+    // Some of the values rounded when the file was read may be in the window: how many isn't known.
+    out.keep_rounded_mark(r);
     Ok(out)
 }
 
@@ -1470,6 +1473,8 @@ fn edit_pixels(s: &mut Session, p: &Value) -> CmdResult {
     let mut out = Raster::new(r.name.clone(), r.width, r.height, bands, r.transform, r.crs, nodata, r.color.clone(), r.data_type.clone())
         .map_err(|e| e.to_string())?;
     out.bands.iter_mut().zip(&r.bands).for_each(|(o, i)| o.name = i.name.clone());
+    // The edit may have overwritten some of the values rounded when the file was read.
+    out.keep_rounded_mark(&r);
     replace(s, &layer, out)?;
     Ok(json!({"pixels": n}))
 }
