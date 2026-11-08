@@ -103,6 +103,12 @@ fn ceiling() -> u64 {
     if usize::BITS >= 64 { BYTES_CEILING } else { BYTES_FLOOR }
 }
 
+/// The memory a 64-bit build needs for [`max_bytes`] to reach `bytes`: the inverse of
+/// [`max_bytes_for`] above the floor.
+fn memory_for(bytes: u64) -> u64 {
+    bytes.saturating_mul(rustgis_data::memory::SHARE).saturating_mul(MEMORY_PER_BYTE)
+}
+
 /// `value` as JSON text, or `None` as soon as it passes `max` bytes: the text of a project too
 /// large to keep is never built whole, only up to the limit.
 pub(crate) fn json_within<T: Serialize + ?Sized>(value: &T, max: u64) -> Result<Option<String>, String> {
@@ -137,7 +143,8 @@ pub(crate) fn json_within<T: Serialize + ?Sized>(value: &T, max: u64) -> Result<
 /// The limit as a refusal says it: in MiB and, where it follows the computer's memory, that it
 /// does, so a project refused here but opened elsewhere is understood.
 pub fn limit_said(max: u64) -> String {
-    if rustgis_data::memory::physical().is_some() {
+    // A 32-bit build keeps the floor whatever the memory: its limit doesn't follow it.
+    if rustgis_data::memory::physical().is_some() && ceiling() > BYTES_FLOOR {
         format!("{} MiB on this computer, a limit that follows its memory", max >> 20)
     } else {
         format!("{} MiB", max >> 20)
@@ -1126,12 +1133,12 @@ impl Project {
     pub fn recovery_text_with_report(mut self) -> Result<(String, crate::durable::Report), String> {
         self.omit_pending_imports();
         let unrecorded = self.bound_address_losses(false);
-        let (text, mut report) = crate::durable::output_owned(self, project_text)?;
+        // Refused as a recovery copy, not as a save, and never built past the limit.
+        let (text, mut report) = crate::durable::output_owned(self, |p| {
+            let max = max_bytes();
+            json_within(p, max)?.ok_or_else(|| format!("the project is too large to keep a recovery copy (maximum {})", limit_said(max)))
+        })?;
         report.addresses = report.addresses.saturating_add(u32::try_from(unrecorded).unwrap_or(u32::MAX));
-        let max = max_bytes();
-        if text.len() as u64 > max {
-            return Err(format!("the project is too large to keep a recovery copy (maximum {})", limit_said(max)));
-        }
         Ok((text, report))
     }
 
@@ -1203,13 +1210,15 @@ impl Project {
             && meta.len() > max
         {
             // A computer with more memory opens it, up to the ceiling; past that none does.
+            // The memory a 64-bit build needs to open it (whole GiB, rounded up).
+            let needed = memory_for(meta.len()).div_ceil(1 << 30);
             let more = if meta.len() > BYTES_CEILING {
                 format!(": no computer opens a project past {} MiB", BYTES_CEILING >> 20)
             } else if meta.len() > ceiling() {
                 // Only a 32-bit build stops below the ceiling.
-                ": a 64-bit RustGIS on a computer with more memory opens it".to_string()
+                format!(": a 64-bit RustGIS on a computer with at least {needed} GiB of memory opens it")
             } else if rustgis_data::memory::physical().is_some() {
-                ": a computer with more memory opens it".to_string()
+                format!(": a computer with at least {needed} GiB of memory opens it")
             } else {
                 String::new()
             };
@@ -1520,6 +1529,13 @@ mod limit_tests {
         }
         let max = max_bytes();
         assert!((BYTES_FLOOR..=BYTES_CEILING).contains(&max), "{max}");
+        // The memory named for a refused file is enough to open it, and not much more.
+        let size: u64 = 659 << 20;
+        let needed = memory_for(size).div_ceil(GIB) * GIB;
+        if usize::BITS >= 64 {
+            assert!(max_bytes_for(Some(needed)) >= size && max_bytes_for(Some(needed - GIB)) < size);
+        }
+        assert_eq!(needed / GIB, 13);
     }
 
     /// Writing stops at the limit: what comes after it is never serialized.
