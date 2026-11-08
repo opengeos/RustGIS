@@ -632,7 +632,16 @@ pub(crate) const NOT_AHEAD: &str = "runs where the model or script runs";
 /// batch's run here to take instead of reading it again.
 pub(crate) struct FileAhead {
     path: std::path::PathBuf,
+    /// The file's size and modification time when it was read: one changed since is read again.
+    stamp: Option<(u64, std::time::SystemTime)>,
     read: Result<(Dataset, rustgis_data::ReadReport), String>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+/// A file's size and modification time, when the system gives them.
+fn file_stamp(path: &std::path::Path) -> Option<(u64, std::time::SystemTime)> {
+    let meta = std::fs::metadata(path).ok()?;
+    Some((meta.len(), meta.modified().ok()?))
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -681,18 +690,21 @@ pub(crate) fn ran_ahead(s: &mut Session) -> RanAheads {
 
 #[cfg(not(target_arch = "wasm32"))]
 /// Reads a batch's input file: on a copy of the session, recorded for the run here
-/// ([`FilesAhead::Recording`]); there, the copy's read of it when it is the next one taken,
-/// else read here, as are the rest.
+/// ([`FilesAhead::Recording`]); there, the copy's read of it when it is the next one taken and
+/// the file hasn't changed since (its size and modification time), else read here, as are the
+/// rest (whose tools then run here too, on what is read now).
 fn read_batch_file(s: &mut Session, path: &std::path::Path) -> Result<(Dataset, rustgis_data::ReadReport), String> {
     if let Some(FilesAhead::Taking(files)) = &mut s.files_ahead {
         match files.pop_front() {
-            Some(next) if next.path == path => return next.read,
+            Some(next) if next.path == path && next.stamp.is_some() && next.stamp == file_stamp(path) => return next.read,
             _ => s.files_ahead = None,
         }
     }
+    let stamp = file_stamp(path);
     let read = rustgis_data::io::read_path(path).map_err(|e| e.to_string());
+    // The dataset's rows are shared with the copy's layer, not copied.
     if let Some(FilesAhead::Recording(files)) = &mut s.files_ahead {
-        files.push(FileAhead { path: path.to_path_buf(), read: read.clone() });
+        files.push(FileAhead { path: path.to_path_buf(), stamp, read: read.clone() });
     }
     read
 }

@@ -33272,14 +33272,21 @@ fn a_scripts_batch_runs_ahead_and_stops_with_its_cancel() {
     let ahead = read_ahead(&mut s, "script.run", &p).unwrap();
     assert!(ahead.reads(), "a batch runs on a thread of its own");
     let read = ahead.run(&Control::stoppable()).unwrap();
-    // Changed after the copy read it: the run here takes that read, not the file as it is now.
-    std::fs::write(&file, "name,x,y\nA,8,47\nB,9,46\nC,10,45\n").unwrap();
     let r = read_land(&mut s, read).unwrap();
     assert_eq!(s.tools_taken, 3, "{r}");
     assert!(s.read_ahead.is_none() && s.tools_ahead.is_none() && s.files_ahead.is_none());
     assert_eq!(layers(&s), layers(&here));
     assert_eq!(s.project.gp_history.len(), here.project.gp_history.len());
     assert!(s.notices.iter().any(|n| n.text == "Batch 'buffer' complete: all 3 succeeded"), "{:?}", s.notices);
+
+    // The file changed after the copy read it: the run here reads it again, and runs its tool.
+    let mut s = session();
+    let read = read_ahead(&mut s, "script.run", &p).unwrap().run(&Control::stoppable()).unwrap();
+    std::fs::write(&file, "name,x,y\nA,8,47\nB,9,46\nC,10,45\n").unwrap();
+    read_land(&mut s, read).unwrap();
+    assert_eq!(s.tools_taken, 2);
+    assert!(s.files_ahead.is_none());
+    assert_eq!(s.map().layer_by_name("towns_buffer").map(|l| l.dataset.features.len()), Some(3));
 
     // Cancelled while it runs: the batch stops between items, and the run adds nothing.
     let mut s = session();
