@@ -33536,7 +33536,35 @@ fn export_raster_puts_a_tile_layer_s_tiles_together() {
         "{:?}",
         &s.notices[n..]
     );
+    // Over two blocks, each tile that fails is counted once, the one on their edge too: every
+    // tile of this archive fails, so as many fail as the export fetches.
+    let bad = dir.join("bad.mbtiles");
+    let c = rusqlite::Connection::open(&bad).unwrap();
+    c.execute_batch(
+        "CREATE TABLE metadata (name text, value text); CREATE TABLE tiles (zoom_level integer, tile_column integer, tile_row integer, tile_data blob);
+         INSERT INTO metadata VALUES ('name', 'Bad'), ('format', 'png'), ('minzoom', '0'), ('maxzoom', '4');",
+    )
+    .unwrap();
+    for x in 0..16 {
+        for y in 0..16 {
+            c.execute("INSERT INTO tiles VALUES (4, ?1, ?2, x'00010203')", [x, y]).unwrap();
+        }
+    }
+    drop(c);
+    s.run("layer.addData", &json!({"path": at(&bad)})).unwrap();
+    let b = s.map().tiles.iter().position(|t| t.name.eq_ignore_ascii_case("bad")).unwrap();
+    let n = s.notices.len();
+    let out = s.run("share.exportRaster", &json!({"tiles": b, "path": at(&path), "bbox": [-170, -60, 50, 60], "zoom": 4})).unwrap();
+    assert!(out["width"].as_u64().is_some_and(|w| w > 2048), "{out}");
+    let fetched = out["tiles"].as_u64().unwrap();
+    assert!(
+        warned(&s, n, &format!("in 2 of its 2 block(s), Bad couldn't be drawn whole ({fetched} tile(s)"))
+            || warned(&s, n, &format!("in 2 of its 2 block(s), bad couldn't be drawn whole ({fetched} tile(s)")),
+        "{:?}",
+        &s.notices[n..]
+    );
     // Its archive gone: refused, or written with the gap said, never quietly.
+    let i = s.map().tiles.iter().position(|t| t.name.eq_ignore_ascii_case("broken")).unwrap();
     let gone = s.map().tiles[i].url.replace("broken", "gone");
     s.map_mut().tiles[i].url = gone;
     let n = s.notices.len();

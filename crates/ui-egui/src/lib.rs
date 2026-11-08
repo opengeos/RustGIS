@@ -3953,7 +3953,7 @@ impl RustGisApp {
                     Some(v) => {
                         let all = &self.session.map().tiles;
                         let named = v.as_str().and_then(|n| all.iter().position(|t| t.name.eq_ignore_ascii_case(n.trim())));
-                        match v.as_u64().map(|i| i as usize).or(named).filter(|i| *i < all.len()) {
+                        match v.as_u64().and_then(|i| usize::try_from(i).ok()).or(named).filter(|i| *i < all.len()) {
                             Some(i) => Some(i),
                             None => {
                                 let why = tl!("No such tile layer").to_string();

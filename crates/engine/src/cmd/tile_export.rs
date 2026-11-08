@@ -219,9 +219,9 @@ fn first_zoom(g: &Grid) -> u8 {
 }
 
 /// The tiles at zoom `z` over a `w × h` block at `frame` that failed (fetched, or read, without
-/// a picture), as the cache keeps them: one error each. A tile the server hasn't (a 404 past its
+/// a picture), as the cache keeps them: each address with its error. A tile the server hasn't (a 404 past its
 /// coverage) is one too: on the ground its gap passes for data.
-fn failed_tiles(templates: &[String], frame: &Frame, w: u32, h: u32, z: u8) -> Vec<String> {
+fn failed_tiles(templates: &[String], frame: &Frame, w: u32, h: u32, z: u8) -> Vec<(String, String)> {
     if templates.is_empty() {
         return Vec::new();
     }
@@ -239,7 +239,7 @@ fn failed_tiles(templates: &[String], frame: &Frame, w: u32, h: u32, z: u8) -> V
     urls.dedup();
     urls.into_iter()
         .filter_map(|url| match cache::get_tile(&url, cache::Want::Image) {
-            cache::State::Failed(e) => Some(e),
+            cache::State::Failed(e) => Some((url, e)),
             _ => None,
         })
         .collect()
@@ -357,7 +357,7 @@ fn write(t: &TileLayer, path: &str, area: Extent, zoom: Option<u8>, shown: Optio
     let (mut credits, mut errors, mut drew) = (Vec::<String>::new(), Vec::<String>::new(), false);
     // The blocks with tiles still on their way when the wait ended, and those with tiles that
     // couldn't be drawn.
-    let (mut pending, mut failed, mut lost) = (0u32, 0u32, 0u64);
+    let (mut pending, mut failed, mut lost) = (0u32, 0u32, Vec::<String>::new());
     for j in 0..by {
         for i in 0..bx {
             let (x0, y0) = (i * side, j * side);
@@ -375,8 +375,15 @@ fn write(t: &TileLayer, path: &str, area: Extent, zoom: Option<u8>, shown: Optio
             if d.error.is_some() || !missing.is_empty() {
                 failed += 1;
             }
-            lost += missing.len() as u64;
-            for e in d.error.into_iter().chain(missing) {
+            // A tile on the edge of two blocks is in both: counted once.
+            let mut missing_errors = Vec::new();
+            for (url, e) in missing {
+                if !lost.contains(&url) {
+                    lost.push(url);
+                }
+                missing_errors.push(e);
+            }
+            for e in d.error.into_iter().chain(missing_errors) {
                 if !errors.contains(&e) {
                     errors.push(e);
                 }
@@ -432,7 +439,7 @@ fn write(t: &TileLayer, path: &str, area: Extent, zoom: Option<u8>, shown: Optio
         let shown: Vec<&str> = errors.iter().take(SHOWN_ERRORS).map(String::as_str).collect();
         let more = errors.len().saturating_sub(SHOWN_ERRORS);
         let more = if more > 0 { format!(" (and {more} more)") } else { String::new() };
-        let tiles = if lost > 0 { format!(" ({lost} tile(s) couldn't be fetched or read)") } else { String::new() };
+        let tiles = if lost.is_empty() { String::new() } else { format!(" ({} tile(s) couldn't be fetched or read)", lost.len()) };
         gaps.push(format!(
             "{path}: in {failed} of its {blocks} block(s), {name} couldn't be drawn whole{tiles}, so parts of it are empty; {} different error(s): {}{more}",
             errors.len(),
