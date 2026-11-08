@@ -1172,6 +1172,9 @@ pub(crate) fn is_wildcard_inputs(v: Option<&Value>) -> bool {
         || v.and_then(Value::as_array).is_some_and(|arr| arr.len() == 1 && arr.first().and_then(Value::as_str) == Some("*"))
 }
 
+/// The most inputs one `gp.batch` runs over.
+pub(crate) const MAX_BATCH_ITEMS: usize = 10_000;
+
 /// Runs a geoprocessing tool in batch across multiple layers or files.
 fn batch(s: &mut Session, p: &Value) -> CmdResult {
     use rustgis_analysis::control::Control;
@@ -1269,6 +1272,18 @@ pub fn run_batch_with(s: &mut Session, p: &Value, control: &std::sync::Arc<rustg
     }
     if base_params.get(batch_param).is_some_and(|v| !v.is_null()) {
         s.notify(format!("gp.batch: 'params.{batch_param}' is replaced by the batch inputs"), false);
+    }
+    // The other names the tool reads its input under are dropped from each item too.
+    let shadowed: Vec<&str> = rustgis_analysis::param_aliases(spec, batch_param)
+        .iter()
+        .copied()
+        .filter(|alias| *alias != batch_param && base_params.get(*alias).is_some_and(|v| !v.is_null()))
+        .collect();
+    if let Some(first) = shadowed.first() {
+        s.notify(
+            format!("gp.batch: {} other name(s) for '{batch_param}' in 'params' replaced by the batch inputs ({first})", shadowed.len()),
+            false,
+        );
     }
 
     let mut unknown: Vec<&str> = base_params
@@ -1462,6 +1477,14 @@ pub fn run_batch_with(s: &mut Session, p: &Value, control: &std::sync::Arc<rustg
         return Err(
             "no inputs provided (specify 'inputs' as an array of layers/paths, '*' for all layers, or 'folder' as a directory path)".into(),
         );
+    }
+
+    // Each item keeps its output as a layer: a hostile list or folder can't make the batch unbounded.
+    if targets.len() > MAX_BATCH_ITEMS {
+        return Err(format!(
+            "{} inputs is more than a batch runs (at most {MAX_BATCH_ITEMS}); split it into smaller batches",
+            targets.len()
+        ));
     }
 
     let mut succeeded = Vec::new();
@@ -5298,6 +5321,47 @@ mod batch_tests {
         let failed: Vec<_> = s.project.gp_history[before..].iter().filter(|r| !r.ok).collect();
         assert_eq!(failed.len(), 1);
         assert_eq!(failed[0].params["input"], "Nowhere");
+    }
+
+    #[test]
+    fn a_batch_over_too_many_inputs_is_refused() {
+        let mut s = test_session();
+        let inputs = vec![json!("Cities"); super::MAX_BATCH_ITEMS + 1];
+        let before = s.map().layers.len();
+        let err = s.run("gp.batch", &json!({"tool": "buffer", "inputs": inputs, "params": {"distance": 1}})).unwrap_err();
+        assert!(err.contains(&format!("{} inputs", super::MAX_BATCH_ITEMS + 1)), "{err}");
+        assert_eq!(s.map().layers.len(), before, "nothing ran");
+    }
+
+    #[test]
+    fn a_static_alias_dropped_from_each_item_is_reported() {
+        let mut s = Session::new(crate::Project::default());
+        let mut ds = Dataset::new(
+            "Tracts",
+            rustgis_data::GeometryType::Point,
+            vec![rustgis_data::Field::new("GEOID", rustgis_data::FieldType::Text)],
+        );
+        ds.push_next(Some(rustgis_data::Geometry::Point(rustgis_geom::Coord::new(0.0, 0.0))), vec![rustgis_data::Value::Text("01".into())]);
+        s.map_mut().add_layer(rustgis_map::Layer::new(0, ds));
+        let mut join =
+            Dataset::new("Census", rustgis_data::GeometryType::None, vec![rustgis_data::Field::new("FIPS", rustgis_data::FieldType::Text)]);
+        join.push_next(None, vec![rustgis_data::Value::Text("01".into())]);
+        s.project.add_table(join);
+        let shared = json!({"targetField": "GEOID", "joinTable": "Census", "joinField": "FIPS"});
+        let mark = s.notices.len() as u64;
+        s.run("gp.batch", &json!({"tool": "joinField", "inputs": ["Tracts"], "params": shared})).unwrap();
+        assert!(!s.notices_since(mark).iter().any(|n| n.text.contains("other name(s)")), "a clean run says nothing");
+        let mut with_alias = shared.clone();
+        with_alias["input"] = json!("Tracts");
+        let mark = s.notices.len() as u64;
+        s.run("gp.batch", &json!({"tool": "joinField", "inputs": ["Tracts"], "params": with_alias})).unwrap();
+        assert!(
+            s.notices_since(mark)
+                .iter()
+                .any(|n| n.text.contains("1 other name(s) for 'target' in 'params' replaced by the batch inputs (input)")),
+            "{:?}",
+            s.notices_since(mark)
+        );
     }
 
     #[test]
