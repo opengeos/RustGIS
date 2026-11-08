@@ -5027,7 +5027,9 @@ mod tests {
         assert_eq!(en.iter().map(|n| n.0).collect::<Vec<_>>(), english);
         let fr = Lang::from_code("fr").unwrap();
         let az = Lang::from_code("az").unwrap();
-        let tip = |names: &[(&'static str, &'static str)], l: Lang| -> &'static str { names.iter().find(|n| n.0 == l.english() || n.0 == l.name()).unwrap().1 };
+        let tip = |names: &[(&'static str, &'static str)], l: Lang| -> &'static str {
+            names.iter().find(|n| n.0 == l.english() || n.0 == l.name()).unwrap().1
+        };
         assert_eq!(tip(&en, fr), "Français", "the tooltip gives the language's own name");
         let de = names(Lang::from_code("de").unwrap());
         assert!(de.contains(&("Français", "French")), "in German, French keeps its own name: {de:?}");
