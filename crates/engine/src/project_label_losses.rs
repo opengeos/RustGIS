@@ -169,10 +169,8 @@ fn count<'a>(
 
 /// One notice per layer read whose diagram won't show for its aggregation or extrusion (#1596),
 /// as `layer.diagram` gives when it is set.
-/// A layer kept both in a map and in an offline snapshot of it is named once.
 fn hidden<'a>(layers: impl Iterator<Item = &'a rustgis_map::Layer>) -> impl Iterator<Item = (ReadPart, String)> {
-    let mut seen = std::collections::HashSet::new();
-    layers.filter_map(crate::cmd::diagram::hidden_text).filter(move |m| seen.insert(m.clone())).map(|m| (ReadPart::Diagrams, m))
+    layers.filter_map(crate::cmd::diagram::hidden_text).map(|m| (ReadPart::Diagrams, m))
 }
 
 /// The notices of the parts asked for.
@@ -219,8 +217,8 @@ pub(super) fn notices(text: &str, project: &Project) -> Result<Vec<(ReadPart, St
         .map(|l| &l.labels)
         .chain(project.styles.iter().map(|s| &s.labels));
     let mut notices = count(raw, retained, &project.name, "the project");
-    // Offline snapshots too: they open as maps of their own.
-    notices.extend(hidden(project.maps.iter().chain(project.offline_areas.iter().map(|a| &a.data)).flat_map(|m| &m.layers)));
+    // Offline snapshots say so when `offline.open` opens them as maps.
+    notices.extend(hidden(project.maps.iter().flat_map(|m| &m.layers)));
     Ok(notices)
 }
 

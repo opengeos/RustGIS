@@ -34214,6 +34214,27 @@ fn opening_a_diagram_that_wont_show_says_why() {
     styled.run("style.import", &json!({"text": map(&s)})).unwrap();
     styled.run("style.import", &json!({"text": hidden})).unwrap();
     assert!(about(&styled).is_empty(), "{:?}", about(&styled));
+    // A file whose label audit can't read it (a sequence-form label class) still says so.
+    let mut odd: Value = serde_json::from_str(&cities).unwrap();
+    odd["labels"]["classes"] = json!([["Extra", true, null, "pop_max", 10, [0, 0, 0, 255], false, false]]);
+    let mut added = Session::new(Project::default());
+    crate::cmd::layer::add_layer_text(&mut added, &odd.to_string()).unwrap();
+    assert_eq!(about(&added).len(), 1, "{:?}", about(&added));
+    // An offline snapshot: quiet with the project, said when it opens as a map.
+    let mut offline = Session::new(Project::from_json(&clean).unwrap());
+    let snapshot = s.map().clone();
+    offline.project.offline_areas.push(crate::project::OfflineArea {
+        name: "Trip".into(),
+        map: snapshot.name.clone(),
+        extent: rustgis_geom::Extent::new(-10.0, -10.0, 10.0, 10.0),
+        created: 0.0,
+        synced: 0.0,
+        data: snapshot,
+    });
+    let reread = Session::new(Project::from_json(&serde_json::to_string(&offline.project).unwrap()).unwrap());
+    assert!(about(&reread).is_empty(), "{:?}", about(&reread));
+    offline.run("offline.open", &json!({"name": "Trip"})).unwrap();
+    check(about(&offline));
 }
 
 #[test]
