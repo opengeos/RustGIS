@@ -361,12 +361,17 @@ class _Api:
             result: The command's result.
         """
         if isinstance(result, dict):
+            # A file with several layers (a GeoPackage read through GDAL, say) reports the
+            # first as "layer" and all of them as "layers": every one of them is returned.
+            many = result.get("layers")
+            ids = [i for i in many if isinstance(i, int) and not isinstance(i, bool)] if isinstance(many, list) else []
+            if len(ids) > 1 and not result.get("tables"):
+                return [Layer._of(self, i) for i in ids]
             added = result.get("layer")
             if isinstance(added, int) and not isinstance(added, bool):
                 return Layer._of(self, added)
-            many = result.get("layers")
-            if isinstance(many, list) and many and not result.get("tables"):
-                return [Layer._of(self, i) for i in many if isinstance(i, int) and not isinstance(i, bool)]
+            if ids and not result.get("tables"):
+                return [Layer._of(self, i) for i in ids]
         return result
 
     # Commands ------------------------------------------------------------------------------
@@ -549,7 +554,8 @@ class _Api:
                 GeoPackage, ``x=`` and ``y=`` for a CSV's coordinate columns.
 
         Returns:
-            The new :class:`Layer`, or the command's result for a table.
+            The new :class:`Layer`, a list of them when the file adds several (the tables
+            of a GeoPackage, or a GDAL file's layers), or the command's result for a table.
         """
         command, args = self._data_command(path)
         if name is not None:

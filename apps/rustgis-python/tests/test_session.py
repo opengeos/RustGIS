@@ -1,6 +1,7 @@
 """Tests for the rustgis Python package (run after `maturin develop`)."""
 
 import json
+import shutil
 
 import pytest
 
@@ -276,6 +277,30 @@ def test_adding_data_returns_the_layer(sample, tmp_path):
     assert again.count == 2 and again.name == "Again"
     sample.remove_layer("Again")
     assert "Again" not in sample
+
+
+def test_adding_a_file_of_several_layers_returns_them_all(sample, tmp_path):
+    sites = sample.add_geojson(POINTS, name="Sites")
+    out = tmp_path / "two.gpkg"
+    sites.to_file(out)
+    sites.to_file(out, mode="addTable", table_name="more_sites")
+    added = sample.add_data(out)
+    assert isinstance(added, list) and len(added) == 2
+    assert all(isinstance(layer, rustgis.Layer) and layer.count == 2 for layer in added)
+    # One table of it is a single layer.
+    one = sample.add_data(out, layer="more_sites")
+    assert isinstance(one, rustgis.Layer) and one.count == 2
+
+
+@pytest.mark.skipif(shutil.which("ogr2ogr") is None or shutil.which("ogrinfo") is None, reason="needs GDAL")
+def test_adding_a_gdal_file_of_several_layers_returns_them_all(sample, tmp_path):
+    # GeoJSON Sequence is read through GDAL; points and a line in one file are two layers.
+    line = {"type": "Feature", "geometry": {"type": "LineString", "coordinates": [[0, 0], [1, 1]]}, "properties": {}}
+    path = tmp_path / "mixed.geojsonl"
+    path.write_text("\n".join(json.dumps(f) for f in [*POINTS["features"], line]) + "\n")
+    added = sample.add_data(path)
+    assert isinstance(added, list) and len(added) == 2
+    assert sorted(layer.count for layer in added) == [1, 2]
 
 
 def test_the_view(sample):

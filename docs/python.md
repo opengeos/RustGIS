@@ -291,8 +291,9 @@ big.to_file("big-cities.gpkg", mode="replaceTable")   # its table named for the 
 
 `add_geojson` also takes any object with `__geo_interface__` (a Shapely geometry, a GeoSeries).
 `add_data`, `add_geojson` and `add_geopandas` return a `Layer` for a single layer, a list for
-multiple layers, or the command result for standalone tables. For example, a CSV without
-geometry is a table. Extra `add_data` keyword arguments go to `layer.addData`, such as `layer=`
+multiple layers (every table of a GeoPackage, or the layers GDAL reads from one file, such as
+points and lines split into a layer each), or the command result for standalone tables. For
+example, a CSV without geometry is a table. Extra `add_data` keyword arguments go to `layer.addData`, such as `layer=`
 to choose a GeoPackage table, or `x=` and `y=` to choose coordinate columns.
 
 Every format the app reads works here: GeoJSON, CSV, Shapefile, GeoPackage, GeoParquet,
