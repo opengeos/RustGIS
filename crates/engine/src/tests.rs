@@ -15806,7 +15806,7 @@ fn rounded_raster_values_are_said_on_import_and_export() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
-/// A raster clipped, resampled, mosaicked or pixel-edited from one with values rounded when it
+/// A raster clipped, resampled, mosaicked, warped or pixel-edited from one with values rounded when it
 /// was read keeps a mark
 /// of them, with no count (it holds an unknown share), and its export says so; one made from a
 /// clean raster says nothing of rounding (#1614).
@@ -15832,12 +15832,16 @@ fn rasters_made_from_rounded_ones_keep_the_rounded_note() {
         let (half, joined) = (format!("{name}_half"), format!("{name}_joined"));
         s.run("raster.process", &json!({"layer": name, "operation": "resample", "factor": 2, "name": half})).unwrap();
         s.run("raster.mosaic", &json!({"inputs": [clip, name], "name": joined})).unwrap();
+        let warped = format!("{name}_warped");
+        let points = [[0, 0, 10, 42], [2, 0, 12, 42], [0, 2, 10, 40]];
+        let fit = json!({"layer": name, "transform": "affine", "crs": 4326, "pointsCrs": 4326, "points": points, "name": warped});
+        s.run("raster.georeference", &fit).unwrap();
         s.run(
             "raster.editPixels",
             &json!({"layer": name, "polygon": [[10.1, 40.1], [10.9, 40.1], [10.9, 40.9], [10.1, 40.9]], "value": 1}),
         )
         .unwrap();
-        for layer in [clip.as_str(), half.as_str(), joined.as_str(), name.as_str()] {
+        for layer in [clip.as_str(), half.as_str(), joined.as_str(), warped.as_str(), name.as_str()] {
             let mark = s.notice_mark();
             s.run("share.exportRaster", &json!({"layer": layer, "path": dir.join(format!("{layer}.tif"))})).unwrap();
             let notes = s.notices_since(mark);

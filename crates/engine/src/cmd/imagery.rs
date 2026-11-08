@@ -322,7 +322,9 @@ fn warp_to_fit(s: &mut Session, p: &Value, layer: &str, r: &Raster) -> CmdResult
     };
     let new_layer = ps(p, "name").map(str::trim).filter(|n| !n.is_empty()).map(|n| n.chars().take(200).collect::<String>());
     let out_name = new_layer.clone().unwrap_or_else(|| r.name.clone());
-    let out = warp::warp(r, &fit, &warp::Options { crs, points_crs, resampling, cell, name: out_name })?;
+    let mut out = warp::warp(r, &fit, &warp::Options { crs, points_crs, resampling, cell, name: out_name })?;
+    // Resampled from values rounded when the file was read, some or all of them.
+    out.keep_rounded_mark(r);
     if let Some((fw, fh)) = r.overview {
         let note =
             format!("{}: warped at reduced resolution, from its {} × {} overview of the {fw} × {fh} raster", r.name, r.width, r.height);
