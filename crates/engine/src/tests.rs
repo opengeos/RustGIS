@@ -13822,6 +13822,28 @@ fn wms_layers_draw_as_one_picture_or_tiles_of_a_size() {
     assert!(t.url.contains("&size=512,512&") && t.tile_size == 512 && !t.single_image, "{}", t.url);
 }
 
+/// #1592: a legend picture the layer cannot keep (an address too long, as a same-origin link can
+/// become once its spaces are encoded for the login) is counted in a notice, not dropped silently.
+#[test]
+fn service_legends_left_out_are_reported() {
+    const WMS: &str = r#"<WMS_Capabilities version="1.3.0" xmlns="http://www.opengis.net/wms" xmlns:xlink="http://www.w3.org/1999/xlink">
+<Service><Title>Test WMS</Title></Service>
+<Capability><Request><GetMap><Format>image/png</Format><DCPType><HTTP><Get><OnlineResource xlink:href="https://maps.example.com/wms?"/></Get></HTTP></DCPType></GetMap></Request>
+<Layer><CRS>EPSG:3857</CRS><Layer><Name>roads</Name><Title>Roads</Title>
+<Style><Name>default</Name><LegendURL><Format>image/png</Format><OnlineResource xlink:href="LEGEND"/></LegendURL></Style></Layer></Layer></Capability></WMS_Capabilities>"#;
+    let long = format!("https://maps.example.com/legends/{}.png", "a".repeat(rustgis_map::tiles::MAX_LEGEND_URL));
+    for (legend, left_out) in [(long.as_str(), true), ("https://maps.example.com/legends/roads.png", false)] {
+        let mut s = Session::new(Project::default());
+        let mark = s.notice_mark();
+        s.run("service.add", &json!({"url": "https://maps.example.com/wms", "layer": "roads", "text": WMS.replace("LEGEND", legend)}))
+            .unwrap();
+        let notices = s.notices_since(mark);
+        let reported = notices.iter().any(|n| n.text.contains("1 legend picture(s) the service listed were left out"));
+        assert_eq!(reported, left_out, "{notices:?}");
+        assert_eq!(s.map().tiles.first().map(|t| t.legends.len()), Some(usize::from(!left_out)));
+    }
+}
+
 /// A WMS layer added from its service takes its legends (the service's GetLegendGraphic, then
 /// its style's picture); any tile layer can be given one, or several for their scales; they and
 /// whether they show are kept with the project and undo; junk is refused.
@@ -30833,6 +30855,53 @@ fn shapefile_value_losses_reach_export_notices() {
             "{:?}",
             s.notices_since(mark)
         );
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// A GeoParquet export writes a value its column's type can't hold as null and says how many,
+/// in which fields; a clean export says nothing of it.
+#[test]
+fn geoparquet_export_says_which_values_it_wrote_as_null() {
+    use rustgis_data::{Dataset, Field, FieldType, Geometry, GeometryType, Value as Attr};
+    let dir = std::env::temp_dir().join(format!("rustgis-parquet-unfit-notices-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let fields = vec![Field::new("id", FieldType::Integer), Field::new("open", FieldType::Boolean), Field::new("name", FieldType::Text)];
+    let mut ds = Dataset::new("Values", GeometryType::Point, fields);
+    let at = |x: f64| Some(Geometry::Point(rustgis_geom::Coord::new(x, 2.0)));
+    ds.push(at(1.0), vec![Attr::Float(1.5), Attr::Text("yes".into()), Attr::Text("a".into())]);
+    ds.push(at(2.0), vec![Attr::Text("two".into()), Attr::Bool(true), Attr::Int(2)]);
+    ds.push(at(3.0), vec![Attr::Int(3), Attr::Null, Attr::Null]);
+    let mut clean = ds.clone();
+    clean.name = "Fits".into();
+    clean.features.truncate(1);
+    clean.features[0].attrs = vec![Attr::Int(1), Attr::Bool(false), Attr::Text("a".into())];
+    let mut s = Session::new(Project::default());
+    let lossy_id = s.map_mut().add_dataset(ds.clone());
+    let clean_id = s.map_mut().add_dataset(clean.clone());
+    s.project.add_table(ds);
+    s.project.add_table(clean);
+    for command in ["share.exportLayer", "share.exportTable"] {
+        for (layer, table, lossy) in [(lossy_id, "Values", true), (clean_id, "Fits", false)] {
+            let path = dir.join(format!("{command}-{table}.parquet"));
+            let mark = s.notice_mark();
+            let params =
+                if command == "share.exportLayer" { json!({"layer":layer,"path":path}) } else { json!({"table":table,"path":path}) };
+            s.run(command, &params).unwrap();
+            let notices: Vec<_> = s.notices_since(mark).iter().map(|n| n.text.clone()).collect();
+            let said = notices.iter().any(|n| n.contains("written as null"));
+            if lossy {
+                assert!(
+                    notices.iter().any(|n| n.contains("3 values") && n.contains("'id', 'open'") && n.contains("written as null")),
+                    "{command}: {notices:?}"
+                );
+                let (back, _) = rustgis_data::io::read_path(&path).unwrap();
+                assert_eq!(back.features[0].attrs[0], Attr::Null);
+                assert_eq!(back.features[1].attrs[2], Attr::Text("2".into()));
+            } else {
+                assert!(!said, "{command}: {notices:?}");
+            }
+        }
     }
     std::fs::remove_dir_all(dir).unwrap();
 }
