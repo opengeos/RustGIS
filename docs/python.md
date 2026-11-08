@@ -295,8 +295,8 @@ multiple layers (every feature table of a GeoPackage, or the layers GDAL reads f
 such as points and lines split into a layer each), or the command result when the file adds
 only standalone tables. For example, a CSV without geometry is a table. Standalone tables added
 together with layers are listed in `s.info()["tables"]`; a GeoPackage's attribute-only tables
-are not added when the whole file is. A GeoPackage or database of more than 32 tables adds the
-first 32 (a notice says so); add the others by name with `layer=`. Extra `add_data` keyword
+are not added when the whole file is. A GeoPackage of more than 32 feature tables adds the
+first 32 (a notice says so); add the other feature tables by name with `layer=`. Extra `add_data` keyword
 arguments go to `layer.addData`, such as `layer=` to choose a GeoPackage table, or `x=` and `y=`
 to choose coordinate columns.
 
