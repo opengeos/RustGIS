@@ -241,6 +241,20 @@ fn links_are_said_and_what_is_written_out_is_drawn() {
     let out = read("model.gml", &lonlat(&building("b1", &inner)), None).unwrap();
     assert!((area(out[0].0.features[0].geometry.as_ref()) - 100.0).abs() < 1e-6);
     assert!(says(&out, "3 geometries or objects are given only by a link to another element (xlink:href)"), "{:?}", messages_of(&out));
+    // A thematic surface, a geometry, a ring's curve and a building part given only by a link are
+    // said as well.
+    let ring = r##"<gml:Polygon><gml:exterior><gml:Ring><gml:curveMember><gml:LineString><gml:posList>0 0 0 9 0 0 9 9 0</gml:posList></gml:LineString></gml:curveMember><gml:curveMember xlink:href="#c"/></gml:Ring></gml:exterior></gml:Polygon>"##;
+    let inner = format!(
+        r##"<bldg:boundedBy><bldg:WallSurface xlink:href="#w"/></bldg:boundedBy>
+        <bldg:lod1MultiSurface><gml:MultiSurface xlink:href="#ms"/></bldg:lod1MultiSurface>
+        <bldg:lod3MultiSurface><gml:MultiSurface><gml:surfaceMember>{ring}</gml:surfaceMember></gml:MultiSurface></bldg:lod3MultiSurface>
+        <bldg:consistsOfBuildingPart xlink:href="#p"/>{}"##,
+        box_surfaces("b1")
+    );
+    let out = read("model.gml", &lonlat(&building("b1", &inner)), None).unwrap();
+    assert!(says(&out, "4 geometries or objects are given only by a link"), "{:?}", messages_of(&out));
+    assert!(!says(&out, "can't be read"), "{:?}", messages_of(&out));
+    assert_eq!(value(&out[0].0, 0, "consistsOfBuildingPart"), Value::Text("#p".into()));
 }
 
 /// What isn't read is said, one notice per kind; a clean model ([`a_building_is_its_ground_with_its_heights`])
@@ -294,7 +308,11 @@ fn files_named_gml_or_xml_holding_a_city_model_are_read_as_one() {
         let layers = crate::io::read_layers(name, &bytes).unwrap();
         assert_eq!(layers[0].dataset.name, "city", "{name}");
         assert_eq!(layers[0].dataset.features.len(), 1, "{name}");
+        // One layer of it, as a single-layer read gives.
+        assert_eq!(crate::io::read_bytes(name, &bytes).unwrap().0.features.len(), 1, "{name}");
     }
+    // Known by its root where its name gives no extension (a download).
+    assert_eq!(crate::io::sniff_extension(&bytes), Some("gml"));
 }
 
 /// A file cut short: the objects before the cut are read, and the cut is said.
@@ -339,11 +357,12 @@ fn a_geometry_with_no_level_of_detail_is_drawn() {
 /// The faces of the highest level of detail are united when there is no ground or LoD 0.
 #[test]
 fn faces_with_no_ground_are_united() {
-    let faces = [polygon("a", &square(0.0, 0.0, 10.0, 5.0)), polygon("b", &square(10.0, 0.0, 10.0, 5.0))];
+    // Overlapping: their union is 150, as two they would be 200.
+    let faces = [polygon("a", &square(0.0, 0.0, 10.0, 5.0)), polygon("b", &square(5.0, 0.0, 10.0, 5.0))];
     let members: String = faces.iter().map(|p| format!("<gml:surfaceMember>{p}</gml:surfaceMember>")).collect();
     let inner = format!("<bldg:lod2MultiSurface><gml:MultiSurface>{members}</gml:MultiSurface></bldg:lod2MultiSurface>");
     let out = read("model.gml", &lonlat(&building("b1", &inner)), None).unwrap();
-    assert!((area(out[0].0.features[0].geometry.as_ref()) - 200.0).abs() < 1e-6, "{:?}", out[0].0.features[0].geometry);
+    assert!((area(out[0].0.features[0].geometry.as_ref()) - 150.0).abs() < 1e-6, "{:?}", out[0].0.features[0].geometry);
 }
 
 /// Positions as `gml:coordinates` (with their separators), and in two dimensions where a geometry
@@ -402,6 +421,10 @@ fn systems_named_empty_or_in_another_axis_order() {
     let swapped = inner.replace(r#"srsName="""#, r#"srsName="urn:ogc:def:crs:EPSG::4326""#);
     let err = read("model.gml", &lonlat(&building("b1", &swapped)), None).unwrap_err().to_string();
     assert!(err.contains("one coordinate system with its axes in different orders"), "{err}");
+    // A name written with a character reference is the name it stands for.
+    let named = inner.replace(r#"srsName="""#, r#"srsName="EPSG:4326""#);
+    let out = read("model.gml", &model("EPSG:432&#54;", &building("b1", &named)), None).unwrap();
+    assert_eq!(out[0].0.features.len(), 1);
 }
 
 /// Arcs are read through their points, and said; an appearance held as a city object member, an
@@ -497,4 +520,48 @@ fn a_file_broken_in_the_middle_is_refused() {
     );
     let err = read("model.gml", &bytes, None).unwrap_err().to_string();
     assert!(!err.contains("cut short"), "{err}");
+}
+
+/// Nested objects are known without an id: a part drawn only by its thematic surfaces, a TIN relief.
+/// A feature beside them with neither id nor geometry is said.
+#[test]
+fn nested_objects_without_an_id_are_read() {
+    let inner = format!(
+        r#"<bldg:consistsOfBuildingPart><bldg:BuildingPart>{}</bldg:BuildingPart><bldg:BuildingPart><gml:name>nothing</gml:name></bldg:BuildingPart></bldg:consistsOfBuildingPart>"#,
+        box_surfaces("p")
+    );
+    let out = read("model.gml", &lonlat(&building("b1", &inner)), None).unwrap();
+    let part = layer(&out, "model BuildingPart");
+    assert_eq!(part.features.len(), 1);
+    assert_eq!(value(part, 0, "parent"), Value::Text("b1".into()));
+    assert_eq!(value(layer(&out, "model Building"), 0, "z_max"), Value::Float(5.0), "raised by its part");
+    assert!(says(&out, "1 nested features with no gml:id and no geometry, beside city objects, are left out"), "{:?}", messages_of(&out));
+    let relief = r#"<core:cityObjectMember><dem:ReliefFeature gml:id="r1"><dem:reliefComponent><dem:TINRelief><dem:lod>2</dem:lod></dem:TINRelief></dem:reliefComponent></dem:ReliefFeature></core:cityObjectMember>"#;
+    let out = read("model.gml", &lonlat(&[relief, &building("b2", &box_surfaces("b2"))].concat()), None).unwrap();
+    assert!(says(&out, "1 TINRelief objects aren't drawn"), "{:?}", messages_of(&out));
+}
+
+/// Heights come from the positions that have them: a 2D ring beside 3D ones takes nothing away.
+#[test]
+fn heights_come_from_the_positions_that_have_them() {
+    let flat = r#"<gml:Polygon><gml:exterior><gml:LinearRing><gml:posList srsDimension="2">20 0 21 0 21 1 20 1 20 0</gml:posList></gml:LinearRing></gml:exterior></gml:Polygon>"#;
+    let members: String = [polygon("a", &square(0.0, 0.0, 10.0, 10.0)), polygon("b", &square(0.0, 0.0, 10.0, 20.0)), flat.to_string()]
+        .iter()
+        .map(|p| format!("<gml:surfaceMember>{p}</gml:surfaceMember>"))
+        .collect();
+    let inner = format!("<bldg:lod2MultiSurface><gml:MultiSurface>{members}</gml:MultiSurface></bldg:lod2MultiSurface>");
+    let out = read("model.gml", &lonlat(&building("b1", &inner)), None).unwrap();
+    assert_eq!((value(&out[0].0, 0, "z_min"), value(&out[0].0, 0, "z_max")), (Value::Float(10.0), Value::Float(20.0)));
+}
+
+/// `gml:coordinates` with a decimal comma, as its `decimal` attribute says.
+#[test]
+fn a_decimal_comma_is_read_where_it_is_declared() {
+    let ring = r#"<gml:Polygon><gml:exterior><gml:LinearRing><gml:coordinates decimal="," cs=";" ts=" ">0;0;0,5 2,5;0;0,5 2,5;4;0,5 0;4;0,5 0;0;0,5</gml:coordinates></gml:LinearRing></gml:exterior></gml:Polygon>"#;
+    let inner = format!(
+        r#"<bldg:boundedBy><bldg:GroundSurface><bldg:lod2MultiSurface><gml:MultiSurface><gml:surfaceMember>{ring}</gml:surfaceMember></gml:MultiSurface></bldg:lod2MultiSurface></bldg:GroundSurface></bldg:boundedBy>"#
+    );
+    let out = read("model.gml", &lonlat(&building("b1", &inner)), None).unwrap();
+    assert!((area(out[0].0.features[0].geometry.as_ref()) - 10.0).abs() < 1e-6, "{:?}", messages_of(&out));
+    assert_eq!(value(&out[0].0, 0, "z_max"), Value::Float(0.5));
 }

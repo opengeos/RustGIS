@@ -217,6 +217,8 @@ pub fn sniff_extension(bytes: &[u8]) -> Option<&'static str> {
         // extension), read by content under `.pbf`.
         _ if crate::esripbf::is_esripbf(bytes) => "pbf",
         _ if start.starts_with('{') || start.starts_with('[') => "geojson",
+        // A CityGML city model, by its root.
+        _ if start.starts_with('<') && crate::citygml::looks_like_citygml(bytes) => "gml",
         _ if start.starts_with('<') && text.contains("<kml") => "kml",
         _ if start.starts_with('<') && text.contains("<gpx") => "gpx",
         // Text whose first two lines a separator splits alike, and no control characters.
@@ -268,7 +270,7 @@ pub fn read_bytes(file_name: &str, bytes: &[u8]) -> Result<(Dataset, ReadReport)
             return Err(DataError::Unsupported(format!("{ext} on its own: it is part of a Shapefile; add it together with its .shp")));
         }
         // The first layer (`read_layers` reads them all), saying what else the file holds.
-        "zip" | "kml" | "kmz" | "gpx" | "gml" | "dxf" | "pbf" | "topojson" => return first_layer(file_name, bytes),
+        "zip" | "kml" | "kmz" | "gpx" | "gml" | "xml" | "dxf" | "pbf" | "topojson" => return first_layer(file_name, bytes),
         "las" | "laz" => crate::lidar::read_bytes(bytes, &name, None)?,
         // A copy, since only borrowed bytes are given; `read_owned` takes them without one.
         e if crate::source::EXTENSIONS.contains(&e) => return read_owned(file_name, bytes.to_vec()),
@@ -326,7 +328,7 @@ pub fn read_path(path: &Path) -> Result<(Dataset, ReadReport)> {
             }
             read_shapefile(path, &name)?
         }
-        "zip" | "kml" | "kmz" | "gpx" | "gml" | "dxf" | "pbf" | "topojson" => {
+        "zip" | "kml" | "kmz" | "gpx" | "gml" | "xml" | "dxf" | "pbf" | "topojson" => {
             check_size(path)?;
             read_bytes(&path.display().to_string(), &std::fs::read(path)?)?
         }

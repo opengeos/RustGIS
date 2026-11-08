@@ -45,6 +45,10 @@ use crate::{DataError, Dataset, ReadReport, Result};
 /// How much of a file is looked at to recognize CityGML: its root's start tag, namespaces included.
 const HEAD_BYTES: usize = 64 * 1024;
 
+/// How many bytes of namespace declarations are copied around the members in all, at least: a
+/// root declaring huge ones, with many members, would have them copied and parsed again for each.
+const WRAP_BUDGET: usize = 1 << 30;
+
 /// The namespace every CityGML version's core namespace starts with.
 const CITYGML: &str = "http://www.opengis.net/citygml/";
 
@@ -115,6 +119,7 @@ fn read_with(file_name: &str, bytes: &[u8], given: Option<Crs>, keep_named: bool
     let mut reading = Reading { budget: MAX_FILE_FACES, swap, ..Reading::default() };
     reading.said.appearances = index.appearances;
     let mut wrapped = String::new();
+    let mut wrap_left = text.len().saturating_mul(4).max(WRAP_BUDGET);
     for &(start, end, holder) in &index.members {
         // A member is parsed with the root's namespaces, as it stands in the document; an object of a
         // `featureMembers`, inside a copy of that element's start and end tags.
@@ -123,6 +128,13 @@ fn read_with(file_name: &str, bytes: &[u8], given: Option<Crs>, keep_named: bool
             continue;
         };
         let (open, close) = holder.and_then(|k| index.holders.get(k)).map_or(("", ""), |(o, c)| (o.as_str(), c.as_str()));
+        // Past the budget, a member isn't read, and is counted.
+        let extra = index.namespaces.len() + open.len() + close.len();
+        if extra > wrap_left {
+            reading.counts.skipped += 1;
+            continue;
+        }
+        wrap_left -= extra;
         wrapped.clear();
         wrapped.push_str("<m");
         wrapped.push_str(&index.namespaces);
@@ -180,9 +192,11 @@ fn position(reader: &Reader<&[u8]>) -> usize {
     usize::try_from(reader.buffer_position()).unwrap_or(usize::MAX)
 }
 
-/// An attribute's value as written (entities not expanded), by local name.
-fn raw_attribute<'a>(e: &'a BytesStart, local: &str) -> Option<Cow<'a, str>> {
-    e.attributes().flatten().find(|a| a.key.local_name().into_inner() == local).map(|a| a.value)
+/// An attribute's value by local name, its character and predefined entity references expanded
+/// (as written, when they can't be).
+fn start_attribute<'a>(e: &'a BytesStart, local: &str) -> Option<Cow<'a, str>> {
+    let a = e.attributes().flatten().find(|a| a.key.local_name().into_inner() == local)?;
+    Some(a.normalized_value(quick_xml::XmlVersion::Implicit1_0).unwrap_or(a.value))
 }
 
 /// The namespace an element's own name is in, by the declarations it makes itself (as a root does).
@@ -247,7 +261,7 @@ impl Index {
                 check_root(file_name, e)?;
                 index.namespaces = declarations(e);
             }
-            if let Some(srs) = raw_attribute(e, "srsName").filter(|s| !s.trim().is_empty()) {
+            if let Some(srs) = start_attribute(e, "srsName").filter(|s| !s.trim().is_empty()) {
                 index.see_system(file_name, srs.trim())?;
             }
             match (depth, holder) {
@@ -374,7 +388,10 @@ fn is_object(e: &Node) -> bool {
     local(e).starts_with(char::is_uppercase)
         && !is_gml(e)
         && !VALUES.contains(&local(e))
-        && (attribute(e, "id").is_some() || elements(*e).any(|p| property_lod(&p).is_some()))
+        && (attribute(e, "id").is_some()
+            || local(e) == "TINRelief"
+            || elements(*e)
+                .any(|p| property_lod(&p).is_some() || (SURFACE_PROPERTIES.contains(&local(&p)) && elements(p).any(|s| !is_gml(&s)))))
 }
 
 /// Adds a value, a key given again making a list.
@@ -476,6 +493,8 @@ struct Said {
     appearances: usize,
     /// Curves with arcs or splines, read as straight lines through their points.
     curved: usize,
+    /// Features beside city objects in a property that have no id and no geometry.
+    not_objects: usize,
 }
 
 impl Said {
@@ -526,6 +545,10 @@ impl Said {
         );
         say(self.appearances, format!("the file's appearances (textures and materials) aren't read: {} are left out", self.appearances));
         say(self.curved, format!("{} curves have arcs or splines, read as straight lines through their points", self.curved));
+        say(
+            self.not_objects,
+            format!("{} nested features with no gml:id and no geometry, beside city objects, are left out", self.not_objects),
+        );
         out
     }
 }
@@ -577,7 +600,10 @@ impl Reading {
             } else if only_link(&p) && SURFACE_PROPERTIES.contains(&name) {
                 self.said.links += 1;
             } else if let Some(href) = attribute(&p, "href").filter(|_| first.is_none()) {
-                // A relation to another feature (a group's members, a generalization).
+                // A relation to another feature (a group's members, a generalization). A part given
+                // by a link is kept as one, and the link said: the part is read only where it is
+                // written out.
+                self.said.links += usize::from(name.starts_with("consistsOf"));
                 insert(&mut attributes, name, Json::from(href.trim()));
             } else if let Some(first) = first.filter(|f| VALUES.contains(&local(f))) {
                 // An envelope (its system is read with the others), or what is said apart.
@@ -588,8 +614,15 @@ impl Reading {
                 self.geometry(&p, -1.0, None, false, &mut parts);
             } else if first.is_some_and(|f| SURFACE_PROPERTIES.contains(&name) && local(&f).starts_with(char::is_uppercase)) {
                 elements(p).for_each(|s| self.surface(&s, &mut parts));
-            } else if first.is_some_and(|f| is_object(&f)) {
-                children.extend(elements(p).filter(is_object));
+            } else if elements(p).any(|c| is_object(&c)) {
+                // The objects; a feature beside them with no id and no geometry is said.
+                for c in elements(p) {
+                    if is_object(&c) {
+                        children.push(c);
+                    } else {
+                        self.said.not_objects += 1;
+                    }
+                }
             } else if let Some(v) = value(&p) {
                 insert(&mut attributes, name, v);
             }
@@ -622,6 +655,10 @@ impl Reading {
     /// A thematic surface or an opening: its geometries' faces are its object's, the ground's when it
     /// is a `GroundSurface`. Its openings are read with it.
     fn surface(&mut self, s: &Node, parts: &mut ObjectParts) {
+        if only_link(s) {
+            self.said.links += 1;
+            return;
+        }
         let ground = local(s) == "GroundSurface";
         for p in elements(*s) {
             if let Some(rank) = property_lod(&p) {
@@ -651,17 +688,15 @@ impl Reading {
             swap: self.swap,
             ground,
             dim: None,
+            instance: false,
             got: Got::default(),
         };
         if walk.geometry(&g).is_none() {
             self.said.bad_coordinates += 1;
             return;
         }
-        let Got { faces, surface, mut lines, points, flat, solid } = walk.got;
-        if !flat {
-            faces.rings().chain(&lines).for_each(|ring| parts.heights.add(ring));
-            points.iter().filter(|(_, instance)| !instance).for_each(|(p, _)| parts.heights.add(std::slice::from_ref(p)));
-        }
+        let Got { faces, surface, mut lines, points, heights, solid } = walk.got;
+        parts.heights.add(&heights);
         parts.solid |= solid;
         if surface {
             self.counts.dropped_rings += faces.dropped_rings;
@@ -686,8 +721,9 @@ struct Got {
     lines: Vec<Vec<P3>>,
     /// Its points, each with whether it is an implicit geometry's reference point.
     points: Vec<(P3, bool)>,
-    /// Some coordinates have no height.
-    flat: bool,
+    /// The positions given with a height, which an object's heights come from (not an implicit
+    /// geometry's reference point).
+    heights: Vec<P3>,
     solid: bool,
 }
 
@@ -702,11 +738,18 @@ struct Walk<'r> {
     ground: bool,
     /// The `srsDimension` a geometry it is in gives.
     dim: Option<usize>,
+    /// Reading an implicit geometry's reference point.
+    instance: bool,
     got: Got,
 }
 
 impl Walk<'_> {
     fn geometry(&mut self, g: &Node) -> Option<()> {
+        // A geometry given by a link isn't followed.
+        if only_link(g) {
+            self.said.links += 1;
+            return Some(());
+        }
         // A geometry's `srsDimension` holds for what it holds.
         let outer = self.dim;
         if let Some(d) = attribute(g, "srsDimension") {
@@ -761,8 +804,10 @@ impl Walk<'_> {
                 // Placed by its matrix it is its prototype's shape; here it is its reference point.
                 let at = elements(*g).find(|c| local(c) == "referencePoint")?;
                 let point = elements(at).next()?;
-                let p = self.positions(&point)?;
-                self.got.points.push((*p.first()?, true));
+                self.instance = true;
+                let p = self.positions(&point);
+                self.instance = false;
+                self.got.points.push((*p?.first()?, true));
             }
             other => {
                 self.counts.unknown.insert(other.chars().take(64).collect());
@@ -808,7 +853,16 @@ impl Walk<'_> {
                 }
                 continue;
             }
-            rings.push(self.positions(&elements(b).next()?)?);
+            let ring = elements(b).next()?;
+            // A ring of curves, one given by a link: the ring isn't whole, and is left out as one.
+            if ring.descendants().any(|d| local(&d) == "curveMember" && only_link(&d)) {
+                self.said.links += 1;
+                if k == 0 {
+                    return Some(());
+                }
+                continue;
+            }
+            rings.push(self.positions(&ring)?);
         }
         self.got.faces.face(rings, self.ground);
         Some(())
@@ -836,11 +890,16 @@ impl Walk<'_> {
                     // Tuples split by `ts` (blanks by default), their values by `cs` (a comma).
                     let cs = attribute(&c, "cs").unwrap_or(",");
                     let ts = attribute(&c, "ts").unwrap_or(" ");
+                    let decimal = attribute(&c, "decimal").filter(|d| *d != "." && !d.is_empty());
+                    let number = |t: &str| match decimal {
+                        Some(d) => t.trim().replace(d, ".").parse::<f64>().ok(),
+                        None => t.trim().parse::<f64>().ok(),
+                    };
                     let written = text(&c);
                     let tuples = written.split(|ch: char| if ts == " " { ch.is_whitespace() } else { ts.contains(ch) });
                     let (mut values, mut dim) = (Vec::new(), None);
                     for tuple in tuples.filter(|t| !t.trim().is_empty()) {
-                        let v: Vec<f64> = tuple.split(cs).map(|t| t.trim().parse().ok()).collect::<Option<_>>()?;
+                        let v: Vec<f64> = tuple.split(cs).map(number).collect::<Option<_>>()?;
                         // Every tuple as long as the first.
                         if *dim.get_or_insert(v.len()) != v.len() {
                             return None;
@@ -854,12 +913,14 @@ impl Walk<'_> {
             if !(2..=3).contains(&dim) || !values.len().is_multiple_of(dim) {
                 return None;
             }
-            self.got.flat |= dim == 2 && !values.is_empty();
             for v in values.chunks(dim) {
                 let (a, b) = (v.first().copied()?, v.get(1).copied()?);
                 let (x, y) = if self.swap { (b, a) } else { (a, b) };
                 let p = [x, y, v.get(2).copied().unwrap_or(0.0)];
                 self.reach.add(&p);
+                if dim == 3 && !self.instance {
+                    self.got.heights.push(p);
+                }
                 out.push(p);
             }
         }

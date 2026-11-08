@@ -13671,6 +13671,11 @@ fn citygml_layers_and_the_coordinate_system_given() {
     let both = |s: &Session, stem: &str| {
         (s.map().layer_by_name(&format!("{stem} Building")).is_some(), s.map().layer_by_name(&format!("{stem} BuildingPart")).is_some())
     };
+    // Placed in the Netherlands, as EPSG:28992 puts (85000, 447000).
+    let placed = |s: &Session, name: &str| {
+        let e = s.map().layer_by_name(name).map(|l| l.dataset.extent()).unwrap();
+        assert!((4.0..5.0).contains(&e.min_x) && (51.5..52.5).contains(&e.min_y), "{name}: {e:?}");
+    };
 
     let mut s = Session::new(Project::default());
     let e = s.run("layer.addData", &json!({"path": path})).unwrap_err();
@@ -13678,6 +13683,7 @@ fn citygml_layers_and_the_coordinate_system_given() {
     let mut s = Session::new(Project::default());
     s.run("layer.addData", &json!({"path": path, "crs": "EPSG:28992"})).unwrap();
     assert_eq!(both(&s, "model"), (true, true));
+    placed(&s, "model Building");
 
     // A layer picked, by path and as text: that layer, with the file's own notices.
     for pick in ["Building", "BuildingPart"] {
@@ -13696,6 +13702,7 @@ fn citygml_layers_and_the_coordinate_system_given() {
     let mut s = Session::new(Project::default());
     s.run("layer.addDataText", &json!({"fileName": "t.xml", "text": model, "crs": "EPSG:28992"})).unwrap();
     assert_eq!(both(&s, "t"), (true, true));
+    placed(&s, "t Building");
 
     // Listed in the coordinate system given, and zipped.
     let mut s = Session::new(Project::default());
@@ -13708,6 +13715,7 @@ fn citygml_layers_and_the_coordinate_system_given() {
     std::fs::write(&archive, rustgis_data::zip::write(&[("d/m.gml".to_string(), model.clone().into_bytes())]).unwrap()).unwrap();
     s.run("layer.addData", &json!({"path": archive.display().to_string(), "crs": "EPSG:28992"})).unwrap();
     assert_eq!(both(&s, "m"), (true, true));
+    placed(&s, "m Building");
     let _ = std::fs::remove_dir_all(dir);
 }
 
