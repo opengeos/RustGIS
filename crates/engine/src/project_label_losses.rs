@@ -192,7 +192,7 @@ fn diagram_messages(d: rustgis_map::diagram::DiagramAudit, name: &str, what: &st
     }
     if d.adjusted > 0 {
         messages.push(format!(
-            "{name}: {} diagram(s) with a size, start angle or outline width out of range adjusted while opening {what}",
+            "{name}: {} diagram(s) with a size, data range, start angle or outline width out of range or out of order adjusted while opening {what}",
             d.adjusted
         ));
     }

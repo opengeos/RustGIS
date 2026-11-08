@@ -510,7 +510,7 @@ mod tests {
             "1 diagram(s) that could not be read or named no field removed",
             "1 diagram category(ies) with a blank field name",
             "1 diagram category(ies) repeating an earlier field kept",
-            "1 layout element(s) with a value out of range or a repeated id adjusted while opening the project (in \"Poster\")",
+            "1 layout element(s) with a value out of range, a repeated id, an over-long name or a missing map frame reference repaired while opening the project (in \"Poster\")",
         ] {
             assert!(said.iter().any(|t| t.contains(text)), "{text}: {said:?}");
         }
@@ -551,6 +551,19 @@ mod tests {
             said.iter().any(|t| t.contains("1 layout(s) beyond the 200 a project holds removed while checking the project")),
             "{said:?}"
         );
+        // A map import takes the layers' diagrams, so says what reading them changed.
+        let mut damaged_map: serde_json::Value = serde_json::from_str(&map).unwrap();
+        let layer = damaged_map["layers"].as_array_mut().unwrap().iter_mut().find(|l| l["id"] == json!(id)).unwrap();
+        let cats = layer["diagram"]["categories"].as_array_mut().unwrap();
+        let mut blank = cats[0].clone();
+        blank["field"] = json!(" ");
+        cats.push(blank);
+        let mut imported = Session::new(Project::default());
+        imported.run("map.import", &json!({"text": damaged_map.to_string()})).unwrap();
+        let said: Vec<&str> = imported.notices.iter().map(|n| n.text.as_str()).collect();
+        assert_eq!(said.iter().filter(|t| t.contains("1 diagram category(ies) with a blank field name")).count(), 1, "{said:?}");
+        // The cap the reader keeps is the one commands keep: no 201st layout to lose.
+        assert!(full.run("layout.new", &json!({})).is_err());
         // Importing its styles takes no diagrams or layouts, so says nothing of them.
         let mut styled = Session::new(Project::default());
         let mark = styled.notices.len();

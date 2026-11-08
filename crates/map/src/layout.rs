@@ -1302,11 +1302,15 @@ impl Layout {
                 },
                 ..*e
             };
-            // A bearing past half a turn names the same direction once normalized: not a change.
-            if let ElementKind::MapFrame { bearing, .. } = &mut before.kind
-                && bearing.is_finite()
-            {
-                *bearing = crate::camera::normalize_bearing(*bearing);
+            // A bearing past half a turn names the same direction once normalized, and a pitch
+            // too small to tilt is drawn flat: neither is a change.
+            if let ElementKind::MapFrame { bearing, pitch, .. } = &mut before.kind {
+                if bearing.is_finite() {
+                    *bearing = crate::camera::normalize_bearing(*bearing);
+                }
+                if (0.0..1e-6).contains(pitch) {
+                    *pitch = 0.0;
+                }
             }
             // Ids stay well below u32::MAX so new elements never run out of numbers. A repeated id
             // (only a hand-edited file has one) is renumbered; references to it keep meaning the
@@ -1691,6 +1695,10 @@ mod tests {
             *bearing = 270.0;
         }
         assert!(l.clamp().is_empty(), "a bearing of 270 is -90 by another name, not a repair");
+        if let ElementKind::MapFrame { pitch, .. } = &mut l.elements[0].kind {
+            *pitch = 1e-7;
+        }
+        assert!(l.clamp().is_empty(), "a pitch too small to tilt is flat, not a repair");
         let ids: Vec<u32> = l.elements.iter().map(|e| e.id).collect();
         assert_eq!(ids.len(), 2, "the legend of a missing frame goes");
         assert_ne!(ids[0], ids[1], "duplicate ids are renumbered");

@@ -319,6 +319,9 @@ pub(crate) fn new_layout(s: &mut Session, p: &Value) -> CmdResult {
         }
         t => return Err(format!("unknown template '{t}'")),
     }
+    if s.project.layouts.len() >= crate::project::MAX_LAYOUTS {
+        return Err(format!("a project holds at most {} layouts; remove one first", crate::project::MAX_LAYOUTS));
+    }
     s.project.layouts.push(l);
     let i = s.project.layouts.len() - 1;
     s.active_layout = Some(i);
@@ -2079,6 +2082,9 @@ fn publication(s: &mut Session, p: &Value) -> CmdResult {
     }
     // Every element by name and id, for `layout.update`.
     let elements: Vec<Value> = l.elements.iter().map(|e| json!({"element": e.id, "name": e.name, "kind": e.kind.code()})).collect();
+    if s.project.layouts.len() >= crate::project::MAX_LAYOUTS {
+        return Err(format!("a project holds at most {} layouts; remove one first", crate::project::MAX_LAYOUTS));
+    }
     s.project.layouts.push(l);
     let i = s.project.layouts.len() - 1;
     s.active_layout = Some(i);
@@ -3695,6 +3701,9 @@ pub(crate) fn import(s: &mut Session, text: &str) -> CmdResult {
         }
     }
     let name = l.name.clone();
+    if s.project.layouts.len() >= crate::project::MAX_LAYOUTS {
+        return Err(format!("a project holds at most {} layouts; remove one first", crate::project::MAX_LAYOUTS));
+    }
     s.project.layouts.push(l);
     let i = s.project.layouts.len() - 1;
     s.active_layout = Some(i);

@@ -1181,8 +1181,8 @@ pub(crate) enum ReadPart {
 /// Every part: a whole project opened.
 pub(crate) const ALL_PARTS: [ReadPart; 3] = [ReadPart::Labels, ReadPart::Diagrams, ReadPart::Layouts];
 
-/// The most layouts a project keeps.
-const MAX_LAYOUTS: usize = 200;
+/// The most layouts a project keeps (`layout.*` commands refuse to make more).
+pub(crate) const MAX_LAYOUTS: usize = 200;
 
 /// The layouts named in a notice, the first few of them.
 fn layout_names(
@@ -1209,6 +1209,11 @@ fn layout_names(
 /// One notice per kind of change [`Project::repair`] made to the layouts of a project read from
 /// its file: layouts beyond the limit, elements brought into range or removed, page settings.
 fn layout_notices(name: &str, when: &str, dropped: usize, repairs: &[(String, rustgis_map::layout::LayoutRepairs)]) -> Vec<String> {
+    // The project's name is cut too, so a long one can't crowd out the count.
+    let name: String = match name.char_indices().nth(100) {
+        Some((i, _)) => format!("{}…", name.get(..i).unwrap_or_default()),
+        None => name.to_string(),
+    };
     let mut notices = Vec::new();
     if dropped > 0 {
         notices.push(format!("{name}: {dropped} layout(s) beyond the {MAX_LAYOUTS} a project holds removed {when}"));
@@ -1218,7 +1223,7 @@ fn layout_notices(name: &str, when: &str, dropped: usize, repairs: &[(String, ru
     let adjusted = total(|r| r.elements_adjusted);
     if adjusted > 0 {
         notices.push(format!(
-            "{name}: {adjusted} layout element(s) with a value out of range or a repeated id adjusted {when} (in {})",
+            "{name}: {adjusted} layout element(s) with a value out of range, a repeated id, an over-long name or a missing map frame reference repaired {when} (in {})",
             layout_names(repairs, |r| r.elements_adjusted)
         ));
     }
