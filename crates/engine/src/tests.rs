@@ -29276,8 +29276,10 @@ fn session_log_entries_name_their_project_and_say_when_their_params_are_partial(
         s.run("script.run", &json!({"script": "map.new {\"name\": \"M\", \"secretAccessKey\": \"S3CRET\", \"secretAccessKey\": \"\"}"}));
     let twice = last(&s);
     assert!(!twice.params.to_string().contains("S3CRET") && twice.partial, "{twice:?}");
-    // Nor with its name escaped, nor a key a plain name blanks only for its value, nor deeper in.
+    // Nor with its name escaped, nor a key a plain name blanks only for its value, nor deeper in;
+    // and a key only logs leave out (`passphrase`) isn't kept either.
     for script in [
+        r#"map.new {"name": "M", "passphrase": "S3CRET"}"#,
         r#"map.new {"name": "M", "\u0074oken": "S3CRET", "\u0074oken": ""}"#,
         r#"map.new {"name": "M", "key": "AKIAIOSFODNN7S3CRET", "key": ""}"#,
         r#"map.new {"name": "M", "style": {"token": "S3CRET", "token": ""}}"#,
@@ -32112,7 +32114,8 @@ fn exports_run_on_another_thread() {
     let missing: Vec<_> = s.notices_since(mark).iter().filter(|n| n.text.contains("in the file")).map(|n| n.text.clone()).collect();
     assert!(missing.len() == 1 && missing[0].contains("2 layers aren't in the file"), "{missing:?}");
     s.map_mut().layers[li].source = None;
-    // One that lands after another project opened is logged under the project it started in.
+    // One that lands (or is refused) after another project opened is logged under the project it
+    // started in.
     let (name, opened) = (s.project.name.clone(), s.opened);
     let run = export_start(&mut s, "share.exportMap", &json!({"path": at("before_new.png"), "width": 64, "height": 48})).unwrap();
     let started = run.started();

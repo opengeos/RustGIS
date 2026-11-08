@@ -273,10 +273,8 @@ pub fn export_land(s: &mut Session, started: Started, done: Result<Wrote, String
     s.diagnostic_source = before;
     if s.log.on() && crate::project_log::is_logged(s, command, &params) {
         let (kept, partial) = crate::project_log::kept_and_partial(&params);
-        let mut entry = crate::project_log::entry(s, command, kept, partial, &landed, at, start.elapsed());
         // The project it started in, not one opened while it ran.
-        (entry.project, entry.opened) = project;
-        s.log.push(entry);
+        s.log.push(crate::project_log::entry(project, command, kept, partial, &landed, at, start.elapsed()));
     }
     landed
 }

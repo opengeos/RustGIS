@@ -327,7 +327,8 @@ pub(crate) fn json_in_text_redacted(t: &str) -> String {
                 // is the one run, and isn't said to be partial for its spacing. Only one with no
                 // key written twice: it is read as its last value, and its text keeps the others
                 // (a secret's first, its last left empty, its name escaped or not).
-                let kept = crate::cmd::history::redacted(&v);
+                // The log's own rule, as for its parameters: a key only logs leave out too.
+                let kept = redacted(&v);
                 let written = from.get(..end).unwrap_or("");
                 if kept == v && serde_json::from_str::<UniqueKeys>(written).is_ok() {
                     out.push_str(written);
@@ -491,8 +492,18 @@ fn clip(v: &Value, chars: usize, items: usize, depth: usize) -> Value {
 /// The entry of command `id`, which started at `at` and took `took`; its error without secrets,
 /// clipped to [`LOG_ERROR_CHARS`].
 /// `partial`: its parameters aren't all as given ([`kept_and_partial`]). It is the entry of the
-/// project open in `s` as it ended: the one a command that opens a project opened.
-pub(crate) fn entry(s: &Session, id: &str, params: Value, partial: bool, res: &CmdResult, at: u64, took: web_time::Duration) -> LogEntry {
+/// project given, its name as the log keeps it ([`kept_name`]) and its `Session::opened`: the one
+/// open as the command ended (the one it opened, for one that opens a project), or for an export,
+/// the one it started in.
+pub(crate) fn entry(
+    project: (String, u64),
+    id: &str,
+    params: Value,
+    partial: bool,
+    res: &CmdResult,
+    at: u64,
+    took: web_time::Duration,
+) -> LogEntry {
     let error = res.as_ref().err().map(|e| kept_error(e));
     LogEntry {
         at,
@@ -501,8 +512,8 @@ pub(crate) fn entry(s: &Session, id: &str, params: Value, partial: bool, res: &C
         ok: res.is_ok(),
         error,
         millis: u64::try_from(took.as_millis()).unwrap_or(u64::MAX),
-        project: kept_name(&s.title()),
-        opened: s.opened,
+        project: project.0,
+        opened: project.1,
         partial,
     }
 }

@@ -113,13 +113,13 @@ pub fn pane(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         let rows = shown.into_iter().map(|e| Row::of(e, registry)).collect();
         *cache = Some(((log.changes(), raw.to_string(), *failed, project), rows, count, total));
     }
-    let (count, total, listed) = cache.as_ref().map_or((0, 0, 0), |(_, rows, matched, all)| (*matched, *all, rows.len()));
+    let (count, total, on_screen) = cache.as_ref().map_or((0, 0, 0), |(_, rows, matched, all)| (*matched, *all, rows.len()));
     let note = if total == 0 {
         tl!("Commands that change the project, or that name a file, folder or address, appear here.").to_string()
     } else if count == 0 {
         tl!("No command matches").to_string()
-    } else if count > listed {
-        crate::i18n::fmt("The newest {shown} of {count} entries", &[("shown", &listed.to_string()), ("count", &count.to_string())])
+    } else if count > on_screen {
+        crate::i18n::fmt("The newest {shown} of {count} entries", &[("shown", &on_screen.to_string()), ("count", &count.to_string())])
     } else if count < total {
         crate::i18n::fmt("{count} of {total} entries", &[("count", &count.to_string()), ("total", &total.to_string())])
     } else if count == 1 {
