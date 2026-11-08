@@ -1978,7 +1978,7 @@ impl Session {
         cmd::raster::say_losses(self, lost);
         // The browser uses its own trust; only native clients can fall back.
         #[cfg(not(target_arch = "wasm32"))]
-        self.say_bundled_roots(rustgis_data::http::bundled_roots());
+        self.notice_trust();
         if !dropped.is_empty() {
             let mut kinds: Vec<&str> = dropped.iter().flat_map(|(_, k)| k.iter().copied()).collect();
             kinds.sort_unstable();
@@ -2023,6 +2023,14 @@ impl Session {
     /// system with no CA certificates and no `SSL_CERT_FILE` or `SSL_CERT_DIR` makes it
     /// ([`rustgis_data::http::bundled_roots`]): the trust source was assumed, not the system's.
     /// Checked after each command and each frame, as the clients are first made when a request is.
+    /// Says, once a session, that native HTTPS fell back to the bundled CA roots, if it did. Run
+    /// with [`Session::notice_landed_rasters`]; a reader of the notices that runs no command (the
+    /// Python package) calls it first, as a client made on a background thread chooses the trust.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn notice_trust(&mut self) {
+        self.say_bundled_roots(rustgis_data::http::bundled_roots());
+    }
+
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     fn say_bundled_roots(&mut self, bundled: bool) {
         if bundled && !self.bundled_roots_said {
