@@ -20,9 +20,10 @@ draws a GeoTIFF of a view too large for 192 DPI at the most that fits, and says 
 at most 8000 points a side, PNG or GeoTIFF: with no `width` or `height`, a larger view is cut to
 its middle; a `width` or `height` past 8000 is drawn at 8000, holding less ground than asked (the whole
 view still fits). Either way the
-export says so. Tiles still
-on their way when the export stops waiting, streamed layers still reading the view, and tile
-layers that can't be drawn leave gaps that would pass for data, so the export warns about them. The web app's Export Map downloads a PNG. A projection
+export says so. In a GeoTIFF,
+tiles still on their way when the export stops waiting, streamed layers still reading the view,
+and tile layers that can't be drawn leave gaps that would pass for data, so its export warns
+about them. The web app's Export Map downloads a PNG. A projection
 whose parameters GeoTIFF's keys can't hold (Mollweide or Robinson, for example) is refused too:
 switch the map to an EPSG projection first.
 

@@ -33133,6 +33133,18 @@ fn export_map_to_geotiff_places_the_view_on_the_ground() {
     // North up over the box: the same place lands on the same ground.
     assert_eq!(at(&r2, 10.0, 50.0), land);
     assert!((r2.transform.pixel_width - cam.res).abs() < 1e-6 * cam.res);
+    // At 100 DPI the box isn't a whole number of pixels: the picture still covers all of it.
+    let at100 = dir.join("turned-100.tif");
+    s.run("share.exportMap", &json!({"path": at100.display().to_string(), "width": 400, "height": 300, "dpi": 100})).unwrap();
+    let r3 = read(&at100);
+    let (bw, bh) = s.map().camera.rotated_size(400.0, 300.0);
+    let cell = r3.transform.pixel_width;
+    assert!(
+        f64::from(r3.width) * cell >= bw * cam.res - 1e-6 && f64::from(r3.height) * cell >= bh * cam.res - 1e-6,
+        "{} × {}",
+        r3.width,
+        r3.height
+    );
     s.run("map.setBearing", &json!({"bearing": 0})).unwrap();
     // `cog` writes a cloud-optimised one; it's for a GeoTIFF only.
     let cog = dir.join("view-cog.tif");
@@ -33262,7 +33274,7 @@ fn export_map_to_geotiff_draws_tile_layers_and_keeps_their_credits() {
     let r = geotiff::read(std::io::Cursor::new(std::fs::read(&path).unwrap()), "tiles").unwrap();
     assert_eq!(r.copyright.as_deref(), Some("(c) R?d"));
     assert!(
-        s.notices.iter().any(|n| n.text.contains("written with 1 © or ® as (c) or (R), 1 character as ? (the credits: © Röd)")),
+        s.notices.iter().any(|n| n.text.contains("written with 1 © or ® as (c) or (R), 1 character as ? (the credits: \"© Röd\")")),
         "{:?}",
         s.notices
     );

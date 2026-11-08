@@ -1234,7 +1234,8 @@ pub(super) fn read_limited_with_nodata(
     let (copyright, copyright_lost) = match dec.find_tag(Tag::Copyright).map(|v| v.map(|v| v.into_string())) {
         Ok(None) => (None, None),
         Ok(Some(Ok(c))) => (Some(c.trim().to_string()), None),
-        Ok(Some(Err(e))) | Err(e) => (None, Some(format!("its Copyright tag: it isn't ASCII text ({e}), so it is left out"))),
+        Ok(Some(Err(e))) => (None, Some(format!("its Copyright tag: it isn't ASCII text ({e}), so it is left out"))),
+        Err(e) => (None, Some(format!("its Copyright tag: it can't be read ({e}), so it is left out"))),
     };
     let spp = samples(&mut dec);
     let bytes = sample_bytes(&mut dec);

@@ -166,6 +166,9 @@ fn png_of(
     rustgis_render::render_png(map, &view)
 }
 
+/// The most characters of the credits a GeoTIFF export's notice shows; its answer has them all.
+const CREDITS_SHOWN: usize = 200;
+
 /// The most points a side an export of the map draws; a larger view is cut to its middle.
 pub const MOST_POINTS: f64 = 8000.0;
 
@@ -304,9 +307,11 @@ fn geotiff_work(
     if turned {
         // North up over the box around the turned view: everything it shows, and more at the
         // corners.
+        // In points whose pixels, once rounded, still cover the box.
         let (bw, bh) = view.camera.rotated_size(view.width, view.height);
-        view.width = bw.ceil();
-        view.height = bh.ceil();
+        let ppp = view.pixels_per_point;
+        view.width = (bw * ppp).ceil() / ppp;
+        view.height = (bh * ppp).ceil() / ppp;
         view.camera.bearing = 0.0;
         notices.push((
             rustgis_data::diagnostics::Severity::Info,
@@ -353,7 +358,11 @@ fn geotiff_work(
             if let Some(c) = &r.copyright {
                 out["copyright"] = json!(c);
                 if let Some(note) = rustgis_data::raster::tag_text_note(c) {
-                    notices.push((rustgis_data::diagnostics::Severity::Info, format!("{path}: {note} (the credits: {c})")));
+                    // Quoted (control characters escaped, so a service's credits can't reach a
+                    // terminal raw) and cut short: the answer holds them whole.
+                    let shown: String = c.chars().take(CREDITS_SHOWN).collect();
+                    let more = if c.chars().count() > CREDITS_SHOWN { "…" } else { "" };
+                    notices.push((rustgis_data::diagnostics::Severity::Info, format!("{path}: {note} (the credits: {shown:?}{more})")));
                 }
             }
             Ok(out)
