@@ -260,16 +260,16 @@ fn embedded_redacted(v: &Value, depth: usize) -> Value {
 
 /// JSON whose every object has each of its keys once, as its text is read: deserializing one with
 /// a key written twice (at any depth) fails.
-struct OnceEach;
+struct UniqueKeys;
 
-impl<'de> Deserialize<'de> for OnceEach {
+impl<'de> Deserialize<'de> for UniqueKeys {
     fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        d.deserialize_any(OnceEach)
+        d.deserialize_any(UniqueKeys)
     }
 }
 
-impl<'de> serde::de::Visitor<'de> for OnceEach {
-    type Value = OnceEach;
+impl<'de> serde::de::Visitor<'de> for UniqueKeys {
+    type Value = UniqueKeys;
 
     fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str("JSON")
@@ -293,7 +293,7 @@ impl<'de> serde::de::Visitor<'de> for OnceEach {
         Ok(self)
     }
     fn visit_seq<A: serde::de::SeqAccess<'de>>(self, mut items: A) -> Result<Self, A::Error> {
-        while items.next_element::<OnceEach>()?.is_some() {}
+        while items.next_element::<UniqueKeys>()?.is_some() {}
         Ok(self)
     }
     fn visit_map<A: serde::de::MapAccess<'de>>(self, mut keys: A) -> Result<Self, A::Error> {
@@ -302,7 +302,7 @@ impl<'de> serde::de::Visitor<'de> for OnceEach {
             if !seen.insert(key) {
                 return Err(serde::de::Error::custom("a key written twice"));
             }
-            keys.next_value::<OnceEach>()?;
+            keys.next_value::<UniqueKeys>()?;
         }
         Ok(self)
     }
@@ -329,7 +329,7 @@ pub(crate) fn json_in_text_redacted(t: &str) -> String {
                 // (a secret's first, its last left empty, its name escaped or not).
                 let kept = crate::cmd::history::redacted(&v);
                 let written = from.get(..end).unwrap_or("");
-                if kept == v && serde_json::from_str::<OnceEach>(written).is_ok() {
+                if kept == v && serde_json::from_str::<UniqueKeys>(written).is_ok() {
                     out.push_str(written);
                 } else {
                     out.push_str(&serde_json::to_string(&kept).unwrap_or_default());
@@ -490,8 +490,8 @@ fn clip(v: &Value, chars: usize, items: usize, depth: usize) -> Value {
 
 /// The entry of command `id`, which started at `at` and took `took`; its error without secrets,
 /// clipped to [`LOG_ERROR_CHARS`].
-/// `partial`: its parameters aren't all as given ([`kept`]). It is the entry of the project open
-/// in `s` as it ended: the one a command that opens a project opened.
+/// `partial`: its parameters aren't all as given ([`kept_and_partial`]). It is the entry of the
+/// project open in `s` as it ended: the one a command that opens a project opened.
 pub(crate) fn entry(s: &Session, id: &str, params: Value, partial: bool, res: &CmdResult, at: u64, took: web_time::Duration) -> LogEntry {
     let error = res.as_ref().err().map(|e| kept_error(e));
     LogEntry {
@@ -516,7 +516,7 @@ fn kept_name(name: &str) -> String {
 
 /// `params` as the log keeps them ([`kept_params`]), and whether that is less than they were:
 /// cut to fit or with secrets taken out, so they wouldn't run again as they ran.
-pub(crate) fn kept(params: &Value) -> (Value, bool) {
+pub(crate) fn kept_and_partial(params: &Value) -> (Value, bool) {
     let kept = kept_params(params);
     let partial = kept != *params;
     (kept, partial)

@@ -28964,6 +28964,9 @@ fn session_log_entries_name_their_project_and_say_when_their_params_are_partial(
     let service = last(&s);
     assert_eq!(service.command, "service.layers", "{service:?}");
     assert!(!service.params.to_string().contains("S3CRET") && service.partial, "{service:?}");
+    // And `project.log` says so: `partial` is in its answer.
+    let answer = s.run("project.log", &json!({"command": "service.layers", "limit": 1})).unwrap();
+    assert_eq!(answer["entries"][0]["partial"], json!(true), "{answer}");
     // Saved: the project's name last in a CSV row; in JSON, the name, and `partial` only when so.
     let mut csv = Vec::new();
     s.log.write(&mut csv, true).unwrap();

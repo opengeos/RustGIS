@@ -602,6 +602,13 @@ mod tests {
         assert!(h.state().ui.session_log.this_project);
         assert!(h.query_by_label("2 of 4 entries").is_some(), "the open and what came after, not the other Same");
         assert!(h.query_by_label(r#"{"name":"Before"}"#).is_none() && h.query_by_label(r#"{"name":"After"}"#).is_some());
+        // Another project opened with logging off (the log unchanged): the list follows it.
+        h.state_mut().run("project.logCommands", json!({"on": false})).unwrap();
+        h.run();
+        assert!(h.query_by_label("3 of 5 entries").is_some(), "the switch's own entry");
+        h.state_mut().run("project.new", json!({"name": "Third"})).unwrap();
+        h.run();
+        assert!(h.query_by_label("No command matches").is_some());
     }
 
     /// Right-clicks row `row` and picks `item` in its menu: the text it put on the clipboard.

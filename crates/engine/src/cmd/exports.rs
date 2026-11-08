@@ -268,7 +268,7 @@ pub fn export_land(s: &mut Session, started: Started, done: Result<Wrote, String
     }
     s.diagnostic_source = before;
     if s.log.on() && crate::project_log::is_logged(s, command, &params) {
-        let (kept, partial) = crate::project_log::kept(&params);
+        let (kept, partial) = crate::project_log::kept_and_partial(&params);
         let entry = crate::project_log::entry(s, command, kept, partial, &landed, at, start.elapsed());
         s.log.push(entry);
     }

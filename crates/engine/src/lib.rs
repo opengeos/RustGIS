@@ -1499,7 +1499,7 @@ impl Session {
                         // The step's label isn't a parameter: the command, run again, takes none.
                         let (params, partial) = match step {
                             Some(label) => (serde_json::json!({"step": label}), false),
-                            None => project_log::kept(params),
+                            None => project_log::kept_and_partial(params),
                         };
                         let e = project_log::entry(self, id, params, partial, &res, at, start.elapsed());
                         if joins && res.is_ok() { self.log.join_last(e) } else { self.log.push(e) }
