@@ -1976,6 +1976,8 @@ impl Session {
         }
         // What a header left out, as adding the layer says it (one notice a kind, with counts).
         cmd::raster::say_losses(self, lost);
+        // The browser uses its own trust; only native clients can fall back.
+        #[cfg(not(target_arch = "wasm32"))]
         self.say_bundled_roots(rustgis_data::http::bundled_roots());
         if !dropped.is_empty() {
             let mut kinds: Vec<&str> = dropped.iter().flat_map(|(_, k)| k.iter().copied()).collect();
@@ -2021,6 +2023,7 @@ impl Session {
     /// system with no CA certificates and no `SSL_CERT_FILE` or `SSL_CERT_DIR` makes it
     /// ([`rustgis_data::http::bundled_roots`]): the trust source was assumed, not the system's.
     /// Checked after each command and each frame, as the clients are first made when a request is.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     fn say_bundled_roots(&mut self, bundled: bool) {
         if bundled && !self.bundled_roots_said {
             self.bundled_roots_said = true;
