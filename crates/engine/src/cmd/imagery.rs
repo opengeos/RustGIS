@@ -1130,7 +1130,9 @@ pub(crate) fn process_work(s: &Session, p: &Value) -> Result<super::workflows::W
                 };
                 let nodata = r.nodata.or(Some(NODATA as f64));
                 let color = if matches!(r.color, ColorHint::Palette(_)) { ColorHint::Gray } else { r.color.clone() };
-                let out = Raster::new(out, w, h, bands, gt, r.crs, nodata, color, r.data_type.clone()).map_err(|e| e.to_string())?;
+                let mut out = Raster::new(out, w, h, bands, gt, r.crs, nodata, color, r.data_type.clone()).map_err(|e| e.to_string())?;
+                // The blocks average values rounded when the file was read, some or all of them.
+                out.keep_rounded_mark(&r);
                 super::workflows::made(out, None)
             }))
         }
@@ -1283,6 +1285,8 @@ fn raster_mosaic(s: &mut Session, p: &Value) -> CmdResult {
         o.name = i.name.clone();
         o.classes = i.classes.clone();
     });
+    // Cells rounded when an input was read may be among those the mosaic keeps.
+    out.keep_rounded_marks(rs.iter().map(|r| &**r));
     let other: Vec<&str> = rs
         .iter()
         .skip(1)

@@ -15806,11 +15806,12 @@ fn rounded_raster_values_are_said_on_import_and_export() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
-/// A raster clipped or pixel-edited from one with values rounded when it was read keeps a mark
+/// A raster clipped, resampled, mosaicked or pixel-edited from one with values rounded when it
+/// was read keeps a mark
 /// of them, with no count (it holds an unknown share), and its export says so; one made from a
 /// clean raster says nothing of rounding (#1614).
 #[test]
-fn clipped_and_edited_rasters_keep_the_rounded_note() {
+fn rasters_made_from_rounded_ones_keep_the_rounded_note() {
     let dir = std::env::temp_dir().join(format!("rustgis-engine-rounded-part-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     const SOME: &str = "some values in it may have been rounded to 32-bit floats";
@@ -15828,8 +15829,15 @@ fn clipped_and_edited_rasters_keep_the_rounded_note() {
         let clipped = raster(&s, &clip);
         assert_eq!((clipped.width, clipped.height, clipped.rounded.is_empty()), (1, 1, true), "{file}");
         assert_eq!(clipped.rounded_some, if rounded { vec![true] } else { vec![] }, "{file}");
-        s.run("raster.editPixels", &json!({"layer": name, "polygon": [[10.1, 40.1], [10.9, 40.1], [10.9, 40.9]], "value": 1})).unwrap();
-        for layer in [clip.as_str(), name.as_str()] {
+        let (half, joined) = (format!("{name}_half"), format!("{name}_joined"));
+        s.run("raster.process", &json!({"layer": name, "operation": "resample", "factor": 2, "name": half})).unwrap();
+        s.run("raster.mosaic", &json!({"inputs": [clip, name], "name": joined})).unwrap();
+        s.run(
+            "raster.editPixels",
+            &json!({"layer": name, "polygon": [[10.1, 40.1], [10.9, 40.1], [10.9, 40.9], [10.1, 40.9]], "value": 1}),
+        )
+        .unwrap();
+        for layer in [clip.as_str(), half.as_str(), joined.as_str(), name.as_str()] {
             let mark = s.notice_mark();
             s.run("share.exportRaster", &json!({"layer": layer, "path": dir.join(format!("{layer}.tif"))})).unwrap();
             let notes = s.notices_since(mark);

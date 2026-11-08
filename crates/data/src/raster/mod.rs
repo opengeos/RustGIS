@@ -954,11 +954,20 @@ impl Raster {
         self.rounded.get(b).is_some_and(|n| *n > 0) || self.rounded_some.get(b).copied().unwrap_or(false)
     }
 
-    /// Marks this raster, made from part of `src` band for band (a clip, a pixel edit), as
-    /// holding some of `src`'s rounded values, how many unknown: the bands of `src` that held
-    /// any are marked, and the count, which was `src`'s whole, isn't kept.
+    /// Marks this raster, made from part of `src` band for band (a clip, a pixel edit, a
+    /// resample), as holding some of `src`'s rounded values, how many unknown: the bands of `src`
+    /// that held any are marked, and the count, which was `src`'s whole, isn't kept.
     pub fn keep_rounded_mark(&mut self, src: &Raster) {
-        let marks: Vec<bool> = (0..self.band_count()).map(|b| src.band_rounded(b)).collect();
+        self.keep_rounded_marks(std::iter::once(src));
+    }
+
+    /// As [`Raster::keep_rounded_mark`], for a raster made from parts of several (a mosaic): a
+    /// band is marked when any source's band of that number held rounded values.
+    pub fn keep_rounded_marks<'a>(&mut self, srcs: impl IntoIterator<Item = &'a Raster>) {
+        let mut marks = vec![false; self.band_count()];
+        for src in srcs {
+            marks.iter_mut().enumerate().for_each(|(b, m)| *m |= src.band_rounded(b));
+        }
         self.rounded = Vec::new();
         self.rounded_some = if marks.contains(&true) { marks } else { Vec::new() };
     }
