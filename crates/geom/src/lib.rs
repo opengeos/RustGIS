@@ -582,8 +582,8 @@ fn ring_lon_steps(ring: &[Coord]) -> Vec<(f64, bool)> {
                 && !moves(before)
                 && !moves(after)
                 && dlat(before) * dlat(after) < 0.0
-                && dlat(before).abs() > NEAR_DEG
-                && dlat(after).abs() > NEAR_DEG;
+                && dlat(before).abs() > SAME_DEG
+                && dlat(after).abs() > SAME_DEG;
             (0.0, full.then_some(d))
         })
         .collect();
@@ -653,7 +653,7 @@ fn authalic_ring_area_m2(ring: &[Coord]) -> f64 {
         let dlat = r.y - p.y;
         // An edge to or from a pole runs along a meridian, and its step in longitude is taken at the
         // pole, where sin ξ is ±1.
-        let pole = [p.y, r.y].into_iter().find(|y| y.abs() >= 90.0);
+        let pole = [p.y, r.y].into_iter().find(|y| y.is_finite() && y.abs() >= 90.0);
         let mean = if let Some(y) = pole {
             y.signum()
         } else if dlat.abs() < 1e-12 {
@@ -754,8 +754,20 @@ fn sphere_ring_area_m2(ring: &[Coord], steps: impl Iterator<Item = f64>) -> f64 
         return 0.0;
     }
     let sin = |c: &Coord| c.y.to_radians().sin();
-    let total: f64 =
-        ring.iter().zip(ring.iter().cycle().skip(1)).zip(steps).map(|((p1, p2), dlon)| dlon.to_radians() * (2.0 + sin(p1) + sin(p2))).sum();
+    let total: f64 = ring
+        .iter()
+        .zip(ring.iter().cycle().skip(1))
+        .zip(steps)
+        .map(|((p1, p2), dlon)| {
+            // An edge to or from a pole runs along a meridian, and its step in longitude is taken at
+            // the pole (sine ±1), as the ellipsoid's area takes it.
+            let sines = match [p1.y, p2.y].into_iter().find(|y| y.is_finite() && y.abs() >= 90.0) {
+                Some(y) => 2.0 * y.signum(),
+                None => sin(p1) + sin(p2),
+            };
+            dlon.to_radians() * (2.0 + sines)
+        })
+        .sum();
     (total * EARTH_RADIUS_M * EARTH_RADIUS_M / 2.0).abs()
 }
 
@@ -1007,6 +1019,16 @@ mod tests {
         let tip = [c(-180.0, 80.0), c(180.0, 80.0), c(0.0, 90.0)];
         let area = wgs84_ring_perimeter_area_m2(&tip).1;
         assert!((area / CAP_80N_M2 - 1.0).abs() < 1e-9, "{area}");
+        // On the sphere, 2πR²(1 − sin 80°), not half of it.
+        let sphere_cap = 2.0 * std::f64::consts::PI * EARTH_RADIUS_M * EARTH_RADIUS_M * (1.0 - 80f64.to_radians().sin());
+        assert!((geodesic_ring_area_m2(&tip) / sphere_cap - 1.0).abs() < 1e-9, "{}", geodesic_ring_area_m2(&tip));
+        // A band 0.00005° high, and one with a vertex halfway up each meridian, are bands.
+        let h = 5e-5;
+        let narrow = [c(-180.0, 0.0), c(180.0, 0.0), c(180.0, h), c(-180.0, h)];
+        let narrow_sphere = 2.0 * std::f64::consts::PI * EARTH_RADIUS_M * EARTH_RADIUS_M * h.to_radians().sin();
+        assert!((geodesic_ring_area_m2(&narrow) / narrow_sphere - 1.0).abs() < 1e-6);
+        let dense = [c(-180.0, -10.0), c(180.0, -10.0), c(180.0, 0.0), c(180.0, 10.0), c(-180.0, 10.0), c(-180.0, 0.0)];
+        assert!((wgs84_ring_perimeter_area_m2(&dense).1 / BAND_10_M2 - 1.0).abs() < 1e-9);
         // A two-vertex ring is a segment there and back on the sphere, as on the ellipsoid.
         let two = [c(-180.0, 10.0), c(180.0, 10.0)];
         assert!(geodesic_ring_perimeter_m(&two) < 1e-3);
