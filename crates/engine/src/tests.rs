@@ -2168,12 +2168,15 @@ fn oversized_project_save_preserves_file_and_live_state() {
     s.run("project.rename", &json!({"name": "Unsaved work"})).unwrap();
     let source = dir.join("roads.geojson").display().to_string();
     s.project.maps[0].layers[0].dataset.source = Some(source.clone());
-    // A single large value reaches the real limit without a large data fixture on disk.
-    s.project.thumbnail = Some("x".repeat(crate::project::MAX_BYTES as usize));
-    let error = s.run("project.saveAs", &json!({"path": path})).unwrap_err();
-    assert!(error.contains("too large"), "{error}");
-    let error = s.run("project.package", &json!({"path": package})).unwrap_err();
-    assert!(error.contains("too large"), "{error}");
+    // A single large value reaches the limit without a large data fixture on disk; the limit is
+    // held at 1 MiB here, as it follows this computer's memory (#1615).
+    let max = 1 << 20;
+    s.project.thumbnail = Some("x".repeat(max as usize));
+    let (error, package_error) = crate::project::with_max_bytes(max, || {
+        (s.run("project.saveAs", &json!({"path": path})).unwrap_err(), s.run("project.package", &json!({"path": package})).unwrap_err())
+    });
+    assert!(error.contains("too large to save (maximum 1 MiB"), "{error}");
+    assert!(package_error.contains("too large"), "{package_error}");
     assert_eq!(std::fs::read(&path).unwrap(), original);
     assert_eq!(std::fs::read(&package).unwrap(), original_package);
     assert_eq!(s.project.name, "Unsaved work");
@@ -2185,6 +2188,43 @@ fn oversized_project_save_preserves_file_and_live_state() {
     assert!(!s.dirty());
     assert!(Project::load(&path).is_ok());
     std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// The project limit follows the computer's memory (#1615): a project as large as the limit saves
+/// and opens again on the same computer, and one past it is refused before it is read, saying its
+/// size and the limit.
+#[test]
+fn a_project_within_the_limit_saves_and_opens_and_one_past_it_says_both_sizes() {
+    let dir = std::env::temp_dir().join(format!("rustgis-project-limit-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("near.rgis");
+    let max: u64 = 2 << 20;
+    let mut s = world();
+    let small = {
+        s.run("project.saveAs", &json!({"path": path})).unwrap();
+        std::fs::metadata(&path).unwrap().len()
+    };
+    // Just under the limit: written and read back whole, the same limit both ways.
+    s.project.thumbnail = Some("x".repeat((max - small - 1024) as usize));
+    crate::project::with_max_bytes(max, || {
+        s.run("project.saveAs", &json!({"path": path})).unwrap();
+        assert!(std::fs::metadata(&path).unwrap().len() <= max);
+        assert_eq!(Project::load(&path).unwrap().thumbnail.map(|t| t.len()), s.project.thumbnail.as_ref().map(|t| t.len()));
+    });
+    // Past it (as a project saved on a computer with more memory): refused, saying both sizes.
+    let big = dir.join("big.rgis");
+    std::fs::write(&big, vec![b' '; (3 << 20) as usize]).unwrap();
+    let e = crate::project::with_max_bytes(max, || Project::load(&big).unwrap_err());
+    assert!(e.contains("is 3 MiB, more than a project can be (maximum 2 MiB"), "{e}");
+    let e = crate::project::with_max_bytes(max, || crate::project::check_format(&" ".repeat(3 << 20), "project").unwrap_err());
+    assert!(e.contains("too large (maximum 2 MiB"), "{e}");
+    // Import Maps reads a project file under the same limit: the one saved above, not the one past it.
+    crate::project::with_max_bytes(max, || {
+        assert!(crate::cmd::items::read_text(&json!({"path": path})).is_ok());
+        let e = crate::cmd::items::read_text(&json!({"path": big})).unwrap_err();
+        assert!(e.contains("too large"), "{e}");
+    });
+    std::fs::remove_dir_all(&dir).ok();
 }
 
 #[test]
@@ -8325,6 +8365,7 @@ fn analysis_workflows_models_scripts_and_raster_functions() {
     assert!(limit("pagedFeatures") >= rustgis_data::ogc::PAGED_FEATURES_FLOOR, "{env}");
     assert!(limit("densityCells") >= rustgis_analysis::DENSITY_CELLS_FLOOR, "{env}");
     assert!(limit("bufferBytes") >= 512 << 20 && limit("threadScratchBytes") >= 256 << 20, "{env}");
+    assert!(limit("projectBytes") as u64 == crate::project::max_bytes() && limit("projectBytes") >= 512 << 20, "{env}");
     // Network route along the rivers: two points on the same river.
     let rivers = s.map().layer_by_name("Rivers").unwrap();
     let (a, b2) = match rivers.dataset.features.iter().filter_map(|f| f.geometry.as_ref()).find_map(|g| match g {
@@ -29507,7 +29548,15 @@ fn the_session_log_records_each_command_run_in_the_session() {
     assert_eq!(doc.params["text"], json!(format!("(a document of {} characters)", qgs.chars().count())), "{doc:?}");
     // A step joined to the newest entry (a held key's nudges) is a change too, so a view of the
     // log reads it again.
-    let nudge = |millis| LogEntry { at: 1, command: "layout.nudge".into(), params: json!({"dx": 1}), ok: true, error: None, millis };
+    let nudge = |millis| LogEntry {
+        at: 1,
+        command: "layout.nudge".into(),
+        params: json!({"dx": 1}),
+        ok: true,
+        error: None,
+        millis,
+        ..Default::default()
+    };
     s.log.push(nudge(2));
     let before = s.log.changes();
     s.log.join_last(nudge(3));
@@ -29567,7 +29616,15 @@ fn the_session_log_records_each_command_run_in_the_session() {
     assert!(s.run("project.log", &json!({"failed": "true"})).is_err());
     assert!(s.run("project.log", &json!({"command": 7})).is_err());
     // An error that starts as a spreadsheet formula is written as text in the CSV.
-    let formula = LogEntry { at: 2, command: "x".into(), params: Value::Null, ok: false, error: Some("=HYPERLINK(1)".into()), millis: 0 };
+    let formula = LogEntry {
+        at: 2,
+        command: "x".into(),
+        params: Value::Null,
+        ok: false,
+        error: Some("=HYPERLINK(1)".into()),
+        millis: 0,
+        ..Default::default()
+    };
     s.log.push(formula);
     // Written out as CSV and JSON Lines.
     let dir = std::env::temp_dir().join(format!("rustgis-session-log-{}", std::process::id()));
@@ -29575,7 +29632,10 @@ fn the_session_log_records_each_command_run_in_the_session() {
     let csv = dir.join("log.csv");
     s.run("project.exportLog", &json!({"path": csv.to_string_lossy()})).unwrap();
     let csv_text = std::fs::read_to_string(&csv).unwrap();
-    assert!(csv_text.starts_with("time_utc,at,command,ok,millis,error,params\n") && csv_text.contains("\"edit.undo\""), "{csv_text}");
+    assert!(
+        csv_text.starts_with("time_utc,at,command,ok,millis,error,params,project\n") && csv_text.contains("\"edit.undo\""),
+        "{csv_text}"
+    );
     assert!(csv_text.contains("\"'=HYPERLINK(1)\"") && !csv_text.contains(",\"=HYPERLINK"), "{csv_text}");
     let jsonl = dir.join("log.jsonl");
     s.run("project.exportLog", &json!({"path": jsonl.to_string_lossy()})).unwrap();
@@ -29618,7 +29678,15 @@ fn the_session_log_records_each_command_run_in_the_session() {
     s.run("project.logCommands", &json!({"on": true})).unwrap();
     // Capped: the oldest go first.
     for i in 0..LOG_LIMIT + 5 {
-        s.log.push(LogEntry { at: i as u64, command: "x".into(), params: Value::Null, ok: true, error: None, millis: 0 });
+        s.log.push(LogEntry {
+            at: i as u64,
+            command: "x".into(),
+            params: Value::Null,
+            ok: true,
+            error: None,
+            millis: 0,
+            ..Default::default()
+        });
     }
     assert_eq!(s.log.len(), LOG_LIMIT);
     assert_eq!(s.log.entries().next().unwrap().at, 5);
@@ -29647,6 +29715,77 @@ fn the_session_log_records_each_command_run_in_the_session() {
     let n = s.log.len();
     assert!(s.run("edit.undo", &Value::Null).is_err() && s.run("edit.redo", &Value::Null).is_err());
     assert_eq!(s.log.len(), n, "nothing to undo or redo: not logged");
+}
+
+/// Each entry names the project it ran in (the one it opened, for a command that opens one), and
+/// another project of the same name is told apart; parameters cut to fit or without their secrets
+/// are said to be partial, as they wouldn't run as they ran; a saved log keeps the project's name.
+#[test]
+fn session_log_entries_name_their_project_and_say_when_their_params_are_partial() {
+    #[cfg(not(target_arch = "wasm32"))]
+    if isolate_process_test("tests::session_log_entries_name_their_project_and_say_when_their_params_are_partial") {
+        return;
+    }
+    let mut s = world();
+    s.log.clear();
+    let last = |s: &Session| s.log.entries().last().cloned().unwrap();
+    s.run("project.rename", &json!({"name": "Atlas"})).unwrap();
+    let renamed = last(&s);
+    assert_eq!((renamed.project.as_str(), renamed.opened, renamed.partial), ("Atlas", s.opened, false), "{renamed:?}");
+    s.run("project.new", &json!({"name": "Atlas"})).unwrap();
+    let made = last(&s);
+    assert_eq!((made.command.as_str(), made.project.as_str(), made.opened), ("project.new", "Atlas", s.opened));
+    assert_ne!(made.opened, renamed.opened, "the same name, another project");
+    // A script with nothing to take out is kept as written, its spacing too: not partial.
+    let script = "map.new {\"name\": \"Third\"}\n# a { that isn't JSON";
+    s.run("script.run", &json!({"script": script})).unwrap();
+    let ran = last(&s);
+    assert_eq!((ran.params["script"].as_str(), ran.partial), (Some(script), false), "{ran:?}");
+    // A secret's key written twice is read as its last value: the first isn't kept as written.
+    let _ =
+        s.run("script.run", &json!({"script": "map.new {\"name\": \"M\", \"secretAccessKey\": \"S3CRET\", \"secretAccessKey\": \"\"}"}));
+    let twice = last(&s);
+    assert!(!twice.params.to_string().contains("S3CRET") && twice.partial, "{twice:?}");
+    // Nor with its name escaped, nor a key a plain name blanks only for its value, nor deeper in;
+    // and a key only logs leave out (`passphrase`) isn't kept either, nor one past eight levels.
+    for script in [
+        r#"map.new {"name": "M", "passphrase": "S3CRET"}"#,
+        r#"map.new {"name": "M", "a": [[[[[[[[[{"passphrase": "S3CRET"}]]]]]]]]]}"#,
+        r#"map.new {"name": "M", "\u0074oken": "S3CRET", "\u0074oken": ""}"#,
+        r#"map.new {"name": "M", "key": "AKIAIOSFODNN7S3CRET", "key": ""}"#,
+        r#"map.new {"name": "M", "style": {"token": "S3CRET", "token": ""}}"#,
+    ] {
+        let before = s.log.len();
+        let _ = s.run("script.run", &json!({"script": script}));
+        let e = last(&s);
+        assert_eq!((s.log.len(), e.command.as_str()), (before + 1, "script.run"), "{script}: its own entry");
+        assert!(!e.params.to_string().contains("S3CRET") && e.partial, "{script}: {e:?}");
+    }
+    // A name past the bound is cut, and says so.
+    s.project.name = "n".repeat(crate::cmd::MAX_NAME + 5);
+    s.run("map.new", &json!({"name": "Long"})).unwrap();
+    assert_eq!(last(&s).project, format!("{}…", "n".repeat(crate::cmd::MAX_NAME)));
+    s.project.name = "Atlas".into();
+    // A script past the log's bound is cut: partial, so it isn't run again as a part.
+    let long = format!("# {}", "x".repeat(crate::project_log::LOG_PARAMS_BYTES * 2));
+    s.run("script.run", &json!({"script": long})).unwrap();
+    assert!(last(&s).partial);
+    // An address without its token: partial too.
+    let _ = s.run("service.layers", &json!({"url": "https://x.org/wms?token=S3CRET&layers=a", "text": "not a capabilities document"}));
+    let service = last(&s);
+    assert_eq!(service.command, "service.layers", "{service:?}");
+    assert!(!service.params.to_string().contains("S3CRET") && service.partial, "{service:?}");
+    // And `project.log` says so: `partial` is in its answer.
+    let answer = s.run("project.log", &json!({"command": "service.layers", "limit": 1})).unwrap();
+    assert_eq!(answer["entries"][0]["partial"], json!(true), "{answer}");
+    // Saved: the project's name last in a CSV row; in JSON, the name, and `partial` only when so.
+    let mut csv = Vec::new();
+    s.log.write(&mut csv, true).unwrap();
+    let csv = String::from_utf8(csv).unwrap();
+    assert!(csv.lines().nth(1).is_some_and(|row| row.ends_with(",\"Atlas\"")), "{csv}");
+    let json = serde_json::to_value(&renamed).unwrap();
+    assert_eq!(json["project"], "Atlas");
+    assert!(json.get("opened").is_none() && json.get("partial").is_none(), "{json}");
 }
 
 /// What the session log keeps of a command's parameters: bounded in bytes, keys and time, and
@@ -29717,7 +29856,15 @@ fn plugins_can_neither_clear_the_session_log_nor_crowd_out_the_users_entries() {
     use crate::project_log::LogEntry;
     // Plugins' commands keep at most their own share of the log: the user's entries stay.
     let mut log = crate::project_log::SessionLog::default();
-    let entry = |command: &str| LogEntry { at: 1, command: command.into(), params: Value::Null, ok: true, error: None, millis: 0 };
+    let entry = |command: &str| LogEntry {
+        at: 1,
+        command: command.into(),
+        params: Value::Null,
+        ok: true,
+        error: None,
+        millis: 0,
+        ..Default::default()
+    };
     log.push(entry("layer.rename"));
     for _ in 0..crate::project_log::LOG_PLUGIN_LIMIT + 5 {
         log.push(entry("plugin:p/flood"));
@@ -32518,6 +32665,16 @@ fn exports_run_on_another_thread() {
     let missing: Vec<_> = s.notices_since(mark).iter().filter(|n| n.text.contains("in the file")).map(|n| n.text.clone()).collect();
     assert!(missing.len() == 1 && missing[0].contains("2 layers aren't in the file"), "{missing:?}");
     s.map_mut().layers[li].source = None;
+    // One that lands (or is refused) after another project opened is logged under the project it
+    // started in.
+    let (name, opened) = (s.project.name.clone(), s.opened);
+    let run = export_start(&mut s, "share.exportMap", &json!({"path": at("before_new.png"), "width": 64, "height": 48})).unwrap();
+    let started = run.started();
+    let wrote = run.run(&Control::new());
+    s.run("project.new", &json!({"name": "Opened meanwhile"})).unwrap();
+    let _ = export_land(&mut s, started, wrote);
+    let e = s.log.entries().last().cloned().unwrap();
+    assert_eq!((e.command.as_str(), e.project.as_str(), e.opened), ("share.exportMap", name.as_str(), opened), "{e:?}");
     let _ = std::fs::remove_dir_all(&dir);
 }
 

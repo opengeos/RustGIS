@@ -401,10 +401,13 @@ differ from the ellipsoid by up to about 0.9 % (a small area near a pole). The s
 measure backs the attribute table's **Calculate Geometry** (`edit.calculateGeometry`), the
 [expressions](expressions.md#values)' `$area`, `$perimeter` and `$length`, the map's
 **Measure** tools on the Earth, and every network tool's edge and route lengths, so all of these
-read the same number for the same geometry, with two exceptions. A polygon ring with a full-turn
-(-180° to 180°) edge, such as a globe-wide band, is measured on the sphere by the attribute table
-and the Measure tools, while **Calculate Geometry Attributes** unwraps it, so it reads near zero
-there. A ring winding around a pole is measured as the region it traces by the attribute table
+read the same number for the same geometry, with one exception. A polygon ring with a full-turn
+edge (-180° to 180° along a parallel that the ring reaches down one meridian and leaves back up
+the other, with the ring's turns leaving it closed around the globe), such as a globe-wide band, is
+measured along its parallels and meridians on the ellipsoid by all of them, its perimeter counting
+each whole parallel; a 180° to -180° edge anywhere else is a seam along the antimeridian (a
+polygon split there), measured as the meridian it runs along. A ring winding around a pole is
+measured as the region it traces by the attribute table
 and the Measure tools (a ring that goes all the way round at 60° N gives the larger region),
 while **Calculate Geometry Attributes** gives the smaller polar cap. On the Moon or another body, the Measure tools measure on
 that body's sphere. The Radius tools still measure a local Mercator distance, and **Mensuration
@@ -1207,6 +1210,7 @@ below the web app's fixed limits and never above a ceiling.
 | `densityCells`: cells of a Kernel Density raster | 16 million | 16 bytes a cell | 512 million |
 | `bufferBytes`: memory for Buffer's output and Select Layer By Location's buffered selectors | 512 MiB (128 MiB in the web app) | the bytes themselves | 8 GiB |
 | `threadScratchBytes`: working memory a tool's threads take together, beyond one thread's | 256 MiB | a sixteenth of memory, on top of the quarter | 4 GiB |
+| `projectBytes`: the largest project file saved or opened (see [Projects](workspace.md#projects)) | 512 MiB | 5 bytes for each byte of the file (about 800 MiB for every 16 GB) | 4 GiB |
 
 So a computer with 16 GB reads rasters of up to about 500 million samples. A run that passes on one
 computer can be refused on a smaller one; the error names the limit there. Project Raster (`raster.project`) puts a raster
