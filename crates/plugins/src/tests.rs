@@ -1927,3 +1927,17 @@ fn panel_unknown_answer_fields_are_reported_but_echoed_changes_are_quiet() {
     assert_eq!(report.fields, ["panel.itmes"]);
     assert!(state.apply(&decl, &json!({"changed":["product"]})).notice().is_none());
 }
+
+#[test]
+fn panel_diagnostic_names_cannot_inject_controls() {
+    let decl = choice_date_range_panel();
+    let mut state = crate::PanelState::new(&decl);
+    let key = "bad\n\u{1b}[31m";
+    let report = state.apply(&decl, &json!({"items":{key:false},"values":{key:true}}));
+    assert_eq!(report.fields.len(), 1);
+    assert!(report.fields.iter().all(|name| !name.chars().any(char::is_control)));
+    let notice = report.notice().unwrap();
+    assert!(!notice.chars().any(char::is_control), "{notice:?}");
+    let report = crate::Dropped { clipped: vec![key.into()], adjusted: vec![key.into()], ..Default::default() };
+    assert!(!report.notice().unwrap().chars().any(char::is_control));
+}

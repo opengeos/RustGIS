@@ -221,6 +221,11 @@ fn clip(s: &str, n: usize) -> String {
     s.chars().take(n).collect()
 }
 
+/// A bounded, single-line name for a diagnostic, without terminal control characters.
+fn diagnostic_name(s: &str) -> String {
+    s.chars().take(MAX_TREE_ID).map(|c| if c.is_control() { ' ' } else { c }).collect()
+}
+
 /// A whole number from an integer or a float with no fraction (JSON from other languages).
 fn whole(v: &Value) -> Option<i64> {
     v.as_i64().or_else(|| v.as_f64().filter(|x| x.is_finite() && x.fract() == 0.0 && x.abs() <= SLIDER_LIMIT as f64).map(|x| x as i64))
@@ -311,7 +316,7 @@ impl Dropped {
     /// Count every field, retaining only a bounded sample for diagnostics.
     fn field(&mut self, name: String) {
         if self.fields.len() < MAX_NAMED {
-            self.fields.push(clip(&name, MAX_TREE_ID));
+            self.fields.push(diagnostic_name(&name));
         } else {
             self.unlisted_fields = self.unlisted_fields.saturating_add(1);
         }
@@ -320,7 +325,7 @@ impl Dropped {
     /// Count every clipped field without retaining all names from an untrusted reply.
     fn clip_field(&mut self, name: String) {
         if self.clipped.len() < MAX_NAMED {
-            self.clipped.push(clip(&name, MAX_TREE_ID));
+            self.clipped.push(diagnostic_name(&name));
         } else {
             self.unlisted_clipped = self.unlisted_clipped.saturating_add(1);
         }
@@ -340,7 +345,7 @@ impl Dropped {
             (&self.adjusted, 0, "value(s) adjusted (clamped or reordered, or choice cleared)"),
         ] {
             if !ids.is_empty() {
-                let names = ids.iter().take(MAX_NAMED).map(|s| clip(s, MAX_TREE_ID)).collect::<Vec<_>>().join(", ");
+                let names = ids.iter().take(MAX_NAMED).map(|s| diagnostic_name(s)).collect::<Vec<_>>().join(", ");
                 let more = if ids.len() > MAX_NAMED || unlisted > 0 { ", …" } else { "" };
                 parts.push(format!("{} {what}: {names}{more}", ids.len().saturating_add(unlisted)));
             }
@@ -352,7 +357,7 @@ impl Dropped {
             ));
         }
         if !self.values.is_empty() {
-            let mut named = self.values.iter().take(MAX_NAMED).map(|v| clip(v, MAX_TREE_ID)).collect::<Vec<_>>().join(", ");
+            let mut named = self.values.iter().take(MAX_NAMED).map(|v| diagnostic_name(v)).collect::<Vec<_>>().join(", ");
             if self.values.len() > MAX_NAMED {
                 named.push_str(", …");
             }
