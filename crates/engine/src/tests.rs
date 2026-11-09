@@ -2,6 +2,10 @@ use serde_json::{Value, json};
 
 use crate::{Project, Session, sample};
 
+#[cfg(not(target_arch = "wasm32"))]
+#[path = "tests/scene_losses.rs"]
+mod scene_losses;
+
 #[path = "tests/permission_policy.rs"]
 mod permission_policy;
 
@@ -9479,7 +9483,18 @@ fn plugin_commands_run_like_commands() {
     assert!(!s.can_undo(), "a plugin without 'edit' doesn't take undo snapshots");
     // Reading the map needs no permission.
     let layers = forward(&mut s, "eng-view", "host.layers", json!({})).unwrap();
-    assert!(layers.as_array().unwrap().iter().any(|l| l["name"] == "Cities"));
+    let cities = layers.as_array().unwrap().iter().find(|l| l["name"] == "Cities").unwrap();
+    let e: Vec<f64> = cities["extent"].as_array().unwrap().iter().filter_map(Value::as_f64).collect();
+    assert!(e.len() == 4 && e[0] <= e[2] && e[1] <= e[3] && (-180.0..=180.0).contains(&e[0]) && (-90.0..=90.0).contains(&e[1]), "{cities}");
+    assert_eq!(cities["transparency"], 0.0, "{cities}");
+    assert!(cities.get("group").is_some_and(Value::is_null), "{cities}");
+    if let Some(l) = s.map_mut().layers.iter_mut().find(|l| l.name == "Cities") {
+        l.transparency = 40.0;
+    }
+    s.run("group.add", &json!({"name": "Places", "layers": ["Cities"]})).unwrap();
+    let layers = forward(&mut s, "eng-view", "host.layers", json!({})).unwrap();
+    let cities = layers.as_array().unwrap().iter().find(|l| l["name"] == "Cities").unwrap();
+    assert_eq!((&cities["transparency"], &cities["group"]), (&json!(40.0), &json!("Places")), "{cities}");
     let fc = forward(&mut s, "eng-view", "host.features", json!({"layer": "Cities", "limit": 2})).unwrap();
     assert_eq!(fc["features"].as_array().unwrap().len(), 2);
     assert_eq!(fc["features"][1]["row"], 1);
@@ -10584,6 +10599,13 @@ fn session_plugins_ask_between_commands_and_hear_the_map() {
     if let Some(l) = s.map_mut().layers.first_mut() {
         l.transparency = 0.5;
     }
+    s.poll_plugin_sessions();
+    assert_eq!(s.run("plugin:eng-sess/v", &Value::Null).unwrap()["events"], json!(["layers"]));
+    // So is a group renamed: `host.layers` names each layer's group.
+    s.run("group.add", &json!({"name": "Places", "layers": ["Cities"]})).unwrap();
+    s.poll_plugin_sessions();
+    let _ = s.run("plugin:eng-sess/v", &Value::Null).unwrap();
+    s.map_mut().groups.iter_mut().for_each(|g| g.name = "Towns".into());
     s.poll_plugin_sessions();
     assert_eq!(s.run("plugin:eng-sess/v", &Value::Null).unwrap()["events"], json!(["layers"]));
     // Another layer made active is a layer change too: `host.layers` says which one is.
@@ -16433,6 +16455,242 @@ fn rounded_raster_values_are_said_on_import_and_export() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// Downloads and files made by mosaic/warp report the rounded values they actually write.
+#[test]
+fn raster_download_mosaic_and_warp_report_export_losses() {
+    let dir = std::env::temp_dir().join(format!("rustgis-raster-export-notes-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    for (name, values, rounded) in [("rounded", "16777217 100000001\n1234567.891 7", true), ("clean", "1 2\n3 4", false)] {
+        let mut s = Session::new(Project::default());
+        let path = dir.join(format!("{name}.asc"));
+        std::fs::write(&path, format!("ncols 2\nnrows 2\nxllcorner 10\nyllcorner 40\ncellsize 1\n{values}")).unwrap();
+        let id = s.run("layer.addData", &json!({"path": path, "name": name})).unwrap()["layer"].as_u64().unwrap();
+        for cog in [false, true] {
+            let mark = s.notice_mark();
+            let (_, bytes) = crate::cmd::raster::geotiff_bytes(&mut s, &json!({"layer": id, "cog": cog})).unwrap();
+            assert_eq!(rustgis_data::raster::read_bytes("download.tif", &bytes).unwrap().width, 2);
+            let notes = s.notices_since(mark);
+            assert_eq!(
+                notes.iter().filter(|n| n.text.contains("3 values in it were rounded to 32-bit floats")).count(),
+                usize::from(rounded),
+                "download, cog={cog}: {notes:?}"
+            );
+        }
+        let points = [[0, 0, 10, 42], [2, 0, 12, 42], [0, 2, 10, 40]];
+        for (command, mut params) in [
+            ("raster.mosaic", json!({"inputs": [name, name], "name": "mosaic"})),
+            ("raster.georeference", json!({"layer": name, "transform": "affine", "points": points, "name": "warped"})),
+        ] {
+            let output = dir.join(format!("{name}-{command}.tif"));
+            params["path"] = json!(output);
+            let mark = s.notice_mark();
+            s.run(command, &params).unwrap();
+            assert!(rustgis_data::raster::read_path(&output).is_ok());
+            let notes = s.notices_since(mark);
+            assert_eq!(
+                notes.iter().filter(|n| n.text.contains("some values in it may have been rounded to 32-bit floats")).count(),
+                usize::from(rounded),
+                "{command}: {notes:?}"
+            );
+            assert!(!notes.iter().any(|n| n.text.contains("3 values in it")), "{command}: {notes:?}");
+        }
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// Metadata limits are reported from downloads, mosaics and warped files, with the files checked.
+#[test]
+fn raster_export_paths_report_band_class_and_credit_changes() {
+    use rustgis_data::raster::{ColorHint, Crs, GeoTransform, Raster, geotiff};
+    let dir = std::env::temp_dir().join(format!("rustgis-raster-export-metadata-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut s = Session::new(Project::default());
+    let gt = GeoTransform { origin_x: 10.0, origin_y: 42.0, pixel_width: 1.0, pixel_height: -1.0 };
+    let mut r =
+        Raster::new("Metadata", 2, 2, vec![vec![1.0; 4]; 5], gt, Crs::LonLat, None, ColorHint::Rgb { alpha: false }, "Float32").unwrap();
+    r.bands[0].name = "red\u{1}name".into();
+    r.bands[0].classes = vec!["zero".into(), "one\u{2}name".into()];
+    r.bands[1].classes = vec!["zero".into(), "green class".into()];
+    r.copyright = Some("© Owner".into());
+    let mut other = r.clone();
+    other.name = "Other".into();
+    other.copyright = Some("Another owner".into());
+    let bytes = geotiff::write(&r, 0).unwrap();
+    crate::cmd::raster::add_raster(&mut s, "Metadata", rustgis_map::RasterLayer::from_bytes(r, "metadata.tif", bytes)).unwrap();
+    let bytes = geotiff::write(&other, 0).unwrap();
+    crate::cmd::raster::add_raster(&mut s, "Other", rustgis_map::RasterLayer::from_bytes(other, "other.tif", bytes)).unwrap();
+    let check = |s: &Session, mark, bytes: &[u8]| {
+        let notes = s.notices_since(mark).iter().map(|n| n.text.as_str()).collect::<Vec<_>>().join("\n");
+        for text in [
+            "3 of its 5 bands written",
+            "class names of band(s) 2 aren't written",
+            "Copyright tag holds ASCII",
+            "2 band or class name(s) held control characters",
+        ] {
+            assert!(notes.contains(text), "missing {text}: {notes}");
+        }
+        let written = rustgis_data::raster::read_bytes("written.tif", bytes).unwrap();
+        assert_eq!(written.band_count(), 3);
+        assert_eq!(written.bands[0].name, "red name");
+        assert_eq!(written.bands[0].classes, ["zero", "one name"]);
+        assert_eq!(written.copyright.as_deref(), Some("(c) Owner"));
+    };
+    for cog in [false, true] {
+        let mark = s.notice_mark();
+        let (_, bytes) = crate::cmd::raster::geotiff_bytes(&mut s, &json!({"layer": "Metadata", "cog": cog})).unwrap();
+        check(&s, mark, &bytes);
+    }
+    let points = [[0, 0, 10, 42], [2, 0, 12, 42], [0, 2, 10, 40]];
+    for (cmd, mut params) in [
+        ("raster.mosaic", json!({"inputs": ["Metadata", "Metadata"], "name": "mosaic"})),
+        (
+            "raster.georeference",
+            json!({"layer": "Metadata", "transform": "affine", "points": points, "resampling": "nearest", "name": "warped"}),
+        ),
+    ] {
+        let path = dir.join(format!("{cmd}.tif"));
+        params["path"] = json!(path);
+        let mark = s.notice_mark();
+        s.run(cmd, &params).unwrap();
+        check(&s, mark, &std::fs::read(path).unwrap());
+    }
+    for (second, changed) in [("Metadata", false), ("Other", true)] {
+        let mark = s.notice_mark();
+        let out = s.run("raster.mosaic", &json!({"inputs": ["Metadata", second], "name": "rights"})).unwrap();
+        assert_eq!(out_raster(&s, &out).copyright.as_deref(), Some("© Owner"));
+        assert_eq!(s.notices_since(mark).iter().any(|n| n.text.contains("copyright differs")), changed, "{:?}", s.notices_since(mark));
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// Class labels describe source values; interpolating or averaging those values drops the labels
+/// with a notice, while nearest, mode and palette-safe sampling retain them.
+#[test]
+fn raster_resampling_class_names_follow_the_values_and_report_losses() {
+    use rustgis_data::raster::{ColorHint, Crs, GeoTransform, Raster, geotiff};
+    let dir = std::env::temp_dir().join(format!("rustgis-resampled-classes-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut s = Session::new(Project::default());
+    let labels: Vec<String> = ["unknown", "one", "two", "water", "snow", "forest"].map(str::to_owned).to_vec();
+    let gt = GeoTransform { origin_x: 10.0, origin_y: 42.0, pixel_width: 1.0, pixel_height: -1.0 };
+    for (name, color, labelled, data_type) in [
+        ("Classes", ColorHint::Gray, true, "Float32"),
+        ("Palette", ColorHint::Palette((0..6).map(|i| [i * 30, 0, 0, 255]).collect()), true, "UInt8"),
+        ("Clean", ColorHint::Gray, false, "Float32"),
+    ] {
+        let mut r = Raster::new(name, 2, 2, vec![vec![3.0, 5.0, 5.0, 3.0]], gt, Crs::LonLat, None, color, data_type).unwrap();
+        if labelled {
+            r.bands[0].classes = labels.clone();
+        }
+        let bytes = geotiff::write(&r, 0).unwrap();
+        crate::cmd::raster::add_raster(&mut s, name, rustgis_map::RasterLayer::from_bytes(r, format!("{name}.tif"), bytes)).unwrap();
+    }
+    let points = [[0, 0, 10, 42], [2, 0, 12, 42], [0, 2, 10, 40]];
+    let params = |cmd: &str, layer: &str| {
+        if cmd == "raster.georeference" {
+            json!({"layer":layer, "transform":"affine", "points":points, "cellSize":0.5})
+        } else {
+            json!({"layer":layer, "crs":4326, "extent":[10,40,12,42], "cellSize":2})
+        }
+    };
+    let lost = |n: &&crate::Notice| n.text.contains("class names of") && n.text.contains("not kept under");
+    for (cmd, requested, method, keep) in [
+        ("raster.georeference", None, "bilinear", false),
+        ("raster.georeference", Some("nearest"), "nearest", true),
+        ("raster.georeference", Some("cubic"), "cubic", false),
+        ("raster.project", Some("nearest"), "nearest", true),
+        ("raster.project", Some("bilinear"), "bilinear", false),
+        ("raster.project", Some("cubic"), "cubic", false),
+        ("raster.project", Some("average"), "average", false),
+        ("raster.project", Some("mode"), "mode", true),
+    ] {
+        for file in [false, true] {
+            let mut p = params(cmd, "Classes");
+            p["name"] = json!(format!("{cmd}-{method}-{file}"));
+            if let Some(method) = requested {
+                p["resampling"] = json!(method);
+            }
+            let path = dir.join(format!("{cmd}-{method}.tif"));
+            if file {
+                p["path"] = json!(path);
+            }
+            let mark = s.notice_mark();
+            let answer = s.run(cmd, &p).unwrap();
+            let out = out_raster(&s, &answer);
+            if keep {
+                assert_eq!(out.bands[0].classes, labels, "{cmd}/{method}");
+            } else {
+                assert!(out.bands[0].classes.is_empty(), "{cmd}/{method}: labels no longer describe the values");
+                assert!(out.bands[0].data.iter().any(|v| v.is_finite() && *v != 3.0 && *v != 5.0), "{cmd}/{method}: values really mixed");
+            }
+            let notes: Vec<_> = s.notices_since(mark).iter().filter(lost).collect();
+            assert_eq!(notes.len(), usize::from(!keep), "{cmd}/{method}: {:?}", s.notices_since(mark));
+            if !keep {
+                assert!(notes[0].text.contains("1 band(s) (1)") && notes[0].text.contains(method), "{:?}", notes[0]);
+            }
+            if file {
+                let written = rustgis_data::raster::read_bytes("written.tif", &std::fs::read(path).unwrap()).unwrap();
+                assert_eq!(written.bands[0].classes, out.bands[0].classes);
+            }
+        }
+    }
+    // Palette requests use value-preserving methods, and report the effective method.
+    for (cmd, requested, effective) in
+        [("raster.georeference", "bilinear", "nearest"), ("raster.project", "bilinear", "nearest"), ("raster.project", "average", "mode")]
+    {
+        let mut p = params(cmd, "Palette");
+        p["name"] = json!(format!("palette-{cmd}-{requested}"));
+        p["resampling"] = json!(requested);
+        let mark = s.notice_mark();
+        let answer = s.run(cmd, &p).unwrap();
+        assert_eq!(answer["resampling"], effective);
+        assert_eq!(out_raster(&s, &answer).bands[0].classes, labels);
+        assert!(!s.notices_since(mark).iter().any(|n| lost(&n)));
+    }
+    for cmd in ["raster.georeference", "raster.project"] {
+        let mark = s.notice_mark();
+        s.run(cmd, &params(cmd, "Clean")).unwrap();
+        assert!(!s.notices_since(mark).iter().any(|n| lost(&n)));
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn raster_export_review_tool_notice_preserves_path_and_band_guidance() {
+    use rustgis_data::raster::{ColorHint, Crs, GeoTransform, Raster, geotiff};
+    let dir = std::env::temp_dir().join(format!("rustgis-mosaic-band-guidance-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let filename = if cfg!(target_os = "windows") { "mosaic.tif" } else { "give \"band\" for another.tif" };
+    let path = dir.join(filename);
+    let gt = GeoTransform { origin_x: 0.0, origin_y: 2.0, pixel_width: 1.0, pixel_height: -1.0 };
+    let r = Raster::new(
+        "Multi",
+        2,
+        2,
+        vec![vec![1.0, 2.0, 3.0, 4.0], vec![5.0, 6.0, 7.0, 8.0]],
+        gt,
+        Crs::LonLat,
+        None,
+        ColorHint::Gray,
+        "Float32",
+    )
+    .unwrap();
+    let bytes = geotiff::write(&r, 0).unwrap();
+    let mut s = Session::new(Project::default());
+    crate::cmd::raster::add_raster(&mut s, "Multi", rustgis_map::RasterLayer::from_bytes(r, "multi.tif", bytes)).unwrap();
+    let mark = s.notice_mark();
+    s.run("raster.mosaic", &json!({"inputs":["Multi","Multi"],"name":"Mosaic","path":path})).unwrap();
+    assert!(path.is_file());
+    let notes = s.notices_since(mark);
+    let note = &notes.iter().find(|n| n.text.starts_with("Exported ")).unwrap().text;
+    assert!(note.starts_with(&format!("Exported {}", path.display())), "{note}");
+    assert!(note.contains("1 of its 2 bands written"), "{note}");
+    let instruction = "export the resulting layer with share.exportRaster and give \"band\" for another";
+    assert_eq!(note.matches(instruction).count(), 1, "{note}");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 /// A raster clipped, resampled, mosaicked, warped or pixel-edited from one with values rounded when it
 /// was read keeps a mark
 /// of them, with no count (it holds an unknown share), and its export says so; one made from a
@@ -16463,12 +16721,30 @@ fn rasters_made_from_rounded_ones_keep_the_rounded_note() {
         let points = [[0, 0, 10, 42], [2, 0, 12, 42], [0, 2, 10, 40]];
         let fit = json!({"layer": name, "transform": "affine", "crs": 4326, "pointsCrs": 4326, "points": points, "name": warped});
         s.run("raster.georeference", &fit).unwrap();
+        let projected = format!("{name}_projected");
+        let projected_file = format!("{name}_projected_file");
+        for (output, file) in [(&projected, false), (&projected_file, true)] {
+            let mut p = json!({"layer":name, "crs":4326, "extent":[10,40,12,42], "cellSize":0.5, "name":output});
+            if file {
+                p["path"] = json!(dir.join(format!("{output}.tif")));
+            }
+            let mark = s.notice_mark();
+            s.run("raster.project", &p).unwrap();
+            assert_eq!(
+                s.notices_since(mark).iter().any(|n| n.text.contains(SOME)),
+                file && rounded,
+                "{output}: {:?}",
+                s.notices_since(mark)
+            );
+        }
         s.run(
             "raster.editPixels",
             &json!({"layer": name, "polygon": [[10.1, 40.1], [10.9, 40.1], [10.9, 40.9], [10.1, 40.9]], "value": 1}),
         )
         .unwrap();
-        for layer in [clip.as_str(), half.as_str(), joined.as_str(), warped.as_str(), name.as_str()] {
+        for layer in
+            [clip.as_str(), half.as_str(), joined.as_str(), warped.as_str(), projected.as_str(), projected_file.as_str(), name.as_str()]
+        {
             let mark = s.notice_mark();
             s.run("share.exportRaster", &json!({"layer": layer, "path": dir.join(format!("{layer}.tif"))})).unwrap();
             let notes = s.notices_since(mark);
@@ -26820,6 +27096,15 @@ fn project_info_describes_the_whole_project() {
     assert_eq!(layouts.len(), 1, "{info}");
     assert_eq!(layouts[0]["name"], "Wall map");
     assert_eq!(layouts[0]["mapFrames"][0]["map"], "World", "{info}");
+    let page = s.project.layouts.first().map(|l| (l.width, l.height)).unwrap();
+    assert_eq!((&layouts[0]["width"], &layouts[0]["height"]), (&json!(page.0), &json!(page.1)), "{info}");
+    assert!(page.0 > 0.0 && page.1 > 0.0);
+    if let Some(l) = s.map_mut().layers.iter_mut().find(|l| l.name == "Cities") {
+        l.transparency = 25.0;
+    }
+    let again = s.run("info.project", &json!({})).unwrap();
+    let cities = again["layers"].as_array().unwrap().iter().find(|l| l["name"] == "Cities").cloned().unwrap();
+    assert_eq!(cities["transparency"], 25.0, "{again}");
 
     let some = s.run("info.project", &json!({"nameFilter": "CIT", "includeFields": false})).unwrap();
     let layers = some["layers"].as_array().unwrap();
@@ -33555,7 +33840,126 @@ fn stl_fans_a_cap_past_the_triangulator_limit_and_says_so() {
     assert!(!stl_triangles(&bytes).is_empty());
     let said = |part: &str| s.notices.iter().any(|n| n.text.contains(part));
     assert!(said("1 polygon cap(s) couldn't be triangulated"));
-    assert!(said("holes are filled"));
+    assert!(said("holes may be filled"));
+}
+
+/// A polygon the triangulator can only finish as a fan: a hole sharing the outer ring's whole left
+/// side (the geom crate's `a_ring_left_with_no_ear_is_finished_as_a_fan_and_says_so`), in degrees.
+fn fan_polygon() -> Value {
+    json!({"type": "Polygon", "coordinates": [
+        [[0.0, 0.0], [0.04, 0.0], [0.04, 0.04], [0.0, 0.04], [0.0, 0.0]],
+        [[0.0, 0.0], [0.03, 0.02], [0.0, 0.04], [0.0, 0.0]]]})
+}
+
+#[test]
+fn three_d_exports_count_internal_fans_with_the_others_and_clean_caps_say_nothing() {
+    for kind in ["obj", "stl"] {
+        // A cap the triangulator can only finish as a fan is reported like one it gave up on.
+        let mut s = mesh_session(json!([mesh_feature(fan_polygon(), 30.0), mesh_feature(square(0.0, false), 30.0)]));
+        crate::cmd::items::item_bytes(&mut s, kind, &json!({"heightField": "h"})).unwrap();
+        let said = |part: &str| s.notices.iter().any(|n| n.text.contains(part));
+        assert!(said("1 polygon cap(s) couldn't be triangulated"), "{kind}: {:?}", s.notices);
+        // Clean caps give no such notice.
+        let mut clean = mesh_session(json!([mesh_feature(square(0.0, false), 30.0)]));
+        crate::cmd::items::item_bytes(&mut clean, kind, &json!({"heightField": "h"})).unwrap();
+        assert!(!clean.notices.iter().any(|n| n.text.contains("couldn't be triangulated")), "{kind}: {:?}", clean.notices);
+    }
+}
+
+#[test]
+fn web_scene_fans_caps_it_cannot_triangulate_and_says_so() {
+    let dir = std::env::temp_dir().join(format!("rustgis-scene-fans-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("scene.gltf").display().to_string();
+    // One cap past the triangulator's limit (5001 vertices) and one it finishes as a fan: two caps, one notice.
+    let big: Vec<[f64; 2]> = (0..5001)
+        .map(|i| {
+            let a = i as f64 * std::f64::consts::TAU / 5001.0;
+            [0.01 * a.cos(), 0.01 * a.sin()]
+        })
+        .collect();
+    let mut s = mesh_session(json!([
+        mesh_feature(json!({"type": "Polygon", "coordinates": [big]}), 30.0),
+        mesh_feature(fan_polygon(), 30.0),
+        mesh_feature(square(0.0, false), 30.0),
+    ]));
+    s.run("share.webScene", &json!({"path": path})).unwrap();
+    let said: Vec<&str> = s.notices.iter().map(|n| n.text.as_str()).filter(|t| t.contains("couldn't be triangulated")).collect();
+    assert_eq!(said.len(), 1, "{:?}", s.notices);
+    assert!(said[0].starts_with("2 polygon cap(s) couldn't be triangulated"), "{said:?}");
+    // A clean scene says nothing about caps.
+    let mut clean = mesh_session(json!([mesh_feature(square(0.0, false), 30.0)]));
+    clean.run("share.webScene", &json!({"path": path})).unwrap();
+    assert!(!clean.notices.iter().any(|n| n.text.contains("couldn't be triangulated")), "{:?}", clean.notices);
+    // On its own (with a hole it can't use), the oversized polygon is in the scene as a fan over
+    // its outer ring: 4999 triangles, and only the ring's 5001 positions (the layer isn't extruded,
+    // so the cap's are all there are), all on the circle, none of the hole's.
+    let hole = [[0.001, 0.001], [0.002, 0.001], [0.0015, 0.002], [0.001, 0.001]];
+    let mut holed = mesh_session(json!([mesh_feature(json!({"type": "Polygon", "coordinates": [big, hole]}), 30.0)]));
+    holed.run("share.webScene", &json!({"path": path})).unwrap();
+    let said: Vec<&str> = holed.notices.iter().map(|n| n.text.as_str()).filter(|t| t.contains("couldn't be triangulated")).collect();
+    assert!(matches!(said[..], [t] if t.starts_with("1 polygon cap(s) couldn't be triangulated")), "{:?}", holed.notices);
+    let g: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    let prim = &g["meshes"][0]["primitives"][0];
+    let accessor = |i: &Value| &g["accessors"][i.as_u64().unwrap() as usize];
+    assert_eq!(accessor(&prim["indices"])["count"], 4999 * 3);
+    let at = accessor(&prim["attributes"]["POSITION"]);
+    assert_eq!(at["count"], 5001);
+    let uri = g["buffers"][0]["uri"].as_str().unwrap();
+    let bytes = {
+        use base64::Engine;
+        base64::engine::general_purpose::STANDARD.decode(uri.split_once(",").unwrap().1).unwrap()
+    };
+    // The indices are the fan from the ring's first vertex, wound to face up (+y) for this
+    // counter-clockwise ring: (0, i, i + 1).
+    let ia = accessor(&prim["indices"]);
+    let iv = &g["bufferViews"][ia["bufferView"].as_u64().unwrap() as usize];
+    let istart = (iv["byteOffset"].as_u64().unwrap_or(0) + ia["byteOffset"].as_u64().unwrap_or(0)) as usize;
+    let indices: Vec<u32> = bytes[istart..istart + 4999 * 3 * 4].chunks(4).map(|b| u32::from_le_bytes(b.try_into().unwrap())).collect();
+    let fan: Vec<u32> = (1..5000u32).flat_map(|i| [0, i, i + 1]).collect();
+    assert_eq!(indices, fan);
+    let view = &g["bufferViews"][at["bufferView"].as_u64().unwrap() as usize];
+    let start = (view["byteOffset"].as_u64().unwrap_or(0) + at["byteOffset"].as_u64().unwrap_or(0)) as usize;
+    let xz: Vec<(f64, f64)> = bytes[start..start + 5001 * 12]
+        .chunks(12)
+        .map(|v| {
+            let f = |o: usize| f64::from(f32::from_le_bytes(v[o..o + 4].try_into().unwrap()));
+            (f(0), f(8))
+        })
+        .collect();
+    // Each position is its source vertex, in order: metres east (x) and south (z) of the map's centre.
+    let c = holed.map().center_lonlat();
+    let (origin, k) = (rustgis_geom::lonlat_to_merc(c), c.y.to_radians().cos().abs().max(0.01));
+    for (i, (x, z)) in xz.iter().enumerate() {
+        let q = rustgis_geom::lonlat_to_merc(rustgis_geom::Coord::new(big[i][0], big[i][1]));
+        let (ex, ez) = ((q.x - origin.x) * k, -(q.y - origin.y) * k);
+        assert!((x - ex).abs() < 0.125 && (z - ez).abs() < 0.125, "vertex {i}: ({x}, {z}), not ({ex}, {ez})");
+    }
+    // And every triangle faces up: its normal, (b - a) × (c - a), has a positive y.
+    for t in indices.chunks(3) {
+        let [a, b, c] = [t[0], t[1], t[2]].map(|n| xz[n as usize]);
+        let (u, v) = ((b.0 - a.0, b.1 - a.1), (c.0 - a.0, c.1 - a.1));
+        assert!(u.1 * v.0 - u.0 * v.1 > 0.0, "{t:?} faces down");
+    }
+    // Features too far from the centre for 32-bit positions (a polygon, a line) are left out and
+    // said, not written as infinity.
+    let far = json!({"type": "Polygon", "coordinates": [[[1e40, 0.0], [1e40, 0.01], [1.01e40, 0.0], [1e40, 0.0]]]});
+    let far_line = json!({"type": "LineString", "coordinates": [[0.0, 0.0], [1e40, 0.0]]});
+    let mut s = mesh_session(json!([mesh_feature(far, 30.0), mesh_feature(far_line, 30.0), mesh_feature(square(0.0, false), 30.0)]));
+    s.run("share.webScene", &json!({"path": path})).unwrap();
+    assert!(
+        s.notices.iter().any(|n| n.text == "2 feature(s) left out of the scene: a coordinate is too far from the map's centre"),
+        "{:?}",
+        s.notices
+    );
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert!(serde_json::from_str::<Value>(&text).is_ok() && !text.contains("null"), "{text}");
+    // A far ring the scene wouldn't draw anyway (two vertices) isn't counted as left out for it.
+    let flat_far = json!({"type": "Polygon", "coordinates": [[[1e40, 0.0], [0.0, 0.01], [1e40, 0.0]]]});
+    let mut s = mesh_session(json!([mesh_feature(flat_far, 30.0), mesh_feature(square(0.0, false), 30.0)]));
+    s.run("share.webScene", &json!({"path": path})).unwrap();
+    assert!(!s.notices.iter().any(|n| n.text.contains("left out of the scene")), "{:?}", s.notices);
+    let _ = std::fs::remove_dir_all(dir);
 }
 
 #[test]
@@ -35082,4 +35486,48 @@ fn area_display_expressions_survive_refused_geometry_edits() {
             .unwrap();
         assert_eq!(session.map().layer(id).unwrap().dataset.features.len(), 2);
     }
+}
+
+/// `gp.threads` sets the shared count every place that starts threads for CPU work takes (#1562),
+/// says it, the default's and the cores, refuses what it can't take, and `null` goes back to the
+/// default. No undo step and no change to the project: it is the process's, not the project's.
+/// In a process of its own, since the setting holds for the whole process.
+#[test]
+fn the_thread_setting_is_the_whole_process() {
+    #[cfg(not(target_arch = "wasm32"))]
+    if isolate_process_test("tests::the_thread_setting_is_the_whole_process") {
+        return;
+    }
+    let mut s = Session::new(Project::default());
+    let cores = rustgis_data::threads::cores();
+    let default = cores.min(rustgis_data::threads::DEFAULT_MAX);
+    let t = s.run("gp.threads", &json!({})).unwrap();
+    assert_eq!(t, json!({"threads": null, "max": default, "default": default, "cores": cores}));
+    let t = s.run("gp.threads", &json!({"threads": 2})).unwrap();
+    assert_eq!((t["threads"].clone(), t["max"].clone(), t["default"].clone()), (json!(2), json!(cores.min(2)), json!(default)), "{t}");
+    assert_eq!(rustgis_data::threads::max(), cores.min(2), "the count everything takes follows");
+    // `gp.env` says the threads it gives with the other limits (in another session: `gp.env` is
+    // a project command, with an undo step of its own).
+    let env = Session::new(Project::default()).run("gp.env", &json!({})).unwrap();
+    assert_eq!((env["limits"]["threads"].clone(), env["limits"]["cores"].clone()), (json!(cores.min(2)), json!(cores)), "{env}");
+    // Above the cores: all of them, the setting kept as given.
+    let t = s.run("gp.threads", &json!({"threads": 1024})).unwrap();
+    assert_eq!((t["threads"].clone(), t["max"].clone()), (json!(1024), json!(cores)), "{t}");
+    for bad in [json!(0), json!(1025), json!(-1), json!(2.5), json!("4")] {
+        let e = s.run("gp.threads", &json!({"threads": bad})).unwrap_err();
+        assert!(e.contains("1 to 1024"), "{bad}: {e}");
+        assert_eq!(rustgis_data::threads::setting(), Some(1024), "a refused value changes nothing");
+    }
+    assert_eq!(s.run("gp.threads", &json!({"threads": null})).unwrap()["threads"], Value::Null);
+    assert_eq!(rustgis_data::threads::max(), default);
+    assert!(!s.dirty() && !s.can_undo(), "nothing to undo, nothing to save");
+}
+
+/// Only the user changes the thread setting: the assistant asks, and agents, plugins and imported
+/// items can't (`Reserved`), since it reaches every session of the process.
+#[test]
+fn the_thread_setting_is_reserved() {
+    let spec = crate::cmd::all().into_iter().find(|c| c.id == "gp.threads").unwrap();
+    assert!(spec.effects.contains(crate::policy::Effect::Reserved));
+    assert!(!spec.mutates, "no undo step");
 }
