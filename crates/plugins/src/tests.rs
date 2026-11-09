@@ -1841,6 +1841,18 @@ fn panel_review_clipped_labels_name_their_fields() {
     }
 }
 
+#[test]
+fn panel_review_node_counts_keep_whole_floats_and_large_integers() {
+    let mut decl = choice_date_range_panel();
+    decl.items.iter_mut().find(|item| item.id == "selected").unwrap().kind = "tree".into();
+    let mut state = crate::PanelState::new(&decl);
+    for (count, expected) in [(json!(67.0), Some(67)), (json!(u64::MAX), Some(u64::MAX)), (json!(1.5), None), (json!(-1.0), None)] {
+        let report = state.apply(&decl, &json!({"items":{"selected":{"nodes":[{"id":"branch","label":"Branch","count":count}]}}}));
+        assert_eq!(state.items["selected"].nodes[0].count, expected, "{count}: {report:?}");
+        assert_eq!(report.notice().is_none(), expected.is_some(), "{count}: {report:?}");
+    }
+}
+
 /// A dropdown takes its options from `plugin.json` or the plugin and the chosen option's id as its
 /// value; a date takes `YYYY-MM-DD`; a range takes `[low, high]` within its ends (#1622).
 #[test]

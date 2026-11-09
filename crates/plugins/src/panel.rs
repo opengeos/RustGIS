@@ -240,6 +240,15 @@ fn whole(v: &Value) -> Option<i64> {
     v.as_i64().or_else(|| v.as_f64().filter(|x| x.is_finite() && x.fract() == 0.0 && x.abs() <= SLIDER_LIMIT as f64).map(|x| x as i64))
 }
 
+/// A nonnegative whole count, retaining exact u64 integers and accepting integral floats.
+fn node_count(v: &Value) -> Option<u64> {
+    v.as_u64().or_else(|| {
+        v.as_f64()
+            .filter(|value| value.is_finite() && value.fract() == 0.0 && *value >= 0.0 && *value < u64::MAX as f64)
+            .map(|value| value as u64)
+    })
+}
+
 /// `[low, high]`, whole numbers.
 fn pair(v: &Value) -> Option<(i64, i64)> {
     match v.as_array().map(Vec::as_slice) {
@@ -501,7 +510,8 @@ fn tree_nodes(v: &[Value], depth: usize, left: &mut usize, seen: &mut HashSet<St
             .map(|c| if c.is_control() { ' ' } else { c })
             .collect();
         for key in ["count", "children"] {
-            if n.get(key).is_some_and(|value| !value.is_null() && if key == "count" { value.as_u64().is_none() } else { !value.is_array() })
+            if n.get(key)
+                .is_some_and(|value| !value.is_null() && if key == "count" { node_count(value).is_none() } else { !value.is_array() })
             {
                 dropped.field(format!("{id}.{key}"));
             }
@@ -510,7 +520,7 @@ fn tree_nodes(v: &[Value], depth: usize, left: &mut usize, seen: &mut HashSet<St
             Some(c) if depth + 1 < MAX_TREE_DEPTH => tree_nodes(c, depth + 1, left, seen, dropped),
             _ => Vec::new(),
         };
-        nodes.push(TreeNode { id: id.to_string(), label, count: n.get("count").and_then(Value::as_u64), children });
+        nodes.push(TreeNode { id: id.to_string(), label, count: n.get("count").and_then(node_count), children });
     }
     nodes
 }
