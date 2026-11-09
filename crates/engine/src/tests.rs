@@ -1258,6 +1258,24 @@ fn qgis_diagrams_import_on_the_fields_the_layer_has() {
         s.run("style.importQgis", &json!({"layer": "Countries", "text": qml(r##"<attribute field="nosuch" color="#00ff00"/>"##)})).unwrap();
     assert!(notes(&r).iter().any(|n| n == "its diagrams, whose fields the layer hasn't (nosuch)"), "{:?}", notes(&r));
     assert_eq!(fields(&s), None);
+    // Sized between two values, a pie losing a category is sized by the rest: noted. One of a
+    // fixed size says nothing of its size.
+    let scaled = |attrs: &str| {
+        format!(
+            r##"<qgis version="3.40.0"><LinearlyInterpolatedDiagramRenderer diagramType="Pie" lowerValue="0" upperValue="1000" lowerWidth="0" upperWidth="20" classificationAttributeExpression="&quot;pop_est&quot; + &quot;nosuch&quot;"><DiagramCategory enabled="1" direction="0">{attrs}</DiagramCategory></LinearlyInterpolatedDiagramRenderer></qgis>"##
+        )
+    };
+    let sized = "its diagrams sized by the sum of the categories left, without those on fields the layer hasn't";
+    let pair = r##"<attribute field="pop_est" color="#ff0000"/><attribute field="nosuch" color="#00ff00"/>"##;
+    let r = s.run("style.importQgis", &json!({"layer": "Countries", "text": scaled(pair)})).unwrap();
+    assert!(notes(&r).iter().any(|n| n == sized), "{:?}", notes(&r));
+    assert!(!notes(&r).iter().any(|n| n.contains("not by")), "the sum QGIS sizes by is the categories': {:?}", notes(&r));
+    let r = s.run("style.importQgis", &json!({"layer": "Countries", "text": qml(pair)})).unwrap();
+    assert!(!notes(&r).iter().any(|n| n == sized), "{:?}", notes(&r));
+    let r = s
+        .run("style.importQgis", &json!({"layer": "Countries", "text": scaled(r##"<attribute field="pop_est" color="#ff0000"/>"##)}))
+        .unwrap();
+    assert!(!notes(&r).iter().any(|n| n == sized), "nothing dropped: {:?}", notes(&r));
     // A graphics layer takes none: noted as left out.
     s.run("graphics.newLayer", &json!({"name": "Sketch"})).unwrap();
     let r = s.run("style.importQgis", &json!({"layer": "Sketch", "text": qml(both)})).unwrap();

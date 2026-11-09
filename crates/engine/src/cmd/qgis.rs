@@ -247,6 +247,11 @@ fn check_diagram(l: &mut rustgis_map::Layer, name: &str, report: &mut Report) {
     let more = if missing.len() > shown.len() { ", …" } else { "" };
     let what = if none_left { "its diagrams, whose fields the layer hasn't" } else { "its diagram categories on fields the layer hasn't" };
     report.skipped(name, format!("{what} ({}{more})", shown.join(", ")));
+    // A pie sized between two values is sized by the sum of the categories left, not of all of
+    // those QGIS adds up.
+    if l.diagram.as_ref().is_some_and(|d| matches!(d.size, rustgis_map::DiagramSize::Scaled { .. })) {
+        report.approximated(name, "its diagrams sized by the sum of the categories left, without those on fields the layer hasn't");
+    }
 }
 
 /// An imported QGIS expression read on `ds`. QGIS measures `$area`, `$perimeter` and `$length`
