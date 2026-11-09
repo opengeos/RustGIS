@@ -55,6 +55,8 @@ struct Budget {
     max_cells: usize,
     cells: usize,
     text: usize,
+    /// Sheet scans together may visit at most one Workbook stream's worth of bytes.
+    work: usize,
 }
 
 impl Budget {
@@ -104,7 +106,7 @@ pub(crate) fn check(stream: &[u8], max_cells: usize) -> Result<()> {
     let mut biff8 = true;
     let mut sheets = Vec::new();
     let mut strings = Vec::new();
-    let mut budget = Budget { max_cells, cells: 0, text: 0 };
+    let mut budget = Budget { max_cells, cells: 0, text: 0, work: stream.len() };
     while at < stream.len() {
         let r = record(stream, at)?;
         at = r.next;
@@ -146,6 +148,10 @@ pub(crate) fn check(stream: &[u8], max_cells: usize) -> Result<()> {
             _ => {}
         }
     }
+    sheets.sort_unstable();
+    if sheets.windows(2).any(|pair| pair.first() == pair.get(1)) {
+        return Err("XLS sheets share a Workbook stream offset".into());
+    }
     for start in sheets {
         worksheet(stream, start, biff8, &strings, &mut budget)?;
     }
@@ -156,6 +162,8 @@ fn defined_name(data: &[u8], biff8: bool) -> Result<()> {
     bytes(data, 0, 14)?;
     let chars = usize::from(byte(data, 3)?);
     let len = usize::from(word(data, 4)?);
+    // calamine's parse_lbl reads the final cce bytes, including for names with rgcb data.
+    // Guard the bytes the reader actually indexes, rather than interpreting a different slice.
     let start = data.len().checked_sub(len).ok_or_else(short)?;
     let prefix = if biff8 { 15 } else { 14 };
     let width = if biff8 && byte(data, 14)? & 1 != 0 { 2 } else { 1 };
@@ -179,11 +187,8 @@ fn defined_name(data: &[u8], biff8: bool) -> Result<()> {
             }
         }
         Some(0x3c | 0x5c | 0x7c | 0x3d | 0x5d | 0x7d) => {
-            if biff8 {
-                3
-            } else {
-                13
-            }
+            // parse_defined_names reads only the external-sheet index for an error token.
+            if biff8 { 3 } else { 13 }
         }
         _ => 0,
     };
@@ -301,6 +306,7 @@ fn worksheet(stream: &[u8], start: usize, biff8: bool, strings: &[usize], budget
     let mut declared = 0;
     while at < stream.len() {
         let r = record(stream, at)?;
+        budget.work = budget.work.checked_sub(r.next - at).ok_or("XLS sheet scans overlap or exceed the Workbook stream size")?;
         at = r.next;
         if depth > 0 {
             match r.kind {
@@ -435,4 +441,31 @@ fn formula(data: &[u8], biff8: bool, budget: &mut Budget) -> Result<()> {
         tokens = rest.get(need..).ok_or_else(short)?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn repeated_and_overlapping_empty_sheets_have_bounded_work() {
+        let mut stream = Vec::new();
+        let offset = (500 * 13 + 4) as u32;
+        for _ in 0..500 {
+            stream.extend([0x85, 0, 9, 0]);
+            stream.extend(offset.to_le_bytes());
+            stream.extend([0, 0, 1, 0, b'A']);
+        }
+        stream.extend([0x0a, 0, 0, 0]);
+        for _ in 0..1000 {
+            stream.extend([0xff, 0, 0, 0]);
+        }
+        stream.extend([0x0a, 0, 0, 0]);
+        assert!(check(&stream, 1_000_000).is_err_and(|e| e.contains("share")));
+        // Different offsets into the same cell-less substream must not multiply scan work.
+        for i in 0..500 {
+            stream[i * 13 + 4..i * 13 + 8].copy_from_slice(&(offset + i as u32 * 4).to_le_bytes());
+        }
+        assert!(check(&stream, 1_000_000).is_err_and(|e| e.contains("overlap")));
+    }
 }
