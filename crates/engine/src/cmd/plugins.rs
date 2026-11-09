@@ -32,7 +32,7 @@ pub fn commands() -> Vec<C> {
             .view()
             .params(r#"{"id": plugin id, "url"?: registry.json}"#),
         C::new("plugin.panel", "Plugin Panel State", "Plugins", panel).roles(&[]).effects(crate::policy::Effects::NONE.with(crate::policy::Effect::Reserved)).view().params(
-            r#"{"id": plugin id, "values"?: {widget id: true/false, a whole number, or a tree node's id (null for none)}, "refresh"?: bool (run the panel's state command)}"#,
+            r#"{"id": plugin id, "values"?: {widget id: true/false, a whole number, [low, high] (a range), a tree node's or a dropdown option's id, or a date "YYYY-MM-DD" (null for none)}, "refresh"?: bool (run the panel's state command)}"#,
         ),
         C::new("plugin.prepare", "Prepare Plugin Environment", "Plugins › Manage", prepare).roles(&[]).effects(crate::policy::Effects::NONE.with(crate::policy::Effect::Reserved))
             .view()

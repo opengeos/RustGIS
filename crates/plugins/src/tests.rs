@@ -692,7 +692,18 @@ fn plugin_panels_are_checked() {
         (item(json!({"kind": "slider", "id": "s", "max": 1.5})), "plugin.json"),
         (item(json!({"kind": "button", "command": "h", "max": 3})), "for sliders"),
         (item(json!({"kind": "checkbox", "id": "c", "label": "C", "steps": true})), "for sliders"),
-        (item(json!({"kind": "button", "command": "h", "default": true})), "only checkboxes and sliders"),
+        (item(json!({"kind": "button", "command": "h", "default": true})), "only checkboxes, sliders"),
+        (item(json!({"kind": "choice", "id": "c", "options": [{"id": "a"}, {"id": "a"}]})), "unique id"),
+        (item(json!({"kind": "choice", "id": "c", "options": ["a"]})), "unique id"),
+        (item(json!({"kind": "choice", "id": "c", "options": [{"id": "a"}], "default": "b"})), "one of its options"),
+        (item(json!({"kind": "slider", "id": "s", "max": 3, "options": [{"id": "a"}]})), "for dropdowns"),
+        (item(json!({"kind": "date", "id": "d", "default": "2023-02-29"})), "YYYY-MM-DD"),
+        (item(json!({"kind": "date", "id": "d", "default": "2023-2-1"})), "YYYY-MM-DD"),
+        (item(json!({"kind": "date", "id": "d", "min": 1})), "for sliders and ranges"),
+        (item(json!({"kind": "range", "id": "r", "max": 9, "default": [5, 2]})), "low first"),
+        (item(json!({"kind": "range", "id": "r", "max": 9, "default": [0, 10]})), "from min to max"),
+        (item(json!({"kind": "range", "id": "r", "max": 9, "default": 3})), "[low, high]"),
+        (item(json!({"kind": "range", "id": "r", "min": 4, "max": 1})), "min must not be above"),
         (item(json!({"kind": "button", "command": "h", "text": "t"})), "for texts"),
         (item(json!({"kind": "text", "id": "t", "text": long})), "too long"),
         (item(json!({"kind": "text", "id": "t", "label": 7})), "plugin.json"),
@@ -942,7 +953,7 @@ fn hostile_panel_trees_are_tamed() {
     assert!(Manifest::parse(&m.to_string()).unwrap_err().contains("search is for trees"));
     let mut m: Value = serde_json::from_str(&testing::panel_manifest("bad-tree")).unwrap();
     m["panel"]["items"].as_array_mut().unwrap().push(json!({"kind": "tree", "id": "t", "default": "a"}));
-    assert!(Manifest::parse(&m.to_string()).unwrap_err().contains("only checkboxes and sliders have a default"));
+    assert!(Manifest::parse(&m.to_string()).unwrap_err().contains("dates have a default"));
 }
 
 #[test]
@@ -1498,4 +1509,73 @@ fn python_environments_are_prepared_one_at_a_time() {
     assert_eq!(crate::pyenv::status("pyenv-lock"), Some(true));
     crate::unload("pyenv-lock");
     let _ = std::fs::remove_dir_all(&plugins);
+}
+
+/// The test panel with a dropdown, a date and a range added (#1622).
+fn choice_date_range_panel() -> crate::PanelDecl {
+    let mut m: Value = serde_json::from_str(&testing::panel_manifest("cdr-panel")).unwrap();
+    let items = m["panel"]["items"].as_array_mut().unwrap();
+    items.push(json!({"kind": "choice", "id": "product", "label": "Product", "command": "q",
+        "options": [{"id": "hls", "label": "DSWx-HLS"}, {"id": "s1"}], "default": "s1"}));
+    items.push(json!({"kind": "date", "id": "start", "label": "Start", "default": "2023-04-01"}));
+    items.push(json!({"kind": "date", "id": "end", "label": "End"}));
+    items.push(json!({"kind": "range", "id": "months", "label": "Months", "min": 0, "max": 11, "default": [2, 5], "steps": true}));
+    items.push(json!({"kind": "range", "id": "all", "label": "All", "min": 1, "max": 4}));
+    Manifest::parse(&m.to_string()).unwrap().panel.unwrap()
+}
+
+/// A dropdown takes its options from `plugin.json` or the plugin and the chosen option's id as its
+/// value; a date takes `YYYY-MM-DD`; a range takes `[low, high]` within its ends (#1622).
+#[test]
+fn panel_dropdowns_dates_and_ranges_keep_their_values() {
+    use crate::PanelState;
+    let decl = choice_date_range_panel();
+    let mut st = PanelState::new(&decl);
+    assert_eq!(st.chosen("product"), Some("s1"), "the declared default");
+    assert_eq!(st.items["product"].nodes.iter().map(|n| n.label.as_str()).collect::<Vec<_>>(), ["DSWx-HLS", "s1"]);
+    assert_eq!((st.chosen("start"), st.chosen("end")), (Some("2023-04-01"), None));
+    assert_eq!(st.range("months"), (2, 5));
+    assert_eq!(st.range("all"), (1, 4), "a range without a default spans its ends");
+    let req = st.request(&[]);
+    assert_eq!(req["values"]["months"], json!([2, 5]));
+    assert_eq!(req["values"]["end"], Value::Null);
+
+    // Values set by the pane or a script: kept only when they fit.
+    assert_eq!(st.set_values(&decl, &json!({"product": "hls", "end": "2024-02-29", "months": [9, 3]})), ["product", "end", "months"]);
+    assert_eq!((st.chosen("product"), st.chosen("end"), st.range("months")), (Some("hls"), Some("2024-02-29"), (3, 9)), "low first");
+    assert!(st.set_values(&decl, &json!({"product": "nope", "end": "2023-02-29", "start": "today", "months": 4})).is_empty());
+    assert_eq!(st.set_values(&decl, &json!({"months": [-5, 40]})), ["months"]);
+    assert_eq!(st.range("months"), (0, 11), "kept within its ends");
+    assert_eq!(st.set_values(&decl, &json!({"end": null, "product": null})), ["product", "end"]);
+    assert_eq!((st.chosen("product"), st.chosen("end")), (None, None));
+
+    // The plugin replaces the options and the ends: the values follow.
+    st.set_values(&decl, &json!({"product": "s1", "months": [8, 11]}));
+    st.apply(&decl, &json!({"items": {"product": {"options": [{"id": "a", "label": "A"}, {"id": "b"}]}, "months": {"min": 0, "max": 9, "labels": ["Jan"]}}}));
+    assert_eq!(st.chosen("product"), None, "the chosen option is gone");
+    assert_eq!(st.range("months"), (8, 9), "within the new ends");
+    assert_eq!(st.slider_label("months", 0), "Jan");
+    st.apply(
+        &decl,
+        &json!({"items": {"product": {"options": [{"id": "a"}, {"id": "a"}, "junk", {"label": "no id"}]}}, "values": {"product": "a"}}),
+    );
+    assert_eq!((st.items["product"].nodes.len(), st.chosen("product")), (1, Some("a")), "repeated and id-less options are left out");
+    // Options are flat: children are dropped.
+    st.apply(&decl, &json!({"items": {"product": {"options": [{"id": "p", "children": [{"id": "c"}]}]}}}));
+    assert!(st.items["product"].nodes[0].children.is_empty());
+    // A date's options or a range's nodes aren't theirs: ignored.
+    st.apply(&decl, &json!({"items": {"start": {"options": [{"id": "x"}]}, "months": {"nodes": [{"id": "x"}]}}}));
+    assert!(st.items["start"].nodes.is_empty() && st.items["months"].nodes.is_empty());
+}
+
+#[test]
+fn panel_dates_are_real_dates() {
+    use crate::panel::date;
+    assert_eq!(date("2024-02-29"), Some((2024, 2, 29)));
+    assert_eq!(date("2000-02-29"), Some((2000, 2, 29)));
+    for bad in
+        ["1900-02-29", "2023-13-01", "2023-00-10", "2023-04-31", "0000-01-01", "2023-4-01", "2023-04-1 ", "+023-04-01", "2023/04/01", ""]
+    {
+        assert_eq!(date(bad), None, "{bad}");
+    }
 }
