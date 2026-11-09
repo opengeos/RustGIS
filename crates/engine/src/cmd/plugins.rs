@@ -586,9 +586,6 @@ impl Session {
         // The values a widget's command was given that the panel couldn't take, and later what
         // the plugin's answer left out, are said (as the plugin's).
         let name = cmd.plugin.manifest.name.clone();
-        if let Some(text) = refused.notice() {
-            self.warn(format!("{name}: {text}"));
-        }
         // The panel's state command runs each time the panel opens: when nothing it asked for
         // could change the project, it is no undo step. Other commands keep theirs.
         let state_command = panel.as_ref().is_some_and(|d| !d.state.is_empty() && d.state == cmd.decl.id);
@@ -648,6 +645,11 @@ impl Session {
             self.say_session_ended(&plugin_name, ended);
         }
         if pending.is_empty() && requested.is_empty() {
+            // Suspended attempts restore their input state and run again. Publish its losses
+            // only when this attempt is terminal, so a download retry cannot repeat them.
+            if let Some(text) = refused.notice() {
+                self.warn(format!("{name}: {text}"));
+            }
             return res;
         }
         // Restore only the original opaque authorities removed by intentional suspension.

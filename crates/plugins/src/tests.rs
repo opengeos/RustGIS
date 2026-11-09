@@ -1733,6 +1733,24 @@ fn choice_date_range_panel() -> crate::PanelDecl {
 }
 
 #[test]
+fn panel_review_node_metadata_and_unknown_fields_are_reported() {
+    let mut decl = choice_date_range_panel();
+    let tree = decl.items.iter_mut().find(|d| d.id == "selected").unwrap();
+    tree.kind = "tree".into();
+    tree.text.clear();
+    for update in [
+        json!({"items":{"selected":{"nodes":[{"id":"node","count":"67"}]}}}),
+        json!({"items":{"selected":{"nodes":[{"id":"node","children":5}]}}}),
+        json!({"items":{"unknown":{"label":"X"}}}),
+        json!({"items":{"months":{"options":[]}}}),
+        json!({"items":{"months":{"typo":5}}}),
+    ] {
+        let mut state = crate::PanelState::new(&decl);
+        assert!(state.apply(&decl, &update).notice().is_some(), "{update}");
+    }
+}
+
+#[test]
 fn panel_review_text_and_slider_label_losses_are_reported() {
     let decl = choice_date_range_panel();
     let mut state = crate::PanelState::new(&decl);

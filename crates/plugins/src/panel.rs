@@ -310,7 +310,7 @@ impl Dropped {
             parts.push(format!("{} label(s) clipped to {MAX_STATE_LABEL} characters", self.labels));
         }
         for (ids, what) in [
-            (&self.fields, "item field(s) not taken (wrong type or invalid bounds)"),
+            (&self.fields, "item field(s) not taken (unknown, inapplicable, wrong type or invalid bounds)"),
             (&self.clipped, "item field(s) clipped or truncated"),
             (&self.adjusted, "value(s) adjusted (clamped or reordered, or choice cleared)"),
         ] {
@@ -429,6 +429,12 @@ fn tree_nodes(v: &[Value], depth: usize, left: &mut usize, seen: &mut HashSet<St
             .chars()
             .map(|c| if c.is_control() { ' ' } else { c })
             .collect();
+        for key in ["count", "children"] {
+            if n.get(key).is_some_and(|value| !value.is_null() && if key == "count" { value.as_u64().is_none() } else { !value.is_array() })
+            {
+                dropped.fields.push(format!("{id}.{key}"));
+            }
+        }
         let children = match n.get("children").and_then(Value::as_array) {
             Some(c) if depth + 1 < MAX_TREE_DEPTH => tree_nodes(c, depth + 1, left, seen, dropped),
             _ => Vec::new(),
@@ -616,6 +622,27 @@ impl PanelState {
         }
         let empty = Map::new();
         let items = update.get("items").and_then(Value::as_object).unwrap_or(&empty);
+        for (id, given) in items {
+            let Some(item) = decl.items.iter().find(|item| item.key() == id) else {
+                dropped.fields.push(id.clone());
+                continue;
+            };
+            if let Some(fields) = given.as_object() {
+                for key in fields.keys() {
+                    let applies = match key.as_str() {
+                        "label" | "enabled" | "visible" => true,
+                        "text" => item.kind == "text",
+                        "min" | "max" | "labels" => item.ranged(),
+                        "nodes" => item.kind == "tree",
+                        "options" => item.kind == "choice",
+                        _ => false,
+                    };
+                    if !applies {
+                        dropped.fields.push(format!("{id}.{key}"));
+                    }
+                }
+            }
+        }
         for d in &decl.items {
             let id = d.key();
             let (Some(u), Some(st)) = (items.get(id), self.items.get_mut(id)) else { continue };

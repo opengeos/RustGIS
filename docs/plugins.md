@@ -416,16 +416,16 @@ Any command can answer the panel's new state, beside the rest of its answer:
 - An item can set `label` (`null` brings back the declared one), `enabled` and `visible`; a text
   its `text`; a slider or a range its `min`, `max` and `labels`, one per value from `min` (the
   numbers when there are none); a tree its `nodes`; a dropdown its `options`. What an answer leaves out stays as it was.
-  Fields belonging to another widget kind are ignored: `text` outside a text widget,
+  Fields belonging to another widget kind are ignored and reported: `text` outside a text widget,
   `min`/`max`/`labels` outside a slider or range, `nodes` outside a tree, and `options` outside a
-  dropdown. Unknown item ids and field names are also ignored.
+  dropdown. Unknown item ids and field names are also ignored and reported.
 - A tree's `nodes` are `[{"id": "env", "label": "Environment", "count": 67, "children": [...]}]`:
   `id` is the value the node gives when chosen, unique in the tree; `label` defaults to the id;
   `count` (a whole number) shows at the right of the row. The nodes come before the values in an
   answer, so one can give a tree and choose a node of it; a chosen node no longer among them
   leaves nothing chosen.
 - RustGIS checks the answer like any other: unknown ids and fields and values of the wrong type
-  are ignored, a slider's or a range's value stays within its ends, a tree's among its nodes, a
+  are ignored with a warning, a slider's or a range's value stays within its ends, a tree's among its nodes, a
   dropdown's among its options (a repeated or missing id is left out) and a date is a real date, texts are
   clipped to 4,000 characters, labels to 200, and a slider has at most 2,000 labels of 80
   characters. A tree holds at most 5,000 nodes, 8 levels deep; a node without an id, or with one

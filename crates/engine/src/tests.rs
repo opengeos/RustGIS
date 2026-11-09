@@ -9874,6 +9874,35 @@ fn plugin_download_retries_keep_their_original_owner() {
 }
 
 #[test]
+fn panel_input_notices_are_not_repeated_after_a_download_retry() {
+    let id = "eng-panel-retry-notice";
+    let mut manifest: Value = serde_json::from_str(&rustgis_plugins::testing::panel_manifest(id)).unwrap();
+    manifest["permissions"] = json!(["edit", "network"]);
+    let host_call = json!({"op":"layer.addUrl","params":{"url":"https://x.org/panel.csv","name":"Panel download","x":"lon","y":"lat"}});
+    let wasm = rustgis_plugins::testing::wasm_with_host_call(&host_call);
+    assert!(!wasm.is_empty());
+    let package = rustgis_plugins::testing::zip_of(&[("plugin.json", manifest.to_string().as_bytes()), ("plugin.wasm", &wasm)]);
+    rustgis_plugins::load(rustgis_plugins::Package::from_zip(&package).unwrap(), "test").unwrap();
+    let mut session = world();
+    let mark = session.notice_mark();
+    let params = json!({"op":"layer.addUrl","params":{"url":"https://x.org/panel.csv","name":"Panel download","x":"lon","y":"lat"},"panel":{"span":[-5,40]}});
+    session.run_leaving_downloads(&format!("plugin:{id}/f"), &params).unwrap();
+    let asked = session.take_url_requests();
+    assert_eq!(asked.len(), 1);
+    let download = session.download_started_for(&asked[0]).unwrap();
+    assert!(session.download_landed(download, b"name,lon,lat\nA,10,50\n".to_vec()));
+    let mut add = asked[0].params().clone();
+    add["id"] = json!(download);
+    session.complete_download(download, &add).unwrap();
+    let ran = session.poll_plugin_retries();
+    assert_eq!(ran.len(), 1);
+    assert!(ran[0].1.is_ok(), "{ran:?}");
+    let notices = session.notices_since(mark).iter().filter(|notice| notice.text.contains("clamped or reordered")).collect::<Vec<_>>();
+    assert_eq!(notices.len(), 1, "{notices:?}");
+    rustgis_plugins::unload(id);
+}
+
+#[test]
 fn plugin_panels_keep_their_state_between_calls() {
     let mut s = world();
     let pkg = rustgis_plugins::Package::from_zip(&rustgis_plugins::testing::panel_package("eng-panel")).unwrap();
