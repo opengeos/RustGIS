@@ -131,6 +131,17 @@ pub(crate) fn apply_with(s: &mut Session, id: u32, changes: Vec<Change>, new_def
     // What each calculation rule's whole-number field cut: the rule and the field's name. Each
     // rule's cuts are said, even when a later rule writes the same field: it may read them.
     let mut cuts: Vec<(String, String, super::edit::Cuts)> = Vec::new();
+    // Parsing against the fields separates a measurement failure from a stale rule. The latter
+    // may still be skipped below, but an ambiguous area must never disable a valid rule.
+    let metadata = rustgis_data::Dataset::new(l.dataset.name.clone(), l.dataset.geometry_type, l.dataset.fields.clone());
+    if l.design
+        .rules
+        .iter()
+        .any(|rule| rustgis_data::query::parse(&rule.expression, &metadata).is_ok_and(|expr| rustgis_data::query::uses_area(&expr)))
+        && let Some(message) = rustgis_data::ambiguous_area_message(l.dataset.features.iter().filter_map(|f| f.geometry.as_ref()))
+    {
+        return Err(message);
+    }
     // Calculation rules, in order.
     for rule in l.design.rules.iter().filter(|r| r.kind == RuleKind::Calculation) {
         let Some(fi) = l.dataset.field_index(&rule.field) else { continue };

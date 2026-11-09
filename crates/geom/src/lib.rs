@@ -443,7 +443,7 @@ pub fn wgs84_length_m(pts: &[Coord]) -> f64 {
         .sum()
 }
 
-/// Whether a full-turn ring through both poles winds beyond one complete surface.
+/// Whether a ring through both poles winds beyond one complete surface.
 ///
 /// Such a ring has no single enclosed region: closing its winding at either pole gives areas a
 /// whole globe apart. The whole-world rectangle remains valid. Roundoff within 64 ulps of the
@@ -456,14 +456,12 @@ pub fn ring_area_is_ambiguous(ring: &[Coord]) -> bool {
         return false;
     }
     let steps = ring_lon_steps(ring);
-    if !steps.iter().any(|&(_, full)| full) {
-        return false;
-    }
+    let full = steps.iter().any(|&(_, full)| full);
     let sphere_surface = 4.0 * std::f64::consts::PI * EARTH_RADIUS_M * EARTH_RADIUS_M;
     let wgs84_surface = 2.0 * std::f64::consts::PI * WGS84_A * WGS84_A * authalic_q(90.0);
     let beyond = |area: f64, surface: f64| area > surface * (1.0 + 64.0 * f64::EPSILON);
-    beyond(sphere_ring_area_m2(ring, steps.iter().map(|&(d, _)| d), true), sphere_surface)
-        || beyond(authalic_ring_area_m2(ring), wgs84_surface)
+    beyond(sphere_ring_area_m2(ring, steps.iter().map(|&(d, _)| d), full), sphere_surface)
+        || (full && beyond(authalic_ring_area_m2(ring), wgs84_surface))
 }
 
 /// The perimeter (metres) and the unsigned enclosed area (square metres) of a lon/lat ring on the
@@ -515,7 +513,16 @@ pub fn wgs84_ring_perimeter_area_m2(ring: &[Coord]) -> (f64, f64) {
     let sphere = sphere_ring_area_m2(ring, steps.iter().map(|&(d, _)| d), false);
     // Compare a sphere area with its own hemisphere; the ellipsoid's hemisphere differs.
     let hemisphere = 2.0 * std::f64::consts::PI * EARTH_RADIUS_M * EARTH_RADIUS_M;
-    (perimeter, if sphere > hemisphere { WGS84_AREA_M2 - area } else { area })
+    (
+        perimeter,
+        if ring_area_is_ambiguous(ring) {
+            f64::NAN
+        } else if sphere > hemisphere {
+            WGS84_AREA_M2 - area
+        } else {
+            area
+        },
+    )
 }
 
 /// The length (metres) of `dlon_deg` degrees of longitude along the WGS 84 parallel at `lat_deg`:
@@ -1296,6 +1303,27 @@ mod tests {
             assert!((reverse_area - area).abs() < 1.0);
             assert!((reverse_perimeter - perimeter).abs() < 1e-6);
         }
+    }
+
+    #[test]
+    fn polar_winding_with_only_a_seam_is_ambiguous() {
+        let c = Coord::new;
+        let ring = [
+            c(-180.0, 90.0),
+            c(180.0, 0.0),
+            c(-60.0, 10.0),
+            c(60.0, 20.0),
+            c(180.0, 30.0),
+            c(-60.0, 40.0),
+            c(60.0, 50.0),
+            c(180.0, 60.0),
+            c(180.0, -90.0),
+            c(90.0, -80.0),
+        ];
+        assert!(ring_area_is_ambiguous(&ring));
+        assert!(geodesic_ring_area_m2(&ring).is_nan());
+        let (perimeter, area) = wgs84_ring_perimeter_area_m2(&ring);
+        assert!(perimeter.is_finite() && area.is_nan());
     }
 
     #[test]

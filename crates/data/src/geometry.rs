@@ -18,9 +18,9 @@ pub fn ambiguous_area_message<'a>(geometries: impl Iterator<Item = &'a Geometry>
             rings += count;
         }
     }
-    (rings > 0).then(|| format!(
-        "area is ambiguous for {rings} ring(s) in {features} feature(s): a full-turn ring through both poles winds beyond one whole surface"
-    ))
+    (rings > 0).then(|| {
+        format!("area is ambiguous for {rings} ring(s) in {features} feature(s): a ring through both poles winds beyond one whole surface")
+    })
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]

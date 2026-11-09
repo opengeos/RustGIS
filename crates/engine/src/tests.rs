@@ -15770,6 +15770,23 @@ fn ambiguous_polar_areas_are_refused_before_attributes_or_joins_are_written() {
 }
 
 #[test]
+fn area_rules_refuse_ambiguous_geometry_during_edits() {
+    use rustgis_data::{Coord, Dataset, Field, FieldType, Geometry, GeometryType, Value};
+    let c = Coord::new;
+    let mut data = Dataset::new("Area rules", GeometryType::Polygon, vec![Field::new("value", FieldType::Double)]);
+    data.push(Some(Geometry::Polygon(vec![vec![vec![c(0.0, 0.0), c(1.0, 0.0), c(1.0, 1.0), c(0.0, 0.0)]]])), vec![Value::Float(1.0)]);
+    let mut s = Session::new(Project::default());
+    let id = s.map_mut().add_dataset(data);
+    s.run("data.attributeRule", &json!({"layer":"Area rules","name":"Area constraint","kind":"constraint","expression":"$area > 0"}))
+        .unwrap();
+    s.map_mut().layer_mut(id).unwrap().dataset.features[0].geometry =
+        Some(Geometry::Polygon(vec![vec![vec![c(-180.0, 90.0), c(180.0, 90.0), c(-90.0, -90.0), c(90.0, -80.0)]]]));
+    let result = s.run("edit.setValue", &json!({"layer":"Area rules","row":0,"field":"value","value":2}));
+    assert!(result.is_err_and(|e| e.to_string().contains("1 ring(s) in 1 feature(s)")), "the area constraint must not disappear");
+    assert_eq!(s.map().layer(id).unwrap().dataset.value(0, 0), &Value::Float(1.0));
+}
+
+#[test]
 fn raster_measure_refuses_ambiguous_polar_area_instead_of_null() {
     let mut s = Session::new(Project::default());
     let bad = json!([[-180, 90], [180, 90], [-90, -90], [90, -80]]);

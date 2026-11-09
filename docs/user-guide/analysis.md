@@ -403,7 +403,7 @@ keep their full area and small antimeridian crossings stay small. Rings winding 
 use the smaller polar region in either direction; reversing a ring does not select its global
 complement. Edges follow the shortest geodesics between vertices. The output fields remain
 `area_km2`, `perimeter_km` and `length_km`; point coordinates are unchanged.
-A full-turn ring through both poles can wind beyond one whole surface and bound no single
+A ring through both poles can wind beyond one whole surface and bound no single
 region. Calculate Geometry Attributes refuses such input, with the numbers of affected rings
 and features, before changing any fields. The attribute table's Calculate Geometry does the
 same for its chosen rows. Spatial Join's Largest overlap refuses affected selected target or

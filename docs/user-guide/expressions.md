@@ -148,7 +148,7 @@ the layer's coordinate system (with the same
 full-turn edge, such as a globe-wide band, counts its whole parallels there too). On a feature with no geometry, or coordinates that aren't
 longitudes and latitudes, they are null. Measuring another kind of layer (`$area` on lines), or a
 unit that isn't one of those, is an error.
-An area expression is also refused if the layer contains a full-turn ring through both poles
+An area expression is also refused if the layer contains a ring through both poles
 whose winding exceeds one whole surface. The error counts the affected rings and features;
 it does not store an impossible area or silently replace it with null. Perimeter expressions,
 ordinary polar caps and whole-world rectangles still work.
