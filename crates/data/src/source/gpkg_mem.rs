@@ -106,6 +106,9 @@ pub fn unsupported_table_counts(bytes: Shared) -> Result<Vec<(String, u64)>> {
         .iter()
         .position(|c| c.name.eq_ignore_ascii_case("table_name"))
         .ok_or_else(|| DataError::Format("GeoPackage: gpkg_contents has no table_name column".into()))?;
+    if [kind_col, name_col].iter().any(|&index| table.columns.get(index).is_some_and(|column| column.generated)) {
+        return Err(DataError::Format("GeoPackage: uploaded catalogs with virtual generated table_name or data_type columns are not supported; materialize these columns or select a feature table explicitly".into()));
+    }
     let mut counts = std::collections::BTreeMap::<String, u64>::new();
     let mut invalid = 0u64;
     // Count in place: the contents catalog can be large without materializing its rows.
@@ -114,8 +117,12 @@ pub fn unsupported_table_counts(bytes: Shared) -> Result<Vec<(String, u64)>> {
             invalid = invalid.saturating_add(1);
             return ControlFlow::Continue(());
         };
-        if !kind.eq_ignore_ascii_case("features") || !registered.contains(&name.to_ascii_lowercase()) {
-            *counts.entry(kind.to_ascii_lowercase()).or_default() += 1;
+        if !registered.contains(&name.to_ascii_lowercase()) {
+            let kind = ["attributes", "features", "tiles", "2d-gridded-coverage"]
+                .into_iter()
+                .find(|known| kind.eq_ignore_ascii_case(known))
+                .unwrap_or("other");
+            *counts.entry(kind.to_string()).or_default() += 1;
         }
         ControlFlow::Continue(())
     })
