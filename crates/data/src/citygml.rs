@@ -9,8 +9,10 @@
 //! aren't objects: their faces are their object's, and a `GroundSurface`'s are the ground a
 //! footprint can come from. A geometry's level of detail is the one its property names (`lod2Solid`
 //! is 2); a geometry in another property (a group's, a relief's extent) has none. Coordinates are
-//! converted from the system the `srsName`s name, by its horizontal part; the URN and URL forms of a
-//! geographic system are latitude first, as GML 3 says.
+//! converted from the system the `srsName`s name (on geometries and envelopes, often the only place
+//! a file names it), by its horizontal part; the URN and URL forms of a geographic system are
+//! latitude first, as GML 3 says. Names that disagree are refused, unless a system is given in
+//! their place, which reads them all and says how many named another.
 //!
 //! Attributes: generic attributes (`gen:stringAttribute` and its kin) typed by their element, the
 //! measures and counts the standard types so (`measuredHeight`, `storeysAboveGround`, …) and any
@@ -20,14 +22,16 @@
 //!
 //! No tree of the whole model is built: one pass indexes the document (where each member lies, and
 //! the systems its `srsName`s name), and each member is then parsed on its own and its tree dropped
-//! once its rows are built. The text and the rows are still the whole model's. The file is hostile: each member's
+//! once its rows are built, counted a member at a time and stopped between members when its run is
+//! cancelled. The text and the rows are still the whole model's. The file is hostile: each member's
 //! nesting and node count are bounded as every XML reader's are, no DTD is read, and the faces
 //! merged are bounded.
 //!
 //! Not read, and said: geometries and objects given only by a link (`xlink:href`), terrain
 //! intersection curves, implicit geometries placed by their matrix (drawn at their reference
-//! point), appearances, addresses and TIN reliefs; curve arcs and splines are read as straight
-//! lines. CityGML 3.0 is refused.
+//! point), appearances, addresses, TIN reliefs, and the properties of thematic surfaces and
+//! openings (a name, generic attributes); curve arcs and splines are read as straight lines.
+//! CityGML 3.0 is refused.
 
 use std::borrow::Cow;
 use std::collections::HashSet;
@@ -45,7 +49,7 @@ use crate::raster::Crs;
 use crate::{DataError, Dataset, ReadReport, Result};
 
 /// How much of a file is looked at to recognize CityGML: its root's start tag, namespaces included.
-const HEAD_BYTES: usize = 64 * 1024;
+pub const HEAD_BYTES: usize = 64 * 1024;
 
 /// How many bytes of namespace declarations are copied around the members in all, at least: a
 /// root declaring huge ones, with many members, would have them copied and parsed again for each.
@@ -137,7 +141,9 @@ fn read_with(file_name: &str, bytes: &[u8], given: Option<Crs>, keep_named: bool
     };
     let text = text.trim_start_matches('\u{feff}');
     let stem = std::path::Path::new(file_name).file_stem().and_then(|s| s.to_str()).filter(|s| !s.is_empty()).unwrap_or("city model");
-    let index = Index::of(file_name, text)?;
+    // A system given for the whole file takes the place of every one it names, so names that
+    // disagree don't stop it; in an archive, where the one a model names comes first, they do.
+    let index = Index::of(file_name, text, given.is_some() && !keep_named)?;
     if index.members.is_empty() {
         return Err(DataError::Format(format!("{file_name}: no city objects (cityObjectMember elements)")));
     }
@@ -150,9 +156,14 @@ fn read_with(file_name: &str, bytes: &[u8], given: Option<Crs>, keep_named: bool
         .is_some_and(|n| known_system(horizontal(n)).is_some_and(|crs| lat_first(n, crs) && given.is_none_or(|g| g.epsg() == crs.epsg())));
     let mut reading = Reading { budget: MAX_FILE_FACES, swap, ..Reading::default() };
     reading.said.appearances = index.appearances;
+    reading.said.links = index.links;
     let mut wrapped = String::new();
     let mut wrap_left = text.len().saturating_mul(4).max(WRAP_BUDGET);
+    // Counted a member at a time, and stopped between members when its run is cancelled (in the
+    // desktop app's background read); the index before is one pass over the text, with no check.
+    crate::progress::begin(index.members.len());
     for &(start, end, holder) in &index.members {
+        crate::progress::step(1)?;
         // A member is parsed with the root's namespaces, as it stands in the document; an object of a
         // `featureMembers`, inside a copy of that element's start and end tags.
         let Some(member) = text.get(start..end) else {
@@ -199,6 +210,13 @@ fn read_with(file_name: &str, bytes: &[u8], given: Option<Crs>, keep_named: bool
     let Reading { counts, built, rows, reach, said, .. } = reading;
     let mut notes = Vec::new();
     let crs = coordinate_system(file_name, given, named, &reach, &mut notes)?;
+    if let Some(other) = &index.other {
+        notes.push(format!(
+            "{} geometries or envelopes name a coordinate system other than the file's first ({other}), and are read in {}, the coordinate system given",
+            index.others,
+            crs.label()
+        ));
+    }
     notes.extend(said.notes(index.cut));
     finish(file_name, stem, rows, built, counts, notes, crs)
 }
@@ -216,8 +234,18 @@ struct Index {
     namespaces: String,
     /// The first `srsName`.
     system: Option<String>,
+    /// A system is given in place of those the file names, so `srsName`s that disagree are kept to
+    /// the first rather than refused.
+    overridden: bool,
+    /// When `overridden`: the elements naming a system other than the first, and the first of
+    /// those names, said as read in the system given.
+    others: usize,
+    other: Option<String>,
     /// The appearances the model holds, which aren't read.
     appearances: usize,
+    /// Members given only by a link that the index alone meets (an empty `featureMembers`), which
+    /// aren't followed.
+    links: usize,
     /// The file ends before its root closes: what came after is left out.
     cut: bool,
 }
@@ -246,11 +274,12 @@ fn root_namespace<'a>(e: &'a BytesStart) -> Option<Cow<'a, str>> {
 
 impl Index {
     /// Indexes a document in one pass, building no tree. Refuses one whose root isn't a CityGML 1.0
-    /// or 2.0 city model, and one whose `srsName`s name different systems.
-    fn of(file_name: &str, text: &str) -> Result<Index> {
+    /// or 2.0 city model, and, unless `overridden` (a system is given in their place), one whose
+    /// `srsName`s name different systems.
+    fn of(file_name: &str, text: &str, overridden: bool) -> Result<Index> {
         let invalid = |e: quick_xml::Error| DataError::Format(format!("{file_name}: {e}"));
         let mut reader = Reader::from_str(text);
-        let mut index = Index::default();
+        let mut index = Index { overridden, ..Index::default() };
         // Open elements, and whether the root has been seen.
         let (mut depth, mut rooted) = (0usize, false);
         // The member being read: where it starts, and the depth its end tag brings back.
@@ -314,7 +343,11 @@ impl Index {
                         member = Some((start, 1));
                         finished.clear();
                     }
-                    "featureMembers" if !empty => {
+                    // One that points elsewhere (`xlink:href`, which GML gives a property in place of
+                    // its contents) is a link, not followed.
+                    "featureMembers" if empty => index.links += usize::from(start_attribute(e, "href").is_some()),
+                    "featureMembers" => {
+                        index.links += usize::from(start_attribute(e, "href").is_some());
                         let open = text.get(start..position(&reader)).unwrap_or_default().to_string();
                         index.holders.push((open, format!("</{}>", e.name().into_inner())));
                         holder = Some(index.holders.len() - 1);
@@ -356,7 +389,10 @@ impl Index {
         Ok(index)
     }
 
-    /// Takes in an `srsName`: the first names the file's system, and one naming another is an error.
+    /// Takes in an `srsName`, on a geometry or on an envelope (often the only place a file names its
+    /// system): the first names the file's system, and one naming another is an error, unless a
+    /// system is given in their place. One system with its axes in different orders is an error
+    /// either way: the order a name gives is how its coordinates are read.
     fn see_system(&mut self, file_name: &str, srs: &str) -> Result<()> {
         let Some(first) = &self.system else {
             self.system = Some(srs.to_string());
@@ -370,12 +406,17 @@ impl Index {
         match (system(first), system(srs)) {
             (Some(a), Some(b)) if a == b => Ok(()),
             (Some((a, _)), Some((b, _))) if a == b => Err(DataError::Unsupported(format!(
-                "{file_name}: its geometries name one coordinate system with its axes in different orders ({} and {}), which aren't read together",
+                "{file_name}: it names one coordinate system with its axes in different orders ({} and {}), which aren't read together",
                 cut(first),
                 cut(srs)
             ))),
+            _ if self.overridden => {
+                self.others += 1;
+                self.other.get_or_insert_with(|| cut(srs));
+                Ok(())
+            }
             _ => Err(DataError::Unsupported(format!(
-                "{file_name}: its geometries name different coordinate systems ({} and {}), which aren't read together",
+                "{file_name}: it names different coordinate systems ({} and {}), which aren't read together; give the coordinate system (crs) to read it in one",
                 cut(first),
                 cut(srs)
             ))),
@@ -595,6 +636,8 @@ struct Said {
     not_objects: usize,
     /// Values naming the code list they are taken from (`codeSpace`), which isn't kept.
     code_spaces: usize,
+    /// Thematic surfaces and openings with properties of their own, which aren't kept.
+    surface_properties: usize,
 }
 
 impl Said {
@@ -661,6 +704,13 @@ impl Said {
             format!(
                 "{} values name the code list they are taken from (codeSpace), which isn't kept: the code is kept on its own",
                 self.code_spaces
+            ),
+        );
+        say(
+            self.surface_properties,
+            format!(
+                "{} thematic surfaces or openings (walls, roofs, windows, doors) have properties of their own (a name, generic attributes), which aren't kept: their faces are kept as their object's",
+                self.surface_properties
             ),
         );
         out
@@ -768,13 +818,15 @@ impl Reading {
     }
 
     /// A thematic surface or an opening: its geometries' faces are its object's, the ground's when it
-    /// is a `GroundSurface`. Its openings are read with it.
+    /// is a `GroundSurface`. Its openings are read with it. Its own properties (a name, generic
+    /// attributes) aren't kept, and are counted.
     fn surface(&mut self, s: &Node, parts: &mut ObjectParts) {
         if only_link(s) {
             self.said.links += 1;
             return;
         }
         let ground = local(s) == "GroundSurface";
+        let mut own = false;
         for p in elements(*s) {
             if let Some(rank) = property_lod(&p) {
                 self.geometry(&p, f64::from(rank), Some(rank.to_string()), ground, parts);
@@ -784,8 +836,15 @@ impl Reading {
                 } else {
                     elements(p).for_each(|o| self.surface(&o, parts));
                 }
+            } else if local(&p) == "appearance" {
+                self.said.appearances += 1;
+            } else if !(is_gml(&p) && local(&p) == "boundedBy") && !local(&p).starts_with("lod") {
+                // Its extent (`gml:boundedBy`) is where it lies, and an empty geometry property
+                // holds nothing: neither is a property of its own.
+                own = true;
             }
         }
+        self.said.surface_properties += usize::from(own);
     }
 
     /// A geometry property's faces, lines and points into the object's parts, at its level of

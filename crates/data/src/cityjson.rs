@@ -222,7 +222,11 @@ fn read_with(file_name: &str, bytes: &[u8], given: Option<Crs>, keep_named: bool
     let mut budget = MAX_FILE_FACES;
     let mut built: Vec<Built> = Vec::with_capacity(objects.len());
     let mut rows: Vec<Row> = Vec::new();
+    // Counted an object at a time, and stopped between objects when its run is cancelled (in the
+    // desktop app's background read); parsing the document before is one step, with no check.
+    crate::progress::begin(objects.len());
     for (id, raw) in &objects {
+        crate::progress::step(1)?;
         let Ok(object) = serde_json::from_str::<RawObject>(raw.get()) else {
             counts.skipped += 1;
             continue;

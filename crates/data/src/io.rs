@@ -2131,6 +2131,8 @@ pub fn read_zip_in(file_name: &str, bytes: &[u8], crs: Option<Crs>) -> Result<Ve
                     out.push((ds, report));
                 }
             }
+            // A run cancelled while a member was read stops the archive, not just that member.
+            Err(DataError::Cancelled) => return Err(DataError::Cancelled),
             Err(e) => skipped.push(format!("{n} ({e})")),
         }
     }

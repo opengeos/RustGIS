@@ -894,3 +894,97 @@ fn ids_values_and_a_cut_inside_a_character() {
     let e = out[0].0.extent();
     assert!((e.min_x - 4.0).abs() < 0.01 && (e.min_y - 52.0).abs() < 0.01, "{e:?}");
 }
+
+/// A coordinate system given takes the place of every one the file names, names that disagree
+/// included, and says how many it read in its place; with none given they are refused. One system
+/// with its axes in different orders is refused either way.
+#[test]
+fn a_system_given_reads_a_file_naming_several() {
+    let ground = square(500_000.0, 5_500_000.0, 10.0, 0.0);
+    let inner = format!(
+        r#"<bldg:boundedBy><bldg:GroundSurface><bldg:lod2MultiSurface><gml:MultiSurface srsName="EPSG:25833"><gml:surfaceMember>{}</gml:surfaceMember></gml:MultiSurface></bldg:lod2MultiSurface></bldg:GroundSurface></bldg:boundedBy>"#,
+        polygon("g", &ground)
+    );
+    let bytes = model("EPSG:25832", &building("b1", &inner));
+    let err = read("model.gml", &bytes, None).unwrap_err().to_string();
+    assert!(err.contains("it names different coordinate systems") && err.contains("crs"), "{err}");
+    let out = read("model.gml", &bytes, Some(Crs::Epsg(25832))).unwrap();
+    assert_eq!(out[0].0.crs, Some(Crs::Epsg(25832)));
+    assert!(
+        says(&out, "1 geometries or envelopes name a coordinate system other than the file's first (EPSG:25833), and are read in"),
+        "{:?}",
+        messages_of(&out)
+    );
+    // In an archive the system a model names comes first, so the names still disagree.
+    assert!(read_member("model.gml", &bytes, Some(Crs::Epsg(25832))).is_err());
+    // Names that agree say nothing of it.
+    let same = model("EPSG:25832", &building("b1", &inner.replace("EPSG:25833", "EPSG:25832")));
+    let out = read("model.gml", &same, Some(Crs::Epsg(25832))).unwrap();
+    assert!(!says(&out, "name a coordinate system other than"), "{:?}", messages_of(&out));
+    // Axes in different orders: the order a name gives is how its coordinates are read.
+    let swapped = inner.replace("EPSG:25833", "urn:ogc:def:crs:EPSG::4326");
+    let err = read("model.gml", &model("EPSG:4326", &building("b1", &swapped)), Some(Crs::Epsg(4326))).unwrap_err().to_string();
+    assert!(err.contains("axes in different orders"), "{err}");
+}
+
+/// A thematic surface's or an opening's own properties aren't kept, and are counted; surfaces with
+/// only their geometry and openings say nothing.
+#[test]
+fn surface_and_opening_properties_are_said() {
+    let wall = polygon("w", "0 0 0 10 0 0 10 0 5 0 0 5 0 0 0");
+    let window = polygon("o", "2 0 1 4 0 1 4 0 3 2 0 3 2 0 1");
+    let inner = format!(
+        r#"<bldg:boundedBy><bldg:WallSurface><gml:name>north wall</gml:name><gml:boundedBy><gml:Envelope srsName="EPSG:4326"><gml:lowerCorner>0 0 0</gml:lowerCorner><gml:upperCorner>10 0 5</gml:upperCorner></gml:Envelope></gml:boundedBy>
+        <bldg:lod3MultiSurface><gml:MultiSurface><gml:surfaceMember>{wall}</gml:surfaceMember></gml:MultiSurface></bldg:lod3MultiSurface>
+        <bldg:opening><bldg:Window><gen:stringAttribute name="glass"><gen:value>double</gen:value></gen:stringAttribute>
+        <bldg:lod3MultiSurface><gml:MultiSurface><gml:surfaceMember>{window}</gml:surfaceMember></gml:MultiSurface></bldg:lod3MultiSurface></bldg:Window></bldg:opening>
+        </bldg:WallSurface></bldg:boundedBy>{}"#,
+        box_surfaces("b1")
+    );
+    let out = read("model.gml", &lonlat(&building("b1", &inner)), None).unwrap();
+    assert!(
+        says(&out, "2 thematic surfaces or openings (walls, roofs, windows, doors) have properties of their own"),
+        "{:?}",
+        messages_of(&out)
+    );
+    let out = read("model.gml", &lonlat(&building("b1", &box_surfaces("b1"))), None).unwrap();
+    assert!(!says(&out, "properties of their own"), "{:?}", messages_of(&out));
+    // A surface's appearance is said as an appearance, not as a property of its own.
+    let painted = format!(
+        "<bldg:boundedBy><bldg:RoofSurface><app:appearance><app:Appearance><app:theme>t</app:theme></app:Appearance></app:appearance>\
+         <bldg:lod2MultiSurface><gml:MultiSurface><gml:surfaceMember>{}</gml:surfaceMember></gml:MultiSurface></bldg:lod2MultiSurface></bldg:RoofSurface></bldg:boundedBy>{}",
+        polygon("p", &square(0.0, 0.0, 10.0, 5.0)),
+        box_surfaces("b1")
+    );
+    let out = read("model.gml", &lonlat(&building("b1", &painted)), None).unwrap();
+    assert!(says(&out, "the file's appearances (textures and materials) aren't read: 1 are left out"), "{:?}", messages_of(&out));
+    assert!(!says(&out, "properties of their own"), "{:?}", messages_of(&out));
+}
+
+/// A `featureMembers` given only by a link isn't followed, and is said with the other links.
+#[test]
+fn a_feature_members_link_is_said() {
+    for link in [r##"<gml:featureMembers xlink:href="#all"/>"##, r##"<gml:featureMembers xlink:href="#all"></gml:featureMembers>"##] {
+        let members = format!("{}{link}", building("b1", &box_surfaces("b1")));
+        let out = read("model.gml", &lonlat(&members), None).unwrap();
+        assert!(says(&out, "1 geometries or objects are given only by a link"), "{link}: {:?}", messages_of(&out));
+    }
+}
+
+/// A read counts its members and stops between them once its run is cancelled; without a run to
+/// answer to it reads them all.
+#[test]
+fn a_cancelled_read_stops_between_members() {
+    use crate::progress::tests::Counted;
+    use std::sync::atomic::Ordering;
+    let members: String = (0..5).map(|i| building(&format!("b{i}"), &box_surfaces(&format!("b{i}")))).collect();
+    let bytes = lonlat(&members);
+    let probe = Counted::cancelling_after(2);
+    let res = {
+        let _g = crate::progress::install(Some(probe.clone()));
+        read("model.gml", &bytes, None)
+    };
+    assert!(matches!(res, Err(DataError::Cancelled)), "{:?}", res.map(|o| o.len()));
+    assert_eq!(probe.total.load(Ordering::Relaxed), 5);
+    assert_eq!(read("model.gml", &bytes, None).unwrap()[0].0.features.len(), 5);
+}
