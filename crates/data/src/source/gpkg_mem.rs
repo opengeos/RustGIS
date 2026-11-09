@@ -107,17 +107,24 @@ pub fn unsupported_table_counts(bytes: Shared) -> Result<Vec<(String, u64)>> {
         .position(|c| c.name.eq_ignore_ascii_case("table_name"))
         .ok_or_else(|| DataError::Format("GeoPackage: gpkg_contents has no table_name column".into()))?;
     let mut counts = std::collections::BTreeMap::<String, u64>::new();
+    let mut invalid = 0u64;
     // Count in place: the contents catalog can be large without materializing its rows.
     db.rows(table, |_, row| {
-        if let Some(kind) = text(row.get(kind_col))
-            && (!kind.eq_ignore_ascii_case("features")
-                || text(row.get(name_col)).is_none_or(|name| !registered.contains(&name.to_ascii_lowercase())))
-        {
+        let (Some(Val::Text(kind)), Some(Val::Text(name))) = (row.get(kind_col), row.get(name_col)) else {
+            invalid = invalid.saturating_add(1);
+            return ControlFlow::Continue(());
+        };
+        if !kind.eq_ignore_ascii_case("features") || !registered.contains(&name.to_ascii_lowercase()) {
             *counts.entry(kind.to_ascii_lowercase()).or_default() += 1;
         }
         ControlFlow::Continue(())
     })
     .map_err(err)?;
+    if invalid > 0 {
+        return Err(DataError::Format(format!(
+            "GeoPackage: {invalid} invalid gpkg_contents entry/entries: table_name and data_type must be text"
+        )));
+    }
     Ok(counts.into_iter().collect())
 }
 

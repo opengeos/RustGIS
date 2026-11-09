@@ -15715,6 +15715,47 @@ fn geopackage_table_cap_is_reported() {
 
 /// Attribute-only GeoPackage tables are counted once when a whole file is added (#1634).
 #[test]
+fn geopackage_review_malformed_contents_are_not_silently_omitted() {
+    let dir = std::env::temp_dir().join(format!("rustgis-gpkg-malformed-catalog-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("bad.gpkg");
+    let _ = std::fs::remove_file(&path);
+    let mut writer = world();
+    writer.run("share.exportLayer", &json!({"layer":"Cities","path":path,"tableName":"A"})).unwrap();
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    conn.execute_batch("ALTER TABLE gpkg_contents RENAME TO original_catalog;
+        CREATE TABLE gpkg_contents(table_name,data_type,identifier,description,last_change,min_x,min_y,max_x,max_y,srs_id);
+        INSERT INTO gpkg_contents SELECT table_name,data_type,identifier,description,last_change,min_x,min_y,max_x,max_y,srs_id FROM original_catalog;
+        INSERT INTO gpkg_contents(table_name,data_type) VALUES ('broken',NULL);").unwrap();
+    drop(conn);
+    for invalid in [rusqlite::types::Value::Null, rusqlite::types::Value::Integer(42)] {
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        conn.execute("UPDATE gpkg_contents SET data_type=?1 WHERE table_name='broken'", [invalid]).unwrap();
+        drop(conn);
+        for bytes in [true, false] {
+            let mut session = Session::new(Project::default());
+            let result = if bytes {
+                crate::cmd::layer::add_source(
+                    &mut session,
+                    &json!({}),
+                    crate::cmd::layer::Origin::Bytes("bad.gpkg", std::sync::Arc::new(std::fs::read(&path).unwrap())),
+                    None,
+                )
+                .map(|_| ())
+            } else {
+                session.run("layer.addData", &json!({"path":path})).map(|_| ()).map_err(|e| e.to_string())
+            };
+            assert!(
+                result.is_err_and(|e| e.contains("1 invalid gpkg_contents")),
+                "bytes={bytes}: malformed catalog must be refused before adding layers"
+            );
+            assert!(session.map().layers.is_empty());
+        }
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn geopackage_attribute_tables_are_not_silently_omitted() {
     let dir = std::env::temp_dir().join(format!("rustgis-gpkg-attributes-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
@@ -15753,7 +15794,11 @@ fn geopackage_attribute_tables_are_not_silently_omitted() {
             let answer = s.run("layer.addData", &json!({"path":path})).unwrap();
             assert_eq!(answer["layers"].as_array().unwrap().len(), 2);
         }
-        assert!(s.notices.iter().any(|n| n.text.contains("1 features table(s) not added")), "bytes={bytes}: {:?}", s.notices);
+        assert!(
+            s.notices.iter().any(|n| n.text.contains("1 feature table(s) not added: no geometry column is registered")),
+            "bytes={bytes}: {:?}",
+            s.notices
+        );
         let notes = skipped(&s);
         assert_eq!(notes.len(), 1, "bytes={bytes}: {notes:?}");
         assert!(notes[0].contains("2 attribute-only tables") && notes[0].contains("mixed.gpkg"), "{notes:?}");

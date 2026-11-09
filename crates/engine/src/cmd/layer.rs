@@ -2050,6 +2050,8 @@ fn add_source_with(
         .map(|(kind, count)| {
             if kind == "attributes" {
                 format!("{count} attribute-only tables not added: GeoPackage attribute tables are not supported")
+            } else if kind == "features" {
+                format!("{count} feature table(s) not added: no geometry column is registered")
             } else {
                 format!("{count} {kind} table(s) not added: only GeoPackage feature tables are supported")
             }
