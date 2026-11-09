@@ -449,7 +449,9 @@ fn is_object(e: &Node) -> bool {
                 !local(&p).ends_with("TerrainIntersection")
                     && (property_lod(&p).is_some()
                         || elements(p).next().is_some_and(|g| is_geometry(&g))
-                        || (SURFACE_PROPERTIES.contains(&local(&p)) && elements(p).any(|s| !is_gml(&s))))
+                        || (SURFACE_PROPERTIES.contains(&local(&p)) && elements(p).any(|s| !is_gml(&s)))
+                        // A wrapper with no id of its own, which carries the objects it holds.
+                        || elements(p).any(|c| is_object(&c)))
             }))
 }
 
@@ -552,6 +554,8 @@ struct Said {
     appearances: usize,
     /// Curves with arcs or splines, read as straight lines through their points.
     curved: usize,
+    /// `gml:Point`s written with more than one position, from which only the first is read.
+    multi_position_points: usize,
     /// Features beside city objects in a property that have no id and no geometry.
     not_objects: usize,
     /// Values naming the code list they are taken from (`codeSpace`), which isn't kept.
@@ -606,6 +610,13 @@ impl Said {
         );
         say(self.appearances, format!("the file's appearances (textures and materials) aren't read: {} are left out", self.appearances));
         say(self.curved, format!("{} curves have arcs or splines, read as straight lines through their points", self.curved));
+        say(
+            self.multi_position_points,
+            format!(
+                "{} gml:Points give more than one position, but a GML Point holds one: only the first is read",
+                self.multi_position_points
+            ),
+        );
         say(
             self.not_objects,
             format!("{} nested features with no gml:id and no geometry, beside city objects, are left out", self.not_objects),
@@ -834,11 +845,15 @@ impl Walk<'_> {
             "Point" => {
                 // A point is its first position, and its height that one's alone.
                 let before = self.got.heights.len();
-                let p = self.positions(g)?;
-                let first = *p.first()?;
-                let had = self.got.heights.len() > before;
+                let p = self.tagged(g)?;
+                let (first, first_has_height) = *p.first()?;
+                if p.len() > 1 {
+                    self.said.multi_position_points += 1;
+                }
+                // The height it keeps is the first position's own, if that was given: a later
+                // position's isn't the point's.
                 self.got.heights.truncate(before);
-                if had {
+                if first_has_height {
                     self.got.heights.push(first);
                 }
                 self.got.points.push((first, false));
@@ -858,6 +873,27 @@ impl Walk<'_> {
                 self.got.lines.push(line);
             }
             "MultiCurve" | "CompositeCurve" => self.members(g, &["curveMember"], "curveMembers")?,
+            "OrientableCurve" => {
+                // An oriented curve is its base curve's line, written the other way when its
+                // orientation is `-`. A base curve given by a link isn't followed.
+                let base = elements(*g).find(|c| local(c) == "baseCurve")?;
+                if only_link(&base) {
+                    self.said.links += 1;
+                    return Some(());
+                }
+                // A base curve with a point or curve given by a link isn't whole, and is left out.
+                if has_linked_part(&base) {
+                    self.said.links += 1;
+                    return Some(());
+                }
+                let mut segments = base.descendants().filter(|d| local(d) == "segments").flat_map(elements);
+                self.said.curved += usize::from(segments.any(|s| local(&s) != "LineStringSegment"));
+                let mut line = self.positions(g)?;
+                if attribute(g, "orientation").map(str::trim) == Some("-") {
+                    line.reverse();
+                }
+                self.got.lines.push(line);
+            }
             "Polygon" | "Triangle" | "Rectangle" | "PolygonPatch" => self.face(g)?,
             name @ ("Surface" | "PolyhedralSurface" | "TriangulatedSurface" | "Tin") => {
                 self.got.surface = true;
@@ -878,9 +914,14 @@ impl Walk<'_> {
             "CompositeSurface" | "MultiSurface" | "Shell" => self.members(g, &["surfaceMember"], "surfaceMembers")?,
             "Solid" => {
                 // A solid with no exterior shell (its cavities only) lacks the part it needs.
-                elements(*g).find(|c| local(c) == "exterior")?;
+                let exterior = elements(*g).find(|c| local(c) == "exterior")?;
                 self.got.solid = true;
-                self.members(g, &["exterior", "interior"], "")?;
+                self.member(&exterior)?;
+                // An exterior given by a link: its cavities are taken off that unknown shell, and
+                // read alone they would be drawn as footprints, so they aren't read either.
+                if !only_link(&exterior) {
+                    self.members(g, &["interior"], "")?;
+                }
             }
             "CompositeSolid" | "MultiSolid" => self.members(g, &["solidMember"], "solidMembers")?,
             "MultiGeometry" | "GeometricComplex" => self.members(g, &["geometryMember", "element"], "geometryMembers")?,
@@ -928,6 +969,15 @@ impl Walk<'_> {
         self.got.surface = true;
         let exterior = elements(*g).find(|c| matches!(local(c), "exterior" | "outerBoundaryIs"))?;
         let interiors = elements(*g).filter(|c| matches!(local(c), "interior" | "innerBoundaryIs"));
+        // Curves a ring is carried in: any segments other than straight lines are read through
+        // their points, and said like a standalone Curve's are.
+        for b in std::iter::once(exterior).chain(interiors) {
+            if let Some(ring) = elements(b).next() {
+                let mut segments = ring.descendants().filter(|d| local(d) == "segments").flat_map(elements);
+                self.said.curved += usize::from(segments.any(|s| local(&s) != "LineStringSegment"));
+            }
+        }
+        let interiors = elements(*g).filter(|c| matches!(local(c), "interior" | "innerBoundaryIs"));
         let mut rings = Vec::new();
         for (k, b) in std::iter::once(exterior).chain(interiors).enumerate() {
             if only_link(&b) {
@@ -954,13 +1004,27 @@ impl Walk<'_> {
     }
 
     /// The positions an element gives, in the order written: its `gml:posList`s, `gml:pos`es and
-    /// `gml:coordinates`. `None` when one isn't numbers, or not as many as its dimension asks for.
+    /// `gml:coordinates`. `None` when one isn't numbers, not as many as its dimension asks for, or
+    /// none is left (an arc given by its centre gives no points on the curve).
     fn positions(&mut self, n: &Node) -> Option<Vec<P3>> {
+        Some(self.tagged(n)?.into_iter().map(|(p, _)| p).collect())
+    }
+
+    /// The same positions, each with whether it was given with a height (a 3D position).
+    fn tagged(&mut self, n: &Node) -> Option<Vec<(P3, bool)>> {
         let mut out = Vec::new();
         // A curve given in the opposite direction (`orientation="-"`) is read and reversed whole.
         let mut reversed: Option<Node> = None;
         for c in n.descendants().filter(Node::is_element) {
             if reversed.is_some_and(|r| c.ancestors().any(|a| a == r)) {
+                continue;
+            }
+            // The centre an arc is given by (`ArcByCenterPoint`, `CircleByCenterPoint`) isn't on
+            // the curve: its positions aren't read, and an arc by its centre alone is left with
+            // none, so its geometry is left out.
+            if matches!(local(&c), "pos" | "posList" | "coordinates" | "coord")
+                && c.ancestors().take_while(|a| a != n).any(|a| matches!(local(&a), "ArcByCenterPoint" | "CircleByCenterPoint"))
+            {
                 continue;
             }
             if c != *n && local(&c) == "OrientableCurve" && attribute(&c, "orientation").map(str::trim) == Some("-") {
@@ -969,7 +1033,7 @@ impl Walk<'_> {
                 if let Some(d) = between.find_map(|a| attribute(&a, "srsDimension")) {
                     self.dim = Some(d.trim().parse().ok()?);
                 }
-                let curve = self.positions(&c);
+                let curve = self.tagged(&c);
                 self.dim = outer;
                 out.extend(curve?.into_iter().rev());
                 reversed = Some(c);
@@ -1030,10 +1094,11 @@ impl Walk<'_> {
                 let (x, y) = if self.swap { (b, a) } else { (a, b) };
                 let p = [x, y, v.get(2).copied().unwrap_or(0.0)];
                 self.reach.add(&p);
-                if dim == 3 && !self.instance {
+                let has_height = dim == 3 && !self.instance;
+                if has_height {
                     self.got.heights.push(p);
                 }
-                out.push(p);
+                out.push((p, has_height));
             }
         }
         (!out.is_empty()).then_some(out)

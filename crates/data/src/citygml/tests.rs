@@ -74,7 +74,16 @@ fn value(ds: &Dataset, row: usize, field: &str) -> Value {
 
 fn area(g: Option<&Geometry>) -> f64 {
     let Some(Geometry::Polygon(polys)) = g else { return 0.0 };
-    polys.iter().filter_map(|p| p.first()).map(|r| crate::geometry::ring_area(r).abs()).sum()
+    // A polygon's holes are taken off, so a test where holes are dropped no longer passes.
+    polys
+        .iter()
+        .map(|p| match p.split_first() {
+            Some((outer, holes)) => {
+                crate::geometry::ring_area(outer).abs() - holes.iter().map(|h| crate::geometry::ring_area(h).abs()).sum::<f64>()
+            }
+            None => 0.0,
+        })
+        .sum()
 }
 
 fn layer<'a>(out: &'a [(Dataset, ReadReport)], name: &str) -> &'a Dataset {
@@ -663,10 +672,21 @@ fn less_common_geometries() {
     assert!((area(out[0].0.features[0].geometry.as_ref()) - 16.0).abs() < 1e-6);
     assert!(!says(&out, "can't be read"), "{:?}", messages_of(&out));
 
-    // A point is its first position, heights included.
+    // A point is its first position, heights included, and more positions aren't kept, said.
     let point = r#"<core:cityObjectMember><frn:CityFurniture gml:id="f1"><frn:lod1Geometry><gml:Point><gml:pos>1 1 10</gml:pos><gml:pos>2 2 100</gml:pos></gml:Point></frn:lod1Geometry></frn:CityFurniture></core:cityObjectMember>"#;
     let out = read("model.gml", &lonlat(point), None).unwrap();
     assert_eq!(value(&out[0].0, 0, "z_max"), Value::Float(10.0));
+    assert!(says(&out, "1 gml:Points give more than one position"), "{:?}", messages_of(&out));
+    // A first position without a height and a 3D one after it: the point keeps its own none.
+    let mixed = point.replace("<gml:pos>1 1 10</gml:pos>", "<gml:pos>1 1</gml:pos>");
+    let out = read("model.gml", &lonlat(&mixed), None).unwrap();
+    assert_eq!(value(&out[0].0, 0, "z_max"), Value::Null, "the first position's own, not a later one's");
+    // The same place as the first, at height 0 in the second: still the first has none.
+    let same_place = point
+        .replace("<gml:pos>1 1 10</gml:pos>", "<gml:pos>1 1</gml:pos>")
+        .replace("<gml:pos>2 2 100</gml:pos>", "<gml:pos>1 1 0</gml:pos>");
+    let out = read("model.gml", &lonlat(&same_place), None).unwrap();
+    assert_eq!(value(&out[0].0, 0, "z_max"), Value::Null, "a 2D first point isn't given the later 3D one's height");
 
     // A solid with only a cavity lacks its exterior, and is said.
     let cavity = format!(
@@ -703,6 +723,91 @@ fn less_common_geometries() {
         .unwrap_or_else(|| panic!("{:?}", out.iter().map(|(d, _)| &d.name).collect::<Vec<_>>()))
         .0;
     assert_eq!(value(points, 0, "parent"), Value::Text("r1".into()));
+}
+
+/// A hole in a ring is kept (the `area` helper takes holes off); an arc's centre isn't a vertex and
+/// an arc by its centre alone gives nothing; an oriented curve's line is read with its orientation,
+/// said with the arcs; a solid whose exterior is a link isn't read as its cavity.
+#[test]
+fn less_common_geometries_of_odd_rings_curves_and_solids() {
+    // A ground with a hole keeps it: the footprint isn't filled in.
+    let ground = format!(
+        r#"<gml:Polygon gml:id="h"><gml:exterior><gml:LinearRing><gml:posList>{}</gml:posList></gml:LinearRing></gml:exterior><gml:interior><gml:LinearRing><gml:posList>{}</gml:posList></gml:LinearRing></gml:interior></gml:Polygon>"#,
+        square(0.0, 0.0, 10.0, 0.0),
+        square(4.0, 4.0, 2.0, 0.0)
+    );
+    let inner = format!(
+        "<bldg:lod0FootPrint><bldg:GroundSurface><bldg:lod2MultiSurface><gml:MultiSurface><gml:surfaceMember>{ground}</gml:surfaceMember></gml:MultiSurface></bldg:lod2MultiSurface></bldg:GroundSurface></bldg:lod0FootPrint>"
+    );
+    let out = read("model.gml", &lonlat(&building("b1", &inner)), None).unwrap();
+    if let Some(Geometry::Polygon(polys)) = &out[0].0.features[0].geometry {
+        assert_eq!(polys[0].len(), 2, "the hole is kept: {:?}", polys[0].len());
+    } else {
+        panic!("{:?}", out[0].0.features[0].geometry);
+    }
+    assert!((area(out[0].0.features[0].geometry.as_ref()) - 96.0).abs() < 1e-6, "{:?}", out[0].0.features[0].geometry);
+
+    // The centre an arc is given by isn't a vertex: the straight part of a curve is read as
+    // written, said with the arcs, and an arc by its centre alone gives nothing.
+    let arc = r#"<gml:ArcByCenterPoint numArc="1" radius="5"><gml:pos>5 -5 0</gml:pos><gml:startAngle>0</gml:startAngle><gml:endAngle>3.14</gml:endAngle></gml:ArcByCenterPoint>"#;
+    let curve = |segments: &str| {
+        format!(
+            r#"<bldg:lod1MultiCurve><gml:MultiCurve><gml:curveMember><gml:Curve><gml:segments>{segments}</gml:segments></gml:Curve></gml:curveMember></gml:MultiCurve></bldg:lod1MultiCurve>"#
+        )
+    };
+    let straight = "<gml:LineStringSegment><gml:posList>0 0 0 10 0 0</gml:posList></gml:LineStringSegment>";
+    let out = read("model.gml", &lonlat(&building("b2", &curve(&format!("{straight}{arc}")))), None).unwrap();
+    if let Some(Geometry::Line(parts)) = &out[0].0.features[0].geometry {
+        assert_eq!(parts[0].len(), 2, "the straight segment's points only: {:?}", parts);
+    } else {
+        panic!("{:?}", out[0].0.features[0].geometry);
+    }
+    assert!(says(&out, "1 curves have arcs or splines"), "{:?}", messages_of(&out));
+    let out = read("model.gml", &lonlat(&building("b2", &curve(arc))), None).unwrap();
+    assert!(says(&out, "1 geometries of city objects have coordinates that can't be read"), "{:?}", messages_of(&out));
+    assert!(out[0].0.features.iter().all(|f| f.geometry.is_none()), "no segment left to read");
+
+    // A ring held in curves with an arc: read through its points, and said like a Curve's are.
+    let ring = "<gml:Polygon><gml:exterior><gml:Ring><gml:curveMember><gml:Curve><gml:segments><gml:Arc><gml:posList>0 0 0 5 5 0 10 0 0</gml:posList></gml:Arc></gml:segments></gml:Curve></gml:curveMember><gml:curveMember><gml:LineString><gml:posList>10 0 0 10 10 0 0 10 0 0 0 0</gml:posList></gml:LineString></gml:curveMember></gml:Ring></gml:exterior></gml:Polygon>";
+    let inner = format!(
+        "<bldg:lod2MultiSurface><gml:MultiSurface><gml:surfaceMember>{ring}</gml:surfaceMember></gml:MultiSurface></bldg:lod2MultiSurface>"
+    );
+    let out = read("model.gml", &lonlat(&building("b5", &inner)), None).unwrap();
+    assert!(says(&out, "1 curves have arcs or splines"), "{:?}", messages_of(&out));
+    assert!(out[0].0.features[0].geometry.is_some(), "{:?}", messages_of(&out));
+
+    // An oriented curve of its own is read, written the other way when its orientation is `-`.
+    let oriented = r#"<bldg:lod1MultiCurve><gml:MultiCurve><gml:curveMember><gml:OrientableCurve orientation="-"><gml:baseCurve><gml:LineString><gml:posList>0 0 0 10 0 0</gml:posList></gml:LineString></gml:baseCurve></gml:OrientableCurve></gml:curveMember></gml:MultiCurve></bldg:lod1MultiCurve>"#;
+    let out = read("model.gml", &lonlat(&building("b2", oriented)), None).unwrap();
+    if let Some(Geometry::Line(parts)) = &out[0].0.features[0].geometry {
+        let (Some(first), Some(last)) = (parts[0].first(), parts[0].last()) else { panic!("{:?}", parts) };
+        assert_eq!((first.x, first.y), (10.0, 0.0), "from the end first: {first:?}");
+        assert_eq!((last.x, last.y), (0.0, 0.0), "to the start last: {last:?}");
+    } else {
+        panic!("{:?}", out[0].0.features[0].geometry);
+    }
+
+    // A solid whose exterior is a link: its cavity isn't drawn apart, and the link is said.
+    let cavity = format!(
+        "<bldg:lod1Solid><gml:Solid><gml:exterior xlink:href=\"#shell\"/><gml:interior><gml:CompositeSurface><gml:surfaceMember>{}</gml:surfaceMember></gml:CompositeSurface></gml:interior></gml:Solid></bldg:lod1Solid>{}",
+        polygon("c", &square(9.0, 9.0, 2.0, 0.0)),
+        box_surfaces("b3")
+    );
+    let out = read("model.gml", &lonlat(&building("b3", &cavity)), None).unwrap();
+    assert!(says(&out, "only by a link"), "{:?}", messages_of(&out));
+    assert!(!says(&out, "can't be read"), "{:?}", messages_of(&out));
+    assert!((area(out[0].0.features[0].geometry.as_ref()) - 100.0).abs() < 1e-6, "{:?}", out[0].0.features[0].geometry);
+
+    // A part with no id of its own still carries the objects it holds.
+    let wrapper = format!(
+        r#"<bldg:consistsOfBuildingPart><bldg:BuildingPart><bldg:consistsOfBuildingPart><bldg:BuildingPart gml:id="deep">{}</bldg:BuildingPart></bldg:consistsOfBuildingPart></bldg:BuildingPart></bldg:consistsOfBuildingPart>"#,
+        box_surfaces("deep")
+    );
+    let out = read("model.gml", &lonlat(&building("b4", &wrapper)), None).unwrap();
+    let part = layer(&out, "model BuildingPart");
+    assert_eq!(part.features.iter().filter(|f| f.geometry.is_some()).count(), 1, "drawn through its wrapper");
+    assert_eq!(value(part, 1, "type"), Value::Text("BuildingPart".into()));
+    assert!(says(&out, "city objects have no gml:id"), "{:?}", messages_of(&out));
 }
 
 /// Ids are `gml:id`s, an extension's metadata named for a level of detail is a value, a terrain

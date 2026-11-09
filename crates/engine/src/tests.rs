@@ -13773,6 +13773,8 @@ fn citygml_layers_and_the_coordinate_system_given() {
         let text = json!({"fileName": "text.gml", "text": model, "crs": "EPSG:28992", "layer": pick});
         s.run("layer.addDataText", &text).unwrap();
         assert!(s.map().layer_by_name(&format!("model {pick}")).is_some() && s.map().layer_by_name(&format!("text {pick}")).is_some());
+        placed(&s, &format!("model {pick}"));
+        placed(&s, &format!("text {pick}"));
         assert_eq!(s.map().layers.len(), 2, "only the layer picked");
         let said = s.notices_since(mark).iter().filter(|n| n.text.contains("appearances")).count();
         assert_eq!(said, 2, "{:?}", s.notices_since(mark));
