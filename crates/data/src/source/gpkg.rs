@@ -109,9 +109,13 @@ fn open_db(path: &Path) -> Result<Connection> {
 
 /// Attribute-only and tile-only packages need not declare any geometry columns.
 fn has_geometry_columns(conn: &Connection) -> Result<bool> {
+    has_table(conn, "gpkg_geometry_columns")
+}
+
+fn has_table(conn: &Connection, name: &str) -> Result<bool> {
     conn.query_row(
-        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name = 'gpkg_geometry_columns' COLLATE NOCASE AND type IN ('table','view'))",
-        [],
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name = ?1 COLLATE NOCASE AND type IN ('table','view'))",
+        [name],
         |row| row.get(0),
     )
     .map_err(err)
@@ -119,6 +123,9 @@ fn has_geometry_columns(conn: &Connection) -> Result<bool> {
 
 fn feature_tables(conn: &Connection) -> Result<Vec<String>> {
     if !has_geometry_columns(conn)? {
+        if !has_table(conn, "gpkg_contents")? {
+            return Err(DataError::Format("not a GeoPackage: no gpkg_contents table".into()));
+        }
         return Ok(Vec::new());
     }
     let mut st = conn.prepare("SELECT table_name FROM gpkg_geometry_columns ORDER BY table_name").map_err(not_gpkg)?;

@@ -29,6 +29,9 @@ fn meta_rows(db: &Db<Shared>, tables: &[Table], name: &str) -> Result<Vec<Vec<(S
     let Some(t) = tables.iter().find(|t| t.name.eq_ignore_ascii_case(name)) else {
         // Attribute-only and tile-only packages can omit the geometry registration table.
         if name.eq_ignore_ascii_case("gpkg_geometry_columns") {
+            if !tables.iter().any(|table| table.name.eq_ignore_ascii_case("gpkg_contents")) {
+                return Err(DataError::Format("not a GeoPackage: no gpkg_contents table".into()));
+            }
             return Ok(Vec::new());
         }
         return Err(DataError::Format(format!("not a GeoPackage: no {name} table")));
