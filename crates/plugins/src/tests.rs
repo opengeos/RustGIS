@@ -1918,3 +1918,12 @@ fn panel_diagnostic_field_samples_are_bounded_and_counts_are_complete() {
     assert!(notice.contains("1000 item field(s)"), "{notice}");
     assert!(notice.len() < 7000);
 }
+
+#[test]
+fn panel_unknown_answer_fields_are_reported_but_echoed_changes_are_quiet() {
+    let decl = choice_date_range_panel();
+    let mut state = crate::PanelState::new(&decl);
+    let report = state.apply(&decl, &json!({"itmes":{"selected":{"text":"lost"}}}));
+    assert_eq!(report.fields, ["panel.itmes"]);
+    assert!(state.apply(&decl, &json!({"changed":["product"]})).notice().is_none());
+}

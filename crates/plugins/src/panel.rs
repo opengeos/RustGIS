@@ -650,6 +650,11 @@ impl PanelState {
             dropped.malformed = usize::from(!update.is_null());
             return dropped;
         }
+        if let Some(fields) = update.as_object() {
+            for key in fields.keys().filter(|key| !matches!(key.as_str(), "values" | "items" | "changed")) {
+                dropped.field(format!("panel.{key}"));
+            }
+        }
         if update.get("items").is_some_and(|items| !items.is_null() && !items.is_object()) {
             dropped.malformed += 1;
         }

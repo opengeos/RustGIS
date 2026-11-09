@@ -418,7 +418,7 @@ Any command can answer the panel's new state, beside the rest of its answer:
   numbers when there are none); a tree its `nodes`; a dropdown its `options`. What an answer leaves out stays as it was.
   Fields belonging to another widget kind are ignored and reported: `text` outside a text widget,
   `min`/`max`/`labels` outside a slider or range, `nodes` outside a tree, and `options` outside a
-  dropdown. Unknown item ids and field names are also ignored and reported.
+  dropdown. Unknown item ids and field names are also ignored and reported. Unknown panel-answer keys are reported too; echoed `changed` request metadata is accepted.
 - A tree's `nodes` are `[{"id": "env", "label": "Environment", "count": 67, "children": [...]}]`:
   `id` is the value the node gives when chosen, unique in the tree; `label` defaults to the id;
   `count` (a whole number) shows at the right of the row. The nodes come before the values in an
