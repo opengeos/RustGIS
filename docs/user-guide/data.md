@@ -101,14 +101,14 @@ semi-major axis, matching legacy PROJ/GDAL coordinates (verified with PROJ 9.7.1
 and for a map drawn in it (including the
 Equirectangular preset). This also applies to planetary Equirectangular systems and definitions
 that name EPSG method 1028. Shapefile and ASCII-grid `.prj` files and GeoPackage WKT definitions
-that declare this method on an ellipsoid report the difference from the declared formula,
+whose method is interpreted as EPSG 1028 on an ellipsoid report the formula difference,
 without assuming how the producer computed its coordinates. Effectively spherical definitions
 need no warning. Code-only CRS identifiers use the same compatibility formula without a method
 warning, since no explicit WKT method is being read. XY Table To Point and Kernel Density also
 report the method difference when given such a WKT definition. RustGIS applies the same compatibility formula to GeoTIFF CT 17;
 this key identifies a GeoTIFF transformation, rather than explicitly declaring EPSG method 1028.
 [PROJ 9.9](https://proj.org/en/stable/operations/projections/eqc.html) supports the ellipsoidal
-formula instead. RustGIS retains the legacy spherical formula to preserve existing file coordinates.
+formula instead. RustGIS preserves coordinates for files created with the legacy spherical formula. Files created with an ellipsoidal EQC formula, including PROJ 9.9 output, can be misplaced by kilometres; check which formula the producer used.
 The datum's ellipsoid is retained for datum transformations and
 exported coordinate system definitions.
 
