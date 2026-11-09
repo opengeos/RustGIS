@@ -752,6 +752,12 @@ class Session(_Api):
             When the keychain can't be used the session goes on without the saved secret and
             logs one ``WARNING`` to the ``rustgis`` logger; that diagnostic never raises or emits
             a Python warning (a command that needed the secret still raises its own error).
+        threads: The most threads one piece of work uses (a tool's rows or features, a raster's
+            chunks), 1 to 1024; never more than the computer's cores. It holds for the whole
+            process, every session in it included, until it is set again; ``None`` (the default)
+            leaves it as it is, at first the cores up to 16. The same as
+            ``s.run("gp.threads", threads=n)``, which also takes ``threads=None`` to go back to
+            the default.
 
     Example:
         >>> s = rustgis.Session(data=["parcels.gpkg"])
@@ -767,11 +773,14 @@ class Session(_Api):
         data: Optional[Union[PathLike, Iterable[PathLike]]] = None,
         plugins: bool = False,
         use_saved_secrets: bool = False,
+        threads: Optional[int] = None,
     ) -> None:
         """Starts a session, optionally opening a project, the sample and data files."""
         if plugins:
             load_plugins()
         self._engine = _Engine(use_saved_secrets)
+        if threads is not None:
+            self.run("gp.threads", threads=threads)
         if sample:
             self.run("project.sample")
         if project is not None:

@@ -936,6 +936,13 @@ impl Chunks {
         }
     }
 
+    /// The most one chunk holds while it is decoded: its samples as read (up to 8 bytes each)
+    /// and as 32-bit floats.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn bytes(&self) -> usize {
+        (self.cw as usize).saturating_mul(self.ch as usize).saturating_mul(self.samples).saturating_mul(12)
+    }
+
     fn count(&self) -> u64 {
         u64::from(self.per_plane) * self.planes as u64
     }
@@ -1038,7 +1045,9 @@ fn decimate<R: Read + Seek>(
     if let Some((open, image, limits)) = open
         && chunks.count() >= PARALLEL_CHUNKS
     {
-        let threads = std::thread::available_parallelism().map_or(1, |n| n.get()).min(16);
+        // Each thread decodes a chunk of its own: beyond one thread's, no more than the threads'
+        // scratch budget, so a high thread setting doesn't multiply the peak.
+        let threads = crate::threads::max().min(1 + crate::memory::thread_scratch() / chunks.bytes().max(1));
         if threads > 1 {
             return decimate_parallel(chunks, bands, k, (ow, oh), nodata, threads, open, image, limits);
         }

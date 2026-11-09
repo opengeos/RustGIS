@@ -458,7 +458,7 @@ pub fn meshes(
             };
             let mut order: Vec<usize> = (0..missing.len()).collect();
             order.sort_by(|a, b| far(&missing[*a]).total_cmp(&far(&missing[*b])));
-            let round = if cfg!(target_arch = "wasm32") { 1 } else { std::thread::available_parallelism().map_or(1, |n| n.get()).min(16) };
+            let round = rustgis_data::threads::max();
             let mut made: Vec<Option<Arc<TileMesh>>> = vec![None; missing.len()];
             for (n, some) in order.chunks(round).enumerate() {
                 if n > 0 && web_time::Instant::now() >= until {
@@ -508,7 +508,7 @@ pub fn meshes(
 fn parallel<T: Sync, R: Send>(items: &[T], f: impl Fn(&T) -> R + Sync) -> Vec<Option<R>> {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let threads = std::thread::available_parallelism().map_or(1, |n| n.get()).min(items.len()).min(16);
+        let threads = rustgis_data::threads::for_items(items.len());
         if threads > 1 {
             let next = std::sync::atomic::AtomicUsize::new(0);
             let out: Mutex<Vec<Option<R>>> = Mutex::new((0..items.len()).map(|_| None).collect());
