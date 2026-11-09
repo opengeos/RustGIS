@@ -362,6 +362,7 @@ struct Parser<'a> {
     ds: &'a Dataset,
     depth: usize,
     area_check: OnceCell<Option<String>>,
+    validate_areas: bool,
 }
 
 impl Parser<'_> {
@@ -615,7 +616,8 @@ impl Parser<'_> {
             let hint = if m == Measure::Length { " (use perimeter on polygons)" } else { "" };
             return Err(format!("'{name}' measures {} layers{hint}", want.label().to_ascii_lowercase()));
         }
-        if m == Measure::Area
+        if self.validate_areas
+            && m == Measure::Area
             && let Some(message) =
                 self.area_check.get_or_init(|| crate::ambiguous_area_message(self.ds.features.iter().filter_map(|f| f.geometry.as_ref())))
         {
@@ -774,11 +776,22 @@ fn show(t: Option<&Tok>) -> String {
 
 /// Parses an expression (a clause, or a value) against a dataset's schema.
 pub fn parse(text: &str, ds: &Dataset) -> Result<Expr, String> {
+    parse_expression(text, ds, true)
+}
+
+/// Parse retained expressions against fields and geometry type, without checking current areas.
+/// Drawing and stale-field checks use this path and report unavailable areas separately; new
+/// user calculations and filters use [`parse`] so ambiguous measurements are refused.
+pub fn parse_fields(text: &str, ds: &Dataset) -> Result<Expr, String> {
+    parse_expression(text, ds, false)
+}
+
+fn parse_expression(text: &str, ds: &Dataset, validate_areas: bool) -> Result<Expr, String> {
     let toks = lex(text)?;
     if toks.is_empty() {
         return Err("the expression is empty".into());
     }
-    let mut p = Parser { toks, pos: 0, ds, depth: 0, area_check: OnceCell::new() };
+    let mut p = Parser { toks, pos: 0, ds, depth: 0, area_check: OnceCell::new(), validate_areas };
     let e = p.or()?;
     if p.pos < p.toks.len() {
         return Err(format!("unexpected {}", show(p.toks.get(p.pos))));

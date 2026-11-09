@@ -153,6 +153,8 @@ whose winding exceeds one whole surface. The error counts the affected rings and
 it does not store an impossible area or silently replace it with null. Perimeter expressions,
 ordinary polar caps and whole-world rectangles still work. Attribute rules check only the edited rows, so an unrelated ambiguous feature does not block a clean-row edit. Geometry edits that would invalidate a saved area filter, symbol or label expression are refused and rolled back.
 
+Saved display expressions are checked against the layer’s fields separately from current area values. When an opened project or refreshed layer contains an ambiguous area, the affected features’ area values are unavailable and a counted notice explains this; the expressions are retained and clean features still evaluate normally. An unrelated field deletion does not discard a valid area expression or rule. Streamed definition queries stop at the first ambiguous decoded chunk and state the scope of that count.
+
 ## Limits
 
 A number too large to represent (`1e999`) is an error. An expression is at most 10,000 characters and nests at most 64 levels: each parenthesis,

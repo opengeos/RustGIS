@@ -922,7 +922,7 @@ impl Renderer {
     pub fn classer(&self, ds: &Dataset, map_scale: Option<f64>) -> Classer {
         let Some(text) = self.expression() else { return Classer::default() };
         Classer {
-            expr: rustgis_data::query::parse(text, ds).ok(),
+            expr: rustgis_data::query::parse_fields(text, ds).ok(),
             env: rustgis_data::query::Env { map_scale: map_scale.filter(|s| s.is_finite() && *s > 0.0) },
         }
     }
@@ -2914,7 +2914,7 @@ impl LabelClass {
     pub fn query(&self, ds: &Dataset) -> Option<Option<rustgis_data::query::Expr>> {
         match self.where_.as_deref().map(str::trim).filter(|w| !w.is_empty()) {
             None => Some(None),
-            Some(w) => rustgis_data::query::parse(w, ds).ok().map(Some),
+            Some(w) => rustgis_data::query::parse_fields(w, ds).ok().map(Some),
         }
     }
 }
@@ -2994,7 +2994,7 @@ impl Labeling {
         };
         // (A class whose text is an expression that still reads keeps its own, which it doesn't
         // label from.)
-        let by_text = |c: &LabelClass| c.by.text.as_deref().is_some_and(|t| rustgis_data::query::parse(t, ds).is_ok());
+        let by_text = |c: &LabelClass| c.by.text.as_deref().is_some_and(|t| rustgis_data::query::parse_fields(t, ds).is_ok());
         for c in self.classes.iter_mut().filter(|c| ds.field_index(&c.field).is_none() && !by_text(c)) {
             c.field.clone_from(&fallback);
         }

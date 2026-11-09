@@ -15821,6 +15821,121 @@ fn tabulate_intersection_refuses_ambiguous_input_denominators() {
 }
 
 #[test]
+fn area_stored_expressions_keep_clean_rows_and_report_unavailable_values() {
+    use rustgis_data::{Coord, Dataset, Field, FieldType, Geometry, GeometryType, Value};
+    let c = Coord::new;
+    let clean = Geometry::Polygon(vec![vec![vec![c(0.0, 0.0), c(1.0, 0.0), c(1.0, 1.0), c(0.0, 0.0)]]]);
+    let mut data =
+        Dataset::new("Stored area", GeometryType::Polygon, vec![Field::new("n", FieldType::Double), Field::new("extra", FieldType::Text)]);
+    data.push(Some(clean.clone()), vec![Value::Float(1.0), Value::Text("x".into())]);
+    data.push(Some(clean), vec![Value::Float(2.0), Value::Text("x".into())]);
+    let mut setup = Session::new(Project::default());
+    let id = setup.map_mut().add_dataset(data);
+    setup
+        .run("data.attributeRule", &json!({"layer":"Stored area","name":"area","kind":"calculation","field":"n","expression":"$area"}))
+        .unwrap();
+    let layer = setup.map_mut().layer_mut(id).unwrap();
+    layer.definition_query = Some("$area > 0 AND n = 1".into());
+    layer.symbol_by.size = Some("$area".into());
+    layer.labels.default.by.text = Some("$area".into());
+    let clean_session = Session::new(setup.project.clone());
+    assert!(!clean_session.notices.iter().any(|notice| notice.text.contains("area is ambiguous")));
+    setup.map_mut().layer_mut(id).unwrap().dataset.features[1].geometry =
+        Some(Geometry::Polygon(vec![vec![vec![c(-180.0, 90.0), c(180.0, 90.0), c(-90.0, -90.0), c(90.0, -80.0)]]]));
+    let mut session = Session::new(setup.project.clone());
+    let layer = session.map().layer(id).unwrap();
+    assert_eq!(layer.visible_rows(), [true, false]);
+    assert!(!layer.styler(None).is_plain());
+    let labels = rustgis_map::label_by::LabelExprs::new(&layer.labels.default.by, &layer.dataset, None).unwrap();
+    assert!(labels.has_text() && labels.text(&layer.dataset, 0).flatten().is_some());
+    assert_eq!(session.notices.iter().filter(|notice| notice.text.contains("1 ring(s) in 1 feature(s)")).count(), 1);
+    session.run("edit.deleteField", &json!({"layer":"Stored area","field":"extra"})).unwrap();
+    let layer = session.map().layer(id).unwrap();
+    assert!(layer.definition_query.is_some());
+    assert_eq!(layer.design.rules.len(), 1);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn area_service_refresh_retains_expressions_and_reports_unavailable_values() {
+    use crate::tests::ogc_server::{ITEMS, Server};
+    let server = Server::group_fixture();
+    let feature = |n: i32, ring: Value| json!({"type":"Feature","properties":{"n":n},"geometry":{"type":"Polygon","coordinates":[ring]}});
+    let clean = json!([[0, 0], [1, 0], [1, 1], [0, 0]]);
+    let bad = json!([[-180, 90], [180, 90], [-90, -90], [90, -80], [-180, 90]]);
+    server.set(ITEMS, &json!({"type":"FeatureCollection","features":[feature(1,clean.clone())]}).to_string());
+    let mut session = Session::new(Project::default());
+    session.run("service.import", &json!({"url":server.root()})).unwrap();
+    let id = session.map().layer_by_name("Places").unwrap().id;
+    let layer = session.map_mut().layer_mut(id).unwrap();
+    layer.definition_query = Some("$area > 0 AND n = 1".into());
+    layer.labels.default.by.text = Some("$area".into());
+    layer.display_filters.push(rustgis_map::effects::DisplayFilter {
+        name: "area".into(),
+        where_: "$area > 0".into(),
+        min_scale: None,
+        max_scale: None,
+    });
+    server.set(ITEMS, &json!({"type":"FeatureCollection","features":[feature(1,clean),feature(2,bad)]}).to_string());
+    let mark = session.notice_mark();
+    session.run("service.refresh", &json!({"layer":id})).unwrap();
+    let layer = session.map().layer(id).unwrap();
+    assert!(layer.definition_query.is_some() && layer.labels.default.by.text.is_some());
+    assert_eq!(layer.display_filters.len(), 1);
+    assert_eq!(layer.visible_rows(), [true, false]);
+    assert_eq!(session.notices_since(mark).iter().filter(|notice| notice.text.contains("1 ring(s) in 1 feature(s)")).count(), 1);
+}
+
+#[test]
+fn area_stale_calculation_targets_do_not_block_edits() {
+    use rustgis_data::{Coord, Dataset, Field, FieldType, Geometry, GeometryType, Value};
+    use rustgis_map::design::{AttributeRule, RuleKind};
+    let c = Coord::new;
+    let mut data = Dataset::new("Stale area", GeometryType::Polygon, vec![Field::new("value", FieldType::Double)]);
+    data.push(
+        Some(Geometry::Polygon(vec![vec![vec![c(-180.0, 90.0), c(180.0, 90.0), c(-90.0, -90.0), c(90.0, -80.0)]]])),
+        vec![Value::Float(1.0)],
+    );
+    let mut session = Session::new(Project::default());
+    let id = session.map_mut().add_dataset(data);
+    session.map_mut().layer_mut(id).unwrap().design.rules.push(AttributeRule {
+        name: "stale".into(),
+        kind: RuleKind::Calculation,
+        field: "gone".into(),
+        expression: "$area".into(),
+    });
+    session.run("edit.setValue", &json!({"layer":"Stale area","row":0,"field":"value","value":2})).unwrap();
+    session.map_mut().layer_mut(id).unwrap().design.rules.push(AttributeRule {
+        name: "constraint".into(),
+        kind: RuleKind::Constraint,
+        field: String::new(),
+        expression: "$area > 0".into(),
+    });
+    assert!(session.run("edit.setValue", &json!({"layer":"Stale area","row":0,"field":"value","value":3})).is_err());
+    assert_eq!(session.map().layer(id).unwrap().dataset.value(0, 0), &Value::Float(2.0));
+}
+
+#[test]
+fn area_archive_restore_cannot_invalidate_a_saved_filter() {
+    use rustgis_data::{Coord, Dataset, Geometry, GeometryType};
+    let c = Coord::new;
+    let mut data = Dataset::new("Archived area", GeometryType::Polygon, vec![]);
+    data.push(Some(Geometry::Polygon(vec![vec![vec![c(0.0, 0.0), c(1.0, 0.0), c(1.0, 1.0), c(0.0, 0.0)]]])), vec![]);
+    let mut session = Session::new(Project::default());
+    let id = session.map_mut().add_dataset(data);
+    let layer = session.map_mut().layer_mut(id).unwrap();
+    let clean = layer.dataset.features[0].clone();
+    let mut bad = clean.clone();
+    bad.geometry = Some(Geometry::Polygon(vec![vec![vec![c(-180.0, 90.0), c(180.0, 90.0), c(-90.0, -90.0), c(90.0, -80.0)]]]));
+    layer.design.archive =
+        Some(vec![rustgis_map::design::ArchiveEntry { time: 10.0, id: clean.id, before: Some(bad), after: Some(clean.clone()) }]);
+    layer.definition_query = Some("$area > 0".into());
+    let result = session.run("data.archiveRestore", &json!({"layer":"Archived area","time":0}));
+    assert!(result.is_err_and(|error| error.to_string().contains("area is ambiguous")));
+    assert_eq!(session.map().layer(id).unwrap().dataset.features[0], clean);
+}
+
+#[test]
 fn area_rules_refuse_ambiguous_geometry_during_edits() {
     use rustgis_data::{Coord, Dataset, Field, FieldType, Geometry, GeometryType, Value};
     let c = Coord::new;
@@ -15890,6 +16005,10 @@ fn raster_measure_refuses_ambiguous_polar_area_instead_of_null() {
     assert!(error.contains("area is ambiguous") && error.contains("1 ring"), "{error}");
     let distance = s.run("raster.measure", &json!({"kind":"distance", "points":bad})).unwrap();
     assert!(distance["metres"].as_f64().is_some_and(|d| d.is_finite() && d > 0.0));
+    let mut closed = bad.as_array().unwrap().clone();
+    closed.push(closed[0].clone());
+    let perimeter = s.run("raster.measure", &json!({"kind":"distance","points":closed})).unwrap();
+    assert!(perimeter["metres"].as_f64().is_some_and(|value| value.is_finite() && value > distance["metres"].as_f64().unwrap()));
     let world = s.run("raster.measure", &json!({"kind":"area", "points":[[-180,-90],[180,-90],[180,90],[-180,90]]})).unwrap();
     assert!(world["squareMetres"].as_f64().is_some_and(|area| area.is_finite() && area > 5e14));
 }

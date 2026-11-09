@@ -133,7 +133,11 @@ fn read_filtered(source: &dyn FeatureSource, req: &Request, bytes: usize, mut sc
         if rustgis_data::query::uses_area(expr)
             && let Some(message) = rustgis_data::ambiguous_area_message(scratch.features.iter().filter_map(|f| f.geometry.as_ref()))
         {
-            return Err(DataError::Format(format!("Definition query: {}: {message}", scratch.name)));
+            return Err(DataError::Format(format!(
+                "Definition query: {}: {message}; count covers this decoded chunk of {} feature(s)",
+                scratch.name,
+                scratch.features.len()
+            )));
         }
         let keep: Vec<bool> = (0..scratch.features.len()).map(|r| rustgis_data::query::eval(expr, &scratch, r)).collect();
         for (feature, _) in std::mem::take(&mut scratch.features).into_iter().zip(keep).filter(|(_, k)| *k) {

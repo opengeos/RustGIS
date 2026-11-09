@@ -1035,7 +1035,7 @@ impl Layer {
             }
         }
         for f in self.display_filters.iter().filter(|f| f.applies(scale)) {
-            if let Ok(e) = rustgis_data::query::parse(&f.where_, &self.dataset) {
+            if let Ok(e) = rustgis_data::query::parse_fields(&f.where_, &self.dataset) {
                 for (r, keep) in rows.iter_mut().enumerate() {
                     *keep = *keep && rustgis_data::query::eval(&e, &self.dataset, r);
                 }
@@ -1065,7 +1065,7 @@ impl Layer {
     pub fn visible_rows(&self) -> Vec<bool> {
         let n = self.dataset.features.len();
         match self.definition_query.as_deref().filter(|q| !q.trim().is_empty()) {
-            Some(q) => match rustgis_data::query::parse(q, &self.dataset) {
+            Some(q) => match rustgis_data::query::parse_fields(q, &self.dataset) {
                 Ok(e) => (0..n).map(|r| rustgis_data::query::eval(&e, &self.dataset, r)).collect(),
                 Err(_) => vec![true; n],
             },

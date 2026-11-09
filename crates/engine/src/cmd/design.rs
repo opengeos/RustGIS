@@ -36,6 +36,33 @@ pub struct EditCounts {
     pub deleted: usize,
 }
 
+/// Whether a retained display expression reads area; stale field references do not count.
+fn has_area_display(l: &rustgis_map::Layer) -> bool {
+    let uses_area =
+        |text: &str| rustgis_data::query::parse_fields(text, &l.dataset).is_ok_and(|expr| rustgis_data::query::uses_area(&expr));
+    let by = &l.symbol_by;
+    l.definition_query
+        .as_deref()
+        .into_iter()
+        .chain(l.display_filters.iter().map(|filter| filter.where_.as_str()))
+        .chain(l.renderer.expression())
+        .chain([&by.size, &by.fill, &by.stroke, &by.stroke_width, &by.angle].into_iter().filter_map(|text| text.as_deref()))
+        .chain(std::iter::once(&l.labels.default).chain(l.labels.classes.iter()).flat_map(|class| {
+            [&class.where_, &class.by.text, &class.by.size, &class.by.color, &class.by.angle].into_iter().filter_map(|text| text.as_deref())
+        }))
+        .any(uses_area)
+}
+
+/// Explain unavailable areas in retained display expressions without discarding their text.
+pub(crate) fn display_area_message(l: &rustgis_map::Layer) -> Option<String> {
+    if !has_area_display(l) {
+        return None;
+    }
+    rustgis_data::ambiguous_area_message(l.dataset.features.iter().filter_map(|feature| feature.geometry.as_ref())).map(|message| {
+        format!("{}: {message}; area values for affected features are unavailable; saved display expressions are retained", l.dataset.name)
+    })
+}
+
 /// Editing is on and a feature layer is active.
 pub(crate) fn need_editable(s: &Session) -> Option<&'static str> {
     if !s.map().editing.settings.enabled {
@@ -135,19 +162,12 @@ pub(crate) fn apply_with(s: &mut Session, id: u32, changes: Vec<Change>, new_def
     // may still be skipped below, but an ambiguous area must never disable a valid rule.
     let metadata = rustgis_data::Dataset::new(l.dataset.name.clone(), l.dataset.geometry_type, l.dataset.fields.clone());
     let uses_area = |text: &str| rustgis_data::query::parse(text, &metadata).is_ok_and(|expr| rustgis_data::query::uses_area(&expr));
-    let by = &l.symbol_by;
-    let display_area = l
-        .definition_query
-        .as_deref()
-        .into_iter()
-        .chain(l.display_filters.iter().map(|filter| filter.where_.as_str()))
-        .chain(l.renderer.expression())
-        .chain([&by.size, &by.fill, &by.stroke, &by.stroke_width, &by.angle].into_iter().filter_map(|text| text.as_deref()))
-        .chain(std::iter::once(&l.labels.default).chain(l.labels.classes.iter()).flat_map(|class| {
-            [&class.where_, &class.by.text, &class.by.size, &class.by.color, &class.by.angle].into_iter().filter_map(|text| text.as_deref())
-        }))
-        .any(uses_area);
-    if (display_area || l.design.rules.iter().any(|rule| uses_area(&rule.expression)))
+    let display_area = has_area_display(l);
+    if (display_area
+        || l.design
+            .rules
+            .iter()
+            .any(|rule| (rule.kind == RuleKind::Constraint || l.dataset.field_index(&rule.field).is_some()) && uses_area(&rule.expression)))
         && let Some(message) =
             rustgis_data::ambiguous_area_message(rows.iter().filter_map(|&row| l.dataset.features.get(row)?.geometry.as_ref()))
     {
@@ -1710,6 +1730,13 @@ fn archive_restore(s: &mut Session, p: &Json) -> CmdResult {
             }
             (None, None) => {}
         }
+    }
+    if has_area_display(l)
+        && let Some(message) = rustgis_data::ambiguous_area_message(
+            touched.iter().filter_map(|(fid, _)| l.dataset.features.get(*index.get(fid)?)?.geometry.as_ref()),
+        )
+    {
+        return Err(format!("{}: {message}", l.dataset.name));
     }
     // The restore is itself archived and counted, so it can be restored past too.
     let time = now();

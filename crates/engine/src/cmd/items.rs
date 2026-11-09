@@ -122,6 +122,8 @@ pub fn commands() -> Vec<C> {
             }
             l.labels.repoint_missing_fields(&l.dataset);
             l.transparency = st.transparency;
+            let area_notice = super::design::display_area_message(l);
+            if let Some(notice) = area_notice { s.notify(notice,false); }
             if relock {
                 s.map_mut().label_lock = None;
                 s.map_mut().label_lock_line_anchors.clear();
@@ -482,6 +484,9 @@ fn import_maps(s: &mut Session, p: &Value) -> CmdResult {
         while s.project.maps.iter().any(|o| o.name.eq_ignore_ascii_case(&m.name)) {
             i += 1;
             m.name = format!("{base} ({i})");
+        }
+        for notice in m.layers.iter().filter_map(super::design::display_area_message) {
+            s.notify(notice, false);
         }
         names.push(m.name.clone());
         m.renew_instance_id();
