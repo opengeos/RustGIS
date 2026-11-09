@@ -97,10 +97,15 @@ Cassini-Soldner, polyconic and Equal Earth methods are supported from their para
 files and in GeoTIFF keys. Esri's orthographic is a spherical projection: on an ellipsoid it is
 refused, with a notice, rather than computed as EPSG's ellipsoidal one. The equidistant
 cylindrical projection (EPSG:4087, World Equidistant Cylindrical) uses a sphere of its datum's
-semi-major axis, matching PROJ and GDAL, both for data and for a map drawn in it (including the
+semi-major axis, matching legacy PROJ/GDAL coordinates (verified with PROJ 9.7.1), both for data
+and for a map drawn in it (including the
 Equirectangular preset). This also applies to planetary Equirectangular systems and definitions
 that name EPSG method 1028. Reading an ellipsoidal WKT2 definition of that method reports this
-compatibility choice: coordinates computed with EPSG's ellipsoidal formula can differ by kilometres.
+compatibility choice without assuming which formula the producer used. Effectively spherical
+definitions need no warning. RustGIS applies the same compatibility formula to GeoTIFF CT 17;
+this key identifies a GeoTIFF transformation, rather than explicitly declaring EPSG method 1028.
+[PROJ 9.9](https://proj.org/en/stable/operations/projections/eqc.html) supports the ellipsoidal
+formula instead. RustGIS retains the legacy spherical formula to preserve existing file coordinates.
 The datum's ellipsoid is retained for datum transformations and
 exported coordinate system definitions.
 

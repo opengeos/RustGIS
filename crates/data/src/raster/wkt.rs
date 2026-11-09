@@ -301,12 +301,17 @@ fn uses_eqc(crs: Crs) -> bool {
     proj4.is_some_and(|p| p.split_whitespace().any(|p| p == "+proj=eqc"))
 }
 
-/// Method 1028 is ellipsoidal, unlike PROJ's `eqc`; a sphere has no such discrepancy.
+/// Method 1028 is ellipsoidal, unlike the legacy PROJ 9.7.1 `eqc` formula; a sphere has no discrepancy.
 fn projection_note(root: &Node, crs: Crs) -> Option<&'static str> {
     let method = root.child("PROJECTION")?.child("AUTHORITY")?;
     let rf = root.child("GEOGCS")?.child("DATUM")?.child("SPHEROID")?.num(1)?;
-    (method.title().eq_ignore_ascii_case("EPSG") && authority_code(method) == Some(1028) && rf.is_finite() && rf > 0.0 && uses_eqc(crs))
-        .then_some("EPSG method 1028 is ellipsoidal; RustGIS uses the PROJ/GDAL spherical equidistant cylindrical formula, so coordinates made with the EPSG formula may differ by kilometres")
+    (method.title().eq_ignore_ascii_case("EPSG")
+        && authority_code(method) == Some(1028)
+        && rf.is_finite()
+        && rf > 0.0
+        && rf.recip() > 1e-12
+        && uses_eqc(crs))
+    .then_some("the definition declares EPSG method 1028 (ellipsoidal); RustGIS uses the legacy PROJ/GDAL spherical equidistant cylindrical formula (PROJ 9.7.1 compatibility), which differs from the declared method")
 }
 
 /// Whether a WKT1 geographic system's ellipsoid is another body's. It is checked before the system
@@ -2024,6 +2029,16 @@ mod tests {
         let note = note.unwrap();
         assert!(note.contains("has no conversion to WGS 84") && note.contains("EPSG method 1028"), "{note}");
         assert_eq!(note.matches("EPSG method 1028").count(), 1);
+    }
+
+    #[test]
+    fn method_1028_on_an_effective_sphere_has_no_compatibility_warning() {
+        let rows = corpus();
+        let wkt = rows.iter().find(|r| r.0 == "EPSG:4087").unwrap().2;
+        let near_sphere = wkt.replace("298.257223563", "10000000000000");
+        assert_ne!(wkt, near_sphere);
+        assert!(read_wkt(&near_sphere).unwrap().1.is_none());
+        assert!(read_wkt(wkt).unwrap().1.unwrap().contains("differs from the declared method"));
     }
 
     #[test]

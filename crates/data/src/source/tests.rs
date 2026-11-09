@@ -15,7 +15,12 @@ fn explicit_method_1028_warns_for_known_geopackage_authorities() {
         let read = gpkg_reproject(100001, Some(row), &mut notes).unwrap();
         assert_eq!(notes.iter().filter(|n| n.contains("EPSG method 1028")).count(), usize::from(warned), "{definition}: {notes:?}");
         if warned {
-            assert!(notes[0].contains("srs_id 100001") && notes[0].contains("PROJ/GDAL"), "{notes:?}");
+            assert!(
+                notes[0].contains("srs_id 100001")
+                    && notes[0].contains("PROJ/GDAL")
+                    && notes[0].contains("using EPSG:4087 parameters in preference to the WKT definition"),
+                "{notes:?}"
+            );
             let point = Geometry::Point(Coord::new(0.0, 5_009_377.085_697_311));
             let Geometry::Point(at) = read.geometry(point).unwrap() else { panic!("not a point") };
             assert!(at.x.abs() < 1e-9 && (at.y - 45.0).abs() < 1e-9, "{at:?}");

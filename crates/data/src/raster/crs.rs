@@ -409,7 +409,7 @@ impl Crs {
 }
 
 /// A transformer between the system a PROJ definition describes and WGS 84 longitude/latitude.
-/// Sinusoidal (MODIS's grid) is computed here. Equidistant cylindrical uses PROJ's spherical
+/// Sinusoidal (MODIS's grid) is computed here. Equidistant cylindrical uses PROJ 9.7.1's spherical
 /// projection formula while retaining its datum's ellipsoid for datum transformations.
 pub(crate) fn transformer_of(def: &str) -> Result<Transformer, String> {
     if let Some(sinu) = rustgis_geom::Sinusoidal::from_proj4(def) {
@@ -428,7 +428,7 @@ fn wgs84() -> Result<proj4rs::Proj, String> {
 }
 
 /// The transformer for a PROJ definition of an equidistant cylindrical projection on an
-/// ellipsoid (EPSG:4087's), using PROJ's sphere of its semi-major axis for the projection and
+/// ellipsoid (EPSG:4087's), using PROJ 9.7.1's sphere of its semi-major axis for the projection and
 /// keeping the ellipsoid for datum transformations: `None` for any other definition, `eqc` on a sphere
 /// included. A map drawn in such a system uses it too (rustgis-map's `Projector`), so the map,
 /// the data read in the system and a raster drawn in its own coordinates all agree.
@@ -453,8 +453,8 @@ pub(crate) fn eqc_geographic(def: &str) -> Result<proj4rs::Proj, String> {
     proj4rs::Proj::from_proj_string(&format!("+proj=longlat {}", datum.join(" "))).map_err(|e| e.to_string())
 }
 
-/// PROJ-compatible equidistant cylindrical coordinates on an ellipsoidal datum. The projection
-/// uses a sphere of the semi-major axis, as PROJ/GDAL do for `eqc`; the datum keeps its ellipsoid,
+/// PROJ 9.7.1-compatible equidistant cylindrical coordinates on an ellipsoidal datum. The projection
+/// uses a sphere of the semi-major axis, as legacy PROJ/GDAL do for `eqc`; the datum keeps its ellipsoid,
 /// shift to WGS 84 and prime meridian. proj4rs replaces the projection's ellipsoid with a sphere,
 /// so datum transformations must run separately on longitude/latitude.
 #[derive(Clone)]
@@ -681,7 +681,7 @@ mod tests {
         }
     }
 
-    /// EPSG:4087 and equidistant cylindrical systems on ellipsoidal datums match PROJ/GDAL.
+    /// EPSG:4087 and equidistant cylindrical systems on ellipsoidal datums match PROJ 9.7.1/GDAL.
     #[test]
     fn equidistant_cylindrical_on_an_ellipsoid() {
         check(4087, (10.0, 55.0), (1_113_194.907_932_735_7, 6_122_571.993_630_046), 1e-6);
