@@ -443,6 +443,29 @@ pub fn wgs84_length_m(pts: &[Coord]) -> f64 {
         .sum()
 }
 
+/// Whether a full-turn ring through both poles winds beyond one complete surface.
+///
+/// Such a ring has no single enclosed region: closing its winding at either pole gives areas a
+/// whole globe apart. The whole-world rectangle remains valid. Roundoff within 64 ulps of the
+/// complete surface is not an extra winding.
+pub fn ring_area_is_ambiguous(ring: &[Coord]) -> bool {
+    if !ring.iter().all(|c| c.is_finite() && c.y.abs() <= 90.0)
+        || !ring.iter().any(|c| at_pole(c.y) && c.y > 0.0)
+        || !ring.iter().any(|c| at_pole(c.y) && c.y < 0.0)
+    {
+        return false;
+    }
+    let steps = ring_lon_steps(ring);
+    if !steps.iter().any(|&(_, full)| full) {
+        return false;
+    }
+    let sphere_surface = 4.0 * std::f64::consts::PI * EARTH_RADIUS_M * EARTH_RADIUS_M;
+    let wgs84_surface = 2.0 * std::f64::consts::PI * WGS84_A * WGS84_A * authalic_q(90.0);
+    let beyond = |area: f64, surface: f64| area > surface * (1.0 + 64.0 * f64::EPSILON);
+    beyond(sphere_ring_area_m2(ring, steps.iter().map(|&(d, _)| d), true), sphere_surface)
+        || beyond(authalic_ring_area_m2(ring), wgs84_surface)
+}
+
 /// The perimeter (metres) and the unsigned enclosed area (square metres) of a lon/lat ring on the
 /// WGS 84 ellipsoid. The ring is closed along a geodesic to its first point, whatever its winding,
 /// so the perimeter and area come from one pass over the ring, not two. A ring gives the
@@ -451,6 +474,7 @@ pub fn wgs84_length_m(pts: &[Coord]) -> f64 {
 /// measured on the ellipsoid by its edges' paths in longitude and latitude, each full turn a whole
 /// parallel); reversing the ring gives the same magnitude. An edge along the ±180° meridian (a
 /// polygon split at the antimeridian) is a seam, measured as the meridian it runs along.
+/// An ambiguous winding ([`ring_area_is_ambiguous`]) has NaN area and keeps its perimeter.
 pub fn wgs84_ring_perimeter_area_m2(ring: &[Coord]) -> (f64, f64) {
     // A broken vertex is no place: NaN, never a plausible number (see [`haversine_m`]).
     if !ring.iter().all(|c| c.is_finite()) {
@@ -477,7 +501,7 @@ pub fn wgs84_ring_perimeter_area_m2(ring: &[Coord]) -> (f64, f64) {
             .zip(&steps)
             .map(|((p, r), &(dlon, full))| if full { wgs84_parallel_m((p.y + r.y) / 2.0, dlon) } else { wgs84_distance_m(*p, *r) })
             .sum();
-        return (perimeter, authalic_ring_area_m2(ring));
+        return (perimeter, if ring_area_is_ambiguous(ring) { f64::NAN } else { authalic_ring_area_m2(ring) });
     }
     let mut polygon = PolygonArea::new(&WGS84, Winding::Clockwise);
     for c in ring {
@@ -759,9 +783,13 @@ impl Aeqd {
 /// Area of a lon/lat ring on the sphere (square metres, always positive).
 ///
 /// Uses the spherical-excess approximation from Chamberlain & Duquette (JPL, 2007).
+/// Returns NaN for an ambiguous winding ([`ring_area_is_ambiguous`]).
 pub fn geodesic_ring_area_m2(ring: &[Coord]) -> f64 {
     if ring.len() < 3 {
         return 0.0;
+    }
+    if ring_area_is_ambiguous(ring) {
+        return f64::NAN;
     }
     // An edge that jumps across the antimeridian (179° to -179°) is a short hop east, not 358°
     // west. A full turn (-180° to 180° along a parallel, as a world-wide rectangle has) is kept as
@@ -1268,6 +1296,37 @@ mod tests {
             assert!((reverse_area - area).abs() < 1.0);
             assert!((reverse_perimeter - perimeter).abs() < 1e-6);
         }
+    }
+
+    #[test]
+    fn ambiguous_polar_winding_has_no_single_area() {
+        let c = Coord::new;
+        let ring = [c(-180.0, 90.0), c(180.0, 90.0), c(-90.0, -90.0), c(90.0, -80.0)];
+        for reversed in [false, true] {
+            for start in 0..ring.len() {
+                let mut shape = ring.to_vec();
+                if reversed {
+                    shape.reverse();
+                }
+                shape.rotate_left(start);
+                for closed in [false, true] {
+                    let mut points = shape.clone();
+                    if closed {
+                        points.push(points[0]);
+                    }
+                    let area = geodesic_ring_area_m2(&points);
+                    assert!(area.is_nan(), "{points:?}: no single spherical region, got {area}");
+                    let (perimeter, area) = wgs84_ring_perimeter_area_m2(&points);
+                    assert!(perimeter.is_finite() && perimeter > 0.0);
+                    assert!(area.is_nan(), "{points:?}: no single ellipsoidal region");
+                }
+            }
+        }
+        // The explicitly whole-world rectangle remains a well-defined area.
+        let world = [c(-180.0, -90.0), c(180.0, -90.0), c(180.0, 90.0), c(-180.0, 90.0)];
+        let globe = 4.0 * std::f64::consts::PI * EARTH_RADIUS_M * EARTH_RADIUS_M;
+        assert!((geodesic_ring_area_m2(&world) / globe - 1.0).abs() < 1e-12);
+        assert!(wgs84_ring_perimeter_area_m2(&world).1.is_finite());
     }
 
     #[test]

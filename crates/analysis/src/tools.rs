@@ -4119,6 +4119,11 @@ fn merc_area_perimeter(mp: &MultiPolygon<f64>) -> (f64, f64) {
 fn calculate_geometry(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
     use geo::{Geodesic, Length};
     let ds = input(inp, p, "input")?;
+    if ds.geometry_type == GeometryType::Polygon
+        && let Some(message) = rustgis_data::ambiguous_area_message(ds.features.iter().filter_map(|f| f.geometry.as_ref()))
+    {
+        return Err(format!("Calculate Geometry Attributes: {}: {message}", ds.name));
+    }
     let mut out = ds.clone();
     match ds.geometry_type {
         GeometryType::Polygon => {
@@ -4926,6 +4931,9 @@ fn tabulate_intersection(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, Strin
         };
         let mut row = zone.key.clone();
         row.extend(class.key.iter().cloned());
+        if let Some(message) = rustgis_data::ambiguous_area_message(std::iter::once(covered)) {
+            return Err(format!("Tabulate Intersection: {message}"));
+        }
         row.push(Value::Float(ground_area_perimeter(covered).0 / 1e6));
         let covered_area = map_area_m2(covered);
         row.push(if zone.map_area_m2 > 0.0 { Value::Float(covered_area / zone.map_area_m2 * 100.0) } else { Value::Null });
@@ -5663,6 +5671,15 @@ fn spatial_join(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
 
     let target_rows = rows(inp, p, "target", target);
     let join_rows = rows(inp, p, "join", join);
+    if mode == JoinMatch::LargestOverlap {
+        for (ds, selected) in [(target, &target_rows), (join, &join_rows)] {
+            if let Some(message) =
+                rustgis_data::ambiguous_area_message(selected.iter().filter_map(|&r| ds.features.get(r)?.geometry.as_ref()))
+            {
+                return Err(format!("Spatial Join: {}: {message}", ds.name));
+            }
+        }
+    }
 
     let mut join_geoms: Vec<Located<'_>> = Vec::with_capacity(join_rows.len());
     for &jr in &join_rows {
@@ -5757,6 +5774,13 @@ fn spatial_join(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
                             continue;
                         }
                         let o = overlap(&t_geo, &j.geo);
+                        if !o.is_finite() {
+                            return Err(format!(
+                                "Spatial Join: the overlap of target row {} and join row {} cannot be measured",
+                                tr + 1,
+                                j.row + 1
+                            ));
+                        }
                         if o > 0.0 && best.is_none_or(|(_, b)| o > b) {
                             best = Some((j.row, o));
                         }

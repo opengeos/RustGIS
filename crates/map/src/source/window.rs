@@ -65,12 +65,13 @@ pub(super) fn read_mode(
         if full { Ok(whole(source.read(req)?, projection)) } else { read_with_fields(source, req, bytes, projection, estimate, fields) }
     };
     // A query that doesn't parse draws every feature, so the view is read as without one.
-    let Some((scratch, expr)) = query.and_then(|q| walked(source, q)) else { return read(source) };
+    let Some((scratch, expr)) = query.and_then(|q| parsed_query(source, q)) else { return read(source) };
     // A view read whole is filtered exactly by the layer. A sampled one would leave matches out
     // (#1456): the source is walked instead, keeping up to the view's limit of the matches.
     // Half the budget holds them; their projection and display levels take the rest.
     let first = read(source)?;
-    if first.0.complete {
+    check_areas(&expr, &first.0.features, &source.info().name)?;
+    if first.0.complete || !source.visits_chunks() || numbers_rows(&expr) {
         return Ok(first);
     }
     drop(first);
@@ -88,10 +89,16 @@ pub(super) fn walked(source: &dyn FeatureSource, query: &Query) -> Option<(Datas
     if !source.visits_chunks() {
         return None;
     }
+    parsed_query(source, query).filter(|(_, expr)| !numbers_rows(expr))
+}
+
+/// Parse against metadata even when a source cannot be walked: its decoded view still needs
+/// validation before a geometry measurement expression is evaluated by the layer.
+fn parsed_query(source: &dyn FeatureSource, query: &Query) -> Option<(Dataset, Expr)> {
     let info = source.info();
     let scratch = Dataset::new(info.name.clone(), info.geometry_type, query.fields.clone());
     let expr = rustgis_data::query::parse(&query.text, &scratch).ok()?;
-    (!numbers_rows(&expr)).then_some((scratch, expr))
+    Some((scratch, expr))
 }
 
 /// Whether an expression reads `@row_number` anywhere.
@@ -123,6 +130,11 @@ fn read_filtered(source: &dyn FeatureSource, req: &Request, bytes: usize, mut sc
     let (mut kept, mut kept_bytes, mut step, mut seen) = (Vec::new(), 0usize, 1u64, 0u64);
     let summary = source.visit_chunks(req.extent, FILTER_CHUNK_BYTES, &mut |chunk| {
         scratch.features = chunk.into();
+        if rustgis_data::query::uses_area(expr)
+            && let Some(message) = rustgis_data::ambiguous_area_message(scratch.features.iter().filter_map(|f| f.geometry.as_ref()))
+        {
+            return Err(DataError::Format(format!("Definition query: {}: {message}", scratch.name)));
+        }
         let keep: Vec<bool> = (0..scratch.features.len()).map(|r| rustgis_data::query::eval(expr, &scratch, r)).collect();
         for (feature, _) in std::mem::take(&mut scratch.features).into_iter().zip(keep).filter(|(_, k)| *k) {
             seen += 1;
@@ -145,6 +157,16 @@ fn read_filtered(source: &dyn FeatureSource, req: &Request, bytes: usize, mut sc
         Ok(())
     })?;
     Ok(Batch { features: kept, matched: seen, complete: step == 1, skipped: summary.skipped })
+}
+
+/// An expression parsed against source metadata still needs validation against decoded geometry.
+fn check_areas(expr: &Expr, features: &[rustgis_data::Feature], name: &str) -> Result<()> {
+    if rustgis_data::query::uses_area(expr)
+        && let Some(message) = rustgis_data::ambiguous_area_message(features.iter().filter_map(|f| f.geometry.as_ref()))
+    {
+        return Err(DataError::Format(format!("Definition query: {name}: {message}")));
+    }
+    Ok(())
 }
 
 /// A whole read's cache: every feature projected, without a byte budget.
@@ -308,6 +330,43 @@ mod tests {
     use super::*;
     use rustgis_data::{Dataset, Field, FieldType, GeometryType, Value};
     use rustgis_geom::Coord;
+
+    #[test]
+    fn ambiguous_polar_area_queries_fail_for_complete_and_chunked_sources() {
+        let c = Coord::new;
+        let bad = vec![c(-180.0, 90.0), c(180.0, 90.0), c(-90.0, -90.0), c(90.0, -80.0)];
+        let mut ds = Dataset::new("Polar", GeometryType::Polygon, vec![]);
+        ds.push(Some(Geometry::Polygon(vec![vec![bad.clone()]])), vec![]);
+        ds.push(Some(Geometry::Polygon(vec![vec![bad]])), vec![]);
+        let (bytes, _) = rustgis_data::io::write_bytes(&ds, "fgb").unwrap();
+        let source = rustgis_data::source::open_bytes("polar.fgb", bytes, None).unwrap();
+        let query = Query { text: "$area > 0".into(), fields: vec![] };
+        let req = Request::all();
+        let error =
+            read_mode(source.as_ref(), &req, usize::MAX, &crate::Projection::WebMercator, 0, true, None, Some(&query)).err().unwrap();
+        assert!(error.to_string().contains("2 ring(s) in 2 feature(s)"), "{error}");
+        let scratch = Dataset::new("Polar", GeometryType::Polygon, vec![]);
+        let expr = rustgis_data::query::parse(&query.text, &scratch).unwrap();
+        let error = read_filtered(source.as_ref(), &Request { extent: None, limit: 1 }, usize::MAX, scratch, &expr).unwrap_err();
+        assert!(error.to_string().contains("Polar") && error.to_string().contains("2 ring(s) in 2 feature(s)"), "{error}");
+        // Text mentioning $area is ordinary text, not a request to measure the geometry.
+        let text = Query { text: "'$area' = '$area'".into(), fields: vec![] };
+        let (batch, _) = read_mode(source.as_ref(), &req, usize::MAX, &crate::Projection::WebMercator, 0, true, None, Some(&text)).unwrap();
+        assert_eq!(batch.features.len(), 2);
+        struct Opaque(Box<dyn FeatureSource>);
+        impl FeatureSource for Opaque {
+            fn info(&self) -> &rustgis_data::source::SourceInfo {
+                self.0.info()
+            }
+            fn read(&self, req: &Request) -> Result<Batch> {
+                self.0.read(req)
+            }
+        }
+        let opaque = Opaque(source);
+        assert!(!opaque.visits_chunks());
+        let error = read_mode(&opaque, &req, usize::MAX, &crate::Projection::WebMercator, 0, true, None, Some(&query)).err().unwrap();
+        assert!(error.to_string().contains("2 ring(s) in 2 feature(s)"), "{error}");
+    }
 
     fn source() -> Box<dyn FeatureSource> {
         let mut ds = Dataset::new("complex", GeometryType::Polyline, vec![Field::new("text", FieldType::Text)]);

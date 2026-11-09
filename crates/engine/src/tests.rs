@@ -15714,6 +15714,62 @@ fn geopackage_table_cap_is_reported() {
 }
 
 #[test]
+fn ambiguous_polar_areas_are_refused_before_attributes_or_joins_are_written() {
+    use rustgis_data::{Coord, Dataset, Field, FieldType, Geometry, GeometryType, Value};
+    let c = Coord::new;
+    let bad = vec![c(-180.0, 90.0), c(180.0, 90.0), c(-90.0, -90.0), c(90.0, -80.0)];
+    let world = vec![c(-180.0, -90.0), c(180.0, -90.0), c(180.0, 90.0), c(-180.0, 90.0)];
+    let mut polar = Dataset::new("Polar", GeometryType::Polygon, vec![Field::new("area", FieldType::Double)]);
+    polar.push(Some(Geometry::Polygon(vec![vec![bad.clone()]])), vec![Value::Float(12.0)]);
+    polar.push(Some(Geometry::Polygon(vec![vec![world, bad]])), vec![Value::Float(24.0)]);
+    let clean_ring = vec![c(0.0, 0.0), c(1.0, 0.0), c(1.0, 1.0), c(0.0, 1.0), c(0.0, 0.0)];
+    polar.push(Some(Geometry::Polygon(vec![vec![clean_ring.clone()]])), vec![Value::Float(36.0)]);
+    let mut clean = Dataset::new("Clean", GeometryType::Polygon, vec![Field::new("area", FieldType::Double)]);
+    clean.push(Some(Geometry::Polygon(vec![vec![clean_ring]])), vec![Value::Float(0.0)]);
+    let mut s = Session::new(Project::default());
+    s.map_mut().add_dataset(polar);
+    s.map_mut().add_dataset(clean);
+    for (command, params) in [
+        ("edit.calculateField", json!({"layer":"Polar", "field":"area", "expression":"$area"})),
+        (
+            "edit.calculateGeometry",
+            json!({"layer":"Polar", "field":"area", "property":"area", "unit":"m2", "scope":"all", "overwrite":true}),
+        ),
+        ("gp.run", json!({"tool":"calculateGeometry", "params":{"input":"Polar"}})),
+        ("gp.run", json!({"tool":"spatialJoin", "params":{"target":"Polar", "join":"Clean", "match":"Largest overlap"}})),
+        ("gp.run", json!({"tool":"spatialJoin", "params":{"target":"Clean", "join":"Polar", "match":"Largest overlap"}})),
+    ] {
+        let error = s.run(command, &params).unwrap_err().to_string();
+        assert!(error.contains("Polar") && error.contains("2 ring(s) in 2 feature(s)") && error.contains("area is ambiguous"), "{error}");
+        let layer = s.map().layer_by_name("Polar").unwrap();
+        assert_eq!(layer.dataset.fields.len(), 1);
+        assert_eq!(layer.dataset.value(0, 0), &Value::Float(12.0));
+        assert_eq!(layer.dataset.value(1, 0), &Value::Float(24.0));
+        assert_eq!(s.map().layers.len(), 2);
+    }
+    // The same operations still work for ordinary polygons.
+    s.run("edit.calculateField", &json!({"layer":"Clean", "field":"area", "expression":"$area"})).unwrap();
+    assert!(s.map().layer_by_name("Clean").unwrap().dataset.value(0, 0).as_f64().is_some_and(|area| area > 0.0));
+    s.run("gp.run", &json!({"tool":"calculateGeometry", "params":{"input":"Clean"}})).unwrap();
+    s.run("gp.run", &json!({"tool":"spatialJoin", "params":{"target":"Clean", "join":"Clean", "match":"Largest overlap"}})).unwrap();
+    // Attribute-table calculations and joins honor a selection of clean features.
+    let polar_id = s.map().layer_by_name("Polar").unwrap().id;
+    s.map_mut().layer_mut(polar_id).unwrap().selection = vec![2];
+    s.run(
+        "edit.calculateGeometry",
+        &json!({"layer":"Polar", "field":"area", "property":"area", "unit":"m2", "scope":"selected", "overwrite":true}),
+    )
+    .unwrap();
+    let layer = s.map().layer_by_name("Polar").unwrap();
+    assert_eq!(layer.dataset.value(0, 0), &Value::Float(12.0));
+    assert_eq!(layer.dataset.value(1, 0), &Value::Float(24.0));
+    assert!(layer.dataset.value(2, 0).as_f64().is_some_and(|area| area > 1e9));
+    for (target, join) in [("Clean", "Polar"), ("Polar", "Clean")] {
+        s.run("gp.run", &json!({"tool":"spatialJoin", "params":{"target":target, "join":join, "match":"Largest overlap"}})).unwrap();
+    }
+}
+
+#[test]
 fn notices_since_survives_the_cap() {
     let mut s = Session::new(Project::default());
     for i in 0..250 {
