@@ -26,10 +26,13 @@ fn err(e: String) -> DataError {
 
 /// The rows of a small metadata table, as (column name → value) lookups.
 fn meta_rows(db: &Db<Shared>, tables: &[Table], name: &str) -> Result<Vec<Vec<(String, Val)>>> {
-    let t = tables
-        .iter()
-        .find(|t| t.name.eq_ignore_ascii_case(name))
-        .ok_or_else(|| DataError::Format(format!("not a GeoPackage: no {name} table")))?;
+    let Some(t) = tables.iter().find(|t| t.name.eq_ignore_ascii_case(name)) else {
+        // Attribute-only and tile-only packages can omit the geometry registration table.
+        if name.eq_ignore_ascii_case("gpkg_geometry_columns") {
+            return Ok(Vec::new());
+        }
+        return Err(DataError::Format(format!("not a GeoPackage: no {name} table")));
+    };
     let mut out = Vec::new();
     let mut too_many = false;
     db.rows(t, |_, r| {

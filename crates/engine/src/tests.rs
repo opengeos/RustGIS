@@ -15865,20 +15865,25 @@ fn geopackage_attribute_tables_are_not_silently_omitted() {
     )
     .unwrap();
     drop(conn);
-    for bytes in [false, true] {
-        let mut s = Session::new(Project::default());
-        let error = if bytes {
-            crate::cmd::layer::add_source(
-                &mut s,
-                &json!({}),
-                crate::cmd::layer::Origin::Bytes("mixed.gpkg", std::sync::Arc::new(std::fs::read(&path).unwrap())),
-                None,
-            )
-            .unwrap_err()
-        } else {
-            s.run("layer.addData", &json!({"path":path})).unwrap_err().to_string()
-        };
-        assert!(error.contains("1 attribute-only table"), "bytes={bytes}: {error}");
+    for missing_geometry_table in [false, true] {
+        if missing_geometry_table {
+            rusqlite::Connection::open(&path).unwrap().execute_batch("DROP TABLE gpkg_geometry_columns").unwrap();
+        }
+        for bytes in [false, true] {
+            let mut s = Session::new(Project::default());
+            let error = if bytes {
+                crate::cmd::layer::add_source(
+                    &mut s,
+                    &json!({}),
+                    crate::cmd::layer::Origin::Bytes("mixed.gpkg", std::sync::Arc::new(std::fs::read(&path).unwrap())),
+                    None,
+                )
+                .unwrap_err()
+            } else {
+                s.run("layer.addData", &json!({"path":path})).unwrap_err().to_string()
+            };
+            assert!(error.contains("1 attribute-only table"), "bytes={bytes}: {error}");
+        }
     }
     std::fs::remove_dir_all(dir).unwrap();
 }
