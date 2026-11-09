@@ -1732,6 +1732,36 @@ fn choice_date_range_panel() -> crate::PanelDecl {
     Manifest::parse(&m.to_string()).unwrap().panel.unwrap()
 }
 
+#[test]
+fn panel_reports_clamped_malformed_and_clipped_input() {
+    let mut decl = choice_date_range_panel();
+    let tree = decl.items.iter_mut().find(|item| item.id == "selected").unwrap();
+    tree.kind = "tree".into();
+    tree.text.clear();
+    for (update, expected) in [
+        (json!({"values":{"months":[-5,40]}}), "clamped or reordered"),
+        (json!({"values":{"months":[9,3]}}), "clamped or reordered"),
+        (json!({"values":{"release":999999}}), "clamped or reordered"),
+        (json!({"values":5}), "expected an object"),
+        (json!(false), "expected an object"),
+        (json!({"items":{"months":{"min":9,"max":3}}}), "field(s) not taken"),
+        (json!({"items":{"months":{"min":-1000000001_i64}}}), "field(s) not taken"),
+        (json!({"items":{"product":{"options":[{"id":"x","label":5}]}}}), "field(s) not taken"),
+        (json!({"items":{"product":{"options":[{"id":"x","label":"界".repeat(201)}]}}}), "200 characters"),
+        (json!({"items":{"selected":{"nodes":[{"id":"x","label":"界".repeat(201)}]}}}), "200 characters"),
+    ] {
+        let mut state = crate::PanelState::new(&decl);
+        let note = state.apply(&decl, &update).notice().unwrap_or_default();
+        assert!(note.contains(expected), "{update}: {note}");
+    }
+    let mut state = crate::PanelState::new(&decl);
+    assert!(state.apply(&decl, &json!({"values":{"months":[1.0,3.0],"end":"2024-02-29"}})).notice().is_none());
+    assert!(state.apply(&decl, &json!({"items":{"product":{"options":[{"id":"s1","label":"Sentinel"}]}}})).notice().is_none());
+    let choice = decl.items.iter_mut().find(|item| item.id == "product").unwrap();
+    choice.options = vec![json!({"id":"s1","label":"界".repeat(201)})];
+    assert!(decl.validate(&|_| true).is_err_and(|error| error.contains("200 characters")));
+}
+
 /// A dropdown takes its options from `plugin.json` or the plugin and the chosen option's id as its
 /// value; a date takes `YYYY-MM-DD`; a range takes `[low, high]` within its ends (#1622).
 #[test]
@@ -1760,7 +1790,8 @@ fn panel_dropdowns_dates_and_ranges_keep_their_values() {
     // The plugin replaces the options and the ends: the values follow.
     st.set_values(&decl, &json!({"product": "s1", "months": [8, 11]}));
     let clean = st.apply(&decl, &json!({"items": {"product": {"options": [{"id": "a", "label": "A"}, {"id": "b"}]}, "months": {"min": 0, "max": 9, "labels": ["Jan"]}}}));
-    assert_eq!((clean.notice(), clean), (None, crate::Dropped::default()), "nothing left out, nothing said");
+    assert_eq!(clean.adjusted, ["product", "months"], "a cleared choice and a clamped range are reported");
+    assert!(clean.notice().unwrap().contains("2 value(s) adjusted"));
     assert_eq!(st.chosen("product"), None, "the chosen option is gone");
     assert_eq!(st.range("months"), (8, 9), "within the new ends");
     assert_eq!(st.slider_label("months", 0), "Jan");
@@ -1770,7 +1801,7 @@ fn panel_dropdowns_dates_and_ranges_keep_their_values() {
     );
     assert_eq!((st.items["product"].nodes.len(), st.chosen("product")), (1, Some("a")), "repeated and id-less options are left out");
     // ... and said, with the values not taken.
-    assert_eq!(lossy, crate::Dropped { values: vec!["end".into(), "nope".into()], nodes: 3 });
+    assert_eq!(lossy, crate::Dropped { values: vec!["end".into(), "nope".into()], nodes: 3, ..Default::default() });
     let said = lossy.notice().unwrap();
     assert!(
         said.starts_with("3 option(s) or tree node(s) left out")

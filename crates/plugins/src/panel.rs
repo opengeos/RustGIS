@@ -175,7 +175,11 @@ impl PanelDecl {
             if kind != "choice" && !item.options.is_empty() {
                 return Err(what("options are for dropdowns (choice)"));
             }
-            let options = if kind == "choice" { choice_options(&item.options) } else { Vec::new() };
+            let mut option_changes = Dropped::default();
+            let options = if kind == "choice" { choice_options_reported(&item.options, &mut option_changes) } else { Vec::new() };
+            if option_changes.notice().is_some() {
+                return Err(what(&format!("option labels must be strings of at most {MAX_STATE_LABEL} characters")));
+            }
             if options.len() != item.options.len() {
                 return Err(what(&format!(
                     "a dropdown's options are at most {MAX_CHOICES} objects, each with a unique id of 1 to {MAX_TREE_ID} characters"
@@ -259,6 +263,11 @@ pub fn days_in_month(y: i32, m: u32) -> Option<u32> {
 /// defaults to the id and is kept to one line. Only the first [`MAX_CHOICES`] entries are looked
 /// at, those left out among them included.
 fn choice_options(v: &[Value]) -> Vec<TreeNode> {
+    choice_options_reported(v, &mut Dropped::default())
+}
+
+/// Dropdown options, with the fields changed while retaining an option reported too.
+fn choice_options_reported(v: &[Value], dropped: &mut Dropped) -> Vec<TreeNode> {
     let (mut left, mut seen) = (MAX_CHOICES, HashSet::new());
     let mut nodes = Vec::new();
     for o in v.iter().take(MAX_CHOICES).filter(|o| o.is_object()) {
@@ -267,7 +276,7 @@ fn choice_options(v: &[Value]) -> Vec<TreeNode> {
         }
         // One at a time, without its children: a dropdown is flat.
         let flat = [json!({"id": o.get("id"), "label": o.get("label")})];
-        nodes.extend(tree_nodes(&flat, MAX_TREE_DEPTH, &mut left, &mut seen));
+        nodes.extend(tree_nodes(&flat, MAX_TREE_DEPTH, &mut left, &mut seen, dropped));
     }
     nodes
 }
@@ -283,12 +292,32 @@ const MAX_NAMED: usize = 10;
 pub struct Dropped {
     pub values: Vec<String>,
     pub nodes: usize,
+    pub adjusted: Vec<String>,
+    pub fields: Vec<String>,
+    pub labels: usize,
+    pub malformed: usize,
 }
 
 impl Dropped {
     /// The notice for it; `None` when nothing was left out.
     pub fn notice(&self) -> Option<String> {
         let mut parts = Vec::new();
+        if self.malformed > 0 {
+            parts.push(format!("{} panel object(s) not taken: expected an object", self.malformed));
+        }
+        if self.labels > 0 {
+            parts.push(format!("{} label(s) clipped to {MAX_STATE_LABEL} characters", self.labels));
+        }
+        for (ids, what) in [
+            (&self.fields, "item field(s) not taken (wrong type or invalid bounds)"),
+            (&self.adjusted, "value(s) adjusted (clamped or reordered, or choice cleared)"),
+        ] {
+            if !ids.is_empty() {
+                let names = ids.iter().take(MAX_NAMED).map(|s| clip(s, MAX_TREE_ID)).collect::<Vec<_>>().join(", ");
+                let more = if ids.len() > MAX_NAMED { ", …" } else { "" };
+                parts.push(format!("{} {what}: {names}{more}", ids.len()));
+            }
+        }
         if self.nodes > 0 {
             parts.push(format!(
                 "{} option(s) or tree node(s) left out (no id, one repeated or too long, too deep, or past the limit)",
@@ -372,7 +401,7 @@ pub struct TreeNode {
 /// (counted down) and [`MAX_TREE_DEPTH`] deep below `depth`. A node without an id, or with one
 /// taken already or too long, is left out with its children; a label defaults to the id (when
 /// missing or blank), and is kept to one line (a row of the tree), control characters as spaces.
-fn tree_nodes(v: &[Value], depth: usize, left: &mut usize, seen: &mut HashSet<String>) -> Vec<TreeNode> {
+fn tree_nodes(v: &[Value], depth: usize, left: &mut usize, seen: &mut HashSet<String>, dropped: &mut Dropped) -> Vec<TreeNode> {
     let mut nodes = Vec::new();
     for n in v {
         if *left == 0 {
@@ -385,6 +414,11 @@ fn tree_nodes(v: &[Value], depth: usize, left: &mut usize, seen: &mut HashSet<St
             continue;
         }
         *left -= 1;
+        match n.get("label") {
+            Some(Value::String(label)) if label.chars().count() > MAX_STATE_LABEL => dropped.labels += 1,
+            Some(label) if !label.is_null() && !label.is_string() => dropped.fields.push(format!("{id}.label")),
+            _ => {}
+        }
         let label: String = n
             .get("label")
             .and_then(Value::as_str)
@@ -394,7 +428,7 @@ fn tree_nodes(v: &[Value], depth: usize, left: &mut usize, seen: &mut HashSet<St
             .map(|c| if c.is_control() { ' ' } else { c })
             .collect();
         let children = match n.get("children").and_then(Value::as_array) {
-            Some(c) if depth + 1 < MAX_TREE_DEPTH => tree_nodes(c, depth + 1, left, seen),
+            Some(c) if depth + 1 < MAX_TREE_DEPTH => tree_nodes(c, depth + 1, left, seen, dropped),
             _ => Vec::new(),
         };
         nodes.push(TreeNode { id: id.to_string(), label, count: n.get("count").and_then(Value::as_u64), children });
@@ -541,6 +575,28 @@ impl PanelState {
         set
     }
 
+    /// Reports refused and adjusted values after [`Self::set_values`], comparing whole numbers
+    /// numerically so an integral JSON float is not a changed value.
+    pub fn value_report(&self, decl: &PanelDecl, values: &Value, set: &[String]) -> Dropped {
+        let mut dropped = Dropped { values: not_taken(values, set), ..Default::default() };
+        let Some(given) = values.as_object() else {
+            dropped.malformed = 1;
+            return dropped;
+        };
+        for id in set {
+            let (Some(item), Some(input), Some(kept)) = (decl.item(id), given.get(id), self.values.get(id)) else { continue };
+            let changed = match item.kind.as_str() {
+                "slider" => whole(input) != whole(kept),
+                "range" => pair(input) != pair(kept),
+                _ => false,
+            };
+            if changed {
+                dropped.adjusted.push(id.clone());
+            }
+        }
+        dropped
+    }
+
     /// Takes in a plugin's answer about its panel: `{"values": {...}, "items": {"id": {...}}}`.
     /// An item may set `label` (`null` for the declared one), `text`, `enabled`, `visible`, for a
     /// slider or a range `min`, `max` and `labels`, for a tree `nodes`, and for a dropdown
@@ -549,13 +605,27 @@ impl PanelState {
     /// and a tree's chosen node among its nodes. Returns the values, options and nodes left out.
     pub fn apply(&mut self, decl: &PanelDecl, update: &Value) -> Dropped {
         let mut dropped = Dropped::default();
+        if !update.is_object() {
+            dropped.malformed = 1;
+            return dropped;
+        }
+        if update.get("items").is_some_and(|items| !items.is_object()) {
+            dropped.malformed += 1;
+        }
         let empty = Map::new();
         let items = update.get("items").and_then(Value::as_object).unwrap_or(&empty);
         for d in &decl.items {
             let id = d.key();
             let (Some(u), Some(st)) = (items.get(id), self.items.get_mut(id)) else { continue };
+            if !u.is_object() {
+                dropped.fields.push(id.to_string());
+                continue;
+            }
             match u.get("label") {
-                Some(Value::String(l)) => st.label = Some(clip(l, MAX_STATE_LABEL)),
+                Some(Value::String(l)) => {
+                    dropped.labels += usize::from(l.chars().count() > MAX_STATE_LABEL);
+                    st.label = Some(clip(l, MAX_STATE_LABEL));
+                }
                 Some(Value::Null) => st.label = None,
                 _ => {}
             }
@@ -573,8 +643,15 @@ impl PanelState {
             if d.ranged() {
                 let min = u.get("min").and_then(whole).unwrap_or(st.min);
                 let max = u.get("max").and_then(whole).unwrap_or(st.max);
-                if min <= max && min >= -SLIDER_LIMIT && max <= SLIDER_LIMIT {
+                let typed = ["min", "max"].iter().all(|key| u.get(*key).is_none_or(|v| whole(v).is_some()));
+                if typed && min <= max && min >= -SLIDER_LIMIT && max <= SLIDER_LIMIT {
                     (st.min, st.max) = (min, max);
+                } else {
+                    for key in ["min", "max"] {
+                        if u.get(key).is_some() {
+                            dropped.fields.push(format!("{id}.{key}"));
+                        }
+                    }
                 }
                 if let Some(ls) = u.get("labels").and_then(Value::as_array) {
                     st.labels = ls
@@ -588,24 +665,28 @@ impl PanelState {
                 && let Some(nodes) = u.get("nodes").and_then(Value::as_array)
             {
                 let mut left = MAX_TREE_NODES;
-                st.nodes = Arc::new(tree_nodes(nodes, 0, &mut left, &mut Default::default()));
+                st.nodes = Arc::new(tree_nodes(nodes, 0, &mut left, &mut Default::default(), &mut dropped));
                 dropped.nodes = dropped.nodes.saturating_add(count_given(nodes, 0).saturating_sub(count_kept(&st.nodes)));
             }
             if d.kind == "choice"
                 && let Some(options) = u.get("options").and_then(Value::as_array)
             {
-                st.nodes = Arc::new(choice_options(options));
+                st.nodes = Arc::new(choice_options_reported(options, &mut dropped));
                 dropped.nodes = dropped.nodes.saturating_add(options.len().saturating_sub(st.nodes.len()));
             }
         }
         if let Some(values) = update.get("values") {
             let set = self.set_values(decl, values);
-            dropped.values = not_taken(values, &set);
+            let report = self.value_report(decl, values, &set);
+            dropped.values = report.values;
+            dropped.adjusted = report.adjusted;
+            dropped.malformed += report.malformed;
         }
         // New ends keep the values within them, and new nodes or options the chosen one among them.
         for d in &decl.items {
             let id = d.key();
             let (Some(st), Some(v)) = (self.items.get(id), self.values.get_mut(id)) else { continue };
+            let before = v.clone();
             match d.kind.as_str() {
                 "slider" => *v = json!(v.as_i64().unwrap_or(st.min).clamp(st.min, st.max)),
                 "range" => {
@@ -615,6 +696,9 @@ impl PanelState {
                 }
                 "tree" | "choice" if v.as_str().is_some_and(|n| !holds(&st.nodes, n)) => *v = Value::Null,
                 _ => {}
+            }
+            if *v != before && !dropped.adjusted.iter().any(|given| given == id) {
+                dropped.adjusted.push(id.to_string());
             }
         }
         dropped

@@ -416,6 +416,9 @@ Any command can answer the panel's new state, beside the rest of its answer:
 - An item can set `label` (`null` brings back the declared one), `enabled` and `visible`; a text
   its `text`; a slider or a range its `min`, `max` and `labels`, one per value from `min` (the
   numbers when there are none); a tree its `nodes`; a dropdown its `options`. What an answer leaves out stays as it was.
+  Fields belonging to another widget kind are ignored: `text` outside a text widget,
+  `min`/`max`/`labels` outside a slider or range, `nodes` outside a tree, and `options` outside a
+  dropdown. Unknown item ids and field names are also ignored.
 - A tree's `nodes` are `[{"id": "env", "label": "Environment", "count": 67, "children": [...]}]`:
   `id` is the value the node gives when chosen, unique in the tree; `label` defaults to the id;
   `count` (a whole number) shows at the right of the row. The nodes come before the values in an
@@ -427,6 +430,11 @@ Any command can answer the panel's new state, beside the rest of its answer:
   clipped to 4,000 characters, labels to 200, and a slider has at most 2,000 labels of 80
   characters. A tree holds at most 5,000 nodes, 8 levels deep; a node without an id, or with one
   longer than 200 characters or taken already, is left out with its children.
+- Malformed panel, `items` or `values` objects, invalid numeric bounds and non-string node or
+  option labels produce counted warnings. So do values clamped or reordered to fit a widget,
+  choices cleared after options change, and labels cut to 200 characters. Warnings name the
+  plugin and affected widgets or fields; clean input stays quiet. A manifest's dropdown labels
+  must already be strings of at most 200 characters, otherwise the manifest is refused.
 - A plugin words what it sets in the request's `lang`; RustGIS translates only what the
   manifest declares.
 - A command that fails leaves the values as they were. The panel's state command is no undo

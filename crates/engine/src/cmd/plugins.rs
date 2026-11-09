@@ -52,8 +52,9 @@ fn panel(s: &mut Session, p: &Value) -> CmdResult {
     let decl = plugin.manifest.panel.clone().ok_or_else(|| format!("{} has no panel", plugin.manifest.name))?;
     let before = s.panel_state(id, &decl).clone();
     if let Some(values) = p.get("values") {
-        let set = s.panel_state(id, &decl).set_values(&decl, values);
-        let dropped = rustgis_plugins::Dropped { values: rustgis_plugins::panel::not_taken(values, &set), nodes: 0 };
+        let state = s.panel_state(id, &decl);
+        let set = state.set_values(&decl, values);
+        let dropped = state.value_report(&decl, values, &set);
         if let Some(text) = dropped.notice() {
             s.warn(format!("{}: {text}", plugin.manifest.name));
         }
@@ -563,7 +564,7 @@ impl Session {
         let given = params;
         let mut params = params;
         let mut stripped;
-        let mut refused = Vec::new();
+        let mut refused = rustgis_plugins::Dropped::default();
         let (before, request) = match &panel {
             Some(decl) => {
                 let state = self.panel_state(&pid, decl);
@@ -571,7 +572,7 @@ impl Session {
                 let mut changed = Vec::new();
                 if let Some(given) = params.get("panel") {
                     changed = state.set_values(decl, given);
-                    refused = rustgis_plugins::panel::not_taken(given, &changed);
+                    refused = state.value_report(decl, given, &changed);
                     stripped = params.clone();
                     if let Some(o) = stripped.as_object_mut() {
                         o.remove("panel");
@@ -585,7 +586,7 @@ impl Session {
         // The values a widget's command was given that the panel couldn't take, and later what
         // the plugin's answer left out, are said (as the plugin's).
         let name = cmd.plugin.manifest.name.clone();
-        if let Some(text) = (rustgis_plugins::Dropped { values: refused, nodes: 0 }).notice() {
+        if let Some(text) = refused.notice() {
             self.warn(format!("{name}: {text}"));
         }
         // The panel's state command runs each time the panel opens: when nothing it asked for
