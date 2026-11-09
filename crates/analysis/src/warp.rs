@@ -589,8 +589,8 @@ impl Canvas {
 
     /// How `r` is held: as a `picture` (a scan being georeferenced), a grey byte image gains
     /// alpha as a colour one does; as data, it keeps its one band, and a cell with no value is
-    /// its no-data, else NaN in a floating-point type and 0 in a whole-number one, as GDAL leaves
-    /// it.
+    /// its no-data, else NaN for floating-point or named-class data and 0 in other whole-number
+    /// data. Named class zero must remain distinct from cells outside the coverage.
     fn of(r: &Raster, picture: bool) -> Canvas {
         let nb = r.bands.len();
         let alpha_src = match r.color {
@@ -606,7 +606,8 @@ impl Canvas {
         let add_alpha = ((rgb && nb == 3) || gray) && alpha_src.is_none() && r.nodata.is_none();
         // Cells with no value: no-data where the raster has some. Colours with alpha are zero there.
         let clear = alpha_src.is_some() || add_alpha;
-        let none = if picture || rgbi || r.data_type.starts_with("Float") { f32::NAN } else { 0.0 };
+        let labelled = r.bands.iter().any(|b| !b.classes.is_empty());
+        let none = if picture || rgbi || labelled || r.data_type.starts_with("Float") { f32::NAN } else { 0.0 };
         let outside = if clear { 0.0 } else { r.nodata.map_or(none, |d| d as f32) };
         let color = match (add_alpha, rgb) {
             (true, true) => ColorHint::Rgb { alpha: true },
@@ -1440,6 +1441,26 @@ mod tests {
         let floats = Raster::new("f", 4, 4, vec![vec![3.5; 16]], gt, crs, None, ColorHint::Gray, "Float32").unwrap();
         let out = project(&floats, &g, Method::Sample(Resampling::Bilinear), "b".into()).unwrap();
         assert_eq!((out.band_count(), out.value(0, 0, 0), out.value(0, 3, 1)), (1, None, Some(3.5)));
+    }
+
+    #[test]
+    fn projected_classes_keep_zero_distinct_from_outside_cells() {
+        let gt = GeoTransform { origin_x: 0.0, origin_y: 2.0, pixel_width: 1.0, pixel_height: -1.0 };
+        let mut r = Raster::new("c", 2, 2, vec![vec![0.0, 1.0, 1.0, 0.0]], gt, Crs::LonLat, None, ColorHint::Gray, "UInt8").unwrap();
+        r.bands[0].classes = vec!["water".into(), "land".into()];
+        let g = Grid::snapped(r.crs, [-1.0, 0.0, 2.0, 2.0], (1.0, 1.0), (0.0, 0.0)).unwrap();
+        for method in [Method::Sample(Resampling::Nearest), Method::Mode] {
+            let out = project(&r, &g, method, "p".into()).unwrap();
+            assert_eq!(out.value(0, 0, 0), None, "outside must not become class zero");
+            assert_eq!(out.value(0, 1, 0), Some(0.0));
+            assert_eq!(out.bands[0].class_name(0.0), Some("water"));
+            assert_eq!(out.bands[0].classes, r.bands[0].classes);
+            let bytes = rustgis_data::raster::geotiff::write(&out, 0).unwrap();
+            let written = rustgis_data::raster::read_bytes("p.tif", &bytes).unwrap();
+            assert_eq!(written.value(0, 0, 0), None);
+            assert_eq!(written.value(0, 1, 0), Some(0.0));
+            assert_eq!(written.bands[0].classes, r.bands[0].classes);
+        }
     }
 
     /// Grids with the same cell and origin line up wherever their areas are; a grid too large to

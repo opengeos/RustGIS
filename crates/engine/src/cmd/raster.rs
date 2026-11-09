@@ -1021,7 +1021,11 @@ pub(super) fn write_geotiff(r: &Raster, bi: usize, cog: bool, path: &str) -> Res
 pub(super) fn write_and_report(s: &mut Session, r: &Raster, bi: usize, cog: bool, path: &str) -> Result<Value, String> {
     let wrote = write_geotiff(r, bi, cog, path)?;
     for note in wrote.notes {
-        s.notify(note, false);
+        // Tools write their default bands; selecting another is an export command parameter.
+        s.notify(
+            note.replace("give \"band\" for another", "export the resulting layer with share.exportRaster and give \"band\" for another"),
+            false,
+        );
     }
     Ok(wrote.answer)
 }
