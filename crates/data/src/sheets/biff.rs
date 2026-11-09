@@ -122,8 +122,7 @@ pub(crate) fn check(stream: &[u8], max_cells: usize) -> Result<()> {
             }
             0x002f => {
                 if word(r.data, 0)? != 0 {
-                    // The reader refuses encrypted workbooks before reading anything further.
-                    return Ok(());
+                    return Err("the XLS workbook is encrypted and cannot be read".into());
                 }
             }
             0x0042 | 0x0022 => {
@@ -292,7 +291,9 @@ fn shared_strings(record: &Record<'_>, budget: &mut Budget) -> Result<Vec<usize>
         if lengths.len() >= budget.max_cells {
             return Err("the XLS shared-string table is too large".into());
         }
-        budget.text(chars)?;
+        // Even an empty string retains a String plus this guard's length entry.
+        budget.cells(1)?;
+        budget.text(32usize.saturating_add(chars))?;
         lengths.push(chars);
     }
     Ok(lengths)
@@ -469,6 +470,22 @@ fn formula(data: &[u8], biff8: bool, budget: &mut Budget) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn encrypted_workbooks_are_refused_before_unchecked_records() {
+        assert!(check(&[0x2f, 0, 2, 0, 1, 0, 0xff], 64).is_err_and(|error| error.contains("encrypted")));
+    }
+
+    #[test]
+    fn empty_shared_strings_use_the_shared_allocation_budget() {
+        let mut data = 3u32.to_le_bytes().repeat(2);
+        data.extend([0u8; 9]);
+        let mut stream = vec![0xfc, 0, 17, 0];
+        stream.extend(data);
+        stream.extend([0x0a, 0, 0, 0]);
+        assert!(check(&stream, 8).is_err(), "empty strings still allocate table entries");
+        assert!(check(&stream, 64).is_ok());
+    }
 
     #[test]
     fn xls_review_equal_nonzero_column_bounds_are_refused() {
