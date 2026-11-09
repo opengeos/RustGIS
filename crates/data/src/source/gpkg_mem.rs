@@ -83,6 +83,14 @@ pub fn layers(bytes: Shared) -> Result<Vec<String>> {
     Ok(names)
 }
 
+/// Attribute-only tables omitted when an uploaded GeoPackage is added as feature layers.
+pub fn attribute_table_count(bytes: Shared) -> Result<u64> {
+    let db = Db::open(bytes).map_err(err)?;
+    let schema = db.tables().map_err(err)?;
+    let rows = meta_rows(&db, &schema, "gpkg_contents")?;
+    Ok(rows.iter().filter(|r| text(get(r, "data_type")).is_some_and(|t| t.eq_ignore_ascii_case("attributes"))).count() as u64)
+}
+
 impl GpkgMemSource {
     /// Opens a feature table (default: the first) of the GeoPackage in `bytes`.
     pub fn open_shared(bytes: Shared, layer: Option<&str>) -> Result<Self> {

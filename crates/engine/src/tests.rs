@@ -15713,6 +15713,84 @@ fn geopackage_table_cap_is_reported() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
+/// Attribute-only GeoPackage tables are counted once when a whole file is added (#1634).
+#[test]
+fn geopackage_attribute_tables_are_not_silently_omitted() {
+    let dir = std::env::temp_dir().join(format!("rustgis-gpkg-attributes-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("mixed.gpkg");
+    let mut writer = world();
+    writer.run("share.exportLayer", &json!({"layer":"Cities", "path":path, "tableName":"A"})).unwrap();
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    conn.execute_batch(
+        "CREATE TABLE B AS SELECT * FROM A;
+         INSERT INTO gpkg_contents (table_name, data_type, srs_id) VALUES ('B', 'features', 4326);
+         INSERT INTO gpkg_geometry_columns (table_name, column_name, geometry_type_name, srs_id, z, m)
+             SELECT 'B', column_name, geometry_type_name, srs_id, z, m FROM gpkg_geometry_columns WHERE table_name = 'A';
+         CREATE TABLE notes (fid INTEGER PRIMARY KEY, note TEXT);
+         INSERT INTO notes VALUES (1, 'Keep me');
+         CREATE TABLE owners (name TEXT);
+         INSERT INTO gpkg_contents (table_name, data_type) VALUES ('notes', 'attributes'), ('owners', 'attributes');",
+    )
+    .unwrap();
+    drop(conn);
+    let skipped =
+        |s: &Session| s.notices.iter().filter(|n| n.text.contains("attribute-only table")).map(|n| n.text.clone()).collect::<Vec<_>>();
+    for bytes in [false, true] {
+        let mut s = Session::new(Project::default());
+        if bytes {
+            crate::cmd::layer::add_source(
+                &mut s,
+                &json!({}),
+                crate::cmd::layer::Origin::Bytes("mixed.gpkg", std::sync::Arc::new(std::fs::read(&path).unwrap())),
+                None,
+            )
+            .unwrap();
+        } else {
+            let answer = s.run("layer.addData", &json!({"path":path})).unwrap();
+            assert_eq!(answer["layers"].as_array().unwrap().len(), 2);
+        }
+        let notes = skipped(&s);
+        assert_eq!(notes.len(), 1, "bytes={bytes}: {notes:?}");
+        assert!(notes[0].contains("2 attribute-only tables") && notes[0].contains("mixed.gpkg"), "{notes:?}");
+    }
+    // Selecting one feature table deliberately does not claim to add the whole file.
+    let mut selected = Session::new(Project::default());
+    selected.run("layer.addData", &json!({"path":path, "layer":"A"})).unwrap();
+    assert!(skipped(&selected).is_empty());
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    conn.execute_batch("DELETE FROM gpkg_contents WHERE data_type = 'attributes'; DROP TABLE notes; DROP TABLE owners;").unwrap();
+    drop(conn);
+    let mut clean = Session::new(Project::default());
+    clean.run("layer.addData", &json!({"path":path})).unwrap();
+    assert!(skipped(&clean).is_empty());
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    conn.execute_batch(
+        "DELETE FROM gpkg_geometry_columns; DELETE FROM gpkg_contents;
+         CREATE TABLE notes (note TEXT);
+         INSERT INTO gpkg_contents (table_name, data_type) VALUES ('notes', 'attributes');",
+    )
+    .unwrap();
+    drop(conn);
+    for bytes in [false, true] {
+        let mut s = Session::new(Project::default());
+        let error = if bytes {
+            crate::cmd::layer::add_source(
+                &mut s,
+                &json!({}),
+                crate::cmd::layer::Origin::Bytes("mixed.gpkg", std::sync::Arc::new(std::fs::read(&path).unwrap())),
+                None,
+            )
+            .unwrap_err()
+        } else {
+            s.run("layer.addData", &json!({"path":path})).unwrap_err().to_string()
+        };
+        assert!(error.contains("1 attribute-only table"), "bytes={bytes}: {error}");
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 #[test]
 fn notices_since_survives_the_cap() {
     let mut s = Session::new(Project::default());

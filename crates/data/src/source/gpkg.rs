@@ -56,6 +56,14 @@ pub fn layers(path: &Path) -> Result<Vec<String>> {
     feature_tables(&conn)
 }
 
+/// Attribute-only tables omitted when the GeoPackage is added as feature layers.
+pub fn attribute_table_count(path: &Path) -> Result<u64> {
+    let conn = open_db(path)?;
+    let count: i64 =
+        conn.query_row("SELECT count(*) FROM gpkg_contents WHERE lower(data_type) = 'attributes'", [], |r| r.get(0)).map_err(err)?;
+    u64::try_from(count).map_err(|_| DataError::Format("GeoPackage: invalid attribute-table count".into()))
+}
+
 fn open_db(path: &Path) -> Result<Connection> {
     let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX).map_err(err)?;
     // A cap on SQLite's page cache, so a huge database can't take all the memory; and the file is
