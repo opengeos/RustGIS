@@ -495,19 +495,22 @@ fn draw_some(r: &Resolved, squares: &[Placed], side: u32, m_per_px: f64, ppp: f3
         if threads > 1 {
             let next = std::sync::atomic::AtomicUsize::new(0);
             let out: Mutex<Vec<Option<DrawnPicture>>> = Mutex::new((0..squares.len()).map(|_| None).collect());
-            std::thread::scope(|scope| {
-                for _ in 0..threads {
-                    scope.spawn(|| {
-                        loop {
-                            let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                            let Some(p) = squares.get(i) else { break };
-                            let d = one(p);
-                            if let Some(slot) = out.lock().unwrap_or_else(|e| e.into_inner()).get_mut(i) {
-                                *slot = d;
-                            }
-                        }
-                    });
+            let work = || {
+                loop {
+                    let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    let Some(p) = squares.get(i) else { break };
+                    let d = one(p);
+                    if let Some(slot) = out.lock().unwrap_or_else(|e| e.into_inner()).get_mut(i) {
+                        *slot = d;
+                    }
                 }
+            };
+            std::thread::scope(|scope| {
+                // A thread the OS refuses costs speed, not the frame: this one takes squares too.
+                for _ in 1..threads {
+                    let _ = std::thread::Builder::new().spawn_scoped(scope, work);
+                }
+                work();
             });
             return out.into_inner().unwrap_or_else(|e| e.into_inner());
         }

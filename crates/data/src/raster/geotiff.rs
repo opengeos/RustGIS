@@ -1126,7 +1126,11 @@ fn decimate_parallel(
         }
     };
     std::thread::scope(|scope| {
-        let handles: Vec<_> = (0..threads).map(|_| scope.spawn(work)).collect();
+        // A thread the OS refuses costs speed, not the read: this one decodes chunks too.
+        let handles: Vec<_> = (1..threads).filter_map(|_| std::thread::Builder::new().spawn_scoped(scope, work).ok()).collect();
+        if std::panic::catch_unwind(std::panic::AssertUnwindSafe(work)).is_err() {
+            fail(err("a chunk couldn't be decoded"));
+        }
         for h in handles {
             if h.join().is_err() {
                 fail(err("a chunk couldn't be decoded"));

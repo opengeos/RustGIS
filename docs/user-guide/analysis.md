@@ -1211,7 +1211,8 @@ the environment does not set their output grids.
 the whole process (every session in it), isn't saved with the project and leaves no undo step.
 Tools, GeoTIFF reads, raster statistics, data-cube trends and the drawing of tiles take their
 threads from it; drawing a raster on the map stays at 8 threads at most, and where each thread
-needs working memory (a tool's, a cube cell's) no more start than `threadScratchBytes` holds. A
+needs working memory (a tool's, a cube cell's) no more start than `threadScratchBytes` holds
+beyond the first thread's. A
 GeoTIFF read keeps the default count whatever that budget, as before; only a higher setting is
 bounded by it. **Settings › Performance › Threads** in the desktop app, the command
 line's `--threads` and Python's `Session(threads=…)` set the same count. A lower setting also

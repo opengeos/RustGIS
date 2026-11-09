@@ -766,11 +766,22 @@ impl TrendRun {
             let slopes = n.saturating_mul(n).saturating_mul(4).max(1);
             let threads = rustgis_data::threads::max().min(1 + rustgis_analysis::scratch_budget() / slopes);
             let part = cells.div_ceil(threads).max(1);
-            std::thread::scope(|scope| {
-                for (k, (block, out)) in block.chunks(part * n).zip(out.chunks_mut(part * OUTPUTS)).enumerate() {
-                    let work = &work;
-                    scope.spawn(move || work(first + k * part, block, out));
+            // The parts are taken from a list, by the threads started and by this one, so a
+            // thread the OS refuses leaves no part undone (and costs speed, not the run).
+            let parts = std::sync::Mutex::new(block.chunks(part * n).zip(out.chunks_mut(part * OUTPUTS)).enumerate().collect::<Vec<_>>());
+            let take = || {
+                loop {
+                    // The lock is let go before the part is worked out.
+                    let next = parts.lock().unwrap_or_else(|e| e.into_inner()).pop();
+                    let Some((k, (block, out))) = next else { break };
+                    work(first + k * part, block, out);
                 }
+            };
+            std::thread::scope(|scope| {
+                for _ in 1..threads {
+                    let _ = std::thread::Builder::new().spawn_scoped(scope, take);
+                }
+                take();
             });
         }
         #[cfg(target_arch = "wasm32")]
