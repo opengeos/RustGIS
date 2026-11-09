@@ -16052,6 +16052,36 @@ fn rasters_made_from_rounded_ones_keep_the_rounded_note() {
 /// An ASCII grid whose `.prj` can't be read is added in longitude/latitude, and adding it says so;
 /// one whose `.prj` is read says nothing of it.
 #[test]
+fn ascii_grid_reports_declared_method_1028_compatibility() {
+    let dir = std::env::temp_dir().join(format!("rustgis-ascii-eqc-note-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let projected = include_str!("../../data/src/raster/wkt2_corpus.tsv")
+        .lines()
+        .find(|row| row.starts_with("EPSG:4087\t"))
+        .unwrap()
+        .split('\t')
+        .nth(5)
+        .unwrap();
+    let geographic = r#"GEOGCS["WGS 84",DATUM["WGS_1984",SPHEROID["WGS 84",6378137,298.257223563]],PRIMEM["Greenwich",0],UNIT["degree",0.0174532925199433]]"#;
+    for (name, wkt, y, expected) in [("projected", projected, 5_009_377.085_697_311, 1), ("geographic", geographic, 40.0, 0)] {
+        let path = dir.join(format!("{name}.asc"));
+        std::fs::write(&path, format!("ncols 1\nnrows 1\nxllcorner 0\nyllcorner {y}\ncellsize 1\n7\n")).unwrap();
+        std::fs::write(path.with_extension("prj"), wkt).unwrap();
+        let mut session = Session::new(Project::default());
+        session.run("layer.addData", &json!({"path":path})).unwrap();
+        let notices = session.notices.iter().filter(|notice| notice.text.contains("EPSG method 1028")).collect::<Vec<_>>();
+        assert_eq!(notices.len(), expected, "{name}: {:?}", session.notices);
+        assert!(notices.iter().all(|notice| notice.text.contains("the .prj file") && !notice.text.contains("read as longitude/latitude")));
+        if expected > 0 {
+            let raster = rustgis_data::raster::read_path(&path).unwrap();
+            let point = raster.crs.transformer().unwrap().to_lonlat(rustgis_data::Coord::new(0.0, y)).unwrap();
+            assert!((point.y - 45.0).abs() < 1e-9);
+        }
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn an_ascii_grid_s_unread_prj_is_said_when_added() {
     let dir = std::env::temp_dir().join(format!("rustgis-engine-asc-prj-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();

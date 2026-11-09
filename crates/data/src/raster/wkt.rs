@@ -283,7 +283,7 @@ pub fn read_wkt(text: &str) -> Result<(Crs, Option<String>), String> {
 
 /// The file's declared EPSG method differs from the formula used for compatibility with PROJ.
 /// A known CRS authority can bypass reading its definition, but must still report that choice.
-pub(crate) fn projection_compatibility_note(text: &str, crs: Crs) -> Option<&'static str> {
+pub fn projection_compatibility_note(text: &str, crs: Crs) -> Option<&'static str> {
     if !uses_eqc(crs) {
         return None;
     }
@@ -311,7 +311,7 @@ fn projection_note(root: &Node, crs: Crs) -> Option<&'static str> {
         && rf > 0.0
         && rf.recip() > 1e-12
         && uses_eqc(crs))
-    .then_some("the definition declares EPSG method 1028 (ellipsoidal); RustGIS uses the legacy PROJ/GDAL spherical equidistant cylindrical formula (PROJ 9.7.1 compatibility), which differs from the declared method")
+    .then_some("the WKT method is interpreted as EPSG method 1028 (ellipsoidal); RustGIS uses the legacy PROJ/GDAL spherical equidistant cylindrical formula (PROJ 9.7.1 compatibility), which differs from the ellipsoidal formula")
 }
 
 /// Whether a WKT1 geographic system's ellipsoid is another body's. It is checked before the system
@@ -2038,7 +2038,7 @@ mod tests {
         let near_sphere = wkt.replace("298.257223563", "10000000000000");
         assert_ne!(wkt, near_sphere);
         assert!(read_wkt(&near_sphere).unwrap().1.is_none());
-        assert!(read_wkt(wkt).unwrap().1.unwrap().contains("differs from the declared method"));
+        assert!(read_wkt(wkt).unwrap().1.unwrap().contains("differs from the ellipsoidal formula"));
     }
 
     #[test]

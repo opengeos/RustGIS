@@ -100,9 +100,12 @@ cylindrical projection (EPSG:4087, World Equidistant Cylindrical) uses a sphere 
 semi-major axis, matching legacy PROJ/GDAL coordinates (verified with PROJ 9.7.1), both for data
 and for a map drawn in it (including the
 Equirectangular preset). This also applies to planetary Equirectangular systems and definitions
-that name EPSG method 1028. Reading an ellipsoidal WKT2 definition of that method reports this
-compatibility choice without assuming which formula the producer used. Effectively spherical
-definitions need no warning. RustGIS applies the same compatibility formula to GeoTIFF CT 17;
+that name EPSG method 1028. Shapefile and ASCII-grid `.prj` files and GeoPackage WKT definitions
+that declare this method on an ellipsoid report the difference from the declared formula,
+without assuming how the producer computed its coordinates. Effectively spherical definitions
+need no warning. Code-only CRS identifiers use the same compatibility formula without a method
+warning, since no explicit WKT method is being read. XY Table To Point and Kernel Density also
+report the method difference when given such a WKT definition. RustGIS applies the same compatibility formula to GeoTIFF CT 17;
 this key identifies a GeoTIFF transformation, rather than explicitly declaring EPSG method 1028.
 [PROJ 9.9](https://proj.org/en/stable/operations/projections/eqc.html) supports the ellipsoidal
 formula instead. RustGIS retains the legacy spherical formula to preserve existing file coordinates.
