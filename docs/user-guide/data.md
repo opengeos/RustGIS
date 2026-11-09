@@ -51,7 +51,8 @@ them. A name given goes to the first map layer added, the bottom one (a standalo
 it when the file has no map layer). A GeoPackage adds its tables in name order, and a file read
 through GDAL keeps its layers in the file's order and orders only the types within each layer.
 GeoPackage attribute-only tables are not supported. Adding a whole file reports their count in
-one notice; a file containing only attribute tables is refused with the count. Selecting a
+one notice. Tile and other unsupported GeoPackage contents are also counted by type; a file
+containing only attribute tables is refused with the count. Selecting a
 feature table explicitly adds only that table.
 On the desktop, **Home › Add › Add Data › Add Folder…** connects a folder to the Browser; the web
 app does not offer folder connections.

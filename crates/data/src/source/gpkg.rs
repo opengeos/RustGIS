@@ -56,12 +56,17 @@ pub fn layers(path: &Path) -> Result<Vec<String>> {
     feature_tables(&conn)
 }
 
-/// Attribute-only tables omitted when the GeoPackage is added as feature layers.
-pub fn attribute_table_count(path: &Path) -> Result<u64> {
+/// Unsupported contents omitted when the GeoPackage is added as feature layers, by type.
+pub fn unsupported_table_counts(path: &Path) -> Result<Vec<(String, u64)>> {
     let conn = open_db(path)?;
-    let count: i64 =
-        conn.query_row("SELECT count(*) FROM gpkg_contents WHERE lower(data_type) = 'attributes'", [], |r| r.get(0)).map_err(err)?;
-    u64::try_from(count).map_err(|_| DataError::Format("GeoPackage: invalid attribute-table count".into()))
+    let mut st = conn.prepare("SELECT lower(data_type), count(*) FROM gpkg_contents WHERE lower(data_type) <> 'features' GROUP BY lower(data_type) ORDER BY lower(data_type)").map_err(not_gpkg)?;
+    st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))
+        .map_err(err)?
+        .map(|r| {
+            let (kind, count) = r.map_err(err)?;
+            Ok((kind, u64::try_from(count).map_err(|_| DataError::Format("GeoPackage: invalid table count".into()))?))
+        })
+        .collect()
 }
 
 fn open_db(path: &Path) -> Result<Connection> {

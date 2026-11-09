@@ -83,12 +83,20 @@ pub fn layers(bytes: Shared) -> Result<Vec<String>> {
     Ok(names)
 }
 
-/// Attribute-only tables omitted when an uploaded GeoPackage is added as feature layers.
-pub fn attribute_table_count(bytes: Shared) -> Result<u64> {
+/// Unsupported contents omitted when an uploaded GeoPackage is added as feature layers, by type.
+pub fn unsupported_table_counts(bytes: Shared) -> Result<Vec<(String, u64)>> {
     let db = Db::open(bytes).map_err(err)?;
     let schema = db.tables().map_err(err)?;
     let rows = meta_rows(&db, &schema, "gpkg_contents")?;
-    Ok(rows.iter().filter(|r| text(get(r, "data_type")).is_some_and(|t| t.eq_ignore_ascii_case("attributes"))).count() as u64)
+    let mut counts = std::collections::BTreeMap::<String, u64>::new();
+    for row in &rows {
+        if let Some(kind) = text(get(row, "data_type"))
+            && !kind.eq_ignore_ascii_case("features")
+        {
+            *counts.entry(kind.to_ascii_lowercase()).or_default() += 1;
+        }
+    }
+    Ok(counts.into_iter().collect())
 }
 
 impl GpkgMemSource {

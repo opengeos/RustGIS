@@ -15731,7 +15731,9 @@ fn geopackage_attribute_tables_are_not_silently_omitted() {
          CREATE TABLE notes (fid INTEGER PRIMARY KEY, note TEXT);
          INSERT INTO notes VALUES (1, 'Keep me');
          CREATE TABLE owners (name TEXT);
-         INSERT INTO gpkg_contents (table_name, data_type) VALUES ('notes', 'attributes'), ('owners', 'attributes');",
+         INSERT INTO gpkg_contents (table_name, data_type) VALUES ('notes', 'attributes'), ('owners', 'attributes');
+         CREATE TABLE imagery (id INTEGER PRIMARY KEY, zoom_level INTEGER, tile_column INTEGER, tile_row INTEGER, tile_data BLOB);
+         INSERT INTO gpkg_contents (table_name, data_type) VALUES ('imagery', 'tiles');",
     )
     .unwrap();
     drop(conn);
@@ -15754,13 +15756,15 @@ fn geopackage_attribute_tables_are_not_silently_omitted() {
         let notes = skipped(&s);
         assert_eq!(notes.len(), 1, "bytes={bytes}: {notes:?}");
         assert!(notes[0].contains("2 attribute-only tables") && notes[0].contains("mixed.gpkg"), "{notes:?}");
+        assert!(s.notices.iter().any(|n| n.text.contains("1 tiles table(s) not added")), "bytes={bytes}: {:?}", s.notices);
     }
     // Selecting one feature table deliberately does not claim to add the whole file.
     let mut selected = Session::new(Project::default());
     selected.run("layer.addData", &json!({"path":path, "layer":"A"})).unwrap();
     assert!(skipped(&selected).is_empty());
     let conn = rusqlite::Connection::open(&path).unwrap();
-    conn.execute_batch("DELETE FROM gpkg_contents WHERE data_type = 'attributes'; DROP TABLE notes; DROP TABLE owners;").unwrap();
+    conn.execute_batch("DELETE FROM gpkg_contents WHERE data_type <> 'features'; DROP TABLE notes; DROP TABLE owners; DROP TABLE imagery;")
+        .unwrap();
     drop(conn);
     let mut clean = Session::new(Project::default());
     clean.run("layer.addData", &json!({"path":path})).unwrap();

@@ -2034,19 +2034,28 @@ fn add_source_with(
     let mut skipped: Vec<String> = Vec::new();
     let mut total = None;
     let selected = ps(p, "layer").map(str::trim).filter(|t| !t.is_empty());
-    // A whole-file add promises all supported contents. A deliberate table selection does not.
-    let attributes = match (&origin, selected.is_none()) {
+    // Report unsupported contents for a whole-file add, not a deliberate table selection.
+    let contents = match (&origin, selected.is_none()) {
         #[cfg(not(target_arch = "wasm32"))]
         (Origin::Path(path), true) if path.to_ascii_lowercase().ends_with(".gpkg") => {
-            source::gpkg::attribute_table_count(Path::new(path)).map_err(err)?
+            source::gpkg::unsupported_table_counts(Path::new(path)).map_err(err)?
         }
         (Origin::Bytes(name, bytes), true) if name.to_ascii_lowercase().ends_with(".gpkg") => {
-            source::gpkg_mem::attribute_table_count(source::Shared(bytes.clone())).map_err(err)?
+            source::gpkg_mem::unsupported_table_counts(source::Shared(bytes.clone())).map_err(err)?
         }
-        _ => 0,
+        _ => Vec::new(),
     };
-    let attribute_note =
-        (attributes > 0).then(|| format!("{attributes} attribute-only tables not added: GeoPackage attribute tables are not supported"));
+    let omitted: Vec<String> = contents
+        .into_iter()
+        .map(|(kind, count)| {
+            if kind == "attributes" {
+                format!("{count} attribute-only tables not added: GeoPackage attribute tables are not supported")
+            } else {
+                format!("{count} {kind} table(s) not added: only GeoPackage feature tables are supported")
+            }
+        })
+        .collect();
+    let attribute_note = (!omitted.is_empty()).then(|| omitted.join("; "));
     let tables: Vec<Option<String>> = match (selected, &origin) {
         (Some(t), _) => vec![Some(t.to_string())],
         (None, Origin::Path(path)) if path.to_ascii_lowercase().ends_with(".gpkg") => {
