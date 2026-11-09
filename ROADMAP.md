@@ -236,8 +236,8 @@ Open questions rather than plans; discuss before building.
   kernel density, A5 grids, kriging, Calculate Field with an expression language, Calculate
   Geometry with metric or imperial units, Project Raster, and vector and raster PMTiles export
   (#557); guided workflows (viewshed, line of sight, IDW, shortest path, suitability); tools run
-  in the background with progress and Cancel, on several cores on the desktop, and in batches
-  (`gp.batch`); measurements on the WGS 84 ellipsoid, in the attribute table, the measure tool
+  in the background with progress and Cancel, many on several cores on the desktop, and in
+  batches (`gp.batch`); measurements on the WGS 84 ellipsoid, in the attribute table, the measure tool
   and expressions;
   ModelBuilder on a node canvas, scripts with command, parameter and value completion, and
   history copied as code; the GeoLibre and Whitebox suite (1,000+ tools) natively and in the
