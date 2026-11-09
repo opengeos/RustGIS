@@ -15770,6 +15770,18 @@ fn ambiguous_polar_areas_are_refused_before_attributes_or_joins_are_written() {
 }
 
 #[test]
+fn raster_measure_refuses_ambiguous_polar_area_instead_of_null() {
+    let mut s = Session::new(Project::default());
+    let bad = json!([[-180, 90], [180, 90], [-90, -90], [90, -80]]);
+    let error = s.run("raster.measure", &json!({"kind":"area", "points":bad})).unwrap_err().to_string();
+    assert!(error.contains("area is ambiguous") && error.contains("1 ring"), "{error}");
+    let distance = s.run("raster.measure", &json!({"kind":"distance", "points":bad})).unwrap();
+    assert!(distance["metres"].as_f64().is_some_and(|d| d.is_finite() && d > 0.0));
+    let world = s.run("raster.measure", &json!({"kind":"area", "points":[[-180,-90],[180,-90],[180,90],[-180,90]]})).unwrap();
+    assert!(world["squareMetres"].as_f64().is_some_and(|area| area.is_finite() && area > 5e14));
+}
+
+#[test]
 fn notices_since_survives_the_cap() {
     let mut s = Session::new(Project::default());
     for i in 0..250 {
