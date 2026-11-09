@@ -151,7 +151,7 @@ unit that isn't one of those, is an error.
 An area expression is also refused if the layer contains a ring through both poles
 whose winding exceeds one whole surface. The error counts the affected rings and features;
 it does not store an impossible area or silently replace it with null. Perimeter expressions,
-ordinary polar caps and whole-world rectangles still work.
+ordinary polar caps and whole-world rectangles still work. Attribute rules check only the edited rows, so an unrelated ambiguous feature does not block a clean-row edit. Geometry edits that would invalidate a saved area filter, symbol or label expression are refused and rolled back.
 
 ## Limits
 

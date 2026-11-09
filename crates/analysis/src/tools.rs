@@ -4708,9 +4708,9 @@ fn tabulate_intersection(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, Strin
     let zone_rows = sorted_rows("zones", zones);
     let class_rows = sorted_rows("classes", classes);
     for (dataset, rows) in [(zones, &zone_rows), (classes, &class_rows)] {
-        if let Some(message) =
-            rustgis_data::ambiguous_area_message(rows.iter().filter_map(|&row| dataset.features.get(row)?.geometry.as_ref()))
-        {
+        if let Some(message) = rustgis_data::ambiguous_area_message(
+            rows.iter().filter_map(|&row| dataset.features.get(row)?.geometry.as_ref()).filter(|g| has_shape(g)),
+        ) {
             return Err(format!("Tabulate Intersection: {}: {message}", dataset.name));
         }
     }

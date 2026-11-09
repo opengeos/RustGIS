@@ -134,13 +134,24 @@ pub(crate) fn apply_with(s: &mut Session, id: u32, changes: Vec<Change>, new_def
     // Parsing against the fields separates a measurement failure from a stale rule. The latter
     // may still be skipped below, but an ambiguous area must never disable a valid rule.
     let metadata = rustgis_data::Dataset::new(l.dataset.name.clone(), l.dataset.geometry_type, l.dataset.fields.clone());
-    if l.design
-        .rules
-        .iter()
-        .any(|rule| rustgis_data::query::parse(&rule.expression, &metadata).is_ok_and(|expr| rustgis_data::query::uses_area(&expr)))
-        && let Some(message) = rustgis_data::ambiguous_area_message(l.dataset.features.iter().filter_map(|f| f.geometry.as_ref()))
+    let uses_area = |text: &str| rustgis_data::query::parse(text, &metadata).is_ok_and(|expr| rustgis_data::query::uses_area(&expr));
+    let by = &l.symbol_by;
+    let display_area = l
+        .definition_query
+        .as_deref()
+        .into_iter()
+        .chain(l.display_filters.iter().map(|filter| filter.where_.as_str()))
+        .chain(l.renderer.expression())
+        .chain([&by.size, &by.fill, &by.stroke, &by.stroke_width, &by.angle].into_iter().filter_map(|text| text.as_deref()))
+        .chain(std::iter::once(&l.labels.default).chain(l.labels.classes.iter()).flat_map(|class| {
+            [&class.where_, &class.by.text, &class.by.size, &class.by.color, &class.by.angle].into_iter().filter_map(|text| text.as_deref())
+        }))
+        .any(uses_area);
+    if (display_area || l.design.rules.iter().any(|rule| uses_area(&rule.expression)))
+        && let Some(message) =
+            rustgis_data::ambiguous_area_message(rows.iter().filter_map(|&row| l.dataset.features.get(row)?.geometry.as_ref()))
     {
-        return Err(message);
+        return Err(format!("{}: {message}", l.dataset.name));
     }
     // Calculation rules, in order.
     for rule in l.design.rules.iter().filter(|r| r.kind == RuleKind::Calculation) {
@@ -148,7 +159,7 @@ pub(crate) fn apply_with(s: &mut Session, id: u32, changes: Vec<Change>, new_def
         let ty = l.dataset.fields.get(fi).map(|f| f.ty).unwrap_or(FieldType::Text);
         // A rule that no longer reads (its field was removed, or a hand-edited file) is skipped
         // rather than blocking every edit.
-        let Ok(calc) = super::edit::Calculation::parse(&rule.expression, &l.dataset) else { continue };
+        let Ok(calc) = super::edit::Calculation::parse(&rule.expression, &metadata) else { continue };
         let mut cut = super::edit::Cuts::default();
         for r in &rows {
             let (v, c) = super::edit::coerce_cut(calc.eval(&l.dataset, *r), ty);
@@ -168,7 +179,7 @@ pub(crate) fn apply_with(s: &mut Session, id: u32, changes: Vec<Change>, new_def
         .iter()
         .filter(|r| r.kind == RuleKind::Constraint)
         .filter_map(|rule| {
-            rustgis_data::query::parse(&rule.expression, &l.dataset).ok().map(|e| (rule.name.clone(), rule.expression.clone(), e))
+            rustgis_data::query::parse(&rule.expression, &metadata).ok().map(|e| (rule.name.clone(), rule.expression.clone(), e))
         })
         .collect();
     let changed_fields = |r: usize| -> Option<Vec<bool>> {

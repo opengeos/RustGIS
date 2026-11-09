@@ -15802,17 +15802,62 @@ fn tabulate_intersection_refuses_ambiguous_input_denominators() {
 fn area_rules_refuse_ambiguous_geometry_during_edits() {
     use rustgis_data::{Coord, Dataset, Field, FieldType, Geometry, GeometryType, Value};
     let c = Coord::new;
-    let mut data = Dataset::new("Area rules", GeometryType::Polygon, vec![Field::new("value", FieldType::Double)]);
-    data.push(Some(Geometry::Polygon(vec![vec![vec![c(0.0, 0.0), c(1.0, 0.0), c(1.0, 1.0), c(0.0, 0.0)]]])), vec![Value::Float(1.0)]);
-    let mut s = Session::new(Project::default());
-    let id = s.map_mut().add_dataset(data);
-    s.run("data.attributeRule", &json!({"layer":"Area rules","name":"Area constraint","kind":"constraint","expression":"$area > 0"}))
+    let clean = Geometry::Polygon(vec![vec![vec![c(0.0, 0.0), c(1.0, 0.0), c(1.0, 1.0), c(0.0, 0.0)]]]);
+    let mut data = Dataset::new(
+        "Area rules",
+        GeometryType::Polygon,
+        vec![Field::new("value", FieldType::Double), Field::new("measured", FieldType::Double)],
+    );
+    for _ in 0..2 {
+        data.push(Some(clean.clone()), vec![Value::Float(1.0), Value::Float(0.0)]);
+    }
+    let mut session = Session::new(Project::default());
+    let id = session.map_mut().add_dataset(data);
+    session
+        .run(
+            "data.attributeRule",
+            &json!({"layer":"Area rules","name":"Area calculation","kind":"calculation","field":"measured","expression":"$area"}),
+        )
         .unwrap();
-    s.map_mut().layer_mut(id).unwrap().dataset.features[0].geometry =
+    session
+        .run(
+            "data.attributeRule",
+            &json!({"layer":"Area rules","name":"Area constraint","kind":"constraint","expression":"value > 0 AND $area > 0"}),
+        )
+        .unwrap();
+    session.map_mut().layer_mut(id).unwrap().dataset.features[0].geometry =
         Some(Geometry::Polygon(vec![vec![vec![c(-180.0, 90.0), c(180.0, 90.0), c(-90.0, -90.0), c(90.0, -80.0)]]]));
-    let result = s.run("edit.setValue", &json!({"layer":"Area rules","row":0,"field":"value","value":2}));
-    assert!(result.is_err_and(|e| e.to_string().contains("1 ring(s) in 1 feature(s)")), "the area constraint must not disappear");
-    assert_eq!(s.map().layer(id).unwrap().dataset.value(0, 0), &Value::Float(1.0));
+    session.run("edit.setValue", &json!({"layer":"Area rules","row":1,"field":"value","value":2})).unwrap();
+    assert!(session.map().layer(id).unwrap().dataset.value(1, 1).as_f64().is_some_and(|area| area > 0.0));
+    let negative = session.run("edit.setValue", &json!({"layer":"Area rules","row":1,"field":"value","value":-1}));
+    assert!(negative.is_err_and(|error| error.to_string().contains("breaks the rule")), "the constraint must still run for clean rows");
+    let result = session.run("edit.setValue", &json!({"layer":"Area rules","row":0,"field":"value","value":2}));
+    assert!(result.is_err_and(|e| e.to_string().contains("Area rules") && e.to_string().contains("1 ring(s) in 1 feature(s)")));
+    assert_eq!(session.map().layer(id).unwrap().dataset.value(0, 0), &Value::Float(1.0));
+    assert_eq!(session.map().layer(id).unwrap().dataset.value(1, 0), &Value::Float(2.0));
+}
+
+#[test]
+fn area_tabulation_omits_shapeless_features_before_checking_unused_holes() {
+    use rustgis_data::{Coord, Dataset, Field, FieldType, Geometry, GeometryType, Value};
+    let c = Coord::new;
+    let clean = vec![c(0.0, 0.0), c(1.0, 0.0), c(1.0, 1.0), c(0.0, 1.0), c(0.0, 0.0)];
+    let mut zones = Dataset::new("Zones", GeometryType::Polygon, vec![Field::new("zone", FieldType::Integer)]);
+    zones.push(
+        Some(Geometry::Polygon(vec![vec![vec![c(0.0, 0.0); 3], vec![c(-180.0, 90.0), c(180.0, 90.0), c(-90.0, -90.0), c(90.0, -80.0)]]])),
+        vec![Value::Int(1)],
+    );
+    zones.push(Some(Geometry::Polygon(vec![vec![clean.clone()]])), vec![Value::Int(2)]);
+    let mut classes = Dataset::new("Classes", GeometryType::Polygon, vec![]);
+    classes.push(Some(Geometry::Polygon(vec![vec![clean]])), vec![]);
+    let mut session = Session::new(Project::default());
+    session.map_mut().add_dataset(zones);
+    session.map_mut().add_dataset(classes);
+    let result = session
+        .run("gp.run", &json!({"tool":"tabulateIntersection","params":{"zones":"Zones","zoneFields":"zone","classes":"Classes"}}))
+        .unwrap();
+    assert!(result.get("table").is_some());
+    assert_eq!(session.notices.iter().filter(|notice| notice.text.contains("1 zone feature has no polygon and was left out")).count(), 1);
 }
 
 #[test]
@@ -34991,4 +35036,50 @@ fn bundled_ca_roots_are_said_once_a_session() {
     let mut other = Session::new(Project::default());
     other.say_bundled_roots(true);
     assert_eq!(said(&other), 1);
+}
+
+#[test]
+fn area_display_expressions_survive_refused_geometry_edits() {
+    use rustgis_data::{Coord, Dataset, Geometry, GeometryType};
+    use rustgis_map::color::Ramp;
+    use rustgis_map::symbology::Renderer;
+    for config in 0..6 {
+        let mut data = Dataset::new("Area display", GeometryType::Polygon, vec![]);
+        data.push(
+            Some(Geometry::Polygon(vec![vec![vec![
+                Coord::new(0.0, 0.0),
+                Coord::new(1.0, 0.0),
+                Coord::new(1.0, 1.0),
+                Coord::new(0.0, 0.0),
+            ]]])),
+            vec![],
+        );
+        let mut session = Session::new(Project::default());
+        let id = session.map_mut().add_dataset(data);
+        let layer = session.map_mut().layer_mut(id).unwrap();
+        match config {
+            0 => layer.definition_query = Some("$area > 0".into()),
+            1 => layer.display_filters.push(rustgis_map::effects::DisplayFilter {
+                name: "Area".into(),
+                where_: "$area > 0".into(),
+                min_scale: None,
+                max_scale: None,
+            }),
+            2 => layer.renderer = Renderer::unique_by(&layer.dataset, &[], "$area", Ramp::default(), layer.renderer.base_symbol()).unwrap(),
+            3 => layer.symbol_by.size = Some("$area".into()),
+            4 => layer.labels.default.by.text = Some("$area".into()),
+            _ => layer.labels.default.where_ = Some("$area > 0".into()),
+        }
+        let result = session.run("edit.addFeature", &json!({"layer":"Area display","geometry":{"type":"Polygon","coordinates":[[[-180,90],[180,90],[-90,-90],[90,-80],[-180,90]]]}}));
+        assert!(result.is_err_and(|error| error.to_string().contains("area is ambiguous")), "configuration {config}");
+        assert_eq!(session.map().layer(id).unwrap().dataset.features.len(), 1);
+        assert_eq!(session.map().layer(id).unwrap().visible_rows(), [true]);
+        session
+            .run(
+                "edit.addFeature",
+                &json!({"layer":"Area display","geometry":{"type":"Polygon","coordinates":[[[2,0],[3,0],[3,1],[2,0]]]}}),
+            )
+            .unwrap();
+        assert_eq!(session.map().layer(id).unwrap().dataset.features.len(), 2);
+    }
 }
