@@ -76,6 +76,11 @@ the table's name beside it (`input_name`). The **XY Table To Point** tool
 ([Geoprocessing](analysis.md), and a table's right-click menu) makes points of a table already in
 the project, from two fields of coordinates and their coordinate system. In a text field a single comma is the decimal separator
 (`1,234` is 1.234); thousands separators are not read.
+Excel `.xls` records, formula operands and sheet bounds are checked before opening, including
+sheets that were not selected. The workbook shares a memory budget across its sheets; a file
+with damaged records or excessive cell or text allocations is refused with the reason. Normal
+cached formula values are read. A formula's direct cell reference to row 65,536 is currently
+refused because the XLS reader cannot handle that reference safely.
 **Home › Add › Add Data › Graphics Layer** adds a layer for [drawn graphics](cartography.md#graphics),
 and **Data › Layer Templates** adds empty layers with ready-made schemas to draw into.
 
