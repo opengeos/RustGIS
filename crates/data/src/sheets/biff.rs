@@ -298,6 +298,20 @@ fn shared_strings(record: &Record<'_>, budget: &mut Budget) -> Result<Vec<usize>
     Ok(lengths)
 }
 
+/// The inline strings decoded directly from one record (LABEL/RSTRING and formula STRING).
+/// Calamine clamps a short body rather than reading CONTINUE records for these strings.
+fn inline_string(data: &[u8], at: usize, biff8: bool) -> Result<usize> {
+    let chars = usize::from(word(data, at)?);
+    if biff8 && chars == 0 && data.len() == at.saturating_add(2) {
+        return Ok(0);
+    }
+    let width = if biff8 && byte(data, at.saturating_add(2))? & 1 != 0 { 2 } else { 1 };
+    let start = at.saturating_add(if biff8 { 3 } else { 2 });
+    bytes(data, start, chars * width)
+        .map_err(|_| "an XLS inline string is cut short or continues beyond this reader's supported record".to_string())?;
+    Ok(chars)
+}
+
 fn dimensions(data: &[u8]) -> Result<usize> {
     let (first, end, col, last) = match data.len() {
         10 => (u32::from(word(data, 0)?), u32::from(word(data, 2)?), word(data, 4)?, word(data, 6)?),
@@ -321,6 +335,7 @@ fn dimensions(data: &[u8]) -> Result<usize> {
 
 fn worksheet(stream: &[u8], start: usize, biff8: bool, strings: &[usize], budget: &mut Budget) -> Result<()> {
     let mut at = start;
+    let mut formula_position = (0u16, 0u16);
     let mut seen_bof = false;
     let mut depth = 0usize;
     let mut cells = Span::default();
@@ -378,6 +393,7 @@ fn worksheet(stream: &[u8], start: usize, biff8: bool, strings: &[usize], budget
                 let (row, col) = (word(r.data, 0)?, word(r.data, 2)?);
                 cells.add(row, col)?;
                 if r.kind == 0x0006 {
+                    formula_position = (word(r.data, 0)?, word(r.data, 2)?);
                     formulas.add(row, col)?;
                     formula(r.data.get(20..).ok_or_else(short)?, biff8, budget)?;
                 } else if r.kind == 0x00fd {
@@ -385,10 +401,13 @@ fn worksheet(stream: &[u8], start: usize, biff8: bool, strings: &[usize], budget
                         budget.text(*len)?;
                     }
                 } else if matches!(r.kind, 0x0204 | 0x00d6) {
-                    budget.text(usize::from(word(r.data, 6)?))?;
+                    budget.text(inline_string(r.data, 6, biff8)?)?;
                 }
             }
-            0x0207 => budget.text(usize::from(word(r.data, 0)?))?,
+            0x0207 => {
+                budget.text(inline_string(r.data, 0, biff8)?)?;
+                cells.add(formula_position.0, formula_position.1)?;
+            }
             _ => {}
         }
         if cells.cells().max(declared).saturating_add(formulas.cells()) > budget.max_cells {
@@ -469,6 +488,37 @@ fn formula(data: &[u8], biff8: bool, budget: &mut Budget) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn repeated_empty_formula_string_values_use_the_cell_budget() {
+        let mut stream = [0x07, 0x02, 3, 0, 0, 0, 0].repeat(20);
+        stream.extend([0x0a, 0, 0, 0]);
+        let mut budget = Budget { max_cells: 8, cells: 0, text: 0, work: stream.len() };
+        assert!(worksheet(&stream, 0, true, &[], &mut budget).is_err());
+    }
+
+    #[test]
+    fn inline_labels_and_formula_strings_require_their_declared_body() {
+        for biff8 in [false, true] {
+            for (kind, offset) in [(0x0204u16, 6usize), (0x00d6, 6), (0x0207, 0)] {
+                for chars in [100u16, 1] {
+                    let mut data = vec![0; offset + 2 + usize::from(biff8)];
+                    data[offset..offset + 2].copy_from_slice(&chars.to_le_bytes());
+                    data.push(b'A');
+                    let mut stream = kind.to_le_bytes().to_vec();
+                    stream.extend((data.len() as u16).to_le_bytes());
+                    stream.extend(data);
+                    stream.extend([0x0a, 0, 0, 0]);
+                    let mut budget = Budget { max_cells: 64, cells: 0, text: 0, work: stream.len() };
+                    assert_eq!(
+                        worksheet(&stream, 0, biff8, &[], &mut budget).is_ok(),
+                        chars == 1,
+                        "kind={kind:x}, biff8={biff8}, chars={chars}"
+                    );
+                }
+            }
+        }
+    }
 
     #[test]
     fn xor_obfuscated_workbooks_are_refused() {
