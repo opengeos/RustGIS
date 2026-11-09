@@ -400,6 +400,9 @@ fn resolve_sources(style: &mut Style, spec: &Spec, base: &address::Origin) -> Re
         ));
     }
     for (id, src) in &mut style.sources {
+        // A missing address or a Mapbox-only source cannot recover by fetching again.
+        let retryable = matches!(src, Source::RasterDem { url: Some(url), encoding, .. }
+            if !url.starts_with("mapbox://") && encoding.fits());
         let resolved = resolve_source(src, spec, base).and_then(|pending| match src {
             Source::RasterDem { tiles, encoding, .. } if !pending => {
                 if tiles.is_empty() {
@@ -425,7 +428,7 @@ fn resolve_sources(style: &mut Style, spec: &Spec, base: &address::Origin) -> Re
             Err(e) if matches!(src, Source::RasterDem { .. }) => {
                 if used {
                     left_out.push(format!("elevation source {id} left out, so its relief isn't drawn: {e}"));
-                    retry = true;
+                    retry |= retryable;
                 }
                 *src = Source::Other;
             }
@@ -1582,6 +1585,18 @@ mod tests {
         ] {
             let doc = serde_json::json!({"version": 8, "sources": {"dem": dem}, "layers": [{"id": "shade", "type": "hillshade", "source": "dem"}]});
             assert_eq!(left_out_of(doc).len(), 1);
+        }
+    }
+
+    #[test]
+    fn permanent_dem_failures_do_not_retry() {
+        let base = "https://permanent-dem.example.com/style.json";
+        for dem in [json!({"type":"raster-dem"}), json!({"type":"raster-dem","url":"mapbox://dem/a"})] {
+            let doc = json!({"version":8,"sources":{"dem":dem},"layers":[{"id":"shade","type":"hillshade","source":"dem"}]});
+            let mut style = Style::parse(&doc).unwrap();
+            let sources = resolve_sources(&mut style, &spec(Kind::Style, base), &address::Origin::named(base)).unwrap().unwrap();
+            assert_eq!(sources.left_out.len(), 1);
+            assert!(!sources.retry && !sources.waiting, "{sources:?}");
         }
     }
 
