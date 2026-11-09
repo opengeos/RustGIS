@@ -1455,11 +1455,12 @@ mod tests {
             assert_eq!(out.value(0, 1, 0), Some(0.0));
             assert_eq!(out.bands[0].class_name(0.0), Some("water"));
             assert_eq!(out.bands[0].classes, r.bands[0].classes);
-            let bytes = rustgis_data::raster::geotiff::write(&out, 0).unwrap();
-            let written = rustgis_data::raster::read_bytes("p.tif", &bytes).unwrap();
-            assert_eq!(written.value(0, 0, 0), None);
-            assert_eq!(written.value(0, 1, 0), Some(0.0));
-            assert_eq!(written.bands[0].classes, r.bands[0].classes);
+            for bytes in [rustgis_data::raster::geotiff::write(&out, 0).unwrap(), rustgis_data::raster::cogwrite::write(&out, 0).unwrap()] {
+                let written = rustgis_data::raster::read_bytes("p.tif", &bytes).unwrap();
+                assert_eq!(written.value(0, 0, 0), None);
+                assert_eq!(written.value(0, 1, 0), Some(0.0));
+                assert_eq!(written.bands[0].classes, r.bands[0].classes);
+            }
         }
     }
 

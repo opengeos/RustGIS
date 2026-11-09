@@ -16202,6 +16202,42 @@ fn raster_resampling_class_names_follow_the_values_and_report_losses() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+#[test]
+fn raster_export_review_tool_notice_preserves_path_and_band_guidance() {
+    use rustgis_data::raster::{ColorHint, Crs, GeoTransform, Raster, geotiff};
+    let dir = std::env::temp_dir().join(format!("rustgis-mosaic-band-guidance-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let filename = if cfg!(target_os = "windows") { "mosaic.tif" } else { "give \"band\" for another.tif" };
+    let path = dir.join(filename);
+    let gt = GeoTransform { origin_x: 0.0, origin_y: 2.0, pixel_width: 1.0, pixel_height: -1.0 };
+    let r = Raster::new(
+        "Multi",
+        2,
+        2,
+        vec![vec![1.0, 2.0, 3.0, 4.0], vec![5.0, 6.0, 7.0, 8.0]],
+        gt,
+        Crs::LonLat,
+        None,
+        ColorHint::Gray,
+        "Float32",
+    )
+    .unwrap();
+    let bytes = geotiff::write(&r, 0).unwrap();
+    let mut s = Session::new(Project::default());
+    crate::cmd::raster::add_raster(&mut s, "Multi", rustgis_map::RasterLayer::from_bytes(r, "multi.tif", bytes)).unwrap();
+    let mark = s.notice_mark();
+    s.run("raster.mosaic", &json!({"inputs":["Multi","Multi"],"name":"Mosaic","path":path})).unwrap();
+    assert!(path.is_file());
+    let notes = s.notices_since(mark);
+    let note = &notes.iter().find(|n| n.text.starts_with("Exported ")).unwrap().text;
+    assert!(note.starts_with(&format!("Exported {}", path.display())), "{note}");
+    assert!(note.contains("1 of its 2 bands written"), "{note}");
+    let instruction = "export the resulting layer with share.exportRaster and give \"band\" for another";
+    assert_eq!(note.matches(instruction).count(), 1, "{note}");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 /// A raster clipped, resampled, mosaicked, warped or pixel-edited from one with values rounded when it
 /// was read keeps a mark
 /// of them, with no count (it holds an unknown share), and its export says so; one made from a

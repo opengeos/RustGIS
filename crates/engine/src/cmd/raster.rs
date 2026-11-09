@@ -959,7 +959,7 @@ pub fn geotiff_bytes(s: &mut Session, p: &Value) -> Result<(String, Vec<u8>), St
     let bi = band(p, "band", &r)?.unwrap_or(0);
     let cog = b(p, "cog") == Some(true);
     let bytes = if cog { raster::cogwrite::write(&r, bi) } else { raster::geotiff::write(&r, bi) }.map_err(|e| e.to_string())?;
-    let note = geotiff_note(&r, bi, cog)?;
+    let note = geotiff_note(&r, bi, cog, "give \"band\" for another")?;
     if !note.is_empty() {
         s.notify(format!("Exported {}.tif{note}", r.name), false);
     }
@@ -991,6 +991,11 @@ pub(crate) fn export_work(s: &Session, p: &Value) -> Result<super::exports::Work
 
 /// Writes raster `r` (band `bi`, or its colour bands) to `path`, and says what the file holds.
 pub(super) fn write_geotiff(r: &Raster, bi: usize, cog: bool, path: &str) -> Result<super::exports::Wrote, String> {
+    write_geotiff_with_guidance(r, bi, cog, path, "give \"band\" for another")
+}
+
+/// Builds the band instruction before combining the note with any caller-supplied path or name.
+fn write_geotiff_with_guidance(r: &Raster, bi: usize, cog: bool, path: &str, band_hint: &str) -> Result<super::exports::Wrote, String> {
     let cog = if cog {
         // Tiles go to the file as they are made: the whole file is never held in memory.
         Some(raster::cogwrite::write_file(r, bi, Path::new(path)).map_err(|e| format!("{path}: {e}"))?)
@@ -999,7 +1004,7 @@ pub(super) fn write_geotiff(r: &Raster, bi: usize, cog: bool, path: &str) -> Res
         rustgis_data::io::write_atomic(Path::new(path), &bytes).map_err(|e| format!("{path}: {e}"))?;
         None
     };
-    let note = geotiff_note(r, bi, cog.is_some())?;
+    let note = geotiff_note(r, bi, cog.is_some(), band_hint)?;
     let mut v = match r.overview {
         Some((fw, fh)) => json!({"path": path, "width": r.width, "height": r.height, "overviewOf": [fw, fh]}),
         None => json!({"path": path}),
@@ -1019,19 +1024,16 @@ pub(super) fn write_geotiff(r: &Raster, bi: usize, cog: bool, path: &str) -> Res
 
 /// Writes a tool's raster file and reports the same export notes as `share.exportRaster`.
 pub(super) fn write_and_report(s: &mut Session, r: &Raster, bi: usize, cog: bool, path: &str) -> Result<Value, String> {
-    let wrote = write_geotiff(r, bi, cog, path)?;
+    let wrote =
+        write_geotiff_with_guidance(r, bi, cog, path, "export the resulting layer with share.exportRaster and give \"band\" for another")?;
     for note in wrote.notes {
-        // Tools write their default bands; selecting another is an export command parameter.
-        s.notify(
-            note.replace("give \"band\" for another", "export the resulting layer with share.exportRaster and give \"band\" for another"),
-            false,
-        );
+        s.notify(note, false);
     }
     Ok(wrote.answer)
 }
 
 /// What the selected GeoTIFF writer keeps, changes or leaves out, shared by files and downloads.
-fn geotiff_note(r: &Raster, bi: usize, cog: bool) -> Result<String, String> {
+fn geotiff_note(r: &Raster, bi: usize, cog: bool, band_hint: &str) -> Result<String, String> {
     let mut note = match r.overview {
         Some((fw, fh)) => format!(" (the {} × {} overview of the {fw} × {fh} raster)", r.width, r.height),
         None => String::new(),
@@ -1053,7 +1055,7 @@ fn geotiff_note(r: &Raster, bi: usize, cog: bool) -> Result<String, String> {
     // The bands the writer leaves out (it writes `band`, or a colour raster's colour bands, which
     // `band` doesn't change) are said, names and all.
     if bands.len() < r.bands.len() {
-        let which = if bands == [bi] { "give \"band\" for another" } else { "its colour bands" };
+        let which = if bands == [bi] { band_hint } else { "its colour bands" };
         note.push_str(&format!("; {} of its {} bands written ({which})", bands.len(), r.bands.len()));
     }
     // The file keeps the first written band's class names only (as dataset `CLASS_` items).
