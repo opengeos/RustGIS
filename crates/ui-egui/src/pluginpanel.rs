@@ -509,12 +509,9 @@ fn choice(app: &mut RustGisApp, ui: &mut Ui, pid: &str, item: &PanelItemDecl, st
     let chosen = state.chosen(id);
     // An option declared in plugin.json shows its label in the interface language; one the plugin
     // sent is worded by the plugin already.
-    let named = |n: &TreeNode| {
-        let declared = item.options.iter().any(|o| {
-            o.get("id").and_then(Value::as_str) == Some(n.id.as_str()) && o.get("label").and_then(Value::as_str) == Some(n.label.as_str())
-        });
-        if declared { tr(&n.label) } else { n.label.clone() }
-    };
+    let declared: HashMap<&str, &str> =
+        item.options.iter().filter_map(|o| Some((o.get("id")?.as_str()?, o.get("label")?.as_str()?))).collect();
+    let named = |n: &TreeNode| if declared.get(n.id.as_str()) == Some(&n.label.as_str()) { tr(&n.label) } else { n.label.clone() };
     let shown = chosen.and_then(|c| st.nodes.iter().find(|n| n.id == c)).map_or_else(|| tl!("Choose…").to_string(), named);
     let on = enabled(item, state) && !st.nodes.is_empty();
     let mut pick = None;
@@ -587,7 +584,7 @@ fn date(app: &mut RustGisApp, ui: &mut Ui, pid: &str, item: &PanelItemDecl, stat
         }
         // The calendar opens on the month of the date (today's when there is none); while it is
         // open, it keeps the month it was stepped to.
-        let btn = ui.add_enabled(on, egui::Button::new("📅").min_size(vec2(28.0, 24.0))).on_hover_text(tl!("Pick a date"));
+        let btn = calendar_button(ui, on, t);
         let opening = parse(&stored).map_or_else(today, |(y, m, _)| (y, m));
         let (y, m) = if btn.clicked() { opening } else { app.ui.plugin_panel.calendar.get(id).copied().unwrap_or(opening) };
         let mut shown = (y, m);
@@ -641,6 +638,29 @@ fn date(app: &mut RustGisApp, ui: &mut Ui, pid: &str, item: &PanelItemDecl, stat
         app.ui.plugin_panel.date_text.remove(id);
         send(app, pid, item, v);
     }
+}
+
+/// A 28 × 24 px button with a calendar drawn on it, opening a date's calendar.
+fn calendar_button(ui: &mut Ui, on: bool, t: &Tokens) -> egui::Response {
+    let tip = tl!("Pick a date");
+    let (r, resp) = ui.allocate_exact_size(vec2(28.0, 24.0), if on { Sense::click() } else { Sense::hover() });
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, on, tip));
+    if on && resp.hovered() {
+        ui.painter().rect_filled(r, CornerRadius::same(5), t.hover);
+    }
+    ui.painter().rect_stroke(r, CornerRadius::same(5), Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
+    let ink = Stroke::new(1.4, if on { t.text } else { t.text_disabled });
+    // A page with a binding across its top, two rings and a few days.
+    let page = egui::Rect::from_center_size(r.center() + vec2(0.0, 1.0), vec2(14.0, 12.0));
+    ui.painter().rect_stroke(page, CornerRadius::same(2), ink, egui::StrokeKind::Middle);
+    ui.painter().line_segment([pos2(page.left(), page.top() + 3.5), pos2(page.right(), page.top() + 3.5)], ink);
+    for x in [page.left() + 4.0, page.right() - 4.0] {
+        ui.painter().line_segment([pos2(x, page.top() - 2.0), pos2(x, page.top() + 1.5)], ink);
+    }
+    for (dx, dy) in [(3.5, 6.5), (7.0, 6.5), (10.5, 6.5), (3.5, 9.5), (7.0, 9.5)] {
+        ui.painter().circle_filled(pos2(page.left() + dx, page.top() + dy), 0.9, ink.color);
+    }
+    resp.on_hover_text(tip)
 }
 
 /// Today's year and month, for a calendar with no date to open on (UTC is near enough).

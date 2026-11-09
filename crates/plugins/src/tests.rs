@@ -877,7 +877,7 @@ fn a_panel_tree_takes_nodes_and_a_chosen_one() {
         {"id": "env", "label": "Ambiente", "count": 2, "children": [{"id": "501", "label": "Árboles"}, {"id": "502"}]},
         {"id": "farm", "label": "Agricultura", "count": 1, "children": [{"id": "601", "label": "Productividad Rural"}]},
     ]);
-    st.apply(&decl, &json!({"items": {"catalogue": {"nodes": nodes}}, "values": {"catalogue": "601"}}));
+    assert_eq!(st.apply(&decl, &json!({"items": {"catalogue": {"nodes": nodes}}, "values": {"catalogue": "601"}})).notice(), None);
     let tree = &st.items["catalogue"].nodes;
     assert_eq!(tree.len(), 2);
     assert_eq!((tree[0].count, tree[0].children[1].label.as_str()), (Some(2), "502"), "a label defaults to the id");
@@ -895,6 +895,10 @@ fn a_panel_tree_takes_nodes_and_a_chosen_one() {
         kept.apply(&decl, &json!({"items": {"catalogue": {"nodes": junk}}}));
         assert_eq!((kept.items["catalogue"].nodes.len(), kept.chosen("catalogue")), (2, Some("501")), "{junk}");
     }
+    // A node repeated, or without an id, at any depth is left out and counted.
+    let mut lossy = st.clone();
+    let junk = json!([{"id": "env", "children": [{"id": "env"}, {"label": "x", "children": [{"id": "y"}]}]}]);
+    assert_eq!(lossy.apply(&decl, &json!({"items": {"catalogue": {"nodes": junk}}})).nodes, 3);
     // New nodes without the chosen one: none chosen.
     st.apply(&decl, &json!({"items": {"catalogue": {"nodes": [{"id": "env"}]}}}));
     assert_eq!(st.chosen("catalogue"), None);
@@ -1552,15 +1556,25 @@ fn panel_dropdowns_dates_and_ranges_keep_their_values() {
 
     // The plugin replaces the options and the ends: the values follow.
     st.set_values(&decl, &json!({"product": "s1", "months": [8, 11]}));
-    st.apply(&decl, &json!({"items": {"product": {"options": [{"id": "a", "label": "A"}, {"id": "b"}]}, "months": {"min": 0, "max": 9, "labels": ["Jan"]}}}));
+    let clean = st.apply(&decl, &json!({"items": {"product": {"options": [{"id": "a", "label": "A"}, {"id": "b"}]}, "months": {"min": 0, "max": 9, "labels": ["Jan"]}}}));
+    assert_eq!((clean.notice(), clean), (None, crate::Dropped::default()), "nothing left out, nothing said");
     assert_eq!(st.chosen("product"), None, "the chosen option is gone");
     assert_eq!(st.range("months"), (8, 9), "within the new ends");
     assert_eq!(st.slider_label("months", 0), "Jan");
-    st.apply(
+    let lossy = st.apply(
         &decl,
-        &json!({"items": {"product": {"options": [{"id": "a"}, {"id": "a"}, "junk", {"label": "no id"}]}}, "values": {"product": "a"}}),
+        &json!({"items": {"product": {"options": [{"id": "a"}, {"id": "a"}, "junk", {"label": "no id"}]}}, "values": {"product": "a", "end": "2023-02-30", "nope": 1}}),
     );
     assert_eq!((st.items["product"].nodes.len(), st.chosen("product")), (1, Some("a")), "repeated and id-less options are left out");
+    // ... and said, with the values not taken.
+    assert_eq!(lossy, crate::Dropped { values: vec!["end".into(), "nope".into()], nodes: 3 });
+    let said = lossy.notice().unwrap();
+    assert!(
+        said.starts_with("3 option(s) or tree node(s) left out")
+            && said.ends_with("2 value(s) not taken (no such widget, or not a value it holds): end, nope"),
+        "{said}"
+    );
+    assert_eq!(crate::panel::not_taken(&json!({"product": "a", "x": 1}), &["product".into()]), ["x"]);
     // Options are flat: children are dropped.
     st.apply(&decl, &json!({"items": {"product": {"options": [{"id": "p", "children": [{"id": "c"}]}]}}}));
     assert!(st.items["product"].nodes[0].children.is_empty());

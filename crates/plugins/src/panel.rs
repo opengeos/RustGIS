@@ -272,6 +272,60 @@ fn choice_options(v: &[Value]) -> Vec<TreeNode> {
     nodes
 }
 
+/// The most value ids a notice names.
+const MAX_NAMED: usize = 10;
+
+/// What a panel update left out, for a notice: the widgets whose given value wasn't taken (no
+/// such widget, a value of the wrong kind, a date that isn't one, an option or node that isn't
+/// there), and how many options and tree nodes were left out (no id, one taken already or too
+/// long, too deep, or past the limit).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Dropped {
+    pub values: Vec<String>,
+    pub nodes: usize,
+}
+
+impl Dropped {
+    /// The notice for it; `None` when nothing was left out.
+    pub fn notice(&self) -> Option<String> {
+        let mut parts = Vec::new();
+        if self.nodes > 0 {
+            parts.push(format!(
+                "{} option(s) or tree node(s) left out (no id, one repeated or too long, too deep, or past the limit)",
+                self.nodes
+            ));
+        }
+        if !self.values.is_empty() {
+            let mut named = self.values.iter().take(MAX_NAMED).map(|v| clip(v, MAX_TREE_ID)).collect::<Vec<_>>().join(", ");
+            if self.values.len() > MAX_NAMED {
+                named.push_str(", …");
+            }
+            parts.push(format!("{} value(s) not taken (no such widget, or not a value it holds): {named}", self.values.len()));
+        }
+        (!parts.is_empty()).then(|| parts.join("; "))
+    }
+}
+
+/// The ids in `values` (`{"id": value}`) that [`PanelState::set_values`] didn't take (`set`).
+pub fn not_taken(values: &Value, set: &[String]) -> Vec<String> {
+    values.as_object().map(|o| o.keys().filter(|k| !set.contains(k)).cloned().collect()).unwrap_or_default()
+}
+
+/// How many nodes `v` holds, at every depth (bounded).
+fn count_given(v: &[Value], depth: usize) -> usize {
+    v.iter()
+        .map(|n| {
+            let below = n.get("children").and_then(Value::as_array).filter(|_| depth < 64).map_or(0, |c| count_given(c, depth + 1));
+            below.saturating_add(1)
+        })
+        .fold(0, usize::saturating_add)
+}
+
+/// How many nodes `nodes` hold, at every depth.
+fn count_kept(nodes: &[TreeNode]) -> usize {
+    nodes.iter().map(|n| 1 + count_kept(&n.children)).sum()
+}
+
 /// What the plugin last said about one widget.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -492,8 +546,9 @@ impl PanelState {
     /// slider or a range `min`, `max` and `labels`, for a tree `nodes`, and for a dropdown
     /// `options`. Unknown ids and fields, and values
     /// of the wrong type, are ignored; texts are clipped, sliders' values kept within their ends
-    /// and a tree's chosen node among its nodes.
-    pub fn apply(&mut self, decl: &PanelDecl, update: &Value) {
+    /// and a tree's chosen node among its nodes. Returns the values, options and nodes left out.
+    pub fn apply(&mut self, decl: &PanelDecl, update: &Value) -> Dropped {
+        let mut dropped = Dropped::default();
         let empty = Map::new();
         let items = update.get("items").and_then(Value::as_object).unwrap_or(&empty);
         for d in &decl.items {
@@ -534,15 +589,18 @@ impl PanelState {
             {
                 let mut left = MAX_TREE_NODES;
                 st.nodes = Arc::new(tree_nodes(nodes, 0, &mut left, &mut Default::default()));
+                dropped.nodes = dropped.nodes.saturating_add(count_given(nodes, 0).saturating_sub(count_kept(&st.nodes)));
             }
             if d.kind == "choice"
                 && let Some(options) = u.get("options").and_then(Value::as_array)
             {
                 st.nodes = Arc::new(choice_options(options));
+                dropped.nodes = dropped.nodes.saturating_add(options.len().saturating_sub(st.nodes.len()));
             }
         }
         if let Some(values) = update.get("values") {
-            self.set_values(decl, values);
+            let set = self.set_values(decl, values);
+            dropped.values = not_taken(values, &set);
         }
         // New ends keep the values within them, and new nodes or options the chosen one among them.
         for d in &decl.items {
@@ -559,6 +617,7 @@ impl PanelState {
                 _ => {}
             }
         }
+        dropped
     }
 
     /// What goes to the plugin in each request: `{"values": {...}, "changed": [ids]}`, `changed`

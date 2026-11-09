@@ -9889,8 +9889,16 @@ fn plugin_panels_keep_their_state_between_calls() {
     assert_eq!(got["panel"], json!({"values": {"local": false, "release": 4, "span": [2, 8]}, "changed": ["release"]}));
     assert_eq!(got["params"], json!({"keep": true}));
     assert_eq!(s.plugin_panels["eng-panel"].slider("release"), 4);
+    let refused = |s: &Session, mark| {
+        s.notices_since(mark).iter().filter(|n| n.text.contains("not taken")).map(|n| n.text.clone()).collect::<Vec<_>>()
+    };
+    assert_eq!(refused(&s, 0), ["Test eng-panel: 1 value(s) not taken (no such widget, or not a value it holds): nope"]);
     // Any command gets them, from the ribbon or a script, and widgets that run nothing set them.
+    let mark = s.notice_mark();
     s.run("plugin.panel", &json!({"id": "eng-panel", "values": {"local": true, "release": 99}})).unwrap();
+    assert!(refused(&s, mark).is_empty(), "values taken (kept within the ends) are not said");
+    s.run("plugin.panel", &json!({"id": "eng-panel", "values": {"span": [1, "x"]}})).unwrap();
+    assert_eq!(refused(&s, mark), ["Test eng-panel: 1 value(s) not taken (no such widget, or not a value it holds): span"]);
     let got = s.run("plugin:eng-panel/h", &json!({})).unwrap();
     assert_eq!(got, json!({"hello": "world"}));
     let got = s.run("plugin:eng-panel/q", &json!({})).unwrap();
