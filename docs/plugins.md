@@ -432,7 +432,10 @@ Any command can answer the panel's new state, beside the rest of its answer:
   longer than 200 characters or taken already, is left out with its children.
 - Malformed panel, `items` or `values` objects, invalid numeric bounds and non-string node or
   option labels produce counted warnings. So do values clamped or reordered to fit a widget,
-  choices cleared after options change, and labels cut to 200 characters. Warnings name the
+  choices cleared after options change, text cut to 4,000 characters, labels cut to 200,
+  slider labels cut to 80 characters or 2,000 entries, and wrong-type applicable item fields.
+  A malformed bound leaves that bound unchanged while a valid companion bound is applied.
+  Warnings name the
   plugin and affected widgets or fields; clean input stays quiet. A manifest's dropdown labels
   must already be strings of at most 200 characters, otherwise the manifest is refused.
 - A plugin words what it sets in the request's `lang`; RustGIS translates only what the

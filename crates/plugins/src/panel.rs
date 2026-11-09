@@ -294,6 +294,7 @@ pub struct Dropped {
     pub nodes: usize,
     pub adjusted: Vec<String>,
     pub fields: Vec<String>,
+    pub clipped: Vec<String>,
     pub labels: usize,
     pub malformed: usize,
 }
@@ -310,6 +311,7 @@ impl Dropped {
         }
         for (ids, what) in [
             (&self.fields, "item field(s) not taken (wrong type or invalid bounds)"),
+            (&self.clipped, "item field(s) clipped or truncated"),
             (&self.adjusted, "value(s) adjusted (clamped or reordered, or choice cleared)"),
         ] {
             if !ids.is_empty() {
@@ -621,6 +623,19 @@ impl PanelState {
                 dropped.fields.push(id.to_string());
                 continue;
             }
+            for (key, valid) in [
+                ("label", u.get("label").is_none_or(|v| v.is_null() || v.is_string())),
+                ("enabled", u.get("enabled").is_none_or(Value::is_boolean)),
+                ("visible", u.get("visible").is_none_or(Value::is_boolean)),
+                ("text", d.kind != "text" || u.get("text").is_none_or(Value::is_string)),
+                ("labels", !d.ranged() || u.get("labels").is_none_or(Value::is_array)),
+                ("nodes", d.kind != "tree" || u.get("nodes").is_none_or(Value::is_array)),
+                ("options", d.kind != "choice" || u.get("options").is_none_or(Value::is_array)),
+            ] {
+                if !valid {
+                    dropped.fields.push(format!("{id}.{key}"));
+                }
+            }
             match u.get("label") {
                 Some(Value::String(l)) => {
                     dropped.labels += usize::from(l.chars().count() > MAX_STATE_LABEL);
@@ -632,6 +647,10 @@ impl PanelState {
             if d.kind == "text"
                 && let Some(t) = u.get("text").and_then(Value::as_str)
             {
+                let count = t.chars().count();
+                if count > MAX_STATE_TEXT {
+                    dropped.clipped.push(format!("{id}.text ({count} to {MAX_STATE_TEXT} characters)"));
+                }
                 st.text = clip(t, MAX_STATE_TEXT);
             }
             if let Some(b) = u.get("enabled").and_then(Value::as_bool) {
@@ -643,17 +662,35 @@ impl PanelState {
             if d.ranged() {
                 let min = u.get("min").and_then(whole).unwrap_or(st.min);
                 let max = u.get("max").and_then(whole).unwrap_or(st.max);
-                let typed = ["min", "max"].iter().all(|key| u.get(*key).is_none_or(|v| whole(v).is_some()));
-                if typed && min <= max && min >= -SLIDER_LIMIT && max <= SLIDER_LIMIT {
+                for key in ["min", "max"] {
+                    if u.get(key).is_some_and(|v| whole(v).is_none()) {
+                        dropped.fields.push(format!("{id}.{key}"));
+                    }
+                }
+                if min <= max && min >= -SLIDER_LIMIT && max <= SLIDER_LIMIT {
                     (st.min, st.max) = (min, max);
                 } else {
                     for key in ["min", "max"] {
-                        if u.get(key).is_some() {
+                        if u.get(key).is_some() && !dropped.fields.contains(&format!("{id}.{key}")) {
                             dropped.fields.push(format!("{id}.{key}"));
                         }
                     }
                 }
                 if let Some(ls) = u.get("labels").and_then(Value::as_array) {
+                    if ls.len() > MAX_SLIDER_LABELS {
+                        dropped.clipped.push(format!("{id}.labels ({} to {MAX_SLIDER_LABELS} labels)", ls.len()));
+                    }
+                    for (index, label) in ls.iter().take(MAX_SLIDER_LABELS).enumerate() {
+                        match label.as_str() {
+                            Some(label) if label.chars().count() > MAX_SLIDER_LABEL => {
+                                dropped
+                                    .clipped
+                                    .push(format!("{id}.labels[{index}] ({} to {MAX_SLIDER_LABEL} characters)", label.chars().count()));
+                            }
+                            None => dropped.fields.push(format!("{id}.labels[{index}]")),
+                            _ => {}
+                        }
+                    }
                     st.labels = ls
                         .iter()
                         .take(MAX_SLIDER_LABELS)

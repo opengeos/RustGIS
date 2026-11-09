@@ -1733,6 +1733,40 @@ fn choice_date_range_panel() -> crate::PanelDecl {
 }
 
 #[test]
+fn panel_review_text_and_slider_label_losses_are_reported() {
+    let decl = choice_date_range_panel();
+    let mut state = crate::PanelState::new(&decl);
+    for update in [
+        json!({"items":{"selected":{"text":"界".repeat(4001)}}}),
+        json!({"items":{"months":{"labels":["界".repeat(81)]}}}),
+        json!({"items":{"months":{"labels":vec!["ok";2001]}}}),
+    ] {
+        assert!(state.apply(&decl, &update).notice().is_some(), "truncation must be reported");
+    }
+    assert!(state.apply(&decl, &json!({"items":{"months":{"labels":[5]}}})).notice().is_some());
+    assert!(state.apply(&decl, &json!({"items":{"selected":{"text":"Clean"},"months":{"labels":["One"]}}})).notice().is_none());
+}
+
+#[test]
+fn panel_review_partial_bounds_and_wrong_types_are_reported() {
+    let decl = choice_date_range_panel();
+    let mut state = crate::PanelState::new(&decl);
+    let report = state.apply(&decl, &json!({"items":{"months":{"min":null,"max":5}}}));
+    assert_eq!(state.items["months"].max, 5);
+    assert_eq!(report.fields, ["months.min"]);
+    for (id, field, value) in [
+        ("months", "label", json!(5)),
+        ("months", "enabled", json!(5)),
+        ("months", "visible", json!(5)),
+        ("months", "labels", json!(5)),
+        ("product", "options", json!(5)),
+    ] {
+        let report = state.apply(&decl, &json!({"items":{id:{field:value}}}));
+        assert!(report.fields.contains(&format!("{id}.{field}")), "{id}.{field}: {report:?}");
+    }
+}
+
+#[test]
 fn panel_reports_clamped_malformed_and_clipped_input() {
     let mut decl = choice_date_range_panel();
     let tree = decl.items.iter_mut().find(|item| item.id == "selected").unwrap();
