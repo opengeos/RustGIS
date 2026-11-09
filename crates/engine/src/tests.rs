@@ -9886,7 +9886,7 @@ fn plugin_panels_keep_their_state_between_calls() {
     assert!(!s.can_undo(), "a state command that changes nothing is no undo step");
     // A widget's command gets the values, the one it set among them, and not as a parameter.
     let got = s.run("plugin:eng-panel/q", &json!({"panel": {"release": 4, "nope": 1}, "keep": true})).unwrap();
-    assert_eq!(got["panel"], json!({"values": {"local": false, "release": 4}, "changed": ["release"]}));
+    assert_eq!(got["panel"], json!({"values": {"local": false, "release": 4, "span": [2, 8]}, "changed": ["release"]}));
     assert_eq!(got["params"], json!({"keep": true}));
     assert_eq!(s.plugin_panels["eng-panel"].slider("release"), 4);
     // Any command gets them, from the ribbon or a script, and widgets that run nothing set them.
@@ -9894,7 +9894,7 @@ fn plugin_panels_keep_their_state_between_calls() {
     let got = s.run("plugin:eng-panel/h", &json!({})).unwrap();
     assert_eq!(got, json!({"hello": "world"}));
     let got = s.run("plugin:eng-panel/q", &json!({})).unwrap();
-    assert_eq!(got["panel"], json!({"values": {"local": true, "release": 12}, "changed": []}), "kept within the slider's ends");
+    assert_eq!(got["panel"], json!({"values": {"local": true, "release": 12, "span": [2, 8]}, "changed": []}), "kept within the slider's ends");
     // A failed command leaves the values as they were.
     assert!(s.run("plugin:eng-panel/e", &json!({"panel": {"release": 1}})).is_err());
     assert_eq!(s.plugin_panels["eng-panel"].slider("release"), 12);
