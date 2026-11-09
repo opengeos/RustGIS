@@ -121,9 +121,8 @@ pub(crate) fn check(stream: &[u8], max_cells: usize) -> Result<()> {
                     && !(version == 0 && word(r.data, 2).unwrap_or(0) == 0x1000);
             }
             0x002f => {
-                if word(r.data, 0)? != 0 {
-                    return Err("the XLS workbook is encrypted and cannot be read".into());
-                }
+                word(r.data, 0)?;
+                return Err("the XLS workbook is encrypted or obfuscated and cannot be read".into());
             }
             0x0042 | 0x0022 => {
                 word(r.data, 0)?;
@@ -470,6 +469,11 @@ fn formula(data: &[u8], biff8: bool, budget: &mut Budget) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn xor_obfuscated_workbooks_are_refused() {
+        assert!(check(&[0x2f, 0, 2, 0, 0, 0, 0x0a, 0, 0, 0], 64).is_err_and(|e| e.contains("encrypted")));
+    }
 
     #[test]
     fn encrypted_workbooks_are_refused_before_unchecked_records() {
