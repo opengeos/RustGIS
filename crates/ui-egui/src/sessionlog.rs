@@ -81,41 +81,39 @@ enum View {
 /// opengeos/RustGIS#1216): the tool runs, the whole session log, and the session log's entries
 /// for the project open now; whether a log view (not the tool runs) is shown.
 pub fn tabs(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) -> bool {
-    ui.horizontal(|ui| {
-        let s = &mut app.ui.session_log;
-        let mut view = if s.open { if s.this_project { View::ThisProject } else { View::SessionLog } } else { View::ToolRuns };
-        crate::widgets::tabs(
-            ui,
-            t,
-            egui::Id::unique("session_log_tabs"),
-            &mut view,
-            &[
-                crate::widgets::Tab {
-                    label: "Tool runs",
-                    icon: "toolbox",
-                    hover: Some("The tools run on this project: saved with it, and each can run again"),
-                    value: View::ToolRuns,
-                },
-                crate::widgets::Tab {
-                    label: "This project",
-                    icon: "filter",
-                    hover: Some("Only the commands run in the project open now"),
-                    value: View::ThisProject,
-                },
-                crate::widgets::Tab {
-                    label: "Session log",
-                    icon: "history",
-                    hover: Some("Everything done in this session, from the app, scripts, the AI Assistant or plugins"),
-                    value: View::SessionLog,
-                },
-            ],
-        );
-        (s.open, s.this_project) = match view {
-            View::ToolRuns => (false, false),
-            View::SessionLog => (true, false),
-            View::ThisProject => (true, true),
-        };
-    });
+    let s = &mut app.ui.session_log;
+    let mut view = if s.open { if s.this_project { View::ThisProject } else { View::SessionLog } } else { View::ToolRuns };
+    crate::widgets::tabs(
+        ui,
+        t,
+        egui::Id::unique("session_log_tabs"),
+        &mut view,
+        &[
+            crate::widgets::Tab {
+                label: "Tool runs",
+                icon: "toolbox",
+                hover: Some("The tools run on this project: saved with it, and each can run again"),
+                value: View::ToolRuns,
+            },
+            crate::widgets::Tab {
+                label: "This project",
+                icon: "filter",
+                hover: Some("Only the commands run in the project open now"),
+                value: View::ThisProject,
+            },
+            crate::widgets::Tab {
+                label: "Session log",
+                icon: "history",
+                hover: Some("Everything done in this session, from the app, scripts, the AI Assistant or plugins"),
+                value: View::SessionLog,
+            },
+        ],
+    );
+    (s.open, s.this_project) = match view {
+        View::ToolRuns => (false, false),
+        View::SessionLog => (true, false),
+        View::ThisProject => (true, true),
+    };
     ui.add_space(4.0);
     app.ui.session_log.open
 }

@@ -147,8 +147,8 @@ pub(crate) struct Tab<T> {
 
 /// A row of tabs drawn as the ribbon's: the chosen one open onto the pane below with its accent
 /// bar, a base line and a hover fill; as the pane narrows, each tab drops its icon, then its name
-/// (the icon alone, named on hover). `current` becomes the chosen tab's value; returns whether it
-/// changed.
+/// (the icon alone, its hover text — or its name — on hover). `current` becomes the chosen tab's
+/// value; returns whether it changed.
 pub(crate) fn tabs<T: Copy + PartialEq>(ui: &mut Ui, t: &Tokens, id: egui::Id, current: &mut T, tabs: &[Tab<T>]) -> bool {
     let font = |on: bool| if on { semibold(12.5) } else { regular(12.5) };
     let (pad, icon, gap, h) = (8.0, 16.0, 5.0, 30.0);
@@ -177,7 +177,7 @@ pub(crate) fn tabs<T: Copy + PartialEq>(ui: &mut Ui, t: &Tokens, id: egui::Id, c
         let r = Rect::from_min_size(pos2(x, row.min.y), vec2(w, h));
         x = r.max.x + 2.0;
         let mut resp = ui.interact(r, id.with(tab.label), Sense::click());
-        resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, on, true, shown));
+        resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, on, shown));
         let p = ui.painter();
         let body = Rect::from_min_max(pos2(r.min.x, r.min.y + 3.0), r.max);
         let round = CornerRadius { nw: 6, ne: 6, sw: 0, se: 0 };
@@ -197,7 +197,7 @@ pub(crate) fn tabs<T: Copy + PartialEq>(ui: &mut Ui, t: &Tokens, id: egui::Id, c
         let cy = body.center().y - 1.0;
         if !names {
             icons::paint(p, Rect::from_center_size(pos2(r.center().x, cy), vec2(icon, icon)), tab.icon, t.icon, t.accent);
-            resp = resp.on_hover_text(shown);
+            resp = resp.on_hover_text(tab.hover.map_or(shown, |h| tl!(h)));
         } else {
             let mut tx = r.min.x + pad;
             if icons {
