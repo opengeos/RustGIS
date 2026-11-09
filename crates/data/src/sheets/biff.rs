@@ -63,7 +63,10 @@ impl Budget {
     fn cells(&mut self, count: usize) -> Result<()> {
         self.cells = self.cells.saturating_add(count);
         if self.cells > self.max_cells {
-            return Err(format!("the XLS workbook is too large (more than {} cells across its sheets)", self.max_cells));
+            return Err(format!(
+                "the XLS workbook is too large (more than {} allocated entries across its sheets and metadata)",
+                self.max_cells
+            ));
         }
         Ok(())
     }
@@ -71,7 +74,7 @@ impl Budget {
     fn text(&mut self, count: usize) -> Result<()> {
         self.text = self.text.saturating_add(count);
         if self.text > self.max_cells.saturating_mul(8) {
-            return Err("the XLS workbook's expanded strings and formulas are too large".into());
+            return Err("the XLS workbook's expanded strings, names and formulas are too large".into());
         }
         Ok(())
     }
@@ -127,7 +130,13 @@ pub(crate) fn check(stream: &[u8], max_cells: usize) -> Result<()> {
                 word(r.data, 0)?;
             }
             0x0017 if biff8 => {
-                word(r.data, 0)?;
+                let count = usize::from(word(r.data, 0)?).min(r.data.len().saturating_sub(2) / 6);
+                budget.cells(count)?;
+            }
+            0x00e0 => {
+                // The reader retains each XF, then allocates its resolved format table.
+                bytes(r.data, 0, 4)?;
+                budget.cells(1)?;
             }
             0x0085 => {
                 let offset = usize::try_from(dword(r.data, 0)?).map_err(|_| "a sheet offset cannot be addressed")?;
@@ -138,12 +147,18 @@ pub(crate) fn check(stream: &[u8], max_cells: usize) -> Result<()> {
                 let prefix = if biff8 { 8 } else { 7 };
                 let width = if biff8 && byte(r.data, 7)? & 1 != 0 { 2 } else { 1 };
                 bytes(r.data, prefix, chars * width)?;
+                // Two sheet-name collections and the empty sheet's state are retained too.
+                budget.text(512 + chars * 8)?;
                 if sheets.len() >= max_cells {
                     return Err("the XLS workbook has too many sheets".into());
                 }
                 sheets.push(offset);
             }
-            0x0018 => defined_name(r.data, biff8)?,
+            0x0018 => {
+                defined_name(r.data, biff8)?;
+                // Bound both copies of the name and its rendered reference, plus object storage.
+                budget.text(256 + usize::from(byte(r.data, 3)?) * 8)?;
+            }
             0x00fc => strings = shared_strings(&r, &mut budget)?,
             _ => {}
         }
@@ -289,7 +304,14 @@ fn dimensions(data: &[u8]) -> Result<usize> {
         14 | 16 => (dword(data, 0)?, dword(data, 4)?, word(data, 8)?, word(data, 10)?),
         _ => return Err("a BIFF Dimensions record has the wrong length".into()),
     };
-    if first > 65_535 || end > 65_536 || col > 255 || last > 256 || (end > 0 && end <= first) || last < col {
+    if first > 65_535
+        || end > 65_536
+        || col > 255
+        || last > 256
+        || (end > 0 && end <= first)
+        || last < col
+        || (end > 0 && last > 0 && last == col)
+    {
         return Err("a BIFF Dimensions record has reversed or out-of-range bounds".into());
     }
     let rows = if end == 0 { 1 } else { (end - first) as usize };
@@ -329,6 +351,7 @@ fn worksheet(stream: &[u8], start: usize, biff8: bool, strings: &[usize], budget
             0x00e5 => {
                 let n = usize::from(word(r.data, 0)?);
                 bytes(r.data, 2, n * 8)?;
+                budget.cells(n)?;
             }
             0x00bd => {
                 bytes(r.data, 0, 6)?;
@@ -446,6 +469,39 @@ fn formula(data: &[u8], biff8: bool, budget: &mut Budget) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn xls_review_equal_nonzero_column_bounds_are_refused() {
+        let mut data = vec![0; 14];
+        data[4..8].copy_from_slice(&10u32.to_le_bytes());
+        data[8..10].copy_from_slice(&2u16.to_le_bytes());
+        data[10..12].copy_from_slice(&2u16.to_le_bytes());
+        assert!(dimensions(&data).is_err(), "calamine subtracts one from the exclusive column end");
+        data[8..12].fill(0);
+        assert!(dimensions(&data).is_ok(), "zero column bounds remain an empty-sheet sentinel");
+    }
+
+    #[test]
+    fn xls_review_metadata_shares_the_allocation_budget() {
+        let mut name = vec![0; 15];
+        name[3] = 1;
+        name[4..6].copy_from_slice(&3u16.to_le_bytes());
+        name.extend([b'N', 0x1e, 1, 0]);
+        for (kind, data) in [(0x18u16, name), (0xe0, vec![0; 20]), (0x17, vec![1, 0, 0, 0, 0, 0, 0, 0])] {
+            let mut record = kind.to_le_bytes().to_vec();
+            record.extend((data.len() as u16).to_le_bytes());
+            record.extend(data);
+            let mut one = record.clone();
+            one.extend([0x0a, 0, 0, 0]);
+            assert!(check(&one, 64).is_ok(), "one metadata entry fits: {kind:x}");
+            let mut many = record.repeat(100);
+            many.extend([0x0a, 0, 0, 0]);
+            assert!(
+                check(&many, 64).is_err_and(|error| error.contains("too large")),
+                "metadata cannot allocate outside the shared budget: {kind:x}"
+            );
+        }
+    }
 
     #[test]
     fn repeated_and_overlapping_empty_sheets_have_bounded_work() {
