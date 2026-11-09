@@ -99,7 +99,9 @@ refused, with a notice, rather than computed as EPSG's ellipsoidal one. The equi
 cylindrical projection (EPSG:4087, World Equidistant Cylindrical) uses a sphere of its datum's
 semi-major axis, matching PROJ and GDAL, both for data and for a map drawn in it (including the
 Equirectangular preset). This also applies to planetary Equirectangular systems and definitions
-that name EPSG method 1028. The datum's ellipsoid is retained for datum transformations and
+that name EPSG method 1028. Reading an ellipsoidal WKT2 definition of that method reports this
+compatibility choice: coordinates computed with EPSG's ellipsoidal formula can differ by kilometres.
+The datum's ellipsoid is retained for datum transformations and
 exported coordinate system definitions.
 
 Shapefile text uses a supported `.cpg` encoding, otherwise the `.dbf` code page, with UTF-8 as

@@ -15,6 +15,36 @@ const MARS_R: f64 = 3_396_190.0;
 const MARS_GEOGCS: &str = r#"GEOGCS["GCS_Mars_2015_-_Sphere_Ocentric",DATUM["D_Mars_2015_-_Sphere",SPHEROID["Mars_2015_-_Sphere",3396190.0,0.0]],PRIMEM["Reference_Meridian",0.0],UNIT["Degree",0.0174532925199433]]"#;
 const WGS84_GEOGCS: &str = r#"GEOGCS["GCS_WGS_1984",DATUM["D_WGS_1984",SPHEROID["WGS_1984",6378137.0,298.257223563]],PRIMEM["Greenwich",0.0],UNIT["Degree",0.0174532925199433]]"#;
 
+/// The same EPSG method can be declared with or without a CRS authority. Both readers must
+/// report the compatibility choice without changing the PROJ/GDAL coordinates.
+#[test]
+fn explicit_method_1028_warns_in_full_and_streamed_shapefiles() {
+    let wkt = r#"PROJCRS["World EQC",BASEGEOGCRS["WGS 84",DATUM["WGS_1984",ELLIPSOID["WGS 84",6378137,298.257223563]],PRIMEM["Greenwich",0]],CONVERSION["EQC",METHOD["Equidistant Cylindrical",ID["EPSG",1028]],PARAMETER["Latitude of 1st standard parallel",0],PARAMETER["Longitude of natural origin",0],PARAMETER["False easting",0],PARAMETER["False northing",0]],CS[Cartesian,2],AXIS["Easting",east],AXIS["Northing",north],LENGTHUNIT["metre",1]]"#;
+    let coded = format!("{},ID[\"EPSG\",4087]]", wkt.strip_suffix(']').unwrap());
+    let sphere = wkt.replace("WGS_1984", "Sphere").replace("298.257223563", "0");
+    let crs = rustgis_data::raster::wkt::crs_from_wkt(wkt).unwrap();
+    let wkt1 = rustgis_data::raster::wkt::to_wkt(crs).unwrap();
+    for (prj, warned) in [(wkt, true), (coded.as_str(), true), (sphere.as_str(), false), (wkt1.as_str(), false)] {
+        let mut ds = Dataset::new("p", GeometryType::Point, Vec::new());
+        ds.push(Some(Geometry::Point(Coord::new(0.0, 5_009_377.085_697_311))), Vec::new());
+        let dir = tempfile::tempdir().unwrap();
+        for (ext, bytes) in io::shapefile_parts(&ds).unwrap().0 {
+            let bytes = if ext == "prj" { prj.as_bytes().to_vec() } else { bytes };
+            std::fs::write(dir.path().join(format!("p.{ext}")), bytes).unwrap();
+        }
+        let path = dir.path().join("p.shp");
+        let (read, report) = io::read_path(&path).unwrap();
+        near(read.features.first().and_then(|f| f.geometry.as_ref()?.label_point()), 0.0, 45.0, 1e-9);
+        let streamed = rustgis_data::source::open_path(&path, None).unwrap();
+        for notes in [&report.messages, &streamed.info().notes] {
+            assert_eq!(notes.iter().filter(|n| n.contains("EPSG method 1028")).count(), usize::from(warned), "{prj}: {notes:?}");
+            if warned {
+                assert!(notes.iter().any(|n| n.contains("PROJ/GDAL") && n.contains("differ")), "{notes:?}");
+            }
+        }
+    }
+}
+
 /// A Shapefile of one point at `x`, `y` in a system its `.prj` gives, read back by
 /// [`io::read_path`]: the point as longitude/latitude, and what the read said.
 fn read_prj(prj: &str, x: f64, y: f64) -> (Option<Coord>, Vec<String>) {
