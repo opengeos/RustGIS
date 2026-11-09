@@ -22,6 +22,8 @@ pub(crate) fn load(app: &mut RustGisApp) {
     }
     let set = saved.parse::<usize>().map_err(|_| String::new()).and_then(|n| threads::set_max(Some(n)));
     if set.is_err() {
+        // The default, as the notice says, whatever an earlier start in this process set.
+        let _ = threads::set_max(None);
         let text = crate::i18n::fmt(
             "The saved thread setting “{value}” isn't a number from 1 to 1024; RustGIS uses the default.",
             &[("value", saved)],

@@ -936,11 +936,11 @@ impl Chunks {
         }
     }
 
-    /// The most one chunk holds while it is decoded: its samples as read (up to 8 bytes each)
-    /// and as 32-bit floats.
+    /// The most one chunk holds while it is decoded: its samples as read (up to 8 bytes each),
+    /// as 32-bit floats, and which of them were rounded (a byte each).
     #[cfg(not(target_arch = "wasm32"))]
     fn bytes(&self) -> usize {
-        (self.cw as usize).saturating_mul(self.ch as usize).saturating_mul(self.samples).saturating_mul(12)
+        (self.cw as usize).saturating_mul(self.ch as usize).saturating_mul(self.samples).saturating_mul(13)
     }
 
     fn count(&self) -> u64 {
@@ -1045,9 +1045,11 @@ fn decimate<R: Read + Seek>(
     if let Some((open, image, limits)) = open
         && chunks.count() >= PARALLEL_CHUNKS
     {
-        // Each thread decodes a chunk of its own: beyond one thread's, no more than the threads'
-        // scratch budget, so a high thread setting doesn't multiply the peak.
-        let threads = crate::threads::max().min(1 + crate::memory::thread_scratch() / chunks.bytes().max(1));
+        // Each thread decodes a chunk of its own. Up to the default count as before; past it (a
+        // high setting) no more than the threads' scratch budget holds, so the peak doesn't
+        // multiply with the setting.
+        let affordable = 1 + crate::memory::thread_scratch() / chunks.bytes().max(1);
+        let threads = crate::threads::max().min(affordable.max(crate::threads::default_max()));
         if threads > 1 {
             return decimate_parallel(chunks, bands, k, (ow, oh), nodata, threads, open, image, limits);
         }

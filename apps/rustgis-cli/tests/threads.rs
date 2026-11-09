@@ -27,4 +27,7 @@ fn the_thread_option_reaches_the_environment() {
         let err = String::from_utf8_lossy(&out.stderr);
         assert!(err.contains("--threads") && err.contains("1 to 1024"), "{bad}: {err}");
     }
+    // The option last, with no value: refused too, not run with the default.
+    let out = cli(&["--cmd", "gp.threads", "--threads"]);
+    assert_eq!(out.status.code(), Some(2), "{}", String::from_utf8_lossy(&out.stderr));
 }

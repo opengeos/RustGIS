@@ -1214,8 +1214,8 @@ threads from it; drawing a raster on the map stays at 8 threads at most, and whe
 needs working memory (a tool's, a GeoTIFF chunk's, a cube cell's) no more start than
 `threadScratchBytes` holds. **Settings › Performance › Threads** in the desktop app, the command
 line's `--threads` and Python's `Session(threads=…)` set the same count. A lower setting also
-lowers the work limits above, which grow with the threads a run takes: a run that passes on 16
-threads can be refused on 4, and Deep Learning can train fewer epochs. Only you change it: the AI
+lowers the work limits above that grow with the threads a run takes (Viewshed, IDW, Kriging and
+Kernel Density): a run that passes on 16 threads can be refused on 4. Only you change it: the AI
 Assistant asks first, and plugins, imported models and tasks, and MCP agents without full access
 can't. `gp.threads`
 returns the setting (`threads`), the threads it gives (`max`), the default's (`default`) and the

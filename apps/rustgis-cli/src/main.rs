@@ -724,7 +724,8 @@ fn cli() -> ExitCode {
     }
     rustgis_engine::sample::apply_worldview(worldview);
     // `--threads N`: the most threads one piece of work uses (#1562), as `gp.threads` sets it.
-    if let Some(t) = opt(&args, "--threads") {
+    if args.iter().any(|a| a == "--threads") {
+        let t = opt(&args, "--threads").unwrap_or("");
         // `mcp --attach` runs the calls in the open app, whose own setting holds.
         if cmd == "mcp" && args.iter().any(|a| a == "--attach") {
             eprintln!("rustgis-cli: --threads doesn't reach the open app; set it there (Settings › Performance › Threads)");

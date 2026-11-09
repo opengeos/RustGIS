@@ -1335,12 +1335,13 @@ impl RustGisApp {
         shortcutui::load(&mut self);
         sourcespane::load_connections(&mut self);
         autosave::load(&mut self);
-        threadsui::load(&mut self);
         if let Some(lang) = self.services.load_pref.as_ref().and_then(|load| load("language")) {
             self.ui.language = lang;
         }
         // Theme readers and startup notices keep translated text, so select the language before reading.
         i18n::set_current(self.chosen_lang());
+        // After the language, so a notice about the saved value is in it.
+        threadsui::load(&mut self);
         // A stored value that is neither `auto` nor a known worldview means `auto`.
         if let Some(w) = self.services.load_pref.as_ref().and_then(|load| load("worldview"))
             && rustgis_engine::sample::Worldview::from_code(&w).is_some()

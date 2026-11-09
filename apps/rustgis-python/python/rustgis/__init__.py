@@ -779,15 +779,24 @@ class Session(_Api):
         if plugins:
             load_plugins()
         self._engine = _Engine(use_saved_secrets)
+        previous = None
         if threads is not None:
+            previous = self.run("gp.threads")["threads"]
             self.run("gp.threads", threads=threads)
-        if sample:
-            self.run("project.sample")
-        if project is not None:
-            self.open(project)
-        if data is not None:
-            for path in [data] if isinstance(data, (str, os.PathLike)) else data:
-                self.add_data(path)
+        try:
+            if sample:
+                self.run("project.sample")
+            if project is not None:
+                self.open(project)
+            if data is not None:
+                for path in [data] if isinstance(data, (str, os.PathLike)) else data:
+                    self.add_data(path)
+        except BaseException:
+            # A session that failed to start leaves the process's setting as it found it, unless
+            # it was changed again meanwhile.
+            if threads is not None and self.run("gp.threads")["threads"] == threads:
+                self.run("gp.threads", threads=previous)
+            raise
 
     def run(self, command: str, params: Optional[Dict[str, Any]] = None, /, **kwargs: Any) -> Any:
         """Runs a RustGIS command by id.

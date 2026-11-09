@@ -394,6 +394,10 @@ def test_threads_set_the_count_for_the_process():
         assert rustgis.Session().run("gp.threads")["threads"] == 2
         with pytest.raises(rustgis.RustGISError, match="1 to 1024"):
             rustgis.Session(threads=0)
+        # A session that fails to start leaves the setting as it was.
+        with pytest.raises(rustgis.RustGISError):
+            rustgis.Session("/nonexistent/project.rgis", threads=3)
+        assert rustgis.Session().run("gp.threads")["threads"] == 2
     finally:
         rustgis.Session().run("gp.threads", threads=None)
     assert rustgis.Session().run("gp.threads")["threads"] is None

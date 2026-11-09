@@ -3519,7 +3519,15 @@ fn threads_menu(app: &mut RustGisApp, ui: &mut Ui) {
             let _ = app.run("ui.threads", json!({"threads": null}));
             ui.close();
         }
-        for n in crate::threadsui::choices(threads::cores()) {
+        let mut choices = crate::threadsui::choices(threads::cores());
+        // A setting made elsewhere (`gp.threads`, a script) is listed too, so it shows as chosen.
+        if let Some(s) = setting.map(|s| s.min(threads::cores()))
+            && !choices.contains(&s)
+        {
+            choices.push(s);
+            choices.sort_unstable();
+        }
+        for n in choices {
             let on = setting.is_some_and(|s| s.min(threads::cores()) == n);
             if ui.add(egui::Button::selectable(on, n.to_string())).clicked() {
                 let _ = app.run("ui.threads", json!({"threads": n}));

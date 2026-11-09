@@ -49,9 +49,11 @@ fn the_thread_setting_is_kept_and_read_at_start() {
     // A start with the default kept leaves it, quietly; a value edited by hand leaves it too,
     // and says so.
     for (kept, said) in [("auto", false), ("lots", true), ("0", true), ("2000", true)] {
+        // Whatever an earlier start in this process set: "auto" leaves it, a bad value resets it.
+        threads::set_max(Some(5)).unwrap();
         prefs.lock().unwrap().insert("max_threads".into(), kept.into());
         let app = start(&prefs);
-        assert_eq!(threads::setting(), None, "{kept}");
+        assert_eq!(threads::setting(), if said { None } else { Some(5) }, "{kept}");
         let told = app.session.notices.iter().any(|n| n.text.contains("thread setting"));
         assert_eq!(told, said, "{kept}");
     }

@@ -71,7 +71,8 @@ pub fn setting() -> Option<usize> {
 
 /// Sets the most threads one piece of work may use, for the whole process (`None`: the default).
 /// A setting from 1 to [`MOST`] is taken; one above the cores means all of them. Work already
-/// running keeps the threads it started with.
+/// running keeps the threads it started with; work done in pieces (a data cube's trend) takes
+/// the new count from its next piece.
 pub fn set_max(threads: Option<usize>) -> Result<(), String> {
     match threads {
         Some(n) if !(1..=MOST).contains(&n) => Err(format!("threads is 1 to {MOST}, or null for the default")),
