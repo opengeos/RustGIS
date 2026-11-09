@@ -410,8 +410,6 @@ fn is_gml(n: &Node) -> bool {
     n.tag_name().namespace().is_some_and(|ns| ns.starts_with("http://www.opengis.net/gml"))
 }
 
-/// The level of detail a geometry property names (`lod2Solid` is 2), when it holds a geometry or
-/// links to one: a property so named that holds text is a value.
 /// An element's `gml:id` (not an extension's `id`).
 fn gml_id<'a>(n: &Node<'a, '_>) -> Option<&'a str> {
     n.attributes()
@@ -429,10 +427,17 @@ fn has_linked_part(n: &Node) -> bool {
     n.descendants().any(|d| matches!(local(&d), "curveMember" | "baseCurve" | "pointProperty" | "pointRep") && only_link(&d))
 }
 
+/// The level of detail a geometry property names (`lod2Solid` is 2), when it holds a geometry or
+/// links to one: a property so named that holds text is a value.
 fn property_lod(p: &Node) -> Option<u32> {
     // A geometry, an implicit one, or a link: not an extension's structured value (`lod2Metadata`).
     let holds = elements(*p).next().is_some_and(|g| is_gml(&g) || local(&g) == "ImplicitGeometry") || attribute(p, "href").is_some();
     local(p).strip_prefix("lod").and_then(|rest| rest.chars().next()).and_then(|c| c.to_digit(10)).filter(|_| holds)
+}
+
+/// Whether a curve has a segment that isn't a straight line (an arc or a spline).
+fn curved(n: &Node) -> bool {
+    n.descendants().filter(|d| local(d) == "segments").flat_map(elements).any(|s| local(&s) != "LineStringSegment")
 }
 
 /// Whether a feature in a property is a city object rather than a structured value or a geometry:
@@ -761,6 +766,8 @@ impl Reading {
             return;
         }
         let Some(g) = elements(*p).next() else { return };
+        // The reach is the file's and no geometry's: a geometry that is left out leaves no point in it.
+        let reach = self.reach;
         let mut walk = Walk {
             counts: &mut self.counts,
             said: &mut self.said,
@@ -773,6 +780,7 @@ impl Reading {
         };
         if walk.geometry(&g).is_none() {
             self.said.bad_coordinates += 1;
+            self.reach = reach;
             return;
         }
         let Got { faces, surface, mut lines, points, heights, solid } = walk.got;
@@ -861,8 +869,7 @@ impl Walk<'_> {
             "MultiPoint" => self.members(g, &["pointMember"], "pointMembers")?,
             name @ ("LineString" | "Curve" | "LinearRing") => {
                 if name == "Curve" {
-                    let mut segments = elements(*g).filter(|c| local(c) == "segments").flat_map(elements);
-                    self.said.curved += usize::from(segments.any(|s| local(&s) != "LineStringSegment"));
+                    self.said.curved += usize::from(curved(g));
                 }
                 // A line with a point or curve given by a link isn't whole, and is left out.
                 if has_linked_part(g) {
@@ -877,17 +884,12 @@ impl Walk<'_> {
                 // An oriented curve is its base curve's line, written the other way when its
                 // orientation is `-`. A base curve given by a link isn't followed.
                 let base = elements(*g).find(|c| local(c) == "baseCurve")?;
-                if only_link(&base) {
+                // A base curve given by a link, or with a point or curve given by one, isn't whole.
+                if only_link(&base) || has_linked_part(&base) {
                     self.said.links += 1;
                     return Some(());
                 }
-                // A base curve with a point or curve given by a link isn't whole, and is left out.
-                if has_linked_part(&base) {
-                    self.said.links += 1;
-                    return Some(());
-                }
-                let mut segments = base.descendants().filter(|d| local(d) == "segments").flat_map(elements);
-                self.said.curved += usize::from(segments.any(|s| local(&s) != "LineStringSegment"));
+                self.said.curved += usize::from(curved(&base));
                 let mut line = self.positions(g)?;
                 if attribute(g, "orientation").map(str::trim) == Some("-") {
                     line.reverse();
@@ -969,17 +971,16 @@ impl Walk<'_> {
         self.got.surface = true;
         let exterior = elements(*g).find(|c| matches!(local(c), "exterior" | "outerBoundaryIs"))?;
         let interiors = elements(*g).filter(|c| matches!(local(c), "interior" | "innerBoundaryIs"));
+        let bounds: Vec<Node> = std::iter::once(exterior).chain(interiors).collect();
         // Curves a ring is carried in: any segments other than straight lines are read through
         // their points, and said like a standalone Curve's are.
-        for b in std::iter::once(exterior).chain(interiors) {
-            if let Some(ring) = elements(b).next() {
-                let mut segments = ring.descendants().filter(|d| local(d) == "segments").flat_map(elements);
-                self.said.curved += usize::from(segments.any(|s| local(&s) != "LineStringSegment"));
+        for b in &bounds {
+            if let Some(ring) = elements(*b).next() {
+                self.said.curved += usize::from(curved(&ring));
             }
         }
-        let interiors = elements(*g).filter(|c| matches!(local(c), "interior" | "innerBoundaryIs"));
         let mut rings = Vec::new();
-        for (k, b) in std::iter::once(exterior).chain(interiors).enumerate() {
+        for (k, b) in bounds.into_iter().enumerate() {
             if only_link(&b) {
                 self.said.links += 1;
                 if k == 0 {

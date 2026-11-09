@@ -810,6 +810,22 @@ fn less_common_geometries_of_odd_rings_curves_and_solids() {
     assert!(says(&out, "city objects have no gml:id"), "{:?}", messages_of(&out));
 }
 
+/// A geometry left out after some of its points were read leaves them out of the file's reach: with no
+/// system named, the file's other points still make it longitude/latitude.
+#[test]
+fn a_geometry_left_out_leaves_no_point_in_the_reach() {
+    let bad = "<core:cityObjectMember><bldg:Building gml:id=\"bad\"><bldg:lod1Geometry><gml:MultiGeometry>\
+        <gml:geometryMember><gml:LineString><gml:posList>500000 600000 0 500010 600000 0</gml:posList></gml:LineString></gml:geometryMember>\
+        <gml:geometryMember><gml:LineString><gml:posList>1 2 3 abc</gml:posList></gml:LineString></gml:geometryMember>\
+        </gml:MultiGeometry></bldg:lod1Geometry></bldg:Building></core:cityObjectMember>";
+    let members = format!("{}{bad}", building("ok", &box_surfaces("ok")));
+    let text = String::from_utf8(model("EPSG:4326", &members)).unwrap().replace(" srsName=\"EPSG:4326\"", "");
+    let out = read("model.gml", text.as_bytes(), None).unwrap();
+    assert!(says(&out, "coordinates are read as longitude/latitude"), "{:?}", messages_of(&out));
+    assert!(says(&out, "coordinates that can't be read"), "{:?}", messages_of(&out));
+    assert!(out[0].0.features.iter().any(|f| f.geometry.is_some()), "{:?}", messages_of(&out));
+}
+
 /// Ids are `gml:id`s, an extension's metadata named for a level of detail is a value, a terrain
 /// intersection doesn't make a feature an object, and a file cut inside a character is read up to it.
 #[test]
