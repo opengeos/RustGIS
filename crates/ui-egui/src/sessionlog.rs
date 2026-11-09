@@ -354,7 +354,7 @@ fn save(app: &mut RustGisApp) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use egui_kittest::kittest::Queryable;
+    use egui_kittest::kittest::{NodeT, Queryable};
 
     fn harness(app: RustGisApp) -> egui_kittest::Harness<'static, RustGisApp> {
         let mut fonts = false;
@@ -365,7 +365,7 @@ mod tests {
                     fonts = true;
                     return;
                 }
-                // The History pane as the app draws it: its two views.
+                // The History pane as the app draws it: its three tabs.
                 let t = crate::theme::Tokens::light();
                 crate::panes::history(app, ui, &t);
             },
@@ -423,6 +423,22 @@ mod tests {
         h.run();
         assert!(h.query_by_label("Buffer").is_some() && h.query_by_label("Made 3 features").is_some());
         assert!(h.query_by_label("Tools you run appear here.").is_none());
+    }
+
+    /// The tabs tell assistive technology their real state: the chosen one toggled on, the others
+    /// toggled off, and none disabled (they are all clickable).
+    #[test]
+    fn tabs_expose_their_real_selected_state_to_assistive_technology() {
+        let mut app = RustGisApp::with_sample();
+        app.ui.session_log.open = true;
+        let mut h = harness(app);
+        h.run();
+        let on = h.get_by_role_and_label(egui::accesskit::Role::Button, "Session log").accesskit_node();
+        assert_eq!(on.toggled(), Some(egui::accesskit::Toggled::True), "the view drawn is announced as chosen");
+        assert!(!on.is_disabled(), "tabs are always clickable");
+        let off = h.get_by_role_and_label(egui::accesskit::Role::Button, "Tool runs").accesskit_node();
+        assert_eq!(off.toggled(), Some(egui::accesskit::Toggled::False), "the view not drawn is not chosen");
+        assert!(!off.is_disabled(), "tabs are always clickable");
     }
 
     /// A step joined to the newest entry (a held key's nudges) shows in the pane at once, though
