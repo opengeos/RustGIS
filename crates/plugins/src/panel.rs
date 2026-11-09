@@ -223,7 +223,16 @@ fn clip(s: &str, n: usize) -> String {
 
 /// A bounded, single-line name for a diagnostic, without terminal control characters.
 fn diagnostic_name(s: &str) -> String {
-    s.chars().take(MAX_TREE_ID).map(|c| if c.is_control() { ' ' } else { c }).collect()
+    s.chars()
+        .take(MAX_TREE_ID)
+        .map(|c| {
+            if c.is_control() || matches!(c,'\u{061c}'|'\u{200e}'|'\u{200f}'|'\u{2028}'..='\u{202e}'|'\u{2066}'..='\u{2069}') {
+                ' '
+            } else {
+                c
+            }
+        })
+        .collect()
 }
 
 /// A whole number from an integer or a float with no fraction (JSON from other languages).
@@ -310,6 +319,7 @@ pub struct Dropped {
     pub malformed: usize,
     pub unlisted_fields: usize,
     pub unlisted_clipped: usize,
+    pub unlisted_values: usize,
 }
 
 impl Dropped {
@@ -319,6 +329,15 @@ impl Dropped {
             self.fields.push(diagnostic_name(&name));
         } else {
             self.unlisted_fields = self.unlisted_fields.saturating_add(1);
+        }
+    }
+
+    /// Count refused values while retaining only a bounded diagnostic sample.
+    fn rejected_value(&mut self, name: &str) {
+        if self.values.len() < MAX_NAMED {
+            self.values.push(diagnostic_name(name));
+        } else {
+            self.unlisted_values = self.unlisted_values.saturating_add(1);
         }
     }
 
@@ -356,12 +375,15 @@ impl Dropped {
                 self.nodes
             ));
         }
-        if !self.values.is_empty() {
+        if !self.values.is_empty() || self.unlisted_values > 0 {
             let mut named = self.values.iter().take(MAX_NAMED).map(|v| diagnostic_name(v)).collect::<Vec<_>>().join(", ");
-            if self.values.len() > MAX_NAMED {
+            if self.values.len() > MAX_NAMED || self.unlisted_values > 0 {
                 named.push_str(", …");
             }
-            parts.push(format!("{} value(s) not taken (no such widget, or not a value it holds): {named}", self.values.len()));
+            parts.push(format!(
+                "{} value(s) not taken (no such widget, or not a value it holds): {named}",
+                self.values.len().saturating_add(self.unlisted_values)
+            ));
         }
         (!parts.is_empty()).then(|| parts.join("; "))
     }
@@ -624,11 +646,15 @@ impl PanelState {
     /// Reports refused and adjusted values after [`Self::set_values`], comparing whole numbers
     /// numerically so an integral JSON float is not a changed value.
     pub fn value_report(&self, decl: &PanelDecl, values: &Value, set: &[String]) -> Dropped {
-        let mut dropped = Dropped { values: not_taken(values, set), ..Default::default() };
+        let mut dropped = Dropped::default();
         let Some(given) = values.as_object() else {
             dropped.malformed = usize::from(!values.is_null());
             return dropped;
         };
+        let accepted: HashSet<&str> = set.iter().map(String::as_str).collect();
+        for id in given.keys().filter(|id| !accepted.contains(id.as_str())) {
+            dropped.rejected_value(id);
+        }
         for id in set {
             let (Some(item), Some(input), Some(kept)) = (decl.item(id), given.get(id), self.values.get(id)) else { continue };
             let changed = match item.kind.as_str() {
@@ -666,6 +692,9 @@ impl PanelState {
         let empty = Map::new();
         let items = update.get("items").and_then(Value::as_object).unwrap_or(&empty);
         for (id, given) in items {
+            if given.is_null() {
+                continue;
+            }
             let Some(item) = decl.items.iter().find(|item| item.key() == id) else {
                 dropped.field(id.clone());
                 continue;
@@ -689,6 +718,9 @@ impl PanelState {
         for d in &decl.items {
             let id = d.key();
             let (Some(u), Some(st)) = (items.get(id), self.items.get_mut(id)) else { continue };
+            if u.is_null() {
+                continue;
+            }
             if !u.is_object() {
                 dropped.field(id.to_string());
                 continue;
@@ -787,6 +819,7 @@ impl PanelState {
             let set = self.set_values(decl, values);
             let report = self.value_report(decl, values, &set);
             dropped.values = report.values;
+            dropped.unlisted_values = report.unlisted_values;
             dropped.adjusted = report.adjusted;
             dropped.malformed += report.malformed;
         }
