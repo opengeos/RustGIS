@@ -698,6 +698,7 @@ mod tests {
                 left_out: Vec::new(),
                 made: std::sync::Mutex::new(web_time::Instant::now()),
                 waiting: false,
+                retry: false,
             })
         };
         assert!(meshes(&resolved(serde_json::json!({"fill-pattern": "dots"})), "s", &[], 3, None).1);
@@ -728,6 +729,7 @@ mod tests {
             left_out: Vec::new(),
             made: std::sync::Mutex::new(web_time::Instant::now()),
             waiting: false,
+            retry: false,
         });
         let at = Extent::new(0.0, 0.0, 1.0, 1.0);
         let tiles =
