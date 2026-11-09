@@ -353,8 +353,10 @@ buttons, trees, dropdowns, date pickers and range sliders bound to its commands.
     - `button`: runs its `command`; its `label` is the command's unless given.
     - `choice`: a dropdown. Its `options` (`[{"id": "dswx-hls", "label": "DSWx-HLS"}]`, at most
       1,000, each `id` unique) come from `plugin.json` or the plugin; `default` is one of their
-      ids. Its value is the chosen option's id, or `null`. Labels declared in `plugin.json` are
-      translated with its `i18n`; the plugin words the ones it sends.
+      ids. Its value is the chosen option's id, or `null`. An option whose id and label are
+      those of one declared in `plugin.json` shows its label translated with its `i18n` (whether
+      the declaration or the plugin's answer gave it); any other label is shown as the plugin
+      words it. Only the first 1,000 options given are looked at.
     - `date`: a box for a date written `YYYY-MM-DD`, with a calendar button beside it. `default`
       is a date. Its value is the date, or `null`. A date typed runs the command when it is
       confirmed (Enter, or leaving the box); one that isn't a real date is put back.

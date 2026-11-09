@@ -727,6 +727,10 @@ fn range(app: &mut RustGisApp, ui: &mut Ui, pid: &str, item: &PanelItemDecl, sta
             app.ui.plugin_panel.range_drag = None;
             done.get_or_insert((lo, hi));
         }
+        // A step taken while a handle is held (a screen reader's) ends the drag with it.
+        if done.is_some() {
+            app.ui.plugin_panel.range_drag = None;
+        }
     });
     ui.horizontal(|ui| {
         let small = |s: String| RichText::new(s).size(10.5).color(t.text_dim);

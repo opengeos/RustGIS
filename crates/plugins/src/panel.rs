@@ -256,12 +256,12 @@ pub fn days_in_month(y: i32, m: u32) -> Option<u32> {
 
 /// A dropdown's options in `v` (`[{"id", "label"?}]`, at most [`MAX_CHOICES`]): an option without
 /// an id, with one taken already or too long, or that isn't an object, is left out. A label
-/// defaults to the id and is kept to one line. Options past the first [`MAX_CHOICES`] kept are
-/// not looked at.
+/// defaults to the id and is kept to one line. Only the first [`MAX_CHOICES`] entries are looked
+/// at, those left out among them included.
 fn choice_options(v: &[Value]) -> Vec<TreeNode> {
     let (mut left, mut seen) = (MAX_CHOICES, HashSet::new());
     let mut nodes = Vec::new();
-    for o in v.iter().filter(|o| o.is_object()) {
+    for o in v.iter().take(MAX_CHOICES).filter(|o| o.is_object()) {
         if left == 0 {
             break;
         }
