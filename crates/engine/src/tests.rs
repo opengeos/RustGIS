@@ -9894,7 +9894,11 @@ fn plugin_panels_keep_their_state_between_calls() {
     let got = s.run("plugin:eng-panel/h", &json!({})).unwrap();
     assert_eq!(got, json!({"hello": "world"}));
     let got = s.run("plugin:eng-panel/q", &json!({})).unwrap();
-    assert_eq!(got["panel"], json!({"values": {"local": true, "release": 12, "span": [2, 8]}, "changed": []}), "kept within the slider's ends");
+    assert_eq!(
+        got["panel"],
+        json!({"values": {"local": true, "release": 12, "span": [2, 8]}, "changed": []}),
+        "kept within the slider's ends"
+    );
     // A failed command leaves the values as they were.
     assert!(s.run("plugin:eng-panel/e", &json!({"panel": {"release": 1}})).is_err());
     assert_eq!(s.plugin_panels["eng-panel"].slider("release"), 12);
