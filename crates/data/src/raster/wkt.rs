@@ -284,33 +284,39 @@ pub fn read_wkt(text: &str) -> Result<(Crs, Option<String>), String> {
 /// The file's declared EPSG method differs from the formula used for compatibility with PROJ.
 /// A known CRS authority can bypass reading its definition, but must still report that choice.
 pub fn projection_compatibility_note(text: &str, crs: Crs) -> Option<&'static str> {
-    if !uses_eqc(crs) {
-        return None;
-    }
+    eqc_semi_major(crs)?;
     projection_note(&wkt1(parse(text).ok()?, 0).ok()?, crs)
 }
 
-/// Whether the chosen system actually uses the PROJ-compatible equidistant cylindrical formula.
-fn uses_eqc(crs: Crs) -> bool {
+/// The semi-major axis used by the resolved equidistant cylindrical projection.
+fn eqc_semi_major(crs: Crs) -> Option<f64> {
     let custom = crs.custom_def();
     let proj4 = match crs {
         Crs::Epsg(code) => epsg_proj4(code),
         Crs::Custom(_) => custom.as_ref().map(|d| d.proj4.as_str()),
         _ => None,
     };
-    proj4.is_some_and(|p| p.split_whitespace().any(|p| p == "+proj=eqc"))
+    let proj4 = proj4.filter(|p| p.split_whitespace().any(|p| p == "+proj=eqc"))?;
+    proj4rs::Proj::from_proj_string(proj4).ok().map(|proj| proj.ellipse_parameters().0)
 }
 
 /// Method 1028 is ellipsoidal, unlike the legacy PROJ 9.7.1 `eqc` formula; a sphere has no discrepancy.
 fn projection_note(root: &Node, crs: Crs) -> Option<&'static str> {
     let method = root.child("PROJECTION")?.child("AUTHORITY")?;
-    let rf = root.child("GEOGCS")?.child("DATUM")?.child("SPHEROID")?.num(1)?;
-    (method.title().eq_ignore_ascii_case("EPSG")
-        && authority_code(method) == Some(1028)
-        && rf.is_finite()
+    if !method.title().eq_ignore_ascii_case("EPSG") || authority_code(method) != Some(1028) {
+        return None;
+    }
+    let spheroid = root.child("GEOGCS")?.child("DATUM")?.child("SPHEROID")?;
+    let resolved_axis = eqc_semi_major(crs)?;
+    if spheroid.num(0).is_some_and(|axis| (axis - resolved_axis).abs() > resolved_axis.abs() * 1e-12) {
+        return Some(
+            "the equidistant cylindrical WKT semi-major axis differs from the resolved CRS; RustGIS uses the resolved CRS semi-major axis, so coordinates may differ from the declared spheroid",
+        );
+    }
+    let rf = spheroid.num(1)?;
+    (rf.is_finite()
         && rf > 0.0
-        && rf.recip() > 1e-12
-        && uses_eqc(crs))
+        && rf.recip() > 1e-12)
     .then_some("the WKT method is interpreted as EPSG method 1028 (ellipsoidal); RustGIS uses the legacy PROJ/GDAL spherical equidistant cylindrical formula (PROJ 9.7.1 compatibility), which differs from the ellipsoidal formula")
 }
 
@@ -2039,6 +2045,15 @@ mod tests {
         assert_ne!(wkt, near_sphere);
         assert!(read_wkt(&near_sphere).unwrap().1.is_none());
         assert!(read_wkt(wkt).unwrap().1.unwrap().contains("differs from the ellipsoidal formula"));
+    }
+
+    #[test]
+    fn near_spherical_eqc_with_a_resolved_radius_mismatch_is_reported() {
+        let rows = corpus();
+        let wkt = rows.iter().find(|r| r.0 == "EPSG:4087").unwrap().2;
+        let mismatched = wkt.replace("298.257223563", "10000000000000").replace("6378137", "6371000");
+        let (_, notice) = read_wkt(&mismatched).unwrap();
+        assert!(notice.is_some_and(|notice| notice.contains("semi-major axis")));
     }
 
     #[test]
