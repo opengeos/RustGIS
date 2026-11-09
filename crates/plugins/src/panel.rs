@@ -233,8 +233,7 @@ fn pair(v: &Value) -> Option<(i64, i64)> {
 /// A date written `YYYY-MM-DD` (years 1 to 9999), as (year, month, day); `None` when it isn't a
 /// real date.
 pub fn date(s: &str) -> Option<(i32, u32, u32)> {
-    let b = s.as_bytes();
-    if b.len() != 10 || b[4] != b'-' || b[7] != b'-' {
+    if s.len() != 10 || s.get(4..5) != Some("-") || s.get(7..8) != Some("-") {
         return None;
     }
     let num = |r: std::ops::Range<usize>| s.get(r).filter(|t| t.bytes().all(|c| c.is_ascii_digit()))?.parse::<u32>().ok();
@@ -257,12 +256,20 @@ pub fn days_in_month(y: i32, m: u32) -> Option<u32> {
 
 /// A dropdown's options in `v` (`[{"id", "label"?}]`, at most [`MAX_CHOICES`]): an option without
 /// an id, with one taken already or too long, or that isn't an object, is left out. A label
-/// defaults to the id and is kept to one line.
+/// defaults to the id and is kept to one line. Options past the first [`MAX_CHOICES`] kept are
+/// not looked at.
 fn choice_options(v: &[Value]) -> Vec<TreeNode> {
-    let mut left = MAX_CHOICES;
-    let flat: Vec<Value> =
-        v.iter().map(|o| if o.is_object() { json!({"id": o.get("id"), "label": o.get("label")}) } else { Value::Null }).collect();
-    tree_nodes(&flat, MAX_TREE_DEPTH, &mut left, &mut HashSet::new())
+    let (mut left, mut seen) = (MAX_CHOICES, HashSet::new());
+    let mut nodes = Vec::new();
+    for o in v.iter().filter(|o| o.is_object()) {
+        if left == 0 {
+            break;
+        }
+        // One at a time, without its children: a dropdown is flat.
+        let flat = [json!({"id": o.get("id"), "label": o.get("label")})];
+        nodes.extend(tree_nodes(&flat, MAX_TREE_DEPTH, &mut left, &mut seen));
+    }
+    nodes
 }
 
 /// What the plugin last said about one widget.

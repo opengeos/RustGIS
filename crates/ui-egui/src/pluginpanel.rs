@@ -25,11 +25,14 @@ pub struct State {
     pub plugin: Option<String>,
     /// A slider being dragged: plugin, widget and the value it shows (not yet sent).
     dragging: Option<(String, String, i64)>,
-    /// A range's handle being dragged: plugin, widget, which handle (0 low, 1 high) and the
-    /// values it shows (not yet sent).
-    range_drag: Option<(String, String, usize, i64, i64)>,
-    /// What each date box holds while it is being typed in, by widget id.
+    /// A range being dragged: plugin, widget and the values it shows (not yet sent).
+    range_drag: Option<(String, String, i64, i64)>,
+    /// What each date box holds while it is being typed in, by widget id: kept only while the box
+    /// shows, so a date the plugin sets since shows instead.
     date_text: HashMap<String, String>,
+    /// The frame the pane was last drawn on: one hidden in between drops what was being typed or
+    /// dragged in it.
+    drawn: u64,
     /// The month each date's calendar shows (year, month), by widget id.
     calendar: HashMap<String, (i32, u32)>,
     /// Each tree's open nodes, and what its search box holds, by widget id.
@@ -128,6 +131,17 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     ui.separator();
     ui.add_space(4.0);
     let items: Vec<&PanelItemDecl> = decl.items.iter().filter(|d| state.items.get(d.key()).is_none_or(|s| s.visible)).collect();
+    // What was being typed or dragged in a pane, or a widget, out of sight since is let go: the
+    // box would otherwise show the old text over what the plugin set meanwhile.
+    let frame = ui.ctx().cumulative_frame_nr();
+    let pane = &mut app.ui.plugin_panel;
+    if pane.drawn.saturating_add(1) < frame {
+        pane.date_text.clear();
+        pane.dragging = None;
+        pane.range_drag = None;
+    }
+    pane.drawn = frame;
+    pane.date_text.retain(|k, _| items.iter().any(|d| d.kind == "date" && d.key() == k && enabled(d, &state)));
     let mut i = 0;
     while let Some(item) = items.get(i).copied() {
         // Buttons side by side, wrapping, as many as follow each other.
@@ -493,7 +507,15 @@ fn choice(app: &mut RustGisApp, ui: &mut Ui, pid: &str, item: &PanelItemDecl, st
         ui.label(RichText::new(&label).size(11.0).color(t.text_dim));
     }
     let chosen = state.chosen(id);
-    let shown = chosen.and_then(|c| st.nodes.iter().find(|n| n.id == c)).map_or_else(|| tl!("Choose…").to_string(), |n| n.label.clone());
+    // An option declared in plugin.json shows its label in the interface language; one the plugin
+    // sent is worded by the plugin already.
+    let named = |n: &TreeNode| {
+        let declared = item.options.iter().any(|o| {
+            o.get("id").and_then(Value::as_str) == Some(n.id.as_str()) && o.get("label").and_then(Value::as_str) == Some(n.label.as_str())
+        });
+        if declared { tr(&n.label) } else { n.label.clone() }
+    };
+    let shown = chosen.and_then(|c| st.nodes.iter().find(|n| n.id == c)).map_or_else(|| tl!("Choose…").to_string(), named);
     let on = enabled(item, state) && !st.nodes.is_empty();
     let mut pick = None;
     let width = ui.available_width();
@@ -501,7 +523,7 @@ fn choice(app: &mut RustGisApp, ui: &mut Ui, pid: &str, item: &PanelItemDecl, st
         let resp =
             egui::ComboBox::from_id_salt(("plugin-choice", pid, id)).selected_text(&shown).width(width).height(320.0).show_ui(ui, |ui| {
                 for n in st.nodes.iter() {
-                    if ui.selectable_label(chosen == Some(n.id.as_str()), &n.label).clicked() && chosen != Some(n.id.as_str()) {
+                    if ui.selectable_label(chosen == Some(n.id.as_str()), named(n)).clicked() && chosen != Some(n.id.as_str()) {
                         pick = Some(n.id.clone());
                     }
                 }
@@ -569,44 +591,46 @@ fn date(app: &mut RustGisApp, ui: &mut Ui, pid: &str, item: &PanelItemDecl, stat
         let opening = parse(&stored).map_or_else(today, |(y, m, _)| (y, m));
         let (y, m) = if btn.clicked() { opening } else { app.ui.plugin_panel.calendar.get(id).copied().unwrap_or(opening) };
         let mut shown = (y, m);
-        let open =
-            egui::Popup::from_toggle_button_response(&btn).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
-                ui.horizontal(|ui| {
-                    if step_button(ui, true, true, tl!("Previous month"), t).clicked() {
-                        shown = month_step(y, m, -1);
-                    }
-                    ui.label(RichText::new(format!("{y:04}-{m:02}")).font(semibold(13.0)));
-                    if step_button(ui, true, false, tl!("Next month"), t).clicked() {
-                        shown = month_step(y, m, 1);
-                    }
-                });
-                let picked_day = parse(&stored).filter(|(sy, sm, _)| (*sy, *sm) == (y, m)).map(|d| d.2);
-                egui::Grid::new(("plugin-calendar", pid, id)).spacing(vec2(2.0, 2.0)).show(ui, |ui| {
-                    for w in [tl!("Mo"), tl!("Tu"), tl!("We"), tl!("Th"), tl!("Fr"), tl!("Sa"), tl!("Su")] {
-                        ui.label(RichText::new(w).size(10.5).color(t.text_dim));
-                    }
-                    ui.end_row();
-                    let first = weekday(y, m, 1);
-                    for _ in 0..first {
-                        ui.label("");
-                    }
-                    let days = days_in_month(y, m).unwrap_or(30);
-                    for d in 1..=days {
-                        let resp = ui.add(egui::Button::selectable(picked_day == Some(d), format!("{d}")).min_size(vec2(26.0, 22.0)));
-                        if resp.clicked() {
-                            picked = Some(json!(format!("{y:04}-{m:02}-{d:02}")));
-                            ui.close();
-                        }
-                        if (first + d).is_multiple_of(7) {
-                            ui.end_row();
-                        }
-                    }
-                });
-                if !stored.is_empty() && ui.button(tl!("Clear")).clicked() {
-                    picked = Some(Value::Null);
-                    ui.close();
+        // A date the plugin disables closes its calendar, so no day can be picked in it.
+        let popup = egui::Popup::from_toggle_button_response(&btn);
+        let popup = if on { popup } else { popup.open_memory(egui::SetOpenCommand::Bool(false)) };
+        let open = popup.close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
+            ui.horizontal(|ui| {
+                if step_button(ui, true, true, tl!("Previous month"), t).clicked() {
+                    shown = month_step(y, m, -1);
+                }
+                ui.label(RichText::new(format!("{y:04}-{m:02}")).font(semibold(13.0)));
+                if step_button(ui, true, false, tl!("Next month"), t).clicked() {
+                    shown = month_step(y, m, 1);
                 }
             });
+            let picked_day = parse(&stored).filter(|(sy, sm, _)| (*sy, *sm) == (y, m)).map(|d| d.2);
+            egui::Grid::new(("plugin-calendar", pid, id)).spacing(vec2(2.0, 2.0)).show(ui, |ui| {
+                for w in [tl!("Mo"), tl!("Tu"), tl!("We"), tl!("Th"), tl!("Fr"), tl!("Sa"), tl!("Su")] {
+                    ui.label(RichText::new(w).size(10.5).color(t.text_dim));
+                }
+                ui.end_row();
+                let first = weekday(y, m, 1);
+                for _ in 0..first {
+                    ui.label("");
+                }
+                let days = days_in_month(y, m).unwrap_or(30);
+                for d in 1..=days {
+                    let resp = ui.add(egui::Button::selectable(picked_day == Some(d), format!("{d}")).min_size(vec2(26.0, 22.0)));
+                    if resp.clicked() {
+                        picked = Some(json!(format!("{y:04}-{m:02}-{d:02}")));
+                        ui.close();
+                    }
+                    if (first + d).is_multiple_of(7) {
+                        ui.end_row();
+                    }
+                }
+            });
+            if !stored.is_empty() && ui.button(tl!("Clear")).clicked() {
+                picked = Some(Value::Null);
+                ui.close();
+            }
+        });
         if open.is_some() {
             app.ui.plugin_panel.calendar.insert(id.to_string(), shown);
         } else {
@@ -634,24 +658,23 @@ fn today() -> (i32, u32) {
     (y, m)
 }
 
-/// The handle a press at `x` takes: the nearer one, and when both sit together the one that can
-/// move that way (the high one to the right of them, the low one to the left).
-fn nearer_handle(x: f32, lo_x: f32, hi_x: f32) -> usize {
-    let (dl, dh) = ((x - lo_x).abs(), (x - hi_x).abs());
-    if (dl - dh).abs() < 0.5 { usize::from(x > hi_x) } else { usize::from(dh < dl) }
-}
-
 /// A range: a slider with two handles, low and high, on one track. It runs its command when a
-/// handle is let go, or both are stepped by ‹ and ›.
+/// handle is let go or moved with the keys (each handle takes the focus), or both are stepped by
+/// ‹ and ›.
 fn range(app: &mut RustGisApp, ui: &mut Ui, pid: &str, item: &PanelItemDecl, state: &PanelState, tr: &dyn Fn(&str) -> String, t: &Tokens) {
     let id = item.key();
     let Some(st) = state.items.get(id) else { return };
     let (min, max) = (st.min, st.max.max(st.min));
     let stored = state.range(id);
-    let dragging = app.ui.plugin_panel.range_drag.as_ref().filter(|d| d.0 == pid && d.1 == id).map(|d| (d.2, d.3, d.4));
-    let (mut lo, mut hi) = dragging.map_or(stored, |d| (d.1, d.2));
-    (lo, hi) = (lo.clamp(min, max), hi.clamp(min, max));
     let on = enabled(item, state) && max > min;
+    let mine = |d: &(String, String, i64, i64)| d.0 == pid && d.1 == id;
+    // A range the plugin disables while it is dragged lets the drag go, running nothing.
+    if !on && app.ui.plugin_panel.range_drag.as_ref().is_some_and(mine) {
+        app.ui.plugin_panel.range_drag = None;
+    }
+    let dragging = app.ui.plugin_panel.range_drag.as_ref().filter(|d| mine(d)).map(|d| (d.2, d.3));
+    let (mut lo, mut hi) = dragging.unwrap_or(stored);
+    (lo, hi) = (lo.clamp(min, max), hi.clamp(min, max).max(lo.clamp(min, max)));
     let label = label_of(item, state, tr);
     ui.horizontal(|ui| {
         ui.label(RichText::new(&label).size(11.0).color(t.text_dim));
@@ -665,44 +688,24 @@ fn range(app: &mut RustGisApp, ui: &mut Ui, pid: &str, item: &PanelItemDecl, sta
     ui.horizontal(|ui| {
         let gap = ui.spacing().item_spacing.x;
         let buttons = if item.steps { 2.0 * (26.0 + gap) } else { 0.0 };
+        let room = ui.available_width();
         if item.steps && step_button(ui, on && lo > min, true, tl!("Step back"), t).clicked() {
             done = Some((lo - 1, hi - 1));
         }
-        let width = (ui.available_width() - buttons).max(60.0);
-        let (rect, resp) = ui.allocate_exact_size(vec2(width, 26.0), if on { Sense::click_and_drag() } else { Sense::hover() });
+        ui.spacing_mut().slider_width = (room - buttons - 4.0).max(60.0);
+        let resp = ui.add_enabled(on, egui::RangeSlider::new(&mut lo, &mut hi, min..=max).show_value(false));
         let resp = if item.help.is_empty() { resp } else { resp.on_hover_text(tr(&item.help)) };
         resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Slider, on, &label));
-        let r = 7.0;
-        let (x0, x1) = (rect.left() + r, rect.right() - r);
-        let span = (max - min).max(1) as f32;
-        let to_x = |v: i64| x0 + (v - min) as f32 / span * (x1 - x0);
-        let to_v = |x: f32| min + (((x - x0) / (x1 - x0)).clamp(0.0, 1.0) * span).round() as i64;
-        if let Some(p) = resp.interact_pointer_pos() {
-            let handle = dragging.map_or_else(|| nearer_handle(p.x, to_x(lo), to_x(hi)), |d| d.0);
-            let v = to_v(p.x);
-            if handle == 0 {
-                lo = v.min(hi)
-            } else {
-                hi = v.max(lo)
-            }
-            if resp.dragged() || resp.is_pointer_button_down_on() {
-                app.ui.plugin_panel.range_drag = Some((pid.to_string(), id.to_string(), handle, lo, hi));
-            }
-        }
-        if !resp.is_pointer_button_down_on() && (dragging.is_some() || resp.clicked()) {
-            app.ui.plugin_panel.range_drag = None;
-            done.get_or_insert((lo, hi));
-        }
-        // The track, the span between the handles, and the handles.
-        let y = rect.center().y;
-        let ink = if on { t.accent } else { t.text_disabled };
-        ui.painter().line_segment([pos2(x0, y), pos2(x1, y)], Stroke::new(4.0, t.border));
-        ui.painter().line_segment([pos2(to_x(lo), y), pos2(to_x(hi), y)], Stroke::new(4.0, ink));
-        for v in [lo, hi] {
-            ui.painter().circle(pos2(to_x(v), y), r, t.input, Stroke::new(2.0, ink));
-        }
         if item.steps && step_button(ui, on && hi < max, false, tl!("Step forward"), t).clicked() {
             done = Some((lo + 1, hi + 1));
+        }
+        if resp.dragged() || resp.is_pointer_button_down_on() {
+            app.ui.plugin_panel.range_drag = Some((pid.to_string(), id.to_string(), lo, hi));
+        } else if on && (dragging.is_some() || (lo, hi) != stored) {
+            // Let go, clicked or moved with the keys: now it runs (a step button clicked on the
+            // same frame wins).
+            app.ui.plugin_panel.range_drag = None;
+            done.get_or_insert((lo, hi));
         }
     });
     ui.horizontal(|ui| {
@@ -740,8 +743,6 @@ mod tests {
             .collect()
     }
 
-    /// A tree shows its open branches' children; a search keeps what matches every word (case and
-    /// accents aside) with the branches above it held open, and a branch found opens as ever.
     #[test]
     fn calendar_arithmetic() {
         // 2023-04-01 was a Saturday, 2024-02-29 a Thursday, 2000-01-01 a Saturday.
@@ -754,13 +755,10 @@ mod tests {
         assert_eq!(month_step(1, 1, -1), (1, 1));
         let (y, m) = today();
         assert!(y >= 2024 && (1..=12).contains(&m));
-        // The nearer handle; when they sit together, the one that can move that way.
-        assert_eq!(nearer_handle(10.0, 0.0, 100.0), 0);
-        assert_eq!(nearer_handle(90.0, 0.0, 100.0), 1);
-        assert_eq!(nearer_handle(60.0, 50.0, 50.0), 1);
-        assert_eq!(nearer_handle(40.0, 50.0, 50.0), 0);
     }
 
+    /// A tree shows its open branches' children; a search keeps what matches every word (case and
+    /// accents aside) with the branches above it held open, and a branch found opens as ever.
     #[test]
     fn tree_rows_follow_open_branches_and_searches() {
         let tree = vec![

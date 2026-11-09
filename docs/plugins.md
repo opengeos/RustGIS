@@ -353,13 +353,15 @@ buttons, trees, dropdowns, date pickers and range sliders bound to its commands.
     - `button`: runs its `command`; its `label` is the command's unless given.
     - `choice`: a dropdown. Its `options` (`[{"id": "dswx-hls", "label": "DSWx-HLS"}]`, at most
       1,000, each `id` unique) come from `plugin.json` or the plugin; `default` is one of their
-      ids. Its value is the chosen option's id, or `null`.
+      ids. Its value is the chosen option's id, or `null`. Labels declared in `plugin.json` are
+      translated with its `i18n`; the plugin words the ones it sends.
     - `date`: a box for a date written `YYYY-MM-DD`, with a calendar button beside it. `default`
       is a date. Its value is the date, or `null`. A date typed runs the command when it is
       confirmed (Enter, or leaving the box); one that isn't a real date is put back.
     - `range`: a slider with two handles, low and high, over whole numbers from `min` to `max`,
-      as a slider's (with its `labels` and `steps`, which move both handles). `default` is
-      `[low, high]` (both ends unless given). Its value is `[low, high]`, low first.
+      as a slider's (with its `labels` and `steps`, which move both handles). Each handle also
+      takes the focus and moves with the arrow keys. `default` is `[low, high]` (both ends unless
+      given). Its value is `[low, high]`, low first.
     - `tree`: nodes the plugin gives (themes, their datasets, say), each branch opened or closed
       with its triangle or a double click. `search: true` adds a box above it that keeps the
       nodes whose label holds every word typed (case and accents aside), with the branches

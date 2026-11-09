@@ -643,7 +643,7 @@ fn plugin_tab_total_item_limit_counts_menus_and_entries_across_groups() {
 fn plugin_panels_are_checked() {
     let ok = Manifest::parse(&testing::panel_manifest("paneled")).unwrap();
     let panel = ok.panel.as_ref().unwrap();
-    assert_eq!(panel.items.len(), 7);
+    assert_eq!(panel.items.len(), 8);
     // A button's id is its command's unless it has one; a tab's `panel` opens the panel.
     assert!(panel.item("q-newer").is_none() && panel.item("newer").is_some_and(|i| i.command == "q-newer"));
     assert!(matches!(ok.entry("panel"), Some(crate::Entry::Panel(_))));
@@ -730,7 +730,8 @@ fn plugin_panel_state_round_trips() {
     let p = crate::load(pkg, "test").unwrap();
     let decl = p.manifest.panel.clone().unwrap();
     let mut st = PanelState::new(&decl);
-    assert_eq!(st.values, [("local".to_string(), json!(false)), ("release".to_string(), json!(0))].into_iter().collect());
+    let defaults = [("local", json!(false)), ("release", json!(0)), ("span", json!([2, 8]))];
+    assert_eq!(st.values, defaults.into_iter().map(|(k, v)| (k.to_string(), v)).collect());
     assert_eq!(st.items["selected"].text, "None yet");
     // The state command answers the panel's state; the host takes it in.
     let cmd = crate::command("plugin:unit-panel/p").unwrap();
@@ -748,7 +749,7 @@ fn plugin_panel_state_round_trips() {
     assert_eq!(changed, ["local", "release"]);
     let echo = crate::command("plugin:unit-panel/q").unwrap();
     let got = crate::run_command_with_panel(&echo, &mut Recorder::default(), &json!({"a": 1}), Some(st.request(&changed))).unwrap();
-    assert_eq!(got["panel"], json!({"values": {"local": true, "release": 3}, "changed": ["local", "release"]}));
+    assert_eq!(got["panel"], json!({"values": {"local": true, "release": 3, "span": [2, 8]}, "changed": ["local", "release"]}));
     assert_eq!(got["params"], json!({"a": 1}));
     assert_eq!(got["kind"], "command");
     // Without a panel, no `panel` in the request.
