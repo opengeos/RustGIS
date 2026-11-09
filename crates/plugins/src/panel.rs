@@ -274,6 +274,12 @@ fn choice_options_reported(v: &[Value], dropped: &mut Dropped) -> Vec<TreeNode> 
         if left == 0 {
             break;
         }
+        if let Some(fields) = o.as_object() {
+            let id = o.get("id").and_then(Value::as_str).unwrap_or("option");
+            for key in fields.keys().filter(|key| !matches!(key.as_str(), "id" | "label")) {
+                dropped.fields.push(format!("{id}.{key}"));
+            }
+        }
         // One at a time, without its children: a dropdown is flat.
         let flat = [json!({"id": o.get("id"), "label": o.get("label")})];
         nodes.extend(tree_nodes(&flat, MAX_TREE_DEPTH, &mut left, &mut seen, dropped));
@@ -416,6 +422,14 @@ fn tree_nodes(v: &[Value], depth: usize, left: &mut usize, seen: &mut HashSet<St
             continue;
         }
         *left -= 1;
+        if let Some(fields) = n.as_object() {
+            for key in fields.keys().filter(|key| !matches!(key.as_str(), "id" | "label" | "count" | "children")) {
+                dropped.fields.push(format!("{id}.{key}"));
+            }
+        }
+        if n.get("label").and_then(Value::as_str).is_some_and(|label| label.chars().any(char::is_control)) {
+            dropped.clipped.push(format!("{id}.label (control characters replaced)"));
+        }
         match n.get("label") {
             Some(Value::String(label)) if label.chars().count() > MAX_STATE_LABEL => dropped.labels += 1,
             Some(label) if !label.is_null() && !label.is_string() => dropped.fields.push(format!("{id}.label")),
@@ -588,7 +602,7 @@ impl PanelState {
     pub fn value_report(&self, decl: &PanelDecl, values: &Value, set: &[String]) -> Dropped {
         let mut dropped = Dropped { values: not_taken(values, set), ..Default::default() };
         let Some(given) = values.as_object() else {
-            dropped.malformed = 1;
+            dropped.malformed = usize::from(!values.is_null());
             return dropped;
         };
         for id in set {
@@ -614,10 +628,10 @@ impl PanelState {
     pub fn apply(&mut self, decl: &PanelDecl, update: &Value) -> Dropped {
         let mut dropped = Dropped::default();
         if !update.is_object() {
-            dropped.malformed = 1;
+            dropped.malformed = usize::from(!update.is_null());
             return dropped;
         }
-        if update.get("items").is_some_and(|items| !items.is_object()) {
+        if update.get("items").is_some_and(|items| !items.is_null() && !items.is_object()) {
             dropped.malformed += 1;
         }
         let empty = Map::new();

@@ -1880,3 +1880,28 @@ fn panel_dates_are_real_dates() {
         assert_eq!(date(bad), None, "{bad}");
     }
 }
+
+#[test]
+fn panel_option_fields_and_label_sanitization_are_reported() {
+    let decl = choice_date_range_panel();
+    let mut state = crate::PanelState::new(&decl);
+    let report =
+        state.apply(&decl, &json!({"items":{"product":{"options":[{"id":"a","label":"A\nB","count":4,"children":[],"lable":"typo"}]}}}));
+    assert_eq!(state.items["product"].nodes[0].label, "A B");
+    for field in ["a.count", "a.children", "a.lable"] {
+        assert!(report.fields.iter().any(|f| f == field), "{report:?}");
+    }
+    assert_eq!(report.clipped, ["a.label (control characters replaced)"]);
+    let report = state.apply(&decl, &json!({"items":{"product":{"options":[{"id":"a","label":"A B"}]}}}));
+    assert!(report.notice().is_none(), "{report:?}");
+}
+
+#[test]
+fn panel_null_optional_objects_are_quiet() {
+    let decl = choice_date_range_panel();
+    let mut state = crate::PanelState::new(&decl);
+    for update in [Value::Null, json!({"items":null}), json!({"values":null})] {
+        assert!(state.apply(&decl, &update).notice().is_none(), "{update}");
+    }
+    assert!(state.value_report(&decl, &Value::Null, &[]).notice().is_none());
+}
