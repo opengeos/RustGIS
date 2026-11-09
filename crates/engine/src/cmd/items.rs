@@ -475,6 +475,7 @@ fn import_maps(s: &mut Session, p: &Value) -> CmdResult {
         },
     };
     let mut names = Vec::new();
+    let first_map = s.project.maps.len();
     for mut m in maps.into_iter().take(MAX_IMPORTED_MAPS) {
         // A binding in a file is no authority to use a login here.
         crate::s3_connections::clear_bindings(m.addresses_mut());
@@ -485,12 +486,12 @@ fn import_maps(s: &mut Session, p: &Value) -> CmdResult {
             i += 1;
             m.name = format!("{base} ({i})");
         }
-        for notice in m.layers.iter().filter_map(super::design::display_area_message) {
-            s.notify(notice, false);
-        }
         names.push(m.name.clone());
         m.renew_instance_id();
         s.project.maps.push(m);
+    }
+    if let Some(message) = super::design::display_area_messages(s.project.maps.iter().skip(first_map).flat_map(|map| map.layers.iter())) {
+        s.notify(message, false);
     }
     // Repair what was read (rasters reopen, cameras clamp); the sources that read S3 wait for
     // the saved connection that is to read them.

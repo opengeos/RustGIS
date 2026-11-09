@@ -1005,7 +1005,18 @@ impl Renderer {
         if text.chars().count() > rustgis_data::query::MAX_LEN {
             return Err(format!("the expression is longer than {} characters", rustgis_data::query::MAX_LEN));
         }
-        let e = rustgis_data::query::parse(text, ds)?;
+        let e = rustgis_data::query::parse_fields(text, ds)?;
+        if rustgis_data::query::uses_area(&e)
+            && let Some(message) = rustgis_data::ambiguous_area_message(
+                ds.features
+                    .iter()
+                    .enumerate()
+                    .filter(|(row, _)| rows.get(*row).copied().unwrap_or(true))
+                    .filter_map(|(_, feature)| feature.geometry.as_ref()),
+            )
+        {
+            return Err(message);
+        }
         let env = rustgis_data::query::Env::default();
         // The first values by text, and while every value reads as a number, by number too: the
         // order is known only once every feature is classed (`rustgis_data::value::numeric_classes`).

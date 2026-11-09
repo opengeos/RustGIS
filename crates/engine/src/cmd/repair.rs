@@ -87,7 +87,7 @@ fn repair_source(s: &mut Session, p: &Value) -> CmdResult {
                     ));
                 }
                 // Classes by an expression that reads on the old fields must read on the new ones.
-                if let Some(e) = l.renderer.expression().filter(|e| rustgis_data::query::parse(e, &l.dataset).is_ok())
+                if let Some(e) = l.renderer.expression().filter(|e| rustgis_data::query::parse_fields(e, &l.dataset).is_ok())
                     && let Err(why) =
                         rustgis_data::query::parse(e, &rustgis_data::Dataset::new("", info.geometry_type, info.fields.clone()))
                 {

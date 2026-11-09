@@ -15855,6 +15855,141 @@ fn area_stored_expressions_keep_clean_rows_and_report_unavailable_values() {
     assert_eq!(layer.design.rules.len(), 1);
 }
 
+fn area_review_fixture() -> (Session, u32) {
+    use rustgis_data::{Coord, Dataset, Field, FieldType, Geometry, GeometryType, Value};
+    let c = Coord::new;
+    let mut data = Dataset::new("Area review", GeometryType::Polygon, vec![Field::new("n", FieldType::Double)]);
+    for (n, ring) in [
+        (1.0, vec![c(0.0, 0.0), c(1.0, 0.0), c(1.0, 1.0), c(0.0, 0.0)]),
+        (2.0, vec![c(-180.0, 90.0), c(180.0, 90.0), c(-90.0, -90.0), c(90.0, -80.0)]),
+    ] {
+        data.push(Some(Geometry::Polygon(vec![vec![ring]])), vec![Value::Float(n)]);
+    }
+    let mut session = Session::new(Project::default());
+    let id = session.map_mut().add_dataset(data);
+    (session, id)
+}
+
+#[test]
+fn area_review_classification_checks_only_kept_rows() {
+    use rustgis_map::{
+        color::Ramp,
+        symbology::{Renderer, Symbol},
+    };
+    let (mut session, id) = area_review_fixture();
+    let layer = session.map_mut().layer_mut(id).unwrap();
+    layer.definition_query = Some("n = 1".into());
+    let rows = layer.visible_rows();
+    let base = Symbol::default_for(layer.geometry_type(), 0);
+    assert!(Renderer::unique_by(&layer.dataset, &rows, "$area", Ramp::Harbour, base).is_ok());
+    assert!(Renderer::unique_by(&layer.dataset, &[], "$area", Ramp::Harbour, base).is_err());
+}
+
+#[test]
+fn area_review_project_notices_group_affected_layers() {
+    let (mut session, id) = area_review_fixture();
+    session.map_mut().layer_mut(id).unwrap().labels.default.by.text = Some("$area".into());
+    let mut copy = session.map().layer(id).unwrap().dataset.clone();
+    copy.name = "Second area".into();
+    let second = session.map_mut().add_dataset(copy);
+    session.map_mut().layer_mut(second).unwrap().labels.default.by.text = Some("$area".into());
+    let opened = Session::new(session.project.clone());
+    let notes: Vec<_> = opened.notices.iter().filter(|n| n.text.contains("area is ambiguous")).collect();
+    assert_eq!(notes.len(), 1, "{notes:?}");
+    assert!(notes[0].text.contains("2 ring(s) in 2 feature(s)") && notes[0].text.contains("2 layer(s)"));
+}
+
+#[test]
+fn area_review_project_info_retains_label_expression() {
+    let (mut session, id) = area_review_fixture();
+    session.map_mut().layer_mut(id).unwrap().labels.enabled = true;
+    session.map_mut().layer_mut(id).unwrap().labels.default.by.text = Some("$area".into());
+    let info = session.run("info.project", &json!({})).unwrap();
+    assert_eq!(info["layers"][0]["labels"], "$area", "{info}");
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn area_review_repair_checks_retained_classification_fields() {
+    use rustgis_map::{
+        color::Ramp,
+        symbology::{Renderer, Symbol},
+    };
+    let (mut session, id) = area_review_fixture();
+    let layer = session.map_mut().layer_mut(id).unwrap();
+    let mut metadata = layer.dataset.clone();
+    metadata.features.clear();
+    layer.renderer =
+        Renderer::unique_by(&metadata, &[], "$area + n", Ramp::Harbour, Symbol::default_for(layer.geometry_type(), 0)).unwrap();
+    let dir = std::env::temp_dir().join(format!("rustgis-area-repair-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let old = dir.join("old.fgb");
+    let new = dir.join("new.fgb");
+    std::fs::write(&old, rustgis_data::source::fgb::write(&layer.dataset).unwrap()).unwrap();
+    let handle = rustgis_data::source::open_path(&old, None).unwrap();
+    layer.source = Some(rustgis_map::source::SourceLayer::from_path(old.display().to_string(), None, handle));
+    let mut replacement = layer.dataset.clone();
+    replacement.fields.clear();
+    for feature in replacement.features.iter_mut() {
+        feature.attrs.clear();
+    }
+    std::fs::write(&new, rustgis_data::source::fgb::write(&replacement).unwrap()).unwrap();
+    let error = session.run("layer.repairSource", &json!({"layer":id,"path":new})).unwrap_err();
+    assert!(error.contains("symbology") && error.contains("n"), "{error}");
+    std::fs::remove_dir_all(dir).ok();
+}
+
+#[test]
+fn area_review_attribute_edits_keep_retained_display_expressions() {
+    let (mut session, id) = area_review_fixture();
+    session.map_mut().layer_mut(id).unwrap().definition_query = Some("$area > 0 AND n = 1".into());
+    session.run("edit.setValue", &json!({"layer":id,"row":1,"field":"n","value":3})).unwrap();
+    assert_eq!(session.map().layer(id).unwrap().visible_rows(), [true, false]);
+}
+
+#[test]
+fn area_review_archive_constraints_refuse_ambiguous_restore() {
+    use rustgis_map::design::{ArchiveEntry, AttributeRule, RuleKind};
+    let (mut session, id) = area_review_fixture();
+    let layer = session.map_mut().layer_mut(id).unwrap();
+    let mut bad = layer.dataset.features[1].clone();
+    let clean = layer.dataset.features[0].clone();
+    bad.id = clean.id;
+    layer.dataset.features.truncate(1);
+    layer.design.archive = Some(vec![ArchiveEntry { time: 10.0, id: clean.id, before: Some(bad), after: Some(clean.clone()) }]);
+    layer.design.rules.push(AttributeRule {
+        name: "area".into(),
+        kind: RuleKind::Constraint,
+        field: String::new(),
+        expression: "$area > 0".into(),
+    });
+    let error = session.run("data.archiveRestore", &json!({"layer":id,"time":0})).unwrap_err();
+    assert!(error.contains("area is ambiguous"), "{error}");
+    assert_eq!(session.map().layer(id).unwrap().dataset.features[0], clean);
+}
+
+#[test]
+fn area_review_streamed_display_reports_each_installed_window_once() {
+    use std::sync::Arc;
+    let (mut session, id) = area_review_fixture();
+    let layer = session.map_mut().layer_mut(id).unwrap();
+    let bytes = Arc::new(rustgis_data::source::fgb::write(&layer.dataset).unwrap());
+    let handle = rustgis_data::source::open_shared("area.fgb", bytes.clone(), None).unwrap();
+    layer.source = Some(rustgis_map::source::SourceLayer::from_bytes("area.fgb", bytes, None, handle));
+    layer.dataset.features.clear();
+    layer.labels.default.by.text = Some("$area".into());
+    let mark = session.notice_mark();
+    session.map_mut().sync_sources(&rustgis_geom::Extent::new(-180.0, -90.0, 180.0, 90.0), 1000.0, true);
+    session.notice_landed_rasters();
+    session.notice_landed_rasters();
+    let notices = session.notices_since(mark);
+    assert_eq!(
+        notices.iter().filter(|notice| notice.text.contains("1 ring(s) in 1 feature(s)") && notice.text.contains("decoded window")).count(),
+        1,
+        "{notices:?}"
+    );
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn area_service_refresh_retains_expressions_and_reports_unavailable_values() {

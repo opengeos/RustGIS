@@ -70,7 +70,7 @@ pub(super) fn read_mode(
     // (#1456): the source is walked instead, keeping up to the view's limit of the matches.
     // Half the budget holds them; their projection and display levels take the rest.
     let first = read(source)?;
-    check_areas(&expr, &first.0.features, &source.info().name)?;
+    check_areas(&expr, &first.0.features, &source.info().name, first.0.complete)?;
     if first.0.complete || !source.visits_chunks() || numbers_rows(&expr) {
         return Ok(first);
     }
@@ -164,11 +164,12 @@ fn read_filtered(source: &dyn FeatureSource, req: &Request, bytes: usize, mut sc
 }
 
 /// An expression parsed against source metadata still needs validation against decoded geometry.
-fn check_areas(expr: &Expr, features: &[rustgis_data::Feature], name: &str) -> Result<()> {
+fn check_areas(expr: &Expr, features: &[rustgis_data::Feature], name: &str, complete: bool) -> Result<()> {
     if rustgis_data::query::uses_area(expr)
         && let Some(message) = rustgis_data::ambiguous_area_message(features.iter().filter_map(|f| f.geometry.as_ref()))
     {
-        return Err(DataError::Format(format!("Definition query: {name}: {message}")));
+        let scope = if complete { String::new() } else { format!("; count covers the {} feature(s) read for this view", features.len()) };
+        return Err(DataError::Format(format!("Definition query: {name}: {message}{scope}")));
     }
     Ok(())
 }

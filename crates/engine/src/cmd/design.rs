@@ -55,12 +55,35 @@ fn has_area_display(l: &rustgis_map::Layer) -> bool {
 
 /// Explain unavailable areas in retained display expressions without discarding their text.
 pub(crate) fn display_area_message(l: &rustgis_map::Layer) -> Option<String> {
-    if !has_area_display(l) {
+    display_area_messages(std::iter::once(l))
+}
+
+/// Count unavailable values across affected layers in one notice, naming the read scope.
+pub(crate) fn display_area_messages<'a>(layers: impl Iterator<Item = &'a rustgis_map::Layer>) -> Option<String> {
+    let (mut rings, mut features, mut names, mut windowed) = (0usize, 0usize, Vec::new(), false);
+    for layer in layers.filter(|layer| has_area_display(layer)) {
+        let before = features;
+        for geometry in layer.dataset.features.iter().filter_map(|feature| feature.geometry.as_ref()) {
+            let count = geometry.ambiguous_area_rings();
+            if count > 0 {
+                rings += count;
+                features += 1;
+            }
+        }
+        if features > before {
+            names.push(layer.name.clone());
+            windowed |= layer.source.is_some();
+        }
+    }
+    if rings == 0 {
         return None;
     }
-    rustgis_data::ambiguous_area_message(l.dataset.features.iter().filter_map(|feature| feature.geometry.as_ref())).map(|message| {
-        format!("{}: {message}; area values for affected features are unavailable; saved display expressions are retained", l.dataset.name)
-    })
+    let scope = if windowed { "; counts cover loaded features, including decoded window(s) for streamed layers" } else { "" };
+    Some(format!(
+        "{} layer(s) ({}): area is ambiguous for {rings} ring(s) in {features} feature(s): a ring through both poles winds beyond one whole surface{scope}; area values for affected features are unavailable; saved display expressions are retained",
+        names.len(),
+        crate::names_said(&names)
+    ))
 }
 
 /// Editing is on and a feature layer is active.
@@ -163,13 +186,18 @@ pub(crate) fn apply_with(s: &mut Session, id: u32, changes: Vec<Change>, new_def
     let metadata = rustgis_data::Dataset::new(l.dataset.name.clone(), l.dataset.geometry_type, l.dataset.fields.clone());
     let uses_area = |text: &str| rustgis_data::query::parse(text, &metadata).is_ok_and(|expr| rustgis_data::query::uses_area(&expr));
     let display_area = has_area_display(l);
-    if (display_area
-        || l.design
-            .rules
-            .iter()
-            .any(|rule| (rule.kind == RuleKind::Constraint || l.dataset.field_index(&rule.field).is_some()) && uses_area(&rule.expression)))
-        && let Some(message) =
-            rustgis_data::ambiguous_area_message(rows.iter().filter_map(|&row| l.dataset.features.get(row)?.geometry.as_ref()))
+    let rule_area = l
+        .design
+        .rules
+        .iter()
+        .any(|rule| (rule.kind == RuleKind::Constraint || l.dataset.field_index(&rule.field).is_some()) && uses_area(&rule.expression));
+    if (display_area || rule_area)
+        && let Some(message) = rustgis_data::ambiguous_area_message(changes.iter().filter_map(|change| {
+            let feature = l.dataset.features.get(change.row?)?;
+            (rule_area || change.before.as_ref().is_none_or(|before| before.geometry != feature.geometry))
+                .then_some(feature.geometry.as_ref())
+                .flatten()
+        }))
     {
         return Err(format!("{}: {message}", l.dataset.name));
     }
@@ -1731,7 +1759,11 @@ fn archive_restore(s: &mut Session, p: &Json) -> CmdResult {
             (None, None) => {}
         }
     }
-    if has_area_display(l)
+    if (has_area_display(l)
+        || l.design.rules.iter().any(|rule| {
+            rule.kind == RuleKind::Constraint
+                && rustgis_data::query::parse_fields(&rule.expression, &l.dataset).is_ok_and(|expr| rustgis_data::query::uses_area(&expr))
+        }))
         && let Some(message) = rustgis_data::ambiguous_area_message(
             touched.iter().filter_map(|(fid, _)| l.dataset.features.get(*index.get(fid)?)?.geometry.as_ref()),
         )

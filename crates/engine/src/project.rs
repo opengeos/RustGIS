@@ -848,8 +848,10 @@ impl Project {
     pub(crate) fn take_read_notices(&mut self, parts: &[ReadPart]) -> Vec<String> {
         let mut notices: Vec<String> =
             std::mem::take(&mut self.read_notices).into_iter().filter(|(part, _)| parts.contains(part)).map(|(_, n)| n).collect();
-        if parts.contains(&ReadPart::AreaExpressions) {
-            notices.extend(self.maps.iter().flat_map(|map| map.layers.iter()).filter_map(crate::cmd::design::display_area_message));
+        if parts.contains(&ReadPart::AreaExpressions)
+            && let Some(message) = crate::cmd::design::display_area_messages(self.maps.iter().flat_map(|map| map.layers.iter()))
+        {
+            notices.push(message);
         }
         notices
     }

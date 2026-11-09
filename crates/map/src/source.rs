@@ -104,6 +104,9 @@ pub struct SourceLayer {
     /// Reads installed so far: the features changing with it came from the source, not an edit.
     #[serde(skip)]
     pub reads: u64,
+    /// Last installed window examined by the session's display diagnostics.
+    #[serde(skip)]
+    display_read_said: u64,
     /// For a layer read through GDAL: the original file, converted again into the cache when the
     /// converted copy is gone (desktop only).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -572,6 +575,14 @@ pub enum Polled {
 }
 
 impl SourceLayer {
+    /// Whether another installed window needs its retained display expressions checked.
+    pub fn take_display_window(&mut self) -> bool {
+        if self.reads == self.display_read_said {
+            return false;
+        }
+        self.display_read_said = self.reads;
+        true
+    }
     /// The original local file, excluding embedded data, databases and query results.
     pub fn linked_file(&self) -> Option<&str> {
         if self.embedded.is_some() || self.postgis.is_some() || self.mysql.is_some() || self.sqlserver.is_some() {
@@ -1296,6 +1307,7 @@ impl SourceLayer {
             reconnect_required: _,
             limit: _,
             reads: _,
+            display_read_said: _,
             gdal,
             duckdb,
             postgis,

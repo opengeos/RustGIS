@@ -410,9 +410,7 @@ fn refresh(s: &mut Session, p: &Value) -> CmdResult {
                 layer.definition_query = None;
             }
             layer.display_filters.retain(|f| rustgis_data::query::parse_fields(&f.where_, &layer.dataset).is_ok());
-            if let Some(note) = crate::cmd::design::display_area_message(layer) {
-                area_notes.push(note);
-            }
+            area_notes.push(layer.id);
             layer.touch_geometry();
             child.layer = layer.id;
             // Locked labels name the old features by id, and the new ones are numbered afresh.
@@ -436,7 +434,7 @@ fn refresh(s: &mut Session, p: &Value) -> CmdResult {
     if moved > 0 {
         s.notify(format!("{moved} saved label move(s) reset in refreshed service layers"), false);
     }
-    for note in area_notes {
+    if let Some(note) = crate::cmd::design::display_area_messages(area_notes.into_iter().filter_map(|id| s.map().layer(id))) {
         s.notify(note, false);
     }
     if !notes.is_empty() {
