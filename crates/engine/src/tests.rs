@@ -16232,12 +16232,30 @@ fn rasters_made_from_rounded_ones_keep_the_rounded_note() {
         let points = [[0, 0, 10, 42], [2, 0, 12, 42], [0, 2, 10, 40]];
         let fit = json!({"layer": name, "transform": "affine", "crs": 4326, "pointsCrs": 4326, "points": points, "name": warped});
         s.run("raster.georeference", &fit).unwrap();
+        let projected = format!("{name}_projected");
+        let projected_file = format!("{name}_projected_file");
+        for (output, file) in [(&projected, false), (&projected_file, true)] {
+            let mut p = json!({"layer":name, "crs":4326, "extent":[10,40,12,42], "cellSize":0.5, "name":output});
+            if file {
+                p["path"] = json!(dir.join(format!("{output}.tif")));
+            }
+            let mark = s.notice_mark();
+            s.run("raster.project", &p).unwrap();
+            assert_eq!(
+                s.notices_since(mark).iter().any(|n| n.text.contains(SOME)),
+                file && rounded,
+                "{output}: {:?}",
+                s.notices_since(mark)
+            );
+        }
         s.run(
             "raster.editPixels",
             &json!({"layer": name, "polygon": [[10.1, 40.1], [10.9, 40.1], [10.9, 40.9], [10.1, 40.9]], "value": 1}),
         )
         .unwrap();
-        for layer in [clip.as_str(), half.as_str(), joined.as_str(), warped.as_str(), name.as_str()] {
+        for layer in
+            [clip.as_str(), half.as_str(), joined.as_str(), warped.as_str(), projected.as_str(), projected_file.as_str(), name.as_str()]
+        {
             let mark = s.notice_mark();
             s.run("share.exportRaster", &json!({"layer": layer, "path": dir.join(format!("{layer}.tif"))})).unwrap();
             let notes = s.notices_since(mark);

@@ -658,6 +658,7 @@ impl Canvas {
             }
         }
         out.copyright = r.copyright.clone();
+        out.keep_rounded_mark(r);
         Ok(out)
     }
 }
