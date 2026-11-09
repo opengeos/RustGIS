@@ -304,10 +304,10 @@ fn choice_options_reported(v: &[Value], dropped: &mut Dropped) -> Vec<TreeNode> 
 /// The most value ids a notice names.
 const MAX_NAMED: usize = 10;
 
-/// What a panel update left out, for a notice: the widgets whose given value wasn't taken (no
-/// such widget, a value of the wrong kind, a date that isn't one, an option or node that isn't
-/// there), and how many options and tree nodes were left out (no id, one taken already or too
-/// long, too deep, or past the limit).
+/// Counts and bounded name samples for what a panel update left out or changed. `values`,
+/// `fields`, `clipped` and `label_fields` retain at most ten names, each at most 200 characters.
+/// The unlisted counters retain the remaining totals; `labels` is the full clipped-label count.
+/// Use `notice()` for the complete counts and sampled locations.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Dropped {
     pub values: Vec<String>,
@@ -316,6 +316,7 @@ pub struct Dropped {
     pub fields: Vec<String>,
     pub clipped: Vec<String>,
     pub labels: usize,
+    pub label_fields: Vec<String>,
     pub malformed: usize,
     pub unlisted_fields: usize,
     pub unlisted_clipped: usize,
@@ -323,6 +324,13 @@ pub struct Dropped {
 }
 
 impl Dropped {
+    /// Count a clipped label and retain a bounded sample of its location.
+    fn clip_label(&mut self, id: &str) {
+        self.labels = self.labels.saturating_add(1);
+        if self.label_fields.len() < MAX_NAMED {
+            self.label_fields.push(diagnostic_name(&format!("{id}.label")));
+        }
+    }
     /// Count every field, retaining only a bounded sample for diagnostics.
     fn field(&mut self, name: String) {
         if self.fields.len() < MAX_NAMED {
@@ -356,7 +364,10 @@ impl Dropped {
             parts.push(format!("{} panel object(s) not taken: expected an object", self.malformed));
         }
         if self.labels > 0 {
-            parts.push(format!("{} label(s) clipped to {MAX_STATE_LABEL} characters", self.labels));
+            let names = self.label_fields.iter().map(|name| diagnostic_name(name)).collect::<Vec<_>>().join(", ");
+            let more = if self.labels > self.label_fields.len() { ", …" } else { "" };
+            let location = if names.is_empty() { String::new() } else { format!(": {names}{more}") };
+            parts.push(format!("{} label(s) clipped to {MAX_STATE_LABEL} characters{location}", self.labels));
         }
         for (ids, unlisted, what) in [
             (&self.fields, self.unlisted_fields, "item field(s) not taken (unknown, inapplicable, wrong type or invalid bounds)"),
@@ -477,7 +488,7 @@ fn tree_nodes(v: &[Value], depth: usize, left: &mut usize, seen: &mut HashSet<St
             dropped.clip_field(format!("{id}.label (control characters replaced)"));
         }
         match n.get("label") {
-            Some(Value::String(label)) if label.chars().count() > MAX_STATE_LABEL => dropped.labels += 1,
+            Some(Value::String(label)) if label.chars().count() > MAX_STATE_LABEL => dropped.clip_label(id),
             Some(label) if !label.is_null() && !label.is_string() => dropped.field(format!("{id}.label")),
             _ => {}
         }
@@ -740,7 +751,9 @@ impl PanelState {
             }
             match u.get("label") {
                 Some(Value::String(l)) => {
-                    dropped.labels += usize::from(l.chars().count() > MAX_STATE_LABEL);
+                    if l.chars().count() > MAX_STATE_LABEL {
+                        dropped.clip_label(id);
+                    }
                     st.label = Some(clip(l, MAX_STATE_LABEL));
                 }
                 Some(Value::Null) => st.label = None,
@@ -762,10 +775,11 @@ impl PanelState {
                 st.visible = b;
             }
             if d.ranged() {
-                let min = u.get("min").and_then(whole).unwrap_or(st.min);
-                let max = u.get("max").and_then(whole).unwrap_or(st.max);
+                let bound = |value: &Value| whole(value).filter(|value| (-SLIDER_LIMIT..=SLIDER_LIMIT).contains(value));
+                let min = u.get("min").and_then(bound).unwrap_or(st.min);
+                let max = u.get("max").and_then(bound).unwrap_or(st.max);
                 for key in ["min", "max"] {
-                    if u.get(key).is_some_and(|v| whole(v).is_none()) {
+                    if u.get(key).is_some_and(|v| bound(v).is_none()) {
                         dropped.field(format!("{id}.{key}"));
                     }
                 }
@@ -773,7 +787,7 @@ impl PanelState {
                     (st.min, st.max) = (min, max);
                 } else {
                     for key in ["min", "max"] {
-                        if u.get(key).is_some_and(|value| whole(value).is_some()) {
+                        if u.get(key).is_some_and(|value| bound(value).is_some()) {
                             dropped.field(format!("{id}.{key}"));
                         }
                     }

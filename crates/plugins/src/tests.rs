@@ -1814,6 +1814,33 @@ fn panel_reports_clamped_malformed_and_clipped_input() {
     assert!(decl.validate(&|_| true).is_err_and(|error| error.contains("200 characters")));
 }
 
+#[test]
+fn panel_review_out_of_range_bound_keeps_valid_sibling() {
+    let decl = choice_date_range_panel();
+    for (update, expected, refused) in
+        [(json!({"min":-2000000000_i64,"max":5}), (0, 5), "months.min"), (json!({"min":2,"max":2000000000_i64}), (2, 11), "months.max")]
+    {
+        let mut state = crate::PanelState::new(&decl);
+        let report = state.apply(&decl, &json!({"items":{"months":update}}));
+        assert_eq!((state.items["months"].min, state.items["months"].max), expected);
+        assert_eq!(report.fields, [refused]);
+    }
+}
+
+#[test]
+fn panel_review_clipped_labels_name_their_fields() {
+    let mut decl = choice_date_range_panel();
+    decl.items.iter_mut().find(|item| item.id == "selected").unwrap().kind = "tree".into();
+    let mut state = crate::PanelState::new(&decl);
+    for (update, field) in [
+        (json!({"items":{"months":{"label":"界".repeat(201)}}}), "months.label"),
+        (json!({"items":{"selected":{"nodes":[{"id":"branch","label":"界".repeat(201)}]}}}), "branch.label"),
+    ] {
+        let note = state.apply(&decl, &update).notice().unwrap();
+        assert!(note.contains(field) && note.contains("200 characters"), "{note}");
+    }
+}
+
 /// A dropdown takes its options from `plugin.json` or the plugin and the chosen option's id as its
 /// value; a date takes `YYYY-MM-DD`; a range takes `[low, high]` within its ends (#1622).
 #[test]
