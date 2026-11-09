@@ -27,6 +27,11 @@ fn the_thread_option_reaches_the_environment() {
         let err = String::from_utf8_lossy(&out.stderr);
         assert!(err.contains("--threads") && err.contains("1 to 1024"), "{bad}: {err}");
     }
+    // `--threads=N` is read as `--threads N`; a bad one is refused.
+    let out = cli(&["--threads=3", "--cmd", "gp.threads"]);
+    let env: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(env["threads"], json!(3), "{env}");
+    assert_eq!(cli(&["--threads=0", "--cmd", "gp.threads"]).status.code(), Some(2));
     // The option last, with no value: refused too, not run with the default.
     let out = cli(&["--cmd", "gp.threads", "--threads"]);
     assert_eq!(out.status.code(), Some(2), "{}", String::from_utf8_lossy(&out.stderr));

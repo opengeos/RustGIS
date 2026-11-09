@@ -50,10 +50,11 @@ pub(crate) fn command(app: &mut RustGisApp, p: &Value) -> Result<Value, String> 
 }
 
 /// The settings Settings › Threads offers on a computer with `cores` cores: powers of two below
-/// them, and the cores themselves.
+/// them, and the cores themselves, up to the largest setting taken ([`threads::MOST`]).
 pub(crate) fn choices(cores: usize) -> Vec<usize> {
-    let mut out: Vec<usize> = std::iter::successors(Some(1usize), |n| n.checked_mul(2)).take_while(|n| *n < cores).collect();
-    out.push(cores.max(1));
+    let top = cores.clamp(1, threads::MOST);
+    let mut out: Vec<usize> = std::iter::successors(Some(1usize), |n| n.checked_mul(2)).take_while(|n| *n < top).collect();
+    out.push(top);
     out
 }
 
@@ -67,5 +68,6 @@ mod tests {
         assert_eq!(choices(8), vec![1, 2, 4, 8]);
         assert_eq!(choices(12), vec![1, 2, 4, 8, 12]);
         assert_eq!(choices(0), vec![1]);
+        assert_eq!(choices(4096).last(), Some(&threads::MOST), "never past what a setting takes");
     }
 }

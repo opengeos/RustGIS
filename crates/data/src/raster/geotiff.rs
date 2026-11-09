@@ -1049,7 +1049,8 @@ fn decimate<R: Read + Seek>(
         // high setting) no more than the threads' scratch budget holds, so the peak doesn't
         // multiply with the setting.
         let affordable = 1 + crate::memory::thread_scratch() / chunks.bytes().max(1);
-        let threads = crate::threads::max().min(affordable.max(crate::threads::default_max()));
+        let chunk_count = usize::try_from(chunks.count()).unwrap_or(usize::MAX);
+        let threads = crate::threads::max().min(affordable.max(crate::threads::default_max())).min(chunk_count);
         if threads > 1 {
             return decimate_parallel(chunks, bands, k, (ow, oh), nodata, threads, open, image, limits);
         }
