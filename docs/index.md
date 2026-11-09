@@ -42,8 +42,8 @@ Map operations are commands you can script from the command line, Python or the 
 
 -   **Analysis**
 
-    SQL selection, overlay and proximity tools, run in the background on several cores on the
-    desktop; batch runs, ModelBuilder, imagery tools, kriging, zonal statistics, data-cube trends,
+    Overlay and proximity tools, run in the background on several cores on the desktop; batch
+    runs, ModelBuilder, SQL selection, imagery tools, kriging, zonal statistics, data-cube trends,
     and over 1,000 tools through the optional GeoLibre/Whitebox suite.
     [Analysis](user-guide/analysis.md) · [Expressions](user-guide/expressions.md)
 
