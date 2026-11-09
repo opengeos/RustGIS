@@ -15733,7 +15733,7 @@ fn geopackage_attribute_tables_are_not_silently_omitted() {
          CREATE TABLE owners (name TEXT);
          INSERT INTO gpkg_contents (table_name, data_type) VALUES ('notes', 'attributes'), ('owners', 'attributes');
          CREATE TABLE imagery (id INTEGER PRIMARY KEY, zoom_level INTEGER, tile_column INTEGER, tile_row INTEGER, tile_data BLOB);
-         INSERT INTO gpkg_contents (table_name, data_type) VALUES ('imagery', 'tiles');",
+         INSERT INTO gpkg_contents (table_name, data_type) VALUES ('imagery', 'tiles'), ('unregistered', 'features');",
     )
     .unwrap();
     drop(conn);
@@ -15753,6 +15753,7 @@ fn geopackage_attribute_tables_are_not_silently_omitted() {
             let answer = s.run("layer.addData", &json!({"path":path})).unwrap();
             assert_eq!(answer["layers"].as_array().unwrap().len(), 2);
         }
+        assert!(s.notices.iter().any(|n| n.text.contains("1 features table(s) not added")), "bytes={bytes}: {:?}", s.notices);
         let notes = skipped(&s);
         assert_eq!(notes.len(), 1, "bytes={bytes}: {notes:?}");
         assert!(notes[0].contains("2 attribute-only tables") && notes[0].contains("mixed.gpkg"), "{notes:?}");
@@ -15763,7 +15764,7 @@ fn geopackage_attribute_tables_are_not_silently_omitted() {
     selected.run("layer.addData", &json!({"path":path, "layer":"A"})).unwrap();
     assert!(skipped(&selected).is_empty());
     let conn = rusqlite::Connection::open(&path).unwrap();
-    conn.execute_batch("DELETE FROM gpkg_contents WHERE data_type <> 'features'; DROP TABLE notes; DROP TABLE owners; DROP TABLE imagery;")
+    conn.execute_batch("DELETE FROM gpkg_contents WHERE data_type <> 'features' OR table_name = 'unregistered'; DROP TABLE notes; DROP TABLE owners; DROP TABLE imagery;")
         .unwrap();
     drop(conn);
     let mut clean = Session::new(Project::default());

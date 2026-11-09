@@ -59,7 +59,7 @@ pub fn layers(path: &Path) -> Result<Vec<String>> {
 /// Unsupported contents omitted when the GeoPackage is added as feature layers, by type.
 pub fn unsupported_table_counts(path: &Path) -> Result<Vec<(String, u64)>> {
     let conn = open_db(path)?;
-    let mut st = conn.prepare("SELECT lower(data_type), count(*) FROM gpkg_contents WHERE lower(data_type) <> 'features' GROUP BY lower(data_type) ORDER BY lower(data_type)").map_err(not_gpkg)?;
+    let mut st = conn.prepare("SELECT lower(data_type), count(*) FROM gpkg_contents WHERE lower(data_type) <> 'features' OR NOT EXISTS (SELECT 1 FROM gpkg_geometry_columns AS g WHERE lower(g.table_name) = lower(gpkg_contents.table_name)) GROUP BY lower(data_type) ORDER BY lower(data_type)").map_err(not_gpkg)?;
     st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))
         .map_err(err)?
         .map(|r| {

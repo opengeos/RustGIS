@@ -87,15 +87,37 @@ pub fn layers(bytes: Shared) -> Result<Vec<String>> {
 pub fn unsupported_table_counts(bytes: Shared) -> Result<Vec<(String, u64)>> {
     let db = Db::open(bytes).map_err(err)?;
     let schema = db.tables().map_err(err)?;
-    let rows = meta_rows(&db, &schema, "gpkg_contents")?;
+    let registered: std::collections::HashSet<String> = meta_rows(&db, &schema, "gpkg_geometry_columns")?
+        .iter()
+        .filter_map(|row| text(get(row, "table_name")))
+        .map(|name| name.to_ascii_lowercase())
+        .collect();
+    let table = schema
+        .iter()
+        .find(|t| t.name.eq_ignore_ascii_case("gpkg_contents"))
+        .ok_or_else(|| DataError::Format("not a GeoPackage: no gpkg_contents table".into()))?;
+    let kind_col = table
+        .columns
+        .iter()
+        .position(|c| c.name.eq_ignore_ascii_case("data_type"))
+        .ok_or_else(|| DataError::Format("GeoPackage: gpkg_contents has no data_type column".into()))?;
+    let name_col = table
+        .columns
+        .iter()
+        .position(|c| c.name.eq_ignore_ascii_case("table_name"))
+        .ok_or_else(|| DataError::Format("GeoPackage: gpkg_contents has no table_name column".into()))?;
     let mut counts = std::collections::BTreeMap::<String, u64>::new();
-    for row in &rows {
-        if let Some(kind) = text(get(row, "data_type"))
-            && !kind.eq_ignore_ascii_case("features")
+    // Count in place: the contents catalog can be large without materializing its rows.
+    db.rows(table, |_, row| {
+        if let Some(kind) = text(row.get(kind_col))
+            && (!kind.eq_ignore_ascii_case("features")
+                || text(row.get(name_col)).is_none_or(|name| !registered.contains(&name.to_ascii_lowercase())))
         {
             *counts.entry(kind.to_ascii_lowercase()).or_default() += 1;
         }
-    }
+        ControlFlow::Continue(())
+    })
+    .map_err(err)?;
     Ok(counts.into_iter().collect())
 }
 
