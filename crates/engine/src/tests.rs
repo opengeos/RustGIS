@@ -40,6 +40,13 @@ fn world() -> Session {
     s
 }
 
+#[test]
+fn add_url_error_keeps_bare_schemes() {
+    let mut s = Session::new(Project::default());
+    let error = s.run("layer.addUrl", &json!({"url": "C:/data/a.tif"})).unwrap_err();
+    assert_eq!(error, "C:/data/a.tif: give an http://, https:// or s3:// address (Add Data opens files)");
+}
+
 /// Runs a test that owns process-wide state in a fresh instance of the test executable.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn isolate_process_test(name: &str) -> bool {

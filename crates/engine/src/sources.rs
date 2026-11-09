@@ -325,6 +325,9 @@ pub fn redact_text(text: &str) -> String {
             let scheme = |c: &char| c.is_ascii_alphanumeric() || "+.-".contains(*c);
             let start = word.get(..at).and_then(|b| b.char_indices().rev().find(|(_, c)| !scheme(c))).map_or(0, |(i, c)| i + c.len_utf8());
             let end = word.trim_end_matches([':', ',', ';', '.', ')', ']', '>', '"', '\'', '»', '›', '”', '’']).len().max(at + 3);
+            if matches!(word.get(at + 3..end), Some("" | "…")) {
+                return piece.to_string();
+            }
             let (before, address, after) =
                 (word.get(..start).unwrap_or(""), word.get(start..end).unwrap_or(""), word.get(end..).unwrap_or(""));
             format!("{before}{}{after}{}", redact(address), piece.get(word.len()..).unwrap_or(""))
@@ -535,6 +538,22 @@ fn build_library() -> Vec<(&'static str, Source)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn error_text_keeps_bare_schemes_but_redacts_addresses() {
+        for text in [
+            "give an http://, https:// or s3:// address",
+            "needs an http:// or https:// address",
+            "uses unencrypted http://. Tick the confirmation",
+            "only http:// and https:// addresses are fetched",
+            "a placeholder: \"https://…\"",
+        ] {
+            assert_eq!(redact_text(text), text, "{text}");
+        }
+        assert_eq!(redact_text("see https://user:pw@host/x, or http://"), "see https://host/x, or http://");
+        assert_eq!(redact_text("see https://host/x?token=secret, or s3://"), "see https://host/x, or s3://");
+        assert!(!redact_text("https://user:pw@host://").contains("pw"));
+    }
 
     #[test]
     fn restored_sources_never_reuse_a_previous_process_login_binding() {
