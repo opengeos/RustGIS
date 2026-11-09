@@ -710,8 +710,7 @@ fn authalic_ring_area_m2(ring: &[Coord]) -> f64 {
     let q_pole = authalic_q(90.0);
     let rq2 = a * a * q_pole / 2.0;
     let sin_xi = |lat: f64| authalic_q(lat) / q_pole;
-    let mut total = 0.0;
-    for ((p, r), (dlon, _)) in ring.iter().zip(ring.iter().cycle().skip(1)).zip(ring_lon_steps(ring)) {
+    let terms = ring.iter().zip(ring.iter().cycle().skip(1)).zip(ring_lon_steps(ring)).map(|((p, r), (dlon, _))| {
         let dlat = r.y - p.y;
         // An edge to or from a pole runs along a meridian ([`pole_sine`]); sin ξ is ±1 there too.
         let mean = if let Some(s) = pole_sine(p.y, r.y) {
@@ -727,9 +726,9 @@ fn authalic_ring_area_m2(ring: &[Coord]) -> f64 {
             }
             sum / (3.0 * N as f64)
         };
-        total += dlon.to_radians() * mean;
-    }
-    (total * rq2).abs()
+        dlon.to_radians() * mean
+    });
+    (compensated_sum(terms) * rq2).abs()
 }
 
 /// Surface area 2πa²(1 + (1 − e²) atanh(e) / e) for WGS 84 (square metres).
@@ -823,19 +822,27 @@ fn sphere_ring_area_m2(ring: &[Coord], steps: impl Iterator<Item = f64>, full: b
         return 0.0;
     }
     let sin = |c: &Coord| c.y.to_radians().sin();
-    let total: f64 = ring
-        .iter()
-        .zip(ring.iter().cycle().skip(1))
-        .zip(steps)
-        .map(|((p1, p2), dlon)| {
-            let sines = match pole_sine(p1.y, p2.y).filter(|_| full) {
-                Some(s) => 2.0 * s,
-                None => sin(p1) + sin(p2),
-            };
-            dlon.to_radians() * (2.0 + sines)
-        })
-        .sum();
+    let total = compensated_sum(ring.iter().zip(ring.iter().cycle().skip(1)).zip(steps).map(|((p1, p2), dlon)| {
+        let sines = match pole_sine(p1.y, p2.y).filter(|_| full) {
+            Some(s) => 2.0 * s,
+            None => sin(p1) + sin(p2),
+        };
+        dlon.to_radians() * (2.0 + sines)
+    }));
     (total * EARTH_RADIUS_M * EARTH_RADIUS_M / 2.0).abs()
+}
+
+/// Kahan compensated summation prevents long valid rings crossing the winding tolerance from
+/// accumulated addition roundoff: Kahan (1965), https://doi.org/10.1145/363707.363723.
+fn compensated_sum(terms: impl IntoIterator<Item = f64>) -> f64 {
+    let (mut total, mut lost) = (0.0, 0.0);
+    for term in terms {
+        let corrected = term - lost;
+        let next = total + corrected;
+        lost = (next - total) - corrected;
+        total = next;
+    }
+    total
 }
 
 /// Map scale denominator (1:N) for a Web Mercator resolution (metres per screen pixel) at a latitude.
@@ -1355,6 +1362,37 @@ mod tests {
         let globe = 4.0 * std::f64::consts::PI * EARTH_RADIUS_M * EARTH_RADIUS_M;
         assert!((geodesic_ring_area_m2(&world) / globe - 1.0).abs() < 1e-12);
         assert!(wgs84_ring_perimeter_area_m2(&world).1.is_finite());
+    }
+
+    #[test]
+    fn densified_world_boundaries_do_not_become_ambiguous_from_roundoff() {
+        let corners = [
+            Coord::new(-180.0, -90.0),
+            Coord::new(180.0, -90.0),
+            Coord::new(180.0, 90.0),
+            Coord::new(-180.0, 90.0),
+            Coord::new(-180.0, -90.0),
+        ];
+        for keep_full in [false, true] {
+            let mut ring = Vec::new();
+            for (edge, pair) in corners.windows(2).enumerate() {
+                let steps = if keep_full && edge == 0 { 1 } else { 10_000 };
+                for index in 0..steps {
+                    let t = index as f64 / steps as f64;
+                    ring.push(Coord::new(pair[0].x + (pair[1].x - pair[0].x) * t, pair[0].y + (pair[1].y - pair[0].y) * t));
+                }
+            }
+            for reverse in [false, true] {
+                if reverse {
+                    ring.reverse();
+                }
+                assert!(!ring_area_is_ambiguous(&ring), "full={keep_full}, reverse={reverse}");
+                let surface = 4.0 * std::f64::consts::PI * EARTH_RADIUS_M * EARTH_RADIUS_M;
+                let area = geodesic_ring_area_m2(&ring);
+                assert!(area.is_finite() && (area / surface - 1.0).abs() < 1e-12, "{area}");
+                assert!(wgs84_ring_perimeter_area_m2(&ring).1.is_finite());
+            }
+        }
     }
 
     #[test]

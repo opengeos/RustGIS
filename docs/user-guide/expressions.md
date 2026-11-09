@@ -155,6 +155,10 @@ ordinary polar caps and whole-world rectangles still work. Attribute rules check
 
 Saved display expressions are checked against the layer’s fields separately from current area values. When an opened project or refreshed layer contains an ambiguous area, the affected features’ area values are unavailable and a counted notice explains this; the expressions are retained and clean features still evaluate normally. Attribute-only edits can retain that existing geometry; new or changed geometry must pass the display check. Area constraints also guard archive restoration. An unrelated field deletion does not discard a valid area expression or rule, and source repair still checks its fields. Unique Values validates the rows kept by the definition query. Streamed display expressions report affected features once per installed window, with a count scoped to the decoded window. Streamed definition queries stop at the first ambiguous decoded chunk and state the scope of that count.
 
+Report filters are retained when a report is imported or fitted to another layer with the
+required fields. Building a report whose filter uses an ambiguous area returns a counted error
+instead of dropping the filter and listing every record.
+
 ## Limits
 
 A number too large to represent (`1e999`) is an error. An expression is at most 10,000 characters and nests at most 64 levels: each parenthesis,

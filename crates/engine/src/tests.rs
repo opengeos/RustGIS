@@ -15908,6 +15908,22 @@ fn area_review_project_info_retains_label_expression() {
     assert_eq!(info["layers"][0]["labels"], "$area", "{info}");
 }
 
+#[test]
+fn area_review_reports_retain_where_clauses_when_fitted() {
+    let (mut session, _) = area_review_fixture();
+    session.run("report.new", &json!({"layer":"Area review","name":"Area report"})).unwrap();
+    session.project.reports[0].where_clause = "$area > 0".into();
+    let text = String::from_utf8(crate::cmd::report::report_file(&session, 0, false).unwrap()).unwrap();
+    session.run("report.update", &json!({"report":0,"layer":"Area review"})).unwrap();
+    assert_eq!(session.project.reports[0].where_clause, "$area > 0");
+    session.run("report.open", &json!({"text":text})).unwrap();
+    assert_eq!(session.project.reports[1].where_clause, "$area > 0");
+    for index in 0..2 {
+        let error = crate::cmd::report::build(&session, index).unwrap_err();
+        assert!(error.contains("1 ring(s) in 1 feature(s)"), "{error}");
+    }
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn area_review_repair_checks_retained_classification_fields() {
