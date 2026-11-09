@@ -1905,3 +1905,16 @@ fn panel_null_optional_objects_are_quiet() {
     }
     assert!(state.value_report(&decl, &Value::Null, &[]).notice().is_none());
 }
+
+#[test]
+fn panel_diagnostic_field_samples_are_bounded_and_counts_are_complete() {
+    let decl = choice_date_range_panel();
+    let mut state = crate::PanelState::new(&decl);
+    let fields: serde_json::Map<String, Value> = (0..1000).map(|index| (format!("{index}{}", "界".repeat(256)), json!(false))).collect();
+    let report = state.apply(&decl, &json!({"items":fields}));
+    assert!(report.fields.len() <= 10);
+    assert!(report.fields.iter().all(|name| name.chars().count() <= 200));
+    let notice = report.notice().unwrap();
+    assert!(notice.contains("1000 item field(s)"), "{notice}");
+    assert!(notice.len() < 7000);
+}

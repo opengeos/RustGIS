@@ -436,8 +436,8 @@ Any command can answer the panel's new state, beside the rest of its answer:
   slider labels cut to 80 characters or 2,000 entries, and wrong-type applicable item fields.
   A malformed bound leaves that bound unchanged while a valid companion bound is applied.
   Warnings name the
-  plugin and affected widgets or fields; clean input stays quiet. A manifest's dropdown labels
-  must already be strings of at most 200 characters, otherwise the manifest is refused.
+  plugin and affected widgets or fields; clean input stays quiet. Diagnostic field names retain only ten samples of at most 200 characters, while counts include every field. A manifest's dropdown labels
+  must already be strings of at most 200 characters without control characters. Option objects allow only `id` and an optional `label`; declarations requiring fields to be discarded or labels to be changed are refused with the affected fields in the error.
 - A plugin words what it sets in the request's `lang`; RustGIS translates only what the
   manifest declares.
 - A command that fails leaves the values as they were. The panel's state command is no undo
