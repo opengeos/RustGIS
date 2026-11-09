@@ -1877,7 +1877,9 @@ fn outside(g: &Geometry, zones: &[Zone], index: (&ExtentIndex, &AtPoles)) -> Opt
 /// layer that overlap each other are not split against each other. Intersect leaves out input
 /// features without geometry; the others keep them, as they are, and an input feature no overlay
 /// polygon meets too, coordinates untouched (a feature that is cut comes out rebuilt, its
-/// overlapping parts unioned).
+/// overlapping parts unioned). Cancel is looked at per overlay polygon, input feature and
+/// remaining zone; the rest of an overlay polygon is one difference against the union of the
+/// input polygons covering it, and Cancel isn't looked at inside that step (#1562).
 fn overlay(inp: &dyn Inputs, p: &Json, op: Overlay) -> Result<ToolResult, String> {
     let ds = input(inp, p, "input")?;
     if ds.geometry_type == GeometryType::None {
