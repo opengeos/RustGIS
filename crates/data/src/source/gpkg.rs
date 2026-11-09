@@ -87,6 +87,15 @@ pub fn unsupported_table_counts(path: &Path) -> Result<Vec<(String, u64)>> {
         .collect()
 }
 
+/// Count a desktop upload with SQLite, matching the reader used to open its feature table.
+pub fn unsupported_table_counts_bytes(bytes: &[u8]) -> Result<Vec<(String, u64)>> {
+    use std::io::Write;
+    let mut copy = tempfile::NamedTempFile::new()?;
+    copy.write_all(bytes)?;
+    copy.flush()?;
+    unsupported_table_counts(copy.path())
+}
+
 fn open_db(path: &Path) -> Result<Connection> {
     let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX).map_err(err)?;
     // A cap on SQLite's page cache, so a huge database can't take all the memory; and the file is

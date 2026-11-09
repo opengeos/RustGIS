@@ -2040,6 +2040,11 @@ fn add_source_with(
         (Origin::Path(path), true) if path.to_ascii_lowercase().ends_with(".gpkg") => {
             source::gpkg::unsupported_table_counts(Path::new(path)).map_err(err)?
         }
+        #[cfg(not(target_arch = "wasm32"))]
+        (Origin::Bytes(name, bytes), true) if name.to_ascii_lowercase().ends_with(".gpkg") => {
+            source::gpkg::unsupported_table_counts_bytes(bytes.as_slice()).map_err(err)?
+        }
+        #[cfg(target_arch = "wasm32")]
         (Origin::Bytes(name, bytes), true) if name.to_ascii_lowercase().ends_with(".gpkg") => {
             source::gpkg_mem::unsupported_table_counts(source::Shared(bytes.clone())).map_err(err)?
         }

@@ -15798,6 +15798,37 @@ fn geopackage_review_malformed_contents_are_not_silently_omitted() {
 }
 
 #[test]
+fn geopackage_virtual_catalog_columns_use_the_desktop_sqlite_reader() {
+    let dir = std::env::temp_dir().join(format!("rustgis-gpkg-virtual-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("virtual.gpkg");
+    world().run("share.exportLayer", &json!({"layer":"Cities","path":path,"tableName":"A"})).unwrap();
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    conn.execute_batch("ALTER TABLE gpkg_contents RENAME TO original_catalog;
+        CREATE TABLE gpkg_contents(table_name TEXT, data_type TEXT GENERATED ALWAYS AS ('features') VIRTUAL, identifier, description, last_change, min_x, min_y, max_x, max_y, srs_id);
+        INSERT INTO gpkg_contents(table_name,identifier,description,last_change,min_x,min_y,max_x,max_y,srs_id)
+        SELECT table_name,identifier,description,last_change,min_x,min_y,max_x,max_y,srs_id FROM original_catalog;").unwrap();
+    drop(conn);
+    let bytes = std::sync::Arc::new(std::fs::read(&path).unwrap());
+    assert!(
+        rustgis_data::source::gpkg_mem::unsupported_table_counts(rustgis_data::source::Shared(bytes.clone()))
+            .is_err_and(|error| error.to_string().contains("virtual generated"))
+    );
+    for uploaded in [false, true] {
+        let mut session = Session::new(Project::default());
+        if uploaded {
+            crate::cmd::layer::add_source(&mut session, &json!({}), crate::cmd::layer::Origin::Bytes("virtual.gpkg", bytes.clone()), None)
+                .unwrap();
+        } else {
+            session.run("layer.addData", &json!({"path":path})).unwrap();
+        }
+        assert_eq!(session.map().layers.len(), 1);
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn geopackage_attribute_tables_are_not_silently_omitted() {
     let dir = std::env::temp_dir().join(format!("rustgis-gpkg-attributes-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
