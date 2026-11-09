@@ -309,9 +309,11 @@ fn projection_note(root: &Node, crs: Crs) -> Option<&'static str> {
     let spheroid = root.child("GEOGCS")?.child("DATUM")?.child("SPHEROID")?;
     let resolved_axis = eqc_semi_major(crs)?;
     if spheroid.num(0).is_some_and(|axis| (axis - resolved_axis).abs() > resolved_axis.abs() * 1e-12) {
-        return Some(
-            "the equidistant cylindrical WKT semi-major axis differs from the resolved CRS; RustGIS uses the resolved CRS semi-major axis, so coordinates may differ from the declared spheroid",
-        );
+        return Some(if spheroid.num(1).is_some_and(|rf| rf.is_finite() && rf > 0.0 && rf.recip() > 1e-12) {
+            "the equidistant cylindrical WKT semi-major axis differs from the resolved CRS; RustGIS uses the resolved CRS semi-major axis, so coordinates may differ from the declared spheroid; the WKT method is interpreted as EPSG method 1028 (ellipsoidal), but RustGIS uses the legacy PROJ/GDAL spherical formula (PROJ 9.7.1 compatibility), which differs from the ellipsoidal formula"
+        } else {
+            "the equidistant cylindrical WKT semi-major axis differs from the resolved CRS; RustGIS uses the resolved CRS semi-major axis, so coordinates may differ from the declared spheroid"
+        });
     }
     let rf = spheroid.num(1)?;
     (rf.is_finite()
@@ -2054,6 +2056,15 @@ mod tests {
         let mismatched = wkt.replace("298.257223563", "10000000000000").replace("6378137", "6371000");
         let (_, notice) = read_wkt(&mismatched).unwrap();
         assert!(notice.is_some_and(|notice| notice.contains("semi-major axis")));
+    }
+
+    #[test]
+    fn projection_review_axis_mismatch_keeps_the_formula_warning() {
+        let rows = corpus();
+        let wkt = rows.iter().find(|r| r.0 == "EPSG:4087").unwrap().2.replace("6378137", "6371000");
+        let (_, notice) = read_wkt(&wkt).unwrap();
+        let notice = notice.unwrap();
+        assert!(notice.contains("semi-major axis") && notice.contains("EPSG method 1028"), "{notice}");
     }
 
     #[test]

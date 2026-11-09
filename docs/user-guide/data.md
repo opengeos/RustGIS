@@ -104,8 +104,10 @@ that name EPSG method 1028. Shapefile and ASCII-grid `.prj` files and GeoPackage
 whose method is interpreted as EPSG 1028 on an ellipsoid report the formula difference,
 without assuming how the producer computed its coordinates. Effectively spherical definitions
 need no warning. Code-only CRS identifiers use the same compatibility formula without a method
-warning, since no explicit WKT method is being read. XY Table To Point and Kernel Density also
-report the method difference when given such a WKT definition. RustGIS applies the same compatibility formula to GeoTIFF CT 17;
+warning, since no explicit WKT method is being read. Typed WKT inputs also report the method
+difference: Add Data overrides, Define Projection, CSV imports, measured layout grids, Zarr
+inputs, vector exports, XY Table To Point and Kernel Density. ASCII-grid sidecars retain
+datum warnings as well as the projection warning. RustGIS applies the same compatibility formula to GeoTIFF CT 17;
 this key identifies a GeoTIFF transformation, rather than explicitly declaring EPSG method 1028.
 [PROJ 9.9](https://proj.org/en/stable/operations/projections/eqc.html) supports the ellipsoidal
 formula instead. RustGIS preserves coordinates for files created with the legacy spherical formula. Files created with an ellipsoidal EQC formula, including PROJ 9.9 output, can be misplaced by kilometres; check which formula the producer used.

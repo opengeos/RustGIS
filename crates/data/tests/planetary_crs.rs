@@ -774,7 +774,12 @@ fn an_ascii_grid_with_a_mars_prj_is_said_or_refused() {
     assert!(e.contains(ANOTHER_BODY) && e.contains("Bonne"), "{e}");
     let earth = raster::read_path(&dir.path().join("earth.asc")).unwrap();
     assert!(planetary_notes(&earth.lost).is_empty(), "{:?}", earth.lost);
-    assert!(!earth.lost.iter().any(|l| l.contains(".prj")), "{:?}", earth.lost);
+    assert_eq!(
+        earth.lost.iter().filter(|l| l.contains(".prj") && l.contains("has no conversion to WGS 84")).count(),
+        1,
+        "{:?}",
+        earth.lost
+    );
 }
 
 /// An Earth `.prj` next to an ASCII grid that RustGIS can't read leaves the grid in

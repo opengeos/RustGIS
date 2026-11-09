@@ -1394,7 +1394,7 @@ pub fn read_bytes(file_name: &str, bytes: &[u8]) -> Result<Raster> {
 fn read_ascii(path: &Path, text: &str, name: &str, nodata: Option<f64>) -> Result<Raster> {
     let (crs, note) = sidecar_crs(path)?;
     let mut r = ascii::read_with_nodata(text, name, crs, nodata)?;
-    // Datum/body notices have their own path. Preserve the method warning without duplicating
+    // Planetary body notices have their own path. Preserve the method warning without duplicating
     // those, and only assume lon/lat for an unreadable definition.
     r.lost.extend(note.map(|message| match crs {
         Some(_) => format!("the .prj file: {message}"),
@@ -1413,8 +1413,13 @@ fn sidecar_crs(path: &Path) -> Result<(Option<Crs>, Option<String>)> {
         let there = std::fs::metadata(path.with_extension("prj")).is_ok_and(|m| m.is_file());
         return Ok((None, there.then(|| "it can't be read as text".to_string())));
     };
-    match wkt::crs_from_wkt(&prj) {
-        Ok(crs) => Ok((Some(crs), wkt::projection_compatibility_note(&prj, crs).map(str::to_owned))),
+    match wkt::read_wkt(&prj) {
+        Ok((crs, note)) => {
+            // The raster's body channel reports planetary interpretation once; datum and
+            // projection notices from this sidecar must otherwise be preserved.
+            let note = if crs.is_planetary() { wkt::projection_compatibility_note(&prj, crs).map(str::to_owned) } else { note };
+            Ok((Some(crs), note))
+        }
         Err(e) => match planetary::refused_wkt(&prj, &e) {
             Some(refused) => Err(DataError::Format(format!("the .prj file: {refused}"))),
             None => Ok((None, Some(e))),
