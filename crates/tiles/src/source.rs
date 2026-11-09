@@ -374,8 +374,15 @@ fn resolve_sources(style: &mut Style, spec: &Spec, base: &address::Origin) -> Re
         .layers
         .iter()
         .filter(|l| {
-            !matches!(l.kind, LayerKind::Background | LayerKind::Other)
-                && l.source.as_deref().is_none_or(|id| style.source(id).is_none_or(|source| matches!(source, Source::Other)))
+            let source = l.source.as_deref().and_then(|id| style.source(id));
+            match l.kind {
+                LayerKind::Background | LayerKind::Other => false,
+                LayerKind::Raster => !matches!(source, Some(Source::Raster { .. } | Source::RasterDem { .. })),
+                LayerKind::Hillshade | LayerKind::ColorRelief => !matches!(source, Some(Source::RasterDem { .. })),
+                LayerKind::Fill | LayerKind::FillExtrusion | LayerKind::Line | LayerKind::Circle | LayerKind::Symbol => {
+                    !matches!(source, Some(Source::Vector { .. }))
+                }
+            }
         })
         .map(|l| l.id.as_str())
         .collect();
@@ -1509,6 +1516,34 @@ mod tests {
             {"id": "heat", "type": "heatmap", "source": "s"}
         ]));
         assert_eq!(said, ["3 style layer(s) skipped because their layer type is unsupported: sky, custom, heat"]);
+    }
+
+    #[test]
+    fn layers_with_incompatible_source_kinds_are_counted() {
+        for kind in ["fill", "line", "circle", "symbol", "fill-extrusion", "hillshade", "color-relief", "raster"] {
+            for source in ["v", "r", "d"] {
+                let doc = json!({"version":8,"sources":{
+                    "v":{"type":"vector","tiles":["https://types.example/{z}/{x}/{y}.pbf"]},
+                    "r":{"type":"raster","tiles":["https://types.example/{z}/{x}/{y}.png"]},
+                    "d":{"type":"raster-dem","tiles":["https://types.example/{z}/{x}/{y}.png"]}},
+                    "layers":[{"id":"test","type":kind,"source":source,
+                        "paint":{"color-relief-color":["interpolate",["linear"],["elevation"],0,"#00f",10,"#f00"]}}]});
+                let mut style = Style::parse(&doc).unwrap();
+                let base = "https://types.example/style.json";
+                let notes = resolve_sources(&mut style, &spec(Kind::Style, base), &address::Origin::named(base)).unwrap().unwrap().left_out;
+                let compatible = match kind {
+                    "raster" => source != "v", // Both raster sources provide drawable images.
+                    "hillshade" | "color-relief" => source == "d",
+                    _ => source == "v",
+                };
+                if compatible {
+                    assert!(notes.is_empty(), "{kind}/{source}: {notes:?}");
+                } else {
+                    assert_eq!(notes.len(), 1, "{kind}/{source}: {notes:?}");
+                    assert!(notes[0].starts_with("1 style layer(s) skipped") && notes[0].ends_with(": test"), "{notes:?}");
+                }
+            }
+        }
     }
 
     #[test]
