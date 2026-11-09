@@ -128,7 +128,8 @@ pub(crate) fn check(stream: &[u8], max_cells: usize) -> Result<()> {
                 word(r.data, 0)?;
             }
             0x0017 if biff8 => {
-                let count = usize::from(word(r.data, 0)?).min(r.data.len().saturating_sub(2) / 6);
+                let count = usize::from(word(r.data, 0)?);
+                bytes(r.data, 2, count * 6)?;
                 budget.cells(count)?;
             }
             0x00e0 => {
@@ -391,7 +392,11 @@ fn worksheet(stream: &[u8], start: usize, biff8: bool, strings: &[usize], budget
                 };
                 bytes(r.data, 0, min)?;
                 let (row, col) = (word(r.data, 0)?, word(r.data, 2)?);
-                cells.add(row, col)?;
+                // A cached string is materialized by its following STRING record, not FORMULA.
+                let cached_string = r.kind == 0x0006 && byte(r.data, 6)? == 0 && bytes(r.data, 12, 2)? == [0xff, 0xff];
+                if !cached_string {
+                    cells.add(row, col)?;
+                }
                 if r.kind == 0x0006 {
                     formula_position = (word(r.data, 0)?, word(r.data, 2)?);
                     formulas.add(row, col)?;
@@ -488,6 +493,29 @@ fn formula(data: &[u8], biff8: bool, budget: &mut Budget) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cached_string_formulas_use_one_value_and_one_formula_slot() {
+        let mut stream = Vec::new();
+        for row in 0..3u16 {
+            let mut data = vec![0; 22];
+            data[..2].copy_from_slice(&row.to_le_bytes());
+            data[12..14].fill(0xff);
+            // The reader retains cached values even if the formula body is empty.
+            stream.extend([6, 0, 22, 0]);
+            stream.extend(data);
+            stream.extend([7, 2, 3, 0, 0, 0, 0]);
+        }
+        stream.extend([10, 0, 0, 0]);
+        let mut budget = Budget { max_cells: 6, cells: 0, text: 0, work: stream.len() };
+        assert_eq!(worksheet(&stream, 0, true, &[], &mut budget), Ok(()));
+    }
+
+    #[test]
+    fn external_sheet_counts_require_their_declared_entries() {
+        assert!(check(&[0x17, 0, 8, 0, 2, 0, 0, 0, 0, 0, 0, 0, 10, 0, 0, 0], 64).is_err());
+        assert!(check(&[0x17, 0, 8, 0, 1, 0, 0, 0, 0, 0, 0, 0, 10, 0, 0, 0], 64).is_ok());
+    }
 
     #[test]
     fn repeated_empty_formula_string_values_use_the_cell_budget() {
