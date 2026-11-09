@@ -11,7 +11,7 @@ use crate::{CmdResult, CommandSpec as C, Session};
 use rustgis_data::Geometry;
 
 pub fn commands() -> Vec<C> {
-    vec![C::new("stac.area", "STAC Search Area", "Home › Add › Web Data › STAC Search", area_cmd).roles(&[]).effects(crate::policy::Effects::NONE.with(crate::policy::Effect::Files)).params(
+    vec![C::new("stac.area", "STAC Search Area", "Home › Add › Web Data › STAC Search", area_cmd).roles(&[]).effects(crate::policy::Effects::NONE.with(crate::policy::Effect::Files)).view().params(
         r#"{"path"?: a file of any format RustGIS reads (GeoJSON, a zipped Shapefile, GeoPackage…): its features are merged, "layer"?: a layer's name or id whose selected features are merged (default: the active layer; used when path is not given), "buffer"?: metres to widen a point or line into a polygon (default 0; polygons are not changed)} → {"intersects": GeoJSON geometry for stac.search, "positions": n, "ignored": n}. Only the highest dimension present is kept (polygons, then lines, then points); the parts of a lower one are counted and reported."#,
     )]
 }
