@@ -16000,10 +16000,66 @@ fn area_review_streamed_display_reports_each_installed_window_once() {
     session.notice_landed_rasters();
     let notices = session.notices_since(mark);
     assert_eq!(
-        notices.iter().filter(|notice| notice.text.contains("1 ring(s) in 1 feature(s)") && notice.text.contains("decoded window")).count(),
+        notices
+            .iter()
+            .filter(|notice| notice.text.contains("1 ring(s) in 1 feature(s)") && notice.text.contains("decoded features"))
+            .count(),
         1,
         "{notices:?}"
     );
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn area_review_streamed_filters_keep_clean_features_and_report_unavailable_rows() {
+    use std::sync::Arc;
+    for limit in [0, 1] {
+        let (mut session, id) = area_review_fixture();
+        let layer = session.map_mut().layer_mut(id).unwrap();
+        let bytes = Arc::new(rustgis_data::source::fgb::write(&layer.dataset).unwrap());
+        let handle = rustgis_data::source::open_shared("area.fgb", bytes.clone(), None).unwrap();
+        let mut source = rustgis_map::source::SourceLayer::from_bytes("area.fgb", bytes, None, handle);
+        source.limit = limit;
+        layer.source = Some(source);
+        layer.dataset.features.clear();
+        layer.definition_query = Some("n = 1 AND $area > 0".into());
+        let mark = session.notice_mark();
+        let view = rustgis_geom::Extent::new(-180.0, -90.0, 180.0, 90.0);
+        let mut pending = true;
+        for _ in 0..1000 {
+            pending = session.map_mut().sync_sources(&view, 1000.0, false);
+            session.notice_landed_rasters();
+            if !pending {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(!pending);
+        let layer = session.map().layer(id).unwrap();
+        assert_eq!(layer.visible_rows().iter().filter(|visible| **visible).count(), 1, "limit={limit}");
+        assert!(layer.source.as_ref().unwrap().error.is_none());
+        session.notice_landed_rasters();
+        let notes = session.notices_since(mark);
+        assert_eq!(
+            notes.iter().filter(|notice| notice.text.contains("1 ring(s) in 1 feature(s)") && notice.text.contains("decoded")).count(),
+            1,
+            "{notes:?}"
+        );
+        // Full exports still refuse an unusable area query rather than losing rows in a copy.
+        session.map_mut().sync_sources(&view, 1000.0, true);
+        assert!(
+            session
+                .map()
+                .layer(id)
+                .unwrap()
+                .source
+                .as_ref()
+                .unwrap()
+                .error
+                .as_ref()
+                .is_some_and(|error| error.contains("area is ambiguous"))
+        );
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]

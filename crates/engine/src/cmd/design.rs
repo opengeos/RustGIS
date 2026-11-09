@@ -63,13 +63,13 @@ pub(crate) fn display_area_messages<'a>(layers: impl Iterator<Item = &'a rustgis
     let (mut rings, mut features, mut names, mut windowed) = (0usize, 0usize, Vec::new(), false);
     for layer in layers.filter(|layer| has_area_display(layer)) {
         let before = features;
-        for geometry in layer.dataset.features.iter().filter_map(|feature| feature.geometry.as_ref()) {
-            let count = geometry.ambiguous_area_rings();
-            if count > 0 {
-                rings += count;
-                features += 1;
-            }
-        }
+        let counts = layer
+            .source
+            .as_ref()
+            .and_then(|source| source.unavailable_areas(&layer.dataset.features))
+            .unwrap_or_else(|| rustgis_map::source::AmbiguousAreas::from_features(&layer.dataset.features));
+        rings = rings.saturating_add(counts.rings);
+        features = features.saturating_add(counts.features);
         if features > before {
             names.push(layer.name.clone());
             windowed |= layer.source.is_some();
@@ -78,7 +78,7 @@ pub(crate) fn display_area_messages<'a>(layers: impl Iterator<Item = &'a rustgis
     if rings == 0 {
         return None;
     }
-    let scope = if windowed { "; counts cover loaded features, including decoded window(s) for streamed layers" } else { "" };
+    let scope = if windowed { "; streamed-layer counts cover only decoded features for the current views" } else { "" };
     Some(format!(
         "{} layer(s) ({}): area is ambiguous for {rings} ring(s) in {features} feature(s): a ring through both poles winds beyond one whole surface{scope}; area values for affected features are unavailable; saved display expressions are retained",
         names.len(),
