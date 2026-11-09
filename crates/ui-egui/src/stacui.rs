@@ -140,6 +140,10 @@ pub struct State {
     pub from: String,
     pub to: String,
     pub use_view: bool,
+    /// Search near the selected features instead (their merged shape, widened by `buffer` metres
+    /// when it is a point or a line), which replaces "where the map is".
+    pub use_selection: bool,
+    pub buffer: String,
     pub max_cloud: String,
     /// The order of an API's items (`eo:cloud_cover`…); empty for the API's own.
     pub sortby: String,
@@ -188,6 +192,8 @@ impl Default for State {
             from: String::new(),
             to: String::new(),
             use_view: true,
+            use_selection: false,
+            buffer: String::new(),
             max_cloud: "20".into(),
             sortby: String::new(),
             preset: None,
@@ -225,6 +231,21 @@ fn fetch_service(app: &mut RustGisApp, url: &str) -> Answer {
     let base = app.ui.stac.api.clone();
     match crate::serviceui::request_from(app, connection.as_deref(), &base, url) {
         Ok(url) => fetch(&url),
+        Err(e) => Slot::new(std::sync::Mutex::new(Some(Err(crate::connectionui::translated(&e))))),
+    }
+}
+
+/// Like [`fetch_service`], POSTing `body` (a search by shape).
+fn post_service(app: &mut RustGisApp, url: &str, body: String) -> Answer {
+    let connection = selected_connection(app);
+    let base = app.ui.stac.api.clone();
+    match crate::serviceui::request_from(app, connection.as_deref(), &base, url) {
+        Ok(url) => {
+            let slot: Answer = Slot::default();
+            let land = slot.clone();
+            cache::post_json(&url, body, Box::new(move |r| *land.lock().unwrap_or_else(|e| e.into_inner()) = Some(r)));
+            slot
+        }
         Err(e) => Slot::new(std::sync::Mutex::new(Some(Err(crate::connectionui::translated(&e))))),
     }
 }
@@ -887,8 +908,17 @@ pub fn dialog(app: &mut RustGisApp, ui: &mut egui::Ui) {
             ui.end_row();
         }
         ui.label("");
-        ui.checkbox(&mut st.use_view, tl!("Only where the map is"));
+        ui.add_enabled(!st.use_selection, egui::Checkbox::new(&mut st.use_view, tl!("Only where the map is")));
         ui.end_row();
+        ui.label("");
+        ui.checkbox(&mut st.use_selection, tl!("Only near the selected features"));
+        ui.end_row();
+        if st.use_selection {
+            let input_label = ui.label(tl!("Widen points and lines by (m)"));
+            ui.add(egui::TextEdit::singleline(&mut st.buffer).hint_text("0").desired_width(ui.available_width().clamp(70.0, 110.0)))
+                .labelled_by(input_label.id);
+            ui.end_row();
+        }
     });
     let st = &app.ui.stac;
     let keepable = !st.listed.is_empty()
@@ -1084,11 +1114,25 @@ fn find_items(app: &mut RustGisApp) {
     if !st.sortby.trim().is_empty() && shown_preset(st).is_some() {
         p["sortby"] = json!(st.sortby.trim());
     }
-    if st.use_view {
+    let buffer = st.buffer.trim().to_string();
+    if st.use_selection {
+        p["intersects"] = json!("selection");
+        if !buffer.is_empty() {
+            match buffer.parse::<f64>() {
+                Ok(m) => p["buffer"] = json!(m),
+                Err(_) => {
+                    app.ui.stac.error = Some(tl!("The distance to widen by is a number of metres").to_string());
+                    return;
+                }
+            }
+        }
+    } else if st.use_view {
         p["bbox"] = json!("view");
     }
-    let search = rustgis_engine::cmd::stac::search_params(&app.session, &p);
-    app.ui.stac.asked_area = search.as_ref().ok().and_then(|s| s.bbox);
+    // The shape of the selection (if asked) replaces the box; what merging leaves out is a notice.
+    let search = rustgis_engine::cmd::stac::search_with_area(&mut app.session, &p).map(|(s, _)| s);
+    app.ui.stac.asked_area =
+        search.as_ref().ok().and_then(|s| s.bbox.or_else(|| s.intersects.as_ref().map(|g| stac::area::Shape::new(g).bbox())));
     app.ui.stac.error = None;
     if is_static {
         let st = &app.ui.stac;
@@ -1105,10 +1149,23 @@ fn find_items(app: &mut RustGisApp) {
         }
         return;
     }
-    let url = stac::api(Some(app.ui.stac.api.as_str())).and_then(|api| search.and_then(|s| stac::search_url(&api, &s)));
-    match url {
-        Ok(url) => {
-            let slot = fetch_service(app, &url);
+    // A shape goes in the body of a POST, which has no limit that matters; a box and the rest in
+    // the address, as before.
+    let api = stac::api(Some(app.ui.stac.api.as_str()));
+    let request = api.and_then(|api| {
+        let s = search?;
+        if s.intersects.is_some() {
+            Ok((stac::search_post_url(&api), Some(stac::search_body(&s)?.to_string())))
+        } else {
+            Ok((stac::search_url(&api, &s)?, None))
+        }
+    });
+    match request {
+        Ok((url, body)) => {
+            let slot = match body {
+                Some(body) => post_service(app, &url, body),
+                None => fetch_service(app, &url),
+            };
             app.ui.stac.waiting = Some((Asked::Search(url), slot));
         }
         Err(e) => app.ui.stac.error = Some(e),

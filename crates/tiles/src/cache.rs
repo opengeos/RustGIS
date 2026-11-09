@@ -1548,6 +1548,14 @@ pub fn post_json_blocking(url: &str, body: &str) -> Result<Vec<u8>, String> {
     native::post_with(&native::public_agent(BLOCKING_TIMEOUT), url, body)
 }
 
+/// Like [`post_json_blocking`], to an address the user named: it may be on their own network, as
+/// a download from one is ([`download_blocking`]). Not for addresses a document pointed to.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn post_json_named_blocking(url: &str, body: &str) -> Result<Vec<u8>, String> {
+    crate::address::check(url, None)?;
+    native::post_with(&native::download_agent(BLOCKING_TIMEOUT), url, body)
+}
+
 /// What a `HEAD` request says of a file before any of it is read: the length of its TIFF header
 /// that a server making GeoTIFFs on request announces (`X-TIFF-Header-Length`, Vantor's Transform
 /// API), so a cloud-optimised GeoTIFF's header comes in one range read; its type; and whether

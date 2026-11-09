@@ -59,13 +59,45 @@ at a time; other assets download whole (see [Files on the web](data-formats.md#f
 The commands do the same: `stac.collections` (`"url"`), `stac.search` (`"collections"`,
 `"bbox"` as `[west, south, east, north]` or `"view"`, `"datetime"` such as
 `2024-06-01/2024-06-30`, `"limit"` from 1 to 200, default 10, `"maxCloud"`, `"footprints"`, and
-`"properties": true` for the scalar item properties rather than just date and cloud cover),
+`"properties": true` for the scalar item properties rather than just date and cloud cover; see
+[Searching by shape](#searching-by-shape) for `"intersects"` and `"buffer"`),
 and `stac.addAsset` with an item returned by `stac.search` (`"item"`) or an item's address
 (`"url"`) and `"asset"`. API searches return one page and a `"next"` address when there is another:
 
 ```sh
 rustgis-cli run --cmd 'stac.search={"collections":"sentinel-2-c1-l2a","bbox":[7.4,46.9,7.5,47],"datetime":"2024-07-01/2024-07-31","maxCloud":20}' --cmd 'stac.addAsset={"url":"https://earth-search.aws.element84.com/v1/collections/sentinel-2-c1-l2a/items/S2B_T32TLS_20240727T103439_L2A","asset":"scl"}'
 ```
+
+### Searching by shape
+
+A bounding box isn't always the area you mean. Tick **Only near the selected features** in STAC
+Search (desktop) to search where the selected features of the active layer are, rather than where
+the map is. The command is `"intersects"`: GeoJSON (a geometry, a feature or a collection of
+features), or `"selection"` for the selected features of `"layer"` (default the active layer). It
+is sent as the STAC `intersects` parameter and replaces `"bbox"` (Item Search takes one or the
+other); a static catalog, which has no search, keeps the items whose footprint meets the shape.
+
+Several features are merged into one shape. Only the highest dimension present is kept
+(polygons, then lines, then points); polygons are dissolved, and positions are rounded to eight
+decimals. RustGIS says how many parts of a lower dimension it left out, and how many lines or
+polygons had too few positions to search with. A shape of more than 20,000 positions, or one
+off the globe, is refused.
+
+`"buffer"` (metres, up to 1,000,000; **Widen points and lines by** in the dialog) widens a point
+or line into a polygon along the Earth's surface before searching, so scenes near it are found and
+not only those that cover it. A polygon is not widened, and RustGIS says so.
+
+`stac.area` makes the shape without searching: from `"path"` (a file in any format RustGIS reads)
+or from a layer's selected features, with the same rules and `"buffer"`. It returns the GeoJSON
+to give `stac.search` as `"intersects"`:
+
+```sh
+rustgis-cli run --cmd 'stac.area={"path":"parcel.shp","buffer":500}' --cmd 'stac.search={"collections":"sentinel-2-c1-l2a","intersects":{"type":"Point","coordinates":[-84.5,38.05]},"buffer":500,"datetime":"2024-07-01/2024-07-31"}'
+```
+
+A shape is sent in the body of a `POST /search`; if the server refuses that, the search is asked
+again in the query when the shape is short enough for one. A POST search returns no `"next"`
+address (RustGIS says when more items match than were loaded): raise `"limit"` or narrow it.
 
 Assets can use HTTP(S) or `s3://` addresses. S3 assets use the saved connection serving their
 bucket, or anonymous AWS access when none matches; see [S3 buckets](data.md#s3-buckets).
