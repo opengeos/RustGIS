@@ -810,6 +810,25 @@ fn less_common_geometries_of_odd_rings_curves_and_solids() {
     assert!(says(&out, "city objects have no gml:id"), "{:?}", messages_of(&out));
 }
 
+/// A file cut right after a city object's end tag, before its member's, keeps that object; a
+/// polygon whose exterior is a link is said as a link only.
+#[test]
+fn a_city_object_finished_before_a_cut_is_kept_and_a_linked_exterior_is_said_once() {
+    let text = String::from_utf8(lonlat(&building("b1", &box_surfaces("b1")))).unwrap();
+    let end = text.find("</bldg:Building>").unwrap() + "</bldg:Building>".len();
+    let out = read("model.gml", &text.as_bytes()[..end], None).unwrap();
+    assert!(out[0].0.features.iter().any(|f| f.geometry.is_some()), "{:?}", messages_of(&out));
+    assert!(says(&out, "cut short"), "{:?}", messages_of(&out));
+
+    let ring = r##"<gml:Polygon gml:id="p"><gml:exterior xlink:href="#ring"/></gml:Polygon>"##;
+    let inner = format!(
+        "<bldg:lod2MultiSurface><gml:MultiSurface><gml:surfaceMember>{ring}</gml:surfaceMember></gml:MultiSurface></bldg:lod2MultiSurface>"
+    );
+    let out = read("model.gml", &lonlat(&building("b2", &inner)), None).unwrap();
+    assert!(says(&out, "only by a link"), "{:?}", messages_of(&out));
+    assert!(!says(&out, "shape that can't be drawn"), "{:?}", messages_of(&out));
+}
+
 /// A geometry left out after some of its points were read leaves them out of the file's reach: with no
 /// system named, the file's other points still make it longitude/latitude.
 #[test]

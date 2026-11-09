@@ -206,10 +206,11 @@ fn read_with(file_name: &str, bytes: &[u8], given: Option<Crs>, keep_named: bool
 /// Where a document's members lie, the namespaces its root declares, and the system it names.
 #[derive(Default)]
 struct Index {
-    /// Each member's byte range, and the `featureMembers` holding it in `holders`, when it is an
-    /// object of one: that element holds many, each read on its own.
+    /// Each member's byte range, and the holder in `holders` it is read in, when it is an object of a
+    /// `featureMembers` or one of the objects a member cut short finished.
     members: Vec<(usize, usize, Option<usize>)>,
-    /// Each `featureMembers` element's start tag as written, and its end tag.
+    /// The start tag as written, and the end tag, of a `featureMembers` element or of a member cut
+    /// short, which the objects it finished are read in.
     holders: Vec<(String, String)>,
     /// The root's namespace declarations, written out as attributes.
     namespaces: String,
@@ -256,6 +257,9 @@ impl Index {
         let mut member: Option<(usize, usize)> = None;
         // The `featureMembers` being read, by its place in `holders`.
         let mut holder: Option<usize> = None;
+        // The objects finished inside the member being read, and the one open now.
+        let mut finished: Vec<(usize, usize)> = Vec::new();
+        let mut child_start: Option<usize> = None;
         // The file ends inside the root's end tag, every member in.
         let mut in_root_end = false;
         loop {
@@ -280,6 +284,9 @@ impl Index {
                     if let Some((start, _)) = member.filter(|&(_, at)| at == depth) {
                         member = None;
                         index.members.push((start, position(&reader), holder));
+                    } else if let Some(s) = child_start.filter(|_| depth == 2) {
+                        child_start = None;
+                        finished.push((s, position(&reader)));
                     }
                     if depth == 1 {
                         holder = None;
@@ -303,7 +310,10 @@ impl Index {
             match (depth, holder) {
                 (1, _) => match e.local_name().into_inner() {
                     "cityObjectMember" | "featureMember" if empty => index.members.push((start, position(&reader), None)),
-                    "cityObjectMember" | "featureMember" => member = Some((start, 1)),
+                    "cityObjectMember" | "featureMember" => {
+                        member = Some((start, 1));
+                        finished.clear();
+                    }
                     "featureMembers" if !empty => {
                         let open = text.get(start..position(&reader)).unwrap_or_default().to_string();
                         index.holders.push((open, format!("</{}>", e.name().into_inner())));
@@ -315,11 +325,31 @@ impl Index {
                 // An object of a `featureMembers`.
                 (2, Some(_)) if empty => index.members.push((start, position(&reader), holder)),
                 (2, Some(_)) => member = Some((start, 2)),
+                (2, None) if matches!(member, Some((_, 1))) => {
+                    if empty {
+                        finished.push((start, position(&reader)));
+                    } else {
+                        child_start = Some(start);
+                    }
+                }
                 _ => {}
             }
             if !empty {
                 depth += 1;
             }
+        }
+        // A member cut short keeps the objects it finished, each in a copy of its member's tags.
+        let first = finished.first().map(|&(s, _)| s);
+        if let (Some((start, 1)), Some(first)) = (member, first) {
+            let name: String = text
+                .get(start + 1..first)
+                .unwrap_or_default()
+                .chars()
+                .take_while(|c| !c.is_whitespace() && !matches!(c, '>' | '/'))
+                .collect();
+            index.holders.push((text.get(start..first).unwrap_or_default().to_string(), format!("</{name}>")));
+            let holder = index.holders.len() - 1;
+            index.members.extend(finished.into_iter().map(|(s, e)| (s, e, Some(holder))));
         }
         // A file cut short, its root not closed: what came after the cut is left out, and said.
         index.cut = depth > 0 && !in_root_end;
@@ -898,7 +928,6 @@ impl Walk<'_> {
             }
             "Polygon" | "Triangle" | "Rectangle" | "PolygonPatch" => self.face(g)?,
             name @ ("Surface" | "PolyhedralSurface" | "TriangulatedSurface" | "Tin") => {
-                self.got.surface = true;
                 let patches: Vec<Node> =
                     elements(*g).filter(|c| matches!(local(c), "patches" | "polygonPatches" | "trianglePatches")).collect();
                 if patches.is_empty() {
@@ -968,7 +997,6 @@ impl Walk<'_> {
     /// link isn't read: a face whose exterior is one is left out, a hole that is one is left out of
     /// its face.
     fn face(&mut self, g: &Node) -> Option<()> {
-        self.got.surface = true;
         let exterior = elements(*g).find(|c| matches!(local(c), "exterior" | "outerBoundaryIs"))?;
         let interiors = elements(*g).filter(|c| matches!(local(c), "interior" | "innerBoundaryIs"));
         let bounds: Vec<Node> = std::iter::once(exterior).chain(interiors).collect();
@@ -1000,6 +1028,7 @@ impl Walk<'_> {
             }
             rings.push(self.positions(&ring)?);
         }
+        self.got.surface = true;
         self.got.faces.face(rings, self.ground);
         Some(())
     }
