@@ -257,7 +257,8 @@ Each layer keeps its look:
   direction from its start angle, with the categories' colours, the background, outline,
   opacity and size (fixed, or between two values, which RustGIS takes as the sum of the
   categories, noted when QGIS sizes by something else). A pie QGIS lays counterclockwise lists
-  its categories in reverse in RustGIS's legend, the order its slices run clockwise. Sizes and
+  its categories in reverse in RustGIS's legend, the order its slices run clockwise; the legend names
+  each category by its field, and a label QGIS gives it otherwise is noted. Sizes and
   outlines past RustGIS's largest, and diagrams QGIS leaves out where they overlap, are noted.
   A category by an expression, or on a
   field the layer hasn't, is left out, noted. Histograms, stacked bars and text diagrams are

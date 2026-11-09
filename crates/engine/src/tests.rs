@@ -1224,7 +1224,7 @@ fn qgis_diagrams_import_on_the_fields_the_layer_has() {
     let mut s = world();
     let qml = |attrs: &str| {
         format!(
-            r##"<qgis version="3.40.0"><SingleCategoryDiagramRenderer diagramType="Pie"><DiagramCategory enabled="1" width="10" sizeType="MM">{attrs}</DiagramCategory></SingleCategoryDiagramRenderer></qgis>"##
+            r##"<qgis version="3.40.0"><SingleCategoryDiagramRenderer diagramType="Pie"><DiagramCategory enabled="1" direction="0" width="10" sizeType="MM">{attrs}</DiagramCategory></SingleCategoryDiagramRenderer></qgis>"##
         )
     };
     let notes =
@@ -1252,12 +1252,17 @@ fn qgis_diagrams_import_on_the_fields_the_layer_has() {
         )
         .unwrap();
     assert!(notes(&r).iter().any(|n| n == "its diagram categories on fields the layer hasn't (nosuch)"), "{:?}", notes(&r));
-    assert_eq!(fields(&s).map(|f| f.len()), Some(2));
+    assert_eq!(fields(&s), Some(vec!["POP_EST".to_string(), "gdp_md".to_string()]));
     // None left: no diagram, noted.
     let r =
         s.run("style.importQgis", &json!({"layer": "Countries", "text": qml(r##"<attribute field="nosuch" color="#00ff00"/>"##)})).unwrap();
     assert!(notes(&r).iter().any(|n| n == "its diagrams, whose fields the layer hasn't (nosuch)"), "{:?}", notes(&r));
     assert_eq!(fields(&s), None);
+    // A graphics layer takes none: noted as left out.
+    s.run("graphics.newLayer", &json!({"name": "Sketch"})).unwrap();
+    let r = s.run("style.importQgis", &json!({"layer": "Sketch", "text": qml(both)})).unwrap();
+    assert!(notes(&r).iter().any(|n| n == "its diagrams (a graphics layer draws none)"), "{:?}", notes(&r));
+    assert!(s.map().layer_by_name("Sketch").unwrap().diagram.is_none());
 }
 
 /// A QGIS categorized renderer by an expression classes by it where the expression reads on the

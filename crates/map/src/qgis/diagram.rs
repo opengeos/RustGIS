@@ -5,8 +5,10 @@
 //! QGIS's renders differs from them more than drawing none.
 //!
 //! What QGIS writes, as measured on its renders: a pie's `width` is its diameter;
-//! `rotationOffset` is where the first slice starts, in degrees clockwise from 3 o'clock; and
-//! `direction="1"` lays the slices counterclockwise (`0`: clockwise). RustGIS draws slices
+//! `rotationOffset` is where the first slice starts, in degrees clockwise from 3 o'clock (none:
+//! 3 o'clock), unless an older file's `angleOffset` is there, which QGIS takes over it: sixteenths
+//! of a degree counterclockwise from 3 o'clock; and `direction="0"` lays the slices clockwise,
+//! anything else (`1`, or none) counterclockwise. RustGIS draws slices
 //! clockwise, so a counterclockwise pie is drawn with its categories in reverse order from the
 //! same start, which covers the same angles.
 
@@ -60,6 +62,7 @@ pub(super) fn read(node: Node, layer: &str, reference: Option<f64>, report: &mut
 
     let mut categories = Vec::new();
     let mut expressions = Vec::new();
+    let mut renamed = Vec::new();
     for a in cat.children().filter(|c| c.has_tag_name("attribute")) {
         let attr = a.attribute("field").unwrap_or_default();
         let Some(field) = field_name(attr) else {
@@ -68,6 +71,11 @@ pub(super) fn read(node: Node, layer: &str, reference: Option<f64>, report: &mut
             }
             continue;
         };
+        // RustGIS's legend names a category by its field: a label QGIS gives it otherwise is noted.
+        if let Some(label) = a.attribute("label").map(str::trim).filter(|l| !l.is_empty() && *l != field) {
+            let more = if label.chars().count() > 40 { "…" } else { "" };
+            renamed.push(format!("{field} as \"{}{more}\"", label.chars().take(40).collect::<String>()));
+        }
         let colour = a.attribute("color").and_then(color).unwrap_or(Rgba::rgb(0x80, 0x80, 0x80));
         categories.push(DiagramCategory { field, colour: faded(colour, num(a, "colorOpacity").unwrap_or(1.0)) });
     }
@@ -80,6 +88,18 @@ pub(super) fn read(node: Node, layer: &str, reference: Option<f64>, report: &mut
                 "{} diagram categor{} by an expression (the first: `{quoted}{more}`): only fields are drawn",
                 expressions.len(),
                 if expressions.len() == 1 { "y" } else { "ies" }
+            ),
+        );
+    }
+    if let Some(first) = renamed.first() {
+        report.approximated(
+            layer,
+            format!(
+                "{} diagram categor{} with a label of {} own, which RustGIS's legend shows by {} (the first: {first})",
+                renamed.len(),
+                if renamed.len() == 1 { "y" } else { "ies" },
+                if renamed.len() == 1 { "its" } else { "their" },
+                if renamed.len() == 1 { "its field" } else { "their fields" },
             ),
         );
     }
@@ -123,8 +143,13 @@ pub(super) fn read(node: Node, layer: &str, reference: Option<f64>, report: &mut
     };
 
     // Where the first slice starts: QGIS counts clockwise from 3 o'clock, RustGIS from 12.
-    let start_angle = (num(cat, "rotationOffset").unwrap_or(270.0) as f32 + 90.0).rem_euclid(360.0);
-    if cat.attribute("direction") == Some("1") {
+    // An older file's angleOffset (sixteenths of a degree counterclockwise from 3 o'clock) wins.
+    let start = match num(cat, "angleOffset") {
+        Some(a) => 90.0 - a / 16.0,
+        None => num(cat, "rotationOffset").unwrap_or(0.0) + 90.0,
+    };
+    let start_angle = (start.rem_euclid(360.0) as f32).rem_euclid(360.0);
+    if cat.attribute("direction") != Some("0") {
         categories.reverse();
     }
 

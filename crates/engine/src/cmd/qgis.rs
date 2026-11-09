@@ -225,8 +225,14 @@ fn add_layer(s: &mut Session, layer: &qgis::ProjectLayer, has_dir: bool, report:
 }
 
 /// Checks the diagram a style set against the layer's fields: a category on a field the layer
-/// hasn't is left out, and a diagram left with none is removed, noted with the fields.
+/// hasn't is left out, and a diagram left with none is removed, noted with the fields. On a
+/// graphics layer, which takes none, the style's is noted as left out.
 fn check_diagram(l: &mut rustgis_map::Layer, name: &str, report: &mut Report) {
+    // A graphics layer takes none (`Style::apply` leaves it out), and its own is left alone.
+    if l.graphics {
+        report.skipped(name, "its diagrams (a graphics layer draws none)");
+        return;
+    }
     let Some(d) = l.diagram.as_mut() else { return };
     let missing: Vec<String> = d.categories.iter().filter(|c| l.dataset.field_index(&c.field).is_none()).map(|c| c.field.clone()).collect();
     if missing.is_empty() {

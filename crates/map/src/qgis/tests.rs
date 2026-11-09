@@ -2032,4 +2032,48 @@ fn diagrams_carry_over_as_pie_diagrams() {
     assert!(d.is_none() && !said(&report, "only the first"), "{:?}", report.notes);
     let (d, report) = style(&qml(two, ""));
     assert!(d.is_some() && said(&report, "only the first"), "{:?}", report.notes);
+    // Without a direction, counterclockwise as QGIS draws it (reversed); without an offset, from
+    // 3 o'clock; an older file's angleOffset (sixteenths, counterclockwise) over rotationOffset.
+    let pie = |attrs: &str| {
+        let (d, report) = style(&qml(
+            &format!(
+                r##"<DiagramCategory enabled="1" {attrs}><attribute field="a" color="#ff0000"/><attribute field="b" color="#0000ff"/></DiagramCategory>"##
+            ),
+            "",
+        ));
+        let d = d.unwrap();
+        (d.categories.iter().map(|c| c.field.clone()).collect::<Vec<_>>(), d.start_angle, report)
+    };
+    assert_eq!(pie("").0, ["b", "a"]);
+    assert_eq!(pie(r#"direction="0""#).0, ["a", "b"]);
+    assert_eq!(pie(r#"direction="1""#).0, ["b", "a"]);
+    assert_eq!(pie("").1, 90.0);
+    assert_eq!(pie(r#"rotationOffset="270" angleOffset="2880""#).1, 270.0);
+    assert_eq!(pie(r#"angleOffset="1440""#).1, 0.0);
+    assert_eq!(pie(r#"rotationOffset="-90""#).1, 0.0);
+    assert_eq!(pie(r#"angleOffset="-1440""#).1, 180.0);
+    assert!((0.0..360.0).contains(&pie(r#"rotationOffset="1e300""#).1));
+    // A category QGIS labels other than its field is noted; one labelled by its field isn't.
+    let (_, report) = style(&qml(
+        r##"<DiagramCategory enabled="1"><attribute field="a" label="Apples" color="#ff0000"/><attribute field="b" label="b" color="#0000ff"/></DiagramCategory>"##,
+        "",
+    ));
+    assert!(
+        said(
+            &report,
+            r#"1 diagram category with a label of its own, which RustGIS's legend shows by its field (the first: a as "Apples")"#
+        ),
+        "{:?}",
+        report.notes
+    );
+    let (_, report) = style(&qml(
+        r##"<DiagramCategory enabled="1"><attribute field="a" label="Apples" color="#ff0000"/><attribute field="b" label="Bananas" color="#0000ff"/></DiagramCategory>"##,
+        "",
+    ));
+    assert!(
+        said(&report, "2 diagram categories with a label of their own, which RustGIS's legend shows by their fields"),
+        "{:?}",
+        report.notes
+    );
+    assert!(pie("").2.notes.is_empty());
 }
