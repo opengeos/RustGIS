@@ -2044,7 +2044,10 @@ fn update(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
         }
     }
     let kept = out.features.len();
-    for z in &zones {
+    crate::control::begin(zones.len());
+    for (done, z) in zones.iter().enumerate() {
+        crate::control::check()?;
+        crate::control::reached(done);
         let Some(u) = up.features.get(z.row) else { continue };
         let attrs =
             ds.fields.iter().zip(&from).map(|(f, i)| i.and_then(|i| u.attrs.get(i)).map_or(Value::Null, |v| converted(v, f.ty))).collect();
@@ -2153,6 +2156,8 @@ fn split(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
         index.candidates_into(&ext, &mut cand_buf);
         points_at_poles.add_to(reached, &mut cand_buf);
         for &li in &cand_buf {
+            // A layer can take most of the input: Cancel is looked at feature by feature too.
+            crate::control::check()?;
             let Some((r, e)) = located.get(li) else { continue };
             let Some(f) = ds.features.get(*r) else { continue };
             let meets = e.intersects(&ext) || (point(*r) && meet_at_a_pole(poles(e), reached));
