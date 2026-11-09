@@ -69,7 +69,7 @@ pub fn unsupported_table_counts(path: &Path) -> Result<Vec<(String, u64)>> {
             "GeoPackage: {invalid} invalid gpkg_contents entry/entries: table_name and data_type must be text"
         )));
     }
-    let mut st = conn.prepare("SELECT CASE WHEN data_type COLLATE NOCASE IN ('attributes','features','tiles','2d-gridded-coverage') THEN lower(data_type) ELSE 'other' END AS kind, count(*) FROM gpkg_contents WHERE NOT EXISTS (SELECT 1 FROM gpkg_geometry_columns AS g WHERE lower(g.table_name) = lower(gpkg_contents.table_name)) GROUP BY 1 ORDER BY 1").map_err(not_gpkg)?;
+    let mut st = conn.prepare("SELECT CASE WHEN data_type COLLATE NOCASE IN ('attributes','features','tiles','2d-gridded-coverage') THEN lower(data_type) ELSE 'other' END AS kind, count(*) FROM gpkg_contents WHERE lower(table_name) NOT IN (SELECT lower(table_name) FROM gpkg_geometry_columns WHERE table_name IS NOT NULL) GROUP BY 1 ORDER BY 1").map_err(not_gpkg)?;
     st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))
         .map_err(err)?
         .map(|r| {
