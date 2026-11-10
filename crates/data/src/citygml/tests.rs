@@ -963,6 +963,36 @@ fn surface_and_opening_properties_are_said() {
     assert!(!says(&out, "properties of their own"), "{:?}", messages_of(&out));
 }
 
+/// A value's attributes other than its unit and code list (a language) aren't kept, and are said;
+/// values with only those give no notice.
+#[test]
+fn value_attributes_that_are_not_kept_are_said() {
+    let named = format!(
+        r#"<gml:name xml:lang="de">Rathaus</gml:name><gml:name xml:lang="en">Town hall</gml:name><bldg:measuredHeight uom="m">12.5</bldg:measuredHeight>{}"#,
+        box_surfaces("b1")
+    );
+    let out = read("model.gml", &lonlat(&building("b1", &named)), None).unwrap();
+    assert!(says(&out, "2 values have attributes other than their unit (uom) or code list (codeSpace)"), "{:?}", messages_of(&out));
+    let plain = format!(
+        r#"<gml:name>Town hall</gml:name><bldg:function codeSpace="functions.xml">1000</bldg:function><bldg:measuredHeight uom="m">12.5</bldg:measuredHeight>{}"#,
+        box_surfaces("b1")
+    );
+    let out = read("model.gml", &lonlat(&building("b1", &plain)), None).unwrap();
+    assert!(!says(&out, "values have attributes other than"), "{:?}", messages_of(&out));
+}
+
+/// What isn't a feature in a city object member (malformed) isn't read as a city object, and is said.
+#[test]
+fn a_member_holding_no_feature_is_said() {
+    let members = format!("{}<core:cityObjectMember><gml:name>x</gml:name></core:cityObjectMember>", building("b1", &box_surfaces("b1")));
+    let out = read("model.gml", &lonlat(&members), None).unwrap();
+    assert!(says(&out, "1 elements in city object members aren't city objects"), "{:?}", messages_of(&out));
+    assert!(!says(&out, "no geometry of their own"), "{:?}", messages_of(&out));
+    assert!(out.iter().all(|(ds, _)| !ds.name.to_ascii_lowercase().contains("name")), "no layer for the name");
+    let out = read("model.gml", &lonlat(&building("b1", &box_surfaces("b1"))), None).unwrap();
+    assert!(!says(&out, "aren't city objects"), "{:?}", messages_of(&out));
+}
+
 /// A `featureMembers` given only by a link isn't followed, and is said with the other links.
 #[test]
 fn a_feature_members_link_is_said() {

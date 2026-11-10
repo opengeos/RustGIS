@@ -202,6 +202,8 @@ fn read_with(file_name: &str, bytes: &[u8], given: Option<Crs>, keep_named: bool
             match local(&object) {
                 "Appearance" => reading.said.appearances += 1,
                 value if VALUES.contains(&value) => {}
+                // A property or a geometry where a feature belongs (malformed): left out, and said.
+                name if !name.starts_with(char::is_uppercase) || is_gml(&object) => reading.said.not_features += 1,
                 _ if only_link(&object) => reading.said.links += 1,
                 _ => reading.object(object, None),
             }
@@ -649,6 +651,11 @@ struct Said {
     not_objects: usize,
     /// Values naming the code list they are taken from (`codeSpace`), which isn't kept.
     code_spaces: usize,
+    /// Values with attributes other than their unit and code list (a language, `xml:lang`), which
+    /// aren't kept.
+    value_attributes: usize,
+    /// Elements in a city object member that aren't features (a `gml:name`, a property).
+    not_features: usize,
     /// Thematic surfaces and openings with properties of their own, which aren't kept.
     surface_properties: usize,
 }
@@ -717,6 +724,20 @@ impl Said {
             format!(
                 "{} values name the code list they are taken from (codeSpace), which isn't kept: the code is kept on its own",
                 self.code_spaces
+            ),
+        );
+        say(
+            self.value_attributes,
+            format!(
+                "{} values have attributes other than their unit (uom) or code list (codeSpace), such as a language (xml:lang), which aren't kept: the value is kept on its own",
+                self.value_attributes
+            ),
+        );
+        say(
+            self.not_features,
+            format!(
+                "{} elements in city object members aren't city objects (a gml:name, a property where a feature belongs), and are left out",
+                self.not_features
             ),
         );
         say(
@@ -802,6 +823,8 @@ impl Reading {
                 }
             } else if let Some(v) = value(&p) {
                 self.said.code_spaces += p.descendants().filter(|n| n.is_element() && attribute(n, "codeSpace").is_some()).count();
+                self.said.value_attributes +=
+                    p.descendants().filter(|n| n.is_element() && n.attributes().any(|a| !matches!(a.name(), "uom" | "codeSpace"))).count();
                 insert(&mut attributes, name, v);
             }
         }
