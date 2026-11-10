@@ -20,7 +20,7 @@ pub fn commands() -> Vec<C> {
             .params(r#"{"layer"?, "row": number, "field": string, "value": any}"#),
         C::new("edit.addField", "Add Field", "Data › Data Design › Fields", add_field).roles(&[]).effects(crate::policy::Effects::NONE)
             .when(need_layer)
-            .params(r#"{"layer"?, "name": string, "type": "long"|"double"|"text"|"boolean"}"#),
+            .params(r#"{"layer"?, "name": string, "type": "long"|"double"|"text"|"boolean"|"date"|"datetime"}"#),
         C::new("edit.deleteField", "Delete Field", "Data › Data Design › Fields", delete_field).roles(&[]).effects(crate::policy::Effects::NONE)
             .when(need_layer)
             .params(r#"{"layer"?, "field": string}"#),
@@ -62,6 +62,10 @@ pub(crate) fn add_feature(s: &mut Session, p: &Json) -> CmdResult {
                 return Err(format!("field '{}' requires a finite number", f.name));
             }
             let coerced = coerce(value.clone(), f.ty);
+            // A value a date field can't hold (`soon`, `20260305`) is refused, not stored as null.
+            if f.ty.is_temporal() && coerced.is_null() && !value.is_null() && !matches!(&value, Value::Text(t) if t.trim().is_empty()) {
+                return Err(format!("field '{}': '{value}' isn't a {} value", f.name, f.ty.label()));
+            }
             if let Some(key) = numeric_loss(&value, &coerced, f.ty) {
                 losses.push((f.name.clone(), key));
             }
@@ -119,7 +123,7 @@ pub(crate) fn validate(g: &Geometry) -> Result<(), String> {
     }
 }
 
-/// `v` as a value of a `ty` field. A number goes into a number field as it is, not through the
+/// `v` as a value of a `ty` field. A date-time into a date field is the day it shows. A number goes into a number field as it is, not through the
 /// text it shows (which rounds a decimal to six places); a decimal, or text written as one, into a
 /// whole-number field loses its fraction (toward zero); a whole number past 2^53 into a decimal
 /// field is the nearest decimal. Not a number is null. Other values go through their text (a
@@ -213,6 +217,8 @@ fn convert(v: Value, ty: FieldType) -> (Value, Cut, Option<f64>) {
         (Value::Float(f), FieldType::Integer) => whole(f),
         (Value::Float(f), FieldType::Double) => (Value::Float(f), Cut::None, None),
         (Value::Int(i), FieldType::Double) => (Value::Float(i as f64), Cut::None, None),
+        // A date-time into a date field is the day it shows.
+        (Value::DateTime(t), FieldType::Date) => (Value::Date(t.date()), Cut::None, None),
         // Text written as a whole number, or as a decimal without an exponent, is read from its
         // digits; any other number written as text, as a decimal.
         (Value::Text(t), FieldType::Integer) => match t.trim().parse::<i64>() {
@@ -332,8 +338,18 @@ fn set_value(s: &mut Session, p: &Json) -> CmdResult {
         Json::String(t) if ty.is_numeric() && t.trim().parse::<f64>().is_ok_and(|f| !f.is_finite()) => {
             return Err(format!("'{}' isn't a finite number, which a {} field holds", t.trim(), ty.label()));
         }
-        Json::String(t) => Value::parse(&t, ty),
-        other => coerce(Value::from_json(&other), ty),
+        // Text a date field can't hold (`soon`) is refused, not stored as null.
+        Json::String(t) => match Value::parse(&t, ty) {
+            Value::Null if ty.is_temporal() && !t.trim().is_empty() && !t.trim().eq_ignore_ascii_case("<null>") => {
+                return Err(format!("'{}' isn't a {} value", t.trim(), ty.label()));
+            }
+            v => v,
+        },
+        // So is any other value a date field can't hold (`20260305`).
+        other => match coerce(Value::from_json(&other), ty) {
+            Value::Null if ty.is_temporal() && !other.is_null() => return Err(format!("'{other}' isn't a {} value", ty.label())),
+            v => v,
+        },
     };
     // Keep the existing finite coercion, but say when it discards information.
     let loss = numeric_loss(&input, &v, ty);
@@ -354,6 +370,7 @@ fn set_value(s: &mut Session, p: &Json) -> CmdResult {
     Ok(Json::Null)
 }
 
+/// Adds an empty field of a type: long, double, text, boolean, date or datetime.
 fn add_field(s: &mut Session, p: &Json) -> CmdResult {
     let id = s.layer_id(p)?;
     let name = ps(p, "name").map(str::trim).filter(|n| !n.is_empty()).ok_or("name is required")?;
@@ -365,6 +382,8 @@ fn add_field(s: &mut Session, p: &Json) -> CmdResult {
         "double" | "float" | "number" => FieldType::Double,
         "text" | "string" => FieldType::Text,
         "boolean" | "bool" => FieldType::Boolean,
+        "date" => FieldType::Date,
+        "datetime" | "date-time" | "timestamp" => FieldType::DateTime,
         other => return Err(format!("unknown field type '{other}'")),
     };
     let l = s.map_mut().layer_mut(id).ok_or("no layer")?;
@@ -487,8 +506,14 @@ fn calculate_field(s: &mut Session, p: &Json) -> CmdResult {
     // number), said even when a calculation rule writes the field afterwards: the rule may read
     // the cut value, and says what it cuts itself.
     let mut cuts = Cuts::default();
+    // Other results the field can't hold (text that isn't a number or a date) are null too, and
+    // counted.
+    let mut unread = 0usize;
     for r in &rows {
-        let (v, cut) = coerce_cut(calc.eval(&l.dataset, *r), ty);
+        let v = calc.eval(&l.dataset, *r);
+        let was_null = v.is_null();
+        let (v, cut) = coerce_cut(v, ty);
+        unread += usize::from(!was_null && v.is_null() && cut == Cut::None);
         cuts.add(cut);
         out.push((*r, v));
     }
@@ -506,6 +531,10 @@ fn calculate_field(s: &mut Session, p: &Json) -> CmdResult {
     let field = s.map().layer(id).and_then(|l| l.dataset.fields.get(fi)).map(|f| f.name.clone()).unwrap_or_default();
     for notice in cuts.notices("Calculate Field", &field) {
         s.notify(notice, false);
+    }
+    if unread > 0 {
+        let rows = if unread == 1 { "1 row" } else { &format!("{unread} rows") };
+        s.notify(format!("Calculate Field: '{field}' is null in {rows}, whose result isn't a {} value", ty.label()), false);
     }
     Ok(json!({"rows": rows.len()}))
 }
@@ -536,7 +565,21 @@ impl Calculation {
         }
         match rustgis_data::query::parse(expr, ds) {
             Ok(e) => Ok(Calculation::Expr(e)),
-            Err(err) => Calc::parse(expr, ds).map(Calculation::Calc).map_err(|_| err),
+            Err(err) => match Calc::parse(expr, ds) {
+                // Arithmetic on a date field, which the language refuses, isn't the earlier
+                // calculator's to do either.
+                Ok(c)
+                    if c.op.is_some()
+                        && [Some(&c.a), c.b.as_ref()]
+                            .into_iter()
+                            .flatten()
+                            .any(|t| matches!(t, Term::Field(i) if ds.fields.get(*i).is_some_and(|f| f.ty.is_temporal()))) =>
+                {
+                    Err(err)
+                }
+                Ok(c) => Ok(Calculation::Calc(c)),
+                Err(_) => Err(err),
+            },
         }
     }
 

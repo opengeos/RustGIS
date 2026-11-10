@@ -2324,8 +2324,12 @@ fn converted(v: &Value, ty: FieldType) -> Value {
         (Value::Int(_), FieldType::Integer)
         | (Value::Float(_), FieldType::Double)
         | (Value::Text(_), FieldType::Text)
-        | (Value::Bool(_), FieldType::Boolean) => v.clone(),
+        | (Value::Bool(_), FieldType::Boolean)
+        | (Value::Date(_), FieldType::Date)
+        | (Value::DateTime(_), FieldType::DateTime) => v.clone(),
         (Value::Null, _) => Value::Null,
+        // A date-time into a date field is the day it shows, as Calculate Field puts it.
+        (Value::DateTime(t), FieldType::Date) => Value::Date(t.date()),
         (Value::Int(i), FieldType::Double) => Value::Float(*i as f64),
         // In range, truncated; out of range (or not a number), empty rather than clamped. i64's
         // bounds as f64 are exactly -2⁶³ and 2⁶³.
@@ -3076,7 +3080,7 @@ pub(crate) fn try_clone_value(v: &Value) -> Result<Value, TryReserveError> {
             s.push_str(t);
             Value::Text(s)
         }
-        Value::Null | Value::Int(_) | Value::Float(_) | Value::Bool(_) => v.clone(),
+        Value::Null | Value::Int(_) | Value::Float(_) | Value::Bool(_) | Value::Date(_) | Value::DateTime(_) => v.clone(),
     })
 }
 
@@ -3710,7 +3714,7 @@ fn coordinate(v: &Value) -> Option<f64> {
                 Err(_) => return None,
             }
         }
-        Value::Null | Value::Bool(_) => return None,
+        Value::Null | Value::Bool(_) | Value::Date(_) | Value::DateTime(_) => return None,
     };
     n.is_finite().then_some(n)
 }
@@ -5072,8 +5076,8 @@ fn summary_statistics(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> 
 fn statistic_fields(ds: &Dataset, requests: &[crate::stats::Request], as_numbers: bool, taken: &[Field]) -> Result<Vec<Field>, String> {
     let mut out: Vec<Field> = Vec::with_capacity(requests.len());
     for r in requests {
-        let (name, numeric) = ds.fields.get(r.field).map(|f| (f.name.as_str(), f.ty.is_numeric())).unwrap_or_default();
-        let field = Field::new(format!("{}_{name}", r.stat.name()), r.stat.output_type(numeric || as_numbers));
+        let (name, ty) = ds.fields.get(r.field).map(|f| (f.name.as_str(), f.ty)).unwrap_or(("", FieldType::Text));
+        let field = Field::new(format!("{}_{name}", r.stat.name()), r.stat.output_type(ty, as_numbers));
         if taken.iter().chain(&out).any(|f| f.name.eq_ignore_ascii_case(&field.name)) {
             return Err(format!("the output would have two fields named '{}'", field.name));
         }
@@ -5339,7 +5343,7 @@ fn pivot_table(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
         return Err(format!("{} rows by {width} fields would make more than {MAX_PIVOT_CELLS} values; select fewer records", groups.len()));
     }
     let mut fields: Vec<Field> = keys.iter().filter_map(|&k| ds.fields.get(k).cloned()).collect();
-    let ty = stat.map_or(value_type, |st| st.output_type(value_type.is_numeric()));
+    let ty = stat.map_or(value_type, |st| st.output_type(value_type, false));
     let values = columns.iter().map(|c| c.key.first().unwrap_or(&Value::Null));
     let names = pivot_field_names(field_name(pivot), values, &fields);
     let first_pivot_field = fields.len();
@@ -11826,6 +11830,11 @@ mod tests {
         assert_eq!(converted(&Value::Int(5), FieldType::Text), Value::Text("5".into()));
         assert_eq!(converted(&Value::Text("x".into()), FieldType::Double), Value::Null);
         assert_eq!(converted(&Value::Null, FieldType::Text), Value::Null);
+        // A date-time into a date field is its day; a date into a date-time field, its midnight.
+        let t = Value::parse("2026-03-05T23:30:00+02:00", FieldType::DateTime);
+        assert_eq!(converted(&t, FieldType::Date), Value::parse("2026-03-05", FieldType::Date));
+        let d = Value::parse("2026-03-05", FieldType::Date);
+        assert_eq!(converted(&d, FieldType::DateTime), Value::parse("2026-03-05T00:00:00", FieldType::DateTime));
     }
 
     /// The layers of a tool's output with several.

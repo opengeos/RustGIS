@@ -975,7 +975,8 @@ fn create_table(conn: &Connection, layout: &Layout) -> Result<()> {
             FieldType::Integer => "INTEGER",
             FieldType::Double => "REAL",
             FieldType::Boolean => "BOOLEAN",
-            FieldType::Text => "TEXT",
+            // Dates are ISO text until GeoPackage's own DATE and DATETIME are written.
+            FieldType::Text | FieldType::Date | FieldType::DateTime => "TEXT",
         };
         cols.push(format!("{} {ty}", quote(col)));
     }

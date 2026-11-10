@@ -611,6 +611,7 @@ fn text_of(v: &rustgis_data::Value) -> Option<String> {
         rustgis_data::Value::Int(i) => i.to_string(),
         rustgis_data::Value::Float(f) => f.to_string(),
         rustgis_data::Value::Bool(b) => b.to_string(),
+        rustgis_data::Value::Date(_) | rustgis_data::Value::DateTime(_) => v.to_string(),
     };
     (!t.trim().is_empty()).then_some(t)
 }
