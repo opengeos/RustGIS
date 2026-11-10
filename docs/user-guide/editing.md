@@ -135,7 +135,9 @@ you edit the value or choose units; click **Apply elevation** to apply the new i
   **Cancel** stops only once it is done). A layer edited while it is checked makes the check say
   so: run Validate again. Checked from a script, the assistant or the command line, it holds
   the window and stops after a fixed amount of work, saying which rules weren't checked
-  completely.
+  completely (a gaps rule's join of its polygons has no such limit). A line or ring too complex
+  to check for self-intersections within the limit is listed at its first point, to be looked
+  at, and its rule is said to be incomplete.
   Beyond 85.05° they follow the geometry tools (see
   [Geoprocessing tools](analysis.md#geoprocessing-tools), **Near the poles**).
 - **Status**: features added, changed and deleted per layer since the last save.

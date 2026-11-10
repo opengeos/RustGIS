@@ -195,8 +195,9 @@ fn segments_cross(a: (Coord, Coord), b: (Coord, Coord)) -> Option<Coord> {
 
 /// Where a path crosses itself (rings and lines; ring closures are allowed). Segments are swept
 /// west to east, so only those overlapping in x are compared. A path too complex to finish
-/// within the work budget is reported at its start, to be looked at, rather than passed.
-fn self_crossing(path: &[Coord], closed: bool) -> Option<Coord> {
+/// within the work budget is reported at its start, to be looked at, rather than passed, and
+/// says so (`Err`), so the check is said to be incomplete.
+fn self_crossing(path: &[Coord], closed: bool) -> Result<Option<Coord>, Coord> {
     let segs: Vec<(Coord, Coord)> = path.windows(2).filter_map(|w| Some((*w.first()?, *w.get(1)?))).collect();
     let n = segs.len();
     let minx = |s: &(Coord, Coord)| s.0.x.min(s.1.x);
@@ -216,7 +217,7 @@ fn self_crossing(path: &[Coord], closed: bool) -> Option<Coord> {
             }
             work += 1;
             if past_limit(work) {
-                return path.first().copied();
+                return Err(path.first().copied().unwrap_or(a.0));
             }
             let (lo, hi) = (i.min(j), i.max(j));
             // Neighbouring segments share a vertex, as do a ring's first and last.
@@ -224,16 +225,18 @@ fn self_crossing(path: &[Coord], closed: bool) -> Option<Coord> {
                 continue;
             }
             if let Some(c) = segments_cross(*a, *b) {
-                return Some(c);
+                return Ok(Some(c));
             }
         }
     }
-    None
+    Ok(None)
 }
 
 /// Lines and polygon rings that cross themselves.
 pub fn self_intersections(ds: &Dataset, rows: &[usize]) -> Checked {
     let mut out = Vec::new();
+    // A path too complex to finish: reported at its start, and the check said incomplete.
+    let mut limited = false;
     crate::control::begin(rows.len());
     for (i, r) in rows.iter().enumerate() {
         if crate::control::cancelled() {
@@ -248,7 +251,14 @@ pub fn self_intersections(ds: &Dataset, rows: &[usize]) -> Checked {
         };
         for (p, closed) in paths {
             let m: Vec<Coord> = p.iter().map(|c| lonlat_to_plane(*c)).collect();
-            if let Some(c) = self_crossing(&m, closed) {
+            let found = match self_crossing(&m, closed) {
+                Ok(c) => c,
+                Err(start) => {
+                    limited = true;
+                    Some(start)
+                }
+            };
+            if let Some(c) = found {
                 out.push(TopologyError { rows: vec![*r], at: plane_to_lonlat(c) });
                 break;
             }
@@ -257,7 +267,7 @@ pub fn self_intersections(ds: &Dataset, rows: &[usize]) -> Checked {
             return Checked::partial(out);
         }
     }
-    Checked::done(out)
+    if limited { Checked::partial(out) } else { Checked::done(out) }
 }
 
 /// Line ends that touch no other line (within `tol_m` metres). Line parts are indexed on a grid,
@@ -1548,6 +1558,23 @@ mod tests {
         let mut pts = Dataset::new("pt", GeometryType::Point, vec![]);
         pts.push(Some(Geometry::Point(Coord::new(180.05, 0.5))), vec![]);
         assert!(not_covered(&pts, &[0], &ds).errors.is_empty());
+    }
+
+    /// A path too complex to check within the work limit is listed at its start, and the check
+    /// says it is incomplete; a run that can be cancelled takes no limit and checks it whole.
+    #[test]
+    fn a_path_past_the_work_limit_is_listed_and_the_check_is_incomplete() {
+        // 10,100 segments running north, each overlapping every other west to east: about 51
+        // million pairs, none crossing.
+        let path: Vec<Coord> = (0..10_101).map(|i| Coord::new(0.0, i as f64 * 0.001)).collect();
+        let mut ds = Dataset::new("l", GeometryType::Polyline, vec![]);
+        ds.push(Some(Geometry::Line(vec![path])), vec![]);
+        let capped = self_intersections(&ds, &[0]);
+        assert_eq!(capped.errors.len(), 1, "listed at its start");
+        assert!(capped.errors[0].at.y.abs() < 1e-9, "{:?}", capped.errors[0].at);
+        assert!(!capped.complete, "and said to be incomplete");
+        let whole = crate::run_under("Topology", &crate::control::Control::stoppable(), || Ok(self_intersections(&ds, &[0]))).unwrap();
+        assert!(whole.errors.is_empty() && whole.complete, "{whole:?}");
     }
 
     #[test]

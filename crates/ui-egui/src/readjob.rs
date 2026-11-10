@@ -63,10 +63,9 @@ struct ReadJob {
 }
 
 /// Runs Add Data, Load All, Reload Data, archive reload/repair, model/script tools or the topology
-/// check with `p`: its
-/// read on a thread of its own when the desktop app makes it so ([`reads::read_ahead`]), after
-/// any under way; here and now otherwise. While one is under way or waiting it answers that, not
-/// what the command installs, which comes as it lands.
+/// check with `p`: its read on a thread of its own when the desktop app makes it so
+/// ([`reads::read_ahead`]), after any under way; here and now otherwise. While one is under way or
+/// waiting it answers that, not what the command installs, which comes as it lands.
 pub fn run(app: &mut RustGisApp, command: &'static str, p: Value) -> Result<Value, String> {
     run_then(app, command, p, None)
 }
