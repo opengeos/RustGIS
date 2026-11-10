@@ -266,6 +266,26 @@ fn links_are_said_and_what_is_written_out_is_drawn() {
     assert_eq!(value(&out[0].0, 0, "consistsOfBuildingPart"), Value::Text("#p".into()));
 }
 
+/// A ring given only by a link is said as a link, not as coordinates that can't be read: a linked
+/// exterior leaves its face out, a linked hole only the hole.
+#[test]
+fn a_ring_given_by_a_link_is_said_as_one() {
+    let exterior = r##"<gml:Polygon><gml:exterior><gml:LinearRing xlink:href="#r"/></gml:exterior></gml:Polygon>"##;
+    let holed = format!(
+        r##"<gml:Polygon><gml:exterior><gml:LinearRing><gml:posList>{}</gml:posList></gml:LinearRing></gml:exterior><gml:interior><gml:LinearRing xlink:href="#h"/></gml:interior></gml:Polygon>"##,
+        square(0.0, 0.0, 10.0, 0.0)
+    );
+    let inner = format!(
+        "<bldg:lod2MultiSurface><gml:MultiSurface><gml:surfaceMember>{exterior}</gml:surfaceMember></gml:MultiSurface></bldg:lod2MultiSurface>\
+         <bldg:lod3MultiSurface><gml:MultiSurface><gml:surfaceMember>{holed}</gml:surfaceMember></gml:MultiSurface></bldg:lod3MultiSurface>"
+    );
+    let out = read("model.gml", &lonlat(&building("b1", &inner)), None).unwrap();
+    assert!(says(&out, "2 geometries or objects are given only by a link"), "{:?}", messages_of(&out));
+    assert!(!says(&out, "can't be read"), "{:?}", messages_of(&out));
+    let drawn: f64 = out.iter().flat_map(|(ds, _)| ds.features.iter()).map(|f| area(f.geometry.as_ref())).sum();
+    assert!(drawn > 0.0, "the face with a linked hole is kept: {:?}", messages_of(&out));
+}
+
 /// What isn't read is said, one notice per kind; a clean model ([`a_building_is_its_ground_with_its_heights`])
 /// says none of it.
 #[test]
@@ -979,6 +999,31 @@ fn value_attributes_that_are_not_kept_are_said() {
     );
     let out = read("model.gml", &lonlat(&building("b1", &plain)), None).unwrap();
     assert!(!says(&out, "values have attributes other than"), "{:?}", messages_of(&out));
+}
+
+/// A generic attribute's value says what it carries that isn't kept (a language, a code list), and
+/// a set's member with no name; a clean one, or a measure's unit, gives none of it.
+#[test]
+fn generic_value_attributes_that_are_not_kept_are_said() {
+    let inner = format!(
+        r#"<gen:stringAttribute name="label"><gen:value xml:lang="de">Rathaus</gen:value></gen:stringAttribute>
+        <gen:stringAttribute name="kind"><gen:value codeSpace="kinds.xml">1</gen:value></gen:stringAttribute>
+        <gen:genericAttributeSet name="survey"><gen:intAttribute><gen:value>3</gen:value></gen:intAttribute></gen:genericAttributeSet>{}"#,
+        box_surfaces("b1")
+    );
+    let out = read("model.gml", &lonlat(&building("b1", &inner)), None).unwrap();
+    assert!(says(&out, "1 values have attributes other than their unit (uom) or code list (codeSpace)"), "{:?}", messages_of(&out));
+    assert!(says(&out, "1 values name the code list they are taken from (codeSpace)"), "{:?}", messages_of(&out));
+    assert!(says(&out, "1 generic attributes in a set (genericAttributeSet) have no name"), "{:?}", messages_of(&out));
+    let clean = format!(
+        r#"<gen:stringAttribute name="label"><gen:value>Town hall</gen:value></gen:stringAttribute>
+        <gen:measureAttribute name="depth"><gen:value uom="m">2</gen:value></gen:measureAttribute>{}"#,
+        box_surfaces("b1")
+    );
+    let out = read("model.gml", &lonlat(&building("b1", &clean)), None).unwrap();
+    for text in ["values have attributes other than", "codeSpace", "have no name"] {
+        assert!(!says(&out, text), "{text}: {:?}", messages_of(&out));
+    }
 }
 
 /// What isn't a feature in a city object member (malformed) isn't read as a city object, and is said.

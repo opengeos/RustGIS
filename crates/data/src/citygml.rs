@@ -656,6 +656,8 @@ struct Said {
     value_attributes: usize,
     /// Elements in a city object member that aren't features (a `gml:name`, a property).
     not_features: usize,
+    /// Members of a generic attribute set with no name, which aren't kept.
+    unnamed_generic: usize,
     /// Thematic surfaces and openings with properties of their own, which aren't kept.
     surface_properties: usize,
 }
@@ -734,6 +736,10 @@ impl Said {
             ),
         );
         say(
+            self.unnamed_generic,
+            format!("{} generic attributes in a set (genericAttributeSet) have no name, and are left out", self.unnamed_generic),
+        );
+        say(
             self.not_features,
             format!(
                 "{} elements in city object members aren't city objects (a gml:name, a property where a feature belongs), and are left out",
@@ -768,6 +774,23 @@ struct Reading {
 
 impl Reading {
     /// Reads a city object into its rows, then the objects nested in it.
+    /// Counts what a generic attribute's value carries that isn't kept: its code list
+    /// (`codeSpace`), its other attributes (a language; a unit but on a `measureAttribute`), and a
+    /// set's members with no name.
+    fn said_generic(&mut self, a: &Node) {
+        for v in a.descendants().filter(|n| n.is_element() && local(n) == "value") {
+            let measure = v.parent_element().is_some_and(|p| local(&p) == "measureAttribute");
+            self.said.code_spaces += usize::from(attribute(&v, "codeSpace").is_some());
+            self.said.value_attributes +=
+                usize::from(v.attributes().any(|at| !(at.name() == "codeSpace" || (measure && at.name() == "uom"))));
+        }
+        self.said.unnamed_generic += a
+            .descendants()
+            .filter(|n| n.is_element() && n.parent_element().is_some_and(|p| local(&p) == "genericAttributeSet"))
+            .filter(|n| attribute(n, "name").is_none())
+            .count();
+    }
+
     fn object(&mut self, e: Node, parent: Option<&str>) {
         let ty = local(&e);
         if ty == "TINRelief" {
@@ -785,6 +808,7 @@ impl Reading {
             if (name.ends_with("Attribute") || name == "genericAttributeSet")
                 && let Some(key) = attribute(&p, "name")
             {
+                self.said_generic(&p);
                 insert(&mut attributes, key, generic_value(&p));
             } else if name.ends_with("TerrainIntersection") {
                 // Where the object meets the ground: an auxiliary line, not the object's shape.
@@ -1112,9 +1136,9 @@ impl Walk<'_> {
                 continue;
             }
             let ring = elements(b).next()?;
-            // A ring with a curve or point given by a link: the ring isn't whole, and is left out
-            // as one.
-            if has_linked_part(&ring) {
+            // A ring given by a link, or with a curve or point given by one: the ring isn't whole,
+            // and is left out as one (a hole alone, its face kept).
+            if only_link(&ring) || has_linked_part(&ring) {
                 self.said.links += 1;
                 if k == 0 {
                     return Some(());
