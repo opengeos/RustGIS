@@ -915,8 +915,10 @@ fn a_system_given_reads_a_file_naming_several() {
         "{:?}",
         messages_of(&out)
     );
-    // In an archive the system a model names comes first, so the names still disagree.
-    assert!(read_member("model.gml", &bytes, Some(Crs::Epsg(25832))).is_err());
+    // In an archive the system a model names comes first, so the names still disagree, and the
+    // refusal doesn't ask for the system already given.
+    let err = read_member("model.gml", &bytes, Some(Crs::Epsg(25832))).unwrap_err().to_string();
+    assert!(err.contains("in an archive a model keeps the systems it names") && !err.contains("give the coordinate system"), "{err}");
     // Names that agree say nothing of it.
     let same = model("EPSG:25832", &building("b1", &inner.replace("EPSG:25833", "EPSG:25832")));
     let out = read("model.gml", &same, Some(Crs::Epsg(25832))).unwrap();
@@ -987,4 +989,19 @@ fn a_cancelled_read_stops_between_members() {
     assert!(matches!(res, Err(DataError::Cancelled)), "{:?}", res.map(|o| o.len()));
     assert_eq!(probe.total.load(Ordering::Relaxed), 5);
     assert_eq!(read("model.gml", &bytes, None).unwrap()[0].0.features.len(), 5);
+}
+
+/// Only GML's namespaces give an object its `gml:id`: an `id` in a namespace that merely starts
+/// with GML's name is an extension's, and doesn't.
+#[test]
+fn gml_ids_come_from_gml_namespaces_only() {
+    assert!(gml_namespace("http://www.opengis.net/gml") && gml_namespace("http://www.opengis.net/gml/3.2"));
+    assert!(!gml_namespace("http://www.opengis.net/gmlfoo") && !gml_namespace("http://www.opengis.net/gm"));
+    let doc = roxmltree::Document::parse(
+        r#"<b xmlns:x="http://www.opengis.net/gmlfoo" xmlns:gml="http://www.opengis.net/gml" x:id="wrong" gml:id="right"/>"#,
+    )
+    .unwrap();
+    assert_eq!(gml_id(&doc.root_element()), Some("right"));
+    let doc = roxmltree::Document::parse(r#"<b xmlns:x="http://www.opengis.net/gmlfoo" x:id="wrong"/>"#).unwrap();
+    assert_eq!(gml_id(&doc.root_element()), None);
 }

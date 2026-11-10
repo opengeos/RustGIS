@@ -143,7 +143,7 @@ fn read_with(file_name: &str, bytes: &[u8], given: Option<Crs>, keep_named: bool
     let stem = std::path::Path::new(file_name).file_stem().and_then(|s| s.to_str()).filter(|s| !s.is_empty()).unwrap_or("city model");
     // A system given for the whole file takes the place of every one it names, so names that
     // disagree don't stop it; in an archive, where the one a model names comes first, they do.
-    let index = Index::of(file_name, text, given.is_some() && !keep_named)?;
+    let index = Index::of(file_name, text, given.is_some() && !keep_named, keep_named)?;
     if index.members.is_empty() {
         return Err(DataError::Format(format!("{file_name}: no city objects (cityObjectMember elements)")));
     }
@@ -237,6 +237,9 @@ struct Index {
     /// A system is given in place of those the file names, so `srsName`s that disagree are kept to
     /// the first rather than refused.
     overridden: bool,
+    /// A member of an archive, which keeps the systems its model names over the one given: a
+    /// refusal says so rather than asking for one.
+    archive: bool,
     /// When `overridden`: the elements naming a system other than the first, and the first of
     /// those names, said as read in the system given.
     others: usize,
@@ -275,11 +278,11 @@ fn root_namespace<'a>(e: &'a BytesStart) -> Option<Cow<'a, str>> {
 impl Index {
     /// Indexes a document in one pass, building no tree. Refuses one whose root isn't a CityGML 1.0
     /// or 2.0 city model, and, unless `overridden` (a system is given in their place), one whose
-    /// `srsName`s name different systems.
-    fn of(file_name: &str, text: &str, overridden: bool) -> Result<Index> {
+    /// `srsName`s name different systems; `archive` for a member of one.
+    fn of(file_name: &str, text: &str, overridden: bool, archive: bool) -> Result<Index> {
         let invalid = |e: quick_xml::Error| DataError::Format(format!("{file_name}: {e}"));
         let mut reader = Reader::from_str(text);
-        let mut index = Index { overridden, ..Index::default() };
+        let mut index = Index { overridden, archive, ..Index::default() };
         // Open elements, and whether the root has been seen.
         let (mut depth, mut rooted) = (0usize, false);
         // The member being read: where it starts, and the depth its end tag brings back.
@@ -415,6 +418,11 @@ impl Index {
                 self.other.get_or_insert_with(|| cut(srs));
                 Ok(())
             }
+            _ if self.archive => Err(DataError::Unsupported(format!(
+                "{file_name}: it names different coordinate systems ({} and {}), which aren't read together; in an archive a model keeps the systems it names, so a coordinate system given doesn't apply to it",
+                cut(first),
+                cut(srs)
+            ))),
             _ => Err(DataError::Unsupported(format!(
                 "{file_name}: it names different coordinate systems ({} and {}), which aren't read together; give the coordinate system (crs) to read it in one",
                 cut(first),
@@ -476,16 +484,21 @@ fn only_link(n: &Node) -> bool {
     attribute(n, "href").is_some() && elements(*n).next().is_none()
 }
 
+/// Whether a namespace is GML's, in any of its versions (`…/gml`, `…/gml/3.2`), and not one that
+/// only starts with its name.
+fn gml_namespace(ns: &str) -> bool {
+    const GML: &str = "http://www.opengis.net/gml";
+    ns.strip_prefix(GML).is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
+}
+
 /// Whether an element is GML's (a geometry, or an envelope).
 fn is_gml(n: &Node) -> bool {
-    n.tag_name().namespace().is_some_and(|ns| ns.starts_with("http://www.opengis.net/gml"))
+    n.tag_name().namespace().is_some_and(gml_namespace)
 }
 
 /// An element's `gml:id` (not an extension's `id`).
 fn gml_id<'a>(n: &Node<'a, '_>) -> Option<&'a str> {
-    n.attributes()
-        .find(|a| a.name() == "id" && a.namespace().is_some_and(|ns| ns.starts_with("http://www.opengis.net/gml")))
-        .map(|a| a.value())
+    n.attributes().find(|a| a.name() == "id" && a.namespace().is_some_and(gml_namespace)).map(|a| a.value())
 }
 
 /// Whether an element is a GML geometry this reader draws.
