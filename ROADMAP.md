@@ -53,8 +53,10 @@ labelled [good first issue](https://github.com/opengeos/RustGIS/labels/good%20fi
 place to start.
 
 ## Underway
-The [open pull requests](https://github.com/opengeos/RustGIS/pulls) are the live list of what is
-underway; check them, and the item's issue, before starting. To take an item, comment on its
+An item is underway when it has an open pull request, or someone said on its issue or discussion
+in the last week that they are working on it. The
+[open pull requests](https://github.com/opengeos/RustGIS/pulls) are the live list; check them, and
+the item's issue, before starting. To take an item, comment on its
 issue if it has one, and open a draft pull request early. Design work without a pull request yet:
 - How a project stores its data: a prototype and the first steps
   ([discussion #1378](https://github.com/opengeos/RustGIS/discussions/1378),
