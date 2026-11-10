@@ -150,7 +150,7 @@ mod tests {
         app.run("ui.worldview", json!({"worldview": "Netherlands"})).unwrap();
         assert_eq!(app.ui.worldview, "nld");
         assert_eq!(downloading(&app), Some(nld));
-        assert_eq!(*asked.borrow(), ["https://data.source.coop/giswqs/opengeos/rustgis/worldviews/countries_nld.geojson"]);
+        assert_eq!(*asked.borrow(), ["https://data.source.coop/opengeos/data/rustgis/worldviews/countries_nld.geojson"]);
         let mark = app.session.notice_mark();
         poll(&mut app, &egui::Context::default());
         assert!(app.session.notices_since(mark).is_empty());

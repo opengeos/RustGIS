@@ -68,9 +68,10 @@ still identify private data, so review copied diagnostics before sharing them.
   until a sign-out or a login that ends clears the cached web tiles; the web app also uses the
   browser's own cache. Links in the pop-up open only when you click them.
 - Choosing a worldview other than the default in **Settings › Language › Worldview** downloads
-  its borders from source.coop (`data.source.coop`), once on the desktop (they are kept in the
-  cache folder) and once a session in the web app. Until you choose one, a system whose time
-  zone or language is mainland China's downloads China's view the same way.
+  its borders from source.coop (`data.source.coop`, the `opengeos/data` repository),
+  once on the desktop (they are kept in the cache folder) and once a session in the web app.
+  Until you choose one, a system whose time zone or language is mainland China's downloads
+  China's view the same way.
 - Web data, remote rasters, cloud storage, database connections and online catalogs contact
   their configured servers. Searches may send keywords, coordinates, an area of interest,
   dates or filters; authenticated connections also send the credentials or tokens required by
