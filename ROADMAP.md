@@ -115,10 +115,11 @@ features build on.
   ([poll #1660](https://github.com/opengeos/RustGIS/discussions/1660)), and storage that opens a
   large project without reading it whole. _Decide first._
 - Date and date-time field types ([#853](https://github.com/opengeos/RustGIS/issues/853), part 1
-  in [#1325](https://github.com/opengeos/RustGIS/pull/1325)), then the formats in three parts;
-  afterwards time zones (a time without a zone stays as written; where an instant is needed, an
-  assumed zone is saved in the project, never written into the data) and recovering a project
-  with an invalid date. _Decide first_ (field types).
+  in [#1325](https://github.com/opengeos/RustGIS/pull/1325)), then read and written as dates by
+  Shapefile and GeoPackage, the other files, and the databases, in that order; afterwards time
+  zones (a time without a zone stays as written; where an instant is needed, an assumed zone is
+  saved in the project, never written into the data) and recovering a project with an invalid
+  date. _Decide first_ (field types).
 - Z coordinates kept from the data and written back, Phase 1 of
   [#726](https://github.com/opengeos/RustGIS/issues/726). _Decide first_ (it changes `Coord`).
 - Persistent attribute joins and virtual fields. _Decide first_ (they change `Feature`; needs an
