@@ -725,7 +725,10 @@ fn cli() -> ExitCode {
         return ExitCode::from(2);
     }
     let wanted = rustgis_engine::sample::wanted_worldview(worldview);
+    // `mcp --attach` relays to the running app, which shows its own worldview.
+    let attaching = cmd == "mcp" && args.iter().any(|a| a == "--attach");
     if matches!(cmd, "render" | "run" | "ask" | "mcp")
+        && !attaching
         && let Err(e) = rustgis_engine::sample::download_blocking(wanted)
     {
         // Asked for by name, it is needed; the system's choice falls back to the default borders.

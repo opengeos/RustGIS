@@ -185,21 +185,32 @@ pub mod sample_data {
         if w.built_in() {
             return Ok(());
         }
+        if text.len() > MAX_WORLDVIEW_BYTES {
+            return Err(format!(
+                "the {} worldview's countries are {} bytes, more than the {MAX_WORLDVIEW_BYTES} allowed",
+                w.name(),
+                text.len()
+            ));
+        }
         check(&text).map_err(|e| format!("the {} worldview's countries aren't usable: {e}", w.name()))?;
         let _ = TEXTS.get(w.index()).ok_or("unknown worldview")?.set(text);
         Ok(())
     }
 
-    /// Checks that `text` can stand in for the built-in countries.
+    /// Checks that `text` can stand in for the built-in countries. It reads the whole file (about
+    /// 250 KB, a few milliseconds), once per worldview and run.
     fn check(text: &str) -> Result<(), String> {
         use rustgis_data::Geometry;
-        let read = |t| rustgis_data::io::read_geojson(t, "Countries").map(|(d, _)| d).map_err(|e| e.to_string());
-        let (ds, built_in) = (read(text)?, read(COUNTRIES)?);
+        let names = |d: &rustgis_data::Dataset| d.fields.iter().map(|f| f.name.clone()).collect::<Vec<_>>();
+        // The built-in countries' fields, read once.
+        static BUILT_IN: OnceLock<Vec<String>> = OnceLock::new();
+        let built_in =
+            BUILT_IN.get_or_init(|| rustgis_data::io::read_geojson(COUNTRIES, "Countries").map(|(d, _)| names(&d)).unwrap_or_default());
+        let ds = rustgis_data::io::read_geojson(text, "Countries").map(|(d, _)| d).map_err(|e| e.to_string())?;
         if ds.features.len() < 100 {
             return Err(format!("{} countries, fewer than 100", ds.features.len()));
         }
-        let names = |d: &rustgis_data::Dataset| d.fields.iter().map(|f| f.name.clone()).collect::<Vec<_>>();
-        if names(&ds) != names(&built_in) {
+        if built_in.is_empty() || names(&ds) != *built_in {
             return Err("its fields aren't the built-in countries'".into());
         }
         if !ds.features.iter().all(|f| matches!(f.geometry, Some(Geometry::Polygon(_)))) {
@@ -6769,6 +6780,9 @@ mod tests {
         }
         let few = r#"{"type":"FeatureCollection","features":[{"type":"Feature","properties":{"name":"A"},"geometry":{"type":"Polygon","coordinates":[[[0,0],[1,0],[1,1],[0,0]]]}}]}"#;
         assert!(install(w, few.to_string()).unwrap_err().contains("fewer than 100"));
+        // Nor is anything over the size allowed, whatever it holds (the web app's fetch has no cap).
+        let huge = format!("{}{}", sample_data::COUNTRIES, " ".repeat(sample_data::MAX_WORLDVIEW_BYTES));
+        assert!(install(w, huge).unwrap_err().contains("more than"));
         assert_eq!(text(w), None);
         // The built-in countries' shape is accepted; the view then shows (the same borders).
         install(w, sample_data::COUNTRIES.to_string()).unwrap();

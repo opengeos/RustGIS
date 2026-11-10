@@ -102,6 +102,9 @@ fn worldview_swaps_only_untouched_sample_countries() {
     t.mark_saved();
     t.run("edit.deleteField", &json!({"layer": "Countries", "field": "pop_est"})).unwrap();
     t.mark_saved();
+    // With nothing to undo, so only the layer's own countries stop the swap.
+    t.clear_history();
+    assert!(!t.can_undo());
     assert!(!swap_countries(&mut t, Worldview::DEFAULT, japan));
 }
 

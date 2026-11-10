@@ -2825,7 +2825,11 @@ impl RustGisApp {
                 self.map.invalidate();
             }
             "ui.worldview" => {
-                let code = p.get("worldview").and_then(Value::as_str).unwrap_or(i18n::AUTO).trim().to_ascii_lowercase();
+                let code = match p.get("worldview") {
+                    None | Some(Value::Null) => i18n::AUTO.to_string(),
+                    Some(Value::String(c)) => c.trim().to_ascii_lowercase(),
+                    Some(other) => return Err(format!("worldview must be a worldview's code, not {other}")),
+                };
                 // Kept as the worldview's own code, so `China` and `chn` are saved alike.
                 self.ui.worldview = if code == i18n::AUTO {
                     code

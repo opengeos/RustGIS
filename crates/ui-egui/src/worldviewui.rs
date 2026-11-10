@@ -164,6 +164,7 @@ mod tests {
         app.run("ui.worldview", json!({"worldview": "default"})).unwrap();
         assert_eq!(asked.borrow().len(), 1);
         assert!(app.run("ui.worldview", json!({"worldview": "atlantis"})).is_err());
+        assert!(app.run("ui.worldview", json!({"worldview": 7})).is_err());
         assert_eq!(app.ui.worldview, "default");
     }
 

@@ -4999,14 +4999,14 @@ fn other_name(ui: &Ui, l: crate::i18n::Lang) -> &'static str {
 fn worldview_menu(app: &mut RustGisApp, ui: &mut Ui) {
     use crate::worldviewui::name;
     use rustgis_engine::sample::{self, Worldview};
-    let shown = sample::worldview();
-    let wanted = sample::wanted_worldview(&app.ui.worldview);
     let label = match crate::worldviewui::downloading(app) {
-        Some(w) => format!("{} ({})", name(w), tl!("downloading…")),
-        None => name(shown).to_string(),
+        Some(w) => crate::i18n::fmt("{name} (downloading…)", &[("name", name(w))]),
+        None => name(sample::worldview()).to_string(),
     };
     let label = format!("{}\n{label}", tl!("Worldview"));
     big_menu(ui, app, "globe_view", &label, "Whose borders the sample countries and the basemap outline show.", move |ui, app| {
+        // Looked up only while the menu is open: `auto` reads the system's time zone and locale.
+        let wanted = sample::wanted_worldview(&app.ui.worldview);
         egui::ScrollArea::vertical().max_height(ui.ctx().content_rect().height() * 0.7).show(ui, |ui| {
             for w in Worldview::all() {
                 let text = if w.built_in() || sample::text(w).is_some() {
