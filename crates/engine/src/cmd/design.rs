@@ -2105,8 +2105,7 @@ fn same_topology(was: &[TopologyInput], now: &[TopologyInput]) -> bool {
         })
 }
 
-/// Checks each rule, in order, a result for each (fewer only in a cancelled run, whose result is
-/// dropped): a layer with a latitude out of range is an error,
+/// Checks each rule, in order, a result for each (a cancelled run is an error): a layer with a latitude out of range is an error,
 /// as it always was. Each check looks at Cancel between features and counts its progress, except
 /// the gaps check's union of every polygon, one step; in a run that can be cancelled it takes no
 /// work limit (see `rustgis_analysis::topology`).
@@ -2114,11 +2113,9 @@ fn check_topology(inputs: &[TopologyInput], tol: f64) -> Result<Vec<rustgis_anal
     use rustgis_analysis::topology as t;
     let mut found = Vec::with_capacity(inputs.len());
     for i in inputs {
-        // A cancelled run stops between rules too (a gaps rule's union doesn't look); what it
-        // found is dropped with the run.
-        if rustgis_data::progress::check().is_err() {
-            break;
-        }
+        // A cancelled run stops between rules too (a gaps rule's union doesn't look), as an error,
+        // so no result short of its rules is ever taken.
+        rustgis_data::progress::check().map_err(|_| "the topology check was cancelled".to_string())?;
         rustgis_analysis::validate_latitudes(&i.data, i.rows.iter().copied())?;
         found.push(match (&i.rule, &i.by) {
             (TopologyRule::MustNotOverlap { .. }, _) => t::overlaps(&i.data, &i.rows),

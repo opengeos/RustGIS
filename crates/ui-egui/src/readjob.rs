@@ -346,14 +346,15 @@ fn start(app: &mut RustGisApp, mut asked: Asked, p: Value) -> Result<Value, Stri
             return Err(why);
         }
         log::warn!("{name} reads here: its thread didn't start: {e}");
-        // Here, where its Cancel can't be clicked, the run takes the work limits of one that
-        // can't be cancelled.
+        // Here, where its Cancel can't be clicked, the topology check takes the work limit of a
+        // run that can't be cancelled; it has none on its thread.
+        let control = if asked.command == "topology.validate" { Control::new() } else { control };
         let read = held
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .take()
             .ok_or_else(|| tl!("This read was already started").to_string())
-            .and_then(|ahead| ahead.run(&Control::new()));
+            .and_then(|ahead| ahead.run(&control));
         return complete_here(app, asked, p, read);
     }
     app.reads.job = Some(ReadJob { asked, gone: None, name, control, slot });
