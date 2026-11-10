@@ -1843,7 +1843,7 @@ mod tests {
     fn closing_the_pane_stops_drawing_the_area_and_returns_to_explore() {
         let mut app = RustGisApp::with_sample();
         app.ui.right = Some(crate::RightPane::WebData);
-        app.ui.web_data = "stac".into();
+        app.ui.web_data = "stac";
         draw(&mut app, "line");
         stop_stale_drawing(&mut app);
         assert_eq!(app.ui.stac.drawing, Some("line"), "the pane is shown");
