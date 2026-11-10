@@ -54,9 +54,9 @@ pub mod sample_data {
     pub const RIVERS: &str = include_str!(concat!(env!("OUT_DIR"), "/rivers.geojson"));
     pub const LAKES: &str = include_str!(concat!(env!("OUT_DIR"), "/lakes.geojson"));
 
-    /// Where the worldviews' countries are downloaded from: `countries_<code>.geojson`, made from
-    /// Natural Earth's points of view by rustgis-assets' `scripts/worldviews.py`.
-    pub const WORLDVIEWS_URL: &str = "https://assets.rustgis.app/data/worldviews";
+    /// Where the worldviews' countries are downloaded from (source.coop): `countries_<code>.geojson`,
+    /// made from Natural Earth's points of view by rustgis-assets' `scripts/worldviews.py`.
+    pub const WORLDVIEWS_URL: &str = "https://data.source.coop/giswqs/opengeos/rustgis/worldviews";
 
     /// The most bytes a worldview's download may be (the files are about 250 KB).
     pub const MAX_WORLDVIEW_BYTES: usize = 8 << 20;
@@ -6748,7 +6748,7 @@ mod tests {
         assert_eq!(all.len(), 32);
         assert_eq!(china.code(), "chn");
         assert_eq!(default.url(), None);
-        assert_eq!(china.url().as_deref(), Some("https://assets.rustgis.app/data/worldviews/countries_chn.geojson"));
+        assert_eq!(china.url().as_deref(), Some("https://data.source.coop/giswqs/opengeos/rustgis/worldviews/countries_chn.geojson"));
         let codes: std::collections::HashSet<_> = all.iter().map(|w| w.code()).collect();
         assert_eq!(codes.len(), all.len());
         assert!(all.iter().all(|w| Worldview::from_code(w.code()) == Some(*w)));

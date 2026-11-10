@@ -478,7 +478,7 @@ Argentina to Vietnam. Choose one in **Settings › Language › Worldview**, set
 to its code (such as `chn`, `ind` or `usa`), or pass `--worldview` to `rustgis-cli`.
 
 A point of view isn't part of the app: it is downloaded (about 250 KB, from
-`assets.rustgis.app`) when you choose it, and the desktop app and the command line keep it in
+[source.coop](https://source.coop/giswqs/opengeos/rustgis/worldviews)) when you choose it, and the desktop app and the command line keep it in
 the cache folder, so it is downloaded once; the web app downloads it again in each session.
 The map keeps the borders it shows until the download arrives, and says so if it fails. Until
 you choose one, RustGIS shows China's view when the system's time zone is mainland China's
