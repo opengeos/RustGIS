@@ -20,6 +20,9 @@ use rustgis_engine::render::rustgis_tiles::{
 use serde_json::json;
 
 use crate::{RustGisApp, Slot, i18n};
+use rustgis_engine::cmd::stac_area::Loaded;
+use rustgis_engine::data::Geometry;
+use rustgis_engine::geom::Coord;
 
 type Answer = Slot<Result<Vec<u8>, String>>;
 
@@ -140,10 +143,17 @@ pub struct State {
     pub from: String,
     pub to: String,
     pub use_view: bool,
-    /// Search near the selected features instead (their merged shape, widened by `buffer` metres
-    /// when it is a point or a line), which replaces "where the map is".
-    pub use_selection: bool,
+    /// The search area built so far: each shape drawn, the selected features, a file's features
+    /// and the map's extent add a part. Merged by the search (the highest dimension present is
+    /// kept), and widened by `buffer` in the Distance units when it is points or lines. While
+    /// there is one it replaces "where the map is".
+    pub parts: Vec<Geometry>,
     pub buffer: String,
+    /// The shape being drawn on the map (`point`, `line`, `polygon` or `rectangle`).
+    pub drawing: Option<&'static str>,
+    /// The features being read and merged on a thread of their own (a file's, or the selection's
+    /// copy), by what they come from; Cancel drops the answer.
+    loading: Option<(String, Slot<Result<Loaded, String>>)>,
     pub max_cloud: String,
     /// The order of an API's items (`eo:cloud_cover`…); empty for the API's own.
     pub sortby: String,
@@ -192,8 +202,10 @@ impl Default for State {
             from: String::new(),
             to: String::new(),
             use_view: true,
-            use_selection: false,
+            parts: Vec::new(),
             buffer: String::new(),
+            drawing: None,
+            loading: None,
             max_cloud: "20".into(),
             sortby: String::new(),
             preset: None,
@@ -342,6 +354,8 @@ fn want_thumbs(app: &mut RustGisApp) {
 pub fn poll(app: &mut RustGisApp, ctx: &egui::Context) {
     poll_thumbs(app, ctx);
     poll_walk(app, ctx);
+    poll_loading(app, ctx);
+    stop_stale_drawing(app);
     let Some((_, slot)) = &app.ui.stac.waiting else { return };
     let Some(r) = slot.lock().unwrap_or_else(|e| e.into_inner()).take() else {
         ctx.request_repaint_after(std::time::Duration::from_millis(100));
@@ -778,6 +792,8 @@ pub fn dialog(app: &mut RustGisApp, ui: &mut egui::Ui) {
     let mut go_to: Option<(String, String)> = None;
     let mut go_up: Option<usize> = None;
     let mut api_changed = false;
+    let mut area_ask: Option<AreaAsk> = None;
+    let distance_unit = app.forms.distance_units.clone();
     if let Some(p) = shown_preset(&app.ui.stac) {
         ui.label(egui::RichText::new(tl!(p.hint())).weak());
     }
@@ -908,18 +924,22 @@ pub fn dialog(app: &mut RustGisApp, ui: &mut egui::Ui) {
             ui.end_row();
         }
         ui.label("");
-        ui.add_enabled(!st.use_selection, egui::Checkbox::new(&mut st.use_view, tl!("Only where the map is")));
+        ui.add_enabled(st.parts.is_empty(), egui::Checkbox::new(&mut st.use_view, tl!("Only where the map is")));
         ui.end_row();
-        ui.label("");
-        ui.checkbox(&mut st.use_selection, tl!("Only near the selected features"));
+        ui.label(tl!("Search area"));
+        ui.vertical(|ui| area_buttons(ui, st, &mut area_ask));
         ui.end_row();
-        if st.use_selection {
-            let input_label = ui.label(tl!("Widen points and lines by (m)"));
-            ui.add(egui::TextEdit::singleline(&mut st.buffer).hint_text("0").desired_width(ui.available_width().clamp(70.0, 110.0)))
-                .labelled_by(input_label.id);
-            ui.end_row();
-        }
+        let input_label = ui.label(i18n::fmt("Widen points and lines by ({unit})", &[("unit", i18n::t(&distance_unit))]));
+        ui.add_enabled(
+            !st.parts.is_empty(),
+            egui::TextEdit::singleline(&mut st.buffer).hint_text("0").desired_width(ui.available_width().clamp(70.0, 110.0)),
+        )
+        .labelled_by(input_label.id);
+        ui.end_row();
     });
+    if let Some(ask) = area_ask {
+        area_action(app, ask);
+    }
     let st = &app.ui.stac;
     let keepable = !st.listed.is_empty()
         && st.listed == st.api.trim()
@@ -1085,6 +1105,290 @@ fn cube_params(st: &State, first: String, last: String, connection: Option<Strin
     Ok(p)
 }
 
+/// What the Search area buttons asked for.
+#[derive(Clone, Copy, PartialEq)]
+enum AreaAsk {
+    /// Draw this shape on the map (again: stop drawing it).
+    Draw(&'static str),
+    Selected,
+    Extent,
+    File,
+    Clear,
+}
+
+/// The most parts a search area holds.
+const MAX_PARTS: usize = 1000;
+
+/// The shapes drawn on the map, with their buttons' labels.
+const DRAW: [(&str, &str); 4] = [("point", "Draw point"), ("line", "Draw line"), ("polygon", "Draw polygon"), ("rectangle", "Draw extent")];
+
+/// The Search area's buttons and what it holds now.
+fn area_buttons(ui: &mut egui::Ui, st: &mut State, ask: &mut Option<AreaAsk>) {
+    let reading = st.loading.as_ref().map(|(what, _)| what.clone());
+    ui.horizontal_wrapped(|ui| {
+        for (shape, label) in DRAW {
+            if ui.selectable_label(st.drawing == Some(shape), tl!(label)).clicked() {
+                *ask = Some(AreaAsk::Draw(shape));
+            }
+        }
+    });
+    ui.horizontal_wrapped(|ui| {
+        if ui.add_enabled(reading.is_none(), egui::Button::new(tl!("Selected features"))).clicked() {
+            *ask = Some(AreaAsk::Selected);
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        if ui.add_enabled(reading.is_none(), egui::Button::new(tl!("Load file…"))).clicked() {
+            *ask = Some(AreaAsk::File);
+        }
+        if ui.button(tl!("Current extent")).clicked() {
+            *ask = Some(AreaAsk::Extent);
+        }
+        let any = !st.parts.is_empty() || st.drawing.is_some() || reading.is_some();
+        if ui.add_enabled(any, egui::Button::new(tl!("Clear"))).clicked() {
+            *ask = Some(AreaAsk::Clear);
+        }
+    });
+    if let Some(what) = reading {
+        ui.horizontal(|ui| {
+            ui.spinner();
+            ui.label(i18n::fmt("Reading {what}…", &[("what", &what)]));
+            if ui.button(tl!("Cancel")).clicked() {
+                st.loading = None;
+            }
+        });
+    } else if let Some(shape) = st.drawing {
+        let hint = match shape {
+            "point" => tl!("Click the map · Esc to stop"),
+            "rectangle" => tl!("Drag a box on the map · Esc to stop"),
+            _ => tl!("Click to add points · double-click to finish · Esc to stop"),
+        };
+        ui.label(egui::RichText::new(hint).weak());
+    } else if !st.parts.is_empty() {
+        ui.label(egui::RichText::new(summary(&st.parts)).weak());
+    }
+}
+
+/// What a search area holds, by kind.
+fn summary(parts: &[Geometry]) -> String {
+    let count = |f: fn(&Geometry) -> bool| parts.iter().filter(|g| f(g)).count().to_string();
+    i18n::fmt(
+        "Search area: {points} point, {lines} line and {polygons} polygon part(s)",
+        &[
+            ("points", &count(|g| matches!(g, Geometry::Point(_) | Geometry::MultiPoint(_)))),
+            ("lines", &count(|g| matches!(g, Geometry::Line(_)))),
+            ("polygons", &count(|g| matches!(g, Geometry::Polygon(_)))),
+        ],
+    )
+}
+
+fn area_action(app: &mut RustGisApp, ask: AreaAsk) {
+    app.ui.stac.error = None;
+    match ask {
+        AreaAsk::Draw(shape) => draw(app, shape),
+        AreaAsk::Selected => add_selected(app),
+        AreaAsk::Extent => add_extent(app),
+        AreaAsk::File => pick_file(app),
+        AreaAsk::Clear => clear_area(app),
+    }
+}
+
+/// Starts drawing `shape` on the map with the graphic tool of that shape (the drawn shape is taken
+/// by [`take_drawn`] instead of becoming a graphic), or stops when it is the one being drawn.
+fn draw(app: &mut RustGisApp, shape: &'static str) {
+    if app.ui.stac.drawing == Some(shape) {
+        stop_drawing(app);
+        return;
+    }
+    let tool = match shape {
+        "point" => "graphicPoint",
+        "line" => "graphicLine",
+        "polygon" => "graphicPolygon",
+        _ => "graphicRectangle",
+    };
+    app.map.cancel_sketch();
+    if app.run("tool.set", json!({"tool": tool})).is_ok() {
+        app.ui.stac.drawing = Some(shape);
+    }
+}
+
+fn stop_drawing(app: &mut RustGisApp) {
+    app.ui.stac.drawing = None;
+    app.map.cancel_sketch();
+    let _ = app.run("tool.set", json!({"tool": "explore"}));
+}
+
+fn clear_area(app: &mut RustGisApp) {
+    if app.ui.stac.drawing.is_some() {
+        stop_drawing(app);
+    }
+    app.ui.stac.parts.clear();
+    app.ui.stac.loading = None;
+}
+
+/// Adds a part, within [`MAX_PARTS`] (said when it is full).
+fn push_part(app: &mut RustGisApp, g: Geometry) {
+    let st = &mut app.ui.stac;
+    if st.parts.len() >= MAX_PARTS {
+        st.error = Some(i18n::fmt("A search area holds at most {n} shapes: Clear it to start again", &[("n", &MAX_PARTS.to_string())]));
+        return;
+    }
+    st.parts.push(g);
+}
+
+/// The selected features of the active layer, merged on a thread of their own.
+fn add_selected(app: &mut RustGisApp) {
+    match rustgis_engine::cmd::stac_area::selected_geometries(&app.session, &json!({})) {
+        Ok(geometries) => {
+            let what = tl!("the selected features").to_string();
+            start_loading(app, what, move || rustgis_engine::cmd::stac_area::merge_loaded(&geometries, Vec::new()));
+        }
+        Err(e) => app.ui.stac.error = Some(e),
+    }
+}
+
+/// The map's extent as a polygon.
+fn add_extent(app: &mut RustGisApp) {
+    match rustgis_engine::cmd::stac::view(&app.session) {
+        Ok(b) => push_part(app, rectangle(b)),
+        Err(e) => app.ui.stac.error = Some(e),
+    }
+}
+
+/// A box `[west, south, east, north]` as a polygon.
+fn rectangle([w, s, e, n]: [f64; 4]) -> Geometry {
+    Geometry::Polygon(vec![vec![vec![Coord::new(w, s), Coord::new(e, s), Coord::new(e, n), Coord::new(w, n), Coord::new(w, s)]]])
+}
+
+/// A file of features, read and merged on a thread of their own.
+#[cfg(not(target_arch = "wasm32"))]
+fn pick_file(app: &mut RustGisApp) {
+    let Some(path) = rfd::FileDialog::new().pick_file() else { return };
+    let path = path.display().to_string();
+    let name = std::path::Path::new(&path).file_name().map_or_else(|| path.clone(), |n| n.to_string_lossy().into_owned());
+    start_loading(app, name, move || rustgis_engine::cmd::stac_area::load_file(&path));
+}
+
+#[cfg(target_arch = "wasm32")]
+fn pick_file(_app: &mut RustGisApp) {}
+
+/// Runs `job` on a thread of its own and takes its answer in [`poll_loading`]; in the browser, which
+/// has one thread, here and now.
+fn start_loading(app: &mut RustGisApp, what: String, job: impl FnOnce() -> Result<Loaded, String> + Send + 'static) {
+    if cfg!(target_arch = "wasm32") {
+        land(app, job());
+        return;
+    }
+    let slot: Slot<Result<Loaded, String>> = Slot::default();
+    let out = slot.clone();
+    let spawned = std::thread::Builder::new().name("stac-area".into()).spawn(move || {
+        let answer = job();
+        *out.lock().unwrap_or_else(|e| e.into_inner()) = Some(answer);
+    });
+    match spawned {
+        Ok(_) => app.ui.stac.loading = Some((what, slot)),
+        Err(e) => app.ui.stac.error = Some(i18n::fmt("Couldn't start reading: {e}", &[("e", &e.to_string())])),
+    }
+}
+
+/// What the thread made: its notices, then the part (or why there is none).
+fn land(app: &mut RustGisApp, answer: Result<Loaded, String>) {
+    match answer {
+        Ok(loaded) => {
+            for n in loaded.notices {
+                app.session.warn(n);
+            }
+            push_part(app, loaded.geometry);
+        }
+        Err(e) => app.ui.stac.error = Some(e),
+    }
+}
+
+fn poll_loading(app: &mut RustGisApp, ctx: &egui::Context) {
+    let Some((_, slot)) = &app.ui.stac.loading else { return };
+    let Some(answer) = slot.lock().unwrap_or_else(|e| e.into_inner()).take() else {
+        ctx.request_repaint_after(std::time::Duration::from_millis(100));
+        return;
+    };
+    app.ui.stac.loading = None;
+    land(app, answer);
+    ctx.request_repaint();
+}
+
+/// Drawing the area stops when another tool is picked.
+fn stop_stale_drawing(app: &mut RustGisApp) {
+    if app.ui.stac.drawing.is_some() && !matches!(app.session.tool, rustgis_engine::Tool::Graphic(_)) {
+        app.ui.stac.drawing = None;
+    }
+}
+
+/// A longitude within the globe and a latitude clamped to it: a click on a repeated copy of the
+/// world is the same place.
+fn on_globe(c: Coord) -> Coord {
+    Coord::new((c.x + 180.0).rem_euclid(360.0) - 180.0, c.y.clamp(-90.0, 90.0))
+}
+
+/// Takes a shape drawn with a graphic tool while the area is being drawn: `None` when it isn't
+/// (the graphic is added as usual), `Some(true)` when it was taken, `Some(false)` when it was too
+/// small to be a shape (the tool stays for another try).
+pub(crate) fn take_drawn(app: &mut RustGisApp, shape: &str, pts: &[Coord]) -> Option<bool> {
+    if app.ui.stac.drawing.is_none_or(|d| d != shape) {
+        return None;
+    }
+    let pts: Vec<Coord> = pts.iter().copied().filter(|c| c.is_finite()).map(on_globe).collect();
+    let geometry = match shape {
+        "point" => pts.first().map(|c| Geometry::Point(*c)),
+        "line" if pts.len() >= 2 => Some(Geometry::Line(vec![pts])),
+        "polygon" if pts.len() >= 3 => {
+            let mut ring = pts;
+            ring.extend(ring.first().copied());
+            Some(Geometry::Polygon(vec![vec![ring]]))
+        }
+        "rectangle" => match (pts.first(), pts.get(1)) {
+            (Some(a), Some(b)) if (a.x - b.x).abs() > 1e-9 && (a.y - b.y).abs() > 1e-9 => {
+                Some(rectangle([a.x.min(b.x), a.y.min(b.y), a.x.max(b.x), a.y.max(b.y)]))
+            }
+            _ => None,
+        },
+        _ => None,
+    };
+    let Some(g) = geometry else { return Some(false) };
+    push_part(app, g);
+    app.ui.stac.drawing = None;
+    Some(true)
+}
+
+/// Draws the search area on the map while the STAC pane is open.
+pub(crate) fn paint_area(app: &RustGisApp, p: &egui::Painter, rect: egui::Rect, color: egui::Color32) {
+    if app.ui.stac.parts.is_empty() || app.ui.right != Some(crate::RightPane::WebData) || app.ui.web_data != "stac" {
+        return;
+    }
+    let stroke = egui::Stroke::new(2.5, color);
+    let line = |cs: &[Coord]| -> Vec<egui::Pos2> { cs.iter().filter_map(|c| crate::mapview::lonlat_to_screen(app, rect, *c)).collect() };
+    for g in &app.ui.stac.parts {
+        match g {
+            Geometry::Point(c) => paint_dot(p, &line(&[*c]), color),
+            Geometry::MultiPoint(cs) => paint_dot(p, &line(cs), color),
+            Geometry::Line(parts) => {
+                for part in parts {
+                    p.add(egui::Shape::line(line(part), stroke));
+                }
+            }
+            Geometry::Polygon(polygons) => {
+                for ring in polygons.iter().flatten() {
+                    p.add(egui::Shape::closed_line(line(ring), stroke));
+                }
+            }
+        }
+    }
+}
+
+fn paint_dot(p: &egui::Painter, at: &[egui::Pos2], color: egui::Color32) {
+    for pos in at {
+        p.circle_filled(*pos, 5.0, color);
+        p.circle_stroke(*pos, 5.0, egui::Stroke::new(1.5, egui::Color32::WHITE));
+    }
+}
+
 /// Finds items: an API's search, or a walk of a static catalog from the node picked.
 fn find_items(app: &mut RustGisApp) {
     let st = &app.ui.stac;
@@ -1115,13 +1419,19 @@ fn find_items(app: &mut RustGisApp) {
         p["sortby"] = json!(st.sortby.trim());
     }
     let buffer = st.buffer.trim().to_string();
-    if st.use_selection {
-        p["intersects"] = json!("selection");
+    if !st.parts.is_empty() {
+        p["intersects"] = json!({
+            "type": "GeometryCollection",
+            "geometries": st.parts.iter().map(stac::area::to_geojson).collect::<Vec<_>>(),
+        });
         if !buffer.is_empty() {
             match buffer.parse::<f64>() {
-                Ok(m) => p["buffer"] = json!(m),
+                Ok(d) => {
+                    p["buffer"] = json!(d);
+                    p["unit"] = json!(app.forms.distance_units);
+                }
                 Err(_) => {
-                    app.ui.stac.error = Some(tl!("The distance to widen by is a number of metres").to_string());
+                    app.ui.stac.error = Some(tl!("The distance to widen by is a number").to_string());
                     return;
                 }
             }
@@ -1422,5 +1732,144 @@ mod tests {
         h.step();
         assert_eq!(h.state().ui.stac.api, "http://127.0.0.1:9/catalog.json");
         assert!(matches!(&h.state().ui.stac.waiting, Some((Asked::Children(url), _)) if url == "http://127.0.0.1:9/catalog.json"));
+    }
+
+    fn at(x: f64, y: f64) -> Coord {
+        Coord::new(x, y)
+    }
+
+    #[test]
+    fn a_drawn_shape_joins_the_search_area_and_not_a_graphics_layer() {
+        let mut app = RustGisApp::with_sample();
+        let layers = app.session.map().layers.len();
+        // Nothing is being drawn for the area: the graphic is the usual one.
+        assert_eq!(take_drawn(&mut app, "polygon", &[at(0.0, 0.0), at(1.0, 0.0), at(1.0, 1.0)]), None);
+        draw(&mut app, "polygon");
+        assert_eq!(app.ui.stac.drawing, Some("polygon"));
+        assert!(matches!(app.session.tool, rustgis_engine::Tool::Graphic("polygon")));
+        // Another shape's graphic is not taken while polygons are drawn.
+        assert_eq!(take_drawn(&mut app, "line", &[at(0.0, 0.0), at(1.0, 1.0)]), None);
+        assert_eq!(take_drawn(&mut app, "polygon", &[at(0.0, 0.0), at(1.0, 0.0), at(1.0, 1.0)]), Some(true));
+        assert!(
+            matches!(app.ui.stac.parts.as_slice(), [Geometry::Polygon(p)] if p.first().and_then(|r| r.first()).is_some_and(|ring| ring.len() == 4))
+        );
+        assert_eq!(app.ui.stac.drawing, None);
+        assert_eq!(app.session.map().layers.len(), layers, "no graphics layer was made");
+    }
+
+    #[test]
+    fn each_shape_is_drawn_from_its_own_points() {
+        let mut app = RustGisApp::with_sample();
+        for (shape, pts, kind) in [
+            ("point", vec![at(5.0, 6.0)], "point"),
+            ("line", vec![at(0.0, 0.0), at(1.0, 1.0)], "line"),
+            ("rectangle", vec![at(3.0, 4.0), at(1.0, 2.0)], "polygon"),
+        ] {
+            draw(&mut app, shape);
+            assert_eq!(take_drawn(&mut app, shape, &pts), Some(true), "{shape}");
+            let made = app.ui.stac.parts.last();
+            assert!(
+                match kind {
+                    "point" => matches!(made, Some(Geometry::Point(c)) if *c == at(5.0, 6.0)),
+                    "line" => matches!(made, Some(Geometry::Line(l)) if l.first().is_some_and(|part| part.len() == 2)),
+                    _ => made == Some(&rectangle([1.0, 2.0, 3.0, 4.0])),
+                },
+                "{shape}: {made:?}"
+            );
+        }
+        assert_eq!(app.ui.stac.parts.len(), 3);
+    }
+
+    #[test]
+    fn a_shape_too_small_to_search_with_keeps_the_tool_for_another_try() {
+        let mut app = RustGisApp::with_sample();
+        for (shape, pts) in [
+            ("rectangle", vec![at(2.0, 2.0), at(2.0, 2.0)]),
+            ("rectangle", vec![at(2.0, 2.0)]),
+            ("line", vec![at(0.0, 0.0)]),
+            ("polygon", vec![at(0.0, 0.0), at(1.0, 1.0)]),
+            ("point", vec![]),
+            ("line", vec![at(f64::NAN, 0.0), at(1.0, f64::INFINITY)]),
+        ] {
+            draw(&mut app, shape);
+            assert_eq!(take_drawn(&mut app, shape, &pts), Some(false), "{shape} {pts:?}");
+            assert_eq!(app.ui.stac.drawing, Some(shape));
+            assert!(app.ui.stac.parts.is_empty());
+            clear_area(&mut app);
+        }
+    }
+
+    #[test]
+    fn a_click_on_a_repeated_world_is_the_same_place_on_the_globe() {
+        let mut app = RustGisApp::with_sample();
+        draw(&mut app, "point");
+        assert_eq!(take_drawn(&mut app, "point", &[at(190.0, 95.0)]), Some(true));
+        assert!(matches!(app.ui.stac.parts.as_slice(), [Geometry::Point(c)] if (c.x + 170.0).abs() < 1e-9 && c.y == 90.0));
+    }
+
+    #[test]
+    fn clear_empties_the_area_and_stops_drawing() {
+        let mut app = RustGisApp::with_sample();
+        app.ui.stac.parts.push(rectangle([0.0, 0.0, 1.0, 1.0]));
+        draw(&mut app, "line");
+        clear_area(&mut app);
+        assert!(app.ui.stac.parts.is_empty() && app.ui.stac.drawing.is_none() && app.ui.stac.loading.is_none());
+        assert!(matches!(app.session.tool, rustgis_engine::Tool::Explore));
+        // Drawing again with the same button stops it.
+        draw(&mut app, "line");
+        draw(&mut app, "line");
+        assert!(app.ui.stac.drawing.is_none() && matches!(app.session.tool, rustgis_engine::Tool::Explore));
+    }
+
+    #[test]
+    fn picking_another_tool_stops_drawing_the_area() {
+        let mut app = RustGisApp::with_sample();
+        draw(&mut app, "point");
+        app.run("tool.set", json!({"tool": "explore"})).unwrap();
+        stop_stale_drawing(&mut app);
+        assert_eq!(app.ui.stac.drawing, None);
+    }
+
+    #[test]
+    fn a_search_area_holds_a_bounded_number_of_parts_and_says_so() {
+        let mut app = RustGisApp::with_sample();
+        for i in 0..MAX_PARTS {
+            push_part(&mut app, Geometry::Point(at(f64::from(i as u32 % 100), 0.0)));
+        }
+        assert_eq!(app.ui.stac.parts.len(), MAX_PARTS);
+        assert!(app.ui.stac.error.is_none());
+        push_part(&mut app, Geometry::Point(at(0.0, 0.0)));
+        assert_eq!(app.ui.stac.parts.len(), MAX_PARTS);
+        assert!(app.ui.stac.error.is_some());
+    }
+
+    #[test]
+    fn a_buffer_that_is_not_a_number_stops_the_search_before_it_asks() {
+        let mut app = RustGisApp::with_sample();
+        app.ui.stac.parts.push(Geometry::Point(at(10.0, 45.0)));
+        app.ui.stac.buffer = "far".into();
+        find_items(&mut app);
+        assert!(app.ui.stac.error.is_some());
+        assert!(app.ui.stac.waiting.is_none(), "nothing was asked of the server");
+    }
+
+    #[test]
+    fn selected_features_are_merged_on_a_thread_and_landed_with_their_notices() {
+        let mut app = RustGisApp::with_sample();
+        // Nothing selected: said, and nothing is started.
+        add_selected(&mut app);
+        assert!(app.ui.stac.error.is_some() && app.ui.stac.loading.is_none());
+        app.ui.stac.error = None;
+        // A mixed answer lands its notices, then its part.
+        let answer =
+            rustgis_engine::cmd::stac_area::merge_loaded(&[rectangle([0.0, 0.0, 1.0, 1.0]), Geometry::Point(at(5.0, 5.0))], Vec::new());
+        let before = app.session.notice_mark();
+        land(&mut app, answer);
+        assert_eq!(app.ui.stac.parts.len(), 1);
+        assert!(app.session.notices_since(before).iter().any(|n| n.text.contains("lower dimension")));
+        // A failed one lands its error and adds nothing.
+        land(&mut app, Err("no such file".into()));
+        assert_eq!(app.ui.stac.parts.len(), 1);
+        assert_eq!(app.ui.stac.error.as_deref(), Some("no such file"));
     }
 }

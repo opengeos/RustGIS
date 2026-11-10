@@ -70,12 +70,23 @@ rustgis-cli run --cmd 'stac.search={"collections":"sentinel-2-c1-l2a","bbox":[7.
 
 ### Searching by shape
 
-A bounding box isn't always the area you mean. Tick **Only near the selected features** in STAC
-Search (desktop) to search where the selected features of the active layer are, rather than where
-the map is. The command is `"intersects"`: GeoJSON (a geometry, a feature or a collection of
-features), or `"selection"` for the selected features of `"layer"` (default the active layer). It
-is sent as the STAC `intersects` parameter and replaces `"bbox"` (Item Search takes one or the
-other); a static catalog, which has no search, keeps the items whose footprint meets the shape.
+A bounding box isn't always the area you mean. In STAC Search (desktop) build a **Search area**
+from any of these, and the search looks there rather than where the map is:
+
+- **Draw point**, **Draw line**, **Draw polygon** and **Draw extent** (a box dragged on the map)
+  draw on the map with the usual click-to-add, double-click-to-finish tools; Esc stops.
+- **Selected features** adds the selected features of the active layer.
+- **Load file…** adds the features of a file in any format RustGIS reads.
+- **Current extent** adds the map's extent as a polygon.
+- **Clear** empties the area.
+
+Each choice adds a part, so the area can hold several; the pane says how many of each kind, and
+the area is drawn on the map while the pane is open. Reading a file or merging a large selection
+runs in the background, with Cancel. The command is `"intersects"`: GeoJSON (a geometry, a feature
+or a collection of features), or `"selection"` for the selected features of `"layer"` (default the
+active layer). It is sent as the STAC `intersects` parameter and replaces `"bbox"` (Item Search
+takes one or the other); a static catalog, which has no search, keeps the items whose footprint
+meets the shape.
 
 Several features are merged into one shape. Only the highest dimension present is kept
 (polygons, then lines, then points); polygons are dissolved, and positions are rounded to eight
@@ -83,7 +94,8 @@ decimals. RustGIS says how many parts of a lower dimension it left out, and how 
 polygons had too few positions to search with. A shape of more than 20,000 positions, or one
 off the globe, is refused.
 
-`"buffer"` (metres, up to 1,000,000; **Widen points and lines by** in the dialog) widens a point
+`"buffer"` (up to 1,000,000 metres, given in `"unit"`: `Meters`, `Feet`, `Kilometers` or `Miles`,
+default `Meters`; **Widen points and lines by** in the dialog, in your Distance units setting) widens a point
 or line into a polygon along the Earth's surface before searching, so scenes near it are found and
 not only those that cover it. A polygon is not widened, and RustGIS says so.
 
