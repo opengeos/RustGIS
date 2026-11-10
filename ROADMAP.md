@@ -33,8 +33,9 @@ markers, or none:
   much code.
 - _Decide first_: the project hasn't settled the design, and the decision is one
   [docs/maintaining.md](docs/maintaining.md#who-approves-a-coordinate-first-change) reserves for
-  the project lead (core types, how a project stores its data, the plugin ABI). Join the
-  discussion on the issue; don't start code until the issue records the decision.
+  the project lead (core types, how a project stores its data, the plugin ABI). Join in
+  where it is linked (an issue or a discussion); don't start code until the decision is recorded
+  there.
 
 An item marked _Coordinate first_ or _Decide first_ links the issue or discussion where it is
 decided, or says an issue is needed; opening that issue is the first step. A theme's tracking issue
@@ -129,8 +130,9 @@ features build on.
 Big layers work, or say plainly where they stop
 ([#1111](https://github.com/opengeos/RustGIS/issues/1111),
 [#1227](https://github.com/opengeos/RustGIS/issues/1227)).
-- An adjustable memory budget, and the 2 million feature cap lifted for the sources that still
-  have it (everything but GeoPackage, FlatGeobuf, GeoParquet and Shapefiles read in place).
+- An adjustable memory budget, and the feature cap (2 million on the desktop, 500,000 in the
+  browser) lifted for the sources that still have it (everything but GeoPackage, FlatGeobuf,
+  GeoParquet and Shapefiles read in place).
 - Shapefile, KML, KMZ and GPX exported a chunk at a time, as the other formats are.
 - Faster raster writing: COG export at Deflate level 1 with a predictor (3 for floating-point
   samples, 2 for integers) and its tiles compressed on several cores (`cogwrite.rs` writes level
