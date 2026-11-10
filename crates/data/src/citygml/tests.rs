@@ -387,6 +387,25 @@ fn links_read_a_member_only_so_many_times_over() {
     assert!(says(&out, &refused), "{refused}: {:?}", messages_of(&out));
 }
 
+/// A linked aggregate holding a geometry its object has read already at that level doesn't read it
+/// again: a point linked on its own and through its multipoint is one point.
+#[test]
+fn a_linked_aggregate_doesnt_read_again_what_was_read() {
+    let part = r#"<bldg:lod1Geometry><gml:MultiPoint gml:id="mp"><gml:pointMember><gml:Point gml:id="pt"><gml:pos>5 5 0</gml:pos></gml:Point></gml:pointMember></gml:MultiPoint></bldg:lod1Geometry>"#;
+    let inner = format!(
+        r##"<bldg:lod1Geometry><gml:MultiGeometry><gml:geometryMember xlink:href="#mp"/><gml:geometryMember xlink:href="#pt"/></gml:MultiGeometry></bldg:lod1Geometry>
+        <bldg:consistsOfBuildingPart><bldg:BuildingPart gml:id="p1">{part}</bldg:BuildingPart></bldg:consistsOfBuildingPart>"##
+    );
+    let out = read("model.gml", &lonlat(&building("b1", &inner)), None).unwrap();
+    let hall = layer(&out, "model Building");
+    let points = match &hall.features[0].geometry {
+        Some(Geometry::Point(_)) => 1,
+        Some(Geometry::MultiPoint(p)) => p.len(),
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(points, 1, "{:?}", hall.features[0].geometry);
+}
+
 /// A geometry left out (a polygon in it can't be read) leaves its good faces unread, so a link to
 /// one of them from elsewhere in the object still reads it.
 #[test]

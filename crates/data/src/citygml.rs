@@ -863,11 +863,13 @@ struct Links<'a, 'i> {
 }
 
 impl<'a, 'i> Links<'a, 'i> {
-    /// Marks a geometry read in this object at a level of detail.
-    fn mark(&mut self, key: (&'a str, Option<u32>)) {
-        if self.seen.insert(key) {
+    /// Marks a geometry read in this object at a level of detail; false when it was already.
+    fn mark(&mut self, key: (&'a str, Option<u32>)) -> bool {
+        let new = self.seen.insert(key);
+        if new {
             self.marked.push(key);
         }
+        new
     }
 
     /// Keeps a link to follow, in the ground's queue when it is a ground surface's.
@@ -1041,11 +1043,10 @@ impl Reading {
         let Pending { then, dim: at_link, .. } = link;
         self.walk(
             |w| {
+                // Marks are made as it is read, inside the walk, so a walk that fails (a cavity that
+                // can't be read) takes them back, and the target is read again by its next link.
+                w.following = true;
                 if !read {
-                    // Marked read before it is read, so an element that is only a link to itself
-                    // ends here; inside the walk, so a walk that fails (a cavity that can't be
-                    // read) takes the mark back, and the target is read again by its next link.
-                    w.links.mark(key);
                     if let Some(d) = dim {
                         w.dim = Some(d.trim().parse().ok()?);
                     }
@@ -1122,6 +1123,7 @@ impl Reading {
             at,
             dim: None,
             instance: false,
+            following: false,
             got: Got::default(),
             links,
         };
@@ -1183,6 +1185,8 @@ struct Walk<'r, 'a, 'i> {
     dim: Option<usize>,
     /// Reading an implicit geometry's reference point.
     instance: bool,
+    /// Reading what a link points to: a geometry its object has read at this level isn't read again.
+    following: bool,
     got: Got,
     /// Its object's links: the geometries read, and those to follow.
     links: &'r mut Links<'a, 'i>,
@@ -1192,14 +1196,19 @@ impl<'a, 'i> Walk<'_, 'a, 'i> {
     /// Reads a geometry into what its walk holds, in the `srsDimension` it gives; one given only by
     /// a link is kept to follow.
     fn geometry(&mut self, g: &Node<'a, 'i>) -> Option<()> {
+        // Read for its object at this level of detail: a link to it from there adds nothing, and
+        // reached through a link once read (a linked composite of polygons read before), it isn't
+        // read again. Marked before a link it is is kept, so a link to itself ends.
+        if let Some(id) = gml_id(g)
+            && !self.links.mark((id, self.at.lod))
+            && self.following
+        {
+            return Some(());
+        }
         // A geometry given by a link is followed once its object's own are read.
         if only_link(g) {
             self.link(g, Vec::new());
             return Some(());
-        }
-        // Read for its object at this level of detail: a link to it from there adds nothing.
-        if let Some(id) = gml_id(g) {
-            self.links.mark((id, self.at.lod));
         }
         // A geometry's `srsDimension` holds for what it holds.
         let outer = self.dim;
