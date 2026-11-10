@@ -36,8 +36,8 @@ markers, or none:
   the project lead (core types, how a project stores its data, the plugin ABI). Join the
   discussion on the issue; don't start code until the issue records the decision.
 
-An item marked _Coordinate first_ or _Decide first_ always links an issue; where it doesn't yet,
-opening one is the first step. A theme's tracking issue holds its details and progress; this
+An item marked _Coordinate first_ or _Decide first_ links its issue, or says one is needed;
+opening that issue is the first step. A theme's tracking issue holds its details and progress; this
 page keeps one line per item. A pull request that lands an item removes it from this page, or
 narrows it to what is left, in the same change.
 
@@ -259,10 +259,11 @@ And alongside it:
 Before adding a tool, check whether the GeoLibre suite already has it (`gp.tools`); a built-in
 version must justify itself: no runner download, the selection honoured, geodesic distances and
 attributes kept.
-- Network analysis: service areas, isochrones and an origin–destination matrix over a line layer,
-  in a guided workflow over the GeoLibre suite's network tools, once their results are checked
-  against known answers (today: shortest path over a line layer, and online Directions). Follow
-  the [ribbon guidelines](docs/contributing.md#ribbon-guidelines) for where it goes.
+- Network analysis: service areas, isochrones (also from a point on the map, through its
+  right-click menu) and an origin–destination matrix over a line layer, in a guided workflow over
+  the GeoLibre suite's network tools, once their results are checked against known answers
+  (today: shortest path over a line layer, and online Directions). Follow the
+  [ribbon guidelines](docs/contributing.md#ribbon-guidelines) for where it goes.
 - Hot-spot statistics (Getis-Ord Gi\*), and emerging hot spots on the time slider.
 - Kriging with a fitted variogram and leave-one-out cross-validation (the variogram is a default
   estimated from the points and extent today, not fitted; `kriging.rs`).
