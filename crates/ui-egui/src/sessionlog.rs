@@ -425,20 +425,29 @@ mod tests {
         assert!(h.query_by_label("Tools you run appear here.").is_none());
     }
 
-    /// The tabs tell assistive technology their real state: the chosen one toggled on, the others
-    /// toggled off, and none disabled (they are all clickable).
+    /// Each tab clicked shows its view (`open`, `this_project`), and the tabs tell assistive
+    /// technology their real state: the chosen one toggled on, the others toggled off, and none
+    /// disabled (they are all clickable).
     #[test]
     fn tabs_expose_their_real_selected_state_to_assistive_technology() {
-        let mut app = RustGisApp::with_sample();
-        app.ui.session_log.open = true;
-        let mut h = harness(app);
+        use egui::accesskit::{Role, Toggled};
+        const TABS: [&str; 3] = ["Tool runs", "This project", "Session log"];
+        let mut h = harness(RustGisApp::with_sample());
         h.run();
-        let on = h.get_by_role_and_label(egui::accesskit::Role::Button, "Session log").accesskit_node();
-        assert_eq!(on.toggled(), Some(egui::accesskit::Toggled::True), "the view drawn is announced as chosen");
-        assert!(!on.is_disabled(), "tabs are always clickable");
-        let off = h.get_by_role_and_label(egui::accesskit::Role::Button, "Tool runs").accesskit_node();
-        assert_eq!(off.toggled(), Some(egui::accesskit::Toggled::False), "the view not drawn is not chosen");
-        assert!(!off.is_disabled(), "tabs are always clickable");
+        let clicks =
+            [("Session log", (true, false)), ("This project", (true, true)), ("Tool runs", (false, false)), ("Session log", (true, false))];
+        for (chosen, state) in clicks {
+            h.get_by_role_and_label(Role::Button, chosen).click();
+            h.run();
+            let s = &h.state().ui.session_log;
+            assert_eq!((s.open, s.this_project), state, "{chosen} shows its view");
+            for tab in TABS {
+                let node = h.get_by_role_and_label(Role::Button, tab).accesskit_node();
+                let on = if tab == chosen { Toggled::True } else { Toggled::False };
+                assert_eq!(node.toggled(), Some(on), "{tab} announced as chosen only when {chosen} is chosen");
+                assert!(!node.is_disabled(), "tabs are always clickable");
+            }
+        }
     }
 
     /// A step joined to the newest entry (a held key's nudges) shows in the pane at once, though

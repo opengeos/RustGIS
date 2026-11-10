@@ -210,7 +210,7 @@ pub(crate) fn tabs<T: Copy + PartialEq>(ui: &mut Ui, t: &Tokens, id: egui::Id, c
                 resp = resp.on_hover_text(tl!(hover));
             }
         }
-        if resp.clicked() {
+        if resp.clicked() && *current != tab.value {
             *current = tab.value;
             changed = true;
         }
