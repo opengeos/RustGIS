@@ -43,7 +43,7 @@
 //! attributes); curve arcs and splines are read as straight lines. CityGML 3.0 is refused.
 
 use std::borrow::Cow;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, hash_map::Entry};
 
 use quick_xml::Reader;
 use quick_xml::errors::SyntaxError;
@@ -215,6 +215,7 @@ fn read_with(file_name: &str, bytes: &[u8], given: Option<Crs>, keep_named: bool
             reading.said.links += 1;
         }
         let mut targets = Targets::of(doc.root_element(), linked);
+        reading.said.repeated_geometry_ids += targets.repeated;
         for object in elements(member) {
             match local(&object) {
                 "Appearance" => reading.said.appearances += 1,
@@ -529,10 +530,12 @@ fn is_geometry(g: &Node) -> bool {
 }
 
 /// Whether a link where a geometry belongs points to one this reader reads there: a GML geometry,
-/// a solid's shell, an oriented curve, or an implicit geometry (drawn at its reference point as one
-/// written out is). Not an envelope, a ring's curve or a segment.
+/// a solid's shell, a surface's patch, an oriented curve, or an implicit geometry (drawn at its
+/// reference point as one written out is). Not an envelope, a ring's curve or a segment.
 fn linkable(n: &Node) -> bool {
-    local(n) == "ImplicitGeometry" || is_geometry(n) || (is_gml(n) && matches!(local(n), "Shell" | "OrientableCurve" | "GeometricComplex"))
+    local(n) == "ImplicitGeometry"
+        || is_geometry(n)
+        || (is_gml(n) && matches!(local(n), "Shell" | "PolygonPatch" | "OrientableCurve" | "GeometricComplex"))
 }
 
 /// Whether a line or ring holds a point or curve given only by a link, so it isn't whole.
@@ -675,6 +678,8 @@ struct Said {
     anonymous: usize,
     /// Objects whose id another object has too.
     repeated_ids: usize,
+    /// Geometries in a member with links whose `gml:id` an earlier element there has too.
+    repeated_geometry_ids: usize,
     terrain_intersections: usize,
     appearances: usize,
     /// Curves with arcs or splines, read as straight lines through their points.
@@ -750,6 +755,13 @@ impl Said {
             format!("{} city objects have a gml:id another object has too: their parts' heights go to only one of them", self.repeated_ids),
         );
         say(
+            self.repeated_geometry_ids,
+            format!(
+                "{} geometries have a gml:id an earlier element of their city object member has too: a link to that id reads the first",
+                self.repeated_geometry_ids
+            ),
+        );
+        say(
             self.terrain_intersections,
             format!(
                 "{} terrain intersection curves (where objects meet the ground) aren't read and are left out",
@@ -810,20 +822,31 @@ impl Said {
 struct Targets<'a, 'i> {
     by_id: HashMap<&'a str, Node<'a, 'i>>,
     budget: usize,
+    /// Geometries a link may point to whose `gml:id` an earlier element of the member has too.
+    repeated: usize,
+    /// The geometries of the member's objects whose coordinates couldn't be read, said already: a
+    /// link to one, from any of its objects, is left out without being said again.
+    failed: HashSet<Key<'a>>,
 }
 
 impl<'a, 'i> Targets<'a, 'i> {
     /// A member's elements by `gml:id`, the first of an id given twice; none when it holds no link.
     fn of(member: Node<'a, 'i>, linked: bool) -> Self {
         let mut by_id = HashMap::new();
+        let mut repeated = 0;
         if linked {
             for n in member.descendants().filter(Node::is_element) {
                 if let Some(id) = gml_id(&n) {
-                    by_id.entry(id).or_insert(n);
+                    match by_id.entry(id) {
+                        Entry::Vacant(v) => {
+                            v.insert(n);
+                        }
+                        Entry::Occupied(_) => repeated += usize::from(linkable(&n)),
+                    }
                 }
             }
         }
-        Targets { by_id, budget: member.range().len().saturating_mul(LINK_READS) }
+        Targets { by_id, budget: member.range().len().saturating_mul(LINK_READS), repeated, failed: HashSet::new() }
     }
 }
 
@@ -864,8 +887,8 @@ struct Links<'a, 'i> {
     /// What `seen` took in, in order, with what it held before, so a geometry left out can take its
     /// own marks back.
     marked: Vec<(Key<'a>, Option<bool>)>,
-    /// The geometries whose coordinates couldn't be read, said already: a link to one is left out
-    /// without being said again.
+    /// The member's geometries whose coordinates couldn't be read ([`Targets::failed`]), lent to the
+    /// object while it is read.
     failed: HashSet<Key<'a>>,
     ground: Vec<Pending<'a, 'i>>,
     others: Vec<Pending<'a, 'i>>,
@@ -955,7 +978,7 @@ impl Reading {
         }
         let id = gml_id(&e);
         let mut parts = ObjectParts::default();
-        let mut links = Links::default();
+        let mut links = Links { failed: std::mem::take(&mut targets.failed), ..Links::default() };
         let mut attributes = Map::new();
         let mut children = Vec::new();
         let mut address = false;
@@ -1014,6 +1037,7 @@ impl Reading {
         while let Some(link) = links.next() {
             self.follow(link, targets, &mut parts, &mut links);
         }
+        targets.failed = links.failed;
         self.counts.addresses += usize::from(address);
         let at_row = self.built.len();
         let made = object_rows(parts, at_row, &mut self.counts, &mut self.budget);
