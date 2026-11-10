@@ -44,40 +44,114 @@ pub use rustgis_tiles;
 pub use tiles::{source_layers as tile_source_layers, spec as tile_spec, style_view};
 
 /// Natural Earth 1:110m sample data (public domain), fetched by `build.rs` from rustgis-assets.
+/// The countries in another worldview are downloaded when one is chosen, never built in.
 pub mod sample_data {
+    use std::sync::OnceLock;
+    use std::sync::atomic::{AtomicU8, Ordering};
+
     pub const COUNTRIES: &str = include_str!(concat!(env!("OUT_DIR"), "/countries.geojson"));
-    /// The countries as China sees its borders (Natural Earth's China point of view).
-    pub const COUNTRIES_CHN: &str = include_str!(concat!(env!("OUT_DIR"), "/countries_chn.geojson"));
     pub const CITIES: &str = include_str!(concat!(env!("OUT_DIR"), "/cities.geojson"));
     pub const RIVERS: &str = include_str!(concat!(env!("OUT_DIR"), "/rivers.geojson"));
     pub const LAKES: &str = include_str!(concat!(env!("OUT_DIR"), "/lakes.geojson"));
 
-    use std::sync::atomic::{AtomicU8, Ordering};
+    /// Where the worldviews' countries are downloaded from: `countries_<code>.geojson`, made from
+    /// Natural Earth's points of view by rustgis-assets' `scripts/worldviews.py`.
+    pub const WORLDVIEWS_URL: &str = "https://assets.rustgis.app/data/worldviews";
 
-    /// Whose view of disputed borders the built-in countries and world outline show.
-    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-    pub enum Worldview {
-        /// Natural Earth's de facto borders.
-        #[default]
-        Default,
-        /// China's view (required for maps shown in China).
-        China,
-    }
+    /// The most bytes a worldview's download may be (the files are about 250 KB).
+    pub const MAX_WORLDVIEW_BYTES: usize = 8 << 20;
+
+    /// How many worldviews there are.
+    pub const WORLDVIEW_COUNT: usize = VIEWS.len();
+
+    /// Each worldview's code (Natural Earth's) and English name; the first is the built-in one.
+    const VIEWS: [(&str, &str); 32] = [
+        ("default", "Default"),
+        ("arg", "Argentina"),
+        ("bdg", "Bangladesh"),
+        ("bra", "Brazil"),
+        ("chn", "China"),
+        ("egy", "Egypt"),
+        ("fra", "France"),
+        ("deu", "Germany"),
+        ("grc", "Greece"),
+        ("ind", "India"),
+        ("idn", "Indonesia"),
+        ("isr", "Israel"),
+        ("ita", "Italy"),
+        ("jpn", "Japan"),
+        ("mar", "Morocco"),
+        ("nep", "Nepal"),
+        ("nld", "Netherlands"),
+        ("pak", "Pakistan"),
+        ("pse", "Palestine"),
+        ("pol", "Poland"),
+        ("prt", "Portugal"),
+        ("rus", "Russia"),
+        ("sau", "Saudi Arabia"),
+        ("kor", "South Korea"),
+        ("esp", "Spain"),
+        ("swe", "Sweden"),
+        ("twn", "Taiwan"),
+        ("tur", "Turkey"),
+        ("ukr", "Ukraine"),
+        ("gbr", "United Kingdom"),
+        ("usa", "United States"),
+        ("vnm", "Vietnam"),
+    ];
+
+    /// Whose view of disputed borders the built-in countries and world outline show: Natural
+    /// Earth's de facto borders (built in), or one of its points of view (downloaded).
+    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+    pub struct Worldview(u8);
 
     impl Worldview {
-        pub fn code(self) -> &'static str {
-            match self {
-                Worldview::Default => "default",
-                Worldview::China => "china",
-            }
+        /// Natural Earth's de facto borders, built in.
+        pub const DEFAULT: Worldview = Worldview(0);
+        /// China's view (required for maps shown in China), the one chosen automatically.
+        pub const CHINA: Worldview = Worldview(4);
+
+        /// Every worldview, the default first, then by English name.
+        pub fn all() -> impl Iterator<Item = Worldview> {
+            (0..VIEWS.len() as u8).map(Worldview)
         }
 
+        /// Its position in [`Worldview::all`].
+        pub fn index(self) -> usize {
+            usize::from(self.0)
+        }
+
+        /// The code settings, `RUSTGIS_WORLDVIEW` and `--worldview` use (Natural Earth's, such as `ind`).
+        pub fn code(self) -> &'static str {
+            VIEWS.get(self.index()).map_or("default", |v| v.0)
+        }
+
+        /// Its English name: the country whose view it is.
+        pub fn name(self) -> &'static str {
+            VIEWS.get(self.index()).map_or("Default", |v| v.1)
+        }
+
+        /// The worldview a code names: Natural Earth's code, the ISO 3166-1 alpha-3 one where it
+        /// differs, or the country's English name, in any case; `china` and `cn` are China.
         pub fn from_code(code: &str) -> Option<Worldview> {
-            match code.trim().to_ascii_lowercase().as_str() {
-                "default" => Some(Worldview::Default),
-                "china" | "chn" | "cn" => Some(Worldview::China),
-                _ => None,
-            }
+            let code = code.trim().to_ascii_lowercase();
+            let code = match code.as_str() {
+                "cn" => "chn",
+                "bgd" => "bdg",
+                "npl" => "nep",
+                c => c,
+            };
+            Worldview::all().find(|w| w.code() == code || w.name().eq_ignore_ascii_case(code))
+        }
+
+        /// Whether it is built in (the default); every other worldview is downloaded.
+        pub fn built_in(self) -> bool {
+            self == Worldview::DEFAULT
+        }
+
+        /// The address its countries are downloaded from (none for the built-in one).
+        pub fn url(self) -> Option<String> {
+            (!self.built_in()).then(|| format!("{WORLDVIEWS_URL}/countries_{}.geojson", self.code()))
         }
 
         /// The worldview for a system in time zone `tz` (IANA, such as `Asia/Shanghai`) whose
@@ -95,27 +169,68 @@ pub mod sample_data {
                 let mut parts = base.split('-');
                 parts.next() == Some("zh") && parts.any(|p| p == "cn")
             });
-            if china_tz || china_locale { Worldview::China } else { Worldview::Default }
+            if china_tz || china_locale { Worldview::CHINA } else { Worldview::DEFAULT }
         }
     }
 
+    /// The downloaded countries of each worldview (the default's slot stays empty).
+    static TEXTS: [OnceLock<String>; VIEWS.len()] = [const { OnceLock::new() }; VIEWS.len()];
+
     static WORLDVIEW: AtomicU8 = AtomicU8::new(0);
 
-    /// Sets the worldview of the countries sample and the basemap's world outline.
-    pub fn set_worldview(w: Worldview) {
-        WORLDVIEW.store(w as u8, Ordering::Relaxed);
+    /// Keeps a worldview's downloaded countries for the rest of the run, once they are checked:
+    /// GeoJSON polygons of at least 100 countries with the built-in countries' fields. A
+    /// worldview that already has its countries keeps them.
+    pub fn install(w: Worldview, text: String) -> Result<(), String> {
+        if w.built_in() {
+            return Ok(());
+        }
+        check(&text).map_err(|e| format!("the {} worldview's countries aren't usable: {e}", w.name()))?;
+        let _ = TEXTS.get(w.index()).ok_or("unknown worldview")?.set(text);
+        Ok(())
+    }
+
+    /// Checks that `text` can stand in for the built-in countries.
+    fn check(text: &str) -> Result<(), String> {
+        use rustgis_data::Geometry;
+        let read = |t| rustgis_data::io::read_geojson(t, "Countries").map(|(d, _)| d).map_err(|e| e.to_string());
+        let (ds, built_in) = (read(text)?, read(COUNTRIES)?);
+        if ds.features.len() < 100 {
+            return Err(format!("{} countries, fewer than 100", ds.features.len()));
+        }
+        let names = |d: &rustgis_data::Dataset| d.fields.iter().map(|f| f.name.clone()).collect::<Vec<_>>();
+        if names(&ds) != names(&built_in) {
+            return Err("its fields aren't the built-in countries'".into());
+        }
+        if !ds.features.iter().all(|f| matches!(f.geometry, Some(Geometry::Polygon(_)))) {
+            return Err("not every country is a polygon".into());
+        }
+        Ok(())
+    }
+
+    /// A worldview's countries GeoJSON, if it is built in or has been downloaded.
+    pub fn text(w: Worldview) -> Option<&'static str> {
+        if w.built_in() { Some(COUNTRIES) } else { TEXTS.get(w.index()).and_then(|t| t.get()).map(String::as_str) }
+    }
+
+    /// Sets the worldview of the countries sample and the basemap's world outline, if its countries
+    /// are at hand ([`text`]); otherwise nothing changes and it says so with `false`.
+    pub fn set_worldview(w: Worldview) -> bool {
+        if text(w).is_none() {
+            return false;
+        }
+        WORLDVIEW.store(w.0, Ordering::Relaxed);
+        true
     }
 
     pub fn worldview() -> Worldview {
-        if WORLDVIEW.load(Ordering::Relaxed) == Worldview::China as u8 { Worldview::China } else { Worldview::Default }
+        let w = Worldview(WORLDVIEW.load(Ordering::Relaxed));
+        if text(w).is_some() { w } else { Worldview::DEFAULT }
     }
 
     /// The countries GeoJSON in the current worldview.
     pub fn countries() -> &'static str {
-        match worldview() {
-            Worldview::Default => COUNTRIES,
-            Worldview::China => COUNTRIES_CHN,
-        }
+        text(worldview()).unwrap_or(COUNTRIES)
     }
 }
 
@@ -345,10 +460,15 @@ pub fn viewing_distance(ground_res: f64, view_height: f64) -> f64 {
 /// The built-in world outline used by every basemap (Natural Earth 1:110m, public domain), in the
 /// current worldview.
 fn world() -> &'static Vec<Geometry> {
-    static W: [OnceLock<Vec<Geometry>>; 2] = [OnceLock::new(), OnceLock::new()];
-    let wv = sample_data::worldview();
-    let cell = &W[wv as usize];
-    cell.get_or_init(|| match rustgis_data::io::read_geojson(sample_data::countries(), "world") {
+    world_of(sample_data::worldview())
+}
+
+/// The world outline in worldview `wv`, in Web Mercator.
+fn world_of(wv: sample_data::Worldview) -> &'static Vec<Geometry> {
+    static W: [OnceLock<Vec<Geometry>>; sample_data::WORLDVIEW_COUNT] = [const { OnceLock::new() }; sample_data::WORLDVIEW_COUNT];
+    static NONE: Vec<Geometry> = Vec::new();
+    let Some(cell) = W.get(wv.index()) else { return &NONE };
+    cell.get_or_init(|| match rustgis_data::io::read_geojson(sample_data::text(wv).unwrap_or(sample_data::COUNTRIES), "world") {
         Ok((ds, _)) => ds.features.into_iter().filter_map(|f| f.geometry).map(|g| g.map_coords(&lonlat_to_merc)).collect(),
         Err(e) => {
             log::warn!("built-in world outline unreadable: {e}");
@@ -359,9 +479,11 @@ fn world() -> &'static Vec<Geometry> {
 
 /// The built-in world outline in longitude/latitude, for the globe.
 fn world_lonlat() -> &'static Vec<Geometry> {
-    static W: [OnceLock<Vec<Geometry>>; 2] = [OnceLock::new(), OnceLock::new()];
-    let cell = &W[sample_data::worldview() as usize];
-    cell.get_or_init(|| world().iter().map(|g| g.map_coords(&rustgis_geom::merc_to_lonlat)).collect())
+    static W: [OnceLock<Vec<Geometry>>; sample_data::WORLDVIEW_COUNT] = [const { OnceLock::new() }; sample_data::WORLDVIEW_COUNT];
+    static NONE: Vec<Geometry> = Vec::new();
+    let wv = sample_data::worldview();
+    let Some(cell) = W.get(wv.index()) else { return &NONE };
+    cell.get_or_init(|| world_of(wv).iter().map(|g| g.map_coords(&rustgis_geom::merc_to_lonlat)).collect())
 }
 
 thread_local! {
@@ -6597,36 +6719,63 @@ mod tests {
     use rustgis_data::{Field, FieldType, Value};
 
     #[test]
-    fn worldview_detection_and_data() {
-        use sample_data::Worldview::{China, Default};
-        let detect = |tz: Option<&str>, locales: &[&str]| sample_data::Worldview::detect(tz, locales.iter().copied());
-        assert_eq!(detect(Some("Asia/Shanghai"), &["en-US"]), China);
-        assert_eq!(detect(Some("Asia/Urumqi"), &[]), China);
-        assert_eq!(detect(Some("Europe/Berlin"), &["zh-CN", "en"]), China);
-        assert_eq!(detect(None, &["zh_CN.UTF-8"]), China);
-        assert_eq!(detect(None, &["zh-Hans-CN"]), China);
-        assert_eq!(detect(Some("Asia/Taipei"), &["zh-TW"]), Default);
-        assert_eq!(detect(Some("Asia/Hong_Kong"), &["zh-HK"]), Default);
-        assert_eq!(detect(Some("America/New_York"), &["en-US", "zh-CN"]), Default);
-        assert_eq!(detect(None, &[]), Default);
-        assert_eq!(sample_data::Worldview::from_code(" China "), Some(China));
-        assert_eq!(sample_data::Worldview::from_code("default"), Some(Default));
-        assert_eq!(sample_data::Worldview::from_code("auto"), None);
-        // Both files have the same fields; in China's view Taiwan is part of China.
-        let read = |text| rustgis_data::io::read_geojson(text, "Countries").unwrap().0;
-        let (def, chn) = (read(sample_data::COUNTRIES), read(sample_data::COUNTRIES_CHN));
-        let fields = |d: &Dataset| d.fields.iter().map(|f| f.name.clone()).collect::<Vec<_>>();
-        assert_eq!(fields(&def), fields(&chn));
-        let names = |d: &Dataset| {
-            let i = d.fields.iter().position(|f| f.name == "name").unwrap();
-            d.features
-                .iter()
-                .filter_map(|f| if let Some(Value::Text(t)) = f.attrs.get(i) { Some(t.clone()) } else { None })
-                .collect::<Vec<_>>()
-        };
-        assert!(names(&def).iter().any(|n| n == "Taiwan"));
-        assert!(!names(&chn).iter().any(|n| n == "Taiwan"));
-        assert!(names(&chn).iter().any(|n| n == "China"));
+    fn worldview_detection_and_codes() {
+        use sample_data::Worldview;
+        let (china, default) = (Worldview::CHINA, Worldview::DEFAULT);
+        let detect = |tz: Option<&str>, locales: &[&str]| Worldview::detect(tz, locales.iter().copied());
+        assert_eq!(detect(Some("Asia/Shanghai"), &["en-US"]), china);
+        assert_eq!(detect(Some("Asia/Urumqi"), &[]), china);
+        assert_eq!(detect(Some("Europe/Berlin"), &["zh-CN", "en"]), china);
+        assert_eq!(detect(None, &["zh_CN.UTF-8"]), china);
+        assert_eq!(detect(None, &["zh-Hans-CN"]), china);
+        assert_eq!(detect(Some("Asia/Taipei"), &["zh-TW"]), default);
+        assert_eq!(detect(Some("Asia/Hong_Kong"), &["zh-HK"]), default);
+        assert_eq!(detect(Some("America/New_York"), &["en-US", "zh-CN"]), default);
+        assert_eq!(detect(None, &[]), default);
+        // Settings saved by earlier versions said `china`.
+        assert_eq!(Worldview::from_code(" China "), Some(china));
+        assert_eq!(Worldview::from_code("cn"), Some(china));
+        assert_eq!(Worldview::from_code("chn"), Some(china));
+        assert_eq!(Worldview::from_code("default"), Some(default));
+        assert_eq!(Worldview::from_code("IND").map(Worldview::name), Some("India"));
+        assert_eq!(Worldview::from_code("united states").map(Worldview::code), Some("usa"));
+        assert_eq!(Worldview::from_code("bgd").map(Worldview::code), Some("bdg"));
+        for bad in ["auto", "", "xyz", "../chn"] {
+            assert_eq!(Worldview::from_code(bad), None, "{bad}");
+        }
+        // Natural Earth's 31 points of view, each downloaded; only the default is built in.
+        let all: Vec<_> = Worldview::all().collect();
+        assert_eq!(all.len(), 32);
+        assert_eq!(china.code(), "chn");
+        assert_eq!(default.url(), None);
+        assert_eq!(china.url().as_deref(), Some("https://assets.rustgis.app/data/worldviews/countries_chn.geojson"));
+        let codes: std::collections::HashSet<_> = all.iter().map(|w| w.code()).collect();
+        assert_eq!(codes.len(), all.len());
+        assert!(all.iter().all(|w| Worldview::from_code(w.code()) == Some(*w)));
+        assert!(all.iter().skip(1).all(|w| !w.built_in() && w.code().len() == 3 && w.url().is_some()));
+    }
+
+    #[test]
+    fn a_worldview_needs_its_countries_before_it_is_shown() {
+        use sample_data::{Worldview, install, set_worldview, text};
+        // Sweden's view, which no other test uses.
+        let w = Worldview::from_code("swe").unwrap();
+        assert_eq!(text(w), None);
+        assert!(!set_worldview(w));
+        assert_eq!(sample_data::worldview(), Worldview::DEFAULT);
+        // What isn't a countries file is refused.
+        for bad in ["", "not json", r#"{"type":"FeatureCollection","features":[]}"#, sample_data::CITIES] {
+            assert!(install(w, bad.to_string()).is_err());
+        }
+        let few = r#"{"type":"FeatureCollection","features":[{"type":"Feature","properties":{"name":"A"},"geometry":{"type":"Polygon","coordinates":[[[0,0],[1,0],[1,1],[0,0]]]}}]}"#;
+        assert!(install(w, few.to_string()).unwrap_err().contains("fewer than 100"));
+        assert_eq!(text(w), None);
+        // The built-in countries' shape is accepted; the view then shows (the same borders).
+        install(w, sample_data::COUNTRIES.to_string()).unwrap();
+        assert!(text(w).is_some());
+        assert!(set_worldview(w));
+        assert_eq!(sample_data::worldview(), w);
+        assert!(set_worldview(Worldview::DEFAULT));
     }
 
     #[test]

@@ -6,40 +6,117 @@ use rustgis_map::{Bookmark, Camera, ClassMethod, Marker, Ramp, Renderer, Rgba, S
 
 use crate::Project;
 
-pub use rustgis_render::sample_data::{CITIES, COUNTRIES, COUNTRIES_CHN, LAKES, RIVERS, Worldview, countries, set_worldview, worldview};
+pub use rustgis_render::sample_data::{CITIES, COUNTRIES, LAKES, RIVERS, Worldview, countries, install, set_worldview, text, worldview};
 
-/// The worldview this system calls for: `RUSTGIS_WORLDVIEW` (`default` or `china`) when set, else
-/// China when the system's time zone or first locale is mainland China's. Nothing is looked up
-/// over the network. Test builds of the engine don't look at the system.
+/// The worldview this system calls for: `RUSTGIS_WORLDVIEW` (a worldview's code, such as `ind`)
+/// when set, else China when the system's time zone or first locale is mainland China's. Nothing
+/// is looked up over the network. Test builds of the engine don't look at the system.
 pub fn system_worldview() -> Worldview {
     if let Some(w) = std::env::var("RUSTGIS_WORLDVIEW").ok().and_then(|v| Worldview::from_code(&v)) {
         return w;
     }
     if cfg!(test) {
-        return Worldview::Default;
+        return Worldview::DEFAULT;
     }
     let tz = iana_time_zone::get_timezone().ok();
     let locales: Vec<String> = sys_locale::get_locales().take(4).collect();
     Worldview::detect(tz.as_deref(), locales.iter().map(String::as_str))
 }
 
-/// Applies a worldview preference: `auto` (or anything unknown) follows the system.
+/// The worldview a preference asks for: a worldview's code, or the system's for `auto` (or
+/// anything unknown).
+pub fn wanted_worldview(pref: &str) -> Worldview {
+    Worldview::from_code(pref).unwrap_or_else(system_worldview)
+}
+
+/// Applies a worldview preference (see [`wanted_worldview`]) and returns the worldview asked
+/// for. It shows only once its countries are at hand ([`ready`]); until then the current one
+/// stays, and the caller downloads it ([`download`], [`download_blocking`]).
 pub fn apply_worldview(pref: &str) -> Worldview {
-    let w = Worldview::from_code(pref).unwrap_or_else(system_worldview);
-    set_worldview(w);
+    let w = wanted_worldview(pref);
+    if ready(w) {
+        set_worldview(w);
+    }
     w
+}
+
+/// Whether downloaded worldviews are kept in the cache folder and read back from it (not in the
+/// engine's own tests, which mustn't touch the computer's cache).
+static KEEP: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(!cfg!(test));
+
+/// Turns keeping downloaded worldviews in the cache folder on or off (off for tests).
+pub fn keep_downloads(on: bool) {
+    KEEP.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Where a downloaded worldview is kept: `worldviews/countries_<code>.geojson` in the cache folder
+/// (none in the browser).
+fn kept_path(w: Worldview) -> Option<std::path::PathBuf> {
+    if w.built_in() || !KEEP.load(std::sync::atomic::Ordering::Relaxed) {
+        return None;
+    }
+    rustgis_data::dirs::cache_dir().map(|d| d.join("worldviews").join(format!("countries_{}.geojson", w.code())))
+}
+
+/// Whether a worldview's countries are at hand: built in, downloaded in this run, or kept from an
+/// earlier download (read now). A kept file that isn't usable is deleted, so it's downloaded again.
+pub fn ready(w: Worldview) -> bool {
+    if text(w).is_some() {
+        return true;
+    }
+    let Some(path) = kept_path(w) else { return false };
+    let Ok(bytes) = std::fs::read(&path) else { return false };
+    if bytes.len() <= rustgis_render::sample_data::MAX_WORLDVIEW_BYTES
+        && let Ok(t) = String::from_utf8(bytes)
+        && install(w, t).is_ok()
+    {
+        return true;
+    }
+    log::warn!("{}: not a usable worldview, removed", path.display());
+    let _ = std::fs::remove_file(&path);
+    false
+}
+
+/// Takes a worldview's downloaded countries: checks and keeps them for this run, and in the cache
+/// folder for the next. Not keeping the file only costs a download next time, so it is logged.
+pub fn accept(w: Worldview, bytes: Vec<u8>) -> Result<(), String> {
+    let text = String::from_utf8(bytes).map_err(|_| format!("the {} worldview's countries aren't UTF-8 text", w.name()))?;
+    let copy = kept_path(w).map(|p| (p, text.clone()));
+    install(w, text)?;
+    if let Some((path, text)) = copy {
+        let saved =
+            path.parent().map_or(Ok(()), std::fs::create_dir_all).and_then(|_| rustgis_data::io::write_atomic(&path, text.as_bytes()));
+        if let Err(e) = saved {
+            log::warn!("couldn't keep the {} worldview in {}: {e}", w.name(), path.display());
+        }
+    }
+    Ok(())
+}
+
+/// Downloads a worldview's countries off the calling thread (natively) or with the browser's
+/// fetch, calling `done` with the bytes for [`accept`].
+pub fn download(w: Worldview, done: Box<dyn FnOnce(Result<Vec<u8>, String>) + Send>) {
+    match w.url() {
+        Some(url) => crate::render::rustgis_tiles::cache::download_limited(&url, rustgis_render::sample_data::MAX_WORLDVIEW_BYTES, done),
+        None => done(Err("the default worldview is built in".into())),
+    }
+}
+
+/// Makes a worldview's countries ready, downloading them and waiting if they aren't at hand (the
+/// command line's `--worldview`).
+#[cfg(not(target_arch = "wasm32"))]
+pub fn download_blocking(w: Worldview) -> Result<(), String> {
+    if ready(w) {
+        return Ok(());
+    }
+    let url = w.url().ok_or("the default worldview is built in")?;
+    let bytes = crate::render::rustgis_tiles::cache::download_blocking_limited(&url, rustgis_render::sample_data::MAX_WORLDVIEW_BYTES)
+        .map_err(|e| format!("couldn't download the {} worldview: {e}", w.name()))?;
+    accept(w, bytes)
 }
 
 fn cam(lon: f64, lat: f64, res: f64) -> Camera {
     Camera { center: lonlat_to_merc(Coord::new(lon, lat)), res, bearing: 0.0, pitch: 0.0 }
-}
-
-/// The built-in countries in a worldview.
-fn countries_in(w: Worldview) -> &'static str {
-    match w {
-        Worldview::Default => COUNTRIES,
-        Worldview::China => COUNTRIES_CHN,
-    }
 }
 
 /// Swaps an untouched sample project's countries from worldview `from` to `to`: only in a project
@@ -49,7 +126,7 @@ pub fn swap_countries(s: &mut crate::Session, from: Worldview, to: Worldview) ->
     if from == to || s.dirty() || s.path.is_some() || s.can_undo() {
         return false;
     }
-    let read = |w| read_geojson(countries_in(w), "Countries").ok().map(|(ds, _)| ds);
+    let read = |w| text(w).and_then(|t| read_geojson(t, "Countries").ok()).map(|(ds, _)| ds);
     let (Some(old), Some(new)) = (read(from), read(to)) else {
         return false;
     };

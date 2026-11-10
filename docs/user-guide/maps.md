@@ -471,13 +471,20 @@ taking other bodies' basemaps off) and `map.bodies`.
 
 ### Worldview
 
-The world outline and the World Atlas sample's countries come in two worldviews: Natural
-Earth's default borders, and China's (Natural Earth's China point of view: Taiwan, Aksai Chin
-and South Tibet are part of China). RustGIS picks China's when the system's time zone is
-mainland China's (such as `Asia/Shanghai`) or its first locale is `zh-CN`; nothing is looked up
-over the network. Choose one in **Settings › Language › Worldview**, set `RUSTGIS_WORLDVIEW`
-(`default` or `china`), or pass `--worldview` to `rustgis-cli`. An untouched sample project
-switches its countries at once; others keep the layer they have.
+The world outline and the World Atlas sample's countries show Natural Earth's default (de facto)
+borders, which are built in, or the borders as one of 31 countries sees them: Natural Earth's
+[points of view](https://www.naturalearthdata.com/blog/admin-0-countries-point-of-views/), from
+Argentina to Vietnam. Choose one in **Settings › Language › Worldview**, set `RUSTGIS_WORLDVIEW`
+to its code (such as `chn`, `ind` or `usa`), or pass `--worldview` to `rustgis-cli`.
+
+A point of view isn't part of the app: it is downloaded (about 250 KB, from
+`assets.rustgis.app`) when you choose it, and the desktop app and the command line keep it in
+the cache folder, so it is downloaded once; the web app downloads it again in each session.
+The map keeps the borders it shows until the download arrives, and says so if it fails. Until
+you choose one, RustGIS shows China's view when the system's time zone is mainland China's
+(such as `Asia/Shanghai`) or its first locale is `zh-CN`, downloading it the same way, and the
+default borders everywhere else. Your choice is kept for the next start. An untouched sample
+project switches its countries when the new borders arrive; others keep the layer they have.
 
 ## Projections
 

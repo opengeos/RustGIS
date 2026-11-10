@@ -71,28 +71,54 @@ pub(crate) fn isolate_process_test(name: &str) -> bool {
 fn worldview_swaps_only_untouched_sample_countries() {
     use sample::{Worldview, swap_countries};
     let countries = |s: &Session| s.map().layer_by_name("Countries").unwrap().dataset.features.len();
+    // Japan's view, which no other test uses, given countries that differ from the built-in ones
+    // (every country but the first) as if downloaded.
+    let japan = Worldview::from_code("jpn").unwrap();
+    let mut fewer: Value = serde_json::from_str(sample::COUNTRIES).unwrap();
+    fewer["features"].as_array_mut().unwrap().remove(0);
     let mut s = world();
     s.mark_saved();
     let n = countries(&s);
-    // The layer holds the default countries, not China's.
-    assert!(!swap_countries(&mut s, Worldview::China, Worldview::Default));
-    assert!(swap_countries(&mut s, Worldview::Default, Worldview::China));
-    assert_ne!(countries(&s), n);
+    // Not before the view's countries are at hand.
+    assert!(!sample::ready(japan));
+    assert!(!swap_countries(&mut s, Worldview::DEFAULT, japan));
+    sample::accept(japan, fewer.to_string().into_bytes()).unwrap();
+    assert!(sample::ready(japan));
+    // The layer holds the default countries, not Japan's.
+    assert!(!swap_countries(&mut s, japan, Worldview::DEFAULT));
+    assert!(swap_countries(&mut s, Worldview::DEFAULT, japan));
+    assert_eq!(countries(&s), n - 1);
     assert!(!s.dirty());
-    assert!(swap_countries(&mut s, Worldview::China, Worldview::Default));
+    assert!(swap_countries(&mut s, japan, Worldview::DEFAULT));
     assert_eq!(countries(&s), n);
     // Not in a project with changes, or a saved one.
     s.mark_unsaved();
-    assert!(!swap_countries(&mut s, Worldview::Default, Worldview::China));
+    assert!(!swap_countries(&mut s, Worldview::DEFAULT, japan));
     s.mark_saved();
     s.path = Some("atlas.rgis".into());
-    assert!(!swap_countries(&mut s, Worldview::Default, Worldview::China));
+    assert!(!swap_countries(&mut s, Worldview::DEFAULT, japan));
     // Not someone else's layer named Countries.
     let mut t = world();
     t.mark_saved();
     t.run("edit.deleteField", &json!({"layer": "Countries", "field": "pop_est"})).unwrap();
     t.mark_saved();
-    assert!(!swap_countries(&mut t, Worldview::Default, Worldview::China));
+    assert!(!swap_countries(&mut t, Worldview::DEFAULT, japan));
+}
+
+#[test]
+fn a_worldview_download_that_isnt_countries_is_refused() {
+    use sample::Worldview;
+    let korea = Worldview::from_code("kor").unwrap();
+    for bad in [b"\xff\xfe".to_vec(), b"<html>404</html>".to_vec(), sample::CITIES.as_bytes().to_vec()] {
+        assert!(sample::accept(korea, bad).is_err());
+    }
+    assert!(!sample::ready(korea));
+    // Applying it before then keeps the current worldview and says which one was asked for.
+    assert_eq!(sample::apply_worldview("kor"), korea);
+    assert_ne!(sample::worldview(), korea);
+    // The default is built in.
+    assert!(sample::ready(Worldview::DEFAULT));
+    assert!(sample::download_blocking(Worldview::DEFAULT).is_ok());
 }
 
 #[test]

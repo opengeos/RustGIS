@@ -114,6 +114,7 @@ mod vertexedit;
 mod webdataui;
 mod widgets;
 mod workspacepanes;
+mod worldviewui;
 mod zarrui;
 
 use rustgis_engine::cmd::service_added::Removal;
@@ -665,9 +666,12 @@ pub struct UiState {
     pub dark_follows_system: bool,
     /// Interface language preference: a language code or `auto`.
     pub language: String,
-    /// Worldview preference for the built-in countries and world outline: `auto`, `default` or
-    /// `china`.
+    /// Worldview preference for the built-in countries and world outline: a worldview's code
+    /// (such as `default`, `chn` or `ind`), or `auto` until one is chosen (China's on a system in
+    /// mainland China, else the default).
     pub worldview: String,
+    /// The worldview being downloaded.
+    pub worldview_fetch: Option<worldviewui::Fetch>,
     /// Start-up preference: what RustGIS opens with.
     pub start_with: StartWith,
     /// Whether a file holding several layers asks which to add (#934), or adds them all.
@@ -911,6 +915,7 @@ impl Default for UiState {
             dark_follows_system: true,
             language: i18n::AUTO.into(),
             worldview: i18n::AUTO.into(),
+            worldview_fetch: None,
             start_with: StartWith::Sample,
             ask_layers: true,
             reserved_shortcuts: Vec::new(),
@@ -1349,11 +1354,16 @@ impl RustGisApp {
         i18n::set_current(self.chosen_lang());
         // After the language, so a notice about the saved value is in it.
         threadsui::load(&mut self);
-        // A stored value that is neither `auto` nor a known worldview means `auto`.
-        if let Some(w) = self.services.load_pref.as_ref().and_then(|load| load("worldview"))
-            && rustgis_engine::sample::Worldview::from_code(&w).is_some()
+        // A stored value that is neither `auto` nor a known worldview means `auto`; `china`, as
+        // earlier versions saved it, is China's view.
+        if let Some(w) = self
+            .services
+            .load_pref
+            .as_ref()
+            .and_then(|load| load("worldview"))
+            .and_then(|w| rustgis_engine::sample::Worldview::from_code(&w))
         {
-            self.ui.worldview = w.trim().to_ascii_lowercase();
+            self.ui.worldview = w.code().to_string();
         }
         self.apply_worldview();
         self.ui.start_with =
@@ -1869,17 +1879,10 @@ impl RustGisApp {
         RustGisApp::new(s)
     }
 
-    /// Applies the worldview preference; an untouched sample project's countries follow it.
+    /// Applies the worldview preference, downloading its countries if they aren't at hand; an
+    /// untouched sample project's countries follow it.
     fn apply_worldview(&mut self) {
-        use rustgis_engine::sample;
-        let before = sample::worldview();
-        // Tests don't depend on the machine's time zone and locale.
-        let pref = if cfg!(test) && self.ui.worldview == i18n::AUTO { "default" } else { self.ui.worldview.as_str() };
-        let after = sample::apply_worldview(pref);
-        if after != before {
-            sample::swap_countries(&mut self.session, before, after);
-            self.map.invalidate();
-        }
+        worldviewui::apply(self);
     }
 
     /// Reloads available theme files from the user folder, retaining built-ins when it is absent.
@@ -2822,11 +2825,14 @@ impl RustGisApp {
                 self.map.invalidate();
             }
             "ui.worldview" => {
-                let code = p.get("worldview").and_then(Value::as_str).unwrap_or(i18n::AUTO).to_ascii_lowercase();
-                if code != i18n::AUTO && rustgis_engine::sample::Worldview::from_code(&code).is_none() {
-                    return Err(format!("unknown worldview '{code}'"));
-                }
-                self.ui.worldview = code;
+                let code = p.get("worldview").and_then(Value::as_str).unwrap_or(i18n::AUTO).trim().to_ascii_lowercase();
+                // Kept as the worldview's own code, so `China` and `chn` are saved alike.
+                self.ui.worldview = if code == i18n::AUTO {
+                    code
+                } else {
+                    let w = rustgis_engine::sample::Worldview::from_code(&code).ok_or_else(|| format!("unknown worldview '{code}'"))?;
+                    w.code().to_string()
+                };
                 if let Some(save) = &self.services.save_pref {
                     save("worldview", &self.ui.worldview);
                 }
@@ -5185,6 +5191,7 @@ impl RustGisApp {
         connectionui::poll(self, ctx);
         connectiontree::poll(self, ctx);
         portalsui::poll(self, ctx);
+        worldviewui::poll(self, ctx);
         catalogsui::poll(self, ctx);
         opendataui::poll(self, ctx);
         embeddingsui::poll(self, ctx);

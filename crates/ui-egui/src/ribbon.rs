@@ -4993,29 +4993,36 @@ fn other_name(ui: &Ui, l: crate::i18n::Lang) -> &'static str {
     if shown == l.english() && drawable(ui, l.name()) { l.name() } else { l.english() }
 }
 
-/// Whose view of disputed borders the built-in countries and world outline show (Settings › Language).
+/// Whose view of disputed borders the built-in countries and world outline show (Settings ›
+/// Language): the built-in default or one of Natural Earth's points of view, downloaded when
+/// chosen. Until one is chosen, a system in mainland China shows China's.
 fn worldview_menu(app: &mut RustGisApp, ui: &mut Ui) {
-    use rustgis_engine::sample::Worldview;
-    let name = |w: Worldview| match w {
-        Worldview::Default => tl!("Default"),
-        Worldview::China => tl!("China"),
+    use crate::worldviewui::name;
+    use rustgis_engine::sample::{self, Worldview};
+    let shown = sample::worldview();
+    let wanted = sample::wanted_worldview(&app.ui.worldview);
+    let label = match crate::worldviewui::downloading(app) {
+        Some(w) => format!("{} ({})", name(w), tl!("downloading…")),
+        None => name(shown).to_string(),
     };
-    let auto = app.ui.worldview == crate::i18n::AUTO;
-    let current = rustgis_engine::sample::worldview();
-    let label = if auto { format!("{} ({})", tl!("Automatic"), name(current)) } else { name(current).to_string() };
     let label = format!("{}\n{label}", tl!("Worldview"));
     big_menu(ui, app, "globe_view", &label, "Whose borders the sample countries and the basemap outline show.", move |ui, app| {
-        if ui.selectable_label(auto, tl!("Automatic (system time zone and region)")).clicked() {
-            let _ = app.run("ui.worldview", json!({"worldview": crate::i18n::AUTO}));
-            ui.close();
-        }
-        ui.separator();
-        for w in [Worldview::Default, Worldview::China] {
-            if ui.selectable_label(!auto && w == current, name(w)).clicked() {
-                let _ = app.run("ui.worldview", json!({"worldview": w.code()}));
-                ui.close();
+        egui::ScrollArea::vertical().max_height(ui.ctx().content_rect().height() * 0.7).show(ui, |ui| {
+            for w in Worldview::all() {
+                let text = if w.built_in() || sample::text(w).is_some() {
+                    name(w).to_string()
+                } else {
+                    crate::i18n::fmt("{name} (download)", &[("name", name(w))])
+                };
+                if ui.selectable_label(w == wanted, text).clicked() {
+                    let _ = app.run("ui.worldview", json!({"worldview": w.code()}));
+                    ui.close();
+                }
+                if w.built_in() {
+                    ui.separator();
+                }
             }
-        }
+        });
     });
 }
 
