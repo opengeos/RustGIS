@@ -924,9 +924,12 @@ fn spectral_points(s: &mut Session, r: &Raster, points: &Value) -> Result<Vec<Va
 /// The point forms read at most [`MAX_SPECTRAL_POINTS`] pixels where the command is called. A
 /// zone's means grow with the zone. A script's line reads them on the script's copy of the session
 /// (it is on `ON_A_COPY`), off the UI thread with **Run Script**'s progress and **Cancel**, and the
-/// run here takes them (#1562). No pane of the app asks for a zone. The assistant, tasks and the
-/// command line run every command where they are asked, with no background path of their own, so
-/// a zone they ask for is read there, looking at Cancel between rows when it runs under a control.
+/// run here takes them (#1562); from the first line that stops the copy, a script's zones are read
+/// here, as its tools run here. No pane of the app asks for a zone. The assistant, tasks and the
+/// command line call commands one at a time on the session itself and use each answer before the
+/// next call, so there is no copy to read on: a zone they ask for is read where they ask, looking at
+/// Cancel between rows when it runs under a control. Giving those callers a background path is their
+/// work, for every command they call, not this command's.
 fn spectral(s: &mut Session, p: &Value) -> CmdResult {
     let r = raster(s, p)?;
     // A zone is read before points, and points before one point: what isn't read is said, once
@@ -994,6 +997,7 @@ fn zone_rings(s: &Session, z: &str) -> Result<Vec<Vec<Coord>>, String> {
 /// and this polygon; read here otherwise (and recorded, on that copy, for the script's run here to
 /// take). A raster a tool made earlier in the script is decoded apart on each side, so its zones
 /// are read again here.
+#[cfg_attr(target_arch = "wasm32", allow(unused_variables))]
 fn zone_means(s: &mut Session, r: &Arc<Raster>, rings: Vec<Vec<Coord>>) -> Result<Option<(Vec<f64>, usize)>, String> {
     #[cfg(not(target_arch = "wasm32"))]
     let same = |z: &ZoneMeans| Arc::ptr_eq(&z.raster, r) && z.rings == rings;

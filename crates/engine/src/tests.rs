@@ -38340,8 +38340,11 @@ fn a_scripts_spectral_zone_is_read_on_its_copy() {
     let read = read_ahead(&mut s, "script.run", &script).unwrap().run(&Control::stoppable()).unwrap();
     s.run("layer.remove", &json!({"layer": "zone"})).unwrap();
     s.run("layer.addDataBytes", &json!({"fileName": "zone.geojson", "data": zone(10.04)})).unwrap();
-    read_land(&mut s, read).unwrap();
+    let now = read_land(&mut s, read).unwrap();
     assert_eq!(s.zones_taken, 0);
+    let direct = s.run("raster.spectral", &p).unwrap();
+    assert_eq!(direct["pixels"], 8, "{direct}");
+    assert_eq!(now["ran"][0]["result"], direct, "the zone as it is now");
 
     // Cancelled as the copy starts: the zone's read looks at it, and nothing lands.
     let mut s = session();

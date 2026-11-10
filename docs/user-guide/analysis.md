@@ -1463,7 +1463,8 @@ The Analyze tab's imagery groups open their tools in the Workflows pane:
   scripts, `{"layer": "scene", "points": [[-43.95, -19.92], [-43.96, -19.93]]}` gives one profile
   per point (up to 1,000; a point off the raster keeps its place with null values, and is said),
   `{"lon", "lat"}` one pixel and `{"zone": "polygons"}` the mean in the selected or first polygon
-  (a script's zone on the desktop is worked out in the background with the script);
+  (on the desktop, a script's zone is worked out in the background with the script, up to the
+  first line that stops it, as said under **Script**; one after it holds the window);
   every answer has the band names and, when the file gives any, `"wavelengths"` in nanometres.
   After GeoLibre's spectral profile.
 - **Change Detection** (difference, ratio, percent), **Indices** (NDVI, NDWI, SAVI, NBR, NDBI,
