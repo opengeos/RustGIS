@@ -52,18 +52,24 @@ fn past_limit(work: usize) -> bool {
     if !crate::control::uncapped() {
         return true;
     }
-    LOOKS.with(|n| {
-        n.set(n.get().wrapping_add(1));
-        n.get().is_multiple_of(LOOK_EVERY)
+    // The units, not the calls: one charge can add many (a polar edge's pieces).
+    LOOKED_AT.with(|at| {
+        let last = at.get();
+        let due = work < last || work - last >= LOOK_EVERY;
+        if due {
+            at.set(work);
+        }
+        due
     }) && crate::control::cancelled()
 }
 
 /// How many units of work past [`MAX_WORK`] go by between looks at Cancel ([`past_limit`]).
-const LOOK_EVERY: u32 = 4096;
+const LOOK_EVERY: usize = 4096;
 
 thread_local! {
-    /// The units counted past [`MAX_WORK`] on this thread, for [`past_limit`]'s looks.
-    static LOOKS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    /// The work a check on this thread had done when [`past_limit`] last looked at Cancel (a
+    /// smaller total is a new check's).
+    static LOOKED_AT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// One geometry from several: polygons are unioned, lines and points gathered.
@@ -1493,11 +1499,14 @@ mod tests {
         })
         .unwrap();
         assert!(past_limit(MAX_WORK + 1), "the limit holds again after the run");
-        // Past the limit, a run that can be cancelled looks at Cancel as it goes, and stops.
+        // Past the limit, a run that can be cancelled looks at Cancel every LOOK_EVERY units, a
+        // charge of many units at once included, and stops.
         let control = crate::control::Control::stoppable();
         crate::run_under("Topology", &control, || {
+            assert!(!past_limit(MAX_WORK + 1), "a look, not cancelled");
             control.cancel();
-            assert!((0..2 * LOOK_EVERY).any(|_| past_limit(MAX_WORK + 1)), "a cancelled run stops past the limit");
+            assert!(!past_limit(MAX_WORK + 2), "no look until LOOK_EVERY units more");
+            assert!(past_limit(MAX_WORK + 2 + 65_536), "one charge of many units past the interval looks, and stops");
             Ok(())
         })
         .unwrap_err();
