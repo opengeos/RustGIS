@@ -1112,6 +1112,7 @@ enum AreaAsk {
     Draw(&'static str),
     Selected,
     Extent,
+    #[cfg(not(target_arch = "wasm32"))]
     File,
     Clear,
 }
@@ -1187,6 +1188,7 @@ fn area_action(app: &mut RustGisApp, ask: AreaAsk) {
         AreaAsk::Draw(shape) => draw(app, shape),
         AreaAsk::Selected => add_selected(app),
         AreaAsk::Extent => add_extent(app),
+        #[cfg(not(target_arch = "wasm32"))]
         AreaAsk::File => pick_file(app),
         AreaAsk::Clear => clear_area(app),
     }
@@ -1267,9 +1269,6 @@ fn pick_file(app: &mut RustGisApp) {
     let name = std::path::Path::new(&path).file_name().map_or_else(|| path.clone(), |n| n.to_string_lossy().into_owned());
     start_loading(app, name, move || rustgis_engine::cmd::stac_area::load_file(&path));
 }
-
-#[cfg(target_arch = "wasm32")]
-fn pick_file(_app: &mut RustGisApp) {}
 
 /// Runs `job` on a thread of its own and takes its answer in [`poll_loading`]; in the browser, which
 /// has one thread, here and now.
