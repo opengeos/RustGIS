@@ -355,30 +355,67 @@ fn cycles_and_chains_of_links_end() {
 }
 
 /// Many objects linking to one large geometry read it only as many times over as the member's size
-/// pays for; the links past that are said, and every object is still read.
+/// pays for, in bytes: a single polygon with a long `posList` is as costly as many elements. The
+/// links past that are said, each one (a second link to the same geometry too), and every object is
+/// still read.
 #[test]
 fn links_read_a_member_only_so_many_times_over() {
-    let polygons: Vec<String> = (0..200).map(|k| polygon(&format!("q{k}"), &square(f64::from(k), 0.0, 1.0, 0.0))).collect();
-    let members: String = polygons.iter().map(|p| format!("<gml:surfaceMember>{p}</gml:surfaceMember>")).collect();
+    let ring: Vec<String> = (0..20_000).map(|k| format!("{} {} 0", f64::from(k % 100), f64::from(k / 100))).collect();
+    let big = format!(
+        r#"<gml:Polygon gml:id="big"><gml:exterior><gml:LinearRing><gml:posList>0 0 0 100 0 0 100 200 0 {} 0 0 0</gml:posList></gml:LinearRing></gml:exterior></gml:Polygon>"#,
+        ring.join(" ")
+    );
     let parts: String = (0..20)
         .map(|k| {
             format!(
-                r##"<bldg:consistsOfBuildingPart><bldg:BuildingPart gml:id="p{k}"><bldg:lod2MultiSurface><gml:MultiSurface><gml:surfaceMember xlink:href="#big"/></gml:MultiSurface></bldg:lod2MultiSurface></bldg:BuildingPart></bldg:consistsOfBuildingPart>"##
+                r##"<bldg:consistsOfBuildingPart><bldg:BuildingPart gml:id="p{k}"><bldg:lod2MultiSurface><gml:MultiSurface><gml:surfaceMember xlink:href="#big"/><gml:surfaceMember xlink:href="#big"/></gml:MultiSurface></bldg:lod2MultiSurface></bldg:BuildingPart></bldg:consistsOfBuildingPart>"##
             )
         })
         .collect();
-    let inner =
-        format!(r#"<bldg:lod1MultiSurface><gml:MultiSurface gml:id="big">{members}</gml:MultiSurface></bldg:lod1MultiSurface>{parts}"#);
-    let out = read("model.gml", &lonlat(&building("b1", &inner)), None).unwrap();
-    assert!(
-        says(&out, "links (xlink:href) to geometries aren't followed, as they would read their city object member over many times"),
-        "{:?}",
-        messages_of(&out)
+    let inner = format!(
+        r#"<bldg:lod1MultiSurface><gml:MultiSurface><gml:surfaceMember>{big}</gml:surfaceMember></gml:MultiSurface></bldg:lod1MultiSurface>{parts}"#
     );
+    let out = read("model.gml", &lonlat(&building("b1", &inner)), None).unwrap();
     let part = layer(&out, "model BuildingPart");
     assert_eq!(part.features.len(), 20);
     let drawn = part.features.iter().filter(|f| f.geometry.is_some()).count();
     assert!((1..20).contains(&drawn), "some read, then the rest refused: {drawn}");
+    let refused = format!(
+        "{} links (xlink:href) to geometries aren't followed, as they would read their city object member over many times",
+        2 * (20 - drawn)
+    );
+    assert!(says(&out, &refused), "{refused}: {:?}", messages_of(&out));
+}
+
+/// A geometry left out (a polygon in it can't be read) leaves its good faces unread, so a link to
+/// one of them from elsewhere in the object still reads it.
+#[test]
+fn a_link_into_a_geometry_left_out_still_reads_its_face() {
+    let bad =
+        r#"<gml:Polygon><gml:exterior><gml:LinearRing><gml:posList>1 2 abc</gml:posList></gml:LinearRing></gml:exterior></gml:Polygon>"#;
+    let inner = format!(
+        r##"<bldg:lod2MultiSurface><gml:MultiSurface><gml:surfaceMember>{}</gml:surfaceMember><gml:surfaceMember>{bad}</gml:surfaceMember></gml:MultiSurface></bldg:lod2MultiSurface>
+        <bldg:lod2Solid><gml:Solid><gml:exterior><gml:CompositeSurface><gml:surfaceMember xlink:href="#p"/></gml:CompositeSurface></gml:exterior></gml:Solid></bldg:lod2Solid>"##,
+        polygon("p", &square(0.0, 0.0, 10.0, 0.0))
+    );
+    let out = read("model.gml", &lonlat(&building("b1", &inner)), None).unwrap();
+    assert!(says(&out, "1 geometries of city objects have coordinates that can't be read"), "{:?}", messages_of(&out));
+    assert!((area(out[0].0.features[0].geometry.as_ref()) - 100.0).abs() < 1e-6, "{:?}", messages_of(&out));
+
+    // A solid whose linked exterior is read but whose cavity can't be: the solid is left out, and
+    // the exterior it linked to is still read by the next link to it at that level.
+    let shell = format!(
+        r#"<bldg:lod1MultiSurface><gml:MultiSurface><gml:surfaceMember><gml:CompositeSurface gml:id="s"><gml:surfaceMember>{}</gml:surfaceMember></gml:CompositeSurface></gml:surfaceMember></gml:MultiSurface></bldg:lod1MultiSurface>"#,
+        polygon("q", &square(0.0, 0.0, 10.0, 0.0))
+    );
+    let inner = format!(
+        r##"{shell}<bldg:lod2MultiSurface><gml:MultiSurface><gml:surfaceMember xlink:href="#s"/></gml:MultiSurface></bldg:lod2MultiSurface>
+        <bldg:lod2Solid><gml:Solid><gml:exterior xlink:href="#s"/><gml:interior><gml:CompositeSurface><gml:surfaceMember>{bad}</gml:surfaceMember></gml:CompositeSurface></gml:interior></gml:Solid></bldg:lod2Solid>"##
+    );
+    let out = read("model.gml", &lonlat(&building("b2", &inner)), None).unwrap();
+    assert!(says(&out, "1 geometries of city objects have coordinates that can't be read"), "{:?}", messages_of(&out));
+    assert_eq!(value(&out[0].0, 0, "lod"), Value::Text("2".into()), "{:?}", messages_of(&out));
+    assert!((area(out[0].0.features[0].geometry.as_ref()) - 100.0).abs() < 1e-6, "{:?}", messages_of(&out));
 }
 
 /// Geometries that are only links to themselves, or to each other, end at once: they don't spend

@@ -63,9 +63,10 @@ pub const HEAD_BYTES: usize = 64 * 1024;
 /// root declaring huge ones, with many members, would have them copied and parsed again for each.
 const WRAP_BUDGET: usize = 1 << 30;
 
-/// How many times over its own size a member's links may read: a geometry a link points to is read
-/// once per object that links to it, so many objects linking to one large geometry can't make a
-/// member's reading grow as their number times its size.
+/// How many times over its own size, in bytes, a member's links may read: a geometry a link points
+/// to is read once per object that links to it, so many objects linking to one large geometry (a
+/// long `posList` as much as many elements) can't make a member's reading grow as their number
+/// times its size.
 const LINK_READS: usize = 4;
 
 /// The namespace every CityGML version's core namespace starts with.
@@ -802,8 +803,8 @@ impl Said {
     }
 }
 
-/// The elements of a member a link can point to, by `gml:id`, and how many nodes its links may
-/// still read.
+/// The elements of a member a link can point to, by `gml:id`, and how many bytes of it its links
+/// may still read.
 struct Targets<'a, 'i> {
     by_id: HashMap<&'a str, Node<'a, 'i>>,
     budget: usize,
@@ -812,16 +813,15 @@ struct Targets<'a, 'i> {
 impl<'a, 'i> Targets<'a, 'i> {
     /// A member's elements by `gml:id`, the first of an id given twice; none when it holds no link.
     fn of(member: Node<'a, 'i>, linked: bool) -> Self {
-        let (mut by_id, mut nodes) = (HashMap::new(), 0usize);
+        let mut by_id = HashMap::new();
         if linked {
             for n in member.descendants().filter(Node::is_element) {
-                nodes += 1;
                 if let Some(id) = gml_id(&n) {
                     by_id.entry(id).or_insert(n);
                 }
             }
         }
-        Targets { by_id, budget: nodes.saturating_mul(LINK_READS) }
+        Targets { by_id, budget: member.range().len().saturating_mul(LINK_READS) }
     }
 }
 
@@ -856,11 +856,21 @@ struct Pending<'a, 'i> {
 #[derive(Default)]
 struct Links<'a, 'i> {
     seen: HashSet<(&'a str, Option<u32>)>,
+    /// What `seen` took in, in order, so a geometry left out can take its own marks back.
+    marked: Vec<(&'a str, Option<u32>)>,
     ground: Vec<Pending<'a, 'i>>,
     others: Vec<Pending<'a, 'i>>,
 }
 
 impl<'a, 'i> Links<'a, 'i> {
+    /// Marks a geometry read in this object at a level of detail.
+    fn mark(&mut self, key: (&'a str, Option<u32>)) {
+        if self.seen.insert(key) {
+            self.marked.push(key);
+        }
+    }
+
+    /// Keeps a link to follow, in the ground's queue when it is a ground surface's.
     fn push(&mut self, link: Pending<'a, 'i>) {
         if link.at.ground { self.ground.push(link) } else { self.others.push(link) }
     }
@@ -888,7 +898,6 @@ struct Reading {
 }
 
 impl Reading {
-    /// Reads a city object into its rows, then the objects nested in it.
     /// Counts what a generic attribute's value carries that isn't kept: its code list
     /// (`codeSpace`), its other attributes (a language; a unit but on a `measureAttribute`), and a
     /// set's members with no name.
@@ -906,6 +915,9 @@ impl Reading {
             .count();
     }
 
+    /// Reads a city object into its rows, then the objects nested in it. Its links are followed
+    /// after its own geometries, with no look at Cancel: what they read is bounded by the member's
+    /// size ([`LINK_READS`]), as parsing the member is, and Cancel is looked at between members.
     fn object<'a, 'i>(&mut self, e: Node<'a, 'i>, parent: Option<&str>, targets: &mut Targets<'a, 'i>) {
         let ty = local(&e);
         if ty == "TINRelief" {
@@ -969,8 +981,7 @@ impl Reading {
             }
         }
         // Links last, once what the object writes out is read: a link to that adds nothing, and a
-        // ground face stays the ground's though a solid links to it first. Their work is bounded by
-        // the member's size (`LINK_READS`), as parsing the member is, with no look at Cancel.
+        // ground face stays the ground's though a solid links to it first.
         while let Some(link) = links.next() {
             self.follow(link, targets, &mut parts, &mut links);
         }
@@ -1003,7 +1014,7 @@ impl Reading {
     /// link to another member, another file or nothing is said, as is one to what isn't a geometry.
     fn follow<'a, 'i>(&mut self, link: Pending<'a, 'i>, targets: &mut Targets<'a, 'i>, parts: &mut ObjectParts, links: &mut Links<'a, 'i>) {
         let id = link.href.trim().strip_prefix('#').map(str::trim);
-        let Some(target) = id.and_then(|id| targets.by_id.get(id)).copied() else {
+        let Some((id, target)) = id.and_then(|id| targets.by_id.get(id).map(|t| (id, *t))) else {
             self.said.links += 1;
             return;
         };
@@ -1012,16 +1023,15 @@ impl Reading {
             return;
         }
         // Read already in this object at this level of detail, written out or by another link:
-        // nothing to add. Marked read now, so an element that is only a link to itself ends here.
-        let read = id.is_some_and(|id| !links.seen.insert((id, link.at.lod)));
+        // nothing to add.
+        let key = (id, link.at.lod);
+        let read = links.seen.contains(&key);
         if read && link.then.is_empty() {
             return;
         }
-        // Counted no further than the budget; once it is spent, every later link is refused at the
-        // cost of one node, so links refused can't add up to more than it either.
-        let cost = if read { 0 } else { target.descendants().filter(Node::is_element).take(targets.budget.saturating_add(1)).count() };
+        // Its bytes in the member: what reading it parses, its elements and its coordinates' text.
+        let cost = if read { 0 } else { target.range().len() };
         if cost > targets.budget {
-            targets.budget = 0;
             self.said.links_past_limit += 1;
             return;
         }
@@ -1032,6 +1042,10 @@ impl Reading {
         self.walk(
             |w| {
                 if !read {
+                    // Marked read before it is read, so an element that is only a link to itself
+                    // ends here; inside the walk, so a walk that fails (a cavity that can't be
+                    // read) takes the mark back, and the target is read again by its next link.
+                    w.links.mark(key);
                     if let Some(d) = dim {
                         w.dim = Some(d.trim().parse().ok()?);
                     }
@@ -1099,7 +1113,7 @@ impl Reading {
     ) {
         // The reach is the file's and no geometry's: a geometry that is left out leaves no point in it,
         // and no link to follow.
-        let (reach, ground, others) = (self.reach, links.ground.len(), links.others.len());
+        let (reach, ground, others, marked) = (self.reach, links.ground.len(), links.others.len(), links.marked.len());
         let mut walk = Walk {
             counts: &mut self.counts,
             said: &mut self.said,
@@ -1116,6 +1130,10 @@ impl Reading {
             self.reach = reach;
             links.ground.truncate(ground);
             links.others.truncate(others);
+            // Its geometries weren't read: a link to one of them still reads it.
+            for key in links.marked.drain(marked..) {
+                links.seen.remove(&key);
+            }
             return;
         }
         let Got { faces, surface, mut lines, points, heights, solid } = walk.got;
@@ -1171,6 +1189,8 @@ struct Walk<'r, 'a, 'i> {
 }
 
 impl<'a, 'i> Walk<'_, 'a, 'i> {
+    /// Reads a geometry into what its walk holds, in the `srsDimension` it gives; one given only by
+    /// a link is kept to follow.
     fn geometry(&mut self, g: &Node<'a, 'i>) -> Option<()> {
         // A geometry given by a link is followed once its object's own are read.
         if only_link(g) {
@@ -1179,7 +1199,7 @@ impl<'a, 'i> Walk<'_, 'a, 'i> {
         }
         // Read for its object at this level of detail: a link to it from there adds nothing.
         if let Some(id) = gml_id(g) {
-            self.links.seen.insert((id, self.at.lod));
+            self.links.mark((id, self.at.lod));
         }
         // A geometry's `srsDimension` holds for what it holds.
         let outer = self.dim;
