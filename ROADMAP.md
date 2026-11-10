@@ -313,8 +313,9 @@ Open questions rather than plans; discuss before building.
   kerchunk and Icechunk.
 - Broader QGIS project compatibility and opening ArcGIS Pro projects (supported QGIS projects
   already open as maps).
-- An in-app Python console and Jupyter notebooks
-  ([#1056](https://github.com/opengeos/RustGIS/issues/1056)); an R package.
+- An in-app Python console, and notebooks whose Python cells run beside the map (`.ipynb` files
+  open and save today, but their Python cells don't run;
+  [#1056](https://github.com/opengeos/RustGIS/issues/1056)); an R package.
 - Mesh layers for model results ([#1166](https://github.com/opengeos/RustGIS/issues/1166)).
 - A server that GeoLibre and RustGIS can both use, once RustGIS is stable
   ([#951](https://github.com/opengeos/RustGIS/discussions/951)).
