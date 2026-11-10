@@ -286,8 +286,8 @@ fn training(s: &Session, p: &Value) -> Result<Training, String> {
     // for the default: the training would say nothing of the epochs left out.
     let epochs = match p.get("epochs").filter(|v| !v.is_null()) {
         None => 60.0,
-        Some(v) => v
-            .as_f64()
+        // Read as other counts are (a numeric string too), then checked.
+        Some(v) => f(p, "epochs")
             .filter(|e| (1.0..=neural::MAX_EPOCHS as f64).contains(e) && e.fract() == 0.0)
             .ok_or_else(|| format!("epochs is 1 to {}, not {v}", neural::MAX_EPOCHS))?,
     };

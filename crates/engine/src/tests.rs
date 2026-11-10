@@ -38868,8 +38868,13 @@ fn a_model_trained_within_the_work_limit_says_so() {
     assert!(r["limited"].as_str().is_some(), "{r}");
     assert_eq!(limited(&s, mark, "big2"), 1);
     // More epochs than a training runs are refused, not cut without a word.
-    for epochs in [json!(0), json!(501), json!(5000), json!(2.5), json!("500 epochs")] {
+    for epochs in [json!(0), json!(501), json!(5000), json!(2.5), json!("2.5"), json!("500 epochs")] {
         let e = s.run("dl.train", &json!({"layer": "scene", "training": "training", "classField": "class", "epochs": epochs})).unwrap_err();
         assert!(e.contains("epochs is 1 to 500"), "{epochs}: {e}");
     }
+    // A count as a numeric string is read as other counts are.
+    let r = s
+        .run("dl.train", &json!({"layer": "scene", "training": "training", "classField": "class", "bands": [1, 2], "epochs": "3"}))
+        .unwrap();
+    assert_eq!(r["epochs"], 3, "{r}");
 }
