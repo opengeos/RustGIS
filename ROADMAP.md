@@ -36,8 +36,8 @@ markers, or none:
   the project lead (core types, how a project stores its data, the plugin ABI). Join the
   discussion on the issue; don't start code until the issue records the decision.
 
-An item marked _Coordinate first_ or _Decide first_ links its issue, or says one is needed;
-opening that issue is the first step. A theme's tracking issue holds its details and progress; this
+An item marked _Coordinate first_ or _Decide first_ links the issue or discussion where it is
+decided, or says an issue is needed; opening that issue is the first step. A theme's tracking issue holds its details and progress; this
 page keeps one line per item. A pull request that lands an item removes it from this page, or
 narrows it to what is left, in the same change.
 

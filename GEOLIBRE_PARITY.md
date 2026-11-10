@@ -127,12 +127,13 @@ _GeoLibre: docs/features.md › Layers, styling, and labels; docs/user-guide/sty
   with its value, percent or both, and the categories listed in layout legends (_Roadmap:
   style and map_ for markers, patterns and a library).
 - [ ] **Style interchange**: import/export SLD, QGIS QML, Mapbox GL JSON. Partial: MapLibre style
-  export and `.rgisstyle` (_Roadmap: style and map_ for QML and SLD import).
+  export, `.rgisstyle`, QGIS layer styles for the supported renderers and QML colour ramps
+  (_Roadmap: style and map_ for more of QML, and SLD import).
 - [ ] **Smart styling**: automatic palette on add, one-click style suggestions. Missing.
 - [ ] **Label engine depth**: expression labels, offset, rotation, wrap, case, priority,
-  de-duplication, number formats. Partial: label classes with SQL queries, field labels with
-  placement and scale ranges; a labeling pane is underway ([#618](https://github.com/opengeos/RustGIS/issues/618), [#722](https://github.com/opengeos/RustGIS/issues/722)). Expression labels:
-  _Roadmap: style and map_.
+  de-duplication, number formats. Partial: label classes with SQL queries, placement, offsets,
+  wrapping and scale ranges in the Labeling pane ([#618](https://github.com/opengeos/RustGIS/issues/618), [#722](https://github.com/opengeos/RustGIS/issues/722)); label text, size,
+  colour and angle by expression (_Roadmap: style and map_ for case, priority and number formats).
 - [ ] **On-map legend and colorbar controls**. Partial: the legend is in Contents and layouts only
   (_Roadmap: style and map_).
 - [ ] **Popup and tooltip designer**: field picking, formats (date, link, image), an expression
