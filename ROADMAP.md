@@ -3,8 +3,9 @@
 _Last reviewed: 2026-11-10 (v0.6.0). Reviewed at each release; if this date is old, trust the
 linked issues over this page._
 
-This page lists what RustGIS doesn't do yet and where help is most useful; details of each item
-live in its linked issue.
+This page lists the work planned for RustGIS and where help is most useful; details of each item
+live in its linked issue. Gaps nobody has planned are listed in
+[GEOLIBRE_PARITY.md](GEOLIBRE_PARITY.md) without a theme.
 
 ## Goals
 - **What exists works.** A feature that crashes, misreads data or is undocumented costs more

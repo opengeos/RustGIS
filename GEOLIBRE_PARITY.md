@@ -308,8 +308,8 @@ _GeoLibre: docs/features.md › Platforms and interface; docs/i18n.md_
   Persian and Hebrew. Partial: 20 languages; Persian text is drawn right to left, while the panes
   keep their left-to-right layout.
 - [ ] **Translated geoprocessing tool names**. Missing (possibly deliberate).
-- [ ] **Keyboard-shortcut cheat sheet**. Partial: Command Search; rebindable shortcuts are on the
-  roadmap (_any time_, [#562](https://github.com/opengeos/RustGIS/issues/562)).
+- [ ] **Keyboard-shortcut cheat sheet**. Partial: Command Search, and shortcuts rebindable with
+  JSON import and export ([#562](https://github.com/opengeos/RustGIS/issues/562)).
 
 ## Already at or beyond parity
 - A native single-binary app, with every action a command shared by the ribbon, CLI, notebooks,
