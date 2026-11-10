@@ -202,7 +202,8 @@ fn segments_cross(a: (Coord, Coord), b: (Coord, Coord)) -> Option<Coord> {
 /// Where a path crosses itself (rings and lines; ring closures are allowed). Segments are swept
 /// west to east, so only those overlapping in x are compared. A path too complex to finish
 /// within the work budget is reported at its start, to be looked at, rather than passed, and
-/// says so (`Err`), so the check is said to be incomplete.
+/// says so (`Err`), so the check is said to be incomplete. A run cancelled past the limit stops
+/// with `Err` too, which the caller tells apart by looking at Cancel.
 fn self_crossing(path: &[Coord], closed: bool) -> Result<Option<Coord>, Coord> {
     let segs: Vec<(Coord, Coord)> = path.windows(2).filter_map(|w| Some((*w.first()?, *w.get(1)?))).collect();
     let n = segs.len();
@@ -259,6 +260,8 @@ pub fn self_intersections(ds: &Dataset, rows: &[usize]) -> Checked {
             let m: Vec<Coord> = p.iter().map(|c| lonlat_to_plane(*c)).collect();
             let found = match self_crossing(&m, closed) {
                 Ok(c) => c,
+                // Stopped by Cancel, not by the limit: nothing to list (the run is dropped).
+                Err(_) if crate::control::cancelled() => return Checked::partial(out),
                 Err(start) => {
                     limited = true;
                     Some(start)

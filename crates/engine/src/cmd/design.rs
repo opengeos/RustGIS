@@ -2056,7 +2056,6 @@ fn topology_rules(s: &mut Session, p: &Json) -> CmdResult {
 
 /// One topology rule as `topology.validate` checks it: the layer's rows shown (their data shared,
 /// not copied) and, for a rule against another layer, that layer's.
-#[derive(Clone)]
 struct TopologyInput {
     rule: TopologyRule,
     layer: String,
@@ -2105,10 +2104,10 @@ fn same_topology(was: &[TopologyInput], now: &[TopologyInput]) -> bool {
         })
 }
 
-/// Checks each rule, in order, a result for each (a cancelled run is an error): a layer with a latitude out of range is an error,
-/// as it always was. Each check looks at Cancel between features and counts its progress, except
-/// the gaps check's union of every polygon, one step; in a run that can be cancelled it takes no
-/// work limit (see `rustgis_analysis::topology`).
+/// Checks each rule, in order, a result for each (a cancelled run is an error): a layer with a
+/// latitude out of range is an error, as it always was. Each check looks at Cancel between features
+/// and counts its progress, except the gaps check's union of every polygon, one step; in a run that
+/// can be cancelled it takes no work limit (see `rustgis_analysis::topology`).
 fn check_topology(inputs: &[TopologyInput], tol: f64) -> Result<Vec<rustgis_analysis::topology::Checked>, String> {
     use rustgis_analysis::topology as t;
     let mut found = Vec::with_capacity(inputs.len());
@@ -2178,6 +2177,22 @@ fn topology_validate(s: &mut Session, p: &Json) -> CmdResult {
         Some(_) => return Err("the topology rules or their layers changed while they were checked: validate again".into()),
         None => check_topology(&inputs, tol)?,
     };
+    // Rules whose layer, or covering layer, isn't on the map are checked for nothing: said.
+    let unchecked: Vec<String> = s
+        .map()
+        .editing
+        .topology
+        .iter()
+        .filter(|r| !inputs.iter().any(|i| &i.rule == *r && i.by.is_some() == matches!(r, TopologyRule::MustBeCoveredBy { .. })))
+        .map(|r| format!("{} on '{}'", r.label(), r.layer()))
+        .collect();
+    if !unchecked.is_empty() {
+        s.warn(format!(
+            "{} topology rule(s) weren't checked: their layer or covering layer isn't on the map ({})",
+            unchecked.len(),
+            unchecked.join(", ")
+        ));
+    }
     let mut errors = Vec::new();
     // Rules whose check stopped early (an error or work limit), or measured some part more coarsely
     // than it's meant to (a line winding round a pole many times): their counts may be off.
