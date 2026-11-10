@@ -453,6 +453,37 @@ fn a_geometry_that_cant_be_read_is_said_once_for_its_links() {
     assert!((area(out[0].0.features[0].geometry.as_ref()) - 100.0).abs() < 1e-6, "{:?}", messages_of(&out));
 }
 
+/// A geometry left out is said as one: what it says of its parts (a ring given by a link) isn't said
+/// again by each link that reads it, and a solid whose exterior links to it is said too.
+#[test]
+fn a_geometry_left_out_doesnt_say_its_parts_for_each_link() {
+    let bad =
+        r#"<gml:Polygon><gml:exterior><gml:LinearRing><gml:posList>1 2 abc</gml:posList></gml:LinearRing></gml:exterior></gml:Polygon>"#;
+    let ring = r##"<gml:Polygon><gml:exterior xlink:href="#ring"/></gml:Polygon>"##;
+    let inner = format!(
+        r##"<bldg:lod1MultiSurface><gml:MultiSurface><gml:surfaceMember><gml:CompositeSurface gml:id="e"><gml:surfaceMember>{ring}</gml:surfaceMember><gml:surfaceMember>{bad}</gml:surfaceMember></gml:CompositeSurface></gml:surfaceMember></gml:MultiSurface></bldg:lod1MultiSurface>
+        <bldg:lod2Solid><gml:Solid><gml:exterior><gml:CompositeSurface><gml:surfaceMember xlink:href="#e"/></gml:CompositeSurface></gml:exterior></gml:Solid></bldg:lod2Solid>
+        <bldg:lod2MultiSurface><gml:MultiSurface><gml:surfaceMember xlink:href="#e"/><gml:surfaceMember>{}</gml:surfaceMember></gml:MultiSurface></bldg:lod2MultiSurface>"##,
+        polygon("a", &square(0.0, 0.0, 10.0, 0.0))
+    );
+    let out = read("model.gml", &lonlat(&building("b1", &inner)), None).unwrap();
+    // Once at LoD 1 where it is written, once at LoD 2 where it is linked.
+    assert!(says(&out, "2 geometries of city objects have coordinates that can't be read"), "{:?}", messages_of(&out));
+    assert!(!says(&out, "given only by a link"), "{:?}", messages_of(&out));
+
+    // A solid whose exterior links to a geometry left out is left out with its cavities, and said.
+    let cavity = format!(
+        "<gml:interior><gml:CompositeSurface><gml:surfaceMember>{}</gml:surfaceMember></gml:CompositeSurface></gml:interior>",
+        polygon("c", &square(2.0, 2.0, 2.0, 0.0))
+    );
+    let inner = format!(
+        r##"<bldg:lod2MultiSurface><gml:MultiSurface><gml:surfaceMember><gml:CompositeSurface gml:id="s"><gml:surfaceMember>{bad}</gml:surfaceMember></gml:CompositeSurface></gml:surfaceMember></gml:MultiSurface></bldg:lod2MultiSurface>
+        <bldg:lod2Solid><gml:Solid><gml:exterior xlink:href="#s"/>{cavity}</gml:Solid></bldg:lod2Solid>"##
+    );
+    let out = read("model.gml", &lonlat(&building("b2", &inner)), None).unwrap();
+    assert!(says(&out, "2 geometries of city objects have coordinates that can't be read"), "{:?}", messages_of(&out));
+}
+
 /// Geometries that are only links to themselves, or to each other, end at once: they don't spend
 /// the member's budget, so the object's other links are still followed.
 #[test]

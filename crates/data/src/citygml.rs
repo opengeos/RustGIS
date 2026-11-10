@@ -659,7 +659,7 @@ fn value(p: &Node) -> Option<Json> {
 }
 
 /// What this reader leaves out that the others don't meet, for one notice per kind.
-#[derive(Default)]
+#[derive(Default, Clone)]
 struct Said {
     /// Geometries whose coordinates can't be read, or that lack a part they need.
     bad_coordinates: usize,
@@ -1055,6 +1055,9 @@ impl Reading {
         // nothing to add.
         let key = (id, link.at.lod);
         if links.failed.contains(&key) {
+            // Said where it failed. A solid whose exterior it is lacks the part it needs, and is left
+            // out with its cavities.
+            self.said.bad_coordinates += usize::from(!link.then.is_empty());
             return;
         }
         let read = links.read(key, link.at.ground);
@@ -1149,6 +1152,9 @@ impl Reading {
         // The reach is the file's and no geometry's: a geometry that is left out leaves no point in it,
         // and no link to follow.
         let (reach, ground, others, marked) = (self.reach, links.ground.len(), links.others.len(), links.marked.len());
+        // What it says of its parts: a geometry left out is said as one, so a link that reads it
+        // again doesn't say its parts again.
+        let said = self.said.clone();
         let mut walk = Walk {
             counts: &mut self.counts,
             said: &mut self.said,
@@ -1167,6 +1173,7 @@ impl Reading {
             if let Some(key) = walk.failed {
                 links.failed.insert(key);
             }
+            self.said = said;
             self.said.bad_coordinates += 1;
             self.reach = reach;
             links.ground.truncate(ground);
