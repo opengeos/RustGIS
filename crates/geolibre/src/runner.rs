@@ -231,14 +231,7 @@ pub(crate) fn run_pinned(
     c.current_dir(dir).arg(id).args(argv);
     live()?;
     pin.check()?;
-    // A run cancelled (the Cancel of a model or script run in the background, #1562) or no longer
-    // live stops the program, rather than waiting for it to finish.
-    let stop = || {
-        if rustgis_analysis::control::current().is_some_and(|c| c.is_cancelled()) {
-            return Some("cancelled".to_string());
-        }
-        live().err()
-    };
+    let stop = || stop_reason(live);
     let out = output_until(c, &stop).map_err(|e| if e == "cancelled" { e } else { format!("{}: {e}", exe.display()) })?;
     if !out.status.success() {
         let err = String::from_utf8_lossy(&out.stderr);
@@ -247,6 +240,19 @@ pub(crate) fn run_pinned(
         return Err(err.lines().take(20).collect::<Vec<_>>().join("\n"));
     }
     Ok(String::from_utf8_lossy(&out.stdout).lines().map(str::to_string).collect())
+}
+
+/// Why a running program is stopped rather than waited for (#1562): its run was cancelled (the
+/// Cancel of a model or script run in the background), the project it was started for is no
+/// longer the one open (the predicate a background read installs), or `live` fails.
+fn stop_reason(live: &dyn Fn() -> Result<(), String>) -> Option<String> {
+    if rustgis_analysis::control::current().is_some_and(|c| c.is_cancelled()) {
+        return Some("cancelled".to_string());
+    }
+    if let Err(e) = rustgis_data::source::remote::check_still(&rustgis_data::source::remote::current_still()) {
+        return Some(e);
+    }
+    live().err()
 }
 
 #[cfg(all(test, unix))]
@@ -268,5 +274,32 @@ mod tests {
         c.arg("done");
         let out = output_until(c, &|| None).unwrap();
         assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "done");
+    }
+
+    /// A program is stopped once its run is cancelled or its project closed, without a GeoLibre
+    /// runner: the path from the run's control and the installed predicate to the kill.
+    #[test]
+    fn a_cancelled_run_or_a_closed_project_stops_the_program() {
+        use rustgis_analysis::control::Control;
+        use rustgis_data::source::remote::with_still;
+        let fine = || Ok(());
+        assert_eq!(stop_reason(&fine), None);
+        assert_eq!(stop_reason(&|| Err("gone".to_string())), Some("gone".to_string()));
+        let control = Control::new();
+        let run = rustgis_analysis::run_under("Tool", &control, || {
+            assert_eq!(stop_reason(&fine), None);
+            control.cancel();
+            let started = std::time::Instant::now();
+            let mut c = Command::new("sleep");
+            c.arg("30");
+            let res = output_until(c, &|| stop_reason(&fine));
+            assert!(started.elapsed() < Duration::from_secs(10), "the program was waited for");
+            assert_eq!(res.err().as_deref(), Some("cancelled"));
+            Ok(())
+        });
+        assert!(run.is_err(), "the run ends cancelled");
+        let closed = with_still(std::sync::Arc::new(|| false), || stop_reason(&fine));
+        assert!(closed.is_some(), "a program started for a project no longer open is stopped");
+        assert_eq!(with_still(std::sync::Arc::new(|| true), || stop_reason(&fine)), None);
     }
 }

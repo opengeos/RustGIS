@@ -1366,7 +1366,9 @@ their name.
   meanwhile (an edit, a selection, a layer added or reordered, the environment, the projection)
   has that tool and those after it run again as the results are added, and so does a tool that
   writes a file or a plugin tool, with those after it. GeoLibre tools are worked out in the
-  background like the built-in ones. Those that run again run as a model always has, holding the
+  background like the built-in ones: their outputs go to a folder of their own until they are
+  added. A GeoLibre option that names a file for the program to write isn't an output, so a
+  tool given one writes it in the background, and again if the tool runs again. Those that run again run as a model always has, holding the
   window until they finish, with the work limits of a run that can't
   be cancelled. The tools worked out in the background take no work limit, as a run that can
   be stopped takes none. Tools that run holding the window or from the command line keep it, so
