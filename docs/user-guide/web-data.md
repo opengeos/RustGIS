@@ -101,15 +101,19 @@ not only those that cover it. A polygon is not widened, and RustGIS says so.
 
 `stac.area` makes the shape without searching: from `"path"` (a file in any format RustGIS reads)
 or from a layer's selected features, with the same rules and `"buffer"`. It returns the GeoJSON
-to give `stac.search` as `"intersects"`:
+to give `stac.search` as `"intersects"`. Run it first, then copy the `intersects` geometry it
+returns into the search (already widened, so the search needs no `"buffer"`):
 
 ```sh
-rustgis-cli run --cmd 'stac.area={"path":"parcel.shp","buffer":500}' --cmd 'stac.search={"collections":"sentinel-2-c1-l2a","intersects":{"type":"Point","coordinates":[-84.5,38.05]},"buffer":500,"datetime":"2024-07-01/2024-07-31"}'
+rustgis-cli run --cmd 'stac.area={"path":"parcel.shp","buffer":500}'
+rustgis-cli run --cmd 'stac.search={"collections":"sentinel-2-c1-l2a","intersects":<the geometry returned above>,"datetime":"2024-07-01/2024-07-31"}'
 ```
 
 A shape is sent in the body of a `POST /search`; if the server refuses that, the search is asked
-again in the query when the shape is short enough for one. A POST search returns no `"next"`
-address (RustGIS says when more items match than were loaded): raise `"limit"` or narrow it.
+again in the query when the shape is short enough for one. A POST search returns no usable
+`"next"` address: raise `"limit"` or narrow the search to see more. RustGIS says when the answer
+shows that more items match than were loaded, but a server that gives neither a count nor a next
+link can't be told from one with no more.
 
 Assets can use HTTP(S) or `s3://` addresses. S3 assets use the saved connection serving their
 bucket, or anonymous AWS access when none matches; see [S3 buckets](data.md#s3-buckets).

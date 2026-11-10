@@ -255,7 +255,7 @@ fn post_service(app: &mut RustGisApp, url: &str, body: String) -> Answer {
         Ok(url) => {
             let slot: Answer = Slot::default();
             let land = slot.clone();
-            cache::post_json(&url, body, Box::new(move |r| *land.lock().unwrap_or_else(|e| e.into_inner()) = Some(r)));
+            cache::post_json_named(&url, body, Box::new(move |r| *land.lock().unwrap_or_else(|e| e.into_inner()) = Some(r)));
             slot
         }
         Err(e) => Slot::new(std::sync::Mutex::new(Some(Err(crate::connectionui::translated(&e))))),
@@ -1314,10 +1314,16 @@ fn poll_loading(app: &mut RustGisApp, ctx: &egui::Context) {
     ctx.request_repaint();
 }
 
-/// Drawing the area stops when another tool is picked.
+/// Drawing the area stops when another tool is picked, or when the STAC pane is no longer shown
+/// (the tool goes back to Explore, so a later shape isn't taken for an area nobody sees).
 fn stop_stale_drawing(app: &mut RustGisApp) {
-    if app.ui.stac.drawing.is_some() && !matches!(app.session.tool, rustgis_engine::Tool::Graphic(_)) {
+    if app.ui.stac.drawing.is_none() {
+        return;
+    }
+    if !matches!(app.session.tool, rustgis_engine::Tool::Graphic(_)) {
         app.ui.stac.drawing = None;
+    } else if app.ui.right != Some(crate::RightPane::WebData) || app.ui.web_data != "stac" {
+        stop_drawing(app);
     }
 }
 
@@ -1353,7 +1359,10 @@ pub(crate) fn take_drawn(app: &mut RustGisApp, shape: &str, pts: &[Coord]) -> Op
     };
     let Some(g) = geometry else { return Some(false) };
     push_part(app, g);
-    app.ui.stac.drawing = None;
+    // A kept tool stays on for the next shape, which joins the area too.
+    if !app.session.keep_tool {
+        app.ui.stac.drawing = None;
+    }
     Some(true)
 }
 
@@ -1827,6 +1836,35 @@ mod tests {
         draw(&mut app, "point");
         app.run("tool.set", json!({"tool": "explore"})).unwrap();
         stop_stale_drawing(&mut app);
+        assert_eq!(app.ui.stac.drawing, None);
+    }
+
+    #[test]
+    fn closing_the_pane_stops_drawing_the_area_and_returns_to_explore() {
+        let mut app = RustGisApp::with_sample();
+        app.ui.right = Some(crate::RightPane::WebData);
+        app.ui.web_data = "stac".into();
+        draw(&mut app, "line");
+        stop_stale_drawing(&mut app);
+        assert_eq!(app.ui.stac.drawing, Some("line"), "the pane is shown");
+        app.ui.right = None;
+        stop_stale_drawing(&mut app);
+        assert_eq!(app.ui.stac.drawing, None);
+        assert!(matches!(app.session.tool, rustgis_engine::Tool::Explore));
+    }
+
+    #[test]
+    fn a_kept_tool_goes_on_adding_shapes_to_the_area() {
+        let mut app = RustGisApp::with_sample();
+        app.session.keep_tool = true;
+        draw(&mut app, "point");
+        for x in [1.0, 2.0] {
+            assert_eq!(take_drawn(&mut app, "point", &[at(x, 0.0)]), Some(true));
+            assert_eq!(app.ui.stac.drawing, Some("point"));
+        }
+        assert_eq!(app.ui.stac.parts.len(), 2);
+        app.session.keep_tool = false;
+        assert_eq!(take_drawn(&mut app, "point", &[at(3.0, 0.0)]), Some(true));
         assert_eq!(app.ui.stac.drawing, None);
     }
 

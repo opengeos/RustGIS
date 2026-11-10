@@ -194,8 +194,10 @@ fn search(s: &mut Session, p: &Value) -> CmdResult {
         let (items, next) = stac::parse_items(&bytes, &url)?;
         // A POST's next link is a request with a body, which is not an address to give back.
         let next = if posted {
-            if next.is_some() {
-                s.warn(format!("more items meet the search area than the {} loaded: raise limit or narrow the search", search.limit));
+            // `parse_items` drops a POST link, so the answer itself says whether there are more.
+            let more = stac::has_next(&bytes) || stac::parse_matched(&bytes).is_some_and(|m| m > items.len() as u64);
+            if more {
+                s.warn(format!("more items meet the search area than the {} loaded: raise limit or narrow the search", items.len()));
             }
             None
         } else {

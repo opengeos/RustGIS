@@ -324,6 +324,18 @@ pub fn parse_items(bytes: &[u8], from: &str) -> Result<(Vec<Item>, Option<String
     Ok((items, next))
 }
 
+/// Whether a search's answer has a `next` link of any method. [`parse_items`] gives none for a
+/// POST link (it needs its body, which isn't an address), so this tells a POST search that more
+/// items match than the page holds.
+pub fn has_next(bytes: &[u8]) -> bool {
+    json(bytes)
+        .ok()
+        .and_then(|v| {
+            v.get("links")?.as_array().map(|ls| ls.iter().take(100).any(|l| l.get("rel").and_then(Value::as_str) == Some("next")))
+        })
+        .unwrap_or(false)
+}
+
 /// How many items a search's answer says match in all (`numberMatched`, or the context
 /// extension's `matched`).
 pub fn parse_matched(bytes: &[u8]) -> Option<u64> {
@@ -951,6 +963,12 @@ mod tests {
         assert_eq!(items.len(), 2);
         assert_eq!(next.as_deref(), Some("https://x.org/v1/search?token=abc"));
         assert_eq!(parse_matched(page), None);
+        // A POST link is no address (`parse_items` drops it) but still says there is more.
+        let post = br#"{"features": [], "links": [{"rel": "next", "method": "POST", "href": "https://x.org/v1/search", "body": {}}]}"#;
+        assert_eq!(parse_items(post, "https://x.org/v1/search").unwrap().1, None);
+        assert!(has_next(post) && has_next(page));
+        assert!(!has_next(br#"{"features": [], "links": [{"rel": "self", "href": "https://x.org/"}]}"#));
+        assert!(!has_next(br#"{"features": []}"#) && !has_next(b"nope"));
         assert_eq!(parse_matched(br#"{"numberMatched": 1234}"#), Some(1234));
         assert_eq!(parse_matched(br#"{"context": {"matched": 7}}"#), Some(7));
         assert_eq!(parse_matched(br#"{"numberMatched": -1}"#), None);

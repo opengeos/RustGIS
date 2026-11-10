@@ -39307,24 +39307,41 @@ fn stac_search_by_shape_says_what_it_leaves_out() {
     s.map_mut().layer_mut(id).unwrap().selection = vec![1];
     let r = s.run("stac.search", &json!({"url": api, "intersects": "selection", "layer": "pts", "footprints": false})).unwrap();
     assert_eq!(r["intersects"], json!({"type": "Point", "coordinates": [7.8, 46.8]}));
+    let before = s.notices.len();
     let area = s.run("stac.area", &json!({"layer": "pts", "buffer": 100})).unwrap();
     assert_eq!(area["intersects"]["type"], "Polygon");
+    assert_eq!(
+        s.notices.len(),
+        before,
+        "clean input says nothing: {:?}",
+        s.notices.iter().skip(before).map(|n| &n.text).collect::<Vec<_>>()
+    );
+    // The ring reaches 100 m from the point [7.8, 46.8] on every side, in degrees of each axis.
+    let ring: Vec<(f64, f64)> =
+        area["intersects"]["coordinates"][0].as_array().unwrap().iter().map(|c| (c[0].as_f64().unwrap(), c[1].as_f64().unwrap())).collect();
+    let reach = |f: fn(&(f64, f64)) -> f64, at: f64| ring.iter().map(|c| (f(c) - at).abs()).fold(0.0, f64::max);
+    let (dlat, dlon) = (100.0 / 111_195.0, 100.0 / (111_195.0 * 46.8f64.to_radians().cos()));
+    assert!((reach(|c| c.1, 46.8) / dlat - 1.0).abs() < 0.05, "{ring:?}");
+    assert!((reach(|c| c.0, 7.8) / dlon - 1.0).abs() < 0.05, "{ring:?}");
 
-    // Hostile input is refused, not read as no area at all.
-    for bad in [
-        json!({"intersects": "everywhere"}),
-        json!({"intersects": 7}),
-        json!({"intersects": {"type": "Point", "coordinates": [500, 0]}}),
-        json!({"intersects": {"type": "Point", "coordinates": "x"}}),
-        json!({"intersects": {"type": "FeatureCollection", "features": []}}),
-        json!({"intersects": point, "buffer": -1}),
-        json!({"intersects": point, "buffer": "far"}),
-        json!({"intersects": point, "buffer": 1e12}),
+    // Hostile input is refused, with the reason, not read as no area at all or failing elsewhere.
+    for (bad, why) in [
+        (json!({"intersects": "everywhere"}), "intersects is GeoJSON"),
+        (json!({"intersects": 7}), "intersects is GeoJSON"),
+        (json!({"intersects": {"type": "Point", "coordinates": [500, 0]}}), "longitude"),
+        (json!({"intersects": {"type": "Point", "coordinates": "x"}}), "isn't GeoJSON geometry"),
+        (json!({"intersects": {"type": "FeatureCollection", "features": []}}), "no point, line or polygon"),
+        (json!({"intersects": point, "buffer": -1}), "buffer is a distance of 0 to"),
+        (json!({"intersects": point, "buffer": "far"}), "buffer is a number"),
+        (json!({"intersects": point, "buffer": 1e12}), "buffer is a distance of 0 to"),
     ] {
         let mut q = bad.clone();
         q["url"] = json!(api);
-        assert!(s.run("stac.search", &q).is_err(), "{bad}");
+        let e = s.run("stac.search", &q).unwrap_err();
+        assert!(e.contains(why), "{bad}: {e}");
     }
-    assert!(s.run("stac.area", &json!({"path": "/no/such/file.geojson"})).is_err());
-    assert!(s.run("stac.area", &json!({"layer": "nowhere"})).is_err());
+    let e = s.run("stac.area", &json!({"path": "/no/such/file.geojson"})).unwrap_err();
+    assert!(e.contains("/no/such/file.geojson"), "{e}");
+    let e = s.run("stac.area", &json!({"layer": "nowhere"})).unwrap_err();
+    assert!(e.contains("nowhere"), "{e}");
 }
