@@ -320,7 +320,10 @@ pub fn train(
     let training = fit.len();
     fit.truncate(((max_work / per_sample).min(usize::MAX as f64) as usize).max(1));
     let per_epoch = per_sample * fit.len().max(1) as f64;
-    let epochs_asked = epochs.clamp(1, MAX_EPOCHS);
+    if !(1..=MAX_EPOCHS).contains(&epochs) {
+        return Err(format!("epochs is 1 to {MAX_EPOCHS}, not {epochs}"));
+    }
+    let epochs_asked = epochs;
     let epochs = epochs_asked.min(((max_work / per_epoch).min(usize::MAX as f64) as usize).max(1));
     let (lr, momentum, batch) = (0.05f32, 0.9f32, 32usize);
     let mut vel: Vec<(Vec<f32>, Vec<f32>)> = layers.iter().map(|l| (vec![0.0; l.w.len()], vec![0.0; l.b.len()])).collect();

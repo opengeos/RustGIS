@@ -282,11 +282,15 @@ fn training(s: &Session, p: &Value) -> Result<Training, String> {
         Some(a) => a.iter().filter_map(Value::as_u64).map(|u| u as usize).take(neural::MAX_LAYERS).collect(),
         None => vec![32, 16],
     };
-    // Out of range is refused, not cut to it: the training would say nothing of the epochs left out.
-    let epochs = f(p, "epochs").unwrap_or(60.0);
-    if !(1.0..=neural::MAX_EPOCHS as f64).contains(&epochs) {
-        return Err(format!("epochs is 1 to {}, not {epochs}", neural::MAX_EPOCHS));
-    }
+    // A count given that isn't a whole number from 1 to 500 is refused, not cut to one or left
+    // for the default: the training would say nothing of the epochs left out.
+    let epochs = match p.get("epochs").filter(|v| !v.is_null()) {
+        None => 60.0,
+        Some(v) => v
+            .as_f64()
+            .filter(|e| (1.0..=neural::MAX_EPOCHS as f64).contains(e) && e.fract() == 0.0)
+            .ok_or_else(|| format!("epochs is 1 to {}, not {v}", neural::MAX_EPOCHS))?,
+    };
     let epochs = epochs as usize;
     // Without a name given, a new model never replaces one: it gets a name of its own.
     let (name, auto) = match ps(p, "model") {

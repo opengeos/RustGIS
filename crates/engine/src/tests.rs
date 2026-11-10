@@ -38838,7 +38838,10 @@ fn a_model_trained_within_the_work_limit_says_so() {
         {"type": "Feature", "properties": {"class": "field"}, "geometry": {"type": "Polygon", "coordinates": [[[10.025, 45.002], [10.038, 45.002], [10.038, 45.035], [10.025, 45.035], [10.025, 45.002]]]}}]});
     s.run("layer.addDataText", &json!({"fileName": "training.geojson", "text": training.to_string()})).unwrap();
     let limited = |s: &Session, mark: u64, name: &str| {
-        s.notices_since(mark).iter().filter(|n| n.text.starts_with(&format!("{name}: trained on "))).count()
+        s.notices_since(mark)
+            .iter()
+            .filter(|n| n.text.starts_with(&format!("{name}: trained on ")) && n.severity == rustgis_data::diagnostics::Severity::Warning)
+            .count()
     };
     let small = json!({"layer": "scene", "training": "training", "classField": "class", "bands": [1, 2], "epochs": 5, "model": "small"});
     let mark = s.notice_mark();
@@ -38865,7 +38868,7 @@ fn a_model_trained_within_the_work_limit_says_so() {
     assert!(r["limited"].as_str().is_some(), "{r}");
     assert_eq!(limited(&s, mark, "big2"), 1);
     // More epochs than a training runs are refused, not cut without a word.
-    for epochs in [0, 501, 5000] {
+    for epochs in [json!(0), json!(501), json!(5000), json!(2.5), json!("500 epochs")] {
         let e = s.run("dl.train", &json!({"layer": "scene", "training": "training", "classField": "class", "epochs": epochs})).unwrap_err();
         assert!(e.contains("epochs is 1 to 500"), "{epochs}: {e}");
     }
