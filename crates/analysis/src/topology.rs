@@ -35,8 +35,36 @@ impl Checked {
 
 /// Most errors reported per check.
 const MAX_ERRORS: usize = 10_000;
-/// Most pair tests one check spends, so a huge layer can't stall the app.
+/// Most pair tests one check spends, so a huge layer can't stall the app: a run that can't be
+/// cancelled. The checks run on one thread, so the limit is the same on every machine; a run that
+/// can be cancelled while it goes (the Error Inspector's, #1291) takes none ([`past_limit`]).
 const MAX_WORK: usize = 50_000_000;
+
+/// Whether `work` passed the check's limit: [`MAX_WORK`], or none in a run that can be cancelled
+/// while it goes ([`crate::control::uncapped`]), whose progress shows and whose Cancel stops it.
+/// The run's control is read only once the limit is passed. Past it, such a run looks at Cancel
+/// every [`LOOK_EVERY`] units, so the loops within one feature (one path's crossings, one end's
+/// polar scan) that the limit bounded stop when it is cancelled, with what was found.
+fn past_limit(work: usize) -> bool {
+    if work <= MAX_WORK {
+        return false;
+    }
+    if !crate::control::uncapped() {
+        return true;
+    }
+    LOOKS.with(|n| {
+        n.set(n.get().wrapping_add(1));
+        n.get().is_multiple_of(LOOK_EVERY)
+    }) && crate::control::cancelled()
+}
+
+/// How many units of work past [`MAX_WORK`] go by between looks at Cancel ([`past_limit`]).
+const LOOK_EVERY: u32 = 4096;
+
+thread_local! {
+    /// The units counted past [`MAX_WORK`] on this thread, for [`past_limit`]'s looks.
+    static LOOKS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
 
 /// One geometry from several: polygons are unioned, lines and points gathered.
 pub fn merge(geoms: &[Geometry]) -> Option<Geometry> {
@@ -113,7 +141,7 @@ pub fn overlaps(ds: &Dataset, rows: &[usize]) -> Checked {
                 break;
             }
             work += 1;
-            if work > MAX_WORK {
+            if past_limit(work) {
                 return Checked::partial(out);
             }
             if !rects_touch(ba, bb) || !a.intersects(b) {
@@ -133,7 +161,8 @@ pub fn overlaps(ds: &Dataset, rows: &[usize]) -> Checked {
 }
 
 /// Holes in the union of a layer's polygons that no polygon covers (the outer boundary isn't a
-/// gap).
+/// gap). The union of every polygon is one step: it looks at no Cancel and counts no progress
+/// until it is done; the holes after it are checked a polygon at a time.
 pub fn gaps(ds: &Dataset, rows: &[usize]) -> Checked {
     let all: Vec<geo::Polygon<f64>> = polygons(ds, rows).into_iter().flat_map(|(_, m, _)| m.0).collect();
     let u = geo::unary_union(all.iter());
@@ -186,7 +215,7 @@ fn self_crossing(path: &[Coord], closed: bool) -> Option<Coord> {
                 break;
             }
             work += 1;
-            if work > MAX_WORK {
+            if past_limit(work) {
                 return path.first().copied();
             }
             let (lo, hi) = (i.min(j), i.max(j));
@@ -269,7 +298,7 @@ pub fn dangles(ds: &Dataset, rows: &[usize], tol_m: f64) -> Checked {
                 for gx in x0.max(0)..=x1.min(cells.last.0) {
                     for gy in y0.max(0)..=y1.min(cells.last.1) {
                         work += 1;
-                        if work > MAX_WORK {
+                        if past_limit(work) {
                             return Checked::partial(Vec::new());
                         }
                         let v = grid.entry((gx, gy)).or_default();
@@ -321,7 +350,7 @@ pub fn dangles(ds: &Dataset, rows: &[usize], tol_m: f64) -> Checked {
                                     .is_some_and(|op| op.len() >= 2 && rustgis_data::geometry::seg_dist2(op, *end) <= tol * tol)
                         })
                 };
-                if work > MAX_WORK {
+                if past_limit(work) {
                     return Checked::partial(out);
                 }
                 if !touches {
@@ -357,13 +386,13 @@ const PLACE_HALVINGS: usize = 60;
 /// at worst costs about a quarter of a piece measured in [`edge_from`]. Reads add up across ends.
 const READS_A_WORK: usize = 4;
 
-/// The dangle check passed [`MAX_WORK`]: nothing more is compared.
+/// The dangle check passed its limit ([`past_limit`]): nothing more is compared.
 struct WorkLimit;
 
-/// Adds `n` to `work`, or says it passed [`MAX_WORK`].
+/// Adds `n` to `work`, or says it passed the limit ([`past_limit`]).
 fn charge(work: &mut usize, n: usize) -> Result<(), WorkLimit> {
     *work = work.saturating_add(n);
-    if *work > MAX_WORK { Err(WorkLimit) } else { Ok(()) }
+    if past_limit(*work) { Err(WorkLimit) } else { Ok(()) }
 }
 
 /// Counts a cheap read ([`READS_A_WORK`] to a unit of work).
@@ -756,7 +785,8 @@ impl<'a> PolarEnds<'a> {
             *span = (left, cells.key(end.x + shift + reach.wx, end.y).0.min(cells.last.0));
         }
         // A grid wider than two turns can contain many copies. Scan its occupied cells once;
-        // the edge tests use the nearest turn, and the existing work limit bounds the scan.
+        // the edge tests use the nearest turn, and the work limit bounds the scan (or, where there is
+        // none, Cancel stops it: see `past_limit`).
         if cells.size * (cells.last.0 as f64 + 1.0) > 2.0 * std::f64::consts::TAU * rustgis_geom::MERCATOR_R {
             columns = [(0, cells.last.0), (0, -1), (0, -1)];
         }
@@ -1440,6 +1470,33 @@ mod tests {
         let around = Reach { end: c(0.0, 0.0), wx: f64::INFINITY, wy: 5.0 };
         assert_eq!(around.spans(&c(-1e9, -10.0), &c(1e9, 10.0)), [Some((0.25, 0.75)), None, None]);
         assert!(Reach::new(c(0.0, 0.0), 89.999_99, 10.0).wx.is_infinite() && Reach::new(c(0.0, 0.0), 89.0, 10.0).wx.is_finite());
+    }
+
+    /// The work limit holds a run that can't be cancelled, and none that can (#1291).
+    #[test]
+    fn a_run_that_can_be_cancelled_takes_no_work_limit() {
+        assert!(past_limit(MAX_WORK + 1) && !past_limit(MAX_WORK));
+        let control = crate::control::Control::stoppable();
+        crate::run_under("Topology", &control, || {
+            assert!(!past_limit(MAX_WORK + 1) && !past_limit(usize::MAX));
+            Ok(())
+        })
+        .unwrap();
+        assert!(past_limit(MAX_WORK + 1), "the limit holds again after the run");
+        // Past the limit, a run that can be cancelled looks at Cancel as it goes, and stops.
+        let control = crate::control::Control::stoppable();
+        let looked = crate::run_under("Topology", &control, || {
+            control.cancel();
+            Ok((0..2 * LOOK_EVERY).any(|_| past_limit(MAX_WORK + 1)))
+        });
+        assert!(looked.is_err(), "the run ends cancelled");
+        let control = crate::control::Control::stoppable();
+        crate::run_under("Topology", &control, || {
+            control.cancel();
+            assert!((0..2 * LOOK_EVERY).any(|_| past_limit(MAX_WORK + 1)), "a cancelled run stops past the limit");
+            Ok(())
+        })
+        .unwrap_err();
     }
 
     #[test]
