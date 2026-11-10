@@ -4062,13 +4062,13 @@ fn count_points(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
     count_points_on(inp, p, None)
 }
 
-/// The most features whose matches a tool finds on several threads before it makes their rows
-/// (Summarize Within's points, Spatial Join's targets): each one's list of matches is kept until
-/// then, so this bounds that memory. Small in tests, so they cross from one batch to the next.
-const FEATURE_BATCH: usize = if cfg!(test) { 256 } else { 65_536 };
+/// The most points whose polygons [`count_points_on`] finds before it counts them: each point's
+/// list of polygons, usually a few, is kept until then. Small in tests, so they cross from one
+/// batch to the next.
+const POINT_BATCH: usize = if cfg!(test) { 256 } else { 65_536 };
 
 /// [`count_points`] on `threads` threads (by the number of points when `None`): the polygons each
-/// point meets are found on their own (#1252), [`FEATURE_BATCH`] points at a time, and counted in
+/// point meets are found on their own (#1252), [`POINT_BATCH`] points at a time, and counted in
 /// point order, so the counts, each polygon's points and the statistics are as on one thread.
 /// Cancel is looked at, and progress counted, between points.
 fn count_points_on(inp: &dyn Inputs, p: &Json, threads: Option<usize>) -> Result<ToolResult, String> {
@@ -4103,7 +4103,7 @@ fn count_points_on(inp: &dyn Inputs, p: &Json, threads: Option<usize>) -> Result
     let point_rows = each_once(rows(inp, p, "points", pts));
     crate::control::begin(point_rows.len());
     let threads = threads.unwrap_or_else(|| crate::parallel::threads_for(point_rows.len(), PARALLEL_FEATURES));
-    for batch in point_rows.chunks(FEATURE_BATCH) {
+    for batch in point_rows.chunks(POINT_BATCH) {
         // Each point's polygons, by their place in `zones`, in the order the index gives them.
         let met_by = crate::parallel::try_map_on(batch, threads, Vec::new, |cand_buf, _, &r| {
             let Some(g) = pts.features.get(r).and_then(|f| f.geometry.as_ref()) else { return Ok::<_, String>(Vec::new()) };
@@ -4114,15 +4114,17 @@ fn count_points_on(inp: &dyn Inputs, p: &Json, threads: Option<usize>) -> Result
             // polygon passed as points, meeting one only there, has no part in it).
             let at = if matches!(g, Geometry::Point(_) | Geometry::MultiPoint(_)) { poles(&g.extent()) } else { (false, false) };
             at_poles.add_to(at, cand_buf);
-            Ok(cand_buf
-                .iter()
-                .copied()
-                .filter(|&zi| {
-                    zones
-                        .get(zi)
-                        .is_some_and(|(_, mp, z_ext, z_at)| meet_at_a_pole(at, *z_at) || (z_ext.intersects(&ext) && mp.intersects(&pg)))
-                })
-                .collect())
+            // Reserved fallibly: a point in very many overlapping polygons is an error, as the
+            // polygons' lists of points below are, not an abort.
+            let mut met = Vec::new();
+            met.try_reserve(cand_buf.len())
+                .map_err(|e| format!("Summarize Within: not enough memory to keep each point's polygons: {e}"))?;
+            met.extend(cand_buf.iter().copied().filter(|&zi| {
+                zones
+                    .get(zi)
+                    .is_some_and(|(_, mp, z_ext, z_at)| meet_at_a_pole(at, *z_at) || (z_ext.intersects(&ext) && mp.intersects(&pg)))
+            }));
+            Ok(met)
         })?;
         for (&r, met_zones) in batch.iter().zip(met_by) {
             let mut met = false;
@@ -5933,6 +5935,12 @@ fn spatial_join(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
     spatial_join_on(inp, p, None)
 }
 
+/// The targets each thread takes per batch in [`spatial_join_on`]: each target's matches are kept
+/// until the batch's rows are made, and a target can match thousands, so batches of `threads` ×
+/// this bound how many lists are held at once (on one thread, this many). Small in tests, so they
+/// cross from one batch to the next.
+const FEATURE_BATCH: usize = if cfg!(test) { 16 } else { 256 };
+
 /// [`spatial_join`] on `threads` threads (by the number of features in each step when `None`): the
 /// join features are converted, and each target's matches found, on their own (#1252); the rows
 /// and merge rules are then made in target order, as on one thread. Cancel is looked at, and
@@ -6054,13 +6062,13 @@ fn spatial_join_on(inp: &dyn Inputs, p: &Json, threads: Option<usize>) -> Result
     let mut total_matches = 0usize;
     let mut written_features = 0usize;
     // Each target's matches, in the order they're joined, with their distances when measured:
-    // found on their own, on several threads when there are many (#1252), [`FEATURE_BATCH`]
-    // targets at a time, so their lists stay bounded (a target can match thousands). `None` for a
-    // row with no feature.
+    // found on their own, on several threads when there are many (#1252), in batches of
+    // [`FEATURE_BATCH`] targets a thread, so the lists held at once stay bounded (a target can
+    // match thousands). `None` for a row with no feature.
     crate::control::begin(target_rows.len());
-    let threads = threads_for(target_rows.len());
-    for batch in target_rows.chunks(FEATURE_BATCH) {
-        let found = crate::parallel::try_map_on(batch, threads, Vec::new, |cand_buf, _, &tr| {
+    let target_threads = threads_for(target_rows.len());
+    for batch in target_rows.chunks(target_threads.max(1).saturating_mul(FEATURE_BATCH)) {
+        let found = crate::parallel::try_map_on(batch, target_threads, Vec::new, |cand_buf, _, &tr| {
             let Some(tf) = target.features.get(tr) else { return Ok(None) };
             let mut matches: Vec<(usize, Option<f64>)> = Vec::new();
             if let Some(tg) = tf.geometry.as_ref() {
@@ -11377,7 +11385,8 @@ mod tests {
     /// Spatial Join (every match mode, one to one with merge rules, one to many, and only the
     /// matching targets), Summarize Within (with statistics) and Simplify give the same rows, bit
     /// for bit, on several threads as on one (#1252), with features without geometry among them
-    /// and, at the tests' [`FEATURE_BATCH`], several batches of targets and points.
+    /// and, at the tests' [`FEATURE_BATCH`] and [`POINT_BATCH`], several batches of targets and
+    /// points.
     #[test]
     fn join_count_and_simplify_on_several_threads_are_on_one() {
         let mut polys = Dataset::new("polys", GeometryType::Polygon, vec![Field::new("k", FieldType::Integer)]);
