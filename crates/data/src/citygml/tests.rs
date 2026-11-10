@@ -238,8 +238,9 @@ fn a_building_part_names_its_parent_and_raises_it() {
     assert!(says(&read("model.gml", &twice, None).unwrap(), "1 city objects have a gml:id another object has too"));
 }
 
-/// A solid of links to its surfaces' polygons: the links aren't followed, and the footprint comes
-/// from the surfaces written in place.
+/// A solid of links to its surfaces' polygons, the way most CityGML files write one: the links find
+/// faces the building holds already, so nothing is added and nothing is said. A link to nothing, to
+/// another file, or to what isn't a geometry is said.
 #[test]
 fn links_are_said_and_what_is_written_out_is_drawn() {
     let links: String = ["b1-g", "b1-w", "b1-r"].iter().map(|id| format!(r##"<gml:surfaceMember xlink:href="#{id}"/>"##)).collect();
@@ -249,7 +250,22 @@ fn links_are_said_and_what_is_written_out_is_drawn() {
     );
     let out = read("model.gml", &lonlat(&building("b1", &inner)), None).unwrap();
     assert!((area(out[0].0.features[0].geometry.as_ref()) - 100.0).abs() < 1e-6);
-    assert!(says(&out, "3 geometries or objects are given only by a link to another element (xlink:href)"), "{:?}", messages_of(&out));
+    let said = messages_of(&out);
+    assert_eq!(said.len(), 1, "only the footprint notice: {said:?}");
+    // To nothing, to another file, and to the building itself.
+    let lost = [r##"<gml:surfaceMember xlink:href="#nowhere"/>"##, r#"<gml:surfaceMember xlink:href="other.gml#b1-g"/>"#].concat();
+    let inner = format!(
+        r##"<bldg:lod2Solid><gml:Solid><gml:exterior><gml:CompositeSurface>{lost}<gml:surfaceMember xlink:href="#b1"/></gml:CompositeSurface></gml:exterior></gml:Solid></bldg:lod2Solid>{}"##,
+        box_surfaces("b1")
+    );
+    let out = read("model.gml", &lonlat(&building("b1", &inner)), None).unwrap();
+    assert!(says(&out, "2 geometries or objects are given only by a link to another element (xlink:href)"), "{:?}", messages_of(&out));
+    assert!(
+        says(&out, "1 links (xlink:href) where a geometry belongs point to an element that isn't a geometry"),
+        "{:?}",
+        messages_of(&out)
+    );
+    assert!((area(out[0].0.features[0].geometry.as_ref()) - 100.0).abs() < 1e-6);
     // A thematic surface, a geometry, a ring's curve and a building part given only by a link are
     // said as well.
     let ring = r##"<gml:Polygon><gml:exterior><gml:Ring><gml:curveMember><gml:LineString><gml:posList>0 0 0 9 0 0 9 9 0</gml:posList></gml:LineString></gml:curveMember><gml:curveMember xlink:href="#c"/></gml:Ring></gml:exterior></gml:Polygon>"##;
@@ -264,6 +280,196 @@ fn links_are_said_and_what_is_written_out_is_drawn() {
     assert!(says(&out, "4 geometries or objects are given only by a link"), "{:?}", messages_of(&out));
     assert!(!says(&out, "can't be read"), "{:?}", messages_of(&out));
     assert_eq!(value(&out[0].0, 0, "consistsOfBuildingPart"), Value::Text("#p".into()));
+}
+
+/// Links are followed after what the object writes out: a solid listing the ground first doesn't
+/// take the ground's faces as a wall's, so the ground still gives the footprint.
+#[test]
+fn a_linked_ground_stays_the_ground() {
+    let solid = r##"<bldg:lod2Solid><gml:Solid><gml:exterior><gml:CompositeSurface><gml:surfaceMember xlink:href="#g"/><gml:surfaceMember xlink:href="#r"/></gml:CompositeSurface></gml:exterior></gml:Solid></bldg:lod2Solid>"##;
+    let inner = [
+        solid.to_string(),
+        surface("GroundSurface", &[polygon("g", &square(2.0, 2.0, 4.0, 0.0))]),
+        surface("RoofSurface", &[polygon("r", &square(0.0, 0.0, 8.0, 5.0))]),
+    ]
+    .concat();
+    let out = read("model.gml", &lonlat(&building("b1", &inner)), None).unwrap();
+    assert!((area(out[0].0.features[0].geometry.as_ref()) - 16.0).abs() < 1e-6, "{:?}", out[0].0.features[0].geometry);
+    assert_eq!(messages_of(&out).len(), 1, "{:?}", messages_of(&out));
+}
+
+/// A link to a geometry its object doesn't hold, written in another object of the member (a
+/// building's solid holding its installation's faces), reads it where the link stands.
+#[test]
+fn a_link_to_another_objects_geometry_reads_it() {
+    let solid = r##"<bldg:lod1Solid><gml:Solid><gml:exterior><gml:CompositeSurface><gml:surfaceMember xlink:href="#p1-g"/><gml:surfaceMember xlink:href="#p1-r"/></gml:CompositeSurface></gml:exterior></gml:Solid></bldg:lod1Solid>"##;
+    let inner = format!(
+        "{solid}<bldg:consistsOfBuildingPart><bldg:BuildingPart gml:id=\"p1\">{}</bldg:BuildingPart></bldg:consistsOfBuildingPart>",
+        box_surfaces("p1")
+    );
+    let out = read("model.gml", &lonlat(&building("b1", &inner)), None).unwrap();
+    let hall = layer(&out, "model Building");
+    assert_eq!(hall.geometry_type, GeometryType::Polygon, "drawn from its links");
+    assert!((area(hall.features[0].geometry.as_ref()) - 100.0).abs() < 1e-6, "{:?}", hall.features[0].geometry);
+    assert_eq!(value(hall, 0, "lod"), Value::Text("1".into()), "at the level of detail of the link");
+    assert_eq!(value(hall, 0, "z_max"), Value::Float(5.0));
+    let part = layer(&out, "model BuildingPart");
+    assert!((area(part.features[0].geometry.as_ref()) - 100.0).abs() < 1e-6, "its part keeps its own");
+    assert!(!says(&out, "link"), "{:?}", messages_of(&out));
+}
+
+/// Links that point at each other end, and a long chain of links is followed without a deep stack.
+#[test]
+fn cycles_and_chains_of_links_end() {
+    // A part's surfaces link to each other; the building links to one of them.
+    let cycle = format!(
+        r##"<bldg:lod2MultiSurface><gml:MultiSurface gml:id="a"><gml:surfaceMember xlink:href="#c"/><gml:surfaceMember>{}</gml:surfaceMember></gml:MultiSurface></bldg:lod2MultiSurface>
+        <bldg:lod3MultiSurface><gml:MultiSurface><gml:surfaceMember><gml:CompositeSurface gml:id="c"><gml:surfaceMember xlink:href="#a"/><gml:surfaceMember xlink:href="#c"/></gml:CompositeSurface></gml:surfaceMember></gml:MultiSurface></bldg:lod3MultiSurface>"##,
+        polygon("pa", &square(0.0, 0.0, 10.0, 0.0))
+    );
+    let inner = format!(
+        r##"<bldg:lod1MultiSurface><gml:MultiSurface><gml:surfaceMember xlink:href="#a"/></gml:MultiSurface></bldg:lod1MultiSurface>
+        <bldg:consistsOfBuildingPart><bldg:BuildingPart gml:id="p1">{cycle}</bldg:BuildingPart></bldg:consistsOfBuildingPart>"##
+    );
+    let out = read("model.gml", &lonlat(&building("b1", &inner)), None).unwrap();
+    assert!((area(layer(&out, "model Building").features[0].geometry.as_ref()) - 100.0).abs() < 1e-6, "{:?}", messages_of(&out));
+    assert!(!says(&out, "link"), "{:?}", messages_of(&out));
+
+    // A chain of 20,000 composites, each holding a link to the next, the last a polygon.
+    let n = 20_000;
+    let mut chain = String::new();
+    for k in 0..n {
+        chain.push_str(&format!(
+            r##"<gml:surfaceMember><gml:CompositeSurface gml:id="k{k}"><gml:surfaceMember xlink:href="#k{}"/></gml:CompositeSurface></gml:surfaceMember>"##,
+            k + 1
+        ));
+    }
+    chain.push_str(&format!("<gml:surfaceMember>{}</gml:surfaceMember>", polygon(&format!("k{n}"), &square(0.0, 0.0, 10.0, 0.0))));
+    let inner = format!(
+        r##"<bldg:lod1MultiSurface><gml:MultiSurface><gml:surfaceMember xlink:href="#k0"/></gml:MultiSurface></bldg:lod1MultiSurface>
+        <bldg:consistsOfBuildingPart><bldg:BuildingPart gml:id="p1"><bldg:lod2MultiSurface><gml:MultiSurface>{chain}</gml:MultiSurface></bldg:lod2MultiSurface></bldg:BuildingPart></bldg:consistsOfBuildingPart>"##
+    );
+    let out = read("model.gml", &lonlat(&building("b1", &inner)), None).unwrap();
+    assert!((area(layer(&out, "model Building").features[0].geometry.as_ref()) - 100.0).abs() < 1e-6, "{:?}", messages_of(&out));
+    assert!(!says(&out, "link"), "{:?}", messages_of(&out));
+}
+
+/// Many objects linking to one large geometry read it only as many times over as the member's size
+/// pays for; the links past that are said, and every object is still read.
+#[test]
+fn links_read_a_member_only_so_many_times_over() {
+    let polygons: Vec<String> = (0..200).map(|k| polygon(&format!("q{k}"), &square(f64::from(k), 0.0, 1.0, 0.0))).collect();
+    let members: String = polygons.iter().map(|p| format!("<gml:surfaceMember>{p}</gml:surfaceMember>")).collect();
+    let parts: String = (0..20)
+        .map(|k| {
+            format!(
+                r##"<bldg:consistsOfBuildingPart><bldg:BuildingPart gml:id="p{k}"><bldg:lod2MultiSurface><gml:MultiSurface><gml:surfaceMember xlink:href="#big"/></gml:MultiSurface></bldg:lod2MultiSurface></bldg:BuildingPart></bldg:consistsOfBuildingPart>"##
+            )
+        })
+        .collect();
+    let inner =
+        format!(r#"<bldg:lod1MultiSurface><gml:MultiSurface gml:id="big">{members}</gml:MultiSurface></bldg:lod1MultiSurface>{parts}"#);
+    let out = read("model.gml", &lonlat(&building("b1", &inner)), None).unwrap();
+    assert!(
+        says(&out, "links (xlink:href) to geometries aren't followed, as they would read their city object member over many times"),
+        "{:?}",
+        messages_of(&out)
+    );
+    let part = layer(&out, "model BuildingPart");
+    assert_eq!(part.features.len(), 20);
+    let drawn = part.features.iter().filter(|f| f.geometry.is_some()).count();
+    assert!((1..20).contains(&drawn), "some read, then the rest refused: {drawn}");
+}
+
+/// Geometries that are only links to themselves, or to each other, end at once: they don't spend
+/// the member's budget, so the object's other links are still followed.
+#[test]
+fn a_geometry_that_only_links_to_itself_ends() {
+    let inner = format!(
+        r##"<bldg:lod1MultiSurface><gml:MultiSurface><gml:surfaceMember xlink:href="#p1-g"/></gml:MultiSurface></bldg:lod1MultiSurface>
+        <bldg:lod2MultiSurface><gml:MultiSurface>
+          <gml:surfaceMember><gml:Polygon gml:id="x" xlink:href="#x"/></gml:surfaceMember>
+          <gml:surfaceMember><gml:Polygon gml:id="y" xlink:href="#z"/></gml:surfaceMember>
+          <gml:surfaceMember><gml:Polygon gml:id="z" xlink:href="#y"/></gml:surfaceMember>
+        </gml:MultiSurface></bldg:lod2MultiSurface>
+        <bldg:consistsOfBuildingPart><bldg:BuildingPart gml:id="p1">{}</bldg:BuildingPart></bldg:consistsOfBuildingPart>"##,
+        box_surfaces("p1")
+    );
+    let out = read("model.gml", &lonlat(&building("b1", &inner)), None).unwrap();
+    let hall = layer(&out, "model Building");
+    assert!((area(hall.features[0].geometry.as_ref()) - 100.0).abs() < 1e-6, "{:?}", messages_of(&out));
+    assert!(!says(&out, "aren't followed"), "{:?}", messages_of(&out));
+}
+
+/// A face reused by a link at another level of detail is read at that level too: the LoD 3
+/// footprint takes in the LoD 2 face its LoD 3 geometry links to.
+#[test]
+fn a_link_from_another_level_of_detail_reads_the_face_there() {
+    let inner = format!(
+        r##"<bldg:lod2MultiSurface><gml:MultiSurface><gml:surfaceMember>{}</gml:surfaceMember></gml:MultiSurface></bldg:lod2MultiSurface>
+        <bldg:lod3MultiSurface><gml:MultiSurface><gml:surfaceMember xlink:href="#a"/><gml:surfaceMember>{}</gml:surfaceMember></gml:MultiSurface></bldg:lod3MultiSurface>"##,
+        polygon("a", &square(0.0, 0.0, 10.0, 0.0)),
+        polygon("b", &square(20.0, 0.0, 10.0, 0.0))
+    );
+    let out = read("model.gml", &lonlat(&building("b1", &inner)), None).unwrap();
+    let ds = &out[0].0;
+    assert_eq!(value(ds, 0, "lod"), Value::Text("3".into()));
+    assert!((area(ds.features[0].geometry.as_ref()) - 200.0).abs() < 1e-6, "{:?}", ds.features[0].geometry);
+    assert!(!says(&out, "link"), "{:?}", messages_of(&out));
+}
+
+/// A solid whose exterior is a link that is found keeps its cavities, read in the dimension the
+/// solid gives, not the shell's.
+#[test]
+fn a_linked_exterior_keeps_its_cavities_in_the_solids_dimension() {
+    let shell = format!(
+        r#"<bldg:lod1MultiSurface><gml:MultiSurface><gml:surfaceMember><gml:CompositeSurface gml:id="shell"><gml:surfaceMember>{}</gml:surfaceMember></gml:CompositeSurface></gml:surfaceMember></gml:MultiSurface></bldg:lod1MultiSurface>"#,
+        polygon("s", &square(0.0, 0.0, 10.0, 0.0))
+    );
+    let cavity = r#"<gml:Polygon><gml:exterior><gml:LinearRing><gml:posList>2 2 4 2 4 4 2 4 2 2</gml:posList></gml:LinearRing></gml:exterior></gml:Polygon>"#;
+    let inner = format!(
+        r##"<bldg:lod2Solid><gml:Solid srsDimension="2"><gml:exterior xlink:href="#shell"/><gml:interior><gml:CompositeSurface><gml:surfaceMember>{cavity}</gml:surfaceMember></gml:CompositeSurface></gml:interior></gml:Solid></bldg:lod2Solid>
+        <bldg:consistsOfBuildingPart><bldg:BuildingPart gml:id="p1">{shell}</bldg:BuildingPart></bldg:consistsOfBuildingPart>"##
+    );
+    let out = read("model.gml", &lonlat(&building("b1", &inner)), None).unwrap();
+    assert!(!says(&out, "can't be read"), "{:?}", messages_of(&out));
+    assert!(!says(&out, "link"), "{:?}", messages_of(&out));
+    let hall = layer(&out, "model Building");
+    assert!((area(hall.features[0].geometry.as_ref()) - 100.0).abs() < 1e-6, "{:?}", hall.features[0].geometry);
+}
+
+/// A linked implicit geometry is drawn at its reference point, as one written out is; one linked
+/// to nothing is said as a link, not as what isn't a geometry.
+#[test]
+fn a_linked_implicit_geometry_is_drawn_at_its_reference_point() {
+    let implicit = r#"<bldg:lod1ImplicitRepresentation><core:ImplicitGeometry gml:id="ig"><core:referencePoint><gml:Point><gml:pos>5 5 0</gml:pos></gml:Point></core:referencePoint></core:ImplicitGeometry></bldg:lod1ImplicitRepresentation>"#;
+    let inner = format!(
+        r##"<bldg:lod2ImplicitRepresentation xlink:href="#ig"/><bldg:lod3ImplicitRepresentation xlink:href="#gone"/>
+        <bldg:consistsOfBuildingPart><bldg:BuildingPart gml:id="p1">{implicit}</bldg:BuildingPart></bldg:consistsOfBuildingPart>"##
+    );
+    let out = read("model.gml", &lonlat(&building("b1", &inner)), None).unwrap();
+    assert!(says(&out, "2 geometry instances are drawn as a point"), "{:?}", messages_of(&out));
+    assert!(says(&out, "1 geometries or objects are given only by a link"), "{:?}", messages_of(&out));
+    assert!(!says(&out, "isn't a geometry"), "{:?}", messages_of(&out));
+}
+
+/// A face a ground surface links to is the ground's, though a solid links to it too, whichever is
+/// written first.
+#[test]
+fn a_ground_given_by_a_link_is_the_ground() {
+    let part = [
+        surface("GroundSurface", &[polygon("pg", &square(2.0, 2.0, 4.0, 0.0))]),
+        surface("RoofSurface", &[polygon("pr", &square(0.0, 0.0, 8.0, 5.0))]),
+    ]
+    .concat();
+    let inner = format!(
+        r##"<bldg:boundedBy><bldg:GroundSurface><bldg:lod2MultiSurface><gml:MultiSurface><gml:surfaceMember xlink:href="#pg"/></gml:MultiSurface></bldg:lod2MultiSurface></bldg:GroundSurface></bldg:boundedBy>
+        <bldg:lod2Solid><gml:Solid><gml:exterior><gml:CompositeSurface><gml:surfaceMember xlink:href="#pg"/><gml:surfaceMember xlink:href="#pr"/></gml:CompositeSurface></gml:exterior></gml:Solid></bldg:lod2Solid>
+        <bldg:consistsOfBuildingPart><bldg:BuildingPart gml:id="p1">{part}</bldg:BuildingPart></bldg:consistsOfBuildingPart>"##
+    );
+    let out = read("model.gml", &lonlat(&building("b1", &inner)), None).unwrap();
+    let hall = layer(&out, "model Building");
+    assert!((area(hall.features[0].geometry.as_ref()) - 16.0).abs() < 1e-6, "{:?}", hall.features[0].geometry);
 }
 
 /// A ring given only by a link is said as a link, not as coordinates that can't be read: a linked
