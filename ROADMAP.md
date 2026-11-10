@@ -253,9 +253,10 @@ And alongside it:
 - Save edits back to Shapefile and GeoJSON layers, as GeoPackage and PostGIS do
   ([#1385](https://github.com/opengeos/RustGIS/issues/1385)). _Coordinate first._
 - Editable standalone tables (they are read-only today).
-- Shared edges: moving one polygon boundary moves its neighbour's too
-  ([#872](https://github.com/opengeos/RustGIS/issues/872)); coincident vertices already move
-  together (`edit.moveSharedVertex`).
+- Shared edges, so that moving one polygon boundary moves its neighbour's too
+  ([#872](https://github.com/opengeos/RustGIS/issues/872)). Coincident vertices already move
+  together (`edit.moveSharedVertex`, with Shared Vertices on); boundaries with different vertex
+  densities still separate, and linked insertion and deletion remain open.
 - Traverse closure for `edit.traverse`: a misclosure report, an optional compass-rule adjustment,
   curve legs and a form.
 - Editor tracking fields (created/edited by and at).
