@@ -54,7 +54,7 @@ place to start.
 ## Underway
 The [open pull requests](https://github.com/opengeos/RustGIS/pulls) are the live list of what is
 underway; check them, and the item's issue, before starting. To take an item, comment on its
-issue and open a draft pull request early. Design work without a pull request yet:
+issue if it has one, and open a draft pull request early. Design work without a pull request yet:
 - How a project stores its data: a prototype and the first steps
   ([discussion #1378](https://github.com/opengeos/RustGIS/discussions/1378),
   [poll #1660](https://github.com/opengeos/RustGIS/discussions/1660)).
@@ -69,9 +69,9 @@ A result is right, or RustGIS says what it lost or assumed
   ([#1354](https://github.com/opengeos/RustGIS/issues/1354)); DuckDB queries (`ST_Force2D`) and
   the TopoJSON reader drop Z without a notice, and the DXF reader keeps one `elevation` per entity
   but not each vertex's Z (the others say so since
-  [#1214](https://github.com/opengeos/RustGIS/pull/1214)); the KML, GeoRSS and OSM readers leave
-  out unreadable coordinates, holes and parts without one (GML says so since
-  [#1686](https://github.com/opengeos/RustGIS/pull/1686)) _(open)_.
+  [#1214](https://github.com/opengeos/RustGIS/pull/1214)); the KML and OSM readers leave out
+  unreadable coordinates, holes and parts without one, and GeoRSS its unreadable holes (GML says
+  so since [#1686](https://github.com/opengeos/RustGIS/pull/1686)) _(open)_.
 - A test that runs lossy sample files through every reader and writer and fails on any loss
   without a notice, beside `hostile_params_never_panic` in `crates/engine/src/tests.rs` _(open)_.
 - A `--strict` option for `rustgis-cli run` that exits non-zero when a loss is reported, for
@@ -131,9 +131,10 @@ Big layers work, or say plainly where they stop
 - An adjustable memory budget, and the 2 million feature cap lifted for the sources that still
   have it (everything but GeoPackage, FlatGeobuf, GeoParquet and Shapefiles read in place).
 - Shapefile, KML, KMZ and GPX exported a chunk at a time, as the other formats are.
-- Faster raster writing: COG export with Deflate level 1 and Predictor 3, COG tiles compressed on
-  several cores (`cogwrite.rs`); Hillshade written as Byte.
-- Drawing: layers read in place read and projected once per draw, filtered by extent
+- Faster raster writing: COG export at Deflate level 1 with a predictor (3 for floating-point
+  samples, 2 for integers) and its tiles compressed on several cores (`cogwrite.rs` writes level
+  6, no predictor, on one thread today); Hillshade written as Byte.
+- Faster drawing: layers read in place read and projected once per draw, filtered by extent
   ([#1065](https://github.com/opengeos/RustGIS/issues/1065)); only the changed layer redrawn
   ([#1057](https://github.com/opengeos/RustGIS/issues/1057)); a heavy layer drawn on several
   cores ([#1067](https://github.com/opengeos/RustGIS/issues/1067)).
@@ -187,6 +188,8 @@ What plugin authors have asked for. An addition that plugins declare through
 In the order of the work: add data, style it, edit it, analyse it, lay it out and share it.
 
 ### Add data
+- Noticing when a linked file or tile archive changes on disk, and offering to reload it (Reload
+  Data does it by hand; [#1477](https://github.com/opengeos/RustGIS/issues/1477)).
 - OGC API services that offer tilesets but no collections list them
   ([#1266](https://github.com/opengeos/RustGIS/issues/1266); waits on a maintainer's answer
   there).
@@ -261,8 +264,8 @@ attributes kept.
   against known answers (today: shortest path over a line layer, and online Directions). Follow
   the [ribbon guidelines](docs/contributing.md#ribbon-guidelines) for where it goes.
 - Hot-spot statistics (Getis-Ord Gi\*), and emerging hot spots on the time slider.
-- Kriging with a fitted variogram and leave-one-out cross-validation (the variogram is a fixed
-  guess today, `kriging.rs`).
+- Kriging with a fitted variogram and leave-one-out cross-validation (the variogram is a default
+  estimated from the points and extent today, not fitted; `kriging.rs`).
 - Charts linked to the selection: histogram, scatter, bar and box plots of a layer's fields.
 - H3 grids built in, next to the A5 grids _(open)_.
 - Reverse geocoding, and the US Census geocoder beside Nominatim and Photon; a DEM downloader so
