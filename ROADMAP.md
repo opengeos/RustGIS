@@ -157,8 +157,8 @@ Big layers work, or say plainly where they stop
   ([#891](https://github.com/opengeos/RustGIS/issues/891)).
 - Waiting on upstream releases: Control-click menus on macOS
   ([#707](https://github.com/opengeos/RustGIS/issues/707)) and asking to save on ⌘Q
-  ([#966](https://github.com/opengeos/RustGIS/issues/966)), both on winit; FlatGeobuf in the web
-  app, on a `flatgeobuf` crate release
+  ([#966](https://github.com/opengeos/RustGIS/issues/966)), both on winit; FlatGeobuf export in
+  the web app, on a `flatgeobuf` crate release
   ([#1111](https://github.com/opengeos/RustGIS/issues/1111)).
 - Docs: a pass over the user guide and the comparison pages against the app today, and short task
   tutorials for newcomers: buffer, select and export a list; edit a layer and save the result; a
@@ -188,6 +188,8 @@ What plugin authors have asked for. An addition that plugins declare through
 In the order of the work: add data, style it, edit it, analyse it, lay it out and share it.
 
 ### Add data
+- Georeferencer: side-by-side window, transform picker, more formats
+  ([#609](https://github.com/opengeos/RustGIS/issues/609)).
 - Noticing when a linked file or tile archive changes on disk, and offering to reload it (Reload
   Data does it by hand; [#1477](https://github.com/opengeos/RustGIS/issues/1477)).
 - OGC API services that offer tilesets but no collections list them
@@ -252,8 +254,6 @@ And alongside it:
 - Attribute table columns: rename (hide and reorder are done) _(open)_.
 - Attribute forms: widgets, constraints and conditional visibility, on top of domains and
   subtypes.
-- Georeferencer: side-by-side window, transform picker, more formats
-  ([#609](https://github.com/opengeos/RustGIS/issues/609)).
 
 ### Analyse
 Before adding a tool, check whether the GeoLibre suite already has it (`gp.tools`); a built-in
