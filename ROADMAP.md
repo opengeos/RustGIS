@@ -66,8 +66,9 @@ The shared pieces the everyday workflow stands on.
 A result is right, or RustGIS says what it lost or assumed
 ([AGENTS.md](AGENTS.md#never-silent)).
 - Known silent losses: a polygon looping round a pole drops out of Clip and Spatial Join
-  ([#1354](https://github.com/opengeos/RustGIS/issues/1354)); the GDAL, DuckDB, SQL Server,
-  TopoJSON and DXF readers drop Z without a notice (the others say so since
+  ([#1354](https://github.com/opengeos/RustGIS/issues/1354)); DuckDB queries (`ST_Force2D`) and
+  the TopoJSON reader drop Z without a notice, and the DXF reader keeps one `elevation` per entity
+  but not each vertex's Z (the others say so since
   [#1214](https://github.com/opengeos/RustGIS/pull/1214)); the KML, GeoRSS and OSM readers leave
   out unreadable coordinates, holes and parts without one (GML says so since
   [#1686](https://github.com/opengeos/RustGIS/pull/1686)) _(open)_.
@@ -120,8 +121,8 @@ features build on.
   with an invalid date. _Decide first_ (field types).
 - Z coordinates kept from the data and written back, Phase 1 of
   [#726](https://github.com/opengeos/RustGIS/issues/726). _Decide first_ (it changes `Coord`).
-- Persistent attribute joins and virtual fields. _Coordinate first_ (they change `Feature`;
-  needs an issue).
+- Persistent attribute joins and virtual fields. _Decide first_ (they change `Feature`; needs an
+  issue).
 
 ### Large data and speed
 Big layers work, or say plainly where they stop
