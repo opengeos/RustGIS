@@ -1738,9 +1738,9 @@ impl RustGisApp {
     }
 
     /// Downloads the project as `file` (web), naming the project after it as Save As does
-    /// natively. A name without the `.rgis` extension gets it. The project still counts as
-    /// unsaved: the browser doesn't say whether it wrote the file (the save prompt can be
-    /// cancelled, the download blocked), so leaving the page keeps warning.
+    /// natively. A name without the `.rgis` extension gets it. Existing unsaved changes stay
+    /// unsaved, and a rename makes a clean project unsaved: the browser doesn't say whether
+    /// it wrote the file (the save prompt can be cancelled, the download blocked).
     pub(crate) fn save_download(&mut self, file: &str) -> Result<(), String> {
         let file = file.trim();
         let stem = if file.to_ascii_lowercase().ends_with(".rgis") { file.get(..file.len() - 5).unwrap_or(file) } else { file }.trim();
@@ -1772,10 +1772,7 @@ impl RustGisApp {
             self.session.mark_unsaved();
         }
         self.session.notify(
-            crate::i18n::fmt(
-                "Download offered: {name}. The browser doesn't say whether it saved the file, so the project still shows unsaved changes.",
-                &[("name", &file)],
-            ),
+            crate::i18n::fmt("Download offered: {name}. The browser doesn't say whether it saved the file.", &[("name", &file)]),
             false,
         );
         for notice in report.notices() {

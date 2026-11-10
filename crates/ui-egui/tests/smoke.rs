@@ -3047,9 +3047,13 @@ fn web_save_asks_for_the_file_name() {
     let bytes = got.lock().unwrap()[0].1.clone();
     h.state_mut().open_picked("test.rgis", &bytes).unwrap();
     assert_eq!(h.state().session.project.name, "test");
+    assert!(!h.state().session.dirty());
     h.state_mut().run("ui.save", json!(null)).unwrap();
     assert_eq!(h.state().dialogs.open, None);
     assert_eq!(names(&got).last().map(String::as_str), Some("test.rgis"));
+    assert!(!h.state().session.dirty(), "an unchanged opened project stays clean after a download offer");
+    let notice = h.state().session.notices.iter().rev().find(|n| n.text.starts_with("Download offered: test.rgis")).unwrap();
+    assert!(!notice.text.contains("unsaved changes"), "{}", notice.text);
     // Another project in its place hasn't been saved: Save asks again, even under the same name.
     let n = names(&got).len();
     h.state_mut().run("project.new", json!({"name": "test"})).unwrap();
