@@ -526,6 +526,29 @@ fn a_ground_given_by_a_link_is_the_ground() {
     let out = read("model.gml", &lonlat(&building("b1", &inner)), None).unwrap();
     let hall = layer(&out, "model Building");
     assert!((area(hall.features[0].geometry.as_ref()) - 16.0).abs() < 1e-6, "{:?}", hall.features[0].geometry);
+
+    // The other way round, as some exporters write it: the solid holds its faces, and the ground
+    // surface links to one of them beside a face of its own. Both are the ground.
+    let inner = format!(
+        r##"<bldg:lod2Solid><gml:Solid><gml:exterior><gml:CompositeSurface><gml:surfaceMember>{}</gml:surfaceMember><gml:surfaceMember>{}</gml:surfaceMember></gml:CompositeSurface></gml:exterior></gml:Solid></bldg:lod2Solid>
+        <bldg:boundedBy><bldg:GroundSurface><bldg:lod2MultiSurface><gml:MultiSurface><gml:surfaceMember xlink:href="#g1"/><gml:surfaceMember>{}</gml:surfaceMember></gml:MultiSurface></bldg:lod2MultiSurface></bldg:GroundSurface></bldg:boundedBy>"##,
+        polygon("g1", &square(0.0, 0.0, 10.0, 0.0)),
+        polygon("r1", &square(0.0, 0.0, 30.0, 5.0)),
+        polygon("g2", &square(20.0, 20.0, 4.0, 0.0))
+    );
+    let out = read("model.gml", &lonlat(&building("b2", &inner)), None).unwrap();
+    assert!((area(out[0].0.features[0].geometry.as_ref()) - 116.0).abs() < 1e-6, "{:?}", out[0].0.features[0].geometry);
+}
+
+/// A city object whose `gml:id` is blank is still an object, kept without an id.
+#[test]
+fn an_object_with_a_blank_id_is_still_one() {
+    let inner = r#"<bldg:consistsOfBuildingPart><bldg:BuildingPart gml:id=" "><gml:name>Annex</gml:name></bldg:BuildingPart></bldg:consistsOfBuildingPart>"#;
+    let out = read("model.gml", &lonlat(&building("b1", &format!("{inner}{}", box_surfaces("b1")))), None).unwrap();
+    let part = layer(&out, "model BuildingPart");
+    assert_eq!(part.features.len(), 1);
+    assert_eq!(value(part, 0, "name"), Value::Text("Annex".into()));
+    assert_eq!(value(part, 0, "id"), Value::Text(String::new()));
 }
 
 /// A ring given only by a link is said as a link, not as coordinates that can't be read: a linked

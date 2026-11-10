@@ -30,8 +30,9 @@
 //! A geometry given by a link (`xlink:href`, `#` and a `gml:id`) to one written in its member, as a
 //! solid's faces are to its walls' and roof's polygons, is read where the link stands, after what
 //! its object writes out, and links a ground surface makes first: a geometry the object holds
-//! already at that level of detail isn't read again, and each one is read at most once per object
-//! and level, so a cycle of links ends. What links read in a member is bounded by the member's size.
+//! already at that level of detail isn't read again, but as the ground when a ground surface links
+//! to one read as another face, and through links each one is read at most once per object and
+//! level, so a cycle of links ends. What links read in a member is bounded by the member's size.
 //!
 //! Not read, and said: geometries given by a link to another member, another file or nothing, or
 //! to what isn't a geometry; objects, thematic surfaces and openings given only by a link; rings,
@@ -559,7 +560,8 @@ fn is_object(e: &Node) -> bool {
     local(e).starts_with(char::is_uppercase)
         && !is_gml(e)
         && !VALUES.contains(&local(e))
-        && (gml_id(e).is_some()
+        // An id given, even blank (which isn't kept as its id).
+        && (e.attributes().any(|a| a.name() == "id" && a.namespace().is_some_and(gml_namespace))
             || local(e) == "TINRelief"
             || elements(*e).any(|p| {
                 // A terrain intersection is an auxiliary line, not the feature's geometry.
@@ -851,25 +853,47 @@ struct Pending<'a, 'i> {
     at: At,
 }
 
-/// One object's links: the geometries it has read, by `gml:id` and level of detail, and the links
-/// left to follow, the ground's apart.
+/// A geometry of an object, by its `gml:id` and the level of detail it is read at.
+type Key<'a> = (&'a str, Option<u32>);
+
+/// One object's links: the geometries it has read, each with whether it was read as the ground, and
+/// the links left to follow, the ground's apart.
 #[derive(Default)]
 struct Links<'a, 'i> {
-    seen: HashSet<(&'a str, Option<u32>)>,
-    /// What `seen` took in, in order, so a geometry left out can take its own marks back.
-    marked: Vec<(&'a str, Option<u32>)>,
+    seen: HashMap<Key<'a>, bool>,
+    /// What `seen` took in, in order, with what it held before, so a geometry left out can take its
+    /// own marks back.
+    marked: Vec<(Key<'a>, Option<bool>)>,
     ground: Vec<Pending<'a, 'i>>,
     others: Vec<Pending<'a, 'i>>,
 }
 
 impl<'a, 'i> Links<'a, 'i> {
-    /// Marks a geometry read in this object at a level of detail; false when it was already.
-    fn mark(&mut self, key: (&'a str, Option<u32>)) -> bool {
-        let new = self.seen.insert(key);
-        if new {
-            self.marked.push(key);
+    /// Whether a geometry needn't be read for `ground`: read already, and as the ground if that is
+    /// what it is read for now.
+    fn read(&self, key: Key<'a>, ground: bool) -> bool {
+        self.seen.get(&key).is_some_and(|&was| was || !ground)
+    }
+
+    /// Marks a geometry read, as the ground or not; false when it needn't be read.
+    fn mark(&mut self, key: Key<'a>, ground: bool) -> bool {
+        if self.read(key, ground) {
+            return false;
         }
-        new
+        let before = self.seen.insert(key, ground);
+        self.marked.push((key, before));
+        true
+    }
+
+    /// Takes back the marks made since `from`, latest first.
+    fn unmark(&mut self, from: usize) {
+        let taken: Vec<_> = self.marked.drain(from..).collect();
+        for (key, before) in taken.into_iter().rev() {
+            match before {
+                Some(was) => self.seen.insert(key, was),
+                None => self.seen.remove(&key),
+            };
+        }
     }
 
     /// Keeps a link to follow, in the ground's queue when it is a ground surface's.
@@ -1027,7 +1051,7 @@ impl Reading {
         // Read already in this object at this level of detail, written out or by another link:
         // nothing to add.
         let key = (id, link.at.lod);
-        let read = links.seen.contains(&key);
+        let read = links.read(key, link.at.ground);
         if read && link.then.is_empty() {
             return;
         }
@@ -1133,9 +1157,7 @@ impl Reading {
             links.ground.truncate(ground);
             links.others.truncate(others);
             // Its geometries weren't read: a link to one of them still reads it.
-            for key in links.marked.drain(marked..) {
-                links.seen.remove(&key);
-            }
+            links.unmark(marked);
             return;
         }
         let Got { faces, surface, mut lines, points, heights, solid } = walk.got;
@@ -1200,7 +1222,7 @@ impl<'a, 'i> Walk<'_, 'a, 'i> {
         // reached through a link once read (a linked composite of polygons read before), it isn't
         // read again. Marked before a link it is is kept, so a link to itself ends.
         if let Some(id) = gml_id(g)
-            && !self.links.mark((id, self.at.lod))
+            && !self.links.mark((id, self.at.lod), self.at.ground)
             && self.following
         {
             return Some(());
