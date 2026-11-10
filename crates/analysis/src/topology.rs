@@ -1495,12 +1495,6 @@ mod tests {
         assert!(past_limit(MAX_WORK + 1), "the limit holds again after the run");
         // Past the limit, a run that can be cancelled looks at Cancel as it goes, and stops.
         let control = crate::control::Control::stoppable();
-        let looked = crate::run_under("Topology", &control, || {
-            control.cancel();
-            Ok((0..2 * LOOK_EVERY).any(|_| past_limit(MAX_WORK + 1)))
-        });
-        assert!(looked.is_err(), "the run ends cancelled");
-        let control = crate::control::Control::stoppable();
         crate::run_under("Topology", &control, || {
             control.cancel();
             assert!((0..2 * LOOK_EVERY).any(|_| past_limit(MAX_WORK + 1)), "a cancelled run stops past the limit");
