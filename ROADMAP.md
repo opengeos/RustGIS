@@ -133,8 +133,9 @@ Big layers work, or say plainly where they stop
 ([#1111](https://github.com/opengeos/RustGIS/issues/1111),
 [#1227](https://github.com/opengeos/RustGIS/issues/1227)).
 - An adjustable memory budget, and the feature cap (2 million on the desktop, 500,000 in the
-  browser) lifted for the sources that still have it (everything but GeoPackage, FlatGeobuf,
-  GeoParquet and Shapefiles read in place).
+  browser) lifted for the sources that still have it: everything but local or uploaded GeoPackage,
+  FlatGeobuf, GeoParquet and Shapefiles read in place, which are read a chunk at a time
+  (`visits_chunks`). Remote FlatGeobuf and GeoParquet still stop at the cap when read whole.
 - Shapefile, KML, KMZ and GPX exported a chunk at a time, as the other formats are.
 - Faster raster writing: COG export at Deflate level 1 with a predictor (3 for floating-point
   samples, 2 for integers) and its tiles compressed on several cores (`cogwrite.rs` writes level
