@@ -437,6 +437,22 @@ fn a_link_into_a_geometry_left_out_still_reads_its_face() {
     assert!((area(out[0].0.features[0].geometry.as_ref()) - 100.0).abs() < 1e-6, "{:?}", messages_of(&out));
 }
 
+/// A geometry whose coordinates can't be read is said once, however many links point to it; its
+/// good parts are still read by a link to them.
+#[test]
+fn a_geometry_that_cant_be_read_is_said_once_for_its_links() {
+    let bad = r#"<gml:Polygon gml:id="p"><gml:exterior><gml:LinearRing><gml:posList>1 2 abc</gml:posList></gml:LinearRing></gml:exterior></gml:Polygon>"#;
+    let inner = format!(
+        r##"<bldg:lod2MultiSurface><gml:MultiSurface><gml:surfaceMember>{}</gml:surfaceMember><gml:surfaceMember>{bad}</gml:surfaceMember></gml:MultiSurface></bldg:lod2MultiSurface>
+        <bldg:lod2Solid><gml:Solid><gml:exterior><gml:CompositeSurface><gml:surfaceMember xlink:href="#p"/><gml:surfaceMember xlink:href="#a"/></gml:CompositeSurface></gml:exterior></gml:Solid></bldg:lod2Solid>
+        <bldg:lod2MultiSurface><gml:MultiSurface><gml:surfaceMember xlink:href="#p"/></gml:MultiSurface></bldg:lod2MultiSurface>"##,
+        polygon("a", &square(0.0, 0.0, 10.0, 0.0))
+    );
+    let out = read("model.gml", &lonlat(&building("b1", &inner)), None).unwrap();
+    assert!(says(&out, "1 geometries of city objects have coordinates that can't be read"), "{:?}", messages_of(&out));
+    assert!((area(out[0].0.features[0].geometry.as_ref()) - 100.0).abs() < 1e-6, "{:?}", messages_of(&out));
+}
+
 /// Geometries that are only links to themselves, or to each other, end at once: they don't spend
 /// the member's budget, so the object's other links are still followed.
 #[test]

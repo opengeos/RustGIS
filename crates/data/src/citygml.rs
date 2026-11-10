@@ -864,6 +864,9 @@ struct Links<'a, 'i> {
     /// What `seen` took in, in order, with what it held before, so a geometry left out can take its
     /// own marks back.
     marked: Vec<(Key<'a>, Option<bool>)>,
+    /// The geometries whose coordinates couldn't be read, said already: a link to one is left out
+    /// without being said again.
+    failed: HashSet<Key<'a>>,
     ground: Vec<Pending<'a, 'i>>,
     others: Vec<Pending<'a, 'i>>,
 }
@@ -1051,6 +1054,9 @@ impl Reading {
         // Read already in this object at this level of detail, written out or by another link:
         // nothing to add.
         let key = (id, link.at.lod);
+        if links.failed.contains(&key) {
+            return;
+        }
         let read = links.read(key, link.at.ground);
         if read && link.then.is_empty() {
             return;
@@ -1072,7 +1078,11 @@ impl Reading {
                 w.following = true;
                 if !read {
                     if let Some(d) = dim {
-                        w.dim = Some(d.trim().parse().ok()?);
+                        let Ok(d) = d.trim().parse() else {
+                            w.failed = Some(key);
+                            return None;
+                        };
+                        w.dim = Some(d);
                     }
                     w.geometry(&target)?;
                 }
@@ -1148,10 +1158,15 @@ impl Reading {
             dim: None,
             instance: false,
             following: false,
+            failed: None,
             got: Got::default(),
             links,
         };
         if go(&mut walk).is_none() {
+            // Said once: a link to the geometry that failed doesn't say it again.
+            if let Some(key) = walk.failed {
+                links.failed.insert(key);
+            }
             self.said.bad_coordinates += 1;
             self.reach = reach;
             links.ground.truncate(ground);
@@ -1209,6 +1224,8 @@ struct Walk<'r, 'a, 'i> {
     instance: bool,
     /// Reading what a link points to: a geometry its object has read at this level isn't read again.
     following: bool,
+    /// The innermost geometry with a `gml:id` whose coordinates couldn't be read, when one is.
+    failed: Option<Key<'a>>,
     got: Got,
     /// Its object's links: the geometries read, and those to follow.
     links: &'r mut Links<'a, 'i>,
@@ -1234,11 +1251,18 @@ impl<'a, 'i> Walk<'_, 'a, 'i> {
         }
         // A geometry's `srsDimension` holds for what it holds.
         let outer = self.dim;
-        if let Some(d) = attribute(g, "srsDimension") {
-            self.dim = Some(d.trim().parse().ok()?);
+        let done = match attribute(g, "srsDimension") {
+            Some(d) => d.trim().parse().ok().map(|d| self.dim = Some(d)),
+            None => Some(()),
         }
-        let done = self.shape(g);
+        .and_then(|()| self.shape(g));
         self.dim = outer;
+        // The innermost geometry that failed is the one lost: a link to its parts still reads them.
+        if done.is_none()
+            && let Some(id) = gml_id(g)
+        {
+            self.failed.get_or_insert((id, self.at.lod));
+        }
         done
     }
 
