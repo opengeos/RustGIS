@@ -35,6 +35,21 @@ pub struct DlModel {
     /// Epochs the last training ran (not saved).
     #[serde(skip)]
     pub epochs: usize,
+    /// What the last training left out to stay within the work limit of a run that can't be
+    /// cancelled ([`neural::Trained::limited`]), said when the model is kept (not saved).
+    #[serde(skip)]
+    pub limited: Option<String>,
+}
+
+impl DlModel {
+    /// Says what its training left out to stay within the work limit, if anything (AGENTS.md ›
+    /// Never silent), and puts it in the command's answer.
+    fn say_limited(&self, s: &mut Session, v: &mut Value) {
+        if let Some(what) = &self.limited {
+            s.warn(format!("{}: {what}", self.name));
+            v["limited"] = json!(what);
+        }
+    }
 }
 
 fn need_raster(s: &Session) -> Option<&'static str> {
@@ -51,6 +66,7 @@ pub fn commands() -> Vec<C> {
             let (m, unread) = train(s, p)?;
             unread.say(s);
             let mut r = json!({"model": m.name, "accuracy": m.accuracy, "classes": m.model.classes, "epochs": m.epochs});
+            m.say_limited(s, &mut r);
             r["replaced"] = json!(store(s, m));
             Ok(r)
         }).inputs(training_inputs).roles(&[]).effects(crate::policy::Effects::NONE)
@@ -209,7 +225,8 @@ impl Training {
             return Err(format!("the class '{c}' has fewer than 5 pixels with data under its polygons"));
         }
         let t = neural::train(bands, classes, &samples, hidden, epochs)?;
-        Ok(DlModel { name, model: t.model, accuracy: t.accuracy, epochs: t.epochs })
+        let limited = t.limited();
+        Ok(DlModel { name, model: t.model, accuracy: t.accuracy, epochs: t.epochs, limited })
     }
 }
 
@@ -342,6 +359,7 @@ pub(crate) fn classify_work(s: &Session, p: &Value) -> Result<super::workflows::
                     m.name = free_name(s, &base);
                     v["model"] = json!(m.name);
                 }
+                m.say_limited(s, v);
                 v["replaced"] = json!(store(s, m));
             }) as super::workflows::Then
         });
