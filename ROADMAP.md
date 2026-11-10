@@ -58,7 +58,7 @@ in the last week that they are working on it. The
 [open pull requests](https://github.com/opengeos/RustGIS/pulls) are the live list; check them, and
 the item's issue, before starting. To take an item, comment on its
 issue if it has one, and open a draft pull request early. Design work without a pull request yet:
-- How a project stores its data: a prototype and the first steps
+- How a project stores its data: a prototype (posted 2026-11-09) and the first steps
   ([discussion #1378](https://github.com/opengeos/RustGIS/discussions/1378),
   [poll #1660](https://github.com/opengeos/RustGIS/discussions/1660)).
 
@@ -71,7 +71,7 @@ A result is right, or RustGIS says what it lost or assumed
 - Known silent losses: a polygon looping round a pole drops out of Clip and Spatial Join
   ([#1354](https://github.com/opengeos/RustGIS/issues/1354)); DuckDB queries (`ST_Force2D`) and
   the TopoJSON reader drop Z without a notice, and the DXF reader keeps one `elevation` per entity
-  but not each vertex's Z (the others say so since
+  but not each vertex's Z (other readers, GDAL and SQL Server among them, say so since
   [#1214](https://github.com/opengeos/RustGIS/pull/1214)); the KML and OSM readers leave out
   unreadable coordinates, holes and parts without one, and GeoRSS its unreadable holes (GML says
   so since [#1686](https://github.com/opengeos/RustGIS/pull/1686)) _(open)_.
@@ -155,8 +155,9 @@ Big layers work, or say plainly where they stop
 - Signed Windows builds (no SmartScreen warning), then a signature check, by publisher name, in
   Check for Updates' Download and Install; in-place updates for the macOS app; settings an
   administrator can fix for a managed install (no AI Assistant, plugins or web services).
-- Autosave and crash recovery in the browser, as the desktop app has
-  (`apps/rustgis-web/src/web.rs`; needs an issue).
+- Autosave and crash recovery in the browser, as the desktop app has since
+  [#873](https://github.com/opengeos/RustGIS/issues/873) (`apps/rustgis-web/src/web.rs`; the
+  browser half needs an issue of its own).
 - The OS keychain for the remaining secrets: web-service basic-auth and API-key logins (for the
   session today), and a plugin `secrets` permission bound to one origin
   ([#760](https://github.com/opengeos/RustGIS/issues/760)); testing on each platform
