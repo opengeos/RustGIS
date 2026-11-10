@@ -140,8 +140,8 @@ pub fn commands() -> Vec<C> {
                 // A position that isn't a placement name is refused, not dropped for the others (null:
                 // none, as for the other keys).
                 None if p.get("position").is_some_and(|v| !v.is_null()) => return Err("position must be a placement name".into()),
-                None if ["offset", "repeat", "otherPositions", "showAll", "callout"].iter().any(|k| p.get(k).is_some()) => None,
-                None => return Err("position is required (or an offset, a repeat, otherPositions, showAll or a callout)".into()),
+                None if ["offset", "repeat", "lineOffset", "otherPositions", "showAll", "callout"].iter().any(|k| p.get(k).is_some()) => None,
+                None => return Err("position is required (or an offset, a repeat, a lineOffset, otherPositions, showAll or a callout)".into()),
             };
             let offset = match p.get("offset") {
                 None => None,
@@ -157,6 +157,20 @@ pub fn commands() -> Vec<C> {
                     _ => return Err("repeat must be a number of points, or 0 or null for none".into()),
                 },
             };
+            // Along a line, how far from it (points, above it as the text reads; negative: below).
+            let line_offset = match p.get("lineOffset") {
+                None => None,
+                Some(Value::Null) => Some(0.0),
+                Some(v) => Some(number(v).ok_or("lineOffset must be a number of points (negative: below the line), or 0 or null for on it")?),
+            };
+            // A distance outside the range is brought within it, and says so.
+            let line_offset_note = line_offset.filter(|d| !rustgis_map::symbology::LABEL_OFFSET.contains(d)).map(|asked| {
+                format!(
+                    "lineOffset {asked} points adjusted to {} (a label sits at most 200 points above or below its line)",
+                    rustgis_map::symbology::label_line_offset(asked)
+                )
+            });
+            let line_offset = line_offset.map(rustgis_map::symbology::label_line_offset);
             // Every label shown, over the others where they crowd.
             let show_all = match p.get("showAll") {
                 None => None,
@@ -209,6 +223,9 @@ pub fn commands() -> Vec<C> {
                 if let Some(r) = repeat {
                     c.repeat = r;
                 }
+                if let Some(d) = line_offset {
+                    c.line_offset = d;
+                }
                 if let Some(a) = show_all {
                     c.show_all = a;
                 }
@@ -225,7 +242,7 @@ pub fn commands() -> Vec<C> {
                 }
                 Ok(())
             })?;
-            if let Some(note) = callout_note {
+            for note in [callout_note, line_offset_note].into_iter().flatten() {
                 s.notify(note, false);
             }
             Ok(done)
@@ -233,7 +250,7 @@ pub fn commands() -> Vec<C> {
         .inputs(super::Inputs::single_layer)
         .when(need_feature_layer)
         .params(
-            r#"{"layer"?, "class"?: name (none: the Default class, by whatever name it has), "position"?: "auto"|"center"|"above"|"below"|"left"|"right"|"aboveRight"|"aboveLeft"|"belowRight"|"belowLeft"|"parallel" (along a line, straight)|"curved" (along a line, following its bends) (required without offset, repeat, otherPositions, showAll or callout), "offset"?: [right, down] points (-200 to 200 each) the label moves from where its position puts it ([0, 0]: none; a label along a line isn't moved), "repeat"?: points (10 to 10000) between a line's labels, spaced out from the one at its middle, at most 32 a line (0 or null: the one at its middle; parallel and curved only), "otherPositions"?: bool (a label whose place is taken tries others: a point's round the point, corners first; a line's along the line, nearest its middle first, placed parallel or curved without a repeat; true is refused for any other line label and on polygons), "showAll"?: bool (every label drawn, over the others where they crowd), "callout"?: true|false|points (5 to 500: a label crowded off its spot moves to a free one nearby, a line drawn back to its feature at most this long; true keeps its length, or 40; false, 0 or null: none; not labels along a line or with an icon)}"#,
+            r#"{"layer"?, "class"?: name (none: the Default class, by whatever name it has), "position"?: "auto"|"center"|"above"|"below"|"left"|"right"|"aboveRight"|"aboveLeft"|"belowRight"|"belowLeft"|"parallel" (along a line, straight)|"curved" (along a line, following its bends) (required without offset, repeat, lineOffset, otherPositions, showAll or callout), "offset"?: [right, down] points (-200 to 200 each) the label moves from where its position puts it ([0, 0]: none; a label along a line isn't moved), "repeat"?: points (10 to 10000) between a line's labels, spaced out from the one at its middle, at most 32 a line (0 or null: the one at its middle; parallel and curved only), "lineOffset"?: points (-200 to 200) between a line and its label's nearest edge, above the line as the text reads, negative below it (0 or null: on the line; parallel and curved only), "otherPositions"?: bool (a label whose place is taken tries others: a point's round the point, corners first; a line's along the line, nearest its middle first, placed parallel or curved without a repeat; true is refused for any other line label and on polygons), "showAll"?: bool (every label drawn, over the others where they crowd), "callout"?: true|false|points (5 to 500: a label crowded off its spot moves to a free one nearby, a line drawn back to its feature at most this long; true keeps its length, or 40; false, 0 or null: none; not labels along a line or with an icon)}"#,
         ),
         // Labels moved by hand (the Move Label tool, as QGIS's): kept by their feature's id.
         C::new("labels.move", "Move Label", "Labeling › Label Placement", |s, p| {

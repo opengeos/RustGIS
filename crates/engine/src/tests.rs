@@ -3277,6 +3277,9 @@ fn hostile_params_never_panic(shard: usize) {
         json!({"text": "<qgis><projectlayers><maplayer type=\"raster\" hasScaleBasedVisibilityFlag=\"1\" minScale=\"NaN\" maxScale=\"-1e308\"><datasource>type=xyz&amp;url=&amp;zmax=999</datasource><layername></layername><provider>wms</provider><pipe><rasterrenderer opacity=\"inf\"/></pipe></maplayer></projectlayers></qgis>"}),
         // A label class placed along lines, with junk the placement and style read after it.
         json!({"layer": "Countries", "position": "curved", "italic": "maybe", "size": -1e308}),
+        // A line label's distance from its line: far out of range, then of the wrong type.
+        json!({"layer": "Rivers", "position": "parallel", "lineOffset": -1e308}),
+        json!({"layer": "Rivers", "lineOffset": {"above": 4}}),
         // A publication sheet's style, accent and orientation, and a shape's rounded corners.
         // (The profile left out or valid, so the style and accent are reached.)
         json!({"style": 7, "accent": "#XYZ", "kind": "ellipse", "element": 1, "radius": "x"}),
@@ -3962,6 +3965,48 @@ fn labels_take_wrapping_and_a_repeat_along_lines() {
     let text = serde_json::to_string(&s.project).unwrap();
     let reopened = Session::new(serde_json::from_str(&text).unwrap());
     assert_eq!(class(&reopened), class(&s));
+}
+
+/// A line's label class takes a distance from the line (#1187): alone it keeps the position, it is
+/// held to its range, 0 and null put the label back on the line, junk is refused, it undoes and the
+/// project keeps it.
+#[test]
+fn labels_take_a_distance_from_the_line() {
+    let mut s = world();
+    let class = |s: &Session| {
+        let c = &s.map().layer_by_name("Rivers").unwrap().labels.default;
+        (c.line_offset, c.placement)
+    };
+    let placement = class(&s).1;
+    assert_eq!(class(&s), (0.0, placement));
+    let mark = s.notice_mark();
+    s.run("labels.placement", &json!({"layer": "Rivers", "lineOffset": 4})).unwrap();
+    assert_eq!(class(&s), (4.0, placement), "a distance alone keeps the position");
+    s.run("labels.placement", &json!({"layer": "Rivers", "lineOffset": "-2.5"})).unwrap();
+    assert_eq!(class(&s).0, -2.5, "below the line");
+    s.run("labels.placement", &json!({"layer": "Rivers", "lineOffset": 200})).unwrap();
+    assert!(s.notices_since(mark).iter().all(|n| !n.text.contains("lineOffset")), "a distance within its range says nothing");
+    let mark = s.notice_mark();
+    s.run("labels.placement", &json!({"layer": "Rivers", "lineOffset": 1e9})).unwrap();
+    assert_eq!(class(&s).0, 200.0, "within its range");
+    let said: Vec<String> = s.notices_since(mark).iter().map(|n| n.text.clone()).collect();
+    assert!(said.iter().any(|t| t.contains("lineOffset 1000000000 points adjusted to 200")), "and says so: {said:?}");
+    s.run("labels.placement", &json!({"layer": "Rivers", "lineOffset": null})).unwrap();
+    assert_eq!(class(&s).0, 0.0, "null is on the line");
+    s.run("edit.undo", &json!({})).unwrap();
+    assert_eq!(class(&s).0, 200.0, "undoes");
+    s.run("labels.placement", &json!({"layer": "Rivers", "lineOffset": 0})).unwrap();
+    assert_eq!(class(&s).0, 0.0, "0 is on the line");
+    for bad in [json!({"lineOffset": "above"}), json!({"lineOffset": [1]}), json!({"lineOffset": true})] {
+        let mut p = bad.clone();
+        p["layer"] = json!("Rivers");
+        assert!(s.run("labels.placement", &p).is_err(), "{bad}");
+    }
+    // Kept with the project.
+    s.run("labels.placement", &json!({"layer": "Rivers", "position": "curved", "lineOffset": -6})).unwrap();
+    let text = serde_json::to_string(&s.project).unwrap();
+    let reopened = Session::new(serde_json::from_str(&text).unwrap());
+    assert_eq!(class(&reopened), (-6.0, rustgis_map::LabelPlacement::Curved));
 }
 
 /// A point label class tries the other places round its point when told to (#1011): alone it keeps
