@@ -565,6 +565,13 @@ mod tests {
         let said = big.limited().expect("a capped run says what it left out");
         assert!(said.contains(&format!("for {} of {MAX_EPOCHS} epochs", big.epochs)), "{said}");
         assert_eq!(t.limited(), None, "a run within the limit says nothing");
+        // Too many samples for even one epoch of the largest network: a random subset is fitted,
+        // and said with its count.
+        let many: Vec<(Vec<f32>, usize)> = (0..12_000).map(|i| (vec![(i % 97) as f32, (i % 89) as f32], i % 2)).collect();
+        let cut = train(&[0, 1], vec!["a".into(), "b".into()], &many, &[MAX_UNITS; MAX_LAYERS], 1).unwrap();
+        assert!(cut.fitted < cut.training && cut.epochs == 1, "{} of {}", cut.fitted, cut.training);
+        let said = cut.limited().expect("a cut sample set is said");
+        assert!(said.contains(&format!("on {} of {} training samples for 1 of 1 epochs", cut.fitted, cut.training)), "{said}");
         // Run so it can be cancelled, it fits every sample for every epoch and says nothing.
         let control = crate::control::Control::stoppable();
         let whole = crate::run_under("Train", &control, || train(&[0, 1], vec!["out".into(), "in".into()], &samples, &[8], 3)).unwrap();

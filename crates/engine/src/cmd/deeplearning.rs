@@ -282,7 +282,12 @@ fn training(s: &Session, p: &Value) -> Result<Training, String> {
         Some(a) => a.iter().filter_map(Value::as_u64).map(|u| u as usize).take(neural::MAX_LAYERS).collect(),
         None => vec![32, 16],
     };
-    let epochs = f(p, "epochs").unwrap_or(60.0).clamp(1.0, neural::MAX_EPOCHS as f64) as usize;
+    // Out of range is refused, not cut to it: the training would say nothing of the epochs left out.
+    let epochs = f(p, "epochs").unwrap_or(60.0);
+    if !(1.0..=neural::MAX_EPOCHS as f64).contains(&epochs) {
+        return Err(format!("epochs is 1 to {}, not {epochs}", neural::MAX_EPOCHS));
+    }
+    let epochs = epochs as usize;
     // Without a name given, a new model never replaces one: it gets a name of its own.
     let (name, auto) = match ps(p, "model") {
         Some(_) => (name(&json!({"name": p.get("model")}), format!("{}_model", r.name)), None),
