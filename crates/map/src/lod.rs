@@ -186,9 +186,10 @@ pub fn thin(g: &Geometry, tol: f64) -> Geometry {
 /// kept. Unlike distance thinning, which keeps a vertex every `tol` along a shape, it keeps only
 /// the ones its shape needs, so a detailed coastline keeps far fewer at the same error. A ring
 /// keeps its extreme vertices (so its extent) and at least a triangle (or stays whole when it has
-/// no more; a ring with no area keeps two of its vertices, one repeated), so a small polygon still has an area
-/// to fill; a point the projection couldn't show (not finite) is kept, and the stretches either
-/// side of it are simplified apart. A tolerance that is not a positive number keeps `g` as it is.
+/// no more; a ring with no area keeps two of its vertices, one repeated), so a small polygon still
+/// has an area to fill; a point the projection couldn't show (not finite) is kept, and the
+/// stretches either side of it are simplified apart. A tolerance that is not a positive number
+/// keeps `g` as it is.
 pub fn simplify(g: &Geometry, tol: f64) -> Geometry {
     if !tol.is_finite() || tol <= 0.0 {
         return g.clone();
