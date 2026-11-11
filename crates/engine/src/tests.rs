@@ -1361,6 +1361,34 @@ fn qgis_annotation_pictures_charge_the_budget_only_once_placed() {
     assert!(notes.iter().any(|n| n.ends_with("picture past the 1 KiB of pictures an import takes")), "{notes:?}");
 }
 
+/// An annotation layer's texts under a layer above that draws more than texts (here a marker)
+/// are noted, as RustGIS draws them over it; the top layer's own texts, with nothing above, aren't.
+#[test]
+fn qgis_annotation_texts_under_layers_above_are_noted() {
+    let mut s = world();
+    let layer = |id: &str, items: &str| {
+        format!(r#"<maplayer type="annotation"><id>{id}</id><layername>{id}</layername><items>{items}</items></maplayer>"#)
+    };
+    let text = r#"<item type="pointtext" text="t" x="8" y="47"/>"#;
+    let marker = r#"<item type="marker" x="8" y="47"/>"#;
+    // QGIS lists the top layer first.
+    let qgs = format!(
+        r#"<qgis><projectCrs><spatialrefsys><authid>EPSG:4326</authid></spatialrefsys></projectCrs><projectlayers>{}{}{}</projectlayers></qgis>"#,
+        layer("top", &format!("{text}{text}")),
+        layer("shapes", marker),
+        layer("bottom", &format!("{text}{text}"))
+    );
+    let r = s.run("project.importQgis", &json!({"text": qgs})).unwrap();
+    let notes: Vec<(String, String)> = r["notes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|n| (n["layer"].as_str().unwrap_or_default().to_string(), n["text"].as_str().unwrap().to_string()))
+        .collect();
+    let under = |l: &str| notes.iter().any(|(layer, t)| layer == l && t.contains("layers above draw over in QGIS"));
+    assert!(under("bottom") && !under("top") && !under("shapes"), "{notes:?}");
+}
+
 /// A QGIS diagram reaches the layer through `style.importQgis`; categories on fields the layer
 /// hasn't are left out, and a diagram left with none removed, each noted with the fields. Undo
 /// takes it back.

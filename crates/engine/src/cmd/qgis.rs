@@ -100,8 +100,20 @@ fn import_project(s: &mut Session, p: &Value) -> CmdResult {
     let mut added = Vec::new();
     let crs = project.crs.as_deref();
     let mut pictures = Pictures::default();
-    for layer in project.layers.iter().rev().chain(project.main_annotations.as_ref()) {
+    let order: Vec<&qgis::ProjectLayer> = project.layers.iter().rev().chain(project.main_annotations.as_ref()).collect();
+    // Whether a layer above each draws more than texts: RustGIS draws every graphics layer's
+    // texts after all layers, so an annotation layer's texts come out over it.
+    let mut covered = vec![false; order.len()];
+    let mut above = false;
+    for (i, layer) in order.iter().enumerate().rev() {
+        covered[i] = above;
+        above |= layer.kind != "annotation" || layer.annotations.iter().any(|a| a.graphic.kind != "text");
+    }
+    for (layer, covered) in order.into_iter().zip(covered) {
         let result = if layer.kind == "annotation" {
+            if covered {
+                note_texts_under_layers_above(layer, &mut report);
+            }
             add_annotations(s, layer, crs, dir.is_some(), &mut pictures, &mut report).map(Some)
         } else {
             add_layer(s, layer, dir.is_some(), &mut report)
@@ -127,6 +139,23 @@ fn import_project(s: &mut Session, p: &Value) -> CmdResult {
         );
     }
     Ok(json!({"map": name, "layers": added, "notes": notes}))
+}
+
+/// Notes the texts of an annotation layer that a layer above draws over in QGIS, which RustGIS
+/// draws over it (it draws graphics layers' texts after all layers). Those already under a
+/// shape or picture of their own layer are noted with it, not again.
+fn note_texts_under_layers_above(layer: &qgis::ProjectLayer, report: &mut Report) {
+    let a = &layer.annotations;
+    let first_on_top = a.iter().rposition(|a| a.graphic.kind != "text").map_or(0, |i| i + 1);
+    let texts = a.get(first_on_top..).unwrap_or_default().iter().filter(|a| a.graphic.kind == "text").count();
+    if texts > 0 {
+        let what = if texts == 1 {
+            "an annotation text a layer above draws over in QGIS is drawn over that layer".to_string()
+        } else {
+            format!("{texts} annotation texts layers above draw over in QGIS are drawn over those layers")
+        };
+        report.approximated(&layer.name, format!("{what}: RustGIS draws graphics layers' texts after all layers"));
+    }
 }
 
 /// Adds one QGIS layer to the active map with its style: `Ok(Some(name))` when added, `Ok(None)`
@@ -263,24 +292,36 @@ fn add_annotations(
     let id = added.get("layer").and_then(Value::as_u64).and_then(|id| u32::try_from(id).ok()).ok_or("the layer wasn't added")?;
     let (mut unplaced, mut unread, mut first_error, mut over) = (0usize, 0usize, None::<String>, 0usize);
     let mut graphics = Vec::new();
+    // A geometry taken to longitude/latitude; `None` where a point doesn't take.
+    let place = |geometry: &rustgis_data::Geometry| {
+        let t = transformer.as_ref()?;
+        let failed = std::cell::Cell::new(false);
+        let out = geometry.map_coords(&|c| {
+            t.to_lonlat(c).filter(|c| c.x.is_finite() && c.y.is_finite() && c.y.abs() <= 90.0).unwrap_or_else(|| {
+                failed.set(true);
+                c
+            })
+        });
+        (!failed.get()).then_some(out)
+    };
     for a in layer.annotations.iter().filter(|_| transformer.is_some()) {
         let mut g = a.graphic.clone();
-        // A picture's bytes, charged to the budget once the graphic is placed.
-        let mut charge = 0;
+        // Placed first: a picture is read only for a graphic that is.
+        let Some(placed) = place(&g.geometry) else {
+            unplaced += 1;
+            continue;
+        };
+        g.geometry = placed;
         if let Some(picture) = &a.picture {
             let left = MAX_PICTURE_BYTES.saturating_sub(pictures.bytes);
-            if pictures.over.contains(picture) {
-                over += 1;
-                continue;
-            }
-            // Each file read once while the budget has room; kept only when it fits, so what is
-            // kept stays within the budget. Every row keeps its own copy, counted against it.
+            let mut fresh = false;
+            // Each file read once while the budget has room, and kept only when it fits, so what
+            // is kept stays within the budget; every row keeps its own copy, counted against it.
             let read = match pictures.read.get(picture) {
-                Some(read) => read.clone(),
-                None if left == 0 => {
-                    over += 1;
-                    continue;
-                }
+                _ if pictures.over.contains(picture) => None,
+                Some(Ok(b64)) if b64.len() > left => None,
+                Some(read) => Some(read.clone()),
+                None if left == 0 => None,
                 None => {
                     let read = if let Some(b64) = picture.strip_prefix("base64:") {
                         super::graphics::picture(&json!({"image": b64}))
@@ -291,47 +332,45 @@ fn add_annotations(
                     };
                     if read.as_ref().is_ok_and(|b64| b64.len() > left) {
                         pictures.over.insert(picture.clone());
-                        over += 1;
-                        continue;
+                        None
+                    } else {
+                        pictures.read.insert(picture.clone(), read.clone());
+                        fresh = true;
+                        Some(read)
                     }
-                    pictures.read.insert(picture.clone(), read.clone());
-                    read
                 }
             };
             match read {
-                Ok(b64) if b64.len() > left => {
+                None => {
                     over += 1;
                     continue;
                 }
-                Ok(b64) => {
-                    charge = b64.len();
+                Some(Ok(b64)) => {
                     if a.keep_aspect
                         && let Some(size) = rustgis_render::picture_size(&b64)
                     {
-                        g.geometry = fitted(&g.geometry, size);
+                        // Fitted in the layer's coordinates, then placed: inside the box placed
+                        // above, so it takes too unless the transform is odd there (then a
+                        // picture just read isn't kept, as it is charged to nothing).
+                        let Some(fit) = place(&fitted(&a.graphic.geometry, size)) else {
+                            if fresh {
+                                pictures.read.remove(picture);
+                            }
+                            unplaced += 1;
+                            continue;
+                        };
+                        g.geometry = fit;
                     }
+                    pictures.bytes += b64.len();
                     g.image = Some(b64);
                 }
-                Err(e) => {
+                Some(Err(e)) => {
                     unread += 1;
                     first_error.get_or_insert(e);
                     continue;
                 }
             }
         }
-        let failed = std::cell::Cell::new(false);
-        let Some(t) = transformer.as_ref() else { continue };
-        g.geometry = g.geometry.map_coords(&|c| {
-            t.to_lonlat(c).filter(|c| c.x.is_finite() && c.y.is_finite() && c.y.abs() <= 90.0).unwrap_or_else(|| {
-                failed.set(true);
-                c
-            })
-        });
-        if failed.get() {
-            unplaced += 1;
-            continue;
-        }
-        pictures.bytes += charge;
         graphics.push(g);
     }
     let n = |count: usize, one: &str, many: &str| if count == 1 { one.to_string() } else { format!("{count} {many}") };
