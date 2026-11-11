@@ -79,6 +79,7 @@ fn import_project(s: &mut Session, p: &Value) -> CmdResult {
     m.basemap = rustgis_map::Basemap::Blank;
     m.graticule = false;
     let degrees = project.crs.as_deref().and_then(Geographic::of);
+    let mut canvas_crs = Some("EPSG:3857");
     if let Some(crs) = &project.crs {
         let code = match crs.as_str() {
             "EPSG:3857" | "EPSG:900913" => "mercator",
@@ -91,8 +92,10 @@ fn import_project(s: &mut Session, p: &Value) -> CmdResult {
             Ok(_) if degrees.is_some_and(|g| !g.wgs84 || !g.greenwich) => {
                 let meridian = if degrees.is_some_and(|g| !g.greenwich) { ", its longitudes taken as from Greenwich" } else { "" };
                 report.approximated("", format!("the project's coordinate system {crs}, drawn in Equirectangular on WGS 84{meridian}"));
+                canvas_crs = Some("EPSG:4326");
             }
-            Ok(_) => {}
+            Ok(_) if degrees.is_some() => canvas_crs = Some("EPSG:4326"),
+            Ok(_) => canvas_crs = Some(crs.as_str()),
         }
     }
     // Bottom first, so each is added on top of the ones below it; the main annotation layer
@@ -100,31 +103,29 @@ fn import_project(s: &mut Session, p: &Value) -> CmdResult {
     let mut added = Vec::new();
     let crs = project.crs.as_deref();
     let mut pictures = Pictures::default();
-    let order: Vec<&qgis::ProjectLayer> = project.layers.iter().rev().chain(project.main_annotations.as_ref()).collect();
-    // Whether a layer above each draws more than texts: RustGIS draws every graphics layer's
-    // texts after all layers, so an annotation layer's texts come out over it.
-    let mut covered = vec![false; order.len()];
-    let mut above = false;
-    for (i, layer) in order.iter().enumerate().rev() {
-        covered[i] = above;
-        // Only a layer drawn: a hidden one covers nothing.
-        above |= layer.visible && (layer.kind != "annotation" || layer.annotations.iter().any(|a| a.graphic.kind != "text"));
-    }
-    for (layer, covered) in order.into_iter().zip(covered) {
+    // The coordinates the map draws in, where QGIS fits a picture whose aspect is locked: the
+    // project's, or Web Mercator where RustGIS couldn't take them (or none were named).
+    let canvas = canvas_crs.and_then(|c| rustgis_data::raster::crs::Crs::parse(c).and_then(|c| c.transformer()).ok());
+    // Each layer added, bottom first: whether it is drawn, and, for an annotation layer, its
+    // texts over all its other graphics and whether it has any such.
+    let mut drawn: Vec<(String, bool, Option<Drawn>)> = Vec::new();
+    for layer in project.layers.iter().rev().chain(project.main_annotations.as_ref()) {
         let result = if layer.kind == "annotation" {
-            if covered {
-                note_texts_under_layers_above(layer, &mut report);
-            }
-            add_annotations(s, layer, crs, dir.is_some(), &mut pictures, &mut report).map(Some)
+            add_annotations(s, layer, crs, canvas.as_ref(), dir.is_some(), &mut pictures, &mut report)
+                .map(|(name, d)| Some((name, Some(d))))
         } else {
-            add_layer(s, layer, dir.is_some(), &mut report)
+            add_layer(s, layer, dir.is_some(), &mut report).map(|name| name.map(|name| (name, None)))
         };
         match result {
-            Ok(Some(name)) => added.push(name),
+            Ok(Some((name, d))) => {
+                drawn.push((layer.name.clone(), layer.visible, d));
+                added.push(name);
+            }
             Ok(None) => {}
             Err(e) => report.skipped(&layer.name, format!("the layer: {e}")),
         }
     }
+    note_texts_under_layers_above(&drawn, &mut report);
     go_to_view(s, &project, degrees);
     let notes: Vec<Value> = report.notes.iter().map(note_json).collect();
     if !report.notes.is_empty() {
@@ -142,20 +143,33 @@ fn import_project(s: &mut Session, p: &Value) -> CmdResult {
     Ok(json!({"map": name, "layers": added, "notes": notes}))
 }
 
-/// Notes the texts of an annotation layer that a layer above draws over in QGIS, which RustGIS
-/// draws over it (it draws graphics layers' texts after all layers). Those already under a
-/// shape or picture of their own layer are noted with it, not again.
-fn note_texts_under_layers_above(layer: &qgis::ProjectLayer, report: &mut Report) {
-    let a = &layer.annotations;
-    let first_on_top = a.iter().rposition(|a| a.graphic.kind != "text").map_or(0, |i| i + 1);
-    let texts = a.get(first_on_top..).unwrap_or_default().iter().filter(|a| a.graphic.kind == "text").count();
-    if texts > 0 {
-        let what = if texts == 1 {
-            "an annotation text a layer above draws over in QGIS is drawn over that layer".to_string()
-        } else {
-            format!("{texts} annotation texts layers above draw over in QGIS are drawn over those layers")
-        };
-        report.approximated(&layer.name, format!("{what}: RustGIS draws graphics layers' texts after all layers"));
+/// What an annotation layer draws, as placed (bottom first): the texts over all its other
+/// graphics, and whether it has any other graphics.
+struct Drawn {
+    texts_on_top: usize,
+    others: bool,
+}
+
+/// Notes the texts of each annotation layer drawn (`drawn`: the layers added, bottom first, each
+/// with whether it is visible) that a visible layer above draws over in QGIS: RustGIS draws
+/// graphics layers' texts after all layers, so over it. Those already under a shape or picture
+/// of their own layer are noted with it, not again.
+fn note_texts_under_layers_above(drawn: &[(String, bool, Option<Drawn>)], report: &mut Report) {
+    let mut above = false;
+    for (name, visible, d) in drawn.iter().rev() {
+        if let Some(d) = d
+            && *visible
+            && above
+            && d.texts_on_top > 0
+        {
+            let what = if d.texts_on_top == 1 {
+                "an annotation text a layer above draws over in QGIS is drawn over that layer".to_string()
+            } else {
+                format!("{} annotation texts layers above draw over in QGIS are drawn over those layers", d.texts_on_top)
+            };
+            report.approximated(name, format!("{what}: RustGIS draws graphics layers' texts after all layers"));
+        }
+        above |= *visible && d.as_ref().is_none_or(|d| d.others);
     }
 }
 
@@ -277,32 +291,42 @@ fn add_annotations(
     s: &mut Session,
     layer: &qgis::ProjectLayer,
     project_crs: Option<&str>,
+    canvas: Option<&rustgis_data::raster::crs::Transformer>,
     has_dir: bool,
     pictures: &mut Pictures,
     report: &mut Report,
-) -> Result<String, String> {
+) -> Result<(String, Drawn), String> {
     let name = layer.name.as_str();
     let crs = layer.crs.as_deref().or(project_crs);
     let transformer = match crs.map(|c| rustgis_data::raster::crs::Crs::parse(c).and_then(|c| c.transformer())) {
         Some(Ok(t)) => Some(t),
         Some(Err(_)) if layer.annotations.is_empty() => None,
         Some(Err(e)) => {
-            report.skipped(name, format!("its annotations, in a coordinate system RustGIS can't read ({e})"));
+            let what = if layer.annotations.len() == 1 {
+                "its annotation".to_string()
+            } else {
+                format!("its {} annotations", layer.annotations.len())
+            };
+            report.skipped(name, format!("{what}, in a coordinate system RustGIS can't read ({e})"));
             None
         }
         None if layer.annotations.is_empty() => None,
         None => {
-            report.skipped(name, "its annotations, in a coordinate system neither the layer nor the project names");
+            let what = if layer.annotations.len() == 1 {
+                "its annotation".to_string()
+            } else {
+                format!("its {} annotations", layer.annotations.len())
+            };
+            report.skipped(name, format!("{what}, in a coordinate system neither the layer nor the project names"));
             None
         }
     };
     let added = s.run_part("graphics.newLayer", &json!({"name": name}))?;
     let id = added.get("layer").and_then(Value::as_u64).and_then(|id| u32::try_from(id).ok()).ok_or("the layer wasn't added")?;
     let (mut unplaced, mut unread, mut first_error, mut over) = (0usize, 0usize, None::<String>, 0usize);
-    // Pictures fitted to their aspect in degrees, which the map draws stretched away from the
-    // equator (QGIS fits them on the screen).
-    let in_degrees = transformer.as_ref().is_some_and(|t| t.is_geographic());
-    let mut fitted_in_degrees = 0usize;
+    // Pictures whose locked aspect couldn't be kept on the map (its coordinates don't take the
+    // box), fitted in the layer's coordinates instead.
+    let mut fitted_in_layer = 0usize;
     let mut graphics = Vec::new();
     // A geometry taken to longitude/latitude; `None` where a point doesn't take.
     let place = |geometry: &rustgis_data::Geometry| {
@@ -333,12 +357,23 @@ fn add_annotations(
                 _ if pictures.over.contains(picture) => None,
                 Some(Ok(b64)) if b64.len() > left => None,
                 Some(read) => Some(read.clone()),
-                None if left == 0 => None,
                 None => {
-                    let read = if let Some(b64) = picture.strip_prefix("base64:") {
-                        super::graphics::picture(&json!({"image": b64}))
-                    } else if !has_dir && qgis::is_relative(picture) {
+                    // Its size first, from its text or its file's length (base64 is 4 bytes for 3):
+                    // one that can't fit isn't read.
+                    let size = match picture.strip_prefix("base64:") {
+                        Some(b64) => Some(b64.trim().len()),
+                        None => std::fs::metadata(picture)
+                            .ok()
+                            .map(|m| usize::try_from(m.len()).unwrap_or(usize::MAX).div_ceil(3).saturating_mul(4)),
+                    };
+                    let read = if !has_dir && picture.strip_prefix("base64:").is_none() && qgis::is_relative(picture) {
                         Err(format!("{picture}, relative to the project's folder, which the import wasn't given (pass dir)"))
+                    } else if size.is_some_and(|size| size > left) {
+                        pictures.over.insert(picture.clone());
+                        over += 1;
+                        continue;
+                    } else if let Some(b64) = picture.strip_prefix("base64:") {
+                        super::graphics::picture(&json!({"image": b64}))
                     } else {
                         super::graphics::picture(&json!({"path": picture}))
                     };
@@ -361,10 +396,39 @@ fn add_annotations(
                     if a.keep_aspect
                         && let Some(size) = rustgis_render::picture_size(&b64)
                     {
-                        // Fitted in the layer's coordinates, then placed: inside the box placed
-                        // above, so it takes too unless the transform is odd there (then a
-                        // picture just read isn't kept, as it is charged to nothing).
-                        let Some(fit) = place(&fitted(&a.graphic.geometry, size)) else {
+                        // Fitted where QGIS fits it, on the map (`canvas`), then back to
+                        // longitude/latitude; else in the layer's coordinates (noted). Inside the
+                        // box placed above, so it takes too unless the transform is odd there
+                        // (then a picture just read isn't kept, as it is charged to nothing).
+                        let on_canvas = canvas.and_then(|c| {
+                            let boxed = g.geometry.extent();
+                            let corners = [
+                                (boxed.min_x, boxed.min_y),
+                                (boxed.max_x, boxed.max_y),
+                                (boxed.min_x, boxed.max_y),
+                                (boxed.max_x, boxed.min_y),
+                            ];
+                            let on: Option<Vec<Coord>> = corners.iter().map(|&(x, y)| c.from_lonlat(Coord::new(x, y))).collect();
+                            let on = on?;
+                            let ring: Vec<Coord> = on.iter().copied().chain(on.first().copied()).collect();
+                            let fit = fitted(&rustgis_data::Geometry::Polygon(vec![vec![ring]]), size);
+                            let failed = std::cell::Cell::new(false);
+                            let back = fit.map_coords(&|p| {
+                                c.to_lonlat(p).filter(|p| p.x.is_finite() && p.y.is_finite() && p.y.abs() <= 90.0).unwrap_or_else(|| {
+                                    failed.set(true);
+                                    p
+                                })
+                            });
+                            (!failed.get()).then_some(back)
+                        });
+                        let fit = match on_canvas {
+                            Some(fit) => Some(fit),
+                            None => {
+                                fitted_in_layer += 1;
+                                place(&fitted(&a.graphic.geometry, size))
+                            }
+                        };
+                        let Some(fit) = fit else {
                             if fresh {
                                 pictures.read.remove(picture);
                             }
@@ -372,7 +436,6 @@ fn add_annotations(
                             continue;
                         };
                         g.geometry = fit;
-                        fitted_in_degrees += usize::from(in_degrees);
                     }
                     pictures.bytes += b64.len();
                     g.image = Some(b64);
@@ -397,14 +460,26 @@ fn add_annotations(
             ),
         );
     }
-    if fitted_in_degrees > 0 {
-        let what = n(fitted_in_degrees, "a picture whose aspect is locked keeps it", "pictures whose aspect is locked keep it");
-        report.approximated(
-            name,
-            format!(
-                "{what} in degrees of longitude and latitude, not on the map as QGIS keeps it: away from the equator it looks stretched"
-            ),
+    if fitted_in_layer > 0 {
+        let what = n(fitted_in_layer, "a picture whose aspect is locked keeps it", "pictures whose aspect is locked keep it");
+        report
+            .approximated(name, format!("{what} in the layer's coordinates, not on the map as QGIS keeps it, as the map's don't take it"));
+    }
+    // Texts over shapes or pictures drawn after them (RustGIS draws a layer's texts last), and
+    // those over all other graphics, which a layer above may cover: from what is placed.
+    let last_other = graphics.iter().rposition(|g| g.kind != "text");
+    let under = last_other.map_or(0, |i| graphics.iter().take(i).filter(|g| g.kind == "text").count());
+    let drawn = Drawn {
+        texts_on_top: graphics.iter().skip(last_other.map_or(0, |i| i + 1)).filter(|g| g.kind == "text").count(),
+        others: last_other.is_some(),
+    };
+    if under > 0 && layer.visible {
+        let what = n(
+            under,
+            "an annotation text QGIS draws under other annotations is drawn over them",
+            "annotation texts QGIS draws under other annotations are drawn over them",
         );
+        report.approximated(name, format!("{what}: RustGIS draws a layer's texts after its shapes and pictures"));
     }
     if let Some(e) = first_error {
         // Its background and frame are still drawn.
@@ -426,7 +501,7 @@ fn add_annotations(
     let st = &layer.style;
     qgis::Style { transparency: st.transparency, blend: st.blend, min_scale: st.min_scale, max_scale: st.max_scale, ..Default::default() }
         .apply(l);
-    Ok(l.name.clone())
+    Ok((l.name.clone(), drawn))
 }
 
 /// The most bytes of pictures (base64) one import adds to graphics layers (in tests, a few

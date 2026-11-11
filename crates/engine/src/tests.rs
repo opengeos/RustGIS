@@ -1361,6 +1361,33 @@ fn qgis_annotation_pictures_charge_the_budget_only_once_placed() {
     assert!(notes.iter().any(|n| n.ends_with("picture past the 1 KiB of pictures an import takes")), "{notes:?}");
 }
 
+/// A text QGIS draws under a shape of its layer (a lower z) is drawn over it, as RustGIS draws a
+/// layer's texts last: noted, with how many. A text on top, or a layer of texts only, isn't.
+#[test]
+fn qgis_annotation_texts_under_shapes_are_noted() {
+    let mut s = world();
+    let text = |z: i32| format!(r#"<item type="pointtext" text="t" x="8" y="47" zIndex="{z}"/>"#);
+    let marker = |z: i32| format!(r#"<item type="marker" x="8" y="47" zIndex="{z}"/>"#);
+    for (items, noted) in [
+        (format!("{}{}{}", text(0), text(1), marker(2)), Some("2 annotation texts QGIS draws under other annotations")),
+        (format!("{}{}", marker(2), text(0)), Some("an annotation text QGIS draws under other annotations")),
+        (format!("{}{}", marker(0), text(1)), None),
+        (format!("{}{}", text(0), text(1)), None),
+    ] {
+        let qgs = format!(
+            r#"<qgis><projectCrs><spatialrefsys><authid>EPSG:4326</authid></spatialrefsys></projectCrs><projectlayers>
+      <maplayer type="annotation"><id>a</id><layername>N</layername><items>{items}</items></maplayer></projectlayers></qgis>"#
+        );
+        let r = s.run("project.importQgis", &json!({"text": qgs})).unwrap();
+        let texts: Vec<&str> = r["notes"].as_array().unwrap().iter().filter_map(|n| n["text"].as_str()).collect();
+        let said = texts.iter().find(|t| t.contains("QGIS draws under other annotations"));
+        match noted {
+            Some(part) => assert!(said.is_some_and(|t| t.contains(part)), "{items}: {texts:?}"),
+            None => assert!(said.is_none(), "{items}: {texts:?}"),
+        }
+    }
+}
+
 /// An annotation layer's texts under a layer above that draws more than texts (here a marker)
 /// are noted, as RustGIS draws them over it; the top layer's own texts, with nothing above, aren't.
 #[test]
@@ -1396,26 +1423,37 @@ fn qgis_annotation_texts_under_layers_above_are_noted() {
     assert!(!texts.iter().any(|t| t.contains("layers above draw over in QGIS")), "{texts:?}");
 }
 
-/// A picture whose aspect is locked, in a layer in degrees, is fitted in degrees: noted, as the
-/// map draws it stretched away from the equator.
+/// A picture whose aspect is locked keeps it on the map, as QGIS fits it on its canvas: in a
+/// project in degrees (drawn as plate carrée) its box in degrees, in a Web Mercator one its box in
+/// Mercator metres, has the picture's 2:1 aspect, the layer being in degrees either way.
 #[test]
-fn qgis_annotation_pictures_fitted_in_degrees_are_noted() {
+fn qgis_annotation_pictures_keep_their_aspect_on_the_map() {
     let mut s = world();
     let png =
         std::fs::read(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../map/testdata/qgis/generated/data/picture.png")).unwrap();
     let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, png);
-    let qgs = |crs: &str, lock: &str| {
-        format!(
-            r#"<qgis><projectCrs><spatialrefsys><authid>{crs}</authid></spatialrefsys></projectCrs><projectlayers>
-      <maplayer type="annotation"><id>a</id><layername>P</layername><items><item type="picture" path="base64:{b64}" lockAspect="{lock}" xMin="8" yMin="47" xMax="9" yMax="48"/></items></maplayer></projectlayers></qgis>"#
-        )
+    let mercator = |c: rustgis_geom::Coord| {
+        (c.x.to_radians() * 6_378_137.0, (std::f64::consts::FRAC_PI_4 + c.y.to_radians() / 2.0).tan().ln() * 6_378_137.0)
     };
-    let noted = |s: &mut Session, crs: &str, lock: &str| {
-        let r = s.run("project.importQgis", &json!({"text": qgs(crs, lock)})).unwrap();
-        r["notes"].as_array().unwrap().iter().any(|n| n["text"].as_str().is_some_and(|t| t.contains("keeps it in degrees")))
-    };
-    assert!(noted(&mut s, "EPSG:4326", "1"));
-    assert!(!noted(&mut s, "EPSG:4326", "0"), "not locked: stretched in QGIS too");
+    for (project, on_map) in [("EPSG:4326", false), ("EPSG:3857", true)] {
+        let qgs = format!(
+            r#"<qgis><projectCrs><spatialrefsys><authid>{project}</authid></spatialrefsys></projectCrs><projectlayers>
+      <maplayer type="annotation"><id>a</id><layername>P</layername><srs><spatialrefsys><authid>EPSG:4326</authid></spatialrefsys></srs><items><item type="picture" path="base64:{b64}" lockAspect="1" xMin="8" yMin="60" xMax="9" yMax="61"/></items></maplayer></projectlayers></qgis>"#
+        );
+        let r = s.run("project.importQgis", &json!({"text": qgs})).unwrap();
+        let l = s.map().layer_by_name("P").unwrap();
+        let ds = &l.dataset;
+        let pic = (0..ds.features.len()).find(|r| rustgis_map::graphics::kind(ds, *r) == "picture").unwrap_or_else(|| panic!("{r}"));
+        let e = ds.features[pic].geometry.as_ref().unwrap().extent();
+        let (w, h) = if on_map {
+            let (a, b) = (mercator(rustgis_geom::Coord::new(e.min_x, e.min_y)), mercator(rustgis_geom::Coord::new(e.max_x, e.max_y)));
+            (b.0 - a.0, b.1 - a.1)
+        } else {
+            (e.max_x - e.min_x, e.max_y - e.min_y)
+        };
+        assert!((w / h - 2.0).abs() < 0.01, "{project}: {w} × {h}");
+        assert!(!r["notes"].to_string().contains("whose aspect is locked"), "{r}");
+    }
 }
 
 /// A QGIS diagram reaches the layer through `style.importQgis`; categories on fields the layer

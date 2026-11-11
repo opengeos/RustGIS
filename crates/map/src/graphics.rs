@@ -190,6 +190,7 @@ pub fn cut(g: &Graphic) -> bool {
         || g.font_size.is_some_and(|f| !FONT_SIZE.contains(&f64::from(f)))
         || past(g.width, MAX_WIDTH)
         || past(g.size, MAX_SIZE)
+        || (g.letter_spacing.is_finite() && !(MIN_LETTER_SPACING..=MAX_LETTER_SPACING).contains(&f64::from(g.letter_spacing)))
 }
 
 /// Adds `g` to the graphics dataset `ds` as its last row, its numbers in the ranges the

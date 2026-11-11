@@ -61,24 +61,9 @@ pub(super) fn read(node: Node, dir: &str, layer: &str, report: &mut Report) -> V
     read.notes(layer, report);
     // Bottom first: by z, then as QGIS lists them (a stable sort).
     drawn.sort_by(|a, b| a.0.total_cmp(&b.0));
-    let out: Vec<Annotation> = drawn.into_iter().flat_map(|(_, a)| a).collect();
-    let under = texts_under_others(&out);
-    if under > 0 {
-        let what = if under == 1 {
-            "an annotation text QGIS draws under other annotations is drawn over them".to_string()
-        } else {
-            format!("{under} annotation texts QGIS draws under other annotations are drawn over them")
-        };
-        report.approximated(layer, format!("{what}: RustGIS draws a layer's texts after its shapes and pictures"));
-    }
-    out
-}
-
-/// Text graphics, of `drawn` (bottom first), with a shape or picture above them: RustGIS draws a
-/// graphics layer's texts after its other graphics, so these come out on top.
-fn texts_under_others(drawn: &[Annotation]) -> usize {
-    let Some(last_other) = drawn.iter().rposition(|a| a.graphic.kind != "text") else { return 0 };
-    drawn[..last_other].iter().filter(|a| a.graphic.kind == "text").count()
+    // (Texts drawn over shapes RustGIS draws first are noted where the layer is placed, from
+    // what is placed.)
+    drawn.into_iter().flat_map(|(_, a)| a).collect()
 }
 
 /// What was met reading a layer's items, noted once each with a count.
@@ -112,6 +97,16 @@ struct Reading {
     pictures_fixed: usize,
     callouts: usize,
     fonts: Vec<String>,
+    /// Texts in a font of their own (any of `fonts`).
+    font_texts: usize,
+    /// Texts with a setting of `unread_text`.
+    unread_texts: usize,
+    /// All texts: each drawn with RustGIS's halo.
+    texts: usize,
+    /// Texts naming one of RustGIS's tokens (`{date}`), which it fills in.
+    tokens: usize,
+    /// A background or frame switched on that names no symbol.
+    no_symbol: usize,
     /// Symbols drawn plainer: dashed, offset, patterned or of several layers.
     plain_symbols: usize,
     /// Markers of other shapes than a circle.
@@ -168,14 +163,32 @@ impl Reading {
             skipped(n(self.callouts, "an annotation's callout", "annotations' callouts"));
         }
         if !self.unread_text.is_empty() {
-            skipped(format!("text annotations' {}", self.unread_text.join(", ")));
+            let what = n(self.unread_texts, "a text annotation's", "text annotations'");
+            skipped(format!("{what} {}", self.unread_text.join(", ")));
+        }
+        if self.no_symbol > 0 {
+            skipped(n(
+                self.no_symbol,
+                "an annotation's background or frame, switched on but naming no symbol",
+                "annotations' backgrounds or frames, switched on but naming no symbol",
+            ));
         }
         let mut approximated = |text: String| report.approximated(layer, text);
         if self.point_texts > 0 {
             approximated(n(
                 self.point_texts,
-                "a text annotation, centred on its point rather than set on it by its baseline, and drawn with RustGIS's halo",
-                "text annotations, centred on their points rather than set on them by their baseline, and drawn with RustGIS's halo",
+                "a text annotation, centred on its point rather than set on it by its baseline",
+                "text annotations, centred on their points rather than set on them by their baseline",
+            ));
+        }
+        if self.texts > 0 {
+            approximated(n(self.texts, "a text annotation, drawn with RustGIS's halo", "text annotations, drawn with RustGIS's halo"));
+        }
+        if self.tokens > 0 {
+            approximated(n(
+                self.tokens,
+                "a text annotation naming one of RustGIS's tokens ({date}, {map} …), drawn with its value",
+                "text annotations naming RustGIS's tokens ({date}, {map} …), drawn with their values",
             ));
         }
         if self.turned > 0 {
@@ -259,7 +272,8 @@ impl Reading {
         }
         if let Some(first) = self.fonts.first() {
             let more = if self.fonts.len() > 1 { format!(" and {} more", self.fonts.len() - 1) } else { String::new() };
-            approximated(format!("text annotations in {first}{more}, drawn in RustGIS's font"));
+            let what = n(self.font_texts, "a text annotation", "text annotations");
+            approximated(format!("{what} in {first}{more}, drawn in RustGIS's font"));
         }
     }
 }
@@ -402,6 +416,11 @@ fn boxed(item: Node, kind: &str, dir: &str, layer: &str, read: &mut Reading, rep
             .map(|s| symbol::read(s, None, false, layer, report))
     };
     let none = Rgba::new(0, 0, 0, 0);
+    let named = |name: &str| item.descendants().any(|d| d.has_tag_name("symbol") && d.attribute("name") == Some(name));
+    read.no_symbol += usize::from(
+        (item.attribute("backgroundEnabled") == Some("1") && !named("backgroundSymbol"))
+            || (item.attribute("frameEnabled") == Some("1") && !named("frameSymbol")),
+    );
     // Under a text, background and frame are one rectangle; a picture's frame goes over it.
     let background =
         (item.attribute("backgroundEnabled") == Some("1")).then(|| symbol_named("backgroundSymbol", report)).flatten().map(|c| {
@@ -491,6 +510,8 @@ fn text_graphic(item: Node, geometry: Geometry, align: TextAlign, layer: &str, r
     }
     read.html += usize::from(html && text != raw);
     read.expressions += usize::from(text.contains("[%"));
+    read.texts += 1;
+    read.tokens += usize::from(graphics::TOKENS.iter().any(|(token, _)| text.contains(token)));
     let mut g = Graphic::new("text", geometry);
     g.text = Some(text);
     g.align = Some(align);
@@ -506,11 +527,11 @@ fn text_graphic(item: Node, geometry: Geometry, align: TextAlign, layer: &str, r
         g.letter_spacing = num(s, "fontLetterSpacing")
             .filter(|v| *v != 0.0)
             .map_or(0.0, |v| labels::points(v, unit, "text annotation letter spacing", layer, report) as f32);
-        if let Some(f) = s.attribute("fontFamily").map(str::trim).filter(|f| !f.is_empty() && !generic(f))
-            && read.fonts.len() < 8
-            && !read.fonts.iter().any(|had| had == f)
-        {
-            read.fonts.push(f.chars().take(60).collect());
+        if let Some(f) = s.attribute("fontFamily").map(str::trim).filter(|f| !f.is_empty() && !generic(f)) {
+            read.font_texts += 1;
+            if read.fonts.len() < 8 && !read.fonts.iter().any(|had| had == f) {
+                read.fonts.push(f.chars().take(60).collect());
+            }
         }
         let on = |tag: &str, k: &str| child(s, tag).is_some_and(|n| n.attribute(k) == Some("1"));
         let unread = [
@@ -521,6 +542,7 @@ fn text_graphic(item: Node, geometry: Geometry, align: TextAlign, layer: &str, r
             (on("shadow", "shadowDraw"), "shadows"),
             (on("text-mask", "maskEnabled"), "masks"),
         ];
+        read.unread_texts += usize::from(unread.iter().any(|(set, _)| *set));
         for (set, what) in unread {
             if set && !read.unread_text.contains(&what) {
                 read.unread_text.push(what);
@@ -539,28 +561,113 @@ fn generic(family: &str) -> bool {
 /// HTML's text without its tags, `<br>` and the ends of paragraphs as line breaks, and the common
 /// entities read.
 fn plain(html: &str) -> String {
+    // What HTML draws of `html`, as lines: tags dropped (and what's in a head, style, script or
+    // title), a `<` that opens no tag kept, runs of white space one space as HTML draws them,
+    // a line broken at `<br>` and between blocks, entities read.
     let mut out = String::new();
     let mut rest = html;
+    let mut hidden: Option<&'static str> = None;
+    let push_text = |out: &mut String, text: &str| {
+        for c in text.chars() {
+            if c.is_whitespace() {
+                if !out.is_empty() && !out.ends_with([' ', '\n']) {
+                    out.push(' ');
+                }
+            } else {
+                out.push(c);
+            }
+        }
+    };
+    let new_line = |out: &mut String| {
+        while out.ends_with(' ') {
+            out.pop();
+        }
+        out.push('\n');
+    };
     while let Some(at) = rest.find('<') {
-        out.push_str(rest.get(..at).unwrap_or_default());
+        if hidden.is_none() {
+            push_text(&mut out, rest.get(..at).unwrap_or_default());
+        }
         let tail = rest.get(at..).unwrap_or_default();
         // A tag: `<` then a letter, `/` or `!`, closed by a `>`. Any other `<` (`a < b`, or one
         // never closed) is text, kept.
         let opens = tail.chars().nth(1).is_some_and(|c| c.is_ascii_alphabetic() || c == '/' || c == '!');
         let Some(end) = tail.find('>').filter(|_| opens).map(|e| e + 1) else {
-            out.push('<');
+            if hidden.is_none() {
+                out.push('<');
+            }
             rest = tail.get(1..).unwrap_or_default();
             continue;
         };
         let tag = tail.get(..end).unwrap_or_default().to_ascii_lowercase();
-        if tag.starts_with("<br") || tag.starts_with("</p") || tag.starts_with("</div") {
-            out.push('\n');
+        let name: String = tag.trim_start_matches(['<', '/']).chars().take_while(|c| c.is_ascii_alphanumeric()).collect();
+        let closing = tag.starts_with("</");
+        match hidden {
+            Some(h) if closing && name == h => hidden = None,
+            Some(_) => {}
+            None => match name.as_str() {
+                "head" | "style" | "script" | "title" if !closing && !tag.ends_with("/>") => {
+                    hidden = Some(match name.as_str() {
+                        "head" => "head",
+                        "style" => "style",
+                        "script" => "script",
+                        _ => "title",
+                    })
+                }
+                "br" => new_line(&mut out),
+                "p" | "div" | "li" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "tr" if closing => new_line(&mut out),
+                _ => {}
+            },
         }
         rest = tail.get(end..).unwrap_or_default();
     }
+    if hidden.is_none() {
+        push_text(&mut out, rest);
+    }
+    let lines: Vec<&str> = out.lines().map(str::trim).collect();
+    entities(lines.join("\n").trim_matches('\n'))
+}
+
+/// `text` with HTML's entities read: the named ones QGIS writes and numeric ones (`&#233;`,
+/// `&#xE9;`); an unknown one is kept as it is.
+fn entities(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(at) = rest.find('&') {
+        out.push_str(rest.get(..at).unwrap_or_default());
+        let tail = rest.get(at..).unwrap_or_default();
+        let entity = tail.find(';').filter(|e| *e <= 10).and_then(|e| tail.get(1..e).map(|name| (name, e)));
+        let read = entity.and_then(|(name, e)| {
+            let c = match name {
+                "amp" => Some('&'),
+                "lt" => Some('<'),
+                "gt" => Some('>'),
+                "quot" => Some('"'),
+                "apos" => Some('\''),
+                "nbsp" => Some(' '),
+                _ => name
+                    .strip_prefix("#x")
+                    .or_else(|| name.strip_prefix("#X"))
+                    .map(|h| u32::from_str_radix(h, 16))
+                    .or_else(|| name.strip_prefix('#').map(str::parse::<u32>))
+                    .and_then(Result::ok)
+                    .and_then(char::from_u32),
+            };
+            c.map(|c| (c, e))
+        });
+        match read {
+            Some((c, e)) => {
+                out.push(c);
+                rest = tail.get(e + 1..).unwrap_or_default();
+            }
+            None => {
+                out.push('&');
+                rest = tail.get(1..).unwrap_or_default();
+            }
+        }
+    }
     out.push_str(rest);
-    let out = out.replace("&nbsp;", " ").replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"").replace("&amp;", "&");
-    out.trim_end_matches('\n').to_string()
+    out
 }
 
 /// The point halfway along the longest part of a line.

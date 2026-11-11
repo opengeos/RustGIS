@@ -947,8 +947,9 @@ fn annotation_defaults_and_limits() {
     assert!(said("an annotation with a text longer, or a font"), "{:?}", report.notes);
 }
 
-/// An HTML text's tags are dropped, but a `<` that opens no tag (`a < b`, or one never closed)
-/// is kept as text, with what follows it.
+/// An HTML text's tags are dropped (and its head, as QGIS's editor writes it), but a `<` that
+/// opens no tag (`a < b`, or one never closed) is kept as text, with what follows it; white
+/// space and entities are read as HTML reads them.
 #[test]
 fn html_annotation_texts_keep_a_lone_less_than() {
     for (html, plain) in [
@@ -957,45 +958,24 @@ fn html_annotation_texts_keep_a_lone_less_than() {
         ("1 <2 <b>bold</b>", "1 <2 bold"),
         ("left<br>right", "left\nright"),
         ("never closed <b", "never closed <b"),
+        // As QGIS's text editor writes it (Qt's `toHtml`): the head and its style aren't text,
+        // the source's line breaks and indents are white space, paragraphs are lines.
+        (
+            "<!DOCTYPE HTML PUBLIC \"-//W3C//DTD HTML 4.0//EN\" \"http://www.w3.org/TR/REC-html40/strict.dtd\">\n<html><head><meta name=\"qrichtext\" content=\"1\" /><style type=\"text/css\">\np, li { white-space: pre-wrap; }\n</style></head><body style=\" font-family:'Sans'; font-size:10pt;\">\n<p style=\" margin-top:0px;\">Hello   <b>bold</b></p>\n<p style=\" margin-top:0px;\">World &#233;&#xE9;&nbsp;!</p></body></html>",
+            "Hello bold\nWorld éé !",
+        ),
+        ("&unknown; &amp;lt;", "&unknown; &lt;"),
     ] {
         let qgs = format!(
             r#"<qgis><projectCrs><spatialrefsys><authid>EPSG:3857</authid></spatialrefsys></projectCrs><projectlayers>
       <maplayer type="annotation"><id>a</id><layername>N</layername><items>
         <item type="pointtext" text="{}" x="1" y="2"><pointTextFormat><text-style allowHtml="1"/></pointTextFormat></item>
       </items></maplayer></projectlayers></qgis>"#,
-            html.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+            html.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;").replace('\n', "&#10;")
         );
         let mut report = Report::default();
         let p = read_project(&qgs, "", &mut report).unwrap();
         assert_eq!(p.layers[0].annotations[0].graphic.text.as_deref(), Some(plain), "{html}");
-    }
-}
-
-/// A text QGIS draws under a shape (a lower z) is drawn over it, as RustGIS draws a layer's texts
-/// last: noted, with how many. A text on top, or a layer of texts only, isn't noted.
-#[test]
-fn annotation_texts_under_shapes_are_noted() {
-    let layer = |items: &str| {
-        format!(
-            r#"<qgis><projectCrs><spatialrefsys><authid>EPSG:3857</authid></spatialrefsys></projectCrs><projectlayers>
-      <maplayer type="annotation"><id>a</id><layername>N</layername><items>{items}</items></maplayer></projectlayers></qgis>"#
-        )
-    };
-    let text = |z: i32| format!(r#"<item type="pointtext" text="t" x="1" y="2" zIndex="{z}"/>"#);
-    let marker = |z: i32| format!(r#"<item type="marker" x="1" y="2" zIndex="{z}"/>"#);
-    for (items, noted) in [
-        (format!("{}{}{}", text(0), text(1), marker(2)), Some("2 annotation texts QGIS draws under other annotations")),
-        (format!("{}{}", marker(2), text(0)), Some("an annotation text QGIS draws under other annotations")),
-        (format!("{}{}", marker(0), text(1)), None),
-        (format!("{}{}", text(0), text(1)), None),
-    ] {
-        let mut report = Report::default();
-        read_project(&layer(&items), "", &mut report).unwrap();
-        let said = report.notes.iter().find(|n| n.text.contains("QGIS draws under other annotations"));
-        match noted {
-            Some(part) => assert!(said.is_some_and(|n| n.text.contains(part)), "{items}: {:?}", report.notes),
-            None => assert!(said.is_none(), "{items}: {:?}", report.notes),
-        }
     }
 }
 

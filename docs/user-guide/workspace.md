@@ -271,8 +271,11 @@ Each layer keeps its look:
   a rectangle text's or picture's background and frame as a rectangle. They are taken from the
   layer's coordinate system to the map's and drawn in their z order. RustGIS centres a text
   graphic on its point, draws it level and with its own halo, and draws text along a line level
-  at the line's middle, all noted; SVG pictures, callouts and annotations QGIS keeps switched off
-  are left out, noted.
+  at the line's middle, all noted. RustGIS draws a graphics layer's texts after all layers, so a
+  text QGIS draws under a shape, or under a layer above, comes out over it (noted). A picture
+  whose aspect is locked keeps it on the map, as QGIS does; an import reads at most 64 MiB of
+  pictures, and those past it are left out (noted). SVG pictures, callouts and annotations QGIS
+  keeps switched off are left out, noted.
 - **Rasters**: singleband grey as a stretch from black to white, singleband pseudocolour as a
   stretch along its colour map (interpolated), as Classify (discrete) or as Unique Values (exact),
   paletted as Unique Values, multiband colour as RGB and hillshade as Shaded Relief; with the
