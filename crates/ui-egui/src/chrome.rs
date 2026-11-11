@@ -1325,8 +1325,9 @@ fn notice_hover(notice: &rustgis_engine::Notice) -> String {
     crate::i18n::fmt("{message}\n{open}", &[("message", &message), ("open", tl_raw!("Open Messages"))])
 }
 
-/// Makes a toast for each notice given since the last call. Counted by the session's notice mark,
-/// not by its list, which keeps only the last 200 notices and so stops growing (#1755).
+/// Makes a toast for each notice the session still holds that was given since the last call.
+/// Counted by the session's notice mark, not by its list, which keeps only the last 200 notices
+/// and so stops growing (#1755); more than 200 between two frames toast only the 200 kept.
 fn toast_new_notices(app: &mut RustGisApp, now: f64) {
     for n in app.session.notices_since(app.map.notices_seen) {
         app.map.toasts_made += 1;
@@ -1381,9 +1382,9 @@ pub fn notices(app: &mut RustGisApp, ctx: &egui::Context) {
 mod tests {
     use super::*;
 
-    /// Past the 200 notices the session keeps, each new notice still makes one toast (#1755).
+    /// Past the 200 notices the session keeps, each new notice it holds still makes one toast (#1755).
     #[test]
-    fn every_notice_makes_one_toast_past_the_kept_two_hundred() {
+    fn each_kept_notice_makes_one_toast_past_the_200th() {
         let mut app = RustGisApp::new(rustgis_engine::Session::new(rustgis_engine::Project::default()));
         toast_new_notices(&mut app, 0.0);
         app.map.toasts.clear();
