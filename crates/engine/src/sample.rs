@@ -121,20 +121,42 @@ const DOWNLOAD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300
 /// Gets a view's countries into memory and calls `done` with the outcome: natively on a thread of
 /// its own, which reads the kept copy or downloads, checks the file and builds its world outline,
 /// so an original (1:10m) view never holds the window; in the browser with its fetch, checking
-/// the file when it lands.
+/// the file when it lands. A download superseded by another choice isn't stopped: it is one
+/// request of a fixed size, and what it brings is kept for the run, so choosing that worldview
+/// again costs nothing. `done`'s error doesn't name the worldview; the caller's message does.
 pub fn fetch(v: View, done: Box<dyn FnOnce(Result<(), String>) + Send>) {
+    #[cfg(not(target_arch = "wasm32"))]
+    fetch_with(v, done, |url, max| crate::render::rustgis_tiles::cache::download_blocking_within(url, max, DOWNLOAD_TIMEOUT));
+    #[cfg(target_arch = "wasm32")]
+    {
+        let Some(url) = v.url() else {
+            return done(Ok(()));
+        };
+        crate::render::rustgis_tiles::cache::download_limited(
+            &url,
+            v.max_bytes(),
+            Box::new(move |r| done(r.and_then(|bytes| accept(v, bytes)))),
+        );
+    }
+}
+
+/// [`fetch`] natively, downloading with `download` (the address and the most bytes allowed).
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn fetch_with(
+    v: View,
+    done: Box<dyn FnOnce(Result<(), String>) + Send>,
+    download: impl FnOnce(&str, usize) -> Result<Vec<u8>, String> + Send + 'static,
+) {
     let Some(url) = v.url() else {
         return done(Ok(()));
     };
-    #[cfg(not(target_arch = "wasm32"))]
     {
         let work = move || {
             let r = if load_kept(v) {
                 Ok(())
             } else {
-                crate::render::rustgis_tiles::cache::download_blocking_within(&url, v.max_bytes(), DOWNLOAD_TIMEOUT)
-                    .map_err(|e| format!("couldn't download the {} worldview: {e}", v.worldview.name()))
-                    .and_then(|bytes| accept(v, bytes))
+                // The error alone: the app's notice names the worldview.
+                download(&url, v.max_bytes()).and_then(|bytes| accept(v, bytes))
             };
             if r.is_ok() {
                 rustgis_render::prepare_world(v);
@@ -148,22 +170,16 @@ pub fn fetch(v: View, done: Box<dyn FnOnce(Result<(), String>) + Send>) {
             if let Some((work, done)) = mine.lock().ok().and_then(|mut g| g.take()) {
                 // A panic (a parser on hostile bytes) is the download's error, not a silent stall.
                 let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(work))
-                    .unwrap_or_else(|_| Err(format!("the {} worldview's download stopped unexpectedly", v.worldview.name())));
+                    .unwrap_or_else(|_| Err("the download stopped unexpectedly".to_string()));
                 done(r);
             }
         });
         if spawned.is_err()
             && let Some((_, done)) = shared.lock().ok().and_then(|mut g| g.take())
         {
-            done(Err(format!("couldn't start a thread to download the {} worldview", v.worldview.name())));
+            done(Err("couldn't start a thread".to_string()));
         }
     }
-    #[cfg(target_arch = "wasm32")]
-    crate::render::rustgis_tiles::cache::download_limited(
-        &url,
-        v.max_bytes(),
-        Box::new(move |r| done(r.and_then(|bytes| accept(v, bytes)))),
-    );
 }
 
 /// Makes a view's countries ready, downloading them and waiting if they aren't at hand (the
@@ -192,6 +208,10 @@ pub fn holds_countries(s: &crate::Session, v: View) -> bool {
 /// Swaps an untouched sample project's countries from view `from` to `to`: only in a project
 /// that is unsaved, unchanged and has nothing to undo, and only a layer named `Countries` holding
 /// exactly the built-in countries of `from`. Returns whether a layer was swapped.
+///
+/// It runs on the UI thread, where the app applies a chosen worldview, and copies the view's
+/// countries read ahead of time. The copy shares the features (`Features` is copy on write):
+/// measured at 15 µs for an original (1:10m) view.
 pub fn swap_countries(s: &mut crate::Session, from: View, to: View) -> bool {
     if from == to || s.dirty() || s.path.is_some() || s.can_undo() {
         return false;

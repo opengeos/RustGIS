@@ -227,6 +227,8 @@ mod tests {
             let told: Vec<_> = app.session.notices_since(mark).iter().map(|n| (n.text.clone(), n.error)).collect();
             assert_eq!(told.len(), 1, "{code}: {told:?}");
             assert!(told[0].1 && told[0].0.contains(w.worldview.name()) && told[0].0.contains("worldview"), "{told:?}");
+            // Named once, by the notice: the download's error doesn't repeat it.
+            assert_eq!(told[0].0.matches("download").count(), 1, "{told:?}");
             assert!(sample::text(w).is_none());
             assert_eq!(downloading(&app), None);
         }

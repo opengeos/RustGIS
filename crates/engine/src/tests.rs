@@ -154,6 +154,21 @@ fn an_original_worldview_downloads_gzipped() {
 }
 
 #[test]
+fn a_failed_worldview_download_doesnt_name_the_worldview_twice() {
+    use sample::{Detail, View, Worldview};
+    // Never the computer's own cache folder.
+    sample::keep_downloads(false);
+    // Greece's view, original detail, which no other test uses.
+    let v = View::new(Worldview::from_code("grc").unwrap(), Detail::Original);
+    let (tx, rx) = std::sync::mpsc::channel();
+    sample::fetch_with(v, Box::new(move |r| drop(tx.send(r))), |_, _| Err("http status: 404".to_string()));
+    let e = rx.recv_timeout(std::time::Duration::from_secs(30)).unwrap().unwrap_err();
+    // The app's notice names the worldview; the error is only why.
+    assert_eq!(e, "http status: 404");
+    assert!(sample::text(v).is_none());
+}
+
+#[test]
 fn sample_project_loads() {
     let s = world();
     let names: Vec<&str> = s.map().layers.iter().map(|l| l.name.as_str()).collect();
