@@ -1661,7 +1661,7 @@ const CLIP_BATCH: usize = if cfg!(test) { 16 } else { 4096 };
 const MAX_CACHED_MASKS: usize = 8;
 
 /// The memory a union kept by Clip holds, about: its coordinates, its rings' and polygons' own
-/// parts, and the key naming its masks.
+/// parts, and the key naming its masks. Split sizes its areas' polygons with it, keyless.
 fn kept_union_bytes(key: &[usize], m: &MultiPolygon<f64>) -> usize {
     use std::mem::size_of;
     let coords = |r: &geo::LineString<f64>| r.0.capacity().saturating_mul(size_of::<geo::Coord<f64>>());
@@ -2463,7 +2463,9 @@ const SPLIT_PART_CHUNK: usize = if cfg!(test) { 64 } else { 65_536 };
 /// parts at a time, and their layers in order. The masks' threads are as many as half the scratch
 /// memory work may take holds of their batches' masks and the one each makes; the parts' as many
 /// as the other half holds of twice the largest input feature's and area's coordinates. Cancel
-/// is looked at, and progress counted, item by item in each step.
+/// is looked at, and progress counted, item by item in each step; one feature made ready, one
+/// area's union and one part are each a step without a look, which can be long for an area of
+/// many large polygons.
 fn split_on(inp: &dyn Inputs, p: &Json, threads: Option<usize>) -> Result<ToolResult, String> {
     let ds = input(inp, p, "input")?;
     if ds.geometry_type == GeometryType::None {
@@ -2534,15 +2536,21 @@ fn split_on(inp: &dyn Inputs, p: &Json, threads: Option<usize>) -> Result<ToolRe
         });
     };
     // Which features some area meets, and how many parts there are to make: looked up area by
-    // area (the index's lookups, quick), with Cancel looked at for each.
+    // area (the index's lookups, quick), counted area by area, with Cancel looked at for each and
+    // every few thousand features an area meets.
     let mut needed = vec![false; located.len()];
     let mut pairs = 0usize;
     let mut cand_buf = Vec::new();
-    for (_, _, ext, reached) in &areas {
+    crate::control::begin(areas.len());
+    for (done, (_, _, ext, reached)) in areas.iter().enumerate() {
         crate::control::check()?;
+        crate::control::reached(done);
         met_by(ext, *reached, &mut cand_buf);
         pairs = pairs.saturating_add(cand_buf.len());
-        for &li in &cand_buf {
+        for (k, &li) in cand_buf.iter().enumerate() {
+            if k % 4096 == 4095 {
+                crate::control::check()?;
+            }
             if let Some(n) = needed.get_mut(li) {
                 *n = true;
             }
@@ -2573,12 +2581,13 @@ fn split_on(inp: &dyn Inputs, p: &Json, threads: Option<usize>) -> Result<ToolRe
             *slot = w;
         }
     }
-    // A mask is a union of one area's polygons, worth threads from two areas on; a thread holds
-    // its batch's masks and the one it makes. Doubled, as `threads_for` doubles: the masks take at
-    // most half the scratch memory, the parts' work the other half.
+    // A mask is a union of one area's polygons, worth a thread of its own from two areas on, each
+    // thread taking one area at a time; a thread holds its batch's masks and the one it makes.
+    // Doubled, as `threads_for` doubles: the masks take at most half the scratch memory, the
+    // parts' work the other half.
     let mask_threads = threads
         .unwrap_or_else(|| {
-            crate::parallel::threads_for_scratch(areas.len(), 2, largest_union.saturating_mul(SPLIT_AREA_BATCH + 1).saturating_mul(2))
+            crate::parallel::threads_for_each(areas.len(), 2, largest_union.saturating_mul(SPLIT_AREA_BATCH + 1).saturating_mul(2))
         })
         .max(1);
     // A part's work: the feature and its part, and the overlay's own copy of the mask, about.
@@ -2587,7 +2596,7 @@ fn split_on(inp: &dyn Inputs, p: &Json, threads: Option<usize>) -> Result<ToolRe
     let mut empty = 0usize;
     for batch in areas.chunks(mask_threads.saturating_mul(SPLIT_AREA_BATCH)) {
         // The batch's masks: one area's polygon as it is, several unioned.
-        let masks = crate::parallel::try_map_on(
+        let masks = crate::parallel::try_map_each_on(
             batch,
             mask_threads,
             || (),
