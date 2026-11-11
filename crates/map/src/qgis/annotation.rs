@@ -567,6 +567,7 @@ fn plain(html: &str) -> String {
     let mut out = String::new();
     let mut rest = html;
     let mut hidden: Option<&'static str> = None;
+    let mut closes = true;
     let push_text = |out: &mut String, text: &str| {
         for c in text.chars() {
             if c.is_whitespace() {
@@ -603,8 +604,11 @@ fn plain(html: &str) -> String {
         }
         // A tag: `<` then a letter, `/` or `!`, closed by a `>`. Any other `<` (`a < b`, or one
         // never closed) is text, kept.
-        let opens = tail.chars().nth(1).is_some_and(|c| c.is_ascii_alphabetic() || c == '/' || c == '!');
-        let Some(end) = tail.find('>').filter(|_| opens).map(|e| e + 1) else {
+        // (Once no `>` is left, none is looked for again: linear in the text.)
+        let opens = closes && tail.chars().nth(1).is_some_and(|c| c.is_ascii_alphabetic() || c == '/' || c == '!');
+        let end = if opens { tail.find('>').map(|e| e + 1) } else { None };
+        closes &= !opens || end.is_some();
+        let Some(end) = end else {
             if hidden.is_none() {
                 out.push('<');
             }

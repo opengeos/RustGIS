@@ -984,6 +984,38 @@ fn html_annotation_texts_keep_a_lone_less_than() {
         let p = read_project(&qgs, "", &mut report).unwrap();
         assert_eq!(p.layers[0].annotations[0].graphic.text.as_deref(), Some(plain), "{html}");
     }
+    // Many a `<` with no `>` after it: read in linear time (a quadratic scan of 200,000 would
+    // take minutes), each kept.
+    let lone = "<".repeat(200_000);
+    let qgs = format!(
+        r#"<qgis><projectCrs><spatialrefsys><authid>EPSG:3857</authid></spatialrefsys></projectCrs><projectlayers>
+      <maplayer type="annotation"><id>a</id><layername>N</layername><items>
+        <item type="pointtext" text="{}" x="1" y="2"><pointTextFormat><text-style allowHtml="1"/></pointTextFormat></item>
+      </items></maplayer></projectlayers></qgis>"#,
+        lone.replace('<', "&lt;")
+    );
+    let started = std::time::Instant::now();
+    let p = read_project(&qgs, "", &mut Report::default()).unwrap();
+    assert!(started.elapsed() < std::time::Duration::from_secs(5), "{:?}", started.elapsed());
+    assert_eq!(p.layers[0].annotations[0].graphic.text.as_ref().map(String::len), Some(200_000));
+}
+
+/// What `push` clamps, `cut` says it cuts (and so the import notes it): a negative width or size,
+/// and letter spacing outside its range, as well as the limits above.
+#[test]
+fn graphics_cut_counts_every_clamp() {
+    let point = rustgis_data::Geometry::Point(rustgis_geom::Coord::new(0.0, 0.0));
+    let with = |f: &dyn Fn(&mut crate::graphics::Graphic)| {
+        let mut g = crate::graphics::Graphic::new("point", point.clone());
+        f(&mut g);
+        crate::graphics::cut(&g)
+    };
+    assert!(!with(&|g| g.width = Some(2.0)));
+    assert!(with(&|g| g.width = Some(-1.0)));
+    assert!(with(&|g| g.size = Some(-0.5)));
+    assert!(with(&|g| g.letter_spacing = 60.0));
+    assert!(with(&|g| g.letter_spacing = -60.0));
+    assert!(!with(&|g| g.letter_spacing = 2.0));
 }
 
 /// QGIS 4 (on Qt 6) weighs fonts from 100 to 1000, QGIS 3 from 0 to 99: a normal weight in
