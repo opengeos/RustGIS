@@ -1641,33 +1641,101 @@ fn part(g: &Geometry, mask: &MultiPolygon<f64>, inside: bool) -> Option<Geometry
 /// or whose union has no area, are left out and counted (a mask selected twice is used once);
 /// with none left, it's an error.
 fn clip(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
+    clip_on(inp, p, None, None)
+}
+
+/// A clip mask feature as [`clip_on`] makes it: its polygons unioned, with its extent, or why it
+/// is left out.
+enum ClipMask {
+    Mask(MultiPolygon<f64>, Extent),
+    NoPolygon,
+    NoArea,
+}
+
+/// The most multi-mask unions one thread of Clip keeps for features that meet the same masks.
+const MAX_CACHED_MASKS: usize = 8;
+
+/// One thread's recent multi-mask unions for Clip, least recently used first, with the bytes
+/// their coordinates take, kept within `cap` bytes. A union is the same however often it is made,
+/// so what the cache keeps changes the time, not the output.
+struct MaskCache {
+    entries: std::collections::VecDeque<(Vec<usize>, MultiPolygon<f64>, usize)>,
+    bytes: usize,
+    cap: usize,
+}
+
+impl MaskCache {
+    fn new(cap: usize) -> Self {
+        MaskCache { entries: std::collections::VecDeque::new(), bytes: 0, cap }
+    }
+
+    /// The union of the masks `near` names, from the cache, or made and kept there; one too big to
+    /// keep within the cap is made and handed over without being kept.
+    fn union_of(&mut self, near: &[usize], masks: &[(MultiPolygon<f64>, Extent)]) -> std::borrow::Cow<'_, MultiPolygon<f64>> {
+        let make = || union_all(near.iter().filter_map(|i| masks.get(*i)).flat_map(|(m, _)| m.0.iter()));
+        if let Some(pos) = self.entries.iter().position(|(ids, ..)| ids.as_slice() == near) {
+            if let Some(entry) = self.entries.remove(pos) {
+                self.entries.push_back(entry);
+            }
+        } else {
+            let mask = make();
+            let coords: usize = mask.0.iter().map(|p| p.exterior().0.len() + p.interiors().iter().map(|r| r.0.len()).sum::<usize>()).sum();
+            let bytes = coords.saturating_mul(std::mem::size_of::<geo::Coord<f64>>());
+            if bytes > self.cap {
+                return std::borrow::Cow::Owned(mask);
+            }
+            while self.entries.len() >= MAX_CACHED_MASKS || self.bytes.saturating_add(bytes) > self.cap {
+                let Some((.., b)) = self.entries.pop_front() else { break };
+                self.bytes = self.bytes.saturating_sub(b);
+            }
+            self.bytes = self.bytes.saturating_add(bytes);
+            self.entries.push_back((near.to_vec(), mask, bytes));
+        }
+        match self.entries.back() {
+            Some((_, mask, _)) => std::borrow::Cow::Borrowed(mask),
+            None => std::borrow::Cow::Owned(make()),
+        }
+    }
+}
+
+/// [`clip`] on `threads` threads (by the number of items in each step when `None`): the masks are
+/// unioned, and each input feature clipped, on their own (#1252), and the rows come back in input
+/// order, as on one thread. Each thread keeps its own recent unions of several masks, all of them
+/// within `cache_bytes` (by default [`crate::parallel::scratch_budget`]).
+fn clip_on(inp: &dyn Inputs, p: &Json, threads: Option<usize>, cache_bytes: Option<usize>) -> Result<ToolResult, String> {
     let ds = input(inp, p, "input")?;
     let clip_ds = input(inp, p, "clip")?;
     if clip_ds.geometry_type != GeometryType::Polygon {
         return Err(format!("'{}' is not a polygon layer", clip_ds.name));
     }
+    let threads_for = |n: usize| threads.unwrap_or_else(|| crate::parallel::threads_for(n, PARALLEL_FEATURES));
+    let mask_rows = each_once(rows(inp, p, "clip", clip_ds));
+    // Each mask is a union: Cancel is looked at, and progress counted, before each.
+    crate::control::begin(mask_rows.len());
+    let made = crate::parallel::try_map_on(
+        &mask_rows,
+        threads_for(mask_rows.len()),
+        || (),
+        |_, _, &r| {
+            let Some(m) = clip_ds.features.get(r).and_then(|f| f.geometry.as_ref()).and_then(polygon_of) else {
+                return Ok::<_, String>(ClipMask::NoPolygon);
+            };
+            let ext = merc_extent(&m);
+            // Union even one polygon: collapsed rings have no filled area. Keep the original
+            // bounds too: rounding an edge must not hide a line the boolean overlay clips to it.
+            let mask = union_all(m.0.iter());
+            let ext = ext.union(&merc_extent(&mask));
+            Ok(if mask.0.is_empty() { ClipMask::NoArea } else { ClipMask::Mask(mask, ext) })
+        },
+    )?;
     let mut masks = Vec::new();
     // Mask features that clip nothing, left out and counted: no polygon, or one with no area.
     let mut left = LeftOut::default();
-    let mask_rows = each_once(rows(inp, p, "clip", clip_ds));
-    crate::control::begin(mask_rows.len());
-    for (done, r) in mask_rows.into_iter().enumerate() {
-        // Each mask is a union: Cancel is looked at, and progress counted, before each.
-        crate::control::check()?;
-        crate::control::reached(done);
-        let Some(m) = clip_ds.features.get(r).and_then(|f| f.geometry.as_ref()).and_then(polygon_of) else {
-            left.no_polygon += 1;
-            continue;
-        };
-        let ext = merc_extent(&m);
-        // Union even one polygon: collapsed rings have no filled area. Keep the original
-        // bounds too: rounding an edge must not hide a line the boolean overlay clips to it.
-        let mask = union_all(m.0.iter());
-        let ext = ext.union(&merc_extent(&mask));
-        if mask.0.is_empty() {
-            left.no_area += 1;
-        } else {
-            masks.push((mask, ext));
+    for m in made {
+        match m {
+            ClipMask::Mask(mask, ext) => masks.push((mask, ext)),
+            ClipMask::NoPolygon => left.no_polygon += 1,
+            ClipMask::NoArea => left.no_area += 1,
         }
     }
     if masks.is_empty() && left.no_polygon + left.no_area > 0 {
@@ -1676,54 +1744,46 @@ fn clip(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
     let index = ExtentIndex::new(masks.iter().map(|(_, ext)| *ext));
     // The masks reaching each pole: a point at one is in them at any longitude (#1033).
     let at_poles = AtPoles::new(masks.iter().map(|(m, _)| plane_poles(m)));
-    // Single candidates reuse their normalized mask. Retain eight recent multi-mask unions
-    // so alternating neighbourhoods can reuse work too; evict the least recently used.
-    const MAX_CACHED_MASKS: usize = 8;
-    let mut cached_masks: std::collections::VecDeque<(Vec<usize>, MultiPolygon<f64>)> = std::collections::VecDeque::new();
     let mut out = copy_schema(ds, out_name(p, format!("{}_Clip", ds.name)), ds.geometry_type);
     let input_rows = rows(inp, p, "input", ds);
     crate::control::begin(input_rows.len());
-    for (done, r) in input_rows.into_iter().enumerate() {
-        crate::control::check()?;
-        crate::control::reached(done);
-        let Some(f) = ds.features.get(r) else { continue };
-        let Some(g) = f.geometry.as_ref() else { continue };
-        let ext = projected_extent(g);
-        // i_overlay uses 29 integer bits about the domain centre. Allow several grid steps
-        // for normalization and clipping: a line just outside an edge can snap onto it.
-        // This widens only the candidate search; the boolean overlay still decides the result.
-        let domain = index.total.union(&ext);
-        let margin = domain.width().max(domain.height()) / f64::from(1_u32 << 27);
-        let ext = ext.padded(0.0, margin);
-        let mut near: Vec<_> =
-            index.candidates(&ext).into_iter().filter(|i| masks.get(*i).is_some_and(|(_, e)| e.intersects(&ext))).collect();
-        if matches!(g, Geometry::Point(_) | Geometry::MultiPoint(_)) {
-            at_poles.add_to(poles(&g.extent()), &mut near);
-        }
-        if near.is_empty() {
-            continue;
-        }
-        let mask = if let [i] = near.as_slice() {
-            let Some((m, _)) = masks.get(*i) else { continue };
-            m
-        } else {
-            if let Some(pos) = cached_masks.iter().position(|(ids, _)| *ids == near) {
-                if let Some(entry) = cached_masks.remove(pos) {
-                    cached_masks.push_back(entry);
-                }
-            } else {
-                if cached_masks.len() == MAX_CACHED_MASKS {
-                    cached_masks.pop_front();
-                }
-                let mask = union_all(near.iter().filter_map(|i| masks.get(*i)).flat_map(|(m, _)| m.0.iter()));
-                cached_masks.push_back((near, mask));
+    let threads = threads_for(input_rows.len());
+    // Single candidates reuse their normalized mask. Each thread keeps eight recent multi-mask
+    // unions, so alternating neighbourhoods can reuse work too, the least recently used going
+    // first; the threads' unions together stay within the scratch memory work may take.
+    let cache_cap = cache_bytes.unwrap_or_else(crate::parallel::scratch_budget) / threads.max(1);
+    let clipped = crate::parallel::try_map_on(
+        &input_rows,
+        threads,
+        || MaskCache::new(cache_cap),
+        |cache, _, &r| {
+            let Some(g) = ds.features.get(r).and_then(|f| f.geometry.as_ref()) else { return Ok::<_, String>(None) };
+            let ext = projected_extent(g);
+            // i_overlay uses 29 integer bits about the domain centre. Allow several grid steps
+            // for normalization and clipping: a line just outside an edge can snap onto it.
+            // This widens only the candidate search; the boolean overlay still decides the result.
+            let domain = index.total.union(&ext);
+            let margin = domain.width().max(domain.height()) / f64::from(1_u32 << 27);
+            let ext = ext.padded(0.0, margin);
+            let mut near: Vec<_> =
+                index.candidates(&ext).into_iter().filter(|i| masks.get(*i).is_some_and(|(_, e)| e.intersects(&ext))).collect();
+            if matches!(g, Geometry::Point(_) | Geometry::MultiPoint(_)) {
+                at_poles.add_to(poles(&g.extent()), &mut near);
             }
-            let Some((_, mask)) = cached_masks.back() else { continue };
-            mask
-        };
-        if let Some(c) = part(&dissolved(g), mask, true) {
-            out.push(Some(c), f.attrs.clone());
-        }
+            if near.is_empty() {
+                return Ok(None);
+            }
+            let shape = dissolved(g);
+            Ok(if let [i] = near.as_slice() {
+                masks.get(*i).and_then(|(m, _)| part(&shape, m, true))
+            } else {
+                part(&shape, &cache.union_of(&near, &masks), true)
+            })
+        },
+    )?;
+    for (r, c) in input_rows.into_iter().zip(clipped) {
+        let (Some(f), Some(c)) = (ds.features.get(r), c) else { continue };
+        out.push(Some(c), f.attrs.clone());
     }
     let n = out.features.len();
     let mut r = result(out, format!("Clip: {n} features kept"))?;
@@ -11915,6 +11975,80 @@ mod tests {
                         format!("{:?}", (&b.geometry, &b.attrs)),
                         "{name}, {threads} threads"
                     );
+                }
+            }
+        }
+    }
+
+    /// Clip gives the same rows, bit for bit, on several threads as on one (#1252), and whatever its
+    /// threads' mask caches can keep (none, a few unions, the default): polygons of one and of
+    /// several parts, lines and points, features without geometry, masks that overlap so features
+    /// meet several (the same ones in a row, so a union comes from the cache), and masks left out
+    /// for no polygon.
+    #[test]
+    fn clip_on_several_threads_and_any_cache_is_on_one() {
+        let mut input = Dataset::new("input", GeometryType::Polygon, vec![Field::new("v", FieldType::Integer)]);
+        let mut lines = Dataset::new("lines", GeometryType::Polyline, vec![Field::new("v", FieldType::Integer)]);
+        let mut points = Dataset::new("points", GeometryType::Point, vec![Field::new("v", FieldType::Integer)]);
+        let mut masks = Dataset::new("masks", GeometryType::Polygon, vec![Field::new("v", FieldType::Integer)]);
+        for i in 0..600i64 {
+            let (x, y) = ((i * 37 % 300) as f64 * 0.1, (i * 53 % 120) as f64 * 0.1);
+            let none = i % 97 == 0;
+            let poly = if i % 7 == 0 {
+                let ring = |x: f64| {
+                    vec![Coord::new(x, y), Coord::new(x + 0.4, y), Coord::new(x + 0.4, y + 0.4), Coord::new(x, y + 0.4), Coord::new(x, y)]
+                };
+                Geometry::Polygon(vec![vec![ring(x)], vec![ring(x + 0.25)]])
+            } else {
+                sq(x, y, 0.35)
+            };
+            input.push(if none { None } else { Some(poly) }, vec![Value::Int(i)]);
+            let line = Geometry::Line(vec![vec![Coord::new(x, y), Coord::new(x + 0.9, y + 0.3)]]);
+            lines.push(if none { None } else { Some(line) }, vec![Value::Int(i)]);
+            points.push(if none { None } else { Some(Geometry::Point(Coord::new(x + 0.05, y + 0.05))) }, vec![Value::Int(i)]);
+        }
+        for i in 0..200i64 {
+            let (x, y) = ((i * 71 % 290) as f64 * 0.1, (i * 29 % 110) as f64 * 0.1);
+            masks.push(if i % 53 == 0 { None } else { Some(sq(x, y, 0.6)) }, vec![Value::Int(1000 + i)]);
+        }
+        // Away from the rest, two overlapping masks and five features in a row meeting both, so
+        // a thread's cache gives back the union it made for the one before.
+        masks.push(Some(sq(40.0, 0.0, 0.6)), vec![Value::Int(2000)]);
+        masks.push(Some(sq(40.3, 0.0, 0.6)), vec![Value::Int(2001)]);
+        for i in 600..605i64 {
+            input.push(Some(sq(40.2, 0.1, 0.35)), vec![Value::Int(i)]);
+            lines.push(Some(Geometry::Line(vec![vec![Coord::new(40.1, 0.1), Coord::new(40.8, 0.3)]])), vec![Value::Int(i)]);
+            points.push(Some(Geometry::Point(Coord::new(40.4, 0.2))), vec![Value::Int(i)]);
+        }
+        let m = Map(HashMap::from([
+            ("input".to_string(), input),
+            ("lines".to_string(), lines),
+            ("points".to_string(), points),
+            ("masks".to_string(), masks),
+        ]));
+        for name in ["input", "lines", "points"] {
+            let p = serde_json::json!({"input": name, "clip": "masks"});
+            let one = clip_on(&m, &p, Some(1), None).unwrap();
+            let one_messages = one.messages.clone();
+            assert!(one_messages.iter().any(|m| m.contains("left out")), "{name}: {one_messages:?}");
+            let one = layer(one);
+            assert!(one.features.len() > 40, "{name}: {}", one.features.len());
+            // The five features meeting both masks at the end are kept.
+            let last: Vec<_> = one.features.iter().rev().take(5).map(|f| f.attrs.first().cloned()).collect();
+            assert_eq!(last, (600..605).rev().map(|i| Some(Value::Int(i))).collect::<Vec<_>>(), "{name}");
+            for threads in [1, 2, 7, 16] {
+                for cache in [Some(0), Some(4_000), None] {
+                    let many = clip_on(&m, &p, Some(threads), cache).unwrap();
+                    assert_eq!(many.messages, one_messages, "{name}, {threads} threads, cache {cache:?}");
+                    let many = layer(many);
+                    assert_eq!(many.features.len(), one.features.len(), "{name}, {threads} threads, cache {cache:?}");
+                    for (a, b) in one.features.iter().zip(&many.features) {
+                        assert_eq!(
+                            format!("{:?}", (&a.geometry, &a.attrs)),
+                            format!("{:?}", (&b.geometry, &b.attrs)),
+                            "{name}, {threads} threads, cache {cache:?}"
+                        );
+                    }
                 }
             }
         }
