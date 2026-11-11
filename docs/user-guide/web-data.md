@@ -76,7 +76,9 @@ from any of these, and the search looks there rather than where the map is:
 - **Draw point**, **Draw line**, **Draw polygon** and **Draw extent** (a box dragged on the map)
   draw on the map with the usual click-to-add, double-click-to-finish tools; Esc stops.
 - **Selected features** adds the selected features of the active layer.
-- **Load file…** adds the features of a file in any format RustGIS reads.
+- **Load file…** adds the features of a file in any format RustGIS reads. A file that holds
+  several layers (KML, GPX, a zip) is read by its first layer, and a notice names the others: add
+  the file with Add Data, pick the layer you mean, and use **Selected features**.
 - **Current extent** adds the map's extent as a polygon.
 - **Clear** empties the area.
 
@@ -110,7 +112,8 @@ rustgis-cli run --cmd 'stac.search={"collections":"sentinel-2-c1-l2a","intersect
 ```
 
 A shape is sent in the body of a `POST /search`; if the server refuses that, the search is asked
-again in the query when the shape is short enough for one. A POST search returns no usable
+again in the query when the shape is short enough for one (the pane and `stac.search` both do).
+A POST search returns no usable
 `"next"` address: raise `"limit"` or narrow the search to see more. RustGIS says when the answer
 shows that more items match than were loaded, but a server that gives neither a count nor a next
 link can't be told from one with no more.

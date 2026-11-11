@@ -22,7 +22,7 @@ pub const MAX_BUFFER_M: f64 = 1_000_000.0;
 fn area_cmd(s: &mut Session, p: &Value) -> CmdResult {
     let geometries = match ps(p, "path").map(str::trim).filter(|x| !x.is_empty()) {
         Some(path) => from_file(s, path)?,
-        None => selected(s, p)?,
+        None => selected_noted(s, p)?,
     };
     let area = merged(s, &geometries, p)?.ok_or("there is no point, line or polygon to search with")?;
     Ok(json!({"intersects": area::to_geojson(&area.geometry), "positions": area::positions(&area.geometry), "ignored": area.ignored}))
@@ -44,8 +44,15 @@ fn read_geometries(path: &str) -> Result<(Vec<Geometry>, Vec<String>), String> {
     if ds.features.len() > area::MAX_FEATURES {
         return Err(format!("{path} has more than {} features: simplify it or use a bounding box", area::MAX_FEATURES));
     }
-    let messages = report.messages.into_iter().map(|m| format!("{path}: {m}")).collect();
-    Ok((ds.features.iter().filter_map(|f| f.geometry.clone()).collect(), messages))
+    let mut messages: Vec<String> = report.messages.into_iter().map(|m| format!("{path}: {m}")).collect();
+    let geometries: Vec<Geometry> = ds.features.iter().filter_map(|f| f.geometry.clone()).collect();
+    if geometries.len() < ds.features.len() {
+        messages.push(format!(
+            "{path}: {} feature(s) have no geometry and are left out of the search area",
+            ds.features.len() - geometries.len()
+        ));
+    }
+    Ok((geometries, messages))
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -78,8 +85,8 @@ pub fn merge_loaded(geometries: &[Geometry], mut notices: Vec<String>) -> Result
 }
 
 /// The geometries of the selected features of the layer `p` names (`layer`, default the active
-/// layer): a copy, so the merge can run off the session's thread.
-pub fn selected_geometries(s: &Session, p: &Value) -> Result<Vec<Geometry>, String> {
+/// layer): a copy, so the merge can run off the session's thread, with what was left out of it.
+pub fn selected_geometries(s: &Session, p: &Value) -> Result<(Vec<Geometry>, Vec<String>), String> {
     selected(s, p)
 }
 
@@ -129,8 +136,18 @@ fn notes(area: &Area) -> Vec<String> {
     out
 }
 
-/// The selected features' geometries of the layer `p` names.
-fn selected(s: &Session, p: &Value) -> Result<Vec<Geometry>, String> {
+/// [`selected`], saying what it left out.
+fn selected_noted(s: &mut Session, p: &Value) -> Result<Vec<Geometry>, String> {
+    let (geometries, notes) = selected(s, p)?;
+    for n in notes {
+        s.warn(n);
+    }
+    Ok(geometries)
+}
+
+/// The selected features' geometries of the layer `p` names, and a notice for the selected rows
+/// that have none (a feature without geometry, or a row the layer no longer has).
+fn selected(s: &Session, p: &Value) -> Result<(Vec<Geometry>, Vec<String>), String> {
     let id = s.layer_id(p)?;
     let layer = s.map().layer(id).ok_or("no such layer")?;
     if layer.selection.is_empty() {
@@ -140,7 +157,17 @@ fn selected(s: &Session, p: &Value) -> Result<Vec<Geometry>, String> {
     if layer.selection.len() > area::MAX_FEATURES {
         return Err(format!("more than {} features are selected: select fewer or use a bounding box", area::MAX_FEATURES));
     }
-    Ok(layer.selection.iter().filter_map(|row| layer.dataset.features.get(*row)).filter_map(|f| f.geometry.clone()).collect())
+    let geometries: Vec<Geometry> =
+        layer.selection.iter().filter_map(|row| layer.dataset.features.get(*row)).filter_map(|f| f.geometry.clone()).collect();
+    let mut notes = Vec::new();
+    if geometries.len() < layer.selection.len() {
+        notes.push(format!(
+            "{}: {} selected feature(s) have no geometry and are left out of the search area",
+            layer.name,
+            layer.selection.len() - geometries.len()
+        ));
+    }
+    Ok((geometries, notes))
 }
 
 /// The search area of GeoJSON given as `intersects`, or of the selection when it is `"selection"`
@@ -148,7 +175,7 @@ fn selected(s: &Session, p: &Value) -> Result<Vec<Geometry>, String> {
 pub fn from_params(s: &mut Session, p: &Value) -> Result<Option<Area>, String> {
     let geometries = match p.get("intersects") {
         None | Some(Value::Null) => return Ok(None),
-        Some(Value::String(v)) if v.trim().eq_ignore_ascii_case("selection") => selected(s, p)?,
+        Some(Value::String(v)) if v.trim().eq_ignore_ascii_case("selection") => selected_noted(s, p)?,
         Some(v @ Value::Object(_)) => area::geometries_of_geojson(v)?,
         Some(_) => return Err("intersects is GeoJSON (a geometry, a feature or a collection of features), or \"selection\"".into()),
     };
@@ -156,6 +183,9 @@ pub fn from_params(s: &mut Session, p: &Value) -> Result<Option<Area>, String> {
 }
 
 /// Merges geometries, widens them by `buffer`, and says what was left out.
+/// The merges and the buffer have no Cancel check. Each merge limits its input and output to
+/// [`area::MAX_POSITIONS`] positions. The buffer distance is limited to [`MAX_BUFFER_M`], but the
+/// buffer has no limit on its vertices before the merge that follows it.
 fn merged(s: &mut Session, geometries: &[Geometry], p: &Value) -> Result<Option<Area>, String> {
     let unit = ps(p, "unit");
     let metres = match p.get("buffer") {

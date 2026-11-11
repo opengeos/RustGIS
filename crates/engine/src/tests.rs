@@ -40932,4 +40932,24 @@ fn stac_search_by_shape_says_what_it_leaves_out() {
     assert!(e.contains("/no/such/file.geojson"), "{e}");
     let e = s.run("stac.area", &json!({"layer": "nowhere"})).unwrap_err();
     assert!(e.contains("nowhere"), "{e}");
+
+    // A selected feature without geometry is counted, once, and the rest still make the area.
+    s.run(
+        "layer.addDataText",
+        &json!({"fileName": "gaps.geojson", "text": json!({"type": "FeatureCollection", "features": [
+        {"type": "Feature", "properties": {}, "geometry": {"type": "Point", "coordinates": [7.5, 46.5]}},
+        {"type": "Feature", "properties": {}, "geometry": null},
+        {"type": "Feature", "properties": {}, "geometry": null}]}).to_string()}),
+    )
+    .unwrap();
+    let id = s.map().layer_by_name("gaps").unwrap().id;
+    s.map_mut().layer_mut(id).unwrap().selection = vec![0, 1, 2];
+    let r = s.run("stac.area", &json!({"layer": "gaps"})).unwrap();
+    assert_eq!(r["intersects"], json!({"type": "Point", "coordinates": [7.5, 46.5]}));
+    assert_eq!(said(&s, "2 selected feature(s) have no geometry"), 1);
+    // Only the features with geometry selected: nothing to say.
+    s.map_mut().layer_mut(id).unwrap().selection = vec![0];
+    let before = said(&s, "have no geometry");
+    s.run("stac.area", &json!({"layer": "gaps"})).unwrap();
+    assert_eq!(said(&s, "have no geometry"), before);
 }

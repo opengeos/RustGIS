@@ -30,8 +30,10 @@ type Answer = Slot<Result<Vec<u8>, String>>;
 enum Asked {
     /// An API's collections, by the address as typed.
     Collections(String),
-    /// A search, by its address (which the answer's links are resolved against).
-    Search(String),
+    /// A search, by its address (which the answer's links are resolved against), and the same
+    /// search as a GET in the address when it went as a POST and fits in one: asked if the server
+    /// refuses the POST.
+    Search(String, Option<String>),
     /// A token for an asset that needs signing: the token service's address, the asset's and the
     /// layer's name and saved connection, captured when Add was requested.
     Token { token_url: String, href: String, name: String, connection: Option<String> },
@@ -185,6 +187,9 @@ pub struct State {
     /// The footprints layer of the last search.
     footprints: Option<u32>,
     waiting: Option<(Asked, Answer)>,
+    /// Whether `api` came from a document's links (an opened item or collection) rather than from
+    /// the user: a request body goes to such an address only on the internet.
+    api_from_document: bool,
     pub error: Option<String>,
     pub info: Option<String>,
 }
@@ -224,6 +229,7 @@ impl Default for State {
             thumbs: Default::default(),
             footprints: None,
             waiting: None,
+            api_from_document: false,
             error: None,
             info: None,
         }
@@ -255,7 +261,14 @@ fn post_service(app: &mut RustGisApp, url: &str, body: String) -> Answer {
         Ok(url) => {
             let slot: Answer = Slot::default();
             let land = slot.clone();
-            cache::post_json_named(&url, body, Box::new(move |r| *land.lock().unwrap_or_else(|e| e.into_inner()) = Some(r)));
+            let done = Box::new(move |r| *land.lock().unwrap_or_else(|e| e.into_inner()) = Some(r));
+            // The API the user typed or picked may be on their own network; one that a document
+            // named (an opened item's or collection's root link) is internet only.
+            if app.ui.stac.api_from_document {
+                cache::post_json(&url, body, done);
+            } else {
+                cache::post_json_named(&url, body, done);
+            }
             slot
         }
         Err(e) => Slot::new(std::sync::Mutex::new(Some(Err(crate::connectionui::translated(&e))))),
@@ -362,6 +375,15 @@ pub fn poll(app: &mut RustGisApp, ctx: &egui::Context) {
         return;
     };
     let Some((asked, _)) = app.ui.stac.waiting.take() else { return };
+    // A server that refuses a POST search is asked again in the address, when the shape fits.
+    if let Asked::Search(_, Some(get)) = &asked
+        && r.is_err()
+    {
+        let get = get.clone();
+        let slot = fetch_service(app, &get);
+        app.ui.stac.waiting = Some((Asked::Search(get, None), slot));
+        return;
+    }
     let st = &mut app.ui.stac;
     st.error = None;
     let previous = st.info.take();
@@ -374,7 +396,7 @@ pub fn poll(app: &mut RustGisApp, ctx: &egui::Context) {
             }
             Err(e) => st.error = Some(e),
         },
-        Asked::Search(url) => match r.and_then(|b| Ok((stac::parse_items(&b, &url)?, stac::parse_matched(&b)))) {
+        Asked::Search(url, _) => match r.and_then(|b| Ok((stac::parse_items(&b, &url)?, stac::parse_matched(&b)))) {
             Ok(((items, next), matched)) => {
                 let n = items.len().to_string();
                 st.info = Some(match matched.filter(|m| *m as usize > items.len()) {
@@ -643,6 +665,7 @@ fn landed_link(app: &mut RustGisApp, url: &str, r: Result<Vec<u8>, String>) {
                 let found = api.is_some();
                 if let Some(api) = api {
                     app.ui.stac.api = api;
+                    app.ui.stac.api_from_document = true;
                 }
                 app.ui.stac.info = Some(i18n::fmt("Item {id}", &[("id", &item.id)]));
                 if !found {
@@ -657,6 +680,7 @@ fn landed_link(app: &mut RustGisApp, url: &str, r: Result<Vec<u8>, String>) {
             let found = api.is_some();
             if let Some(api) = api {
                 app.ui.stac.api = api;
+                app.ui.stac.api_from_document = true;
             }
             app.ui.stac.collection = id.chars().take(200).collect();
             app.ui.stac.info = Some(i18n::fmt("Collection {id}: choose dates and Find Items", &[("id", &app.ui.stac.collection)]));
@@ -755,6 +779,7 @@ pub fn title(app: &RustGisApp) -> &'static str {
 /// way from it (a catalog walk among them), wherever the switch comes from.
 pub(crate) fn switch_api(st: &mut State, url: &str) {
     st.api = url.to_string();
+    st.api_from_document = false;
     drop_listing(st);
 }
 
@@ -770,7 +795,7 @@ fn drop_listing(st: &mut State) {
     st.children.clear();
     // What Save as Connection would keep: listed again before it is offered.
     st.listed.clear();
-    if st.waiting.as_ref().is_some_and(|(a, _)| matches!(a, Asked::Collections(_) | Asked::Search(_) | Asked::Children(_))) {
+    if st.waiting.as_ref().is_some_and(|(a, _)| matches!(a, Asked::Collections(_) | Asked::Search(..) | Asked::Children(_))) {
         st.waiting = None;
     }
     st.walk = None;
@@ -830,6 +855,7 @@ pub fn dialog(app: &mut RustGisApp, ui: &mut egui::Ui) {
                 .on_hover_text(tl!("Catalog"));
             // A catalog typed in is browsed with Browse, from its top.
             if ui.add(egui::TextEdit::singleline(&mut st.api).desired_width(ui.available_width().max(80.0))).changed() {
+                st.api_from_document = false;
                 drop_listing(st);
             }
         });
@@ -1240,9 +1266,9 @@ fn push_part(app: &mut RustGisApp, g: Geometry) {
 /// The selected features of the active layer, merged on a thread of their own.
 fn add_selected(app: &mut RustGisApp) {
     match rustgis_engine::cmd::stac_area::selected_geometries(&app.session, &json!({})) {
-        Ok(geometries) => {
+        Ok((geometries, notes)) => {
             let what = tl!("the selected features").to_string();
-            start_loading(app, what, move || rustgis_engine::cmd::stac_area::merge_loaded(&geometries, Vec::new()));
+            start_loading(app, what, move || rustgis_engine::cmd::stac_area::merge_loaded(&geometries, notes));
         }
         Err(e) => app.ui.stac.error = Some(e),
     }
@@ -1473,18 +1499,20 @@ fn find_items(app: &mut RustGisApp) {
     let request = api.and_then(|api| {
         let s = search?;
         if s.intersects.is_some() {
-            Ok((stac::search_post_url(&api), Some(stac::search_body(&s)?.to_string())))
+            // The same search as a GET, when its shape fits in an address.
+            let get = stac::search_url(&api, &s).ok();
+            Ok((stac::search_post_url(&api), Some(stac::search_body(&s)?.to_string()), get))
         } else {
-            Ok((stac::search_url(&api, &s)?, None))
+            Ok((stac::search_url(&api, &s)?, None, None))
         }
     });
     match request {
-        Ok((url, body)) => {
+        Ok((url, body, get)) => {
             let slot = match body {
                 Some(body) => post_service(app, &url, body),
                 None => fetch_service(app, &url),
             };
-            app.ui.stac.waiting = Some((Asked::Search(url), slot));
+            app.ui.stac.waiting = Some((Asked::Search(url, get), slot));
         }
         Err(e) => app.ui.stac.error = Some(e),
     }
@@ -1911,5 +1939,33 @@ mod tests {
         land(&mut app, Err("no such file".into()));
         assert_eq!(app.ui.stac.parts.len(), 1);
         assert_eq!(app.ui.stac.error.as_deref(), Some("no such file"));
+    }
+
+    #[test]
+    fn a_refused_post_search_is_asked_again_in_the_address_when_it_fits() {
+        let ctx = egui::Context::default();
+        // A refused POST with a GET to fall back on asks it, once, and shows no error yet.
+        let refused: Answer = Slot::new(std::sync::Mutex::new(Some(Err("HTTP 405".to_string()))));
+        let mut app = RustGisApp::with_sample();
+        app.ui.stac.waiting =
+            Some((Asked::Search("http://127.0.0.1/search".into(), Some("http://127.0.0.1/search?limit=1".into())), refused));
+        poll(&mut app, &ctx);
+        assert!(app.ui.stac.error.is_none());
+        assert!(matches!(&app.ui.stac.waiting, Some((Asked::Search(u, None), _)) if u == "http://127.0.0.1/search?limit=1"));
+        // With no GET to try (a shape too long for an address), the refusal is shown.
+        let refused: Answer = Slot::new(std::sync::Mutex::new(Some(Err("HTTP 405".to_string()))));
+        app.ui.stac.waiting = Some((Asked::Search("http://127.0.0.1/search".into(), None), refused));
+        poll(&mut app, &ctx);
+        assert_eq!(app.ui.stac.error.as_deref(), Some("HTTP 405"));
+        assert!(app.ui.stac.waiting.is_none());
+    }
+
+    #[test]
+    fn an_api_a_document_named_is_not_one_the_user_named() {
+        let mut app = RustGisApp::with_sample();
+        assert!(!app.ui.stac.api_from_document);
+        app.ui.stac.api_from_document = true;
+        switch_api(&mut app.ui.stac, "https://example.org/stac/v1");
+        assert!(!app.ui.stac.api_from_document, "picking an API is the user's choice");
     }
 }
