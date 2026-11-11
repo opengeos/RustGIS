@@ -1454,6 +1454,19 @@ fn qgis_annotation_pictures_keep_their_aspect_on_the_map() {
         assert!((w / h - 2.0).abs() < 0.01, "{project}: {w} × {h}");
         assert!(!r["notes"].to_string().contains("whose aspect is locked"), "{r}");
     }
+    // A project in an ESRI code (Mollweide) the map takes: fitted on it, nothing noted.
+    let qgs = format!(
+        r#"<qgis><projectCrs><spatialrefsys><authid>ESRI:54009</authid></spatialrefsys></projectCrs><projectlayers>
+      <maplayer type="annotation"><id>a</id><layername>M</layername><srs><spatialrefsys><authid>EPSG:4326</authid></spatialrefsys></srs><items><item type="picture" path="base64:{b64}" lockAspect="1" xMin="8" yMin="60" xMax="9" yMax="61"/></items></maplayer></projectlayers></qgis>"#
+    );
+    let r = s.run("project.importQgis", &json!({"text": qgs})).unwrap();
+    assert!(!r["notes"].to_string().contains("whose aspect is locked"), "{r}");
+    assert!(
+        s.map()
+            .layer_by_name("M")
+            .is_some_and(|l| (0..l.dataset.features.len()).any(|r| rustgis_map::graphics::kind(&l.dataset, r) == "picture")),
+        "{r}"
+    );
 }
 
 /// A QGIS diagram reaches the layer through `style.importQgis`; categories on fields the layer

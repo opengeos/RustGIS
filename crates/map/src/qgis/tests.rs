@@ -944,7 +944,7 @@ fn annotation_defaults_and_limits() {
     assert_eq!(a[0].graphic.align, Some(TextAlign::Left));
     let said = |part: &str| report.notes.iter().any(|n| n.text.contains(part));
     assert!(said("a picture annotation that names no picture"), "{:?}", report.notes);
-    assert!(said("an annotation with a text longer, or a font"), "{:?}", report.notes);
+    assert!(said("an annotation with a text longer, a font"), "{:?}", report.notes);
 }
 
 /// An HTML text's tags are dropped (and its head, as QGIS's editor writes it), but a `<` that
@@ -965,6 +965,13 @@ fn html_annotation_texts_keep_a_lone_less_than() {
             "Hello bold\nWorld éé !",
         ),
         ("&unknown; &amp;lt;", "&unknown; &lt;"),
+        // Qt's empty paragraph is one blank line; blocks left open still break lines; table cells
+        // stay apart; a comment holding a `>` is dropped; a control character isn't text.
+        ("<p>a</p>\n<p style=\"-qt-paragraph-type:empty;\"><br /></p>\n<p>b</p>", "a\n\nb"),
+        ("<p>one<p>two<ul><li>x<li>y</ul>", "one\ntwo\nx\ny"),
+        ("<table><tr><td>a</td><td>b</td></tr></table>", "a b"),
+        ("a<!-- x > y -->b", "ab"),
+        ("bell&#7;&#+65;&#0;", "bell&#7;&#+65;&#0;"),
     ] {
         let qgs = format!(
             r#"<qgis><projectCrs><spatialrefsys><authid>EPSG:3857</authid></spatialrefsys></projectCrs><projectlayers>

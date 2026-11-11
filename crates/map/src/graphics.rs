@@ -183,7 +183,8 @@ pub const MAX_WIDTH: f64 = 50.0;
 pub const MAX_SIZE: f64 = 200.0;
 
 /// Whether [`push`] cuts something of `g` to fit: a text past [`MAX_TEXT`], a font size outside
-/// [`FONT_SIZE`], a width past [`MAX_WIDTH`] or a size past [`MAX_SIZE`].
+/// [`FONT_SIZE`], a width past [`MAX_WIDTH`], a size past [`MAX_SIZE`] or letter spacing outside
+/// [`MIN_LETTER_SPACING`]..=[`MAX_LETTER_SPACING`].
 pub fn cut(g: &Graphic) -> bool {
     let past = |v: Option<f32>, max: f64| v.is_some_and(|v| f64::from(v) > max);
     g.text.as_ref().is_some_and(|t| t.chars().nth(MAX_TEXT).is_some())

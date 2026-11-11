@@ -79,7 +79,6 @@ fn import_project(s: &mut Session, p: &Value) -> CmdResult {
     m.basemap = rustgis_map::Basemap::Blank;
     m.graticule = false;
     let degrees = project.crs.as_deref().and_then(Geographic::of);
-    let mut canvas_crs = Some("EPSG:3857");
     if let Some(crs) = &project.crs {
         let code = match crs.as_str() {
             "EPSG:3857" | "EPSG:900913" => "mercator",
@@ -92,10 +91,8 @@ fn import_project(s: &mut Session, p: &Value) -> CmdResult {
             Ok(_) if degrees.is_some_and(|g| !g.wgs84 || !g.greenwich) => {
                 let meridian = if degrees.is_some_and(|g| !g.greenwich) { ", its longitudes taken as from Greenwich" } else { "" };
                 report.approximated("", format!("the project's coordinate system {crs}, drawn in Equirectangular on WGS 84{meridian}"));
-                canvas_crs = Some("EPSG:4326");
             }
-            Ok(_) if degrees.is_some() => canvas_crs = Some("EPSG:4326"),
-            Ok(_) => canvas_crs = Some(crs.as_str()),
+            Ok(_) => {}
         }
     }
     // Bottom first, so each is added on top of the ones below it; the main annotation layer
@@ -103,9 +100,13 @@ fn import_project(s: &mut Session, p: &Value) -> CmdResult {
     let mut added = Vec::new();
     let crs = project.crs.as_deref();
     let mut pictures = Pictures::default();
-    // The coordinates the map draws in, where QGIS fits a picture whose aspect is locked: the
-    // project's, or Web Mercator where RustGIS couldn't take them (or none were named).
-    let canvas = canvas_crs.and_then(|c| rustgis_data::raster::crs::Crs::parse(c).and_then(|c| c.transformer()).ok());
+    // The coordinates the map draws in, where QGIS fits a picture whose aspect is locked (on its
+    // canvas): the map's projection as set above (Web Mercator where none was taken).
+    let canvas_def = match &s.map().projection {
+        rustgis_map::Projection::Custom(code) => rustgis_map::projection::lookup(code).ok().map(|(def, _)| def),
+        _ => Some("EPSG:3857".to_string()),
+    };
+    let canvas = canvas_def.and_then(|d| rustgis_data::raster::crs::Crs::parse(&d).and_then(|c| c.transformer()).ok());
     // Each layer added, bottom first: whether it is drawn, and, for an annotation layer, its
     // texts over all its other graphics and whether it has any such.
     let mut drawn: Vec<(String, bool, Option<Drawn>)> = Vec::new();
@@ -150,15 +151,15 @@ struct Drawn {
     others: bool,
 }
 
-/// Notes the texts of each annotation layer drawn (`drawn`: the layers added, bottom first, each
-/// with whether it is visible) that a visible layer above draws over in QGIS: RustGIS draws
+/// Notes the texts of each annotation layer (`drawn`: the layers added, bottom first, each with
+/// whether it is visible) that a visible layer above draws over in QGIS: RustGIS draws
 /// graphics layers' texts after all layers, so over it. Those already under a shape or picture
 /// of their own layer are noted with it, not again.
 fn note_texts_under_layers_above(drawn: &[(String, bool, Option<Drawn>)], report: &mut Report) {
     let mut above = false;
     for (name, visible, d) in drawn.iter().rev() {
+        // The layer noted hidden or not (shown later, it draws so); only one drawn covers it.
         if let Some(d) = d
-            && *visible
             && above
             && d.texts_on_top > 0
         {
@@ -401,18 +402,24 @@ fn add_annotations(
                         // box placed above, so it takes too unless the transform is odd there
                         // (then a picture just read isn't kept, as it is charged to nothing).
                         let on_canvas = canvas.and_then(|c| {
-                            let boxed = g.geometry.extent();
-                            let corners = [
-                                (boxed.min_x, boxed.min_y),
-                                (boxed.max_x, boxed.max_y),
-                                (boxed.min_x, boxed.max_y),
-                                (boxed.max_x, boxed.min_y),
-                            ];
-                            let on: Option<Vec<Coord>> = corners.iter().map(|&(x, y)| c.from_lonlat(Coord::new(x, y))).collect();
-                            let on = on?;
-                            let ring: Vec<Coord> = on.iter().copied().chain(on.first().copied()).collect();
-                            let fit = fitted(&rustgis_data::Geometry::Polygon(vec![vec![ring]]), size);
+                            // The placed box's own corners on the canvas (a box across ±180° is
+                            // fitted in the layer's coordinates instead).
+                            let e = g.geometry.extent();
+                            if e.max_x - e.min_x > 180.0 {
+                                return None;
+                            }
                             let failed = std::cell::Cell::new(false);
+                            let on = g.geometry.map_coords(&|p| {
+                                c.from_lonlat(p).filter(|p| p.x.is_finite() && p.y.is_finite()).unwrap_or_else(|| {
+                                    failed.set(true);
+                                    p
+                                })
+                            });
+                            if failed.get() {
+                                return None;
+                            }
+                            let fit = fitted(&on, size);
+                            failed.set(false);
                             let back = fit.map_coords(&|p| {
                                 c.to_lonlat(p).filter(|p| p.x.is_finite() && p.y.is_finite() && p.y.abs() <= 90.0).unwrap_or_else(|| {
                                     failed.set(true);
@@ -463,7 +470,7 @@ fn add_annotations(
     if fitted_in_layer > 0 {
         let what = n(fitted_in_layer, "a picture whose aspect is locked keeps it", "pictures whose aspect is locked keep it");
         report
-            .approximated(name, format!("{what} in the layer's coordinates, not on the map as QGIS keeps it, as the map's don't take it"));
+            .approximated(name, format!("{what} in the layer's coordinates, not on the map as QGIS keeps it (the map's coordinates don't take its box, or it lies across ±180°)"));
     }
     // Texts over shapes or pictures drawn after them (RustGIS draws a layer's texts last), and
     // those over all other graphics, which a layer above may cover: from what is placed.
@@ -473,7 +480,8 @@ fn add_annotations(
         texts_on_top: graphics.iter().skip(last_other.map_or(0, |i| i + 1)).filter(|g| g.kind == "text").count(),
         others: last_other.is_some(),
     };
-    if under > 0 && layer.visible {
+    // Hidden or not: shown later, it draws so.
+    if under > 0 {
         let what = n(
             under,
             "an annotation text QGIS draws under other annotations is drawn over them",

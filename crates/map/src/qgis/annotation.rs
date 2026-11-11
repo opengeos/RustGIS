@@ -245,8 +245,8 @@ impl Reading {
         if self.clamped > 0 {
             approximated(n(
                 self.clamped,
-                "an annotation with a text longer, or a font, mark or line larger, than a graphic takes, cut to it",
-                "annotations with a text longer, or a font, mark or line larger, than a graphic takes, cut to it",
+                "an annotation with a text longer, a font, mark or line larger, or letter spacing wider, than a graphic takes, cut to it",
+                "annotations with a text longer, a font, mark or line larger, or letter spacing wider, than a graphic takes, cut to it",
             ));
         }
         if self.pictures_fixed > 0 {
@@ -584,11 +584,23 @@ fn plain(html: &str) -> String {
         }
         out.push('\n');
     };
+    // A block's start or end: a line break unless one is there already (Qt writes an empty
+    // paragraph as `<p><br /></p>`, one blank line).
+    let block = |out: &mut String| {
+        if !out.is_empty() && !out.ends_with('\n') {
+            new_line(out);
+        }
+    };
     while let Some(at) = rest.find('<') {
         if hidden.is_none() {
             push_text(&mut out, rest.get(..at).unwrap_or_default());
         }
         let tail = rest.get(at..).unwrap_or_default();
+        // A comment, to its `-->` (it may hold a `>`).
+        if tail.starts_with("<!--") {
+            rest = tail.find("-->").and_then(|e| tail.get(e + 3..)).unwrap_or_default();
+            continue;
+        }
         // A tag: `<` then a letter, `/` or `!`, closed by a `>`. Any other `<` (`a < b`, or one
         // never closed) is text, kept.
         let opens = tail.chars().nth(1).is_some_and(|c| c.is_ascii_alphabetic() || c == '/' || c == '!');
@@ -615,7 +627,8 @@ fn plain(html: &str) -> String {
                     })
                 }
                 "br" => new_line(&mut out),
-                "p" | "div" | "li" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "tr" if closing => new_line(&mut out),
+                "p" | "div" | "li" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "tr" | "ul" | "ol" | "table" => block(&mut out),
+                "td" | "th" if closing => out.push(' '),
                 _ => {}
             },
         }
@@ -645,13 +658,16 @@ fn entities(text: &str) -> String {
                 "quot" => Some('"'),
                 "apos" => Some('\''),
                 "nbsp" => Some(' '),
+                // Digits only (no sign), and no control character but a line break or tab.
                 _ => name
                     .strip_prefix("#x")
                     .or_else(|| name.strip_prefix("#X"))
+                    .filter(|h| h.chars().all(|c| c.is_ascii_hexdigit()))
                     .map(|h| u32::from_str_radix(h, 16))
-                    .or_else(|| name.strip_prefix('#').map(str::parse::<u32>))
+                    .or_else(|| name.strip_prefix('#').filter(|d| d.chars().all(|c| c.is_ascii_digit())).map(str::parse::<u32>))
                     .and_then(Result::ok)
-                    .and_then(char::from_u32),
+                    .and_then(char::from_u32)
+                    .filter(|c| !c.is_control() || matches!(c, '\n' | '\t')),
             };
             c.map(|c| (c, e))
         });
