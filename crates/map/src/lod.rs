@@ -3,9 +3,9 @@
 //! A detailed layer seen whole puts many vertices in each pixel: walking them all on every frame
 //! makes panning and zooming stall. A thinned copy is simplified with Douglas–Peucker, keeping
 //! only the vertices its shape needs to stay within a set distance of the original (#1750), so
-//! the map draws from far fewer vertices and looks the same. Copies
-//! are made per level (a tolerance of 2^level projection units) on first use and kept, a few
-//! at a time; the renderer picks the level just under a device pixel at the view's zoom.
+//! the map draws from far fewer vertices and looks the same. Copies are made per level (a
+//! tolerance of 2^level projection units) on first use and kept, a few at a time; the renderer
+//! picks the level just under a device pixel at the view's zoom.
 
 use rustgis_data::{Coord, Geometry};
 
@@ -186,8 +186,10 @@ pub fn thin(g: &Geometry, tol: f64) -> Geometry {
 /// kept. Unlike distance thinning, which keeps a vertex every `tol` along a shape, it keeps only
 /// the ones its shape needs, so a detailed coastline keeps far fewer at the same error. A ring
 /// keeps its extreme vertices (so its extent) and at least a triangle (or stays whole when it has
-/// no more), so a small polygon still has an area to fill; a point the projection couldn't show
-/// (not finite) is kept, and the stretches either side of it are simplified apart. A tolerance that is not a positive number keeps `g` as it is.
+/// no more; a ring with no area keeps four of its vertices), so a small polygon still has an area
+/// to fill; a point the projection couldn't show
+/// (not finite) is kept, and the stretches either side of it are simplified apart. A tolerance
+/// that is not a positive number keeps `g` as it is.
 pub fn simplify(g: &Geometry, tol: f64) -> Geometry {
     if !tol.is_finite() || tol <= 0.0 {
         return g.clone();
@@ -241,7 +243,13 @@ fn simplify_ring(ring: &[Coord], tol: f64) -> Vec<Coord> {
             .filter(|i| !corners.contains(i))
             .filter_map(|i| ring.get(i).filter(|c| c.is_finite()).map(|c| (i, from(*c))))
             .fold(None, |best: Option<(usize, f64)>, (i, d)| if d > best.map_or(0.0, |b| b.1) { Some((i, d)) } else { best });
-        let Some((i, _)) = far else { return ring.to_vec() };
+        // Every vertex on what is kept already (a ring with no area, such as an out-and-back
+        // sliver): the kept vertices, the last repeated, rather than the whole ring.
+        let Some((i, _)) = far else {
+            let Some(&last) = corners.last() else { return ring.to_vec() };
+            corners.resize(3, last);
+            break;
+        };
         corners.push(i);
     }
     corners.sort_unstable();
@@ -578,6 +586,19 @@ mod tests {
         assert_eq!(kept.len(), 4, "{kept:?}");
         assert_eq!(kept.first(), kept.last());
         assert!(kept.contains(&Coord::new(10.0, 10.01)), "the far corner stays: {kept:?}");
+        assert!(within(&ring, kept, 1.0));
+    }
+
+    /// A ring with no area (out along a line and back) keeps four of its vertices, not all of them.
+    #[test]
+    fn an_out_and_back_ring_keeps_four_vertices() {
+        let out: Vec<Coord> = (0..=50).map(|i| Coord::new(f64::from(i), 0.0)).collect();
+        let ring: Vec<Coord> = out.iter().chain(out.iter().rev().skip(1)).copied().collect();
+        let Geometry::Polygon(p) = simplify(&Geometry::Polygon(vec![vec![ring.clone()]]), 1.0) else { panic!("a polygon") };
+        let kept = &p[0][0];
+        assert_eq!(kept.len(), 4, "{kept:?}");
+        assert_eq!(kept.first(), kept.last());
+        assert!(kept.contains(&Coord::new(50.0, 0.0)));
         assert!(within(&ring, kept, 1.0));
     }
 

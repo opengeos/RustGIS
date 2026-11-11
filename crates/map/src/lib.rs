@@ -3368,8 +3368,7 @@ mod tests {
         assert!(!r.has_class_strokes());
     }
 
-    /// A layer of one long line along the equator with `n` vertices.
-    /// A line around the equator of `n` vertices, zigzagging about 11 m either side of it, so
+    /// A layer of one line around the equator of `n` vertices, zigzagging about 11 m either side of it, so
     /// display thinning keeps every vertex zoomed in and only the ends zoomed out.
     fn long_line(n: usize) -> Layer {
         let mut d = Dataset::new("line", GeometryType::Polyline, vec![]);
