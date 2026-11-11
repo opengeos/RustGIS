@@ -4337,7 +4337,10 @@ fn count_points_on(inp: &dyn Inputs, p: &Json, threads: Option<usize>) -> Result
     let mut summarised: Vec<usize> = Vec::new();
     let point_rows = each_once(rows(inp, p, "points", pts));
     crate::control::begin(point_rows.len());
-    let threads = threads.unwrap_or_else(|| crate::parallel::threads_for(point_rows.len(), PARALLEL_FEATURES));
+    // A thread's candidate list can hold every polygon (the index scans them all when it has no
+    // grid), so that scratch bounds the threads too.
+    let cand_bytes = zones.len().saturating_mul(std::mem::size_of::<usize>());
+    let threads = threads.unwrap_or_else(|| crate::parallel::threads_for_scratch(point_rows.len(), PARALLEL_FEATURES, cand_bytes));
     for batch in point_rows.chunks(POINT_BATCH) {
         // Each point's polygons, by their place in `zones`, in the order the index gives them.
         let met_by = crate::parallel::try_map_on(batch, threads, Vec::new, |cand_buf, _, &r| {
@@ -6182,7 +6185,8 @@ const FEATURE_BATCH: usize = if cfg!(test) { 16 } else { 256 };
 /// [`spatial_join`] on `threads` threads (by the number of features in each step when `None`): the
 /// join features are converted, and each target's matches found, on their own (#1252); the rows
 /// and merge rules are then made in target order, as on one thread. Cancel is looked at, and
-/// progress counted, feature by feature.
+/// progress counted, feature by feature. An overlap that can't be measured fails the run once its
+/// batch of targets is done, at the same row on any thread count.
 fn spatial_join_on(inp: &dyn Inputs, p: &Json, threads: Option<usize>) -> Result<ToolResult, String> {
     let target = input(inp, p, "target")?;
     let join = input(inp, p, "join")?;
@@ -6306,7 +6310,10 @@ fn spatial_join_on(inp: &dyn Inputs, p: &Json, threads: Option<usize>) -> Result
     // that target's result, raised here in target order, so a threaded run fails at the same
     // row as one thread does.
     crate::control::begin(target_rows.len());
-    let target_threads = threads_for(target_rows.len());
+    // A thread's candidate list can hold every join feature (the index scans them all when it has
+    // no grid), so that scratch bounds the threads too.
+    let cand_bytes = join_geoms.len().saturating_mul(std::mem::size_of::<usize>());
+    let target_threads = threads.unwrap_or_else(|| crate::parallel::threads_for_scratch(target_rows.len(), PARALLEL_FEATURES, cand_bytes));
     for batch in target_rows.chunks(target_threads.max(1).saturating_mul(FEATURE_BATCH)) {
         let found = crate::parallel::try_map_on(batch, target_threads, Vec::new, |cand_buf, _, &tr| {
             let Some(tf) = target.features.get(tr) else { return Ok(Ok(None)) };
