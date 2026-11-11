@@ -107,7 +107,8 @@ fn import_project(s: &mut Session, p: &Value) -> CmdResult {
     let mut above = false;
     for (i, layer) in order.iter().enumerate().rev() {
         covered[i] = above;
-        above |= layer.kind != "annotation" || layer.annotations.iter().any(|a| a.graphic.kind != "text");
+        // Only a layer drawn: a hidden one covers nothing.
+        above |= layer.visible && (layer.kind != "annotation" || layer.annotations.iter().any(|a| a.graphic.kind != "text"));
     }
     for (layer, covered) in order.into_iter().zip(covered) {
         let result = if layer.kind == "annotation" {
@@ -265,6 +266,13 @@ fn add_layer(s: &mut Session, layer: &qgis::ProjectLayer, has_dir: bool, report:
 /// system (else the project's, `project_crs`) to longitude/latitude, its pictures read from their
 /// files (a relative one only with the project's folder, `has_dir`), its opacity, blending and
 /// scale range from its style. What can't be placed or read is noted.
+///
+/// On the thread that runs the import, as the import's other layers are: like opening a project,
+/// it adds layers to the session as it goes, and no part of it runs on its own yet. Its work is
+/// bounded: at most [`MAX_PICTURE_BYTES`] of pictures an import (each file at most what
+/// `graphics::picture` reads), each read once, and at most [`qgis::MAX_ANNOTATIONS`] items a layer
+/// placed. Running the whole import off the window, with Cancel and progress, is for the import
+/// as a whole, not this layer kind.
 fn add_annotations(
     s: &mut Session,
     layer: &qgis::ProjectLayer,
@@ -291,6 +299,10 @@ fn add_annotations(
     let added = s.run_part("graphics.newLayer", &json!({"name": name}))?;
     let id = added.get("layer").and_then(Value::as_u64).and_then(|id| u32::try_from(id).ok()).ok_or("the layer wasn't added")?;
     let (mut unplaced, mut unread, mut first_error, mut over) = (0usize, 0usize, None::<String>, 0usize);
+    // Pictures fitted to their aspect in degrees, which the map draws stretched away from the
+    // equator (QGIS fits them on the screen).
+    let in_degrees = transformer.as_ref().is_some_and(|t| t.is_geographic());
+    let mut fitted_in_degrees = 0usize;
     let mut graphics = Vec::new();
     // A geometry taken to longitude/latitude; `None` where a point doesn't take.
     let place = |geometry: &rustgis_data::Geometry| {
@@ -360,6 +372,7 @@ fn add_annotations(
                             continue;
                         };
                         g.geometry = fit;
+                        fitted_in_degrees += usize::from(in_degrees);
                     }
                     pictures.bytes += b64.len();
                     g.image = Some(b64);
@@ -381,6 +394,15 @@ fn add_annotations(
                 unplaced,
                 "an annotation that doesn't take to longitude and latitude",
                 "annotations that don't take to longitude and latitude",
+            ),
+        );
+    }
+    if fitted_in_degrees > 0 {
+        let what = n(fitted_in_degrees, "a picture whose aspect is locked keeps it", "pictures whose aspect is locked keep it");
+        report.approximated(
+            name,
+            format!(
+                "{what} in degrees of longitude and latitude, not on the map as QGIS keeps it: away from the equator it looks stretched"
             ),
         );
     }

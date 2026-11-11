@@ -544,7 +544,14 @@ fn plain(html: &str) -> String {
     while let Some(at) = rest.find('<') {
         out.push_str(rest.get(..at).unwrap_or_default());
         let tail = rest.get(at..).unwrap_or_default();
-        let end = tail.find('>').map_or(tail.len(), |e| e + 1);
+        // A tag: `<` then a letter, `/` or `!`, closed by a `>`. Any other `<` (`a < b`, or one
+        // never closed) is text, kept.
+        let opens = tail.chars().nth(1).is_some_and(|c| c.is_ascii_alphabetic() || c == '/' || c == '!');
+        let Some(end) = tail.find('>').filter(|_| opens).map(|e| e + 1) else {
+            out.push('<');
+            rest = tail.get(1..).unwrap_or_default();
+            continue;
+        };
         let tag = tail.get(..end).unwrap_or_default().to_ascii_lowercase();
         if tag.starts_with("<br") || tag.starts_with("</p") || tag.starts_with("</div") {
             out.push('\n');

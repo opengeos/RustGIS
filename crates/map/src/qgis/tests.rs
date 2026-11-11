@@ -947,6 +947,30 @@ fn annotation_defaults_and_limits() {
     assert!(said("an annotation with a text longer, or a font"), "{:?}", report.notes);
 }
 
+/// An HTML text's tags are dropped, but a `<` that opens no tag (`a < b`, or one never closed)
+/// is kept as text, with what follows it.
+#[test]
+fn html_annotation_texts_keep_a_lone_less_than() {
+    for (html, plain) in [
+        ("<b>a</b> &lt; b", "a < b"),
+        ("x < 3 and y > 2", "x < 3 and y > 2"),
+        ("1 <2 <b>bold</b>", "1 <2 bold"),
+        ("left<br>right", "left\nright"),
+        ("never closed <b", "never closed <b"),
+    ] {
+        let qgs = format!(
+            r#"<qgis><projectCrs><spatialrefsys><authid>EPSG:3857</authid></spatialrefsys></projectCrs><projectlayers>
+      <maplayer type="annotation"><id>a</id><layername>N</layername><items>
+        <item type="pointtext" text="{}" x="1" y="2"><pointTextFormat><text-style allowHtml="1"/></pointTextFormat></item>
+      </items></maplayer></projectlayers></qgis>"#,
+            html.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+        );
+        let mut report = Report::default();
+        let p = read_project(&qgs, "", &mut report).unwrap();
+        assert_eq!(p.layers[0].annotations[0].graphic.text.as_deref(), Some(plain), "{html}");
+    }
+}
+
 /// A text QGIS draws under a shape (a lower z) is drawn over it, as RustGIS draws a layer's texts
 /// last: noted, with how many. A text on top, or a layer of texts only, isn't noted.
 #[test]

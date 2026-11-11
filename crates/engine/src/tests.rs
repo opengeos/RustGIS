@@ -1387,6 +1387,35 @@ fn qgis_annotation_texts_under_layers_above_are_noted() {
         .collect();
     let under = |l: &str| notes.iter().any(|(layer, t)| layer == l && t.contains("layers above draw over in QGIS"));
     assert!(under("bottom") && !under("top") && !under("shapes"), "{notes:?}");
+
+    // The marker layer hidden: it covers nothing, and nothing is noted.
+    let tree = r#"<layer-tree-group><layer-tree-layer id="top" checked="Qt::Checked"/><layer-tree-layer id="shapes" checked="Qt::Unchecked"/><layer-tree-layer id="bottom" checked="Qt::Checked"/></layer-tree-group>"#;
+    let hidden = qgs.replace("<projectlayers>", &format!("{tree}<projectlayers>"));
+    let r = s.run("project.importQgis", &json!({"text": hidden})).unwrap();
+    let texts: Vec<&str> = r["notes"].as_array().unwrap().iter().filter_map(|n| n["text"].as_str()).collect();
+    assert!(!texts.iter().any(|t| t.contains("layers above draw over in QGIS")), "{texts:?}");
+}
+
+/// A picture whose aspect is locked, in a layer in degrees, is fitted in degrees: noted, as the
+/// map draws it stretched away from the equator.
+#[test]
+fn qgis_annotation_pictures_fitted_in_degrees_are_noted() {
+    let mut s = world();
+    let png =
+        std::fs::read(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../map/testdata/qgis/generated/data/picture.png")).unwrap();
+    let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, png);
+    let qgs = |crs: &str, lock: &str| {
+        format!(
+            r#"<qgis><projectCrs><spatialrefsys><authid>{crs}</authid></spatialrefsys></projectCrs><projectlayers>
+      <maplayer type="annotation"><id>a</id><layername>P</layername><items><item type="picture" path="base64:{b64}" lockAspect="{lock}" xMin="8" yMin="47" xMax="9" yMax="48"/></items></maplayer></projectlayers></qgis>"#
+        )
+    };
+    let noted = |s: &mut Session, crs: &str, lock: &str| {
+        let r = s.run("project.importQgis", &json!({"text": qgs(crs, lock)})).unwrap();
+        r["notes"].as_array().unwrap().iter().any(|n| n["text"].as_str().is_some_and(|t| t.contains("keeps it in degrees")))
+    };
+    assert!(noted(&mut s, "EPSG:4326", "1"));
+    assert!(!noted(&mut s, "EPSG:4326", "0"), "not locked: stretched in QGIS too");
 }
 
 /// A QGIS diagram reaches the layer through `style.importQgis`; categories on fields the layer
