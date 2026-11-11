@@ -1377,3 +1377,39 @@ fn a_cancelled_read_stops_between_objects() {
     assert_eq!(probe.total.load(Ordering::Relaxed), 5);
     assert_eq!(read("model.city.json", &bytes, None).unwrap()[0].0.features.len(), 5);
 }
+
+/// A geometry instance is its template placed by its matrix at its reference point, with the
+/// template's heights placed too. One whose matrix isn't 16 numbers, whose template is missing, or
+/// whose template can't be read is its reference point, and said; a template that can't be read is
+/// said once, not for each instance.
+#[test]
+fn an_instance_is_its_template_placed() {
+    let instance = |template: usize, matrix: Json| {
+        json!({"type": "SolitaryVegetationObject", "geometry": [
+            {"type": "GeometryInstance", "template": template, "boundaries": [0], "transformationMatrix": matrix}]})
+    };
+    let twice = json!([2, 0, 0, 0, 0, 2, 0, 0, 0, 0, 2, 0, 0, 0, 0, 1]);
+    let objects = json!({
+        "tree": instance(0, twice.clone()),
+        "short": instance(0, json!([1, 0, 0])),
+        "missing": instance(5, twice.clone()),
+        "broken": instance(1, twice.clone()),
+        "broken again": instance(1, twice),
+    });
+    let mut root: Json = serde_json::from_slice(&doc(json!([[5, 5, 1]]), objects)).unwrap();
+    let cube = json!([[0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0], [0, 0, 1], [1, 0, 1], [1, 1, 1], [0, 1, 1]]);
+    root["geometry-templates"] = json!({"templates": [
+        {"type": "Solid", "lod": "2", "boundaries": box_shell()},
+        {"type": "MultiSurface", "lod": "2", "boundaries": [[[0, 1, 99]]]},
+    ], "vertices-templates": cube});
+    let out = read("m.city.json", root.to_string().as_bytes(), None).unwrap();
+    let placed = &out.iter().find(|(d, _)| d.geometry_type == GeometryType::Polygon).expect("the placed tree").0;
+    assert_eq!(placed.features.len(), 1);
+    assert!((area(geometry(placed, 0)) - 4.0).abs() < 1e-9, "{:?}", geometry(placed, 0));
+    let Some(Geometry::Polygon(polys)) = geometry(placed, 0) else { panic!("a polygon") };
+    assert!(polys[0][0].iter().all(|c| (5.0..=7.0).contains(&c.x) && (5.0..=7.0).contains(&c.y)), "at its reference point");
+    assert_eq!(value(placed, 0, "z_min"), crate::Value::Float(1.0));
+    assert_eq!(value(placed, 0, "z_max"), crate::Value::Float(3.0));
+    assert!(says(&out, "4 geometry instances are drawn as a point"), "{:?}", messages_of(&out));
+    assert!(says(&out, "1 geometries of city objects have vertex indexes that can't be read"), "{:?}", messages_of(&out));
+}

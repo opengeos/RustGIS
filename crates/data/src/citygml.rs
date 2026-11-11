@@ -27,23 +27,40 @@
 //! nesting and node count are bounded as every XML reader's are, no DTD is read, and the faces
 //! merged are bounded.
 //!
-//! A geometry given by a link (`xlink:href`, `#` and a `gml:id`) to one written in its member, as a
-//! solid's faces are to its walls' and roof's polygons, is read where the link stands, after what
-//! its object writes out, and links a ground surface makes first: a geometry the object holds
-//! already at that level of detail isn't read again, but as the ground when a ground surface links
-//! to one read as another face, and through links each one is read at most once per object and
-//! level, so a cycle of links ends. What links read in a member is bounded by the member's size.
+//! A geometry given by a link (`xlink:href`, `#` and a `gml:id`), as a solid's faces are to its
+//! walls' and roof's polygons, is read where the link stands, after what its object writes out, and
+//! links a ground surface makes first: a geometry the object holds already at that level of detail
+//! isn't read again, but as the ground when a ground surface links to one read as another face, and
+//! through links each one is read at most once per object and level, so a cycle of links ends. One
+//! written in another member is found by the index, which notes where each element with a `gml:id`
+//! lies when the file holds links: it is copied, with the namespaces and dimension around it, into a
+//! document parsed beside the member, and the links in it are followed in turn. What a member's
+//! links read is bounded by the member's size, and what links copy and read from other members by
+//! the file's. A geometry that can't be read is said once, whichever object or link reads it first.
 //!
-//! Not read, and said: geometries given by a link to another member, another file or nothing, or
-//! to what isn't a geometry; objects, thematic surfaces and openings given only by a link; rings,
-//! a line's or ring's points and curves, and an oriented curve's base curve given by one; terrain
-//! intersection curves,
-//! implicit geometries placed by their matrix (drawn at their reference point), appearances,
+//! An implicit geometry (`ImplicitGeometry`) is its prototype (`relativeGMLGeometry`, written in
+//! place or given by a link), placed by its matrix at its reference point (OGC 12-019 §8.3), in the
+//! file's axis order: the prototype is read once, in its own system, and placed for each instance,
+//! the points placed in all as many as the file could write out.
+//!
+//! A part, a group's member or a group's parent given by a link (`consistsOfBuildingPart`,
+//! `groupMember`, a `CityObjectGroup`'s `parent`) makes the objects it names a child and its parent,
+//! as if one were written in the other, once every member is read; the link is kept as an attribute
+//! too.
+//!
+//! Not read, and said: geometries given by a link to another file or nothing, to what isn't a
+//! geometry, or to one where this reader draws nothing (an appearance's, a terrain intersection's);
+//! a prototype's geometry linked from outside its implicit geometry, and links inside a prototype;
+//! thematic surfaces and openings given only by a link; rings, a line's or ring's points and curves,
+//! and an oriented curve's base curve given by one; terrain intersection curves; an implicit
+//! geometry whose prototype is in another file (`libraryObject`) or whose matrix isn't 16 numbers
+//! with `0 0 0 1` last (drawn at its reference point); a group member's role; appearances,
 //! addresses, TIN reliefs, and the properties of thematic surfaces and openings (a name, generic
 //! attributes); curve arcs and splines are read as straight lines. CityGML 3.0 is refused.
 
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet, hash_map::Entry};
+use std::rc::Rc;
 
 use quick_xml::Reader;
 use quick_xml::errors::SyntaxError;
@@ -64,10 +81,10 @@ pub const HEAD_BYTES: usize = 64 * 1024;
 /// root declaring huge ones, with many members, would have them copied and parsed again for each.
 const WRAP_BUDGET: usize = 1 << 30;
 
-/// How many times over its own size, in bytes, a member's links may read: a geometry a link points
-/// to is read once per object that links to it, so many objects linking to one large geometry (a
-/// long `posList` as much as many elements) can't make a member's reading grow as their number
-/// times its size.
+/// How many times over its own size, in bytes, a member's links may read, and the file's links copy
+/// and read from other members: a geometry a link points to is read once per object that links to
+/// it, so many objects linking to one large geometry (a long `posList` as much as many elements)
+/// can't make reading grow as their number times its size.
 const LINK_READS: usize = 4;
 
 /// The namespace every CityGML version's core namespace starts with.
@@ -169,10 +186,15 @@ fn read_with(file_name: &str, bytes: &[u8], given: Option<Crs>, keep_named: bool
         .system
         .as_deref()
         .is_some_and(|n| known_system(horizontal(n)).is_some_and(|crs| lat_first(n, crs) && given.is_none_or(|g| g.epsg() == crs.epsg())));
-    let mut reading = Reading { budget: MAX_FILE_FACES, swap, ..Reading::default() };
+    // What links copy from other members and read there is bounded by the file's size, as what a
+    // member's links read is by the member's; the points implicit geometries place, by as many as
+    // the file could write out ([`POINT_BYTES`]).
+    let (link_bytes, placing) = (text.len().saturating_mul(LINK_READS), text.len() / POINT_BYTES);
+    let mut reading = Reading { budget: MAX_FILE_FACES, swap, link_bytes, placing, ..Reading::default() };
     reading.said.appearances = index.appearances;
     reading.said.links = index.links;
-    let mut wrapped = String::new();
+    reading.said.repeated_geometry_ids = index.repeated;
+    let (mut wrapped, mut far) = (String::new(), Vec::new());
     let mut wrap_left = text.len().saturating_mul(4).max(WRAP_BUDGET);
     // Counted a member at a time, and stopped between members when its run is cancelled (in the
     // desktop app's background read); the index before is one pass over the text, with no check.
@@ -202,8 +224,8 @@ fn read_with(file_name: &str, bytes: &[u8], given: Option<Crs>, keep_named: bool
         wrapped.push_str(member);
         wrapped.push_str(close);
         wrapped.push_str("</m>");
-        let opts = ParsingOptions { allow_dtd: false, nodes_limit: crate::io::XML_NODES, ..ParsingOptions::default() };
-        let Ok(doc) = crate::xml::parse(&wrapped, opts) else {
+        reading.wrap_at = (start, wrapped.len() - member.len() - close.len() - "</m>".len());
+        let Ok(doc) = crate::xml::parse(&wrapped, options()) else {
             reading.counts.skipped += 1;
             continue;
         };
@@ -214,8 +236,25 @@ fn read_with(file_name: &str, bytes: &[u8], given: Option<Crs>, keep_named: bool
         if only_link(&member) {
             reading.said.links += 1;
         }
-        let mut targets = Targets::of(doc.root_element(), linked);
-        reading.said.repeated_geometry_ids += targets.repeated;
+        // The geometries its links point to in other members, copied and parsed beside it, each on
+        // its own: one that can't be parsed leaves the links to it pointing to nothing, and said so.
+        let copied = if linked {
+            copy_far(&index, text, start..end, doc.root_element(), &mut reading.link_bytes, &mut far)
+        } else {
+            far.clear();
+            Copied::default()
+        };
+        // Each copy, with where in the file its geometry is written and where in the copy it starts:
+        // what an element of it is known by ([`Reading::place_of`]).
+        let far_docs: Vec<_> = far.iter().filter_map(|(at, copy)| Some((*at, crate::xml::parse(copy, options()).ok()?))).collect();
+        reading.copies = far_docs
+            .iter()
+            .map(|(at, d)| {
+                let from = elements(d.root_element()).next().and_then(|w| elements(w).next()).map_or(0, |g| g.range().start);
+                (std::ptr::from_ref(d).addr(), (*at, from))
+            })
+            .collect();
+        let mut targets = Targets::of(doc.root_element(), far_docs.iter().map(|(_, d)| d.root_element()), linked, copied);
         for object in elements(member) {
             match local(&object) {
                 "Appearance" => reading.said.appearances += 1,
@@ -227,7 +266,8 @@ fn read_with(file_name: &str, bytes: &[u8], given: Option<Crs>, keep_named: bool
             }
         }
     }
-    let Reading { counts, built, rows, reach, said, .. } = reading;
+    let Reading { counts, mut built, rows, reach, mut said, relations, .. } = reading;
+    said.object_links += relate(&mut built, relations);
     let mut notes = Vec::new();
     let crs = coordinate_system(file_name, given, named, &reach, &mut notes)?;
     if let Some(other) = &index.other {
@@ -271,6 +311,153 @@ struct Index {
     links: usize,
     /// The file ends before its root closes: what came after is left out.
     cut: bool,
+    /// The file holds links (`href`): only then are its elements with a `gml:id` indexed.
+    linked: bool,
+    /// The elements of its members with a `gml:id`, by id, the first of an id given twice: where a
+    /// link from another member finds what it points to.
+    spots: HashMap<Box<str>, Spot>,
+    /// Geometries a link may point to whose `gml:id` an earlier element of a member has too.
+    repeated: usize,
+    /// The namespace declarations around the elements in `spots`, written as attributes: each set
+    /// once, shared by the elements it stands around.
+    contexts: Vec<String>,
+}
+
+/// Where an element with a `gml:id` lies in the text, what it is, and what its text alone loses of
+/// where it stands.
+struct Spot {
+    start: usize,
+    /// None while it is open, for one the file is cut inside, and for one whose declarations
+    /// couldn't be kept ([`Scopes::left`]): a link to it finds nothing.
+    end: Option<usize>,
+    kind: Kind,
+    /// The namespaces declared around it in its member, the innermost of a prefix declared twice:
+    /// its place in [`Index::contexts`].
+    declarations: usize,
+    /// The `srsDimension` its nearest ancestor in its member gives, written as an attribute.
+    dim: Option<Box<str>>,
+}
+
+/// What a link finds at a `gml:id`.
+#[derive(Clone, Copy, PartialEq)]
+enum Kind {
+    /// A geometry a link reads where it stands.
+    Geometry,
+    /// A geometry in an implicit geometry's prototype (`relativeGMLGeometry`), read only placed.
+    Prototype,
+    /// Anything else: an object, a surface, a ring, or a geometry where this reader draws nothing.
+    Other,
+}
+
+/// An element open in a member, while the file has links.
+struct Open {
+    depth: usize,
+    /// Its `gml:id`, when it is the first element with it: its end is noted when it closes.
+    id: Option<Box<str>>,
+    /// The namespaces declared where its children stand: its place in [`Scopes::stack`], which it
+    /// took itself (`own`, given back when it closes) when it declares some.
+    scope: usize,
+    own: bool,
+    /// The `srsDimension` its children stand in, written as an attribute.
+    dim: Option<Box<str>>,
+    /// It is in a prototype, or where this reader draws nothing (its own name included).
+    prototype: bool,
+    undrawn: bool,
+}
+
+/// The namespaces declared inside the root around the elements being indexed, a set for each
+/// element that declares some, nested as they are.
+struct Scopes {
+    stack: Vec<Scope>,
+    /// Bytes the sets may still take, copied as they nest and written out for the elements in them:
+    /// past it, a link to an element in a set that couldn't be made finds nothing, and is said, so
+    /// crafted declarations can't make indexing grow as their number times their size.
+    left: usize,
+}
+
+/// One set of namespaces declared inside the root.
+#[derive(Default)]
+struct Scope {
+    /// Each by its key, with its attribute as written and whether it binds GML's namespace.
+    pairs: Vec<(String, String, bool)>,
+    /// The prefixes bound to GML's namespace, the root's among them, at most [`GML_PREFIXES`]:
+    /// shared, as most sets keep their parent's.
+    gml: Rc<[String]>,
+    /// Its place in [`Index::contexts`], once an element with a `gml:id` in it is noted.
+    context: Option<usize>,
+    /// Past what the sets may take: an element in it can't be copied.
+    spent: bool,
+}
+
+impl Scopes {
+    /// The set an element's own declarations make inside `parent`'s, or none when it makes none.
+    fn within(&mut self, parent: usize, e: &BytesStart) -> Option<Scope> {
+        let mine: Vec<(String, String, bool)> = e
+            .attributes()
+            .flatten()
+            .filter(|a| a.key.into_inner() == "xmlns" || a.key.into_inner().starts_with("xmlns:"))
+            .map(|a| {
+                let key = a.key.into_inner().to_string();
+                let written = written_attribute(&key, &a.value);
+                let ns = a.normalized_value(quick_xml::XmlVersion::Implicit1_0).unwrap_or(a.value);
+                (key, written, gml_namespace(ns.trim()))
+            })
+            .collect();
+        if mine.is_empty() {
+            return None;
+        }
+        let around = self.stack.get(parent)?;
+        let size = |pairs: &[(String, String, bool)]| pairs.iter().map(|(k, w, _)| k.len() + w.len()).sum::<usize>();
+        let cost = size(&around.pairs) + size(&mine) + around.gml.iter().map(String::len).sum::<usize>();
+        if around.spent || cost > self.left {
+            // Its ids are still found by the root's prefixes; what is in it can't be copied.
+            let gml = self.stack.first().map_or_else(|| Rc::from([]), |r| Rc::clone(&r.gml));
+            return Some(Scope { gml, spent: true, ..Scope::default() });
+        }
+        self.left -= cost;
+        let mut pairs = around.pairs.clone();
+        let mut gml: Vec<String> =
+            around.gml.iter().filter(|g| !mine.iter().any(|(k, _, _)| k.strip_prefix("xmlns:") == Some(g.as_str()))).cloned().collect();
+        for (key, written, is_gml) in mine {
+            if is_gml
+                && gml.len() < GML_PREFIXES
+                && let Some(prefix) = key.strip_prefix("xmlns:")
+            {
+                gml.push(prefix.to_string());
+            }
+            match pairs.iter_mut().find(|(k, _, _)| *k == key) {
+                Some(pair) => *pair = (key, written, is_gml),
+                None => pairs.push((key, written, is_gml)),
+            }
+        }
+        Some(Scope { pairs, gml: gml.into(), context: None, spent: false })
+    }
+
+    /// The place in `contexts` of a set's declarations, written once for all the elements in it;
+    /// none past what the sets may take.
+    fn context(&mut self, at: usize, contexts: &mut Vec<String>) -> Option<usize> {
+        let scope = self.stack.get_mut(at)?;
+        if scope.context.is_some() || scope.spent {
+            return scope.context;
+        }
+        let written: String = scope.pairs.iter().map(|(_, w, _)| w.as_str()).collect();
+        if written.len() > self.left {
+            scope.spent = true;
+            return None;
+        }
+        self.left -= written.len();
+        contexts.push(written);
+        scope.context = Some(contexts.len() - 1);
+        scope.context
+    }
+}
+
+/// An `srsDimension` as written, for the elements a copy wraps. A value no dimension is that long
+/// is kept as one that can't be read, as it can't where it is written.
+fn written_dim(e: &BytesStart) -> Option<Box<str>> {
+    let a = e.attributes().flatten().find(|a| a.key.into_inner() == "srsDimension")?;
+    let value = if a.value.len() <= 16 { &*a.value } else { "?" };
+    Some(written_attribute("srsDimension", value).into())
 }
 
 fn position(reader: &Reader<&[u8]>) -> usize {
@@ -295,14 +482,123 @@ fn root_namespace<'a>(e: &'a BytesStart) -> Option<Cow<'a, str>> {
     Some(a.normalized_value(quick_xml::XmlVersion::Implicit1_0).unwrap_or(a.value))
 }
 
+/// An attribute as written, quoted again with a quote its value doesn't hold, after a space.
+fn written_attribute(key: &str, value: &str) -> String {
+    let quote = if value.contains('"') { '\'' } else { '"' };
+    format!(" {key}={quote}{value}{quote}")
+}
+
+/// Most prefixes for GML's namespace an element's `gml:id` is looked for by, while indexing: past
+/// them, an id under another isn't indexed, and a link to it from another member finds nothing, so
+/// crafted declarations can't make every element's look grow with their number.
+const GML_PREFIXES: usize = 8;
+
+/// The prefixes an element declares for GML's namespace, at most [`GML_PREFIXES`].
+fn gml_prefixes(e: &BytesStart) -> Vec<String> {
+    e.attributes()
+        .flatten()
+        .filter_map(|a| {
+            let prefix = a.key.into_inner().strip_prefix("xmlns:")?;
+            let ns = a.normalized_value(quick_xml::XmlVersion::Implicit1_0).unwrap_or(a.value);
+            gml_namespace(ns.trim()).then(|| prefix.to_string())
+        })
+        .take(GML_PREFIXES)
+        .collect()
+}
+
+/// An element's `gml:id`, by the prefixes bound to GML where it stands, trimmed; a blank one is none.
+fn start_id(e: &BytesStart, gml: &[String]) -> Option<String> {
+    let a = e.attributes().flatten().find(|a| a.key.into_inner().strip_suffix(":id").is_some_and(|p| gml.iter().any(|g| g == p)))?;
+    let value = a.normalized_value(quick_xml::XmlVersion::Implicit1_0).unwrap_or(a.value);
+    Some(value.trim().to_string()).filter(|id| !id.is_empty())
+}
+
+/// Whether a name is one a link where a geometry belongs may point to: a GML geometry, a solid's
+/// shell, a surface's patch, an oriented curve, or an implicit geometry.
+fn linkable_name(name: &str) -> bool {
+    GEOMETRIES.contains(&name) || matches!(name, "Shell" | "PolygonPatch" | "OrientableCurve" | "GeometricComplex" | "ImplicitGeometry")
+}
+
+/// Whether an element holds what this reader doesn't draw: an appearance, a terrain intersection
+/// curve, a TIN relief. A link to a geometry in one isn't followed.
+fn undrawn(name: &str) -> bool {
+    matches!(name, "appearance" | "appearanceMember" | "Appearance" | "TINRelief") || name.ends_with("TerrainIntersection")
+}
+
 impl Index {
+    /// Notes an element of a member, while the file has links: where it lies when it has a `gml:id`,
+    /// and what its children stand in. `base` is the set of namespaces the member stands in (its
+    /// `featureMembers`'s, or none but the root's).
+    fn spot(
+        &mut self,
+        e: &BytesStart,
+        (start, end): (usize, usize),
+        empty: bool,
+        depth: usize,
+        base: usize,
+        scopes: &mut Scopes,
+        open: &mut Vec<Open>,
+    ) {
+        let name = e.local_name().into_inner();
+        let (around, dim, prototype, hidden) =
+            open.last().map_or((base, None, false, false), |o| (o.scope, o.dim.clone(), o.prototype, o.undrawn));
+        let kind = match () {
+            _ if hidden || undrawn(name) || !linkable_name(name) => Kind::Other,
+            _ if prototype => Kind::Prototype,
+            _ => Kind::Geometry,
+        };
+        // Its own declarations hold for its own `gml:id`, and for its children.
+        let mine = scopes.within(around, e);
+        let gml = mine.as_ref().or(scopes.stack.get(around)).map_or(&[][..], |s| &s.gml[..]);
+        let mut first = None;
+        if let Some(id) = start_id(e, gml) {
+            match self.spots.entry(id.into()) {
+                Entry::Vacant(v) => {
+                    // What its text alone loses: the declarations around it and the dimension its
+                    // nearest ancestor gives. Past what declarations may take, it can't be copied:
+                    // a link to it finds nothing.
+                    let context = scopes.context(around, &mut self.contexts);
+                    first = (context.is_some() && !empty).then(|| v.key().clone());
+                    let end = context.and(empty.then_some(end));
+                    v.insert(Spot { start, end, kind, declarations: context.unwrap_or_default(), dim: dim.clone() });
+                }
+                Entry::Occupied(_) => self.repeated += usize::from(kind != Kind::Other),
+            }
+        }
+        // Nested too deep to parse, it is noted no further, and its children with it.
+        if empty || open.len() > crate::xml::MAX_DEPTH {
+            return;
+        }
+        let own = mine.is_some();
+        if let Some(scope) = mine {
+            scopes.stack.push(scope);
+        }
+        open.push(Open {
+            depth,
+            id: first,
+            scope: if own { scopes.stack.len() - 1 } else { around },
+            own,
+            dim: written_dim(e).or(dim),
+            prototype: prototype || name == "relativeGMLGeometry",
+            undrawn: hidden || undrawn(name),
+        });
+    }
+
     /// Indexes a document in one pass, building no tree. Refuses one whose root isn't a CityGML 1.0
     /// or 2.0 city model, and, unless `overridden` (a system is given in their place), one whose
     /// `srsName`s name different systems; `archive` for a member of one.
     fn of(file_name: &str, text: &str, overridden: bool, archive: bool) -> Result<Index> {
         let invalid = |e: quick_xml::Error| DataError::Format(format!("{file_name}: {e}"));
         let mut reader = Reader::from_str(text);
-        let mut index = Index { overridden, archive, ..Index::default() };
+        let mut index = Index { overridden, archive, linked: text.contains("href"), ..Index::default() };
+        // While the file has links: the namespaces declared inside the root (the root's own are
+        // written on every copy), the set the members being read stand in (`base`, their
+        // `featureMembers`'s), and the elements open in a member.
+        let mut scopes = Scopes { stack: Vec::new(), left: text.len() };
+        let (mut base, mut open) = (0, Vec::<Open>::new());
+        // The depth of the prototype being read (`relativeGMLGeometry`): its system is its own, not
+        // the file's.
+        let mut prototype: Option<usize> = None;
         // Open elements, and whether the root has been seen.
         let (mut depth, mut rooted) = (0usize, false);
         // The member being read: where it starts, and the depth its end tag brings back.
@@ -333,6 +629,17 @@ impl Index {
                 Event::Empty(e) => (e, true),
                 Event::End(_) => {
                     depth = depth.saturating_sub(1);
+                    if prototype == Some(depth) {
+                        prototype = None;
+                    }
+                    if let Some(closed) = open.pop_if(|o| o.depth == depth) {
+                        if closed.own {
+                            scopes.stack.pop();
+                        }
+                        if let Some(spot) = closed.id.and_then(|id| index.spots.get_mut(id.as_ref())) {
+                            spot.end = Some(position(&reader));
+                        }
+                    }
                     if let Some((start, _)) = member.filter(|&(_, at)| at == depth) {
                         member = None;
                         index.members.push((start, position(&reader), holder));
@@ -342,6 +649,8 @@ impl Index {
                     }
                     if depth == 1 {
                         holder = None;
+                        scopes.stack.truncate(1);
+                        base = 0;
                     }
                     continue;
                 }
@@ -355,9 +664,15 @@ impl Index {
                 rooted = true;
                 check_root(file_name, e)?;
                 index.namespaces = declarations(e);
+                scopes.stack.push(Scope { gml: gml_prefixes(e).into(), ..Scope::default() });
             }
-            if let Some(srs) = start_attribute(e, "srsName").filter(|s| !s.trim().is_empty()) {
+            if prototype.is_none()
+                && let Some(srs) = start_attribute(e, "srsName").filter(|s| !s.trim().is_empty())
+            {
                 index.see_system(file_name, srs.trim())?;
+            }
+            if prototype.is_none() && !empty && e.local_name().into_inner() == "relativeGMLGeometry" {
+                prototype = Some(depth);
             }
             match (depth, holder) {
                 (1, _) => match e.local_name().into_inner() {
@@ -371,9 +686,13 @@ impl Index {
                     "featureMembers" if empty => index.links += usize::from(start_attribute(e, "href").is_some()),
                     "featureMembers" => {
                         index.links += usize::from(start_attribute(e, "href").is_some());
-                        let open = text.get(start..position(&reader)).unwrap_or_default().to_string();
-                        index.holders.push((open, format!("</{}>", e.name().into_inner())));
+                        let tag = text.get(start..position(&reader)).unwrap_or_default().to_string();
+                        index.holders.push((tag, format!("</{}>", e.name().into_inner())));
                         holder = Some(index.holders.len() - 1);
+                        if let Some(scope) = scopes.within(0, e) {
+                            scopes.stack.push(scope);
+                            base = scopes.stack.len() - 1;
+                        }
                     }
                     "appearanceMember" => index.appearances += 1,
                     _ => {}
@@ -389,6 +708,9 @@ impl Index {
                     }
                 }
                 _ => {}
+            }
+            if index.linked && member.is_some() {
+                index.spot(e, (start, position(&reader)), empty, depth, base, &mut scopes, &mut open);
             }
             if !empty {
                 depth += 1;
@@ -472,12 +794,17 @@ fn declarations(e: &BytesStart) -> String {
     for a in e.attributes().flatten() {
         let key = a.key.into_inner();
         if key == "xmlns" || key.starts_with("xmlns:") {
-            // As written, so entities stay as they were; quoted with what the value doesn't hold.
-            let quote = if a.value.contains('"') { '\'' } else { '"' };
-            out.push_str(&format!(" {key}={quote}{}{quote}", a.value));
+            // As written, so entities stay as they were.
+            out.push_str(&written_attribute(key, &a.value));
         }
     }
     out
+}
+
+/// How a member, or a copy of another member's geometry, is parsed: no DTD, and no more nodes than
+/// any XML the app reads.
+fn options<'i>() -> ParsingOptions<'i> {
+    ParsingOptions { allow_dtd: false, nodes_limit: crate::io::XML_NODES, ..ParsingOptions::default() }
 }
 
 fn elements<'a, 'i>(n: Node<'a, 'i>) -> impl Iterator<Item = Node<'a, 'i>> {
@@ -530,12 +857,22 @@ fn is_geometry(g: &Node) -> bool {
 }
 
 /// Whether a link where a geometry belongs points to one this reader reads there: a GML geometry,
-/// a solid's shell, a surface's patch, an oriented curve, or an implicit geometry (drawn at its
-/// reference point as one written out is). Not an envelope, a ring's curve or a segment.
+/// a solid's shell, a surface's patch, an oriented curve, or an implicit geometry (placed as one
+/// written out is). Not an envelope, a ring's curve or a segment.
 fn linkable(n: &Node) -> bool {
-    local(n) == "ImplicitGeometry"
-        || is_geometry(n)
-        || (is_gml(n) && matches!(local(n), "Shell" | "PolygonPatch" | "OrientableCurve" | "GeometricComplex"))
+    local(n) == "ImplicitGeometry" || (is_gml(n) && linkable_name(local(n)))
+}
+
+/// Whether an element stands where this reader draws nothing ([`undrawn`]): a link to it isn't
+/// followed.
+fn undrawn_at(n: &Node) -> bool {
+    n.ancestors().skip(1).any(|a| undrawn(local(&a)))
+}
+
+/// Whether an element is in an implicit geometry's prototype, in its own system: only its implicit
+/// geometries place it.
+fn in_prototype(n: &Node) -> bool {
+    n.ancestors().skip(1).any(|a| local(&a) == "relativeGMLGeometry")
 }
 
 /// Whether a line or ring holds a point or curve given only by a link, so it isn't whole.
@@ -664,22 +1001,32 @@ fn value(p: &Node) -> Option<Json> {
 /// What this reader leaves out that the others don't meet, for one notice per kind.
 #[derive(Default, Clone)]
 struct Said {
-    /// Geometries whose coordinates can't be read, or that lack a part they need.
+    /// Geometries whose coordinates can't be read, or that lack a part they need: each written one
+    /// once, whichever object or link reads it first, and a solid whose exterior is a link to one.
     bad_coordinates: usize,
     /// Geometries and objects given only by a link that isn't followed: a geometry's to another
-    /// member, another file or nothing, and any to an object, a thematic surface or opening, a ring,
-    /// a line's or ring's point or curve, or an oriented curve's base curve.
+    /// file, nothing, or a member that can't be parsed; a thematic surface's or opening's, a ring's,
+    /// a line's or ring's point or curve's, an oriented curve's base curve's, a member's, and any in
+    /// a prototype.
     links: usize,
-    /// Links where a geometry belongs to an element of the member that isn't one.
+    /// Links where a geometry belongs to an element that isn't one, or to a geometry this reader
+    /// doesn't read there: one where it draws nothing (an appearance's, a terrain intersection's) or
+    /// a prototype's outside its implicit geometry.
     not_geometry_links: usize,
-    /// Links to geometries not followed because the member's links had read what they may.
+    /// Links to geometries not followed because the member's links, or the file's, had read what
+    /// they may.
     links_past_limit: usize,
     /// Objects with no id, holding parts that can't name them as their parent.
     anonymous: usize,
     /// Objects whose id another object has too.
     repeated_ids: usize,
-    /// Geometries in a member with links whose `gml:id` an earlier element there has too.
+    /// Geometries, in a file with links, whose `gml:id` an earlier element of a member has too.
     repeated_geometry_ids: usize,
+    /// Links that would make one object another's part (`consistsOfBuildingPart`, `groupMember`, a
+    /// group's `parent`) naming no other object of the file, or made by an object with no id.
+    object_links: usize,
+    /// Group members with a role in their group (`role`), which isn't kept.
+    group_roles: usize,
     terrain_intersections: usize,
     appearances: usize,
     /// Curves with arcs or splines, read as straight lines through their points.
@@ -732,14 +1079,14 @@ impl Said {
         say(
             self.not_geometry_links,
             format!(
-                "{} links (xlink:href) where a geometry belongs point to an element that isn't a geometry, and are left out",
+                "{} links (xlink:href) where a geometry belongs point to an element that isn't a geometry, or to a geometry where nothing is drawn (a terrain intersection, an appearance) or that only an implicit geometry places, and are left out",
                 self.not_geometry_links
             ),
         );
         say(
             self.links_past_limit,
             format!(
-                "{} links (xlink:href) to geometries aren't followed, as they would read their city object member over many times: what they point to is left out where they stand",
+                "{} links (xlink:href) to geometries aren't followed, as they would read their city object member, or the file, over many times: what they point to is left out where they stand",
                 self.links_past_limit
             ),
         );
@@ -757,10 +1104,18 @@ impl Said {
         say(
             self.repeated_geometry_ids,
             format!(
-                "{} geometries have a gml:id an earlier element of their city object member has too: a link to that id reads the first",
+                "{} geometries have a gml:id an earlier element of the file has too: a link to that id reads the one in its city object member, or else the first",
                 self.repeated_geometry_ids
             ),
         );
+        say(
+            self.object_links,
+            format!(
+                "{} links between city objects (consistsOfBuildingPart, groupMember, a group's parent) name no other city object of the file, or are made by one with no gml:id: the link is kept as an attribute, but no parent is",
+                self.object_links
+            ),
+        );
+        say(self.group_roles, format!("{} members of groups (groupMember) have a role in their group, which isn't kept", self.group_roles));
         say(
             self.terrain_intersections,
             format!(
@@ -817,37 +1172,120 @@ impl Said {
     }
 }
 
-/// The elements of a member a link can point to, by `gml:id`, and how many bytes of it its links
-/// may still read.
+/// The elements a member's links can point to, by `gml:id`, and how many bytes of it its links may
+/// still read.
 struct Targets<'a, 'i> {
-    by_id: HashMap<&'a str, Node<'a, 'i>>,
+    /// Each with whether it is a copy of another member's, whose reading the file's budget pays for
+    /// ([`Reading::link_bytes`]). The first of an id given twice, the member's own first.
+    by_id: HashMap<&'a str, (Node<'a, 'i>, bool)>,
     budget: usize,
-    /// Geometries a link may point to whose `gml:id` an earlier element of the member has too.
-    repeated: usize,
-    /// The geometries of the member's objects whose coordinates couldn't be read, said already: a
-    /// link to one, from any of its objects, is left out without being said again.
-    failed: HashSet<Key<'a>>,
+    /// Ids of other members' geometries left uncopied, the file's links having copied what they may.
+    refused: HashSet<String>,
+    /// Ids of other members' elements that aren't a geometry a link reads.
+    elsewhere: HashSet<String>,
 }
 
 impl<'a, 'i> Targets<'a, 'i> {
-    /// A member's elements by `gml:id`, the first of an id given twice; none when it holds no link.
-    fn of(member: Node<'a, 'i>, linked: bool) -> Self {
+    /// A member's elements by `gml:id`, then those copied from other members (`far`); none when the
+    /// member holds no link.
+    fn of(member: Node<'a, 'i>, far: impl Iterator<Item = Node<'a, 'i>>, linked: bool, copied: Copied) -> Self {
         let mut by_id = HashMap::new();
-        let mut repeated = 0;
         if linked {
-            for n in member.descendants().filter(Node::is_element) {
+            let own = member.descendants().map(|n| (n, false));
+            for (n, copy) in own.chain(far.flat_map(|f| f.descendants()).map(|n| (n, true))) {
                 if let Some(id) = gml_id(&n) {
-                    match by_id.entry(id) {
-                        Entry::Vacant(v) => {
-                            v.insert(n);
-                        }
-                        Entry::Occupied(_) => repeated += usize::from(linkable(&n)),
-                    }
+                    by_id.entry(id).or_insert((n, copy));
                 }
             }
         }
-        Targets { by_id, budget: member.range().len().saturating_mul(LINK_READS), repeated, failed: HashSet::new() }
+        let Copied { refused, elsewhere } = copied;
+        Targets { by_id, budget: member.range().len().saturating_mul(LINK_READS), refused, elsewhere }
     }
+}
+
+/// What copying other members' geometries for a member's links left out.
+#[derive(Default)]
+struct Copied {
+    refused: HashSet<String>,
+    elsewhere: HashSet<String>,
+}
+
+/// The id a link to an element of the same file names (`#` and a `gml:id`), trimmed.
+fn fragment(href: &str) -> Option<&str> {
+    href.trim().strip_prefix('#').map(str::trim).filter(|id| !id.is_empty())
+}
+
+/// The ids the links in some text name, by a scan that builds no tree.
+fn hrefs_in(text: &str) -> Vec<String> {
+    let mut reader = Reader::from_str(text);
+    let mut out = Vec::new();
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(e) | Event::Empty(e)) => {
+                if let Some(id) = start_attribute(&e, "href").as_deref().and_then(fragment) {
+                    out.push(id.to_string());
+                }
+            }
+            Ok(Event::Eof) | Err(_) => return out,
+            Ok(_) => {}
+        }
+    }
+}
+
+/// Copies into `out`, each as a document of its own, the geometries a member's links point to in
+/// other members, and those their links point to in turn, so one that can't be parsed costs only
+/// the links to it. Each is in an element that carries what its text alone loses of where it
+/// stands: the namespaces declared around it, the `srsDimension` above it, and, for a prototype's,
+/// a `relativeGMLGeometry` around it; each with where it is written in the file, so it is known as
+/// the element it copies ([`Reading::place_of`]). An id the member gives
+/// an element of its own isn't copied: its links read that one. What the file's links copy is
+/// bounded by `left`, in bytes; copying, and parsing the copies, don't look at Cancel, which is
+/// looked at between members: for all members together they are bounded by that budget.
+fn copy_far(
+    index: &Index,
+    text: &str,
+    member: std::ops::Range<usize>,
+    root: Node,
+    left: &mut usize,
+    out: &mut Vec<(usize, String)>,
+) -> Copied {
+    out.clear();
+    let mut copied = Copied::default();
+    let mut taken = HashSet::new();
+    let mut queue: Vec<String> =
+        root.descendants().filter_map(|n| attribute(&n, "href")).filter_map(fragment).map(str::to_string).collect();
+    // Only a member linking to an id the index knows outside it copies anything.
+    queue.retain(|id| index.spots.get(id.as_str()).is_some_and(|spot| !member.contains(&spot.start)));
+    if queue.is_empty() {
+        return copied;
+    }
+    let own: HashSet<&str> = root.descendants().filter_map(|n| gml_id(&n)).collect();
+    while let Some(id) = queue.pop() {
+        let Some(spot) = index.spots.get(id.as_str()) else { continue };
+        if own.contains(id.as_str()) || member.contains(&spot.start) || !taken.insert(spot.start) {
+            continue;
+        }
+        let written = spot.end.and_then(|end| text.get(spot.start..end));
+        let Some(written) = written.filter(|_| spot.kind != Kind::Other) else {
+            // Not a geometry a link reads, or one the file is cut inside (as good as nothing).
+            if spot.kind == Kind::Other {
+                copied.elsewhere.insert(id);
+            }
+            continue;
+        };
+        let wrap = if spot.kind == Kind::Prototype { "relativeGMLGeometry" } else { "copied" };
+        let dim = spot.dim.as_deref().unwrap_or_default();
+        let declarations = index.contexts.get(spot.declarations).map_or("", String::as_str);
+        let cost = written.len() + declarations.len() + dim.len() + 2 * wrap.len() + index.namespaces.len() + 10;
+        if cost > *left {
+            copied.refused.insert(id);
+            continue;
+        }
+        *left -= cost;
+        queue.extend(hrefs_in(written));
+        out.push((spot.start, format!("<f{}><{wrap}{declarations}{dim}>{written}</{wrap}></f>", index.namespaces)));
+    }
+    copied
 }
 
 /// Where a geometry is read into its object: the level of detail its property names (none in a
@@ -865,19 +1303,44 @@ impl At {
     }
 }
 
+/// What a link points to: an element by its `gml:id`, or, for an implicit geometry whose prototype
+/// is written in place, that prototype.
+enum To<'a, 'i> {
+    Href(&'a str),
+    Node(Node<'a, 'i>),
+}
+
 /// A link to a geometry met while reading an object, followed once the object's own geometries
 /// are read.
 struct Pending<'a, 'i> {
-    href: &'a str,
+    to: To<'a, 'i>,
     /// What is read only when the link is found: a solid's cavities, when its exterior is a link,
     /// in the `srsDimension` where the link stands (`dim`).
     then: Vec<Node<'a, 'i>>,
     dim: Option<usize>,
     at: At,
+    /// It is a solid's exterior: the solid is lost with what it points to.
+    solid: bool,
+    /// The elements given only by a link, each with a `gml:id`, that led here: a link back to one
+    /// of them is a cycle, which ends.
+    via: Vec<&'a str>,
+    /// An implicit geometry's: where its prototype is placed.
+    place: Option<Placement>,
 }
 
 /// A geometry of an object, by its `gml:id` and the level of detail it is read at.
 type Key<'a> = (&'a str, Option<u32>);
+
+/// Why a link isn't followed, each said in its own notice.
+#[derive(Clone, Copy)]
+enum Unread {
+    /// To another file, nothing, or what the file is cut before.
+    Missing,
+    /// The member's or the file's links read what they may.
+    PastLimit,
+    /// To what isn't a geometry a link reads there.
+    NotGeometry,
+}
 
 /// One object's links: the geometries it has read, each with whether it was read as the ground, and
 /// the links left to follow, the ground's apart.
@@ -887,9 +1350,6 @@ struct Links<'a, 'i> {
     /// What `seen` took in, in order, with what it held before, so a geometry left out can take its
     /// own marks back.
     marked: Vec<(Key<'a>, Option<bool>)>,
-    /// The member's geometries whose coordinates couldn't be read ([`Targets::failed`]), lent to the
-    /// object while it is read.
-    failed: HashSet<Key<'a>>,
     ground: Vec<Pending<'a, 'i>>,
     others: Vec<Pending<'a, 'i>>,
 }
@@ -934,6 +1394,16 @@ impl<'a, 'i> Links<'a, 'i> {
     }
 }
 
+/// What a geometry being read is, so that one left out is said once: where it is written when it has a `gml:id`,
+/// whether a link reads it (and so what fails may be the link's cavities rather than it), and
+/// whether it is a solid's exterior given by a link (the solid is lost with it, and said).
+#[derive(Clone, Copy)]
+struct Root {
+    id: Option<usize>,
+    linked: bool,
+    solid: bool,
+}
+
 /// The reading of a document's objects.
 #[derive(Default)]
 struct Reading {
@@ -947,6 +1417,29 @@ struct Reading {
     swap: bool,
     /// The ids already given, for those given again.
     ids: HashSet<String>,
+    /// The geometries with a `gml:id` whose coordinates can't be read or that lack a part they need,
+    /// in any member, and those holding one, by where they are written ([`Self::place_of`]): a link
+    /// to one is left out without reading it again. By place, not by id: two geometries given one id
+    /// are two.
+    failed: HashSet<usize>,
+    /// The broken ones said already, each the innermost with an id a failure ran through: each is
+    /// said once, whichever link or object reads it first.
+    counted: HashSet<usize>,
+    /// Where the member being read starts in the file, and how many bytes its document puts before
+    /// it: what [`Self::place_of`] takes an element of it back to the file by.
+    wrap_at: (usize, usize),
+    /// The copies of other members' geometries the member being read links to, by their document:
+    /// where in the file what each copies is written, and where in the copy it starts.
+    copies: HashMap<usize, (usize, usize)>,
+    /// Bytes the file's links may still copy from other members and read there.
+    link_bytes: usize,
+    /// Points implicit geometries may still place, all their instances together.
+    placing: usize,
+    /// Prototypes read in their own system, by where they are written: none for one that can't be
+    /// read.
+    prototypes: HashMap<usize, Option<Got>>,
+    /// Links that make one object another's part (child, parent), resolved once every member is read.
+    relations: Vec<(String, String)>,
 }
 
 impl Reading {
@@ -969,7 +1462,9 @@ impl Reading {
 
     /// Reads a city object into its rows, then the objects nested in it. Its links are followed
     /// after its own geometries, with no look at Cancel: what they read is bounded by the member's
-    /// size ([`LINK_READS`]), as parsing the member is, and Cancel is looked at between members.
+    /// size ([`LINK_READS`]) and the file's, as parsing the member is, and Cancel is looked at
+    /// between members. A link that makes another object its part, or makes it a group's part, is
+    /// kept to resolve once every member is read.
     fn object<'a, 'i>(&mut self, e: Node<'a, 'i>, parent: Option<&str>, targets: &mut Targets<'a, 'i>) {
         let ty = local(&e);
         if ty == "TINRelief" {
@@ -978,13 +1473,17 @@ impl Reading {
         }
         let id = gml_id(&e);
         let mut parts = ObjectParts::default();
-        let mut links = Links { failed: std::mem::take(&mut targets.failed), ..Links::default() };
+        let mut links = Links::default();
         let mut attributes = Map::new();
         let mut children = Vec::new();
+        // The objects a group names as its parent, written in place: read as objects of their own.
+        let mut heads = Vec::new();
         let mut address = false;
         for p in elements(e) {
             let name = local(&p);
             let first = elements(p).next();
+            // A group member's role in its group isn't kept.
+            self.said.group_roles += usize::from(name == "groupMember" && attribute(&p, "role").is_some());
             if (name.ends_with("Attribute") || name == "genericAttributeSet")
                 && let Some(key) = attribute(&p, "name")
             {
@@ -1002,10 +1501,20 @@ impl Reading {
             } else if only_link(&p) && SURFACE_PROPERTIES.contains(&name) {
                 self.said.links += 1;
             } else if let Some(href) = attribute(&p, "href").filter(|_| first.is_none()) {
-                // A relation to another feature (a group's members, a generalization). A part given
-                // by a link is kept as one, and the link said: the part is read only where it is
-                // written out.
-                self.said.links += usize::from(name.starts_with("consistsOf"));
+                // A relation to another feature (a group's members, a generalization), kept as
+                // written. A part, a group's member and a group's parent also make the objects they
+                // link a child and its parent, as if written one in the other.
+                let other = fragment(href);
+                let relation = match name {
+                    _ if name.starts_with("consistsOf") || name == "groupMember" => Some((other, id)),
+                    "parent" if ty == "CityObjectGroup" => Some((id, other)),
+                    _ => None,
+                };
+                match relation {
+                    Some((Some(child), Some(parent))) => self.relations.push((child.to_string(), parent.to_string())),
+                    Some(_) => self.said.object_links += 1,
+                    None => {}
+                }
                 insert(&mut attributes, name, Json::from(href.trim()));
             } else if let Some(first) = first.filter(|f| VALUES.contains(&local(f))) {
                 // An envelope (its system is read with the others), or what is said apart.
@@ -1017,12 +1526,14 @@ impl Reading {
             } else if first.is_some_and(|f| SURFACE_PROPERTIES.contains(&name) && local(&f).starts_with(char::is_uppercase)) {
                 elements(p).for_each(|s| self.surface(&s, &mut parts, &mut links));
             } else if elements(p).any(|c| is_object(&c)) {
-                // The objects; a feature beside them with no id and no geometry is said.
+                // The objects; a feature beside them with no id and no geometry is said. A group's
+                // parent is the group's parent, not its child.
+                let up = name == "parent" && ty == "CityObjectGroup";
                 for c in elements(p) {
-                    if is_object(&c) {
-                        children.push(c);
-                    } else {
-                        self.said.not_objects += 1;
+                    match () {
+                        _ if !is_object(&c) => self.said.not_objects += 1,
+                        _ if up => heads.push(c),
+                        _ => children.push(c),
                     }
                 }
             } else if let Some(v) = value(&p) {
@@ -1037,7 +1548,6 @@ impl Reading {
         while let Some(link) = links.next() {
             self.follow(link, targets, &mut parts, &mut links);
         }
-        targets.failed = links.failed;
         self.counts.addresses += usize::from(address);
         let at_row = self.built.len();
         let made = object_rows(parts, at_row, &mut self.counts, &mut self.budget);
@@ -1061,66 +1571,183 @@ impl Reading {
         for child in children {
             self.object(child, id, targets);
         }
+        for head in heads {
+            match (id, gml_id(&head)) {
+                (Some(group), Some(parent)) => self.relations.push((group.to_string(), parent.to_string())),
+                _ => self.said.object_links += 1,
+            }
+            self.object(head, None, targets);
+        }
     }
 
-    /// Reads the geometry a link points to in its member, as if written where the link stands. A
-    /// link to another member, another file or nothing is said, as is one to what isn't a geometry.
+    /// The element a link points to, in its member or copied from another (`far`), or why it isn't
+    /// followed.
+    fn find<'a, 'i>(href: &'a str, targets: &Targets<'a, 'i>) -> std::result::Result<(&'a str, Node<'a, 'i>, bool), Unread> {
+        let id = fragment(href).ok_or(Unread::Missing)?;
+        match targets.by_id.get(id) {
+            Some(&(target, far)) => Ok((id, target, far)),
+            None if targets.refused.contains(id) => Err(Unread::PastLimit),
+            None if targets.elsewhere.contains(id) => Err(Unread::NotGeometry),
+            None => Err(Unread::Missing),
+        }
+    }
+
+    /// Pays for reading what a link points to: from the member's budget, or, for another member's,
+    /// the file's, as copying it was. False, and said, when what is left doesn't cover it.
+    fn pay(&mut self, targets: &mut Targets, far: bool, cost: usize) -> bool {
+        let left = if far { &mut self.link_bytes } else { &mut targets.budget };
+        if cost > *left {
+            self.unread(Unread::PastLimit);
+            return false;
+        }
+        *left -= cost;
+        true
+    }
+
+    /// Says a link that isn't followed.
+    fn unread(&mut self, why: Unread) {
+        match why {
+            Unread::Missing => self.said.links += 1,
+            Unread::PastLimit => self.said.links_past_limit += 1,
+            Unread::NotGeometry => self.said.not_geometry_links += 1,
+        }
+    }
+
+    /// Reads the geometry a link points to, in its member or another, as if written where the link
+    /// stands. One an implicit geometry points to is its prototype, placed ([`Self::instance`]).
     fn follow<'a, 'i>(&mut self, link: Pending<'a, 'i>, targets: &mut Targets<'a, 'i>, parts: &mut ObjectParts, links: &mut Links<'a, 'i>) {
-        let id = link.href.trim().strip_prefix('#').map(str::trim);
-        let Some((id, target)) = id.and_then(|id| targets.by_id.get(id).map(|t| (id, *t))) else {
-            self.said.links += 1;
+        if let Some(place) = link.place {
+            self.instance(link, place, targets, parts, links);
             return;
+        }
+        let Pending { to: To::Href(href), then, dim: at_link, at, solid, via, .. } = link else { return };
+        let (id, target, far) = match Self::find(href, targets) {
+            Ok(found) => found,
+            Err(why) => return self.unread(why),
         };
-        if !linkable(&target) {
-            self.said.not_geometry_links += 1;
+        // Not a geometry, one where this reader draws nothing (an appearance's), or a prototype,
+        // which only its implicit geometry places.
+        if !linkable(&target) || undrawn_at(&target) || in_prototype(&target) {
+            return self.unread(Unread::NotGeometry);
+        }
+        let place = self.place_of(&target);
+        if self.failed.contains(&place) {
+            // Said where it failed. A solid whose exterior it is lacks the part it needs, and is left
+            // out with its cavities: said too.
+            self.said.bad_coordinates += usize::from(solid);
             return;
         }
         // Read already in this object at this level of detail, written out or by another link:
-        // nothing to add.
-        let key = (id, link.at.lod);
-        if links.failed.contains(&key) {
-            // Said where it failed. A solid whose exterior it is lacks the part it needs, and is left
-            // out with its cavities.
-            self.said.bad_coordinates += usize::from(!link.then.is_empty());
+        // nothing to add. One given only by a link stands for what that link points to, which is
+        // found again, so a link it couldn't follow is said for this one too (a cycle of them ends).
+        let key = (id, at.lod);
+        let read = links.read(key, at.ground);
+        if read && then.is_empty() {
+            if only_link(&target)
+                && !via.contains(&id)
+                && let Some(next) = attribute(&target, "href")
+            {
+                let mut via = via;
+                via.push(id);
+                links.push(Pending { to: To::Href(next), then, dim: at_link, at, solid, via, place: None });
+            }
             return;
         }
-        let read = links.read(key, link.at.ground);
-        if read && link.then.is_empty() {
+        // Its bytes: what reading it parses, its elements and its coordinates' text.
+        if !self.pay(targets, far, if read { 0 } else { target.range().len() }) {
             return;
         }
-        // Its bytes in the member: what reading it parses, its elements and its coordinates' text.
-        let cost = if read { 0 } else { target.range().len() };
-        if cost > targets.budget {
-            self.said.links_past_limit += 1;
-            return;
-        }
-        targets.budget -= cost;
-        // The dimension of the geometries it is written in, not of the link's.
-        let dim = target.ancestors().skip(1).find_map(|a| attribute(&a, "srsDimension"));
-        let Pending { then, dim: at_link, .. } = link;
-        self.walk(
+        let got = self.read(
             |w| {
                 // Marks are made as it is read, inside the walk, so a walk that fails (a cavity that
                 // can't be read) takes them back, and the target is read again by its next link.
                 w.following = true;
+                w.via = via;
                 if !read {
-                    if let Some(d) = dim {
-                        let Ok(d) = d.trim().parse() else {
-                            w.failed = Some(key);
-                            return None;
-                        };
-                        w.dim = Some(d);
-                    }
+                    w.where_written(&target)?;
                     w.geometry(&target)?;
                 }
                 // The cavities are written where the link stands, in its dimension.
                 w.dim = at_link;
                 then.iter().try_for_each(|cavity| w.member(cavity))
             },
-            link.at,
-            parts,
+            at,
             links,
+            Root { id: Some(place), linked: true, solid },
         );
+        if let Some(got) = got {
+            self.add(parts, at, got);
+        }
+    }
+
+    /// Places an implicit geometry's prototype as its matrix says, at its reference point: read once
+    /// in its own system, for every instance that links to it, and placed for each. An instance
+    /// whose prototype can't be found, read or placed is drawn at its reference point, as one whose
+    /// prototype is in another file is (said with them).
+    fn instance<'a, 'i>(
+        &mut self,
+        link: Pending<'a, 'i>,
+        place: Placement,
+        targets: &mut Targets<'a, 'i>,
+        parts: &mut ObjectParts,
+        links: &mut Links<'a, 'i>,
+    ) {
+        let Pending { to, at, .. } = link;
+        let reference = |parts: &mut ObjectParts| {
+            parts.points.add_points(at.rank(), || at.lod.map(|l| l.to_string()), vec![(place.reference(), true)]);
+        };
+        let (shape, far, linked) = match to {
+            To::Node(shape) => (shape, false, false),
+            To::Href(href) => match Self::find(href, targets) {
+                // A geometry of a prototype: not one an object or a surface writes out.
+                Ok((_, shape, far)) if linkable(&shape) && local(&shape) != "ImplicitGeometry" && in_prototype(&shape) => {
+                    (shape, far, true)
+                }
+                Ok(_) => {
+                    self.unread(Unread::NotGeometry);
+                    return reference(parts);
+                }
+                Err(why) => {
+                    self.unread(why);
+                    return reference(parts);
+                }
+            },
+        };
+        // By where it is written: one read in place and through a link is one, and two given one id
+        // are two.
+        let key = self.place_of(&shape);
+        let id = gml_id(&shape).map(|_| key);
+        let placed = match self.prototypes.get(&key) {
+            Some(known) => known.as_ref().and_then(|g| g.placed(&place, &mut self.placing)),
+            None => {
+                // Read where it is written, paid for once, as a link's target is.
+                if !self.pay(targets, far, if linked { shape.range().len() } else { 0 }) {
+                    return reference(parts);
+                }
+                let got = self.read(
+                    |w| {
+                        w.local = true;
+                        w.where_written(&shape)?;
+                        w.geometry(&shape)
+                    },
+                    at,
+                    links,
+                    Root { id, linked, solid: false },
+                );
+                // Its rings of no area are said once, not for each instance.
+                self.counts.dropped_rings += got.as_ref().map_or(0, |g| g.faces.dropped_rings);
+                let placed = got.as_ref().and_then(|g| g.placed(&place, &mut self.placing));
+                self.prototypes.insert(key, got);
+                placed
+            }
+        };
+        match placed {
+            Some(placed) => {
+                placed.reach(&mut self.reach);
+                self.add(parts, at, placed);
+            }
+            None => reference(parts),
+        }
     }
 
     /// A thematic surface or an opening: its geometries' faces are its object's, the ground's when it
@@ -1157,24 +1784,28 @@ impl Reading {
     /// property given by a link is followed with the object's other links.
     fn geometry<'a, 'i>(&mut self, p: &Node<'a, 'i>, at: At, parts: &mut ObjectParts, links: &mut Links<'a, 'i>) {
         if let Some(href) = attribute(p, "href").filter(|_| only_link(p)) {
-            links.push(Pending { href, then: Vec::new(), dim: None, at });
+            links.push(Pending { to: To::Href(href), then: Vec::new(), dim: None, at, solid: false, via: Vec::new(), place: None });
             return;
         }
         let Some(g) = elements(*p).next() else { return };
-        self.walk(|w| w.geometry(&g), at, parts, links);
+        if let Some(got) =
+            self.read(|w| w.geometry(&g), at, links, Root { id: gml_id(&g).map(|_| self.place_of(&g)), linked: false, solid: false })
+        {
+            self.add(parts, at, got);
+        }
     }
 
-    /// Walks a geometry with `go` into the object's parts at `at`. The links it meets are left to
-    /// follow after the object's own geometries, unless it is left out, when they go with it.
-    fn walk<'a, 'i>(
+    /// Reads a geometry with `go`, at `at`. The links it meets are left to follow after the
+    /// object's own geometries, unless it is left out, when they go with it: then it leaves nothing
+    /// behind (no mark, no point in the file's reach, no notice of its parts) and is said once, as
+    /// `root` says.
+    fn read<'a, 'i>(
         &mut self,
         go: impl FnOnce(&mut Walk<'_, 'a, 'i>) -> Option<()>,
         at: At,
-        parts: &mut ObjectParts,
         links: &mut Links<'a, 'i>,
-    ) {
-        // The reach is the file's and no geometry's: a geometry that is left out leaves no point in it,
-        // and no link to follow.
+        root: Root,
+    ) -> Option<Got> {
         let (reach, ground, others, marked) = (self.reach, links.ground.len(), links.others.len(), links.marked.len());
         // What it says of its parts: a geometry left out is said as one, so a link that reads it
         // again doesn't say its parts again.
@@ -1188,25 +1819,52 @@ impl Reading {
             dim: None,
             instance: false,
             following: false,
-            failed: None,
+            local: false,
+            failed: Vec::new(),
+            via: Vec::new(),
             got: Got::default(),
             links,
         };
-        if go(&mut walk).is_none() {
-            // Said once: a link to the geometry that failed doesn't say it again.
-            if let Some(key) = walk.failed {
-                links.failed.insert(key);
-            }
-            self.said = said;
-            self.said.bad_coordinates += 1;
-            self.reach = reach;
-            links.ground.truncate(ground);
-            links.others.truncate(others);
-            // Its geometries weren't read: a link to one of them still reads it.
-            links.unmark(marked);
-            return;
+        let done = go(&mut walk);
+        let Walk { got, failed, .. } = walk;
+        if done.is_some() {
+            return Some(got);
         }
-        let Got { faces, surface, mut lines, points, heights, solid } = walk.got;
+        self.said = said;
+        self.reach = reach;
+        links.ground.truncate(ground);
+        links.others.truncate(others);
+        // Its geometries weren't read: a link to one of them still reads it.
+        links.unmark(marked);
+        // Said once. What a link points to failed: the geometry that can't be read is the innermost
+        // with an id the failure ran through, said by whichever object or link reads it first (with
+        // none, the one written here), and a solid whose exterior it is too. Else what the link
+        // reads where it stands failed (a solid's cavity): that solid is lost.
+        let failed: Vec<usize> = failed.iter().map(|n| self.place_of(n)).collect();
+        let lost = if root.linked && !root.id.is_some_and(|r| failed.contains(&r)) {
+            1
+        } else {
+            let broken = failed.first().map_or(1, |&at| usize::from(self.counted.insert(at)));
+            broken + usize::from(root.solid)
+        };
+        self.said.bad_coordinates += lost;
+        self.failed.extend(failed);
+        None
+    }
+
+    /// Where an element is written in the file, by its first byte: in the member being read, or in
+    /// another member when it is in a copy ([`copy_far`]).
+    fn place_of(&self, n: &Node) -> usize {
+        let r = n.range().start;
+        match self.copies.get(&std::ptr::from_ref(n.document()).addr()) {
+            Some(&(at, from)) => at.saturating_add(r).saturating_sub(from),
+            None => self.wrap_at.0.saturating_add(r).saturating_sub(self.wrap_at.1),
+        }
+    }
+
+    /// A geometry read into the object's parts at `at`.
+    fn add(&mut self, parts: &mut ObjectParts, at: At, got: Got) {
+        let Got { faces, surface, mut lines, points, heights, solid } = got;
         parts.heights.add(&heights);
         parts.solid |= solid;
         let (rank, lod) = (at.rank(), at.lod.map(|l| l.to_string()));
@@ -1224,6 +1882,41 @@ impl Reading {
     }
 }
 
+/// Makes each object a link names as another's part (or a group's member, or a group's parent) a
+/// child of that other, as if written in it: its heights then go to it. Gives the links that name
+/// no other object of the file (nothing, another file, the object itself), whose relation isn't
+/// kept. A part named by an id two objects have is the first's.
+fn relate(built: &mut [Built], relations: Vec<(String, String)>) -> usize {
+    let mut unresolved = 0;
+    let parents: Vec<(usize, String)> = {
+        let mut at: HashMap<&str, usize> = HashMap::new();
+        for (i, b) in built.iter().enumerate().filter(|(_, b)| !b.id.is_empty()) {
+            at.entry(b.id.as_str()).or_insert(i);
+        }
+        relations
+            .into_iter()
+            .filter_map(|(child, parent)| {
+                let found = at.get(child.as_str()).copied().filter(|_| child != parent && at.contains_key(parent.as_str()));
+                unresolved += usize::from(found.is_none());
+                found.map(|c| (c, parent))
+            })
+            .collect()
+    };
+    // A parent given twice (written around it and linked, or linked twice) is one: each child's
+    // parents are told apart once, so many links to one object cost their number, not its square.
+    let (mut given, mut met) = (HashSet::<(usize, String)>::new(), HashSet::new());
+    for (c, parent) in parents {
+        let Some(b) = built.get_mut(c) else { continue };
+        if met.insert(c) {
+            given.extend(b.parent_ids.iter().map(|p| (c, p.clone())));
+        }
+        if given.insert((c, parent.clone())) {
+            b.parent_ids.push(parent);
+        }
+    }
+    unresolved
+}
+
 /// What one geometry holds.
 #[derive(Default)]
 struct Got {
@@ -1237,6 +1930,42 @@ struct Got {
     /// geometry's reference point).
     heights: Vec<P3>,
     solid: bool,
+}
+
+impl Got {
+    /// A prototype read in its own system, placed; none when the instances' points left to place
+    /// (`placing`) don't cover it, or a point placed isn't a finite number. Its rings of no area were
+    /// said when it was read.
+    fn placed(&self, place: &Placement, placing: &mut usize) -> Option<Got> {
+        let f = &self.faces;
+        let size = f.rings().chain(&self.lines).map(Vec::len).sum::<usize>() + self.points.len() + self.heights.len();
+        if size > *placing {
+            return None;
+        }
+        *placing -= size;
+        let ring = |r: &Vec<P3>| r.iter().map(|p| place.place(p)).collect::<Option<Vec<P3>>>();
+        let rings = |rs: &Vec<Vec<P3>>| rs.iter().map(ring).collect::<Option<Vec<_>>>();
+        Some(Got {
+            faces: Faces {
+                faces: f.faces.iter().map(rings).collect::<Option<_>>()?,
+                ground: f.ground.clone(),
+                left_out: rings(&f.left_out)?,
+                truncated: f.truncated,
+                ground_left_out: rings(&f.ground_left_out)?,
+                dropped_rings: 0,
+            },
+            surface: self.surface,
+            lines: rings(&self.lines)?,
+            points: self.points.iter().map(|(p, reference)| Some((place.place(p)?, *reference))).collect::<Option<_>>()?,
+            heights: self.heights.iter().map(|p| place.place(p)).collect::<Option<_>>()?,
+            solid: self.solid,
+        })
+    }
+
+    /// Takes its points into the file's reach.
+    fn reach(&self, reach: &mut Reach) {
+        self.faces.rings().chain(&self.lines).flatten().chain(self.points.iter().map(|(p, _)| p)).for_each(|p| reach.add(p));
+    }
 }
 
 /// A walk through a geometry's elements. `None` when coordinates can't be read or a part a geometry
@@ -1255,8 +1984,13 @@ struct Walk<'r, 'a, 'i> {
     instance: bool,
     /// Reading what a link points to: a geometry its object has read at this level isn't read again.
     following: bool,
-    /// The innermost geometry with a `gml:id` whose coordinates couldn't be read, when one is.
-    failed: Option<Key<'a>>,
+    /// Reading a prototype in its own system: its coordinates aren't the file's (not turned
+    /// latitude first, not in its reach), no mark is made, and its links aren't followed.
+    local: bool,
+    /// The geometries with a `gml:id` a failure ran through, from the innermost out: each is lost.
+    failed: Vec<Node<'a, 'i>>,
+    /// The elements given only by a link that led to what is read ([`Pending::via`]).
+    via: Vec<&'a str>,
     got: Got,
     /// Its object's links: the geometries read, and those to follow.
     links: &'r mut Links<'a, 'i>,
@@ -1269,7 +2003,8 @@ impl<'a, 'i> Walk<'_, 'a, 'i> {
         // Read for its object at this level of detail: a link to it from there adds nothing, and
         // reached through a link once read (a linked composite of polygons read before), it isn't
         // read again. Marked before a link it is is kept, so a link to itself ends.
-        if let Some(id) = gml_id(g)
+        if !self.local
+            && let Some(id) = gml_id(g)
             && !self.links.mark((id, self.at.lod), self.at.ground)
             && self.following
         {
@@ -1277,7 +2012,7 @@ impl<'a, 'i> Walk<'_, 'a, 'i> {
         }
         // A geometry given by a link is followed once its object's own are read.
         if only_link(g) {
-            self.link(g, Vec::new());
+            self.link(g, Vec::new(), false, gml_id(g));
             return Some(());
         }
         // A geometry's `srsDimension` holds for what it holds.
@@ -1288,20 +2023,42 @@ impl<'a, 'i> Walk<'_, 'a, 'i> {
         }
         .and_then(|()| self.shape(g));
         self.dim = outer;
-        // The innermost geometry that failed is the one lost: a link to its parts still reads them.
-        if done.is_none()
-            && let Some(id) = gml_id(g)
-        {
-            self.failed.get_or_insert((id, self.at.lod));
+        // Each geometry with an id the failure runs through is lost, and a link to it isn't read
+        // again. Its parts that didn't fail aren't: a link to one still reads it.
+        if done.is_none() && gml_id(g).is_some() {
+            self.failed.push(*g);
         }
         done
     }
 
-    /// Keeps a link to a geometry to follow, and what is read only when it is found.
-    fn link(&mut self, n: &Node<'a, 'i>, then: Vec<Node<'a, 'i>>) {
-        if let Some(href) = attribute(n, "href") {
-            self.links.push(Pending { href, then, dim: self.dim, at: self.at });
+    /// Takes the dimension of the geometries an element is written in, for one read where something
+    /// else stands (a link's target, a prototype). One that can't be read fails, and the element with
+    /// it, when it has a `gml:id`.
+    fn where_written(&mut self, g: &Node<'a, 'i>) -> Option<()> {
+        if let Some(d) = g.ancestors().skip(1).find_map(|a| attribute(&a, "srsDimension")) {
+            let Ok(d) = d.trim().parse() else {
+                if gml_id(g).is_some() {
+                    self.failed.push(*g);
+                }
+                return None;
+            };
+            self.dim = Some(d);
         }
+        Some(())
+    }
+
+    /// Keeps a link to a geometry to follow, and what is read only when it is found (a solid's
+    /// cavities, when `solid`); `own` is the `gml:id` of the element given only by it. In a
+    /// prototype, links aren't followed, and are said.
+    fn link(&mut self, n: &Node<'a, 'i>, then: Vec<Node<'a, 'i>>, solid: bool, own: Option<&'a str>) {
+        let Some(href) = attribute(n, "href") else { return };
+        if self.local {
+            self.said.links += 1;
+            return;
+        }
+        let mut via = self.via.clone();
+        via.extend(own);
+        self.links.push(Pending { to: To::Href(href), then, dim: self.dim, at: self.at, solid, via, place: None });
     }
 
     fn shape(&mut self, g: &Node<'a, 'i>) -> Option<()> {
@@ -1377,7 +2134,7 @@ impl<'a, 'i> Walk<'_, 'a, 'i> {
                     // Its cavities are taken off that shell: read alone they would be drawn as
                     // footprints, so they are read only once the shell is found.
                     let cavities = elements(*g).filter(|c| local(c) == "interior").collect();
-                    self.link(&exterior, cavities);
+                    self.link(&exterior, cavities, true, None);
                 } else {
                     self.member(&exterior)?;
                     self.members(g, &["interior"], "")?;
@@ -1385,15 +2142,7 @@ impl<'a, 'i> Walk<'_, 'a, 'i> {
             }
             "CompositeSolid" | "MultiSolid" => self.members(g, &["solidMember"], "solidMembers")?,
             "MultiGeometry" | "GeometricComplex" => self.members(g, &["geometryMember", "element"], "geometryMembers")?,
-            "ImplicitGeometry" => {
-                // Placed by its matrix it is its prototype's shape; here it is its reference point.
-                let at = elements(*g).find(|c| local(c) == "referencePoint")?;
-                let point = elements(at).next()?;
-                self.instance = true;
-                let p = self.positions(&point);
-                self.instance = false;
-                self.got.points.push((*p?.first()?, true));
-            }
+            "ImplicitGeometry" => self.implicit(g)?,
             other => {
                 self.counts.unknown.insert(other.chars().take(64).collect());
             }
@@ -1401,10 +2150,54 @@ impl<'a, 'i> Walk<'_, 'a, 'i> {
         Some(())
     }
 
+    /// An implicit geometry: its prototype (`relativeGMLGeometry`), written in place or given by a
+    /// link, placed by its matrix at its reference point once its object's own geometries are read.
+    /// One whose prototype is in another file (`libraryObject`), or whose matrix isn't 16 numbers
+    /// with `0 0 0 1` last, is its reference point, with no height.
+    fn implicit(&mut self, g: &Node<'a, 'i>) -> Option<()> {
+        if self.local {
+            // A prototype's geometries are GML's: one that is an implicit geometry places nothing.
+            self.counts.unknown.insert("ImplicitGeometry in a prototype".to_string());
+            return Some(());
+        }
+        let at = elements(*g).find(|c| local(c) == "referencePoint")?;
+        let point = elements(at).next()?;
+        self.instance = true;
+        let p = self.positions(&point);
+        self.instance = false;
+        let reference = *p?.first()?;
+        let matrix = match elements(*g).find(|c| local(c) == "transformationMatrix") {
+            None => Some(vec![1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0]),
+            Some(m) => text(&m).split_ascii_whitespace().map(|v| v.parse().ok()).collect::<Option<Vec<f64>>>(),
+        };
+        // The matrix places the prototype in the file's axis order, as its reference point is
+        // written: in a file read latitude first, its first row gives the latitude, so its first two
+        // rows change places as the reference point's coordinates do.
+        let place = matrix.and_then(|mut v| {
+            if self.swap && v.len() == 16 {
+                (0..4).for_each(|k| v.swap(k, k + 4));
+            }
+            Placement::new(&v, reference)
+        });
+        let shape = elements(*g).find(|c| local(c) == "relativeGMLGeometry");
+        let to = match shape {
+            Some(rel) if only_link(&rel) => attribute(&rel, "href").map(To::Href),
+            Some(rel) => elements(rel).next().map(To::Node),
+            None => None,
+        };
+        match (place, to) {
+            (Some(place), Some(to)) => {
+                self.links.push(Pending { to, then: Vec::new(), dim: None, at: self.at, solid: false, via: Vec::new(), place: Some(place) })
+            }
+            _ => self.got.points.push((reference, true)),
+        }
+        Some(())
+    }
+
     /// The geometry a member property holds: written in place, or a link, followed later.
     fn member(&mut self, m: &Node<'a, 'i>) -> Option<()> {
         if only_link(m) {
-            self.link(m, Vec::new());
+            self.link(m, Vec::new(), false, None);
             return Some(());
         }
         elements(*m).try_for_each(|g| self.geometry(&g))
@@ -1550,9 +2343,13 @@ impl<'a, 'i> Walk<'_, 'a, 'i> {
             }
             for v in values.chunks(dim) {
                 let (a, b) = (v.first().copied()?, v.get(1).copied()?);
-                let (x, y) = if self.swap { (b, a) } else { (a, b) };
+                // A prototype's coordinates are in its own system: never latitude first, and not where
+                // the file's objects lie until placed.
+                let (x, y) = if self.swap && !self.local { (b, a) } else { (a, b) };
                 let p = [x, y, v.get(2).copied().unwrap_or(0.0)];
-                self.reach.add(&p);
+                if !self.local {
+                    self.reach.add(&p);
+                }
                 let has_height = dim == 3 && !self.instance;
                 if has_height {
                     self.got.heights.push(p);
