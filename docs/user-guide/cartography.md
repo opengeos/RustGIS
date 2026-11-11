@@ -129,10 +129,23 @@ For polygons, **No Fill** in the Symbology pane or **Style › Drawing** draws o
 It keeps each symbol's outline colour and width, including in Unique Values and Graduated Colors,
 without changing the classes. Change the outline with **Outline color** and **Outline width** in
 the Single Symbol editor, or `layer.outline` for all classes. Undo restores the previous fills;
-the colour picker's opacity control can also make a fill visible again. By command:
+the button also changes to **Restore Fill**, which puts the fills back as they were: their
+colours and opacities, the layer's own fill layers and each class's. A fill that was transparent
+before No Fill stays transparent, and a class colour, outline or label changed while No Fill is on
+is kept. Fills shown while No Fill is on (a class's fill layers, or a class colour with an
+opacity) show until No Fill is chosen again, which hides them too and keeps them for Restore Fill
+in place of what it kept for those classes. A new symbology, colour scheme or fill colour (`layer.symbology`, `layer.ramp`,
+`layer.color`), a saved style applied (`style.apply`), a QGIS style with symbols (`style.importQgis`), subtypes that symbolize the layer
+(`data.subtypes`), or fill layers in the symbol's colour for the whole layer (`layer.fillLayers`),
+turn No Fill off and draw the fills themselves, so Restore Fill is then no longer offered, and a
+notice counts the hidden fills that were dropped. On a mixed or streamed layer, where No Fill lays
+a transparent fill over the symbols, fill layers for the whole layer of any colour turn it off
+too, as they replace that fill. A project saved with No Fill on by an earlier RustGIS doesn't record the fills, so Restore Fill says what it couldn't put back.
+On a polygon layer the symbols' fills show at the default opacity; on a mixed or streamed layer the symbols keep their own opacity, and fill layers the layer or its classes had don't come back. By command:
 
 ```text
 layer.noFill={"layer":"Countries"}
+layer.restoreFill={"layer":"Countries"}
 ```
 
 A GeoJSON with mixed geometry keeps its points, lines and polygons in one layer, classified by its
@@ -519,6 +532,17 @@ Turn labels on per layer (Labeling › Labels › **Label**), then:
   Lock keeps the ones placed. The distance grows with the labels at a reference scale
   (`labels.placement={"layer": "Rivers", "position": "curved", "repeat": 144}`; `null` or `0` is
   the one at the middle).
+- **Distance from the line**: a label placed along a line (Parallel or Curved) set off it, so it
+  doesn't sit over the line it names (Labeling pane › Position › **Distance**, 0 to 200 points, with
+  **Above** or **Below**). The distance runs from the line to the text's nearest edge, and above and
+  below are as the text reads, not north and south: over a level road the label is higher on the
+  screen, beside a road read downward it is to its right. Curved, each character moves off with its
+  own part of the line, so the text keeps following it; where the line bends so tightly that the
+  characters on the inside of the bend would run into one another, the place is left out, as one
+  too sharp to curve is. Repeats and other places along the line sit off it the same way, Lock keeps
+  them where they were found along the line, and the distance grows with the labels at a reference
+  scale (`labels.placement={"layer": "Rivers", "lineOffset": 4}`; negative is below, `0` or `null`
+  on the line).
 - **Show all labels** (Labeling pane › Position): labels among the view's 20,000 highest-priority
   candidates are drawn, over the others where
   they crowd, rather than some left out (`labels.placement={"layer": "Cities", "showAll": true}`).
@@ -593,6 +617,10 @@ Turn labels on per layer (Labeling › Labels › **Label**), then:
 - **Convert** (Labeling › Map Labeling, or Layers › right-click › **Convert To Annotation**) turns a
   layer's labels into an annotation layer: one point per label, carrying its
   text in a `TEXT` field, which you can then edit, move or delete like any other features.
+  A label along a line becomes an upright point at its line's middle vertex (the end of a line
+  of two), which can be some way from where the label was drawn: its angle, curve, repeats and
+  distance from the line are left out, and the conversion says how many, and how many of them
+  belong to a class that repeats along lines (each becomes one point).
 - **Label classes** label different features differently, such as large cities in larger text.
   Each class has a SQL clause choosing its features, and its own field, text symbol, placement
   and visibility range. Each class labels every feature its clause matches, the **Default**
