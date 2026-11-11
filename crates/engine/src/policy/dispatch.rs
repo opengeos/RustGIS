@@ -730,6 +730,11 @@ impl Session {
             let spec = *self.registry.get(id).ok_or("no file completion command")?;
             return Ok(Authorized { op: CommandOp::Registered { spec, params: params.clone() }, node: r.continuation.node.clone() });
         }
+        // Every way in (a background raster or export, a read ahead) refuses a command of an
+        // extension that is off, as `Session::run` does.
+        if let Some(why) = self.extensions().blocks(id) {
+            return Err(why);
+        }
         let node = self.command_node(id, params)?;
         let node = self.admit(node)?;
         let op = match &node.op {
