@@ -626,6 +626,10 @@ pub fn prepare_world(v: sample_data::View) {
     let _ = sample_data::dataset(v);
     let _ = world_of(v);
     let _ = world_lonlat_of(v);
+    // An outline small enough to draw whole has no levels: no threads for it.
+    if outline_level(v, 0).is_none() {
+        return;
+    }
     let next = std::sync::atomic::AtomicUsize::new(0);
     let work = || {
         loop {
@@ -3728,6 +3732,8 @@ fn render_frame(
                 (None, Some(Geometry::Polygon(p))) => p,
                 _ => continue,
             };
+            // The GPU backend tessellates a country in view whole (its mesh moves with the camera,
+            // `GPU_CULL_MARGIN`): the level's fewer vertices help it, the per-part culling doesn't.
             if gpu {
                 flush_acc(pm.pixels(), &mut cmds, &mut cpu_dirty)?;
                 if mesh::collect_basemap(&mut cmds, polys, &c.extent, land, outline, ctx.ppp, map_per_px).is_ok() {
@@ -7160,7 +7166,8 @@ mod tests {
             last = n;
         }
         assert!(last * 30 < full && last < built_in, "{last} of {full}");
-        // Each part's extent is still its own (simplifying keeps the extreme vertices of a ring).
+        // Each part's extent is at most its full one (a simplified ring can lose an extreme
+        // vertex, within the tolerance).
         for (c, f) in outline_level(v, 1).unwrap().iter().zip(level0) {
             assert_eq!(c.index, f.index);
             for (a, b) in c.parts.iter().zip(&f.parts) {
