@@ -246,9 +246,14 @@ fn read_with(file_name: &str, bytes: &[u8], given: Option<Crs>, keep_named: bool
         };
         // Each copy, with where in the file its geometry is written and where in the copy it starts:
         // what an element of it is known by ([`Reading::place_of`]).
-        // Parsed together, they hold the nodes one member may: all of them alive at once, they take
-        // no more than the member could. One past that isn't parsed, as one that can't be.
-        let mut nodes = crate::io::XML_NODES;
+        // The member and its copies, all alive at once, hold together no more nodes than one member
+        // may: the copies share what the member's own document leaves. One past that isn't parsed,
+        // as one that can't be.
+        let mut nodes = if far.is_empty() {
+            0
+        } else {
+            crate::io::XML_NODES.saturating_sub(u32::try_from(doc.descendants().count()).unwrap_or(u32::MAX))
+        };
         let far_docs: Vec<_> = far
             .iter()
             .filter_map(|(at, copy)| {
@@ -1313,7 +1318,8 @@ fn hrefs_in(text: &str) -> HashSet<String> {
 /// the element it copies ([`Reading::place_of`]). An id the member gives an element of its own isn't
 /// copied: its links read that one. Nor is a prototype read already (`read`, by where it is
 /// written): many members placing one prototype read it once. What the file's links copy is
-/// bounded by `left`, in bytes, and their trees, parsed together, by the nodes one member may hold;
+/// bounded by `left`, in bytes, and their trees, parsed together, by the nodes one member may hold
+/// less those of the member's own document;
 /// copying, and parsing the copies, don't look at Cancel, which is looked at between members: for
 /// all members together they are bounded by that budget.
 fn copy_far(
