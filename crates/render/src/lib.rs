@@ -628,6 +628,10 @@ fn world_lonlat_of(wv: sample_data::View) -> &'static Vec<Geometry> {
     static W: [OnceLock<Vec<Geometry>>; sample_data::VIEW_COUNT] = [const { OnceLock::new() }; sample_data::VIEW_COUNT];
     static NONE: Vec<Geometry> = Vec::new();
     let Some(cell) = W.get(wv.index()) else { return &NONE };
+    // As `world_of`: nothing is cached until the view's countries are at hand.
+    if sample_data::dataset(wv).is_none() {
+        return &NONE;
+    }
     cell.get_or_init(|| world_of(wv).iter().map(|g| g.map_coords(&rustgis_geom::merc_to_lonlat)).collect())
 }
 
@@ -640,9 +644,14 @@ thread_local! {
 /// The built-in world outline in a custom projection's coordinates (kept per projection).
 fn world_in(flat: &rustgis_map::projection::Flat, key: &str) -> std::rc::Rc<Vec<Geometry>> {
     WORLD_IN.with(|cell| {
+        let lonlat = world_lonlat();
+        // An outline not at hand yet is drawn empty, not kept.
+        if lonlat.is_empty() {
+            return std::rc::Rc::new(Vec::new());
+        }
         cell.borrow_mut()
             .entry(format!("{}:{key}", sample_data::view().index()))
-            .or_insert_with(|| std::rc::Rc::new(world_lonlat().iter().map(|g| flat.project(g)).collect()))
+            .or_insert_with(|| std::rc::Rc::new(lonlat.iter().map(|g| flat.project(g)).collect()))
             .clone()
     })
 }
