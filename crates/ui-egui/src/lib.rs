@@ -37,6 +37,7 @@ mod editpanes;
 mod embeddingsui;
 #[cfg(not(target_arch = "wasm32"))]
 mod exportjob;
+mod extensionsui;
 mod failureui;
 mod fieldlists;
 mod fieldmenu;
@@ -115,6 +116,7 @@ mod vertexedit;
 mod webdataui;
 mod widgets;
 mod workspacepanes;
+mod worldviewui;
 mod zarrui;
 
 use rustgis_engine::cmd::service_added::Removal;
@@ -456,6 +458,20 @@ pub struct ServiceConn {
     pub error: Option<String>,
     /// A capabilities request that failed, with what the server said (#509).
     pub failure: Option<Failure>,
+    /// The filter as last typed, and when: a listing that stops short is searched whole once
+    /// typing pauses (`dialogs::SEARCH_PAUSE`), not on every key (#1577).
+    pub typed: Option<(String, web_time::Instant)>,
+    /// `service.layers` run again with the filter, over every layer read of a listing that stops
+    /// short.
+    pub search: Option<ServiceSearch>,
+}
+
+/// A search of all of a service's layers (`service.layers` with `filter`), for Add From Service.
+pub struct ServiceSearch {
+    /// The filter it was run with.
+    pub filter: String,
+    /// Its answer (the first matches, with `matched`), or why it failed.
+    pub listing: Result<Value, String>,
 }
 
 /// Add From Service's rows: the layers of a listing that match the filter, and for each the
@@ -470,6 +486,8 @@ pub struct ServiceAdded {
     pub filter: String,
     /// How many layers match the filter (the first `dialogs::SHOWN_LAYERS` are shown).
     pub matched: usize,
+    /// The rows are places in the search's answer (`ServiceConn::search`), not in the listing.
+    pub searched: bool,
     /// Each shown row: its place in the listing, and the command that removes it when it is on
     /// the map (`None`: the row says Add).
     pub rows: Vec<(usize, Option<Removal>)>,
@@ -694,9 +712,14 @@ pub struct UiState {
     pub dark_follows_system: bool,
     /// Interface language preference: a language code or `auto`.
     pub language: String,
-    /// Worldview preference for the built-in countries and world outline: `auto`, `default` or
-    /// `china`.
+    /// Worldview preference for the built-in countries and world outline: a worldview's code
+    /// (such as `default`, `chn` or `ind`), or `auto` until one is chosen (China's on a system in
+    /// mainland China, else the default).
     pub worldview: String,
+    /// How detailed a downloaded worldview is: `simplified` (the default) or `original`.
+    pub worldview_detail: String,
+    /// The worldview being downloaded.
+    pub worldview_fetch: Option<worldviewui::Fetch>,
     /// Start-up preference: what RustGIS opens with.
     pub start_with: StartWith,
     /// Whether a file holding several layers asks which to add (#934), or adds them all.
@@ -941,6 +964,8 @@ impl Default for UiState {
             dark_follows_system: true,
             language: i18n::AUTO.into(),
             worldview: i18n::AUTO.into(),
+            worldview_detail: rustgis_engine::sample::Detail::default().code().into(),
+            worldview_fetch: None,
             start_with: StartWith::Sample,
             ask_layers: true,
             reserved_shortcuts: Vec::new(),
@@ -1085,6 +1110,8 @@ pub struct RustGisApp {
     pub time: timebar::TimeBarState,
     /// The Plugin Manager and plugin downloads.
     pub plugins: pluginsui::PluginsState,
+    /// The Extensions window and the saved extension choices (#1752).
+    pub extensions: extensionsui::ExtensionsState,
     /// Help › Check for Updates.
     pub update: update::UpdateState,
     pub reports: reportpane::ReportState,
@@ -1314,6 +1341,7 @@ impl RustGisApp {
             ws: workspacepanes::WorkspaceState::default(),
             time: timebar::TimeBarState::default(),
             plugins: pluginsui::PluginsState::default(),
+            extensions: extensionsui::ExtensionsState::default(),
             update: update::UpdateState::default(),
             reports: reportpane::ReportState::default(),
             docs: docpanes::DocState::default(),
@@ -1380,11 +1408,34 @@ impl RustGisApp {
         i18n::set_current(self.chosen_lang());
         // After the language, so a notice about the saved value is in it.
         threadsui::load(&mut self);
-        // A stored value that is neither `auto` nor a known worldview means `auto`.
-        if let Some(w) = self.services.load_pref.as_ref().and_then(|load| load("worldview"))
-            && rustgis_engine::sample::Worldview::from_code(&w).is_some()
-        {
-            self.ui.worldview = w.trim().to_ascii_lowercase();
+        // A stored value that is neither `auto` nor a known worldview means `auto`; `china`, as
+        // earlier versions saved it, is China's view. One this version doesn't know (from a newer
+        // RustGIS) is said, and stays saved until another is chosen.
+        let load = |key: &str| self.services.load_pref.as_ref().and_then(|load| load(key)).map(|v| v.trim().to_ascii_lowercase());
+        let (stored, stored_detail) = (load("worldview"), load("worldview_detail"));
+        if let Some(code) = stored.filter(|c| c != i18n::AUTO) {
+            match rustgis_engine::sample::Worldview::from_code(&code) {
+                Some(w) => self.ui.worldview = w.code().to_string(),
+                None => self.session.notify(
+                    i18n::fmt(
+                        "The saved worldview '{code}' isn't one this version knows, so it is ignored until you choose one",
+                        &[("code", &code)],
+                    ),
+                    false,
+                ),
+            }
+        }
+        if let Some(code) = stored_detail {
+            match rustgis_engine::sample::Detail::from_code(&code) {
+                Some(d) => self.ui.worldview_detail = d.code().to_string(),
+                None => self.session.notify(
+                    i18n::fmt(
+                        "The saved worldview detail '{code}' isn't one this version knows; simplified borders are used",
+                        &[("code", &code)],
+                    ),
+                    false,
+                ),
+            }
         }
         self.apply_worldview();
         self.ui.start_with =
@@ -1467,6 +1518,8 @@ impl RustGisApp {
         // take_saved_look finds a saved theme only once the folder is read.
         self.load_themes();
         self.take_saved_look();
+        // Which extensions are on, before the tabs they add are looked at.
+        extensionsui::load(&mut self);
         self.ui.hidden_tabs = ribbon::current_hidden_tabs(list(self.services.load_pref.as_ref().and_then(|load| load("hidden_tabs"))));
         self.ui.quick_access = list(self.services.load_pref.as_ref().and_then(|load| load("quick_access")));
         // The browser's GeoLibre tools, loaded in an earlier visit: load them again (the runner
@@ -1893,24 +1946,17 @@ impl RustGisApp {
     /// The sample "World Atlas" project.
     pub fn with_sample() -> Self {
         // Tests don't depend on the machine's time zone and locale.
-        rustgis_engine::sample::apply_worldview(if cfg!(test) { "default" } else { i18n::AUTO });
+        rustgis_engine::sample::apply_view(if cfg!(test) { "default" } else { i18n::AUTO }, "");
         let mut s = Session::new(Project::default());
         let _ = s.run("project.sample", &Value::Null);
         s.mark_saved();
         RustGisApp::new(s)
     }
 
-    /// Applies the worldview preference; an untouched sample project's countries follow it.
+    /// Applies the worldview preference, downloading its countries if they aren't at hand; an
+    /// untouched sample project's countries follow it.
     fn apply_worldview(&mut self) {
-        use rustgis_engine::sample;
-        let before = sample::worldview();
-        // Tests don't depend on the machine's time zone and locale.
-        let pref = if cfg!(test) && self.ui.worldview == i18n::AUTO { "default" } else { self.ui.worldview.as_str() };
-        let after = sample::apply_worldview(pref);
-        if after != before {
-            sample::swap_countries(&mut self.session, before, after);
-            self.map.invalidate();
-        }
+        worldviewui::apply(self);
     }
 
     /// Reloads available theme files from the user folder, retaining built-ins when it is absent.
@@ -2829,6 +2875,10 @@ impl RustGisApp {
             // Opens the Workflows pane at a section (staying open when switching sections).
             "ui.pane.workflows" => {
                 let section = p.get("section").and_then(Value::as_str);
+                // A section of an extension that is off is refused before anything changes.
+                if let Some(why) = section.and_then(|s| analysispane::section_blocked(&self.session, s)) {
+                    return Err(why);
+                }
                 // A map pick started in another section (or before the pane closes) ends here.
                 self.workflow.pick = None;
                 match section.and_then(|s| analysispane::SECTIONS.iter().find(|x| x.0 == s)) {
@@ -2868,13 +2918,40 @@ impl RustGisApp {
                 self.map.invalidate();
             }
             "ui.worldview" => {
-                let code = p.get("worldview").and_then(Value::as_str).unwrap_or(i18n::AUTO).to_ascii_lowercase();
-                if code != i18n::AUTO && rustgis_engine::sample::Worldview::from_code(&code).is_none() {
-                    return Err(format!("unknown worldview '{code}'"));
+                // `detail` alone (a missing or null worldview) keeps the worldview; no parameters at
+                // all mean `auto`.
+                let detail_only = p.get("worldview").is_none_or(Value::is_null) && p.get("detail").is_some_and(|d| !d.is_null());
+                let code = match p.get("worldview") {
+                    _ if detail_only => None,
+                    None | Some(Value::Null) => Some(i18n::AUTO.to_string()),
+                    Some(Value::String(c)) => Some(c.trim().to_ascii_lowercase()),
+                    Some(other) => return Err(format!("worldview must be a worldview's code, not {other}")),
+                };
+                let detail = match p.get("detail") {
+                    None | Some(Value::Null) => None,
+                    Some(Value::String(d)) => Some(
+                        rustgis_engine::sample::Detail::from_code(d)
+                            .ok_or_else(|| format!("unknown worldview detail '{d}': original or simplified"))?,
+                    ),
+                    Some(other) => return Err(format!("detail must be original or simplified, not {other}")),
+                };
+                if let Some(code) = code {
+                    // Kept as the worldview's own code, so `China` and `chn` are saved alike.
+                    self.ui.worldview = if code == i18n::AUTO {
+                        code
+                    } else {
+                        let w = rustgis_engine::sample::Worldview::from_code(&code).ok_or_else(|| format!("unknown worldview '{code}'"))?;
+                        w.code().to_string()
+                    };
+                    if let Some(save) = &self.services.save_pref {
+                        save("worldview", &self.ui.worldview);
+                    }
                 }
-                self.ui.worldview = code;
-                if let Some(save) = &self.services.save_pref {
-                    save("worldview", &self.ui.worldview);
+                if let Some(d) = detail {
+                    self.ui.worldview_detail = d.code().to_string();
+                    if let Some(save) = &self.services.save_pref {
+                        save("worldview_detail", &self.ui.worldview_detail);
+                    }
                 }
                 self.apply_worldview();
             }
@@ -3173,6 +3250,9 @@ impl RustGisApp {
                     };
                 }
             }
+            "ui.extensions" => {
+                self.extensions.open = p.get("open").and_then(Value::as_bool).unwrap_or(!self.extensions.open);
+            }
             "ui.installPlugin" => pluginsui::install_from_file(self, p.get("path").and_then(Value::as_str)),
             // What a click with Explore does: identify there and show the popup.
             "ui.identify" => {
@@ -3366,6 +3446,8 @@ impl RustGisApp {
                     added: None,
                     error: None,
                     failure: None,
+                    typed: None,
+                    search: None,
                 });
             }
             "ui.importShapefile" => {
@@ -5141,6 +5223,7 @@ impl RustGisApp {
                         }
                         conn.listing = Some(v);
                         conn.added = None;
+                        conn.search = None;
                     }
                     Err(e) => conn.error = Some(e),
                 }
@@ -5298,6 +5381,7 @@ impl RustGisApp {
         connectionui::poll(self, ctx);
         connectiontree::poll(self, ctx);
         portalsui::poll(self, ctx);
+        worldviewui::poll(self, ctx);
         catalogsui::poll(self, ctx);
         opendataui::poll(self, ctx);
         embeddingsui::poll(self, ctx);
@@ -5308,6 +5392,7 @@ impl RustGisApp {
         zarrui::poll(self, ctx);
         geolibreui::poll(self, ctx);
         pluginsui::poll(self, ctx);
+        extensionsui::persist(self);
         assistantpane::poll(self, ctx);
         // A project the MCP relay, the assistant or a plugin opened or saved this frame (they run
         // on the session directly) becomes Last Project now, not a frame later the app may not
@@ -5541,6 +5626,7 @@ impl RustGisApp {
         autosave::offer(self, &ctx);
         saveprompt::show(self, &ctx);
         pluginsui::show(self, &ctx);
+        extensionsui::show(self, &ctx);
         plugindialog::show(self, &ctx);
         update::show(self, &ctx);
         showme::tick(self, &ctx);

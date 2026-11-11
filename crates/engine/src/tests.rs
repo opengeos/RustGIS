@@ -69,30 +69,103 @@ pub(crate) fn isolate_process_test(name: &str) -> bool {
 
 #[test]
 fn worldview_swaps_only_untouched_sample_countries() {
-    use sample::{Worldview, swap_countries};
+    use sample::{Detail, View, Worldview, swap_countries};
     let countries = |s: &Session| s.map().layer_by_name("Countries").unwrap().dataset.features.len();
+    // Japan's view, which no other test uses, given countries that differ from the built-in ones
+    // (every country but the first) as if downloaded.
+    let japan = View::new(Worldview::from_code("jpn").unwrap(), Detail::Original);
+    let mut fewer: Value = serde_json::from_str(sample::COUNTRIES).unwrap();
+    fewer["features"].as_array_mut().unwrap().remove(0);
     let mut s = world();
     s.mark_saved();
     let n = countries(&s);
-    // The layer holds the default countries, not China's.
-    assert!(!swap_countries(&mut s, Worldview::China, Worldview::Default));
-    assert!(swap_countries(&mut s, Worldview::Default, Worldview::China));
-    assert_ne!(countries(&s), n);
+    // Not before the view's countries are at hand.
+    assert!(!sample::ready(japan));
+    assert!(!swap_countries(&mut s, View::DEFAULT, japan));
+    sample::accept(japan, fewer.to_string().into_bytes()).unwrap();
+    assert!(sample::ready(japan));
+    // The layer holds the default countries, not Japan's.
+    assert!(!swap_countries(&mut s, japan, View::DEFAULT));
+    assert!(swap_countries(&mut s, View::DEFAULT, japan));
+    assert_eq!(countries(&s), n - 1);
     assert!(!s.dirty());
-    assert!(swap_countries(&mut s, Worldview::China, Worldview::Default));
+    assert!(swap_countries(&mut s, japan, View::DEFAULT));
     assert_eq!(countries(&s), n);
-    // Not in a project with changes, or a saved one.
+    // Not in a project with changes, or a saved one; it still holds the sample's countries (the
+    // app then says they're kept).
     s.mark_unsaved();
-    assert!(!swap_countries(&mut s, Worldview::Default, Worldview::China));
+    assert!(!swap_countries(&mut s, View::DEFAULT, japan));
+    assert!(sample::holds_countries(&s, View::DEFAULT));
+    assert!(!sample::holds_countries(&s, japan));
     s.mark_saved();
     s.path = Some("atlas.rgis".into());
-    assert!(!swap_countries(&mut s, Worldview::Default, Worldview::China));
+    assert!(!swap_countries(&mut s, View::DEFAULT, japan));
     // Not someone else's layer named Countries.
     let mut t = world();
     t.mark_saved();
     t.run("edit.deleteField", &json!({"layer": "Countries", "field": "pop_est"})).unwrap();
     t.mark_saved();
-    assert!(!swap_countries(&mut t, Worldview::Default, Worldview::China));
+    // With nothing to undo, so only the layer's own countries stop the swap.
+    t.clear_history();
+    assert!(!t.can_undo());
+    assert!(!swap_countries(&mut t, View::DEFAULT, japan));
+    assert!(!sample::holds_countries(&t, View::DEFAULT));
+}
+
+#[test]
+fn a_worldview_download_that_isnt_countries_is_refused() {
+    use sample::{Detail, View, Worldview};
+    let korea = View::new(Worldview::from_code("kor").unwrap(), Detail::Simplified);
+    for bad in [b"\xff\xfe".to_vec(), b"<html>404</html>".to_vec(), sample::CITIES.as_bytes().to_vec()] {
+        assert!(sample::accept(korea, bad).is_err());
+    }
+    assert!(!sample::ready(korea));
+    // Nor is a download over the size allowed at its detail.
+    assert!(sample::accept(korea, vec![b' '; Detail::Simplified.max_bytes() + 1]).unwrap_err().contains("more than"));
+    // Applying it before then keeps the current view and says which one was asked for.
+    assert_eq!(sample::apply_view("kor", "simplified"), korea);
+    assert_ne!(sample::view(), korea);
+    assert_eq!(sample::wanted_view("kor", "nonsense"), korea);
+    // The default is built in.
+    assert!(sample::ready(View::DEFAULT));
+    assert!(sample::download_blocking(View::DEFAULT).is_ok());
+}
+
+#[test]
+fn an_original_worldview_downloads_gzipped() {
+    use sample::{Detail, View, Worldview};
+    let gzip = |text: &[u8]| {
+        let mut out = vec![0x1f, 0x8b, 8, 0, 0, 0, 0, 0, 0, 0xff];
+        out.extend(miniz_oxide::deflate::compress_to_vec(text, 6));
+        out.extend([0; 8]);
+        out
+    };
+    // Vietnam's view, original detail, which no other test uses.
+    let v = View::new(Worldview::from_code("vnm").unwrap(), Detail::Original);
+    // Something that unpacks to more than the original detail allows is refused, not cut.
+    let huge = gzip(&vec![b' '; Detail::Original.max_bytes() + 1]);
+    assert!(sample::accept(v, huge).unwrap_err().contains("can't be unpacked"));
+    assert!(sample::accept(v, vec![0x1f, 0x8b, 8]).is_err());
+    assert!(sample::text(v).is_none());
+    sample::accept(v, gzip(sample::COUNTRIES.as_bytes())).unwrap();
+    assert_eq!(sample::text(v), Some(sample::COUNTRIES));
+    // The default worldview's original detail is a download too.
+    assert!(!sample::ready(View::new(Worldview::DEFAULT, Detail::Original)));
+}
+
+#[test]
+fn a_failed_worldview_download_doesnt_name_the_worldview_twice() {
+    use sample::{Detail, View, Worldview};
+    // Never the computer's own cache folder.
+    sample::keep_downloads(false);
+    // Greece's view, original detail, which no other test uses.
+    let v = View::new(Worldview::from_code("grc").unwrap(), Detail::Original);
+    let (tx, rx) = std::sync::mpsc::channel();
+    sample::fetch_with(v, Box::new(move |r| drop(tx.send(r))), |_, _| Err("http status: 404".to_string()));
+    let e = rx.recv_timeout(std::time::Duration::from_secs(30)).unwrap().unwrap_err();
+    // The app's notice names the worldview; the error is only why.
+    assert_eq!(e, "http status: 404");
+    assert!(sample::text(v).is_none());
 }
 
 #[test]
@@ -16855,6 +16928,81 @@ fn a_long_document_address_lists_fewer_layers() {
     let e = s.run("service.groupPlan", &json!({"url": url, "text": text})).unwrap_err();
     assert!(e.contains("an address too long to read them all"), "{e}");
     assert!(s.run("service.groupPlan", &json!({"url": "https://api.example.org/collections", "text": text})).is_ok());
+}
+
+/// `service.layers` with `filter` searches every layer read, not only the first 2000 it lists, and
+/// counts the matches (#1577: IBGE's WFS has 10,186 types, in an order that changes).
+#[test]
+fn a_filter_searches_past_the_listing() {
+    let types: String = (1..=2500)
+        .map(|i| {
+            let title = if (2101..=2103).contains(&i) { format!("Solos do Brasil {i}") } else { format!("Tipo {i}") };
+            format!("<FeatureType><Name>t:{i}</Name><Title>{title}</Title></FeatureType>")
+        })
+        .collect();
+    let caps = format!(r#"<WFS_Capabilities version="2.0.0"><FeatureTypeList>{types}</FeatureTypeList></WFS_Capabilities>"#);
+    let url = "https://wfs.example.org/wfs";
+    let mut s = Session::new(Project::default());
+    let names = |v: &Value| v["layers"].as_array().unwrap().iter().map(|l| l["name"].as_str().unwrap().to_string()).collect::<Vec<_>>();
+    // Without a filter, as before: the first 2000, and no count of matches.
+    let all = s.run("service.layers", &json!({"url": url, "text": caps})).unwrap();
+    assert_eq!((&all["count"], &all["total"]), (&json!(2000), &json!(2500)));
+    assert!(all.get("matched").is_none());
+    // Words in the title or the name, in any case, all of them: past the listing too.
+    let found = s.run("service.layers", &json!({"url": url, "text": caps, "filter": "  BRASIL solos "})).unwrap();
+    assert_eq!(names(&found), ["t:2101", "t:2102", "t:2103"]);
+    assert_eq!((&found["count"], &found["matched"], &found["total"]), (&json!(3), &json!(3), &json!(2500)));
+    assert!(found.get("listedNote").is_none() && found["notes"].as_array().unwrap().is_empty(), "{found}");
+    assert_eq!(found["layers"][0]["source_url"], all["layers"][0]["source_url"]);
+    assert_eq!(names(&s.run("service.layers", &json!({"url": url, "text": caps, "filter": "t:2500"})).unwrap()), ["t:2500"]);
+    let none = s.run("service.layers", &json!({"url": url, "text": caps, "filter": "solos nada"})).unwrap();
+    assert_eq!((&none["count"], &none["matched"]), (&json!(0), &json!(0)));
+    // More matches than a listing holds: the first 2000, said, with how many match.
+    let many = s.run("service.layers", &json!({"url": url, "text": caps, "filter": "tipo"})).unwrap();
+    assert_eq!((&many["count"], &many["matched"], &many["total"]), (&json!(2000), &json!(2497), &json!(2500)));
+    assert_eq!(many["listedNote"], "only the first 2000 of 2497 matching layers are listed; service.add takes any of them by name");
+    // A blank filter is none.
+    assert!(s.run("service.layers", &json!({"url": url, "text": caps, "filter": "  "})).unwrap().get("matched").is_none());
+}
+
+/// A search reads again the documents a listing read, so it doesn't say again what reading them
+/// says: Add From Service searches once per pause in typing, and the notices would repeat (#1577).
+/// The answer's notes still say it.
+#[test]
+fn a_search_does_not_repeat_the_listings_notice() {
+    // A landing page whose collections link doesn't get the address's token: one withheld.
+    let url = "https://collections.invalid/root?f=json&token=RGSYNTH_search";
+    let landing = r#"{"links":[{"rel":"data","type":"application/json","href":"/catalog?f=json"}]}"#;
+    let collections: Vec<Value> = (1..=3)
+        .map(|i| json!({"id": format!("c{i}"), "title": format!("C {i}"), "links": [{"rel": "items", "type": "application/geo+json", "href": format!("https://collections.invalid/collections/c{i}/items")}]}))
+        .collect();
+    let documents = json!([{"url": "https://collections.invalid/catalog?f=json", "text": json!({"collections": collections}).to_string()}]);
+    let mut s = Session::new(Project::default());
+    let withheld = |s: &Session, mark| s.notices_since(mark).iter().filter(|n| n.text.contains("didn't get its keys")).count();
+    let said = |v: &Value| v["notes"].as_array().unwrap().iter().any(|n| n.as_str().unwrap().contains("didn't get its keys"));
+    let mark = s.notice_mark();
+    let p = json!({"url": url, "type": "ogcapi", "text": landing, "documents": documents});
+    let listing = s.run("service.layers", &p).unwrap();
+    assert_eq!(withheld(&s, mark), 1, "{:?}", s.notices_since(mark));
+    assert!(said(&listing), "{listing}");
+    for filter in ["c 1", "c 2", "c"] {
+        let mut p = p.clone();
+        p["filter"] = json!(filter);
+        let found = s.run("service.layers", &p).unwrap();
+        assert!(found["matched"].as_u64().unwrap() > 0 && said(&found), "{found}");
+    }
+    assert_eq!(withheld(&s, mark), 1, "{:?}", s.notices_since(mark));
+    // A word given many times is looked for once, with the same answer.
+    let mut many = p.clone();
+    many["filter"] = json!(vec!["c"; 50_000].join(" ") + " 2");
+    let found = s.run("service.layers", &many).unwrap();
+    assert_eq!(found["matched"], 1, "{found}");
+    // A filter that isn't text is refused, not ignored.
+    for filter in [json!(["c"]), json!(5)] {
+        let mut p = p.clone();
+        p["filter"] = filter;
+        assert!(s.run("service.layers", &p).unwrap_err().contains("filter must be text"));
+    }
 }
 
 /// A layer past what RustGIS reads of a document is refused for that reason, not as absent.
