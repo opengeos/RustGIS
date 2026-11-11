@@ -9246,6 +9246,48 @@ fn dem_b64() -> String {
     base64::engine::general_purpose::STANDARD.encode(geotiff::write(&r, 0).unwrap())
 }
 
+/// A viewshed whose rays cross ground with no data says how many cells it saw across it, taken as
+/// hiding nothing, and, with bilinear heights, how many it saw with the nearest cell's height
+/// beside it; one with data everywhere says neither (see
+/// `analysis_workflows_models_scripts_and_raster_functions`).
+#[test]
+fn a_viewshed_says_what_ground_with_no_data_it_saw_across() {
+    use base64::Engine;
+    use rustgis_data::raster::{ColorHint, Crs, GeoTransform, Raster, geotiff};
+    let mut s = world();
+    // Flat ground with a column of no-data cells five cells east of the observer.
+    let gt = GeoTransform { origin_x: 10.0, origin_y: 45.04, pixel_width: 0.001, pixel_height: -0.001 };
+    let z: Vec<f32> = (0..1600).map(|i| if i % 40 == 15 { -9999.0 } else { 200.0 }).collect();
+    let r = Raster::new("holes", 40, 40, vec![z], gt, Crs::LonLat, Some(-9999.0), ColorHint::Gray, "Float32").unwrap();
+    let data = base64::engine::general_purpose::STANDARD.encode(geotiff::write(&r, 0).unwrap());
+    s.run("layer.addDataBytes", &json!({"fileName": "holes.tif", "data": data})).unwrap();
+    let dem = s.map().layers.iter().find(|l| l.is_raster()).unwrap().name.clone();
+    let at = json!({"layer": dem, "lon": 10.0105, "lat": 45.0205, "height": 2});
+    for heights in ["nearest", "bilinear"] {
+        let mark = s.notices.len();
+        let mut p = at.clone();
+        p["heights"] = json!(heights);
+        let v = s.run("analysis.viewshed", &p).unwrap();
+        let across = v["acrossNoData"].as_u64().unwrap();
+        assert!(across > 100, "{heights}: {v}");
+        let said: Vec<&str> = s.notices[mark..].iter().map(|n| n.text.as_str()).collect();
+        assert!(
+            said.iter().any(|t| t.contains(&format!("{across} cell(s) of the viewshed were seen across ground with no data"))),
+            "{heights}: {said:?}"
+        );
+        let nearest = v["readNearest"].as_u64().unwrap();
+        if heights == "nearest" {
+            assert_eq!(nearest, 0);
+        } else {
+            assert!(nearest > 100, "{v}");
+            assert!(
+                said.iter().any(|t| t.contains(&format!("{nearest} cell(s) of the viewshed were seen with the nearest cell's height"))),
+                "{said:?}"
+            );
+        }
+    }
+}
+
 #[test]
 fn analysis_workflows_models_scripts_and_raster_functions() {
     let mut s = world();
@@ -9298,12 +9340,18 @@ fn analysis_workflows_models_scripts_and_raster_functions() {
     // On the flat northern edge: everything west of the wall is in view.
     let v = s.run("analysis.viewshed", &json!({"layer": dem, "lon": 10.0055, "lat": 45.0395, "height": 2})).unwrap();
     assert!(v["visibleCells"].as_u64().unwrap() > 100, "{v}");
-    // Bilinear heights read the ground between cells; any other name is refused, saying which
-    // there are.
-    let b = s.run("analysis.viewshed", &json!({"layer": dem, "lon": 10.0055, "lat": 45.0395, "height": 2, "heights": "bilinear"})).unwrap();
-    assert!(b["visibleCells"].as_u64().unwrap() > 100, "{b}");
-    let e = s.run("analysis.viewshed", &json!({"layer": dem, "lon": 10.0055, "lat": 45.0395, "heights": "cubic"})).unwrap_err();
-    assert!(e.to_string().contains(r#"heights must be "nearest" or "bilinear", not "cubic""#), "{e}");
+    // Bilinear heights read the ground between cells: on this hill and wall they see at least
+    // what the nearest cells do (a cell nearer the top no longer stands in for the ground), and
+    // little more. Any other name, or a value that isn't one, is refused, saying which there are.
+    let b = s.run("analysis.viewshed", &json!({"layer": dem, "lon": 10.0055, "lat": 45.0395, "height": 2, "heights": "Bilinear"})).unwrap();
+    let (near, bil) = (v["visibleCells"].as_u64().unwrap(), b["visibleCells"].as_u64().unwrap());
+    assert!(bil >= near && bil <= near + near / 10, "nearest {near}, bilinear {bil}");
+    // A DEM with every cell holding data: nothing to say about ground with none.
+    assert!(b.get("acrossNoData").is_none() && v.get("acrossNoData").is_none(), "{b}");
+    for bad in [json!("cubic"), json!(1)] {
+        let e = s.run("analysis.viewshed", &json!({"layer": dem, "lon": 10.0055, "lat": 45.0395, "heights": bad})).unwrap_err();
+        assert!(e.to_string().contains(r#"heights must be "nearest" or "bilinear", not "#), "{e}");
+    }
     let los = s.run("analysis.lineOfSight", &json!({"layer": dem, "from": [10.0205, 45.0395], "to": [10.0355, 45.0395]})).unwrap();
     assert_eq!(los["visible"], false);
     let los = s.run("analysis.lineOfSight", &json!({"layer": dem, "from": [10.0205, 45.0395], "to": [10.0055, 45.0395]})).unwrap();

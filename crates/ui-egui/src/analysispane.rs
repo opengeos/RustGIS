@@ -24,6 +24,8 @@ pub struct Workflow {
     pub field: String,
     pub number: String,
     pub number2: String,
+    /// The viewshed reads the ground between cells (bilinear heights), not the nearest cell.
+    pub bilinear: bool,
     pub text: String,
     pub function: String,
     pub chain: Vec<String>,
@@ -685,11 +687,30 @@ pub fn workflows(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                 ui.add(egui::TextEdit::singleline(&mut app.workflow.number).hint_text(tl!("observer height m")).desired_width(110.0));
                 ui.add(egui::TextEdit::singleline(&mut app.workflow.number2).hint_text(tl!("radius m")).desired_width(80.0));
             });
+            // How the ground along each ray is read.
+            ui.horizontal(|ui| {
+                ui.label(tl!("Ground heights"));
+                let (nearest, between) = (tl!("Nearest cell"), tl!("Between cells (bilinear)"));
+                egui::ComboBox::from_id_salt("wf_v_heights")
+                    .selected_text(if app.workflow.bilinear { between } else { nearest })
+                    .width(170.0)
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(&mut app.workflow.bilinear, false, nearest);
+                        ui.selectable_value(&mut app.workflow.bilinear, true, between);
+                    })
+                    .response
+                    .on_hover_text(tl!(
+                        "How the ground between the observer and a cell is read: the cell each point falls in, or between the cells' centres. Between cells is right on ground that bulges, a hill seen from its top, where the nearest cell can hide cells just inside the horizon."
+                    ));
+            });
             pick_button(app, ui, "viewshed", 1, "Click the observer on the map");
             if let Some(p) = picked(app, "viewshed").and_then(|v| v.first().copied()) {
                 let mut params = json!({"layer": app.workflow.layer, "lon": p.x, "lat": p.y, "height": num(&app.workflow.number, 1.7)});
                 if let Ok(r) = app.workflow.number2.trim().parse::<f64>() {
                     params["radius"] = json!(r);
+                }
+                if app.workflow.bilinear {
+                    params["heights"] = json!("bilinear");
                 }
                 run(app, "analysis.viewshed", params);
             }

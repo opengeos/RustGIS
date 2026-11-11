@@ -1087,15 +1087,46 @@ fn viewshed_work(s: &Session, p: &Value) -> Result<Work, String> {
     let radius = f(p, "radius").unwrap_or((cx * dem.width as f64).hypot(cy * dem.height as f64)).clamp(1.0, 500_000.0);
     let height = f(p, "height").unwrap_or(1.7).clamp(0.0, 10_000.0);
     // How the ground along each ray is read: the cell a point falls in, or between cells.
-    let heights = match ps(p, "heights") {
-        None => rasterops::Heights::Nearest,
-        Some(h) => rasterops::Heights::named(h).ok_or_else(|| format!("heights must be \"nearest\" or \"bilinear\", not \"{h}\""))?,
+    let heights = match p.get("heights") {
+        None | Some(Value::Null) => rasterops::Heights::Nearest,
+        Some(Value::String(h)) => {
+            rasterops::Heights::named(h).ok_or_else(|| format!("heights must be \"nearest\" or \"bilinear\", not \"{h}\""))?
+        }
+        Some(other) => return Err(format!("heights must be \"nearest\" or \"bilinear\", not {other}")),
     };
     let name = out_name(p, format!("{}_viewshed", dem.name));
+    let dem_name = dem.name.clone();
     Ok(Box::new(move || {
         let vs = rasterops::viewshed(&dem, band, at, height, radius, heights)?;
-        let seen = vs.iter().filter(|v| **v == 1.0).count();
-        made(rasterops::derive(&dem, &name, vec![vs])?, Some(json!({"visibleCells": seen})))
+        let seen = vs.cells.iter().filter(|v| **v == 1.0).count();
+        let (through_gaps, read_nearest) = (vs.through_gaps, vs.read_nearest);
+        let m = made(rasterops::derive(&dem, &name, vec![vs.cells])?, Some(json!({"visibleCells": seen})))?;
+        if through_gaps == 0 && read_nearest == 0 {
+            return Ok(m);
+        }
+        // Ground with no data hides nothing, and bilinear heights read the nearest cell beside
+        // it: said, with how many cells it touched.
+        let then: Then = Box::new(move |s: &mut Session, v: &mut Value| {
+            if through_gaps > 0 {
+                s.notify(
+                    format!(
+                        "{dem_name}: {through_gaps} cell(s) of the viewshed were seen across ground with no data, taken as hiding nothing"
+                    ),
+                    false,
+                );
+            }
+            if read_nearest > 0 {
+                s.notify(
+                    format!("{dem_name}: {read_nearest} cell(s) of the viewshed were seen with the nearest cell's height next to ground with no data, not between cells"),
+                    false,
+                );
+            }
+            if let Some(o) = v.as_object_mut() {
+                o.insert("acrossNoData".into(), json!(through_gaps));
+                o.insert("readNearest".into(), json!(read_nearest));
+            }
+        });
+        Ok(Made { then: Some(then), ..m })
     }))
 }
 

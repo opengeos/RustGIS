@@ -442,27 +442,31 @@ pub enum Heights {
     /// can hide cells just inside the horizon.
     #[default]
     Nearest,
-    /// Between the cells' centres, in proportion to how near the point is to each (bilinear), as
-    /// GRASS's `r.viewshed` reads it: smoother, and right on bulging ground. Where one of those
-    /// cells has no data, the cell the point falls in, as [`Heights::Nearest`] reads it.
+    /// Between the cells' centres, in proportion to how near the point is to each (bilinear):
+    /// smoother, and right on bulging ground. Where one of those cells has no data, the cell the
+    /// point falls in, as [`Heights::Nearest`] reads it (counted: [`Viewshed::read_nearest`]).
     Bilinear,
 }
 
 impl Heights {
-    /// The one named `name` (`nearest`, `bilinear`); `None` for any other.
+    /// The one named `name` (`nearest`, `bilinear`, in any case); `None` for any other.
     pub fn named(name: &str) -> Option<Heights> {
-        match name {
-            "nearest" => Some(Heights::Nearest),
-            "bilinear" => Some(Heights::Bilinear),
-            _ => None,
+        if name.eq_ignore_ascii_case("nearest") {
+            Some(Heights::Nearest)
+        } else if name.eq_ignore_ascii_case("bilinear") {
+            Some(Heights::Bilinear)
+        } else {
+            None
         }
     }
 
-    /// The ground at a point of a ray, `(col, row)` in cells (whole numbers at cell centres).
-    fn at(self, r: &Raster, b: usize, col: f64, row: f64) -> Option<f32> {
-        let nearest = || r.value(b, col.round() as i64, row.round() as i64);
+    /// The ground at a point of a ray, `(col, row)` in cells (whole numbers at cell centres), and
+    /// whether it is the nearest cell's, read in place of cells between which a neighbour has
+    /// no data. `None` where the point's own cell has no data.
+    fn at(self, r: &Raster, b: usize, col: f64, row: f64) -> Option<(f64, bool)> {
+        let nearest = |fell_back: bool| r.value(b, col.round() as i64, row.round() as i64).map(|v| (f64::from(v), fell_back));
         if self == Heights::Nearest {
-            return nearest();
+            return nearest(false);
         }
         let (c0, r0) = (col.floor(), row.floor());
         let (tx, ty) = (col - c0, row - r0);
@@ -476,17 +480,30 @@ impl Heights {
             }
             match r.value(b, c0 + dc, r0 + dr) {
                 Some(v) => sum += wgt * f64::from(v),
-                None => return nearest(),
+                None => return nearest(true),
             }
         }
-        Some(sum as f32)
+        Some((sum, false))
     }
+}
+
+/// A viewshed: each cell visible (1) or not (0), no-data outside the radius, and how many cells'
+/// rays read the ground less than fully.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Viewshed {
+    pub cells: Vec<f32>,
+    /// Cells whose ray crossed ground with no data, taken as hiding nothing there.
+    pub through_gaps: usize,
+    /// Cells whose ray, read [`Heights::Bilinear`], took the nearest cell's height somewhere,
+    /// a cell it would read between having no data.
+    pub read_nearest: usize,
 }
 
 /// Cells visible from an observer (1) or not (0) within `radius_m`; outside the radius no-data.
 /// The Earth curves as visible light sees it (`SIGHT_RADIUS_M`). The ground along each ray is read
-/// as `heights` says.
-pub fn viewshed(r: &Raster, b: usize, observer: Coord, height: f64, radius_m: f64, heights: Heights) -> Result<Vec<f32>, String> {
+/// as `heights` says; ground with no data hides nothing, and the cells whose rays crossed some are
+/// counted.
+pub fn viewshed(r: &Raster, b: usize, observer: Coord, height: f64, radius_m: f64, heights: Heights) -> Result<Viewshed, String> {
     viewshed_on(None, r, b, observer, height, radius_m, heights)
 }
 
@@ -499,7 +516,7 @@ fn viewshed_on(
     height: f64,
     radius_m: f64,
     heights: Heights,
-) -> Result<Vec<f32>, String> {
+) -> Result<Viewshed, String> {
     let (oc, or) = r.pixel_at(observer).ok_or("the observer is outside the raster")?;
     let z0 = r.value(b, oc, or).ok_or("the observer stands on no-data")? as f64 + height;
     let (cx, cy) = r.cell_size_m();
@@ -533,6 +550,8 @@ fn viewshed_on(
     let w = r.width as usize;
     let mut out = new_band(w, r.height as usize, NODATA)?;
     let window = out.chunks_mut(w).skip(usize::try_from(first).unwrap_or(0)).take(rows);
+    // Summed across threads: the same counts on any number.
+    let (through_gaps, read_nearest) = (std::sync::atomic::AtomicUsize::new(0), std::sync::atomic::AtomicUsize::new(0));
     crate::control::begin(rows);
     crate::parallel::for_each_row(window, threads, crate::control::Pace::default, |pace, i, line: &mut [f32]| {
         let row = first + i as i64;
@@ -557,22 +576,39 @@ fn viewshed_on(
                 return;
             }
             let mut visible = true;
+            let (mut gap, mut nearest) = (false, false);
+            // Along the longer axis the ray steps a whole cell at a time, so that coordinate is
+            // exact; along the other it falls between cells.
+            let (dc, dr) = (col - oc, row - or);
+            let along = |o: i64, d: i64, s: usize, t: f64| {
+                if d.unsigned_abs() as usize == steps { (o + d.signum() * s as i64) as f64 } else { o as f64 + d as f64 * t }
+            };
             for s in 1..steps {
                 let t = s as f64 / steps as f64;
-                let (c, rr) = (oc as f64 + (col - oc) as f64 * t, or as f64 + (row - or) as f64 * t);
-                let Some(zi) = heights.at(r, b, c, rr) else { continue };
+                let (c, rr) = (along(oc, dc, s, t), along(or, dr, s, t));
+                let Some((zi, fell_back)) = heights.at(r, b, c, rr) else {
+                    gap = true;
+                    continue;
+                };
+                nearest |= fell_back;
                 let di = dist * t;
-                if (zi as f64 - di * di / (2.0 * SIGHT_RADIUS_M) - z0) / di > target {
+                if (zi - di * di / (2.0 * SIGHT_RADIUS_M) - z0) / di > target {
                     visible = false;
                     break;
                 }
+            }
+            if gap {
+                through_gaps.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
+            if nearest {
+                read_nearest.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             }
             if let Some(o) = line.get_mut(col as usize) {
                 *o = if visible { 1.0 } else { 0.0 };
             }
         }
     })?;
-    Ok(out)
+    Ok(Viewshed { cells: out, through_gaps: through_gaps.into_inner(), read_nearest: read_nearest.into_inner() })
 }
 
 /// Inverse distance weighted interpolation of point values onto a grid in `crs`, from each cell's
@@ -1654,12 +1690,16 @@ mod tests {
         for (at, radius, expected) in
             [(Coord::new(0.012, 44.990), 500.0, [207, 775, 5318]), (Coord::new(0.003, 44.985), 5_000.0, [185, 6050, 65])]
         {
-            let one = viewshed_on(Some(1), &dem, 0, at, 2.0, radius, Heights::Nearest).unwrap_or_else(|e| panic!("{e}"));
+            let one_run = viewshed_on(Some(1), &dem, 0, at, 2.0, radius, Heights::Nearest).unwrap_or_else(|e| panic!("{e}"));
+            // Rays crossing the DEM's no-data cells are counted, and as many on any thread count.
+            assert!(one_run.through_gaps > 0 && one_run.read_nearest == 0, "radius {radius}: {}", one_run.through_gaps);
+            let one = &one_run.cells;
             let counts = [1.0, 0.0, NODATA].map(|k| one.iter().filter(|v| v.to_bits() == k.to_bits()).count());
             assert_eq!(counts, expected, "radius {radius}");
             for threads in [2, 7, 16] {
                 let many = viewshed_on(Some(threads), &dem, 0, at, 2.0, radius, Heights::Nearest).unwrap_or_else(|e| panic!("{e}"));
-                assert!(one.iter().map(|v| v.to_bits()).eq(many.iter().map(|v| v.to_bits())), "{threads} threads, radius {radius}");
+                assert_eq!(many.through_gaps, one_run.through_gaps, "{threads} threads, radius {radius}");
+                assert!(one.iter().map(|v| v.to_bits()).eq(many.cells.iter().map(|v| v.to_bits())), "{threads} threads, radius {radius}");
             }
         }
     }
@@ -1847,7 +1887,7 @@ mod tests {
         let eye = Coord::new(0.0005, 0.0);
         // √(2 · 7/6 · 6,371 km · 10 m), written out so that the test pins the radius.
         let horizon = 12_192.0;
-        let vs = viewshed(&flat, 0, eye, 10.0, 20_000.0, Heights::Nearest).unwrap_or_else(|e| panic!("{e}"));
+        let vs = viewshed(&flat, 0, eye, 10.0, 20_000.0, Heights::Nearest).unwrap_or_else(|e| panic!("{e}")).cells;
         let row = &vs[w as usize..2 * w as usize];
         let last = row.iter().rposition(|v| *v == 1.0).unwrap_or(0);
         let (cx, _) = flat.cell_size_m();
@@ -1861,7 +1901,8 @@ mod tests {
 
     /// Viewsheds on DEMs whose answer is known from their geometry: flat ground (the horizon at
     /// √(2·R′·h)), a bowl (every cell seen), a dome (seen up to where the line from the eye
-    /// touches it, at √(h / k′)), and a wall (the cells in its shadow hidden). The Earth's
+    /// touches it, at √(h / k′)), and a wall lower than the eye (the cells in its shadow hidden,
+    /// those beyond it seen again). The Earth's
     /// curvature for visible light (`SIGHT_RADIUS_M`) is part of each answer. Cells within a cell
     /// and a half of a boundary, where a grid can't say which side a cell is on, aren't counted.
     /// Bilinear heights get every other cell right on all four; nearest heights hide some of the
@@ -1891,7 +1932,7 @@ mod tests {
         let drop = |d: f64| d * d / (2.0 * SIGHT_RADIUS_M);
         // Cells seen wrongly, and those counted, for `expected` (None: on a boundary, or outside).
         let wrong = |r: &Raster, h: f64, heights: Heights, expected: &dyn Fn(i64, i64, f64) -> Option<bool>| {
-            let vs = viewshed(r, 0, eye, h, radius, heights).unwrap_or_else(|e| panic!("{e}"));
+            let vs = viewshed(r, 0, eye, h, radius, heights).unwrap_or_else(|e| panic!("{e}")).cells;
             let (mut bad, mut counted) = (0usize, 0usize);
             for row in 0..i64::from(n) {
                 for col in 0..i64::from(n) {
@@ -1934,13 +1975,20 @@ mod tests {
         let (bad_nearest, _) = wrong(&dome, 10.0, Heights::Nearest, &|_, _, d| before(d, edge));
         assert!(bad_nearest > 0, "nearest heights hide some of the dome just inside its horizon");
 
-        // A wall 50 m high, a column of cells 20 cells east of the eye (2 m up): beyond it, a cell
-        // is hidden when the wall's top stands above the line from the eye to it. Rays mostly east
-        // or west, which cross the wall at a cell's centre line, are counted; others cross it
-        // between columns, where where it stands depends on how the ground is read.
+        // A wall 1 m high, a column of cells 20 cells (about 600 m) east of an eye 2 m up: beyond it,
+        // a cell is hidden while the line from the eye over the wall's top passes above it, and
+        // seen again once the line has come down below the ground (at about 1.2 km on a flat
+        // Earth, a little farther with its curve). Rays mostly east or west,
+        // which cross the wall at a cell's centre line, are counted; others cross it between
+        // columns, where where it stands depends on how the ground is read.
         let wall_col = half + 20;
-        let wall = dem(&|x, _| if (x - 20.0 * cx).abs() < cx / 2.0 { 50.0 } else { 0.0 });
+        let wall = dem(&|x, _| if (x - 20.0 * cx).abs() < cx / 2.0 { 1.0 } else { 0.0 });
         let z0 = 2.0;
+        // How far the line over the wall's top passes above the cell (negative: below it).
+        let over = |col: i64, d: f64| {
+            let dw = d * (20.0 / (col - half) as f64);
+            (1.0 - drop(dw) - z0) / dw * d - (-drop(d) - z0)
+        };
         let shadow = |col: i64, row: i64, d: f64| -> Option<bool> {
             let (dc, dr) = (col - half, row - half);
             if col == wall_col || dr.abs() > dc.abs() {
@@ -1949,10 +1997,23 @@ mod tests {
             if col < wall_col {
                 return Some(true);
             }
-            let dw = d * (20.0 / dc as f64);
-            let over = (50.0 - drop(dw) - z0) / dw * d - (-drop(d) - z0);
-            if over.abs() < 1.0 { None } else { Some(over < 0.0) }
+            let over = over(col, d);
+            if over.abs() < 0.05 { None } else { Some(over < 0.0) }
         };
+        // Both sides of the shadow's edge are counted, not only the shadow.
+        let (mut hidden, mut seen_past) = (0usize, 0usize);
+        for row in 0..i64::from(n) {
+            for col in wall_col + 1..i64::from(n) {
+                let (x, y) = at(col, row);
+                let d = x.hypot(y);
+                match (d <= radius).then(|| shadow(col, row, d)).flatten() {
+                    Some(false) => hidden += 1,
+                    Some(true) => seen_past += 1,
+                    None => {}
+                }
+            }
+        }
+        assert!(hidden > 1_000 && seen_past > 1_000, "{hidden} hidden, {seen_past} seen past the wall");
         for heights in [Heights::Nearest, Heights::Bilinear] {
             let (bad, counted) = wrong(&wall, z0, heights, &shadow);
             assert!(bad == 0 && counted > 10_000, "wall, {heights:?}: {bad} of {counted} wrong");
@@ -2310,7 +2371,7 @@ mod tests {
                 *v = if i % 20 == 10 { 500.0 } else { 0.0 };
             }
         }
-        let vs = viewshed(&wall, 0, Coord::new(0.0025, 0.0105), 2.0, 5_000.0, Heights::Nearest).unwrap_or_default();
+        let vs = viewshed(&wall, 0, Coord::new(0.0025, 0.0105), 2.0, 5_000.0, Heights::Nearest).unwrap_or_default().cells;
         assert_eq!(vs[10 * 20 + 5], 1.0);
         assert_eq!(vs[10 * 20 + 15], 0.0);
         let (seen, prof) =
