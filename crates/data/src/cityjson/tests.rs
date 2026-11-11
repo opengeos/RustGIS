@@ -1401,7 +1401,7 @@ fn an_instance_is_its_template_placed() {
     root["geometry-templates"] = json!({"templates": [
         {"type": "Solid", "lod": "2", "boundaries": box_shell()},
         {"type": "MultiSurface", "lod": "2", "boundaries": [[[0, 1, 99]]]},
-    ], "vertices-templates": cube});
+    ], "vertices-templates": cube.clone()});
     let out = read("m.city.json", root.to_string().as_bytes(), None).unwrap();
     let placed = &out.iter().find(|(d, _)| d.geometry_type == GeometryType::Polygon).expect("the placed tree").0;
     assert_eq!(placed.features.len(), 1);
@@ -1412,4 +1412,15 @@ fn an_instance_is_its_template_placed() {
     assert_eq!(value(placed, 0, "z_max"), crate::Value::Float(3.0));
     assert!(says(&out, "4 geometry instances are drawn as a point"), "{:?}", messages_of(&out));
     assert!(says(&out, "1 geometries of city objects have vertex indexes that can't be read"), "{:?}", messages_of(&out));
+    // Placed whole, an instance says nothing.
+    let mut clean: Json = serde_json::from_slice(&doc(
+        json!([[5, 5, 1]]),
+        json!({"tree": instance(0, json!([2, 0, 0, 0, 0, 2, 0, 0, 0, 0, 2, 0, 0, 0, 0, 1]))}),
+    ))
+    .unwrap();
+    clean["geometry-templates"] =
+        json!({"templates": [{"type": "Solid", "lod": "2", "boundaries": box_shell()}], "vertices-templates": cube});
+    let out = read("m.city.json", clean.to_string().as_bytes(), None).unwrap();
+    assert!(!says(&out, "geometry instances"), "{:?}", messages_of(&out));
+    assert!(!says(&out, "can't be read"), "{:?}", messages_of(&out));
 }

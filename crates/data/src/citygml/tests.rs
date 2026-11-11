@@ -1896,3 +1896,38 @@ fn a_parent_given_twice_is_one() {
     }
     assert!(!says(&out, "links between city objects"), "{:?}", messages_of(&out));
 }
+
+/// A long chain of geometries each given only by a link to the next is followed once for each, so
+/// it costs its length, not its square; each link it couldn't follow is said.
+#[test]
+fn a_long_chain_of_links_costs_its_length() {
+    let chain: String = (0..20_000)
+        .map(|k| format!(r##"<gml:surfaceMember><gml:Polygon gml:id="q{k}" xlink:href="#q{}"/></gml:surfaceMember>"##, k + 1))
+        .collect();
+    let inner = format!("<bldg:lod2MultiSurface><gml:MultiSurface>{chain}</gml:MultiSurface></bldg:lod2MultiSurface>");
+    let out = read("model.gml", &lonlat(&building("b1", &inner)), None).unwrap();
+    assert!(says(&out, "20000 geometries or objects are given only by a link"), "{:?}", messages_of(&out));
+}
+
+/// Only ids a link names are indexed: an id given twice that no link names isn't said.
+#[test]
+fn an_id_no_link_names_isnt_indexed() {
+    let polygon_in = |object: &str, id: &str| {
+        building(
+            object,
+            &format!(
+                "<bldg:lod2MultiSurface><gml:MultiSurface><gml:surfaceMember>{}</gml:surfaceMember></gml:MultiSurface></bldg:lod2MultiSurface>",
+                polygon(id, &square(0.0, 0.0, 10.0, 0.0))
+            ),
+        )
+    };
+    let linking = building(
+        "c",
+        r##"<bldg:lod2MultiSurface><gml:MultiSurface><gml:surfaceMember xlink:href="#y"/></gml:MultiSurface></bldg:lod2MultiSurface>"##,
+    );
+    let out =
+        read("model.gml", &lonlat(&[polygon_in("a", "x"), polygon_in("b", "x"), polygon_in("d", "y"), linking].concat()), None).unwrap();
+    let ds = only(&out);
+    assert!((area(ds.features[row_of(ds, "c")].geometry.as_ref()) - 100.0).abs() < 1e-6, "{:?}", messages_of(&out));
+    assert!(!says(&out, "earlier element of the file"), "{:?}", messages_of(&out));
+}
