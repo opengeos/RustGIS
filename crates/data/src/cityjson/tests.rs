@@ -1424,3 +1424,45 @@ fn an_instance_is_its_template_placed() {
     assert!(!says(&out, "geometry instances"), "{:?}", messages_of(&out));
     assert!(!says(&out, "can't be read"), "{:?}", messages_of(&out));
 }
+
+/// One tree instancing `template` at [5, 5, 1] with `matrix`, beside `templates`.
+fn instanced(matrix: Json, templates: Json) -> Vec<u8> {
+    let objects = json!({"tree": {"type": "SolitaryVegetationObject", "geometry": [
+        {"type": "GeometryInstance", "template": 0, "boundaries": [0], "transformationMatrix": matrix}]}});
+    let mut root: Json = serde_json::from_slice(&doc(json!([[5, 5, 1]]), objects)).unwrap();
+    root["geometry-templates"] = templates;
+    root.to_string().into_bytes()
+}
+
+fn cube() -> Json {
+    json!([[0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0], [0, 0, 1], [1, 0, 1], [1, 1, 1], [0, 1, 1]])
+}
+
+/// A `geometry-templates` block that can't be read is said, and its instances drawn as points.
+#[test]
+fn templates_that_cant_be_read_are_said() {
+    let unit = json!([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
+    let bad = json!({"templates": [{"type": "Solid", "lod": "2", "boundaries": box_shell()}], "vertices-templates": [[0, 0, "x"]]});
+    let out = read("m.city.json", &instanced(unit, bad), None).unwrap();
+    assert!(says(&out, "1 geometries of city objects have vertex indexes that can't be read"), "{:?}", messages_of(&out));
+    assert!(says(&out, "1 geometry instances are drawn as a point"), "{:?}", messages_of(&out));
+}
+
+/// Empty rings cost placing too: a template of many is held back by the file's placing, and said.
+#[test]
+fn empty_rings_cost_placing() {
+    let unit = json!([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
+    let empty: Vec<Json> = (0..5_000).map(|_| json!([[]])).collect();
+    let templates = json!({"templates": [{"type": "MultiSurface", "lod": "2", "boundaries": empty}], "vertices-templates": cube()});
+    let out = read("m.city.json", &instanced(unit, templates), None).unwrap();
+    assert!(says(&out, "1 geometry instances are drawn as a point"), "{:?}", messages_of(&out));
+}
+
+/// Rings a matrix flattens when it places a template are said for each instance.
+#[test]
+fn rings_flattened_by_placing_are_said() {
+    let flat = json!([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
+    let templates = json!({"templates": [{"type": "Solid", "lod": "2", "boundaries": box_shell()}], "vertices-templates": cube()});
+    let out = read("m.city.json", &instanced(flat, templates), None).unwrap();
+    assert!(says(&out, "3 rings with fewer than three different points are left out"), "{:?}", messages_of(&out));
+}

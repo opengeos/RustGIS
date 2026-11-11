@@ -99,7 +99,9 @@ struct RawGeometry {
 /// when it can't be read (said once, not for each instance), and their vertices, in the templates'
 /// own system (the file's `transform` doesn't apply to them).
 struct Templates {
-    shapes: Vec<Option<(RawGeometry, usize)>>,
+    /// Each with how many vertex indexes placing it reads, and whether reading it left out rings of
+    /// no area (said then, once, not again for each instance).
+    shapes: Vec<Option<(RawGeometry, usize, bool)>>,
     vertices: Vec<P3>,
 }
 
@@ -114,7 +116,12 @@ impl Templates {
             #[serde(rename = "vertices-templates", default)]
             vertices: Vec<P3>,
         }
-        let raw: Raw = serde_json::from_str(raw?.get()).ok()?;
+        // A block that can't be read leaves every instance at its reference point, said with them;
+        // the block itself is said as a geometry that can't be read.
+        let Ok(raw) = serde_json::from_str::<Raw>(raw?.get()) else {
+            counts.bad_geometries += 1;
+            return None;
+        };
         let vertex = |k: usize| raw.vertices.get(k).copied();
         let shapes = raw
             .templates
@@ -123,13 +130,15 @@ impl Templates {
                 // A template that can't be read is said here, once; one that is an instance itself
                 // places nothing.
                 let shape = serde_json::from_value::<RawGeometry>(t).ok().filter(|g| g.ty != "GeometryInstance");
+                let dropped = counts.dropped_rings;
                 let read = shape.as_ref().and_then(|g| geometry(&mut ObjectParts::default(), g, &vertex, counts));
                 if read.is_none() {
                     counts.bad_geometries += 1;
                 }
+                let degenerate = counts.dropped_rings > dropped;
                 shape.filter(|_| read.is_some()).map(|g| {
                     let size = indexes(&g.boundaries);
-                    (g, size)
+                    (g, size, degenerate)
                 })
             })
             .collect();
@@ -137,9 +146,11 @@ impl Templates {
     }
 }
 
-/// How many vertex indexes boundaries hold, which is what placing them reads.
+/// How many vertex indexes boundaries hold, which is what placing them reads; an empty array counts
+/// as one, as placing it still makes and drops a ring or a face.
 fn indexes(boundaries: &Json) -> usize {
     match boundaries {
+        Json::Array(parts) if parts.is_empty() => 1,
         Json::Array(parts) => parts.iter().map(indexes).sum(),
         _ => 1,
     }
@@ -361,7 +372,7 @@ fn object_parts(
             counts.bad_geometries += 1;
             continue;
         };
-        if !place(&mut parts, g, reference, templates, placing) {
+        if !place(&mut parts, g, reference, templates, placing, counts) {
             let (rank, lod) = level(g);
             parts.points.add_points(rank, lod, vec![(reference, true)]);
         }
@@ -371,11 +382,19 @@ fn object_parts(
 
 /// Places an instance's template into the object's parts; false when it isn't placed: its
 /// template is missing or can't be read, its matrix isn't 16 numbers with `0 0 0 1` last, or the
-/// file's placing is spent.
-fn place(parts: &mut ObjectParts, g: &RawGeometry, reference: P3, templates: Option<&Templates>, placing: &mut usize) -> bool {
+/// file's placing is spent. The level of detail is its template's: an instance has none of its own
+/// (CityJSON 1.1 §3.4).
+fn place(
+    parts: &mut ObjectParts,
+    g: &RawGeometry,
+    reference: P3,
+    templates: Option<&Templates>,
+    placing: &mut usize,
+    counts: &mut Counts,
+) -> bool {
     let Some(t) = templates else { return false };
     let shape = g.template.as_ref().and_then(Json::as_u64).and_then(|i| usize::try_from(i).ok()).and_then(|i| t.shapes.get(i));
-    let Some(Some((shape, size))) = shape else { return false };
+    let Some(Some((shape, size, degenerate))) = shape else { return false };
     let placement = match &g.matrix {
         None => Some(Placement::at(reference)),
         Some(m) => {
@@ -388,9 +407,15 @@ fn place(parts: &mut ObjectParts, g: &RawGeometry, reference: P3, templates: Opt
     }
     *placing -= size;
     let vertex = |k: usize| t.vertices.get(k).and_then(|v| placement.place(v));
-    // The template was read once already, and what it lacks said then (its rings of no area): not
-    // again for each instance. What fails now is a point placed past what a number holds.
-    geometry(parts, shape, &vertex, &mut Counts::default()) == Some(true)
+    // The template was read once already, and its rings of no area said then: not again for each
+    // instance. A template with none may have some once placed (a matrix that flattens it): said
+    // for each instance. What fails is a point placed past what a number holds.
+    let mut placed = Counts::default();
+    let done = geometry(parts, shape, &vertex, &mut placed) == Some(true);
+    if !degenerate {
+        counts.dropped_rings += placed.dropped_rings;
+    }
+    done
 }
 
 /// One geometry into an object's parts, its points from `vertex`: whether it added something, or

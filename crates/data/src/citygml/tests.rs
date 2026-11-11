@@ -1931,3 +1931,58 @@ fn an_id_no_link_names_isnt_indexed() {
     assert!((area(ds.features[row_of(ds, "c")].geometry.as_ref()) - 100.0).abs() < 1e-6, "{:?}", messages_of(&out));
     assert!(!says(&out, "earlier element of the file"), "{:?}", messages_of(&out));
 }
+
+/// A prototype in another member, read once, is placed for every instance that links to it,
+/// without being copied again for each: many small instances of a large prototype aren't held back
+/// by what copies may cost.
+#[test]
+fn a_shared_prototype_is_read_once_for_every_member() {
+    // Large in bytes, few in points.
+    let padding = " ".repeat(20_000);
+    let prototype = format!(
+        r#"<core:relativeGMLGeometry><gml:MultiSurface gml:id="proto"><gml:surfaceMember><gml:Polygon><gml:exterior><gml:LinearRing><gml:posList>0 0 0 1 0 0 1 1 0 0 1 0 0 0 0{padding}</gml:posList></gml:LinearRing></gml:exterior></gml:Polygon></gml:surfaceMember></gml:MultiSurface></core:relativeGMLGeometry>"#
+    );
+    let mut members = furniture("t0", &format!("{prototype}{}", reference(0.0, 0.0, 0.0)));
+    for k in 1..100 {
+        let at = f64::from(k) * 2.0;
+        members.push_str(&furniture(
+            &format!("t{k}"),
+            &format!(r##"<core:relativeGMLGeometry xlink:href="#proto"/>{}"##, reference(at, 0.0, 0.0)),
+        ));
+    }
+    let out = read("model.gml", &lonlat(&members), None).unwrap();
+    assert_eq!(of_type(&out, GeometryType::Polygon).features.len(), 100, "{:?}", messages_of(&out));
+    assert!(!says(&out, "geometry instances"), "{:?}", messages_of(&out));
+    assert!(!says(&out, "link"), "{:?}", messages_of(&out));
+}
+
+/// A link to an id several elements have reads the first in the file (when its member has none),
+/// whatever order the member's links come in, even when another is inside a geometry it also links.
+#[test]
+fn a_link_reads_the_first_of_an_id_whatever_the_order_of_links() {
+    let first = building(
+        "a",
+        &format!(
+            "<bldg:lod2MultiSurface><gml:MultiSurface><gml:surfaceMember>{}</gml:surfaceMember></gml:MultiSurface></bldg:lod2MultiSurface>",
+            polygon("x", &square(0.0, 0.0, 10.0, 0.0))
+        ),
+    );
+    let holding = building(
+        "c",
+        &format!(
+            r#"<bldg:lod1MultiSurface><gml:MultiSurface><gml:surfaceMember><gml:CompositeSurface gml:id="g"><gml:surfaceMember>{}</gml:surfaceMember></gml:CompositeSurface></gml:surfaceMember></gml:MultiSurface></bldg:lod1MultiSurface>"#,
+            polygon("x", &square(20.0, 0.0, 5.0, 0.0))
+        ),
+    );
+    for links in [
+        r##"<gml:surfaceMember xlink:href="#g"/><gml:surfaceMember xlink:href="#x"/>"##,
+        r##"<gml:surfaceMember xlink:href="#x"/><gml:surfaceMember xlink:href="#g"/>"##,
+    ] {
+        let linking =
+            building("b", &format!("<bldg:lod2MultiSurface><gml:MultiSurface>{links}</gml:MultiSurface></bldg:lod2MultiSurface>"));
+        let out = read("model.gml", &lonlat(&[first.clone(), holding.clone(), linking].concat()), None).unwrap();
+        let ds = only(&out);
+        let got = area(ds.features[row_of(ds, "b")].geometry.as_ref());
+        assert!((got - 125.0).abs() < 1e-6, "{links}: {got} {:?}", messages_of(&out));
+    }
+}

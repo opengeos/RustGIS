@@ -600,7 +600,7 @@ impl Highest<(P3, bool)> {
     }
 }
 
-/// The fewest bytes a point written out takes (`1 2 3 `): the points implicit geometries place, all
+/// The fewest bytes a 3D point written out takes (`1 2 3 `), as a city model's points are: the points implicit geometries place, all
 /// their instances together, are at most a file's size over it, as many as it could write out, so a
 /// large prototype placed many times can't make reading grow as their product.
 pub(crate) const POINT_BYTES: usize = 6;
