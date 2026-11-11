@@ -2685,7 +2685,9 @@ impl Session {
         }
     }
 
-    /// Takes another session's extension choices (a copy that runs a model or script ahead).
+    /// Takes another session's extension choices (a copy that runs a model or script ahead, on
+    /// the desktop only).
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn set_extensions(&mut self, state: extensions::State) {
         self.extensions = state;
     }
