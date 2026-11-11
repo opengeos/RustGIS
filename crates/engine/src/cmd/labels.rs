@@ -9,6 +9,7 @@ use serde_json::{Value, json};
 
 use super::layer::s_req;
 use super::{b, f, need_feature_layer, ps};
+use crate::notice_text::NoticeText;
 use crate::{CmdResult, CommandSpec as C, Session};
 
 /// A number, or a number written as text (as `f` reads a parameter).
@@ -163,13 +164,8 @@ pub fn commands() -> Vec<C> {
                 Some(Value::Null) => Some(0.0),
                 Some(v) => Some(number(v).ok_or("lineOffset must be a number of points (negative: below the line), or 0 or null for on it")?),
             };
-            // A distance outside the range is brought within it, and says so.
-            let line_offset_note = line_offset.filter(|d| !rustgis_map::symbology::LABEL_OFFSET.contains(d)).map(|asked| {
-                format!(
-                    "lineOffset {asked} points adjusted to {} (a label sits at most 200 points above or below its line)",
-                    rustgis_map::symbology::label_line_offset(asked)
-                )
-            });
+            // A distance outside the range is brought within it, and says so once the layer is known.
+            let line_offset_asked = line_offset.filter(|d| !rustgis_map::symbology::LABEL_OFFSET.contains(d));
             let line_offset = line_offset.map(rustgis_map::symbology::label_line_offset);
             // Every label shown, over the others where they crowd.
             let show_all = match p.get("showAll") {
@@ -242,8 +238,21 @@ pub fn commands() -> Vec<C> {
                 }
                 Ok(())
             })?;
-            for note in [callout_note, line_offset_note].into_iter().flatten() {
+            if let Some(note) = callout_note {
                 s.notify(note, false);
+            }
+            if let Some(asked) = line_offset_asked {
+                let name = s.map().layer(id).map(|l| l.name.clone()).unwrap_or_default();
+                let kept = rustgis_map::symbology::label_line_offset(asked);
+                // A huge value in short (1e308, not its 309 digits).
+                let asked = if asked.abs() < 1e6 { asked.to_string() } else { format!("{asked:e}") };
+                s.notify_text(
+                    NoticeText::format(
+                        "{name}: lineOffset {asked} points adjusted to {kept} (a label sits at most 200 points above or below its line)",
+                        [("name", name.into()), ("asked", asked.into()), ("kept", kept.to_string().into())],
+                    ),
+                    false,
+                );
             }
             Ok(done)
         }).roles(&[]).effects(crate::policy::Effects::NONE)
@@ -794,10 +803,9 @@ fn convert(s: &mut Session, p: &Value) -> CmdResult {
     }
     let n = ds.features.len();
     let flattened_note = (flattened > 0).then(|| {
-        format!(
-            "{}: {flattened} label{} along lines made upright points on their lines (their angle, curve, repeats and distance from the line left out)",
-            ds.name,
-            if flattened == 1 { "" } else { "s" }
+        NoticeText::format(
+            "{name}: {n} label(s) along lines made upright points at their lines' middle vertex, no longer laid along the line",
+            [("name", ds.name.clone().into()), ("n", flattened.to_string().into())],
         )
     });
     let cut_note = (cut > 0).then(|| {
@@ -848,8 +856,11 @@ fn convert(s: &mut Session, p: &Value) -> CmdResult {
         a.min_scale = min_scale;
         a.max_scale = max_scale;
     }
-    for note in [cut_note, flattened_note].into_iter().flatten() {
+    if let Some(note) = cut_note {
         s.notify(note, false);
+    }
+    if let Some(note) = flattened_note {
+        s.notify_text(note, false);
     }
     if let Some((_, unread)) = &whole {
         unread.say(s);

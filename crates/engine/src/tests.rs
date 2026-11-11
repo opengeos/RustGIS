@@ -3990,7 +3990,10 @@ fn labels_take_a_distance_from_the_line() {
     s.run("labels.placement", &json!({"layer": "Rivers", "lineOffset": 1e9})).unwrap();
     assert_eq!(class(&s).0, 200.0, "within its range");
     let said: Vec<String> = s.notices_since(mark).iter().map(|n| n.text.clone()).collect();
-    assert!(said.iter().any(|t| t.contains("lineOffset 1000000000 points adjusted to 200")), "and says so: {said:?}");
+    assert!(
+        said.iter().any(|t| t == "Rivers: lineOffset 1e9 points adjusted to 200 (a label sits at most 200 points above or below its line)"),
+        "and says where, in short: {said:?}"
+    );
     s.run("labels.placement", &json!({"layer": "Rivers", "lineOffset": null})).unwrap();
     assert_eq!(class(&s).0, 0.0, "null is on the line");
     s.run("edit.undo", &json!({})).unwrap();
@@ -4022,7 +4025,7 @@ fn converting_labels_along_lines_says_what_they_lose() {
     assert!(n > 0);
     let said: Vec<String> = s.notices_since(mark).iter().map(|x| x.text.clone()).collect();
     let expected = format!(
-        "Rivers Annotation: {n} labels along lines made upright points on their lines (their angle, curve, repeats and distance from the line left out)"
+        "Rivers Annotation: {n} label(s) along lines made upright points at their lines' middle vertex, no longer laid along the line"
     );
     assert!(said.contains(&expected), "{said:?}");
     let mark = s.notice_mark();
