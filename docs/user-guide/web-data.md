@@ -88,7 +88,9 @@ runs in the background, with Cancel. The command is `"intersects"`: GeoJSON (a g
 or a collection of features), or `"selection"` for the selected features of `"layer"` (default the
 active layer). It is sent as the STAC `intersects` parameter and replaces `"bbox"` (Item Search
 takes one or the other); a static catalog, which has no search, keeps the items whose footprint
-meets the shape.
+meets the shape, and also the items that have no usable footprint, which are not known to match:
+check those yourself. A box dragged across the 180° meridian is searched as two boxes, one each
+side of it.
 
 Several features are merged into one shape. Only the highest dimension present is kept
 (polygons, then lines, then points); polygons are dissolved, and positions are rounded to eight

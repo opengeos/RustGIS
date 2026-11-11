@@ -396,12 +396,13 @@ pub fn poll(app: &mut RustGisApp, ctx: &egui::Context) {
             }
             Err(e) => st.error = Some(e),
         },
-        Asked::Search(url, _) => match r.and_then(|b| Ok((stac::parse_items(&b, &url)?, stac::parse_matched(&b)))) {
-            Ok(((items, next), matched)) => {
+        Asked::Search(url, _) => match r.and_then(|b| Ok((stac::parse_items(&b, &url)?, stac::parse_matched(&b), stac::has_next(&b)))) {
+            Ok(((items, next), matched, has_next)) => {
                 let n = items.len().to_string();
                 st.info = Some(match matched.filter(|m| *m as usize > items.len()) {
                     Some(m) => i18n::fmt("Showing {n} of {m} items (narrow the search for others)", &[("n", &n), ("m", &m.to_string())]),
-                    None if next.is_some() => i18n::fmt("Showing {n} items (more match: narrow the search)", &[("n", &n)]),
+                    // A POST search's `next` link has no address to give, so `next` is none for it.
+                    None if next.is_some() || has_next => i18n::fmt("Showing {n} items (more match: narrow the search)", &[("n", &n)]),
                     None => i18n::fmt("Showing {n} items", &[("n", &n)]),
                 });
                 st.details = None;
@@ -1346,7 +1347,10 @@ fn stop_stale_drawing(app: &mut RustGisApp) {
     if app.ui.stac.drawing.is_none() {
         return;
     }
-    if !matches!(app.session.tool, rustgis_engine::Tool::Graphic(_)) {
+    // Another graphic tool picked from the ribbon is not the shape being drawn here, so a later
+    // shape of the drawn kind isn't taken for the area.
+    let drawing = app.ui.stac.drawing;
+    if !matches!(app.session.tool, rustgis_engine::Tool::Graphic(shape) if Some(shape) == drawing) {
         app.ui.stac.drawing = None;
     } else if app.ui.right != Some(crate::RightPane::WebData) || app.ui.web_data != "stac" {
         stop_drawing(app);
@@ -1359,6 +1363,29 @@ fn on_globe(c: Coord) -> Coord {
     Coord::new((c.x + 180.0).rem_euclid(360.0) - 180.0, c.y.clamp(-90.0, 90.0))
 }
 
+/// The box dragged from corner `a` to corner `b`, as longitudes on the (maybe repeated) world map.
+/// A box that crosses the dateline is two boxes, one each side of it, rather than one that spans
+/// the world the other way; one 360° wide or more is the whole globe.
+fn box_between(a: Coord, b: Coord) -> Geometry {
+    let (south, north) = (a.y.min(b.y).clamp(-90.0, 90.0), a.y.max(b.y).clamp(-90.0, 90.0));
+    let width = (a.x - b.x).abs();
+    if width >= 360.0 {
+        return rectangle([-180.0, south, 180.0, north]);
+    }
+    let west = on_globe(Coord::new(a.x.min(b.x), 0.0)).x;
+    let east = west + width;
+    if east <= 180.0 {
+        return rectangle([west, south, east, north]);
+    }
+    let (Geometry::Polygon(mut first), Geometry::Polygon(second)) =
+        (rectangle([west, south, 180.0, north]), rectangle([-180.0, south, east - 360.0, north]))
+    else {
+        return rectangle([west, south, 180.0, north]);
+    };
+    first.extend(second);
+    Geometry::Polygon(first)
+}
+
 /// Takes a shape drawn with a graphic tool while the area is being drawn: `None` when it isn't
 /// (the graphic is added as usual), `Some(true)` when it was taken, `Some(false)` when it was too
 /// small to be a shape (the tool stays for another try).
@@ -1366,7 +1393,8 @@ pub(crate) fn take_drawn(app: &mut RustGisApp, shape: &str, pts: &[Coord]) -> Op
     if app.ui.stac.drawing.is_none_or(|d| d != shape) {
         return None;
     }
-    let pts: Vec<Coord> = pts.iter().copied().filter(|c| c.is_finite()).map(on_globe).collect();
+    let raw: Vec<Coord> = pts.iter().copied().filter(|c| c.is_finite()).collect();
+    let pts: Vec<Coord> = raw.iter().copied().map(on_globe).collect();
     let geometry = match shape {
         "point" => pts.first().map(|c| Geometry::Point(*c)),
         "line" if pts.len() >= 2 => Some(Geometry::Line(vec![pts])),
@@ -1375,10 +1403,9 @@ pub(crate) fn take_drawn(app: &mut RustGisApp, shape: &str, pts: &[Coord]) -> Op
             ring.extend(ring.first().copied());
             Some(Geometry::Polygon(vec![vec![ring]]))
         }
-        "rectangle" => match (pts.first(), pts.get(1)) {
-            (Some(a), Some(b)) if (a.x - b.x).abs() > 1e-9 && (a.y - b.y).abs() > 1e-9 => {
-                Some(rectangle([a.x.min(b.x), a.y.min(b.y), a.x.max(b.x), a.y.max(b.y)]))
-            }
+        // The corners as dragged (not wrapped), so a box across the dateline keeps its width.
+        "rectangle" => match (raw.first(), raw.get(1)) {
+            (Some(a), Some(b)) if (a.x - b.x).abs() > 1e-9 && (a.y - b.y).abs() > 1e-9 => Some(box_between(*a, *b)),
             _ => None,
         },
         _ => None,
@@ -1982,6 +2009,64 @@ mod tests {
         poll(&mut app, &ctx);
         assert_eq!(app.ui.stac.error.as_deref(), Some("HTTP 405"));
         assert!(app.ui.stac.waiting.is_none());
+    }
+
+    #[test]
+    fn a_post_search_with_a_next_link_says_more_match() {
+        let ctx = egui::Context::default();
+        let answer = |body: &str| -> Answer { Slot::new(std::sync::Mutex::new(Some(Ok(body.as_bytes().to_vec())))) };
+        // A POST `next` link has no address, so the parser gives none; the pane still says so.
+        let post_next = r#"{"type":"FeatureCollection","features":[],"links":[{"rel":"next","method":"POST","href":"http://127.0.0.1/search","body":{"token":"x"}}]}"#;
+        let mut app = RustGisApp::with_sample();
+        app.ui.stac.waiting = Some((Asked::Search("http://127.0.0.1/search".into(), None), answer(post_next)));
+        poll(&mut app, &ctx);
+        let said = app.ui.stac.info.clone().unwrap_or_default();
+        assert!(said.contains("more match"), "{said}");
+        // No next link and no count: nothing more is claimed.
+        let all = r#"{"type":"FeatureCollection","features":[],"links":[]}"#;
+        app.ui.stac.waiting = Some((Asked::Search("http://127.0.0.1/search".into(), None), answer(all)));
+        poll(&mut app, &ctx);
+        let said = app.ui.stac.info.clone().unwrap_or_default();
+        assert!(!said.contains("more match"), "{said}");
+    }
+
+    #[test]
+    fn another_graphic_tool_stops_the_drawing_of_the_area() {
+        let mut app = RustGisApp::with_sample();
+        draw(&mut app, "polygon");
+        assert_eq!(app.ui.stac.drawing, Some("polygon"));
+        // The ribbon picks the line graphic: the polygon drawn next isn't the area's.
+        app.run("tool.set", json!({"tool": "graphicLine"})).unwrap();
+        stop_stale_drawing(&mut app);
+        assert_eq!(app.ui.stac.drawing, None);
+        let polygon = [Coord::new(0.0, 0.0), Coord::new(1.0, 0.0), Coord::new(1.0, 1.0)];
+        assert_eq!(take_drawn(&mut app, "polygon", &polygon), None);
+        assert!(app.ui.stac.parts.is_empty());
+    }
+
+    #[test]
+    fn a_box_dragged_across_the_dateline_is_two_boxes() {
+        let (a, b) = (Coord::new(179.0, 10.0), Coord::new(181.0, 20.0));
+        let Geometry::Polygon(two) = box_between(a, b) else { panic!("a polygon") };
+        assert_eq!(two.len(), 2, "one box each side of the dateline");
+        let xs = |p: &Vec<Vec<Coord>>| p.iter().flatten().map(|c| c.x).fold((f64::MAX, f64::MIN), |(lo, hi), x| (lo.min(x), hi.max(x)));
+        assert_eq!(xs(&two[0]), (179.0, 180.0));
+        assert_eq!(xs(&two[1]), (-180.0, -179.0));
+        // Dragged from the other side, or on a repeated copy of the world, it is the same.
+        let Geometry::Polygon(again) = box_between(Coord::new(-181.0, 10.0), Coord::new(-179.0, 20.0)) else { panic!("a polygon") };
+        assert_eq!(again.len(), 2, "-181 to -179 is 179 to 181 on the next copy of the world");
+        assert_eq!(xs(&again[0]), (179.0, 180.0));
+        assert_eq!(xs(&again[1]), (-180.0, -179.0));
+    }
+
+    #[test]
+    fn a_box_within_the_world_stays_one_box_and_a_wide_one_is_the_globe() {
+        let Geometry::Polygon(one) = box_between(Coord::new(10.0, 0.0), Coord::new(20.0, 5.0)) else { panic!("a polygon") };
+        assert_eq!(one.len(), 1);
+        let Geometry::Polygon(globe) = box_between(Coord::new(-200.0, -10.0), Coord::new(200.0, 10.0)) else { panic!("a polygon") };
+        assert_eq!(globe.len(), 1);
+        let xs: Vec<f64> = globe[0].iter().flatten().map(|c| c.x).collect();
+        assert!(xs.iter().all(|x| (-180.0..=180.0).contains(x)), "{xs:?}");
     }
 
     #[test]
