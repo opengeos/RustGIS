@@ -305,6 +305,15 @@ pub mod sample_data {
         Ok(())
     }
 
+    /// A view's countries read as a layer's dataset, once per view and run (a few milliseconds
+    /// simplified, about 85 ms for an original view, which the desktop app reads on the
+    /// download's thread): `None` until its countries are at hand.
+    pub fn dataset(v: View) -> Option<&'static rustgis_data::Dataset> {
+        static SETS: [OnceLock<Option<rustgis_data::Dataset>>; VIEW_COUNT] = [const { OnceLock::new() }; VIEW_COUNT];
+        let t = text(v)?;
+        SETS.get(v.index())?.get_or_init(|| rustgis_data::io::read_geojson(t, "Countries").ok().map(|(d, _)| d)).as_ref()
+    }
+
     /// A view's countries GeoJSON, if it is built in or has been downloaded.
     pub fn text(v: View) -> Option<&'static str> {
         if v.built_in() { Some(COUNTRIES) } else { TEXTS.get(v.index()).and_then(|t| t.get()).map(String::as_str) }
@@ -584,9 +593,10 @@ fn world_of(wv: sample_data::View) -> &'static Vec<Geometry> {
     })
 }
 
-/// Builds a view's world outline ahead of time (the desktop app does it on the download's thread),
-/// so the first map drawn in it doesn't read its countries on the UI thread.
+/// Reads a view's countries and builds its world outline ahead of time (the desktop app does it on
+/// the download's thread), so neither is done on the UI thread when the view is shown.
 pub fn prepare_world(v: sample_data::View) {
+    let _ = sample_data::dataset(v);
     let _ = world_of(v);
 }
 

@@ -7,7 +7,7 @@ use rustgis_map::{Bookmark, Camera, ClassMethod, Marker, Ramp, Renderer, Rgba, S
 use crate::Project;
 
 pub use rustgis_render::sample_data::{
-    CITIES, COUNTRIES, Detail, LAKES, RIVERS, View, Worldview, countries, install, set_view, text, view, worldview,
+    CITIES, COUNTRIES, Detail, LAKES, RIVERS, View, Worldview, countries, dataset, install, set_view, text, view, worldview,
 };
 
 /// The worldview this system calls for: `RUSTGIS_WORLDVIEW` (a worldview's code, such as `ind`)
@@ -187,14 +187,14 @@ pub fn swap_countries(s: &mut crate::Session, from: View, to: View) -> bool {
     if from == to || s.dirty() || s.path.is_some() || s.can_undo() {
         return false;
     }
-    let read = |w| text(w).and_then(|t| read_geojson(t, "Countries").ok()).map(|(ds, _)| ds);
-    let (Some(old), Some(new)) = (read(from), read(to)) else {
+    // Read once per view (ahead of time on the desktop, see `fetch`), so a swap only copies.
+    let (Some(old), Some(new)) = (dataset(from), dataset(to)) else {
         return false;
     };
     let Some(l) = s.map_mut().layers.iter_mut().find(|l| l.name == "Countries" && l.dataset.features == old.features) else {
         return false;
     };
-    l.dataset = new;
+    l.dataset = new.clone();
     l.selection.clear();
     l.touch_geometry();
     true
