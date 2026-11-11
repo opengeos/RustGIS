@@ -572,7 +572,13 @@ fn where_clauses_compare_dates() {
     assert_eq!(select("issued LIKE '2026-%'", &d).unwrap(), vec![1, 2]);
     // Arithmetic on dates is an error, not a column of nulls.
     assert_eq!(parse("issued + 30", &d).err().unwrap_or_default(), "'issued' holds dates, and arithmetic on dates isn't supported yet");
+    // Also a date reached through a function or CASE, or given to a number's function: each
+    // would be null for every row.
+    for e in ["coalesce(issued) + 1", "-nullif(issued, '2026-01-01')", "CASE WHEN 1 = 1 THEN issued END * 2", "if(true, 1, issued) + 1"] {
+        assert_eq!(parse(e, &d).err().unwrap_or_default(), "'issued' holds dates, and arithmetic on dates isn't supported yet", "{e}");
+    }
+    assert_eq!(parse("abs(issued)", &d).err().unwrap_or_default(), "'issued' holds dates, and abs on dates isn't supported yet");
+    assert!(parse("coalesce(issued, '2026-01-01')", &d).is_ok(), "a date passed through is no arithmetic");
     assert!(parse("-ts", &d).is_err());
-    assert_eq!(value(&parse("coalesce(issued) + 1", &d).unwrap(), &d, 0, &Env::default()), Value::Null);
     assert_eq!(value(&parse("issued || ''", &d).unwrap(), &d, 0, &Env::default()), Value::Text("2025-12-31".into()));
 }

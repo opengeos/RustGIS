@@ -105,9 +105,9 @@ Rules shared by all of them:
   midnight, so `seen = '2026-03-05'` matches midnight only: use a range for the whole day.
   Date-times with different offsets compare by instant, and one without a zone as if it were
   UTC. Text that isn't a full date (`'2026'`) compares as text, against the date's ISO text.
-  Arithmetic on a date field is an error for now. A date reached another way, as in
-  `coalesce(issued) + 1`, gives null instead: Select By Attributes selects nothing for it, and
-  Calculate Field writes null.
+  Arithmetic on a date is an error for now, also on one reached through `coalesce`, `nullif`,
+  `if` or `CASE` (`coalesce(issued) + 1`), and so are the number functions (`abs`, `round`,
+  `min`, …) given a date.
 - **Arithmetic** reads text as a number when it is one (`'12' + 1` is 13). `+` joins text that
   isn't (`name + ' km'`); `-`, `*`, `/` on such text give null.
 - **Nulls.** Arithmetic with a null gives null. A comparison with a null is *unknown*: it

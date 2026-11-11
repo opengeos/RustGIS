@@ -1888,7 +1888,12 @@ fn template(s: &mut Session, p: &Json) -> CmdResult {
             if super::edit::non_finite_input(&value, ty) {
                 return Err(format!("field '{k}' requires a finite number"));
             }
-            defaults.push((l.dataset.fields.get(fi).map(|f| f.name.clone()).unwrap_or_default(), super::edit::coerce(value, ty)));
+            let coerced = super::edit::coerce(value.clone(), ty);
+            // A default a date field can't hold is refused, as edit.addFeature refuses the value.
+            if ty.is_temporal() && coerced.is_null() && !value.asks_null() {
+                return Err(format!("field '{k}': '{value}' isn't a {} value", ty.label()));
+            }
+            defaults.push((l.dataset.fields.get(fi).map(|f| f.name.clone()).unwrap_or_default(), coerced));
         }
     }
     l.design.templates.retain(|t| !t.name.eq_ignore_ascii_case(&name));

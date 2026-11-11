@@ -353,7 +353,7 @@ mod tests {
         assert_eq!(dt("2026-03-05T14:30:00+02:00").sort_key(), dt("2026-03-05T12:30:00Z").sort_key());
         assert_eq!(dt("2026-03-05T12:30:00").sort_key(), dt("2026-03-05T12:30:00Z").sort_key());
         assert_eq!(dt("2026-03-05T23:30:00-05:00").date().to_string(), "2026-03-05");
-        assert_eq!(dt("0001-01-01T00:30:00+01:00").micros(), i64::MIN, "before year 1 in UTC");
+        assert!(DateTime::parse("0001-01-01T00:30:00+01:00").is_none(), "before year 1 in UTC");
         assert_eq!(dt("9999-12-31T23:59:59.999999").date().to_string(), "9999-12-31");
         for bad in [
             "2026-03-05T",

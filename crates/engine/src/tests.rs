@@ -527,8 +527,16 @@ fn date_fields_work_from_adding_to_saving() {
     let mark = s.notice_mark();
     s.run("edit.calculateField", &json!({"layer": "Cities", "field": "seen", "expression": "founded"})).unwrap();
     assert!(s.notices_since(mark).iter().all(|n| !n.text.contains("Calculate Field")), "clean results give no notice");
+    let cell = |s: &Session, layer: &str, row: usize, field: &str| {
+        let ds = &s.map().layer_by_name(layer).unwrap().dataset;
+        ds.value(row, ds.field_index(field).unwrap()).to_string()
+    };
+    assert_eq!(cell(&s, "Cities", 0, "seen"), "2026-03-05T00:00:00");
+    // A template's default a date field can't hold is refused, as edit.addFeature refuses it.
+    let err = s.run("edit.template", &json!({"layer": "Cities", "name": "Old", "defaults": {"founded": "soon"}})).unwrap_err();
+    assert_eq!(err, "field 'founded': 'soon' isn't a Date value");
     // A date-time with a time of day, into a date field by Calculate Field or Paste, keeps its day, and that is said.
-    s.run("edit.setValue", &json!({"layer": "Cities", "row": 0, "field": "seen", "value": "2026-03-05T14:30:00"})).unwrap();
+    s.run("edit.setValue", &json!({"layer": "Cities", "row": 0, "field": "seen", "value": "2026-03-07T14:30:00"})).unwrap();
     let mark = s.notice_mark();
     s.run("edit.calculateField", &json!({"layer": "Cities", "field": "founded", "expression": "seen"})).unwrap();
     assert!(
@@ -536,7 +544,9 @@ fn date_fields_work_from_adding_to_saving() {
         "{:?}",
         s.notices_since(mark)
     );
+    assert_eq!(cell(&s, "Cities", 0, "founded"), "2026-03-07");
     s.run("edit.undo", &Value::Null).unwrap();
+    assert_eq!(cell(&s, "Cities", 0, "founded"), "2026-03-05");
     s.run("select.byAttributes", &json!({"layer": "Cities", "where": "seen > '2026-03-05T12:00:00'"})).unwrap();
     s.run("edit.copy", &Value::Null).unwrap();
     s.run("edit.pasteSpecial", &json!({"name": "Moments"})).unwrap();
@@ -549,6 +559,8 @@ fn date_fields_work_from_adding_to_saving() {
         "{:?}",
         s.notices_since(mark)
     );
+    let pasted = s.map().layer_by_name("Moments").unwrap().dataset.features.len() - 1;
+    assert_eq!(cell(&s, "Moments", pasted, "seen"), "2026-03-07");
     s.run("layer.remove", &json!({"layer": "Moments"})).unwrap();
     s.run("edit.setValue", &json!({"layer": "Cities", "row": 0, "field": "seen", "value": "2026-03-05T00:00:00"})).unwrap();
     let err = s.run("edit.setValue", &json!({"layer": "Cities", "row": 0, "field": "founded", "value": "soon"})).unwrap_err();

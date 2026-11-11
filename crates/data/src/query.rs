@@ -564,17 +564,30 @@ impl Parser<'_> {
         }
         if rest.is_empty() { Ok(first) } else { self.arithmetic(first, rest) }
     }
-    /// `first op term …`, unless a term is a date field: date arithmetic (`issued + 30`) is an
-    /// error until the language has it, rather than a column of nulls.
+    /// `first op term …`, unless a term can be a date: date arithmetic (`issued + 30`,
+    /// `coalesce(issued) + 1`) is an error until the language has it, rather than a column of
+    /// nulls.
     fn arithmetic(&self, first: Expr, rest: Vec<(Arith, Expr)>) -> Result<Expr, String> {
         for e in std::iter::once(&first).chain(rest.iter().map(|(_, e)| e)) {
-            if let Expr::Field(i) = e
-                && let Some(f) = self.ds.fields.get(*i).filter(|f| f.ty.is_temporal())
-            {
+            if let Some(f) = self.date_field(e) {
                 return Err(format!("'{}' holds dates, and arithmetic on dates isn't supported yet", f.name));
             }
         }
         Ok(Expr::Chain(Box::new(first), rest))
+    }
+    /// The date field `e` can give a value of: the field itself, or one passed through `if`,
+    /// `coalesce`, `nullif` or `CASE`. Other functions give numbers or text.
+    fn date_field(&self, e: &Expr) -> Option<&crate::Field> {
+        match e {
+            Expr::Field(i) => self.ds.fields.get(*i).filter(|f| f.ty.is_temporal()),
+            Expr::Call(Func::If, args) => args.iter().skip(1).find_map(|a| self.date_field(a)),
+            Expr::Call(Func::Coalesce, args) => args.iter().find_map(|a| self.date_field(a)),
+            Expr::Call(Func::NullIf, args) => args.first().and_then(|a| self.date_field(a)),
+            Expr::Case { arms, otherwise, .. } => {
+                arms.iter().map(|(_, then)| then).chain(otherwise.as_deref()).find_map(|a| self.date_field(a))
+            }
+            _ => None,
+        }
     }
     fn sum(&mut self) -> Result<Expr, String> {
         self.chain(&[Arith::Add, Arith::Sub], Self::product)
@@ -713,6 +726,27 @@ impl Parser<'_> {
                 format!("{min} to {max}")
             };
             return Err(format!("{fname} takes {n} argument{}", if n == "1" { "" } else { "s" }));
+        }
+        // A number's functions would give null for every date, so a date there is an error, as
+        // date arithmetic is.
+        if matches!(
+            f,
+            Func::Abs
+                | Func::Round
+                | Func::Floor
+                | Func::Ceil
+                | Func::Sqrt
+                | Func::Exp
+                | Func::Ln
+                | Func::Log10
+                | Func::Min
+                | Func::Max
+                | Func::Clamp
+                | Func::ScaleLinear
+                | Func::ScaleExp
+        ) && let Some(d) = args.iter().find_map(|a| self.date_field(a))
+        {
+            return Err(format!("'{}' holds dates, and {fname} on dates isn't supported yet", d.name));
         }
         let m = match f {
             Func::Area => Measure::Area,

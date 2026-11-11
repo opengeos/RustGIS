@@ -2330,6 +2330,8 @@ fn converted(v: &Value, ty: FieldType) -> Value {
         (Value::Null, _) => Value::Null,
         // A date-time into a date field is the day it shows, as Calculate Field puts it.
         (Value::DateTime(t), FieldType::Date) => Value::Date(t.date()),
+        // A date is no number or yes/no: null, and counted, rather than read as one.
+        (Value::Date(_) | Value::DateTime(_), FieldType::Integer | FieldType::Double | FieldType::Boolean) => Value::Null,
         (Value::Int(i), FieldType::Double) => Value::Float(*i as f64),
         // In range, truncated; out of range (or not a number), empty rather than clamped. i64's
         // bounds as f64 are exactly -2⁶³ and 2⁶³.
@@ -11897,6 +11899,11 @@ mod tests {
         assert_eq!(converted(&t, FieldType::Date), Value::parse("2026-03-05", FieldType::Date));
         let d = Value::parse("2026-03-05", FieldType::Date);
         assert_eq!(converted(&d, FieldType::DateTime), Value::parse("2026-03-05T00:00:00", FieldType::DateTime));
+        // A date into a number or yes/no field is null (and counted), not read as false.
+        for ty in [FieldType::Boolean, FieldType::Integer, FieldType::Double] {
+            assert_eq!(converted(&d, ty), Value::Null, "{ty:?}");
+            assert_eq!(converted(&t, ty), Value::Null, "{ty:?}");
+        }
     }
 
     /// The layers of a tool's output with several.
