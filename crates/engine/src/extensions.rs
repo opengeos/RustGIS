@@ -152,7 +152,9 @@ impl State {
         let mut kept = Map::new();
         for (id, on) in map {
             match on.as_bool() {
-                Some(on) if !id.is_empty() && id.chars().count() <= MAX_ID && chosen.len() < MAX_ENTRIES => {
+                // The cap is for ids this version doesn't know: a known extension's choice is
+                // always read.
+                Some(on) if !id.is_empty() && id.chars().count() <= MAX_ID && (get(&id).is_some() || chosen.len() < MAX_ENTRIES) => {
                     chosen.insert(id, on);
                 }
                 _ => {
@@ -330,5 +332,13 @@ mod tests {
         assert!(said.is_some_and(|s| s.starts_with("3 entries")));
         let (again, _) = State::from_setting(st.to_setting().as_deref());
         assert_eq!(again.chosen.len() + again.kept.len(), MAX_ENTRIES + 3);
+        // A known extension's choice is never lost to the cap.
+        let full: Map<String, Value> = (0..MAX_ENTRIES).map(|i| (format!("from-newer-{i:03}"), Value::Bool(true))).collect();
+        let (mut st, said) = State::from_setting(Some(&Value::Object(full).to_string()));
+        assert_eq!(said, None);
+        assert!(st.set("imagery", true).is_ok());
+        let (again, said) = State::from_setting(st.to_setting().as_deref());
+        assert_eq!(said, None);
+        assert!(again.is_on("imagery"));
     }
 }

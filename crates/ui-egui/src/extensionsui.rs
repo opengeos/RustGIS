@@ -171,7 +171,10 @@ mod tests {
         set(&mut app, "imagery", false);
         assert!(app.extensions.message.as_ref().is_some_and(|(ok, _)| *ok));
         assert!(!crate::ribbon::tab_exists(&app, &tab));
+        // A refused section leaves a pick started elsewhere alone.
+        app.workflow.pick = Some(crate::analysispane::Pick { purpose: "test", needed: 1, points: Vec::new() });
         let why = app.run("ui.pane.workflows", json!({"section": "ortho"})).unwrap_err();
+        assert!(app.workflow.pick.is_some());
         assert!(why.contains("Imagery extension, which is off"), "{why}");
         assert!(!crate::analysispane::section_shown(&app.session, "classify"));
         assert!(crate::analysispane::section_shown(&app.session, "rasterFunctions"));
@@ -243,8 +246,11 @@ mod tests {
         // While the extension is off its tab isn't there to open.
         app.run("ui.tab", json!({"tab": "Home"})).unwrap();
         app.run("extension.disable", json!({"id": "imagery"})).unwrap();
-        crate::showme::start(&mut app, &step("raster.classify"));
+        app.ui.show_me = None;
+        let said = crate::showme::start(&mut app, &step("raster.classify"));
         assert_eq!(app.ui.tab, "Home");
+        assert!(said.contains("Imagery extension, which is off"), "{said}");
+        assert!(app.ui.show_me.is_none());
     }
 
     #[test]

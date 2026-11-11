@@ -8,10 +8,9 @@ use crate::{CmdResult, CommandSpec as C, Session};
 pub fn commands() -> Vec<C> {
     use crate::policy::{Effect, Effects};
     vec![
-        C::new("extension.list", "Extensions", "Plugins › Extensions", list)
-            .roles(&[])
-            .effects(Effects::NONE.with(Effect::Reserved))
-            .view(),
+        // Listing reads nothing of the user's and changes nothing; turning one on or off is
+        // Reserved, as `plugin.enable` is.
+        C::new("extension.list", "Extensions", "Plugins › Extensions", list).roles(&[]).effects(Effects::NONE).view(),
         C::new("extension.enable", "Enable Extension", "Plugins › Extensions", enable)
             .roles(&[])
             .effects(Effects::NONE.with(Effect::Reserved))

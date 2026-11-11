@@ -52,6 +52,10 @@ pub fn start(app: &mut RustGisApp, st: &TaskStep) -> String {
         app.ui.open_right(RightPane::Symbology);
         return tl!("It's in the Symbology pane, open on the step's layer.").to_string();
     }
+    // A command of an extension that is off isn't on the ribbon: say how to turn it on.
+    if let Some(why) = app.session.extensions().blocks(id) {
+        return why;
+    }
     let spec = app.session.registry.get(id);
     let label = spec.map_or_else(|| id.to_string(), |c| tl!(c.label).to_string());
     let (target, key, fallback) = match id {

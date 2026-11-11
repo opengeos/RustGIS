@@ -841,6 +841,12 @@ impl Session {
         if !self.policy.scopes.is_empty() {
             self.continuation_owner(&c)?;
         }
+        // A run whose extension was turned off while it ran is never finished: its raster is
+        // let go here rather than kept to no end.
+        if let Some(why) = self.extensions().blocks(c.node.id()) {
+            self.raster_results.retain(|(n, _)| *n != id);
+            return Err(why);
+        }
         let mut params = params.clone();
         params.as_object_mut().ok_or("raster completion parameters must be an object")?.insert("ran".into(), json!(id));
         self.resume(&c, |s| s.run(command, &params))?
