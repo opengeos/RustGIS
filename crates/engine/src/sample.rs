@@ -141,7 +141,7 @@ pub fn fetch(v: View, done: Box<dyn FnOnce(Result<(), String>) + Send>) {
             }
             r
         };
-        // A thread the system refuses costs the window's time, not the worldview.
+        // A thread the system refuses costs the worldview, never the window's time.
         let shared = std::sync::Arc::new(std::sync::Mutex::new(Some((work, done))));
         let mine = shared.clone();
         let spawned = std::thread::Builder::new().name("worldview".into()).spawn(move || {
@@ -150,9 +150,9 @@ pub fn fetch(v: View, done: Box<dyn FnOnce(Result<(), String>) + Send>) {
             }
         });
         if spawned.is_err()
-            && let Some((work, done)) = shared.lock().ok().and_then(|mut g| g.take())
+            && let Some((_, done)) = shared.lock().ok().and_then(|mut g| g.take())
         {
-            done(work());
+            done(Err(format!("couldn't start a thread to download the {} worldview", v.worldview.name())));
         }
     }
     #[cfg(target_arch = "wasm32")]

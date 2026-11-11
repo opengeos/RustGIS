@@ -735,16 +735,21 @@ fn cli() -> ExitCode {
     // `mcp --attach` relays to the running app, which shows its own worldview; `ask`'s model,
     // sign-in and account options draw nothing.
     let attaching = cmd == "mcp" && args.iter().any(|a| a == "--attach");
-    let ask_setup = cmd == "ask"
-        && args.iter().any(|a| ["--models", "--login", "--logout", "--accounts", "--account", "--remove-account"].contains(&a.as_str()));
+    // (`--account ID` alone may come with a request, which draws maps, so it isn't one of them.)
+    let ask_setup =
+        cmd == "ask" && args.iter().any(|a| ["--models", "--login", "--logout", "--accounts", "--remove-account"].contains(&a.as_str()));
     if matches!(cmd, "render" | "run" | "ask" | "mcp")
         && !attaching
         && !ask_setup
         && let Err(e) = rustgis_engine::sample::download_blocking(wanted)
     {
         // Asked for by name, it is needed; the system's choice falls back to the built-in borders.
-        if worldview != "auto" || opt(&args, "--worldview-detail").is_some() {
+        if worldview != "auto" {
             eprintln!("rustgis-cli: --worldview {worldview}: {e}");
+            return ExitCode::FAILURE;
+        }
+        if opt(&args, "--worldview-detail").is_some() {
+            eprintln!("rustgis-cli: --worldview-detail {detail}: {e}");
             return ExitCode::FAILURE;
         }
         eprintln!("rustgis-cli: warning: {e}; the map shows the default borders");

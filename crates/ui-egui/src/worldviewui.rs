@@ -195,7 +195,7 @@ mod tests {
         poll(&mut app, &egui::Context::default());
         assert!(sample::text(View::new(netherlands, sample::Detail::Original)).is_some());
         // Back to simplified: already in memory, nothing downloaded.
-        app.run("ui.worldview", json!({"detail": "simplified"})).unwrap();
+        app.run("ui.worldview", json!({"worldview": null, "detail": "simplified"})).unwrap();
         assert_eq!(asked.borrow().len(), 2);
         assert_eq!(app.ui.worldview, "nld");
         assert!(app.run("ui.worldview", json!({"detail": "detailed"})).is_err());

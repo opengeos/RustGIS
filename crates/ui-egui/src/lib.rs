@@ -2846,9 +2846,11 @@ impl RustGisApp {
                 self.map.invalidate();
             }
             "ui.worldview" => {
-                // `detail` alone keeps the worldview; no parameters at all mean `auto`.
+                // `detail` alone (a missing or null worldview) keeps the worldview; no parameters at
+                // all mean `auto`.
+                let detail_only = p.get("worldview").is_none_or(Value::is_null) && p.get("detail").is_some_and(|d| !d.is_null());
                 let code = match p.get("worldview") {
-                    None if p.get("detail").is_some() => None,
+                    _ if detail_only => None,
                     None | Some(Value::Null) => Some(i18n::AUTO.to_string()),
                     Some(Value::String(c)) => Some(c.trim().to_ascii_lowercase()),
                     Some(other) => return Err(format!("worldview must be a worldview's code, not {other}")),

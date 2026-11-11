@@ -5010,7 +5010,11 @@ fn worldview_menu(app: &mut RustGisApp, ui: &mut Ui) {
         ui.label(egui::RichText::new(tl!("Detail")).small().weak());
         for (d, text, tip) in [
             (Detail::Simplified, tl!("Simplified"), tl!("Borders at 1:110m, a small download (about 250 KB)")),
-            (Detail::Original, tl!("Original"), tl!("Natural Earth's 1:10m borders with every island, a larger download (about 10 MB)")),
+            (
+                Detail::Original,
+                tl!("Original"),
+                tl!("Natural Earth's 1:10m borders with every island, a larger download (about 3 MB, 10 MB unpacked)"),
+            ),
         ] {
             if ui.selectable_label(wanted.detail == d, text).on_hover_text(tip).clicked() {
                 let _ = app.run("ui.worldview", json!({"detail": d.code()}));

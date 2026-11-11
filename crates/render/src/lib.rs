@@ -123,8 +123,8 @@ pub mod sample_data {
         }
 
         /// Its place among the views' slots.
-        pub fn index(self) -> usize {
-            self.worldview.index() * 2 + usize::from(self.detail == Detail::Simplified)
+        pub const fn index(self) -> usize {
+            self.worldview.0 as usize * 2 + matches!(self.detail, Detail::Simplified) as usize
         }
 
         /// Its file's path in the cache folder (the GeoJSON itself).
@@ -263,7 +263,7 @@ pub mod sample_data {
     static TEXTS: [OnceLock<String>; VIEW_COUNT] = [const { OnceLock::new() }; VIEW_COUNT];
 
     /// The view shown, as its index.
-    static VIEW: AtomicU8 = AtomicU8::new(0);
+    static VIEW: AtomicU8 = AtomicU8::new(View::DEFAULT.index() as u8);
 
     /// Keeps a view's downloaded countries for the rest of the run, once they are checked: at
     /// most [`View::max_bytes`], GeoJSON polygons of at least 100 countries with the built-in
@@ -6910,6 +6910,11 @@ mod tests {
         assert_eq!(sample_data::view(), original);
         assert_eq!(sample_data::worldview(), w);
         assert!(set_view(View::DEFAULT));
+        // The view shown at start is the built-in one, even once the default worldview's
+        // original detail is at hand.
+        let default_original = View::new(Worldview::DEFAULT, Detail::Original);
+        install(default_original, sample_data::COUNTRIES.to_string()).unwrap();
+        assert_eq!(sample_data::view(), View::DEFAULT);
     }
 
     #[test]
