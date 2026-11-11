@@ -4349,16 +4349,19 @@ fn count_points_on(inp: &dyn Inputs, p: &Json, threads: Option<usize>) -> Result
             // polygon passed as points, meeting one only there, has no part in it).
             let at = if matches!(g, Geometry::Point(_) | Geometry::MultiPoint(_)) { poles(&g.extent()) } else { (false, false) };
             at_poles.add_to(at, cand_buf);
-            // Reserved fallibly: a point in very many overlapping polygons is an error, as the
-            // polygons' lists of points below are, not an abort.
+            // Grown fallibly, one match at a time: a point in very many overlapping polygons is an
+            // error, as the polygons' lists of points below are, not an abort, and the list holds
+            // what the point meets, not every candidate the index returned.
             let mut met = Vec::new();
-            met.try_reserve(cand_buf.len())
-                .map_err(|e| format!("Summarize Within: not enough memory to keep each point's polygons: {e}"))?;
-            met.extend(cand_buf.iter().copied().filter(|&zi| {
-                zones
+            for &zi in cand_buf.iter() {
+                let meets = zones
                     .get(zi)
-                    .is_some_and(|(_, mp, z_ext, z_at)| meet_at_a_pole(at, *z_at) || (z_ext.intersects(&ext) && mp.intersects(&pg)))
-            }));
+                    .is_some_and(|(_, mp, z_ext, z_at)| meet_at_a_pole(at, *z_at) || (z_ext.intersects(&ext) && mp.intersects(&pg)));
+                if meets {
+                    met.try_reserve(1).map_err(|e| format!("Summarize Within: not enough memory to keep each point's polygons: {e}"))?;
+                    met.push(zi);
+                }
+            }
             Ok(met)
         })?;
         for (&r, met_zones) in batch.iter().zip(met_by) {
@@ -6299,12 +6302,14 @@ fn spatial_join_on(inp: &dyn Inputs, p: &Json, threads: Option<usize>) -> Result
     // Each target's matches, in the order they're joined, with their distances when measured:
     // found on their own, on several threads when there are many (#1252), in batches of
     // [`FEATURE_BATCH`] targets a thread, so the lists held at once stay bounded (a target can
-    // match thousands). `None` for a row with no feature.
+    // match thousands). `None` for a row with no feature. An overlap that can't be measured is
+    // that target's result, raised here in target order, so a threaded run fails at the same
+    // row as one thread does.
     crate::control::begin(target_rows.len());
     let target_threads = threads_for(target_rows.len());
     for batch in target_rows.chunks(target_threads.max(1).saturating_mul(FEATURE_BATCH)) {
         let found = crate::parallel::try_map_on(batch, target_threads, Vec::new, |cand_buf, _, &tr| {
-            let Some(tf) = target.features.get(tr) else { return Ok(None) };
+            let Some(tf) = target.features.get(tr) else { return Ok(Ok(None)) };
             let mut matches: Vec<(usize, Option<f64>)> = Vec::new();
             if let Some(tg) = tf.geometry.as_ref() {
                 let t_ext = tg.extent();
@@ -6349,11 +6354,11 @@ fn spatial_join_on(inp: &dyn Inputs, p: &Json, threads: Option<usize>) -> Result
                             }
                             let o = overlap(&t_geo, &j.geo);
                             if !o.is_finite() {
-                                return Err(format!(
+                                return Ok(Err(format!(
                                     "Spatial Join: the overlap of target row {} and join row {} cannot be measured",
                                     tr + 1,
                                     j.row + 1
-                                ));
+                                )));
                             }
                             if o > 0.0 && best.is_none_or(|(_, b)| o > b) {
                                 best = Some((j.row, o));
@@ -6371,12 +6376,12 @@ fn spatial_join_on(inp: &dyn Inputs, p: &Json, threads: Option<usize>) -> Result
                     }
                 }
             }
-            Ok(Some(matches))
+            Ok::<_, String>(Ok::<_, String>(Some(matches)))
         })?;
 
         for (&tr, matches) in batch.iter().zip(found) {
             let Some(tf) = target.features.get(tr) else { continue };
-            let Some(matches) = matches else { continue };
+            let Some(matches) = matches? else { continue };
             let m_count = matches.len();
             total_matches += m_count;
 
