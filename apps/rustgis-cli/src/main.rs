@@ -739,10 +739,12 @@ fn cli() -> ExitCode {
     // `mcp --attach` relays to the running app, which shows its own worldview; `ask`'s model,
     // sign-in and account options draw nothing.
     let attaching = cmd == "mcp" && args.iter().any(|a| a == "--attach");
-    // `--account ID` is one of them only without a request, which would draw maps.
     let ask_setup = cmd == "ask"
         && (args.iter().any(|a| ["--models", "--login", "--logout", "--accounts", "--remove-account"].contains(&a.as_str()))
-            || (args.iter().any(|a| a == "--account") && ask_request(&args).is_none()));
+            // Without a request, nothing is drawn by `--account`, nor unless a project is read or saved.
+            || (ask_request(&args).is_none()
+                && (args.iter().any(|a| a == "--account")
+                    || !args.iter().any(|a| ["--sample", "--project", "--data", "--save"].contains(&a.as_str())))));
     if matches!(cmd, "render" | "run" | "ask" | "mcp")
         && !attaching
         && !ask_setup

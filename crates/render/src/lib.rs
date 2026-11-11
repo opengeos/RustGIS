@@ -259,8 +259,12 @@ pub mod sample_data {
     /// How many views there are (each worldview at each detail).
     pub const VIEW_COUNT: usize = VIEWS.len() * 2;
 
-    /// The downloaded countries of each view (the default's slots stay empty).
+    /// The downloaded countries of each view (the built-in one's slot stays empty), and each view's
+    /// countries read. Both are kept for the rest of the run, deliberately: a view is downloaded
+    /// only when chosen, so they hold the views a session has shown (an original one is about
+    /// 10 MB of text and as much read), and switching back to one costs nothing.
     static TEXTS: [OnceLock<String>; VIEW_COUNT] = [const { OnceLock::new() }; VIEW_COUNT];
+    static SETS: [OnceLock<Option<rustgis_data::Dataset>>; VIEW_COUNT] = [const { OnceLock::new() }; VIEW_COUNT];
 
     /// The view shown, as its index.
     static VIEW: AtomicU8 = AtomicU8::new(View::DEFAULT.index() as u8);
@@ -277,22 +281,30 @@ pub mod sample_data {
         if text.len() > max {
             return Err(format!("the {} worldview's countries are {} bytes, more than the {max} allowed", w.name(), text.len()));
         }
-        check(&text).map_err(|e| format!("the {} worldview's countries aren't usable: {e}", w.name()))?;
-        let _ = TEXTS.get(v.index()).ok_or("unknown worldview")?.set(text);
+        let ds = check(&text).map_err(|e| format!("the {} worldview's countries aren't usable: {e}", w.name()))?;
+        let slot = v.index();
+        if TEXTS.get(slot).ok_or("unknown worldview")?.set(text).is_ok() {
+            // Read once: the check's dataset is the one shown.
+            let _ = SETS.get(slot).ok_or("unknown worldview")?.set(Some(ds));
+        }
         Ok(())
     }
 
-    /// Checks that `text` can stand in for the built-in countries. It reads the whole file, once
-    /// per view and run: a few milliseconds for a simplified one, longer for an original one, which
-    /// the desktop app checks on the download's thread.
-    fn check(text: &str) -> Result<(), String> {
+    /// Checks that `text` can stand in for the built-in countries and returns it read. It reads the
+    /// whole file, once per view and run: a few milliseconds for a simplified one, about 85 ms for
+    /// an original one, which the desktop app checks on the download's thread. A file the reader
+    /// skips features of is refused: a worldview missing countries isn't usable.
+    fn check(text: &str) -> Result<rustgis_data::Dataset, String> {
         use rustgis_data::Geometry;
         let names = |d: &rustgis_data::Dataset| d.fields.iter().map(|f| f.name.clone()).collect::<Vec<_>>();
         // The built-in countries' fields, read once.
         static BUILT_IN: OnceLock<Vec<String>> = OnceLock::new();
         let built_in =
             BUILT_IN.get_or_init(|| rustgis_data::io::read_geojson(COUNTRIES, "Countries").map(|(d, _)| names(&d)).unwrap_or_default());
-        let ds = rustgis_data::io::read_geojson(text, "Countries").map(|(d, _)| d).map_err(|e| e.to_string())?;
+        let (ds, report) = rustgis_data::io::read_geojson(text, "Countries").map_err(|e| e.to_string())?;
+        if report.skipped > 0 {
+            return Err(format!("{} of its features can't be read", report.skipped));
+        }
         if ds.features.len() < 100 {
             return Err(format!("{} countries, fewer than 100", ds.features.len()));
         }
@@ -302,16 +314,19 @@ pub mod sample_data {
         if !ds.features.iter().all(|f| matches!(f.geometry, Some(Geometry::Polygon(_)))) {
             return Err("not every country is a polygon".into());
         }
-        Ok(())
+        Ok(ds)
     }
 
     /// A view's countries read as a layer's dataset, once per view and run (a few milliseconds
     /// simplified, about 85 ms for an original view, which the desktop app reads on the
     /// download's thread): `None` until its countries are at hand.
     pub fn dataset(v: View) -> Option<&'static rustgis_data::Dataset> {
-        static SETS: [OnceLock<Option<rustgis_data::Dataset>>; VIEW_COUNT] = [const { OnceLock::new() }; VIEW_COUNT];
-        let t = text(v)?;
-        SETS.get(v.index())?.get_or_init(|| rustgis_data::io::read_geojson(t, "Countries").ok().map(|(d, _)| d)).as_ref()
+        let slot = SETS.get(v.index())?;
+        if v.built_in() {
+            return slot.get_or_init(|| rustgis_data::io::read_geojson(COUNTRIES, "Countries").ok().map(|(d, _)| d)).as_ref();
+        }
+        // A downloaded view's dataset is kept by `install`, which read it.
+        slot.get()?.as_ref()
     }
 
     /// A view's countries GeoJSON, if it is built in or has been downloaded.
@@ -584,13 +599,13 @@ fn world_of(wv: sample_data::View) -> &'static Vec<Geometry> {
     static W: [OnceLock<Vec<Geometry>>; sample_data::VIEW_COUNT] = [const { OnceLock::new() }; sample_data::VIEW_COUNT];
     static NONE: Vec<Geometry> = Vec::new();
     let Some(cell) = W.get(wv.index()) else { return &NONE };
-    cell.get_or_init(|| match rustgis_data::io::read_geojson(sample_data::text(wv).unwrap_or(sample_data::COUNTRIES), "world") {
-        Ok((ds, _)) => ds.features.into_iter().filter_map(|f| f.geometry).map(|g| g.map_coords(&lonlat_to_merc)).collect(),
-        Err(e) => {
-            log::warn!("built-in world outline unreadable: {e}");
-            Vec::new()
-        }
-    })
+    // A view whose countries aren't at hand draws no outline and caches none, so its slot fills
+    // once they arrive.
+    let Some(ds) = sample_data::dataset(wv) else {
+        log::warn!("the world outline of a worldview not at hand was asked for");
+        return &NONE;
+    };
+    cell.get_or_init(|| ds.features.iter().filter_map(|f| f.geometry.as_ref()).map(|g| g.map_coords(&lonlat_to_merc)).collect())
 }
 
 /// Reads a view's countries and builds its world outline for the flat map and the globe ahead of
@@ -6902,6 +6917,10 @@ mod tests {
         }
         let few = r#"{"type":"FeatureCollection","features":[{"type":"Feature","properties":{"name":"A"},"geometry":{"type":"Polygon","coordinates":[[[0,0],[1,0],[1,1],[0,0]]]}}]}"#;
         assert!(install(original, few.to_string()).unwrap_err().contains("fewer than 100"));
+        // Nor one the reader skips features of (a country left out), however many it keeps.
+        let mut broken: serde_json::Value = serde_json::from_str(sample_data::COUNTRIES).unwrap();
+        broken["features"][0]["geometry"] = serde_json::json!({"type": "Polygon", "coordinates": "not coordinates"});
+        assert!(install(original, broken.to_string()).unwrap_err().contains("can't be read"));
         assert_eq!(text(original), None);
         // Nor is anything over the size allowed at its detail, whatever it holds (the web app's
         // fetch has no cap).
