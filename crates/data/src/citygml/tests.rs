@@ -2018,7 +2018,54 @@ fn children_past_what_declarations_may_take_are_read() {
     );
     let written =
         format!(r#"<core:cityObjectMember><bldg:Building gml:id="c"{many}>{children}{inner}</bldg:Building></core:cityObjectMember>"#);
-    let out = read("model.gml", &lonlat(&written), None).unwrap();
+    // A link, so the file is indexed and every declaration is looked at.
+    let linking = building(
+        "d",
+        r##"<bldg:lod2MultiSurface><gml:MultiSurface><gml:surfaceMember xlink:href="#p"/></gml:MultiSurface></bldg:lod2MultiSurface>"##,
+    );
+    let out = read("model.gml", &lonlat(&[written, linking].concat()), None).unwrap();
     let ds = only(&out);
     assert!((area(ds.features[row_of(ds, "c")].geometry.as_ref()) - 100.0).abs() < 1e-6, "{:?}", messages_of(&out));
+}
+
+/// A solid whose exterior links to what is itself only a link keeps its cavities for the end of
+/// that chain: read with the shell it ends at, left out with the solid when it ends in nothing.
+#[test]
+fn cavities_wait_for_the_end_of_an_exterior_chain() {
+    let cavity = format!(
+        "<gml:interior><gml:CompositeSurface><gml:surfaceMember>{}</gml:surfaceMember></gml:CompositeSurface></gml:interior>",
+        polygon("c", &square(2.0, 2.0, 2.0, 0.0))
+    );
+    let model = |end: &str| {
+        let inner = format!(
+            r##"<bldg:lod1MultiSurface><gml:MultiSurface><gml:surfaceMember><gml:CompositeSurface gml:id="s"><gml:surfaceMember>{}</gml:surfaceMember></gml:CompositeSurface></gml:surfaceMember><gml:surfaceMember><gml:CompositeSurface gml:id="l" xlink:href="#{end}"/></gml:surfaceMember></gml:MultiSurface></bldg:lod1MultiSurface>
+            <bldg:lod2Solid><gml:Solid><gml:exterior xlink:href="#l"/>{cavity}</gml:Solid></bldg:lod2Solid>"##,
+            polygon("a", &square(0.0, 0.0, 10.0, 0.0))
+        );
+        read("model.gml", &lonlat(&building("b", &inner)), None).unwrap()
+    };
+    let lod = |out: &[(Dataset, ReadReport)]| value(only(out), 0, "lod");
+    // Ends at a shell: the solid is read, at LoD 2.
+    let out = model("s");
+    assert_eq!(lod(&out), Value::Text("2".into()), "{:?}", messages_of(&out));
+    // Ends in nothing: the solid is left out with its cavity, and the links said; LoD 1 draws.
+    let out = model("nothing");
+    assert_eq!(lod(&out), Value::Text("1".into()), "{:?}", messages_of(&out));
+    assert!(says(&out, "are given only by a link"), "{:?}", messages_of(&out));
+}
+
+/// A prototype with nothing to place (its surfaces all links, which it doesn't follow) leaves its
+/// instance at its reference point, and said.
+#[test]
+fn a_prototype_with_nothing_to_place_is_its_reference_point() {
+    let prototype = r##"<core:relativeGMLGeometry><gml:MultiSurface gml:id="proto"><gml:surfaceMember xlink:href="#elsewhere"/></gml:MultiSurface></core:relativeGMLGeometry>"##;
+    let member = furniture(
+        "t",
+        &format!(
+            "<core:transformationMatrix>1 0 0 0 0 1 0 0 0 0 1 0 0 0 0 1</core:transformationMatrix>{prototype}{}",
+            reference(5.0, 5.0, 1.0)
+        ),
+    );
+    let out = read("model.gml", &lonlat(&member), None).unwrap();
+    assert!(says(&out, "1 geometry instances are drawn as a point"), "{:?}", messages_of(&out));
 }

@@ -421,6 +421,9 @@ impl Scopes {
         }
         self.left -= cost;
         let mut pairs = around.pairs.clone();
+        // Each key's place among the pairs, so a set of many declarations is merged in their number,
+        // not its square.
+        let mut place: HashMap<String, usize> = pairs.iter().enumerate().map(|(k, (key, _, _))| (key.clone(), k)).collect();
         let mut gml: Vec<String> =
             around.gml.iter().filter(|g| !mine.iter().any(|(k, _, _)| k.strip_prefix("xmlns:") == Some(g.as_str()))).cloned().collect();
         for (key, written, is_gml) in mine {
@@ -430,9 +433,12 @@ impl Scopes {
             {
                 gml.push(prefix.to_string());
             }
-            match pairs.iter_mut().find(|(k, _, _)| *k == key) {
+            match place.get(&key).and_then(|&k| pairs.get_mut(k)) {
                 Some(pair) => *pair = (key, written, is_gml),
-                None => pairs.push((key, written, is_gml)),
+                None => {
+                    place.insert(key.clone(), pairs.len());
+                    pairs.push((key, written, is_gml));
+                }
             }
         }
         let bytes = size(&pairs) + gml.iter().map(String::len).sum::<usize>();
@@ -1712,6 +1718,16 @@ impl Reading {
             }
             return;
         }
+        // A solid's exterior given by a link to what is itself only a link: its cavities wait for
+        // the end of that chain, so a chain that ends in nothing leaves the solid out with them, as
+        // an exterior link to nothing does.
+        if !read && !then.is_empty() && only_link(&target) {
+            match targets.end_of(id) {
+                Some(end) => links.push(Pending { to: To::Href(end), then, dim: at_link, at, solid, place: None }),
+                None => self.unread(Unread::Missing),
+            }
+            return;
+        }
         // Its bytes: what reading it parses, its elements and its coordinates' text.
         if !self.pay(targets, far, if read { 0 } else { target.range().len() }) {
             return;
@@ -2003,13 +2019,19 @@ struct Got {
 }
 
 impl Got {
-    /// A prototype read in its own system, placed; none when the instances' points left to place
-    /// (`placing`) don't cover it, or a point placed isn't a finite number. Its rings of no area were
+    /// A prototype read in its own system, placed; none when it holds nothing to place, the
+    /// instances' points left to place (`placing`) don't cover it, or a point placed isn't a finite
+    /// number. Its rings of no area were
     /// left out and said when it was read; those its placing flattens (a matrix that scales an axis
     /// to nothing) are left out the same way, in `dropped_rings`, which [`Reading::add`] says for
     /// each instance.
     fn placed(&self, place: &Placement, placing: &mut usize) -> Option<Got> {
         let f = &self.faces;
+        // Nothing to place (a prototype whose surfaces are all links, which it doesn't follow): its
+        // instance is its reference point, and said.
+        if f.rings().next().is_none() && self.lines.is_empty() && self.points.is_empty() {
+            return None;
+        }
         let size = f.rings().chain(&self.lines).map(Vec::len).sum::<usize>() + self.points.len() + self.heights.len();
         if size > *placing {
             return None;
