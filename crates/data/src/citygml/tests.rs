@@ -2097,3 +2097,11 @@ fn a_prototype_with_nothing_to_place_is_its_reference_point() {
     let out = read("model.gml", &lonlat(&member), None).unwrap();
     assert!(says(&out, "1 geometry instances are drawn as a point"), "{:?}", messages_of(&out));
 }
+
+/// Geometries given only by links to each other, in a cycle, draw nothing, and the links are said.
+#[test]
+fn a_cycle_of_links_is_said() {
+    let inner = r##"<bldg:lod2MultiSurface><gml:MultiSurface><gml:surfaceMember><gml:CompositeSurface gml:id="a" xlink:href="#b"/></gml:surfaceMember><gml:surfaceMember><gml:CompositeSurface gml:id="b" xlink:href="#a"/></gml:surfaceMember></gml:MultiSurface></bldg:lod2MultiSurface>"##;
+    let out = read("model.gml", &lonlat(&building("c", inner)), None).unwrap();
+    assert!(says(&out, "are given only by a link"), "{:?}", messages_of(&out));
+}

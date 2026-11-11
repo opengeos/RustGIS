@@ -12,7 +12,9 @@
 //! The file is hostile: vertex indexes are checked, the nesting is fixed by the geometry types, the
 //! faces merged are bounded, and so are the points instances place, by the file's size. Each
 //! object's geometry is parsed on its own and dropped once its rows are built; its attributes and
-//! the root metadata are kept as JSON values until the layers are written.
+//! the root metadata are kept as JSON values until the layers are written. The geometry templates,
+//! which every instance may place, are parsed once and kept for the whole read, as the vertices
+//! are: bounded by the file's size.
 
 use std::collections::BTreeMap;
 

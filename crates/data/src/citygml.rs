@@ -246,7 +246,17 @@ fn read_with(file_name: &str, bytes: &[u8], given: Option<Crs>, keep_named: bool
         };
         // Each copy, with where in the file its geometry is written and where in the copy it starts:
         // what an element of it is known by ([`Reading::place_of`]).
-        let far_docs: Vec<_> = far.iter().filter_map(|(at, copy)| Some((*at, crate::xml::parse(copy, options()).ok()?))).collect();
+        // Parsed together, they hold the nodes one member may: all of them alive at once, they take
+        // no more than the member could. One past that isn't parsed, as one that can't be.
+        let mut nodes = crate::io::XML_NODES;
+        let far_docs: Vec<_> = far
+            .iter()
+            .filter_map(|(at, copy)| {
+                let doc = crate::xml::parse(copy, ParsingOptions { nodes_limit: nodes, ..options() }).ok()?;
+                nodes = nodes.saturating_sub(u32::try_from(doc.descendants().count()).unwrap_or(u32::MAX));
+                Some((*at, doc))
+            })
+            .collect();
         reading.copies = far_docs
             .iter()
             .map(|(at, d)| {
@@ -1303,8 +1313,9 @@ fn hrefs_in(text: &str) -> HashSet<String> {
 /// the element it copies ([`Reading::place_of`]). An id the member gives an element of its own isn't
 /// copied: its links read that one. Nor is a prototype read already (`read`, by where it is
 /// written): many members placing one prototype read it once. What the file's links copy is
-/// bounded by `left`, in bytes; copying, and parsing the copies, don't look at Cancel, which is
-/// looked at between members: for all members together they are bounded by that budget.
+/// bounded by `left`, in bytes, and their trees, parsed together, by the nodes one member may hold;
+/// copying, and parsing the copies, don't look at Cancel, which is looked at between members: for
+/// all members together they are bounded by that budget.
 fn copy_far(
     index: &Index,
     text: &str,
@@ -1707,14 +1718,16 @@ impl Reading {
         }
         // Read already in this object at this level of detail, written out or by another link:
         // nothing to add. One given only by a link stands for what its chain of such links ends at
-        // ([`Targets::end_of`]), so a link it couldn't follow is said for this one too.
+        // ([`Targets::end_of`]), so a link it couldn't follow is said for this one too, as is one
+        // whose chain comes back on itself.
         let key = (place, at.lod);
         let read = links.read(key, at.ground);
         if read && then.is_empty() {
-            if only_link(&target)
-                && let Some(end) = targets.end_of(id)
-            {
-                links.push(Pending { to: To::Href(end), then, dim: at_link, at, solid, place: None });
+            if only_link(&target) {
+                match targets.end_of(id) {
+                    Some(end) => links.push(Pending { to: To::Href(end), then, dim: at_link, at, solid, place: None }),
+                    None => self.unread(Unread::Missing),
+                }
             }
             return;
         }
