@@ -69,30 +69,103 @@ pub(crate) fn isolate_process_test(name: &str) -> bool {
 
 #[test]
 fn worldview_swaps_only_untouched_sample_countries() {
-    use sample::{Worldview, swap_countries};
+    use sample::{Detail, View, Worldview, swap_countries};
     let countries = |s: &Session| s.map().layer_by_name("Countries").unwrap().dataset.features.len();
+    // Japan's view, which no other test uses, given countries that differ from the built-in ones
+    // (every country but the first) as if downloaded.
+    let japan = View::new(Worldview::from_code("jpn").unwrap(), Detail::Original);
+    let mut fewer: Value = serde_json::from_str(sample::COUNTRIES).unwrap();
+    fewer["features"].as_array_mut().unwrap().remove(0);
     let mut s = world();
     s.mark_saved();
     let n = countries(&s);
-    // The layer holds the default countries, not China's.
-    assert!(!swap_countries(&mut s, Worldview::China, Worldview::Default));
-    assert!(swap_countries(&mut s, Worldview::Default, Worldview::China));
-    assert_ne!(countries(&s), n);
+    // Not before the view's countries are at hand.
+    assert!(!sample::ready(japan));
+    assert!(!swap_countries(&mut s, View::DEFAULT, japan));
+    sample::accept(japan, fewer.to_string().into_bytes()).unwrap();
+    assert!(sample::ready(japan));
+    // The layer holds the default countries, not Japan's.
+    assert!(!swap_countries(&mut s, japan, View::DEFAULT));
+    assert!(swap_countries(&mut s, View::DEFAULT, japan));
+    assert_eq!(countries(&s), n - 1);
     assert!(!s.dirty());
-    assert!(swap_countries(&mut s, Worldview::China, Worldview::Default));
+    assert!(swap_countries(&mut s, japan, View::DEFAULT));
     assert_eq!(countries(&s), n);
-    // Not in a project with changes, or a saved one.
+    // Not in a project with changes, or a saved one; it still holds the sample's countries (the
+    // app then says they're kept).
     s.mark_unsaved();
-    assert!(!swap_countries(&mut s, Worldview::Default, Worldview::China));
+    assert!(!swap_countries(&mut s, View::DEFAULT, japan));
+    assert!(sample::holds_countries(&s, View::DEFAULT));
+    assert!(!sample::holds_countries(&s, japan));
     s.mark_saved();
     s.path = Some("atlas.rgis".into());
-    assert!(!swap_countries(&mut s, Worldview::Default, Worldview::China));
+    assert!(!swap_countries(&mut s, View::DEFAULT, japan));
     // Not someone else's layer named Countries.
     let mut t = world();
     t.mark_saved();
     t.run("edit.deleteField", &json!({"layer": "Countries", "field": "pop_est"})).unwrap();
     t.mark_saved();
-    assert!(!swap_countries(&mut t, Worldview::Default, Worldview::China));
+    // With nothing to undo, so only the layer's own countries stop the swap.
+    t.clear_history();
+    assert!(!t.can_undo());
+    assert!(!swap_countries(&mut t, View::DEFAULT, japan));
+    assert!(!sample::holds_countries(&t, View::DEFAULT));
+}
+
+#[test]
+fn a_worldview_download_that_isnt_countries_is_refused() {
+    use sample::{Detail, View, Worldview};
+    let korea = View::new(Worldview::from_code("kor").unwrap(), Detail::Simplified);
+    for bad in [b"\xff\xfe".to_vec(), b"<html>404</html>".to_vec(), sample::CITIES.as_bytes().to_vec()] {
+        assert!(sample::accept(korea, bad).is_err());
+    }
+    assert!(!sample::ready(korea));
+    // Nor is a download over the size allowed at its detail.
+    assert!(sample::accept(korea, vec![b' '; Detail::Simplified.max_bytes() + 1]).unwrap_err().contains("more than"));
+    // Applying it before then keeps the current view and says which one was asked for.
+    assert_eq!(sample::apply_view("kor", "simplified"), korea);
+    assert_ne!(sample::view(), korea);
+    assert_eq!(sample::wanted_view("kor", "nonsense"), korea);
+    // The default is built in.
+    assert!(sample::ready(View::DEFAULT));
+    assert!(sample::download_blocking(View::DEFAULT).is_ok());
+}
+
+#[test]
+fn an_original_worldview_downloads_gzipped() {
+    use sample::{Detail, View, Worldview};
+    let gzip = |text: &[u8]| {
+        let mut out = vec![0x1f, 0x8b, 8, 0, 0, 0, 0, 0, 0, 0xff];
+        out.extend(miniz_oxide::deflate::compress_to_vec(text, 6));
+        out.extend([0; 8]);
+        out
+    };
+    // Vietnam's view, original detail, which no other test uses.
+    let v = View::new(Worldview::from_code("vnm").unwrap(), Detail::Original);
+    // Something that unpacks to more than the original detail allows is refused, not cut.
+    let huge = gzip(&vec![b' '; Detail::Original.max_bytes() + 1]);
+    assert!(sample::accept(v, huge).unwrap_err().contains("can't be unpacked"));
+    assert!(sample::accept(v, vec![0x1f, 0x8b, 8]).is_err());
+    assert!(sample::text(v).is_none());
+    sample::accept(v, gzip(sample::COUNTRIES.as_bytes())).unwrap();
+    assert_eq!(sample::text(v), Some(sample::COUNTRIES));
+    // The default worldview's original detail is a download too.
+    assert!(!sample::ready(View::new(Worldview::DEFAULT, Detail::Original)));
+}
+
+#[test]
+fn a_failed_worldview_download_doesnt_name_the_worldview_twice() {
+    use sample::{Detail, View, Worldview};
+    // Never the computer's own cache folder.
+    sample::keep_downloads(false);
+    // Greece's view, original detail, which no other test uses.
+    let v = View::new(Worldview::from_code("grc").unwrap(), Detail::Original);
+    let (tx, rx) = std::sync::mpsc::channel();
+    sample::fetch_with(v, Box::new(move |r| drop(tx.send(r))), |_, _| Err("http status: 404".to_string()));
+    let e = rx.recv_timeout(std::time::Duration::from_secs(30)).unwrap().unwrap_err();
+    // The app's notice names the worldview; the error is only why.
+    assert_eq!(e, "http status: 404");
+    assert!(sample::text(v).is_none());
 }
 
 #[test]
@@ -3277,6 +3350,9 @@ fn hostile_params_never_panic(shard: usize) {
         json!({"text": "<qgis><projectlayers><maplayer type=\"raster\" hasScaleBasedVisibilityFlag=\"1\" minScale=\"NaN\" maxScale=\"-1e308\"><datasource>type=xyz&amp;url=&amp;zmax=999</datasource><layername></layername><provider>wms</provider><pipe><rasterrenderer opacity=\"inf\"/></pipe></maplayer></projectlayers></qgis>"}),
         // A label class placed along lines, with junk the placement and style read after it.
         json!({"layer": "Countries", "position": "curved", "italic": "maybe", "size": -1e308}),
+        // A line label's distance from its line: far out of range, then of the wrong type.
+        json!({"layer": "Rivers", "position": "parallel", "lineOffset": -1e308}),
+        json!({"layer": "Rivers", "lineOffset": {"above": 4}}),
         // A publication sheet's style, accent and orientation, and a shape's rounded corners.
         // (The profile left out or valid, so the style and accent are reached.)
         json!({"style": 7, "accent": "#XYZ", "kind": "ellipse", "element": 1, "radius": "x"}),
@@ -3962,6 +4038,113 @@ fn labels_take_wrapping_and_a_repeat_along_lines() {
     let text = serde_json::to_string(&s.project).unwrap();
     let reopened = Session::new(serde_json::from_str(&text).unwrap());
     assert_eq!(class(&reopened), class(&s));
+}
+
+/// A line's label class takes a distance from the line (#1187): alone it keeps the position, it is
+/// held to its range, 0 and null put the label back on the line, junk is refused, it undoes and the
+/// project keeps it.
+#[test]
+fn labels_take_a_distance_from_the_line() {
+    let mut s = world();
+    let class = |s: &Session| {
+        let c = &s.map().layer_by_name("Rivers").unwrap().labels.default;
+        (c.line_offset, c.placement)
+    };
+    let placement = class(&s).1;
+    assert_eq!(class(&s), (0.0, placement));
+    let mark = s.notice_mark();
+    s.run("labels.placement", &json!({"layer": "Rivers", "lineOffset": 4})).unwrap();
+    assert_eq!(class(&s), (4.0, placement), "a distance alone keeps the position");
+    s.run("labels.placement", &json!({"layer": "Rivers", "lineOffset": "-2.5"})).unwrap();
+    assert_eq!(class(&s).0, -2.5, "below the line");
+    s.run("labels.placement", &json!({"layer": "Rivers", "lineOffset": 200})).unwrap();
+    assert!(s.notices_since(mark).is_empty(), "a distance within its range says nothing: {:?}", s.notices_since(mark));
+    let mark = s.notice_mark();
+    s.run("labels.placement", &json!({"layer": "Rivers", "lineOffset": 1e9})).unwrap();
+    assert_eq!(class(&s).0, 200.0, "within its range");
+    let said: Vec<String> = s.notices_since(mark).iter().map(|n| n.text.clone()).collect();
+    assert!(
+        said.iter().any(|t| t == "Rivers: lineOffset 1e9 points adjusted to 200 (a label sits at most 200 points above or below its line)"),
+        "and says where, in short: {said:?}"
+    );
+    s.run("labels.placement", &json!({"layer": "Rivers", "lineOffset": null})).unwrap();
+    assert_eq!(class(&s).0, 0.0, "null is on the line");
+    s.run("edit.undo", &json!({})).unwrap();
+    assert_eq!(class(&s).0, 200.0, "undoes");
+    s.run("labels.placement", &json!({"layer": "Rivers", "lineOffset": 0})).unwrap();
+    assert_eq!(class(&s).0, 0.0, "0 is on the line");
+    for bad in [json!({"lineOffset": "above"}), json!({"lineOffset": [1]}), json!({"lineOffset": true})] {
+        let mut p = bad.clone();
+        p["layer"] = json!("Rivers");
+        assert!(s.run("labels.placement", &p).is_err(), "{bad}");
+    }
+    // Kept with the project.
+    s.run("labels.placement", &json!({"layer": "Rivers", "position": "curved", "lineOffset": -6})).unwrap();
+    let text = serde_json::to_string(&s.project).unwrap();
+    let reopened = Session::new(serde_json::from_str(&text).unwrap());
+    assert_eq!(class(&reopened), (-6.0, rustgis_map::LabelPlacement::Curved));
+}
+
+/// A project whose label distance from the line is out of range or not a number says so on
+/// opening, one notice with a count; in range, 0 or null says nothing (#1187).
+#[test]
+fn opening_a_project_says_when_a_line_label_distance_is_adjusted() {
+    let said = |v: &Value| {
+        let s = Session::new(Project::from_json(&v.to_string()).unwrap());
+        s.notices.iter().filter(|n| n.text.contains("label distance(s) from the line")).map(|n| n.text.clone()).collect::<Vec<_>>()
+    };
+    let clean: Value = serde_json::to_value(&world().project).unwrap();
+    assert!(said(&clean).is_empty());
+    for fine in [json!(4.5), json!(-200), json!(0), json!(null)] {
+        let mut v = clean.clone();
+        v["maps"][0]["layers"][0]["labels"]["line_offset"] = fine.clone();
+        assert!(said(&v).is_empty(), "{fine}");
+    }
+    let mut damaged = clean.clone();
+    damaged["maps"][0]["layers"][0]["labels"]["line_offset"] = json!(900);
+    damaged["maps"][0]["layers"][1]["labels"]["line_offset"] = json!("above");
+    let loaded = Project::from_json(&damaged.to_string()).unwrap();
+    assert_eq!(loaded.maps[0].layers[0].labels.default.line_offset, 200.0);
+    assert_eq!(loaded.maps[0].layers[1].labels.default.line_offset, 0.0);
+    let notes = said(&damaged);
+    assert_eq!(notes.len(), 1, "{notes:?}");
+    assert!(
+        notes[0].ends_with("2 label distance(s) from the line out of range or not a number adjusted while opening the project"),
+        "{notes:?}"
+    );
+}
+
+/// Labels along lines converted to annotation become upright points on their lines, and the
+/// conversion says how many lost their angle, curve and distance from the line; points' labels
+/// lose none of that, and say nothing (#1187).
+#[test]
+fn converting_labels_along_lines_says_what_they_lose() {
+    let mut s = world();
+    s.run("labels.enable", &json!({"layer": "Rivers", "on": true})).unwrap();
+    s.run("labels.placement", &json!({"layer": "Rivers", "position": "parallel", "lineOffset": 6})).unwrap();
+    let mark = s.notice_mark();
+    let n = s.run("labels.convert", &json!({"layer": "Rivers"})).unwrap()["annotations"].as_u64().unwrap();
+    assert!(n > 0);
+    let said: Vec<String> = s.notices_since(mark).iter().map(|x| x.text.clone()).collect();
+    let expected = format!(
+        "Rivers Annotation: {n} label(s) along lines made upright points at their lines' middle vertex, no longer laid along the line"
+    );
+    assert!(said.contains(&expected), "{said:?}");
+    assert!(said.iter().all(|t| !t.contains("repeats")), "none repeated: {said:?}");
+    // The annotation's labels aren't along a line, so they keep no distance from one.
+    let annotation = s.map().layer_by_name("Rivers Annotation").unwrap();
+    assert_eq!(annotation.labels.default.line_offset, 0.0);
+    // Repeated along their lines, each converts once (as many annotations), and says so.
+    s.undo();
+    s.run("labels.placement", &json!({"layer": "Rivers", "repeat": 144})).unwrap();
+    let mark = s.notice_mark();
+    let repeated = s.run("labels.convert", &json!({"layer": "Rivers"})).unwrap()["annotations"].as_u64().unwrap();
+    assert_eq!(repeated, n, "one annotation a label, however many repeats it drew");
+    let said: Vec<String> = s.notices_since(mark).iter().map(|x| x.text.clone()).collect();
+    assert!(said.contains(&format!("Rivers Annotation: {n} label(s) whose class repeats along lines converted once each")), "{said:?}");
+    let mark = s.notice_mark();
+    s.run("labels.convert", &json!({"layer": "Cities"})).unwrap();
+    assert!(s.notices_since(mark).iter().all(|x| !x.text.contains("along lines")), "{:?}", s.notices_since(mark));
 }
 
 /// A point label class tries the other places round its point when told to (#1011): alone it keeps
@@ -40435,6 +40618,8 @@ fn long_commands_stop_when_cancelled_while_they_run() {
         ("symmetricalDifference", json!({"input": "Lakes", "overlay": "Countries"})),
         ("update", json!({"input": "Countries", "update": "Lakes"})),
         ("split", json!({"input": "Rivers", "split": "Countries"})),
+        ("simplify", json!({"input": "Countries", "tolerance": 1})),
+        ("countPoints", json!({"polygons": "Countries", "points": "Cities"})),
         ("convexHull", json!({"input": "Countries", "group": "None", "output": "Hulls_each"})),
         ("convexHull", json!({"input": "Countries", "group": "All", "output": "Hulls_all"})),
         ("kernelDensity", json!({"input": "Cities", "crs": "EPSG:3857"})),
