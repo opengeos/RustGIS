@@ -1687,10 +1687,10 @@ fn coord_bytes(g: &Geometry) -> usize {
 
 /// One thread's recent multi-mask unions for Clip, least recently used first, with the memory
 /// each holds ([`kept_union_bytes`]), kept within `cap` bytes; and the latest union too big for
-/// that, kept on its own while the features next to each other meet it, so they share it. That
-/// one is outside the cap, as the union a feature is clipped by on one thread is: a thread holds
-/// one at a time. A union is the same however often it is made, so what the cache keeps changes
-/// the time, not the output.
+/// that, kept on its own until a feature wants another union, or meets one mask or none, so
+/// the features next to each other that meet it share it. That one is outside the cap: it is
+/// counted as the thread's work in progress, as the union a feature is clipped by is. A union is
+/// the same however often it is made, so what the cache keeps changes the time, not the output.
 struct MaskCache {
     entries: VecDeque<(Vec<usize>, MultiPolygon<f64>, usize)>,
     bytes: usize,
@@ -1712,13 +1712,14 @@ impl MaskCache {
                 None => Cow::Owned(make()),
             };
         }
+        // Another union is wanted: the big one goes, so no more than one is held while the next
+        // is made, and none is kept for features that no longer meet it.
+        self.big = None;
         if let Some(pos) = self.entries.iter().position(|(ids, ..)| ids.as_slice() == near) {
             if let Some(entry) = self.entries.remove(pos) {
                 self.entries.push_back(entry);
             }
         } else {
-            // The big one goes first, so no more than one is held while the next is made.
-            self.big = None;
             let mask = make();
             let bytes = kept_union_bytes(near, &mask);
             if bytes > self.cap {
@@ -1744,16 +1745,19 @@ impl MaskCache {
 /// [`clip`] on `threads` threads (by the number of items in each step, and the memory each
 /// takes, when `None`): the masks are unioned, and each input feature clipped, on their own
 /// (#1252), in batches of [`CLIP_BATCH`] features a thread, and the rows come back in input
-/// order, as on one thread. A thread's work in progress takes about twice its largest mask's and
-/// input feature's coordinates; the threads are as many as half the scratch memory work may take
-/// holds of that, and their recent unions of several masks share `cache_bytes` (by default the
-/// other half of [`crate::parallel::scratch_budget`]).
+/// order, as on one thread. A thread's work in progress takes about twice the largest mask's
+/// coordinates while the masks are unioned, then twice the largest input feature's plus the
+/// largest union of the masks one feature meets; the threads are as many as half the scratch
+/// memory work may take holds of that, and their recent unions of several masks share
+/// `cache_bytes` (by default the other half of [`crate::parallel::scratch_budget`]).
 fn clip_on(inp: &dyn Inputs, p: &Json, threads: Option<usize>, cache_bytes: Option<usize>) -> Result<ToolResult, String> {
     let ds = input(inp, p, "input")?;
     let clip_ds = input(inp, p, "clip")?;
     if clip_ds.geometry_type != GeometryType::Polygon {
         return Err(format!("'{}' is not a polygon layer", clip_ds.name));
     }
+    // A thread's work in progress is `scratch`; doubled here, so the threads' work takes at most
+    // half the scratch memory (`threads_for_scratch` divides all of it), the caches the other half.
     let threads_for = |n: usize, scratch: usize| {
         threads.unwrap_or_else(|| crate::parallel::threads_for_scratch(n, PARALLEL_FEATURES, scratch.saturating_mul(2)))
     };
@@ -1762,7 +1766,8 @@ fn clip_on(inp: &dyn Inputs, p: &Json, threads: Option<usize>, cache_bytes: Opti
         rows.iter().filter_map(|&r| ds.features.get(r)?.geometry.as_ref()).map(coord_bytes).max().unwrap_or(0)
     };
     let largest_mask = largest(clip_ds, &mask_rows);
-    // Each mask is a union: Cancel is looked at, and progress counted, before each.
+    // Each mask is a union: Cancel is looked at, and progress counted, before each. A thread
+    // holds a mask's polygons and their union.
     crate::control::begin(mask_rows.len());
     let made = crate::parallel::try_map_on(
         &mask_rows,
@@ -1800,44 +1805,70 @@ fn clip_on(inp: &dyn Inputs, p: &Json, threads: Option<usize>, cache_bytes: Opti
     let input_rows = rows(inp, p, "input", ds);
     // Input features without geometry: nothing of them can be kept.
     let without = input_rows.iter().filter(|&&r| ds.features.get(r).is_some_and(|f| f.geometry.is_none())).count();
-    crate::control::begin(input_rows.len());
-    let work = largest(ds, &input_rows).saturating_add(largest_mask).saturating_mul(2);
-    let clip_threads = threads_for(input_rows.len(), work);
-    // Single candidates reuse their normalized mask. Each thread keeps eight recent multi-mask
-    // unions, so alternating neighbourhoods can reuse work too, the least recently used going
-    // first; the threads' unions together stay within their share of the scratch memory.
-    let cache_cap = cache_bytes.unwrap_or_else(|| crate::parallel::scratch_budget() / 2) / clip_threads.max(1);
+    // The masks whose extents meet a feature's, and the poles' for a point at one.
+    let near_of = |g: &Geometry| {
+        let ext = projected_extent(g);
+        // i_overlay uses 29 integer bits about the domain centre. Allow several grid steps
+        // for normalization and clipping: a line just outside an edge can snap onto it.
+        // This widens only the candidate search; the boolean overlay still decides the result.
+        let domain = index.total.union(&ext);
+        let margin = domain.width().max(domain.height()) / f64::from(1_u32 << 27);
+        let ext = ext.padded(0.0, margin);
+        let mut near: Vec<_> =
+            index.candidates(&ext).into_iter().filter(|i| masks.get(*i).is_some_and(|(_, e)| e.intersects(&ext))).collect();
+        if matches!(g, Geometry::Point(_) | Geometry::MultiPoint(_)) {
+            at_poles.add_to(poles(&g.extent()), &mut near);
+        }
+        near
+    };
+    // A thread's work in progress: a feature, its clipped part, and the union of the masks it
+    // meets when they are several, which can be far larger than any one mask (at most all of
+    // them).
+    let mask_bytes: Vec<usize> = masks.iter().map(|(m, _)| kept_union_bytes(&[], m)).collect();
+    let union_bytes = |near: &[usize]| match near {
+        [] | [_] => 0,
+        _ => near.iter().filter_map(|&i| mask_bytes.get(i)).fold(0usize, |a, &b| a.saturating_add(b)),
+    };
+    let feature_work = largest(ds, &input_rows).saturating_mul(2);
+    // As many threads as there could be, if no feature met several masks: they size the batches.
+    let most_threads = threads_for(input_rows.len(), feature_work.saturating_add(largest_mask)).max(1);
+    // Each feature is looked at twice: for the masks it meets, then to be clipped.
+    crate::control::begin(input_rows.len().saturating_mul(2));
     // In batches, so the clipped features held before they're added to the output stay few.
-    for batch in input_rows.chunks(clip_threads.max(1).saturating_mul(CLIP_BATCH)) {
-        let clipped = crate::parallel::try_map_on(
+    for batch in input_rows.chunks(most_threads.saturating_mul(CLIP_BATCH)) {
+        let nears = crate::parallel::try_map_on(
             batch,
+            most_threads,
+            || (),
+            |_, _, &r| Ok::<_, String>(ds.features.get(r).and_then(|f| f.geometry.as_ref()).map(near_of)),
+        )?;
+        // The batch's threads, by its largest union too.
+        let largest_union = nears.iter().flatten().map(|near| union_bytes(near)).max().unwrap_or(0);
+        let clip_threads = threads_for(batch.len(), feature_work.saturating_add(largest_mask.max(largest_union))).min(most_threads);
+        // Single candidates reuse their normalized mask. Each thread keeps eight recent multi-mask
+        // unions, so alternating neighbourhoods can reuse work too, the least recently used going
+        // first; the threads' unions together stay within their share of the scratch memory.
+        let cache_cap = cache_bytes.unwrap_or_else(|| crate::parallel::scratch_budget() / 2) / clip_threads.max(1);
+        let work: Vec<(usize, Option<Vec<usize>>)> = batch.iter().copied().zip(nears).collect();
+        let clipped = crate::parallel::try_map_on(
+            &work,
             clip_threads,
             || MaskCache::new(cache_cap),
-            |cache, _, &r| {
-                let Some(g) = ds.features.get(r).and_then(|f| f.geometry.as_ref()) else { return Ok::<_, String>(None) };
-                let ext = projected_extent(g);
-                // i_overlay uses 29 integer bits about the domain centre. Allow several grid steps
-                // for normalization and clipping: a line just outside an edge can snap onto it.
-                // This widens only the candidate search; the boolean overlay still decides the result.
-                let domain = index.total.union(&ext);
-                let margin = domain.width().max(domain.height()) / f64::from(1_u32 << 27);
-                let ext = ext.padded(0.0, margin);
-                let mut near: Vec<_> =
-                    index.candidates(&ext).into_iter().filter(|i| masks.get(*i).is_some_and(|(_, e)| e.intersects(&ext))).collect();
-                if matches!(g, Geometry::Point(_) | Geometry::MultiPoint(_)) {
-                    at_poles.add_to(poles(&g.extent()), &mut near);
-                }
+            |cache, _, (r, near)| {
+                let (Some(g), Some(near)) = (ds.features.get(*r).and_then(|f| f.geometry.as_ref()), near) else {
+                    return Ok::<_, String>(None);
+                };
                 if near.is_empty() {
+                    // A big union is kept only while the features next to each other meet it.
                     cache.big = None;
                     return Ok(None);
                 }
                 let shape = dissolved(g);
                 Ok(if let [i] = near.as_slice() {
-                    // A big union is kept only while the features next to each other need it.
                     cache.big = None;
                     masks.get(*i).and_then(|(m, _)| part(&shape, m, true))
                 } else {
-                    part(&shape, &cache.union_of(&near, &masks), true)
+                    part(&shape, &cache.union_of(near, &masks), true)
                 })
             },
         )?;
