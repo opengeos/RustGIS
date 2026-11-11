@@ -617,13 +617,33 @@ fn world_of(wv: sample_data::View) -> &'static Vec<Geometry> {
 /// time (the desktop app does it on the download's thread), so none of it is done on the UI
 /// thread when the view is shown. A map in another projection still projects the outline once,
 /// on the first frame drawn in it.
+///
+/// A detailed outline's levels of detail are built here too, eagerly: a flat map shown at any zoom
+/// then finds its level ready, never building one on the UI thread. They are independent, so they
+/// are built on several threads (the user's thread setting, [`rustgis_data::threads::max`]; one in
+/// the browser), about 280 ms and 15 MB on one thread for a 1:10m worldview.
 pub fn prepare_world(v: sample_data::View) {
     let _ = sample_data::dataset(v);
     let _ = world_of(v);
     let _ = world_lonlat_of(v);
-    for level in 0..=OUTLINE_LEVELS {
-        let _ = outline_level(v, level);
-    }
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let work = || {
+        loop {
+            let level = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            if level > OUTLINE_LEVELS {
+                break;
+            }
+            let _ = outline_level(v, level);
+        }
+    };
+    let threads = if cfg!(target_arch = "wasm32") { 1 } else { rustgis_data::threads::max().min(OUTLINE_LEVELS + 1) };
+    std::thread::scope(|scope| {
+        // A thread the system refuses costs speed: the others, and this one, build its levels.
+        for _ in 1..threads {
+            let _ = std::thread::Builder::new().name("rustgis-outline-levels".into()).spawn_scoped(scope, work);
+        }
+        work();
+    });
 }
 
 /// How many simplified levels a detailed world outline has, after its full-detail one (level 0):
