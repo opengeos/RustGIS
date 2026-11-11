@@ -3985,7 +3985,7 @@ fn labels_take_a_distance_from_the_line() {
     s.run("labels.placement", &json!({"layer": "Rivers", "lineOffset": "-2.5"})).unwrap();
     assert_eq!(class(&s).0, -2.5, "below the line");
     s.run("labels.placement", &json!({"layer": "Rivers", "lineOffset": 200})).unwrap();
-    assert!(s.notices_since(mark).iter().all(|n| !n.text.contains("lineOffset")), "a distance within its range says nothing");
+    assert!(s.notices_since(mark).is_empty(), "a distance within its range says nothing: {:?}", s.notices_since(mark));
     let mark = s.notice_mark();
     s.run("labels.placement", &json!({"layer": "Rivers", "lineOffset": 1e9})).unwrap();
     assert_eq!(class(&s).0, 200.0, "within its range");
@@ -4007,6 +4007,27 @@ fn labels_take_a_distance_from_the_line() {
     let text = serde_json::to_string(&s.project).unwrap();
     let reopened = Session::new(serde_json::from_str(&text).unwrap());
     assert_eq!(class(&reopened), (-6.0, rustgis_map::LabelPlacement::Curved));
+}
+
+/// Labels along lines converted to annotation become upright points on their lines, and the
+/// conversion says how many lost their angle, curve and distance from the line; points' labels
+/// lose none of that, and say nothing (#1187).
+#[test]
+fn converting_labels_along_lines_says_what_they_lose() {
+    let mut s = world();
+    s.run("labels.enable", &json!({"layer": "Rivers", "on": true})).unwrap();
+    s.run("labels.placement", &json!({"layer": "Rivers", "position": "parallel", "lineOffset": 6})).unwrap();
+    let mark = s.notice_mark();
+    let n = s.run("labels.convert", &json!({"layer": "Rivers"})).unwrap()["annotations"].as_u64().unwrap();
+    assert!(n > 0);
+    let said: Vec<String> = s.notices_since(mark).iter().map(|x| x.text.clone()).collect();
+    let expected = format!(
+        "Rivers Annotation: {n} labels along lines made upright points on their lines (their angle, curve, repeats and distance from the line left out)"
+    );
+    assert!(said.contains(&expected), "{said:?}");
+    let mark = s.notice_mark();
+    s.run("labels.convert", &json!({"layer": "Cities"})).unwrap();
+    assert!(s.notices_since(mark).iter().all(|x| !x.text.contains("along lines")), "{:?}", s.notices_since(mark));
 }
 
 /// A point label class tries the other places round its point when told to (#1011): alone it keeps
