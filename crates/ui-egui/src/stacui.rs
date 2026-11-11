@@ -972,7 +972,8 @@ pub fn dialog(app: &mut RustGisApp, ui: &mut egui::Ui) {
         && crate::connectionui::picked(&connections, st.connection.as_deref(), &st.listed).is_none();
     let mut keep = false;
     ui.horizontal(|ui| {
-        search = ui.add_enabled(!busy, egui::Button::new(tl!("Find Items"))).clicked();
+        let area_loading = app.ui.stac.loading.is_some();
+        search = ui.add_enabled(!busy && !area_loading, egui::Button::new(tl!("Find Items"))).clicked();
         if busy {
             ui.spinner();
         }
@@ -1430,6 +1431,11 @@ fn find_items(app: &mut RustGisApp) {
     if st.walk.is_some() || st.waiting.as_ref().is_some_and(|(a, _)| !matches!(a, Asked::Children(_))) {
         return;
     }
+    // A file or selection still being read would be missing from the area searched, so wait for it.
+    if st.loading.is_some() {
+        app.ui.stac.error = Some(tl!("The search area is still loading: search when it has finished").to_string());
+        return;
+    }
     let datetime = match (st.from.trim(), st.to.trim()) {
         ("", "") => None,
         (a, "") => Some(format!("{a}/..")),
@@ -1841,6 +1847,24 @@ mod tests {
         draw(&mut app, "point");
         assert_eq!(take_drawn(&mut app, "point", &[at(190.0, 95.0)]), Some(true));
         assert!(matches!(app.ui.stac.parts.as_slice(), [Geometry::Point(c)] if (c.x + 170.0).abs() < 1e-9 && c.y == 90.0));
+    }
+
+    #[test]
+    fn a_search_waits_for_an_area_that_is_still_loading() {
+        let mut app = RustGisApp::with_sample();
+        app.ui.stac.api = "https://example.org/stac/v1".into();
+        app.ui.stac.parts.push(rectangle([0.0, 0.0, 1.0, 1.0]));
+        let slot: Slot<Result<Loaded, String>> = Slot::default();
+        app.ui.stac.loading = Some(("pts.geojson".into(), slot));
+        find_items(&mut app);
+        assert!(app.ui.stac.waiting.is_none(), "nothing is sent while the area loads");
+        let said = app.ui.stac.error.clone().unwrap_or_default();
+        assert!(said.contains("still loading"), "{said}");
+        // Once it has landed, the same search starts, and the message is gone.
+        app.ui.stac.loading = None;
+        app.ui.stac.error = None;
+        find_items(&mut app);
+        assert!(app.ui.stac.waiting.is_some() && app.ui.stac.error.is_none());
     }
 
     #[test]
