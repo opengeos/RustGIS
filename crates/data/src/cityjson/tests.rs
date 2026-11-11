@@ -1452,7 +1452,8 @@ fn templates_that_cant_be_read_are_said() {
 #[test]
 fn empty_rings_cost_placing() {
     let unit = json!([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
-    let empty: Vec<Json> = (0..5_000).map(|_| json!([[]])).collect();
+    let mut empty: Vec<Json> = (0..5_000).map(|_| json!([[]])).collect();
+    empty.push(json!([[0, 1, 2, 3]]));
     let templates = json!({"templates": [{"type": "MultiSurface", "lod": "2", "boundaries": empty}], "vertices-templates": cube()});
     let out = read("m.city.json", &instanced(unit, templates), None).unwrap();
     assert!(says(&out, "1 geometry instances are drawn as a point"), "{:?}", messages_of(&out));
@@ -1465,4 +1466,39 @@ fn rings_flattened_by_placing_are_said() {
     let templates = json!({"templates": [{"type": "Solid", "lod": "2", "boundaries": box_shell()}], "vertices-templates": cube()});
     let out = read("m.city.json", &instanced(flat, templates), None).unwrap();
     assert!(says(&out, "3 rings with fewer than three different points are left out"), "{:?}", messages_of(&out));
+}
+
+/// An instance with no matrix (CityJSON requires one) is drawn at its reference point, and said.
+#[test]
+fn an_instance_with_no_matrix_is_a_point() {
+    let templates = json!({"templates": [{"type": "Solid", "lod": "2", "boundaries": box_shell()}], "vertices-templates": cube()});
+    let mut root: Json = serde_json::from_slice(&instanced(Json::Null, templates)).unwrap();
+    let instance = root["CityObjects"]["tree"]["geometry"][0].as_object_mut().unwrap();
+    instance.remove("transformationMatrix");
+    let out = read("m.city.json", root.to_string().as_bytes(), None).unwrap();
+    assert!(says(&out, "1 geometry instances are drawn as a point"), "{:?}", messages_of(&out));
+}
+
+/// A template with no surfaces places nothing: its instance is drawn at its reference point, and said.
+#[test]
+fn an_empty_template_is_a_point() {
+    let unit = json!([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
+    let templates = json!({"templates": [{"type": "MultiSurface", "lod": "2", "boundaries": []}], "vertices-templates": cube()});
+    let out = read("m.city.json", &instanced(unit, templates), None).unwrap();
+    assert!(says(&out, "1 geometry instances are drawn as a point"), "{:?}", messages_of(&out));
+}
+
+/// A template with a ring of no area says it once; a matrix that flattens its other rings says
+/// those for each instance, not the template's again.
+#[test]
+fn a_degenerate_template_still_says_rings_placing_flattens() {
+    let mut boundaries = box_shell();
+    boundaries[0].as_array_mut().unwrap().push(json!([[0, 1]]));
+    let templates = json!({"templates": [{"type": "Solid", "lod": "2", "boundaries": boundaries}], "vertices-templates": cube()});
+    let unit = json!([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
+    let out = read("m.city.json", &instanced(unit, templates.clone()), None).unwrap();
+    assert!(says(&out, "1 rings with fewer than three different points are left out"), "{:?}", messages_of(&out));
+    let flat = json!([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
+    let out = read("m.city.json", &instanced(flat, templates), None).unwrap();
+    assert!(says(&out, "4 rings with fewer than three different points are left out"), "{:?}", messages_of(&out));
 }

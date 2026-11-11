@@ -1986,3 +1986,39 @@ fn a_link_reads_the_first_of_an_id_whatever_the_order_of_links() {
         assert!((got - 125.0).abs() < 1e-6, "{links}: {got} {:?}", messages_of(&out));
     }
 }
+
+/// Rings a matrix flattens when it places a prototype are left out and said for each instance; a
+/// matrix that flattens nothing says nothing.
+#[test]
+fn rings_flattened_by_placing_are_said() {
+    let prototype = format!(
+        r#"<core:relativeGMLGeometry><gml:MultiSurface gml:id="proto"><gml:surfaceMember>{}</gml:surfaceMember><gml:surfaceMember>{}</gml:surfaceMember></gml:MultiSurface></core:relativeGMLGeometry>"#,
+        polygon("proto-f", &square(0.0, 0.0, 1.0, 0.0)),
+        polygon("proto-r", &square(0.0, 0.0, 1.0, 1.0))
+    );
+    let placed = |matrix: &str| {
+        furniture("t", &format!("<core:transformationMatrix>{matrix}</core:transformationMatrix>{prototype}{}", reference(5.0, 5.0, 1.0)))
+    };
+    let out = read("model.gml", &lonlat(&placed("0 0 0 0 0 0 0 0 0 0 1 0 0 0 0 1")), None).unwrap();
+    assert!(says(&out, "2 rings with fewer than three different points are left out"), "{:?}", messages_of(&out));
+    let out = read("model.gml", &lonlat(&placed("2 0 0 0 0 2 0 0 0 0 2 0 0 0 0 1")), None).unwrap();
+    assert!(!says(&out, "fewer than three different points"), "{:?}", messages_of(&out));
+}
+
+/// An element with many namespace declarations followed by many children declaring one each: past
+/// what the sets may take, a child's set is spent without looking at its parent's pairs, and what
+/// stands in it is still read.
+#[test]
+fn children_past_what_declarations_may_take_are_read() {
+    let many: String = (0..3_000).map(|k| format!(r#" xmlns:n{k}="urn:n{k}""#)).collect();
+    let children: String = (0..3_000).map(|k| format!(r#"<gen:stringAttribute xmlns:c{k}="urn:c{k}"></gen:stringAttribute>"#)).collect();
+    let inner = format!(
+        "<bldg:lod2MultiSurface><gml:MultiSurface><gml:surfaceMember>{}</gml:surfaceMember></gml:MultiSurface></bldg:lod2MultiSurface>",
+        polygon("p", &square(0.0, 0.0, 10.0, 0.0))
+    );
+    let written =
+        format!(r#"<core:cityObjectMember><bldg:Building gml:id="c"{many}>{children}{inner}</bldg:Building></core:cityObjectMember>"#);
+    let out = read("model.gml", &lonlat(&written), None).unwrap();
+    let ds = only(&out);
+    assert!((area(ds.features[row_of(ds, "c")].geometry.as_ref()) - 100.0).abs() < 1e-6, "{:?}", messages_of(&out));
+}

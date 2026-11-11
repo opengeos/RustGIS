@@ -99,9 +99,9 @@ struct RawGeometry {
 /// when it can't be read (said once, not for each instance), and their vertices, in the templates'
 /// own system (the file's `transform` doesn't apply to them).
 struct Templates {
-    /// Each with how many vertex indexes placing it reads, and whether reading it left out rings of
-    /// no area (said then, once, not again for each instance).
-    shapes: Vec<Option<(RawGeometry, usize, bool)>>,
+    /// Each with how many vertex indexes placing it reads, and how many rings of no area reading it
+    /// left out (said then, once, not again for each instance).
+    shapes: Vec<Option<(RawGeometry, usize, usize)>>,
     vertices: Vec<P3>,
 }
 
@@ -135,15 +135,30 @@ impl Templates {
                 if read.is_none() {
                     counts.bad_geometries += 1;
                 }
-                let degenerate = counts.dropped_rings > dropped;
-                shape.filter(|_| read.is_some()).map(|g| {
+                let dropped = counts.dropped_rings - dropped;
+                // One with no vertex at all (`"boundaries": []`) places nothing: its instances are
+                // their reference points, and said.
+                shape.filter(|g| read.is_some() && has_vertex(&g.boundaries)).map(|g| {
                     let size = indexes(&g.boundaries);
-                    (g, size, degenerate)
+                    (g, size, dropped)
                 })
             })
             .collect();
         Some(Templates { shapes, vertices: raw.vertices })
     }
+}
+
+/// Whether boundaries hold a vertex index anywhere.
+fn has_vertex(boundaries: &Json) -> bool {
+    let mut stack = vec![boundaries];
+    while let Some(j) = stack.pop() {
+        match j {
+            Json::Array(items) => stack.extend(items),
+            Json::Number(_) => return true,
+            _ => {}
+        }
+    }
+    false
 }
 
 /// How many vertex indexes boundaries hold, which is what placing them reads; an empty array counts
@@ -381,8 +396,8 @@ fn object_parts(
 }
 
 /// Places an instance's template into the object's parts; false when it isn't placed: its
-/// template is missing or can't be read, its matrix isn't 16 numbers with `0 0 0 1` last, or the
-/// file's placing is spent. The level of detail is its template's: an instance has none of its own
+/// template is missing, can't be read or draws nothing, its matrix is missing (CityJSON 1.1 §3.4
+/// requires one) or isn't 16 numbers with `0 0 0 1` last, or the file's placing is spent. The level of detail is its template's: an instance has none of its own
 /// (CityJSON 1.1 §3.4).
 fn place(
     parts: &mut ObjectParts,
@@ -394,27 +409,21 @@ fn place(
 ) -> bool {
     let Some(t) = templates else { return false };
     let shape = g.template.as_ref().and_then(Json::as_u64).and_then(|i| usize::try_from(i).ok()).and_then(|i| t.shapes.get(i));
-    let Some(Some((shape, size, degenerate))) = shape else { return false };
-    let placement = match &g.matrix {
-        None => Some(Placement::at(reference)),
-        Some(m) => {
-            m.as_array().and_then(|v| v.iter().map(Json::as_f64).collect::<Option<Vec<f64>>>()).and_then(|v| Placement::new(&v, reference))
-        }
-    };
-    let Some(placement) = placement else { return false };
+    let Some(Some((shape, size, template_dropped))) = shape else { return false };
+    let placement = g.matrix.as_ref().and_then(Json::as_array).and_then(|v| v.iter().map(Json::as_f64).collect::<Option<Vec<f64>>>());
+    let Some(placement) = placement.and_then(|v| Placement::new(&v, reference)) else { return false };
     if *size > *placing {
         return false;
     }
     *placing -= size;
     let vertex = |k: usize| t.vertices.get(k).and_then(|v| placement.place(v));
     // The template was read once already, and its rings of no area said then: not again for each
-    // instance. A template with none may have some once placed (a matrix that flattens it): said
-    // for each instance. What fails is a point placed past what a number holds.
+    // instance. Placing may flatten others (a matrix that scales an axis to nothing): those are said
+    // for each instance. A ring of no area keeps none once placed, so the placed rings left out are
+    // the template's and the new ones. What fails is a point placed past what a number holds.
     let mut placed = Counts::default();
     let done = geometry(parts, shape, &vertex, &mut placed) == Some(true);
-    if !degenerate {
-        counts.dropped_rings += placed.dropped_rings;
-    }
+    counts.dropped_rings += placed.dropped_rings.saturating_sub(*template_dropped);
     done
 }
 

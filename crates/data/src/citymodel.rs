@@ -618,11 +618,6 @@ pub(crate) struct Placement {
 }
 
 impl Placement {
-    /// No rotation, scale or translation: the prototype as it is, at the reference point.
-    pub(crate) fn at(at: P3) -> Placement {
-        Placement { rows: [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]], at }
-    }
-
     /// A placement from the matrix's 16 numbers, row by row. None unless they are 16 finite numbers
     /// whose last row is `0 0 0 1`: a matrix that projects (one the standard allows) isn't read.
     pub(crate) fn new(matrix: &[f64], at: P3) -> Option<Placement> {

@@ -388,6 +388,8 @@ struct Scope {
     context: Option<usize>,
     /// Past what the sets may take: an element in it can't be copied.
     spent: bool,
+    /// What its pairs and GML prefixes take, in bytes: what a set nested in it copies.
+    bytes: usize,
 }
 
 impl Scopes {
@@ -409,7 +411,9 @@ impl Scopes {
         }
         let around = self.stack.get(parent)?;
         let size = |pairs: &[(String, String, bool)]| pairs.iter().map(|(k, w, _)| k.len() + w.len()).sum::<usize>();
-        let cost = size(&around.pairs) + size(&mine) + around.gml.iter().map(String::len).sum::<usize>();
+        // Known before its parent's pairs are looked at: an element in a spent set, or past the bound,
+        // costs only its own declarations, however many its parent's set holds.
+        let cost = around.bytes.saturating_add(size(&mine));
         if around.spent || cost > self.left {
             // Its ids are still found by the root's prefixes; what is in it can't be copied.
             let gml = self.stack.first().map_or_else(|| Rc::from([]), |r| Rc::clone(&r.gml));
@@ -431,7 +435,8 @@ impl Scopes {
                 None => pairs.push((key, written, is_gml)),
             }
         }
-        Some(Scope { pairs, gml: gml.into(), context: None, spent: false })
+        let bytes = size(&pairs) + gml.iter().map(String::len).sum::<usize>();
+        Some(Scope { pairs, gml: gml.into(), context: None, spent: false, bytes })
     }
 
     /// The place in `contexts` of a set's declarations, written once for all the elements in it;
@@ -673,7 +678,9 @@ impl Index {
                 rooted = true;
                 check_root(file_name, e)?;
                 index.namespaces = declarations(e);
-                scopes.stack.push(Scope { gml: gml_prefixes(e).into(), ..Scope::default() });
+                let gml = gml_prefixes(e);
+                let bytes = gml.iter().map(String::len).sum();
+                scopes.stack.push(Scope { gml: gml.into(), bytes, ..Scope::default() });
             }
             if prototype.is_none()
                 && let Some(srs) = start_attribute(e, "srsName").filter(|s| !s.trim().is_empty())
@@ -1998,7 +2005,9 @@ struct Got {
 impl Got {
     /// A prototype read in its own system, placed; none when the instances' points left to place
     /// (`placing`) don't cover it, or a point placed isn't a finite number. Its rings of no area were
-    /// said when it was read.
+    /// left out and said when it was read; those its placing flattens (a matrix that scales an axis
+    /// to nothing) are left out the same way, in `dropped_rings`, which [`Reading::add`] says for
+    /// each instance.
     fn placed(&self, place: &Placement, placing: &mut usize) -> Option<Got> {
         let f = &self.faces;
         let size = f.rings().chain(&self.lines).map(Vec::len).sum::<usize>() + self.points.len() + self.heights.len();
@@ -2008,15 +2017,17 @@ impl Got {
         *placing -= size;
         let ring = |r: &Vec<P3>| r.iter().map(|p| place.place(p)).collect::<Option<Vec<P3>>>();
         let rings = |rs: &Vec<Vec<P3>>| rs.iter().map(ring).collect::<Option<Vec<_>>>();
+        let mut faces = Faces {
+            left_out: rings(&f.left_out)?,
+            truncated: f.truncated,
+            ground_left_out: rings(&f.ground_left_out)?,
+            ..Faces::default()
+        };
+        for (face, ground) in f.faces.iter().zip(&f.ground) {
+            faces.face(rings(face)?, *ground);
+        }
         Some(Got {
-            faces: Faces {
-                faces: f.faces.iter().map(rings).collect::<Option<_>>()?,
-                ground: f.ground.clone(),
-                left_out: rings(&f.left_out)?,
-                truncated: f.truncated,
-                ground_left_out: rings(&f.ground_left_out)?,
-                dropped_rings: 0,
-            },
+            faces,
             surface: self.surface,
             lines: rings(&self.lines)?,
             points: self.points.iter().map(|(p, reference)| Some((place.place(p)?, *reference))).collect::<Option<_>>()?,
