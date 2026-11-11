@@ -7,7 +7,7 @@
 //! With none installed (an export, the CLI, the browser) frames always finish. The flag is the
 //! thread's own: threads the renderer starts for a part of the frame (a raster's rows) don't look
 //! at it, and finish their part. A long step without a look (projecting or thinning a layer's
-//! geometry for the first time, a raster) runs to its end.
+//! geometry for the first time, a raster, a single feature's path) runs to its end.
 
 use std::cell::RefCell;
 use std::sync::Arc;

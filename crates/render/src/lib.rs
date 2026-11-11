@@ -2712,6 +2712,10 @@ fn gpu_turned(map: &mut Map, view: &View, full_res_rasters: bool, sources_ready:
         cmds.extend(scene.cmds);
     }
     map.label_lock = lock;
+    // A frame stopped during its last band goes no further (see `cancel`).
+    if cancel::requested() {
+        return None;
+    }
     if !plain {
         return None;
     }
@@ -4407,6 +4411,10 @@ fn render_frame(
             } else {
                 Vec::new()
             };
+            // A stopped frame places no labels for the rest of the layer (see `cancel`).
+            if cancel::requested() {
+                return Ok(());
+            }
             if label_fields.iter().any(Option::is_some) {
                 let label_factor = layer.size_factor(label_scale);
                 // Each class's font, where it is installed. An export (`full_res_rasters`: see
