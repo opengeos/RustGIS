@@ -1,8 +1,12 @@
 //! Stopping a frame no longer wanted (#1750). The desktop app draws a settled flat map's frame on a
 //! worker; when the map moves again before it is done, the frame is out of date. The worker
 //! installs a flag on its thread ([`install`]) and sets it to stop: the renderer looks at it between
-//! layers and every [`EVERY`] features of a layer, and a frame stopped that way comes back as
-//! `None`. With none installed (an export, the CLI, the browser) frames always finish.
+//! layers, before each chunk of a streamed layer and every [`EVERY`] features of a layer, and a
+//! frame stopped that way comes back as `None`, without its tiles, labels or effects worked out.
+//! With none installed (an export, the CLI, the browser) frames always finish. The flag is the
+//! thread's own: threads the renderer starts for a part of the frame (a raster's rows) don't look
+//! at it, and finish their part. A long step without a look (projecting or thinning a layer's
+//! geometry for the first time, a raster) runs to its end.
 
 use std::cell::RefCell;
 use std::sync::Arc;
@@ -33,7 +37,14 @@ impl Drop for Installed {
 
 /// Whether the frame being drawn on this thread was asked to stop.
 pub(crate) fn requested() -> bool {
-    FLAG.with(|f| f.borrow().as_ref().is_some_and(|flag| flag.load(Ordering::Relaxed)))
+    // Never during the thread's teardown: no frame is drawn that late.
+    FLAG.try_with(|f| f.borrow().as_ref().is_some_and(|flag| flag.load(Ordering::Relaxed))).unwrap_or(false)
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Features drawn on this test thread, to see a stopped frame stop drawing.
+    pub(crate) static DRAWN: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 #[cfg(test)]
@@ -64,8 +75,13 @@ mod tests {
         let view = crate::View { width: 64.0, height: 48.0, pixels_per_point: 1.0, camera: rustgis_map::Camera::world(), sky: false };
         let flag = Arc::new(AtomicBool::new(false));
         let _guard = install(flag.clone());
+        DRAWN.set(0);
         assert!(crate::render(&mut map, &view).is_some());
+        assert!(DRAWN.get() > 100, "{} countries drawn", DRAWN.get());
+        // Stopped, it draws no feature at all, not just hands back nothing.
         flag.store(true, Ordering::Relaxed);
+        DRAWN.set(0);
         assert!(crate::render(&mut map, &view).is_none());
+        assert_eq!(DRAWN.get(), 0);
     }
 }

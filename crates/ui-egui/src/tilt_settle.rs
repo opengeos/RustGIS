@@ -101,8 +101,9 @@ impl<K: Copy + PartialEq> TiltSettle<K> {
         self.start_with(ctx, key, stop, move || draw(map, view, backend, flag));
     }
 
-    /// Asks the frame being drawn to stop (it is out of date): the renderer looks between layers
-    /// and every few thousand features, so the worker is free again soon. The stopped frame is
+    /// Asks the frame being drawn to stop (it is out of date): the renderer looks between layers,
+    /// before each chunk of a streamed layer and every 2048 features (see `render::cancel`), so
+    /// the worker is free again soon. The stopped frame is
     /// still handed back by [`TiltSettle::take`], with no picture and `cancelled` set, and its key
     /// may be drawn again. In the browser frames are drawn at once: there is nothing to stop.
     pub fn cancel(&mut self) {

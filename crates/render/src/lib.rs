@@ -3960,6 +3960,10 @@ fn render_frame(
         // polygons.
         let mut extruded_charts: Option<Canvas> = None;
         let mut draw_chunk = |layer: &mut rustgis_map::Layer| -> rustgis_data::Result<()> {
+            // A stopped frame draws no more of a layer or a streamed chunk (see `cancel`).
+            if cancel::requested() {
+                return Ok(());
+            }
             // The definition query and the display filters that apply at this scale (a feature draws
             // only if it matches all of them).
             let mut rows = layer.drawn_rows(scale);
@@ -4180,6 +4184,8 @@ fn render_frame(
                         if row % cancel::EVERY == 0 && row > 0 && cancel::requested() {
                             break;
                         }
+                        #[cfg(test)]
+                        cancel::DRAWN.set(cancel::DRAWN.get() + 1);
                         let Some(g) = g else { continue };
                         let e = extents.get(row).copied().unwrap_or_else(|| g.extent());
                         // A point's marks, shifted from it, may show while the point is off the view.
@@ -4780,6 +4786,10 @@ fn render_frame(
             // All coordinates are read here: filtering only to the viewport can change labels,
             // shadows and screen-space effects whose geometry lies beyond its boundary.
             let result = visit_complete(source.as_ref(), &mut |features| {
+                // A frame no longer wanted reads no further (see `cancel`).
+                if cancel::requested() {
+                    return Err(rustgis_data::DataError::Cancelled);
+                }
                 chunk.clear_cache();
                 chunk.selection =
                     features.iter().enumerate().filter_map(|(r, f)| selected_order.contains_key(&f.id).then_some(r)).collect();
@@ -4791,6 +4801,10 @@ fn render_frame(
                 Ok(())
             });
             if let Err(e) = result {
+                // Stopped, not failed: the source is fine.
+                if cancel::requested() {
+                    return None;
+                }
                 if let Some(s) = &mut layer.source {
                     s.error = Some(e.to_string());
                 }
@@ -4832,6 +4846,11 @@ fn render_frame(
             ctx.highlight(&mut pm, &geometry, &symbol, &strokes, turn);
             cpu_dirty = true;
         }
+    }
+    // A frame stopped part-way (see `cancel`) is no frame: its tiles, labels and effects aren't
+    // worth working out.
+    if cancel::requested() {
+        return None;
     }
     if let Some(id) = below {
         draw_tiles!(Some(id));
