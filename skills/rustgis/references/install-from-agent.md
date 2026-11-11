@@ -46,13 +46,14 @@ Run the appropriate platform row, not every command:
 | Platform | Agent-runnable commands |
 | --- | --- |
 | Windows x64 | `winget install OpenGeos.RustGIS` |
-| macOS | `brew install --cask opengeos/rustgis/rustgis` then `brew install opengeos/rustgis/rustgis-cli` |
+| macOS | `brew install --cask rustgis` then `brew install opengeos/rustgis/rustgis-cli` |
 | Arch Linux with an AUR helper | `yay -S rustgis-bin` |
 | Fedora | `sudo dnf copr enable giswqs/rustgis && sudo dnf install rustgis` |
 
-On Homebrew 5.1 or later, first run `brew trust opengeos/rustgis` once.
-Homebrew's `rustgis-cli` formula also works on Linux but installs **only the
-CLI**, not the desktop app. winget's default is the per-user installer; use
+The `rustgis` cask needs no tap, and on Linux it installs the desktop app's
+AppImage. The `rustgis-cli` formula comes from the opengeos/rustgis tap: on
+Homebrew 5.1 or later, first run `brew trust opengeos/rustgis` once. That
+formula also works on Linux but installs **only the CLI**. winget's default is the per-user installer; use
 `--scope machine` only for an authorized all-user MSI installation.
 If elevation needs the user's password, leave that interaction to the user;
 the portable route below does not require system-wide installation.
