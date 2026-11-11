@@ -2561,7 +2561,8 @@ pub fn shapefile_values_notes(ds: &Dataset, target: &str) -> Vec<String> {
             }
             let Some(loss) = counts.get_mut(k) else { continue };
             match field.ty {
-                FieldType::Text if value.to_string().len() > 254 => loss.text += 1,
+                // A date field is written as its text too, so text held in one is cut the same way.
+                FieldType::Text | FieldType::Date | FieldType::DateTime if value.to_string().len() > 254 => loss.text += 1,
                 FieldType::Integer | FieldType::Double => {
                     let d = decimals.get(k).copied().unwrap_or(0);
                     match dbf_number(value, field.ty, d) {
@@ -4422,6 +4423,10 @@ mod tests {
             assert_eq!(dates_as_text_note(&fields, target), None, "{target}");
         }
         assert_eq!(dates_as_text_note(&fields[..1], "a.gpkg"), None);
+        // Text held in a date field is cut to a Shapefile's 254 bytes like any text, and said.
+        let mut ds = Dataset::new("d", GeometryType::Point, vec![Field::new("issued", FieldType::Date)]);
+        ds.push(Some(Geometry::Point(Coord::new(0.0, 0.0))), vec![Value::Text("x".repeat(300))]);
+        assert_eq!(shapefile_values_notes(&ds, "a.shp"), ["a.shp: 1 text value was cut to at most 254 bytes, in 'issued'"]);
     }
 
     /// The notice for field names a Shapefile can't hold names each change as the file has it,

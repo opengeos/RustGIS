@@ -2400,8 +2400,9 @@ fn update_on(inp: &dyn Inputs, p: &Json, threads: Option<usize>) -> Result<ToolR
         }
     }
     let kept = out.features.len();
-    // For each input field, how many update values its type couldn't hold, written as null.
-    let mut unfit = vec![0usize; ds.fields.len()];
+    // For each input field, how many update values its type couldn't hold, written as null, and
+    // how many date-times a date field kept only the day of.
+    let mut unfit = vec![(0usize, 0usize); ds.fields.len()];
     crate::control::begin(zones.len());
     for (done, z) in zones.iter().enumerate() {
         crate::control::check()?;
@@ -2412,11 +2413,12 @@ fn update_on(inp: &dyn Inputs, p: &Json, threads: Option<usize>) -> Result<ToolR
             .iter()
             .zip(&from)
             .zip(&mut unfit)
-            .map(|((f, i), n)| {
+            .map(|((f, i), (n, days))| {
                 let Some(v) = i.and_then(|i| u.attrs.get(i)) else { return Value::Null };
                 let c = converted(v, f.ty);
-                // Empty text is null wherever it goes: no loss.
-                *n += usize::from(c.is_null() && !v.is_null() && !matches!(v, Value::Text(t) if t.trim().is_empty()));
+                // Empty or `<null>` text asks for null: no loss.
+                *n += usize::from(c.is_null() && !v.asks_null());
+                *days += usize::from(matches!(v, Value::DateTime(t) if f.ty == FieldType::Date && !t.is_date()));
                 c
             })
             .collect();
@@ -2425,9 +2427,15 @@ fn update_on(inp: &dyn Inputs, p: &Json, threads: Option<usize>) -> Result<ToolR
     let added = out.features.len() - kept;
     let mut messages = vec![format!("Update: {kept} input features kept, {added} update features added")];
     messages.extend(left_out.notes("Update", &up.name));
-    for (f, n) in ds.fields.iter().zip(unfit).filter(|(_, n)| *n > 0) {
-        let features = if n == 1 { "1 update feature".to_string() } else { format!("{n} update features") };
-        messages.push(format!("Update: '{}' is null in {features}, whose value isn't a {} value", f.name, f.ty.label()));
+    let features = |n: usize| if n == 1 { "1 update feature".to_string() } else { format!("{n} update features") };
+    for (f, (n, days)) in ds.fields.iter().zip(unfit) {
+        if n > 0 {
+            messages.push(format!("Update: '{}' is null in {}, whose value isn't a {} value", f.name, features(n), f.ty.label()));
+        }
+        if days > 0 {
+            let their = if days == 1 { "its" } else { "their" };
+            messages.push(format!("Update: '{}' holds dates, so {} kept only {their} day", f.name, features(days)));
+        }
     }
     Ok(ToolResult { output: Output::Layer(out), messages })
 }
@@ -11788,6 +11796,25 @@ mod tests {
         assert_eq!(out.features[4].geometry, zones.features[1].geometry);
         let e = crate::run("update", &inputs(), &serde_json::json!({"input": "pts", "update": "polys"})).unwrap_err();
         assert!(e.contains("not a polygon layer"), "{e}");
+    }
+
+    #[test]
+    fn update_says_what_a_date_field_keeps_of_a_date_time() {
+        let fields = vec![Field::new("d", FieldType::Date), Field::new("n", FieldType::Integer)];
+        let mut parcels = Dataset::new("parcels", GeometryType::Polygon, fields);
+        parcels.push(Some(sq(0.0, 0.0, 1.0)), vec![Value::Null, Value::Null]);
+        let fields = vec![Field::new("d", FieldType::DateTime), Field::new("n", FieldType::Text)];
+        let mut zones = Dataset::new("zones", GeometryType::Polygon, fields);
+        let at = |t: &str| Value::DateTime(rustgis_data::DateTime::parse(t).unwrap());
+        // A midnight without a zone is all there is to its day; `<null>` asks for null.
+        zones.push(Some(sq(5.0, 0.0, 1.0)), vec![at("2026-03-05T00:00:00"), Value::Text("<null>".into())]);
+        let m = |zones: Dataset| Map(HashMap::from([("parcels".to_string(), parcels.clone()), ("zones".to_string(), zones)]));
+        let res = crate::run("update", &m(zones.clone()), &serde_json::json!({"input": "parcels", "update": "zones"})).unwrap();
+        assert_eq!(res.messages.len(), 1, "{:?}", res.messages);
+        zones.push(Some(sq(7.0, 0.0, 1.0)), vec![at("2026-03-05T14:30:00+02:00"), Value::Null]);
+        let res = crate::run("update", &m(zones), &serde_json::json!({"input": "parcels", "update": "zones"})).unwrap();
+        assert_eq!(res.messages.get(1).map(String::as_str), Some("Update: 'd' holds dates, so 1 update feature kept only its day"));
+        assert_eq!(res.messages.len(), 2);
     }
 
     #[test]

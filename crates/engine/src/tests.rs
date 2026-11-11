@@ -527,6 +527,30 @@ fn date_fields_work_from_adding_to_saving() {
     let mark = s.notice_mark();
     s.run("edit.calculateField", &json!({"layer": "Cities", "field": "seen", "expression": "founded"})).unwrap();
     assert!(s.notices_since(mark).iter().all(|n| !n.text.contains("Calculate Field")), "clean results give no notice");
+    // A date-time with a time of day, into a date field by Calculate Field or Paste, keeps its day, and that is said.
+    s.run("edit.setValue", &json!({"layer": "Cities", "row": 0, "field": "seen", "value": "2026-03-05T14:30:00"})).unwrap();
+    let mark = s.notice_mark();
+    s.run("edit.calculateField", &json!({"layer": "Cities", "field": "founded", "expression": "seen"})).unwrap();
+    assert!(
+        s.notices_since(mark).iter().any(|n| n.text == "Calculate Field: 'founded' holds dates, so 1 result kept only its day"),
+        "{:?}",
+        s.notices_since(mark)
+    );
+    s.run("edit.undo", &Value::Null).unwrap();
+    s.run("select.byAttributes", &json!({"layer": "Cities", "where": "seen > '2026-03-05T12:00:00'"})).unwrap();
+    s.run("edit.copy", &Value::Null).unwrap();
+    s.run("edit.pasteSpecial", &json!({"name": "Moments"})).unwrap();
+    s.run("edit.deleteField", &json!({"layer": "Moments", "field": "seen"})).unwrap();
+    s.run("edit.addField", &json!({"layer": "Moments", "name": "seen", "type": "date"})).unwrap();
+    let mark = s.notice_mark();
+    s.run("edit.paste", &json!({"layer": "Moments"})).unwrap();
+    assert!(
+        s.notices_since(mark).iter().any(|n| n.text == "Paste: 'seen' holds dates, so 1 feature kept only its day"),
+        "{:?}",
+        s.notices_since(mark)
+    );
+    s.run("layer.remove", &json!({"layer": "Moments"})).unwrap();
+    s.run("edit.setValue", &json!({"layer": "Cities", "row": 0, "field": "seen", "value": "2026-03-05T00:00:00"})).unwrap();
     let err = s.run("edit.setValue", &json!({"layer": "Cities", "row": 0, "field": "founded", "value": "soon"})).unwrap_err();
     assert_eq!(err, "'soon' isn't a Date value");
     // So is any other value a date field can't hold, given as a number.

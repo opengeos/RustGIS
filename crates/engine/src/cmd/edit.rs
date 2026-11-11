@@ -63,7 +63,7 @@ pub(crate) fn add_feature(s: &mut Session, p: &Json) -> CmdResult {
             }
             let coerced = coerce(value.clone(), f.ty);
             // A value a date field can't hold (`soon`, `20260305`) is refused, not stored as null.
-            if f.ty.is_temporal() && coerced.is_null() && !explicit_null(&value) {
+            if f.ty.is_temporal() && coerced.is_null() && !value.asks_null() {
                 return Err(format!("field '{}': '{value}' isn't a {} value", f.name, f.ty.label()));
             }
             if let Some(key) = numeric_loss(&value, &coerced, f.ty) {
@@ -137,7 +137,8 @@ pub(crate) fn coerce(v: Value, ty: FieldType) -> Value {
     }
 }
 
-/// What [`coerce_cut`] took from a number to put it in a whole-number field.
+/// What [`coerce_cut`] took from a number to put it in a whole-number field, or from a date-time
+/// to put it in a date field.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Cut {
     /// Nothing.
@@ -148,6 +149,8 @@ pub(crate) enum Cut {
     Range,
     /// All of it: not a number (NaN) is null.
     NotANumber,
+    /// A date-time's time of day or zone: a date field keeps its day.
+    Time,
 }
 
 /// How many of a field's results [`coerce_cut`] cut, of each kind, for one notice per kind.
@@ -156,6 +159,7 @@ pub(crate) struct Cuts {
     fractions: usize,
     past: usize,
     not_numbers: usize,
+    times: usize,
 }
 
 impl Cuts {
@@ -165,10 +169,11 @@ impl Cuts {
             Cut::Fraction => self.fractions += 1,
             Cut::Range => self.past += 1,
             Cut::NotANumber => self.not_numbers += 1,
+            Cut::Time => self.times += 1,
         }
     }
 
-    /// The notices for what writing the whole-number field `field` cut, each starting with `by`
+    /// The notices for what writing the whole-number or date field `field` cut, each starting with `by`
     /// (the command or rule that wrote it). Empty when nothing was cut.
     pub(crate) fn notices(&self, by: &str, field: &str) -> Vec<String> {
         let results = |n: usize| if n == 1 { "1 result".to_string() } else { format!("{n} results") };
@@ -183,6 +188,10 @@ impl Cuts {
         if self.not_numbers > 0 {
             let are = if self.not_numbers == 1 { "isn't a number" } else { "aren't numbers" };
             out.push(format!("{by}: '{field}' is null for {} that {are}", results(self.not_numbers)));
+        }
+        if self.times > 0 {
+            let their = if self.times == 1 { "its" } else { "their" };
+            out.push(format!("{by}: '{field}' holds dates, so {} kept only {their} day", results(self.times)));
         }
         out
     }
@@ -217,8 +226,8 @@ fn convert(v: Value, ty: FieldType) -> (Value, Cut, Option<f64>) {
         (Value::Float(f), FieldType::Integer) => whole(f),
         (Value::Float(f), FieldType::Double) => (Value::Float(f), Cut::None, None),
         (Value::Int(i), FieldType::Double) => (Value::Float(i as f64), Cut::None, None),
-        // A date-time into a date field is the day it shows.
-        (Value::DateTime(t), FieldType::Date) => (Value::Date(t.date()), Cut::None, None),
+        // A date-time into a date field is the day it shows, and said so when it had a time or zone.
+        (Value::DateTime(t), FieldType::Date) => (Value::Date(t.date()), if t.is_date() { Cut::None } else { Cut::Time }, None),
         // Text written as a whole number, or as a decimal without an exponent, is read from its
         // digits; any other number written as text, as a decimal.
         (Value::Text(t), FieldType::Integer) => match t.trim().parse::<i64>() {
@@ -303,15 +312,9 @@ fn field_index(s: &Session, id: u32, name: &str) -> Result<usize, String> {
     s.map().layer(id).and_then(|l| l.dataset.field_index(name)).ok_or_else(|| format!("no field named '{name}'"))
 }
 
-/// Whether `v` asks for null: null itself, or text that is empty or `<null>`, as the table takes it.
-/// Such a value becoming null is no loss, so nothing reports or refuses it.
-pub(crate) fn explicit_null(v: &Value) -> bool {
-    v.is_null() || matches!(v, Value::Text(t) if t.trim().is_empty() || t.trim().eq_ignore_ascii_case("<null>"))
-}
-
 /// A numeric conversion's loss, shared by edits and feature creation. Null entered explicitly is quiet.
 fn numeric_loss(input: &Value, v: &Value, ty: FieldType) -> Option<&'static str> {
-    if ty.is_numeric() && v.is_null() && !explicit_null(input) {
+    if ty.is_numeric() && v.is_null() && !input.asks_null() {
         Some("{layer}, field '{field}', row {row}: 1 attribute value was written as null because it isn't a number")
     } else if ty == FieldType::Integer {
         let (exact, cut) = coerce_cut(input.clone(), ty);
@@ -515,7 +518,7 @@ fn calculate_field(s: &mut Session, p: &Json) -> CmdResult {
     let mut unread = 0usize;
     for r in &rows {
         let v = calc.eval(&l.dataset, *r);
-        let asked_null = explicit_null(&v);
+        let asked_null = v.asks_null();
         let (v, cut) = coerce_cut(v, ty);
         unread += usize::from(!asked_null && v.is_null() && cut == Cut::None);
         cuts.add(cut);

@@ -172,6 +172,16 @@ impl Value {
             Value::Date(_) | Value::DateTime(_) => self.to_string().into(),
         }
     }
+    /// Whether it asks for null: null itself, or text that is empty or `<null>`, as
+    /// [`parse`](Value::parse) and the table take it. Such a value becoming null is no loss, so
+    /// nothing reports or refuses it.
+    pub fn asks_null(&self) -> bool {
+        match self {
+            Value::Null => true,
+            Value::Text(t) => t.trim().is_empty() || t.trim().eq_ignore_ascii_case("<null>"),
+            _ => false,
+        }
+    }
     /// Parses user text into a value of `ty` (empty → Null). Text a number field can't hold,
     /// including a non-finite Double (`NaN`, `inf`), is Null. Dates are ISO 8601: `YYYY-MM-DD`
     /// for a date; that, a time and an optional zone for a date-time. Text that isn't one is Null.

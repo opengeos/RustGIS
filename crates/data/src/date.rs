@@ -106,7 +106,7 @@ impl DateTime {
 
     /// Reads `YYYY-MM-DD`, then optionally `T` or a space and `HH:MM[:SS[.ffffff]]`, then
     /// optionally `Z` or an offset (`+05:30`, `-0800`, `+02`). A date alone is its midnight.
-    /// Digits past microseconds are cut.
+    /// Digits past microseconds are refused unless they're zeros, so nothing is cut.
     pub fn parse(s: &str) -> Option<DateTime> {
         let s = s.trim();
         let date = Date::parse(s.get(..10)?)?;
@@ -134,7 +134,7 @@ impl DateTime {
             sec = digits(b.get(6..8)?)?;
             if b.len() > 8 {
                 let frac = b.get(8..)?.strip_prefix(b".")?;
-                if frac.is_empty() || !frac.iter().all(u8::is_ascii_digit) {
+                if frac.is_empty() || !frac.iter().all(u8::is_ascii_digit) || frac.iter().skip(6).any(|&c| c != b'0') {
                     return None;
                 }
                 for i in 0..6 {
@@ -165,6 +165,12 @@ impl DateTime {
                 DateTime::with_offset(wall.checked_sub(i64::from(off) * MINUTE_US)?, off)
             }
         }
+    }
+
+    /// Whether its day says all of it: midnight, without a zone. Otherwise [`date`](Self::date)
+    /// drops its time or its zone.
+    pub fn is_date(self) -> bool {
+        self == DateTime::from_date(self.date())
     }
 
     /// The day it falls on, as it's shown (in its own offset).
@@ -296,6 +302,18 @@ mod tests {
     }
 
     #[test]
+    fn digits_past_microseconds_are_refused_unless_zeros() {
+        assert!(DateTime::parse("2026-03-05T14:30:00.123456789Z").is_none(), "nothing is cut");
+        assert_eq!(
+            DateTime::parse("2026-03-05T14:30:00.123456000Z").map(|t| t.to_string()),
+            DateTime::parse("2026-03-05T14:30:00.123456Z").map(|t| t.to_string())
+        );
+        assert!(DateTime::parse("2026-03-05T00:00:00").is_some_and(DateTime::is_date));
+        assert!(!DateTime::parse("2026-03-05T00:00:00Z").is_some_and(DateTime::is_date), "a zone isn't kept by a date");
+        assert!(!DateTime::parse("2026-03-05T14:30:00").is_some_and(DateTime::is_date));
+    }
+
+    #[test]
     fn dates_read_and_print_iso() {
         for s in ["1970-01-01", "2026-03-05", "2024-02-29", "0001-01-01", "9999-12-31"] {
             assert_eq!(Date::parse(s).map(|d| d.to_string()).as_deref(), Some(s));
@@ -330,7 +348,7 @@ mod tests {
         assert_eq!(dt("2026-03-05T14:30:00+0200").to_string(), "2026-03-05T14:30:00+02:00");
         assert_eq!(dt("2026-03-05T14:30:00-03").to_string(), "2026-03-05T14:30:00-03:00");
         assert_eq!(dt("2026-03-05T14:30:00.5Z").to_string(), "2026-03-05T14:30:00.500Z");
-        assert_eq!(dt("2026-03-05T14:30:00.1234567").to_string(), "2026-03-05T14:30:00.123456");
+        assert_eq!(dt("2026-03-05T14:30:00.1234560").to_string(), "2026-03-05T14:30:00.123456");
         // The instant, compared across offsets; a time without a zone compares as UTC.
         assert_eq!(dt("2026-03-05T14:30:00+02:00").sort_key(), dt("2026-03-05T12:30:00Z").sort_key());
         assert_eq!(dt("2026-03-05T12:30:00").sort_key(), dt("2026-03-05T12:30:00Z").sort_key());
