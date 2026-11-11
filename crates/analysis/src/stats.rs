@@ -510,22 +510,30 @@ pub fn compute(stat: Stat, column: &Column, separator: &str) -> Value {
             Value::Text(v.iter().enumerate().map(text).collect::<Vec<_>>().join(separator))
         }
         (Stat::Concatenate, Values::Texts(v)) if !v.is_empty() => Value::Text(v.join(separator)),
+        // A date field's distinct instants: the same moment at different offsets is one, as in
+        // grouping.
+        (Stat::Unique, _) if !column.dates.is_empty() => {
+            let mut keys: Vec<i64> = column.dates.iter().filter_map(Value::temporal_key).collect();
+            keys.sort_unstable();
+            keys.dedup();
+            count(keys.len())
+        }
         (Stat::Unique, _) => count(column.distinct()),
         // A date field's earliest, latest, first, last or most common date, as a date: by
         // instant, where the text of date-times with different offsets would sort apart.
-        (Stat::Min | Stat::Max | Stat::First | Stat::Last | Stat::Mode | Stat::Minority, Values::Texts(v)) if !column.dates.is_empty() => {
+        (Stat::Min | Stat::Max | Stat::First | Stat::Last | Stat::Mode | Stat::Minority, Values::Texts(_)) if !column.dates.is_empty() => {
             let d = &column.dates;
             let picked = match stat {
                 Stat::Min => d.iter().min_by_key(|x| x.temporal_key()),
                 Stat::Max => d.iter().max_by_key(|x| x.temporal_key()),
                 Stat::First => d.first(),
                 Stat::Last => d.last(),
+                // The most or least common instant, counted as UNIQUE counts them.
                 _ => {
-                    let sorted = || match column.sorted() {
-                        Values::Texts(s) => s.as_slice(),
-                        Values::Numbers(_) => &[],
-                    };
-                    textual(stat, v, sorted).and_then(|t| v.iter().position(|x| x == t)).and_then(|i| d.get(i))
+                    let mut by_instant: Vec<&Value> = d.iter().collect();
+                    by_instant.sort_by_key(|x| x.temporal_key());
+                    return pick_run_by(&by_instant, stat == Stat::Mode, |a, b| a.temporal_key() == b.temporal_key())
+                        .map_or(Value::Null, |x| (*x).clone());
                 }
             };
             picked.cloned().unwrap_or(Value::Null)
@@ -858,6 +866,21 @@ mod tests {
     /// The named statistic over values with no nulls, joined by ", ".
     fn f(stat: &str, v: &Values) -> Value {
         compute(Stat::parse(stat).unwrap(), &Column::new(v.clone(), 0), ", ")
+    }
+
+    /// A date-time field counts the same moment at different offsets once, as grouping does: in
+    /// UNIQUE, MODE and MINORITY, which give back one of the field's own values.
+    #[test]
+    fn date_times_are_counted_by_instant() {
+        let mut ds = Dataset::new("t", GeometryType::None, vec![Field::new("ts", FieldType::DateTime)]);
+        for t in ["2026-03-05T12:00:00Z", "2026-03-05T13:00:00+01:00", "2026-03-06T00:00:00Z"] {
+            ds.push(None, vec![Value::parse(t, FieldType::DateTime)]);
+        }
+        let c = column(&ds, &[0, 1, 2], 0, false);
+        let get = |stat: &str| compute(Stat::parse(stat).unwrap(), &c, ", ").to_string();
+        assert_eq!(get("UNIQUE"), "2");
+        assert_eq!(get("MODE"), "2026-03-05T12:00:00Z");
+        assert_eq!(get("MINORITY"), "2026-03-06T00:00:00Z");
     }
 
     /// Every named statistic and the percentiles read back under their own names, in any case, and

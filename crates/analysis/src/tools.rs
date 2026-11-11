@@ -2400,19 +2400,36 @@ fn update_on(inp: &dyn Inputs, p: &Json, threads: Option<usize>) -> Result<ToolR
         }
     }
     let kept = out.features.len();
+    // For each input field, how many update values its type couldn't hold, written as null.
+    let mut unfit = vec![0usize; ds.fields.len()];
     crate::control::begin(zones.len());
     for (done, z) in zones.iter().enumerate() {
         crate::control::check()?;
         crate::control::reached(done);
         let Some(u) = up.features.get(z.row) else { continue };
-        let attrs =
-            ds.fields.iter().zip(&from).map(|(f, i)| i.and_then(|i| u.attrs.get(i)).map_or(Value::Null, |v| converted(v, f.ty))).collect();
+        let attrs = ds
+            .fields
+            .iter()
+            .zip(&from)
+            .zip(&mut unfit)
+            .map(|((f, i), n)| {
+                let Some(v) = i.and_then(|i| u.attrs.get(i)) else { return Value::Null };
+                let c = converted(v, f.ty);
+                // Empty text is null wherever it goes: no loss.
+                *n += usize::from(c.is_null() && !v.is_null() && !matches!(v, Value::Text(t) if t.trim().is_empty()));
+                c
+            })
+            .collect();
         out.push_next(u.geometry.clone(), attrs);
     }
     let added = out.features.len() - kept;
-    let mut r = result(out, format!("Update: {kept} input features kept, {added} update features added"))?;
-    r.messages.extend(left_out.notes("Update", &up.name));
-    Ok(r)
+    let mut messages = vec![format!("Update: {kept} input features kept, {added} update features added")];
+    messages.extend(left_out.notes("Update", &up.name));
+    for (f, n) in ds.fields.iter().zip(unfit).filter(|(_, n)| *n > 0) {
+        let features = if n == 1 { "1 update feature".to_string() } else { format!("{n} update features") };
+        messages.push(format!("Update: '{}' is null in {features}, whose value isn't a {} value", f.name, f.ty.label()));
+    }
+    Ok(ToolResult { output: Output::Layer(out), messages })
 }
 
 /// The most split areas (split polygons, or values of the split field) Split takes: more is an
@@ -5030,19 +5047,28 @@ fn summary_statistics(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> 
     let ds = input(inp, p, "input")?;
     let mut requests = stats::parse_requests(ds, p.get("statistics"))?;
     let field_only = requests.is_empty();
+    // A Statistics Field is read as numbers, except a date field: its values are dates, which give
+    // a count and the earliest and latest, not sums.
+    let mut as_numbers = field_only;
     if field_only {
         let field = s(p, "field").trim();
         if field.is_empty() {
             return Err("give the statistics to compute, or a Statistics Field".into());
         }
         let fi = find_field_case_insensitive(ds, field)?;
-        requests = [Stat::Count, Stat::Sum, Stat::Mean, Stat::Min, Stat::Max, Stat::Std].map(|stat| Request { field: fi, stat }).to_vec();
+        let stats: &[Stat] = if ds.fields.get(fi).is_some_and(|f| f.ty.is_temporal()) {
+            as_numbers = false;
+            &[Stat::Count, Stat::Min, Stat::Max]
+        } else {
+            &[Stat::Count, Stat::Sum, Stat::Mean, Stat::Min, Stat::Max, Stat::Std]
+        };
+        requests = stats.iter().map(|&stat| Request { field: fi, stat }).collect();
     }
     let cases = key_fields(ds, p.get("case"), "Case Field")?;
     let separator = concatenate_separator(p)?;
     let mut fields: Vec<Field> = cases.iter().filter_map(|&c| ds.fields.get(c).cloned()).collect();
     fields.push(Field::new("FREQUENCY", FieldType::Integer));
-    let added = statistic_fields(ds, &requests, field_only, &fields)?;
+    let added = statistic_fields(ds, &requests, as_numbers, &fields)?;
     let first_added = fields.len();
     fields.extend(added);
     if let Some(c) = cases.iter().filter_map(|&c| ds.fields.get(c)).find(|f| f.name.eq_ignore_ascii_case("FREQUENCY")) {
@@ -5055,11 +5081,11 @@ fn summary_statistics(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> 
     rs.sort_unstable();
     rs.dedup();
     let mut rounded = Rounded::new(requests.len());
-    rounded.count_texts(ds, &rs, &requests, field_only);
+    rounded.count_texts(ds, &rs, &requests, as_numbers);
     for group in stats::group_rows(ds, &rs, &cases) {
         let mut row = group.key;
         row.push(stats::count(group.rows.len()));
-        row.extend(statistic_values(ds, &group.rows, &requests, field_only, separator, &mut rounded));
+        row.extend(statistic_values(ds, &group.rows, &requests, as_numbers, separator, &mut rounded));
         // One past the last id: `push` would search them all for each group.
         out.push_next(None, row);
     }
@@ -11733,7 +11759,9 @@ mod tests {
         m.0.get_mut("parcels").unwrap().push(None, vec![Value::Text("p3".into()), Value::Text("lot".into())]);
         // An update feature without geometry adds nothing.
         m.0.get_mut("zones").unwrap().push(None, vec![Value::Text("z0".into()), Value::Null]);
-        let out = layer(crate::run("update", &m, &serde_json::json!({"input": "parcels", "update": "zones"})).unwrap());
+        let res = crate::run("update", &m, &serde_json::json!({"input": "parcels", "update": "zones"})).unwrap();
+        assert!(!res.messages.iter().any(|m| m.contains("is null in")), "values that fit say nothing: {:?}", res.messages);
+        let out = layer(res);
         assert_eq!(out.name, "parcels_Update");
         let names: Vec<&str> = out.fields.iter().map(|f| f.name.as_str()).collect();
         assert_eq!(names, ["id", "use"], "the input's fields only");
@@ -11790,7 +11818,14 @@ mod tests {
         zones.push(Some(sq(5.0, 0.0, 1.0)), row(0.1, " 7 ", 3, 1));
         zones.push(Some(sq(7.0, 0.0, 1.0)), row(2.5, "seven", -2, 0));
         let m = Map(HashMap::from([("parcels".to_string(), parcels), ("zones".to_string(), zones)]));
-        let out = layer(crate::run("update", &m, &serde_json::json!({"input": "parcels", "update": "zones"})).unwrap());
+        let res = crate::run("update", &m, &serde_json::json!({"input": "parcels", "update": "zones"})).unwrap();
+        // "seven" isn't a whole number: null, and said.
+        assert_eq!(
+            res.messages.get(1).map(String::as_str),
+            Some("Update: 'n' is null in 1 update feature, whose value isn't a Long value")
+        );
+        assert_eq!(res.messages.len(), 2);
+        let out = layer(res);
         let attrs: Vec<&[Value]> = out.features.iter().skip(1).map(|f| f.attrs.as_slice()).collect();
         assert_eq!(
             attrs,
@@ -13203,6 +13238,26 @@ mod tests {
         let text = layer(crate::run("summaryStatistics", &m, &serde_json::json!({"input": "parcels", "field": "owner"})).unwrap());
         assert_eq!((column(&text, "COUNT_owner"), column(&text, "MEAN_owner")), (vec![Value::Int(0)], vec![Value::Null]));
         assert_eq!(text.fields.get(3).map(|f| f.ty), Some(FieldType::Double));
+        // A date field gives its count and its earliest and latest dates, as dates.
+        let mut permits = Dataset::new("permits", GeometryType::Polygon, vec![Field::new("issued", FieldType::Date)]);
+        for day in ["2026-03-05", "1999-12-31", "", "2026-01-01"] {
+            permits.push(Some(sq(0.0, 0.0, 1.0)), vec![Value::parse(day, FieldType::Date)]);
+        }
+        let m = Map(HashMap::from([("permits".to_string(), permits)]));
+        let dates = layer(crate::run("summaryStatistics", &m, &serde_json::json!({"input": "permits", "field": "issued"})).unwrap());
+        let names: Vec<(&str, FieldType)> = dates.fields.iter().map(|f| (f.name.as_str(), f.ty)).collect();
+        assert_eq!(
+            names,
+            [
+                ("FREQUENCY", FieldType::Integer),
+                ("COUNT_issued", FieldType::Integer),
+                ("MIN_issued", FieldType::Date),
+                ("MAX_issued", FieldType::Date)
+            ]
+        );
+        assert_eq!(column(&dates, "COUNT_issued"), [Value::Int(3)]);
+        assert_eq!(column(&dates, "MIN_issued"), [Value::parse("1999-12-31", FieldType::Date)]);
+        assert_eq!(column(&dates, "MAX_issued"), [Value::parse("2026-03-05", FieldType::Date)]);
     }
 
     /// A statistics list over several case fields: groups for each (zone, district), the pairs'

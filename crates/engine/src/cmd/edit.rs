@@ -63,7 +63,7 @@ pub(crate) fn add_feature(s: &mut Session, p: &Json) -> CmdResult {
             }
             let coerced = coerce(value.clone(), f.ty);
             // A value a date field can't hold (`soon`, `20260305`) is refused, not stored as null.
-            if f.ty.is_temporal() && coerced.is_null() && !value.is_null() && !matches!(&value, Value::Text(t) if t.trim().is_empty()) {
+            if f.ty.is_temporal() && coerced.is_null() && !explicit_null(&value) {
                 return Err(format!("field '{}': '{value}' isn't a {} value", f.name, f.ty.label()));
             }
             if let Some(key) = numeric_loss(&value, &coerced, f.ty) {
@@ -303,11 +303,15 @@ fn field_index(s: &Session, id: u32, name: &str) -> Result<usize, String> {
     s.map().layer(id).and_then(|l| l.dataset.field_index(name)).ok_or_else(|| format!("no field named '{name}'"))
 }
 
+/// Whether `v` asks for null: null itself, or text that is empty or `<null>`, as the table takes it.
+/// Such a value becoming null is no loss, so nothing reports or refuses it.
+fn explicit_null(v: &Value) -> bool {
+    v.is_null() || matches!(v, Value::Text(t) if t.trim().is_empty() || t.trim().eq_ignore_ascii_case("<null>"))
+}
+
 /// A numeric conversion's loss, shared by edits and feature creation. Null entered explicitly is quiet.
 fn numeric_loss(input: &Value, v: &Value, ty: FieldType) -> Option<&'static str> {
-    let intentional_null =
-        input.is_null() || matches!(&input, Value::Text(t) if t.trim().is_empty() || t.trim().eq_ignore_ascii_case("<null>"));
-    if ty.is_numeric() && v.is_null() && !intentional_null {
+    if ty.is_numeric() && v.is_null() && !explicit_null(input) {
         Some("{layer}, field '{field}', row {row}: 1 attribute value was written as null because it isn't a number")
     } else if ty == FieldType::Integer {
         let (exact, cut) = coerce_cut(input.clone(), ty);
@@ -511,9 +515,9 @@ fn calculate_field(s: &mut Session, p: &Json) -> CmdResult {
     let mut unread = 0usize;
     for r in &rows {
         let v = calc.eval(&l.dataset, *r);
-        let was_null = v.is_null();
+        let asked_null = explicit_null(&v);
         let (v, cut) = coerce_cut(v, ty);
-        unread += usize::from(!was_null && v.is_null() && cut == Cut::None);
+        unread += usize::from(!asked_null && v.is_null() && cut == Cut::None);
         cuts.add(cut);
         out.push((*r, v));
     }

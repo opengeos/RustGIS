@@ -4408,8 +4408,6 @@ mod tests {
         assert!(missing.is_empty(), "losses without notices: {missing:?}");
     }
 
-    /// The notice for field names a Shapefile can't hold names each change as the file has it,
-    /// and there is none when every name fits.
     #[test]
     fn dates_written_as_text_are_said() {
         let fields = [Field::new("id", FieldType::Integer), Field::new("issued", FieldType::Date), Field::new("ts", FieldType::DateTime)];
@@ -4426,6 +4424,8 @@ mod tests {
         assert_eq!(dates_as_text_note(&fields[..1], "a.gpkg"), None);
     }
 
+    /// The notice for field names a Shapefile can't hold names each change as the file has it,
+    /// and there is none when every name fits.
     #[test]
     fn shapefile_field_name_changes_are_said() {
         // Each field as a Shapefile written and read back names it.

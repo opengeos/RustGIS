@@ -712,7 +712,9 @@ into a `target` table or layer based on matching key values:
   as text in the other (Census GEOIDs, FIPS codes, ZIP codes) joins when the codes match exactly as
   written. Leading zeros stay meaningful: a number that lost its zero (`1001` for `"01001"`) leaves its
   record unmatched, and a warning says how many records missed this way, with the first pair. A date
-  or date-time key matches a text key holding its ISO 8601 text (`2026-03-05`). Other
+  key matches a text key holding its ISO 8601 text (`2026-03-05`), and a date-time key the text
+  as RustGIS writes it (`2026-03-05T14:30:00`, or `2026-03-05T14:30:00+02:00` with its offset). Two
+  date-time keys match by instant, so the same moment at different offsets matches. Other
   incompatible key data types (e.g. text vs floating point or boolean) are rejected, and the message
   suggests converting one key with Add Field and Calculate Field.
 - **Transferred fields:** `fields` selects specific source fields to transfer (a comma-separated list

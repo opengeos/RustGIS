@@ -532,6 +532,15 @@ fn date_fields_work_from_adding_to_saving() {
     assert_eq!(err, "field 'founded': '20260305' isn't a Date value");
     let added = s.run("edit.addFeature", &json!({"layer": "Cities", "geometry": point, "attributes": {"founded": "2026-03-05"}})).unwrap();
     s.run("edit.undo", &Value::Null).unwrap();
+    // `<null>` asks for null, as in the table and edit.setValue.
+    s.run("edit.addFeature", &json!({"layer": "Cities", "geometry": point, "attributes": {"founded": "<null>"}})).unwrap();
+    s.run("edit.undo", &Value::Null).unwrap();
+    // So does a result of empty text: null, with no notice.
+    s.run("edit.addField", &json!({"layer": "Cities", "name": "n", "type": "long"})).unwrap();
+    let mark = s.notice_mark();
+    s.run("edit.calculateField", &json!({"layer": "Cities", "field": "n", "expression": "''"})).unwrap();
+    assert!(s.notices_since(mark).iter().all(|n| !n.text.contains("Calculate Field")), "{:?}", s.notices_since(mark));
+    s.run("edit.deleteField", &json!({"layer": "Cities", "field": "n"})).unwrap();
     assert!(added["row"].is_u64());
     let ds = |s: &Session| s.map().layer_by_name("Cities").unwrap().dataset.clone();
     let seen = ds(&s).field_index("seen").unwrap();
@@ -549,9 +558,17 @@ fn date_fields_work_from_adding_to_saving() {
     );
     assert!(rustgis_map::time::time_fields(&ds(&s)).iter().any(|(f, _)| f == "seen"), "the slider is offered the date field");
     // Saved and opened, the values are still dates.
-    let dir = std::env::temp_dir().join(format!("rustgis-dates-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join("dates.rgis");
+    // Removed however the test ends, and its own each run (the process id alone can repeat).
+    struct Dir(std::path::PathBuf);
+    impl Drop for Dir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos());
+    let dir = Dir(std::env::temp_dir().join(format!("rustgis-dates-{}-{nanos}", std::process::id())));
+    std::fs::create_dir_all(&dir.0).unwrap();
+    let path = dir.0.join("dates.rgis");
     s.run("project.saveAs", &json!({"path": path.display().to_string()})).unwrap();
     let mut t = Session::new(Project::default());
     t.run("project.open", &json!({"path": path.display().to_string()})).unwrap();
@@ -563,7 +580,6 @@ fn date_fields_work_from_adding_to_saving() {
         (0..a.features.len()).map(|r| a.value(r, seen).clone()).collect::<Vec<_>>(),
         (0..b.features.len()).map(|r| b.value(r, seen).clone()).collect::<Vec<_>>()
     );
-    std::fs::remove_dir_all(&dir).ok();
 }
 
 /// A polygon layer stacks fills (a colour, hatch lines, markers on a grid), for the layer or a
