@@ -573,6 +573,18 @@ mod tests {
         let Geometry::Line(parts) = simplify(&Geometry::Line(vec![run.clone()]), 0.5) else { panic!("a line") };
         assert!(started.elapsed().as_secs() < 20, "{:?}", started.elapsed());
         assert!(parts[0].first() == run.first() && parts[0].last() == run.last());
+        // Every dropped vertex (one in a hundred checked, against the kept vertices either side of
+        // it) is within the tolerance of the simplified line.
+        let mut at = 0;
+        for (i, c) in run.iter().enumerate() {
+            if parts[0].get(at + 1) == Some(c) {
+                at += 1;
+            }
+            if i % 100 == 0 {
+                let next = parts[0].get(at + 1).unwrap_or(&parts[0][at]);
+                assert!(segment_distance(*c, parts[0][at], *next) <= 0.5 + 1e-9, "vertex {i}");
+            }
+        }
     }
 
     #[test]

@@ -3692,7 +3692,10 @@ fn render_frame(
         };
         // A detailed outline on the flat map is drawn at the level of detail for the zoom, and
         // only its parts in view (#1750).
-        let levelled = (globe.is_none() && !custom).then(|| outline_level(sample_data::view(), outline_level_for(map_per_px))).flatten();
+        // An outline not at hand yet (`world()` said so) isn't looked up again.
+        let levelled = (globe.is_none() && !custom && !outlines.is_empty())
+            .then(|| outline_level(sample_data::view(), outline_level_for(map_per_px)))
+            .flatten();
         for c in levelled.unwrap_or_default() {
             if !visible(&c.extent) {
                 continue;
