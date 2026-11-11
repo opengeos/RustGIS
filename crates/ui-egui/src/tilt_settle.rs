@@ -66,7 +66,9 @@ fn draw(mut map: Map, view: View, backend: Backend, stop: Stop) -> Done {
     };
     #[cfg(not(target_arch = "wasm32"))]
     let (rendered, incomplete) = (render::render_backend(&mut map, &view, backend), false);
-    let cancelled = stop.load(std::sync::atomic::Ordering::Relaxed);
+    // Stopped only if it came back without a picture: a stop after the renderer's last look
+    // leaves a finished frame.
+    let cancelled = rendered.is_none() && stop.load(std::sync::atomic::Ordering::Relaxed);
     Done { rendered, view, map, ms: t0.elapsed().as_millis() as u64, incomplete, cancelled, archives }
 }
 
