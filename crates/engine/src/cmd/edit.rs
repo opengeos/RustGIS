@@ -305,7 +305,7 @@ fn field_index(s: &Session, id: u32, name: &str) -> Result<usize, String> {
 
 /// Whether `v` asks for null: null itself, or text that is empty or `<null>`, as the table takes it.
 /// Such a value becoming null is no loss, so nothing reports or refuses it.
-fn explicit_null(v: &Value) -> bool {
+pub(crate) fn explicit_null(v: &Value) -> bool {
     v.is_null() || matches!(v, Value::Text(t) if t.trim().is_empty() || t.trim().eq_ignore_ascii_case("<null>"))
 }
 
@@ -560,27 +560,31 @@ impl Calculation {
     pub(crate) fn parse(expr: &str, ds: &rustgis_data::Dataset) -> Result<Calculation, String> {
         // A field named like a literal was read as the field (`null + 1`), so what the earlier
         // calculator reads with such a field keeps its meaning (quoted text needn't).
+        // A date field in arithmetic, which the language refuses, isn't the earlier calculator's
+        // to do either.
+        let date_field = |c: &Calc| {
+            c.op.as_ref()?;
+            [Some(&c.a), c.b.as_ref()].into_iter().flatten().find_map(|t| match t {
+                Term::Field(i) => ds.fields.get(*i).filter(|f| f.ty.is_temporal()),
+                _ => None,
+            })
+        };
         let named_like_a_literal: Vec<usize> = ["true", "false", "null"].iter().filter_map(|k| ds.field_index(k)).collect();
         if !named_like_a_literal.is_empty()
             && let Ok(c) = Calc::parse(expr, ds)
             && [Some(&c.a), c.b.as_ref()].into_iter().flatten().any(|t| matches!(t, Term::Field(i) if named_like_a_literal.contains(i)))
         {
+            // The language would read the name as its literal, so it is refused here, as the
+            // language refuses arithmetic on any other date field.
+            if let Some(f) = date_field(&c) {
+                return Err(format!("'{}' holds dates, and arithmetic on dates isn't supported yet", f.name));
+            }
             return Ok(Calculation::Calc(c));
         }
         match rustgis_data::query::parse(expr, ds) {
             Ok(e) => Ok(Calculation::Expr(e)),
             Err(err) => match Calc::parse(expr, ds) {
-                // Arithmetic on a date field, which the language refuses, isn't the earlier
-                // calculator's to do either.
-                Ok(c)
-                    if c.op.is_some()
-                        && [Some(&c.a), c.b.as_ref()]
-                            .into_iter()
-                            .flatten()
-                            .any(|t| matches!(t, Term::Field(i) if ds.fields.get(*i).is_some_and(|f| f.ty.is_temporal()))) =>
-                {
-                    Err(err)
-                }
+                Ok(c) if date_field(&c).is_some() => Err(err),
                 Ok(c) => Ok(Calculation::Calc(c)),
                 Err(_) => Err(err),
             },

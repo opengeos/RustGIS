@@ -113,6 +113,8 @@ fn clip(s: &Session, p: &Value) -> Result<Dataset, String> {
 fn coerce(v: &Attr, ty: FieldType) -> Attr {
     match v {
         Attr::Null => Attr::Null,
+        // A moment pasted into a date field keeps its day, as Calculate Field and Update do.
+        Attr::DateTime(t) if ty == FieldType::Date => Attr::Date(t.date()),
         Attr::Text(t) => Attr::parse(t, ty),
         other => Attr::parse(&other.to_string(), ty),
     }
@@ -150,6 +152,8 @@ fn paste(s: &mut Session, p: &Value) -> CmdResult {
     let map: Vec<Option<usize>> = l.dataset.fields.iter().map(|f| src.field_index(&f.name)).collect();
     let mut next = l.dataset.features.iter().map(|f| f.id).max().unwrap_or(0);
     let first = l.dataset.features.len();
+    // Per field, the pasted values that aren't null but that the field can't hold.
+    let mut unfit = vec![0usize; l.dataset.fields.len()];
     for ft in src.features {
         if ft.geometry.as_ref().is_some_and(|g| want != GeometryType::None && g.kind() != want) {
             continue;
@@ -160,7 +164,17 @@ fn paste(s: &mut Session, p: &Value) -> CmdResult {
             .fields
             .iter()
             .zip(&map)
-            .map(|(f, i)| i.and_then(|i| ft.attrs.get(i)).map(|v| coerce(v, f.ty)).unwrap_or(Attr::Null))
+            .zip(unfit.iter_mut())
+            .map(|((f, i), unfit)| match i.and_then(|i| ft.attrs.get(i)) {
+                Some(v) => {
+                    let out = coerce(v, f.ty);
+                    if out.is_null() && !super::edit::explicit_null(v) {
+                        *unfit += 1;
+                    }
+                    out
+                }
+                None => Attr::Null,
+            })
             .collect();
         l.dataset.features.push(Feature { id: next, geometry: ft.geometry, attrs });
     }
@@ -168,9 +182,23 @@ fn paste(s: &mut Session, p: &Value) -> CmdResult {
     l.touch_geometry();
     l.selection = (first..first + n).collect();
     let name = l.name.clone();
+    let unfit: Vec<String> = l
+        .dataset
+        .fields
+        .iter()
+        .zip(unfit)
+        .filter(|(_, n)| *n > 0)
+        .map(|(f, n)| {
+            let features = if n == 1 { "1 feature".to_string() } else { format!("{n} features") };
+            format!("Paste: '{}' is null in {features}, whose value isn't a {} value", f.name, f.ty.label())
+        })
+        .collect();
     super::design::apply(s, id, (first..first + n).map(|r| super::design::Change { before: None, row: Some(r) }).collect())?;
     s.map_mut().layers.iter_mut().filter(|o| o.id != id).for_each(|o| o.selection.clear());
     s.notify(format!("Pasted {n} features into {name}"), false);
+    for notice in unfit {
+        s.notify(notice, false);
+    }
     Ok(json!({"pasted": n, "layer": id}))
 }
 
@@ -200,4 +228,17 @@ fn copy_path(s: &mut Session, p: &Value) -> CmdResult {
         s.notify("The copied address leaves out part of the layer's address (keys, tokens, a password, a login or a fragment), so it may not work as it is", false);
     }
     Ok(json!({"text": text}))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_moment_pasted_into_a_date_field_keeps_its_day() {
+        let t = rustgis_data::DateTime::parse("2026-03-05T23:30:00+02:00").unwrap();
+        assert_eq!(coerce(&Attr::DateTime(t), FieldType::Date).to_string(), "2026-03-05");
+        assert_eq!(coerce(&Attr::Text("2026-03-05".into()), FieldType::Date).to_string(), "2026-03-05");
+        assert!(coerce(&Attr::Text("soon".into()), FieldType::Date).is_null());
+    }
 }

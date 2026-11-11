@@ -518,6 +518,11 @@ fn date_fields_work_from_adding_to_saving() {
     s.run("select.clear", &Value::Null).unwrap();
     let err = s.run("edit.calculateField", &json!({"layer": "Cities", "field": "founded", "expression": "founded + 30"})).unwrap_err();
     assert!(err.contains("arithmetic on dates"), "{err}");
+    // Also for a date field named like a literal, which the earlier calculator reads first.
+    s.run("edit.addField", &json!({"layer": "Cities", "name": "true", "type": "date"})).unwrap();
+    let err = s.run("edit.calculateField", &json!({"layer": "Cities", "field": "founded", "expression": "true + 1"})).unwrap_err();
+    assert!(err.contains("arithmetic on dates"), "{err}");
+    s.run("edit.deleteField", &json!({"layer": "Cities", "field": "true"})).unwrap();
     // A date into a date-time field is its midnight; text that isn't a date is reported.
     let mark = s.notice_mark();
     s.run("edit.calculateField", &json!({"layer": "Cities", "field": "seen", "expression": "founded"})).unwrap();
@@ -534,6 +539,24 @@ fn date_fields_work_from_adding_to_saving() {
     s.run("edit.undo", &Value::Null).unwrap();
     // `<null>` asks for null, as in the table and edit.setValue.
     s.run("edit.addFeature", &json!({"layer": "Cities", "geometry": point, "attributes": {"founded": "<null>"}})).unwrap();
+    s.run("edit.undo", &Value::Null).unwrap();
+    // Pasted dates go in; a value the field can't hold is said, and empty text is no loss.
+    let pasted = |founded: &[&str]| {
+        let features: Vec<Value> =
+            founded.iter().map(|f| json!({"type": "Feature", "geometry": point, "properties": {"founded": f}})).collect();
+        json!({"layer": "Cities", "text": json!({"type": "FeatureCollection", "features": features}).to_string()})
+    };
+    let mark = s.notice_mark();
+    s.run("edit.paste", &pasted(&["2026-03-05", ""])).unwrap();
+    assert!(s.notices_since(mark).iter().all(|n| !n.text.contains("is null in")), "{:?}", s.notices_since(mark));
+    s.run("edit.undo", &Value::Null).unwrap();
+    let mark = s.notice_mark();
+    s.run("edit.paste", &pasted(&["2026-03-05", "soon", "March 5"])).unwrap();
+    assert!(
+        s.notices_since(mark).iter().any(|n| n.text == "Paste: 'founded' is null in 2 features, whose value isn't a Date value"),
+        "{:?}",
+        s.notices_since(mark)
+    );
     s.run("edit.undo", &Value::Null).unwrap();
     // So does a result of empty text: null, with no notice.
     s.run("edit.addField", &json!({"layer": "Cities", "name": "n", "type": "long"})).unwrap();
