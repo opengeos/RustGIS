@@ -1,8 +1,9 @@
 //! Stopping a frame no longer wanted (#1750). The desktop app draws a settled flat map's frame on a
 //! worker; when the map moves again before it is done, the frame is out of date. The worker
 //! installs a flag on its thread ([`install`]) and sets it to stop: the renderer looks at it between
-//! layers, before each chunk of a streamed layer and every [`EVERY`] features of a layer, and a
-//! frame stopped that way comes back as `None`, without its tiles, labels or effects worked out.
+//! layers, between a tilted view's bands, before each chunk of a streamed layer and every
+//! [`EVERY`] features or [`EVERY_VERTICES`] vertices of a layer, and a frame stopped that way comes
+//! back as `None`, without its tiles, labels or effects worked out.
 //! With none installed (an export, the CLI, the browser) frames always finish. The flag is the
 //! thread's own: threads the renderer starts for a part of the frame (a raster's rows) don't look
 //! at it, and finish their part. A long step without a look (projecting or thinning a layer's
@@ -14,6 +15,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 /// How many features of a layer are drawn between looks at the flag.
 pub(crate) const EVERY: usize = 2048;
+
+/// How many vertices of a layer are drawn between looks at the flag, so a layer of a few heavy
+/// features (a detailed coastline) stops part-way too.
+pub(crate) const EVERY_VERTICES: usize = 65_536;
 
 thread_local! {
     static FLAG: RefCell<Option<Arc<AtomicBool>>> = const { RefCell::new(None) };

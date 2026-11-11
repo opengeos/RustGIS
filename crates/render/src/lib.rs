@@ -2416,6 +2416,10 @@ fn render_tilted(map: &mut Map, view: &View, full_res_rasters: bool, sources_rea
         }
     }
     map.label_lock = lock;
+    // A frame stopped during its last band goes no further (see `cancel`).
+    if cancel::requested() {
+        return None;
+    }
     match &ground {
         Some(g) => {
             drape_terrain(pm.pixels(), view, map, &kept, g);
@@ -4193,14 +4197,20 @@ fn render_frame(
                     // Polygons with stacked fills (patterns) draw them in place of their single fill.
                     let has_fills = layer.has_fills();
                     let mut stacked: Vec<(&[Vec<Coord>], Symbol, &[LineStroke])> = Vec::new();
+                    // Vertices drawn since the stop was last looked at (see `cancel`).
+                    let mut since_look = 0usize;
                     for (row, g) in drawn.iter().enumerate() {
-                        // And every few thousand features of a large layer.
-                        if row % cancel::EVERY == 0 && row > 0 && cancel::requested() {
+                        // And every few thousand features, or vertices, of a large layer.
+                        if (row % cancel::EVERY == 0 && row > 0 || since_look >= cancel::EVERY_VERTICES) && cancel::requested() {
                             break;
+                        }
+                        if since_look >= cancel::EVERY_VERTICES {
+                            since_look = 0;
                         }
                         #[cfg(test)]
                         cancel::DRAWN.set(cancel::DRAWN.get() + 1);
                         let Some(g) = g else { continue };
+                        since_look += rustgis_map::lod::vertices(g);
                         let e = extents.get(row).copied().unwrap_or_else(|| g.extent());
                         // A point's marks, shifted from it, may show while the point is off the view.
                         let marked_in = || {

@@ -110,7 +110,8 @@ impl<K: Copy + PartialEq> TiltSettle<K> {
     }
 
     /// Asks the frame being drawn to stop (it is out of date): the renderer looks between layers,
-    /// before each chunk of a streamed layer and every 2048 features (see `render::cancel`), so
+    /// before each chunk of a streamed layer, every 2048 features or 65,536 vertices and between
+    /// a tilted view's bands (see `render::cancel`), so
     /// the worker is free again soon. The stopped frame is
     /// still handed back by [`TiltSettle::take`], with no picture and `cancelled` set, and its key
     /// may be drawn again. In the browser frames are drawn at once: there is nothing to stop.

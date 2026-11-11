@@ -1038,6 +1038,10 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             }
             let backend = if gpu_ok { rustgis_engine::render::Backend::GpuLive } else { rustgis_engine::render::Backend::Cpu };
             app.map.tilt_settle.start_backend(ui.ctx(), key, app.session.map().clone(), view, backend);
+            // A worker the system refused wakes no frame: the next draws it here.
+            if flat_settle && app.map.tilt_settle.failed(key) {
+                ui.ctx().request_repaint();
+            }
         }
         let shown = (app.map.texture.is_some() || app.map.gpu_frame.is_some())
             && app.map.key.is_some_and(|k| same_view(Key { draft: false, ..k }, key));
