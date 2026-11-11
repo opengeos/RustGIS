@@ -593,7 +593,8 @@ pub fn viewing_distance(ground_res: f64, view_height: f64) -> f64 {
 }
 
 /// The built-in world outline used by every basemap (Natural Earth 1:110m, public domain), in the
-/// current worldview.
+/// current worldview (the renderer reads the worldview once a frame and calls `world_of`).
+#[cfg(test)]
 fn world() -> &'static Vec<Geometry> {
     world_of(sample_data::view())
 }
@@ -3684,18 +3685,20 @@ fn render_frame(
     if map.draws_world_outline() {
         let fill = paint(land, 1.0);
         let stroke = (outline.a() > 0).then(|| (paint(outline, 1.0), 0.6));
+        // The worldview read once: the outline and its level must be of the same one, though
+        // another thread may switch it mid-frame.
+        let worldview = sample_data::view();
         let custom_world = custom.then(|| world_in(&flat, &key));
         let outlines: &Vec<Geometry> = match (&globe, &custom_world) {
             (Some(_), _) => world_lonlat(),
             (None, Some(w)) => w,
-            (None, None) => world(),
+            (None, None) => world_of(worldview),
         };
         // A detailed outline on the flat map is drawn at the level of detail for the zoom, and
         // only its parts in view (#1750).
-        // An outline not at hand yet (`world()` said so) isn't looked up again.
-        let levelled = (globe.is_none() && !custom && !outlines.is_empty())
-            .then(|| outline_level(sample_data::view(), outline_level_for(map_per_px)))
-            .flatten();
+        // An outline not at hand yet (`world_of` said so) isn't looked up again.
+        let levelled =
+            (globe.is_none() && !custom && !outlines.is_empty()).then(|| outline_level(worldview, outline_level_for(map_per_px))).flatten();
         for c in levelled.unwrap_or_default() {
             if !visible(&c.extent) {
                 continue;
