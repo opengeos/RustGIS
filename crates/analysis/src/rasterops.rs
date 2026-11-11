@@ -443,8 +443,9 @@ pub enum Heights {
     #[default]
     Nearest,
     /// Between the cells' centres, in proportion to how near the point is to each (bilinear):
-    /// smoother, and closer on bulging ground, though still an estimate. Where one of those cells has no data, the cell the
-    /// point falls in, as [`Heights::Nearest`] reads it (counted: [`Viewshed::read_nearest`]).
+    /// smoother, and closer on bulging ground, though still an estimate. Where one of those cells
+    /// has no data, the cell the point falls in, as [`Heights::Nearest`] reads it (counted:
+    /// [`Viewshed::read_nearest`]).
     Bilinear,
 }
 
@@ -464,7 +465,8 @@ impl Heights {
     /// whether it is the nearest cell's, read in place of cells between which a neighbour has
     /// no data. `None` where the point's own cell has no data.
     fn at(self, r: &Raster, b: usize, col: f64, row: f64) -> Option<(f64, bool)> {
-        let nearest = |fell_back: bool| r.value(b, col.round() as i64, row.round() as i64).map(|v| (f64::from(v), fell_back));
+        let (nc, nr) = (col.round() as i64, row.round() as i64);
+        let nearest = |fell_back: bool| r.value(b, nc, nr).map(|v| (f64::from(v), fell_back));
         if self == Heights::Nearest {
             return nearest(false);
         }
@@ -1675,8 +1677,8 @@ mod tests {
 
     /// A radius reaching far past the raster (the whole DEM's diagonal, as the command takes by
     /// default) counts only the raster's cells: a strip 6,000 cells long, seen from one end, is
-    /// worked out, though the square the radius spans holds 144 million cells, as is one whose
-    /// radius spans more cells than a number holds.
+    /// worked out, though the square the radius spans holds 144 million cells. So is a radius of
+    /// more cells than an `i64` holds.
     #[test]
     fn a_viewshed_radius_past_the_raster_counts_only_its_cells() {
         let transform = GeoTransform { origin_x: 0.0, origin_y: 0.001, pixel_width: 0.001, pixel_height: -0.001 };
@@ -2013,7 +2015,7 @@ mod tests {
         // seen again once the line has come down below the ground (at about 1.2 km on a flat
         // Earth, a little farther with its curve). Rays mostly east or west,
         // which cross the wall at a cell's centre line, are counted; others cross it between
-        // columns, where where it stands depends on how the ground is read.
+        // columns, where it stands depends on how the ground is read.
         let wall_col = half + 20;
         let wall = dem(&|x, _| if (x - 20.0 * cx).abs() < cx / 2.0 { 1.0 } else { 0.0 });
         let z0 = 2.0;
