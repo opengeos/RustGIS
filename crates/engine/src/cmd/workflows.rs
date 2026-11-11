@@ -60,7 +60,7 @@ pub fn commands() -> Vec<C> {
             r#"{"criteria": [{"layer": raster, "band"?: 1-based, "ranges": [[lo, hi, score]], "weight": number}], "name"?: output, "ran"?: (internal: a raster the app has worked out)}"#,
         ),
         C::new("analysis.viewshed", "Visibility Analysis", "Analyze › Workflows", viewshed).roles(&[]).effects(crate::policy::Effects::NONE)
-            .params(r#"{"layer": elevation raster, "lon", "lat", "band"?: 1-based, "height"?: observer metres, "radius"?: metres (at most 500 km; default: the whole raster), "heights"?: "nearest" (default) | "bilinear" (the ground along each ray), "name"?: output, "ran"?: (internal: a viewshed the app has worked out)}"#),
+            .params(r#"{"layer": elevation raster, "lon", "lat", "band"?: 1-based, "height"?: observer metres, 0 to 10,000 (default 1.7), "radius"?: metres (at most 500 km; default: the whole raster), "heights"?: "nearest" (default) | "bilinear" (the ground along each ray), "name"?: output, "ran"?: (internal: a viewshed the app has worked out)}"#),
         C::new("analysis.lineOfSight", "Line Of Sight", "Analyze › Workflows", line_of_sight).roles(&[]).effects(crate::policy::Effects::NONE).params(
             r#"{"layer": elevation raster, "from": [lon, lat], "to": [lon, lat], "band"?: 1-based, "observerHeight"?: m, "targetHeight"?: m, "name"?: output}"#,
         ),
@@ -1108,9 +1108,21 @@ fn viewshed_work(s: &Session, p: &Value) -> Result<Work, String> {
     // (Within half a cell of 360°: a cell size stored rounded falls a little short.)
     let pw = dem.transform.pixel_width.abs();
     let round_the_earth = dem.crs.is_geographic() && pw * f64::from(dem.width) >= 360.0 - pw / 2.0;
-    let to_edge = dem.pixel_at(at).map_or(0.0, |(c, _)| (c.min(i64::from(dem.width) - 1 - c) as f64 + 0.5) * cx);
+    let oc = dem.pixel_at(at).map_or(0, |(c, _)| c);
+    let to_edge = (oc.min(i64::from(dem.width) - 1 - oc) as f64 + 0.5) * cx;
     let seam = round_the_earth && radius > to_edge;
-    let height = f(p, "height").unwrap_or(1.7).clamp(0.0, 10_000.0);
+    // Whether the radius reaches the far edge's column (its centre on the observer's row, as the
+    // viewshed measures it), so the ground across the edge is worked out the long way round
+    // rather than left out.
+    let far = oc.max(i64::from(dem.width) - 1 - oc) as f64 * cx;
+    let both_edges = radius >= far;
+    // Refused, naming it, when it isn't a height a viewshed takes: never another one used.
+    let height = match p.get("height") {
+        None | Some(Value::Null) => 1.7,
+        Some(v) => f(p, "height")
+            .filter(|h| (0.0..=10_000.0).contains(h))
+            .ok_or_else(|| format!("height must be a number of metres from 0 to 10,000, not {v}"))?,
+    };
     // How the ground along each ray is read: the cell a point falls in, or between cells.
     let heights = match p.get("heights") {
         None | Some(Value::Null) => rasterops::Heights::Nearest,
@@ -1153,12 +1165,12 @@ fn viewshed_work(s: &Session, p: &Value) -> Result<Work, String> {
                 );
             }
             if seam {
-                // Given a radius, the ground across the edge is too far the long way round to
-                // fall inside it; with none, the whole raster is worked out, that ground too.
-                let across = if given.is_some() { "left out of the viewshed" } else { "worked out the long way round" };
+                // Rays don't wrap across the edge: the ground across it is reached only through the
+                // raster, when the radius's window takes in the far edge's column too.
+                let across = if both_edges { "worked out the long way round" } else { "left out of the viewshed" };
                 s.notify(
                     format!(
-                        "{dem_name}: the raster goes round the Earth, but the viewshed's rays don't cross its ±180° edge: ground just across it is {across}"
+                        "{dem_name}: the raster goes round the Earth, but the viewshed's rays don't cross its east–west edge: ground just across it is {across}"
                     ),
                     false,
                 );

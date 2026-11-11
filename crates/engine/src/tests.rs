@@ -9306,7 +9306,8 @@ fn a_viewshed_says_what_ground_with_no_data_it_saw_across() {
 
 /// A viewshed's radius: one past 500 km is shortened to it, said with by how much; text or 0 is
 /// refused, naming it; on a raster round the Earth whose edge the radius reaches, the rays not
-/// crossing its ±180° edge are said.
+/// crossing its east–west edge are said: left out when the radius's window doesn't take in the
+/// far edge, worked out the long way round when it does.
 #[test]
 fn a_viewshed_says_what_it_did_with_its_radius_and_the_seam() {
     use base64::Engine;
@@ -9323,7 +9324,7 @@ fn a_viewshed_says_what_it_did_with_its_radius_and_the_seam() {
         s.run("analysis.viewshed", &p).unwrap_or_else(|e| panic!("{p}: {e}"));
         s.notices[mark..].iter().map(|n| n.text.clone()).collect::<Vec<_>>()
     };
-    let seam = "rays don't cross its ±180° edge";
+    let seam = "rays don't cross its east–west edge";
     // By the edge with no radius (the whole raster): the seam is said.
     let notes = said(&mut s, json!({"layer": dem, "lon": -179.0, "lat": 0.0}));
     assert!(notes.iter().any(|n| n.contains(seam) && n.ends_with("worked out the long way round")), "{notes:?}");
@@ -9333,7 +9334,7 @@ fn a_viewshed_says_what_it_did_with_its_radius_and_the_seam() {
     // 600 km is taken as 500 km, and said; 500 km from the edge's cell reaches it.
     let notes = said(&mut s, json!({"layer": dem, "lon": -177.0, "lat": 0.0, "radius": 600_000}));
     assert!(notes.iter().any(|n| n.contains("the radius of 600 km was taken as 500 km")), "{notes:?}");
-    // Given a radius, the ground across the edge is left out (too far the long way round).
+    // Given a radius whose window doesn't reach the far edge, the ground across is left out.
     assert!(notes.iter().any(|n| n.contains(seam) && n.ends_with("left out of the viewshed")), "{notes:?}");
     // Just past 500 km, said to a tenth of a km.
     let notes = said(&mut s, json!({"layer": dem, "lon": 0.0, "lat": 0.0, "radius": 500_400}));
@@ -9347,6 +9348,29 @@ fn a_viewshed_says_what_it_did_with_its_radius_and_the_seam() {
     let nad83 = s.map().layers.iter().find(|l| l.name.starts_with("nad83")).unwrap().name.clone();
     let notes = said(&mut s, json!({"layer": nad83, "lon": -179.0, "lat": 0.0}));
     assert!(notes.iter().any(|n| n.contains(seam)), "{notes:?}");
+    // Stored from 0° to 360°, with its edge at 0°: the same.
+    let gt = GeoTransform { origin_x: 0.0, origin_y: 90.0, pixel_width: 2.0, pixel_height: -2.0 };
+    let r = Raster::new("east", 180, 90, vec![vec![0.0; 180 * 90]], gt, Crs::LonLat, None, ColorHint::Gray, "Float32").unwrap();
+    let data = base64::engine::general_purpose::STANDARD.encode(geotiff::write(&r, 0).unwrap());
+    s.run("layer.addDataBytes", &json!({"fileName": "east.tif", "data": data})).unwrap();
+    let east = s.map().layers.iter().find(|l| l.name.starts_with("east")).unwrap().name.clone();
+    let notes = said(&mut s, json!({"layer": east, "lon": 1.0, "lat": 0.0, "radius": 300_000}));
+    assert!(notes.iter().any(|n| n.contains(seam) && n.ends_with("left out of the viewshed")), "{notes:?}");
+    // Near the pole, with cells of 90° (100 km each, as `cell_size_m` measures them there): a
+    // 350 km radius reaches the far column, so the ground across the edge is worked out through
+    // the raster.
+    let gt = GeoTransform { origin_x: -180.0, origin_y: 90.0, pixel_width: 90.0, pixel_height: -1.0 };
+    let r = Raster::new("cap", 4, 1, vec![vec![0.0; 4]], gt, Crs::LonLat, None, ColorHint::Gray, "Float32").unwrap();
+    let data = base64::engine::general_purpose::STANDARD.encode(geotiff::write(&r, 0).unwrap());
+    s.run("layer.addDataBytes", &json!({"fileName": "cap.tif", "data": data})).unwrap();
+    let cap = s.map().layers.iter().find(|l| l.name.starts_with("cap")).unwrap().name.clone();
+    let notes = said(&mut s, json!({"layer": cap, "lon": -170.0, "lat": 89.5, "radius": 350_000}));
+    assert!(notes.iter().any(|n| n.contains(seam) && n.ends_with("worked out the long way round")), "{notes:?}");
+    // A radius between 2 and 3 cells: its window takes in the far column,
+    // but the far column's centre lies outside the radius, so the ground across is left out.
+    let (cx, _) = s.map().layer_by_name(&cap).and_then(|l| l.raster.as_ref()?.data.as_ref().map(|r| r.cell_size_m())).unwrap();
+    let notes = said(&mut s, json!({"layer": cap, "lon": -170.0, "lat": 89.5, "radius": 2.5 * cx}));
+    assert!(notes.iter().any(|n| n.contains(seam) && n.ends_with("left out of the viewshed")), "{notes:?}");
     for bad in [json!("500km"), json!(0), json!(-5), json!(true)] {
         let e = s.run("analysis.viewshed", &json!({"layer": dem, "lon": 0.0, "lat": 0.0, "radius": bad})).unwrap_err();
         assert_eq!(e, format!("radius must be a number of metres above 0, not {bad}"));

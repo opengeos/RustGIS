@@ -404,12 +404,15 @@ fn num(s: &str, d: f64) -> f64 {
 /// The viewshed's parameters from the pane, seen from `at`: an empty radius field leaves the
 /// radius out, so the command takes the whole DEM.
 fn viewshed_params(w: &Workflow, at: rustgis_engine::geom::Coord) -> Value {
-    let mut params = json!({"layer": w.layer, "lon": at.x, "lat": at.y, "height": num(&w.number, 1.7)});
-    // A number is the radius; other text goes as it is, for the command to refuse, naming it.
-    match w.number2.trim() {
-        "" => {}
-        // `inf`, `NaN` and `1e400` parse, but aren't numbers JSON holds (they'd be null, no radius).
-        r => params["radius"] = r.parse::<f64>().ok().filter(|r| r.is_finite()).map_or_else(|| json!(r), |r| json!(r)),
+    let mut params = json!({"layer": w.layer, "lon": at.x, "lat": at.y});
+    // A number is the height or radius; other text goes as it is, for the command to refuse,
+    // naming it (`inf`, `NaN` and `1e400` parse, but aren't numbers JSON holds: they'd be null).
+    // Empty: the command's own (1.7 m up; the whole raster).
+    for (key, text) in [("height", &w.number), ("radius", &w.number2)] {
+        match text.trim() {
+            "" => {}
+            t => params[key] = t.parse::<f64>().ok().filter(|v| v.is_finite()).map_or_else(|| json!(t), |v| json!(v)),
+        }
     }
     if w.bilinear {
         params["heights"] = json!("bilinear");
@@ -2115,6 +2118,13 @@ mod tests {
         // A number in the field is the radius; other text is refused, not taken as no radius.
         let workflow = Workflow { layer: layer.clone(), number2: " 5000 ".into(), ..Default::default() };
         assert_eq!(viewshed_params(&workflow, Coord::new(10.0005, 45.0005))["radius"], json!(5000.0));
+        // So is the height, and an empty one is the command's 1.7 m.
+        for (text, e) in [("abc", r#"not "abc""#), ("1,7", r#"not "1,7""#), ("-3", "not -3.0")] {
+            let workflow = Workflow { layer: layer.clone(), number: text.into(), ..Default::default() };
+            let got = app.session.run("analysis.viewshed", &viewshed_params(&workflow, at)).unwrap_err();
+            assert!(got.starts_with("height must be a number of metres from 0 to 10,000") && got.ends_with(e), "{got}");
+        }
+        assert!(viewshed_params(&Workflow { layer: layer.clone(), ..Default::default() }, at).get("height").is_none());
         for text in ["500km", "inf", "NaN", "1e400", "-infinity"] {
             let workflow = Workflow { layer: layer.clone(), number2: text.into(), ..Default::default() };
             let e = app.session.run("analysis.viewshed", &viewshed_params(&workflow, at)).unwrap_err();
