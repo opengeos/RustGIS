@@ -1117,7 +1117,7 @@ fn viewshed_work(s: &Session, p: &Value) -> Result<Work, String> {
             }
             if read_nearest > 0 {
                 s.notify(
-                    format!("{dem_name}: {read_nearest} cell(s) of the viewshed were seen with the nearest cell's height next to ground with no data, not between cells"),
+                    format!("{dem_name}: {read_nearest} cell(s) of the viewshed were worked out with the nearest cell's height next to ground with no data, not between cells"),
                     false,
                 );
             }

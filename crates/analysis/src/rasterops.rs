@@ -492,7 +492,7 @@ impl Heights {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Viewshed {
     pub cells: Vec<f32>,
-    /// Cells whose ray crossed ground with no data, taken as hiding nothing there.
+    /// Cells seen across ground with no data, taken as hiding nothing there.
     pub through_gaps: usize,
     /// Cells whose ray, read [`Heights::Bilinear`], took the nearest cell's height somewhere,
     /// a cell it would read between having no data.
@@ -577,15 +577,14 @@ fn viewshed_on(
             }
             let mut visible = true;
             let (mut gap, mut nearest) = (false, false);
-            // Along the longer axis the ray steps a whole cell at a time, so that coordinate is
-            // exact; along the other it falls between cells.
+            // Along the longer axis the ray steps a whole cell at a time; along the other it falls
+            // between cells. Both are one division of whole numbers, so exact wherever the point
+            // lies on a cell's centre line (and no neighbour is weighed by a rounding error).
             let (dc, dr) = (col - oc, row - or);
-            let along = |o: i64, d: i64, s: usize, t: f64| {
-                if d.unsigned_abs() as usize == steps { (o + d.signum() * s as i64) as f64 } else { o as f64 + d as f64 * t }
-            };
+            let along = |o: i64, d: i64, s: usize| o as f64 + (d * s as i64) as f64 / steps as f64;
             for s in 1..steps {
                 let t = s as f64 / steps as f64;
-                let (c, rr) = (along(oc, dc, s, t), along(or, dr, s, t));
+                let (c, rr) = (along(oc, dc, s), along(or, dr, s));
                 let Some((zi, fell_back)) = heights.at(r, b, c, rr) else {
                     gap = true;
                     continue;
@@ -597,7 +596,8 @@ fn viewshed_on(
                     break;
                 }
             }
-            if gap {
+            // A hidden cell stays hidden whatever the missing ground is: only those seen count.
+            if gap && visible {
                 through_gaps.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             }
             if nearest {
@@ -1672,7 +1672,7 @@ mod tests {
     }
 
     /// Viewshed rows made on several threads see what one thread sees (#1252), with the radius
-    /// inside the raster and reaching past its edges.
+    /// inside the raster and reaching past its edges, with nearest and bilinear heights.
     #[test]
     fn viewshed_on_several_threads_is_viewshed_on_one() {
         let (w, h) = (90u32, 70u32);
@@ -1691,15 +1691,23 @@ mod tests {
             [(Coord::new(0.012, 44.990), 500.0, [207, 775, 5318]), (Coord::new(0.003, 44.985), 5_000.0, [185, 6050, 65])]
         {
             let one_run = viewshed_on(Some(1), &dem, 0, at, 2.0, radius, Heights::Nearest).unwrap_or_else(|e| panic!("{e}"));
-            // Rays crossing the DEM's no-data cells are counted, and as many on any thread count.
+            // Cells seen across the DEM's no-data cells are counted; nearest heights read no
+            // neighbours, so none falls back.
             assert!(one_run.through_gaps > 0 && one_run.read_nearest == 0, "radius {radius}: {}", one_run.through_gaps);
             let one = &one_run.cells;
             let counts = [1.0, 0.0, NODATA].map(|k| one.iter().filter(|v| v.to_bits() == k.to_bits()).count());
             assert_eq!(counts, expected, "radius {radius}");
+            // Bilinear heights read next to the no-data cells, so some cells take a nearest height.
+            let bilinear = viewshed_on(Some(1), &dem, 0, at, 2.0, radius, Heights::Bilinear).unwrap_or_else(|e| panic!("{e}"));
+            assert!(bilinear.through_gaps > 0 && bilinear.read_nearest > 0, "radius {radius}: {}", bilinear.read_nearest);
             for threads in [2, 7, 16] {
-                let many = viewshed_on(Some(threads), &dem, 0, at, 2.0, radius, Heights::Nearest).unwrap_or_else(|e| panic!("{e}"));
-                assert_eq!(many.through_gaps, one_run.through_gaps, "{threads} threads, radius {radius}");
-                assert!(one.iter().map(|v| v.to_bits()).eq(many.cells.iter().map(|v| v.to_bits())), "{threads} threads, radius {radius}");
+                for (heights, one_run) in [(Heights::Nearest, &one_run), (Heights::Bilinear, &bilinear)] {
+                    let many = viewshed_on(Some(threads), &dem, 0, at, 2.0, radius, heights).unwrap_or_else(|e| panic!("{e}"));
+                    let what = format!("{heights:?}, {threads} threads, radius {radius}");
+                    assert_eq!((many.through_gaps, many.read_nearest), (one_run.through_gaps, one_run.read_nearest), "{what}");
+                    let bits = |c: &[f32]| c.iter().map(|v| v.to_bits()).collect::<Vec<_>>();
+                    assert_eq!(bits(&one_run.cells), bits(&many.cells), "{what}");
+                }
             }
         }
     }

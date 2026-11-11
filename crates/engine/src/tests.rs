@@ -9255,21 +9255,36 @@ fn a_viewshed_says_what_ground_with_no_data_it_saw_across() {
     use base64::Engine;
     use rustgis_data::raster::{ColorHint, Crs, GeoTransform, Raster, geotiff};
     let mut s = world();
-    // Flat ground with a column of no-data cells five cells east of the observer.
+    // Flat ground with a column of no-data cells five cells east of the observer, and the same
+    // with a high wall ten cells farther, hiding what lies beyond it.
     let gt = GeoTransform { origin_x: 10.0, origin_y: 45.04, pixel_width: 0.001, pixel_height: -0.001 };
-    let z: Vec<f32> = (0..1600).map(|i| if i % 40 == 15 { -9999.0 } else { 200.0 }).collect();
-    let r = Raster::new("holes", 40, 40, vec![z], gt, Crs::LonLat, Some(-9999.0), ColorHint::Gray, "Float32").unwrap();
-    let data = base64::engine::general_purpose::STANDARD.encode(geotiff::write(&r, 0).unwrap());
-    s.run("layer.addDataBytes", &json!({"fileName": "holes.tif", "data": data})).unwrap();
-    let dem = s.map().layers.iter().find(|l| l.is_raster()).unwrap().name.clone();
-    let at = json!({"layer": dem, "lon": 10.0105, "lat": 45.0205, "height": 2});
+    let mut dems = vec![];
+    for (name, wall) in [("holes", 200.0), ("walled", 400.0)] {
+        let z: Vec<f32> = (0..1600)
+            .map(|i| match i % 40 {
+                15 => -9999.0,
+                25 => wall,
+                _ => 200.0,
+            })
+            .collect();
+        let r = Raster::new(name, 40, 40, vec![z], gt, Crs::LonLat, Some(-9999.0), ColorHint::Gray, "Float32").unwrap();
+        let data = base64::engine::general_purpose::STANDARD.encode(geotiff::write(&r, 0).unwrap());
+        s.run("layer.addDataBytes", &json!({"fileName": format!("{name}.tif"), "data": data})).unwrap();
+        dems.push(s.map().layers.iter().rev().find(|l| l.is_raster() && l.name.starts_with(name)).unwrap().name.clone());
+    }
+    let run = |s: &mut Session, dem: &str, heights: &str| {
+        s.run("analysis.viewshed", &json!({"layer": dem, "lon": 10.0105, "lat": 45.0205, "height": 2, "heights": heights})).unwrap()
+    };
     for heights in ["nearest", "bilinear"] {
+        // Only cells seen are counted: those the wall hides would stay hidden whatever the
+        // missing ground is.
+        let walled = run(&mut s, &dems[1], heights);
+        let walled_across = walled["acrossNoData"].as_u64().unwrap();
         let mark = s.notices.len();
-        let mut p = at.clone();
-        p["heights"] = json!(heights);
-        let v = s.run("analysis.viewshed", &p).unwrap();
+        let v = run(&mut s, &dems[0], heights);
         let across = v["acrossNoData"].as_u64().unwrap();
-        assert!(across > 100, "{heights}: {v}");
+        assert!(across > 100 && across <= v["visibleCells"].as_u64().unwrap(), "{heights}: {v}");
+        assert!(walled_across > 0 && walled_across + 100 < across, "{heights}: {walled_across} of {across}");
         let said: Vec<&str> = s.notices[mark..].iter().map(|n| n.text.as_str()).collect();
         assert!(
             said.iter().any(|t| t.contains(&format!("{across} cell(s) of the viewshed were seen across ground with no data"))),
@@ -9281,7 +9296,8 @@ fn a_viewshed_says_what_ground_with_no_data_it_saw_across() {
         } else {
             assert!(nearest > 100, "{v}");
             assert!(
-                said.iter().any(|t| t.contains(&format!("{nearest} cell(s) of the viewshed were seen with the nearest cell's height"))),
+                said.iter()
+                    .any(|t| t.contains(&format!("{nearest} cell(s) of the viewshed were worked out with the nearest cell's height"))),
                 "{said:?}"
             );
         }
