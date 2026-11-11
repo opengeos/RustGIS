@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# The platforms to test on, as a JSON list of runners. Pushes to main, manual runs and releases
-# test on every platform; a pull request on Linux, plus macOS when it's labelled `ci:macos` and
+# The platforms to test on, as a JSON list of runners. Pushes to main and releases test on every
+# platform, and so does a manual run unless it asks for `linux` (PLATFORMS), which tests there
+# alone, whatever the labels; a pull request on Linux, plus macOS when it's labelled `ci:macos` and
 # Windows (x64 and ARM64) when it's labelled `ci:windows` (`ci:full` asks for both). For the label
 # just added (the `CI on label` workflow), only the platform that label asks for: the pull
-# request's own run already covers Linux. A manual run asked for `linux` (PLATFORMS) tests there
-# alone, as a pull request does.
+# request's own run already covers Linux.
 #
 # From the event: EVENT (github.event_name), ACTION (github.event.action), LABEL (the label
 # added), LABELS (the pull request's labels, as JSON) and PLATFORMS (a manual run's choice).
@@ -22,7 +22,7 @@ asks() {
 os=()
 [ "${ACTION:-}" = labeled ] || os+=(ubuntu-latest)
 if [ "${EVENT:-}" = workflow_dispatch ] && [ "${PLATFORMS:-all}" = linux ]; then
-  jq -cn '$ARGS.positional' --args "${os[@]}"
+  jq -cn '$ARGS.positional' --args ${os[@]+"${os[@]}"}
   exit 0
 fi
 if [ "${EVENT:-}" != pull_request ] || asks ci:macos; then os+=(macos-latest); fi
