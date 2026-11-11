@@ -525,7 +525,15 @@ mod tests {
         let Geometry::Line(dp) = simplify(&g, 0.5) else { panic!("a line") };
         // What distance thinning (#1066, a vertex kept every 0.5 along the run) used to keep.
         let mut last = run[0];
-        let thinned = 1 + run.iter().filter(|c| (c.x - last.x).abs() + (c.y - last.y).abs() >= 0.5 && { last = **c; true }).count();
+        let thinned = 1 + run
+            .iter()
+            .filter(|c| {
+                (c.x - last.x).abs() + (c.y - last.y).abs() >= 0.5 && {
+                    last = **c;
+                    true
+                }
+            })
+            .count();
         assert_eq!(dp[0].first(), run.first());
         assert_eq!(dp[0].last(), run.last());
         assert!(within(&run, &dp[0], 0.5));
@@ -547,10 +555,12 @@ mod tests {
         assert_eq!(diamond.first(), diamond.last());
         let twice: f64 = diamond.windows(2).map(|w| w[0].x * w[1].y - w[1].x * w[0].y).sum();
         assert!((twice.abs() / 2.0 - 20_000.0).abs() < 1.0, "{}", twice.abs() / 2.0);
-        let extent = |r: &[Coord]| r.iter().fold(rustgis_geom::Extent::EMPTY, |mut e, c| {
-            e.expand(*c);
-            e
-        });
+        let extent = |r: &[Coord]| {
+            r.iter().fold(rustgis_geom::Extent::EMPTY, |mut e, c| {
+                e.expand(*c);
+                e
+            })
+        };
         assert_eq!(extent(diamond), extent(&ring));
     }
 
