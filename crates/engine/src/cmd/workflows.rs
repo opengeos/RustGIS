@@ -1077,6 +1077,12 @@ fn viewshed(s: &mut Session, p: &Value) -> CmdResult {
     made_or_ran(s, p, "analysis.viewshed")
 }
 
+/// `m` metres as a notice says it: in km to a tenth, or in metres in exponent form when past a
+/// million km.
+fn metres(m: f64) -> String {
+    if m < 1e9 { format!("{} km", (m / 100.0).round() / 10.0) } else { format!("{m:.1e} m") }
+}
+
 /// The longest radius a viewshed is given; with none, it covers the whole raster.
 const MAX_VIEWSHED_RADIUS_M: f64 = 500_000.0;
 
@@ -1099,7 +1105,9 @@ fn viewshed_work(s: &Session, p: &Value) -> Result<Work, String> {
     let shortened = given.filter(|r| *r > MAX_VIEWSHED_RADIUS_M);
     // A raster around the whole Earth (in longitude/latitude) has its east and west edges side
     // by side, but rays don't cross from one to the other: said when the radius reaches an edge.
-    let round_the_earth = matches!(dem.crs, Crs::LonLat) && dem.transform.pixel_width.abs() * f64::from(dem.width) >= 359.999;
+    // (Within half a cell of 360°: a cell size stored rounded falls a little short.)
+    let pw = dem.transform.pixel_width.abs();
+    let round_the_earth = dem.crs.is_geographic() && pw * f64::from(dem.width) >= 360.0 - pw / 2.0;
     let to_edge = dem.pixel_at(at).map_or(0.0, |(c, _)| (c.min(i64::from(dem.width) - 1 - c) as f64 + 0.5) * cx);
     let seam = round_the_earth && radius > to_edge;
     let height = f(p, "height").unwrap_or(1.7).clamp(0.0, 10_000.0);
@@ -1114,31 +1122,43 @@ fn viewshed_work(s: &Session, p: &Value) -> Result<Work, String> {
     let name = out_name(p, format!("{}_viewshed", dem.name));
     let dem_name = dem.name.clone();
     Ok(Box::new(move || {
-        let vs = rasterops::viewshed(&dem, band, at, height, radius, heights)?;
+        let vs = rasterops::viewshed(&dem, band, at, height, radius, heights).map_err(|e| {
+            // With no radius given, the work is the whole raster's, not a radius's.
+            if given.is_none() && e.starts_with("the radius takes") {
+                e.replacen("the radius takes", "the whole raster (no radius given) takes", 1)
+                    .replace("use a smaller radius", "give a radius")
+            } else {
+                e
+            }
+        })?;
         let seen = vs.cells.iter().filter(|v| **v == 1.0).count();
         let (through_gaps, read_nearest) = (vs.through_gaps, vs.read_nearest);
-        let m = made(rasterops::derive(&dem, &name, vec![vs.cells])?, Some(json!({"visibleCells": seen})))?;
+        let answer = json!({"visibleCells": seen, "acrossNoData": through_gaps, "readNearest": read_nearest});
+        let m = made(rasterops::derive(&dem, &name, vec![vs.cells])?, Some(answer))?;
         if through_gaps == 0 && read_nearest == 0 && shortened.is_none() && !seam {
             return Ok(m);
         }
         // Ground with no data hides nothing, and bilinear heights read the nearest cell beside
         // it: said, with how many cells it touched. A radius shortened, and rays that don't
         // cross the ±180° edge, said too.
-        let then: Then = Box::new(move |s: &mut Session, v: &mut Value| {
+        let then: Then = Box::new(move |s: &mut Session, _: &mut Value| {
             if let Some(r) = shortened {
                 s.notify(
                     format!(
-                        "{dem_name}: the radius of {:.0} km was taken as {:.0} km, the most a viewshed takes; with no radius it covers the whole raster",
-                        r / 1000.0,
-                        MAX_VIEWSHED_RADIUS_M / 1000.0
+                        "{dem_name}: the radius of {} was taken as {}, the most a viewshed takes; with no radius it covers the whole raster",
+                        metres(r),
+                        metres(MAX_VIEWSHED_RADIUS_M)
                     ),
                     false,
                 );
             }
             if seam {
+                // Given a radius, the ground across the edge is too far the long way round to
+                // fall inside it; with none, the whole raster is worked out, that ground too.
+                let across = if given.is_some() { "left out of the viewshed" } else { "worked out the long way round" };
                 s.notify(
                     format!(
-                        "{dem_name}: the raster goes round the Earth, but the viewshed's rays don't cross its ±180° edge: ground just across it is worked out the long way round"
+                        "{dem_name}: the raster goes round the Earth, but the viewshed's rays don't cross its ±180° edge: ground just across it is {across}"
                     ),
                     false,
                 );
@@ -1156,10 +1176,6 @@ fn viewshed_work(s: &Session, p: &Value) -> Result<Work, String> {
                     format!("{dem_name}: {read_nearest} cell(s) of the viewshed were worked out with the nearest cell's height next to ground with no data, not between cells"),
                     false,
                 );
-            }
-            if let Some(o) = v.as_object_mut() {
-                o.insert("acrossNoData".into(), json!(through_gaps));
-                o.insert("readNearest".into(), json!(read_nearest));
             }
         });
         Ok(Made { then: Some(then), ..m })

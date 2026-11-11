@@ -437,7 +437,8 @@ pub(crate) const MAX_IDW_WORK: usize = 400_000_000;
 /// How a viewshed reads the ground between the observer and a cell.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Heights {
-    /// The cell each point of the ray falls in, as the viewshed always has. On ground that bulges
+    /// The cell each point of the ray falls in, as the viewshed has read it (each point now exact on
+    /// a cell's centre line, which can change a cell at a tie). On ground that bulges
     /// (a hill seen from its top), a cell nearer the observer than the point stands in for it and
     /// can hide cells just inside the horizon.
     #[default]
@@ -1940,7 +1941,7 @@ mod tests {
     /// those beyond it seen again). The Earth's
     /// curvature for visible light (`SIGHT_RADIUS_M`) is part of each answer. Cells within a cell
     /// and a half of a boundary, where a grid can't say which side a cell is on, aren't counted.
-    /// Bilinear heights get every other cell right on all four; nearest heights hide some of the
+    /// Bilinear heights get every cell counted right on all four; nearest heights hide some of the
     /// dome just inside its horizon, and are right on the other three.
     #[test]
     fn viewsheds_give_the_known_answers_of_flat_ground_a_bowl_a_dome_and_a_wall() {

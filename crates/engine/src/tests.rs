@@ -9326,13 +9326,26 @@ fn a_viewshed_says_what_it_did_with_its_radius_and_the_seam() {
     let seam = "rays don't cross its ±180° edge";
     // By the edge with no radius (the whole raster): the seam is said.
     let notes = said(&mut s, json!({"layer": dem, "lon": -179.0, "lat": 0.0}));
-    assert!(notes.iter().any(|n| n.contains(seam)), "{notes:?}");
+    assert!(notes.iter().any(|n| n.contains(seam) && n.ends_with("worked out the long way round")), "{notes:?}");
     // Mid-way with a radius not reaching an edge: nothing said.
     let notes = said(&mut s, json!({"layer": dem, "lon": 0.0, "lat": 0.0, "radius": 50_000}));
     assert!(notes.is_empty(), "{notes:?}");
     // 600 km is taken as 500 km, and said; 500 km from the edge's cell reaches it.
     let notes = said(&mut s, json!({"layer": dem, "lon": -177.0, "lat": 0.0, "radius": 600_000}));
     assert!(notes.iter().any(|n| n.contains("the radius of 600 km was taken as 500 km")), "{notes:?}");
+    // Given a radius, the ground across the edge is left out (too far the long way round).
+    assert!(notes.iter().any(|n| n.contains(seam) && n.ends_with("left out of the viewshed")), "{notes:?}");
+    // Just past 500 km, said to a tenth of a km.
+    let notes = said(&mut s, json!({"layer": dem, "lon": 0.0, "lat": 0.0, "radius": 500_400}));
+    assert!(notes.iter().any(|n| n.contains("the radius of 500.4 km was taken as 500 km")), "{notes:?}");
+    // A geographic coordinate system other than WGS 84, and a cell size stored rounded
+    // (180 × 1.99999° = 359.9998°): still round the Earth.
+    let gt = GeoTransform { origin_x: -180.0, origin_y: 90.0, pixel_width: 1.99999, pixel_height: -2.0 };
+    let r = Raster::new("nad83", 180, 90, vec![vec![0.0; 180 * 90]], gt, Crs::Epsg(4269), None, ColorHint::Gray, "Float32").unwrap();
+    let data = base64::engine::general_purpose::STANDARD.encode(geotiff::write(&r, 0).unwrap());
+    s.run("layer.addDataBytes", &json!({"fileName": "nad83.tif", "data": data})).unwrap();
+    let nad83 = s.map().layers.iter().find(|l| l.name.starts_with("nad83")).unwrap().name.clone();
+    let notes = said(&mut s, json!({"layer": nad83, "lon": -179.0, "lat": 0.0}));
     assert!(notes.iter().any(|n| n.contains(seam)), "{notes:?}");
     for bad in [json!("500km"), json!(0), json!(-5), json!(true)] {
         let e = s.run("analysis.viewshed", &json!({"layer": dem, "lon": 0.0, "lat": 0.0, "radius": bad})).unwrap_err();
@@ -9395,11 +9408,16 @@ fn analysis_workflows_models_scripts_and_raster_functions() {
     // Bilinear heights read the ground between cells: on this hill and wall they see at least
     // what the nearest cells do (a cell nearer the top no longer stands in for the ground), and
     // little more. Any other name, or a value that isn't one, is refused, saying which there are.
+    let mark = s.notices.len();
     let b = s.run("analysis.viewshed", &json!({"layer": dem, "lon": 10.0055, "lat": 45.0395, "height": 2, "heights": "Bilinear"})).unwrap();
     let (near, bil) = (v["visibleCells"].as_u64().unwrap(), b["visibleCells"].as_u64().unwrap());
     assert!(bil >= near && bil <= near + near / 10, "nearest {near}, bilinear {bil}");
-    // A DEM with every cell holding data: nothing to say about ground with none.
-    assert!(b.get("acrossNoData").is_none() && v.get("acrossNoData").is_none(), "{b}");
+    // A DEM with every cell holding data: nothing to say about ground with none, and the answer
+    // says none.
+    assert!(s.notices[mark..].is_empty(), "{:?}", s.notices[mark..].iter().map(|n| &n.text).collect::<Vec<_>>());
+    for a in [&v, &b] {
+        assert_eq!((&a["acrossNoData"], &a["readNearest"]), (&json!(0), &json!(0)), "{a}");
+    }
     for bad in [json!("cubic"), json!(1)] {
         let e = s.run("analysis.viewshed", &json!({"layer": dem, "lon": 10.0055, "lat": 45.0395, "heights": bad})).unwrap_err();
         assert!(e.to_string().contains(r#"heights must be "nearest" or "bilinear", not "#), "{e}");
