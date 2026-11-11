@@ -6,8 +6,10 @@
 //! AI Assistant alike), and the front end hides its tab and buttons.
 //!
 //! What the user chose is the session's [`State`]. The desktop and web apps keep it as the
-//! `extensions` setting ([`State::from_setting`], [`State::to_setting`]); the command line and
-//! Python start from each extension's default. A setting from a newer RustGIS may name
+//! `extensions` setting ([`State::from_setting`], [`State::to_setting`]) and start each extension
+//! the setting says nothing about at its default ([`Extension::default_on`]). A session of its
+//! own (the command line, Python, a test) starts with every extension on, so scripts keep
+//! working; `extension.disable` turns one off there too. A setting from a newer RustGIS may name
 //! extensions this version doesn't know: they are kept as they were and written back unchanged.
 
 use std::collections::BTreeMap;
@@ -26,7 +28,7 @@ pub struct Extension {
     /// The caption of its own ribbon tab (`extension:<id>`), or `None` for a group on the Plugins
     /// tab.
     pub tab: Option<&'static str>,
-    /// Whether it is on until the user says otherwise.
+    /// Whether the desktop and web apps start with it on until the user says otherwise.
     pub default_on: bool,
     /// The command ids it owns.
     pub commands: &'static [&'static str],
@@ -39,7 +41,7 @@ pub const IMAGERY: Extension = Extension {
     name: "Imagery",
     description: "Ortho and reality mapping, georeferencing, image analysis and classification, deep learning, mensuration and hosted imagery, on a tab of its own.",
     tab: Some("Imagery"),
-    default_on: true,
+    default_on: false,
     commands: &[
         "imagery.workspace",
         "imagery.workspaceOptions",
@@ -90,17 +92,22 @@ pub fn tab_id(id: &str) -> String {
 }
 
 /// What the user turned on or off, by extension id. Ids this version doesn't know (from a newer
-/// RustGIS) are kept, so saving writes them back as they were.
+/// RustGIS) are kept, so saving writes them back as they were. The default state (a session of
+/// its own) has every extension on; one read from the setting starts each at its default.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct State {
     chosen: BTreeMap<String, bool>,
+    /// Whether an extension the user said nothing about is at its default (the apps) rather
+    /// than on.
+    defaults: bool,
 }
 
 impl State {
-    /// Whether extension `id` is on: what the user chose, else its default. An unknown id is off.
+    /// Whether extension `id` is on: what the user chose, else its default in the apps and on
+    /// elsewhere. An unknown id is off.
     pub fn is_on(&self, id: &str) -> bool {
         match get(id) {
-            Some(e) => self.chosen.get(id).copied().unwrap_or(e.default_on),
+            Some(e) => self.chosen.get(id).copied().unwrap_or(!self.defaults || e.default_on),
             None => false,
         }
     }
@@ -125,11 +132,12 @@ impl State {
     /// over-long ids and those past [`MAX_ENTRIES`] are left out. An empty or missing setting is
     /// every extension at its default.
     pub fn from_setting(text: Option<&str>) -> (State, Option<String>) {
-        let Some(text) = text.map(str::trim).filter(|t| !t.is_empty()) else { return (State::default(), None) };
+        let at_defaults = State { chosen: BTreeMap::new(), defaults: true };
+        let Some(text) = text.map(str::trim).filter(|t| !t.is_empty()) else { return (at_defaults, None) };
         let map = match serde_json::from_str::<Value>(text) {
             Ok(Value::Object(map)) => map,
             Ok(_) | Err(_) => {
-                return (State::default(), Some("the extensions setting isn't a JSON object; every extension is at its default".into()));
+                return (at_defaults, Some("the extensions setting isn't a JSON object; every extension is at its default".into()));
             }
         };
         let mut chosen = BTreeMap::new();
@@ -149,7 +157,7 @@ impl State {
                 if skipped == 1 { "was" } else { "were" }
             )
         });
-        (State { chosen }, said)
+        (State { chosen, defaults: true }, said)
     }
 
     /// The `extensions` setting: every choice made, known ids or not.
@@ -170,6 +178,7 @@ impl State {
                         "tab": e.tab,
                         "enabled": self.is_on(e.id),
                         "default": e.default_on,
+                        "chosen": self.chosen.get(e.id),
                         "commands": e.commands,
                     })
                 })
@@ -199,6 +208,18 @@ mod tests {
                 assert_eq!(owner(c).map(|o| o.id), Some(e.id), "{c} is owned twice");
             }
         }
+    }
+
+    #[test]
+    fn a_session_of_its_own_has_every_extension_on_and_the_apps_start_at_the_defaults() {
+        assert!(!IMAGERY.default_on);
+        assert!(State::default().is_on("imagery"));
+        let (apps, said) = State::from_setting(None);
+        assert_eq!(said, None);
+        assert!(!apps.is_on("imagery"));
+        assert!(apps.blocks("raster.classify").is_some());
+        let (chosen, _) = State::from_setting(Some(r#"{"imagery": true}"#));
+        assert!(chosen.is_on("imagery"));
     }
 
     #[test]
@@ -253,14 +274,16 @@ mod tests {
 
     #[test]
     fn unreadable_setting_is_said() {
-        assert_eq!(State::from_setting(None), (State::default(), None));
-        assert_eq!(State::from_setting(Some("  ")), (State::default(), None));
+        let at_defaults = State { chosen: BTreeMap::new(), defaults: true };
+        assert_eq!(State::from_setting(None), (at_defaults.clone(), None));
+        assert_eq!(State::from_setting(Some("  ")), (at_defaults.clone(), None));
         let (st, said) = State::from_setting(Some("[1, 2]"));
-        assert_eq!(st, State::default());
+        assert_eq!(st, at_defaults);
         assert!(said.is_some_and(|s| s.contains("isn't a JSON object")));
         let long = "x".repeat(MAX_ID + 1);
         let (st, said) = State::from_setting(Some(&format!(r#"{{"imagery": "no", "{long}": true, "ok": false}}"#)));
-        assert!(st.is_on("imagery"));
+        // Left at its default.
+        assert!(!st.is_on("imagery"));
         assert!(said.is_some_and(|s| s.starts_with("2 entries")));
         let many: Map<String, Value> = (0..MAX_ENTRIES + 3).map(|i| (format!("e{i}"), Value::Bool(true))).collect();
         let (st, said) = State::from_setting(Some(&Value::Object(many).to_string()));

@@ -157,7 +157,7 @@ mod tests {
 
     #[test]
     fn turning_imagery_off_hides_its_tab_sections_and_commands_and_is_saved() {
-        let prefs = Arc::new(Mutex::new(vec![(SETTING.to_string(), r#"{"from-newer": true}"#.to_string())]));
+        let prefs = Arc::new(Mutex::new(vec![(SETTING.to_string(), r#"{"imagery": true, "from-newer": true}"#.to_string())]));
         let mut app = app_with_prefs(&prefs);
         load(&mut app);
         let tab = extensions::tab_id("imagery");
@@ -197,13 +197,39 @@ mod tests {
         let prefs = Arc::new(Mutex::new(vec![(SETTING.to_string(), "not json".to_string())]));
         let mut app = app_with_prefs(&prefs);
         load(&mut app);
-        assert!(app.session.extensions().is_on("imagery"));
+        // At its default.
+        assert!(!app.session.extensions().is_on("imagery"));
         assert!(app.session.notices.iter().any(|n| n.text.contains("extensions setting isn't a JSON object")));
         // A clean setting says nothing.
         let prefs = Arc::new(Mutex::new(vec![(SETTING.to_string(), r#"{"imagery": true}"#.to_string())]));
         let mut app = app_with_prefs(&prefs);
         load(&mut app);
         assert!(!app.session.notices.iter().any(|n| n.text.contains("extensions setting")));
+    }
+
+    #[test]
+    fn the_app_starts_with_imagery_off_until_it_is_turned_on() {
+        let prefs = Arc::new(Mutex::new(Vec::new()));
+        let mut app = app_with_prefs(&prefs);
+        load(&mut app);
+        let tab = extensions::tab_id("imagery");
+        assert!(!crate::ribbon::tab_exists(&app, &tab));
+        assert!(app.run("raster.classify", json!({})).is_err_and(|e| e.contains("Imagery extension, which is off")));
+        // Nothing chosen yet: nothing written.
+        persist(&mut app);
+        assert!(prefs.lock().unwrap().is_empty());
+        set(&mut app, "imagery", true);
+        assert!(crate::ribbon::tab_exists(&app, &tab));
+        persist(&mut app);
+        assert!(prefs.lock().unwrap().iter().any(|(k, v)| k == SETTING && v.contains("\"imagery\":true")));
+    }
+
+    #[test]
+    fn an_extensions_tab_comes_after_help() {
+        let app = RustGisApp::with_sample();
+        let ids: Vec<String> = crate::ribbon::all_tabs(&app).into_iter().map(|(id, _)| id).collect();
+        let at = |t: &str| ids.iter().position(|i| i == t);
+        assert!(at("extension:imagery") > at("Help") && at("Help").is_some(), "{ids:?}");
     }
 
     #[test]

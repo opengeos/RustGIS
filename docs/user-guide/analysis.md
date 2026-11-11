@@ -1439,7 +1439,7 @@ save and run models without the canvas:
 ## Imagery
 
 The Imagery tab's groups open their tools in the Workflows pane. The tab belongs to the Imagery
-[extension](index.md#extensions), which is on unless you turn it off in Plugins › Extensions:
+[extension](index.md#extensions): turn it on in Plugins › Extensions to show the tab:
 
 - **Ortho Mapping** and **Reality Mapping** workspaces mosaic georeferenced images into an
   orthomosaic, or elevation rasters into a surface model that exports as a 3D mesh (OBJ).

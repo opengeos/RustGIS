@@ -86,16 +86,11 @@ fn extension_tabs(app: &RustGisApp) -> Vec<(String, String)> {
         .collect()
 }
 
-/// RustGIS's tabs, with the tabs of extensions that are on before Plugins and plugins' own tabs
-/// last: (tab id, caption in the interface language).
-fn all_tabs(app: &RustGisApp) -> Vec<(String, String)> {
-    let mut tabs: Vec<(String, String)> = Vec::new();
-    for t in TABS {
-        if t == "Plugins" {
-            tabs.extend(extension_tabs(app));
-        }
-        tabs.push((t.to_string(), tl!(t).to_string()));
-    }
+/// RustGIS's tabs, then the tabs of extensions that are on (after Help), then plugins' own tabs:
+/// (tab id, caption in the interface language).
+pub(crate) fn all_tabs(app: &RustGisApp) -> Vec<(String, String)> {
+    let mut tabs: Vec<(String, String)> = TABS.iter().map(|t| (t.to_string(), tl!(*t).to_string())).collect();
+    tabs.extend(extension_tabs(app));
     tabs.extend(plugin_tabs(app));
     tabs
 }

@@ -2675,14 +2675,19 @@ impl Session {
         &self.extensions
     }
 
-    /// Takes the saved `extensions` setting (the desktop and web apps, at start): what of it
-    /// couldn't be read is said as a notice.
+    /// Takes the saved `extensions` setting (the desktop and web apps, at start), over each
+    /// extension's default where it says nothing: what of it couldn't be read is said as a notice.
     pub fn load_extensions(&mut self, setting: Option<&str>) {
         let (state, said) = extensions::State::from_setting(setting);
         self.extensions = state;
         if let Some(said) = said {
             self.warn(said);
         }
+    }
+
+    /// Takes another session's extension choices (a copy that runs a model or script ahead).
+    pub(crate) fn set_extensions(&mut self, state: extensions::State) {
+        self.extensions = state;
     }
 
     /// Turns extension `id` on or off (`extension.enable` and `extension.disable`).
