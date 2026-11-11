@@ -60,7 +60,7 @@ pub fn commands() -> Vec<C> {
             r#"{"criteria": [{"layer": raster, "band"?: 1-based, "ranges": [[lo, hi, score]], "weight": number}], "name"?: output, "ran"?: (internal: a raster the app has worked out)}"#,
         ),
         C::new("analysis.viewshed", "Visibility Analysis", "Analyze › Workflows", viewshed).roles(&[]).effects(crate::policy::Effects::NONE)
-            .params(r#"{"layer": elevation raster, "lon", "lat", "band"?: 1-based, "height"?: observer metres, "radius"?: metres, "name"?: output, "ran"?: (internal: a viewshed the app has worked out)}"#),
+            .params(r#"{"layer": elevation raster, "lon", "lat", "band"?: 1-based, "height"?: observer metres, "radius"?: metres, "heights"?: "nearest" (default) | "bilinear" (the ground along each ray), "name"?: output, "ran"?: (internal: a viewshed the app has worked out)}"#),
         C::new("analysis.lineOfSight", "Line Of Sight", "Analyze › Workflows", line_of_sight).roles(&[]).effects(crate::policy::Effects::NONE).params(
             r#"{"layer": elevation raster, "from": [lon, lat], "to": [lon, lat], "band"?: 1-based, "observerHeight"?: m, "targetHeight"?: m, "name"?: output}"#,
         ),
@@ -1086,9 +1086,14 @@ fn viewshed_work(s: &Session, p: &Value) -> Result<Work, String> {
     // The whole raster by default: its diagonal reaches every cell from any observer.
     let radius = f(p, "radius").unwrap_or((cx * dem.width as f64).hypot(cy * dem.height as f64)).clamp(1.0, 500_000.0);
     let height = f(p, "height").unwrap_or(1.7).clamp(0.0, 10_000.0);
+    // How the ground along each ray is read: the cell a point falls in, or between cells.
+    let heights = match ps(p, "heights") {
+        None => rasterops::Heights::Nearest,
+        Some(h) => rasterops::Heights::named(h).ok_or_else(|| format!("heights must be \"nearest\" or \"bilinear\", not \"{h}\""))?,
+    };
     let name = out_name(p, format!("{}_viewshed", dem.name));
     Ok(Box::new(move || {
-        let vs = rasterops::viewshed(&dem, band, at, height, radius)?;
+        let vs = rasterops::viewshed(&dem, band, at, height, radius, heights)?;
         let seen = vs.iter().filter(|v| **v == 1.0).count();
         made(rasterops::derive(&dem, &name, vec![vs])?, Some(json!({"visibleCells": seen})))
     }))

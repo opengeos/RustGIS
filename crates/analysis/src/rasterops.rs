@@ -434,14 +434,72 @@ pub fn line_of_sight(
 const MAX_VIEWSHED_WORK: usize = 400_000_000;
 pub(crate) const MAX_IDW_WORK: usize = 400_000_000;
 
+/// How a viewshed reads the ground between the observer and a cell.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Heights {
+    /// The cell each point of the ray falls in, as the viewshed always has. On ground that bulges
+    /// (a hill seen from its top), a cell nearer the observer than the point stands in for it and
+    /// can hide cells just inside the horizon.
+    #[default]
+    Nearest,
+    /// Between the cells' centres, in proportion to how near the point is to each (bilinear), as
+    /// GRASS's `r.viewshed` reads it: smoother, and right on bulging ground. Where one of those
+    /// cells has no data, the cell the point falls in, as [`Heights::Nearest`] reads it.
+    Bilinear,
+}
+
+impl Heights {
+    /// The one named `name` (`nearest`, `bilinear`); `None` for any other.
+    pub fn named(name: &str) -> Option<Heights> {
+        match name {
+            "nearest" => Some(Heights::Nearest),
+            "bilinear" => Some(Heights::Bilinear),
+            _ => None,
+        }
+    }
+
+    /// The ground at a point of a ray, `(col, row)` in cells (whole numbers at cell centres).
+    fn at(self, r: &Raster, b: usize, col: f64, row: f64) -> Option<f32> {
+        let nearest = || r.value(b, col.round() as i64, row.round() as i64);
+        if self == Heights::Nearest {
+            return nearest();
+        }
+        let (c0, r0) = (col.floor(), row.floor());
+        let (tx, ty) = (col - c0, row - r0);
+        let (c0, r0) = (c0 as i64, r0 as i64);
+        let mut sum = 0.0f64;
+        // A neighbour weighing nothing (the point on its row or column) isn't read, so a point
+        // on a cell's centre line needs only the two cells it lies between.
+        for (dc, dr, wgt) in [(0, 0, (1.0 - tx) * (1.0 - ty)), (1, 0, tx * (1.0 - ty)), (0, 1, (1.0 - tx) * ty), (1, 1, tx * ty)] {
+            if wgt == 0.0 {
+                continue;
+            }
+            match r.value(b, c0 + dc, r0 + dr) {
+                Some(v) => sum += wgt * f64::from(v),
+                None => return nearest(),
+            }
+        }
+        Some(sum as f32)
+    }
+}
+
 /// Cells visible from an observer (1) or not (0) within `radius_m`; outside the radius no-data.
-/// The Earth curves as visible light sees it (`SIGHT_RADIUS_M`).
-pub fn viewshed(r: &Raster, b: usize, observer: Coord, height: f64, radius_m: f64) -> Result<Vec<f32>, String> {
-    viewshed_on(None, r, b, observer, height, radius_m)
+/// The Earth curves as visible light sees it (`SIGHT_RADIUS_M`). The ground along each ray is read
+/// as `heights` says.
+pub fn viewshed(r: &Raster, b: usize, observer: Coord, height: f64, radius_m: f64, heights: Heights) -> Result<Vec<f32>, String> {
+    viewshed_on(None, r, b, observer, height, radius_m, heights)
 }
 
 /// [`viewshed`] on `threads` threads, or as many as its work calls for.
-fn viewshed_on(threads: Option<usize>, r: &Raster, b: usize, observer: Coord, height: f64, radius_m: f64) -> Result<Vec<f32>, String> {
+fn viewshed_on(
+    threads: Option<usize>,
+    r: &Raster,
+    b: usize,
+    observer: Coord,
+    height: f64,
+    radius_m: f64,
+    heights: Heights,
+) -> Result<Vec<f32>, String> {
     let (oc, or) = r.pixel_at(observer).ok_or("the observer is outside the raster")?;
     let z0 = r.value(b, oc, or).ok_or("the observer stands on no-data")? as f64 + height;
     let (cx, cy) = r.cell_size_m();
@@ -501,8 +559,8 @@ fn viewshed_on(threads: Option<usize>, r: &Raster, b: usize, observer: Coord, he
             let mut visible = true;
             for s in 1..steps {
                 let t = s as f64 / steps as f64;
-                let (c, rr) = ((oc as f64 + (col - oc) as f64 * t).round() as i64, (or as f64 + (row - or) as f64 * t).round() as i64);
-                let Some(zi) = r.value(b, c, rr) else { continue };
+                let (c, rr) = (oc as f64 + (col - oc) as f64 * t, or as f64 + (row - or) as f64 * t);
+                let Some(zi) = heights.at(r, b, c, rr) else { continue };
                 let di = dist * t;
                 if (zi as f64 - di * di / (2.0 * SIGHT_RADIUS_M) - z0) / di > target {
                     visible = false;
@@ -1596,11 +1654,11 @@ mod tests {
         for (at, radius, expected) in
             [(Coord::new(0.012, 44.990), 500.0, [207, 775, 5318]), (Coord::new(0.003, 44.985), 5_000.0, [185, 6050, 65])]
         {
-            let one = viewshed_on(Some(1), &dem, 0, at, 2.0, radius).unwrap_or_else(|e| panic!("{e}"));
+            let one = viewshed_on(Some(1), &dem, 0, at, 2.0, radius, Heights::Nearest).unwrap_or_else(|e| panic!("{e}"));
             let counts = [1.0, 0.0, NODATA].map(|k| one.iter().filter(|v| v.to_bits() == k.to_bits()).count());
             assert_eq!(counts, expected, "radius {radius}");
             for threads in [2, 7, 16] {
-                let many = viewshed_on(Some(threads), &dem, 0, at, 2.0, radius).unwrap_or_else(|e| panic!("{e}"));
+                let many = viewshed_on(Some(threads), &dem, 0, at, 2.0, radius, Heights::Nearest).unwrap_or_else(|e| panic!("{e}"));
                 assert!(one.iter().map(|v| v.to_bits()).eq(many.iter().map(|v| v.to_bits())), "{threads} threads, radius {radius}");
             }
         }
@@ -1789,7 +1847,7 @@ mod tests {
         let eye = Coord::new(0.0005, 0.0);
         // √(2 · 7/6 · 6,371 km · 10 m), written out so that the test pins the radius.
         let horizon = 12_192.0;
-        let vs = viewshed(&flat, 0, eye, 10.0, 20_000.0).unwrap_or_else(|e| panic!("{e}"));
+        let vs = viewshed(&flat, 0, eye, 10.0, 20_000.0, Heights::Nearest).unwrap_or_else(|e| panic!("{e}"));
         let row = &vs[w as usize..2 * w as usize];
         let last = row.iter().rposition(|v| *v == 1.0).unwrap_or(0);
         let (cx, _) = flat.cell_size_m();
@@ -1799,6 +1857,106 @@ mod tests {
         let seen = |lon: f64| line_of_sight(&flat, 0, eye, Coord::new(lon, 0.0), 10.0, 0.0, 200).map(|(v, _)| v);
         assert_eq!(seen(0.1035), Some(true));
         assert_eq!(seen(0.1155), Some(false));
+    }
+
+    /// Viewsheds on DEMs whose answer is known from their geometry: flat ground (the horizon at
+    /// √(2·R′·h)), a bowl (every cell seen), a dome (seen up to where the line from the eye
+    /// touches it, at √(h / k′)), and a wall (the cells in its shadow hidden). The Earth's
+    /// curvature for visible light (`SIGHT_RADIUS_M`) is part of each answer. Cells within a cell
+    /// and a half of a boundary, where a grid can't say which side a cell is on, aren't counted.
+    /// Bilinear heights get every other cell right on all four; nearest heights hide some of the
+    /// dome just inside its horizon, and are right on the other three.
+    #[test]
+    fn viewsheds_give_the_known_answers_of_flat_ground_a_bowl_a_dome_and_a_wall() {
+        // 201 × 201 cells of 0.00027° (about 30 m) on the equator, the observer at the centre.
+        let (n, half, step) = (201u32, 100i64, 0.00027);
+        let transform = GeoTransform { origin_x: 0.0, origin_y: step * f64::from(n) / 2.0, pixel_width: step, pixel_height: -step };
+        let blank = Raster::new("dem", n, n, vec![vec![0.0; (n * n) as usize]], transform, Crs::LonLat, None, ColorHint::Gray, "Float32")
+            .unwrap_or_else(|e| panic!("{e}"));
+        let (cx, cy) = blank.cell_size_m();
+        let at = |col: i64, row: i64| ((col - half) as f64 * cx, (row - half) as f64 * cy);
+        let dem = |z: &dyn Fn(f64, f64) -> f64| {
+            let mut r = blank.clone();
+            if let Some(b) = r.bands.get_mut(0) {
+                for (i, v) in b.data.iter_mut().enumerate() {
+                    let (x, y) = at(i as i64 % i64::from(n), i as i64 / i64::from(n));
+                    *v = z(x, y) as f32;
+                }
+            }
+            r
+        };
+        let eye = Coord::new(step * (half as f64 + 0.5), step * (f64::from(n) / 2.0 - half as f64 - 0.5));
+        let radius = 3_000.0;
+        let band = 1.5 * cx.max(cy);
+        let drop = |d: f64| d * d / (2.0 * SIGHT_RADIUS_M);
+        // Cells seen wrongly, and those counted, for `expected` (None: on a boundary, or outside).
+        let wrong = |r: &Raster, h: f64, heights: Heights, expected: &dyn Fn(i64, i64, f64) -> Option<bool>| {
+            let vs = viewshed(r, 0, eye, h, radius, heights).unwrap_or_else(|e| panic!("{e}"));
+            let (mut bad, mut counted) = (0usize, 0usize);
+            for row in 0..i64::from(n) {
+                for col in 0..i64::from(n) {
+                    let (x, y) = at(col, row);
+                    let d = x.hypot(y);
+                    let Some(want) = (d > 0.0 && d <= radius).then(|| expected(col, row, d)).flatten() else { continue };
+                    let got = vs.get((row * i64::from(n) + col) as usize).copied();
+                    counted += 1;
+                    bad += usize::from(got != Some(if want { 1.0 } else { 0.0 }));
+                }
+            }
+            (bad, counted)
+        };
+        let before = |d: f64, edge: f64| if (d - edge).abs() <= band { None } else { Some(d < edge) };
+
+        // Flat ground, an eye 0.5 m up: the horizon at √(2·R′·h), about 2.7 km.
+        let flat = dem(&|_, _| 0.0);
+        let horizon = (2.0 * SIGHT_RADIUS_M * 0.5).sqrt();
+        for heights in [Heights::Nearest, Heights::Bilinear] {
+            let (bad, counted) = wrong(&flat, 0.5, heights, &|_, _, d| before(d, horizon));
+            assert!(bad == 0 && counted > 20_000, "flat, {heights:?}: {bad} of {counted} wrong");
+        }
+
+        // A bowl rising 4 m a kilometre squared (z = k·d², far steeper than the Earth curves
+        // away): every cell is seen.
+        let bowl = dem(&|x, y| 4e-6 * (x * x + y * y));
+        for heights in [Heights::Nearest, Heights::Bilinear] {
+            let (bad, counted) = wrong(&bowl, 2.0, heights, &|_, _, _| Some(true));
+            assert!(bad == 0 && counted > 20_000, "bowl, {heights:?}: {bad} of {counted} wrong");
+        }
+
+        // A dome falling 10 m a kilometre squared from its top, the eye 10 m up there: with the
+        // Earth's curve, the ground falls k′ = k + 1/(2R′) a metre squared, and the line from the
+        // eye touches it at √(h / k′), about 1 km; beyond, the dome hides the ground.
+        let k = 1e-5;
+        let dome = dem(&|x, y| 500.0 - k * (x * x + y * y));
+        let edge = (10.0 / (k + 1.0 / (2.0 * SIGHT_RADIUS_M))).sqrt();
+        let (bad, counted) = wrong(&dome, 10.0, Heights::Bilinear, &|_, _, d| before(d, edge));
+        assert!(bad == 0 && counted > 20_000, "dome, bilinear: {bad} of {counted} wrong");
+        let (bad_nearest, _) = wrong(&dome, 10.0, Heights::Nearest, &|_, _, d| before(d, edge));
+        assert!(bad_nearest > 0, "nearest heights hide some of the dome just inside its horizon");
+
+        // A wall 50 m high, a column of cells 20 cells east of the eye (2 m up): beyond it, a cell
+        // is hidden when the wall's top stands above the line from the eye to it. Rays mostly east
+        // or west, which cross the wall at a cell's centre line, are counted; others cross it
+        // between columns, where where it stands depends on how the ground is read.
+        let wall_col = half + 20;
+        let wall = dem(&|x, _| if (x - 20.0 * cx).abs() < cx / 2.0 { 50.0 } else { 0.0 });
+        let z0 = 2.0;
+        let shadow = |col: i64, row: i64, d: f64| -> Option<bool> {
+            let (dc, dr) = (col - half, row - half);
+            if col == wall_col || dr.abs() > dc.abs() {
+                return None;
+            }
+            if col < wall_col {
+                return Some(true);
+            }
+            let dw = d * (20.0 / dc as f64);
+            let over = (50.0 - drop(dw) - z0) / dw * d - (-drop(d) - z0);
+            if over.abs() < 1.0 { None } else { Some(over < 0.0) }
+        };
+        for heights in [Heights::Nearest, Heights::Bilinear] {
+            let (bad, counted) = wrong(&wall, z0, heights, &shadow);
+            assert!(bad == 0 && counted > 10_000, "wall, {heights:?}: {bad} of {counted} wrong");
+        }
     }
 
     /// A run past one thread's work, on one thread, is refused, naming the cap and the threads.
@@ -2152,7 +2310,7 @@ mod tests {
                 *v = if i % 20 == 10 { 500.0 } else { 0.0 };
             }
         }
-        let vs = viewshed(&wall, 0, Coord::new(0.0025, 0.0105), 2.0, 5_000.0).unwrap_or_default();
+        let vs = viewshed(&wall, 0, Coord::new(0.0025, 0.0105), 2.0, 5_000.0, Heights::Nearest).unwrap_or_default();
         assert_eq!(vs[10 * 20 + 5], 1.0);
         assert_eq!(vs[10 * 20 + 15], 0.0);
         let (seen, prof) =
