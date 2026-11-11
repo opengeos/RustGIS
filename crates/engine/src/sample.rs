@@ -102,9 +102,9 @@ pub fn accept(v: View, bytes: Vec<u8>) -> Result<(), String> {
         return Err(format!("the {} worldview's countries are {} bytes, more than the {} allowed", w.name(), bytes.len(), v.max_bytes()));
     }
     let text = String::from_utf8(bytes).map_err(|_| format!("the {} worldview's countries aren't UTF-8 text", w.name()))?;
-    let copy = kept_path(v).map(|p| (p, text.clone()));
     install(v, text)?;
-    if let Some((path, text)) = copy {
+    // Kept from the copy `install` keeps, not a second one.
+    if let (Some(path), Some(text)) = (kept_path(v), self::text(v)) {
         let saved =
             path.parent().map_or(Ok(()), std::fs::create_dir_all).and_then(|_| rustgis_data::io::write_atomic(&path, text.as_bytes()));
         if let Err(e) = saved {

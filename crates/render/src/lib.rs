@@ -282,10 +282,14 @@ pub mod sample_data {
             return Err(format!("the {} worldview's countries are {} bytes, more than the {max} allowed", w.name(), text.len()));
         }
         let ds = check(&text).map_err(|e| format!("the {} worldview's countries aren't usable: {e}", w.name()))?;
-        let slot = v.index();
-        if TEXTS.get(slot).ok_or("unknown worldview")?.set(text).is_ok() {
-            // Read once: the check's dataset is the one shown.
-            let _ = SETS.get(slot).ok_or("unknown worldview")?.set(Some(ds));
+        let (Some(texts), Some(sets)) = (TEXTS.get(v.index()), SETS.get(v.index())) else {
+            return Err("unknown worldview".into());
+        };
+        // Read once: the check's dataset is the one shown. It goes in first, so a view whose text
+        // is at hand (what `view` and `set_view` go by) always has its countries read.
+        if texts.get().is_none() {
+            let _ = sets.set(Some(ds));
+            let _ = texts.set(text);
         }
         Ok(())
     }

@@ -34,8 +34,9 @@ locale (China's view in mainland China, falling back to the default borders with
 it can't be downloaded). `--worldview-detail simplified|original` chooses how detailed: the
 simplified borders (the default, about 250 KB) or Natural Earth's 1:10m ones (a 3 MB download),
 which `--worldview default` also downloads. Given explicitly, it makes a failed download an
-error even with `auto`. Nothing is downloaded by `ask`'s model, sign-in and account options or
-by `ask` with no request unless it reads or saves a project, nor by `mcp --attach`.
+error even with `auto`. Nothing is downloaded by `ask`'s model and sign-in options, by `ask`
+with no request unless it reads or saves a project (with `--account` and no request, not even
+then), nor by `mcp --attach`.
 
 `--threads N` sets the most threads one piece of work uses (1 to 1024, never more than the
 cores), as [`gp.threads`](user-guide/analysis.md#analysis-workflows) sets it. With `mcp --attach` the
