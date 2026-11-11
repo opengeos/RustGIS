@@ -571,10 +571,20 @@ mod tests {
         assert_eq!(extent(diamond), extent(&ring));
     }
 
-    /// A sliver whose extremes are two vertices grows from them into a triangle, still within the
+    /// A ring whose extremes are two vertices grows from them into a triangle, still within the
     /// tolerance of every vertex.
     #[test]
-    fn a_sliver_ring_grows_from_its_kept_vertices_into_a_triangle() {
+    fn a_ring_with_two_extremes_grows_into_a_triangle() {
+        let ring = vec![Coord::new(0.0, 0.0), Coord::new(5.0, 4.9), Coord::new(10.0, 10.0), Coord::new(5.0, 5.1), Coord::new(0.0, 0.0)];
+        let Geometry::Polygon(p) = simplify(&Geometry::Polygon(vec![vec![ring.clone()]]), 1.0) else { panic!("a polygon") };
+        let kept = &p[0][0];
+        assert_eq!(kept, &vec![Coord::new(0.0, 0.0), Coord::new(5.0, 4.9), Coord::new(10.0, 10.0), Coord::new(0.0, 0.0)]);
+        assert!(within(&ring, kept, 1.0));
+    }
+
+    /// A long sliver keeps its extremes (four vertices) and stays within the tolerance.
+    #[test]
+    fn a_sliver_ring_keeps_its_extremes() {
         let ring: Vec<Coord> = (0..=20)
             .map(|i| Coord::new(f64::from(i) * 0.5, f64::from(i) * 0.5 + 0.01))
             .chain((1..20).rev().map(|i| Coord::new(f64::from(i) * 0.5, f64::from(i) * 0.5 - 0.01)))
