@@ -735,7 +735,7 @@ fn convert(s: &mut Session, p: &Value) -> CmdResult {
     // Texts cut to their most characters, said once.
     let mut cut = 0usize;
     // Labels along lines made upright points on them (not those moved by hand), and of them those
-    // repeated along their lines (each converted once), said once each.
+    // whose class repeats along lines (each converted once), said once each.
     let (mut flattened, mut repeated) = (0usize, 0usize);
     for (on, name, kind) in
         [(by_size, "SIZE", FieldType::Double), (by_color, "COLOR", FieldType::Text), (by_angle, "ANGLE", FieldType::Double)]
@@ -813,7 +813,7 @@ fn convert(s: &mut Session, p: &Value) -> CmdResult {
     });
     let repeated_note = (repeated > 0).then(|| {
         NoticeText::format(
-            "{name}: {n} label(s) repeated along their lines converted once each",
+            "{name}: {n} label(s) whose class repeats along lines converted once each",
             [("name", ds.name.clone().into()), ("n", repeated.to_string().into())],
         )
     });
@@ -834,6 +834,8 @@ fn convert(s: &mut Session, p: &Value) -> CmdResult {
         // On its point, never round it: an annotation stays where it is (#1011).
         c.placement = LabelPlacement::Center;
         c.other_positions = false;
+        // Not along a line any more, so its distance from one goes too (#1187).
+        c.line_offset = 0.0;
         // The annotations' ids aren't the features': each moved label is already at its place.
         c.moved.clear();
         // Each class picks the points it labelled, Default too once there are others (#732):

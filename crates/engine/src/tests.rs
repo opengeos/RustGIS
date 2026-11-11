@@ -4057,14 +4057,18 @@ fn converting_labels_along_lines_says_what_they_lose() {
         "Rivers Annotation: {n} label(s) along lines made upright points at their lines' middle vertex, no longer laid along the line"
     );
     assert!(said.contains(&expected), "{said:?}");
-    assert!(said.iter().all(|t| !t.contains("repeated")), "none repeated: {said:?}");
-    // Repeated along their lines, each converts once, and says so.
+    assert!(said.iter().all(|t| !t.contains("repeats")), "none repeated: {said:?}");
+    // The annotation's labels aren't along a line, so they keep no distance from one.
+    let annotation = s.map().layer_by_name("Rivers Annotation").unwrap();
+    assert_eq!(annotation.labels.default.line_offset, 0.0);
+    // Repeated along their lines, each converts once (as many annotations), and says so.
     s.undo();
     s.run("labels.placement", &json!({"layer": "Rivers", "repeat": 144})).unwrap();
     let mark = s.notice_mark();
-    let n = s.run("labels.convert", &json!({"layer": "Rivers"})).unwrap()["annotations"].as_u64().unwrap();
+    let repeated = s.run("labels.convert", &json!({"layer": "Rivers"})).unwrap()["annotations"].as_u64().unwrap();
+    assert_eq!(repeated, n, "one annotation a label, however many repeats it drew");
     let said: Vec<String> = s.notices_since(mark).iter().map(|x| x.text.clone()).collect();
-    assert!(said.contains(&format!("Rivers Annotation: {n} label(s) repeated along their lines converted once each")), "{said:?}");
+    assert!(said.contains(&format!("Rivers Annotation: {n} label(s) whose class repeats along lines converted once each")), "{said:?}");
     let mark = s.notice_mark();
     s.run("labels.convert", &json!({"layer": "Cities"})).unwrap();
     assert!(s.notices_since(mark).iter().all(|x| !x.text.contains("along lines")), "{:?}", s.notices_since(mark));

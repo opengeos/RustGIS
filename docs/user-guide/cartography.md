@@ -620,7 +620,7 @@ Turn labels on per layer (Labeling › Labels › **Label**), then:
   A label along a line becomes an upright point at its line's middle vertex (the end of a line
   of two), which can be some way from where the label was drawn: its angle, curve, repeats and
   distance from the line are left out, and the conversion says how many, and how many of them
-  were repeated along their line (each becomes one point).
+  belong to a class that repeats along lines (each becomes one point).
 - **Label classes** label different features differently, such as large cities in larger text.
   Each class has a SQL clause choosing its features, and its own field, text symbol, placement
   and visibility range. Each class labels every feature its clause matches, the **Default**
