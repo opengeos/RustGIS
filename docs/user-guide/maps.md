@@ -477,10 +477,18 @@ borders, which are built in, or the borders as one of 31 countries sees them: Na
 Argentina to Vietnam. Choose one in **Settings › Language › Worldview**, set `RUSTGIS_WORLDVIEW`
 to its code (such as `chn`, `ind` or `usa`), or pass `--worldview` to `rustgis-cli`.
 
-A point of view isn't part of the app: it is downloaded (about 250 KB, from
-[source.coop](https://source.coop/opengeos/data/rustgis/worldviews)) when you choose it, and the desktop app and the command line keep it in
-the cache folder, so it is downloaded once; the web app downloads it again in each session.
-The map keeps the borders it shows until the download arrives, and says so if it fails. Until
+A point of view isn't part of the app: it is downloaded from
+[source.coop](https://source.coop/opengeos/data/rustgis/worldviews) when you choose it, and the
+desktop app and the command line keep it in the cache folder, so it is downloaded once; the web
+app downloads it again in each session. **Detail**, at the top of the same menu, sets how much:
+
+- **Simplified** (the default): borders at 1:110m, like the built-in ones; about 250 KB.
+- **Original**: Natural Earth's 1:10m borders with every island and territory; a 3 MB download,
+  10 MB once unpacked, so maps with it draw more slowly. With the default worldview, this
+  downloads the detailed version of the built-in borders.
+
+`rustgis-cli` takes `--worldview-detail original`. The map keeps the borders it shows until the
+download arrives, and says so if it fails. Until
 you choose one, RustGIS shows China's view when the system's time zone is mainland China's
 (such as `Asia/Shanghai`) or its first locale is `zh-CN`, downloading it the same way, and the
 default borders everywhere else. Your choice is kept for the next start. An untouched sample

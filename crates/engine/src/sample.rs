@@ -6,7 +6,9 @@ use rustgis_map::{Bookmark, Camera, ClassMethod, Marker, Ramp, Renderer, Rgba, S
 
 use crate::Project;
 
-pub use rustgis_render::sample_data::{CITIES, COUNTRIES, LAKES, RIVERS, Worldview, countries, install, set_worldview, text, worldview};
+pub use rustgis_render::sample_data::{
+    CITIES, COUNTRIES, Detail, LAKES, RIVERS, View, Worldview, countries, install, set_view, text, view, worldview,
+};
 
 /// The worldview this system calls for: `RUSTGIS_WORLDVIEW` (a worldview's code, such as `ind`)
 /// when set, else China when the system's time zone or first locale is mainland China's. Nothing
@@ -29,15 +31,21 @@ pub fn wanted_worldview(pref: &str) -> Worldview {
     Worldview::from_code(pref).unwrap_or_else(system_worldview)
 }
 
-/// Applies a worldview preference (see [`wanted_worldview`]) and returns the worldview asked
-/// for. It shows only once its countries are at hand ([`ready`]); until then the current one
-/// stays, and the caller downloads it ([`download`], [`download_blocking`]).
-pub fn apply_worldview(pref: &str) -> Worldview {
-    let w = wanted_worldview(pref);
-    if ready(w) {
-        set_worldview(w);
+/// The view the preferences ask for: the worldview's (see [`wanted_worldview`]) at the detail
+/// `detail` names (`original` or `simplified`; anything else is the default, simplified).
+pub fn wanted_view(pref: &str, detail: &str) -> View {
+    View::new(wanted_worldview(pref), Detail::from_code(detail).unwrap_or_default())
+}
+
+/// Applies the worldview preferences (see [`wanted_view`]) and returns the view asked for. It
+/// shows only once its countries are in memory; until then the current one stays, and the caller
+/// gets them ([`fetch`], [`download_blocking`]). Nothing is read from disk here.
+pub fn apply_view(pref: &str, detail: &str) -> View {
+    let v = wanted_view(pref, detail);
+    if text(v).is_some() {
+        set_view(v);
     }
-    w
+    v
 }
 
 /// Whether downloaded worldviews are kept in the cache folder and read back from it (not in the
@@ -49,40 +57,53 @@ pub fn keep_downloads(on: bool) {
     KEEP.store(on, std::sync::atomic::Ordering::Relaxed);
 }
 
-/// Where a downloaded worldview is kept: `worldviews/countries_<code>.geojson` in the cache folder
-/// (none in the browser).
-fn kept_path(w: Worldview) -> Option<std::path::PathBuf> {
-    if w.built_in() || !KEEP.load(std::sync::atomic::Ordering::Relaxed) {
+/// Where a downloaded view is kept: `worldviews/countries_<code>.geojson` (simplified) or
+/// `worldviews/original/countries_<code>.geojson` in the cache folder (none in the browser).
+fn kept_path(v: View) -> Option<std::path::PathBuf> {
+    if v.built_in() || !KEEP.load(std::sync::atomic::Ordering::Relaxed) {
         return None;
     }
-    rustgis_data::dirs::cache_dir().map(|d| d.join("worldviews").join(format!("countries_{}.geojson", w.code())))
+    rustgis_data::dirs::cache_dir().map(|d| d.join("worldviews").join(v.file()))
 }
 
-/// Whether a worldview's countries are at hand: built in, downloaded in this run, or kept from an
-/// earlier download (read now). A kept file that isn't usable is deleted, so it's downloaded again.
-pub fn ready(w: Worldview) -> bool {
-    if text(w).is_some() {
-        return true;
+/// Reads a view kept from an earlier download into memory. A kept file that isn't usable (too
+/// big, not text, not countries) is deleted, so it's downloaded again.
+fn load_kept(v: View) -> bool {
+    let Some(path) = kept_path(v) else { return false };
+    let Ok(meta) = std::fs::metadata(&path) else { return false };
+    let usable = meta.len() <= v.max_bytes() as u64
+        && std::fs::read(&path).ok().and_then(|b| String::from_utf8(b).ok()).is_some_and(|t| install(v, t).is_ok());
+    if !usable {
+        log::warn!("{}: not a usable worldview, removed", path.display());
+        let _ = std::fs::remove_file(&path);
     }
-    let Some(path) = kept_path(w) else { return false };
-    let Ok(bytes) = std::fs::read(&path) else { return false };
-    if bytes.len() <= rustgis_render::sample_data::MAX_WORLDVIEW_BYTES
-        && let Ok(t) = String::from_utf8(bytes)
-        && install(w, t).is_ok()
-    {
-        return true;
-    }
-    log::warn!("{}: not a usable worldview, removed", path.display());
-    let _ = std::fs::remove_file(&path);
-    false
+    usable
 }
 
-/// Takes a worldview's downloaded countries: checks and keeps them for this run, and in the cache
+/// Whether a view's countries are at hand: built in, in memory, or kept from an earlier download
+/// (read now, so callers on the UI thread use [`fetch`] instead).
+pub fn ready(v: View) -> bool {
+    text(v).is_some() || load_kept(v)
+}
+
+/// Takes a view's downloaded countries: checks and keeps them for this run, and in the cache
 /// folder for the next. Not keeping the file only costs a download next time, so it is logged.
-pub fn accept(w: Worldview, bytes: Vec<u8>) -> Result<(), String> {
+pub fn accept(v: View, bytes: Vec<u8>) -> Result<(), String> {
+    let w = v.worldview;
+    // The original details are published gzipped; inflating stops at the size allowed.
+    let bytes = if bytes.starts_with(&[0x1f, 0x8b]) {
+        crate::render::rustgis_tiles::mvt::gunzip_within(&bytes, v.max_bytes()).map_err(|e| {
+            format!("the {} worldview's countries can't be unpacked ({e}): more than {} bytes, or damaged", w.name(), v.max_bytes())
+        })?
+    } else {
+        bytes
+    };
+    if bytes.len() > v.max_bytes() {
+        return Err(format!("the {} worldview's countries are {} bytes, more than the {} allowed", w.name(), bytes.len(), v.max_bytes()));
+    }
     let text = String::from_utf8(bytes).map_err(|_| format!("the {} worldview's countries aren't UTF-8 text", w.name()))?;
-    let copy = kept_path(w).map(|p| (p, text.clone()));
-    install(w, text)?;
+    let copy = kept_path(v).map(|p| (p, text.clone()));
+    install(v, text)?;
     if let Some((path, text)) = copy {
         let saved =
             path.parent().map_or(Ok(()), std::fs::create_dir_all).and_then(|_| rustgis_data::io::write_atomic(&path, text.as_bytes()));
@@ -93,36 +114,76 @@ pub fn accept(w: Worldview, bytes: Vec<u8>) -> Result<(), String> {
     Ok(())
 }
 
-/// Downloads a worldview's countries off the calling thread (natively) or with the browser's
-/// fetch, calling `done` with the bytes for [`accept`].
-pub fn download(w: Worldview, done: Box<dyn FnOnce(Result<Vec<u8>, String>) + Send>) {
-    match w.url() {
-        Some(url) => crate::render::rustgis_tiles::cache::download_limited(&url, rustgis_render::sample_data::MAX_WORLDVIEW_BYTES, done),
-        None => done(Err("the default worldview is built in".into())),
+/// How long a worldview's download may take (an original one is about 10 MB).
+#[cfg(not(target_arch = "wasm32"))]
+const DOWNLOAD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
+
+/// Gets a view's countries into memory and calls `done` with the outcome: natively on a thread of
+/// its own, which reads the kept copy or downloads, checks the file and builds its world outline,
+/// so an original (1:10m) view never holds the window; in the browser with its fetch, checking
+/// the file when it lands.
+pub fn fetch(v: View, done: Box<dyn FnOnce(Result<(), String>) + Send>) {
+    let Some(url) = v.url() else {
+        return done(Ok(()));
+    };
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let work = move || {
+            let r = if load_kept(v) {
+                Ok(())
+            } else {
+                crate::render::rustgis_tiles::cache::download_blocking_within(&url, v.max_bytes(), DOWNLOAD_TIMEOUT)
+                    .map_err(|e| format!("couldn't download the {} worldview: {e}", v.worldview.name()))
+                    .and_then(|bytes| accept(v, bytes))
+            };
+            if r.is_ok() {
+                rustgis_render::prepare_world(v);
+            }
+            r
+        };
+        // A thread the system refuses costs the window's time, not the worldview.
+        let shared = std::sync::Arc::new(std::sync::Mutex::new(Some((work, done))));
+        let mine = shared.clone();
+        let spawned = std::thread::Builder::new().name("worldview".into()).spawn(move || {
+            if let Some((work, done)) = mine.lock().ok().and_then(|mut g| g.take()) {
+                done(work());
+            }
+        });
+        if spawned.is_err()
+            && let Some((work, done)) = shared.lock().ok().and_then(|mut g| g.take())
+        {
+            done(work());
+        }
     }
+    #[cfg(target_arch = "wasm32")]
+    crate::render::rustgis_tiles::cache::download_limited(
+        &url,
+        v.max_bytes(),
+        Box::new(move |r| done(r.and_then(|bytes| accept(v, bytes)))),
+    );
 }
 
-/// Makes a worldview's countries ready, downloading them and waiting if they aren't at hand (the
+/// Makes a view's countries ready, downloading them and waiting if they aren't at hand (the
 /// command line's `--worldview`).
 #[cfg(not(target_arch = "wasm32"))]
-pub fn download_blocking(w: Worldview) -> Result<(), String> {
-    if ready(w) {
+pub fn download_blocking(v: View) -> Result<(), String> {
+    if ready(v) {
         return Ok(());
     }
-    let url = w.url().ok_or("the default worldview is built in")?;
-    let bytes = crate::render::rustgis_tiles::cache::download_blocking_limited(&url, rustgis_render::sample_data::MAX_WORLDVIEW_BYTES)
-        .map_err(|e| format!("couldn't download the {} worldview: {e}", w.name()))?;
-    accept(w, bytes)
+    let url = v.url().ok_or("the default worldview is built in")?;
+    let bytes = crate::render::rustgis_tiles::cache::download_blocking_within(&url, v.max_bytes(), DOWNLOAD_TIMEOUT)
+        .map_err(|e| format!("couldn't download the {} worldview: {e}", v.worldview.name()))?;
+    accept(v, bytes)
 }
 
 fn cam(lon: f64, lat: f64, res: f64) -> Camera {
     Camera { center: lonlat_to_merc(Coord::new(lon, lat)), res, bearing: 0.0, pitch: 0.0 }
 }
 
-/// Swaps an untouched sample project's countries from worldview `from` to `to`: only in a project
+/// Swaps an untouched sample project's countries from view `from` to `to`: only in a project
 /// that is unsaved, unchanged and has nothing to undo, and only a layer named `Countries` holding
 /// exactly the built-in countries of `from`. Returns whether a layer was swapped.
-pub fn swap_countries(s: &mut crate::Session, from: Worldview, to: Worldview) -> bool {
+pub fn swap_countries(s: &mut crate::Session, from: View, to: View) -> bool {
     if from == to || s.dirty() || s.path.is_some() || s.can_undo() {
         return false;
     }

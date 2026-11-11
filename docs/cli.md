@@ -31,7 +31,10 @@ world outline, for `render`, `run`, `ask` and `mcp`: the default borders, or a
 other than the default is downloaded once and kept in the cache folder; if the download fails,
 a named one is an error. `auto` follows `RUSTGIS_WORLDVIEW`, else the system time zone and
 locale (China's view in mainland China, falling back to the default borders with a warning when
-it can't be downloaded).
+it can't be downloaded). `--worldview-detail simplified|original` chooses how detailed: the
+simplified borders (the default, about 250 KB) or Natural Earth's 1:10m ones (a 3 MB download),
+which `--worldview default` also downloads. The model, sign-in and account options of `ask` and
+`mcp --attach` download nothing.
 
 `--threads N` sets the most threads one piece of work uses (1 to 1024, never more than the
 cores), as [`gp.threads`](user-guide/analysis.md#analysis-workflows) sets it. With `mcp --attach` the

@@ -3,7 +3,7 @@
 //! it is chosen (or, for China, when the system calls for it), off the frame through the tile
 //! cache's downloads (a thread natively, fetch on the web), and kept in the cache folder.
 
-use rustgis_engine::sample::{self, Worldview};
+use rustgis_engine::sample::{self, View, Worldview};
 
 use crate::{RustGisApp, Slot, i18n};
 
@@ -46,10 +46,17 @@ pub fn name(w: Worldview) -> &'static str {
     }
 }
 
-/// The download under way: the worldview and where its answer lands.
+/// The download under way: the view and where its outcome lands.
 pub struct Fetch {
-    pub wanted: Worldview,
-    slot: Slot<Result<Vec<u8>, String>>,
+    pub wanted: View,
+    landing: Landing,
+}
+
+/// Where a download lands: the bytes, from the services' fetch (checked here), or the outcome of
+/// [`sample::fetch`], which checked them on its own thread.
+enum Landing {
+    Bytes(Slot<Result<Vec<u8>, String>>),
+    Done(Slot<Result<(), String>>),
 }
 
 /// The worldview preference, with `auto` as the default one in tests (they don't depend on the
@@ -58,13 +65,18 @@ fn pref(app: &RustGisApp) -> &str {
     if cfg!(test) && app.ui.worldview == i18n::AUTO { "default" } else { app.ui.worldview.as_str() }
 }
 
-/// Applies the worldview preference: shows it if its countries are at hand, else downloads them
-/// and keeps the current borders until they arrive. An untouched sample project's countries
-/// follow.
+/// The view the preferences ask for.
+pub fn wanted(app: &RustGisApp) -> View {
+    sample::wanted_view(pref(app), &app.ui.worldview_detail)
+}
+
+/// Applies the worldview preferences: shows the view if its countries are in memory, else gets
+/// them (the kept copy or a download) and keeps the current borders until they arrive. An
+/// untouched sample project's countries follow.
 pub fn apply(app: &mut RustGisApp) {
-    let before = sample::worldview();
-    let wanted = sample::apply_worldview(pref(app));
-    let after = sample::worldview();
+    let before = sample::view();
+    let wanted = sample::apply_view(pref(app), &app.ui.worldview_detail);
+    let after = sample::view();
     if after != before {
         sample::swap_countries(&mut app.session, before, after);
         app.map.invalidate();
@@ -76,39 +88,48 @@ pub fn apply(app: &mut RustGisApp) {
     }
 }
 
-/// Starts downloading a worldview's countries.
-fn start(app: &mut RustGisApp, wanted: Worldview) {
-    let slot: Slot<Result<Vec<u8>, String>> = Slot::default();
-    match (&app.services.fetch, wanted.url()) {
-        (Some(fetch), Some(url)) => fetch(&url, slot.clone()),
-        _ => {
-            let land = slot.clone();
-            sample::download(wanted, Box::new(move |r| *land.lock().unwrap_or_else(|e| e.into_inner()) = Some(r)));
+/// Starts getting a view's countries.
+fn start(app: &mut RustGisApp, wanted: View) {
+    let landing = match (&app.services.fetch, wanted.url()) {
+        (Some(fetch), Some(url)) => {
+            let slot = Slot::default();
+            fetch(&url, slot.clone());
+            Landing::Bytes(slot)
         }
-    }
-    app.ui.worldview_fetch = Some(Fetch { wanted, slot });
+        _ => {
+            let slot: Slot<Result<(), String>> = Slot::default();
+            let land = slot.clone();
+            sample::fetch(wanted, Box::new(move |r| *land.lock().unwrap_or_else(|e| e.into_inner()) = Some(r)));
+            Landing::Done(slot)
+        }
+    };
+    app.ui.worldview_fetch = Some(Fetch { wanted, landing });
 }
 
 /// The worldview being downloaded, if any (the ribbon says so).
 pub fn downloading(app: &RustGisApp) -> Option<Worldview> {
-    app.ui.worldview_fetch.as_ref().map(|f| f.wanted)
+    app.ui.worldview_fetch.as_ref().map(|f| f.wanted.worldview)
 }
 
-/// Lands a download: shows the worldview if it is still the one asked for, or says why it can't.
+/// Lands a download: shows the view if it is still the one asked for, or says why it can't.
 pub fn poll(app: &mut RustGisApp, ctx: &egui::Context) {
     let Some(fetch) = &app.ui.worldview_fetch else { return };
-    let Some(r) = fetch.slot.lock().unwrap_or_else(|e| e.into_inner()).take() else {
+    let wanted = fetch.wanted;
+    let landed = match &fetch.landing {
+        Landing::Bytes(slot) => slot.lock().unwrap_or_else(|e| e.into_inner()).take().map(|r| r.and_then(|b| sample::accept(wanted, b))),
+        Landing::Done(slot) => slot.lock().unwrap_or_else(|e| e.into_inner()).take(),
+    };
+    let Some(r) = landed else {
         ctx.request_repaint_after(std::time::Duration::from_millis(100));
         return;
     };
-    let wanted = fetch.wanted;
     app.ui.worldview_fetch = None;
-    match r.and_then(|bytes| sample::accept(wanted, bytes)) {
+    match r {
         Ok(()) => apply(app),
         Err(e) => {
             let text = i18n::fmt(
                 "Couldn't download the {view} worldview ({error}); the map keeps the {current} borders",
-                &[("view", name(wanted)), ("error", &e), ("current", name(sample::worldview()))],
+                &[("view", name(wanted.worldview)), ("error", &e), ("current", name(sample::worldview()))],
             );
             app.session.notify(text, true);
         }
@@ -144,12 +165,13 @@ mod tests {
             log.borrow_mut().push(url.to_string());
             Ok(sample::COUNTRIES.as_bytes().to_vec())
         });
-        let nld = Worldview::from_code("nld").unwrap();
+        let netherlands = Worldview::from_code("nld").unwrap();
+        let nld = View::new(netherlands, sample::Detail::Simplified);
         assert!(asked.borrow().is_empty(), "nothing is downloaded before a worldview is chosen");
         assert!(sample::text(nld).is_none());
         app.run("ui.worldview", json!({"worldview": "Netherlands"})).unwrap();
         assert_eq!(app.ui.worldview, "nld");
-        assert_eq!(downloading(&app), Some(nld));
+        assert_eq!(downloading(&app), Some(netherlands));
         assert_eq!(*asked.borrow(), ["https://data.source.coop/opengeos/data/rustgis/worldviews/countries_nld.geojson"]);
         let mark = app.session.notice_mark();
         poll(&mut app, &egui::Context::default());
@@ -163,9 +185,23 @@ mod tests {
         // Nor does the built-in default.
         app.run("ui.worldview", json!({"worldview": "default"})).unwrap();
         assert_eq!(asked.borrow().len(), 1);
+        // The original detail is a download of its own, kept as a setting.
+        app.run("ui.worldview", json!({"worldview": "nld", "detail": "original"})).unwrap();
+        assert_eq!(app.ui.worldview_detail, "original");
+        assert_eq!(
+            asked.borrow().last().map(String::as_str),
+            Some("https://data.source.coop/opengeos/data/rustgis/worldviews/original/countries_nld.geojson.gz")
+        );
+        poll(&mut app, &egui::Context::default());
+        assert!(sample::text(View::new(netherlands, sample::Detail::Original)).is_some());
+        // Back to simplified: already in memory, nothing downloaded.
+        app.run("ui.worldview", json!({"detail": "simplified"})).unwrap();
+        assert_eq!(asked.borrow().len(), 2);
+        assert_eq!(app.ui.worldview, "nld");
+        assert!(app.run("ui.worldview", json!({"detail": "detailed"})).is_err());
         assert!(app.run("ui.worldview", json!({"worldview": "atlantis"})).is_err());
         assert!(app.run("ui.worldview", json!({"worldview": 7})).is_err());
-        assert_eq!(app.ui.worldview, "default");
+        assert_eq!((app.ui.worldview.as_str(), app.ui.worldview_detail.as_str()), ("nld", "simplified"));
     }
 
     /// A download that fails, or isn't countries, says so and keeps the borders shown.
@@ -173,13 +209,13 @@ mod tests {
     fn a_failed_worldview_download_is_told() {
         for (code, answer) in [("pol", Err("HTTP 404".to_string())), ("prt", Ok(b"<html>not found</html>".to_vec()))] {
             let mut app = app_fetching(move |_| answer.clone());
-            let w = Worldview::from_code(code).unwrap();
+            let w = View::new(Worldview::from_code(code).unwrap(), sample::Detail::Simplified);
             app.run("ui.worldview", json!({"worldview": code})).unwrap();
             let mark = app.session.notice_mark();
             poll(&mut app, &egui::Context::default());
             let told: Vec<_> = app.session.notices_since(mark).iter().map(|n| (n.text.clone(), n.error)).collect();
             assert_eq!(told.len(), 1, "{code}: {told:?}");
-            assert!(told[0].1 && told[0].0.contains(w.name()) && told[0].0.contains("worldview"), "{told:?}");
+            assert!(told[0].1 && told[0].0.contains(w.worldview.name()) && told[0].0.contains("worldview"), "{told:?}");
             assert!(sample::text(w).is_none());
             assert_eq!(downloading(&app), None);
         }

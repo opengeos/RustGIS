@@ -47,7 +47,7 @@ use serde_json::{Map, Value, json};
 
 fn usage() -> ExitCode {
     eprintln!(
-        "usage:\n  rustgis-cli commands | tools\n  rustgis-cli plugins [install <file|folder> | uninstall <id> | enable <id> | disable <id> | browse | get <id> | prepare <id>] [--registry URL]\n  rustgis-cli skills [add <SKILL.md|folder|.zip> | remove <name> | enable <name> | disable <name>]\n  rustgis-cli info <data>\n  rustgis-cli logo <out.png|out.ico|out.bmp> [--size N] [--canvas WxH --at X,Y (.bmp only)]\n  rustgis-cli render <data|project> <out.png> [--basemap NAME] [--tiles URL] [--width N] [--height N] [--dpi N] [--worldview auto|default|CODE]\n  rustgis-cli run [--sample] [--project P] [--data F]… --cmd 'id={{json}}'… [--save P] [--worldview auto|default|CODE]\n  rustgis-cli ask [--sample] [--project P] [--data F]… \"request\" [--provider P] [--model M] [--base-url URL] [--yes] [--save P]\n  rustgis-cli ask --models [--provider P]\n  rustgis-cli ask --login [--another-account] [--account CLIENT_ID] | --logout\n  rustgis-cli ask --accounts | --account CLIENT_ID | --remove-account CLIENT_ID\n  common options: --use-saved-secrets (use the connections, passwords, keys, ChatGPT sign-in and Earthdata Login token the RustGIS app saved; reads the system keychain), --threads N (the most threads one piece of work uses, 1-1024; default: the cores, up to 16)\n  rustgis-cli mcp [--sample] [--project P] [--data F]… [--yes] [--attach [PORT] [--token-file FILE] [--timeout SECONDS (5-600)]]\n  rustgis-cli mcp-register [--client claude] [--name NAME] [--port PORT]"
+        "usage:\n  rustgis-cli commands | tools\n  rustgis-cli plugins [install <file|folder> | uninstall <id> | enable <id> | disable <id> | browse | get <id> | prepare <id>] [--registry URL]\n  rustgis-cli skills [add <SKILL.md|folder|.zip> | remove <name> | enable <name> | disable <name>]\n  rustgis-cli info <data>\n  rustgis-cli logo <out.png|out.ico|out.bmp> [--size N] [--canvas WxH --at X,Y (.bmp only)]\n  rustgis-cli render <data|project> <out.png> [--basemap NAME] [--tiles URL] [--width N] [--height N] [--dpi N] [--worldview auto|default|CODE] [--worldview-detail simplified|original]\n  rustgis-cli run [--sample] [--project P] [--data F]… --cmd 'id={{json}}'… [--save P] [--worldview auto|default|CODE] [--worldview-detail simplified|original]\n  rustgis-cli ask [--sample] [--project P] [--data F]… \"request\" [--provider P] [--model M] [--base-url URL] [--yes] [--save P]\n  rustgis-cli ask --models [--provider P]\n  rustgis-cli ask --login [--another-account] [--account CLIENT_ID] | --logout\n  rustgis-cli ask --accounts | --account CLIENT_ID | --remove-account CLIENT_ID\n  common options: --use-saved-secrets (use the connections, passwords, keys, ChatGPT sign-in and Earthdata Login token the RustGIS app saved; reads the system keychain), --threads N (the most threads one piece of work uses, 1-1024; default: the cores, up to 16)\n  rustgis-cli mcp [--sample] [--project P] [--data F]… [--yes] [--attach [PORT] [--token-file FILE] [--timeout SECONDS (5-600)]]\n  rustgis-cli mcp-register [--client claude] [--name NAME] [--port PORT]"
     );
     ExitCode::from(2)
 }
@@ -263,6 +263,7 @@ fn ask(s: &mut Session, args: &[String], saved: Option<&Saved>, env: &Environmen
         "--plugin",
         "--registry",
         "--worldview",
+        "--worldview-detail",
         "--threads",
         "--account",
         "--remove-account",
@@ -716,29 +717,39 @@ fn cli() -> ExitCode {
             }
         }
     }
-    // Whose borders the built-in countries and world outline show: the system's by default. A
-    // worldview other than the default is downloaded (once: it is kept in the cache folder) by
-    // the subcommands that draw or open maps.
+    // Whose borders the built-in countries and world outline show: the system's by default, at
+    // the simplified detail unless `--worldview-detail original`. A view other than the built-in
+    // one is downloaded (once: it is kept in the cache folder) by the subcommands that draw or
+    // open maps.
     let worldview = opt(&args, "--worldview").unwrap_or("auto");
     if worldview != "auto" && rustgis_engine::sample::Worldview::from_code(worldview).is_none() {
         eprintln!("rustgis-cli: --worldview {worldview}: expected auto, default or a worldview's code (such as chn, ind or usa)");
         return ExitCode::from(2);
     }
-    let wanted = rustgis_engine::sample::wanted_worldview(worldview);
-    // `mcp --attach` relays to the running app, which shows its own worldview.
+    let detail = opt(&args, "--worldview-detail").unwrap_or("simplified");
+    if rustgis_engine::sample::Detail::from_code(detail).is_none() {
+        eprintln!("rustgis-cli: --worldview-detail {detail}: expected simplified or original");
+        return ExitCode::from(2);
+    }
+    let wanted = rustgis_engine::sample::wanted_view(worldview, detail);
+    // `mcp --attach` relays to the running app, which shows its own worldview; `ask`'s model,
+    // sign-in and account options draw nothing.
     let attaching = cmd == "mcp" && args.iter().any(|a| a == "--attach");
+    let ask_setup = cmd == "ask"
+        && args.iter().any(|a| ["--models", "--login", "--logout", "--accounts", "--account", "--remove-account"].contains(&a.as_str()));
     if matches!(cmd, "render" | "run" | "ask" | "mcp")
         && !attaching
+        && !ask_setup
         && let Err(e) = rustgis_engine::sample::download_blocking(wanted)
     {
-        // Asked for by name, it is needed; the system's choice falls back to the default borders.
-        if worldview != "auto" {
+        // Asked for by name, it is needed; the system's choice falls back to the built-in borders.
+        if worldview != "auto" || opt(&args, "--worldview-detail").is_some() {
             eprintln!("rustgis-cli: --worldview {worldview}: {e}");
             return ExitCode::FAILURE;
         }
         eprintln!("rustgis-cli: warning: {e}; the map shows the default borders");
     }
-    rustgis_engine::sample::apply_worldview(worldview);
+    rustgis_engine::sample::apply_view(worldview, detail);
     // `--threads N` (or `--threads=N`): the most threads one piece of work uses (#1562), as
     // `gp.threads` sets it.
     let joined = args.iter().find_map(|a| a.strip_prefix("--threads="));

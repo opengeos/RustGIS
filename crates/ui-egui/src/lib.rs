@@ -670,6 +670,8 @@ pub struct UiState {
     /// (such as `default`, `chn` or `ind`), or `auto` until one is chosen (China's on a system in
     /// mainland China, else the default).
     pub worldview: String,
+    /// How detailed a downloaded worldview is: `simplified` (the default) or `original`.
+    pub worldview_detail: String,
     /// The worldview being downloaded.
     pub worldview_fetch: Option<worldviewui::Fetch>,
     /// Start-up preference: what RustGIS opens with.
@@ -915,6 +917,7 @@ impl Default for UiState {
             dark_follows_system: true,
             language: i18n::AUTO.into(),
             worldview: i18n::AUTO.into(),
+            worldview_detail: rustgis_engine::sample::Detail::default().code().into(),
             worldview_fetch: None,
             start_with: StartWith::Sample,
             ask_layers: true,
@@ -1355,15 +1358,33 @@ impl RustGisApp {
         // After the language, so a notice about the saved value is in it.
         threadsui::load(&mut self);
         // A stored value that is neither `auto` nor a known worldview means `auto`; `china`, as
-        // earlier versions saved it, is China's view.
-        if let Some(w) = self
-            .services
-            .load_pref
-            .as_ref()
-            .and_then(|load| load("worldview"))
-            .and_then(|w| rustgis_engine::sample::Worldview::from_code(&w))
-        {
-            self.ui.worldview = w.code().to_string();
+        // earlier versions saved it, is China's view. One this version doesn't know (from a newer
+        // RustGIS) is said, and stays saved until another is chosen.
+        let load = |key: &str| self.services.load_pref.as_ref().and_then(|load| load(key)).map(|v| v.trim().to_ascii_lowercase());
+        let (stored, stored_detail) = (load("worldview"), load("worldview_detail"));
+        if let Some(code) = stored.filter(|c| c != i18n::AUTO) {
+            match rustgis_engine::sample::Worldview::from_code(&code) {
+                Some(w) => self.ui.worldview = w.code().to_string(),
+                None => self.session.notify(
+                    i18n::fmt(
+                        "The saved worldview '{code}' isn't one this version knows, so it is ignored until you choose one",
+                        &[("code", &code)],
+                    ),
+                    false,
+                ),
+            }
+        }
+        if let Some(code) = stored_detail {
+            match rustgis_engine::sample::Detail::from_code(&code) {
+                Some(d) => self.ui.worldview_detail = d.code().to_string(),
+                None => self.session.notify(
+                    i18n::fmt(
+                        "The saved worldview detail '{code}' isn't one this version knows; simplified borders are used",
+                        &[("code", &code)],
+                    ),
+                    false,
+                ),
+            }
         }
         self.apply_worldview();
         self.ui.start_with =
@@ -1872,7 +1893,7 @@ impl RustGisApp {
     /// The sample "World Atlas" project.
     pub fn with_sample() -> Self {
         // Tests don't depend on the machine's time zone and locale.
-        rustgis_engine::sample::apply_worldview(if cfg!(test) { "default" } else { i18n::AUTO });
+        rustgis_engine::sample::apply_view(if cfg!(test) { "default" } else { i18n::AUTO }, "");
         let mut s = Session::new(Project::default());
         let _ = s.run("project.sample", &Value::Null);
         s.mark_saved();
@@ -2825,20 +2846,38 @@ impl RustGisApp {
                 self.map.invalidate();
             }
             "ui.worldview" => {
+                // `detail` alone keeps the worldview; no parameters at all mean `auto`.
                 let code = match p.get("worldview") {
-                    None | Some(Value::Null) => i18n::AUTO.to_string(),
-                    Some(Value::String(c)) => c.trim().to_ascii_lowercase(),
+                    None if p.get("detail").is_some() => None,
+                    None | Some(Value::Null) => Some(i18n::AUTO.to_string()),
+                    Some(Value::String(c)) => Some(c.trim().to_ascii_lowercase()),
                     Some(other) => return Err(format!("worldview must be a worldview's code, not {other}")),
                 };
-                // Kept as the worldview's own code, so `China` and `chn` are saved alike.
-                self.ui.worldview = if code == i18n::AUTO {
-                    code
-                } else {
-                    let w = rustgis_engine::sample::Worldview::from_code(&code).ok_or_else(|| format!("unknown worldview '{code}'"))?;
-                    w.code().to_string()
+                let detail = match p.get("detail") {
+                    None | Some(Value::Null) => None,
+                    Some(Value::String(d)) => Some(
+                        rustgis_engine::sample::Detail::from_code(d)
+                            .ok_or_else(|| format!("unknown worldview detail '{d}': original or simplified"))?,
+                    ),
+                    Some(other) => return Err(format!("detail must be original or simplified, not {other}")),
                 };
-                if let Some(save) = &self.services.save_pref {
-                    save("worldview", &self.ui.worldview);
+                if let Some(code) = code {
+                    // Kept as the worldview's own code, so `China` and `chn` are saved alike.
+                    self.ui.worldview = if code == i18n::AUTO {
+                        code
+                    } else {
+                        let w = rustgis_engine::sample::Worldview::from_code(&code).ok_or_else(|| format!("unknown worldview '{code}'"))?;
+                        w.code().to_string()
+                    };
+                    if let Some(save) = &self.services.save_pref {
+                        save("worldview", &self.ui.worldview);
+                    }
+                }
+                if let Some(d) = detail {
+                    self.ui.worldview_detail = d.code().to_string();
+                    if let Some(save) = &self.services.save_pref {
+                        save("worldview_detail", &self.ui.worldview_detail);
+                    }
                 }
                 self.apply_worldview();
             }
