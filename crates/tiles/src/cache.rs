@@ -4244,11 +4244,12 @@ mod tests {
         let _turn = crate::cache::turn();
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
-        // Set once the test has looked at the progress mid-download. The server holds the
+        // Sent once the test has looked at the progress mid-download. The server holds the
         // response open until then, so the progress is read while bytes are still to come, and
-        // then sends the rest at once: no sleeps for a busy runner to stretch (macOS CI).
-        let looked = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let done_looking = looked.clone();
+        // then sends the rest at once: no sleeps for a busy runner to stretch (macOS CI). A
+        // failed assertion drops the sender, and the server closes the response at once rather
+        // than holding a download in flight for the tests after this one.
+        let (release, released) = std::sync::mpsc::channel::<()>();
         std::thread::spawn(move || {
             for stream in listener.incoming() {
                 let Ok(mut stream) = stream else { return };
@@ -4259,15 +4260,14 @@ mod tests {
                     continue;
                 }
                 // Chunked, so no length: 10 kB, past the 5 kB the test waits for, then a pause
-                // until the test has looked (bounded, so a failed test doesn't hang the server).
+                // until the test has looked.
                 let chunk = format!("3e8\r\n{}\r\n", "x".repeat(1000));
                 let head = format!("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n{}", chunk.repeat(10));
                 if stream.write_all(head.as_bytes()).is_err() {
                     return;
                 }
-                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-                while !looked.load(std::sync::atomic::Ordering::SeqCst) && std::time::Instant::now() < deadline {
-                    std::thread::sleep(std::time::Duration::from_millis(5));
+                if released.recv_timeout(std::time::Duration::from_secs(30)).is_err() {
+                    return;
                 }
                 if stream.write_all(chunk.repeat(190).as_bytes()).is_err() {
                     return;
@@ -4292,7 +4292,7 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
         assert_eq!(progress.fraction(), None, "{progress:?}");
-        done_looking.store(true, std::sync::atomic::Ordering::SeqCst);
+        let _ = release.send(());
         assert!(rx.recv_timeout(std::time::Duration::from_secs(20)).unwrap().is_ok());
     }
 
