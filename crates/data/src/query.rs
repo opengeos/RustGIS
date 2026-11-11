@@ -744,6 +744,10 @@ impl Parser<'_> {
                 | Func::Clamp
                 | Func::ScaleLinear
                 | Func::ScaleExp
+                | Func::ToInt
+                | Func::ToReal
+                | Func::ColorRgb
+                | Func::ColorRgba
         ) && let Some(d) = args.iter().find_map(|a| self.date_field(a))
         {
             return Err(format!("'{}' holds dates, and {fname} on dates isn't supported yet", d.name));

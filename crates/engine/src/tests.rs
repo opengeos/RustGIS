@@ -555,7 +555,7 @@ fn date_fields_work_from_adding_to_saving() {
     let mark = s.notice_mark();
     s.run("edit.paste", &json!({"layer": "Moments"})).unwrap();
     assert!(
-        s.notices_since(mark).iter().any(|n| n.text == "Paste: 'seen' holds dates, so 1 feature kept only its day"),
+        s.notices_since(mark).iter().any(|n| n.text == "Paste: 'seen' holds dates, so 1 result kept only its day"),
         "{:?}",
         s.notices_since(mark)
     );

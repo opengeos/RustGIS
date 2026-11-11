@@ -578,6 +578,9 @@ fn where_clauses_compare_dates() {
         assert_eq!(parse(e, &d).err().unwrap_or_default(), "'issued' holds dates, and arithmetic on dates isn't supported yet", "{e}");
     }
     assert_eq!(parse("abs(issued)", &d).err().unwrap_or_default(), "'issued' holds dates, and abs on dates isn't supported yet");
+    for e in ["to_int(issued)", "to_real(ts)", "color_rgb(issued, 0, 0)"] {
+        assert!(parse(e, &d).err().unwrap_or_default().contains("on dates isn't supported yet"), "{e}");
+    }
     assert!(parse("coalesce(issued, '2026-01-01')", &d).is_ok(), "a date passed through is no arithmetic");
     assert!(parse("-ts", &d).is_err());
     assert_eq!(value(&parse("issued || ''", &d).unwrap(), &d, 0, &Env::default()), Value::Text("2025-12-31".into()));
