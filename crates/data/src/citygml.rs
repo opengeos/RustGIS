@@ -1720,8 +1720,9 @@ impl Reading {
         }
         // A solid's exterior given by a link to what is itself only a link: its cavities wait for
         // the end of that chain, so a chain that ends in nothing leaves the solid out with them, as
-        // an exterior link to nothing does.
-        if !read && !then.is_empty() && only_link(&target) {
+        // an exterior link to nothing does. So too when the link was read already at this level
+        // (a surface holds it): that read was the link's, not the shell's.
+        if !then.is_empty() && only_link(&target) {
             match targets.end_of(id) {
                 Some(end) => links.push(Pending { to: To::Href(end), then, dim: at_link, at, solid, place: None }),
                 None => self.unread(Unread::Missing),

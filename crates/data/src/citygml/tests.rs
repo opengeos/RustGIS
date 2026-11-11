@@ -2029,29 +2029,57 @@ fn children_past_what_declarations_may_take_are_read() {
 }
 
 /// A solid whose exterior links to what is itself only a link keeps its cavities for the end of
-/// that chain: read with the shell it ends at, left out with the solid when it ends in nothing.
+/// that chain: read with the shell it ends at, left out with the solid when it ends in nothing,
+/// whether that link stands at another level of detail or at the solid's own (read already there).
 #[test]
 fn cavities_wait_for_the_end_of_an_exterior_chain() {
     let cavity = format!(
         "<gml:interior><gml:CompositeSurface><gml:surfaceMember>{}</gml:surfaceMember></gml:CompositeSurface></gml:interior>",
         polygon("c", &square(2.0, 2.0, 2.0, 0.0))
     );
-    let model = |end: &str| {
+    let model = |end: &str, alias_lod: u8| {
+        let alias = format!(r##"<gml:surfaceMember><gml:CompositeSurface gml:id="l" xlink:href="#{end}"/></gml:surfaceMember>"##);
+        let (at_1, at_2) = if alias_lod == 1 { (alias.as_str(), "") } else { ("", alias.as_str()) };
         let inner = format!(
-            r##"<bldg:lod1MultiSurface><gml:MultiSurface><gml:surfaceMember><gml:CompositeSurface gml:id="s"><gml:surfaceMember>{}</gml:surfaceMember></gml:CompositeSurface></gml:surfaceMember><gml:surfaceMember><gml:CompositeSurface gml:id="l" xlink:href="#{end}"/></gml:surfaceMember></gml:MultiSurface></bldg:lod1MultiSurface>
+            r##"<bldg:lod1MultiSurface><gml:MultiSurface><gml:surfaceMember><gml:CompositeSurface gml:id="s"><gml:surfaceMember>{}</gml:surfaceMember></gml:CompositeSurface></gml:surfaceMember>{at_1}</gml:MultiSurface></bldg:lod1MultiSurface>
             <bldg:lod2Solid><gml:Solid><gml:exterior xlink:href="#l"/>{cavity}</gml:Solid></bldg:lod2Solid>"##,
             polygon("a", &square(0.0, 0.0, 10.0, 0.0))
         );
+        let inner = if at_2.is_empty() {
+            inner
+        } else {
+            format!("{inner}<bldg:lod2MultiSurface><gml:MultiSurface>{at_2}</gml:MultiSurface></bldg:lod2MultiSurface>")
+        };
         read("model.gml", &lonlat(&building("b", &inner)), None).unwrap()
     };
     let lod = |out: &[(Dataset, ReadReport)]| value(only(out), 0, "lod");
-    // Ends at a shell: the solid is read, at LoD 2.
-    let out = model("s");
-    assert_eq!(lod(&out), Value::Text("2".into()), "{:?}", messages_of(&out));
-    // Ends in nothing: the solid is left out with its cavity, and the links said; LoD 1 draws.
-    let out = model("nothing");
-    assert_eq!(lod(&out), Value::Text("1".into()), "{:?}", messages_of(&out));
-    assert!(says(&out, "are given only by a link"), "{:?}", messages_of(&out));
+    for alias_lod in [1, 2] {
+        // Ends at a shell: the solid is read, at LoD 2.
+        let out = model("s", alias_lod);
+        assert_eq!(lod(&out), Value::Text("2".into()), "alias at LoD {alias_lod}: {:?}", messages_of(&out));
+        // Ends in nothing: the solid is left out with its cavity, and the links said; LoD 1 draws.
+        let out = model("nothing", alias_lod);
+        assert_eq!(lod(&out), Value::Text("1".into()), "alias at LoD {alias_lod}: {:?}", messages_of(&out));
+        assert!(says(&out, "are given only by a link"), "{:?}", messages_of(&out));
+    }
+}
+
+/// A group's parent written in place, not linked, is the group's parent all the same: the group is
+/// its child, and raises it, and the object written there isn't the group's child.
+#[test]
+fn a_groups_parent_written_in_place_is_its_parent() {
+    let members = [
+        r##"<core:cityObjectMember><grp:CityObjectGroup gml:id="g"><grp:groupMember xlink:href="#b1"/><grp:parent><bldg:Building gml:id="site"><gml:name>Site</gml:name></bldg:Building></grp:parent></grp:CityObjectGroup></core:cityObjectMember>"##.to_string(),
+        building("b1", &box_surfaces("b1")),
+    ]
+    .concat();
+    let out = read("model.gml", &lonlat(&members), None).unwrap();
+    let groups = layer(&out, "model CityObjectGroup");
+    assert_eq!(value(groups, 0, "parent"), Value::Text("site".into()));
+    let buildings = layer(&out, "model Building");
+    let site = row_of(buildings, "site");
+    assert_ne!(value(buildings, site, "parent"), Value::Text("g".into()));
+    assert_eq!(value(buildings, site, "z_max"), Value::Float(5.0), "raised through the group");
 }
 
 /// A prototype with nothing to place (its surfaces all links, which it doesn't follow) leaves its
