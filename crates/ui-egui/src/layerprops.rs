@@ -1,7 +1,8 @@
 //! The Layer Properties pane (#1803): the selected layer's settings in one place, opened from a
 //! layer's right-click menu (Properties…) or View › Windows › Layer Properties. As the Labeling
-//! pane, it holds no state of its own: it reads the layer each frame and runs the same commands
-//! as the ribbon and the layer's menu, so every change undoes on its own. A tab per topic shows
+//! pane, it keeps no layer settings of its own: it reads the layer each frame and runs the same
+//! commands as the ribbon and the layer's menu, so every change undoes on its own. Only what it
+//! shows is kept, in egui's memory: the tab chosen, the header's light and a name being typed. A tab per topic shows
 //! one part at a time: General, Source and Display. The pane follows the selected layer, as the
 //! Symbology and Labeling panes do; its header (the layer's type and name, also on the pane's tab)
 //! lights up for a moment when the layer changes, so a change made next isn't made on another
@@ -134,7 +135,7 @@ fn general(app: &mut RustGisApp, ui: &mut Ui, l: &Layer) {
     ui.add_space(4.0);
     let mut visible = l.visible;
     if ui.checkbox(&mut visible, tl!("Visible")).changed() {
-        run(app, "layer.visibility", json!({"layer": l.id, "on": visible}));
+        run(app, "layer.visibility", json!({"layer": l.id, "visible": visible}));
     }
     if !l.is_raster() {
         let mut selectable = l.selectable;
