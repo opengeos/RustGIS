@@ -18,7 +18,7 @@ with its tag.
 
 | Channel | Package | Install | Secret |
 | --- | --- | --- | --- |
-| Homebrew tap [opengeos/homebrew-rustgis](https://github.com/opengeos/homebrew-rustgis) | cask `rustgis` (the DMGs), formula `rustgis-cli` (macOS and Linux) | `brew install opengeos/rustgis/rustgis-cli` | `HOMEBREW_TAP_DEPLOY_KEY` |
+| Homebrew tap [opengeos/homebrew-rustgis](https://github.com/opengeos/homebrew-rustgis) | cask `rustgis` (the DMGs), formula `rustgis-cli` (macOS and Linux) | `brew install --cask opengeos/rustgis/rustgis` and `brew install opengeos/rustgis/rustgis-cli` | `HOMEBREW_TAP_DEPLOY_KEY` |
 | [AUR](https://aur.archlinux.org/packages/rustgis-bin) | `rustgis-bin` (the .deb files, x86_64 and aarch64) | `yay -S rustgis-bin` | `AUR_SSH_PRIVATE_KEY` |
 | [Fedora COPR](https://copr.fedorainfracloud.org/coprs/giswqs/rustgis/) | `rustgis` (the .rpm files plus AppStream metainfo) | `sudo dnf copr enable giswqs/rustgis && sudo dnf install rustgis` | `COPR_CONFIG` |
 | [winget](https://github.com/microsoft/winget-pkgs/tree/master/manifests/o/OpenGeos/RustGIS) | `OpenGeos.RustGIS` (setup.exe per user, .msi per machine) | `winget install OpenGeos.RustGIS` | `WINGET_TOKEN` |
