@@ -87,8 +87,8 @@ for each to close and otherwise stops without installing (exit code 2), rather t
 part of it. The same goes for Help › Check for Updates › Install and Restart: close any other
 RustGIS window first, or the update waits for it and then isn't installed (RustGIS says so).
 The `rustgis` cask is in Homebrew's own repository, so it needs no tap. The `rustgis-cli`
-formula comes from the opengeos/rustgis tap: on Homebrew 5.1 and later, run
-`brew trust opengeos/rustgis` once before installing it. If you installed the app from that tap
+formula comes from the opengeos/rustgis tap; installing it by that full name trusts just that
+formula, with no separate `brew trust` step. If you installed the app from that tap
 before (`opengeos/rustgis/rustgis`), it keeps updating from there; to move to Homebrew's cask,
 run `brew uninstall --cask opengeos/rustgis/rustgis && brew install --cask rustgis`.
 Each package is the same build as the release page, and a new release reaches the package
