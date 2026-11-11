@@ -189,8 +189,9 @@ commands still run.
 
 The desktop and web apps start each extension at its default and remember your choices (the
 `extensions` setting). A setting saved by a newer RustGIS that names extensions this version
-doesn't have keeps them unchanged, and a setting that can't be read is reported in Messages,
-leaving every extension at its default. The command line and Python start with every extension
+doesn't have keeps them unchanged, and so do entries that can't be read (each kind is reported
+in Messages). A setting that can't be read at all is reported, leaves every extension at its
+default and is never written over. The command line and Python start with every extension
 on, so scripts that use its commands keep working; models and scripts run in the apps follow the
 apps' choices. Turn one off or on in a run with:
 

@@ -1608,6 +1608,11 @@ impl Session {
             return self.invoke(op, policy::Txn::Own);
         }
         let Some(&spec) = self.registry.get(id) else { return Err(format!("unknown command '{}'", project_log::log_identifier(id))) };
+        // A command of an extension that is off says so before anything else about it (before
+        // its parameters are read or a layer is made active for its conditions).
+        if let Some(why) = self.extensions.blocks(id) {
+            return Err(why);
+        }
         // Keys the command does not read: said, so a script or an agent can correct itself.
         if let (Value::Object(given), Some(known)) = (params, spec.param_keys()) {
             // Bounded: the keys come from the caller (the first few, each clipped).
@@ -1631,10 +1636,6 @@ impl Session {
         let active = self.active_layer;
         if named.is_some() {
             self.active_layer = named;
-        }
-        // A command of an extension that is off says so before anything else about it.
-        if let Some(why) = self.extensions.blocks(id) {
-            return Err(why);
         }
         // Restored on every path, even if a condition were to panic.
         let enabled = spec.enabled;
@@ -2669,7 +2670,6 @@ impl Session {
             .ok_or_else(|| format!("unknown colour scheme '{name}'"))
     }
 
-    /// Resolves a `layer` parameter (name or id), defaulting to the active layer.
     /// Which extensions are on (#1752).
     pub fn extensions(&self) -> &extensions::State {
         &self.extensions
@@ -2695,6 +2695,7 @@ impl Session {
         self.extensions.set(id, on)
     }
 
+    /// Resolves a `layer` parameter (name or id), defaulting to the active layer.
     pub fn layer_id(&self, p: &Value) -> Result<u32, String> {
         cmd::InputSource::input_context(self).layer_id(p)
     }

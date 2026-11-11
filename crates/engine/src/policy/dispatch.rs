@@ -689,6 +689,20 @@ impl Session {
     }
     /// Resolves the command once or retrieves a restricted owner-only completion token.
     pub(crate) fn authorize(&mut self, id: &str, params: &Value) -> Result<Authorized<CommandOp>, String> {
+        // Every way in (a background raster or export, a read ahead, a completion) refuses a
+        // command of an extension that is off, as `Session::run` does: the one asked for, and
+        // the one a completion finishes.
+        if let Some(why) = self.extensions().blocks(id) {
+            return Err(why);
+        }
+        let op = self.authorize_unchecked(id, params)?;
+        if let Some(why) = self.extensions().blocks(op.node.id()) {
+            return Err(why);
+        }
+        Ok(op)
+    }
+    /// [`Self::authorize`] before the extension check.
+    fn authorize_unchecked(&mut self, id: &str, params: &Value) -> Result<Authorized<CommandOp>, String> {
         if let Some(id_of_run) = params.get("ran").and_then(Value::as_u64)
             && let Some(c) = self.raster_results.iter().find(|(n, _)| *n == id_of_run).and_then(|(_, m)| m.continuation.clone())
         {
@@ -729,11 +743,6 @@ impl Session {
             self.gp_file_owner(&r.continuation)?;
             let spec = *self.registry.get(id).ok_or("no file completion command")?;
             return Ok(Authorized { op: CommandOp::Registered { spec, params: params.clone() }, node: r.continuation.node.clone() });
-        }
-        // Every way in (a background raster or export, a read ahead) refuses a command of an
-        // extension that is off, as `Session::run` does.
-        if let Some(why) = self.extensions().blocks(id) {
-            return Err(why);
         }
         let node = self.command_node(id, params)?;
         let node = self.admit(node)?;

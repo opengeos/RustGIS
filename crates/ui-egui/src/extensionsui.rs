@@ -38,8 +38,9 @@ pub fn persist(app: &mut RustGisApp) {
         return;
     }
     let now = now.clone();
-    if let Some(save) = &app.services.save_pref {
-        save(SETTING, &now.to_setting());
+    // A setting that couldn't be read is never written over (said when it was read).
+    if let (Some(save), Some(text)) = (&app.services.save_pref, now.to_setting()) {
+        save(SETTING, &text);
     }
     app.extensions.saved = Some(now);
 }
@@ -200,6 +201,10 @@ mod tests {
         // At its default.
         assert!(!app.session.extensions().is_on("imagery"));
         assert!(app.session.notices.iter().any(|n| n.text.contains("extensions setting isn't a JSON object")));
+        // Not written over by a change.
+        set(&mut app, "imagery", true);
+        persist(&mut app);
+        assert!(prefs.lock().unwrap().iter().all(|(_, v)| v == "not json"));
         // A clean setting says nothing.
         let prefs = Arc::new(Mutex::new(vec![(SETTING.to_string(), r#"{"imagery": true}"#.to_string())]));
         let mut app = app_with_prefs(&prefs);
@@ -222,6 +227,24 @@ mod tests {
         assert!(crate::ribbon::tab_exists(&app, &tab));
         persist(&mut app);
         assert!(prefs.lock().unwrap().iter().any(|(k, v)| k == SETTING && v.contains("\"imagery\":true")));
+    }
+
+    #[test]
+    fn show_me_opens_an_extensions_tab_for_its_commands() {
+        let mut app = RustGisApp::with_sample();
+        let step = |command: &str| rustgis_engine::project::TaskStep {
+            title: String::new(),
+            instructions: String::new(),
+            command: command.into(),
+            params: json!({}),
+        };
+        crate::showme::start(&mut app, &step("raster.classify"));
+        assert_eq!(app.ui.tab, "extension:imagery");
+        // While the extension is off its tab isn't there to open.
+        app.run("ui.tab", json!({"tab": "Home"})).unwrap();
+        app.run("extension.disable", json!({"id": "imagery"})).unwrap();
+        crate::showme::start(&mut app, &step("raster.classify"));
+        assert_eq!(app.ui.tab, "Home");
     }
 
     #[test]

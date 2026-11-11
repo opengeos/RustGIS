@@ -97,6 +97,11 @@ pub fn tab_id(id: &str) -> String {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct State {
     chosen: BTreeMap<String, bool>,
+    /// Entries of the setting this version couldn't read (not true or false, an over-long id,
+    /// past [`MAX_ENTRIES`]): written back as they were.
+    kept: Map<String, Value>,
+    /// Whether the setting couldn't be read at all (not a JSON object): it is never written over.
+    unreadable: bool,
     /// Whether an extension the user said nothing about is at its default (the apps) rather
     /// than on.
     defaults: bool,
@@ -115,6 +120,7 @@ impl State {
     /// Turns extension `id` on or off. An id that is no extension is an error.
     pub fn set(&mut self, id: &str, on: bool) -> Result<&'static Extension, String> {
         let e = get(id).ok_or_else(|| unknown(id))?;
+        self.kept.remove(e.id);
         self.chosen.insert(e.id.to_string(), on);
         Ok(e)
     }
@@ -129,41 +135,52 @@ impl State {
 
     /// The state the `extensions` setting holds (`{"<id>": true|false, …}`) and what of it couldn't
     /// be read, said in one line (`None` when all of it could): entries that aren't true or false,
-    /// over-long ids and those past [`MAX_ENTRIES`] are left out. An empty or missing setting is
-    /// every extension at its default.
+    /// over-long ids and those past [`MAX_ENTRIES`] are ignored and kept to be written back as
+    /// they were. A setting that isn't a JSON object is ignored and never written over. An empty
+    /// or missing setting is every extension at its default.
     pub fn from_setting(text: Option<&str>) -> (State, Option<String>) {
-        let at_defaults = State { chosen: BTreeMap::new(), defaults: true };
+        let at_defaults = State { defaults: true, ..State::default() };
         let Some(text) = text.map(str::trim).filter(|t| !t.is_empty()) else { return (at_defaults, None) };
         let map = match serde_json::from_str::<Value>(text) {
             Ok(Value::Object(map)) => map,
             Ok(_) | Err(_) => {
-                return (at_defaults, Some("the extensions setting isn't a JSON object; every extension is at its default".into()));
+                let said = "the extensions setting isn't a JSON object; every extension is at its default, and what you turn on or off isn't saved over the setting";
+                return (State { unreadable: true, ..at_defaults }, Some(said.into()));
             }
         };
         let mut chosen = BTreeMap::new();
-        let mut skipped = 0usize;
+        let mut kept = Map::new();
         for (id, on) in map {
             match on.as_bool() {
                 Some(on) if !id.is_empty() && id.chars().count() <= MAX_ID && chosen.len() < MAX_ENTRIES => {
                     chosen.insert(id, on);
                 }
-                _ => skipped += 1,
+                _ => {
+                    kept.insert(id, on);
+                }
             }
         }
+        let skipped = kept.len();
         let said = (skipped > 0).then(|| {
             format!(
-                "{skipped} entr{} of the extensions setting couldn't be read (not true or false, an id over {MAX_ID} characters, or past {MAX_ENTRIES} entries) and {} left out",
+                "{skipped} entr{} of the extensions setting couldn't be read (not true or false, an id over {MAX_ID} characters, or past {MAX_ENTRIES} entries): ignored, and kept as {} when the setting is saved",
                 if skipped == 1 { "y" } else { "ies" },
-                if skipped == 1 { "was" } else { "were" }
+                if skipped == 1 { "it was" } else { "they were" }
             )
         });
-        (State { chosen, defaults: true }, said)
+        (State { chosen, kept, unreadable: false, defaults: true }, said)
     }
 
-    /// The `extensions` setting: every choice made, known ids or not.
-    pub fn to_setting(&self) -> String {
-        let map: Map<String, Value> = self.chosen.iter().map(|(k, v)| (k.clone(), Value::Bool(*v))).collect();
-        Value::Object(map).to_string()
+    /// The `extensions` setting: every choice made, known ids or not, and the entries this
+    /// version couldn't read as they were. `None` when the setting read couldn't be read at all
+    /// (it isn't written over).
+    pub fn to_setting(&self) -> Option<String> {
+        if self.unreadable {
+            return None;
+        }
+        let mut map = self.kept.clone();
+        map.extend(self.chosen.iter().map(|(k, v)| (k.clone(), Value::Bool(*v))));
+        Some(Value::Object(map).to_string())
     }
 
     /// Every extension with whether it's on, for `extension.list` and the Extensions window.
@@ -212,7 +229,7 @@ mod tests {
 
     #[test]
     fn a_session_of_its_own_has_every_extension_on_and_the_apps_start_at_the_defaults() {
-        assert!(!IMAGERY.default_on);
+        const { assert!(!IMAGERY.default_on) };
         assert!(State::default().is_on("imagery"));
         let (apps, said) = State::from_setting(None);
         assert_eq!(said, None);
@@ -243,9 +260,9 @@ mod tests {
         assert!(!st.is_on("imagery"));
         // Not an extension here, so off here; but kept for the version that knows it.
         assert!(!st.is_on("from-newer"));
-        let (again, _) = State::from_setting(Some(&st.to_setting()));
+        let (again, _) = State::from_setting(st.to_setting().as_deref());
         assert_eq!(again, st);
-        assert!(again.to_setting().contains("\"from-newer\":true"));
+        assert!(again.to_setting().is_some_and(|t| t.contains("\"from-newer\":true")));
     }
 
     #[test]
@@ -266,6 +283,17 @@ mod tests {
         // A background raster run is refused before it starts.
         #[cfg(not(target_arch = "wasm32"))]
         assert!(s.start_raster("raster.classify", &json!({})).is_err_and(|e| e.contains("Imagery extension, which is off")));
+        // A refused command makes no layer active and reads none of its parameters.
+        s.run("project.sample", &Value::Null).unwrap_or_default();
+        let ids: Vec<u32> = s.map().layers.iter().map(|l| l.id).collect();
+        let (a, b) = (ids.first().copied(), ids.get(1).copied());
+        s.active_layer = a;
+        let before = s.notices.len();
+        assert!(off_said(s.run("raster.classify", &json!({"layer": b, "bogus": 1}))));
+        assert_eq!(s.active_layer, a);
+        assert!(!s.notices.iter().skip(before).any(|n| n.text.contains("ignores")));
+        // A completion of a run is refused too.
+        assert!(off_said(s.run("raster.classify", &json!({"ran": 999}))));
         // Commands no extension owns still run.
         assert!(s.run("extension.list", &json!({})).is_ok());
         s.run("extension.enable", &json!({"id": "imagery", "enabled": true})).unwrap_or_default();
@@ -274,20 +302,33 @@ mod tests {
 
     #[test]
     fn unreadable_setting_is_said() {
-        let at_defaults = State { chosen: BTreeMap::new(), defaults: true };
+        let at_defaults = State { defaults: true, ..State::default() };
         assert_eq!(State::from_setting(None), (at_defaults.clone(), None));
         assert_eq!(State::from_setting(Some("  ")), (at_defaults.clone(), None));
-        let (st, said) = State::from_setting(Some("[1, 2]"));
-        assert_eq!(st, at_defaults);
+        let (mut st, said) = State::from_setting(Some("[1, 2]"));
+        assert!(!st.is_on("imagery"));
         assert!(said.is_some_and(|s| s.contains("isn't a JSON object")));
+        // Never written over, even after a change.
+        assert!(st.set("imagery", true).is_ok());
+        assert_eq!(st.to_setting(), None);
         let long = "x".repeat(MAX_ID + 1);
-        let (st, said) = State::from_setting(Some(&format!(r#"{{"imagery": "no", "{long}": true, "ok": false}}"#)));
+        let (mut st, said) = State::from_setting(Some(&format!(r#"{{"imagery": "no", "{long}": true, "ok": false, "foo": {{"x": 1}}}}"#)));
         // Left at its default.
         assert!(!st.is_on("imagery"));
-        assert!(said.is_some_and(|s| s.starts_with("2 entries")));
+        assert!(said.is_some_and(|s| s.starts_with("3 entries")));
+        // Kept as they were, unless a choice replaces one.
+        let text = st.to_setting().unwrap_or_default();
+        assert!(
+            text.contains(&format!("\"{long}\":true")) && text.contains("\"foo\":{\"x\":1}") && text.contains("\"imagery\":\"no\""),
+            "{text}"
+        );
+        assert!(st.set("imagery", true).is_ok());
+        assert!(st.to_setting().is_some_and(|t| t.contains("\"imagery\":true") && t.contains("\"foo\"")));
         let many: Map<String, Value> = (0..MAX_ENTRIES + 3).map(|i| (format!("e{i}"), Value::Bool(true))).collect();
         let (st, said) = State::from_setting(Some(&Value::Object(many).to_string()));
         assert_eq!(st.chosen.len(), MAX_ENTRIES);
         assert!(said.is_some_and(|s| s.starts_with("3 entries")));
+        let (again, _) = State::from_setting(st.to_setting().as_deref());
+        assert_eq!(again.chosen.len() + again.kept.len(), MAX_ENTRIES + 3);
     }
 }
