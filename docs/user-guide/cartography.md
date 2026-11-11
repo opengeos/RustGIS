@@ -617,6 +617,8 @@ Turn labels on per layer (Labeling › Labels › **Label**), then:
 - **Convert** (Labeling › Map Labeling, or Layers › right-click › **Convert To Annotation**) turns a
   layer's labels into an annotation layer: one point per label, carrying its
   text in a `TEXT` field, which you can then edit, move or delete like any other features.
+  A label along a line becomes an upright point on its line: its angle, curve, repeats and
+  distance from the line are left out, and the conversion says how many.
 - **Label classes** label different features differently, such as large cities in larger text.
   Each class has a SQL clause choosing its features, and its own field, text symbol, placement
   and visibility range. Each class labels every feature its clause matches, the **Default**

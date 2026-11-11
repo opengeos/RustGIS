@@ -725,6 +725,8 @@ fn convert(s: &mut Session, p: &Value) -> CmdResult {
     let by_angle = l.labels.in_order().any(|c| c.visible && c.by.angle.is_some() && !(only_lines && c.placement.along_line()));
     // Texts cut to their most characters, said once.
     let mut cut = 0usize;
+    // Labels along lines made upright points on them (not those moved by hand), said once.
+    let mut flattened = 0usize;
     for (on, name, kind) in
         [(by_size, "SIZE", FieldType::Double), (by_color, "COLOR", FieldType::Text), (by_angle, "ANGLE", FieldType::Double)]
     {
@@ -781,6 +783,7 @@ fn convert(s: &mut Session, p: &Value) -> CmdResult {
                 attrs.push(number(e.filter(|_| turns).and_then(|e| e.angle(&l.dataset, row))));
             }
             ds.push(Some(Geometry::Point(at)), attrs);
+            flattened += usize::from(put.is_none() && along(class, ft.geometry.as_ref()));
             if let (Some(put), Some(new)) = (put, ds.features.last()) {
                 moved.push((i, new.id, put));
             }
@@ -790,6 +793,13 @@ fn convert(s: &mut Session, p: &Value) -> CmdResult {
         return Err("the layer has no labels to convert".into());
     }
     let n = ds.features.len();
+    let flattened_note = (flattened > 0).then(|| {
+        format!(
+            "{}: {flattened} label{} along lines made upright points on their lines (their angle, curve, repeats and distance from the line left out)",
+            ds.name,
+            if flattened == 1 { "" } else { "s" }
+        )
+    });
     let cut_note = (cut > 0).then(|| {
         format!(
             "{}: {cut} label text{} cut to {} characters",
@@ -838,7 +848,7 @@ fn convert(s: &mut Session, p: &Value) -> CmdResult {
         a.min_scale = min_scale;
         a.max_scale = max_scale;
     }
-    if let Some(note) = cut_note {
+    for note in [cut_note, flattened_note].into_iter().flatten() {
         s.notify(note, false);
     }
     if let Some((_, unread)) = &whole {
