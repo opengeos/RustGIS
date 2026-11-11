@@ -9304,6 +9304,42 @@ fn a_viewshed_says_what_ground_with_no_data_it_saw_across() {
     }
 }
 
+/// A viewshed's radius: one past 500 km is shortened to it, said with by how much; text or 0 is
+/// refused, naming it; on a raster round the Earth whose edge the radius reaches, the rays not
+/// crossing its ±180° edge are said.
+#[test]
+fn a_viewshed_says_what_it_did_with_its_radius_and_the_seam() {
+    use base64::Engine;
+    use rustgis_data::raster::{ColorHint, Crs, GeoTransform, Raster, geotiff};
+    let mut s = world();
+    // Flat ground round the Earth, 2° a cell.
+    let gt = GeoTransform { origin_x: -180.0, origin_y: 90.0, pixel_width: 2.0, pixel_height: -2.0 };
+    let r = Raster::new("globe", 180, 90, vec![vec![0.0; 180 * 90]], gt, Crs::LonLat, None, ColorHint::Gray, "Float32").unwrap();
+    let data = base64::engine::general_purpose::STANDARD.encode(geotiff::write(&r, 0).unwrap());
+    s.run("layer.addDataBytes", &json!({"fileName": "globe.tif", "data": data})).unwrap();
+    let dem = s.map().layers.iter().find(|l| l.is_raster()).unwrap().name.clone();
+    let said = |s: &mut Session, p: Value| {
+        let mark = s.notices.len();
+        s.run("analysis.viewshed", &p).unwrap_or_else(|e| panic!("{p}: {e}"));
+        s.notices[mark..].iter().map(|n| n.text.clone()).collect::<Vec<_>>()
+    };
+    let seam = "rays don't cross its ±180° edge";
+    // By the edge with no radius (the whole raster): the seam is said.
+    let notes = said(&mut s, json!({"layer": dem, "lon": -179.0, "lat": 0.0}));
+    assert!(notes.iter().any(|n| n.contains(seam)), "{notes:?}");
+    // Mid-way with a radius not reaching an edge: nothing said.
+    let notes = said(&mut s, json!({"layer": dem, "lon": 0.0, "lat": 0.0, "radius": 50_000}));
+    assert!(notes.is_empty(), "{notes:?}");
+    // 600 km is taken as 500 km, and said; 500 km from the edge's cell reaches it.
+    let notes = said(&mut s, json!({"layer": dem, "lon": -177.0, "lat": 0.0, "radius": 600_000}));
+    assert!(notes.iter().any(|n| n.contains("the radius of 600 km was taken as 500 km")), "{notes:?}");
+    assert!(notes.iter().any(|n| n.contains(seam)), "{notes:?}");
+    for bad in [json!("500km"), json!(0), json!(-5), json!(true)] {
+        let e = s.run("analysis.viewshed", &json!({"layer": dem, "lon": 0.0, "lat": 0.0, "radius": bad})).unwrap_err();
+        assert_eq!(e, format!("radius must be a number of metres above 0, not {bad}"));
+    }
+}
+
 #[test]
 fn analysis_workflows_models_scripts_and_raster_functions() {
     let mut s = world();

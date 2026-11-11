@@ -534,7 +534,9 @@ fn viewshed_on(
     // Each cell walks a ray back to the observer: bound cells × ray length, not just cells.
     let cells = (right - left + 1).saturating_mul(last - first + 1);
     let longest = (oc - left).max(right - oc).max(or - first).max(last - or);
-    let ray_work = usize::try_from(cells.saturating_mul(longest / 2 + 1)).unwrap_or(usize::MAX);
+    // A bilinear step reads four cells where a nearest one reads one: weighed as four.
+    let per_step = if heights == Heights::Bilinear { 4 } else { 1 };
+    let ray_work = usize::try_from(cells.saturating_mul(longest / 2 + 1).saturating_mul(per_step)).unwrap_or(usize::MAX);
     // Each cell walks its own ray and writes only itself, so the rows within the radius are made
     // on several threads when the work is large (#1252), and may take as many times the work.
     let rows = usize::try_from(last - first + 1).unwrap_or(0);
@@ -542,7 +544,8 @@ fn viewshed_on(
     let cap = crate::parallel::work_cap(MAX_VIEWSHED_WORK, threads);
     if ray_work > cap {
         return Err(format!(
-            "the radius takes {ray_work} ray steps, more than the {cap} this computer takes on {threads} thread(s); use a smaller radius{}",
+            "the radius takes {ray_work} ray steps{}, more than the {cap} this computer takes on {threads} thread(s); use a smaller radius{}",
+            if per_step > 1 { " (a step between cells counted as four)" } else { "" },
             crate::parallel::UNCAPPED_HINT
         ));
     }

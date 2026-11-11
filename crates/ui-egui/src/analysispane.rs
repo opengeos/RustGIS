@@ -405,8 +405,10 @@ fn num(s: &str, d: f64) -> f64 {
 /// radius out, so the command takes the whole DEM.
 fn viewshed_params(w: &Workflow, at: rustgis_engine::geom::Coord) -> Value {
     let mut params = json!({"layer": w.layer, "lon": at.x, "lat": at.y, "height": num(&w.number, 1.7)});
-    if let Ok(r) = w.number2.trim().parse::<f64>() {
-        params["radius"] = json!(r);
+    // A number is the radius; other text goes as it is, for the command to refuse, naming it.
+    match w.number2.trim() {
+        "" => {}
+        r => params["radius"] = r.parse::<f64>().map_or_else(|_| json!(r), |r| json!(r)),
     }
     if w.bilinear {
         params["heights"] = json!("bilinear");
@@ -2109,9 +2111,12 @@ mod tests {
             app.session.run("analysis.viewshed", &p).unwrap_or_else(|e| panic!("radius {radius:?}: {e}"));
             assert_eq!(worked(&app, &name), ((w * h) as usize, true), "radius {radius:?}: every cell worked out");
         }
-        // A number in the field is the radius.
-        let workflow = Workflow { layer, number2: " 5000 ".into(), ..Default::default() };
+        // A number in the field is the radius; other text is refused, not taken as no radius.
+        let workflow = Workflow { layer: layer.clone(), number2: " 5000 ".into(), ..Default::default() };
         assert_eq!(viewshed_params(&workflow, Coord::new(10.0005, 45.0005))["radius"], json!(5000.0));
+        let workflow = Workflow { layer, number2: "500km".into(), ..Default::default() };
+        let e = app.session.run("analysis.viewshed", &viewshed_params(&workflow, at)).unwrap_err();
+        assert_eq!(e, r#"radius must be a number of metres above 0, not "500km""#);
     }
 
     /// A Script pane run works its tools out on a thread of its own: the results say Running…
