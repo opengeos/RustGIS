@@ -653,7 +653,8 @@ fn entities(text: &str) -> String {
     while let Some(at) = rest.find('&') {
         out.push_str(rest.get(..at).unwrap_or_default());
         let tail = rest.get(at..).unwrap_or_default();
-        let entity = tail.find(';').filter(|e| *e <= 10).and_then(|e| tail.get(1..e).map(|name| (name, e)));
+        // Its `;` looked for only within the longest entity read (`&#x10FFFF;`): linear in the text.
+        let entity = tail.char_indices().take(11).find(|(_, c)| *c == ';').and_then(|(e, _)| tail.get(1..e).map(|name| (name, e)));
         let read = entity.and_then(|(name, e)| {
             let c = match name {
                 "amp" => Some('&'),

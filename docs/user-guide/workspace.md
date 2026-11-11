@@ -273,8 +273,9 @@ Each layer keeps its look:
   graphic on its point, draws it level and with its own halo, and draws text along a line level
   at the line's middle, all noted. RustGIS draws a graphics layer's texts after all layers, so a
   text QGIS draws under a shape, or under a layer above, comes out over it (noted). A picture
-  whose aspect is locked keeps it on the map, as QGIS does; an import reads at most 64 MiB of
-  pictures, and those past it are left out (noted). SVG pictures, callouts and annotations QGIS
+  whose aspect is locked keeps it on the map, as QGIS does; an import keeps at most 64 MiB of
+  pictures as stored (base64, about 48 MiB of PNG or JPEG files), and those past it are left out
+  (noted). SVG pictures, callouts and annotations QGIS
   keeps switched off are left out, noted.
 - **Rasters**: singleband grey as a stretch from black to white, singleband pseudocolour as a
   stretch along its colour map (interpolated), as Classify (discrete) or as Unique Values (exact),
