@@ -713,7 +713,7 @@ pub fn workflows(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                     })
                     .response
                     .on_hover_text(tl!(
-                        "How the ground between the observer and a cell is read: the cell each point falls in, or between the cells' centres. Between cells is right on ground that bulges, a hill seen from its top, where the nearest cell can hide cells just inside the horizon."
+                        "How the ground between the observer and a cell is read: the cell each point falls in, or between the cells' centres. Between cells is an estimate too, but closer on ground that bulges, a hill seen from its top, where the nearest cell can hide cells just inside the horizon."
                     ));
             });
             pick_button(app, ui, "viewshed", 1, "Click the observer on the map");
@@ -2066,34 +2066,48 @@ mod tests {
     use super::*;
     use egui_kittest::kittest::Queryable;
 
-    /// An empty radius field (or one of spaces) runs the viewshed over the whole DEM, also one
-    /// whose radius square, the DEM's diagonal each way, holds far more cells than the DEM.
+    /// An empty radius field (or one of spaces) runs the viewshed over the whole DEM: one whose
+    /// radius square, the DEM's diagonal each way, holds far more cells than the DEM, and
+    /// reaching farther than the 500 km a radius given takes.
     #[test]
     fn a_viewshed_with_an_empty_radius_field_sees_the_whole_dem() {
         use base64::Engine;
         use rustgis_engine::geom::Coord;
         let mut app = RustGisApp::with_sample();
         use rustgis_engine::data::raster::{ColorHint, Crs, GeoTransform, Raster, geotiff};
-        // A strip 4,000 cells long and 2 high: the DEM's diagonal each way spans 8,001 × 8,001
+        // A strip 4,000 cells long and 2 high, 0.002° (about 160 m) a cell: about 630 km, past
+        // the 500 km a radius given takes. The DEM's diagonal each way spans 8,001 × 8,001
         // cells, 64 million, of which 8,000 are the DEM's.
         let (w, h) = (4_000u32, 2u32);
-        let gt = GeoTransform { origin_x: 10.0, origin_y: 45.002, pixel_width: 0.001, pixel_height: -0.001 };
+        let gt = GeoTransform { origin_x: 10.0, origin_y: 45.004, pixel_width: 0.002, pixel_height: -0.002 };
         let dem =
             Raster::new("strip", w, h, vec![vec![200.0; (w * h) as usize]], gt, Crs::LonLat, None, ColorHint::Gray, "Float32").unwrap();
         let data = base64::engine::general_purpose::STANDARD.encode(geotiff::write(&dem, 0).unwrap());
         app.session.run("layer.addDataBytes", &json!({"fileName": "strip.tif", "data": data})).unwrap();
         let layer = app.session.map().layers.iter().rev().find(|l| l.is_raster()).unwrap().name.clone();
-        // As the farthest radius the command takes: flat ground seen up to its horizon, a few km.
-        let mut far = json!({"layer": layer, "lon": 10.0005, "lat": 45.0005, "height": 2.0, "radius": 500_000.0});
-        let seen = app.session.run("analysis.viewshed", &far).unwrap()["visibleCells"].as_u64().unwrap();
-        assert!(seen > 20 && seen < u64::from(w * h), "{seen}");
-        far.as_object_mut().unwrap().remove("radius");
-        for radius in ["", "   "] {
+        // Cells of a viewshed worked out (not left no-data), and whether the strip's far end is.
+        let worked = |app: &RustGisApp, name: &str| {
+            let r = app.session.map().layer_by_name(name).and_then(|l| l.raster.as_ref()?.data.clone()).unwrap();
+            let n = (0..h as i64)
+                .flat_map(|row| (0..w as i64).map(move |col| (col, row)))
+                .filter(|&(c, rr)| r.value(0, c, rr).is_some())
+                .count();
+            (n, r.value(0, i64::from(w) - 1, 0).is_some())
+        };
+        let at = Coord::new(10.001, 45.001);
+        // A radius given is at most 500 km: the far end of the strip is left out.
+        app.session
+            .run("analysis.viewshed", &json!({"layer": layer, "lon": at.x, "lat": at.y, "height": 2.0, "radius": 1e9, "name": "given"}))
+            .unwrap();
+        assert!(!worked(&app, "given").1);
+        for (i, radius) in ["", "   "].into_iter().enumerate() {
             let workflow = Workflow { layer: layer.clone(), number: "2".into(), number2: radius.into(), ..Default::default() };
-            let p = viewshed_params(&workflow, Coord::new(10.0005, 45.0005));
-            assert_eq!(p, far, "radius {radius:?}");
-            let v = app.session.run("analysis.viewshed", &p).unwrap_or_else(|e| panic!("radius {radius:?}: {e}"));
-            assert_eq!(v["visibleCells"].as_u64(), Some(seen), "radius {radius:?}: {v}");
+            let mut p = viewshed_params(&workflow, at);
+            assert!(p.get("radius").is_none(), "radius {radius:?}: {p}");
+            let name = format!("empty{i}");
+            p["name"] = json!(name);
+            app.session.run("analysis.viewshed", &p).unwrap_or_else(|e| panic!("radius {radius:?}: {e}"));
+            assert_eq!(worked(&app, &name), ((w * h) as usize, true), "radius {radius:?}: every cell worked out");
         }
         // A number in the field is the radius.
         let workflow = Workflow { layer, number2: " 5000 ".into(), ..Default::default() };

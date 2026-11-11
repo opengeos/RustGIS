@@ -443,7 +443,7 @@ pub enum Heights {
     #[default]
     Nearest,
     /// Between the cells' centres, in proportion to how near the point is to each (bilinear):
-    /// smoother, and right on bulging ground. Where one of those cells has no data, the cell the
+    /// smoother, and closer on bulging ground, though still an estimate. Where one of those cells has no data, the cell the
     /// point falls in, as [`Heights::Nearest`] reads it (counted: [`Viewshed::read_nearest`]).
     Bilinear,
 }

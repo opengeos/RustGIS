@@ -60,7 +60,7 @@ pub fn commands() -> Vec<C> {
             r#"{"criteria": [{"layer": raster, "band"?: 1-based, "ranges": [[lo, hi, score]], "weight": number}], "name"?: output, "ran"?: (internal: a raster the app has worked out)}"#,
         ),
         C::new("analysis.viewshed", "Visibility Analysis", "Analyze › Workflows", viewshed).roles(&[]).effects(crate::policy::Effects::NONE)
-            .params(r#"{"layer": elevation raster, "lon", "lat", "band"?: 1-based, "height"?: observer metres, "radius"?: metres, "heights"?: "nearest" (default) | "bilinear" (the ground along each ray), "name"?: output, "ran"?: (internal: a viewshed the app has worked out)}"#),
+            .params(r#"{"layer": elevation raster, "lon", "lat", "band"?: 1-based, "height"?: observer metres, "radius"?: metres (at most 500 km; default: the whole raster), "heights"?: "nearest" (default) | "bilinear" (the ground along each ray), "name"?: output, "ran"?: (internal: a viewshed the app has worked out)}"#),
         C::new("analysis.lineOfSight", "Line Of Sight", "Analyze › Workflows", line_of_sight).roles(&[]).effects(crate::policy::Effects::NONE).params(
             r#"{"layer": elevation raster, "from": [lon, lat], "to": [lon, lat], "band"?: 1-based, "observerHeight"?: m, "targetHeight"?: m, "name"?: output}"#,
         ),
@@ -1083,8 +1083,12 @@ fn viewshed_work(s: &Session, p: &Value) -> Result<Work, String> {
     let at = Coord::new(f(p, "lon").ok_or("lon is required")?, f(p, "lat").ok_or("lat is required")?);
     let band = band_of(p, &dem)?;
     let (cx, cy) = dem.cell_size_m();
-    // The whole raster by default: its diagonal reaches every cell from any observer.
-    let radius = f(p, "radius").unwrap_or((cx * dem.width as f64).hypot(cy * dem.height as f64)).clamp(1.0, 500_000.0);
+    // The whole raster by default, however large: its diagonal reaches every cell from any
+    // observer, and only the raster's cells are worked out. A radius given is at most 500 km.
+    let radius = match f(p, "radius") {
+        Some(r) => r.clamp(1.0, 500_000.0),
+        None => (cx * dem.width as f64).hypot(cy * dem.height as f64).max(1.0),
+    };
     let height = f(p, "height").unwrap_or(1.7).clamp(0.0, 10_000.0);
     // How the ground along each ray is read: the cell a point falls in, or between cells.
     let heights = match p.get("heights") {
