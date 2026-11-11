@@ -1747,8 +1747,9 @@ impl MaskCache {
 /// (#1252), in batches of [`CLIP_BATCH`] features a thread, and the rows come back in input
 /// order, as on one thread. A thread's work in progress takes about twice the largest mask's
 /// coordinates while the masks are unioned, then twice the largest input feature's, a list of
-/// the masks, and the larger of the largest mask and the largest union of the masks one feature
-/// meets (found for each batch first); the threads are as many as half the scratch
+/// the masks (or the index's references to them), and the larger of the largest mask and the
+/// largest size of the masks one feature meets, together (found for each batch first, standing
+/// for their union); the threads are as many as half the scratch
 /// memory work may take holds of that, and their recent unions of several masks share
 /// `cache_bytes` (by default the other half of [`crate::parallel::scratch_budget`]).
 fn clip_on(inp: &dyn Inputs, p: &Json, threads: Option<usize>, cache_bytes: Option<usize>) -> Result<ToolResult, String> {
@@ -1804,7 +1805,6 @@ fn clip_on(inp: &dyn Inputs, p: &Json, threads: Option<usize>, cache_bytes: Opti
     let at_poles = AtPoles::new(masks.iter().map(|(m, _)| plane_poles(m)));
     let mut out = copy_schema(ds, out_name(p, format!("{}_Clip", ds.name)), ds.geometry_type);
     let input_rows = rows(inp, p, "input", ds);
-    // Input features without geometry: nothing of them can be kept.
     // Input features without geometry, or with an empty one: nothing of them can be kept.
     let without = input_rows
         .iter()
@@ -1826,20 +1826,22 @@ fn clip_on(inp: &dyn Inputs, p: &Json, threads: Option<usize>, cache_bytes: Opti
         }
         near
     };
-    // A thread's work in progress: a feature, its clipped part, and the union of the masks it
-    // meets when they are several, which can be far larger than any one mask (at most all of
-    // them).
+    // The union of the masks a feature meets, when they are several, can be far larger than any
+    // one mask (at most all of them). Its size is taken as theirs together, which it doesn't
+    // exceed by much (an overlay adds a vertex where edges cross, and takes away the overlaps).
     let mask_bytes: Vec<usize> = masks.iter().map(|(m, _)| kept_union_bytes(&[], m)).collect();
     let union_bytes = |near: &[usize]| match near {
         [] | [_] => 0,
         _ => near.iter().filter_map(|&i| mask_bytes.get(i)).fold(0usize, |a, &b| a.saturating_add(b)),
     };
     // A thread's work in progress: a feature and its clipped part, the list of the masks it meets
-    // (at most all of them), and the larger of a mask and the union of the masks it meets.
-    let feature_work = largest(ds, &input_rows).saturating_mul(2).saturating_add(masks.len().saturating_mul(std::mem::size_of::<usize>()));
+    // (at most all of them, or all the grid's references before each is kept once), and the
+    // larger of a mask and the union of the masks it meets.
+    let candidates = masks.len().max(index.references);
+    let feature_work = largest(ds, &input_rows).saturating_mul(2).saturating_add(candidates.saturating_mul(std::mem::size_of::<usize>()));
     // As many threads as there could be, if no feature met several masks: they size the batches.
     let most_threads = threads_for(input_rows.len(), feature_work.saturating_add(largest_mask)).max(1);
-    // Each feature is looked at twice: for the size of the union of the masks it meets, then to
+    // Each feature is looked at twice: for the size of the masks it meets together, then to
     // be clipped. Only those sizes are kept between the two, not the masks.
     crate::control::begin(input_rows.len().saturating_mul(2));
     // In batches, so the clipped features held before they're added to the output stay few.
@@ -5940,6 +5942,9 @@ struct ExtentIndex {
     grid: Option<std::collections::HashMap<(i64, i64), Vec<usize>>>,
     /// How many features there are.
     len: usize,
+    /// How many cell references the grid holds (0 without one): the most a query can collect
+    /// before each feature is kept once.
+    references: usize,
 }
 
 impl ExtentIndex {
@@ -5959,6 +5964,7 @@ impl ExtentIndex {
             cell_h: (total.height() / n_cells).max(1e-9),
             grid: None,
             len: extents.len(),
+            references: 0,
         };
         if extents.len() <= Self::MAX_LINEAR_FEATURES || total.is_empty() {
             return index;
@@ -5981,6 +5987,7 @@ impl ExtentIndex {
             }
         }
         index.grid = Some(grid);
+        index.references = references;
         index
     }
 
