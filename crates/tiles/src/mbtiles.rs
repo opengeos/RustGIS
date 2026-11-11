@@ -322,14 +322,19 @@ pub fn info_ready(archive: &str, timeout: Duration) -> Result<Option<Arc<Info>>,
             let address = archive.to_string();
             let worker_key = key.clone();
             let still = crate::cache::current_still();
+            // Under way from before the thread starts until what it read is kept (or the thread
+            // fails to start), so a render waiting for the map's reads waits for this one too.
+            let under_way = crate::cache::UnderWay::begin();
             let spawned = std::thread::Builder::new().name("rustgis-mbtiles-info".into()).spawn(move || {
                 crate::cache::with_optional_still(still, || {
                     let result = crate::cache::check_still(&crate::cache::current_still()).and_then(|_| read_info(&address));
                     remember_info(&address, &result, epoch);
                 });
+                // Over once what it read is kept, before its waiters wake: whoever sees it over
+                // sees the metadata, and a caller that waited sees it no longer counted.
+                drop(under_way);
                 pending.lock().unwrap_or_else(|e| e.into_inner()).remove(&worker_key);
                 ready.notify_all();
-                crate::cache::notify();
             });
             if let Err(error) = spawned {
                 all.remove(&key);
@@ -478,6 +483,8 @@ mod tests {
         let _ = crate::cache::with_still(still, || info_ready("/reentrant-pending-read.mbtiles", Duration::ZERO));
         assert!(checks.load(Ordering::SeqCst) >= 2, "the post-wait check must execute");
         assert!(available.load(Ordering::SeqCst), "Still ran with pending metadata reads locked");
+        // The read it started is counted until it ends: over before the next test's turn.
+        crate::cache::wait(Duration::from_secs(10));
     }
 
     /// The metadata worker inherits its initiating transport context instead of reading at root.
@@ -578,6 +585,25 @@ mod tests {
         assert!(!metadata_stalled(&reads, &healthy), "a healthy admitted read retains its own deadline");
         reads.remove(&stalled);
         assert!(!metadata_stalled(&reads, &next), "capacity can recover when the OS returns");
+    }
+
+    /// A metadata read counts as under way while its worker runs, so an export's complete render
+    /// waits for it instead of finding nothing in flight and giving up at once (#1801).
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_metadata_read_counts_as_under_way_while_it_runs() {
+        let _turn = crate::cache::turn();
+        let during = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let seen = during.clone();
+        let still: crate::cache::Still = Arc::new(move || {
+            if std::thread::current().name() == Some("rustgis-mbtiles-info") {
+                seen.fetch_max(crate::cache::in_flight(), Ordering::SeqCst);
+            }
+            true
+        });
+        let address = "/counted-metadata-read.mbtiles";
+        let _ = crate::cache::with_still(still, || info_ready(address, Duration::from_secs(10)));
+        assert!(during.load(Ordering::SeqCst) >= 1, "the worker's own read wasn't counted as under way");
     }
 
     #[test]

@@ -1722,6 +1722,31 @@ pub(crate) fn fetch_worker(url: String, done: Done) {
     native::fetch(url, done, &[]);
 }
 
+/// A read the map waits for that runs outside the fetch queue (an MBTiles file's metadata, read
+/// on its own thread): counted in [`in_flight`] from now until it is dropped, which wakes the map
+/// as a fetch's end does. A complete render takes nothing under way for nothing to come, so a
+/// read it doesn't count is one it stops waiting for at once (#1801). Native only: in the browser
+/// the metadata is read in place.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) struct UnderWay(());
+
+#[cfg(not(target_arch = "wasm32"))]
+impl UnderWay {
+    /// Counts one more read under way, until the returned value is dropped.
+    pub(crate) fn begin() -> Self {
+        IN_FLIGHT.fetch_add(1, Ordering::Relaxed);
+        Self(())
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl Drop for UnderWay {
+    /// The read is over: no longer counted, and the map draws again, as at a fetch's end.
+    fn drop(&mut self) {
+        finished();
+    }
+}
+
 /// Reads a range of a local file (`<path>#rustgis-range=a-b`) on the fetch workers, counted like
 /// [`fetch_counted`]; never through an installed fetcher, which only knows web addresses.
 pub(crate) fn fetch_local(url: String, done: Done) {
