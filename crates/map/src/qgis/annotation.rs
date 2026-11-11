@@ -61,7 +61,24 @@ pub(super) fn read(node: Node, dir: &str, layer: &str, report: &mut Report) -> V
     read.notes(layer, report);
     // Bottom first: by z, then as QGIS lists them (a stable sort).
     drawn.sort_by(|a, b| a.0.total_cmp(&b.0));
-    drawn.into_iter().flat_map(|(_, a)| a).collect()
+    let out: Vec<Annotation> = drawn.into_iter().flat_map(|(_, a)| a).collect();
+    let under = texts_under_others(&out);
+    if under > 0 {
+        let what = if under == 1 {
+            "an annotation text QGIS draws under other annotations is drawn over them".to_string()
+        } else {
+            format!("{under} annotation texts QGIS draws under other annotations are drawn over them")
+        };
+        report.approximated(layer, format!("{what}: RustGIS draws a layer's texts after its shapes and pictures"));
+    }
+    out
+}
+
+/// Text graphics, of `drawn` (bottom first), with a shape or picture above them: RustGIS draws a
+/// graphics layer's texts after its other graphics, so these come out on top.
+fn texts_under_others(drawn: &[Annotation]) -> usize {
+    let Some(last_other) = drawn.iter().rposition(|a| a.graphic.kind != "text") else { return 0 };
+    drawn[..last_other].iter().filter(|a| a.graphic.kind == "text").count()
 }
 
 /// What was met reading a layer's items, noted once each with a count.

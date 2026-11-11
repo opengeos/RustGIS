@@ -1335,6 +1335,32 @@ fn qgis_annotation_layers_import_as_graphics_layers() {
     assert_eq!(texts, 8, "the texts come in all the same");
 }
 
+/// Pictures are charged to an import's budget (1 KiB in tests) only once placed: pictures that
+/// don't take to longitude and latitude leave it whole, and those past it are left out, noted.
+#[test]
+fn qgis_annotation_pictures_charge_the_budget_only_once_placed() {
+    let mut s = world();
+    let png =
+        std::fs::read(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../map/testdata/qgis/generated/data/picture.png")).unwrap();
+    let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, png);
+    let picture =
+        |y: f64| format!(r#"<item type="picture" path="base64:{b64}" lockAspect="0" xMin="8" yMin="{y}" xMax="9" yMax="{}"/>"#, y + 1.0);
+    // Ten pictures past the pole (more than the budget holds), then seven on the map: six fit.
+    let items = format!("{}{}", picture(100.0).repeat(10), picture(47.0).repeat(7));
+    let qgs = format!(
+        r#"<qgis><projectCrs><spatialrefsys><authid>EPSG:4326</authid></spatialrefsys></projectCrs><projectlayers>
+      <maplayer type="annotation"><id>a</id><layername>P</layername><items>{items}</items></maplayer></projectlayers></qgis>"#
+    );
+    let r = s.run("project.importQgis", &json!({"text": qgs})).unwrap();
+    let notes: Vec<String> = r["notes"].as_array().unwrap().iter().map(|n| n["text"].as_str().unwrap().to_string()).collect();
+    let l = s.map().layer_by_name("P").unwrap();
+    let placed = (0..l.dataset.features.len()).filter(|r| rustgis_map::graphics::kind(&l.dataset, *r) == "picture").count();
+    assert_eq!(placed, 1024 / b64.len(), "{notes:?}");
+    assert!(notes.iter().any(|n| n.starts_with("10 annotations that don't take to longitude and latitude")), "{notes:?}");
+    // One left out (7 − 6): "a picture annotation's picture past the …".
+    assert!(notes.iter().any(|n| n.ends_with("picture past the 1 KiB of pictures an import takes")), "{notes:?}");
+}
+
 /// A QGIS diagram reaches the layer through `style.importQgis`; categories on fields the layer
 /// hasn't are left out, and a diagram left with none removed, each noted with the fields. Undo
 /// takes it back.

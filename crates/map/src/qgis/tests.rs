@@ -947,6 +947,34 @@ fn annotation_defaults_and_limits() {
     assert!(said("an annotation with a text longer, or a font"), "{:?}", report.notes);
 }
 
+/// A text QGIS draws under a shape (a lower z) is drawn over it, as RustGIS draws a layer's texts
+/// last: noted, with how many. A text on top, or a layer of texts only, isn't noted.
+#[test]
+fn annotation_texts_under_shapes_are_noted() {
+    let layer = |items: &str| {
+        format!(
+            r#"<qgis><projectCrs><spatialrefsys><authid>EPSG:3857</authid></spatialrefsys></projectCrs><projectlayers>
+      <maplayer type="annotation"><id>a</id><layername>N</layername><items>{items}</items></maplayer></projectlayers></qgis>"#
+        )
+    };
+    let text = |z: i32| format!(r#"<item type="pointtext" text="t" x="1" y="2" zIndex="{z}"/>"#);
+    let marker = |z: i32| format!(r#"<item type="marker" x="1" y="2" zIndex="{z}"/>"#);
+    for (items, noted) in [
+        (format!("{}{}{}", text(0), text(1), marker(2)), Some("2 annotation texts QGIS draws under other annotations")),
+        (format!("{}{}", marker(2), text(0)), Some("an annotation text QGIS draws under other annotations")),
+        (format!("{}{}", marker(0), text(1)), None),
+        (format!("{}{}", text(0), text(1)), None),
+    ] {
+        let mut report = Report::default();
+        read_project(&layer(&items), "", &mut report).unwrap();
+        let said = report.notes.iter().find(|n| n.text.contains("QGIS draws under other annotations"));
+        match noted {
+            Some(part) => assert!(said.is_some_and(|n| n.text.contains(part)), "{items}: {:?}", report.notes),
+            None => assert!(said.is_none(), "{items}: {:?}", report.notes),
+        }
+    }
+}
+
 /// QGIS 4 (on Qt 6) weighs fonts from 100 to 1000, QGIS 3 from 0 to 99: a normal weight in
 /// either isn't bold.
 #[test]

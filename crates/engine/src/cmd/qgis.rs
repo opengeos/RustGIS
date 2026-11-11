@@ -265,24 +265,46 @@ fn add_annotations(
     let mut graphics = Vec::new();
     for a in layer.annotations.iter().filter(|_| transformer.is_some()) {
         let mut g = a.graphic.clone();
+        // A picture's bytes, charged to the budget once the graphic is placed.
+        let mut charge = 0;
         if let Some(picture) = &a.picture {
-            // Each file read once; every row keeps its own copy, counted against the budget.
-            let read = pictures.read.entry(picture.clone()).or_insert_with(|| {
-                if let Some(b64) = picture.strip_prefix("base64:") {
-                    super::graphics::picture(&json!({"image": b64}))
-                } else if !has_dir && qgis::is_relative(picture) {
-                    Err(format!("{picture}, relative to the project's folder, which the import wasn't given (pass dir)"))
-                } else {
-                    super::graphics::picture(&json!({"path": picture}))
+            let left = MAX_PICTURE_BYTES.saturating_sub(pictures.bytes);
+            if pictures.over.contains(picture) {
+                over += 1;
+                continue;
+            }
+            // Each file read once while the budget has room; kept only when it fits, so what is
+            // kept stays within the budget. Every row keeps its own copy, counted against it.
+            let read = match pictures.read.get(picture) {
+                Some(read) => read.clone(),
+                None if left == 0 => {
+                    over += 1;
+                    continue;
                 }
-            });
-            match read.clone() {
-                Ok(b64) if pictures.bytes.saturating_add(b64.len()) > MAX_PICTURE_BYTES => {
+                None => {
+                    let read = if let Some(b64) = picture.strip_prefix("base64:") {
+                        super::graphics::picture(&json!({"image": b64}))
+                    } else if !has_dir && qgis::is_relative(picture) {
+                        Err(format!("{picture}, relative to the project's folder, which the import wasn't given (pass dir)"))
+                    } else {
+                        super::graphics::picture(&json!({"path": picture}))
+                    };
+                    if read.as_ref().is_ok_and(|b64| b64.len() > left) {
+                        pictures.over.insert(picture.clone());
+                        over += 1;
+                        continue;
+                    }
+                    pictures.read.insert(picture.clone(), read.clone());
+                    read
+                }
+            };
+            match read {
+                Ok(b64) if b64.len() > left => {
                     over += 1;
                     continue;
                 }
                 Ok(b64) => {
-                    pictures.bytes += b64.len();
+                    charge = b64.len();
                     if a.keep_aspect
                         && let Some(size) = rustgis_render::picture_size(&b64)
                     {
@@ -309,6 +331,7 @@ fn add_annotations(
             unplaced += 1;
             continue;
         }
+        pictures.bytes += charge;
         graphics.push(g);
     }
     let n = |count: usize, one: &str, many: &str| if count == 1 { one.to_string() } else { format!("{count} {many}") };
@@ -329,7 +352,7 @@ fn add_annotations(
     }
     if over > 0 {
         let what = n(over, "a picture annotation's picture", "picture annotations' pictures");
-        report.skipped(name, format!("{what} past the {} MiB of pictures an import takes", MAX_PICTURE_BYTES >> 20));
+        report.skipped(name, format!("{what} past the {} of pictures an import takes", size_text(MAX_PICTURE_BYTES)));
     }
     let Some(l) = s.map_mut().layer_mut(id) else { return Err("the layer wasn't added".into()) };
     for g in graphics {
@@ -345,13 +368,23 @@ fn add_annotations(
     Ok(l.name.clone())
 }
 
-/// The most bytes of pictures (base64) one import adds to graphics layers.
-const MAX_PICTURE_BYTES: usize = 64 << 20;
+/// The most bytes of pictures (base64) one import adds to graphics layers (in tests, a few
+/// small pictures').
+const MAX_PICTURE_BYTES: usize = if cfg!(test) { 1 << 10 } else { 64 << 20 };
 
-/// The pictures an import has read, by file (or `base64:` text), and the bytes it has added.
+/// `bytes` in MiB, or KiB below one.
+fn size_text(bytes: usize) -> String {
+    if bytes >= 1 << 20 { format!("{} MiB", bytes >> 20) } else { format!("{} KiB", bytes >> 10) }
+}
+
+/// The pictures an import has read, by file (or `base64:` text), and the bytes it has added to
+/// placed graphics.
 #[derive(Default)]
 struct Pictures {
+    /// Those read that fit the budget when read, and those that don't read.
     read: std::collections::HashMap<String, Result<String, String>>,
+    /// Those read that didn't fit what was left of the budget, not kept.
+    over: std::collections::HashSet<String>,
     bytes: usize,
 }
 
