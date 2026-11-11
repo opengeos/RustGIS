@@ -6,6 +6,7 @@
 //! the labels too, for export and the command line.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+pub mod cancel;
 mod canvas;
 mod diagrams;
 mod effects;
@@ -1979,6 +1980,10 @@ fn render_with_backend(map: &mut Map, view: &View, full_res_rasters: bool, backe
 fn render_any(map: &mut Map, view: &View, full_res_rasters: bool, backend: Backend, record: bool) -> Option<RenderOutput> {
     let revisions = archive_revisions([&*map]);
     let output = render_pass(map, view, full_res_rasters, backend, record);
+    // A frame stopped part-way (see `cancel`) is no frame.
+    if cancel::requested() {
+        return None;
+    }
     revisions.current([&*map]).then_some(output).flatten()
 }
 
@@ -3776,6 +3781,10 @@ fn render_frame(
     // The layer drawn last, whose tile layers go over it before the next.
     let mut below: Option<u32> = None;
     for li in order {
+        // A frame no longer wanted stops between layers (see `cancel`).
+        if cancel::requested() {
+            break;
+        }
         if let Some(id) = below.take() {
             draw_tiles!(Some(id));
         }
@@ -4167,6 +4176,10 @@ fn render_frame(
                     let has_fills = layer.has_fills();
                     let mut stacked: Vec<(&[Vec<Coord>], Symbol, &[LineStroke])> = Vec::new();
                     for (row, g) in drawn.iter().enumerate() {
+                        // And every few thousand features of a large layer.
+                        if row % cancel::EVERY == 0 && row > 0 && cancel::requested() {
+                            break;
+                        }
                         let Some(g) = g else { continue };
                         let e = extents.get(row).copied().unwrap_or_else(|| g.extent());
                         // A point's marks, shifted from it, may show while the point is off the view.
