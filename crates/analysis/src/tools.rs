@@ -2449,16 +2449,21 @@ fn split(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
 /// The split areas [`split_on`] works on at a time a thread: their masks are held until their
 /// layers are made. Small in tests, so they cross from one batch to the next.
 const SPLIT_AREA_BATCH: usize = if cfg!(test) { 2 } else { 4 };
+/// The (area, feature) parts [`split_on`] makes at a time, so the list of them and their results
+/// stay bounded however many features an area's extent takes in. Small in tests, so they cross
+/// from one chunk to the next.
+const SPLIT_PART_CHUNK: usize = if cfg!(test) { 64 } else { 65_536 };
 
 /// [`split`] on `threads` threads (by the number of items in each step, and the memory each takes,
 /// when `None`), with the same layers, bit for bit, as on one (#1252). The split polygons are made
 /// into masks on several threads ([`overlay_zones_on`]). Then the input features some split area
 /// meets are made ready for the overlay ([`dissolved`]) on several, once each. Then the split
 /// areas, [`SPLIT_AREA_BATCH`] a thread at a time: their masks (a union for an area of several
-/// polygons) on several, then every feature's part in each area on several, and their layers in
-/// order. A thread's work in progress is taken as twice the largest area's polygons, or twice the
-/// largest input feature's coordinates, and the threads as many as the scratch memory work may
-/// take holds of that. Cancel is looked at, and progress counted, item by item in each step.
+/// polygons) on several, then every feature's part in each area on several, [`SPLIT_PART_CHUNK`]
+/// parts at a time, and their layers in order. The masks' threads are as many as half the scratch
+/// memory work may take holds of their batches' masks and the one each makes; the parts' as many
+/// as the other half holds of twice the largest input feature's and area's coordinates. Cancel
+/// is looked at, and progress counted, item by item in each step.
 fn split_on(inp: &dyn Inputs, p: &Json, threads: Option<usize>) -> Result<ToolResult, String> {
     let ds = input(inp, p, "input")?;
     if ds.geometry_type == GeometryType::None {
@@ -2546,11 +2551,10 @@ fn split_on(inp: &dyn Inputs, p: &Json, threads: Option<usize>) -> Result<ToolRe
     let needed: Vec<usize> = needed.iter().enumerate().filter_map(|(li, &n)| n.then_some(li)).collect();
     let largest_feature =
         needed.iter().filter_map(|&li| ds.features.get(located.get(li)?.0)?.geometry.as_ref()).map(coord_bytes).max().unwrap_or(0);
-    let largest_area = areas
-        .iter()
-        .map(|(_, polys, ..)| polys.iter().map(|z| kept_union_bytes(&[], &z.poly)).fold(0usize, usize::saturating_add))
-        .max()
-        .unwrap_or(0);
+    let area_bytes = |polys: &[&Zone]| polys.iter().map(|z| kept_union_bytes(&[], &z.poly)).fold(0usize, usize::saturating_add);
+    let largest_area = areas.iter().map(|(_, polys, ..)| area_bytes(polys)).max().unwrap_or(0);
+    // Only an area of several polygons has its mask made (a union); one polygon's is borrowed.
+    let largest_union = areas.iter().filter(|(_, polys, ..)| polys.len() > 1).map(|(_, polys, ..)| area_bytes(polys)).max().unwrap_or(0);
     let threads_for = |n: usize, scratch: usize| {
         threads.unwrap_or_else(|| crate::parallel::threads_for_scratch(n, PARALLEL_FEATURES, scratch.saturating_mul(2)))
     };
@@ -2569,8 +2573,16 @@ fn split_on(inp: &dyn Inputs, p: &Json, threads: Option<usize>) -> Result<ToolRe
             *slot = w;
         }
     }
-    let mask_threads = threads_for(areas.len(), largest_area).max(1);
-    let part_threads = threads_for(pairs, largest_feature.saturating_add(largest_area));
+    // A mask is a union of one area's polygons, worth threads from two areas on; a thread holds
+    // its batch's masks and the one it makes. Doubled, as `threads_for` doubles: the masks take at
+    // most half the scratch memory, the parts' work the other half.
+    let mask_threads = threads
+        .unwrap_or_else(|| {
+            crate::parallel::threads_for_scratch(areas.len(), 2, largest_union.saturating_mul(SPLIT_AREA_BATCH + 1).saturating_mul(2))
+        })
+        .max(1);
+    // A part's work: the feature and its part, and the overlay's own copy of the mask, about.
+    let part_work = largest_feature.saturating_add(largest_area).saturating_mul(2);
     let mut layers = Vec::new();
     let mut empty = 0usize;
     for batch in areas.chunks(mask_threads.saturating_mul(SPLIT_AREA_BATCH)) {
@@ -2586,21 +2598,6 @@ fn split_on(inp: &dyn Inputs, p: &Json, threads: Option<usize>) -> Result<ToolRe
                 })
             },
         )?;
-        // Every feature each area meets, area by area in order: their parts on several threads.
-        let mut work: Vec<(usize, usize)> = Vec::new();
-        for (ai, (_, _, ext, reached)) in batch.iter().enumerate() {
-            met_by(ext, *reached, &mut cand_buf);
-            work.extend(cand_buf.iter().map(|&li| (ai, li)));
-        }
-        let parts = crate::parallel::try_map_on(
-            &work,
-            part_threads,
-            || (),
-            |_, _, &(ai, li)| {
-                let (Some(mask), Some(Some(g))) = (masks.get(ai), whole.get(li)) else { return Ok::<_, String>(None) };
-                Ok(part(g, mask, true))
-            },
-        )?;
         let mut outs: Vec<Dataset> = batch
             .iter()
             .map(|(name, ..)| {
@@ -2609,12 +2606,38 @@ fn split_on(inp: &dyn Inputs, p: &Json, threads: Option<usize>) -> Result<ToolRe
                 out
             })
             .collect();
-        for (&(ai, li), c) in work.iter().zip(parts) {
-            let (Some(out), Some(c), Some(f)) = (outs.get_mut(ai), c, located.get(li).and_then(|(r, _)| ds.features.get(*r))) else {
-                continue;
-            };
-            out.push_next(Some(c), f.attrs.clone());
+        // Every feature each area meets, area by area in order, their parts made on several
+        // threads [`SPLIT_PART_CHUNK`] at a time and added to their layers in that order.
+        let make = |work: &[(usize, usize)], outs: &mut Vec<Dataset>| -> Result<(), String> {
+            let parts = crate::parallel::try_map_on(
+                work,
+                threads_for(work.len(), part_work),
+                || (),
+                |_, _, &(ai, li)| {
+                    let (Some(mask), Some(Some(g))) = (masks.get(ai), whole.get(li)) else { return Ok::<_, String>(None) };
+                    Ok(part(g, mask, true))
+                },
+            )?;
+            for (&(ai, li), c) in work.iter().zip(parts) {
+                let (Some(out), Some(c), Some(f)) = (outs.get_mut(ai), c, located.get(li).and_then(|(r, _)| ds.features.get(*r))) else {
+                    continue;
+                };
+                out.push_next(Some(c), f.attrs.clone());
+            }
+            Ok(())
+        };
+        let mut work: Vec<(usize, usize)> = Vec::new();
+        for (ai, (_, _, ext, reached)) in batch.iter().enumerate() {
+            met_by(ext, *reached, &mut cand_buf);
+            for &li in &cand_buf {
+                work.push((ai, li));
+                if work.len() >= SPLIT_PART_CHUNK {
+                    make(&work, &mut outs)?;
+                    work.clear();
+                }
+            }
         }
+        make(&work, &mut outs)?;
         for out in outs {
             if out.features.is_empty() {
                 empty += 1;
@@ -12176,7 +12199,8 @@ mod tests {
     /// Split gives the same layers, bit for bit, on several threads as on one (#1252): areas of one
     /// polygon and of several (by a field), polygons of one and of several parts, lines and points,
     /// features without geometry, an area that holds nothing, and, at the tests'
-    /// [`SPLIT_AREA_BATCH`], several batches of areas.
+    /// [`SPLIT_AREA_BATCH`] and [`SPLIT_PART_CHUNK`], several batches of areas and chunks of parts;
+    /// the threads set or found by the sizes.
     #[test]
     fn split_on_several_threads_is_on_one() {
         let mut input = Dataset::new("input", GeometryType::Polygon, vec![Field::new("v", FieldType::Integer)]);
@@ -12235,10 +12259,10 @@ mod tests {
                 assert!(one_messages.iter().any(|m| m.contains("held no features")), "{name}, {field:?}: {one_messages:?}");
                 let one = layers(one);
                 assert!(one.len() > 10, "{name}, {field:?}: {}", one.len());
-                for threads in [2, 7, 16] {
-                    let many = split_on(&m, &p, Some(threads)).unwrap();
-                    assert_eq!(many.messages, one_messages, "{name}, {field:?}, {threads} threads");
-                    assert_eq!(layers(many), one, "{name}, {field:?}, {threads} threads");
+                for threads in [Some(2), Some(7), Some(16), None] {
+                    let many = split_on(&m, &p, threads).unwrap();
+                    assert_eq!(many.messages, one_messages, "{name}, {field:?}, {threads:?} threads");
+                    assert_eq!(layers(many), one, "{name}, {field:?}, {threads:?} threads");
                 }
             }
         }
