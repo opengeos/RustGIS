@@ -4244,6 +4244,10 @@ mod tests {
         let _turn = crate::cache::turn();
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
+        // Set once the test has looked at the progress mid-download: the rest comes at once, so
+        // the download's end doesn't wait on 200 sleeps a busy runner stretches (macOS CI).
+        let looked = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let done_looking = looked.clone();
         std::thread::spawn(move || {
             for stream in listener.incoming() {
                 let Ok(mut stream) = stream else { return };
@@ -4252,13 +4256,15 @@ mod tests {
                     let _ = write!(stream, "HTTP/1.1 200 OK\r\nContent-Length: 10\r\nConnection: close\r\n\r\n0123456789");
                     continue;
                 }
-                // Chunked, so no length: a 1 kB chunk every 20 ms.
+                // Chunked, so no length: a 1 kB chunk every 20 ms until the test has looked.
                 let _ = write!(stream, "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n");
                 for _ in 0..200 {
                     if write!(stream, "3e8\r\n{}\r\n", "x".repeat(1000)).is_err() {
                         return;
                     }
-                    std::thread::sleep(std::time::Duration::from_millis(20));
+                    if !looked.load(std::sync::atomic::Ordering::SeqCst) {
+                        std::thread::sleep(std::time::Duration::from_millis(20));
+                    }
                 }
                 let _ = write!(stream, "0\r\n\r\n");
             }
@@ -4280,6 +4286,7 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
         assert_eq!(progress.fraction(), None, "{progress:?}");
+        done_looking.store(true, std::sync::atomic::Ordering::SeqCst);
         assert!(rx.recv_timeout(std::time::Duration::from_secs(20)).unwrap().is_ok());
     }
 
