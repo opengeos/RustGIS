@@ -734,8 +734,9 @@ fn convert(s: &mut Session, p: &Value) -> CmdResult {
     let by_angle = l.labels.in_order().any(|c| c.visible && c.by.angle.is_some() && !(only_lines && c.placement.along_line()));
     // Texts cut to their most characters, said once.
     let mut cut = 0usize;
-    // Labels along lines made upright points on them (not those moved by hand), said once.
-    let mut flattened = 0usize;
+    // Labels along lines made upright points on them (not those moved by hand), and of them those
+    // repeated along their lines (each converted once), said once each.
+    let (mut flattened, mut repeated) = (0usize, 0usize);
     for (on, name, kind) in
         [(by_size, "SIZE", FieldType::Double), (by_color, "COLOR", FieldType::Text), (by_angle, "ANGLE", FieldType::Double)]
     {
@@ -792,7 +793,9 @@ fn convert(s: &mut Session, p: &Value) -> CmdResult {
                 attrs.push(number(e.filter(|_| turns).and_then(|e| e.angle(&l.dataset, row))));
             }
             ds.push(Some(Geometry::Point(at)), attrs);
-            flattened += usize::from(put.is_none() && along(class, ft.geometry.as_ref()));
+            let flat = put.is_none() && along(class, ft.geometry.as_ref());
+            flattened += usize::from(flat);
+            repeated += usize::from(flat && class.repeat.is_some());
             if let (Some(put), Some(new)) = (put, ds.features.last()) {
                 moved.push((i, new.id, put));
             }
@@ -806,6 +809,12 @@ fn convert(s: &mut Session, p: &Value) -> CmdResult {
         NoticeText::format(
             "{name}: {n} label(s) along lines made upright points at their lines' middle vertex, no longer laid along the line",
             [("name", ds.name.clone().into()), ("n", flattened.to_string().into())],
+        )
+    });
+    let repeated_note = (repeated > 0).then(|| {
+        NoticeText::format(
+            "{name}: {n} label(s) repeated along their lines converted once each",
+            [("name", ds.name.clone().into()), ("n", repeated.to_string().into())],
         )
     });
     let cut_note = (cut > 0).then(|| {
@@ -859,7 +868,7 @@ fn convert(s: &mut Session, p: &Value) -> CmdResult {
     if let Some(note) = cut_note {
         s.notify(note, false);
     }
-    if let Some(note) = flattened_note {
+    for note in [flattened_note, repeated_note].into_iter().flatten() {
         s.notify_text(note, false);
     }
     if let Some((_, unread)) = &whole {

@@ -4012,6 +4012,35 @@ fn labels_take_a_distance_from_the_line() {
     assert_eq!(class(&reopened), (-6.0, rustgis_map::LabelPlacement::Curved));
 }
 
+/// A project whose label distance from the line is out of range or not a number says so on
+/// opening, one notice with a count; in range, 0 or null says nothing (#1187).
+#[test]
+fn opening_a_project_says_when_a_line_label_distance_is_adjusted() {
+    let said = |v: &Value| {
+        let s = Session::new(Project::from_json(&v.to_string()).unwrap());
+        s.notices.iter().filter(|n| n.text.contains("label distance(s) from the line")).map(|n| n.text.clone()).collect::<Vec<_>>()
+    };
+    let clean: Value = serde_json::to_value(&world().project).unwrap();
+    assert!(said(&clean).is_empty());
+    for fine in [json!(4.5), json!(-200), json!(0), json!(null)] {
+        let mut v = clean.clone();
+        v["maps"][0]["layers"][0]["labels"]["line_offset"] = fine.clone();
+        assert!(said(&v).is_empty(), "{fine}");
+    }
+    let mut damaged = clean.clone();
+    damaged["maps"][0]["layers"][0]["labels"]["line_offset"] = json!(900);
+    damaged["maps"][0]["layers"][1]["labels"]["line_offset"] = json!("above");
+    let loaded = Project::from_json(&damaged.to_string()).unwrap();
+    assert_eq!(loaded.maps[0].layers[0].labels.default.line_offset, 200.0);
+    assert_eq!(loaded.maps[0].layers[1].labels.default.line_offset, 0.0);
+    let notes = said(&damaged);
+    assert_eq!(notes.len(), 1, "{notes:?}");
+    assert!(
+        notes[0].ends_with("2 label distance(s) from the line out of range or not a number adjusted while opening the project"),
+        "{notes:?}"
+    );
+}
+
 /// Labels along lines converted to annotation become upright points on their lines, and the
 /// conversion says how many lost their angle, curve and distance from the line; points' labels
 /// lose none of that, and say nothing (#1187).
@@ -4028,6 +4057,14 @@ fn converting_labels_along_lines_says_what_they_lose() {
         "Rivers Annotation: {n} label(s) along lines made upright points at their lines' middle vertex, no longer laid along the line"
     );
     assert!(said.contains(&expected), "{said:?}");
+    assert!(said.iter().all(|t| !t.contains("repeated")), "none repeated: {said:?}");
+    // Repeated along their lines, each converts once, and says so.
+    s.undo();
+    s.run("labels.placement", &json!({"layer": "Rivers", "repeat": 144})).unwrap();
+    let mark = s.notice_mark();
+    let n = s.run("labels.convert", &json!({"layer": "Rivers"})).unwrap()["annotations"].as_u64().unwrap();
+    let said: Vec<String> = s.notices_since(mark).iter().map(|x| x.text.clone()).collect();
+    assert!(said.contains(&format!("Rivers Annotation: {n} label(s) repeated along their lines converted once each")), "{said:?}");
     let mark = s.notice_mark();
     s.run("labels.convert", &json!({"layer": "Cities"})).unwrap();
     assert!(s.notices_since(mark).iter().all(|x| !x.text.contains("along lines")), "{:?}", s.notices_since(mark));
