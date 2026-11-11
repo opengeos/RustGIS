@@ -1746,8 +1746,9 @@ impl MaskCache {
 /// takes, when `None`): the masks are unioned, and each input feature clipped, on their own
 /// (#1252), in batches of [`CLIP_BATCH`] features a thread, and the rows come back in input
 /// order, as on one thread. A thread's work in progress takes about twice the largest mask's
-/// coordinates while the masks are unioned, then twice the largest input feature's plus the
-/// largest union of the masks one feature meets; the threads are as many as half the scratch
+/// coordinates while the masks are unioned, then twice the largest input feature's, a list of
+/// the masks, and the larger of the largest mask and the largest union of the masks one feature
+/// meets (found for each batch first); the threads are as many as half the scratch
 /// memory work may take holds of that, and their recent unions of several masks share
 /// `cache_bytes` (by default the other half of [`crate::parallel::scratch_budget`]).
 fn clip_on(inp: &dyn Inputs, p: &Json, threads: Option<usize>, cache_bytes: Option<usize>) -> Result<ToolResult, String> {
@@ -1804,7 +1805,11 @@ fn clip_on(inp: &dyn Inputs, p: &Json, threads: Option<usize>, cache_bytes: Opti
     let mut out = copy_schema(ds, out_name(p, format!("{}_Clip", ds.name)), ds.geometry_type);
     let input_rows = rows(inp, p, "input", ds);
     // Input features without geometry: nothing of them can be kept.
-    let without = input_rows.iter().filter(|&&r| ds.features.get(r).is_some_and(|f| f.geometry.is_none())).count();
+    // Input features without geometry, or with an empty one: nothing of them can be kept.
+    let without = input_rows
+        .iter()
+        .filter(|&&r| ds.features.get(r).is_some_and(|f| f.geometry.as_ref().is_none_or(|g| g.coord_count() == 0)))
+        .count();
     // The masks whose extents meet a feature's, and the poles' for a point at one.
     let near_of = |g: &Geometry| {
         let ext = projected_extent(g);
@@ -1829,35 +1834,36 @@ fn clip_on(inp: &dyn Inputs, p: &Json, threads: Option<usize>, cache_bytes: Opti
         [] | [_] => 0,
         _ => near.iter().filter_map(|&i| mask_bytes.get(i)).fold(0usize, |a, &b| a.saturating_add(b)),
     };
-    let feature_work = largest(ds, &input_rows).saturating_mul(2);
+    // A thread's work in progress: a feature and its clipped part, the list of the masks it meets
+    // (at most all of them), and the larger of a mask and the union of the masks it meets.
+    let feature_work = largest(ds, &input_rows).saturating_mul(2).saturating_add(masks.len().saturating_mul(std::mem::size_of::<usize>()));
     // As many threads as there could be, if no feature met several masks: they size the batches.
     let most_threads = threads_for(input_rows.len(), feature_work.saturating_add(largest_mask)).max(1);
-    // Each feature is looked at twice: for the masks it meets, then to be clipped.
+    // Each feature is looked at twice: for the size of the union of the masks it meets, then to
+    // be clipped. Only those sizes are kept between the two, not the masks.
     crate::control::begin(input_rows.len().saturating_mul(2));
     // In batches, so the clipped features held before they're added to the output stay few.
     for batch in input_rows.chunks(most_threads.saturating_mul(CLIP_BATCH)) {
-        let nears = crate::parallel::try_map_on(
+        let unions = crate::parallel::try_map_on(
             batch,
             most_threads,
             || (),
-            |_, _, &r| Ok::<_, String>(ds.features.get(r).and_then(|f| f.geometry.as_ref()).map(near_of)),
+            |_, _, &r| Ok::<_, String>(ds.features.get(r).and_then(|f| f.geometry.as_ref()).map_or(0, |g| union_bytes(&near_of(g)))),
         )?;
         // The batch's threads, by its largest union too.
-        let largest_union = nears.iter().flatten().map(|near| union_bytes(near)).max().unwrap_or(0);
+        let largest_union = unions.into_iter().max().unwrap_or(0);
         let clip_threads = threads_for(batch.len(), feature_work.saturating_add(largest_mask.max(largest_union))).min(most_threads);
         // Single candidates reuse their normalized mask. Each thread keeps eight recent multi-mask
         // unions, so alternating neighbourhoods can reuse work too, the least recently used going
         // first; the threads' unions together stay within their share of the scratch memory.
         let cache_cap = cache_bytes.unwrap_or_else(|| crate::parallel::scratch_budget() / 2) / clip_threads.max(1);
-        let work: Vec<(usize, Option<Vec<usize>>)> = batch.iter().copied().zip(nears).collect();
         let clipped = crate::parallel::try_map_on(
-            &work,
+            batch,
             clip_threads,
             || MaskCache::new(cache_cap),
-            |cache, _, (r, near)| {
-                let (Some(g), Some(near)) = (ds.features.get(*r).and_then(|f| f.geometry.as_ref()), near) else {
-                    return Ok::<_, String>(None);
-                };
+            |cache, _, &r| {
+                let Some(g) = ds.features.get(r).and_then(|f| f.geometry.as_ref()) else { return Ok::<_, String>(None) };
+                let near = near_of(g);
                 if near.is_empty() {
                     // A big union is kept only while the features next to each other meet it.
                     cache.big = None;
@@ -1868,7 +1874,7 @@ fn clip_on(inp: &dyn Inputs, p: &Json, threads: Option<usize>, cache_bytes: Opti
                     cache.big = None;
                     masks.get(*i).and_then(|(m, _)| part(&shape, m, true))
                 } else {
-                    part(&shape, &cache.union_of(near, &masks), true)
+                    part(&shape, &cache.union_of(&near, &masks), true)
                 })
             },
         )?;
@@ -12075,14 +12081,15 @@ mod tests {
         }
     }
 
-    /// Clip says how many input features it left out for having no geometry, and says nothing of
-    /// it when all have one.
+    /// Clip says how many input features it left out for having no geometry, or an empty one, and
+    /// says nothing of it when all have one.
     #[test]
     fn clip_says_which_input_features_have_no_geometry() {
         let mut input = Dataset::new("input", GeometryType::Polygon, vec![]);
         input.push(Some(sq(0.0, 0.0, 1.0)), vec![]);
         input.push(None, vec![]);
         input.push(None, vec![]);
+        input.push(Some(Geometry::Polygon(vec![])), vec![]);
         let mut clean = Dataset::new("clean", GeometryType::Polygon, vec![]);
         clean.push(Some(sq(0.0, 0.0, 1.0)), vec![]);
         let mut masks = Dataset::new("masks", GeometryType::Polygon, vec![]);
@@ -12090,7 +12097,7 @@ mod tests {
         let m = Map(HashMap::from([("input".to_string(), input), ("clean".to_string(), clean), ("masks".to_string(), masks)]));
         let lossy = clip(&m, &serde_json::json!({"input": "input", "clip": "masks"})).unwrap();
         assert!(
-            lossy.messages.iter().any(|m| m == "Clip: 2 feature(s) of 'input' left out: they have no geometry to clip"),
+            lossy.messages.iter().any(|m| m == "Clip: 3 feature(s) of 'input' left out: they have no geometry to clip"),
             "{:?}",
             lossy.messages
         );
