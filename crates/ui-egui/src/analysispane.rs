@@ -401,6 +401,19 @@ fn num(s: &str, d: f64) -> f64 {
     s.trim().parse().unwrap_or(d)
 }
 
+/// The viewshed's parameters from the pane, seen from `at`: an empty radius field leaves the
+/// radius out, so the command takes the whole DEM.
+fn viewshed_params(w: &Workflow, at: rustgis_engine::geom::Coord) -> Value {
+    let mut params = json!({"layer": w.layer, "lon": at.x, "lat": at.y, "height": num(&w.number, 1.7)});
+    if let Ok(r) = w.number2.trim().parse::<f64>() {
+        params["radius"] = json!(r);
+    }
+    if w.bilinear {
+        params["heights"] = json!("bilinear");
+    }
+    params
+}
+
 /// The sections of the Workflows pane: (id, title).
 pub const SECTIONS: &[(&str, &str)] = &[
     ("rasterFunctions", "Raster Functions"),
@@ -705,13 +718,7 @@ pub fn workflows(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             });
             pick_button(app, ui, "viewshed", 1, "Click the observer on the map");
             if let Some(p) = picked(app, "viewshed").and_then(|v| v.first().copied()) {
-                let mut params = json!({"layer": app.workflow.layer, "lon": p.x, "lat": p.y, "height": num(&app.workflow.number, 1.7)});
-                if let Ok(r) = app.workflow.number2.trim().parse::<f64>() {
-                    params["radius"] = json!(r);
-                }
-                if app.workflow.bilinear {
-                    params["heights"] = json!("bilinear");
-                }
+                let params = viewshed_params(&app.workflow, p);
                 run(app, "analysis.viewshed", params);
             }
         }
@@ -2058,6 +2065,40 @@ pub fn script_details(app: &mut RustGisApp, ctx: &egui::Context) {
 mod tests {
     use super::*;
     use egui_kittest::kittest::Queryable;
+
+    /// An empty radius field (or one of spaces) runs the viewshed over the whole DEM, also one
+    /// whose radius square, the DEM's diagonal each way, holds far more cells than the DEM.
+    #[test]
+    fn a_viewshed_with_an_empty_radius_field_sees_the_whole_dem() {
+        use base64::Engine;
+        use rustgis_engine::geom::Coord;
+        let mut app = RustGisApp::with_sample();
+        use rustgis_engine::data::raster::{ColorHint, Crs, GeoTransform, Raster, geotiff};
+        // A strip 4,000 cells long and 2 high: the DEM's diagonal each way spans 8,001 × 8,001
+        // cells, 64 million, of which 8,000 are the DEM's.
+        let (w, h) = (4_000u32, 2u32);
+        let gt = GeoTransform { origin_x: 10.0, origin_y: 45.002, pixel_width: 0.001, pixel_height: -0.001 };
+        let dem =
+            Raster::new("strip", w, h, vec![vec![200.0; (w * h) as usize]], gt, Crs::LonLat, None, ColorHint::Gray, "Float32").unwrap();
+        let data = base64::engine::general_purpose::STANDARD.encode(geotiff::write(&dem, 0).unwrap());
+        app.session.run("layer.addDataBytes", &json!({"fileName": "strip.tif", "data": data})).unwrap();
+        let layer = app.session.map().layers.iter().rev().find(|l| l.is_raster()).unwrap().name.clone();
+        // As the farthest radius the command takes: flat ground seen up to its horizon, a few km.
+        let mut far = json!({"layer": layer, "lon": 10.0005, "lat": 45.0005, "height": 2.0, "radius": 500_000.0});
+        let seen = app.session.run("analysis.viewshed", &far).unwrap()["visibleCells"].as_u64().unwrap();
+        assert!(seen > 20 && seen < u64::from(w * h), "{seen}");
+        far.as_object_mut().unwrap().remove("radius");
+        for radius in ["", "   "] {
+            let workflow = Workflow { layer: layer.clone(), number: "2".into(), number2: radius.into(), ..Default::default() };
+            let p = viewshed_params(&workflow, Coord::new(10.0005, 45.0005));
+            assert_eq!(p, far, "radius {radius:?}");
+            let v = app.session.run("analysis.viewshed", &p).unwrap_or_else(|e| panic!("radius {radius:?}: {e}"));
+            assert_eq!(v["visibleCells"].as_u64(), Some(seen), "radius {radius:?}: {v}");
+        }
+        // A number in the field is the radius.
+        let workflow = Workflow { layer, number2: " 5000 ".into(), ..Default::default() };
+        assert_eq!(viewshed_params(&workflow, Coord::new(10.0005, 45.0005))["radius"], json!(5000.0));
+    }
 
     /// A Script pane run works its tools out on a thread of its own: the results say Running…
     /// until it lands, runs land in the order asked, and one cancelled or left says so.

@@ -523,21 +523,20 @@ fn viewshed_on(
     if !(cx > 0.0 && cy > 0.0 && radius_m.is_finite() && radius_m > 0.0) {
         return Err("the raster's cells or the radius have no size".into());
     }
-    // A tiny declared cell size would make the window overflow: bound it before converting.
-    if radius_m / cx > 100_000.0 || radius_m / cy > 100_000.0 {
-        return Err("the radius covers too many cells; use a smaller radius".into());
-    }
+    // In cells (saturating: a radius of more cells than an i64 holds still reaches past the
+    // raster). Only the radius's cells within the raster are worked out, so a radius reaching
+    // past it (the whole DEM's diagonal, by default) costs no more than the raster, which is
+    // already in memory; the time is bounded by the ray steps below.
     let rad_c = (radius_m / cx).ceil() as i64;
     let rad_r = (radius_m / cy).ceil() as i64;
+    let (first, last) = (or.saturating_sub(rad_r).max(0), or.saturating_add(rad_r).min(r.height as i64 - 1));
+    let (left, right) = (oc.saturating_sub(rad_c).max(0), oc.saturating_add(rad_c).min(r.width as i64 - 1));
     // Each cell walks a ray back to the observer: bound cells × ray length, not just cells.
-    let cells = (2 * rad_c + 1).saturating_mul(2 * rad_r + 1);
-    let ray_work = usize::try_from(cells.saturating_mul(rad_c.max(rad_r) / 2 + 1)).unwrap_or(usize::MAX);
-    if cells > 25_000_000 {
-        return Err("the radius covers too many cells; use a smaller radius".into());
-    }
+    let cells = (right - left + 1).saturating_mul(last - first + 1);
+    let longest = (oc - left).max(right - oc).max(or - first).max(last - or);
+    let ray_work = usize::try_from(cells.saturating_mul(longest / 2 + 1)).unwrap_or(usize::MAX);
     // Each cell walks its own ray and writes only itself, so the rows within the radius are made
     // on several threads when the work is large (#1252), and may take as many times the work.
-    let (first, last) = ((or - rad_r).max(0), (or + rad_r).min(r.height as i64 - 1));
     let rows = usize::try_from(last - first + 1).unwrap_or(0);
     let threads = threads.unwrap_or_else(|| crate::parallel::threads_for_rows(rows, ray_work, 0));
     let cap = crate::parallel::work_cap(MAX_VIEWSHED_WORK, threads);
@@ -555,7 +554,7 @@ fn viewshed_on(
     crate::control::begin(rows);
     crate::parallel::for_each_row(window, threads, crate::control::Pace::default, |pace, i, line: &mut [f32]| {
         let row = first + i as i64;
-        for col in (oc - rad_c).max(0)..=(oc + rad_c).min(r.width as i64 - 1) {
+        for col in left..=right {
             let (dx, dy) = ((col - oc) as f64 * cx, (row - or) as f64 * cy);
             let dist = dx.hypot(dy);
             if dist > radius_m {
@@ -1669,6 +1668,29 @@ mod tests {
         assert!(new_band(usize::MAX, 2, 0.0f32).is_err_and(|e| e.starts_with("not enough memory")));
         assert_eq!(new_band(3, 2, NODATA), Ok(vec![NODATA; 6]));
         assert!(grid::<f64>(4, 5).is_ok_and(|g| g.is_empty() && g.capacity() >= 20));
+    }
+
+    /// A radius reaching far past the raster (the whole DEM's diagonal, as the command takes by
+    /// default) counts only the raster's cells: a strip 6,000 cells long, seen from one end, is
+    /// worked out, though the square the radius spans holds 144 million cells, as is one whose
+    /// radius spans more cells than a number holds.
+    #[test]
+    fn a_viewshed_radius_past_the_raster_counts_only_its_cells() {
+        let transform = GeoTransform { origin_x: 0.0, origin_y: 0.001, pixel_width: 0.001, pixel_height: -0.001 };
+        let strip = Raster::new("strip", 6_000, 1, vec![vec![100.0; 6_000]], transform, Crs::LonLat, None, ColorHint::Gray, "Float32")
+            .unwrap_or_else(|e| panic!("{e}"));
+        let (cx, _) = strip.cell_size_m();
+        let vs = viewshed(&strip, 0, Coord::new(0.0005, 0.0005), 2.0, cx * 6_000.0, Heights::Nearest).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(vs.cells.len(), 6_000);
+        // Every cell worked out (none left no-data): seen up to the horizon, hidden past it.
+        assert!(vs.cells.iter().all(|v| *v == 1.0 || *v == 0.0), "every cell worked out");
+        assert!(vs.cells.contains(&1.0) && vs.cells.contains(&0.0), "seen and hidden");
+        // A radius of more cells than an i64 holds, on cells declared a millimetre wide.
+        let tiny = GeoTransform { pixel_width: 1e-8, pixel_height: -1e-8, ..transform };
+        let strip = Raster::new("strip", 50, 1, vec![vec![100.0; 50]], tiny, Crs::LonLat, None, ColorHint::Gray, "Float32")
+            .unwrap_or_else(|e| panic!("{e}"));
+        let vs = viewshed(&strip, 0, Coord::new(5e-9, 0.001 - 5e-9), 2.0, 1e300, Heights::Nearest).unwrap_or_else(|e| panic!("{e}"));
+        assert!(vs.cells.iter().all(|v| *v == 1.0), "{:?}", vs.cells);
     }
 
     /// Viewshed rows made on several threads see what one thread sees (#1252), with the radius
