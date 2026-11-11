@@ -593,18 +593,25 @@ fn world_of(wv: sample_data::View) -> &'static Vec<Geometry> {
     })
 }
 
-/// Reads a view's countries and builds its world outline ahead of time (the desktop app does it on
-/// the download's thread), so neither is done on the UI thread when the view is shown.
+/// Reads a view's countries and builds its world outline for the flat map and the globe ahead of
+/// time (the desktop app does it on the download's thread), so none of it is done on the UI
+/// thread when the view is shown. A map in another projection still projects the outline once,
+/// on the first frame drawn in it.
 pub fn prepare_world(v: sample_data::View) {
     let _ = sample_data::dataset(v);
     let _ = world_of(v);
+    let _ = world_lonlat_of(v);
 }
 
 /// The built-in world outline in longitude/latitude, for the globe.
 fn world_lonlat() -> &'static Vec<Geometry> {
+    world_lonlat_of(sample_data::view())
+}
+
+/// The world outline in view `wv`, in longitude/latitude.
+fn world_lonlat_of(wv: sample_data::View) -> &'static Vec<Geometry> {
     static W: [OnceLock<Vec<Geometry>>; sample_data::VIEW_COUNT] = [const { OnceLock::new() }; sample_data::VIEW_COUNT];
     static NONE: Vec<Geometry> = Vec::new();
-    let wv = sample_data::view();
     let Some(cell) = W.get(wv.index()) else { return &NONE };
     cell.get_or_init(|| world_of(wv).iter().map(|g| g.map_coords(&rustgis_geom::merc_to_lonlat)).collect())
 }

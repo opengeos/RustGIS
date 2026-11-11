@@ -91,9 +91,12 @@ fn worldview_swaps_only_untouched_sample_countries() {
     assert!(!s.dirty());
     assert!(swap_countries(&mut s, japan, View::DEFAULT));
     assert_eq!(countries(&s), n);
-    // Not in a project with changes, or a saved one.
+    // Not in a project with changes, or a saved one; it still holds the sample's countries (the
+    // app then says they're kept).
     s.mark_unsaved();
     assert!(!swap_countries(&mut s, View::DEFAULT, japan));
+    assert!(sample::holds_countries(&s, View::DEFAULT));
+    assert!(!sample::holds_countries(&s, japan));
     s.mark_saved();
     s.path = Some("atlas.rgis".into());
     assert!(!swap_countries(&mut s, View::DEFAULT, japan));
@@ -106,6 +109,7 @@ fn worldview_swaps_only_untouched_sample_countries() {
     t.clear_history();
     assert!(!t.can_undo());
     assert!(!swap_countries(&mut t, View::DEFAULT, japan));
+    assert!(!sample::holds_countries(&t, View::DEFAULT));
 }
 
 #[test]

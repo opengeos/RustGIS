@@ -146,7 +146,10 @@ pub fn fetch(v: View, done: Box<dyn FnOnce(Result<(), String>) + Send>) {
         let mine = shared.clone();
         let spawned = std::thread::Builder::new().name("worldview".into()).spawn(move || {
             if let Some((work, done)) = mine.lock().ok().and_then(|mut g| g.take()) {
-                done(work());
+                // A panic (a parser on hostile bytes) is the download's error, not a silent stall.
+                let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(work))
+                    .unwrap_or_else(|_| Err(format!("the {} worldview's download stopped unexpectedly", v.worldview.name())));
+                done(r);
             }
         });
         if spawned.is_err()
@@ -178,6 +181,12 @@ pub fn download_blocking(v: View) -> Result<(), String> {
 
 fn cam(lon: f64, lat: f64, res: f64) -> Camera {
     Camera { center: lonlat_to_merc(Coord::new(lon, lat)), res, bearing: 0.0, pitch: 0.0 }
+}
+
+/// Whether the project has a layer named `Countries` holding exactly the built-in countries of
+/// view `v` (the sample's, whether or not it may be swapped).
+pub fn holds_countries(s: &crate::Session, v: View) -> bool {
+    dataset(v).is_some_and(|d| s.map().layers.iter().any(|l| l.name == "Countries" && l.dataset.features == d.features))
 }
 
 /// Swaps an untouched sample project's countries from view `from` to `to`: only in a project

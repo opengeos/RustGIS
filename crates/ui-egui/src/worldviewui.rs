@@ -78,7 +78,16 @@ pub fn apply(app: &mut RustGisApp) {
     let wanted = sample::apply_view(pref(app), &app.ui.worldview_detail);
     let after = sample::view();
     if after != before {
-        sample::swap_countries(&mut app.session, before, after);
+        if !sample::swap_countries(&mut app.session, before, after) && sample::holds_countries(&app.session, before) {
+            // The project has changes or is saved: its sample countries stay as they are.
+            app.session.notify(
+                i18n::fmt(
+                    "The basemap now shows the {view} worldview; the project's Countries layer keeps its borders",
+                    &[("view", name(after.worldview))],
+                ),
+                false,
+            );
+        }
         app.map.invalidate();
     }
     if after == wanted {
@@ -202,6 +211,8 @@ mod tests {
         assert!(app.run("ui.worldview", json!({"worldview": "atlantis"})).is_err());
         assert!(app.run("ui.worldview", json!({"worldview": 7})).is_err());
         assert_eq!((app.ui.worldview.as_str(), app.ui.worldview_detail.as_str()), ("nld", "simplified"));
+        // The view shown is the process's: leave it as other tests expect.
+        sample::set_view(View::DEFAULT);
     }
 
     /// A download that fails, or isn't countries, says so and keeps the borders shown.

@@ -248,10 +248,8 @@ fn configuration(provider: &str, args: &[String], env: &Environment, saved: Opti
 
 const NEEDS_REQUEST: &str = "ask needs a request, e.g. rustgis-cli ask --sample \"Which countries have the largest GDP?\"";
 
-/// `ask "<request>"`: one conversation turn with the AI assistant, which acts on the project.
-fn ask(s: &mut Session, args: &[String], saved: Option<&Saved>, env: &Environment) -> Result<(), String> {
-    use rustgis_assistant::{Agent, Entry, agent, http};
-    // The first value that isn't an option's.
+/// The request `ask` is given: its first argument that is neither an option nor an option's value.
+fn ask_request(args: &[String]) -> Option<String> {
     let takes_value = [
         "--provider",
         "--model",
@@ -268,12 +266,18 @@ fn ask(s: &mut Session, args: &[String], saved: Option<&Saved>, env: &Environmen
         "--account",
         "--remove-account",
     ];
-    let prompt = args
-        .iter()
+    args.iter()
         .enumerate()
         .skip(1)
         .find(|(i, a)| !a.starts_with("--") && !args.get(i - 1).is_some_and(|p| takes_value.contains(&p.as_str())))
-        .map(|(_, a)| a.clone());
+        .map(|(_, a)| a.clone())
+}
+
+/// `ask "<request>"`: one conversation turn with the AI assistant, which acts on the project.
+fn ask(s: &mut Session, args: &[String], saved: Option<&Saved>, env: &Environment) -> Result<(), String> {
+    use rustgis_assistant::{Agent, Entry, agent, http};
+    // The first value that isn't an option's.
+    let prompt = ask_request(args);
     let provider = choose_provider(args, env, saved);
     if provider::preset(&provider).is_none() {
         let ids: Vec<&str> = provider::PRESETS.iter().map(|p| p.id).collect();
@@ -735,9 +739,10 @@ fn cli() -> ExitCode {
     // `mcp --attach` relays to the running app, which shows its own worldview; `ask`'s model,
     // sign-in and account options draw nothing.
     let attaching = cmd == "mcp" && args.iter().any(|a| a == "--attach");
-    // (`--account ID` alone may come with a request, which draws maps, so it isn't one of them.)
-    let ask_setup =
-        cmd == "ask" && args.iter().any(|a| ["--models", "--login", "--logout", "--accounts", "--remove-account"].contains(&a.as_str()));
+    // `--account ID` is one of them only without a request, which would draw maps.
+    let ask_setup = cmd == "ask"
+        && (args.iter().any(|a| ["--models", "--login", "--logout", "--accounts", "--remove-account"].contains(&a.as_str()))
+            || (args.iter().any(|a| a == "--account") && ask_request(&args).is_none()));
     if matches!(cmd, "render" | "run" | "ask" | "mcp")
         && !attaching
         && !ask_setup
