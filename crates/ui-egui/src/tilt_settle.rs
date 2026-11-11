@@ -81,6 +81,12 @@ impl<K: Copy + PartialEq> TiltSettle<K> {
         return self.ready.is_some();
     }
 
+    /// Whether the frame keyed `key` couldn't be drawn here (the worker panicked, or the system
+    /// refused its thread): it isn't tried again, so the caller draws it another way.
+    pub fn failed(&self, key: K) -> bool {
+        self.failed == Some(key)
+    }
+
     /// The key of the frame being drawn (or drawn and not yet taken).
     pub fn key(&self) -> Option<K> {
         #[cfg(not(target_arch = "wasm32"))]
@@ -264,6 +270,7 @@ mod tests {
             assert!(std::time::Instant::now() < end, "the worker never ended");
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
+        assert!(s.failed(1u8) && !s.failed(2u8));
         s.start(&ctx, 1u8, map.clone(), view);
         assert!(!s.busy(), "the same frame was tried again");
         s.start(&ctx, 2u8, map, view);

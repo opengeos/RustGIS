@@ -83,5 +83,13 @@ mod tests {
         DRAWN.set(0);
         assert!(crate::render(&mut map, &view).is_none());
         assert_eq!(DRAWN.get(), 0);
+        // So does a tilted one, drawn band by band.
+        let tilted = crate::View { camera: rustgis_map::Camera { pitch: 60.0, ..rustgis_map::Camera::world() }, ..view };
+        DRAWN.set(0);
+        assert!(crate::render(&mut map, &tilted).is_none());
+        assert_eq!(DRAWN.get(), 0);
+        flag.store(false, Ordering::Relaxed);
+        assert!(crate::render(&mut map, &tilted).is_some());
+        assert!(DRAWN.get() > 0);
     }
 }

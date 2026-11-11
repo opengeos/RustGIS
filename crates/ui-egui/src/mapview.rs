@@ -954,7 +954,10 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         && cam.pitch == 0.0
         && app.session.map().tiles.is_empty()
         && (app.map.texture.is_some() || app.map.gpu_frame.is_some())
-        && app.map.key.is_some_and(|k| k.rev == key.rev && k.size == key.size && k.sources == key.sources && (k.cam != key.cam || k.draft));
+        && app.map.key.is_some_and(|k| k.rev == key.rev && k.size == key.size && k.sources == key.sources && (k.cam != key.cam || k.draft))
+        // A frame the worker couldn't draw (it panicked, or the system refused its thread) is
+        // drawn on the UI thread, as before: a refused thread costs smoothness, not the frame.
+        && !app.map.tilt_settle.failed(key);
     let settling = (tilted || globe_view || tiled_flat || flat_settle) && !moving && app.ws.playing.is_none() && !hold;
     let mut tilt_draped = tilt_draped;
     // A frame finishing during a new gesture is obsolete. Drain it now so it neither holds

@@ -2356,6 +2356,11 @@ fn render_tilted(map: &mut Map, view: &View, full_res_rasters: bool, sources_rea
     let (mut attribution, mut tiles_pending, mut tile_errors) = (Vec::<String>::new(), false, Vec::<String>::new());
     let (mut partial, mut pending_in_place) = (Vec::<u32>::new(), Vec::<u32>::new());
     for (i, b) in bands_of.into_iter().enumerate() {
+        // A stopped frame (see `cancel`) draws no further band, nor its drape or warp.
+        if cancel::requested() {
+            map.label_lock = lock;
+            return None;
+        }
         let v = band_view(view, &b);
         let Some(RenderOutput::Cpu(r)) =
             render_frame(map, &v, full_res_rasters, Backend::Cpu, Labels::Tilted(view, &mut candidates), false)
@@ -2635,10 +2640,19 @@ fn gpu_turned(map: &mut Map, view: &View, full_res_rasters: bool, sources_ready:
     let mut plain = true;
     let last = bands.len().saturating_sub(1);
     for (i, b) in bands.iter().enumerate() {
+        // A stopped frame (see `cancel`) draws no further band, nor falls back to the CPU.
+        if cancel::requested() {
+            map.label_lock = lock;
+            return None;
+        }
         let v = band_view(view, b);
         let Some(RenderOutput::Gpu(scene)) =
             render_frame(map, &v, full_res_rasters, Backend::Gpu, Labels::Tilted(view, &mut candidates), false)
         else {
+            if cancel::requested() {
+                map.label_lock = lock;
+                return None;
+            }
             plain = false;
             break;
         };
