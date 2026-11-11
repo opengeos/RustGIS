@@ -1434,12 +1434,12 @@ fn find_items(app: &mut RustGisApp) {
         });
         if !buffer.is_empty() {
             match buffer.parse::<f64>() {
-                Ok(d) => {
+                Ok(d) if d.is_finite() && d >= 0.0 => {
                     p["buffer"] = json!(d);
                     p["unit"] = json!(app.forms.distance_units);
                 }
-                Err(_) => {
-                    app.ui.stac.error = Some(tl!("The distance to widen by is a number").to_string());
+                _ => {
+                    app.ui.stac.error = Some(tl!("The distance to widen by is a number, 0 or more").to_string());
                     return;
                 }
             }
@@ -1884,10 +1884,13 @@ mod tests {
     fn a_buffer_that_is_not_a_number_stops_the_search_before_it_asks() {
         let mut app = RustGisApp::with_sample();
         app.ui.stac.parts.push(Geometry::Point(at(10.0, 45.0)));
-        app.ui.stac.buffer = "far".into();
-        find_items(&mut app);
-        assert!(app.ui.stac.error.is_some());
-        assert!(app.ui.stac.waiting.is_none(), "nothing was asked of the server");
+        for bad in ["far", "NaN", "inf", "-5"] {
+            app.ui.stac.buffer = bad.into();
+            app.ui.stac.error = None;
+            find_items(&mut app);
+            assert!(app.ui.stac.error.is_some(), "{bad}");
+            assert!(app.ui.stac.waiting.is_none(), "{bad}: nothing was asked of the server");
+        }
     }
 
     #[test]

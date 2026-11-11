@@ -80,11 +80,7 @@ pub fn merge_loaded(geometries: &[Geometry], mut notices: Vec<String>) -> Result
 /// The geometries of the selected features of the layer `p` names (`layer`, default the active
 /// layer): a copy, so the merge can run off the session's thread.
 pub fn selected_geometries(s: &Session, p: &Value) -> Result<Vec<Geometry>, String> {
-    let geometries = selected(s, p)?;
-    if geometries.len() > area::MAX_FEATURES {
-        return Err(format!("more than {} features are selected: select fewer or use a bounding box", area::MAX_FEATURES));
-    }
-    Ok(geometries)
+    selected(s, p)
 }
 
 /// The distance units a buffer may be given in, with their length in metres.
@@ -139,6 +135,10 @@ fn selected(s: &Session, p: &Value) -> Result<Vec<Geometry>, String> {
     let layer = s.map().layer(id).ok_or("no such layer")?;
     if layer.selection.is_empty() {
         return Err(format!("{}: select the features to search with first", layer.name));
+    }
+    // Counted before any geometry is copied.
+    if layer.selection.len() > area::MAX_FEATURES {
+        return Err(format!("more than {} features are selected: select fewer or use a bounding box", area::MAX_FEATURES));
     }
     Ok(layer.selection.iter().filter_map(|row| layer.dataset.features.get(*row)).filter_map(|f| f.geometry.clone()).collect())
 }
