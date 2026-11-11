@@ -4,6 +4,8 @@
 //!
 //! The file is a worldview's countries (see `worldview_bench` in `rustgis-render`). Each gesture
 //! is a run of wheel steps at 60 frames a second; a frame over 33 ms is one the user sees stall.
+//! `GPU=1` draws the map with the GPU backend, `INLINE=1` every frame on the UI thread (as the
+//! browser does), `PPP=2` at two device pixels a point.
 use rustgis_engine::sample::{self, Detail, View, Worldview};
 use rustgis_ui_egui::RustGisApp;
 
@@ -27,6 +29,8 @@ fn main() {
     rustgis_engine::render::prepare_world(wv);
     sample::set_view(wv);
     let mut app = RustGisApp::with_sample();
+    // `INLINE=1`: every frame on the UI thread, as in the browser.
+    app.map.inline_frames = std::env::var_os("INLINE").is_some();
     if std::env::var_os("GPU").is_some() {
         let setup = egui_wgpu::WgpuSetup::CreateNew(egui_wgpu::WgpuSetupCreateNew::without_display_handle());
         let instance = pollster::block_on(setup.new_instance());
@@ -70,6 +74,11 @@ fn main() {
         }
         for _ in 0..5 {
             h.step();
+        }
+        // A gesture timed from a map still drawing wouldn't start where the others do.
+        if h.state().map.drawing() {
+            eprintln!("the map did not settle in 30 s");
+            std::process::exit(1);
         }
     };
     settle(&mut h);

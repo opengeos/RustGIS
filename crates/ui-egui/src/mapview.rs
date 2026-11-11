@@ -353,6 +353,8 @@ pub struct MapView {
     /// The frame `motion_frame` is drawing is no longer wanted (the map came to rest, or changed):
     /// it is dropped when it lands, even if it finished before it saw the stop.
     motion_dropped: bool,
+    /// Draws a flat map's frames on the UI thread, as the browser does (diagnostics and tests).
+    pub inline_frames: bool,
     /// The frame shown has tile pictures still to draw: drawn again.
     filling: bool,
     /// Shooting stars around the globe.
@@ -444,6 +446,7 @@ impl Default for MapView {
             tilt_settle: Default::default(),
             motion_frame: Default::default(),
             motion_dropped: false,
+            inline_frames: false,
             filling: false,
             label_map: Vec::new(),
             comets: Default::default(),
@@ -532,6 +535,8 @@ impl MapView {
         self.preview_attempt = None;
         self.kept = None;
         self.gpu_frame = None;
+        // The frame being drawn is out of date: stopped, so it uploads no scene nobody will show.
+        self.tilt_settle.cancel();
         self.tilt_settle = Default::default();
         // One still being drawn is stopped, and dropped when it lands.
         self.motion_frame.cancel();
@@ -960,6 +965,7 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     // resize) is still drawn at once, so it shows without waiting. The browser has one thread: there
     // the worker draws it at once, as before.
     let flat_settle = cfg!(not(target_arch = "wasm32"))
+        && !app.map.inline_frames
         && !globe_view
         && cam.bearing == 0.0
         && cam.pitch == 0.0
@@ -1119,8 +1125,14 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                         show_frame(app, ui.ctx(), r, &done.view, (w, h), k, time, false);
                     }
                     rustgis_engine::render::RenderOutput::Gpu(scene) => {
+                        // The map came back (panned away and back) inside the scene on screen
+                        // while this one was drawn for where it had gone: the one that still
+                        // holds the view stays, rather than one with features left out of it.
+                        let keep = app.map.gpu_frame.as_ref().is_some_and(|f| !f.has_images && f.fits(&cam))
+                            && scene_covers(app.map.tex_camera, cam, w, h)
+                            && !scene_covers(done.view.camera, cam, w, h);
                         // A scene over the device's limits: drawn on the CPU, on the worker too.
-                        if !show_gpu_frame(app, scene, uploaded(done.prepared), &done.view, k, time) {
+                        if !keep && !show_gpu_frame(app, scene, uploaded(done.prepared), &done.view, k, time) {
                             app.map.motion_frame.start(ui.ctx(), Key { draft: true, ..k }, done.map, done.view);
                         }
                     }
@@ -1189,13 +1201,25 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             let r = tex_rect(app, cam, rect, false);
             let stretch = r.width() as f64 / app.map.tex_size.0.max(1.0);
             let full = app.map.motion_cost;
+            let since = time - app.map.last_render;
+            // Drawn on this thread (the browser, a tiled map, a worker refused), a frame stops the
+            // window for as long as it takes: see `inline_frame_due`.
+            let inline = !flat_settle;
             let (vw, vh, k) = if !r.expand(0.5).contains_rect(rect) {
-                // A gap is filled at once.
-                (w * GAP_SPAN, h * GAP_SPAN, motion_resolution(full, GAP_SPAN * GAP_SPAN))
+                // A gap is filled at once: off the UI thread, or by a quick frame on it.
+                let area = GAP_SPAN * GAP_SPAN;
+                let k = motion_resolution(full, area);
+                if inline && !inline_frame_due(full * area * k * k, since) {
+                    return None;
+                }
+                (w * GAP_SPAN, h * GAP_SPAN, k)
             } else {
                 let k = motion_resolution(full, 1.0);
                 // Tile pictures still to draw are drawn as a stretched frame is sharpened.
-                if (stretch <= MOTION_STRETCH && !app.map.filling) || time - app.map.last_render < motion_gap(full * k * k) {
+                if (stretch <= MOTION_STRETCH && !app.map.filling)
+                    || since < motion_gap(full * k * k)
+                    || (inline && full * k * k > MOTION_HOLD_MS)
+                {
                     return None;
                 }
                 (w, h, k)
@@ -1676,6 +1700,23 @@ fn full_cost(ms: f64, view: &View, (w, h): (f64, f64), ppp: f32) -> f64 {
 fn motion_gap(ms: f64) -> f64 {
     let s = ms.min(300.0) / 1000.0;
     (if ms <= 60.0 { s * 1.5 } else { s * 3.0 }).max(1.0 / 30.0)
+}
+
+/// How long (ms) a frame may take to be drawn on the UI thread while the map moves: a longer one
+/// waits until the map rests, as a freeze of a quarter of a second mid-gesture is worse than the
+/// map's background showing round the last frame meanwhile.
+const MOTION_HOLD_MS: f64 = 250.0;
+
+/// Whether a frame that fills a gap (zooming out, panning past the last frame's edge) is drawn
+/// now on the UI thread, `since` seconds after the last frame, when it would take `ms`: a quick
+/// one at once; a slower one spaced out by how long it takes (see `motion_gap`), as frames that
+/// sharpen a stretched picture are; one over `MOTION_HOLD_MS` not until the map rests. Filled at
+/// once whatever it took, a detailed layer's gaps stopped the window every few steps of zooming
+/// out where frames aren't drawn off the UI thread (the browser, #1750), while zooming in, whose
+/// frames were spaced, stayed smooth.
+fn inline_frame_due(ms: f64, since: f64) -> bool {
+    // An unmeasured cost (not a number) is drawn, as `motion_resolution` draws it sharp.
+    ms.is_nan() || ms <= MOTION_BUDGET_MS || (ms <= MOTION_HOLD_MS && since >= motion_gap(ms))
 }
 
 /// Draws with `f`, the tile pictures the map lacks drawn at the pace of a map `moving` or not
@@ -5435,6 +5476,50 @@ mod tests {
         assert!(!h.state().map.motion_frame.busy() && !h.state().map.motion_dropped);
     }
 
+    /// #1750: where frames are drawn on the UI thread (the browser), a slow map's gap frame
+    /// isn't drawn mid-motion at all: zooming out of a detailed layer froze the window for each
+    /// one, every few steps. The last frame stays, shrunk, until the map rests; a quick map's gap
+    /// is still filled at once.
+    #[test]
+    fn a_slow_maps_gap_frame_waits_for_the_map_to_rest_on_the_ui_thread() {
+        let _turn = crate::fetching::turn();
+        let mut app = RustGisApp::with_sample();
+        app.map.inline_frames = true;
+        let mut h =
+            egui_kittest::Harness::builder().with_size(vec2(900.0, 550.0)).with_step_dt(0.000_05).with_max_steps(10_000).build_ui_state(
+                |ui, app: &mut RustGisApp| {
+                    let ctx = ui.ctx().clone();
+                    app.logic(&ctx);
+                    app.ui(ui);
+                },
+                app,
+            );
+        for _ in 0..5 {
+            h.step();
+        }
+        let before = h.state().map.key.expect("a frame");
+        assert!(!before.draft && !h.state().map.drawing(), "the first frame is drawn at once");
+        // The wheel zooming out, mid-gesture, on a map whose frames take long.
+        h.state_mut().map.last_interaction = f64::MAX;
+        h.state_mut().map.motion_cost = 400.0;
+        h.state_mut().session.map_mut().camera.res *= 2.0;
+        for _ in 0..5 {
+            h.step();
+            assert_eq!(h.state().map.key, Some(before), "a slow gap frame froze the window mid-motion");
+        }
+        assert!(!h.state().map.drawing(), "nothing is drawn off the UI thread here");
+        // A quick map's gap is filled at once, over more than the view.
+        h.state_mut().map.motion_cost = 5.0;
+        h.step();
+        let st = h.state();
+        assert!(st.map.key.is_some_and(|k| k.draft && k != before), "a quick gap frame is drawn at once");
+        assert!(st.map.tex_size.0 > st.session.view_size.0 * 1.2);
+        // At rest the exact frame is drawn.
+        h.state_mut().map.last_interaction = -10.0;
+        h.step();
+        assert!(h.state().map.key.is_some_and(|k| !k.draft), "the exact frame of the resting map");
+    }
+
     /// #1051: changing a layer's transparency over a tiled basemap kept the exact frame on
     /// screen until the next one arrived; it showed a coarse preview of the whole map, basemap
     /// included, so every step of a slider drag made the map flicker.
@@ -5549,6 +5634,11 @@ mod tests {
         assert_eq!(motion_resolution(10_000.0, 4.0), 0.5, "never below half");
         assert_eq!(motion_resolution(f64::NAN, 1.0), 1.0);
         assert_eq!(motion_resolution(f64::INFINITY, 1.0), 0.5);
+        // On the UI thread a quick gap frame is drawn at once, a slower one spaced out by how
+        // long it takes, and one that would freeze the window not until the map rests.
+        assert!(inline_frame_due(0.0, 0.0) && inline_frame_due(20.0, 0.0) && inline_frame_due(f64::NAN, 0.0));
+        assert!(!inline_frame_due(100.0, 0.1) && inline_frame_due(100.0, 0.31));
+        assert!(!inline_frame_due(400.0, 60.0) && !inline_frame_due(f64::INFINITY, 60.0));
         // A gap frame over 1.5 times the view at full resolution costs 2.25 views.
         let gap = View { width: 1200.0, height: 900.0, pixels_per_point: 2.0, camera: Camera::world(), sky: true };
         assert!((full_cost(45.0, &gap, (800.0, 600.0), 2.0) - 20.0).abs() < 1e-9);
