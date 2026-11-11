@@ -1289,6 +1289,52 @@ fn qgis_measures_in_project_units_are_left_out() {
     assert!(!r["notes"].to_string().contains("project's units"), "{r}");
 }
 
+/// A QGIS project's annotation layers come in as graphics layers, taken to longitude/latitude,
+/// the main one on top; a picture is read from its file and fitted to its aspect.
+#[test]
+fn qgis_annotation_layers_import_as_graphics_layers() {
+    let mut s = world();
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../map/testdata/qgis/generated/qgs/annotations-styled.qgs");
+    let notes =
+        |r: &serde_json::Value| r["notes"].as_array().unwrap().iter().map(|n| n["text"].as_str().unwrap().to_string()).collect::<Vec<_>>();
+    let r = s.run("project.importQgis", &json!({"path": path.to_string_lossy()})).unwrap();
+    assert_eq!(r["layers"], json!(["styled annotations", "Annotations"]), "{r}");
+    // The main annotation layer on top, both graphics layers.
+    let names: Vec<&str> = s.map().layers.iter().map(|l| l.name.as_str()).collect();
+    assert_eq!(names, ["Annotations", "styled annotations"]);
+    let l = s.map().layer_by_name("styled annotations").unwrap();
+    assert!(l.graphics);
+    let ds = &l.dataset;
+    let row = (0..ds.features.len()).find(|r| rustgis_map::graphics::label(ds, *r) == Some("right, bold, red")).unwrap();
+    assert!(rustgis_map::graphics::bold(ds, row));
+    // Taken from Swiss LV95 to longitude/latitude (Winterthur).
+    let Some(rustgis_data::Geometry::Point(c)) = &ds.features[row].geometry else { panic!() };
+    assert!((c.x - 8.73).abs() < 0.02 && (c.y - 47.5).abs() < 0.02, "{c:?}");
+    // The picture, read from its file and fitted to its 2:1 aspect.
+    let pic = (0..ds.features.len()).find(|r| rustgis_map::graphics::kind(ds, *r) == "picture").unwrap();
+    let image = ds.field_index("image").map(|fi| ds.value(pic, fi).clone());
+    assert!(matches!(image, Some(rustgis_data::Value::Text(t)) if !t.is_empty()));
+    let e = ds.features[pic].geometry.as_ref().unwrap().extent();
+    let ratio = (e.max_x - e.min_x) * (47.5f64).to_radians().cos() / (e.max_y - e.min_y);
+    assert!((ratio - 2.0).abs() < 0.1, "{ratio}");
+    assert!(notes(&r).iter().any(|n| n.contains("an SVG picture annotation")), "{:?}", notes(&r));
+
+    // Given as text with no folder: the relative picture is noted, the rest comes in.
+    let text = std::fs::read_to_string(&path).unwrap();
+    let r = s.run("project.importQgis", &json!({"text": text})).unwrap();
+    assert!(
+        notes(&r)
+            .iter()
+            .any(|n| n.starts_with("a picture annotation's picture, which doesn't read (the first: ../data/picture.png, relative")),
+        "{:?}",
+        notes(&r)
+    );
+    let l = s.map().layer_by_name("styled annotations").unwrap();
+    assert!((0..l.dataset.features.len()).all(|r| rustgis_map::graphics::kind(&l.dataset, r) != "picture"));
+    let texts = (0..l.dataset.features.len()).filter(|r| rustgis_map::graphics::label(&l.dataset, *r).is_some()).count();
+    assert_eq!(texts, 8, "the texts come in all the same");
+}
+
 /// A QGIS diagram reaches the layer through `style.importQgis`; categories on fields the layer
 /// hasn't are left out, and a diagram left with none removed, each noted with the fields. Undo
 /// takes it back.
@@ -2209,11 +2255,14 @@ fn a_qgis_project_opens_as_a_map_and_a_qgis_style_styles_a_layer() {
     let t = s.map().tiles.iter().find(|t| t.name == "Tiles").unwrap();
     assert!(t.overlay);
     assert_eq!(t.blend, rustgis_map::effects::Blend::Multiply);
-    // A layer of no provider (QGIS's annotation layer) is noted by its kind.
-    let qgs = r#"<qgis version="3.42.0"><title>Notes</title><projectlayers><maplayer type="annotation"><id>a</id><layername>Notes</layername></maplayer></projectlayers></qgis>"#;
+    // A layer of no provider is noted by its kind; an annotation layer, even an empty one, is a
+    // graphics layer.
+    let qgs = r#"<qgis version="3.42.0"><title>Notes</title><projectlayers><maplayer type="annotation"><id>a</id><layername>Notes</layername></maplayer>
+      <maplayer type="tiled-scene"><id>b</id><layername>Scene</layername></maplayer></projectlayers></qgis>"#;
     let out = s.run("project.importQgis", &json!({"text": qgs})).unwrap();
     let text = serde_json::to_string(&out["notes"]).unwrap();
-    assert!(text.contains("doesn't read QGIS's annotation layers"), "{text}");
+    assert!(text.contains("doesn't read QGIS's tiled-scene layers"), "{text}");
+    assert!(s.map().layer_by_name("Notes").is_some_and(|l| l.graphics && l.dataset.features.is_empty()));
     // A project given as text with no folder: a relative path is noted, not looked for in the
     // working directory.
     let rel = r#"<qgis version="3.42.0"><projectlayers><maplayer type="vector"><id>a</id><datasource>./data/roads.geojson</datasource><layername>Rel</layername><provider>ogr</provider></maplayer></projectlayers></qgis>"#;

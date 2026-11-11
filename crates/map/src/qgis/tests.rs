@@ -709,6 +709,7 @@ fn what_rustgis_has_no_place_for_is_noted() {
         </maplayer>
       </projectlayers>
       <main-annotation-layer><items><item type="pointtext"/><item type="linetext"/></items></main-annotation-layer>
+      <Annotations><TextAnnotationItem/></Annotations>
       <Layouts><Layout name="One"/></Layouts>
       <Bookmarks><Bookmark name="Here"/></Bookmarks>
       <visibility-presets><visibility-preset name="Only points"/></visibility-presets>
@@ -718,9 +719,13 @@ fn what_rustgis_has_no_place_for_is_noted() {
     let mut report = Report::default();
     read_project(&qgs, "", &mut report).unwrap();
     let said = |layer: &str, part: &str| report.notes.iter().any(|n| n.layer == layer && n.text.contains(part));
-    for part in ["print layouts (1)", "annotations (2", "bookmarks (1)", "map themes (1)", "relations between layers (1)"] {
+    for part in
+        ["print layouts (1)", "annotations of QGIS's older kind (1", "bookmarks (1)", "map themes (1)", "relations between layers (1)"]
+    {
         assert!(said("", part), "{part}: {:?}", report.notes);
     }
+    // The main annotation layer's items, placed nowhere, are noted on it.
+    assert!(said("Annotations", "2 annotations whose geometry doesn't read"), "{:?}", report.notes);
     for part in [
         "time settings",
         "other styles (night)",
@@ -857,6 +862,105 @@ fn raster_renderers_read_as_rustgis_raster_styles() {
     }
 }
 
+/// QGIS's annotation items come in as graphics, in z order, with their look; what RustGIS draws
+/// differently or not at all is noted.
+#[test]
+fn annotations_carry_over_as_graphics() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/qgis/generated/qgs");
+    let text = std::fs::read_to_string(root.join("annotations-styled.qgs")).unwrap();
+    let mut report = Report::default();
+    let project = read_project(&text, "/p/qgs", &mut report).unwrap();
+    let layer = project.layers.iter().find(|l| l.kind == "annotation").unwrap();
+    assert_eq!((layer.name.as_str(), layer.crs.as_deref()), ("styled annotations", Some("EPSG:2056")));
+    let kinds: Vec<&str> = layer.annotations.iter().map(|a| a.graphic.kind).collect();
+    // The polygon (z -1) first, the bold text (z 5) last; the box of the centred text under it.
+    assert_eq!(kinds.first(), Some(&"polygon"), "{kinds:?}");
+    assert_eq!(layer.annotations.last().and_then(|a| a.graphic.text.as_deref()), Some("right, bold, red"));
+    // Switched off and SVG: left out.
+    let texts: Vec<&str> = layer.annotations.iter().filter_map(|a| a.graphic.text.as_deref()).collect();
+    assert!(!texts.contains(&"switched off"), "{texts:?}");
+    assert!(texts.contains(&"html text"), "HTML read as plain text: {texts:?}");
+    assert_eq!(kinds.iter().filter(|k| **k == "picture").count(), 1, "{kinds:?}");
+
+    let bold = layer.annotations.last().unwrap().graphic.clone();
+    assert!(bold.bold && !bold.italic, "{bold:?}");
+    assert_eq!((bold.fill, bold.align, bold.font_size), (Some(Rgba::rgb(200, 0, 0)), Some(TextAlign::Right), Some(14.0)));
+    assert_eq!(bold.geometry, rustgis_data::Geometry::Point(rustgis_geom::Coord::new(2697000.0, 1261800.0)));
+    let italic = layer.annotations.iter().find(|a| a.graphic.text.as_deref() == Some("turned, italic")).unwrap();
+    // 4 mm in typographic points.
+    assert!(italic.graphic.italic && !italic.graphic.bold && (italic.graphic.font_size.unwrap() - 4.0 * 72.0 / 25.4).abs() < 1e-3);
+    let square = layer.annotations.iter().find(|a| a.graphic.kind == "point" && a.graphic.fill == Some(Rgba::rgb(255, 0, 0))).unwrap();
+    assert!((square.graphic.size.unwrap() - 4.0 * 96.0 / 25.4).abs() < 1e-3, "{square:?}");
+    let line = layer.annotations.iter().find(|a| a.graphic.outline == Some(Rgba::rgb(0, 0, 255))).unwrap();
+    assert_eq!(line.graphic.kind, "line");
+    let Some(rustgis_data::Geometry::Polygon(rings)) = layer.annotations.first().map(|a| &a.graphic.geometry) else { panic!() };
+    assert_eq!(rings[0].len(), 2, "the hole is kept");
+    // The centred text's box: its background with its frame's outline, under the text.
+    let at = layer.annotations.iter().position(|a| a.graphic.text.as_deref() == Some("centred in a box")).unwrap();
+    let boxed = &layer.annotations[at - 1].graphic;
+    assert_eq!((boxed.kind, boxed.fill, boxed.outline), ("rectangle", Some(Rgba::rgb(255, 255, 180)), Some(Rgba::rgb(200, 0, 0))));
+    // The picture: its file from the project's folder, fitted keeping its aspect; its frame over it.
+    let pic = layer.annotations.iter().position(|a| a.picture.is_some()).unwrap();
+    assert_eq!(layer.annotations[pic].picture.as_deref(), Some("/p/qgs/../data/picture.png"));
+    assert!(layer.annotations[pic].keep_aspect);
+    assert_eq!(layer.annotations[pic + 1].graphic.kind, "rectangle");
+    // The main annotation layer, over the others.
+    let main = project.main_annotations.as_ref().unwrap();
+    assert_eq!((main.name.as_str(), main.annotations.len()), ("Annotations", 1));
+
+    let said = |part: &str| report.notes.iter().any(|n| n.layer == "styled annotations" && n.text.contains(part));
+    for part in [
+        "a switched-off annotation",
+        "an SVG picture annotation",
+        "4 text annotations, centred on their points",
+        "a turned text annotation, drawn level",
+        "a text annotation in HTML",
+        "sized at a reference scale",
+        "a text along a line, drawn level",
+        "a rectangle text aligned to a side of its box",
+        "a rectangle text of a fixed size",
+        "marker annotation of another shape, drawn as a circle",
+        "symbol of dashes",
+        "text annotations in DejaVu Sans",
+        "rectangle texts, drawn on their own lines rather than wrapped",
+    ] {
+        assert!(said(part), "{part}: {:#?}", report.notes);
+    }
+}
+
+/// A point text without an alignment (a file from before QGIS wrote one) is left aligned, as
+/// QGIS reads it; a picture naming no file and a huge font are noted.
+#[test]
+fn annotation_defaults_and_limits() {
+    let qgs = r#"<qgis><projectCrs><spatialrefsys><authid>EPSG:3857</authid></spatialrefsys></projectCrs><projectlayers>
+      <maplayer type="annotation"><id>a</id><layername>N</layername><items>
+        <item type="pointtext" text="old" x="1" y="2"/>
+        <item type="pointtext" text="huge" x="1" y="2"><pointTextFormat><text-style fontSize="900" fontSizeUnit="Point"/></pointTextFormat></item>
+        <item type="picture" path="" xMin="0" yMin="0" xMax="1" yMax="1"/>
+      </items></maplayer></projectlayers></qgis>"#;
+    let mut report = Report::default();
+    let p = read_project(qgs, "", &mut report).unwrap();
+    let a = &p.layers[0].annotations;
+    assert_eq!(a[0].graphic.align, Some(TextAlign::Left));
+    let said = |part: &str| report.notes.iter().any(|n| n.text.contains(part));
+    assert!(said("a picture annotation that names no picture"), "{:?}", report.notes);
+    assert!(said("an annotation with a text longer, or a font"), "{:?}", report.notes);
+}
+
+/// QGIS 4 (on Qt 6) weighs fonts from 100 to 1000, QGIS 3 from 0 to 99: a normal weight in
+/// either isn't bold.
+#[test]
+fn font_weights_read_on_both_scales() {
+    for (weight, bold) in [("50", false), ("75", true), ("400", false), ("600", true), ("700", true)] {
+        let qml = format!(
+            r#"<qgis><labeling type="simple"><settings><text-style fieldName="name" fontWeight="{weight}"/></settings></labeling></qgis>"#
+        );
+        let mut report = Report::default();
+        let s = read_style(&qml, "layer", &mut report).unwrap();
+        assert_eq!(s.labels.unwrap().default.bold, bold, "weight {weight}");
+    }
+}
+
 /// Every generated style and project in `testdata/qgis` reads, each project with its layers.
 #[test]
 fn every_corpus_file_reads() {
@@ -877,7 +981,7 @@ fn every_corpus_file_reads() {
         read_style(&text, "layer", &mut report).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
     }
     let projects = files("generated/qgs", &["qgs", "qgz"]);
-    assert_eq!(projects.len(), 21, "project corpus changed: {projects:?}");
+    assert_eq!(projects.len(), 22, "project corpus changed: {projects:?}");
     for path in &projects {
         let bytes = std::fs::read(path).unwrap();
         let text = if path.extension().is_some_and(|e| e == "qgz") {
