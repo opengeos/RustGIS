@@ -886,8 +886,9 @@ pub(crate) struct DeclaredCrs<'a> {
 /// the code's, or is another body's system, as a `.prj` comes before its own `AUTHORITY`
 /// ([`read_wkt_over_code`](crate::raster::wkt::read_wkt_over_code)). Another body's system
 /// ([`Reproject::planetary`]) is said, or an error when its coordinates would be in the wrong place
-/// as longitude/latitude. `None` when there is nothing to read it by: no EPSG code, no definition
-/// and no other body's code; the format then says what its coordinates are taken as.
+/// as longitude/latitude. An Earth definition beside another body's IAU code is read, and said.
+/// `None` when there is nothing to read it by: no EPSG code, no definition and no other body's
+/// code; the format then says what its coordinates are taken as.
 pub(crate) fn declared_reproject(declared: DeclaredCrs, notes: &mut Vec<String>) -> Option<Result<Reproject>> {
     let DeclaredCrs { what, organization, code: declared_code, epsg, wkt1, wkt2 } = declared;
     let definition = wkt2.or(wkt1);
@@ -963,6 +964,15 @@ pub(crate) fn declared_reproject(declared: DeclaredCrs, notes: &mut Vec<String>)
         let crs = match read {
             Ok((crs, note)) => {
                 notes.extend(note.map(|n| format!("{what}: {n}")));
+                // An IAU code names another body's system, so an Earth definition read in its
+                // place is said.
+                if !crs.is_planetary()
+                    && let (Some(org), Some(code)) = (organization, declared_code)
+                    && crate::raster::planetary::iau_code(org, code).is_some()
+                {
+                    let system = format!("{}:{code}", org.trim());
+                    notes.push(format!("{what}: its code {system} is another body's, but its definition is the Earth's, which is used"));
+                }
                 crs
             }
             Err(e) => {

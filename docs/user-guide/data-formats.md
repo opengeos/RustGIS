@@ -643,7 +643,7 @@ Coordinate systems of other bodies than the Earth (Mars, the Moon and the rest o
 `IAU_2015` codes, or any datum whose ellipsoid isn't the Earth's) aren't read as such yet: every
 layer is placed on the Earth. An EPSG or Esri code that comes with another body's WKT (in the WKT
 itself, a GeoPackage, a FlatGeobuf or a File Geodatabase) names an Earth system, so it is
-ignored.
+ignored. So is an IAU code beside an Earth WKT (a GeoPackage or a FlatGeobuf), with a notice.
 
 - **Read, with a notice.** A layer whose coordinates are the body's longitude/latitude, counted
   east, is read as it is: a geographic `.prj` or WKT, a GeoTIFF's own keys, an IAU code ending in
