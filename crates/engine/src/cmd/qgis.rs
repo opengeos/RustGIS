@@ -1153,6 +1153,12 @@ fn add_bookmarks(s: &mut Session, project: &qgis::Project, report: &mut Report) 
     let mut beyond = Vec::new();
     // Those in coordinate systems past the first `MAX_BOOKMARK_CRS`.
     let mut many = Vec::new();
+    // Those read in the project's coordinate system, having none of their own.
+    let mut assumed = Vec::new();
+    // Those reaching past the latitudes a Web Mercator map shows (about 85°), fitted to the part
+    // it does.
+    let mut polar = Vec::new();
+    let mercator = matches!(m.flat(), rustgis_map::projection::Flat::Mercator);
     let mut over = 0usize;
     // One transformer per coordinate system.
     let mut transformers: std::collections::HashMap<&str, Option<rustgis_data::raster::crs::Transformer>> =
@@ -1162,6 +1168,7 @@ fn add_bookmarks(s: &mut Session, project: &qgis::Project, report: &mut Report) 
             none.push(b.name.as_str());
             continue;
         };
+        let own_crs = b.crs.is_some();
         if !transformers.contains_key(crs) && transformers.len() >= MAX_BOOKMARK_CRS {
             many.push(b.name.as_str());
             continue;
@@ -1189,11 +1196,19 @@ fn add_bookmarks(s: &mut Session, project: &qgis::Project, report: &mut Report) 
         // QGIS's extent is the view's own rectangle, turned with it (measured: turning the map
         // keeps its scale): fitted facing north, then turned.
         m.camera.set_bearing(0.0);
-        if !m.fit_lonlat(&e, w, h) {
+        // (Web Mercator fits any extent, clamped to its 85°: one wholly past them shows nothing.)
+        let past = mercator && (e.min_y >= rustgis_geom::MAX_LAT || e.max_y <= -rustgis_geom::MAX_LAT);
+        if past || !m.fit_lonlat(&e, w, h) {
             beyond.push(b.name.as_str());
             continue;
         }
         m.camera.set_bearing(-b.rotation);
+        if !own_crs {
+            assumed.push(b.name.as_str());
+        }
+        if mercator && (e.max_y > rustgis_geom::MAX_LAT || e.min_y < -rustgis_geom::MAX_LAT) {
+            polar.push(b.name.as_str());
+        }
         let name = names.take(&b.name);
         m.bookmarks.push(rustgis_map::Bookmark::new(name, m.camera));
     }
@@ -1210,6 +1225,18 @@ fn add_bookmarks(s: &mut Session, project: &qgis::Project, report: &mut Report) 
     }
     if !unread.is_empty() {
         report.skipped("", format!("its bookmarks in a coordinate system RustGIS can't read ({})", listed(&unread)));
+    }
+    if !assumed.is_empty() {
+        report.approximated(
+            "",
+            format!("its bookmarks with no coordinate system of their own, read in the project's ({})", listed(&assumed)),
+        );
+    }
+    if !polar.is_empty() {
+        report.approximated(
+            "",
+            format!("its bookmarks reaching past the 85° a Web Mercator map shows, fitted to the part it does ({})", listed(&polar)),
+        );
     }
     if !many.is_empty() {
         report.skipped("", format!("its bookmarks in coordinate systems past the first {MAX_BOOKMARK_CRS} ({})", listed(&many)));

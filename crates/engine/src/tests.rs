@@ -1797,16 +1797,35 @@ fn qgis_bookmarks_the_map_cannot_show_or_name_are_noted() {
       <Bookmark extent="Polygon ((2.2 48.8, 2.5 48.8, 2.5 48.9, 2.2 48.9, 2.2 48.8))" name="Paris"><spatialrefsys><authid>EPSG:4326</authid></spatialrefsys></Bookmark>
       <Bookmark extent="Polygon ((-74.1 40.6, -73.8 40.6, -73.8 40.9, -74.1 40.9, -74.1 40.6))" name="New York"><spatialrefsys><authid>EPSG:4326</authid></spatialrefsys></Bookmark>
       <Bookmark extent="Polygon ((2.2 48.8, 2.5 48.8, 2.5 48.9, 2.2 48.9, 2.2 48.8))" name="{long}"><spatialrefsys><authid>EPSG:4326</authid></spatialrefsys></Bookmark>
+      <Bookmark extent="Polygon ((440000 5400000, 460000 5400000, 460000 5420000, 440000 5420000, 440000 5400000))" name="In the project's"/>
     </Bookmarks></qgis>"#
     );
     let mut s = world();
     let out = s.run("project.importQgis", &json!({"text": qgs})).unwrap();
     let notes = serde_json::to_string(&out["notes"]).unwrap();
     let names: Vec<usize> = s.map().bookmarks.iter().map(|b| b.name.chars().count()).collect();
-    assert_eq!(names, [119, 120, 5, 120], "{notes}");
+    assert_eq!(names, [119, 120, 5, 120, 16], "{notes}");
     assert!(s.map().bookmarks[1].name.ends_with("M 2"));
     assert!(notes.contains("its bookmarks whose place the map's projection doesn't reach (1: New York)"), "{notes}");
     assert!(notes.contains("bookmark names cut to 120 characters (2)"), "{notes}");
+    // One read in the project's coordinate system, said.
+    assert!(notes.contains("its bookmarks with no coordinate system of their own, read in the project's (1: In the project's)"), "{notes}");
+    // On a Web Mercator map, one reaching past its 85° is fitted to the part it shows, and said.
+    let polar = r#"<qgis version="4.2.3"><projectCrs><spatialrefsys><authid>EPSG:3857</authid></spatialrefsys></projectCrs><Bookmarks>
+      <Bookmark extent="Polygon ((10 80, 20 80, 20 89, 10 89, 10 80))" name="Polar"><spatialrefsys><authid>EPSG:4326</authid></spatialrefsys></Bookmark>
+      <Bookmark extent="Polygon ((10 70, 20 70, 20 80, 10 80, 10 70))" name="Arctic"><spatialrefsys><authid>EPSG:4326</authid></spatialrefsys></Bookmark>
+      <Bookmark extent="Polygon ((10 86, 20 86, 20 89, 10 89, 10 86))" name="Pole"><spatialrefsys><authid>EPSG:4326</authid></spatialrefsys></Bookmark>
+    </Bookmarks></qgis>"#;
+    let mut s = world();
+    let out = s.run("project.importQgis", &json!({"text": polar})).unwrap();
+    let notes = serde_json::to_string(&out["notes"]).unwrap();
+    assert_eq!(s.map().bookmarks.len(), 2, "{notes}");
+    // One wholly past them shows nothing: not added, and said.
+    assert!(notes.contains("its bookmarks whose place the map's projection doesn't reach (1: Pole)"), "{notes}");
+    assert!(
+        notes.contains("its bookmarks reaching past the 85° a Web Mercator map shows, fitted to the part it does (1: Polar)"),
+        "{notes}"
+    );
 }
 
 /// Bookmarks in more coordinate systems than an import reads: those past the first 100 systems
