@@ -81,9 +81,11 @@ pub struct PlatformPackage {
 
 /// Reads an entry's `packages` one platform at a time: a platform whose package can't be read
 /// comes back empty, for [`parse_for`] to drop as it drops any package that doesn't check out,
-/// in place of failing the whole entry and hiding the plugin from every platform.
+/// in place of failing the whole entry and hiding the plugin from every platform. `null` is no
+/// packages; anything else that isn't an object fails the entry, as any field of the wrong type
+/// does.
 fn platform_packages<'de, D: Deserializer<'de>>(d: D) -> Result<BTreeMap<String, PlatformPackage>, D::Error> {
-    let raw = BTreeMap::<String, Value>::deserialize(d)?;
+    let raw = Option::<BTreeMap<String, Value>>::deserialize(d)?.unwrap_or_default();
     Ok(raw.into_iter().map(|(key, v)| (key, serde_json::from_value(v).unwrap_or_default())).collect())
 }
 
@@ -221,8 +223,20 @@ pub fn parse(text: &str, url: &str) -> Result<Vec<Entry>, String> {
     parse_for(text, url, this_platform())
 }
 
+/// [`parse`], with a notice when packages by platform were skipped: one that doesn't check out
+/// (no address, a bad SHA-256, an address that isn't allowed) costs its platform the plugin, so
+/// it is said, with how many and which. None for a registry read whole.
+pub fn parse_with_notice(text: &str, url: &str) -> Result<(Vec<Entry>, Option<String>), String> {
+    parse_noting(text, url, this_platform())
+}
+
 /// [`parse`], for `platform` (a key of `packages`; none in the browser).
 pub fn parse_for(text: &str, url: &str, platform: Option<&str>) -> Result<Vec<Entry>, String> {
+    parse_noting(text, url, platform).map(|(entries, _)| entries)
+}
+
+/// [`parse_with_notice`], for `platform`.
+pub fn parse_noting(text: &str, url: &str, platform: Option<&str>) -> Result<(Vec<Entry>, Option<String>), String> {
     let root: Value = serde_json::from_str(text).map_err(|e| format!("the plugin registry isn't valid JSON: {e}"))?;
     // Taken by value, so each entry is converted without a copy (a large registry would
     // otherwise briefly need several times its size).
@@ -236,6 +250,8 @@ pub fn parse_for(text: &str, url: &str, platform: Option<&str>) -> Result<Vec<En
     };
     let mut out: Vec<Entry> = Vec::new();
     let mut seen = std::collections::HashSet::new();
+    // The packages by platform that were skipped: how many, and the first few by name.
+    let (mut skipped, mut which) = (0usize, Vec::new());
     for v in list.into_iter().take(MAX_ENTRIES) {
         let Ok(mut e) = serde_json::from_value::<Entry>(v) else { continue };
         if !valid_id(&e.id, false) || version_parts(&e.version).is_none() || e.name.trim().is_empty() {
@@ -247,11 +263,22 @@ pub fn parse_for(text: &str, url: &str, platform: Option<&str>) -> Result<Vec<En
         // A platform's package that doesn't check out is dropped as an entry's only one is, and
         // so is a platform this version doesn't know: nothing here would download it. (No
         // address is not the registry's folder, which an empty path would resolve to.)
+        let id = &e.id;
         e.packages.retain(|key, p| {
-            let known = PLATFORMS.iter().any(|(k, _)| k == key);
-            let named = !p.package.trim().is_empty();
+            // A platform this version doesn't know isn't a loss: nothing was to be read.
+            if !PLATFORMS.iter().any(|(k, _)| k == key) {
+                return false;
+            }
+            let has_address = !p.package.trim().is_empty();
             p.package = resolve(url, &p.package);
-            known && named && is_sha256(&p.sha256) && allowed_url(&p.package)
+            let good = has_address && is_sha256(&p.sha256) && allowed_url(&p.package);
+            if !good {
+                skipped += 1;
+                if which.len() < 5 {
+                    which.push(format!("{id} ({})", platform_name(key)));
+                }
+            }
+            good
         });
         let whole = !e.package.trim().is_empty() && is_sha256(&e.sha256);
         e.package = resolve(url, &e.package);
@@ -290,7 +317,14 @@ pub fn parse_for(text: &str, url: &str, platform: Option<&str>) -> Result<Vec<En
         out.push(e);
     }
     out.sort_by_key(|e| e.name.to_lowercase());
-    Ok(out)
+    let notice = (skipped > 0).then(|| {
+        let more = if skipped > which.len() { ", …" } else { "" };
+        format!(
+            "{skipped} package(s) for a platform in the plugin registry were skipped (no address, a bad SHA-256 or an address that isn't allowed): {}{more}",
+            which.join(", ")
+        )
+    });
+    Ok((out, notice))
 }
 
 /// The blocklist published beside a registry.

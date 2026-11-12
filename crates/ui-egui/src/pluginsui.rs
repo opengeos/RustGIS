@@ -617,7 +617,12 @@ pub fn poll(app: &mut RustGisApp, ctx: &egui::Context) {
             Job::Registry { url, slot } => match take(&slot) {
                 None => waiting.push(Job::Registry { url, slot }),
                 Some(r) => {
-                    app.plugins.set_registry(Some(r.and_then(|b| rp::registry::parse(&String::from_utf8_lossy(&b), &url))));
+                    let read = r.and_then(|b| rp::registry::parse_with_notice(&String::from_utf8_lossy(&b), &url));
+                    // A platform's package the registry listed and RustGIS skipped is said.
+                    if let Ok((_, Some(skipped))) = &read {
+                        app.session.notify(skipped.clone(), false);
+                    }
+                    app.plugins.set_registry(Some(read.map(|(entries, _)| entries)));
                     let slot = fetch(app, &rp::registry::blocklist_url(&url), 4 << 20, Some(ctx.clone()));
                     waiting.push(Job::Blocklist { registry: url, slot });
                 }

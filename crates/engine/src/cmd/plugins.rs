@@ -265,7 +265,10 @@ fn enable(_: &mut Session, p: &Value) -> CmdResult {
 fn fetch_registry(s: &mut Session, url: &str) -> Result<Vec<rustgis_plugins::registry::Entry>, String> {
     use rustgis_plugins::registry;
     let text = registry::fetch(url, registry::MAX_REGISTRY_BYTES)?;
-    let entries = registry::parse(&String::from_utf8_lossy(&text), url)?;
+    let (entries, skipped) = registry::parse_with_notice(&String::from_utf8_lossy(&text), url)?;
+    if let Some(skipped) = skipped {
+        s.warn(skipped);
+    }
     // A blocklist that can't be fetched or read (one that isn't text included: a replaced byte in
     // an id would match nothing) leaves the list in force, with a warning. Another registry may
     // have no blocklist (it blocks nothing); the hosted one always has one.

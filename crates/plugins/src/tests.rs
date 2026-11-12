@@ -2533,6 +2533,27 @@ fn a_bad_platform_package_is_dropped_alone() {
             row("h-no-address", "")
         ]
     );
+    // Skipped packages are said, with how many and which (the first five); the platforms this
+    // version doesn't know and a registry read whole say nothing.
+    let (_, notice) = registry::parse_noting(&text, url, Some("windows")).unwrap();
+    let notice = notice.unwrap();
+    assert!(notice.starts_with("6 package(s) for a platform in the plugin registry were skipped"), "{notice}");
+    assert!(
+        notice.ends_with(": a-no-address (Linux), b-no-hash (Linux), c-not-an-object (Linux), d-bad-size (Linux), e-own-too (Linux), …"),
+        "{notice}"
+    );
+    let clean = json!([
+        {"id": "ok", "name": "ok", "version": "1.0.0", "packages": {"windows": good, "plan9": {"package": "p.rgplugin", "sha256": lin}}},
+        // `null` is no packages: the entry's own package, as without the field.
+        {"id": "null-packages", "name": "n", "version": "1.0.0", "package": "any.rgplugin", "sha256": any, "packages": null},
+    ])
+    .to_string();
+    let (entries, notice) = registry::parse_noting(&clean, url, Some("linux")).unwrap();
+    assert_eq!(notice, None);
+    assert_eq!(
+        entries.iter().map(|e| (e.id.as_str(), e.package.as_str())).collect::<Vec<_>>(),
+        [("null-packages", "https://plugins.rustgis.app/any.rgplugin"), ("ok", "")]
+    );
     // What is listed without a package always names a platform that has one.
     for platform in ["linux", "macos", "windows"] {
         for e in registry::parse_for(&text, url, Some(platform)).unwrap() {
