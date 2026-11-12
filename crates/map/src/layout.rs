@@ -1470,6 +1470,8 @@ impl Layout {
                         if g.mgrs && (g.kind != GridKind::Measured || named_other) {
                             g.mgrs = false;
                             mgrs_off = mgrs_off.saturating_add(1);
+                            // (Counted by `mgrs_off` and said in its own notice, so `before` matches:
+                            // not an adjusted element too.)
                             if let ElementKind::MapFrame { grid: Some(b), .. } = &mut before.kind {
                                 b.mgrs = false;
                             }

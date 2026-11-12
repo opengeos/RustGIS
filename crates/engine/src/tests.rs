@@ -7017,12 +7017,16 @@ fn a_measured_grid_can_be_labelled_as_mgrs() {
     assert_eq!((g.mgrs, g.crs.as_deref()), (false, Some("EPSG:2056")));
     let said: Vec<String> = back.take_read_notices(&[crate::project::ReadPart::Layouts]).iter().map(|n| n.english()).collect();
     assert!(said.iter().any(|n| n.contains("MGRS labels turned off on 1 map frame grid(s)")), "{said:?}");
+    assert!(!said.iter().any(|n| n.contains("value out of range")), "{said:?}");
     // A blank system kept from a file is none: the grid can still be changed.
     let blank = text.replace("\"mgrs\":true", "\"mgrs\":true,\"crs\":\" \"");
-    let mut opened = Session::new(crate::Project::from_json(&blank).unwrap());
+    let mut blank_project = crate::Project::from_json(&blank).unwrap();
+    let blank_said: Vec<String> =
+        blank_project.take_read_notices(&[crate::project::ReadPart::Layouts]).iter().map(|n| n.english()).collect();
+    assert!(!blank_said.iter().any(|n| n.contains("MGRS labels turned off") || n.contains("value out of range")), "{blank_said:?}");
+    let mut opened = Session::new(blank_project);
     assert!(saved(&opened.project).mgrs);
     opened.run("layout.update", &json!({"element": frame, "grid": {"color": "#FF0000"}})).unwrap();
-    assert!(!said.iter().any(|n| n.contains("value out of range")), "{said:?}");
 }
 
 /// A map frame's grid can be a measured grid (#1008): eastings and northings in a projected
