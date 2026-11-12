@@ -1681,7 +1681,8 @@ fn gpu_upload(
 
 /// Shows a GPU scene drawn for `view` as the map, with its labels, credits and tile errors:
 /// from `prepared`, its buffers already uploaded (see [`gpu_upload`]), else uploading them here.
-/// False when the scene is over the device's limits: the caller draws the frame on the CPU.
+/// False when the scene is over the device's limits, or the map has left the GPU: the caller
+/// draws the frame on the CPU.
 fn show_gpu_frame(
     app: &mut RustGisApp,
     scene: rustgis_engine::render::gpu_scene::GpuScene,
@@ -1690,6 +1691,11 @@ fn show_gpu_frame(
     key: Key,
     time: f64,
 ) -> bool {
+    // A scene a worker finished after the map left the graphics card (it ran out of memory,
+    // #1777) isn't shown: the caller draws it on the CPU, and no GPU renderer comes back.
+    if !app.map.gpu_enabled {
+        return false;
+    }
     let Some(rs) = &app.map.render_state else { return false };
     let r = app.map.gpu_renderer.get_or_insert_with(|| std::sync::Arc::new(crate::mapgpu::GpuMapRenderer::new(rs)));
     let cam = view.camera;
