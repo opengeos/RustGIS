@@ -2380,6 +2380,7 @@ Not applied yet.	ຍັງບໍ່ທັນນຳໃຊ້ເທື່ອ.
 Not for texts: a text is edited in the Format pane.	ບໍ່ສາມາດໃຊ້ກັບຂໍ້ຄວາມ: ຂໍ້ຄວາມຕ້ອງແກ້ໄຂໃນຊ່ອງຮູບແບບ.
 Not loaded	ບໍ່ໄດ້ໂຫຼດ
 not needed	ບໍ່ຈຳເປັນ
+Not available for {platform}	ບໍ່ມີສຳລັບ {platform}
 Not sandboxed	ຢູ່ນອກ Sandbox
 Not saved yet	ຍັງບໍ່ໄດ້ບັນທຶກເທື່ອ
 Not searched, as they didn't load: {folders}	ບໍ່ໄດ້ຄົ້ນຫາ ເນື່ອງຈາກບໍ່ສາມາດໂຫຼດໄດ້: {folders}
@@ -4288,6 +4289,7 @@ Zoom: the map's zoom level, as web maps count it. Bearing: the direction the top
 {agent} was stopped by you.	{agent} ຖືກຢຸດໂດຍທ່ານ.
 {names}: needs Node.js (npx) for its ACP adapter.	{names}: ຕ້ອງການ Node.js (npx) ສຳລັບຕົວແປງ ACP.
 {name} is larger than {mb} MB	{name} ໃຫຍ່ກວ່າ {mb} MB
+{name} has no package for {platform}. It is available for: {platforms}.	{name} ບໍ່ມີແພັກເກັດສຳລັບ {platform}. ມີສຳລັບ: {platforms}.
 {name} runs as a program on your computer: it needs the desktop app or rustgis-cli.	{name} ເຮັດວຽກເປັນໂປຣແກຣມໃນຄອມພິວເຕີຂອງທ່ານ: ມັນຕ້ອງການແອັບເດັສທັອບ ຫຼື rustgis-cli.
 {name} was withdrawn from the plugin registry and has been turned off.	{name} ຖືກຖອນອອກຈາກຄັງລົງທະບຽນປລັກອິນ ແລະ ຖືກປິດການໃຊ້ງານແລ້ວ.
 {name} was withdrawn from the plugin registry: {reason}	{name} ຖືກຖອນອອກຈາກຄັງລົງທະບຽນປລັກອິນ: {reason}

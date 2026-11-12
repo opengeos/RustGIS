@@ -2380,6 +2380,7 @@ Not applied yet.	尚未应用。
 Not for texts: a text is edited in the Format pane.	不适用于文本：文本在格式窗格中编辑。
 Not loaded	未加载
 not needed	无需填写
+Not available for {platform}	不适用于 {platform}
 Not sandboxed	未沙箱隔离
 Not saved yet	尚未保存
 Not searched, as they didn't load: {folders}	由于以下文件夹未能加载，未进行搜索：{folders}
@@ -4288,6 +4289,7 @@ Zoom: the map's zoom level, as web maps count it. Bearing: the direction the top
 {agent} was stopped by you.	你已停止 {agent}。
 {names}: needs Node.js (npx) for its ACP adapter.	{names}：其 ACP 适配器需要 Node.js（npx）。
 {name} is larger than {mb} MB	{name} 大于 {mb} MB
+{name} has no package for {platform}. It is available for: {platforms}.	{name} 没有适用于 {platform} 的软件包。可用于：{platforms}。
 {name} runs as a program on your computer: it needs the desktop app or rustgis-cli.	{name} 作为程序在您的计算机上运行：需要桌面应用或 rustgis-cli。
 {name} was withdrawn from the plugin registry and has been turned off.	{name} 已从插件库下架，并已被停用。
 {name} was withdrawn from the plugin registry: {reason}	{name} 已从插件库下架：{reason}

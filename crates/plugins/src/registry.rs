@@ -34,13 +34,22 @@ pub struct Entry {
     pub license: String,
     #[serde(default)]
     pub categories: Vec<String>,
-    /// The `.rgplugin` package: an HTTPS URL, or a path relative to the registry.
+    /// The `.rgplugin` package: an HTTPS URL, or a path relative to the registry. Once read
+    /// ([`parse`]), the package for this platform: its own from `packages` if it has one, or
+    /// empty when the plugin has packages for other platforms only (see [`Entry::available`]).
+    #[serde(default)]
     pub package: String,
     /// Lower-case hex SHA-256 of the package: the download must match it.
+    #[serde(default)]
     pub sha256: String,
     /// The package's size in bytes.
     #[serde(default)]
     pub size: u64,
+    /// A package per platform (`windows`, `macos`, `linux`), for a plugin that ships a program
+    /// for each: this platform's is downloaded in place of `package`, which is then the package
+    /// for the platforms not named, if the entry has one.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub packages: BTreeMap<String, PlatformPackage>,
     #[serde(default)]
     pub min_rustgis_version: String,
     #[serde(default)]
@@ -58,6 +67,39 @@ pub struct Entry {
     pub python: Option<String>,
 }
 
+/// One platform's package of a plugin: what an [`Entry`]'s `package`, `sha256` and `size` say of
+/// its only one.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PlatformPackage {
+    pub package: String,
+    pub sha256: String,
+    #[serde(default)]
+    pub size: u64,
+}
+
+/// The platforms a registry entry can name a package for, with the names shown for them. The
+/// keys are those of a manifest's `run`.
+pub const PLATFORMS: [(&str, &str); 3] = [("windows", "Windows"), ("macos", "macOS"), ("linux", "Linux")];
+
+/// This platform's key in an entry's `packages`, as a manifest's `run` picks its program; none
+/// in the browser, which has no platform of its own.
+pub fn this_platform() -> Option<&'static str> {
+    if cfg!(target_arch = "wasm32") {
+        None
+    } else if cfg!(target_os = "windows") {
+        Some("windows")
+    } else if cfg!(target_os = "macos") {
+        Some("macos")
+    } else {
+        Some("linux")
+    }
+}
+
+/// The name shown for the platform `key` (`macOS` for `macos`), or the key.
+pub fn platform_name(key: &str) -> &str {
+    PLATFORMS.iter().find(|(k, _)| *k == key).map_or(key, |(_, name)| name)
+}
+
 fn is_wasm(r: &Runtime) -> bool {
     *r == Runtime::Wasm
 }
@@ -73,6 +115,24 @@ impl Entry {
     /// `s` (the name or description) in language `lang`, or `s`.
     pub fn translate<'a>(&'a self, lang: &str, s: &'a str) -> &'a str {
         crate::manifest::translate(&self.i18n, lang, s)
+    }
+
+    /// Whether the plugin has a package for this platform. Without one it is listed, not
+    /// installed: its packages are for other platforms.
+    pub fn available(&self) -> bool {
+        !self.package.is_empty()
+    }
+
+    /// The platforms the plugin has a package for, by the names shown for them (`Windows`,
+    /// `macOS`, `Linux`): for saying where a plugin that isn't available here can be installed.
+    pub fn platforms(&self) -> Vec<&'static str> {
+        PLATFORMS.iter().filter(|(key, _)| self.packages.contains_key(*key)).map(|(_, name)| *name).collect()
+    }
+
+    /// Why the plugin can't be installed here, for one with packages for other platforms only.
+    pub fn unavailable(&self) -> String {
+        let here = this_platform().map_or("the browser", platform_name);
+        format!("{} has no package for {here}: it is for {}", self.name, self.platforms().join(", "))
     }
 }
 
@@ -136,8 +196,15 @@ fn is_local(url: &str) -> bool {
 
 /// Reads a registry (an object with a `plugins` array, or a bare array) fetched from `url`,
 /// resolving package paths. Entries that don't check out are skipped, not fatal: one bad entry
-/// mustn't hide the rest.
+/// mustn't hide the rest. An entry with a package per platform comes back with this platform's
+/// as its `package`, `sha256` and `size`; one with packages for other platforms only is kept,
+/// with no `package`, so the list can say where it installs.
 pub fn parse(text: &str, url: &str) -> Result<Vec<Entry>, String> {
+    parse_for(text, url, this_platform())
+}
+
+/// [`parse`], for `platform` (a key of `packages`; none in the browser).
+pub fn parse_for(text: &str, url: &str, platform: Option<&str>) -> Result<Vec<Entry>, String> {
     let root: Value = serde_json::from_str(text).map_err(|e| format!("the plugin registry isn't valid JSON: {e}"))?;
     // Taken by value, so each entry is converted without a copy (a large registry would
     // otherwise briefly need several times its size).
@@ -153,11 +220,25 @@ pub fn parse(text: &str, url: &str) -> Result<Vec<Entry>, String> {
     let mut seen = std::collections::HashSet::new();
     for v in list.into_iter().take(MAX_ENTRIES) {
         let Ok(mut e) = serde_json::from_value::<Entry>(v) else { continue };
-        if !valid_id(&e.id, false) || version_parts(&e.version).is_none() || !is_sha256(&e.sha256) || e.name.trim().is_empty() {
+        if !valid_id(&e.id, false) || version_parts(&e.version).is_none() || e.name.trim().is_empty() {
             continue;
         }
+        // A platform's package that doesn't check out is dropped as an entry's only one is, and
+        // so is a platform this version doesn't know: nothing here would download it.
+        e.packages.retain(|key, p| {
+            p.package = resolve(url, &p.package);
+            PLATFORMS.iter().any(|(k, _)| k == key) && is_sha256(&p.sha256) && allowed_url(&p.package)
+        });
         e.package = resolve(url, &e.package);
-        if !allowed_url(&e.package) || !seen.insert(e.id.clone()) {
+        let whole = is_sha256(&e.sha256) && allowed_url(&e.package);
+        match platform.and_then(|key| e.packages.get(key)) {
+            Some(own) => (e.package, e.sha256, e.size) = (own.package.clone(), own.sha256.clone(), own.size),
+            None if whole => {}
+            // Packages for other platforms only: listed, with nothing to download here.
+            None if !e.packages.is_empty() => (e.package, e.sha256, e.size) = (String::new(), String::new(), 0),
+            None => continue,
+        }
+        if !seen.insert(e.id.clone()) {
             continue;
         }
         if !e.homepage.starts_with("https://") && !e.homepage.starts_with("http://") {

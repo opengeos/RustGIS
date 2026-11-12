@@ -2380,6 +2380,7 @@ Not applied yet.	Ainda não aplicado.
 Not for texts: a text is edited in the Format pane.	Não para textos: um texto é editado no painel Formato.
 Not loaded	Não carregado
 not needed	não é necessária
+Not available for {platform}	Não disponível para {platform}
 Not sandboxed	Fora da sandbox
 Not saved yet	Ainda não salvo
 Not searched, as they didn't load: {folders}	Não pesquisadas, pois não carregaram: {folders}
@@ -4288,6 +4289,7 @@ Zoom: the map's zoom level, as web maps count it. Bearing: the direction the top
 {agent} was stopped by you.	Você interrompeu o {agent}.
 {names}: needs Node.js (npx) for its ACP adapter.	{names}: precisa do Node.js (npx) para o adaptador ACP.
 {name} is larger than {mb} MB	{name} tem mais de {mb} MB
+{name} has no package for {platform}. It is available for: {platforms}.	{name} não tem pacote para {platform}. Está disponível para: {platforms}.
 {name} runs as a program on your computer: it needs the desktop app or rustgis-cli.	{name} é executado como um programa no seu computador: requer o aplicativo desktop ou o rustgis-cli.
 {name} was withdrawn from the plugin registry and has been turned off.	{name} foi retirado do registro de plugins e foi desativado.
 {name} was withdrawn from the plugin registry: {reason}	{name} foi retirado do registro de plugins: {reason}

@@ -2380,6 +2380,7 @@ Not applied yet.	まだ適用されていません。
 Not for texts: a text is edited in the Format pane.	テキストには使用できません: テキストは書式ウィンドウで編集します。
 Not loaded	未読み込み
 not needed	不要
+Not available for {platform}	{platform} では利用できません
 Not sandboxed	サンドボックス外
 Not saved yet	未保存
 Not searched, as they didn't load: {folders}	読み込めなかったため検索していません: {folders}
@@ -4288,6 +4289,7 @@ Zoom: the map's zoom level, as web maps count it. Bearing: the direction the top
 {agent} was stopped by you.	{agent} を停止しました。
 {names}: needs Node.js (npx) for its ACP adapter.	{names}: ACP アダプターに Node.js (npx) が必要です。
 {name} is larger than {mb} MB	{name} は {mb} MB を超えています
+{name} has no package for {platform}. It is available for: {platforms}.	{name} には {platform} 用のパッケージがありません。利用できるプラットフォーム: {platforms}。
 {name} runs as a program on your computer: it needs the desktop app or rustgis-cli.	{name} はコンピューター上のプログラムとして実行されます。デスクトップ アプリまたは rustgis-cli が必要です。
 {name} was withdrawn from the plugin registry and has been turned off.	{name} はプラグイン レジストリから取り下げられたため、無効にしました。
 {name} was withdrawn from the plugin registry: {reason}	{name} はプラグイン レジストリから取り下げられました: {reason}

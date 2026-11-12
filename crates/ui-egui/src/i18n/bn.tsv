@@ -2380,6 +2380,7 @@ Not applied yet.	এখনও প্রয়োগ করা হয়নি।
 Not for texts: a text is edited in the Format pane.	টেক্সটের জন্য নয়: Format pane-এ টেক্সট সম্পাদনা করা হয়।
 Not loaded	লোড হয়নি
 not needed	প্রয়োজন নেই
+Not available for {platform}	{platform}-এর জন্য উপলব্ধ নয়
 Not sandboxed	Sandbox-এর বাইরে
 Not saved yet	এখনও সংরক্ষিত নয়
 Not searched, as they didn't load: {folders}	লোড হয়নি বলে অনুসন্ধান করা হয়নি: {folders}
@@ -4288,6 +4289,7 @@ Zoom: the map's zoom level, as web maps count it. Bearing: the direction the top
 {agent} was stopped by you.	আপনি {agent}-কে থামিয়েছেন।
 {names}: needs Node.js (npx) for its ACP adapter.	{names}: এর ACP adapter-এর জন্য Node.js (npx) দরকার।
 {name} is larger than {mb} MB	{name} {mb} MB-এর চেয়ে বড়
+{name} has no package for {platform}. It is available for: {platforms}.	{name}-এর {platform}-এর জন্য কোনো package নেই। এটি এগুলোর জন্য উপলব্ধ: {platforms}।
 {name} runs as a program on your computer: it needs the desktop app or rustgis-cli.	{name} আপনার কম্পিউটারে program হিসেবে চলে: এর জন্য desktop app বা rustgis-cli দরকার।
 {name} was withdrawn from the plugin registry and has been turned off.	{name} plugin registry থেকে প্রত্যাহার করা হয়েছে এবং বন্ধ করা হয়েছে।
 {name} was withdrawn from the plugin registry: {reason}	{name} plugin registry থেকে প্রত্যাহার করা হয়েছে: {reason}

@@ -2380,6 +2380,7 @@ Not applied yet.	هنوز اعمال نشده است.
 Not for texts: a text is edited in the Format pane.	برای متن‌ها نیست: متن در پنل Format ویرایش می‌شود.
 Not loaded	بارگذاری نشده
 not needed	لازم نیست
+Not available for {platform}	برای {platform} در دسترس نیست
 Not sandboxed	بدون سندباکس
 Not saved yet	هنوز ذخیره نشده
 Not searched, as they didn't load: {folders}	جستجو نشدند چون بارگذاری نشدند: {folders}
@@ -4288,6 +4289,7 @@ Zoom: the map's zoom level, as web maps count it. Bearing: the direction the top
 {agent} was stopped by you.	عامل {agent} توسط شما متوقف شد.
 {names}: needs Node.js (npx) for its ACP adapter.	افزونهٔ {names} برای آداپتور ACP خود به Node.js (npx) نیاز دارد.
 {name} is larger than {mb} MB	حجم {name} از {mb} MB بزرگ‌تر است
+{name} has no package for {platform}. It is available for: {platforms}.	{name} بسته‌ای برای {platform} ندارد. برای این‌ها در دسترس است: {platforms}.
 {name} runs as a program on your computer: it needs the desktop app or rustgis-cli.	افزونهٔ {name} مثل یک برنامهٔ مستقل روی رایانهٔ شما اجرا می‌شود: به برنامهٔ دسکتاپ یا rustgis-cli نیاز دارد.
 {name} was withdrawn from the plugin registry and has been turned off.	افزونهٔ {name} از فهرست افزونه‌ها پس گرفته شده و خاموش شده است.
 {name} was withdrawn from the plugin registry: {reason}	افزونهٔ {name} از فهرست افزونه‌ها پس گرفته شد: {reason}

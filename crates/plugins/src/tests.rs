@@ -2365,3 +2365,97 @@ fn panel_rejected_value_names_are_sampled_without_losing_the_count() {
     assert!(report.values.len() <= 10);
     assert!(report.notice().unwrap().contains("1000 value(s) not taken"));
 }
+
+/// A registry entry can name a package per platform (#1821): each platform reads its own, the
+/// entry's own package serves the platforms not named, and a plugin with packages for other
+/// platforms only is listed with nothing to download.
+#[test]
+fn registry_entries_name_a_package_per_platform() {
+    let (win, mac, lin, any) = ("1".repeat(64), "2".repeat(64), "3".repeat(64), "4".repeat(64));
+    let url = "https://plugins.rustgis.app/registry.json";
+    let text = json!([
+        {"id": "globe", "name": "Globe", "version": "1.0.0", "runtime": "process", "packages": {
+            "windows": {"package": "globe-windows.rgplugin", "sha256": win, "size": 16},
+            "macos": {"package": "https://example.com/globe-macos.rgplugin", "sha256": mac, "size": 30},
+            "linux": {"package": "globe-linux.rgplugin", "sha256": lin, "size": 17}}},
+        // Windows only, with no package for the rest.
+        {"id": "win-only", "name": "Win", "version": "1.0.0", "runtime": "process", "packages": {
+            "windows": {"package": "win.rgplugin", "sha256": win, "size": 5}}},
+        // One platform's own package, and the entry's for the others.
+        {"id": "mixed", "name": "Mixed", "version": "1.0.0", "package": "mixed.rgplugin", "sha256": any, "size": 9, "packages": {
+            "linux": {"package": "mixed-linux.rgplugin", "sha256": lin, "size": 7}}},
+        // Packages that don't check out are dropped: a bad hash, plain HTTP, an unknown platform.
+        {"id": "broken", "name": "Broken", "version": "1.0.0", "packages": {
+            "windows": {"package": "b.rgplugin", "sha256": "abc"},
+            "linux": {"package": "http://insecure.example.com/b.rgplugin", "sha256": lin},
+            "plan9": {"package": "b.rgplugin", "sha256": lin}}},
+        {"id": "plain", "name": "Plain", "version": "1.0.0", "package": "plain.rgplugin", "sha256": any, "size": 3},
+    ])
+    .to_string();
+    let read = |platform: Option<&str>| registry::parse_for(&text, url, platform).unwrap();
+    let got = |platform: Option<&str>| -> Vec<(String, String, String, u64)> {
+        read(platform).into_iter().map(|e| (e.id, e.package, e.sha256, e.size)).collect()
+    };
+    let row = |id: &str, package: &str, sha: &str, size: u64| {
+        let package = if package.is_empty() || package.contains("://") {
+            package.to_string()
+        } else {
+            format!("https://plugins.rustgis.app/{package}")
+        };
+        (id.to_string(), package, sha.to_string(), size)
+    };
+    assert_eq!(
+        got(Some("linux")),
+        [
+            row("globe", "globe-linux.rgplugin", &lin, 17),
+            row("mixed", "mixed-linux.rgplugin", &lin, 7),
+            row("plain", "plain.rgplugin", &any, 3),
+            row("win-only", "", "", 0),
+        ]
+    );
+    assert_eq!(
+        got(Some("macos")),
+        [
+            row("globe", "https://example.com/globe-macos.rgplugin", &mac, 30),
+            row("mixed", "mixed.rgplugin", &any, 9),
+            row("plain", "plain.rgplugin", &any, 3),
+            row("win-only", "", "", 0),
+        ]
+    );
+    assert_eq!(
+        got(Some("windows")),
+        [
+            row("globe", "globe-windows.rgplugin", &win, 16),
+            row("mixed", "mixed.rgplugin", &any, 9),
+            row("plain", "plain.rgplugin", &any, 3),
+            row("win-only", "win.rgplugin", &win, 5),
+        ]
+    );
+    // The browser has no platform: only an entry's own package installs there.
+    assert_eq!(
+        got(None),
+        [
+            row("globe", "", "", 0),
+            row("mixed", "mixed.rgplugin", &any, 9),
+            row("plain", "plain.rgplugin", &any, 3),
+            row("win-only", "", "", 0)
+        ]
+    );
+    // A plugin with nothing for this platform says where it does install.
+    let v = read(Some("linux"));
+    let (globe, win_only) = (&v[0], &v[3]);
+    assert!(globe.available() && !win_only.available());
+    assert_eq!(globe.platforms(), ["Windows", "macOS", "Linux"]);
+    assert_eq!(win_only.platforms(), ["Windows"]);
+    assert!(win_only.unavailable().starts_with("Win has no package for "), "{}", win_only.unavailable());
+    assert!(win_only.unavailable().ends_with(": it is for Windows"), "{}", win_only.unavailable());
+    // What `parse` reads is this platform's.
+    let own = registry::parse(&text, url).unwrap();
+    assert_eq!(own, registry::parse_for(&text, url, registry::this_platform()).unwrap());
+    // Round trips, the packages by platform included; an entry without them is written without.
+    for e in &v {
+        let back: registry::Entry = serde_json::from_value(serde_json::to_value(e).unwrap()).unwrap();
+        assert_eq!(&back, e);
+    }
+    assert!(serde_json::to_value(&v[2]).unwrap().get("packages").is_none());
+}

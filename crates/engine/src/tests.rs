@@ -12426,6 +12426,7 @@ fn registry_downloads_are_checked() {
         package: "https://example.com/x.rgplugin".into(),
         sha256: "0".repeat(64),
         size: 0,
+        packages: Default::default(),
         min_rustgis_version: String::new(),
         permissions: Vec::new(),
         i18n: Default::default(),
@@ -12438,6 +12439,25 @@ fn registry_downloads_are_checked() {
     e.id = "other".into();
     assert!(crate::cmd::plugins::install_checked(&e, &bytes).unwrap_err().contains("not 'other'"));
     e.id = "eng-reg".into();
+    // A plugin with packages for other platforms only has nothing to install here (#1821).
+    let elsewhere = rustgis_plugins::registry::Entry {
+        package: String::new(),
+        sha256: String::new(),
+        packages: [(
+            "plan9".to_string(),
+            rustgis_plugins::registry::PlatformPackage {
+                package: "https://example.com/x.rgplugin".into(),
+                sha256: e.sha256.clone(),
+                size: 0,
+            },
+        )]
+        .into(),
+        ..e.clone()
+    };
+    let err = crate::cmd::plugins::install_checked(&elsewhere, &bytes).unwrap_err();
+    assert!(err.contains("Reg has no package for") && err.ends_with("it wasn't installed"), "{err}");
+    assert_eq!(crate::cmd::plugins::entry_status(&elsewhere)["available"], json!(false));
+    assert_eq!(crate::cmd::plugins::entry_status(&e)["available"], json!(true));
     // What the registry said about how it runs (shown before installing) must be so.
     e.runtime = rustgis_plugins::manifest::Runtime::Process;
     let err = crate::cmd::plugins::install_checked(&e, &bytes).unwrap_err();
