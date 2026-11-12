@@ -70,6 +70,11 @@ impl std::fmt::Display for Date {
 /// A moment: microseconds since 1970-01-01, and the offset from UTC in minutes when it has a
 /// zone. With an offset, `micros` is the instant in UTC; without one, it's the wall-clock time
 /// as if it were UTC.
+///
+/// `==` and hashing compare what is stored, offset included, so `12:00Z` and `13:00+01:00` are
+/// different values: changing one to the other is an edit that undo and saving must see.
+/// Ordering ([`sort_key`](Self::sort_key), and `Value`'s `partial_cmp`) compares the instant,
+/// where the two are equal.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct DateTime {
     micros: i64,

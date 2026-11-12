@@ -227,7 +227,8 @@ impl std::fmt::Display for Value {
 
 impl PartialOrd for Value {
     /// Dates by instant (also against date text), numbers as numbers, nulls first, then text
-    /// ignoring case.
+    /// ignoring case. Two date-times at one instant with different offsets are `Equal` here but
+    /// not `==`, which compares what is stored (see [`DateTime`]).
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         use std::cmp::Ordering;
         if let Some((a, b)) = self.temporal_keys(other) {
