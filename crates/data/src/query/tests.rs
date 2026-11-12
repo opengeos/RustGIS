@@ -644,6 +644,7 @@ fn where_clauses_compare_dates() {
         "issued LIKE '2026-%'",
         "ts >= '2026-03-05 14:30'",
         "issued < '2026-03-05 revision 2'",
+        "issued < '2026-03-05 14:30 revision 2'",
         "issued < '2026 report 03 page 05'",
         "issued < '2026-03/05'",
     ] {

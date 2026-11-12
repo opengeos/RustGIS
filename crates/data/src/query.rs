@@ -184,7 +184,13 @@ fn other_date_form(t: &str) -> bool {
         Some(i) => (t.get(..i).unwrap_or(t), t.get(i + 1..)),
         None => (t, None),
     };
-    if time.is_some_and(|time| !time.starts_with(|c: char| c.is_ascii_digit()) || !time.contains(':')) {
+    // A time is a clock and an optional zone, and nothing else: `14:30`, `14:30:00.5 +02:00`, `14:30Z`.
+    let clock = |time: &str| {
+        time.starts_with(|c: char| c.is_ascii_digit())
+            && time.contains(':')
+            && time.chars().all(|c| c.is_ascii_digit() || matches!(c, ':' | '.' | '+' | '-' | ' ' | 'Z' | 'z'))
+    };
+    if time.is_some_and(|time| !clock(time)) {
         return false;
     }
     let Some(sep) = date.chars().find(|c| !c.is_ascii_digit()) else { return false };
