@@ -1998,7 +1998,8 @@ fn qgis_bookmarks_relations_rotation_and_time_import() {
             .contains("its relations to a layer that came in as several tables with the field, any of which it could mean (1: Trip names)"),
         "{notes}"
     );
-    // Only its tracks have `points`: related to them, said to be a guess.
+    // Of its tables, only the tracks have `points` (routes have it too, but this file has none):
+    // related to them, said to be a guess.
     assert_eq!((rels[1].name.as_str(), rels[1].origin_key.as_str()), ("Trip points", "points"));
     assert!(notes.contains("related to the one table with the field, QGIS's own not being known (1: Trip points)"), "{notes}");
     assert!(!notes.contains("not being known (2"), "{notes}");
