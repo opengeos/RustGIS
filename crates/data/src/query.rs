@@ -168,6 +168,20 @@ pub enum Func {
     LineLength,
 }
 
+/// Whether `t` is a whole date in a form other than ISO 8601: digits only, five or more
+/// (`20260101`), or year, month and day as three numbers in either order (`2026/03/05`,
+/// `2026-1-1`, `05.03.2026`) that don't read as an ISO date.
+fn other_date_form(t: &str) -> bool {
+    if t.len() >= 5 && t.bytes().all(|b| b.is_ascii_digit()) {
+        return true;
+    }
+    if !t.starts_with(|c: char| c.is_ascii_digit()) || crate::DateTime::parse(t).is_some() {
+        return false;
+    }
+    let groups: Vec<usize> = t.split(|c: char| !c.is_ascii_digit()).filter(|g| !g.is_empty()).map(str::len).take(3).collect();
+    matches!(groups.as_slice(), [4, 1..=2, 1..=2] | [1..=2, 1..=2, 4])
+}
+
 /// Whether `f` works on numbers, so it gives null for a date.
 fn number_func(f: Func) -> bool {
     matches!(
@@ -615,10 +629,11 @@ impl Parser<'_> {
         if let Some(f) = date {
             return Err(format!("'{}' holds dates, so it compares with a date in quotes ('2026-01-01') or text, not a number", f.name));
         }
-        // A date written without dashes ('20260101') is text that no date reads as, so it would
-        // compare with the date's text and match nothing.
+        // A whole date written another way ('20260101', '2026/03/05', '2026-1-1', '05/03/2026')
+        // is text that no date reads as, so it would compare with the date's text and match the
+        // wrong rows. A partial date ('2026', '2026-03') still compares as text, in order.
         let compact = |e: &Expr| match e {
-            Expr::Lit(Value::Text(t)) if t.trim().len() >= 5 && t.trim().bytes().all(|b| b.is_ascii_digit()) => Some(t.trim().to_string()),
+            Expr::Lit(Value::Text(t)) if other_date_form(t.trim()) => Some(t.trim().to_string()),
             _ => None,
         };
         let date =

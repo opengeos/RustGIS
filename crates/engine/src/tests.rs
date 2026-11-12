@@ -37500,6 +37500,18 @@ fn polygons_burned_onto_a_chosen_grid() {
     assert_eq!(dated["skipped"], json!({"noValue": 1}), "{dated}");
     let r = out_raster(&s, &dated);
     assert_eq!((at(&r, 1.5, 1.5), at(&r, 9.5, 9.5)), (Some(2.0), Some(1.0)));
+    // Date-times by instant, not by their text: 00:30+02:00 is before 23:00Z the day before, and
+    // one moment at two offsets is one class.
+    s.run("edit.addField", &json!({"layer": "soils", "name": "seen", "type": "datetime"})).unwrap();
+    for (row, when) in [(0, "2026-03-04T23:00:00Z"), (1, "2026-03-05T00:30:00+02:00"), (2, "2026-03-05T01:00:00+02:00")] {
+        s.run("edit.setValue", &json!({"layer": "soils", "row": row, "field": "seen", "value": when})).unwrap();
+    }
+    let seen = s.run("raster.rasterize", &json!({"layer": "soils", "field": "seen", "cellSize": 1, "name": "seen"})).unwrap();
+    assert_eq!(
+        seen["classes"],
+        json!([{"code": 1, "value": "2026-03-05T00:30:00+02:00"}, {"code": 2, "value": "2026-03-04T23:00:00Z"}]),
+        "{seen}"
+    );
 
     // On a grid projected from a raster: exactly that grid, and the cells in place there.
     let gt = GeoTransform { origin_x: 0.0, origin_y: 10.0, pixel_width: 0.5, pixel_height: -0.5 };

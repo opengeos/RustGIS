@@ -626,10 +626,20 @@ fn where_clauses_compare_dates() {
     assert!(parse("issued > ts", &d).is_ok(), "two dates compare");
     // A date without dashes is text no date reads as: an error asking for YYYY-MM-DD. A shorter
     // partial date still compares as text.
-    for e in ["issued >= '20260101'", "issued = '20260305'", "'20260101' < issued", "issued IN ('2026-01-01', '20260101')"] {
+    for e in [
+        "issued >= '20260101'",
+        "issued = '20260305'",
+        "'20260101' < issued",
+        "issued IN ('2026-01-01', '20260101')",
+        "issued >= '2026/03/05'",
+        "issued >= '2026-1-1'",
+        "issued = '05.03.2026'",
+    ] {
         assert!(parse(e, &d).err().unwrap_or_default().contains("write the date as YYYY-MM-DD"), "{e}");
     }
-    assert!(parse("issued > '2026'", &d).is_ok());
+    for e in ["issued > '2026'", "issued >= '2026-03'", "issued LIKE '2026-%'", "ts >= '2026-03-05 14:30'"] {
+        assert!(parse(e, &d).is_ok(), "{e}");
+    }
     for e in ["to_int(issued)", "to_real(ts)", "color_rgb(issued, 0, 0)"] {
         assert!(parse(e, &d).err().unwrap_or_default().contains("on dates isn't supported yet"), "{e}");
     }
