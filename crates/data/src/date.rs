@@ -154,6 +154,8 @@ impl DateTime {
         match zone {
             None => DateTime::local(wall),
             Some(z) if z.eq_ignore_ascii_case("z") => DateTime::with_offset(wall, 0),
+            // `Z` followed by more (`Z0200`) is no zone: refused, not read as an offset.
+            Some(z) if !z.starts_with(['+', '-']) => None,
             Some(z) => {
                 let sign = if z.starts_with('-') { -1 } else { 1 };
                 let z = z.get(1..)?.as_bytes();
@@ -309,6 +311,7 @@ mod tests {
     #[test]
     fn digits_past_microseconds_are_refused_unless_zeros() {
         assert!(DateTime::parse("2026-03-05T14:30:00.123456789Z").is_none(), "nothing is cut");
+        assert!(DateTime::parse("2026-03-05T14:30:00Z0200").is_none(), "Z then an offset is no zone");
         assert_eq!(
             DateTime::parse("2026-03-05T14:30:00.123456000Z").map(|t| t.to_string()),
             DateTime::parse("2026-03-05T14:30:00.123456Z").map(|t| t.to_string())
