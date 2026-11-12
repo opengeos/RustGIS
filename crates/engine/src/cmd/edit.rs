@@ -228,6 +228,10 @@ fn convert(v: Value, ty: FieldType) -> (Value, Cut, Option<f64>) {
         (Value::Int(i), FieldType::Double) => (Value::Float(i as f64), Cut::None, None),
         // A date-time into a date field is the day it shows, and said so when it had a time or zone.
         (Value::DateTime(t), FieldType::Date) => (Value::Date(t.date()), if t.is_date() { Cut::None } else { Cut::Time }, None),
+        // A date is no number or yes/no: null (and said by the caller), not read as false.
+        (Value::Date(_) | Value::DateTime(_), FieldType::Integer | FieldType::Double | FieldType::Boolean) => {
+            (Value::Null, Cut::None, None)
+        }
         // Text written as a whole number, or as a decimal without an exponent, is read from its
         // digits; any other number written as text, as a decimal.
         (Value::Text(t), FieldType::Integer) => match t.trim().parse::<i64>() {

@@ -480,6 +480,9 @@ impl Parser<'_> {
                     other => return Err(format!("expected ',' or ')', found {}", show(other.as_ref()))),
                 }
             }
+            for e in &list {
+                self.date_against_number(&l, e)?;
+            }
             return Ok(match l {
                 Expr::Field(field) if list.iter().all(|e| matches!(e, Expr::Lit(_))) => {
                     let values = list.into_iter().filter_map(|e| if let Expr::Lit(v) = e { Some(v) } else { None }).collect();
@@ -494,6 +497,8 @@ impl Parser<'_> {
                 return Err("expected AND after BETWEEN …".into());
             }
             let hi = self.concat()?;
+            self.date_against_number(&l, &lo)?;
+            self.date_against_number(&l, &hi)?;
             return Ok(Expr::Between { e: Box::new(l), lo: Box::new(lo), hi: Box::new(hi), negate });
         }
         if negate {
@@ -513,6 +518,7 @@ impl Parser<'_> {
         };
         self.pos += 1;
         let r = self.concat()?;
+        self.date_against_number(&l, &r)?;
         Ok(match (l, r) {
             (Expr::Field(field), Expr::Lit(lit)) => Expr::Cmp { field, op, lit },
             (l, r) => Expr::Compare(op, Box::new(l), Box::new(r)),
@@ -574,6 +580,22 @@ impl Parser<'_> {
             }
         }
         Ok(Expr::Chain(Box::new(first), rest))
+    }
+    /// An error when one side is a date and the other a number (`issued >= 20260101`), which
+    /// would compare the date's text with the number's digits and match the wrong rows.
+    fn date_against_number(&self, a: &Expr, b: &Expr) -> Result<(), String> {
+        let number = |e: &Expr| matches!(e, Expr::Lit(Value::Int(_) | Value::Float(_) | Value::Bool(_)));
+        let date = if number(b) {
+            self.date_field(a)
+        } else if number(a) {
+            self.date_field(b)
+        } else {
+            None
+        };
+        match date {
+            Some(f) => Err(format!("'{}' holds dates: compare it with a date in quotes ('2026-01-01'), not a number", f.name)),
+            None => Ok(()),
+        }
     }
     /// The date field `e` can give a value of: the field itself, or one passed through `if`,
     /// `coalesce`, `nullif` or `CASE`. Other functions give numbers or text.

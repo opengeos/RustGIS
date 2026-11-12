@@ -242,6 +242,10 @@ mod tests {
         assert_eq!(coerce(&Attr::Text("2026-03-05".into()), FieldType::Date).0.to_string(), "2026-03-05");
         assert!(coerce(&Attr::Text("soon".into()), FieldType::Date).0.is_null());
         assert_eq!(coerce(&Attr::Text("<null>".into()), FieldType::Text), (Attr::Text("<null>".into()), Cut::None));
+        // A date is no yes/no or number: null, which paste counts and says.
+        for ty in [FieldType::Boolean, FieldType::Integer, FieldType::Double] {
+            assert_eq!(coerce(&Attr::DateTime(t), ty), (Attr::Null, Cut::None), "{ty:?}");
+        }
     }
 
     #[test]
