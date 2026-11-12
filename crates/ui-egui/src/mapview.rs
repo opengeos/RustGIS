@@ -713,9 +713,12 @@ impl GpuErrors {
 pub(crate) fn leave_gpu_if_out_of_memory(app: &mut RustGisApp) {
     use std::sync::atomic::Ordering;
     let ran_out = app.map.gpu_errors.out_of_memory.swap(false, Ordering::SeqCst);
-    // Errors with running out of memory follow from it (what couldn't be made, used): only it
-    // is said, and the notice for another error is kept for one of its own.
-    let other = app.map.gpu_errors.other.swap(false, Ordering::SeqCst) && !ran_out;
+    // Errors with running out of memory follow from it (what couldn't be made, used): when the
+    // map leaves the card for it, only that is said, and the notice for another error is kept
+    // for one of its own. (With the map already off the card, running out isn't said: the other
+    // error is.)
+    let leaves = ran_out && app.map.gpu_enabled;
+    let other = app.map.gpu_errors.other.swap(false, Ordering::SeqCst) && !leaves;
     if other && !app.map.gpu_error_said {
         app.map.gpu_error_said = true;
         // (Clicking GPU helps only with the map on the GPU; otherwise it's egui's own drawing.)
@@ -5080,9 +5083,12 @@ mod tests {
         assert!(app.map.gpu_enabled);
         assert_eq!(app.session.notices.len(), before + 4);
         assert!(format!("{:?}", app.session.notices.last().unwrap()).contains("Clicking GPU"));
-        // With the map on the CPU, the notice doesn't point at the GPU switch.
+        // With the map on the CPU, the notice doesn't point at the GPU switch, and is said though
+        // the card ran out of memory too (which, the map being off it, isn't said).
         let mut cpu = RustGisApp::with_sample();
+        assert!(!cpu.map.gpu_enabled);
         let before = cpu.session.notices.len();
+        ran_out(&cpu);
         cpu.map.gpu_errors.note(&invalid());
         leave_gpu_if_out_of_memory(&mut cpu);
         assert_eq!(cpu.session.notices.len(), before + 1);
