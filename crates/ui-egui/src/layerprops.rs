@@ -163,27 +163,36 @@ fn name_key(instance: u64) -> egui::Id {
 }
 
 /// The layer's name, renamed (`layer.rename`) when the box is left (a click elsewhere, another
-/// layer's included) or Enter is pressed, and put back as it was with Escape or when left empty.
-/// The draft is kept only while the box has focus, so a rename from elsewhere (undo, a script)
-/// shows at once, and a draft left when the pane was hidden mid-edit is dropped, not shown as if
-/// it were the name. The box is the layer's own: when the layer changes without the box being
-/// left (a script, the assistant), the draft is dropped (see [`layer_changed`]).
+/// layer's included) or Enter is pressed, and put back as it was with Escape or when left empty. A
+/// press on the Layers pane lets go of the box before the pane is drawn
+/// (`widgets::let_go_on_panel_press`), so on that frame the box has lost its focus but the draft,
+/// kept the frame before, still names the layer it was typed for. A draft is kept only while the
+/// box has focus, so a rename from elsewhere (undo, a script) shows at once, and one older than the
+/// last frame (the pane was hidden mid-edit) is dropped, not shown as if it were the name. The box
+/// is the layer's own: when the layer changes without the box being left (a script, the
+/// assistant), the draft is dropped (see [`layer_changed`]).
 fn name_row(app: &mut RustGisApp, ui: &mut Ui, l: &Layer) {
     let key = name_key(l.instance_id());
-    let box_id = egui::Id::unique(("layer_properties_name_box", l.instance_id()));
-    // A draft shows only in the box being edited, never in one drawn again after it was hidden.
-    let focused = ui.memory(|m| m.has_focus(box_id));
-    let mut draft = ui.data(|d| d.get_temp::<String>(key)).filter(|_| focused).unwrap_or_else(|| l.name.clone());
+    let kept_at = key.with("pass");
+    let pass = ui.ctx().cumulative_pass_nr();
+    let fresh = ui.data(|d| d.get_temp::<u64>(kept_at)).is_some_and(|at| at + 1 >= pass);
+    let mut draft = ui.data(|d| d.get_temp::<String>(key)).filter(|_| fresh).unwrap_or_else(|| l.name.clone());
     // Read before the box, which may take the key for itself.
     let escape = ui.input(|i| i.key_pressed(egui::Key::Escape));
     ui.horizontal(|ui| {
         let input_label = ui.label(tl!("Name"));
-        let edit = egui::TextEdit::singleline(&mut draft).id(box_id).desired_width(f32::INFINITY);
+        let edit = egui::TextEdit::singleline(&mut draft).id_salt(("layer_properties_name", l.instance_id())).desired_width(f32::INFINITY);
         let r = ui.add(edit).labelled_by(input_label.id);
         if r.has_focus() {
-            ui.data_mut(|d| d.insert_temp(key, draft));
+            ui.data_mut(|d| {
+                d.insert_temp(key, draft);
+                d.insert_temp(kept_at, pass);
+            });
         } else {
-            ui.data_mut(|d| d.remove_temp::<String>(key));
+            ui.data_mut(|d| {
+                d.remove_temp::<String>(key);
+                d.remove_temp::<u64>(kept_at);
+            });
             let name = draft.trim();
             if r.lost_focus() && !escape && !name.is_empty() && name != l.name {
                 run(app, "layer.rename", json!({"layer": l.id, "name": name}));
@@ -446,6 +455,42 @@ mod tests {
         assert_eq!((m.layer(cities).unwrap().name.as_str(), m.layer(countries).unwrap().name.as_str()), ("Cities", "Countries"));
         assert_eq!(h.state().session.undo_depth(), steps, "nothing renamed");
         assert!(h.ctx.data(|d| d.get_temp::<String>(super::name_key(instance))).is_none(), "nor does it come back");
+    }
+
+    /// A name typed and left by clicking another layer in the Layers pane renames the layer it was
+    /// typed for, in one step, and the pane then shows the other: the press lets go of the box
+    /// before the row picks its layer (`widgets::let_go_on_panel_press`), as in the whole app.
+    #[test]
+    fn clicking_another_layer_renames_the_layer_the_name_was_typed_for() {
+        let mut app = RustGisApp::with_sample();
+        app.run("ui.pane.layerProperties", json!({"layer": "Countries"})).unwrap();
+        let countries = app.session.active_layer.unwrap();
+        let cities = layer_id(&app, "Cities");
+        let steps = app.session.undo_depth();
+        let mut h =
+            egui_kittest::Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_max_steps(64).with_step_dt(0.25).build_ui_state(
+                |ui, app: &mut RustGisApp| {
+                    let ctx = ui.ctx().clone();
+                    app.logic(&ctx);
+                    app.ui(ui);
+                },
+                app,
+            );
+        h.run_steps(6);
+        h.get_by_role_and_label(Role::TextInput, "Name").click();
+        h.run_steps(2);
+        h.get_by_role_and_label(Role::TextInput, "Name").type_text(" 2");
+        h.run_steps(2);
+        let at = h.get_by_label("Cities").rect().center();
+        h.hover_at(at);
+        h.drag_at(at);
+        h.step();
+        h.drop_at(at);
+        h.run_steps(3);
+        let m = h.state().session.map();
+        assert_eq!((m.layer(countries).unwrap().name.as_str(), m.layer(cities).unwrap().name.as_str()), ("Countries 2", "Cities"));
+        assert_eq!(h.state().session.active_layer, Some(cities), "the click picked Cities");
+        assert_eq!(h.state().session.undo_depth(), steps + 1, "one step");
     }
 
     /// A name being typed when the pane is hidden is dropped: back in view, the box shows the
