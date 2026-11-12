@@ -744,6 +744,21 @@ fn group_notes(tree: &Tree, blended: &[String], effects: &[String], report: &mut
     if tree.custom_order {
         report.approximated("", "its layer order (set apart from the layer tree): drawn in the layer tree's order");
     }
+    if tree.legend_order {
+        report.approximated("", "its layer order (set apart from the legend), not read: drawn in the legend's order");
+    }
+    if tree.deep > 0 {
+        report.approximated(
+            "",
+            format!("layers below {TREE_DEPTH} levels of groups ({}): put in the group holding them, with their groups' boxes", tree.deep),
+        );
+    }
+    if tree.cut > 0 {
+        report.skipped(
+            "",
+            format!("the layer tree's entries past the first {TREE_LAYERS} ({}): their layers come in at the top level, shown", tree.cut),
+        );
+    }
 }
 
 /// The project's main annotation layer (`<main-annotation-layer>`), drawn over its layers, as a
@@ -833,8 +848,25 @@ struct Tree {
     groups: Vec<TreeGroup>,
     /// The groups not kept.
     folded: usize,
+    /// Layers below [`TREE_DEPTH`] levels of groups, read without walking further in.
+    deep: usize,
+    /// Layer entries past [`TREE_LAYERS`], not read.
+    cut: usize,
     /// A drawing order of its own is on (QGIS's Layer Order panel) and differs from the tree's.
     custom_order: bool,
+    /// QGIS 2's legend keeps a drawing order of its own (`updateDrawingOrder="false"`).
+    legend_order: bool,
+}
+
+/// The most levels of groups the layer tree is walked into; the layers further in are read
+/// without walking (see [`Tree::flatten`]).
+const TREE_DEPTH: usize = 64;
+/// The most layer entries read from the layer tree.
+const TREE_LAYERS: usize = MAX_LAYERS * 4;
+
+/// Whether a layer tree or legend entry's box is checked.
+fn checked_box(n: Node) -> bool {
+    n.attribute("checked").is_none_or(|c| c == "Qt::Checked" || c == "Qt::PartiallyChecked")
 }
 
 impl Tree {
@@ -845,41 +877,64 @@ impl Tree {
             tree.walk(t, false, top, 0);
             // The custom order, top first, of the layers in the tree.
             if let Some(c) = child(t, "custom-order").filter(|c| c.attribute("enabled") == Some("1")) {
+                let known: std::collections::HashSet<&str> = tree.layers.iter().map(|l| l.id.as_str()).collect();
                 let ids: Vec<&str> = c
                     .children()
                     .filter(|i| i.has_tag_name("item"))
+                    .take(TREE_LAYERS)
                     .filter_map(|i| i.text())
                     .map(str::trim)
-                    .filter(|id| tree.layers.iter().any(|l| l.id == *id))
-                    .take(MAX_LAYERS * 4)
+                    .filter(|id| known.contains(id))
                     .collect();
-                let order: Vec<&str> = tree.layers.iter().map(|l| l.id.as_str()).filter(|id| ids.contains(id)).collect();
+                let listed: std::collections::HashSet<&str> = ids.iter().copied().collect();
+                let order: Vec<&str> = tree.layers.iter().map(|l| l.id.as_str()).filter(|id| listed.contains(id)).collect();
                 tree.custom_order = ids != order;
             }
         } else if let Some(l) = child(root, "legend") {
             tree.walk(l, true, top, 0);
+            // Each legend layer's place in it (`drawingOrder`, -1 when it follows the legend).
+            tree.legend_order = l.attribute("updateDrawingOrder") == Some("false")
+                && l.descendants()
+                    .filter(|n| n.has_tag_name("legendlayer"))
+                    .any(|n| n.attribute("drawingOrder").and_then(|o| o.trim().parse::<i64>().ok()).is_some_and(|o| o >= 0));
         }
         tree
     }
 
-    /// Reads a group's children (`legend`: QGIS 2's `<legend>`). Walked to a bounded depth.
+    /// The tags of a layer and of a group (`legend`: QGIS 2's `<legend>`).
+    fn tags(legend: bool) -> (&'static str, &'static str) {
+        if legend { ("legendlayer", "legendgroup") } else { ("layer-tree-layer", "layer-tree-group") }
+    }
+
+    /// Adds a layer entry's layers (a QGIS 2 legend layer may list several), up to
+    /// [`TREE_LAYERS`]; past that they are counted in `cut`.
+    fn add(&mut self, c: Node, legend: bool, visible: bool, checked: bool, group: Option<usize>) {
+        let ids: Vec<&str> = if legend {
+            c.descendants().filter(|f| f.has_tag_name("legendlayerfile")).filter_map(|f| f.attribute("layerid")).collect()
+        } else {
+            c.attribute("id").into_iter().collect()
+        };
+        for id in ids {
+            if self.layers.len() >= TREE_LAYERS {
+                self.cut += 1;
+            } else {
+                self.layers.push(TreeLayer { id: id.to_string(), visible, checked, group });
+            }
+        }
+    }
+
+    /// Reads a group's children (`legend`: QGIS 2's `<legend>`), walking into the groups in it
+    /// [`TREE_DEPTH`] levels deep; further in, [`Tree::flatten`] reads the layers.
     fn walk(&mut self, group: Node, legend: bool, at: Place, depth: usize) {
-        if depth > 64 || self.layers.len() > MAX_LAYERS * 4 {
+        if depth > TREE_DEPTH {
+            self.flatten(group, legend, at);
             return;
         }
-        let on = |n: Node| n.attribute("checked").is_none_or(|c| c == "Qt::Checked" || c == "Qt::PartiallyChecked");
-        let (layer_tag, group_tag) = if legend { ("legendlayer", "legendgroup") } else { ("layer-tree-layer", "layer-tree-group") };
+        let on = checked_box;
+        let (layer_tag, group_tag) = Tree::tags(legend);
         for c in group.children().filter(Node::is_element) {
             if c.has_tag_name(layer_tag) {
-                let (visible, checked) = (at.visible && on(c), at.checked && on(c));
-                let ids: Vec<&str> = if legend {
-                    c.descendants().filter(|f| f.has_tag_name("legendlayerfile")).filter_map(|f| f.attribute("layerid")).collect()
-                } else {
-                    c.attribute("id").into_iter().collect()
-                };
-                for id in ids {
-                    self.layers.push(TreeLayer { id: id.to_string(), visible, checked, group: at.kept });
-                }
+                self.add(c, legend, at.visible && on(c), at.checked && on(c), at.kept);
             } else if c.has_tag_name(group_tag) {
                 let visible = at.visible && on(c);
                 let inside = if at.level <= crate::MAX_GROUP_DEPTH && self.groups.len() < crate::MAX_GROUPS {
@@ -896,6 +951,27 @@ impl Tree {
                     Place { visible, checked: at.checked && on(c), kept: at.kept, level: at.level + 1 }
                 };
                 self.walk(c, legend, inside, depth + 1);
+            }
+        }
+    }
+
+    /// Reads the layers in a group too deep to walk into, in order, without recursing: each in
+    /// the group holding them all (`at`), with its box and those of the groups between (counted
+    /// in `deep`).
+    fn flatten(&mut self, group: Node, legend: bool, at: Place) {
+        let (layer_tag, group_tag) = Tree::tags(legend);
+        // Entries to read, the next on top, each with the boxes of the groups above it.
+        let mut stack: Vec<(Node, bool)> = group.children().filter(Node::is_element).rev().map(|c| (c, true)).collect();
+        while let Some((c, boxes)) = stack.pop() {
+            if c.has_tag_name(layer_tag) {
+                let on = boxes && checked_box(c);
+                // Only those read: the ones past the budget are counted in `cut`.
+                let before = self.layers.len();
+                self.add(c, legend, at.visible && on, at.checked && on, at.kept);
+                self.deep += self.layers.len() - before;
+            } else if c.has_tag_name(group_tag) {
+                let inside = boxes && checked_box(c);
+                stack.extend(c.children().filter(Node::is_element).rev().map(|n| (n, inside)));
             }
         }
     }

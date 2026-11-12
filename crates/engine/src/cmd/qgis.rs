@@ -198,7 +198,15 @@ fn add_groups(s: &mut Session, project: &qgis::Project, came_in: &[CameIn], repo
         let Some(layer) = project.layers.get(c.index) else { continue };
         let Some(group) = layer.group.and_then(|g| project.groups.get(g)) else { continue };
         if c.tile && c.ids.is_empty() {
-            outside.push((layer.name.as_str(), group.name.as_str()));
+            // The opacity of a group drawn as one holding it, which the tile goes without.
+            let mut chain = layer.group;
+            let mut faded = false;
+            for _ in 0..project.groups.len() {
+                let Some(g) = chain.and_then(|g| project.groups.get(g)) else { break };
+                faded |= g.transparency.is_some();
+                chain = g.parent;
+            }
+            outside.push((layer.name.as_str(), group.name.as_str(), faded));
         }
         for id in &c.ids {
             if let Some(l) = m.layer_mut(*id) {
@@ -207,8 +215,9 @@ fn add_groups(s: &mut Session, project: &qgis::Project, came_in: &[CameIn], repo
         }
     }
     m.tidy_groups();
-    for (name, group) in outside {
-        report.approximated(name, format!("its place in the group {group}: a web tile layer, added outside the group"));
+    for (name, group, faded) in outside {
+        let opacity = if faded { " and the opacity of a group drawn as one holding it" } else { "" };
+        report.approximated(name, format!("its place in the group {group}{opacity}: a web tile layer, added outside the group"));
     }
 }
 

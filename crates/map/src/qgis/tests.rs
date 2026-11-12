@@ -664,6 +664,14 @@ fn files_of_qgis_1_and_2_read_by_their_old_names() {
     assert_eq!(p.crs.as_deref(), Some("EPSG:21781"), "the canvas's");
     let names: Vec<(&str, bool)> = p.layers.iter().map(|l| (l.name.as_str(), l.visible)).collect();
     assert_eq!(names, [("roads", true), ("land", false)], "the legend's order; land's group is unchecked");
+    assert!(!report.notes.iter().any(|n| n.text.contains("layer order")), "the legend's own order: {:?}", report.notes);
+    // A legend keeping a drawing order of its own: noted, as it isn't read.
+    let own = qgs
+        .replace(r#"<legend updateDrawingOrder="true">"#, r#"<legend updateDrawingOrder="false">"#)
+        .replace(r#"name="land">"#, r#"name="land" drawingOrder="0">"#);
+    let mut own_report = Report::default();
+    read_project(&own, "", &mut own_report).unwrap();
+    assert!(own_report.notes.iter().any(|n| n.text.contains("set apart from the legend")), "{:?}", own_report.notes);
     let base = p.groups.iter().map(|g| (g.name.as_str(), g.checked, g.expanded)).collect::<Vec<_>>();
     assert_eq!(base, [("base", false, true)], "the legend's group");
     assert_eq!((p.layers[1].group, p.layers[1].checked), (Some(0), true));
@@ -2400,6 +2408,31 @@ fn groups_past_the_limits_put_their_layers_in_the_group_holding_them() {
     assert_eq!(p.groups.len(), crate::MAX_GROUP_DEPTH);
     assert_eq!((p.layers[0].group, p.layers[0].checked, p.layers[0].visible), (Some(crate::MAX_GROUP_DEPTH - 1), false, false));
     assert!(report.notes.iter().any(|n| n.text.contains("groups past RustGIS's 8 levels") && n.text.contains("(2)")), "{:?}", report.notes);
+
+    // A tree deeper than it is walked (64 levels): the layers further in are still read, in the
+    // eighth group, with the boxes of the groups between; noted. The 70th group is unchecked.
+    let mut tree = String::new();
+    for level in 1..=70 {
+        let checked = if level == 70 { "Qt::Unchecked" } else { "Qt::Checked" };
+        tree.push_str(&format!(r#"<layer-tree-group checked="{checked}" name="L{level}">"#));
+    }
+    tree.push_str(r#"<layer-tree-layer checked="Qt::Checked" id="a"/>"#);
+    tree.push_str(&"</layer-tree-group>".repeat(70));
+    let qgs = format!(
+        r#"<qgis><layer-tree-group>{tree}<layer-tree-layer checked="Qt::Checked" id="b"/></layer-tree-group><projectlayers><maplayer type="vector"><id>a</id><datasource>/d/a.shp</datasource><layername>a</layername><provider>ogr</provider></maplayer><maplayer type="vector"><id>b</id><datasource>/d/b.shp</datasource><layername>b</layername><provider>ogr</provider></maplayer></projectlayers></qgis>"#
+    );
+    let mut report = Report::default();
+    let p = read_project(&qgs, "", &mut report).unwrap();
+    let layers: Vec<(&str, Option<usize>, bool, bool)> =
+        p.layers.iter().map(|l| (l.name.as_str(), l.group, l.checked, l.visible)).collect();
+    assert_eq!(layers, [("a", Some(crate::MAX_GROUP_DEPTH - 1), false, false), ("b", None, true, true)], "a hidden by its 70th group");
+    assert!(report.notes.iter().any(|n| n.text.contains("layers below 64 levels of groups (1)")), "{:?}", report.notes);
+
+    // Layer entries past those read (4000) are noted.
+    let entries: String = (0..TREE_LAYERS + 2).map(|i| format!(r#"<layer-tree-layer checked="Qt::Checked" id="x{i}"/>"#)).collect();
+    let mut report = Report::default();
+    read_project(&format!("<qgis><layer-tree-group>{entries}</layer-tree-group></qgis>"), "", &mut report).unwrap();
+    assert!(report.notes.iter().any(|n| n.text.contains("entries past the first 4000 (2)")), "{:?}", report.notes);
 
     // Past the most groups a map keeps: the rest aren't kept.
     let many = r#"<layer-tree-group checked="Qt::Checked" name="G"/>"#.repeat(crate::MAX_GROUPS + 3);

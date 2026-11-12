@@ -1448,10 +1448,11 @@ fn qgis_layer_tree_groups_import_as_layer_groups() {
         <layer-tree-layer checked="Qt::Checked" id="t"/>
       </layer-tree-group>
       <layer-tree-layer checked="Qt::Checked" id="c"/>
-      <layer-tree-group checked="Qt::Checked" expanded="1" groupLayer="gl" name="Drawn as one"><layer-tree-layer checked="Qt::Checked" id="d"/></layer-tree-group>
+      <layer-tree-group checked="Qt::Checked" expanded="1" groupLayer="gl" name="Drawn as one"><layer-tree-layer checked="Qt::Checked" id="d"/><layer-tree-layer checked="Qt::Checked" id="t2"/></layer-tree-group>
       <layer-tree-group checked="Qt::Checked" expanded="1" name="Empty"/>
     </layer-tree-group><projectlayers>{layers}
       <maplayer type="group"><id>gl</id><layername>Drawn as one</layername><layerOpacity>0.25</layerOpacity><blendMode>0</blendMode></maplayer>
+      <maplayer type="raster"><id>t2</id><datasource>type=xyz&amp;url=https://tiles2.example/%7Bz%7D/%7Bx%7D/%7By%7D.png</datasource><layername>Tiles 2</layername><provider>wms</provider></maplayer>
       <maplayer type="raster"><id>t</id><datasource>type=xyz&amp;url=https://tiles.example/%7Bz%7D/%7Bx%7D/%7By%7D.png</datasource><layername>Tiles</layername><provider>wms</provider></maplayer>
     </projectlayers></qgis>"#
     );
@@ -1477,6 +1478,7 @@ fn qgis_layer_tree_groups_import_as_layer_groups() {
     assert_eq!([visible("a"), visible("b"), visible("c"), visible("d")], [true, false, true, true]);
     let notes = serde_json::to_string(&out["notes"]).unwrap();
     assert!(notes.contains("its place in the group Outer: a web tile layer, added outside the group"), "{notes}");
+    assert!(notes.contains("its place in the group Drawn as one and the opacity of a group drawn as one holding it"), "{notes}");
     assert!(notes.contains("opacity of groups drawn as one (1: Drawn as one)"), "{notes}");
     assert!(!notes.contains("RustGIS doesn't read QGIS's group layers"), "{notes}");
     std::fs::remove_dir_all(&dir).ok();
