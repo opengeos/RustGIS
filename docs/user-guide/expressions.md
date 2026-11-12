@@ -104,7 +104,9 @@ Rules shared by all of them:
   date (`issued >= '2026-01-01'`, `seen < '2026-03-05T08:00Z'`) as a date. A date is its
   midnight, so `seen = '2026-03-05'` matches midnight only: use a range for the whole day.
   Date-times with different offsets compare by instant, and one without a zone as if it were
-  UTC. Text that isn't a full date (`'2026'`) compares as text, against the date's ISO text.
+  UTC; a date is its UTC midnight, so `2026-03-05T01:00+02:00` (2026-03-04 at 23:00 UTC) falls
+  before `'2026-03-05'`. Converting that date-time into a date field keeps the day it shows,
+  2026-03-05. Text that isn't a full date (`'2026'`) compares as text, against the date's ISO text.
   A date compares only with text or another date: against a number (`issued >= 20260101`,
   `issued > year`, arithmetic) it's an error, so put the date in quotes, as `YYYY-MM-DD`. A
   date written without dashes in quotes (`issued >= '20260101'`) is an error too; one that
