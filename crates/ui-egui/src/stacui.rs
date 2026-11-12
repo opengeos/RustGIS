@@ -410,6 +410,10 @@ pub fn poll(app: &mut RustGisApp, ctx: &egui::Context) {
                     None if next.is_some() || has_next => i18n::fmt("Showing {n} items (more match: narrow the search)", &[("n", &n)]),
                     None => i18n::fmt("Showing {n} items", &[("n", &n)]),
                 });
+                // An API that can't sort may ignore the sort instead of refusing it: say so.
+                if let Some(note) = sort_ignored_note(&items, sort_of(st, false)) {
+                    st.info = st.info.take().map(|i| format!("{i}. {note}"));
+                }
                 st.details = None;
                 st.counted = true;
                 st.chosen = items.iter().map(|i| i.pick(None).map(|a| a.key.clone()).unwrap_or_default()).collect();
@@ -771,7 +775,6 @@ fn fetch_children(app: &mut RustGisApp) {
     app.ui.stac.waiting = Some((Asked::Children(url), slot));
 }
 
-/// The preset the dialog is showing, if it is still on its API or catalog.
 /// The orders the dialog offers an API's items in: the sort field (`-` first for descending) and its label.
 const SORTS: [(&str, &str); 4] =
     [("", "API's own order"), ("-datetime", "Newest first"), ("datetime", "Oldest first"), ("eo:cloud_cover", "Least cloud first")];
@@ -781,6 +784,15 @@ fn sort_of(st: &State, is_static: bool) -> Option<&str> {
     Some(st.sortby.trim()).filter(|b| !b.is_empty() && !is_static)
 }
 
+/// What to say when the items an API answered are visibly not in the order asked for: an API
+/// without the sort extension may ignore a sort rather than refuse it. None when they are in
+/// order or it can't be told.
+fn sort_ignored_note(items: &[stac::Item], sortby: Option<&str>) -> Option<String> {
+    (stac::sort_followed(items, sortby) == Some(false))
+        .then(|| i18n::fmt("The API did not sort them by {sort}: they are in its own order", &[("sort", sortby.unwrap_or("").trim())]))
+}
+
+/// The preset the dialog is showing, if it is still on its API or catalog.
 fn shown_preset(st: &State) -> Option<Preset> {
     st.preset.filter(|p| st.api.trim().trim_end_matches('/') == p.address())
 }
@@ -1834,6 +1846,19 @@ mod tests {
         }
         // Newest first is a field the search can sort on.
         assert!(SORTS.iter().any(|(v, _)| *v == "-datetime") && SORTS.iter().any(|(v, _)| *v == "datetime"));
+        // An API that ignored the sort is said so (and only then): the items tell.
+        let page = |dates: [&str; 3]| {
+            let f: Vec<_> = dates
+                .iter()
+                .enumerate()
+                .map(|(n, d)| json!({"type": "Feature", "id": format!("i{n}"), "bbox": [0, 0, 1, 1], "properties": {"datetime": d}}))
+                .collect();
+            stac::parse_items(json!({"type": "FeatureCollection", "features": f}).to_string().as_bytes(), "https://x.org/search").unwrap().0
+        };
+        let sorted = page(["2024-06-03T00:00:00Z", "2024-06-02T00:00:00Z", "2024-06-01T00:00:00Z"]);
+        assert_eq!(sort_ignored_note(&sorted, Some("-datetime")), None);
+        assert_eq!(sort_ignored_note(&sorted, None), None);
+        assert!(sort_ignored_note(&sorted, Some("datetime")).is_some_and(|n| n.contains("datetime")));
     }
 
     #[test]

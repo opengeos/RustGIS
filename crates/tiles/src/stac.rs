@@ -194,6 +194,38 @@ fn sort_parts(sortby: Option<&str>) -> Result<Option<(&'static str, String)>, St
     Ok(Some((sign, field)))
 }
 
+/// Whether `v` is in order, ascending or descending (equal neighbours are fine).
+fn ordered<T: PartialOrd>(v: &[T], descending: bool) -> bool {
+    v.windows(2).all(|w| if descending { w[0] >= w[1] } else { w[0] <= w[1] })
+}
+
+/// Whether `items`, as an API answered a search sorted by `sortby`, are visibly not in that
+/// order: `Some(false)` when two neighbours are the wrong way round, `Some(true)` when they are
+/// all in order, `None` when it can't be told (no sort, a field the items don't carry here
+/// besides their date and cloud cover, or fewer than two values to compare). An API without the
+/// sort extension may ignore a sort rather than refuse it, and this is how that shows.
+pub fn sort_followed(items: &[Item], sortby: Option<&str>) -> Option<bool> {
+    let (sign, field) = sort_parts(sortby).ok().flatten()?;
+    let descending = sign == "-";
+    match field.as_str() {
+        "properties.eo:cloud_cover" => {
+            let v: Vec<f64> = items.iter().filter_map(|i| i.cloud).collect();
+            (v.len() >= 2).then(|| ordered(&v, descending))
+        }
+        // Dates compare as written (RFC 3339 in one zone orders as text); dates of different
+        // lengths would not, so those are not compared.
+        "properties.datetime" => {
+            let len = items.first()?.datetime.len();
+            if len == 0 || items.len() < 2 || items.iter().any(|i| i.datetime.len() != len) {
+                return None;
+            }
+            let v: Vec<&str> = items.iter().map(|i| i.datetime.as_str()).collect();
+            Some(ordered(&v, descending))
+        }
+        _ => None,
+    }
+}
+
 /// The address a POST search goes to.
 pub fn search_post_url(api: &str) -> String {
     crate::template::join(api, &format!("{}/search", crate::logins::inner(api)))
@@ -879,6 +911,49 @@ mod tests {
             {"rel": "parent", "href": "https://api.example.org/v1/collections/s2"}]}"#;
         assert_eq!(api_of(static_root, "https://cdn.example.org/s2/a.json").as_deref(), Some("https://api.example.org/v1"));
         assert_eq!(api_of(br#"{"links": [{"rel": "root", "href": "catalog.json"}]}"#, "https://cdn.example.org/a.json"), None);
+    }
+
+    /// Items with these dates and cloud covers, as an API answers them.
+    fn answered(rows: &[(&str, Option<f64>)]) -> Vec<Item> {
+        let features: Vec<Value> = rows
+            .iter()
+            .enumerate()
+            .map(|(n, (d, c))| {
+                let mut props = serde_json::json!({"datetime": d});
+                if let Some(c) = c {
+                    props["eo:cloud_cover"] = serde_json::json!(c);
+                }
+                serde_json::json!({"type": "Feature", "id": format!("i{n}"), "bbox": [0, 0, 1, 1], "properties": props})
+            })
+            .collect();
+        let body = serde_json::json!({"type": "FeatureCollection", "features": features}).to_string();
+        parse_items(body.as_bytes(), "https://x.org/v1/search").unwrap().0
+    }
+
+    #[test]
+    fn a_sort_the_api_ignored_shows_in_the_order_of_its_items() {
+        let newest =
+            answered(&[("2024-06-03T00:00:00Z", Some(9.0)), ("2024-06-02T00:00:00Z", Some(1.0)), ("2024-06-01T00:00:00Z", Some(5.0))]);
+        assert_eq!(sort_followed(&newest, Some("-datetime")), Some(true));
+        assert_eq!(sort_followed(&newest, Some("datetime")), Some(false));
+        // Cloud cover goes the other way: 9, 1, 5 is in neither order.
+        assert_eq!(sort_followed(&newest, Some("eo:cloud_cover")), Some(false));
+        assert_eq!(sort_followed(&newest, Some("-eo:cloud_cover")), Some(false));
+        let least =
+            answered(&[("2024-06-03T00:00:00Z", Some(1.0)), ("2024-06-01T00:00:00Z", Some(1.0)), ("2024-06-02T00:00:00Z", Some(5.0))]);
+        assert_eq!(sort_followed(&least, Some("eo:cloud_cover")), Some(true));
+        // Nothing to tell by: no sort, another field, one item, no cloud covers, dates of other lengths.
+        assert_eq!(sort_followed(&newest, None), None);
+        assert_eq!(sort_followed(&newest, Some("")), None);
+        assert_eq!(sort_followed(&newest, Some("platform")), None);
+        assert_eq!(sort_followed(&newest, Some("bad sort!")), None);
+        assert_eq!(sort_followed(&newest[..1], Some("-datetime")), None);
+        assert_eq!(
+            sort_followed(&answered(&[("2024-06-03T00:00:00Z", None), ("2024-06-01T00:00:00Z", None)]), Some("eo:cloud_cover")),
+            None
+        );
+        assert_eq!(sort_followed(&answered(&[("2024-06-03", None), ("2024-06-01T00:00:00Z", None)]), Some("datetime")), None);
+        assert_eq!(sort_followed(&[], Some("datetime")), None);
     }
 
     #[test]

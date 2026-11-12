@@ -203,6 +203,14 @@ fn search(s: &mut Session, p: &Value) -> CmdResult {
         } else {
             next
         };
+        // An API without the sort extension may ignore a sort instead of refusing it.
+        if stac::sort_followed(&items, search.sortby.as_deref()) == Some(false) {
+            s.warn(format!(
+                "sortby {} was not followed: the items are not in that order, so this API may not sort (its first {} items are shown in its own order)",
+                search.sortby.as_deref().unwrap_or("").trim(),
+                items.len()
+            ));
+        }
         let all = b(p, "properties").unwrap_or(false);
         let mut out =
             json!({"count": items.len(), "items": items.iter().map(|i| stac::item_json_with(i, all)).collect::<Vec<_>>(), "next": next});
