@@ -1230,9 +1230,8 @@ fn add_bookmarks(s: &mut Session, project: &qgis::Project, report: &mut Report) 
         // QGIS's extent is the view's own rectangle, turned with it (measured: turning the map
         // keeps its scale): fitted facing north, then turned.
         m.camera.set_bearing(0.0);
-        // (Web Mercator fits any extent, clamped to its 85°: one wholly past them shows nothing.)
-        let past = mercator && (e.min_y >= rustgis_geom::MAX_LAT || e.max_y <= -rustgis_geom::MAX_LAT);
-        if past || !m.fit_lonlat(&e, w, h) {
+        // (Not one wholly past a Web Mercator map's 85°, nor one its projection doesn't reach.)
+        if !m.fit_lonlat(&e, w, h) {
             beyond.push(b.name.as_str());
             continue;
         }
