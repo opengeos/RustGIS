@@ -1039,7 +1039,8 @@ fn value(p: &Node) -> Option<Json> {
 #[derive(Default, Clone)]
 struct Said {
     /// Geometries whose coordinates can't be read, or that lack a part they need: each written one
-    /// once, whichever object or link reads it first, and a solid whose exterior is a link to one.
+    /// once, whichever object or link reads it first, a solid whose exterior is a link to one, and
+    /// a solid with cavities whose exterior has nothing read and no notice says why.
     bad_coordinates: usize,
     /// Geometries and objects given only by a link that isn't followed: a geometry's to another
     /// file, nothing, or a member that can't be parsed; a thematic surface's or opening's, a ring's,
@@ -1801,8 +1802,10 @@ impl Reading {
         let place = self.place_of(&target);
         if self.failed.contains(&place) {
             // Said where it failed. A solid whose exterior it is lacks the part it needs, and is left
-            // out with its cavities: said too.
+            // out with its cavities: said too. One whose surface it is is said by it, however many
+            // links read it.
             self.said.bad_coordinates += usize::from(solid);
+            links.explained(wait);
             return;
         }
         // Read already in this object at this level of detail, written out or by another link:
@@ -2386,7 +2389,11 @@ impl<'a, 'i> Walk<'_, 'a, 'i> {
                 done?;
                 if self.drawn > drawn {
                     if let Some((cavities, _)) = self.links.take(own) {
-                        cavities.iter().try_for_each(|cavity| self.member(cavity))?;
+                        // Its cavities aren't the outer solid's exterior, as where a link reads them.
+                        let held = self.wait.take();
+                        let read = cavities.iter().try_for_each(|cavity| self.member(cavity));
+                        self.wait = held;
+                        read?;
                     }
                 } else if self.said.noticed() > before {
                     // Nothing read, and a link of it said (a ring's, or any in a prototype, which

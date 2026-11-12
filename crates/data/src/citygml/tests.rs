@@ -2182,6 +2182,9 @@ fn cavities_wait_for_the_exterior_to_read_something() {
         let out = model(&exterior, "");
         left_out(&out, case);
         links_said(&out, case);
+        // The solid's own links, not only the part's: two links to nothing in each case (the part
+        // and the solid both read the composite that leads nowhere).
+        assert!(says(&out, "2 geometries or objects are given only by a link"), "{case}: {:?}", messages_of(&out));
     }
     // Nothing of the exterior read and nothing to follow: a face whose ring is a link is said as
     // that link; an empty shell lacks the part it needs, and is said so.
