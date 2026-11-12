@@ -1674,6 +1674,132 @@ fn qgis_layer_tree_groups_import_as_layer_groups() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
+/// A QGIS project's bookmarks come in at their places (turned as QGIS turns them), its relations
+/// as relationships, its map's rotation as the bearing, and its layers' time settings as time
+/// slider bindings, the slider left off as QGIS opens a project (every feature drawn).
+#[test]
+fn qgis_bookmarks_relations_rotation_and_time_import() {
+    let dir = std::env::temp_dir().join(format!("rustgis-qgis-structure-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = |id: &str, props: &[&str]| {
+        let features: Vec<String> = props
+            .iter()
+            .map(|p| format!(r#"{{"type":"Feature","properties":{p},"geometry":{{"type":"Point","coordinates":[8.5,47.4]}}}}"#))
+            .collect();
+        std::fs::write(dir.join(format!("{id}.geojson")), format!(r#"{{"type":"FeatureCollection","features":[{}]}}"#, features.join(",")))
+            .unwrap();
+    };
+    file("parcels", &[r#"{"id":1}"#, r#"{"id":2}"#]);
+    file("owners", &[r#"{"pid":1}"#, r#"{"pid":2}"#]);
+    file("Owners", &[r#"{"pid":1,"when":"soon"}"#]);
+    // Two date fields: QGIS's is the second.
+    file("events", &[r#"{"made":"2019-01-01","when":"2020-03-01","note":"a"}"#, r#"{"made":"2019-02-01","when":"2021-05-01","note":"b"}"#]);
+    let layer = |id: &str, temporal: &str| {
+        format!(
+            r#"<maplayer type="vector"><id>{id}_1</id><datasource>./{id}.geojson</datasource><layername>{id}</layername><provider>ogr</provider>{temporal}</maplayer>"#
+        )
+    };
+    let on = |field: &str| format!(r#"<temporal enabled="1" mode="1" startField="{field}" accumulate="0" limitMode="0"/>"#);
+    let layers = [layer("parcels", &on("nope")), layer("owners", ""), layer("events", &on("when")), layer("Owners", &on("when"))].concat();
+    let qgs = format!(
+        r#"<qgis version="4.2.3">
+      <projectCrs><spatialrefsys><authid>EPSG:3857</authid></spatialrefsys></projectCrs>
+      <mapcanvas name="theMapCanvas"><extent><xmin>930000</xmin><ymin>6000000</ymin><xmax>960000</xmax><ymax>6030000</ymax></extent><rotation>15</rotation></mapcanvas>
+      <projectlayers>{layers}</projectlayers>
+      <relations>
+        <relation id="own" name="Owners of parcel" referencedLayer="parcels_1" referencingLayer="owners_1" strength="Association"><fieldRef referencedField="id" referencingField="pid"/></relation>
+        <relation id="gone" name="To nowhere" referencedLayer="parcels_1" referencingLayer="missing_1" strength="Association"><fieldRef referencedField="id" referencingField="pid"/></relation>
+      </relations>
+      <Bookmarks>
+        <Bookmark extent="Polygon ((8.4 47.3, 8.6 47.3, 8.6 47.45, 8.4 47.45, 8.4 47.3))" group="" id="a" name="Zurich" rotation="0"><spatialrefsys><authid>EPSG:4326</authid></spatialrefsys></Bookmark>
+        <Bookmark extent="Polygon ((900000 5900000, 1000000 5900000, 1000000 6000000, 900000 6000000, 900000 5900000))" group="" id="b" name="Web" rotation="30"/>
+        <Bookmark extent="Polygon ((2680000 1240000, 2700000 1240000, 2700000 1260000, 2680000 1260000, 2680000 1240000))" group="" id="c" name="Zurich" rotation="0"><spatialrefsys><authid>EPSG:2056</authid></spatialrefsys></Bookmark>
+        <Bookmark extent="Polygon ((1 1, 2 1, 2 2, 1 2, 1 1))" group="" id="d" name="Odd" rotation="0"><spatialrefsys><authid>EPSG:999999</authid></spatialrefsys></Bookmark>
+        <Bookmark extent="Polygon ((-400 0, 10 0, 10 10, -400 10, -400 0))" group="" id="e" name="Beyond" rotation="0"><spatialrefsys><authid>EPSG:4326</authid></spatialrefsys></Bookmark>
+      </Bookmarks>
+    </qgis>"#
+    );
+    let mut s = world();
+    let out = s.run("project.importQgis", &json!({"text": qgs, "dir": dir.display().to_string()})).unwrap();
+    let notes = serde_json::to_string(&out["notes"]).unwrap();
+    let m = s.map();
+    let turned = |bearing: f64, by: f64| (bearing + by).rem_euclid(360.0).min((-(bearing + by)).rem_euclid(360.0)) < 1e-9;
+    // The map turned 15° clockwise: north 15° east of up.
+    assert!(turned(m.camera.bearing, 15.0), "{}", m.camera.bearing);
+    let names: Vec<&str> = m.bookmarks.iter().map(|b| b.name.as_str()).collect();
+    assert_eq!(names, ["Zurich", "Web", "Zurich 2"], "{notes}");
+    let centre = |i: usize| m.to_lonlat(m.bookmarks[i].camera.center).unwrap();
+    let (zurich, lv95) = (centre(0), centre(2));
+    assert!((zurich.x - 8.5).abs() < 1e-6 && (zurich.y - 47.375).abs() < 0.01, "{zurich:?}");
+    // LV95 2690000/1250000 is 8.631°E 47.395°N.
+    assert!((lv95.x - 8.631).abs() < 0.001 && (lv95.y - 47.395).abs() < 0.001, "{lv95:?}");
+    assert!(turned(m.bookmarks[1].camera.bearing, 30.0), "{}", m.bookmarks[1].camera.bearing);
+    assert!(turned(m.bookmarks[0].camera.bearing, 0.0));
+    // Fitted facing north whatever came before (the map turned 15°, the bookmark not): the zoom
+    // a north-up map fitting the same place takes.
+    let mut north = rustgis_map::Map::new("north");
+    north.fit_lonlat(&rustgis_geom::Extent::new(8.4, 47.3, 8.6, 47.45), s.view_size.0, s.view_size.1);
+    assert!(
+        (m.bookmarks[0].camera.res - north.camera.res).abs() < 1e-6 * north.camera.res,
+        "{} {}",
+        m.bookmarks[0].camera.res,
+        north.camera.res
+    );
+    assert!(notes.contains("its bookmarks in a coordinate system RustGIS can't read (1: Odd)"), "{notes}");
+    assert!(notes.contains("its bookmarks whose place lies outside their coordinate system's area (1: Beyond)"), "{notes}");
+    let rels = &m.editing.relationships;
+    assert_eq!(rels.len(), 1, "{notes}");
+    let r = &rels[0];
+    assert_eq!(
+        (r.name.as_str(), r.origin.as_str(), r.origin_key.as_str(), r.destination.as_str(), r.destination_key.as_str()),
+        // Another layer's name differs only by case: layers' names are kept apart, the relation
+        // following the one renamed.
+        ("Owners of parcel", "parcels", "id", "owners (2)", "pid")
+    );
+    assert!(notes.contains("its relations between layers that didn't come in or haven't the fields (1: To nowhere)"), "{notes}");
+    // Bound, the slider off: every feature shows, as QGIS opens a project.
+    let events = m.layer_by_name("events").unwrap();
+    assert_eq!(events.time.as_ref().map(|t| t.field.as_str()), Some("when"));
+    assert!(m.time.is_none());
+    assert!(events.time.as_ref().unwrap().keeps(&events.dataset).is_none());
+    assert!(m.layer_by_name("parcels").unwrap().time.is_none());
+    assert!(notes.contains("its time settings, by the field nope, which the layer hasn't"), "{notes}");
+    assert!(notes.contains("its time settings, by the field when, none of whose values read as dates"), "{notes}");
+    // Related Data selects through it.
+    let id = s.map().layer_by_name("parcels").unwrap().id;
+    s.map_mut().layer_mut(id).unwrap().selection = vec![0];
+    s.run("data.related", &json!({"name": "Owners of parcel"})).unwrap();
+    assert_eq!(s.map().layer_by_name("owners (2)").unwrap().selection.len(), 1);
+    // Turned on for it (as the Time Slider button does), the slider keeps its field and spans its
+    // dates.
+    let on = s.run("time.bind", &json!({"layer": "events"})).unwrap();
+    assert_eq!(on["field"], "when", "{on}");
+    assert_eq!((&on["start"], &on["end"]), (&json!("2020-03"), &json!("2021-05")), "{on}");
+    // Bound to a field with no dates, it takes one that has them, as before.
+    let id = s.map().layer_by_name("events").unwrap().id;
+    s.map_mut().layer_mut(id).unwrap().time = Some(rustgis_map::time::TimeBinding::new("note"));
+    let on = s.run("time.bind", &json!({"layer": "events"})).unwrap();
+    assert_ne!(on["field"], "note", "{on}");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// Many bookmarks of one name come in numbered, quickly (each name's next number remembered).
+#[test]
+fn many_qgis_bookmarks_of_one_name_come_in_numbered() {
+    let mark = r#"<Bookmark extent="Polygon ((8.4 47.3, 8.6 47.3, 8.6 47.45, 8.4 47.45, 8.4 47.3))" name="Here"><spatialrefsys><authid>EPSG:4326</authid></spatialrefsys></Bookmark>"#;
+    let qgs = format!(r#"<qgis version="4.2.3"><Bookmarks>{}</Bookmarks></qgis>"#, mark.repeat(5000));
+    let mut s = world();
+    let started = std::time::Instant::now();
+    s.run("project.importQgis", &json!({"text": qgs})).unwrap();
+    let m = s.map();
+    assert_eq!(m.bookmarks.len(), 5000);
+    assert_eq!(
+        (m.bookmarks[0].name.as_str(), m.bookmarks[1].name.as_str(), m.bookmarks[4999].name.as_str()),
+        ("Here", "Here 2", "Here 5000")
+    );
+    assert!(started.elapsed().as_secs() < 20, "{:?}", started.elapsed());
+}
+
 /// A picture whose aspect is locked keeps it on the map, as QGIS fits it on its canvas: in a
 /// project in degrees (drawn as plate carrée) its box in degrees, in a Web Mercator one its box in
 /// Mercator metres, has the picture's 2:1 aspect, the layer being in degrees either way.
