@@ -32,9 +32,30 @@ const MIN_NAMESPACE_WORK: u64 = 1 << 20;
 
 /// Parses `text` (a leading byte-order mark dropped) with `opts`, once [`check_limits`] passes.
 pub fn parse<'a>(text: &'a str, opts: ParsingOptions<'a>) -> Result<Document<'a>, String> {
+    let mut unbounded = u64::MAX;
+    parse_within(text, opts, &mut unbounded)
+}
+
+/// Parses `text` as [`parse`] does, and takes the namespace work [`check_limits`] counts from
+/// `left`, refusing it when more than is left. A reader that parses many documents cut from one
+/// file gives them [`namespace_budget`] of that file: each document's own bound covers a short one
+/// whatever it declares, so documents that each repeat the same declarations (CityGML's members,
+/// each with its root's) would otherwise take as their number times the declarations' square.
+pub fn parse_within<'a>(text: &'a str, opts: ParsingOptions<'a>, left: &mut u64) -> Result<Document<'a>, String> {
     let text = text.trim_start_matches('\u{feff}');
-    check_limits(text, opts.allow_dtd)?;
+    let work = check_limits(text, opts.allow_dtd)?;
+    *left = left.checked_sub(work).ok_or_else(too_much)?;
     Document::parse_with_options(text, opts).map_err(|e| e.to_string())
+}
+
+/// The namespace work a document of `len` bytes may take: [`NAMESPACE_WORK`] steps a byte, and
+/// [`MIN_NAMESPACE_WORK`] at least.
+pub fn namespace_budget(len: usize) -> u64 {
+    (len as u64).saturating_mul(NAMESPACE_WORK).max(MIN_NAMESPACE_WORK)
+}
+
+fn too_much() -> String {
+    "the document's namespace declarations would take more to resolve than its size allows".to_string()
 }
 
 /// Refuses XML nested deeper than [`MAX_DEPTH`], or whose namespaces would take more than
@@ -43,8 +64,8 @@ pub fn parse<'a>(text: &'a str, opts: ParsingOptions<'a>) -> Result<Document<'a>
 /// parser does (one declared again is the same prefix); where it can't tell, it counts too deep
 /// rather than too shallow, and too much work rather than too little (an attribute with no prefix
 /// counts as looked up). With a DTD allowed, an entity whose value holds markup is refused too:
-/// expanded, it would nest in ways the text doesn't show.
-pub fn check_limits(text: &str, allow_dtd: bool) -> Result<(), String> {
+/// expanded, it would nest in ways the text doesn't show. Returns the steps of namespace work it counted.
+pub fn check_limits(text: &str, allow_dtd: bool) -> Result<u64, String> {
     let b = text.as_bytes();
     let (mut i, mut depth) = (0usize, 0usize);
     // The prefixes each open element declares, how many declarations of each prefix are open (the
@@ -53,8 +74,7 @@ pub fn check_limits(text: &str, allow_dtd: bool) -> Result<(), String> {
     let mut declared: Vec<Vec<&[u8]>> = Vec::new();
     let mut prefixes: HashMap<&[u8], usize> = HashMap::new();
     let mut work = 0u64;
-    let limit = (text.len() as u64).saturating_mul(NAMESPACE_WORK).max(MIN_NAMESPACE_WORK);
-    let too_much = || "the document's namespace declarations would take more to resolve than its size allows".to_string();
+    let limit = namespace_budget(text.len());
     let find = |from: usize, pat: &[u8]| -> Option<usize> { b.get(from..)?.windows(pat.len()).position(|w| w == pat).map(|p| from + p) };
     while i < b.len() {
         if b.get(i) != Some(&b'<') {
@@ -65,17 +85,17 @@ pub fn check_limits(text: &str, allow_dtd: bool) -> Result<(), String> {
         if rest.starts_with(b"<!--") {
             match find(i + 4, b"-->") {
                 Some(e) => i = e + 3,
-                None => return Ok(()),
+                None => return Ok(work),
             }
         } else if rest.starts_with(b"<![CDATA[") {
             match find(i + 9, b"]]>") {
                 Some(e) => i = e + 3,
-                None => return Ok(()),
+                None => return Ok(work),
             }
         } else if rest.starts_with(b"<?") {
             match find(i + 2, b"?>") {
                 Some(e) => i = e + 2,
-                None => return Ok(()),
+                None => return Ok(work),
             }
         } else if rest.starts_with(b"<!") {
             // A DOCTYPE (with any internal subset): to its closing `>`, `[ … ]` and quotes skipped.
@@ -198,7 +218,7 @@ pub fn check_limits(text: &str, allow_dtd: bool) -> Result<(), String> {
             i = j + 1;
         }
     }
-    Ok(())
+    Ok(work)
 }
 
 /// One declaration of `prefix` goes out of scope.
