@@ -1326,7 +1326,7 @@ fn copy_far(
     index: &Index,
     text: &str,
     (member, root): (std::ops::Range<usize>, Node),
-    read: &HashMap<usize, Option<Got>>,
+    read: &HashMap<usize, Option<(Got, usize)>>,
     left: &mut usize,
     out: &mut Vec<(usize, String)>,
 ) -> Copied {
@@ -1519,8 +1519,8 @@ struct Reading {
     /// Points implicit geometries may still place, all their instances together.
     placing: usize,
     /// Prototypes read in their own system, by where they are written: none for one that can't be
-    /// read.
-    prototypes: HashMap<usize, Option<Got>>,
+    /// read. Each with the points placing it costs, counted once ([`Got::size`]).
+    prototypes: HashMap<usize, Option<(Got, usize)>>,
     /// Links that make one object another's part (child, parent), resolved once every member is read.
     relations: Vec<(String, String)>,
 }
@@ -1814,7 +1814,7 @@ impl Reading {
             },
         };
         let placed = match (self.prototypes.get(&key), shape) {
-            (Some(known), _) => known.as_ref().and_then(|g| g.placed(&place, &mut self.placing)),
+            (Some(known), _) => known.as_ref().and_then(|(g, size)| g.placed(*size, &place, &mut self.placing)),
             // Known by its place only when it was read: never here.
             (None, None) => None,
             (None, Some(shape)) => {
@@ -1835,7 +1835,11 @@ impl Reading {
                 );
                 // Its rings of no area are said once, not for each instance.
                 self.counts.dropped_rings += got.as_ref().map_or(0, |g| g.faces.dropped_rings);
-                let placed = got.as_ref().and_then(|g| g.placed(&place, &mut self.placing));
+                let got = got.map(|g| {
+                    let size = g.size();
+                    (g, size)
+                });
+                let placed = got.as_ref().and_then(|(g, size)| g.placed(*size, &place, &mut self.placing));
                 self.prototypes.insert(key, got);
                 placed
             }
@@ -2045,14 +2049,15 @@ impl Got {
     /// left out and said when it was read; those its placing flattens (a matrix that scales an axis
     /// to nothing) are left out the same way, in `dropped_rings`, which [`Reading::add`] says for
     /// each instance.
-    fn placed(&self, place: &Placement, placing: &mut usize) -> Option<Got> {
+    /// `size` is what placing it costs ([`Self::size`]), counted once when it is read, so an
+    /// instance past the budget costs no walk through its rings.
+    fn placed(&self, size: usize, place: &Placement, placing: &mut usize) -> Option<Got> {
         let f = &self.faces;
         // Nothing to place (a prototype whose surfaces are all links, which it doesn't follow): its
         // instance is its reference point, and said.
         if f.rings().next().is_none() && self.lines.is_empty() && self.points.is_empty() {
             return None;
         }
-        let size = f.rings().chain(&self.lines).map(Vec::len).sum::<usize>() + self.points.len() + self.heights.len();
         if size > *placing {
             return None;
         }
@@ -2076,6 +2081,11 @@ impl Got {
             heights: self.heights.iter().map(|p| place.place(p)).collect::<Option<_>>()?,
             solid: self.solid,
         })
+    }
+
+    /// The points placing it costs: those of its rings and lines, its points and its heights.
+    fn size(&self) -> usize {
+        self.faces.rings().chain(&self.lines).map(Vec::len).sum::<usize>() + self.points.len() + self.heights.len()
     }
 
     /// Takes its points into the file's reach.
