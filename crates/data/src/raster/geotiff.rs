@@ -2495,10 +2495,19 @@ mod tests {
     }
 
     fn rgb_tiled_samples(images: &[(u32, u32, u16)], bits: u16, predictor: u16, pixel: impl Fn(u32, u32, u32) -> u16) -> Vec<u8> {
+        // The first image is the full one, the rest overviews (NewSubfileType 1).
+        let images: Vec<(u32, u32, u16, u32)> =
+            images.iter().enumerate().map(|(i, &(size, tile, samples))| (size, tile, samples, u32::from(i > 0))).collect();
+        rgb_tiled_images(&images, bits, predictor, pixel)
+    }
+
+    /// As [`rgb_tiled_samples`], each image `(size, tile, samples, subfile type)` in turn: a
+    /// transparency mask has the subfile type 4.
+    fn rgb_tiled_images(images: &[(u32, u32, u16, u32)], bits: u16, predictor: u16, pixel: impl Fn(u32, u32, u32) -> u16) -> Vec<u8> {
         let full = images.first().map_or(1, |i| i.0);
         let mut out = vec![b'I', b'I', 42, 0, 0, 0, 0, 0];
         let mut next_link = 4;
-        for (i, &(size, tile, samples)) in images.iter().enumerate() {
+        for (i, &(size, tile, samples, subfile)) in images.iter().enumerate() {
             let k = full / size;
             let n = size.div_ceil(tile);
             // The tiles' data first, then the IFD pointing at it.
@@ -2528,7 +2537,7 @@ mod tests {
             let longs = |v: &[u32]| v.iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<u8>>();
             let doubles = |v: &[f64]| v.iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<u8>>();
             let mut e: Vec<(u16, u16, u32, Vec<u8>)> = vec![
-                (254, 4, 1, longs(&[u32::from(i > 0)])),
+                (254, 4, 1, longs(&[subfile])),
                 (256, 4, 1, longs(&[size])),
                 (257, 4, 1, longs(&[size])),
                 (258, 3, u32::from(samples), shorts(&vec![bits; usize::from(samples)])),
@@ -2721,6 +2730,30 @@ mod tests {
         let Parse::Done(layout) = cog::layout(&whole).unwrap() else { panic!("not a COG") };
         assert_eq!(layout.levels.iter().map(|l| l.width).collect::<Vec<_>>(), [32]);
         assert!(layout.lost.iter().any(|n| n.contains("stopped after 64 skipped images")), "{:?}", layout.lost);
+    }
+
+    /// Transparency masks count toward the same scan bound as the other images passed over.
+    #[test]
+    fn cog_overview_scan_stops_after_so_many_masks() {
+        use super::super::cog::{self, Parse, Sparse};
+        // The full image, 64 masks of its size, then an overview the scan never reaches.
+        let mut images = vec![(32, 16, 4, 0)];
+        images.extend(vec![(32, 16, 4, 4); 64]);
+        images.push((16, 16, 4, 1));
+        let bytes = rgb_tiled_images(&images, 8, 1, |b, x, y| (b * 10 + x + y) as u16);
+        let whole = Sparse::default().with_len(bytes.len() as u64).with(0, bytes);
+        let Parse::Done(layout) = cog::layout(&whole).unwrap() else { panic!("not a COG") };
+        assert_eq!(layout.levels.iter().map(|l| l.width).collect::<Vec<_>>(), [32]);
+        assert!(layout.lost.iter().any(|n| n.contains("stopped after 64 skipped images")), "{:?}", layout.lost);
+        // Fewer masks: the overview is read, and nothing is said.
+        let mut images = vec![(32, 16, 4, 0)];
+        images.extend(vec![(32, 16, 4, 4); 3]);
+        images.push((16, 16, 4, 1));
+        let bytes = rgb_tiled_images(&images, 8, 1, |b, x, y| (b * 10 + x + y) as u16);
+        let whole = Sparse::default().with_len(bytes.len() as u64).with(0, bytes);
+        let Parse::Done(layout) = cog::layout(&whole).unwrap() else { panic!("not a COG") };
+        assert_eq!(layout.levels.iter().map(|l| (l.width, l.ifd)).collect::<Vec<_>>(), [(32, 0), (16, 4)]);
+        assert!(layout.lost.iter().all(|n| !n.contains("scan for overviews stopped")), "{:?}", layout.lost);
     }
 
     /// An RGBI image too large to read whole, with a three-sample overview that would fit: the
