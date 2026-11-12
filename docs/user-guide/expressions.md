@@ -105,7 +105,8 @@ Rules shared by all of them:
   midnight, so `seen = '2026-03-05'` matches midnight only: use a range for the whole day.
   Date-times with different offsets compare by instant, and one without a zone as if it were
   UTC. Text that isn't a full date (`'2026'`) compares as text, against the date's ISO text.
-  A date against a number (`issued >= 20260101`) is an error: put the date in quotes.
+  A date compares only with text or another date: against a number (`issued >= 20260101`,
+  `issued > year`) it's an error, so put the date in quotes.
   Arithmetic on a date is an error for now, also on one reached through `coalesce`, `nullif`,
   `if` or `CASE` (`coalesce(issued) + 1`), and so are the number functions (`abs`, `round`,
   `min`, …) given a date.

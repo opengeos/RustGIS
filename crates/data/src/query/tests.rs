@@ -578,7 +578,7 @@ fn where_clauses_compare_dates() {
         assert_eq!(parse(e, &d).err().unwrap_or_default(), "'issued' holds dates, and arithmetic on dates isn't supported yet", "{e}");
     }
     assert_eq!(parse("abs(issued)", &d).err().unwrap_or_default(), "'issued' holds dates, and abs on dates isn't supported yet");
-    // A date against a number would compare text with digits: an error that says to quote it.
+    // A date against anything that gives a number would compare text with digits: an error.
     for e in [
         "issued >= 20260101",
         "20260101 < issued",
@@ -586,8 +586,14 @@ fn where_clauses_compare_dates() {
         "ts IN (1, 2)",
         "issued BETWEEN 20260101 AND 20261231",
         "issued >= 2026 * 10000 + 101",
+        "issued > @row_number",
+        "issued < pi()",
+        "issued >= if(true, 20260101, 20250101)",
+        "issued = CASE WHEN true THEN 20260305 END",
+        "issued = coalesce(20260305, 1)",
+        "issued = (1 = 1)",
     ] {
-        assert!(parse(e, &d).err().unwrap_or_default().contains("compare it with a date in quotes"), "{e}");
+        assert!(parse(e, &d).err().unwrap_or_default().contains("not a number"), "{e}");
     }
     // Also a number a field holds or a function gives; text still compares.
     let n = Dataset::new(
@@ -596,11 +602,19 @@ fn where_clauses_compare_dates() {
         vec![Field::new("issued", FieldType::Date), Field::new("n", FieldType::Integer), Field::new("s", FieldType::Text)],
     );
     for e in ["issued > n", "issued = abs(n)", "n < issued"] {
-        assert!(parse(e, &n).err().unwrap_or_default().contains("compare it with a date in quotes"), "{e}");
+        assert!(parse(e, &n).err().unwrap_or_default().contains("not a number"), "{e}");
     }
-    for e in ["issued > s", "issued = s + 'x'", "issued >= '2026-' || '01-01'"] {
+    for e in [
+        "issued > s",
+        "issued = s + 'x'",
+        "issued >= '2026-' || '01-01'",
+        "issued = coalesce(s, '2026-01-01')",
+        "issued >= upper(s)",
+        "issued = NULL",
+    ] {
         assert!(parse(e, &n).is_ok(), "{e}");
     }
+    assert!(parse("issued > ts", &d).is_ok(), "two dates compare");
     for e in ["to_int(issued)", "to_real(ts)", "color_rgb(issued, 0, 0)"] {
         assert!(parse(e, &d).err().unwrap_or_default().contains("on dates isn't supported yet"), "{e}");
     }

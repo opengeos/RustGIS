@@ -609,28 +609,35 @@ impl Parser<'_> {
     /// `issued > year`), which would compare the date's text with the number's digits and match
     /// the wrong rows.
     fn date_against_number(&self, a: &Expr, b: &Expr) -> Result<(), String> {
-        let date = if self.number_valued(b) {
+        let date = if !self.text_or_date(b) {
             self.date_field(a)
-        } else if self.number_valued(a) {
+        } else if !self.text_or_date(a) {
             self.date_field(b)
         } else {
             None
         };
         match date {
-            Some(f) => Err(format!("'{}' holds dates: compare it with a date in quotes ('2026-01-01'), not a number", f.name)),
+            Some(f) => Err(format!("'{}' holds dates, so it compares with a date in quotes ('2026-01-01') or text, not a number", f.name)),
             None => Ok(()),
         }
     }
-    /// Whether `e` gives a number: a number literal, a number or yes/no field, a variable,
-    /// arithmetic without text, or a number function.
-    fn number_valued(&self, e: &Expr) -> bool {
+    /// Whether `e` can give text or a date, which a date compares with: a text or date literal or
+    /// field, null, `||`, arithmetic with a text term (`+` joins text), a function that gives text,
+    /// or one of these passed through `if`, `coalesce`, `nullif` or `CASE`. Anything else gives a
+    /// number or yes/no.
+    fn text_or_date(&self, e: &Expr) -> bool {
         match e {
-            Expr::Lit(v) => matches!(v, Value::Int(_) | Value::Float(_) | Value::Bool(_)),
-            Expr::Field(i) => self.ds.fields.get(*i).is_some_and(|f| f.ty.is_numeric() || f.ty == crate::FieldType::Boolean),
-            Expr::Var(_) => true,
-            // `+` joins text, so arithmetic is a number only when no term is text.
-            Expr::Chain(first, rest) => std::iter::once(&**first).chain(rest.iter().map(|(_, e)| e)).all(|e| self.number_valued(e)),
-            Expr::Call(f, _) => number_func(*f) || *f == Func::Length,
+            Expr::Lit(v) => !matches!(v, Value::Int(_) | Value::Float(_) | Value::Bool(_)),
+            Expr::Field(i) => self.ds.fields.get(*i).is_some_and(|f| matches!(f.ty, crate::FieldType::Text) || f.ty.is_temporal()),
+            Expr::Concat(_) => true,
+            Expr::Chain(first, rest) => std::iter::once(&**first).chain(rest.iter().map(|(_, e)| e)).any(|e| self.text_or_date(e)),
+            Expr::Call(Func::If, args) => args.iter().skip(1).any(|a| self.text_or_date(a)),
+            Expr::Call(Func::Coalesce, args) => args.iter().any(|a| self.text_or_date(a)),
+            Expr::Call(Func::NullIf, args) => args.first().is_some_and(|a| self.text_or_date(a)),
+            Expr::Case { arms, otherwise, .. } => {
+                arms.iter().map(|(_, then)| then).chain(otherwise.as_deref()).any(|a| self.text_or_date(a))
+            }
+            Expr::Call(f, _) => !number_func(*f) && !matches!(f, Func::Length | Func::Pi | Func::Area | Func::Perimeter | Func::LineLength),
             _ => false,
         }
     }
