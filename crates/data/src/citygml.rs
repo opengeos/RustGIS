@@ -1399,7 +1399,7 @@ enum To<'a, 'i> {
 /// are read.
 struct Pending<'a, 'i> {
     to: To<'a, 'i>,
-    /// The solid whose cavities wait on it ([`Links::waiting`]): it stands in that solid's exterior.
+    /// The solid whose exterior it stands in, when that solid has cavities ([`Links::waiting`]).
     wait: Option<usize>,
     at: At,
     /// It is a solid's exterior: the solid is lost with what it points to.
@@ -1428,8 +1428,8 @@ enum Unread {
 enum Wait<'a, 'i> {
     /// Waiting, with the `srsDimension` the solid is written in.
     Cavities(Vec<Node<'a, 'i>>, Option<usize>),
-    /// Read with its exterior.
-    Read,
+    /// Taken to read with its exterior.
+    Taken,
     /// A cavity can't be read: the solid is left out whole, its exterior's other links too.
     Lost,
 }
@@ -1447,7 +1447,7 @@ struct Links<'a, 'i> {
     /// The solids whose exterior has had nothing read yet, each with its cavities: the links in that
     /// exterior name it ([`Pending::wait`]), and the first that reads something reads them. One still
     /// waiting once the object's links are followed is left out with its cavities: its exterior
-    /// leads nowhere, and its links say so.
+    /// leads nowhere, and its links say so. (In a prototype its links are said, not followed.)
     waiting: Vec<Wait<'a, 'i>>,
 }
 
@@ -1471,7 +1471,7 @@ impl<'a, 'i> Links<'a, 'i> {
     /// The cavities the solid `wait` names waits with, taken to read: none when it doesn't wait.
     fn take(&mut self, wait: Option<usize>) -> Option<(Vec<Node<'a, 'i>>, Option<usize>)> {
         let w = self.waiting.get_mut(wait?)?;
-        match std::mem::replace(w, Wait::Read) {
+        match std::mem::replace(w, Wait::Taken) {
             Wait::Cavities(cavities, dim) => Some((cavities, dim)),
             other => {
                 *w = other;
@@ -1817,7 +1817,10 @@ impl Reading {
                 }
                 // The exterior has something read (or read already): its solid's cavities are read
                 // with it, written where the solid is, in its dimension. One that holds only links
-                // leaves them to those links.
+                // leaves them to those links. Read already means marked at this level, not that it
+                // drew: a composite of links to nothing that links back to itself, or that another
+                // exterior of the object read first, takes them too. Only links that lead nowhere
+                // make that so, and they are said.
                 if (read || w.drawn > 0)
                     && let Some((cavities, dim)) = w.links.take(wait)
                 {
@@ -2343,7 +2346,7 @@ impl<'a, 'i> Walk<'_, 'a, 'i> {
                 let outer = self.wait;
                 let own = (!cavities.is_empty()).then(|| self.links.wait(cavities, self.dim));
                 self.wait = own.or(outer);
-                let drawn = self.drawn;
+                let (drawn, queued) = (self.drawn, self.links.ground.len() + self.links.others.len());
                 let done = if only_link(&exterior) {
                     self.link(&exterior, true);
                     Some(())
@@ -2352,10 +2355,16 @@ impl<'a, 'i> Walk<'_, 'a, 'i> {
                 };
                 self.wait = outer;
                 done?;
-                if self.drawn > drawn
-                    && let Some((cavities, _)) = self.links.take(own)
-                {
-                    cavities.iter().try_for_each(|cavity| self.member(cavity))?;
+                if self.drawn > drawn {
+                    if let Some((cavities, _)) = self.links.take(own) {
+                        cavities.iter().try_for_each(|cavity| self.member(cavity))?;
+                    }
+                } else if own.is_some() && self.links.ground.len() + self.links.others.len() == queued {
+                    // Nothing of its exterior read and no link left to follow (an empty shell, faces
+                    // whose rings are links): it lacks the part it needs, and is left out with its
+                    // cavities, said.
+                    self.links.take(own);
+                    self.said.bad_coordinates += 1;
                 }
             }
             "CompositeSolid" | "MultiSolid" => self.members(g, &["solidMember"], "solidMembers")?,
