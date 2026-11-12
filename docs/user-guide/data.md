@@ -116,8 +116,8 @@ or other WKT:
 - A grid transformation (NTv2 or NADCON, a `BOUNDCRS`'s, or GDAL's WKT1 `PROJ4_GRIDS` or
   `+nadgrids` in its `PROJ4` extension), or another without Helmert translations, isn't applied:
   the system is read without it, with a notice naming it and its grid file, as positions may be
-  off by as much as that shift. A system read by an EPSG code that has its own shift to WGS 84
-  uses that shift instead, and the notice says so. A `BOUNDCRS` without a transformation, which
+  off by as much as that shift. A system read by an EPSG or Esri code that has its own shift to
+  WGS 84 uses that shift instead, and the notice says so. A `BOUNDCRS` without a transformation, which
   PROJ refuses, is read as its source system, with a notice unless the source is on WGS 84. A
   ballpark offset is no known shift (the datum's own notice says so), and a null offset is none.
 - The notices come with WKT read from a Shapefile's or ASCII grid's `.prj`, a GeoPackage's or
@@ -392,7 +392,10 @@ changed or disappeared in the file since it was loaded, nothing is saved. A cons
 trigger failure also rolls everything back; pending edits remain in the layer. New features
 get source-assigned keys that cannot alias loaded rows, and unrelated columns and tables remain
 intact. The saved rows are read back within the transaction, so the layer keeps values assigned
-by defaults and triggers before it starts tracking its next edits. If a DELETE trigger recreates
+by defaults and triggers before it starts tracking its next edits. Dates are saved as a
+GeoPackage export writes them: a date-time with another offset than UTC's is saved in UTC, and a
+notice says so. A stored date that isn't one loads as empty, with a notice, and is left as it is
+unless that value is edited. If a DELETE trigger recreates
 a target row, that stored row reappears in the layer and is not counted as deleted. If triggers
 change or remove other rows already loaded in the layer, those rows are refreshed or removed
 before the next edits; rows outside the load are not added.
@@ -569,11 +572,31 @@ addresses a run. An address is matched to the house before its street (`Damrak 1
 the building, not the middle of Damrak). Its places have a point but no extent, so Find Place
 zooms in close around them.
 
+For U.S. street addresses, `"provider": "census"` (**U.S. Census (addresses)**) uses the
+[Census Bureau geocoder](https://geocoding.geo.census.gov/geocoder/Geocoding_Services_API.html),
+with the `Public_AR_Current` benchmark. Give a house number and street plus city/state or ZIP;
+it does not search general place names. Coordinates are calculated along address ranges, rather
+than surveyed building positions. RustGIS sends one single-record request at a time, at most one
+a second, including through a proxy, with up to 10,000 distinct addresses a run; this pacing is a
+RustGIS precaution, not a published Census rate limit. This uses the single-line endpoint, not
+Census's file-upload service. Puerto Rico addresses requiring Urbanization or Municipio are not
+supported by that endpoint. No Census geography attributes are added. Find Place credits the
+U.S. Census Bureau and zooms around the returned point. Direct access works in the desktop app
+and CLI; Census does not support CORS, so the web app requires a CORS-enabled proxy in **Server**
+(`"url"`), exposing the same `/locations/onelineaddress` endpoint.
+
+Find Place shows up to eight candidates; `map.findPlace` honours its `limit` (1–20). When
+the server returns additional candidates, a notice counts those not shown, including candidates
+not inspected past the parser's 20-result safety cap. Supplied `places` answers need no network
+access and can be applied without a proxy in the browser.
+
 An answer's places without a usable position (no coordinate, or one that can't be read) are left
 out, and a notice says how many; an answer with places but none usable counts as a failed
 request, not as "not found". An address longer than the geocoder takes (400 characters for the
 Locatieserver, 500 for the others) isn't sent cut short: its request fails. In the app the requests go out in the background, one at a time, and the layer is added when the
-last answer lands; `layer.geocode` on the command line waits for them.
+last answer lands. The status bar shows progress and **Cancel**; cancelling discards the run
+without adding a layer, even if its current request later finishes. `layer.geocode` on the command
+line waits for the answers.
 
 ```sh
 rustgis-cli run --cmd 'layer.addData={"path":"stores.csv"}' --cmd 'layer.geocode={"table":"stores","address":["street","city","country"]}'
@@ -1160,8 +1183,9 @@ and the MCP server see it too. A GeoTIFF read in place that is added before its 
 (the desktop app, the browser) answers `"reading": true`, sized by its header when that is in, and
 with `null` for its size and bands until then.
 `share.exportRaster` writes an untiled GeoTIFF; with `"cog": true` it writes a cloud-optimised one:
-512-pixel tiles compressed with Deflate, overviews (each half the size of the last, down to one
-tile), and every directory ahead of the tiles, so a reader fetches the header once and then only the
+512-pixel tiles compressed with Deflate after a predictor (the floating-point one for decimal
+values, differences along the row for whole numbers, none for classes), overviews (each half the
+size of the last, down to one tile), and every directory ahead of the tiles, so a reader fetches the header once and then only the
 tiles it needs. Overviews are averaged, except for a palette raster or one with a few whole-number
 classes, whose overviews take a pixel so that no class is invented; a palette keeps its colour
 table, though not the table's transparency, which a TIFF colour table can't hold (GDAL drops it
