@@ -9308,7 +9308,8 @@ fn a_viewshed_says_what_ground_with_no_data_it_saw_across() {
 /// 0 is refused, naming it; on a raster round the Earth whose edge the radius reaches, the rays
 /// not crossing its east–west edge are said: the ground across left out when the radius doesn't
 /// reach the far edge's column, worked out the long way round when it does in every row it
-/// reaches the near one, and partly when only near the observer's row.
+/// reaches the near one, and partly when only near the observer's row; nothing said when the way
+/// across the edge is no shorter than through the raster.
 #[test]
 fn a_viewshed_says_what_it_did_with_its_radius_and_the_seam() {
     use base64::Engine;
@@ -9388,9 +9389,19 @@ fn a_viewshed_says_what_it_did_with_its_radius_and_the_seam() {
     let notes = said(&mut s, json!({"layer": rows, "lon": -170.0, "lat": 89.95, "radius": (3.0 * cx).hypot(2.0 * cy) + 1.0}));
     assert!(notes.iter().any(|n| n.contains(seam) && n.ends_with("worked out the long way round")), "{notes:?}");
     // From the second column, the far column is the one across the edge, two cells away either
-    // way: every cell across the edge within the radius is worked out, whatever the rows.
+    // way: nothing is shorter across the edge, so nothing is said.
     let notes = said(&mut s, json!({"layer": rows, "lon": -45.0, "lat": 89.95, "radius": 2.0 * cx + 1.0}));
-    assert!(notes.iter().any(|n| n.contains(seam) && n.ends_with("worked out the long way round")), "{notes:?}");
+    assert!(notes.is_empty(), "{notes:?}");
+    // Nor from the middle of an odd number of columns (2 of 5), each edge two cells away.
+    let gt = GeoTransform { origin_x: -180.0, origin_y: 90.0, pixel_width: 72.0, pixel_height: -0.1 };
+    let r = Raster::new("odd", 5, 3, vec![vec![0.0; 15]], gt, Crs::LonLat, None, ColorHint::Gray, "Float32").unwrap();
+    let data = base64::engine::general_purpose::STANDARD.encode(geotiff::write(&r, 0).unwrap());
+    s.run("layer.addDataBytes", &json!({"fileName": "odd.tif", "data": data})).unwrap();
+    let odd = s.map().layers.iter().find(|l| l.name.starts_with("odd")).unwrap().name.clone();
+    for p in [json!({"layer": odd, "lon": 0.0, "lat": 89.95}), json!({"layer": odd, "lon": 0.0, "lat": 89.95, "radius": 2.5 * cx})] {
+        let notes = said(&mut s, p);
+        assert!(notes.is_empty(), "{notes:?}");
+    }
     for bad in [json!("500km"), json!(0), json!(-5), json!(true)] {
         let e = s.run("analysis.viewshed", &json!({"layer": dem, "lon": 0.0, "lat": 0.0, "radius": bad})).unwrap_err();
         assert_eq!(e, format!("radius must be a number of metres above 0, not {bad}"));

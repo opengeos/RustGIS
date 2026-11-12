@@ -1102,7 +1102,11 @@ fn viewshed_work(s: &Session, p: &Value) -> Result<Work, String> {
     let (oc, or) = dem.pixel_at(at).unwrap_or((0, 0));
     let (w, h) = (i64::from(dem.width), i64::from(dem.height));
     let (near, far) = (oc.min(w - 1 - oc), oc.max(w - 1 - oc));
-    let seam = round_the_earth && radius > (near as f64 + 0.5) * cx;
+    // Only when the way across the edge is shorter than the way through the raster: the cell
+    // just across the near edge is `near + 1` cells away across it and `far` through the raster,
+    // and with no shorter way (the observer within a cell of the middle column) every cell is
+    // worked out as near as it is.
+    let seam = round_the_earth && near + 1 < far && radius > (near as f64 + 0.5) * cx;
     // The ground just across the edge is the far edge's column, reached only through the raster:
     // worked out the long way round in the rows where the radius reaches it (cell centres, as the
     // viewshed measures them). The rows with ground across the edge within the radius are those
