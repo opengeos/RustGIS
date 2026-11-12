@@ -464,7 +464,8 @@ impl Heights {
 
     /// The ground at a point of a ray, `(col, row)` in cells (whole numbers at cell centres), and
     /// whether it is the nearest cell's, read in place of cells between which a neighbour has
-    /// no data. `None` where the point's own cell has no data.
+    /// no data. `None` where the point's own cell has no data, and so, between cells, where a
+    /// neighbour weighed has none either.
     fn at(self, r: &Raster, b: usize, col: f64, row: f64) -> Option<(f64, bool)> {
         let (nc, nr) = (col.round() as i64, row.round() as i64);
         let nearest = |fell_back: bool| r.value(b, nc, nr).map(|v| (f64::from(v), fell_back));
@@ -502,10 +503,56 @@ pub struct Viewshed {
     pub read_nearest: usize,
 }
 
+/// The ray steps a viewshed from `(oc, or)` takes over the window `cols` × `rows` (inclusive): for
+/// each cell no farther than `radius_m` (cell centres, `cx` × `cy` metres apart, as the viewshed
+/// measures them), its ray's steps, the larger of its column and row offsets. A row's cells within
+/// the radius are a run of columns, whose sum has a closed form, so the count is one step a row.
+fn ray_steps(observer: (i64, i64), cols: (i64, i64), rows: (i64, i64), cell: (f64, f64), radius_m: f64) -> u128 {
+    let ((oc, or), (left, right), (first, last), (cx, cy)) = (observer, cols, rows, cell);
+    // Σ max(x, a) for x in 0..=n.
+    let up_to = |n: i128, a: i128| -> i128 {
+        if n < 0 {
+            0
+        } else if n <= a {
+            (n + 1) * a
+        } else {
+            (a + 1) * a + (n * (n + 1) - a * (a + 1)) / 2
+        }
+    };
+    let within = |dc: i64, dr: i64| (dc as f64 * cx).hypot(dr as f64 * cy) <= radius_m;
+    let mut total: i128 = 0;
+    for row in first..=last {
+        let dr = row - or;
+        if !within(0, dr) {
+            continue;
+        }
+        // The farthest column offset within the radius on this row, put right at the edge.
+        let reach = ((radius_m * radius_m - (dr as f64 * cy).powi(2)).max(0.0).sqrt() / cx).floor();
+        let mut k = if reach.is_finite() { reach.min(i64::MAX as f64 / 2.0) as i64 } else { i64::MAX / 2 };
+        while k < i64::MAX / 2 && within(k.saturating_add(1), dr) {
+            k += 1;
+        }
+        while k > 0 && !within(k, dr) {
+            k -= 1;
+        }
+        // The run's offsets from the observer's column, within the window.
+        let (lo, hi) = (i128::from((oc.saturating_sub(k)).max(left) - oc), i128::from((oc.saturating_add(k)).min(right) - oc));
+        let a = i128::from(dr.abs());
+        total += if lo <= 0 && 0 <= hi {
+            up_to(hi, a) + up_to(-lo, a) - a
+        } else if lo > 0 {
+            up_to(hi, a) - up_to(lo - 1, a)
+        } else {
+            up_to(-lo, a) - up_to(-hi - 1, a)
+        };
+    }
+    u128::try_from(total).unwrap_or(0)
+}
+
 /// Cells visible from an observer (1) or not (0) within `radius_m`; outside the radius no-data.
 /// The Earth curves as visible light sees it (`SIGHT_RADIUS_M`). The ground along each ray is read
-/// as `heights` says; ground with no data hides nothing, and the cells whose rays crossed some are
-/// counted.
+/// as `heights` says; ground with no data hides nothing, and the visible cells whose rays crossed
+/// some are counted ([`Viewshed::through_gaps`]).
 pub fn viewshed(r: &Raster, b: usize, observer: Coord, height: f64, radius_m: f64, heights: Heights) -> Result<Viewshed, String> {
     viewshed_on(None, r, b, observer, height, radius_m, heights)
 }
@@ -534,15 +581,15 @@ fn viewshed_on(
     let rad_r = (radius_m / cy).ceil() as i64;
     let (first, last) = (or.saturating_sub(rad_r).max(0), or.saturating_add(rad_r).min(r.height as i64 - 1));
     let (left, right) = (oc.saturating_sub(rad_c).max(0), oc.saturating_add(rad_c).min(r.width as i64 - 1));
-    // Each cell walks a ray back to the observer: bound cells × ray length, not just cells.
-    let cells = (right - left + 1).saturating_mul(last - first + 1);
-    let longest = (oc - left).max(right - oc).max(or - first).max(last - or);
     // A ray steps a whole cell along its longer axis, so a bilinear point lies on a cell's
     // centre line and reads the two cells it falls between ([`Heights::at`] skips a neighbour
     // that weighs nothing; next to no data, the nearest cell too) where a nearest one reads one:
     // weighed as two.
     let per_step = if heights == Heights::Bilinear { 2 } else { 1 };
-    let ray_work = usize::try_from(cells.saturating_mul(longest / 2 + 1).saturating_mul(per_step)).unwrap_or(usize::MAX);
+    // Each cell within the radius walks a ray back to the observer, one step a cell along its
+    // longer axis: the steps counted exactly, a row at a time, not estimated.
+    let ray_work = usize::try_from(ray_steps((oc, or), (left, right), (first, last), (cx, cy), radius_m).saturating_mul(per_step as u128))
+        .unwrap_or(usize::MAX);
     // Each cell walks its own ray and writes only itself, so the rows within the radius are made
     // on several threads when the work is large (#1252), and may take as many times the work.
     let rows = usize::try_from(last - first + 1).unwrap_or(0);
@@ -1712,9 +1759,9 @@ mod tests {
 
     /// A bilinear ray step is weighed as two in the work cap (it reads the two cells it falls
     /// between), and a refusal says so: 1,000 × 1,000 cells from the middle on one thread take
-    /// 251 million nearest steps, under the cap, and 502 million weighed bilinear ones, over it.
-    /// A radius reaching every cell is refused as the whole raster; one short of the corners,
-    /// with the same window and steps, as a radius.
+    /// 333,333,500 nearest steps, under the cap, and twice that weighed bilinear, over it. A
+    /// radius reaching every cell is refused as the whole raster; one short of the corners, as a
+    /// radius, with the steps of the cells within it.
     #[test]
     fn a_bilinear_viewshed_step_is_weighed_as_two_in_the_work_cap() {
         let w = 1_000u32;
@@ -1725,7 +1772,7 @@ mod tests {
         let e = viewshed_on(Some(1), &dem, 0, middle, 2.0, 1e9, Heights::Bilinear).unwrap_err();
         assert!(
             e.starts_with(&format!(
-                "the whole raster takes 502000000 ray steps (a step between cells counted as two), more than the {MAX_VIEWSHED_WORK} this computer takes on 1 thread(s); give a radius to cover only part of it"
+                "the whole raster takes 666667000 ray steps (a step between cells counted as two), more than the {MAX_VIEWSHED_WORK} this computer takes on 1 thread(s); give a radius to cover only part of it"
             )),
             "{e}"
         );
@@ -1733,8 +1780,47 @@ mod tests {
         // (about 707 cells of the side's mean away; the cells are longer north–south at 45°).
         let (cx, cy) = dem.cell_size_m();
         assert!(600.0 * cx.max(cy) < (500.0 * cx).hypot(500.0 * cy));
-        let e = viewshed_on(Some(1), &dem, 0, middle, 2.0, 600.0 * cx.max(cy), Heights::Bilinear).unwrap_err();
-        assert!(e.starts_with("the radius takes 502000000 ray steps") && e.contains("; use a smaller radius"), "{e}");
+        let radius = 600.0 * cx.max(cy);
+        let e = viewshed_on(Some(1), &dem, 0, middle, 2.0, radius, Heights::Bilinear).unwrap_err();
+        let steps = 2 * brute_ray_steps((500, 500), (0, 999), (0, 999), (cx, cy), radius);
+        assert!(
+            steps < 666_667_000 && e.starts_with(&format!("the radius takes {steps} ray steps")) && e.contains("; use a smaller radius"),
+            "{e}"
+        );
+    }
+
+    /// Each cell's ray steps within the radius, one at a time.
+    fn brute_ray_steps(observer: (i64, i64), cols: (i64, i64), rows: (i64, i64), cell: (f64, f64), radius_m: f64) -> u128 {
+        let mut n = 0u128;
+        for row in rows.0..=rows.1 {
+            for col in cols.0..=cols.1 {
+                let (dc, dr) = (col - observer.0, row - observer.1);
+                if (dc as f64 * cell.0).hypot(dr as f64 * cell.1) <= radius_m {
+                    n += u128::from(dc.unsigned_abs().max(dr.unsigned_abs()));
+                }
+            }
+        }
+        n
+    }
+
+    /// The ray steps counted a row at a time are each cell's, counted one by one: an observer in
+    /// the middle, at a corner, on an edge and outside the window's middle row; square and
+    /// oblong cells; a radius inside the window, cutting its corners, past it, and on a cell's
+    /// centre exactly.
+    #[test]
+    fn viewshed_ray_steps_are_counted_exactly() {
+        let window = ((0, 39), (0, 24));
+        for observer in [(20, 12), (0, 0), (39, 7), (5, 24)] {
+            for cell in [(10.0, 10.0), (7.0, 13.0), (30.0, 2.5)] {
+                for radius in [0.5, 10.0, 35.0, 120.0, 260.0, 1e9, 1e300] {
+                    assert_eq!(
+                        ray_steps(observer, window.0, window.1, cell, radius),
+                        brute_ray_steps(observer, window.0, window.1, cell, radius),
+                        "{observer:?} {cell:?} {radius}"
+                    );
+                }
+            }
+        }
     }
 
     /// Viewshed rows made on several threads see what one thread sees (#1252), with the radius

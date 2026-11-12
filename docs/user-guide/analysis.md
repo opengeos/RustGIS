@@ -104,10 +104,13 @@ can take up to about twice as long as a one-thread run at its own (measured on o
 Silver 4114; it can be longer on others); in the web app, on one thread, the limits stay as they
 are. The error names the limit on this computer and the threads it counted. The limits on memory
 (the cells a grid may have, and those on the following pages) hold everywhere. Viewshed has no limit
-on its window (a radius past the raster's diagonal is taken as the diagonal), only on its ray steps:
-with no radius it covers the whole raster, so on a large one it can be refused where nobody can stop
-the run (the web app, a script, the assistant). A smaller radius, or a run from its pane on the
-desktop or with `rustgis-cli run`, gets it through. A
+on its window (a radius past the raster's diagonal is taken as the diagonal), only on its ray steps,
+counted exactly before it starts (each cell within the radius takes a step per cell between it and
+the observer, counted as two with bilinear heights): with no radius it covers the whole raster, so on a large one it
+can be refused in the web app, a script or the assistant, which can't cancel a run. A smaller
+radius, or a run from its pane on the desktop or with `rustgis-cli run`, gets it through. There
+nothing caps it, so a whole-raster viewshed of a large DEM can take long (the steps grow with the
+cells times the raster's longer side, not the radius); its progress shows and **Cancel** stops it. A
 tool's own default cell size still follows the one-thread limit, so it makes the same grid on any
 computer and from any caller; a finer cell size given is what a larger limit, or none, lets through.
 
