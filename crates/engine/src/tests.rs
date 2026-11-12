@@ -1943,6 +1943,7 @@ fn qgis_bookmarks_relations_rotation_and_time_import() {
         <relation id="own" name="Owners of parcel" referencedLayer="parcels_1" referencingLayer="owners_1" strength="Association"><fieldRef referencedField="id" referencingField="pid"/></relation>
         <relation id="gone" name="To nowhere" referencedLayer="parcels_1" referencingLayer="missing_1" strength="Association"><fieldRef referencedField="id" referencingField="pid"/></relation>
         <relation id="trip" name="Trip names" referencedLayer="trip_1" referencingLayer="owners_1" strength="Association"><fieldRef referencedField="name" referencingField="pid"/></relation>
+        <relation id="points" name="Trip points" referencedLayer="trip_1" referencingLayer="owners_1" strength="Association"><fieldRef referencedField="points" referencingField="pid"/></relation>
       </relations>
       <Bookmarks>
         <Bookmark extent="Polygon ((8.4 47.3, 8.6 47.3, 8.6 47.45, 8.4 47.45, 8.4 47.3))" group="" id="a" name="Zurich" rotation="0"><spatialrefsys><authid>EPSG:4326</authid></spatialrefsys></Bookmark>
@@ -1982,7 +1983,7 @@ fn qgis_bookmarks_relations_rotation_and_time_import() {
     assert!(notes.contains("its bookmarks in a coordinate system RustGIS can't read (1: Odd)"), "{notes}");
     assert!(notes.contains("its bookmarks whose place lies outside their coordinate system's area (1: Beyond)"), "{notes}");
     let rels = &m.editing.relationships;
-    assert_eq!(rels.len(), 1, "{notes}");
+    assert_eq!(rels.len(), 2, "{notes}");
     let r = &rels[0];
     assert_eq!(
         (r.name.as_str(), r.origin.as_str(), r.origin_key.as_str(), r.destination.as_str(), r.destination_key.as_str()),
@@ -1997,6 +1998,10 @@ fn qgis_bookmarks_relations_rotation_and_time_import() {
             .contains("its relations to a layer that came in as several tables with the field, any of which it could mean (1: Trip names)"),
         "{notes}"
     );
+    // Only its tracks have `points`: related to them, said to be a guess.
+    assert_eq!((rels[1].name.as_str(), rels[1].origin_key.as_str()), ("Trip points", "points"));
+    assert!(notes.contains("related to the one table with the field, QGIS's own not being known (1: Trip points)"), "{notes}");
+    assert!(!notes.contains("not being known (2"), "{notes}");
     // Bound, the slider off: every feature shows, as QGIS opens a project.
     let events = m.layer_by_name("events").unwrap();
     assert_eq!(events.time.as_ref().map(|t| t.field.as_str()), Some("when"));
@@ -46261,4 +46266,21 @@ fn an_animation_export_says_its_missing_cast_shadows_once() {
         assert!(said.len() == 1 && said[0].starts_with(what), "{command}: {said:?}");
     }
     std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// A zoom to a place wholly past a Web Mercator map's 85° leaves the view where it is, and says
+/// so; one reaching into them fits, clamped.
+#[test]
+fn a_zoom_beyond_web_mercators_latitudes_says_so() {
+    let mut s = world();
+    let view = s.map().camera;
+    let mark = s.notice_mark();
+    s.zoom_to(&rustgis_geom::Extent::new(-10.0, 86.0, 10.0, 89.0));
+    assert_eq!((s.map().camera.center, s.map().camera.res), (view.center, view.res));
+    let said: Vec<String> = s.notices_since(mark).iter().map(|n| n.text.clone()).collect();
+    assert!(said.iter().any(|n| n.contains("beyond what the map's projection shows")), "{said:?}");
+    let mark = s.notice_mark();
+    s.zoom_to(&rustgis_geom::Extent::new(-10.0, 80.0, 10.0, 89.0));
+    assert_ne!(s.map().camera.center, view.center);
+    assert!(s.notices_since(mark).is_empty());
 }

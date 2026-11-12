@@ -2839,15 +2839,16 @@ impl Session {
         cmd::navigate::view_of(self.map()).map(|(_, z)| z)
     }
 
-    /// Fits the camera to a lon/lat extent in the current view size.
+    /// Fits the camera to a lon/lat extent in the current view size. One the map's projection
+    /// doesn't reach (wholly past Web Mercator's 85°, say) leaves the view where it is, and says so.
     pub fn zoom_to(&mut self, e: &rustgis_geom::Extent) {
         let (w, h) = self.view_size;
         let m = self.map_mut();
         if m.projection.is_globe() {
             rustgis_map::Globe::fit(&mut m.camera, e, w, h);
-        } else {
-            // An extent the projection doesn't reach leaves the view where it is.
-            let _ = m.fit_lonlat(e, w, h);
+        } else if !e.is_empty() && w > 1.0 && h > 1.0 && !m.fit_lonlat(e, w, h) {
+            self.notify("The place lies beyond what the map's projection shows, so the view stays where it is.", false);
+            return;
         }
         self.record_extent();
     }
