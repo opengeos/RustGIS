@@ -169,17 +169,32 @@ pub enum Func {
 }
 
 /// Whether `t` is a whole date in a form other than ISO 8601: digits only, five or more
-/// (`20260101`), or year, month and day as three numbers in either order (`2026/03/05`,
-/// `2026-1-1`, `05.03.2026`) that don't read as an ISO date.
+/// (`20260101`), or year, month and day as three numbers in either order joined by one `-`, `/`
+/// or `.` (`2026/03/05`, `2026-1-1`, `05.03.2026`), alone or before a time (`2026/03/05 14:30`),
+/// that doesn't read as an ISO date. Other text (`2026-03-05 revision 2`) isn't a date.
 fn other_date_form(t: &str) -> bool {
     if t.len() >= 5 && t.bytes().all(|b| b.is_ascii_digit()) {
         return true;
     }
-    if !t.starts_with(|c: char| c.is_ascii_digit()) || crate::DateTime::parse(t).is_some() {
+    if crate::DateTime::parse(t).is_some() {
         return false;
     }
-    let groups: Vec<usize> = t.split(|c: char| !c.is_ascii_digit()).filter(|g| !g.is_empty()).map(str::len).take(3).collect();
-    matches!(groups.as_slice(), [4, 1..=2, 1..=2] | [1..=2, 1..=2, 4])
+    // The date: up to a space or `T` that starts a time.
+    let (date, time) = match t.find([' ', 'T', 't']) {
+        Some(i) => (t.get(..i).unwrap_or(t), t.get(i + 1..)),
+        None => (t, None),
+    };
+    if time.is_some_and(|time| !time.starts_with(|c: char| c.is_ascii_digit()) || !time.contains(':')) {
+        return false;
+    }
+    let Some(sep) = date.chars().find(|c| !c.is_ascii_digit()) else { return false };
+    if !['-', '/', '.'].contains(&sep) {
+        return false;
+    }
+    let parts: Vec<&str> = date.split(sep).collect();
+    let digits = |p: &&str| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit());
+    let lens: Vec<usize> = parts.iter().map(|p| p.len()).collect();
+    parts.iter().all(digits) && matches!(lens.as_slice(), [4, 1..=2, 1..=2] | [1..=2, 1..=2, 4])
 }
 
 /// Whether `f` works on numbers, so it gives null for a date.

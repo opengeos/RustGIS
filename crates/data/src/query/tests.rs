@@ -634,10 +634,19 @@ fn where_clauses_compare_dates() {
         "issued >= '2026/03/05'",
         "issued >= '2026-1-1'",
         "issued = '05.03.2026'",
+        "ts >= '2026/03/05 14:30'",
     ] {
         assert!(parse(e, &d).err().unwrap_or_default().contains("write the date as YYYY-MM-DD"), "{e}");
     }
-    for e in ["issued > '2026'", "issued >= '2026-03'", "issued LIKE '2026-%'", "ts >= '2026-03-05 14:30'"] {
+    for e in [
+        "issued > '2026'",
+        "issued >= '2026-03'",
+        "issued LIKE '2026-%'",
+        "ts >= '2026-03-05 14:30'",
+        "issued < '2026-03-05 revision 2'",
+        "issued < '2026 report 03 page 05'",
+        "issued < '2026-03/05'",
+    ] {
         assert!(parse(e, &d).is_ok(), "{e}");
     }
     for e in ["to_int(issued)", "to_real(ts)", "color_rgb(issued, 0, 0)"] {
