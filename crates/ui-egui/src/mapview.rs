@@ -658,7 +658,9 @@ fn now(ui: &Ui) -> f64 {
 #[cfg_attr(target_arch = "wasm32", allow(unused_variables))]
 pub(crate) fn handle_gpu_errors(device: &egui_wgpu::wgpu::Device, errors: std::sync::Arc<GpuErrors>) {
     #[cfg(not(target_arch = "wasm32"))]
-    device.on_uncaptured_error(std::sync::Arc::new(move |e: egui_wgpu::wgpu::Error| errors.note(&e)));
+    device.on_uncaptured_error(std::sync::Arc::new(move |e: egui_wgpu::wgpu::Error| {
+        errors.note(&e);
+    }));
 }
 
 /// What the graphics card's error handler found since the map last looked.
@@ -677,9 +679,9 @@ pub(crate) struct GpuErrors {
 const MAX_GPU_ERRORS_LOGGED: u32 = 20;
 
 impl GpuErrors {
-    /// Notes `e`, and logs it while few have been.
+    /// Notes `e`, and logs it while few have been: whether it was logged.
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
-    fn note(&self, e: &egui_wgpu::wgpu::Error) {
+    fn note(&self, e: &egui_wgpu::wgpu::Error) -> bool {
         use std::sync::atomic::Ordering;
         let oom = matches!(e, egui_wgpu::wgpu::Error::OutOfMemory { .. });
         if oom { &self.out_of_memory } else { &self.other }.store(true, Ordering::SeqCst);
@@ -690,6 +692,7 @@ impl GpuErrors {
         if n + 1 == MAX_GPU_ERRORS_LOGGED {
             log::error!("further graphics card errors are not logged");
         }
+        n < MAX_GPU_ERRORS_LOGGED
     }
 }
 
@@ -717,6 +720,8 @@ pub(crate) fn leave_gpu_if_out_of_memory(app: &mut RustGisApp) {
     app.map.gpu_enabled = false;
     app.map.gpu_renderer = None;
     app.map.gpu_frame = None;
+    // (No live GPU scene is left to keep the tile key for.)
+    app.map.live_rev = None;
     app.map.split_gpu = None;
     for target in [&app.map.gpu_target, &app.map.gpu_target_split] {
         *target.lock().unwrap_or_else(|e| e.into_inner()) = None;
@@ -5005,14 +5010,13 @@ mod tests {
         let source = || -> egui_wgpu::wgpu::ErrorSource { "no room".into() };
         let invalid = || Error::Validation { source: source(), description: "texture is invalid".into() };
         let errors = GpuErrors::default();
-        errors.note(&invalid());
+        assert!(errors.note(&invalid()));
         assert!(errors.other.load(Ordering::SeqCst) && !errors.out_of_memory.load(Ordering::SeqCst));
-        errors.note(&Error::OutOfMemory { source: source() });
+        assert!(errors.note(&Error::OutOfMemory { source: source() }));
         assert!(errors.out_of_memory.load(Ordering::SeqCst));
         // A flood is logged only so far: noting goes on.
-        for _ in 0..100 {
-            errors.note(&invalid());
-        }
+        let logged = (0..100).filter(|_| errors.note(&invalid())).count();
+        assert_eq!(logged, MAX_GPU_ERRORS_LOGGED as usize - 2, "the first two above were logged");
         assert_eq!(errors.logged.load(Ordering::SeqCst), 102);
         let mut app = RustGisApp::with_sample();
         app.map.gpu_enabled = true;
