@@ -2760,3 +2760,16 @@ fn a_map_rotation_that_does_not_read_is_noted() {
         report.notes
     );
 }
+
+/// A project nested past the limit, or whose namespaces would take too long to resolve, is refused
+/// before it is parsed, never a crash or a hang.
+#[test]
+fn a_hostile_project_is_refused_before_parsing() {
+    let deep = format!("<!DOCTYPE qgis><qgis>{}{}</qgis>", "<a>".repeat(10_000), "</a>".repeat(10_000));
+    let refused = parse(&deep, "a QGIS project").unwrap_err();
+    assert!(refused.contains("deep"), "{refused}");
+    let declarations: String = (0..20_000).map(|k| format!(r#" xmlns:n{k}="urn:{k}""#)).collect();
+    let flood = format!("<qgis{declarations}/>");
+    let refused = parse(&flood, "a QGIS project").unwrap_err();
+    assert!(refused.contains("namespace declarations"), "{refused}");
+}
