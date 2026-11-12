@@ -20594,19 +20594,43 @@ fn zipped_shapefiles_add_as_layers() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A request read whole: its head and as much body as its `Content-Length` says. A server that
+/// answers and closes with part of the request unread has its connection reset on Windows and
+/// macOS, and the client sees the reset in place of the answer.
+fn read_request(s: &mut std::net::TcpStream) -> String {
+    use std::io::Read;
+    let _ = s.set_read_timeout(Some(std::time::Duration::from_secs(5)));
+    let mut req = Vec::new();
+    let mut buf = [0u8; 4096];
+    let mut want = None;
+    while want.is_none_or(|n| req.len() < n) && req.len() < 1 << 20 {
+        let Ok(read) = s.read(&mut buf) else { break };
+        if read == 0 {
+            break;
+        }
+        req.extend_from_slice(&buf[..read]);
+        if want.is_none()
+            && let Some(end) = req.windows(4).position(|w| w == b"\r\n\r\n")
+        {
+            let head = String::from_utf8_lossy(&req[..end]).to_ascii_lowercase();
+            let body = head.lines().find_map(|l| l.strip_prefix("content-length:")).and_then(|n| n.trim().parse::<usize>().ok());
+            want = Some(end + 4 + body.unwrap_or(0));
+        }
+    }
+    String::from_utf8_lossy(&req).into_owned()
+}
+
 /// Serves each request by the first route its path starts with (`{base}` in a body becomes the
 /// server's address; other paths are 404); returns the base address.
 fn serve_routes(routes: Vec<(&'static str, String)>, n: usize) -> String {
-    use std::io::{Read, Write};
+    use std::io::Write;
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
     let b = base.clone();
     std::thread::spawn(move || {
         for stream in listener.incoming().take(n) {
             let Ok(mut s) = stream else { continue };
-            let mut buf = [0u8; 4096];
-            let read = s.read(&mut buf).unwrap_or(0);
-            let req = String::from_utf8_lossy(&buf[..read]);
+            let req = read_request(&mut s);
             let path = req.split_whitespace().nth(1).unwrap_or("/").to_string();
             match routes.iter().find(|(p, _)| path.starts_with(p)) {
                 Some((_, body)) => {
@@ -42710,7 +42734,6 @@ fn stac_search_by_shape_says_what_it_leaves_out() {
     let item = r#"{"type": "Feature", "id": "S2_1", "collection": "s2", "bbox": [7, 46, 8, 47],
         "geometry": {"type": "Polygon", "coordinates": [[[7, 46], [8, 46], [8, 47], [7, 47], [7, 46]]]},
         "properties": {"datetime": "2024-06-02T10:30:00Z", "eo:cloud_cover": 3.5}, "assets": {}}"#;
-    // A POST answered before its body is read is asked again as a GET, so each search may take two.
     let base = serve_routes(vec![("/v1/search", format!(r#"{{"type": "FeatureCollection", "features": [{item}]}}"#))], 40);
     let api = format!("{base}/v1");
     let said = |s: &Session, text: &str| s.notices.iter().filter(|n| n.text.contains(text)).count();
@@ -42942,5 +42965,60 @@ fn a_layer_read_from_a_file_says_whether_it_and_the_file_are_in_step() {
     assert_eq!(said(&s, mark), 0);
     // A layer that wasn't read from such a file has nothing to compare with.
     assert!(s.run("source.syncState", &json!({"layer": "Cities"})).is_err());
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// `"coverage"` (#1379) writes the grid the placement searched as a PNG, three pixels a cell: dark
+/// where the map draws, white where it is free, tinted in the graticule's label strips, the placed
+/// surrounds outlined in red; the answer names it, and asking for it reaches files. A path that
+/// isn't a .png is refused with nothing changed; one that can't be written is said, the layout
+/// made all the same.
+#[test]
+fn publication_writes_its_coverage_grid() {
+    use crate::policy::{Effect, command_effects};
+    let dir = std::env::temp_dir().join(format!("rustgis-coverage-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut s = world();
+    let piaui = json!([-46.8, -11.6, -38.5, -2.2]);
+    let path = dir.join("coverage.png").display().to_string();
+    let asked = json!({"extent": piaui, "coverage": path});
+    let spec = s.registry.get("layout.publication").unwrap();
+    assert!(command_effects(spec, &asked).contains(Effect::Files));
+    assert!(!command_effects(spec, &json!({"extent": piaui})).contains(Effect::Files));
+    let r = s.run("layout.publication", &asked).unwrap();
+    assert_eq!(r["coverage"], json!(path), "{r}");
+    let img = image::open(&path).unwrap().to_rgba8();
+    assert_eq!(img.width().max(img.height()), 384 * 3);
+    let count = |keep: &dyn Fn([u8; 3]) -> bool| img.pixels().filter(|p| keep([p.0[0], p.0[1], p.0[2]])).count();
+    let (dark, white) = (count(&|c| c == [0x33; 3] || c == [0x2E, 0x4A, 0x7A]), count(&|c| c == [0xFF; 3] || c == [0xC9, 0xDD, 0xF2]));
+    let strips = count(&|c| c == [0xC9, 0xDD, 0xF2] || c == [0x2E, 0x4A, 0x7A]);
+    let red = count(&|[r, g, b]| r > 180 && g < 90 && b < 90);
+    assert!(dark > 0 && white > 0 && strips > 0 && red > 0, "dark {dark}, white {white}, strips {strips}, outlines {red}");
+    // Refused before anything changes.
+    let layouts = s.project.layouts.len();
+    for bad in [json!("coverage.jpg"), json!(3)] {
+        let e = s.run("layout.publication", &json!({"extent": piaui, "coverage": bad})).unwrap_err();
+        assert!(e.contains("coverage is the path of a .png file"), "{e}");
+    }
+    assert_eq!(s.project.layouts.len(), layouts);
+    // A folder that isn't there: said, the layout made, no path in the answer.
+    let nowhere = dir.join("missing").join("coverage.png").display().to_string();
+    let r = s.run("layout.publication", &json!({"extent": piaui, "coverage": nowhere})).unwrap();
+    assert!(r["coverage"].is_null(), "{r}");
+    assert!(r["warnings"].as_array().unwrap().iter().any(|w| w.as_str().unwrap().contains("the coverage image isn't written")), "{r}");
+    assert_eq!(s.project.layouts.len(), layouts + 1);
+    // A project holding all the layouts it can is refused before the file is written.
+    let full = dir.join("full.png");
+    // One a run before left behind would pass for not written.
+    let _ = std::fs::remove_file(&full);
+    let blank = s.project.layouts[0].clone();
+    s.project.layouts.resize(crate::project::MAX_LAYOUTS, blank);
+    let e = s.run("layout.publication", &json!({"extent": piaui, "coverage": full.display().to_string()})).unwrap_err();
+    assert!(e.contains("at most"), "{e}");
+    assert!(!full.exists());
+    s.project.layouts.truncate(layouts + 1);
+    // Without it, no file and no warning about one.
+    let r = s.run("layout.publication", &json!({"extent": piaui})).unwrap();
+    assert!(r["coverage"].is_null() && !r["warnings"].to_string().contains("coverage"), "{r}");
     std::fs::remove_dir_all(dir).unwrap();
 }
