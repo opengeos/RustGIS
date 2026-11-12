@@ -2182,14 +2182,15 @@ fn cavities_wait_for_the_exterior_to_read_something() {
         left_out(&out, case);
         links_said(&out, case);
     }
-    // Nothing of the exterior read and nothing to follow: an empty shell, a face whose ring is a
-    // link. The solid lacks the part it needs, and is said so.
+    // Nothing of the exterior read and nothing to follow: a face whose ring is a link is said as
+    // that link; an empty shell lacks the part it needs, and is said so.
     let ringless = r##"<gml:exterior><gml:CompositeSurface><gml:surfaceMember><gml:Polygon><gml:exterior xlink:href="#ring"/></gml:Polygon></gml:surfaceMember></gml:CompositeSurface></gml:exterior>"##;
-    for (exterior, case) in [(ringless, "a face given by a ring link"), ("<gml:exterior/>", "an empty exterior")] {
-        let out = model(exterior, "");
-        left_out(&out, case);
-        assert!(says(&out, "1 geometries of city objects have coordinates that can't be read"), "{case}: {:?}", messages_of(&out));
-    }
+    let out = model(ringless, "");
+    left_out(&out, "a face given by a ring link");
+    links_said(&out, "a face given by a ring link");
+    let out = model("<gml:exterior/>", "");
+    left_out(&out, "an empty exterior");
+    assert!(says(&out, "1 geometries of city objects have coordinates that can't be read"), "{:?}", messages_of(&out));
 
     // Links that are found read the cavity, once their faces are: through a composite of links too,
     // and with the shell given by a link; nothing is said.
@@ -2235,4 +2236,29 @@ fn a_cavity_that_cant_be_read_leaves_a_linked_exterior_out() {
     assert!((area(ds.features[b].geometry.as_ref()) - 100.0).abs() < 1e-6, "{:?}", ds.features[b].geometry);
     assert!(says(&out, "1 geometries of city objects have coordinates that can't be read"), "{:?}", messages_of(&out));
     assert!(!says(&out, "link"), "{:?}", messages_of(&out));
+}
+
+/// A prototype's solid whose exterior is a link, which a prototype doesn't follow, is left out with
+/// its cavity: said as that link, not as coordinates that can't be read; the prototype's other faces
+/// are placed.
+#[test]
+fn a_prototype_solid_with_a_linked_exterior_is_said_as_its_link() {
+    let prototype = format!(
+        r##"<core:relativeGMLGeometry><gml:MultiGeometry gml:id="proto"><gml:geometryMember>{}</gml:geometryMember><gml:geometryMember><gml:Solid><gml:exterior xlink:href="#elsewhere"/><gml:interior><gml:CompositeSurface><gml:surfaceMember>{}</gml:surfaceMember></gml:CompositeSurface></gml:interior></gml:Solid></gml:geometryMember></gml:MultiGeometry></core:relativeGMLGeometry>"##,
+        polygon("proto-f", &square(0.0, 0.0, 1.0, 0.0)),
+        polygon("proto-c", &square(0.2, 0.2, 0.2, 3.0))
+    );
+    let member = furniture(
+        "t",
+        &format!(
+            "<core:transformationMatrix>1 0 0 0 0 1 0 0 0 0 1 0 0 0 0 1</core:transformationMatrix>{prototype}{}",
+            reference(5.0, 5.0, 1.0)
+        ),
+    );
+    let out = read("model.gml", &lonlat(&member), None).unwrap();
+    assert!(says(&out, "1 geometries or objects are given only by a link"), "{:?}", messages_of(&out));
+    assert!(!says(&out, "can't be read"), "{:?}", messages_of(&out));
+    assert!(!says(&out, "drawn as a point"), "its face is placed: {:?}", messages_of(&out));
+    let placed = of_type(&out, GeometryType::Polygon);
+    assert_eq!(value(placed, row_of(placed, "t"), "z_max"), Value::Float(1.0), "the cavity isn't placed: {:?}", messages_of(&out));
 }

@@ -2346,7 +2346,7 @@ impl<'a, 'i> Walk<'_, 'a, 'i> {
                 let outer = self.wait;
                 let own = (!cavities.is_empty()).then(|| self.links.wait(cavities, self.dim));
                 self.wait = own.or(outer);
-                let (drawn, queued) = (self.drawn, self.links.ground.len() + self.links.others.len());
+                let (drawn, queued, said) = (self.drawn, self.links.ground.len() + self.links.others.len(), self.said.links);
                 let done = if only_link(&exterior) {
                     self.link(&exterior, true);
                     Some(())
@@ -2359,10 +2359,11 @@ impl<'a, 'i> Walk<'_, 'a, 'i> {
                     if let Some((cavities, _)) = self.links.take(own) {
                         cavities.iter().try_for_each(|cavity| self.member(cavity))?;
                     }
-                } else if own.is_some() && self.links.ground.len() + self.links.others.len() == queued {
-                    // Nothing of its exterior read and no link left to follow (an empty shell, faces
-                    // whose rings are links): it lacks the part it needs, and is left out with its
-                    // cavities, said.
+                } else if own.is_some() && self.links.ground.len() + self.links.others.len() == queued && self.said.links == said {
+                    // Nothing of its exterior read, no link left to follow and none said (an empty
+                    // shell): it lacks the part it needs, and is left out with its cavities, said. One
+                    // whose links are said (a ring's, or any in a prototype, which aren't followed) is
+                    // left out with them, said by those links.
                     self.links.take(own);
                     self.said.bad_coordinates += 1;
                 }
