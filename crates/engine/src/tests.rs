@@ -646,6 +646,20 @@ fn date_fields_work_from_adding_to_saving() {
         s.notices_since(mark)
     );
     assert!(rustgis_map::time::time_fields(&ds(&s)).iter().any(|(f, _)| f == "seen"), "the slider is offered the date field");
+    // A calculation rule writing a date into a number field writes null, and says so; a clean one
+    // says nothing.
+    s.run("edit.addField", &json!({"layer": "Cities", "name": "yr", "type": "long"})).unwrap();
+    for (expression, said) in [("founded", true), ("1", false)] {
+        let rule = json!({"layer": "Cities", "name": "Year", "kind": "calculation", "field": "yr", "expression": expression});
+        s.run("data.attributeRule", &rule).unwrap();
+        let mark = s.notice_mark();
+        s.run("edit.setValue", &json!({"layer": "Cities", "row": 0, "field": "founded", "value": "2026-03-05"})).unwrap();
+        let notices: Vec<String> = s.notices_since(mark).iter().map(|n| n.text.clone()).collect();
+        let null = "Attribute rule Year: 'yr' is null in 1 row, whose result isn't a Long value".to_string();
+        assert_eq!(notices.contains(&null), said, "{expression}: {notices:?}");
+        s.run("data.attributeRule", &json!({"layer": "Cities", "name": "Year", "remove": true})).unwrap();
+    }
+    s.run("edit.deleteField", &json!({"layer": "Cities", "field": "yr"})).unwrap();
     // Saved and opened, the values are still dates.
     // Removed however the test ends, and its own each run (the process id alone can repeat).
     struct Dir(std::path::PathBuf);
