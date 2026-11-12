@@ -2555,16 +2555,21 @@ fn bookmarks_relations_and_time_read_as_qgis_saves_them() {
         layer("fixed", &temporal("0", &[])),
         layer("redraw", &temporal("5", &[])),
         layer("closed", &temporal("1", &[("startField", "when"), ("limitMode", "1")])),
+        layer("lasting_events", &temporal("1", &[("startField", "when"), ("fixedDuration", "3"), ("durationUnit", "h")])),
+        layer("piling", &temporal("1", &[("startField", "when"), ("fixedDuration", "3"), ("accumulate", "1")])),
         layer("unnamed", &temporal("1", &[])),
         r#"<maplayer type="raster"><id>dem</id><datasource>./dem.tif</datasource><layername>dem</layername><provider>gdal</provider><temporal enabled="1" mode="0"/></maplayer>"#.to_string(),
     ]
     .concat();
+    // A ring of 10,001 points: not read in part.
+    let long = vec!["1 2"; 10_001].join(", ");
     let wgs84 =
         "<spatialrefsys nativeFormat=\"Wkt\"><proj4>+proj=longlat +datum=WGS84 +no_defs</proj4><authid>EPSG:4326</authid></spatialrefsys>";
     let qgs = format!(
         r#"<qgis version="4.2.3-Belém do Pará">
       <projectCrs><spatialrefsys><authid>EPSG:3857</authid></spatialrefsys></projectCrs>
       <mapcanvas annotationsVisible="1" name="theMapCanvas"><units>meters</units><extent><xmin>0</xmin><ymin>0</ymin><xmax>10</xmax><ymax>10</ymax></extent><rotation>15</rotation></mapcanvas>
+      <mapcanvas name="mapCanvas2"><rotation>x</rotation></mapcanvas>
       <projectlayers>{layers}</projectlayers>
       <relations>
         <relation id="own" name="Owners of parcel" referencedLayer="parcels_1" referencingLayer="owners_1" strength="Composition"><fieldRef referencedField="id" referencingField="pid"/></relation>
@@ -2576,6 +2581,8 @@ fn bookmarks_relations_and_time_read_as_qgis_saves_them() {
         <Bookmark extent="Polygon ((8.40000000000000036 47.29999999999999716, 8.59999999999999964 47.29999999999999716, 8.59999999999999964 47.45000000000000284, 8.40000000000000036 47.45000000000000284, 8.40000000000000036 47.29999999999999716))" group="Swiss" id="{{0ac0}}" name="Zurich" rotation="0">{wgs84}</Bookmark>
         <Bookmark extent="Polygon ((900000 5900000, 1000000 5900000, 1000000 6000000, 900000 6000000, 900000 5900000))" group="" id="{{0072}}" name="Web" rotation="30"/>
         <Bookmark extent="Point (1 2)" group="" id="x" name="Nowhere" rotation="0"/>
+        <Bookmark extent="Polygon ((1 2, 3 2, 3 4, 1 4, 1 2))" group="" id="y" name="Askew" rotation="abc"/>
+        <Bookmark extent="Polygon (({long}))" group="" id="z" name="Long" rotation="0"/>
       </Bookmarks>
       <ProjectTimeSettings cumulativeTemporalRange="1" frameRate="5" timeStep="2" timeStepUnit="wk" totalMovieFrames="100">
         <TemporalRange><start>2020-01-01T00:00:00Z</start><end>2020-12-31T00:00:00Z</end></TemporalRange>
@@ -2584,12 +2591,17 @@ fn bookmarks_relations_and_time_read_as_qgis_saves_them() {
     );
     let mut report = Report::default();
     let p = read_project(&qgs, "/p", &mut report).unwrap();
+    // The main canvas's (another canvas's unreadable one isn't read).
     assert_eq!(p.rotation, 15.0);
     let marks: Vec<(&str, [f64; 4], Option<&str>, f64)> =
         p.bookmarks.iter().map(|b| (b.name.as_str(), b.extent, b.crs.as_deref(), b.rotation)).collect();
     assert_eq!(
         marks,
-        [("Zurich", [8.4, 47.3, 8.6, 47.45], Some("EPSG:4326"), 0.0), ("Web", [900000.0, 5900000.0, 1000000.0, 6000000.0], None, 30.0),]
+        [
+            ("Zurich", [8.4, 47.3, 8.6, 47.45], Some("EPSG:4326"), 0.0),
+            ("Web", [900000.0, 5900000.0, 1000000.0, 6000000.0], None, 30.0),
+            ("Askew", [1.0, 2.0, 3.0, 4.0], None, 0.0)
+        ]
     );
     let rels: Vec<(&str, &str, &str, &str, &str)> = p
         .relations
@@ -2619,7 +2631,9 @@ fn bookmarks_relations_and_time_read_as_qgis_saves_them() {
     use NoteKind::{Approximated as A, Skipped as S};
     for (layer, kind, part) in [
         ("", S, "the groups of its bookmarks (1: Swiss)"),
-        ("", S, "its bookmarks whose place doesn't read (1: Nowhere)"),
+        ("", S, "its bookmarks whose place doesn't read (2: Nowhere, Long)"),
+        ("", A, "its bookmarks whose rotation doesn't read, facing north (1: Askew)"),
+        ("lasting_events", A, "its features lasting 3 hours each: each shown at its date alone"),
         ("", S, "its relation Owners of parcel's composition"),
         ("", A, "its relation two keys on 2 pairs of fields: related by the first (pid = id) alone"),
         ("", S, "its relations that name no layers or fields (1: none)"),
@@ -2638,6 +2652,9 @@ fn bookmarks_relations_and_time_read_as_qgis_saves_them() {
     ] {
         assert!(said(layer, kind, part), "{layer}: {part}: {:#?}", report.notes);
     }
+    // Accumulating, an event has no duration of its own.
+    assert!(!said("piling", A, "lasting"), "{:#?}", report.notes);
+    assert!(!report.notes.iter().any(|n| n.text.contains("the map's rotation")), "{:#?}", report.notes);
     // Each layer's time noted once.
     assert_eq!(report.notes.iter().filter(|n| n.layer == "by_expr").count(), 1, "{:#?}", report.notes);
 }
@@ -2710,4 +2727,18 @@ fn the_corpus_bookmarks_relations_and_time_settings_read_as_qgis_wrote_them() {
     ] {
         assert!(said(layer, part), "{layer}: {part}: {:#?}", report.notes);
     }
+}
+
+/// The map's rotation that doesn't read faces north, noted.
+#[test]
+fn a_map_rotation_that_does_not_read_is_noted() {
+    let qgs = r#"<qgis version="4.2.3"><mapcanvas name="theMapCanvas"><rotation>sideways</rotation></mapcanvas></qgis>"#;
+    let mut report = Report::default();
+    let p = read_project(qgs, "/p", &mut report).unwrap();
+    assert_eq!(p.rotation, 0.0);
+    assert!(
+        report.notes.iter().any(|n| n.text == "the map's rotation `sideways`, which doesn't read: facing north"),
+        "{:#?}",
+        report.notes
+    );
 }

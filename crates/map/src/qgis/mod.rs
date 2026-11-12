@@ -493,12 +493,7 @@ pub fn read_project(text: &str, dir: &str, report: &mut Report) -> Result<Projec
         layers: Vec::new(),
         main_annotations: None,
         groups: Vec::new(),
-        rotation: canvas
-            .and_then(|c| child(c, "rotation"))
-            .and_then(|r| r.text())
-            .and_then(|r| r.trim().parse::<f64>().ok())
-            .filter(|r| r.is_finite())
-            .unwrap_or(0.0),
+        rotation: 0.0,
         bookmarks: Vec::new(),
         relations: Vec::new(),
     };
@@ -506,6 +501,16 @@ pub fn read_project(text: &str, dir: &str, report: &mut Report) -> Result<Projec
     // are checked, and their groups.
     let mut tree = Tree::read(root);
     project_notes(root, report);
+    // The map's rotation: one that doesn't read faces north, noted.
+    if let Some(r) = canvas.and_then(|c| child(c, "rotation")).and_then(|r| r.text()).map(str::trim).filter(|r| !r.is_empty()) {
+        match r.parse::<f64>().ok().filter(|r| r.is_finite()) {
+            Some(r) => project.rotation = r,
+            None => {
+                let r: String = r.chars().take(40).collect();
+                report.approximated("", format!("the map's rotation `{r}`, which doesn't read: facing north"));
+            }
+        }
+    }
     project.bookmarks = structure::bookmarks(root, report);
     project.relations = structure::relations(root, report);
     structure::project_time(root, report);

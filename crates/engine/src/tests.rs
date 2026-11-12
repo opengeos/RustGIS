@@ -1783,6 +1783,27 @@ fn qgis_bookmarks_relations_rotation_and_time_import() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
+/// A bookmark the map's projection doesn't reach isn't saved with another place's view, and a
+/// name past a bookmark's longest is cut, both noted.
+#[test]
+fn qgis_bookmarks_the_map_cannot_show_or_name_are_noted() {
+    let long = "N".repeat(130);
+    let qgs = format!(
+        r#"<qgis version="4.2.3"><projectCrs><spatialrefsys><authid>EPSG:32631</authid></spatialrefsys></projectCrs><Bookmarks>
+      <Bookmark extent="Polygon ((2.2 48.8, 2.5 48.8, 2.5 48.9, 2.2 48.9, 2.2 48.8))" name="Paris"><spatialrefsys><authid>EPSG:4326</authid></spatialrefsys></Bookmark>
+      <Bookmark extent="Polygon ((-74.1 40.6, -73.8 40.6, -73.8 40.9, -74.1 40.9, -74.1 40.6))" name="New York"><spatialrefsys><authid>EPSG:4326</authid></spatialrefsys></Bookmark>
+      <Bookmark extent="Polygon ((2.2 48.8, 2.5 48.8, 2.5 48.9, 2.2 48.9, 2.2 48.8))" name="{long}"><spatialrefsys><authid>EPSG:4326</authid></spatialrefsys></Bookmark>
+    </Bookmarks></qgis>"#
+    );
+    let mut s = world();
+    let out = s.run("project.importQgis", &json!({"text": qgs})).unwrap();
+    let notes = serde_json::to_string(&out["notes"]).unwrap();
+    let names: Vec<usize> = s.map().bookmarks.iter().map(|b| b.name.chars().count()).collect();
+    assert_eq!(names, [5, 120], "{notes}");
+    assert!(notes.contains("its bookmarks whose place the map's projection doesn't reach (1: New York)"), "{notes}");
+    assert!(notes.contains("bookmark names cut to 120 characters (1)"), "{notes}");
+}
+
 /// Many bookmarks of one name come in numbered, quickly (each name's next number remembered).
 #[test]
 fn many_qgis_bookmarks_of_one_name_come_in_numbered() {

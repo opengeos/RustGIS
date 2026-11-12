@@ -340,12 +340,12 @@ length or justified, values outside a graduated renderer's ranges in its first o
 such as `layerid` that RustGIS doesn't read, groups showing one layer at a time as ordinary groups,
 a group layer's opacity applied to each of its layers and its blending mode drawn as Normal, a
 relation on several pairs of fields related by the first, features shown over time from a start date
-alone, a layer accumulating its features over time, features at the very end of a time step) and what was skipped (arrow lines, group layers' draw effects, other data-defined
+alone, events lasting a fixed time shown at their date, a layer accumulating its features over time, features at the very end of a time step) and what was skipped (arrow lines, group layers' draw effects, other data-defined
 settings, draw effects, label callouts, contours and other raster
 renderers RustGIS has no match for, PostGIS, WFS
 and other sources RustGIS doesn't read, histogram, stacked bar and text diagrams, joins, virtual fields, a layer's other styles,
 time from an expression, a fixed range or redrawn as the time changes, a raster's or a service's time, and the project's print layouts, QGIS 3's older annotation balloons, map themes,
-bookmark groups, polymorphic relations and its time span and steps). A database
+bookmark groups and bookmarks the map's projection doesn't reach, polymorphic relations and its time span and steps). A database
 password in a project never reaches the notes.
 
 A QGIS layer style (`.qml`) styles the selected layer the same way, a feature layer or a raster:

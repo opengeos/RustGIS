@@ -1045,7 +1045,7 @@ fn add_relations(s: &mut Session, project: &qgis::Project, came_in: &[CameIn], r
         })
     };
     let mut missing = Vec::new();
-    let mut names = Names::new(s.map().editing.relationships.iter().map(|r| r.name.as_str()), 200);
+    let mut names = Names::new(s.map().editing.relationships.iter().map(|r| r.name.as_str()), MAX_RELATION_NAME);
     for r in &project.relations {
         let (Some((origin, origin_key)), Some((destination, destination_key))) =
             (find(s, &r.referenced, &r.referenced_field), find(s, &r.referencing, &r.referencing_field))
@@ -1074,7 +1074,13 @@ fn add_relations(s: &mut Session, project: &qgis::Project, came_in: &[CameIn], r
     if !missing.is_empty() {
         report.skipped("", format!("its relations between layers that didn't come in or haven't the fields ({})", listed(&missing)));
     }
+    if names.cut > 0 {
+        report.approximated("", format!("relation names cut to {MAX_RELATION_NAME} characters ({})", names.cut));
+    }
 }
+
+/// The longest relationship name an import keeps.
+const MAX_RELATION_NAME: usize = 200;
 
 /// Names made unique as they are taken, ignoring case: a taken one numbered (`Name 2`, `Name 3`,
 /// …), kept to `max` characters. Each name's next number is remembered, so many alike don't
@@ -1083,14 +1089,19 @@ struct Names {
     taken: std::collections::HashSet<String>,
     next: std::collections::HashMap<String, u64>,
     max: usize,
+    /// Names taken that were cut to `max`.
+    cut: usize,
 }
 
 impl Names {
     fn new<'a>(taken: impl Iterator<Item = &'a str>, max: usize) -> Names {
-        Names { taken: taken.map(str::to_lowercase).collect(), next: std::collections::HashMap::new(), max }
+        Names { taken: taken.map(str::to_lowercase).collect(), next: std::collections::HashMap::new(), max, cut: 0 }
     }
 
     fn take(&mut self, base: &str) -> String {
+        if base.chars().nth(self.max).is_some() {
+            self.cut += 1;
+        }
         let base: String = base.chars().take(self.max).collect();
         let key = base.to_lowercase();
         let mut k = self.next.get(&key).copied().unwrap_or(1);
@@ -1126,6 +1137,8 @@ fn add_bookmarks(s: &mut Session, project: &qgis::Project, report: &mut Report) 
     // Those with no coordinate system, in one RustGIS can't read, and those whose place
     // doesn't all lie in theirs.
     let (mut none, mut unread, mut outside) = (Vec::new(), Vec::new(), Vec::new());
+    // Those the map's projection doesn't reach.
+    let mut beyond = Vec::new();
     let mut over = 0usize;
     // One transformer per coordinate system.
     let mut transformers: std::collections::HashMap<&str, Option<rustgis_data::raster::crs::Transformer>> =
@@ -1158,7 +1171,10 @@ fn add_bookmarks(s: &mut Session, project: &qgis::Project, report: &mut Report) 
         // QGIS's extent is the view's own rectangle, turned with it (measured: turning the map
         // keeps its scale): fitted facing north, then turned.
         m.camera.set_bearing(0.0);
-        m.fit_lonlat(&e, w, h);
+        if !m.fit_lonlat(&e, w, h) {
+            beyond.push(b.name.as_str());
+            continue;
+        }
         m.camera.set_bearing(-b.rotation);
         let name = names.take(&b.name);
         m.bookmarks.push(rustgis_map::Bookmark::new(name, m.camera));
@@ -1179,6 +1195,12 @@ fn add_bookmarks(s: &mut Session, project: &qgis::Project, report: &mut Report) 
     }
     if !outside.is_empty() {
         report.skipped("", format!("its bookmarks whose place lies outside their coordinate system's area ({})", listed(&outside)));
+    }
+    if !beyond.is_empty() {
+        report.skipped("", format!("its bookmarks whose place the map's projection doesn't reach ({})", listed(&beyond)));
+    }
+    if names.cut > 0 {
+        report.approximated("", format!("bookmark names cut to {} characters ({})", super::navigate::MAX_BOOKMARK_NAME, names.cut));
     }
     if over > 0 {
         report.skipped("", format!("its bookmarks past those a map keeps ({over})"));
@@ -1263,7 +1285,7 @@ fn import_style(s: &mut Session, p: &Value) -> CmdResult {
         if style.diagram.is_some() {
             check_diagram(l, &name, &mut report);
         }
-        // Bound while the slider is on: the layer shows its window at once.
+        // Bound: the layer shows the slider's window at once (nothing changes while it is off).
         if bind_time(l, &name, style.time.as_deref(), &mut report) {
             s.map_mut().apply_time();
         }

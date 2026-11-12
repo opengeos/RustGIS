@@ -45,6 +45,8 @@ pub fn bookmarks(root: Node, report: &mut Report) -> Vec<ProjectBookmark> {
     }
     let mut out = Vec::new();
     let mut unread = Vec::new();
+    // Those whose rotation doesn't read, facing north.
+    let mut unturned = Vec::new();
     let mut groups: Vec<&str> = Vec::new();
     for b in all.into_iter().take(MAX_BOOKMARKS) {
         let name = b.attribute("name").map(str::trim).filter(|n| !n.is_empty()).unwrap_or("Bookmark");
@@ -57,11 +59,20 @@ pub fn bookmarks(root: Node, report: &mut Report) -> Vec<ProjectBookmark> {
         {
             groups.push(g);
         }
-        let rotation = b.attribute("rotation").and_then(|r| r.trim().parse::<f64>().ok()).filter(|r| r.is_finite()).unwrap_or(0.0);
+        let rotation = match b.attribute("rotation").map(str::trim).filter(|r| !r.is_empty()) {
+            None => 0.0,
+            Some(r) => r.parse::<f64>().ok().filter(|r| r.is_finite()).unwrap_or_else(|| {
+                unturned.push(name);
+                0.0
+            }),
+        };
         out.push(ProjectBookmark { name: name.to_string(), extent, crs: crs_of(b), rotation });
     }
     if !unread.is_empty() {
         report.skipped("", format!("its bookmarks whose place doesn't read ({})", listed(&unread)));
+    }
+    if !unturned.is_empty() {
+        report.approximated("", format!("its bookmarks whose rotation doesn't read, facing north ({})", listed(&unturned)));
     }
     if !groups.is_empty() {
         report.skipped("", format!("the groups of its bookmarks ({}): RustGIS lists bookmarks in one list", listed(&groups)));
@@ -198,6 +209,17 @@ pub fn layer_time(node: Node, layer: &str, report: &mut Report) -> Option<String
         report.skipped(layer, "its time settings, which name no field");
         return None;
     };
+    // An event lasting a fixed time (QGIS's single date field with a duration; accumulating, it
+    // has none).
+    let duration = t.attribute("fixedDuration").and_then(|d| d.trim().parse::<f64>().ok()).filter(|d| d.is_finite() && *d > 0.0);
+    if t.attribute("mode") == Some("1")
+        && t.attribute("accumulate") != Some("1")
+        && let Some(d) = duration
+    {
+        let unit = unit_name(t.attribute("durationUnit").unwrap_or("min"));
+        let unit = if d == 1.0 { unit.0 } else { unit.1 };
+        report.approximated(layer, format!("its features lasting {d} {unit} each: each shown at its date alone"));
+    }
     if t.attribute("accumulate") == Some("1") {
         report.approximated(
             layer,
@@ -246,6 +268,9 @@ fn day(t: &str) -> &str {
     }
 }
 
+/// The most points a bookmark's ring may have.
+const MAX_RING: usize = 10_000;
+
 /// The bounds of a polygon in WKT (`Polygon ((x y, x y, …))`, as QGIS saves a bookmark's place):
 /// [xmin, ymin, xmax, ymax], when its coordinates read and it has an area.
 fn polygon_extent(wkt: &str) -> Option<[f64; 4]> {
@@ -258,8 +283,12 @@ fn polygon_extent(wkt: &str) -> Option<[f64; 4]> {
     let inner = body.get(open..)?.trim_matches(|c: char| c == '(' || c == ')' || c.is_whitespace());
     // The outer ring alone.
     let ring = inner.split(')').next()?;
+    // QGIS writes a bookmark's rectangle (five points); a longer ring isn't read in part.
+    if ring.split(',').nth(MAX_RING).is_some() {
+        return None;
+    }
     let mut e = [f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY];
-    for pair in ring.split(',').take(10_000) {
+    for pair in ring.split(',') {
         let mut v = pair.split_whitespace().map(|n| n.parse::<f64>().ok().filter(|v| v.is_finite()));
         let (Some(Some(x)), Some(Some(y))) = (v.next(), v.next()) else { return None };
         e = [e[0].min(x), e[1].min(y), e[2].max(x), e[3].max(y)];
