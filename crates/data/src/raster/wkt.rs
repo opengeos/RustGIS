@@ -1616,7 +1616,7 @@ fn custom(p: &Node, method: &str) -> Result<Crs, String> {
         {
             return Err(format!(
                 "the {} projection with a parameter that isn't a finite number isn't supported",
-                p.child("PROJECTION").map_or("", Node::title)
+                clip(p.child("PROJECTION").map_or("", Node::title))
             ));
         }
         // None of the three has a scale factor, and PROJ ignores one. A definition with a scale
@@ -1625,7 +1625,7 @@ fn custom(p: &Node, method: &str) -> Result<Crs, String> {
         "NATURAL_EARTH" | "ECKERT_IV" | "WINKEL_TRIPEL" if k0 != 1.0 => {
             return Err(format!(
                 "the {} projection with a scale factor other than 1 isn't supported",
-                p.child("PROJECTION").map_or("", Node::title)
+                clip(p.child("PROJECTION").map_or("", Node::title))
             ));
         }
         "NATURAL_EARTH" => format!("+proj=natearth {at}"),
@@ -4482,6 +4482,16 @@ pub(crate) mod tests {
             r#"PROJCS["p",GEOGCS["g",DATUM["WGS_1984",SPHEROID["WGS 84",6378137,298.257223563]],PRIMEM["Greenwich",0],UNIT["degree",0.0174532925199433]],PROJECTION["{long}"],UNIT["metre",1]]"#
         );
         said(&read_wkt(&projection).unwrap_err(), "projection isn't supported");
+        // A world projection's name with a long run of spaces in it is still read as its method,
+        // which refuses a scale factor and a parameter that isn't a finite number.
+        let natural_earth =
+            projection.replace(&format!(r#"PROJECTION["{long}"]"#), &format!(r#"PROJECTION["Natural{}Earth"]"#, " ".repeat(20_000)));
+        assert_ne!(natural_earth, projection);
+        for parameter in [r#"PARAMETER["scale_factor",0.5]"#, r#"PARAMETER["central_meridian",1e400]"#] {
+            let refused = natural_earth.replace(r#",UNIT["metre",1]]"#, &format!(r#",{parameter},UNIT["metre",1]]"#));
+            assert_ne!(refused, natural_earth);
+            said(&read_wkt(&refused).unwrap_err(), "isn't supported");
+        }
         let unit =
             format!(r#"GEOGCS["g",DATUM["WGS_1984",SPHEROID["WGS 84",6378137,298.257223563]],PRIMEM["Greenwich",0],UNIT["{long}",0.5]]"#);
         said(&read_wkt(&unit).unwrap_err(), "aren't supported");
