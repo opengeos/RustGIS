@@ -464,8 +464,8 @@ impl Heights {
 
     /// The ground at a point of a ray, `(col, row)` in cells (whole numbers at cell centres), and
     /// whether it is the nearest cell's, read in place of cells between which a neighbour has
-    /// no data. `None` where the point's own cell has no data, and so, between cells, where a
-    /// neighbour weighed has none either.
+    /// no data. `None` where the point's own cell has no data: between cells, a neighbour weighed
+    /// with no data falls back to that cell, so `None` there too only when it has none.
     fn at(self, r: &Raster, b: usize, col: f64, row: f64) -> Option<(f64, bool)> {
         let (nc, nr) = (col.round() as i64, row.round() as i64);
         let nearest = |fell_back: bool| r.value(b, nc, nr).map(|v| (f64::from(v), fell_back));
@@ -507,8 +507,9 @@ pub struct Viewshed {
 /// each cell no farther than `radius_m` (cell centres, `cx` × `cy` metres apart, as the viewshed
 /// measures them), its ray's steps, the larger of its column and row offsets. A row's cells within
 /// the radius are a run of columns, whose sum has a closed form, so the count is one step a row.
-/// A cell with no data walks no ray but is counted (finding out which have none would read them
-/// all): the most steps the viewshed takes, and exactly them where every cell has data.
+/// It is the sum of the rays' full lengths, so the most steps the viewshed takes: a ray stops
+/// where the ground first hides its cell, and a cell with no data walks none (finding out which
+/// have none would read them all).
 fn ray_steps(observer: (i64, i64), cols: (i64, i64), rows: (i64, i64), cell: (f64, f64), radius_m: f64) -> u128 {
     let ((oc, or), (left, right), (first, last), (cx, cy)) = (observer, cols, rows, cell);
     // Σ max(x, a) for x in 0..=n.
@@ -528,28 +529,24 @@ fn ray_steps(observer: (i64, i64), cols: (i64, i64), rows: (i64, i64), cell: (f6
         if !within(0, dr) {
             continue;
         }
-        // The farthest column offset within the radius on this row, at most the window's (a
-        // squared radius past f64's range reaches all of it), put right at the edge: both
-        // corrections stay within the window's width.
+        // The farthest column offset within the radius on this row, at most the window's, worked
+        // out in cells (so a radius near f64's range doesn't overflow when squared) and put right
+        // at the edge: the corrections only undo rounding, and stay within the window's width.
         let span = (oc - left).max(right - oc);
-        let reach = ((radius_m * radius_m - (dr as f64 * cy).powi(2)).max(0.0).sqrt() / cx).floor();
-        let mut k = if reach.is_nan() { span } else { reach.clamp(0.0, span as f64) as i64 };
+        let (rc, yc) = (radius_m / cx, dr as f64 * cy / cx);
+        let reach = ((rc - yc) * (rc + yc)).max(0.0).sqrt().floor();
+        let mut k = reach.clamp(0.0, span as f64) as i64;
         while k < span && within(k + 1, dr) {
             k += 1;
         }
         while k > 0 && !within(k, dr) {
             k -= 1;
         }
-        // The run's offsets from the observer's column, within the window.
-        let (lo, hi) = (i128::from((oc - k).max(left) - oc), i128::from((oc + k).min(right) - oc));
+        // The run's offsets from the observer's column, within the window: the observer is in
+        // it, so the run takes in its column (offset 0, counted once).
+        let (west, east) = (i128::from(oc - (oc - k).max(left)), i128::from((oc + k).min(right) - oc));
         let a = i128::from(dr.abs());
-        total += if lo <= 0 && 0 <= hi {
-            up_to(hi, a) + up_to(-lo, a) - a
-        } else if lo > 0 {
-            up_to(hi, a) - up_to(lo - 1, a)
-        } else {
-            up_to(-lo, a) - up_to(-hi - 1, a)
-        };
+        total += up_to(west, a) + up_to(east, a) - a;
     }
     // (Never negative; were it, the cap refuses the run rather than letting it through.)
     u128::try_from(total).unwrap_or(u128::MAX)
@@ -1814,8 +1811,8 @@ mod tests {
     /// The ray steps counted a row at a time are each cell's, counted one by one: an observer in
     /// the middle, at a corner, on an edge and outside the window's middle row; square and
     /// oblong cells; a radius inside the window, cutting its corners, past it, and on a cell's
-    /// centre exactly. Cells and a radius so large that the squared radius is past f64's range
-    /// are counted at once, not by walking a column at a time towards the radius.
+    /// centre exactly. Cells and radii so large that the squared radius is past f64's range are
+    /// counted as the rest (they once walked a column at a time towards the radius).
     #[test]
     fn viewshed_ray_steps_are_counted_exactly() {
         let window = ((0, 39), (0, 24));
@@ -1830,7 +1827,6 @@ mod tests {
                 }
             }
         }
-        let start = std::time::Instant::now();
         assert_eq!(
             ray_steps((0, 0), (0, 49), (0, 0), (1e150, 1e150), 1e155),
             brute_ray_steps((0, 0), (0, 49), (0, 0), (1e150, 1e150), 1e155)
@@ -1839,7 +1835,14 @@ mod tests {
             ray_steps((0, 0), (0, 49), (0, 9), (1e182, 1e182), 1e200),
             brute_ray_steps((0, 0), (0, 49), (0, 9), (1e182, 1e182), 1e200)
         );
-        assert!(start.elapsed() < std::time::Duration::from_secs(1), "{:?}", start.elapsed());
+        for radius in [1.5e151, 1.5e154] {
+            let (observer, cell) = ((25, 5), (1e150, 1e150));
+            assert_eq!(
+                ray_steps(observer, (0, 49), (0, 9), cell, radius),
+                brute_ray_steps(observer, (0, 49), (0, 9), cell, radius),
+                "{radius}"
+            );
+        }
     }
 
     /// Viewshed rows made on several threads see what one thread sees (#1252), with the radius
