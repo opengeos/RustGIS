@@ -3825,6 +3825,7 @@ The web app can't link to files on this computer: add the file again with Add Da
 The whole log, as CSV or JSON Lines (.jsonl): it may name files and addresses, so look at it before sharing it	მთელი ჟურნალი, CSV ან JSON Lines (.jsonl) ფორმატში: შეიძლება შეიცავდეს ფაილებისა და მისამართების სახელებს, ამიტომ გაზიარებამდე გადახედეთ
 the window's screenshot didn't come back in time, so the map was drawn offscreen	ფანჯრის ეკრანის ანაბეჭდი დროულად არ დაბრუნდა, ამიტომ რუკა ეკრანის გარეთ დაიხატა
 the window's screenshot didn't hold the map, so it was drawn offscreen	ფანჯრის ეკრანის ანაბეჭდი რუკას არ შეიცავდა, ამიტომ ის ეკრანის გარეთ დაიხატა
+the web app	ვებაპლიკაცია
 The {n} waiting after it were left too	მის შემდეგ მომლოდინე {n} ასევე მიტოვებულია
 Theme	თემა
 Theme {name} loaded and kept at {path}	თემა {name} ჩაიტვირთა და შენახულია მისამართზე {path}

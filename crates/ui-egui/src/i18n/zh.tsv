@@ -3825,6 +3825,7 @@ The web app can't link to files on this computer: add the file again with Add Da
 The whole log, as CSV or JSON Lines (.jsonl): it may name files and addresses, so look at it before sharing it	整个日志，CSV 或 JSON Lines（.jsonl）格式：其中可能包含文件和地址，分享前请先检查
 the window's screenshot didn't come back in time, so the map was drawn offscreen	窗口截图未能及时返回，因此已在屏幕外绘制地图
 the window's screenshot didn't hold the map, so it was drawn offscreen	窗口截图中不包含地图，因此已在屏幕外绘制
+the web app	Web 应用
 The {n} waiting after it were left too	排在其后等待的 {n} 个也已放弃
 Theme	主题
 Theme {name} loaded and kept at {path}	已加载主题 {name} 并保存在 {path}

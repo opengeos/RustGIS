@@ -3825,6 +3825,7 @@ The web app can't link to files on this computer: add the file again with Add Da
 The whole log, as CSV or JSON Lines (.jsonl): it may name files and addresses, so look at it before sharing it	Het hele logboek, als CSV of JSON Lines (.jsonl): het kan bestanden en adressen noemen, dus bekijk het voordat je het deelt
 the window's screenshot didn't come back in time, so the map was drawn offscreen	de schermafbeelding van het venster kwam niet op tijd terug, dus is de kaart buiten beeld getekend
 the window's screenshot didn't hold the map, so it was drawn offscreen	de schermafbeelding van het venster bevatte de kaart niet, dus is ze buiten beeld getekend
+the web app	de webapp
 The {n} waiting after it were left too	Ook de {n} die erna wachtten, zijn overgeslagen
 Theme	Thema
 Theme {name} loaded and kept at {path}	Thema {name} geladen en bewaard in {path}

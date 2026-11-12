@@ -3825,6 +3825,7 @@ The web app can't link to files on this computer: add the file again with Add Da
 The whole log, as CSV or JSON Lines (.jsonl): it may name files and addresses, so look at it before sharing it	Весь журнал в формате CSV или JSON Lines (.jsonl): в нём могут упоминаться файлы и адреса, поэтому просмотрите его перед отправкой
 the window's screenshot didn't come back in time, so the map was drawn offscreen	снимок окна не вернулся вовремя, поэтому карта отрисована вне экрана
 the window's screenshot didn't hold the map, so it was drawn offscreen	снимок окна не содержал карту, поэтому она отрисована вне экрана
+the web app	веб-приложения
 The {n} waiting after it were left too	Ожидавшие после него задачи ({n}) тоже отменены
 Theme	Тема
 Theme {name} loaded and kept at {path}	Тема {name} загружена и сохранена в {path}

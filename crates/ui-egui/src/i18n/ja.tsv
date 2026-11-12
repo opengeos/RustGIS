@@ -3825,6 +3825,7 @@ The web app can't link to files on this computer: add the file again with Add Da
 The whole log, as CSV or JSON Lines (.jsonl): it may name files and addresses, so look at it before sharing it	ログ全体 (CSV または JSON Lines (.jsonl)): ファイルやアドレスが含まれる場合があるため、共有する前に確認してください
 the window's screenshot didn't come back in time, so the map was drawn offscreen	ウィンドウのスクリーンショットが時間内に返されなかったため、オフスクリーンでマップを描画しました
 the window's screenshot didn't hold the map, so it was drawn offscreen	ウィンドウのスクリーンショットにマップが含まれていなかったため、オフスクリーンで描画しました
+the web app	Web アプリ
 The {n} waiting after it were left too	その後に待機していた {n} 件も中止されました
 Theme	テーマ
 Theme {name} loaded and kept at {path}	テーマ {name} を読み込み、{path} に保存しました

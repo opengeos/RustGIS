@@ -3825,6 +3825,7 @@ The web app can't link to files on this computer: add the file again with Add Da
 The whole log, as CSV or JSON Lines (.jsonl): it may name files and addresses, so look at it before sharing it	کل گزارش، به‌صورت CSV یا JSON Lines (.jsonl): ممکن است نام فایل‌ها و نشانی‌ها را داشته باشد، پس پیش از هم‌رسانی آن را بررسی کنید
 the window's screenshot didn't come back in time, so the map was drawn offscreen	عکس فوری پنجره به‌موقع برنگشت، پس نقشه بیرون از دید ترسیم شد
 the window's screenshot didn't hold the map, so it was drawn offscreen	عکس فوری پنجره نقشه را در بر نگرفت، پس نقشه بیرون از دید ترسیم شد
+the web app	برنامهٔ وب
 The {n} waiting after it were left too	{n} موردی که پس از آن در انتظار بودند هم رها شدند
 Theme	پوسته
 Theme {name} loaded and kept at {path}	پوسته {name} بارگذاری و در {path} نگه داشته شد

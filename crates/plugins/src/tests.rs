@@ -2448,7 +2448,7 @@ fn registry_entries_name_a_package_per_platform() {
     assert_eq!(globe.platforms(), ["Windows", "macOS", "Linux"]);
     assert_eq!(win_only.platforms(), ["Windows"]);
     assert!(win_only.unavailable().starts_with("Win has no package for "), "{}", win_only.unavailable());
-    assert!(win_only.unavailable().ends_with(": it is for Windows"), "{}", win_only.unavailable());
+    assert!(win_only.unavailable().ends_with(" (it is available for Windows)"), "{}", win_only.unavailable());
     // What `parse` reads is this platform's.
     let own = registry::parse(&text, url).unwrap();
     assert_eq!(own, registry::parse_for(&text, url, registry::this_platform()).unwrap());
@@ -2458,4 +2458,85 @@ fn registry_entries_name_a_package_per_platform() {
         assert_eq!(&back, e);
     }
     assert!(serde_json::to_value(&v[2]).unwrap().get("packages").is_none());
+}
+
+/// A platform's package that doesn't check out costs that platform its package, not the plugin
+/// its place in the list, and is never replaced by the package for the platforms not named.
+#[test]
+fn a_bad_platform_package_is_dropped_alone() {
+    let (win, lin, any) = ("1".repeat(64), "3".repeat(64), "4".repeat(64));
+    let url = "https://plugins.rustgis.app/registry.json";
+    let good = json!({"package": "w.rgplugin", "sha256": win, "size": 5});
+    let entry = |id: &str, linux: Value, own: bool| {
+        let mut e = json!({"id": id, "name": id, "version": "1.0.0", "packages": {"windows": good, "linux": linux}});
+        if own {
+            e["package"] = json!("any.rgplugin");
+            e["sha256"] = json!(any);
+        }
+        e
+    };
+    let text = json!([
+        // No address, no hash, not an object, a size that isn't a number, a bad hash.
+        entry("a-no-address", json!({"sha256": lin}), false),
+        entry("b-no-hash", json!({"package": "l.rgplugin"}), false),
+        entry("c-not-an-object", json!(7), false),
+        entry("d-bad-size", json!({"package": "l.rgplugin", "sha256": lin, "size": "big"}), false),
+        // Linux was given its own package: the entry's isn't Linux's, though Linux's is bad.
+        entry("e-own-too", json!({"package": "l.rgplugin", "sha256": "abc"}), true),
+        // The same with nothing else left for other platforms: on Linux there is nothing to list.
+        {"id": "f-only-bad", "name": "f", "version": "1.0.0", "package": "any.rgplugin", "sha256": any,
+         "packages": {"linux": {"package": "l.rgplugin", "sha256": "abc"}}},
+        // An entry of its own with no address isn't the registry's folder.
+        {"id": "g-no-address", "name": "g", "version": "1.0.0", "sha256": any},
+        {"id": "h-no-address", "name": "h", "version": "1.0.0", "sha256": any, "packages": {"windows": good}},
+    ])
+    .to_string();
+    let got = |platform: &str| -> Vec<(String, String)> {
+        registry::parse_for(&text, url, Some(platform)).unwrap().into_iter().map(|e| (e.id, e.package)).collect()
+    };
+    let row = |id: &str, package: &str| {
+        (id.to_string(), if package.is_empty() { String::new() } else { format!("https://plugins.rustgis.app/{package}") })
+    };
+    assert_eq!(
+        got("linux"),
+        [
+            row("a-no-address", ""),
+            row("b-no-hash", ""),
+            row("c-not-an-object", ""),
+            row("d-bad-size", ""),
+            row("e-own-too", ""),
+            row("h-no-address", ""),
+        ]
+    );
+    assert_eq!(
+        got("windows"),
+        [
+            row("a-no-address", "w.rgplugin"),
+            row("b-no-hash", "w.rgplugin"),
+            row("c-not-an-object", "w.rgplugin"),
+            row("d-bad-size", "w.rgplugin"),
+            row("e-own-too", "w.rgplugin"),
+            row("f-only-bad", "any.rgplugin"),
+            row("h-no-address", "w.rgplugin"),
+        ]
+    );
+    // macOS isn't named anywhere: the entry's own package, where it has one.
+    assert_eq!(
+        got("macos"),
+        [
+            row("a-no-address", ""),
+            row("b-no-hash", ""),
+            row("c-not-an-object", ""),
+            row("d-bad-size", ""),
+            row("e-own-too", "any.rgplugin"),
+            row("f-only-bad", "any.rgplugin"),
+            row("h-no-address", "")
+        ]
+    );
+    // What is listed without a package always names a platform that has one.
+    for platform in ["linux", "macos", "windows"] {
+        for e in registry::parse_for(&text, url, Some(platform)).unwrap() {
+            assert!(e.available() || !e.platforms().is_empty(), "{platform}: {}", e.id);
+        }
+    }
 }

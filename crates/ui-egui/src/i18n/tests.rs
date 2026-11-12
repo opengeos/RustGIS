@@ -266,6 +266,7 @@ fn registry_process_plugin_notes_are_in_every_catalog() {
             "Not sandboxed",
             "Desktop and command line only",
             "Not available for {platform}",
+            "the web app",
             "{name} has no package for {platform}. It is available for: {platforms}.",
             "{name} runs as a program on your computer: it needs the desktop app or rustgis-cli.",
             "Installing it downloads Python {version} and the packages it needs from the internet.",

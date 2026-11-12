@@ -3,7 +3,7 @@
 
 use std::collections::BTreeMap;
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 
 use crate::manifest::{Permission, Runtime, valid_id, version_parts};
@@ -48,7 +48,7 @@ pub struct Entry {
     /// A package per platform (`windows`, `macos`, `linux`), for a plugin that ships a program
     /// for each: this platform's is downloaded in place of `package`, which is then the package
     /// for the platforms not named, if the entry has one.
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    #[serde(default, deserialize_with = "platform_packages", skip_serializing_if = "BTreeMap::is_empty")]
     pub packages: BTreeMap<String, PlatformPackage>,
     #[serde(default)]
     pub min_rustgis_version: String,
@@ -69,12 +69,22 @@ pub struct Entry {
 
 /// One platform's package of a plugin: what an [`Entry`]'s `package`, `sha256` and `size` say of
 /// its only one.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct PlatformPackage {
+    #[serde(default)]
     pub package: String,
+    #[serde(default)]
     pub sha256: String,
     #[serde(default)]
     pub size: u64,
+}
+
+/// Reads an entry's `packages` one platform at a time: a platform whose package can't be read
+/// comes back empty, for [`parse_for`] to drop as it drops any package that doesn't check out,
+/// in place of failing the whole entry and hiding the plugin from every platform.
+fn platform_packages<'de, D: Deserializer<'de>>(d: D) -> Result<BTreeMap<String, PlatformPackage>, D::Error> {
+    let raw = BTreeMap::<String, Value>::deserialize(d)?;
+    Ok(raw.into_iter().map(|(key, v)| (key, serde_json::from_value(v).unwrap_or_default())).collect())
 }
 
 /// The platforms a registry entry can name a package for, with the names shown for them. The
@@ -98,6 +108,11 @@ pub fn this_platform() -> Option<&'static str> {
 /// The name shown for the platform `key` (`macOS` for `macos`), or the key.
 pub fn platform_name(key: &str) -> &str {
     PLATFORMS.iter().find(|(k, _)| *k == key).map_or(key, |(_, name)| name)
+}
+
+/// The name shown for this platform; `the web app` in the browser.
+pub fn this_platform_name() -> &'static str {
+    this_platform().map_or("the web app", platform_name)
 }
 
 fn is_wasm(r: &Runtime) -> bool {
@@ -131,8 +146,11 @@ impl Entry {
 
     /// Why the plugin can't be installed here, for one with packages for other platforms only.
     pub fn unavailable(&self) -> String {
-        let here = this_platform().map_or("the browser", platform_name);
-        format!("{} has no package for {here}: it is for {}", self.name, self.platforms().join(", "))
+        let (here, has) = (this_platform_name(), self.platforms());
+        if has.is_empty() {
+            return format!("{} has no package for {here}", self.name);
+        }
+        format!("{} has no package for {here} (it is available for {})", self.name, has.join(", "))
     }
 }
 
@@ -223,17 +241,24 @@ pub fn parse_for(text: &str, url: &str, platform: Option<&str>) -> Result<Vec<En
         if !valid_id(&e.id, false) || version_parts(&e.version).is_none() || e.name.trim().is_empty() {
             continue;
         }
+        // The entry named a package for this platform: its own package then isn't this
+        // platform's, even when the named one doesn't check out.
+        let named = platform.is_some_and(|key| e.packages.contains_key(key));
         // A platform's package that doesn't check out is dropped as an entry's only one is, and
-        // so is a platform this version doesn't know: nothing here would download it.
+        // so is a platform this version doesn't know: nothing here would download it. (No
+        // address is not the registry's folder, which an empty path would resolve to.)
         e.packages.retain(|key, p| {
+            let known = PLATFORMS.iter().any(|(k, _)| k == key);
+            let named = !p.package.trim().is_empty();
             p.package = resolve(url, &p.package);
-            PLATFORMS.iter().any(|(k, _)| k == key) && is_sha256(&p.sha256) && allowed_url(&p.package)
+            known && named && is_sha256(&p.sha256) && allowed_url(&p.package)
         });
+        let whole = !e.package.trim().is_empty() && is_sha256(&e.sha256);
         e.package = resolve(url, &e.package);
-        let whole = is_sha256(&e.sha256) && allowed_url(&e.package);
+        let whole = whole && allowed_url(&e.package);
         match platform.and_then(|key| e.packages.get(key)) {
             Some(own) => (e.package, e.sha256, e.size) = (own.package.clone(), own.sha256.clone(), own.size),
-            None if whole => {}
+            None if whole && !named => {}
             // Packages for other platforms only: listed, with nothing to download here.
             None if !e.packages.is_empty() => (e.package, e.sha256, e.size) = (String::new(), String::new(), 0),
             None => continue,

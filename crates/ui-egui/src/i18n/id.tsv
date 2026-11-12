@@ -3825,6 +3825,7 @@ The web app can't link to files on this computer: add the file again with Add Da
 The whole log, as CSV or JSON Lines (.jsonl): it may name files and addresses, so look at it before sharing it	Seluruh log, sebagai CSV atau JSON Lines (.jsonl): log mungkin menyebut file dan alamat, jadi periksa sebelum membagikannya
 the window's screenshot didn't come back in time, so the map was drawn offscreen	tangkapan layar jendela tidak kembali tepat waktu, sehingga peta digambar di luar layar
 the window's screenshot didn't hold the map, so it was drawn offscreen	tangkapan layar jendela tidak memuat peta, sehingga peta digambar di luar layar
+the web app	aplikasi web
 The {n} waiting after it were left too	{n} yang menunggu setelahnya juga ditinggalkan
 Theme	Tema
 Theme {name} loaded and kept at {path}	Tema {name} dimuat dan disimpan di {path}

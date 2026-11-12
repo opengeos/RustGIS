@@ -3824,6 +3824,7 @@ The web app can't link to files on this computer: add the file again with Add Da
 The whole log, as CSV or JSON Lines (.jsonl): it may name files and addresses, so look at it before sharing it	Ολόκληρο το αρχείο καταγραφής, ως CSV ή JSON Lines (.jsonl): μπορεί να αναφέρει αρχεία και διευθύνσεις, οπότε ελέγξτε το πριν το μοιραστείτε
 the window's screenshot didn't come back in time, so the map was drawn offscreen	το στιγμιότυπο του παραθύρου δεν επέστρεψε εγκαίρως, οπότε ο χάρτης σχεδιάστηκε εκτός οθόνης
 the window's screenshot didn't hold the map, so it was drawn offscreen	το στιγμιότυπο του παραθύρου δεν περιείχε τον χάρτη, οπότε σχεδιάστηκε εκτός οθόνης
+the web app	την εφαρμογή web
 The {n} waiting after it were left too	Εγκαταλείφθηκαν και τα {n} που περίμεναν μετά από αυτό
 Theme	Θέμα
 Theme {name} loaded and kept at {path}	Το θέμα {name} φορτώθηκε και διατηρήθηκε στο {path}

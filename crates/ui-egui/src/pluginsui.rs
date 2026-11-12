@@ -568,7 +568,8 @@ fn download(app: &mut RustGisApp, e: &Entry, ctx: &egui::Context) {
         return;
     }
     if !e.available() {
-        app.plugins.message = Some((false, elsewhere(e, &e.name)));
+        let lang = crate::i18n::current().code();
+        app.plugins.message = Some((false, elsewhere(e, e.translate(lang, &e.name))));
         return;
     }
     let slot = fetch(app, &e.package, rp::package::MAX_PACKAGE, Some(ctx.clone()));
@@ -688,15 +689,18 @@ fn chip(ui: &mut egui::Ui, t: &Tokens, text: &str, color: egui::Color32) -> egui
 }
 
 /// This platform's name, as the Browse list shows it.
-fn here() -> &'static str {
-    rp::registry::this_platform().map_or("WebAssembly", rp::registry::platform_name)
+fn here() -> String {
+    match rp::registry::this_platform() {
+        Some(key) => rp::registry::platform_name(key).to_string(),
+        None => tl!("the web app").to_string(),
+    }
 }
 
 /// Why `e` (shown as `name`) can't be installed here: its packages are for other platforms.
 fn elsewhere(e: &Entry, name: &str) -> String {
     crate::i18n::fmt(
         "{name} has no package for {platform}. It is available for: {platforms}.",
-        &[("name", name), ("platform", here()), ("platforms", &e.platforms().join(", "))],
+        &[("name", name), ("platform", &here()), ("platforms", &e.platforms().join(", "))],
     )
 }
 
@@ -959,7 +963,7 @@ fn browse_row(ui: &mut egui::Ui, t: &Tokens, e: &Entry, web: bool) -> bool {
                 ));
             } else if !e.available() {
                 // Listed for the same reason: its packages are for other platforms.
-                ui.label(egui::RichText::new(crate::i18n::fmt("Not available for {platform}", &[("platform", here())])).color(t.text_dim))
+                ui.label(egui::RichText::new(crate::i18n::fmt("Not available for {platform}", &[("platform", &here())])).color(t.text_dim))
                     .on_hover_text(elsewhere(e, e.translate(lang, &e.name)));
             } else {
                 let label = if newer { tl!("Update") } else { tl!("Install") };

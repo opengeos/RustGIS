@@ -12444,7 +12444,7 @@ fn registry_downloads_are_checked() {
         package: String::new(),
         sha256: String::new(),
         packages: [(
-            "plan9".to_string(),
+            if cfg!(windows) { "linux" } else { "windows" }.to_string(),
             rustgis_plugins::registry::PlatformPackage {
                 package: "https://example.com/x.rgplugin".into(),
                 sha256: e.sha256.clone(),
@@ -12455,7 +12455,11 @@ fn registry_downloads_are_checked() {
         ..e.clone()
     };
     let err = crate::cmd::plugins::install_checked(&elsewhere, &bytes).unwrap_err();
-    assert!(err.contains("Reg has no package for") && err.ends_with("it wasn't installed"), "{err}");
+    let other = if cfg!(windows) { "Linux" } else { "Windows" };
+    assert!(
+        err.starts_with("Reg has no package for ") && err.ends_with(&format!("(it is available for {other}); it wasn't installed")),
+        "{err}"
+    );
     assert_eq!(crate::cmd::plugins::entry_status(&elsewhere)["available"], json!(false));
     assert_eq!(crate::cmd::plugins::entry_status(&e)["available"], json!(true));
     // What the registry said about how it runs (shown before installing) must be so.

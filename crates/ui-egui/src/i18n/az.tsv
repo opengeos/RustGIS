@@ -3825,6 +3825,7 @@ The web app can't link to files on this computer: add the file again with Add Da
 The whole log, as CSV or JSON Lines (.jsonl): it may name files and addresses, so look at it before sharing it	Bütün jurnal, CSV və ya JSON Lines (.jsonl) kimi: fayl və ünvan adları ola bilər, ona görə paylaşmazdan əvvəl ona baxın
 the window's screenshot didn't come back in time, so the map was drawn offscreen	pəncərənin ekran görüntüsü vaxtında gəlmədi, ona görə xəritə ekrandan kənarda çəkildi
 the window's screenshot didn't hold the map, so it was drawn offscreen	pəncərənin ekran görüntüsündə xəritə yox idi, ona görə ekrandan kənarda çəkildi
+the web app	veb tətbiq
 The {n} waiting after it were left too	Ondan sonra gözləyən {n} qeyd də buraxıldı
 Theme	Mövzu
 Theme {name} loaded and kept at {path}	{name} mövzusu yükləndi və {path} ünvanında saxlanıldı
