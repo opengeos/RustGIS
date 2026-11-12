@@ -587,6 +587,8 @@ fn where_clauses_compare_dates() {
         "issued BETWEEN 20260101 AND 20261231",
         "issued >= 2026 * 10000 + 101",
         "issued > @row_number",
+        "nullif(issued, 20260101) IS NULL",
+        "CASE issued WHEN 20260101 THEN 1 ELSE 0 END = 1",
         "issued < pi()",
         "issued >= if(true, 20260101, 20250101)",
         "issued = CASE WHEN true THEN 20260305 END",

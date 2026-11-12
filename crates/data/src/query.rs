@@ -810,6 +810,12 @@ impl Parser<'_> {
         {
             return Err(format!("'{}' holds dates, and {fname} on dates isn't supported yet", d.name));
         }
+        // `nullif(a, b)` compares its two arguments, as `a = b` would.
+        if f == Func::NullIf
+            && let [a, b] = args.as_slice()
+        {
+            self.date_against_number(a, b)?;
+        }
         let m = match f {
             Func::Area => Measure::Area,
             Func::Perimeter => Measure::Perimeter,
@@ -840,6 +846,10 @@ impl Parser<'_> {
                 return Err("the expression has too many terms".into());
             }
             let when = self.or()?;
+            // `CASE subject WHEN value` compares the two, as `subject = value` would.
+            if let Some(s) = &subject {
+                self.date_against_number(s, &when)?;
+            }
             if !self.eat_kw("THEN") {
                 return Err(format!("expected THEN, found {}", show(self.toks.get(self.pos))));
             }
