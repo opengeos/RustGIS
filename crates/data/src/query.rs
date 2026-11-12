@@ -609,13 +609,9 @@ impl Parser<'_> {
     /// `issued > year`), which would compare the date's text with the number's digits and match
     /// the wrong rows.
     fn date_against_number(&self, a: &Expr, b: &Expr) -> Result<(), String> {
-        let date = if !self.text_or_date(b) {
-            self.date_field(a)
-        } else if !self.text_or_date(a) {
-            self.date_field(b)
-        } else {
-            None
-        };
+        // Each way round: either side can be the date, whatever the other is.
+        let date_against = |d: &Expr, other: &Expr| if self.text_or_date(other) { None } else { self.date_field(d) };
+        let date = date_against(a, b).or_else(|| date_against(b, a));
         if let Some(f) = date {
             return Err(format!("'{}' holds dates, so it compares with a date in quotes ('2026-01-01') or text, not a number", f.name));
         }
