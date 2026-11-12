@@ -1818,9 +1818,9 @@ impl Reading {
                 // The exterior has something read (or read already): its solid's cavities are read
                 // with it, written where the solid is, in its dimension. One that holds only links
                 // leaves them to those links. Read already means marked at this level, not that it
-                // drew: a composite of links to nothing that links back to itself, or that another
-                // exterior of the object read first, takes them too. Only links that lead nowhere
-                // make that so, and they are said.
+                // drew: a composite of links to nothing that another exterior of the object read
+                // first takes them too (those links are said), as does one whose links come back to
+                // it in a cycle with nothing drawn (not said). Only broken files make that so.
                 if (read || w.drawn > 0)
                     && let Some((cavities, dim)) = w.links.take(wait)
                 {
