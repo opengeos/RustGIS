@@ -2409,6 +2409,25 @@ fn groups_past_the_limits_put_their_layers_in_the_group_holding_them() {
     assert_eq!((p.layers[0].group, p.layers[0].checked, p.layers[0].visible), (Some(crate::MAX_GROUP_DEPTH - 1), false, false));
     assert!(report.notes.iter().any(|n| n.text.contains("groups past RustGIS's 8 levels") && n.text.contains("(2)")), "{:?}", report.notes);
 
+    // The ninth group drawn as one: its group layer isn't a layer, and its opacity is noted as
+    // left out (its layer went in the eighth group).
+    let drawn = qgs.replace(r#"name="L9">"#, r#"name="L9" groupLayer="gl9">"#).replace(
+        "</projectlayers>",
+        r#"<maplayer type="group"><id>gl9</id><layername>L9</layername><layerOpacity>0.5</layerOpacity></maplayer></projectlayers>"#,
+    );
+    let mut report = Report::default();
+    let p = read_project(&drawn, "", &mut report).unwrap();
+    assert_eq!(p.layers.iter().map(|l| l.name.as_str()).collect::<Vec<_>>(), ["a"]);
+    assert!(
+        report.notes.iter().any(|n| n.text.contains("draw effects of groups drawn as one past RustGIS's group limits (1: L9)")),
+        "{:?}",
+        report.notes
+    );
+    // One that gives its layers nothing: no note.
+    let mut report = Report::default();
+    read_project(&drawn.replace("<layerOpacity>0.5</layerOpacity>", "<layerOpacity>1</layerOpacity>"), "", &mut report).unwrap();
+    assert!(!report.notes.iter().any(|n| n.text.contains("drawn as one")), "{:?}", report.notes);
+
     // A tree deeper than it is walked (64 levels): the layers further in are still read, in the
     // eighth group, with the boxes of the groups between; noted. The 70th group is unchecked.
     let mut tree = String::new();

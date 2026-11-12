@@ -214,7 +214,11 @@ fn add_groups(s: &mut Session, project: &qgis::Project, came_in: &[CameIn], repo
             }
         }
     }
-    m.tidy_groups();
+    // Parents come before the groups in them, so no link should be dropped; said if one is.
+    let dropped = m.tidy_groups();
+    if dropped > 0 {
+        report.approximated("", format!("groups whose place in another couldn't be kept ({dropped}), put at the top level"));
+    }
     for (name, group, faded) in outside {
         let opacity = if faded { " and the opacity of a group drawn as one holding it" } else { "" };
         report.approximated(name, format!("its place in the group {group}{opacity}: a web tile layer, added outside the group"));

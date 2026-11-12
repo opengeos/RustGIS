@@ -491,6 +491,8 @@ pub fn read_project(text: &str, dir: &str, report: &mut Report) -> Result<Projec
     // QGIS group layers (a group drawn as one) whose blending mode RustGIS's groups don't have,
     // and those with a draw effect.
     let (mut blended, mut effects) = (Vec::new(), Vec::new());
+    // Groups drawn as one past RustGIS's limits whose opacity, blending or effect is left out.
+    let mut unkept = Vec::new();
     for ml in maplayers.into_iter().take(MAX_LAYERS) {
         let id = child(ml, "id").and_then(|n| n.text()).unwrap_or_default().trim().to_string();
         let name = child(ml, "layername").and_then(|n| n.text()).unwrap_or_default().trim().to_string();
@@ -507,6 +509,19 @@ pub fn read_project(text: &str, dir: &str, report: &mut Report) -> Result<Projec
             }
             if child(ml, "paintEffect").is_some_and(has_effect) {
                 effects.push(g.group.name.clone());
+            }
+            continue;
+        }
+        // A group layer of a group not kept: its layers went in the group holding it, so what it
+        // gives them is left out, when it gives them anything.
+        // Each id once (removed as it's taken), so a repeated one isn't counted twice; its own
+        // notes aren't given, as it draws nothing of its own.
+        if ml.attribute("type") == Some("group") && tree.folded_layers.remove(&id) {
+            let style = read_style_node(ml, &name, &mut Report::default());
+            let blended = child(ml, "blendMode").and_then(|n| n.text()).and_then(|t| t.trim().parse::<i32>().ok()).is_some_and(|m| m != 0);
+            let effect = child(ml, "paintEffect").is_some_and(has_effect);
+            if style.transparency.is_some_and(|t| t > 0.0) || blended || effect {
+                unkept.push(name);
             }
             continue;
         }
@@ -560,6 +575,17 @@ pub fn read_project(text: &str, dir: &str, report: &mut Report) -> Result<Projec
     layers.sort_by_key(|(at, _)| at.unwrap_or(usize::MAX));
     project.layers = layers.into_iter().map(|(_, l)| l).collect();
     group_notes(&tree, &blended, &effects, report);
+    if !unkept.is_empty() {
+        let names = unkept.iter().take(8).map(String::as_str).collect::<Vec<_>>().join(", ");
+        let more = if unkept.len() > 8 { ", …" } else { "" };
+        report.skipped(
+            "",
+            format!(
+                "the opacity, blending and draw effects of groups drawn as one past RustGIS's group limits ({}: {names}{more})",
+                unkept.len()
+            ),
+        );
+    }
     project.groups = tree.groups.into_iter().map(|g| g.group).collect();
     Ok(project)
 }
@@ -850,6 +876,8 @@ struct Tree {
     folded: usize,
     /// Layers below [`TREE_DEPTH`] levels of groups, read without walking further in.
     deep: usize,
+    /// The group layers (by id) of groups drawn as one that weren't kept.
+    folded_layers: std::collections::HashSet<String>,
     /// Layer entries past [`TREE_LAYERS`], not read.
     cut: usize,
     /// A drawing order of its own is on (QGIS's Layer Order panel) and differs from the tree's.
@@ -901,6 +929,13 @@ impl Tree {
         tree
     }
 
+    /// Keeps the id of the group layer of a group not kept (`groupLayer`), if it is one.
+    fn fold_group_layer(&mut self, group: Node) {
+        if let Some(id) = group.attribute("groupLayer").map(str::trim).filter(|l| !l.is_empty()) {
+            self.folded_layers.insert(id.to_string());
+        }
+    }
+
     /// The tags of a layer and of a group (`legend`: QGIS 2's `<legend>`).
     fn tags(legend: bool) -> (&'static str, &'static str) {
         if legend { ("legendlayer", "legendgroup") } else { ("layer-tree-layer", "layer-tree-group") }
@@ -948,6 +983,7 @@ impl Tree {
                     Place { visible, checked: true, kept: Some(self.groups.len() - 1), level: at.level + 1 }
                 } else {
                     self.folded += 1;
+                    self.fold_group_layer(c);
                     Place { visible, checked: at.checked && on(c), kept: at.kept, level: at.level + 1 }
                 };
                 self.walk(c, legend, inside, depth + 1);
@@ -970,6 +1006,7 @@ impl Tree {
                 self.add(c, legend, at.visible && on, at.checked && on, at.kept);
                 self.deep += self.layers.len() - before;
             } else if c.has_tag_name(group_tag) {
+                self.fold_group_layer(c);
                 let inside = boxes && checked_box(c);
                 stack.extend(c.children().filter(Node::is_element).rev().map(|n| (n, inside)));
             }
@@ -978,7 +1015,10 @@ impl Tree {
 }
 
 /// QGIS's blending modes RustGIS has, by the number QGIS saves a layer's (`<blendMode>`): its
-/// own numbering, not Qt's composition modes (measured: QGIS 4.2 saves Multiply as 6).
+/// own numbering, not Qt's composition modes (measured: QGIS 4.2 saves Multiply as 6). Older
+/// QGIS does too: a QGIS 3.10 project saves 6 and a QGIS 2.2 style 10, which in Qt's numbers
+/// are modes QGIS doesn't offer (DestinationIn, DestinationAtop), in QGIS's Multiply and Hard
+/// Light.
 fn blend_of(mode: i32) -> Option<Blend> {
     Some(match mode {
         0 => Blend::Normal,
