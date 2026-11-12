@@ -1099,9 +1099,7 @@ impl Names {
     }
 
     fn take(&mut self, base: &str) -> String {
-        if base.chars().nth(self.max).is_some() {
-            self.cut += 1;
-        }
+        let mut cut = base.chars().nth(self.max).is_some();
         let base: String = base.chars().take(self.max).collect();
         let key = base.to_lowercase();
         let mut k = self.next.get(&key).copied().unwrap_or(1);
@@ -1110,9 +1108,15 @@ impl Names {
                 base.clone()
             } else {
                 let suffix = format!(" {k}");
-                base.chars().take(self.max.saturating_sub(suffix.len())).chain(suffix.chars()).collect()
+                let room = self.max.saturating_sub(suffix.len());
+                // (A name shortened to make room for its number is cut too.)
+                cut |= base.chars().nth(room).is_some();
+                base.chars().take(room).chain(suffix.chars()).collect()
             };
             if self.taken.insert(name.to_lowercase()) {
+                if cut {
+                    self.cut += 1;
+                }
                 break name;
             }
             k = k.saturating_add(1);
@@ -1122,9 +1126,17 @@ impl Names {
     }
 }
 
+/// The most coordinate systems an import's bookmarks are read in: each is parsed, and a PROJ
+/// string stays in the run's table of systems.
+const MAX_BOOKMARK_CRS: usize = 100;
+
 /// Adds the project's bookmarks, each the place its extent shows (in its own coordinate system,
 /// else the project's), turned as QGIS turns it. One whose coordinate system doesn't read, or
 /// past the bookmarks a map keeps, is noted.
+///
+/// On the UI thread, with the rest of `project.importQgis`, which replaces the session's map: the
+/// work is bounded (at most 10,000 bookmarks, in at most [`MAX_BOOKMARK_CRS`] coordinate systems,
+/// each parsed once), well under a second.
 fn add_bookmarks(s: &mut Session, project: &qgis::Project, report: &mut Report) {
     if project.bookmarks.is_empty() {
         return;
@@ -1139,6 +1151,8 @@ fn add_bookmarks(s: &mut Session, project: &qgis::Project, report: &mut Report) 
     let (mut none, mut unread, mut outside) = (Vec::new(), Vec::new(), Vec::new());
     // Those the map's projection doesn't reach.
     let mut beyond = Vec::new();
+    // Those in coordinate systems past the first `MAX_BOOKMARK_CRS`.
+    let mut many = Vec::new();
     let mut over = 0usize;
     // One transformer per coordinate system.
     let mut transformers: std::collections::HashMap<&str, Option<rustgis_data::raster::crs::Transformer>> =
@@ -1148,6 +1162,10 @@ fn add_bookmarks(s: &mut Session, project: &qgis::Project, report: &mut Report) 
             none.push(b.name.as_str());
             continue;
         };
+        if !transformers.contains_key(crs) && transformers.len() >= MAX_BOOKMARK_CRS {
+            many.push(b.name.as_str());
+            continue;
+        }
         let t = transformers.entry(crs).or_insert_with(|| rustgis_data::raster::crs::Crs::parse(crs).and_then(|c| c.transformer()).ok());
         let Some(t) = t.as_ref() else {
             unread.push(b.name.as_str());
@@ -1192,6 +1210,9 @@ fn add_bookmarks(s: &mut Session, project: &qgis::Project, report: &mut Report) 
     }
     if !unread.is_empty() {
         report.skipped("", format!("its bookmarks in a coordinate system RustGIS can't read ({})", listed(&unread)));
+    }
+    if !many.is_empty() {
+        report.skipped("", format!("its bookmarks in coordinate systems past the first {MAX_BOOKMARK_CRS} ({})", listed(&many)));
     }
     if !outside.is_empty() {
         report.skipped("", format!("its bookmarks whose place lies outside their coordinate system's area ({})", listed(&outside)));

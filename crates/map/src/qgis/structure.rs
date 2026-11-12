@@ -100,11 +100,13 @@ pub fn relations(root: Node, report: &mut Report) -> Vec<ProjectRelation> {
         let name = r.attribute("name").map(str::trim).filter(|n| !n.is_empty()).unwrap_or(id);
         let name = if name.is_empty() { "Relation" } else { name };
         let attr = |n: Node, k: &str| n.attribute(k).map(str::trim).filter(|v| !v.is_empty()).map(str::to_string);
-        let pairs: Vec<(String, String)> = r
-            .children()
-            .filter(|c| c.has_tag_name("fieldRef"))
-            .filter_map(|c| Some((attr(c, "referencingField")?, attr(c, "referencedField")?)))
-            .collect();
+        let refs: Vec<Node> = r.children().filter(|c| c.has_tag_name("fieldRef")).collect();
+        let pairs: Vec<(String, String)> =
+            refs.iter().filter_map(|c| Some((attr(*c, "referencingField")?, attr(*c, "referencedField")?))).collect();
+        // (QGIS writes both fields of each pair: a pair missing one is a hand-edited project's.)
+        if !pairs.is_empty() && pairs.len() < refs.len() {
+            report.skipped("", format!("its relation {name}'s pairs of fields that don't name both ({})", refs.len() - pairs.len()));
+        }
         let (Some(referenced), Some(referencing), Some((referencing_field, referenced_field))) =
             (attr(r, "referencedLayer"), attr(r, "referencingLayer"), pairs.first().cloned())
         else {
@@ -291,6 +293,10 @@ fn polygon_extent(wkt: &str) -> Option<[f64; 4]> {
     for pair in ring.split(',') {
         let mut v = pair.split_whitespace().map(|n| n.parse::<f64>().ok().filter(|v| v.is_finite()));
         let (Some(Some(x)), Some(Some(y))) = (v.next(), v.next()) else { return None };
+        // A third value (a height) isn't a bookmark's: the place doesn't read, and is noted.
+        if v.next().is_some() {
+            return None;
+        }
         e = [e[0].min(x), e[1].min(y), e[2].max(x), e[3].max(y)];
     }
     (e[0] < e[2] && e[1] < e[3]).then_some(e)

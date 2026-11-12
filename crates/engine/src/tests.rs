@@ -1788,8 +1788,12 @@ fn qgis_bookmarks_relations_rotation_and_time_import() {
 #[test]
 fn qgis_bookmarks_the_map_cannot_show_or_name_are_noted() {
     let long = "N".repeat(130);
+    // A name that fits, twice: the second is shortened to make room for its number.
+    let fits = "M".repeat(119);
     let qgs = format!(
         r#"<qgis version="4.2.3"><projectCrs><spatialrefsys><authid>EPSG:32631</authid></spatialrefsys></projectCrs><Bookmarks>
+      <Bookmark extent="Polygon ((2.2 48.8, 2.5 48.8, 2.5 48.9, 2.2 48.9, 2.2 48.8))" name="{fits}"><spatialrefsys><authid>EPSG:4326</authid></spatialrefsys></Bookmark>
+      <Bookmark extent="Polygon ((2.2 48.8, 2.5 48.8, 2.5 48.9, 2.2 48.9, 2.2 48.8))" name="{fits}"><spatialrefsys><authid>EPSG:4326</authid></spatialrefsys></Bookmark>
       <Bookmark extent="Polygon ((2.2 48.8, 2.5 48.8, 2.5 48.9, 2.2 48.9, 2.2 48.8))" name="Paris"><spatialrefsys><authid>EPSG:4326</authid></spatialrefsys></Bookmark>
       <Bookmark extent="Polygon ((-74.1 40.6, -73.8 40.6, -73.8 40.9, -74.1 40.9, -74.1 40.6))" name="New York"><spatialrefsys><authid>EPSG:4326</authid></spatialrefsys></Bookmark>
       <Bookmark extent="Polygon ((2.2 48.8, 2.5 48.8, 2.5 48.9, 2.2 48.9, 2.2 48.8))" name="{long}"><spatialrefsys><authid>EPSG:4326</authid></spatialrefsys></Bookmark>
@@ -1799,9 +1803,30 @@ fn qgis_bookmarks_the_map_cannot_show_or_name_are_noted() {
     let out = s.run("project.importQgis", &json!({"text": qgs})).unwrap();
     let notes = serde_json::to_string(&out["notes"]).unwrap();
     let names: Vec<usize> = s.map().bookmarks.iter().map(|b| b.name.chars().count()).collect();
-    assert_eq!(names, [5, 120], "{notes}");
+    assert_eq!(names, [119, 120, 5, 120], "{notes}");
+    assert!(s.map().bookmarks[1].name.ends_with("M 2"));
     assert!(notes.contains("its bookmarks whose place the map's projection doesn't reach (1: New York)"), "{notes}");
-    assert!(notes.contains("bookmark names cut to 120 characters (1)"), "{notes}");
+    assert!(notes.contains("bookmark names cut to 120 characters (2)"), "{notes}");
+}
+
+/// Bookmarks in more coordinate systems than an import reads: those past the first 100 systems
+/// are left out, and noted.
+#[test]
+fn qgis_bookmarks_in_too_many_coordinate_systems_are_noted() {
+    let mark = |i: u32, code: u32| {
+        format!(
+            r#"<Bookmark extent="Polygon ((500000 0, 500100 0, 500100 100, 500000 100, 500000 0))" name="B{i}"><spatialrefsys><authid>EPSG:{code}</authid></spatialrefsys></Bookmark>"#
+        )
+    };
+    // 101 UTM zones, north and south.
+    let codes = (32601..=32660).chain(32701..=32741);
+    let marks: String = codes.enumerate().map(|(i, c)| mark(i as u32, c)).collect();
+    let qgs = format!(r#"<qgis version="4.2.3"><Bookmarks>{marks}</Bookmarks></qgis>"#);
+    let mut s = world();
+    let out = s.run("project.importQgis", &json!({"text": qgs})).unwrap();
+    let notes = serde_json::to_string(&out["notes"]).unwrap();
+    assert!(notes.contains("its bookmarks in coordinate systems past the first 100 (1: B100)"), "{notes}");
+    assert!(!s.map().bookmarks.iter().any(|b| b.name == "B100"));
 }
 
 /// Many bookmarks of one name come in numbered, quickly (each name's next number remembered).
