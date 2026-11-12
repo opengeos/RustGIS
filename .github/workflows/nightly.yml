@@ -122,6 +122,7 @@ jobs:
           cargo test --locked -p rustgis-engine --test never_silent_roundtrip
           cargo test --locked -p rustgis-data --test reprojection_round_trip
           cargo test --locked -p rustgis-geom --test geodesic_identities
+          cargo test --locked -p rustgis-data --test extent_query_properties
 
   report:
     name: Report
