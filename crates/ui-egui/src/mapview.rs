@@ -649,6 +649,18 @@ fn now(ui: &Ui) -> f64 {
 /// leaves the graphics card ([`leave_gpu_if_out_of_memory`]). In the browser none is put on:
 /// WebGPU already only logs what nothing catches, and wgpu would turn its rare internal errors
 /// into a crash once a handler is there.
+/// Puts [`handle_gpu_errors`] on the device once there is one, from the app's frame (the start
+/// page and backstage included, so egui's own uploads are covered from the first frame).
+pub(crate) fn handle_gpu_errors_once(app: &mut RustGisApp, ctx: &egui::Context) {
+    if app.map.gpu_handler_on {
+        return;
+    }
+    if let Some(rs) = &app.map.render_state {
+        handle_gpu_errors(&rs.device, app.map.gpu_errors.clone(), ctx.clone());
+        app.map.gpu_handler_on = true;
+    }
+}
+
 /// A frame is asked of `ctx` for each error, so the map leaves the card even when nothing else
 /// would draw again (an error in the last frame before the window goes idle).
 #[cfg_attr(target_arch = "wasm32", allow(unused_variables))]
@@ -735,13 +747,6 @@ pub(crate) fn leave_gpu_if_out_of_memory(app: &mut RustGisApp) {
 /// Shows the active map workspace, discarding stale node gestures after map-tab changes and
 /// before rendering their overlays or consuming pointer releases.
 pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
-    // The device's error handler, once there is a device (here, where the context is known).
-    if !app.map.gpu_handler_on
-        && let Some(rs) = &app.map.render_state
-    {
-        handle_gpu_errors(&rs.device, app.map.gpu_errors.clone(), ui.ctx().clone());
-        app.map.gpu_handler_on = true;
-    }
     leave_gpu_if_out_of_memory(app);
     // Read before the cache was cleared (a sign-out), a picture goes with it: checked on every
     // frame, whatever is shown (a view with no map frame, a catalog or a layout included).
