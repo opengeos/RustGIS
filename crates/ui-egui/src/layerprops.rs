@@ -162,36 +162,47 @@ fn name_key(instance: u64) -> egui::Id {
     egui::Id::unique(("layer_properties_name", instance))
 }
 
+/// The most characters `layer.rename` keeps of a name: the box takes no more, so none are cut.
+const NAME_LIMIT: usize = 200;
+
 /// The layer's name, renamed (`layer.rename`) when the box is left (a click elsewhere, another
 /// layer's included) or Enter is pressed, and put back as it was with Escape or when left empty. A
 /// press on the Layers pane lets go of the box before the pane is drawn
 /// (`widgets::let_go_on_panel_press`), so on that frame the box has lost its focus but the draft,
 /// kept the frame before, still names the layer it was typed for. A draft is kept only while the
 /// box has focus, so a rename from elsewhere (undo, a script) shows at once, and one older than the
-/// last frame (the pane was hidden mid-edit) is dropped, not shown as if it were the name. The box
-/// is the layer's own: when the layer changes without the box being left (a script, the
-/// assistant), the draft is dropped (see [`layer_changed`]).
+/// last frame (the pane was hidden mid-edit) is dropped, not shown as if it were the name. A draft
+/// begun from another name than the layer's (a script or the assistant renamed it meanwhile) is
+/// dropped too, so leaving the box never undoes that rename. The box is the layer's own: when the
+/// layer changes without the box being left (a script, the assistant), the draft is dropped (see
+/// [`layer_changed`]).
 fn name_row(app: &mut RustGisApp, ui: &mut Ui, l: &Layer) {
     let key = name_key(l.instance_id());
-    let kept_at = key.with("pass");
+    let (kept_at, from) = (key.with("pass"), key.with("from"));
     let pass = ui.ctx().cumulative_pass_nr();
-    let fresh = ui.data(|d| d.get_temp::<u64>(kept_at)).is_some_and(|at| at + 1 >= pass);
+    let fresh = ui.data(|d| d.get_temp::<u64>(kept_at)).is_some_and(|at| at + 1 >= pass)
+        && ui.data(|d| d.get_temp::<String>(from)).is_some_and(|n| n == l.name);
     let mut draft = ui.data(|d| d.get_temp::<String>(key)).filter(|_| fresh).unwrap_or_else(|| l.name.clone());
     // Read before the box, which may take the key for itself.
     let escape = ui.input(|i| i.key_pressed(egui::Key::Escape));
     ui.horizontal(|ui| {
         let input_label = ui.label(tl!("Name"));
-        let edit = egui::TextEdit::singleline(&mut draft).id_salt(("layer_properties_name", l.instance_id())).desired_width(f32::INFINITY);
+        let edit = egui::TextEdit::singleline(&mut draft)
+            .id_salt(("layer_properties_name", l.instance_id()))
+            .char_limit(NAME_LIMIT)
+            .desired_width(f32::INFINITY);
         let r = ui.add(edit).labelled_by(input_label.id);
         if r.has_focus() {
             ui.data_mut(|d| {
                 d.insert_temp(key, draft);
                 d.insert_temp(kept_at, pass);
+                d.insert_temp(from, l.name.clone());
             });
         } else {
             ui.data_mut(|d| {
                 d.remove_temp::<String>(key);
                 d.remove_temp::<u64>(kept_at);
+                d.remove_temp::<String>(from);
             });
             let name = draft.trim();
             if r.lost_focus() && !escape && !name.is_empty() && name != l.name {
@@ -424,6 +435,47 @@ mod tests {
         h.run();
         assert_eq!(h.state().session.map().layer(id).unwrap().name, "Towns", "Escape keeps the name");
         assert_eq!(h.state().session.undo_depth(), steps + 1);
+        // Escape lets go of the box, so no later click away can set what was escaped.
+        assert!(!h.get_by_role_and_label(Role::TextInput, "Name").is_focused(), "Escape lets go of the box");
+    }
+
+    /// The box takes no more characters than `layer.rename` keeps, so none are cut unsaid.
+    #[test]
+    fn the_name_box_takes_no_more_than_the_rename_keeps() {
+        let app = with_cities();
+        let id = app.session.active_layer.unwrap();
+        let mut h = harness(app);
+        h.run();
+        h.get_by_role_and_label(Role::TextInput, "Name").click();
+        h.run();
+        // "Cities" and as many more: the box stops at the limit.
+        h.get_by_role_and_label(Role::TextInput, "Name").type_text(&"x".repeat(super::NAME_LIMIT));
+        h.run();
+        let typed = h.get_by_role_and_label(Role::TextInput, "Name").value().unwrap_or_default();
+        assert_eq!(typed.chars().count(), super::NAME_LIMIT);
+        h.key_press(egui::Key::Enter);
+        h.run();
+        assert_eq!(h.state().session.map().layer(id).unwrap().name, typed, "nothing cut");
+    }
+
+    /// A rename from elsewhere (a script, the assistant) while a name is being typed wins: the
+    /// draft begun from the old name is dropped, and leaving the box doesn't undo the rename.
+    #[test]
+    fn a_rename_from_elsewhere_while_typing_is_kept() {
+        let app = with_cities();
+        let id = app.session.active_layer.unwrap();
+        let mut h = harness(app);
+        h.run();
+        h.get_by_role_and_label(Role::TextInput, "Name").click();
+        h.run();
+        h.get_by_role_and_label(Role::TextInput, "Name").type_text(" draft");
+        h.run();
+        h.state_mut().session.run("layer.rename", &json!({"layer": id, "name": "Towns"})).unwrap();
+        h.run();
+        assert_eq!(h.get_by_role_and_label(Role::TextInput, "Name").value().as_deref(), Some("Towns"), "the box shows the new name");
+        h.key_press(egui::Key::Enter);
+        h.run();
+        assert_eq!(h.state().session.map().layer(id).unwrap().name, "Towns");
     }
 
     /// A name being typed when another layer is chosen renames neither layer, and doesn't come
@@ -533,8 +585,12 @@ mod tests {
         assert!(!h.state().session.map().layer(id).unwrap().selectable);
         h.state_mut().session.run("edit.undo", &json!({})).unwrap();
         assert!(h.state().session.map().layer(id).unwrap().selectable);
+        // The legend's fold is what the Layers pane shows, not an edit: no undo step
+        // (`layer.expand` is a view command).
+        let steps = h.state().session.undo_depth();
         h.get_by_role_and_label(Role::CheckBox, "Show legend in Layers").click();
         h.run();
         assert!(!h.state().session.map().layer(id).unwrap().expanded, "the legend is folded");
+        assert_eq!(h.state().session.undo_depth(), steps, "no undo step");
     }
 }

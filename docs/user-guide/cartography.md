@@ -681,7 +681,9 @@ Open it with Layers › right-click › **Properties…** or **View › Windows 
 follows the selected layer, as the Symbology and Labeling panes do: its header shows the layer's
 type and name, and lights up for a moment when another layer is selected, and the pane's tab names
 the layer too. A name being typed is kept when you click away, even on another layer, as Enter keeps
-it; Escape drops it. It runs the same commands as the ribbon, so each change undoes on its own.
+it; Escape drops it. It runs the same commands as the ribbon, so each change undoes on its own,
+except **Show legend in Layers**: like the arrow beside a layer in the Layers pane, it changes what
+that pane shows, not the layer, so it isn't a step to undo.
 
 ## Layer effects
 
