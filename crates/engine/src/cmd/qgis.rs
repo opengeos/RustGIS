@@ -1019,7 +1019,7 @@ fn bind_time(l: &mut rustgis_map::Layer, name: &str, field: Option<&str>, report
             if l.is_streamed() {
                 report.approximated(
                     name,
-                    format!("its time settings, by the field {field}, bound before its features are read: those whose value isn't a date show at every time"),
+                    format!("its time settings, by the field {field}, bound before its features are read: one whose value isn't a date is hidden while the slider is on, or every one shows when none reads as one"),
                 );
             }
             l.time = Some(rustgis_map::time::TimeBinding::new(f.name.clone()));
