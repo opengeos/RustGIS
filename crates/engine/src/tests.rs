@@ -498,6 +498,193 @@ fn editing_features_and_fields() {
     assert_eq!(s.map().layer_by_name("Cities").unwrap().dataset.features.len(), n - 1);
 }
 
+/// A date field is added, edited as ISO text, compared in a where clause, calculated, offered to
+/// the time slider, and kept as dates through a project save; arithmetic on it is an error, and
+/// text that isn't a date is reported, not quietly stored as null.
+#[test]
+fn date_fields_work_from_adding_to_saving() {
+    use rustgis_data::Value as V;
+    let mut s = world();
+    s.run("edit.addField", &json!({"layer": "Cities", "name": "founded", "type": "date"})).unwrap();
+    s.run("edit.addField", &json!({"layer": "Cities", "name": "seen", "type": "datetime"})).unwrap();
+    let fields = s.run("layer.fields", &json!({"layer": "Cities"})).unwrap();
+    let types: Vec<&str> = fields.as_array().unwrap().iter().filter_map(|f| f["type"].as_str()).collect();
+    assert!(types.ends_with(&["Date", "DateTime"]), "{types:?}");
+    for (row, day) in [(0, "2026-03-05"), (1, "1999-12-31"), (2, "2026-01-01")] {
+        s.run("edit.setValue", &json!({"layer": "Cities", "row": row, "field": "founded", "value": day})).unwrap();
+    }
+    let selected = s.run("select.byAttributes", &json!({"layer": "Cities", "where": "founded >= '2026-01-01'"})).unwrap();
+    assert_eq!(selected["selected"], 2);
+    s.run("select.clear", &Value::Null).unwrap();
+    let err = s.run("edit.calculateField", &json!({"layer": "Cities", "field": "founded", "expression": "founded + 30"})).unwrap_err();
+    assert!(err.contains("arithmetic on dates"), "{err}");
+    // Also for a date field named like a literal, which the earlier calculator reads first.
+    s.run("edit.addField", &json!({"layer": "Cities", "name": "true", "type": "date"})).unwrap();
+    let err = s.run("edit.calculateField", &json!({"layer": "Cities", "field": "founded", "expression": "true + 1"})).unwrap_err();
+    assert!(err.contains("arithmetic on dates"), "{err}");
+    s.run("edit.deleteField", &json!({"layer": "Cities", "field": "true"})).unwrap();
+    // A date into a date-time field is its midnight; text that isn't a date is reported.
+    let mark = s.notice_mark();
+    s.run("edit.calculateField", &json!({"layer": "Cities", "field": "seen", "expression": "founded"})).unwrap();
+    assert!(s.notices_since(mark).iter().all(|n| !n.text.contains("Calculate Field")), "clean results give no notice");
+    let cell = |s: &Session, layer: &str, row: usize, field: &str| {
+        let ds = &s.map().layer_by_name(layer).unwrap().dataset;
+        ds.value(row, ds.field_index(field).unwrap()).to_string()
+    };
+    assert_eq!(cell(&s, "Cities", 0, "seen"), "2026-03-05T00:00:00");
+    // A template's default a date field can't hold is refused, as edit.addFeature refuses it.
+    let err = s.run("edit.template", &json!({"layer": "Cities", "name": "Old", "defaults": {"founded": "soon"}})).unwrap_err();
+    assert_eq!(err, "field 'founded': 'soon' isn't a Date value");
+    // A native caller's date-time default keeps only its day in a date field, and that is said; a
+    // midnight without a zone loses nothing.
+    s.run("edit.template", &json!({"layer": "Cities", "name": "Old", "defaults": {"founded": "2026-03-05"}})).unwrap();
+    let here = json!({"type": "Point", "coordinates": [0.0, 0.0]});
+    for (when, said) in [("2026-03-07T14:30:00", true), ("2026-03-07T00:00:00", false)] {
+        let t = rustgis_data::DateTime::parse(when).unwrap();
+        let cities = s.map_mut().layers.iter_mut().find(|l| l.name == "Cities").unwrap();
+        let old = cities.design.templates.iter_mut().find(|x| x.name == "Old").unwrap();
+        old.defaults[0].1 = V::DateTime(t);
+        let mark = s.notice_mark();
+        let row =
+            s.run("edit.addFeature", &json!({"layer": "Cities", "geometry": here, "template": "Old"})).unwrap()["row"].as_u64().unwrap();
+        let notices: Vec<String> = s.notices_since(mark).iter().map(|n| n.text.clone()).collect();
+        assert_eq!(notices.iter().any(|n| n.contains("field 'founded'") && n.contains("kept only its day")), said, "{when}: {notices:?}");
+        assert_eq!(cell(&s, "Cities", row as usize, "founded"), "2026-03-07");
+        s.run("edit.undo", &Value::Null).unwrap();
+    }
+    // A date default for a yes/no field is null, and said.
+    s.run("edit.addField", &json!({"layer": "Cities", "name": "flag", "type": "boolean"})).unwrap();
+    s.run("edit.template", &json!({"layer": "Cities", "name": "Old", "defaults": {"flag": true}})).unwrap();
+    let cities = s.map_mut().layers.iter_mut().find(|l| l.name == "Cities").unwrap();
+    let old = cities.design.templates.iter_mut().find(|x| x.name == "Old").unwrap();
+    old.defaults[0].1 = V::parse("2026-03-07", rustgis_data::FieldType::Date);
+    let mark = s.notice_mark();
+    s.run("edit.addFeature", &json!({"layer": "Cities", "geometry": here, "template": "Old"})).unwrap();
+    let notices: Vec<String> = s.notices_since(mark).iter().map(|n| n.text.clone()).collect();
+    assert!(notices.iter().any(|n| n.contains("field 'flag'") && n.contains("isn't a yes/no value")), "{notices:?}");
+    s.run("edit.undo", &Value::Null).unwrap();
+    s.run("edit.deleteField", &json!({"layer": "Cities", "field": "flag"})).unwrap();
+    s.run("edit.template", &json!({"layer": "Cities", "name": "Old", "remove": true})).unwrap();
+    // A date-time with a time of day, into a date field by Calculate Field or Paste, keeps its day, and that is said.
+    s.run("edit.setValue", &json!({"layer": "Cities", "row": 0, "field": "seen", "value": "2026-03-07T14:30:00"})).unwrap();
+    let mark = s.notice_mark();
+    s.run("edit.calculateField", &json!({"layer": "Cities", "field": "founded", "expression": "seen"})).unwrap();
+    assert!(
+        s.notices_since(mark).iter().any(|n| n.text == "Calculate Field: 'founded' holds dates, so 1 result kept only its day"),
+        "{:?}",
+        s.notices_since(mark)
+    );
+    assert_eq!(cell(&s, "Cities", 0, "founded"), "2026-03-07");
+    s.run("edit.undo", &Value::Null).unwrap();
+    assert_eq!(cell(&s, "Cities", 0, "founded"), "2026-03-05");
+    s.run("select.byAttributes", &json!({"layer": "Cities", "where": "seen > '2026-03-05T12:00:00'"})).unwrap();
+    s.run("edit.copy", &Value::Null).unwrap();
+    s.run("edit.pasteSpecial", &json!({"name": "Moments"})).unwrap();
+    s.run("edit.deleteField", &json!({"layer": "Moments", "field": "seen"})).unwrap();
+    s.run("edit.addField", &json!({"layer": "Moments", "name": "seen", "type": "date"})).unwrap();
+    let mark = s.notice_mark();
+    s.run("edit.paste", &json!({"layer": "Moments"})).unwrap();
+    assert!(
+        s.notices_since(mark).iter().any(|n| n.text == "Paste: 'seen' holds dates, so 1 result kept only its day"),
+        "{:?}",
+        s.notices_since(mark)
+    );
+    let pasted = s.map().layer_by_name("Moments").unwrap().dataset.features.len() - 1;
+    assert_eq!(cell(&s, "Moments", pasted, "seen"), "2026-03-07");
+    s.run("layer.remove", &json!({"layer": "Moments"})).unwrap();
+    s.run("edit.setValue", &json!({"layer": "Cities", "row": 0, "field": "seen", "value": "2026-03-05T00:00:00"})).unwrap();
+    let err = s.run("edit.setValue", &json!({"layer": "Cities", "row": 0, "field": "founded", "value": "soon"})).unwrap_err();
+    assert_eq!(err, "'soon' isn't a Date value");
+    // So is any other value a date field can't hold, given as a number.
+    let err = s.run("edit.setValue", &json!({"layer": "Cities", "row": 0, "field": "founded", "value": 20260305})).unwrap_err();
+    assert_eq!(err, "'20260305' isn't a Date value");
+    let point = json!({"type": "Point", "coordinates": [0.0, 0.0]});
+    let err = s.run("edit.addFeature", &json!({"layer": "Cities", "geometry": point, "attributes": {"founded": 20260305}})).unwrap_err();
+    assert_eq!(err, "field 'founded': '20260305' isn't a Date value");
+    let added = s.run("edit.addFeature", &json!({"layer": "Cities", "geometry": point, "attributes": {"founded": "2026-03-05"}})).unwrap();
+    s.run("edit.undo", &Value::Null).unwrap();
+    // `<null>` asks for null, as in the table and edit.setValue.
+    s.run("edit.addFeature", &json!({"layer": "Cities", "geometry": point, "attributes": {"founded": "<null>"}})).unwrap();
+    s.run("edit.undo", &Value::Null).unwrap();
+    // Pasted dates go in; a value the field can't hold is said, and empty text is no loss.
+    let pasted = |founded: &[&str]| {
+        let features: Vec<Value> =
+            founded.iter().map(|f| json!({"type": "Feature", "geometry": point, "properties": {"founded": f}})).collect();
+        json!({"layer": "Cities", "text": json!({"type": "FeatureCollection", "features": features}).to_string()})
+    };
+    let mark = s.notice_mark();
+    s.run("edit.paste", &pasted(&["2026-03-05", ""])).unwrap();
+    assert!(s.notices_since(mark).iter().all(|n| !n.text.contains("is null in")), "{:?}", s.notices_since(mark));
+    s.run("edit.undo", &Value::Null).unwrap();
+    let mark = s.notice_mark();
+    s.run("edit.paste", &pasted(&["2026-03-05", "soon", "March 5"])).unwrap();
+    assert!(
+        s.notices_since(mark).iter().any(|n| n.text == "Paste: 'founded' is null in 2 features, whose value isn't a Date value"),
+        "{:?}",
+        s.notices_since(mark)
+    );
+    s.run("edit.undo", &Value::Null).unwrap();
+    // So does a result of empty text: null, with no notice.
+    s.run("edit.addField", &json!({"layer": "Cities", "name": "n", "type": "long"})).unwrap();
+    let mark = s.notice_mark();
+    s.run("edit.calculateField", &json!({"layer": "Cities", "field": "n", "expression": "''"})).unwrap();
+    assert!(s.notices_since(mark).iter().all(|n| !n.text.contains("Calculate Field")), "{:?}", s.notices_since(mark));
+    s.run("edit.deleteField", &json!({"layer": "Cities", "field": "n"})).unwrap();
+    assert!(added["row"].is_u64());
+    let ds = |s: &Session| s.map().layer_by_name("Cities").unwrap().dataset.clone();
+    let seen = ds(&s).field_index("seen").unwrap();
+    assert_eq!(ds(&s).value(0, seen).to_string(), "2026-03-05T00:00:00");
+    let mark = s.notice_mark();
+    s.run(
+        "edit.calculateField",
+        &json!({"layer": "Cities", "field": "founded", "expression": "CASE WHEN @row_number = 1 THEN 'soon' ELSE founded END"}),
+    )
+    .unwrap();
+    assert!(
+        s.notices_since(mark).iter().any(|n| n.text.contains("'founded' is null in 1 row, whose result isn't a Date value")),
+        "{:?}",
+        s.notices_since(mark)
+    );
+    assert!(rustgis_map::time::time_fields(&ds(&s)).iter().any(|(f, _)| f == "seen"), "the slider is offered the date field");
+    // A calculation rule writing a date into a number field writes null, and says so; a clean one
+    // says nothing.
+    s.run("edit.addField", &json!({"layer": "Cities", "name": "yr", "type": "long"})).unwrap();
+    for (expression, said) in [("founded", true), ("1", false)] {
+        let rule = json!({"layer": "Cities", "name": "Year", "kind": "calculation", "field": "yr", "expression": expression});
+        s.run("data.attributeRule", &rule).unwrap();
+        let mark = s.notice_mark();
+        s.run("edit.setValue", &json!({"layer": "Cities", "row": 0, "field": "founded", "value": "2026-03-05"})).unwrap();
+        let notices: Vec<String> = s.notices_since(mark).iter().map(|n| n.text.clone()).collect();
+        let null = "Attribute rule Year: 'yr' is null in 1 row, whose result isn't a Long value".to_string();
+        assert_eq!(notices.contains(&null), said, "{expression}: {notices:?}");
+        s.run("data.attributeRule", &json!({"layer": "Cities", "name": "Year", "remove": true})).unwrap();
+    }
+    s.run("edit.deleteField", &json!({"layer": "Cities", "field": "yr"})).unwrap();
+    // Saved and opened, the values are still dates.
+    // Removed however the test ends, and its own each run (the process id alone can repeat).
+    struct Dir(std::path::PathBuf);
+    impl Drop for Dir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos());
+    let dir = Dir(std::env::temp_dir().join(format!("rustgis-dates-{}-{nanos}", std::process::id())));
+    std::fs::create_dir_all(&dir.0).unwrap();
+    let path = dir.0.join("dates.rgis");
+    s.run("project.saveAs", &json!({"path": path.display().to_string()})).unwrap();
+    let mut t = Session::new(Project::default());
+    t.run("project.open", &json!({"path": path.display().to_string()})).unwrap();
+    let (a, b) = (ds(&s), ds(&t));
+    let founded = b.field_index("founded").unwrap();
+    assert_eq!(b.fields[founded].ty, rustgis_data::FieldType::Date);
+    assert!(matches!(b.value(1, founded), V::Date(d) if d.to_string() == "1999-12-31"));
+    assert_eq!(
+        (0..a.features.len()).map(|r| a.value(r, seen).clone()).collect::<Vec<_>>(),
+        (0..b.features.len()).map(|r| b.value(r, seen).clone()).collect::<Vec<_>>()
+    );
+}
+
 /// A polygon layer stacks fills (a colour, hatch lines, markers on a grid), for the layer or a
 /// class of its own; junk is refused and numbers held within range; each change undoes, and the
 /// project keeps them (a layer without them saves as before).
@@ -9955,6 +10142,171 @@ fn dem_b64() -> String {
     base64::engine::general_purpose::STANDARD.encode(geotiff::write(&r, 0).unwrap())
 }
 
+/// A viewshed whose rays cross ground with no data says how many cells it saw across it, taken as
+/// hiding nothing, and, with bilinear heights, how many it saw with the nearest cell's height
+/// beside it; one with data everywhere says neither (see
+/// `analysis_workflows_models_scripts_and_raster_functions`).
+#[test]
+fn a_viewshed_says_what_ground_with_no_data_it_saw_across() {
+    use base64::Engine;
+    use rustgis_data::raster::{ColorHint, Crs, GeoTransform, Raster, geotiff};
+    let mut s = world();
+    // Flat ground with a column of no-data cells five cells east of the observer, and the same
+    // with a high wall ten cells farther, hiding what lies beyond it.
+    let gt = GeoTransform { origin_x: 10.0, origin_y: 45.04, pixel_width: 0.001, pixel_height: -0.001 };
+    let mut dems = vec![];
+    for (name, wall) in [("holes", 200.0), ("walled", 400.0)] {
+        let z: Vec<f32> = (0..1600)
+            .map(|i| match i % 40 {
+                15 => -9999.0,
+                25 => wall,
+                _ => 200.0,
+            })
+            .collect();
+        let r = Raster::new(name, 40, 40, vec![z], gt, Crs::LonLat, Some(-9999.0), ColorHint::Gray, "Float32").unwrap();
+        let data = base64::engine::general_purpose::STANDARD.encode(geotiff::write(&r, 0).unwrap());
+        s.run("layer.addDataBytes", &json!({"fileName": format!("{name}.tif"), "data": data})).unwrap();
+        dems.push(s.map().layers.iter().rev().find(|l| l.is_raster() && l.name.starts_with(name)).unwrap().name.clone());
+    }
+    let run = |s: &mut Session, dem: &str, heights: &str| {
+        s.run("analysis.viewshed", &json!({"layer": dem, "lon": 10.0105, "lat": 45.0205, "height": 2, "heights": heights})).unwrap()
+    };
+    for heights in ["nearest", "bilinear"] {
+        // Only cells seen are counted: those the wall hides would stay hidden whatever the
+        // missing ground is.
+        let walled = run(&mut s, &dems[1], heights);
+        let walled_across = walled["acrossNoData"].as_u64().unwrap();
+        let mark = s.notices.len();
+        let v = run(&mut s, &dems[0], heights);
+        let across = v["acrossNoData"].as_u64().unwrap();
+        assert!(across > 100 && across <= v["visibleCells"].as_u64().unwrap(), "{heights}: {v}");
+        assert!(walled_across > 0 && walled_across + 100 < across, "{heights}: {walled_across} of {across}");
+        let said: Vec<&str> = s.notices[mark..].iter().map(|n| n.text.as_str()).collect();
+        assert!(
+            said.iter().any(|t| t.contains(&format!("{across} cell(s) of the viewshed were seen across ground with no data"))),
+            "{heights}: {said:?}"
+        );
+        let nearest = v["readNearest"].as_u64().unwrap();
+        if heights == "nearest" {
+            assert_eq!(nearest, 0);
+        } else {
+            assert!(nearest > 100, "{v}");
+            assert!(
+                said.iter().any(|t| t.contains(&format!("{nearest} cell(s) were worked out with the nearest cell's height"))),
+                "{said:?}"
+            );
+        }
+    }
+}
+
+/// A viewshed's radius: one past the raster's diagonal works out the same cells as none; text or
+/// 0 is refused, naming it; on a raster round the Earth whose edge the radius reaches, the rays
+/// not crossing its east–west edge are said: the ground across left out when the radius doesn't
+/// reach the far edge's column, worked out the long way round when it does in every row it
+/// reaches the near one, and partly when only near the observer's row; nothing said when the way
+/// across the edge is no shorter than through the raster.
+#[test]
+fn a_viewshed_says_what_it_did_with_its_radius_and_the_seam() {
+    use base64::Engine;
+    use rustgis_data::raster::{ColorHint, Crs, GeoTransform, Raster, geotiff};
+    let mut s = world();
+    // Flat ground round the Earth, 2° a cell.
+    let gt = GeoTransform { origin_x: -180.0, origin_y: 90.0, pixel_width: 2.0, pixel_height: -2.0 };
+    let r = Raster::new("globe", 180, 90, vec![vec![0.0; 180 * 90]], gt, Crs::LonLat, None, ColorHint::Gray, "Float32").unwrap();
+    let data = base64::engine::general_purpose::STANDARD.encode(geotiff::write(&r, 0).unwrap());
+    s.run("layer.addDataBytes", &json!({"fileName": "globe.tif", "data": data})).unwrap();
+    let dem = s.map().layers.iter().find(|l| l.is_raster()).unwrap().name.clone();
+    let said = |s: &mut Session, p: Value| {
+        let mark = s.notices.len();
+        s.run("analysis.viewshed", &p).unwrap_or_else(|e| panic!("{p}: {e}"));
+        s.notices[mark..].iter().map(|n| n.text.clone()).collect::<Vec<_>>()
+    };
+    let seam = "rays don't cross its east–west edge";
+    // By the edge with no radius (the whole raster): the seam is said.
+    let notes = said(&mut s, json!({"layer": dem, "lon": -179.0, "lat": 0.0}));
+    assert!(notes.iter().any(|n| n.contains(seam) && n.ends_with("worked out the long way round")), "{notes:?}");
+    // By the edge with a radius past the edge line but short of the cell across it (2° is about
+    // 222 km there): nothing across it is within the radius, so nothing said.
+    let notes = said(&mut s, json!({"layer": dem, "lon": -179.0, "lat": 0.0, "radius": 150_000}));
+    assert!(notes.is_empty(), "{notes:?}");
+    // Mid-way with a radius not reaching an edge: nothing said.
+    let notes = said(&mut s, json!({"layer": dem, "lon": 0.0, "lat": 0.0, "radius": 50_000}));
+    assert!(notes.is_empty(), "{notes:?}");
+    // Given a radius reaching the near edge but not the far one, the ground across is left out.
+    let notes = said(&mut s, json!({"layer": dem, "lon": -177.0, "lat": 0.0, "radius": 600_000}));
+    assert_eq!(notes.len(), 1, "{notes:?}");
+    assert!(notes[0].contains(seam) && notes[0].ends_with("left out of the viewshed"), "{notes:?}");
+    // A radius past the raster's diagonal works out the same cells as none, with nothing to say
+    // about the radius.
+    let visible = |s: &mut Session, p: Value| s.run("analysis.viewshed", &p).unwrap_or_else(|e| panic!("{p}: {e}"))["visibleCells"].clone();
+    let (none, huge) = (json!({"layer": dem, "lon": 0.0, "lat": 0.0}), json!({"layer": dem, "lon": 0.0, "lat": 0.0, "radius": 1e12}));
+    assert_eq!(visible(&mut s, none.clone()), visible(&mut s, huge.clone()));
+    assert_eq!(said(&mut s, none), said(&mut s, huge));
+    // A geographic coordinate system other than WGS 84, and a cell size stored rounded
+    // (180 × 1.99999° = 359.9998°): still round the Earth.
+    let gt = GeoTransform { origin_x: -180.0, origin_y: 90.0, pixel_width: 1.99999, pixel_height: -2.0 };
+    let r = Raster::new("nad83", 180, 90, vec![vec![0.0; 180 * 90]], gt, Crs::Epsg(4269), None, ColorHint::Gray, "Float32").unwrap();
+    let data = base64::engine::general_purpose::STANDARD.encode(geotiff::write(&r, 0).unwrap());
+    s.run("layer.addDataBytes", &json!({"fileName": "nad83.tif", "data": data})).unwrap();
+    let nad83 = s.map().layers.iter().find(|l| l.name.starts_with("nad83")).unwrap().name.clone();
+    let notes = said(&mut s, json!({"layer": nad83, "lon": -179.0, "lat": 0.0}));
+    assert!(notes.iter().any(|n| n.contains(seam)), "{notes:?}");
+    // Stored from 0° to 360°, with its edge at 0°: the same.
+    let gt = GeoTransform { origin_x: 0.0, origin_y: 90.0, pixel_width: 2.0, pixel_height: -2.0 };
+    let r = Raster::new("east", 180, 90, vec![vec![0.0; 180 * 90]], gt, Crs::LonLat, None, ColorHint::Gray, "Float32").unwrap();
+    let data = base64::engine::general_purpose::STANDARD.encode(geotiff::write(&r, 0).unwrap());
+    s.run("layer.addDataBytes", &json!({"fileName": "east.tif", "data": data})).unwrap();
+    let east = s.map().layers.iter().find(|l| l.name.starts_with("east")).unwrap().name.clone();
+    let notes = said(&mut s, json!({"layer": east, "lon": 1.0, "lat": 0.0, "radius": 300_000}));
+    assert!(notes.iter().any(|n| n.contains(seam) && n.ends_with("left out of the viewshed")), "{notes:?}");
+    // Near the pole, with cells of 90° (100 km each, as `cell_size_m` measures them there): a
+    // 350 km radius reaches the far column, so the ground across the edge is worked out through
+    // the raster.
+    let gt = GeoTransform { origin_x: -180.0, origin_y: 90.0, pixel_width: 90.0, pixel_height: -1.0 };
+    let r = Raster::new("cap", 4, 1, vec![vec![0.0; 4]], gt, Crs::LonLat, None, ColorHint::Gray, "Float32").unwrap();
+    let data = base64::engine::general_purpose::STANDARD.encode(geotiff::write(&r, 0).unwrap());
+    s.run("layer.addDataBytes", &json!({"fileName": "cap.tif", "data": data})).unwrap();
+    let cap = s.map().layers.iter().find(|l| l.name.starts_with("cap")).unwrap().name.clone();
+    let notes = said(&mut s, json!({"layer": cap, "lon": -170.0, "lat": 89.5, "radius": 350_000}));
+    assert!(notes.iter().any(|n| n.contains(seam) && n.ends_with("worked out the long way round")), "{notes:?}");
+    // A radius between 2 and 3 cells: its window takes in the far column,
+    // but the far column's centre lies outside the radius, so the ground across is left out.
+    let (cx, _) = s.map().layer_by_name(&cap).and_then(|l| l.raster.as_ref()?.data.as_ref().map(|r| r.cell_size_m())).unwrap();
+    let notes = said(&mut s, json!({"layer": cap, "lon": -170.0, "lat": 89.5, "radius": 2.5 * cx}));
+    assert!(notes.iter().any(|n| n.contains(seam) && n.ends_with("left out of the viewshed")), "{notes:?}");
+    // Three rows of 0.1° there: a radius of three cells reaches the far column on the observer's
+    // row only, so the ground across is worked out there and left out in the rows beside it;
+    // three cells and three rows reach it in every row.
+    let gt = GeoTransform { origin_x: -180.0, origin_y: 90.0, pixel_width: 90.0, pixel_height: -0.1 };
+    let r = Raster::new("rows", 4, 3, vec![vec![0.0; 12]], gt, Crs::LonLat, None, ColorHint::Gray, "Float32").unwrap();
+    let data = base64::engine::general_purpose::STANDARD.encode(geotiff::write(&r, 0).unwrap());
+    s.run("layer.addDataBytes", &json!({"fileName": "rows.tif", "data": data})).unwrap();
+    let rows = s.map().layers.iter().find(|l| l.name.starts_with("rows")).unwrap().name.clone();
+    let (cx, cy) = s.map().layer_by_name(&rows).and_then(|l| l.raster.as_ref()?.data.as_ref().map(|r| r.cell_size_m())).unwrap();
+    let notes = said(&mut s, json!({"layer": rows, "lon": -170.0, "lat": 89.95, "radius": 3.0 * cx + 1.0}));
+    assert!(notes.iter().any(|n| n.contains(seam) && n.ends_with("near the observer's row and left out farther from it")), "{notes:?}");
+    let notes = said(&mut s, json!({"layer": rows, "lon": -170.0, "lat": 89.95, "radius": (3.0 * cx).hypot(2.0 * cy) + 1.0}));
+    assert!(notes.iter().any(|n| n.contains(seam) && n.ends_with("worked out the long way round")), "{notes:?}");
+    // From the second column, the far column is the one across the edge, two cells away either
+    // way: nothing is shorter across the edge, so nothing is said.
+    let notes = said(&mut s, json!({"layer": rows, "lon": -45.0, "lat": 89.95, "radius": 2.0 * cx + 1.0}));
+    assert!(notes.is_empty(), "{notes:?}");
+    // Nor from the middle of an odd number of columns (2 of 5), each edge two cells away.
+    let gt = GeoTransform { origin_x: -180.0, origin_y: 90.0, pixel_width: 72.0, pixel_height: -0.1 };
+    let r = Raster::new("odd", 5, 3, vec![vec![0.0; 15]], gt, Crs::LonLat, None, ColorHint::Gray, "Float32").unwrap();
+    let data = base64::engine::general_purpose::STANDARD.encode(geotiff::write(&r, 0).unwrap());
+    s.run("layer.addDataBytes", &json!({"fileName": "odd.tif", "data": data})).unwrap();
+    let odd = s.map().layers.iter().find(|l| l.name.starts_with("odd")).unwrap().name.clone();
+    for p in [json!({"layer": odd, "lon": 0.0, "lat": 89.95}), json!({"layer": odd, "lon": 0.0, "lat": 89.95, "radius": 2.5 * cx})] {
+        let notes = said(&mut s, p);
+        assert!(notes.is_empty(), "{notes:?}");
+    }
+    for bad in [json!("500km"), json!(0), json!(-5), json!(true)] {
+        let e = s.run("analysis.viewshed", &json!({"layer": dem, "lon": 0.0, "lat": 0.0, "radius": bad})).unwrap_err();
+        assert_eq!(e, format!("radius must be a number of metres above 0, not {bad}"));
+    }
+}
+
 #[test]
 fn analysis_workflows_models_scripts_and_raster_functions() {
     let mut s = world();
@@ -10007,6 +10359,23 @@ fn analysis_workflows_models_scripts_and_raster_functions() {
     // On the flat northern edge: everything west of the wall is in view.
     let v = s.run("analysis.viewshed", &json!({"layer": dem, "lon": 10.0055, "lat": 45.0395, "height": 2})).unwrap();
     assert!(v["visibleCells"].as_u64().unwrap() > 100, "{v}");
+    // Bilinear heights read the ground between cells: on this hill and wall they see at least
+    // what the nearest cells do (a cell nearer the top no longer stands in for the ground), and
+    // little more. Any other name, or a value that isn't one, is refused, saying which there are.
+    let mark = s.notices.len();
+    let b = s.run("analysis.viewshed", &json!({"layer": dem, "lon": 10.0055, "lat": 45.0395, "height": 2, "heights": "Bilinear"})).unwrap();
+    let (near, bil) = (v["visibleCells"].as_u64().unwrap(), b["visibleCells"].as_u64().unwrap());
+    assert!(bil >= near && bil <= near + near / 10, "nearest {near}, bilinear {bil}");
+    // A DEM with every cell holding data: nothing to say about ground with none, and the answer
+    // says none.
+    assert!(s.notices[mark..].is_empty(), "{:?}", s.notices[mark..].iter().map(|n| &n.text).collect::<Vec<_>>());
+    for a in [&v, &b] {
+        assert_eq!((&a["acrossNoData"], &a["readNearest"]), (&json!(0), &json!(0)), "{a}");
+    }
+    for bad in [json!("cubic"), json!(1)] {
+        let e = s.run("analysis.viewshed", &json!({"layer": dem, "lon": 10.0055, "lat": 45.0395, "heights": bad})).unwrap_err();
+        assert!(e.to_string().contains(r#"heights must be "nearest" or "bilinear", not "#), "{e}");
+    }
     let los = s.run("analysis.lineOfSight", &json!({"layer": dem, "from": [10.0205, 45.0395], "to": [10.0355, 45.0395]})).unwrap();
     assert_eq!(los["visible"], false);
     let los = s.run("analysis.lineOfSight", &json!({"layer": dem, "from": [10.0205, 45.0395], "to": [10.0055, 45.0395]})).unwrap();
@@ -19061,6 +19430,97 @@ fn blank_project_starts_in_a_projected_crs() {
         assert!(s.run("map.zoomToExtent", &json!({"extent": bad})).is_err(), "{bad}");
     }
     assert!(crate::cmd::share::map_png(&mut s, Some(400.0), Some(300.0), None).unwrap().len() > 1000);
+}
+
+/// CSV and GPX exports say what the format couldn't hold (a line layer's geometry and a
+/// multipoint's other points in CSV; other fields, polygons' holes and multipoints in GPX), and
+/// Data Interop's KML and GPX the rows without geometry, and Export Table the same for a table
+/// that keeps geometry; a layer or table each holds whole gets no such notice.
+#[test]
+fn csv_and_gpx_exports_say_what_they_leave_out() {
+    use rustgis_data::{Coord, Dataset, Field, FieldType, Geometry, GeometryType, Value as V};
+    let dir = std::env::temp_dir().join(format!("rustgis-engine-csv-gpx-losses-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let square = |x: f64, hole: bool| {
+        let ring = |a: f64, b: f64| vec![Coord::new(a, a), Coord::new(b, a), Coord::new(b, b), Coord::new(a, b), Coord::new(a, a)];
+        let mut rings = vec![ring(x, x + 4.0)];
+        if hole {
+            rings.push(ring(x + 1.0, x + 2.0));
+        }
+        Geometry::Polygon(vec![rings])
+    };
+    let layer = |name: &str, kind, rows: Vec<(Geometry, Vec<V>)>| {
+        let mut ds = Dataset::new(name, kind, vec![Field::new("name", FieldType::Text), Field::new("height", FieldType::Double)]);
+        for (g, a) in rows {
+            ds.push(Some(g), a);
+        }
+        ds
+    };
+    let mut s = Session::new(Project::default());
+    s.map_mut().add_dataset(layer("Areas", GeometryType::Polygon, vec![(square(0.0, true), vec![V::Text("A".into()), V::Float(2.5)])]));
+    let pts = vec![
+        (Geometry::Point(Coord::new(1.0, 2.0)), vec![V::Text("P".into()), V::Null]),
+        (Geometry::MultiPoint(vec![Coord::new(3.0, 4.0), Coord::new(5.0, 6.0)]), vec![V::Text("M".into()), V::Null]),
+    ];
+    s.map_mut().add_dataset(layer("Sites", GeometryType::Point, pts));
+    let clean = vec![(Geometry::Point(Coord::new(1.0, 2.0)), vec![V::Text("P".into()), V::Null])];
+    s.map_mut().add_dataset(layer("Clean", GeometryType::Point, clean));
+    let said = |s: &mut Session, id: &str, p: Value| {
+        let mark = s.notices.len();
+        s.run(id, &p).unwrap();
+        s.notices[mark..].iter().map(|n| n.text.clone()).filter(|t| !t.starts_with("Exported ")).collect::<Vec<_>>()
+    };
+    let out = |name: &str| dir.join(name).display().to_string();
+    let n = said(&mut s, "share.exportLayer", json!({"layer": "Areas", "path": out("areas.csv")}));
+    assert!(n.len() == 1 && n[0].contains("the geometry of 1 feature wasn't written"), "{n:?}");
+    let n = said(&mut s, "share.exportLayer", json!({"layer": "Sites", "path": out("sites.csv")}));
+    assert!(n.len() == 1 && n[0].contains("1 feature has more than one point"), "{n:?}");
+    let n = said(&mut s, "share.exportLayer", json!({"layer": "Areas", "path": out("areas.gpx")}));
+    assert_eq!(n.len(), 2, "{n:?}");
+    assert!(
+        n[0].contains("1 field wasn't written: 'height'")
+            && n[1].contains("1 polygon was written as tracks")
+            && n[1].contains("1 hole left out"),
+        "{n:?}"
+    );
+    let n = said(&mut s, "share.exportLayer", json!({"layer": "Sites", "path": out("sites.gpx")}));
+    assert!(n.len() == 1 && n[0].contains("1 multipoint was written as a waypoint for each"), "{n:?}");
+    let n = said(&mut s, "data.convert", json!({"layer": "Areas", "format": "gpx"}));
+    assert!(n.iter().any(|t| t.contains("'height'")) && n.iter().any(|t| t.contains("tracks")), "{n:?}");
+    let n = said(&mut s, "data.convert", json!({"layer": "Areas", "format": "csv"}));
+    assert!(n.iter().any(|t| t.contains("wasn't written, only the attributes")), "{n:?}");
+    // A row without geometry, which KML and GPX can't hold, is counted.
+    let mut rows = layer("Rows", GeometryType::Point, vec![(Geometry::Point(Coord::new(1.0, 2.0)), vec![V::Text("P".into()), V::Null])]);
+    rows.push(None, vec![V::Text("no place".into()), V::Null]);
+    s.map_mut().add_dataset(rows);
+    for format in ["kml", "gpx"] {
+        let n = said(&mut s, "data.convert", json!({"layer": "Rows", "format": format}));
+        assert!(n.len() == 1 && n[0].contains("1 features without drawable geometry were left out"), "{format}: {n:?}");
+    }
+    // A standalone table keeps geometry too: Export Table says the same, and nothing for a clean one.
+    let areas = layer("Area table", GeometryType::Polygon, vec![(square(0.0, true), vec![V::Text("A".into()), V::Float(2.5)])]);
+    let points =
+        layer("Point table", GeometryType::Point, vec![(Geometry::Point(Coord::new(1.0, 2.0)), vec![V::Text("P".into()), V::Null])]);
+    s.project.tables.push(crate::project::Table { id: 9001, dataset: areas });
+    s.project.tables.push(crate::project::Table { id: 9002, dataset: points });
+    let n = said(&mut s, "share.exportTable", json!({"table": 9001, "path": out("table.csv")}));
+    assert!(n.len() == 1 && n[0].contains("the geometry of 1 feature wasn't written"), "{n:?}");
+    let n = said(&mut s, "share.exportTable", json!({"table": 9001, "path": out("table.gpx")}));
+    assert!(n.iter().any(|t| t.contains("'height'")) && n.iter().any(|t| t.contains("1 hole left out")), "{n:?}");
+    for ext in ["csv", "gpx"] {
+        let n = said(&mut s, "share.exportTable", json!({"table": 9002, "path": out(&format!("clean-table.{ext}"))}));
+        assert_eq!(n, Vec::<String>::new(), "{ext}");
+    }
+    // Points alone, their other field empty: CSV and GPX hold them whole.
+    for ext in ["csv", "gpx"] {
+        assert_eq!(
+            said(&mut s, "share.exportLayer", json!({"layer": "Clean", "path": out(&format!("clean.{ext}"))})),
+            Vec::<String>::new()
+        );
+        assert_eq!(said(&mut s, "data.convert", json!({"layer": "Clean", "format": ext})), Vec::<String>::new());
+    }
+    std::fs::remove_dir_all(dir).unwrap();
 }
 
 #[test]
@@ -38118,8 +38578,9 @@ fn calculate_field_keeps_decimals_and_says_what_whole_numbers_cut() {
     assert_eq!(calc(&mut s, "i", "y * 0 - 9223372036854775808"), (none.clone(), vec![V::Int(i64::MIN); 3]));
     assert_eq!(calc(&mut s, "i", "y * 0 + 9223372036854775808"), (vec![past("3 results")], vec![V::Null; 3]));
     // Text written as a number: a decimal loses its fraction, a whole number is exact; text that
-    // isn't a number is null, as before.
-    assert_eq!(calc(&mut s, "i", "t"), (vec![cut("1 result")], vec![V::Int(2), V::Int(12), V::Null]));
+    // isn't a number is null, and said.
+    let unread = "Calculate Field: 'i' is null in 1 row, whose result isn't a Long value".to_string();
+    assert_eq!(calc(&mut s, "i", "t"), (vec![cut("1 result"), unread.clone()], vec![V::Int(2), V::Int(12), V::Null]));
     // Decimal text at the range's ends is read from its digits: i64::MAX written with ".0" fits,
     // and a fraction on i64::MIN is cut, not taken as one past the range.
     s.run("edit.addField", &json!({"layer": "calc", "name": "t2", "type": "text"})).unwrap();
@@ -38141,9 +38602,10 @@ fn calculate_field_keeps_decimals_and_says_what_whole_numbers_cut() {
     texts(&mut s, ["NaN", "inf", "1e400"]);
     let not_numbers = "Calculate Field: 'i' is null for 2 results that aren't numbers".to_string();
     assert_eq!(calc(&mut s, "i", "t2"), (vec![past("1 result"), not_numbers], vec![V::Null; 3]));
-    // With an exponent, text is read as a decimal: 0.25 loses its fraction, 3 is whole.
+    // With an exponent, text is read as a decimal: 0.25 loses its fraction, 3 is whole; "-" is
+    // no number.
     texts(&mut s, ["2.5e-1", "3e0", "-"]);
-    assert_eq!(calc(&mut s, "i", "t2"), (vec![cut("1 result")], vec![V::Int(0), V::Int(3), V::Null]));
+    assert_eq!(calc(&mut s, "i", "t2"), (vec![cut("1 result"), unread.clone()], vec![V::Int(0), V::Int(3), V::Null]));
     // Other commands that write a number into a whole-number field keep their earlier conversion
     // past the range (the range's end): only Calculate Field and calculation rules say what they
     // cut, and make such a result null.
@@ -38383,6 +38845,29 @@ fn polygons_burned_onto_a_chosen_grid() {
     );
     assert!(s.notices_since(mark).is_empty() && sel.get("skipped").is_none(), "clean input says nothing: {sel}");
     s.run("select.clear", &json!({})).unwrap();
+
+    // A date field: codes in date order, as a text field's are; the polygon with no date has no value.
+    s.run("edit.addField", &json!({"layer": "soils", "name": "surveyed", "type": "date"})).unwrap();
+    for (row, day) in [(0, "2026-03-05"), (1, "1999-12-31")] {
+        s.run("edit.setValue", &json!({"layer": "soils", "row": row, "field": "surveyed", "value": day})).unwrap();
+    }
+    let dated = s.run("raster.rasterize", &json!({"layer": "soils", "field": "surveyed", "cellSize": 1, "name": "surveyed"})).unwrap();
+    assert_eq!(dated["classes"], json!([{"code": 1, "value": "1999-12-31"}, {"code": 2, "value": "2026-03-05"}]), "{dated}");
+    assert_eq!(dated["skipped"], json!({"noValue": 1}), "{dated}");
+    let r = out_raster(&s, &dated);
+    assert_eq!((at(&r, 1.5, 1.5), at(&r, 9.5, 9.5)), (Some(2.0), Some(1.0)));
+    // Date-times by instant, not by their text: 00:30+02:00 is before 23:00Z the day before, and
+    // one moment at two offsets is one class.
+    s.run("edit.addField", &json!({"layer": "soils", "name": "seen", "type": "datetime"})).unwrap();
+    for (row, when) in [(0, "2026-03-04T23:00:00Z"), (1, "2026-03-05T00:30:00+02:00"), (2, "2026-03-05T01:00:00+02:00")] {
+        s.run("edit.setValue", &json!({"layer": "soils", "row": row, "field": "seen", "value": when})).unwrap();
+    }
+    let seen = s.run("raster.rasterize", &json!({"layer": "soils", "field": "seen", "cellSize": 1, "name": "seen"})).unwrap();
+    assert_eq!(
+        seen["classes"],
+        json!([{"code": 1, "value": "2026-03-05T00:30:00+02:00"}, {"code": 2, "value": "2026-03-04T23:00:00Z"}]),
+        "{seen}"
+    );
 
     // On a grid projected from a raster: exactly that grid, and the cells in place there.
     let gt = GeoTransform { origin_x: 0.0, origin_y: 10.0, pixel_width: 0.5, pixel_height: -0.5 };

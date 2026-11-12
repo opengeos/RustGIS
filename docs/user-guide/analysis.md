@@ -103,10 +103,18 @@ times more work as the threads it runs on. Threads share cores and memory, so a 
 can take up to about twice as long as a one-thread run at its own (measured on one machine, a Xeon
 Silver 4114; it can be longer on others); in the web app, on one thread, the limits stay as they
 are. The error names the limit on this computer and the threads it counted. The limits on memory
-(the cells a grid may have, and those on the following pages) hold everywhere, as does Viewshed's on
-its window: a radius covering more than 25 million cells, or 100,000 cells across, is refused. A
-tool's own default cell size still follows the one-thread limit, so it makes the same grid on any
-computer and from any caller; a finer cell size given is what a larger limit, or none, lets through.
+(the cells a grid may have, and those on the following pages) hold everywhere. Viewshed has no limit
+on its window (a radius past the raster's diagonal is taken as the diagonal), only on its ray steps,
+counted before it starts as the most it can take: each cell within the radius a step per cell
+between it and the observer (two with bilinear heights), though a ray stops where the ground first
+hides its cell and a cell with no data walks none. With no radius it covers the whole raster, so
+on a large one it can be refused where a run can't be stopped (listed above); a smaller radius, or
+a run from its pane on the desktop or with `rustgis-cli run` typed at a terminal, gets it through.
+Nothing caps it there, so a whole-raster viewshed of a large DEM can take long: its steps are at
+most its cells times the raster's longer side (counted twice with bilinear heights). Its progress
+shows, and **Cancel** stops it. A tool's own default cell size still follows the one-thread limit,
+so it makes the same grid on any computer and from any caller; a finer cell size given is what a
+larger limit, or none, lets through.
 
 From the command line or a script (`gp.run`), a built-in tool's parameter with a list of choices, such as Buffer's
 units, takes one of them in any letter case (`"meters"` for `Meters`); any other value is an error
@@ -722,7 +730,10 @@ into a `target` table or layer based on matching key values:
   full (`"47157000100"` matches `47157000100`), so an all-digit ID typed as a number in one table and
   as text in the other (Census GEOIDs, FIPS codes, ZIP codes) joins when the codes match exactly as
   written. Leading zeros stay meaningful: a number that lost its zero (`1001` for `"01001"`) leaves its
-  record unmatched, and a warning says how many records missed this way, with the first pair. Other
+  record unmatched, and a warning says how many records missed this way, with the first pair. A date
+  key matches a text key holding its ISO 8601 text (`2026-03-05`), and a date-time key the text
+  as RustGIS writes it (`2026-03-05T14:30:00`, or `2026-03-05T14:30:00+02:00` with its offset). Two
+  date-time keys match by instant, so the same moment at different offsets matches. Other
   incompatible key data types (e.g. text vs floating point or boolean) are rejected, and the message
   suggests converting one key with Add Field and Calculate Field.
 - **Transferred fields:** `fields` selects specific source fields to transfer (a comma-separated list
@@ -785,7 +796,8 @@ input produced by another tool, type its field names before running the model.
 
 Every statistic but `NULLS` leaves out empty values. A text field takes `COUNT`, `MIN`, `MAX`,
 `FIRST`, `LAST`, `UNIQUE`, `CONCATENATE`, `MODE`, `MINORITY` and `NULLS`; the rest need a numeric
-field. A group with no values gets empty statistics, except a `COUNT` and `UNIQUE` of 0 (its
+field. A date or date-time field takes the same ones as text; its `MIN`, `MAX`, `FIRST`, `LAST`,
+`MODE` and `MINORITY` are dates, with `MIN` and `MAX` by instant. A group with no values gets empty statistics, except a `COUNT` and `UNIQUE` of 0 (its
 `NULLS` is its `FREQUENCY`). Two output fields can't share a name, so a case field can't be called
 `FREQUENCY` or `<STAT>_<field>` for a statistic asked for. Counts are whole numbers, `CONCATENATE`
 and the statistics of a text field are text, and the others are decimal. A decimal holds whole
@@ -1235,7 +1247,7 @@ click them on the map:
 | Raster Functions | Slope, aspect, hillshade, NDVI, band math (`(b4-b3)/(b4+b3)`), remapping, thresholds, resampling |
 | Function Editor | Chains raster functions, each on the previous output |
 | Suitability Modeler | Scores rasters 1–10 and adds them with weights |
-| Visibility Analysis | A viewshed from a point on an elevation raster, with the Earth's curvature and the refraction of visible light (1/7, as `gdal_viewshed`) |
+| Visibility Analysis | A viewshed from a point on an elevation raster, with the Earth's curvature and the refraction of visible light (1/7, as `gdal_viewshed`). The ground along each ray is the cell each point falls in by default; `heights: "bilinear"` (**Ground heights › Between cells (bilinear)** in the Workflows pane) reads it between the cells' centres instead. Both are estimates of the ground between cell centres; between cells is closer on ground that bulges (a hill seen from its top), where the nearest cell can hide cells just inside the horizon. With no radius, or one longer than the raster's diagonal, the viewshed covers the whole raster. The map's **Viewshed N km Here** reads the ground as the Workflows pane's **Ground heights** says. On a raster round the whole Earth the rays don't cross its east–west edge, which the analysis says when the radius reaches it and the way across is shorter: the ground just across the edge is left out, worked out the long way round where the radius reaches the far edge through the raster too (always with no radius), or partly both, near the observer's row and not farther from it. The observer's height must be from 0 to 10,000 m. Ground with no data hides nothing, and next to it bilinear heights take the nearest cell's height; the analysis says how many cells this touched, in a notice. The answer gives both counts (0 when there is nothing to say): `acrossNoData` counts the visible cells whose rays crossed ground with no data (a hidden cell stays hidden whatever that ground is, so it isn't counted, and 0 doesn't mean no ray crossed any); `readNearest` counts every cell, visible or hidden, whose ray took a nearest height next to no data in bilinear mode |
 | Exploratory 3D Analysis | A line of sight between two points, split into seen and hidden parts, with the same curvature and refraction |
 | Geostatistical Wizard | An IDW surface from feature values, using 12 nearest neighbours by default |
 | Network Analysis | The shortest (or cheapest, by a cost field) route over a line layer |
