@@ -482,8 +482,8 @@ fn rasterize(s: &mut Session, p: &Value) -> CmdResult {
         };
         burns.push((parts, v));
     }
-    // A text field's values become codes 1 to n, in sorted order.
-    let text = field.is_some_and(|(_, ty)| ty == FieldType::Text);
+    // A text or date field's values become codes 1 to n, in sorted order (ISO dates sort by date).
+    let text = field.is_some_and(|(_, ty)| ty == FieldType::Text || ty.is_temporal());
     let classes: Vec<String> = if text {
         let set: std::collections::BTreeSet<String> = burns.iter().filter_map(|(_, v)| text_of(v)).collect();
         set.into_iter().collect()

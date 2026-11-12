@@ -37490,6 +37490,17 @@ fn polygons_burned_onto_a_chosen_grid() {
     assert!(s.notices_since(mark).is_empty() && sel.get("skipped").is_none(), "clean input says nothing: {sel}");
     s.run("select.clear", &json!({})).unwrap();
 
+    // A date field: codes in date order, as a text field's are; the polygon with no date has no value.
+    s.run("edit.addField", &json!({"layer": "soils", "name": "surveyed", "type": "date"})).unwrap();
+    for (row, day) in [(0, "2026-03-05"), (1, "1999-12-31")] {
+        s.run("edit.setValue", &json!({"layer": "soils", "row": row, "field": "surveyed", "value": day})).unwrap();
+    }
+    let dated = s.run("raster.rasterize", &json!({"layer": "soils", "field": "surveyed", "cellSize": 1, "name": "surveyed"})).unwrap();
+    assert_eq!(dated["classes"], json!([{"code": 1, "value": "1999-12-31"}, {"code": 2, "value": "2026-03-05"}]), "{dated}");
+    assert_eq!(dated["skipped"], json!({"noValue": 1}), "{dated}");
+    let r = out_raster(&s, &dated);
+    assert_eq!((at(&r, 1.5, 1.5), at(&r, 9.5, 9.5)), (Some(2.0), Some(1.0)));
+
     // On a grid projected from a raster: exactly that grid, and the cells in place there.
     let gt = GeoTransform { origin_x: 0.0, origin_y: 10.0, pixel_width: 0.5, pixel_height: -0.5 };
     let dem = Raster::new("dem", 20, 20, vec![vec![1.0; 400]], gt, Crs::LonLat, None, ColorHint::Gray, "Float32").unwrap();
