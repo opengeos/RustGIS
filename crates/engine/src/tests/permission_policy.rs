@@ -24,6 +24,137 @@ fn pending(s: &Session, scope: &Scope, call: &Call) -> Pending {
     }
 }
 
+/// Reload's implicit local-file access uses the same grants as explicit file commands.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn permission_policy_reload_requires_file_authority_in_every_ingress() {
+    if isolate_process_test("tests::permission_policy::permission_policy_reload_requires_file_authority_in_every_ingress") {
+        return;
+    }
+    use crate::policy::{AgentAccess, Effect, command_effects};
+    let path = grid_fgb("policy-reload-grants", 2);
+    let mut s = Session::new(Project::default());
+    let id = s.run("layer.addData", &json!({"path":path,"stream":true})).unwrap()["layer"].as_u64().unwrap() as u32;
+    let params = json!({"layer":id});
+    let call = Call::command("layer.reloadData", params.clone());
+    assert!(command_effects(s.registry.get("layer.reloadData").unwrap(), &params).contains(Effect::Files));
+    let source = s.map().layer(id).unwrap().source.clone().unwrap();
+    let depth = s.undo_depth();
+    let (scope, _) = assistant(14770);
+    let approved = pending(&s, &scope, &call);
+    assert!(approved.review().steps.iter().any(|step| step.starts_with("layer.reloadData ")));
+    assert!(s.run_scoped(scope.clone(), &call).is_err());
+    assert!(s.map().layer(id).unwrap().source.as_ref().unwrap().same_opening(&source));
+    assert_eq!(s.undo_depth(), depth);
+    s.run_permitted(scope.clone(), approved.allow(), &call).unwrap();
+    assert!(!s.map().layer(id).unwrap().source.as_ref().unwrap().same_opening(&source));
+
+    let task = json!({"name":"Reload linked data","steps":[{"title":"Reload","command":"layer.reloadData","params":params}]});
+    s.run("task.new", &task).unwrap();
+    let task_call = Call::command("task.run", json!({"task":"Reload linked data"}));
+    let approved = pending(&s, &scope, &task_call);
+    assert!(s.run_scoped(scope.clone(), &task_call).is_err(), "a trusted task does not widen its assistant caller");
+    s.run_permitted(scope, approved.allow(), &task_call).unwrap();
+    let mut imported = task;
+    imported["name"] = json!("Imported reload");
+    imported["imported"] = json!(true);
+    s.run("task.new", &imported).unwrap();
+    let full = Scope::agent(AgentAccess::Full, false, "reload-imported-full", None, Arc::new(Live(AtomicBool::new(true))));
+    assert!(s.run_scoped(full, &Call::command("task.run", json!({"task":"Imported reload"}))).is_err());
+
+    plugin("policy-reload-edit", &["edit"]);
+    let source = s.map().layer(id).unwrap().source.clone().unwrap();
+    let error = forward(&mut s, "policy-reload-edit", "layer.reloadData", params.clone()).unwrap_err();
+    assert!(error.contains("'files' permission"), "{error}");
+    assert!(s.map().layer(id).unwrap().source.as_ref().unwrap().same_opening(&source));
+    plugin("policy-reload-files", &["edit", "files"]);
+    forward(&mut s, "policy-reload-files", "layer.reloadData", params.clone()).unwrap();
+    assert!(!s.map().layer(id).unwrap().source.as_ref().unwrap().same_opening(&source));
+    let source = s.map().layer(id).unwrap().source.clone().unwrap();
+    s.run("layer.reloadData", &params).unwrap();
+    assert!(!s.map().layer(id).unwrap().source.as_ref().unwrap().same_opening(&source), "native User dispatch remains trusted");
+    rustgis_plugins::unload("policy-reload-edit");
+    rustgis_plugins::unload("policy-reload-files");
+    std::fs::remove_file(path).unwrap();
+}
+
+/// Admission precedes preparation, and preparation itself cannot read a file before its worker.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn permission_policy_reload_preparation_requires_approval_before_file_work() {
+    use crate::cmd::reads::{read_ahead, read_land};
+    use crate::policy::AgentAccess;
+    use rustgis_analysis::control::Control;
+    let path = grid_fgb("policy-reload-preparation", 2);
+    let bytes = std::fs::read(&path).unwrap();
+    let mut s = Session::new(Project::default());
+    let id = s.run("layer.addData", &json!({"path":path,"stream":true})).unwrap()["layer"].as_u64().unwrap() as u32;
+    let params = json!({"layer":id});
+    let source = s.map().layer(id).unwrap().source.clone().unwrap();
+    let depth = s.undo_depth();
+    std::fs::remove_file(&path).unwrap();
+    let (scope, _) = assistant(14771);
+    let error = s.with_scope(scope, |s| read_ahead(s, "layer.reloadData", &params)).unwrap().err().unwrap();
+    assert!(error.contains("approval"), "{error}");
+    let refused = Scope::agent(AgentAccess::Refuse, false, "reload-refused", None, Arc::new(Live(AtomicBool::new(true))));
+    assert!(s.with_scope(refused, |s| read_ahead(s, "layer.reloadData", &params)).unwrap().is_err());
+    assert!(s.map().layer(id).unwrap().source.as_ref().unwrap().same_opening(&source));
+    assert_eq!(s.undo_depth(), depth);
+    // An authorized picker can capture its work while the file is absent; only the worker
+    // opens it, after publication below. An unapproved picker above cannot return any work.
+    let ahead = read_ahead(&mut s, "layer.reloadData", &params).unwrap();
+    assert!(ahead.reads());
+    std::fs::write(&path, bytes).unwrap();
+    read_land(&mut s, ahead.run(&Control::new()).unwrap()).unwrap();
+    assert!(!s.map().layer(id).unwrap().source.as_ref().unwrap().same_opening(&source));
+    std::fs::remove_file(path).unwrap();
+}
+
+/// A prepared reload retains its initiating scope and target through cancellation and delivery.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn permission_policy_reload_worker_keeps_its_owner_without_native_fallback() {
+    use crate::cmd::reads::{read_ahead, read_land};
+    use crate::policy::AgentAccess;
+    use rustgis_analysis::control::Control;
+    let path = grid_fgb("policy-reload-owner", 2);
+    let mut s = Session::new(Project::default());
+    let id = s.run("layer.addData", &json!({"path":path,"stream":true})).unwrap()["layer"].as_u64().unwrap() as u32;
+    let other = s.run("layer.addData", &json!({"path":path,"stream":true})).unwrap()["layer"].as_u64().unwrap() as u32;
+    let live = Arc::new(Live(AtomicBool::new(true)));
+    let scope = Scope::agent(AgentAccess::Allow, false, "reload-owner", None, live.clone());
+    let params = json!({"layer":id});
+    let source = s.map().layer(id).unwrap().source.clone().unwrap();
+    let depth = s.undo_depth();
+    let ahead = s.with_scope(scope.clone(), |s| read_ahead(s, "layer.reloadData", &params)).unwrap().unwrap();
+    live.0.store(false, Ordering::SeqCst);
+    assert!(ahead.run(&Control::new()).err().unwrap().contains("revoked"), "revocation refuses worker entry");
+    live.0.store(true, Ordering::SeqCst);
+    let ahead = s.with_scope(scope.clone(), |s| read_ahead(s, "layer.reloadData", &params)).unwrap().unwrap();
+    let control = Control::new();
+    control.cancel();
+    assert!(ahead.run(&control).err().unwrap().contains("cancelled"));
+    let read = s.with_scope(scope.clone(), |s| read_ahead(s, "layer.reloadData", &params)).unwrap().unwrap().run(&Control::new()).unwrap();
+    let (foreign, _) = assistant(14772);
+    assert!(s.with_scope(foreign, |s| read_land(s, read)).unwrap().unwrap_err().contains("another caller"));
+    let read = s.with_scope(scope.clone(), |s| read_ahead(s, "layer.reloadData", &params)).unwrap().unwrap().run(&Control::new()).unwrap();
+    live.0.store(false, Ordering::SeqCst);
+    assert!(read_land(&mut s, read).unwrap_err().contains("revoked"), "root delivery cannot replace the revoked owner");
+    assert!(s.map().layer(id).unwrap().source.as_ref().unwrap().same_opening(&source));
+    assert_eq!(s.undo_depth(), depth);
+    live.0.store(true, Ordering::SeqCst);
+    s.active_layer = Some(id);
+    let ahead = s.with_scope(scope.clone(), |s| read_ahead(s, "layer.reloadData", &json!({}))).unwrap().unwrap();
+    s.active_layer = Some(other);
+    let other_source = s.map().layer(other).unwrap().source.clone().unwrap();
+    let read = ahead.run(&Control::new()).unwrap();
+    s.with_scope(scope, |s| read_land(s, read)).unwrap().unwrap();
+    assert!(!s.map().layer(id).unwrap().source.as_ref().unwrap().same_opening(&source));
+    assert!(s.map().layer(other).unwrap().source.as_ref().unwrap().same_opening(&other_source));
+    assert_eq!(s.undo_depth(), depth + 1);
+    std::fs::remove_file(path).unwrap();
+}
+
 /// Training chooses its raster and polygons before a model exists; approval must use that branch.
 #[test]
 fn permission_policy_training_classification_binds_its_actual_inputs() {
@@ -789,6 +920,114 @@ fn permission_policy_exact_runtime_account_rotation() {
     arcgis_auth::sign_out(Some(root.trim_end_matches('/')));
 }
 
+/// A remembered Earthdata token read before a node binds keeps it current; read after, it cancels
+/// with a message that says why; a login or replacement keeps the ordinary message. The command
+/// line and Python read it for a command that names a data host, so that command is not cancelled.
+#[test]
+fn permission_policy_remembered_earthdata_token_read_mid_run() {
+    // The token and its store are process-wide: isolate them from every parallel plan reader.
+    #[cfg(not(target_arch = "wasm32"))]
+    if std::env::var_os("RUSTGIS_POLICY_REMEMBERED_CHILD").is_none() {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "tests::permission_policy::permission_policy_remembered_earthdata_token_read_mid_run", "--nocapture"])
+            .env("RUSTGIS_POLICY_REMEMBERED_CHILD", "1")
+            // `opt_in` reads saved preferences: none, from a folder that doesn't exist.
+            .env("RUSTGIS_CONFIG_DIR", std::env::temp_dir().join(format!("rustgis-policy-remembered-{}", std::process::id())))
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{}{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+        assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed"));
+        return;
+    }
+
+    use crate::render::rustgis_tiles::earthdata;
+    use rustgis_data::secrets::{MemorySecrets, Secret, SecretStore};
+    // A new run of the app with a token remembered, not yet read.
+    let relaunch = || {
+        let store = Arc::new(MemorySecrets::new());
+        store.save(earthdata::ACCOUNT, &Secret::new("synthetic-remembered")).unwrap();
+        earthdata::set_token(None).unwrap();
+        earthdata::set_secret_store(Some(store));
+    };
+    // Starts a command that sends (a download), as the app does after the plan binds its accounts.
+    let start = |s: &mut Session, n: u64| {
+        let (scope, _) = assistant(n);
+        let call = Call::command("layer.addUrl", json!({"url":"https://example.invalid/remembered.geojson"}));
+        let p = pending(s, &scope, &call);
+        s.run_permitted(scope, p.allow(), &call).unwrap();
+        let request = s.take_url_requests().pop().unwrap();
+        let id = s.download_started_for(&request).unwrap();
+        (id, s.download_still(id).unwrap())
+    };
+    let mut s = world();
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        s.leave_downloads = true;
+    }
+
+    // Read at startup, before the node binds: nothing changes mid-run.
+    relaunch();
+    assert_eq!(earthdata::restore(), earthdata::Restored::Token);
+    let (id, still) = start(&mut s, 1601);
+    assert_eq!(earthdata::restore(), earthdata::Restored::Nothing);
+    assert!(still() && s.download_continues(id).is_ok());
+
+    // Read while the command runs: cancelled, and told why.
+    relaunch();
+    let (id, still) = start(&mut s, 1602);
+    assert_eq!(earthdata::restore(), earthdata::Restored::Token);
+    assert!(!still());
+    let said = s.download_continues(id).unwrap_err();
+    assert!(said.contains("remembered on this computer was read while this command ran") && !said.contains("synthetic"), "{said}");
+
+    // A login or replacement instead of that read, or after it, is the ordinary change.
+    let changes: [&dyn Fn(); 2] =
+        [&|| drop(earthdata::login("synthetic-typed", false)), &|| earthdata::set_token(Some("synthetic-typed")).unwrap()];
+    for (n, change) in changes.into_iter().enumerate() {
+        relaunch();
+        let (id, still) = start(&mut s, 1610 + n as u64);
+        change();
+        assert!(!still());
+        let said = s.download_continues(id).unwrap_err();
+        assert!(said.contains("account changed") && !said.contains("remembered"), "{said}");
+    }
+    relaunch();
+    let (id, _) = start(&mut s, 1620);
+    earthdata::restore();
+    earthdata::set_token(Some("synthetic-typed")).unwrap();
+    let said = s.download_continues(id).unwrap_err();
+    assert!(said.contains("account changed") && !said.contains("remembered"), "{said}");
+
+    // Run as the command line and Python run a command.
+    let run = |s: &mut Session, url: &str| {
+        s.run("layer.addUrl", &json!({ "url": url })).unwrap();
+        let request = s.take_url_requests().pop().unwrap();
+        let id = s.download_started_for(&request).unwrap();
+        (id, s.download_still(id).unwrap())
+    };
+    let data_host = "https://data.ornldaac.earthdata.nasa.gov/remembered.geojson";
+    // Without the opt-in (the app, which reads it off the frame) a command doesn't read the token.
+    relaunch();
+    run(&mut s, data_host);
+    assert!(!earthdata::has_token());
+
+    // Opting in to saved secrets reads nothing, and neither does a command naming no data host.
+    // One that names a data host reads the token first, binds it and is not cancelled.
+    let store = MemorySecrets::new();
+    store.save(earthdata::ACCOUNT, &Secret::new("synthetic-remembered")).unwrap();
+    earthdata::set_token(None).unwrap();
+    crate::prefs::opt_in(&mut s, store, |_| {});
+    assert!(!earthdata::has_token());
+    run(&mut s, "https://example.invalid/remembered.geojson");
+    assert!(!earthdata::has_token());
+    let (id, still) = run(&mut s, data_host);
+    assert!(earthdata::has_token());
+    assert_eq!(earthdata::restore(), earthdata::Restored::Nothing);
+    assert!(still() && s.download_continues(id).is_ok());
+    earthdata::set_secret_store(None);
+    earthdata::set_token(None).unwrap();
+}
+
 /// Foreign in-place completions cannot borrow/consume ownership; omitted options retain defaults.
 #[test]
 fn permission_policy_download_refinements_rollback_and_abandonment() {
@@ -1345,6 +1584,25 @@ fn permission_policy_web_login_reselection_refuses_old_consent_and_landing() {
     assert!(s.map().layers.is_empty());
 }
 
+/// A session choice naming a connection that is gone is no choice: the one connection left at
+/// the origin still lends its login, as with no choice at all.
+#[test]
+fn permission_policy_web_login_stale_choice_falls_back_to_the_sole_connection() {
+    use crate::{connections::WEB, render::rustgis_tiles::logins, service_logins};
+    let mut s = Session::new(Project::default());
+    let origin = "https://policy-stale-choice.example.invalid";
+    let definition = json!({"kind":"wms","name":"Only","address":origin,"auth":"header","keyName":"X-Key"});
+    let id = s.run("connection.new", &definition).unwrap()["id"].as_str().unwrap().to_string();
+    s.run("connection.login", &json!({"id":id,"apiKey":"RGSYNTH_stale_choice"})).unwrap();
+    let url = format!("{origin}/roads.geojson");
+    let fresh = service_logins::request(&mut s, None, &url).unwrap();
+    assert_ne!(fresh, url, "the sole connection's login is lent");
+    s.database_logins.select(WEB, origin, "gone");
+    let stale = service_logins::request(&mut s, None, &url).unwrap();
+    assert_ne!(stale, url, "a choice of a connection that is gone doesn't read anonymously");
+    assert_eq!(logins::apply(&stale).unwrap().unwrap().header.unwrap().1, "RGSYNTH_stale_choice");
+}
+
 /// Runtime snapshots include absence and this owner's logout, while another Session is separate.
 #[test]
 fn permission_policy_web_accounts_ignore_other_sessions_and_revoke_owned_sends() {
@@ -1536,6 +1794,73 @@ fn permission_policy_renamed_streamed_inputs_keep_their_reach() {
         assert_eq!(serde_json::to_value(&s.project).unwrap(), before);
     }
     assert!(outcomes.iter().all(|(_, asks, shown)| *asks && *shown), "{outcomes:?}");
+}
+
+/// Training read whole from a layer read in place reaches its source, as Load All does; the
+/// same layer in memory reaches nothing.
+#[test]
+fn permission_policy_training_read_whole_reaches_its_source() {
+    let mut s = world();
+    s.run("layer.addDataBytes", &json!({"fileName":"scene.tif","data":two_class_b64()})).unwrap();
+    let (scope, _) = assistant(3602);
+    let calls = [
+        Call::command("dl.train", json!({"layer":"scene","training":"Countries","classField":"name"})),
+        Call::command("dl.classify", json!({"layer":"scene","training":"Countries","classField":"name"})),
+        Call::command("raster.classifySupervised", json!({"layer":"scene","training":"Countries","classField":"name"})),
+    ];
+    let reaches = |s: &Session, call: &Call| matches!(s.review(&scope, call), Outcome::NeedsApproval(_));
+    assert!(calls.iter().all(|call| !reaches(&s, call)), "in memory: nothing to approve");
+    let id = s.map().layer_by_name("Countries").unwrap().id;
+    let mut source = rustgis_map::source::SourceLayer::default();
+    source.path = Some("https://example.invalid/countries.fgb".into());
+    s.map_mut().layer_mut(id).unwrap().source = Some(source);
+    for call in &calls {
+        let approved = pending(&s, &scope, call);
+        assert!(approved.review().why.contains("internet"), "{:?}", approved.review().why);
+    }
+}
+
+/// Converting the labels of, or exporting a report of, a layer read in place reads it whole, so
+/// the call reaches its source; the same layer in memory reaches no network.
+#[test]
+fn permission_policy_labels_and_reports_read_whole_reach_their_source() {
+    let mut s = world();
+    s.run("report.new", &json!({"layer":"Cities"})).unwrap();
+    let (scope, _) = assistant(3603);
+    let convert = Call::command("labels.convert", json!({"layer":"Cities"}));
+    let export = Call::command("report.export", json!({"path":"/tmp/report.pdf"}));
+    let internet = |s: &Session, call: &Call| match s.review(&scope, call) {
+        Outcome::NeedsApproval(p) => p.review().why.contains("internet"),
+        _ => false,
+    };
+    assert!(!internet(&s, &convert) && !internet(&s, &export), "in memory: no network");
+    let id = s.map().layer_by_name("Cities").unwrap().id;
+    let mut source = rustgis_map::source::SourceLayer::default();
+    source.path = Some("https://example.invalid/cities.fgb".into());
+    s.map_mut().layer_mut(id).unwrap().source = Some(source);
+    assert!(internet(&s, &convert), "labels.convert");
+    assert!(internet(&s, &export), "report.export");
+
+    // The report's own layer in memory, the web source only under its records (a subreport) or
+    // in a report it appends: the export reads those whole too.
+    for under in ["subreport", "appended"] {
+        let mut s = world();
+        s.run("report.new", &json!({"layer":"Countries","name":"Main"})).unwrap();
+        if under == "subreport" {
+            s.run("data.relate", &json!({"name":"Country of city","origin":"Countries","originKey":"name","destination":"Cities","destinationKey":"adm0name"})).unwrap();
+            s.run("report.subreport", &json!({"report":"Main","relationship":"Country of city"})).unwrap();
+        } else {
+            s.run("report.new", &json!({"layer":"Cities","name":"Appended"})).unwrap();
+            s.run("report.relatedReport", &json!({"report":"Main","related":"Appended"})).unwrap();
+        }
+        let export = Call::command("report.export", json!({"report":"Main","path":"/tmp/report.pdf"}));
+        assert!(!internet(&s, &export), "{under}: in memory");
+        let id = s.map().layer_by_name("Cities").unwrap().id;
+        let mut source = rustgis_map::source::SourceLayer::default();
+        source.path = Some("https://example.invalid/cities.fgb".into());
+        s.map_mut().layer_mut(id).unwrap().source = Some(source);
+        assert!(internet(&s, &export), "{under}: its layer read whole from the web");
+    }
 }
 
 /// In-memory range reads need Network, while local paths and external drivers retain Files.

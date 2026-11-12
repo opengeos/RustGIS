@@ -50,7 +50,7 @@ files, and exported maps are drawn turned and tilted. A tilted map keeps the sca
 of the view: nearer ground is larger, farther ground smaller and drawn coarser, fading into fog
 and, past about 72 degrees, a sky above the horizon. Labels stay upright, and those too far away
 to read are left out. Point markers stand upright, facing you, as MapLibre's circles do, smaller
-with distance (aggregated, masked or blended point layers, and layers of more than 50,000 points,
+with distance (aggregated, masked, blended or diagrammed point layers, and layers of more than 50,000 points,
 keep their markers on the ground). Extruded layers (Style › Extrusion) stand up in perspective on a tilted
 map, as in MapLibre: walls lit by the way they face and darker toward their foot, roofs at their
 height, with the labels of extruded features on their roofs. While a tilted map moves, the
@@ -69,8 +69,11 @@ back about the centre of view, so the horizon comes into sight past the curve of
 
 **Terrain** gives a tilted map relief, as MapLibre's terrain does: the map is draped over the
 ground's heights, labels and point markers stand on it, and nearer slopes hide what lies behind
-them. The heights come from a DEM raster layer of the project (heights in metres; the layer can
-stay hidden) or from elevation tiles: Terrarium (`terrarium`, as the free
+them. While the map moves, the relief is laid on a coarse grid, to keep up; once it settles, and
+in exported maps, on a grid four times finer each way, so a ridge's outline follows the ridge
+(the settled map fades in over the moving one in a quarter of a second). The heights come from a
+DEM raster layer of the project (heights in metres; the layer can stay hidden) or from elevation
+tiles: Terrarium (`terrarium`, as the free
 `https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png`) or Mapbox
 Terrain-RGB (`mapbox`, also MapTiler's). **View › Scene › Terrain** turns it on from the active
 layer (make the DEM the active layer first) and off again; a notice names the layer and says to
@@ -138,10 +141,13 @@ and **View In Google Earth** open the place in your browser at about the same zo
 
 ### Coordinate readouts
 
-The status bar shows the pointer's coordinates. Click them to step through four formats; the
-choice is remembered and also sets the right-click menu's first row. The same place in each:
+The status bar shows the pointer's coordinates while it is over the map, and keeps the last
+position (dimmed) when it leaves, so you can move to the status bar and click it. It reads `—`
+until the pointer has been over the map, and again after you switch to another map or open another
+project. Click the coordinates to step through four formats; the choice is remembered and also
+sets the right-click menu's first row. The same place in each:
 
-| Format | Example | |
+| Format | Example | Notes |
 | --- | --- | --- |
 | Decimal degrees | `15.3000° E  49.8500° N` | four decimal places |
 | DMS | `15°18′00.0″ E  49°51′00.0″ N` | degrees, minutes and seconds |
@@ -260,7 +266,7 @@ Ocean, Atlas, Blank), which need no network, and web tile layers over them:
   layers (each `hillshade-method`, lit as the map is drawn, north up; slopes are steepened at
   small scales so relief stays visible). Its shading follows the style's colours, exaggeration
   and light rather than matching MapLibre's pixel for pixel. Other `color-relief-color`
-  expressions aren't drawn. If a style's elevation source can't be read, its relief and
+  expressions aren't drawn, and a notice names the layers skipped. If a style's elevation source can't be read, its relief and
   hillshade layers are left out with a notice saying why, and the rest is drawn. Labels are placed
   as MapLibre places them: at points,
   in the middle of areas, and along lines (street names every `symbol-spacing`, turned to the
@@ -273,8 +279,43 @@ Ocean, Atlas, Blank), which need no network, and web tile layers over them:
   A style's root `center`, `zoom`, `bearing` and `pitch` say where it opens: `map.addTiles` with
   `"view": true` takes the map there once the style has loaded.
 
+Present PMTiles metadata must be complete, decodable and a JSON object; malformed metadata or a
+stored metadata section over **16 MiB** refuses ordinary loading, repair and reload rather than
+silently losing credits or source-layer information. RustGIS's PMTiles writer enforces the same
+metadata limit. This is not a limit on the archive's total size; absent metadata remains supported.
+MBTiles metadata names and values must be text: unreadable or NULL metadata cells also produce an
+error rather than being silently skipped. Native MBTiles loading, repair and reload refuse more
+than **1,000 metadata rows** rather than silently omitting later rows.
+
 HTTPS tiles use [platform certificate trust](data.md#https-certificates) on desktop and the
 command line, including private CAs trusted by the operating system. The web app uses the browser.
+
+Tile addresses are checked after filling their placeholders, before cached bytes or network
+requests are used. In the native app, a document on the internet cannot select a local
+destination IP. Explicitly selected self-hosted servers remain supported, including ordinary
+hostnames resolved by local DNS, with local fallback when the same hostname also returns
+public addresses. Native fetchers filter the resolved IPs before connecting,
+using the supplying document's actual connection reach. Native requests refuse
+link-local and unspecified addresses, including those represented by IPv4-mapped IPv6
+addresses or the well-known NAT64 prefix. Public IPv4 destinations under that prefix can pass.
+Document redirects also change the base for relative references.
+IPv4 decoding covers mapped addresses and the well-known `64:ff9b::/96` prefix. It does not
+inspect destinations behind 6to4 tunnels or custom translation gateways, including the
+[RFC 8215](https://www.rfc-editor.org/rfc/rfc8215#section-5) `64:ff9b:1::/48` prefix, whose
+translation is network-specific. Such routes can hide a private or link-local IPv4 destination
+behind a public-looking IPv6 address; restrictions on those routes require network firewall policy.
+Native redirects are checked at each hop. In the web app, use the final service address:
+tile, style, TileJSON and sprite redirects, including HTTP-to-HTTPS upgrades and CDN hops,
+are refused because the browser hides their destinations from the app. The same browser
+transport refuses redirects for downloads, fonts, archive range reads and HEAD requests for
+file metadata; see
+[network downloads](data.md#network-downloads).
+The web app checks the URL's spelling and normalized address, but cannot inspect resolved IPs.
+A public-looking hostname can reach a private or link-local server if the browser permits it;
+DNS resolution, local-network permissions and certificate trust are controlled by the browser.
+Native tile and document requests, and file downloads through **From URL…**,
+connect directly without an environment HTTP proxy, so a proxy cannot resolve destinations
+beyond these checks. See [network downloads](data.md#network-downloads) if your network requires a proxy.
 
 The gallery's **Web Basemaps** need no API key: the OpenFreeMap vector maps (Liberty, Bright,
 Positron, Dark, Fiord) and USGS Imagery. Choosing one replaces the other web basemaps; tick
@@ -309,6 +350,58 @@ alone, whichever it is (a WMS layer too). Tiles are not
 selectable or editable; a tile not yet loaded may need another click once it arrives.
 **Reload** in the Basemap gallery (`map.reloadWebLayers`) clears cached tiles and styles and
 fetches them again.
+
+**Reloading a local tile archive (desktop).** After changing a PMTiles or MBTiles file on disk,
+right-click its row in Layers and choose **Reload Data** (**Reload Tile Archive** in Command
+Search). CLI, Python, MCP and the Assistant use
+`map.reloadTiles={"index":0}`; `"name"` or catalog `"id"` can select the archive instead.
+No replacement path is accepted. This is a manual action: RustGIS does not watch the file for changes.
+It rereads that archive's metadata and tiles without clearing other archives or web layers.
+The layer keeps its name, visibility, opacity, blend, drawing order, source-layer visibility,
+style and other presentation settings; the map's view stays where it is. Undo cannot restore
+file contents that another program has overwritten.
+
+On the desktop, menu actions and direct attached MCP `run_command` calls validate reload and
+repair on a background worker; the status bar shows the work and **Cancel**. Only one read runs
+at a time. If its project, map, archive or presentation changes before it lands, the result is
+left unapplied: retry on the intended target. A paused attached batch also rejects its remaining
+commands if the project or selected map changes. Notebook cells, task steps, scripts (the Script
+pane and attached MCP `run`) and file-bridge scripts validate inline on the window thread, without
+reload status or cancellation during validation.
+Cancelling MBTiles validation also interrupts SQLite queries used to infer missing zoom metadata.
+It cannot preempt a filesystem operation blocked inside the operating system.
+
+Approval binds the selected archive's owning map, stack position and source route, not just its
+name or index. Retargeting or reordering it requires reviewing the operation again.
+
+Each operation observes file size and modification time before validation, checks them again
+after validation and immediately before applying the result, and rejects observable changes.
+It also checks file identity and change time where the platform exposes them, plus MBTiles
+`-wal` and `-journal` existence and revisions (not the reader-coordination `-shm` file).
+Metadata that cannot be read is an error, not permission to apply an unchecked result.
+These checks are not an immutable snapshot: a rewrite that leaves the same observations, or a
+write after the final check, may escape detection. Finish writing before reloading or repairing.
+If an archive is reloaded during a map or layout export, the export refuses a mixed-version
+result. Wait for the reload to finish and retry the export.
+
+Reload first checks that the file can be read. If it is missing, unreadable or invalid, a notice
+explains the failure and the existing layer and retained cached data are left unchanged.
+Finish writing or restore the file, then choose **Reload Data** again. If the file has moved,
+choose **Repair Data Source…** instead and select its new location. Repair also checks the
+replacement before changing the source; cancelling or choosing an unreadable or invalid archive
+leaves the existing source and layer unchanged, so you can retry with a valid file.
+
+Validation reads one size-bounded raster sample from a fresh MBTiles connection and decodes it
+before dropping retained caches. PMTiles validation checks all reachable index directories, not
+every tile payload. It allows at most **64 MiB stored and 64 MiB decoded index bytes**, **1,048,576
+index entries**, **4,096 unique directories** (including the root), and **four leaf levels**;
+each stored directory read is limited to **16 MiB**. An invalid index or an exceeded validation
+budget is an explicit error without eviction, even if an unusually large index is otherwise valid.
+
+Neither action is available for local archives in the web app, or for remote tile services.
+On Windows, an open MBTiles file may not be replaceable while RustGIS holds it open: reload
+does not bypass that operating-system restriction. Close RustGIS before replacing the file,
+then reopen the project, or write to a different path and use **Repair Data Source…**.
 
 **Source layers.** A vector PMTiles or MBTiles archive lists its source layers (the
 `vector_layers` its metadata names: `water`, `roads`, `pois`…) under its row in the Layers pane:
@@ -381,13 +474,30 @@ taking other bodies' basemaps off) and `map.bodies`.
 
 ### Worldview
 
-The world outline and the World Atlas sample's countries come in two worldviews: Natural
-Earth's default borders, and China's (Natural Earth's China point of view: Taiwan, Aksai Chin
-and South Tibet are part of China). RustGIS picks China's when the system's time zone is
-mainland China's (such as `Asia/Shanghai`) or its first locale is `zh-CN`; nothing is looked up
-over the network. Choose one in **Settings › Language › Worldview**, set `RUSTGIS_WORLDVIEW`
-(`default` or `china`), or pass `--worldview` to `rustgis-cli`. An untouched sample project
-switches its countries at once; others keep the layer they have.
+The world outline and the World Atlas sample's countries show Natural Earth's default (de facto)
+borders, which are built in, or the borders as one of 31 countries sees them: Natural Earth's
+[points of view](https://www.naturalearthdata.com/blog/admin-0-countries-point-of-views/), from
+Argentina to Vietnam. Choose one in **Settings › Language › Worldview**, set `RUSTGIS_WORLDVIEW`
+to its code (such as `chn`, `ind` or `usa`), or pass `--worldview` to `rustgis-cli`.
+
+A point of view isn't part of the app: it is downloaded from
+[source.coop](https://source.coop/opengeos/data/rustgis/worldviews) when you choose it, and the
+desktop app and the command line keep it in the cache folder, so it is downloaded once; the web
+app downloads it again in each session. **Detail**, at the top of the same menu, sets how much:
+
+- **Simplified** (the default): borders at 1:110m, like the built-in ones; about 250 KB.
+- **Original**: Natural Earth's 1:10m borders with every island and territory; a 3 MB download,
+  10 MB once unpacked, so maps with it draw more slowly. On a flat Web Mercator map the
+  basemap's land outline is drawn simplified to within a pixel at each zoom, which keeps most of
+  that cost away from it; the globe and other projections draw it in full. With the default
+  worldview, this downloads the detailed version of the built-in borders.
+
+`rustgis-cli` takes `--worldview-detail original`. The map keeps the borders it shows until the
+download arrives, and says so if it fails. Until
+you choose one, RustGIS shows China's view when the system's time zone is mainland China's
+(such as `Asia/Shanghai`) or its first locale is `zh-CN`, downloading it the same way, and the
+default borders everywhere else. Your choice is kept for the next start. An untouched sample
+project switches its countries when the new borders arrive; others keep the layer they have.
 
 ## Projections
 
@@ -399,8 +509,8 @@ System** dialog, which also takes a projected EPSG code (such as `3035`, `32633`
 code whose projection method or datum grid RustGIS can't use (Laborde such as `8441`, or a NAD27
 code that needs a grid) is refused with the reason, rather than drawn in another projection.
 RustGIS supports a subset of Esri's projected systems, checked against
-PROJ at representative points; unsupported codes such as World Miller (`ESRI:54003`) are refused
-as unknown codes. The presets:
+PROJ at representative points; unsupported codes such as World Miller (`ESRI:54003`) and the
+two-point oblique Mercators (`ESRI:53025`, `ESRI:54025`) are refused as unknown codes. The presets:
 
 | Preset | Kind |
 | --- | --- |

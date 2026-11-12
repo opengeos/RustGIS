@@ -12,7 +12,7 @@ use crate::manifest::{Permission, Runtime, valid_id, version_parts};
 pub const DEFAULT_URL: &str = "https://plugins.rustgis.app/registry.json";
 
 /// The most entries read from a registry (or a blocklist): room for tens of thousands of plugins.
-const MAX_ENTRIES: usize = 100_000;
+pub(crate) const MAX_ENTRIES: usize = 100_000;
 
 /// The largest registry downloaded (a registry entry is about 1 KB, so this is ample).
 pub const MAX_REGISTRY_BYTES: usize = 64 * 1024 * 1024;
@@ -192,15 +192,40 @@ pub fn blocklist_url(registry: &str) -> String {
     resolve(registry, "blocklist.json")
 }
 
-/// Reads a blocklist (an object with a `blocked` array, or a bare array).
+/// Reads a blocklist (an object with a `blocked` array, or a bare array). Any other shape, an
+/// entry whose `id` isn't a plugin id or whose `sha256`, when given, isn't a SHA-256 hash (either
+/// would match nothing; no `sha256`, or `null`, withdraws every version), or more than 100,000
+/// entries, is an error rather than a shorter list, so a malformed refresh leaves the last good
+/// list in place: only `[]` or `{"blocked": []}` clears it.
 pub fn parse_blocklist(text: &str) -> Result<Vec<Blocked>, String> {
     let root: Value = serde_json::from_str(text).map_err(|e| format!("the blocklist isn't valid JSON: {e}"))?;
-    let list = match &root {
-        Value::Array(a) => a.clone(),
-        Value::Object(o) => o.get("blocked").and_then(Value::as_array).cloned().unwrap_or_default(),
-        _ => Vec::new(),
+    let list = match root {
+        Value::Array(a) => a,
+        Value::Object(mut o) => match o.remove("blocked") {
+            Some(Value::Array(a)) => a,
+            _ => return Err("the blocklist has no 'blocked' list".into()),
+        },
+        _ => return Err("the blocklist isn't a list or an object with a 'blocked' list".into()),
     };
-    Ok(list.into_iter().take(MAX_ENTRIES).filter_map(|v| serde_json::from_value::<Blocked>(v).ok()).collect())
+    if list.len() > MAX_ENTRIES {
+        return Err(format!("the blocklist has {} entries; at most {MAX_ENTRIES} can be read", list.len()));
+    }
+    list.into_iter()
+        .enumerate()
+        .map(|(i, v)| {
+            // The reason is cut short: it can quote the entry, which comes from the network.
+            let b = serde_json::from_value::<Blocked>(v)
+                .map_err(|e| format!("blocklist entry {}: {}", i + 1, e.to_string().chars().take(200).collect::<String>()))?;
+            if !valid_id(&b.id, false) {
+                return Err(format!("blocklist entry {}: id isn't a plugin id", i + 1));
+            }
+            // Either case: `blocked` compares hashes ignoring it.
+            match &b.sha256 {
+                Some(h) if !is_sha256(&h.to_ascii_lowercase()) => Err(format!("blocklist entry {}: sha256 isn't a SHA-256 hash", i + 1)),
+                _ => Ok(b),
+            }
+        })
+        .collect()
 }
 
 /// Why a package is blocked, if it is.
@@ -226,7 +251,7 @@ pub fn fetch_with_progress(
 ) -> Result<Vec<u8>, String> {
     use std::io::Read;
     if !allowed_url(url) {
-        return Err(format!("{url}: only HTTPS addresses are allowed"));
+        return Err(rustgis_data::diagnostics::message_with_address(url, "only HTTPS addresses are allowed"));
     }
     // Redirects stay on HTTPS (a local test registry may use plain HTTP, and only locally). A
     // server that stops sending ends the download after a minute, not at `timeout`: until a read
@@ -239,8 +264,11 @@ pub fn fetch_with_progress(
         .tls_config(rustgis_data::http::tls_config())
         .build()
         .into();
-    let mut resp =
-        agent.get(url).header("User-Agent", concat!("RustGIS/", env!("CARGO_PKG_VERSION"))).call().map_err(|e| format!("{url}: {e}"))?;
+    let mut resp = agent
+        .get(url)
+        .header("User-Agent", concat!("RustGIS/", env!("CARGO_PKG_VERSION")))
+        .call()
+        .map_err(|e| rustgis_data::diagnostics::message_with_address(url, &e.to_string()))?;
     let total = resp.headers().get("content-length").and_then(|v| v.to_str().ok()).and_then(|v| v.trim().parse::<u64>().ok());
     let mut reader = resp.body_mut().with_config().limit(limit as u64 + 1).reader();
     let mut buf = Vec::new();
@@ -249,17 +277,17 @@ pub fn fetch_with_progress(
         let n = match reader.read(&mut piece) {
             Ok(n) => n,
             Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
-            Err(e) => return Err(format!("{url}: {e}")),
+            Err(e) => return Err(rustgis_data::diagnostics::message_with_address(url, &e.to_string())),
         };
         if n == 0 {
             break;
         }
         buf.extend_from_slice(piece.get(..n).unwrap_or_default());
         if buf.len() > limit {
-            return Err(format!("{url} is larger than {} MB", limit / (1024 * 1024)));
+            return Err(rustgis_data::diagnostics::message_with_address(url, &format!("is larger than {} MB", limit / (1024 * 1024))));
         }
         if !progress(buf.len() as u64, total) {
-            return Err(format!("{url}: cancelled"));
+            return Err(rustgis_data::diagnostics::message_with_address(url, "cancelled"));
         }
     }
     Ok(buf)
@@ -271,6 +299,14 @@ mod fetch_tests {
     use std::io::{Read, Write};
     use std::net::TcpListener;
     use std::time::Duration;
+
+    #[test]
+    fn rejected_secret_addresses_keep_the_policy_reason() {
+        let error = fetch("ftp://plugins.test/a?token=secret value", 1024).unwrap_err();
+        let error = rustgis_data::diagnostics::redact(&rustgis_data::diagnostics::redact(&error));
+        assert!(error.contains("only HTTPS addresses are allowed"), "{error}");
+        assert!(!error.contains("secret") && !error.contains("value"), "{error}");
+    }
 
     /// Serves `body` once on this computer, as an HTTP answer that gives its length.
     fn serve(body: Vec<u8>) -> std::io::Result<String> {

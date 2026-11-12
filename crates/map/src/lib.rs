@@ -4,6 +4,7 @@
 pub mod antimeridian;
 pub mod camera;
 pub mod color;
+pub mod content;
 pub mod design;
 pub mod diagram;
 pub mod effects;
@@ -122,6 +123,24 @@ pub enum NoFill {
     Symbols,
 }
 
+/// What No Fill hid ([`Layer::hidden_fills`]), for Restore Fill to put back.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct HiddenFills {
+    /// Each symbol's fill opacity before No Fill, in [`Renderer::map_symbols`] order (made 0).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub alphas: Vec<u8>,
+    /// The layer's own fills before No Fill (replaced by its transparent one).
+    #[serde(default, skip_serializing_if = "Vec::is_empty", deserialize_with = "fills::de_fills")]
+    pub fills: Vec<fills::FillLayer>,
+    /// The classes' own fills before No Fill (taken off).
+    #[serde(default, skip_serializing_if = "Vec::is_empty", deserialize_with = "de_class_fills")]
+    pub class_fills: Vec<(symbology::ClassRef, Vec<fills::FillLayer>)>,
+    /// Started by No Fill on again over a layer that kept nothing (saved with No Fill on by an
+    /// earlier RustGIS): it holds only what was hidden since, not what the first No Fill hid.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub partial: bool,
+}
+
 /// A layer: a dataset drawn with a renderer and labels.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Layer {
@@ -186,6 +205,9 @@ pub struct Layer {
     /// fill in the symbol's colour shows them again. A fill colour chosen transparent isn't this.
     #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "de_no_fill")]
     pub no_fill: Option<NoFill>,
+    /// What No Fill hid, while it is on: Restore Fill puts back what wasn't changed since.
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "de_hidden_fills")]
+    pub hidden_fills: Option<HiddenFills>,
     /// Draws the stacked strokes in levels (symbol levels): every feature's strokes of one
     /// [`LineStroke::level`] before any of the next, so road casings join under the cores
     /// instead of cutting across them where lines meet.
@@ -228,6 +250,11 @@ pub struct Layer {
     /// The GeoPackage table this layer's edits save to.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gpkg: Option<source::GpkgEdit>,
+    /// Set for a layer read whole from a Shapefile or GeoJSON file (its `dataset.source`): the
+    /// file and the layer as they were when last in step, to tell edits the file lacks and
+    /// changes made to the file since.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub synced: Option<rustgis_data::sync::Synced>,
     /// The saved connection it was added from (its id, in the app's preferences): a layer whose
     /// source is read again logs in with that connection's login, and a project opened where
     /// the connection or its login is missing asks for one. Empty for a layer that came from no
@@ -241,6 +268,9 @@ pub struct Layer {
     /// Process-local identity, preserved by snapshots but never stored in a project.
     #[serde(skip, default = "next_layer_instance")]
     instance_id: u64,
+    /// Process-local replacement identity; ordinary geometry edits leave chosen vertices valid.
+    #[serde(skip)]
+    replacement_rev: u64,
     /// Shared, like the features: an undo snapshot or other copy of the layer doesn't copy it.
     #[serde(skip)]
     projected: std::sync::Arc<Vec<Option<Geometry>>>,
@@ -293,6 +323,16 @@ impl Layer {
     /// Identifies this live layer, independently of its reusable map-local ID.
     pub fn instance_id(&self) -> u64 {
         self.instance_id
+    }
+
+    /// Identifies the current source contents independently of ordinary vertex edits.
+    pub fn replacement_revision(&self) -> u64 {
+        self.replacement_rev
+    }
+
+    /// Marks a wholesale data replacement, not an edit to the existing features.
+    pub fn touch_replacement(&mut self) {
+        self.replacement_rev = next_layer_instance();
     }
 
     /// Starts a distinct live instance after copying a layer or its owning map.
@@ -371,14 +411,24 @@ impl Layer {
         })
     }
 
-    /// Installs a fresh source, retaining styling but clearing feature-specific state whose ids
-    /// may identify different features. Returns the number of saved label moves reset for a notice.
-    pub fn replace_source(&mut self, src: source::SourceLayer) -> usize {
+    /// Installs a fresh source, retaining styling except an untouched no-geometry default.
+    /// Clears feature-specific state whose ids may identify different features, returning the
+    /// number of saved label moves reset for a notice.
+    pub fn replace_source(&mut self, mut src: source::SourceLayer) -> usize {
         self.selection.clear();
         let moved = self.labels.in_order().map(|class| class.moved.len()).sum();
         self.labels.default.moved.clear();
         self.labels.classes.iter_mut().for_each(|class| class.moved.clear());
+        src.reads = self.source.as_ref().map_or(0, |old| old.reads);
         if let Some(info) = src.info() {
+            if self.dataset.geometry_type == rustgis_data::GeometryType::None
+                && info.geometry_type != rustgis_data::GeometryType::None
+                && let Renderer::Single(sym) = &self.renderer
+                && let Some(seed) = sym.default_seed(rustgis_data::GeometryType::None)
+            {
+                self.renderer = Renderer::Single(Symbol::default_for(info.geometry_type, seed));
+            }
+            self.dataset.geometry_type = info.geometry_type;
             self.dataset.fields = info.fields.clone();
             self.dataset.crs = info.coordinate_system();
             // The new source's Z and M, which reading it drops (see `Dataset::zm_dropped`).
@@ -386,6 +436,7 @@ impl Layer {
         }
         self.dataset.source = src.linked_file().map(String::from);
         self.source = Some(src);
+        self.touch_replacement();
         self.install(Vec::new());
         moved
     }
@@ -403,6 +454,7 @@ impl Layer {
         Layer {
             id,
             instance_id: next_layer_instance(),
+            replacement_rev: 0,
             name: dataset.name.clone(),
             visible: true,
             labels: Labeling::default_for(&dataset),
@@ -425,6 +477,7 @@ impl Layer {
             line_strokes: Vec::new(),
             fill_layers: Vec::new(),
             no_fill: None,
+            hidden_fills: None,
             stroke_levels: false,
             marker_rotation: None,
             diagram: None,
@@ -436,6 +489,7 @@ impl Layer {
             source: None,
             postgis: None,
             gpkg: None,
+            synced: None,
             connection: String::new(),
             anonymous: false,
             projected: Default::default(),
@@ -553,8 +607,18 @@ impl Layer {
         self.source.as_ref().is_some_and(|s| s.is_pending())
     }
 
+    /// The ids of the selected features: those of the selected rows, and for a layer read in place
+    /// those parked for its next read (a project just opened, its view not yet read).
+    pub fn selected_ids(&self) -> std::collections::HashSet<u64> {
+        let mut ids: std::collections::HashSet<u64> =
+            self.selection.iter().filter_map(|r| self.dataset.features.get(*r)).map(|f| f.id).collect();
+        ids.extend(self.source.iter().flat_map(|src| src.saved_selection.iter().copied()));
+        ids
+    }
+
     /// Replaces a streamed layer's features, keeping the selection (by feature id).
     fn install(&mut self, features: Vec<rustgis_data::Feature>) {
+        let areas = self.source.as_ref().and_then(|source| source.ready_cache.as_ref()).map(|cache| cache.areas).unwrap_or_default();
         let mut ids: std::collections::HashSet<u64> =
             self.selection.iter().filter_map(|r| self.dataset.features.get(*r)).map(|f| f.id).collect();
         if let Some(src) = &mut self.source {
@@ -590,6 +654,10 @@ impl Layer {
                 if padded { rustgis_data::source::memory::features_bytes(&self.dataset.features) } else { cache.feature_bytes };
             self.view_memory.seed(&self.dataset.features, &self.projected, feature_bytes, cache.projected_bytes);
         }
+        if let Some(source) = &mut self.source {
+            source.area_counts = areas;
+            source.area_features = Some(self.dataset.features.allocation_key());
+        }
     }
 
     /// Allocated row, projected-geometry, extent and optional display storage for this layer.
@@ -613,6 +681,14 @@ impl Layer {
         let Some(copy) = self.open_source()? else { return Ok((self.dataset.clone(), 0)) };
         let (mut ds, report) = copy.read_all()?;
         ds.name = self.dataset.name.clone();
+        ds.zm_dropped |= self.dataset.zm_dropped;
+        if ds.features.is_empty() && ds.geometry_type == rustgis_data::GeometryType::None {
+            ds.geometry_type = if self.dataset.geometry_type != rustgis_data::GeometryType::None {
+                self.dataset.geometry_type
+            } else {
+                copy.info().map_or(rustgis_data::GeometryType::None, |info| info.geometry_type)
+            };
+        }
         // (A project that lists no fields keeps the source's, as `sync_source` gives it.)
         if !self.dataset.fields.is_empty() {
             ds.fields = self.dataset.fields.clone();
@@ -628,7 +704,15 @@ impl Layer {
         let Some(copy) = self.open_source()? else { return Ok(None) };
         let Some(src) = copy.visit_source() else { return Ok(None) };
         let info = src.info();
-        let mut ds = Dataset::new(self.dataset.name.clone(), info.geometry_type, info.fields.clone());
+        // (A reload that read no rows leaves the reader without a type: the layer's declared one
+        // stands, as in `load_all_counted`.)
+        let geometry_type =
+            if info.geometry_type == rustgis_data::GeometryType::None && self.dataset.geometry_type != rustgis_data::GeometryType::None {
+                self.dataset.geometry_type
+            } else {
+                info.geometry_type
+            };
+        let mut ds = Dataset::new(self.dataset.name.clone(), geometry_type, info.fields.clone());
         ds.crs = info.coordinate_system();
         // What reading the source drops, the export lacks (see `Dataset::zm_dropped`).
         ds.zm_dropped = info.zm_dropped || self.dataset.zm_dropped;
@@ -1035,7 +1119,7 @@ impl Layer {
             }
         }
         for f in self.display_filters.iter().filter(|f| f.applies(scale)) {
-            if let Ok(e) = rustgis_data::query::parse(&f.where_, &self.dataset) {
+            if let Ok(e) = rustgis_data::query::parse_fields(&f.where_, &self.dataset) {
                 for (r, keep) in rows.iter_mut().enumerate() {
                     *keep = *keep && rustgis_data::query::eval(&e, &self.dataset, r);
                 }
@@ -1065,7 +1149,7 @@ impl Layer {
     pub fn visible_rows(&self) -> Vec<bool> {
         let n = self.dataset.features.len();
         match self.definition_query.as_deref().filter(|q| !q.trim().is_empty()) {
-            Some(q) => match rustgis_data::query::parse(q, &self.dataset) {
+            Some(q) => match rustgis_data::query::parse_fields(q, &self.dataset) {
                 Ok(e) => (0..n).map(|r| rustgis_data::query::eval(&e, &self.dataset, r)).collect(),
                 Err(_) => vec![true; n],
             },
@@ -2066,11 +2150,14 @@ impl Map {
     /// Makes a project file's groups whole (#836): a parent that is the group itself, missing,
     /// in a loop or past [`MAX_GROUP_DEPTH`] levels is dropped (the group goes to the top
     /// level), and each group's layers are gathered together, the outermost groups first.
-    pub fn tidy_groups(&mut self) {
+    /// Returns the number of invalid parent links removed.
+    pub fn tidy_groups(&mut self) -> usize {
+        let mut removed = 0;
         let ids: std::collections::HashSet<u32> = self.groups.iter().map(|g| g.id).collect();
         for g in &mut self.groups {
             if g.parent.is_some_and(|p| p == g.id || !ids.contains(&p)) {
                 g.parent = None;
+                removed += 1;
             }
         }
         let mut parent: std::collections::HashMap<u32, Option<u32>> = self.groups.iter().map(|g| (g.id, g.parent)).collect();
@@ -2080,6 +2167,7 @@ impl Map {
             while let Some(p) = next {
                 if seen.contains(&p) || seen.len() >= MAX_GROUP_DEPTH {
                     g.parent = None;
+                    removed += 1;
                     parent.insert(g.id, None);
                     break;
                 }
@@ -2092,6 +2180,7 @@ impl Map {
         for (_, id) in order {
             self.gather_group(id);
         }
+        removed
     }
 
     /// The map's layers as they stand (their ids in order, and the next id), cheap to take before
@@ -2728,6 +2817,20 @@ fn de_no_fill<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<NoFill>, 
     })
 }
 
+/// [`Layer::hidden_fills`] that don't read as this version keeps them read as none kept, rather
+/// than failing the whole project; Restore Fill then says what it couldn't put back.
+fn de_hidden_fills<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<HiddenFills>, D::Error> {
+    Ok(Option::<serde_json::Value>::deserialize(d)?.and_then(|v| serde_json::from_value(v).ok()))
+}
+
+/// [`HiddenFills::class_fills`] read as a layer's own fill stacks are: each stack at most
+/// [`fills::MAX_FILLS`], so a saved stack Restore Fill would refuse still opens.
+fn de_class_fills<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<(symbology::ClassRef, Vec<fills::FillLayer>)>, D::Error> {
+    #[derive(Deserialize)]
+    struct Saved(symbology::ClassRef, #[serde(deserialize_with = "fills::de_fills")] Vec<fills::FillLayer>);
+    Ok(Vec::<Saved>::deserialize(d)?.into_iter().map(|Saved(class, f)| (class, f)).collect())
+}
+
 /// Reads a layer's reference scale as `layer.referenceScale` would leave it: one out of
 /// [`REFERENCE_SCALES`] (or not a number) is none. A project file is hostile input.
 fn de_reference_scale<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<f64>, D::Error> {
@@ -2856,6 +2959,7 @@ impl Layer {
             line_strokes: _,
             fill_layers: _,
             no_fill: _,
+            hidden_fills: _,
             stroke_levels: _,
             marker_rotation: _,
             symbol_by: _,
@@ -2866,6 +2970,7 @@ impl Layer {
             source,
             postgis,
             gpkg,
+            synced: _,
             connection: _,
             anonymous: _,
             instance_id: _,
@@ -2881,6 +2986,7 @@ impl Layer {
             view_memory: _,
             geometry_kinds: _,
             geometry_rev: _,
+            replacement_rev: _,
             diagram: _,
         } = self;
         let mut out = Vec::new();
@@ -3191,6 +3297,34 @@ mod tests {
             v["no_fill"] = unknown.clone();
             assert_eq!(serde_json::from_value::<Layer>(v.clone()).unwrap().no_fill, None, "{unknown}");
         }
+        // What No Fill hid is saved with it; one that doesn't read is none kept.
+        let kept = HiddenFills {
+            alphas: vec![170, 0],
+            fills: vec![fills::FillLayer::hatch(45.0, 4.0, 0.5)],
+            class_fills: vec![(symbology::ClassRef::Index(1), vec![fills::FillLayer::default()])],
+            partial: true,
+        };
+        l.hidden_fills = Some(kept.clone());
+        let text = serde_json::to_string(&l).unwrap();
+        assert_eq!(serde_json::from_str::<Layer>(&text).unwrap().hidden_fills, Some(kept));
+        let mut v = serde_json::to_value(&l).unwrap();
+        for unknown in
+            [serde_json::json!("Later"), serde_json::json!({"alphas": [300]}), serde_json::json!({"class_fills": [["Later", []]]})]
+        {
+            v["hidden_fills"] = unknown.clone();
+            assert_eq!(serde_json::from_value::<Layer>(v.clone()).unwrap().hidden_fills, None, "{unknown}");
+        }
+    }
+
+    #[test]
+    fn a_saved_class_stack_reads_bounded_like_a_layer_stack() {
+        // Restore Fill would refuse a class stack past MAX_FILLS, so a saved one reads at most that.
+        let stack: Vec<_> = (0..fills::MAX_FILLS + 4).map(|_| serde_json::json!({})).collect();
+        let saved = serde_json::json!({"class_fills": [[{"Index": 1}, stack]]});
+        let read: HiddenFills = serde_json::from_value(saved).unwrap();
+        assert_eq!(read.class_fills.len(), 1);
+        assert_eq!(read.class_fills[0].0, symbology::ClassRef::Index(1));
+        assert_eq!(read.class_fills[0].1.len(), fills::MAX_FILLS);
     }
 
     #[test]
@@ -3241,10 +3375,11 @@ mod tests {
         assert!(!r.has_class_strokes());
     }
 
-    /// A layer of one long line along the equator with `n` vertices.
+    /// A layer of one line around the equator of `n` vertices, zigzagging about 11 m either side of it, so
+    /// display thinning keeps every vertex zoomed in and only the ends zoomed out.
     fn long_line(n: usize) -> Layer {
         let mut d = Dataset::new("line", GeometryType::Polyline, vec![]);
-        let run = (0..n).map(|i| Coord::new(-170.0 + 340.0 * i as f64 / n as f64, 0.0)).collect();
+        let run = (0..n).map(|i| Coord::new(-170.0 + 340.0 * i as f64 / n as f64, if i % 2 == 0 { 1e-4 } else { -1e-4 })).collect();
         d.push(Some(Geometry::Line(vec![run])), vec![]);
         Layer::new(1, d)
     }

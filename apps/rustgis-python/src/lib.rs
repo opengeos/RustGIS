@@ -152,9 +152,9 @@ impl Engine {
     }
 
     /// Layer `layer` of the active map as GeoJSON text: an id, or a name (a name that is a number
-    /// is read as an id after the names). Its features as they are in memory (a large file read
-    /// in place holds the features of the last view; run `layer.loadAll` first for all of them),
-    /// or only its selected ones when `selected`.
+    /// is read as an id after the names). All its features (a layer read in place, which holds
+    /// only the features of the last view, is read whole from its source, and rows that couldn't
+    /// be read are said), or only its selected ones when `selected`.
     #[pyo3(signature = (layer, selected=false))]
     fn layer_geojson(&self, py: Python<'_>, layer: LayerRef, selected: bool) -> PyResult<String> {
         let result = self.with_session(py, |session| {
@@ -166,6 +166,16 @@ impl Engine {
                     .or_else(|| name.trim().parse::<u32>().ok().and_then(|id| map.layer(id)))
                     .ok_or_else(|| format!("no layer named '{name}'")),
             }?;
+            if !selected && found.is_streamed() {
+                let (ds, unread) = found.load_all_counted().map_err(|e| format!("{}: {e}", found.name))?;
+                let name = found.name.clone();
+                match unread {
+                    0 => {}
+                    1 => session.warn(format!("{name}: 1 row couldn't be read and was left out")),
+                    n => session.warn(format!("{name}: {n} rows couldn't be read and were left out")),
+                }
+                return Ok(rustgis_engine::data::io::to_geojson(&ds).to_string());
+            }
             if !selected {
                 return Ok(rustgis_engine::data::io::to_geojson(&found.dataset).to_string());
             }
@@ -222,7 +232,11 @@ impl Engine {
     /// The notices commands have given since the last call (a file's warnings, a tool's
     /// summary): `(text, is_error)` pairs, oldest first.
     fn take_notices(&self, py: Python<'_>) -> Vec<(String, bool)> {
-        let notices: Vec<(String, bool)> = self.with_session(py, |session| session.notices.drain(..).map(|n| (n.text, n.error)).collect());
+        let notices: Vec<(String, bool)> = self.with_session(py, |session| {
+            // A client made on a background thread since the last command may have chosen the trust.
+            session.notice_trust();
+            session.notices.drain(..).map(|n| (n.text, n.error)).collect()
+        });
         self.flush(py);
         notices
     }

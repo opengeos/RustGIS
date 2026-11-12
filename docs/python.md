@@ -237,6 +237,10 @@ The GeoLibre and Whitebox tools run as they do in the app, through the `geolibre
 (see [Analysis](user-guide/analysis.md)). `rustgis.load_plugins()`, or
 `Session(plugins=True)`, loads the [plugins](plugins.md) installed for the desktop app.
 
+`Session(threads=4)` sets the most threads one piece of work uses (1 to 1024, never more than the
+cores), for the whole process, every session in it included; `s.run("gp.threads", threads=None)`
+goes back to the default, the cores up to 16 (see [Environments](user-guide/analysis.md#analysis-workflows)).
+
 ### Saved connections and secrets
 
 `rustgis.Session(use_saved_secrets=True)` loads the desktop app's saved connection definitions
@@ -291,15 +295,24 @@ big.to_file("big-cities.gpkg", mode="replaceTable")   # its table named for the 
 
 `add_geojson` also takes any object with `__geo_interface__` (a Shapely geometry, a GeoSeries).
 `add_data`, `add_geojson` and `add_geopandas` return a `Layer` for a single layer, a list for
-multiple layers, or the command result for standalone tables. For example, a CSV without
-geometry is a table. Extra `add_data` keyword arguments go to `layer.addData`, such as `layer=`
-to choose a GeoPackage table, or `x=` and `y=` to choose coordinate columns.
+multiple layers (every feature table of a GeoPackage, or the layers GDAL reads from one file,
+such as points and lines split into a layer each), or the command result when the file adds
+only standalone tables. For example, a CSV without geometry is a table. Standalone tables added
+together with layers are listed in `s.info()["tables"]`; a GeoPackage's attribute-only tables
+are not added when the whole file is. A GeoPackage of more than 32 feature tables adds the
+first 32 (a notice says so); add the other feature tables by name with `layer=`. Extra `add_data` keyword
+arguments go to `layer.addData`, such as `layer=` to choose a GeoPackage table, or `x=` and `y=`
+to choose coordinate columns.
 
 Every format the app reads works here: GeoJSON, CSV, Shapefile, GeoPackage, GeoParquet,
 FlatGeobuf, KML/KMZ, GPX, GeoTIFF and the rest of [Supported Data
-Formats](user-guide/data-formats.md). A large file read in place keeps only the features of the
-last view in memory; run `layer.loadAll` on it before `to_geojson` or `to_geopandas` to get all
-of them.
+Formats](user-guide/data-formats.md). A layer read in place (a large file, a database table)
+keeps only the features of the last view in memory; `to_geojson` and `to_geopandas` read all of
+its features from the source each time they're called (unless asked for the selected features
+only), as Load All Features does, and rows that can't be read are left out and said in
+`s.notices()`. `to_file` can be cheaper for a large layer: to GeoJSON, CSV,
+FlatGeobuf, GeoPackage or GeoParquet it writes a chunk at a time where the source allows;
+otherwise it reads the layer whole too.
 
 Open an existing project with `Session(project="atlas.rgis")` or `s.open("atlas.rgis")`.
 `s.project_json()` returns JSON with the same credential removal as Save, with notices available

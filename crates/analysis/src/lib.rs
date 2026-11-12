@@ -47,7 +47,10 @@ pub use density::{
 };
 pub use parallel::scratch_budget;
 pub use parameters::StatisticList;
-pub use tools::{TOOLS, find_field_case_insensitive, holds_coordinates, max_buffer_bytes, param_applies, simplify_geometry, zonal_bands};
+pub use tools::{
+    TOOLS, find_field_case_insensitive, holds_coordinates, max_buffer_bytes, min_pad, param_applies, points_in, projected_crs, raster_crs,
+    simplify_geometry, zonal_bands,
+};
 
 use rustgis_data::Dataset;
 use serde_json::Value;
@@ -479,6 +482,32 @@ fn params_for(spec: &ToolSpec, params: &Value, built_in: bool) -> Result<Value, 
     Ok(Value::Object(p))
 }
 
+pub use tools::JOIN_FIELD_ALIASES;
+
+/// Whether a parameter key is declared by `spec` or accepted as a valid parameter alias.
+pub fn is_accepted_param(spec: &ToolSpec, key: &str) -> bool {
+    if spec.params.iter().any(|p| p.name == key) {
+        return true;
+    }
+    if spec.id == "joinField" { JOIN_FIELD_ALIASES.contains(&key) } else { false }
+}
+
+/// The names a tool reads one of its parameters under, `key` among them, or none when it has no
+/// other names (Join Field takes its target as `target`, `input` or `target_layer`).
+pub fn param_aliases(spec: &ToolSpec, key: &str) -> &'static [&'static str] {
+    const JOIN_FIELD: &[&[&str]] = &[
+        &["target", "input", "target_layer"],
+        &["joinTable", "join", "source", "join_table"],
+        &["targetField", "target_field", "key", "target_key"],
+        &["joinField", "join_field", "join_key"],
+        &["duplicates", "duplicateStrategy", "duplicate_strategy"],
+    ];
+    if spec.id != "joinField" {
+        return &[];
+    }
+    JOIN_FIELD.iter().find(|group| group.contains(&key)).copied().unwrap_or(&[])
+}
+
 /// A built-in tool's on-off parameter as `true` or `false` (text saying so counts). Anything else is
 /// an error, never a guess at what `"yes"` or `1` meant (#406). A blank value, or null, is the
 /// default.
@@ -670,6 +699,7 @@ pub fn run_under<T>(name: &str, control: &std::sync::Arc<control::Control>, work
     let _data = control::install_progress(Some(control.clone()));
     // No count until the work starts one: a control used before doesn't show that run's.
     control::begin(0);
+    control.cancel_if_started();
     let res = work();
     rustgis_data::source::remote::check_still(&still)?;
     if !control.is_cancelled() {

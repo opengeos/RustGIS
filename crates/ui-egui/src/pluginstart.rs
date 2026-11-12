@@ -1,5 +1,6 @@
 //! A plugin command the user asks for in the interface starts a frame or two later, so the window
-//! first shows that it is running (#1319): the command may wait for a server on this thread, and
+//! first shows that it is running (#1319): the command may wait for a server on this thread (unless
+//! it is waiting in `layer.addUrl` or `service.add`, which leave that to the frame loop), and
 //! nothing is drawn until it has finished. Clicks made meanwhile, which the window system holds
 //! until then, are dropped, so a second click out of impatience doesn't run it again. Scripts, the
 //! AI Assistant and attached agents run commands at once ([`RustGisApp::run`]).
@@ -40,8 +41,12 @@ pub struct State {
 }
 
 /// Leaves plugin command `id` to start once the window has shown it. The same command with the
-/// same parameters, already waiting, isn't asked twice.
+/// same parameters, already waiting to start or for what it asked of the web, isn't asked twice:
+/// the status bar says it is running.
 pub(crate) fn ask(app: &mut RustGisApp, id: &str, params: Value) -> Result<(), String> {
+    if app.session.plugin_command_waits(id, &params) {
+        return Ok(());
+    }
     let opened = app.session.opened;
     if let Some(start) = app.ui.plugin_start.waiting.iter_mut().find(|s| s.id == id && s.params == params && s.opened == opened) {
         if !start.prepared.is_current() {
@@ -87,8 +92,18 @@ pub(crate) fn run_next(app: &mut RustGisApp, ctx: &egui::Context) {
     let Some(start) = app.ui.plugin_start.waiting.pop_front() else { return };
     let held = ctx.input(|i| i.pointer.any_down());
     let began = web_time::Instant::now();
-    let _ = app.run_prepared(&start.id, start.params, start.prepared);
+    let dialog = crate::plugindialog::asked(app, &start.id, &start.params);
+    let answer = app.run_prepared(&start.id, start.params, start.prepared);
+    if dialog {
+        crate::plugindialog::answered(app, &start.id, &answer);
+    }
     app.ui.plugin_start.clicks_stale = !held && began.elapsed() >= STALE_AFTER;
+}
+
+/// Whether plugin command `id` with `params` waits to start, or waits off the frame for what it
+/// asked of the web.
+pub(crate) fn waits(app: &RustGisApp, id: &str, params: &Value) -> bool {
+    app.ui.plugin_start.waiting.iter().any(|s| s.id == id && s.params == *params) || app.session.plugin_command_waits(id, params)
 }
 
 /// Runs again the commands whose downloads have come in. A long run holds clicks too, and one of
@@ -97,8 +112,11 @@ pub(crate) fn run_next(app: &mut RustGisApp, ctx: &egui::Context) {
 pub(crate) fn run_again(app: &mut RustGisApp, ctx: &egui::Context) {
     let held = ctx.input(|i| i.pointer.any_down());
     let began = web_time::Instant::now();
-    let ran = !app.session.poll_plugin_retries().is_empty();
-    if ran && !held && began.elapsed() >= STALE_AFTER {
+    let ran = app.session.poll_plugin_retries();
+    for (id, answer) in &ran {
+        crate::plugindialog::answered(app, id, answer);
+    }
+    if !ran.is_empty() && !held && began.elapsed() >= STALE_AFTER {
         app.ui.plugin_start.clicks_stale = true;
         ctx.request_repaint();
     }
@@ -114,10 +132,12 @@ pub(crate) fn frame_drawn(app: &mut RustGisApp, ctx: &egui::Context) {
     }
 }
 
-/// What the status bar says while a command waits to start: `Running BrasilData: Solos…`.
+/// What the status bar says while a command waits to start, or waits off the frame for what it
+/// asked of the web: `Running BrasilData: Solos…`. While it waits off the frame, an error said
+/// since it began to wait goes first.
 pub(crate) fn running(app: &RustGisApp) -> Option<String> {
-    let title = title(app, &app.ui.plugin_start.waiting.front()?.id);
-    Some(i18n::fmt("Running {command}…", &[("command", &title)]))
+    let id = app.ui.plugin_start.waiting.front().map(|s| s.id.as_str()).or_else(|| app.session.plugin_command_waiting())?;
+    Some(i18n::fmt("Running {command}…", &[("command", &title(app, id))]))
 }
 
 /// A plugin command as the user knows it: `BrasilData: Solos`.
@@ -192,7 +212,7 @@ mod tests {
         cache::set_fetcher(move |url, done| callbacks.lock().unwrap().push((url, done)));
         let mut h = launch_with_permissions("ui-queued-url", &["edit", "network"]);
         let camera = h.state().session.map().camera;
-        for zoom in ["false", "true", "on"] {
+        for zoom in ["false", "true", "on", "yes", "auto"] {
             let name = format!("Places {zoom}");
             let url = format!("http://127.0.0.1:9/queued-{zoom}.csv");
             let params = json!({"url":url,"name":name,"x":"east","y":"north","zoom":zoom});
@@ -202,7 +222,9 @@ mod tests {
             h.step();
             assert!(running(h.state()).is_some());
             run_next(h.state_mut(), &egui::Context::default());
-            assert!(running(h.state()).is_none());
+            // It has run, and the status bar says it runs until its download is in (#1319).
+            assert!(h.state().ui.plugin_start.waiting.is_empty());
+            assert!(running(h.state()).is_some());
             assert!(held.lock().unwrap().is_empty(), "dispatch queues the request before any send");
             let requests = h.state_mut().session.take_url_requests();
             assert_eq!(requests.len(), 1, "the queued plugin leaves an opaque request for the frame loop");
@@ -215,22 +237,27 @@ mod tests {
             assert_eq!(request.params(), &expected, "the claim preserves the caller's options, anonymous reads and engine receipt");
             let app = h.state_mut();
             app.session.map_mut().camera = camera;
-            app.ui.link_zoomed = false;
+            // "yes" lands after a link has zoomed: its claimed text still reads as true, so the
+            // view is kept rather than the download refused (#1600).
+            app.ui.link_zoomed = zoom == "yes";
             app.add_url(request.params(), Some(request), None).unwrap();
             let (asked, done) = held.lock().unwrap().pop().unwrap();
             let (asked, limit) = cache::split_download_limit(&asked);
             assert_eq!(asked, url);
             assert_eq!(limit, Some(cache::MAX_DOWNLOAD));
-            assert_eq!(app.ui.downloads[0].2["zoom"], zoom, "completion preserves the claim's JSON representation");
-            assert_eq!(app.ui.downloads[0].2["request"], receipt, "completion retains the opaque request's exact receipt");
+            assert_eq!(app.ui.downloads[0].params["zoom"], zoom, "completion preserves the claim's JSON representation");
+            assert_eq!(app.ui.downloads[0].params["request"], receipt, "completion retains the opaque request's exact receipt");
             done(Ok(b"east,north\n1,2\n3,4\n".to_vec()));
             app.poll_data_downloads();
             let places = app.session.map().layer_by_name(&name).unwrap();
             assert_eq!(places.dataset.features.len(), 2);
             assert!(places.anonymous);
             assert!(places.connection.is_empty());
-            if zoom == "false" {
-                assert_eq!(app.session.map().camera, camera, "false keeps the view");
+            // Text it can't read is read as false and said (#1600); the rest says nothing of it.
+            let unread = app.session.notices_since(mark).iter().filter(|n| n.text.contains("zoom = \"auto\" (read as false)")).count();
+            assert_eq!(unread, usize::from(zoom == "auto"), "{zoom}: {:?}", app.session.notices_since(mark));
+            if matches!(zoom, "false" | "yes" | "auto") {
+                assert_eq!(app.session.map().camera, camera, "false, unreadable text, and a later link, keep the view");
             } else {
                 assert!(app.session.map().camera.res < camera.res, "true and on frame the new points");
                 assert!(app.ui.link_zoomed);
@@ -319,6 +346,23 @@ mod tests {
         h.state_mut().run(id, rename("Brooks", "Creeks")).unwrap();
         assert!(h.state().session.map().layer_by_name("Creeks").is_some());
         plugins::unload("ui-turn");
+    }
+
+    /// The window answers while a command waits for the web, so a click can reach it: the same
+    /// command isn't started over, and another, or the same with other parameters, is (#1319).
+    #[test]
+    fn a_command_waiting_for_the_web_isnt_asked_again() {
+        let pkg = plugins::Package::from_zip(&plugins::testing::package("ui-again-asked", &["edit", "network"])).unwrap();
+        plugins::load(pkg, "test").unwrap();
+        let mut app = RustGisApp::with_sample();
+        let (id, params) = ("plugin:ui-again-asked/f", json!({"op": "layer.addUrl", "params": {"url": "https://x.org/a.csv"}}));
+        app.run(id, params.clone()).unwrap();
+        assert!(app.session.plugin_retries_waiting());
+        ask(&mut app, id, params).unwrap();
+        assert!(app.ui.plugin_start.waiting.is_empty());
+        ask(&mut app, id, json!({"op": "layer.addUrl", "params": {"url": "https://x.org/b.csv"}})).unwrap();
+        assert_eq!(app.ui.plugin_start.waiting.len(), 1);
+        plugins::unload("ui-again-asked");
     }
 
     /// Clicks are dropped once, after a long run; what the pointer did otherwise stays.

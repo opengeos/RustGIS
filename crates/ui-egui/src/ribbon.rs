@@ -28,11 +28,15 @@ pub fn current_tab(name: &str) -> &str {
         "Map" => "Home",
         "Insert" | "Raster Data" => "Data",
         "Feature Layer" | "Raster Layer" => "Style",
-        "Analysis" | "Imagery" => "Analyze",
+        "Analysis" => "Analyze",
         "Share" | "Layout" => "Publish",
         _ => name,
     };
-    if TABS.contains(&tab) || tab.starts_with("plugin:") { tab } else { "Home" }
+    // The imagery groups were on Analyze, then moved to the Imagery extension's tab (#1752).
+    if tab == "Imagery" {
+        return "extension:imagery";
+    }
+    if TABS.contains(&tab) || tab.starts_with("plugin:") || tab.starts_with("extension:") { tab } else { "Home" }
 }
 
 /// Saved hidden tabs under the current names: renamed tabs carry over, and names of tabs whose
@@ -47,7 +51,10 @@ pub fn current_hidden_tabs(saved: Vec<String>) -> Vec<String> {
             "Share" => "Publish",
             n => n,
         };
-        if (TABS.contains(&tab) || tab.starts_with("plugin:")) && !FIXED_TABS.contains(&tab) && !out.iter().any(|t| t == tab) {
+        if (TABS.contains(&tab) || tab.starts_with("plugin:") || tab.starts_with("extension:"))
+            && !FIXED_TABS.contains(&tab)
+            && !out.iter().any(|t| t == tab)
+        {
             out.push(tab.to_string());
         }
     }
@@ -69,10 +76,40 @@ fn plugin_tabs(app: &RustGisApp) -> Vec<(String, String)> {
         .collect()
 }
 
+/// The extensions that are on with a tab of their own (#1752): (tab id, caption in the interface
+/// language).
+fn extension_tabs(app: &RustGisApp) -> Vec<(String, String)> {
+    rustgis_engine::extensions::ALL
+        .iter()
+        .filter(|e| app.session.extensions().is_on(e.id))
+        .filter_map(|e| e.tab.map(|caption| (rustgis_engine::extensions::tab_id(e.id), tl_raw!(caption).to_string())))
+        .collect()
+}
+
+/// RustGIS's tabs, then the tabs of extensions that are on (after Help), then plugins' own tabs:
+/// (tab id, caption in the interface language).
+pub(crate) fn all_tabs(app: &RustGisApp) -> Vec<(String, String)> {
+    let mut tabs: Vec<(String, String)> = TABS.iter().map(|t| (t.to_string(), tl!(*t).to_string())).collect();
+    tabs.extend(extension_tabs(app));
+    tabs.extend(plugin_tabs(app));
+    tabs
+}
+
+/// Whether tab `tab` (one of RustGIS's, an extension's or a plugin's) is there to show.
+pub fn tab_exists(app: &RustGisApp, tab: &str) -> bool {
+    if tab.starts_with("plugin:") {
+        plugin_tabs(app).iter().any(|(id, _)| id == tab)
+    } else if tab.starts_with("extension:") {
+        extension_tabs(app).iter().any(|(id, _)| id == tab)
+    } else {
+        TABS.contains(&tab)
+    }
+}
+
 pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
-    // A plugin's tab whose plugin was turned off or removed.
-    if app.ui.tab.starts_with("plugin:") && !plugin_tabs(app).iter().any(|(id, _)| *id == app.ui.tab) {
+    // A tab whose plugin or extension was turned off or removed.
+    if !tab_exists(app, &app.ui.tab) {
         app.ui.tab = "Plugins".into();
     }
     egui::Panel::top("tabs")
@@ -102,6 +139,7 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
                     let tab = app.ui.tab.clone();
                     match tab.as_str() {
                         t if t.starts_with("plugin:") => plugin_tab(app, ui, t.trim_start_matches("plugin:")),
+                        t if t.starts_with("extension:") => extension_groups(app, ui, t.trim_start_matches("extension:")),
                         "Data" => data_tab(app, ui),
                         "Style" => style_tab(app, ui),
                         "Labeling" => labeling_tab(app, ui),
@@ -214,9 +252,8 @@ fn tab_strip(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             app.ui.backstage = true;
         }
         ui.add_space(6.0);
-        // RustGIS's tabs, then plugins' own tabs; the user can hide any of them.
-        let mut tabs: Vec<(String, String)> = TABS.iter().map(|t| (t.to_string(), tl!(*t).to_string())).collect();
-        tabs.extend(plugin_tabs(app));
+        // RustGIS's tabs, extensions' and plugins' own tabs; the user can hide any of them.
+        let mut tabs = all_tabs(app);
         tabs.retain(|(id, _)| !app.ui.hidden_tabs.iter().any(|h| h == id));
         // The tabs scroll between the Project button and the right-side controls (the collapse
         // button and the active tool indicator) when the window is too narrow for them.
@@ -1689,10 +1726,14 @@ fn analysis_groups(app: &mut RustGisApp, ui: &mut Ui) {
             "Workflows",
             "Guided analysis: suitability, visibility, networks, interpolation and more.",
             |ui, app| {
-                for (id, title) in crate::analysispane::SECTIONS
+                let shown: Vec<&(&str, &str)> = crate::analysispane::SECTIONS
                     .iter()
-                    .filter(|s| !matches!(s.0, "rasterFunctions" | "functionEditor" | "environments" | "models"))
-                {
+                    .filter(|s| {
+                        !matches!(s.0, "rasterFunctions" | "functionEditor" | "environments" | "models")
+                            && crate::analysispane::section_shown(&app.session, s.0)
+                    })
+                    .collect();
+                for (id, title) in shown {
                     menu_item(ui, app, "geoprocessing", title, "ui.pane.workflows", json!({"section": id}));
                 }
             },
@@ -2132,8 +2173,8 @@ fn view_tab(app: &mut RustGisApp, ui: &mut Ui) {
             small(
                 ui,
                 app,
-                "identify",
-                "Diagnostics",
+                "message_log",
+                "Messages",
                 "Review errors, warnings, information and failed network requests from this session.",
                 "ui.pane.diagnosticLog",
                 Value::Null,
@@ -2334,6 +2375,10 @@ fn data_source_group(app: &mut RustGisApp, ui: &mut Ui) {
             false,
             false,
         );
+        #[cfg(not(target_arch = "wasm32"))]
+        if active_layer(app).is_some_and(crate::reloaddata::supported) {
+            big(ui, app, "redo", "Reload\nData", crate::reloaddata::HELP, "ui.reloadData", Value::Null, false, false);
+        }
     });
 }
 
@@ -2367,11 +2412,21 @@ fn layer_hint(ui: &mut Ui, text: &str) {
     });
 }
 
-/// The Analyze tab: geoprocessing, workflows, imagery and notebooks.
+/// The Analyze tab: geoprocessing, workflows and notebooks. Its imagery groups are on the Imagery extension's tab (#1752).
 fn analyze_tab(app: &mut RustGisApp, ui: &mut Ui) {
     analysis_groups(app, ui);
     notebook_group(app, ui);
-    imagery_groups(app, ui);
+}
+
+/// An extension's groups (#1752), on its own tab or, for one without a tab, on the Plugins tab.
+/// Nothing while it is off.
+fn extension_groups(app: &mut RustGisApp, ui: &mut Ui, id: &str) {
+    if !app.session.extensions().is_on(id) {
+        return;
+    }
+    if id == rustgis_engine::extensions::IMAGERY.id {
+        imagery_groups(app, ui);
+    }
 }
 
 /// The Publish tab: the open layout's groups first, then reports, presentations, export and
@@ -2671,6 +2726,9 @@ fn share_groups(app: &mut RustGisApp, ui: &mut Ui) {
                 menu_item(ui, app, "save_as", "Save As Report File…", "ui.saveItem", json!({"kind": "report"}));
                 menu_item(ui, app, "save_as", "Save As Report Template…", "ui.saveItem", json!({"kind": "reportTemplate"}));
             });
+        });
+        // A column holds three rows: Presentation and Export To 3D get one of their own.
+        col(ui, |ui| {
             small_menu(
                 ui,
                 app,
@@ -2682,15 +2740,16 @@ fn share_groups(app: &mut RustGisApp, ui: &mut Ui) {
                     menu_item(ui, app, "save_as", "Save As Presentation File…", "ui.saveItem", json!({"kind": "presentation"}));
                 },
             );
-            small(
+            small_menu(
                 ui,
                 app,
                 "export_layer",
                 "Export To 3D",
-                "Export the selected layer as a 3D model (OBJ), polygons extruded.",
-                "ui.saveItem",
-                json!({"kind": "obj"}),
-                false,
+                "Export the selected layer as a 3D model (OBJ or STL), polygons extruded.",
+                |ui, app| {
+                    menu_item(ui, app, "export_layer", "Wavefront OBJ…", "ui.saveItem", json!({"kind": "obj"}));
+                    menu_item(ui, app, "export_layer", "STL 3D Model…", "ui.saveItem", json!({"kind": "stl"}));
+                },
             );
         });
     });
@@ -2827,16 +2886,19 @@ fn share_groups(app: &mut RustGisApp, ui: &mut Ui) {
                 Value::Null,
                 app.ui.right == Some(RightPane::Shares),
             );
-            small(
-                ui,
-                app,
-                "modelbuilder",
-                "Deep Learning",
-                "Package a trained deep learning model.",
-                "ui.saveItem",
-                json!({"kind": "dlPackage"}),
-                false,
-            );
+            // Deep learning packages are the Imagery extension's (#1752).
+            if app.session.extensions().is_on(rustgis_engine::extensions::IMAGERY.id) {
+                small(
+                    ui,
+                    app,
+                    "modelbuilder",
+                    "Deep Learning",
+                    "Package a trained deep learning model.",
+                    "ui.saveItem",
+                    json!({"kind": "dlPackage"}),
+                    false,
+                );
+            }
         });
     });
     group(ui, "Layout", |ui| {
@@ -3205,6 +3267,16 @@ fn layout_groups(app: &mut RustGisApp, ui: &mut Ui) {
             small(ui, app, "save_as", "Save Layout File", "Save the layout as a layout file.", "ui.saveLayout", Value::Null, false);
             small(ui, app, "map", "Show Map", "Close the layout and show the map.", "layout.close", Value::Null, false);
         });
+        col(ui, |ui| {
+            // A PDF's map frames carry their coordinates (a GeoPDF) unless this is turned off: a
+            // toggle, as Snap and Rulers are.
+            let on = app.ui.pdf_georeference;
+            let desc =
+                "Export and print the layout's map frames to PDF with their coordinates, so PDF readers can locate and measure in them.";
+            if small(ui, app, "globe_view", "Georeference PDF", desc, "ui.menu", Value::Null, on).clicked() {
+                app.ui.pdf_georeference = !on;
+            }
+        });
     });
 }
 
@@ -3244,6 +3316,23 @@ fn plugins_tab(app: &mut RustGisApp, ui: &mut Ui) {
             );
         });
     });
+    group(ui, "Extensions", |ui| {
+        big(
+            ui,
+            app,
+            "extension",
+            "Extensions",
+            "Turn on or off the optional parts of RustGIS, such as Imagery.",
+            "ui.extensions",
+            Value::Null,
+            app.extensions.open,
+            false,
+        );
+    });
+    // The groups of the extensions that are on and have no tab of their own.
+    for e in rustgis_engine::extensions::ALL.iter().filter(|e| e.tab.is_none()) {
+        extension_groups(app, ui, e.id);
+    }
     // A group per enabled plugin with commands, in the interface language when it has one
     // (plugins with a tab of their own are on that tab instead).
     let lang = app.lang().code();
@@ -3456,10 +3545,9 @@ fn settings_tab(app: &mut RustGisApp, ui: &mut Ui) {
     });
     group(ui, "Customize", |ui| {
         let hidden = app.ui.hidden_tabs.clone();
-        // RustGIS's tabs and plugins' tabs.
-        let mut all: Vec<(String, String)> =
-            TABS.iter().filter(|t| !FIXED_TABS.contains(*t)).map(|t| (t.to_string(), tl!(*t).to_string())).collect();
-        all.extend(plugin_tabs(app));
+        // RustGIS's tabs, extensions' and plugins' tabs.
+        let mut all = all_tabs(app);
+        all.retain(|(id, _)| !FIXED_TABS.contains(&id.as_str()));
         big_form_menu(ui, app, "settings", "Ribbon", "Choose which tabs the ribbon shows.", move |ui, app| {
             for (tab, caption) in &all {
                 let mut on = !hidden.iter().any(|h| h == tab);
@@ -3484,10 +3572,53 @@ fn settings_tab(app: &mut RustGisApp, ui: &mut Ui) {
         worldview_menu(app, ui);
     });
     group(ui, "Start-up", |ui| start_project_menu(app, ui));
+    // The browser has no threads to set.
+    if !cfg!(target_arch = "wasm32") {
+        group(ui, "Performance", |ui| threads_menu(app, ui));
+    }
     // Only a shell that keeps recovery copies (the desktop app) has autosave.
     if app.services.recovery.is_some() {
         group(ui, "Autosave", |ui| autosave_menu(app, ui));
     }
+}
+
+/// A thread setting's name: "Automatic (8)", with the threads it gives, or the number.
+fn threads_label(setting: Option<usize>) -> String {
+    use rustgis_engine::data::threads;
+    match setting {
+        None => crate::i18n::fmt("Automatic ({n})", &[("n", &threads::default_max().to_string())]),
+        Some(n) => n.min(threads::cores()).to_string(),
+    }
+}
+
+/// Settings › Threads: the most threads one piece of work uses (#1562), the computer's cores up
+/// to 16 by default.
+fn threads_menu(app: &mut RustGisApp, ui: &mut Ui) {
+    use rustgis_engine::data::threads;
+    let setting = threads::setting();
+    let label = format!("{}\n{}", tl!("Threads"), threads_label(setting));
+    let tip = "The most threads a tool, a raster read or a map drawing uses: fewer keep cores free for other work.";
+    big_menu(ui, app, "settings", &label, tip, move |ui, app| {
+        if ui.add(egui::Button::selectable(setting.is_none(), threads_label(None))).clicked() {
+            let _ = app.run("ui.threads", json!({"threads": null}));
+            ui.close();
+        }
+        let mut choices = crate::threadsui::choices(threads::cores());
+        // A setting made elsewhere (`gp.threads`, a script) is listed too, so it shows as chosen.
+        if let Some(s) = setting.map(|s| s.min(threads::cores()))
+            && !choices.contains(&s)
+        {
+            choices.push(s);
+            choices.sort_unstable();
+        }
+        for n in choices {
+            let on = setting.is_some_and(|s| s.min(threads::cores()) == n);
+            if ui.add(egui::Button::selectable(on, n.to_string())).clicked() {
+                let _ = app.run("ui.threads", json!({"threads": n}));
+                ui.close();
+            }
+        }
+    });
 }
 
 /// An interval's name: "Off" or "Every 5 min".
@@ -4038,7 +4169,16 @@ fn imagery_groups(app: &mut RustGisApp, ui: &mut Ui) {
                 wf("change"),
                 false,
             );
-            small(ui, app, "graduated", "Spectral Analysis", "Every band's value at a pixel.", "ui.pane.workflows", wf("spectral"), false);
+            small(
+                ui,
+                app,
+                "graduated",
+                "Spectral Analysis",
+                "Chart every band at points on the map, and compare them.",
+                "ui.pane.workflows",
+                wf("spectral"),
+                false,
+            );
         });
     });
     group(ui, "Image Classification", |ui| {
@@ -4285,13 +4425,18 @@ fn drawing_group(app: &mut RustGisApp, ui: &mut Ui, layer: &rustgis_engine::map:
                 });
             }
             if layer.has_geometry(GeometryType::Polygon) && !layer.graphics {
+                let hidden = layer.no_fill.is_some();
                 small(
                     ui,
                     app,
-                    "no_fill",
-                    "No Fill",
-                    "Draw only polygon outlines, keeping their colors and widths.",
-                    "layer.noFill",
+                    if hidden { "symbology" } else { "no_fill" },
+                    if hidden { "Restore Fill" } else { "No Fill" },
+                    if hidden {
+                        "Restore polygon fills hidden by No Fill, keeping their colors and outlines."
+                    } else {
+                        "Draw only polygon outlines, keeping their colors and widths."
+                    },
+                    if hidden { "layer.restoreFill" } else { "layer.noFill" },
                     Value::Null,
                     false,
                 );
@@ -4898,35 +5043,76 @@ fn feature_data_groups(app: &mut RustGisApp, ui: &mut Ui) {
     });
 }
 
-/// A language's own name, or its English name when no installed font can draw it (CJK names on the
-/// web before a CJK font has been downloaded).
-fn shown_name(ui: &Ui, l: crate::i18n::Lang) -> &'static str {
-    if ui.ctx().fonts_mut(|f| f.has_glyphs(&regular(12.5), l.name())) { l.name() } else { l.english() }
+/// Whether an installed font can draw `text` (CJK names on the web before a CJK font has been
+/// downloaded can't be).
+fn drawable(ui: &Ui, text: &str) -> bool {
+    ui.ctx().fonts_mut(|f| f.has_glyphs(&regular(12.5), text))
 }
 
-/// Whose view of disputed borders the built-in countries and world outline show (Settings › Language).
+/// How the language picker names `l`: in English while the interface is English, otherwise in the
+/// language itself, or in English when no installed font can draw that.
+fn shown_name(ui: &Ui, l: crate::i18n::Lang) -> &'static str {
+    if crate::i18n::current() == crate::i18n::Lang::EN || !drawable(ui, l.name()) { l.english() } else { l.name() }
+}
+
+/// The languages in the picker's order: alphabetical by the name the list shows.
+fn sorted_langs(ui: &Ui) -> Vec<crate::i18n::Lang> {
+    let mut langs: Vec<_> = crate::i18n::Lang::all().collect();
+    langs.sort_by_cached_key(|&l| shown_name(ui, l).to_lowercase());
+    langs
+}
+
+/// The picker's tooltip for `l`: whichever of its two names the list doesn't show, if it can be drawn.
+fn other_name(ui: &Ui, l: crate::i18n::Lang) -> &'static str {
+    let shown = shown_name(ui, l);
+    if shown == l.english() && drawable(ui, l.name()) { l.name() } else { l.english() }
+}
+
+/// Whose view of disputed borders the built-in countries and world outline show (Settings ›
+/// Language): the built-in default or one of Natural Earth's points of view, downloaded when
+/// chosen. Until one is chosen, a system in mainland China shows China's.
 fn worldview_menu(app: &mut RustGisApp, ui: &mut Ui) {
-    use rustgis_engine::sample::Worldview;
-    let name = |w: Worldview| match w {
-        Worldview::Default => tl!("Default"),
-        Worldview::China => tl!("China"),
+    use crate::worldviewui::name;
+    use rustgis_engine::sample::{self, Detail, View, Worldview};
+    let label = match crate::worldviewui::downloading(app) {
+        Some(w) => crate::i18n::fmt("{name} (downloading…)", &[("name", name(w))]),
+        None => name(sample::worldview()).to_string(),
     };
-    let auto = app.ui.worldview == crate::i18n::AUTO;
-    let current = rustgis_engine::sample::worldview();
-    let label = if auto { format!("{} ({})", tl!("Automatic"), name(current)) } else { name(current).to_string() };
     let label = format!("{}\n{label}", tl!("Worldview"));
     big_menu(ui, app, "globe_view", &label, "Whose borders the sample countries and the basemap outline show.", move |ui, app| {
-        if ui.selectable_label(auto, tl!("Automatic (system time zone and region)")).clicked() {
-            let _ = app.run("ui.worldview", json!({"worldview": crate::i18n::AUTO}));
-            ui.close();
-        }
-        ui.separator();
-        for w in [Worldview::Default, Worldview::China] {
-            if ui.selectable_label(!auto && w == current, name(w)).clicked() {
-                let _ = app.run("ui.worldview", json!({"worldview": w.code()}));
-                ui.close();
+        // Looked up only while the menu is open: `auto` reads the system's time zone and locale.
+        let wanted = crate::worldviewui::wanted(app);
+        ui.label(egui::RichText::new(tl!("Detail")).small().weak());
+        for (d, text, tip) in [
+            (Detail::Simplified, tl!("Simplified"), tl!("Borders at 1:110m, a small download (about 250 KB)")),
+            (
+                Detail::Original,
+                tl!("Original"),
+                tl!("Natural Earth's 1:10m borders with every island, a larger download (about 3 MB, 10 MB unpacked)"),
+            ),
+        ] {
+            if ui.selectable_label(wanted.detail == d, text).on_hover_text(tip).clicked() {
+                let _ = app.run("ui.worldview", json!({"detail": d.code()}));
             }
         }
+        ui.separator();
+        let detail = Detail::from_code(&app.ui.worldview_detail).unwrap_or_default();
+        egui::ScrollArea::vertical().max_height(ui.ctx().content_rect().height() * 0.6).show(ui, |ui| {
+            for w in Worldview::all() {
+                let text = if sample::text(View::new(w, detail)).is_some() {
+                    name(w).to_string()
+                } else {
+                    crate::i18n::fmt("{name} (download)", &[("name", name(w))])
+                };
+                if ui.selectable_label(w == wanted.worldview, text).clicked() {
+                    let _ = app.run("ui.worldview", json!({"worldview": w.code()}));
+                    ui.close();
+                }
+                if w.built_in() {
+                    ui.separator();
+                }
+            }
+        });
     });
 }
 
@@ -4941,9 +5127,9 @@ fn language_menu(app: &mut RustGisApp, ui: &mut Ui) {
             ui.close();
         }
         ui.separator();
-        for l in crate::i18n::Lang::all() {
+        for l in sorted_langs(ui) {
             let sel = !auto && l == current;
-            if ui.selectable_label(sel, shown_name(ui, l)).on_hover_text(l.english()).clicked() {
+            if ui.selectable_label(sel, shown_name(ui, l)).on_hover_text(other_name(ui, l)).clicked() {
                 let _ = app.run("ui.language", json!({"code": l.code()}));
                 ui.close();
             }
@@ -4981,6 +5167,70 @@ mod tests {
         );
         h.run();
         h
+    }
+
+    /// The language list names every language in English while the interface is English, with the
+    /// language's own name as the tooltip; in another language each keeps its own name, or its
+    /// English one where no font can draw it.
+    #[test]
+    fn the_language_list_follows_the_interface_language() {
+        use crate::i18n::{self, Lang};
+        let names = |lang: Lang, install: bool| {
+            let mut fonts = !install;
+            let mut h = egui_kittest::Harness::builder().build_ui_state(
+                move |ui, out: &mut Vec<(&'static str, &'static str)>| {
+                    if !fonts {
+                        crate::theme::install_fonts(ui.ctx(), &[], None);
+                        fonts = true;
+                        return;
+                    }
+                    i18n::set_current(lang);
+                    *out = Lang::all().map(|l| (shown_name(ui, l), other_name(ui, l))).collect();
+                    i18n::set_current(Lang::EN);
+                },
+                Vec::new(),
+            );
+            h.run();
+            h.state().clone()
+        };
+        let en = names(Lang::EN, true);
+        let english: Vec<_> = Lang::all().map(Lang::english).collect();
+        assert_eq!(en.iter().map(|n| n.0).collect::<Vec<_>>(), english);
+        let fr = Lang::from_code("fr").unwrap();
+        let tip = |names: &[(&'static str, &'static str)], l: Lang| -> &'static str {
+            names.iter().find(|n| n.0 == l.english() || n.0 == l.name()).unwrap().1
+        };
+        assert_eq!(tip(&en, fr), "Français", "the tooltip gives the language's own name");
+        let order = |lang: Lang| {
+            let mut fonts = false;
+            let mut h = egui_kittest::Harness::builder().build_ui_state(
+                move |ui, out: &mut Vec<&'static str>| {
+                    if !fonts {
+                        crate::theme::install_fonts(ui.ctx(), &[], None);
+                        fonts = true;
+                        return;
+                    }
+                    i18n::set_current(lang);
+                    *out = sorted_langs(ui).into_iter().map(|l| shown_name(ui, l)).collect();
+                    i18n::set_current(Lang::EN);
+                },
+                Vec::new(),
+            );
+            h.run();
+            h.state().clone()
+        };
+        let listed = order(Lang::EN);
+        assert_eq!(listed.first(), Some(&"Azerbaijani"), "{listed:?}");
+        assert!(listed.windows(2).all(|w| w[0].to_lowercase() <= w[1].to_lowercase()), "alphabetical: {listed:?}");
+        let de = Lang::from_code("de").unwrap();
+        let names_de = names(de, true);
+        assert!(names_de.contains(&("Français", "French")), "in German, French keeps its own name: {names_de:?}");
+        // egui's own fonts have no Bengali letters, so without the interface fonts Bengali falls back.
+        let bn = Lang::from_code("bn").unwrap();
+        let bare = names(de, false);
+        assert!(bare.contains(&("Bengali", "Bengali")), "an undrawable name falls back to English: {bare:?}");
+        assert!(bare.contains(&("Français", "French")), "a drawable one doesn't: {bare:?}");
+        assert!(!bare.iter().any(|n| n.0 == bn.name()));
     }
 
     /// The Labeling tab holds every label group (#897): a feature layer's, then the map's, which
@@ -5022,6 +5272,23 @@ mod tests {
         );
         h.run();
         h
+    }
+
+    #[test]
+    fn drawing_restores_polygon_fills_without_reclassifying() {
+        let mut h = drawing_harness();
+        h.state_mut().run("layer.select", json!({"layer": "Countries"})).unwrap();
+        h.run();
+        let renderer = h.state().session.map().layer_by_name("Countries").unwrap().renderer.clone();
+        h.get_by_label("No Fill").click();
+        h.run();
+        assert!(h.state().session.map().layer_by_name("Countries").unwrap().no_fill.is_some());
+        h.get_by_label("Restore Fill").click();
+        h.run();
+        let layer = h.state().session.map().layer_by_name("Countries").unwrap();
+        assert!(layer.no_fill.is_none());
+        assert_eq!(layer.renderer, renderer);
+        assert!(h.query_by_label("No Fill").is_some());
     }
 
     /// Drags a number of the harness from `at` by 16, 32 and 48 points, calling `each` between.

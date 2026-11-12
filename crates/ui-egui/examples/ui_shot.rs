@@ -17,7 +17,8 @@
 //! `{"scroll": [x, y, dy]}` turns the mouse wheel by `dy` points over (x, y) (negative zooms
 //! out) and runs one frame (shots then catch the map mid-zoom),
 //! `{"plugin": path}` loads a `.rgplugin` or a plugin folder for the run (as `rustgis-cli run
-//! --plugin` does), and `{"testPlugin": "panel"}` the plugin tests use, with a panel,
+//! --plugin` does), and `{"testPlugin": "panel"}` the plugin tests use, with a panel
+//! (`"pick"`: one of picks on the map),
 //! `{"titlebar": {"left_inset": 80, "height": 34}}`
 //! draws the header as a macOS unified title bar (`null` turns it off), and
 //! `{"width": w, "height": h}` on the first line sets the size (default 1480×900),
@@ -25,6 +26,8 @@
 //! positive, with physical dimensions from 1 pixel through the GPU's maximum 2D texture size.
 //! `"dt": seconds` sets each frame's length, default 0.25; a short one such as 0.016 catches the map mid-motion.
 //! The window opens the World Atlas sample.
+//! `"readsOffFrame": true` on the first line runs Add Data, Load All, models and scripts on a
+//! thread of their own, as the desktop app does (the status bar shows the run and Cancel).
 //! `"recovery": "/abs/dir"` on the first line gives the run that recovery folder, as the desktop
 //! app has one (Settings › Autosave; a copy left there is offered by the recovery dialog).
 //!
@@ -150,6 +153,8 @@ fn main() {
     let ribbon_split = lines.first().and_then(|l| l.get("ribbonSplit")).and_then(Value::as_bool).unwrap_or(false);
     let mut split_showcase = RibbonSplitShowcase::default();
     let mut app = RustGisApp::with_sample();
+    // As the desktop app does: Add Data, Load All, models and scripts run on a thread of their own.
+    app.reads_off_frame = lines.first().and_then(|l| l.get("readsOffFrame")).and_then(Value::as_bool).unwrap_or(false);
     if let Some(dir) = lines.first().and_then(|l| l.get("recovery")).and_then(Value::as_str) {
         let store = rustgis_ui_egui::FolderStore::open(std::path::Path::new(dir)).expect("recovery folder");
         app = app.with_services(rustgis_ui_egui::Services { recovery: Some(Box::new(store)), ..Default::default() });
@@ -257,6 +262,7 @@ fn main() {
         } else if let Some(which) = l.get("testPlugin").and_then(|v| v.as_str()) {
             let bytes = match which {
                 "panel" => rustgis_plugins::testing::panel_package("test-panel"),
+                "pick" => rustgis_plugins::testing::pick_package("test-pick"),
                 _ => rustgis_plugins::testing::package("test-plugin", &[]),
             };
             if let Err(e) = rustgis_plugins::Package::from_zip(&bytes).and_then(|pkg| rustgis_plugins::load(pkg, "test")) {

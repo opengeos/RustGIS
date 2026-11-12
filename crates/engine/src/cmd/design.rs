@@ -36,6 +36,56 @@ pub struct EditCounts {
     pub deleted: usize,
 }
 
+/// Whether a retained display expression reads area; stale field references do not count.
+fn has_area_display(l: &rustgis_map::Layer) -> bool {
+    let uses_area =
+        |text: &str| rustgis_data::query::parse_fields(text, &l.dataset).is_ok_and(|expr| rustgis_data::query::uses_area(&expr));
+    let by = &l.symbol_by;
+    l.definition_query
+        .as_deref()
+        .into_iter()
+        .chain(l.display_filters.iter().map(|filter| filter.where_.as_str()))
+        .chain(l.renderer.expression())
+        .chain([&by.size, &by.fill, &by.stroke, &by.stroke_width, &by.angle].into_iter().filter_map(|text| text.as_deref()))
+        .chain(std::iter::once(&l.labels.default).chain(l.labels.classes.iter()).flat_map(|class| {
+            [&class.where_, &class.by.text, &class.by.size, &class.by.color, &class.by.angle].into_iter().filter_map(|text| text.as_deref())
+        }))
+        .any(uses_area)
+}
+
+/// Explain unavailable areas in retained display expressions without discarding their text.
+pub(crate) fn display_area_message(l: &rustgis_map::Layer) -> Option<String> {
+    display_area_messages(std::iter::once(l))
+}
+
+/// Count unavailable values across affected layers in one notice, naming the read scope.
+pub(crate) fn display_area_messages<'a>(layers: impl Iterator<Item = &'a rustgis_map::Layer>) -> Option<String> {
+    let (mut rings, mut features, mut names, mut windowed) = (0usize, 0usize, Vec::new(), false);
+    for layer in layers.filter(|layer| has_area_display(layer)) {
+        let before = features;
+        let counts = layer
+            .source
+            .as_ref()
+            .and_then(|source| source.unavailable_areas(&layer.dataset.features))
+            .unwrap_or_else(|| rustgis_map::source::AmbiguousAreas::from_features(&layer.dataset.features));
+        rings = rings.saturating_add(counts.rings);
+        features = features.saturating_add(counts.features);
+        if features > before {
+            names.push(layer.name.clone());
+            windowed |= layer.source.is_some();
+        }
+    }
+    if rings == 0 {
+        return None;
+    }
+    let scope = if windowed { "; streamed-layer counts cover only decoded features for the current views" } else { "" };
+    Some(format!(
+        "{} layer(s) ({}): area is ambiguous for {rings} ring(s) in {features} feature(s): a ring through both poles winds beyond one whole surface{scope}; area values for affected features are unavailable; saved display expressions are retained",
+        names.len(),
+        crate::names_said(&names)
+    ))
+}
+
 /// Editing is on and a feature layer is active.
 pub(crate) fn need_editable(s: &Session) -> Option<&'static str> {
     if !s.map().editing.settings.enabled {
@@ -112,6 +162,9 @@ pub(crate) fn apply_with(s: &mut Session, id: u32, changes: Vec<Change>, new_def
                     && let Some(cell) = l.dataset.features.get_mut(*r).and_then(|f| f.attrs.get_mut(fi))
                     && cell.is_null()
                 {
+                    if super::edit::non_finite_input(v, ty) {
+                        return Err(format!("field '{field}' requires a finite number"));
+                    }
                     *cell = super::edit::coerce(v.clone(), ty);
                 }
             }
@@ -131,13 +184,33 @@ pub(crate) fn apply_with(s: &mut Session, id: u32, changes: Vec<Change>, new_def
     // What each calculation rule's whole-number field cut: the rule and the field's name. Each
     // rule's cuts are said, even when a later rule writes the same field: it may read them.
     let mut cuts: Vec<(String, String, super::edit::Cuts)> = Vec::new();
+    // Parsing against the fields separates a measurement failure from a stale rule. The latter
+    // may still be skipped below, but an ambiguous area must never disable a valid rule.
+    let metadata = rustgis_data::Dataset::new(l.dataset.name.clone(), l.dataset.geometry_type, l.dataset.fields.clone());
+    let uses_area = |text: &str| rustgis_data::query::parse(text, &metadata).is_ok_and(|expr| rustgis_data::query::uses_area(&expr));
+    let display_area = has_area_display(l);
+    let rule_area = l
+        .design
+        .rules
+        .iter()
+        .any(|rule| (rule.kind == RuleKind::Constraint || l.dataset.field_index(&rule.field).is_some()) && uses_area(&rule.expression));
+    if (display_area || rule_area)
+        && let Some(message) = rustgis_data::ambiguous_area_message(changes.iter().filter_map(|change| {
+            let feature = l.dataset.features.get(change.row?)?;
+            (rule_area || change.before.as_ref().is_none_or(|before| before.geometry != feature.geometry))
+                .then_some(feature.geometry.as_ref())
+                .flatten()
+        }))
+    {
+        return Err(format!("{}: {message}", l.dataset.name));
+    }
     // Calculation rules, in order.
     for rule in l.design.rules.iter().filter(|r| r.kind == RuleKind::Calculation) {
         let Some(fi) = l.dataset.field_index(&rule.field) else { continue };
         let ty = l.dataset.fields.get(fi).map(|f| f.ty).unwrap_or(FieldType::Text);
         // A rule that no longer reads (its field was removed, or a hand-edited file) is skipped
         // rather than blocking every edit.
-        let Ok(calc) = super::edit::Calculation::parse(&rule.expression, &l.dataset) else { continue };
+        let Ok(calc) = super::edit::Calculation::parse(&rule.expression, &metadata) else { continue };
         let mut cut = super::edit::Cuts::default();
         for r in &rows {
             let (v, c) = super::edit::coerce_cut(calc.eval(&l.dataset, *r), ty);
@@ -157,7 +230,7 @@ pub(crate) fn apply_with(s: &mut Session, id: u32, changes: Vec<Change>, new_def
         .iter()
         .filter(|r| r.kind == RuleKind::Constraint)
         .filter_map(|rule| {
-            rustgis_data::query::parse(&rule.expression, &l.dataset).ok().map(|e| (rule.name.clone(), rule.expression.clone(), e))
+            rustgis_data::query::parse(&rule.expression, &metadata).ok().map(|e| (rule.name.clone(), rule.expression.clone(), e))
         })
         .collect();
     let changed_fields = |r: usize| -> Option<Vec<bool>> {
@@ -939,8 +1012,8 @@ fn polar_transform(
     })
 }
 
-/// [`modify`] for a move, turn or scale, which leaves a vertex missing a coordinate where it was:
-/// says how many of the features it changed have one.
+/// [`modify`] for a move, turn or scale, which leaves a vertex missing a coordinate (or with an
+/// infinite one) where it was: says how many of the features it changed have one.
 fn move_features(s: &mut Session, mut change: impl FnMut((u32, usize), &Geometry) -> Result<Option<Geometry>, String>) -> CmdResult {
     let mut missing = 0usize;
     let done = modify(s, |key, g| {
@@ -953,7 +1026,7 @@ fn move_features(s: &mut Session, mut change: impl FnMut((u32, usize), &Geometry
         Ok(moved)
     })?;
     if missing > 0 {
-        s.warn(format!("{missing} feature(s) have a vertex missing a coordinate, which was left where it was"));
+        s.warn(format!("{missing} feature(s) have a vertex missing a coordinate or with an infinite one, which was left where it was"));
     }
     Ok(done)
 }
@@ -986,7 +1059,7 @@ fn modify(s: &mut Session, mut change: impl FnMut((u32, usize), &Geometry) -> Re
 fn set_geometry(s: &mut Session, p: &Json) -> CmdResult {
     let id = s.layer_id(p)?;
     let row = p.get("row").and_then(Json::as_u64).ok_or("row is required")? as usize;
-    let g = p.get("geometry").and_then(rustgis_data::io::geometry_from_geojson).ok_or("geometry must be a GeoJSON geometry")?;
+    let g = super::edit::geometry_param(p)?;
     replace_geometry(s, id, row, g)?;
     Ok(Json::Null)
 }
@@ -1502,11 +1575,18 @@ fn subtypes(s: &mut Session, p: &Json) -> CmdResult {
     for v in list.iter().take(1000) {
         let code = v.get("code").and_then(Json::as_i64).ok_or("each subtype has an integer code")?;
         let name = v.get("name").and_then(Json::as_str).ok_or("each subtype has a name")?.chars().take(200).collect();
-        let defaults = v
+        let defaults: Vec<(String, Value)> = v
             .get("defaults")
             .and_then(Json::as_object)
             .map(|o| o.iter().map(|(k, v)| (k.clone(), Value::from_json(v))).collect())
             .unwrap_or_default();
+        for (field, value) in &defaults {
+            if let Some(ty) = l.dataset.field_index(field).and_then(|i| l.dataset.fields.get(i)).map(|f| f.ty)
+                && super::edit::non_finite_input(value, ty)
+            {
+                return Err(format!("field '{field}' requires a finite number"));
+            }
+        }
         if subs.iter().any(|x: &Subtype| x.code == code) {
             return Err(format!("subtype code {code} is used twice"));
         }
@@ -1519,6 +1599,7 @@ fn subtypes(s: &mut Session, p: &Json) -> CmdResult {
     let l = s.map_mut().layer_mut(id).ok_or("no such layer")?;
     // Unique values by subtype code.
     let mut past = PastClasses::default();
+    let mut no_fill_dropped = None;
     if symbolize {
         let base = l.renderer.base_symbol();
         // The classes come from every feature, so a definition query doesn't drop any; the
@@ -1527,10 +1608,15 @@ fn subtypes(s: &mut Session, p: &Json) -> CmdResult {
         let rows = l.visible_rows();
         past = PastClasses { features: drawn_past(&l.dataset, &r, &fname, &rows), ..rest };
         l.renderer = r;
+        // The new classes' fills are drawn, as with a new symbology (#1301).
+        no_fill_dropped = super::layer::end_no_fill_for_new_renderer(l);
     }
     let n = subs.len();
     let name = l.name.clone();
     l.design.subtypes = Some(Subtypes { field: fname.clone(), subtypes: subs });
+    if let Some(notice) = no_fill_dropped {
+        s.notify(notice, false);
+    }
     if past.features > 0 {
         let (max, order) = (rustgis_map::symbology::MAX_UNIQUE, if past.by_number { "by number" } else { "in text order" });
         s.notify(
@@ -1689,6 +1775,17 @@ fn archive_restore(s: &mut Session, p: &Json) -> CmdResult {
             (None, None) => {}
         }
     }
+    if (has_area_display(l)
+        || l.design.rules.iter().any(|rule| {
+            rule.kind == RuleKind::Constraint
+                && rustgis_data::query::parse_fields(&rule.expression, &l.dataset).is_ok_and(|expr| rustgis_data::query::uses_area(&expr))
+        }))
+        && let Some(message) = rustgis_data::ambiguous_area_message(
+            touched.iter().filter_map(|(fid, _)| l.dataset.features.get(*index.get(fid)?)?.geometry.as_ref()),
+        )
+    {
+        return Err(format!("{}: {message}", l.dataset.name));
+    }
     // The restore is itself archived and counted, so it can be restored past too.
     let time = now();
     let mut counts = EditCounts::default();
@@ -1772,6 +1869,7 @@ fn related(s: &mut Session, p: &Json) -> CmdResult {
     Ok(json!({"related": total, "layers": names}))
 }
 
+/// Validates defaults before replacing a template; a refused numeric value leaves it intact.
 fn template(s: &mut Session, p: &Json) -> CmdResult {
     let id = s.layer_id(p)?;
     let name = ps(p, "name").map(str::trim).filter(|n| !n.is_empty()).ok_or("name is required")?.to_string();
@@ -1786,8 +1884,11 @@ fn template(s: &mut Session, p: &Json) -> CmdResult {
         for (k, v) in o {
             let fi = l.dataset.field_index(k).ok_or_else(|| format!("no field named '{k}'"))?;
             let ty = l.dataset.fields.get(fi).map(|f| f.ty).unwrap_or(FieldType::Text);
-            defaults
-                .push((l.dataset.fields.get(fi).map(|f| f.name.clone()).unwrap_or_default(), super::edit::coerce(Value::from_json(v), ty)));
+            let value = Value::from_json(v);
+            if super::edit::non_finite_input(&value, ty) {
+                return Err(format!("field '{k}' requires a finite number"));
+            }
+            defaults.push((l.dataset.fields.get(fi).map(|f| f.name.clone()).unwrap_or_default(), super::edit::coerce(value, ty)));
         }
     }
     l.design.templates.retain(|t| !t.name.eq_ignore_ascii_case(&name));
@@ -1973,47 +2074,167 @@ fn topology_rules(s: &mut Session, p: &Json) -> CmdResult {
     Ok(Json::Array(rules))
 }
 
-/// Checks every topology rule; the errors are kept for the Error Inspector.
-fn topology_validate(s: &mut Session, p: &Json) -> CmdResult {
+/// One topology rule as `topology.validate` checks it: the layer's rows shown (their data shared,
+/// not copied) and, for a rule against another layer, that layer's.
+struct TopologyInput {
+    rule: TopologyRule,
+    layer: String,
+    data: rustgis_data::Dataset,
+    rows: Vec<usize>,
+    by: Option<rustgis_data::Dataset>,
+}
+
+/// The rules as the map has them now, each with what it reads; a rule whose layer is gone is left
+/// out, as it always was.
+fn topology_checks(s: &Session) -> Vec<TopologyInput> {
+    let mut inputs = Vec::new();
+    for rule in s.map().editing.topology.clone() {
+        let Some(l) = s.map().layer_by_name(rule.layer()) else { continue };
+        let rows: Vec<usize> = l.visible_rows().iter().enumerate().filter(|(_, v)| **v).map(|(i, _)| i).collect();
+        // A covering layer that is gone leaves the rule with nothing to check (its layer's
+        // latitudes are still checked).
+        let by = match &rule {
+            TopologyRule::MustBeCoveredBy { by, .. } => s.map().layer_by_name(by).map(|b| b.dataset.clone()),
+            _ => None,
+        };
+        inputs.push(TopologyInput { rule, layer: l.name.clone(), data: l.dataset.clone(), rows, by });
+    }
+    inputs
+}
+
+/// Whether two layers' data are the same: the same rows (shared, not compared one by one), fields
+/// and geometry type.
+fn same_data(a: &rustgis_data::Dataset, b: &rustgis_data::Dataset) -> bool {
+    a.features.shares(&b.features) && a.fields == b.fields && a.geometry_type == b.geometry_type
+}
+
+/// Whether `was` (what a check read on another thread) is what the rules read now.
+fn same_topology(was: &[TopologyInput], now: &[TopologyInput]) -> bool {
+    was.len() == now.len()
+        && was.iter().zip(now).all(|(a, b)| {
+            a.rule == b.rule
+                && a.layer == b.layer
+                && a.rows == b.rows
+                && same_data(&a.data, &b.data)
+                && match (&a.by, &b.by) {
+                    (Some(x), Some(y)) => same_data(x, y),
+                    (None, None) => true,
+                    _ => false,
+                }
+        })
+}
+
+/// Checks each rule, in order, a result for each (a cancelled run is an error): a layer with a
+/// latitude out of range is an error, as it always was. Each check looks at Cancel between features
+/// and counts its progress, except the gaps check's union of every polygon, one step; in a run that
+/// can be cancelled it takes no work limit (see `rustgis_analysis::topology`).
+fn check_topology(inputs: &[TopologyInput], tol: f64) -> Result<Vec<rustgis_analysis::topology::Checked>, String> {
     use rustgis_analysis::topology as t;
-    let tol = f(p, "toleranceM").unwrap_or(1.0).clamp(0.0, 10_000.0);
+    let mut found = Vec::with_capacity(inputs.len());
+    for i in inputs {
+        // A cancelled run stops between rules too (a gaps rule's union doesn't look), as an error,
+        // so no result short of its rules is ever taken.
+        rustgis_data::progress::check().map_err(|_| "the topology check was cancelled".to_string())?;
+        rustgis_analysis::validate_latitudes(&i.data, i.rows.iter().copied())?;
+        found.push(match (&i.rule, &i.by) {
+            (TopologyRule::MustNotOverlap { .. }, _) => t::overlaps(&i.data, &i.rows),
+            (TopologyRule::MustNotHaveGaps { .. }, _) => t::gaps(&i.data, &i.rows),
+            (TopologyRule::MustNotSelfIntersect { .. }, _) => t::self_intersections(&i.data, &i.rows),
+            (TopologyRule::MustNotHaveDangles { .. }, _) => t::dangles(&i.data, &i.rows, tol),
+            (TopologyRule::MustBeCoveredBy { .. }, Some(by)) => {
+                rustgis_analysis::validate_latitudes(by, 0..by.features.len())?;
+                t::not_covered(&i.data, &i.rows, by)
+            }
+            // Its covering layer is gone: nothing checked, nothing said, as it always was.
+            (TopologyRule::MustBeCoveredBy { .. }, None) => t::Checked { errors: Vec::new(), complete: true, skipped: 0 },
+        });
+    }
+    Ok(found)
+}
+
+/// The tolerance `topology.validate` checks dangles with, in metres.
+fn topology_tolerance(p: &Json) -> f64 {
+    f(p, "toleranceM").unwrap_or(1.0).clamp(0.0, 10_000.0)
+}
+
+/// The key a topology check read ahead is placed under.
+const TOPOLOGY_AHEAD: &str = "topology.validate";
+
+/// A topology check made on a thread of its own ([`topology_ahead`]), with what it read.
+struct TopologyAhead {
+    inputs: Vec<TopologyInput>,
+    tol: f64,
+    found: Result<Vec<rustgis_analysis::topology::Checked>, String>,
+}
+
+/// The check `topology.validate` makes before it runs in the desktop app (#1291, #1562): every
+/// rule on a thread of its own, with progress and Cancel and no work limit. The command takes it
+/// as it lands when the rules and their layers are still the ones checked.
+pub(crate) fn topology_ahead(s: &Session, p: &Json) -> Option<super::reads::ReadWork> {
+    let (inputs, tol) = (topology_checks(s), topology_tolerance(p));
+    if inputs.is_empty() {
+        return None;
+    }
+    Some(super::reads::ahead("Error Inspector", TOPOLOGY_AHEAD.to_string(), move || {
+        let found = check_topology(&inputs, tol);
+        TopologyAhead { inputs, tol, found }
+    }))
+}
+
+/// Checks every topology rule; the errors are kept for the Error Inspector. The work grows with
+/// the layers, so the desktop app checks them on a thread of its own first ([`topology_ahead`]),
+/// with the status bar's progress and **Cancel**, and the command takes that check as it lands;
+/// when a rule or a layer changed meanwhile it says so and keeps the errors it had, rather than
+/// check again here, which would hold the window. The assistant, tasks, scripts and the
+/// command line call commands one at a time on the session and use each answer before the next,
+/// so they check where they ask, with the work limit of a run that can't be cancelled.
+fn topology_validate(s: &mut Session, p: &Json) -> CmdResult {
+    let tol = topology_tolerance(p);
+    let inputs = topology_checks(s);
+    let found = match super::reads::take::<TopologyAhead>(s, TOPOLOGY_AHEAD) {
+        Some(ahead) if ahead.tol == tol && same_topology(&ahead.inputs, &inputs) => ahead.found?,
+        // Checking again here would hold the window: the check made on its thread is dropped.
+        Some(_) => return Err("the topology rules or their layers changed while they were checked: validate again".into()),
+        None => check_topology(&inputs, tol)?,
+    };
+    // Rules whose layer, or covering layer, isn't on the map are checked for nothing: said.
+    let unchecked: Vec<String> = s
+        .map()
+        .editing
+        .topology
+        .iter()
+        .filter(|r| !inputs.iter().any(|i| &i.rule == *r && i.by.is_some() == matches!(r, TopologyRule::MustBeCoveredBy { .. })))
+        .map(|r| format!("{} on '{}'", r.label(), r.layer()))
+        .collect();
+    if !unchecked.is_empty() {
+        s.warn(format!(
+            "{} topology rule(s) weren't checked: their layer or covering layer isn't on the map ({})",
+            unchecked.len(),
+            unchecked.join(", ")
+        ));
+    }
     let mut errors = Vec::new();
     // Rules whose check stopped early (an error or work limit), or measured some part more coarsely
     // than it's meant to (a line winding round a pole many times): their counts may be off.
     let mut incomplete = Vec::new();
     // Polygons a check had to leave out, by rule.
     let mut skipped = Vec::new();
-    for rule in s.map().editing.topology.clone() {
-        let Some(l) = s.map().layer_by_name(rule.layer()) else { continue };
-        let rows: Vec<usize> = l.visible_rows().iter().enumerate().filter(|(_, v)| **v).map(|(i, _)| i).collect();
-        rustgis_analysis::validate_latitudes(&l.dataset, rows.iter().copied())?;
-        let found = match &rule {
-            TopologyRule::MustNotOverlap { .. } => t::overlaps(&l.dataset, &rows),
-            TopologyRule::MustNotHaveGaps { .. } => t::gaps(&l.dataset, &rows),
-            TopologyRule::MustNotSelfIntersect { .. } => t::self_intersections(&l.dataset, &rows),
-            TopologyRule::MustNotHaveDangles { .. } => t::dangles(&l.dataset, &rows, tol),
-            TopologyRule::MustBeCoveredBy { by, .. } => match s.map().layer_by_name(by) {
-                Some(b) => {
-                    rustgis_analysis::validate_latitudes(&b.dataset, 0..b.dataset.features.len())?;
-                    t::not_covered(&l.dataset, &rows, &b.dataset)
-                }
-                None => continue,
-            },
-        };
+    for (i, found) in inputs.iter().zip(found) {
+        let rule = &i.rule;
         if !found.complete || found.skipped > 0 {
             incomplete.push(rule.label().to_string());
         }
         if found.skipped > 0 {
             // The features left out are the covering layer's.
-            let of = match &rule {
+            let of = match rule {
                 TopologyRule::MustBeCoveredBy { by, .. } => by.as_str(),
-                _ => l.name.as_str(),
+                _ => i.layer.as_str(),
             };
-            skipped.push(format!("{} on '{}': {} feature(s) of '{}'", rule.label(), l.name, found.skipped, of));
+            skipped.push(format!("{} on '{}': {} feature(s) of '{}'", rule.label(), i.layer, found.skipped, of));
         }
         errors.extend(found.errors.into_iter().map(|e| crate::TopologyIssue {
             rule: rule.label().to_string(),
-            layer: l.name.clone(),
+            layer: i.layer.clone(),
             rows: e.rows,
             lon: e.at.x,
             lat: e.at.y,

@@ -56,13 +56,33 @@ Layouts open as tabs next to the maps; while one is open, its groups lead the Pu
     alike, such as a context layer filling the frame, isn't worth a warning); two that overlap (a
     frame too small) are said too.
     The top visible raster gets a colorbar beneath the vector legend if its renderer has a colour
-    scale; RGB and untinted hillshade do not. The legend takes the fewest columns, up to three,
+    scale; RGB and untinted hillshade do not. `"colorbar": "none"` leaves it out, and the legend's
+    box is sized for the legend alone: hiding the colorbar afterwards would leave its room empty
+    in the box. The legend takes the fewest columns, up to three,
     that fit the largest rectangle the map leaves free; when none fits, a long one is laid in more
     when that shows more of it, or as much while covering at least a quarter less of what the map
     draws (the answer's `legendColumns`); in a side column it stays in one. Polygon layers with no
     fill and no labels, such as neighbouring borders, don't count as what the map draws here, unless
-    nothing else is shown. If the legend or colorbar cannot fit, the result warns about clipping or
-    resizing. A streamed layer still loading gets a fixed-size legend to adjust by hand.
+    nothing else is shown, nor do polygon layers in one colour with no labels that run on past the
+    frame, such as neighbouring states, beside a layer drawn by classes or a raster. When no shape
+    of the legend fits, the map is first moved towards an edge, as far as the asked extent stays in
+    the frame, so the room on both its sides joins (the answer's `mapShift`, in mm right and down,
+    and a warning). Where the projection stretches, as Web Mercator does away from the equator, the
+    moved frame is drawn at its new centre's ground scale, and the extent has to stay whole at that
+    scale. Only when no move makes room for it, a continuous map with a long legend is veiled: at
+    the asked scale, at least 80% of the extent's part of the frame and 30% of the rest are drawn
+    (not counting the layers just named), and the legend's box in one column, its colorbar included,
+    is taller than a quarter of the frame; a sparser map stays unveiled. The veil covers what is
+    outside the extent's bounding box in the map's projection, but for the strips under the
+    graticule's labels (so an extent whose edges curve there, as in a conic or polar projection,
+    keeps the box's corners outside it unveiled), and the surrounds group in its widest band (the
+    answer's `veiled`, `arrangement` `"veil"` and `moved`, and a warning), at up to about half the
+    scale on a sheet (each scale tried is rounded up to two significant figures) when the frame
+    leaves too little of it, which the result says too. When neither makes room, the map stays
+    centred and unveiled, and the legend is laid out as above. The veil and the surrounds are
+    ordinary elements, to move or delete as any other; `"veil": false` leaves the map unveiled and
+    at its scale. If the legend or colorbar cannot fit, the result warns about clipping or resizing.
+    A streamed layer still loading gets a fixed-size legend to adjust by hand.
   - **Decimal comma**: `"decimal": ","` prints the graticule, scale bar and colorbar numbers and
     `{scale}` with a decimal comma and points between thousands (`0,05`, `1:6.300.000`).
     `layout.page={"decimal": ","}` sets it on any layout; `"."` restores decimal points.
@@ -198,6 +218,20 @@ Layouts open as tabs next to the maps; while one is open, its groups lead the Pu
     (a mask, a highlight, a basemap-like layer). Scripts give the same with
     `"exclude": ["Graticule"]` on `layout.addElement` or `layout.update` (`[]` lists every layer
     again); a renamed layer stays left out.
+  - **Labels**: a legend can show a layer under a label instead of its name, so a layer named for
+    a plugin or a script (`BrasilData: Setores censitários 2022 (MG)`, `setores_mg_2022_clip`)
+    reads well on the page while it keeps its name everywhere else. Scripts give
+    `"labels": {"BrasilData: Setores censitários 2022 (MG)": "Setores censitários"}` on
+    `layout.addElement` or `layout.update`: the layer by its name (any case), as `exclude` names
+    it, and a layer the map hasn't is refused. Each entry replaces that layer's label and leaves
+    the others; `null` or a blank label shows the layer's name again, and `{}` every layer's. The
+    label goes in the layer's row, or over its classes; a WMS or WMTS layer's goes over its
+    picture. It is up to 200 characters (a longer one is refused), and the legend measures it, not
+    the name, so sizing a legend to its content and the warnings on its fit follow the label. Two
+    legends can label a layer differently (in two languages, say). A renamed layer keeps its label
+    (not when another layer has its new name, which is said); a removed one's is dropped, so a later
+    layer of that name isn't labelled unasked. Labels are saved with the layout, in the project and
+    in a `.rgislayout` file.
 - **Colorbar**: the colour scale of a raster layer in the frame's map, as the map draws it (its
   stretch, colour ramp and enhancement): a gradient bar for a stretch or a tinted hillshade,
   steps labelled at their breaks for Classify, and a block per value for Unique Values and colour
@@ -299,6 +333,20 @@ Layouts open as tabs next to the maps; while one is open, its groups lead the Pu
   are pictures cut to their shape. The `dpi` also sets how fine the vectors' detail is kept, as a
   PNG at that resolution would show it. A frame or page whose vectors would pass 256 MB (64 MB
   in the browser) is drawn as a picture instead, and the export says which.
+  A PDF is also a GeoPDF: each map frame is georeferenced (an ISO 32000 geospatial viewport, the
+  form GDAL, QGIS, Acrobat and Avenza read), with its map's coordinate system as WKT and its EPSG
+  code when it has one, so a reader shows coordinates and measures in it, and GDAL or QGIS open the
+  page as a georeferenced raster. It carries coordinates only: no layers and no feature
+  attributes. A tilted frame, one on the globe, and one with a corner off the Earth aren't
+  georeferenced, and the export says which (in a map series, on which pages when not on all: each
+  page moves the frame). Where a frame is drawn over another, only the one on top carries
+  coordinates there (none when it isn't georeferenced), so a reader doesn't show the
+  other's through it. A viewport is a rectangle, so a shaped frame (circle, ellipse, polygon)
+  drawn over another is left out, and the frame under it has no coordinates in its box. A frame in a projection with no WKT form is
+  georeferenced by its corners in longitude/latitude when that puts the places on a 9 × 9 grid
+  over it within 0.5 mm of where they are drawn (measured there, not proven between them), and
+  left out otherwise. **Georeference PDF** in the Publish tab's
+  Export group (`"georeference": false` for `layout.export`) leaves the coordinates out.
   In SVG each element is a group (an Inkscape layer) named after it: text stays text and rectangles,
   ellipses and lines stay shapes, and map frames and the other surrounds are kept as vectors as in a
   PDF (their labels as the letters' shapes, each run labelled with its text), so the page can be

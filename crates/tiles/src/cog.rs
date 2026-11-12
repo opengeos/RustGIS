@@ -16,6 +16,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex, OnceLock};
 
+use rustgis_data::diagnostics::message_with_address;
 use rustgis_data::raster::ColorHint;
 use rustgis_data::raster::cog::{self, Layout, Level, Parse, Sparse};
 use rustgis_data::raster::crs::Transformer;
@@ -475,7 +476,7 @@ fn load(url: String, done: Box<dyn FnOnce(Result<Arc<Info>, String>) + Send>) {
         Box::new(move |h| {
             let h = h.unwrap_or_default();
             if h.content_type.as_deref().is_some_and(not_tiff_type) && !h.accepts_ranges && h.tiff_header_length.is_none() {
-                return done(Err(format!("{u}: not a GeoTIFF")));
+                return done(Err(message_with_address(&u, "not a GeoTIFF")));
             }
             read_header(u, header_length(h.tiff_header_length), done);
         }),
@@ -510,8 +511,8 @@ fn read_header(url: String, len: u64, done: Box<dyn FnOnce(Result<Arc<Info>, Str
         len,
         Box::new(move |r| match r {
             Ok(b) if cog::is_tiff(&b) => step(u, Sparse::default().with(0, b), 0, done),
-            Ok(_) => done(Err(format!("{u}: not a GeoTIFF"))),
-            Err(e) => done(Err(format!("{u}: {e}"))),
+            Ok(_) => done(Err(message_with_address(&u, "not a GeoTIFF"))),
+            Err(e) => done(Err(message_with_address(&u, &e))),
         }),
     );
 }
@@ -522,7 +523,7 @@ fn step(url: String, have: Sparse, rounds: usize, done: Box<dyn FnOnce(Result<Ar
         Ok(Parse::NotTiled(why)) => done(Err(format!("{NOT_COG}: {why}"))),
         Ok(Parse::Need(a, b)) => {
             let Some(len) = header_read(&have, a, b, rounds) else {
-                done(Err(format!("{url}: the GeoTIFF's header is too large or too scattered to read in place")));
+                done(Err(message_with_address(&url, "the GeoTIFF's header is too large or too scattered to read in place")));
                 return;
             };
             let u = url.clone();
@@ -536,13 +537,13 @@ fn step(url: String, have: Sparse, rounds: usize, done: Box<dyn FnOnce(Result<Ar
                     // table) is left out and said, as the whole-file read does; one the image needs
                     // fails to decode. Once only: a file whose length is known isn't asked past it.
                     Ok(more) if more.is_empty() && !have.len_known() => step(u, have.with_len(a), rounds + 1, done),
-                    Ok(more) if more.is_empty() => done(Err(format!("{u}: the GeoTIFF is cut short"))),
+                    Ok(more) if more.is_empty() => done(Err(message_with_address(&u, "the GeoTIFF is cut short"))),
                     Ok(more) => step(u, have.with(a, more), rounds + 1, done),
-                    Err(e) => done(Err(format!("{u}: {e}"))),
+                    Err(e) => done(Err(message_with_address(&u, &e))),
                 }),
             );
         }
-        Err(e) => done(Err(format!("{url}: {e}"))),
+        Err(e) => done(Err(message_with_address(&url, &e.to_string()))),
     }
 }
 
@@ -577,12 +578,12 @@ fn stats(url: String, header: Sparse, layout: Layout, done: Box<dyn FnOnce(Resul
     let transformer = match layout.crs.transformer() {
         Ok(t) => t,
         Err(e) => {
-            done(Err(format!("{url}: {e}")));
+            done(Err(message_with_address(&url, &e)));
             return;
         }
     };
     let Some(full) = layout.levels.first().cloned() else {
-        done(Err(format!("{url}: no image")));
+        done(Err(message_with_address(&url, "no image")));
         return;
     };
     // Bounds: the full image's edges, sampled (a projected square isn't square in degrees).
@@ -601,7 +602,7 @@ fn stats(url: String, header: Sparse, layout: Layout, done: Box<dyn FnOnce(Resul
         }
     }
     if lon.0 > lon.1 || lat.0 > lat.1 {
-        done(Err(format!("{url}: the GeoTIFF's corners aren't on the globe")));
+        done(Err(message_with_address(&url, "the GeoTIFF's corners aren't on the globe")));
         return;
     }
     let bounds = [lon.0.max(-180.0), lat.0.max(-85.05), lon.1.min(180.0), lat.1.min(85.05)];
@@ -1117,7 +1118,7 @@ fn parse_url(url: &str) -> Option<(u8, u32, u32, String)> {
 /// Draws a map tile (`cog:z/x/y@address`): empty where the file has nothing.
 pub(crate) fn fetch(url: &str, done: Done) {
     let Some((z, x, y, archive)) = parse_url(url) else {
-        done(Err(format!("{url}: not a COG tile address")));
+        done(Err(message_with_address(url, "not a COG tile address")));
         return;
     };
     let (file, look) = split(&archive);
@@ -1398,7 +1399,7 @@ pub fn probe_blocking(url: &str) -> Result<bool, String> {
         Ok(Ok(())) => Ok(true),
         Ok(Err(e)) if read_whole(&e) => Ok(false),
         Ok(Err(e)) => Err(e),
-        Err(_) => Err(format!("{url}: no answer in a minute")),
+        Err(_) => Err(message_with_address(url, "no answer in a minute")),
     }
 }
 
@@ -1429,10 +1430,52 @@ pub const MAX_VALUES_READ: u64 = 64_000_000;
 /// A file's header, waiting for it: for an analysis that reads the values (opengeos/RustGIS#579).
 #[cfg(not(target_arch = "wasm32"))]
 pub fn info_blocking(url: &str) -> Result<Arc<Info>, String> {
+    info_until(url, &std::sync::atomic::AtomicBool::new(false))
+}
+
+/// [`info_blocking`], giving up within 100 ms of `stop` being set (a download's Cancel), with
+/// [`STOPPED`].
+#[cfg(not(target_arch = "wasm32"))]
+pub fn info_until(url: &str, stop: &std::sync::atomic::AtomicBool) -> Result<Arc<Info>, String> {
     let url = split(url).0;
     let (tx, rx) = std::sync::mpsc::channel();
     with_info(url, Box::new(move |r| tx.send(r).unwrap_or_default()));
-    rx.recv_timeout(Duration::from_secs(120)).map_err(|_| format!("{url}: no answer in two minutes"))?
+    wait_until(&rx, Duration::from_secs(120), stop).map_err(|stopped| stopped_or(stopped, url, "no answer in two minutes"))?
+}
+
+/// What a read given up for its `stop` says.
+#[cfg(not(target_arch = "wasm32"))]
+pub const STOPPED: &str = "stopped before it was read";
+
+/// How often a blocking read looks at its `stop` while it waits.
+#[cfg(not(target_arch = "wasm32"))]
+const STOP_STEP: Duration = Duration::from_millis(100);
+
+/// What `rx` sends within `limit`, waited for in steps of [`STOP_STEP`]: `Err(true)` once `stop`
+/// is set, `Err(false)` when nothing came in time (or the sender is gone).
+#[cfg(not(target_arch = "wasm32"))]
+fn wait_until<T>(rx: &std::sync::mpsc::Receiver<T>, limit: Duration, stop: &std::sync::atomic::AtomicBool) -> Result<T, bool> {
+    let end = Instant::now() + limit;
+    loop {
+        if stop.load(std::sync::atomic::Ordering::Relaxed) {
+            return Err(true);
+        }
+        let left = end.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return Err(false);
+        }
+        match rx.recv_timeout(left.min(STOP_STEP)) {
+            Ok(v) => return Ok(v),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return Err(false),
+        }
+    }
+}
+
+/// [`STOPPED`] for a wait given up for its `stop`, else `late`; both name the address.
+#[cfg(not(target_arch = "wasm32"))]
+fn stopped_or(stopped: bool, url: &str, late: &str) -> String {
+    message_with_address(url, if stopped { STOPPED } else { late })
 }
 
 /// Band `band`'s values (0-based) in a window of a level: columns `cols.0..cols.1` and rows
@@ -1450,12 +1493,15 @@ pub fn read_values_blocking(
     cols: (u32, u32),
     rows: (u32, u32),
 ) -> Result<Vec<f32>, String> {
-    read_values_counted_blocking(info, url, level, band, cols, rows).map(|(values, _, _)| values)
+    let never = std::sync::atomic::AtomicBool::new(false);
+    read_values_counted_blocking(info, url, level, band, cols, rows, &never).map(|(values, _, _)| values)
 }
 
 /// [`read_values_blocking`], with how many of the window's values `f32` rounded (32- and 64-bit
 /// whole numbers and 64-bit floats it doesn't hold exactly; no-data isn't counted), and how many
-/// it can't hold at all (past its range: left out, NaN).
+/// it can't hold at all (past its range: left out, NaN). It gives up within 100 ms of `stop`
+/// being set (a download's Cancel), with [`STOPPED`]; the tiles already asked for are
+/// still fetched, for the cache.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn read_values_counted_blocking(
     info: &Arc<Info>,
@@ -1464,6 +1510,7 @@ pub fn read_values_counted_blocking(
     band: usize,
     cols: (u32, u32),
     rows: (u32, u32),
+    stop: &std::sync::atomic::AtomicBool,
 ) -> Result<(Vec<f32>, u64, u64), String> {
     let url = split(url).0.to_string();
     let l = info.layout.levels.get(level).ok_or("no such overview")?;
@@ -1494,9 +1541,13 @@ pub fn read_values_counted_blocking(
         (r0..=r1).flat_map(|ty| (c0..=c1).filter_map(move |tx| ty.checked_mul(across).and_then(|t| t.checked_add(tx)))).collect();
     // Reserved first: a window the machine can't hold is an error, not a crash (#1291).
     let (mut out, mut rounded, mut overflowed) = (rustgis_data::raster::filled(w, h, f32::NAN).map_err(|e| e.to_string())?, 0u64, 0u64);
+    if stop.load(std::sync::atomic::Ordering::Relaxed) {
+        return Err(message_with_address(&url, STOPPED));
+    }
     let (tx, rx) = std::sync::mpsc::channel();
     fetch_bands(info.clone(), url.clone(), level, tiles.clone(), vec![band], Box::new(move |r| tx.send(r).unwrap_or_default()));
-    let picked = rx.recv_timeout(Duration::from_secs(120)).map_err(|_| format!("{url}: tiles not read in two minutes"))??;
+    let picked =
+        wait_until(&rx, Duration::from_secs(120), stop).map_err(|stopped| stopped_or(stopped, &url, "tiles not read in two minutes"))??;
     let nodata = info.layout.nodata.map(|v| v as f32);
     for (&t, p) in tiles.iter().zip(&picked) {
         let Some((chunk, b)) = p.first() else { continue };
@@ -1831,7 +1882,7 @@ mod tests {
         bad[entry + 8..entry + 12].copy_from_slice(&(len + 1000).to_le_bytes());
         let (l, ..) = layout_by_ranges(&bad).expect("read");
         let said: Vec<&String> = l.lost.iter().chain(l.described.iter().flat_map(|d| d.lost.iter())).collect();
-        assert!(said.iter().any(|x| x.contains("band and class names are left out")), "{said:?}");
+        assert!(said.iter().any(|x| x.contains("band and class names and wavelengths are left out")), "{said:?}");
     }
 
     /// The header alone of a tiled GeoTIFF, `side` pixels a side in 256-pixel tiles, laid out as

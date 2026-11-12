@@ -629,7 +629,10 @@ fn landed_link(app: &mut RustGisApp, url: &str, r: Result<Vec<u8>, String>) {
                 app.ui.stac.info = Some(format!("{} · {}", app.ui.stac.info.clone().unwrap_or_default(), unknown(app)));
             }
         }
-        _ => app.ui.stac.error = Some(i18n::fmt("{url}: not a STAC item or collection", &[("url", url)])),
+        _ => {
+            app.ui.stac.error =
+                Some(i18n::fmt("{url}: not a STAC item or collection", &[("url", &rustgis_engine::sources::address_in_message(url))]))
+        }
     }
 }
 
@@ -1261,7 +1264,7 @@ mod tests {
         app.ui.stac.waiting = Some((asked, slot));
         app.ui.stac.connection = two["id"].as_str().map(str::to_string);
         poll(&mut app, &egui::Context::default());
-        let (_, _, params, _) = app.ui.downloads.last().unwrap();
+        let params = &app.ui.downloads.last().unwrap().params;
         assert_eq!(params["connection"], one["id"], "token completion must not re-read the picker");
         assert_ne!(params["connection"], two["id"]);
     }

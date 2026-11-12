@@ -190,7 +190,7 @@ fn plan(r: &Raster, band: usize) -> Result<Plan> {
     };
     let max = if sample == Sample::Byte { 255.0 } else { 65_535.0 };
     // A few distinct whole numbers are classes; photographs and rasters with a range are not.
-    let categorical = sample != Sample::Float && b.stats.categories.as_ref().is_some_and(|c| c.len() <= 64);
+    let categorical = !b.classes.is_empty() || (sample != Sample::Float && b.stats.categories.as_ref().is_some_and(|c| c.len() <= 64));
     Ok(Plan {
         bands: vec![band],
         sample,
@@ -400,6 +400,9 @@ fn entries(r: &Raster, plan: &Plan, lv: &Level, first: bool, geo: &GeoKeys, big:
     }
     e.push(shorts(339, &vec![format; spp]));
     if first {
+        if let Some(c) = r.copyright.as_deref().map(super::tag_text).filter(|c| !c.is_empty()) {
+            e.push(ascii(33432, &c));
+        }
         let gt = r.transform;
         e.push(doubles(33550, &[gt.pixel_width.abs(), gt.pixel_height.abs(), 0.0]));
         e.push(doubles(33922, &[0.0, 0.0, 0.0, gt.origin_x, gt.origin_y, 0.0]));
@@ -745,6 +748,24 @@ mod tests {
         assert_eq!(at(5, 3, 0), 22);
         // Green: y mod 256 over 4j..4j+4 (j = 3 → 13.5 → 14).
         assert_eq!(at(0, 3, 1), 14);
+    }
+
+    #[test]
+    fn raster_export_review_named_classes_keep_codes_in_float_overviews() {
+        let (w, h) = (700u32, 4u32);
+        let data = (0..w * h).map(|i| if i % w < 2 { f32::NAN } else { (i % 2) as f32 }).collect();
+        let mut r = utm(w, h, vec![data], ColorHint::Gray, "UInt8", None);
+        r.bands[0].classes = vec!["Water".into(), "Land".into()];
+        let bytes = write(&r, 0).unwrap();
+        let ov = geotiff::read_limited(geotiff::reader(Cursor::new(bytes.as_slice())).unwrap(), "o", 1500, None).unwrap();
+        assert_eq!((ov.width, ov.height), (350, 2));
+        assert_eq!(ov.value(0, 0, 0), None);
+        assert!(ov.bands[0].data.iter().all(|v| v.is_nan() || *v == 0.0 || *v == 1.0), "no averaged class codes");
+        assert_eq!(ov.bands[0].classes, r.bands[0].classes);
+        r.bands[0].classes.clear();
+        let bytes = write(&r, 0).unwrap();
+        let ov = geotiff::read_limited(geotiff::reader(Cursor::new(bytes.as_slice())).unwrap(), "o", 1500, None).unwrap();
+        assert_eq!(ov.value(0, 2, 0), Some(0.5), "continuous float overviews still average");
     }
 
     #[test]

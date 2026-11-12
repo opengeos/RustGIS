@@ -37,11 +37,12 @@ type Start = fn(&Session, &Value) -> Result<Work, String>;
 
 /// The exports the app writes on another thread ([`export_start`]), each with what it is called
 /// (in its progress, and a cancelled run's error) and what it reads of the session.
-const IN_BACKGROUND: &[(&str, &str, Start)] = &[
+pub(crate) const IN_BACKGROUND: &[(&str, &str, Start)] = &[
     ("share.exportLayer", "Export Features", super::share::layer_work),
     ("share.exportRaster", "Export Raster", super::raster::export_work),
     ("share.exportMap", "Export Map", super::share::map_work),
     ("layout.export", "Export Layout", super::layout::export_work),
+    ("report.export", "Export Report", super::report::export_work),
 ];
 
 /// `command` and what it is called, when the app writes its file on another thread (see
@@ -125,14 +126,7 @@ pub(crate) fn drawn(
     let written_path = written.is_ok().then(|| path.clone());
     let answer = written.as_ref().map_or(Value::Null, Value::clone);
     let then: Then = Box::new(move |s: &mut Session, _: &mut Value| {
-        use rustgis_data::diagnostics::Severity;
-        for (severity, text) in notices {
-            match severity {
-                Severity::Error => s.notify(text, true),
-                Severity::Warning => s.warn(text),
-                Severity::Info => s.notify(text, false),
-            }
-        }
+        say(s, notices);
         let mut missing = Vec::new();
         for (instance, name, error, copied) in failed {
             let live = s.project.maps.iter_mut().flat_map(|m| m.layers.iter_mut()).find(|l| l.instance_id() == instance);
@@ -167,6 +161,35 @@ pub(crate) fn drawn(
     })
 }
 
+/// What drawing an export on `copy` (a copy of the session) said, each notice with its severity,
+/// to say again where the export lands; past the notices a session keeps, how many earlier ones
+/// there were. `path` names the file in that count.
+pub(crate) fn copy_notices(copy: &mut Session, path: &str) -> Vec<(rustgis_data::diagnostics::Severity, String)> {
+    let kept = std::mem::take(&mut copy.notices);
+    let earlier = copy.notices_given().saturating_sub(kept.len() as u64);
+    let mut said = Vec::new();
+    if earlier > 0 {
+        said.push((
+            rustgis_data::diagnostics::Severity::Warning,
+            format!("{path}: {earlier} earlier notices from drawing it aren't shown"),
+        ));
+    }
+    said.extend(kept.into_iter().map(|n| (n.severity, n.text)));
+    said
+}
+
+/// Says `notices` (what an export said on a copy of the session) in `s`, each as it was said.
+pub(crate) fn say(s: &mut Session, notices: Vec<(rustgis_data::diagnostics::Severity, String)>) {
+    use rustgis_data::diagnostics::Severity;
+    for (severity, text) in notices {
+        match severity {
+            Severity::Error => s.notify(text, true),
+            Severity::Warning => s.warn(text),
+            Severity::Info => s.notify(text, false),
+        }
+    }
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 /// An export ([`IN_BACKGROUND`]) started to write its file on another thread ([`ExportRun::run`])
 /// while the session goes on: its inputs are taken now (cheaply: the features and pixels are
@@ -190,6 +213,9 @@ pub struct Started {
     pub(crate) start: web_time::Instant,
     /// The admitted invocation; cloned metadata never selects replacement authority.
     pub(crate) owner: crate::policy::Continuation,
+    /// The project it started in, its name as the log keeps it and its `Session::opened`: the
+    /// log's entry names that one, not one opened while it ran.
+    pub(crate) project: (String, u64),
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -235,7 +261,8 @@ pub(crate) fn export_start_raw(s: &mut Session, op: crate::policy::Authorized<cr
     owner.check()?;
     let current = owner.clone();
     let still = std::sync::Arc::new(move || current.check().is_ok());
-    let started = Started { command, params: p.clone(), at: crate::project_log::now_ms(), start: web_time::Instant::now(), owner };
+    let project = (crate::project_log::kept_name(&s.title()), s.opened);
+    let started = Started { command, params: p.clone(), at: crate::project_log::now_ms(), start: web_time::Instant::now(), owner, project };
     let work = crate::render::rustgis_tiles::cache::with_still(still, || start(s, p))?;
     Ok(ExportRun { name, started, work })
 }
@@ -245,7 +272,7 @@ pub(crate) fn export_start_raw(s: &mut Session, op: crate::policy::Authorized<cr
 /// its answer: the troubleshooting history files what it says (its failure too) under that
 /// command, and the session's log has its entry, as when it runs here.
 pub fn export_land(s: &mut Session, started: Started, done: Result<Wrote, String>) -> CmdResult {
-    let Started { command, params, at, start, owner } = started;
+    let Started { command, params, at, start, owner, project } = started;
     let before = s.diagnostic_source.replace(command);
     let mark = s.notice_mark();
     let landed: CmdResult = (|| {
@@ -268,8 +295,9 @@ pub fn export_land(s: &mut Session, started: Started, done: Result<Wrote, String
     }
     s.diagnostic_source = before;
     if s.log.on() && crate::project_log::is_logged(s, command, &params) {
-        let entry = crate::project_log::entry(command, crate::project_log::kept_params(&params), &landed, at, start.elapsed());
-        s.log.push(entry);
+        let (kept, partial) = crate::project_log::kept_and_partial(&params);
+        // The project it started in, not one opened while it ran.
+        s.log.push(crate::project_log::entry(project, command, kept, partial, &landed, at, start.elapsed()));
     }
     landed
 }

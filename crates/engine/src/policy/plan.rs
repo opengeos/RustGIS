@@ -7,6 +7,21 @@ use crate::{CommandSpec, Session};
 use serde_json::{Value, json};
 use std::sync::Arc;
 
+/// Whether a parameter is the address of a file on an Earthdata data host. Walks with a list, not
+/// by recursion: parameters are hostile.
+fn names_earthdata_host(params: &Value) -> bool {
+    let mut left = vec![params];
+    while let Some(value) = left.pop() {
+        match value {
+            Value::String(text) if crate::render::rustgis_tiles::earthdata::is_data_host(text) => return true,
+            Value::Array(items) => left.extend(items),
+            Value::Object(fields) => left.extend(fields.values()),
+            _ => {}
+        }
+    }
+    false
+}
+
 pub struct Call {
     pub(super) kind: CallKind,
     pub(super) request: String,
@@ -347,6 +362,9 @@ impl Node {
     }
     /// Rejects a withdrawn load or reloaded schema before a new stage begins.
     pub(crate) fn current(&self) -> Result<(), String> {
+        if self.auth.as_ref().is_some_and(|a| a.restored_since()) {
+            return Err("the Earthdata token remembered on this computer was read while this command ran; run it again".into());
+        }
         if self.auth.as_ref().is_some_and(|a| !a.is_current()) {
             return Err("the active account changed since this operation was approved".into());
         }
@@ -633,6 +651,12 @@ impl<'a> Builder<'a> {
                 let tool = params.get("tool").and_then(Value::as_str).ok_or("tool is required")?;
                 n.children.push(self.tool(tool, params.get("params").unwrap_or(&Value::Null))?);
             }
+            // The batch's items aren't expanded here: it declares Files and Automation, and adds
+            // what its tool reaches beyond a built-in's (a plugin's code, an unreviewed runner).
+            "gp.batch" => {
+                let tool = params.get("tool").and_then(Value::as_str).ok_or("tool is required")?;
+                n.effects = n.effects.union(batch_tool_effects(tool)?);
+            }
             "gp.spatialJoin" => n.children.push(self.tool("spatialJoin", params)?),
             "gp.zonalStats" => n.children.push(self.tool("zonalStats", params)?),
             "script.run" if self.strict => {
@@ -743,6 +767,12 @@ impl<'a> Builder<'a> {
         let session = self.s;
         if reads {
             if self.auth.is_none() {
+                // The command line and Python read the remembered token only for a command that
+                // needs it, and it must be read before this snapshot or the command's first
+                // request changes the account and cancels it (#1626). The app reads it at launch.
+                if session.saved_secrets_opted_in && names_earthdata_host(params) {
+                    crate::render::rustgis_tiles::earthdata::restore();
+                }
                 self.auth = Some(Arc::new(super::scope::RuntimeAccounts::capture(session)?));
             }
             n.auth = self.auth.clone();
@@ -1402,6 +1432,19 @@ impl Session {
             "web":{"selected":self.database_logins.web_selections(),"active":self.web_logins.active_ids()}
         })
     }
+}
+
+/// What a batch's tool reaches beyond a built-in's, without its per-item parameters.
+pub(super) fn batch_tool_effects(name: &str) -> Result<Effects, String> {
+    let pin = ToolPin::resolve(name)?;
+    let mut e = Effects::NONE;
+    if pin.plugin.is_some() {
+        e = e.with(Effect::Plugin);
+    }
+    if pin.resolved.source().is_some_and(|s| s != "geolibre" && s != rustgis_plugins::tools::SOURCE) {
+        e = e.with(Effect::Unreviewed);
+    }
+    Ok(e)
 }
 
 /// Projects pinned tool effects for compatibility consumers; execution still uses its own token.

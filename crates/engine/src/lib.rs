@@ -8,8 +8,10 @@
 pub mod cmd;
 pub mod connections;
 pub mod durable;
+pub mod extensions;
 pub mod geometry_calc;
 pub mod model;
+mod notice_text;
 pub mod peer;
 pub mod policy;
 #[cfg(not(target_arch = "wasm32"))]
@@ -50,10 +52,17 @@ pub struct UrlRequest {
     key: u64,
     params: Value,
     authority: std::sync::Arc<policy::Continuation>,
+    /// For a window asked with `"bbox": "view"`: the box the view was then, kept apart from its
+    /// parameters, which a caller gives and a command run again is matched by.
+    view: Option<[f64; 4]>,
 }
 impl UrlRequest {
     pub fn params(&self) -> &Value {
         &self.params
+    }
+    /// The box `"bbox": "view"` was when the command asked (`cmd::layer::window_asked_in`).
+    pub fn view_asked(&self) -> Option<[f64; 4]> {
+        self.view
     }
 }
 
@@ -527,8 +536,19 @@ pub struct TopologyIssue {
 pub struct Notice {
     pub text: String,
     pub error: bool,
+    /// Trusted templates with already-redacted arguments; ordinary notices have no payload.
+    localized: Option<notice_text::NoticeText>,
     /// How the troubleshooting history files it (an error, a warning or information).
     pub(crate) severity: rustgis_data::diagnostics::Severity,
+}
+
+impl Notice {
+    /// Deferred interface text, or `None` for an ordinary notice whose text is already final.
+    /// The formatter returns logical-order text; the front end shapes the complete result once.
+    /// Arguments are redacted before retention, and the result has the ordinary notice limits.
+    pub fn translated(&self, format: impl Fn(&str, &[(&str, &str)]) -> String) -> Option<String> {
+        self.localized.as_ref().map(|text| Session::redacted(&text.render(&format)).into_string())
+    }
 }
 
 /// One counted, already-redacted loss, independent of the changes a command can roll back.
@@ -644,6 +664,8 @@ pub struct Session {
     /// Favourite, recent and saved data sources (kept with the app's preferences, not the
     /// project).
     pub sources: sources::Sources,
+    /// Which extensions are on (#1752): the commands of one that is off are refused.
+    extensions: extensions::State,
     /// Saved connections (`connection.*`): kept with the app's preferences, not the project; never a secret.
     pub connections: connections::Connections,
     /// The runtime token of each saved S3 connection's login in this session, by saved id (see
@@ -695,11 +717,17 @@ pub struct Session {
     /// layer lands as the map draws (failing is said then, and read again: see
     /// [`Session::read_in_place_again`]).
     pub in_place_wait: bool,
+    /// Whether commands run on the desktop window's own thread, which draws nothing until each
+    /// answers: a plugin command there is held to the usual two minutes, whatever longer
+    /// `timeout` it declares. The command line, Python, scripts and tests run off any window.
+    pub on_window_thread: bool,
     pub notices: Vec<Notice>,
     /// Counted losses await the outermost guard's cleanup, including failed nested commands.
     /// Runtime-only: never in Project, undo or PutAside, so replacement cannot erase them.
     loss_notices: Vec<LossNotice>,
     loss_notice_overflow: u32,
+    /// Whether this session has said that native HTTPS trusts the bundled CA roots (#1591).
+    bundled_roots_said: bool,
     /// Troubleshooting history, independent of the active pane, project files and undo.
     pub diagnostics: rustgis_data::diagnostics::History,
     /// Notices given in this session, including ones no longer kept (see [`Session::notices_since`]),
@@ -722,7 +750,7 @@ pub struct Session {
     pub(crate) saved_over: Vec<rustgis_map::source::Versions>,
     /// The feature cache fills itself after projection changes (Data › Feature Cache).
     pub auto_cache: bool,
-    /// Mensuration results (Analyze › Mensuration › Results).
+    /// Mensuration results (Imagery › Mensuration › Results).
     pub measurements: Vec<serde_json::Value>,
     /// The last topology check's errors (Edit › Error Inspector).
     pub topology_errors: Vec<TopologyIssue>,
@@ -807,6 +835,9 @@ pub struct Session {
     /// them (it keeps nothing between calls). Not saved with the project: a plugin's state
     /// command reads what it needs from the map when the panel opens.
     pub plugin_panels: std::collections::BTreeMap<String, rustgis_plugins::PanelState>,
+    /// What running session plugins were last told of the map, to send them events.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    pub(crate) plugin_watch: cmd::plugins::Watch,
     /// Data downloads of this project under way (Home › Add › Add Data › From URL), by id.
     downloading: Vec<u64>,
     /// Downloads that landed, waiting for `layer.addDownload`.
@@ -821,12 +852,17 @@ pub struct Session {
     /// Downloads a command asked for where nothing may wait (the browser): the parameters of
     /// `layer.addUrl` calls, for the front end to fetch and add (see [`Session::take_url_requests`]).
     pub(crate) url_requests: Vec<UrlRequest>,
+    /// The view's box a window request being queued keeps ([`UrlRequest::view_asked`]).
+    pub(crate) window_view: Option<[f64; 4]>,
     /// Set by [`Session::request_url`] for [`Session::guarded`]: the command running changed
     /// nothing, it only left a request (a plugin's own answer can't claim that).
     request_only: bool,
     /// Set by [`Session::run_leaving_downloads`]: `layer.addUrl` leaves what it would wait for
     /// to the front end ([`Session::request_url`]), as in the browser.
     leave_downloads: bool,
+    /// Set by [`prefs::opt_in`]: the command line and Python read the remembered Earthdata token
+    /// for a command that names a data host, before it binds its accounts.
+    saved_secrets_opted_in: bool,
     /// Plugin commands waiting for their `host.fetch` answers, or the downloads their
     /// `layer.addUrl` left to the app, to run again.
     pub(crate) plugin_retries: Vec<cmd::plugins::fetch::Retry>,
@@ -840,6 +876,8 @@ pub struct Session {
     /// While a plugin command runs again for its downloads: what each one asked for, and what
     /// adding it answered, for its `layer.addUrl` to answer once.
     pub(crate) rerun_landed: Vec<(serde_json::Value, CmdResult, cmd::plugins::fetch::Added)>,
+    /// Which of those are failures already told in this run (see [`Session::rerun_answer`]).
+    pub(crate) rerun_told: Vec<usize>,
     /// While a plugin command runs again: the errors its earlier runs said, not said again.
     pub(crate) rerun_said: Vec<String>,
     /// While plugin commands whose downloads are in run again: the downloads they wait for, still
@@ -886,6 +924,14 @@ pub struct Session {
     /// ([`cmd::gp::Ahead::Taking`]), or which that copy records ([`cmd::gp::Ahead::Recording`]).
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) tools_ahead: Option<cmd::gp::Ahead>,
+    /// The files a batch read on that copy, which the batch's run here takes
+    /// ([`cmd::gp::FilesAhead`]).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) files_ahead: Option<cmd::gp::FilesAhead>,
+    /// The zones' spectral means a script read on that copy, which its run here takes
+    /// ([`cmd::imagery::ZonesAhead`]).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) zones_ahead: Option<cmd::imagery::ZonesAhead>,
     /// Where the requests a copy of the session makes for a model's run ahead go
     /// ([`cmd::workflows::ahead_on_copy`]): the session's own Diagnostics, as when they're made
     /// there. Its notices stay its own: the run there says them.
@@ -894,6 +940,9 @@ pub struct Session {
     /// The tools run ahead that a model's run took, for the tests.
     #[cfg(test)]
     pub(crate) tools_taken: usize,
+    /// The zones' means read ahead that a command took, for the tests.
+    #[cfg(test)]
+    pub(crate) zones_taken: usize,
     /// Set where a person at a terminal waits on a command (`rustgis-cli run` with stdin and
     /// stderr a terminal), who can stop it with Ctrl-C: tools and rasters take no work cap
     /// ([`rustgis_analysis::control::Control::stoppable`]). A program that calls it (an agent, a
@@ -1067,7 +1116,7 @@ impl Session {
         rustgis_data::diagnostics::set_clock(|| {
             web_time::SystemTime::now().duration_since(web_time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
         });
-        let label_notices = std::mem::take(&mut project.label_read_notices);
+        let label_notices = project.take_read_notices(&crate::project::ALL_PARTS);
         let mut session = Session {
             project,
             path: None,
@@ -1078,6 +1127,7 @@ impl Session {
             states: 0,
             saved: Some(0),
             sources: sources::Sources::default(),
+            extensions: extensions::State::default(),
             connections: connections::Connections::default(),
             s3_bindings: std::collections::BTreeMap::new(),
             s3_pending: Vec::new(),
@@ -1096,9 +1146,11 @@ impl Session {
             view_size: (1200.0, 720.0),
             style_view: None,
             in_place_wait: true,
+            on_window_thread: false,
             notices: Vec::new(),
             loss_notices: Vec::new(),
             loss_notice_overflow: 0,
+            bundled_roots_said: false,
             diagnostics: rustgis_data::diagnostics::History::default(),
             notices_given: 0,
             table_layer: None,
@@ -1145,22 +1197,26 @@ impl Session {
             started: Vec::new(),
             plugin_runs: Vec::new(),
             plugin_panels: std::collections::BTreeMap::new(),
+            plugin_watch: Default::default(),
             downloading: Vec::new(),
             downloaded: Vec::new(),
             landed_reads: Vec::new(),
             #[cfg(not(target_arch = "wasm32"))]
             landed_windows: Vec::new(),
             url_requests: Vec::new(),
+            window_view: None,
             file_outputs: Vec::new(),
             #[cfg(test)]
             queue_gp_files: false,
             request_only: false,
             leave_downloads: false,
+            saved_secrets_opted_in: false,
             plugin_retries: Vec::new(),
             url_waits: cmd::plugins::fetch::UrlWaits::default(),
             next_request: 0,
             call_requests: None,
             rerun_landed: Vec::new(),
+            rerun_told: Vec::new(),
             rerun_said: Vec::new(),
             rerun_requests: Vec::new(),
             retry_tries: 0,
@@ -1179,13 +1235,19 @@ impl Session {
             #[cfg(not(target_arch = "wasm32"))]
             tools_ahead: None,
             #[cfg(not(target_arch = "wasm32"))]
+            files_ahead: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            zones_ahead: None,
+            #[cfg(not(target_arch = "wasm32"))]
             requests_into: None,
             #[cfg(test)]
             tools_taken: 0,
+            #[cfg(test)]
+            zones_taken: 0,
             stoppable: false,
         };
         for text in label_notices {
-            session.notify(text, false);
+            session.notify_text(text, false);
         }
         session
     }
@@ -1464,7 +1526,7 @@ impl Session {
             let (at, start) = (project_log::now_ms(), web_time::Instant::now());
             #[cfg(not(target_arch = "wasm32"))]
             let files_before: Vec<String> = self.mbtiles_files().map(str::to_string).collect();
-            let res = run(self);
+            let res = self.with_unread_bools(source, run);
             // Whichever command took its last layer away (removed, undone, the project closed):
             // the file can now be moved or replaced, so what was read of it is forgotten too.
             #[cfg(not(target_arch = "wasm32"))]
@@ -1493,11 +1555,13 @@ impl Session {
                 // command's result as it was, without an entry, and says so in the app's log.
                 let logged = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     if project_log::is_logged(self, id, params) {
-                        let params = match step {
-                            Some(label) => serde_json::json!({"step": label}),
-                            None => project_log::kept_params(params),
+                        // The step's label isn't a parameter: the command, run again, takes none.
+                        let (params, partial) = match step {
+                            Some(label) => (serde_json::json!({"step": label}), false),
+                            None => project_log::kept_and_partial(params),
                         };
-                        let e = project_log::entry(id, params, &res, at, start.elapsed());
+                        let project = (project_log::kept_name(&self.title()), self.opened);
+                        let e = project_log::entry(project, id, params, partial, &res, at, start.elapsed());
                         if joins && res.is_ok() { self.log.join_last(e) } else { self.log.push(e) }
                     }
                 }));
@@ -1544,6 +1608,11 @@ impl Session {
             return self.invoke(op, policy::Txn::Own);
         }
         let Some(&spec) = self.registry.get(id) else { return Err(format!("unknown command '{}'", project_log::log_identifier(id))) };
+        // A command of an extension that is off says so before anything else about it (before
+        // its parameters are read or a layer is made active for its conditions).
+        if let Some(why) = self.extensions.blocks(id) {
+            return Err(why);
+        }
         // Keys the command does not read: said, so a script or an agent can correct itself.
         if let (Value::Object(given), Some(known)) = (params, spec.param_keys()) {
             // Bounded: the keys come from the caller (the first few, each clipped).
@@ -1949,6 +2018,19 @@ impl Session {
     /// read, and why. Once for each layer's pixels or failure, one notice of each kind; the app
     /// calls it each frame.
     pub fn notice_landed_rasters(&mut self) {
+        // Streamed vector windows land after project opening too. Check each installed read
+        // once, keeping the same counted notice channel as retained resident expressions.
+        let mut landed = Vec::new();
+        for map in &mut self.project.maps {
+            for layer in &mut map.layers {
+                if layer.source.as_mut().is_some_and(|source| source.take_display_window()) {
+                    landed.push(&*layer);
+                }
+            }
+        }
+        if let Some(message) = cmd::design::display_area_messages(landed.into_iter()) {
+            self.notify(message, false);
+        }
         let (mut lost, mut held, mut failed, mut dropped) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
         for m in &mut self.project.maps {
             for l in &mut m.layers {
@@ -1970,6 +2052,9 @@ impl Session {
         }
         // What a header left out, as adding the layer says it (one notice a kind, with counts).
         cmd::raster::say_losses(self, lost);
+        // The browser uses its own trust; only native clients can fall back.
+        #[cfg(not(target_arch = "wasm32"))]
+        self.notice_trust();
         if !dropped.is_empty() {
             let mut kinds: Vec<&str> = dropped.iter().flat_map(|(_, k)| k.iter().copied()).collect();
             kinds.sort_unstable();
@@ -2007,6 +2092,28 @@ impl Session {
                     false,
                 )
             }
+        }
+    }
+
+    /// Says once a session that native HTTPS trusts the bundled Mozilla roots, as a Linux or BSD
+    /// system with no CA certificates and no `SSL_CERT_FILE` or `SSL_CERT_DIR` makes it
+    /// ([`rustgis_data::http::bundled_roots`]): the trust source was assumed, not the system's.
+    /// Checked after each command and each frame, as the clients are first made when a request is.
+    /// Says, once a session, that native HTTPS fell back to the bundled CA roots, if it did. Run
+    /// with [`Session::notice_landed_rasters`]; a reader of the notices that runs no command (the
+    /// Python package) calls it first, as a client made on a background thread chooses the trust.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn notice_trust(&mut self) {
+        self.say_bundled_roots(rustgis_data::http::bundled_roots());
+    }
+
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    fn say_bundled_roots(&mut self, bundled: bool) {
+        if bundled && !self.bundled_roots_said {
+            self.bundled_roots_said = true;
+            self.warn(
+                "This system has no CA certificates, so HTTPS servers are checked against the Mozilla roots bundled with RustGIS: install the system's CA certificates (or set SSL_CERT_FILE or SSL_CERT_DIR) to use its trust instead",
+            );
         }
     }
 
@@ -2073,6 +2180,33 @@ impl Session {
     pub fn notify(&mut self, text: impl Into<String>, error: bool) {
         use rustgis_data::diagnostics::Severity;
         self.notice(text.into(), if error { Severity::Error } else { Severity::Info });
+    }
+
+    /// Publishes English diagnostics and retains redacted templates for translated interfaces.
+    pub(crate) fn notify_text(&mut self, text: notice_text::NoticeText, error: bool) {
+        let text = text.redacted();
+        let mark = self.notices_given;
+        self.notify(text.english(), error);
+        if self.notices_given != mark
+            && let Some(notice) = self.notices.last_mut()
+        {
+            notice.localized = Some(text);
+        }
+    }
+
+    /// Runs `f`, then says the true/false parameters it could not read: text taken as false,
+    /// other values ignored (#1600), as `source`'s notice. Inside another such run (a command's
+    /// script, a command run by a command) they are left for the outer one to say.
+    pub(crate) fn with_unread_bools<T>(&mut self, source: Option<&'static str>, f: impl FnOnce(&mut Self) -> T) -> T {
+        let scope = cmd::UnreadBoolsScope::open();
+        let r = f(self);
+        if let Some(text) = scope.close() {
+            let said_by = source.or(self.diagnostic_source);
+            let previous = std::mem::replace(&mut self.diagnostic_source, said_by);
+            self.warn(text);
+            self.diagnostic_source = previous;
+        }
+        r
     }
 
     /// A nonfatal problem: existing notice consumers still see it as a non-error, while
@@ -2163,7 +2297,12 @@ impl Session {
             return;
         }
         self.diagnostics.push_redacted(severity, source.unwrap_or("Application"), &text);
-        self.notices.push(Notice { text: text.into_string(), error: severity == rustgis_data::diagnostics::Severity::Error, severity });
+        self.notices.push(Notice {
+            text: text.into_string(),
+            error: severity == rustgis_data::diagnostics::Severity::Error,
+            localized: None,
+            severity,
+        });
         self.notices_given += 1;
         if self.notices.len() > 200 {
             self.notices.remove(0);
@@ -2240,7 +2379,8 @@ impl Session {
         self.state
     }
 
-    /// The project as it is now is saved (written to its file, or downloaded in the browser).
+    /// The project as it is now is saved: written to its file. A browser download doesn't
+    /// count, as the page can't tell whether the browser saved it.
     pub fn mark_saved(&mut self) {
         self.saved = Some(self.state);
     }
@@ -2528,6 +2668,33 @@ impl Session {
                     .map(|r| rustgis_map::Ramp::Custom(Box::new(r.clone())))
             })
             .ok_or_else(|| format!("unknown colour scheme '{name}'"))
+    }
+
+    /// Which extensions are on (#1752).
+    pub fn extensions(&self) -> &extensions::State {
+        &self.extensions
+    }
+
+    /// Takes the saved `extensions` setting (the desktop and web apps, at start), over each
+    /// extension's default where it says nothing: what of it couldn't be read is said as a notice.
+    pub fn load_extensions(&mut self, setting: Option<&str>) {
+        let (state, said) = extensions::State::from_setting(setting);
+        self.extensions = state;
+        if let Some(said) = said {
+            self.warn(said);
+        }
+    }
+
+    /// Takes another session's extension choices (a copy that runs a model or script ahead, on
+    /// the desktop only).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn set_extensions(&mut self, state: extensions::State) {
+        self.extensions = state;
+    }
+
+    /// Turns extension `id` on or off (`extension.enable` and `extension.disable`).
+    pub(crate) fn set_extension(&mut self, id: &str, on: bool) -> Result<&'static extensions::Extension, String> {
+        self.extensions.set(id, on)
     }
 
     /// Resolves a `layer` parameter (name or id), defaulting to the active layer.

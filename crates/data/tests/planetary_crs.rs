@@ -140,6 +140,9 @@ fn planetographic_systems_without_east_axes_are_refused() {
     let dir = tempfile::tempdir().unwrap();
     let r = 3_396_190.0f64;
     let metres = LONLAT.map(|(lon, lat)| (r * lon.to_radians(), r * lat.to_radians()));
+    // PROJ 9.7.1: +proj=eqc +a=3396190 +rf=169.894447223612.
+    // The projection uses the semi-major axis as its radius even on a planetographic datum.
+    let proj_metres = [(-7_930_954.528_618_374, 1_105_473.108_809_661), (4_590_825.323_180_067, 1_093_025.422_329_766_7)];
     let with_axes = |wkt: &str, axes: &str| format!("{},{axes}]", wkt.strip_suffix(']').unwrap());
     let east_north = r#"AXIS["Lon",EAST],AXIS["Lat",NORTH]"#;
     let unnamed = MARS_OGRAPHIC_ESRI.replace("GCS_Mars_2015_Ographic", "GCS_Mars");
@@ -194,14 +197,14 @@ fn planetographic_systems_without_east_axes_are_refused() {
         ("esri_east", with_axes(MARS_OGRAPHIC_ESRI, east_north), LONLAT),
         ("wkt2_east", MARS_WEST.replace(",west,", ",east,"), LONLAT),
         ("ocentric_code", with_axes(&unnamed, r#"AUTHORITY["IAU_2015","49900"]"#), LONLAT),
-        ("eqc_easting", eqc_on(&with_axes(MARS_OGRAPHIC_ESRI, east_north), "Mars_Equirectangular"), metres),
+        ("eqc_easting", eqc_on(&with_axes(MARS_OGRAPHIC_ESRI, east_north), "Mars_Equirectangular"), proj_metres),
         (
             "eqc_base_easting",
             with_axes(&eqc_on(MARS_OGRAPHIC_ESRI, "Mars_Equirectangular"), r#"AXIS["Easting",EAST],AXIS["Northing",NORTH]"#),
-            metres,
+            proj_metres,
         ),
         ("eqc_ocentric_code", with_axes(MARS_EQC, r#"AUTHORITY["IAU_2015","49910"]"#), metres),
-        ("wkt2_eqc_easting", wkt2_eqc("Mars (2015) / Ographic", "east"), metres),
+        ("wkt2_eqc_easting", wkt2_eqc("Mars (2015) / Ographic", "east"), proj_metres),
     ];
     for (name, prj, native) in &read {
         let path = shapefile(dir.path(), name, *native, prj);
@@ -238,8 +241,7 @@ fn planetographic_systems_without_east_axes_are_refused() {
     assert!(planetary_notes(&report.messages).is_empty(), "{:?}", report.messages);
     let src = source::open_path(&path, None).unwrap();
     assert_eq!(said(&src.info().notes), 1, "{:?}", src.info().notes);
-    let a = 6_378_137.0f64;
-    let earth_metres = LONLAT.map(|(lon, lat)| (a * lon.to_radians(), a * lat.to_radians()));
+    let earth_metres = LONLAT.map(|(lon, lat)| (6_378_137.0 * lon.to_radians(), 6_378_137.0 * lat.to_radians()));
     let earth_eqc = eqc_on(&west, "World_Equidistant_Cylindrical");
     assert!(earth_eqc.contains("WGS_1984") && earth_eqc.contains("WEST"), "{earth_eqc}");
     let path = shapefile(dir.path(), "earth_eqc_west", earth_metres, &earth_eqc);
@@ -256,6 +258,70 @@ fn planetographic_systems_without_east_axes_are_refused() {
     assert!(e.contains(ANOTHER_BODY) && e.contains("planetographic"), "{e}");
     let e = mem(&path).err().unwrap().to_string();
     assert!(e.contains(ANOTHER_BODY) && e.contains("planetographic"), "{e}");
+    // So it is beside a WKT2 definition that can't be read, which gives way to it (without the
+    // IAU code, which would say it too).
+    let path = geopackage(dir.path(), "ographic_wkt2", LONLAT, ("NONE", 1, MARS_OGRAPHIC_ESRI));
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    conn.execute("ALTER TABLE gpkg_spatial_ref_sys ADD COLUMN definition_12_063 TEXT", []).unwrap();
+    conn.execute(r#"UPDATE gpkg_spatial_ref_sys SET definition_12_063 = 'PROJCRS["x"]' WHERE srs_id = 990001"#, []).unwrap();
+    drop(conn);
+    let e = io::read_path(&path).unwrap_err().to_string();
+    assert!(e.contains(ANOTHER_BODY) && e.contains("planetographic"), "{e}");
+    let e = mem(&path).err().unwrap().to_string();
+    assert!(e.contains(ANOTHER_BODY) && e.contains("planetographic"), "{e}");
+    // And when the WKT2 is the refused one and the WKT1 can't be read either.
+    let path = geopackage(dir.path(), "ographic_wkt1_broken", LONLAT, ("NONE", 1, "GEOGCS["));
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    conn.execute("ALTER TABLE gpkg_spatial_ref_sys ADD COLUMN definition_12_063 TEXT", []).unwrap();
+    conn.execute("UPDATE gpkg_spatial_ref_sys SET definition_12_063 = ?1 WHERE srs_id = 990001", [MARS_OGRAPHIC_ESRI]).unwrap();
+    drop(conn);
+    let e = io::read_path(&path).unwrap_err().to_string();
+    assert!(e.contains(ANOTHER_BODY) && e.contains("planetographic"), "{e}");
+    let e = mem(&path).err().unwrap().to_string();
+    assert!(e.contains(ANOTHER_BODY) && e.contains("planetographic"), "{e}");
+    // And when the WKT1 is an Earth system: the WKT2 counts, so it is still refused.
+    let wgs84 = r#"GEOGCS["WGS 84",DATUM["WGS_1984",SPHEROID["WGS 84",6378137,298.257223563]],PRIMEM["Greenwich",0],UNIT["degree",0.0174532925199433]]"#;
+    let path = geopackage(dir.path(), "ographic_wkt1_earth", LONLAT, ("NONE", 1, wgs84));
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    conn.execute("ALTER TABLE gpkg_spatial_ref_sys ADD COLUMN definition_12_063 TEXT", []).unwrap();
+    conn.execute("UPDATE gpkg_spatial_ref_sys SET definition_12_063 = ?1 WHERE srs_id = 990001", [MARS_OGRAPHIC_ESRI]).unwrap();
+    drop(conn);
+    let e = io::read_path(&path).unwrap_err().to_string();
+    assert!(e.contains(ANOTHER_BODY) && e.contains("planetographic"), "{e}");
+    let e = mem(&path).err().unwrap().to_string();
+    assert!(e.contains(ANOTHER_BODY) && e.contains("planetographic"), "{e}");
+    // So it is with a WKT2 one, longitudes counted west.
+    let path = geopackage(dir.path(), "west_wkt2_wkt1_earth", LONLAT, ("NONE", 1, wgs84));
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    conn.execute("ALTER TABLE gpkg_spatial_ref_sys ADD COLUMN definition_12_063 TEXT", []).unwrap();
+    conn.execute("UPDATE gpkg_spatial_ref_sys SET definition_12_063 = ?1 WHERE srs_id = 990001", [MARS_WEST]).unwrap();
+    drop(conn);
+    let e = io::read_path(&path).unwrap_err().to_string();
+    assert!(e.contains(ANOTHER_BODY), "{e}");
+    let e = mem(&path).err().unwrap().to_string();
+    assert!(e.contains(ANOTHER_BODY), "{e}");
+    // A WKT2 that can't be parsed gives way to the WKT1, also under another body's code.
+    let path = geopackage(dir.path(), "ocentric_wkt2_broken", LONLAT, ("IAU_2015", 49900, MARS_ESRI));
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    conn.execute("ALTER TABLE gpkg_spatial_ref_sys ADD COLUMN definition_12_063 TEXT", []).unwrap();
+    conn.execute("UPDATE gpkg_spatial_ref_sys SET definition_12_063 = ?1 WHERE srs_id = 990001", ["GEOGCRS[\"Mars\""]).unwrap();
+    drop(conn);
+    let (ds, report) = io::read_path(&path).unwrap();
+    assert_eq!(points(&ds), LONLAT.map(|(x, y)| Coord::new(x, y)).to_vec());
+    assert!(report.messages.iter().any(|m| m.contains("its WKT1 definition is used")), "{:?}", report.messages);
+    assert!(mem(&path).unwrap().info().notes.iter().any(|m| m.contains("its WKT1 definition is used")));
+    // So it does under a projected IAU code, which alone would be refused: the WKT1 reads.
+    let path = geopackage(dir.path(), "eqc_wkt2_broken", metres, ("IAU_2015", 49910, MARS_EQC));
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    conn.execute("ALTER TABLE gpkg_spatial_ref_sys ADD COLUMN definition_12_063 TEXT", []).unwrap();
+    conn.execute("UPDATE gpkg_spatial_ref_sys SET definition_12_063 = ?1 WHERE srs_id = 990001", [r#"PROJCRS["Mars""#]).unwrap();
+    drop(conn);
+    let (ds, report) = io::read_path(&path).unwrap();
+    for (got, (lon, lat)) in points(&ds).into_iter().zip(LONLAT) {
+        assert!((got.x - lon).abs() < 1e-9 && (got.y - lat).abs() < 1e-9, "{got:?}");
+    }
+    assert!(report.messages.iter().any(|m| m.contains("its WKT1 definition is used")), "{:?}", report.messages);
+    assert!(mem(&path).unwrap().info().notes.iter().any(|m| m.contains("its WKT1 definition is used")));
     let east = with_axes(MARS_OGRAPHIC_ESRI, east_north);
     let path = geopackage(dir.path(), "ographic_east", LONLAT, ("IAU_2015", 49901, &east));
     let (ds, report) = io::read_path(&path).unwrap();
@@ -744,13 +810,13 @@ fn a_mars_projection_in_a_geotiff_is_said_or_refused() {
     // On the Earth, such a citation changes nothing.
     let earth = cited_on(6_378_137.0, 3073, "Ographic test grid|").unwrap();
     assert!(!earth.crs.is_planetary() && earth.lost.is_empty(), "{:?}", earth.lost);
-    // A transformation RustGIS doesn't read (23, the New Zealand Map Grid's): refused on Mars, even
+    // A transformation RustGIS doesn't read (26, the New Zealand Map Grid's): refused on Mars, even
     // where the numbers look like degrees, as they are metres.
     let mut unread = eqc.clone();
     let at = unread.chunks(4).position(|k| k[0] == 3075).unwrap() * 4 + 3;
-    unread[at] = 23;
+    unread[at] = 26;
     let e = raster::read_bytes("unread.tif", &geotiff(-180.0, &unread, &[3_396_190.0], "")).unwrap_err().to_string();
-    assert!(e.contains(ANOTHER_BODY) && e.contains("transformation 23"), "{e}");
+    assert!(e.contains(ANOTHER_BODY) && e.contains("transformation 26"), "{e}");
     // On the Earth it is read as longitude/latitude where the numbers fit, as before.
     let earth = raster::read_bytes("earth.tif", &geotiff(-180.0, &unread, &[6_378_137.0], "")).unwrap();
     assert_eq!(earth.crs, Crs::LonLat);
@@ -772,7 +838,12 @@ fn an_ascii_grid_with_a_mars_prj_is_said_or_refused() {
     assert!(e.contains(ANOTHER_BODY) && e.contains("Bonne"), "{e}");
     let earth = raster::read_path(&dir.path().join("earth.asc")).unwrap();
     assert!(planetary_notes(&earth.lost).is_empty(), "{:?}", earth.lost);
-    assert!(!earth.lost.iter().any(|l| l.contains(".prj")), "{:?}", earth.lost);
+    assert_eq!(
+        earth.lost.iter().filter(|l| l.contains(".prj") && l.contains("has no conversion to WGS 84")).count(),
+        1,
+        "{:?}",
+        earth.lost
+    );
 }
 
 /// An Earth `.prj` next to an ASCII grid that RustGIS can't read leaves the grid in

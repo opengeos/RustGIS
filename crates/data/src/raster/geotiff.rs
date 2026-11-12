@@ -48,12 +48,11 @@ pub(super) fn extra_alpha<R: Read + Seek>(dec: &mut Decoder<R>) -> bool {
 }
 
 /// How `n` samples of a grey image the decoder calls multiband are shown: grey with alpha when
-/// there are two and the second is declared alpha (extra sample 1, associated, or 2, unassociated),
-/// else grey. GDAL marks the second band of an ordinary two-band file as 0, unspecified data.
+/// the second is declared alpha (extra sample 1, associated, or 2, unassociated), whatever data
+/// bands follow it, else grey. GDAL marks the second band of an ordinary two-band file as 0,
+/// unspecified data.
 pub(super) fn multiband_color<R: Read + Seek>(dec: &mut Decoder<R>, n: u16) -> ColorHint {
-    let alpha =
-        n == 2 && dec.find_tag_unsigned_vec::<u16>(Tag::ExtraSamples).ok().flatten().is_some_and(|v| matches!(v.first(), Some(1 | 2)));
-    if alpha { ColorHint::GrayAlpha } else { ColorHint::Gray }
+    if n >= 2 && extra_alpha(dec) { ColorHint::GrayAlpha } else { ColorHint::Gray }
 }
 
 fn geo_tags<R: Read + Seek>(dec: &mut Decoder<R>) -> Result<Geo> {
@@ -410,6 +409,10 @@ fn proj4_of_keys(keys: &[u16], doubles: &[f64], ascii: &str) -> Result<(String, 
         }
         Some(16) => format!("+proj=sterea +lat_0={lat0} +lon_0={lon0} +k_0={k0} +x_0={x0} +y_0={y0}"),
         Some(17) => format!("+proj=eqc +lat_ts={lat1} +lon_0={lon0} +x_0={x0} +y_0={y0}"),
+        // CT_Orthographic: EPSG's method 9840, on the ellipsoid.
+        Some(21) => format!("+proj=ortho +lat_0={lat0} +lon_0={lon0} +x_0={x0} +y_0={y0}"),
+        // CT_Robinson.
+        Some(23) => format!("+proj=robin +lon_0={lon0} +x_0={x0} +y_0={y0}"),
         // MODIS's grid; RustGIS computes it (`rustgis_geom::Sinusoidal`).
         Some(24) => format!("+proj=sinu +lon_0={lon0} +x_0={x0} +y_0={y0}"),
         Some(28) => format!("+proj=cea +lat_ts={lat1} +lon_0={lon0} +x_0={x0} +y_0={y0}"),
@@ -446,35 +449,27 @@ fn proj4_of_keys(keys: &[u16], doubles: &[f64], ascii: &str) -> Result<(String, 
 }
 
 /// Whether two PROJ definitions place the same points: points around the projection's origin,
-/// unprojected by both, land within a millimetre-scale tolerance.
+/// unprojected by both (as RustGIS computes them, sinusoidal and PROJ-compatible equidistant
+/// cylindrical included), land within a centimetre.
 fn same_projection(a: &str, b: &str) -> bool {
     let offsets = [(0.0, 0.0), (100_000.0, 50_000.0), (-250_000.0, 150_000.0), (300_000.0, -200_000.0), (-50_000.0, -400_000.0)];
-    // Sinusoidal, which proj4rs lacks, by its own inverse; one sinusoidal and one not differ.
-    match (rustgis_geom::Sinusoidal::from_proj4(a), rustgis_geom::Sinusoidal::from_proj4(b)) {
-        (Some(Ok(sa)), Some(Ok(sb))) => {
-            return offsets.iter().all(|(dx, dy)| {
-                // The same map point in both, so a different false origin is a different projection.
-                let m = rustgis_geom::Coord::new(sa.x0 + dx, sa.y0 + dy);
-                // Degrees: 1e-7 is about a centimetre.
-                matches!((sa.inverse(m), sb.inverse(m)), (Some(p), Some(q)) if (p.x - q.x).abs() < 1e-7 && (p.y - q.y).abs() < 1e-7)
-            });
-        }
-        (None, None) => {}
-        _ => return false,
-    }
-    let (Ok(pa), Ok(pb), Ok(ll)) = (
-        proj4rs::Proj::from_proj_string(a),
-        proj4rs::Proj::from_proj_string(b),
-        proj4rs::Proj::from_proj_string("+proj=longlat +datum=WGS84 +no_defs"),
-    ) else {
-        return false;
-    };
+    let (Ok(ta), Ok(tb)) = (super::crs::transformer_of(a), super::crs::transformer_of(b)) else { return false };
+    // The same map points in both, offset from the first's false origin, so a different false
+    // origin is a different projection.
+    let num = |k: &str| a.split_whitespace().find_map(|t| t.strip_prefix(k)?.parse::<f64>().ok()).filter(|v| v.is_finite()).unwrap_or(0.0);
+    let (x0, y0) = (num("+x_0="), num("+y_0="));
     offsets.iter().all(|(dx, dy)| {
-        let (mut p, mut q) = ((*dx, *dy, 0.0), (*dx, *dy, 0.0));
-        let ok = proj4rs::transform::transform(&pa, &ll, &mut p).is_ok() && proj4rs::transform::transform(&pb, &ll, &mut q).is_ok();
-        // Radians: 1e-9 is under a centimetre.
-        ok && p.0.is_finite() && p.1.is_finite() && (p.0 - q.0).abs() < 1e-9 && (p.1 - q.1).abs() < 1e-9
+        let m = rustgis_geom::Coord::new(x0 + dx, y0 + dy);
+        // Degrees: 1e-7 is about a centimetre.
+        matches!((ta.to_lonlat(m), tb.to_lonlat(m)), (Some(p), Some(q)) if (p.x - q.x).abs() < 1e-7 && (p.y - q.y).abs() < 1e-7)
     })
+}
+
+/// Whether a raster in `crs` can be written as a GeoTIFF: an EPSG system always, a user-defined
+/// one when it came with GeoKeys or its PROJ definition can be said as them (see
+/// [`keys_from_proj4`]).
+pub fn describes(crs: Crs) -> bool {
+    crs.custom_def().is_none_or(|d| !d.geokeys.is_empty() || keys_from_proj4(&d.proj4, &d.label).is_some())
 }
 
 /// GeoKeys for a user-defined projection from its PROJ definition (one read from WKT, which
@@ -548,6 +543,9 @@ fn keys_from_proj4(proj4: &str, label: &str) -> Option<(Vec<u16>, Vec<f64>, Stri
         "stere" => (14, vec![(3080, lon0), (3081, lat0), (3082, x0), (3083, y0), (3092, k0)]),
         "sterea" => (16, vec![(3080, lon0), (3081, lat0), (3082, x0), (3083, y0), (3092, k0)]),
         "eqc" => (17, vec![(3078, num("lat_ts").unwrap_or(0.0)), (3080, lon0), (3082, x0), (3083, y0)]),
+        // By the projection centre's keys (3088, 3089), as GDAL writes them.
+        "ortho" => (21, vec![(3082, x0), (3083, y0), (3088, lon0), (3089, lat0)]),
+        "robin" => (23, vec![(3082, x0), (3083, y0), (3088, lon0)]),
         "cea" => (28, vec![(3078, num("lat_ts").unwrap_or(0.0)), (3080, lon0), (3082, x0), (3083, y0)]),
         // Its longitude is the projection centre's (3088), as GDAL and MODIS write it.
         "sinu" => (24, vec![(3082, x0), (3083, y0), (3088, lon0)]),
@@ -937,6 +935,13 @@ impl Chunks {
         }
     }
 
+    /// The most one chunk holds while it is decoded: its samples as read (up to 8 bytes each),
+    /// as 32-bit floats, and which of them were rounded (a byte each).
+    #[cfg(not(target_arch = "wasm32"))]
+    fn bytes(&self) -> usize {
+        (self.cw as usize).saturating_mul(self.ch as usize).saturating_mul(self.samples).saturating_mul(13)
+    }
+
     fn count(&self) -> u64 {
         u64::from(self.per_plane) * self.planes as u64
     }
@@ -1039,7 +1044,12 @@ fn decimate<R: Read + Seek>(
     if let Some((open, image, limits)) = open
         && chunks.count() >= PARALLEL_CHUNKS
     {
-        let threads = std::thread::available_parallelism().map_or(1, |n| n.get()).min(16);
+        // Each thread decodes a chunk of its own. Up to the default count as before; past it (a
+        // high setting) no more than the threads' scratch budget holds, so the peak doesn't
+        // multiply with the setting.
+        let affordable = 1 + crate::memory::thread_scratch() / chunks.bytes().max(1);
+        let chunk_count = usize::try_from(chunks.count()).unwrap_or(usize::MAX);
+        let threads = crate::threads::max().min(affordable.max(crate::threads::default_max())).min(chunk_count);
         if threads > 1 {
             return decimate_parallel(chunks, bands, k, (ow, oh), nodata, threads, open, image, limits);
         }
@@ -1115,7 +1125,11 @@ fn decimate_parallel(
         }
     };
     std::thread::scope(|scope| {
-        let handles: Vec<_> = (0..threads).map(|_| scope.spawn(work)).collect();
+        // A thread the OS refuses costs speed, not the read: this one decodes chunks too.
+        let handles: Vec<_> = (1..threads).filter_map(|_| std::thread::Builder::new().spawn_scoped(scope, work).ok()).collect();
+        if std::panic::catch_unwind(std::panic::AssertUnwindSafe(work)).is_err() {
+            fail(err("a chunk couldn't be decoded"));
+        }
         for h in handles {
             if h.join().is_err() {
                 fail(err("a chunk couldn't be decoded"));
@@ -1225,9 +1239,18 @@ pub(super) fn read_limited_with_nodata(
         Ok(None) => None,
         Ok(Some(v)) => match v.into_string() {
             Ok(t) => super::pam::parse_gdal_metadata(&t),
-            Err(e) => Some(super::pam::Pam::losing(format!("it isn't text ({e}): band and class names are left out"))),
+            Err(e) => Some(super::pam::Pam::losing(format!("it isn't text ({e}): band and class names and wavelengths are left out"))),
         },
-        Err(e) => Some(super::pam::Pam::losing(format!("it doesn't decode ({e}): band and class names are left out"))),
+        Err(e) => Some(super::pam::Pam::losing(format!("it doesn't decode ({e}): band and class names and wavelengths are left out"))),
+    };
+    // Who holds the rights to the picture, kept as it reads so an export of it says so too (the
+    // writers make it the ASCII a tag holds, and the exports say what that changed); one that
+    // doesn't read as text is left out, and said.
+    let (copyright, copyright_lost) = match dec.find_tag(Tag::Copyright).map(|v| v.map(|v| v.into_string())) {
+        Ok(None) => (None, None),
+        Ok(Some(Ok(c))) => (Some(c.trim().to_string()), None),
+        Ok(Some(Err(e))) => (None, Some(format!("its Copyright tag: it isn't ASCII text ({e}), so it is left out"))),
+        Err(e) => (None, Some(format!("its Copyright tag: it can't be read ({e}), so it is left out"))),
     };
     let spp = samples(&mut dec);
     let bytes = sample_bytes(&mut dec);
@@ -1444,6 +1467,8 @@ pub(super) fn read_limited_with_nodata(
         r.georeferenced = false;
         r.overview = overview;
         r.rounded = rounded;
+        r.copyright = copyright.filter(|c| !c.is_empty());
+        r.lost.extend(copyright_lost);
         r.lost.extend(table_lost);
         if let Some(p) = &described {
             r.apply_pam(p, super::pam::GDAL_METADATA);
@@ -1495,6 +1520,8 @@ pub(super) fn read_limited_with_nodata(
     let mut r = Raster::new(name, w, h, bands, transform, crs, geo.nodata, color, data_type)?;
     r.overview = overview;
     r.rounded = rounded;
+    r.copyright = copyright.filter(|c| !c.is_empty());
+    r.lost.extend(copyright_lost);
     r.lost.extend(super::planetary::note_of(crs));
     r.lost.extend(table_lost);
     if let Some(p) = &described {
@@ -1528,7 +1555,10 @@ pub(super) fn geo_keys(r: &Raster) -> Result<GeoKeys> {
         Some(d) if d.geokeys.is_empty() => {
             return Err(err(format!("{}: a coordinate system without GeoTIFF keys can't be written", d.label)));
         }
-        Some(d) => d.geokeys.clone(),
+        // The tiepoint is written at the corner of the first pixel, so the raster type is area: a
+        // system first read from a point file (whose grid was moved to the corner on reading) is
+        // written as one too, or readers would place it half a pixel off.
+        Some(d) => as_area(&d.geokeys),
         None => vec![
             1,
             1,
@@ -1549,6 +1579,20 @@ pub(super) fn geo_keys(r: &Raster) -> Result<GeoKeys> {
         ],
     };
     Ok(GeoKeys { keys, custom })
+}
+
+/// GeoKey directory `keys` with the raster type (1025) as area (1), as the writers' corner
+/// tiepoint says.
+fn as_area(keys: &[u16]) -> Vec<u16> {
+    let mut keys = keys.to_vec();
+    // After the 4-short header, 4 shorts a key: its id, where its value is (0: in place), its
+    // count and its value.
+    for entry in keys.get_mut(4..).into_iter().flat_map(|k| k.as_chunks_mut::<4>().0) {
+        if let [1025, 0, _, value] = entry {
+            *value = 1;
+        }
+    }
+    keys
 }
 
 /// Whether band `b` is written as bytes: whole numbers within 0–255 (or no valid pixels at all),
@@ -1577,7 +1621,19 @@ pub fn written_bands(r: &Raster, band: usize) -> Vec<usize> {
 /// raster always writes its colour bands, as its 8-bit form did before. A cancelled run stops
 /// it (with [`DataError::Cancelled`]) within a strip.
 pub fn write(r: &Raster, band: usize) -> Result<Vec<u8>> {
-    match encode(r, band) {
+    finish(encode(r, band, false))
+}
+
+/// Writes every band of a raster, for a layer whose pixels the project keeps: as [`write`] does
+/// when that keeps them all, otherwise as 32-bit float samples (RGB first for a colour raster,
+/// and alpha after them when it has one), which [`read`] reads back as the same bands.
+pub fn write_all(r: &Raster) -> Result<Vec<u8>> {
+    finish(encode(r, 0, true))
+}
+
+/// The encoder's answer, a cancel during it as [`DataError::Cancelled`].
+fn finish(encoded: Result<Vec<u8>>) -> Result<Vec<u8>> {
+    match encoded {
         Ok(bytes) => Ok(bytes),
         // The encoder's error for a cancel only says the write stopped.
         Err(e) => crate::progress::check().and(Err(e)),
@@ -1605,8 +1661,8 @@ impl<W: Seek> Seek for Probed<W> {
     }
 }
 
-/// [`write`], a cancel failing as any write error does.
-fn encode(r: &Raster, band: usize) -> Result<Vec<u8>> {
+/// [`write`] (or with `every`, [`write_all`]), a cancel failing as any write error does.
+fn encode(r: &Raster, band: usize, every: bool) -> Result<Vec<u8>> {
     use tiff::encoder::{Compression, DeflateLevel, TiffEncoder, colortype};
     // A scan's place is only where it was laid on the view: not coordinates to write into a file.
     r.require_coordinates().map_err(err)?;
@@ -1620,6 +1676,10 @@ fn encode(r: &Raster, band: usize) -> Result<Vec<u8>> {
     let tie = [0.0, 0.0, 0.0, gt.origin_x, gt.origin_y, 0.0];
     let GeoKeys { keys, custom } = geo_keys(r)?;
     let (w, h) = (r.width, r.height);
+    // Every band holds width × height values; one that doesn't is refused rather than padded.
+    if r.bands.iter().any(|b| b.data.len() != (w as usize) * (h as usize)) {
+        return Err(err(format!("a band of the raster doesn't hold its {w} × {h} values")));
+    }
     let bytes = |b: usize| -> Option<Vec<u8>> {
         let band = r.bands.get(b)?;
         // No-data pixels keep the no-data value, so the written GDAL_NODATA tag still matches.
@@ -1631,6 +1691,7 @@ fn encode(r: &Raster, band: usize) -> Result<Vec<u8>> {
     // Each branch below names the bands it writes as samples (`$written`): their names, and the
     // first one's class names (the red band's, for a colour file), go to GDAL's metadata tag,
     // read back on open.
+    let copyright = r.copyright.as_deref().map(super::tag_text).filter(|c| !c.is_empty());
     macro_rules! tags {
         ($img:expr, $written:expr) => {{
             let classes = super::gdal_metadata_of(r, $written);
@@ -1656,6 +1717,9 @@ fn encode(r: &Raster, band: usize) -> Result<Vec<u8>> {
             if let Some(xml) = &classes {
                 e.write_tag(Tag::Unknown(42112), xml.as_str()).map_err(err)?;
             }
+            if let Some(c) = &copyright {
+                e.write_tag(Tag::Copyright, c.as_str()).map_err(err)?;
+            }
             if let Some(nd) = r.nodata {
                 e.write_tag(Tag::GdalNodata, nd.to_string().as_str()).map_err(err)?;
             }
@@ -1666,7 +1730,58 @@ fn encode(r: &Raster, band: usize) -> Result<Vec<u8>> {
     let byte_holes = r.nodata.is_none()
         && matches!(r.color, ColorHint::Rgb { alpha: false })
         && written_bands(r, band).iter().any(|b| r.bands.get(*b).is_some_and(|b| b.stats.count < (w as usize) * (h as usize)));
-    if rgb
+    let all: Vec<usize> = (0..r.bands.len()).collect();
+    if every && written_bands(r, band).len() < all.len() {
+        // More bands than colour (or one grey band) takes: each a 32-bit float sample, the first
+        // past the colour (or grey) ones alpha when the raster says it is.
+        use tiff::tags::ExtraSamples;
+        // Alpha follows the colour (or grey) samples it belongs to: RGB's is the fourth band, grey's
+        // the second, so a colour hint on too few bands for colour marks none.
+        let alpha = if rgb { matches!(r.color, ColorHint::Rgb { alpha: true }) } else { matches!(r.color, ColorHint::GrayAlpha) };
+        let extras: Vec<ExtraSamples> = (0..all.len() - if rgb { 3 } else { 1 })
+            .map(|i| if i == 0 && alpha { ExtraSamples::UnassociatedAlpha } else { ExtraSamples::Unspecified })
+            .collect();
+        // The samples interleaved, as large as the raster: reserved first, so a raster this
+        // machine can't hold twice is an error, and a cancel is heard while they are copied.
+        // Bytes when every band is whole bytes (and an empty cell can be written as no-data),
+        // so an 8-bit image reads back as one; otherwise 32-bit floats.
+        let n = (w as usize) * (h as usize);
+        let samples = n.checked_mul(all.len()).ok_or_else(|| err("the raster is too large to write"))?;
+        // Decided from the values, not the statistics (a raster read in part has none): every
+        // valid value a whole number in 0–255, and an empty cell only where no-data can mark it.
+        // An 8-bit raster can hold fractions after resampling; those stay floats.
+        let in_bytes = |v: &f32| !r.is_valid(*v) || (v.fract() == 0.0 && (0.0..=255.0).contains(v));
+        let marked = |v: &f32| r.nodata.is_some() || r.is_valid(*v);
+        // Only an 8-bit raster: a float one holding byte-range values keeps its type and range.
+        let as_bytes = r.data_type == "UInt8"
+            && all.iter().all(|b| fits_bytes(r, *b))
+            && r.bands.iter().all(|b| b.data.iter().all(|v| in_bytes(v) && marked(v)));
+        macro_rules! wide {
+            ($colour:ty, $sample:expr) => {{
+                let mut data = super::room(samples, w as usize, h as usize)?;
+                for i in 0..n {
+                    if i % (1 << 20) == 0 {
+                        crate::progress::check()?;
+                    }
+                    // Every band holds `n` values (checked above), so none is filled in.
+                    data.extend(r.bands.iter().map(|b| $sample(b.data.get(i).copied().unwrap_or(f32::NAN))));
+                }
+                let mut img = enc.new_image::<$colour>(w, h).map_err(err)?;
+                img.extra_samples(&extras).map_err(err)?;
+                tags!(img, &all[..]);
+                img.write_data(&data).map_err(err)?;
+            }};
+        }
+        if as_bytes {
+            let nodata = r.nodata.map_or(0, |d| d as u8);
+            let byte = |v: f32| if r.is_valid(v) { v.clamp(0.0, 255.0) as u8 } else { nodata };
+            if rgb { wide!(colortype::RGB8, byte) } else { wide!(colortype::Gray8, byte) }
+        } else if rgb {
+            wide!(colortype::RGB32Float, |v: f32| v)
+        } else {
+            wide!(colortype::Gray32Float, |v: f32| v)
+        }
+    } else if rgb
         && !byte_holes
         && (!written_bands(r, band).contains(&3) || fits_bytes(r, 3))
         && let (Some(red), Some(green), Some(blue)) = (bytes(0), bytes(1), bytes(2))
@@ -1728,6 +1843,73 @@ fn encode(r: &Raster, band: usize) -> Result<Vec<u8>> {
 mod tests {
     use super::*;
     use crate::raster::tests::small;
+
+    /// Who holds the rights (the Copyright tag) is written by both writers and read back, as the
+    /// ASCII a TIFF tag holds (`©` as `(c)`, control characters as spaces, others as `?`); a
+    /// raster without it writes none.
+    #[test]
+    fn copyright_round_trips() {
+        let mut r = small();
+        assert_eq!(read(std::io::Cursor::new(write(&r, 0).unwrap()), "none").unwrap().copyright, None);
+        r.copyright = Some("© OpenStreetMap contributors | Bundesamt für Landestopografie\0\n".into());
+        let want = Some("(c) OpenStreetMap contributors | Bundesamt f?r Landestopografie".to_string());
+        // One written as ?; the NUL and line break at the end are trimmed, not counted.
+        assert_eq!(super::super::tag_text_changes(r.copyright.as_deref().unwrap()), (1, 1, 0));
+        // Inside, a line break and U+0085 (a control character outside ASCII) are spaces.
+        assert_eq!(super::super::tag_text_changes("a\nb\u{85}c ü"), (0, 1, 2));
+        assert_eq!(
+            super::super::tag_text_note("© a\nb ü").as_deref(),
+            Some(
+                "the Copyright tag holds ASCII only, so it is written with 1 © or ® as (c) or (R), 1 character as ?, 1 control character as a space"
+            )
+        );
+        assert_eq!(super::super::tag_text_note("plain"), None);
+        assert_eq!(super::super::tag_text_note(""), None);
+        // Nothing a tag can hold: no tag is written, and that is said.
+        assert_eq!(
+            super::super::tag_text_note("\0\n").as_deref(),
+            Some("the credits hold nothing a Copyright tag can, so the file has none")
+        );
+        let mut blank = small();
+        blank.copyright = Some("\0\n".into());
+        assert_eq!(read(std::io::Cursor::new(write(&blank, 0).unwrap()), "none").unwrap().copyright, None);
+        // A Copyright tag that isn't text (bytes, not ASCII) is left out, and said.
+        let mut buf = std::io::Cursor::new(Vec::new());
+        {
+            let mut enc = tiff::encoder::TiffEncoder::new(&mut buf).unwrap();
+            let mut img = enc.new_image::<tiff::encoder::colortype::Gray8>(2, 2).unwrap();
+            img.encoder().write_tag(Tag::Copyright, &[0xA9u8, 0x20, 0x58][..]).unwrap();
+            img.write_data(&[1, 2, 3, 4]).unwrap();
+        }
+        let odd = read(std::io::Cursor::new(buf.into_inner()), "odd").unwrap();
+        assert_eq!(odd.copyright, None);
+        assert!(odd.lost.iter().any(|l| l.starts_with("its Copyright tag: it isn't ASCII text")), "{:?}", odd.lost);
+        assert_eq!(super::super::tag_text("a\nb\u{85}c ü"), "a b c ?");
+        // A scan (a TIFF with no GeoTIFF tags) keeps it too.
+        let mut buf = std::io::Cursor::new(Vec::new());
+        {
+            let mut enc = tiff::encoder::TiffEncoder::new(&mut buf).unwrap();
+            let mut img = enc.new_image::<tiff::encoder::colortype::Gray8>(2, 2).unwrap();
+            img.encoder().write_tag(Tag::Copyright, "(c) Scan").unwrap();
+            img.write_data(&[1, 2, 3, 4]).unwrap();
+        }
+        let scan = read(std::io::Cursor::new(buf.into_inner()), "scan").unwrap();
+        assert_eq!((scan.georeferenced, scan.copyright.as_deref()), (false, Some("(c) Scan")));
+        assert_eq!(read(std::io::Cursor::new(write(&r, 0).unwrap()), "tif").unwrap().copyright, want);
+        let cog = super::super::cogwrite::write(&r, 0).unwrap();
+        assert_eq!(read(std::io::Cursor::new(cog), "cog").unwrap().copyright, want);
+    }
+
+    /// A user-defined system's keys are written with the raster type as area, as the corner
+    /// tiepoint is: one first read from a point file isn't placed half a pixel off.
+    #[test]
+    fn custom_keys_are_written_as_area() {
+        let point = [1u16, 1, 0, 3, 1024, 0, 1, 1, 1025, 0, 1, 2, 3072, 0, 1, 32767];
+        assert_eq!(as_area(&point), [1, 1, 0, 3, 1024, 0, 1, 1, 1025, 0, 1, 1, 3072, 0, 1, 32767]);
+        // A key whose value is elsewhere (not in place) is left alone, as is a short directory.
+        assert_eq!(as_area(&[1, 1, 0, 1, 1025, 34737, 1, 2]), [1, 1, 0, 1, 1025, 34737, 1, 2]);
+        assert_eq!(as_area(&[1, 1]), [1, 1]);
+    }
 
     #[test]
     fn float_colour_round_trip() {
@@ -1862,6 +2044,56 @@ mod tests {
         assert_eq!(back.value(3, 0, 0), Some(0.0));
     }
 
+    /// `write_all` keeps the bands `write` leaves out: every band of a grey raster, grey and its
+    /// alpha (with a data band after it too), and a colour raster's bands past RGB and alpha, each
+    /// read back as written, with its colour; 8-bit bands stay 8-bit.
+    #[test]
+    fn write_all_keeps_every_band() {
+        let gt = GeoTransform { origin_x: 0.0, origin_y: 2.0, pixel_width: 1.0, pixel_height: -1.0 };
+        let raster = |n: usize, color: ColorHint| {
+            let bands = (0..n).map(|b| (0..6).map(|i| (b * 10 + i) as f32 + 0.5).collect()).collect();
+            Raster::new("r", 3, 2, bands, gt, Crs::LonLat, None, color, "Float32").unwrap()
+        };
+        for r in [
+            raster(3, ColorHint::Gray),
+            raster(2, ColorHint::GrayAlpha),
+            raster(3, ColorHint::GrayAlpha),
+            raster(6, ColorHint::Rgb { alpha: true }),
+        ] {
+            assert!(written_bands(&r, 0).len() < r.band_count());
+            let back = read(std::io::Cursor::new(write_all(&r).unwrap()), "r").unwrap();
+            assert_eq!((back.band_count(), &back.color), (r.band_count(), &r.color));
+            assert!((0..r.band_count()).all(|b| back.bands[b].data == r.bands[b].data), "{:?}", r.color);
+        }
+        // Two bands hinted as colour with alpha are too few for colour: neither is marked alpha.
+        let two = raster(2, ColorHint::Rgb { alpha: true });
+        let back = read(std::io::Cursor::new(write_all(&two).unwrap()), "r").unwrap();
+        assert_eq!((back.band_count(), &back.color), (2, &ColorHint::Gray));
+        // An 8-bit colour image with more bands stays 8-bit, so it reads back with the same range.
+        let bytes = (0..5).map(|b| (0..6).map(|i| (b * 40 + i) as f32).collect()).collect();
+        let rgbi = Raster::new("b", 3, 2, bytes, gt, Crs::LonLat, None, ColorHint::Rgb { alpha: false }, "UInt8").unwrap();
+        let back = read(std::io::Cursor::new(write_all(&rgbi).unwrap()), "b").unwrap();
+        assert_eq!((back.band_count(), &back.color, back.data_type.as_str()), (5, &rgbi.color, "UInt8"));
+        assert!((0..5).all(|b| back.bands[b].data == rgbi.bands[b].data));
+        // A float raster holding byte-range whole values stays float, with its own range.
+        let floats = vec![vec![0.0, 1.0, 7.0, 9.0, 4.0, 3.0], vec![1.0; 6]];
+        let floats = Raster::unmeasured("f", 3, 2, floats, gt, Crs::LonLat, None, ColorHint::Gray, "Float32").unwrap();
+        assert_eq!(read(std::io::Cursor::new(write_all(&floats).unwrap()), "f").unwrap().data_type, "Float32");
+        // An 8-bit raster holding a fraction (a resampled mean) keeps it: written as floats.
+        let mean = vec![vec![0.0, 1.5, 7.0, 9.0, 0.0, 3.0], vec![1.0; 6]];
+        let means = Raster::new("m", 3, 2, mean, gt, Crs::LonLat, Some(0.0), ColorHint::Gray, "UInt8").unwrap();
+        let back = read(std::io::Cursor::new(write_all(&means).unwrap()), "m").unwrap();
+        assert_eq!(back.value(0, 1, 0), Some(1.5));
+        // A raster without statistics (read in part) is judged by its values: 1200 isn't a byte.
+        let tall = vec![vec![1200.0, 0.0, 300.0, 1.0, 2.0, 3.0], vec![1.0; 6]];
+        let tall = Raster::unmeasured("t", 3, 2, tall, gt, Crs::LonLat, Some(0.0), ColorHint::Gray, "UInt8").unwrap();
+        let back = read(std::io::Cursor::new(write_all(&tall).unwrap()), "t").unwrap();
+        assert_eq!((back.value(0, 0, 0), back.value(0, 2, 0)), (Some(1200.0), Some(300.0)));
+        // What `write` keeps whole is written as `write` writes it.
+        let rgb = raster(3, ColorHint::Rgb { alpha: false });
+        assert_eq!(write_all(&rgb).unwrap(), write(&rgb, 0).unwrap());
+    }
+
     /// An Equi7 tile (a Sentinel-1 product on TU Wien's grid, say) names its system by its EPSG
     /// code, 27707 for South America: read as that system, not refused.
     #[test]
@@ -1907,7 +2139,7 @@ mod tests {
         let (a, b) = (r.crs.transformer().unwrap().to_lonlat(c).unwrap(), back.crs.transformer().unwrap().to_lonlat(c).unwrap());
         assert!((a.x - b.x).abs() < 1e-9 && (a.y - b.y).abs() < 1e-9 && (a.x + 97.5).abs() < 1e-6, "{a:?} {b:?}");
         // One the keys can't say is refused, as before.
-        assert!(keys_from_proj4("+proj=robin +lon_0=0 +datum=WGS84", "x").is_none());
+        assert!(keys_from_proj4("+proj=moll +lon_0=0 +datum=WGS84", "x").is_none());
         assert!(keys_from_proj4("junk", "x").is_none());
         assert!(keys_from_proj4("+proj=tmerc +lon_0=0 +units=us-ft +datum=WGS84", "x").is_none(), "only metres");
         for unsaid in [
@@ -1932,6 +2164,30 @@ mod tests {
             keys_from_proj4("+proj=stere +lat_0=90 +lat_ts=70 +lon_0=-45 +k=1 +x_0=0 +y_0=0 +datum=WGS84 +units=m", "NSIDC").unwrap();
         let back = custom_crs(&k, &d, &a).unwrap().custom_def().unwrap().proj4.clone();
         assert!(back.contains("+lat_0=90") && back.contains("+lat_ts=70") && back.contains("+lon_0=-45"), "{back}");
+    }
+
+    /// Orthographic and Robinson systems from WKT are written as keys (CT_Orthographic 21 and
+    /// CT_Robinson 23, by the projection centre's keys) and read back as the same; an ellipsoidal
+    /// equidistant cylindrical one (EPSG:4087's, CT 17) uses PROJ-compatible coordinates.
+    #[test]
+    fn orthographic_robinson_and_ellipsoidal_eqc_are_written_as_keys() {
+        for (def, ct) in [
+            ("+proj=ortho +lat_0=55 +lon_0=5 +x_0=100 +y_0=-200 +datum=WGS84 +units=m +no_defs", 21),
+            ("+proj=ortho +lat_0=-90 +lon_0=0 +x_0=0 +y_0=0 +a=1737400 +b=1737400 +units=m +no_defs", 21),
+            ("+proj=robin +lon_0=150 +x_0=1000 +y_0=-2000 +datum=WGS84 +units=m +no_defs", 23),
+            ("+proj=eqc +lat_ts=30 +lon_0=-90 +x_0=0 +y_0=0 +datum=WGS84 +units=m +no_defs", 17),
+            ("+proj=eqc +lat_ts=0 +lon_0=0 +x_0=0 +y_0=0 +a=3396190 +rf=169.894447223612 +units=m +no_defs", 17),
+        ] {
+            let (k, d, a) = keys_from_proj4(def, "x").unwrap_or_else(|| panic!("{def}"));
+            assert_eq!(geokey(&k, &d, &a, 3075).map(|v| matches!(v, KeyValue::Short(c) if c == ct)), Some(true), "{def}");
+            let back = custom_crs(&k, &d, &a).unwrap().custom_def().unwrap().proj4.clone();
+            assert!(same_projection(def, &back), "{def}: {back}");
+        }
+        // PROJ uses the same coordinates on a sphere of the semi-major axis.
+        assert!(same_projection(
+            "+proj=eqc +lat_ts=0 +lon_0=0 +datum=WGS84 +units=m +no_defs",
+            "+proj=eqc +lat_ts=0 +lon_0=0 +R=6378137 +units=m +no_defs"
+        ));
     }
 
     #[test]

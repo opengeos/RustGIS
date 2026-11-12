@@ -276,6 +276,10 @@ pub fn commands() -> Vec<C> {
                     l.renew_instance_id();
                     l.normalize_selection();
                 }
+                // As a project's maps say when opened (#1596).
+                for (_, text) in crate::project::label_losses::hidden(m.layers.iter()) {
+                    s.notify(text, false);
+                }
                 s.project.maps.push(m);
                 s.project.active_map = s.project.maps.len() - 1;
             }
@@ -600,6 +604,8 @@ fn snapshot(m: &mut rustgis_map::Map, e: &Extent) -> rustgis_map::Map {
         c.dataset.features =
             l.dataset.features.iter().filter(|f| f.geometry.as_ref().is_some_and(|g| g.extent().intersects(e))).cloned().collect();
         c.selection.clear();
+        // Only part of the rows read: no longer the layer its file's record describes.
+        c.synced = None;
         c.touch_geometry();
         out.layers.push(c);
     }

@@ -74,6 +74,34 @@ pub fn is_cityjson(file_name: &str, bytes: &[u8]) -> bool {
         && (crate::cityjson::is_cityjson_name(file_name) || std::str::from_utf8(bytes).is_ok_and(crate::cityjson::looks_like_cityjson))
 }
 
+/// Whether a `.gml` or `.xml` file is a CityGML city model, by its root.
+pub fn is_citygml(file_name: &str, bytes: &[u8]) -> bool {
+    let ext = Path::new(file_name).extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
+    matches!(ext.as_str(), "gml" | "xml") && crate::citygml::looks_like_citygml(bytes)
+}
+
+/// Whether a file is a city model, CityJSON or CityGML: its layers all come from one reading, which
+/// takes the coordinate system a caller gives ([`read_city_model`]).
+pub fn is_city_model(file_name: &str, bytes: &[u8]) -> bool {
+    is_cityjson(file_name, bytes) || is_citygml(file_name, bytes)
+}
+
+/// Reads a city model's layers (see [`is_city_model`]); `crs`, when given, goes over the system it
+/// names.
+pub fn read_city_model(file_name: &str, bytes: &[u8], crs: Option<Crs>) -> Result<Vec<(Dataset, ReadReport)>> {
+    if is_citygml(file_name, bytes) { crate::citygml::read(file_name, bytes, crs) } else { crate::cityjson::read(file_name, bytes, crs) }
+}
+
+/// As [`read_city_model`], for a member of an archive: a model that names a system RustGIS knows
+/// keeps it over `crs`.
+fn read_city_member(file_name: &str, bytes: &[u8], crs: Option<Crs>) -> Result<Vec<(Dataset, ReadReport)>> {
+    if is_citygml(file_name, bytes) {
+        crate::citygml::read_member(file_name, bytes, crs)
+    } else {
+        crate::cityjson::read_member(file_name, bytes, crs)
+    }
+}
+
 /// Reads every layer of a file held in memory: the Shapefiles and other files of a zip, a KML or
 /// KMZ's points, lines and polygons (with their styles), or a GPX's waypoints, routes, tracks and
 /// track points. Other files give their one layer.
@@ -96,7 +124,9 @@ pub fn read_layers(file_name: &str, bytes: &[u8]) -> Result<Vec<LayerRead>> {
         // Plain XML: whichever of the XML formats its contents say.
         "xml" => {
             let text = String::from_utf8_lossy(bytes.get(..bytes.len().min(8192)).unwrap_or(bytes));
-            if crate::landxml::looks_like_landxml(&text) {
+            if crate::citygml::looks_like_citygml(bytes) {
+                plain(crate::citygml::read(file_name, bytes, None)?)
+            } else if crate::landxml::looks_like_landxml(&text) {
                 plain(crate::landxml::read(file_name, bytes, None)?)
             } else if crate::georss::looks_like_georss(&text) {
                 plain(crate::georss::read(file_name, bytes)?)
@@ -109,10 +139,12 @@ pub fn read_layers(file_name: &str, bytes: &[u8]) -> Result<Vec<LayerRead>> {
                     .collect()
             } else {
                 return Err(DataError::Format(format!(
-                    "{file_name}: an XML file RustGIS doesn't read (it reads GeoRSS, LandXML, KML and GPX)"
+                    "{file_name}: an XML file RustGIS doesn't read (it reads GeoRSS, LandXML, CityGML, KML and GPX)"
                 )));
             }
         }
+        // A CityGML city model, or the features of a collection.
+        "gml" if crate::citygml::looks_like_citygml(bytes) => plain(crate::citygml::read(file_name, bytes, None)?),
         "gml" => plain(crate::gml::read(file_name, bytes)?),
         "dxf" => plain(crate::dxf::read(file_name, bytes, &crate::dxf::Options::default())?),
         // OpenStreetMap PBF, not a vector tile (`.pbf` too).
@@ -185,6 +217,8 @@ pub fn sniff_extension(bytes: &[u8]) -> Option<&'static str> {
         // extension), read by content under `.pbf`.
         _ if crate::esripbf::is_esripbf(bytes) => "pbf",
         _ if start.starts_with('{') || start.starts_with('[') => "geojson",
+        // A CityGML city model, by its root.
+        _ if start.starts_with('<') && crate::citygml::looks_like_citygml(bytes) => "gml",
         _ if start.starts_with('<') && text.contains("<kml") => "kml",
         _ if start.starts_with('<') && text.contains("<gpx") => "gpx",
         // Text whose first two lines a separator splits alike, and no control characters.
@@ -236,6 +270,7 @@ pub fn read_bytes(file_name: &str, bytes: &[u8]) -> Result<(Dataset, ReadReport)
             return Err(DataError::Unsupported(format!("{ext} on its own: it is part of a Shapefile; add it together with its .shp")));
         }
         // The first layer (`read_layers` reads them all), saying what else the file holds.
+        "xml" if is_citygml(file_name, bytes) => return first_layer(file_name, bytes),
         "zip" | "kml" | "kmz" | "gpx" | "gml" | "dxf" | "pbf" | "topojson" => return first_layer(file_name, bytes),
         "las" | "laz" => crate::lidar::read_bytes(bytes, &name, None)?,
         // A copy, since only borrowed bytes are given; `read_owned` takes them without one.
@@ -297,6 +332,14 @@ pub fn read_path(path: &Path) -> Result<(Dataset, ReadReport)> {
         "zip" | "kml" | "kmz" | "gpx" | "gml" | "dxf" | "pbf" | "topojson" => {
             check_size(path)?;
             read_bytes(&path.display().to_string(), &std::fs::read(path)?)?
+        }
+        "xml" => {
+            check_size(path)?;
+            let bytes = std::fs::read(path)?;
+            if !is_citygml(&path.display().to_string(), &bytes) {
+                return Err(DataError::Unsupported("xml".into()));
+            }
+            read_bytes(&path.display().to_string(), &bytes)?
         }
         // With its .mid beside it (spelt mid, MID or Mid).
         "mif" => {
@@ -546,6 +589,8 @@ pub fn write_path_to(ds: &Dataset, path: &Path, crs: Crs, gpkg: &GpkgTable) -> R
             #[cfg(not(target_arch = "wasm32"))]
             {
                 crate::progress::begin(ds.features.len());
+                // Every feature is written: a layer of several kinds of geometry gets a GEOMETRY
+                // column, and one that declares no type takes its geometry's.
                 let table = crate::source::gpkg::write_table_in(ds, path, crs, gpkg)?;
                 Ok((0, Some(table)))
             }
@@ -683,7 +728,10 @@ fn write_new_with(path: &Path, write: impl FnOnce(&mut dyn std::io::Write) -> st
 }
 
 /// Writes through a temporary file that is synced and renamed into place, so an interrupted
-/// write never truncates an existing file. The temporary file is removed on failure.
+/// write never truncates an existing file. The temporary file is removed on failure. A symbolic
+/// link is written through, and an existing file keeps its permissions. For app-managed files
+/// whose destination link must be replaced instead, use [`replace_atomic`]. On Unix, failure to
+/// inspect or preserve an existing file's permissions is an error and leaves that file unchanged.
 pub fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     use std::io::Write;
     write_atomic_with(path, |w| w.write_all(bytes))
@@ -696,12 +744,47 @@ pub fn write_atomic_with<T, E: From<std::io::Error>>(
     path: &Path,
     write: impl FnOnce(&mut std::io::BufWriter<std::fs::File>) -> std::result::Result<T, E>,
 ) -> std::result::Result<T, E> {
+    let path = link_target(path)?;
+    atomic_write_at(&path, write)
+}
+
+/// Atomically replaces an app-managed file, replacing a final symbolic link rather than
+/// writing through it. Parent directories must be trusted, as for [`write_atomic`]. Existing
+/// regular files keep their permissions; a replaced link uses a new file's permissions.
+pub fn replace_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    atomic_write_at(path, |out| out.write_all(bytes))
+}
+
+/// Stages content beside the chosen destination; errors and cancellation retain the old file.
+fn atomic_write_at<T, E: From<std::io::Error>>(
+    path: &Path,
+    write: impl FnOnce(&mut std::io::BufWriter<std::fs::File>) -> std::result::Result<T, E>,
+) -> std::result::Result<T, E> {
     use std::io::Write;
     let tmp = temp_beside(path)?;
     // Opened before the guard, so a name already taken is never removed.
     let file = std::fs::OpenOptions::new().write(true).create_new(true).open(&tmp)?;
     // Removes the file on an error and on a panic in `write` alike, unless it was moved into place.
     let staged = Staged(&tmp);
+    // The new file takes the old one's mode before any content is written, so a private file
+    // (0600) never becomes readable by others. On Windows a new file inherits its folder's access
+    // rules, and copying a read-only flag would only make the rename fail.
+    #[cfg(unix)]
+    match std::fs::symlink_metadata(path) {
+        Ok(old) if !old.file_type().is_symlink() => {
+            use std::os::unix::fs::PermissionsExt;
+            let permissions = old.permissions();
+            // Mounts that cannot chmod need no syscall when the mode already matches.
+            // If preserving a different mode fails, refuse the save instead of widening it.
+            if file.metadata()?.permissions().mode() != permissions.mode() {
+                file.set_permissions(permissions)?;
+            }
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
+    }
     let mut out = std::io::BufWriter::new(file);
     let value = write(&mut out)?;
     out.flush()?;
@@ -717,6 +800,32 @@ pub fn write_atomic_with<T, E: From<std::io::Error>>(
     std::mem::forget(staged);
     Ok(value)
 }
+
+/// The file a write to `path` replaces: `path` itself, or, when it is a symbolic link, the file
+/// its chain of links ends at (which need not exist yet). A link's relative target counts from
+/// the link's folder. More than [`MAX_LINKS`] links in a row, as in a loop, is an error.
+fn link_target(path: &Path) -> std::io::Result<std::path::PathBuf> {
+    let mut at = path.to_path_buf();
+    for _ in 0..=MAX_LINKS {
+        match std::fs::symlink_metadata(&at) {
+            Ok(meta) if meta.file_type().is_symlink() => {
+                let next = std::fs::read_link(&at)?;
+                // `join` keeps an absolute target as it is.
+                at = at.parent().map_or_else(|| next.clone(), |folder| folder.join(&next));
+            }
+            Ok(_) => return Ok(at),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(at),
+            Err(error) => return Err(error),
+        }
+    }
+    Err(std::io::Error::new(
+        std::io::ErrorKind::InvalidInput,
+        format!("{} leads through more than {MAX_LINKS} symbolic links", path.display()),
+    ))
+}
+
+/// How many symbolic links in a row [`link_target`] follows, as many as Linux does.
+const MAX_LINKS: usize = 40;
 
 /// A file being written beside its destination: removed when dropped, as an export that
 /// failed or panicked leaves it. A finished export forgets it once the file is renamed.
@@ -1053,6 +1162,11 @@ impl Schema {
         }
     }
 
+    /// A property's field, once seen.
+    pub(crate) fn index(&self, k: &str) -> Option<usize> {
+        self.index.get(k).copied()
+    }
+
     /// The fields, typed by every value seen.
     pub(crate) fn fields(&self) -> Vec<Field> {
         self.order.iter().map(|(k, ty)| Field::new(k.clone(), ty.unwrap_or(FieldType::Text))).collect()
@@ -1151,6 +1265,8 @@ impl Collector {
         let mut unconverted = 0usize;
         // Only features kept count toward the heights dropped.
         let mut zm = 0usize;
+        // Features kept, as longitude/latitude, with a latitude past the poles.
+        let mut swapped = 0usize;
         for (n, (geom, values, had_z)) in self.features.into_iter().enumerate() {
             // A feature that can't be converted is dropped, and its id is not reused, as when the
             // file is read in place.
@@ -1171,6 +1287,9 @@ impl Collector {
                 }
             }
             zm += usize::from(had_z);
+            // Converted geometry is already within ±90.5° (or dropped above), so only what is read
+            // as longitude/latitude can be swapped.
+            swapped += usize::from(declared.is_none() && geom.as_ref().is_some_and(latitude_past_poles));
             ds.features.push(crate::Feature { id: n as u64 + 1, geometry: geom, attrs });
         }
         ds.geometry_type = dominant_type(&ds);
@@ -1186,6 +1305,7 @@ impl Collector {
             // What couldn't be converted can't come back by defining the projection again.
             ds.crs_incomplete = unconverted > 0;
         }
+        report.messages.extend(swapped_latitude_note(swapped));
         // Last, as a source read in place notes it.
         ds.drop_zm(&mut report, zm);
         Ok((ds, report))
@@ -1232,12 +1352,15 @@ fn widen(a: FieldType, b: Option<FieldType>) -> FieldType {
     }
 }
 
-fn coerce(v: Value, ty: FieldType) -> Value {
+/// A value as its field's type holds it: an integer in a decimal field as a decimal, anything in
+/// a text field as its text.
+pub(crate) fn coerce(v: Value, ty: FieldType) -> Value {
     match (ty, v) {
         (_, Value::Null) => Value::Null,
         (FieldType::Double, Value::Int(i)) => Value::Float(i as f64),
         (FieldType::Text, v @ Value::Text(_)) => v,
-        (FieldType::Text, v) => Value::Text(v.to_string()),
+        // A number in full, as a file writes it: `Display` rounds to 6 decimals.
+        (FieldType::Text, v) => Value::Text(v.to_file_text()),
         (_, v) => v,
     }
 }
@@ -1576,7 +1699,7 @@ pub(crate) fn read_rows(
         let attrs = columns
             .iter()
             .zip(&ds.fields)
-            .map(|(&i, f)| Value::parse(&unguard(r.get(i).map(|s| s.as_str()).unwrap_or("")), f.ty))
+            .map(|(&i, f)| Value::parse_source(&unguard(r.get(i).map(|s| s.as_str()).unwrap_or("")), f.ty))
             .collect();
         ds.push_next(geom, attrs);
     }
@@ -1645,6 +1768,26 @@ pub(crate) fn read_rows(
     Ok((ds, report))
 }
 
+/// Whether a geometry has a position that could be longitude/latitude with the two swapped: its x
+/// within ±180.5° and its y past the poles (beyond ±90.5°, as the readers check). Eastings and
+/// northings, with x far past 180 too, aren't taken for that. Each position is judged on its own, so
+/// another position elsewhere doesn't hide it.
+pub(crate) fn latitude_past_poles(g: &Geometry) -> bool {
+    let mut past = false;
+    g.for_each_coord(|c| past |= c.x.abs() <= 180.5 && c.y.abs() > 90.5);
+    past
+}
+
+/// The notice for `n` features with a latitude past the poles (none for 0).
+pub(crate) fn swapped_latitude_note(n: usize) -> Option<String> {
+    let tail = "a latitude past ±90°: longitude and latitude may be swapped";
+    match n {
+        0 => None,
+        1 => Some(format!("1 feature has {tail}")),
+        n => Some(format!("{n} features have {tail}")),
+    }
+}
+
 /// Whether a geometry has coordinates outside longitude/latitude's range.
 fn out_of_lonlat(g: &Geometry) -> bool {
     let e = g.extent();
@@ -1695,7 +1838,7 @@ pub(crate) fn type_text_columns(ds: &mut Dataset, keep: &[&str]) {
             if let Some(v) = f.attrs.get_mut(i)
                 && let Value::Text(t) = v
             {
-                *v = if t.trim().is_empty() { Value::Null } else { Value::parse(t, ty) };
+                *v = if t.trim().is_empty() { Value::Null } else { Value::parse_source(t, ty) };
             }
         }
     }
@@ -1720,11 +1863,8 @@ const FORMULA_START: [char; 6] = ['=', '+', '-', '@', '\t', '\r'];
 /// A cell's text; text that a spreadsheet would run as a formula is prefixed with `'`.
 fn csv_cell(v: &Value) -> String {
     match v {
-        Value::Null => String::new(),
         Value::Text(t) if t.starts_with(FORMULA_START) => format!("'{t}"),
-        // The shortest text that reads back as the same number: `Display` rounds to 6 decimals.
-        Value::Float(f) => f.to_string(),
-        other => other.to_string(),
+        other => other.to_file_text(),
     }
 }
 
@@ -2015,7 +2155,8 @@ pub fn read_zip_in(file_name: &str, bytes: &[u8], crs: Option<Crs>) -> Result<Ve
     let mut skipped: Vec<String> = Vec::new();
     for n in shps {
         if out.len() >= MAX_ZIP_LAYERS {
-            break;
+            skipped.push(format!("{n} (past the {MAX_ZIP_LAYERS}-layer limit)"));
+            continue;
         }
         let base = stem(&n);
         let name = Path::new(&n).file_stem().and_then(|s| s.to_str()).unwrap_or("layer").to_string();
@@ -2039,6 +2180,7 @@ pub fn read_zip_in(file_name: &str, bytes: &[u8], crs: Option<Crs>) -> Result<Ve
     let mut mifs: Vec<String> = entries.iter().flatten().filter(|(n, _)| ext_of(n) == "mif").map(|(n, _)| n.clone()).collect();
     mifs.sort();
     for n in mifs {
+        // The `.mif` files not taken stay in `entries`, so the loop below names them as past the limit.
         if out.len() >= MAX_ZIP_LAYERS {
             break;
         }
@@ -2067,7 +2209,7 @@ pub fn read_zip_in(file_name: &str, bytes: &[u8], crs: Option<Crs>) -> Result<Ve
         }
         let leaf = n.rsplit('/').next().unwrap_or(&n);
         // A city model has many layers.
-        let read = if is_cityjson(leaf, &b) { crate::cityjson::read_member(leaf, &b, crs) } else { read_bytes(leaf, &b).map(|r| vec![r]) };
+        let read = if is_city_model(leaf, &b) { read_city_member(leaf, &b, crs) } else { read_bytes(leaf, &b).map(|r| vec![r]) };
         match read {
             Ok(layers) => {
                 for (mut ds, report) in layers {
@@ -2079,9 +2221,21 @@ pub fn read_zip_in(file_name: &str, bytes: &[u8], crs: Option<Crs>) -> Result<Ve
                     out.push((ds, report));
                 }
             }
+            // A run cancelled while a member was read stops the archive, not just that member.
+            Err(DataError::Cancelled) => return Err(DataError::Cancelled),
             Err(e) => skipped.push(format!("{n} ({e})")),
         }
     }
+    // At most this many skipped members are named; the rest are counted.
+    const NAMED_SKIPPED: usize = 20;
+    let skipped = if skipped.len() > NAMED_SKIPPED {
+        let more = skipped.len() - NAMED_SKIPPED;
+        let mut named: Vec<String> = skipped.into_iter().take(NAMED_SKIPPED).collect();
+        named.push(format!("and {more} more"));
+        named
+    } else {
+        skipped
+    };
     if out.is_empty() {
         let why = if skipped.is_empty() { String::new() } else { format!(": {}", skipped.join("; ")) };
         return Err(DataError::Format(format!("{file_name}: no Shapefile or other vector data in the archive could be read{why}")));
@@ -2346,13 +2500,13 @@ pub fn shapefile_names_note(fields: &[Field], target: &str) -> Option<String> {
 }
 
 /// Keeps a diagnostic on one line and prevents field names from reordering its text.
-fn dbf_notice_char(c: char) -> char {
+pub(crate) fn dbf_notice_char(c: char) -> char {
     let reorders = matches!(c, '\u{061C}' | '\u{200E}' | '\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}');
     if c.is_control() || reorders || matches!(c, '\u{2028}' | '\u{2029}') { ' ' } else { c }
 }
 
 /// A bounded field name for a dBase notice, with controls and directional marks flattened.
-fn dbf_notice_name(name: &str) -> String {
+pub(crate) fn dbf_notice_name(name: &str) -> String {
     let mut out = String::new();
     for c in name.chars().map(dbf_notice_char) {
         if out.len() + c.len_utf8() > 40 {
@@ -2497,6 +2651,20 @@ fn dbf_boolean(value: &Value) -> Option<bool> {
     }
 }
 
+/// The notice for the `left_out` features an export to `name` (a file of extension `ext`) left
+/// out, as [`write_path_in`] and [`write_bytes_in`] count them; `None` when none were. A
+/// Shapefile export (`.shp`, or zipped) writes only drawable geometry of the layer's one kind (it
+/// writes no null shapes, though the format has them); FlatGeobuf, KML and GPX exports write only
+/// features with geometry; the other formats leave nothing out.
+pub fn left_out_note(name: &str, ext: &str, left_out: usize) -> Option<String> {
+    (left_out > 0).then(|| match ext {
+        "shp" | "zip" => format!(
+            "{name}: {left_out} features left out of the Shapefile: without drawable geometry, or with geometry of another kind than the layer's"
+        ),
+        _ => format!("{name}: {left_out} features without drawable geometry were left out"),
+    })
+}
+
 /// Whether [`shapefile_parts_in`] writes a feature with geometry `g` to a layer of type `gt`: one
 /// of the layer's kind with something drawable (a finite point, a line part of two finite points,
 /// a polygon whose outer ring has three).
@@ -2514,6 +2682,102 @@ fn shapefile_keeps(g: Option<&Geometry>, gt: GeometryType) -> bool {
         }
         _ => false,
     }
+}
+
+/// Calls `f` with each vertex of `g` that [`shapefile_parts_in`] writes, in a layer of type `gt`,
+/// once a projected export has made every coordinate finite (`project` refuses one it can't):
+/// none of another kind than the layer's, and of a line or a polygon only the parts it can draw,
+/// a line part of two vertices, a ring of three (a polygon's holes go with its outer ring).
+pub(crate) fn shapefile_vertices(g: &Geometry, gt: GeometryType, f: impl FnMut(Coord)) {
+    match (g, gt) {
+        (Geometry::Point(_) | Geometry::MultiPoint(_), GeometryType::Point) => g.for_each_coord(f),
+        (Geometry::Line(parts), GeometryType::Polyline) => parts.iter().filter(|p| p.len() >= 2).flatten().copied().for_each(f),
+        (Geometry::Polygon(polys), GeometryType::Polygon) => polys
+            .iter()
+            .filter(|p| p.first().is_some_and(|outer| outer.len() >= 3))
+            .flatten()
+            .filter(|r| r.len() >= 3)
+            .flatten()
+            .copied()
+            .for_each(f),
+        _ => {}
+    }
+}
+
+/// What [`shapefile_parts_in`] leaves out of geometry `g` it writes to a layer of type `gt`, as
+/// (vertices, parts), `drawable` telling the vertices it writes: the vertices that aren't, and the
+/// line parts and polygon rings with too few drawable vertices (a part needs two, a ring three),
+/// whether written so or left so by those vertices, a hole going with its polygon's outer ring.
+/// `None` for geometry it leaves out whole, of another kind or with nothing drawable
+/// ([`left_out_note`]'s). The same filters as the writer's.
+fn shapefile_geometry_losses(g: Option<&Geometry>, gt: GeometryType, drawable: fn(&Coord) -> bool) -> Option<(usize, usize)> {
+    let count = |r: &[Coord]| r.iter().filter(|c| drawable(c)).count();
+    match (g, gt) {
+        (Some(g @ (Geometry::Point(_) | Geometry::MultiPoint(_))), GeometryType::Point) => {
+            let (mut all, mut kept) = (0usize, 0usize);
+            g.for_each_coord(|c| {
+                all += 1;
+                kept += usize::from(drawable(&c));
+            });
+            (kept > 0).then_some((all - kept, 0))
+        }
+        (Some(Geometry::Line(parts)), GeometryType::Polyline) => {
+            let missing = parts.iter().map(|p| p.len() - count(p)).sum();
+            let short = parts.iter().filter(|p| count(p) < 2).count();
+            (short < parts.len()).then_some((missing, short))
+        }
+        (Some(Geometry::Polygon(polys)), GeometryType::Polygon) => {
+            let outer_kept = |poly: &[Vec<Coord>]| poly.first().is_some_and(|outer| count(outer) >= 3);
+            if !polys.iter().any(|poly| outer_kept(poly)) {
+                return None;
+            }
+            let missing = polys.iter().flatten().map(|r| r.len() - count(r)).sum();
+            let rings = polys
+                .iter()
+                .map(|poly| if outer_kept(poly) { poly.iter().skip(1).filter(|r| count(r) < 3).count() } else { poly.len() })
+                .sum();
+            Some((missing, rings))
+        }
+        _ => None,
+    }
+}
+
+/// What an export to a Shapefile in `crs` says it leaves out of the geometry it writes, one
+/// notice per kind with a count, or none: vertices with a missing (NaN) or infinite coordinate,
+/// and the line parts or polygon rings without enough vertices to draw. Features left out whole
+/// are [`left_out_note`]'s. In another system than longitude/latitude, the export writes the
+/// projected copy and refuses a coordinate that doesn't project to a finite one ([`project`]), so
+/// every vertex it writes is drawable (an infinite latitude in Web Mercator is written at
+/// 85.05°), and only parts too short to draw are left out. `target` names what was written; line
+/// breaks and other control characters in it show as spaces.
+pub fn shapefile_geometry_notes(ds: &Dataset, target: &str, crs: Crs) -> Vec<String> {
+    let drawable: fn(&Coord) -> bool = if crs == Crs::LonLat { |c| c.x.is_finite() && c.y.is_finite() } else { |_| true };
+    let (mut vertices, mut parts) = (0usize, 0usize);
+    for f in &ds.features {
+        let Some((v, p)) = shapefile_geometry_losses(f.geometry.as_ref(), ds.geometry_type, drawable) else { continue };
+        vertices += v;
+        parts += p;
+    }
+    let target: String = target.chars().map(dbf_notice_char).collect();
+    let mut notes = Vec::new();
+    if vertices > 0 {
+        let what = if vertices == 1 {
+            "1 vertex with a missing or infinite coordinate was".to_string()
+        } else {
+            format!("{vertices} vertices with a missing or infinite coordinate were")
+        };
+        notes.push(format!("{target}: {what} left out of the Shapefile"));
+    }
+    if parts > 0 {
+        let (one, many, why) = if ds.geometry_type == GeometryType::Polyline {
+            ("line part", "line parts", "with fewer than 2 drawable vertices")
+        } else {
+            ("polygon ring", "polygon rings", "with fewer than 3 drawable vertices or in a polygon whose outer ring was left out")
+        };
+        let what = if parts == 1 { format!("1 {one} was") } else { format!("{parts} {many} were") };
+        notes.push(format!("{target}: {what} left out of the Shapefile, {why}"));
+    }
+    notes
 }
 
 /// A dataset as the files of a Shapefile: (extension, bytes) for `.shp`, `.shx`, `.dbf`, `.prj`
@@ -2663,6 +2927,218 @@ mod tests {
     use super::*;
     use std::io::Write;
 
+    /// A Shapefile export of a polygon layer holding a point and a feature without geometry writes
+    /// the polygon and counts both left out, the point for its kind; a layer of polygons loses none.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_shapefile_counts_geometry_of_another_kind_left_out() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let geojson = r#"{"type":"FeatureCollection","features":[
+            {"type":"Feature","properties":{"name":"area"},"geometry":{"type":"Polygon","coordinates":[[[0,0],[1,0],[1,1],[0,0]]]}},
+            {"type":"Feature","properties":{"name":"spot"},"geometry":{"type":"Point","coordinates":[5,5]}},
+            {"type":"Feature","properties":{"name":"none"},"geometry":null}]}"#;
+        let (mixed, _) = read_geojson(geojson, "mixed")?;
+        let dir = tempfile::tempdir()?;
+        assert_eq!(write_path(&mixed, &dir.path().join("mixed.shp"))?, 2);
+        let (back, _) = read_path(&dir.path().join("mixed.shp"))?;
+        assert_eq!(back.features.len(), 1);
+        let mut areas = mixed.clone();
+        areas.features.truncate(1);
+        assert_eq!(write_path(&areas, &dir.path().join("areas.shp"))?, 0);
+        Ok(())
+    }
+
+    /// The left-out notice names what each format can't hold: a Shapefile, features without
+    /// drawable geometry or of another kind; the others, features without drawable geometry.
+    /// Nothing left out, no notice.
+    #[test]
+    fn left_out_notes_say_what_the_format_cant_hold() {
+        for ext in ["shp", "zip"] {
+            assert_eq!(
+                left_out_note("out", ext, 2).as_deref(),
+                Some(
+                    "out: 2 features left out of the Shapefile: without drawable geometry, or with geometry of another kind than the layer's"
+                )
+            );
+        }
+        for ext in ["fgb", "kml", "gpx"] {
+            assert_eq!(left_out_note("out", ext, 1).as_deref(), Some("out: 1 features without drawable geometry were left out"));
+        }
+        assert_eq!(left_out_note("out", "shp", 0), None);
+        assert_eq!(left_out_note("out", "gpkg", 0), None);
+    }
+
+    /// A Shapefile export leaves out vertices with a missing or infinite coordinate, and the line
+    /// parts and polygon rings that leaves too short to draw, and says how many; the features
+    /// themselves are written. A feature with nothing drawable left is the left-out notice's, and
+    /// clean geometry gives no notice (#1687).
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_shapefile_says_which_vertices_and_parts_it_leaves_out() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let c = Coord::new;
+        let nan = f64::NAN;
+        let inf = f64::INFINITY;
+        let dir = tempfile::tempdir()?;
+        let coords = |g: &Option<Geometry>| {
+            let mut n = 0;
+            if let Some(g) = g {
+                g.for_each_coord(|_| n += 1);
+            }
+            n
+        };
+
+        // The issue's case: a multipoint of four, one member's x missing, is written with three.
+        let mut points = Dataset::new("mp", GeometryType::Point, vec![]);
+        points.push(Some(Geometry::MultiPoint(vec![c(0., 0.), c(nan, 1.), c(2., 2.), c(3., 3.)])), vec![]);
+        assert_eq!(write_path(&points, &dir.path().join("mp.shp"))?, 0);
+        let (back, _) = read_path(&dir.path().join("mp.shp"))?;
+        assert_eq!(coords(&back.features[0].geometry), 3);
+        assert_eq!(
+            shapefile_geometry_notes(&points, "mp.shp", Crs::LonLat),
+            ["mp.shp: 1 vertex with a missing or infinite coordinate was left out of the Shapefile"]
+        );
+
+        // Lines: two vertices go, and the part left with one finite vertex goes with them, as does
+        // a part written with one vertex.
+        let mut lines = Dataset::new("lines", GeometryType::Polyline, vec![]);
+        let parts = vec![vec![c(0., 0.), c(nan, 1.), c(2., 2.)], vec![c(5., 5.), c(inf, 6.)], vec![c(9., 9.)]];
+        lines.push(Some(Geometry::Line(parts)), vec![]);
+        assert_eq!(write_path(&lines, &dir.path().join("lines.shp"))?, 0);
+        let (back, _) = read_path(&dir.path().join("lines.shp"))?;
+        assert_eq!(coords(&back.features[0].geometry), 2);
+        assert_eq!(
+            shapefile_geometry_notes(&lines, "lines.shp", Crs::LonLat),
+            [
+                "lines.shp: 2 vertices with a missing or infinite coordinate were left out of the Shapefile",
+                "lines.shp: 2 line parts were left out of the Shapefile, with fewer than 2 drawable vertices",
+            ]
+        );
+
+        // Polygons: the first keeps its outer ring but loses a hole left with two vertices; the
+        // second loses its outer ring, and its whole hole with it.
+        let square = |x: f64| vec![c(x, 0.), c(x + 4., 0.), c(x + 4., 4.), c(x, 4.), c(x, 0.)];
+        let hole = |x: f64| vec![c(x + 1., 1.), c(x + 2., 1.), c(x + 2., 2.), c(x + 1., 1.)];
+        let mut broken_hole = hole(0.);
+        broken_hole[1] = c(nan, nan);
+        broken_hole[2] = c(nan, 2.);
+        let mut broken_outer = square(10.);
+        broken_outer[1] = c(inf, 0.);
+        broken_outer[2] = c(14., nan);
+        broken_outer[3] = c(nan, 4.);
+        let mut polys = Dataset::new("polys", GeometryType::Polygon, vec![]);
+        polys.push(Some(Geometry::Polygon(vec![vec![square(0.), broken_hole], vec![broken_outer, hole(10.)]])), vec![]);
+        assert_eq!(write_path(&polys, &dir.path().join("polys.shp"))?, 0);
+        let (back, _) = read_path(&dir.path().join("polys.shp"))?;
+        assert_eq!(coords(&back.features[0].geometry), 5);
+        assert_eq!(
+            shapefile_geometry_notes(&polys, "polys.shp", Crs::LonLat),
+            [
+                "polys.shp: 5 vertices with a missing or infinite coordinate were left out of the Shapefile",
+                "polys.shp: 3 polygon rings were left out of the Shapefile, with fewer than 3 drawable vertices or in a polygon whose outer ring was left out",
+            ]
+        );
+
+        // A feature with nothing drawable left is counted left out whole, not vertex by vertex.
+        let mut gone = Dataset::new("gone", GeometryType::Point, vec![]);
+        gone.push(Some(Geometry::MultiPoint(vec![c(nan, 0.), c(0., inf)])), vec![]);
+        gone.push(Some(Geometry::Point(c(1., 1.))), vec![]);
+        assert_eq!(write_path(&gone, &dir.path().join("gone.shp"))?, 1);
+        assert!(shapefile_geometry_notes(&gone, "gone.shp", Crs::LonLat).is_empty());
+
+        // Clean geometry: nothing to say.
+        for ds in [&points, &lines, &polys] {
+            let mut clean = ds.clone();
+            clean.features[0].geometry = match ds.geometry_type {
+                GeometryType::Point => Some(Geometry::MultiPoint(vec![c(0., 0.), c(1., 1.)])),
+                GeometryType::Polyline => Some(Geometry::Line(vec![vec![c(0., 0.), c(1., 1.)]])),
+                _ => Some(Geometry::Polygon(vec![vec![square(0.), hole(0.)]])),
+            };
+            assert!(shapefile_geometry_notes(&clean, "clean.shp", Crs::LonLat).is_empty(), "{}", ds.name);
+        }
+
+        // Projected, the export writes the projected copy. Web Mercator writes an infinite
+        // latitude at 85.05°, so that vertex and its part are written and nothing is said of
+        // them; a part of one vertex is still left out. A missing coordinate can't be projected,
+        // so the export is refused. In longitude/latitude, the infinite latitude goes, and its
+        // part with it.
+        let mut merc = Dataset::new("merc", GeometryType::Polyline, vec![]);
+        merc.push(Some(Geometry::Line(vec![vec![c(0., 0.), c(1., inf)], vec![c(5., 5.)], vec![c(7., 7.), c(8., 8.)]])), vec![]);
+        assert_eq!(write_path_in(&merc, &dir.path().join("merc.shp"), Crs::WebMercator)?, 0);
+        let (back, _) = read_path(&dir.path().join("merc.shp"))?;
+        assert_eq!(coords(&back.features[0].geometry), 4);
+        assert_eq!(
+            shapefile_geometry_notes(&merc, "merc.shp", Crs::WebMercator),
+            ["merc.shp: 1 line part was left out of the Shapefile, with fewer than 2 drawable vertices"]
+        );
+        assert_eq!(write_path(&merc, &dir.path().join("merc-4326.shp"))?, 0);
+        let (back, _) = read_path(&dir.path().join("merc-4326.shp"))?;
+        assert_eq!(coords(&back.features[0].geometry), 2);
+        assert_eq!(
+            shapefile_geometry_notes(&merc, "merc-4326.shp", Crs::LonLat),
+            [
+                "merc-4326.shp: 1 vertex with a missing or infinite coordinate was left out of the Shapefile",
+                "merc-4326.shp: 2 line parts were left out of the Shapefile, with fewer than 2 drawable vertices",
+            ]
+        );
+        assert!(write_path_in(&points, &dir.path().join("mp-3857.shp"), Crs::WebMercator).is_err());
+        Ok(())
+    }
+
+    /// A GeoPackage export loses no geometry: a layer read from a GeoJSON of a polygon and a point
+    /// (declared a polygon layer, by its most common kind) gets a GEOMETRY column holding both, and
+    /// a feature without geometry stays, as a table holds it. A layer of one kind keeps its kind's
+    /// column, whether it declares its type or not.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_geopackage_of_a_mixed_layer_keeps_every_kind() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let geojson = r#"{"type":"FeatureCollection","features":[
+            {"type":"Feature","properties":{"name":"area"},"geometry":{"type":"Polygon","coordinates":[[[0,0],[1,0],[1,1],[0,0]]]}},
+            {"type":"Feature","properties":{"name":"spot"},"geometry":{"type":"Point","coordinates":[5,5]}},
+            {"type":"Feature","properties":{"name":"none"},"geometry":null}]}"#;
+        let (mixed, _) = read_geojson(geojson, "mixed")?;
+        assert_eq!(mixed.geometry_type, GeometryType::Polygon);
+        let dir = tempfile::tempdir()?;
+        // The column's type, and the rows written with whether each has geometry, read with SQL.
+        let table = |path: &Path| -> std::result::Result<(String, Vec<(String, bool)>), Box<dyn std::error::Error>> {
+            let conn = rusqlite::Connection::open(path)?;
+            let kind: String = conn.query_row("SELECT geometry_type_name FROM gpkg_geometry_columns", [], |r| r.get(0))?;
+            let mut rows = conn.prepare(r#"SELECT "name", "geom" IS NOT NULL FROM "mixed" ORDER BY "fid""#)?;
+            let written = rows.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<std::result::Result<_, _>>()?;
+            Ok((kind, written))
+        };
+        let all = vec![("area".to_string(), true), ("spot".to_string(), true), ("none".to_string(), false)];
+        let path = dir.path().join("mixed.gpkg");
+        assert_eq!(write_path(&mixed, &path)?, 0);
+        assert_eq!(table(&path)?, ("GEOMETRY".to_string(), all.clone()));
+        // Read back, the point and the polygon are both there.
+        let (back, _) = read_path(&path)?;
+        let mut kinds: Vec<GeometryType> = back.features.iter().filter_map(|f| f.geometry.as_ref().map(Geometry::kind)).collect();
+        kinds.sort_by_key(|k| format!("{k:?}"));
+        assert_eq!(kinds, [GeometryType::Point, GeometryType::Polygon]);
+        // A layer that declares no geometry type does the same.
+        let mut typeless = mixed.clone();
+        typeless.geometry_type = GeometryType::None;
+        let at = dir.path().join("typeless.gpkg");
+        assert_eq!(write_path(&typeless, &at)?, 0);
+        assert_eq!(table(&at)?, ("GEOMETRY".to_string(), all));
+        // Projected, every feature is written too.
+        let utm = Crs::from_epsg(32631).ok_or("no UTM zone 31N")?;
+        let projected = dir.path().join("projected.gpkg");
+        assert_eq!(write_path_in(&mixed, &projected, utm)?, 0);
+        assert_eq!(table(&projected)?.0, "GEOMETRY");
+        // One kind, declared or not: that kind's column, nothing left out.
+        let mut areas = mixed.clone();
+        areas.features.retain(|f| !matches!(f.geometry, Some(Geometry::Point(_))));
+        let one = vec![("area".to_string(), true), ("none".to_string(), false)];
+        let at = dir.path().join("areas.gpkg");
+        assert_eq!(write_path(&areas, &at)?, 0);
+        assert_eq!(table(&at)?, ("MULTIPOLYGON".to_string(), one.clone()));
+        areas.geometry_type = GeometryType::None;
+        let at = dir.path().join("typeless-areas.gpkg");
+        assert_eq!(write_path(&areas, &at)?, 0);
+        assert_eq!(table(&at)?, ("MULTIPOLYGON".to_string(), one));
+        Ok(())
+    }
+
     /// Exercises caller cleanup through the public Shapefile writer, one fresh process per collision.
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
@@ -2799,6 +3275,86 @@ mod tests {
         assert!(write_atomic(&destination, b"must not replace directory").is_err());
         assert_eq!(std::fs::read(marker)?, b"keep destination contents");
         assert_eq!(std::fs::read_dir(&root)?.count(), 1, "failed install left a staging file");
+        std::fs::remove_dir_all(root)
+    }
+
+    /// Saving through a link (a project kept in a synced folder, linked from elsewhere) updates
+    /// the file it leads to, relative or dangling, and leaves the link in place; a loop is an
+    /// error that changes nothing.
+    #[cfg(unix)]
+    #[test]
+    fn write_atomic_writes_through_symbolic_links() -> std::io::Result<()> {
+        let root = temp_beside(&std::env::temp_dir().join("rustgis-atomic-link"))?;
+        std::fs::create_dir(&root)?;
+        let real_dir = root.join("real");
+        std::fs::create_dir(&real_dir)?;
+        let real = real_dir.join("project.rgis");
+        std::fs::write(&real, b"old")?;
+        let link = root.join("project.rgis");
+        std::os::unix::fs::symlink("real/project.rgis", &link)?;
+        let chained = root.join("chained.rgis");
+        std::os::unix::fs::symlink(&link, &chained)?;
+        write_atomic(&chained, b"new")?;
+        assert_eq!(std::fs::read(&real)?, b"new");
+        assert!(std::fs::symlink_metadata(&link)?.file_type().is_symlink());
+        assert!(std::fs::symlink_metadata(&chained)?.file_type().is_symlink());
+        assert_eq!(std::fs::read_dir(&real_dir)?.count(), 1, "a temp file was left behind");
+        // A dangling link gets its file created.
+        let missing = real_dir.join("missing.rgis");
+        let dangling = root.join("dangling.rgis");
+        std::os::unix::fs::symlink(&missing, &dangling)?;
+        write_atomic(&dangling, b"made")?;
+        assert_eq!(std::fs::read(&missing)?, b"made");
+        assert!(std::fs::symlink_metadata(&dangling)?.file_type().is_symlink());
+        // A loop is refused without touching anything.
+        let (a, b) = (root.join("a.rgis"), root.join("b.rgis"));
+        std::os::unix::fs::symlink(&b, &a)?;
+        std::os::unix::fs::symlink(&a, &b)?;
+        assert!(write_atomic(&a, b"loop").is_err());
+        assert!(std::fs::symlink_metadata(&a)?.file_type().is_symlink());
+        assert_eq!(std::fs::read_dir(&root)?.count(), 6, "a temp file was left behind");
+        let mut target = real.clone();
+        for i in 0..MAX_LINKS {
+            let next = root.join(format!("chain-{i}"));
+            std::os::unix::fs::symlink(&target, &next)?;
+            target = next;
+        }
+        write_atomic(&target, b"forty links")?;
+        assert_eq!(std::fs::read(&real)?, b"forty links");
+        let too_many = root.join("chain-over-limit");
+        std::os::unix::fs::symlink(&target, &too_many)?;
+        assert!(write_atomic(&too_many, b"too many").is_err());
+        assert_eq!(std::fs::read(&real)?, b"forty links");
+        // Managed files replace the link itself, retaining the target's original contents.
+        replace_atomic(&link, b"managed file")?;
+        assert!(!std::fs::symlink_metadata(&link)?.file_type().is_symlink());
+        assert_eq!(std::fs::read(&link)?, b"managed file");
+        assert_eq!(std::fs::read(&real)?, b"forty links");
+        std::fs::remove_dir_all(root)
+    }
+
+    /// A private file stays private when saved over, and a new file still gets the usual mode.
+    #[cfg(unix)]
+    #[test]
+    fn write_atomic_keeps_permissions() -> std::io::Result<()> {
+        use std::os::unix::fs::PermissionsExt;
+        let root = temp_beside(&std::env::temp_dir().join("rustgis-atomic-mode"))?;
+        std::fs::create_dir(&root)?;
+        let private = root.join("private.rgis");
+        std::fs::write(&private, b"old")?;
+        std::fs::set_permissions(&private, std::fs::Permissions::from_mode(0o600))?;
+        write_atomic(&private, b"new")?;
+        assert_eq!(std::fs::read(&private)?, b"new");
+        assert_eq!(std::fs::metadata(&private)?.permissions().mode() & 0o7777, 0o600);
+        // A read-only file is still replaced, and stays read-only.
+        std::fs::set_permissions(&private, std::fs::Permissions::from_mode(0o400))?;
+        write_atomic(&private, b"newer")?;
+        assert_eq!(std::fs::read(&private)?, b"newer");
+        assert_eq!(std::fs::metadata(&private)?.permissions().mode() & 0o7777, 0o400);
+        // A new file is created as before: owner read-write, the rest by the umask.
+        let fresh = root.join("fresh.rgis");
+        write_atomic(&fresh, b"x")?;
+        assert_eq!(std::fs::metadata(&fresh)?.permissions().mode() & 0o600, 0o600);
         std::fs::remove_dir_all(root)
     }
 
@@ -3156,6 +3712,132 @@ mod tests {
         );
     }
 
+    /// An export in Web Mercator writes a latitude beyond 85.05°, an infinite one too, at 85.05°,
+    /// where Web Mercator ends, and says how many vertices it moved; for a streamed layer, its
+    /// source's extent tells. Within 85.05°, or in another system, nothing is said of it.
+    #[test]
+    fn a_web_mercator_export_says_what_it_writes_at_85_degrees() {
+        use rustgis_geom::{Extent, MAX_LAT, lonlat_to_merc, merc_to_lonlat};
+        let c = Coord::new;
+        let ext = |ds: &Dataset| ds.extent();
+        let layer = |name: &str, points: &[Coord]| {
+            let mut ds = Dataset::new(name, GeometryType::Point, vec![]);
+            for p in points {
+                ds.push(Some(Geometry::Point(*p)), vec![]);
+            }
+            ds
+        };
+        let polar = layer("polar", &[c(10.0, 89.0), c(20.0, -90.0), c(30.0, 60.0), c(40.0, f64::INFINITY)]);
+        // What the export writes: each latitude beyond at 85.05°.
+        let merc = project(&polar, Crs::WebMercator).unwrap();
+        let written: Vec<Coord> = merc
+            .features
+            .iter()
+            .filter_map(|f| match f.geometry {
+                Some(Geometry::Point(p)) => Some(merc_to_lonlat(p)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(written.len(), 4);
+        for (w, lat) in written.iter().zip([MAX_LAT, -MAX_LAT, 60.0, MAX_LAT]) {
+            assert!((w.y - lat).abs() < 1e-9, "{w:?}");
+        }
+        assert_eq!(merc.features[0].geometry, Some(Geometry::Point(lonlat_to_merc(c(10.0, MAX_LAT)))));
+        assert_eq!(
+            crate::export_notes([(&polar, ext(&polar))], "polar.shp", Crs::WebMercator),
+            ["polar.shp: 3 vertices of polar are beyond 85.05° north or south, and written at 85.05°, where Web Mercator ends"]
+        );
+        // In another system, or within 85.05°: nothing.
+        for crs in [Crs::LonLat, Crs::Epsg(32631)] {
+            assert!(crate::export_notes([(&polar, ext(&polar))], "polar.shp", crs).is_empty(), "{crs:?}");
+        }
+        let within = layer("within", &[c(30.0, 60.0), c(0.0, -MAX_LAT)]);
+        assert!(crate::export_notes([(&within, ext(&within))], "within.shp", Crs::WebMercator).is_empty());
+        // One vertex; and several layers in one notice, counting the vertices of all.
+        let one = layer("one", &[c(0.0, 86.0)]);
+        assert_eq!(
+            crate::export_notes([(&one, ext(&one))], "one.gpkg", Crs::WebMercator),
+            ["one.gpkg: 1 vertex of one is beyond 85.05° north or south, and written at 85.05°, where Web Mercator ends"]
+        );
+        assert_eq!(
+            crate::export_notes([(&polar, ext(&polar)), (&within, ext(&within)), (&one, ext(&one))], "map.gpkg", Crs::WebMercator),
+            [
+                "map.gpkg: 4 vertices of 2 layers (polar, one) are beyond 85.05° north or south, and written at 85.05°, where Web Mercator ends"
+            ]
+        );
+        // A streamed layer's features are only those in view: its source's extent tells, without
+        // a count, and only that it reaches beyond, as a source can declare a wider one than its
+        // data's.
+        let mut window = layer("tiles", &[c(0.0, 0.0)]);
+        window.windowed = true;
+        assert_eq!(
+            crate::export_notes([(&window, Extent::new(-180.0, -90.0, 180.0, 84.0))], "tiles.gpkg", Crs::WebMercator),
+            [
+                "tiles.gpkg: the extent of tiles reaches beyond 85.05° north or south, and what lies beyond is written at 85.05°, where Web Mercator ends"
+            ]
+        );
+        assert!(crate::export_notes([(&window, Extent::new(-180.0, -80.0, 180.0, 84.0))], "tiles.gpkg", Crs::WebMercator).is_empty());
+        // A layer counted and a window told by its extent: one notice, saying both.
+        assert_eq!(
+            crate::export_notes([(&polar, ext(&polar)), (&window, Extent::new(-180.0, -90.0, 180.0, 84.0))], "map.gpkg", Crs::WebMercator),
+            [
+                "map.gpkg: 3 vertices of polar are beyond 85.05° north or south, and written at 85.05°; the extent of tiles reaches beyond 85.05° north or south, and what lies beyond is written at 85.05°, where Web Mercator ends"
+            ]
+        );
+        // A layer without features that isn't a window (a raster layer's, or a streamed layer's
+        // written a chunk at a time, whose export counts as it writes) has no extent tell.
+        let empty = Dataset::new("empty", GeometryType::Point, vec![]);
+        assert!(crate::export_notes([(&empty, Extent::new(-180.0, -90.0, 180.0, 90.0))], "empty.gpkg", Crs::WebMercator).is_empty());
+        // A Shapefile holds only geometry of the layer's kind, and of it only parts it can draw:
+        // the vertices it leaves out aren't counted, though a GeoPackage holds them. Of the lines,
+        // the 2 vertices of the first are written, not the one-vertex part or the point. Of the
+        // polygons, the 4 of the first one's three-vertex hole, not its two-vertex one, nor the
+        // second polygon, whose outer ring has 2 vertices, with its hole.
+        let mut lines = Dataset::new("lines", GeometryType::Polyline, vec![]);
+        lines.push(Some(Geometry::Line(vec![vec![c(0.0, 88.0), c(10.0, 88.0)]])), vec![]);
+        lines.push(Some(Geometry::Line(vec![vec![c(0.0, 89.0)], vec![c(0.0, 0.0), c(1.0, 0.0)]])), vec![]);
+        lines.push(Some(Geometry::Point(c(5.0, 89.0))), vec![]);
+        let mut polys = Dataset::new("polys", GeometryType::Polygon, vec![]);
+        let ring = |r: &[(f64, f64)]| r.iter().map(|&(x, y)| c(x, y)).collect::<Vec<_>>();
+        polys.push(
+            Some(Geometry::Polygon(vec![vec![
+                ring(&[(0.0, 0.0), (0.0, 10.0), (10.0, 10.0), (0.0, 0.0)]),
+                ring(&[(1.0, 86.0), (2.0, 86.0), (1.5, 87.0), (1.0, 86.0)]),
+                ring(&[(3.0, 89.0), (3.0, 89.0)]),
+            ]])),
+            vec![],
+        );
+        polys.push(
+            Some(Geometry::Polygon(vec![vec![
+                ring(&[(0.0, 89.0), (1.0, 89.0)]),
+                ring(&[(0.0, 86.0), (1.0, 86.0), (1.0, 87.0), (0.0, 86.0)]),
+            ]])),
+            vec![],
+        );
+        for (ds, in_shapefile, in_geopackage) in [(&lines, 2, 4), (&polys, 4, 12)] {
+            let name = ds.name.as_str();
+            for (target, n) in
+                [(format!("{name}.shp"), in_shapefile), (format!("{name}.zip"), in_shapefile), (format!("{name}.gpkg"), in_geopackage)]
+            {
+                assert_eq!(
+                    crate::export_notes([(ds, ext(ds))], &target, Crs::WebMercator),
+                    [format!(
+                        "{target}: {n} vertices of {name} are beyond 85.05° north or south, and written at 85.05°, where Web Mercator ends"
+                    )]
+                );
+            }
+            // As many as the Shapefile written holds at 85.05°.
+            let (zip, _) = write_bytes_in(ds, "shp", Crs::WebMercator).unwrap();
+            let mut at_edge = 0;
+            for (back, _) in read_zip(&format!("{name}.zip"), &zip).unwrap() {
+                for g in back.features.iter().filter_map(|f| f.geometry.as_ref()) {
+                    g.for_each_coord(|c| at_edge += usize::from((c.y.abs() - MAX_LAT).abs() < 1e-6));
+                }
+            }
+            assert_eq!(at_edge, in_shapefile, "{name}");
+        }
+    }
+
     #[test]
     fn wkt_geometries() {
         use crate::interop::parse_wkt;
@@ -3246,6 +3928,18 @@ mod tests {
         // UTF-8 says nothing; binary data named .csv is refused.
         assert!(read_bytes("t.csv", "nome,n\nJosé,1\n".as_bytes()).unwrap().1.messages.is_empty());
         assert!(read_bytes("t.csv", b"a,b\n\x00\xff\x01,2\n").is_err());
+    }
+
+    /// A GeoJSON column of text and numbers is read as text, its numbers in full rather than
+    /// rounded as they're shown.
+    #[test]
+    fn a_mixed_geojson_column_keeps_its_numbers_in_full() {
+        let text = r#"{"type":"FeatureCollection","features":[
+            {"type":"Feature","properties":{"v":"a"},"geometry":{"type":"Point","coordinates":[1,2]}},
+            {"type":"Feature","properties":{"v":0.1234567891},"geometry":{"type":"Point","coordinates":[3,4]}}]}"#;
+        let (ds, _) = read_geojson(text, "t").unwrap();
+        assert_eq!(ds.fields[0].ty, FieldType::Text);
+        assert_eq!(ds.value(1, 0), &Value::Text("0.1234567891".into()));
     }
 
     #[test]
@@ -3483,6 +4177,34 @@ mod tests {
         }
         // A .shp alone is refused with a hint to zip it.
         assert!(read_bytes("x.shp", &entries[0].1).is_err());
+        // Shapefiles past the layer limit are named, not dropped unsaid; at the limit nothing is said.
+        let shapefiles = |count: usize| -> Vec<(String, Vec<u8>)> {
+            (0..count).flat_map(|i| entries.iter().take(4).map(move |(n, b)| (format!("s{i:02}.{}", ext(n)), b.clone()))).collect()
+        };
+        fn ext(n: &str) -> String {
+            n.rsplit('.').next().unwrap_or_default().to_ascii_lowercase()
+        }
+        let layers = read_zip("x.zip", &crate::zip::write(&shapefiles(MAX_ZIP_LAYERS + 2)).unwrap()).unwrap();
+        assert_eq!(layers.len(), MAX_ZIP_LAYERS);
+        assert_eq!(layers[0].1.messages, ["x.zip: skipped s32.shp (past the 32-layer limit); s33.shp (past the 32-layer limit)"]);
+        let layers = read_zip("x.zip", &crate::zip::write(&shapefiles(MAX_ZIP_LAYERS)).unwrap()).unwrap();
+        assert_eq!(layers.len(), MAX_ZIP_LAYERS);
+        assert!(layers.iter().all(|(_, r)| r.messages.is_empty()), "{:?}", layers[0].1.messages);
+        // MapInfo files past the limit are named too (by the loop over the other members, which
+        // they're left to), once each.
+        let mif = b"Version 300\nColumns 1\n  id Integer\nData\nPoint 1 2\n".to_vec();
+        let mifs = |count: usize| -> Vec<(String, Vec<u8>)> {
+            (0..count).flat_map(|i| [(format!("m{i:02}.mif"), mif.clone()), (format!("m{i:02}.mid"), b"1\n".to_vec())]).collect()
+        };
+        let layers = read_zip("x.zip", &crate::zip::write(&mifs(MAX_ZIP_LAYERS + 1)).unwrap()).unwrap();
+        assert_eq!(layers.len(), MAX_ZIP_LAYERS);
+        assert_eq!(layers[0].1.messages, ["x.zip: skipped m32.mif (past the 32-layer limit)"]);
+        let layers = read_zip("x.zip", &crate::zip::write(&mifs(MAX_ZIP_LAYERS)).unwrap()).unwrap();
+        assert!(layers.iter().all(|(_, r)| r.messages.is_empty()), "{:?}", layers[0].1.messages);
+        // A long list of skipped members names the first ones and counts the rest.
+        let layers = read_zip("x.zip", &crate::zip::write(&mifs(MAX_ZIP_LAYERS + 25)).unwrap()).unwrap();
+        let note = &layers[0].1.messages[0];
+        assert!(note.contains("m51.mif") && !note.contains("m52.mif") && note.ends_with("; and 5 more"), "{note}");
     }
 
     /// A Shapefile's loose files picked or dropped together are zipped into one, which reads as a

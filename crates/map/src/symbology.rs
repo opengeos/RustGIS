@@ -148,6 +148,12 @@ impl Symbol {
         }
     }
 
+    /// The seed whose `g` default this symbol is, untouched: a layer keeps its default when it is
+    /// copied or added from a layer file under another id, so any seed's default counts.
+    pub fn default_seed(&self, g: GeometryType) -> Option<u32> {
+        (0..LAYER_COLORS.len() as u32).find(|&seed| *self == Symbol::default_for(g, seed))
+    }
+
     pub fn with_fill(mut self, c: Rgba, g: GeometryType) -> Symbol {
         match g {
             GeometryType::Polyline => {
@@ -830,7 +836,7 @@ pub const OTHER_FILL: Rgba = Rgba::rgb(0xB0, 0xB0, 0xB0);
 pub const MAX_LABEL: usize = 200;
 
 /// One class of a Unique Values or Graduated Colors renderer, as a command names it.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum ClassRef {
     /// A Unique Values class, by its value.
     Value(String),
@@ -922,7 +928,7 @@ impl Renderer {
     pub fn classer(&self, ds: &Dataset, map_scale: Option<f64>) -> Classer {
         let Some(text) = self.expression() else { return Classer::default() };
         Classer {
-            expr: rustgis_data::query::parse(text, ds).ok(),
+            expr: rustgis_data::query::parse_fields(text, ds).ok(),
             env: rustgis_data::query::Env { map_scale: map_scale.filter(|s| s.is_finite() && *s > 0.0) },
         }
     }
@@ -1005,7 +1011,18 @@ impl Renderer {
         if text.chars().count() > rustgis_data::query::MAX_LEN {
             return Err(format!("the expression is longer than {} characters", rustgis_data::query::MAX_LEN));
         }
-        let e = rustgis_data::query::parse(text, ds)?;
+        let e = rustgis_data::query::parse_fields(text, ds)?;
+        if rustgis_data::query::uses_area(&e)
+            && let Some(message) = rustgis_data::ambiguous_area_message(
+                ds.features
+                    .iter()
+                    .enumerate()
+                    .filter(|(row, _)| rows.get(*row).copied().unwrap_or(true))
+                    .filter_map(|(_, feature)| feature.geometry.as_ref()),
+            )
+        {
+            return Err(message);
+        }
         let env = rustgis_data::query::Env::default();
         // The first values by text, and while every value reads as a number, by number too: the
         // order is known only once every feature is classed (`rustgis_data::value::numeric_classes`).
@@ -1896,7 +1913,7 @@ impl Renderer {
     }
 
     /// Applies `f` to every symbol.
-    pub fn map_symbols(&mut self, f: impl Fn(&mut Symbol)) {
+    pub fn map_symbols(&mut self, mut f: impl FnMut(&mut Symbol)) {
         match self {
             Renderer::Single(s) => f(s),
             Renderer::Unique { classes, other, .. } => {
@@ -2317,6 +2334,11 @@ pub struct LabelClass {
     /// the one at its middle, as QGIS's repeat distance; none is the one at its middle.
     #[serde(default, deserialize_with = "de_repeat", skip_serializing_if = "Option::is_none")]
     pub repeat: Option<f32>,
+    /// Along a line, how far the label sits from it (points, within [`LABEL_OFFSET`], to the
+    /// text's nearest edge), as QGIS's distance from a line: above it as the text reads when
+    /// positive, below when negative, on it at 0.
+    #[serde(default, deserialize_with = "de_line_offset", skip_serializing_if = "is_zero")]
+    pub line_offset: f32,
     /// Every label drawn, over the others where they crowd, rather than some left out.
     #[serde(default, deserialize_with = "de_flag", skip_serializing_if = "std::ops::Not::not")]
     pub show_all: bool,
@@ -2612,6 +2634,15 @@ fn de_label_offset<'de, D: serde::Deserializer<'de>>(d: D) -> Result<[f32; 2], D
     Ok(lenient::<D, [f64; 2]>(d)?.map_or([0.0; 2], |o| o.map(within)))
 }
 
+/// A label's distance from its line, within [`LABEL_OFFSET`]; one that isn't a number is none.
+pub fn label_line_offset(v: f64) -> f32 {
+    if v.is_finite() { v.clamp(*LABEL_OFFSET.start(), *LABEL_OFFSET.end()) as f32 } else { 0.0 }
+}
+
+fn de_line_offset<'de, D: serde::Deserializer<'de>>(d: D) -> Result<f32, D::Error> {
+    Ok(lenient::<D, f64>(d)?.map_or(0.0, label_line_offset))
+}
+
 fn is_no_offset(o: &[f32; 2]) -> bool {
     *o == [0.0; 2]
 }
@@ -2884,6 +2915,7 @@ impl LabelClass {
             wrap_length: 0,
             line_align: crate::layout::TextAlign::Left,
             repeat: None,
+            line_offset: 0.0,
             show_all: false,
             callout: None,
             moved: Vec::new(),
@@ -2914,7 +2946,7 @@ impl LabelClass {
     pub fn query(&self, ds: &Dataset) -> Option<Option<rustgis_data::query::Expr>> {
         match self.where_.as_deref().map(str::trim).filter(|w| !w.is_empty()) {
             None => Some(None),
-            Some(w) => rustgis_data::query::parse(w, ds).ok().map(Some),
+            Some(w) => rustgis_data::query::parse_fields(w, ds).ok().map(Some),
         }
     }
 }
@@ -2994,7 +3026,7 @@ impl Labeling {
         };
         // (A class whose text is an expression that still reads keeps its own, which it doesn't
         // label from.)
-        let by_text = |c: &LabelClass| c.by.text.as_deref().is_some_and(|t| rustgis_data::query::parse(t, ds).is_ok());
+        let by_text = |c: &LabelClass| c.by.text.as_deref().is_some_and(|t| rustgis_data::query::parse_fields(t, ds).is_ok());
         for c in self.classes.iter_mut().filter(|c| ds.field_index(&c.field).is_none() && !by_text(c)) {
             c.field.clone_from(&fallback);
         }
@@ -3215,6 +3247,31 @@ mod tests {
         assert_eq!(serde_json::from_value::<Labeling>(serde_json::to_value(&on).unwrap()).unwrap(), on);
         let junk = read(serde_json::json!({"other_positions": "yes"}));
         assert!(!junk.default.other_positions);
+        assert_eq!(junk.default.field, "name");
+    }
+
+    /// A label saved before the distance from a line sits on it and saves as before; a distance
+    /// is kept either way, held to its range, and one that isn't a number is none (#1187).
+    #[test]
+    fn a_line_offset_is_kept_and_old_labels_save_as_before() {
+        let base = serde_json::json!({"enabled": true, "field": "name", "size": 9.0, "color": [0, 0, 0, 255], "halo": true, "bold": false});
+        let read = |extra: serde_json::Value| {
+            let mut v = base.clone();
+            if let (Some(o), Some(e)) = (v.as_object_mut(), extra.as_object()) {
+                o.extend(e.clone());
+            }
+            serde_json::from_value::<Labeling>(v).unwrap()
+        };
+        let old = read(serde_json::json!({}));
+        assert_eq!(old.default.line_offset, 0.0);
+        assert!(serde_json::to_value(&old).unwrap().get("line_offset").is_none());
+        for (given, kept) in [(4.5, 4.5), (-3.0, -3.0), (900.0, 200.0), (-900.0, -200.0)] {
+            let l = read(serde_json::json!({"line_offset": given}));
+            assert_eq!(l.default.line_offset, kept, "{given}");
+            assert_eq!(serde_json::from_value::<Labeling>(serde_json::to_value(&l).unwrap()).unwrap(), l);
+        }
+        let junk = read(serde_json::json!({"line_offset": "above"}));
+        assert_eq!(junk.default.line_offset, 0.0);
         assert_eq!(junk.default.field, "name");
     }
 

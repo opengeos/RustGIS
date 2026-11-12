@@ -56,8 +56,122 @@ pub fn open_command(path: &str) -> &'static str {
 /// Saved-document compatibility version, independent of the RustGIS release version.
 /// Advance it when an older reader would lose meaningful saved information on resaving.
 pub const FORMAT: u32 = 1;
-/// Largest project file read or saved (512 MiB).
-pub const MAX_BYTES: u64 = 512 << 20;
+/// Largest project file read or saved in the browser, or on a computer whose memory isn't known
+/// (512 MiB): the floor of [`max_bytes`].
+pub const BYTES_FLOOR: u64 = 512 << 20;
+
+/// The most [`max_bytes`] grows to, however much memory the computer has (4 GiB).
+pub const BYTES_CEILING: u64 = 4 << 30;
+
+/// The memory an open project takes for each byte of its file, as measured opening projects of
+/// GeoJSON layers from the command line:
+/// - polygons of 40 vertices and 8 attributes: about 2 (337 MiB took 731 MiB; 674 MiB, 1.41 GiB;
+///   the app took 576 MiB more than empty to open and draw the first);
+/// - points with 12 short text attributes: about 4.4 (101 MiB took 449 MiB);
+/// - points with 30 one-letter attributes, about the most a byte of file costs: about 5.2
+///   (87 MiB took 453 MiB).
+///
+/// Planned at 5: at the limit, even the most measured takes little more than a quarter of the
+/// memory, and a project of the size in #1615 (659 MiB) opens on a computer sold as 16 GB, which
+/// reports a little less than 16 GiB.
+const MEMORY_PER_BYTE: u64 = 5;
+
+/// Largest project file read or saved on this computer (#1615): on the desktop as much as a
+/// quarter of its memory holds open at [`MEMORY_PER_BYTE`] a byte, from [`BYTES_FLOOR`] up to
+/// [`BYTES_CEILING`], as the other memory limits follow it (#1291 step 2); [`BYTES_FLOOR`] in the
+/// browser. Save and open use the same limit, so a project saved here opens here; one saved on a
+/// computer with more memory may need one like it.
+pub fn max_bytes() -> u64 {
+    #[cfg(test)]
+    if let Some(max) = TEST_MAX.with(std::cell::Cell::get) {
+        return max;
+    }
+    max_bytes_for(rustgis_data::memory::physical())
+}
+
+/// [`max_bytes`] on a computer with `memory` bytes (`None`: not known). The formula is
+/// [`rustgis_data::memory::scaled`]'s, worked out here in `u64`, as that one counts in `usize`,
+/// which doesn't hold 4 GiB on a 32-bit build.
+fn max_bytes_for(memory: Option<u64>) -> u64 {
+    memory.map_or(BYTES_FLOOR, |m| (m / rustgis_data::memory::SHARE / MEMORY_PER_BYTE).clamp(BYTES_FLOOR, ceiling()))
+}
+
+/// The most [`max_bytes`] grows to in this build: [`BYTES_CEILING`] on a 64-bit build. A 32-bit
+/// build stays at [`BYTES_FLOOR`] whatever the memory: an open project takes 2 to 5 times its file
+/// in address space, which 4 GiB doesn't hold for a larger one.
+fn ceiling() -> u64 {
+    if usize::BITS >= 64 { BYTES_CEILING } else { BYTES_FLOOR }
+}
+
+/// The memory a 64-bit build needs for [`max_bytes`] to reach `bytes`: the inverse of
+/// [`max_bytes_for`] above the floor.
+fn memory_for(bytes: u64) -> u64 {
+    bytes.saturating_mul(rustgis_data::memory::SHARE).saturating_mul(MEMORY_PER_BYTE)
+}
+
+/// `value` as JSON text, or `None` as soon as it passes `max` bytes: the text of a project too
+/// large to keep is never built whole, only up to the limit.
+pub(crate) fn json_within<T: Serialize + ?Sized>(value: &T, max: u64) -> Result<Option<String>, String> {
+    struct Capped {
+        buf: Vec<u8>,
+        max: usize,
+        over: bool,
+    }
+    impl std::io::Write for Capped {
+        fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+            if self.buf.len().saturating_add(b.len()) > self.max {
+                self.over = true;
+                return Err(std::io::Error::other("past the limit"));
+            }
+            // A machine short of memory gets an error, not an abort.
+            self.buf.try_reserve(b.len()).map_err(|_| std::io::Error::other("out of memory"))?;
+            self.buf.extend_from_slice(b);
+            Ok(b.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut w = Capped { buf: Vec::new(), max: usize::try_from(max).unwrap_or(usize::MAX), over: false };
+    match serde_json::to_writer(&mut w, value) {
+        Ok(()) => String::from_utf8(w.buf).map(Some).map_err(|e| e.to_string()),
+        Err(_) if w.over => Ok(None),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+/// The limit as a refusal says it: in MiB and, where it follows the computer's memory, that it
+/// does, so a project refused here but opened elsewhere is understood.
+pub fn limit_said(max: u64) -> String {
+    // A 32-bit build keeps the floor whatever the memory: its limit doesn't follow it.
+    if rustgis_data::memory::physical().is_some() && ceiling() > BYTES_FLOOR {
+        format!("{} MiB on this computer, a limit that follows its memory", max >> 20)
+    } else {
+        format!("{} MiB", max >> 20)
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// A smaller [`max_bytes`] for the tests on this thread ([`with_max_bytes`]), so a test of
+    /// the limit doesn't build a project of gigabytes.
+    static TEST_MAX: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) };
+}
+
+/// Runs `f` with [`max_bytes`] at `max` on the calling thread only (work `f` hands to another
+/// thread sees the real limit); the limit is restored even if `f` panics.
+#[cfg(test)]
+pub(crate) fn with_max_bytes<T>(max: u64, f: impl FnOnce() -> T) -> T {
+    struct Restore;
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            TEST_MAX.with(|m| m.set(None));
+        }
+    }
+    TEST_MAX.with(|m| m.set(Some(max)));
+    let _restore = Restore;
+    f()
+}
 
 /// Runtime capabilities never survive a project boundary, including an in-process save restore.
 /// `None` for an address that holds none, and for a wrapper that doesn't parse (kept as it is,
@@ -200,9 +314,9 @@ pub(crate) fn public_login_params(value: &serde_json::Value) -> Option<serde_jso
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Project {
-    /// Read-time label adjustments, consumed by the session and never saved.
+    /// Read-time adjustments (labels, diagrams, layouts), consumed by the session and never saved.
     #[serde(skip)]
-    pub(crate) label_read_notices: Vec<String>,
+    pub(crate) read_notices: Vec<(ReadPart, NoticeText)>,
     /// The format read from disk; serialization always declares the current writer's format.
     #[serde(default = "format", serialize_with = "write_format")]
     pub format: u32,
@@ -392,6 +506,36 @@ pub struct GpEnvironment {
     /// The cell size (degrees) of rasters tools create, when they don't say.
     #[serde(default)]
     pub cell_size: Option<f64>,
+    /// The projected coordinate system the Geostatistical Wizard makes its surface in, and the cell
+    /// size in its units, when the run doesn't say; `None`: degrees, with `cell_size`. Kept apart
+    /// from `cell_size` so an older RustGIS, which reads only that, still makes it in degrees rather
+    /// than reading this system's units as degrees: losing it costs that version the setting, not
+    /// the raster.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub projected: Option<ProjectedCells>,
+}
+
+impl GpEnvironment {
+    /// The cell size set for rasters made in `crs`: the projected one's in its own system, the
+    /// degree one in longitude/latitude (whether or not a system is set), none in another system.
+    pub fn cell_in(&self, crs: rustgis_data::raster::Crs) -> Option<f64> {
+        match self.projected {
+            Some(g) if g.crs == crs => g.cell_size,
+            _ if crs == rustgis_data::raster::Crs::LonLat => self.cell_size,
+            _ => None,
+        }
+    }
+}
+
+/// A projected coordinate system for the rasters the environment sets ([`GpEnvironment::projected`]).
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ProjectedCells {
+    /// The system, never one in degrees: `gp.env` refuses those, and opening a project leaves one
+    /// out.
+    pub crs: rustgis_data::raster::Crs,
+    /// The cell size in the system's units; `None`: the tool's own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cell_size: Option<f64>,
 }
 
 /// A model: geoprocessing steps run in order. A parameter value `%n` stands for the output layer
@@ -544,8 +688,9 @@ struct FileFormat {
 /// metadata is legacy content; arrays include legacy style files. Writers remain unchanged
 /// until a change needs a newer format, at which point it must declare that format.
 pub(crate) fn check_format(text: &str, kind: &str) -> Result<(), String> {
-    if text.len() as u64 > MAX_BYTES {
-        return Err(format!("the {kind} file is too large"));
+    let max = max_bytes();
+    if text.len() as u64 > max {
+        return Err(format!("the {kind} file is too large (maximum {})", limit_said(max)));
     }
     if text.trim_start().starts_with('[') {
         return Ok(());
@@ -582,7 +727,7 @@ impl Project {
 
     pub fn new(name: impl Into<String>) -> Self {
         Project {
-            label_read_notices: Vec::new(),
+            read_notices: Vec::new(),
             format: FORMAT,
             name: name.into(),
             maps: vec![Map::new("Map")],
@@ -728,21 +873,45 @@ impl Project {
         id
     }
 
-    /// Repairs invariants after loading (at least one map; a valid active index).
-    pub fn normalize(&mut self) {
-        self.repair(false);
+    /// Takes the notices of what reading the project changed, keeping those of the parts given
+    /// (an import says only what it takes); the rest are dropped.
+    pub(crate) fn take_read_notices(&mut self, parts: &[ReadPart]) -> Vec<NoticeText> {
+        let mut notices: Vec<NoticeText> =
+            std::mem::take(&mut self.read_notices).into_iter().filter(|(part, _)| parts.contains(part)).map(|(_, n)| n).collect();
+        if parts.contains(&ReadPart::AreaExpressions)
+            && let Some(message) = crate::cmd::design::display_area_messages(self.maps.iter().flat_map(|map| map.layers.iter()))
+        {
+            notices.push(message.into());
+        }
+        notices
+    }
+
+    /// Repairs invariants after loading (at least one map; a valid active index). Returns a
+    /// notice for each kind of change that removed, cut or renamed something, for the session
+    /// to show.
+    #[must_use]
+    pub fn normalize(&mut self) -> Vec<String> {
+        self.normalize_text().into_iter().map(|n| n.english()).collect()
+    }
+
+    /// The same repairs with deferred translation for session-owned interface notices.
+    pub(crate) fn normalize_text(&mut self) -> Vec<NoticeText> {
+        self.repair(false).into_iter().map(|(_, n)| n).collect()
     }
 
     /// [`Project::normalize`] for a project read from its file, which also opens its plain COG
     /// tile layers (a project saved before GeoTIFFs read in place were raster layers, or with
     /// those `map.addTiles` adds) as raster layers read in place: as the project opens only. A
     /// later repair (a layer file added, maps imported) leaves a tile layer added this session
-    /// as it is.
-    pub(crate) fn normalize_opened(&mut self) {
-        self.repair(true);
+    /// as it is. Returns a notice for each kind of change that removed, cut or renamed
+    /// something, with the part of the project it is about.
+    pub(crate) fn normalize_opened(&mut self) -> Vec<(ReadPart, NoticeText)> {
+        self.repair(true)
     }
 
-    fn repair(&mut self, opened: bool) {
+    /// Reports removed or shortened content, renamed items and repaired group display settings
+    /// with their affected part. Table ids absent from older formats are filled in for compatibility.
+    fn repair(&mut self, opened: bool) -> Vec<(ReadPart, NoticeText)> {
         if self.maps.is_empty() {
             self.maps.push(Map::new("Map"));
         }
@@ -766,43 +935,75 @@ impl Project {
         }
         let top = self.tables.iter().map(|t| t.id).max().unwrap_or(0);
         self.next_table_id = self.next_table_id.max(top.wrapping_add(1)).max(1);
-        self.layouts.truncate(200);
+        let layouts_dropped = self.layouts.len().saturating_sub(MAX_LAYOUTS);
+        self.layouts.truncate(MAX_LAYOUTS);
+        let mut repairs = Vec::new();
         for l in &mut self.layouts {
-            l.clamp();
+            let r = l.clamp();
+            if !r.is_empty() {
+                repairs.push((l.name.clone(), r));
+            }
         }
+        let when = if opened { "while opening the project" } else { "while checking the project" };
+        let mut notices: Vec<(ReadPart, NoticeText)> =
+            layout_notices(&self.name, when, layouts_dropped, &repairs).into_iter().map(|n| (ReadPart::Layouts, n.into())).collect();
+        let mut done = Repaired::default();
         // Files skip the commands' limits, and notebooks and presentations are found (and
         // notebooks trusted) by name, so names are made unique.
-        for r in &mut self.reports {
-            r.clamp();
+        for (what, len) in [
+            ("report(s)", self.reports.len()),
+            ("presentation(s)", self.presentations.len()),
+            ("notebook(s)", self.notebooks.len()),
+            ("deep-learning model(s)", self.dl_models.len()),
+            ("shared item(s)", self.shared.len()),
+            ("data store(s)", self.data_stores.len()),
+            ("color ramp(s)", self.ramps.len()),
+        ] {
+            done.over_limit.add_kind(len.saturating_sub(MAX_ITEMS), what);
         }
         self.reports.truncate(MAX_ITEMS);
         self.presentations.truncate(MAX_ITEMS);
         self.notebooks.truncate(MAX_ITEMS);
         self.dl_models.truncate(MAX_ITEMS);
-        self.dl_models.retain(|m| m.model.validate().is_ok());
+        self.dl_models.retain(|m| {
+            let valid = m.model.validate().is_ok();
+            if !valid {
+                done.models_removed.add(1, &m.name);
+            }
+            valid
+        });
         self.shared.truncate(MAX_ITEMS);
         self.data_stores.truncate(MAX_ITEMS);
+        for r in &mut self.reports {
+            let repairs = r.clamp();
+            done.content(repairs, &r.name);
+        }
         for p in &mut self.presentations {
-            p.clamp();
+            let repairs = p.clamp();
+            done.content(repairs, &p.name);
         }
         for nb in &mut self.notebooks {
-            nb.clamp();
+            let repairs = nb.clamp();
+            done.content(repairs, &nb.name);
         }
-        unique_names(self.presentations.iter_mut().map(|p| &mut p.name));
-        unique_names(self.notebooks.iter_mut().map(|nb| &mut nb.name));
-        unique_names(self.dl_models.iter_mut().map(|m| &mut m.name));
+        done.renamed.add_kind(unique_names(self.presentations.iter_mut().map(|p| &mut p.name)), "presentation(s)");
+        done.renamed.add_kind(unique_names(self.notebooks.iter_mut().map(|nb| &mut nb.name)), "notebook(s)");
+        done.renamed.add_kind(unique_names(self.dl_models.iter_mut().map(|m| &mut m.name)), "deep-learning model(s)");
         // Custom ramps are found by name, before them the built-in schemes: a hand edit's repeated
         // or built-in name gets a suffix, so every ramp stays reachable.
         self.ramps.truncate(MAX_ITEMS);
         for r in &mut self.ramps {
             if rustgis_map::Ramp::from_name(r.name()).is_some() {
+                done.ramps_suffixed.add(1, r.name());
                 r.name_mut().push_str(" (custom)");
             }
         }
-        unique_names(self.ramps.iter_mut().map(|r| r.name_mut()));
+        done.renamed.add_kind(unique_names(self.ramps.iter_mut().map(|r| r.name_mut())), "color ramp(s)");
         for m in &mut self.maps {
             // Groups from project files must stay shallow, bounded and unambiguous. Children
             // refer to existing ordinary layers; no layer belongs to two groups.
+            let groups_before = m.service_groups.len() + m.groups.len();
+            let (mut members_removed, mut names_cut) = (0usize, 0usize);
             m.service_groups.truncate(2000);
             let layer_ids: std::collections::HashSet<u32> = m.layers.iter().map(|l| l.id).collect();
             let mut ids = layer_ids.clone();
@@ -811,9 +1012,12 @@ impl Project {
                 if g.id == 0 || g.url.len() > 8192 || !ids.insert(g.id) {
                     return false;
                 }
+                names_cut += usize::from(g.name.chars().nth(200).is_some());
                 g.name = g.name.chars().take(200).collect();
+                let members = g.children.len();
                 g.children.truncate(2000);
                 g.children.retain(|c| layer_ids.contains(&c.layer) && children.insert(c.layer));
+                members_removed += members - g.children.len();
                 true
             });
             // Layer groups likewise: ids of their own, children that exist and are in no other
@@ -824,20 +1028,35 @@ impl Project {
                 if g.id == 0 || !ids.insert(g.id) {
                     return false;
                 }
+                names_cut += usize::from(g.name.chars().nth(200).is_some());
                 g.name = g.name.chars().take(200).collect();
+                let (transparency, min_scale, max_scale) = (g.transparency, g.min_scale, g.max_scale);
                 g.transparency = if g.transparency.is_finite() { g.transparency.clamp(0.0, 100.0) } else { 0.0 };
                 g.min_scale = g.min_scale.filter(|v| v.is_finite() && *v > 0.0);
                 g.max_scale = g.max_scale.filter(|v| v.is_finite() && *v > 0.0);
+                done.group_settings.add(
+                    usize::from(transparency != g.transparency)
+                        + usize::from(min_scale != g.min_scale)
+                        + usize::from(max_scale != g.max_scale),
+                    &m.name,
+                );
+                let members = g.children.len();
                 g.children.retain(|c| layer_ids.contains(c) && children.insert(*c));
+                members_removed += members - g.children.len();
                 true
             });
-            m.tidy_groups();
+            done.groups_removed.add(groups_before - m.service_groups.len() - m.groups.len(), &m.name);
+            done.members_removed.add(members_removed, &m.name);
+            done.group_names_cut.add(names_cut, &m.name);
+            done.group_parents.add(m.tidy_groups(), &m.name);
             // A projection this version can't use (a hand edit, or a newer file) falls back to
             // Web Mercator rather than being named while another is drawn.
             if let rustgis_map::Projection::Custom(code) = &m.projection
                 && let Err(e) = rustgis_map::projection::Projector::new(code)
             {
                 log::warn!("{}: {e}; using Web Mercator", m.name);
+                done.projection_lost.add(1, &m.name);
+                done.bookmarks_kept |= !m.bookmarks.is_empty();
                 m.projection = rustgis_map::Projection::WebMercator;
                 // The camera is in the lost projection's units: start from the whole world.
                 m.camera = rustgis_map::Camera::world();
@@ -851,7 +1070,24 @@ impl Project {
                 }
             }
             // Tile layers with an address that can't be fetched (a hand edit) are dropped.
-            m.tiles.retain_mut(|t| t.repair().map_err(|e| log::warn!("{}: {e}", m.name)).is_ok());
+            let mut kept_tiles = 0usize;
+            m.tiles.retain_mut(|t| match t.repair_counted() {
+                Ok(repairs) => {
+                    let converted = opened && crate::cmd::tiles::cog_tile_is_raster(t);
+                    if converted || kept_tiles < rustgis_map::tiles::MAX_TILE_LAYERS {
+                        done.tile(repairs, &t.name);
+                    }
+                    if !converted {
+                        kept_tiles += 1;
+                    }
+                    true
+                }
+                Err(e) => {
+                    log::warn!("{}: {e}", m.name);
+                    done.tiles_removed.add(1, &t.name);
+                    false
+                }
+            });
             // GeoTIFFs read in place are raster layers (a project from before saved tile layers),
             // so they don't count toward the tile layers kept. As the project opens only: a tile
             // layer added this session stays one until the project is opened again.
@@ -874,6 +1110,7 @@ impl Project {
                     }
                 }
             }
+            done.tiles_over_limit.add(m.tiles.len().saturating_sub(rustgis_map::tiles::MAX_TILE_LAYERS), &m.name);
             m.tiles.truncate(rustgis_map::tiles::MAX_TILE_LAYERS);
             #[cfg(not(target_arch = "wasm32"))]
             for t in &mut m.tiles {
@@ -929,6 +1166,8 @@ impl Project {
                 }
                 l.normalize_selection();
                 let fields = l.dataset.fields.len();
+                let extra = l.dataset.features.iter().filter(|f| f.attrs.len() > fields).count();
+                done.values_cut.add(extra, &l.name);
                 for f in &mut l.dataset.features {
                     f.attrs.resize(fields, rustgis_data::Value::Null);
                 }
@@ -936,6 +1175,8 @@ impl Project {
             }
             read_in_place(m);
         }
+        notices.extend(done.notices(&self.name, when));
+        notices
     }
 
     pub fn map(&self) -> &Map {
@@ -1018,11 +1259,12 @@ impl Project {
     pub fn recovery_text_with_report(mut self) -> Result<(String, crate::durable::Report), String> {
         self.omit_pending_imports();
         let unrecorded = self.bound_address_losses(false);
-        let (text, mut report) = crate::durable::output_owned(self, project_text)?;
+        // Refused as a recovery copy, not as a save, and never built past the limit.
+        let (text, mut report) = crate::durable::output_owned(self, |p| {
+            let max = max_bytes();
+            json_within(p, max)?.ok_or_else(|| format!("the project is too large to keep a recovery copy (maximum {})", limit_said(max)))
+        })?;
         report.addresses = report.addresses.saturating_add(u32::try_from(unrecorded).unwrap_or(u32::MAX));
-        if text.len() as u64 > MAX_BYTES {
-            return Err("the project is too large to keep a recovery copy".into());
-        }
         Ok((text, report))
     }
 
@@ -1036,23 +1278,28 @@ impl Project {
 
     /// Reads a project from its JSON text (a browser upload).
     pub fn from_json(text: &str) -> Result<Project, String> {
-        Self::read_json(text, true, None, true)
+        Self::read_json(text, true, None, true, None)
     }
 
     /// Reads imported JSON (including package contents) without restoring a saved file's secrets.
     pub(crate) fn from_import_json(text: &str, dir: Option<&Path>) -> Result<Project, String> {
-        Self::read_json(text, false, dir, true)
+        Self::read_json(text, false, dir, true, None)
+    }
+
+    /// Repairs only the maps the import will retain, so excluded maps produce no notices.
+    pub(crate) fn from_import_maps_json(text: &str, dir: Option<&Path>, limit: usize) -> Result<Project, String> {
+        Self::read_json(text, false, dir, true, Some(limit))
     }
 
     /// Peer census must precede normalization: duplicate ids cannot become proof of a unique
     /// matching slot after the normalizer renumbers or drops them. Saved-text restore is absent.
     pub(crate) fn from_peer_raw(text: &str) -> Result<Project, String> {
-        Self::read_json(text, false, None, false)
+        Self::read_json(text, false, None, false, None)
     }
 
     /// Validates compatibility before typed decoding. Saved files may restore exact fields;
     /// peer input stays unnormalized until its slot census has rejected ambiguous identities.
-    fn read_json(text: &str, restore: bool, dir: Option<&Path>, normalize: bool) -> Result<Project, String> {
+    fn read_json(text: &str, restore: bool, dir: Option<&Path>, normalize: bool, map_limit: Option<usize>) -> Result<Project, String> {
         check_format(text, "project")?;
         let mut p: Project = serde_json::from_str(text).map_err(|e| {
             let msg = e.to_string();
@@ -1077,20 +1324,82 @@ impl Project {
         if let Some(d) = dir.and_then(Path::to_str) {
             p.resolve_paths(d);
         }
-        if normalize {
-            p.normalize_opened();
+        let excluded_maps = map_limit.map_or(0, |limit| p.maps.len().saturating_sub(limit));
+        if let Some(limit) = map_limit {
+            p.maps.truncate(limit);
         }
-        p.label_read_notices = label_losses::notices(text, &p)?;
+        let repair_notices = if normalize { p.normalize_opened() } else { Vec::new() };
+        p.read_notices =
+            label_losses::notices_for_maps(text, &p, map_limit.is_some())?.into_iter().map(|(part, text)| (part, text.into())).collect();
+        p.read_notices.extend(repair_notices);
+        // What `gp.env` refuses, which only a hand-edited file holds, is left out, and said: a system
+        // in degrees or geocentric (its cell size would be read in the wrong units) or one this
+        // version can't project to, and a cell size that isn't above 0.
+        if let Some(g) = p.gp_env.projected.filter(|g| g.crs.is_geographic() || g.crs.is_geocentric() || g.crs.transformer().is_err()) {
+            p.gp_env.projected = None;
+            p.read_notices.push((
+                ReadPart::Items,
+                NoticeText::format(
+                    "the environment's coordinate system {crs} isn't a projected one this version can use, so it was left out",
+                    [("crs", g.crs.label().into())],
+                ),
+            ));
+        }
+        if let Some(g) = p.gp_env.projected.as_mut()
+            && let Some(c) = g.cell_size.filter(|c| !(c.is_finite() && *c > 0.0))
+        {
+            g.cell_size = None;
+            p.read_notices.push((
+                ReadPart::Items,
+                NoticeText::format(
+                    "the environment's cell size {size} isn't above 0, so it was left out",
+                    [("size", c.to_string().into())],
+                ),
+            ));
+        }
+        if excluded_maps > 0 {
+            p.read_notices.push((
+                ReadPart::Maps,
+                NoticeText::format("{n} map(s) beyond the import limit left out", [("n", excluded_maps.to_string().into())]),
+            ));
+        }
         Ok(p)
     }
 
-    /// Opens a project file (a regular file within [`MAX_BYTES`]; see `read_file`), resolving
+    /// Opens a project file (a regular file within [`max_bytes`]; see `read_file`), resolving
     /// its relative paths against its folder.
     pub fn load(path: &Path) -> Result<Project, String> {
-        let bytes = read_file(path, MAX_BYTES)?;
+        let max = max_bytes();
+        // Past the limit: said with its size and the limit here, before anything is read.
+        if let Ok(meta) = std::fs::metadata(path)
+            && meta.is_file()
+            && meta.len() > max
+        {
+            // A computer with more memory opens it, up to the ceiling; past that none does.
+            // The memory a 64-bit build needs to open it (whole GiB, rounded up).
+            let needed = memory_for(meta.len()).div_ceil(1 << 30);
+            let more = if meta.len() > BYTES_CEILING {
+                format!(": no computer opens a project past {} MiB", BYTES_CEILING >> 20)
+            } else if meta.len() > ceiling() {
+                // Only a 32-bit build stops below the ceiling.
+                format!(": a 64-bit RustGIS on a computer with at least {needed} GiB of memory opens it")
+            } else if rustgis_data::memory::physical().is_some() {
+                format!(": a computer with at least {needed} GiB of memory opens it")
+            } else {
+                String::new()
+            };
+            return Err(format!(
+                "{} is {} MiB, more than a project can be (maximum {}){more}",
+                path.display(),
+                // Rounded up: a file a byte past 512 MiB isn't "512 MiB".
+                meta.len().div_ceil(1 << 20),
+                limit_said(max)
+            ));
+        }
+        let bytes = read_file(path, max)?;
         let text = String::from_utf8(bytes).map_err(|_| format!("{} isn't a RustGIS project", path.display()))?;
         let dir = std::path::absolute(path).ok().and_then(|p| p.parent().map(Path::to_path_buf));
-        Self::read_json(&text, true, dir.as_deref(), true)
+        Self::read_json(&text, true, dir.as_deref(), true, None)
     }
 }
 
@@ -1154,15 +1463,376 @@ fn empty_map() -> &'static Map {
 /// Most reports, presentations and notebooks a project file may hold.
 pub const MAX_ITEMS: usize = 1000;
 
+/// The part of a project a read notice is about, so an import says only what it takes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ReadPart {
+    AreaExpressions,
+    Labels,
+    Diagrams,
+    /// Diagrams that won't show for their layer's aggregation or extrusion (#1596).
+    HiddenDiagrams,
+    Layouts,
+    /// The maps' groups, projections, tile layers and attribute values.
+    Maps,
+    /// The project's other lists: reports, presentations, notebooks, models, ramps and the like.
+    Items,
+}
+
+/// Every part: a whole project opened.
+pub(crate) const ALL_PARTS: [ReadPart; 7] = [
+    ReadPart::AreaExpressions,
+    ReadPart::Labels,
+    ReadPart::Diagrams,
+    ReadPart::HiddenDiagrams,
+    ReadPart::Layouts,
+    ReadPart::Maps,
+    ReadPart::Items,
+];
+
+/// The most layouts a project keeps (`layout.*` commands refuse to make more).
+pub(crate) const MAX_LAYOUTS: usize = 200;
+
+/// The layouts named in a notice, the first few of them.
+/// A name cut to 100 characters for a notice, so a long one can't crowd out the count (a
+/// notice too long is withheld whole).
+pub(crate) fn short_name(name: &str) -> String {
+    match name.char_indices().nth(100) {
+        Some((i, _)) => format!("{}…", name.get(..i).unwrap_or_default()),
+        None => name.to_string(),
+    }
+}
+
+fn layout_names(
+    repairs: &[(String, rustgis_map::layout::LayoutRepairs)],
+    of: impl Fn(&rustgis_map::layout::LayoutRepairs) -> usize,
+) -> String {
+    let names: Vec<&str> = repairs.iter().filter(|(_, r)| of(r) > 0).map(|(n, _)| n.as_str()).collect();
+    quoted_names(names.len(), names.iter().take(3).copied())
+}
+
+/// The first three of `total` names, quoted and shortened, then how many more there are.
+fn quoted_names<'a>(total: usize, first: impl Iterator<Item = &'a str>) -> String {
+    let mut text = first.take(3).map(|n| format!("\"{}\"", short_name(n))).collect::<Vec<_>>().join(", ");
+    if total > 3 {
+        text.push_str(&format!(" and {} more", total - 3));
+    }
+    text
+}
+
+/// A count of one kind of repair and where it was made: the first few names (of maps, layers or
+/// items) and how many there were in all.
+#[derive(Default)]
+struct Tally {
+    count: usize,
+    names: Vec<String>,
+    places: usize,
+    kinds: Vec<(usize, &'static str)>,
+}
+
+impl Tally {
+    /// Adds `n` repairs made in `place`; nothing when `n` is 0.
+    fn add(&mut self, n: usize, place: &str) {
+        if n == 0 {
+            return;
+        }
+        self.count = self.count.saturating_add(n);
+        self.places += 1;
+        if self.names.len() < 3 {
+            self.names.push(place.to_string());
+        }
+    }
+
+    /// Adds `n` repairs of the kind of item `what` (as "notebook(s)"); nothing when `n` is 0.
+    /// Every kind is named: a tally has a few kinds at most.
+    fn add_kind(&mut self, n: usize, what: &'static str) {
+        if n > 0 {
+            self.count = self.count.saturating_add(n);
+            self.places += 1;
+            self.kinds.push((n, what));
+        }
+    }
+
+    /// Literal project names and a translatable count of places beyond the first three.
+    fn places(&self) -> NoticeText {
+        let names: NoticeText = self.names.iter().map(|name| format!("\"{}\"", short_name(name))).collect::<Vec<_>>().join(", ").into();
+        if self.places > 3 {
+            NoticeText::format("{names} and {n} more", [("names", names), ("n", (self.places - 3).to_string().into())])
+        } else {
+            names
+        }
+    }
+
+    /// A counted list whose item-kind labels are translated independently of saved names.
+    fn kinds(&self) -> NoticeText {
+        NoticeText::list(
+            self.kinds
+                .iter()
+                .map(|(n, kind)| NoticeText::format("{n} {kind}", [("n", n.to_string().into()), ("kind", NoticeText::term(kind))])),
+        )
+    }
+}
+
+/// The same content notices for a standalone import, published only after it succeeds.
+pub(crate) fn content_notices(repairs: rustgis_map::content::ContentRepairs, name: &str) -> Vec<NoticeText> {
+    let mut done = Repaired::default();
+    done.content(repairs, name);
+    done.notices(name, "while importing the item").into_iter().map(|(_, n)| n).collect()
+}
+
+/// Successful tile additions use the same counted, redacted notices as project reads.
+pub(crate) fn tile_notices(repairs: rustgis_map::tiles::TileRepairs, name: &str) -> Vec<NoticeText> {
+    let mut done = Repaired::default();
+    done.tile(repairs, name);
+    done.notices(name, "while checking the tile layer").into_iter().map(|(_, n)| n).collect()
+}
+
+/// What [`Project::repair`] removed, cut or renamed outside the layouts, for its notices.
+#[derive(Default)]
+struct Repaired {
+    over_limit: Tally,
+    models_removed: Tally,
+    renamed: Tally,
+    ramps_suffixed: Tally,
+    groups_removed: Tally,
+    members_removed: Tally,
+    group_names_cut: Tally,
+    group_settings: Tally,
+    group_parents: Tally,
+    content_text: Tally,
+    content_filters: Tally,
+    content_entries: Tally,
+    content_images: Tally,
+    content_settings: Tally,
+    projection_lost: Tally,
+    /// A map whose projection was lost has bookmarks, which stay in that projection's units.
+    bookmarks_kept: bool,
+    tile_addresses: Tally,
+    tile_entries: Tally,
+    tile_styles: Tally,
+    tile_text: Tally,
+    tile_settings: Tally,
+    tiles_removed: Tally,
+    tiles_over_limit: Tally,
+    values_cut: Tally,
+}
+
+impl Repaired {
+    /// Groups successful tile repairs by kind without keeping any saved addresses.
+    fn tile(&mut self, repairs: rustgis_map::tiles::TileRepairs, name: &str) {
+        self.tile_addresses.add(repairs.addresses, name);
+        self.tile_entries.add(repairs.entries, name);
+        self.tile_styles.add(repairs.styles, name);
+        self.tile_text.add(repairs.text, name);
+        self.tile_settings.add(repairs.settings, name);
+    }
+
+    /// Keeps loss kinds separate while aggregating affected item names across their clamps.
+    fn content(&mut self, repairs: rustgis_map::content::ContentRepairs, name: &str) {
+        self.content_text.add(repairs.text, name);
+        self.content_filters.add(repairs.filters, name);
+        self.content_entries.add(repairs.entries, name);
+        self.content_images.add(repairs.images, name);
+        self.content_settings.add(repairs.settings, name);
+    }
+
+    /// One deferred notice per kind: only trusted templates and kind labels are translated.
+    fn notices(&self, name: &str, when: &'static str) -> Vec<(ReadPart, NoticeText)> {
+        let name = short_name(name);
+        let mut notices = Vec::new();
+        let mut say = |part, tally: &Tally, text: NoticeText| {
+            if tally.count > 0 {
+                notices.push((part, NoticeText::format("{name}: {message}", [("name", name.clone().into()), ("message", text)])));
+            }
+        };
+        let message = |key, t: &Tally, extra: Vec<(&'static str, NoticeText)>| {
+            let mut args = vec![("n", t.count.to_string().into()), ("places", t.places()), ("when", NoticeText::term(when))];
+            args.extend(extra);
+            NoticeText::format(key, args)
+        };
+        let t = &self.over_limit;
+        say(
+            ReadPart::Items,
+            t,
+            message(
+                "{kinds} beyond the {limit} of each a project holds removed {when}",
+                t,
+                vec![("kinds", t.kinds()), ("limit", MAX_ITEMS.to_string().into())],
+            ),
+        );
+        for (t, key) in [
+            (&self.content_text, "{n} report, presentation or notebook text field(s) shortened to supported limits {when} ({places})"),
+            (&self.content_filters, "{n} report filter(s) shortened to 2000 characters; included records may change {when} ({places})"),
+            (
+                &self.content_entries,
+                "{n} report field(s), group(s), statistic(s), section(s), presentation page(s) or notebook cell(s) beyond supported limits removed {when} ({places})",
+            ),
+            (&self.content_images, "{n} presentation picture(s) or video poster(s) beyond the size limit removed {when} ({places})"),
+            (
+                &self.content_settings,
+                "{n} report or presentation page-size, timing or map-view setting(s) brought into supported ranges {when} ({places})",
+            ),
+        ] {
+            say(ReadPart::Items, t, message(key, t, vec![]));
+        }
+        let t = &self.models_removed;
+        say(ReadPart::Items, t, message("{n} deep-learning model(s) this version can't use removed {when} ({places})", t, vec![]));
+        let t = &self.renamed;
+        say(ReadPart::Items, t, message("names used more than once renamed with a number {when}: {kinds}", t, vec![("kinds", t.kinds())]));
+        let t = &self.ramps_suffixed;
+        say(
+            ReadPart::Items,
+            t,
+            message("{n} color ramp(s) named like a built-in ramp renamed with \" (custom)\" {when} ({places})", t, vec![]),
+        );
+        let t = &self.groups_removed;
+        say(
+            ReadPart::Maps,
+            t,
+            message(
+                "{n} layer group(s) with no id, a repeated id, an over-long address or beyond the limit removed {when} (in {places})",
+                t,
+                vec![],
+            ),
+        );
+        let t = &self.members_removed;
+        say(
+            ReadPart::Maps,
+            t,
+            message(
+                "{n} group member(s) for a missing layer, a layer already in another group or beyond the limit removed {when} (in {places})",
+                t,
+                vec![],
+            ),
+        );
+        let t = &self.group_names_cut;
+        say(ReadPart::Maps, t, message("{n} group name(s) cut to 200 characters {when} (in {places})", t, vec![]));
+        let t = &self.group_settings;
+        say(
+            ReadPart::Maps,
+            t,
+            message(
+                "{n} group transparency or scale-range setting(s) replaced or removed to fit supported values {when} (in {places})",
+                t,
+                vec![],
+            ),
+        );
+        let t = &self.group_parents;
+        say(ReadPart::Maps, t, message("{n} group(s) with an invalid parent moved to the top level {when} (in {places})", t, vec![]));
+        let t = &self.projection_lost;
+        let bookmarks = if self.bookmarks_kept {
+            NoticeText::term("; their bookmarks are still in the old projection's units")
+        } else {
+            String::new().into()
+        };
+        say(
+            ReadPart::Maps,
+            t,
+            message(
+                "{n} map(s) with a projection this version can't use drawn in Web Mercator from the whole world {when} ({places}){bookmarks}",
+                t,
+                vec![("bookmarks", bookmarks)],
+            ),
+        );
+        for (t, key) in [
+            (&self.tile_addresses, "{n} invalid, repeated or excess dated tile address(es) removed {when} ({places})"),
+            (&self.tile_entries, "{n} invalid or excess tile layer-name or subdomain entry(ies) removed {when} ({places})"),
+            (&self.tile_styles, "{n} unreadable tile style definition(s) removed {when}; the tiles keep their colours ({places})"),
+            (&self.tile_text, "{n} tile address, name, attribution or identifier field(s) shortened or replaced {when} ({places})"),
+            (&self.tile_settings, "{n} tile coverage or numeric setting(s) removed or brought into range {when} ({places})"),
+        ] {
+            say(ReadPart::Maps, t, message(key, t, vec![]));
+        }
+        let t = &self.tiles_removed;
+        say(ReadPart::Maps, t, message("{n} tile layer(s) with an address that can't be used removed {when} ({places})", t, vec![]));
+        let t = &self.tiles_over_limit;
+        say(
+            ReadPart::Maps,
+            t,
+            message(
+                "{n} tile layer(s) beyond the {limit} a map holds removed {when} (in {places})",
+                t,
+                vec![("limit", rustgis_map::tiles::MAX_TILE_LAYERS.to_string().into())],
+            ),
+        );
+        let t = &self.values_cut;
+        say(
+            ReadPart::Maps,
+            t,
+            message(
+                "{n} feature(s) with more attribute values than their layer has fields lost the extra values {when} (in {places})",
+                t,
+                vec![],
+            ),
+        );
+        notices
+    }
+}
+
+/// One notice per kind of change [`Project::repair`] made to the layouts of a project read from
+/// its file: layouts beyond the limit, elements brought into range or removed, page settings.
+pub(crate) fn layout_notices(
+    name: &str,
+    when: &str,
+    dropped: usize,
+    repairs: &[(String, rustgis_map::layout::LayoutRepairs)],
+) -> Vec<String> {
+    let name = short_name(name);
+    let mut notices = Vec::new();
+    if dropped > 0 {
+        notices.push(format!("{name}: {dropped} layout(s) beyond the {MAX_LAYOUTS} a project holds removed {when}"));
+    }
+    let total =
+        |of: fn(&rustgis_map::layout::LayoutRepairs) -> usize| repairs.iter().map(|(_, r)| of(r)).fold(0usize, usize::saturating_add);
+    let adjusted = total(|r| r.elements_adjusted);
+    if adjusted > 0 {
+        notices.push(format!(
+            "{name}: {adjusted} layout element(s) with a value out of range, a repeated id, an over-long name or a missing map frame reference repaired {when} (in {})",
+            layout_names(repairs, |r| r.elements_adjusted)
+        ));
+    }
+    let cut = total(|r| r.elements_cut);
+    if cut > 0 {
+        notices.push(format!(
+            "{name}: {cut} layout element(s) with a name, text, polygon points, legend exclusions or legend labels cut to their limits {when} (in {})",
+            layout_names(repairs, |r| r.elements_cut)
+        ));
+    }
+    let removed = total(|r| r.elements_removed);
+    if removed > 0 {
+        notices.push(format!(
+            "{name}: {removed} layout element(s) beyond the 500 a layout holds or tied to a missing map frame removed {when} (in {})",
+            layout_names(repairs, |r| r.elements_removed)
+        ));
+    }
+    let pages = total(|r| r.page_adjusted);
+    if pages > 0 {
+        notices.push(format!(
+            "{name}: the page size, guides or map series margin of {pages} layout(s) adjusted {when} (in {})",
+            layout_names(repairs, |r| r.page_adjusted)
+        ));
+    }
+    let series = total(|r| r.series_removed);
+    if series > 0 {
+        notices.push(format!(
+            "{name}: the map series of {series} layout(s) removed, its map frame missing, {when} (in {})",
+            layout_names(repairs, |r| r.series_removed)
+        ));
+    }
+    notices
+}
+
 /// Renames names repeated (ignoring case) after their first use: "Tour", "Tour 2", …. Each base
 /// name remembers the last number it gave, so many repeats cost no more than a few each.
-fn unique_names<'a>(names: impl Iterator<Item = &'a mut String>) {
+/// Returns how many it renamed.
+fn unique_names<'a>(names: impl Iterator<Item = &'a mut String>) -> usize {
     let mut seen = std::collections::HashSet::new();
     let mut next: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    let mut renamed = 0;
     for name in names {
         if seen.insert(name.to_ascii_lowercase()) {
             continue;
         }
+        renamed += 1;
         let base = name.clone();
         let k = next.entry(base.to_ascii_lowercase()).or_insert(1);
         loop {
@@ -1173,16 +1843,18 @@ fn unique_names<'a>(names: impl Iterator<Item = &'a mut String>) {
             }
         }
     }
+    renamed
 }
 
 // Durable ownership is classified here so private fields cannot disappear from the inventory.
 use crate::durable::{Durable, FieldMut, Leaf, Owner, Prepare};
+use crate::notice_text::NoticeText;
 
 impl Durable for Project {
     /// Offers classified whole fields once, before any live mutation.
     fn prepare(&self, p: &mut Prepare<'_>) {
         let Self {
-            label_read_notices: _,
+            read_notices: _,
             format: _,
             name: _,
             maps,
@@ -1271,6 +1943,7 @@ impl Durable for Table {
         if let Some(v) = provenance {
             p.string(Leaf::Table, v, true, rustgis_map::paths::is_local(v));
         }
+        p.count_numbers(dataset);
     }
 
     /// Resolves a prepared location through owned fields, without allocation or policy.
@@ -1353,11 +2026,73 @@ impl Durable for ModelGraph {
 
 /// Enforces the opening bound inside the formatter, before any destination is replaced.
 fn project_text(p: &Project) -> Result<String, String> {
-    let text = serde_json::to_string(p).map_err(|e| e.to_string())?;
-    if text.len() as u64 > MAX_BYTES {
-        return Err(format!("the project is too large to save (maximum {} MiB)", MAX_BYTES >> 20));
+    let max = max_bytes();
+    json_within(p, max)?.ok_or_else(|| format!("the project is too large to save (maximum {})", limit_said(max)))
+}
+
+#[cfg(test)]
+mod limit_tests {
+    use super::*;
+
+    const GIB: u64 = 1 << 30;
+
+    /// A quarter of the memory, at 5 bytes a byte of project: a twentieth of it, from 512 MiB to
+    /// 4 GiB; 512 MiB where the memory isn't known (the browser).
+    #[test]
+    fn the_project_limit_follows_the_memory() {
+        assert_eq!(max_bytes_for(None), BYTES_FLOOR);
+        assert_eq!(max_bytes_for(Some(8 * GIB)), BYTES_FLOOR, "never below the floor");
+        // Within this build's ceiling: a 32-bit build stays at the floor.
+        let within = |v: u64| v.clamp(BYTES_FLOOR, ceiling());
+        assert_eq!(max_bytes_for(Some(16 * GIB)), within(16 * GIB / 20));
+        assert_eq!(max_bytes_for(Some(64 * GIB)), within(64 * GIB / 20));
+        assert_eq!(max_bytes_for(Some(80 * GIB)), ceiling());
+        assert_eq!(max_bytes_for(Some(1024 * GIB)), ceiling(), "never above the ceiling");
+        assert_eq!(max_bytes_for(Some(u64::MAX)), ceiling(), "no overflow");
+        // The 659 MiB project of #1615 opens on a computer sold as 16 GB, which reports less (in a
+        // 64-bit build, as the app is).
+        if usize::BITS >= 64 {
+            assert!(max_bytes_for(Some(15 * GIB)) > 659 << 20);
+            assert_eq!(ceiling(), BYTES_CEILING);
+        } else {
+            assert_eq!(ceiling(), BYTES_FLOOR);
+        }
+        let max = max_bytes();
+        assert!((BYTES_FLOOR..=BYTES_CEILING).contains(&max), "{max}");
+        // The memory named for a refused file is enough to open it, and not much more.
+        let size: u64 = 659 << 20;
+        let needed = memory_for(size).div_ceil(GIB) * GIB;
+        if usize::BITS >= 64 {
+            assert!(max_bytes_for(Some(needed)) >= size && max_bytes_for(Some(needed - GIB)) < size);
+        }
+        assert_eq!(needed / GIB, 13);
     }
-    Ok(text)
+
+    /// Writing stops at the limit: what comes after it is never serialized.
+    #[test]
+    fn serializing_stops_at_the_limit() {
+        struct Probe<'a>(&'a std::cell::Cell<bool>);
+        impl Serialize for Probe<'_> {
+            fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+                self.0.set(true);
+                s.serialize_unit()
+            }
+        }
+        let visited = std::cell::Cell::new(false);
+        let v = ("x".repeat(100), Probe(&visited));
+        assert_eq!(json_within(&v, 50).ok(), Some(None));
+        assert!(!visited.get(), "the value after the limit was serialized");
+        assert!(json_within(&v, 1000).ok().flatten().is_some() && visited.get());
+    }
+
+    /// The text stops at the limit: whole within it, none past it, never built past it.
+    #[test]
+    fn json_is_never_built_past_the_limit() {
+        let v = serde_json::json!({"a": "x".repeat(100)});
+        let whole = serde_json::to_string(&v).unwrap_or_default();
+        assert_eq!(json_within(&v, whole.len() as u64).ok().flatten(), Some(whole.clone()));
+        assert_eq!(json_within(&v, whole.len() as u64 - 1).ok(), Some(None));
+    }
 }
 
 #[cfg(test)]
