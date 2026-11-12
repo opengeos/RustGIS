@@ -643,12 +643,6 @@ fn now(ui: &Ui) -> f64 {
     ui.input(|i| i.time)
 }
 
-/// Puts a handler on the desktop device for the errors nothing else catches (#1777). wgpu's own
-/// closes the app on any of them, a graphics card running out of memory (2 GB at 2560 × 1440)
-/// too; this one logs them, and notes running out in `out_of_memory`, after which the map
-/// leaves the graphics card ([`leave_gpu_if_out_of_memory`]). In the browser none is put on:
-/// WebGPU already only logs what nothing catches, and wgpu would turn its rare internal errors
-/// into a crash once a handler is there.
 /// Puts [`handle_gpu_errors`] on the device once there is one, from the app's frame (the start
 /// page and backstage included, so egui's own uploads are covered from the first frame).
 pub(crate) fn handle_gpu_errors_once(app: &mut RustGisApp, ctx: &egui::Context) {
@@ -661,6 +655,13 @@ pub(crate) fn handle_gpu_errors_once(app: &mut RustGisApp, ctx: &egui::Context) 
     }
 }
 
+/// Puts a handler on the desktop device for the errors nothing else catches (#1777). wgpu's own
+/// closes the app on any of them, a graphics card running out of memory (2 GB at 2560 × 1440)
+/// too; this one logs them, and notes running out in `out_of_memory`, after which the map
+/// leaves the graphics card ([`leave_gpu_if_out_of_memory`]). In the browser none is put on:
+/// WebGPU already only logs what nothing catches, and wgpu would turn its rare internal errors
+/// into a crash once a handler is there.
+///
 /// A frame is asked of `ctx` for each error, so the map leaves the card even when nothing else
 /// would draw again (an error in the last frame before the window goes idle).
 #[cfg_attr(target_arch = "wasm32", allow(unused_variables))]
@@ -698,7 +699,7 @@ impl GpuErrors {
         if n < MAX_GPU_ERRORS_LOGGED {
             log::error!("graphics card error: {e}");
         }
-        if n + 1 == MAX_GPU_ERRORS_LOGGED {
+        if n.saturating_add(1) == MAX_GPU_ERRORS_LOGGED {
             log::error!("further graphics card errors are not logged");
         }
         n < MAX_GPU_ERRORS_LOGGED
@@ -711,7 +712,11 @@ impl GpuErrors {
 /// Another error the card reports is said once a session, as it may leave the map drawn wrong.
 pub(crate) fn leave_gpu_if_out_of_memory(app: &mut RustGisApp) {
     use std::sync::atomic::Ordering;
-    if app.map.gpu_errors.other.swap(false, Ordering::SeqCst) && !app.map.gpu_error_said {
+    let ran_out = app.map.gpu_errors.out_of_memory.swap(false, Ordering::SeqCst);
+    // Errors with running out of memory follow from it (what couldn't be made, used): only it
+    // is said, and the notice for another error is kept for one of its own.
+    let other = app.map.gpu_errors.other.swap(false, Ordering::SeqCst) && !ran_out;
+    if other && !app.map.gpu_error_said {
         app.map.gpu_error_said = true;
         // (Clicking GPU helps only with the map on the GPU; otherwise it's egui's own drawing.)
         let text = if app.map.gpu_enabled {
@@ -723,7 +728,7 @@ pub(crate) fn leave_gpu_if_out_of_memory(app: &mut RustGisApp) {
         };
         app.session.notify(text, true);
     }
-    if !app.map.gpu_errors.out_of_memory.swap(false, Ordering::SeqCst) || !app.map.gpu_enabled {
+    if !ran_out || !app.map.gpu_enabled {
         return;
     }
     app.map.gpu_enabled = false;
@@ -5057,6 +5062,15 @@ mod tests {
         leave_gpu_if_out_of_memory(&mut app);
         assert!(!app.map.gpu_enabled);
         assert_eq!(app.session.notices.len(), before + 2);
+        // Running out with errors that follow from it, in one frame: only running out is said,
+        // and the notice for another error is kept.
+        app.run("ui.map.gpu", serde_json::json!({"on": true, "remember": false})).unwrap();
+        ran_out(&app);
+        app.map.gpu_errors.note(&invalid());
+        leave_gpu_if_out_of_memory(&mut app);
+        assert!(!app.map.gpu_enabled && !app.map.gpu_error_said);
+        assert_eq!(app.session.notices.len(), before + 3);
+        assert!(format!("{:?}", app.session.notices.last().unwrap()).contains("ran out of memory"));
         // Another error is said once a session, the map left as it is.
         app.map.gpu_enabled = true;
         for _ in 0..2 {
@@ -5064,7 +5078,7 @@ mod tests {
             leave_gpu_if_out_of_memory(&mut app);
         }
         assert!(app.map.gpu_enabled);
-        assert_eq!(app.session.notices.len(), before + 3);
+        assert_eq!(app.session.notices.len(), before + 4);
         assert!(format!("{:?}", app.session.notices.last().unwrap()).contains("Clicking GPU"));
         // With the map on the CPU, the notice doesn't point at the GPU switch.
         let mut cpu = RustGisApp::with_sample();
