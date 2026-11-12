@@ -1694,13 +1694,20 @@ fn qgis_bookmarks_relations_rotation_and_time_import() {
     file("Owners", &[r#"{"pid":1,"when":"soon"}"#]);
     // Two date fields: QGIS's is the second.
     file("events", &[r#"{"made":"2019-01-01","when":"2020-03-01","note":"a"}"#, r#"{"made":"2019-02-01","when":"2021-05-01","note":"b"}"#]);
+    // A file of two layers, both with a name field: QGIS's layer is one of them (`layerid`).
+    std::fs::write(
+        dir.join("trip.gpx"),
+        r#"<gpx version="1.1" creator="t" xmlns="http://www.topografix.com/GPX/1/1"><wpt lat="47.4" lon="8.5"><name>a</name></wpt><trk><name>b</name><trkseg><trkpt lat="47.4" lon="8.5"/><trkpt lat="47.5" lon="8.6"/></trkseg></trk></gpx>"#,
+    )
+    .unwrap();
     let layer = |id: &str, temporal: &str| {
         format!(
             r#"<maplayer type="vector"><id>{id}_1</id><datasource>./{id}.geojson</datasource><layername>{id}</layername><provider>ogr</provider>{temporal}</maplayer>"#
         )
     };
     let on = |field: &str| format!(r#"<temporal enabled="1" mode="1" startField="{field}" accumulate="0" limitMode="0"/>"#);
-    let layers = [layer("parcels", &on("nope")), layer("owners", ""), layer("events", &on("when")), layer("Owners", &on("when"))].concat();
+    let layers = [layer("parcels", &on("nope")), layer("owners", ""), layer("events", &on("when")), layer("Owners", &on("when"))].concat()
+        + r#"<maplayer type="vector"><id>trip_1</id><datasource>./trip.gpx|layerid=1</datasource><layername>trip</layername><provider>ogr</provider></maplayer>"#;
     let qgs = format!(
         r#"<qgis version="4.2.3">
       <projectCrs><spatialrefsys><authid>EPSG:3857</authid></spatialrefsys></projectCrs>
@@ -1709,6 +1716,7 @@ fn qgis_bookmarks_relations_rotation_and_time_import() {
       <relations>
         <relation id="own" name="Owners of parcel" referencedLayer="parcels_1" referencingLayer="owners_1" strength="Association"><fieldRef referencedField="id" referencingField="pid"/></relation>
         <relation id="gone" name="To nowhere" referencedLayer="parcels_1" referencingLayer="missing_1" strength="Association"><fieldRef referencedField="id" referencingField="pid"/></relation>
+        <relation id="trip" name="Trip names" referencedLayer="trip_1" referencingLayer="owners_1" strength="Association"><fieldRef referencedField="name" referencingField="pid"/></relation>
       </relations>
       <Bookmarks>
         <Bookmark extent="Polygon ((8.4 47.3, 8.6 47.3, 8.6 47.45, 8.4 47.45, 8.4 47.3))" group="" id="a" name="Zurich" rotation="0"><spatialrefsys><authid>EPSG:4326</authid></spatialrefsys></Bookmark>
@@ -1757,6 +1765,12 @@ fn qgis_bookmarks_relations_rotation_and_time_import() {
         ("Owners of parcel", "parcels", "id", "owners (2)", "pid")
     );
     assert!(notes.contains("its relations between layers that didn't come in or haven't the fields (1: To nowhere)"), "{notes}");
+    // Its layer came in as two with the field: not related to either, and said.
+    assert!(
+        notes
+            .contains("its relations to a layer that came in as several tables with the field, any of which it could mean (1: Trip names)"),
+        "{notes}"
+    );
     // Bound, the slider off: every feature shows, as QGIS opens a project.
     let events = m.layer_by_name("events").unwrap();
     assert_eq!(events.time.as_ref().map(|t| t.field.as_str()), Some("when"));
@@ -1826,6 +1840,32 @@ fn qgis_bookmarks_the_map_cannot_show_or_name_are_noted() {
         notes.contains("its bookmarks reaching past the 85° a Web Mercator map shows, fitted to the part it does (1: Polar)"),
         "{notes}"
     );
+}
+
+/// A QGIS style's time settings bind a streamed layer on its date field, though its rows aren't
+/// read until it is drawn; a field it hasn't is still refused, and noted.
+#[test]
+fn qgis_time_settings_bind_a_streamed_layer() {
+    use rustgis_data::{Coord, Dataset, Field, FieldType, Geometry, GeometryType, Value as V};
+    let mut ds = Dataset::new("dated", GeometryType::Point, vec![Field::new("when", FieldType::Text)]);
+    for (i, d) in ["2020-01-01", "2021-06-01"].iter().enumerate() {
+        ds.push(Some(Geometry::Point(Coord::new(8.0 + i as f64, 47.0))), vec![V::Text((*d).into())]);
+    }
+    let path = std::env::temp_dir().join(format!("rustgis-engine-{}-dated.fgb", std::process::id()));
+    rustgis_data::io::write_path(&ds, &path).unwrap();
+    let mut s = Session::new(Project::default());
+    s.run("layer.addData", &json!({"path": path.display().to_string(), "stream": true})).unwrap();
+    assert!(s.map().layers[0].is_streamed() && s.map().layers[0].dataset.features.is_empty());
+    let qml = |field: &str| {
+        format!(r#"<qgis version="4.2.3"><temporal enabled="1" mode="1" startField="{field}" accumulate="0" limitMode="0"/></qgis>"#)
+    };
+    let out = s.run("style.importQgis", &json!({"layer": "dated", "text": qml("when")})).unwrap();
+    assert_eq!(s.map().layers[0].time.as_ref().map(|t| t.field.as_str()), Some("when"), "{out}");
+    s.map_mut().layers[0].time = None;
+    let out = s.run("style.importQgis", &json!({"layer": "dated", "text": qml("nope")})).unwrap();
+    assert!(s.map().layers[0].time.is_none());
+    assert!(out.to_string().contains("its time settings, by the field nope, which the layer hasn't"), "{out}");
+    let _ = std::fs::remove_file(path);
 }
 
 /// Bookmarks in more coordinate systems than an import reads: those past the first 100 systems

@@ -1010,11 +1010,12 @@ fn go_to_view(s: &mut Session, project: &qgis::Project, degrees: Option<Geograph
 }
 
 /// Binds `l` to the time slider on `field` (from a QGIS layer's time settings), when it has the
-/// field; noted when it hasn't. Whether it was bound.
+/// field and its values read as dates; noted when not. A streamed layer's rows aren't read yet,
+/// so it is bound on the field alone, its dates read as its features are. Whether it was bound.
 fn bind_time(l: &mut rustgis_map::Layer, name: &str, field: Option<&str>, report: &mut Report) -> bool {
     let Some(field) = field else { return false };
     match l.dataset.field_index(field).and_then(|i| l.dataset.fields.get(i)) {
-        Some(f) if rustgis_map::time::field_span(&l.dataset, &f.name).is_some() => {
+        Some(f) if l.is_streamed() || rustgis_map::time::field_span(&l.dataset, &f.name).is_some() => {
             l.time = Some(rustgis_map::time::TimeBinding::new(f.name.clone()));
             true
         }
@@ -1033,26 +1034,43 @@ fn bind_time(l: &mut rustgis_map::Layer, name: &str, field: Option<&str>, report
 /// the referenced, parent layer; destination: the referencing, child layer). A relation whose
 /// layers didn't come in, or haven't its fields, is noted; one whose name is taken is numbered.
 fn add_relations(s: &mut Session, project: &qgis::Project, came_in: &[CameIn], report: &mut Report) {
-    // The map layer a project layer came in as, with the field: the first of those added for it
-    // that has it.
-    let find = |s: &Session, id: &str, field: &str| -> Option<(String, String)> {
+    // The map layer a project layer came in as, with the field. A file of several layers (one
+    // QGIS names by `layerid`, which isn't read) adds them all: when more than one has the field,
+    // which the relation means isn't known (`Err`), rather than taking the first.
+    let find = |s: &Session, id: &str, field: &str| -> Option<Result<(String, String), ()>> {
         let index = project.layers.iter().position(|l| l.id == id)?;
         let c = came_in.iter().find(|c| c.index == index)?;
-        c.ids.iter().find_map(|lid| {
-            let l = s.map().layer(*lid).filter(|l| !l.is_raster())?;
-            let f = l.dataset.field_index(field).and_then(|i| l.dataset.fields.get(i))?;
-            Some((l.name.clone(), f.name.clone()))
-        })
+        let mut with: Vec<(String, String)> = c
+            .ids
+            .iter()
+            .filter_map(|lid| {
+                let l = s.map().layer(*lid).filter(|l| !l.is_raster())?;
+                let f = l.dataset.field_index(field).and_then(|i| l.dataset.fields.get(i))?;
+                Some((l.name.clone(), f.name.clone()))
+            })
+            .collect();
+        match with.len() {
+            0 => None,
+            1 => with.pop().map(Ok),
+            _ => Some(Err(())),
+        }
     };
     let mut missing = Vec::new();
+    // Those between layers that came in as several, either of which could be meant.
+    let mut ambiguous = Vec::new();
     let mut names = Names::new(s.map().editing.relationships.iter().map(|r| r.name.as_str()), MAX_RELATION_NAME);
     for r in &project.relations {
-        let (Some((origin, origin_key)), Some((destination, destination_key))) =
-            (find(s, &r.referenced, &r.referenced_field), find(s, &r.referencing, &r.referencing_field))
-        else {
-            missing.push(r.name.as_str());
+        let (origin, destination) = (find(s, &r.referenced, &r.referenced_field), find(s, &r.referencing, &r.referencing_field));
+        let (Some(Ok((origin, origin_key))), Some(Ok((destination, destination_key)))) = (&origin, &destination) else {
+            if matches!(origin, Some(Err(()))) || matches!(destination, Some(Err(()))) {
+                ambiguous.push(r.name.as_str());
+            } else {
+                missing.push(r.name.as_str());
+            }
             continue;
         };
+        let (origin, origin_key, destination, destination_key) =
+            (origin.clone(), origin_key.clone(), destination.clone(), destination_key.clone());
         // A relationship names its layers: their names are unique (a layer added under a taken
         // name, ignoring case, is numbered), so it relates the ones that came in.
         let name = names.take(&r.name);
@@ -1073,6 +1091,15 @@ fn add_relations(s: &mut Session, project: &qgis::Project, came_in: &[CameIn], r
     };
     if !missing.is_empty() {
         report.skipped("", format!("its relations between layers that didn't come in or haven't the fields ({})", listed(&missing)));
+    }
+    if !ambiguous.is_empty() {
+        report.skipped(
+            "",
+            format!(
+                "its relations to a layer that came in as several tables with the field, any of which it could mean ({})",
+                listed(&ambiguous)
+            ),
+        );
     }
     if names.cut > 0 {
         report.approximated("", format!("relation names cut to {MAX_RELATION_NAME} characters ({})", names.cut));

@@ -2587,6 +2587,7 @@ fn bookmarks_relations_and_time_read_as_qgis_saves_them() {
         <Bookmark extent="Polygon (({long}))" group="" id="z" name="Long" rotation="0"/>
         <Bookmark extent="Polygon ((1 2 9, 3 2 9, 3 4 9, 1 4 9, 1 2 9))" group="" id="h" name="High" rotation="0"/>
         <Bookmark extent="Polygon ((1 2, 3 2, 3 4, 1 4, 1 2))" group="" id="n" name=" " rotation="0"/>
+        <Bookmark extent="Polygon ((1 2, 3 2, 3 4, 1 4, 1 2))" group="Lost" id="u" name="Blank" rotation="x"><spatialrefsys><authid></authid></spatialrefsys></Bookmark>
       </Bookmarks>
       <ProjectTimeSettings cumulativeTemporalRange="1" frameRate="5" timeStep="2" timeStepUnit="wk" totalMovieFrames="100">
         <TemporalRange><start>2020-01-01T00:00:00Z</start><end>2020-12-31T00:00:00Z</end></TemporalRange>
@@ -2647,6 +2648,7 @@ fn bookmarks_relations_and_time_read_as_qgis_saves_them() {
         ("", S, "its bookmarks whose place doesn't read (3: Nowhere, Long, High)"),
         ("", S, "its relation half pair's pairs of fields that don't name both (1)"),
         ("", A, "its bookmarks with no name, named Bookmark (1)"),
+        ("", S, "its bookmarks whose coordinate system doesn't read (1: Blank)"),
         ("", A, "its relations with no name, named by their id, else Relation (1: nameless)"),
         ("", A, "its bookmarks whose rotation doesn't read, facing north (1: Askew)"),
         ("lasting_events", A, "its features lasting 3 hours each: each shown at its date alone"),

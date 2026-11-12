@@ -50,6 +50,9 @@ pub fn bookmarks(root: Node, report: &mut Report) -> Vec<ProjectBookmark> {
     let mut groups: Vec<&str> = Vec::new();
     // Those with no name, named "Bookmark".
     let mut unnamed = 0usize;
+    // Those whose own coordinate system is there but doesn't read (no code, no PROJ string):
+    // not placed in the project's, which may not be theirs.
+    let mut unread_crs = Vec::new();
     for b in all.into_iter().take(MAX_BOOKMARKS) {
         let given = b.attribute("name").map(str::trim).filter(|n| !n.is_empty());
         let name = given.unwrap_or("Bookmark");
@@ -57,6 +60,11 @@ pub fn bookmarks(root: Node, report: &mut Report) -> Vec<ProjectBookmark> {
             unread.push(name);
             continue;
         };
+        let crs = crs_of(b);
+        if crs.is_none() && b.descendants().any(|d| d.has_tag_name("spatialrefsys")) {
+            unread_crs.push(name);
+            continue;
+        }
         if let Some(g) = b.attribute("group").map(str::trim).filter(|g| !g.is_empty())
             && !groups.contains(&g)
         {
@@ -70,10 +78,13 @@ pub fn bookmarks(root: Node, report: &mut Report) -> Vec<ProjectBookmark> {
             }),
         };
         unnamed += usize::from(given.is_none());
-        out.push(ProjectBookmark { name: name.to_string(), extent, crs: crs_of(b), rotation });
+        out.push(ProjectBookmark { name: name.to_string(), extent, crs, rotation });
     }
     if unnamed > 0 {
         report.approximated("", format!("its bookmarks with no name, named Bookmark ({unnamed})"));
+    }
+    if !unread_crs.is_empty() {
+        report.skipped("", format!("its bookmarks whose coordinate system doesn't read ({})", listed(&unread_crs)));
     }
     if !unread.is_empty() {
         report.skipped("", format!("its bookmarks whose place doesn't read ({})", listed(&unread)));
@@ -211,7 +222,7 @@ pub fn layer_time(node: Node, layer: &str, report: &mut Report) -> Option<String
             }
         },
         Some("0") => {
-            report.skipped(layer, "its fixed time range: the layer shows at every time");
+            report.skipped(layer, "its fixed time range, which RustGIS's time slider hasn't: not taken");
             return None;
         }
         Some("5") => {
