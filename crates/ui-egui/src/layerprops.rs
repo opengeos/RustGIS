@@ -162,7 +162,8 @@ fn name_key(instance: u64) -> egui::Id {
     egui::Id::unique(("layer_properties_name", instance))
 }
 
-/// The most characters `layer.rename` keeps of a name: the box takes no more, so none are cut.
+/// The most characters `layer.rename` keeps of a name: the box takes no more (a longer paste is
+/// cut to fit, and a note under the box says so), so the command cuts none.
 const NAME_LIMIT: usize = 200;
 
 /// The layer's name, renamed (`layer.rename`) when the box is left (a click elsewhere, another
@@ -185,13 +186,14 @@ fn name_row(app: &mut RustGisApp, ui: &mut Ui, l: &Layer) {
     let mut draft = ui.data(|d| d.get_temp::<String>(key)).filter(|_| fresh).unwrap_or_else(|| l.name.clone());
     // Read before the box, which may take the key for itself.
     let escape = ui.input(|i| i.key_pressed(egui::Key::Escape));
-    ui.horizontal(|ui| {
+    let full = ui.horizontal(|ui| {
         let input_label = ui.label(tl!("Name"));
         let edit = egui::TextEdit::singleline(&mut draft)
             .id_salt(("layer_properties_name", l.instance_id()))
             .char_limit(NAME_LIMIT)
             .desired_width(f32::INFINITY);
         let r = ui.add(edit).labelled_by(input_label.id);
+        let full = draft.chars().count() >= NAME_LIMIT;
         if r.has_focus() {
             ui.data_mut(|d| {
                 d.insert_temp(key, draft);
@@ -209,7 +211,12 @@ fn name_row(app: &mut RustGisApp, ui: &mut Ui, l: &Layer) {
                 run(app, "layer.rename", json!({"layer": l.id, "name": name}));
             }
         }
+        full
     });
+    // The box takes no more, and cuts a longer paste to fit: said, not done unseen.
+    if full.inner {
+        ui.weak(tl!("Names keep up to 200 characters."));
+    }
 }
 
 /// What the Details pane shows of the layer, and the actions on its source the layer's menu has,
@@ -439,7 +446,8 @@ mod tests {
         assert!(!h.get_by_role_and_label(Role::TextInput, "Name").is_focused(), "Escape lets go of the box");
     }
 
-    /// The box takes no more characters than `layer.rename` keeps, so none are cut unsaid.
+    /// The box takes no more characters than `layer.rename` keeps, and says so once it is full, so
+    /// what doesn't fit (a paste) isn't cut unsaid.
     #[test]
     fn the_name_box_takes_no_more_than_the_rename_keeps() {
         let app = with_cities();
@@ -448,11 +456,13 @@ mod tests {
         h.run();
         h.get_by_role_and_label(Role::TextInput, "Name").click();
         h.run();
+        assert!(h.query_by_label("Names keep up to 200 characters.").is_none(), "no note for a short name");
         // "Cities" and as many more: the box stops at the limit.
         h.get_by_role_and_label(Role::TextInput, "Name").type_text(&"x".repeat(super::NAME_LIMIT));
         h.run();
         let typed = h.get_by_role_and_label(Role::TextInput, "Name").value().unwrap_or_default();
         assert_eq!(typed.chars().count(), super::NAME_LIMIT);
+        assert!(h.query_by_label("Names keep up to 200 characters.").is_some(), "the cut is said");
         h.key_press(egui::Key::Enter);
         h.run();
         assert_eq!(h.state().session.map().layer(id).unwrap().name, typed, "nothing cut");

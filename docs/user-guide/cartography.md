@@ -666,7 +666,9 @@ the ribbon, the Details pane and the layer's right-click menu. A tab per topic s
 time:
 
 - **General**: the layer's name (renamed when you leave the box or press Enter; Escape keeps the
-  old one), **Visible**, for a feature layer **Selectable** (whether the Select tool picks its
+  old one; up to 200 characters: a longer paste is cut to fit, and a note under the full box says
+  so),
+  **Visible**, for a feature layer **Selectable** (whether the Select tool picks its
   features on the map), and **Show legend in Layers**. Symbology and labels keep their own panes.
 - **Source**: what the Details pane shows (geometry, feature and field counts, source, coordinate
   system, extent and fields), with the actions on the source that the layer's menu has, where they
