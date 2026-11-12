@@ -10243,6 +10243,50 @@ fn a_viewshed_says_what_it_did_with_its_radius_and_the_seam() {
     }
 }
 
+/// The graticule's type and the measured grid's coordinate system (#1042): a type or system given
+/// shows it; no parameters toggle it as before; a system that isn't projected, can't be read, or
+/// is given for another type is refused, naming it; a project keeps them, and one without them
+/// reads as latitudes and longitudes.
+#[test]
+fn the_graticule_takes_a_type_and_a_measured_grids_system() {
+    use rustgis_map::graticule::GraticuleType;
+    let mut s = world();
+    assert_eq!(s.map().graticule_type, GraticuleType::Degrees);
+    s.run("map.graticule", &json!({"on": false})).unwrap();
+    let r = s.run("map.graticule", &json!({"type": "UTM"})).unwrap();
+    assert_eq!(r, json!({"on": true, "type": "utm", "crs": null}));
+    // No parameters: toggled, the type kept.
+    s.run("map.graticule", &json!({})).unwrap();
+    assert!(!s.map().graticule && s.map().graticule_type == GraticuleType::Utm);
+    let r = s.run("map.graticule", &json!({"type": "measured", "crs": " EPSG:2056 "})).unwrap();
+    assert_eq!(r, json!({"on": true, "type": "measured", "crs": "EPSG:2056"}));
+    for (p, e) in [
+        (json!({"type": "mgrs"}), "type must be one of degrees, measured, utm, not \"mgrs\""),
+        (json!({"type": 3}), "type must be \"degrees\", \"measured\" or \"utm\", not 3"),
+        (json!({"crs": "EPSG:4326"}), "crs: EPSG:4326 is geographic"),
+        (json!({"type": "utm", "crs": "EPSG:2056"}), "crs is the measured grid's; the graticule is \"utm\""),
+        (json!({"crs": 2056}), "crs must be a coordinate system"),
+    ] {
+        let got = s.run("map.graticule", &p).unwrap_err();
+        assert!(got.starts_with(e), "{p}: {got}");
+    }
+    assert!(s.run("map.graticule", &json!({"crs": "EPSG:999999999"})).unwrap_err().starts_with("crs: "));
+    assert!(s.run("map.graticule", &json!({"crs": "x".repeat(5000)})).unwrap_err().starts_with("crs: at most"));
+    // Unchanged by the refusals.
+    assert_eq!((s.map().graticule_type, s.map().graticule_crs.as_deref()), (GraticuleType::Measured, Some("EPSG:2056")));
+    // Saved with the project, and back.
+    let text = serde_json::to_string(&s.project).unwrap();
+    let back = crate::Project::from_json(&text).unwrap();
+    assert_eq!((back.map().graticule_type, back.map().graticule_crs.as_deref()), (GraticuleType::Measured, Some("EPSG:2056")));
+    // An empty system: the map's own again.
+    s.run("map.graticule", &json!({"crs": ""})).unwrap();
+    assert_eq!(s.map().graticule_crs, None);
+    // Latitudes and longitudes aren't written, so a project saved with them is as before.
+    s.run("map.graticule", &json!({"type": "degrees"})).unwrap();
+    let text = serde_json::to_string(&s.project).unwrap();
+    assert!(!text.contains("graticule_type") && !text.contains("graticule_crs"));
+}
+
 #[test]
 fn analysis_workflows_models_scripts_and_raster_functions() {
     let mut s = world();
