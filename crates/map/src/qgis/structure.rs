@@ -48,8 +48,11 @@ pub fn bookmarks(root: Node, report: &mut Report) -> Vec<ProjectBookmark> {
     // Those whose rotation doesn't read, facing north.
     let mut unturned = Vec::new();
     let mut groups: Vec<&str> = Vec::new();
+    // Those with no name, named "Bookmark".
+    let mut unnamed = 0usize;
     for b in all.into_iter().take(MAX_BOOKMARKS) {
-        let name = b.attribute("name").map(str::trim).filter(|n| !n.is_empty()).unwrap_or("Bookmark");
+        let given = b.attribute("name").map(str::trim).filter(|n| !n.is_empty());
+        let name = given.unwrap_or("Bookmark");
         let Some(extent) = b.attribute("extent").and_then(polygon_extent) else {
             unread.push(name);
             continue;
@@ -66,7 +69,11 @@ pub fn bookmarks(root: Node, report: &mut Report) -> Vec<ProjectBookmark> {
                 0.0
             }),
         };
+        unnamed += usize::from(given.is_none());
         out.push(ProjectBookmark { name: name.to_string(), extent, crs: crs_of(b), rotation });
+    }
+    if unnamed > 0 {
+        report.approximated("", format!("its bookmarks with no name, named Bookmark ({unnamed})"));
     }
     if !unread.is_empty() {
         report.skipped("", format!("its bookmarks whose place doesn't read ({})", listed(&unread)));
@@ -95,9 +102,12 @@ pub fn relations(root: Node, report: &mut Report) -> Vec<ProjectRelation> {
     }
     let mut out = Vec::new();
     let mut unread = Vec::new();
+    // Those with no name, named by their id (else "Relation").
+    let mut unnamed = Vec::new();
     for r in all.into_iter().take(MAX_RELATIONS) {
         let id = r.attribute("id").map(str::trim).unwrap_or_default();
-        let name = r.attribute("name").map(str::trim).filter(|n| !n.is_empty()).unwrap_or(id);
+        let given = r.attribute("name").map(str::trim).filter(|n| !n.is_empty());
+        let name = given.unwrap_or(id);
         let name = if name.is_empty() { "Relation" } else { name };
         let attr = |n: Node, k: &str| n.attribute(k).map(str::trim).filter(|v| !v.is_empty()).map(str::to_string);
         let refs: Vec<Node> = r.children().filter(|c| c.has_tag_name("fieldRef")).collect();
@@ -125,10 +135,16 @@ pub fn relations(root: Node, report: &mut Report) -> Vec<ProjectRelation> {
         if r.attribute("strength") == Some("Composition") {
             report.skipped("", format!("its relation {name}'s composition (related features deleted and copied with theirs)"));
         }
+        if given.is_none() {
+            unnamed.push(name);
+        }
         out.push(ProjectRelation { name: name.to_string(), referenced, referenced_field, referencing, referencing_field });
     }
     if !unread.is_empty() {
         report.skipped("", format!("its relations that name no layers or fields ({})", listed(&unread)));
+    }
+    if !unnamed.is_empty() {
+        report.approximated("", format!("its relations with no name, named by their id, else Relation ({})", listed(&unnamed)));
     }
     out
 }

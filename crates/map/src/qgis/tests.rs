@@ -2575,6 +2575,7 @@ fn bookmarks_relations_and_time_read_as_qgis_saves_them() {
         <relation id="own" name="Owners of parcel" referencedLayer="parcels_1" referencingLayer="owners_1" strength="Composition"><fieldRef referencedField="id" referencingField="pid"/></relation>
         <relation id="two" name="two keys" referencedLayer="parcels_1" referencingLayer="owners_1" strength="Association"><fieldRef referencedField="id" referencingField="pid"/><fieldRef referencedField="k2" referencingField="pk2"/></relation>
         <relation id="none" name="" referencedLayer="parcels_1" referencingLayer="owners_1" strength="Association"/>
+        <relation id="nameless" name="" referencedLayer="parcels_1" referencingLayer="owners_1" strength="Association"><fieldRef referencedField="id" referencingField="pid"/></relation>
         <relation id="half" name="half pair" referencedLayer="parcels_1" referencingLayer="owners_1" strength="Association"><fieldRef referencedField="id" referencingField="pid"/><fieldRef referencedField="k2"/></relation>
       </relations>
       <polymorphicRelations><relation id="poly" name="poly" referencedLayerExpression="@layer_name" referencedLayerField="y" referencedLayerIds="a,b" referencingLayer="events" relationStrength="Association"><fieldRef referencedField="id" referencingField="y"/></relation></polymorphicRelations>
@@ -2585,6 +2586,7 @@ fn bookmarks_relations_and_time_read_as_qgis_saves_them() {
         <Bookmark extent="Polygon ((1 2, 3 2, 3 4, 1 4, 1 2))" group="" id="y" name="Askew" rotation="abc"/>
         <Bookmark extent="Polygon (({long}))" group="" id="z" name="Long" rotation="0"/>
         <Bookmark extent="Polygon ((1 2 9, 3 2 9, 3 4 9, 1 4 9, 1 2 9))" group="" id="h" name="High" rotation="0"/>
+        <Bookmark extent="Polygon ((1 2, 3 2, 3 4, 1 4, 1 2))" group="" id="n" name=" " rotation="0"/>
       </Bookmarks>
       <ProjectTimeSettings cumulativeTemporalRange="1" frameRate="5" timeStep="2" timeStepUnit="wk" totalMovieFrames="100">
         <TemporalRange><start>2020-01-01T00:00:00Z</start><end>2020-12-31T00:00:00Z</end></TemporalRange>
@@ -2602,7 +2604,8 @@ fn bookmarks_relations_and_time_read_as_qgis_saves_them() {
         [
             ("Zurich", [8.4, 47.3, 8.6, 47.45], Some("EPSG:4326"), 0.0),
             ("Web", [900000.0, 5900000.0, 1000000.0, 6000000.0], None, 30.0),
-            ("Askew", [1.0, 2.0, 3.0, 4.0], None, 0.0)
+            ("Askew", [1.0, 2.0, 3.0, 4.0], None, 0.0),
+            ("Bookmark", [1.0, 2.0, 3.0, 4.0], None, 0.0)
         ]
     );
     let rels: Vec<(&str, &str, &str, &str, &str)> = p
@@ -2617,6 +2620,7 @@ fn bookmarks_relations_and_time_read_as_qgis_saves_them() {
         [
             ("Owners of parcel", "parcels_1", "id", "owners_1", "pid"),
             ("two keys", "parcels_1", "id", "owners_1", "pid"),
+            ("nameless", "parcels_1", "id", "owners_1", "pid"),
             ("half pair", "parcels_1", "id", "owners_1", "pid")
         ]
     );
@@ -2642,6 +2646,8 @@ fn bookmarks_relations_and_time_read_as_qgis_saves_them() {
         ("", S, "the groups of its bookmarks (1: Swiss)"),
         ("", S, "its bookmarks whose place doesn't read (3: Nowhere, Long, High)"),
         ("", S, "its relation half pair's pairs of fields that don't name both (1)"),
+        ("", A, "its bookmarks with no name, named Bookmark (1)"),
+        ("", A, "its relations with no name, named by their id, else Relation (1: nameless)"),
         ("", A, "its bookmarks whose rotation doesn't read, facing north (1: Askew)"),
         ("lasting_events", A, "its features lasting 3 hours each: each shown at its date alone"),
         ("", S, "its relation Owners of parcel's composition"),
