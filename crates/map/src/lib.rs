@@ -24,6 +24,7 @@ pub mod projection;
 pub mod qgis;
 pub mod raster;
 pub mod report;
+pub mod shadow;
 pub mod slots;
 pub mod source;
 pub use slots::{LayerRole, Slot, SlotAt, SlotPos, TileRole};
@@ -250,6 +251,11 @@ pub struct Layer {
     /// The GeoPackage table this layer's edits save to.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gpkg: Option<source::GpkgEdit>,
+    /// Set for a layer read whole from a Shapefile or GeoJSON file (its `dataset.source`): the
+    /// file and the layer as they were when last in step, to tell edits the file lacks and
+    /// changes made to the file since.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub synced: Option<rustgis_data::sync::Synced>,
     /// The saved connection it was added from (its id, in the app's preferences): a layer whose
     /// source is read again logs in with that connection's login, and a project opened where
     /// the connection or its login is missing asks for one. Empty for a layer that came from no
@@ -484,6 +490,7 @@ impl Layer {
             source: None,
             postgis: None,
             gpkg: None,
+            synced: None,
             connection: String::new(),
             anonymous: false,
             projected: Default::default(),
@@ -2964,6 +2971,7 @@ impl Layer {
             source,
             postgis,
             gpkg,
+            synced: _,
             connection: _,
             anonymous: _,
             instance_id: _,
