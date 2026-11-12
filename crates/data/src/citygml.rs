@@ -1086,6 +1086,13 @@ struct Said {
 }
 
 impl Said {
+    /// The notices that say why a geometry is left out: what can't be read, and links not followed.
+    /// Counted before and after reading a solid's exterior, or following a link of it, to know
+    /// whether its loss is said.
+    fn noticed(&self) -> usize {
+        self.bad_coordinates + self.links + self.not_geometry_links + self.links_past_limit
+    }
+
     /// The notices, and whether the file ends inside a member.
     fn notes(&self, cut: bool) -> Vec<String> {
         let mut out = Vec::new();
@@ -1426,8 +1433,9 @@ enum Unread {
 /// A solid's cavities, kept until its exterior has something read: read alone they would be drawn
 /// as its faces.
 enum Wait<'a, 'i> {
-    /// Waiting, with the `srsDimension` the solid is written in.
-    Cavities(Vec<Node<'a, 'i>>, Option<usize>),
+    /// Waiting, with the `srsDimension` the solid is written in, and whether a notice says why its
+    /// exterior has nothing read yet (a link of it to nothing, or to what can't be read).
+    Cavities(Vec<Node<'a, 'i>>, Option<usize>, bool),
     /// Taken to read with its exterior.
     Taken,
     /// A cavity can't be read: the solid is left out whole, its exterior's other links too.
@@ -1446,15 +1454,16 @@ struct Links<'a, 'i> {
     others: Vec<Pending<'a, 'i>>,
     /// The solids whose exterior has had nothing read yet, each with its cavities: the links in that
     /// exterior name it ([`Pending::wait`]), and the first that reads something reads them. One still
-    /// waiting once the object's links are followed is left out with its cavities: its exterior
-    /// leads nowhere, and its links say so. (In a prototype its links are said, not followed.)
+    /// waiting once the object's links are followed is left out with its cavities, and said: by the
+    /// notices of its links (to nothing, or to what can't be read; in a prototype, where they aren't
+    /// followed), else as a solid that lacks the part it needs.
     waiting: Vec<Wait<'a, 'i>>,
 }
 
 impl<'a, 'i> Links<'a, 'i> {
     /// Keeps a solid's cavities, written in `dim`, until its exterior has something read.
     fn wait(&mut self, cavities: Vec<Node<'a, 'i>>, dim: Option<usize>) -> usize {
-        self.waiting.push(Wait::Cavities(cavities, dim));
+        self.waiting.push(Wait::Cavities(cavities, dim, false));
         self.waiting.len() - 1
     }
 
@@ -1472,12 +1481,25 @@ impl<'a, 'i> Links<'a, 'i> {
     fn take(&mut self, wait: Option<usize>) -> Option<(Vec<Node<'a, 'i>>, Option<usize>)> {
         let w = self.waiting.get_mut(wait?)?;
         match std::mem::replace(w, Wait::Taken) {
-            Wait::Cavities(cavities, dim) => Some((cavities, dim)),
+            Wait::Cavities(cavities, dim, _) => Some((cavities, dim)),
             other => {
                 *w = other;
                 None
             }
         }
+    }
+
+    /// Notes that a notice says why the exterior of the solid `wait` names has nothing read yet.
+    fn explained(&mut self, wait: Option<usize>) {
+        if let Some(Wait::Cavities(_, _, said)) = wait.and_then(|w| self.waiting.get_mut(w)) {
+            *said = true;
+        }
+    }
+
+    /// The solids still waiting that no notice explains: their exterior has nothing read and says
+    /// nothing of why (an empty shell, written in place or linked).
+    fn unexplained(&self) -> usize {
+        self.waiting.iter().filter(|w| matches!(w, Wait::Cavities(_, _, false))).count()
     }
 
     /// Leaves out the solid `wait` names.
@@ -1678,8 +1700,15 @@ impl Reading {
         // Links last, once what the object writes out is read: a link to that adds nothing, and a
         // ground face stays the ground's though a solid links to it first.
         while let Some(link) = links.next() {
+            let (wait, before) = (link.wait, self.said.noticed());
             self.follow(link, targets, &mut parts, &mut links);
+            if self.said.noticed() > before {
+                links.explained(wait);
+            }
         }
+        // A solid whose exterior has nothing read, and no notice says why: it lacks the part it
+        // needs, and is left out with its cavities.
+        self.said.bad_coordinates += links.unexplained();
         self.counts.addresses += usize::from(address);
         let at_row = self.built.len();
         let made = object_rows(parts, at_row, &mut self.counts, &mut self.budget);
@@ -2346,7 +2375,7 @@ impl<'a, 'i> Walk<'_, 'a, 'i> {
                 let outer = self.wait;
                 let own = (!cavities.is_empty()).then(|| self.links.wait(cavities, self.dim));
                 self.wait = own.or(outer);
-                let (drawn, queued, said) = (self.drawn, self.links.ground.len() + self.links.others.len(), self.said.links);
+                let (drawn, before) = (self.drawn, self.said.noticed());
                 let done = if only_link(&exterior) {
                     self.link(&exterior, true);
                     Some(())
@@ -2359,13 +2388,10 @@ impl<'a, 'i> Walk<'_, 'a, 'i> {
                     if let Some((cavities, _)) = self.links.take(own) {
                         cavities.iter().try_for_each(|cavity| self.member(cavity))?;
                     }
-                } else if own.is_some() && self.links.ground.len() + self.links.others.len() == queued && self.said.links == said {
-                    // Nothing of its exterior read, no link left to follow and none said (an empty
-                    // shell): it lacks the part it needs, and is left out with its cavities, said. One
-                    // whose links are said (a ring's, or any in a prototype, which aren't followed) is
-                    // left out with them, said by those links.
-                    self.links.take(own);
-                    self.said.bad_coordinates += 1;
+                } else if self.said.noticed() > before {
+                    // Nothing read, and a link of it said (a ring's, or any in a prototype, which
+                    // aren't followed): that notice says why the solid is left out.
+                    self.links.explained(own);
                 }
             }
             "CompositeSolid" | "MultiSolid" => self.members(g, &["solidMember"], "solidMembers")?,

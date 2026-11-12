@@ -2133,6 +2133,7 @@ fn cavities_wait_for_the_exterior_to_read_something() {
             r##"<bldg:consistsOfBuildingPart><bldg:BuildingPart gml:id="part"><bldg:lod2MultiSurface><gml:MultiSurface>
             <gml:surfaceMember>{}</gml:surfaceMember><gml:surfaceMember>{}</gml:surfaceMember>
             <gml:surfaceMember><gml:CompositeSurface gml:id="found"><gml:surfaceMember xlink:href="#p"/></gml:CompositeSurface></gml:surfaceMember>{nowhere}
+            <gml:surfaceMember><gml:CompositeSurface gml:id="empty"/></gml:surfaceMember>
             </gml:MultiSurface></bldg:lod2MultiSurface></bldg:BuildingPart></bldg:consistsOfBuildingPart>"##,
             polygon("p", &square(0.0, 0.0, 10.0, 0.0)),
             polygon("q", "0 0 0 10 0 0 10 0 5 0 0 5 0 0 0")
@@ -2188,9 +2189,18 @@ fn cavities_wait_for_the_exterior_to_read_something() {
     let out = model(ringless, "");
     left_out(&out, "a face given by a ring link");
     links_said(&out, "a face given by a ring link");
-    let out = model("<gml:exterior/>", "");
-    left_out(&out, "an empty exterior");
-    assert!(says(&out, "1 geometries of city objects have coordinates that can't be read"), "{:?}", messages_of(&out));
+    // An empty shell, written in place, given by a link, or reached through a surface's link: no
+    // notice says why nothing is read, so the solid is said as lacking the part it needs.
+    for (exterior, case) in [
+        ("<gml:exterior/>".to_string(), "an empty exterior"),
+        (r##"<gml:exterior xlink:href="#empty"/>"##.to_string(), "a linked empty shell"),
+        (in_place(&["empty"]), "a surface linking an empty shell"),
+    ] {
+        let out = model(&exterior, "");
+        left_out(&out, case);
+        assert!(says(&out, "1 geometries of city objects have coordinates that can't be read"), "{case}: {:?}", messages_of(&out));
+        clean(&out, case);
+    }
 
     // Links that are found read the cavity, once their faces are: through a composite of links too,
     // and with the shell given by a link; nothing is said.
