@@ -10262,7 +10262,7 @@ fn the_graticule_takes_a_type_and_a_measured_grids_system() {
     assert_eq!(r, json!({"on": true, "type": "measured", "crs": "EPSG:2056"}));
     for (p, e) in [
         (json!({"type": "mgrs"}), "type must be one of degrees, measured, utm, not \"mgrs\""),
-        (json!({"type": 3}), "type must be \"degrees\", \"measured\" or \"utm\", not 3"),
+        (json!({"type": 3}), "type must be one of \"degrees\", \"measured\", \"utm\", not 3"),
         (json!({"crs": "EPSG:4326"}), "crs: EPSG:4326 is geographic"),
         (json!({"type": "utm", "crs": "EPSG:2056"}), "crs is the measured grid's; the graticule is \"utm\""),
         (json!({"crs": 2056}), "crs must be a coordinate system"),
@@ -10278,6 +10278,16 @@ fn the_graticule_takes_a_type_and_a_measured_grids_system() {
     let text = serde_json::to_string(&s.project).unwrap();
     let back = crate::Project::from_json(&text).unwrap();
     assert_eq!((back.map().graticule_type, back.map().graticule_crs.as_deref()), (GraticuleType::Measured, Some("EPSG:2056")));
+    // From a file: a system the command would refuse is left out as the project opens, and said;
+    // one it takes stays.
+    let mut v: Value = serde_json::from_str(&text).unwrap();
+    for (crs, kept) in [("EPSG:4326", false), ("not a system", false), ("x".repeat(5000).as_str(), false), ("EPSG:2056", true)] {
+        v["maps"][0]["graticule_crs"] = json!(crs);
+        let mut back = crate::Project::from_json(&v.to_string()).unwrap();
+        assert_eq!(back.map().graticule_crs.as_deref(), kept.then_some(crs), "{}", &crs[..crs.len().min(20)]);
+        let said = format!("{:?}", back.take_read_notices(&[crate::project::ReadPart::Maps]));
+        assert_eq!(said.contains("the measured graticule's coordinate system"), !kept, "{said}");
+    }
     // An empty system: the map's own again.
     s.run("map.graticule", &json!({"crs": ""})).unwrap();
     assert_eq!(s.map().graticule_crs, None);

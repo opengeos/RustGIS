@@ -11,8 +11,8 @@ use serde_json::{Value, json};
 
 use crate::theme::{Tokens, regular, semibold};
 use crate::widgets::{
-    CONTENT_H, Dragged, LABEL_H, big, big_form_menu, big_menu, big_split_menu, col, group, menu_item, small, small_form_menu, small_menu,
-    submenu_row, text_w,
+    CONTENT_H, Dragged, LABEL_H, big, big_form_menu, big_menu, big_split_form_menu, big_split_menu, col, group, menu_item, small,
+    small_form_menu, small_menu, submenu_row, text_w,
 };
 use crate::{RightPane, RustGisApp, icons};
 
@@ -1822,7 +1822,7 @@ fn graticule_menu(ui: &mut Ui, app: &mut RustGisApp) {
             tl!("An EPSG code, WKT or a PROJ string; empty: the map's own when it is projected, else the UTM zone at the view's centre"),
         );
         let enter = edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-        if ui.button(tl!("Use")).clicked() || enter {
+        if ui.button(tl!("Use System")).clicked() || enter {
             let typed = app.ui.graticule_crs_input.trim();
             let crs = if typed.is_empty() { String::new() } else { crate::dialogs::typed_crs(typed) };
             match app.run("map.graticule", json!({"type": "measured", "crs": crs})) {
@@ -1834,7 +1834,7 @@ fn graticule_menu(ui: &mut Ui, app: &mut RustGisApp) {
             }
         }
     });
-    let shown = app.session.map().graticule_crs.clone();
+    let shown = app.session.map().graticule_crs.as_deref().map(rustgis_engine::map::graticule::short_crs);
     ui.label(match shown {
         Some(c) => crate::i18n::fmt("Now: {crs}", &[("crs", &c)]),
         None => tl!("Now: the map's own, else the UTM zone at the centre").to_string(),
@@ -1844,7 +1844,7 @@ fn graticule_menu(ui: &mut Ui, app: &mut RustGisApp) {
 fn view_tab(app: &mut RustGisApp, ui: &mut Ui) {
     group(ui, "Display", |ui| {
         let g = app.session.map().graticule;
-        big_split_menu(
+        big_split_form_menu(
             ui,
             app,
             "graticule",
@@ -1853,7 +1853,7 @@ fn view_tab(app: &mut RustGisApp, ui: &mut Ui) {
             "map.graticule",
             Value::Null,
             g,
-            "Graticule type",
+            "Graticule options",
             "What the graticule draws: latitudes and longitudes, a measured grid or the UTM zones.",
             true,
             graticule_menu,
@@ -5256,16 +5256,20 @@ mod tests {
         h.get_by_label("Graticule").click();
         h.run();
         assert_eq!(h.state().session.map().graticule, !on);
-        h.get_by_label("Graticule type").click();
+        h.get_by_label("Graticule options").click();
         h.run();
         h.get_by_label("UTM Zones").click();
         h.run();
         assert!(h.state().session.map().graticule && h.state().session.map().graticule_type == GraticuleType::Utm);
-        // A system typed as an EPSG code.
-        h.state_mut().ui.graticule_crs_input = "2056".into();
-        h.get_by_label("Graticule type").click();
+        // A system typed as an EPSG code: clicking into the field keeps the menu open.
+        h.get_by_label("Graticule options").click();
         h.run();
-        h.get_by_label("Use").click();
+        h.get_by_role(egui::accesskit::Role::TextInput).click();
+        h.run();
+        h.get_by_role(egui::accesskit::Role::TextInput).type_text("2056");
+        h.run();
+        assert_eq!(h.state().ui.graticule_crs_input, "2056", "typed into the open menu");
+        h.get_by_label("Use System").click();
         h.run();
         let m = h.state().session.map();
         assert_eq!((m.graticule_type, m.graticule_crs.as_deref()), (GraticuleType::Measured, Some("EPSG:2056")));
@@ -5273,9 +5277,9 @@ mod tests {
         // A geographic one: refused, said, and nothing changed.
         let said = h.state().session.notices.len();
         h.state_mut().ui.graticule_crs_input = "4326".into();
-        h.get_by_label("Graticule type").click();
+        h.get_by_label("Graticule options").click();
         h.run();
-        h.get_by_label("Use").click();
+        h.get_by_label("Use System").click();
         h.run();
         assert_eq!(h.state().session.map().graticule_crs.as_deref(), Some("EPSG:2056"));
         assert!(

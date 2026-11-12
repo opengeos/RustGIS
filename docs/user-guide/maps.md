@@ -607,8 +607,11 @@ picking one shows it:
   view, each also gets its own eastings and northings, at the same interval in all of them and
   cut at the zone's edges.
 
-The grids have no labels on the map; the status bar reads coordinates in UTM or MGRS. The type
-and system are saved with the map.
+The grids have no labels on the map; the status bar reads coordinates in UTM or MGRS. Like the
+latitudes and longitudes, they aren't drawn on the copies of the world a flat map shows past
+±180°. The type and system are saved with the map; a project whose measured grid names a system
+this version can't use (one in degrees, or a PROJ string the web app can't read) opens without it,
+and says so.
 
 **Global** shows a globe; **Local** a flat view centred where you are (azimuthal equidistant;
 not in the web app, which doesn't include that projection).

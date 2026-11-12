@@ -24,17 +24,21 @@ const MAX_GRIDDED_CELLS: usize = 8;
 const PER_DEGREE: f64 = 2.0;
 
 /// The graticule's lines in longitude/latitude for a measured or UTM graticule; `None` for
-/// latitudes and longitudes, which the graticule draws itself.
+/// latitudes and longitudes, which the graticule draws itself. They cover the view and the margin
+/// around it the GPU moves a frame's meshes within while panning ([`crate::GPU_CULL_MARGIN`]), at
+/// the step the view itself suits.
 pub(crate) fn lines(map: &Map, view: &View) -> Option<Vec<Vec<Coord>>> {
     if map.graticule_type == GraticuleType::Degrees {
         return None;
     }
     let globe = map.projection.is_globe().then(|| Globe::new(&view.camera, view.width, view.height));
-    let seen = in_view(map, view, globe.as_ref());
+    let (shown, around) = (in_view(map, view, globe.as_ref(), 0.0), in_view(map, view, globe.as_ref(), crate::GPU_CULL_MARGIN));
+    let center = at(map, view, globe.as_ref(), view.width / 2.0, view.height / 2.0).or_else(|| shown.get(shown.len() / 2).copied());
+    let Some(center) = center else { return Some(Vec::new()) };
     Some(match map.graticule_type {
         GraticuleType::Degrees => Vec::new(),
-        GraticuleType::Measured => measured(map, view, globe.as_ref(), &seen),
-        GraticuleType::Utm => utm(&seen),
+        GraticuleType::Measured => measured(map, center, &shown, &around),
+        GraticuleType::Utm => utm(center, &shown, &around),
     })
 }
 
@@ -48,97 +52,117 @@ fn at(map: &Map, view: &View, globe: Option<&Globe>, sx: f64, sy: f64) -> Option
     c.filter(|c| c.is_finite())
 }
 
-/// Places in view, in longitude/latitude: a grid of points over the view (on a globe, those that
-/// fall on it), so a view whose corners miss the globe still has its extent.
-fn in_view(map: &Map, view: &View, globe: Option<&Globe>) -> Vec<Coord> {
+/// Places in the view grown by `margin` of its size on every side, in longitude/latitude: a grid
+/// of points over it (on a globe, those that fall on it), so a view whose corners miss the globe
+/// still has its extent.
+fn in_view(map: &Map, view: &View, globe: Option<&Globe>, margin: f64) -> Vec<Coord> {
     let (w, h) = (view.width, view.height);
     let n = 16;
     let mut out = Vec::with_capacity((n + 1) * (n + 1));
     for i in 0..=n {
         for j in 0..=n {
-            out.extend(at(map, view, globe, w * i as f64 / n as f64, h * j as f64 / n as f64));
+            let (tx, ty) = (-margin + (1.0 + 2.0 * margin) * i as f64 / n as f64, -margin + (1.0 + 2.0 * margin) * j as f64 / n as f64);
+            out.extend(at(map, view, globe, w * tx, h * ty));
         }
     }
     out
 }
 
-/// A measured grid over the view: the layout's measured grid in the map's graticule system.
-fn measured(map: &Map, view: &View, globe: Option<&Globe>, seen: &[Coord]) -> Vec<Vec<Coord>> {
-    let mut ext = Extent::EMPTY;
-    for c in seen {
-        ext.expand(*c);
+/// The step that draws about eight lines across the places `shown`, in `tr`'s system.
+fn step_over(tr: &rustgis_data::raster::Transformer, shown: &[Coord]) -> Option<f64> {
+    let mut m = Extent::EMPTY;
+    for c in shown.iter().filter_map(|c| tr.from_lonlat(*c)) {
+        m.expand(c);
     }
-    if ext.is_empty() {
-        return Vec::new();
-    }
-    let center = at(map, view, globe, view.width / 2.0, view.height / 2.0).unwrap_or_else(|| ext.center());
+    (!m.is_empty() && m.width().is_finite() && m.height().is_finite())
+        .then(|| nice_step(m.width().max(m.height()), rustgis_map::layout::MIN_MEASURED_STEP))
+}
+
+/// A measured grid over the view and around it: the layout's measured grid in the map's graticule
+/// system, at the step the view suits.
+fn measured(map: &Map, center: Coord, shown: &[Coord], around: &[Coord]) -> Vec<Vec<Coord>> {
     let g = Grid { kind: GridKind::Measured, crs: map.graticule_crs.clone(), labels: false, ..Grid::default() };
     let Some(tr) = measured_crs(&g, map, center).and_then(|c| c.transformer().ok()) else { return Vec::new() };
+    let Some(step) = step_over(&tr, shown) else { return Vec::new() };
     let mut lines = Vec::new();
-    measured_lines(&g, &tr, seen, false, &mut lines);
+    measured_lines(&Grid { step, ..g }, &tr, around, false, &mut lines);
     lines.into_iter().map(|(pts, _, _)| pts).filter(|l| l.len() >= 2).collect()
 }
 
-/// The UTM zones and latitude bands in view, and in each of a few zones in view its eastings and
-/// northings, one step apart in all of them.
-fn utm(seen: &[Coord]) -> Vec<Vec<Coord>> {
-    let mut ext = Extent::EMPTY;
-    for c in seen {
-        ext.expand(*c);
+/// The longitude/latitude extents the places cover: one, or two either side of the antimeridian
+/// when they lie across it (on a globe turned to 180°, longitudes jump from 180° to −180°).
+fn extents(places: &[Coord]) -> Vec<Extent> {
+    let mut e = Extent::EMPTY;
+    for c in places {
+        e.expand(*c);
     }
-    if ext.is_empty() {
+    if e.is_empty() {
         return Vec::new();
     }
+    if e.width() > 180.0 {
+        // The same places with the western hemisphere moved east of 180°: narrower when they lie
+        // across the antimeridian.
+        let mut east = Extent::EMPTY;
+        for c in places {
+            east.expand(Coord::new(if c.x < 0.0 { c.x + 360.0 } else { c.x }, c.y));
+        }
+        if east.width() < e.width() && east.max_x > 180.0 {
+            return vec![Extent { max_x: 180.0, ..east }, Extent { min_x: -180.0, max_x: east.max_x - 360.0, ..east }];
+        }
+    }
+    vec![e]
+}
+
+/// The UTM zones and latitude bands in view and around it, and in each of a few zones in view its
+/// eastings and northings, one step apart in all of them (the step the view suits in the zone at
+/// its centre).
+fn utm(center: Coord, shown: &[Coord], around: &[Coord]) -> Vec<Vec<Coord>> {
+    let parts = extents(around);
+    if parts.is_empty() {
+        return Vec::new();
+    }
+    let has_lon =
+        |lon: f64, south: f64, north: f64| parts.iter().any(|e| e.min_x <= lon && lon <= e.max_x && e.min_y <= north && south <= e.max_y);
     let mut lines = Vec::new();
-    // Each zone's western edge within each band (the eastern one is the next zone's western), so
-    // the Norway and Svalbard zones are drawn as they are.
+    // Each zone's western edge within each band, and the last zone's eastern one at 180°, so the
+    // Norway and Svalbard zones are drawn as they are.
     let mut cells = Vec::new();
     for band in BANDS.chars() {
         let Some((south, north)) = band_latitudes(band) else { continue };
         for zone in 1..=60u8 {
             let Some((west, east)) = zone_longitudes(zone, band) else { continue };
             cells.push((zone, band, Extent { min_x: west, min_y: south, max_x: east, max_y: north }));
-            if ext.min_x <= west && west <= ext.max_x && ext.min_y <= north && south <= ext.max_y {
+            if has_lon(west, south, north) {
                 lines.push(meridian(west, south, north));
             }
         }
+        if has_lon(180.0, south, north) {
+            lines.push(meridian(180.0, south, north));
+        }
     }
     // The bands' edges, and the zones' southern and northern limits.
-    for band in BANDS.chars() {
-        let Some((south, _)) = band_latitudes(band) else { continue };
-        if ext.min_y <= south && south <= ext.max_y {
-            lines.push(parallel(south, ext.min_x.max(-180.0), ext.max_x.min(180.0)));
+    let edges = BANDS.chars().filter_map(|b| band_latitudes(b).map(|(south, _)| south)).chain([UTM_MAX_LAT]);
+    for lat in edges {
+        for e in parts.iter().filter(|e| e.min_y <= lat && lat <= e.max_y) {
+            lines.push(parallel(lat, e.min_x.max(-180.0), e.max_x.min(180.0)));
         }
-    }
-    if ext.min_y <= UTM_MAX_LAT && UTM_MAX_LAT <= ext.max_y {
-        lines.push(parallel(UTM_MAX_LAT, ext.min_x.max(-180.0), ext.max_x.min(180.0)));
     }
     // Eastings and northings in each zone in view, when few are.
-    let shown: Vec<_> = cells.into_iter().filter(|(_, _, c)| overlaps(c, &ext)).collect();
-    if shown.is_empty() || shown.len() > MAX_GRIDDED_CELLS {
+    let in_view: Vec<_> = cells.into_iter().filter_map(|(z, b, c)| parts.iter().find(|e| overlaps(&c, e)).map(|e| (z, b, c, *e))).collect();
+    if in_view.is_empty() || in_view.len() > MAX_GRIDDED_CELLS {
         return lines;
     }
-    // One step for every zone, from the view's span in the zone at its middle.
-    let mid = ext.center();
-    let Some(step) = zone_transformer(mid).and_then(|tr| {
-        let mut m = Extent::EMPTY;
-        for c in seen.iter().filter_map(|c| tr.from_lonlat(*c)) {
-            m.expand(c);
-        }
-        (!m.is_empty()).then(|| nice_step(m.width().max(m.height()), rustgis_map::layout::MIN_MEASURED_STEP))
-    }) else {
-        return lines;
-    };
-    for (zone, band, cell) in shown {
+    let Some(step) = zone_transformer(center).and_then(|tr| step_over(&tr, shown)) else { return lines };
+    for (zone, band, cell, e) in in_view {
         let north = band >= 'N';
         let epsg = if north { 32_600 } else { 32_700 } + u32::from(zone);
         let Some(tr) = rustgis_data::raster::Crs::from_epsg(epsg).and_then(|c| c.transformer().ok()) else { continue };
         // The part of the cell in view, its edges densified, as the frame the grid covers.
         let part = Extent {
-            min_x: cell.min_x.max(ext.min_x),
-            min_y: cell.min_y.max(ext.min_y),
-            max_x: cell.max_x.min(ext.max_x),
-            max_y: cell.max_y.min(ext.max_y),
+            min_x: cell.min_x.max(e.min_x),
+            min_y: cell.min_y.max(e.min_y),
+            max_x: cell.max_x.min(e.max_x),
+            max_y: cell.max_y.min(e.max_y),
         };
         let frame: Vec<Coord> = (0..=8)
             .flat_map(|i| {
@@ -288,6 +312,61 @@ mod tests {
         assert!(straight_in(&lines(&m, &view).unwrap(), 32632));
     }
 
+    /// The grid covers the margin around the view that the GPU pans a frame within, so panning
+    /// shows no edge; its step is the view's own (about eight lines across it), not the margin's.
+    #[test]
+    fn a_measured_graticule_covers_the_margin_at_the_views_step() {
+        let (mut m, view) = winterthur("EPSG:2056");
+        // 7.5 m a point: about 6,000 m across, so 1 km lines (eight-odd across the view), where
+        // the view and its margin, about 12,000 m, would take 2 km.
+        let view = View { camera: rustgis_map::camera::Camera { res: 7.5, ..view.camera }, ..view };
+        m.graticule_type = GraticuleType::Measured;
+        let tr = rustgis_data::raster::Crs::from_epsg(2056).unwrap().transformer().unwrap();
+        let mut seen = Extent::EMPTY;
+        for c in in_view(&m, &view, None, 0.0) {
+            seen.expand(tr.from_lonlat(c).unwrap());
+        }
+        let mut drawn = Extent::EMPTY;
+        let mut eastings = Vec::new();
+        for l in lines(&m, &view).unwrap() {
+            let pts: Vec<Coord> = l.iter().map(|c| tr.from_lonlat(*c).unwrap()).collect();
+            pts.iter().for_each(|p| drawn.expand(*p));
+            if pts.iter().all(|p| (p.x - pts[0].x).abs() < 0.01) {
+                eastings.push(pts[0].x);
+            }
+        }
+        // 1 km apart, over the view and half a view either side.
+        assert!(drawn.min_x < seen.min_x - 0.4 * seen.width() && drawn.max_x > seen.max_x + 0.4 * seen.width(), "{drawn:?} {seen:?}");
+        eastings.sort_by(f64::total_cmp);
+        assert!(eastings.windows(2).all(|w| (w[1] - w[0] - 1000.0).abs() < 0.01), "{eastings:?}");
+    }
+
+    /// A view across the antimeridian (a globe turned to Fiji) is two extents, not one round the
+    /// world: the zones in it get their eastings and northings, and the zones' edge at 180° is
+    /// drawn, as it is at the right-hand edge of a flat world.
+    #[test]
+    fn utm_zones_across_the_antimeridian_keep_their_grids() {
+        let seen: Vec<Coord> = (0..=10)
+            .flat_map(|i| (0..=10).map(move |j| (f64::from(i), f64::from(j))))
+            .map(|(i, j)| {
+                let lon = 179.4 + 1.2 * i / 10.0;
+                Coord::new(if lon > 180.0 { lon - 360.0 } else { lon }, -17.0 - 0.6 * j / 10.0)
+            })
+            .collect();
+        let parts = extents(&seen);
+        assert_eq!(parts.len(), 2, "{parts:?}");
+        let lines = utm(Coord::new(179.9, -17.3), &seen, &seen);
+        let at_180 = lines.iter().any(|l| l.iter().all(|c| (c.x - 180.0).abs() < 1e-9));
+        let inner = lines.iter().filter(|l| !l.iter().all(|c| (c.x - l[0].x).abs() < 1e-9)).count();
+        assert!(at_180 && inner > 4, "edge at 180°: {at_180}, eastings and northings: {inner}");
+        // The whole flat world: the right-hand edge too.
+        let world: Vec<Coord> =
+            (0..=20).flat_map(|i| (0..=10).map(move |j| Coord::new(-180.0 + 18.0 * f64::from(i), -80.0 + 16.0 * f64::from(j)))).collect();
+        let lines = utm(Coord::new(0.0, 0.0), &world, &world);
+        assert!(lines.iter().any(|l| l.iter().all(|c| (c.x - 180.0).abs() < 1e-9)));
+        assert!(lines.iter().any(|l| l.iter().all(|c| (c.x + 180.0).abs() < 1e-9)));
+    }
+
     #[test]
     fn a_polyline_is_cut_at_a_box() {
         let b = bx(0.0, 0.0, 10.0, 10.0);
@@ -309,7 +388,7 @@ mod tests {
         let seen: Vec<Coord> = (0..=20)
             .flat_map(|i| (0..=20).map(move |j| Coord::new(-2.0 + 46.0 * f64::from(i) / 20.0, 54.0 + 30.0 * f64::from(j) / 20.0)))
             .collect();
-        let lines = utm(&seen);
+        let lines = utm(Coord::new(21.0, 69.0), &seen, &seen);
         // Meridians: a line whose points share a longitude, from its southern to northern end.
         let meridian_at = |lon: f64, lat: f64| {
             lines.iter().any(|l| l.len() >= 2 && l.iter().all(|c| (c.x - lon).abs() < 1e-9) && l[0].y <= lat && lat <= l[l.len() - 1].y)
@@ -333,7 +412,7 @@ mod tests {
         let seen: Vec<Coord> = (0..=10)
             .flat_map(|i| (0..=10).map(move |j| Coord::new(11.6 + 0.8 * f64::from(i) / 10.0, 47.3 + 0.4 * f64::from(j) / 10.0)))
             .collect();
-        let lines = utm(&seen);
+        let lines = utm(Coord::new(12.0, 47.5), &seen, &seen);
         let inner: Vec<_> = lines.iter().filter(|l| !(l.iter().all(|c| (c.x - l[0].x).abs() < 1e-9))).collect();
         assert!(inner.len() > 4, "eastings and northings drawn: {}", inner.len());
         // No line of either zone's grid crosses 12° E.

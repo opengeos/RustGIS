@@ -1346,6 +1346,26 @@ impl Project {
                 ),
             ));
         }
+        // A measured graticule's system `map.graticule` would refuse (too long, unreadable here, or
+        // in degrees), from a hand-edited file or one saved where it reads (a PROJ string the web
+        // app can't): left out, said, and the graticule falls back to the map's own system.
+        for m in &mut p.maps {
+            let Some(c) = m.graticule_crs.take() else { continue };
+            let usable = c.trim().chars().nth(rustgis_map::layout::MAX_GRID_CRS).is_none()
+                && rustgis_data::raster::Crs::parse(c.trim()).is_ok_and(|r| !r.is_geographic() && r.transformer().is_ok());
+            if usable {
+                m.graticule_crs = Some(c);
+                continue;
+            }
+            let shown = rustgis_map::graticule::short_crs(&c);
+            p.read_notices.push((
+                ReadPart::Maps,
+                NoticeText::format(
+                    "{map}: the measured graticule's coordinate system {crs} isn't a projected one this version can use, so it was left out (the map's own, else the UTM zone at the centre, is used)",
+                    [("map", m.name.clone().into()), ("crs", shown.into())],
+                ),
+            ));
+        }
         if let Some(g) = p.gp_env.projected.as_mut()
             && let Some(c) = g.cell_size.filter(|c| !(c.is_finite() && *c > 0.0))
         {

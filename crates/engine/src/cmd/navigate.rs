@@ -540,7 +540,10 @@ fn graticule(s: &mut Session, p: &Value) -> CmdResult {
             let names: Vec<&str> = GraticuleType::ALL.iter().map(|t| t.code()).collect();
             format!("type must be one of {}, not \"{t}\"", names.join(", "))
         })?),
-        Some(other) => return Err(format!("type must be \"degrees\", \"measured\" or \"utm\", not {other}")),
+        Some(other) => {
+            let names: Vec<String> = GraticuleType::ALL.iter().map(|t| format!("\"{}\"", t.code())).collect();
+            return Err(format!("type must be one of {}, not {other}", names.join(", ")));
+        }
     };
     let crs = match p.get("crs") {
         None => None,
@@ -556,6 +559,10 @@ fn graticule(s: &mut Session, p: &Value) -> CmdResult {
                     "crs: {} is geographic; a measured grid needs a projected system (\"degrees\" draws latitudes and longitudes)",
                     c.trim()
                 ));
+            }
+            // (As the project checks it when it opens: one this version can't project to draws no grid.)
+            if let Err(e) = read.transformer() {
+                return Err(format!("crs: {} can't be used here: {e}", c.trim()));
             }
             Some(Some(c.trim().to_string()))
         }
