@@ -1,5 +1,5 @@
 //! XML parsed safely: every reader of XML (GPX, KML, GML, CityGML, GeoRSS, LandXML, OGC
-//! capabilities, S3 listings, QGIS projects and styles) goes through [`parse`], which refuses a
+//! capabilities, raster PAM files, S3 listings, QGIS projects and styles) goes through [`parse`], which refuses a
 //! document nested deeper than [`MAX_DEPTH`], or whose namespaces would take more than
 //! [`NAMESPACE_WORK`] times its size to resolve, before parsing it. Nesting thousands of elements
 //! deep exhausts the stack while the document is parsed or walked, and crafted namespace
@@ -20,17 +20,15 @@ pub const MAX_DEPTH: usize = 256;
 /// namespaces, checks each declaration against the others and copies each namespace in scope in,
 /// checking it against all it holds so far. A real file (a few dozen namespaces on its root, an
 /// element every few dozen bytes) takes under one step a byte; one declaring hundreds of namespaces
-/// around many elements, thousands.
+/// around many elements, thousands. An element declaring namespaces costs about half the square of
+/// those around it, so tiny ones (20 bytes) each declaring one under about 50 namespaces reach it.
+/// Each namespace copied in stays in the parsed document (two bytes), and copying n takes n(n-1)/2
+/// steps, so within this bound the copies come to about three a byte at most.
 pub const NAMESPACE_WORK: u64 = 64;
 
 /// The namespace resolution any document may take, however short: a root declaring several hundred
 /// namespaces is no threat.
 const MIN_NAMESPACE_WORK: u64 = 1 << 20;
-
-/// How many namespaces a document's elements may copy in, per byte of its text: each copy is kept
-/// in the parsed document (two bytes), so this bounds the memory they take to a few times the
-/// text's size, about what its elements take parsed.
-const NAMESPACE_COPIES: u64 = 4;
 
 /// Parses `text` (a leading byte-order mark dropped) with `opts`, once [`check_limits`] passes.
 pub fn parse<'a>(text: &'a str, opts: ParsingOptions<'a>) -> Result<Document<'a>, String> {
@@ -40,8 +38,7 @@ pub fn parse<'a>(text: &'a str, opts: ParsingOptions<'a>) -> Result<Document<'a>
 }
 
 /// Refuses XML nested deeper than [`MAX_DEPTH`], or whose namespaces would take more than
-/// [`NAMESPACE_WORK`] steps a byte to resolve (or copy in more than [`NAMESPACE_COPIES`] a byte),
-/// by a scan that never recurses. It counts what opens and closes an element, skipping comments,
+/// [`NAMESPACE_WORK`] steps a byte to resolve, by a scan that never recurses. It counts what opens and closes an element, skipping comments,
 /// CDATA, processing instructions and quoted attribute values, and the prefixes in scope as the
 /// parser does (one declared again is the same prefix); where it can't tell, it counts too deep
 /// rather than too shallow, and too much work rather than too little (an attribute with no prefix
@@ -55,9 +52,8 @@ pub fn check_limits(text: &str, allow_dtd: bool) -> Result<(), String> {
     // the browser's 32-bit sizes can't saturate the limit away.
     let mut declared: Vec<Vec<&[u8]>> = Vec::new();
     let mut prefixes: HashMap<&[u8], usize> = HashMap::new();
-    let (mut work, mut copies) = (0u64, 0u64);
+    let mut work = 0u64;
     let limit = (text.len() as u64).saturating_mul(NAMESPACE_WORK).max(MIN_NAMESPACE_WORK);
-    let copy_limit = (text.len() as u64).saturating_mul(NAMESPACE_COPIES).max(MIN_NAMESPACE_WORK);
     let too_much = || "the document's namespace declarations would take more to resolve than its size allows".to_string();
     let find = |from: usize, pat: &[u8]| -> Option<usize> { b.get(from..)?.windows(pat.len()).position(|w| w == pat).map(|p| from + p) };
     while i < b.len() {
@@ -137,7 +133,8 @@ pub fn check_limits(text: &str, allow_dtd: bool) -> Result<(), String> {
             let mut j = i + 1;
             let mut quote = None::<u8>;
             // Its attributes, by the name before each `=`: the prefixes it declares (`""` the
-            // default namespace) and the others.
+            // default namespace, which any attribute named `xmlns` declares, `n:xmlns` too, as
+            // the parser reads it) and the others.
             let (mut own, mut attributes) = (Vec::<&[u8]>::new(), 0u64);
             let (mut word, mut name) = (None::<usize>, (0usize, 0usize));
             while let Some(&c) = b.get(j) {
@@ -151,10 +148,10 @@ pub fn check_limits(text: &str, allow_dtd: bool) -> Result<(), String> {
                             name = (s, j);
                         }
                         let key = b.get(name.0..name.1).unwrap_or(&[]);
-                        if key == b"xmlns" {
-                            own.push(b"");
-                        } else if let Some(prefix) = key.strip_prefix(b"xmlns:") {
+                        if let Some(prefix) = key.strip_prefix(b"xmlns:") {
                             own.push(prefix);
+                        } else if key == b"xmlns" || key.ends_with(b":xmlns") {
+                            own.push(b"");
                         } else {
                             attributes += 1;
                         }
@@ -185,10 +182,9 @@ pub fn check_limits(text: &str, allow_dtd: bool) -> Result<(), String> {
                 // in, checked against its own and those copied before it.
                 let copying = around.saturating_mul(mine).saturating_add(around.saturating_mul(around.saturating_sub(1)) / 2);
                 cost = cost.saturating_add(mine.saturating_mul(mine)).saturating_add(copying);
-                copies = copies.saturating_add(around);
             }
             work = work.saturating_add(cost);
-            if work > limit || copies > copy_limit {
+            if work > limit {
                 return Err(too_much());
             }
             if j > 0 && b.get(j - 1) == Some(&b'/') {
@@ -299,10 +295,13 @@ mod tests {
     /// way of building that is refused before parsing, while real documents pass.
     #[test]
     fn namespace_work_is_bounded() {
-        // Each is refused by its own term: the root's own declarations are few enough to pass.
+        // Each is refused for its own kind of work: the root's own declarations are few enough
+        // to pass alone.
         // Copied: a few hundred namespaces around children that each declare one, so each copies
-        // them all in, checking each against those copied before it.
+        // them all in, checking each against those copied before it; declared as the default
+        // namespace by an attribute named `xmlns` with a prefix too, as the parser reads it.
         let copied = format!("<r{}>{}</r>", declarations(300), r#"<a xmlns:x="urn:x"/>"#.repeat(5000));
+        let qualified = format!("<r{}>{}</r>", declarations(300), r#"<a n0:xmlns="urn:x"/>"#.repeat(5000));
         // Checked against each other: one element declaring many.
         let one = format!("<r{}/>", declarations(20_000));
         // Looked up: a root declaring many, around many prefixed elements declaring none.
@@ -310,7 +309,7 @@ mod tests {
         // Attributes checked against each other: one element with many.
         let attributes: String = (0..20_000).map(|k| format!(" a{k}=''")).collect();
         let attributed = format!("<r{attributes}/>");
-        for doc in [&copied, &one, &looked_up, &attributed] {
+        for doc in [&copied, &qualified, &one, &looked_up, &attributed] {
             let refused = check_limits(doc, false).unwrap_err();
             assert!(refused.contains("namespace declarations"), "{refused}");
             assert!(parse(doc, ParsingOptions::default()).is_err());
