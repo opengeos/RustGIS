@@ -43,7 +43,9 @@ Data added by its address, from a web server or an S3 bucket, is described in
 ## STAC catalogs
 
 **Home › Add › Web Data › STAC Search…** searches a [STAC](https://stacspec.org) API for imagery and
-other assets: by collection, dates, the most cloud cover and (by default) where the map is. The
+other assets: by collection, dates, the most cloud cover and (by default) where the map is, in the
+order you pick under **Sort by** (the API's own, newest first, oldest first or least cloud first;
+an API that can't sort says so). A static catalog is walked in its own order, so it has no sort. The
 default API is Element 84's [Earth Search](https://earth-search.aws.element84.com/v1);
 Microsoft's [Planetary Computer](https://planetarycomputer.microsoft.com/api/stac/v1) is offered
 beside it, and other APIs with GET item search work. **Collections** lists what the API offers,

@@ -772,6 +772,15 @@ fn fetch_children(app: &mut RustGisApp) {
 }
 
 /// The preset the dialog is showing, if it is still on its API or catalog.
+/// The orders the dialog offers an API's items in: the sort field (`-` first for descending) and its label.
+const SORTS: [(&str, &str); 4] =
+    [("", "API's own order"), ("-datetime", "Newest first"), ("datetime", "Oldest first"), ("eo:cloud_cover", "Least cloud first")];
+
+/// The sort a search sends: the one picked, none for the API's own order or a static catalog.
+fn sort_of(st: &State, is_static: bool) -> Option<&str> {
+    Some(st.sortby.trim()).filter(|b| !b.is_empty() && !is_static)
+}
+
 fn shown_preset(st: &State) -> Option<Preset> {
     st.preset.filter(|p| st.api.trim().trim_end_matches('/') == p.address())
 }
@@ -946,6 +955,18 @@ pub fn dialog(app: &mut RustGisApp, ui: &mut egui::Ui) {
         ui.add(egui::TextEdit::singleline(&mut st.max_cloud).hint_text(tl!("any")).desired_width(ui.available_width().clamp(70.0, 110.0)))
             .labelled_by(input_label.id);
         ui.end_row();
+        if !is_static {
+            // A static catalog is walked in its own order, so it has no sort.
+            ui.label(tl!("Sort by"));
+            let current = st.sortby.trim().to_string();
+            let shown = SORTS.iter().find(|(v, _)| *v == current).map_or(current.clone(), |(_, l)| tl!(l).to_string());
+            egui::ComboBox::from_id_salt("stac_sortby").selected_text(shown).show_ui(ui, |ui| {
+                for (v, label) in SORTS {
+                    ui.selectable_value(&mut st.sortby, v.to_string(), tl!(label));
+                }
+            });
+            ui.end_row();
+        }
         if is_static && (st.preset == Some(Preset::Vantor) || !st.phase.is_empty()) {
             ui.label(tl!("Phase"));
             ui.horizontal(|ui| {
@@ -1500,10 +1521,9 @@ fn find_items(app: &mut RustGisApp) {
     if let Ok(c) = st.max_cloud.trim().parse::<f64>() {
         p["maxCloud"] = json!(c);
     }
-    // A preset's sort order, only while the dialog is still on the preset's API (another API
-    // may not sort).
-    if !st.sortby.trim().is_empty() && shown_preset(st).is_some() {
-        p["sortby"] = json!(st.sortby.trim());
+    // The sort picked in the dialog (a preset starts with its own); a static catalog has none.
+    if let Some(by) = sort_of(st, is_static) {
+        p["sortby"] = json!(by);
     }
     let buffer = st.buffer.trim().to_string();
     if !st.parts.is_empty() {
@@ -1801,6 +1821,19 @@ mod tests {
         let p = cube_params(&st, "2024-01-01".into(), "2024-02-01".into(), Some("picked".into())).unwrap();
         assert_eq!(p["connection"], "picked");
         assert!(cube_params(&st, "a".into(), "b".into(), None).unwrap().get("connection").is_none());
+    }
+
+    #[test]
+    fn the_sort_picked_is_sent_to_an_api_only() {
+        let mut st = State::default();
+        assert_eq!(sort_of(&st, false), None);
+        for (v, _) in SORTS.iter().filter(|(v, _)| !v.is_empty()) {
+            st.sortby = format!(" {v} ");
+            assert_eq!(sort_of(&st, false), Some(*v));
+            assert_eq!(sort_of(&st, true), None);
+        }
+        // Newest first is a field the search can sort on.
+        assert!(SORTS.iter().any(|(v, _)| *v == "-datetime") && SORTS.iter().any(|(v, _)| *v == "datetime"));
     }
 
     #[test]
