@@ -813,13 +813,15 @@ enum SearchAction {
     OpenItem(&'static str),
     SaveItem(&'static str),
     Pane(crate::RightPane),
+    /// A tab of the Layer Properties pane, by its `ui.pane.layerProperties` name.
+    PropertiesTab(&'static str),
     Workflow(&'static str),
 }
 
 /// Routes commands requiring user input to their dialogs rather than executing empty params.
 fn search_action(id: &str) -> Option<SearchAction> {
     use crate::RightPane;
-    use SearchAction::{Command, Dialog, OpenItem, Pane, SaveItem, Workflow};
+    use SearchAction::{Command, Dialog, OpenItem, Pane, PropertiesTab, SaveItem, Workflow};
     Some(match id {
         "project.open" => Command("ui.open"),
         "project.save" => Command("ui.save"),
@@ -868,7 +870,7 @@ fn search_action(id: &str) -> Option<SearchAction> {
         "layer.repairSource" => Dialog("repairSource"),
         "layer.reloadData" => Command("ui.reloadData"),
         "ui.importShapefile" => Dialog("addShapefile"),
-        "layer.definitionQuery" => Dialog("definitionQuery"),
+        "layer.definitionQuery" => PropertiesTab("query"),
         "layer.symbology" | "raster.symbology" | "layer.color" | "layer.outline" | "layer.lineStrokes" | "layer.fillLayers"
         | "layer.ramp" => Pane(RightPane::Symbology),
         "select.byAttributes" => Dialog("selectByAttributes"),
@@ -1184,6 +1186,7 @@ pub fn command_search(app: &mut RustGisApp, ctx: &egui::Context) {
                 SearchAction::Dialog(name) => app.run("ui.dialog", json!({"name": name})),
                 SearchAction::OpenItem(kind) => app.run("ui.openItem", json!({"kind": kind})),
                 SearchAction::SaveItem(kind) => app.run("ui.saveItem", json!({"kind": kind})),
+                SearchAction::PropertiesTab(tab) => app.run("ui.pane.layerProperties", json!({"tab": tab})),
                 SearchAction::Workflow(section) => app.run("ui.pane.workflows", json!({"section": section})),
                 SearchAction::Pane(pane) => {
                     app.ui.open_right(pane);
