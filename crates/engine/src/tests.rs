@@ -9296,8 +9296,7 @@ fn a_viewshed_says_what_ground_with_no_data_it_saw_across() {
         } else {
             assert!(nearest > 100, "{v}");
             assert!(
-                said.iter()
-                    .any(|t| t.contains(&format!("{nearest} cell(s) of the viewshed were worked out with the nearest cell's height"))),
+                said.iter().any(|t| t.contains(&format!("{nearest} cell(s) were worked out with the nearest cell's height"))),
                 "{said:?}"
             );
         }
@@ -9330,6 +9329,10 @@ fn a_viewshed_says_what_it_did_with_its_radius_and_the_seam() {
     // By the edge with no radius (the whole raster): the seam is said.
     let notes = said(&mut s, json!({"layer": dem, "lon": -179.0, "lat": 0.0}));
     assert!(notes.iter().any(|n| n.contains(seam) && n.ends_with("worked out the long way round")), "{notes:?}");
+    // By the edge with a radius past the edge line but short of the cell across it (2° is about
+    // 222 km there): nothing across it is within the radius, so nothing said.
+    let notes = said(&mut s, json!({"layer": dem, "lon": -179.0, "lat": 0.0, "radius": 150_000}));
+    assert!(notes.is_empty(), "{notes:?}");
     // Mid-way with a radius not reaching an edge: nothing said.
     let notes = said(&mut s, json!({"layer": dem, "lon": 0.0, "lat": 0.0, "radius": 50_000}));
     assert!(notes.is_empty(), "{notes:?}");

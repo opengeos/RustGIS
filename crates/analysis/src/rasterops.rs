@@ -549,8 +549,16 @@ fn viewshed_on(
     let threads = threads.unwrap_or_else(|| crate::parallel::threads_for_rows(rows, ray_work, 0));
     let cap = crate::parallel::work_cap(MAX_VIEWSHED_WORK, threads);
     if ray_work > cap {
+        // A radius reaching the raster's farthest corner covers all of it (as with no radius
+        // given, the raster's diagonal): said as the whole raster, not as a radius to shorten.
+        let corner = ((oc.max(r.width as i64 - 1 - oc)) as f64 * cx).hypot((or.max(r.height as i64 - 1 - or)) as f64 * cy);
+        let (what, fix) = if radius_m >= corner {
+            ("the whole raster", "give a radius to cover only part of it")
+        } else {
+            ("the radius", "use a smaller radius")
+        };
         return Err(format!(
-            "the radius takes {ray_work} ray steps{}, more than the {cap} this computer takes on {threads} thread(s); use a smaller radius{}",
+            "{what} takes {ray_work} ray steps{}, more than the {cap} this computer takes on {threads} thread(s); {fix}{}",
             if per_step > 1 { " (a step between cells counted as two)" } else { "" },
             crate::parallel::UNCAPPED_HINT
         ));
@@ -1705,6 +1713,8 @@ mod tests {
     /// A bilinear ray step is weighed as two in the work cap (it reads the two cells it falls
     /// between), and a refusal says so: 1,000 × 1,000 cells from the middle on one thread take
     /// 251 million nearest steps, under the cap, and 502 million weighed bilinear ones, over it.
+    /// A radius reaching every cell is refused as the whole raster; one short of the corners,
+    /// with the same window and steps, as a radius.
     #[test]
     fn a_bilinear_viewshed_step_is_weighed_as_two_in_the_work_cap() {
         let w = 1_000u32;
@@ -1715,10 +1725,16 @@ mod tests {
         let e = viewshed_on(Some(1), &dem, 0, middle, 2.0, 1e9, Heights::Bilinear).unwrap_err();
         assert!(
             e.starts_with(&format!(
-                "the radius takes 502000000 ray steps (a step between cells counted as two), more than the {MAX_VIEWSHED_WORK} this computer takes on 1 thread(s)"
+                "the whole raster takes 502000000 ray steps (a step between cells counted as two), more than the {MAX_VIEWSHED_WORK} this computer takes on 1 thread(s); give a radius to cover only part of it"
             )),
             "{e}"
         );
+        // 600 of the longer cell side: past every edge (500 cells away), short of the corners
+        // (about 707 cells of the side's mean away; the cells are longer north–south at 45°).
+        let (cx, cy) = dem.cell_size_m();
+        assert!(600.0 * cx.max(cy) < (500.0 * cx).hypot(500.0 * cy));
+        let e = viewshed_on(Some(1), &dem, 0, middle, 2.0, 600.0 * cx.max(cy), Heights::Bilinear).unwrap_err();
+        assert!(e.starts_with("the radius takes 502000000 ray steps") && e.contains("; use a smaller radius"), "{e}");
     }
 
     /// Viewshed rows made on several threads see what one thread sees (#1252), with the radius

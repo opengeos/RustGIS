@@ -1087,11 +1087,10 @@ fn viewshed_work(s: &Session, p: &Value) -> Result<Work, String> {
     // observer, and only the raster's cells are worked out. A radius given past the diagonal
     // covers the same cells, so it is taken as the diagonal: nothing is left out.
     let diagonal = (cx * dem.width as f64).hypot(cy * dem.height as f64).max(1.0);
-    let (radius, given) = match p.get("radius") {
-        None | Some(Value::Null) => (diagonal, None),
+    let radius = match p.get("radius") {
+        None | Some(Value::Null) => diagonal,
         Some(v) => {
-            let r = f(p, "radius").filter(|r| *r > 0.0).ok_or_else(|| format!("radius must be a number of metres above 0, not {v}"))?;
-            (r.min(diagonal), Some(r))
+            f(p, "radius").filter(|r| *r > 0.0).ok_or_else(|| format!("radius must be a number of metres above 0, not {v}"))?.min(diagonal)
         }
     };
     // A raster around the whole Earth (in longitude/latitude) has its east and west edges side
@@ -1106,7 +1105,7 @@ fn viewshed_work(s: &Session, p: &Value) -> Result<Work, String> {
     // just across the near edge is `near + 1` cells away across it and `far` through the raster,
     // and with no shorter way (the observer within a cell of the middle column) every cell is
     // worked out as near as it is.
-    let seam = round_the_earth && near + 1 < far && radius > (near as f64 + 0.5) * cx;
+    let seam = round_the_earth && near + 1 < far && (near as f64 + 1.0) * cx <= radius;
     // The ground just across the edge is the far edge's column, reached only through the raster:
     // worked out the long way round in the rows where the radius reaches it (cell centres, as the
     // viewshed measures them). The rows with ground across the edge within the radius are those
@@ -1141,15 +1140,7 @@ fn viewshed_work(s: &Session, p: &Value) -> Result<Work, String> {
     let name = out_name(p, format!("{}_viewshed", dem.name));
     let dem_name = dem.name.clone();
     Ok(Box::new(move || {
-        let vs = rasterops::viewshed(&dem, band, at, height, radius, heights).map_err(|e| {
-            // With no radius given, the work is the whole raster's, not a radius's.
-            if given.is_none() && e.starts_with("the radius takes") {
-                e.replacen("the radius takes", "the whole raster (no radius given) takes", 1)
-                    .replace("use a smaller radius", "give a radius")
-            } else {
-                e
-            }
-        })?;
+        let vs = rasterops::viewshed(&dem, band, at, height, radius, heights)?;
         let seen = vs.cells.iter().filter(|v| **v == 1.0).count();
         let (through_gaps, read_nearest) = (vs.through_gaps, vs.read_nearest);
         let answer = json!({"visibleCells": seen, "acrossNoData": through_gaps, "readNearest": read_nearest});
@@ -1179,7 +1170,7 @@ fn viewshed_work(s: &Session, p: &Value) -> Result<Work, String> {
             }
             if read_nearest > 0 {
                 s.notify(
-                    format!("{dem_name}: {read_nearest} cell(s) of the viewshed were worked out with the nearest cell's height next to ground with no data, not between cells"),
+                    format!("{dem_name}: {read_nearest} cell(s) were worked out with the nearest cell's height next to ground with no data, not between cells"),
                     false,
                 );
             }
