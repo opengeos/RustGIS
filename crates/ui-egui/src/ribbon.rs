@@ -1816,11 +1816,13 @@ fn graticule_menu(ui: &mut Ui, app: &mut RustGisApp) {
         }
     }
     ui.separator();
-    ui.label(tl!("Measured grid's coordinate system"));
+    let name = ui.label(tl!("Measured grid's coordinate system"));
     ui.horizontal(|ui| {
         let edit = ui.add(egui::TextEdit::singleline(&mut app.ui.graticule_crs_input).hint_text("2056").desired_width(90.0)).on_hover_text(
             tl!("An EPSG code, WKT or a PROJ string; empty: the map's own when it is projected, else the UTM zone at the view's centre"),
         );
+        // Named by the label above it, for a screen reader (the hint is only a placeholder).
+        let edit = edit.labelled_by(name.id);
         let enter = edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
         if ui.button(tl!("Use System")).clicked() || enter {
             let typed = app.ui.graticule_crs_input.trim();
@@ -5264,9 +5266,9 @@ mod tests {
         // A system typed as an EPSG code: clicking into the field keeps the menu open.
         h.get_by_label("Graticule options").click();
         h.run();
-        h.get_by_role(egui::accesskit::Role::TextInput).click();
+        h.get_by_role_and_label(egui::accesskit::Role::TextInput, "Measured grid's coordinate system").click();
         h.run();
-        h.get_by_role(egui::accesskit::Role::TextInput).type_text("2056");
+        h.get_by_role_and_label(egui::accesskit::Role::TextInput, "Measured grid's coordinate system").type_text("2056");
         h.run();
         assert_eq!(h.state().ui.graticule_crs_input, "2056", "typed into the open menu");
         h.get_by_label("Use System").click();

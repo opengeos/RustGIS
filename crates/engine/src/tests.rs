@@ -10264,6 +10264,7 @@ fn the_graticule_takes_a_type_and_a_measured_grids_system() {
         (json!({"type": "mgrs"}), "type must be one of degrees, measured, utm, not \"mgrs\""),
         (json!({"type": 3}), "type must be one of \"degrees\", \"measured\", \"utm\", not 3"),
         (json!({"crs": "EPSG:4326"}), "crs: EPSG:4326 is geographic"),
+        (json!({"crs": "EPSG:4978"}), "crs: EPSG:4978 is geocentric"),
         (json!({"type": "utm", "crs": "EPSG:2056"}), "crs is the measured grid's; the graticule is \"utm\""),
         (json!({"crs": 2056}), "crs must be a coordinate system"),
     ] {
@@ -10281,13 +10282,30 @@ fn the_graticule_takes_a_type_and_a_measured_grids_system() {
     // From a file: a system the command would refuse is left out as the project opens, and said;
     // one it takes stays.
     let mut v: Value = serde_json::from_str(&text).unwrap();
-    for (crs, kept) in [("EPSG:4326", false), ("not a system", false), ("x".repeat(5000).as_str(), false), ("EPSG:2056", true)] {
+    for (crs, kept) in
+        [("EPSG:4326", false), ("EPSG:4978", false), ("not a system", false), ("x".repeat(5000).as_str(), false), ("EPSG:2056", true)]
+    {
         v["maps"][0]["graticule_crs"] = json!(crs);
         let mut back = crate::Project::from_json(&v.to_string()).unwrap();
         assert_eq!(back.map().graticule_crs.as_deref(), kept.then_some(crs), "{}", &crs[..crs.len().min(20)]);
         let said = format!("{:?}", back.take_read_notices(&[crate::project::ReadPart::Maps]));
         assert_eq!(said.contains("the measured graticule's coordinate system"), !kept, "{said}");
     }
+    // Several maps with one each: one notice, with how many and which.
+    let mut many = v.clone();
+    many["maps"][0]["graticule_crs"] = json!("EPSG:4326");
+    let mut second = many["maps"][0].clone();
+    second["name"] = json!("Second");
+    many["maps"].as_array_mut().unwrap().push(second);
+    let mut back = crate::Project::from_json(&many.to_string()).unwrap();
+    let said: Vec<String> = back
+        .take_read_notices(&[crate::project::ReadPart::Maps])
+        .iter()
+        .map(|n| n.english())
+        .filter(|n| n.contains("measured graticule"))
+        .collect();
+    assert_eq!(said.len(), 1, "{said:?}");
+    assert!(said[0].contains("2 map(s)") && said[0].contains("Second (EPSG:4326)"), "{said:?}");
     // An empty system: the map's own again.
     s.run("map.graticule", &json!({"crs": ""})).unwrap();
     assert_eq!(s.map().graticule_crs, None);

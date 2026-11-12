@@ -147,16 +147,20 @@ fn utm(center: Coord, shown: &[Coord], around: &[Coord]) -> Vec<Vec<Coord>> {
             lines.push(parallel(lat, e.min_x.max(-180.0), e.max_x.min(180.0)));
         }
     }
-    // Eastings and northings in each zone in view, when few are.
-    let in_view: Vec<_> = cells.into_iter().filter_map(|(z, b, c)| parts.iter().find(|e| overlaps(&c, e)).map(|e| (z, b, c, *e))).collect();
-    if in_view.is_empty() || in_view.len() > MAX_GRIDDED_CELLS {
+    // Eastings and northings when few zone-and-band cells are in the view itself (not counting
+    // the margin, so they don't come and go as it pans), drawn over the margin too.
+    let seen_parts = extents(shown);
+    let seen_cells = cells.iter().filter(|(_, _, c)| seen_parts.iter().any(|e| overlaps(c, e))).count();
+    if seen_cells == 0 || seen_cells > MAX_GRIDDED_CELLS {
         return lines;
     }
+    let in_view: Vec<_> = cells.into_iter().filter_map(|(z, b, c)| parts.iter().find(|e| overlaps(&c, e)).map(|e| (z, b, c, *e))).collect();
     let Some(step) = zone_transformer(center).and_then(|tr| step_over(&tr, shown)) else { return lines };
     for (zone, band, cell, e) in in_view {
         let north = band >= 'N';
         let epsg = if north { 32_600 } else { 32_700 } + u32::from(zone);
-        let Some(tr) = rustgis_data::raster::Crs::from_epsg(epsg).and_then(|c| c.transformer().ok()) else { continue };
+        // (Made once a code: the map redraws often.)
+        let Some(tr) = rustgis_data::ogc::warp::transformer(epsg) else { continue };
         // The part of the cell in view, its edges densified, as the frame the grid covers.
         let part = Extent {
             min_x: cell.min_x.max(e.min_x),
@@ -181,10 +185,9 @@ fn utm(center: Coord, shown: &[Coord], around: &[Coord]) -> Vec<Vec<Coord>> {
     lines
 }
 
-/// The transformer of the UTM zone at `c` (by its 6° zone and hemisphere).
-fn zone_transformer(c: Coord) -> Option<rustgis_data::raster::Transformer> {
-    let epsg = rustgis_map::layout::utm_epsg(c.x, c.y.clamp(UTM_MIN_LAT, UTM_MAX_LAT - 1e-9));
-    rustgis_data::raster::Crs::from_epsg(epsg)?.transformer().ok()
+/// The transformer of the UTM zone at `c` (by its 6° zone and hemisphere), made once a code.
+fn zone_transformer(c: Coord) -> Option<std::sync::Arc<rustgis_data::raster::Transformer>> {
+    rustgis_data::ogc::warp::transformer(rustgis_map::layout::utm_epsg(c.x, c.y.clamp(UTM_MIN_LAT, UTM_MAX_LAT - 1e-9)))
 }
 
 fn overlaps(a: &Extent, b: &Extent) -> bool {
@@ -378,6 +381,26 @@ mod tests {
         assert_eq!(runs.len(), 2, "{runs:?}");
         // Wholly outside: nothing.
         assert!(clip(&[Coord::new(20.0, 20.0), Coord::new(30.0, 30.0)], &b).is_empty());
+    }
+
+    /// The eight-cell limit counts the view, not its margin: 8° to 20° E and 47° to 49° N holds six
+    /// cells (32T to 34U), its margin ten, and its zones keep their eastings and northings.
+    #[test]
+    fn the_utm_grid_limit_counts_the_view_not_its_margin() {
+        let grid = |w: f64, s: f64, e: f64, n: f64| -> Vec<Coord> {
+            (0..=12)
+                .flat_map(|i| (0..=12).map(move |j| Coord::new(w + (e - w) * f64::from(i) / 12.0, s + (n - s) * f64::from(j) / 12.0)))
+                .collect()
+        };
+        let (shown, around) = (grid(8.0, 47.0, 20.0, 49.0), grid(2.0, 46.0, 26.0, 50.0));
+        let lines = utm(Coord::new(14.0, 48.0), &shown, &around);
+        let inner = lines
+            .iter()
+            .filter(|l| !l.iter().all(|c| (c.x - l[0].x).abs() < 1e-9) && !l.iter().all(|c| (c.y - l[0].y).abs() < 1e-9))
+            .count();
+        assert!(inner > 4, "eastings and northings: {inner}");
+        // And they reach into the margin (zone 31, west of 6° E).
+        assert!(lines.iter().any(|l| l.iter().all(|c| c.x < 6.0) && !l.iter().all(|c| (c.x - l[0].x).abs() < 1e-9)));
     }
 
     /// The UTM graticule over Scandinavia draws the zones' edges as they are there: southern

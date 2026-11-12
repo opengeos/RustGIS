@@ -560,6 +560,9 @@ fn graticule(s: &mut Session, p: &Value) -> CmdResult {
                     c.trim()
                 ));
             }
+            if read.is_geocentric() {
+                return Err(format!("crs: {} is geocentric; a measured grid needs a projected system", c.trim()));
+            }
             // (As the project checks it when it opens: one this version can't project to draws no grid.)
             if let Err(e) = read.transformer() {
                 return Err(format!("crs: {} can't be used here: {e}", c.trim()));
