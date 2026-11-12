@@ -149,13 +149,21 @@ pub fn to_geojson(g: &Geometry) -> Value {
 /// The geometries in GeoJSON of any of its three top-level shapes (a geometry, a feature, a
 /// collection of features); at most [`MAX_FEATURES`] features are read.
 pub fn geometries_of_geojson(v: &Value) -> Result<Vec<Geometry>, String> {
-    let one = |g: &Value| -> Result<Option<Geometry>, String> {
+    geometries_of_geojson_noted(v).map(|(geometries, _)| geometries)
+}
+
+/// [`geometries_of_geojson`], and how many features or members had a null geometry, which it
+/// leaves out.
+pub fn geometries_of_geojson_noted(v: &Value) -> Result<(Vec<Geometry>, usize), String> {
+    let mut without = 0usize;
+    let mut one = |g: &Value| -> Result<Option<Geometry>, String> {
         if g.is_null() {
+            without += 1;
             return Ok(None);
         }
         rustgis_data::io::geometry_from_geojson(g).map(Some).ok_or_else(|| "the search area isn't GeoJSON geometry".to_string())
     };
-    match v.get("type").and_then(Value::as_str) {
+    let geometries = match v.get("type").and_then(Value::as_str) {
         Some("FeatureCollection") => {
             let features = v.get("features").and_then(Value::as_array).ok_or("the search area's features aren't a list")?;
             if features.len() > MAX_FEATURES {
@@ -165,9 +173,9 @@ pub fn geometries_of_geojson(v: &Value) -> Result<Vec<Geometry>, String> {
             for f in features {
                 out.extend(one(f.get("geometry").unwrap_or(&Value::Null))?);
             }
-            Ok(out)
+            out
         }
-        Some("Feature") => Ok(one(v.get("geometry").unwrap_or(&Value::Null))?.into_iter().collect()),
+        Some("Feature") => one(v.get("geometry").unwrap_or(&Value::Null))?.into_iter().collect(),
         Some("GeometryCollection") => {
             let members = v.get("geometries").and_then(Value::as_array).ok_or("the search area's geometries aren't a list")?;
             if members.len() > MAX_FEATURES {
@@ -177,11 +185,12 @@ pub fn geometries_of_geojson(v: &Value) -> Result<Vec<Geometry>, String> {
             for m in members {
                 out.extend(one(m)?);
             }
-            Ok(out)
+            out
         }
-        Some(_) => Ok(one(v)?.into_iter().collect()),
-        None => Err("the search area is GeoJSON: a geometry, a feature or a collection of features".into()),
-    }
+        Some(_) => one(v)?.into_iter().collect(),
+        None => return Err("the search area is GeoJSON: a geometry, a feature or a collection of features".into()),
+    };
+    Ok((geometries, without))
 }
 
 /// The most features or geometries one search area reads.
@@ -249,9 +258,35 @@ impl Shape {
         }
         let footprint = item.geometry.as_ref().and_then(rustgis_data::io::geometry_from_geojson).filter(on_globe);
         match footprint {
-            Some(f) => to_geo(&f).intersects(&self.geo),
+            Some(f) => to_geo(&f).intersects(&self.geo) || self.meets_over_the_antimeridian(item, &f),
             None => true,
         }
+    }
+
+    /// An item whose box crosses the antimeridian but whose footprint isn't split there (RFC 7946
+    /// asks for it to be) spans the world the other way in a plain test. Read on a world that goes
+    /// on past 180°, it is where its box says. Only for a shape on one side of 0°, where moving the
+    /// western longitudes a world's width east changes nothing about the shape.
+    fn meets_over_the_antimeridian(&self, item: &Item, footprint: &Geometry) -> bool {
+        let Some([w, _, e, _]) = item.bbox else { return false };
+        let [sw, _, se, _] = self.bbox;
+        if w <= e || (sw < 0.0 && se > 0.0) {
+            return false;
+        }
+        let footprint = shifted(footprint, |x| x < 0.0);
+        let shape = if se <= 0.0 { shifted(&self.geometry, |_| true) } else { self.geometry.clone() };
+        to_geo(&footprint).intersects(&to_geo(&shape))
+    }
+}
+
+/// `g` with the longitudes `when` picks moved a world's width east.
+fn shifted(g: &Geometry, when: impl Fn(f64) -> bool) -> Geometry {
+    let c = |c: &Coord| if when(c.x) { Coord::new(c.x + 360.0, c.y) } else { *c };
+    match g {
+        Geometry::Point(p) => Geometry::Point(c(p)),
+        Geometry::MultiPoint(v) => Geometry::MultiPoint(v.iter().map(c).collect()),
+        Geometry::Line(v) => Geometry::Line(v.iter().map(|l| l.iter().map(c).collect()).collect()),
+        Geometry::Polygon(v) => Geometry::Polygon(v.iter().map(|p| p.iter().map(|r| r.iter().map(c).collect()).collect()).collect()),
     }
 }
 
@@ -356,6 +391,19 @@ mod tests {
         // Only a bbox: the footprint is its box. Neither: kept, as a bbox filter keeps it.
         assert!(Shape::new(&Geometry::Point(Coord::new(0.9, 0.9))).meets(&item(Some([0.0, 0.0, 1.0, 1.0]), None)));
         assert!(Shape::new(&Geometry::Point(Coord::new(50.0, 50.0))).meets(&item(None, None)));
+    }
+
+    #[test]
+    fn a_footprint_not_split_at_the_antimeridian_is_where_its_box_says() {
+        // The ring runs 170 → -170 the short way, as the box says; a plain test sees it span -170..170.
+        let ring = json!({"type": "Polygon", "coordinates": [[[170, -20], [-170, -20], [-170, -10], [170, -10], [170, -20]]]});
+        let unsplit = item(Some([170.0, -20.0, -170.0, -10.0]), Some(ring));
+        for x in [175.0, -175.0] {
+            assert!(Shape::new(&Geometry::Point(Coord::new(x, -15.0))).meets(&unsplit), "{x}");
+        }
+        assert!(!Shape::new(&Geometry::Point(Coord::new(0.0, -15.0))).meets(&unsplit), "the far side of the world");
+        assert!(!Shape::new(&Geometry::Point(Coord::new(100.0, -15.0))).meets(&unsplit));
+        assert!(!Shape::new(&Geometry::Point(Coord::new(175.0, 30.0))).meets(&unsplit), "off the box");
     }
 
     #[test]

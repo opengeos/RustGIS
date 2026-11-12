@@ -176,7 +176,13 @@ pub fn from_params(s: &mut Session, p: &Value) -> Result<Option<Area>, String> {
     let geometries = match p.get("intersects") {
         None | Some(Value::Null) => return Ok(None),
         Some(Value::String(v)) if v.trim().eq_ignore_ascii_case("selection") => selected_noted(s, p)?,
-        Some(v @ Value::Object(_)) => area::geometries_of_geojson(v)?,
+        Some(v @ Value::Object(_)) => {
+            let (geometries, without) = area::geometries_of_geojson_noted(v)?;
+            if without > 0 {
+                s.warn(format!("{without} feature(s) without a geometry are left out of the search area"));
+            }
+            geometries
+        }
         Some(_) => return Err("intersects is GeoJSON (a geometry, a feature or a collection of features), or \"selection\"".into()),
     };
     Ok(Some(merged(s, &geometries, p)?.ok_or("the search area has no point, line or polygon to search with")?))
@@ -199,23 +205,128 @@ fn merged(s: &mut Session, geometries: &[Geometry], p: &Value) -> Result<Option<
             None => return Err(format!("buffer is a number: a distance in {} (0 to {MAX_BUFFER_M} metres)", unit.unwrap_or("metres"))),
         },
     };
-    let Some(mut area) = area::merge(geometries)? else { return Ok(None) };
-    for n in notes(&area) {
+    let Some(prepared) = prepare(geometries, metres)? else { return Ok(None) };
+    for n in prepared.notices {
         s.warn(n);
     }
+    Ok(Some(prepared.area))
+}
+
+/// A search area ready to send, and what making it left out or approximated.
+pub struct Prepared {
+    pub area: Area,
+    pub notices: Vec<String>,
+}
+
+/// Merges `geometries` and widens points and lines by `metres` (0 for none): a search area's
+/// whole work, without a session, so the pane can run it on a thread of its own. It has no Cancel
+/// check: each merge limits its input and output to [`area::MAX_POSITIONS`] positions, and the
+/// buffer has no limit on its vertices before the merge that follows it.
+pub fn prepare(geometries: &[Geometry], metres: f64) -> Result<Option<Prepared>, String> {
+    let Some(mut area) = area::merge(geometries)? else { return Ok(None) };
+    let mut notices = notes(&area);
     if metres > 0.0 {
         if matches!(area.geometry, Geometry::Polygon(_)) {
-            s.warn("the search area's buffer is not applied: it widens points and lines, and a polygon already has an area");
+            notices.push("the search area's buffer is not applied: it widens points and lines, and a polygon already has an area".into());
         } else {
-            let widened = rustgis_analysis::geodesic::geodesic_buffer(&area.geometry, metres)
+            let (widened, coarse) = rustgis_analysis::geodesic::geodesic_buffer_noted(&area.geometry, metres)
                 .ok_or("the buffer of the search area is empty: give a larger distance")?;
+            if coarse {
+                notices.push(
+                    "the search area's buffer has outline edges left with fewer points along them than they need: \
+                     its sides there can stray from the distance by more than a buffer otherwise keeps to"
+                        .into(),
+                );
+            }
+            let widened = split_at_antimeridian(widened)?;
             // Eight decimals, as the merge keeps; the buffer is a polygon, so it is merged again.
-            area = area::merge(&[widened])?
+            area = area::merge(&[widened])
+                .map_err(|e| {
+                    if e.contains("more than") {
+                        format!(
+                            "the widened search area has more than {} positions (each point or line widened adds many): \
+                             widen fewer shapes or give a smaller distance",
+                            area::MAX_POSITIONS
+                        )
+                    } else {
+                        e
+                    }
+                })?
                 .map(|a| Area { ignored: area.ignored, degenerate: area.degenerate, ..a })
                 .ok_or("the buffer of the search area is empty")?;
         }
     }
-    Ok(Some(area))
+    Ok(Some(Prepared { area, notices }))
+}
+
+/// A buffer that ran past ±180° (the buffer of a point near the meridian keeps its rings
+/// continuous) as the same area in the longitudes a search takes: cut at the meridian, with the
+/// part beyond it moved a world's width back. A polygon with a hole that crosses it is refused.
+fn split_at_antimeridian(g: Geometry) -> Result<Geometry, String> {
+    use rustgis_geom::Coord;
+    let Geometry::Polygon(polygons) = g else { return Ok(g) };
+    let beyond = |c: &Coord| c.x > 180.0 || c.x < -180.0;
+    if !polygons.iter().flatten().flatten().any(beyond) {
+        return Ok(Geometry::Polygon(polygons));
+    }
+    let mut out = Vec::new();
+    for polygon in polygons {
+        if !polygon.iter().flatten().any(beyond) {
+            out.push(polygon);
+            continue;
+        }
+        let [outer] = polygon.as_slice() else {
+            return Err("the widened search area crosses the 180° meridian where it has a hole: give a smaller distance".into());
+        };
+        for (lo, hi, shift) in [(-180.0, 180.0, 0.0), (180.0, f64::INFINITY, -360.0), (f64::NEG_INFINITY, -180.0, 360.0)] {
+            let ring = clip_between(outer, lo, hi);
+            if ring.len() >= 4 && ring_area(&ring) > 0.0 {
+                out.push(vec![ring.into_iter().map(|c| Coord::new(c.x + shift, c.y)).collect()]);
+            }
+        }
+    }
+    Ok(Geometry::Polygon(out))
+}
+
+/// The part of a closed ring with `lo <= x <= hi` (Sutherland–Hodgman against each side), closed.
+fn clip_between(ring: &[rustgis_geom::Coord], lo: f64, hi: f64) -> Vec<rustgis_geom::Coord> {
+    use rustgis_geom::Coord;
+    let half = |ring: &[Coord], edge: f64, keep_above: bool| -> Vec<Coord> {
+        let inside = |x: f64| if keep_above { x >= edge } else { x <= edge };
+        let cut = |a: Coord, b: Coord| Coord::new(edge, a.y + (edge - a.x) / (b.x - a.x) * (b.y - a.y));
+        let mut out = Vec::new();
+        for w in ring.windows(2) {
+            let (a, b) = (w[0], w[1]);
+            match (inside(a.x), inside(b.x)) {
+                (true, true) => out.push(b),
+                (true, false) => out.push(cut(a, b)),
+                (false, true) => {
+                    out.push(cut(a, b));
+                    out.push(b);
+                }
+                (false, false) => {}
+            }
+        }
+        if let (Some(first), Some(last)) = (out.first().copied(), out.last().copied())
+            && first != last
+        {
+            out.push(first);
+        }
+        out
+    };
+    let mut ring = ring.to_vec();
+    if lo.is_finite() {
+        ring = half(&ring, lo, true);
+    }
+    if hi.is_finite() {
+        ring = half(&ring, hi, false);
+    }
+    ring
+}
+
+/// The area of a ring in square degrees (the shoelace formula), 0 when it has no area.
+fn ring_area(ring: &[rustgis_geom::Coord]) -> f64 {
+    ring.windows(2).map(|w| w[0].x * w[1].y - w[1].x * w[0].y).sum::<f64>().abs() / 2.0
 }
 
 /// Whether the search names a shape of its own, which replaces its `bbox`.
@@ -263,6 +374,45 @@ mod tests {
         assert_eq!(mixed.notices.len(), 2, "{:?}", mixed.notices);
         assert!(mixed.notices.iter().any(|n| n.contains("lower dimension")));
         assert!(merge_loaded(&[], Vec::new()).is_err());
+    }
+
+    #[test]
+    fn a_buffer_past_the_antimeridian_is_split_into_longitudes_a_search_takes() {
+        for (x, y) in [(179.99, -17.0), (-179.99, 17.0)] {
+            let Ok(Some(p)) = prepare(&[point(x, y)], 5000.0) else { panic!("a buffer near {x}") };
+            let Geometry::Polygon(parts) = &p.area.geometry else { panic!("a polygon") };
+            assert_eq!(parts.len(), 2, "one each side of the meridian, near {x}");
+            let xs: Vec<f64> = parts.iter().flatten().flatten().map(|c| c.x).collect();
+            assert!(xs.iter().all(|x| (-180.0..=180.0).contains(x)), "{xs:?}");
+            assert!(xs.contains(&180.0) && xs.contains(&-180.0), "both sides reach the meridian: {xs:?}");
+        }
+        // A point well inside the world is one polygon, as before.
+        let Ok(Some(p)) = prepare(&[point(10.0, 10.0)], 5000.0) else { panic!("a buffer") };
+        assert!(matches!(&p.area.geometry, Geometry::Polygon(parts) if parts.len() == 1));
+    }
+
+    #[test]
+    fn widening_so_many_shapes_that_the_result_is_too_detailed_says_so_plainly() {
+        let points: Vec<Geometry> = (0..160).map(|i| point(f64::from(i) * 0.5, 10.0)).collect();
+        let Err(e) = prepare(&points, 1000.0) else { panic!("160 widened points are too many") };
+        assert!(e.contains("widen fewer") && e.contains("20000"), "{e}");
+        assert!(prepare(&points[..100], 1000.0).is_ok(), "fewer fit");
+    }
+
+    #[test]
+    fn geojson_features_without_a_geometry_are_counted_and_said() {
+        let with = json!({"type": "Feature", "properties": {}, "geometry": {"type": "Point", "coordinates": [1, 2]}});
+        let nulls = json!({"type": "FeatureCollection", "features": [with.clone(), {"type": "Feature", "properties": {}, "geometry": null}, {"type": "Feature", "properties": {}}]});
+        let mut s = Session::new(crate::Project::default());
+        let area = from_params(&mut s, &json!({"intersects": nulls})).unwrap().unwrap();
+        assert!(matches!(area.geometry, Geometry::Point(_)));
+        let said = |s: &Session| s.notices.iter().filter(|n| n.text.contains("2 feature(s) without a geometry")).count();
+        assert_eq!(said(&s), 1);
+        // Features that all have one: nothing is said.
+        let mut s = Session::new(crate::Project::default());
+        let clean = json!({"type": "FeatureCollection", "features": [with]});
+        from_params(&mut s, &json!({"intersects": clean})).unwrap();
+        assert!(s.notices.iter().all(|n| !n.text.contains("without a geometry")), "{:?}", s.notices);
     }
 
     #[test]

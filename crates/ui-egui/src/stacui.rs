@@ -20,7 +20,7 @@ use rustgis_engine::render::rustgis_tiles::{
 use serde_json::json;
 
 use crate::{RustGisApp, Slot, i18n};
-use rustgis_engine::cmd::stac_area::Loaded;
+use rustgis_engine::cmd::stac_area::{Loaded, Prepared};
 use rustgis_engine::data::Geometry;
 use rustgis_engine::geom::Coord;
 
@@ -156,6 +156,9 @@ pub struct State {
     /// The features being read and merged on a thread of their own (a file's, or the selection's
     /// copy), by what they come from; Cancel drops the answer.
     loading: Option<(String, Slot<Result<Loaded, String>>)>,
+    /// A search whose area is being made (merged and widened) on a thread of its own, with the
+    /// search to send once it lands; Clear drops it.
+    preparing: Option<Preparing>,
     pub max_cloud: String,
     /// The order of an API's items (`eo:cloud_cover`…); empty for the API's own.
     pub sortby: String,
@@ -211,6 +214,7 @@ impl Default for State {
             buffer: String::new(),
             drawing: None,
             loading: None,
+            preparing: None,
             max_cloud: "20".into(),
             sortby: String::new(),
             preset: None,
@@ -368,6 +372,7 @@ pub fn poll(app: &mut RustGisApp, ctx: &egui::Context) {
     poll_thumbs(app, ctx);
     poll_walk(app, ctx);
     poll_loading(app, ctx);
+    poll_preparing(app, ctx);
     stop_stale_drawing(app);
     let Some((_, slot)) = &app.ui.stac.waiting else { return };
     let Some(r) = slot.lock().unwrap_or_else(|e| e.into_inner()).take() else {
@@ -811,7 +816,7 @@ fn drop_listing(st: &mut State) {
 
 /// The dialog.
 pub fn dialog(app: &mut RustGisApp, ui: &mut egui::Ui) {
-    let busy = app.ui.stac.waiting.is_some() || app.ui.stac.walk.is_some();
+    let busy = app.ui.stac.waiting.is_some() || app.ui.stac.walk.is_some() || app.ui.stac.preparing.is_some();
     let is_static = catalog::is_static(&app.ui.stac.api);
     let mut list = false;
     let mut search = false;
@@ -1172,7 +1177,7 @@ fn area_buttons(ui: &mut egui::Ui, st: &mut State, ask: &mut Option<AreaAsk>) {
         if ui.button(tl!("Current extent")).clicked() {
             *ask = Some(AreaAsk::Extent);
         }
-        let any = !st.parts.is_empty() || st.drawing.is_some() || reading.is_some();
+        let any = !st.parts.is_empty() || st.drawing.is_some() || reading.is_some() || st.preparing.is_some();
         if ui.add_enabled(any, egui::Button::new(tl!("Clear"))).clicked() {
             *ask = Some(AreaAsk::Clear);
         }
@@ -1253,6 +1258,7 @@ fn clear_area(app: &mut RustGisApp) {
     }
     app.ui.stac.parts.clear();
     app.ui.stac.loading = None;
+    app.ui.stac.preparing = None;
 }
 
 /// Adds a part, within [`MAX_PARTS`] (said when it is full).
@@ -1363,6 +1369,15 @@ fn on_globe(c: Coord) -> Coord {
     Coord::new((c.x + 180.0).rem_euclid(360.0) - 180.0, c.y.clamp(-90.0, 90.0))
 }
 
+/// Whether a drawn line (or a polygon, whose last point joins its first) goes over the 180°
+/// meridian: two points that are near on the map but far apart once each is wrapped into -180 to
+/// 180. Wrapped on its own, each vertex would send the shape the long way round the world.
+fn crosses_dateline(raw: &[Coord], closed: bool) -> bool {
+    let first = raw.first().into_iter().filter(|_| closed);
+    let ends = raw.iter().chain(first).collect::<Vec<_>>();
+    ends.windows(2).any(|w| (on_globe(*w[0]).x - on_globe(*w[1]).x).abs() > 180.0 && (w[0].x - w[1].x).abs() <= 180.0)
+}
+
 /// The box dragged from corner `a` to corner `b`, as longitudes on the (maybe repeated) world map.
 /// A box that crosses the dateline is two boxes, one each side of it, rather than one that spans
 /// the world the other way; one 360° wide or more is the whole globe.
@@ -1394,6 +1409,11 @@ pub(crate) fn take_drawn(app: &mut RustGisApp, shape: &str, pts: &[Coord]) -> Op
         return None;
     }
     let raw: Vec<Coord> = pts.iter().copied().filter(|c| c.is_finite()).collect();
+    if matches!(shape, "line" | "polygon") && crosses_dateline(&raw, shape == "polygon") {
+        app.ui.stac.error =
+            Some(tl!("A line or polygon can't cross the 180° meridian: draw it in two parts, one on each side").to_string());
+        return Some(false);
+    }
     let pts: Vec<Coord> = raw.iter().copied().map(on_globe).collect();
     let geometry = match shape {
         "point" => pts.first().map(|c| Geometry::Point(*c)),
@@ -1455,7 +1475,7 @@ fn paint_dot(p: &egui::Painter, at: &[egui::Pos2], color: egui::Color32) {
 fn find_items(app: &mut RustGisApp) {
     let st = &app.ui.stac;
     // A catalog's children still coming don't hold a search up.
-    if st.walk.is_some() || st.waiting.as_ref().is_some_and(|(a, _)| !matches!(a, Asked::Children(_))) {
+    if st.walk.is_some() || st.preparing.is_some() || st.waiting.as_ref().is_some_and(|(a, _)| !matches!(a, Asked::Children(_))) {
         return;
     }
     // A file or selection still being read would be missing from the area searched, so wait for it.
@@ -1487,29 +1507,97 @@ fn find_items(app: &mut RustGisApp) {
     }
     let buffer = st.buffer.trim().to_string();
     if !st.parts.is_empty() {
-        p["intersects"] = json!({
-            "type": "GeometryCollection",
-            "geometries": st.parts.iter().map(stac::area::to_geojson).collect::<Vec<_>>(),
-        });
-        if !buffer.is_empty() {
+        // The area (merging, widening) takes as long as its shapes are many and detailed, so it is
+        // made on a thread of its own and the search is sent with it when it lands.
+        let metres = if buffer.is_empty() {
+            Ok(0.0)
+        } else {
             match buffer.parse::<f64>() {
                 Ok(d) if d.is_finite() && d >= 0.0 => {
-                    p["buffer"] = json!(d);
-                    p["unit"] = json!(app.forms.distance_units);
+                    rustgis_engine::cmd::stac_area::buffer_metres(d, Some(app.forms.distance_units.as_str()))
                 }
-                _ => {
-                    app.ui.stac.error = Some(tl!("The distance to widen by is a number, 0 or more").to_string());
-                    return;
-                }
+                _ => Err(tl!("The distance to widen by is a number, 0 or more").to_string()),
             }
+        };
+        let geometries = st.parts.clone();
+        match metres {
+            Ok(metres) => start_preparing(app, geometries, metres, p, is_static),
+            Err(e) => app.ui.stac.error = Some(e),
         }
-    } else if st.use_view {
+        return;
+    }
+    if st.use_view {
         p["bbox"] = json!("view");
     }
+    send_search(app, p, is_static);
+}
+
+/// An area being made for a search, and the search to send with it.
+struct Preparing {
+    slot: Slot<Result<Option<Prepared>, String>>,
+    params: serde_json::Value,
+    is_static: bool,
+}
+
+/// Makes the search area of `geometries` widened by `metres` on a thread of its own (here and now
+/// in the browser, which has one), then sends the search `params` describes with it.
+fn start_preparing(app: &mut RustGisApp, geometries: Vec<Geometry>, metres: f64, params: serde_json::Value, is_static: bool) {
+    let job = move || rustgis_engine::cmd::stac_area::prepare(&geometries, metres);
+    if cfg!(target_arch = "wasm32") {
+        land_prepared(app, job(), params, is_static);
+        return;
+    }
+    let slot: Slot<Result<Option<Prepared>, String>> = Slot::default();
+    let out = slot.clone();
+    let spawned = std::thread::Builder::new().name("stac-search-area".into()).spawn(move || {
+        let answer = job();
+        *out.lock().unwrap_or_else(|e| e.into_inner()) = Some(answer);
+    });
+    match spawned {
+        Ok(_) => {
+            app.ui.stac.error = None;
+            app.ui.stac.info = Some(tl!("Making the search area…").to_string());
+            app.ui.stac.preparing = Some(Preparing { slot, params, is_static });
+        }
+        Err(e) => app.ui.stac.error = Some(i18n::fmt("Couldn't start the search: {e}", &[("e", &e.to_string())])),
+    }
+}
+
+fn poll_preparing(app: &mut RustGisApp, ctx: &egui::Context) {
+    let Some(preparing) = &app.ui.stac.preparing else { return };
+    let Some(answer) = preparing.slot.lock().unwrap_or_else(|e| e.into_inner()).take() else {
+        ctx.request_repaint_after(std::time::Duration::from_millis(100));
+        return;
+    };
+    let Some(preparing) = app.ui.stac.preparing.take() else { return };
+    land_prepared(app, answer, preparing.params, preparing.is_static);
+    ctx.request_repaint();
+}
+
+/// The area made: what it left out is said, and the search goes with it.
+fn land_prepared(app: &mut RustGisApp, answer: Result<Option<Prepared>, String>, mut params: serde_json::Value, is_static: bool) {
+    match answer {
+        Ok(Some(prepared)) => {
+            for n in prepared.notices {
+                app.session.warn(n);
+            }
+            params["intersects"] = stac::area::to_geojson(&prepared.area.geometry);
+            send_search(app, params, is_static);
+        }
+        Ok(None) => app.ui.stac.error = Some(tl!("The search area has no point, line or polygon to search with").to_string()),
+        Err(e) => app.ui.stac.error = Some(e),
+    }
+}
+
+/// Sends the search `p` describes: a walk of a static catalog, or an API's search.
+fn send_search(app: &mut RustGisApp, p: serde_json::Value, is_static: bool) {
     // The shape of the selection (if asked) replaces the box; what merging leaves out is a notice.
     let search = rustgis_engine::cmd::stac::search_with_area(&mut app.session, &p).map(|(s, _)| s);
+    // The area a cube is asked over: the shape's extent when it has one a cube can use, not a
+    // point, a line along a parallel or a box split at the dateline (the items' extent then).
+    let usable = |b: [f64; 4]| (b[2] > b[0] && b[3] > b[1] && b[2] - b[0] < 360.0).then_some(b);
     app.ui.stac.asked_area =
-        search.as_ref().ok().and_then(|s| s.bbox.or_else(|| s.intersects.as_ref().map(|g| stac::area::Shape::new(g).bbox())));
+        search.as_ref().ok().and_then(|s| s.bbox.or_else(|| s.intersects.as_ref().and_then(|g| usable(stac::area::Shape::new(g).bbox()))));
     app.ui.stac.error = None;
     if is_static {
         let st = &app.ui.stac;
@@ -1887,10 +1975,12 @@ mod tests {
         assert!(app.ui.stac.waiting.is_none(), "nothing is sent while the area loads");
         let said = app.ui.stac.error.clone().unwrap_or_default();
         assert!(said.contains("still loading"), "{said}");
-        // Once it has landed, the same search starts, and the message is gone.
+        // Once it has landed, the same search starts (its area made first, off the frame), and the
+        // message is gone.
         app.ui.stac.loading = None;
         app.ui.stac.error = None;
         find_items(&mut app);
+        wait_for_the_area(&mut app);
         assert!(app.ui.stac.waiting.is_some() && app.ui.stac.error.is_none());
     }
 
@@ -2042,6 +2132,69 @@ mod tests {
         let polygon = [Coord::new(0.0, 0.0), Coord::new(1.0, 0.0), Coord::new(1.0, 1.0)];
         assert_eq!(take_drawn(&mut app, "polygon", &polygon), None);
         assert!(app.ui.stac.parts.is_empty());
+    }
+
+    /// Polls the pane until the area of a shape search has been made on its thread.
+    fn wait_for_the_area(app: &mut RustGisApp) {
+        let ctx = egui::Context::default();
+        for _ in 0..500 {
+            if app.ui.stac.preparing.is_none() {
+                return;
+            }
+            poll_preparing(app, &ctx);
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        panic!("the search area was not made in five seconds");
+    }
+
+    #[test]
+    fn a_shape_search_makes_its_area_off_the_frame_and_then_sends() {
+        let mut app = RustGisApp::with_sample();
+        app.ui.stac.api = "http://127.0.0.1:1/stac".into();
+        app.ui.stac.collection = "c".into();
+        app.ui.stac.parts.push(rectangle([7.0, 46.0, 8.0, 47.0]));
+        find_items(&mut app);
+        // The click returned with the area still being made, and nothing sent yet.
+        assert!(app.ui.stac.preparing.is_some() && app.ui.stac.waiting.is_none() && app.ui.stac.error.is_none());
+        // A second click while it is made does nothing.
+        find_items(&mut app);
+        wait_for_the_area(&mut app);
+        assert!(app.ui.stac.waiting.is_some() || app.ui.stac.error.is_some(), "the search went out");
+        assert_eq!(app.ui.stac.asked_area, Some([7.0, 46.0, 8.0, 47.0]));
+        // A point has no extent a cube could use: the items' extent is used then, as before.
+        app.ui.stac.waiting = None;
+        app.ui.stac.parts = vec![Geometry::Point(Coord::new(7.5, 46.5))];
+        find_items(&mut app);
+        wait_for_the_area(&mut app);
+        assert_eq!(app.ui.stac.asked_area, None);
+        // Clear drops an area still being made.
+        app.ui.stac.waiting = None;
+        find_items(&mut app);
+        clear_area(&mut app);
+        assert!(app.ui.stac.preparing.is_none() && app.ui.stac.parts.is_empty());
+    }
+
+    #[test]
+    fn a_line_or_polygon_across_the_dateline_is_refused_with_a_reason() {
+        let mut app = RustGisApp::with_sample();
+        draw(&mut app, "line");
+        let across = [Coord::new(179.0, 0.0), Coord::new(181.0, 0.0)];
+        assert_eq!(take_drawn(&mut app, "line", &across), Some(false));
+        assert!(app.ui.stac.parts.is_empty());
+        let said = app.ui.stac.error.clone().unwrap_or_default();
+        assert!(said.contains("180°"), "{said}");
+        // A polygon with a side over the meridian is refused too.
+        app.ui.stac.error = None;
+        draw(&mut app, "polygon");
+        let polygon = [Coord::new(179.0, 0.0), Coord::new(179.0, 5.0), Coord::new(181.0, 5.0)];
+        assert_eq!(take_drawn(&mut app, "polygon", &polygon), Some(false));
+        // A line wholly on one side, or wholly on the next copy of the world, is taken.
+        app.ui.stac.error = None;
+        for line in [[Coord::new(10.0, 0.0), Coord::new(20.0, 0.0)], [Coord::new(190.0, 0.0), Coord::new(200.0, 0.0)]] {
+            draw(&mut app, "line");
+            assert_eq!(take_drawn(&mut app, "line", &line), Some(true), "{line:?}");
+        }
+        assert!(app.ui.stac.error.is_none());
     }
 
     #[test]
