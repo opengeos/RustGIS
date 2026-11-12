@@ -2944,7 +2944,7 @@ impl RustGisApp {
                     Some(t) => Some(
                         t.as_str()
                             .and_then(layerprops::Topic::parse)
-                            .ok_or_else(|| format!("unknown tab {t}: general, source, display or query"))?,
+                            .ok_or("unknown tab: give general, source, display or query")?,
                     ),
                     None => None,
                 };

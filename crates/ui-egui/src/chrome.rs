@@ -1392,6 +1392,16 @@ pub fn notices(app: &mut RustGisApp, ctx: &egui::Context) {
 mod tests {
     use super::*;
 
+    /// Command Search's Definition Query opens the Layer Properties pane on its Query tab (#1803),
+    /// the dialog it opened being gone.
+    #[test]
+    fn definition_query_is_found_on_the_query_tab() {
+        assert!(matches!(search_action("layer.definitionQuery"), Some(SearchAction::PropertiesTab("query"))));
+        let mut app = RustGisApp::with_sample();
+        app.session.run("layer.select", &json!({"layer": "Cities"})).unwrap();
+        assert!(super::search_disabled(&app, "layer.definitionQuery").is_none(), "offered for a feature layer");
+    }
+
     /// Past the 200 notices the session keeps, each new notice it holds still makes one toast (#1755).
     #[test]
     fn each_kept_notice_makes_one_toast_past_the_200th() {

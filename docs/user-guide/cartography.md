@@ -683,7 +683,7 @@ time:
   draw (the grammar is in [Expressions](expressions.md)). Buttons add a field or an operator, a red
   line says what is wrong with a clause as you type it, **Apply** (or Ctrl+Enter) sets it and
   **Clear** draws every feature again. A clause being typed is kept while you look at another tab;
-  choosing another layer or Escape drops it.
+  choosing another layer or Escape in the box drops it.
 
 Open it with Layers › right-click › **Properties…** or **View › Windows › Layer Properties**;
 **Data › Definition Query** opens it on the Query tab. It

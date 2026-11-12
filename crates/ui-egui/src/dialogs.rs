@@ -1965,17 +1965,21 @@ pub(crate) fn buttons(app: &mut RustGisApp, ui: &mut egui::Ui, ok: &str, f: impl
 }
 
 /// Buttons that add one of `fields` (the first 24) or an operator to the clause `text`, as Select
-/// By Attributes and the Layer Properties pane's Query tab offer them.
+/// By Attributes and the Layer Properties pane's Query tab offer them. Each is set apart from what
+/// the clause ends with, so a name typed just before isn't run into it (`nameLIKE`).
 pub(crate) fn field_chips(ui: &mut egui::Ui, fields: &[rustgis_engine::data::Field], text: &mut String) {
+    let add = |text: &mut String, word: &str| {
+        if !text.is_empty() && !text.ends_with(char::is_whitespace) {
+            text.push(' ');
+        }
+        text.push_str(word);
+        text.push(' ');
+    };
     ui.horizontal_wrapped(|ui| {
         ui.label(egui::RichText::new(tl!("Fields:")).small().weak());
         for f in fields.iter().take(24) {
             if ui.small_button(&f.name).clicked() {
-                if !text.is_empty() && !text.ends_with(' ') {
-                    text.push(' ');
-                }
-                text.push_str(&f.name);
-                text.push(' ');
+                add(text, &f.name);
             }
         }
     });
@@ -1983,7 +1987,7 @@ pub(crate) fn field_chips(ui: &mut egui::Ui, fields: &[rustgis_engine::data::Fie
     ui.horizontal_wrapped(|ui| {
         for op in ["=", "<>", ">", "<", "LIKE", "AND", "OR", "IS NULL"] {
             if ui.small_button(op).clicked() {
-                text.push_str(&format!("{op} "));
+                add(text, op);
             }
         }
     });
@@ -2035,8 +2039,8 @@ fn select_by_attributes(app: &mut RustGisApp, ui: &mut egui::Ui, t: &Tokens) -> 
             .desired_width(f32::INFINITY)
             .font(egui::TextStyle::Monospace),
     );
-    let fields = app.session.map().layer_by_name(&app.dialogs.layer).map(|l| l.dataset.fields.clone()).unwrap_or_default();
-    field_chips(ui, &fields, &mut app.dialogs.text);
+    let fields = app.session.map().layer_by_name(&app.dialogs.layer).map(|l| l.dataset.fields.as_slice()).unwrap_or_default();
+    field_chips(ui, fields, &mut app.dialogs.text);
     // Live validation.
     let check =
         app.session.map().layer_by_name(&app.dialogs.layer).map(|l| rustgis_engine::data::query::select(&app.dialogs.text, &l.dataset));

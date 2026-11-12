@@ -376,9 +376,10 @@ fn query_key(instance: u64) -> egui::Id {
 /// The layer's definition query (`layer.definitionQuery`): only the features matching the clause
 /// draw. The clause typed is set with Apply or Ctrl+Enter, and Clear removes the query; until then
 /// it is kept for this layer while a field or operator button is pressed or another tab is looked
-/// at. It is dropped, and the box shows the layer's query, with Escape, when another layer is
-/// shown (see [`layer_changed`]), when the pane comes back in view (see [`drop_query_when_back`])
-/// and when the query changes from elsewhere (undo, a script), as a name being typed is.
+/// at. It is dropped, and the box shows the layer's query, with Escape in the box (Escape
+/// elsewhere is another control's: a map tool's, a menu's), when another layer is shown (see [`layer_changed`]), when the pane comes back in view (see [`drop_query_when_back`])
+/// and when the query changes from elsewhere (undo, a script), as a name being typed is. The box
+/// cuts nothing: a clause longer than the parser reads is said to be too long, and isn't applied.
 fn query(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, t: &Tokens) {
     let key = query_key(l.instance_id());
     let current = l.definition_query.clone().unwrap_or_default();
@@ -395,7 +396,6 @@ fn query(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, t: &Tokens) {
             egui::TextEdit::multiline(&mut text)
                 .id_salt(("layer_properties_query", l.instance_id()))
                 .hint_text(tl!("e.g. continent = 'Europe'"))
-                .char_limit(rustgis_engine::data::query::MAX_LEN)
                 .desired_rows(3)
                 .desired_width(f32::INFINITY)
                 .font(egui::TextStyle::Monospace),
@@ -609,6 +609,53 @@ mod tests {
         assert_eq!(h.state().session.map().layer(id).unwrap().definition_query, None);
         assert_eq!(h.state().session.undo_depth(), steps + 2);
         assert_eq!(query_box(&h), "");
+    }
+
+    /// A clause longer than the parser reads is kept whole in the box, said to be too long and not
+    /// applied: nothing is cut unsaid.
+    #[test]
+    fn a_clause_too_long_is_said_not_cut() {
+        let app = with_cities();
+        let id = app.session.active_layer.unwrap();
+        let mut h = harness(app);
+        h.run();
+        open_tab(&mut h, "Query");
+        let long = format!("name = '{}'", "x".repeat(rustgis_engine::data::query::MAX_LEN));
+        type_query(&mut h, &long);
+        assert_eq!(query_box(&h).chars().count(), long.chars().count(), "nothing cut");
+        assert!(h.query_by_label_contains("too long").is_some(), "the length is said");
+        h.get_by_role_and_label(Role::Button, "Apply").click();
+        h.run();
+        assert_eq!(h.state().session.map().layer(id).unwrap().definition_query, None, "not applied");
+    }
+
+    /// A clause being typed when the pane is hidden is dropped: back in view, the box shows the
+    /// layer's query.
+    #[test]
+    fn hiding_the_pane_drops_the_query_being_typed() {
+        let app = with_cities();
+        let mut h = harness(app);
+        h.run();
+        open_tab(&mut h, "Query");
+        type_query(&mut h, "pop_max > 1");
+        h.state_mut().ui.right = Some(RightPane::Symbology);
+        h.run();
+        h.state_mut().ui.right = Some(RightPane::LayerProperties);
+        h.run();
+        assert_eq!(query_box(&h), "", "the layer's own query");
+    }
+
+    /// A field or operator button sets its word apart from a name typed just before it.
+    #[test]
+    fn the_buttons_set_their_word_apart() {
+        let app = with_cities();
+        let mut h = harness(app);
+        h.run();
+        open_tab(&mut h, "Query");
+        type_query(&mut h, "name");
+        h.get_by_role_and_label(Role::Button, "LIKE").click();
+        h.run();
+        assert_eq!(query_box(&h), "name LIKE ");
     }
 
     /// Ctrl+Enter applies the clause without breaking the line; Escape drops what was typed.
