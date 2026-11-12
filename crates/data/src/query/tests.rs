@@ -601,20 +601,30 @@ fn where_clauses_compare_dates() {
         GeometryType::None,
         vec![Field::new("issued", FieldType::Date), Field::new("n", FieldType::Integer), Field::new("s", FieldType::Text)],
     );
-    for e in ["issued > n", "issued = abs(n)", "n < issued"] {
+    // Also every branch of if, coalesce and CASE, and arithmetic, which reads text that is a number
+    // as one.
+    for e in [
+        "issued > n",
+        "issued = abs(n)",
+        "n < issued",
+        "issued >= if(n > 0, n * 10000 + 101, issued)",
+        "issued = coalesce(n, issued)",
+        "issued = CASE WHEN n > 0 THEN n ELSE issued END",
+        "issued > s + 1",
+        "issued = s + 'x'",
+    ] {
         assert!(parse(e, &n).err().unwrap_or_default().contains("not a number"), "{e}");
     }
-    for e in [
-        "issued > s",
-        "issued = s + 'x'",
-        "issued >= '2026-' || '01-01'",
-        "issued = coalesce(s, '2026-01-01')",
-        "issued >= upper(s)",
-        "issued = NULL",
-    ] {
+    for e in ["issued > s", "issued >= '2026-' || '01-01'", "issued = coalesce(s, '2026-01-01')", "issued >= upper(s)", "issued = NULL"] {
         assert!(parse(e, &n).is_ok(), "{e}");
     }
     assert!(parse("issued > ts", &d).is_ok(), "two dates compare");
+    // A date without dashes is text no date reads as: an error asking for YYYY-MM-DD. A shorter
+    // partial date still compares as text.
+    for e in ["issued >= '20260101'", "issued = '20260305'", "'20260101' < issued", "issued IN ('2026-01-01', '20260101')"] {
+        assert!(parse(e, &d).err().unwrap_or_default().contains("write the date as YYYY-MM-DD"), "{e}");
+    }
+    assert!(parse("issued > '2026'", &d).is_ok());
     for e in ["to_int(issued)", "to_real(ts)", "color_rgb(issued, 0, 0)"] {
         assert!(parse(e, &d).err().unwrap_or_default().contains("on dates isn't supported yet"), "{e}");
     }

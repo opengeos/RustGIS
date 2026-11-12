@@ -106,7 +106,8 @@ Rules shared by all of them:
   Date-times with different offsets compare by instant, and one without a zone as if it were
   UTC. Text that isn't a full date (`'2026'`) compares as text, against the date's ISO text.
   A date compares only with text or another date: against a number (`issued >= 20260101`,
-  `issued > year`) it's an error, so put the date in quotes.
+  `issued > year`, arithmetic) it's an error, so put the date in quotes, as `YYYY-MM-DD` (a
+  date without dashes, `'20260101'`, is an error too). Use `||` to join text.
   Arithmetic on a date is an error for now, also on one reached through `coalesce`, `nullif`,
   `if` or `CASE` (`coalesce(issued) + 1`), and so are the number functions (`abs`, `round`,
   `min`, …) given a date.

@@ -616,26 +616,36 @@ impl Parser<'_> {
         } else {
             None
         };
+        if let Some(f) = date {
+            return Err(format!("'{}' holds dates, so it compares with a date in quotes ('2026-01-01') or text, not a number", f.name));
+        }
+        // A date written without dashes ('20260101') is text that no date reads as, so it would
+        // compare with the date's text and match nothing.
+        let compact = |e: &Expr| match e {
+            Expr::Lit(Value::Text(t)) if t.trim().len() >= 5 && t.trim().bytes().all(|b| b.is_ascii_digit()) => Some(t.trim().to_string()),
+            _ => None,
+        };
+        let date =
+            compact(b).and_then(|t| Some((self.date_field(a)?, t))).or_else(|| compact(a).and_then(|t| Some((self.date_field(b)?, t))));
         match date {
-            Some(f) => Err(format!("'{}' holds dates, so it compares with a date in quotes ('2026-01-01') or text, not a number", f.name)),
+            Some((f, t)) => Err(format!("'{}' holds dates: write the date as YYYY-MM-DD ('2026-01-01'), not '{t}'", f.name)),
             None => Ok(()),
         }
     }
-    /// Whether `e` can give text or a date, which a date compares with: a text or date literal or
-    /// field, null, `||`, arithmetic with a text term (`+` joins text), a function that gives text,
-    /// or one of these passed through `if`, `coalesce`, `nullif` or `CASE`. Anything else gives a
-    /// number or yes/no.
+    /// Whether `e` can only give text or a date, which a date compares with: a text or date literal
+    /// or field, null, `||`, a function that gives text, or `if`, `coalesce`, `nullif` or `CASE`
+    /// whose every branch is one of these. Anything else can give a number or yes/no, arithmetic
+    /// included (`+` reads text that is a number as one: `'12' + 1` is 13).
     fn text_or_date(&self, e: &Expr) -> bool {
         match e {
             Expr::Lit(v) => !matches!(v, Value::Int(_) | Value::Float(_) | Value::Bool(_)),
             Expr::Field(i) => self.ds.fields.get(*i).is_some_and(|f| matches!(f.ty, crate::FieldType::Text) || f.ty.is_temporal()),
             Expr::Concat(_) => true,
-            Expr::Chain(first, rest) => std::iter::once(&**first).chain(rest.iter().map(|(_, e)| e)).any(|e| self.text_or_date(e)),
-            Expr::Call(Func::If, args) => args.iter().skip(1).any(|a| self.text_or_date(a)),
-            Expr::Call(Func::Coalesce, args) => args.iter().any(|a| self.text_or_date(a)),
+            Expr::Call(Func::If, args) => args.iter().skip(1).all(|a| self.text_or_date(a)),
+            Expr::Call(Func::Coalesce, args) => args.iter().all(|a| self.text_or_date(a)),
             Expr::Call(Func::NullIf, args) => args.first().is_some_and(|a| self.text_or_date(a)),
             Expr::Case { arms, otherwise, .. } => {
-                arms.iter().map(|(_, then)| then).chain(otherwise.as_deref()).any(|a| self.text_or_date(a))
+                arms.iter().map(|(_, then)| then).chain(otherwise.as_deref()).all(|a| self.text_or_date(a))
             }
             Expr::Call(f, _) => !number_func(*f) && !matches!(f, Func::Length | Func::Pi | Func::Area | Func::Perimeter | Func::LineLength),
             _ => false,

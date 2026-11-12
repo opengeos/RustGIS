@@ -73,6 +73,13 @@ pub(crate) fn add_feature(s: &mut Session, p: &Json) -> CmdResult {
             if matches!(value, Value::DateTime(t) if f.ty == FieldType::Date && !t.is_date()) {
                 losses.push((f.name.clone(), "{layer}, field '{field}', row {row}: 1 attribute value kept only its day"));
             }
+            // A date (a native caller's template default) is no yes/no value: null, and said.
+            if f.ty == FieldType::Boolean && coerced.is_null() && !value.asks_null() {
+                losses.push((
+                    f.name.clone(),
+                    "{layer}, field '{field}', row {row}: 1 attribute value was written as null because it isn't a yes/no value",
+                ));
+            }
             Ok(coerced)
         })
         .collect();

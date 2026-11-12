@@ -552,6 +552,18 @@ fn date_fields_work_from_adding_to_saving() {
         assert_eq!(cell(&s, "Cities", row as usize, "founded"), "2026-03-07");
         s.run("edit.undo", &Value::Null).unwrap();
     }
+    // A date default for a yes/no field is null, and said.
+    s.run("edit.addField", &json!({"layer": "Cities", "name": "flag", "type": "boolean"})).unwrap();
+    s.run("edit.template", &json!({"layer": "Cities", "name": "Old", "defaults": {"flag": true}})).unwrap();
+    let cities = s.map_mut().layers.iter_mut().find(|l| l.name == "Cities").unwrap();
+    let old = cities.design.templates.iter_mut().find(|x| x.name == "Old").unwrap();
+    old.defaults[0].1 = V::parse("2026-03-07", rustgis_data::FieldType::Date);
+    let mark = s.notice_mark();
+    s.run("edit.addFeature", &json!({"layer": "Cities", "geometry": here, "template": "Old"})).unwrap();
+    let notices: Vec<String> = s.notices_since(mark).iter().map(|n| n.text.clone()).collect();
+    assert!(notices.iter().any(|n| n.contains("field 'flag'") && n.contains("isn't a yes/no value")), "{notices:?}");
+    s.run("edit.undo", &Value::Null).unwrap();
+    s.run("edit.deleteField", &json!({"layer": "Cities", "field": "flag"})).unwrap();
     s.run("edit.template", &json!({"layer": "Cities", "name": "Old", "remove": true})).unwrap();
     // A date-time with a time of day, into a date field by Calculate Field or Paste, keeps its day, and that is said.
     s.run("edit.setValue", &json!({"layer": "Cities", "row": 0, "field": "seen", "value": "2026-03-07T14:30:00"})).unwrap();
