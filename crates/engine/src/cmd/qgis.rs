@@ -1016,6 +1016,12 @@ fn bind_time(l: &mut rustgis_map::Layer, name: &str, field: Option<&str>, report
     let Some(field) = field else { return false };
     match l.dataset.field_index(field).and_then(|i| l.dataset.fields.get(i)) {
         Some(f) if l.is_streamed() || rustgis_map::time::field_span(&l.dataset, &f.name).is_some() => {
+            if l.is_streamed() {
+                report.approximated(
+                    name,
+                    format!("its time settings, by the field {field}, bound before its features are read: those whose value isn't a date show at every time"),
+                );
+            }
             l.time = Some(rustgis_map::time::TimeBinding::new(f.name.clone()));
             true
         }
@@ -1062,10 +1068,11 @@ fn add_relations(s: &mut Session, project: &qgis::Project, came_in: &[CameIn], r
     for r in &project.relations {
         let (origin, destination) = (find(s, &r.referenced, &r.referenced_field), find(s, &r.referencing, &r.referencing_field));
         let (Some(Ok((origin, origin_key))), Some(Ok((destination, destination_key)))) = (&origin, &destination) else {
-            if matches!(origin, Some(Err(()))) || matches!(destination, Some(Err(()))) {
-                ambiguous.push(r.name.as_str());
-            } else {
+            // (A layer that didn't come in, or hasn't the field, is the reason first.)
+            if origin.is_none() || destination.is_none() {
                 missing.push(r.name.as_str());
+            } else {
+                ambiguous.push(r.name.as_str());
             }
             continue;
         };

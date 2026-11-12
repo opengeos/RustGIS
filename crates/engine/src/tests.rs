@@ -1694,7 +1694,8 @@ fn qgis_bookmarks_relations_rotation_and_time_import() {
     file("Owners", &[r#"{"pid":1,"when":"soon"}"#]);
     // Two date fields: QGIS's is the second.
     file("events", &[r#"{"made":"2019-01-01","when":"2020-03-01","note":"a"}"#, r#"{"made":"2019-02-01","when":"2021-05-01","note":"b"}"#]);
-    // A file of two layers, both with a name field: QGIS's layer is one of them (`layerid`).
+    // A file of several layers (waypoints, tracks, track points), each with a name field: QGIS's
+    // layer is one of them (`layerid`).
     std::fs::write(
         dir.join("trip.gpx"),
         r#"<gpx version="1.1" creator="t" xmlns="http://www.topografix.com/GPX/1/1"><wpt lat="47.4" lon="8.5"><name>a</name></wpt><trk><name>b</name><trkseg><trkpt lat="47.4" lon="8.5"/><trkpt lat="47.5" lon="8.6"/></trkseg></trk></gpx>"#,
@@ -1861,6 +1862,8 @@ fn qgis_time_settings_bind_a_streamed_layer() {
     };
     let out = s.run("style.importQgis", &json!({"layer": "dated", "text": qml("when")})).unwrap();
     assert_eq!(s.map().layers[0].time.as_ref().map(|t| t.field.as_str()), Some("when"), "{out}");
+    // Its dates aren't read yet: said.
+    assert!(out.to_string().contains("bound before its features are read"), "{out}");
     s.map_mut().layers[0].time = None;
     let out = s.run("style.importQgis", &json!({"layer": "dated", "text": qml("nope")})).unwrap();
     assert!(s.map().layers[0].time.is_none());
