@@ -2072,18 +2072,18 @@ mod tests {
     use super::*;
     use egui_kittest::kittest::Queryable;
 
-    /// An empty radius field (or one of spaces) runs the viewshed over the whole DEM: one whose
-    /// radius square, the DEM's diagonal each way, holds far more cells than the DEM, and
-    /// reaching farther than the 500 km a radius given takes.
+    /// An empty radius field (or one of spaces) runs the viewshed over the whole DEM, about
+    /// 630 km long: one whose radius square, the DEM's diagonal each way, holds far more cells
+    /// than the DEM.
     #[test]
     fn a_viewshed_with_an_empty_radius_field_sees_the_whole_dem() {
         use base64::Engine;
         use rustgis_engine::geom::Coord;
         let mut app = RustGisApp::with_sample();
         use rustgis_engine::data::raster::{ColorHint, Crs, GeoTransform, Raster, geotiff};
-        // A strip 4,000 cells long and 2 high, 0.002° (about 160 m) a cell: about 630 km, past
-        // the 500 km a radius given takes. The DEM's diagonal each way spans 8,001 × 8,001
-        // cells, 64 million, of which 8,000 are the DEM's.
+        // A strip 4,000 cells long and 2 high, 0.002° (about 160 m) a cell: about 630 km. The
+        // DEM's diagonal each way spans 8,001 × 8,001 cells, 64 million, of which 8,000 are the
+        // DEM's.
         let (w, h) = (4_000u32, 2u32);
         let gt = GeoTransform { origin_x: 10.0, origin_y: 45.004, pixel_width: 0.002, pixel_height: -0.002 };
         let dem =
@@ -2101,11 +2101,16 @@ mod tests {
             (n, r.value(0, i64::from(w) - 1, 0).is_some())
         };
         let at = Coord::new(10.001, 45.001);
-        // A radius given is at most 500 km: the far end of the strip is left out.
+        // A radius given short of the far end leaves it out; one past the DEM's diagonal works
+        // out every cell, as an empty field does.
+        app.session
+            .run("analysis.viewshed", &json!({"layer": layer, "lon": at.x, "lat": at.y, "height": 2.0, "radius": 100_000, "name": "short"}))
+            .unwrap();
+        assert!(!worked(&app, "short").1);
         app.session
             .run("analysis.viewshed", &json!({"layer": layer, "lon": at.x, "lat": at.y, "height": 2.0, "radius": 1e9, "name": "given"}))
             .unwrap();
-        assert!(!worked(&app, "given").1);
+        assert_eq!(worked(&app, "given"), ((w * h) as usize, true));
         for (i, radius) in ["", "   "].into_iter().enumerate() {
             let workflow = Workflow { layer: layer.clone(), number: "2".into(), number2: radius.into(), ..Default::default() };
             let mut p = viewshed_params(&workflow, at);

@@ -537,8 +537,11 @@ fn viewshed_on(
     // Each cell walks a ray back to the observer: bound cells × ray length, not just cells.
     let cells = (right - left + 1).saturating_mul(last - first + 1);
     let longest = (oc - left).max(right - oc).max(or - first).max(last - or);
-    // A bilinear step reads four cells where a nearest one reads one: weighed as four.
-    let per_step = if heights == Heights::Bilinear { 4 } else { 1 };
+    // A ray steps a whole cell along its longer axis, so a bilinear point lies on a cell's
+    // centre line and reads the two cells it falls between ([`Heights::at`] skips a neighbour
+    // that weighs nothing; next to no data, the nearest cell too) where a nearest one reads one:
+    // weighed as two.
+    let per_step = if heights == Heights::Bilinear { 2 } else { 1 };
     let ray_work = usize::try_from(cells.saturating_mul(longest / 2 + 1).saturating_mul(per_step)).unwrap_or(usize::MAX);
     // Each cell walks its own ray and writes only itself, so the rows within the radius are made
     // on several threads when the work is large (#1252), and may take as many times the work.
@@ -548,7 +551,7 @@ fn viewshed_on(
     if ray_work > cap {
         return Err(format!(
             "the radius takes {ray_work} ray steps{}, more than the {cap} this computer takes on {threads} thread(s); use a smaller radius{}",
-            if per_step > 1 { " (a step between cells counted as four)" } else { "" },
+            if per_step > 1 { " (a step between cells counted as two)" } else { "" },
             crate::parallel::UNCAPPED_HINT
         ));
     }
@@ -1697,6 +1700,25 @@ mod tests {
             .unwrap_or_else(|e| panic!("{e}"));
         let vs = viewshed(&strip, 0, Coord::new(5e-9, 0.001 - 5e-9), 2.0, 1e300, Heights::Nearest).unwrap_or_else(|e| panic!("{e}"));
         assert!(vs.cells.iter().all(|v| *v == 1.0), "{:?}", vs.cells);
+    }
+
+    /// A bilinear ray step is weighed as two in the work cap (it reads the two cells it falls
+    /// between), and a refusal says so: 1,000 × 1,000 cells from the middle on one thread take
+    /// 251 million nearest steps, under the cap, and 502 million weighed bilinear ones, over it.
+    #[test]
+    fn a_bilinear_viewshed_step_is_weighed_as_two_in_the_work_cap() {
+        let w = 1_000u32;
+        let transform = GeoTransform { origin_x: 0.0, origin_y: 45.0, pixel_width: 0.0003, pixel_height: -0.0003 };
+        let dem = Raster::new("dem", w, w, vec![vec![0.0; (w * w) as usize]], transform, Crs::LonLat, None, ColorHint::Gray, "Float32")
+            .unwrap_or_else(|e| panic!("{e}"));
+        let middle = Coord::new(500.5 * 0.0003, 45.0 - 500.5 * 0.0003);
+        let e = viewshed_on(Some(1), &dem, 0, middle, 2.0, 1e9, Heights::Bilinear).unwrap_err();
+        assert!(
+            e.starts_with(&format!(
+                "the radius takes 502000000 ray steps (a step between cells counted as two), more than the {MAX_VIEWSHED_WORK} this computer takes on 1 thread(s)"
+            )),
+            "{e}"
+        );
     }
 
     /// Viewshed rows made on several threads see what one thread sees (#1252), with the radius
