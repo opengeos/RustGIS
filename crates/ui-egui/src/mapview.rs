@@ -525,12 +525,6 @@ impl MapView {
     /// egui's wgpu render state from the host (`frame.wgpu_render_state()`), for the GPU map
     /// backend. Cheap to call every frame: the state is Arc-backed and pipelines build lazily.
     pub fn set_render_state(&mut self, rs: Option<egui_wgpu::RenderState>) {
-        if let Some(rs) = &rs
-            && !self.gpu_handler_on
-        {
-            handle_gpu_errors(&rs.device, self.gpu_errors.clone());
-            self.gpu_handler_on = true;
-        }
         self.render_state = rs;
     }
 
@@ -655,11 +649,14 @@ fn now(ui: &Ui) -> f64 {
 /// leaves the graphics card ([`leave_gpu_if_out_of_memory`]). In the browser none is put on:
 /// WebGPU already only logs what nothing catches, and wgpu would turn its rare internal errors
 /// into a crash once a handler is there.
+/// A frame is asked of `ctx` for each error, so the map leaves the card even when nothing else
+/// would draw again (an error in the last frame before the window goes idle).
 #[cfg_attr(target_arch = "wasm32", allow(unused_variables))]
-pub(crate) fn handle_gpu_errors(device: &egui_wgpu::wgpu::Device, errors: std::sync::Arc<GpuErrors>) {
+pub(crate) fn handle_gpu_errors(device: &egui_wgpu::wgpu::Device, errors: std::sync::Arc<GpuErrors>, ctx: egui::Context) {
     #[cfg(not(target_arch = "wasm32"))]
     device.on_uncaptured_error(std::sync::Arc::new(move |e: egui_wgpu::wgpu::Error| {
         errors.note(&e);
+        ctx.request_repaint();
     }));
 }
 
@@ -738,6 +735,13 @@ pub(crate) fn leave_gpu_if_out_of_memory(app: &mut RustGisApp) {
 /// Shows the active map workspace, discarding stale node gestures after map-tab changes and
 /// before rendering their overlays or consuming pointer releases.
 pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
+    // The device's error handler, once there is a device (here, where the context is known).
+    if !app.map.gpu_handler_on
+        && let Some(rs) = &app.map.render_state
+    {
+        handle_gpu_errors(&rs.device, app.map.gpu_errors.clone(), ui.ctx().clone());
+        app.map.gpu_handler_on = true;
+    }
     leave_gpu_if_out_of_memory(app);
     // Read before the cache was cleared (a sign-out), a picture goes with it: checked on every
     // frame, whatever is shown (a view with no map frame, a catalog or a layout included).

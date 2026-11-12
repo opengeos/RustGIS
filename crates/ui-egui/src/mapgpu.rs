@@ -1820,6 +1820,12 @@ mod tests {
         rs.device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None }).unwrap();
         rx.recv().unwrap().unwrap();
         assert_eq!(&slice.get_mapped_range().unwrap()[..], &[1, 2, 3, 4, 5, 0, 0, 0]);
+        // A buffer that can't be made (here a usage wgpu refuses, as it refuses one the card has
+        // no room for) comes back invalid, its error reported, without the panic.
+        let scope = rs.device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let refused = wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::VERTEX;
+        let _ = buffer_init(&rs.device, &wgpu::util::BufferInitDescriptor { label: None, contents: &[1, 2, 3, 4], usage: refused });
+        assert!(pollster::block_on(scope.pop()).is_some(), "the error is reported");
     }
 
     #[test]
