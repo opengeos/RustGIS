@@ -579,8 +579,27 @@ fn where_clauses_compare_dates() {
     }
     assert_eq!(parse("abs(issued)", &d).err().unwrap_or_default(), "'issued' holds dates, and abs on dates isn't supported yet");
     // A date against a number would compare text with digits: an error that says to quote it.
-    for e in ["issued >= 20260101", "20260101 < issued", "issued = 20260305", "ts IN (1, 2)", "issued BETWEEN 20260101 AND 20261231"] {
+    for e in [
+        "issued >= 20260101",
+        "20260101 < issued",
+        "issued = 20260305",
+        "ts IN (1, 2)",
+        "issued BETWEEN 20260101 AND 20261231",
+        "issued >= 2026 * 10000 + 101",
+    ] {
         assert!(parse(e, &d).err().unwrap_or_default().contains("compare it with a date in quotes"), "{e}");
+    }
+    // Also a number a field holds or a function gives; text still compares.
+    let n = Dataset::new(
+        "t",
+        GeometryType::None,
+        vec![Field::new("issued", FieldType::Date), Field::new("n", FieldType::Integer), Field::new("s", FieldType::Text)],
+    );
+    for e in ["issued > n", "issued = abs(n)", "n < issued"] {
+        assert!(parse(e, &n).err().unwrap_or_default().contains("compare it with a date in quotes"), "{e}");
+    }
+    for e in ["issued > s", "issued = s + 'x'", "issued >= '2026-' || '01-01'"] {
+        assert!(parse(e, &n).is_ok(), "{e}");
     }
     for e in ["to_int(issued)", "to_real(ts)", "color_rgb(issued, 0, 0)"] {
         assert!(parse(e, &d).err().unwrap_or_default().contains("on dates isn't supported yet"), "{e}");

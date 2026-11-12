@@ -535,6 +535,24 @@ fn date_fields_work_from_adding_to_saving() {
     // A template's default a date field can't hold is refused, as edit.addFeature refuses it.
     let err = s.run("edit.template", &json!({"layer": "Cities", "name": "Old", "defaults": {"founded": "soon"}})).unwrap_err();
     assert_eq!(err, "field 'founded': 'soon' isn't a Date value");
+    // A native caller's date-time default keeps only its day in a date field, and that is said; a
+    // midnight without a zone loses nothing.
+    s.run("edit.template", &json!({"layer": "Cities", "name": "Old", "defaults": {"founded": "2026-03-05"}})).unwrap();
+    let here = json!({"type": "Point", "coordinates": [0.0, 0.0]});
+    for (when, said) in [("2026-03-07T14:30:00", true), ("2026-03-07T00:00:00", false)] {
+        let t = rustgis_data::DateTime::parse(when).unwrap();
+        let cities = s.map_mut().layers.iter_mut().find(|l| l.name == "Cities").unwrap();
+        let old = cities.design.templates.iter_mut().find(|x| x.name == "Old").unwrap();
+        old.defaults[0].1 = V::DateTime(t);
+        let mark = s.notice_mark();
+        let row =
+            s.run("edit.addFeature", &json!({"layer": "Cities", "geometry": here, "template": "Old"})).unwrap()["row"].as_u64().unwrap();
+        let notices: Vec<String> = s.notices_since(mark).iter().map(|n| n.text.clone()).collect();
+        assert_eq!(notices.iter().any(|n| n.contains("field 'founded'") && n.contains("kept only its day")), said, "{when}: {notices:?}");
+        assert_eq!(cell(&s, "Cities", row as usize, "founded"), "2026-03-07");
+        s.run("edit.undo", &Value::Null).unwrap();
+    }
+    s.run("edit.template", &json!({"layer": "Cities", "name": "Old", "remove": true})).unwrap();
     // A date-time with a time of day, into a date field by Calculate Field or Paste, keeps its day, and that is said.
     s.run("edit.setValue", &json!({"layer": "Cities", "row": 0, "field": "seen", "value": "2026-03-07T14:30:00"})).unwrap();
     let mark = s.notice_mark();

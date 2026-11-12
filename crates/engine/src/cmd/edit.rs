@@ -69,6 +69,10 @@ pub(crate) fn add_feature(s: &mut Session, p: &Json) -> CmdResult {
             if let Some(key) = numeric_loss(&value, &coerced, f.ty) {
                 losses.push((f.name.clone(), key));
             }
+            // A date-time (a native caller's template default) keeps only its day in a date field.
+            if matches!(value, Value::DateTime(t) if f.ty == FieldType::Date && !t.is_date()) {
+                losses.push((f.name.clone(), "{layer}, field '{field}', row {row}: 1 attribute value kept only its day"));
+            }
             Ok(coerced)
         })
         .collect();

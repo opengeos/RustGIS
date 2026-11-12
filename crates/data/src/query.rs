@@ -168,6 +168,30 @@ pub enum Func {
     LineLength,
 }
 
+/// Whether `f` works on numbers, so it gives null for a date.
+fn number_func(f: Func) -> bool {
+    matches!(
+        f,
+        Func::Abs
+            | Func::Round
+            | Func::Floor
+            | Func::Ceil
+            | Func::Sqrt
+            | Func::Exp
+            | Func::Ln
+            | Func::Log10
+            | Func::Min
+            | Func::Max
+            | Func::Clamp
+            | Func::ScaleLinear
+            | Func::ScaleExp
+            | Func::ToInt
+            | Func::ToReal
+            | Func::ColorRgb
+            | Func::ColorRgba
+    )
+}
+
 /// Functions by name, with their fewest and most arguments.
 const FUNCS: &[(&str, Func, usize, usize)] = &[
     ("if", Func::If, 2, 3),
@@ -581,13 +605,13 @@ impl Parser<'_> {
         }
         Ok(Expr::Chain(Box::new(first), rest))
     }
-    /// An error when one side is a date and the other a number (`issued >= 20260101`), which
-    /// would compare the date's text with the number's digits and match the wrong rows.
+    /// An error when one side is a date and the other a number (`issued >= 20260101`,
+    /// `issued > year`), which would compare the date's text with the number's digits and match
+    /// the wrong rows.
     fn date_against_number(&self, a: &Expr, b: &Expr) -> Result<(), String> {
-        let number = |e: &Expr| matches!(e, Expr::Lit(Value::Int(_) | Value::Float(_) | Value::Bool(_)));
-        let date = if number(b) {
+        let date = if self.number_valued(b) {
             self.date_field(a)
-        } else if number(a) {
+        } else if self.number_valued(a) {
             self.date_field(b)
         } else {
             None
@@ -595,6 +619,19 @@ impl Parser<'_> {
         match date {
             Some(f) => Err(format!("'{}' holds dates: compare it with a date in quotes ('2026-01-01'), not a number", f.name)),
             None => Ok(()),
+        }
+    }
+    /// Whether `e` gives a number: a number literal, a number or yes/no field, a variable,
+    /// arithmetic without text, or a number function.
+    fn number_valued(&self, e: &Expr) -> bool {
+        match e {
+            Expr::Lit(v) => matches!(v, Value::Int(_) | Value::Float(_) | Value::Bool(_)),
+            Expr::Field(i) => self.ds.fields.get(*i).is_some_and(|f| f.ty.is_numeric() || f.ty == crate::FieldType::Boolean),
+            Expr::Var(_) => true,
+            // `+` joins text, so arithmetic is a number only when no term is text.
+            Expr::Chain(first, rest) => std::iter::once(&**first).chain(rest.iter().map(|(_, e)| e)).all(|e| self.number_valued(e)),
+            Expr::Call(f, _) => number_func(*f) || *f == Func::Length,
+            _ => false,
         }
     }
     /// The date field `e` can give a value of: the field itself, or one passed through `if`,
@@ -751,26 +788,8 @@ impl Parser<'_> {
         }
         // A number's functions would give null for every date, so a date there is an error, as
         // date arithmetic is.
-        if matches!(
-            f,
-            Func::Abs
-                | Func::Round
-                | Func::Floor
-                | Func::Ceil
-                | Func::Sqrt
-                | Func::Exp
-                | Func::Ln
-                | Func::Log10
-                | Func::Min
-                | Func::Max
-                | Func::Clamp
-                | Func::ScaleLinear
-                | Func::ScaleExp
-                | Func::ToInt
-                | Func::ToReal
-                | Func::ColorRgb
-                | Func::ColorRgba
-        ) && let Some(d) = args.iter().find_map(|a| self.date_field(a))
+        if number_func(f)
+            && let Some(d) = args.iter().find_map(|a| self.date_field(a))
         {
             return Err(format!("'{}' holds dates, and {fname} on dates isn't supported yet", d.name));
         }
