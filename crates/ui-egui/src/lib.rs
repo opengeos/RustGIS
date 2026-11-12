@@ -2941,11 +2941,9 @@ impl RustGisApp {
                     None => None,
                 };
                 let tab = match p.get("tab").filter(|t| !t.is_null()) {
-                    Some(t) => Some(
-                        t.as_str()
-                            .and_then(layerprops::Topic::parse)
-                            .ok_or("unknown tab: give general, source, display or query")?,
-                    ),
+                    Some(t) => {
+                        Some(t.as_str().and_then(layerprops::Topic::parse).ok_or("unknown tab: give general, source, display or query")?)
+                    }
                     None => None,
                 };
                 let layer = given.or(self.session.active_layer).and_then(|id| self.session.map().layer(id));
