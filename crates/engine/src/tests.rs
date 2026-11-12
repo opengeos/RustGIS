@@ -1451,7 +1451,7 @@ fn qgis_layer_tree_groups_import_as_layer_groups() {
       <layer-tree-group checked="Qt::Checked" expanded="1" groupLayer="gl" name="Drawn as one"><layer-tree-layer checked="Qt::Checked" id="d"/><layer-tree-layer checked="Qt::Checked" id="t2"/></layer-tree-group>
       <layer-tree-group checked="Qt::Checked" expanded="1" name="Empty"/>
     </layer-tree-group><projectlayers>{layers}
-      <maplayer type="group"><id>gl</id><layername>Drawn as one</layername><layerOpacity>0.25</layerOpacity><blendMode>0</blendMode></maplayer>
+      <maplayer type="group" hasScaleBasedVisibilityFlag="1" minScale="50000" maxScale="1000"><id>gl</id><layername>Drawn as one</layername><layerOpacity>0.25</layerOpacity><blendMode>0</blendMode></maplayer>
       <maplayer type="raster"><id>t2</id><datasource>type=xyz&amp;url=https://tiles2.example/%7Bz%7D/%7Bx%7D/%7By%7D.png</datasource><layername>Tiles 2</layername><provider>wms</provider></maplayer>
       <maplayer type="raster"><id>t</id><datasource>type=xyz&amp;url=https://tiles.example/%7Bz%7D/%7Bx%7D/%7By%7D.png</datasource><layername>Tiles</layername><provider>wms</provider></maplayer>
     </projectlayers></qgis>"#
@@ -1466,6 +1466,9 @@ fn qgis_layer_tree_groups_import_as_layer_groups() {
     assert_eq!((outer.visible, outer.expanded, outer.parent), (true, false, None));
     assert_eq!((inner.visible, inner.parent), (false, Some(outer.id)));
     assert_eq!((one.transparency, one.parent), (75.0, None));
+    // Its visibility range, in RustGIS's scales.
+    let q = rustgis_map::qgis::QGIS_SCALE;
+    assert_eq!((one.min_scale, one.max_scale), (Some(50_000.0 * q), Some(1000.0 * q)));
     assert!(empty.children.is_empty(), "kept, as QGIS keeps it");
     let id = |name: &str| m.layer_by_name(name).unwrap().id;
     let visible = |name: &str| m.layer_by_name(name).unwrap().visible;

@@ -213,8 +213,8 @@ GeoTIFF and the other formats RustGIS reads), a CSV of
 points, XYZ tiles or a WMS layer, unchecked layers and groups hidden. The layer tree's groups come in
 as [layer groups](index.md), nested as in QGIS (to eight levels and 2,000 groups; the layers of
 groups past that go in the group holding them), open or closed, each layer in its group with its
-own box; a group drawn as one (a QGIS group layer) takes its opacity, applied to each of its
-layers. Web tile layers (XYZ, and WMS layers drawn as tiles) can't be in a group and come in
+own box; a group drawn as one (a QGIS group layer) takes its visibility range and its
+opacity, the opacity applied to each of its layers. Web tile layers (XYZ, and WMS layers drawn as tiles) can't be in a group and come in
 outside it. The layers draw in the layer tree's order, also when the project sets an order of
 its own (noted). The map takes the project's
 coordinate system and its saved view (or its layers' extent, when that view shows none of them),

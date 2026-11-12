@@ -184,6 +184,8 @@ fn add_groups(s: &mut Session, project: &qgis::Project, came_in: &[CameIn], repo
         group.visible = g.checked;
         group.expanded = g.expanded;
         group.transparency = g.transparency.unwrap_or(0.0).clamp(0.0, 100.0);
+        group.min_scale = g.min_scale;
+        group.max_scale = g.max_scale;
         group.parent = g.parent.and_then(|p| made.get(p).copied());
         made.push(m.add_group(group));
     }

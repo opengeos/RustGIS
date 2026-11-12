@@ -422,6 +422,11 @@ pub struct ProjectGroup {
     pub parent: Option<usize>,
     /// 0 = opaque, 100 = invisible: the opacity of a QGIS group layer (a group drawn as one).
     pub transparency: Option<f32>,
+    /// A group layer's visibility range (RustGIS's scales, see [`QGIS_SCALE`]): its layers draw
+    /// only when zoomed in beyond 1:`min_scale` and out beyond 1:`max_scale`. QGIS 4.2 doesn't
+    /// save one for a group layer (measured), but a file may have one.
+    pub min_scale: Option<f64>,
+    pub max_scale: Option<f64>,
 }
 
 /// One layer of a QGIS project.
@@ -504,6 +509,8 @@ pub fn read_project(text: &str, dir: &str, report: &mut Report) -> Result<Projec
             // Its notes (a blending mode RustGIS hasn't, say) go under its name.
             let style = read_style_node(ml, &name, report);
             g.group.transparency = style.transparency.filter(|t| *t > 0.0);
+            g.group.min_scale = style.min_scale.flatten();
+            g.group.max_scale = style.max_scale.flatten();
             if style.blend.is_some_and(|b| b != Blend::Normal) {
                 blended.push(g.group.name.clone());
             }
@@ -520,8 +527,19 @@ pub fn read_project(text: &str, dir: &str, report: &mut Report) -> Result<Projec
             let style = read_style_node(ml, &name, &mut Report::default());
             let blended = child(ml, "blendMode").and_then(|n| n.text()).and_then(|t| t.trim().parse::<i32>().ok()).is_some_and(|m| m != 0);
             let effect = child(ml, "paintEffect").is_some_and(has_effect);
-            if style.transparency.is_some_and(|t| t > 0.0) || blended || effect {
-                unkept.push(name);
+            let ranged = style.min_scale.flatten().is_some() || style.max_scale.flatten().is_some();
+            let parts: Vec<&str> = [
+                (style.transparency.is_some_and(|t| t > 0.0), "opacity"),
+                (blended, "blending"),
+                (effect, "draw effect"),
+                (ranged, "visibility range"),
+            ]
+            .into_iter()
+            .filter(|(on, _)| *on)
+            .map(|(_, part)| part)
+            .collect();
+            if !parts.is_empty() {
+                unkept.push(format!("{name} ({})", parts.join(", ")));
             }
             continue;
         }
@@ -580,10 +598,7 @@ pub fn read_project(text: &str, dir: &str, report: &mut Report) -> Result<Projec
         let more = if unkept.len() > 8 { ", …" } else { "" };
         report.skipped(
             "",
-            format!(
-                "the opacity, blending and draw effects of groups drawn as one past RustGIS's group limits ({}: {names}{more})",
-                unkept.len()
-            ),
+            format!("what groups drawn as one past RustGIS's group limits give their layers ({}: {names}{more})", unkept.len()),
         );
     }
     project.groups = tree.groups.into_iter().map(|g| g.group).collect();
@@ -780,7 +795,7 @@ fn group_notes(tree: &Tree, blended: &[String], effects: &[String], report: &mut
         );
     }
     if tree.cut > 0 {
-        report.skipped(
+        report.approximated(
             "",
             format!("the layer tree's entries past the first {TREE_LAYERS} ({}): their layers come in at the top level, shown", tree.cut),
         );
@@ -976,7 +991,15 @@ impl Tree {
                     let name = c.attribute("name").map(str::trim).filter(|n| !n.is_empty()).unwrap_or("Group");
                     let expanded = if legend { c.attribute("open") != Some("false") } else { c.attribute("expanded") != Some("0") };
                     self.groups.push(TreeGroup {
-                        group: ProjectGroup { name: name.to_string(), checked: on(c), expanded, parent: at.kept, transparency: None },
+                        group: ProjectGroup {
+                            name: name.to_string(),
+                            checked: on(c),
+                            expanded,
+                            parent: at.kept,
+                            transparency: None,
+                            min_scale: None,
+                            max_scale: None,
+                        },
                         layer: c.attribute("groupLayer").map(str::trim).filter(|l| !l.is_empty()).map(str::to_string),
                         exclusive: c.attribute("mutually-exclusive") == Some("1"),
                     });
@@ -1006,6 +1029,7 @@ impl Tree {
                 self.add(c, legend, at.visible && on, at.checked && on, at.kept);
                 self.deep += self.layers.len() - before;
             } else if c.has_tag_name(group_tag) {
+                self.folded += 1;
                 self.fold_group_layer(c);
                 let inside = boxes && checked_box(c);
                 stack.extend(c.children().filter(Node::is_element).rev().map(|n| (n, inside)));
