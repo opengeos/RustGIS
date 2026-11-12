@@ -2105,3 +2105,100 @@ fn a_cycle_of_links_is_said() {
     let out = read("model.gml", &lonlat(&building("c", inner)), None).unwrap();
     assert!(says(&out, "are given only by a link"), "{:?}", messages_of(&out));
 }
+
+/// A solid's cavities wait for its exterior to have something read (#1816): an exterior written
+/// in place or given by a link, whose surfaces are links, reads them with the first of those links
+/// that reads something; when every one leads nowhere, the solid is left out with its cavities,
+/// the links are said, and the object keeps its other level of detail.
+#[test]
+fn cavities_wait_for_the_exterior_to_read_something() {
+    // A cavity 8 high: the object's height says whether it was read.
+    let cavity = format!(
+        "<gml:interior><gml:CompositeSurface><gml:surfaceMember>{}</gml:surfaceMember></gml:CompositeSurface></gml:interior>",
+        polygon("c", &square(2.0, 2.0, 2.0, 8.0))
+    );
+    let lod1 = format!(
+        "<bldg:lod1MultiSurface><gml:MultiSurface><gml:surfaceMember>{}</gml:surfaceMember></gml:MultiSurface></bldg:lod1MultiSurface>",
+        polygon("a", &square(0.0, 0.0, 10.0, 0.0))
+    );
+    // A part holding what the solid links to, read there at LoD 2 and here through the links.
+    let part = format!(
+        r##"<bldg:consistsOfBuildingPart><bldg:BuildingPart gml:id="part"><bldg:lod2MultiSurface><gml:MultiSurface>
+        <gml:surfaceMember>{}</gml:surfaceMember><gml:surfaceMember>{}</gml:surfaceMember>
+        <gml:surfaceMember><gml:CompositeSurface gml:id="found"><gml:surfaceMember xlink:href="#p"/></gml:CompositeSurface></gml:surfaceMember>
+        <gml:surfaceMember><gml:CompositeSurface gml:id="nowhere"><gml:surfaceMember xlink:href="#missing"/></gml:CompositeSurface></gml:surfaceMember>
+        </gml:MultiSurface></bldg:lod2MultiSurface></bldg:BuildingPart></bldg:consistsOfBuildingPart>"##,
+        polygon("p", &square(0.0, 0.0, 10.0, 0.0)),
+        polygon("q", "0 0 0 10 0 0 10 0 5 0 0 5 0 0 0")
+    );
+    let members = |hrefs: &[&str]| -> String { hrefs.iter().map(|h| format!(r##"<gml:surfaceMember xlink:href="#{h}"/>"##)).collect() };
+    let in_place = |hrefs: &[&str]| format!("<gml:exterior><gml:CompositeSurface>{}</gml:CompositeSurface></gml:exterior>", members(hrefs));
+    let model = |exterior: &str, extra: &str| {
+        let inner = format!("{lod1}<bldg:lod2Solid><gml:Solid>{exterior}{cavity}</gml:Solid></bldg:lod2Solid>{extra}{part}");
+        read("model.gml", &lonlat(&building("b", &inner)), None).unwrap()
+    };
+    let of = |out: &[(Dataset, ReadReport)], field: &str| {
+        let ds = layer(out, "model Building");
+        value(ds, row_of(ds, "b"), field)
+    };
+    let kept = |out: &[(Dataset, ReadReport)], case: &str| {
+        assert_eq!(of(out, "lod"), Value::Text("2".into()), "{case}: {:?}", messages_of(out));
+        assert_eq!(of(out, "z_max"), Value::Float(8.0), "{case}: the cavity is read: {:?}", messages_of(out));
+    };
+    let left_out = |out: &[(Dataset, ReadReport)], case: &str| {
+        assert_eq!(of(out, "lod"), Value::Text("1".into()), "{case}: {:?}", messages_of(out));
+        assert_eq!(
+            of(out, "z_max"),
+            Value::Float(5.0),
+            "{case}: the cavity isn't read (the part's wall is 5 high): {:?}",
+            messages_of(out)
+        );
+        assert!(says(out, "are given only by a link"), "{case}: {:?}", messages_of(out));
+    };
+
+    // Exterior written in place, every surface a link to nothing.
+    left_out(&model(&in_place(&["missing", "gone"]), ""), "in place, to nothing");
+    // Exterior given by a link to a shell (the part's) whose surfaces lead nowhere.
+    left_out(&model(r##"<gml:exterior xlink:href="#nowhere"/>"##, ""), "linked shell, to nothing");
+    // A surface that is a link to a composite whose surfaces lead nowhere.
+    left_out(&model(&in_place(&["nowhere"]), ""), "in place, through a composite to nothing");
+    // A face whose ring is a link: nothing of the exterior is read.
+    let ringless = r##"<gml:exterior><gml:CompositeSurface><gml:surfaceMember><gml:Polygon><gml:exterior xlink:href="#ring"/></gml:Polygon></gml:surfaceMember></gml:CompositeSurface></gml:exterior>"##;
+    left_out(&model(ringless, ""), "a face given by a ring link");
+
+    // Links that are found read the cavity, once their faces are: one leading nowhere beside them
+    // is said, through a composite of links too, and with the shell given by a link.
+    kept(&model(&in_place(&["p", "q"]), ""), "in place, found");
+    let out = model(&in_place(&["missing", "p"]), "");
+    kept(&out, "in place, one found");
+    assert!(says(&out, "are given only by a link"), "{:?}", messages_of(&out));
+    kept(&model(&in_place(&["found"]), ""), "in place, through a composite found");
+    kept(&model(r##"<gml:exterior xlink:href="#found"/>"##, ""), "linked shell, found");
+    // Surfaces the object has read already at that level (its thematic surfaces): the exterior
+    // has them, and the cavity is read.
+    kept(&model(&in_place(&["s-g", "s-w", "s-r"]), &box_surfaces("s")), "read already");
+}
+
+/// A solid whose exterior is all links, and whose cavity can't be read, is left out whole: none
+/// of its exterior's links draws it in part, and it is said once.
+#[test]
+fn a_cavity_that_cant_be_read_leaves_a_linked_exterior_out() {
+    let bad =
+        r#"<gml:Polygon><gml:exterior><gml:LinearRing><gml:posList>1 2 abc</gml:posList></gml:LinearRing></gml:exterior></gml:Polygon>"#;
+    let inner = format!(
+        r##"<bldg:lod1MultiSurface><gml:MultiSurface><gml:surfaceMember>{}</gml:surfaceMember></gml:MultiSurface></bldg:lod1MultiSurface>
+        <bldg:lod2Solid><gml:Solid><gml:exterior><gml:CompositeSurface><gml:surfaceMember xlink:href="#p"/><gml:surfaceMember xlink:href="#q"/></gml:CompositeSurface></gml:exterior>
+        <gml:interior><gml:CompositeSurface><gml:surfaceMember>{bad}</gml:surfaceMember></gml:CompositeSurface></gml:interior></gml:Solid></bldg:lod2Solid>
+        <bldg:consistsOfBuildingPart><bldg:BuildingPart gml:id="part"><bldg:lod1MultiSurface><gml:MultiSurface><gml:surfaceMember>{}</gml:surfaceMember><gml:surfaceMember>{}</gml:surfaceMember></gml:MultiSurface></bldg:lod1MultiSurface></bldg:BuildingPart></bldg:consistsOfBuildingPart>"##,
+        polygon("a", &square(0.0, 0.0, 10.0, 0.0)),
+        polygon("p", &square(0.0, 0.0, 10.0, 0.0)),
+        polygon("q", &square(20.0, 0.0, 10.0, 0.0))
+    );
+    let out = read("model.gml", &lonlat(&building("b", &inner)), None).unwrap();
+    let ds = layer(&out, "model Building");
+    let b = row_of(ds, "b");
+    assert_eq!(value(ds, b, "lod"), Value::Text("1".into()), "{:?}", messages_of(&out));
+    assert!((area(ds.features[b].geometry.as_ref()) - 100.0).abs() < 1e-6, "{:?}", ds.features[b].geometry);
+    assert!(says(&out, "1 geometries of city objects have coordinates that can't be read"), "{:?}", messages_of(&out));
+    assert!(!says(&out, "link"), "{:?}", messages_of(&out));
+}
