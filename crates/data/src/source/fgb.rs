@@ -103,10 +103,12 @@ impl FgbSource {
         let reproject = match super::declared_reproject(declared, &mut notes) {
             Some(reproject) => reproject?,
             // Nothing to read it by: longitude/latitude, said when another organization's code
-            // names the system.
+            // names the system, or a negative code, which can't be an EPSG one.
             None => {
                 if !epsg_org && let Some(org) = organization {
                     notes.push(format!("its coordinate system is defined by {org}, not EPSG; read as longitude/latitude"));
+                } else if let Some(code) = code {
+                    notes.push(format!("its coordinate system's code {code} isn't an EPSG code; read as longitude/latitude"));
                 }
                 Reproject::from_crs(Crs::LonLat, &mut notes)
             }

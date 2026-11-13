@@ -1237,7 +1237,7 @@ fn fgb_reads(path: &Path) -> Vec<(Option<Geometry>, Vec<String>)> {
 /// browser. Its EPSG code is used when its WKT gives no other shift to WGS 84, and the WKT
 /// otherwise, where a `.prj` of it places the point. A grid the WKT gives beside the code is said.
 /// Without an EPSG code the WKT is read; one that can't be read is said. A code without a WKT is
-/// read as before.
+/// read as before. A negative code without a WKT is longitude/latitude, said.
 #[test]
 fn a_flatgeobuf_headers_system_is_read_as_a_geopackage_rows_is() {
     use crate::raster::wkt::{read_wkt, to_wkt};
@@ -1259,9 +1259,12 @@ fn a_flatgeobuf_headers_system_is_read_as_a_geopackage_rows_is() {
     let other = bng.replace(BNG_SHIFT, "TOWGS84[375,-111,431,0,0,0,0]");
     assert_ne!(other, bng);
     assert!(metres_apart(prj(&other, xy), by_code) > 1.0);
-    for (org, wkt, lonlat) in
-        [(Some("EPSG"), Some(bng.as_str()), by_code), (None, Some(&other), prj(&other, xy)), (Some("EPSG"), None, by_code)]
-    {
+    for (org, wkt, lonlat) in [
+        (Some("EPSG"), Some(bng.as_str()), by_code),
+        (Some("EPSG"), Some(other.as_str()), prj(&other, xy)),
+        (None, Some(&other), prj(&other, xy)),
+        (Some("EPSG"), None, by_code),
+    ] {
         for (geometry, notes) in read(org, 27700, wkt, xy) {
             assert_placed(&format!("{wkt:?}"), geometry.as_ref(), lonlat);
             assert!(notes.is_empty(), "{notes:?}");
@@ -1294,7 +1297,7 @@ fn a_flatgeobuf_headers_system_is_read_as_a_geopackage_rows_is() {
     assert!(utm.contains("WGS 84"), "{utm}");
     let utm = utm.replace(r#",AUTHORITY["EPSG","32633"]]"#, "]");
     let lonlat = Crs::Epsg(32633).transformer().unwrap().to_lonlat(xy).unwrap();
-    for (org, code) in [(None, 0), (Some("EPSG"), 0), (Some("ESRI"), 102_033)] {
+    for (org, code) in [(None, 0), (Some("EPSG"), 0), (Some("EPSG"), -5), (Some("ESRI"), 102_033)] {
         for (geometry, notes) in read(org, code, Some(&utm), xy) {
             assert_placed(&format!("{org:?} {code}"), geometry.as_ref(), lonlat);
             assert!(notes.is_empty(), "{notes:?}");
@@ -1307,6 +1310,19 @@ fn a_flatgeobuf_headers_system_is_read_as_a_geopackage_rows_is() {
     // Another organization's code without a WKT: longitude/latitude, said, as before.
     for (_, notes) in read(Some("ESRI"), 102_033, None, Coord::new(5.0, 50.0)) {
         assert_eq!(notes, ["its coordinate system is defined by ESRI, not EPSG; read as longitude/latitude"]);
+    }
+    // A negative code isn't an EPSG one: longitude/latitude, said. EPSG's 0 is no code, so nothing
+    // is (a header without an organization is read in `flatgeobuf`).
+    let lonlat = Coord::new(5.0, 50.0);
+    for org in [None, Some("EPSG")] {
+        for (geometry, notes) in read(org, -5, None, lonlat) {
+            assert_placed("a negative code", geometry.as_ref(), lonlat);
+            assert_eq!(notes, ["its coordinate system's code -5 isn't an EPSG code; read as longitude/latitude"]);
+        }
+    }
+    for (geometry, notes) in read(Some("EPSG"), 0, None, lonlat) {
+        assert_placed("no code", geometry.as_ref(), lonlat);
+        assert!(notes.is_empty(), "{notes:?}");
     }
 }
 
