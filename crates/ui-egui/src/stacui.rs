@@ -411,17 +411,22 @@ pub fn poll(app: &mut RustGisApp, ctx: &egui::Context) {
         Asked::Search(url, _) => match r.and_then(|b| Ok((stac::parse_items(&b, &url)?, stac::parse_matched(&b), stac::has_next(&b)))) {
             Ok(((items, next), matched, has_next)) => {
                 let n = items.len().to_string();
-                st.info = Some(match matched.filter(|m| *m as usize > items.len()) {
-                    Some(m) => i18n::fmt("Showing {n} of {m} items (narrow the search for others)", &[("n", &n), ("m", &m.to_string())]),
+                // Logical order until the line is whole: `fmt` puts a finished message in display
+                // form, so it runs once, over the count and the note together.
+                let count = match matched.filter(|m| *m as usize > items.len()) {
+                    Some(m) => {
+                        i18n::fmt_raw("Showing {n} of {m} items (narrow the search for others)", &[("n", &n), ("m", &m.to_string())])
+                    }
                     // A POST search's `next` link has no address to give, so `next` is none for it.
-                    None if next.is_some() || has_next => i18n::fmt("Showing {n} items (more match: narrow the search)", &[("n", &n)]),
-                    None => i18n::fmt("Showing {n} items", &[("n", &n)]),
-                });
+                    None if next.is_some() || has_next => i18n::fmt_raw("Showing {n} items (more match: narrow the search)", &[("n", &n)]),
+                    None => i18n::fmt_raw("Showing {n} items", &[("n", &n)]),
+                };
                 // An API that can't sort may ignore the sort instead of refusing it: say so.
                 // The sort that was sent, not the dropdown's value now.
-                if let Some(note) = sort_ignored_note(&items, st.asked_sort.as_deref()) {
-                    st.info = st.info.take().map(|i| i18n::fmt("{info}. {note}", &[("info", &i), ("note", &note)]));
-                }
+                st.info = Some(match sort_ignored_note(&items, st.asked_sort.as_deref()) {
+                    Some(note) => i18n::fmt("{count}. {note}", &[("count", &count), ("note", &note)]),
+                    None => i18n::fmt("{count}", &[("count", &count)]),
+                });
                 st.details = None;
                 st.counted = true;
                 st.chosen = items.iter().map(|i| i.pick(None).map(|a| a.key.clone()).unwrap_or_default()).collect();
@@ -810,7 +815,7 @@ fn sort_of(st: &State, is_static: bool) -> Option<&str> {
 /// order or it can't be told.
 fn sort_ignored_note(items: &[stac::Item], sortby: Option<&str>) -> Option<String> {
     (stac::sort_followed(items, sortby) == Some(false))
-        .then(|| i18n::fmt("The API did not sort them by {sort}: they are in its own order", &[("sort", sortby.unwrap_or("").trim())]))
+        .then(|| i18n::fmt_raw("The API did not sort them by {sort}: they are in its own order", &[("sort", sortby.unwrap_or("").trim())]))
 }
 
 /// The preset the dialog is showing, if it is still on its API or catalog.

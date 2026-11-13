@@ -73,8 +73,9 @@ pub struct Item {
     pub id: String,
     pub collection: String,
     pub datetime: String,
-    /// Whether `datetime` is the item's own `properties.datetime` (false when it is empty or
-    /// stands in with `start_datetime`, which an API sorting on `datetime` did not sort by).
+    /// Whether `datetime` is the item's own `properties.datetime`: false when that is null or
+    /// missing, and `datetime` stands in with `start_datetime` (which an API sorting on
+    /// `datetime` did not sort by).
     pub own_datetime: bool,
     /// West, south, east, north.
     pub bbox: Option<[f64; 4]>,

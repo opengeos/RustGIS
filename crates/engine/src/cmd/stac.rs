@@ -227,7 +227,8 @@ fn search(s: &mut Session, p: &Value) -> CmdResult {
 
 /// What to warn when the items an API answered are visibly not in the order asked for (an API
 /// without the sort extension may ignore a sort rather than refuse it); none when they are in
-/// order or it can't be told.
+/// order or it can't be told. Only the desktop searches here (the web app searches from its pane).
+#[cfg(not(target_arch = "wasm32"))]
 fn sort_ignored(items: &[Item], sortby: Option<&str>) -> Option<String> {
     (stac::sort_followed(items, sortby) == Some(false)).then(|| {
         format!(
