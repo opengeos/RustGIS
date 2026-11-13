@@ -190,14 +190,15 @@ mod android {
                     if purpose == "data" && self.app.session.dirty() {
                         paths.retain(|path| {
                             let name = path.display().to_string();
-                            let data = rustgis_engine::project::open_command(&name) == "layer.addData";
-                            if !data {
+                            // Only what replaces the project: a GeoLibre project adds a map to it.
+                            let replaces = rustgis_engine::project::open_command(&name) == "project.open";
+                            if replaces {
                                 let file = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or(name);
                                 let text = "{name} wasn't opened: it is a project, and this one has unsaved changes. Save it, or open the project with Open Project.";
                                 self.app.session.notify(i18n::fmt(text, &[("name", &file)]), true);
                                 remove_copy(path);
                             }
-                            data
+                            !replaces
                         });
                     }
                     raw_input.dropped_files.extend(paths.into_iter().map(|path| std::sync::Arc::new(Pushed(path)) as _));
