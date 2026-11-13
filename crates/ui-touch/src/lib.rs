@@ -286,6 +286,20 @@ impl Form {
     }
 }
 
+impl Form {
+    /// Places a vertex of the shape being drawn at `at`, unless the last one is there already
+    /// (the button tapped twice with the map not moved): a vertex on the one before it adds
+    /// nothing to the shape, and two of three in one place make a polygon of no area. Says
+    /// whether it was placed.
+    fn place(&mut self, at: (f64, f64)) -> bool {
+        if self.vertices.last() == Some(&at) {
+            return false;
+        }
+        self.vertices.push(at);
+        true
+    }
+}
+
 fn form(ctx: &egui::Context) -> Form {
     ctx.data(|d| d.get_temp(egui::Id::unique("touch_capture"))).unwrap_or_default()
 }
@@ -521,7 +535,8 @@ fn capture(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         let enough = placed >= fewest(target.kind);
         if action(ui, t, tl!("Add Vertex Here"), width, !enough, true) {
             match cross {
-                Some(at) => state.vertices.push(at),
+                Some(at) if state.place(at) => {}
+                Some(_) => app.session.notify(tl!("No vertex was added: the cross is where the last one is. Move the map under it."), true),
                 None => app.session.notify(tl!("No vertex was added: the cross is off the map. Move the map under it."), true),
             }
         }
@@ -794,6 +809,12 @@ mod tests {
             frame(&mut app, &ctx, Sheet::Capture);
             assert_eq!(form(&ctx).vertices.len(), 3);
         }
+        // A vertex where the last one is isn't placed; one anywhere else is.
+        let mut drawing = Form::default();
+        assert!(drawing.place(square[0]));
+        assert!(!drawing.place(square[0]));
+        assert!(drawing.place(square[1]));
+        assert_eq!(drawing.vertices, square[..2]);
         // A shape of the wrong kind for its layer is refused, and said.
         let cities = target(&mut app, GeometryType::Point);
         let before = count(&app, cities.id);
