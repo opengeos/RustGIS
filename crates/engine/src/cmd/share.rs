@@ -237,7 +237,7 @@ pub(crate) fn shadow_warnings(what: &str, said: &rustgis_render::ShadowsSaid) ->
     let mut out: Vec<String> = said.notices.iter().map(|e| format!("{what}: {e}")).collect();
     if said.to_come {
         out.push(format!(
-            "{what}: made without the cast shadows still being worked out, as the window doesn't wait for them: once the map shows them, draw or export it again"
+            "{what}: made without the cast shadows or sky visibility still being worked out, as the window doesn't wait for them: once the map shows them, draw or export it again"
         ));
     }
     out
@@ -701,6 +701,7 @@ fn write_layer(l: &rustgis_map::Layer, path: &str, asked: Option<Crs>, gpkg: Gpk
                 .into_iter()
                 .collect();
             dates.extend(rustgis_data::io::utc_dates_note(&layer.fields, &e.utc_dates, path));
+            dates.extend(e.date_messages.iter().map(|n| format!("{path}: {n}")));
             (e.written, e.left_out, e.skipped, table, unfit, e.null_numbers, moved, e.csv, dates)
         }
         None => {
@@ -785,7 +786,7 @@ fn write_layer(l: &rustgis_map::Layer, path: &str, asked: Option<Crs>, gpkg: Gpk
 
 /// Reports numeric loss after the file has been written, keeping the output path literal in
 /// translated interface text. A clean export emits no loss notice.
-fn notify_null_numbers(s: &mut Session, path: &str, count: usize) {
+pub(crate) fn notify_null_numbers(s: &mut Session, path: &str, count: usize) {
     if count > 0 {
         s.notify_text(
             crate::notice_text::NoticeText::format(
