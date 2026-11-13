@@ -467,7 +467,7 @@ fn durable_future_documents_keep_their_exact_text_unchecked() {
         format!("https://h.invalid/{{z}}/{{x}}/{{y}}.png?token={SECRET}"),
     ));
     let mut document = serde_json::to_value(&future).unwrap();
-    let format = crate::project::FORMAT + 1;
+    let format = crate::project::READ_FORMAT + 1;
     document["format"] = json!(format);
     document["futureRequired"] = json!({"meaning":"preserve this unknown field"});
     let source = serde_json::to_string_pretty(&document).unwrap();
@@ -493,6 +493,21 @@ fn durable_future_documents_keep_their_exact_text_unchecked() {
         assert_eq!(serde_json::to_value(&project).unwrap(), before);
         assert_eq!((report.steps, report.unchecked, report.withheld), (0, 1, 0));
         assert_eq!(report.notices(), ["1 step(s) contain opaque parameters that may hold credentials and were kept unchecked"]);
+    }
+    // A format this version reads, listing a capability: kept as written too, as rewriting it
+    // through the types would drop the list. Without one, it is checked like any project.
+    for (requires, unchecked) in [(Some(json!(["z-values"])), 1), (None, 0)] {
+        let mut document = serde_json::to_value(&future).unwrap();
+        document["format"] = json!(crate::project::READ_FORMAT);
+        if let Some(r) = requires {
+            document["requires"] = r;
+        }
+        let text = document.to_string();
+        let (clean, report) = crate::roles::command("project.openText", &json!({"text": text}), 0);
+        assert_eq!(report.unchecked, unchecked, "{text}");
+        // `None`: the parameters are kept as they are.
+        let kept = clean.map_or(text.clone(), |c| c["text"].as_str().unwrap_or_default().to_string());
+        assert_eq!(kept.contains(SECRET), unchecked == 1, "{kept}");
     }
     let malformed = source.strip_suffix('}').unwrap();
     let (clean, report) = crate::roles::command("project.openText", &json!({"text":malformed}), 0);

@@ -377,7 +377,8 @@ impl Durable for VecSteps {
 /// access. Unchanged documents keep their exact text; only changed typed copies are serialized.
 fn document(kind: Document, v: &Value, depth: usize, report: &mut Report) -> Option<Value> {
     let Some(text) = v.as_str().filter(|s| s.len() as u64 <= crate::project::max_bytes()) else { return invalid(v, report) };
-    if serde_json::from_str::<DocumentFormat>(text).is_ok_and(|f| f.format > u64::from(crate::project::FORMAT)) {
+    // One this RustGIS wouldn't read, or would rewrite without what it requires, stays as written.
+    if serde_json::from_str::<DocumentFormat>(text).is_ok() && !crate::project::rewritable_format(text) {
         report.unchecked = report.unchecked.saturating_add(1);
         return None;
     }
