@@ -137,9 +137,6 @@ fn differences(all: &[rustgis_data::Feature], got: &[u64], q: &Extent, how: &str
     out
 }
 
-/// Chunked reads that came in more than one chunk: none would leave chunk boundaries unchecked.
-static SPLIT: AtomicU64 = AtomicU64::new(0);
-
 /// What `src` does differently for `q`, besides the limits.
 fn check(src: &dyn FeatureSource, q: &Extent) -> Result<(Vec<String>, usize, usize), String> {
     let all = src.read(&Request::all()).map_err(|e| format!("whole read: {e}"))?;
@@ -150,15 +147,15 @@ fn check(src: &dyn FeatureSource, q: &Extent) -> Result<(Vec<String>, usize, usi
     }
     if src.visits_chunks() {
         let (mut visited, mut chunks) = (Vec::new(), 0);
-        // A small budget, so a layer comes in several chunks.
-        src.visit_chunks(Some(*q), 512, &mut |fs| {
+        // A budget no feature fits in, so each comes in a chunk of its own.
+        src.visit_chunks(Some(*q), 1, &mut |fs| {
             chunks += 1;
             visited.extend(fs.into_iter().map(|f| f.id));
             Ok(())
         })
         .map_err(|e| format!("visit: {e}"))?;
-        if chunks > 1 {
-            SPLIT.fetch_add(1, Ordering::Relaxed);
+        if visited.len() >= 2 && chunks < 2 {
+            found.push(format!("visit gave {} features in one chunk of a byte", visited.len()));
         }
         found.extend(differences(&all.features, &ids(visited), q, "visit"));
     }
@@ -182,21 +179,27 @@ fn an_extent_read_gives_the_features_a_whole_read_filters_to() {
     // Layers each format wrote, by kind (points, lines, polygons): one that refuses every layer
     // of a kind checks nothing for it.
     let written = std::cell::RefCell::new([[0u32; 3]; FORMATS.len()]);
+    // Kinds of layer made: a small run may not make all three.
+    let made = std::cell::RefCell::new([false; 3]);
     let result = runner.run(&(layer(), extent()), |(ds, q)| {
         // A folder of its own for each case: a Shapefile's index is reused by path and stamp.
         let sub = dir.path().join(case.fetch_add(1, Ordering::Relaxed).to_string());
         std::fs::create_dir_all(&sub).unwrap();
         let mut some = false;
+        let kind = match ds.geometry_type {
+            GeometryType::Point => 0,
+            GeometryType::Polyline => 1,
+            _ => 2,
+        };
+        // A format may refuse a layer with nothing to draw (a Shapefile does).
+        if ds.features.iter().any(|f| f.geometry.is_some()) {
+            made.borrow_mut()[kind] = true;
+        }
         for (k, ext) in FORMATS.into_iter().enumerate() {
             let path = sub.join(format!("layer.{ext}"));
             if rustgis_data::io::write_path(&ds, &path).is_err() {
                 continue;
             }
-            let kind = match ds.geometry_type {
-                GeometryType::Point => 0,
-                GeometryType::Polyline => 1,
-                _ => 2,
-            };
             written.borrow_mut()[k][kind] += 1;
             let src = open_path(&path, None).map_err(|e| TestCaseError::fail(format!("{ext}: open: {e}")))?;
             let (found, n, total) = check(src.as_ref(), &q).map_err(|e| TestCaseError::fail(format!("{ext}: {e}")))?;
@@ -213,8 +216,9 @@ fn an_extent_read_gives_the_features_a_whole_read_filters_to() {
     if let Err(e) = result {
         panic!("PROPERTY_SEED={seed}: {e}");
     }
-    assert!(SPLIT.load(Ordering::Relaxed) > 0, "PROPERTY_SEED={seed}: no chunked read came in more than one chunk");
+    let made = made.into_inner();
     for (ext, n) in FORMATS.iter().zip(written.into_inner()) {
-        assert!(n.iter().all(|n| *n > 0), "PROPERTY_SEED={seed}: {ext} wrote no layer of some kind (points, lines, polygons): {n:?}");
+        let missing = n.iter().zip(made).any(|(n, made)| made && *n == 0);
+        assert!(!missing, "PROPERTY_SEED={seed}: {ext} wrote no layer of a kind made (points, lines, polygons): {n:?}");
     }
 }
