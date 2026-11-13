@@ -1007,7 +1007,7 @@ pub fn dialog(app: &mut RustGisApp, ui: &mut egui::Ui) {
         if !is_static {
             // A static catalog is walked in its own order, so it has no sort.
             ui.label(tl!("Sort by"));
-            let current = st.sortby.trim().to_string();
+            let current = if st.sort_is_default && shown_preset(st).is_none() { String::new() } else { st.sortby.trim().to_string() };
             let shown = SORTS.iter().find(|(v, _)| *v == current).map_or(current.clone(), |(_, l)| tl!(l).to_string());
             egui::ComboBox::from_id_salt("stac_sortby").selected_text(shown).show_ui(ui, |ui| {
                 for (v, label) in SORTS {
