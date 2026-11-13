@@ -137,6 +137,9 @@ fn differences(all: &[rustgis_data::Feature], got: &[u64], q: &Extent, how: &str
     out
 }
 
+/// Chunked reads that came in more than one chunk: none would leave chunk boundaries unchecked.
+static SPLIT: AtomicU64 = AtomicU64::new(0);
+
 /// What `src` does differently for `q`, besides the limits.
 fn check(src: &dyn FeatureSource, q: &Extent) -> Result<(Vec<String>, usize, usize), String> {
     let all = src.read(&Request::all()).map_err(|e| format!("whole read: {e}"))?;
@@ -146,13 +149,17 @@ fn check(src: &dyn FeatureSource, q: &Extent) -> Result<(Vec<String>, usize, usi
         found.push("read was incomplete".into());
     }
     if src.visits_chunks() {
-        let mut visited = Vec::new();
+        let (mut visited, mut chunks) = (Vec::new(), 0);
         // A small budget, so a layer comes in several chunks.
         src.visit_chunks(Some(*q), 512, &mut |fs| {
+            chunks += 1;
             visited.extend(fs.into_iter().map(|f| f.id));
             Ok(())
         })
         .map_err(|e| format!("visit: {e}"))?;
+        if chunks > 1 {
+            SPLIT.fetch_add(1, Ordering::Relaxed);
+        }
         found.extend(differences(&all.features, &ids(visited), q, "visit"));
     }
     Ok((found, read.features.len(), all.features.len()))
@@ -206,6 +213,7 @@ fn an_extent_read_gives_the_features_a_whole_read_filters_to() {
     if let Err(e) = result {
         panic!("PROPERTY_SEED={seed}: {e}");
     }
+    assert!(SPLIT.load(Ordering::Relaxed) > 0, "PROPERTY_SEED={seed}: no chunked read came in more than one chunk");
     for (ext, n) in FORMATS.iter().zip(written.into_inner()) {
         assert!(n.iter().all(|n| *n > 0), "PROPERTY_SEED={seed}: {ext} wrote no layer of some kind (points, lines, polygons): {n:?}");
     }
