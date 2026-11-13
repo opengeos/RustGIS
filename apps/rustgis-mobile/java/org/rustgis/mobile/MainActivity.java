@@ -37,6 +37,23 @@ public class MainActivity extends NativeActivity {
     private String saveName = "";
     private byte[] saveBytes;
 
+    @Override
+    protected void onCreate(android.os.Bundle saved) {
+        super.onCreate(saved);
+        // The interface draws a light ground under the system's bars: their icons are drawn dark.
+        if (android.os.Build.VERSION.SDK_INT >= 30) {
+            android.view.WindowInsetsController bars = getWindow().getInsetsController();
+            if (bars != null) {
+                int light = android.view.WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS
+                        | android.view.WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS;
+                bars.setSystemBarsAppearance(light, light);
+            }
+        } else {
+            getWindow().getDecorView().setSystemUiVisibility(
+                    android.view.View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR | android.view.View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR);
+        }
+    }
+
     /** Asks the user for files with the system's picker; each arrives as a "picked" event. */
     public void pick(final String purpose) {
         runOnUiThread(() -> {
@@ -89,6 +106,32 @@ public class MainActivity extends NativeActivity {
             events.clear();
             return taken;
         }
+    }
+
+    /**
+     * The room the system's bars and a camera cutout take at the window's edges, in pixels, as
+     * "left top right bottom"; empty before the window is laid out.
+     */
+    public String insets() {
+        android.view.WindowInsets insets = getWindow().getDecorView().getRootWindowInsets();
+        if (insets == null) {
+            return "";
+        }
+        int left, top, right, bottom;
+        if (android.os.Build.VERSION.SDK_INT >= 30) {
+            android.graphics.Insets bars = insets.getInsets(
+                    android.view.WindowInsets.Type.systemBars() | android.view.WindowInsets.Type.displayCutout());
+            left = bars.left;
+            top = bars.top;
+            right = bars.right;
+            bottom = bars.bottom;
+        } else {
+            left = insets.getSystemWindowInsetLeft();
+            top = insets.getSystemWindowInsetTop();
+            right = insets.getSystemWindowInsetRight();
+            bottom = insets.getSystemWindowInsetBottom();
+        }
+        return left + " " + top + " " + right + " " + bottom;
     }
 
     /** Whether something asked for is still to be reported. */
