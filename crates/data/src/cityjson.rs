@@ -309,7 +309,7 @@ fn read_with(file_name: &str, bytes: &[u8], given: Option<Crs>, keep_named: bool
     let given = given.filter(|_| !keep_named || named.and_then(known_system).is_none());
     let mut reach = Reach::default();
     vertices.iter().for_each(|v| reach.add(v));
-    let crs = coordinate_system(file_name, given, named, &reach, &mut notes)?;
+    let crs = coordinate_system(file_name, given, named, false, &reach, &mut notes)?;
     notes.extend(doc.appearance.and_then(appearance_note));
     let Some(objects) = doc.objects else {
         return Err(DataError::Format(format!("{file_name}: no CityObjects")));
