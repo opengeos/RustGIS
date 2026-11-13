@@ -782,8 +782,8 @@ impl<'de> serde::de::Visitor<'de> for RequiredNameVisitor {
         f.write_str("a capability name")
     }
     fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<Self::Value, E> {
-        // A long name keeps its first bytes (on a character's boundary) and `…`, which no known
-        // name has, so it can't be taken for one.
+        // A long name keeps its first bytes (on a character's boundary) and `…` for the refusal;
+        // longer than any known name (held by the assertion above), it can't be taken for one.
         if v.len() > MAX_CAPABILITY_BYTES {
             let mut end = MAX_CAPABILITY_BYTES;
             while !v.is_char_boundary(end) {
@@ -896,10 +896,9 @@ pub(crate) fn kept_as_written(text: &str, honours_requires: bool) -> bool {
 }
 
 /// Refuse future document formats before typed deserialization or normalization. Missing
-/// metadata is legacy content; arrays include legacy style files. Writers remain unchanged
-/// until a change needs a newer format, at which point it must declare that format. Up to
-/// [`READ_FORMAT`] is read, unless the document requires a capability this RustGIS doesn't know:
-/// that refusal names them.
+/// metadata is legacy content; arrays include legacy style files. Up to [`READ_FORMAT`] is read,
+/// unless the document requires a capability this RustGIS doesn't know: that refusal names them.
+/// A change an older reader would lose names a capability in `requires` (see [`CAPABILITIES`]).
 pub(crate) fn check_format(text: &str, kind: &str) -> Result<(), String> {
     let max = max_bytes();
     if text.len() as u64 > max {
