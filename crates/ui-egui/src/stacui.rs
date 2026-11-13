@@ -823,7 +823,7 @@ fn keep_preset_sort_for_its_api(st: &mut State) {
 /// having its area made and will go out with that sort, whatever the dialog is switched to
 /// meanwhile. The dropdown, and what drops the sort, follow this one rule so they never disagree.
 fn keeps_preset_sort(st: &State) -> bool {
-    shown_preset(st).is_some() || st.preparing.is_some()
+    shown_preset(st).is_some() || st.preparing.is_some() || matches!(st.waiting, Some((Asked::Search(..), _)))
 }
 
 /// The sort a search sends: the one picked, none for the API's own order or a static catalog.
