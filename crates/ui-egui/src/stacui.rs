@@ -824,8 +824,9 @@ fn drop_listing(st: &mut State) {
     st.collections.clear();
     st.items.clear();
     st.collection.clear();
-    // A preset's own sort stays with the preset's API: another API may reject it (a sort the
-    // user picked is kept).
+    // A preset's own sort stays with the preset's API: another API may reject it. It is told by
+    // its value, so picking that same sort on the preset counts as the preset's; any other sort
+    // the user picked is kept.
     if st.preset.is_some() && shown_preset(st).is_none() && st.sortby == PRESET_SORT {
         st.sortby.clear();
     }
@@ -1889,6 +1890,12 @@ mod tests {
         app.ui.stac.sortby = "-datetime".into();
         switch_api(&mut app.ui.stac, "https://other.example.org/stac/v1");
         assert_eq!(app.ui.stac.sortby, "-datetime");
+        // Picking the preset's own sort by hand is the preset's too: it goes when leaving its API.
+        let mut app = RustGisApp::with_sample();
+        app.run("ui.stac.sentinel2", serde_json::Value::Null).unwrap();
+        app.ui.stac.sortby = PRESET_SORT.into();
+        switch_api(&mut app.ui.stac, "https://example.org/stac/v1");
+        assert_eq!(app.ui.stac.sortby, "");
     }
 
     #[test]
