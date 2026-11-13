@@ -498,7 +498,6 @@ fn source_open_status(app: &RustGisApp, ui: &mut Ui, t: &Tokens) {
     ui.ctx().request_repaint_after(std::time::Duration::from_millis(50));
 }
 
-/// Whether windows are being read off the frame (none in the browser).
 /// Whether work is running that the status bar shows with its progress and Cancel: an export, a
 /// file or a layer being read, a download.
 pub(crate) fn background_busy(app: &RustGisApp) -> bool {
@@ -533,6 +532,7 @@ fn sources_opening(app: &RustGisApp) -> bool {
     app.session.project.maps.iter().flat_map(|m| &m.layers).filter_map(|l| l.source.as_ref()).any(|s| s.opening_progress().is_some())
 }
 
+/// Whether windows are being read off the frame (none in the browser).
 fn window_reads_under_way(app: &RustGisApp) -> bool {
     #[cfg(not(target_arch = "wasm32"))]
     return !app.ui.window_reads.is_empty();
