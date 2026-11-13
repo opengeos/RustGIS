@@ -39289,8 +39289,12 @@ fn a_layout_pdf_sets_its_text_in_its_fonts() {
     let (pdf, said) = export(&mut s, json!({})).unwrap();
     assert!(pdf.contains("/Subtype /Type0") && pdf.contains("/Encoding /Identity-H"), "{said:?}");
     assert!(pdf.contains("/Subtype /CIDFontType2") || pdf.contains("/Subtype /CIDFontType0"));
-    assert!(!pdf.contains("/Subtype /Type3"), "every face embedded: {said:?}");
-    assert!(!said.iter().any(|t| t.contains("as outlines")), "{said:?}");
+    // Every face embedded, except where the bold title is a variable system font drawn at its
+    // semibold weight (macOS's SF, #1922): an instance its file doesn't hold stays outlines, and
+    // says so.
+    let outlined: Vec<&String> = said.iter().filter(|t| t.contains("as outlines")).collect();
+    assert!(outlined.iter().all(|t| t.contains("drawn at another weight or width")), "{said:?}");
+    assert!(!pdf.contains("/Subtype /Type3") || !outlined.is_empty(), "every face embedded: {said:?}");
     // The text read back: the title's and the labels' characters are in the fonts' maps.
     let raw = std::fs::read(&path).unwrap();
     let maps: String = raw
