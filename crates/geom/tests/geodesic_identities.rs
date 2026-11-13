@@ -55,6 +55,10 @@ fn a_distance_is_symmetric_zero_only_at_one_place_and_no_longer_than_a_detour() 
     let result = runner.run(&(coord(), coord(), coord()), |(a, b, c)| {
         for ((name, part, _), d) in ROUNDING.iter().zip([wgs84_distance_m as fn(Coord, Coord) -> f64, haversine_m]) {
             let (ab, ba, ac, bc) = (d(a, b), d(b, a), d(a, c), d(b, c));
+            // NaN fails no comparison below, so a distance that isn't a number fails here.
+            if ![ab, ba, ac, bc].iter().all(|d| d.is_finite()) {
+                return Err(TestCaseError::fail(format!("{name}: {ab}, {ba}, {ac}, {bc} m among {a:?}, {b:?}, {c:?}")));
+            }
             let tolerance = 1e-6 + part * ab.max(ac).max(bc);
             if (ab - ba).abs() > tolerance {
                 return Err(TestCaseError::fail(format!("{name}: {ab} m from {a:?} to {b:?}, {ba} m back")));
@@ -152,9 +156,9 @@ fn measures(ring: &[Coord]) -> [(&'static str, f64); 4] {
     ]
 }
 
-/// Whether two measures agree: both NaN, or equal to a part in 10⁹ and a square metre.
+/// Whether two measures agree: both NaN, or finite and equal to a part in 10⁹ and a square metre.
 fn agree(a: f64, b: f64) -> bool {
-    (a.is_nan() && b.is_nan()) || (a - b).abs() <= 1e-9 * a.abs().max(b.abs()) + 1.0
+    (a.is_nan() && b.is_nan()) || a.is_finite() && b.is_finite() && (a - b).abs() <= 1e-9 * a.abs().max(b.abs()) + 1.0
 }
 
 #[test]

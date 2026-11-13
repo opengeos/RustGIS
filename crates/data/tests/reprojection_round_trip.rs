@@ -121,6 +121,11 @@ fn case() -> impl Strategy<Value = (usize, Coord, bool)> {
     })
 }
 
+/// Whether `p` is in the area of use `(w, e, s, n)`, whose east edge may be past 180°.
+fn in_area((w, e, s, n): (f64, f64, f64, f64), p: Coord) -> bool {
+    (s..=n).contains(&p.y) && ((w..=e).contains(&p.x) || (w..=e).contains(&(p.x + 360.0)))
+}
+
 /// Cases that went there and back, and places that were refused.
 static TRIPS: AtomicUsize = AtomicUsize::new(0);
 static REFUSED: AtomicUsize = AtomicUsize::new(0);
@@ -149,13 +154,16 @@ fn a_place_taken_into_a_coordinate_system_comes_back() {
     let cases = u32::try_from(env("PROPERTY_CASES", 20_000)).unwrap_or(20_000);
     let config = Config { cases, failure_persistence: None, ..Config::default() };
     let mut runner = TestRunner::new_with_rng(config, TestRng::from_seed(RngAlgorithm::ChaCha, &bytes));
-    let result = runner.run(&case(), |(i, p, inside)| {
-        let (Some((name, _)), Some(t)) = (SYSTEMS.get(i), transformers.get(i)) else { return Ok(()) };
+    let result = runner.run(&case(), |(i, p, _)| {
+        let (Some((name, area)), Some(t)) = (SYSTEMS.get(i), transformers.get(i)) else { return Ok(()) };
+        // Inside the area of use by where the place is, whichever way it was made.
+        let inside = in_area(*area, p);
         let limit = LIMITS.iter().find(|(s, _, anywhere, _)| s == name && (*anywhere || !inside));
         let allowed = limit.map_or(TOLERANCE_M, |l| l.1.max(TOLERANCE_M));
         let edge = (p.x.abs() > 179.99 || p.y.abs() > 89.99) && OUTLINE_REFUSALS.iter().any(|(s, _)| s == name);
         let trip = match trip(t, p) {
-            Err(_) if edge => None,
+            // Only a refusal on the way back, not a place that comes back wrong.
+            Err(e) if edge && e.contains("didn't come back") => None,
             other => other.map_err(|e| TestCaseError::fail(format!("{name}: {e}")))?,
         };
         match trip {
