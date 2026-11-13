@@ -259,8 +259,23 @@ fn toggle_button(ui: &mut Ui, t: &Tokens, icon: &str, hint: &str, on: bool) -> b
 /// the next point's fields (by field name).
 #[derive(Clone, Default)]
 struct Form {
+    /// The layer a chip chose; `None` follows the active layer.
     layer: Option<u32>,
+    /// The layer the fields were last shown for: what is typed belongs to it alone.
+    shown: Option<u32>,
     values: std::collections::BTreeMap<String, String>,
+}
+
+impl Form {
+    /// The form for layer `id`: what was typed for another layer is dropped, so one layer's text
+    /// never goes into another's field of the same name.
+    fn for_layer(mut self, id: u32) -> Form {
+        if self.shown != Some(id) {
+            self.values.clear();
+            self.shown = Some(id);
+        }
+        self
+    }
 }
 
 fn form(ctx: &egui::Context) -> Form {
@@ -293,44 +308,72 @@ fn capture_rows(app: &RustGisApp, ctx: &egui::Context) -> usize {
     fields + 3
 }
 
-/// A value typed for a field, as the command takes it: a number where it reads as one and the
-/// field holds numbers, a truth value for a yes/no field, the text otherwise. Nothing typed is
-/// no value. The command refuses what the field can't hold, and says so.
-fn typed(text: &str, ty: rustgis_ui_egui::rustgis_engine::data::FieldType) -> Value {
+/// A value typed for a field, as the command takes it: a number for a field of numbers, a truth
+/// value for a yes/no field, the text otherwise. Nothing typed is no value. Text that isn't a
+/// number, in a field of numbers, is an error here: the command would store nothing for it, and
+/// the point would be saved without what was typed.
+fn typed(text: &str, ty: rustgis_ui_egui::rustgis_engine::data::FieldType) -> Result<Value, ()> {
     use rustgis_ui_egui::rustgis_engine::data::FieldType;
     let text = text.trim();
     if text.is_empty() {
-        return Value::Null;
+        return Ok(Value::Null);
     }
     match ty {
-        FieldType::Integer => text.parse::<i64>().map(Value::from).unwrap_or_else(|_| Value::from(text)),
-        FieldType::Double => text.parse::<f64>().ok().filter(|n| n.is_finite()).map(Value::from).unwrap_or_else(|| Value::from(text)),
-        FieldType::Boolean => Value::from(text == "true"),
-        FieldType::Text | FieldType::Date | FieldType::DateTime => Value::from(text),
+        FieldType::Integer => text.parse::<i64>().map(Value::from).map_err(|_| ()),
+        FieldType::Double => text.parse::<f64>().ok().filter(|n| n.is_finite()).map(Value::from).ok_or(()),
+        FieldType::Boolean => match text {
+            "true" => Ok(Value::from(true)),
+            "false" => Ok(Value::from(false)),
+            _ => Err(()),
+        },
+        // A date the field can't hold is refused by the command, by name.
+        FieldType::Text | FieldType::Date | FieldType::DateTime => Ok(Value::from(text)),
     }
 }
 
+/// Where the cross is: the middle of the map, as longitude and latitude. `None` where the map's
+/// projection has no such place for it (the middle of the view is off the projected world).
+fn cross_place(app: &RustGisApp) -> Option<(f64, f64)> {
+    let map = app.session.map();
+    map.to_lonlat(map.camera.center).map(|at| (at.x, at.y))
+}
+
 /// Adds a point to layer `id` where the middle of the map is, with what the form holds, turning
-/// editing on for the map first when it is off (and saying so). Says whether the point was added;
-/// a refusal is said by the front end.
+/// editing on for the map first when it is off (and saying so). Says whether the point was added.
+/// It isn't, and the reason is said, when a field of numbers holds text that isn't one, when the
+/// cross is on no place of the map's projection, or when the command refuses.
 fn add_point(app: &mut RustGisApp, id: u32, form: &Form) -> bool {
     let Some(layer) = app.session.map().layer(id) else { return false };
     let name = layer.name.clone();
-    let attributes: serde_json::Map<String, Value> = layer
-        .dataset
-        .fields
-        .iter()
-        .filter_map(|f| form.values.get(&f.name).map(|text| (f.name.clone(), typed(text, f.ty))))
-        .filter(|(_, value)| !value.is_null())
-        .collect();
-    let at = app.session.map().center_lonlat();
+    let mut attributes = serde_json::Map::new();
+    let mut not_numbers = Vec::new();
+    for field in &layer.dataset.fields {
+        let Some(text) = form.values.get(&field.name) else { continue };
+        match typed(text, field.ty) {
+            Ok(Value::Null) => {}
+            Ok(value) => {
+                attributes.insert(field.name.clone(), value);
+            }
+            Err(()) => not_numbers.push(field.name.clone()),
+        }
+    }
+    if !not_numbers.is_empty() {
+        let fields = not_numbers.join(", ");
+        let text = "The point wasn't added: what is typed for {fields} isn't a value the field holds ({count}).";
+        app.session.notify(rustgis_ui_egui::i18n::fmt(text, &[("fields", &fields), ("count", &not_numbers.len().to_string())]), true);
+        return false;
+    }
+    let Some((lon, lat)) = cross_place(app) else {
+        app.session.notify(tl!("The point wasn't added: the cross is off the map. Move the map under it."), true);
+        return false;
+    };
     if !app.session.map().editing.settings.enabled {
         if app.run_by_user("edit.enable", json!({"on": true})).is_err() {
             return false;
         }
         app.session.notify(tl!("Editing was turned on for this map."), false);
     }
-    let geometry = json!({"type": "Point", "coordinates": [at.x, at.y]});
+    let geometry = json!({"type": "Point", "coordinates": [lon, lat]});
     if app.run_by_user("edit.addFeature", json!({"layer": id, "geometry": geometry, "attributes": attributes})).is_err() {
         return false;
     }
@@ -351,10 +394,14 @@ fn capture(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         ui.add_space(8.0);
         return;
     };
+    state = state.for_layer(id);
     // The button stays in reach above the fields, however many the layer has.
-    let at = app.session.map().center_lonlat();
-    let place =
-        rustgis_ui_egui::i18n::fmt("At the cross: {lon}, {lat}", &[("lon", &format!("{:.6}", at.x)), ("lat", &format!("{:.6}", at.y))]);
+    let place = match cross_place(app) {
+        Some((lon, lat)) => {
+            rustgis_ui_egui::i18n::fmt("At the cross: {lon}, {lat}", &[("lon", &format!("{lon:.6}")), ("lat", &format!("{lat:.6}"))])
+        }
+        None => tl!("The cross is off the map: move the map under it.").to_string(),
+    };
     ui.label(RichText::new(place).size(13.0).color(t.text_dim));
     let add = egui::Button::new(RichText::new(tl!("Add Point Here")).size(16.0).color(t.on_accent))
         .fill(t.accent)
@@ -371,9 +418,9 @@ fn capture(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                     let on = *layer == id;
                     let text = RichText::new(name).size(15.0).color(if on { t.accent_text } else { t.text });
                     let chip = egui::Button::new(text).fill(if on { t.checked } else { t.input }).min_size(Vec2::new(TARGET, TARGET - 8.0));
+                    // The next frame shows the chosen layer's fields, empty (`Form::for_layer`).
                     if ui.add(chip).clicked() && !on {
                         state.layer = Some(*layer);
-                        state.values.clear();
                     }
                 }
             });
@@ -592,16 +639,53 @@ mod tests {
     }
 
     #[test]
+    fn text_in_a_field_of_numbers_keeps_the_point_from_being_added_and_is_said() {
+        use rustgis_ui_egui::rustgis_engine::data::FieldType;
+        let mut app = RustGisApp::with_sample();
+        let id = capture_layer(&app, &Form::default()).unwrap();
+        let layer = app.session.map().layer(id).unwrap();
+        let before = layer.dataset.features.len();
+        let number =
+            layer.dataset.fields.iter().find(|f| matches!(f.ty, FieldType::Integer | FieldType::Double)).map(|f| f.name.clone()).unwrap();
+        let mut state = Form::default();
+        state.values.insert(number.clone(), "many".into());
+        let mark = app.session.notice_mark();
+        assert!(!add_point(&mut app, id, &state));
+        assert_eq!(app.session.map().layer(id).unwrap().dataset.features.len(), before);
+        let said: Vec<_> = app.session.notices_since(mark).iter().filter(|n| n.error).collect();
+        assert_eq!(said.len(), 1);
+        assert!(said[0].text.contains(&number), "{}", said[0].text);
+        // A number there goes in, with no error.
+        state.values.insert(number, "12".into());
+        let mark = app.session.notice_mark();
+        assert!(add_point(&mut app, id, &state));
+        assert!(app.session.notices_since(mark).iter().all(|n| !n.error));
+    }
+
+    #[test]
+    fn what_is_typed_for_one_layer_is_dropped_for_another() {
+        let mut state = Form::default().for_layer(1);
+        state.values.insert("name".into(), "Camp".into());
+        // The same layer keeps it; another drops it.
+        let state = state.for_layer(1);
+        assert_eq!(state.values.len(), 1);
+        assert!(state.for_layer(2).values.is_empty());
+    }
+
+    #[test]
     fn what_is_typed_becomes_the_fields_kind_of_value() {
         use rustgis_ui_egui::rustgis_engine::data::FieldType;
-        assert_eq!(typed("  ", FieldType::Text), Value::Null);
-        assert_eq!(typed(" 42 ", FieldType::Integer), json!(42));
-        assert_eq!(typed("4.5", FieldType::Double), json!(4.5));
-        assert_eq!(typed("true", FieldType::Boolean), json!(true));
-        assert_eq!(typed("false", FieldType::Boolean), json!(false));
-        // Not a number: passed as typed, for the command to refuse by name.
-        assert_eq!(typed("many", FieldType::Integer), json!("many"));
-        assert_eq!(typed("inf", FieldType::Double), json!("inf"));
+        assert_eq!(typed("  ", FieldType::Text), Ok(Value::Null));
+        assert_eq!(typed(" 42 ", FieldType::Integer), Ok(json!(42)));
+        assert_eq!(typed("4.5", FieldType::Double), Ok(json!(4.5)));
+        assert_eq!(typed("true", FieldType::Boolean), Ok(json!(true)));
+        assert_eq!(typed("false", FieldType::Boolean), Ok(json!(false)));
+        assert_eq!(typed("soon", FieldType::Date), Ok(json!("soon")));
+        // Not what the field holds: an error, not a value the command would store as nothing.
+        assert_eq!(typed("many", FieldType::Integer), Err(()));
+        assert_eq!(typed("4.5", FieldType::Integer), Err(()));
+        assert_eq!(typed("inf", FieldType::Double), Err(()));
+        assert_eq!(typed("yes", FieldType::Boolean), Err(()));
     }
 
     #[test]
