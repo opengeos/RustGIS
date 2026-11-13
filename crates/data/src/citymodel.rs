@@ -109,7 +109,8 @@ pub(crate) struct Counts {
     pub(crate) tin_reliefs: usize,
     pub(crate) unconverted: usize,
     pub(crate) bad_heights: usize,
-    /// Objects whose lowest and highest Z are too far apart for their difference to be a number.
+    /// Objects whose lowest and highest Z, or lowest Z and ground, are too far apart for their
+    /// difference to be a number.
     pub(crate) height_overflows: usize,
     /// The rounds after which passing heights up to parents stopped, when it did.
     pub(crate) parent_rounds: usize,
@@ -820,12 +821,12 @@ pub(crate) fn raise_parents(built: &mut [Built], visits: usize) -> Option<usize>
 
 /// Each object's ground: the lowest Z of the topmost object it is part of (of the lowest, when it is
 /// part of several), so a part over a building's roof starts at its lowest point's height above the
-/// building's lowest point (its basement's, when it has one), and a building at 0. A group's members aren't parts of the group: their ground is
-/// their own. Heights are passed up first ([`raise_parents`]), so each object's lowest Z is at most
-/// its parts', and the ground is the least of its own and its parents'. Run in as many rounds as
-/// passing heights up, and bounded the same way; gives the rounds it stopped after, when grounds
-/// were still moving. Not looking at Cancel: like passing heights up, a pass over objects already
-/// read.
+/// building's lowest point (its basement's, when it has one), and a building at 0. A group's
+/// members aren't parts of the group: their ground is their own. Heights are passed up first
+/// ([`raise_parents`]), so each object's lowest Z is at most its parts', and the ground is the
+/// least of its own and its parents'. Run in as many rounds as passing heights up, and bounded the
+/// same way; gives the rounds it stopped after, when grounds were still moving. Not looking at
+/// Cancel: like passing heights up, a pass over objects already read.
 pub(crate) fn set_grounds(built: &mut [Built], visits: usize) -> Option<usize> {
     let links: Vec<Vec<usize>> = {
         let index: HashMap<&str, usize> = built.iter().enumerate().map(|(i, b)| (b.id.as_str(), i)).collect();
@@ -1015,7 +1016,7 @@ fn listed(names: &BTreeSet<String>) -> String {
 }
 
 /// One notice per kind, with a count.
-fn messages(c: &Counts) -> Vec<String> {
+pub(crate) fn messages(c: &Counts) -> Vec<String> {
     let mut out = Vec::new();
     let mut say = |n: usize, text: String| {
         if n > 0 {

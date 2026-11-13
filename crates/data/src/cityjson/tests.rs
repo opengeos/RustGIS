@@ -859,6 +859,14 @@ fn setting_grounds_is_bounded() {
     let mut cycle = vec![built("a", Some("b"), Some((1.0, 2.0))), built("b", Some("a"), Some((0.0, 1.0)))];
     assert_eq!(set_grounds(&mut cycle, MAX_PARENT_VISITS), None);
     assert_eq!((cycle[0].ground, cycle[1].ground), (Some(0.0), Some(0.0)));
+    let said = |c: &Counts| messages(c).into_iter().filter(|m| m.contains("base_height is measured")).collect::<Vec<_>>();
+    assert_eq!(
+        said(&Counts { ground_rounds: 3, ..Counts::default() }),
+        [
+            "parent chains go deeper than 3 levels: some parts' base_height is measured from a parent, not from the topmost object they are part of"
+        ]
+    );
+    assert!(said(&Counts::default()).is_empty(), "grounds that settled say nothing");
 }
 
 /// Past what the visits allow it stops and says after how many rounds; a cycle settles.
