@@ -259,20 +259,22 @@ fn toggle_button(ui: &mut Ui, t: &Tokens, icon: &str, hint: &str, on: bool) -> b
 /// the next point's fields (by field name).
 #[derive(Clone, Default)]
 struct Form {
-    /// The layer a chip chose; `None` follows the active layer.
-    layer: Option<u32>,
+    /// The layer a chip chose; `None` follows the active layer. A layer is named here by its
+    /// `Layer::instance_id`, not its id: ids start again in each map and each project, and a
+    /// choice or a draft must never pass to another map's layer of the same id.
+    layer: Option<u64>,
     /// The layer the fields were last shown for: what is typed belongs to it alone.
-    shown: Option<u32>,
+    shown: Option<u64>,
     values: std::collections::BTreeMap<String, String>,
 }
 
 impl Form {
-    /// The form for layer `id`: what was typed for another layer is dropped, so one layer's text
-    /// never goes into another's field of the same name.
-    fn for_layer(mut self, id: u32) -> Form {
-        if self.shown != Some(id) {
+    /// The form for the layer `instance`: what was typed for another layer is dropped, so one
+    /// layer's text never goes into another's field of the same name.
+    fn for_layer(mut self, instance: u64) -> Form {
+        if self.shown != Some(instance) {
             self.values.clear();
-            self.shown = Some(id);
+            self.shown = Some(instance);
         }
         self
     }
@@ -286,18 +288,19 @@ fn set_form(ctx: &egui::Context, form: Form) {
     ctx.data_mut(|d| d.insert_temp(egui::Id::unique("touch_capture"), form));
 }
 
-/// The map's point layers (id, name), top first: what a point can be captured into.
-fn point_layers(app: &RustGisApp) -> Vec<(u32, String)> {
+/// The map's point layers (id, name, instance), top first: what a point can be captured into.
+fn point_layers(app: &RustGisApp) -> Vec<(u32, String, u64)> {
     let point = rustgis_ui_egui::rustgis_engine::data::GeometryType::Point;
-    app.session.map().layers.iter().filter(|l| l.geometry_type() == point).map(|l| (l.id, l.name.clone())).collect()
+    app.session.map().layers.iter().filter(|l| l.geometry_type() == point).map(|l| (l.id, l.name.clone(), l.instance_id())).collect()
 }
 
 /// The layer the Capture sheet captures into: the one chosen in it while it is still a point
 /// layer of this map, else the active layer when it is one, else the top point layer.
 fn capture_layer(app: &RustGisApp, form: &Form) -> Option<u32> {
     let layers = point_layers(app);
-    let has = |id: &u32| layers.iter().any(|(l, _)| l == id);
-    form.layer.filter(has).or(app.session.active_layer.filter(has)).or(layers.first().map(|(id, _)| *id))
+    let chosen = form.layer.and_then(|instance| layers.iter().find(|(_, _, i)| *i == instance).map(|(id, _, _)| *id));
+    let has = |id: &u32| layers.iter().any(|(l, _, _)| l == id);
+    chosen.or(app.session.active_layer.filter(has)).or(layers.first().map(|(id, _, _)| *id))
 }
 
 /// The Capture sheet's rows, for its height: its layers, its fields, where the cross is, and
@@ -359,8 +362,7 @@ fn add_point(app: &mut RustGisApp, id: u32, form: &Form) -> bool {
     }
     if !not_numbers.is_empty() {
         let fields = not_numbers.join(", ");
-        let text = "The point wasn't added: what is typed for {fields} isn't a value the field holds ({count}).";
-        app.session.notify(rustgis_ui_egui::i18n::fmt(text, &[("fields", &fields), ("count", &not_numbers.len().to_string())]), true);
+        app.session.notify(rustgis_ui_egui::i18n::fmt("The point wasn't added. Not a number, in: {fields}.", &[("fields", &fields)]), true);
         return false;
     }
     let Some((lon, lat)) = cross_place(app) else {
@@ -394,7 +396,8 @@ fn capture(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         ui.add_space(8.0);
         return;
     };
-    state = state.for_layer(id);
+    let instance = layers.iter().find(|(l, _, _)| *l == id).map_or(0, |(_, _, i)| *i);
+    state = state.for_layer(instance);
     // The button stays in reach above the fields, however many the layer has.
     let place = match cross_place(app) {
         Some((lon, lat)) => {
@@ -414,13 +417,13 @@ fn capture(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         egui::ScrollArea::horizontal().id_salt("touch_capture_layers").show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.set_min_height(TARGET);
-                for (layer, name) in &layers {
+                for (layer, name, instance) in &layers {
                     let on = *layer == id;
                     let text = RichText::new(name).size(15.0).color(if on { t.accent_text } else { t.text });
                     let chip = egui::Button::new(text).fill(if on { t.checked } else { t.input }).min_size(Vec2::new(TARGET, TARGET - 8.0));
                     // The next frame shows the chosen layer's fields, empty (`Form::for_layer`).
                     if ui.add(chip).clicked() && !on {
-                        state.layer = Some(*layer);
+                        state.layer = Some(*instance);
                     }
                 }
             });
@@ -595,7 +598,8 @@ mod tests {
             .find(|f| f.ty == rustgis_ui_egui::rustgis_engine::data::FieldType::Text)
             .map(|f| f.name.clone())
             .unwrap();
-        let mut state = Form { layer: Some(id), ..Form::default() };
+        let instance = layer.instance_id();
+        let mut state = Form { layer: Some(instance), ..Form::default() };
         state.values.insert(text.clone(), "Field Camp".into());
         // With editing off, capturing turns it on, and says so.
         run(&mut app, "edit.enable", json!({"on": false}));
@@ -610,7 +614,7 @@ mod tests {
         // The sheet draws with the new point's layer, and for a map with no point layer.
         frame(&mut app, &ctx, Sheet::Capture);
         run(&mut app, "layer.remove", json!({"layer": id}));
-        assert_eq!(capture_layer(&app, &Form { layer: Some(id), ..Form::default() }), None);
+        assert_eq!(capture_layer(&app, &Form { layer: Some(instance), ..Form::default() }), None);
         frame(&mut app, &ctx, Sheet::Capture);
     }
 
@@ -623,7 +627,7 @@ mod tests {
         run(&mut app, "layer.paste", Value::Null);
         let layers = point_layers(&app);
         assert_eq!(layers.len(), 2, "{layers:?}");
-        let other = layers.iter().map(|(id, _)| *id).find(|id| *id != cities).unwrap();
+        let (other, _, other_instance) = layers.iter().find(|(id, _, _)| *id != cities).cloned().unwrap();
         // Nothing chosen: the active layer, whichever it is, and it is followed as it changes.
         for id in [cities, other] {
             run(&mut app, "layer.select", json!({"layer": id}));
@@ -635,7 +639,15 @@ mod tests {
         assert_eq!(form(&ctx).layer, None);
         // A chip's choice wins over the active layer.
         run(&mut app, "layer.select", json!({"layer": cities}));
-        assert_eq!(capture_layer(&app, &Form { layer: Some(other), ..Form::default() }), Some(other));
+        assert_eq!(capture_layer(&app, &Form { layer: Some(other_instance), ..Form::default() }), Some(other));
+        // A choice made for another map's or project's layer is no choice here, whatever its id.
+        assert_eq!(capture_layer(&app, &Form { layer: Some(u64::MAX), ..Form::default() }), Some(cities));
+        // The sample opened again: its Cities is another layer, though its id is the same.
+        let was = layers.iter().find(|(id, _, _)| *id == cities).map(|(_, _, i)| *i);
+        app.session.mark_saved();
+        run(&mut app, "project.sample", Value::Null);
+        let again = point_layers(&app).iter().find(|(id, _, _)| *id == cities).map(|(_, _, i)| *i);
+        assert!(again.is_some() && again != was, "{was:?} {again:?}");
     }
 
     #[test]
