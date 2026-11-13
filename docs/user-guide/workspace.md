@@ -29,7 +29,7 @@ smaller one is loaded whole.
 command line. A package opens as a new, unsaved project; Save writes a plain `.rgis` file.
 Opening or creating a project clears undo history; saving does not.
 
-This version already reads format 2, the coming `.rgis` that links to its data
+This version already reads format 2, a newer `.rgis` format
 ([#1853](https://github.com/opengeos/RustGIS/issues/1853)), when the file needs nothing this
 version lacks, and saves it in the format it writes today. A project, package, template, map or
 layer file that needs something this version can't read (what it lists under `requires`) is

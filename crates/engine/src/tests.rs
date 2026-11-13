@@ -42884,9 +42884,12 @@ fn format_2_is_read_unless_it_needs_what_this_rustgis_cannot_read() {
     let too_many: Vec<String> = (0..1000).map(|i| format!("c{i}")).collect();
     let e = Project::from_json(&as_format(2, Some(json!(too_many)))).unwrap_err();
     assert!(e.contains("lists more than 256 things it needs"), "{e}");
-    // A name of a million characters is kept only as far as the refusal shows it.
+    // A name of a million characters is said cut short (`requires_tests` checks what is kept).
     let e = Project::from_json(&as_format(2, Some(json!(["y".repeat(1_000_000)])))).unwrap_err();
     assert!(e.len() < 400 && e.contains("yyy…"), "{}", e.len());
+    // Names that look alike once flattened are said once.
+    let e = Project::from_json(&as_format(2, Some(json!(["a\n", "a\r"])))).unwrap_err();
+    assert!(e.contains("read: a. Update"), "{e}");
     // Format 3 is still from a newer RustGIS, before its capabilities are looked at.
     let e = Project::from_json(&as_format(3, Some(json!(["z-values"])))).unwrap_err();
     assert!(e.contains("saved by a newer RustGIS (format 3)"), "{e}");

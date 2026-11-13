@@ -55,7 +55,8 @@ pub fn open_command(path: &str) -> &'static str {
 }
 /// The format this RustGIS writes: the saved-document compatibility version, independent of the
 /// RustGIS release version. Advance it when an older reader would lose meaningful saved
-/// information on resaving.
+/// information on resaving; within format 2, such an addition is named in `requires` instead
+/// (see [`READ_FORMAT`] and [`CAPABILITIES`]).
 pub const FORMAT: u32 = 1;
 /// The newest format this RustGIS reads. Format 2 is read a release before anything writes it
 /// (#1853): a document of format 2 opens when this RustGIS knows every capability it `requires`,
@@ -68,9 +69,16 @@ pub const CAPABILITIES: &[&str] = &[];
 /// The most entries a document's `requires` may list: past it the document is refused without
 /// the rest being read.
 const MAX_REQUIRES: usize = 256;
-/// The longest capability name kept whole, in bytes: a longer one can't be a known capability, so
-/// only its start is kept, for the refusal to show.
+/// The longest capability name kept whole, in bytes: a longer one can't be a known capability
+/// (none is longer, held below), so only its start is kept, marked `…`, for the refusal to show.
 const MAX_CAPABILITY_BYTES: usize = 128;
+const _: () = {
+    let mut i = 0;
+    while i < CAPABILITIES.len() {
+        assert!(CAPABILITIES[i].len() <= MAX_CAPABILITY_BYTES, "a known capability's name is at most MAX_CAPABILITY_BYTES");
+        i += 1;
+    }
+};
 /// Largest project file read or saved in the browser, or on a computer whose memory isn't known
 /// (512 MiB): the floor of [`max_bytes`].
 pub const BYTES_FLOOR: u64 = 512 << 20;
@@ -774,10 +782,14 @@ impl<'de> serde::de::Visitor<'de> for RequiredNameVisitor {
         f.write_str("a capability name")
     }
     fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<Self::Value, E> {
-        // A long name keeps only what a refusal shows, and is told apart from a known one by
-        // being longer than any.
+        // A long name keeps its first bytes (on a character's boundary) and `…`, which no known
+        // name has, so it can't be taken for one.
         if v.len() > MAX_CAPABILITY_BYTES {
-            Ok(RequiredName::Name(v.chars().take(81).collect::<String>() + "…"))
+            let mut end = MAX_CAPABILITY_BYTES;
+            while !v.is_char_boundary(end) {
+                end -= 1;
+            }
+            Ok(RequiredName::Name(format!("{}…", v.get(..end).unwrap_or_default())))
         } else {
             Ok(RequiredName::Name(v.to_string()))
         }
@@ -865,17 +877,21 @@ fn capability_said(name: &str) -> String {
 }
 
 /// Whether a saved document's text, read for its format, is one to keep as written rather than
-/// rewrite through RustGIS's types: of a format this RustGIS doesn't read, or requiring anything
-/// (the typed copy wouldn't keep the list, even of capabilities it knows). Text that doesn't read
-/// as an object, or whose `format` isn't a number, isn't one.
-pub(crate) fn kept_as_written(text: &str) -> bool {
+/// rewrite through RustGIS's types: of a format this RustGIS doesn't read, or, for a kind whose
+/// reader looks at `requires` (`honours_requires`: projects and maps), requiring anything, as the
+/// typed copy wouldn't keep the list, even of capabilities it knows. A list (a legacy style file),
+/// or text whose `format` isn't a number, isn't one.
+pub(crate) fn kept_as_written(text: &str, honours_requires: bool) -> bool {
+    if text.trim_start().starts_with('[') {
+        return false;
+    }
     serde_json::from_str::<FileFormat>(text).is_ok_and(|h| {
         let requires_nothing = match &h.requires {
             Requires::Nothing => true,
             Requires::Names(names) => names.is_empty(),
             Requires::TooMany | Requires::NotNames => false,
         };
-        h.format > u64::from(READ_FORMAT) || !requires_nothing
+        h.format > u64::from(READ_FORMAT) || (honours_requires && !requires_nothing)
     })
 }
 
@@ -898,7 +914,12 @@ pub(crate) fn check_format(text: &str, kind: &str) -> Result<(), String> {
     }
     let unknown = unknown_capabilities(&header.requires, kind)?;
     if !unknown.is_empty() {
-        let said: Vec<String> = unknown.iter().map(|n| capability_said(n)).collect();
+        let mut said: Vec<String> = Vec::new();
+        for name in unknown.iter().map(|n| capability_said(n)) {
+            if !said.contains(&name) {
+                said.push(name);
+            }
+        }
         return Err(format!("this {kind} needs what this RustGIS can't read: {}. Update RustGIS to open it.", crate::names_said(&said)));
     }
     Ok(())
@@ -2268,6 +2289,31 @@ impl Durable for ModelGraph {
 fn project_text(p: &Project) -> Result<String, String> {
     let max = max_bytes();
     json_within(p, max)?.ok_or_else(|| format!("the project is too large to save (maximum {})", limit_said(max)))
+}
+
+#[cfg(test)]
+mod requires_tests {
+    use super::*;
+
+    fn requires(names: serde_json::Value) -> Requires {
+        serde_json::from_value::<FileFormat>(serde_json::json!({"format": 2, "requires": names})).map(|h| h.requires).unwrap_or_default()
+    }
+
+    /// At most [`MAX_REQUIRES`] entries are read, and a long name keeps only its start.
+    #[test]
+    fn requires_is_read_within_its_bounds() {
+        let names = |n: usize| serde_json::Value::from((0..n).map(|i| format!("c{i}")).collect::<Vec<_>>());
+        assert!(matches!(requires(names(MAX_REQUIRES)), Requires::Names(n) if n.len() == MAX_REQUIRES));
+        assert!(matches!(requires(names(MAX_REQUIRES + 1)), Requires::TooMany));
+        // A name of a million characters is kept as its first 128 bytes and `…`; a long name of
+        // characters of three bytes is cut on a boundary, and a short one kept whole.
+        let Requires::Names(n) = requires(serde_json::json!(["y".repeat(1_000_000), "名".repeat(50), "名".repeat(42)])) else { panic!() };
+        assert_eq!(n[0], format!("{}…", "y".repeat(MAX_CAPABILITY_BYTES)));
+        assert_eq!(n[1], format!("{}…", "名".repeat(42)));
+        assert_eq!(n[2], "名".repeat(42));
+        // The first entry that isn't a name ends the reading.
+        assert!(matches!(requires(serde_json::json!(["a", 1, "b"])), Requires::NotNames));
+    }
 }
 
 #[cfg(test)]

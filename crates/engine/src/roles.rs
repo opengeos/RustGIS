@@ -372,7 +372,8 @@ impl Durable for VecSteps {
 fn document(kind: Document, v: &Value, depth: usize, report: &mut Report) -> Option<Value> {
     let Some(text) = v.as_str().filter(|s| s.len() as u64 <= crate::project::max_bytes()) else { return invalid(v, report) };
     // One this RustGIS wouldn't read, or would rewrite without what it requires, stays as written.
-    if crate::project::kept_as_written(text) {
+    // Only project and map readers refuse a document for what it requires; the others don't look.
+    if crate::project::kept_as_written(text, matches!(kind, Document::Project | Document::Map)) {
         report.unchecked = report.unchecked.saturating_add(1);
         return None;
     }

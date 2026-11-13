@@ -519,6 +519,10 @@ fn durable_future_documents_keep_their_exact_text_unchecked() {
         let kept = clean.map_or(text.clone(), |c| c["text"].as_str().unwrap_or_default().to_string());
         assert_eq!(kept.contains(SECRET), unchecked == 1, "{kept}");
     }
+    // A task document's reader doesn't look at `requires`, so listing one doesn't keep it unchecked.
+    let task = json!({"name": "t", "requires": ["z-values"], "steps": []}).to_string();
+    let (_, report) = crate::roles::command("task.import", &json!({"text": task}), 0);
+    assert_eq!(report.unchecked, 0);
     let malformed = source.strip_suffix('}').unwrap();
     let (clean, report) = crate::roles::command("project.openText", &json!({"text":malformed}), 0);
     assert_eq!(clean.unwrap()["text"], "[parameters withheld]", "malformed credential-bearing text keeps its existing handling");
