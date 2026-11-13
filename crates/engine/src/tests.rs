@@ -25051,6 +25051,16 @@ fn dxf_drawings_by_path_and_upload() {
     assert_eq!(u.map().layers.len(), 2);
     assert!(u.notices.iter().any(|n| n.text.contains("doesn't say its coordinate system")), "{:?}", u.notices);
     assert!(u.run("layer.addDataBytes", &json!({"fileName": "bad.dxf", "data": "AAAA"})).is_err());
+    // Blocks (图块) are drawn unless "blocks" says not to: what is left out is counted.
+    let blocked = "  0\nSECTION\n  2\nBLOCKS\n  0\nBLOCK\n  2\nB\n  0\nPOINT\n 10\n1\n 20\n1\n  0\nENDBLK\n  0\nENDSEC\n  0\nSECTION\n  2\nENTITIES\n  0\nINSERT\n  2\nB\n 10\n5\n 20\n5\n  0\nLINE\n  8\nRoads\n 10\n0\n 20\n0\n 11\n1\n 21\n0\n  0\nENDSEC\n  0\nEOF\n";
+    let mut v = Session::new(Project::default());
+    v.run("layer.addDataText", &json!({"fileName": "blocks.dxf", "text": blocked})).unwrap();
+    assert_eq!(v.map().layers.len(), 2, "the block's point and the line");
+    let mut w = Session::new(Project::default());
+    w.run("layer.addDataText", &json!({"fileName": "blocks.dxf", "text": blocked, "blocks": false})).unwrap();
+    let names: Vec<String> = w.map().layers.iter().map(|l| l.name.clone()).collect();
+    assert_eq!(names, ["blocks lines"], "the line only");
+    assert!(w.notices.iter().any(|n| n.text.contains("1 inserted blocks")), "{:?}", w.notices);
     let _ = std::fs::remove_dir_all(dir);
 }
 

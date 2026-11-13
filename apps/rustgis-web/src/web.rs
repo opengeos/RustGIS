@@ -1172,6 +1172,7 @@ fn services(inbox: Inbox, font_inbox: Inbox, notes: Notes, ctx: egui::Context, e
             let mark = match (purpose, tool_exts) {
                 ("shortcuts", _) => rustgis_ui_egui::SHORTCUT_PICK,
                 ("text", _) => rustgis_ui_egui::DELIMITED_PICK,
+                ("dxf", _) => rustgis_ui_egui::DXF_PICK,
                 ("shapefile", _) => rustgis_ui_egui::SHAPEFILE_PICK,
                 (_, Some(_)) => rustgis_ui_egui::TOOL_FILE_PICK,
                 _ => "",
@@ -1216,6 +1217,8 @@ fn services(inbox: Inbox, font_inbox: Inbox, notes: Notes, ctx: egui::Context, e
             } else if purpose == "text" {
                 rfd::AsyncFileDialog::new()
                     .add_filter("Delimited text and spreadsheets", &["csv", "tsv", "txt", "xlsx", "xlsm", "xlsb", "xls", "ods"])
+            } else if purpose == "dxf" {
+                rfd::AsyncFileDialog::new().add_filter(rustgis_ui_egui::tl!("DXF drawing"), &["dxf"])
             } else if purpose == "picture" {
                 rfd::AsyncFileDialog::new().add_filter("Pictures", &["png", "jpg", "jpeg"])
             } else {
