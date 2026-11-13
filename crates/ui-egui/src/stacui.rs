@@ -811,6 +811,11 @@ fn drop_preset_sort(st: &mut State) {
 /// of the address and typing it back keeps the sort; it is judged when a search is sent and when
 /// another API is picked.
 fn keep_preset_sort_for_its_api(st: &mut State) {
+    // A search whose area is being made keeps the sort it was made with, until it lands.
+    if shown_preset(st).is_none() && st.preparing.is_none() {
+        drop_preset_sort(st);
+    }
+}
     if shown_preset(st).is_none() {
         drop_preset_sort(st);
     }
