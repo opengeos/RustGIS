@@ -1,26 +1,109 @@
-//! RustGIS on Android: the phase 0 feasibility spike (#1902).
+//! RustGIS on Android (#1902).
 //!
-//! The desktop front end (`rustgis-ui-egui`) in a `NativeActivity`, to find out what builds, what
-//! runs and what breaks on a phone before any touch interface is designed. See `README.md` for
-//! how to build and install it.
+//! The desktop front end (`rustgis-ui-egui`) in a `NativeActivity`, with the phone's file picker
+//! ([`phone`], a `rustgis_engine::platform::Platform`) standing where the browser's stands for
+//! the web app. See `README.md` for how to build and install it.
 //!
-//! Not here yet (phase 1): a platform trait for location, camera and file picking; preferences
-//! and the keychain; autosave; a touch-first front end.
+//! Not here yet: location and the camera; preferences and the keychain; autosave; a touch-first
+//! front end.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 #[cfg(target_os = "android")]
+mod phone;
+
+#[cfg(target_os = "android")]
 mod android {
+    use crate::phone::Phone;
     use eframe::egui;
     use eframe::wgpu;
     use rustgis_engine::data::dirs;
-    use rustgis_ui_egui::RustGisApp;
+    use rustgis_engine::platform::{Event, Platform};
+    use rustgis_ui_egui::{Inbox, RustGisApp};
+    use std::cell::RefCell;
+    use std::rc::Rc;
     use winit::platform::android::activity::AndroidApp;
+
+    /// What a service couldn't do, kept until the next frame says it in the window (a service has
+    /// no session to tell).
+    type Refusals = Rc<RefCell<Vec<String>>>;
 
     /// The app: the desktop front end, with the files to open once the window runs.
     struct App {
         app: RustGisApp,
         /// The files pushed to the app's folder ([`pushed`]), until the first frame takes them.
         pushed: Vec<std::path::PathBuf>,
+        /// The phone's file picker, where its Java half is there.
+        phone: Option<Rc<Phone>>,
+        /// Picked files the front end reads as bytes (`Services::inbox`).
+        inbox: Inbox,
+        refusals: Refusals,
+    }
+
+    impl App {
+        /// Takes what the phone did since the last frame: picked files are opened, the rest is
+        /// said in the window.
+        fn take_phone_events(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+            for text in self.refusals.borrow_mut().drain(..) {
+                self.app.session.notify(text, true);
+            }
+            let Some(phone) = self.phone.clone() else { return };
+            for event in phone.take_events() {
+                match event {
+                    // Data and projects open by path, as files dropped on the desktop window do:
+                    // a GeoPackage is then edited in place, in its copy.
+                    Event::Picked { purpose, path, .. } if purpose == "data" || purpose == "project" => {
+                        raw_input.dropped_files.push(std::sync::Arc::new(Pushed(path)));
+                    }
+                    // Every other picker's file goes where the browser's does: to whoever asked.
+                    Event::Picked { purpose, name, path } => {
+                        match std::fs::read(&path) {
+                            Ok(bytes) => {
+                                self.inbox.lock().unwrap_or_else(|e| e.into_inner()).push((format!("{}{name}", mark(&purpose)), bytes))
+                            }
+                            Err(e) => self.app.session.notify(format!("{name} wasn't opened: {e}"), true),
+                        }
+                        // Its bytes are all that was wanted of the copy.
+                        let _ = std::fs::remove_file(&path);
+                    }
+                    Event::Cancelled => {}
+                    Event::Saved { name } => self.app.session.notify(format!("Saved {name}."), false),
+                    Event::Failed(text) => self.app.session.notify(text, true),
+                }
+            }
+            // A picked file is copied on a thread of Android's: look again until it has arrived.
+            if phone.busy() {
+                ctx.request_repaint_after(std::time::Duration::from_millis(250));
+            }
+        }
+    }
+
+    /// What starts the name of a file from the picker for `purpose` in the inbox, as the browser's
+    /// shell marks them: the front end sends a marked file to the dialog that asked for it.
+    fn mark(purpose: &str) -> &'static str {
+        match purpose {
+            "shortcuts" => rustgis_ui_egui::SHORTCUT_PICK,
+            "text" => rustgis_ui_egui::DELIMITED_PICK,
+            "shapefile" => rustgis_ui_egui::SHAPEFILE_PICK,
+            p if p.starts_with(rustgis_ui_egui::TOOL_FILE_PURPOSE) => rustgis_ui_egui::TOOL_FILE_PICK,
+            _ => "",
+        }
+    }
+
+    /// Gives the front end the phone's file picker, the way the browser's shell gives its own:
+    /// Open and Add Data ask through `open_async`, and what is saved or exported is offered
+    /// through `download`.
+    fn use_picker(app: &mut RustGisApp, phone: &Rc<Phone>, inbox: &Inbox, refusals: &Refusals) {
+        let (picker, refused) = (phone.clone(), refusals.clone());
+        app.services.open_async = Some(Box::new(move |purpose: &str| {
+            log::info!("asking for files: {purpose}");
+            if let Err(e) = picker.pick_files(purpose) {
+                log::warn!("{e}");
+                refused.borrow_mut().push(e);
+            }
+        }));
+        let saver = phone.clone();
+        app.services.download = Some(Box::new(move |name: &str, bytes: Vec<u8>| saver.save_file(name, bytes)));
+        app.services.inbox = Some(inbox.clone());
     }
 
     impl eframe::App for App {
@@ -34,7 +117,8 @@ mod android {
             self.app.ui(ui);
         }
 
-        fn raw_input_hook(&mut self, _ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+        fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+            self.take_phone_events(ctx, raw_input);
             // The pushed files open as files dropped on the desktop window do: once the window
             // runs, read off its thread with progress and Cancel, each failure said in the window.
             // Opened before the event loop, a large one would hold the activity's start.
@@ -45,7 +129,7 @@ mod android {
         }
     }
 
-    /// A pushed file, handed to the front end as a file dropped on the window: by its path.
+    /// A pushed or picked file, handed to the front end as a file dropped on the window: by its path.
     #[derive(Debug)]
     struct Pushed(std::path::PathBuf);
 
@@ -73,7 +157,7 @@ mod android {
 
     /// The files and folders in the app's external files folder
     /// (`/sdcard/Android/data/org.rustgis.mobile/files`, where `adb push` can put them), in name
-    /// order: the spike's stand-in for a file picker. A folder or an entry that can't be read is
+    /// order: a way in for tests, beside the file picker. A folder or an entry that can't be read is
     /// said in the window.
     fn pushed(android: &AndroidApp, app: &mut RustGisApp) -> Vec<std::path::PathBuf> {
         let Some(dir) = android.external_data_path() else {
@@ -137,12 +221,18 @@ mod android {
             log::warn!("start-up: {e}");
             app.session.notify(e, true);
         }
-        // The pickers do nothing here (`rustgis_ui_egui`'s `filedialog`): said once, in the window.
-        let folder = android.external_data_path().map(|d| d.display().to_string());
-        app.session.warn(match folder {
-            Some(folder) => format!("Android has no file picker in RustGIS yet: every button that asks for a file or folder does nothing. Files and folders in {folder} are opened at start-up."),
-            None => "Android has no file picker in RustGIS yet: every button that asks for a file or folder does nothing.".to_string(),
-        });
+        let (inbox, refusals) = (Inbox::default(), Refusals::default());
+        let phone = match Phone::new(&android) {
+            Ok(phone) => {
+                let phone = Rc::new(phone);
+                use_picker(&mut app, &phone, &inbox, &refusals);
+                Some(phone)
+            }
+            Err(e) => {
+                app.session.warn(format!("{e}. Every button that asks for a file does nothing."));
+                None
+            }
+        };
         let pushed = pushed(&android, &mut app);
         app.session.mark_saved();
         let mut wgpu_options = eframe::egui_wgpu::WgpuConfiguration::default();
@@ -151,7 +241,9 @@ mod android {
             setup.instance_descriptor.backends = wgpu::Backends::VULKAN | wgpu::Backends::GL;
         }
         let options = eframe::NativeOptions { android_app: Some(android), wgpu_options, ..Default::default() };
-        if let Err(e) = eframe::run_native("RustGIS", options, Box::new(move |_cc| Ok(Box::new(App { app, pushed })))) {
+        if let Err(e) =
+            eframe::run_native("RustGIS", options, Box::new(move |_cc| Ok(Box::new(App { app, pushed, phone, inbox, refusals }))))
+        {
             log::error!("the app stopped: {e}");
         }
         // The activity is gone (Back, or the system destroyed it). winit's event loop can't be

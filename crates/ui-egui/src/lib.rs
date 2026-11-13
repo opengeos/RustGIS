@@ -5721,6 +5721,16 @@ impl RustGisApp {
                 ctx.request_repaint_after(std::time::Duration::from_millis(250));
             }
         }
+        // A picker Android doesn't have was asked for: said, as the click did nothing.
+        #[cfg(target_os = "android")]
+        for what in filedialog::take_refused() {
+            let text = match what {
+                "choose a folder" => tl!("Choosing a folder isn't available on Android yet."),
+                "save a file" => tl!("Saving to a file of your choice isn't available here on Android yet."),
+                _ => tl!("Choosing a file isn't available here on Android yet."),
+            };
+            self.session.notify(text, false);
+        }
         // Files from the async picker or browser drops.
         let arrived: Vec<(String, Vec<u8>)> = match &self.services.inbox {
             Some(inbox) => std::mem::take(&mut *inbox.lock().unwrap_or_else(|e| e.into_inner())),
