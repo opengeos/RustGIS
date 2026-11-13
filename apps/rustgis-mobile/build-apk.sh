@@ -3,8 +3,8 @@
 #
 #   apps/rustgis-mobile/build-apk.sh [--debug] [abi ...]     (default: arm64-v8a x86_64)
 #
-# Needs: the Rust Android targets, cargo-ndk, and an Android SDK with the NDK, build-tools and a
-# platform (see README.md). ANDROID_HOME names the SDK (default ~/Android/Sdk).
+# Needs: a JDK (keytool, apksigner), the Rust Android targets, cargo-ndk, and an Android SDK with
+# the NDK, build-tools and a platform (see README.md). ANDROID_HOME names the SDK (default ~/Android/Sdk).
 set -euo pipefail
 
 profile=--release
@@ -45,7 +45,7 @@ unsigned=$out/unsigned.apk
 # A debug key of this checkout's own: an APK must be signed to install, even on an emulator.
 key=$out/debug.keystore
 [ -f "$key" ] || keytool -genkeypair -keystore "$key" -storepass android -keypass android -alias debug \
-    -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=RustGIS debug" >/dev/null 2>&1
+    -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=RustGIS debug" >/dev/null
 "$tools/apksigner" sign --ks "$key" --ks-pass pass:android --key-pass pass:android --out "$out/rustgis-mobile.apk" "$out/aligned.apk"
 rm -f "$unsigned" "$out/aligned.apk"
 ls -lh "$out/rustgis-mobile.apk"

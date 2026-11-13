@@ -12,7 +12,7 @@ Once:
 ```sh
 rustup target add aarch64-linux-android x86_64-linux-android
 cargo install cargo-ndk --locked
-# An Android SDK in ~/Android/Sdk (or ANDROID_HOME), with:
+# A JDK (for keytool and apksigner), and an Android SDK in ~/Android/Sdk (or ANDROID_HOME), with:
 sdkmanager "ndk;27.2.12479018" "build-tools;36.0.0" "platforms;android-35" "platform-tools"
 ```
 
@@ -27,7 +27,7 @@ adb logcat -s rustgis                        # the app's log
 ```
 
 There is no file picker yet. To open data, push it to the app's external files folder before
-starting the app: every file there is opened once the window is up, as if dropped on the desktop's
+starting the app: every file or folder there is opened once the window is up, as if dropped on the desktop's
 window.
 
 ```sh

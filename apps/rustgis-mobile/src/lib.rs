@@ -6,7 +6,7 @@
 //!
 //! Not here yet (phase 1): a platform trait for location, camera and file picking; preferences
 //! and the keychain; autosave; a touch-first front end.
-#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 #[cfg(target_os = "android")]
 mod android {
@@ -71,7 +71,7 @@ mod android {
         }
     }
 
-    /// The files in the app's external files folder
+    /// The files and folders in the app's external files folder
     /// (`/sdcard/Android/data/org.rustgis.mobile/files`, where `adb push` can put them), in name
     /// order: the spike's stand-in for a file picker. A folder or an entry that can't be read is
     /// said in the window.
@@ -92,12 +92,8 @@ mod android {
         let mut first = None;
         for entry in entries {
             match entry {
-                Ok(entry) => {
-                    let path = entry.path();
-                    if path.is_file() {
-                        files.push(path);
-                    }
-                }
+                // Folders too (a Zarr store is one): what the front end can't open, it says.
+                Ok(entry) => files.push(entry.path()),
                 Err(e) => {
                     unread += 1;
                     first.get_or_insert(e);
@@ -128,6 +124,7 @@ mod android {
         app.reads_off_frame = true;
         if let Err(e) = app.start(&rustgis_ui_egui::Start { blank: Some(false), ..Default::default() }) {
             log::warn!("start-up: {e}");
+            app.session.notify(e, true);
         }
         let pushed = pushed(&android, &mut app);
         app.session.mark_saved();
