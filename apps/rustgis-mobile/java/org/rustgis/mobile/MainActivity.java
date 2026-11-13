@@ -49,7 +49,9 @@ public class MainActivity extends NativeActivity {
             Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
             intent.addCategory(Intent.CATEGORY_OPENABLE);
             intent.setType("*/*");
-            intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
+            // Several files only where the front end takes several, as in the browser: two
+            // projects would replace one another, and a dialog's options go with one file.
+            intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, purpose.equals("data") || purpose.equals("shapefile"));
             if (!start(intent, PICK)) {
                 picking = false;
             }
@@ -141,9 +143,13 @@ public class MainActivity extends NativeActivity {
             final String purpose = this.purpose;
             // Copied off the main thread: a document can be large, or come from the network.
             new Thread(() -> {
+                // One folder for what was picked together, and for nothing else: a file that is
+                // read with the one beside it (a .mif and its .mid) finds it, and a later pick of
+                // the same name can't replace a file the session has open.
+                File dir = new File(new File(getFilesDir(), "picked"), Long.toString(System.nanoTime()));
                 try {
                     for (Uri uri : uris) {
-                        copyIn(purpose, uri);
+                        copyIn(purpose, uri, dir);
                     }
                 } finally {
                     answered();
@@ -179,12 +185,13 @@ public class MainActivity extends NativeActivity {
     }
 
     /** Copies a picked document into the app's storage, where the Rust side can open it by path. */
-    private void copyIn(String purpose, Uri uri) {
+    private void copyIn(String purpose, Uri uri, File dir) {
         String name = displayName(uri);
-        // A folder of its own for each pick: a second file of the same name must not replace
-        // one the session has open.
-        File dir = new File(new File(getFilesDir(), "picked"), Long.toString(System.nanoTime()));
         File file = new File(dir, name);
+        // Two documents of one name picked together (from two folders) both keep their bytes.
+        for (int n = 2; file.exists(); n++) {
+            file = new File(dir, n + "-" + name);
+        }
         try {
             if (!dir.isDirectory() && !dir.mkdirs()) {
                 throw new java.io.IOException("the app's storage can't be written to");
@@ -202,6 +209,7 @@ public class MainActivity extends NativeActivity {
             add("picked\t" + purpose + "\t" + name + "\t" + file.getAbsolutePath());
         } catch (Throwable e) {
             // Half a copy would only fill the storage: nothing reports its path to remove it later.
+            // (The folder goes only once it is empty.)
             file.delete();
             dir.delete();
             add("failed\t" + name + " wasn't opened: " + e.getMessage());

@@ -41,7 +41,8 @@ impl Event {
                 Event::Picked { purpose: purpose.to_string(), name: name.to_string(), path: PathBuf::from(path) }
             }
             ["cancelled"] => Event::Cancelled,
-            ["saved", name] => Event::Saved { name: name.to_string() },
+            // A name is the user's own text and may hold a tab: the rest of the line is the name.
+            ["saved", name @ ..] if !name.is_empty() => Event::Saved { name: name.join("\t") },
             ["failed", text @ ..] => Event::Failed(text.join("\t")),
             _ => Event::Failed(format!("The system reported something RustGIS doesn't know: {line}")),
         }
@@ -79,6 +80,7 @@ mod tests {
         );
         assert_eq!(Event::parse("cancelled"), Event::Cancelled);
         assert_eq!(Event::parse("saved\tmap.png"), Event::Saved { name: "map.png".into() });
+        assert_eq!(Event::parse("saved\tmy\tmap.png"), Event::Saved { name: "my\tmap.png".into() });
         // A failure's text is kept whole, tabs and all.
         assert_eq!(Event::parse("failed\ta.gpkg wasn't opened:\tno room"), Event::Failed("a.gpkg wasn't opened:\tno room".into()));
     }

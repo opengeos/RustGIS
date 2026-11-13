@@ -9,6 +9,7 @@ use jni::objects::{JObject, JString};
 use jni::refs::Global;
 use jni::{JValue, JavaVM, jni_sig, jni_str};
 use rustgis_engine::platform::{Event, Platform};
+use std::cell::RefCell;
 use std::path::PathBuf;
 use winit::platform::android::activity::AndroidApp;
 
@@ -16,6 +17,9 @@ use winit::platform::android::activity::AndroidApp;
 pub struct Phone {
     activity: Global<JObject<'static>>,
     storage: Option<PathBuf>,
+    /// Why the activity last couldn't be asked what happened, until it can be again: said once,
+    /// not every frame.
+    unreachable: RefCell<Option<String>>,
 }
 
 impl Phone {
@@ -38,7 +42,7 @@ impl Phone {
                 })
             })
             .map_err(|e| format!("Android's Java side can't be reached: {e}"))?;
-        Ok(Phone { activity, storage: android.internal_data_path() })
+        Ok(Phone { activity, storage: android.internal_data_path(), unreachable: RefCell::new(None) })
     }
 
     /// Runs `call` with the Java environment and the activity, on this thread.
@@ -89,8 +93,16 @@ impl Platform for Phone {
             env.cast_local::<JString>(taken)?.try_to_string(env)
         });
         match lines {
-            Ok(lines) => lines.lines().map(Event::parse).collect(),
-            Err(e) => vec![Event::Failed(e)],
+            Ok(lines) => {
+                self.unreachable.replace(None);
+                lines.lines().map(Event::parse).collect()
+            }
+            // Asked every frame: the same failure is said once.
+            Err(e) if self.unreachable.borrow().as_deref() == Some(e.as_str()) => Vec::new(),
+            Err(e) => {
+                self.unreachable.replace(Some(e.clone()));
+                vec![Event::Failed(e)]
+            }
         }
     }
 }

@@ -71,12 +71,6 @@ mod android {
             let Some(phone) = self.phone.clone() else { return };
             for event in phone.take_events() {
                 match event {
-                    // Data and projects open by path, as files dropped on the desktop window do:
-                    // a GeoPackage is then edited in place, in its copy.
-                    Event::Picked { purpose, path, .. } if purpose == "data" || purpose == "project" => {
-                        raw_input.dropped_files.push(std::sync::Arc::new(Pushed(path)));
-                    }
-                    // Every other picker's file goes where the browser's does: to whoever asked.
                     Event::Picked { purpose, name, path } => self.waiting.push((purpose, name, path)),
                     Event::Cancelled => {}
                     Event::Saved { name } => self.app.session.notify(i18n::fmt("Saved {name}.", &[("name", &name)]), false),
@@ -94,25 +88,36 @@ mod android {
             // A picked file is copied on a thread of Android's: look again until it has arrived.
             let busy = phone.busy();
             if !busy && !self.waiting.is_empty() {
-                self.read_waiting(ctx);
+                self.open_waiting(ctx, raw_input);
             }
             if busy || self.reading.load(Ordering::Relaxed) > 0 {
                 ctx.request_repaint_after(std::time::Duration::from_millis(250));
             }
         }
 
-        /// Reads the files picked for dialogs into the inbox, off the window's thread (a file can
-        /// be large), each picker's files together so a Shapefile's loose parts become one layer,
-        /// as the browser's shell reads them.
-        fn read_waiting(&mut self, ctx: &egui::Context) {
-            let mut batches: Vec<(String, Vec<(String, PathBuf)>)> = Vec::new();
+        /// Opens the picked files, now that every picker has answered in full, what was picked
+        /// together kept together (its copies share a folder).
+        ///
+        /// Data and projects open by path, as files dropped on the desktop window do: a
+        /// GeoPackage is then edited in place, in its copy, and a file read with the one beside
+        /// it finds it. Every other picker's files go where the browser's do, to the dialog that
+        /// asked: read into the inbox off the window's thread (a file can be large), a Shapefile's
+        /// loose parts gathered into one layer. That read has no Cancel: each file is one read,
+        /// and the dialogs' files are small beside data.
+        fn open_waiting(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+            let mut batches: Vec<(Option<PathBuf>, String, Vec<(String, PathBuf)>)> = Vec::new();
             for (purpose, name, path) in self.waiting.drain(..) {
-                match batches.iter_mut().find(|(p, _)| *p == purpose) {
-                    Some((_, files)) => files.push((name, path)),
-                    None => batches.push((purpose, vec![(name, path)])),
+                let folder = path.parent().map(PathBuf::from);
+                match batches.iter_mut().find(|(f, _, _)| *f == folder) {
+                    Some((_, _, files)) => files.push((name, path)),
+                    None => batches.push((folder, purpose, vec![(name, path)])),
                 }
             }
-            for (purpose, files) in batches {
+            for (_, purpose, files) in batches {
+                if purpose == "data" || purpose == "project" {
+                    raw_input.dropped_files.extend(files.into_iter().map(|(_, path)| std::sync::Arc::new(Pushed(path)) as _));
+                    continue;
+                }
                 let (inbox, problems, reading, ctx) = (self.inbox.clone(), self.problems.clone(), self.reading.clone(), ctx.clone());
                 reading.fetch_add(1, Ordering::Relaxed);
                 let names: Vec<String> = files.iter().map(|(name, _)| name.clone()).collect();
