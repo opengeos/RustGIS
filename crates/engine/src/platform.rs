@@ -1,5 +1,5 @@
-//! What a phone provides that a computer's window doesn't: the system's file picker, the app's
-//! own storage, and (to come) location and the camera. A mobile shell implements [`Platform`] for
+//! What a phone provides that a computer's window doesn't: the system's file picker and (to
+//! come) location and the camera. A mobile shell implements [`Platform`] for
 //! its system; a front end asks through it and collects what happened with
 //! [`Platform::take_events`], as nothing here waits for the user.
 //!
@@ -60,9 +60,6 @@ pub trait Platform {
     /// [`Event::Saved`] or [`Event::Failed`] follows. `Ok` means the user was asked, not that the
     /// file is written.
     fn save_file(&self, name: &str, bytes: Vec<u8>) -> Result<(), String>;
-
-    /// The app's own folder, where the system gives it one.
-    fn storage(&self) -> Option<PathBuf>;
 
     /// What happened since the last call, oldest first.
     fn take_events(&self) -> Vec<Event>;

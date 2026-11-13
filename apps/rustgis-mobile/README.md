@@ -49,7 +49,7 @@ of the app.
 ## The phone, from Rust
 
 `rustgis_engine::platform::Platform` is what a front end asks a phone for: files from the system's
-picker, a place to save, the app's storage. Location and the camera are added to it with their
+picker and a place to save. Location and the camera are added to it with their
 first implementation. `src/phone.rs` implements it for Android by calling the activity's Java half,
 `java/org/rustgis/mobile/MainActivity.java`, which is the only code that can show the picker (the
 Storage Access Framework) and receive its answer.
@@ -64,8 +64,8 @@ Rust calls Java and never the other way: each frame the app collects what happen
 - **Saving.** Save, Save As and the exports offer their file through the picker, as the browser
   offers a download. A project saved this way names its picked data by the copies' paths in the
   app's storage.
-- **Not yet.** Choosing a folder (Add Folder, a Zarr store) says it isn't available. The copies in
-  `files/picked` are never removed. Bringing edits back to the original file is phase 3.
+- **Not yet.** Choosing a folder (Add Folder, a Zarr store) says it isn't available. The copies of
+  data and projects in `files/picked` are never removed (a dialog's file is removed once read). Bringing edits back to the original file is phase 3.
 
 ## What differs from the desktop
 

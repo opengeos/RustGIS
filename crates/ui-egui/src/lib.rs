@@ -1963,10 +1963,14 @@ impl RustGisApp {
             // cannot confirm that this renamed document reached a file.
             self.session.mark_unsaved();
         }
-        self.session.notify(
-            crate::i18n::fmt("Download offered: {name}. The browser doesn't say whether it saved the file.", &[("name", &file)]),
-            false,
-        );
+        // On Android the file is written once the user has chosen its place, and the shell
+        // says then whether it was.
+        let offered = if cfg!(target_os = "android") {
+            crate::i18n::fmt("Choose where to save {name}.", &[("name", &file)])
+        } else {
+            crate::i18n::fmt("Download offered: {name}. The browser doesn't say whether it saved the file.", &[("name", &file)])
+        };
+        self.session.notify(offered, false);
         report.notify(&mut self.session);
         self.ui.web_file = Some(file);
         Ok(())
@@ -1986,7 +1990,12 @@ impl RustGisApp {
                     self.session.notify(e, true);
                     return false;
                 }
-                self.session.notify(crate::i18n::fmt("Download offered: {name}", &[("name", name)]), false);
+                let offered = if cfg!(target_os = "android") {
+                    crate::i18n::fmt("Choose where to save {name}.", &[("name", name)])
+                } else {
+                    crate::i18n::fmt("Download offered: {name}", &[("name", name)])
+                };
+                self.session.notify(offered, false);
                 true
             }
             None => false,

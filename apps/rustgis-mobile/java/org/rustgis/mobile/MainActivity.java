@@ -161,7 +161,8 @@ public class MainActivity extends NativeActivity {
             saveBytes = null;
             final Uri uri = result == RESULT_OK && data != null ? data.getData() : null;
             if (uri == null || bytes == null) {
-                add("cancelled");
+                // Said, as the app has already told the user to choose a place for it.
+                add("failed\t" + name + " wasn't saved: no place was chosen for it.");
                 answered();
                 return;
             }
@@ -206,7 +207,8 @@ public class MainActivity extends NativeActivity {
                     out.write(buffer, 0, n);
                 }
             }
-            add("picked\t" + purpose + "\t" + name + "\t" + file.getAbsolutePath());
+            // The copy's own name: a second document of one name is told from the first.
+            add("picked\t" + purpose + "\t" + file.getName() + "\t" + file.getAbsolutePath());
         } catch (Throwable e) {
             // Half a copy would only fill the storage: nothing reports its path to remove it later.
             // (The folder goes only once it is empty.)

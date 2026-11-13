@@ -1,6 +1,5 @@
-//! Android as a [`Platform`]: the system's file picker (the Storage Access Framework) and the
-//! app's storage, asked for through the activity's Java half
-//! (`java/org/rustgis/mobile/MainActivity.java`).
+//! Android as a [`Platform`]: the system's file picker (the Storage Access Framework), asked for
+//! through the activity's Java half (`java/org/rustgis/mobile/MainActivity.java`).
 //!
 //! Rust calls Java and never the other way: what happened is collected with `takeEvents`, so the
 //! library exports nothing but `android_main`.
@@ -9,14 +8,13 @@ use jni::objects::{JObject, JString};
 use jni::refs::Global;
 use jni::{JValue, JavaVM, jni_sig, jni_str};
 use rustgis_engine::platform::{Event, Platform};
+use rustgis_ui_egui::i18n;
 use std::cell::RefCell;
-use std::path::PathBuf;
 use winit::platform::android::activity::AndroidApp;
 
 /// The phone, through its activity.
 pub struct Phone {
     activity: Global<JObject<'static>>,
-    storage: Option<PathBuf>,
     /// Why the activity last couldn't be asked what happened, until it can be again: said once,
     /// not every frame.
     unreachable: RefCell<Option<String>>,
@@ -41,15 +39,15 @@ impl Phone {
                     held
                 })
             })
-            .map_err(|e| format!("Android's Java side can't be reached: {e}"))?;
-        Ok(Phone { activity, storage: android.internal_data_path(), unreachable: RefCell::new(None) })
+            .map_err(|e| i18n::fmt("Android's Java side can't be reached: {error}", &[("error", &e.to_string())]))?;
+        Ok(Phone { activity, unreachable: RefCell::new(None) })
     }
 
     /// Runs `call` with the Java environment and the activity, on this thread.
     fn java<T>(&self, call: impl FnOnce(&mut jni::Env, &JObject) -> jni::errors::Result<T>) -> Result<T, String> {
         JavaVM::singleton()
             .and_then(|vm| vm.attach_current_thread(|env| call(env, &self.activity)))
-            .map_err(|e| format!("Android refused: {e}"))
+            .map_err(|e| i18n::fmt("Android refused: {error}", &[("error", &e.to_string())]))
     }
 
     /// Whether something asked for is still to be reported: the window keeps asking while it is.
@@ -78,10 +76,6 @@ impl Platform for Phone {
             )?
             .v()
         })
-    }
-
-    fn storage(&self) -> Option<PathBuf> {
-        self.storage.clone()
     }
 
     fn take_events(&self) -> Vec<Event> {
