@@ -313,12 +313,10 @@ fn row(ui: &mut Ui, t: &Tokens, icon: &str, label: &str) -> bool {
     response.clicked()
 }
 
-/// Runs a command the user tapped for. What it refuses is said in the window, as the ribbon's
-/// buttons say it.
+/// Runs a command the user tapped for. What it refuses, the front end says in the window itself,
+/// as it does for the ribbon's buttons.
 fn run(app: &mut RustGisApp, command: &str, params: Value) {
-    if let Err(e) = app.run_by_user(command, params) {
-        app.session.notify(e, true);
-    }
+    let _ = app.run_by_user(command, params);
 }
 
 #[cfg(test)]
@@ -351,7 +349,7 @@ mod tests {
     }
 
     #[test]
-    fn tile_layers_are_listed_and_hidden_from_their_rows() {
+    fn a_map_with_a_tile_layer_draws_its_sheet_and_takes_the_rows_commands() {
         let mut app = RustGisApp::with_sample();
         run(&mut app, "map.addTiles", json!({"url": "https://tiles.example.com/{z}/{x}/{y}.png", "name": "Imagery"}));
         assert_eq!(app.session.map().tiles.len(), 1);
@@ -390,6 +388,7 @@ mod tests {
         let mut app = RustGisApp::with_sample();
         let before = app.session.notice_mark();
         run(&mut app, "layer.zoomTo", json!({"layer": "no such layer"}));
-        assert!(app.session.notices_since(before).iter().any(|n| n.error));
+        // Once: the front end reports a refusal itself.
+        assert_eq!(app.session.notices_since(before).iter().filter(|n| n.error).count(), 1);
     }
 }
