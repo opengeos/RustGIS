@@ -4902,7 +4902,6 @@ dependencies = [
  "log",
  "rustgis-engine",
  "rustgis-ui-egui",
- "serde_json",
  "winit",
 ]
 

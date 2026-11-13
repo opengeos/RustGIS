@@ -27,7 +27,8 @@ adb logcat -s rustgis                        # the app's log
 ```
 
 There is no file picker yet. To open data, push it to the app's external files folder before
-starting the app: every file there is opened at start-up, as if named on the desktop's command line.
+starting the app: every file there is opened once the window is up, as if dropped on the desktop's
+window.
 
 ```sh
 adb push parcels.gpkg /sdcard/Android/data/org.rustgis.mobile/files/
@@ -51,7 +52,7 @@ Java or Kotlin: `aapt2` links the manifest, and the Rust library is the whole ap
 |---|---|
 | File dialogs | None: `rfd` has no Android backend, so every picker is cancelled and says so in the log (`crates/ui-egui/src/filedialog.rs`) |
 | HTTPS trust | The bundled Mozilla roots, not the device's certificates; the session says so once (`rustgis_data::http`) |
-| Folders | Settings, app data and the cache are in the app's internal storage, named through `RUSTGIS_CONFIG_DIR`, `RUSTGIS_APP_DATA_DIR` and `RUSTGIS_CACHE_DIR` |
+| Folders | Settings, app data and the cache are in the app's internal storage, set once at start-up (`rustgis_data::dirs::set_root`) |
 | GeoLibre tools, GDAL formats, DuckDB | Not available: a phone can't run their programs |
 | Preferences, the keychain, autosave | Not wired up yet |
 | Soft keyboard | `NativeActivity`'s is poor; a real app moves to `GameActivity` |

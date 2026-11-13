@@ -15,7 +15,8 @@ abis=("$@")
 root=$(cd "$(dirname "$0")/../.." && pwd)
 sdk=${ANDROID_HOME:-$HOME/Android/Sdk}
 # The newest of each that is installed.
-newest() { ls -d "$1"/*/ 2>/dev/null | sort -V | tail -1 | sed 's:/$::'; }
+# Nothing when there is none: the check below says what is missing.
+newest() { { ls -d "$1"/*/ 2>/dev/null || true; } | sort -V | tail -1 | sed 's:/$::'; }
 export ANDROID_NDK_HOME=${ANDROID_NDK_HOME:-$(newest "$sdk/ndk")}
 tools=$(newest "$sdk/build-tools")
 platform=$(newest "$sdk/platforms")

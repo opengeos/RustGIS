@@ -26,7 +26,6 @@ type_complexity = "allow"
 # Without the `geolibre` feature: a phone can't run the `geolibre` program.
 rustgis-engine = { workspace = true }
 rustgis-ui-egui = { workspace = true }
-serde_json = { workspace = true }
 # NativeActivity needs no Java of ours. Its soft keyboard support is poor: a real app moves to
 # GameActivity (`android-game-activity`), which also allows `accesskit`.
 eframe = { workspace = true, features = ["default_fonts", "wgpu", "android-native-activity"] }
