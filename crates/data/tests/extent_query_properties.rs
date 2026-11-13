@@ -172,8 +172,9 @@ fn an_extent_read_gives_the_features_a_whole_read_filters_to() {
     let cases = u32::try_from(env("PROPERTY_CASES", 128)).unwrap_or(128);
     let config = Config { cases, failure_persistence: None, ..Config::default() };
     let mut runner = TestRunner::new_with_rng(config, TestRng::from_seed(RngAlgorithm::ChaCha, &bytes));
-    // Layers each format wrote: one that refuses every layer checks nothing.
-    let written = std::cell::RefCell::new([0u32; FORMATS.len()]);
+    // Layers each format wrote, by kind (points, lines, polygons): one that refuses every layer
+    // of a kind checks nothing for it.
+    let written = std::cell::RefCell::new([[0u32; 3]; FORMATS.len()]);
     let result = runner.run(&(layer(), extent()), |(ds, q)| {
         // A folder of its own for each case: a Shapefile's index is reused by path and stamp.
         let sub = dir.path().join(case.fetch_add(1, Ordering::Relaxed).to_string());
@@ -184,7 +185,12 @@ fn an_extent_read_gives_the_features_a_whole_read_filters_to() {
             if rustgis_data::io::write_path(&ds, &path).is_err() {
                 continue;
             }
-            written.borrow_mut()[k] += 1;
+            let kind = match ds.geometry_type {
+                GeometryType::Point => 0,
+                GeometryType::Polyline => 1,
+                _ => 2,
+            };
+            written.borrow_mut()[k][kind] += 1;
             let src = open_path(&path, None).map_err(|e| TestCaseError::fail(format!("{ext}: open: {e}")))?;
             let (found, n, total) = check(src.as_ref(), &q).map_err(|e| TestCaseError::fail(format!("{ext}: {e}")))?;
             some |= n > 0 && n < total;
@@ -201,6 +207,6 @@ fn an_extent_read_gives_the_features_a_whole_read_filters_to() {
         panic!("PROPERTY_SEED={seed}: {e}");
     }
     for (ext, n) in FORMATS.iter().zip(written.into_inner()) {
-        assert!(n > 0, "PROPERTY_SEED={seed}: {ext} wrote none of the layers");
+        assert!(n.iter().all(|n| *n > 0), "PROPERTY_SEED={seed}: {ext} wrote no layer of some kind (points, lines, polygons): {n:?}");
     }
 }

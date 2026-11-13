@@ -123,7 +123,15 @@ fn case() -> impl Strategy<Value = (usize, Coord, bool)> {
 
 /// Whether `p` is in the area of use `(w, e, s, n)`, whose east edge may be past 180°.
 fn in_area((w, e, s, n): (f64, f64, f64, f64), p: Coord) -> bool {
-    (s..=n).contains(&p.y) && ((w..=e).contains(&p.x) || (w..=e).contains(&(p.x + 360.0)))
+    (s..=n).contains(&p.y) && [p.x - 360.0, p.x, p.x + 360.0].iter().any(|x| (w..=e).contains(x))
+}
+
+#[test]
+fn a_place_on_the_antimeridian_is_in_an_area_on_either_side() {
+    let zone_1 = (-180.0, -174.0, 0.0, 84.0);
+    assert!(in_area(zone_1, Coord::new(180.0, 45.0)) && in_area(zone_1, Coord::new(-180.0, 45.0)));
+    assert!(in_area((174.0, 180.0, -80.0, 0.0), Coord::new(-180.0, -45.0)));
+    assert!(!in_area(zone_1, Coord::new(179.0, 45.0)));
 }
 
 /// Cases that went there and back, and places that were refused.

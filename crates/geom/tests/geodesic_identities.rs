@@ -156,9 +156,9 @@ fn measures(ring: &[Coord]) -> [(&'static str, f64); 4] {
     ]
 }
 
-/// Whether two measures agree: both NaN, or finite and equal to a part in 10⁹ and a square metre.
+/// Whether two measures agree: finite and equal to a part in 10⁹ and a square metre.
 fn agree(a: f64, b: f64) -> bool {
-    (a.is_nan() && b.is_nan()) || a.is_finite() && b.is_finite() && (a - b).abs() <= 1e-9 * a.abs().max(b.abs()) + 1.0
+    a.is_finite() && b.is_finite() && (a - b).abs() <= 1e-9 * a.abs().max(b.abs()) + 1.0
 }
 
 #[test]
@@ -166,6 +166,10 @@ fn a_ring_measures_the_same_from_any_vertex_either_way_round() {
     let (seed, mut runner) = runner(10_000);
     let result = runner.run(&(ring(), any::<prop::sample::Index>()), |(ring, twice)| {
         let want = measures(&ring);
+        // The rings made here are never the ambiguous ones (through both poles) measured as NaN.
+        if let Some((name, m)) = want.iter().find(|(_, m)| !m.is_finite()) {
+            return Err(TestCaseError::fail(format!("{name} of {ring:?} is {m}")));
+        }
         let n = ring.len();
         let mut variants: Vec<(String, Vec<Coord>)> =
             (1..n).map(|k| (format!("starting at vertex {k}"), [&ring[k..], &ring[..k]].concat())).collect();
