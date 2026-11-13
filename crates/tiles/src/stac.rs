@@ -73,6 +73,9 @@ pub struct Item {
     pub id: String,
     pub collection: String,
     pub datetime: String,
+    /// Whether `datetime` is the item's own `properties.datetime` (false when it is empty or
+    /// stands in with `start_datetime`, which an API sorting on `datetime` did not sort by).
+    pub own_datetime: bool,
     /// West, south, east, north.
     pub bbox: Option<[f64; 4]>,
     /// Its footprint, a GeoJSON geometry.
@@ -216,7 +219,10 @@ pub fn sort_followed(items: &[Item], sortby: Option<&str>) -> Option<bool> {
         // length (the same fraction of a second); any other offset or form is not compared.
         "properties.datetime" => {
             let len = items.first()?.datetime.len();
-            if len == 0 || items.len() < 2 || items.iter().any(|i| i.datetime.len() != len || !i.datetime.ends_with('Z')) {
+            // An item whose own `datetime` is null carries its `start_datetime` here, which the
+            // API did not sort by: it can't be compared.
+            if len == 0 || items.len() < 2 || items.iter().any(|i| !i.own_datetime || i.datetime.len() != len || !i.datetime.ends_with('Z'))
+            {
                 return None;
             }
             let v: Vec<&str> = items.iter().map(|i| i.datetime.as_str()).collect();
@@ -442,6 +448,7 @@ fn item(f: &Value, from: Option<&str>) -> Option<Item> {
     });
     let geometry = f.get("geometry").filter(|g| g.is_object() && footprint_size(g) <= MAX_FOOTPRINT).cloned();
     let cloud = props.and_then(|p| p.get("eo:cloud_cover")).and_then(Value::as_f64).filter(|c| c.is_finite());
+    let own_datetime = props.and_then(|p| p.get("datetime")).is_some_and(Value::is_string);
     let datetime = props
         .and_then(|p| p.get("datetime").filter(|d| d.is_string()).or_else(|| p.get("start_datetime")))
         .and_then(Value::as_str)
@@ -516,6 +523,7 @@ fn item(f: &Value, from: Option<&str>) -> Option<Item> {
         id,
         collection: text(f.get("collection")),
         datetime,
+        own_datetime,
         bbox,
         geometry,
         cloud,
@@ -961,6 +969,25 @@ mod tests {
         // The same instant written two ways is not out of order.
         let same = answered(&[("2024-06-01T00:00:00.0000Z", None), ("2024-06-01T00:00:00+00:00", None)]);
         assert_eq!(sort_followed(&same, Some("datetime")), None);
+    }
+
+    /// An item with a null `datetime` carries its `start_datetime` as its date, which the API did
+    /// not sort by: a correctly sorted answer with one is not called out of order.
+    #[test]
+    fn a_range_item_with_no_datetime_is_not_compared_by_its_start() {
+        let features = serde_json::json!([
+            {"type": "Feature", "id": "a", "bbox": [0, 0, 1, 1], "properties": {"datetime": "2024-06-03T00:00:00Z"}},
+            {"type": "Feature", "id": "b", "bbox": [0, 0, 1, 1], "properties": {"datetime": null, "start_datetime": "2024-06-05T00:00:00Z"}},
+        ]);
+        let body = serde_json::json!({"type": "FeatureCollection", "features": features}).to_string();
+        let items = parse_items(body.as_bytes(), "https://x.org/v1/search").unwrap().0;
+        assert_eq!(items[1].datetime, "2024-06-05T00:00:00Z");
+        assert!(items[0].own_datetime && !items[1].own_datetime);
+        // Newest first by `datetime`: the API may have put the null one last. Can't be told.
+        assert_eq!(sort_followed(&items, Some("-datetime")), None);
+        // Items that all have their own date are still checked.
+        let own = answered(&[("2024-06-03T00:00:00Z", None), ("2024-06-05T00:00:00Z", None)]);
+        assert_eq!(sort_followed(&own, Some("-datetime")), Some(false));
     }
 
     #[test]
