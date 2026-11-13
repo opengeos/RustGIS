@@ -4787,6 +4787,7 @@ dependencies = [
  "parquet",
  "postgres",
  "proj4rs",
+ "proptest",
  "quick-xml 0.42.0",
  "roxmltree",
  "rusqlite",
@@ -4863,6 +4864,7 @@ name = "rustgis-geom"
 version = "0.6.0"
 dependencies = [
  "geographiclib-rs",
+ "proptest",
  "serde",
 ]
 
