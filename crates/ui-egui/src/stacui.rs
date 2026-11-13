@@ -1604,19 +1604,23 @@ fn find_items(app: &mut RustGisApp) {
     send_search(app, p, is_static);
 }
 
-/// An area being made for a search, and the search to send with it.
+/// An area being made for a search, and the search to send with it, built for `api` (the one
+/// the dialog was on): the API picker stays usable meanwhile, and the search (its collection and
+/// sort are that API's) must not go to another.
 struct Preparing {
     slot: Slot<Result<Option<Prepared>, String>>,
     params: serde_json::Value,
     is_static: bool,
+    api: String,
 }
 
 /// Makes the search area of `geometries` widened by `metres` on a thread of its own (here and now
 /// in the browser, which has one), then sends the search `params` describes with it.
 fn start_preparing(app: &mut RustGisApp, geometries: Vec<Geometry>, metres: f64, params: serde_json::Value, is_static: bool) {
     let job = move || rustgis_engine::cmd::stac_area::prepare(&geometries, metres);
+    let api = app.ui.stac.api.trim().to_string();
     if cfg!(target_arch = "wasm32") {
-        land_prepared(app, job(), params, is_static);
+        land_prepared(app, job(), params, is_static, &api);
         return;
     }
     let slot: Slot<Result<Option<Prepared>, String>> = Slot::default();
@@ -1629,7 +1633,7 @@ fn start_preparing(app: &mut RustGisApp, geometries: Vec<Geometry>, metres: f64,
         Ok(_) => {
             app.ui.stac.error = None;
             app.ui.stac.info = Some(tl!("Making the search area…").to_string());
-            app.ui.stac.preparing = Some(Preparing { slot, params, is_static });
+            app.ui.stac.preparing = Some(Preparing { slot, params, is_static, api });
         }
         Err(e) => app.ui.stac.error = Some(i18n::fmt("Couldn't start the search: {e}", &[("e", &e.to_string())])),
     }
@@ -1642,12 +1646,24 @@ fn poll_preparing(app: &mut RustGisApp, ctx: &egui::Context) {
         return;
     };
     let Some(preparing) = app.ui.stac.preparing.take() else { return };
-    land_prepared(app, answer, preparing.params, preparing.is_static);
+    land_prepared(app, answer, preparing.params, preparing.is_static, &preparing.api);
     ctx.request_repaint();
 }
 
-/// The area made: what it left out is said, and the search goes with it.
-fn land_prepared(app: &mut RustGisApp, answer: Result<Option<Prepared>, String>, mut params: serde_json::Value, is_static: bool) {
+/// The area made: what it left out is said, and the search goes with it, to the API it was built
+/// for (`api`): if the dialog is on another now, the search is dropped and that is said.
+fn land_prepared(
+    app: &mut RustGisApp,
+    answer: Result<Option<Prepared>, String>,
+    mut params: serde_json::Value,
+    is_static: bool,
+    api: &str,
+) {
+    if app.ui.stac.api.trim() != api {
+        app.ui.stac.error = None;
+        app.ui.stac.info = Some(tl!("The API changed while the search area was being made: press Find Items to search it").to_string());
+        return;
+    }
     match answer {
         Ok(Some(prepared)) => {
             for n in prepared.notices {
@@ -1930,6 +1946,23 @@ mod tests {
         app.ui.stac.sortby = PRESET_SORT.into();
         switch_api(&mut app.ui.stac, "https://example.org/stac/v1");
         assert_eq!(app.ui.stac.sortby, PRESET_SORT);
+    }
+
+    /// A search whose area was being made when another API was picked is not sent to that API
+    /// (its collection and sort were the first one's): it is dropped, and the pane says so.
+    #[test]
+    fn an_area_made_for_one_api_is_not_searched_on_another() {
+        let mut app = RustGisApp::with_sample();
+        app.run("ui.stac.sentinel2", serde_json::Value::Null).unwrap();
+        let made_for = app.ui.stac.api.clone();
+        let params = json!({"limit": 50, "collections": "sentinel-2-c1-l2a", "sortby": PRESET_SORT});
+        let area = rustgis_engine::cmd::stac_area::prepare(&[rectangle([5.0, 45.0, 6.0, 46.0])], 0.0).unwrap();
+        // Another API was picked while the area was being made: nothing is sent, and it is said.
+        switch_api(&mut app.ui.stac, "https://example.org/stac/v1");
+        land_prepared(&mut app, Ok(area), params, false, &made_for);
+        assert!(app.ui.stac.waiting.is_none(), "the search went to the other API");
+        assert!(app.ui.stac.error.is_none());
+        assert!(app.ui.stac.info.as_deref().is_some_and(|i| i.contains("API changed")), "{:?}", app.ui.stac.info);
     }
 
     /// Typing in the API field doesn't touch the sort: deleting a character of the preset's
