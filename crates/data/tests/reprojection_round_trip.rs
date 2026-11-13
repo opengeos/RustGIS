@@ -64,6 +64,9 @@ const LIMITS: &[(&str, f64, bool, &str)] = &[
     // there: about R·√ε, a decimetre.
     ("EPSG:3035", 0.2, false, "the authalic latitude rounds within a ten-thousandth of a degree of a pole"),
     ("EPSG:6933", 0.2, false, "the authalic latitude rounds within a ten-thousandth of a degree of a pole"),
+    // Eckert IV: within a millionth of a degree of a pole, y is a rounding step or two from the
+    // pole line's, which is about a centimetre on the ground (`rustgis_geom::world`, #1911).
+    ("+proj=eck4 +lon_0=0 +datum=WGS84 +units=m +no_defs", 0.05, true, "a Double holds y to about a centimetre near a pole"),
     // Robinson's curve between its table rows (every 5°) is in pieces whose single-precision
     // coefficients don't quite meet: at 10°, 35°, 45°, 65° and 90° a band of y up to 2.13 m wide is
     // reached from both sides of the row, and the inverse takes the side above. As PROJ's.
