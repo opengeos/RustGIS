@@ -201,8 +201,8 @@ fn ordered<T: PartialOrd>(v: &[T], descending: bool) -> bool {
 
 /// Whether `items`, as an API answered a search sorted by `sortby`, are visibly not in that
 /// order: `Some(false)` when two neighbours are the wrong way round, `Some(true)` when they are
-/// all in order, `None` when it can't be told (no sort, a field the items don't carry here
-/// besides their date and cloud cover, or fewer than two values to compare). An API without the
+/// all in order, `None` when it can't be told: no sort, a sort on anything but date or cloud
+/// cover, dates that are not comparable as text, or fewer than two values. An API without the
 /// sort extension may ignore a sort rather than refuse it, and this is how that shows.
 pub fn sort_followed(items: &[Item], sortby: Option<&str>) -> Option<bool> {
     let (sign, field) = sort_parts(sortby).ok().flatten()?;
@@ -212,11 +212,11 @@ pub fn sort_followed(items: &[Item], sortby: Option<&str>) -> Option<bool> {
             let v: Vec<f64> = items.iter().filter_map(|i| i.cloud).collect();
             (v.len() >= 2).then(|| ordered(&v, descending))
         }
-        // Dates compare as written (RFC 3339 in one zone orders as text); dates of different
-        // lengths would not, so those are not compared.
+        // Dates compare as written, which orders them only when they are UTC (`Z`) and of one
+        // length (the same fraction of a second); any other offset or form is not compared.
         "properties.datetime" => {
             let len = items.first()?.datetime.len();
-            if len == 0 || items.len() < 2 || items.iter().any(|i| i.datetime.len() != len) {
+            if len == 0 || items.len() < 2 || items.iter().any(|i| i.datetime.len() != len || !i.datetime.ends_with('Z')) {
                 return None;
             }
             let v: Vec<&str> = items.iter().map(|i| i.datetime.as_str()).collect();
@@ -954,6 +954,13 @@ mod tests {
         );
         assert_eq!(sort_followed(&answered(&[("2024-06-03", None), ("2024-06-01T00:00:00Z", None)]), Some("datetime")), None);
         assert_eq!(sort_followed(&[], Some("datetime")), None);
+        // Dates that are not UTC are not compared as text: the same length is no proof of the same zone.
+        let zones = answered(&[("2024-06-03T10:00:00+02:00", None), ("2024-06-03T06:00:00-05:00", None)]);
+        assert_eq!(sort_followed(&zones, Some("-datetime")), None);
+        assert_eq!(sort_followed(&zones, Some("datetime")), None);
+        // The same instant written two ways is not out of order.
+        let same = answered(&[("2024-06-01T00:00:00.0000Z", None), ("2024-06-01T00:00:00+00:00", None)]);
+        assert_eq!(sort_followed(&same, Some("datetime")), None);
     }
 
     #[test]

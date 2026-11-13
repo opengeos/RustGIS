@@ -179,6 +179,8 @@ pub struct State {
     /// link), and the one the search under way asks for, which takes its place when its items land.
     searched_area: Option<[f64; 4]>,
     asked_area: Option<[f64; 4]>,
+    /// The sort the search under way was sent with (the dropdown may change while it waits).
+    asked_sort: Option<String>,
     /// The asset chosen for each item.
     pub chosen: Vec<String>,
     /// The item whose properties are shown.
@@ -227,6 +229,7 @@ impl Default for State {
             items: Vec::new(),
             searched_area: None,
             asked_area: None,
+            asked_sort: None,
             chosen: Vec::new(),
             details: None,
             counted: false,
@@ -411,8 +414,9 @@ pub fn poll(app: &mut RustGisApp, ctx: &egui::Context) {
                     None => i18n::fmt("Showing {n} items", &[("n", &n)]),
                 });
                 // An API that can't sort may ignore the sort instead of refusing it: say so.
-                if let Some(note) = sort_ignored_note(&items, sort_of(st, false)) {
-                    st.info = st.info.take().map(|i| format!("{i}. {note}"));
+                // The sort that was sent, not the dropdown's value now.
+                if let Some(note) = sort_ignored_note(&items, st.asked_sort.as_deref()) {
+                    st.info = st.info.take().map(|i| i18n::fmt("{info}. {note}", &[("info", &i), ("note", &note)]));
                 }
                 st.details = None;
                 st.counted = true;
@@ -532,7 +536,7 @@ pub fn open_preset(app: &mut RustGisApp, preset: Option<Preset>, p: &serde_json:
             }
             Preset::Sentinel2 => {
                 st.collection = "sentinel-2-c1-l2a".into();
-                st.sortby = "eo:cloud_cover".into();
+                st.sortby = PRESET_SORT.into();
                 st.from = days_ago(90);
             }
             Preset::UsgsLidar => {
@@ -779,6 +783,9 @@ fn fetch_children(app: &mut RustGisApp) {
 const SORTS: [(&str, &str); 4] =
     [("", "API's own order"), ("-datetime", "Newest first"), ("datetime", "Oldest first"), ("eo:cloud_cover", "Least cloud first")];
 
+/// The sort the Sentinel-2 preset starts with.
+const PRESET_SORT: &str = "eo:cloud_cover";
+
 /// The sort a search sends: the one picked, none for the API's own order or a static catalog.
 fn sort_of(st: &State, is_static: bool) -> Option<&str> {
     Some(st.sortby.trim()).filter(|b| !b.is_empty() && !is_static)
@@ -817,6 +824,11 @@ fn drop_listing(st: &mut State) {
     st.collections.clear();
     st.items.clear();
     st.collection.clear();
+    // A preset's own sort stays with the preset's API: another API may reject it (a sort the
+    // user picked is kept).
+    if st.preset.is_some() && shown_preset(st).is_none() && st.sortby == PRESET_SORT {
+        st.sortby.clear();
+    }
     (st.node, st.node_title) = (String::new(), String::new());
     st.trail.clear();
     st.children.clear();
@@ -1665,6 +1677,7 @@ fn send_search(app: &mut RustGisApp, p: serde_json::Value, is_static: bool) {
                 Some(body) => post_service(app, &url, body),
                 None => fetch_service(app, &url),
             };
+            app.ui.stac.asked_sort = p["sortby"].as_str().map(str::to_string);
             app.ui.stac.waiting = Some((Asked::Search(url, get), slot));
         }
         Err(e) => app.ui.stac.error = Some(e),
@@ -1859,6 +1872,23 @@ mod tests {
         assert_eq!(sort_ignored_note(&sorted, Some("-datetime")), None);
         assert_eq!(sort_ignored_note(&sorted, None), None);
         assert!(sort_ignored_note(&sorted, Some("datetime")).is_some_and(|n| n.contains("datetime")));
+    }
+
+    #[test]
+    fn a_presets_sort_stays_with_the_presets_api() {
+        let mut app = RustGisApp::with_sample();
+        app.run("ui.stac.sentinel2", serde_json::Value::Null).unwrap();
+        assert_eq!(app.ui.stac.sortby, PRESET_SORT);
+        // Staying on the preset's API keeps it; leaving for another drops it.
+        let api = app.ui.stac.api.clone();
+        switch_api(&mut app.ui.stac, &api);
+        assert_eq!(app.ui.stac.sortby, PRESET_SORT);
+        switch_api(&mut app.ui.stac, "https://example.org/stac/v1");
+        assert_eq!(app.ui.stac.sortby, "");
+        // A sort the user picked on another API is theirs: it stays when the API changes again.
+        app.ui.stac.sortby = "-datetime".into();
+        switch_api(&mut app.ui.stac, "https://other.example.org/stac/v1");
+        assert_eq!(app.ui.stac.sortby, "-datetime");
     }
 
     #[test]
