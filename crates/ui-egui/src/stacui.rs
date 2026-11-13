@@ -872,9 +872,15 @@ fn drop_listing(st: &mut State) {
     }
 }
 
+/// Whether a search is being made, sent or walked: what it asked for is fixed by then, so the
+/// buttons that ask again, and the sort that was sent, stay as they are until it is done.
+fn busy(st: &State) -> bool {
+    st.waiting.is_some() || st.walk.is_some() || st.preparing.is_some()
+}
+
 /// The dialog.
 pub fn dialog(app: &mut RustGisApp, ui: &mut egui::Ui) {
-    let busy = app.ui.stac.waiting.is_some() || app.ui.stac.walk.is_some() || app.ui.stac.preparing.is_some();
+    let busy = busy(&app.ui.stac);
     let is_static = catalog::is_static(&app.ui.stac.api);
     let mut list = false;
     let mut search = false;
@@ -1009,12 +1015,16 @@ pub fn dialog(app: &mut RustGisApp, ui: &mut egui::Ui) {
             ui.label(tl!("Sort by"));
             let current = if st.sort_is_default && shown_preset(st).is_none() { String::new() } else { st.sortby.trim().to_string() };
             let shown = SORTS.iter().find(|(v, _)| *v == current).map_or(current.clone(), |(_, l)| tl!(l).to_string());
-            egui::ComboBox::from_id_salt("stac_sortby").selected_text(shown).show_ui(ui, |ui| {
-                for (v, label) in SORTS {
-                    if ui.selectable_value(&mut st.sortby, v.to_string(), tl!(label)).clicked() {
-                        st.sort_is_default = false;
+            // Not while a search is being made: its sort is already chosen, and a pick now would
+            // show in the dropdown without being the one sent.
+            ui.add_enabled_ui(!busy, |ui| {
+                egui::ComboBox::from_id_salt("stac_sortby").selected_text(shown).show_ui(ui, |ui| {
+                    for (v, label) in SORTS {
+                        if ui.selectable_value(&mut st.sortby, v.to_string(), tl!(label)).clicked() {
+                            st.sort_is_default = false;
+                        }
                     }
-                }
+                });
             });
             ui.end_row();
         }
@@ -2369,6 +2379,23 @@ mod tests {
         find_items(&mut app);
         clear_area(&mut app);
         assert!(app.ui.stac.preparing.is_none() && app.ui.stac.parts.is_empty());
+    }
+
+    #[test]
+    fn the_sort_is_fixed_while_the_area_is_made_and_the_search_goes_out_with_it() {
+        let mut app = RustGisApp::with_sample();
+        app.ui.stac.api = "http://127.0.0.1:1/stac".into();
+        app.ui.stac.collection = "c".into();
+        app.ui.stac.sortby = "-datetime".into();
+        app.ui.stac.parts.push(rectangle([7.0, 46.0, 8.0, 47.0]));
+        assert!(!busy(&app.ui.stac), "nothing is under way before Find Items");
+        find_items(&mut app);
+        // The dialog is busy while the area is made: the Sort by dropdown is off then, as Find
+        // Items is, so a pick can't show in it without being the one sent.
+        assert!(app.ui.stac.preparing.is_some() && busy(&app.ui.stac));
+        wait_for_the_area(&mut app);
+        assert_eq!(app.ui.stac.asked_sort.as_deref(), Some("-datetime"));
+        assert!(busy(&app.ui.stac) || app.ui.stac.error.is_some(), "the search is under way until it is answered");
     }
 
     #[test]
