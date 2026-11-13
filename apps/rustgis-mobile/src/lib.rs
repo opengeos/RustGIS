@@ -83,6 +83,9 @@ mod android {
         app: RustGisApp,
         /// The files pushed to the app's folder ([`pushed`]), until the first frame takes them.
         pushed: Vec<std::path::PathBuf>,
+        /// Whether the system bars' icons were last asked to be dark (a light ground); `None`
+        /// before the first frame.
+        bars_light: Option<bool>,
         /// The phone's file picker, where its Java half is there.
         phone: Option<Rc<Phone>>,
         /// Picked files the front end reads as bytes (`Services::inbox`).
@@ -298,7 +301,15 @@ mod android {
             // The window runs under the system's bars; the interface keeps to what they leave
             // (`insets`), over a ground of its own colour so the bars read as part of it.
             let ctx = ui.ctx().clone();
-            ui.painter().rect_filled(ctx.viewport_rect(), 0.0, rustgis_ui_egui::theme::Tokens::get(&ctx).pane);
+            let tokens = rustgis_ui_egui::theme::Tokens::get(&ctx);
+            // The bars' icons are drawn to be read on that ground, whichever theme it is.
+            if self.bars_light != Some(!tokens.dark) {
+                self.bars_light = Some(!tokens.dark);
+                if let Some(phone) = &self.phone {
+                    phone.bars_light(!tokens.dark);
+                }
+            }
+            ui.painter().rect_filled(ctx.viewport_rect(), 0.0, tokens.pane);
             ui.scope_builder(egui::UiBuilder::new().max_rect(ctx.content_rect()), |ui| self.app.ui(ui));
         }
 
@@ -435,6 +446,7 @@ mod android {
             Box::new(move |_cc| {
                 Ok(Box::new(App {
                     app,
+                    bars_light: None,
                     pushed,
                     phone,
                     inbox,

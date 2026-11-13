@@ -67,6 +67,16 @@ impl Phone {
         <[f32; 4]>::try_from(edges).ok()
     }
 
+    /// Draws the system bars' icons dark (`light` ground under them) or light (a dark one).
+    pub fn bars_light(&self, light: bool) {
+        let asked = self.java(|env, activity| {
+            env.call_method(activity, jni_str!("barsLight"), jni_sig!((light: boolean) -> void), &[JValue::Bool(light)])?.v()
+        });
+        if let Err(e) = asked {
+            log::warn!("{e}");
+        }
+    }
+
     /// Whether something asked for is still to be reported: the window keeps asking while it is.
     pub fn busy(&self) -> bool {
         self.java(|env, activity| env.call_method(activity, jni_str!("busy"), jni_sig!(() -> boolean), &[])?.z()).unwrap_or(false)

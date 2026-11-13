@@ -77,8 +77,8 @@ redo, and **Use the Desktop Interface**, which brings back the ribbon and panes 
 started again.
 
 The interface keeps out of the room the system's bars take: the activity's Java half reports the
-insets each frame, and the bars' icons are drawn dark over the interface's light ground. The dark
-theme does not change them yet.
+insets, and the bars' icons are drawn dark over a light theme's ground and light over a dark
+one's.
 
 ## What differs from the desktop
 

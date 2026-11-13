@@ -31,6 +31,8 @@ public class MainActivity extends NativeActivity {
     private final ArrayList<String> events = new ArrayList<>();
     /** Pickers shown and not yet answered in full (guarded by events). */
     private int asked;
+    /** The window's insets as insets() gives them, written on the main thread. */
+    private volatile String insets = "";
     private String purpose = "";
     /** A picker for opening is shown and has not answered (the main thread's alone). */
     private boolean picking;
@@ -40,18 +42,35 @@ public class MainActivity extends NativeActivity {
     @Override
     protected void onCreate(android.os.Bundle saved) {
         super.onCreate(saved);
-        // The interface draws a light ground under the system's bars: their icons are drawn dark.
-        if (android.os.Build.VERSION.SDK_INT >= 30) {
-            android.view.WindowInsetsController bars = getWindow().getInsetsController();
-            if (bars != null) {
-                int light = android.view.WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS
-                        | android.view.WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS;
-                bars.setSystemBarsAppearance(light, light);
+        // The insets are read where Android hands them over, on the main thread, and kept for
+        // the Rust side to ask for from its own.
+        getWindow().getDecorView().setOnApplyWindowInsetsListener((view, given) -> {
+            insets = describe(given);
+            return view.onApplyWindowInsets(given);
+        });
+        barsLight(true);
+    }
+
+    /**
+     * Draws the system bars' icons dark, for a light ground under them, or light, for a dark one:
+     * the Rust side says which whenever its theme changes.
+     */
+    public void barsLight(final boolean light) {
+        runOnUiThread(() -> {
+            if (android.os.Build.VERSION.SDK_INT >= 30) {
+                android.view.WindowInsetsController bars = getWindow().getInsetsController();
+                if (bars != null) {
+                    int both = android.view.WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS
+                            | android.view.WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS;
+                    bars.setSystemBarsAppearance(light ? both : 0, both);
+                }
+            } else {
+                int both = android.view.View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR | android.view.View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
+                android.view.View view = getWindow().getDecorView();
+                int flags = view.getSystemUiVisibility();
+                view.setSystemUiVisibility(light ? flags | both : flags & ~both);
             }
-        } else {
-            getWindow().getDecorView().setSystemUiVisibility(
-                    android.view.View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR | android.view.View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR);
-        }
+        });
     }
 
     /** Asks the user for files with the system's picker; each arrives as a "picked" event. */
@@ -113,10 +132,10 @@ public class MainActivity extends NativeActivity {
      * "left top right bottom"; empty before the window is laid out.
      */
     public String insets() {
-        android.view.WindowInsets insets = getWindow().getDecorView().getRootWindowInsets();
-        if (insets == null) {
-            return "";
-        }
+        return insets;
+    }
+
+    private static String describe(android.view.WindowInsets insets) {
         int left, top, right, bottom;
         if (android.os.Build.VERSION.SDK_INT >= 30) {
             android.graphics.Insets bars = insets.getInsets(

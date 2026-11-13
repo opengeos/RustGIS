@@ -60,7 +60,9 @@ pub fn chrome(app: &mut RustGisApp, ui: &mut Ui) {
     // and Cancel over the bar, where the desktop's status bar would.
     if app.background_busy() {
         egui::Panel::bottom("touch_busy").exact_size(TARGET).frame(frame.inner_margin(egui::Margin::symmetric(12, 0))).show(ui, |ui| {
-            ui.horizontal_centered(|ui| app.background_status(ui));
+            // Scrolled sideways when it is wider than the phone (a long address): its Cancel is
+            // then reached, not cut off.
+            egui::ScrollArea::horizontal().show(ui, |ui| ui.horizontal_centered(|ui| app.background_status(ui)));
         });
     }
     if shown != Sheet::None {
@@ -247,13 +249,7 @@ fn more(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     egui::ScrollArea::vertical().auto_shrink([false, true]).show(ui, |ui| {
         for (icon, label, command) in rows {
             if row(ui, t, icon, label) {
-                // The desktop asks before a command replaces unsaved work; so does this.
-                if REPLACES.contains(&command) && app.session.dirty() {
-                    set_sheet(ui.ctx(), Sheet::Discard(command));
-                } else {
-                    set_sheet(ui.ctx(), Sheet::None);
-                    run(app, command, Value::Null);
-                }
+                run_or_ask(app, ui.ctx(), command);
             }
         }
         // The whole of RustGIS is still there, for a tablet or a job the touch interface has no
@@ -268,6 +264,17 @@ fn more(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
 
 /// The More sheet's commands that replace the project.
 const REPLACES: [&str; 2] = ["ui.open", "project.new"];
+
+/// Runs a command of the More sheet and lowers the sheet, or, when it would replace a project
+/// with unsaved changes, asks first: the desktop asks too.
+fn run_or_ask(app: &mut RustGisApp, ctx: &egui::Context, command: &'static str) {
+    if REPLACES.contains(&command) && app.session.dirty() {
+        set_sheet(ctx, Sheet::Discard(command));
+    } else {
+        set_sheet(ctx, Sheet::None);
+        run(app, command, Value::Null);
+    }
+}
 
 /// The sheet that asks before `command` replaces a project with unsaved changes: they can't be
 /// brought back with Undo.
@@ -351,6 +358,31 @@ mod tests {
         frame(&mut app, &egui::Context::default(), Sheet::Layers);
         run(&mut app, "map.setTiles", json!({"index": 0, "visible": false}));
         assert!(!app.session.map().tiles[0].visible);
+    }
+
+    #[test]
+    fn a_project_with_unsaved_changes_is_asked_about_and_a_saved_one_is_replaced() {
+        let ctx = egui::Context::default();
+        let mut app = RustGisApp::with_sample();
+        app.session.mark_saved();
+        let layers = app.session.map().layers.len();
+        assert!(layers > 0);
+        // Unsaved: the project stays and the sheet asks.
+        let first = app.session.map().layers.first().map(|l| l.id);
+        run(&mut app, "layer.rename", json!({"layer": first, "name": "Renamed"}));
+        assert!(app.session.dirty());
+        run_or_ask(&mut app, &ctx, "project.new");
+        assert_eq!(sheet(&ctx), Sheet::Discard("project.new"));
+        assert_eq!(app.session.map().layers.len(), layers);
+        // Saved: New Project runs.
+        app.session.mark_saved();
+        run_or_ask(&mut app, &ctx, "project.new");
+        assert_eq!(sheet(&ctx), Sheet::None);
+        assert!(app.session.map().layers.is_empty());
+        // What doesn't replace the project never asks.
+        run(&mut app, "map.zoomIn", Value::Null);
+        run_or_ask(&mut app, &ctx, "edit.undo");
+        assert_eq!(sheet(&ctx), Sheet::None);
     }
 
     #[test]
