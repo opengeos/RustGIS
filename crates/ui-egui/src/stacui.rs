@@ -181,6 +181,9 @@ pub struct State {
     asked_area: Option<[f64; 4]>,
     /// The sort the search under way was sent with (the dropdown may change while it waits).
     asked_sort: Option<String>,
+    /// Whether `sortby` is the one a preset set up and the user has not touched the dropdown
+    /// since: only that sort goes with the preset (see [`drop_preset_sort`]).
+    sort_is_default: bool,
     /// The asset chosen for each item.
     pub chosen: Vec<String>,
     /// The item whose properties are shown.
@@ -230,6 +233,7 @@ impl Default for State {
             searched_area: None,
             asked_area: None,
             asked_sort: None,
+            sort_is_default: false,
             chosen: Vec::new(),
             details: None,
             counted: false,
@@ -536,7 +540,7 @@ pub fn open_preset(app: &mut RustGisApp, preset: Option<Preset>, p: &serde_json:
             }
             Preset::Sentinel2 => {
                 st.collection = "sentinel-2-c1-l2a".into();
-                st.sortby = PRESET_SORT.into();
+                (st.sortby, st.sort_is_default) = (PRESET_SORT.into(), true);
                 st.from = days_ago(90);
             }
             Preset::UsgsLidar => {
@@ -548,6 +552,8 @@ pub fn open_preset(app: &mut RustGisApp, preset: Option<Preset>, p: &serde_json:
             browse(app, None);
         }
     } else if preset.is_none() {
+        // A preset's own sort goes with the preset.
+        drop_preset_sort(&mut app.ui.stac);
         app.ui.stac.preset = None;
     }
     // A catalog or collection below the static catalog's top, by its address.
@@ -786,6 +792,14 @@ const SORTS: [(&str, &str); 4] =
 /// The sort the Sentinel-2 preset starts with.
 const PRESET_SORT: &str = "eo:cloud_cover";
 
+/// Drops the sort a preset set up, if the user has not picked one since: a sort the user chose
+/// (even the same one) is theirs and stays.
+fn drop_preset_sort(st: &mut State) {
+    if std::mem::take(&mut st.sort_is_default) {
+        st.sortby.clear();
+    }
+}
+
 /// The sort a search sends: the one picked, none for the API's own order or a static catalog.
 fn sort_of(st: &State, is_static: bool) -> Option<&str> {
     Some(st.sortby.trim()).filter(|b| !b.is_empty() && !is_static)
@@ -824,11 +838,9 @@ fn drop_listing(st: &mut State) {
     st.collections.clear();
     st.items.clear();
     st.collection.clear();
-    // A preset's own sort stays with the preset's API: another API may reject it. It is told by
-    // its value, so picking that same sort on the preset counts as the preset's; any other sort
-    // the user picked is kept.
-    if st.preset.is_some() && shown_preset(st).is_none() && st.sortby == PRESET_SORT {
-        st.sortby.clear();
+    // A preset's own sort stays with the preset's API: another API may reject it.
+    if st.preset.is_some() && shown_preset(st).is_none() {
+        drop_preset_sort(st);
     }
     (st.node, st.node_title) = (String::new(), String::new());
     st.trail.clear();
@@ -987,7 +999,9 @@ pub fn dialog(app: &mut RustGisApp, ui: &mut egui::Ui) {
             let shown = SORTS.iter().find(|(v, _)| *v == current).map_or(current.clone(), |(_, l)| tl!(l).to_string());
             egui::ComboBox::from_id_salt("stac_sortby").selected_text(shown).show_ui(ui, |ui| {
                 for (v, label) in SORTS {
-                    ui.selectable_value(&mut st.sortby, v.to_string(), tl!(label));
+                    if ui.selectable_value(&mut st.sortby, v.to_string(), tl!(label)).clicked() {
+                        st.sort_is_default = false;
+                    }
                 }
             });
             ui.end_row();
@@ -1890,10 +1904,30 @@ mod tests {
         app.ui.stac.sortby = "-datetime".into();
         switch_api(&mut app.ui.stac, "https://other.example.org/stac/v1");
         assert_eq!(app.ui.stac.sortby, "-datetime");
-        // Picking the preset's own sort by hand is the preset's too: it goes when leaving its API.
+        // The same sort picked by hand on the preset is the user's: it stays (a click in the
+        // dropdown clears `sort_is_default`).
         let mut app = RustGisApp::with_sample();
         app.run("ui.stac.sentinel2", serde_json::Value::Null).unwrap();
+        (app.ui.stac.sortby, app.ui.stac.sort_is_default) = (PRESET_SORT.into(), false);
+        switch_api(&mut app.ui.stac, "https://example.org/stac/v1");
+        assert_eq!(app.ui.stac.sortby, PRESET_SORT);
+        // A sort picked on the USGS LiDAR preset (which sets none) stays too.
+        let mut app = RustGisApp::with_sample();
+        app.run("ui.stac.usgsLidar", serde_json::Value::Null).unwrap();
         app.ui.stac.sortby = PRESET_SORT.into();
+        switch_api(&mut app.ui.stac, "https://example.org/stac/v1");
+        assert_eq!(app.ui.stac.sortby, PRESET_SORT);
+    }
+
+    /// Reopening STAC Search from the ribbon (no preset) takes the preset's default sort with it,
+    /// so it can't go on to another API typed in afterwards.
+    #[test]
+    fn reopening_the_dialog_without_a_preset_drops_the_presets_sort() {
+        let mut app = RustGisApp::with_sample();
+        app.run("ui.stac.sentinel2", serde_json::Value::Null).unwrap();
+        assert_eq!(app.ui.stac.sortby, PRESET_SORT);
+        app.run("ui.stac", serde_json::Value::Null).unwrap();
+        assert_eq!(app.ui.stac.sortby, "");
         switch_api(&mut app.ui.stac, "https://example.org/stac/v1");
         assert_eq!(app.ui.stac.sortby, "");
     }
