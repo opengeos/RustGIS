@@ -42868,7 +42868,10 @@ fn format_2_is_read_unless_it_needs_what_this_rustgis_cannot_read() {
     // A list that isn't one of names says so, whatever it holds instead.
     for requires in [json!("z-values"), json!([1]), json!(["a", [["deep"]]]), json!({"z": true}), json!(true)] {
         let e = Project::from_json(&as_format(2, Some(requires.clone()))).unwrap_err();
-        assert!(e.contains("(`requires`) isn't a list of names") && e.contains("update RustGIS"), "{requires}: {e}");
+        assert!(
+            e.contains("lists what it needs (`requires`) as something other than names") && e.contains("update RustGIS"),
+            "{requires}: {e}"
+        );
     }
     // Long names with line breaks and text-reordering characters, or none at all: five named, cut
     // short, flattened, and how many more.
@@ -42881,12 +42884,17 @@ fn format_2_is_read_unless_it_needs_what_this_rustgis_cannot_read() {
     let too_many: Vec<String> = (0..1000).map(|i| format!("c{i}")).collect();
     let e = Project::from_json(&as_format(2, Some(json!(too_many)))).unwrap_err();
     assert!(e.contains("lists more than 256 things it needs"), "{e}");
+    // A name of a million characters is kept only as far as the refusal shows it.
+    let e = Project::from_json(&as_format(2, Some(json!(["y".repeat(1_000_000)])))).unwrap_err();
+    assert!(e.len() < 400 && e.contains("yyy…"), "{}", e.len());
     // Format 3 is still from a newer RustGIS, before its capabilities are looked at.
     let e = Project::from_json(&as_format(3, Some(json!(["z-values"])))).unwrap_err();
     assert!(e.contains("saved by a newer RustGIS (format 3)"), "{e}");
     // Importing maps from a format 2 project reads it too.
     let mut t = world();
+    let maps = t.project.maps.len();
     t.run("map.import", &json!({"text": as_format(2, None)})).unwrap();
+    assert!(t.project.maps.len() > maps);
 }
 
 #[test]

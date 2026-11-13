@@ -65,9 +65,12 @@ pub const READ_FORMAT: u32 = 2;
 /// The capabilities a saved document may require that this RustGIS reads. None yet: format 2 is
 /// format 1's content, and each later addition an older reader would lose comes with its name.
 pub const CAPABILITIES: &[&str] = &[];
-/// The most capability names a document's `requires` may list: past it the document is refused
-/// without its names being read.
+/// The most entries a document's `requires` may list: past it the document is refused without
+/// the rest being read.
 const MAX_REQUIRES: usize = 256;
+/// The longest capability name kept whole, in bytes: a longer one can't be a known capability, so
+/// only its start is kept, for the refusal to show.
+const MAX_CAPABILITY_BYTES: usize = 128;
 /// Largest project file read or saved in the browser, or on a computer whose memory isn't known
 /// (512 MiB): the floor of [`max_bytes`].
 pub const BYTES_FLOOR: u64 = 512 << 20;
@@ -728,12 +731,13 @@ impl<'de> Deserialize<'de> for RequiredName {
     }
 }
 
-/// Skips a list or an object without keeping any of it.
+/// Skips the rest of a list without keeping any of it.
 fn skip_seq<'de, A: serde::de::SeqAccess<'de>>(mut seq: A) -> Result<(), A::Error> {
     while seq.next_element::<serde::de::IgnoredAny>()?.is_some() {}
     Ok(())
 }
 
+/// Skips the rest of an object without keeping any of it.
 fn skip_map<'de, A: serde::de::MapAccess<'de>>(mut map: A) -> Result<(), A::Error> {
     while map.next_entry::<serde::de::IgnoredAny, serde::de::IgnoredAny>()?.is_some() {}
     Ok(())
@@ -770,7 +774,13 @@ impl<'de> serde::de::Visitor<'de> for RequiredNameVisitor {
         f.write_str("a capability name")
     }
     fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<Self::Value, E> {
-        Ok(RequiredName::Name(v.to_string()))
+        // A long name keeps only what a refusal shows, and is told apart from a known one by
+        // being longer than any.
+        if v.len() > MAX_CAPABILITY_BYTES {
+            Ok(RequiredName::Name(v.chars().take(81).collect::<String>() + "…"))
+        } else {
+            Ok(RequiredName::Name(v.to_string()))
+        }
     }
     fn visit_unit<E: serde::de::Error>(self) -> Result<Self::Value, E> {
         Ok(RequiredName::Other)
@@ -796,23 +806,26 @@ impl<'de> serde::de::Visitor<'de> for RequiresVisitor {
         Ok(Requires::NotNames)
     }
     fn visit_seq<A: serde::de::SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
-        let (mut names, mut other) = (Vec::new(), false);
+        let mut names = Vec::new();
         loop {
-            if names.len() + usize::from(other) >= MAX_REQUIRES {
+            if names.len() >= MAX_REQUIRES {
                 // One more entry is one too many; the rest is skipped unread.
                 if seq.next_element::<serde::de::IgnoredAny>()?.is_some() {
                     skip_seq(seq)?;
                     return Ok(Requires::TooMany);
                 }
-                break;
+                return Ok(Requires::Names(names));
             }
             match seq.next_element::<RequiredName>()? {
-                None => break,
+                None => return Ok(Requires::Names(names)),
                 Some(RequiredName::Name(n)) => names.push(n),
-                Some(RequiredName::Other) => other = true,
+                // Not a list of names, whatever else it holds: the rest is skipped unread.
+                Some(RequiredName::Other) => {
+                    skip_seq(seq)?;
+                    return Ok(Requires::NotNames);
+                }
             }
         }
-        Ok(if other { Requires::NotNames } else { Requires::Names(names) })
     }
     other_values!(Requires::NotNames);
 }
@@ -830,7 +843,7 @@ fn unknown_capabilities(requires: &Requires, kind: &str) -> Result<Vec<String>, 
         }
         Requires::NotNames => {
             return Err(format!(
-                "this {kind}'s list of what it needs (`requires`) isn't a list of names, so this RustGIS can't tell whether it reads it. It may be damaged, or from a newer RustGIS: update RustGIS to open it."
+                "this {kind} lists what it needs (`requires`) as something other than names, so this RustGIS can't tell whether it reads it. It may be damaged, or from a newer RustGIS: update RustGIS to open it."
             ));
         }
     };
@@ -851,17 +864,18 @@ fn capability_said(name: &str) -> String {
     if shown.is_empty() { "(unnamed)".to_string() } else { shown.to_string() }
 }
 
-/// Whether a saved document's text is one this RustGIS reads and may rewrite through its types:
-/// of a format it reads, and requiring nothing. One that lists capabilities is kept as written
-/// even when all are known, as the typed copy wouldn't keep the list.
-pub(crate) fn rewritable_format(text: &str) -> bool {
+/// Whether a saved document's text, read for its format, is one to keep as written rather than
+/// rewrite through RustGIS's types: of a format this RustGIS doesn't read, or requiring anything
+/// (the typed copy wouldn't keep the list, even of capabilities it knows). Text that doesn't read
+/// as an object, or whose `format` isn't a number, isn't one.
+pub(crate) fn kept_as_written(text: &str) -> bool {
     serde_json::from_str::<FileFormat>(text).is_ok_and(|h| {
         let requires_nothing = match &h.requires {
             Requires::Nothing => true,
             Requires::Names(names) => names.is_empty(),
             Requires::TooMany | Requires::NotNames => false,
         };
-        h.format <= u64::from(READ_FORMAT) && requires_nothing
+        h.format > u64::from(READ_FORMAT) || !requires_nothing
     })
 }
 

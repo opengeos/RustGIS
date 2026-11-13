@@ -496,9 +496,19 @@ fn durable_future_documents_keep_their_exact_text_unchecked() {
     }
     // A format this version reads, listing a capability: kept as written too, as rewriting it
     // through the types would drop the list. Without one, it is checked like any project.
-    for (requires, unchecked) in [(Some(json!(["z-values"])), 1), (None, 0)] {
+    // Listed in a document without a `format`, the same.
+    for (format, requires, unchecked) in [
+        (Some(crate::project::READ_FORMAT), Some(json!(["z-values"])), 1),
+        (None, Some(json!(["z-values"])), 1),
+        (Some(crate::project::READ_FORMAT), None, 0),
+    ] {
         let mut document = serde_json::to_value(&future).unwrap();
-        document["format"] = json!(crate::project::READ_FORMAT);
+        match format {
+            Some(f) => document["format"] = json!(f),
+            None => {
+                document.as_object_mut().unwrap().remove("format");
+            }
+        }
         if let Some(r) = requires {
             document["requires"] = r;
         }

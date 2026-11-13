@@ -122,6 +122,12 @@ fn file_compatibility_refuses_unknown_capabilities_before_importing() -> Result<
         assert_eq!(serde_json::to_value(&s.project).map_err(|e| e.to_string())?, before, "{command}");
         assert!(!s.dirty(), "{command}");
     }
+    // A template whose list isn't one of names, or is too long, is called a template too.
+    for requires in [json!("z-values"), json!((0..300).map(|i| format!("c{i}")).collect::<Vec<_>>())] {
+        let text = json!({"format": format, "requires": requires, "maps": []}).to_string();
+        let error = s.run("project.fromTemplate", &json!({"text": text})).unwrap_err();
+        assert!(error.starts_with("this template lists "), "{error}");
+    }
     Ok(())
 }
 
