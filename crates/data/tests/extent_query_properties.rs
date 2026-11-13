@@ -1,9 +1,10 @@
 //! A source asked for the features in an extent gives the features a whole read gives whose
 //! geometry's box meets the extent (`Request`), as a property: through each provider's spatial
 //! index (GeoPackage and Shapefile R-trees, FlatGeobuf's packed R-tree, GeoJSON's boxes) or its
-//! scan, by `read` and by `visit_chunks`. What a provider may do differently is listed in
-//! [`LIMITS`], with the reason. Layers and extents lean on edges: boxes that touch, degenerate
-//! boxes, empty and inverted boxes, infinite boxes, coordinates that `f32` can't hold, empty layers.
+//! scan, by `read` and, where the source has it (not GeoJSON), by `visit_chunks`. What a provider
+//! may do differently is listed in [`LIMITS`], with the reason. Layers and extents lean on edges:
+//! boxes that touch, degenerate boxes, empty and inverted boxes, infinite boxes, coordinates that
+//! `f32` can't hold, empty layers.
 //!
 //! Pull requests run a fixed seed; the nightly a new one with more cases. A failure gives its seed
 //! and the smallest layer and extent found. To run a seed again, or deeper:
