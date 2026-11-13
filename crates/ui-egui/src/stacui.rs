@@ -816,10 +816,6 @@ fn keep_preset_sort_for_its_api(st: &mut State) {
         drop_preset_sort(st);
     }
 }
-    if shown_preset(st).is_none() {
-        drop_preset_sort(st);
-    }
-}
 
 /// The sort a search sends: the one picked, none for the API's own order or a static catalog.
 fn sort_of(st: &State, is_static: bool) -> Option<&str> {
