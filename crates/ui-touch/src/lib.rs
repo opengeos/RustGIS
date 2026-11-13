@@ -407,7 +407,7 @@ fn capture(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             });
         }
     });
-    state.layer = Some(id);
+    // The layer is kept only when a chip chose it: until then the sheet follows the active layer.
     set_form(&ctx, state);
 }
 
@@ -565,6 +565,30 @@ mod tests {
         run(&mut app, "layer.remove", json!({"layer": id}));
         assert_eq!(capture_layer(&app, &Form { layer: Some(id), ..Form::default() }), None);
         frame(&mut app, &ctx, Sheet::Capture);
+    }
+
+    #[test]
+    fn the_sheet_follows_the_active_layer_until_a_chip_chooses_another() {
+        let mut app = RustGisApp::with_sample();
+        // A second point layer: a copy of the sample's cities.
+        let cities = point_layers(&app)[0].0;
+        run(&mut app, "layer.copy", json!({"layer": cities}));
+        run(&mut app, "layer.paste", Value::Null);
+        let layers = point_layers(&app);
+        assert_eq!(layers.len(), 2, "{layers:?}");
+        let other = layers.iter().map(|(id, _)| *id).find(|id| *id != cities).unwrap();
+        // Nothing chosen: the active layer, whichever it is, and it is followed as it changes.
+        for id in [cities, other] {
+            run(&mut app, "layer.select", json!({"layer": id}));
+            assert_eq!(capture_layer(&app, &Form::default()), Some(id));
+        }
+        // Drawing the sheet doesn't choose: the next frame still follows the active layer.
+        let ctx = egui::Context::default();
+        frame(&mut app, &ctx, Sheet::Capture);
+        assert_eq!(form(&ctx).layer, None);
+        // A chip's choice wins over the active layer.
+        run(&mut app, "layer.select", json!({"layer": cities}));
+        assert_eq!(capture_layer(&app, &Form { layer: Some(other), ..Form::default() }), Some(other));
     }
 
     #[test]
