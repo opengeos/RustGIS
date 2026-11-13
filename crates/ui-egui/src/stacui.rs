@@ -558,8 +558,11 @@ pub fn open_preset(app: &mut RustGisApp, preset: Option<Preset>, p: &serde_json:
             browse(app, None);
         }
     } else if preset.is_none() {
-        // A preset's own sort goes with the preset.
-        drop_preset_sort(&mut app.ui.stac);
+        // A preset's own sort goes with the preset, unless a search is having its area made: it
+        // goes out with that sort, and the dropdown keeps saying so until it lands.
+        if app.ui.stac.preparing.is_none() {
+            drop_preset_sort(&mut app.ui.stac);
+        }
         app.ui.stac.preset = None;
     }
     // A catalog or collection below the static catalog's top, by its address.
@@ -811,10 +814,16 @@ fn drop_preset_sort(st: &mut State) {
 /// of the address and typing it back keeps the sort; it is judged when a search is sent and when
 /// another API is picked.
 fn keep_preset_sort_for_its_api(st: &mut State) {
-    // A search whose area is being made keeps the sort it was made with, until it lands.
-    if shown_preset(st).is_none() && st.preparing.is_none() {
+    if !keeps_preset_sort(st) {
         drop_preset_sort(st);
     }
+}
+
+/// Whether a preset's own sort still stands: the dialog is on the preset's API, or a search is
+/// having its area made and will go out with that sort, whatever the dialog is switched to
+/// meanwhile. The dropdown, and what drops the sort, follow this one rule so they never disagree.
+fn keeps_preset_sort(st: &State) -> bool {
+    shown_preset(st).is_some() || st.preparing.is_some()
 }
 
 /// The sort a search sends: the one picked, none for the API's own order or a static catalog.
@@ -1024,7 +1033,7 @@ pub fn dialog(app: &mut RustGisApp, ui: &mut egui::Ui) {
         if !is_static {
             // A static catalog is walked in its own order, so it has no sort.
             ui.label(tl!("Sort by"));
-            let current = if st.sort_is_default && shown_preset(st).is_none() { String::new() } else { st.sortby.trim().to_string() };
+            let current = if st.sort_is_default && !keeps_preset_sort(st) { String::new() } else { st.sortby.trim().to_string() };
             let shown = SORTS.iter().find(|(v, _)| *v == current).map_or(current.clone(), |(_, l)| tl!(l).to_string());
             // Not while a search is being made: its sort is already chosen, and a pick now would
             // show in the dropdown without being the one sent.
@@ -1944,6 +1953,27 @@ mod tests {
         assert_eq!(sort_unchecked_note(&sorted, Some("datetime")), None, "ignored is the other note's to say");
         assert_eq!(sort_unchecked_note(&sorted, None), None);
         assert_eq!(sort_unchecked_note(&sorted[..1], Some("platform")), None);
+    }
+
+    #[test]
+    fn opening_stac_search_while_an_area_is_made_keeps_the_presets_sort() {
+        let mut app = RustGisApp::with_sample();
+        app.run("ui.stac.sentinel2", serde_json::Value::Null).unwrap();
+        assert_eq!((app.ui.stac.sortby.as_str(), app.ui.stac.sort_is_default), (PRESET_SORT, true));
+        // The search is being made with the preset's sort, and the ribbon's STAC Search is opened.
+        let api = app.ui.stac.api.clone();
+        app.ui.stac.preparing = Some(Preparing { slot: Slot::default(), params: json!({"sortby": PRESET_SORT}), is_static: false, api });
+        open_preset(&mut app, None, &serde_json::Value::Null).unwrap();
+        assert!(app.ui.stac.preset.is_none());
+        assert_eq!((app.ui.stac.sortby.as_str(), app.ui.stac.sort_is_default), (PRESET_SORT, true), "it goes out with that sort");
+        assert!(keeps_preset_sort(&app.ui.stac), "and the dropdown keeps reading it");
+        keep_preset_sort_for_its_api(&mut app.ui.stac);
+        assert_eq!(app.ui.stac.sortby, PRESET_SORT);
+        // Once the area has landed the preset is gone, and so is its sort.
+        app.ui.stac.preparing = None;
+        assert!(!keeps_preset_sort(&app.ui.stac));
+        keep_preset_sort_for_its_api(&mut app.ui.stac);
+        assert_eq!((app.ui.stac.sortby.as_str(), app.ui.stac.sort_is_default), ("", false));
     }
 
     #[test]
