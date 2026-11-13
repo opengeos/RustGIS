@@ -222,7 +222,11 @@ pub fn sort_followed(items: &[Item], sortby: Option<&str>) -> Option<bool> {
             let len = items.first()?.datetime.len();
             // An item whose own `datetime` is null carries its `start_datetime` here, which the
             // API did not sort by: it can't be compared.
-            if len == 0 || items.len() < 2 || items.iter().any(|i| !i.own_datetime || i.datetime.len() != len || !i.datetime.ends_with('Z'))
+            if len == 0
+                || items.len() < 2
+                || items.iter().any(|i| {
+                    !i.own_datetime || i.datetime.len() != len || !i.datetime.ends_with('Z') || i.datetime.get(10..11) != Some("T")
+                })
             {
                 return None;
             }
@@ -970,6 +974,11 @@ mod tests {
         // The same instant written two ways is not out of order.
         let same = answered(&[("2024-06-01T00:00:00.0000Z", None), ("2024-06-01T00:00:00+00:00", None)]);
         assert_eq!(sort_followed(&same, Some("datetime")), None);
+        // A lowercase `t` or a space for the separator sorts differently as text: not compared.
+        let sep = answered(&[("2024-06-01t00:00:00Z", None), ("2024-06-01T01:00:00Z", None)]);
+        assert_eq!(sort_followed(&sep, Some("datetime")), None);
+        let space = answered(&[("2024-06-01 00:00:00Z", None), ("2024-06-01T01:00:00Z", None)]);
+        assert_eq!(sort_followed(&space, Some("datetime")), None);
     }
 
     /// An item with a null `datetime` carries its `start_datetime` as its date, which the API did
