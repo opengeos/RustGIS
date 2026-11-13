@@ -93,8 +93,10 @@ information on resaving, name it in the document's `requires` and add the name t
 where it is read; a format beyond `READ_FORMAT` is for a change a capability can't describe. This
 includes additive fields that parse successfully but disappear when an older writer saves. Task,
 presentation, notebook and model documents don't check `requires` yet: a change to them that an
-older reader would lose needs that check first (see [maintaining](maintaining.md#saved-files-and-settings)). For a style file that needs metadata, the future writer must use an object rather
-than the legacy array; readers with this guard refuse its newer format before interpreting it.
+older reader would lose needs that check first (see
+[maintaining](maintaining.md#saved-files-and-settings)). For a style file that needs metadata,
+the future writer must use an object rather than the legacy array; readers with this guard refuse
+its newer format before interpreting it.
 A payload or wrapper for such a new format belongs in that future change. Keep existing legacy
 readers and test that unsupported versions fail before typed deserialization, normalization or
 source reopening, including alternate import and package paths.

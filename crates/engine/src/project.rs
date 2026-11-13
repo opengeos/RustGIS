@@ -877,11 +877,12 @@ fn capability_said(name: &str) -> String {
 }
 
 /// Whether a saved document's text, read for its format, is one to keep as written rather than
-/// rewrite through RustGIS's types: of a format this RustGIS doesn't read, or, for a kind whose
-/// reader looks at `requires` (`honours_requires`: projects and maps), requiring anything, as the
-/// typed copy wouldn't keep the list, even of capabilities it knows. A list (a legacy style file),
-/// or text whose `format` isn't a number, isn't one.
-pub(crate) fn kept_as_written(text: &str, honours_requires: bool) -> bool {
+/// rewrite through RustGIS's types. For a kind whose reader looks at `requires` and reads format 2
+/// (`reads_format_2`: projects and maps): of a format past [`READ_FORMAT`], or requiring anything,
+/// as the typed copy wouldn't keep the list, even of capabilities it knows. For the others (tasks,
+/// presentations, notebooks, models), whose typed copies drop what they don't know: of a format
+/// past [`FORMAT`]. A list (a legacy style file), or text whose `format` isn't a number, isn't one.
+pub(crate) fn kept_as_written(text: &str, reads_format_2: bool) -> bool {
     if text.trim_start().starts_with('[') {
         return false;
     }
@@ -891,7 +892,7 @@ pub(crate) fn kept_as_written(text: &str, honours_requires: bool) -> bool {
             Requires::Names(names) => names.is_empty(),
             Requires::TooMany | Requires::NotNames => false,
         };
-        h.format > u64::from(READ_FORMAT) || (honours_requires && !requires_nothing)
+        if reads_format_2 { h.format > u64::from(READ_FORMAT) || !requires_nothing } else { h.format > u64::from(FORMAT) }
     })
 }
 

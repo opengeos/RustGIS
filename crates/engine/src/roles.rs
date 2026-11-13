@@ -371,8 +371,9 @@ impl Durable for VecSteps {
 /// access. Unchanged documents keep their exact text; only changed typed copies are serialized.
 fn document(kind: Document, v: &Value, depth: usize, report: &mut Report) -> Option<Value> {
     let Some(text) = v.as_str().filter(|s| s.len() as u64 <= crate::project::max_bytes()) else { return invalid(v, report) };
-    // One this RustGIS wouldn't read, or would rewrite without what it requires, stays as written.
-    // Only project and map readers refuse a document for what it requires; the others don't look.
+    // One this RustGIS wouldn't read, or would rewrite without what it doesn't know, stays as
+    // written. Only project and map readers read format 2 and refuse a document for what it
+    // requires; the others keep format 1's bound and don't look at `requires`.
     if crate::project::kept_as_written(text, matches!(kind, Document::Project | Document::Map)) {
         report.unchecked = report.unchecked.saturating_add(1);
         return None;
