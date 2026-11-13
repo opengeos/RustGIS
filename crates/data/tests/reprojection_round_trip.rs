@@ -3,7 +3,7 @@
 //! centimetre on the ground. Inside a system's area of use a place must go there and back; outside
 //! it the system may refuse it (`None`), but a place it does take must come back, never somewhere
 //! else. What a system does instead is listed in [`LIMITS`] and [`OUTLINE_REFUSALS`] with the
-//! reason; a known bug is marked `bug:`. Places lean on the areas' edges and corners, the poles
+//! reason; a known bug is marked `bug:` (#1925). Places lean on the areas' edges and corners, the poles
 //! and the antimeridian.
 //!
 //! Pull requests run a fixed seed; the nightly a new one with more cases. A failure gives its seed
