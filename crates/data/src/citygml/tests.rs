@@ -263,6 +263,8 @@ fn a_vertical_system_that_isnt_metres_upward_is_said() {
     let feet = notes("EPSG:2263", &["EPSG:2263"], None);
     assert!(feet.len() == 1 && feet[0].contains("measures in us-ft"), "{feet:?}");
     assert!(notes(&compound("2263", "5703"), &["EPSG:2263"], None).is_empty());
+    // A geometry naming a vertical part gives the heights' unit, whatever the first name says.
+    assert!(notes("EPSG:2263", &[&compound("2263", "5703")], None).is_empty());
     let one = notes(&compound("2263", "6360"), &["EPSG:2263"], None);
     assert!(one.len() == 1 && one[0].contains("(crs:EPSG::6360)"), "{one:?}");
     // Past the systems said one by one, the rest are counted.

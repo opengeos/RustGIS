@@ -341,8 +341,7 @@ fn read_with(file_name: &str, bytes: &[u8], given: Option<Crs>, keep_named: bool
     let Reading { counts, mut built, rows, reach, mut said, relations, .. } = reading;
     said.object_links += relate(&mut built, relations);
     let mut notes = Vec::new();
-    let vertical_named = index.system.as_deref().and_then(vertical).is_some();
-    let crs = coordinate_system(file_name, given, named, vertical_named, &reach, &mut notes)?;
+    let crs = coordinate_system(file_name, given, named, index.vertical_named, &reach, &mut notes)?;
     if let Some(other) = &index.other {
         notes.push(format!(
             "{} geometries or envelopes name a coordinate system other than the file's first ({other}), and are read in {}, the coordinate system given",
@@ -384,6 +383,9 @@ struct Index {
     /// another are counted (`verticals_past`).
     verticals: Vec<(Option<u32>, String)>,
     verticals_past: usize,
+    /// Whether an `srsName` names a vertical part, in metres or not: its unit is the heights', so
+    /// the horizontal system's isn't said as theirs.
+    vertical_named: bool,
     /// A system is given in place of those the file names, so `srsName`s that disagree are kept to
     /// the first rather than refused.
     overridden: bool,
@@ -867,7 +869,11 @@ impl Index {
         if self.system.as_deref() == Some(srs) {
             return Ok(());
         }
-        if let Some((v, code)) = vertical(srs).and_then(|v| Some((v, vertical_code(v)?)))
+        let named = vertical(srs);
+        self.vertical_named |= named.is_some();
+        // A part with an EPSG code is the same system as one with the same code, however spelled;
+        // one with none, as one of the same name.
+        if let Some((v, code)) = named.and_then(|v| Some((v, vertical_code(v)?)))
             && !self.verticals.iter().any(|(c, seen)| *c == code && (code.is_some() || seen == v))
         {
             if self.verticals.len() < VERTICALS {
