@@ -12,6 +12,8 @@ pub mod extensions;
 pub mod geometry_calc;
 pub mod model;
 mod notice_text;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod observe;
 pub mod peer;
 pub mod policy;
 #[cfg(not(target_arch = "wasm32"))]
@@ -687,6 +689,9 @@ pub struct Session {
     /// The favourite arrangement of publication layouts (`layout.arrangement`, #1379): a name or a
     /// corner for each surround, kept with the app's preferences, not the project.
     pub layout_favourite: serde_json::Value,
+    /// The arrangements of publication layouts saved by name (`layout.arrangement {"save": …}`),
+    /// each its corners, kept with the app's preferences too.
+    pub layout_arrangements: serde_json::Map<String, serde_json::Value>,
     pub registry: Registry,
     /// Bumped on every change so views can cache.
     pub revision: u64,
@@ -1135,6 +1140,7 @@ impl Session {
             web_logins: service_logins::SessionLogins::new(),
             raster_defaults: rustgis_map::RasterDefaults::default(),
             layout_favourite: serde_json::Value::String("classic".into()),
+            layout_arrangements: serde_json::Map::new(),
             registry: Registry { commands: cmd::all() },
             revision: 1,
             opened: 0,
@@ -2021,8 +2027,16 @@ impl Session {
         // Streamed vector windows land after project opening too. Check each installed read
         // once, keeping the same counted notice channel as retained resident expressions.
         let mut landed = Vec::new();
+        let mut dates = Vec::new();
         for map in &mut self.project.maps {
             for layer in &mut map.layers {
+                // Values in date fields that weren't dates, once for a layer read in place.
+                if let Some(note) = layer.source.as_mut().and_then(|source| source.take_unread_dates()) {
+                    dates.push(format!(
+                        "{}: some values in its date fields aren't dates and show as empty (Load All Features counts them all); so far, {note}",
+                        layer.name
+                    ));
+                }
                 if layer.source.as_mut().is_some_and(|source| source.take_display_window()) {
                     landed.push(&*layer);
                 }
@@ -2030,6 +2044,9 @@ impl Session {
         }
         if let Some(message) = cmd::design::display_area_messages(landed.into_iter()) {
             self.notify(message, false);
+        }
+        for note in dates {
+            self.notify(note, false);
         }
         let (mut lost, mut held, mut failed, mut dropped) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
         for m in &mut self.project.maps {
@@ -2734,7 +2751,8 @@ impl Session {
         if m.projection.is_globe() {
             rustgis_map::Globe::fit(&mut m.camera, e, w, h);
         } else {
-            m.fit_lonlat(e, w, h);
+            // An extent the projection doesn't reach leaves the view where it is.
+            let _ = m.fit_lonlat(e, w, h);
         }
         self.record_extent();
     }

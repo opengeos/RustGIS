@@ -65,13 +65,13 @@ pub fn to_kml(ds: &Dataset, name_field: Option<usize>) -> crate::Result<String> 
     for (r, f) in ds.features.iter().enumerate() {
         crate::progress::step(1)?;
         let Some(g) = &f.geometry else { continue };
-        let name = name_field.map(|fi| ds.value(r, fi).to_string()).unwrap_or_else(|| f.id.to_string());
+        let name = name_field.map(|fi| ds.value(r, fi).to_file_text()).unwrap_or_else(|| f.id.to_string());
         let data: String = ds
             .fields
             .iter()
             .zip(&f.attrs)
             .filter(|(_, v)| !v.is_null())
-            .map(|(fd, v)| format!("<Data name=\"{}\"><value>{}</value></Data>", xml(&fd.name), xml(&v.to_string())))
+            .map(|(fd, v)| format!("<Data name=\"{}\"><value>{}</value></Data>", xml(&fd.name), xml(&v.to_file_text())))
             .collect();
         out.push_str(&format!(
             "<Placemark><name>{}</name><ExtendedData>{data}</ExtendedData>{}</Placemark>\n",
@@ -94,7 +94,7 @@ pub fn to_gpx(ds: &Dataset, name_field: Option<usize>) -> crate::Result<String> 
     for (r, f) in ds.features.iter().enumerate() {
         crate::progress::step(1)?;
         let Some(g) = &f.geometry else { continue };
-        let name = xml(&name_field.map(|fi| ds.value(r, fi).to_string()).unwrap_or_else(|| f.id.to_string()));
+        let name = xml(&name_field.map(|fi| ds.value(r, fi).to_file_text()).unwrap_or_else(|| f.id.to_string()));
         match g {
             Geometry::Point(c) => out.push_str(&format!("<wpt {}><name>{name}</name></wpt>\n", pt(c))),
             Geometry::MultiPoint(v) => v.iter().for_each(|c| out.push_str(&format!("<wpt {}><name>{name}</name></wpt>\n", pt(c)))),
@@ -465,8 +465,8 @@ impl WktParser {
     }
 }
 
-/// CSV with a `wkt` geometry column and every attribute.
-pub fn to_wkt_csv(ds: &Dataset) -> String {
+/// CSV with a `wkt` geometry column and every attribute; cancellable between features.
+pub fn to_wkt_csv(ds: &Dataset) -> crate::Result<String> {
     // Text starting like a formula is prefixed with ' so spreadsheets show it rather than run it.
     let q = |s: &str| {
         let s = if s.starts_with(['=', '+', '-', '@']) && s.parse::<f64>().is_err() { format!("'{s}") } else { s.to_string() };
@@ -479,14 +479,15 @@ pub fn to_wkt_csv(ds: &Dataset) -> String {
     }
     out.push('\n');
     for f in &ds.features {
+        crate::progress::step(1)?;
         out.push_str(&q(&f.geometry.as_ref().map(wkt).unwrap_or_default()));
         for v in &f.attrs {
             out.push(',');
-            out.push_str(&q(&if v.is_null() { String::new() } else { v.to_string() }));
+            out.push_str(&q(&v.to_file_text()));
         }
         out.push('\n');
     }
-    out
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -524,6 +525,28 @@ mod tests {
         let g = to_gpx(&ds, Some(0)).unwrap();
         assert!(g.contains("<wpt lat=\"48.85\" lon=\"2.35\">"));
         assert_eq!(wkt(&Geometry::Line(vec![vec![Coord::new(0.0, 0.0), Coord::new(1.0, 1.0)]])), "LINESTRING (0 0, 1 1)");
-        assert!(to_wkt_csv(&ds).starts_with("wkt,name\nPOINT (2.35 48.85),Paris & co"));
+        assert!(to_wkt_csv(&ds).unwrap().starts_with("wkt,name\nPOINT (2.35 48.85),Paris & co"));
+    }
+
+    /// Numbers are written in full and a null name as nothing, not as they're shown (rounded to
+    /// 6 decimals, `<Null>`).
+    #[test]
+    fn kml_gpx_and_wkt_csv_write_values_as_stored() {
+        let fields = vec![Field::new("name", FieldType::Text), Field::new("v", FieldType::Double)];
+        let mut ds = Dataset::new("t", GeometryType::Point, fields);
+        ds.push(Some(Geometry::Point(Coord::new(1.0, 2.0))), vec![Value::Null, Value::Float(0.1234567891)]);
+        ds.push(Some(Geometry::Point(Coord::new(3.0, 4.0))), vec![Value::Text("B".into()), Value::Float(1e-9)]);
+        let k = to_kml(&ds, Some(0)).unwrap();
+        assert!(k.contains("<value>0.1234567891</value>") && k.contains("<value>0.000000001</value>"), "{k}");
+        assert!(k.contains("<Placemark><name></name>") && !k.contains("Null"), "{k}");
+        let g = to_gpx(&ds, Some(0)).unwrap();
+        assert!(g.contains("<name></name>") && g.contains("<name>B</name>") && !g.contains("Null"), "{g}");
+        // Named by a number: in full too.
+        let mut numbered = Dataset::new("n", GeometryType::Point, vec![Field::new("id", FieldType::Double)]);
+        numbered.push(Some(Geometry::Point(Coord::new(1.0, 2.0))), vec![Value::Float(0.1234567891)]);
+        assert!(to_kml(&numbered, Some(0)).unwrap().contains("<name>0.1234567891</name>"));
+        assert!(to_gpx(&numbered, Some(0)).unwrap().contains("<name>0.1234567891</name>"));
+        let c = to_wkt_csv(&ds).unwrap();
+        assert!(c.contains("POINT (1 2),,0.1234567891\n") && c.contains(",B,0.000000001\n"), "{c}");
     }
 }

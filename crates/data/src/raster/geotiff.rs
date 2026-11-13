@@ -1461,6 +1461,27 @@ pub(super) fn read_limited_with_nodata(
     if ycbcr {
         ycbcr_to_rgb(&mut bands);
     }
+    // The image's internal transparency mask: its masked pixels are no-data, as outside a
+    // reprojection are. One that can't be read leaves them as stored, and says so.
+    let mut mask_lost = None;
+    match super::mask::find(&mut dec, image, if decimate_by > 1 { (full_w, full_h) } else { (w, h) }) {
+        super::mask::Found::At(m) => match super::mask::read(&mut dec, m, decimate_by) {
+            Ok(opaque) if opaque.len() == n => {
+                for band in &mut bands {
+                    for (v, _) in band.iter_mut().zip(&opaque).filter(|(_, o)| !**o) {
+                        *v = f32::NAN;
+                    }
+                }
+            }
+            Ok(_) => mask_lost = Some("its transparency mask doesn't match its image".to_string()),
+            Err(DataError::Cancelled) => return Err(DataError::Cancelled),
+            Err(e) => mask_lost = Some(e.to_string()),
+        },
+        super::mask::Found::Elsewhere => mask_lost = Some("the file has none for the image read".to_string()),
+        super::mask::Found::Unscanned(why) => mask_lost = Some(why),
+        super::mask::Found::None => {}
+    }
+    let mask_lost = mask_lost.map(|why| format!("its transparency mask isn't applied ({why}): masked pixels draw as stored"));
     // A scan keeps a stand-in transform, sized to the pixels read.
     if !geo.referenced {
         let mut r = Raster::new(name, w, h, bands, super::unreferenced(w, h), Crs::LonLat, geo.nodata, color, data_type)?;
@@ -1470,6 +1491,7 @@ pub(super) fn read_limited_with_nodata(
         r.copyright = copyright.filter(|c| !c.is_empty());
         r.lost.extend(copyright_lost);
         r.lost.extend(table_lost);
+        r.lost.extend(mask_lost);
         if let Some(p) = &described {
             r.apply_pam(p, super::pam::GDAL_METADATA);
         }
@@ -1524,6 +1546,7 @@ pub(super) fn read_limited_with_nodata(
     r.lost.extend(copyright_lost);
     r.lost.extend(super::planetary::note_of(crs));
     r.lost.extend(table_lost);
+    r.lost.extend(mask_lost);
     if let Some(p) = &described {
         r.apply_pam(p, super::pam::GDAL_METADATA);
     }
@@ -1617,64 +1640,49 @@ pub fn written_bands(r: &Raster, band: usize) -> Vec<usize> {
 
 /// Writes a raster as a Deflate-compressed GeoTIFF: a colour raster's colour bands (RGB(A) bytes
 /// when they are 8-bit, else 32-bit floats, alpha kept), so it reads back in colour; otherwise
-/// `band` (0-based) as 32-bit floats. `band` is for rasters that aren't colour ones: a colour
-/// raster always writes its colour bands, as its 8-bit form did before. A cancelled run stops
-/// it (with [`DataError::Cancelled`]) within a strip.
+/// `band` (0-based), as bytes when it is an 8-bit band of whole bytes, else as 32-bit floats.
+/// `band` is for rasters that aren't colour ones: a colour raster always writes its colour bands,
+/// as its 8-bit form did before. The strips go through the predictors and Deflate effort of the
+/// COG writer ([`super::cogwrite::write_strips`]). A cancelled run stops it (with
+/// [`DataError::Cancelled`]) within a strip.
 pub fn write(r: &Raster, band: usize) -> Result<Vec<u8>> {
-    finish(encode(r, band, false))
+    encode(r, band, false)
 }
 
 /// Writes every band of a raster, for a layer whose pixels the project keeps: as [`write`] does
 /// when that keeps them all, otherwise as 32-bit float samples (RGB first for a colour raster,
 /// and alpha after them when it has one), which [`read`] reads back as the same bands.
 pub fn write_all(r: &Raster) -> Result<Vec<u8>> {
-    finish(encode(r, 0, true))
+    encode(r, 0, true)
 }
 
-/// The encoder's answer, a cancel during it as [`DataError::Cancelled`].
-fn finish(encoded: Result<Vec<u8>>) -> Result<Vec<u8>> {
-    match encoded {
-        Ok(bytes) => Ok(bytes),
-        // The encoder's error for a cancel only says the write stopped.
-        Err(e) => crate::progress::check().and(Err(e)),
-    }
+/// Writes `data` (samples interleaved as `img` lays them out, a row after another) as `img`'s
+/// strips, at the end of `out`.
+fn put<T: Copy + Sync, const N: usize>(
+    img: super::cogwrite::Strips,
+    data: &[T],
+    le: fn(T) -> [u8; N],
+    out: &mut std::io::Cursor<Vec<u8>>,
+) -> Result<()> {
+    let per_row = img.w as usize * usize::from(img.spp);
+    super::cogwrite::write_strips(img, out, |rows, buf| {
+        let s = data.get(rows.start * per_row..rows.end * per_row).ok_or_else(|| err("the samples don't fill the image"))?;
+        buf.extend(s.iter().flat_map(|v| le(*v)));
+        Ok(())
+    })
 }
 
-/// The file's bytes, written by the encoder a strip's compressed output at a time: each write
-/// fails once the run was cancelled. It counts no progress: the encoder doesn't say where a
-/// strip ends.
-struct Probed<W>(W);
-
-impl<W: std::io::Write> std::io::Write for Probed<W> {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        crate::progress::check().map_err(std::io::Error::other)?;
-        self.0.write(buf)
-    }
-    fn flush(&mut self) -> std::io::Result<()> {
-        self.0.flush()
-    }
-}
-
-impl<W: Seek> Seek for Probed<W> {
-    fn seek(&mut self, pos: std::io::SeekFrom) -> std::io::Result<u64> {
-        self.0.seek(pos)
-    }
-}
-
-/// [`write`] (or with `every`, [`write_all`]), a cancel failing as any write error does.
+/// [`write`] (or with `every`, [`write_all`]).
 fn encode(r: &Raster, band: usize, every: bool) -> Result<Vec<u8>> {
-    use tiff::encoder::{Compression, DeflateLevel, TiffEncoder, colortype};
+    use super::cogwrite::{Sample, Strips, few_classes, geo_entries};
     // A scan's place is only where it was laid on the view: not coordinates to write into a file.
     r.require_coordinates().map_err(err)?;
-    let mut out = Probed(std::io::Cursor::new(Vec::new()));
-    let mut enc = TiffEncoder::new(&mut out).map_err(err)?.with_compression(Compression::Deflate(DeflateLevel::Balanced));
+    let mut out = std::io::Cursor::new(Vec::new());
     let gt = r.transform;
     if gt.pixel_height > 0.0 || gt.pixel_width < 0.0 {
         return Err(err("only north-up rasters can be exported for now"));
     }
-    let scale = [gt.pixel_width.abs(), gt.pixel_height.abs(), 0.0];
-    let tie = [0.0, 0.0, 0.0, gt.origin_x, gt.origin_y, 0.0];
-    let GeoKeys { keys, custom } = geo_keys(r)?;
+    let geo = geo_keys(r)?;
     let (w, h) = (r.width, r.height);
     // Every band holds width × height values; one that doesn't is refused rather than padded.
     if r.bands.iter().any(|b| b.data.len() != (w as usize) * (h as usize)) {
@@ -1688,43 +1696,26 @@ fn encode(r: &Raster, band: usize, every: bool) -> Result<Vec<u8>> {
             .then(|| band.data.iter().map(|v| if r.is_valid(*v) { v.clamp(0.0, 255.0) as u8 } else { nodata.unwrap_or(0) }).collect())
     };
     let rgb = matches!(r.color, ColorHint::Rgb { .. }) && r.bands.len() >= 3;
-    // Each branch below names the bands it writes as samples (`$written`): their names, and the
-    // first one's class names (the red band's, for a colour file), go to GDAL's metadata tag,
-    // read back on open.
-    let copyright = r.copyright.as_deref().map(super::tag_text).filter(|c| !c.is_empty());
-    macro_rules! tags {
-        ($img:expr, $written:expr) => {{
-            let classes = super::gdal_metadata_of(r, $written);
-            let e = $img.encoder();
-            // The fourth sample says what it is: unassociated alpha (2) or data (0, as RGB and
-            // near-infrared). The encoder writes no ExtraSamples tag, and without one a reader
-            // can't tell alpha from data.
-            if $written.len() == 4 && rgb {
-                let extra: u16 = if matches!(r.color, ColorHint::Rgb { alpha: true }) { 2 } else { 0 };
-                e.write_tag(Tag::ExtraSamples, &[extra][..]).map_err(err)?;
-            }
-            e.write_tag(Tag::ModelPixelScaleTag, &scale[..]).map_err(err)?;
-            e.write_tag(Tag::ModelTiepointTag, &tie[..]).map_err(err)?;
-            e.write_tag(Tag::GeoKeyDirectoryTag, &keys[..]).map_err(err)?;
-            if let Some(d) = &custom {
-                if !d.doubles.is_empty() {
-                    e.write_tag(Tag::Unknown(34736), &d.doubles[..]).map_err(err)?;
-                }
-                if !d.ascii.is_empty() {
-                    e.write_tag(Tag::Unknown(34737), d.ascii.as_str()).map_err(err)?;
-                }
-            }
-            if let Some(xml) = &classes {
-                e.write_tag(Tag::Unknown(42112), xml.as_str()).map_err(err)?;
-            }
-            if let Some(c) = &copyright {
-                e.write_tag(Tag::Copyright, c.as_str()).map_err(err)?;
-            }
-            if let Some(nd) = r.nodata {
-                e.write_tag(Tag::GdalNodata, nd.to_string().as_str()).map_err(err)?;
-            }
-        }};
-    }
+    // The image each branch below writes: `written` names the bands it writes as samples, whose
+    // names, and the first one's class names (the red band's, for a colour file), go to GDAL's
+    // metadata tag, read back on open. Grey or RGB samples come first, then those `extra` says
+    // what they are (unassociated alpha, 2, or data, 0). A single band of classes takes no
+    // predictor.
+    let image = |written: &[usize], sample: Sample, extra: Vec<u16>| -> Result<Strips> {
+        let colour = if rgb { 3 } else { 1 };
+        Ok(Strips {
+            w,
+            h,
+            spp: u16::try_from(colour + extra.len()).map_err(|_| err("a TIFF holds at most 65,535 bands"))?,
+            sample,
+            photometric: if rgb { 2 } else { 1 },
+            extra,
+            classes: matches!(written, [b] if r.bands.get(*b).is_some_and(few_classes)),
+            tags: geo_entries(r, &geo, written, r.nodata.map(|d| d.to_string())),
+        })
+    };
+    // The fourth sample of a colour file says what it is: alpha, or data (as RGB and near-infrared).
+    let fourth = || vec![if matches!(r.color, ColorHint::Rgb { alpha: true }) { 2 } else { 0 }];
     // Without alpha or a no-data marker, byte samples cannot keep NaN holes (for example the
     // cells outside a reprojected RGBI image). Keep those samples as floats instead.
     let byte_holes = r.nodata.is_none()
@@ -1734,13 +1725,10 @@ fn encode(r: &Raster, band: usize, every: bool) -> Result<Vec<u8>> {
     if every && written_bands(r, band).len() < all.len() {
         // More bands than colour (or one grey band) takes: each a 32-bit float sample, the first
         // past the colour (or grey) ones alpha when the raster says it is.
-        use tiff::tags::ExtraSamples;
         // Alpha follows the colour (or grey) samples it belongs to: RGB's is the fourth band, grey's
         // the second, so a colour hint on too few bands for colour marks none.
         let alpha = if rgb { matches!(r.color, ColorHint::Rgb { alpha: true }) } else { matches!(r.color, ColorHint::GrayAlpha) };
-        let extras: Vec<ExtraSamples> = (0..all.len() - if rgb { 3 } else { 1 })
-            .map(|i| if i == 0 && alpha { ExtraSamples::UnassociatedAlpha } else { ExtraSamples::Unspecified })
-            .collect();
+        let extras: Vec<u16> = (0..all.len() - if rgb { 3 } else { 1 }).map(|i| if i == 0 && alpha { 2 } else { 0 }).collect();
         // The samples interleaved, as large as the raster: reserved first, so a raster this
         // machine can't hold twice is an error, and a cancel is heard while they are copied.
         // Bytes when every band is whole bytes (and an empty cell can be written as no-data),
@@ -1757,7 +1745,7 @@ fn encode(r: &Raster, band: usize, every: bool) -> Result<Vec<u8>> {
             && all.iter().all(|b| fits_bytes(r, *b))
             && r.bands.iter().all(|b| b.data.iter().all(|v| in_bytes(v) && marked(v)));
         macro_rules! wide {
-            ($colour:ty, $sample:expr) => {{
+            ($sample:expr, $kind:expr, $le:expr) => {{
                 let mut data = super::room(samples, w as usize, h as usize)?;
                 for i in 0..n {
                     if i % (1 << 20) == 0 {
@@ -1766,20 +1754,15 @@ fn encode(r: &Raster, band: usize, every: bool) -> Result<Vec<u8>> {
                     // Every band holds `n` values (checked above), so none is filled in.
                     data.extend(r.bands.iter().map(|b| $sample(b.data.get(i).copied().unwrap_or(f32::NAN))));
                 }
-                let mut img = enc.new_image::<$colour>(w, h).map_err(err)?;
-                img.extra_samples(&extras).map_err(err)?;
-                tags!(img, &all[..]);
-                img.write_data(&data).map_err(err)?;
+                put(image(&all[..], $kind, extras)?, &data, $le, &mut out)?;
             }};
         }
         if as_bytes {
             let nodata = r.nodata.map_or(0, |d| d as u8);
             let byte = |v: f32| if r.is_valid(v) { v.clamp(0.0, 255.0) as u8 } else { nodata };
-            if rgb { wide!(colortype::RGB8, byte) } else { wide!(colortype::Gray8, byte) }
-        } else if rgb {
-            wide!(colortype::RGB32Float, |v: f32| v)
+            wide!(byte, Sample::Byte, u8::to_le_bytes)
         } else {
-            wide!(colortype::Gray32Float, |v: f32| v)
+            wide!(|v: f32| v, Sample::Float, f32::to_le_bytes)
         }
     } else if rgb
         && !byte_holes
@@ -1793,17 +1776,13 @@ fn encode(r: &Raster, band: usize, every: bool) -> Result<Vec<u8>> {
             for i in 0..n {
                 data.extend([red.get(i), green.get(i), blue.get(i), a.get(i)].map(|v| v.copied().unwrap_or(0)));
             }
-            let mut img = enc.new_image::<colortype::RGBA8>(w, h).map_err(err)?;
-            tags!(img, &[0, 1, 2, 3]);
-            img.write_data(&data).map_err(err)?;
+            put(image(&[0, 1, 2, 3], Sample::Byte, fourth())?, &data, u8::to_le_bytes, &mut out)?;
         } else {
             let mut data = Vec::with_capacity(n * 3);
             for i in 0..n {
                 data.extend([red.get(i), green.get(i), blue.get(i)].map(|v| v.copied().unwrap_or(0)));
             }
-            let mut img = enc.new_image::<colortype::RGB8>(w, h).map_err(err)?;
-            tags!(img, &[0, 1, 2]);
-            img.write_data(&data).map_err(err)?;
+            put(image(&[0, 1, 2], Sample::Byte, Vec::new())?, &data, u8::to_le_bytes, &mut out)?;
         }
     } else if rgb && let (Some(red), Some(green), Some(blue)) = (r.bands.first(), r.bands.get(1), r.bands.get(2)) {
         // Colour bands that aren't bytes (three embedding dimensions): kept as 32-bit floats, with
@@ -1816,27 +1795,36 @@ fn encode(r: &Raster, band: usize, every: bool) -> Result<Vec<u8>> {
                 for i in 0..n {
                     data.extend([at(red, i), at(green, i), at(blue, i), at(alpha, i)]);
                 }
-                let mut img = enc.new_image::<colortype::RGBA32Float>(w, h).map_err(err)?;
-                tags!(img, &[0, 1, 2, 3]);
-                img.write_data(&data).map_err(err)?;
+                put(image(&[0, 1, 2, 3], Sample::Float, fourth())?, &data, f32::to_le_bytes, &mut out)?;
             }
             None => {
                 let mut data = Vec::with_capacity(n * 3);
                 for i in 0..n {
                     data.extend([at(red, i), at(green, i), at(blue, i)]);
                 }
-                let mut img = enc.new_image::<colortype::RGB32Float>(w, h).map_err(err)?;
-                tags!(img, &[0, 1, 2]);
-                img.write_data(&data).map_err(err)?;
+                put(image(&[0, 1, 2], Sample::Float, Vec::new())?, &data, f32::to_le_bytes, &mut out)?;
             }
         }
     } else {
         let b = r.bands.get(band).ok_or_else(|| err(format!("the raster has no band {}", band + 1)))?;
-        let mut img = enc.new_image::<colortype::Gray32Float>(w, h).map_err(err)?;
-        tags!(img, &[band]);
-        img.write_data(&b.data).map_err(err)?;
+        // An 8-bit band is written as bytes when every value is a whole byte and an empty cell is
+        // only where no-data can mark it (as the multiband samples above); otherwise as floats.
+        let byte = |v: &f32| if r.is_valid(*v) { v.fract() == 0.0 && (0.0..=255.0).contains(v) } else { r.nodata.is_some() };
+        if r.data_type == "UInt8" && fits_bytes(r, band) && b.data.iter().all(byte) {
+            let nodata = r.nodata.map_or(0, |d| d as u8);
+            let mut data = super::room(b.data.len(), w as usize, h as usize)?;
+            for (i, v) in b.data.iter().enumerate() {
+                if i % (1 << 20) == 0 {
+                    crate::progress::check()?;
+                }
+                data.push(if r.is_valid(*v) { *v as u8 } else { nodata });
+            }
+            put(image(&[band], Sample::Byte, Vec::new())?, &data, u8::to_le_bytes, &mut out)?;
+        } else {
+            put(image(&[band], Sample::Float, Vec::new())?, &b.data, f32::to_le_bytes, &mut out)?;
+        }
     }
-    Ok(out.0.into_inner())
+    Ok(out.into_inner())
 }
 
 #[cfg(test)]
@@ -1941,6 +1929,22 @@ mod tests {
         assert_eq!(back.value(0, 2, 1), Some(7.0));
         assert_eq!(back.value(0, 1, 1), None);
         assert_eq!(back.data_type, "Float32");
+    }
+
+    /// A grey 8-bit band is written as bytes, its no-data cells as the no-data value; without a
+    /// no-data value to mark an empty cell, or with a fraction, it stays floats.
+    #[test]
+    fn grey_bytes_round_trip_as_bytes() {
+        let gt = GeoTransform { origin_x: 0.0, origin_y: 3.0, pixel_width: 1.0, pixel_height: -1.0 };
+        let byte = |cells: Vec<f32>, nodata| {
+            let r = Raster::new("g", 3, 1, vec![cells], gt, Crs::LonLat, nodata, ColorHint::Gray, "UInt8").unwrap();
+            read(std::io::Cursor::new(write(&r, 0).unwrap()), "back").unwrap()
+        };
+        let back = byte(vec![1.0, 0.0, 255.0], Some(0.0));
+        assert_eq!((back.data_type.as_str(), back.nodata), ("UInt8", Some(0.0)));
+        assert_eq!((back.value(0, 0, 0), back.value(0, 1, 0), back.value(0, 2, 0)), (Some(1.0), None, Some(255.0)));
+        assert_eq!(byte(vec![1.0, f32::NAN, 2.0], None).data_type, "Float32");
+        assert_eq!(byte(vec![1.0, 2.5, 2.0], Some(0.0)).data_type, "Float32");
     }
 
     #[test]
@@ -2495,11 +2499,35 @@ mod tests {
     }
 
     fn rgb_tiled_samples(images: &[(u32, u32, u16)], bits: u16, predictor: u16, pixel: impl Fn(u32, u32, u32) -> u16) -> Vec<u8> {
+        // The first image is the full one, the rest overviews (NewSubfileType 1).
+        let images: Vec<(u32, u32, u16, u32)> =
+            images.iter().enumerate().map(|(i, &(size, tile, samples))| (size, tile, samples, u32::from(i > 0))).collect();
+        rgb_tiled_images(&images, bits, predictor, pixel)
+    }
+
+    /// As [`rgb_tiled_samples`], each image `(size, tile, samples, subfile type)` in turn: a
+    /// transparency mask has the subfile type 4.
+    fn rgb_tiled_images(images: &[(u32, u32, u16, u32)], bits: u16, predictor: u16, pixel: impl Fn(u32, u32, u32) -> u16) -> Vec<u8> {
+        rgb_tiled_masked(images, bits, predictor, pixel, |_, _, _| true)
+    }
+
+    /// As [`rgb_tiled_images`], with a real mask for each image whose subfile type has bit 2 set:
+    /// 1 bit a pixel, opaque where `opaque(size, x, y)` (in the mask's own pixels) holds, deflated unless
+    /// `predictor` is 1.
+    fn rgb_tiled_masked(
+        images: &[(u32, u32, u16, u32)],
+        bits: u16,
+        predictor: u16,
+        pixel: impl Fn(u32, u32, u32) -> u16,
+        opaque: impl Fn(u32, u32, u32) -> bool,
+    ) -> Vec<u8> {
         let full = images.first().map_or(1, |i| i.0);
         let mut out = vec![b'I', b'I', 42, 0, 0, 0, 0, 0];
         let mut next_link = 4;
-        for (i, &(size, tile, samples)) in images.iter().enumerate() {
+        for (i, &(size, tile, samples, subfile)) in images.iter().enumerate() {
             let k = full / size;
+            let (mask, deflated) = (subfile & 4 != 0, predictor != 1);
+            let (samples, bits, predictor) = if mask { (1, 1, 1) } else { (samples, bits, predictor) };
             let n = size.div_ceil(tile);
             // The tiles' data first, then the IFD pointing at it.
             let mut offsets = Vec::new();
@@ -2508,6 +2536,17 @@ mod tests {
                 offsets.push(out.len() as u32);
                 let mut raw = Vec::new();
                 for y in 0..tile {
+                    if mask {
+                        let y = (t / n) * tile + y;
+                        let mut row = vec![0u8; tile.div_ceil(8) as usize];
+                        for x in (0..tile).filter(|x| (t % n) * tile + x < size && y < size) {
+                            if opaque(size, (t % n) * tile + x, y) {
+                                row[(x / 8) as usize] |= 0x80 >> (x % 8);
+                            }
+                        }
+                        raw.extend(row);
+                        continue;
+                    }
                     let mut prev = [0u16; 4];
                     for x in 0..tile {
                         let (x, y) = ((t % n) * tile + x, (t / n) * tile + y);
@@ -2519,7 +2558,7 @@ mod tests {
                         }
                     }
                 }
-                let encoded = if predictor == 1 { raw } else { miniz_oxide::deflate::compress_to_vec_zlib(&raw, 6) };
+                let encoded = if predictor == 1 && !(mask && deflated) { raw } else { miniz_oxide::deflate::compress_to_vec_zlib(&raw, 6) };
                 counts.push(encoded.len() as u32);
                 out.extend(encoded);
             }
@@ -2528,12 +2567,12 @@ mod tests {
             let longs = |v: &[u32]| v.iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<u8>>();
             let doubles = |v: &[f64]| v.iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<u8>>();
             let mut e: Vec<(u16, u16, u32, Vec<u8>)> = vec![
-                (254, 4, 1, longs(&[u32::from(i > 0)])),
+                (254, 4, 1, longs(&[subfile])),
                 (256, 4, 1, longs(&[size])),
                 (257, 4, 1, longs(&[size])),
                 (258, 3, u32::from(samples), shorts(&vec![bits; usize::from(samples)])),
-                (259, 3, 1, shorts(&[if predictor == 1 { 1 } else { 8 }])),
-                (262, 3, 1, shorts(&[2])),
+                (259, 3, 1, shorts(&[if predictor == 1 && !(mask && deflated) { 1 } else { 8 }])),
+                (262, 3, 1, shorts(&[if mask { 4 } else { 2 }])),
                 (277, 3, 1, shorts(&[samples])),
                 (284, 3, 1, shorts(&[1])),
                 (317, 3, 1, shorts(&[predictor])),
@@ -2699,6 +2738,193 @@ mod tests {
         let Parse::Done(layout) = cog::layout(&whole).unwrap() else { panic!("not a COG") };
         assert_eq!((layout.levels.len(), layout.bands), (2, 4));
         assert!(layout.lost.iter().all(|n| !n.contains("overview(s)")), "{:?}", layout.lost);
+        // A left-out overview's tiles, too large to be a level's, don't fail the file: the next
+        // overview with the full image's samples is still a level.
+        let bytes = rgb_tiled_samples(&[(40, 16, 4), (20, 1200, 3), (10, 16, 4)], 8, 1, |b, x, y| (b * 10 + x + y) as u16);
+        let whole = Sparse::default().with_len(bytes.len() as u64).with(0, bytes);
+        let Parse::Done(layout) = cog::layout(&whole).unwrap() else { panic!("not a COG") };
+        assert_eq!(layout.levels.iter().map(|l| (l.width, l.ifd)).collect::<Vec<_>>(), [(40, 0), (10, 2)]);
+        assert!(layout.lost.iter().any(|n| n.contains("1 overview(s)") && n.contains("image 1 (3)")), "{:?}", layout.lost);
+        assert!(layout.lost.iter().all(|n| !n.contains("scan for overviews stopped")), "{:?}", layout.lost);
+    }
+
+    /// Looking for overviews passes over a bounded number of images, and says when it stops.
+    #[test]
+    fn cog_overview_scan_stops_after_so_many_skipped_images() {
+        use super::super::cog::{self, Parse, Sparse};
+        // The full image, 64 more of its size (not overviews of it), then an overview.
+        let mut images = vec![(32, 16, 4); 65];
+        images.push((16, 16, 4));
+        let bytes = rgb_tiled_samples(&images, 8, 1, |b, x, y| (b * 10 + x + y) as u16);
+        let whole = Sparse::default().with_len(bytes.len() as u64).with(0, bytes);
+        let Parse::Done(layout) = cog::layout(&whole).unwrap() else { panic!("not a COG") };
+        assert_eq!(layout.levels.iter().map(|l| l.width).collect::<Vec<_>>(), [32]);
+        assert!(layout.lost.iter().any(|n| n.contains("stopped after 64 skipped images")), "{:?}", layout.lost);
+    }
+
+    /// Transparency masks count toward the same scan bound as the other images passed over.
+    #[test]
+    fn cog_overview_scan_stops_after_so_many_masks() {
+        use super::super::cog::{self, Parse, Sparse};
+        // The full image, 64 masks of its size, then an overview the scan never reaches.
+        let mut images = vec![(32, 16, 4, 0)];
+        images.extend(vec![(32, 16, 4, 4); 64]);
+        images.push((16, 16, 4, 1));
+        let bytes = rgb_tiled_images(&images, 8, 1, |b, x, y| (b * 10 + x + y) as u16);
+        let whole = Sparse::default().with_len(bytes.len() as u64).with(0, bytes);
+        let Parse::Done(layout) = cog::layout(&whole).unwrap() else { panic!("not a COG") };
+        assert_eq!(layout.levels.iter().map(|l| l.width).collect::<Vec<_>>(), [32]);
+        assert!(layout.lost.iter().any(|n| n.contains("stopped after 64 skipped images")), "{:?}", layout.lost);
+        // Fewer masks: the overview is read, and nothing is said.
+        let mut images = vec![(32, 16, 4, 0)];
+        images.extend(vec![(32, 16, 4, 4); 3]);
+        images.push((16, 16, 4, 1));
+        let bytes = rgb_tiled_images(&images, 8, 1, |b, x, y| (b * 10 + x + y) as u16);
+        let whole = Sparse::default().with_len(bytes.len() as u64).with(0, bytes);
+        let Parse::Done(layout) = cog::layout(&whole).unwrap() else { panic!("not a COG") };
+        assert_eq!(layout.levels.iter().map(|l| (l.width, l.ifd)).collect::<Vec<_>>(), [(32, 0), (16, 4)]);
+        assert!(layout.lost.iter().all(|n| !n.contains("scan for overviews stopped")), "{:?}", layout.lost);
+    }
+
+    /// Sets `tag`'s value (a short, in place) in the `ifd`-th image of a little-endian TIFF.
+    fn set_short(bytes: &mut [u8], ifd: usize, tag: u16, value: u16) {
+        let long = |b: &[u8], at: usize| u32::from_le_bytes([b[at], b[at + 1], b[at + 2], b[at + 3]]) as usize;
+        let mut at = long(bytes, 4);
+        for _ in 0..ifd {
+            at = long(bytes, at + 2 + 12 * usize::from(u16::from_le_bytes([bytes[at], bytes[at + 1]])));
+        }
+        for k in 0..usize::from(u16::from_le_bytes([bytes[at], bytes[at + 1]])) {
+            let e = at + 2 + 12 * k;
+            if bytes[e..e + 2] == tag.to_le_bytes() {
+                bytes[e + 8..e + 10].copy_from_slice(&value.to_le_bytes());
+            }
+        }
+    }
+
+    /// The issue's file: a JPEG RGB image's border masked by an internal mask (stored black), its
+    /// centre kept, one black centre pixel included.
+    fn masked_rgb(predictor: u16) -> Vec<u8> {
+        let centre = |x: u32, y: u32| (8..24).contains(&x) && (8..24).contains(&y);
+        let pixel = move |b: u32, x: u32, y: u32| if centre(x, y) && (x, y) != (12, 12) { [200, 120, 40][b as usize] } else { 0 };
+        rgb_tiled_masked(&[(32, 16, 3, 0), (32, 16, 1, 4)], 8, predictor, pixel, move |_, x, y| centre(x, y))
+    }
+
+    #[test]
+    fn an_internal_mask_makes_masked_pixels_transparent() {
+        for predictor in [1, 2] {
+            let r = read(std::io::Cursor::new(masked_rgb(predictor)), "masked").unwrap();
+            assert_eq!((r.width, r.height, r.band_count(), r.color.clone()), (32, 32, 3, ColorHint::Rgb { alpha: false }));
+            for y in 0..32 {
+                for x in 0..32 {
+                    for b in 0..3 {
+                        let inside = (8..24).contains(&x) && (8..24).contains(&y);
+                        let want = if !inside {
+                            None
+                        } else if (x, y) == (12, 12) {
+                            Some(0.0)
+                        } else {
+                            Some([200.0, 120.0, 40.0][b])
+                        };
+                        assert_eq!(r.value(b, x as i64, y as i64), want, "band {b} at {x},{y}");
+                    }
+                }
+            }
+            assert!(r.lost.is_empty(), "{:?}", r.lost);
+            // The statistics leave the masked pixels out.
+            assert_eq!(r.bands[0].stats.count, 16 * 16);
+        }
+    }
+
+    #[test]
+    fn a_file_without_a_mask_is_unchanged() {
+        let pixel = |b: u32, x: u32, y: u32| (b * 10 + x + y) as u16;
+        let r = read(std::io::Cursor::new(rgb_tiled_samples(&[(32, 16, 3)], 8, 1, pixel)), "plain").unwrap();
+        assert!(r.lost.is_empty(), "{:?}", r.lost);
+        assert_eq!(r.bands[0].stats.count, 32 * 32);
+        assert_eq!(r.value(1, 0, 0), Some(10.0));
+    }
+
+    #[test]
+    fn an_overviews_own_mask_applies_when_the_overview_is_read() {
+        // The full image's mask hides its left 8 columns, the overview's its top 4 rows.
+        let opaque = |size: u32, x: u32, y: u32| if size == 64 { x >= 8 } else { y >= 4 };
+        let images = [(64, 16, 3, 0), (32, 16, 3, 1), (32, 16, 1, 5), (64, 16, 1, 4)];
+        let bytes = rgb_tiled_masked(&images, 8, 1, |b, _, _| u16::try_from(b + 1).unwrap_or(0) * 50, opaque);
+        // Masks may come in any order; 3 × 32 × 32 samples fit, 3 × 64 × 64 don't.
+        let r = read_limited(reader(std::io::Cursor::new(&bytes)).unwrap(), "overview", 4_000, None).unwrap();
+        assert_eq!((r.width, r.height, r.overview), (32, 32, Some((64, 64))));
+        for (x, y) in [(0, 0), (31, 3), (0, 3)] {
+            assert_eq!(r.value(0, x, y), None, "{x},{y}");
+        }
+        for (x, y) in [(0, 4), (3, 4), (31, 31), (2, 20)] {
+            assert_eq!(r.value(0, x, y), Some(50.0), "{x},{y}");
+        }
+        assert!(r.lost.is_empty(), "{:?}", r.lost);
+        // The whole image has its own.
+        let full = read(std::io::Cursor::new(&bytes), "full").unwrap();
+        assert_eq!((full.width, full.value(0, 7, 40), full.value(0, 8, 0)), (64, None, Some(50.0)));
+    }
+
+    #[test]
+    fn an_overview_without_a_mask_of_its_own_says_so() {
+        // Only the full image has a mask: the overview read draws as stored, and says why.
+        let images = [(64, 16, 3, 0), (32, 16, 3, 1), (64, 16, 1, 4)];
+        let bytes = rgb_tiled_masked(&images, 8, 1, |_, _, _| 50, |_, x, _| x >= 8);
+        let r = read_limited(reader(std::io::Cursor::new(&bytes)).unwrap(), "overview", 4_000, None).unwrap();
+        assert_eq!((r.width, r.value(0, 0, 0)), (32, Some(50.0)));
+        assert_eq!(
+            r.lost,
+            ["its transparency mask isn't applied (the file has none for the image read): masked pixels draw as stored"],
+            "{:?}",
+            r.lost
+        );
+    }
+
+    #[test]
+    fn a_mask_follows_an_image_read_every_other_pixel() {
+        // No overview fits: every second pixel of the full image is read, with its mask's.
+        let opaque = |_: u32, x: u32, y: u32| (x / 3 + y / 5).is_multiple_of(2);
+        let bytes = rgb_tiled_masked(&[(64, 16, 3, 0), (64, 16, 1, 4)], 8, 1, |_, _, _| 90, opaque);
+        let r = read_limited(reader(std::io::Cursor::new(&bytes)).unwrap(), "sparse", 4_000, None).unwrap();
+        assert_eq!((r.width, r.overview), (32, Some((64, 64))));
+        for y in 0..32u32 {
+            for x in 0..32u32 {
+                let want = opaque(64, x * 2, y * 2).then_some(90.0);
+                assert_eq!(r.value(0, i64::from(x), i64::from(y)), want, "{x},{y}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_mask_that_cant_be_read_is_said_once_and_the_image_loads() {
+        let mut bytes = masked_rgb(1);
+        // JPEG, which masks aren't read in.
+        set_short(&mut bytes, 1, 259, 7);
+        let r = read(std::io::Cursor::new(&bytes), "bad").unwrap();
+        assert_eq!(r.lost.len(), 1, "{:?}", r.lost);
+        assert!(r.lost[0].starts_with("its transparency mask isn't applied (a transparency mask's compression (7)"), "{:?}", r.lost);
+        assert_eq!(r.value(0, 0, 0), Some(0.0), "masked pixels draw as stored");
+        assert_eq!(r.value(0, 20, 20), Some(200.0));
+        // More than one bit a pixel.
+        let mut bytes = masked_rgb(1);
+        set_short(&mut bytes, 1, 258, 8);
+        let r = read(std::io::Cursor::new(&bytes), "bad").unwrap();
+        assert!(r.lost.iter().any(|n| n.contains("isn't 1 bit a pixel")), "{:?}", r.lost);
+        assert_eq!(r.value(0, 0, 0), Some(0.0));
+    }
+
+    #[test]
+    fn a_cog_header_says_its_masks_arent_applied_in_place() {
+        use super::super::cog::{self, Parse, Sparse};
+        let layout = |bytes: Vec<u8>| {
+            let whole = Sparse::default().with_len(bytes.len() as u64).with(0, bytes);
+            let Parse::Done(layout) = cog::layout(&whole).unwrap() else { panic!("not a COG") };
+            layout
+        };
+        let l = layout(masked_rgb(1));
+        assert_eq!(l.lost, ["1 transparency mask(s) aren't applied when tiles are read in place: masked pixels draw as stored"]);
+        let plain = layout(rgb_tiled_samples(&[(32, 16, 3)], 8, 1, |b, _, _| b as u16));
+        assert!(plain.lost.is_empty(), "{:?}", plain.lost);
     }
 
     /// An RGBI image too large to read whole, with a three-sample overview that would fit: the
@@ -2711,8 +2937,17 @@ mod tests {
         assert_eq!((r.band_count(), r.color.clone()), (4, ColorHint::Rgb { alpha: false }));
         // Every other pixel of the full image, not the full image whole.
         assert_eq!((r.width, r.height, r.overview), (20, 20, Some((40, 40))));
-        assert_eq!(r.value(3, 0, 0), Some(f32::from(pixel(3, 0, 0))));
-        assert_eq!(r.value(3, 1, 1), Some(f32::from(pixel(3, 2, 2))));
+        for y in 0..r.height {
+            for x in 0..r.width {
+                for b in 0..4 {
+                    assert_eq!(
+                        r.value(b as usize, i64::from(x), i64::from(y)),
+                        Some(f32::from(pixel(b, x * 2, y * 2))),
+                        "band {b} at {x},{y}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]

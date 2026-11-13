@@ -31,10 +31,11 @@ This guide walks through RustGIS by task. Each page covers one part of the app:
 - **Layers pane** (left): the map's layers in drawing order, with their legends. A new layer goes
   on top, whatever its kind (a feature, raster or web layer, an analysis result). Tick a layer to
   show or hide it; drag it up or down to change the drawing order; right-click it to zoom to it,
-  rename or remove it and more. The entire layer block, including its expanded legend and
-  classes, is split 50/50: drop in its upper half to insert above, or its lower half to insert
-  below. The insertion line shows the destination. Drop inside the first block's upper half
-  to move to the top, or inside the final block's lower half to move to the bottom.
+  rename it (or press ++f2++) or remove it and more. The entire layer block, including its
+  expanded legend and classes, is split 50/50: drop in its upper half to insert above, or its
+  lower half to insert below. The insertion line shows the destination. Drop inside the first
+  block's upper half to move to the top, or inside the final block's lower half to move to the
+  bottom.
   Type in the box at the top to show only the layers and tables
   whose names contain the text (++escape++ clears it); a selected layer it hides is no longer
   selected, and layers can be reordered again once it is cleared. The buttons beside the list's
@@ -87,8 +88,8 @@ This guide walks through RustGIS by task. Each page covers one part of the app:
 - **Map view**: one tab per map and layout. The buttons at the top right zoom in, zoom out and go
   to the full extent; the north arrow and scale bar sit in the corners (on a rotated or tilted
   map, click the north arrow to face north and look straight down); tile credits at the bottom right.
-- **Panes** (right): Tools (geoprocessing), Symbology, Labeling, History, Details, Bookmarks,
-  Editing, Workflows, Script, SQL, the AI Assistant and more. Open them from **View › Windows** or the commands that use
+- **Panes** (right): Tools (geoprocessing), Symbology, Labeling, Layer Properties, History,
+  Bookmarks, Editing, Workflows, Script, SQL, the AI Assistant and more. Open them from **View › Windows** or the commands that use
   them. Each pane opened gets a tab at the top, in the order opened: click a tab to show its pane,
   and its **✕** to close it (the next tab shows; closing the last hides the side). Right-click a
   tab to close it, the others or all; the **✕** at the header's end closes every pane. Tabs that
@@ -275,9 +276,44 @@ tile archives have their own **Reload Data** on their Layers row; see
 
 Supported targets are linked vectors, rasters (including time-following Zarr variables),
 GDAL/DuckDB file-backed layers and editable local GeoPackage tables. GDAL-linked File
-Geodatabases and Zarr folders can be reloaded manually. **This is manual reload only**:
-RustGIS does not detect or notify about changes on disk. Folder sources are not monitored;
-use Reload Data even when the folder's timestamp has not changed.
+Geodatabases and Zarr folders can be reloaded manually. Folder sources are not monitored
+(**Folder source — changes are not monitored. Use Reload Data.** in the Layers row's tooltip): use
+Reload Data even when the folder's timestamp has not changed.
+
+**Changed on disk (desktop).** While the app is open, RustGIS looks at the files its linked
+layers and local tile archives read every 5 seconds and when its window regains focus, in every
+map of the project. It reads only metadata (size, modification time and the file's identity: on
+Linux and macOS its status-change time too, on Windows its creation time), never the data: a Shapefile's `.dbf`, `.shx`, `.prj` and `.cpg` count with its
+`.shp`, a MapInfo file's `.mid` with its `.mif`, a GeoPackage, MBTiles or `.sqlite` file's `-wal`
+and `-journal` with it, and a DuckDB database's `.wal` with it (a `.db` file gets both). Other
+sidecars (a raster's `.aux.xml` or `.prj`) aren't watched. A change is reported once two looks in a row agree:
+a stability check, not proof the writer has finished (one that pauses for longer may be reported
+mid-write, and again when it's done). The Layers pane marks the row **(changed on disk)**, **(missing on
+disk)** or **(can't be checked)**, and a notification lists each affected file with **Reload Data**
+for each layer or archive reading it (**Repair Data Source…** when a linked file is missing) and
+**Not Now**. RustGIS doesn't reload anything until you choose, though a layer read in place
+(streamed) reads its file as you pan and zoom, so it may already show some of the new data; Reload
+Data reloads only that layer, opening its map
+first, and asks before discarding GeoPackage edits (see below). **Not Now** hides the notification
+for that version of the file; the row stays marked, and a later change notifies again. A reload
+clears the mark for what it read; a change that came while it read stays marked. Saving edits, or
+exporting into a watched file, from RustGIS's menus, ribbon and Command Search isn't reported as an
+outside change, except for other layers reading the table that was written, or the file an export
+replaced (a GeoJSON, a Shapefile): they still show the old rows and stay marked. (A layer read in
+place from a GeoPackage table RustGIS wrote reads it again, so it isn't marked.) Watching for
+changes, the marks and Not Now don't change the project or add undo steps.
+
+Limits: a write that keeps the size, modification time and identity of every watched file isn't
+seen; nor is one made while the layer is being opened, before its first look, which RustGIS takes
+as what the layer read. Reload Data stays available whether or not a change was reported. A
+reload, a GeoPackage save or an export run from a script, a model, the AI Assistant pane, the file
+bridge or the command line doesn't clear the mark or count as RustGIS's own write (an archive
+reload from an attached MCP client does clear it). Another program writing the same GeoPackage
+while RustGIS saves or exports into it isn't told apart from RustGIS's own write. A file that
+doesn't answer (a network drive gone away) pauses the checks of every file until it does; a
+notice says so. When one map shows the same tile archive twice, removing or reordering those
+two can move a mark from one to the other.
+
 Saved GDAL/DuckDB links reread their original selected table when restoring a disposable
 converted copy, including compatible empty tables. If the original cannot be read, RustGIS
 does not borrow another session's temporary conversion. A durable saved conversion outside the
@@ -337,6 +373,30 @@ the default and discarding edits defaults to false. Only an explicit
 `{"layer":42,"path":"/data/cities.fgb","table":null}`; `table` is a string for a selected table
 or raster subdataset.
 
+### Source file state
+
+A layer read whole from a Shapefile or a `.geojson` file keeps its features in the project, so
+edits change the project, not the file. It also keeps a record of what was read: each part of
+the file's size and SHA-256 hash, and a hash of the layer's rows. `source.syncState` compares
+the layer with the rows read, and the file with the parts read, and answers `inSync`, `edited`
+(the layer has edits since it was read), `sourceChanged` (the file changed since it was read)
+or `both`, with the names of the parts that changed. It doesn't compare the layer with the file
+as it is now: the same edit made to both shows as `both`. Only the bytes count: writing the
+same bytes again isn't a change, while a copy that puts back the file's size and time with other
+bytes is one.
+Undoing every edit makes the layer match its record again, so it reads `inSync` if the file
+hasn't changed either. A number that isn't finite (NaN, infinity), which a
+project saves as empty, shows the layer as `edited` once its project is opened again. On the desktop the file and the rows are hashed
+in the background, with progress and Cancel in the status bar.
+
+The record is made just before the file is read, so a file written to while it was being read
+shows as changed, unless the write was undone before RustGIS looked again. A layer read in
+place and a `.json` file have no record. The record is saved with the project; the web app
+can't check it.
+
+On the desktop, make the layer active and choose **Source File State** in Command Search; what it
+found shows in the status bar. CLI and Python: `source.syncState` with `{"layer":"parcels"}`.
+
 ## Keyboard shortcuts
 
 | Keys | Action |
@@ -356,6 +416,7 @@ or raster subdataset.
 | Arrow keys / ++shift++ + arrow keys | Nudge the selected layout element / nudge it further |
 | ++alt+shift+right++ / ++alt+shift+left++ | Indent the active layer into the group above it / outdent it out of its group |
 | ++alt+shift+up++ / ++alt+shift+down++ | Move the active layer up / down one step in the Layers pane |
+| ++f2++ | Rename the active layer |
 | ++ctrl+c++ / ++ctrl+x++ / ++ctrl+v++ | Copy / Cut / Paste features |
 
 On macOS, ++cmd++ takes the place of ++ctrl++. **Help › Shortcuts** lists them all in the app,

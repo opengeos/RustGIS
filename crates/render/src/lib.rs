@@ -20,6 +20,7 @@ pub mod layout;
 mod line_labels;
 mod line_markers;
 pub mod logo;
+mod mapgrid;
 mod mesh;
 mod native_tiles;
 mod pattern_fill;
@@ -537,6 +538,9 @@ pub struct Rendered {
     pub pending_in_place: Vec<u32>,
     /// The frame kept as vectors, when it was recorded ([`render_complete_recorded`]).
     pub(crate) recorded: Option<Canvas>,
+    /// When recorded, each of `labels`' map layer, by id and name (`u32::MAX` and no name for
+    /// a label of no layer's), for [`draw_labels`]; else empty.
+    pub(crate) label_layers: Vec<(u32, String)>,
 }
 
 /// Which rasteriser [`render_backend`] targets: the tiny-skia CPU pixmap (the default, and the
@@ -830,6 +834,21 @@ const MITRE_LIMIT: f32 = 2.0;
 /// The most dashes a dashed stroke is cut into along one path (`Ctx::dash`).
 const MAX_DASHES: f32 = 100_000.0;
 
+/// A dash pattern in pixels for `path` at `ppp` pixels a point, or `None` to draw it solid: a
+/// pattern under a pixel a round, or one that would cut the path into more than [`MAX_DASHES`]
+/// dashes (each is a path of its own), would only cost time. The whole path counts, on screen or
+/// not: the dashing doesn't skip what's off screen.
+pub(crate) fn dash_steps(d: &rustgis_map::symbology::Dash, ppp: f32, path: &tiny_skia::Path) -> Option<Vec<f32>> {
+    let steps: Vec<f32> = d.even_steps().iter().map(|v| v * ppp).collect();
+    let period: f32 = steps.iter().sum();
+    // Each round of the pattern draws one dash per pair of steps.
+    let dashes = path_length(path) / period * (steps.len() / 2) as f32;
+    if !(period >= 1.0 && dashes <= MAX_DASHES) {
+        return None;
+    }
+    Some(steps)
+}
+
 struct Ctx<'a> {
     view: &'a View,
     ppp: f32,
@@ -1116,14 +1135,7 @@ impl Ctx<'_> {
     /// is a path of its own), would only cost time. The whole path counts, on screen or not: the
     /// dashing doesn't skip what's off screen.
     fn dash(&self, d: &rustgis_map::symbology::Dash, path: &tiny_skia::Path) -> Option<Vec<f32>> {
-        let steps: Vec<f32> = d.even_steps().iter().map(|v| v * self.ppp).collect();
-        let period: f32 = steps.iter().sum();
-        // Each round of the pattern draws one dash per pair of steps.
-        let dashes = path_length(path) / period * (steps.len() / 2) as f32;
-        if !(period >= 1.0 && dashes <= MAX_DASHES) {
-            return None;
-        }
-        Some(steps)
+        dash_steps(d, self.ppp, path)
     }
 
     /// `starts`: where along its line each of `path`'s pieces begins ([`Self::ring_path_at`]), so a
@@ -2028,7 +2040,8 @@ impl ArchiveRevision {
         if self.0 != current.0 {
             return Err("a tile archive changed during rendering; export again after the reload finishes".to_string());
         }
-        result.ok_or_else(|| failure.to_string())
+        // A frame cut short by Cancel (see `drape_terrain`) says it was cancelled.
+        result.ok_or_else(|| rustgis_data::progress::check().err().map_or_else(|| failure.to_string(), |e| e.to_string()))
     }
 }
 
@@ -2098,6 +2111,16 @@ fn render_any(map: &mut Map, view: &View, full_res_rasters: bool, backend: Backe
     revisions.current([&*map]).then_some(output).flatten()
 }
 
+/// The scales a frame of `view` from `camera` (normalised) draws layers at: its centre's, and each
+/// tilt band's when it is tilted (not on a globe). A layer drawn at any of them is drawn.
+fn drawn_scales(map: &Map, camera: &Camera, view: &View) -> Vec<f64> {
+    let mut scales = vec![map.ground_res_at(camera) / rustgis_geom::PIXEL_M];
+    if camera.pitch != 0.0 && !map.projection.is_globe() {
+        scales.extend(camera.tilt_bands(view.width, view.height).iter().map(|b| map.ground_res_at(&b.camera) / rustgis_geom::PIXEL_M));
+    }
+    scales
+}
+
 /// One entire pass, including all bands and backend fallbacks, under `render_any`'s guard.
 fn render_pass(map: &mut Map, view: &View, full_res_rasters: bool, backend: Backend, record: bool) -> Option<RenderOutput> {
     // A bearing or pitch set directly on the camera may be unnormalised (or no number, which
@@ -2108,10 +2131,7 @@ fn render_pass(map: &mut Map, view: &View, full_res_rasters: bool, backend: Back
     // A persisted Shapefile has no chunk handle until it opens. Preflight required local
     // sources in every view so an open failure cannot become a successful incomplete export.
     let complete_layers: std::collections::HashSet<u32> = {
-        let mut scales = vec![map.ground_res_at(&camera) / rustgis_geom::PIXEL_M];
-        if camera.pitch != 0.0 && !map.projection.is_globe() {
-            scales.extend(camera.tilt_bands(view.width, view.height).iter().map(|b| map.ground_res_at(&b.camera) / rustgis_geom::PIXEL_M));
-        }
+        let scales = drawn_scales(map, &camera, view);
         map.layers
             .iter()
             .filter(|l| scales.iter().any(|scale| map.draws_at(l, *scale)))
@@ -2533,7 +2553,10 @@ fn render_tilted(map: &mut Map, view: &View, full_res_rasters: bool, sources_rea
     }
     match &ground {
         Some(g) => {
-            drape_terrain(pm.pixels(), view, map, &kept, g);
+            // Cut short by Cancel, the frame isn't handed on: half its ground would be missing.
+            if !drape_terrain(pm.pixels(), view, map, &kept, g) {
+                return None;
+            }
             tiles_pending |= g.pending();
         }
         None => warp.finish(pm.pixels()),
@@ -2559,6 +2582,7 @@ fn render_tilted(map: &mut Map, view: &View, full_res_rasters: bool, sources_rea
         partial,
         pending_in_place,
         recorded: None,
+        label_layers: Vec::new(),
     })
 }
 
@@ -2566,7 +2590,10 @@ fn render_tilted(map: &mut Map, view: &View, full_res_rasters: bool, sources_rea
 /// triangles raised to the ground's height and mapped from its picture, every band keeping to
 /// its own stretch of ground, all drawn far to near so nearer slopes hide what lies behind
 /// them; fog with distance, and the sky behind. (Without terrain, [`Warp`] does it per pixel.)
-fn drape_terrain(pm: &mut Pixmap, view: &View, map: &Map, bands: &[(View, (f64, f64), Pixmap)], ground: &terrain::Ground) {
+/// Reading the grids' heights and ordering the triangles (tens of milliseconds) doesn't look at
+/// Cancel; drawing them, the long part, does. False when an export cancelled meanwhile stopped
+/// it, the picture left half drawn.
+fn drape_terrain(pm: &mut Pixmap, view: &View, map: &Map, bands: &[(View, (f64, f64), Pixmap)], ground: &terrain::Ground) -> bool {
     let (sky, fog) = tilt_sky(map);
     let cam = view.camera;
     let (w, h) = (view.width, view.height);
@@ -2589,14 +2616,18 @@ fn drape_terrain(pm: &mut Pixmap, view: &View, map: &Map, bands: &[(View, (f64, 
         }
         None => pm.fill(c(fog)),
     }
-    // Every band's triangles: (depth, band, screen and picture corners).
-    type Tri = (f64, usize, [(f64, f64); 3], [(f64, f64); 3]);
-    let mut tris: Vec<Tri> = Vec::new();
-    let n = terrain::CELLS;
+    // Every band's triangles: (depth, band, cell * 2 + which half), with each band's grid of
+    // vertices (screen point, picture point, depth). Indices, not corners: the settled mesh is
+    // fine (`terrain::SETTLED_CELLS`), and corners copied into each triangle took 112 bytes a
+    // triangle against 16 (13 MB against 8 with the grids, for a 1600 × 1100 export).
+    type Vertex = ((f64, f64), (f64, f64), f64);
+    let n = terrain::SETTLED_CELLS;
+    let (pw, ph) = (f64::from(pm.width()), f64::from(pm.height()));
+    let mut grids: Vec<Vec<Option<Vertex>>> = Vec::with_capacity(bands.len());
+    let mut tris: Vec<(f64, u32, u32)> = Vec::new();
     for (bi, (v, (d0, d1), pic)) in bands.iter().enumerate() {
         let kb = f64::from(pic.width()) / v.width.max(1e-9);
-        // A band's grid: screen point, picture point and depth of each vertex.
-        let grid: Vec<Option<((f64, f64), (f64, f64), f64)>> = (0..=n)
+        let grid: Vec<Option<Vertex>> = (0..=n)
             .flat_map(|j| (0..=n).map(move |i| (i, j)))
             .map(|(i, j)| {
                 let (lx, ly) = (v.width * i as f64 / n as f64, v.height * j as f64 / n as f64);
@@ -2609,35 +2640,36 @@ fn drape_terrain(pm: &mut Pixmap, view: &View, map: &Map, bands: &[(View, (f64, 
             .collect();
         // Its own stretch of ground, a little over at the seams.
         let margin = ((d1.min(far) - d0) * 0.02).max(0.0);
-        for j in 0..n {
-            for i in 0..n {
-                let at = |i: usize, j: usize| grid.get(j * (n + 1) + i).copied().flatten();
-                let (Some(a), Some(b), Some(c), Some(d)) = (at(i, j), at(i + 1, j), at(i, j + 1), at(i + 1, j + 1)) else { continue };
-                for [p, q, r] in [[a, b, d], [a, d, c]] {
-                    let depth = (p.2 + q.2 + r.2) / 3.0;
-                    if depth < d0 - margin || depth > d1 + margin || p.2.min(q.2).min(r.2) > far {
-                        continue;
-                    }
-                    // Wholly off one side of the picture: nothing to draw.
-                    let (pw, ph) = (f64::from(pm.width()), f64::from(pm.height()));
-                    let xs = [p.0.0, q.0.0, r.0.0];
-                    let ys = [p.0.1, q.0.1, r.0.1];
-                    if xs.iter().all(|x| *x < 0.0)
-                        || xs.iter().all(|x| *x > pw)
-                        || ys.iter().all(|y| *y < 0.0)
-                        || ys.iter().all(|y| *y > ph)
-                    {
-                        continue;
-                    }
-                    tris.push((depth, bi, [p.0, q.0, r.0], [p.1, q.1, r.1]));
+        for (cell, (i, j)) in (0..n).flat_map(|j| (0..n).map(move |i| (i, j))).enumerate() {
+            let Some(halves) = triangles(&grid, n, i, j) else { continue };
+            for (half, [p, q, r]) in halves.into_iter().enumerate() {
+                let depth = (p.2 + q.2 + r.2) / 3.0;
+                if depth < d0 - margin || depth > d1 + margin || p.2.min(q.2).min(r.2) > far {
+                    continue;
                 }
+                // Wholly off one side of the picture: nothing to draw.
+                let xs = [p.0.0, q.0.0, r.0.0];
+                let ys = [p.0.1, q.0.1, r.0.1];
+                if xs.iter().all(|x| *x < 0.0) || xs.iter().all(|x| *x > pw) || ys.iter().all(|y| *y < 0.0) || ys.iter().all(|y| *y > ph) {
+                    continue;
+                }
+                tris.push((depth, bi as u32, (cell * 2 + half) as u32));
             }
         }
+        grids.push(grid);
     }
     tris.sort_by(|a, b| b.0.total_cmp(&a.0));
     let fog_paint = |t: f64| paint(fog, t as f32);
-    for (depth, bi, dst, src) in tris {
-        let Some((_, _, pic)) = bands.get(bi) else { continue };
+    for (drawn, (depth, bi, at)) in tris.into_iter().enumerate() {
+        // An export cancelled meanwhile (see `rustgis_data::progress`) stops here: it writes
+        // nothing. The settled frame on screen has no run to cancel.
+        if drawn % 4096 == 0 && rustgis_data::progress::check().is_err() {
+            return false;
+        }
+        let (Some((_, _, pic)), Some(grid)) = (bands.get(bi as usize), grids.get(bi as usize)) else { continue };
+        let cell = at as usize / 2;
+        let Some([p, q, r]) = triangles(grid, n, cell % n, cell / n).and_then(|t| t.get(at as usize % 2).copied()) else { continue };
+        let (dst, src) = ([p.0, q.0, r.0], [p.1, q.1, r.1]);
         let Some(t) = affine(src, dst) else { continue };
         // A hair larger all round, so neighbours leave no seam.
         let (cx, cy) = ((dst[0].0 + dst[1].0 + dst[2].0) / 3.0, (dst[0].1 + dst[1].1 + dst[2].1) / 3.0);
@@ -2659,6 +2691,15 @@ fn drape_terrain(pm: &mut Pixmap, view: &View, map: &Map, bands: &[(View, (f64, 
             pm.fill_path(&path, &fog_paint(f), FillRule::Winding, Transform::identity(), None);
         }
     }
+    true
+}
+
+/// The two triangles of the cell (`i`, `j`) of a band's grid of `n` cells a side, [a, b, d] and
+/// [a, d, c] of its corners a b / c d; none when a corner couldn't be placed.
+fn triangles<V: Copy>(grid: &[Option<V>], n: usize, i: usize, j: usize) -> Option<[[V; 3]; 2]> {
+    let at = |i: usize, j: usize| grid.get(j * (n + 1) + i).copied().flatten();
+    let (a, b, c, d) = (at(i, j)?, at(i + 1, j)?, at(i, j + 1)?, at(i + 1, j + 1)?);
+    Some([[a, b, d], [a, d, c]])
 }
 
 /// The affine map taking the triangle `src` onto `dst` (physical pixels); `None` for a
@@ -3660,6 +3701,9 @@ fn render_frame(
     record: bool,
 ) -> Option<RenderOutput> {
     let (w, h) = view.pixel_size();
+    // Who draws a layer's cast shadows: this map and the layer, by their live identities (a
+    // layer's id repeats from map to map: a locator's and its main map's, say).
+    let map_instance = map.instance_id();
     // Kept as vectors (`record`) on the CPU, for a flat frame without view effects or a
     // colour-vision simulation it applies (pixel filters over the whole frame; an export,
     // `full_res_rasters`, never simulates colour vision); anything else draws its pixels.
@@ -3802,6 +3846,8 @@ fn render_frame(
     }
     if map.graticule && grat.a() > 0 {
         let p = paint(grat, 1.0);
+        // A measured or UTM graticule's lines (#1042), else latitudes and longitudes.
+        let grid = mapgrid::lines(map, view);
         let step = if view.camera.res > 8000.0 {
             30.0
         } else if view.camera.res > 2000.0 {
@@ -3812,17 +3858,20 @@ fn render_frame(
             1.0
         };
         let (lat_max, lat_min) = if globe.is_some() { (90.0, -90.0) } else { (85.0, -85.0) };
-        let mut lines = Vec::new();
-        let mut lon = -180.0;
-        while lon <= 180.0 {
-            lines.push((0..=36).map(|i| Coord::new(lon, lat_min + (lat_max - lat_min) * i as f64 / 36.0)).collect::<Vec<_>>());
-            lon += step;
-        }
-        let mut lat = -90.0 + step;
-        while lat < 90.0 {
-            lines.push((0..=72).map(|i| Coord::new(-180.0 + i as f64 * 5.0, lat)).collect::<Vec<_>>());
-            lat += step;
-        }
+        let lines = grid.unwrap_or_else(|| {
+            let mut lines = Vec::new();
+            let mut lon = -180.0;
+            while lon <= 180.0 {
+                lines.push((0..=36).map(|i| Coord::new(lon, lat_min + (lat_max - lat_min) * i as f64 / 36.0)).collect::<Vec<_>>());
+                lon += step;
+            }
+            let mut lat = -90.0 + step;
+            while lat < 90.0 {
+                lines.push((0..=72).map(|i| Coord::new(-180.0 + i as f64 * 5.0, lat)).collect::<Vec<_>>());
+                lat += step;
+            }
+            lines
+        });
         let lines = if globe.is_some() {
             lines
         } else if custom {
@@ -3953,6 +4002,8 @@ fn render_frame(
     // The layer drawn last, whose tile layers go over it before the next.
     let mut below: Option<u32> = None;
     for li in order {
+        // Each layer drawn is a layer of the recording (#1815); what comes between them isn't.
+        pm.layer(None);
         // A frame no longer wanted stops between layers (see `cancel`).
         if cancel::requested() {
             break;
@@ -3965,6 +4016,7 @@ fn render_frame(
         if !layer.visible || !layer.in_scale_range(scale) || held.contains(&layer.id) {
             continue;
         }
+        pm.layer_with_id(&layer_name(layer), u64::from(layer.id));
         let opacity = layer.opacity() * group_opacity.get(&layer.id).copied().unwrap_or(1.0);
         let mask = masks.iter().find(|(id, _)| *id == layer.id).map(|(_, m)| m);
         let (blend, layer_blend) = (blend_mode(layer.blend), layer.blend);
@@ -3999,12 +4051,42 @@ fn render_frame(
                 };
                 let stats = rl.masked_stats();
                 let stats = stats.as_ref().map(|s| s.as_slice());
+                // Its cast shadows, never waited for here (an export waits before it draws, see
+                // `complete`): drawn without them meanwhile, and again once they land. A map's frame
+                // says so as tiles to come; a page's, as shadows to come.
+                let light = match rl.cast_shadows(false, (map_instance, layer.instance_id()), shadows_landed) {
+                    rustgis_map::raster::CastShadows::Ready(grid) => Some(grid),
+                    rustgis_map::raster::CastShadows::Pending => {
+                        if full_res_rasters {
+                            SHADOWS_TO_COME.with(|c| c.set(true));
+                        } else {
+                            tile_out.pending = true;
+                        }
+                        None
+                    }
+                    rustgis_map::raster::CastShadows::Unavailable(why) => {
+                        let e = format!("{}: {why}", layer.name);
+                        // A page's frames say it on the page too (see `layout::shadow_notices`).
+                        SHADOW_NOTICES.with(|n| {
+                            let mut n = n.borrow_mut();
+                            if !n.contains(&e) {
+                                n.push(e.clone());
+                            }
+                        });
+                        if !tile_out.errors.contains(&e) {
+                            tile_out.errors.push(e);
+                        }
+                        None
+                    }
+                    rustgis_map::raster::CastShadows::None => None,
+                };
+                let light = light.as_deref().map(Vec::as_slice);
                 // Read in place: the part in view, at the level the view needs.
                 let address = rl.path.as_deref().filter(|_| rl.in_place);
                 let mut draw_it = |pm: &mut Pixmap, opacity: f32| match address {
                     // Drawn from less than the view needs (a coarser level, tiles that couldn't be
                     // read): shown, and said with the tile errors.
-                    Some(a) => match raster::draw_in_place(pm, a, data, &rl.style, stats, view, opacity, full_res_rasters, place) {
+                    Some(a) => match raster::draw_in_place(pm, a, data, &rl.style, stats, view, opacity, full_res_rasters, place, light) {
                         Ok(pending) => {
                             tile_out.pending |= pending;
                             if pending && !tile_out.pending_in_place.contains(&layer.id) {
@@ -4021,7 +4103,7 @@ fn render_frame(
                             }
                         }
                     },
-                    None => raster::draw(pm, data, &rl.style, stats, view, opacity, full_res_rasters, place),
+                    None => raster::draw(pm, data, &rl.style, stats, view, opacity, full_res_rasters, place, light),
                 };
                 if offscreen {
                     let mut target = Pixmap::new(w, h)?;
@@ -5029,6 +5111,7 @@ fn render_frame(
             cpu_dirty = true;
         }
     }
+    pm.layer(None);
     // A frame stopped part-way (see `cancel`) is no frame: its tiles, labels and effects aren't
     // worth working out.
     if cancel::requested() {
@@ -5096,6 +5179,16 @@ fn render_frame(
         None => (view.width, view.height),
     };
     let placed = place_labels_with_previews(label_candidates, fixed_labels, lw as f32, lh as f32, lock.is_some(), display.show_unplaced);
+    // Each placed label's map layer, for a recording to keep each layer's labels together: the
+    // fixed labels (graphics text) come first, then one for each key.
+    let label_layers: Vec<(u32, String)> = if pm.is_recording() {
+        let fixed = placed.labels.len().saturating_sub(placed.keys.len());
+        let names: std::collections::HashMap<u32, String> = map.layers.iter().map(|l| (l.id, layer_name(l))).collect();
+        let name = |id: u32| names.get(&id).cloned().unwrap_or_default();
+        std::iter::repeat_n((u32::MAX, String::new()), fixed).chain(placed.keys.iter().map(|((id, ..), _)| (*id, name(*id)))).collect()
+    } else {
+        Vec::new()
+    };
     // (The lock is never taken from a tilted view: its labels' places out of sight are dropped,
     // so the numbers of the places they take aren't those of their class's.)
     if display.locked && map.label_lock.is_none() && !matches!(labels_to, Labels::Tilted(..)) {
@@ -5144,6 +5237,7 @@ fn render_frame(
                 partial,
                 pending_in_place,
                 recorded,
+                label_layers,
             }))
         }
         Backend::Gpu | Backend::GpuLive => {
@@ -6284,6 +6378,96 @@ impl LabelGrid {
     }
 }
 
+thread_local! {
+    /// Set on the interface's thread ([`on_the_interface_thread`]), and while the Layout view's
+    /// page is drawn: frames don't wait for cast shadows (see [`without_shadow_wait`]).
+    static NO_SHADOW_WAIT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// A frame drawn at full resolution had cast shadows still to come (see [`shadows_said`]).
+    static SHADOWS_TO_COME: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Why layers drawn on this thread were drawn without their cast shadows, each said once (see
+    /// [`shadows_said`]).
+    static SHADOW_NOTICES: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// What the frames drawn in [`shadows_said`] said of their cast shadows.
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct ShadowsSaid {
+    /// Why layers were drawn without them, each once, named by the layer ("Relief: its cast
+    /// shadows aren't drawn: …").
+    pub notices: Vec<String>,
+    /// Some were drawn without them still being worked out (on the interface's thread, which
+    /// doesn't wait): drawn again once they land, they show them.
+    pub to_come: bool,
+}
+
+/// Runs `f`, which draws maps or pages on this thread, and gives what its frames said of their
+/// cast shadows: the one way to read it, so whatever draws for someone says it (Never silent).
+/// What frames drawn before on this thread left (the map view's, say) is not `f`'s.
+pub fn shadows_said<T>(f: impl FnOnce() -> T) -> (T, ShadowsSaid) {
+    take_said();
+    let out = f();
+    (out, take_said())
+}
+
+/// What frames drawn on this thread since the last call said of their cast shadows.
+fn take_said() -> ShadowsSaid {
+    ShadowsSaid { notices: take_shadow_notices(), to_come: SHADOWS_TO_COME.with(|c| c.replace(false)) }
+}
+
+fn take_shadow_notices() -> Vec<String> {
+    SHADOW_NOTICES.with(|n| std::mem::take(&mut *n.borrow_mut()))
+}
+
+/// Marks this thread as the interface's: frames drawn on it (an image, a print, a page drawn while
+/// the window waits) never wait for cast shadows still being worked out (Never hold the window).
+/// They are drawn without them, which [`shadows_said`] says; exports drawn off it wait for them.
+pub fn on_the_interface_thread() {
+    NO_SHADOW_WAIT.with(|c| c.set(true));
+}
+
+/// Called when a layer's cast shadows land: the map, or the page, is drawn again.
+fn shadows_landed() {
+    rustgis_tiles::cache::notify_at(web_time::Instant::now());
+}
+
+/// Runs `f` (the Layout view's page) with its frames drawn without the cast shadows still being
+/// worked out, rather than waiting for them: they say so ([`shadows_said`]), and the page is
+/// drawn again as they land.
+pub(crate) fn without_shadow_wait<T>(f: impl FnOnce() -> T) -> T {
+    let before = NO_SHADOW_WAIT.with(|c| c.replace(true));
+    let out = f();
+    NO_SHADOW_WAIT.with(|c| c.set(before));
+    out
+}
+
+/// Runs `f`, which draws one frame, and whether that frame had cast shadows still to come; what
+/// frames before it said is kept for [`shadows_said`].
+pub(crate) fn frame_with_shadows_to_come<T>(f: impl FnOnce() -> T) -> (T, bool) {
+    let before = SHADOWS_TO_COME.with(|c| c.replace(false));
+    let out = f();
+    let to_come = SHADOWS_TO_COME.with(|c| c.replace(before));
+    if to_come {
+        SHADOWS_TO_COME.with(|c| c.set(true));
+    }
+    (out, to_come)
+}
+
+/// Waits for the cast shadows of the map's Shaded Relief layers drawn in `view` (visible, in
+/// their and their groups' scale range at the view's centre or, tilted, at one of its bands, as
+/// `render_pass` draws them), as an export does (it runs off the interface's thread); the wait
+/// gives up when the run is cancelled.
+fn wait_for_cast_shadows(map: &Map, view: &View) {
+    let mut camera = view.camera;
+    camera.bearing = rustgis_map::camera::normalize_bearing(camera.bearing);
+    camera.pitch = rustgis_map::camera::normalize_pitch(camera.pitch);
+    let scales = drawn_scales(map, &camera, view);
+    for layer in map.layers.iter().filter(|l| scales.iter().any(|s| map.draws_at(l, *s))) {
+        if let Some(rl) = &layer.raster {
+            rl.cast_shadows(true, (map.instance_id(), layer.instance_id()), shadows_landed);
+        }
+    }
+}
+
 /// Render passes [`render_complete`] makes at most with nothing come since the last (the wait ran
 /// out, or nothing was under way): passes that draw what came are bound by its minute alone.
 const IDLE_PASSES: usize = 6;
@@ -6304,6 +6488,29 @@ pub(crate) fn render_complete_recorded(map: &mut Map, view: &View) -> Option<Ren
 
 /// [`render_complete`]'s passes, each recorded when `record`.
 fn complete(map: &mut Map, view: &View, record: bool) -> Option<Rendered> {
+    // Cast shadows still being worked out are waited for first, unless this draws on the
+    // interface's thread (see `on_the_interface_thread`).
+    if !NO_SHADOW_WAIT.with(std::cell::Cell::get) {
+        wait_for_cast_shadows(map, view);
+    }
+    // What it says of cast shadows (still to come, layers drawn without them) is the last pass's
+    // to say: an earlier one's may have been drawn again with them. What frames before it said
+    // is kept (see `shadows_said`).
+    let before = (SHADOWS_TO_COME.with(|c| c.replace(false)), take_shadow_notices());
+    let r = complete_passes(map, view, record);
+    SHADOWS_TO_COME.with(|c| c.set(before.0 || c.get()));
+    let mut notices = before.1;
+    for e in take_shadow_notices() {
+        if !notices.contains(&e) {
+            notices.push(e);
+        }
+    }
+    SHADOW_NOTICES.with(|n| *n.borrow_mut() = notices);
+    r
+}
+
+/// [`complete`]'s passes, each saying afresh what it drew of cast shadows.
+fn complete_passes(map: &mut Map, view: &View, record: bool) -> Option<Rendered> {
     // What had come when it drew: what lands meanwhile is news to the wait.
     let mut drawn_at = rustgis_tiles::cache::generation();
     let mut r = render_cpu(map, view, true, record)?;
@@ -6325,6 +6532,8 @@ fn complete(map: &mut Map, view: &View, record: bool) -> Option<Rendered> {
             idle += 1;
         }
         drawn_at = now;
+        SHADOWS_TO_COME.with(|c| c.set(false));
+        take_shadow_notices();
         r = render_cpu(map, view, true, record)?;
     }
     Some(r)
@@ -6350,12 +6559,46 @@ fn render_drawing_inner(map: &mut Map, view: &View) -> Option<vector::Drawing> {
             c
         }
     };
-    for l in r.unplaced.iter().chain(&r.labels) {
-        text::draw(&mut pm, l, view.pixels_per_point as f32);
-    }
+    draw_labels(&mut pm, (&r.unplaced, &r.labels, &r.label_layers), view.pixels_per_point as f32);
     text::scale_bar(&mut pm, view, map.ground_res_at(&view.camera));
-    draw_attribution(&mut pm, &r.attribution, view.pixels_per_point as f32);
+    draw_attribution(&mut pm, &r.attribution, view.pixels_per_point as f32, (0.0, 0.0));
     pm.into_drawing()
+}
+
+/// A map layer's name as a recording's layer is named (#1815): a layer with none is named after
+/// its id, as a layout element with none is after its kind.
+fn layer_name(layer: &rustgis_map::Layer) -> String {
+    if layer.name.trim().is_empty() { format!("Layer {}", layer.id) } else { layer.name.clone() }
+}
+
+/// Draws a frame's unplaced and placed labels. A recording keeps each map layer's placed labels
+/// as a layer of their own, "Labels: <layer>" (#1815): drawn in the placement's order, as the
+/// pixels draw them (labels can overlap: pinned ones, a class that shows all), each run of one
+/// layer's labels is marked as that layer, so one layer can be several runs.
+pub(crate) fn draw_labels(pm: &mut Canvas, (unplaced, labels, layers): (&[PlacedLabel], &[PlacedLabel], &[(u32, String)]), ppp: f32) {
+    for l in unplaced {
+        text::draw(pm, l, ppp);
+    }
+    // Recorded, there is a layer for each label (see `render_frame`); without, no layers.
+    if !pm.is_recording() || layers.len() != labels.len() {
+        for l in labels {
+            text::draw(pm, l, ppp);
+        }
+        return;
+    }
+    let mut shown = None;
+    for (l, (id, name)) in labels.iter().zip(layers) {
+        if shown != Some(*id) {
+            if *id == u32::MAX {
+                pm.layer(None);
+            } else {
+                pm.layer_with_id(&format!("Labels: {name}"), u64::from(*id));
+            }
+            shown = Some(*id);
+        }
+        text::draw(pm, l, ppp);
+    }
+    pm.layer(None);
 }
 
 /// Renders a map with its labels, a scale bar and a north arrow to PNG bytes.
@@ -6368,7 +6611,7 @@ pub fn render_png(map: &mut Map, view: &View) -> Result<Vec<u8>, String> {
         text::draw(&mut pm, l, view.pixels_per_point as f32);
     }
     text::scale_bar(&mut pm, view, map.ground_res_at(&view.camera));
-    draw_attribution(&mut pm, &r.attribution, view.pixels_per_point as f32);
+    draw_attribution(&mut pm, &r.attribution, view.pixels_per_point as f32, (0.0, 0.0));
     let png = pm.into_pixmap().encode_png().map_err(|e| e.to_string())?;
     revisions.finish([&*map], Some(png), "could not encode the image")
 }
@@ -6391,8 +6634,21 @@ pub struct Placed {
 /// [`render_png`] refuses.
 pub fn render_placed(map: &mut Map, view: &View) -> Result<Placed, String> {
     let revisions = archive_revisions([&*map]);
-    let r = render_exported(map, view)?;
-    let mut gaps = Vec::new();
+    // Layers drawn without their cast shadows are said as gaps, not as tile layers that failed;
+    // what frames before it said is kept for `shadows_said`.
+    let (before, before_come) = (take_shadow_notices(), SHADOWS_TO_COME.with(|c| c.replace(false)));
+    let r = render_exported(map, view);
+    let (shadows, to_come) = (take_shadow_notices(), SHADOWS_TO_COME.with(|c| c.replace(before_come)));
+    SHADOW_NOTICES.with(|n| *n.borrow_mut() = before);
+    let r = r?;
+    let tile_errors: Vec<&String> = r.tile_errors.iter().filter(|e| !shadows.contains(e)).collect();
+    let mut gaps = shadows;
+    if to_come {
+        gaps.push(
+            "made without the cast shadows still being worked out, as the window doesn't wait for them: once the map shows them, draw or export it again"
+                .to_string(),
+        );
+    }
     if r.tiles_pending {
         gaps.push("some tiles were still on their way when the export stopped waiting, so parts of tile layers are empty: export again once the map has drawn them".to_string());
     }
@@ -6402,8 +6658,8 @@ pub fn render_placed(map: &mut Map, view: &View) -> Result<Placed, String> {
                 .to_string(),
         );
     }
-    if let Some(first) = r.tile_errors.first() {
-        let n = r.tile_errors.len();
+    if let Some(first) = tile_errors.first() {
+        let n = tile_errors.len();
         gaps.push(if n == 1 {
             format!("a tile layer couldn't be drawn, so its part is empty: {first}")
         } else {
@@ -6441,19 +6697,37 @@ fn render_exported(map: &mut Map, view: &View) -> Result<Rendered, String> {
     Ok(r)
 }
 
-/// The tile layers' credits, small, in the bottom-right corner.
-pub(crate) fn draw_attribution(pm: &mut Canvas, attribution: &[String], ppp: f32) {
+/// The size of the tile layers' credits, in points.
+pub(crate) const ATTRIBUTION_SIZE: f32 = 9.0;
+
+/// The tile layers' credits as [`draw_attribution`] writes them, and their whole width in points;
+/// none when there are none.
+pub(crate) fn attribution_text(attribution: &[String]) -> Option<(String, f32)> {
     if attribution.is_empty() {
-        return;
+        return None;
     }
     let text = attribution.join(" | ");
-    let size = 9.0;
+    let tw = text::measure(&text, ATTRIBUTION_SIZE, false);
+    Some((text, tw))
+}
+
+/// Where [`draw_attribution`] centres a credit `tw` points wide across a canvas `w` points wide,
+/// `right` points further in from its right edge: one wider than the canvas is centred as if it
+/// were the canvas's width, so it runs past both edges.
+pub(crate) fn attribution_center(w: f32, tw: f32, right: f32) -> f32 {
+    w - right - tw.min(w) / 2.0 - 4.0
+}
+
+/// The tile layers' credits, small, in the bottom-right corner: `inset` points further in (up
+/// from the bottom, in from the right), to keep clear of what sits along those edges.
+pub(crate) fn draw_attribution(pm: &mut Canvas, attribution: &[String], ppp: f32, (bottom, right): (f32, f32)) {
     let (w, h) = (pm.width() as f32 / ppp, pm.height() as f32 / ppp);
-    let tw = text::measure(&text, size, false).min(w);
+    let Some((text, tw)) = attribution_text(attribution) else { return };
+    let size = ATTRIBUTION_SIZE;
     let label = PlacedLabel {
         text,
-        x: w - tw / 2.0 - 4.0,
-        y: h - size * 0.9,
+        x: attribution_center(w, tw, right),
+        y: h - bottom - size * 0.9,
         size,
         color: Rgba::rgb(0x33, 0x33, 0x33),
         halo: Some(Rgba::rgb(0xFF, 0xFF, 0xFF)),
@@ -6499,6 +6773,50 @@ mod tests {
             glyphs: Vec::new(),
             background: None,
         }
+    }
+
+    /// Labels of two map layers that overlap (a class that shows all, a pinned label) are
+    /// recorded in the placement's order, as the pixels draw them, so the one on top stays on
+    /// top: each run of one layer's labels is marked as that layer, and its runs are one PDF
+    /// layer (#1815).
+    #[test]
+    fn overlapping_labels_of_two_layers_keep_their_order() {
+        use crate::vector::Item;
+        let labels = [label("Aa", 10.0, None, 0.0), label("Bb", 12.0, None, 0.0), label("Cc", 14.0, None, 0.0)];
+        let layers = [(1, "Rios".to_string()), (2, "Cidades".to_string()), (1, "Rios".to_string())];
+        let record = || {
+            let mut pm = Canvas::recording(120, 40).unwrap();
+            draw_labels(&mut pm, (&[], &labels, &layers), 1.0);
+            pm.into_drawing().unwrap()
+        };
+        let (_, _, items) = record().finish();
+        fn text(items: &[Item]) -> String {
+            items
+                .iter()
+                .map(|i| match i {
+                    Item::Glyphs(r) => r.glyphs.iter().map(|g| g.ch).collect(),
+                    Item::Group(g) => text(&g.items),
+                    _ => String::new(),
+                })
+                .collect()
+        }
+        let runs: Vec<(String, String)> =
+            items.iter().filter_map(|i| if let Item::Group(g) = i { Some((g.layer.clone()?, text(&g.items))) } else { None }).collect();
+        let want = [("Labels: Rios", "Aa"), ("Labels: Cidades", "Bb"), ("Labels: Rios", "Cc")];
+        assert_eq!(runs, want.map(|(a, b)| (a.to_string(), b.to_string())));
+        // One PDF layer for Rios's two runs, marked around each in turn.
+        let pdf = crate::pdf::write(&[crate::pdf::Page::drawing(record(), 40.0, 15.0)], "Labels");
+        let objs = crate::pdf::tests::objects(&pdf);
+        let id = |name: &str| {
+            let ids: Vec<usize> =
+                objs.iter().enumerate().filter(|o| o.1.0 == format!("<< /Type /OCG /Name ({name}) >>")).map(|o| o.0 + 1).collect();
+            assert_eq!(ids.len(), 1, "{name}");
+            ids[0]
+        };
+        let (rios, cidades) = (id("Labels: Rios"), id("Labels: Cidades"));
+        let content = objs.iter().map(|o| String::from_utf8_lossy(&o.1).into_owned()).find(|c| c.contains(" BDC")).unwrap();
+        let marks: Vec<&str> = content.lines().filter(|l| l.ends_with(" BDC")).collect();
+        assert_eq!(marks, [format!("/OC /OC{rios} BDC"), format!("/OC /OC{cidades} BDC"), format!("/OC /OC{rios} BDC")]);
     }
 
     /// While a label is dragged, its callout's line is worked out where it is: from its feature,
@@ -8437,6 +8755,102 @@ mod tests {
         m
     }
 
+    /// An export waits for a layer's cast shadows, worked out off the frame, and draws them.
+    #[test]
+    fn an_export_waits_for_cast_shadows() {
+        let mut m = hill_map();
+        let id = m.layers.iter().find(|l| l.raster.is_some()).map(|l| l.id).unwrap();
+        let lit = |m: &mut Map, shadow: f64| {
+            let l = m.layer_mut(id).unwrap();
+            l.visible = true;
+            l.raster.as_mut().unwrap().style.renderer =
+                rustgis_map::RasterRenderer::ShadedRelief { band: 0, ramp: None, azimuth: 315.0, altitude: 5.0, z_factor: 1.0, shadow };
+        };
+        let camera = Camera { center: lonlat_to_merc(Coord::new(0.0, 0.0)), res: 1200.0, bearing: 0.0, pitch: 0.0 };
+        let view = View { width: 200.0, height: 200.0, pixels_per_point: 1.0, camera, sky: false };
+        lit(&mut m, 0.0);
+        let plain = render_complete(&mut m, &view).unwrap();
+        lit(&mut m, 1.0);
+        let shaded = render_complete(&mut m, &view).unwrap();
+        assert!(!shaded.tiles_pending);
+        assert_ne!(plain.pixmap.data(), shaded.pixmap.data(), "drawn with its shadows");
+    }
+
+    /// A tilted export waits for the cast shadows of a layer drawn only in one of its far bands,
+    /// outside its scale range at the view's centre.
+    #[test]
+    fn a_tilted_export_waits_for_the_cast_shadows_its_bands_draw() {
+        let mut m = hill_map();
+        let id = m.layers.iter().find(|l| l.raster.is_some()).map(|l| l.id).unwrap();
+        let camera = Camera { center: lonlat_to_merc(Coord::new(0.0, 0.0)), res: 1200.0, bearing: 0.0, pitch: 60.0 };
+        let view = View { width: 200.0, height: 200.0, pixels_per_point: 1.0, camera, sky: false };
+        let scales = drawn_scales(&m, &camera, &view);
+        let (centre, farthest) = (scales[0], scales.iter().copied().fold(0.0, f64::max));
+        assert!(farthest > centre * 1.01, "a far band is drawn at a smaller scale: {scales:?}");
+        let l = m.layer_mut(id).unwrap();
+        l.visible = true;
+        l.raster.as_mut().unwrap().style.renderer =
+            rustgis_map::RasterRenderer::ShadedRelief { band: 0, ramp: None, azimuth: 210.0, altitude: 5.0, z_factor: 1.0, shadow: 1.0 };
+        // Drawn only zoomed out past a scale between the centre's and the far band's.
+        l.max_scale = Some((centre + farthest) / 2.0);
+        // Its work held before it traces: an export that waits for it can't end until it is let
+        // go, and says it waits (a copy of the layer shares its grids); one that doesn't ends.
+        let probe = m.layer(id).and_then(|l| l.raster.clone()).unwrap();
+        let hold = rustgis_map::raster::hold_cast_shadows();
+        let export = std::thread::spawn(move || {
+            render_complete(&mut m, &view).unwrap();
+            m
+        });
+        let start = std::time::Instant::now();
+        while probe.cast_shadow_waiters() == 0 && !export.is_finished() {
+            assert!(start.elapsed() < std::time::Duration::from_secs(30), "the export neither waited for the grid nor ended");
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        let waited = probe.cast_shadow_waiters() > 0;
+        drop(hold);
+        let m = export.join().unwrap();
+        assert!(waited, "the export waited for the far band's cast shadows");
+        let rl = m.layer(id).and_then(|l| l.raster.as_ref()).unwrap();
+        assert!(matches!(rl.cast_shadows(false, (0, 0), || {}), rustgis_map::raster::CastShadows::Ready(_)), "and drew them");
+    }
+
+    /// An export doesn't wait for, nor start, the cast shadows of a layer it doesn't draw: one
+    /// outside its scale range, or held by a group.
+    #[test]
+    fn an_export_waits_only_for_the_cast_shadows_it_draws() {
+        let camera = Camera { center: lonlat_to_merc(Coord::new(0.0, 0.0)), res: 1200.0, bearing: 0.0, pitch: 0.0 };
+        let view = View { width: 200.0, height: 200.0, pixels_per_point: 1.0, camera, sky: false };
+        for grouped in [false, true] {
+            let mut m = hill_map();
+            let id = m.layers.iter().find(|l| l.raster.is_some()).map(|l| l.id).unwrap();
+            let l = m.layer_mut(id).unwrap();
+            l.visible = true;
+            l.raster.as_mut().unwrap().style.renderer = rustgis_map::RasterRenderer::ShadedRelief {
+                band: 0,
+                ramp: None,
+                azimuth: 200.0,
+                altitude: 5.0,
+                z_factor: 1.0,
+                shadow: 1.0,
+            };
+            // Drawn only zoomed in past 1:1: or in a group drawn only there.
+            if grouped {
+                let mut g = rustgis_map::LayerGroup::new("Relief");
+                g.children = vec![id];
+                g.min_scale = Some(1.0);
+                m.add_group(g);
+            } else {
+                l.min_scale = Some(1.0);
+            }
+            render_complete(&mut m, &view).unwrap();
+            let rl = m.layer(id).and_then(|l| l.raster.as_ref()).unwrap();
+            assert!(
+                matches!(rl.cast_shadows(false, (0, 0), || {}), rustgis_map::raster::CastShadows::Pending),
+                "grouped {grouped}: nothing was worked out for it"
+            );
+        }
+    }
+
     #[test]
     fn a_raster_at_the_closest_zoom_is_drawn_where_it_is() {
         // At the deepest zoom (#902) the raster's far corners lie billions of pixels from the
@@ -8510,6 +8924,95 @@ mod tests {
             Some(rustgis_map::view::Terrain { source: rustgis_map::view::TerrainSource::Layer("none".into()), exaggeration: 1.0 });
         assert!(terrain::Ground::of(&hilly, &camera).is_none());
         assert!(render(&mut hilly, &view).is_some());
+    }
+
+    #[test]
+    fn a_narrow_ridge_stands_in_a_settled_tilted_frame() {
+        // #1523: an east-west ridge narrower than a row of the moving drape's mesh, lying between
+        // two of its rows, stands up in the settled frame. On that mesh the frame is the same as
+        // over flat ground: none of its corners is on the ridge.
+        use rustgis_data::raster::{ColorHint, Crs, GeoTransform, Raster};
+        let camera = Camera { center: Coord::new(0.0, 0.0), res: 600.0, bearing: 0.0, pitch: 60.0 };
+        let view = View { width: 400.0, height: 300.0, pixels_per_point: 1.0, camera, sky: false };
+        // The band holding the view's centre, and the moving mesh's rows there (a band north up
+        // has rows of one northing).
+        let bands = camera.tilt_bands(view.width, view.height);
+        let b = bands.iter().find(|b| b.depth.0 < 1.0 && b.depth.1 > 1.0).expect("the centre's band");
+        let row = |j: f64| b.camera.to_map(b.width / 2.0, b.height * j / terrain::CELLS as f64, b.width, b.height).y;
+        let j = (0..terrain::CELLS).min_by(|&p, &q| row(p as f64 + 0.5).abs().total_cmp(&row(q as f64 + 0.5).abs())).unwrap_or(0) as f64;
+        let (mid, spacing) = (row(j + 0.5), (row(j) - row(j + 1.0)).abs());
+        assert!(terrain::SETTLED_CELLS >= 4 * terrain::CELLS && spacing > 1000.0, "{spacing}");
+        let half = 0.3125 * spacing;
+        // DEMs in Web Mercator round it, their cells a sixteenth of the rows apart: one with the
+        // ridge (shown), one flat.
+        let cell = spacing / 16.0;
+        let (cols, rows) = (400usize, 400usize);
+        let (x0, y0) = (-(cols as f64) * cell / 2.0, mid + rows as f64 * cell / 2.0);
+        let gt = GeoTransform { origin_x: x0, origin_y: y0, pixel_width: cell, pixel_height: -cell };
+        let dem = |name: &str, ridge: f32| {
+            let heights: Vec<f32> =
+                (0..cols * rows).map(|k| if ((y0 - ((k / cols) as f64 + 0.5) * cell) - mid).abs() <= half { ridge } else { 0.0 }).collect();
+            Raster::new(name, cols as u32, rows as u32, vec![heights], gt, Crs::WebMercator, None, ColorHint::Gray, "Float32").unwrap()
+        };
+        let mut m = Map::new("Map");
+        m.basemap = rustgis_map::Basemap::Blank;
+        m.add_raster("dem", rustgis_map::RasterLayer::from_path(dem("dem", 9000.0), "dem.tif"));
+        let flat = m.add_raster("flat", rustgis_map::RasterLayer::from_path(dem("flat", 0.0), "flat.tif"));
+        if let Some(l) = m.layer_mut(flat) {
+            l.visible = false;
+        }
+        let terrain = |name: &str| {
+            Some(rustgis_map::view::Terrain { source: rustgis_map::view::TerrainSource::Layer(name.into()), exaggeration: 2.0 })
+        };
+        // Where its far edge lies flat, and raised to its height.
+        m.view.terrain = terrain("dem");
+        let g = terrain::Ground::of(&m, &camera).expect("terrain");
+        let top = Coord::new(0.0, mid + half * 0.9);
+        let (u, v) = camera.ground_px(top);
+        let flat_y = camera.project_raised(u, v, 0.0, view.width, view.height).expect("in view").1;
+        let raised_y = camera.project_raised(u, v, g.up_px(top, &camera), view.width, view.height).expect("in view").1;
+        assert!(flat_y - raised_y > 20.0, "{flat_y} vs {raised_y}");
+        let ridge = render(&mut m, &view).expect("a frame");
+        m.view.terrain = terrain("flat");
+        let ground = render(&mut m, &view).expect("a frame");
+        // In the middle column, the ridge stands up to near its height: the frames differ there.
+        let differs = (0..300).filter(|&y| ridge.pixmap.pixel(200, y) != ground.pixmap.pixel(200, y)).min().expect("the ridge stands up");
+        let drawn = f64::from(differs);
+        assert!(drawn < flat_y - 0.5 * (flat_y - raised_y), "drawn from {drawn}: flat {flat_y}, raised {raised_y}");
+    }
+
+    #[test]
+    fn a_cancelled_export_stops_laying_the_map_over_its_terrain() {
+        // Cancelled once the terrain's drawing has looked once: halfway through its triangles.
+        struct CancelledMidway(std::sync::atomic::AtomicUsize);
+        impl rustgis_data::progress::Probe for CancelledMidway {
+            fn cancelled(&self) -> bool {
+                self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed) >= 1
+            }
+            fn begin(&self, _: u64) {}
+            fn advance(&self, _: u64) {}
+        }
+        let camera = Camera { center: lonlat_to_merc(Coord::new(0.0, -0.6)), res: 600.0, bearing: 0.0, pitch: 65.0 };
+        let view = View { width: 400.0, height: 300.0, pixels_per_point: 1.0, camera, sky: false };
+        let mut m = hill_map();
+        m.view.terrain =
+            Some(rustgis_map::view::Terrain { source: rustgis_map::view::TerrainSource::Layer("dem".into()), exaggeration: 2.0 });
+        if let Some(l) = m.layers.iter_mut().find(|l| l.name == "dem") {
+            l.visible = true;
+        }
+        assert!(render(&mut m, &view).is_some());
+        assert!(render_png(&mut m, &view).is_ok());
+        // Cancelled, the frame stops with its ground half laid, and isn't handed on: an export
+        // says it was cancelled.
+        let probe = std::sync::Arc::new(CancelledMidway(std::sync::atomic::AtomicUsize::new(0)));
+        {
+            let _probe = rustgis_data::progress::install(Some(probe.clone()));
+            assert!(render(&mut m, &view).is_none());
+        }
+        assert!(probe.0.load(std::sync::atomic::Ordering::Relaxed) >= 2, "the drawing went on after the first look");
+        probe.0.store(0, std::sync::atomic::Ordering::Relaxed);
+        let _probe = rustgis_data::progress::install(Some(probe));
+        assert_eq!(render_png(&mut m, &view).err().as_deref(), Some(rustgis_data::DataError::Cancelled.to_string().as_str()));
     }
 
     #[test]
