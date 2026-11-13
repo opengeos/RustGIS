@@ -32,18 +32,27 @@ public class MainActivity extends NativeActivity {
     /** Pickers shown and not yet answered in full (guarded by events). */
     private int asked;
     private String purpose = "";
+    /** A picker for opening is shown and has not answered (the main thread's alone). */
+    private boolean picking;
     private String saveName = "";
     private byte[] saveBytes;
 
     /** Asks the user for files with the system's picker; each arrives as a "picked" event. */
     public void pick(final String purpose) {
         runOnUiThread(() -> {
+            if (picking) {
+                add("failed\tAnother file is already being chosen. Choose files again when it is done.");
+                return;
+            }
+            picking = true;
             this.purpose = purpose;
             Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
             intent.addCategory(Intent.CATEGORY_OPENABLE);
             intent.setType("*/*");
             intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
-            start(intent, PICK);
+            if (!start(intent, PICK)) {
+                picking = false;
+            }
         });
     }
 
@@ -112,6 +121,7 @@ public class MainActivity extends NativeActivity {
     protected void onActivityResult(int request, int result, Intent data) {
         super.onActivityResult(request, result, data);
         if (request == PICK) {
+            picking = false;
             final ArrayList<Uri> uris = new ArrayList<>();
             if (result == RESULT_OK && data != null) {
                 ClipData clip = data.getClipData();
@@ -131,10 +141,13 @@ public class MainActivity extends NativeActivity {
             final String purpose = this.purpose;
             // Copied off the main thread: a document can be large, or come from the network.
             new Thread(() -> {
-                for (Uri uri : uris) {
-                    copyIn(purpose, uri);
+                try {
+                    for (Uri uri : uris) {
+                        copyIn(purpose, uri);
+                    }
+                } finally {
+                    answered();
                 }
-                answered();
             }).start();
         } else if (request == SAVE) {
             final byte[] bytes = saveBytes;
@@ -147,16 +160,20 @@ public class MainActivity extends NativeActivity {
                 return;
             }
             new Thread(() -> {
-                try (OutputStream out = getContentResolver().openOutputStream(uri, "wt")) {
-                    if (out == null) {
-                        throw new java.io.IOException("the place chosen can't be written to");
+                try {
+                    try (OutputStream out = getContentResolver().openOutputStream(uri, "wt")) {
+                        if (out == null) {
+                            throw new java.io.IOException("the place chosen can't be written to");
+                        }
+                        out.write(bytes);
                     }
-                    out.write(bytes);
+                    // Said once the file is closed: a failure to close is a failure to save.
                     add("saved\t" + name);
-                } catch (Exception e) {
+                } catch (Throwable e) {
                     add("failed\t" + name + " wasn't saved: " + e.getMessage());
+                } finally {
+                    answered();
                 }
-                answered();
             }).start();
         }
     }
@@ -164,14 +181,14 @@ public class MainActivity extends NativeActivity {
     /** Copies a picked document into the app's storage, where the Rust side can open it by path. */
     private void copyIn(String purpose, Uri uri) {
         String name = displayName(uri);
+        // A folder of its own for each pick: a second file of the same name must not replace
+        // one the session has open.
+        File dir = new File(new File(getFilesDir(), "picked"), Long.toString(System.nanoTime()));
+        File file = new File(dir, name);
         try {
-            // A folder of its own for each pick: a second file of the same name must not replace
-            // one the session has open.
-            File dir = new File(new File(getFilesDir(), "picked"), Long.toString(System.nanoTime()));
             if (!dir.isDirectory() && !dir.mkdirs()) {
                 throw new java.io.IOException("the app's storage can't be written to");
             }
-            File file = new File(dir, name);
             try (InputStream in = getContentResolver().openInputStream(uri);
                     OutputStream out = new FileOutputStream(file)) {
                 if (in == null) {
@@ -183,7 +200,10 @@ public class MainActivity extends NativeActivity {
                 }
             }
             add("picked\t" + purpose + "\t" + name + "\t" + file.getAbsolutePath());
-        } catch (Exception e) {
+        } catch (Throwable e) {
+            // Half a copy would only fill the storage: nothing reports its path to remove it later.
+            file.delete();
+            dir.delete();
             add("failed\t" + name + " wasn't opened: " + e.getMessage());
         }
     }

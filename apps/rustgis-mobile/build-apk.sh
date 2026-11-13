@@ -39,10 +39,10 @@ find "$out/apk/lib" -name librustgis_mobile.so -exec "$strip" {} \;
 
 # The activity's Java half, compiled without Gradle: javac, then d8 to Android's bytecode.
 rm -rf "$out/java" && mkdir -p "$out/java/classes" "$out/java/dex"
-javac -nowarn -source 11 -target 11 -classpath "$platform/android.jar" -d "$out/java/classes" \
-    $(find "$root/apps/rustgis-mobile/java" -name '*.java')
-"$tools/d8" --release --min-api 26 --lib "$platform/android.jar" --output "$out/java/dex" \
-    $(find "$out/java/classes" -name '*.class')
+mapfile -d '' sources < <(find "$root/apps/rustgis-mobile/java" -name '*.java' -print0)
+javac -nowarn -source 11 -target 11 -classpath "$platform/android.jar" -d "$out/java/classes" "${sources[@]}"
+mapfile -d '' classes < <(find "$out/java/classes" -name '*.class' -print0)
+"$tools/d8" --release --min-api 26 --lib "$platform/android.jar" --output "$out/java/dex" "${classes[@]}"
 
 unsigned=$out/unsigned.apk
 "$tools/aapt2" link -o "$unsigned" --manifest "$root/apps/rustgis-mobile/AndroidManifest.xml" -I "$platform/android.jar"

@@ -18,9 +18,12 @@ mod android {
     use eframe::wgpu;
     use rustgis_engine::data::dirs;
     use rustgis_engine::platform::{Event, Platform};
-    use rustgis_ui_egui::{Inbox, RustGisApp};
+    use rustgis_ui_egui::{Inbox, RustGisApp, i18n, tl};
     use std::cell::RefCell;
+    use std::path::PathBuf;
     use std::rc::Rc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
     use winit::platform::android::activity::AndroidApp;
 
     /// What a service couldn't do, kept until the next frame says it in the window (a service has
@@ -37,7 +40,26 @@ mod android {
         /// Picked files the front end reads as bytes (`Services::inbox`).
         inbox: Inbox,
         refusals: Refusals,
+        /// Files picked for a dialog (purpose, name, copy), until their picker has answered in
+        /// full: a Shapefile's parts arrive one by one and are read together.
+        waiting: Vec<(String, String, PathBuf)>,
+        /// What reading them off the window's thread found, until the next frame says it.
+        problems: Problems,
+        /// The batches being read.
+        reading: Arc<AtomicUsize>,
     }
+
+    /// Why a picked file didn't reach the dialog that asked for it.
+    enum Problem {
+        /// A shortcut file over `SHORTCUT_FILE_MAX_BYTES`.
+        ShortcutTooLarge,
+        /// The copy of the file `name` couldn't be read.
+        Unread { name: String, error: String },
+        /// What gathering a Shapefile's parts found, in its own words.
+        Shapefile(String),
+    }
+
+    type Problems = Arc<Mutex<Vec<Problem>>>;
 
     impl App {
         /// Takes what the phone did since the last frame: picked files are opened, the rest is
@@ -55,26 +77,90 @@ mod android {
                         raw_input.dropped_files.push(std::sync::Arc::new(Pushed(path)));
                     }
                     // Every other picker's file goes where the browser's does: to whoever asked.
-                    Event::Picked { purpose, name, path } => {
-                        match std::fs::read(&path) {
-                            Ok(bytes) => {
-                                self.inbox.lock().unwrap_or_else(|e| e.into_inner()).push((format!("{}{name}", mark(&purpose)), bytes))
-                            }
-                            Err(e) => self.app.session.notify(format!("{name} wasn't opened: {e}"), true),
-                        }
-                        // Its bytes are all that was wanted of the copy.
-                        let _ = std::fs::remove_file(&path);
-                    }
+                    Event::Picked { purpose, name, path } => self.waiting.push((purpose, name, path)),
                     Event::Cancelled => {}
-                    Event::Saved { name } => self.app.session.notify(format!("Saved {name}."), false),
+                    Event::Saved { name } => self.app.session.notify(i18n::fmt("Saved {name}.", &[("name", &name)]), false),
                     Event::Failed(text) => self.app.session.notify(text, true),
                 }
             }
+            for problem in self.problems.lock().unwrap_or_else(|e| e.into_inner()).drain(..) {
+                let text = match problem {
+                    Problem::ShortcutTooLarge => tl!("Shortcut file exceeds the size limit.").to_string(),
+                    Problem::Unread { name, error } => i18n::fmt("{name} wasn't opened: {error}", &[("name", &name), ("error", &error)]),
+                    Problem::Shapefile(text) => text,
+                };
+                self.app.session.notify(text, true);
+            }
             // A picked file is copied on a thread of Android's: look again until it has arrived.
-            if phone.busy() {
+            let busy = phone.busy();
+            if !busy && !self.waiting.is_empty() {
+                self.read_waiting(ctx);
+            }
+            if busy || self.reading.load(Ordering::Relaxed) > 0 {
                 ctx.request_repaint_after(std::time::Duration::from_millis(250));
             }
         }
+
+        /// Reads the files picked for dialogs into the inbox, off the window's thread (a file can
+        /// be large), each picker's files together so a Shapefile's loose parts become one layer,
+        /// as the browser's shell reads them.
+        fn read_waiting(&mut self, ctx: &egui::Context) {
+            let mut batches: Vec<(String, Vec<(String, PathBuf)>)> = Vec::new();
+            for (purpose, name, path) in self.waiting.drain(..) {
+                match batches.iter_mut().find(|(p, _)| *p == purpose) {
+                    Some((_, files)) => files.push((name, path)),
+                    None => batches.push((purpose, vec![(name, path)])),
+                }
+            }
+            for (purpose, files) in batches {
+                let (inbox, problems, reading, ctx) = (self.inbox.clone(), self.problems.clone(), self.reading.clone(), ctx.clone());
+                reading.fetch_add(1, Ordering::Relaxed);
+                let names: Vec<String> = files.iter().map(|(name, _)| name.clone()).collect();
+                let counted = reading.clone();
+                let started = std::thread::Builder::new().name("picked files".into()).spawn(move || {
+                    read_batch(&purpose, files, &inbox, &problems);
+                    reading.fetch_sub(1, Ordering::Relaxed);
+                    ctx.request_repaint();
+                });
+                if let Err(e) = started {
+                    counted.fetch_sub(1, Ordering::Relaxed);
+                    let error = e.to_string();
+                    for name in names {
+                        self.app.session.notify(i18n::fmt("{name} wasn't opened: {error}", &[("name", &name), ("error", &error)]), true);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Reads one picker's files (name, copy) into `inbox`, marked for the dialog that asked, and
+    /// removes the copies: their bytes are all that was wanted of them.
+    fn read_batch(purpose: &str, files: Vec<(String, PathBuf)>, inbox: &Inbox, problems: &Problems) {
+        let mark = mark(purpose);
+        let say = |problem| problems.lock().unwrap_or_else(|e| e.into_inner()).push(problem);
+        let mut read = Vec::new();
+        for (name, path) in files {
+            let shortcut =
+                mark == rustgis_ui_egui::SHORTCUT_PICK || (mark.is_empty() && name.to_ascii_lowercase().ends_with(".rgisshortcuts"));
+            let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+            if shortcut && size > rustgis_ui_egui::SHORTCUT_FILE_MAX_BYTES as u64 {
+                say(Problem::ShortcutTooLarge);
+            } else {
+                match std::fs::read(&path) {
+                    Ok(bytes) => read.push((name, bytes)),
+                    Err(e) => say(Problem::Unread { name, error: e.to_string() }),
+                }
+            }
+            let _ = std::fs::remove_file(&path);
+            if let Some(folder) = path.parent() {
+                let _ = std::fs::remove_dir(folder);
+            }
+        }
+        let (read, found) = rustgis_engine::data::io::gather_shapefiles(read);
+        for text in found {
+            say(Problem::Shapefile(text));
+        }
+        inbox.lock().unwrap_or_else(|e| e.into_inner()).extend(read.into_iter().map(|(name, bytes)| (format!("{mark}{name}"), bytes)));
     }
 
     /// What starts the name of a file from the picker for `purpose` in the inbox, as the browser's
@@ -229,7 +315,7 @@ mod android {
                 Some(phone)
             }
             Err(e) => {
-                app.session.warn(format!("{e}. Every button that asks for a file does nothing."));
+                app.session.warn(i18n::fmt("{error}. Every button that asks for a file does nothing.", &[("error", &e)]));
                 None
             }
         };
@@ -241,9 +327,22 @@ mod android {
             setup.instance_descriptor.backends = wgpu::Backends::VULKAN | wgpu::Backends::GL;
         }
         let options = eframe::NativeOptions { android_app: Some(android), wgpu_options, ..Default::default() };
-        if let Err(e) =
-            eframe::run_native("RustGIS", options, Box::new(move |_cc| Ok(Box::new(App { app, pushed, phone, inbox, refusals }))))
-        {
+        if let Err(e) = eframe::run_native(
+            "RustGIS",
+            options,
+            Box::new(move |_cc| {
+                Ok(Box::new(App {
+                    app,
+                    pushed,
+                    phone,
+                    inbox,
+                    refusals,
+                    waiting: Vec::new(),
+                    problems: Problems::default(),
+                    reading: Arc::default(),
+                }))
+            }),
+        ) {
             log::error!("the app stopped: {e}");
         }
         // The activity is gone (Back, or the system destroyed it). winit's event loop can't be
