@@ -41,7 +41,8 @@ unsigned=$out/unsigned.apk
 "$tools/aapt2" link -o "$unsigned" --manifest "$root/apps/rustgis-mobile/AndroidManifest.xml" -I "$platform/android.jar"
 # The libraries go in uncompressed and page-aligned, so Android maps them straight from the APK.
 (cd "$out/apk" && zip -q -0 -r "$unsigned" lib)
-"$tools/zipalign" -f -p 16384 "$unsigned" "$out/aligned.apk" 2>/dev/null || "$tools/zipalign" -f -p 4 "$unsigned" "$out/aligned.apk"
+# -P 16: on 16 KB pages, which Android 15 phones may use (build-tools 35 and later).
+"$tools/zipalign" -f -P 16 4 "$unsigned" "$out/aligned.apk"
 
 # A debug key of this checkout's own: an APK must be signed to install, even on an emulator.
 key=$out/debug.keystore

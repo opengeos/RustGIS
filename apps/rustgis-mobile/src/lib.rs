@@ -104,6 +104,17 @@ mod android {
             app.session.notify(format!("{unread} entries of {} couldn't be read and weren't opened: {e}", dir.display()), true);
         }
         files.sort();
+        // One project: each one opened would replace the one before it, and nothing would say so.
+        let mut projects = 0usize;
+        files.retain(|f| {
+            let project = rustgis_engine::project::open_command(&f.display().to_string()) != "layer.addData";
+            projects += usize::from(project);
+            !project || projects == 1
+        });
+        if projects > 1 {
+            app.session
+                .notify(format!("{} other projects in {} weren't opened: only the first project is.", projects - 1, dir.display()), false);
+        }
         files
     }
 
