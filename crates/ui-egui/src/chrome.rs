@@ -499,6 +499,32 @@ fn source_open_status(app: &RustGisApp, ui: &mut Ui, t: &Tokens) {
 }
 
 /// Whether windows are being read off the frame (none in the browser).
+/// Whether work is running that the status bar shows with its progress and Cancel: an export, a
+/// file or a layer being read, a download.
+pub(crate) fn background_busy(app: &RustGisApp) -> bool {
+    #[cfg(not(target_arch = "wasm32"))]
+    if app.export_job.is_some() || crate::readjob::showing(app) {
+        return true;
+    }
+    !app.ui.downloads.is_empty() || window_reads_under_way(app)
+}
+
+/// That work's progress and Cancel, as the status bar draws them, for a shell without one.
+pub(crate) fn background_status(app: &mut RustGisApp, ui: &mut Ui) {
+    let t = Tokens::get(ui.ctx());
+    #[cfg(not(target_arch = "wasm32"))]
+    if app.export_job.is_some() {
+        crate::exportjob::status(app, ui, &t);
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    if crate::readjob::showing(app) {
+        crate::readjob::status(app, ui, &t);
+    }
+    if !app.ui.downloads.is_empty() || window_reads_under_way(app) {
+        downloads_status(app, ui, &t);
+    }
+}
+
 fn window_reads_under_way(app: &RustGisApp) -> bool {
     #[cfg(not(target_arch = "wasm32"))]
     return !app.ui.window_reads.is_empty();

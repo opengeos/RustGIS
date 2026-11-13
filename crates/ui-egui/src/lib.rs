@@ -2365,6 +2365,18 @@ impl RustGisApp {
         mapview::show(self, ui);
     }
 
+    /// Whether background work is running that the user is shown, with its Cancel: an export, a
+    /// file or a layer being read, a download. A shell that draws its own interface
+    /// ([`RustGisApp::chrome`]) shows [`RustGisApp::background_status`] while it is.
+    pub fn background_busy(&self) -> bool {
+        chrome::background_busy(self)
+    }
+
+    /// Draws that work's progress and Cancel into `ui`, as the desktop's status bar does.
+    pub fn background_status(&mut self, ui: &mut egui::Ui) {
+        chrome::background_status(self, ui);
+    }
+
     /// Whether this shell opens files by path (the desktop app; the web app picks them in the
     /// browser instead).
     pub(crate) fn opens_files(&self) -> bool {

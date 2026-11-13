@@ -25,6 +25,8 @@ const SHEET_SHARE: f32 = 0.55;
 const SHEET_MARGIN: f32 = 4.0;
 /// The More sheet's rows.
 const MORE_ROWS: usize = 6;
+/// The rows of the sheet that asks about unsaved changes: what it says, and its two answers.
+const DISCARD_ROWS: usize = 3;
 
 /// The sheet risen over the map.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -33,6 +35,8 @@ enum Sheet {
     None,
     Layers,
     More,
+    /// Asking before the command named replaces a project with unsaved changes.
+    Discard(&'static str),
 }
 
 /// The sheet shown, kept in egui's memory: the interface has no state of its own in the app.
@@ -52,10 +56,18 @@ pub fn chrome(app: &mut RustGisApp, ui: &mut Ui) {
     let shown = sheet(&ctx);
     let frame = egui::Frame::NONE.fill(t.pane).stroke(Stroke::new(1.0, t.border));
     egui::Panel::bottom("touch_bar").exact_size(BAR).frame(frame).show(ui, |ui| bar(app, ui, &t, shown));
+    // Work running off the window's thread (a file being read, an export) shows its progress
+    // and Cancel over the bar, where the desktop's status bar would.
+    if app.background_busy() {
+        egui::Panel::bottom("touch_busy").exact_size(TARGET).frame(frame.inner_margin(egui::Margin::symmetric(12, 0))).show(ui, |ui| {
+            ui.horizontal_centered(|ui| app.background_status(ui));
+        });
+    }
     if shown != Sheet::None {
         // As tall as its rows, up to its share of the window: a longer list scrolls.
         let rows = match shown {
-            Sheet::Layers => app.session.map().layers.len().max(1),
+            Sheet::Layers => (app.session.map().layers.len() + app.session.map().tiles.len()).max(1),
+            Sheet::Discard(_) => DISCARD_ROWS,
             Sheet::More => MORE_ROWS,
             Sheet::None => 0,
         };
@@ -68,6 +80,7 @@ pub fn chrome(app: &mut RustGisApp, ui: &mut Ui) {
             |ui| match shown {
                 Sheet::Layers => layers(app, ui, &t),
                 Sheet::More => more(app, ui, &t),
+                Sheet::Discard(command) => discard(app, ui, &t, command),
                 Sheet::None => {}
             },
         );
@@ -140,33 +153,51 @@ fn icon_button(ui: &mut Ui, t: &Tokens, icon: &str, hint: &str) -> bool {
     response.clicked()
 }
 
-/// The Layers sheet: the active map's layers, the top one first. A row's eye shows or hides its
-/// layer, its name makes it the active layer, and its last button zooms to it.
+/// A row of the Layers sheet: a feature or raster layer by its id, a tile layer by its place.
+#[derive(Clone, Copy)]
+enum Row {
+    Layer(u32),
+    Tile(usize),
+}
+
+/// The Layers sheet: the active map's layers, then its tile layers, each list top first. A row's
+/// eye shows or hides its layer, its name makes it the one acted on, and its last button zooms
+/// to it.
 fn layers(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     heading(ui, t, tl!("Layers"));
-    // Read first: a row's button runs a command, which changes the list it is drawn from.
-    let rows: Vec<(u32, String, bool)> = app.session.map().layers.iter().map(|l| (l.id, l.name.clone(), l.visible)).collect();
+    // Read first: a row's button runs a command, which changes the lists it is drawn from.
+    let map = app.session.map();
+    let active = app.session.active_layer;
+    let picked = app.session.selected_tile();
+    let mut rows: Vec<(Row, String, bool, bool)> =
+        map.layers.iter().map(|l| (Row::Layer(l.id), l.name.clone(), l.visible, active == Some(l.id))).collect();
+    rows.extend(map.tiles.iter().enumerate().map(|(i, tile)| (Row::Tile(i), tile.name.clone(), tile.visible, picked == Some(i))));
     if rows.is_empty() {
         ui.label(RichText::new(tl!("This map has no layers yet. Add Data puts one on it.")).color(t.text_dim));
         ui.add_space(8.0);
         return;
     }
-    let active = app.session.active_layer;
     egui::ScrollArea::vertical().auto_shrink([false, true]).show(ui, |ui| {
-        for (id, name, visible) in rows {
+        for (row, name, visible, chosen) in rows {
             ui.horizontal(|ui| {
                 ui.set_min_height(TARGET);
                 let eye = if visible { tl!("Hide this layer") } else { tl!("Show this layer") };
                 if toggle_button(ui, t, "eye", eye, visible) {
-                    run(app, "layer.visibility", json!({"layer": id, "visible": !visible}));
+                    match row {
+                        Row::Layer(id) => run(app, "layer.visibility", json!({"layer": id, "visible": !visible})),
+                        Row::Tile(index) => run(app, "map.setTiles", json!({"index": index, "visible": !visible})),
+                    }
                 }
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     if icon_button(ui, t, "zoom_full", tl!("Zoom to this layer")) {
-                        run(app, "layer.zoomTo", json!({"layer": id}));
+                        match row {
+                            Row::Layer(id) => run(app, "layer.zoomTo", json!({"layer": id})),
+                            Row::Tile(index) => run(app, "map.zoomToTiles", json!({"index": index})),
+                        }
                     }
                     // The name takes the room between the two buttons, cut short when it is long.
                     let (rect, response) = ui.allocate_exact_size(Vec2::new(ui.available_width(), TARGET), Sense::click());
-                    if active == Some(id) {
+                    if chosen {
                         ui.painter().rect_filled(rect, CornerRadius::same(6), t.checked);
                     }
                     let ink = if visible { t.text } else { t.text_disabled };
@@ -174,7 +205,10 @@ fn layers(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                     let clip = ui.painter().with_clip_rect(rect.shrink2(Vec2::new(8.0, 0.0)));
                     clip.galley(egui::pos2(rect.min.x + 8.0, rect.center().y - text.size().y / 2.0), text, ink);
                     if response.on_hover_text(name).clicked() {
-                        run(app, "layer.select", json!({"layer": id}));
+                        match row {
+                            Row::Layer(id) => run(app, "layer.select", json!({"layer": id})),
+                            Row::Tile(index) => run(app, "map.selectTiles", json!({"index": index})),
+                        }
                     }
                 });
             });
@@ -213,8 +247,13 @@ fn more(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     egui::ScrollArea::vertical().auto_shrink([false, true]).show(ui, |ui| {
         for (icon, label, command) in rows {
             if row(ui, t, icon, label) {
-                set_sheet(ui.ctx(), Sheet::None);
-                run(app, command, Value::Null);
+                // The desktop asks before a command replaces unsaved work; so does this.
+                if REPLACES.contains(&command) && app.session.dirty() {
+                    set_sheet(ui.ctx(), Sheet::Discard(command));
+                } else {
+                    set_sheet(ui.ctx(), Sheet::None);
+                    run(app, command, Value::Null);
+                }
             }
         }
         // The whole of RustGIS is still there, for a tablet or a job the touch interface has no
@@ -225,6 +264,23 @@ fn more(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             app.session.notify(tl!("The desktop interface is on until RustGIS is started again."), false);
         }
     });
+}
+
+/// The More sheet's commands that replace the project.
+const REPLACES: [&str; 2] = ["ui.open", "project.new"];
+
+/// The sheet that asks before `command` replaces a project with unsaved changes: they can't be
+/// brought back with Undo.
+fn discard(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, command: &'static str) {
+    heading(ui, t, tl!("Unsaved Changes"));
+    ui.label(RichText::new(tl!("This project has changes that aren't saved. Going on discards them.")).size(15.0).color(t.text));
+    if row(ui, t, "delete", tl!("Discard Changes")) {
+        set_sheet(ui.ctx(), Sheet::None);
+        run(app, command, Value::Null);
+    }
+    if row(ui, t, "close", tl!("Keep Working")) {
+        set_sheet(ui.ctx(), Sheet::None);
+    }
 }
 
 /// A row of a sheet's list: an icon and a label, as wide as the sheet. Says whether it was tapped.
@@ -274,7 +330,7 @@ mod tests {
     fn every_sheet_draws_for_the_sample_and_for_an_empty_map() {
         let ctx = egui::Context::default();
         let mut app = RustGisApp::with_sample();
-        for shown in [Sheet::None, Sheet::Layers, Sheet::More] {
+        for shown in [Sheet::None, Sheet::Layers, Sheet::More, Sheet::Discard("project.new")] {
             frame(&mut app, &ctx, shown);
             assert_eq!(sheet(&ctx), shown);
         }
@@ -285,6 +341,16 @@ mod tests {
         }
         assert!(app.session.map().layers.is_empty());
         frame(&mut app, &ctx, Sheet::Layers);
+    }
+
+    #[test]
+    fn tile_layers_are_listed_and_hidden_from_their_rows() {
+        let mut app = RustGisApp::with_sample();
+        run(&mut app, "map.addTiles", json!({"url": "https://tiles.example.com/{z}/{x}/{y}.png", "name": "Imagery"}));
+        assert_eq!(app.session.map().tiles.len(), 1);
+        frame(&mut app, &egui::Context::default(), Sheet::Layers);
+        run(&mut app, "map.setTiles", json!({"index": 0, "visible": false}));
+        assert!(!app.session.map().tiles[0].visible);
     }
 
     #[test]
