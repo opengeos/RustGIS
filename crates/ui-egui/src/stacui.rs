@@ -805,6 +805,16 @@ fn drop_preset_sort(st: &mut State) {
     }
 }
 
+/// A preset's own sort goes only to the preset's API (another may reject it): dropped when the
+/// dialog is on another API. Typing in the API field doesn't call this, so deleting a character
+/// of the address and typing it back keeps the sort; it is judged when a search is sent and when
+/// another API is picked.
+fn keep_preset_sort_for_its_api(st: &mut State) {
+    if shown_preset(st).is_none() {
+        drop_preset_sort(st);
+    }
+}
+
 /// The sort a search sends: the one picked, none for the API's own order or a static catalog.
 fn sort_of(st: &State, is_static: bool) -> Option<&str> {
     Some(st.sortby.trim()).filter(|b| !b.is_empty() && !is_static)
@@ -834,6 +844,7 @@ pub(crate) fn switch_api(st: &mut State, url: &str) {
     st.api = url.to_string();
     st.api_from_document = false;
     drop_listing(st);
+    keep_preset_sort_for_its_api(st);
 }
 
 /// Forgets what was listed for the last API or catalog, and what is still on its way from it: a
@@ -843,10 +854,6 @@ fn drop_listing(st: &mut State) {
     st.collections.clear();
     st.items.clear();
     st.collection.clear();
-    // A preset's own sort stays with the preset's API: another API may reject it.
-    if st.preset.is_some() && shown_preset(st).is_none() {
-        drop_preset_sort(st);
-    }
     (st.node, st.node_title) = (String::new(), String::new());
     st.trail.clear();
     st.children.clear();
@@ -1538,6 +1545,7 @@ fn paint_dot(p: &egui::Painter, at: &[egui::Pos2], color: egui::Color32) {
 
 /// Finds items: an API's search, or a walk of a static catalog from the node picked.
 fn find_items(app: &mut RustGisApp) {
+    keep_preset_sort_for_its_api(&mut app.ui.stac);
     let st = &app.ui.stac;
     // A catalog's children still coming don't hold a search up.
     if st.walk.is_some() || st.preparing.is_some() || st.waiting.as_ref().is_some_and(|(a, _)| !matches!(a, Asked::Children(_))) {
@@ -1922,6 +1930,28 @@ mod tests {
         app.ui.stac.sortby = PRESET_SORT.into();
         switch_api(&mut app.ui.stac, "https://example.org/stac/v1");
         assert_eq!(app.ui.stac.sortby, PRESET_SORT);
+    }
+
+    /// Typing in the API field doesn't touch the sort: deleting a character of the preset's
+    /// address and typing it back keeps the preset's default. It is dropped when a search is sent
+    /// (or another API is picked) while the dialog is on another API.
+    #[test]
+    fn editing_the_address_and_retyping_it_keeps_the_presets_sort() {
+        let mut app = RustGisApp::with_sample();
+        app.run("ui.stac.sentinel2", serde_json::Value::Null).unwrap();
+        let address = app.ui.stac.api.clone();
+        // What the text field does on each keystroke: change the text and drop the listing.
+        app.ui.stac.api.pop();
+        drop_listing(&mut app.ui.stac);
+        assert_eq!((app.ui.stac.sortby.as_str(), app.ui.stac.sort_is_default), (PRESET_SORT, true));
+        app.ui.stac.api = address;
+        drop_listing(&mut app.ui.stac);
+        assert_eq!((app.ui.stac.sortby.as_str(), app.ui.stac.sort_is_default), (PRESET_SORT, true));
+        assert_eq!(shown_preset(&app.ui.stac), Some(Preset::Sentinel2));
+        // Left on another address, the check made when a search is sent drops it.
+        app.ui.stac.api = "https://example.org/stac/v1".into();
+        keep_preset_sort_for_its_api(&mut app.ui.stac);
+        assert_eq!((app.ui.stac.sortby.as_str(), app.ui.stac.sort_is_default), ("", false));
     }
 
     /// Reopening STAC Search from the ribbon (no preset) takes the preset's default sort with it,
