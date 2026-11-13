@@ -237,6 +237,14 @@ pub fn sort_followed(items: &[Item], sortby: Option<&str>) -> Option<bool> {
     }
 }
 
+/// Whether a sort was asked for and `items` can't show if the API followed it: two or more items
+/// (one is in order whatever the sort) that [`sort_followed`] can't tell, because the sort is on
+/// something it doesn't compare or the dates are not comparable. The caller says so rather than
+/// leave the user to assume the sort was applied.
+pub fn sort_unchecked(items: &[Item], sortby: Option<&str>) -> bool {
+    items.len() >= 2 && sort_parts(sortby).ok().flatten().is_some() && sort_followed(items, sortby).is_none()
+}
+
 /// The address a POST search goes to.
 pub fn search_post_url(api: &str) -> String {
     crate::template::join(api, &format!("{}/search", crate::logins::inner(api)))
@@ -979,6 +987,29 @@ mod tests {
         assert_eq!(sort_followed(&sep, Some("datetime")), None);
         let space = answered(&[("2024-06-01 00:00:00Z", None), ("2024-06-01T01:00:00Z", None)]);
         assert_eq!(sort_followed(&space, Some("datetime")), None);
+    }
+
+    /// A sort whose order can't be checked is said so, and only when there is something to check:
+    /// a sort asked for, two or more items, and the answer can't tell.
+    #[test]
+    fn a_sort_that_cannot_be_checked_is_told_apart_from_one_that_can() {
+        let newest = answered(&[("2024-06-03T00:00:00Z", Some(9.0)), ("2024-06-02T00:00:00Z", Some(1.0))]);
+        // In order, or visibly out of it: checked either way.
+        assert!(!sort_unchecked(&newest, Some("-datetime")));
+        assert!(!sort_unchecked(&newest, Some("datetime")));
+        // No sort asked, or one that isn't a sort: nothing to say.
+        assert!(!sort_unchecked(&newest, None));
+        assert!(!sort_unchecked(&newest, Some(" ")));
+        assert!(!sort_unchecked(&newest, Some("bad sort!")));
+        // A field that isn't compared, dates in other zones, no cloud covers: asked, not known.
+        assert!(sort_unchecked(&newest, Some("platform")));
+        let zones = answered(&[("2024-06-03T10:00:00+02:00", None), ("2024-06-03T06:00:00-05:00", None)]);
+        assert!(sort_unchecked(&zones, Some("-datetime")));
+        let bare = answered(&[("2024-06-03T00:00:00Z", None), ("2024-06-01T00:00:00Z", None)]);
+        assert!(sort_unchecked(&bare, Some("eo:cloud_cover")));
+        // One item is in order whatever the sort, and no items have no order.
+        assert!(!sort_unchecked(&zones[..1], Some("-datetime")));
+        assert!(!sort_unchecked(&[], Some("-datetime")));
     }
 
     /// An item with a null `datetime` carries its `start_datetime` as its date, which the API did

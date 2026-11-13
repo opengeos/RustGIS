@@ -204,7 +204,7 @@ fn search(s: &mut Session, p: &Value) -> CmdResult {
             next
         };
         // An API without the sort extension may ignore a sort instead of refusing it.
-        if let Some(note) = sort_ignored(&items, search.sortby.as_deref()) {
+        if let Some(note) = sort_ignored(&items, search.sortby.as_deref()).or_else(|| sort_unchecked(&items, search.sortby.as_deref())) {
             s.warn(note);
         }
         let all = b(p, "properties").unwrap_or(false);
@@ -235,6 +235,19 @@ fn sort_ignored(items: &[Item], sortby: Option<&str>) -> Option<String> {
             "sortby {} was not followed: the items are not in that order, so this API may not sort (its first {} items are shown in its own order)",
             sortby.unwrap_or("").trim(),
             items.len()
+        )
+    })
+}
+
+/// What to say when a sort was asked for and the items can't show whether the API followed it
+/// (the sort is on a field that isn't compared, or the dates can't be compared): the order is
+/// the API's, and not known to be the one asked for.
+#[cfg(not(target_arch = "wasm32"))]
+fn sort_unchecked(items: &[Item], sortby: Option<&str>) -> Option<String> {
+    stac::sort_unchecked(items, sortby).then(|| {
+        format!(
+            "sortby {} could not be checked: the items' order can't be told, so it is not known whether this API sorted them",
+            sortby.unwrap_or("").trim()
         )
     })
 }
@@ -1398,6 +1411,14 @@ mod tests {
         assert_eq!(super::sort_ignored(&items, Some("platform")), None);
         let note = super::sort_ignored(&items, Some(" datetime ")).unwrap();
         assert!(note.contains("sortby datetime was not followed") && note.contains("3 items"), "{note}");
+        // A sort the items can't show is said so, and only then: not for one the items show, no
+        // sort, or one item.
+        let unknown = super::sort_unchecked(&items, Some(" platform ")).unwrap();
+        assert!(unknown.contains("sortby platform could not be checked"), "{unknown}");
+        assert_eq!(super::sort_unchecked(&items, Some("-datetime")), None);
+        assert_eq!(super::sort_unchecked(&items, Some("datetime")), None, "ignored is the other note's to say");
+        assert_eq!(super::sort_unchecked(&items, None), None);
+        assert_eq!(super::sort_unchecked(&items[..1], Some("platform")), None);
     }
 
     /// A piece's rows: as many as fit, whole tiles of rows when one fits, at least one; none when

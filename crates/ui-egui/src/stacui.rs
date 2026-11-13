@@ -423,7 +423,8 @@ pub fn poll(app: &mut RustGisApp, ctx: &egui::Context) {
                 };
                 // An API that can't sort may ignore the sort instead of refusing it: say so.
                 // The sort that was sent, not the dropdown's value now.
-                st.info = Some(match sort_ignored_note(&items, st.asked_sort.as_deref()) {
+                let asked = st.asked_sort.as_deref();
+                st.info = Some(match sort_ignored_note(&items, asked).or_else(|| sort_unchecked_note(&items, asked)) {
                     Some(note) => i18n::fmt("{count}. {note}", &[("count", &count), ("note", &note)]),
                     None => i18n::fmt("{count}", &[("count", &count)]),
                 });
@@ -826,6 +827,15 @@ fn sort_of(st: &State, is_static: bool) -> Option<&str> {
 fn sort_ignored_note(items: &[stac::Item], sortby: Option<&str>) -> Option<String> {
     (stac::sort_followed(items, sortby) == Some(false))
         .then(|| i18n::fmt_raw("The API did not sort them by {sort}: they are in its own order", &[("sort", sortby.unwrap_or("").trim())]))
+}
+
+/// What to say when a sort was asked for and the items can't show whether the API followed it
+/// (dates that can't be compared, or a field that isn't compared): the order is the API's, and
+/// not known to be the one asked for. None for a page of one, or no sort.
+fn sort_unchecked_note(items: &[stac::Item], sortby: Option<&str>) -> Option<String> {
+    stac::sort_unchecked(items, sortby).then(|| {
+        i18n::fmt_raw("The order by {sort} could not be checked: it is the API's own order", &[("sort", sortby.unwrap_or("").trim())])
+    })
 }
 
 /// The preset the dialog is showing, if it is still on its API or catalog.
@@ -1926,6 +1936,13 @@ mod tests {
         assert_eq!(sort_ignored_note(&sorted, Some("-datetime")), None);
         assert_eq!(sort_ignored_note(&sorted, None), None);
         assert!(sort_ignored_note(&sorted, Some("datetime")).is_some_and(|n| n.contains("datetime")));
+        // A sort the items can't show is said so, and only then: not for one the items show, no
+        // sort, or a page of one.
+        assert!(sort_unchecked_note(&sorted, Some("platform")).is_some_and(|n| n.contains("platform")));
+        assert_eq!(sort_unchecked_note(&sorted, Some("-datetime")), None);
+        assert_eq!(sort_unchecked_note(&sorted, Some("datetime")), None, "ignored is the other note's to say");
+        assert_eq!(sort_unchecked_note(&sorted, None), None);
+        assert_eq!(sort_unchecked_note(&sorted[..1], Some("platform")), None);
     }
 
     #[test]
