@@ -69,7 +69,12 @@ public class MainActivity extends NativeActivity {
             saveBytes = bytes;
             Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT);
             intent.addCategory(Intent.CATEGORY_OPENABLE);
-            intent.setType("application/octet-stream");
+            // The file's own type where Android knows its extension: some providers name the
+            // file by it.
+            int dot = name.lastIndexOf('.');
+            String type = dot < 0 ? null
+                    : android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(name.substring(dot + 1).toLowerCase());
+            intent.setType(type == null ? "application/octet-stream" : type);
             intent.putExtra(Intent.EXTRA_TITLE, name);
             if (!start(intent, SAVE)) {
                 saveBytes = null;

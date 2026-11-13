@@ -11,6 +11,54 @@
 #[cfg(target_os = "android")]
 mod phone;
 
+/// The files of `picked` to open, each by its path: all but the parts another of them reads from
+/// beside it (a Shapefile's `.dbf`, `.shx`, `.prj` and `.cpg`, a MapInfo file's `.mid`), matched
+/// by name whatever the case. A part picked without its main file stays, and is refused by name.
+#[cfg_attr(not(any(target_os = "android", test)), allow(dead_code))]
+fn without_sidecars(picked: Vec<std::path::PathBuf>) -> Vec<std::path::PathBuf> {
+    let lower = |part: Option<&std::ffi::OsStr>| part.map(|p| p.to_string_lossy().to_lowercase()).unwrap_or_default();
+    let named: Vec<(String, String)> = picked.iter().map(|p| (lower(p.file_stem()), lower(p.extension()))).collect();
+    let has = |stem: &str, extension: &str| named.iter().any(|(s, e)| s == stem && e == extension);
+    let mut kept = Vec::new();
+    for (path, (stem, extension)) in picked.iter().zip(&named) {
+        let read_by = match extension.as_str() {
+            "dbf" | "shx" | "prj" | "cpg" => "shp",
+            "mid" => "mif",
+            _ => "",
+        };
+        if read_by.is_empty() || !has(stem, read_by) {
+            kept.push(path.clone());
+        }
+    }
+    kept
+}
+
+#[cfg(test)]
+mod tests {
+    use super::without_sidecars;
+    use std::path::PathBuf;
+
+    fn kept(names: &[&str]) -> Vec<String> {
+        without_sidecars(names.iter().map(|n| PathBuf::from("/picked/1").join(n)).collect())
+            .iter()
+            .map(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default())
+            .collect()
+    }
+
+    #[test]
+    fn parts_picked_with_their_file_are_left_to_it() {
+        assert_eq!(kept(&["roads.shp", "roads.dbf", "roads.shx", "roads.prj", "roads.cpg"]), ["roads.shp"]);
+        assert_eq!(kept(&["ROADS.SHP", "Roads.DBF", "parcels.mif", "parcels.MID"]), ["ROADS.SHP", "parcels.mif"]);
+    }
+
+    #[test]
+    fn a_part_picked_alone_is_kept_to_be_refused_by_name() {
+        assert_eq!(kept(&["roads.dbf", "lakes.shp", "notes.prj"]), ["roads.dbf", "lakes.shp", "notes.prj"]);
+        // Other files are never parts.
+        assert_eq!(kept(&["a.gpkg", "a.geojson"]), ["a.gpkg", "a.geojson"]);
+    }
+}
+
 #[cfg(target_os = "android")]
 mod android {
     use crate::phone::Phone;
@@ -53,6 +101,8 @@ mod android {
     enum Problem {
         /// A shortcut file over `SHORTCUT_FILE_MAX_BYTES`.
         ShortcutTooLarge,
+        /// The file `name` is over the size read into memory (`rustgis_data::io::MAX_BYTES`).
+        TooLarge { name: String },
         /// The copy of the file `name` couldn't be read.
         Unread { name: String, error: String },
         /// What gathering a Shapefile's parts found, in its own words.
@@ -80,6 +130,7 @@ mod android {
             for problem in self.problems.lock().unwrap_or_else(|e| e.into_inner()).drain(..) {
                 let text = match problem {
                     Problem::ShortcutTooLarge => tl!("Shortcut file exceeds the size limit.").to_string(),
+                    Problem::TooLarge { name } => i18n::fmt("{name} wasn't opened: it is larger than 256 MB.", &[("name", &name)]),
                     Problem::Unread { name, error } => i18n::fmt("{name} wasn't opened: {error}", &[("name", &name), ("error", &error)]),
                     Problem::Shapefile(text) => text,
                 };
@@ -115,7 +166,10 @@ mod android {
             }
             for (_, purpose, files) in batches {
                 if purpose == "data" || purpose == "project" {
-                    raw_input.dropped_files.extend(files.into_iter().map(|(_, path)| std::sync::Arc::new(Pushed(path)) as _));
+                    // A Shapefile's or a MapInfo file's parts picked with it are read by it, from
+                    // beside it: opened on their own they would each be refused.
+                    let paths = crate::without_sidecars(files.into_iter().map(|(_, path)| path).collect());
+                    raw_input.dropped_files.extend(paths.into_iter().map(|path| std::sync::Arc::new(Pushed(path)) as _));
                     continue;
                 }
                 let (inbox, problems, reading, ctx) = (self.inbox.clone(), self.problems.clone(), self.reading.clone(), ctx.clone());
@@ -150,6 +204,9 @@ mod android {
             let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
             if shortcut && size > rustgis_ui_egui::SHORTCUT_FILE_MAX_BYTES as u64 {
                 say(Problem::ShortcutTooLarge);
+            } else if size > rustgis_engine::data::io::MAX_BYTES {
+                // Refused before it is read: a file this large is not held in memory whole.
+                say(Problem::TooLarge { name });
             } else {
                 match std::fs::read(&path) {
                     Ok(bytes) => read.push((name, bytes)),
