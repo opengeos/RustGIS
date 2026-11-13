@@ -50,8 +50,7 @@ const SYSTEMS: &[(&str, (f64, f64, f64, f64))] = &[
 
 /// Where a system doesn't bring a place back to within [`TOLERANCE_M`], as (system, how far in
 /// metres a place may come back from where it was, whether inside its area of use too or only
-/// outside it, why). Each but Eckert IV's (RustGIS's own) is PROJ's behaviour too, checked with
-/// PROJ 9.8.1.
+/// outside it, why). Each is PROJ's behaviour too, checked with PROJ 9.8.1.
 const LIMITS: &[(&str, f64, bool, &str)] = &[
     ("EPSG:3857", f64::INFINITY, false, "a latitude past 85.05° is taken as 85.05°, where Web Mercator ends; an export says so"),
     // bug: transverse Mercator takes places up to 150° from its central meridian (as PROJ does),
@@ -65,11 +64,10 @@ const LIMITS: &[(&str, f64, bool, &str)] = &[
     // there: about R·√ε, a decimetre.
     ("EPSG:3035", 0.2, false, "the authalic latitude rounds within a ten-thousandth of a degree of a pole"),
     ("EPSG:6933", 0.2, false, "the authalic latitude rounds within a ten-thousandth of a degree of a pole"),
-    // Robinson's inverse finds the latitude to 2e-6° (`projection_methods.rs`).
-    ("+proj=robin +lon_0=0 +x_0=0 +y_0=0 +datum=WGS84 +units=m +no_defs", 0.25, true, "Robinson's inverse settles to 2e-6°"),
-    // bug: Eckert IV's inverse (`rustgis_geom::world`) stops where the residual is under 1e-9 of
-    // the radius, and y hardly changes with latitude near a pole: metres there.
-    ("+proj=eck4 +lon_0=0 +datum=WGS84 +units=m +no_defs", 10.0, true, "Eckert IV's inverse stops short near a pole"),
+    // Robinson's curve between its table rows (every 5°) is in pieces whose single-precision
+    // coefficients don't quite meet: at 10°, 35°, 45°, 65° and 90° a band of y up to 2.13 m wide is
+    // reached from both sides of the row, and the inverse takes the side above. As PROJ's.
+    ("+proj=robin +lon_0=0 +x_0=0 +y_0=0 +datum=WGS84 +units=m +no_defs", 2.5, true, "Robinson's pieces overlap at some table rows"),
     // bug: Albers' inverse (proj4rs's, as PROJ's) snaps a latitude within about 0.02° of a pole
     // onto it.
     ("EPSG:5070", 5_000.0, false, "Albers takes a place near a pole as the pole"),
@@ -86,9 +84,6 @@ const OUTLINE_REFUSALS: &[(&str, &str)] = &[
     // bug: Robinson's inverse refuses a longitude its latitude's rounding puts past ±180°, so a
     // world Robinson file loses every shape that touches the map's edge.
     ("+proj=robin +lon_0=0 +x_0=0 +y_0=0 +datum=WGS84 +units=m +no_defs", "Robinson's inverse refuses the map's edge"),
-    // bug: Eckert IV's inverse (`rustgis_geom::world`) refuses the pole line away from the
-    // central meridian.
-    ("+proj=eck4 +lon_0=0 +datum=WGS84 +units=m +no_defs", "Eckert IV's inverse refuses the pole line"),
 ];
 
 /// A number from the environment, else `default`.
