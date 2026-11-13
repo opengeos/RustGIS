@@ -2496,7 +2496,29 @@ fn a_3_0_model_reads_its_own_ways_and_says_what_it_leaves_out() {
         "{:?}",
         messages_of(&out)
     );
-    assert!(says(&out, "1 values name the code list they are taken from (codeSpace)"), "the set's: {:?}", messages_of(&out));
+    assert!(says(&out, "1 sets of generic attributes (genericAttributeSet) name a code list (codeSpace)"), "{:?}", messages_of(&out));
     assert_eq!(layer(&out, "model Building").features.len(), 2);
     assert!(out.iter().all(|(ds, _)| ds.geometry_type == GeometryType::Polygon), "the curve isn't drawn as a line");
+}
+
+/// The names 3.0 adds are read only in its namespaces: an extension (ADE) of a 2.0 model may name a
+/// property of its own `boundary` or `buildingPart`, and it keeps the meaning it had in 2.0. Its
+/// feature in `boundary` is an object of its own, not the building's thematic surface, and its
+/// `buildingPart` is a link kept as an attribute, which makes no part.
+#[test]
+fn an_extension_of_2_0_keeps_its_own_properties_named_as_3_0s() {
+    let ade = r#"xmlns:ade="http://example.com/ade""#;
+    let inner = format!(
+        r##"{}<ade:boundary {ade}><ade:Sensor gml:id="s1"><ade:lod2MultiSurface><gml:MultiSurface><gml:surfaceMember>{}</gml:surfaceMember></gml:MultiSurface></ade:lod2MultiSurface></ade:Sensor></ade:boundary>
+        <ade:buildingPart {ade} xlink:href="#p1"/>"##,
+        box_surfaces("b1"),
+        polygon("s1-g", &square(20.0, 20.0, 2.0, 0.0))
+    );
+    let members = format!("{}{}", building("b1", &inner), building("p1", &box_surfaces("p1")));
+    let out = read("model.gml", &lonlat(&members), None).unwrap();
+    let sensors = layer(&out, "model Sensor");
+    assert_eq!(value(sensors, row_of(sensors, "s1"), "parent"), Value::Text("b1".into()), "{:?}", messages_of(&out));
+    let buildings = layer(&out, "model Building");
+    assert_eq!(value(buildings, row_of(buildings, "p1"), "parent"), Value::Null, "no part made");
+    assert_eq!(value(buildings, row_of(buildings, "b1"), "buildingPart"), Value::Text("#p1".into()));
 }

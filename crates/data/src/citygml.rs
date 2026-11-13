@@ -18,7 +18,8 @@
 //! by its own where they change: thematic surfaces in `boundary`, openings in `fillingSurface`, a
 //! prototype in `relativeGeometry`, parts linked by `buildingPart` (and a bridge's or tunnel's),
 //! generic attributes named by a `gen:name`, and a group member inside its `Role`. Its spaces (a
-//! `BuildingRoom`, a `Storey`) are objects like any other.
+//! `BuildingRoom`, a `Storey`) are objects like any other. Those names are read only in 3.0's
+//! namespaces ([`in_3_0`]): an extension of a 1.0 or 2.0 model that uses one keeps its own meaning.
 //!
 //! Attributes: generic attributes (`gen:stringAttribute` and its kin) typed by their element, the
 //! measures and counts the standard types so (`measuredHeight`, `storeysAboveGround`, …) and any
@@ -50,7 +51,7 @@
 //! the points placed in all as many as the file could write out.
 //!
 //! A part, a group's member or a group's parent given by a link (`consistsOfBuildingPart`,
-//! `buildingPart`, `groupMember`, a `CityObjectGroup`'s `parent`) makes the objects it names a child and its parent,
+//! `buildingPart`, `bridgePart`, `tunnelPart`, `groupMember`, a `CityObjectGroup`'s `parent`) makes the objects it names a child and its parent,
 //! as if one were written in the other, once every member is read; the link is kept as an attribute
 //! too.
 //!
@@ -97,21 +98,54 @@ const LINK_READS: usize = 4;
 /// The namespace every CityGML version's core namespace starts with.
 const CITYGML: &str = "http://www.opengis.net/citygml/";
 
+/// CityGML 3.0's core namespace.
+const CITYGML_3: &str = "http://www.opengis.net/citygml/3.0";
+
 /// The CityGML versions read, by their core namespace.
-const VERSIONS: [&str; 3] =
-    ["http://www.opengis.net/citygml/1.0", "http://www.opengis.net/citygml/2.0", "http://www.opengis.net/citygml/3.0"];
+const VERSIONS: [&str; 3] = ["http://www.opengis.net/citygml/1.0", "http://www.opengis.net/citygml/2.0", CITYGML_3];
 
 /// The properties whose features are surfaces of their object (thematic surfaces, openings, traffic
-/// areas), not objects of their own: 3.0 calls a thematic surface's `boundary`, and an opening's
-/// `fillingSurface`.
-const SURFACE_PROPERTIES: [&str; 6] = ["boundedBy", "boundary", "opening", "fillingSurface", "trafficArea", "auxiliaryTrafficArea"];
+/// areas), not objects of their own.
+const SURFACE_PROPERTIES: [&str; 4] = ["boundedBy", "opening", "trafficArea", "auxiliaryTrafficArea"];
+
+/// 3.0's names for them, read only in its namespaces ([`in_3_0`]): a thematic surface's
+/// `boundary`, an opening's `fillingSurface`.
+const SURFACE_PROPERTIES_3: [&str; 2] = ["boundary", "fillingSurface"];
 
 /// The property holding an implicit geometry's prototype: `relativeGMLGeometry` in 1.0 and 2.0,
-/// `relativeGeometry` in 3.0.
+/// `relativeGeometry` in 3.0 (read only there, see [`in_3_0`]).
 const PROTOTYPES: [&str; 2] = ["relativeGMLGeometry", "relativeGeometry"];
 
-/// 3.0's properties linking a part to its object, which 1.0 and 2.0 call `consistsOf…`.
+/// 3.0's properties linking a part to its object, which 1.0 and 2.0 call `consistsOf…` (read only
+/// in its namespaces, see [`in_3_0`]).
 const PARTS: [&str; 3] = ["buildingPart", "bridgePart", "tunnelPart"];
+
+/// Whether an element is in one of CityGML 3.0's namespaces. The names 3.0 adds (`boundary`,
+/// `fillingSurface`, `relativeGeometry`, `buildingPart`, `genericAttribute`, `relatedTo`, a group
+/// member's `Role`) are read only there: an extension (ADE) of a 1.0 or 2.0 model may give one of
+/// them to a property of its own, which keeps the meaning it had.
+fn in_3_0(n: &Node) -> bool {
+    n.tag_name().namespace().is_some_and(|ns| ns.starts_with(CITYGML) && ns.ends_with("/3.0"))
+}
+
+/// Whether a property's features are surfaces of its object ([`SURFACE_PROPERTIES`],
+/// [`SURFACE_PROPERTIES_3`]).
+fn surface_property(p: &Node) -> bool {
+    let name = local(p);
+    SURFACE_PROPERTIES.contains(&name) || (SURFACE_PROPERTIES_3.contains(&name) && in_3_0(p))
+}
+
+/// Whether a property holds an implicit geometry's prototype ([`PROTOTYPES`]), by its name and, in
+/// the index, which doesn't resolve namespaces, whether the model is 3.0 (`three`).
+fn prototype_name(name: &str, three: bool) -> bool {
+    let [old, new] = PROTOTYPES;
+    name == old || (three && name == new)
+}
+
+/// Whether an element holds an implicit geometry's prototype ([`PROTOTYPES`]).
+fn prototype_property(n: &Node) -> bool {
+    prototype_name(local(n), in_3_0(n))
+}
 
 /// Features written in UpperCamelCase that are a property's value, not a city object.
 const VALUES: [&str; 4] = ["Envelope", "Null", "Address", "Appearance"];
@@ -343,6 +377,8 @@ struct Index {
     appearances: usize,
     /// The versions the model holds (3.0), which aren't read.
     versions: usize,
+    /// Whether the model is CityGML 3.0, whose own names the index reads only then.
+    three: bool,
     /// Members given only by a link that the index alone meets (an empty `featureMembers`), which
     /// aren't followed.
     links: usize,
@@ -638,7 +674,7 @@ impl Index {
             scope: if own { scopes.stack.len() - 1 } else { around },
             own,
             dim: written_dim(e).or(dim),
-            prototype: prototype || PROTOTYPES.contains(&name),
+            prototype: prototype || prototype_name(name, self.three),
             undrawn: hidden || undrawn(name),
         });
     }
@@ -726,6 +762,7 @@ impl Index {
                 }
                 rooted = true;
                 check_root(file_name, e)?;
+                index.three = root_namespace(e).as_deref().map(str::trim) == Some(CITYGML_3);
                 index.namespaces = declarations(e);
                 let gml = gml_prefixes(e);
                 let bytes = gml.iter().map(String::len).sum();
@@ -736,7 +773,7 @@ impl Index {
             {
                 index.see_system(file_name, srs.trim())?;
             }
-            if prototype.is_none() && !empty && PROTOTYPES.contains(&e.local_name().into_inner()) {
+            if prototype.is_none() && !empty && prototype_name(e.local_name().into_inner(), index.three) {
                 prototype = Some(depth);
             }
             match (depth, holder) {
@@ -935,7 +972,7 @@ fn undrawn_at(n: &Node) -> bool {
 /// Whether an element is in an implicit geometry's prototype, in its own system: only its implicit
 /// geometries place it.
 fn in_prototype(n: &Node) -> bool {
-    n.ancestors().skip(1).any(|a| PROTOTYPES.contains(&local(&a)))
+    n.ancestors().skip(1).any(|a| prototype_property(&a))
 }
 
 /// Whether a line or ring holds a point or curve given only by a link, so it isn't whole.
@@ -971,7 +1008,7 @@ fn is_object(e: &Node) -> bool {
                 !terrain_intersection(local(&p))
                     && (property_lod(&p).is_some()
                         || elements(p).next().is_some_and(|g| is_geometry(&g))
-                        || (SURFACE_PROPERTIES.contains(&local(&p)) && elements(p).any(|s| !is_gml(&s)))
+                        || (surface_property(&p) && elements(p).any(|s| !is_gml(&s)))
                         // A wrapper with no id of its own, which carries the objects it holds.
                         || elements(p).any(|c| is_object(&c)))
             }))
@@ -1045,7 +1082,7 @@ fn generic_name(a: &Node) -> Option<String> {
 /// 3.0's group member: a `groupMember` holding a `Role`, which holds the member (a `groupMember`)
 /// and its role (`role`). Gives the member, and whether the role is given.
 fn group_role<'a, 'i>(p: &Node<'a, 'i>) -> Option<(bool, Node<'a, 'i>)> {
-    if local(p) != "groupMember" {
+    if local(p) != "groupMember" || !in_3_0(p) {
         return None;
     }
     let role = elements(*p).next().filter(|r| local(r) == "Role")?;
@@ -1113,8 +1150,8 @@ struct Said {
     repeated_ids: usize,
     /// Geometries whose `gml:id`, which a link names, an earlier element of a member has too.
     repeated_geometry_ids: usize,
-    /// Links that would make one object another's part (`consistsOfBuildingPart`, `groupMember`, a
-    /// group's `parent`) naming no other object of the file, or made by an object with no id.
+    /// Links that would make one object another's part (`consistsOfBuildingPart`, 3.0's
+    /// `buildingPart`, `bridgePart` and `tunnelPart`, `groupMember`, a group's `parent`) naming no other object of the file, or made by an object with no id.
     object_links: usize,
     /// Group members with a role in their group (`role`), which isn't kept.
     group_roles: usize,
@@ -1132,6 +1169,8 @@ struct Said {
     not_objects: usize,
     /// Values naming the code list they are taken from (`codeSpace`), which isn't kept.
     code_spaces: usize,
+    /// Sets of generic attributes naming a code list (`codeSpace`), which isn't kept.
+    set_code_spaces: usize,
     /// Values with attributes other than their unit and code list (a language, `xml:lang`), which
     /// aren't kept.
     value_attributes: usize,
@@ -1213,7 +1252,7 @@ impl Said {
         say(
             self.object_links,
             format!(
-                "{} links between city objects (consistsOfBuildingPart, buildingPart, groupMember, a group's parent) name no other city object of the file, or are made by one with no gml:id: the link is kept as an attribute, but no parent is",
+                "{} links between city objects (consistsOfBuildingPart, buildingPart, bridgePart, tunnelPart, groupMember, a group's parent) name no other city object of the file, or are made by one with no gml:id: the link is kept as an attribute, but no parent is",
                 self.object_links
             ),
         );
@@ -1251,6 +1290,13 @@ impl Said {
             format!(
                 "{} values name the code list they are taken from (codeSpace), which isn't kept: the code is kept on its own",
                 self.code_spaces
+            ),
+        );
+        say(
+            self.set_code_spaces,
+            format!(
+                "{} sets of generic attributes (genericAttributeSet) name a code list (codeSpace), which isn't kept",
+                self.set_code_spaces
             ),
         );
         say(
@@ -1680,7 +1726,8 @@ impl Reading {
         // `name` and a set's list by its `codeSpace`, attributes; 3.0 by `gen:name` and
         // `gen:codeSpace` children, each member in a `genericAttribute`.
         for set in a.descendants().filter(|n| n.is_element() && local(n).eq_ignore_ascii_case("genericAttributeSet")) {
-            self.said.code_spaces += usize::from(attribute(&set, "codeSpace").is_some() || elements(set).any(|c| local(&c) == "codeSpace"));
+            self.said.set_code_spaces +=
+                usize::from(attribute(&set, "codeSpace").is_some() || elements(set).any(|c| local(&c) == "codeSpace"));
             for member in elements(set).filter(|m| !matches!(local(m), "name" | "codeSpace")) {
                 let member = if local(&member) == "genericAttribute" { elements(member).next() } else { Some(member) };
                 self.said.unnamed_generic += usize::from(member.is_none_or(|m| generic_name(&m).is_none()));
@@ -1724,7 +1771,7 @@ impl Reading {
             {
                 self.said_generic(&p);
                 insert(&mut attributes, key, generic_value(&p));
-            } else if name == "genericAttribute" {
+            } else if name == "genericAttribute" && in_3_0(&p) {
                 // 3.0's: the attribute inside, named by its `gen:name`.
                 for a in elements(p) {
                     match generic_name(&a) {
@@ -1735,7 +1782,7 @@ impl Reading {
                         None => self.said.unnamed_generic += 1,
                     }
                 }
-            } else if name == "relatedTo" && first.is_some_and(|f| local(&f) == "CityObjectRelation") {
+            } else if name == "relatedTo" && in_3_0(&p) && first.is_some_and(|f| local(&f) == "CityObjectRelation") {
                 self.said.object_relations += 1;
             } else if terrain_intersection(name) {
                 // Where the object meets the ground: an auxiliary line, not the object's shape.
@@ -1746,7 +1793,7 @@ impl Reading {
                 address = true;
             } else if name == "appearance" {
                 self.said.appearances += 1;
-            } else if only_link(&p) && SURFACE_PROPERTIES.contains(&name) {
+            } else if only_link(&p) && surface_property(&p) {
                 self.said.links += 1;
             } else if let Some(href) = attribute(&p, "href").filter(|_| first.is_none()) {
                 // A relation to another feature (a group's members, a generalization), kept as
@@ -1754,7 +1801,9 @@ impl Reading {
                 // link a child and its parent, as if written one in the other.
                 let other = fragment(href);
                 let relation = match name {
-                    _ if name.starts_with("consistsOf") || PARTS.contains(&name) || name == "groupMember" => Some((other, id)),
+                    _ if name.starts_with("consistsOf") || (PARTS.contains(&name) && in_3_0(&p)) || name == "groupMember" => {
+                        Some((other, id))
+                    }
                     "parent" if ty == "CityObjectGroup" => Some((id, other)),
                     _ => None,
                 };
@@ -1771,7 +1820,7 @@ impl Reading {
             } else if first.is_some_and(|f| is_gml(&f)) {
                 // A geometry in a property that names no level of detail (a group's, a relief's).
                 self.geometry(&p, At { lod: None, ground: false }, &mut parts, &mut links);
-            } else if first.is_some_and(|f| SURFACE_PROPERTIES.contains(&name) && local(&f).starts_with(char::is_uppercase)) {
+            } else if first.is_some_and(|f| surface_property(&p) && local(&f).starts_with(char::is_uppercase)) {
                 elements(p).for_each(|s| self.surface(&s, &mut parts, &mut links));
             } else if elements(p).any(|c| is_object(&c)) {
                 // The objects; a feature beside them with no id and no geometry is said. A group's
@@ -2059,7 +2108,7 @@ impl Reading {
         for p in elements(*s) {
             if let Some(rank) = property_lod(&p) {
                 self.geometry(&p, At { lod: Some(rank), ground }, parts, links);
-            } else if matches!(local(&p), "opening" | "fillingSurface") {
+            } else if local(&p) == "opening" || (local(&p) == "fillingSurface" && in_3_0(&p)) {
                 if only_link(&p) {
                     self.said.links += 1;
                 } else {
@@ -2533,7 +2582,7 @@ impl<'a, 'i> Walk<'_, 'a, 'i> {
             }
             Placement::new(&v, reference)
         });
-        let shape = elements(*g).find(|c| PROTOTYPES.contains(&local(c)));
+        let shape = elements(*g).find(prototype_property);
         let to = match shape {
             Some(rel) if only_link(&rel) => attribute(&rel, "href").map(To::Href),
             Some(rel) => elements(rel).next().map(To::Node),
