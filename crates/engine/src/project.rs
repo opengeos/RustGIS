@@ -54,8 +54,20 @@ pub fn open_command(path: &str) -> &'static str {
     }
 }
 /// Saved-document compatibility version, independent of the RustGIS release version.
-/// Advance it when an older reader would lose meaningful saved information on resaving.
+/// Advance it when an older reader would lose meaningful saved information on resaving. The
+/// format this RustGIS writes.
 pub const FORMAT: u32 = 1;
+/// The newest format this RustGIS reads. Format 2 is read a release before anything writes it
+/// (#1853): a document of format 2 opens when this RustGIS knows every capability it `requires`,
+/// so what a later RustGIS adds to format 2, and an older one would lose, is listed there and
+/// refused by name instead.
+pub const READ_FORMAT: u32 = 2;
+/// The capabilities a saved document may require that this RustGIS reads. None yet: format 2 is
+/// format 1's content, and each later addition an older reader would lose comes with its name.
+pub const CAPABILITIES: &[&str] = &[];
+/// The most capabilities a refusal names, each cut to [`CAPABILITY_SAID`] characters.
+const CAPABILITIES_SAID: usize = 8;
+const CAPABILITY_SAID: usize = 64;
 /// Largest project file read or saved in the browser, or on a computer whose memory isn't known
 /// (512 MiB): the floor of [`max_bytes`].
 pub const BYTES_FLOOR: u64 = 512 << 20;
@@ -683,11 +695,55 @@ fn plain_web_address(path: &str) -> bool {
 struct FileFormat {
     #[serde(default)]
     format: u64,
+    /// The capabilities the document needs its reader to know (format 2 on), read loosely so a
+    /// list of the wrong shape is said as such rather than as no RustGIS document at all.
+    #[serde(default)]
+    requires: Option<serde_json::Value>,
+}
+
+/// The capabilities `requires` names that this RustGIS doesn't know, or an error when it isn't a
+/// list of names.
+fn unknown_capabilities(requires: Option<&serde_json::Value>, kind: &str) -> Result<Vec<String>, String> {
+    let Some(requires) = requires.filter(|v| !v.is_null()) else { return Ok(Vec::new()) };
+    let bad = || format!("this {kind}'s list of the capabilities it needs (`requires`) doesn't read: it isn't a list of names");
+    let names = requires.as_array().ok_or_else(bad)?;
+    let mut unknown = Vec::new();
+    for name in names {
+        let name = name.as_str().ok_or_else(bad)?;
+        if !CAPABILITIES.contains(&name) && !unknown.iter().any(|u| u == name) {
+            unknown.push(name.to_string());
+        }
+    }
+    Ok(unknown)
+}
+
+/// Capability names as a refusal says them: at most [`CAPABILITIES_SAID`], each cut short and
+/// without control characters, and how many more.
+fn capabilities_said(names: &[String]) -> String {
+    let mut said: Vec<String> = names
+        .iter()
+        .take(CAPABILITIES_SAID)
+        .map(|n| {
+            let clean: String = n.chars().filter(|c| !c.is_control()).collect();
+            if clean.chars().count() > CAPABILITY_SAID {
+                format!("{}…", clean.chars().take(CAPABILITY_SAID).collect::<String>())
+            } else {
+                clean
+            }
+        })
+        .map(|n| format!("`{n}`"))
+        .collect();
+    if names.len() > CAPABILITIES_SAID {
+        said.push(format!("{} more", names.len() - CAPABILITIES_SAID));
+    }
+    said.join(", ")
 }
 
 /// Refuse future document formats before typed deserialization or normalization. Missing
 /// metadata is legacy content; arrays include legacy style files. Writers remain unchanged
-/// until a change needs a newer format, at which point it must declare that format.
+/// until a change needs a newer format, at which point it must declare that format. Up to
+/// [`READ_FORMAT`] is read, unless the document requires a capability this RustGIS doesn't know:
+/// that refusal names them.
 pub(crate) fn check_format(text: &str, kind: &str) -> Result<(), String> {
     let max = max_bytes();
     if text.len() as u64 > max {
@@ -697,8 +753,15 @@ pub(crate) fn check_format(text: &str, kind: &str) -> Result<(), String> {
         return Ok(());
     }
     let header: FileFormat = serde_json::from_str(text).map_err(|e| format!("not a RustGIS {kind}: {e}"))?;
-    if header.format > u64::from(FORMAT) {
+    if header.format > u64::from(READ_FORMAT) {
         return Err(format!("this {kind} was saved by a newer RustGIS (format {}). Update RustGIS to open it.", header.format));
+    }
+    let unknown = unknown_capabilities(header.requires.as_ref(), kind)?;
+    if !unknown.is_empty() {
+        return Err(format!(
+            "this {kind} needs what this RustGIS can't read ({}). Update RustGIS to open it.",
+            capabilities_said(&unknown)
+        ));
     }
     Ok(())
 }
@@ -1311,7 +1374,7 @@ impl Project {
             }
         })?;
         p.ensure_imports_complete().map_err(|_| "a project file cannot contain runtime GeoLibre download reservations".to_string())?;
-        if p.format > FORMAT {
+        if p.format > READ_FORMAT {
             return Err(format!("this project was saved by a newer RustGIS (format {}). Update RustGIS to open it.", p.format));
         }
         if restore {

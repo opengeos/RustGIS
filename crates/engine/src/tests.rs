@@ -42834,6 +42834,56 @@ fn importing_a_file_that_is_neither_map_nor_project_says_so() {
     assert!(e.contains("Update RustGIS"), "{e}");
 }
 
+/// Format 2 is read a release before anything writes it (#1853 piece 1): a project of format 2
+/// opens, and is saved again in the format this RustGIS writes; one needing a capability this
+/// RustGIS doesn't know is refused naming it; a newer format is refused as before.
+#[test]
+fn format_2_is_read_unless_it_needs_what_this_rustgis_cannot_read() {
+    let s = world();
+    let as_format = |format: u64, requires: Option<Value>| {
+        let mut v: Value = serde_json::to_value(&s.project).unwrap();
+        v["format"] = json!(format);
+        if let Some(r) = requires {
+            v["requires"] = r;
+        }
+        v.to_string()
+    };
+    // Format 2, with no capabilities or an empty list: read whole, and written back as format 1.
+    for requires in [None, Some(json!([])), Some(Value::Null)] {
+        let p = Project::from_json(&as_format(2, requires.clone())).unwrap();
+        assert_eq!(p.format, 2);
+        assert_eq!(p.maps.len(), s.project.maps.len(), "{requires:?}");
+        assert_eq!(p.map().layers.len(), s.map().layers.len(), "{requires:?}");
+        let again: Value = serde_json::from_str(&serde_json::to_string(&p).unwrap()).unwrap();
+        assert_eq!(again["format"], json!(crate::project::FORMAT));
+        assert!(again.get("requires").is_none());
+    }
+    // A capability this RustGIS doesn't know, in format 2 or a format 1 file that names one:
+    // refused, named once, with the advice to update.
+    for format in [1, 2] {
+        let e = Project::from_json(&as_format(format, Some(json!(["z-values", "z-values"])))).unwrap_err();
+        assert_eq!(e, "this project needs what this RustGIS can't read (`z-values`). Update RustGIS to open it.");
+    }
+    // A list that isn't one of names says so.
+    for requires in [json!("z-values"), json!([1]), json!({"z": true})] {
+        let e = Project::from_json(&as_format(2, Some(requires.clone()))).unwrap_err();
+        assert!(e.contains("(`requires`) doesn't read: it isn't a list of names"), "{requires}: {e}");
+    }
+    // Many long names with control characters: eight said, cut short, and how many more.
+    let many: Vec<String> = (0..20).map(|i| format!("cap{i}\n{}", "x".repeat(100))).collect();
+    let e = Project::from_json(&as_format(2, Some(json!(many)))).unwrap_err();
+    assert!(e.contains("`cap0") && e.contains("`cap7") && !e.contains("`cap8") && e.contains("12 more"), "{e}");
+    assert!(!e.contains('\n') && e.contains("x…`"), "{e}");
+    // Format 3 is still from a newer RustGIS, before its capabilities are looked at.
+    let e = Project::from_json(&as_format(3, Some(json!(["z-values"])))).unwrap_err();
+    assert!(e.contains("saved by a newer RustGIS (format 3)"), "{e}");
+    // Importing maps and layers from a format 2 project reads it too, and refuses the same way.
+    let mut t = world();
+    t.run("map.import", &json!({"text": as_format(2, None)})).unwrap();
+    let e = t.run("map.import", &json!({"text": as_format(2, Some(json!(["z-values"])))})).unwrap_err();
+    assert!(e.contains("this map file, project or package needs what this RustGIS can't read (`z-values`)"), "{e}");
+}
+
 #[test]
 fn model_import_refusals_name_their_cause() {
     let mut s = world();
