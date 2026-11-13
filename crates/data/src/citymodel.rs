@@ -27,8 +27,8 @@ pub(crate) const MAX_FACES: usize = 200_000;
 pub(crate) const MAX_FILE_FACES: usize = if cfg!(target_arch = "wasm32") { 500_000 } else { 4_000_000 };
 /// The rounds of passing heights up to parents always allowed. The specification has two levels.
 pub(crate) const MIN_PARENT_ROUNDS: usize = 8;
-/// Most objects and parent links visited passing heights up: past it, a crafted chain stops, with a
-/// notice, rather than costing the square of its length. [`MIN_PARENT_ROUNDS`] are run whatever it
+/// Most objects and parent links visited passing heights up, and again taking grounds from the
+/// topmost objects: past it, a crafted chain stops, with a notice, rather than costing the square of its length. [`MIN_PARENT_ROUNDS`] are run whatever it
 /// says, so a file with more links than it pays for eight rounds of costs those eight.
 pub(crate) const MAX_PARENT_VISITS: usize = if cfg!(target_arch = "wasm32") { 50_000_000 } else { 200_000_000 };
 /// Most characters of an object type shown in a layer's name.
@@ -116,6 +116,8 @@ pub(crate) struct Counts {
     pub(crate) parent_rounds: usize,
     /// The rounds after which taking parts' grounds from their topmost objects stopped, when it did.
     pub(crate) ground_rounds: usize,
+    /// Objects naming a parent that isn't among those read: their grounds leave it out.
+    pub(crate) unknown_parents: usize,
     pub(crate) unknown: BTreeSet<String>,
     pub(crate) renamed: BTreeSet<String>,
     /// Objects drawn from another geometry or level of detail than one whose X or Y can't be drawn.
@@ -537,6 +539,10 @@ pub(crate) fn finish(
     }
     counts.parent_rounds = raise_parents(&mut built, MAX_PARENT_VISITS).unwrap_or(0);
     counts.ground_rounds = set_grounds(&mut built, MAX_PARENT_VISITS).unwrap_or(0);
+    counts.unknown_parents = {
+        let ids: HashSet<&str> = built.iter().map(|b| b.id.as_str()).collect();
+        built.iter().filter(|b| b.parent_ids.iter().any(|p| !ids.contains(p.as_str()))).count()
+    };
     let overflows = |b: &Built| b.z.is_some_and(|(lo, hi)| !(hi - lo).is_finite() || b.ground.is_some_and(|g| !(lo - g).is_finite()));
     counts.height_overflows = built.iter().filter(|b| overflows(b)).count();
     let is_3d = |b: &Built| b.solid || b.z.is_some_and(|(lo, hi)| hi > lo);
@@ -1111,6 +1117,13 @@ pub(crate) fn messages(c: &Counts) -> Vec<String> {
         format!(
             "parent chains go deeper than {} levels: some parts' base_height is measured from a parent, not from the topmost object they are part of",
             c.ground_rounds
+        ),
+    );
+    say(
+        c.unknown_parents,
+        format!(
+            "{} city objects name a parent that isn't in the file or couldn't be read: their base_height leaves it out",
+            c.unknown_parents
         ),
     );
     if !c.unknown.is_empty() {

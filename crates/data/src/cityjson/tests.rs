@@ -938,6 +938,26 @@ fn a_part_starts_at_its_height_above_its_building() {
     assert_eq!(base("d1"), float(0.0));
     assert_eq!(base("d0"), float(3.0), "over a basement, it starts at the basement's depth");
     assert_eq!(base("x"), float(8.0), "from its topmost object's lowest point, not its parent's");
+    assert!(!says(&out, "name a parent"), "{:?}", messages_of(&out));
+}
+
+/// A part whose parent isn't in the file, or couldn't be read, is measured from itself, and said.
+#[test]
+fn a_part_whose_parent_is_missing_is_said() {
+    let vertices = json!([[0.0, 0.0, 10.0], [0.0001, 0.0001, 20.0]]);
+    let at = json!([{"type": "MultiPoint", "boundaries": [0, 1]}]);
+    let objects = json!({
+        "p": {"type": "BuildingPart", "parents": ["nowhere"], "geometry": at},
+        "q": {"type": "BuildingPart", "parents": ["broken"], "geometry": at},
+        "broken": {"type": 7},
+    });
+    let out = read("m.city.json", &doc(vertices, objects), None).unwrap();
+    assert_eq!(value(&out[0].0, 0, "base_height"), crate::Value::Float(0.0));
+    assert!(
+        says(&out, "2 city objects name a parent that isn't in the file or couldn't be read: their base_height leaves it out"),
+        "{:?}",
+        messages_of(&out)
+    );
 }
 
 /// A compound URN is read by its horizontal part, not by its last code, and its vertical part gives
