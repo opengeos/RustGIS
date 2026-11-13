@@ -14,7 +14,7 @@ import java.util.ArrayList;
 
 /**
  * The activity: Android's NativeActivity, plus what only Java can ask the system for. The Rust
- * side (src/android.rs) calls the public methods and collects what happened with takeEvents: it
+ * side (src/phone.rs) calls the public methods and collects what happened with takeEvents: it
  * is never called from here, so the library exports nothing but its entry point.
  *
  * An event is one string, its fields separated by tabs:

@@ -66,7 +66,7 @@ mod android {
     use eframe::wgpu;
     use rustgis_engine::data::dirs;
     use rustgis_engine::platform::{Event, Platform};
-    use rustgis_ui_egui::{Inbox, RustGisApp, i18n, tl};
+    use rustgis_ui_egui::{Inbox, RustGisApp, i18n};
     use std::cell::RefCell;
     use std::path::PathBuf;
     use std::rc::Rc;
@@ -99,10 +99,11 @@ mod android {
 
     /// Why a picked file didn't reach the dialog that asked for it.
     enum Problem {
-        /// A shortcut file over `SHORTCUT_FILE_MAX_BYTES`.
-        ShortcutTooLarge,
-        /// The file `name` is over the size read into memory (`rustgis_data::io::MAX_BYTES`).
-        TooLarge { name: String },
+        /// The shortcut file `name` is over `SHORTCUT_FILE_MAX_BYTES`.
+        ShortcutTooLarge { name: String },
+        /// The file `name` is over the size read into memory (`rustgis_data::io::MAX_BYTES`), by
+        /// itself or `together` with the files picked with it and already read.
+        TooLarge { name: String, together: bool },
         /// The copy of the file `name` couldn't be read.
         Unread { name: String, error: String },
         /// What gathering a Shapefile's parts found, in its own words.
@@ -129,8 +130,19 @@ mod android {
             }
             for problem in self.problems.lock().unwrap_or_else(|e| e.into_inner()).drain(..) {
                 let text = match problem {
-                    Problem::ShortcutTooLarge => tl!("Shortcut file exceeds the size limit.").to_string(),
-                    Problem::TooLarge { name } => i18n::fmt("{name} wasn't opened: it is larger than 256 MB.", &[("name", &name)]),
+                    Problem::ShortcutTooLarge { name } => {
+                        let limit = rustgis_ui_egui::SHORTCUT_FILE_MAX_BYTES.to_string();
+                        i18n::fmt("{name} wasn't opened: a shortcut file is at most {limit} bytes.", &[("name", &name), ("limit", &limit)])
+                    }
+                    Problem::TooLarge { name, together } => {
+                        let limit = (rustgis_engine::data::io::MAX_BYTES >> 20).to_string();
+                        let template = if together {
+                            "{name} wasn't opened: with the files picked with it, it is over {limit} MiB."
+                        } else {
+                            "{name} wasn't opened: it is over {limit} MiB."
+                        };
+                        i18n::fmt(template, &[("name", &name), ("limit", &limit)])
+                    }
                     Problem::Unread { name, error } => i18n::fmt("{name} wasn't opened: {error}", &[("name", &name), ("error", &error)]),
                     Problem::Shapefile(text) => text,
                 };
@@ -174,7 +186,7 @@ mod android {
                 }
                 let (inbox, problems, reading, ctx) = (self.inbox.clone(), self.problems.clone(), self.reading.clone(), ctx.clone());
                 reading.fetch_add(1, Ordering::Relaxed);
-                let names: Vec<String> = files.iter().map(|(name, _)| name.clone()).collect();
+                let unread = files.clone();
                 let counted = reading.clone();
                 let started = std::thread::Builder::new().name("picked files".into()).spawn(move || {
                     read_batch(&purpose, files, &inbox, &problems);
@@ -184,7 +196,9 @@ mod android {
                 if let Err(e) = started {
                     counted.fetch_sub(1, Ordering::Relaxed);
                     let error = e.to_string();
-                    for name in names {
+                    // Nothing will read these copies now: they go, as they would have once read.
+                    for (name, path) in unread {
+                        remove_copy(&path);
                         self.app.session.notify(i18n::fmt("{name} wasn't opened: {error}", &[("name", &name), ("error", &error)]), true);
                     }
                 }
@@ -198,31 +212,42 @@ mod android {
         let mark = mark(purpose);
         let say = |problem| problems.lock().unwrap_or_else(|e| e.into_inner()).push(problem);
         let mut read = Vec::new();
+        // The bytes read so far, of this batch.
+        let mut held = 0u64;
         for (name, path) in files {
             let shortcut =
                 mark == rustgis_ui_egui::SHORTCUT_PICK || (mark.is_empty() && name.to_ascii_lowercase().ends_with(".rgisshortcuts"));
             let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
             if shortcut && size > rustgis_ui_egui::SHORTCUT_FILE_MAX_BYTES as u64 {
-                say(Problem::ShortcutTooLarge);
-            } else if size > rustgis_engine::data::io::MAX_BYTES {
-                // Refused before it is read: a file this large is not held in memory whole.
-                say(Problem::TooLarge { name });
+                say(Problem::ShortcutTooLarge { name });
+            } else if held.saturating_add(size) > rustgis_engine::data::io::MAX_BYTES {
+                // Refused before it is read: no more than the cap is held in memory at once, in
+                // one file or in the files picked together.
+                say(Problem::TooLarge { name, together: size <= rustgis_engine::data::io::MAX_BYTES });
             } else {
                 match std::fs::read(&path) {
-                    Ok(bytes) => read.push((name, bytes)),
+                    Ok(bytes) => {
+                        held += bytes.len() as u64;
+                        read.push((name, bytes));
+                    }
                     Err(e) => say(Problem::Unread { name, error: e.to_string() }),
                 }
             }
-            let _ = std::fs::remove_file(&path);
-            if let Some(folder) = path.parent() {
-                let _ = std::fs::remove_dir(folder);
-            }
+            remove_copy(&path);
         }
         let (read, found) = rustgis_engine::data::io::gather_shapefiles(read);
         for text in found {
             say(Problem::Shapefile(text));
         }
         inbox.lock().unwrap_or_else(|e| e.into_inner()).extend(read.into_iter().map(|(name, bytes)| (format!("{mark}{name}"), bytes)));
+    }
+
+    /// Removes a picked file's copy, and its folder once that is empty.
+    fn remove_copy(path: &std::path::Path) {
+        let _ = std::fs::remove_file(path);
+        if let Some(folder) = path.parent() {
+            let _ = std::fs::remove_dir(folder);
+        }
     }
 
     /// What starts the name of a file from the picker for `purpose` in the inbox, as the browser's
