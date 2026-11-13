@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Builds a debug APK of the Android spike (#1902): target/android/rustgis-mobile.apk.
+# Builds a release APK of the Android spike (#1902), signed with a debug key:
+# target/android/rustgis-mobile.apk. --debug builds the debug profile instead.
 #
 #   apps/rustgis-mobile/build-apk.sh [--debug] [abi ...]     (default: arm64-v8a x86_64)
 #

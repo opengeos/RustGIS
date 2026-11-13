@@ -126,6 +126,12 @@ mod android {
             log::warn!("start-up: {e}");
             app.session.notify(e, true);
         }
+        // The pickers do nothing here (`rustgis_ui_egui`'s `filedialog`): said once, in the window.
+        let folder = android.external_data_path().map(|d| d.display().to_string());
+        app.session.warn(match folder {
+            Some(folder) => format!("Android has no file picker in RustGIS yet: Open, Save and Add Data's file buttons do nothing. Files and folders in {folder} are opened at start-up."),
+            None => "Android has no file picker in RustGIS yet: Open, Save and Add Data's file buttons do nothing.".to_string(),
+        });
         let pushed = pushed(&android, &mut app);
         app.session.mark_saved();
         let mut wgpu_options = eframe::egui_wgpu::WgpuConfiguration::default();

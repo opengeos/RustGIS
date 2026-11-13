@@ -50,7 +50,7 @@ Java or Kotlin: `aapt2` links the manifest, and the Rust library is the whole ap
 
 | | On Android |
 |---|---|
-| File dialogs | None: `rfd` has no Android backend, so every picker is cancelled and says so in the log (`crates/ui-egui/src/filedialog.rs`) |
+| File dialogs | None: `rfd` has no Android backend, so every picker is cancelled (`crates/ui-egui/src/filedialog.rs`); the app says so once at start-up, and each cancelled picker is in the log |
 | HTTPS trust | The bundled Mozilla roots, not the device's certificates; the session says so once (`rustgis_data::http`) |
 | Folders | Settings, app data and the cache are in the app's internal storage, set once at start-up (`rustgis_data::dirs::set_root`) |
 | GeoLibre tools, GDAL formats, DuckDB | Not available: a phone can't run their programs |
