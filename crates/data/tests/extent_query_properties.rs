@@ -147,7 +147,8 @@ fn check(src: &dyn FeatureSource, q: &Extent) -> Result<(Vec<String>, usize, usi
     }
     if src.visits_chunks() {
         let mut visited = Vec::new();
-        src.visit_chunks(Some(*q), 1 << 20, &mut |fs| {
+        // A small budget, so a layer comes in several chunks.
+        src.visit_chunks(Some(*q), 512, &mut |fs| {
             visited.extend(fs.into_iter().map(|f| f.id));
             Ok(())
         })
