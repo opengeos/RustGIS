@@ -20,13 +20,7 @@ const FORMATS: [&str; 5] = ["gpkg", "fgb", "shp", "parquet", "geojson"];
 
 /// Differences a provider may have from the whole read filtered in memory, as (format, the start
 /// of a difference from [`differences`], why).
-const LIMITS: &[(&str, &str, &str)] = &[
-    // bug: the Shapefile and GeoJSON indexes round the extent to the nearest `f32` and never test
-    // the feature's own box against it, so a box just outside the extent matches.
-    ("shp", "read gave a feature just outside", "the index compares boxes as `f32`"),
-    ("shp", "visit gave a feature just outside", "the index compares boxes as `f32`"),
-    ("geojson", "read gave a feature just outside", "the index compares boxes as `f32`"),
-];
+const LIMITS: &[(&str, &str, &str)] = &[];
 
 /// Whether `difference` is a limit of `ext` listed above.
 fn declared(ext: &str, difference: &str) -> bool {
