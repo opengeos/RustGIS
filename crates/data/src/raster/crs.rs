@@ -478,8 +478,9 @@ fn in_degrees(def: &str) -> String {
         .join(" ")
 }
 
-/// A definition's parameters as terrio-crs reads them (its ellipsoid's axes, prime meridian and
-/// unit among them), angles in radians or with the `D`/`°` marks read as degrees.
+/// A definition's parameters as terrio-crs reads them: its ellipsoid's axes in metres, the prime
+/// meridian (and other angles) in degrees, and metres per unit. Angles given in radians or with
+/// the `D`/`°` marks are turned into degrees before terrio-crs reads them.
 pub(crate) fn def_params(def: &str) -> Option<terrio_crs::ProjParams> {
     terrio_crs::SpatialRef::from_proj4(&in_degrees(def)).ok()?.projection_params()
 }

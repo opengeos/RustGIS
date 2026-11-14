@@ -2061,6 +2061,8 @@ fn def_wkt(def: &str, name: &str, code: Option<u16>) -> Option<String> {
     let number = |k: &str| text(k).and_then(|v| v.trim().parse::<f64>().ok());
     let reshaped = ["f", "es", "e"].iter().any(|k| flag(k)) && !["a", "R", "rf", "b"].iter().any(|k| flag(k));
     let reported_es = 1.0 - (proj.b / proj.a).powi(2);
+    // Reshaped to another shape than the reported one: `+f` equal to the named ellipsoid's
+    // flattening, written in other digits, isn't.
     let es = match (number("f"), number("es"), number("e")) {
         (Some(f), _, _) if reshaped => f * (2.0 - f),
         (None, Some(es), _) if reshaped => es,
@@ -2072,11 +2074,12 @@ fn def_wkt(def: &str, name: &str, code: Option<u16>) -> Option<String> {
             v.is_none_or(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "true" | "t" | "yes" | "y" | "on" | "1"))
         })
     };
+    let reshaped_to_another = (es - reported_es).abs() > 1e-12;
     let authalic = switched_on("R_A") && es != 0.0;
     let (a, b) = if authalic {
         let r = authalic_radius(proj.a, proj.a * (1.0 - es).sqrt());
         (r, r)
-    } else if es != reported_es {
+    } else if reshaped_to_another {
         (proj.a, proj.a * (1.0 - es).sqrt())
     } else {
         (proj.a, proj.b)
@@ -2088,7 +2091,7 @@ fn def_wkt(def: &str, name: &str, code: Option<u16>) -> Option<String> {
     // would take the named one back. The authalic sphere isn't given EPSG's name either, whose
     // radius is rounded.
     let named_axes = ellps.and_then(|e| earth_params(&format!("+proj=longlat +ellps={e}"))).map(|p| (p.a, p.b));
-    let changed = authalic || es != reported_es || named_axes.is_some_and(|(na, nb)| (na - a).abs() > 1e-6 || (nb - b).abs() > 1e-6);
+    let changed = authalic || reshaped_to_another || named_axes.is_some_and(|(na, nb)| (na - a).abs() > 1e-6 || (nb - b).abs() > 1e-6);
     let ellps_name = match known {
         Some(r) if authalic => format!("Authalic sphere of {}", r.1),
         Some(r) if !changed => r.1.to_string(),
@@ -2545,6 +2548,9 @@ pub(crate) mod tests {
             assert!((a.x - b.x).abs() < 0.001 && (a.y - b.y).abs() < 0.001, "{def}: {a:?} {b:?}\n{wkt}");
             assert!((a.x - proj.0).abs() < 0.001 && (a.y - proj.1).abs() < 0.001, "{def}: {a:?} PROJ {proj:?}");
         }
+        // A flattening equal to the named ellipsoid's keeps its name and datum.
+        let same = proj4_to_wkt("+proj=laea +lat_0=45 +lon_0=-100 +datum=WGS84 +f=0.0033528106647474805 +units=m +no_defs", "X").unwrap();
+        assert!(same.contains(r#"DATUM["WGS_1984",SPHEROID["WGS 84",6378137,298.257223563]"#), "{same}");
         // A definition without a unit is in metres.
         let wkt = proj4_to_wkt("+proj=tmerc +lon_0=9 +x_0=500000 +datum=WGS84 +no_defs", "X").unwrap();
         assert!(wkt.contains(r#"PARAMETER["false_easting",500000]"#) && wkt.contains(r#"UNIT["metre",1],AXIS"#), "{wkt}");
