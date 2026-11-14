@@ -52,6 +52,8 @@ public class MainActivity extends NativeActivity {
     private int dropped;
     /** Why TrackService couldn't run, until takeEvents says so. */
     private static volatile String refusal;
+    /** The activity, while it is created: TrackService's refusal reaches it at once. */
+    private static volatile MainActivity current;
     /** The listener positions arrive on, while they are asked for. */
     private android.location.LocationListener positions;
     /** The user is being asked for leave to use the location, and hasn't answered. */
@@ -68,6 +70,7 @@ public class MainActivity extends NativeActivity {
     @Override
     protected void onCreate(android.os.Bundle saved) {
         super.onCreate(saved);
+        current = this;
         // A photo being taken when Android ended the app (the camera app in front): its file.
         if (saved != null && saved.getString("photo") != null) {
             photo = new File(saved.getString("photo"));
@@ -243,9 +246,16 @@ public class MainActivity extends NativeActivity {
         }
     }
 
-    /** TrackService was refused by Android: takeEvents says why. */
+    /**
+     * TrackService was refused by Android: takeEvents says why, and the activity stops keeping
+     * positions out of sight now, not at the next frame (an app out of sight draws none).
+     */
     static void serviceRefused(String why) {
         refusal = why;
+        MainActivity activity = current;
+        if (activity != null) {
+            activity.keepLocatingRefused();
+        }
     }
 
     /** Back in sight: positions are asked for again, if they were wanted and are still allowed. */
@@ -336,6 +346,9 @@ public class MainActivity extends NativeActivity {
 
     @Override
     protected void onDestroy() {
+        if (current == this) {
+            current = null;
+        }
         stopLocating();
         stopService(new Intent(this, TrackService.class));
         super.onDestroy();
@@ -449,9 +462,14 @@ public class MainActivity extends NativeActivity {
         }
     }
 
-    /** TrackService didn't start: positions stop out of sight again. */
+    /** TrackService didn't start: positions stop out of sight again, now if out of sight already. */
     private void keepLocatingRefused() {
-        runOnUiThread(() -> keepLocating = false);
+        runOnUiThread(() -> {
+            keepLocating = false;
+            if (!started) {
+                stopLocating();
+            }
+        });
     }
 
     /**
@@ -533,9 +551,12 @@ public class MainActivity extends NativeActivity {
             File file = photo;
             photo = null;
             // Kept only when the camera said it took it and wrote something: a cancelled
-            // camera leaves an empty file behind, which goes.
+            // camera leaves an empty file behind, which goes. One that wrote a photo and then
+            // said it was cancelled keeps it, unattached, and that is said.
             if (file != null && result == RESULT_OK && file.length() > 0) {
                 add("photo\t" + file.getName() + "\t" + file.getAbsolutePath());
+            } else if (file != null && file.length() > 0) {
+                add("failed\tThe camera app wrote a photo and then said it was cancelled: it wasn't attached, and is kept as " + file.getAbsolutePath());
             } else {
                 if (file != null) {
                     file.delete();
