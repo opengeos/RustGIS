@@ -2730,7 +2730,7 @@ mod tests {
         h.run();
         h.event(egui::Event::Text("po".into()));
         h.run();
-        assert!(h.query_by_role_and_label(Role::Button, "Pop Est").is_some(), "the field offered");
+        assert!(h.query_by_role_and_label(Role::Button, "\"Pop Est\"").is_some(), "the field offered, as written");
         h.key_press(egui::Key::Enter);
         h.run();
         assert_eq!(h.state().dialogs.text, "\"Pop Est\"");

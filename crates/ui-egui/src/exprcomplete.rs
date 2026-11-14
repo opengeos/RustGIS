@@ -12,8 +12,10 @@ use rustgis_engine::data::query::{self, FuncSpec, Kw, Place, VARS};
 
 use crate::completion::{GAP, List, Offered, Worked};
 
-/// The most suggestions the list holds (it scrolls).
-const MAX_ITEMS: usize = 50;
+/// The most fields the list holds (typing narrows them; it scrolls): a table of hundreds of
+/// columns mustn't draw hundreds of rows. The functions, variables and keywords after them are
+/// the language's, a few dozen, and always all there.
+const MAX_FIELDS: usize = 50;
 
 /// What an item stands for.
 #[derive(Clone, Debug, PartialEq)]
@@ -75,6 +77,7 @@ fn offer_at(text: &str, at: usize, ds: &Dataset, asked: bool) -> Option<Offer> {
     if c.operand {
         let mut fields: Vec<&str> = ds.fields.iter().map(|f| f.name.as_str()).filter(|n| fits(n)).collect();
         fields.sort_by_key(|n| n.to_lowercase());
+        fields.truncate(MAX_FIELDS);
         of.extend(fields.into_iter().map(|n| Item::Field(n.to_string())));
     }
     if c.place == Place::Code {
@@ -89,7 +92,6 @@ fn offer_at(text: &str, at: usize, ds: &Dataset, asked: bool) -> Option<Offer> {
         }
         of.extend(c.keywords.iter().filter(|k| fits(k.word())).map(|k| Item::Keyword(*k)));
     }
-    of.truncate(MAX_ITEMS);
     if of.is_empty() {
         return None;
     }
@@ -98,11 +100,12 @@ fn offer_at(text: &str, at: usize, ds: &Dataset, asked: bool) -> Option<Offer> {
     Some(Offer { start: c.word.start, end: c.word.end, quote, items, of })
 }
 
-/// An item as the list shows it: a function with its brackets, so it reads apart from a field
-/// of the same name.
+/// An item as the list shows it, each apart from the others, as it is picked by what it shows:
+/// a field as the expression names it (`"NOT"`, `"$area"` and `"Pop Est"` in quotes, so a field
+/// never reads as a keyword or variable), a function with its brackets.
 fn shown(item: &Item) -> String {
     match item {
-        Item::Field(name) => name.clone(),
+        Item::Field(name) => field_ref(name),
         Item::Function(f) => format!("{}()", f.name),
         Item::Variable(_, name) => name.to_string(),
         Item::Keyword(k) => k.word().to_string(),
@@ -239,15 +242,30 @@ fn draw_help(ui: &mut Ui, item: &Item, ds: Option<&Dataset>, width: f32) {
 }
 
 /// Puts `item` in place of the offer's word in `text`: a field as the expression names it (in
-/// the quote it was begun with, a closing one already there taken in), a function with its
-/// bracket open (closed too when it takes no arguments), a variable or keyword as it is; as one
-/// undo step of the box, the cursor after it, and the box keeps the focus.
+/// the quote it was begun with, a closing one already there taken in; a `!` name holding a `!`
+/// in double quotes, as `!` has no escape), a function with its bracket open (closed too when
+/// it takes no arguments; a `(` already there is used, not doubled), a variable or keyword as it
+/// is; as one undo step of the box, the cursor after it, and the box keeps the focus.
 fn accept(ui: &Ui, id: Id, text: &mut String, offer: &Offer, item: &str) {
-    let Some(of) = find(offer, item) else { return };
+    let Some((new, at)) = written(text, offer, item) else { return };
+    let mut state = TextEditState::load(ui.ctx(), id).unwrap_or_default();
+    let mut undoer = state.undoer();
+    let was = state.cursor.char_range().unwrap_or(CCursorRange::one(CCursor::new(offer.end)));
+    undoer.add_undo(&(was, text.clone()));
+    state.set_undoer(undoer);
+    *text = new;
+    state.cursor.set_char_range(Some(CCursorRange::one(CCursor::new(at))));
+    state.store(ui.ctx(), id);
+    ui.memory_mut(|m| m.request_focus(id));
+}
+
+/// `text` with `item` of `offer` accepted (`accept`), and where the cursor goes (chars).
+fn written(text: &str, offer: &Offer, item: &str) -> Option<(String, usize)> {
+    let of = find(offer, item)?;
     let chars: Vec<char> = text.chars().collect();
-    let (Some(before), Some(mut after)) = (chars.get(..offer.start), chars.get(offer.end..)) else { return };
+    let (before, mut after) = (chars.get(..offer.start)?, chars.get(offer.end..)?);
     let put = match of {
-        Item::Field(name) => match offer.quote {
+        Item::Field(name) => match offer.quote.filter(|q| *q != '!' || !name.contains('!')) {
             Some(q) => {
                 if after.first() == Some(&q) {
                     after = after.get(1..).unwrap_or_default();
@@ -257,6 +275,10 @@ fn accept(ui: &Ui, id: Id, text: &mut String, offer: &Offer, item: &str) {
             }
             None => field_ref(name),
         },
+        Item::Function(f) if after.first() == Some(&'(') => {
+            after = after.get(1..).unwrap_or_default();
+            format!("{}(", f.name)
+        }
         Item::Function(f) if f.max == 0 => format!("{}()", f.name),
         Item::Function(f) => format!("{}(", f.name),
         Item::Variable(_, name) => name.to_string(),
@@ -265,15 +287,7 @@ fn accept(ui: &Ui, id: Id, text: &mut String, offer: &Offer, item: &str) {
     let mut new: String = before.iter().collect();
     new.push_str(&put);
     new.extend(after);
-    let mut state = TextEditState::load(ui.ctx(), id).unwrap_or_default();
-    let mut undoer = state.undoer();
-    let was = state.cursor.char_range().unwrap_or(CCursorRange::one(CCursor::new(offer.end)));
-    undoer.add_undo(&(was, text.clone()));
-    state.set_undoer(undoer);
-    *text = new;
-    state.cursor.set_char_range(Some(CCursorRange::one(CCursor::new(offer.start + put.chars().count()))));
-    state.store(ui.ctx(), id);
-    ui.memory_mut(|m| m.request_focus(id));
+    Some((new, offer.start + put.chars().count()))
 }
 
 #[cfg(test)]
@@ -312,7 +326,7 @@ mod tests {
     /// first; the keywords where a keyword goes.
     #[test]
     fn a_word_begun_offers_what_it_starts() {
-        assert_eq!(items("po", false), ["pop", "Pop Est"]);
+        assert_eq!(items("po", false), ["pop", "\"Pop Est\""]);
         assert_eq!(items("ro", false), ["round()"]);
         assert_eq!(items("$ar", false), ["$area"]);
         assert_eq!(items("pop > 1 a", false), ["AND"]);
@@ -335,7 +349,58 @@ mod tests {
     #[test]
     fn a_quoted_name_offers_only_fields() {
         let o = offer_at("\"Po", 3, &ds(), false).unwrap();
-        assert_eq!((o.items, o.quote, o.start), (vec!["pop".to_string(), "Pop Est".to_string()], Some('"'), 0));
+        assert_eq!((o.items, o.quote, o.start), (vec!["pop".to_string(), "\"Pop Est\"".to_string()], Some('"'), 0));
         assert!(items("\"ro", false).is_empty(), "no function in a field's quotes");
+    }
+
+    /// A field that reads like a keyword or a variable is shown quoted, so each item is picked
+    /// as what it is: Enter on `NOT` writes the keyword, on `"NOT"` the field.
+    #[test]
+    fn a_field_never_reads_as_a_keyword_or_variable() {
+        let ds = Dataset::new("t", GeometryType::Point, vec![Field::new("NOT", FieldType::Text), Field::new("$area", FieldType::Double)]);
+        let o = offer_at("no", 2, &ds, false).unwrap();
+        assert_eq!(o.items, ["\"NOT\"", "NOT"]);
+        assert_eq!(find(&o, "NOT"), Some(&Item::Keyword(Kw::Not)));
+        assert_eq!(find(&o, "\"NOT\""), Some(&Item::Field("NOT".into())));
+        let o = offer_at("$ar", 3, &ds, false).unwrap();
+        assert_eq!(o.items, ["\"$area\"", "$area"]);
+    }
+
+    /// Many fields: at most `MAX_FIELDS` of them, and the language's items still after them.
+    #[test]
+    fn many_fields_leave_room_for_the_language() {
+        let fields = (0..80).map(|i| Field::new(format!("f{i:02}"), FieldType::Integer)).collect();
+        let ds = Dataset::new("t", GeometryType::Point, fields);
+        let o = offer_at("", 0, &ds, true).unwrap();
+        assert_eq!(o.of.iter().filter(|i| matches!(i, Item::Field(_))).count(), MAX_FIELDS);
+        for want in ["round()", "$area", "CASE"] {
+            assert!(o.items.iter().any(|i| i == want), "{want}");
+        }
+    }
+
+    /// What accepting writes, and where the cursor goes: `▮` marks it, in `text` (before) and in
+    /// what's expected (after).
+    #[test]
+    fn accepting_writes_the_item_as_the_expression_needs_it() {
+        let ds =
+            Dataset::new("t", GeometryType::Point, vec![Field::new("Pop Est", FieldType::Integer), Field::new("Area!", FieldType::Double)]);
+        for (text, item, want) in [
+            ("Pop▮", "\"Pop Est\"", "\"Pop Est\"▮"),
+            ("\"Pop▮\" > 1", "\"Pop Est\"", "\"Pop Est\"▮ > 1"),
+            ("!Pop▮", "\"Pop Est\"", "!Pop Est!▮"),
+            // `!` has no escape: a name holding one goes in double quotes.
+            ("!Ar▮", "\"Area!\"", "\"Area!\"▮"),
+            ("ro▮", "round()", "round(▮"),
+            ("ro▮(2)", "round()", "round(▮2)"),
+            ("p▮", "pi()", "pi()▮"),
+        ] {
+            let at = text.chars().position(|c| c == '▮').unwrap();
+            let text = text.replace('▮', "");
+            let offer = offer_at(&text, at, &ds, false).unwrap();
+            let (new, cursor) = written(&text, &offer, item).unwrap();
+            let mut got: Vec<char> = new.chars().collect();
+            got.insert(cursor, '▮');
+            assert_eq!(got.into_iter().collect::<String>(), want, "{text}");
+        }
     }
 }
