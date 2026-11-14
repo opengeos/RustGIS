@@ -778,8 +778,29 @@ impl Ios {
         let delegate = PickerDelegate::new(self.mtm, self.shared.clone(), self.folders.clone(), Asked::Save { name, temporary });
         picker.setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
         self.picker.replace(Some(delegate));
+        if let Err(error) = self.present(&presenter, &picker) {
+            // Not shown: its delegate will never answer, so the file goes now.
+            if let Some(Asked::Save { name, temporary }) =
+                self.picker.borrow().as_ref().and_then(|delegate| delegate.ivars().asked.borrow_mut().take())
+            {
+                remove_with_folder(&temporary);
+                self.shared.failed(i18n::fmt("{name} wasn't saved: {error}", &[("name", &name), ("error", &error)]));
+            }
+        }
+    }
+
+    /// Shows `picker` over `presenter`, counted as showing until it answers; or says why it
+    /// couldn't be. UIKit declines a presentation (another under way, a presenter leaving the
+    /// window) with only a log line, and then no delegate ever answers: counted, it would hold
+    /// back every later picker until the app is started again.
+    fn present(&self, presenter: &UIViewController, picker: &UIViewController) -> Result<(), String> {
         count(&self.shared.showing, true);
-        presenter.presentViewController_animated_completion(&picker, true, None);
+        presenter.presentViewController_animated_completion(picker, true, None);
+        if picker.presentingViewController().is_none() {
+            count(&self.shared.showing, false);
+            return Err(i18n::fmt("The picker couldn't be shown just now: try again.", &[]));
+        }
+        Ok(())
     }
 
     /// The window's view controller on top, to show a picker over.
@@ -829,9 +850,7 @@ impl Platform for Ios {
             PickerDelegate::new(self.mtm, self.shared.clone(), self.folders.clone(), Asked::Open { purpose: purpose.to_string() });
         picker.setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
         self.picker.replace(Some(delegate));
-        count(&self.shared.showing, true);
-        presenter.presentViewController_animated_completion(&picker, true, None);
-        Ok(())
+        self.present(&presenter, &picker)
     }
 
     fn save_file(&self, name: &str, bytes: Vec<u8>) -> Result<(), String> {
@@ -906,9 +925,7 @@ impl Platform for Ios {
         // SAFETY: the delegate conforms to both protocols the picker asks of it.
         unsafe { picker.setDelegate(Some(&delegate)) };
         self.camera.replace(Some(delegate));
-        count(&self.shared.showing, true);
-        presenter.presentViewController_animated_completion(&picker, true, None);
-        Ok(())
+        self.present(&presenter, &picker)
     }
 
     fn take_events(&self) -> Vec<Event> {

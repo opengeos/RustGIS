@@ -28,9 +28,10 @@ pub trait Phone: Platform {
     /// Whether something asked for is still to be reported: the window keeps asking while it is.
     fn busy(&self) -> bool;
 
-    /// Whether a picker (or the camera) is up and hasn't answered. A phone that wakes the window
-    /// when one answers leaves it out of [`Phone::busy`], so the window doesn't redraw behind it;
-    /// one that doesn't counts it there too, which is the default.
+    /// Whether a picker (or the camera) is on the screen and hasn't answered: a picker asked for
+    /// now is refused. A phone that wakes the window when one answers leaves it out of
+    /// [`Phone::busy`], so the window doesn't redraw behind it. The default, [`Phone::busy`],
+    /// is for a phone that can't tell.
     fn picking(&self) -> bool {
         self.busy()
     }
@@ -162,8 +163,12 @@ impl<P: Phone> App<P> {
         for event in phone.take_events() {
             match event {
                 Event::Picked { purpose, name, path } => {
-                    self.asked.borrow_mut().clear();
-                    self.asked_busy = false;
+                    // A file of the request asked for last answers it; one of an earlier request
+                    // (still being copied when another was asked for) leaves that one waiting.
+                    if *self.asked.borrow() == purpose {
+                        self.asked.borrow_mut().clear();
+                        self.asked_busy = false;
+                    }
                     self.waiting.push((purpose, name, path));
                 }
                 // A cancelled DXF request is ended, so Import DXF stops waiting for it.
@@ -360,27 +365,24 @@ fn use_picker<P: Phone + 'static>(
     let refused_while_up = refused_picker.clone();
     app.services.open_async = Some(Box::new(move |purpose: &str| {
         log::info!("asking for files: {purpose}");
-        // Kept as the picker's request only when no other picker's is: a second one is refused
-        // by the phone, and the one showing keeps its own.
-        let first = asking.borrow().is_empty();
-        if first {
-            *asking.borrow_mut() = purpose.to_string();
-        }
-        let shown = picker.pick_files(purpose);
-        let refused_here = match shown {
-            Ok(()) => !first,
+        // Refused only where the phone refuses it: an error now (iOS), or a picker on the screen
+        // already (Android says why a moment later). Accepted, it is the request from now on,
+        // even while the files picked before it are still being copied.
+        let up = picker.picking();
+        let refused_here = match picker.pick_files(purpose) {
+            Ok(()) => up,
             Err(e) => {
                 log::warn!("{e}");
                 refused.borrow_mut().push(e);
-                if first {
-                    asking.borrow_mut().clear();
-                }
                 true
             }
         };
-        // Refused because another was up: the shell puts back what the front end kept for that
-        // one ([`Kept`]).
-        if refused_here && !first {
+        if !refused_here {
+            *asking.borrow_mut() = purpose.to_string();
+        }
+        // Refused because another picker was up: the shell puts back what the front end kept
+        // for that one ([`Kept`]).
+        if refused_here && up {
             refused_while_up.set(true);
         }
         // A DXF request whose picker didn't show is ended now: Import DXF stops waiting.
@@ -461,7 +463,7 @@ impl<P: Phone> eframe::App for App<P> {
             self.keyboard = keyboard;
         }
         self.take_phone_events(ctx, raw_input);
-        self.kept = (!self.asked.borrow().is_empty()).then(|| Kept::of(&self.app));
+        self.kept = self.phone.as_ref().is_some_and(|phone| phone.picking()).then(|| Kept::of(&self.app));
         // The pushed files open as files dropped on the desktop window do: once the window
         // runs, read off its thread with progress and Cancel, each failure said in the window.
         // Opened before the event loop, a large one would hold the app's start.
