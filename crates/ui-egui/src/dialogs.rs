@@ -365,8 +365,9 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
                     } else {
                         json!({"lon": app.dialogs.a.trim(), "lat": app.dialogs.b.trim()})
                     };
-                    // The command refuses a scale it can't use.
-                    let scale = app.dialogs.c.trim().replace(',', "");
+                    // The command refuses a scale it can't use: commas go only where they group
+                    // thousands (50,000), so a decimal comma (1,5) is refused, not read as 15.
+                    let scale = scale_text(&app.dialogs.c);
                     if !scale.is_empty() {
                         p["scale"] = json!(scale);
                     }
@@ -2438,9 +2439,49 @@ fn crs_details(ui: &mut egui::Ui, chosen: &str, current: &str, t: &Tokens) {
     }
 }
 
+/// A scale box's text as the command reads it: commas that group thousands (`50,000`,
+/// `1,000,000.5`) taken out, any other comma (a decimal comma, `1,5`) left in, so the command
+/// refuses it rather than reading `15`.
+fn scale_text(text: &str) -> String {
+    let text = text.trim();
+    let whole = text.split_once('.').map_or(text, |(w, _)| w);
+    let grouped = whole.contains(',') && {
+        let mut groups = whole.split(',');
+        let first = groups.next().unwrap_or("");
+        (1..=3).contains(&first.len())
+            && first.chars().all(|c| c.is_ascii_digit())
+            && groups.all(|g| g.len() == 3 && g.chars().all(|c| c.is_ascii_digit()))
+    };
+    let decimals = text.split_once('.').is_none_or(|(_, d)| !d.contains(','));
+    if grouped && decimals { text.replace(',', "") } else { text.to_string() }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A scale's commas go only where they group thousands: a decimal comma is left for the
+    /// command to refuse, not read as a bigger number.
+    #[test]
+    fn a_scale_box_takes_commas_only_between_thousands() {
+        for (typed, sent) in [
+            ("50,000", "50000"),
+            (" 1,000,000 ", "1000000"),
+            ("1,000,000.5", "1000000.5"),
+            ("50000", "50000"),
+            ("1,5", "1,5"),
+            ("50,00", "50,00"),
+            ("1234,567", "1234,567"),
+            (",500", ",500"),
+            ("1,000.5,5", "1,000.5,5"),
+            ("", ""),
+        ] {
+            assert_eq!(scale_text(typed), sent, "{typed}");
+        }
+        let mut s = rustgis_engine::Session::new(rustgis_engine::Project::default());
+        let refused = s.run("map.goToXY", &json!({"lon": 0, "lat": 0, "scale": scale_text("1,5")})).unwrap_err();
+        assert!(refused.contains("scale must be a positive number"), "{refused}");
+    }
 
     /// The app in a harness, its fonts installed on the first pass (the dialog draws on the next).
     fn app_harness(app: RustGisApp) -> egui_kittest::Harness<'static, RustGisApp> {
