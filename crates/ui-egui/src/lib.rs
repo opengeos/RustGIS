@@ -1117,8 +1117,10 @@ const CAPTURE_PIXELS: f64 = 16_000_000.0;
 /// The lowest dpi a layout is copied at: a page that would need less is an error.
 const CAPTURE_MIN_DPI: f64 = 36.0;
 
-/// The most positions [`RustGisApp::fixes`] keeps for an interface to take: a day of one a second.
-pub const FIXES_KEPT: usize = 86_400;
+/// The most positions [`RustGisApp::fixes`] keeps for an interface to take: more than two days of
+/// one a second, as many as a phone's shell keeps out of sight (its `MOST_EVENTS`), so a batch it
+/// hands over on coming back is taken whole into a track.
+pub const FIXES_KEPT: usize = 200_000;
 
 impl RustGisApp {
     /// Keeps a position the shell reported: the last one in [`RustGisApp::position`], and each in

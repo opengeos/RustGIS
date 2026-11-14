@@ -93,6 +93,15 @@ pub fn chrome(app: &mut RustGisApp, ui: &mut Ui) {
     }
     let frame = egui::Frame::NONE.fill(t.pane).stroke(Stroke::new(1.0, t.border));
     egui::Panel::bottom("touch_bar").exact_size(BAR).frame(frame).show(ui, |ui| bar(app, ui, &t, shown));
+    // The device's position off while a track is recorded (Android stopped it): the next
+    // position starts a run of its own, the track not joined across the gap.
+    let mut field = track::field(&ctx);
+    if !app.locate
+        && let Some(recording) = field.track.as_mut().filter(|t| !t.broken)
+    {
+        recording.broken = true;
+        track::set_field(&ctx, field);
+    }
     // A track being recorded says so over the bar, with its Stop, whatever sheet is up.
     if let Some(recording) = track::field(&ctx).track {
         let margin = egui::Margin::symmetric(12, 0);
@@ -166,10 +175,19 @@ pub fn chrome(app: &mut RustGisApp, ui: &mut Ui) {
         // The track being recorded, as it grows.
         if let (Some(recording), Some((map, _))) = (track::field(&ctx).track, app.map.view_rect) {
             let painter = ui.painter().with_clip_rect(map);
-            // One line for each run of points the view shows (a point behind the globe breaks it),
-            // a point on the pixel of the last left out: hours of a track stay a few shapes.
+            // One line for each run of points the view shows (a point behind the globe breaks it,
+            // as do a break in the track and a step across the antimeridian, which would be drawn
+            // the long way round), a point on the pixel of the last left out: hours of a track
+            // stay a few shapes.
             let mut runs: Vec<Vec<egui::Pos2>> = vec![Vec::new()];
-            for at in recording.points.iter().map(|f| app.lonlat_to_screen(f.lon, f.lat)) {
+            let mut before: Option<f64> = None;
+            for (i, f) in recording.points.iter().enumerate() {
+                let across = before.is_some_and(|lon| (f.lon - lon).abs() > 180.0);
+                before = Some(f.lon);
+                if (across || recording.runs.contains(&i)) && runs.last().is_some_and(|r| !r.is_empty()) {
+                    runs.push(Vec::new());
+                }
+                let at = app.lonlat_to_screen(f.lon, f.lat);
                 match (at, runs.last_mut()) {
                     (Some(p), Some(run)) if run.last().is_none_or(|q| q.distance(p) >= 1.0) => run.push(p),
                     (Some(_), _) => {}
@@ -188,6 +206,12 @@ pub fn chrome(app: &mut RustGisApp, ui: &mut Ui) {
             // The shape being drawn, kept while Edit is on but drawn only in Add; the feature
             // being edited, and where the cross snapped to.
             let state = form(&ctx);
+            // A streamed layer's features put in place by the map view this frame, after the
+            // sheet looked for the snap: one more frame looks again, the cross held still.
+            // Only while there is a layer to capture into, whose sheet then looks again.
+            if capture_layer(app, &state).is_some() && state.snap_for.is_some_and(|f| f.shapes != shapes(app)) {
+                ctx.request_repaint();
+            }
             if !state.edit_mode {
                 sketch(app, &painter, map.center(), &t, &ctx);
             }
@@ -444,7 +468,8 @@ struct Form {
     /// changes: they are of the place, not of a layer.
     photos: Vec<std::path::PathBuf>,
     /// What [`Form::snap`] was found for: it is looked for again only when the cross moved, the
-    /// map zoomed, the vertex being moved changed or the project did.
+    /// map zoomed, the vertex being moved changed, the session changed or a layer's shapes did
+    /// (a streamed layer's features put in place).
     snap_for: Option<SnapFor>,
     /// The height of the window the sheet was last drawn in: when it changes (the soft keyboard
     /// came or went), the field being typed in is scrolled back into view.
@@ -484,15 +509,23 @@ impl Form {
     }
 }
 
-/// What the cross's place was snapped for: its place, the vertex being moved, the project's state,
-/// the map's resolution and whether snapping was on.
+/// What the cross's place was snapped for: its place, the vertex being moved, the session's
+/// revision, the layers' geometry revisions summed (a streamed layer's features are put in place
+/// by the map view without a change to the session), the map's resolution and whether snapping
+/// was on.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct SnapFor {
     at: Option<(f64, f64)>,
     moving: Option<(u32, usize, rustgis_ui_egui::rustgis_engine::data::VertexId)>,
-    state: u64,
+    revision: u64,
+    shapes: u64,
     res: f64,
     on: bool,
+}
+
+/// The map's layers' geometry revisions, summed: it moves whenever a layer's shapes change.
+fn shapes(app: &RustGisApp) -> u64 {
+    app.session.map().layers.iter().fold(0u64, |sum, l| sum.wrapping_add(l.geometry_rev))
 }
 
 fn form(ctx: &egui::Context) -> Form {
@@ -912,7 +945,8 @@ fn capture(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     // on changed, not on every frame.
     let at = cross_place(app);
     let map = app.session.map();
-    let wants = SnapFor { at, moving, state: app.session.state(), res: map.camera.res, on: map.editing.snapping.enabled };
+    let wants =
+        SnapFor { at, moving, revision: app.session.revision, shapes: shapes(app), res: map.camera.res, on: map.editing.snapping.enabled };
     if state.snap_for != Some(wants) {
         state.snap = at.and_then(|at| edit::snap(app, at, moving));
         state.snap_for = Some(wants);
@@ -1279,11 +1313,12 @@ fn edit_sheet(
         }
         return;
     };
-    let Some(shape) = edit::shape(app, target.id, row) else {
+    // The shape is borrowed for each look at it, not copied each frame: the buttons change it.
+    let Some(status) = edit::shape_ref(app, target.id, row).map(|shape| edit::status(target.kind, shape, editing.vertex)) else {
         state.editing = None;
         return;
     };
-    ui.label(RichText::new(edit::status(target.kind, &shape, editing.vertex)).size(14.0).color(t.text));
+    ui.label(RichText::new(status).size(14.0).color(t.text));
     let off = || tl!("Nothing was changed: the cross is off the map. Move the map under it.");
     if target.kind == GeometryType::Point {
         if action(ui, t, tl!("Move Point Here"), width, true, true) {
@@ -1298,8 +1333,8 @@ fn edit_sheet(
         let has = editing.vertex.is_some();
         if action(ui, t, tl!("Pick Vertex at Cross"), width, !has, true) {
             let middle = app.map.view_rect.map(|(rect, _)| rect.center());
-            match middle.and_then(|at| edit::vertex_near(app, &shape, at)) {
-                Some(v) => state.editing = Some(editing.picking(Some(v), Some(&shape))),
+            match middle.and_then(|at| edit::vertex_near(app, edit::shape_ref(app, target.id, row)?, at)) {
+                Some(v) => state.editing = Some(editing.picking(Some(v), edit::shape_ref(app, target.id, row))),
                 None => app.session.notify(tl!("No vertex is near the cross. Move the map so the cross is on one."), true),
             }
         }
@@ -1314,14 +1349,15 @@ fn edit_sheet(
                     let at = if act == "delete" { None } else { cross };
                     if act != "delete" && at.is_none() {
                         app.session.notify(off(), true);
-                    } else if at.is_some_and(|at| edit::doubles(app, &shape, v, act, at)) {
+                    } else if let Some(at) = at
+                        && edit::shape_ref(app, target.id, row).is_some_and(|shape| edit::doubles(app, shape, v, act, at))
+                    {
                         app.session.notify(
                             tl!("Nothing was changed: the cross is on the vertex next to it, and two in one place make an edge of no length. Move the map."),
                             true,
                         );
                     } else if let Some(next) = edit::vertex(app, target.id, row, v, act, at) {
-                        let now = edit::shape(app, target.id, row);
-                        state.editing = Some(editing.picking(next, now.as_ref()));
+                        state.editing = Some(editing.picking(next, edit::shape_ref(app, target.id, row)));
                     }
                 }
             }
@@ -1789,6 +1825,26 @@ mod tests {
     }
 
     #[test]
+    fn the_snap_is_looked_for_again_once_a_layers_shapes_change() {
+        let ctx = egui::Context::default();
+        let mut app = RustGisApp::with_sample();
+        target(&mut app, GeometryType::Polyline);
+        frame(&mut app, &ctx, Sheet::Capture);
+        assert!(form(&ctx).snap_for.is_some());
+        // A stale snap the cache holds, then features read in the background: it is let go.
+        let stale = edit::Snapped { lon: 1.0, lat: 2.0, kind: "vertex" };
+        set_form(&ctx, Form { snap: Some(stale), ..form(&ctx) });
+        frame(&mut app, &ctx, Sheet::Capture);
+        // Nothing changed since the snap was found: the one held is kept.
+        assert_eq!(form(&ctx).snap, Some(stale));
+        // A layer's shapes put in place, as the map view does with a streamed layer's features.
+        let id = app.session.map().layers[0].id;
+        app.session.map_mut().layer_mut(id).unwrap().touch_geometry();
+        frame(&mut app, &ctx, Sheet::Capture);
+        assert_ne!(form(&ctx).snap, Some(stale));
+    }
+
+    #[test]
     fn a_vertex_put_on_the_one_next_to_it_is_found_and_a_place_apart_is_not() {
         let ctx = egui::Context::default();
         let mut app = RustGisApp::with_sample();
@@ -2082,11 +2138,14 @@ mod tests {
         let mark = app.session.notice_mark();
         assert!(!stop_track(&mut app, &ctx));
         assert_eq!(track::field(&ctx).track.map(|t| t.points.len()), Some(3));
-        assert!(app.session.notices_since(mark).iter().any(|n| n.error && n.text.contains("kept")));
+        // Why it was refused is said, then that it is kept.
+        let said: Vec<String> = app.session.notices_since(mark).iter().filter(|n| n.error).map(|n| n.text.clone()).collect();
+        assert!(said.len() >= 2 && said.last().is_some_and(|t| t.contains("kept")), "{said:?}");
         // The More sheet has room for its row while positioning is off.
         app.locate = false;
         frame(&mut app, &ctx, Sheet::More);
-        assert!(track::field(&ctx).track.is_some());
+        // With positioning off, the next position starts a run of its own.
+        assert!(track::field(&ctx).track.is_some_and(|t| t.broken));
     }
 
     #[test]
