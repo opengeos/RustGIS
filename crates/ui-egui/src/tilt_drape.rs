@@ -452,22 +452,25 @@ impl TiltDrape {
             .collect();
         let mut mesh = Mesh::default();
         // Shadows on the ground first, under every feature.
-        for (s, _, foot, up, rings, _) in shapes.iter().filter(|x| x.0.shadows) {
+        for (s, _, foot, up, rings, holes) in shapes.iter().filter(|x| x.0.shadows) {
             let shade = Color32::from_black_alpha((60 * u16::from(s.fill.a()) / 255) as u8);
-            for q in render::tilted_shadow_quads(cam, w, h, rings, *foot, *up) {
+            // Raised, a hole's walls cast too: the footprint moved by the base, which no longer sits
+            // under the roof, is the top one's and every edge's sweep between them.
+            let swept: &[Vec<(f64, f64)>] = if *foot > 0.0 { holes } else { &[] };
+            for q in render::tilted_shadow_quads(cam, w, h, rings, *foot, *up)
+                .into_iter()
+                .chain(render::tilted_shadow_quads(cam, w, h, swept, *foot, *up))
+            {
                 fan(&mut mesh, q.into_iter().map(|p| Some(pos(p))), shade);
             }
-            // The footprint moved away from the light: the roof's triangles on the ground. Raised,
-            // also moved by the base, so the walls' shadow has no gap where it falls in a hole.
-            let shifts = [(true, render::shadow_shift(*foot + *up)), (*foot > 0.0, render::shadow_shift(*foot))];
-            for &(_, (du, dv)) in shifts.iter().filter(|s| s.0) {
-                for [a, b, c] in s.roof_indices.as_chunks::<3>().0 {
-                    let tri: Option<Vec<(f64, f64)>> =
-                        [a, b, c].iter().map(|&&k| s.roof.get(k as usize).map(|p| ground(s, p)).map(|(u, v)| (u + du, v + dv))).collect();
-                    let Some(tri) = tri else { continue };
-                    let cut = render::clip_near(&tri, cam.near_v(0.0, h));
-                    fan(&mut mesh, cut.into_iter().map(|(u, v)| cam.project_raised(u, v, 0.0, w, h).map(pos)), shade);
-                }
+            // The footprint moved away from the light: the roof's triangles on the ground.
+            let (du, dv) = render::shadow_shift(*foot + *up);
+            for [a, b, c] in s.roof_indices.as_chunks::<3>().0 {
+                let tri: Option<Vec<(f64, f64)>> =
+                    [a, b, c].iter().map(|&&k| s.roof.get(k as usize).map(|p| ground(s, p)).map(|(u, v)| (u + du, v + dv))).collect();
+                let Some(tri) = tri else { continue };
+                let cut = render::clip_near(&tri, cam.near_v(0.0, h));
+                fan(&mut mesh, cut.into_iter().map(|(u, v)| cam.project_raised(u, v, 0.0, w, h).map(pos)), shade);
             }
         }
         for (s, depth, foot, up, rings, holes) in &shapes {
@@ -766,10 +769,10 @@ mod tests {
     }
 
     #[test]
-    fn a_raised_block_with_a_hole_casts_its_roof_from_its_base_too() {
+    fn a_raised_block_with_a_hole_casts_its_holes_walls_too() {
         use rustgis_engine::data::{Dataset, Geometry, GeometryType};
         let ctx = egui::Context::default();
-        let size = |base: f64| {
+        let size = |base: f64, with_hole: bool| {
             let mut m = tilted(55.0);
             let mut ds = Dataset::new("blocks", GeometryType::Polygon, vec![]);
             let sq = |a: f64| {
@@ -783,7 +786,8 @@ mod tests {
             let (mut outer, mut hole) = (sq(1.0), sq(0.3));
             outer.push(outer[0]);
             hole.push(hole[0]);
-            ds.push(Some(Geometry::Polygon(vec![vec![outer, hole]])), vec![]);
+            let rings = if with_hole { vec![outer, hole] } else { vec![outer] };
+            ds.push(Some(Geometry::Polygon(vec![rings])), vec![]);
             let id = m.add_dataset(ds);
             if let Some(l) = m.layer_mut(id) {
                 l.extrusion =
@@ -793,11 +797,12 @@ mod tests {
             assert!(d.prepare(&ctx, &mut m, DrapeKey { rev: 0, sources: 0 }, 0, 800.0, 600.0, 1.0, 0.0));
             let rect = Rect::from_min_size(pos2(0.0, 0.0), egui::vec2(800.0, 600.0));
             let mesh = d.extrusions(rect, &m.camera, fog()).expect("the block stands up");
-            (mesh.vertices.len(), d.drape.as_ref().map_or(0, |dr| dr.shapes.iter().map(|s| s.roof_indices.len()).sum::<usize>()))
+            mesh.vertices.len()
         };
-        let ((grounded, roof), (raised, _)) = (size(0.0), size(100_000.0));
-        assert!(roof >= 6, "a roof with a hole is triangles: {roof}");
-        assert_eq!(raised, grounded + roof, "the roof's triangles are cast again from the base");
+        // Raised, the hole's 4 walls cast their sweep (a quad each, or more where cut near the eye);
+        // a solid block casts as much raised as on the ground.
+        assert!(size(100_000.0, true) >= size(0.0, true) + 16, "{} vs {}", size(100_000.0, true), size(0.0, true));
+        assert_eq!(size(100_000.0, false), size(0.0, false));
     }
 
     #[test]

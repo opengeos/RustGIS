@@ -3201,16 +3201,11 @@ fn extrusion_cmds(shapes: &[ExtrudedShape], origin: [f64; 2]) -> Option<Vec<gpu_
     for s in shapes {
         // The walls stand from their base, the roof at the base plus the height, together within
         // 1e9; a height or base that is no number (hostile attributes) is the ground.
-        let foot = if s.base_height.is_finite() { s.base_height.clamp(0.0, 1e9) } else { 0.0 };
+        let foot = base_within(s.base_height, 1e9);
         let h = if s.height.is_finite() { s.height.clamp(0.0, 1e9 - foot) } else { 0.0 };
         let top = foot + h;
-        // The roof drawn for the solid, its shadow, and (raised) the shadow of the base.
-        let roofs = if foot > 0.0 { 3 } else { 2 };
-        let more = s
-            .roof
-            .len()
-            .saturating_mul(roofs)
-            .saturating_add(s.rings.iter().chain(&s.holes).map(Vec::len).sum::<usize>().saturating_mul(8));
+        let more =
+            s.roof.len().saturating_mul(2).saturating_add(s.rings.iter().chain(&s.holes).map(Vec::len).sum::<usize>().saturating_mul(8));
         if solid.len().saturating_add(shade.len()).saturating_add(more) > MAX_VERTICES {
             return None;
         }
@@ -3230,14 +3225,6 @@ fn extrusion_cmds(shapes: &[ExtrudedShape], origin: [f64; 2]) -> Option<Vec<gpu_
             let base = shade.len() as u32;
             shade.extend(s.roof.iter().map(|p| vertex(rel(roof_at(p), 0.0), [0.0; 2], shadow, [0.0, EXTRUDE_SHADOW, 0.0, top as f32])));
             shade_i.extend(s.roof_indices.iter().map(|i| base + i));
-            // Raised, the walls' shadow leaves the footprint's own shifted by the base bare where
-            // it falls inside a hole of the top one.
-            if foot > 0.0 {
-                let base = shade.len() as u32;
-                shade
-                    .extend(s.roof.iter().map(|p| vertex(rel(roof_at(p), 0.0), [0.0; 2], shadow, [0.0, EXTRUDE_SHADOW, 0.0, foot as f32])));
-                shade_i.extend(s.roof_indices.iter().map(|i| base + i));
-            }
         }
         // The walls; a hole's face into it (a courtyard).
         for (r, hole) in s.rings.iter().map(|r| (r, false)).chain(s.holes.iter().map(|r| (r, true))) {
@@ -3256,7 +3243,9 @@ fn extrusion_cmds(shapes: &[ExtrudedShape], origin: [f64; 2]) -> Option<Vec<gpu_
                     solid.push(vertex(rel(c, z), n, color, [t, EXTRUDE_WALL, lit, 0.0]));
                 }
                 solid_i.extend([k, k + 1, k + 2, k, k + 2, k + 3]);
-                if s.shadows && !hole {
+                // Raised, a hole's walls cast too: the footprint moved by the base, which no longer
+                // sits under the roof, is the top one's and every edge's sweep between them.
+                if s.shadows && (!hole || foot > 0.0) {
                     let k = shade.len() as u32;
                     for (c, fall) in [(a, foot), (b, foot), (b, top), (a, top)] {
                         shade.push(vertex(rel(c, 0.0), [0.0; 2], shadow, [0.0, EXTRUDE_SHADOW, 0.0, fall as f32]));
@@ -9487,18 +9476,18 @@ mod tests {
     }
 
     /// A raised footprint's shadow also covers where the base's shifted footprint falls inside a
-    /// hole of the top one: the roof's triangles are cast from the base as well as from the top.
+    /// hole of the top one: the hole's walls cast their sweep too. A solid block needs nothing more.
     #[test]
-    fn a_raised_part_with_a_hole_casts_its_roof_from_its_base_too() {
+    fn a_raised_part_with_a_hole_casts_its_holes_walls_too() {
         let c = Coord::new;
         let ring = |a: f64| vec![c(-a, -a), c(a, -a), c(a, a), c(-a, a)];
-        let shape = |base: f64| ExtrudedShape {
+        let shape = |base: f64, holes: Vec<Vec<Coord>>| ExtrudedShape {
             origin: c(0.0, 0.0),
             center: c(0.0, 0.0),
             roof: vec![[-10.0, -10.0], [10.0, -10.0], [10.0, 10.0], [-10.0, 10.0]],
             roof_indices: vec![0, 1, 2, 0, 2, 3],
             rings: vec![ring(10.0)],
-            holes: vec![ring(4.0)],
+            holes,
             metres: 5.0,
             height: 5.0,
             base_metres: base,
@@ -9509,8 +9498,8 @@ mod tests {
             lighting: true,
             shadows: true,
         };
-        let falls = |base: f64| -> Vec<f32> {
-            let cmds = extrusion_cmds(&[shape(base)], [0.0, 0.0]).expect("within the budget");
+        let falls = |base: f64, holes: Vec<Vec<Coord>>| -> Vec<f32> {
+            let cmds = extrusion_cmds(&[shape(base, holes)], [0.0, 0.0]).expect("within the budget");
             cmds.into_iter()
                 .filter_map(|cmd| match cmd {
                     gpu_scene::DrawCmd::Extrusion { vertices, shadows: true, .. } => Some(vertices),
@@ -9520,13 +9509,15 @@ mod tests {
                 .map(|v| v.info[3])
                 .collect()
         };
-        let (ground, raised) = (falls(0.0), falls(10.0));
-        // The roof's 4 vertices come first, then (raised) 4 more, then the sides.
-        assert_eq!(raised.len(), ground.len() + 4, "one more roof's worth of vertices");
+        let (ground, raised) = (falls(0.0, vec![ring(4.0)]), falls(10.0, vec![ring(4.0)]));
+        // The roof's 4 vertices come first, then the sides: the outer ring's, and (raised) the hole's.
+        assert_eq!(raised.len(), ground.len() + 16, "the hole's 4 walls cast their sweep");
         assert_eq!(raised.get(..4), Some(&[15.0f32; 4][..]), "the roof from the top");
-        assert_eq!(raised.get(4..8), Some(&[10.0f32; 4][..]), "and from the base");
+        assert_eq!(raised.iter().filter(|f| **f == 10.0).count(), 16, "8 sides, each from the base");
         assert_eq!(ground.get(..4), Some(&[5.0f32; 4][..]));
-        assert_eq!(ground.iter().filter(|f| **f == 0.0).count(), 8, "no base: the sides' feet alone fall from the ground");
+        assert_eq!(ground.iter().filter(|f| **f == 0.0).count(), 8, "no base: the outer sides' feet alone fall from the ground");
+        // A solid block casts as many vertices raised as on the ground.
+        assert_eq!(falls(10.0, vec![]).len(), falls(0.0, vec![]).len());
     }
 
     fn ring_px(cam: &Camera) -> Vec<(f64, f64)> {
