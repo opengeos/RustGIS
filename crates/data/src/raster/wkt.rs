@@ -2059,7 +2059,12 @@ fn def_wkt(def: &str, name: &str, code: Option<u16>) -> Option<String> {
         .collect();
     let text = |k: &str| params.iter().find(|(n, _)| *n == k).and_then(|(_, v)| *v);
     let flag = |k: &str| params.iter().any(|(n, _)| *n == k);
-    let get = |k: &str| text(k).and_then(|v| v.parse::<f64>().ok()).filter(|v| v.is_finite());
+    // Angles as they are read ([`crate::raster::crs::angle_degrees`]): `50d27'35"` is no 0.
+    let get = |k: &str| {
+        text(k)
+            .and_then(|v| if crate::raster::crs::angular(k, v) { crate::raster::crs::angle_degrees(v) } else { v.parse::<f64>().ok() })
+            .filter(|v| v.is_finite())
+    };
     let authority = |c: Option<u16>| c.map(|c| format!(",AUTHORITY[\"EPSG\",\"{c}\"]")).unwrap_or_default();
 
     // The datum and its ellipsoid.
@@ -2501,6 +2506,14 @@ pub(crate) mod tests {
         assert!(wkt.contains("PARAMETER[\"standard_parallel_1\",50.459776252189805]"), "{wkt}");
         let wkt = proj4_to_wkt("+proj=wintri +lon_0=0 +datum=WGS84 +units=m +no_defs", "W").unwrap();
         assert!(wkt.contains("PARAMETER[\"standard_parallel_1\",0]"), "{wkt}");
+        // In degrees, minutes and seconds, as the definition is read.
+        let wkt = proj4_to_wkt("+proj=wintri +lon_0=0 +lat_1=50d30' +datum=WGS84 +units=m +no_defs", "W").unwrap();
+        assert!(wkt.contains("PARAMETER[\"standard_parallel_1\",50.5]"), "{wkt}");
+        let dms = Crs::parse("+proj=wintri +lat_1=50d30' +datum=WGS84 +units=m").unwrap();
+        let back = crs_from_wkt(&to_wkt(dms).unwrap()).unwrap().transformer().unwrap();
+        let c = Coord::new(10.0, 40.0);
+        let (a, b) = (dms.transformer().unwrap().from_lonlat(c).unwrap(), back.from_lonlat(c).unwrap());
+        assert!((a.x - b.x).abs() < 1e-6 && (a.y - b.y).abs() < 1e-6, "{a:?} {b:?}");
         // A method proj4rs can't read (here Natural Earth; in the browser the azimuthal
         // equidistant) still has its ellipsoid and datum shift read, to name its datum.
         assert!(proj4rs::Proj::from_proj_string("+proj=natearth +ellps=intl +towgs84=1,2,3").is_err());

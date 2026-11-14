@@ -763,6 +763,8 @@ pub struct Session {
     /// The coordinate systems a background export used on its worker thread, as (definition,
     /// label), for [`Session::say_grid_notes`].
     pub(crate) crs_used_elsewhere: Vec<(String, String)>,
+    /// When the frame path last looked for missing datum grids ([`Session::say_grid_notes`]).
+    grid_notes_checked: Option<web_time::Instant>,
     /// The count of cloud-optimised GeoTIFF headers landed when [`Session::notice_landed_rasters`]
     /// last looked back at the dates a dated series has shown (`cog::landed_count`).
     cog_headers_seen: u64,
@@ -1194,6 +1196,7 @@ impl Session {
             beyond_said: None,
             crs_notes_said: Vec::new(),
             crs_used_elsewhere: Vec::new(),
+            grid_notes_checked: None,
             cog_headers_seen: 0,
             table_layer: None,
             table_standalone: None,
@@ -1583,8 +1586,9 @@ impl Session {
                 render::rustgis_tiles::mbtiles::close_unused(files.into_iter());
             }
             // Pixels the command read in place (a project, an import) say what they lost.
-            // And the coordinate systems that needed a missing datum grid ([`Self::say_grid_notes`]).
-            self.notice_landed_rasters();
+            self.notice_landed_pixels();
+            // And the coordinate systems that needed a missing datum grid, after every command.
+            self.say_grid_notes();
             // A plugin's command waiting for its fetches answers `pending` and runs again when they
             // land: logged then, once. (Another command's `pending`, a download the web app makes, is
             // logged as it is asked for: nothing runs it again.)
@@ -2127,6 +2131,13 @@ impl Session {
     /// Once for each layer's pixels, failure or file, one notice of each kind; the app calls it
     /// each frame.
     pub fn notice_landed_rasters(&mut self) {
+        self.notice_landed_pixels();
+        // From frames too: a system a frame first drew needs no command after it to be said.
+        self.say_grid_notes_now_and_then();
+    }
+
+    /// [`Self::notice_landed_rasters`] but for the datum grids, which a command says itself.
+    fn notice_landed_pixels(&mut self) {
         // Streamed vector windows land after project opening too. Check each installed read
         // once, keeping the same counted notice channel as retained resident expressions.
         let mut landed = Vec::new();
@@ -2260,8 +2271,6 @@ impl Session {
                 )
             }
         }
-        // Each frame: a system a frame first drew needs no command after it to be said.
-        self.say_grid_notes();
     }
 
     /// Says once a session that native HTTPS trusts the bundled Mozilla roots, as a Linux or BSD
@@ -2394,15 +2403,28 @@ impl Session {
                 found.push((def, label));
             }
         }
-        if !found.is_empty() && self.crs_notes_said.len() < 256 {
-            let mut labels: Vec<String> = Vec::new();
-            for (_, label) in &found {
-                if !labels.contains(label) {
-                    labels.push(label.clone());
-                }
-            }
+        // Without a limit: each system is said once, and their number is bounded by the tables
+        // and the custom systems a run keeps.
+        if !found.is_empty() {
+            let labels: Vec<String> = found.iter().map(|(_, label)| label.clone()).collect();
             self.notify(grid_notes_text(&labels), false);
             self.crs_notes_said.extend(found.into_iter().map(|(def, _)| def));
+        }
+        if rustgis_data::raster::crs::take_unnamed_grid_need() {
+            self.notify(
+                "A coordinate system that RustGIS can't name, one of the thousands used this run, needed a datum grid RustGIS doesn't have yet, so the next transformation was used; places may be metres off",
+                false,
+            );
+        }
+    }
+
+    /// [`Self::say_grid_notes`] from the frame path: at most once a second, as a frame comes many
+    /// times a second and a system first drawn waits no longer than that to be said.
+    fn say_grid_notes_now_and_then(&mut self) {
+        let due = self.grid_notes_checked.is_none_or(|at| at.elapsed() >= std::time::Duration::from_secs(1));
+        if due {
+            self.grid_notes_checked = Some(web_time::Instant::now());
+            self.say_grid_notes();
         }
     }
 

@@ -461,7 +461,7 @@ fn in_degrees(def: &str) -> String {
     def.split_whitespace()
         .map(|token| {
             let t = token.trim_start_matches('+');
-            let angle = t.split_once('=').filter(|(k, _)| ANGLES.contains(k));
+            let angle = t.split_once('=').filter(|(k, v)| angular(k, v));
             let radians = angle.and_then(|(k, v)| {
                 let d = v.strip_suffix(['r', 'R'])?.parse::<f64>().ok()?.to_degrees();
                 d.is_finite().then(|| format!("+{k}={d}"))
@@ -476,6 +476,20 @@ fn in_degrees(def: &str) -> String {
 
 /// The angle parameters of a PROJ definition.
 const ANGLES: [&str; 10] = ["lat_0", "lon_0", "lat_1", "lat_2", "lat_ts", "lonc", "alpha", "gamma", "lon_1", "lon_2"];
+
+/// Whether `key=value` is an angle ([`ANGLES`]), a prime meridian given as one (`+pm=2D`, not
+/// `+pm=paris`) included.
+pub(crate) fn angular(key: &str, value: &str) -> bool {
+    ANGLES.contains(&key) || (key == "pm" && value.starts_with(|c: char| c.is_ascii_digit() || "+-.".contains(c)))
+}
+
+/// An angle parameter's value in degrees, as PROJ reads it: degrees, degrees, minutes and
+/// seconds ([`parse_angle`]) or radians (`0.5r`).
+pub(crate) fn angle_degrees(value: &str) -> Option<f64> {
+    parse_angle(value)
+        .or_else(|| value.strip_suffix(['r', 'R']).and_then(|r| r.parse::<f64>().ok()).map(f64::to_degrees))
+        .filter(|d| d.is_finite())
+}
 
 /// [`transformer_of`]'s transformer, built.
 fn build(def: &str) -> Result<Transformer, String> {
@@ -518,17 +532,13 @@ fn misread_parameter(def: &str) -> Result<(), String> {
             }
             continue;
         }
-        if !NUMERIC_PARAMETERS.contains(&key) {
+        let angle = angular(key, value);
+        if !angle && !NUMERIC_PARAMETERS.contains(&key) {
             continue;
         }
-        let read = if ANGLES.contains(&key) {
-            parse_angle(value).is_some_and(f64::is_finite)
-                || value.strip_suffix(['r', 'R']).and_then(|r| r.parse::<f64>().ok()).is_some_and(|r| r.to_degrees().is_finite())
-        } else {
-            value.parse::<f64>().is_ok_and(f64::is_finite)
-        };
+        let read = if angle { angle_degrees(value).is_some() } else { value.parse::<f64>().is_ok_and(f64::is_finite) };
         if !read {
-            let what = if ANGLES.contains(&key) { "an angle" } else { "a number" };
+            let what = if angle { "an angle" } else { "a number" };
             return Err(format!("+{key}={value} isn't {what}"));
         }
     }
@@ -545,8 +555,8 @@ fn parse_angle(value: &str) -> Option<f64> {
         return Some(v);
     }
     let (body, sign) = match s.chars().last()? {
-        'N' | 'n' | 'E' | 'e' => (&s[..s.len() - 1], 1.0),
-        'S' | 's' | 'W' | 'w' => (&s[..s.len() - 1], -1.0),
+        'N' | 'n' | 'E' | 'e' => (s.get(..s.len() - 1)?, 1.0),
+        'S' | 's' | 'W' | 'w' => (s.get(..s.len() - 1)?, -1.0),
         _ => (s.as_str(), 1.0),
     };
     let negative = body.len() == s.len() && body.starts_with('-');
@@ -751,14 +761,28 @@ fn record_warning(message: String) {
         return;
     }
     // The definition whose transformer [`grid_note_of`] is asking. One built past [`MAX_BUILT`]
-    // flushes as it is dropped, unnamed, and isn't noted here: an EPSG code's probe
-    // ([`probe_grid`]) notes it, but a system without a code, a code without an area of use and
-    // one past the probe's limit stay silent.
+    // isn't kept, and flushes as it is dropped, unnamed: an EPSG code's probe ([`probe_grid`])
+    // names it, and otherwise the session says that a system it can't name needed one
+    // ([`take_unnamed_grid_need`]).
     let def = FLUSHING.try_with(|l| l.borrow().clone()).ok().flatten().unwrap_or_default();
+    if def.is_empty() {
+        UNNAMED_NEEDS_GRID.store(true, std::sync::atomic::Ordering::Relaxed);
+        return;
+    }
+    // Kept without a limit: what is noted is bounded by the definitions built ([`MAX_BUILT`]).
     let mut needs = needs_grid().lock().unwrap_or_else(|e| e.into_inner());
-    if !def.is_empty() && !needs.contains(&def) && needs.len() < MAX_BUILT {
+    if !needs.contains(&def) {
         needs.push(def);
     }
+}
+
+/// A transformer RustGIS didn't keep ([`MAX_BUILT`]) needed a missing grid: [`record_warning`].
+static UNNAMED_NEEDS_GRID: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Whether a coordinate system RustGIS can't name, one of more than [`MAX_BUILT`] used this run,
+/// needed a missing datum grid since this was last asked: for the session to say so.
+pub fn take_unnamed_grid_need() -> bool {
+    UNNAMED_NEEDS_GRID.swap(false, std::sync::atomic::Ordering::Relaxed)
 }
 
 thread_local! {
@@ -766,7 +790,8 @@ thread_local! {
     static FLUSHING: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
 }
 
-/// The definitions whose most accurate datum transformation needed a missing grid this run.
+/// The definitions whose most accurate datum transformation needed a missing grid since the app
+/// started (a session says each once).
 fn needs_grid() -> &'static std::sync::Mutex<Vec<String>> {
     static NEEDS: std::sync::OnceLock<std::sync::Mutex<Vec<String>>> = std::sync::OnceLock::new();
     NEEDS.get_or_init(Default::default)
@@ -793,7 +818,7 @@ pub fn definition_and_label(crs: Crs) -> Option<(String, String)> {
 /// The note of the systems called `labels` whose most accurate datum transformation needed a
 /// grid ([`needs_a_missing_grid`]): one notice for all of them, with their count.
 pub fn grid_notes_text(labels: &[String]) -> String {
-    const TAIL: &str = "the most accurate datum transformation needs a grid RustGIS doesn't have yet, so the next one was used; places may be metres off (NAD27 without its grid: about 10 m)";
+    const TAIL: &str = "the most accurate datum transformation needs a grid RustGIS doesn't have yet, so the next one was used; places may be metres off (NAD27, for one, is about 10 m off without its grid)";
     match labels {
         [one] => format!("{one}: {TAIL}"),
         _ => format!("{} coordinate systems ({}): {TAIL}", labels.len(), labels.join(", ")),
@@ -841,7 +866,8 @@ pub fn probe_grid(def: &str, at: impl FnOnce() -> Option<Coord>) {
     static PROBED: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<String>>> = std::sync::OnceLock::new();
     {
         let probed = PROBED.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner());
-        if probed.contains(def) || probed.len() >= MAX_BUILT {
+        // Without a limit: only EPSG codes' definitions are probed, a table's worth at most.
+        if probed.contains(def) {
             return;
         }
     }
@@ -856,7 +882,7 @@ pub fn probe_grid(def: &str, at: impl FnOnce() -> Option<Coord>) {
     let t = t.with_warning_handler(|_| {});
     if matches!(t.transform(at.x, at.y), Err(terrio_crs::Error::MissingGrid(_))) {
         let mut needs = needs_grid().lock().unwrap_or_else(|e| e.into_inner());
-        if !needs.iter().any(|d| d == def) && needs.len() < MAX_BUILT {
+        if !needs.iter().any(|d| d == def) {
             needs.push(def.to_string());
         }
     }
@@ -869,13 +895,13 @@ thread_local! {
     static USED: std::cell::RefCell<Vec<(String, String)>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
-/// The most systems [`USED`] keeps between two looks: a command uses a few.
-const MAX_USED: usize = 64;
-
-fn note_used(def: &str, label: impl FnOnce() -> String) {
+/// Notes that this thread asked for a transformer for `def` (called `label`), for
+/// [`take_used`]: without a limit, as each system is noted once and a command uses a few. The
+/// map's projections note theirs too, for a background export's map.
+pub fn note_used(def: &str, label: impl FnOnce() -> String) {
     let _ = USED.try_with(|u| {
         let mut u = u.borrow_mut();
-        if u.len() < MAX_USED && !u.iter().any(|(d, _)| d == def) {
+        if !u.iter().any(|(d, _)| d == def) {
             u.push((def.to_string(), label()));
         }
     });
@@ -1018,7 +1044,9 @@ impl Transformer {
                 // On the antimeridian (a rounding past it included), the end on the place's side of
                 // the map: a world layer's shapes on its west edge stay there, at -180°.
                 if (at.x.abs() - 180.0).abs() < 1e-9 {
-                    let east = t.params.as_ref().is_none_or(|p| c.x >= p.x_0 / if p.to_meter > 0.0 { p.to_meter } else { 1.0 });
+                    // Its longitude pointing east, whatever its axes' order and direction.
+                    let x = if t.geographic { t.lon_sign * if t.lat_first { c.y } else { c.x } } else { c.x };
+                    let east = t.params.as_ref().is_none_or(|p| x >= p.x_0 / if p.to_meter > 0.0 { p.to_meter } else { 1.0 });
                     Coord::new(if east { 180.0 } else { -180.0 }, at.y)
                 } else {
                     at
@@ -1258,6 +1286,20 @@ mod tests {
         assert_eq!(parse_angle("30d30\"\""), None);
         let marked = Crs::parse("+proj=tmerc +ellps=WGS84 +lat_0=30°30' +lon_0=9D").and_then(Crs::transformer).unwrap();
         let plain = Crs::parse("+proj=tmerc +ellps=WGS84 +lat_0=30.5 +lon_0=9").and_then(Crs::transformer).unwrap();
+        // A prime meridian given as an angle, in any of its forms, as one in degrees; a named one
+        // as it is (PROJ 9.8.1: Paris is 2°20'14.025"E).
+        let pm = |v: &str| {
+            Crs::parse(&format!("+proj=longlat +datum=WGS84 +pm={v}"))
+                .and_then(Crs::transformer)
+                .unwrap()
+                .to_lonlat(Coord::new(0.0, 0.0))
+                .unwrap()
+        };
+        for v in ["2", "2D", "2°", "2d0'0\"E", &format!("{}r", 2f64.to_radians())] {
+            assert!((pm(v).x - 2.0).abs() < 1e-9, "{v}: {:?}", pm(v));
+        }
+        assert!((pm("paris").x - (2.0 + 20.0 / 60.0 + 14.025 / 3600.0)).abs() < 1e-9);
+        assert!(Crs::parse("+proj=longlat +datum=WGS84 +pm=2x").and_then(Crs::transformer).is_err());
         assert_eq!(marked.from_lonlat(Coord::new(9.5, 47.0)), plain.from_lonlat(Coord::new(9.5, 47.0)));
         let dms = Crs::parse("+proj=tmerc +ellps=WGS84 +lat_0=30d30 +lon_0=9").and_then(Crs::transformer).unwrap();
         let dec = Crs::parse("+proj=tmerc +ellps=WGS84 +lat_0=30.5 +lon_0=9").and_then(Crs::transformer).unwrap();
@@ -1283,6 +1325,11 @@ mod tests {
         assert!((native.x + 100.0).abs() < 1e-9, "{native:?}");
         let corner = west.to_lonlat_for_extent(native).unwrap();
         assert!((corner.x - 100.0).abs() < 1e-9 && (corner.y - 10.0).abs() < 1e-9, "{corner:?}");
+        // On the antimeridian, the end on the place's side: 180°W stays west whatever the axes.
+        assert_eq!(t.to_lonlat(Coord::new(45.0, -180.0)).map(|c| c.x), Some(-180.0));
+        assert_eq!(t.to_lonlat(Coord::new(45.0, 180.0)).map(|c| c.x), Some(180.0));
+        assert_eq!(west.to_lonlat(Coord::new(180.0, 10.0)).map(|c| c.x), Some(-180.0));
+        assert_eq!(west.to_lonlat(Coord::new(-180.0, 10.0)).map(|c| c.x), Some(180.0));
     }
 
     /// Hostile definitions in every method terrio-crs computes, typed or read from a file: refused

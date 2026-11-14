@@ -561,6 +561,8 @@ impl Projector {
         let proj = def.split_whitespace().find_map(|t| t.strip_prefix("+proj=")).unwrap_or("");
         // Computed as rustgis-data computes the same definition, so data in the system lands
         // where the map puts it.
+        // Noted as used, so a background export of a map drawn in it says its missing grid.
+        rustgis_data::raster::crs::note_used(&def, || label.to_string());
         let t = rustgis_data::raster::crs::transformer_of(&def).map_err(|e| refusal(code, proj, &e))?;
         let params = t.params().cloned();
         // Whether an EPSG code needs a datum grid RustGIS doesn't have, asked in its area of use
