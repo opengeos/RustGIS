@@ -116,6 +116,11 @@ pub fn chrome(app: &mut RustGisApp, ui: &mut Ui) {
             // The shape being drawn, kept while Edit is on but drawn only in Add; the feature
             // being edited, and where the cross snapped to.
             let state = form(&ctx);
+            // A streamed layer's features put in place by the map view this frame, after the
+            // sheet looked for the snap: one more frame looks again, the cross held still.
+            if state.snap_for.is_some_and(|f| f.shapes != shapes(app)) {
+                ctx.request_repaint();
+            }
             if !state.edit_mode {
                 sketch(app, &painter, map.center(), &t, &ctx);
             }
@@ -398,6 +403,11 @@ struct SnapFor {
     shapes: u64,
     res: f64,
     on: bool,
+}
+
+/// The map's layers' geometry revisions, summed: it moves whenever a layer's shapes change.
+fn shapes(app: &RustGisApp) -> u64 {
+    app.session.map().layers.iter().fold(0u64, |sum, l| sum.wrapping_add(l.geometry_rev))
 }
 
 fn form(ctx: &egui::Context) -> Form {
@@ -778,14 +788,8 @@ fn capture(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     // on changed, not on every frame.
     let at = cross_place(app);
     let map = app.session.map();
-    let wants = SnapFor {
-        at,
-        moving,
-        revision: app.session.revision,
-        shapes: map.layers.iter().fold(0u64, |sum, l| sum.wrapping_add(l.geometry_rev)),
-        res: map.camera.res,
-        on: map.editing.snapping.enabled,
-    };
+    let wants =
+        SnapFor { at, moving, revision: app.session.revision, shapes: shapes(app), res: map.camera.res, on: map.editing.snapping.enabled };
     if state.snap_for != Some(wants) {
         state.snap = at.and_then(|at| edit::snap(app, at, moving));
         state.snap_for = Some(wants);
