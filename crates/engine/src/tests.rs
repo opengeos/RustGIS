@@ -47208,7 +47208,16 @@ fn a_save_refuses_coordinates_that_arent_numbers_and_keeps_the_file() {
 #[test]
 fn a_shapefile_coordinate_that_isnt_a_number_reaches_no_layer() {
     use rustgis_data::{Coord, Dataset, Geometry, GeometryType};
-    let dir = std::env::temp_dir().join(format!("rustgis-nan-stream-{}", std::process::id()));
+    // Removed however the test ends.
+    struct Dir(std::path::PathBuf);
+    impl Drop for Dir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos());
+    let guard = Dir(std::env::temp_dir().join(format!("rustgis-nan-stream-{}-{nanos}", std::process::id())));
+    let dir = guard.0.clone();
     std::fs::create_dir_all(&dir).unwrap();
     let mut s = Session::new(Project::default());
     let mut ds = Dataset::new("pts", GeometryType::Point, vec![]);
@@ -47242,5 +47251,4 @@ fn a_shapefile_coordinate_that_isnt_a_number_reaches_no_layer() {
         t.run("project.saveAs", &json!({"path": saved})).unwrap();
         Session::new(Project::default()).run("project.open", &json!({"path": saved})).unwrap();
     }
-    let _ = std::fs::remove_dir_all(&dir);
 }
