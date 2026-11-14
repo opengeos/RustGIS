@@ -118,7 +118,8 @@ pub fn chrome(app: &mut RustGisApp, ui: &mut Ui) {
             let state = form(&ctx);
             // A streamed layer's features put in place by the map view this frame, after the
             // sheet looked for the snap: one more frame looks again, the cross held still.
-            if state.snap_for.is_some_and(|f| f.shapes != shapes(app)) {
+            // Only while there is a layer to capture into, whose sheet then looks again.
+            if capture_layer(app, &state).is_some() && state.snap_for.is_some_and(|f| f.shapes != shapes(app)) {
                 ctx.request_repaint();
             }
             if !state.edit_mode {
