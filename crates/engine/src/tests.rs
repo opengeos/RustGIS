@@ -47465,6 +47465,11 @@ fn go_to_xy_reads_a_position_as_the_search_box_does() {
     let e = refused(&mut s, json!({"position": "33UZZ1234512345"}));
     assert!(e.starts_with("no place at this grid reference") && e.contains("100 km square"), "{e}");
     assert!(refused(&mut s, json!({"position": "Paris"})).contains("write a position as"));
+    // Minutes follow whole degrees and seconds whole minutes, as in the X and Y boxes: `40.5°30′`
+    // isn't read as 41°.
+    for q in ["40.5°30′N 74°W", "40°30.5′15″N 74°W"] {
+        assert!(refused(&mut s, json!({"position": q})).contains("write a position as"), "{q}");
+    }
     for q in ["40.7, 200", "95, 100", "-91, 200"] {
         assert!(refused(&mut s, json!({"position": q})).contains("within ±90"), "{q}");
     }

@@ -4664,6 +4664,8 @@ fn by_coordinates_reads_x_y_and_a_grid_reference() {
     assert_eq!(h.state().dialogs.open, Some("goToXY"));
     assert!(h.state().dialogs.error.as_deref().is_some_and(|e| e.contains("scale")), "{:?}", h.state().dialogs.error);
     h.state_mut().dialogs.c = "50,000".into();
+    // From elsewhere, so the grid reference is what brings the map to New York.
+    h.state_mut().session.run("map.goToXY", &json!({"lon": 10, "lat": 50})).unwrap();
     h.step();
     h.get_by_label("Go").click();
     h.step();

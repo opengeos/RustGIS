@@ -649,6 +649,10 @@ pub(crate) fn axis(nums: &[f64]) -> Option<f64> {
     if rest.len() > 2 || rest.iter().any(|v| !(0.0..60.0).contains(v)) {
         return None;
     }
+    // Minutes follow whole degrees and seconds whole minutes: `40.5°30′` says two things at once.
+    if nums.iter().rev().skip(1).any(|v| v.fract() != 0.0) {
+        return None;
+    }
     let m = rest.first().copied().unwrap_or(0.0);
     let sec = rest.get(1).copied().unwrap_or(0.0);
     let v = d.abs() + m / 60.0 + sec / 3600.0;
