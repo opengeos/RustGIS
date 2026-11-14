@@ -432,7 +432,7 @@ fn embed_layer(mut l: Layer, budget: &mut u64) -> Layer {
     l
 }
 
-pub(crate) fn embedded_map(m: &Map, budget: &mut u64) -> Map {
+fn embedded_map(m: &Map, budget: &mut u64) -> Map {
     let mut m = m.clone();
     m.layers = m.layers.into_iter().map(|l| embed_layer(l, budget)).collect();
     m
