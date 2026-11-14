@@ -1149,10 +1149,22 @@ pub(crate) fn tls_provider() {
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) const MAX_CA_BYTES: u64 = 1 << 20;
 
-/// Reads and validates a custom CA certificate file (`<= 1 MiB`, regular file, valid PEM or, when
-/// `allow_der` and named `.der`, single DER), never echoing file contents in an error.
+/// How [`read_ca_roots`] treats non-PEM custom CA files.
 #[cfg(not(target_arch = "wasm32"))]
-pub(crate) fn read_ca_roots(label: &str, file: &Path, allow_der: bool) -> Result<rustls::RootCertStore> {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CaDer {
+    /// PEM only (`sslrootcert`).
+    None,
+    /// Single DER certificate when the file extension is `.der` (`ca`).
+    Extension,
+    /// Single DER certificate regardless of extension when no PEM block header is present (`ssl-ca`).
+    Fallback,
+}
+
+/// Reads and validates a custom CA certificate file (`<= 1 MiB`, regular file, valid PEM or single
+/// DER per `der`), never echoing file contents in an error.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn read_ca_roots(label: &str, file: &Path, der: CaDer) -> Result<rustls::RootCertStore> {
     use rustls::pki_types::{CertificateDer, pem::PemObject};
     use std::io::Read;
 
@@ -1178,7 +1190,13 @@ pub(crate) fn read_ca_roots(label: &str, file: &Path, allow_der: bool) -> Result
         return Err(bad("no certificates"));
     }
     let mut roots = rustls::RootCertStore::empty();
-    if allow_der && file.extension().is_some_and(|e| e.eq_ignore_ascii_case("der")) && !bytes.windows(10).any(|w| w == b"-----BEGIN") {
+    let has_pem = bytes.windows(10).any(|w| w == b"-----BEGIN");
+    let try_der = match der {
+        CaDer::None => false,
+        CaDer::Extension => !has_pem && file.extension().is_some_and(|e| e.eq_ignore_ascii_case("der")),
+        CaDer::Fallback => !has_pem,
+    };
+    if try_der {
         roots.add(CertificateDer::from(bytes)).map_err(|_| bad("invalid certificate"))?;
         return Ok(roots);
     }

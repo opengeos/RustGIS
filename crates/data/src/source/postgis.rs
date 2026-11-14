@@ -167,20 +167,37 @@ pub struct Conn {
 }
 
 impl Conn {
+    fn has_open_client(&self) -> bool {
+        self.client.lock().unwrap_or_else(|e| e.into_inner()).as_ref().is_some_and(|c| !c.is_closed())
+    }
+
+    fn reconnect_cfg(&self) -> postgres::Config {
+        let mut cfg = self.config.clone();
+        if !self.plain {
+            cfg.ssl_mode(postgres::config::SslMode::Require);
+        }
+        cfg
+    }
+
+    fn reconnect_client(&self) -> Result<postgres::Client> {
+        let cfg = self.reconnect_cfg();
+        let (client, plain) = open_client(&cfg, &self.tls, self.writable)?;
+        // A connection that was encrypted isn't continued in the clear.
+        if plain && !self.plain {
+            return Err(DataError::Format(
+                "the server no longer offers TLS: connect again with Home › Add › Add Data › Database… to accept that".into(),
+            ));
+        }
+        Ok(client)
+    }
+
     /// Runs `f` with the client, connecting again when the connection dropped: a drop (a server
     /// restart, an idle timeout) shows only when it is used, so `f` runs once more on a new one.
     fn with<T>(&self, mut f: impl FnMut(&mut postgres::Client) -> std::result::Result<T, postgres::Error>) -> Result<T> {
         let mut guard = self.client.lock().unwrap_or_else(|e| e.into_inner());
         for attempt in 0..2 {
             if guard.as_ref().is_none_or(postgres::Client::is_closed) {
-                let (client, plain) = open_client(&self.config, &self.tls, self.writable)?;
-                // A connection that was encrypted isn't continued in the clear.
-                if plain && !self.plain {
-                    return Err(DataError::Format(
-                        "the server no longer offers TLS: connect again with Home › Add › Add Data › Database… to accept that".into(),
-                    ));
-                }
-                *guard = Some(client);
+                *guard = Some(self.reconnect_client()?);
             }
             let client = guard.as_mut().ok_or_else(|| DataError::Format("not connected".into()))?;
             let r = f(client);
@@ -200,13 +217,7 @@ impl Conn {
     fn once<T>(&self, f: impl FnOnce(&mut postgres::Client) -> std::result::Result<T, postgres::Error>) -> Result<T> {
         let mut guard = self.client.lock().unwrap_or_else(|e| e.into_inner());
         if guard.as_ref().is_none_or(postgres::Client::is_closed) {
-            let (client, plain) = open_client(&self.config, &self.tls, self.writable)?;
-            if plain && !self.plain {
-                return Err(DataError::Format(
-                    "the server no longer offers TLS: connect again with Home › Add › Add Data › Database… to accept that".into(),
-                ));
-            }
-            *guard = Some(client);
+            *guard = Some(self.reconnect_client()?);
         }
         let client = guard.as_mut().ok_or_else(|| DataError::Format("not connected".into()))?;
         let r = f(client);
@@ -262,9 +273,8 @@ fn connect_client(config: &postgres::Config, tls: &Tls, writable: bool) -> Resul
     let handshake = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let mut client = match tls {
         Tls::Disable => config.connect(postgres::NoTls),
-        Tls::Unverified | Tls::Verified(_) => {
-            config.connect(tokio_postgres_rustls::MakeRustlsConnect::new(rustls_config_with(tls, handshake.clone())?))
-        }
+        Tls::Unverified | Tls::Verified(_) => config
+            .connect(TrackTls { inner: tokio_postgres_rustls::MakeRustlsConnect::new(rustls_config(tls)?), handshake: handshake.clone() }),
     }
     .map_err(|e| {
         let message = match e.as_db_error() {
@@ -291,33 +301,81 @@ fn connect_client(config: &postgres::Config, tls: &Tls, writable: bool) -> Resul
     Ok((client, plain))
 }
 
-#[cfg(test)]
-fn rustls_config(tls: &Tls) -> Result<rustls::ClientConfig> {
-    rustls_config_with(tls, Arc::new(std::sync::atomic::AtomicBool::new(false)))
+/// Tracks whether the final socket connected by `tokio-postgres` completed a TLS handshake,
+/// resetting on each host attempt in a multi-host connection string.
+struct TrackTls<M> {
+    inner: M,
+    handshake: Arc<std::sync::atomic::AtomicBool>,
 }
 
-fn rustls_config_with(tls: &Tls, handshake: Arc<std::sync::atomic::AtomicBool>) -> Result<rustls::ClientConfig> {
+struct TrackTlsConnect<C> {
+    inner: C,
+    handshake: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl<S, M> postgres::tls::MakeTlsConnect<S> for TrackTls<M>
+where
+    S: Send + 'static,
+    M: postgres::tls::MakeTlsConnect<S>,
+    M::TlsConnect: Send + 'static,
+    <M::TlsConnect as postgres::tls::TlsConnect<S>>::Future: Send + 'static,
+{
+    type Stream = M::Stream;
+    type TlsConnect = TrackTlsConnect<M::TlsConnect>;
+    type Error = M::Error;
+
+    fn make_tls_connect(&mut self, domain: &str) -> std::result::Result<Self::TlsConnect, Self::Error> {
+        self.handshake.store(false, std::sync::atomic::Ordering::Relaxed);
+        let inner = self.inner.make_tls_connect(domain)?;
+        Ok(TrackTlsConnect { inner, handshake: self.handshake.clone() })
+    }
+}
+
+impl<S, C> postgres::tls::TlsConnect<S> for TrackTlsConnect<C>
+where
+    S: Send + 'static,
+    C: postgres::tls::TlsConnect<S> + Send + 'static,
+    C::Future: Send + 'static,
+{
+    type Stream = C::Stream;
+    type Error = C::Error;
+    type Future = std::pin::Pin<Box<dyn std::future::Future<Output = std::result::Result<Self::Stream, Self::Error>> + Send>>;
+
+    fn connect(self, stream: S) -> Self::Future {
+        let handshake = self.handshake;
+        let fut = self.inner.connect(stream);
+        Box::pin(async move {
+            let res = fut.await;
+            if res.is_ok() {
+                handshake.store(true, std::sync::atomic::Ordering::Relaxed);
+            }
+            res
+        })
+    }
+}
+
+fn rustls_config(tls: &Tls) -> Result<rustls::ClientConfig> {
     let provider = Arc::new(rustls::crypto::ring::default_provider());
     let builder = rustls::ClientConfig::builder_with_provider(provider.clone())
         .with_safe_default_protocol_versions()
         .map_err(|e| DataError::Format(format!("TLS: {e}")))?;
     Ok(match tls {
         Tls::Verified(Some(file)) => {
-            let roots = super::read_ca_roots("sslrootcert", file, false)?;
+            let roots = super::read_ca_roots("sslrootcert", file, super::CaDer::None)?;
             builder.with_root_certificates(roots).with_no_client_auth()
         }
         Tls::Verified(None) => {
             let roots = rustls::RootCertStore { roots: webpki_roots::TLS_SERVER_ROOTS.to_vec() };
             builder.with_root_certificates(roots).with_no_client_auth()
         }
-        _ => builder.dangerous().with_custom_certificate_verifier(Arc::new(Unchecked(provider, handshake))).with_no_client_auth(),
+        _ => builder.dangerous().with_custom_certificate_verifier(Arc::new(Unchecked(provider))).with_no_client_auth(),
     })
 }
 
 /// libpq's `sslmode=prefer`/`require`: the connection is encrypted, but the server's certificate
-/// isn't checked (its signatures are). Records whether a TLS handshake ran.
+/// isn't checked (its signatures are).
 #[derive(Debug)]
-struct Unchecked(Arc<rustls::crypto::CryptoProvider>, Arc<std::sync::atomic::AtomicBool>);
+struct Unchecked(Arc<rustls::crypto::CryptoProvider>);
 
 impl rustls::client::danger::ServerCertVerifier for Unchecked {
     fn verify_server_cert(
@@ -328,7 +386,6 @@ impl rustls::client::danger::ServerCertVerifier for Unchecked {
         _ocsp_response: &[u8],
         _now: rustls::pki_types::UnixTime,
     ) -> std::result::Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
-        self.1.store(true, std::sync::atomic::Ordering::Relaxed);
         Ok(rustls::client::danger::ServerCertVerified::assertion())
     }
 
@@ -395,6 +452,32 @@ pub fn connect_writable(dsn: &str, ask: bool) -> Result<Arc<Conn>> {
     connect_as(dsn, ask, true)
 }
 
+fn find_live(live: &mut Vec<Live>, dsn: &str, password: &Option<String>, writable: bool) -> Option<Arc<Conn>> {
+    live.retain(|(_, _, _, w)| w.strong_count() > 0);
+    live.iter()
+        .filter(|(d, p, wr, _)| d == dsn && p == password && *wr == writable)
+        .find_map(|(_, _, _, w)| w.upgrade().filter(|c| c.has_open_client()))
+}
+
+fn finish_live(live: &mut Vec<Live>, dsn: &str, password: Option<String>, writable: bool, conn: Arc<Conn>) -> Arc<Conn> {
+    live.retain(|(_, _, _, w)| w.strong_count() > 0);
+    if let Some(c) = live
+        .iter()
+        .filter(|(d, p, wr, _)| d == dsn && *p == password && *wr == writable)
+        .find_map(|(_, _, _, w)| w.upgrade().filter(|c| c.has_open_client() && c.plain == conn.plain))
+    {
+        return c;
+    }
+    live.retain(|(d, p, wr, w)| {
+        if d != dsn || *p != password || *wr != writable {
+            return true;
+        }
+        w.upgrade().is_some_and(|c| c.has_open_client() && c.plain == conn.plain)
+    });
+    live.push((dsn.to_string(), password, writable, Arc::downgrade(&conn)));
+    conn
+}
+
 fn connect_as(dsn: &str, ask: bool, writable: bool) -> Result<Arc<Conn>> {
     let (mut config, tls) = config(dsn)?;
     let password = super::duckdb::remembered_password(dsn).or_else(|| {
@@ -403,12 +486,9 @@ fn connect_as(dsn: &str, ask: bool, writable: bool) -> Result<Arc<Conn>> {
         }
         super::duckdb::ambient_password("postgres").or_else(|| pgpass(&config))
     });
-    // A connection opened with another password (one given since) isn't shared.
-    let find = |live: &mut Vec<Live>| {
-        live.retain(|(_, _, _, w)| w.strong_count() > 0);
-        live.iter().find(|(d, p, wr, _)| d == dsn && *p == password && *wr == writable).and_then(|(_, _, _, w)| w.upgrade())
-    };
-    if let Some(c) = find(&mut live().lock().unwrap_or_else(|e| e.into_inner())) {
+    // A connection opened with another password (one given since) or one whose client already
+    // closed isn't shared.
+    if let Some(c) = find_live(&mut live().lock().unwrap_or_else(|e| e.into_inner()), dsn, &password, writable) {
         return Ok(c);
     }
     if let Some(p) = &password {
@@ -416,14 +496,10 @@ fn connect_as(dsn: &str, ask: bool, writable: bool) -> Result<Arc<Conn>> {
     }
     // Connecting can take as long as the timeout: other connections don't wait for it.
     let (client, plain) = open_client(&config, &tls, writable)?;
-    let mut live = live().lock().unwrap_or_else(|e| e.into_inner());
-    // Another layer may have connected meanwhile; this one's client then just closes.
-    if let Some(c) = find(&mut live) {
-        return Ok(c);
-    }
     let conn = Arc::new(Conn { config, tls, plain, writable, client: Mutex::new(Some(client)) });
-    live.push((dsn.to_string(), password, writable, Arc::downgrade(&conn)));
-    Ok(conn)
+    let mut live = live().lock().unwrap_or_else(|e| e.into_inner());
+    // Another layer may have connected meanwhile; stale closed or downgraded slots are replaced.
+    Ok(finish_live(&mut live, dsn, password, writable, conn))
 }
 
 /// A connection string's client configuration, with libpq's defaults (`PGHOST`, `PGPORT`,
@@ -1672,7 +1748,59 @@ mod tests {
 
     #[test]
     fn tls_notes_and_ca_certificates() {
-        use rustls::client::danger::ServerCertVerifier;
+        use postgres::tls::{MakeTlsConnect, TlsConnect};
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        struct DummyStream;
+        impl tokio::io::AsyncRead for DummyStream {
+            fn poll_read(
+                self: std::pin::Pin<&mut Self>,
+                _: &mut std::task::Context<'_>,
+                _: &mut tokio::io::ReadBuf<'_>,
+            ) -> std::task::Poll<std::io::Result<()>> {
+                std::task::Poll::Ready(Ok(()))
+            }
+        }
+        impl tokio::io::AsyncWrite for DummyStream {
+            fn poll_write(
+                self: std::pin::Pin<&mut Self>,
+                _: &mut std::task::Context<'_>,
+                buf: &[u8],
+            ) -> std::task::Poll<std::io::Result<usize>> {
+                std::task::Poll::Ready(Ok(buf.len()))
+            }
+            fn poll_flush(self: std::pin::Pin<&mut Self>, _: &mut std::task::Context<'_>) -> std::task::Poll<std::io::Result<()>> {
+                std::task::Poll::Ready(Ok(()))
+            }
+            fn poll_shutdown(self: std::pin::Pin<&mut Self>, _: &mut std::task::Context<'_>) -> std::task::Poll<std::io::Result<()>> {
+                std::task::Poll::Ready(Ok(()))
+            }
+        }
+        impl postgres::tls::TlsStream for DummyStream {
+            fn channel_binding(&self) -> postgres::tls::ChannelBinding {
+                postgres::tls::ChannelBinding::none()
+            }
+        }
+
+        #[derive(Clone, Copy)]
+        struct FakeTls(bool);
+        impl MakeTlsConnect<()> for FakeTls {
+            type Stream = DummyStream;
+            type TlsConnect = FakeTls;
+            type Error = std::io::Error;
+            fn make_tls_connect(&mut self, _: &str) -> std::io::Result<FakeTls> {
+                Ok(*self)
+            }
+        }
+        impl TlsConnect<()> for FakeTls {
+            type Stream = DummyStream;
+            type Error = std::io::Error;
+            type Future = std::future::Ready<std::io::Result<DummyStream>>;
+            fn connect(self, _: ()) -> Self::Future {
+                std::future::ready(if self.0 { Ok(DummyStream) } else { Err(std::io::Error::other("tls failed")) })
+            }
+        }
+
         assert_eq!(tls_note(&Tls::Disable, true), Some("the connection isn't encrypted (sslmode=disable)"));
         assert_eq!(
             tls_note(&Tls::Unverified, true),
@@ -1681,23 +1809,45 @@ mod tests {
         assert_eq!(tls_note(&Tls::Unverified, false), Some("the server's certificate isn't checked (sslmode=verify-full checks it)"));
         assert_eq!(tls_note(&Tls::Verified(None), false), None);
 
-        // `Unchecked` records whether a TLS handshake actually ran (`prefer` fallback vs TLS).
-        let handshake = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let verifier = Unchecked(Arc::new(rustls::crypto::ring::default_provider()), handshake.clone());
-        assert!(!handshake.load(std::sync::atomic::Ordering::Relaxed));
-        let name = rustls::pki_types::ServerName::try_from("db.example").unwrap();
-        assert!(
-            verifier
-                .verify_server_cert(
-                    &rustls::pki_types::CertificateDer::from(vec![0u8; 4]),
-                    &[],
-                    &name,
-                    &[],
-                    rustls::pki_types::UnixTime::now(),
-                )
-                .is_ok()
-        );
-        assert!(handshake.load(std::sync::atomic::Ordering::Relaxed));
+        // `TrackTls` records per-socket handshake completion and resets on each `make_tls_connect`
+        // so a prior host's TLS handshake doesn't mask a subsequent host's cleartext fallback.
+        let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
+        let handshake = Arc::new(AtomicBool::new(false));
+        let mut tracked = TrackTls { inner: FakeTls(true), handshake: handshake.clone() };
+        let c1 = MakeTlsConnect::<()>::make_tls_connect(&mut tracked, "a.example").unwrap();
+        assert!(!handshake.load(Ordering::Relaxed));
+        assert!(rt.block_on(c1.connect(())).is_ok());
+        assert!(handshake.load(Ordering::Relaxed));
+
+        // Second host: `make_tls_connect` resets immediately even if `connect` is never called
+        // (`sslmode=prefer` server replying `'N'`), and stays false when `connect` fails.
+        let _unused = MakeTlsConnect::<()>::make_tls_connect(&mut tracked, "b.example").unwrap();
+        assert!(!handshake.load(Ordering::Relaxed));
+        tracked.inner = FakeTls(false);
+        let c2 = MakeTlsConnect::<()>::make_tls_connect(&mut tracked, "c.example").unwrap();
+        assert!(rt.block_on(c2.connect(())).is_err());
+        assert!(!handshake.load(Ordering::Relaxed));
+
+        // Pre-handshake reconnect upgrades encrypted `sslmode=prefer` to `Require`, and closed
+        // `Conn` entries in `Live` don't block a fresh connection or linger in the pool.
+        let (base_cfg, _) = config("host=db.example dbname=gis user=me sslmode=prefer").unwrap();
+        assert_eq!(base_cfg.get_ssl_mode(), postgres::config::SslMode::Prefer);
+        let dropped_tls =
+            Arc::new(Conn { config: base_cfg.clone(), tls: Tls::Unverified, plain: false, writable: false, client: Mutex::new(None) });
+        assert!(!dropped_tls.has_open_client());
+        assert_eq!(dropped_tls.reconnect_cfg().get_ssl_mode(), postgres::config::SslMode::Require);
+        let dropped_plain =
+            Arc::new(Conn { config: base_cfg, tls: Tls::Unverified, plain: true, writable: false, client: Mutex::new(None) });
+        assert_eq!(dropped_plain.reconnect_cfg().get_ssl_mode(), postgres::config::SslMode::Prefer);
+
+        let dsn = "host=db.example dbname=gis user=me";
+        let pw = Some("secret".to_string());
+        let mut pool: Vec<Live> = vec![(dsn.to_string(), pw.clone(), false, Arc::downgrade(&dropped_tls))];
+        assert!(find_live(&mut pool, dsn, &pw, false).is_none());
+        let replaced = finish_live(&mut pool, dsn, pw.clone(), false, dropped_plain.clone());
+        assert!(Arc::ptr_eq(&replaced, &dropped_plain));
+        assert_eq!(pool.len(), 1);
+        assert!(Arc::ptr_eq(&pool[0].3.upgrade().unwrap(), &dropped_plain));
 
         // Custom CA loader: accepts valid PEM <= 1 MiB, rejects folders, oversized files and
         // invalid files without echoing their contents.

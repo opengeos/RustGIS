@@ -312,10 +312,10 @@ pub fn convert(src: &Path, layer: Option<&str>, crs: Option<&str>) -> Result<Con
     convert_in(&dir, src, layer, crs, None)
 }
 
-/// Whether WKT text embeds a PROJ extension, grid file or pipeline directive that GDAL or PROJ
-/// would open or execute.
+/// Whether WKT text embeds a PROJ grid extension, grid file or pipeline directive that GDAL or
+/// PROJ would open or execute.
 fn wkt_embeds_proj_or_files(c: &str, up: &str) -> bool {
-    if (up.contains("EXTENSION") && up.contains("PROJ")) || up.contains("PARAMETERFILE") || up.contains("/VSI") {
+    if up.contains("PROJ4_GRIDS") || up.contains("PARAMETERFILE") || up.contains("/VSI") {
         return true;
     }
     let is_ident = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
@@ -605,6 +605,7 @@ mod tests {
             "urn:ogc:def:crs:EPSG::2263",
             "PROJCS[\"x\",GEOGCS[\"y\"]]",
             "GEOGCS[\"WGS 84\",DATUM[\"WGS_1984\",SPHEROID[\"WGS 84\",6378137,298.257223563]]]",
+            "GEOGCS[\"WGS 84\",EXTENSION[\"PROJ4\",\"+proj=longlat +datum=WGS84 +no_defs\"]]",
             "PROJCRS[\"OSGB 1936 / British National Grid\",BASEGEOGCRS[\"OSGB 1936\"]]",
         ] {
             assert!(valid_crs(good), "{good}");

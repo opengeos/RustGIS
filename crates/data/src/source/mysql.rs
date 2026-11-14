@@ -310,7 +310,7 @@ fn connect_client(config: &Config, password: Option<&str>) -> Result<((mysql::Co
         Tls::Require => vec![Some(unchecked)],
         Tls::Verified { ca, identity } => {
             if let Some(file) = ca {
-                super::read_ca_roots("ssl-ca", file, false)?;
+                super::read_ca_roots("ssl-ca", file, super::CaDer::Fallback)?;
             }
             let ssl = mysql::SslOpts::default().with_danger_skip_domain_validation(!identity);
             vec![Some(match ca {
@@ -1120,11 +1120,27 @@ mod tests {
         let err = connect_client(&bad_cfg(&huge), None).unwrap_err().to_string();
         assert!(err.contains("larger than 1 MB"), "{err}");
 
+        let (der, pem) = super::super::tests::synthetic_ca_cert();
+        let pem_path = dir.path().join("ca.pem");
+        std::fs::write(&pem_path, &pem).unwrap();
+        let der_path = dir.path().join("ca.crt");
+        std::fs::write(&der_path, &der).unwrap();
+        for valid in [&pem_path, &der_path] {
+            assert!(super::super::read_ca_roots("ssl-ca", valid, super::super::CaDer::Fallback).is_ok());
+            let err = connect_client(&bad_cfg(valid), None).unwrap_err().to_string();
+            assert!(!err.contains("no certificates") && !err.contains("invalid certificate"), "{err}");
+        }
+
         let secret = "SENTINEL_MYSQL_CA_SECRET_9921";
-        let broken = dir.path().join("broken.pem");
-        std::fs::write(&broken, format!("-----BEGIN CERTIFICATE-----\n{secret}\n-----END CERTIFICATE-----\n")).unwrap();
-        let err = connect_client(&bad_cfg(&broken), None).unwrap_err().to_string();
-        assert!(!err.contains(secret), "error leaked file contents: {err}");
+        for (name, body) in [
+            ("broken.pem", format!("-----BEGIN CERTIFICATE-----\n{secret}\n-----END CERTIFICATE-----\n")),
+            ("plain.crt", format!("{secret}\nnot a certificate\n")),
+        ] {
+            let p = dir.path().join(name);
+            std::fs::write(&p, body).unwrap();
+            let err = connect_client(&bad_cfg(&p), None).unwrap_err().to_string();
+            assert!(!err.contains(secret), "error leaked file contents: {err}");
+        }
     }
 
     #[test]

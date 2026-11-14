@@ -252,7 +252,7 @@ fn check_ca(config: &Config) -> Result<()> {
     if !config.trust_cert
         && let Some(ca) = &config.ca
     {
-        super::read_ca_roots("ca", ca, true)?;
+        super::read_ca_roots("ca", ca, super::CaDer::Extension)?;
     }
     Ok(())
 }

@@ -359,20 +359,33 @@ fn check_crs(crs: Option<&str>) -> Result<()> {
     }
 }
 
-/// libpq parameters that read local files or inject server start-up options, refused when
+/// libpq parameters that read or write local files or inject server start-up options, refused when
 /// handing a connection string to DuckDB's `postgres` extension.
 const REFUSED_PG_PARAMS: &[&str] =
-    &["sslcert", "sslkey", "sslrootcert", "sslcrl", "sslcrldir", "passfile", "service", "servicefile", "options"];
+    &["sslcert", "sslkey", "sslkeylogfile", "sslrootcert", "sslcrl", "sslcrldir", "passfile", "service", "servicefile", "options"];
+
+fn pg_param_named(raw_key: &str) -> bool {
+    let trimmed = raw_key.trim();
+    REFUSED_PG_PARAMS.iter().any(|p| trimmed.eq_ignore_ascii_case(p))
+        || crate::address::normalized_name(trimmed).is_some_and(|norm| REFUSED_PG_PARAMS.contains(&norm.as_str()))
+}
 
 fn pg_param_refused(raw_key: &str) -> bool {
-    let trimmed = raw_key.trim();
-    if REFUSED_PG_PARAMS.iter().any(|p| trimmed.eq_ignore_ascii_case(p)) {
-        return true;
+    pg_param_named(raw_key) || crate::address::normalized_name(raw_key.trim()).is_none()
+}
+
+fn check_pg_query(query: &str, strict: bool) -> Result<()> {
+    let refused = if strict { pg_param_refused } else { pg_param_named };
+    for kv in query.split(['&', ';']).filter(|kv| !kv.is_empty()) {
+        let (k, _) = kv.split_once('=').unwrap_or((kv, ""));
+        let decoded_kv = super::pgconn::percent_decode(kv);
+        let (dk, _) = decoded_kv.split_once('=').unwrap_or((&decoded_kv, ""));
+        if refused(k) || refused(dk) {
+            let shown = dk.trim();
+            return Err(DataError::Format(format!("the connection: parameter '{shown}' isn't allowed")));
+        }
     }
-    match crate::address::normalized_name(trimmed) {
-        Some(norm) => REFUSED_PG_PARAMS.contains(&norm.as_str()),
-        None => true,
-    }
+    Ok(())
 }
 
 /// Checks a PostgreSQL connection string before handing it to DuckDB's `ATTACH … (TYPE postgres)`.
@@ -383,17 +396,24 @@ fn check_postgres_attach(dsn: &str) -> Result<()> {
     let t = dsn.trim();
     let lower = t.to_ascii_lowercase();
     if lower.starts_with("postgresql://") || lower.starts_with("postgres://") {
-        let no_frag = t.split('#').next().unwrap_or(t);
-        if let Some((_, query)) = no_frag.split_once('?') {
-            for kv in query.split(['&', ';']).filter(|kv| !kv.is_empty()) {
-                let (k, _) = kv.split_once('=').unwrap_or((kv, ""));
-                let decoded_kv = super::pgconn::percent_decode(kv);
-                let (dk, _) = decoded_kv.split_once('=').unwrap_or((&decoded_kv, ""));
-                if pg_param_refused(k) || pg_param_refused(dk) {
-                    let shown = dk.trim();
-                    return Err(DataError::Format(format!("the connection: parameter '{shown}' isn't allowed")));
+        let Some((_, rest)) = t.split_once("://") else {
+            return Err(DataError::Format("the connection: invalid connection string".into()));
+        };
+        let before_slash = rest.split('/').next().unwrap_or(rest);
+        if let Some(at) = before_slash.find('@') {
+            if let Some((_, query)) = rest.get(at + 1..).and_then(|s| s.split_once('?')) {
+                check_pg_query(query, true)?;
+            }
+            if let Some((_, pre_q)) = before_slash.get(..at).and_then(|s| s.split_once('?')) {
+                check_pg_query(pre_q, false)?;
+                if !rest.contains('/')
+                    && let Some((_, full_q)) = rest.split_once('?')
+                {
+                    check_pg_query(full_q, false)?;
                 }
             }
+        } else if let Some((_, query)) = rest.split_once('?') {
+            check_pg_query(query, true)?;
         }
         return Ok(());
     }
@@ -1176,11 +1196,13 @@ mod tests {
             "postgres:host=db.example dbname=gis sslrootcert=/tmp/root.crt",
             "postgres:host=db.example dbname=gis sslcert=/tmp/c.pem",
             "postgres:host=db.example dbname=gis sslkey=/tmp/k.pem",
+            "postgres:host=db.example dbname=gis sslkeylogfile=/tmp/keys.log",
             "postgres:host=db.example dbname=gis sslcrl=/tmp/r.pem",
             "postgres:host=db.example dbname=gis service=prod",
             "postgres:host=db.example dbname=gis servicefile=/tmp/pg_service.conf",
             "postgres:host=db.example dbname=gis options='-c log_statement=all'",
             "postgresql://me@db.example/gis?passfile=/tmp/pgpass",
+            "postgresql://me@db.example/gis?sslkeylogfile=/tmp/keys.log",
             "postgresql://me@db.example/gis?SSLROOTCERT=/tmp/root.crt",
             "postgresql://me@db.example/gis?%70assfile=/tmp/pgpass",
             "postgresql://me@db.example/gis?sslmode=require;servicefile=/tmp/pg_service.conf",
@@ -1189,8 +1211,18 @@ mod tests {
             let db = Database::parse(bad);
             assert!(prelude(&dir, Some(&db), true).is_err(), "{bad}");
         }
-        assert!(prelude(&dir, Some(&Database::Postgres("host=db.example bare passfile=/tmp/pgpass".into())), true).is_err());
-        assert!(prelude(&dir, Some(&Database::Postgres("host='unterminated".into())), true).is_err());
+        for bad in [
+            "postgresql://me@db.example/gis?application_name=x#&sslrootcert=/tmp/root.crt",
+            "postgresql://u?x@db.example/gis?sslrootcert=/tmp/root.crt",
+            "postgresql://db.example?options=-c%20foo@bar?sslmode=require",
+            "postgresql://me@db.example/gis?sslkeylogfile=/tmp/keys.log",
+            "host=db.example dbname=gis sslkeylogfile=/tmp/keys.log",
+            "host=db.example bare passfile=/tmp/pgpass",
+            "host='unterminated",
+        ] {
+            assert!(prelude(&dir, Some(&Database::Postgres(bad.into())), true).is_err(), "{bad}");
+        }
+        assert!(prelude(&dir, Some(&Database::Postgres("postgresql://u?x@db.example/gis?sslmode=require".into())), true).is_ok());
     }
 
     #[test]
