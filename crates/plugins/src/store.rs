@@ -249,6 +249,7 @@ fn extract(bytes: &[u8], to: &Path) -> Result<(), String> {
 /// Installs a package's bytes: checks it, copies it into the plugins folder (replacing an
 /// older copy) and loads it.
 pub fn install_bytes(bytes: &[u8]) -> Result<Arc<Plugin>, String> {
+    crate::may_install()?;
     let mut pkg = Package::from_zip(bytes)?;
     // A process plugin is checked (blocklist, platform) before its files replace an installed
     // copy's: a package that won't load leaves the old one working.
@@ -289,6 +290,7 @@ pub fn install_bytes(bytes: &[u8]) -> Result<Arc<Plugin>, String> {
 /// Installs from a path: a `.rgplugin` file is copied in; a plugin folder (for development) is
 /// remembered and loaded from where it is.
 pub fn install_path(path: &Path) -> Result<Arc<Plugin>, String> {
+    crate::may_install()?;
     if !path.is_dir() {
         // Size-checked before reading: a huge file isn't read into memory.
         let len = std::fs::metadata(path).map_err(|e| format!("{}: {e}", path.display()))?.len();
