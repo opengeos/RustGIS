@@ -225,8 +225,16 @@ pub(crate) fn finish(app: &mut RustGisApp, track: Track) -> Result<(), Track> {
     let parts: Vec<&[Fix]> = track.parts().into_iter().filter(|p| p.len() >= 2).collect();
     let alone = track.points.len() - parts.iter().map(|p| p.len()).sum::<usize>();
     if parts.is_empty() {
-        app.session.notify(tl!("The track wasn't added: it has fewer than two positions."), true);
-        left_out(app, &track, 0);
+        if track.points.len() < 2 {
+            app.session.notify(tl!("The track wasn't added: it has fewer than two positions."), true);
+            left_out(app, &track, 0);
+        } else {
+            app.session.notify(
+                tl!("The track wasn't added: this device's position was off between each of its positions, so no part of it has two."),
+                true,
+            );
+            left_out(app, &track, alone);
+        }
         return Ok(());
     }
     // Editing first: a Tracks layer isn't made for a track that then can't be added.
@@ -407,6 +415,17 @@ mod tests {
         assert!(said.iter().any(|t| t.contains("stored in 2 parts")), "{said:?}");
         assert!(said.iter().any(|t| t.starts_with("1 positions") && t.contains("after a later one")), "{said:?}");
         assert!(said.iter().any(|t| t.starts_with("1 positions") && t.contains("alone between two breaks")), "{said:?}");
+        // Every position alone between breaks: none is a line, and how many is said.
+        let mut scattered = Track::default();
+        for (i, lon) in [1.0, 2.0, 3.0].into_iter().enumerate() {
+            scattered.broken = true;
+            scattered.push(fix(lon, 1.0, None, Some(i64::try_from(i).unwrap() * 1000)));
+        }
+        let mark = app.session.notice_mark();
+        assert!(finish(&mut app, scattered).is_ok());
+        let said: Vec<String> = app.session.notices_since(mark).iter().map(|n| n.text.clone()).collect();
+        assert!(said.iter().any(|t| t.contains("no part of it has two")), "{said:?}");
+        assert!(said.iter().any(|t| t.starts_with("3 positions") && t.contains("alone between two breaks")), "{said:?}");
         // A track without breaks or late positions says none of it.
         let mut clean = Track::default();
         clean.push(fix(1.0, 1.0, None, Some(0)));
