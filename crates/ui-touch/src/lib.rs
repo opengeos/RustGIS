@@ -829,7 +829,7 @@ fn capture(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             // A list narrowed by the contingent values: what the domain lists and the sets leave,
             // or, with no list of its own, the values the sets leave. The value chosen stays,
             // marked, even when the others no longer fit it, so the conflict shows.
-            let list = match (list, left.as_ref()) {
+            let list: Option<Vec<(String, String)>> = match (list, left.as_ref()) {
                 (Some(list), Some(left)) => Some(list.into_iter().filter(|(stored, _)| left.contains(stored)).collect()),
                 (None, Some(left)) => {
                     let said = described.get(i).cloned().flatten().unwrap_or_default();
@@ -839,6 +839,7 @@ fn capture(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                 }
                 (list, None) => list,
             };
+            let chosen_from_list = list.is_some();
             let dated = matches!(field.ty, FieldType::Date | FieldType::DateTime);
             ui.horizontal(|ui| {
                 ui.set_min_height(TARGET);
@@ -895,7 +896,11 @@ fn capture(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                     }
                 }
             });
-            // The calendar, under its field, while it is open.
+            // The calendar, under its field, while it is open and the field is typed into: a field
+            // the contingent values narrowed to chips (its toggle gone) closes it.
+            if chosen_from_list && state.calendar.as_ref().is_some_and(|(name, _)| name == &field.name) {
+                state.calendar = None;
+            }
             if let Some((name, month)) = state.calendar.as_mut().filter(|(name, _)| name == &field.name) {
                 let name = name.clone();
                 let value = state.values.entry(name).or_default();
@@ -1319,7 +1324,14 @@ mod tests {
         let set = json!({"layer": cities.id, "name": "pair", "fields": [text, number], "combos": [["Camp", 1], ["Town", 2]]});
         run(&mut app, "data.contingentValues", set);
         assert_eq!(form::contingent(app.session.map().layer(cities.id).unwrap(), &text, &state.values).map(|v| v.len()), Some(2));
+        // A calendar open on a field the contingent values narrow to chips closes: its toggle is
+        // gone with the text box.
         set_form(&ctx, Form { shown: Some(cities.instance), calendar: Some((text, (2026, 3))), ..Form::default() });
+        frame(&mut app, &ctx, Sheet::Capture);
+        assert!(form(&ctx).calendar.is_none());
+        // On a date field typed into, it stays open and draws.
+        run(&mut app, "edit.addField", json!({"layer": cities.id, "name": "seen", "type": "date"}));
+        set_form(&ctx, Form { shown: Some(cities.instance), calendar: Some(("seen".into(), (2026, 3))), ..Form::default() });
         frame(&mut app, &ctx, Sheet::Capture);
         assert!(form(&ctx).calendar.is_some());
     }

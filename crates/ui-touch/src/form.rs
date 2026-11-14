@@ -171,7 +171,8 @@ pub(crate) fn calendar(ui: &mut Ui, t: &Tokens, month: &mut Month, text: &mut St
     let width = ui.available_width();
     let gap = ui.spacing().item_spacing.x;
     let cell = ((width - 6.0 * gap) / 7.0).max(1.0);
-    let height = super::TARGET - 8.0;
+    // A finger's height; the width is what seven columns leave (about 42 points on a narrow phone).
+    let height = super::TARGET;
     let mut picked = false;
     ui.horizontal(|ui| {
         if ui.add(egui::Button::new(RichText::new("‹").size(20.0)).min_size(Vec2::new(super::TARGET, height))).clicked() {
