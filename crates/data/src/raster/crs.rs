@@ -1393,6 +1393,30 @@ mod tests {
         assert_eq!(neu.to_lonlat(Coord::new(0.0, -edge)).map(|c| c.x), Some(-180.0));
     }
 
+    /// A world projection on a sphere whose radius isn't finite and positive places nothing,
+    /// either way (#2038, which checked RustGIS's own world projections before terrio-crs took
+    /// them over); one of 1 m or the Earth's still works, with its offsets.
+    #[test]
+    fn world_projections_with_invalid_radii_place_nothing() {
+        for method in ["robin", "eqearth", "natearth", "wintri", "eck4"] {
+            for radius in ["0", "-0", "-1", "-6378137", "nan", "inf", "-inf"] {
+                let def = format!("+proj={method} +R={radius} +units=m");
+                let Ok(t) = Crs::parse(&def).and_then(Crs::transformer) else { continue };
+                for c in [Coord::new(0.0, 0.0), Coord::new(10.0, 50.0)] {
+                    assert_eq!(t.from_lonlat(c), None, "{def}: forward {c:?}");
+                    assert_eq!(t.to_lonlat(c), None, "{def}: inverse {c:?}");
+                }
+            }
+            for radius in ["1", "6378137"] {
+                let def = format!("+proj={method} +R={radius} +lon_0=30 +x_0=1000 +y_0=-2000 +units=m");
+                let t = Crs::parse(&def).and_then(Crs::transformer).unwrap_or_else(|e| panic!("{def}: {e}"));
+                let c = Coord::new(40.0, 50.0);
+                let back = t.to_lonlat(t.from_lonlat(c).unwrap()).unwrap();
+                assert!((back.x - c.x).abs() < 1e-5 && (back.y - c.y).abs() < 1e-5, "{def}: {back:?}");
+            }
+        }
+    }
+
     /// Hostile definitions in every method terrio-crs computes, typed or read from a file: refused
     /// or computed, never a panic, and a place either lands somewhere finite or is refused.
     #[test]
