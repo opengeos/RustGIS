@@ -2019,7 +2019,7 @@ const FORMULA_START: [char; 6] = ['=', '+', '-', '@', '\t', '\r'];
 /// A cell's text; text that a spreadsheet would run as a formula is prefixed with `'`.
 fn csv_cell(v: &Value) -> String {
     match v {
-        Value::Text(t) if t.starts_with(FORMULA_START) => format!("'{t}"),
+        Value::Text(t) if t.starts_with(FORMULA_START) && !t.parse::<f64>().is_ok_and(|f| f.is_finite()) => format!("'{t}"),
         other => other.to_file_text(),
     }
 }
@@ -4819,6 +4819,21 @@ mod tests {
         assert_eq!(out.lines().next(), Some("lng,latitude,lon,lat,longitude,note"), "{out}");
         let (ds, _) = read_csv("a\nNaN\nx\n", "t").unwrap();
         assert_eq!(ds.fields[0].ty, FieldType::Text);
+    }
+
+    #[test]
+    fn csv_export_does_not_escape_valid_signed_numbers() {
+        let mut ds =
+            Dataset::new("tiger", GeometryType::None, vec![Field::new("INTPTLAT", FieldType::Text), Field::new("note", FieldType::Text)]);
+        ds.push(None, vec![Value::Text("+35.1329460".into()), Value::Text("=SUM(A1)".into())]);
+        ds.push(None, vec![Value::Text("-90.1234567".into()), Value::Text("+cmd|' /C calc'!A0".into())]);
+        let out = to_csv(&ds).unwrap();
+        assert!(out.contains("+35.1329460"), "{out}");
+        assert!(!out.contains("'+35.1329460"), "{out}");
+        assert!(out.contains("-90.1234567"), "{out}");
+        assert!(!out.contains("'-90.1234567"), "{out}");
+        assert!(out.contains("'=SUM(A1)"), "{out}");
+        assert!(out.contains("'+cmd"), "{out}");
     }
 
     #[test]
