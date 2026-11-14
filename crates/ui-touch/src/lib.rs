@@ -713,11 +713,12 @@ fn add_feature(app: &mut RustGisApp, id: u32, form: &Form, geometry: Value) -> b
     // The photos taken for it go in the layer's photos field, made when it has none.
     let mut photos_in = None;
     if !form.photos.is_empty() {
-        let Some(field) = photos::ensure_field(app, id) else { return false };
+        let Some((field, made)) = photos::ensure_field(app, id) else { return false };
         // After what was typed in the field, if it was.
         let typed = attributes.get(&field).and_then(Value::as_str).unwrap_or_default().to_string();
-        attributes.insert(field.clone(), json!(photos::joined(&typed, &form.photos)));
-        photos_in = Some(field);
+        let (text, count) = photos::joined(&typed, &form.photos);
+        attributes.insert(field.clone(), json!(text));
+        photos_in = Some((field, made, count));
     }
     let mut feature = json!({"layer": id, "geometry": geometry, "attributes": attributes});
     // A template chosen while the layer still has it: one removed since is not asked for.
@@ -729,6 +730,14 @@ fn add_feature(app: &mut RustGisApp, id: u32, form: &Form, geometry: Value) -> b
         feature["template"] = json!(name);
     }
     if app.run_by_user("edit.addFeature", feature).is_err() {
+        // A photos field made for a feature that then wasn't added goes again: a refused add
+        // leaves the layer's design as it was.
+        if let Some((field, true, _)) = &photos_in
+            && app.run_by_user("edit.deleteField", json!({"layer": id, "field": field})).is_ok()
+        {
+            app.session
+                .notify(rustgis_ui_egui::i18n::fmt("The {field} field added for it was taken away again.", &[("field", field)]), false);
+        }
         return false;
     }
     let added = match kind {
@@ -738,9 +747,9 @@ fn add_feature(app: &mut RustGisApp, id: u32, form: &Form, geometry: Value) -> b
     };
     // Where its photos went: the layer's own field of that name, maybe.
     let added = match photos_in {
-        Some(field) => rustgis_ui_egui::i18n::fmt(
+        Some((field, _, count)) => rustgis_ui_egui::i18n::fmt(
             "{added} Its {n} photo(s) are named in its {field} field.",
-            &[("added", &added), ("n", &form.photos.len().to_string()), ("field", &field)],
+            &[("added", &added), ("n", &count.to_string()), ("field", &field)],
         ),
         None => added,
     };
@@ -2053,6 +2062,25 @@ mod tests {
         app.locate = false;
         frame(&mut app, &ctx, Sheet::Capture);
         assert!(track::field(&ctx).averaging.is_none());
+    }
+
+    #[test]
+    fn a_photos_field_made_for_a_feature_refused_is_taken_away_again() {
+        let mut app = RustGisApp::with_sample();
+        let cities = target(&mut app, GeometryType::Point);
+        let fields = app.session.map().layer(cities.id).unwrap().dataset.fields.len();
+        // A line into a point layer: refused, after the photos field was made for it.
+        let line = geometry(GeometryType::Polyline, &[(1.0, 1.0), (2.0, 2.0)]).unwrap();
+        let form = Form { photos: vec!["/data/photos/c.jpg".into()], ..Form::default() };
+        let mark = app.session.notice_mark();
+        assert!(!add_feature(&mut app, cities.id, &form, line));
+        assert_eq!(app.session.map().layer(cities.id).unwrap().dataset.fields.len(), fields);
+        assert!(app.session.notices_since(mark).iter().any(|n| n.text.contains("taken away again")));
+        // Added, the field stays and the photo is counted once.
+        let mark = app.session.notice_mark();
+        assert!(add_point(&mut app, cities.id, &form));
+        assert_eq!(app.session.map().layer(cities.id).unwrap().dataset.fields.len(), fields + 1);
+        assert!(app.session.notices_since(mark).iter().any(|n| n.text.ends_with("Its 1 photo(s) are named in its photos field.")));
     }
 
     #[test]
