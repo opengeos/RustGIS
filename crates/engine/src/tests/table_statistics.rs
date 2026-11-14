@@ -240,3 +240,18 @@ fn the_desktops_count_ahead_is_what_the_command_answers_and_a_changed_layer_is_r
     let e = read_ahead(&mut s, "table.statistics", &p).unwrap().run(&control).err().unwrap();
     assert!(e.to_lowercase().contains("cancel") && control.looked() > 0, "{e}");
 }
+
+/// The count made ahead reports every row as done, the last block of fewer than 1,024 included,
+/// and a layer under one block too.
+#[test]
+fn the_count_ahead_reports_progress_over_every_row() {
+    use crate::cmd::reads::read_ahead;
+    use rustgis_analysis::control::Control;
+    for n in [5usize, 1025] {
+        let rows: Vec<Vec<V>> = (0..n).map(|i| vec![V::Int(i as i64)]).collect();
+        let mut s = layer_of("w", vec![Field::new("n", FieldType::Integer)], rows);
+        let control = Control::stoppable();
+        read_ahead(&mut s, "table.statistics", &json!({"layer": "w", "field": "n"})).unwrap().run(&control).unwrap();
+        assert_eq!(control.progress(), Some((n as u64, n as u64)), "{n} rows");
+    }
+}

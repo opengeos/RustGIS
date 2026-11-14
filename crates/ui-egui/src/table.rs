@@ -739,7 +739,7 @@ fn statistics_window(app: &mut RustGisApp, ctx: &egui::Context) {
             ui.label(egui::RichText::new(covers).weak());
             ui.add_space(4.0);
             egui::Grid::new("column_statistics_grid").num_columns(2).spacing([16.0, 4.0]).show(ui, |ui| {
-                for (name, value) in &lines {
+                for (name, value, _) in &lines {
                     ui.label(name);
                     ui.label(egui::RichText::new(value).monospace());
                     ui.end_row();
@@ -747,7 +747,8 @@ fn statistics_window(app: &mut RustGisApp, ctx: &egui::Context) {
             });
             ui.add_space(4.0);
             if ui.button(tl!("Copy")).clicked() {
-                let text: Vec<String> = lines.iter().map(|(n, v)| format!("{n}\t{v}")).collect();
+                // The values as the answer holds them, not as the window rounds them, for a spreadsheet.
+                let text: Vec<String> = lines.iter().map(|(n, _, full)| format!("{n}\t{full}")).collect();
                 ui.ctx().copy_text(text.join("\n"));
             }
         });
@@ -776,29 +777,40 @@ fn stats_coverage(answer: &Value) -> String {
     }
 }
 
-/// The rows of the statistics window: each statistic's name and its value, as the field's kind
-/// has them (a text or date field has no sum or mean); the values left out, when there are any,
-/// last.
-fn stats_lines(answer: &Value) -> Vec<(String, String)> {
+/// The rows of the statistics window: each statistic's name, its value as the window shows it, and
+/// its value as the answer holds it, in full, for the copy. The field's kind decides the rows (a
+/// text or date field has no sum or mean); the values left out, when there are any, last.
+fn stats_lines(answer: &Value) -> Vec<(String, String, String)> {
     let number = answer.get("kind").and_then(Value::as_str) == Some("number");
     let count = |k: &str| fmt_stat(answer.get(k).and_then(Value::as_f64).unwrap_or(0.0));
     let value = |k: &str| match answer.get(k) {
         // A whole number past 2^53 is an integer (or its digits), shown as it is, never as a decimal.
         Some(Value::Number(n)) if !n.is_f64() => n.to_string().parse::<i128>().map(fmt_whole).unwrap_or_else(|_| n.to_string()),
-        Some(Value::Number(n)) => n.as_f64().map(fmt_stat).unwrap_or_default(),
+        Some(Value::Number(n)) => match n.as_f64() {
+            // A whole number a decimal holds is grouped as a whole, not in scientific form from 1e15.
+            Some(x) if number && x.fract() == 0.0 && x.abs() < 9_007_199_254_740_992.0 => fmt_whole(x as i128),
+            x => x.map(fmt_stat).unwrap_or_default(),
+        },
         Some(Value::String(s)) if number => s.parse::<i128>().map(fmt_whole).unwrap_or_else(|_| s.clone()),
         Some(Value::String(s)) => s.clone(),
         _ => tl!("none").to_string(),
     };
-    let mut out = vec![(tl!("Count").to_string(), count("count")), (tl!("Empty").to_string(), count("nulls"))];
+    // The same value as the answer holds it: a number's digits as they are, text as it is.
+    let full = |k: &str| match answer.get(k) {
+        Some(Value::Number(n)) => n.to_string(),
+        Some(Value::String(s)) => s.clone(),
+        _ => String::new(),
+    };
+    let line = |name: &str, shown: String, exact: String| (name.to_string(), shown, exact);
+    let mut out = vec![line(tl!("Count"), count("count"), count("count")), line(tl!("Empty"), count("nulls"), count("nulls"))];
     if number {
-        out.push((tl!("Sum").to_string(), value("sum")));
-        out.push((tl!("Mean").to_string(), value("mean")));
-        out.push((tl!("Minimum").to_string(), value("min")));
-        out.push((tl!("Maximum").to_string(), value("max")));
-        out.push((tl!("Standard deviation").to_string(), value("stdDev")));
+        out.push(line(tl!("Sum"), value("sum"), full("sum")));
+        out.push(line(tl!("Mean"), value("mean"), full("mean")));
+        out.push(line(tl!("Minimum"), value("min"), full("min")));
+        out.push(line(tl!("Maximum"), value("max"), full("max")));
+        out.push(line(tl!("Standard deviation"), value("stdDev"), full("stdDev")));
         if answer.get("skipped").and_then(Value::as_u64).unwrap_or(0) > 0 {
-            out.push((tl!("Not numbers").to_string(), count("skipped")));
+            out.push(line(tl!("Not numbers"), count("skipped"), count("skipped")));
         }
     } else {
         let distinct = if answer.get("distinctCapped").and_then(Value::as_bool).unwrap_or(false) {
@@ -806,9 +818,9 @@ fn stats_lines(answer: &Value) -> Vec<(String, String)> {
         } else {
             count("distinct")
         };
-        out.push((tl!("Distinct").to_string(), distinct));
-        out.push((tl!("Minimum").to_string(), value("min")));
-        out.push((tl!("Maximum").to_string(), value("max")));
+        out.push(line(tl!("Distinct"), distinct.clone(), distinct));
+        out.push(line(tl!("Minimum"), value("min"), full("min")));
+        out.push(line(tl!("Maximum"), value("max"), full("max")));
     }
     out
 }
@@ -1353,8 +1365,8 @@ mod tests {
         assert_eq!(stats_coverage(&some), "The 12 selected rows");
         let numbers = json!({"kind": "number", "count": 3, "nulls": 1, "skipped": 0, "sum": 12000.5, "mean": 4000.1667, "min": 2.0, "max": 6.0, "stdDev": 1.5});
         let lines = stats_lines(&numbers);
-        assert_eq!(lines.iter().find(|(n, _)| n == "Sum").map(|l| l.1.as_str()), Some("12,000.5"));
-        assert!(lines.iter().all(|(n, _)| n != "Not numbers"));
+        assert_eq!(lines.iter().find(|(n, _, _)| n == "Sum").map(|l| l.1.as_str()), Some("12,000.5"));
+        assert!(lines.iter().all(|(n, _, _)| n != "Not numbers"));
         let text = json!({"kind": "text", "count": 3, "nulls": 0, "distinct": 2, "min": "a", "max": "b"});
         let names: Vec<String> = stats_lines(&text).into_iter().map(|l| l.0).collect();
         assert_eq!(names, ["Count", "Empty", "Distinct", "Minimum", "Maximum"]);
@@ -1401,6 +1413,24 @@ mod tests {
         h.state_mut().session.table_layer = None;
         h.run_steps(2);
         assert!(h.state().table.stats.is_none());
+    }
+
+    /// A whole-number sum from 1e15 up to 2^53 is grouped, not in scientific form, and the copy
+    /// holds the digits the window rounds.
+    #[test]
+    fn a_whole_sum_from_1e15_is_grouped_and_the_copy_keeps_the_digits() {
+        let whole = json!({"kind": "number", "count": 2, "nulls": 0, "skipped": 0, "sum": 2e15, "mean": 1e15,
+            "min": 1, "max": 1999999999999999_i64, "stdDev": 0.5});
+        let lines = stats_lines(&whole);
+        let of = |n: &str| lines.iter().find(|l| l.0 == n).map(|l| (l.1.clone(), l.2.clone()));
+        assert_eq!(of("Sum"), Some(("2,000,000,000,000,000".to_string(), json!(2e15).to_string())));
+        assert_eq!(of("Mean").map(|l| l.0).as_deref(), Some("1,000,000,000,000,000"));
+        let decimal = json!({"kind": "number", "count": 2, "nulls": 0, "skipped": 0, "sum": 12345.678, "mean": 0.1234567,
+            "min": 1.0, "max": 2.0, "stdDev": 0.5});
+        let lines = stats_lines(&decimal);
+        let of = |n: &str| lines.iter().find(|l| l.0 == n).map(|l| (l.1.clone(), l.2.clone()));
+        assert_eq!(of("Sum"), Some(("12,345.68".to_string(), "12345.678".to_string())));
+        assert_eq!(of("Mean"), Some(("0.123457".to_string(), "0.1234567".to_string())));
     }
 
     #[test]

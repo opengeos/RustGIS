@@ -131,18 +131,13 @@ struct Texts {
     latest: Option<(i64, String)>,
 }
 
-/// The selected rows, each once, leaving out numbers past the layer's last row; empty without a
-/// selection.
-fn covered(ds: &Dataset, selection: Option<&[usize]>) -> Vec<usize> {
-    match selection {
-        None => Vec::new(),
-        Some(sel) => {
-            let mut rows: Vec<usize> = sel.iter().copied().filter(|&r| r < ds.features.len()).collect();
-            rows.sort_unstable();
-            rows.dedup();
-            rows
-        }
-    }
+/// The selected rows, each once, sorted, leaving out numbers past the layer's last row. Sorting
+/// is O(n log n), so it is done where the count is, not at the request on the UI thread.
+fn covered(ds: &Dataset, selected: &[usize]) -> Vec<usize> {
+    let mut rows: Vec<usize> = selected.iter().copied().filter(|&r| r < ds.features.len()).collect();
+    rows.sort_unstable();
+    rows.dedup();
+    rows
 }
 
 fn is_empty_text(v: &Cell) -> bool {
@@ -157,7 +152,8 @@ struct Target {
     /// The column, by its place in the table.
     column: usize,
     selected: bool,
-    /// The selected rows, each once (empty when all are counted).
+    /// The selection as the layer had it when asked (empty when all are counted); [`gather`] sorts
+    /// it and keeps each row once.
     rows: Vec<usize>,
 }
 
@@ -185,7 +181,8 @@ fn resolve(s: &Session, p: &Value) -> Result<Target, String> {
         return Err(format!("{}: load all its features first (Layers › Load All Features), so the statistics cover them all", l.name));
     }
     let column = column_of(ds, &l.name, p)?;
-    let rows = covered(ds, selected.then_some(l.selection.as_slice()));
+    // Copied as it is: the sort and the dedup wait for `gather`, on the thread that counts.
+    let rows = if selected { l.selection.clone() } else { Vec::new() };
     Ok(Target { id, layer: l.name.clone(), column, selected, rows })
 }
 
@@ -201,8 +198,9 @@ fn gather(ds: &Dataset, t: &Target) -> Result<Done, String> {
     let cancelled = |_| "the column statistics were cancelled".to_string();
     let fi = t.column;
     let f = ds.fields.get(fi).ok_or_else(|| format!("{}: no column {fi}", t.layer))?;
-    let rows = if t.selected { t.rows.len() } else { ds.features.len() };
-    let rows_at = |i: usize| if t.selected { t.rows.get(i).copied() } else { Some(i) };
+    let picked = if t.selected { covered(ds, &t.rows) } else { Vec::new() };
+    let rows = if t.selected { picked.len() } else { ds.features.len() };
+    let rows_at = |i: usize| if t.selected { picked.get(i).copied() } else { Some(i) };
     let mut out = json!({"layer": t.layer, "layerId": t.id, "field": f.name, "index": fi, "selected": t.selected, "rows": rows});
     let mut notices = Vec::new();
     let map = out.as_object_mut().ok_or("no answer")?;
@@ -211,7 +209,7 @@ fn gather(ds: &Dataset, t: &Target) -> Result<Done, String> {
         let mut n = Numbers::default();
         for i in 0..rows {
             if i % 1024 == 0 {
-                rustgis_data::progress::step(if i == 0 { 0 } else { 1024 }).map_err(cancelled)?;
+                rustgis_data::progress::step((rows - i).min(1024)).map_err(cancelled)?;
             }
             let Some(r) = rows_at(i) else { continue };
             match ds.value(r, fi) {
@@ -280,7 +278,7 @@ fn gather(ds: &Dataset, t: &Target) -> Result<Done, String> {
         let mut t2 = Texts::default();
         for i in 0..rows {
             if i % 1024 == 0 {
-                rustgis_data::progress::step(if i == 0 { 0 } else { 1024 }).map_err(cancelled)?;
+                rustgis_data::progress::step((rows - i).min(1024)).map_err(cancelled)?;
             }
             let Some(r) = rows_at(i) else { continue };
             let v = ds.value(r, fi);
