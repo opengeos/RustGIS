@@ -54,8 +54,9 @@ concurrency:
 
 env:
   # Only main and releases publish; a pull request, or a manual run on another branch, only builds
-  # and smoke-tests. (cli-manifest repeats this in its `if`, where env isn't available.)
-  PUBLISH: ${{ github.event_name == 'release' || github.ref == 'refs/heads/main' }}
+  # and smoke-tests. A pull request is told by its event, not its ref: a run created after it merged
+  # has refs/heads/main. (cli-manifest repeats this in its `if`, where env isn't available.)
+  PUBLISH: ${{ github.event_name == 'release' || (github.event_name != 'pull_request' && github.ref == 'refs/heads/main') }}
   WEB_IMAGE: ghcr.io/opengeos/rustgis
   CLI_IMAGE: ghcr.io/opengeos/rustgis-cli
   # The tags of both images (docker/metadata-action); `latest` follows main, as `edge` does.
@@ -64,7 +65,7 @@ env:
     type=sha,enable=${{ github.event_name != 'release' }}
     type=semver,pattern={{version}}
     type=semver,pattern={{major}}.{{minor}}
-    type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+    type=raw,value=latest,enable=${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
 
 jobs:
   web:
@@ -256,7 +257,7 @@ jobs:
   cli-manifest:
     name: Command line image (publish)
     needs: cli
-    if: github.repository == 'opengeos/RustGIS' && (github.event_name == 'release' || github.ref == 'refs/heads/main')
+    if: github.repository == 'opengeos/RustGIS' && (github.event_name == 'release' || (github.event_name != 'pull_request' && github.ref == 'refs/heads/main'))
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
