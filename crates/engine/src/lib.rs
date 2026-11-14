@@ -757,6 +757,8 @@ pub struct Session {
     /// `None` between commands. Its inner steps would each say it (a zoom refused by each layer an
     /// add frames): it is said once in a command, however many notices come after.
     beyond_said: Option<bool>,
+    /// The datum grid notes this session has said ([`Session::say_grid_notes`]).
+    crs_notes_said: Vec<String>,
     /// The count of cloud-optimised GeoTIFF headers landed when [`Session::notice_landed_rasters`]
     /// last looked back at the dates a dated series has shown (`cog::landed_count`).
     cog_headers_seen: u64,
@@ -1186,6 +1188,7 @@ impl Session {
             diagnostics: rustgis_data::diagnostics::History::default(),
             notices_given: 0,
             beyond_said: None,
+            crs_notes_said: Vec::new(),
             cog_headers_seen: 0,
             table_layer: None,
             table_standalone: None,
@@ -1576,6 +1579,7 @@ impl Session {
             }
             // Pixels the command read in place (a project, an import) say what they lost.
             self.notice_landed_rasters();
+            self.say_grid_notes();
             // A plugin's command waiting for its fetches answers `pending` and runs again when they
             // land: logged then, once. (Another command's `pending`, a download the web app makes, is
             // logged as it is asked for: nothing runs it again.)
@@ -2344,6 +2348,34 @@ impl Session {
     pub fn notify(&mut self, text: impl Into<String>, error: bool) {
         use rustgis_data::diagnostics::Severity;
         self.notice(text.into(), if error { Severity::Error } else { Severity::Info });
+    }
+
+    /// Says, once per system, that a coordinate system this project uses (a map's projection, a
+    /// layer's or a raster's) or the command used (an export's target) needed a datum grid RustGIS doesn't have, so a less accurate
+    /// transformation placed it: after the command, or the frame drawn before it, that first
+    /// used it.
+    fn say_grid_notes(&mut self) {
+        use rustgis_data::raster::crs::{grid_note, grid_note_of, take_used_notes};
+        // What the command used beyond its layers and maps, on this thread (an export's target
+        // system, a grid's, a calculation's).
+        let mut notes = take_used_notes();
+        for map in &self.project.maps {
+            if let rustgis_map::Projection::Custom(code) = &map.projection
+                && let Ok((def, label)) = rustgis_map::projection::lookup(code)
+            {
+                notes.extend(grid_note_of(&def, &label));
+            }
+            for layer in &map.layers {
+                notes.extend(layer.dataset.crs.and_then(grid_note));
+                notes.extend(layer.raster.as_ref().and_then(|r| r.data.as_ref()).and_then(|r| grid_note(r.crs)));
+            }
+        }
+        for note in notes {
+            if !self.crs_notes_said.contains(&note) && self.crs_notes_said.len() < 256 {
+                self.notify(note.clone(), false);
+                self.crs_notes_said.push(note);
+            }
+        }
     }
 
     /// Publishes English diagnostics and retains redacted templates for translated interfaces.
