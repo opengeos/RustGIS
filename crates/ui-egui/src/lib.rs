@@ -5035,21 +5035,7 @@ impl RustGisApp {
                 )?;
             }
             let url = rustgis_engine::data::login_address::inner(bound_url);
-            if public {
-                rustgis_engine::render::rustgis_tiles::cache::restrict_to_public(bound_url);
-                if let Some(parts) = rustgis_engine::data::io::shapefile_part_urls(bound_url) {
-                    for (_, part) in parts {
-                        rustgis_engine::render::rustgis_tiles::cache::restrict_to_public(&part);
-                    }
-                }
-            } else {
-                rustgis_engine::render::rustgis_tiles::cache::allow_named(bound_url);
-                if let Some(parts) = rustgis_engine::data::io::shapefile_part_urls(bound_url) {
-                    for (_, part) in parts {
-                        rustgis_engine::render::rustgis_tiles::cache::allow_named(&part);
-                    }
-                }
-            }
+            rustgis_engine::cmd::layer::mark_url_reach(bound_url, check_origin, public);
             // A window of a cloud-optimised GeoTIFF is read off the frame (below), with no
             // probe: it is refused unless it is one. In the browser the command refuses it.
             let window = cfg!(not(target_arch = "wasm32")) && p.get("bbox").is_some_and(|v| !v.is_null());

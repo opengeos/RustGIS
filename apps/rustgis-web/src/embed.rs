@@ -170,8 +170,8 @@ pub fn skipped_startup_links(query: &str, embedded: bool) -> Vec<(&'static str, 
             .split('&')
             .filter_map(|kv| kv.strip_prefix(key)?.strip_prefix('='))
             .filter(|raw| !raw.trim().is_empty())
-            .filter_map(|raw| decode_query_value(raw, plus_as_space))
-            .filter(|v| !v.trim().is_empty())
+            // A value that doesn't decode (a bad `%` escape) is still a link left out: only blank text isn't.
+            .filter(|raw| decode_query_value(raw, plus_as_space).is_none_or(|v| !v.trim().is_empty()))
             .count();
         if count > 0 {
             skipped.push((key, count));
@@ -433,6 +433,14 @@ mod tests {
         assert!(notices[0].contains("1 ?project="), "{notices:?}");
         assert!(notices[1].contains("2 ?data="), "{notices:?}");
         assert!(notices[2].contains("1 ?registry="), "{notices:?}");
+
+        // A value that doesn't decode is still a link left out, so it is counted.
+        let mut undecodable = Session::new(Project::default());
+        let mark = undecodable.notice_mark();
+        notify_skipped_startup_links(&mut undecodable, "?embed&data=%zz", true);
+        let notices: Vec<String> = undecodable.notices_since(mark).iter().map(|n| n.text.clone()).collect();
+        assert_eq!(notices.len(), 1, "{notices:?}");
+        assert!(notices[0].contains("1 ?data="), "{notices:?}");
     }
 
     #[test]

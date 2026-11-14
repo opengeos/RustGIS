@@ -3782,7 +3782,9 @@ pub fn origin_ceiling(origin: Option<&str>, public: bool) -> crate::render::rust
     }
 }
 
-fn mark_url_reach(url: &str, origin: Option<&str>, public: bool) {
+/// Records the reach a URL (and its Shapefile parts) was requested with: a document's request
+/// restricts it to public addresses; a user's own request without an origin clears that again.
+pub fn mark_url_reach(url: &str, origin: Option<&str>, public: bool) {
     use crate::render::rustgis_tiles::cache;
     if public {
         cache::restrict_to_public(url);
