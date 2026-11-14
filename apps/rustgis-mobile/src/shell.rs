@@ -27,6 +27,13 @@ pub trait Phone: Platform {
 
     /// Whether something asked for is still to be reported: the window keeps asking while it is.
     fn busy(&self) -> bool;
+
+    /// Whether a picker (or the camera) is up and hasn't answered. A phone that wakes the window
+    /// when one answers leaves it out of [`Phone::busy`], so the window doesn't redraw behind it;
+    /// one that doesn't counts it there too, which is the default.
+    fn picking(&self) -> bool {
+        self.busy()
+    }
 }
 
 /// What a service couldn't do, kept until the next frame says it in the window (a service has
@@ -173,9 +180,10 @@ impl<P: Phone> App<P> {
         // with no file picked (each copy failed, said), its request ends as a cancelled one
         // does. Looked at only after the phone was seen busy: Android shows its picker a moment
         // after it is asked.
-        if busy && !self.asked.borrow().is_empty() {
+        let pending = busy || phone.picking();
+        if pending && !self.asked.borrow().is_empty() {
             self.asked_busy = true;
-        } else if !busy && self.asked_busy {
+        } else if !pending && self.asked_busy {
             self.asked_busy = false;
             let asked = std::mem::take(&mut *self.asked.borrow_mut());
             if asked.starts_with("dxf:") {
@@ -216,6 +224,9 @@ impl<P: Phone> App<P> {
                 None => batches.push((folder, purpose, vec![(name, path)])),
             }
         }
+        // The dialogs' batches are read on one thread, one after another, so the cap on what is
+        // held in memory holds for the whole pick, from however many folders.
+        let mut reads = Vec::new();
         for (_, purpose, files) in batches {
             if purpose == "data" || purpose == "project" {
                 // A Shapefile's or a MapInfo file's parts picked with it are read by it, from
@@ -224,36 +235,42 @@ impl<P: Phone> App<P> {
                 raw_input.dropped_files.extend(paths.into_iter().map(|path| Arc::new(Pushed(path)) as _));
                 continue;
             }
-            let (inbox, problems, reading, ctx) = (self.inbox.clone(), self.problems.clone(), self.reading.clone(), ctx.clone());
-            reading.fetch_add(1, Ordering::Relaxed);
-            let unread = files.clone();
-            let counted = reading.clone();
-            let started = std::thread::Builder::new().name("picked files".into()).spawn(move || {
-                read_batch(&purpose, files, &inbox, &problems);
-                reading.fetch_sub(1, Ordering::Relaxed);
-                ctx.request_repaint();
-            });
-            if let Err(e) = started {
-                counted.fetch_sub(1, Ordering::Relaxed);
-                let error = e.to_string();
-                // Nothing will read these copies now: they go, as they would have once read.
-                for (name, path) in unread {
-                    remove_copy(&path);
-                    self.app.session.notify(i18n::fmt("{name} wasn't opened: {error}", &[("name", &name), ("error", &error)]), true);
-                }
+            reads.push((purpose, files));
+        }
+        if reads.is_empty() {
+            return;
+        }
+        let (inbox, problems, reading, ctx) = (self.inbox.clone(), self.problems.clone(), self.reading.clone(), ctx.clone());
+        reading.fetch_add(1, Ordering::Relaxed);
+        let unread: Vec<(String, PathBuf)> = reads.iter().flat_map(|(_, files)| files.clone()).collect();
+        let counted = reading.clone();
+        let started = std::thread::Builder::new().name("picked files".into()).spawn(move || {
+            let mut held = 0u64;
+            for (purpose, files) in reads {
+                read_batch(&purpose, files, &inbox, &problems, &mut held);
+            }
+            reading.fetch_sub(1, Ordering::Relaxed);
+            ctx.request_repaint();
+        });
+        if let Err(e) = started {
+            counted.fetch_sub(1, Ordering::Relaxed);
+            let error = e.to_string();
+            // Nothing will read these copies now: they go, as they would have once read.
+            for (name, path) in unread {
+                remove_copy(&path);
+                self.app.session.notify(i18n::fmt("{name} wasn't opened: {error}", &[("name", &name), ("error", &error)]), true);
             }
         }
     }
 }
 
-/// Reads one picker's files (name, copy) into `inbox`, marked for the dialog that asked, and
-/// removes the copies: their bytes are all that was wanted of them.
-fn read_batch(purpose: &str, files: Vec<(String, PathBuf)>, inbox: &Inbox, problems: &Problems) {
+/// Reads one folder's files of a pick (name, copy) into `inbox`, marked for the dialog that
+/// asked, and removes the copies: their bytes are all that was wanted of them. `held` counts the
+/// bytes the pick has read so far, across its folders.
+fn read_batch(purpose: &str, files: Vec<(String, PathBuf)>, inbox: &Inbox, problems: &Problems, held: &mut u64) {
     let mark = crate::mark(purpose);
     let say = |problem| problems.lock().unwrap_or_else(|e| e.into_inner()).push(problem);
     let mut read = Vec::new();
-    // The bytes read so far, of this batch.
-    let mut held = 0u64;
     for (name, path) in files {
         let shortcut = mark == rustgis_ui_egui::SHORTCUT_PICK || (mark.is_empty() && name.to_ascii_lowercase().ends_with(".rgisshortcuts"));
         let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
@@ -266,7 +283,7 @@ fn read_batch(purpose: &str, files: Vec<(String, PathBuf)>, inbox: &Inbox, probl
         } else {
             match std::fs::read(&path) {
                 Ok(bytes) => {
-                    held += bytes.len() as u64;
+                    *held += bytes.len() as u64;
                     read.push((name, bytes));
                 }
                 Err(e) => say(Problem::Unread { name, error: e.to_string() }),
@@ -300,16 +317,27 @@ fn use_picker<P: Phone + 'static>(app: &mut RustGisApp, phone: &Rc<P>, inbox: &I
     let (picker, refused, asking, answers) = (phone.clone(), refusals.clone(), asked.clone(), inbox.clone());
     app.services.open_async = Some(Box::new(move |purpose: &str| {
         log::info!("asking for files: {purpose}");
-        if asking.borrow().is_empty() {
+        // Kept as the picker's request only when no other picker's is: a second one is refused
+        // by the phone, and the one showing keeps its own.
+        let first = asking.borrow().is_empty();
+        if first {
             *asking.borrow_mut() = purpose.to_string();
-        } else if purpose.starts_with("dxf:") {
-            // A picker is up already: the phone refuses this one (and says so), so its DXF
-            // request is ended now, and the one showing keeps its own.
-            answers.lock().unwrap_or_else(|e| e.into_inner()).push((crate::mark(purpose), Vec::new()));
         }
-        if let Err(e) = picker.pick_files(purpose) {
-            log::warn!("{e}");
-            refused.borrow_mut().push(e);
+        let shown = picker.pick_files(purpose);
+        let refused_here = match shown {
+            Ok(()) => !first,
+            Err(e) => {
+                log::warn!("{e}");
+                refused.borrow_mut().push(e);
+                if first {
+                    asking.borrow_mut().clear();
+                }
+                true
+            }
+        };
+        // A DXF request whose picker didn't show is ended now: Import DXF stops waiting.
+        if refused_here && purpose.starts_with("dxf:") {
+            answers.lock().unwrap_or_else(|e| e.into_inner()).push((crate::mark(purpose), Vec::new()));
         }
     }));
     let saver = phone.clone();
