@@ -4,7 +4,7 @@
 
 use eframe::egui;
 use rustgis_engine::platform::{Event, Platform};
-use rustgis_ui_egui::{Inbox, RustGisApp, i18n};
+use rustgis_ui_egui::{Inbox, RustGisApp, i18n, tl};
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -64,6 +64,8 @@ struct App<P: Phone> {
     refusals: Refusals,
     /// What the picker showing was asked for (`Platform::pick_files`'s purpose), until it answers.
     asked: Asked,
+    /// Whether the phone was seen busy with that picker.
+    asked_busy: bool,
     /// Files picked for a dialog (purpose, name, copy), until their picker has answered in
     /// full: a Shapefile's parts arrive one by one and are read together.
     waiting: Vec<(String, String, PathBuf)>,
@@ -119,11 +121,13 @@ impl<P: Phone> App<P> {
             match event {
                 Event::Picked { purpose, name, path } => {
                     self.asked.borrow_mut().clear();
+                    self.asked_busy = false;
                     self.waiting.push((purpose, name, path));
                 }
                 // A cancelled DXF request is ended, so Import DXF stops waiting for it.
                 Event::Cancelled => {
                     let asked = std::mem::take(&mut *self.asked.borrow_mut());
+                    self.asked_busy = false;
                     if asked.starts_with("dxf:") {
                         self.inbox.lock().unwrap_or_else(|e| e.into_inner()).push((crate::mark(&asked), Vec::new()));
                     }
@@ -165,6 +169,19 @@ impl<P: Phone> App<P> {
         }
         // A picked file is copied on a thread of the phone's: look again until it has arrived.
         let busy = phone.busy();
+        // The picker asked for has answered in full once the phone, busy with it, no longer is:
+        // with no file picked (each copy failed, said), its request ends as a cancelled one
+        // does. Looked at only after the phone was seen busy: Android shows its picker a moment
+        // after it is asked.
+        if busy && !self.asked.borrow().is_empty() {
+            self.asked_busy = true;
+        } else if !busy && self.asked_busy {
+            self.asked_busy = false;
+            let asked = std::mem::take(&mut *self.asked.borrow_mut());
+            if asked.starts_with("dxf:") {
+                self.inbox.lock().unwrap_or_else(|e| e.into_inner()).push((crate::mark(&asked), Vec::new()));
+            }
+        }
         if !busy && !self.waiting.is_empty() {
             self.open_waiting(ctx, raw_input);
         }
@@ -280,10 +297,16 @@ fn remove_copy(path: &Path) {
 /// Open and Add Data ask through `open_async`, and what is saved or exported is offered
 /// through `download`.
 fn use_picker<P: Phone + 'static>(app: &mut RustGisApp, phone: &Rc<P>, inbox: &Inbox, refusals: &Refusals, asked: &Asked) {
-    let (picker, refused, asking) = (phone.clone(), refusals.clone(), asked.clone());
+    let (picker, refused, asking, answers) = (phone.clone(), refusals.clone(), asked.clone(), inbox.clone());
     app.services.open_async = Some(Box::new(move |purpose: &str| {
         log::info!("asking for files: {purpose}");
-        *asking.borrow_mut() = purpose.to_string();
+        if asking.borrow().is_empty() {
+            *asking.borrow_mut() = purpose.to_string();
+        } else if purpose.starts_with("dxf:") {
+            // A picker is up already: the phone refuses this one (and says so), so its DXF
+            // request is ended now, and the one showing keeps its own.
+            answers.lock().unwrap_or_else(|e| e.into_inner()).push((crate::mark(purpose), Vec::new()));
+        }
         if let Err(e) = picker.pick_files(purpose) {
             log::warn!("{e}");
             refused.borrow_mut().push(e);
@@ -318,6 +341,10 @@ impl<P: Phone> eframe::App for App<P> {
         ui.painter().rect_filled(ctx.viewport_rect(), 0.0, tokens.pane);
         ui.scope_builder(egui::UiBuilder::new().max_rect(ctx.content_rect()), |ui| self.app.ui(ui));
         // Something of the phone's is still to arrive (a picked file, a position): look again.
+        // A picker or a save asked for in this frame counts too: the poll was set before it.
+        if self.poll.is_none() && self.phone.as_ref().is_some_and(|phone| phone.busy()) {
+            self.poll = Some(250);
+        }
         if let Some(wait) = self.poll {
             ctx.request_repaint_after(std::time::Duration::from_millis(wait));
         }
@@ -381,13 +408,14 @@ impl egui::DroppedFile for Pushed {
 /// gave no such folder.
 pub fn pushed(dir: Option<PathBuf>, app: &mut RustGisApp) -> Vec<PathBuf> {
     let Some(dir) = dir else {
-        app.session.warn("This device gives RustGIS no folder for files put on it: there are no pushed files to open.");
+        app.session.warn(tl!("This device gives RustGIS no folder for files put on it: there are no pushed files to open."));
         return Vec::new();
     };
     let entries = match std::fs::read_dir(&dir) {
         Ok(entries) => entries,
         Err(e) => {
-            app.session.notify(format!("The files in {} weren't opened: {e}", dir.display()), true);
+            let (dir, error) = (dir.display().to_string(), e.to_string());
+            app.session.notify(i18n::fmt("The files in {dir} weren't opened: {error}", &[("dir", &dir), ("error", &error)]), true);
             return Vec::new();
         }
     };
@@ -405,7 +433,14 @@ pub fn pushed(dir: Option<PathBuf>, app: &mut RustGisApp) -> Vec<PathBuf> {
         }
     }
     if let Some(e) = first {
-        app.session.notify(format!("{unread} entries of {} couldn't be read and weren't opened: {e}", dir.display()), true);
+        let (count, dir, error) = (unread.to_string(), dir.display().to_string(), e.to_string());
+        app.session.notify(
+            i18n::fmt(
+                "{count} entries of {dir} couldn't be read and weren't opened: {error}",
+                &[("count", &count), ("dir", &dir), ("error", &error)],
+            ),
+            true,
+        );
     }
     files.sort();
     // One project: each one opened would replace the one before it, and nothing would say so.
@@ -416,8 +451,13 @@ pub fn pushed(dir: Option<PathBuf>, app: &mut RustGisApp) -> Vec<PathBuf> {
         !project || projects == 1
     });
     if projects > 1 {
-        app.session
-            .notify(format!("{} other projects in {} weren't opened: only the first project is.", projects - 1, dir.display()), false);
+        app.session.notify(
+            i18n::fmt(
+                "{count} other projects in {dir} weren't opened: only the first project is.",
+                &[("count", &(projects - 1).to_string()), ("dir", &dir.display().to_string())],
+            ),
+            false,
+        );
     }
     files
 }
@@ -428,7 +468,7 @@ pub fn pushed(dir: Option<PathBuf>, app: &mut RustGisApp) -> Vec<PathBuf> {
 pub fn front_end(folders: bool) -> RustGisApp {
     let mut app = RustGisApp::with_sample();
     if !folders {
-        app.session.warn("This device gives RustGIS no folder of its own: settings, the tile cache and recovery copies are off.");
+        app.session.warn(tl!("This device gives RustGIS no folder of its own: settings, the tile cache and recovery copies are off."));
     }
     // As on the desktop: commands run on the window's thread must not hold it.
     app.session.in_place_wait = false;
@@ -482,6 +522,7 @@ pub fn run<P: Phone + 'static>(
                 inbox,
                 refusals,
                 asked,
+                asked_busy: false,
                 waiting: Vec::new(),
                 problems: Problems::default(),
                 reading: Arc::default(),
