@@ -2680,7 +2680,8 @@ fn integral_numeric_to_integer(ds: &mut Dataset, decimals: &[u8]) {
         if ds.fields.get(fi).map(|f| f.ty) != Some(FieldType::Double) {
             continue;
         }
-        if decimals.get(fi).is_some_and(|&d| d > 0) {
+        // Decimals missing from a malformed header can't be ruled out: the column stays Double.
+        if decimals.get(fi).is_none_or(|&d| d > 0) {
             continue;
         }
         let whole = ds.features.iter().all(|f| match f.attrs.get(fi) {
@@ -3666,6 +3667,23 @@ pub(crate) fn group_rings(rings: Vec<(Vec<Coord>, bool)>) -> Geometry {
 mod tests {
     use super::*;
     use std::io::Write;
+
+    /// A whole-valued Double is read as Integer only when the header declares no decimals for it;
+    /// when the header doesn't give its decimals at all, it stays Double.
+    #[test]
+    fn a_double_with_undeclared_decimals_stays_double() {
+        let layer = || {
+            let mut ds = Dataset::new("t", GeometryType::None, vec![Field::new("V", FieldType::Double)]);
+            ds.push(None, vec![Value::Float(100.0)]);
+            ds
+        };
+        let mut missing = layer();
+        integral_numeric_to_integer(&mut missing, &[]);
+        assert_eq!(missing.fields[0].ty, FieldType::Double);
+        let mut none_declared = layer();
+        integral_numeric_to_integer(&mut none_declared, &[0]);
+        assert_eq!(none_declared.fields[0].ty, FieldType::Integer);
+    }
 
     /// Text is cut to what its code page holds in the bytes given, at a character boundary.
     #[test]
