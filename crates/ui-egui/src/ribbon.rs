@@ -4160,18 +4160,17 @@ fn effects_groups(app: &mut RustGisApp, ui: &mut Ui, layer: &rustgis_engine::map
                     small_menu(
                         ui,
                         app,
-                        "up",
+                        "extrusion_base",
                         "Base",
                         "What the walls stand on: the ground, a field or the constant Base (m).",
                         move |ui, app| {
-                            if ui.radio(on.base_field.is_none() && on.base == 0.0, tl!("Ground")).clicked() {
+                            if ui.radio(on.base_field.is_none() && (on.base <= 0.0 || on.base.is_nan()), tl!("Ground")).clicked() {
                                 let _ = app.run("layer.extrusionBase", json!({"field": null, "base": 0}));
                                 ui.close();
                             }
                             // A constant base is set with Base (m); once set, it can be chosen over a field.
                             if on.base > 0.0 {
-                                let m = format!("{:.2}", on.base);
-                                let label = crate::i18n::fmt("Constant ({m} m)", &[("m", m.trim_end_matches('0').trim_end_matches('.'))]);
+                                let label = crate::i18n::fmt("Constant ({m} m)", &[("m", &on.base.to_string())]);
                                 if ui.radio(on.base_field.is_none(), label).clicked() {
                                     let _ = app.run("layer.extrusionBase", json!({"field": null}));
                                     ui.close();
@@ -4213,7 +4212,8 @@ fn effects_groups(app: &mut RustGisApp, ui: &mut Ui, layer: &rustgis_engine::map
                         let drag = Dragged::lend(ui, egui::Id::unique(("extrusion_base", layer.id)), &mut b);
                         let r = ui
                             .add(egui::DragValue::new(&mut b).update_while_editing(false).range(0.0..=1e7).speed(xx.base.max(10.0) * 0.02))
-                            .labelled_by(input_label.id);
+                            .labelled_by(input_label.id)
+                            .on_hover_text(tl!("The constant base: used where no field is chosen, or the field holds no number."));
                         if drag.settled(ui, &r, &mut b) && b != xx.base {
                             let _ = app.run("layer.extrusionBase", json!({"base": b}));
                         }
