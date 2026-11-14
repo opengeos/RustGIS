@@ -329,7 +329,6 @@ fn written(text: &str, offer: &Offer, item: &str) -> Option<(String, usize)> {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use rustgis_engine::data::{Field, FieldType, GeometryType};
