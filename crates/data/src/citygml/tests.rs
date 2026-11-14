@@ -241,11 +241,16 @@ fn a_vertical_system_that_isnt_metres_upward_is_said() {
     assert_eq!(
         notes(&compound("25832", "6360"), &["EPSG:25832"], None),
         [
-            "a vertical system the file names (crs:EPSG::6360) measures heights in US survey feet: z_min, z_max and height are kept as the file has them, and Style › Extrusion reads metres, so objects may stand at the wrong height"
+            "a vertical system the file names (crs:EPSG::6360) measures heights in US survey feet: z_min, z_max, height and base_height are kept as the file has them, and Style › Extrusion reads metres, so objects may stand at the wrong height"
         ]
     );
     let depth = notes(&compound("25832", "5715"), &["EPSG:25832"], None);
-    assert!(depth.len() == 1 && depth[0].contains("(crs:EPSG::5715) measures depth, downward, in metres"), "{depth:?}");
+    assert!(
+        depth.len() == 1
+            && depth[0].contains("(crs:EPSG::5715) measures depth, downward, in metres")
+            && depth[0].contains("base_height is how far an object's top is below its topmost object's top"),
+        "{depth:?}"
+    );
     let unknown = notes(&compound("25832", "9999"), &["EPSG:25832"], None);
     assert!(unknown.len() == 1 && unknown[0].contains("(crs:EPSG::9999) is one RustGIS doesn't know"), "{unknown:?}");
     // A geometry whose vertical part differs from the root's is said too; one system is said once,

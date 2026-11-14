@@ -363,13 +363,13 @@ pub(crate) fn vertical_note(system: &str) -> Option<String> {
     let shown: String = system.chars().take(80).collect();
     Some(match OTHER_VERTICALS.iter().find(|(c, _, _)| Some(*c) == code) {
         Some((_, unit, false)) => format!(
-            "a vertical system the file names ({shown}) measures heights in {unit}: z_min, z_max and height are kept as the file has them, and Style › Extrusion reads metres, so objects may stand at the wrong height"
+            "a vertical system the file names ({shown}) measures heights in {unit}: z_min, z_max, height and base_height are kept as the file has them, and Style › Extrusion reads metres, so objects may stand at the wrong height"
         ),
         Some((_, unit, true)) => format!(
-            "a vertical system the file names ({shown}) measures depth, downward, in {unit}: z_min and z_max are kept as the file has them, so the lower value is the higher point, and Style › Extrusion reads heights in metres"
+            "a vertical system the file names ({shown}) measures depth, downward, in {unit}: z_min and z_max are kept as the file has them, so the lower value is the higher point, and base_height is how far an object's top is below its topmost object's top; Style › Extrusion reads heights in metres"
         ),
         None => format!(
-            "a vertical system the file names ({shown}) is one RustGIS doesn't know the unit or direction of: z_min, z_max and height are kept as the file has them, and Style › Extrusion reads heights in metres"
+            "a vertical system the file names ({shown}) is one RustGIS doesn't know the unit or direction of: z_min, z_max, height and base_height are kept as the file has them, and Style › Extrusion reads heights in metres"
         ),
     })
 }
@@ -460,7 +460,7 @@ pub(crate) fn coordinate_system(
     }
     if let Some(unit) = crs.height_unit_not_metre().filter(|_| !vertical_named) {
         notes.push(format!(
-            "{} measures in {unit}: z_min, z_max and height are kept as the file has them, and Style › Extrusion reads metres, so objects may stand at the wrong height",
+            "{} measures in {unit}: z_min, z_max, height and base_height are kept as the file has them, and Style › Extrusion reads metres, so objects may stand at the wrong height",
             crs.label()
         ));
     }
