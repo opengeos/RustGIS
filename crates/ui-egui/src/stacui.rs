@@ -558,12 +558,11 @@ pub fn open_preset(app: &mut RustGisApp, preset: Option<Preset>, p: &serde_json:
             browse(app, None);
         }
     } else if preset.is_none() {
-        // A preset's own sort goes with the preset, unless a search is having its area made: it
-        // goes out with that sort, and the dropdown keeps saying so until it lands.
-        if app.ui.stac.preparing.is_none() {
-            drop_preset_sort(&mut app.ui.stac);
-        }
+        // A preset's own sort goes with the preset, unless a search is under way with it (its area
+        // being made, or sent and not answered): `keeps_preset_sort` is the one rule for that, so
+        // the dropdown and the next search follow it.
         app.ui.stac.preset = None;
+        keep_preset_sort_for_its_api(&mut app.ui.stac);
     }
     // A catalog or collection below the static catalog's top, by its address.
     if let Some(url) = p.get("catalog").and_then(serde_json::Value::as_str).map(str::trim).filter(|u| !u.is_empty()) {
@@ -1973,6 +1972,27 @@ mod tests {
         app.ui.stac.preparing = None;
         assert!(!keeps_preset_sort(&app.ui.stac));
         keep_preset_sort_for_its_api(&mut app.ui.stac);
+        assert_eq!((app.ui.stac.sortby.as_str(), app.ui.stac.sort_is_default), ("", false));
+    }
+
+    #[test]
+    fn opening_stac_search_while_a_search_is_in_flight_keeps_the_presets_sort() {
+        let mut app = RustGisApp::with_sample();
+        app.run("ui.stac.sentinel2", serde_json::Value::Null).unwrap();
+        // The search went out with the preset's sort and is not answered yet.
+        app.ui.stac.waiting = Some((Asked::Search("https://x.org/search".into(), None), Slot::default()));
+        open_preset(&mut app, None, &serde_json::Value::Null).unwrap();
+        assert!(app.ui.stac.preset.is_none());
+        assert_eq!((app.ui.stac.sortby.as_str(), app.ui.stac.sort_is_default), (PRESET_SORT, true), "it went out with that sort");
+        assert!(keeps_preset_sort(&app.ui.stac), "and the dropdown keeps reading it");
+        // Answered: the preset is gone, and so is its sort.
+        app.ui.stac.waiting = None;
+        keep_preset_sort_for_its_api(&mut app.ui.stac);
+        assert_eq!((app.ui.stac.sortby.as_str(), app.ui.stac.sort_is_default), ("", false));
+        // Any other wait (a listing of collections) isn't a search with that sort.
+        app.run("ui.stac.sentinel2", serde_json::Value::Null).unwrap();
+        app.ui.stac.waiting = Some((Asked::Collections("https://x.org".into()), Slot::default()));
+        open_preset(&mut app, None, &serde_json::Value::Null).unwrap();
         assert_eq!((app.ui.stac.sortby.as_str(), app.ui.stac.sort_is_default), ("", false));
     }
 
