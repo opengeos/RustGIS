@@ -1,6 +1,6 @@
 //! A list of suggestions floating by a text box's cursor, as in a code editor, with the help of
 //! the highlighted item beside it: ↑/↓ move the highlight, Enter or Tab accept it, Escape closes
-//! the list, or a press accepts an item. What to offer and what the help says are the caller's
+//! the list, or pressing an item accepts it. What to offer and what the help says are the caller's
 //! (the Script pane's `scriptcomplete`); where the list goes, how it scrolls, its keys and its
 //! state between frames are here, so every box that completes looks and behaves the same.
 
@@ -316,20 +316,49 @@ mod tests {
     }
 
     /// A list holding no items takes no arrow, Enter nor Tab (there's no highlight to move or
-    /// accept), and closes.
+    /// accept): the key is left for the box, and the list closes.
     #[test]
     fn an_empty_list_takes_no_keys() {
         for key in [egui::Key::ArrowDown, egui::Key::ArrowUp, egui::Key::Enter, egui::Key::Tab] {
-            let list = super::List { open: Some((Words(Vec::new()), 0)), ..Default::default() };
+            let pressed = move |ui: &egui::Ui| {
+                ui.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Key { key: k, pressed: true, .. } if *k == key)))
+            };
+            // Opened afresh each frame, so it is open when the key comes.
             let mut h = egui_kittest::Harness::new_ui_state(
-                |ui, list: &mut super::List<Words>| {
+                move |ui, left: &mut Option<bool>| {
+                    let mut list = super::List { open: Some((Words(Vec::new()), 0)), ..Default::default() };
+                    let came = pressed(ui);
                     assert_eq!(list.keys(ui), None);
+                    assert!(!list.is_open());
+                    if came {
+                        *left = Some(pressed(ui));
+                    }
                 },
-                list,
+                None,
             );
             h.key_press(key);
             h.run();
-            assert!(!h.state().is_open(), "{key:?}");
+            assert_eq!(*h.state(), Some(true), "{key:?} left for the box");
+        }
+    }
+
+    /// An offer with items opens the list under a focused box; one with none opens nothing.
+    #[test]
+    fn an_empty_offer_opens_no_list() {
+        for (items, open) in [(vec!["one".to_string()], true), (Vec::new(), false)] {
+            let offered = items.clone();
+            let mut h = egui_kittest::Harness::new_ui_state(
+                move |ui, (text, list): &mut (String, super::List<Words>)| {
+                    let out = egui::TextEdit::singleline(text).show(ui);
+                    out.response.response.request_focus();
+                    let visible = ui.clip_rect();
+                    let offer = Words(offered.clone());
+                    list.show(ui, egui::Id::new("list"), &out, visible, |_| Some(offer), |_, _| None, |_, _, _, _| {});
+                },
+                (String::new(), super::List::default()),
+            );
+            h.run_steps(3);
+            assert_eq!(h.state().1.is_open(), open, "{items:?}");
         }
     }
 
