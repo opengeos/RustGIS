@@ -2845,11 +2845,11 @@ impl Session {
     pub fn zoom_to(&mut self, e: &rustgis_geom::Extent) -> bool {
         let (w, h) = self.view_size;
         let m = self.map_mut();
-        let fitted = if m.projection.is_globe() {
+        let fitted = if e.is_empty() || w <= 1.0 || h <= 1.0 {
+            false
+        } else if m.projection.is_globe() {
             rustgis_map::Globe::fit(&mut m.camera, e, w, h);
             true
-        } else if e.is_empty() || w <= 1.0 || h <= 1.0 {
-            false
         } else if m.fit_lonlat(e, w, h) {
             true
         } else {

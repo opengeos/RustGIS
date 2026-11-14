@@ -1480,10 +1480,12 @@ pub(crate) fn add_photos_to(s: &mut Session, name: &str, zoom: Option<bool>, fee
         }
         None => add_dataset(s, ds),
     };
+    let mut out = json!({"layer": id, "photos": added, "skipped": report.skipped});
+    // Framed on the photos this added, `zoomed` says whether the view moved to them.
     if zoom.unwrap_or(empty_before) {
-        s.zoom_to(&extent);
+        out["zoomed"] = json!(s.zoom_to(&extent));
     }
-    Ok(json!({"layer": id, "photos": added, "skipped": report.skipped}))
+    Ok(out)
 }
 
 /// The most folder entries `layer.addPhotos` lists (it keeps the first photos by name).
@@ -5191,7 +5193,8 @@ fn added_download(s: &mut Session, p: &Value, mut r: Value, mark_source: bool, u
 }
 
 /// Zooms to the layers a command's result names (`layer`, `layers`), all of them together;
-/// whether the view framed them (none had an extent, or the map's projection doesn't reach it).
+/// whether the view framed them (not when none had an extent, or the map's projection doesn't
+/// reach it).
 fn zoom_to_added(s: &mut Session, r: &Value) -> bool {
     let ids = r.get("layers").and_then(Value::as_array).into_iter().flatten().chain(r.get("layer"));
     let e = ids
