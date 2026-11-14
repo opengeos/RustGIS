@@ -50,8 +50,9 @@ can't be checked, such as dates in mixed time zones). **Dates** starts unticked 
 service ticks it, for its last 90 days) and **Most cloud cover (%)** starts ticked: tick or untick
 either to put that filter in or leave it out of the search while keeping what you typed. A
 ticked box left blank puts nothing in the search (any date, any cloud cover); a cloud limit that
-is not a number from 0 to 100 is refused with a message, not dropped. A collection without
-`eo:cloud_cover` finds nothing with a limit set. A static catalog is walked
+is not a number from 0 to 100 is refused with a message, not dropped. In an API search, a
+collection without `eo:cloud_cover` finds nothing with a limit set; a static catalog keeps an item
+that doesn't say how cloudy it is. A static catalog is walked
 in its own order, so it has no sort. The default API is Element 84's [Earth Search](https://earth-search.aws.element84.com/v1);
 Microsoft's [Planetary Computer](https://planetarycomputer.microsoft.com/api/stac/v1) is offered
 beside it, and other APIs with GET item search work. **Collections** lists what the API offers,
