@@ -55,6 +55,23 @@ pub const RAN_TOO_LONG: &str = "it ran too long and was stopped";
 /// Plugin command and tool ids start with this: `plugin:<plugin>/<command>`.
 pub const PREFIX: &str = "plugin:";
 
+/// Whether plugins can be installed here. Not on iOS: App Review doesn't let an app download
+/// code that adds to what it does (App Store Review Guideline 2.5.2), and a plugin is such code,
+/// from the registry or from a file. A future build could carry plugins reviewed with the app.
+pub const INSTALLS: bool = !cfg!(target_os = "ios");
+
+/// Why a plugin can't be installed here, when [`INSTALLS`] is false.
+pub const NOT_INSTALLED_HERE: &str = "Plugins can't be installed on iOS: Apple doesn't let an app download code that adds to what it does. Use them in RustGIS on a computer or in the browser.";
+
+/// `Ok` where plugins can be installed ([`INSTALLS`]), or why not.
+pub fn may_install() -> Result<(), String> {
+    allowed(INSTALLS)
+}
+
+fn allowed(installs: bool) -> Result<(), String> {
+    if installs { Ok(()) } else { Err(NOT_INSTALLED_HERE.to_string()) }
+}
+
 /// A loaded plugin.
 pub struct Plugin {
     pub manifest: Manifest,

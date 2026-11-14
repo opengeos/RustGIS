@@ -872,6 +872,14 @@ fn installed_tab(app: &mut RustGisApp, ui: &mut egui::Ui, t: &Tokens) {
 const ROW_H: f32 = 104.0;
 
 fn browse_tab(app: &mut RustGisApp, ui: &mut egui::Ui, t: &Tokens) {
+    // Where nothing can be installed (iOS), the registry isn't fetched: the reason stands in
+    // for it.
+    if !rp::INSTALLS {
+        card(ui, t, |ui| {
+            ui.label(egui::RichText::new(tl!("Plugins can't be installed on iOS: Apple doesn't let an app download code that adds to what it does. Use them in RustGIS on a computer or in the browser.")).color(t.text));
+        });
+        return;
+    }
     if app.plugins.registry.is_none() && !app.plugins.busy() {
         refresh(app, ui.ctx());
     }

@@ -272,7 +272,31 @@ xcrun simctl launch --console booted org.rustgis.mobile    # the app's log on th
 Development or Distribution identity in the keychain) and `IOS_PROFILE` (a provisioning profile for
 `org.rustgis.mobile`) it signs the app and packs `target/ios/RustGIS.ipa`, for a device or for
 TestFlight. There is no Xcode project: cargo builds the executable and the script makes the bundle
-around it, with `ios/Info.plist`.
+around it, with `ios/Info.plist`, the app icon (the logo, drawn by `build.rs` from the same code as
+the desktop's window icon and compiled with `actool`), and the build keys Xcode's own builds
+record. The build number is the commit count, or `IOS_BUILD`.
+
+### TestFlight and the App Store
+
+This needs the project's Apple Developer account, which the steps below assume; none of it is
+automated yet.
+
+1. In App Store Connect, make the app with the bundle id `org.rustgis.mobile`.
+2. In the developer account, make an Apple Distribution certificate (in the keychain of the Mac
+   that builds) and an App Store provisioning profile for `org.rustgis.mobile`.
+3. Build and upload, with an App Store Connect API key (`~/.appstoreconnect/private_keys/AuthKey_<id>.p8`):
+
+   ```sh
+   IOS_SIGN_IDENTITY="Apple Distribution: …" IOS_PROFILE=RustGIS_AppStore.mobileprovision \
+       apps/rustgis-mobile/build-ios.sh device
+   xcrun altool --upload-app -f target/ios/RustGIS.ipa -t ios --apiKey <id> --apiIssuer <issuer>
+   ```
+
+4. Once processed, the build is in TestFlight for internal testers; external testers and the
+   App Store need Apple's review. The review notes should say why the app asks for the location
+   in the background (tracks recorded with the screen off), that it downloads no code (plugins
+   are off on iOS), and why App Transport Security is off (a project's map layers may be any
+   `http://` server).
 
 Files put in the app's Documents folder are opened once the window is up, as the pushed files are
 on Android:
@@ -293,6 +317,7 @@ cp parcels.gpkg "$(xcrun simctl get_app_container booted org.rustgis.mobile data
 | Soft keyboard | winit's own (`UIKeyInput`): letters and Backspace reach the form. The room the keyboard takes comes from UIKit's keyboard notices and keeps the field above it. Return types nothing, as winit 0.30 hands it on as a character: typing ends with a tap outside the field |
 | Folders | Settings, app data and the cache are in `Library/Application Support` |
 | Plain HTTP | App Transport Security is off for every host (`NSAllowsArbitraryLoads`): a project's tile layers and services may be any `http://` server, not known when the app is built, so a list of exceptions can't name them. The App Review notes say so |
+| Plugins | None can be installed, and the registry isn't fetched: App Review doesn't let an app download code that adds to what it does (guideline 2.5.2), and a plugin, from the registry or a file, is such code. Each way of installing one says so (`rustgis_plugins::INSTALLS`). A later build could carry plugins reviewed with the app |
 
 Two things winit 0.30 doesn't do on iOS 27 are done in `src/ios.rs`:
 

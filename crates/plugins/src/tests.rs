@@ -2872,3 +2872,15 @@ fn plugin_settings_are_erased_only_by_uninstalling() {
     assert!(!file.exists() && crate::get("settings-store").is_none());
     let _ = std::fs::remove_dir_all(&plugins);
 }
+
+#[test]
+fn installing_is_refused_with_the_reason_where_plugins_cant_be_installed() {
+    assert_eq!(crate::allowed(true), Ok(()));
+    let refused = crate::allowed(false);
+    assert_eq!(refused, Err(crate::NOT_INSTALLED_HERE.to_string()));
+    assert!(crate::NOT_INSTALLED_HERE.contains("iOS"));
+    // Where plugins can be installed, installing goes on to read the package.
+    if crate::INSTALLS {
+        assert!(crate::store::install_bytes(b"not a package").is_err_and(|e| e != crate::NOT_INSTALLED_HERE));
+    }
+}
