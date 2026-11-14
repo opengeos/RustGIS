@@ -148,6 +148,13 @@ mod android {
                     Event::Position(fix) if self.locating => self.app.position = Some(fix),
                     // A fix that was on its way when positioning was turned off.
                     Event::Position(_) => {}
+                    // Android ended positioning itself (its reason is a failure beside this): the
+                    // interface goes back to offering to show the position.
+                    Event::Stopped => {
+                        self.app.locate = false;
+                        self.locating = false;
+                        self.app.position = None;
+                    }
                     Event::Failed(text) => self.app.session.notify(text, true),
                 }
             }

@@ -21,6 +21,8 @@ import java.util.ArrayList;
  *   picked    purpose  name  path    a chosen file, copied to the app's storage
  *   cancelled                        a picker closed without a choice
  *   saved     name                   a file written where the user chose
+ *   position  lon  lat  accuracy     where the device is (accuracy in metres, or empty)
+ *   stopped                          positioning ended without being asked to
  *   failed    text                   what went wrong, to show the user
  */
 public class MainActivity extends NativeActivity {
@@ -88,8 +90,8 @@ public class MainActivity extends NativeActivity {
             locating = on;
             if (!on) {
                 stopLocating();
-            } else if (checkSelfPermission(android.Manifest.permission.ACCESS_FINE_LOCATION)
-                    == android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            } else if (allowed(android.Manifest.permission.ACCESS_FINE_LOCATION)
+                    || allowed(android.Manifest.permission.ACCESS_COARSE_LOCATION)) {
                 startLocating();
             } else {
                 requestPermissions(new String[] {android.Manifest.permission.ACCESS_FINE_LOCATION,
@@ -111,8 +113,43 @@ public class MainActivity extends NativeActivity {
         if (given) {
             startLocating();
         } else {
-            locating = false;
-            add("failed\tRustGIS wasn't given leave to use this device's location: its position can't be shown.");
+            stopped("RustGIS wasn't given leave to use this device's location: its position can't be shown.");
+        }
+    }
+
+    private boolean allowed(String permission) {
+        return checkSelfPermission(permission) == android.content.pm.PackageManager.PERMISSION_GRANTED;
+    }
+
+    /**
+     * Positioning has ended without the Rust side asking: why is said ("failed"), and "stopped"
+     * tells it so, so the interface doesn't go on offering to hide a position that isn't coming.
+     */
+    private void stopped(String why) {
+        locating = false;
+        stopLocating();
+        add("failed\t" + why);
+        add("stopped");
+    }
+
+    /** Positions are not asked for while the app is out of sight: they would only pile up. */
+    @Override
+    protected void onStop() {
+        stopLocating();
+        super.onStop();
+    }
+
+    /** Back in sight: positions are asked for again, if they were wanted and are still allowed. */
+    @Override
+    protected void onStart() {
+        super.onStart();
+        if (locating) {
+            if (allowed(android.Manifest.permission.ACCESS_FINE_LOCATION)
+                    || allowed(android.Manifest.permission.ACCESS_COARSE_LOCATION)) {
+                startLocating();
+            } else {
+                stopped("RustGIS is no longer given leave to use this device's location.");
+            }
         }
     }
 
@@ -120,7 +157,7 @@ public class MainActivity extends NativeActivity {
     private void startLocating() {
         android.location.LocationManager manager = (android.location.LocationManager) getSystemService(LOCATION_SERVICE);
         if (manager == null) {
-            add("failed\tThis device has no location service.");
+            stopped("This device has no location service.");
             return;
         }
         stopLocating();
@@ -130,7 +167,11 @@ public class MainActivity extends NativeActivity {
         for (String provider : new String[] {android.location.LocationManager.GPS_PROVIDER,
                 android.location.LocationManager.NETWORK_PROVIDER}) {
             try {
-                if (manager.getAllProviders().contains(provider)) {
+                // Satellites need the precise permission: with the approximate one alone, the
+                // network's positions are the ones to ask for.
+                boolean satellites = provider.equals(android.location.LocationManager.GPS_PROVIDER);
+                if (manager.getAllProviders().contains(provider)
+                        && (!satellites || allowed(android.Manifest.permission.ACCESS_FINE_LOCATION))) {
                     manager.requestLocationUpdates(provider, 1000, 0, positions, getMainLooper());
                     asked++;
                 }
@@ -139,8 +180,7 @@ public class MainActivity extends NativeActivity {
             }
         }
         if (asked == 0) {
-            positions = null;
-            add("failed\tThis device has no way to find its position.");
+            stopped("This device has no way to find its position.");
         }
     }
 

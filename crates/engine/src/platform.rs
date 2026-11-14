@@ -40,13 +40,16 @@ pub enum Event {
     },
     /// The device's position, while [`Platform::locate`] is on.
     Position(Fix),
+    /// Positioning ended without [`Platform::locate`] turning it off (leave refused or taken
+    /// away, no way to find a position): the reason comes as an [`Event::Failed`].
+    Stopped,
     /// Something went wrong: the text is for the user.
     Failed(String),
 }
 
 impl Event {
     /// Reads an event a shell passed as one line of tab-separated fields (`picked`, `cancelled`,
-    /// `saved`, `position`, `failed`). A line that is none of these is a failure that quotes it: nothing a
+    /// `saved`, `position`, `stopped`, `failed`). A line that is none of these is a failure that quotes it: nothing a
     /// shell reports is dropped.
     pub fn parse(line: &str) -> Event {
         let fields: Vec<&str> = line.split('\t').collect();
@@ -55,6 +58,7 @@ impl Event {
                 Event::Picked { purpose: purpose.to_string(), name: name.to_string(), path: PathBuf::from(path) }
             }
             ["cancelled"] => Event::Cancelled,
+            ["stopped"] => Event::Stopped,
             // A name is the user's own text and may hold a tab: the rest of the line is the name.
             ["saved", name @ ..] if !name.is_empty() => Event::Saved { name: name.join("\t") },
             ["position", lon, lat, accuracy] => match (lon.parse::<f64>(), lat.parse::<f64>()) {
@@ -103,6 +107,7 @@ mod tests {
             Event::Picked { purpose: "data".into(), name: "parcels.gpkg".into(), path: PathBuf::from("/data/picked/1/parcels.gpkg") }
         );
         assert_eq!(Event::parse("cancelled"), Event::Cancelled);
+        assert_eq!(Event::parse("stopped"), Event::Stopped);
         assert_eq!(Event::parse("position\t-83.92\t35.96\t4.5"), Event::Position(Fix { lon: -83.92, lat: 35.96, accuracy: Some(4.5) }));
         // No accuracy given, or one that is none: the position stands without it.
         assert_eq!(Event::parse("position\t10\t20\t"), Event::Position(Fix { lon: 10.0, lat: 20.0, accuracy: None }));
