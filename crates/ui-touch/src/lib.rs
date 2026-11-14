@@ -109,7 +109,11 @@ pub fn chrome(app: &mut RustGisApp, ui: &mut Ui) {
 /// Draws where the device is: a dot, in a ring as wide as the position is good to.
 fn position(app: &RustGisApp, painter: &egui::Painter, fix: rustgis_ui_egui::rustgis_engine::platform::Fix, t: &Tokens) {
     let Some(at) = app.lonlat_to_screen(fix.lon, fix.lat) else { return };
-    let metres_a_point = app.session.map().ground_res();
+    // The ground a point of the screen covers where the fix is, not at the middle of the view:
+    // on a projection whose scale changes with latitude the two differ.
+    let map = app.session.map();
+    let here = map.to_map(rustgis_ui_egui::rustgis_engine::geom::Coord::new(fix.lon, fix.lat));
+    let metres_a_point = here.map_or(0.0, |at| map.camera.res * map.ground_per_unit(at));
     // A ring wider than the view has no edge in it to show, and an accuracy out of all measure
     // (it is the system's to give) would make one of no size a painter can take.
     let widest = painter.clip_rect().size().length();

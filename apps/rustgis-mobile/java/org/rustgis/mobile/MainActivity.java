@@ -43,6 +43,8 @@ public class MainActivity extends NativeActivity {
     private android.location.LocationListener positions;
     /** The user is being asked for leave to use the location, and hasn't answered. */
     private boolean asking;
+    /** The activity is in sight (between onStart and onStop). */
+    private boolean started;
     /** A picker for opening is shown and has not answered (the main thread's alone). */
     private boolean picking;
     private String saveName = "";
@@ -118,7 +120,10 @@ public class MainActivity extends NativeActivity {
             given |= result == android.content.pm.PackageManager.PERMISSION_GRANTED;
         }
         if (given) {
-            startLocating();
+            // Out of sight, the start is left to onStart: positions would only pile up.
+            if (started) {
+                startLocating();
+            }
         } else {
             stopped("RustGIS wasn't given leave to use this device's location: its position can't be shown.");
         }
@@ -142,6 +147,7 @@ public class MainActivity extends NativeActivity {
     /** Positions are not asked for while the app is out of sight: they would only pile up. */
     @Override
     protected void onStop() {
+        started = false;
         stopLocating();
         super.onStop();
     }
@@ -150,6 +156,7 @@ public class MainActivity extends NativeActivity {
     @Override
     protected void onStart() {
         super.onStart();
+        started = true;
         // While the user is still being asked for leave, its answer decides, not this.
         if (locating && !asking) {
             if (allowed(android.Manifest.permission.ACCESS_FINE_LOCATION)

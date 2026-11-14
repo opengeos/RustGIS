@@ -93,8 +93,10 @@ pub trait Platform {
     fn save_file(&self, name: &str, bytes: Vec<u8>) -> Result<(), String>;
 
     /// Starts (`on`) or stops reporting the device's position: each fix arrives as an
-    /// [`Event::Position`]. Starting asks the user for leave where the system wants it; a refusal
-    /// arrives as an [`Event::Failed`]. `Ok` means it was asked, not that a position is known.
+    /// [`Event::Position`]. Starting asks the user for leave where the system wants it. A refusal,
+    /// like any other end to positioning that wasn't asked for, arrives as an [`Event::Failed`]
+    /// and then an [`Event::Stopped`], so the interface knows no position is coming. `Ok` means
+    /// it was asked, not that a position is known.
     fn locate(&self, on: bool) -> Result<(), String>;
 
     /// What happened since the last call, oldest first.
