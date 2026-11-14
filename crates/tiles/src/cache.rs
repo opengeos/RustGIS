@@ -291,8 +291,10 @@ pub fn set_fetcher(f: impl Fn(String, Done) + Send + Sync + 'static) {
 /// map's edge): a transport keeping diagnostics passes them to
 /// [`RequestDiagnostics::omit_statuses`], so it records what the native transport records.
 pub fn set_fetcher_omitting(f: impl Fn(String, Done, &'static [u16]) + Send + Sync + 'static) {
-    *fetcher().lock().unwrap_or_else(|e| e.into_inner()) = Some(Arc::new(Box::new(move |url, _, done, omit| {
-        let origin = crate::address::Origin::named(&crate::s3::bound_destination(&url).ok().flatten().unwrap_or_else(|| url.clone()));
+    *fetcher().lock().unwrap_or_else(|e| e.into_inner()) = Some(Arc::new(Box::new(move |url, ceiling, done, omit| {
+        let clean = split_range(split_tail(split_download_limit(&url).0).0).0;
+        let dest = crate::s3::bound_destination(clean).ok().flatten().unwrap_or_else(|| clean.to_string());
+        let origin = crate::address::Origin::named(&dest).narrow_reach(ceiling);
         f(url, Box::new(move |r| done(r.map(|bytes| Fetched { bytes, origin }))), omit);
     })));
 }
@@ -340,14 +342,88 @@ pub fn clear_header() {
     *header().lock().unwrap_or_else(|e| e.into_inner()) = None;
 }
 
-const MAX_PUBLIC_ONLY: usize = 4096;
-const MAX_PUBLIC_TEMPLATES: usize = 256;
+const MAX_PUBLIC_ONLY: usize = 16_384;
+const MAX_PUBLIC_TEMPLATES: usize = 1024;
+const MAX_NAMED_LOCAL: usize = 4096;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct PublicTemplate {
+    scheme: String,
+    authority_parts: Vec<String>,
+    tail_parts: Vec<String>,
+}
+
+impl PublicTemplate {
+    fn parse(template: &str) -> Option<Self> {
+        if !(template.contains('{') && template.contains('}')) {
+            return None;
+        }
+        let (scheme, authority, tail) = split_url_parts(template)?;
+        let authority_parts = split_placeholders(authority, true)?;
+        let tail_parts = split_placeholders(tail, false)?;
+        Some(Self { scheme, authority_parts, tail_parts })
+    }
+
+    fn matches(&self, candidate: &str) -> bool {
+        let Some((scheme, authority, tail)) = split_url_parts(candidate) else { return false };
+        scheme == self.scheme
+            && glob_matches(&authority.to_ascii_lowercase(), &self.authority_parts)
+            && glob_matches(tail, &self.tail_parts)
+    }
+}
+
+fn split_url_parts(url: &str) -> Option<(String, &str, &str)> {
+    let (scheme, rest) = url.split_once("://")?;
+    let sep = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    let authority = &rest[..sep];
+    let authority = authority.rsplit_once('@').map_or(authority, |(_, h)| h);
+    if authority.is_empty() {
+        return None;
+    }
+    Some((scheme.to_ascii_lowercase(), authority, &rest[sep..]))
+}
+
+fn split_placeholders(s: &str, lowercase: bool) -> Option<Vec<String>> {
+    let mut parts = Vec::new();
+    let mut rest = s;
+    while let Some((lit, after_open)) = rest.split_once('{') {
+        let (_, after_close) = after_open.split_once('}')?;
+        parts.push(if lowercase { lit.to_ascii_lowercase() } else { lit.to_string() });
+        rest = after_close;
+    }
+    parts.push(if lowercase { rest.to_ascii_lowercase() } else { rest.to_string() });
+    Some(parts)
+}
+
+fn glob_matches(candidate: &str, parts: &[String]) -> bool {
+    match parts {
+        [] => candidate.is_empty(),
+        [only] => candidate == only,
+        [first, rest @ ..] => {
+            let Some(mut rem) = candidate.strip_prefix(first.as_str()) else { return false };
+            let Some((last, middle)) = rest.split_last() else { return true };
+            if !rem.ends_with(last.as_str()) {
+                return false;
+            }
+            rem = &rem[..rem.len() - last.len()];
+            for seg in middle {
+                let Some((_, after)) = rem.split_once(seg.as_str()) else { return false };
+                rem = after;
+            }
+            true
+        }
+    }
+}
 
 #[derive(Default)]
 struct PublicOnly {
-    order: std::collections::VecDeque<String>,
     exact: std::collections::HashSet<String>,
-    templates: Vec<(String, String)>,
+    templates: Vec<PublicTemplate>,
+    named_order: std::collections::VecDeque<String>,
+    named_local: std::collections::HashSet<String>,
+    /// Once capacity is reached, active public restrictions are never evicted; unknown URLs fail
+    /// closed to [`crate::address::Reach::Public`] unless explicitly user-named via [`allow_named`].
+    saturated: bool,
 }
 
 fn public_only() -> &'static Mutex<PublicOnly> {
@@ -370,25 +446,32 @@ pub fn restrict_to_public(url: &str) {
     }
     let added = {
         let mut p = public_only().lock().unwrap_or_else(|e| e.into_inner());
-        if let (Some((pre, _)), Some((_, suf))) = (base.split_once('{'), base.rsplit_once('}'))
-            && !p.templates.iter().any(|(a, b)| a == pre && b == suf)
+        let removed_named = p.named_local.remove(base);
+        if removed_named {
+            p.named_order.retain(|item| item != base);
+        }
+        let mut changed = removed_named;
+        if let Some(tpl) = PublicTemplate::parse(base)
+            && !p.templates.contains(&tpl)
         {
-            if p.templates.len() >= MAX_PUBLIC_TEMPLATES {
-                p.templates.remove(0);
+            if p.templates.len() < MAX_PUBLIC_TEMPLATES {
+                p.templates.push(tpl);
+                changed = true;
+            } else if !p.saturated {
+                p.saturated = true;
+                changed = true;
             }
-            p.templates.push((pre.to_string(), suf.to_string()));
         }
-        if p.exact.insert(base.to_string()) {
-            if p.order.len() >= MAX_PUBLIC_ONLY
-                && let Some(oldest) = p.order.pop_front()
-            {
-                p.exact.remove(&oldest);
+        if !p.exact.contains(base) {
+            if p.exact.len() < MAX_PUBLIC_ONLY {
+                p.exact.insert(base.to_string());
+                changed = true;
+            } else if !p.saturated {
+                p.saturated = true;
+                changed = true;
             }
-            p.order.push_back(base.to_string());
-            true
-        } else {
-            false
         }
+        changed
     };
     if added {
         forget(url);
@@ -398,12 +481,21 @@ pub fn restrict_to_public(url: &str) {
 /// Clears any document-origin restriction on `url` when the user explicitly names it directly.
 pub fn allow_named(url: &str) {
     let base = canonical_resource(url);
-    let mut p = public_only().lock().unwrap_or_else(|e| e.into_inner());
-    if p.exact.remove(base) {
-        p.order.retain(|item| item != base);
+    if base.is_empty() {
+        return;
     }
-    if let (Some((pre, _)), Some((_, suf))) = (base.split_once('{'), base.rsplit_once('}')) {
-        p.templates.retain(|(a, b)| !(a == pre && b == suf));
+    let mut p = public_only().lock().unwrap_or_else(|e| e.into_inner());
+    p.exact.remove(base);
+    if let Some(tpl) = PublicTemplate::parse(base) {
+        p.templates.retain(|existing| existing != &tpl);
+    }
+    if p.named_local.insert(base.to_string()) {
+        if p.named_order.len() >= MAX_NAMED_LOCAL
+            && let Some(oldest) = p.named_order.pop_front()
+        {
+            p.named_local.remove(&oldest);
+        }
+        p.named_order.push_back(base.to_string());
     }
 }
 
@@ -411,18 +503,23 @@ pub fn allow_named(url: &str) {
 /// document named it, [`crate::address::Reach::Local`] otherwise.
 pub fn ceiling_for(url: &str) -> crate::address::Reach {
     let base = canonical_resource(url);
+    if base.is_empty() {
+        return crate::address::Reach::Local;
+    }
     let p = public_only().lock().unwrap_or_else(|e| e.into_inner());
-    if p.exact.contains(base)
-        || (!base.is_empty() && p.templates.iter().any(|(pre, suf)| base.starts_with(pre.as_str()) && base.ends_with(suf.as_str())))
-    {
+    if p.exact.contains(base) {
+        crate::address::Reach::Public
+    } else if p.named_local.contains(base) {
+        crate::address::Reach::Local
+    } else if p.templates.iter().any(|tpl| tpl.matches(base)) || p.saturated {
         crate::address::Reach::Public
     } else {
         crate::address::Reach::Local
     }
 }
 
-#[cfg(test)]
-fn clear_public_only() {
+/// Resets document-origin public restrictions recorded by [`restrict_to_public`] and [`allow_named`].
+pub fn clear_public_restrictions() {
     let mut p = public_only().lock().unwrap_or_else(|e| e.into_inner());
     *p = PublicOnly::default();
 }
@@ -452,7 +549,7 @@ impl Drop for Turn {
         clear_fetcher();
         clear_poster();
         clear_header();
-        clear_public_only();
+        clear_public_restrictions();
     }
 }
 
@@ -1525,6 +1622,25 @@ pub fn download_detailed(url: &str, max: usize, done: DoneDetailed) {
     download_detailed_within(url, max, DOWNLOAD_TIMEOUT, &[], done);
 }
 
+/// Like [`download`], preserving the final post-redirect [`crate::address::Origin`] and observed
+/// network reach alongside the downloaded bytes.
+pub fn download_with_origin(url: &str, done: FetchedDone) {
+    download_fetched_reaching(url, MAX_DOWNLOAD, DOWNLOAD_TIMEOUT, &[], Reaching::Any, Box::new(move |r| done(r.map_err(|f| f.message))));
+}
+
+/// Like [`download_public`], preserving the final post-redirect [`crate::address::Origin`] and
+/// observed network reach alongside the downloaded bytes.
+pub fn download_public_with_origin(url: &str, done: FetchedDone) {
+    download_fetched_reaching(
+        url,
+        MAX_DOWNLOAD,
+        DOWNLOAD_TIMEOUT,
+        &[],
+        Reaching::Public,
+        Box::new(move |r| done(r.map_err(|f| f.message))),
+    );
+}
+
 /// Like [`download`], connecting only to public internet addresses: for data or catalog documents
 /// whose address came from another web document rather than directly from the user.
 pub fn download_public(url: &str, done: Done) {
@@ -1554,6 +1670,8 @@ enum Reaching {
     Public,
 }
 
+type DoneFetchedDetailed = Box<dyn FnOnce(Result<Fetched, Failure>) + Send>;
+
 /// Like [`download_detailed`], giving up after `timeout` natively; a status in `omit` isn't
 /// recorded as a failure.
 fn download_detailed_within(url: &str, max: usize, timeout: std::time::Duration, omit: &'static [u16], done: DoneDetailed) {
@@ -1562,6 +1680,17 @@ fn download_detailed_within(url: &str, max: usize, timeout: std::time::Duration,
 
 /// [`download_detailed_within`], natively connecting only where `reaching` allows.
 fn download_reaching(url: &str, max: usize, timeout: std::time::Duration, omit: &'static [u16], reaching: Reaching, done: DoneDetailed) {
+    download_fetched_reaching(url, max, timeout, omit, reaching, Box::new(move |r| done(r.map(|f| f.bytes))));
+}
+
+fn download_fetched_reaching(
+    url: &str,
+    max: usize,
+    timeout: std::time::Duration,
+    omit: &'static [u16],
+    reaching: Reaching,
+    done: DoneFetchedDetailed,
+) {
     if let Err(e) = check_current() {
         done(Err(Failure::new(url, e)));
         return;
@@ -1572,7 +1701,7 @@ fn download_reaching(url: &str, max: usize, timeout: std::time::Duration, omit: 
         Reaching::Public => crate::address::Reach::Public,
     };
     let still = current_still();
-    let done: DoneDetailed = Box::new(move |r| with_optional_still(still, || done(r)));
+    let done: DoneFetchedDetailed = Box::new(move |r| with_optional_still(still, || done(r)));
     if let Err(e) = crate::address::check_reach(url, ceiling) {
         done(Err(Failure::new(url, e)));
         return;
@@ -1581,19 +1710,23 @@ fn download_reaching(url: &str, max: usize, timeout: std::time::Duration, omit: 
     IN_FLIGHT.fetch_add(1, Ordering::Relaxed);
     // The failure names the address asked for, not the marked one fetched.
     let asked = url.to_string();
-    let done: DoneDetailed = Box::new(move |r| {
+    let done: DoneFetchedDetailed = Box::new(move |r| {
         let r = crate::logins::check(&asked).map_err(|e| Failure::new(&asked, e)).and(r);
-        done(r.map_err(|f| Failure { url: crate::logins::inner(&asked).to_string(), ..f }));
+        done(
+            r.map(|mut f| {
+                f.origin = f.origin.narrow_reach(ceiling);
+                f
+            })
+            .map_err(|f| Failure { url: crate::logins::inner(&asked).to_string(), ..f }),
+        );
         finished();
     });
     let f = fetcher().lock().unwrap_or_else(|e| e.into_inner()).clone();
     match f {
-        Some(f) => {
-            f(marked.clone(), ceiling, Box::new(move |r| done(r.map(|fetched| fetched.bytes).map_err(|e| Failure::new(&marked, e)))), omit)
-        }
+        Some(f) => f(marked.clone(), ceiling, Box::new(move |r| done(r.map_err(|e| Failure::new(&marked, e)))), omit),
         None => match reaching {
-            Reaching::Any => native::download_within(marked, timeout, omit, done),
-            Reaching::Public => native::download_public_within(marked, timeout, omit, done),
+            Reaching::Any => native::download_fetched_within(marked, timeout, omit, done),
+            Reaching::Public => native::download_fetched_public_within(marked, timeout, omit, done),
         },
     }
 }
@@ -2144,7 +2277,9 @@ mod native {
     use std::collections::HashMap;
     use std::sync::{Condvar, Mutex, OnceLock};
 
-    use super::{Capture, DROPPED, Done, DoneDetailed, Fetched, FetchedDone, MAX_BYTES};
+    #[cfg(test)]
+    use super::DoneDetailed;
+    use super::{Capture, DROPPED, Done, Fetched, FetchedDone, MAX_BYTES};
     use crate::address::{Origin, Reach};
     use crate::failure::{Failure, Reason};
 
@@ -2831,7 +2966,17 @@ mod native {
         download_within(url, super::DOWNLOAD_TIMEOUT, &[], done);
     }
 
+    #[cfg(test)]
     pub(super) fn download_within(url: String, timeout: std::time::Duration, omit: &'static [u16], done: DoneDetailed) {
+        download_fetched_within(url, timeout, omit, Box::new(move |r| done(r.map(|f| f.bytes))));
+    }
+
+    pub(super) fn download_fetched_within(
+        url: String,
+        timeout: std::time::Duration,
+        omit: &'static [u16],
+        done: super::DoneFetchedDetailed,
+    ) {
         let capture = Capture::current();
         let still = super::current_still();
         let progress = super::current_progress();
@@ -2841,15 +2986,25 @@ mod native {
                     let _scope = capture.enter();
                     let r = super::check_current()
                         .map_err(Failure::from)
-                        .and_then(|_| get_detailed_omitting(&download_agent(timeout), &url, omit));
+                        .and_then(|_| get_fetched_omitting(&download_agent(timeout), &url, omit));
                     done(r);
                 })
             })
         });
     }
 
-    /// Like [`download_within`], connecting only to internet addresses ([`public_agent`]).
+    /// Like [`download_fetched_within`], connecting only to internet addresses ([`public_agent`]).
+    #[cfg(test)]
     pub(super) fn download_public_within(url: String, timeout: std::time::Duration, omit: &'static [u16], done: DoneDetailed) {
+        download_fetched_public_within(url, timeout, omit, Box::new(move |r| done(r.map(|f| f.bytes))));
+    }
+
+    pub(super) fn download_fetched_public_within(
+        url: String,
+        timeout: std::time::Duration,
+        omit: &'static [u16],
+        done: super::DoneFetchedDetailed,
+    ) {
         let capture = Capture::current();
         let still = super::current_still();
         let progress = super::current_progress();
@@ -2857,9 +3012,12 @@ mod native {
             super::with_optional_still(still, || {
                 super::with_progress(progress, || {
                     let _scope = capture.enter();
-                    let r = super::check_current()
-                        .map_err(Failure::from)
-                        .and_then(|_| get_detailed_omitting(&public_agent(timeout), &url, omit));
+                    let r = super::check_current().map_err(Failure::from).and_then(|_| {
+                        get_fetched_omitting(&public_agent(timeout), &url, omit).map(|mut f| {
+                            f.origin = f.origin.narrow_reach(Reach::Public);
+                            f
+                        })
+                    });
                     done(r);
                 })
             })
@@ -2997,8 +3155,16 @@ mod native {
     }
 
     /// [`get_detailed`], a status in `omit` not recorded as a failure.
+    #[cfg(test)]
     pub(super) fn get_detailed_omitting(agent: &ureq::Agent, url: &str, omit: &'static [u16]) -> Result<Vec<u8>, Failure> {
         get_detailed_reaching(agent, url, Reach::Local, omit)
+    }
+
+    pub(super) fn get_fetched_omitting(agent: &ureq::Agent, url: &str, omit: &'static [u16]) -> Result<Fetched, Failure> {
+        fetch_answer(agent, url, Reach::Local, true, omit).map_err(|f| Failure {
+            url: if url.contains(rustgis_data::login_address::PREFIX) { crate::logins::scrub_error(url) } else { url.to_string() },
+            ..f
+        })
     }
 
     pub(super) fn get_detailed_reaching(agent: &ureq::Agent, url: &str, reach: Reach, omit: &'static [u16]) -> Result<Vec<u8>, Failure> {
@@ -3267,7 +3433,7 @@ mod native {
 
 #[cfg(target_arch = "wasm32")]
 mod native {
-    use super::{Done, DoneDetailed};
+    use super::{Done, DoneFetchedDetailed};
 
     /// Keeps the destination ceiling with queued work; the web build requires its own fetcher.
     pub(super) fn fetch_reached(url: String, _ceiling: crate::address::Reach, done: super::FetchedDone, _omit: &'static [u16]) {
@@ -3278,13 +3444,18 @@ mod native {
         done(Err(rustgis_data::diagnostics::message_with_address(&url, "this build has no way to fetch tiles")));
     }
 
-    pub(super) fn download_within(url: String, _timeout: std::time::Duration, _omit: &'static [u16], done: DoneDetailed) {
+    pub(super) fn download_fetched_within(url: String, _timeout: std::time::Duration, _omit: &'static [u16], done: DoneFetchedDetailed) {
         let message = rustgis_data::diagnostics::message_with_address(&url, "this build has no way to fetch tiles");
         done(Err(crate::failure::Failure::new(&url, message)));
     }
 
-    pub(super) fn download_public_within(url: String, timeout: std::time::Duration, omit: &'static [u16], done: DoneDetailed) {
-        download_within(url, timeout, omit, done);
+    pub(super) fn download_fetched_public_within(
+        url: String,
+        timeout: std::time::Duration,
+        omit: &'static [u16],
+        done: DoneFetchedDetailed,
+    ) {
+        download_fetched_within(url, timeout, omit, done);
     }
 
     pub(super) fn post(url: String, _body: String, done: Done) {
@@ -6694,5 +6865,33 @@ mod tests {
 
         allow_named(tif);
         assert_eq!(ceiling_for(tif), crate::address::Reach::Local);
+    }
+
+    #[test]
+    fn public_template_matches_only_its_own_authority_and_never_evicts_restrictions() {
+        let _turn = turn();
+        restrict_to_public("https://{s}.tiles.example/{z}/{x}/{y}.png");
+        assert_eq!(ceiling_for("https://a.tiles.example/4/5/6.png"), crate::address::Reach::Public);
+        assert_eq!(ceiling_for("http://a.tiles.example/4/5/6.png"), crate::address::Reach::Local);
+        assert_eq!(ceiling_for("https://192.168.1.5/logo.png"), crate::address::Reach::Local);
+        assert_eq!(ceiling_for("https://192.168.1.5/4/5/6.png"), crate::address::Reach::Local);
+        allow_named("https://192.168.1.5/logo.png");
+        assert_eq!(ceiling_for("https://192.168.1.5/logo.png"), crate::address::Reach::Local);
+
+        let first_exact = "https://cdn.example/early-cog.tif";
+        let first_tpl = "https://dated.example/{YYYY}/{MM}/{DD}.tif";
+        restrict_to_public(first_exact);
+        restrict_to_public(first_tpl);
+        for i in 0..(MAX_PUBLIC_TEMPLATES + 8) {
+            restrict_to_public(&format!("https://t{i}.example/{{z}}/{{x}}/{{y}}.png"));
+        }
+        for i in 0..(MAX_PUBLIC_ONLY + 8) {
+            restrict_to_public(&format!("https://e.example/asset-{i}.tif"));
+        }
+        assert_eq!(ceiling_for(first_exact), crate::address::Reach::Public);
+        assert_eq!(ceiling_for("https://dated.example/2025/01/15.tif"), crate::address::Reach::Public);
+        assert_eq!(ceiling_for("https://unseen.example/other.tif"), crate::address::Reach::Public, "saturated table fails closed");
+        allow_named("https://192.168.1.5/logo.png");
+        assert_eq!(ceiling_for("https://192.168.1.5/logo.png"), crate::address::Reach::Local);
     }
 }

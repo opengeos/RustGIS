@@ -58,9 +58,11 @@ pub fn parse(v: &Value) -> Option<Msg> {
 }
 
 /// Interface commands an embedding page may run: panes, tabs, the ribbon, look and language,
-/// and harmless view or chrome toggles. Commands that fetch web addresses, open or export files,
-/// print, open pages, touch the clipboard or change stored tasks and settings outside the
-/// embedded session stay out.
+/// units, and harmless view or chrome toggles. Appearance and unit commands here update only the
+/// embedded visit's in-memory interface state ([`pref_pair`] makes `save_pref` a no-op and
+/// `load_pref` empty when `embedded`, so `localStorage` on the RustGIS origin is never read or
+/// written). Commands that fetch web addresses, open or export files, print, open pages, touch the
+/// clipboard, record tasks or recover autosaves stay out.
 const UI_EMBED: &[&str] = &[
     "ui.about",
     "ui.animationPlay",
@@ -126,6 +128,83 @@ pub fn runnable(command: &str) -> bool {
 /// project through `postMessage`.
 pub const fn startup_links_allowed(embedded: bool) -> bool {
     !embedded
+}
+
+const STARTUP_LINK_KEYS: [&str; 7] = ["project", "data", "stac", "style", "tiles", "zarr", "registry"];
+
+fn decode_query_value(raw: &str, plus_as_space: bool) -> Option<String> {
+    let bytes = raw.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes.get(i).copied()? {
+            b'+' if plus_as_space => {
+                out.push(b' ');
+                i += 1;
+            }
+            b'%' => {
+                let hi = char::from(*bytes.get(i + 1)?).to_digit(16)?;
+                let lo = char::from(*bytes.get(i + 2)?).to_digit(16)?;
+                out.push(((hi << 4) | lo) as u8);
+                i += 3;
+            }
+            b => {
+                out.push(b);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8(out).ok()
+}
+
+/// Counts startup address query parameters skipped when `?embed` disables startup links.
+pub fn skipped_startup_links(query: &str, embedded: bool) -> Vec<(&'static str, usize)> {
+    if startup_links_allowed(embedded) {
+        return Vec::new();
+    }
+    let trimmed = query.trim_start_matches('?');
+    let mut skipped = Vec::new();
+    for key in STARTUP_LINK_KEYS {
+        let plus_as_space = matches!(key, "project" | "registry");
+        let count = trimmed
+            .split('&')
+            .filter_map(|kv| kv.strip_prefix(key)?.strip_prefix('='))
+            .filter(|raw| !raw.trim().is_empty())
+            .filter_map(|raw| decode_query_value(raw, plus_as_space))
+            .filter(|v| !v.trim().is_empty())
+            .count();
+        if count > 0 {
+            skipped.push((key, count));
+        }
+    }
+    skipped
+}
+
+/// Reports each kind of startup link skipped in `?embed`, one notice per parameter kind with count.
+pub fn notify_skipped_startup_links(session: &mut rustgis_ui_egui::rustgis_engine::Session, query: &str, embedded: bool) {
+    for (kind, count) in skipped_startup_links(query, embedded) {
+        session.notify(
+            rustgis_ui_egui::i18n::fmt(
+                "?embed receives its project from the host page, so {count} {param} link(s) were left out",
+                &[("count", &count.to_string()), ("param", &format!("?{kind}="))],
+            ),
+            false,
+        );
+    }
+}
+
+pub type PrefLoad = Box<dyn Fn(&str) -> Option<String>>;
+pub type PrefSave = Box<dyn Fn(&str, &str)>;
+
+/// Builds the `(load_pref, save_pref)` pair for `Services`: in `?embed`, neither callback reads or
+/// writes persistent browser storage, so `UI_EMBED` appearance and unit commands affect only the
+/// embedded session in memory.
+pub fn pref_pair(
+    embedded: bool,
+    load_persistent: impl Fn(&str) -> Option<String> + 'static,
+    save_persistent: impl Fn(&str, &str) + 'static,
+) -> (PrefLoad, PrefSave) {
+    if embedded { (Box::new(|_| None), Box::new(|_, _| {})) } else { (Box::new(load_persistent), Box::new(save_persistent)) }
 }
 
 pub fn ready() -> Value {
@@ -327,5 +406,75 @@ mod tests {
         // A change undone before it settles posts nothing.
         assert_eq!(c.due(k(5), t), (false, Some(SETTLE)));
         assert_eq!(c.due(k(4), t + SETTLE), (false, None));
+    }
+
+    #[test]
+    fn embedded_startup_reports_skipped_query_links_with_counts_and_stays_quiet_when_clean() {
+        use rustgis_ui_egui::rustgis_engine::{Project, Session};
+        let mut clean = Session::new(Project::default());
+        let mark = clean.notice_mark();
+        notify_skipped_startup_links(&mut clean, "?embed&lang=de&extent=-10,35,20,60", true);
+        assert!(clean.notices_since(mark).is_empty(), "non-link query parameters in ?embed emit no skipped-link notice");
+
+        let mut standalone = Session::new(Project::default());
+        let mark = standalone.notice_mark();
+        notify_skipped_startup_links(&mut standalone, "?data=https%3A%2F%2Fexample.com%2Fa.geojson", false);
+        assert!(standalone.notices_since(mark).is_empty(), "standalone visits run startup links instead of skipping them");
+
+        let mut skipped = Session::new(Project::default());
+        let mark = skipped.notice_mark();
+        notify_skipped_startup_links(
+            &mut skipped,
+            "?embed&project=https%3A%2F%2Fexample.com%2Fp.rgis&data=https%3A%2F%2Fexample.com%2Fa.geojson&data=https%3A%2F%2Fexample.com%2Fb.geojson&registry=https%3A%2F%2Fexample.com%2Freg.json&stac=",
+            true,
+        );
+        let notices: Vec<String> = skipped.notices_since(mark).iter().map(|n| n.text.clone()).collect();
+        assert_eq!(notices.len(), 3, "{notices:?}");
+        assert!(notices[0].contains("1 ?project="), "{notices:?}");
+        assert!(notices[1].contains("2 ?data="), "{notices:?}");
+        assert!(notices[2].contains("1 ?registry="), "{notices:?}");
+    }
+
+    #[test]
+    fn embedded_preferences_stay_in_memory_without_reading_or_writing_storage() {
+        use std::sync::{Arc, Mutex};
+
+        let reads = Arc::new(Mutex::new(Vec::<String>::new()));
+        let writes = Arc::new(Mutex::new(Vec::<(String, String)>::new()));
+        let r_log = reads.clone();
+        let w_log = writes.clone();
+        let (load_pref, save_pref) = pref_pair(
+            true,
+            move |k| {
+                r_log.lock().unwrap().push(k.to_string());
+                Some("dark".into())
+            },
+            move |k, v| {
+                w_log.lock().unwrap().push((k.to_string(), v.to_string()));
+            },
+        );
+        let services = rustgis_ui_egui::Services { load_pref: Some(load_pref), save_pref: Some(save_pref), ..Default::default() };
+        let mut app = rustgis_ui_egui::RustGisApp::with_sample().with_services(services);
+        app.embedded = true;
+
+        for (cmd, params) in [
+            ("ui.theme", json!({"dark": true})),
+            ("ui.themeFile", json!({})),
+            ("ui.language", json!({"code": "de"})),
+            ("ui.scale", json!({"factor": 1.25})),
+            ("ui.ribbon", json!({"minimized": true})),
+            ("ui.measurementUnits", json!({"units": "imperial"})),
+            ("ui.coordinateFormat", json!({"format": "dms"})),
+            ("ui.map.gpu", json!({"on": true})),
+        ] {
+            assert!(runnable(cmd), "{cmd}");
+            app.run(cmd, params).unwrap_or_else(|e| panic!("{cmd} failed: {e}"));
+        }
+
+        assert_eq!(app.ui.language, "de");
+        assert!(app.ui.ribbon_minimized);
+        assert!(app.ui.measurement_imperial);
+        assert!(reads.lock().unwrap().is_empty(), "embedded mode must not read saved storage preferences");
+        assert!(writes.lock().unwrap().is_empty(), "embedded mode must not write saved storage preferences");
     }
 }

@@ -3717,14 +3717,31 @@ pub fn request_origin(p: &Value) -> Result<(Option<&str>, bool), String> {
         Some(_) => return Err("\"from\" must be a string".into()),
     };
     let from_document = match p.get("fromDocument") {
-        None | Some(Value::Null) => false,
-        Some(Value::Bool(b)) => *b,
+        None | Some(Value::Null) => None,
+        Some(Value::Bool(b)) => Some(*b),
         Some(_) => return Err("\"fromDocument\" must be true or false".into()),
     };
-    let public = from_document
-        || from.is_some_and(|u| crate::render::rustgis_tiles::address::reach(u) == crate::render::rustgis_tiles::address::Reach::Public);
+    let public = match from_document {
+        Some(b) => b,
+        None => from.is_some_and(|u| {
+            crate::render::rustgis_tiles::address::reach(crate::render::rustgis_tiles::logins::inner(u))
+                == crate::render::rustgis_tiles::address::Reach::Public
+        }),
+    };
     let origin = if public && from.is_none() { Some("https://document.invalid/") } else { from };
     Ok((origin, public))
+}
+
+/// Network reach ceiling implied by `(origin, public)` from [`request_origin`].
+pub fn origin_ceiling(origin: Option<&str>, public: bool) -> crate::render::rustgis_tiles::address::Reach {
+    use crate::render::rustgis_tiles::{address, logins};
+    if origin.is_some_and(|u| address::reach(logins::inner(u)) == address::Reach::Forbidden) {
+        address::Reach::Forbidden
+    } else if public {
+        address::Reach::Public
+    } else {
+        address::Reach::Local
+    }
 }
 
 fn mark_url_reach(url: &str, origin: Option<&str>, public: bool) {
@@ -3748,8 +3765,11 @@ fn mark_url_reach(url: &str, origin: Option<&str>, public: bool) {
 
 fn add_url_as_given(s: &mut Session, p: &Value) -> CmdResult {
     let (origin, public) = request_origin(p)?;
-    if let Some(raw) = ps(p, "url").map(str::trim).filter(|u| !u.is_empty()) {
-        crate::render::rustgis_tiles::address::check(raw, origin)?;
+    if (origin.is_some() || public)
+        && let Some(raw) = ps(p, "url").map(str::trim).filter(|u| !u.is_empty())
+    {
+        let _ = web_address(raw)?;
+        crate::render::rustgis_tiles::address::check_reach(raw, origin_ceiling(origin, public))?;
     }
     let bound = crate::service_logins::request_params(s, p)?;
     let p = bound.as_ref();
@@ -3762,8 +3782,6 @@ fn add_url_as_given(s: &mut Session, p: &Value) -> CmdResult {
         return Err("\"document\" is internal to service.add: leave it out".into());
     }
     let url = ps(p, "url").map(str::trim).filter(|u| !u.is_empty()).ok_or("url is required")?;
-    crate::render::rustgis_tiles::address::check(url, origin)?;
-    mark_url_reach(url, origin, public);
     // A plugin command run again once the download it left to the app was added (#1202): what
     // adding it answered, as often as the run asks for it (the app downloaded and added it once).
     // Answering it changes nothing (the layer is its own undo step).
@@ -3817,6 +3835,10 @@ fn add_url_as_given(s: &mut Session, p: &Value) -> CmdResult {
     // An address read through a saved S3 connection is judged by the address it wraps; the whole
     // address stays what is fetched and kept.
     let lower = web_address(url)?;
+    if origin.is_some() || public {
+        crate::render::rustgis_tiles::address::check_reach(url, origin_ceiling(origin, public))?;
+    }
+    mark_url_reach(url, origin, public);
     // A scan (`"as"`) keeps the pixels and none of the coordinates: the file is downloaded whole and
     // read as one (`add_named_bytes` checks it is an image), never read in place.
     let scan = super::raster::as_scan(p)?;

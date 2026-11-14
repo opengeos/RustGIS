@@ -2,7 +2,6 @@
 //! eframe web runner.
 
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
 use std::rc::Rc;
 
 use rustgis_ui_egui::rustgis_engine::{data::diagnostics::Capture, sources::message_with_address};
@@ -252,6 +251,8 @@ pub fn start() {
                         {
                             log::warn!("?registry={url}: {e}");
                         }
+                    } else {
+                        crate::embed::notify_skipped_startup_links(&mut app.session, &q, embedded);
                     }
                     let embed = if embedded {
                         match Embed::listen(cc.egui_ctx.clone()) {
@@ -1112,25 +1113,15 @@ fn services(inbox: Inbox, font_inbox: Inbox, notes: Notes, ctx: egui::Context, e
     let font_sink = font_inbox.clone();
     let fetch_ctx = ctx.clone();
     let http_ctx = ctx.clone();
-    let (load_pref, save_pref): (Box<dyn Fn(&str) -> Option<String>>, Box<dyn Fn(&str, &str)>) = if embedded {
-        let prefs = Rc::new(RefCell::new(HashMap::<String, String>::new()));
-        let saved = prefs.clone();
-        (
-            Box::new(move |key: &str| prefs.borrow().get(key).cloned()),
-            Box::new(move |key: &str, value: &str| {
-                saved.borrow_mut().insert(key.to_string(), value.to_string());
-            }),
-        )
-    } else {
-        (
-            Box::new(|key: &str| storage().and_then(|s| s.get_item(&format!("rustgis.{key}")).ok().flatten())),
-            Box::new(|key: &str, value: &str| {
-                if let Some(s) = storage() {
-                    let _ = s.set_item(&format!("rustgis.{key}"), value);
-                }
-            }),
-        )
-    };
+    let (load_pref, save_pref) = crate::embed::pref_pair(
+        embedded,
+        |key: &str| storage().and_then(|s| s.get_item(&format!("rustgis.{key}")).ok().flatten()),
+        |key: &str, value: &str| {
+            if let Some(s) = storage() {
+                let _ = s.set_item(&format!("rustgis.{key}"), value);
+            }
+        },
+    );
     let arcgis_ctx = ctx.clone();
     let clipboard_ctx = ctx.clone();
     Services {

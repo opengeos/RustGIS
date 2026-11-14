@@ -2167,6 +2167,14 @@ impl RustGisApp {
         }
     }
 
+    fn save_pref(&self, key: &str, value: &str) {
+        if !self.embedded
+            && let Some(save) = &self.services.save_pref
+        {
+            save(key, value);
+        }
+    }
+
     /// A file saved as the other brightness takes the interface with it, so name and look agree.
     fn sync_named_brightness(&mut self) {
         if self.ui.theme_name.is_empty() {
@@ -2175,9 +2183,7 @@ impl RustGisApp {
         if let Some(dark) = self.themes.iter().find(|t| t.name == self.ui.theme_name).map(|t| t.dark) {
             if self.ui.dark != dark {
                 self.ui.dark = dark;
-                if let Some(save) = &self.services.save_pref {
-                    save("dark", if dark { "true" } else { "false" });
-                }
+                self.save_pref("dark", if dark { "true" } else { "false" });
             }
             // The loaded theme owns its brightness; following the platform would overwrite it.
             self.ui.dark_follows_system = false;
@@ -2266,10 +2272,8 @@ impl RustGisApp {
         self.ui.theme_name = picked.name.clone();
         self.ui.dark = picked.dark;
         self.ui.dark_follows_system = false;
-        if let Some(save) = &self.services.save_pref {
-            save("theme", &picked.name);
-            save("dark", if picked.dark { "true" } else { "false" });
-        }
+        self.save_pref("theme", &picked.name);
+        self.save_pref("dark", if picked.dark { "true" } else { "false" });
         Ok(())
     }
 
@@ -3229,9 +3233,7 @@ impl RustGisApp {
                 }
                 self.ui.language = code.to_ascii_lowercase();
                 self.fonts_failed.clear();
-                if let Some(save) = &self.services.save_pref {
-                    save("language", &self.ui.language);
-                }
+                self.save_pref("language", &self.ui.language);
                 self.map.invalidate();
             }
             "ui.worldview" => {
@@ -3353,9 +3355,7 @@ impl RustGisApp {
             "ui.ribbon" => {
                 self.ui.ribbon_minimized = p.get("minimized").and_then(Value::as_bool).unwrap_or(!self.ui.ribbon_minimized);
                 self.ui.ribbon_peek = false;
-                if let Some(save) = &self.services.save_pref {
-                    save("ribbon_minimized", if self.ui.ribbon_minimized { "true" } else { "false" });
-                }
+                self.save_pref("ribbon_minimized", if self.ui.ribbon_minimized { "true" } else { "false" });
             }
             // The theme list in Settings is the one control for brightness; this picks its entry.
             "ui.theme" => {
@@ -3379,10 +3379,8 @@ impl RustGisApp {
                     .map(|t| t.name.clone())
                     .unwrap_or_default();
                 self.ui.dark_follows_system = false;
-                if let Some(save) = &self.services.save_pref {
-                    save("theme", &self.ui.theme_name);
-                    save("dark", if dark { "true" } else { "false" });
-                }
+                self.save_pref("theme", &self.ui.theme_name);
+                self.save_pref("dark", if dark { "true" } else { "false" });
             }
             // Picks a theme by name; no name follows the system again.
             "ui.themeFile" => {
@@ -3396,11 +3394,9 @@ impl RustGisApp {
                 if name.is_empty() {
                     self.ui.theme_name.clear();
                     self.ui.dark_follows_system = true;
-                    if let Some(save) = &self.services.save_pref {
-                        save("theme", "");
-                        save("dark_fallback", if self.ui.dark { "true" } else { "false" });
-                        save("dark", "auto");
-                    }
+                    self.save_pref("theme", "");
+                    self.save_pref("dark_fallback", if self.ui.dark { "true" } else { "false" });
+                    self.save_pref("dark", "auto");
                 } else {
                     self.use_theme(&name)?;
                 }
@@ -3430,9 +3426,7 @@ impl RustGisApp {
                         false,
                     );
                 }
-                if let Some(save) = &self.services.save_pref {
-                    save("ui_scale", &self.ui.interface_scale.to_string());
-                }
+                self.save_pref("ui_scale", &self.ui.interface_scale.to_string());
             }
             "ui.themeReload" => self.load_themes(),
             "ui.measurementUnits" => {
@@ -3443,9 +3437,7 @@ impl RustGisApp {
                     _ => return Err(tl!("Measurement units must be metric or imperial").into()),
                 };
                 self.ui.measurement_imperial = imperial;
-                if let Some(save) = &self.services.save_pref {
-                    save("measurement_units", if imperial { "imperial" } else { "metric" });
-                }
+                self.save_pref("measurement_units", if imperial { "imperial" } else { "metric" });
             }
             "ui.coordinateFormat" => {
                 let format = match p.get("format") {
@@ -3455,9 +3447,7 @@ impl RustGisApp {
                     _ => return Err(tl!("The coordinate format must be decimal, dms, utm or mgrs").into()),
                 };
                 self.map.coord_format = format;
-                if let Some(save) = &self.services.save_pref {
-                    save(coordreadout::PREF, format.code());
-                }
+                self.save_pref(coordreadout::PREF, format.code());
             }
             "ui.moveSharedVertices" => {
                 let on = match p.get("on") {
@@ -3483,10 +3473,8 @@ impl RustGisApp {
             "ui.map.gpu" => {
                 self.map.gpu_enabled = p.get("on").and_then(Value::as_bool).unwrap_or(!self.map.gpu_enabled);
                 // `"remember": false` turns it on or off for this visit only (a `?gpu` link).
-                if p.get("remember").and_then(Value::as_bool) != Some(false)
-                    && let Some(save) = &self.services.save_pref
-                {
-                    save("ui.map.gpu", if self.map.gpu_enabled { "1" } else { "0" });
+                if p.get("remember").and_then(Value::as_bool) != Some(false) {
+                    self.save_pref("ui.map.gpu", if self.map.gpu_enabled { "1" } else { "0" });
                 }
                 self.map.invalidate();
             }
@@ -3638,7 +3626,7 @@ impl RustGisApp {
             // when it lands: native projects replace it; GeoLibre imports add a map (see `poll_downloads`).
             "ui.openUrl" => {
                 if self.embedded {
-                    return Err("embedded sessions receive projects from the host page".into());
+                    return Err(tl!("Embedded sessions receive projects from the host page").into());
                 }
                 let url = p.get("url").and_then(Value::as_str).map(str::trim).filter(|u| !u.is_empty()).ok_or("url is required")?;
                 let url = rustgis_engine::map::geolibre::download_url(url);
@@ -4811,9 +4799,9 @@ impl RustGisApp {
             if file.is_some_and(rustgis_engine::map::geolibre::is_project_file)
                 || file.is_some_and(|f| f.to_ascii_lowercase().ends_with(".rgispkg"))
             {
-                return Err("embedded sessions open peer project JSON only".into());
+                return Err(tl!("Embedded sessions open peer project JSON only").into());
             }
-            let text = std::str::from_utf8(bytes).map_err(|_| "not a RustGIS project".to_string())?;
+            let text = std::str::from_utf8(bytes).map_err(|_| tl!("Not a RustGIS project").to_string())?;
             self.open_peer_text(text)?;
             self.map.invalidate();
             return Ok(Value::Null);
@@ -4828,7 +4816,7 @@ impl RustGisApp {
         let text = if package {
             rustgis_engine::cmd::items::package_text(bytes)?
         } else {
-            std::str::from_utf8(bytes).map_err(|_| "not a RustGIS project".to_string())?.to_string()
+            std::str::from_utf8(bytes).map_err(|_| tl!("Not a RustGIS project").to_string())?.to_string()
         };
         let mut p = json!({"text": text, "package": package});
         if let Some(f) = file.filter(|_| !package) {
@@ -4872,7 +4860,12 @@ impl RustGisApp {
             };
             let url = raw_url.trim();
             let (check_origin, public) = rustgis_engine::cmd::layer::request_origin(p)?;
-            rustgis_engine::render::rustgis_tiles::address::check(url, check_origin)?;
+            if check_origin.is_some() || public {
+                rustgis_engine::render::rustgis_tiles::address::check_reach(
+                    url,
+                    rustgis_engine::cmd::layer::origin_ceiling(check_origin, public),
+                )?;
+            }
             // Claimed work keeps its exact admitted address and connection. Only direct native
             // UI ingress chooses a login here; a continuation never acquires a new default.
             let bound = if claim.is_some() {
@@ -4893,7 +4886,12 @@ impl RustGisApp {
             let check_origin = bound_origin.or(check_origin);
             let public = public || bound_public;
             let bound_url = p.get("url").and_then(Value::as_str).unwrap_or(url);
-            rustgis_engine::render::rustgis_tiles::address::check(bound_url, check_origin)?;
+            if check_origin.is_some() || public {
+                rustgis_engine::render::rustgis_tiles::address::check_reach(
+                    bound_url,
+                    rustgis_engine::cmd::layer::origin_ceiling(check_origin, public),
+                )?;
+            }
             let url = rustgis_engine::data::login_address::inner(bound_url);
             if public {
                 rustgis_engine::render::rustgis_tiles::cache::restrict_to_public(bound_url);
@@ -4902,7 +4900,7 @@ impl RustGisApp {
                         rustgis_engine::render::rustgis_tiles::cache::restrict_to_public(&part);
                     }
                 }
-            } else if check_origin.is_none() {
+            } else {
                 rustgis_engine::render::rustgis_tiles::cache::allow_named(bound_url);
                 if let Some(parts) = rustgis_engine::data::io::shapefile_part_urls(bound_url) {
                     for (_, part) in parts {
@@ -5008,10 +5006,13 @@ impl RustGisApp {
             if let Some(number) = p.get("request").filter(|v| v.is_u64()) {
                 q["request"] = number.clone();
             }
-            for k in ["service", "coverage", "anonymous", "fromDocument"] {
+            for k in ["service", "coverage", "anonymous"] {
                 if p.get(k).and_then(Value::as_bool) == Some(true) {
                     q[k] = json!(true);
                 }
+            }
+            if let Some(from_document) = p.get("fromDocument").and_then(Value::as_bool) {
+                q["fromDocument"] = json!(from_document);
             }
             for key in ["geolibreProject", "geolibreLayer"] {
                 if let Some(value) = p.get(key) {
@@ -6161,6 +6162,9 @@ pub(crate) mod fetching {
     impl Drop for Turn {
         fn drop(&mut self) {
             rustgis_engine::render::rustgis_tiles::cache::clear_fetcher();
+            rustgis_engine::render::rustgis_tiles::cache::clear_poster();
+            rustgis_engine::render::rustgis_tiles::cache::clear_header();
+            rustgis_engine::render::rustgis_tiles::cache::clear_public_restrictions();
         }
     }
 
@@ -8248,17 +8252,23 @@ mod look_tests {
             .expect("public HTTPS COG probe is accepted");
         assert_eq!(cache::ceiling_for("https://example.com/scene.tif"), address::Reach::Public);
         assert!(seen.lock().unwrap().iter().all(|(u, r)| u == "https://example.com/scene.tif" && *r == address::Reach::Public));
+        drop(_turn);
+        assert_eq!(cache::ceiling_for("https://example.com/scene.tif"), address::Reach::Local);
     }
 
     #[test]
     fn embedded_app_contains_project_imports_to_peer_policy() {
         use serde_json::json;
         let mut app = RustGisApp::with_sample();
+        let saved = saved_by(&mut app);
         app.embedded = true;
         app.ui.web_file = Some("before.rgis".into());
         assert!(app.run("ui.openUrl", json!({"url": "https://example.com/map.rgis"})).is_err());
         assert!(app.open_project_bytes(Some("map.geolibre.json"), b"{}").is_err());
         assert!(app.open_project_bytes(Some("map.rgispkg"), b"PK\x03\x04").is_err());
+        app.run("ui.theme", json!({"dark": true})).expect("in-memory theme toggle");
+        assert!(app.ui.dark);
+        assert!(saved.lock().expect("the log").is_empty(), "embedded UI commands must not persist preferences");
 
         let mut donor = RustGisApp::with_sample();
         donor.run("project.rename", json!({"name": "FromEmbedder"})).expect("rename donor");
