@@ -1,14 +1,26 @@
-//! What a phone provides that a computer's window doesn't: the system's file picker and (to
-//! come) location and the camera. A mobile shell implements [`Platform`] for
+//! What a phone provides that a computer's window doesn't: the system's file picker, the device's
+//! position and (to come) the camera. A mobile shell implements [`Platform`] for
 //! its system; a front end asks through it and collects what happened with
 //! [`Platform::take_events`], as nothing here waits for the user.
 //!
-//! Location and the camera are added with their first implementation (#1902, phase 3).
+//! The camera is added with its first implementation (#1902, phase 3).
 
 use std::path::PathBuf;
 
+/// Where the device is, as its system reports it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Fix {
+    /// Longitude, in degrees (WGS 84).
+    pub lon: f64,
+    /// Latitude, in degrees (WGS 84).
+    pub lat: f64,
+    /// The radius the system gives the position to (about two times in three), in metres, when
+    /// it says.
+    pub accuracy: Option<f64>,
+}
+
 /// What the system did since the front end last asked.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Event {
     /// A file the user picked, copied to where it can be opened by path.
     Picked {
@@ -26,13 +38,15 @@ pub enum Event {
         /// The name it was offered under.
         name: String,
     },
+    /// The device's position, while [`Platform::locate`] is on.
+    Position(Fix),
     /// Something went wrong: the text is for the user.
     Failed(String),
 }
 
 impl Event {
     /// Reads an event a shell passed as one line of tab-separated fields (`picked`, `cancelled`,
-    /// `saved`, `failed`). A line that is none of these is a failure that quotes it: nothing a
+    /// `saved`, `position`, `failed`). A line that is none of these is a failure that quotes it: nothing a
     /// shell reports is dropped.
     pub fn parse(line: &str) -> Event {
         let fields: Vec<&str> = line.split('\t').collect();
@@ -43,6 +57,14 @@ impl Event {
             ["cancelled"] => Event::Cancelled,
             // A name is the user's own text and may hold a tab: the rest of the line is the name.
             ["saved", name @ ..] if !name.is_empty() => Event::Saved { name: name.join("\t") },
+            ["position", lon, lat, accuracy] => match (lon.parse::<f64>(), lat.parse::<f64>()) {
+                // A place on the Earth, or it is no position: a failure that quotes the line.
+                (Ok(lon), Ok(lat)) if (-180.0..=180.0).contains(&lon) && (-90.0..=90.0).contains(&lat) => {
+                    let accuracy = accuracy.parse::<f64>().ok().filter(|m| m.is_finite() && *m >= 0.0);
+                    Event::Position(Fix { lon, lat, accuracy })
+                }
+                _ => Event::Failed(format!("The system reported something RustGIS doesn't know: {line}")),
+            },
             ["failed", text @ ..] => Event::Failed(text.join("\t")),
             _ => Event::Failed(format!("The system reported something RustGIS doesn't know: {line}")),
         }
@@ -61,6 +83,11 @@ pub trait Platform {
     /// file is written.
     fn save_file(&self, name: &str, bytes: Vec<u8>) -> Result<(), String>;
 
+    /// Starts (`on`) or stops reporting the device's position: each fix arrives as an
+    /// [`Event::Position`]. Starting asks the user for leave where the system wants it; a refusal
+    /// arrives as an [`Event::Failed`]. `Ok` means it was asked, not that a position is known.
+    fn locate(&self, on: bool) -> Result<(), String>;
+
     /// What happened since the last call, oldest first.
     fn take_events(&self) -> Vec<Event>;
 }
@@ -76,6 +103,10 @@ mod tests {
             Event::Picked { purpose: "data".into(), name: "parcels.gpkg".into(), path: PathBuf::from("/data/picked/1/parcels.gpkg") }
         );
         assert_eq!(Event::parse("cancelled"), Event::Cancelled);
+        assert_eq!(Event::parse("position\t-83.92\t35.96\t4.5"), Event::Position(Fix { lon: -83.92, lat: 35.96, accuracy: Some(4.5) }));
+        // No accuracy given, or one that is none: the position stands without it.
+        assert_eq!(Event::parse("position\t10\t20\t"), Event::Position(Fix { lon: 10.0, lat: 20.0, accuracy: None }));
+        assert_eq!(Event::parse("position\t10\t20\t-1"), Event::Position(Fix { lon: 10.0, lat: 20.0, accuracy: None }));
         assert_eq!(Event::parse("saved\tmap.png"), Event::Saved { name: "map.png".into() });
         assert_eq!(Event::parse("saved\tmy\tmap.png"), Event::Saved { name: "my\tmap.png".into() });
         // A failure's text is kept whole, tabs and all.
@@ -84,7 +115,7 @@ mod tests {
 
     #[test]
     fn an_unknown_line_is_a_failure_that_quotes_it() {
-        for line in ["", "picked\tdata", "moved\tx", "saved"] {
+        for line in ["", "picked\tdata", "moved\tx", "saved", "position\t200\t20\t5", "position\tx\t20\t5", "position\tNaN\t20\t5"] {
             match Event::parse(line) {
                 Event::Failed(text) => assert!(text.ends_with(line), "{text}"),
                 other => panic!("{line:?} read as {other:?}"),

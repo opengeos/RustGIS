@@ -9,8 +9,9 @@
 //! hide, zoom to, the active layer), the Capture sheet (a point, line or polygon placed by the cross
 //! on the map, with a form for its layer's attributes that follows the layer's data design: value
 //! lists, ranges and feature templates) and the More sheet (full extent, project, undo, the
-//! desktop interface). Not yet: editing a shape's vertices, snapping, and text input that suits
-//! a soft keyboard.
+//! desktop interface, the device's position). Where a shell reports the device's position
+//! (`RustGisApp::position`), it is drawn on the map and the capture cross can be put on it.
+//! Not yet: editing a shape's vertices, snapping, and text input that suits a soft keyboard.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 use egui::{Align, Color32, CornerRadius, Layout, Rect, RichText, Sense, Stroke, Ui, Vec2};
@@ -27,7 +28,7 @@ const SHEET_SHARE: f32 = 0.55;
 /// The room above and below a sheet's rows.
 const SHEET_MARGIN: f32 = 4.0;
 /// The More sheet's rows.
-const MORE_ROWS: usize = 7;
+const MORE_ROWS: usize = 9;
 
 /// The sheet risen over the map.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -92,6 +93,10 @@ pub fn chrome(app: &mut RustGisApp, ui: &mut Ui) {
         app.map_view(ui);
         // While capturing, a cross marks the middle of the map: the point goes there, so the
         // map is moved under the cross, which a finger does more exactly than a tap.
+        // Where the device is, while its position is shown.
+        if let (Some(fix), Some((map, _))) = (app.position, app.map.view_rect) {
+            position(app, &ui.painter().with_clip_rect(map), fix, &t);
+        }
         if shown == Sheet::Capture
             && let Some((map, _)) = app.map.view_rect
         {
@@ -99,6 +104,28 @@ pub fn chrome(app: &mut RustGisApp, ui: &mut Ui) {
             cross(ui.painter(), map.center(), &t);
         }
     });
+}
+
+/// Draws where the device is: a dot, in a ring as wide as the position is good to.
+fn position(app: &RustGisApp, painter: &egui::Painter, fix: rustgis_ui_egui::rustgis_engine::platform::Fix, t: &Tokens) {
+    let Some(at) = app.lonlat_to_screen(fix.lon, fix.lat) else { return };
+    let metres_a_point = app.session.map().ground_res();
+    if let Some(radius) = fix.accuracy.filter(|_| metres_a_point > 0.0).map(|m| (m / metres_a_point) as f32)
+        && radius > 9.0
+    {
+        painter.circle(at, radius, t.accent.gamma_multiply(0.15), Stroke::new(1.0, t.accent.gamma_multiply(0.6)));
+    }
+    painter.circle(at, 8.0, Color32::WHITE, Stroke::NONE);
+    painter.circle(at, 6.0, t.accent, Stroke::NONE);
+}
+
+/// Moves the map so the device's position is in its middle, under the capture cross. Says so
+/// when there is no position yet.
+fn go_to_position(app: &mut RustGisApp) {
+    match app.position {
+        Some(fix) => run(app, "map.goToXY", json!({"lon": fix.lon, "lat": fix.lat})),
+        None => app.session.notify(tl!("This device's position isn't known yet."), false),
+    }
 }
 
 /// The capture cross: dark with a light edge, to show over any map.
@@ -350,7 +377,7 @@ fn capture_rows(app: &RustGisApp, ctx: &egui::Context) -> usize {
     let Some(target) = capture_layer(app, &form(ctx)) else { return 2 };
     let layer = app.session.map().layer(target.id);
     let fields = layer.map_or(0, |l| l.dataset.fields.len() + usize::from(!l.design.templates.is_empty()));
-    fields + if target.kind == GeometryType::Point { 3 } else { 4 }
+    fields + if target.kind == GeometryType::Point { 3 } else { 4 } + usize::from(app.locate)
 }
 
 /// A value typed for a field, as the command takes it: a number for a field of numbers, a truth
@@ -620,6 +647,10 @@ fn capture(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     };
     ui.label(RichText::new(place).size(13.0).color(t.text_dim));
     let width = ui.available_width();
+    // With the device's position shown, one tap puts the cross on it.
+    if app.locate && action(ui, t, tl!("Go to My Position"), width, false, app.position.is_some()) {
+        go_to_position(app);
+    }
     if target.kind == GeometryType::Point {
         if action(ui, t, tl!("Add Point Here"), width, true, true) && fresh && add_point(app, target.id, &state) {
             state.values.clear();
@@ -753,6 +784,16 @@ fn more(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                 set_sheet(ui.ctx(), Sheet::None);
                 run(app, command, Value::Null);
             }
+        }
+        // The device's position, where the shell can report one (it asks the user's leave first).
+        let locate = if app.locate { tl!("Hide My Position") } else { tl!("Show My Position") };
+        if row(ui, t, "explore", locate) {
+            set_sheet(ui.ctx(), Sheet::None);
+            app.locate = !app.locate;
+        }
+        if app.locate && row(ui, t, "zoom_full", tl!("Go to My Position")) {
+            set_sheet(ui.ctx(), Sheet::None);
+            go_to_position(app);
         }
         // The whole of RustGIS is still there, for a tablet or a job the touch interface has no
         // button for yet. The Project page's Start brings this interface back at the next start.
@@ -1068,6 +1109,30 @@ mod tests {
         set_form(&ctx, Form { shown: Some(cities.instance), template: Some("Capital".into()), ..Form::default() });
         frame(&mut app, &ctx, Sheet::Capture);
         assert_eq!(form(&ctx).template.as_deref(), Some("Capital"));
+    }
+
+    #[test]
+    fn the_devices_position_is_drawn_and_the_map_goes_to_it() {
+        use rustgis_ui_egui::rustgis_engine::platform::Fix;
+        let ctx = egui::Context::default();
+        let mut app = RustGisApp::with_sample();
+        // No position yet: going to it says so, and the map stays.
+        let before = cross_place(&app);
+        let mark = app.session.notice_mark();
+        go_to_position(&mut app);
+        assert_eq!(cross_place(&app), before);
+        assert_eq!(app.session.notices_since(mark).len(), 1);
+        // With one, the map's middle (the capture cross) goes to it.
+        app.locate = true;
+        app.position = Some(Fix { lon: 30.0, lat: -2.0, accuracy: Some(5.0) });
+        go_to_position(&mut app);
+        let (lon, lat) = cross_place(&app).unwrap();
+        assert!((lon - 30.0).abs() < 1e-6 && (lat + 2.0).abs() < 1e-6, "{lon} {lat}");
+        // Every sheet draws with the position on the map, its ring too (a wide one, to be drawn).
+        app.position = Some(Fix { lon: 30.0, lat: -2.0, accuracy: Some(500_000.0) });
+        for shown in [Sheet::None, Sheet::Capture, Sheet::More] {
+            frame(&mut app, &ctx, shown);
+        }
     }
 
     #[test]

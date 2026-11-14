@@ -83,6 +83,11 @@ mod android {
         app: RustGisApp,
         /// The files pushed to the app's folder ([`pushed`]), until the first frame takes them.
         pushed: Vec<std::path::PathBuf>,
+        /// Whether something of Android's is still to arrive, so the window draws again soon
+        /// to take it.
+        poll: bool,
+        /// Whether the phone was last asked for positions (`RustGisApp::locate`, as last seen).
+        locating: bool,
         /// Whether the system bars' icons were last asked to be dark (a light ground); `None`
         /// before the first frame.
         bars_light: Option<bool>,
@@ -123,11 +128,26 @@ mod android {
                 self.app.session.notify(text, true);
             }
             let Some(phone) = self.phone.clone() else { return };
+            // Positioning follows what the interface asks for; off, the last position is let go.
+            if self.app.locate != self.locating {
+                self.locating = self.app.locate;
+                if let Err(e) = phone.locate(self.locating) {
+                    self.app.session.notify(e, true);
+                    self.app.locate = false;
+                    self.locating = false;
+                }
+                if !self.locating {
+                    self.app.position = None;
+                }
+            }
             for event in phone.take_events() {
                 match event {
                     Event::Picked { purpose, name, path } => self.waiting.push((purpose, name, path)),
                     Event::Cancelled => {}
                     Event::Saved { name } => self.app.session.notify(i18n::fmt("Saved {name}.", &[("name", &name)]), false),
+                    Event::Position(fix) if self.locating => self.app.position = Some(fix),
+                    // A fix that was on its way when positioning was turned off.
+                    Event::Position(_) => {}
                     Event::Failed(text) => self.app.session.notify(text, true),
                 }
             }
@@ -156,9 +176,9 @@ mod android {
             if !busy && !self.waiting.is_empty() {
                 self.open_waiting(ctx, raw_input);
             }
-            if busy || self.reading.load(Ordering::Relaxed) > 0 {
-                ctx.request_repaint_after(std::time::Duration::from_millis(250));
-            }
+            // Positions arrive on a thread of Android's too: looked for while they are wanted.
+            // Asked for from inside the frame (`ui`): asked from here, before it, it isn't kept.
+            self.poll = busy || self.locating || self.reading.load(Ordering::Relaxed) > 0;
         }
 
         /// Opens the picked files, now that every picker has answered in full, what was picked
@@ -311,6 +331,10 @@ mod android {
             }
             ui.painter().rect_filled(ctx.viewport_rect(), 0.0, tokens.pane);
             ui.scope_builder(egui::UiBuilder::new().max_rect(ctx.content_rect()), |ui| self.app.ui(ui));
+            // Something of Android's is still to arrive (a picked file, a position): look again.
+            if self.poll {
+                ctx.request_repaint_after(std::time::Duration::from_millis(250));
+            }
         }
 
         fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
@@ -446,6 +470,8 @@ mod android {
             Box::new(move |_cc| {
                 Ok(Box::new(App {
                     app,
+                    poll: false,
+                    locating: false,
                     bars_light: None,
                     pushed,
                     phone,

@@ -26,6 +26,7 @@ import java.util.ArrayList;
 public class MainActivity extends NativeActivity {
     private static final int PICK = 1;
     private static final int SAVE = 2;
+    private static final int LOCATION = 3;
     private static final int COPY_BUFFER = 1 << 16;
 
     private final ArrayList<String> events = new ArrayList<>();
@@ -34,6 +35,10 @@ public class MainActivity extends NativeActivity {
     /** The window's insets as insets() gives them, written on the main thread. */
     private volatile String insets = "";
     private String purpose = "";
+    /** Whether positions are wanted (the main thread's alone). */
+    private boolean locating;
+    /** The listener positions arrive on, while they are asked for. */
+    private android.location.LocationListener positions;
     /** A picker for opening is shown and has not answered (the main thread's alone). */
     private boolean picking;
     private String saveName = "";
@@ -71,6 +76,86 @@ public class MainActivity extends NativeActivity {
                 view.setSystemUiVisibility(light ? flags | both : flags & ~both);
             }
         });
+    }
+
+    /**
+     * Starts or stops reporting the device's position: each fix arrives as a "position" event
+     * (longitude, latitude, accuracy in metres). Starting asks for the location permission where
+     * it isn't given yet; a refusal arrives as a "failed" event.
+     */
+    public void locate(final boolean on) {
+        runOnUiThread(() -> {
+            locating = on;
+            if (!on) {
+                stopLocating();
+            } else if (checkSelfPermission(android.Manifest.permission.ACCESS_FINE_LOCATION)
+                    == android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                startLocating();
+            } else {
+                requestPermissions(new String[] {android.Manifest.permission.ACCESS_FINE_LOCATION,
+                        android.Manifest.permission.ACCESS_COARSE_LOCATION}, LOCATION);
+            }
+        });
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int request, String[] permissions, int[] results) {
+        super.onRequestPermissionsResult(request, permissions, results);
+        if (request != LOCATION || !locating) {
+            return;
+        }
+        boolean given = false;
+        for (int result : results) {
+            given |= result == android.content.pm.PackageManager.PERMISSION_GRANTED;
+        }
+        if (given) {
+            startLocating();
+        } else {
+            locating = false;
+            add("failed\tRustGIS wasn't given leave to use this device's location: its position can't be shown.");
+        }
+    }
+
+    /** Asks every provider the device has (satellites, the network) for positions, about one a second. */
+    private void startLocating() {
+        android.location.LocationManager manager = (android.location.LocationManager) getSystemService(LOCATION_SERVICE);
+        if (manager == null) {
+            add("failed\tThis device has no location service.");
+            return;
+        }
+        stopLocating();
+        positions = fix -> add("position\t" + fix.getLongitude() + "\t" + fix.getLatitude() + "\t"
+                + (fix.hasAccuracy() ? Float.toString(fix.getAccuracy()) : ""));
+        int asked = 0;
+        for (String provider : new String[] {android.location.LocationManager.GPS_PROVIDER,
+                android.location.LocationManager.NETWORK_PROVIDER}) {
+            try {
+                if (manager.getAllProviders().contains(provider)) {
+                    manager.requestLocationUpdates(provider, 1000, 0, positions, getMainLooper());
+                    asked++;
+                }
+            } catch (SecurityException | IllegalArgumentException e) {
+                add("failed\tThis device's location can't be read (" + provider + "): " + e.getMessage());
+            }
+        }
+        if (asked == 0) {
+            positions = null;
+            add("failed\tThis device has no way to find its position.");
+        }
+    }
+
+    private void stopLocating() {
+        android.location.LocationManager manager = (android.location.LocationManager) getSystemService(LOCATION_SERVICE);
+        if (manager != null && positions != null) {
+            manager.removeUpdates(positions);
+        }
+        positions = null;
+    }
+
+    @Override
+    protected void onDestroy() {
+        stopLocating();
+        super.onDestroy();
     }
 
     /** Asks the user for files with the system's picker; each arrives as a "picked" event. */
