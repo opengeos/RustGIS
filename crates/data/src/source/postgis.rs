@@ -17,7 +17,10 @@ use crate::raster::Crs;
 use crate::{DataError, Feature, Field, FieldType, GeometryType, Result, Value, wkb};
 use postgres::types::ToSql;
 use rustgis_geom::Extent;
-use std::sync::{Arc, Mutex, OnceLock, Weak};
+use std::sync::{
+    Arc, Mutex, OnceLock, Weak,
+    atomic::{AtomicBool, Ordering},
+};
 use std::time::Duration;
 
 /// How long a statement may run on the server.
@@ -160,13 +163,17 @@ pub struct Conn {
     tls: Tls,
     /// Whether the connection isn't encrypted (`sslmode=disable`, or `prefer` when the server
     /// offered no TLS).
-    plain: bool,
+    plain: AtomicBool,
     /// A connection that saves edits ([`connect_writable`]); every other one is read only.
     writable: bool,
     client: Mutex<Option<postgres::Client>>,
 }
 
 impl Conn {
+    fn is_plain(&self) -> bool {
+        self.plain.load(Ordering::Acquire)
+    }
+
     fn has_open_client(&self) -> bool {
         match self.client.try_lock() {
             Ok(guard) => guard.as_ref().is_some_and(|c| !c.is_closed()),
@@ -179,7 +186,7 @@ impl Conn {
 
     fn reconnect_cfg(&self) -> postgres::Config {
         let mut cfg = self.config.clone();
-        if !self.plain {
+        if !self.is_plain() {
             cfg.ssl_mode(postgres::config::SslMode::Require);
         }
         cfg
@@ -189,11 +196,12 @@ impl Conn {
         let cfg = self.reconnect_cfg();
         let (client, plain) = open_client(&cfg, &self.tls, self.writable)?;
         // A connection that was encrypted isn't continued in the clear.
-        if plain && !self.plain {
+        if plain && !self.is_plain() {
             return Err(DataError::Format(
                 "the server no longer offers TLS: connect again with Home › Add › Add Data › Database… to accept that".into(),
             ));
         }
+        self.plain.store(plain, Ordering::Release);
         Ok(client)
     }
 
@@ -466,11 +474,12 @@ fn find_live(live: &mut Vec<Live>, dsn: &str, password: &Option<String>, writabl
 }
 
 fn finish_live(live: &mut Vec<Live>, dsn: &str, password: Option<String>, writable: bool, conn: Arc<Conn>) -> Arc<Conn> {
+    let want_plain = conn.is_plain();
     live.retain(|(_, _, _, w)| w.strong_count() > 0);
     if let Some(c) = live
         .iter()
         .filter(|(d, p, wr, _)| d == dsn && *p == password && *wr == writable)
-        .find_map(|(_, _, _, w)| w.upgrade().filter(|c| c.has_open_client() && c.plain == conn.plain))
+        .find_map(|(_, _, _, w)| w.upgrade().filter(|c| c.has_open_client() && c.is_plain() == want_plain))
     {
         return c;
     }
@@ -478,7 +487,7 @@ fn finish_live(live: &mut Vec<Live>, dsn: &str, password: Option<String>, writab
         if d != dsn || *p != password || *wr != writable {
             return true;
         }
-        w.upgrade().is_some_and(|c| c.has_open_client() && c.plain == conn.plain)
+        w.upgrade().is_some_and(|c| c.has_open_client() && c.is_plain() == want_plain)
     });
     live.push((dsn.to_string(), password, writable, Arc::downgrade(&conn)));
     conn
@@ -502,7 +511,7 @@ fn connect_as(dsn: &str, ask: bool, writable: bool) -> Result<Arc<Conn>> {
     }
     // Connecting can take as long as the timeout: other connections don't wait for it.
     let (client, plain) = open_client(&config, &tls, writable)?;
-    let conn = Arc::new(Conn { config, tls, plain, writable, client: Mutex::new(Some(client)) });
+    let conn = Arc::new(Conn { config, tls, plain: AtomicBool::new(plain), writable, client: Mutex::new(Some(client)) });
     let mut live = live().lock().unwrap_or_else(|e| e.into_inner());
     // Another layer may have connected meanwhile; stale closed or downgraded slots are replaced.
     Ok(finish_live(&mut live, dsn, password, writable, conn))
@@ -893,7 +902,7 @@ impl PostgisSource {
                 ),
             }
         }
-        if let Some(note) = tls_note(&conn.tls, conn.plain) {
+        if let Some(note) = tls_note(&conn.tls, conn.is_plain()) {
             notes.push(note.into());
         }
         let lonlat = if srid == 0 || srid == 4326 { native.clone() } else { format!("ST_Transform({native}, 4326)") };
@@ -1669,7 +1678,7 @@ mod tests {
             conn: Arc::new(Conn {
                 config: postgres::Config::new(),
                 tls: Tls::Disable,
-                plain: true,
+                plain: AtomicBool::new(true),
                 writable: false,
                 client: Mutex::new(None),
             }),
@@ -1838,12 +1847,22 @@ mod tests {
         // `Conn` entries in `Live` don't block a fresh connection or linger in the pool.
         let (base_cfg, _) = config("host=db.example dbname=gis user=me sslmode=prefer").unwrap();
         assert_eq!(base_cfg.get_ssl_mode(), postgres::config::SslMode::Prefer);
-        let dropped_tls =
-            Arc::new(Conn { config: base_cfg.clone(), tls: Tls::Unverified, plain: false, writable: false, client: Mutex::new(None) });
+        let dropped_tls = Arc::new(Conn {
+            config: base_cfg.clone(),
+            tls: Tls::Unverified,
+            plain: AtomicBool::new(false),
+            writable: false,
+            client: Mutex::new(None),
+        });
         assert!(!dropped_tls.has_open_client());
         assert_eq!(dropped_tls.reconnect_cfg().get_ssl_mode(), postgres::config::SslMode::Require);
-        let dropped_plain =
-            Arc::new(Conn { config: base_cfg, tls: Tls::Unverified, plain: true, writable: false, client: Mutex::new(None) });
+        let dropped_plain = Arc::new(Conn {
+            config: base_cfg,
+            tls: Tls::Unverified,
+            plain: AtomicBool::new(true),
+            writable: false,
+            client: Mutex::new(None),
+        });
         assert_eq!(dropped_plain.reconnect_cfg().get_ssl_mode(), postgres::config::SslMode::Prefer);
 
         let dsn = "host=db.example dbname=gis user=me";
@@ -1888,15 +1907,15 @@ mod tests {
         let err = rustls_config(&Tls::Verified(Some(huge))).unwrap_err().to_string();
         assert!(err.contains("larger than 1 MB"), "{err}");
 
-        let secret = "SENTINEL_CA_SECRET_LINE_8472";
+        let marker = concat!("SENTINEL_CA_", "LINE_8472");
         for (name, body) in [
-            ("plain.pem", format!("{secret}\nnot a certificate\n")),
-            ("broken.pem", format!("-----BEGIN CERTIFICATE-----\n{secret}\n-----END CERTIFICATE-----\n")),
+            ("plain.pem", format!("{marker}\nnot a certificate\n")),
+            ("broken.pem", format!("-----BEGIN CERTIFICATE-----\n{marker}\n-----END CERTIFICATE-----\n")),
         ] {
             let p = dir.path().join(name);
             std::fs::write(&p, body).unwrap();
             let err = rustls_config(&Tls::Verified(Some(p))).unwrap_err().to_string();
-            assert!(!err.contains(secret), "error leaked file contents: {err}");
+            assert!(!err.contains(marker), "error leaked file contents: {err}");
         }
     }
 

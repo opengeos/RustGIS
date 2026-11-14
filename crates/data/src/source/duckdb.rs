@@ -431,8 +431,16 @@ fn check_postgres_attach(dsn: &str) -> Result<()> {
         let before_slash = rest.split('/').next().unwrap_or(rest);
         if let Some(at) = before_slash.find('@') {
             let user_part = before_slash.get(..at).unwrap_or("");
-            if user_part.contains(['[', ']']) || before_slash.get(at + 1..).unwrap_or("").contains('@') {
+            let after_at = before_slash.get(at + 1..).unwrap_or("");
+            let host_part = after_at.split('?').next().unwrap_or("");
+            if user_part.contains(['[', ']']) || host_part.contains('@') || (rest.contains('/') && after_at.contains('@')) {
                 return Err(DataError::Format("the connection: invalid connection string".into()));
+            }
+            if !rest.contains('/')
+                && let Some((_, after_last_at)) = after_at.rsplit_once('@')
+                && let Some((_, q2)) = after_last_at.split_once('?')
+            {
+                check_pg_query(q2, true)?;
             }
             let tail = after_uri_hosts(rest.get(at + 1..).unwrap_or(""))?;
             if let Some((_, query)) = tail.split_once('?') {
@@ -1258,6 +1266,7 @@ mod tests {
             "postgresql://[::1]?x=1@db.example/gis?sslkeylogfile=/tmp/keys.log",
             "postgresql://[u]?x@db.example/gis?sslrootcert=/tmp/root.crt",
             "postgresql://u1@u2?x@db.example/gis?sslrootcert=/tmp/root.crt",
+            "postgresql://u1@u2?x@db.example?sslrootcert=/tmp/root.crt",
             "postgresql://u@[fe80::1?x]/gis?sslrootcert=/tmp/root.crt",
             "postgresql://h1,[fe80::1?x]/gis?sslrootcert=/tmp/root.crt",
             "postgresql://[::1]:5432/gis?sslrootcert=/tmp/root.crt",
@@ -1271,6 +1280,7 @@ mod tests {
         }
         for good in [
             "postgresql://u?x@db.example/gis?sslmode=require",
+            "postgresql://u@db.example?application_name=alice@team",
             "postgresql://[::1]:5432/gis?sslmode=require",
             "postgresql://[::1]/gis",
             "postgresql://user@[fe80::1%25eth0]:5432/gis?sslmode=require",

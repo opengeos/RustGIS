@@ -208,7 +208,7 @@ pub struct Conn {
     server: Server,
     /// Whether the connection isn't encrypted (`DISABLED`, or `PREFERRED` when the server offered
     /// no TLS).
-    plain: bool,
+    plain: std::sync::atomic::AtomicBool,
     client: Mutex<Option<mysql::Conn>>,
 }
 
@@ -255,11 +255,12 @@ impl Conn {
             if guard.is_none() {
                 let ((client, _), plain) = open_client(&self.config, self.password.as_deref())?;
                 // A connection that was encrypted isn't continued in the clear.
-                if plain && !self.plain {
+                if plain && !self.plain.load(std::sync::atomic::Ordering::Acquire) {
                     return Err(DataError::Format(
                         "the server no longer offers TLS: connect again with Home › Add › Add Data › Database… to accept that".into(),
                     ));
                 }
+                self.plain.store(plain, std::sync::atomic::Ordering::Release);
                 *guard = Some(client);
             }
             let client = guard.as_mut().ok_or_else(|| DataError::Format("not connected".into()))?;
@@ -341,7 +342,10 @@ fn tls_note(tls: &Tls, plain: bool) -> Option<&'static str> {
         Tls::Disable => Some("the connection isn't encrypted (ssl-mode=DISABLED)"),
         Tls::Prefer if plain => Some("the connection isn't encrypted: the server offers no TLS (ssl-mode=REQUIRED refuses such a server)"),
         Tls::Prefer | Tls::Require => Some("the server's certificate isn't checked (ssl-mode=VERIFY_IDENTITY checks it)"),
-        Tls::Verified { .. } => None,
+        Tls::Verified { identity: true, .. } => None,
+        Tls::Verified { identity: false, .. } => {
+            Some("the server's host name isn't checked against its certificate (ssl-mode=VERIFY_IDENTITY checks it)")
+        }
     }
 }
 
@@ -397,7 +401,13 @@ pub fn connect(address: &str, ask: bool) -> Result<Arc<Conn>> {
     if let Some(c) = find(&mut live) {
         return Ok(c);
     }
-    let conn = Arc::new(Conn { config, password: password.clone(), server, plain, client: Mutex::new(Some(client)) });
+    let conn = Arc::new(Conn {
+        config,
+        password: password.clone(),
+        server,
+        plain: std::sync::atomic::AtomicBool::new(plain),
+        client: Mutex::new(Some(client)),
+    });
     live.push((address.to_string(), password, Arc::downgrade(&conn)));
     Ok(conn)
 }
@@ -709,7 +719,7 @@ impl MysqlSource {
                 ),
             }
         }
-        if let Some(note) = tls_note(&conn.config.tls, conn.plain) {
+        if let Some(note) = tls_note(&conn.config.tls, conn.plain.load(std::sync::atomic::Ordering::Acquire)) {
             notes.push(note.into());
         }
         let reproject = Reproject::from_epsg(Some(srid), &mut notes);
@@ -1104,6 +1114,10 @@ mod tests {
         assert_eq!(tls_note(&Tls::Prefer, false), Some("the server's certificate isn't checked (ssl-mode=VERIFY_IDENTITY checks it)"));
         assert_eq!(tls_note(&Tls::Require, false), Some("the server's certificate isn't checked (ssl-mode=VERIFY_IDENTITY checks it)"));
         assert_eq!(tls_note(&Tls::Verified { ca: None, identity: true }, false), None);
+        assert_eq!(
+            tls_note(&Tls::Verified { ca: None, identity: false }, false),
+            Some("the server's host name isn't checked against its certificate (ssl-mode=VERIFY_IDENTITY checks it)")
+        );
 
         let dir = tempfile::tempdir().unwrap();
         let bad_cfg = |p: &std::path::Path| {
@@ -1131,15 +1145,15 @@ mod tests {
             assert!(!err.contains("no certificates") && !err.contains("invalid certificate"), "{err}");
         }
 
-        let secret = "SENTINEL_MYSQL_CA_SECRET_9921";
+        let marker = concat!("SENTINEL_MYSQL_CA_", "LINE_9921");
         for (name, body) in [
-            ("broken.pem", format!("-----BEGIN CERTIFICATE-----\n{secret}\n-----END CERTIFICATE-----\n")),
-            ("plain.crt", format!("{secret}\nnot a certificate\n")),
+            ("broken.pem", format!("-----BEGIN CERTIFICATE-----\n{marker}\n-----END CERTIFICATE-----\n")),
+            ("plain.crt", format!("{marker}\nnot a certificate\n")),
         ] {
             let p = dir.path().join(name);
             std::fs::write(&p, body).unwrap();
             let err = connect_client(&bad_cfg(&p), None).unwrap_err().to_string();
-            assert!(!err.contains(secret), "error leaked file contents: {err}");
+            assert!(!err.contains(marker), "error leaked file contents: {err}");
         }
     }
 
