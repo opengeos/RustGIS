@@ -47200,3 +47200,47 @@ fn a_save_refuses_coordinates_that_arent_numbers_and_keeps_the_file() {
     t.run("project.open", &json!({"path": path("p.rgis")})).unwrap();
     assert_eq!(t.map().layer_by_name("ways").unwrap().dataset.features.len(), 3);
 }
+
+/// A Shapefile read in place (streamed) leaves out a shape with a coordinate that isn't a number,
+/// counted, as one it can't convert (#1985): nothing NaN reaches the map. Read whole, the feature
+/// keeps its attributes without geometry. Either way the project saves and opens again.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_shapefile_coordinate_that_isnt_a_number_reaches_no_layer() {
+    use rustgis_data::{Coord, Dataset, Geometry, GeometryType};
+    let dir = std::env::temp_dir().join(format!("rustgis-nan-stream-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut s = Session::new(Project::default());
+    let mut ds = Dataset::new("pts", GeometryType::Point, vec![]);
+    ds.push(Some(Geometry::Point(Coord::new(10.0, 20.0))), vec![]);
+    ds.push(Some(Geometry::Point(Coord::new(11.0, 21.0))), vec![]);
+    let id = s.map_mut().add_dataset(ds);
+    let shp = dir.join("pts.shp");
+    s.run("share.exportLayer", &json!({"layer": id, "path": shp})).unwrap();
+    // Header 100, record header 8, shape type 4: the first point's x at 112.
+    let mut b = std::fs::read(&shp).unwrap();
+    b[112..120].copy_from_slice(&f64::NAN.to_le_bytes());
+    std::fs::write(&shp, &b).unwrap();
+    for stream in [false, true] {
+        let mut t = Session::new(Project::default());
+        let mark = t.notice_mark();
+        let id = t.run("layer.addData", &json!({"path": shp, "stream": stream})).unwrap()["layer"].as_u64().unwrap() as u32;
+        if stream {
+            t.run("layer.loadAll", &json!({"layer": id})).unwrap();
+        }
+        let notices: Vec<String> = t.notices_since(mark).iter().map(|n| n.text.clone()).collect();
+        let said = if stream {
+            "pts: 1 row couldn't be read and was left out"
+        } else {
+            "1 shape(s) have a coordinate that isn't a number (NaN or infinite): their features are kept without geometry"
+        };
+        assert!(notices.iter().any(|n| n == said), "stream {stream}: {notices:?}");
+        let geometries: Vec<_> = t.map().layer(id).unwrap().dataset.features.iter().map(|f| f.geometry.clone()).collect();
+        let kept = Some(Geometry::Point(Coord::new(11.0, 21.0)));
+        assert_eq!(geometries, if stream { vec![kept] } else { vec![None, kept] }, "stream {stream}");
+        let saved = dir.join(format!("p-{stream}.rgis"));
+        t.run("project.saveAs", &json!({"path": saved})).unwrap();
+        Session::new(Project::default()).run("project.open", &json!({"path": saved})).unwrap();
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
