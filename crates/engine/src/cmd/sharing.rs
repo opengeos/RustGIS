@@ -1065,12 +1065,11 @@ fn gltf(m: &Map, view: (f64, f64)) -> Result<SceneBytes, String> {
                 return Err("the scene would be too large; share fewer features".into());
             }
             let sym = styler.symbol(row);
-            // A layer without an extrusion stands flat on the ground.
+            // A layer without an extrusion stands flat on the ground; the base and the height
+            // together stay within 1e6 m (the base is never NaN, so the height's cap is a number).
             let (h, foot) = ex.map_or((0.0, 0.0), |e| {
-                (
-                    e.metres_at(&l.dataset, row, columns).clamp(0.0, 1e6) as f32,
-                    e.base_metres_at(&l.dataset, row, columns).clamp(0.0, 1e6) as f32,
-                )
+                let foot = e.base_metres_at(&l.dataset, row, columns).clamp(0.0, 1e6);
+                ((e.metres_at(&l.dataset, row, columns).clamp(0.0, 1e6 - foot)) as f32, foot as f32)
             });
             // The walls stand from the base, the cap sits on them.
             let top = foot + h;

@@ -41778,6 +41778,8 @@ fn a_raised_part_stands_on_its_base_in_a_web_scene() {
     let grounded = scene(0.0);
     assert_eq!(grounded.iter().cloned().fold(f64::MAX, f64::min), 0.0);
     assert_eq!(grounded.iter().cloned().fold(f64::MIN, f64::max), 30.0);
+    // A base at the cap leaves no room for the height: the top stays within it.
+    assert_eq!(scene(1e9).iter().cloned().fold(f64::MIN, f64::max), 1e6);
     let _ = std::fs::remove_dir_all(dir);
 }
 
