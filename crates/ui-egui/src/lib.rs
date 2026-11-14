@@ -86,6 +86,7 @@ pub enum Landed {
     Ran(Result<Value, String>),
     NotRun(String),
 }
+mod boxedit;
 #[cfg(not(target_arch = "wasm32"))]
 mod relayshot;
 #[cfg(not(target_arch = "wasm32"))]
@@ -1153,6 +1154,7 @@ impl RustGisApp {
 
 pub struct RustGisApp {
     pub session: Session,
+    pub(crate) boxes: boxedit::State,
     pub ui: UiState,
     pub map: mapview::MapView,
     pub dialogs: dialogs::Dialogs,
@@ -1448,6 +1450,7 @@ impl RustGisApp {
         };
         RustGisApp {
             session: s,
+            boxes: boxedit::State::default(),
             ui,
             map: mapview::MapView::default(),
             dialogs: dialogs::Dialogs::default(),
@@ -2718,6 +2721,7 @@ impl RustGisApp {
         // Nested commands (including scripts) can replace rows too; never retarget a chosen
         // vertex or held gesture to the replacement feature at the same row.
         crate::vertexedit::cancel_stale_drag(self);
+        crate::boxedit::cancel_stale(self);
         if let Err(e) = &r {
             self.command_failed(id, e, notice_mark);
         }
@@ -4499,6 +4503,30 @@ impl RustGisApp {
                 let name = format!("{} animation.zip", self.session.map().name);
                 if let Some(path) = dialogs::pick_save(&name, &["zip"], tl!("PNG frames (zip)")) {
                     return self.run("animation.export", json!({"path": path}));
+                }
+            }
+            // Export Orbit's dialog, its parameters in `p`: the file picked, then the frames drawn
+            // on a thread of their own, with progress and Cancel in the status bar.
+            // The browser has no file to write to (its stub picker answers none): said, not left
+            // as a click that does nothing.
+            #[cfg(target_arch = "wasm32")]
+            "ui.exportOrbit" => return Err("exporting an orbit needs the desktop app".into()),
+            #[cfg(not(target_arch = "wasm32"))]
+            "ui.exportOrbit" => {
+                // Refused before the file is picked: parameters that aren't an object, a number
+                // out of its range, or another export still running.
+                let mut args = match p {
+                    Value::Null => json!({}),
+                    Value::Object(_) => p.clone(),
+                    _ => return Err("Export Orbit takes an object of parameters".into()),
+                };
+                rustgis_engine::cmd::view::check_orbit_params(&args)?;
+                exportjob::idle(self)?;
+                let name = format!("{} orbit.gif", self.session.map().name);
+                // No file picked answers null, and the dialog stays open.
+                if let Some(path) = dialogs::pick_save(&name, &["gif", "zip"], tl!("Animated GIF or PNG frames (zip)")) {
+                    args["path"] = json!(path);
+                    return exportjob::start(self, "map.exportOrbit", args);
                 }
             }
             "ui.magnifier" => self.map.magnifier = p.get("on").and_then(Value::as_bool).unwrap_or(!self.map.magnifier),

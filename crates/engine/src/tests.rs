@@ -4456,6 +4456,67 @@ fn shaded_relief_keeps_its_fill_light() {
     assert_eq!(fill(&t), 0.45, "back when opened");
 }
 
+/// Shaded Relief's rock on steep slopes (#1913): an object turns it on, its missing keys from the
+/// current rock or the defaults; kept when left out; `false` removes it; a `from` not below `to`
+/// or a bad colour is refused; saved with the project only when set.
+#[test]
+fn shaded_relief_keeps_its_rock_on_steep_slopes() {
+    use rustgis_map::raster::Rock;
+    let mut s = with_raster();
+    let rock = |s: &Session| match s.map().layers.first().and_then(|l| l.raster.as_ref()).map(|r| &r.style.renderer) {
+        Some(rustgis_map::RasterRenderer::ShadedRelief { rock, .. }) => *rock,
+        other => panic!("{other:?}"),
+    };
+    let rocks_saved = |s: &mut Session| s.project.saved_text(None).unwrap().0.matches("\"rock\"").count();
+    s.run("raster.symbology", &json!({"type": "shadedRelief"})).unwrap();
+    assert_eq!(rock(&s), None, "off by default");
+    let before = rocks_saved(&mut s);
+    s.run("raster.symbology", &json!({"type": "shadedRelief", "rock": {}})).unwrap();
+    assert_eq!(rock(&s), Some(Rock::DEFAULT));
+    s.run("raster.symbology", &json!({"type": "shadedRelief", "rock": {"to": 50, "color": "#806040"}})).unwrap();
+    s.run("raster.symbology", &json!({"type": "shadedRelief", "azimuth": 200})).unwrap();
+    let want = Rock { from: 25.0, to: 50.0, color: rustgis_map::Rgba::rgb(0x80, 0x60, 0x40) };
+    assert_eq!(rock(&s), Some(want), "left out, kept; its missing keys too");
+    assert_eq!(rocks_saved(&mut s), before + 1, "saved when set");
+    for bad in
+        [json!({"from": 40, "to": 30}), json!({"from": 30, "to": 30}), json!({"color": "rock"}), json!({"color": "#B2ACA480"}), json!(3)]
+    {
+        assert!(s.run("raster.symbology", &json!({"type": "shadedRelief", "rock": bad})).is_err(), "{bad}");
+        assert_eq!(rock(&s), Some(want), "{bad}: refused, the rock kept");
+    }
+    s.run("raster.symbology", &json!({"type": "shadedRelief", "rock": false})).unwrap();
+    assert_eq!(rock(&s), None);
+    assert_eq!(rocks_saved(&mut s), before, "not saved once removed");
+}
+
+/// An export draws the rock on steep slopes: a grey relief whose east half is a 63° wall turns
+/// red there with a red rock, and keeps the same pixels on the flat west half.
+#[test]
+fn an_export_draws_the_rock_on_steep_slopes() {
+    use rustgis_data::raster::{ColorHint, Crs, GeoTransform, Raster, geotiff};
+    let mut s = world();
+    // 41 cells of 30 m a side: flat to column 20, then rising 60 m a cell eastward.
+    let wall: Vec<f32> = (0..41 * 41).map(|i| ((i % 41 - 20).max(0) * 60) as f32).collect();
+    let gt = GeoTransform { origin_x: 500_000.0, origin_y: 7_000_000.0, pixel_width: 30.0, pixel_height: -30.0 };
+    let r = Raster::new("wall", 41, 41, vec![wall], gt, Crs::from_epsg(31983).unwrap(), None, ColorHint::Gray, "Float32").unwrap();
+    let bytes = geotiff::write(&r, 0).unwrap();
+    crate::cmd::raster::add_raster(&mut s, "wall", rustgis_map::RasterLayer::from_bytes(r, "wall.tif".to_string(), bytes)).unwrap();
+    s.run("layer.zoomTo", &json!({"layer": "wall"})).unwrap();
+    let drawn = |s: &mut Session, rock: Value| {
+        s.run("raster.symbology", &json!({"layer": "wall", "type": "shadedRelief", "grey": true, "azimuth": 270, "rock": rock})).unwrap();
+        let png = crate::cmd::share::map_png(s, Some(200.0), Some(200.0), None).unwrap();
+        crate::render::decode_png(&png).unwrap()
+    };
+    let plain = drawn(&mut s, json!(false));
+    let rocky = drawn(&mut s, json!({"from": 10, "to": 20, "color": "#FF0000"}));
+    let px = |p: &tiny_skia::Pixmap, x: u32| p.pixel(x, 100).map(|c| [c.red(), c.green(), c.blue()]).unwrap();
+    // The flat west half: the same grey. The wall: grey without the rock, red with it.
+    assert_eq!(px(&rocky, 70), px(&plain, 70));
+    let ([r0, g0, b0], [r1, g1, b1]) = (px(&plain, 130), px(&rocky, 130));
+    assert!(r0 == g0 && g0 == b0 && r0 > 0, "a grey wall: {:?}", [r0, g0, b0]);
+    assert!(r1 > 0 && g1 == 0 && b1 == 0, "a red wall: {:?}", [r1, g1, b1]);
+}
+
 /// An export draws the sky a pit hides: its floor darker with `sky` 1 than with 0, the ground
 /// around it (which sees the whole sky) the same. The first export with the sky, from a cold
 /// cache, waits for the grid: it is the same image as one drawn once the grid is kept.
@@ -6322,6 +6383,75 @@ fn applying_a_style_keeps_the_layers_own_label_moves() {
     let labels = &s.map().layer(id).unwrap().labels.default;
     assert_eq!((labels.moved_to(ids[0]), labels.moved_to(ids[1])), (None, Some([2.0, 2.0])));
     assert!(s.notices_since(mark).iter().any(|n| n.text.contains("1 saved label move(s) in style Moved not applied")));
+}
+
+/// Styles: a name given past 200 characters is refused, not cut; a file's styles past the 1,000
+/// one file adds, names cut to fit and styles a later one of the same name replaces are said, one
+/// notice a kind with its count (#1972). Within the limits, nothing is said.
+#[test]
+fn styles_refuse_or_say_what_they_cut() {
+    let mut s = world();
+    let at = |n: usize| "é".repeat(n);
+    let said = |s: &Session, mark: u64, what: &str| {
+        s.notices_since(mark).iter().map(|n| n.text.clone()).filter(|t| t.starts_with(what)).collect::<Vec<_>>()
+    };
+    let id = s.map().layer_by_name("Cities").unwrap().id;
+    // A name given: refused past 200 characters, nothing added; taken whole at 200.
+    let styles = s.project.styles.len();
+    let e = s.run("style.new", &json!({"layer": id, "name": at(201)})).unwrap_err();
+    assert!(e.contains("201 characters") && e.contains("at most 200"), "{e}");
+    assert_eq!(s.project.styles.len(), styles);
+    assert_eq!(s.run("style.new", &json!({"layer": id, "name": at(200)})).unwrap()["style"], at(200));
+    // No name, from a layer whose name is longer (an import's): its first 200, said, and the
+    // answer gives the name kept.
+    let long = format!("{}x", at(200));
+    s.map_mut().layer_mut(id).unwrap().name = long.clone();
+    let mark = s.notice_mark();
+    let r = s.run("style.new", &json!({"layer": id})).unwrap();
+    assert_eq!(r["style"], at(200));
+    assert_eq!(said(&s, mark, "New Style"), ["New Style: the style takes the first 200 characters of the layer's name"]);
+    s.map_mut().layer_mut(id).unwrap().name = "Cities".into();
+    // A style file of 1,002: two of one name, one name past 200, and 999 others. The first 1,000
+    // are read; the later twin replaces the earlier.
+    s.run("style.new", &json!({"layer": id, "name": "Base"})).unwrap();
+    let base = serde_json::to_value(s.project.styles.iter().find(|t| t.name == "Base").unwrap()).unwrap();
+    let named = |name: &str| {
+        let mut v = base.clone();
+        v["name"] = json!(name);
+        v
+    };
+    let mut file = vec![named("Twin"), named("twin"), named(&format!("{}y", at(200)))];
+    file.extend((0..999).map(|i| named(&format!("S{i}"))));
+    let mark = s.notice_mark();
+    let r = s.run("style.add", &json!({"text": Value::Array(file).to_string()})).unwrap();
+    // Twin and twin are one style; the 1,000 read hold 999 names.
+    assert_eq!(r["added"], 999);
+    assert!(s.project.styles.iter().any(|t| t.name == "twin") && !s.project.styles.iter().any(|t| t.name == "Twin"));
+    assert!(s.project.styles.iter().any(|t| t.name == "S996") && !s.project.styles.iter().any(|t| t.name == "S997"));
+    let mut notes = said(&s, mark, "Add Style");
+    notes.sort();
+    assert_eq!(
+        notes,
+        [
+            "Add Style: 1 style name(s) cut to 200 characters",
+            "Add Style: 1 style(s) replaced by a later one of the same name in the file",
+            "Add Style: the first 1000 of the file's 1002 styles are added",
+        ]
+    );
+    // A clean file says nothing.
+    let mark = s.notice_mark();
+    s.run("style.add", &json!({"text": json!([named("Clean")]).to_string()})).unwrap();
+    assert!(said(&s, mark, "Add Style").is_empty());
+    // Import Styles from a map file with two feature layers of one name: one style, said.
+    let other =
+        s.map().layers.iter().find(|l| !l.is_raster() && l.id != id && l.geometry_type() != rustgis_data::GeometryType::None).unwrap().id;
+    s.map_mut().layer_mut(other).unwrap().name = "Cities".into();
+    let map = serde_json::to_value(s.map()).unwrap();
+    let mark = s.notice_mark();
+    let r = s.run("style.import", &json!({"text": map.to_string()})).unwrap();
+    let layers = s.map().layers.iter().filter(|l| !l.is_raster() && l.geometry_type() != rustgis_data::GeometryType::None).count();
+    assert_eq!(r["imported"], layers - 1, "the two Cities are one style");
+    assert_eq!(said(&s, mark, "Import Styles"), ["Import Styles: 1 style(s) replaced by a later one of the same name in the file"]);
 }
 
 /// A project template keeps no features, so no saved label moves either, and says so.
@@ -11647,6 +11777,138 @@ fn analysis_workflows_models_scripts_and_raster_functions() {
     assert!(g.as_array().unwrap().iter().any(|t| t["id"] == "raster.function"));
 }
 
+/// `model.new` refuses steps or a name given past their limits, rather than cutting them; from
+/// the history, it says the runs it can't replay and a history longer than a model takes.
+#[test]
+fn model_new_refuses_or_says_what_it_leaves() {
+    let mut s = world();
+    let said = |s: &Session, mark: u64, what: &str| {
+        s.notices_since(mark).iter().filter(|n| n.text.contains(what)).map(|n| n.text.clone()).collect::<Vec<_>>()
+    };
+    let step = json!({"tool": "buffer", "params": {"input": "Cities", "distance": 1}});
+    // Steps given: refused past 2,000, nothing added; taken at 2,000.
+    let models = s.project.models.len();
+    let e = s.run("model.new", &json!({"name": "Long", "steps": vec![step.clone(); 2001]})).unwrap_err();
+    assert!(e.contains("steps has 2001 entries") && e.contains("at most 2000"), "{e}");
+    assert_eq!(s.project.models.len(), models);
+    let r = s.run("model.new", &json!({"name": "Long", "steps": vec![step.clone(); 2000]})).unwrap();
+    assert_eq!(r["steps"], 2000);
+    // A graph, steps or the history: one way to make a model. Two are refused, and nothing is added.
+    let graph = json!({"nodes": [{"id": "i", "kind": "input", "layer": "Cities"}], "edges": []});
+    let models = s.project.models.len();
+    let e = s.run("model.new", &json!({"name": "Both", "graph": graph, "steps": [step.clone()]})).unwrap_err();
+    assert!(e.contains("not more than one"), "{e}");
+    let e = s.run("model.new", &json!({"name": "Both", "graph": graph, "fromHistory": true})).unwrap_err();
+    assert!(e.contains("not more than one"), "{e}");
+    let e = s.run("model.new", &json!({"name": "Both", "steps": [step.clone()], "fromHistory": true})).unwrap_err();
+    assert!(e.contains("not more than one"), "{e}");
+    assert_eq!(s.project.models.len(), models);
+    // A name given: refused past 200 characters (é: two bytes, one character), taken at 200. The
+    // same name again is told apart within the 200, and that is said.
+    let at = |n: usize| "é".repeat(n);
+    let e = s.run("model.new", &json!({"name": at(201), "steps": [step.clone()]})).unwrap_err();
+    assert!(e.contains("201 characters") && e.contains("at most 200"), "{e}");
+    assert_eq!(s.project.models.len(), models);
+    assert_eq!(s.run("model.new", &json!({"name": at(200), "steps": [step.clone()]})).unwrap()["model"], at(200));
+    let mark = s.notice_mark();
+    let r = s.run("model.new", &json!({"name": at(200), "steps": [step.clone()]})).unwrap();
+    assert_eq!(r["model"].as_str().map(|n| (n.chars().count(), n.ends_with(" 2"))), Some((200, true)), "{r}");
+    assert_eq!(
+        said(&s, mark, "ModelBuilder"),
+        ["ModelBuilder: a model has that name already, so the name given is cut to 198 characters to fit \" 2\""]
+    );
+    let mark = s.notice_mark();
+    s.run("model.new", &json!({"name": "Long", "steps": [step.clone()]})).unwrap();
+    assert!(said(&s, mark, "ModelBuilder").is_empty(), "a short name only gains the suffix");
+    // A cut that lands on a space keeps no space before the suffix: the name's 197 letters, then " 2".
+    let spaced = format!("{} bc", "a".repeat(197));
+    s.run("model.new", &json!({"name": spaced, "steps": [step.clone()]})).unwrap();
+    let mark = s.notice_mark();
+    let r = s.run("model.new", &json!({"name": spaced, "steps": [step.clone()]})).unwrap();
+    assert_eq!(r["model"], format!("{} 2", "a".repeat(197)), "{r}");
+    assert_eq!(said(&s, mark, "ModelBuilder").len(), 1, "the cut to 197 is said");
+    // From the history: 2,006 runs, five with a tool that isn't available. The model replays the
+    // first 2,000 of the 2,001 it can, in their order, and says both.
+    let run = |i: usize| crate::GpRecord {
+        tool: "Buffer".into(),
+        id: "buffer".into(),
+        params: json!({"input": "Cities", "distance": i}),
+        command: None,
+        at: 0,
+        ok: true,
+        messages: Vec::new(),
+        millis: 0,
+        outputs: Vec::new(),
+    };
+    let mystery = |i: usize| crate::GpRecord { tool: "Mystery".into(), id: "mystery".into(), ..run(i) };
+    let history = |s: &Session, mark: u64| said(s, mark, "the history");
+    s.project.gp_history = (0..2006).map(|i| if i % 400 == 7 { mystery(i) } else { run(i) }).collect();
+    let mark = s.notice_mark();
+    let r = s.run("model.new", &json!({"name": "Replay", "fromHistory": true})).unwrap();
+    assert_eq!(r["steps"], 2000);
+    let replay = s.project.models.iter().find(|m| m.name == "Replay").unwrap();
+    assert_eq!(replay.steps[7].params["distance"], 8, "run 7 is left out");
+    assert_eq!(
+        history(&s, mark),
+        [
+            "Replay: 5 successful runs in the history use a tool that isn't available, so they're left out",
+            "Replay: the model takes the first 2000 of the 2001 successful runs it can replay from the history",
+        ]
+    );
+    // One it can't replay, within the limit: said in the singular, nothing cut.
+    s.project.gp_history = (0..3).map(|i| if i == 1 { mystery(i) } else { run(i) }).collect();
+    let mark = s.notice_mark();
+    assert_eq!(s.run("model.new", &json!({"name": "Few", "fromHistory": true})).unwrap()["steps"], 2);
+    assert_eq!(history(&s, mark), ["Few: 1 successful run in the history uses a tool that isn't available, so it's left out"]);
+    // A null steps is none given: the history is replayed.
+    assert_eq!(s.run("model.new", &json!({"name": "Few", "fromHistory": true, "steps": null})).unwrap()["steps"], 2);
+    // A run left out that made a layer a later step reads: the step isn't wired to an older run's
+    // output of that name, but reads the layer by its name, and that is said. Without the run left
+    // out, the step is wired to the older run.
+    let making = |i: usize, input: &str| crate::GpRecord {
+        params: json!({"input": input, "distance": i}),
+        outputs: vec!["Made".to_string()],
+        ..run(i)
+    };
+    s.project.gp_history = vec![making(0, "Cities"), crate::GpRecord { tool: "Mystery".into(), ..making(1, "Cities") }, making(2, "Made")];
+    let mark = s.notice_mark();
+    s.run("model.new", &json!({"name": "Rewired", "fromHistory": true})).unwrap();
+    let rewired = s.project.models.iter().find(|m| m.name == "Rewired").unwrap();
+    assert_eq!(rewired.steps[1].params["input"], "Made", "not %1, the older run's output");
+    assert_eq!(
+        said(&s, mark, "Rewired:"),
+        [
+            "Rewired: 1 successful run in the history uses a tool that isn't available, so it's left out",
+            "Rewired: 1 step(s) read a layer made by a run that's left out, so they read the project's layer of that name",
+        ]
+    );
+    s.project.gp_history = vec![making(0, "Cities"), making(2, "Made")];
+    let mark = s.notice_mark();
+    s.run("model.new", &json!({"name": "Wired", "fromHistory": true})).unwrap();
+    assert_eq!(s.project.models.iter().find(|m| m.name == "Wired").unwrap().steps[1].params["input"], "%1");
+    assert!(said(&s, mark, "Wired:").is_empty());
+    // A step past the 2,000 a model keeps that reads such a layer isn't counted: the model has
+    // none.
+    let mut long: Vec<crate::GpRecord> = (0..2000).map(run).collect();
+    long.push(crate::GpRecord { tool: "Mystery".into(), ..making(2000, "Cities") });
+    long.push(making(2001, "Made"));
+    s.project.gp_history = long;
+    let mark = s.notice_mark();
+    assert_eq!(s.run("model.new", &json!({"name": "Late", "fromHistory": true})).unwrap()["steps"], 2000);
+    assert_eq!(
+        said(&s, mark, "Late:"),
+        [
+            "Late: 1 successful run in the history uses a tool that isn't available, so it's left out",
+            "Late: the model takes the first 2000 of the 2001 successful runs it can replay from the history",
+        ]
+    );
+    // A clean history of 2,000 runs: all replayed, nothing said.
+    s.project.gp_history = (0..2000).map(run).collect();
+    let mark = s.notice_mark();
+    assert_eq!(s.run("model.new", &json!({"name": "Clean", "fromHistory": true})).unwrap()["steps"], 2000);
+    assert!(history(&s, mark).is_empty());
+}
+
 /// A web link chart past its limits says what it leaves out, to whoever shares it and on its page
 /// (#1947): links past a feature's 200, and features past the chart's 3,000. Within them,
 /// nothing is said.
@@ -12137,6 +12399,53 @@ fn a_scan_warped_onto_its_points_is_placed_for_real() {
     let again = t.map().layer_by_name("plate").unwrap().raster.as_ref().unwrap().data.clone().unwrap();
     assert!(again.georeferenced && again.transform == out.transform, "{:?} vs {:?}", again.transform, out.transform);
     std::fs::remove_dir_all(&dir).ok();
+}
+
+/// A one-in-one plane returns 45 degrees, with its unit in the band description through both
+/// function paths, GeoTIFF export and project reopening. A following function clears that label.
+/// The geographic case uses the documented centre-latitude approximation; zFactor scales rise.
+#[test]
+fn slope_results_describe_degrees() {
+    use base64::Engine;
+    use rustgis_data::raster::{ColorHint, Crs, GeoTransform, Raster, geotiff};
+    for (crs, cell, top, rise) in [(Crs::WebMercator, 10.0, 30.0, 10.0), (Crs::LonLat, 0.001, 60.0015, 55.66)] {
+        for chain in [false, true] {
+            let mut s = world();
+            let gt = GeoTransform { origin_x: 0.0, origin_y: top, pixel_width: cell, pixel_height: -cell };
+            let pixels = (0..9).map(|i| (i % 3) as f32 * rise).collect();
+            let dem = Raster::new("plane", 3, 3, vec![pixels], gt, crs, None, ColorHint::Gray, "Float32").unwrap();
+            let data = base64::engine::general_purpose::STANDARD.encode(geotiff::write(&dem, 0).unwrap());
+            s.run("layer.addDataBytes", &json!({"fileName": "plane.tif", "data": data})).unwrap();
+            let (cmd, params, expected) = if chain {
+                ("raster.functionChain", json!({"layer": "plane", "steps": [{"function": "slope"}], "name": "S"}), 45.0)
+            } else {
+                (
+                    "raster.function",
+                    json!({"layer": "plane", "function": "slope", "zFactor": 0.5, "name": "S"}),
+                    0.5_f64.atan().to_degrees(),
+                )
+            };
+            s.run(cmd, &params).unwrap();
+            let info = s.run("raster.info", &json!({"layer": "S"})).unwrap();
+            assert_eq!(info["bands"][0]["name"], "Slope (degrees)");
+            let out = s.map().layer_by_name("S").unwrap().raster.as_ref().unwrap().data.as_ref().unwrap();
+            assert!((f64::from(out.bands[0].data[4]) - expected).abs() < 1e-4, "{crs:?} {cmd}");
+            let back = geotiff::read(std::io::Cursor::new(geotiff::write(out, 0).unwrap()), "S").unwrap();
+            assert_eq!(back.bands[0].name, "Slope (degrees)");
+            let text = serde_json::to_string(&s.project).unwrap();
+            let mut reopened = Session::new(Project::default());
+            reopened.run("project.openText", &json!({"text": text})).unwrap();
+            assert_eq!(reopened.run("raster.info", &json!({"layer": "S"})).unwrap()["bands"][0]["name"], "Slope (degrees)");
+            s.run(
+                "raster.functionChain",
+                &json!({"layer": "plane", "steps": [
+                {"function": "slope"}, {"function": "threshold", "value": 30}
+            ], "name": "mask"}),
+            )
+            .unwrap();
+            assert_ne!(s.run("raster.info", &json!({"layer": "mask"})).unwrap()["bands"][0]["name"], "Slope (degrees)");
+        }
+    }
 }
 
 /// A hillshade is made as bytes, 1–255 with 0 for no data, so it is exported as 8-bit samples (a
@@ -45285,6 +45594,7 @@ fn long_commands_stop_when_cancelled_while_they_run() {
         ("share.exportLayer", json!({"layer": "Cities", "path": out("cities.geojson")})),
         ("share.exportRaster", json!({"layer": dem, "path": out("dem.tif")})),
         ("share.exportMap", json!({"path": out("map.png"), "width": 320, "height": 200})),
+        ("map.exportOrbit", json!({"path": out("orbit.zip"), "frames": 3, "width": 96, "height": 64})),
         ("layout.export", json!({"path": out("layout.pdf"), "dpi": 72})),
         ("report.export", json!({"path": out("report.pdf"), "dpi": 72})),
         ("source.publish", json!({"layer": "towns"})),
@@ -47359,12 +47669,56 @@ fn an_orbit_is_exported_as_png_frames_or_a_gif_and_the_view_comes_back() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
-/// A run asked to stop ends an orbit, and a time animation, between frames: nothing is written
-/// and the view is back where it was.
+/// The app draws an orbit on a thread of its own: its progress counts the frames, and Cancel
+/// stops it between them with nothing written, not even a temporary file, the view untouched.
+#[test]
+fn an_orbit_drawn_on_another_thread_counts_its_frames_and_stops_on_cancel() {
+    use rustgis_analysis::control::Control;
+    let mut s = world();
+    s.run("map.setBearing", &json!({"bearing": 30})).unwrap();
+    let before = s.map().camera;
+    let dir = std::env::temp_dir().join(format!("rustgis-orbit-thread-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("orbit.zip");
+    let params = |frames: u32| json!({"path": path.display().to_string(), "frames": frames, "width": 96, "height": 64});
+    // Run to its end: every frame counted, the file written and said.
+    let run = crate::cmd::exports::export_start(&mut s, "map.exportOrbit", &params(4)).unwrap();
+    let (started, control) = (run.started(), Control::stoppable());
+    let wrote = run.run(&control);
+    assert_eq!(control.progress(), Some((4, 4)));
+    let r = crate::cmd::exports::export_land(&mut s, started, wrote).unwrap();
+    assert_eq!(r["frames"], 4);
+    assert_eq!(rustgis_data::zip::read(&std::fs::read(&path).unwrap()).unwrap().len(), 4);
+    assert!(s.notices.iter().any(|n| n.text == format!("Exported {}", path.display())));
+    std::fs::remove_file(&path).unwrap();
+    // Cancelled once its first frames are counted, far from its last.
+    let run = crate::cmd::exports::export_start(&mut s, "map.exportOrbit", &params(1000)).unwrap();
+    let control = Control::stoppable();
+    let on = control.clone();
+    let drawing = std::thread::spawn(move || run.run(&on).map(|_| ()));
+    let end = std::time::Instant::now() + std::time::Duration::from_secs(120);
+    while control.progress().is_none_or(|(done, _)| done < 2) {
+        assert!(std::time::Instant::now() < end, "no frame was counted");
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    control.cancel();
+    let e = drawing.join().unwrap().unwrap_err();
+    let (done, total) = control.progress().unwrap();
+    assert!(e.contains("cancelled") && done < total && total == 1000, "{e}: {done} of {total}");
+    let left: Vec<_> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().file_name()).collect();
+    assert!(left.is_empty(), "{left:?}");
+    assert_eq!(s.map().camera, before);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// A run asked to stop ends a time animation between frames: nothing is written and the slider
+/// is back where it was.
 #[test]
 fn a_stopped_run_ends_an_animation_export_with_nothing_written() {
     /// Asked to stop once it was asked `0` times whether it was: 0 stops a run before its first
-    /// frame, 2 one that has drawn a frame, 3 one that has drawn two.
+    /// frame, 3 one that has drawn a frame (looked before it, after it and as it counted it), 4 one
+    /// that has drawn two.
     struct Stopped(u32, std::sync::atomic::AtomicU32);
     impl rustgis_data::progress::Probe for Stopped {
         fn cancelled(&self) -> bool {
@@ -47380,22 +47734,20 @@ fn a_stopped_run_ends_an_animation_export_with_nothing_written() {
     let date = s.run("time.info", &Value::Null).unwrap()["date"].clone();
     let dir = std::env::temp_dir().join(format!("rustgis-orbit-stopped-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    for command in ["map.exportOrbit", "time.export"] {
-        let path = dir.join(format!("{command}.zip"));
-        let params = json!({"path": path.display().to_string(), "width": 96, "height": 64});
-        s.run(command, &params).unwrap();
-        std::fs::remove_file(&path).unwrap();
-        // Stopped at once, before the second frame, and after it: an orbit's second frame has
-        // turned the camera, so it is the restore that brings the view back.
-        for after in [0, 2, 3] {
-            let stopped = rustgis_data::progress::install(Some(std::sync::Arc::new(Stopped(after, 0.into()))));
-            let e = s.run(command, &params).unwrap_err();
-            drop(stopped);
-            assert!(e.contains("cancel"), "{command} after {after}: {e}");
-            assert!(!path.exists(), "{command} after {after} wrote a file");
-            assert_eq!(s.map().camera, before, "{command} after {after}");
-            assert_eq!(s.run("time.info", &Value::Null).unwrap()["date"], date, "{command} after {after}");
-        }
+    let path = dir.join("time.zip");
+    let params = json!({"path": path.display().to_string(), "width": 96, "height": 64});
+    s.run("time.export", &params).unwrap();
+    std::fs::remove_file(&path).unwrap();
+    // Stopped at once, before the second frame, and after it: the second frame has moved the
+    // slider, so it is the restore that brings it back.
+    for after in [0, 3, 4] {
+        let stopped = rustgis_data::progress::install(Some(std::sync::Arc::new(Stopped(after, 0.into()))));
+        let e = s.run("time.export", &params).unwrap_err();
+        drop(stopped);
+        assert!(e.contains("cancel"), "after {after}: {e}");
+        assert!(!path.exists(), "after {after} wrote a file");
+        assert_eq!(s.map().camera, before, "after {after}");
+        assert_eq!(s.run("time.info", &Value::Null).unwrap()["date"], date, "after {after}");
     }
     std::fs::remove_dir_all(dir).unwrap();
 }
