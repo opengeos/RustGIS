@@ -64,8 +64,13 @@ impl Event {
             ["position", lon, lat, accuracy] => match (lon.parse::<f64>(), lat.parse::<f64>()) {
                 // A place on the Earth, or it is no position: a failure that quotes the line.
                 (Ok(lon), Ok(lat)) if (-180.0..=180.0).contains(&lon) && (-90.0..=90.0).contains(&lat) => {
-                    let accuracy = accuracy.parse::<f64>().ok().filter(|m| m.is_finite() && *m >= 0.0);
-                    Event::Position(Fix { lon, lat, accuracy })
+                    // No accuracy given is no accuracy; one given that isn't a distance is a line
+                    // RustGIS doesn't know, not a position quietly taken without it.
+                    match accuracy.parse::<f64>() {
+                        _ if accuracy.is_empty() => Event::Position(Fix { lon, lat, accuracy: None }),
+                        Ok(metres) if metres.is_finite() && metres >= 0.0 => Event::Position(Fix { lon, lat, accuracy: Some(metres) }),
+                        _ => Event::Failed(format!("The system reported something RustGIS doesn't know: {line}")),
+                    }
                 }
                 _ => Event::Failed(format!("The system reported something RustGIS doesn't know: {line}")),
             },
@@ -109,9 +114,8 @@ mod tests {
         assert_eq!(Event::parse("cancelled"), Event::Cancelled);
         assert_eq!(Event::parse("stopped"), Event::Stopped);
         assert_eq!(Event::parse("position\t-83.92\t35.96\t4.5"), Event::Position(Fix { lon: -83.92, lat: 35.96, accuracy: Some(4.5) }));
-        // No accuracy given, or one that is none: the position stands without it.
+        // No accuracy given: the position stands without it.
         assert_eq!(Event::parse("position\t10\t20\t"), Event::Position(Fix { lon: 10.0, lat: 20.0, accuracy: None }));
-        assert_eq!(Event::parse("position\t10\t20\t-1"), Event::Position(Fix { lon: 10.0, lat: 20.0, accuracy: None }));
         assert_eq!(Event::parse("saved\tmap.png"), Event::Saved { name: "map.png".into() });
         assert_eq!(Event::parse("saved\tmy\tmap.png"), Event::Saved { name: "my\tmap.png".into() });
         // A failure's text is kept whole, tabs and all.
@@ -120,7 +124,18 @@ mod tests {
 
     #[test]
     fn an_unknown_line_is_a_failure_that_quotes_it() {
-        for line in ["", "picked\tdata", "moved\tx", "saved", "position\t200\t20\t5", "position\tx\t20\t5", "position\tNaN\t20\t5"] {
+        for line in [
+            "",
+            "picked\tdata",
+            "moved\tx",
+            "saved",
+            "position\t200\t20\t5",
+            "position\tx\t20\t5",
+            "position\tNaN\t20\t5",
+            "position\t10\t20\t-1",
+            "position\t10\t20\tabc",
+            "position\t10\t20\tinf",
+        ] {
             match Event::parse(line) {
                 Event::Failed(text) => assert!(text.ends_with(line), "{text}"),
                 other => panic!("{line:?} read as {other:?}"),

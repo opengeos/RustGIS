@@ -41,6 +41,8 @@ public class MainActivity extends NativeActivity {
     private boolean locating;
     /** The listener positions arrive on, while they are asked for. */
     private android.location.LocationListener positions;
+    /** The user is being asked for leave to use the location, and hasn't answered. */
+    private boolean asking;
     /** A picker for opening is shown and has not answered (the main thread's alone). */
     private boolean picking;
     private String saveName = "";
@@ -94,6 +96,7 @@ public class MainActivity extends NativeActivity {
                     || allowed(android.Manifest.permission.ACCESS_COARSE_LOCATION)) {
                 startLocating();
             } else {
+                asking = true;
                 requestPermissions(new String[] {android.Manifest.permission.ACCESS_FINE_LOCATION,
                         android.Manifest.permission.ACCESS_COARSE_LOCATION}, LOCATION);
             }
@@ -103,7 +106,11 @@ public class MainActivity extends NativeActivity {
     @Override
     public void onRequestPermissionsResult(int request, String[] permissions, int[] results) {
         super.onRequestPermissionsResult(request, permissions, results);
-        if (request != LOCATION || !locating) {
+        if (request != LOCATION) {
+            return;
+        }
+        asking = false;
+        if (!locating) {
             return;
         }
         boolean given = false;
@@ -143,7 +150,8 @@ public class MainActivity extends NativeActivity {
     @Override
     protected void onStart() {
         super.onStart();
-        if (locating) {
+        // While the user is still being asked for leave, its answer decides, not this.
+        if (locating && !asking) {
             if (allowed(android.Manifest.permission.ACCESS_FINE_LOCATION)
                     || allowed(android.Manifest.permission.ACCESS_COARSE_LOCATION)) {
                 startLocating();
@@ -161,8 +169,24 @@ public class MainActivity extends NativeActivity {
             return;
         }
         stopLocating();
-        positions = fix -> add("position\t" + fix.getLongitude() + "\t" + fix.getLatitude() + "\t"
-                + (fix.hasAccuracy() ? Float.toString(fix.getAccuracy()) : ""));
+        // Every callback is written out: before Android 11 none has a default, and a provider
+        // switched off would call one that isn't there.
+        positions = new android.location.LocationListener() {
+            @Override
+            public void onLocationChanged(android.location.Location fix) {
+                add("position\t" + fix.getLongitude() + "\t" + fix.getLatitude() + "\t"
+                        + (fix.hasAccuracy() ? Float.toString(fix.getAccuracy()) : ""));
+            }
+
+            @Override
+            public void onProviderEnabled(String provider) {}
+
+            @Override
+            public void onProviderDisabled(String provider) {}
+
+            @Override
+            public void onStatusChanged(String provider, int status, android.os.Bundle extras) {}
+        };
         int asked = 0;
         for (String provider : new String[] {android.location.LocationManager.GPS_PROVIDER,
                 android.location.LocationManager.NETWORK_PROVIDER}) {
@@ -170,7 +194,8 @@ public class MainActivity extends NativeActivity {
                 // Satellites need the precise permission: with the approximate one alone, the
                 // network's positions are the ones to ask for.
                 boolean satellites = provider.equals(android.location.LocationManager.GPS_PROVIDER);
-                if (manager.getAllProviders().contains(provider)
+                // One switched off would be asked without complaint and never answer.
+                if (manager.getAllProviders().contains(provider) && manager.isProviderEnabled(provider)
                         && (!satellites || allowed(android.Manifest.permission.ACCESS_FINE_LOCATION))) {
                     manager.requestLocationUpdates(provider, 1000, 0, positions, getMainLooper());
                     asked++;
@@ -180,7 +205,7 @@ public class MainActivity extends NativeActivity {
             }
         }
         if (asked == 0) {
-            stopped("This device has no way to find its position.");
+            stopped("This device's position can't be found: location is turned off in its settings, or it has no way to find one.");
         }
     }
 
