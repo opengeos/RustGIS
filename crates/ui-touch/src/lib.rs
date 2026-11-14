@@ -510,7 +510,7 @@ fn capture_rows(app: &RustGisApp, ctx: &egui::Context) -> usize {
             (Some(_), GeometryType::Point) => 2,
             (Some(_), _) => 3,
         };
-        return 4 + buttons + usize::from(app.locate);
+        return 4 + buttons + usize::from(app.locate) + usize::from(!state.photos.is_empty());
     }
     // A date and time's calendar has its Now row too.
     let calendar = match (&state.calendar, layer) {
@@ -958,12 +958,16 @@ fn capture(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             });
         });
         // Edit mode changes shapes, not attributes: the form is for a new feature.
+        // Photos for the next feature, where the device has a camera to ask; in Edit mode those
+        // already taken stay in sight (a photo for the feature edited is Add Photo's).
         if edit_mode {
+            if !state.photos.is_empty() {
+                photo_row(app, ui, t, &mut state.photos, false);
+            }
             return;
         }
-        // Photos for the next feature, where the device has a camera to ask.
         if app.services.take_photo.is_some() || !state.photos.is_empty() {
-            photo_row(app, ui, t, &mut state.photos);
+            photo_row(app, ui, t, &mut state.photos, true);
         }
         // Read first: the rows change the form, not the layer.
         let layer = app.session.map().layer(target.id);
@@ -1142,13 +1146,13 @@ fn position_buttons(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, ctx: &egui::C
     track::set_field(ctx, state);
 }
 
-/// The row of photos for the next feature: Take Photo, and a chip for each photo taken, which a
-/// tap takes off (the file stays in the app's photos folder).
-fn photo_row(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, taken: &mut Vec<std::path::PathBuf>) {
+/// The row of photos for the next feature: Take Photo (with `camera`), and a chip for each photo
+/// taken, which a tap takes off (the file stays in the app's photos folder).
+fn photo_row(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, taken: &mut Vec<std::path::PathBuf>, camera: bool) {
     egui::ScrollArea::horizontal().id_salt("touch_capture_photos").show(ui, |ui| {
         ui.horizontal(|ui| {
             ui.set_min_height(TARGET);
-            if app.services.take_photo.is_some() && action(ui, t, tl!("Take Photo"), 140.0, false, true) {
+            if camera && app.services.take_photo.is_some() && action(ui, t, tl!("Take Photo"), 140.0, false, true) {
                 take_photo(app);
             }
             let mut gone = None;
