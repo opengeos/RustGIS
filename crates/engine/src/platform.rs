@@ -137,8 +137,9 @@ pub trait Platform {
     fn keep_locating(&self, on: bool) -> Result<(), String>;
 
     /// Asks the device's camera for a photo: an [`Event::Photo`] follows with where it was
-    /// written (in the app's own storage), or [`Event::Cancelled`] when the user took none. `Ok`
-    /// means the camera was asked, not that a photo was taken.
+    /// written (in the app's own storage), or [`Event::Cancelled`] when there is none (the user
+    /// took none, or it couldn't be kept). `Ok` means the camera was asked, not that a photo was
+    /// taken.
     fn take_photo(&self) -> Result<(), String>;
 
     /// What happened since the last call, oldest first.

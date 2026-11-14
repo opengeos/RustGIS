@@ -306,6 +306,12 @@ mod tests {
         // The copy arrives: it answers its request, still open.
         requests.picked("dxf:1");
         assert_eq!(requests.frame(false), None);
+        // A photo that wasn't kept: the camera's answer is a cancel too, and the next cancel is
+        // a picker's.
+        requests.photo_asked();
+        assert_eq!(requests.cancelled(), None);
+        assert_eq!(requests.asked("dxf:3", false), None);
+        assert_eq!(requests.cancelled(), Some("dxf:3".into()));
         // A photo taken leaves the next cancel to a picker.
         requests.photo_asked();
         requests.photo_taken();

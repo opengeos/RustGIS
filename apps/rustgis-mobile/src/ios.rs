@@ -187,7 +187,7 @@ impl PickerDelegate {
                     // Copies of documents the user has elsewhere: left out of the device's
                     // backups (iCloud, a computer's), as the app can be given them again.
                     if std::fs::create_dir_all(&root).is_ok() {
-                        exclude_from_backup(&root);
+                        exclude_from_backup(&copied, &root);
                     }
                     let mut copies = 0usize;
                     let mut sources: Vec<Option<String>> = Vec::new();
@@ -216,15 +216,17 @@ impl PickerDelegate {
     }
 }
 
-/// Leaves `folder` (and what is in it) out of the device's backups.
-fn exclude_from_backup(folder: &Path) {
+/// Leaves `folder` (and what is in it) out of the device's backups, or says it couldn't.
+fn exclude_from_backup(shared: &Shared, folder: &Path) {
     let url = NSURL::fileURLWithPath(&NSString::from_str(&folder.to_string_lossy()));
     let yes = objc2_foundation::NSNumber::numberWithBool(true);
     // SAFETY: the key's documented value is an NSNumber holding a boolean.
     let set = unsafe { url.setResourceValue_forKey_error(Some(&yes), objc2_foundation::NSURLIsExcludedFromBackupKey) };
     if let Err(e) = set {
-        // Not data lost: the copies are then backed up with the app.
-        log::warn!("{} is kept in the device's backups: {}", folder.display(), e.localizedDescription());
+        // Not data lost: the copies are then backed up with the app, which is said.
+        let error = e.localizedDescription().to_string();
+        log::warn!("{} is kept in the device's backups: {error}", folder.display());
+        shared.failed(i18n::fmt("The copies of picked files will be in this device's backups: {error}", &[("error", &error)]));
     }
 }
 
@@ -386,6 +388,8 @@ impl CameraDelegate {
         // Cancel); written off it.
         let Some(jpeg) = image.and_then(|image| image.jpeg_representation(0.9)).map(|data| data.to_vec()) else {
             shared.failed(i18n::fmt("The photo wasn't kept: {error}", &[("error", &i18n::fmt("the camera gave no picture", &[]))]));
+            // No photo: the camera's answer is none, as when it is cancelled.
+            shared.add(Event::Cancelled);
             wake(self.mtm());
             return;
         };
@@ -397,12 +401,17 @@ impl CameraDelegate {
             let path = photos.join(&name);
             match std::fs::create_dir_all(&photos).and_then(|()| std::fs::write(&path, jpeg)) {
                 Ok(()) => writer.add(Event::Photo { name, path }),
-                Err(e) => writer.failed(i18n::fmt("The photo wasn't kept: {error}", &[("error", &e.to_string())])),
+                Err(e) => {
+                    writer.failed(i18n::fmt("The photo wasn't kept: {error}", &[("error", &e.to_string())]));
+                    // No photo: the camera's answer is none, as when it is cancelled.
+                    writer.add(Event::Cancelled);
+                }
             }
             count(&writer.working, false);
         });
         if let Err(e) = writing {
             shared.failed(i18n::fmt("The photo wasn't kept: {error}", &[("error", &e.to_string())]));
+            shared.add(Event::Cancelled);
             count(&shared.working, false);
         }
     }
