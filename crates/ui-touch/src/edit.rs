@@ -64,7 +64,31 @@ pub(crate) fn row_of(app: &RustGisApp, id: u32, feature: u64) -> Option<usize> {
 
 /// The shape of the feature in row `row` of layer `id`.
 pub(crate) fn shape(app: &RustGisApp, id: u32, row: usize) -> Option<Geometry> {
-    app.session.map().layer(id)?.dataset.features.get(row)?.geometry.clone()
+    shape_ref(app, id, row).cloned()
+}
+
+/// [`shape`], borrowed: what is drawn and checked each frame isn't copied for it.
+pub(crate) fn shape_ref(app: &RustGisApp, id: u32, row: usize) -> Option<&Geometry> {
+    app.session.map().layer(id)?.dataset.features.get(row)?.geometry.as_ref()
+}
+
+/// Whether putting vertex `v` of `shape` at `at` (`move`), or a new one there after it
+/// (`insert`), would leave two vertices in one place in a row: on the screen, within a point of
+/// each other. The edge between them would have no length, which the capture draft refuses too.
+pub(crate) fn doubles(app: &RustGisApp, shape: &Geometry, v: VertexId, action: &str, at: (f64, f64)) -> bool {
+    let edges = shape.edges();
+    let ring = matches!(shape, Geometry::Polygon(_));
+    let mine = || edges.iter().filter(|e| e.0.part == v.part && e.0.ring == v.ring);
+    let count = mine().count();
+    let after = mine().find(|e| e.0 == v).map(|e| e.2);
+    let before = mine().find(|e| e.0.index + 1 == v.index || (ring && v.index == 0 && e.0.index + 1 == count)).map(|e| e.1);
+    let near = match action {
+        "move" => [before, after],
+        "insert" => [shape.vertex(v), after],
+        _ => return false,
+    };
+    let Some(cross) = app.lonlat_to_screen(at.0, at.1) else { return false };
+    near.into_iter().flatten().filter_map(|c| app.lonlat_to_screen(c.x, c.y)).any(|p| p.distance(cross) < 1.0)
 }
 
 /// The feature of layer `id` drawn on top under the cross (within [`REACH`]), by its id.
@@ -218,10 +242,11 @@ pub(crate) fn status(kind: GeometryType, shape: &Geometry, picked: Option<Vertex
     if kind == GeometryType::Point {
         return tl!("Move the map to where the point goes, then Move Point Here.").to_string();
     }
-    match picked.and_then(|v| shape.vertices().iter().position(|(id, _)| *id == v)) {
+    let vertices = shape.vertices();
+    match picked.and_then(|v| vertices.iter().position(|(id, _)| *id == v)) {
         Some(n) => i18n::fmt(
             "Vertex {n} of {all} picked: move the map to where it goes, then Move Here. Add After puts a new vertex at the cross after it.",
-            &[("n", &(n + 1).to_string()), ("all", &shape.vertices().len().to_string())],
+            &[("n", &(n + 1).to_string()), ("all", &vertices.len().to_string())],
         ),
         None => tl!("Put the cross on a vertex and pick it.").to_string(),
     }
