@@ -345,7 +345,8 @@ struct Form {
     /// Where the cross's place snapped to on the last frame, with snapping on.
     snap: Option<edit::Snapped>,
     /// What [`Form::snap`] was found for: it is looked for again only when the cross moved, the
-    /// map zoomed, the vertex being moved changed or the project did.
+    /// map zoomed, the vertex being moved changed, the session changed or a background read
+    /// brought in features.
     snap_for: Option<SnapFor>,
     /// The height of the window the sheet was last drawn in: when it changes (the soft keyboard
     /// came or went), the field being typed in is scrolled back into view.
@@ -385,13 +386,15 @@ impl Form {
     }
 }
 
-/// What the cross's place was snapped for: its place, the vertex being moved, the project's state,
-/// the map's resolution and whether snapping was on.
+/// What the cross's place was snapped for: its place, the vertex being moved, the session's
+/// revision, the background reads finished (a streamed layer's features come in without a change
+/// to the session), the map's resolution and whether snapping was on.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct SnapFor {
     at: Option<(f64, f64)>,
     moving: Option<(u32, usize, rustgis_ui_egui::rustgis_engine::data::VertexId)>,
-    state: u64,
+    revision: u64,
+    sources: u64,
     res: f64,
     on: bool,
 }
@@ -774,7 +777,14 @@ fn capture(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     // on changed, not on every frame.
     let at = cross_place(app);
     let map = app.session.map();
-    let wants = SnapFor { at, moving, state: app.session.state(), res: map.camera.res, on: map.editing.snapping.enabled };
+    let wants = SnapFor {
+        at,
+        moving,
+        revision: app.session.revision,
+        sources: rustgis_ui_egui::rustgis_engine::map::source::generation(),
+        res: map.camera.res,
+        on: map.editing.snapping.enabled,
+    };
     if state.snap_for != Some(wants) {
         state.snap = at.and_then(|at| edit::snap(app, at, moving));
         state.snap_for = Some(wants);
@@ -1049,11 +1059,12 @@ fn edit_sheet(
         }
         return;
     };
-    let Some(shape) = edit::shape(app, target.id, row) else {
+    // The shape is borrowed for each look at it, not copied each frame: the buttons change it.
+    let Some(status) = edit::shape_ref(app, target.id, row).map(|shape| edit::status(target.kind, shape, editing.vertex)) else {
         state.editing = None;
         return;
     };
-    ui.label(RichText::new(edit::status(target.kind, &shape, editing.vertex)).size(14.0).color(t.text));
+    ui.label(RichText::new(status).size(14.0).color(t.text));
     let off = || tl!("Nothing was changed: the cross is off the map. Move the map under it.");
     if target.kind == GeometryType::Point {
         if action(ui, t, tl!("Move Point Here"), width, true, true) {
@@ -1068,8 +1079,8 @@ fn edit_sheet(
         let has = editing.vertex.is_some();
         if action(ui, t, tl!("Pick Vertex at Cross"), width, !has, true) {
             let middle = app.map.view_rect.map(|(rect, _)| rect.center());
-            match middle.and_then(|at| edit::vertex_near(app, &shape, at)) {
-                Some(v) => state.editing = Some(editing.picking(Some(v), Some(&shape))),
+            match middle.and_then(|at| edit::vertex_near(app, edit::shape_ref(app, target.id, row)?, at)) {
+                Some(v) => state.editing = Some(editing.picking(Some(v), edit::shape_ref(app, target.id, row))),
                 None => app.session.notify(tl!("No vertex is near the cross. Move the map so the cross is on one."), true),
             }
         }
@@ -1084,14 +1095,15 @@ fn edit_sheet(
                     let at = if act == "delete" { None } else { cross };
                     if act != "delete" && at.is_none() {
                         app.session.notify(off(), true);
-                    } else if at.is_some_and(|at| edit::doubles(app, &shape, v, act, at)) {
+                    } else if let Some(at) = at
+                        && edit::shape_ref(app, target.id, row).is_some_and(|shape| edit::doubles(app, shape, v, act, at))
+                    {
                         app.session.notify(
                             tl!("Nothing was changed: the cross is on the vertex next to it, and two in one place make an edge of no length. Move the map."),
                             true,
                         );
                     } else if let Some(next) = edit::vertex(app, target.id, row, v, act, at) {
-                        let now = edit::shape(app, target.id, row);
-                        state.editing = Some(editing.picking(next, now.as_ref()));
+                        state.editing = Some(editing.picking(next, edit::shape_ref(app, target.id, row)));
                     }
                 }
             }
@@ -1523,6 +1535,21 @@ mod tests {
         set_form(&ctx, Form { shown: Some(cities.instance), calendar: Some(("seen".into(), (2026, 3))), ..Form::default() });
         frame(&mut app, &ctx, Sheet::Capture);
         assert!(form(&ctx).calendar.is_some());
+    }
+
+    #[test]
+    fn the_snap_is_looked_for_again_once_a_background_read_lands() {
+        let ctx = egui::Context::default();
+        let mut app = RustGisApp::with_sample();
+        target(&mut app, GeometryType::Polyline);
+        frame(&mut app, &ctx, Sheet::Capture);
+        assert!(form(&ctx).snap_for.is_some());
+        // A stale snap the cache holds, then features read in the background: it is let go.
+        let stale = edit::Snapped { lon: 1.0, lat: 2.0, kind: "vertex" };
+        set_form(&ctx, Form { snap: Some(stale), ..form(&ctx) });
+        rustgis_ui_egui::rustgis_engine::map::source::wake();
+        frame(&mut app, &ctx, Sheet::Capture);
+        assert_ne!(form(&ctx).snap, Some(stale));
     }
 
     #[test]
