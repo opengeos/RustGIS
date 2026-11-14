@@ -33,6 +33,9 @@ pub trait Phone: Platform {
 /// no session to tell).
 type Refusals = Rc<RefCell<Vec<String>>>;
 
+/// The purpose the picker was last asked for.
+type Asked = Rc<RefCell<String>>;
+
 /// The app: the desktop front end, with the files to open once the window runs.
 struct App<P: Phone> {
     app: RustGisApp,
@@ -59,6 +62,8 @@ struct App<P: Phone> {
     /// Picked files the front end reads as bytes (`Services::inbox`).
     inbox: Inbox,
     refusals: Refusals,
+    /// What the picker showing was asked for (`Platform::pick_files`'s purpose), until it answers.
+    asked: Asked,
     /// Files picked for a dialog (purpose, name, copy), until their picker has answered in
     /// full: a Shapefile's parts arrive one by one and are read together.
     waiting: Vec<(String, String, PathBuf)>,
@@ -112,8 +117,17 @@ impl<P: Phone> App<P> {
         }
         for event in phone.take_events() {
             match event {
-                Event::Picked { purpose, name, path } => self.waiting.push((purpose, name, path)),
-                Event::Cancelled => {}
+                Event::Picked { purpose, name, path } => {
+                    self.asked.borrow_mut().clear();
+                    self.waiting.push((purpose, name, path));
+                }
+                // A cancelled DXF request is ended, so Import DXF stops waiting for it.
+                Event::Cancelled => {
+                    let asked = std::mem::take(&mut *self.asked.borrow_mut());
+                    if asked.starts_with("dxf:") {
+                        self.inbox.lock().unwrap_or_else(|e| e.into_inner()).push((crate::mark(&asked), Vec::new()));
+                    }
+                }
                 Event::Photo { path, .. } => self.app.photos.push(path),
                 Event::Saved { name } => self.app.session.notify(i18n::fmt("Saved {name}.", &[("name", &name)]), false),
                 Event::Position(fix) if self.locating => self.app.report_position(fix),
@@ -218,7 +232,7 @@ impl<P: Phone> App<P> {
 /// Reads one picker's files (name, copy) into `inbox`, marked for the dialog that asked, and
 /// removes the copies: their bytes are all that was wanted of them.
 fn read_batch(purpose: &str, files: Vec<(String, PathBuf)>, inbox: &Inbox, problems: &Problems) {
-    let mark = mark(purpose);
+    let mark = crate::mark(purpose);
     let say = |problem| problems.lock().unwrap_or_else(|e| e.into_inner()).push(problem);
     let mut read = Vec::new();
     // The bytes read so far, of this batch.
@@ -247,6 +261,10 @@ fn read_batch(purpose: &str, files: Vec<(String, PathBuf)>, inbox: &Inbox, probl
     for text in found {
         say(Problem::Shapefile(text));
     }
+    // A DXF request with nothing read is ended, as a cancelled one is: Import DXF stops waiting.
+    if mark.starts_with(rustgis_ui_egui::DXF_PICK) && read.is_empty() {
+        inbox.lock().unwrap_or_else(|e| e.into_inner()).push((mark.clone(), Vec::new()));
+    }
     inbox.lock().unwrap_or_else(|e| e.into_inner()).extend(read.into_iter().map(|(name, bytes)| (format!("{mark}{name}"), bytes)));
 }
 
@@ -258,25 +276,14 @@ fn remove_copy(path: &Path) {
     }
 }
 
-/// What starts the name of a file from the picker for `purpose` in the inbox, as the browser's
-/// shell marks them: the front end sends a marked file to the dialog that asked for it.
-fn mark(purpose: &str) -> &'static str {
-    match purpose {
-        "shortcuts" => rustgis_ui_egui::SHORTCUT_PICK,
-        "text" => rustgis_ui_egui::DELIMITED_PICK,
-        "shapefile" => rustgis_ui_egui::SHAPEFILE_PICK,
-        p if p.starts_with(rustgis_ui_egui::TOOL_FILE_PURPOSE) => rustgis_ui_egui::TOOL_FILE_PICK,
-        _ => "",
-    }
-}
-
 /// Gives the front end the phone's file picker, the way the browser's shell gives its own:
 /// Open and Add Data ask through `open_async`, and what is saved or exported is offered
 /// through `download`.
-fn use_picker<P: Phone + 'static>(app: &mut RustGisApp, phone: &Rc<P>, inbox: &Inbox, refusals: &Refusals) {
-    let (picker, refused) = (phone.clone(), refusals.clone());
+fn use_picker<P: Phone + 'static>(app: &mut RustGisApp, phone: &Rc<P>, inbox: &Inbox, refusals: &Refusals, asked: &Asked) {
+    let (picker, refused, asking) = (phone.clone(), refusals.clone(), asked.clone());
     app.services.open_async = Some(Box::new(move |purpose: &str| {
         log::info!("asking for files: {purpose}");
+        *asking.borrow_mut() = purpose.to_string();
         if let Err(e) = picker.pick_files(purpose) {
             log::warn!("{e}");
             refused.borrow_mut().push(e);
@@ -443,11 +450,11 @@ pub fn run<P: Phone + 'static>(
     pushed: Vec<PathBuf>,
     options: eframe::NativeOptions,
 ) -> eframe::Result {
-    let (inbox, refusals) = (Inbox::default(), Refusals::default());
+    let (inbox, refusals, asked) = (Inbox::default(), Refusals::default(), Asked::default());
     let phone = match phone {
         Ok(phone) => {
             let phone = Rc::new(phone);
-            use_picker(&mut app, &phone, &inbox, &refusals);
+            use_picker(&mut app, &phone, &inbox, &refusals, &asked);
             Some(phone)
         }
         Err(e) => {
@@ -474,6 +481,7 @@ pub fn run<P: Phone + 'static>(
                 phone,
                 inbox,
                 refusals,
+                asked,
                 waiting: Vec::new(),
                 problems: Problems::default(),
                 reading: Arc::default(),

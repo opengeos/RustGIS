@@ -29,6 +29,10 @@ allow_attributes_without_reason = "warn"
 too_many_arguments = "allow"
 type_complexity = "allow"
 
+[dev-dependencies]
+rustgis-engine = { workspace = true }
+rustgis-ui-egui = { workspace = true }
+
 [target.'cfg(target_os = "android")'.dependencies]
 # Without the `geolibre` feature: a phone can't run the `geolibre` program.
 rustgis-engine = { workspace = true }
@@ -64,3 +68,5 @@ objc2-foundation = "0.3"
 objc2-ui-kit = { version = "0.3", features = ["objc2-uniform-type-identifiers"] }
 objc2-core-location = "0.3"
 objc2-uniform-type-identifiers = "0.3"
+# The file coordinator's reader (`NSFileCoordinator`): the version objc2-foundation uses.
+block2 = "0.6"

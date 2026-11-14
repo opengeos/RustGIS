@@ -285,13 +285,14 @@ cp parcels.gpkg "$(xcrun simctl get_app_container booted org.rustgis.mobile data
 
 | | On iOS |
 |---|---|
-| Opening | UIKit's document picker, any file, several at once (a Shapefile's parts). It gives the original documents, wherever they are (iCloud Drive, another app's folder): each is read inside its security scope and copied into `Library/Application Support/picked/…`, off the main thread, and opened from there as on Android. The original is not changed |
-| Saving | The bytes are written to the app's `tmp` folder under the name offered, and the document picker exports a copy where the user chooses; then the file in `tmp` is removed. Cancelled, the app says the file wasn't saved |
+| Opening | UIKit's document picker, any file, several at once (a Shapefile's parts). It gives the original documents, wherever they are (iCloud Drive, another app's folder): each is read inside its security scope, through a file coordinator (a document in iCloud Drive is downloaded first), and copied into `Library/Application Support/picked/…` off the main thread, a folder for each folder the documents came from, and opened from there as on Android. The original is not changed |
+| Saving | The bytes are written to the app's `tmp` folder under the name offered, off the main thread, and then the document picker exports a copy where the user chooses; then the file in `tmp` is removed. Cancelled, the app says the file wasn't saved |
 | Position | Core Location, best accuracy. Asked the first time (`NSLocationWhenInUseUsageDescription`); positions start once the user allows them. Refused, now or later in Settings, the app says so and stops asking |
 | Out of sight | Recording a track turns on background location updates (the app's `location` background mode in `Info.plist`), with iOS's indicator that an app is using the location. Positions found out of sight wait, at most 200,000, as on Android |
 | Camera | `UIImagePickerController`: the photo is written as a JPEG to `Library/Application Support/photos`. A device without a camera (the Simulator) says so |
 | Soft keyboard | winit's own (`UIKeyInput`): letters and Backspace reach the form. The room the keyboard takes comes from UIKit's keyboard notices and keeps the field above it. Return types nothing, as winit 0.30 hands it on as a character: typing ends with a tap outside the field |
 | Folders | Settings, app data and the cache are in `Library/Application Support` |
+| Plain HTTP | App Transport Security is off for every host (`NSAllowsArbitraryLoads`): a project's tile layers and services may be any `http://` server, not known when the app is built, so a list of exceptions can't name them. The App Review notes say so |
 
 Two things winit 0.30 doesn't do on iOS 27 are done in `src/ios.rs`:
 

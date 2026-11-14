@@ -31,35 +31,31 @@ use objc2_uniform_type_identifiers::UTTypeItem;
 use rustgis_engine::platform::{Event, Fix, Platform};
 use rustgis_ui_egui::i18n;
 use std::cell::{Cell, RefCell};
-use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-/// The most events kept for the front end: two days of a position a second out of sight, as on
-/// Android. Past it the oldest go, and how many is said.
-const MOST_EVENTS: usize = 200_000;
+/// The most positions kept for the front end: two days of one a second out of sight, as on
+/// Android. Past it the oldest go, and how many is said ([`crate::Queue`]).
+const MOST_POSITIONS: usize = 200_000;
 
 /// What the delegates report, until the next frame takes it.
-#[derive(Default)]
 struct Shared {
-    /// Oldest first.
-    events: Mutex<VecDeque<Event>>,
-    /// Events dropped past [`MOST_EVENTS`] since the front end last took them.
-    dropped: AtomicUsize,
+    events: Mutex<crate::Queue>,
     /// Pickers shown and not yet answered in full (a picked document is copied after its picker
-    /// has closed).
+    /// has closed, a file to save is written before its picker shows).
     asked: Mutex<usize>,
+}
+
+impl Default for Shared {
+    fn default() -> Shared {
+        Shared { events: Mutex::new(crate::Queue::new(MOST_POSITIONS)), asked: Mutex::new(0) }
+    }
 }
 
 impl Shared {
     fn add(&self, event: Event) {
-        let mut events = self.events.lock().unwrap_or_else(|e| e.into_inner());
-        if events.len() >= MOST_EVENTS {
-            events.pop_front();
-            self.dropped.fetch_add(1, Ordering::Relaxed);
-        }
-        events.push_back(event);
+        self.events.lock().unwrap_or_else(|e| e.into_inner()).add(event);
     }
 
     fn failed(&self, text: String) {
@@ -160,15 +156,22 @@ impl PickerDelegate {
                 // The documents are the originals, wherever they are (iCloud Drive, another
                 // app's folder): each is read inside its security scope, held until its copy is
                 // made.
-                // One folder for what was picked together, and for nothing else: a file read
-                // with the one beside it (a .mif and its .mid) finds it, and a later pick of the
-                // same name can't replace a file the session has open.
-                let folder = ivars.folders.support.join("picked").join(unique());
+                // One folder for what was picked together, and for nothing else, with a folder of
+                // its own for each folder the documents came from: a file read with the one
+                // beside it (a .shp and its .dbf) finds that one, not one of the same name picked
+                // from elsewhere, and a later pick can't replace a file the session has open.
+                let picked = ivars.folders.support.join("picked").join(unique());
                 // Copied off the main thread: a document can be large, or come from the network.
                 let copied = shared.clone();
                 let copying = std::thread::Builder::new().name("picked documents".into()).spawn(move || {
+                    let mut sources: Vec<Option<String>> = Vec::new();
                     for url in urls {
-                        copy_in(&copied, &purpose, &url, &folder);
+                        let source = url.URLByDeletingLastPathComponent().and_then(|u| u.path()).map(|p| p.to_string());
+                        let k = sources.iter().position(|s| *s == source).unwrap_or_else(|| {
+                            sources.push(source);
+                            sources.len() - 1
+                        });
+                        copy_in(&copied, &purpose, &url, &picked.join(k.to_string()));
                     }
                     copied.answered();
                 });
@@ -183,23 +186,20 @@ impl PickerDelegate {
 
 /// Copies the picked document at `url` into `folder` in the app's storage, where the front end
 /// can open it by path, and says so; or says why it wasn't. The document is read inside its
-/// security scope.
+/// security scope, through a file coordinator: one in iCloud Drive is downloaded first, and
+/// another app writing it is waited for.
 fn copy_in(shared: &Shared, purpose: &str, url: &NSURL, folder: &Path) {
     let name = safe_name(&url.lastPathComponent().map(|n| n.to_string()).unwrap_or_default());
     // SAFETY: a URL the document picker returned; the scope ends below, once read.
     let scoped = unsafe { url.startAccessingSecurityScopedResource() };
     let mut file = folder.join(&name);
-    // Two documents of one name picked together (from two folders) both keep their bytes.
+    // Two documents of one name from one folder can't be; a name taken is kept apart all the same.
     let mut n = 2;
     while file.exists() {
         file = folder.join(format!("{n}-{name}"));
         n += 1;
     }
-    let copied = url
-        .path()
-        .map(|p| PathBuf::from(p.to_string()))
-        .ok_or_else(|| i18n::fmt("the system gave no path for it", &[]))
-        .and_then(|path| std::fs::create_dir_all(folder).and_then(|()| std::fs::copy(path, &file)).map_err(|e| e.to_string()));
+    let copied = coordinated_copy(url, folder, &file);
     if scoped {
         // SAFETY: the scope `startAccessingSecurityScopedResource` started above.
         unsafe { url.stopAccessingSecurityScopedResource() };
@@ -215,6 +215,38 @@ fn copy_in(shared: &Shared, purpose: &str, url: &NSURL, folder: &Path) {
             remove_with_folder(&file);
             shared.failed(i18n::fmt("{name} wasn't opened: {error}", &[("name", &name), ("error", &error)]));
         }
+    }
+}
+
+/// Copies the document at `url` to `file` (in `folder`, made first) inside a coordinated read.
+fn coordinated_copy(url: &NSURL, folder: &Path, file: &Path) -> Result<(), String> {
+    use objc2::AnyThread as _;
+    std::fs::create_dir_all(folder).map_err(|e| e.to_string())?;
+    let result: RefCell<Option<Result<(), String>>> = RefCell::new(None);
+    let reader = block2::RcBlock::new(|read: std::ptr::NonNull<NSURL>| {
+        // SAFETY: the URL the coordinator hands its reader, alive while the reader runs.
+        let read = unsafe { read.as_ref() };
+        let copied = read
+            .path()
+            .map(|p| PathBuf::from(p.to_string()))
+            .ok_or_else(|| i18n::fmt("the system gave no path for it", &[]))
+            .and_then(|path| std::fs::copy(path, file).map(|_| ()).map_err(|e| e.to_string()));
+        result.replace(Some(copied));
+    });
+    let coordinator = objc2_foundation::NSFileCoordinator::initWithFilePresenter(objc2_foundation::NSFileCoordinator::alloc(), None);
+    let mut error = None;
+    coordinator.coordinateReadingItemAtURL_options_error_byAccessor(
+        url,
+        objc2_foundation::NSFileCoordinatorReadingOptions::empty(),
+        Some(&mut error),
+        &reader,
+    );
+    // The reader is done with: what it found is taken.
+    drop(reader);
+    match (result.into_inner(), error) {
+        (Some(copied), _) => copied,
+        (None, Some(error)) => Err(error.localizedDescription().to_string()),
+        (None, None) => Err(i18n::fmt("the system didn't let it be read", &[])),
     }
 }
 
@@ -301,21 +333,28 @@ impl CameraDelegate {
         if ivars.answered.replace(true) {
             return;
         }
-        let shared = &ivars.shared;
-        let written = image
-            .and_then(|image| image.jpeg_representation(0.9))
-            .ok_or_else(|| i18n::fmt("the camera gave no picture", &[]))
-            .and_then(|jpeg| {
-                let name = format!("photo-{}.jpg", unique());
-                let path = ivars.photos.join(&name);
-                std::fs::create_dir_all(&ivars.photos).and_then(|()| std::fs::write(&path, jpeg.to_vec())).map_err(|e| e.to_string())?;
-                Ok((name, path))
-            });
-        match written {
-            Ok((name, path)) => shared.add(Event::Photo { name, path }),
-            Err(error) => shared.failed(i18n::fmt("The photo wasn't kept: {error}", &[("error", &error)])),
+        let shared = ivars.shared.clone();
+        // Encoded here, on the main thread, as UIKit's images are read there (one step, no
+        // Cancel); written off it.
+        let Some(jpeg) = image.and_then(|image| image.jpeg_representation(0.9)).map(|data| data.to_vec()) else {
+            shared.failed(i18n::fmt("The photo wasn't kept: {error}", &[("error", &i18n::fmt("the camera gave no picture", &[]))]));
+            shared.answered();
+            return;
+        };
+        let (photos, writer) = (ivars.photos.clone(), shared.clone());
+        let writing = std::thread::Builder::new().name("photo".into()).spawn(move || {
+            let name = format!("photo-{}.jpg", unique());
+            let path = photos.join(&name);
+            match std::fs::create_dir_all(&photos).and_then(|()| std::fs::write(&path, jpeg)) {
+                Ok(()) => writer.add(Event::Photo { name, path }),
+                Err(e) => writer.failed(i18n::fmt("The photo wasn't kept: {error}", &[("error", &e.to_string())])),
+            }
+            writer.answered();
+        });
+        if let Err(e) = writing {
+            shared.failed(i18n::fmt("The photo wasn't kept: {error}", &[("error", &e.to_string())]));
+            shared.answered();
         }
-        shared.answered();
     }
 }
 
@@ -442,9 +481,11 @@ define_class!(
             let frame = notification.userInfo().and_then(|info| info.objectForKey(unsafe { UIKeyboardFrameEndUserInfoKey }))
                 .and_then(|value| value.downcast::<NSValue>().ok())
                 .map(|value| unsafe { value.CGRectValue() });
-            let Some(screen) = key_window(mtm).map(|window| window.screen().bounds()) else { return };
-            // The part of the screen under the keyboard's top, when it ends on the screen.
-            let height = frame.map(|f| (screen.size.height - f.origin.y).clamp(0.0, screen.size.height)).unwrap_or(0.0);
+            // The keyboard's frame is the screen's; the window's frame there (which isn't the whole
+            // screen in Stage Manager or Split View) says how much of the window it covers.
+            let Some(window) = key_window(mtm).map(|window| window.frame()) else { return };
+            let bottom = window.origin.y + window.size.height;
+            let height = frame.map(|f| (bottom - f.origin.y).clamp(0.0, window.size.height)).unwrap_or(0.0);
             self.ivars().height.set(height);
         }
 
@@ -621,6 +662,18 @@ pub struct Ios {
     location: Retained<CLLocationManager>,
     located: Retained<LocationDelegate>,
     keyboard: Retained<KeyboardObserver>,
+    /// A file to save being written, until its export picker shows.
+    saving: RefCell<Option<Saving>>,
+}
+
+/// Whether a file to save is written: `None` while it is being written.
+type Written = Arc<Mutex<Option<Result<(), String>>>>;
+
+/// A file to save, being written to the app's tmp folder before its export picker shows.
+struct Saving {
+    name: String,
+    temporary: PathBuf,
+    done: Written,
 }
 
 impl Drop for Ios {
@@ -652,7 +705,40 @@ impl Ios {
             location,
             located,
             keyboard: KeyboardObserver::new(mtm),
+            saving: RefCell::new(None),
         }
+    }
+
+    /// Shows the export picker for the file being saved, once it is written; or says why it
+    /// wasn't. Asked each frame (`take_events`), on the main thread.
+    fn show_export(&self) {
+        let written = {
+            let saving = self.saving.borrow();
+            let Some(saving) = saving.as_ref() else { return };
+            match saving.done.lock().unwrap_or_else(|e| e.into_inner()).take() {
+                Some(written) => written,
+                None => return,
+            }
+        };
+        let Some(Saving { name, temporary, .. }) = self.saving.borrow_mut().take() else { return };
+        let presenter = written.and_then(|()| self.presenter());
+        let presenter = match presenter {
+            Ok(presenter) => presenter,
+            Err(error) => {
+                remove_with_folder(&temporary);
+                self.shared.failed(i18n::fmt("{name} wasn't saved: {error}", &[("name", &name), ("error", &error)]));
+                self.shared.answered();
+                return;
+            }
+        };
+        let url = NSURL::fileURLWithPath(&NSString::from_str(&temporary.to_string_lossy()));
+        let urls = NSArray::from_retained_slice(&[url]);
+        let picker =
+            UIDocumentPickerViewController::initForExportingURLs_asCopy(UIDocumentPickerViewController::alloc(self.mtm), &urls, true);
+        let delegate = PickerDelegate::new(self.mtm, self.shared.clone(), self.folders.clone(), Asked::Save { name, temporary });
+        picker.setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
+        self.picker.replace(Some(delegate));
+        presenter.presentViewController_animated_completion(&picker, true, None);
     }
 
     /// The window's view controller on top, to show a picker over.
@@ -714,25 +800,23 @@ impl Platform for Ios {
         if self.already_asking(i18n::fmt("{name} wasn't saved: another file is waiting for its place to be chosen.", &[("name", name)])) {
             return Ok(());
         }
-        let presenter = self.presenter()?;
         // The export picker copies a file: it is written to the app's tmp folder first, under
-        // the name offered, and removed once the picker has answered.
+        // the name offered (off the main thread: a project or an export can be large), and the
+        // picker is shown by the frame after it is written ([`Ios::show_export`]). The file is
+        // removed once the picker has answered.
         let temporary = self.folders.temporary.join("save").join(unique()).join(safe_name(name));
-        let written = temporary.parent().map(std::fs::create_dir_all).unwrap_or(Ok(())).and_then(|()| std::fs::write(&temporary, &bytes));
-        if let Err(e) = written {
-            remove_with_folder(&temporary);
+        let done: Written = Arc::default();
+        let (file, finished) = (temporary.clone(), done.clone());
+        let writing = std::thread::Builder::new().name("file to save".into()).spawn(move || {
+            let written = file.parent().map(std::fs::create_dir_all).unwrap_or(Ok(())).and_then(|()| std::fs::write(&file, &bytes));
+            *finished.lock().unwrap_or_else(|e| e.into_inner()) = Some(written.map_err(|e| e.to_string()));
+        });
+        if let Err(e) = writing {
             return Err(i18n::fmt("{name} wasn't saved: {error}", &[("name", name), ("error", &e.to_string())]));
         }
-        let url = NSURL::fileURLWithPath(&NSString::from_str(&temporary.to_string_lossy()));
-        let urls = NSArray::from_retained_slice(&[url]);
-        let picker =
-            UIDocumentPickerViewController::initForExportingURLs_asCopy(UIDocumentPickerViewController::alloc(self.mtm), &urls, true);
-        let delegate =
-            PickerDelegate::new(self.mtm, self.shared.clone(), self.folders.clone(), Asked::Save { name: name.to_string(), temporary });
-        picker.setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
-        self.picker.replace(Some(delegate));
+        // Asked from now: another save waits for this one.
         self.shared.ask();
-        presenter.presentViewController_animated_completion(&picker, true, None);
+        self.saving.replace(Some(Saving { name: name.to_string(), temporary, done }));
         Ok(())
     }
 
@@ -794,16 +878,8 @@ impl Platform for Ios {
     }
 
     fn take_events(&self) -> Vec<Event> {
-        let mut taken: Vec<Event> = self.shared.events.lock().unwrap_or_else(|e| e.into_inner()).drain(..).collect();
-        let dropped = self.shared.dropped.swap(0, Ordering::Relaxed);
-        if dropped > 0 {
-            let text = i18n::fmt(
-                "{count} positions found while RustGIS was out of sight were dropped: more were waiting than it keeps.",
-                &[("count", &dropped.to_string())],
-            );
-            taken.insert(0, Event::Failed(text));
-        }
-        taken
+        self.show_export();
+        self.shared.events.lock().unwrap_or_else(|e| e.into_inner()).take()
     }
 }
 

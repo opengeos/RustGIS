@@ -23,7 +23,9 @@ esac
 
 root=$(cd "$(dirname "$0")/../.." && pwd)
 here=$root/apps/rustgis-mobile
-target_dir=${CARGO_TARGET_DIR:-$root/target}
+# Cargo runs in the checkout's root, where a relative CARGO_TARGET_DIR is read from.
+target_dir=${CARGO_TARGET_DIR:-target}
+case $target_dir in /*) ;; *) target_dir=$root/$target_dir ;; esac
 out=$target_dir/ios
 app=$out/RustGIS.app
 
@@ -31,7 +33,8 @@ app=$out/RustGIS.app
 flag=
 if [ "$profile" = release ]; then flag=--release; fi
 # The SDK's own clang builds the C parts (the bundled SQLite, the Zstandard decoder).
-export SDKROOT=$(xcrun --sdk "$sdk" --show-sdk-path)
+SDKROOT=$(xcrun --sdk "$sdk" --show-sdk-path)
+export SDKROOT
 export IPHONEOS_DEPLOYMENT_TARGET=15.0
 (cd "$root" && cargo build $flag --target "$target" -p rustgis-mobile --bin rustgis-mobile)
 

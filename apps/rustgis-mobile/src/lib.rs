@@ -44,6 +44,79 @@ fn without_sidecars(picked: Vec<std::path::PathBuf>) -> Vec<std::path::PathBuf> 
     kept
 }
 
+/// What starts the name of a file from the picker for `purpose` in the inbox, as the browser's
+/// shell marks them: the front end sends a marked file to the dialog that asked for it. A DXF
+/// request (`dxf:<id>`) carries its id, as Import DXF matches its answer by it.
+#[cfg(any(target_os = "android", target_os = "ios", test))]
+fn mark(purpose: &str) -> String {
+    if let Some(id) = purpose.strip_prefix("dxf:") {
+        return format!("{}{id}:", rustgis_ui_egui::DXF_PICK);
+    }
+    match purpose {
+        "shortcuts" => rustgis_ui_egui::SHORTCUT_PICK,
+        "text" => rustgis_ui_egui::DELIMITED_PICK,
+        "shapefile" => rustgis_ui_egui::SHAPEFILE_PICK,
+        p if p.starts_with(rustgis_ui_egui::TOOL_FILE_PURPOSE) => rustgis_ui_egui::TOOL_FILE_PICK,
+        _ => "",
+    }
+    .to_string()
+}
+
+/// What the phone reported, oldest first, until the front end takes it: at most `most`
+/// positions. Past that the oldest position goes, and how many went is said when they are
+/// taken; nothing else is dropped (a picked file, a failure), as positions are what pile up, out
+/// of sight for days.
+#[cfg(any(target_os = "ios", test))]
+struct Queue {
+    events: std::collections::VecDeque<rustgis_engine::platform::Event>,
+    most: usize,
+    positions: usize,
+    dropped: usize,
+}
+
+#[cfg(any(target_os = "ios", test))]
+impl Queue {
+    fn new(most: usize) -> Queue {
+        Queue { events: Default::default(), most: most.max(1), positions: 0, dropped: 0 }
+    }
+
+    fn add(&mut self, event: rustgis_engine::platform::Event) {
+        use rustgis_engine::platform::Event;
+        if matches!(event, Event::Position(_)) {
+            if self.positions >= self.most
+                && let Some(oldest) = self.events.iter().position(|e| matches!(e, Event::Position(_)))
+            {
+                self.events.remove(oldest);
+                self.positions -= 1;
+                self.dropped += 1;
+            }
+            self.positions += 1;
+        }
+        self.events.push_back(event);
+    }
+
+    fn is_empty(&self) -> bool {
+        self.events.is_empty()
+    }
+
+    /// Everything waiting, oldest first, after a failure that says how many positions were
+    /// dropped, when any were.
+    fn take(&mut self) -> Vec<rustgis_engine::platform::Event> {
+        let mut taken = Vec::with_capacity(self.events.len() + 1);
+        if self.dropped > 0 {
+            let text = rustgis_ui_egui::i18n::fmt(
+                "{count} positions found while RustGIS was out of sight were dropped: more were waiting than it keeps.",
+                &[("count", &self.dropped.to_string())],
+            );
+            taken.push(rustgis_engine::platform::Event::Failed(text));
+        }
+        taken.extend(self.events.drain(..));
+        self.positions = 0;
+        self.dropped = 0;
+        taken
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::without_sidecars;
@@ -60,6 +133,32 @@ mod tests {
     fn parts_picked_with_their_file_are_left_to_it() {
         assert_eq!(kept(&["roads.shp", "roads.dbf", "roads.shx", "roads.prj", "roads.cpg"]), ["roads.shp"]);
         assert_eq!(kept(&["ROADS.SHP", "Roads.DBF", "parcels.mif", "parcels.MID"]), ["ROADS.SHP", "parcels.mif"]);
+    }
+
+    #[test]
+    fn a_dxf_request_keeps_its_id_in_its_mark() {
+        assert_eq!(super::mark("dxf:7"), format!("{}7:", rustgis_ui_egui::DXF_PICK));
+        assert_eq!(super::mark("shapefile"), rustgis_ui_egui::SHAPEFILE_PICK);
+        assert_eq!(super::mark("data"), "");
+    }
+
+    #[test]
+    fn the_oldest_positions_go_past_the_limit_and_are_counted() {
+        use rustgis_engine::platform::{Event, Fix};
+        let at = |lon: f64| Event::Position(Fix { lon, lat: 0.0, accuracy: None, time: None });
+        let mut queue = super::Queue::new(2);
+        queue.add(Event::Cancelled);
+        for lon in [1.0, 2.0, 3.0] {
+            queue.add(at(lon));
+        }
+        let taken = queue.take();
+        // The dropped position is said first; the picker's answer is kept.
+        assert!(matches!(&taken[0], Event::Failed(text) if text.starts_with("1 positions")), "{taken:?}");
+        assert_eq!(&taken[1..], &[Event::Cancelled, at(2.0), at(3.0)]);
+        // Taken, the queue starts again: under the limit, nothing is said.
+        queue.add(at(4.0));
+        assert_eq!(queue.take(), vec![at(4.0)]);
+        assert!(queue.is_empty());
     }
 
     #[test]
