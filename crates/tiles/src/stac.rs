@@ -90,6 +90,8 @@ pub struct Item {
     /// `self` link, which it could point anywhere); `None` for an item given whole, whose assets
     /// may then only be public web addresses.
     pub origin: Option<String>,
+    /// Observed network reach of the document this item was read from.
+    pub origin_reach: crate::address::Reach,
     /// Its properties, to show: the first hundred plain values (not objects or arrays), long
     /// text cut.
     pub properties: Option<Value>,
@@ -368,10 +370,17 @@ pub fn parse_collections(bytes: &[u8]) -> Result<Vec<Collection>, String> {
 /// The items of a search's answer (an ItemCollection), and the address of its next page. `from`
 /// is the address the answer came from, which relative addresses are resolved against.
 pub fn parse_items(bytes: &[u8], from: &str) -> Result<(Vec<Item>, Option<String>), String> {
+    parse_items_from_origin(bytes, &crate::address::Origin::named(from))
+}
+
+/// Like [`parse_items`], carrying the observed post-redirect [`crate::address::Origin`] and reach.
+pub fn parse_items_from_origin(bytes: &[u8], origin: &crate::address::Origin) -> Result<(Vec<Item>, Option<String>), String> {
     let v = json(bytes)?;
     let features = v.get("features").and_then(Value::as_array).ok_or("the answer isn't a list of STAC items")?;
-    let items = features.iter().take(MAX_ITEMS).filter_map(|f| item(f, Some(from))).collect();
-    let next = link(&v, "next", from);
+    let from = origin.url();
+    let reach = origin.reach();
+    let items = features.iter().take(MAX_ITEMS).filter_map(|f| item_with_reach(f, Some(from), Some(reach))).collect();
+    let next = link(&v, "next", from).filter(|u| origin.check(u).is_ok());
     Ok((items, next))
 }
 
@@ -414,7 +423,12 @@ pub fn api_of(bytes: &[u8], from: &str) -> Option<String> {
 }
 
 pub fn parse_item(bytes: &[u8], from: &str) -> Result<Item, String> {
-    item(&json(bytes)?, Some(from)).ok_or_else(|| "the answer isn't a STAC item".to_string())
+    parse_item_from_origin(bytes, &crate::address::Origin::named(from))
+}
+
+/// Like [`parse_item`], carrying the observed post-redirect [`crate::address::Origin`] and reach.
+pub fn parse_item_from_origin(bytes: &[u8], origin: &crate::address::Origin) -> Result<Item, String> {
+    item_with_reach(&json(bytes)?, Some(origin.url()), Some(origin.reach())).ok_or_else(|| "the answer isn't a STAC item".to_string())
 }
 
 /// An item from its JSON (as STAC gives it, or as [`item_json`] wrote it).
@@ -434,6 +448,10 @@ fn link(v: &Value, rel: &str, from: &str) -> Option<String> {
 }
 
 fn item(f: &Value, from: Option<&str>) -> Option<Item> {
+    item_with_reach(f, from, None)
+}
+
+pub(crate) fn item_with_reach(f: &Value, from: Option<&str>, reach: Option<crate::address::Reach>) -> Option<Item> {
     if f.get("type").and_then(Value::as_str) != Some("Feature") {
         return None;
     }
@@ -532,6 +550,8 @@ fn item(f: &Value, from: Option<&str>) -> Option<Item> {
             .collect();
         Value::Object(kept)
     });
+    let origin_reach =
+        reach.unwrap_or_else(|| from.map_or(crate::address::Reach::Public, |u| crate::address::reach(crate::logins::inner(u))));
     Some(Item {
         id,
         collection: text(f.get("collection")),
@@ -543,6 +563,7 @@ fn item(f: &Value, from: Option<&str>) -> Option<Item> {
         assets,
         url,
         origin: from.map(str::to_string),
+        origin_reach,
         properties,
         tile: props.and_then(tile_of),
     })
@@ -709,6 +730,12 @@ impl Item {
             .or_else(|| self.assets.iter().filter(picture).find(|a| a.roles.iter().any(|r| r == "overview")))
     }
 
+    /// Checks `href` against the document origin and observed reach this item was read from.
+    pub fn check_href(&self, href: &str) -> Result<(), String> {
+        let origin = crate::address::Origin { url: self.origin.clone().unwrap_or_else(|| UNTRUSTED.to_string()), reach: self.origin_reach };
+        origin.check(href)
+    }
+
     /// The address of the asset to add (see [`Item::pick`]), checked: a plain web address the item
     /// may point to, not one that needs signing or a cloud store's own protocol.
     pub fn asset_href(&self, key: Option<&str>) -> Result<(String, String), String> {
@@ -724,7 +751,7 @@ impl Item {
         // Judged by where the item came from; an item given whole may only point at public
         // addresses (as a document on the web may). A Planetary Computer asset is signed by the
         // caller ([`needs_signing`]).
-        crate::address::check(&a.href, Some(self.origin.as_deref().unwrap_or(UNTRUSTED)))?;
+        self.check_href(&a.href)?;
         Ok((a.key.clone(), a.href.clone()))
     }
 }
