@@ -2017,13 +2017,13 @@ fn unguard(cell: &str) -> std::borrow::Cow<'_, str> {
 const FORMULA_START: [char; 6] = ['=', '+', '-', '@', '\t', '\r'];
 
 /// A cell's text; text that a spreadsheet would run as a formula is prefixed with `'`.
-/// Valid numbers whose digits fit in integer or Double precision without loss are exported
-/// bare, matching [`double_holds`].
+/// Valid numbers whose digits fit in Double precision without loss and without leading zeros
+/// are exported bare, matching [`double_holds`].
 fn csv_cell(v: &Value) -> String {
     match v {
         Value::Text(t)
             if t.starts_with(FORMULA_START)
-                && !(t.parse::<i64>().is_ok() || (t.parse::<f64>().is_ok_and(|f| f.is_finite()) && double_holds(t))) =>
+                && !(t.parse::<f64>().is_ok_and(|f| f.is_finite()) && double_holds(t) && !has_leading_zero(t)) =>
         {
             format!("'{t}")
         }
@@ -4835,6 +4835,7 @@ mod tests {
         ds.push(None, vec![Value::Text("+35.1329460".into()), Value::Text("=SUM(A1)".into())]);
         ds.push(None, vec![Value::Text("-90.1234567".into()), Value::Text("+cmd|' /C calc'!A0".into())]);
         ds.push(None, vec![Value::Text("+447700900123".into()), Value::Text("-12345678901234567890".into())]);
+        ds.push(None, vec![Value::Text("-007".into()), Value::Text("-123456789012345678".into())]);
         let out = to_csv(&ds).unwrap();
         assert!(out.contains("+35.1329460"), "{out}");
         assert!(!out.contains("'+35.1329460"), "{out}");
@@ -4842,9 +4843,46 @@ mod tests {
         assert!(!out.contains("'-90.1234567"), "{out}");
         assert!(out.contains("+447700900123"), "{out}");
         assert!(!out.contains("'+447700900123"), "{out}");
+        assert!(out.contains("'-007"), "{out}");
+        assert!(out.contains("'-123456789012345678"), "{out}");
         assert!(out.contains("'-12345678901234567890"), "{out}");
         assert!(out.contains("'=SUM(A1)"), "{out}");
         assert!(out.contains("'+cmd"), "{out}");
+    }
+
+    #[test]
+    fn csv_signed_numbers_and_text_round_trip() {
+        let mut ds = Dataset::new(
+            "test",
+            GeometryType::None,
+            vec![
+                Field::new("coord", FieldType::Text),
+                Field::new("phone", FieldType::Text),
+                Field::new("code", FieldType::Text),
+                Field::new("long_id", FieldType::Text),
+                Field::new("formula", FieldType::Text),
+            ],
+        );
+        ds.push(
+            None,
+            vec![
+                Value::Text("+35.1329460".into()),
+                Value::Text("+447700900123".into()),
+                Value::Text("-007".into()),
+                Value::Text("-123456789012345678".into()),
+                Value::Text("=SUM(A1)".into()),
+            ],
+        );
+        let csv_text = to_csv(&ds).unwrap();
+        let (reimported, _) = read_csv(&csv_text, "test").unwrap();
+        assert_eq!(reimported.fields[0].ty, FieldType::Double);
+        assert_eq!(reimported.fields[1].ty, FieldType::Integer);
+        assert_eq!(reimported.fields[2].ty, FieldType::Text);
+        assert_eq!(reimported.features[0].attrs[2], Value::Text("-007".into()));
+        assert_eq!(reimported.fields[3].ty, FieldType::Text);
+        assert_eq!(reimported.features[0].attrs[3], Value::Text("-123456789012345678".into()));
+        assert_eq!(reimported.fields[4].ty, FieldType::Text);
+        assert_eq!(reimported.features[0].attrs[4], Value::Text("=SUM(A1)".into()));
     }
 
     #[test]
