@@ -421,6 +421,14 @@ fn tell_unloaded(app: &mut RustGisApp) {
 
 /// Checks a package that arrived (a file, a download) and asks the user to accept it.
 pub fn received(app: &mut RustGisApp, bytes: Vec<u8>, from: Option<Box<Entry>>) {
+    // Every way a package arrives (opened, dropped, downloaded) is refused here, before it is read
+    // or offered for installing, where none could be installed.
+    if !rp::INSTALLS {
+        let _ = (bytes, from);
+        app.plugins.message = Some((false, not_installed_here().to_string()));
+        app.session.notify(not_installed_here(), false);
+        return;
+    }
     let r = (|| {
         if let Some(e) = &from {
             let sha = rp::package::sha256_hex(&bytes);
