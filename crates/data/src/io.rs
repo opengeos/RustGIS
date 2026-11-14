@@ -2006,6 +2006,13 @@ fn has_leading_zero(v: &str) -> bool {
     d.len() > 1 && d.starts_with('0') && d.as_bytes().get(1).is_some_and(|b| b.is_ascii_digit())
 }
 
+/// A whole number with more than 15 digits (e.g. an account or card number); spreadsheets
+/// retain only 15 significant digits, so these must be apostrophe-guarded in CSV export.
+fn is_long_integer(v: &str) -> bool {
+    let d = v.strip_prefix(['-', '+']).unwrap_or(v);
+    d.len() > 15 && d.bytes().all(|b| b.is_ascii_digit())
+}
+
 /// Undoes the export formula guard: `'=x` reads back as `=x`.
 fn unguard(cell: &str) -> std::borrow::Cow<'_, str> {
     match cell.strip_prefix('\'') {
@@ -2017,13 +2024,13 @@ fn unguard(cell: &str) -> std::borrow::Cow<'_, str> {
 const FORMULA_START: [char; 6] = ['=', '+', '-', '@', '\t', '\r'];
 
 /// A cell's text; text that a spreadsheet would run as a formula is prefixed with `'`.
-/// Valid numbers whose digits fit in Double precision without loss and without leading zeros
-/// are exported bare, matching [`double_holds`].
+/// Valid numbers whose digits fit in Double precision without loss, without leading zeros,
+/// and with at most 15 whole digits (to avoid truncation in spreadsheets) are exported bare.
 fn csv_cell(v: &Value) -> String {
     match v {
         Value::Text(t)
             if t.starts_with(FORMULA_START)
-                && !(t.parse::<f64>().is_ok_and(|f| f.is_finite()) && double_holds(t) && !has_leading_zero(t)) =>
+                && !(t.parse::<f64>().is_ok_and(|f| f.is_finite()) && double_holds(t) && !has_leading_zero(t) && !is_long_integer(t)) =>
         {
             format!("'{t}")
         }
@@ -4836,6 +4843,7 @@ mod tests {
         ds.push(None, vec![Value::Text("-90.1234567".into()), Value::Text("+cmd|' /C calc'!A0".into())]);
         ds.push(None, vec![Value::Text("+447700900123".into()), Value::Text("-12345678901234567890".into())]);
         ds.push(None, vec![Value::Text("-007".into()), Value::Text("-123456789012345678".into())]);
+        ds.push(None, vec![Value::Text("-1234567890123456".into()), Value::Text("+1234567890123456".into())]);
         let out = to_csv(&ds).unwrap();
         assert!(out.contains("+35.1329460"), "{out}");
         assert!(!out.contains("'+35.1329460"), "{out}");
@@ -4844,6 +4852,8 @@ mod tests {
         assert!(out.contains("+447700900123"), "{out}");
         assert!(!out.contains("'+447700900123"), "{out}");
         assert!(out.contains("'-007"), "{out}");
+        assert!(out.contains("'-1234567890123456"), "{out}");
+        assert!(out.contains("'+1234567890123456"), "{out}");
         assert!(out.contains("'-123456789012345678"), "{out}");
         assert!(out.contains("'-12345678901234567890"), "{out}");
         assert!(out.contains("'=SUM(A1)"), "{out}");
