@@ -75,7 +75,16 @@ fn offer_at(text: &str, at: usize, ds: &Dataset, asked: bool) -> Option<Offer> {
     let fits = |name: &str| starts_with(name, p) && !name.eq_ignore_ascii_case(p);
     let mut of = Vec::new();
     if c.operand {
-        let mut fields: Vec<&str> = ds.fields.iter().map(|f| f.name.as_str()).filter(|n| fits(n)).collect();
+        // A field another one shadows (`name` after `Name`: the expression reads the first, letter
+        // case aside) isn't offered: written, it would read the other.
+        let mut fields: Vec<&str> = ds
+            .fields
+            .iter()
+            .enumerate()
+            .filter(|(i, f)| ds.field_index(&f.name) == Some(*i))
+            .map(|(_, f)| f.name.as_str())
+            .filter(|n| fits(n))
+            .collect();
         fields.sort_by_key(|n| n.to_lowercase());
         fields.truncate(MAX_FIELDS);
         of.extend(fields.into_iter().map(|n| Item::Field(n.to_string())));
@@ -118,10 +127,14 @@ struct State {
     list: List<Offer>,
     /// What was worked out to offer, for which cursor, text (its hash) and fields (their names'
     /// hash: another layer's offer others) and whether it was asked for.
-    worked: Option<Worked<(u64, bool), Option<Offer>>>,
+    worked: Option<Worked<(u64, bool, bool), Option<Offer>>>,
     /// Where Ctrl+Space asked for the list (the text's hash and the cursor): it shows there with
     /// no word typed, until the text or the cursor moves on.
     asked: Option<(u64, usize)>,
+    /// Where an item was just accepted (the text's hash and the cursor): nothing is offered there
+    /// (`pop` taken mustn't offer `"Pop Est"`, for Enter to take next), until the text or the
+    /// cursor moves on, or Ctrl+Space asks.
+    accepted: Option<(u64, usize)>,
 }
 
 fn load(ui: &Ui, id: Id) -> State {
@@ -153,7 +166,7 @@ pub(crate) fn expr_edit(
     }
     let picked = state.list.keys(ui, id);
     if let Some((offer, item)) = &picked {
-        accept(ui, id, text, offer, item);
+        state.accepted = accept(ui, id, text, offer, item);
         state.worked = None;
     }
     let open = state.list.is_open();
@@ -164,15 +177,21 @@ pub(crate) fn expr_edit(
     let fields = ds.map_or(0, |d| egui::util::hash(d.fields.iter().map(|f| f.name.as_str()).collect::<Vec<_>>()));
     let worked = &mut state.worked;
     let asked = &mut state.asked;
+    let accepted = &mut state.accepted;
     let work = |at: Option<usize>| {
         // Asked here, and still here.
         let here = at.is_some_and(|at| *asked == Some((hash, at)));
         if !here {
             *asked = None;
         }
-        let with = (fields, here);
+        // Just accepted here, and not asked since.
+        if at.map(|at| (hash, at)) != *accepted {
+            *accepted = None;
+        }
+        let quiet = accepted.is_some() && !here;
+        let with = (fields, here, quiet);
         Worked::get(worked, at, hash, &with).unwrap_or_else(|| {
-            let offer = at.zip(ds).and_then(|(at, ds)| offer_at(text.as_str(), at, ds, here));
+            let offer = at.zip(ds).filter(|_| !quiet).and_then(|(at, ds)| offer_at(text.as_str(), at, ds, here));
             *worked = Some(Worked { at, text: hash, with, value: offer.clone() });
             offer
         })
@@ -187,8 +206,9 @@ pub(crate) fn expr_edit(
     let clicked = state.list.show(ui, id.with("expr_list"), &out, visible, work, icon, draw);
     store(ui, id, state);
     if let Some((offer, item)) = clicked {
-        accept(ui, id, text, &offer, &item);
+        let accepted = accept(ui, id, text, &offer, &item);
         let mut state = load(ui, id);
+        state.accepted = accepted;
         state.worked = None;
         store(ui, id, state);
     }
@@ -241,13 +261,14 @@ fn draw_help(ui: &mut Ui, item: &Item, ds: Option<&Dataset>, width: f32) {
     });
 }
 
-/// Puts `item` in place of the offer's word in `text`: a field as the expression names it (in
-/// the quote it was begun with, a closing one already there taken in; a `!` name holding a `!`
-/// in double quotes, as `!` has no escape), a function with its bracket open (closed too when
+/// Puts `item` in place of the offer's word in `text`, the rest of the word after the cursor
+/// too: a field as the expression names it (in the quote it was begun with; a `!` name holding a
+/// `!` in double quotes, as `!` has no escape), a function with its bracket open (closed too when
 /// it takes no arguments; a `(` already there is used, not doubled), a variable or keyword as it
-/// is; as one undo step of the box, the cursor after it, and the box keeps the focus.
-fn accept(ui: &Ui, id: Id, text: &mut String, offer: &Offer, item: &str) {
-    let Some((new, at)) = written(text, offer, item) else { return };
+/// is; as one undo step of the box, the cursor after it, and the box keeps the focus. Returns
+/// where it was put: the new text's hash and the cursor.
+fn accept(ui: &Ui, id: Id, text: &mut String, offer: &Offer, item: &str) -> Option<(u64, usize)> {
+    let (new, at) = written(text, offer, item)?;
     let mut state = TextEditState::load(ui.ctx(), id).unwrap_or_default();
     let mut undoer = state.undoer();
     let was = state.cursor.char_range().unwrap_or(CCursorRange::one(CCursor::new(offer.end)));
@@ -257,19 +278,36 @@ fn accept(ui: &Ui, id: Id, text: &mut String, offer: &Offer, item: &str) {
     state.cursor.set_char_range(Some(CCursorRange::one(CCursor::new(at))));
     state.store(ui.ctx(), id);
     ui.memory_mut(|m| m.request_focus(id));
+    Some((egui::util::hash(text.as_str()), at))
+}
+
+/// How many of `rest`, the text after the cursor, are still the word being replaced: the rest of
+/// a name or variable (`po▮p`), or of a quoted name with its closing quote (`"Po▮p Est"`; a
+/// doubled `"` is one inside the name). None of an unclosed quoted name: what follows is left.
+fn word_rest(rest: &[char], quote: Option<char>) -> usize {
+    let Some(q) = quote else { return rest.iter().take_while(|c| c.is_alphanumeric() || **c == '_').count() };
+    let mut i = 0;
+    while let Some(&c) = rest.get(i) {
+        if c == q && q == '"' && rest.get(i + 1) == Some(&'"') {
+            i += 2;
+        } else if c == q {
+            return i + 1;
+        } else {
+            i += 1;
+        }
+    }
+    0
 }
 
 /// `text` with `item` of `offer` accepted (`accept`), and where the cursor goes (chars).
 fn written(text: &str, offer: &Offer, item: &str) -> Option<(String, usize)> {
     let of = find(offer, item)?;
     let chars: Vec<char> = text.chars().collect();
-    let (before, mut after) = (chars.get(..offer.start)?, chars.get(offer.end..)?);
+    let (before, rest) = (chars.get(..offer.start)?, chars.get(offer.end..)?);
+    let mut after = rest.get(word_rest(rest, offer.quote)..).unwrap_or_default();
     let put = match of {
         Item::Field(name) => match offer.quote.filter(|q| *q != '!' || !name.contains('!')) {
             Some(q) => {
-                if after.first() == Some(&q) {
-                    after = after.get(1..).unwrap_or_default();
-                }
                 let name = if q == '"' { name.replace('"', "\"\"") } else { name.to_string() };
                 format!("{q}{name}{q}")
             }
@@ -366,6 +404,44 @@ mod tests {
         assert_eq!(o.items, ["\"$area\"", "$area"]);
     }
 
+    /// A field another one shadows, letter case aside, isn't offered: the expression would read
+    /// the first.
+    #[test]
+    fn a_shadowed_field_is_not_offered() {
+        let ds = Dataset::new("t", GeometryType::Point, vec![Field::new("Name", FieldType::Text), Field::new("name", FieldType::Text)]);
+        assert_eq!(offer_at("na", 2, &ds, false).map(|o| o.items), Some(vec!["Name".to_string()]));
+    }
+
+    /// Accepting closes the list where it was put, though more is on offer there (`pop` taken,
+    /// `"Pop Est"` still starts with it): Enter is the dialog's again. Ctrl+Space shows it.
+    #[test]
+    fn accepting_leaves_the_list_closed_until_asked() {
+        use egui::accesskit::Role;
+        use egui_kittest::kittest::Queryable;
+        let data = ds();
+        let id = Id::unique("expr");
+        let mut h = egui_kittest::Harness::new_ui_state(
+            move |ui, text: &mut String| {
+                let label = ui.label("Expression");
+                let _ = expr_edit(ui, id, text, Some(&data), |e| e).labelled_by(label.id);
+            },
+            String::new(),
+        );
+        h.run();
+        h.ctx.memory_mut(|m| m.request_focus(id));
+        h.run();
+        h.event(egui::Event::Text("po".into()));
+        h.run();
+        assert!(h.query_by_role_and_label(Role::Button, "pop").is_some(), "offered");
+        h.key_press(Key::Enter);
+        h.run();
+        assert_eq!(h.state(), "pop");
+        assert!(h.query_by_role_and_label(Role::Button, "\"Pop Est\"").is_none(), "closed where it was put");
+        h.key_press_modifiers(Modifiers::CTRL, Key::Space);
+        h.run();
+        assert!(h.query_by_role_and_label(Role::Button, "\"Pop Est\"").is_some(), "asked for");
+    }
+
     /// Many fields: at most `MAX_FIELDS` of them, and the language's items still after them.
     #[test]
     fn many_fields_leave_room_for_the_language() {
@@ -390,6 +466,12 @@ mod tests {
             ("!Pop▮", "\"Pop Est\"", "!Pop Est!▮"),
             // `!` has no escape: a name holding one goes in double quotes.
             ("!Ar▮", "\"Area!\"", "\"Area!\"▮"),
+            ("!Ar▮!", "\"Area!\"", "\"Area!\"▮"),
+            // The rest of the word after the cursor is replaced too.
+            ("Po▮p", "\"Pop Est\"", "\"Pop Est\"▮"),
+            ("\"Po▮p E\" > 1", "\"Pop Est\"", "\"Pop Est\"▮ > 1"),
+            ("\"Po▮p \"\"E\" > 1", "\"Pop Est\"", "\"Pop Est\"▮ > 1"),
+            ("ro▮und(2)", "round()", "round(▮2)"),
             ("ro▮", "round()", "round(▮"),
             ("ro▮(2)", "round()", "round(▮2)"),
             ("p▮", "pi()", "pi()▮"),
