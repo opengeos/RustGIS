@@ -685,6 +685,7 @@ masking, swipe, blending, aggregation, graphics, stacked strokes, fills or label
 on the CPU. Extrusions use the GPU only on a tilted map. In the desktop app, if the graphics
 card runs out of memory (a card with 2 GB at a large window size, with other programs using it
 too), the map switches to the CPU, with a notice, instead of the app closing; clicking **CPU**
-in the status bar tries the GPU again, as does the next start (the setting stays on). Any other
-error the graphics card reports is said once, as the map (or, with the map on the CPU, the
-window) may then be drawn wrongly.
+in the status bar tries the GPU again, as does the next start (the setting stays on); errors
+that follow from running out in the same moment aren't said on their own. Any other error the
+graphics card reports is said once, as the map (or, with the map on the CPU, the window) may
+then be drawn wrongly; so is running out of memory with the map already on the CPU.

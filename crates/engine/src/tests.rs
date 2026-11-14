@@ -46269,19 +46269,19 @@ fn an_animation_export_says_its_missing_cast_shadows_once() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
-/// A zoom to a place wholly past a Web Mercator map's 85° leaves the view where it is, and says
-/// so; one reaching into them fits, clamped.
+/// A zoom to a place wholly past a Web Mercator map's 85° leaves the view where it is, says so,
+/// and is said not to have framed it (as `"zoomed"` reports); one reaching into them fits, clamped.
 #[test]
 fn a_zoom_beyond_web_mercators_latitudes_says_so() {
     let mut s = world();
     let view = s.map().camera;
     let mark = s.notice_mark();
-    s.zoom_to(&rustgis_geom::Extent::new(-10.0, 86.0, 10.0, 89.0));
+    assert!(!s.zoom_to(&rustgis_geom::Extent::new(-10.0, 86.0, 10.0, 89.0)));
     assert_eq!((s.map().camera.center, s.map().camera.res), (view.center, view.res));
     let said: Vec<String> = s.notices_since(mark).iter().map(|n| n.text.clone()).collect();
     assert!(said.iter().any(|n| n.contains("beyond what the map's projection shows")), "{said:?}");
     let mark = s.notice_mark();
-    s.zoom_to(&rustgis_geom::Extent::new(-10.0, 80.0, 10.0, 89.0));
+    assert!(s.zoom_to(&rustgis_geom::Extent::new(-10.0, 80.0, 10.0, 89.0)));
     assert_ne!(s.map().camera.center, view.center);
     assert!(s.notices_since(mark).is_empty());
 }

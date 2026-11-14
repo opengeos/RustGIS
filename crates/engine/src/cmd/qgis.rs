@@ -1058,7 +1058,8 @@ fn add_relations(s: &mut Session, project: &qgis::Project, came_in: &[CameIn], r
                 Some((l.name.clone(), f.name.clone()))
             })
             .collect();
-        let guessed = c.ids.len() > 1;
+        // Several vector tables came in for it (a raster beside one can't be QGIS's vector layer).
+        let guessed = c.ids.iter().filter(|lid| s.map().layer(**lid).is_some_and(|l| !l.is_raster())).count() > 1;
         match with.len() {
             0 => None,
             1 => with.pop().map(|(layer, field)| Ok((layer, field, guessed))),

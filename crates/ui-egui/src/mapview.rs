@@ -719,6 +719,7 @@ pub(crate) fn leave_gpu_if_out_of_memory(app: &mut RustGisApp) {
     // for one of its own. With the map already off the card, running out is said as another
     // error is.
     let leaves = ran_out && app.map.gpu_enabled;
+    // (The swap comes first, so the flag is cleared every frame whatever else holds.)
     let other = (app.map.gpu_errors.other.swap(false, Ordering::SeqCst) || ran_out) && !leaves;
     if other && !app.map.gpu_error_said {
         app.map.gpu_error_said = true;
@@ -5026,7 +5027,8 @@ mod tests {
 
     /// The graphics card running out of memory doesn't close the app (#1777): it's noted, and
     /// the map then leaves the GPU for the CPU with a notice, its GPU resources let go. Once:
-    /// turned on again, running out again falls back again. A map on the CPU only forgets it.
+    /// turned on again, running out again falls back again. With the map already on the CPU,
+    /// running out is said once a session, as another error is, worded for the window.
     #[test]
     fn running_out_of_gpu_memory_draws_the_map_on_the_cpu() {
         use egui_wgpu::wgpu::Error;
