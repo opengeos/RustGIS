@@ -770,8 +770,11 @@ mod tests {
         std::fs::write(&photo, b"jpeg bytes").unwrap();
         field.run("edit.addField", &json!({"layer": cities, "name": "photos", "type": "text"})).unwrap();
         field.run("edit.setValue", &json!({"layer": cities, "row": 0, "field": "photos", "value": photo.display().to_string()})).unwrap();
-        // Sent back: the photo goes with it, its feature naming it in the package.
+        // Sent back: the photo goes with it, its feature naming it in the package, and with only
+        // pictures named nothing is said of other files.
+        let mark = field.notice_mark();
         let (area, back) = package(&mut field, &Value::Null).unwrap();
+        assert!(field.notices_since(mark).iter().all(|n| !n.text.contains("only pictures go")));
         assert_eq!(area, "Trip");
         let entries = rustgis_data::zip::read(&back).unwrap();
         assert!(entries.iter().any(|(n, b)| n == "photos/photo-1.jpg" && b == b"jpeg bytes"));
