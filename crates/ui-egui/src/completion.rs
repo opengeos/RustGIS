@@ -15,8 +15,9 @@ const MIN_WIDTH: f32 = 220.0;
 pub(crate) const HELP_WIDTH: f32 = 360.0;
 /// The narrowest the help gets beside the list; with less room it goes under the list.
 const HELP_MIN_WIDTH: f32 = 200.0;
-/// The gap between the list and the help, and the popup frame's margins (both sides).
+/// The gap between the list and the help.
 pub(crate) const GAP: f32 = 12.0;
+/// The popup frame's margins, both sides together.
 pub(crate) const FRAME: f32 = 24.0;
 
 /// What a list offers: the items, and where the word they replace ends (a char index of the
@@ -60,9 +61,8 @@ pub(crate) fn popup(ui: &Ui, id: Id, corner: egui::Pos2, room: f32, content: imp
     (rect, rect.size() + egui::vec2(0.0, area.inner))
 }
 
-/// What was worked out at a cursor, and for which text (its hash) and `with` (what else it
-/// depends on: the plugins' revision and the project for a list; the language and the plugins'
-/// revision for a help): worked out again only when one changes.
+/// What was worked out at a cursor, and for which text (its hash) and `with` (whatever else it
+/// depends on, as its caller says): worked out again only when one changes.
 #[derive(Clone)]
 pub(crate) struct Worked<W, T> {
     pub at: Option<usize>,
@@ -135,6 +135,11 @@ impl<O: Offered> List<O> {
     pub fn keys(&mut self, ui: &Ui) -> Option<(O, String)> {
         let (offer, selected) = self.open.clone()?;
         let n = offer.items().len();
+        // Nothing to move to nor accept (`show` opens no empty list).
+        if n == 0 {
+            self.open = None;
+            return None;
+        }
         let (up, down, accept, close) = ui.input_mut(|i| {
             (
                 i.consume_key(Modifiers::NONE, Key::ArrowUp),
@@ -198,6 +203,8 @@ impl<O: Offered> List<O> {
         } else {
             None
         };
+        // An offer with nothing in it shows no list.
+        let offer = offer.filter(|o| !o.items().is_empty());
         // Closed with Escape: not again for the same word.
         if offer.is_some() && self.dismissed == offer {
             self.open = None;
@@ -294,6 +301,38 @@ impl<O: Offered> List<O> {
 
 #[cfg(test)]
 mod tests {
+    /// Words on offer, as a box would offer them.
+    #[derive(Clone, Debug, PartialEq)]
+    struct Words(Vec<String>);
+
+    impl super::Offered for Words {
+        fn items(&self) -> &[String] {
+            &self.0
+        }
+
+        fn end(&self) -> usize {
+            0
+        }
+    }
+
+    /// A list holding no items takes no arrow, Enter nor Tab (there's no highlight to move or
+    /// accept), and closes.
+    #[test]
+    fn an_empty_list_takes_no_keys() {
+        for key in [egui::Key::ArrowDown, egui::Key::ArrowUp, egui::Key::Enter, egui::Key::Tab] {
+            let list = super::List { open: Some((Words(Vec::new()), 0)), ..Default::default() };
+            let mut h = egui_kittest::Harness::new_ui_state(
+                |ui, list: &mut super::List<Words>| {
+                    assert_eq!(list.keys(ui), None);
+                },
+                list,
+            );
+            h.key_press(key);
+            h.run();
+            assert!(!h.state().is_open(), "{key:?}");
+        }
+    }
+
     /// A popup leaves a line and a half clear of the cursor's line: under it when it fits, else
     /// above it.
     #[test]
