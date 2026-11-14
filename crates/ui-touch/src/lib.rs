@@ -386,7 +386,7 @@ fn set_form(ctx: &egui::Context, form: Form) {
     ctx.data_mut(|d| d.insert_temp(egui::Id::unique("touch_capture"), form));
 }
 
-use rustgis_ui_egui::rustgis_engine::data::{GeometryType, VertexId};
+use rustgis_ui_egui::rustgis_engine::data::GeometryType;
 
 /// A layer a feature can be captured into.
 #[derive(Clone)]
@@ -1149,6 +1149,7 @@ fn run(app: &mut RustGisApp, command: &str, params: Value) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rustgis_ui_egui::rustgis_engine::data::VertexId;
 
     /// Draws a frame of the interface for a phone's window with `shown` up.
     fn frame(app: &mut RustGisApp, ctx: &egui::Context, shown: Sheet) {
