@@ -4,7 +4,7 @@
 //! points, lines and polygons layers with their title, link, description, date and id.
 //!
 //! The file is hostile: no DTD is read, the node count is capped, and items whose coordinates
-//! can't be read are skipped and counted.
+//! can't be read are skipped and counted; unreadable polygon holes are omitted and counted.
 
 use roxmltree::{Node, ParsingOptions};
 use rustgis_geom::Coord;
@@ -71,6 +71,7 @@ fn bbox(ll: Coord, ur: Coord) -> Option<Geometry> {
 }
 
 /// An item's place, `Ok(None)` when it has none, `Err` when it has one that can't be read.
+/// Unreadable polygon holes are omitted and counted in `lost_holes`.
 fn place(item: &Node, lost_holes: &mut usize) -> std::result::Result<Option<Geometry>, ()> {
     let g = |name: &str| item.children().find(|c| c.is_element() && local(c) == name);
     let parse = |n: Node| lat_lons(&text_of(&n)).ok_or(());
