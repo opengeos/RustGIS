@@ -209,7 +209,8 @@ pub(crate) fn finish(app: &mut RustGisApp, track: Track) -> bool {
 fn tracks_layer(app: &mut RustGisApp) -> Option<u32> {
     use rustgis_ui_egui::rustgis_engine::data::{FieldType, GeometryType};
     let has = |l: &rustgis_ui_egui::rustgis_engine::map::Layer, name: &str| {
-        l.dataset.fields.iter().any(|f| f.name.eq_ignore_ascii_case(name) && f.ty == FieldType::Text)
+        // By its exact name: `edit.addFeature` stores an attribute under the field of that name.
+        l.dataset.fields.iter().any(|f| f.name == name && f.ty == FieldType::Text)
     };
     let found = app
         .session
@@ -278,6 +279,25 @@ mod tests {
         // Either side of the antimeridian: a place between them, not the other side of the Earth.
         let d = average(&[fix(179.9999, 0.0, None, None), fix(-179.9999, 0.0, None, None)]).unwrap();
         assert!(d.lon.abs() > 179.99, "{d:?}");
+    }
+
+    #[test]
+    fn a_tracks_layer_whose_fields_are_named_otherwise_is_passed_over() {
+        let mut app = RustGisApp::with_sample();
+        // A user's own Tracks layer, its fields `Name` and `Notes`.
+        let made = app.run_by_user("layer.template", json!({"template": "lines", "name": TRACKS})).unwrap();
+        let theirs = made["layer"].as_u64().unwrap() as u32;
+        for (old, new) in [("name", "Name"), ("notes", "Notes")] {
+            app.run_by_user("edit.deleteField", json!({"layer": theirs, "field": old})).unwrap();
+            app.run_by_user("edit.addField", json!({"layer": theirs, "name": new, "type": "text"})).unwrap();
+        }
+        let track = Track { points: Arc::new(vec![fix(1.0, 1.0, None, Some(0)), fix(1.1, 1.0, None, Some(60_000))]), ..Track::default() };
+        assert!(finish(&mut app, track));
+        // Not theirs: a layer of its own, holding the track's name.
+        assert!(app.session.map().layer(theirs).unwrap().dataset.features.is_empty());
+        let ours = app.session.map().layers.iter().find(|l| l.id != theirs && tracks_name(&l.name)).unwrap();
+        let name = ours.dataset.field_index("name").unwrap();
+        assert!(ours.dataset.value(0, name).to_string().starts_with("Track"));
     }
 
     #[test]
