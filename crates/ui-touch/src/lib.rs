@@ -452,7 +452,7 @@ fn set_form(ctx: &egui::Context, form: Form) {
     ctx.data_mut(|d| d.insert_temp(egui::Id::unique("touch_capture"), form));
 }
 
-use rustgis_ui_egui::rustgis_engine::data::{GeometryType, VertexId};
+use rustgis_ui_egui::rustgis_engine::data::GeometryType;
 
 /// A layer a feature can be captured into.
 #[derive(Clone)]
@@ -966,7 +966,7 @@ fn capture(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             // A list narrowed by the contingent values: what the domain lists and the sets leave,
             // or, with no list of its own, the values the sets leave. The value chosen stays,
             // marked, even when the others no longer fit it, so the conflict shows.
-            let list = match (list, left.as_ref()) {
+            let list: Option<Vec<(String, String)>> = match (list, left.as_ref()) {
                 (Some(list), Some(left)) => Some(list.into_iter().filter(|(stored, _)| left.contains(stored)).collect()),
                 (None, Some(left)) => {
                     let said = described.get(i).cloned().flatten().unwrap_or_default();
@@ -976,6 +976,7 @@ fn capture(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                 }
                 (list, None) => list,
             };
+            let chosen_from_list = list.is_some();
             let dated = matches!(field.ty, FieldType::Date | FieldType::DateTime);
             ui.horizontal(|ui| {
                 ui.set_min_height(TARGET);
@@ -1032,7 +1033,11 @@ fn capture(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                     }
                 }
             });
-            // The calendar, under its field, while it is open.
+            // The calendar, under its field, while it is open and the field is typed into: a field
+            // the contingent values narrowed to chips (its toggle gone) closes it.
+            if chosen_from_list && state.calendar.as_ref().is_some_and(|(name, _)| name == &field.name) {
+                state.calendar = None;
+            }
             if let Some((name, month)) = state.calendar.as_mut().filter(|(name, _)| name == &field.name) {
                 let name = name.clone();
                 let value = state.values.entry(name).or_default();
@@ -1135,8 +1140,7 @@ fn edit_sheet(
         if action(ui, t, tl!("Move Point Here"), width, true, true) {
             match cross {
                 Some(at) => {
-                    let first = VertexId::new(0, 0, 0);
-                    let _ = edit::vertex(app, target.id, row, first, "move", Some(at));
+                    edit::move_point(app, target.id, row, at);
                 }
                 None => app.session.notify(off(), true),
             }
@@ -1270,6 +1274,7 @@ fn run(app: &mut RustGisApp, command: &str, params: Value) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rustgis_ui_egui::rustgis_engine::data::VertexId;
 
     /// Draws a frame of the interface for a phone's window with `shown` up.
     fn frame(app: &mut RustGisApp, ctx: &egui::Context, shown: Sheet) {
@@ -1602,7 +1607,14 @@ mod tests {
         let set = json!({"layer": cities.id, "name": "pair", "fields": [text, number], "combos": [["Camp", 1], ["Town", 2]]});
         run(&mut app, "data.contingentValues", set);
         assert_eq!(form::contingent(app.session.map().layer(cities.id).unwrap(), &text, &state.values).map(|v| v.len()), Some(2));
+        // A calendar open on a field the contingent values narrow to chips closes: its toggle is
+        // gone with the text box.
         set_form(&ctx, Form { shown: Some(cities.instance), calendar: Some((text, (2026, 3))), ..Form::default() });
+        frame(&mut app, &ctx, Sheet::Capture);
+        assert!(form(&ctx).calendar.is_none());
+        // On a date field typed into, it stays open and draws.
+        run(&mut app, "edit.addField", json!({"layer": cities.id, "name": "seen", "type": "date"}));
+        set_form(&ctx, Form { shown: Some(cities.instance), calendar: Some(("seen".into(), (2026, 3))), ..Form::default() });
         frame(&mut app, &ctx, Sheet::Capture);
         assert!(form(&ctx).calendar.is_some());
     }
@@ -1756,6 +1768,24 @@ mod tests {
         assert_eq!(last.checked(Some(&abc)).vertex, None);
         // A vertex the shape doesn't have isn't picked at all.
         assert_eq!(edit::Editing::feature(7).picking(Some(VertexId::new(0, 0, 9)), Some(&abc)).vertex, None);
+    }
+
+    #[test]
+    fn move_point_here_moves_a_point_and_refuses_a_multipoint() {
+        let mut app = RustGisApp::with_sample();
+        let cities = target(&mut app, GeometryType::Point);
+        assert!(edit::move_point(&mut app, cities.id, 0, (12.0, 34.0)));
+        let moved = app.session.map().layer(cities.id).unwrap().dataset.features[0].geometry.clone();
+        assert!(matches!(moved, Some(rustgis_ui_egui::rustgis_engine::data::Geometry::Point(c)) if c.x == 12.0 && c.y == 34.0));
+        // A multipoint in a point layer: nothing moves, and that is said.
+        let multi = json!({"layer": cities.id, "geometry": {"type": "MultiPoint", "coordinates": [[1.0, 1.0], [2.0, 2.0]]}});
+        run(&mut app, "edit.addFeature", multi);
+        let row = count(&app, cities.id) - 1;
+        let before = app.session.map().layer(cities.id).unwrap().dataset.features[row].geometry.clone();
+        let mark = app.session.notice_mark();
+        assert!(!edit::move_point(&mut app, cities.id, row, (5.0, 5.0)));
+        assert_eq!(app.session.map().layer(cities.id).unwrap().dataset.features[row].geometry, before);
+        assert!(app.session.notices_since(mark).iter().any(|n| n.error && n.text.contains("multipoint")));
     }
 
     #[test]
