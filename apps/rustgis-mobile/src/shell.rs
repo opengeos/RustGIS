@@ -41,8 +41,8 @@ pub trait Phone: Platform {
 /// no session to tell).
 type Refusals = Rc<RefCell<Vec<String>>>;
 
-/// The purpose the picker was last asked for.
-type Asked = Rc<RefCell<String>>;
+/// The requests for files waited on ([`crate::Requests`]).
+type Asked = Rc<RefCell<crate::Requests>>;
 
 /// What the front end keeps for the picker that is up (Add Delimited Text's options, the command
 /// a picked project opens with, a picture's corners): a request the phone refuses while it is
@@ -101,10 +101,8 @@ struct App<P: Phone> {
     /// Picked files the front end reads as bytes (`Services::inbox`).
     inbox: Inbox,
     refusals: Refusals,
-    /// What the picker showing was asked for (`Platform::pick_files`'s purpose), until it answers.
+    /// The requests for files waited on.
     asked: Asked,
-    /// Whether the phone was seen busy with that picker.
-    asked_busy: bool,
     /// What the front end kept for that picker, as the frame began ([`Kept`]).
     kept: Option<Kept>,
     /// Whether a picker was refused in this frame because one was up.
@@ -163,21 +161,20 @@ impl<P: Phone> App<P> {
         for event in phone.take_events() {
             match event {
                 Event::Picked { purpose, name, path } => {
-                    // A file of the request asked for last answers it; one of an earlier request
-                    // (still being copied when another was asked for) leaves that one waiting.
-                    if *self.asked.borrow() == purpose {
-                        self.asked.borrow_mut().clear();
-                        self.asked_busy = false;
-                    }
+                    // A file answers its own request; one of an earlier request (still being
+                    // copied when another was asked for) leaves the later one waiting.
+                    self.asked.borrow_mut().picked(&purpose);
                     self.waiting.push((purpose, name, path));
                 }
-                // A cancelled DXF request is ended, so Import DXF stops waiting for it.
+                // The picker on the screen closed with no choice: its request is ended.
                 Event::Cancelled => {
-                    let asked = std::mem::take(&mut *self.asked.borrow_mut());
-                    self.asked_busy = false;
-                    if asked.starts_with("dxf:") {
-                        self.inbox.lock().unwrap_or_else(|e| e.into_inner()).push((crate::mark(&asked), Vec::new()));
-                    }
+                    let ended = self.asked.borrow_mut().cancelled();
+                    self.end(ended);
+                }
+                // A request whose every copy failed, by name.
+                Event::Ended { purpose } => {
+                    let ended = self.asked.borrow_mut().ended(&purpose);
+                    self.end(ended);
                 }
                 Event::Photo { path, .. } => self.app.photos.push(path),
                 Event::Saved { name } => self.app.session.notify(i18n::fmt("Saved {name}.", &[("name", &name)]), false),
@@ -216,20 +213,10 @@ impl<P: Phone> App<P> {
         }
         // A picked file is copied on a thread of the phone's: look again until it has arrived.
         let busy = phone.busy();
-        // The picker asked for has answered in full once the phone, busy with it, no longer is:
-        // with no file picked (each copy failed, said), its request ends as a cancelled one
-        // does. Looked at only after the phone was seen busy: Android shows its picker a moment
-        // after it is asked.
-        let pending = busy || phone.picking();
-        if pending && !self.asked.borrow().is_empty() {
-            self.asked_busy = true;
-        } else if !pending && self.asked_busy {
-            self.asked_busy = false;
-            let asked = std::mem::take(&mut *self.asked.borrow_mut());
-            if asked.starts_with("dxf:") {
-                self.inbox.lock().unwrap_or_else(|e| e.into_inner()).push((crate::mark(&asked), Vec::new()));
-            }
-        }
+        // The request waited on has been answered in full once the phone, busy with it, no
+        // longer is: with no file picked (each copy failed, said), it is ended.
+        let ended = self.asked.borrow_mut().frame(busy || phone.picking());
+        self.end(ended);
         if !busy && !self.waiting.is_empty() {
             self.open_waiting(ctx, raw_input);
         }
@@ -244,6 +231,14 @@ impl<P: Phone> App<P> {
         } else {
             None
         };
+    }
+
+    /// Ends a request for files that got none (`purpose`): a dialog waiting for its answer
+    /// (Import DXF) is answered empty, and stops waiting.
+    fn end(&self, purpose: Option<String>) {
+        if let Some(purpose) = purpose.filter(|p| p.starts_with("dxf:")) {
+            self.inbox.lock().unwrap_or_else(|e| e.into_inner()).push((crate::mark(&purpose), Vec::new()));
+        }
     }
 
     /// Opens the picked files, now that every picker has answered in full, what was picked
@@ -377,17 +372,15 @@ fn use_picker<P: Phone + 'static>(
                 true
             }
         };
-        if !refused_here {
-            *asking.borrow_mut() = purpose.to_string();
-        }
+        let ended = asking.borrow_mut().asked(purpose, refused_here);
         // Refused because another picker was up: the shell puts back what the front end kept
         // for that one ([`Kept`]).
         if refused_here && up {
             refused_while_up.set(true);
         }
         // A DXF request whose picker didn't show is ended now: Import DXF stops waiting.
-        if refused_here && purpose.starts_with("dxf:") {
-            answers.lock().unwrap_or_else(|e| e.into_inner()).push((crate::mark(purpose), Vec::new()));
+        if let Some(purpose) = ended.filter(|p| p.starts_with("dxf:")) {
+            answers.lock().unwrap_or_else(|e| e.into_inner()).push((crate::mark(&purpose), Vec::new()));
         }
     }));
     let saver = phone.clone();
@@ -609,7 +602,6 @@ pub fn run<P: Phone + 'static>(
                 inbox,
                 refusals,
                 asked,
-                asked_busy: false,
                 kept: None,
                 refused_picker,
                 waiting: Vec::new(),

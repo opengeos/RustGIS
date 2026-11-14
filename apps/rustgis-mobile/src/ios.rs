@@ -181,7 +181,7 @@ impl PickerDelegate {
                 // from elsewhere, and a later pick can't replace a file the session has open.
                 let picked = ivars.folders.support.join("picked").join(unique());
                 // Copied off the main thread: a document can be large, or come from the network.
-                let copied = shared.clone();
+                let (copied, unstarted) = (shared.clone(), purpose.clone());
                 let copying = std::thread::Builder::new().name("picked documents".into()).spawn(move || {
                     let mut copies = 0usize;
                     let mut sources: Vec<Option<String>> = Vec::new();
@@ -193,16 +193,16 @@ impl PickerDelegate {
                         });
                         copies += usize::from(copy_in(&copied, &purpose, &url, &picked.join(k.to_string())));
                     }
-                    // Nothing copied (each failure said): the picker answered with nothing, so
-                    // the request ends as a cancelled one does (Import DXF stops waiting).
+                    // Nothing copied (each failure said): this request ends, by name, as
+                    // another may have been asked for meanwhile (Import DXF stops waiting).
                     if copies == 0 {
-                        copied.add(Event::Cancelled);
+                        copied.add(Event::Ended { purpose });
                     }
                     count(&copied.working, false);
                 });
                 if let Err(e) = copying {
                     shared.failed(i18n::fmt("The files chosen weren't opened: {error}", &[("error", &e.to_string())]));
-                    shared.add(Event::Cancelled);
+                    shared.add(Event::Ended { purpose: unstarted });
                     count(&shared.working, false);
                 }
             }

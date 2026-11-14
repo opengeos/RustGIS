@@ -62,6 +62,73 @@ fn mark(purpose: &str) -> String {
     .to_string()
 }
 
+/// The request for files the front end is waiting on, as the shell follows it: which request
+/// each answer ends. A request ended with no file is answered empty by the shell, so a dialog
+/// waiting for it (Import DXF) stops waiting.
+#[cfg(any(target_os = "android", target_os = "ios", test))]
+#[derive(Default)]
+struct Requests {
+    /// What the picker asked for last, and accepted, was asked for (`Platform::pick_files`'s
+    /// purpose); empty when nothing is waited on.
+    current: String,
+    /// Whether the phone was seen busy with it (a picker up, its files being copied).
+    seen_busy: bool,
+}
+
+#[cfg(any(target_os = "android", target_os = "ios", test))]
+impl Requests {
+    /// A request for `purpose`, `refused` by the phone or not. Returns the request to end now:
+    /// a refused one. An accepted one is waited on from now, even while the files of the one
+    /// before it are still being copied.
+    fn asked(&mut self, purpose: &str, refused: bool) -> Option<String> {
+        if refused {
+            return Some(purpose.to_string());
+        }
+        self.current = purpose.to_string();
+        self.seen_busy = false;
+        None
+    }
+
+    /// A file picked for `purpose` arrived: it answers that request, and no other.
+    fn picked(&mut self, purpose: &str) {
+        if self.current == purpose {
+            self.current.clear();
+            self.seen_busy = false;
+        }
+    }
+
+    /// The picker on the screen closed with no choice: it is the request waited on.
+    fn cancelled(&mut self) -> Option<String> {
+        self.seen_busy = false;
+        Some(std::mem::take(&mut self.current)).filter(|purpose| !purpose.is_empty())
+    }
+
+    /// The request for `purpose` ended with no file (every copy failed): that one, whichever
+    /// is waited on now.
+    fn ended(&mut self, purpose: &str) -> Option<String> {
+        self.picked(purpose);
+        Some(purpose.to_string())
+    }
+
+    /// Each frame, whether the phone is busy with a picker or its files (`pending`). Returns
+    /// the request to end: the one waited on, once the phone, seen busy with it, no longer is
+    /// and nothing answered it (Android says no more when a copy fails).
+    fn frame(&mut self, pending: bool) -> Option<String> {
+        if self.current.is_empty() {
+            return None;
+        }
+        if pending {
+            self.seen_busy = true;
+            None
+        } else if self.seen_busy {
+            self.seen_busy = false;
+            Some(std::mem::take(&mut self.current))
+        } else {
+            None
+        }
+    }
+}
+
 /// What the phone reported, oldest first, until the front end takes it: at most `most`
 /// positions. Past that the oldest position goes, and how many went is said when they are
 /// taken; nothing else is dropped (a picked file, a failure), as positions are what pile up, out
@@ -190,6 +257,42 @@ mod tests {
         // None left out: nothing said.
         queue.add(Event::Cancelled);
         assert_eq!(queue.take(), vec![Event::Cancelled]);
+    }
+
+    #[test]
+    fn each_answer_ends_its_own_request() {
+        let mut requests = super::Requests::default();
+        // A DXF request, accepted; its picker answers and its files are copied.
+        assert_eq!(requests.asked("dxf:1", false), None);
+        assert_eq!(requests.frame(true), None);
+        // While they are copied, another DXF request: accepted, its picker up.
+        assert_eq!(requests.asked("dxf:2", false), None);
+        assert_eq!(requests.frame(true), None);
+        // Every copy of the first fails: the first ends, the second stays waited on.
+        assert_eq!(requests.ended("dxf:1"), Some("dxf:1".into()));
+        assert_eq!(requests.frame(true), None);
+        // A file of the first, had one come, wouldn't answer the second either.
+        requests.picked("dxf:1");
+        // The second's picker is cancelled: it ends.
+        assert_eq!(requests.cancelled(), Some("dxf:2".into()));
+        assert_eq!(requests.frame(false), None);
+    }
+
+    #[test]
+    fn a_refused_request_ends_at_once_and_a_quiet_one_once_the_phone_is_done() {
+        let mut requests = super::Requests::default();
+        assert_eq!(requests.asked("dxf:1", true), Some("dxf:1".into()));
+        assert_eq!(requests.cancelled(), None);
+        // Accepted, then the phone busy, then idle with no answer (a copy failed on Android).
+        assert_eq!(requests.asked("dxf:2", false), None);
+        assert_eq!(requests.frame(false), None, "not seen busy yet: Android shows its picker a moment later");
+        assert_eq!(requests.frame(true), None);
+        assert_eq!(requests.frame(false), Some("dxf:2".into()));
+        // A file answers its request: nothing is left to end.
+        assert_eq!(requests.asked("data", false), None);
+        assert_eq!(requests.frame(true), None);
+        requests.picked("data");
+        assert_eq!(requests.frame(false), None);
     }
 
     #[test]
