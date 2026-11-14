@@ -188,8 +188,22 @@ public class MainActivity extends NativeActivity {
             @Override
             public void onProviderEnabled(String provider) {}
 
+            /** Location switched off while positions are wanted: with no provider left, say so. */
             @Override
-            public void onProviderDisabled(String provider) {}
+            public void onProviderDisabled(String provider) {
+                android.location.LocationManager manager =
+                        (android.location.LocationManager) getSystemService(LOCATION_SERVICE);
+                if (!locating || manager == null) {
+                    return;
+                }
+                for (String other : new String[] {android.location.LocationManager.GPS_PROVIDER,
+                        android.location.LocationManager.NETWORK_PROVIDER}) {
+                    if (manager.getAllProviders().contains(other) && manager.isProviderEnabled(other)) {
+                        return;
+                    }
+                }
+                stopped("This device's location was turned off in its settings.");
+            }
 
             @Override
             public void onStatusChanged(String provider, int status, android.os.Bundle extras) {}

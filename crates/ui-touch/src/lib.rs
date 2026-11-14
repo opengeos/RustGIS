@@ -27,8 +27,8 @@ const BAR: f32 = 64.0;
 const SHEET_SHARE: f32 = 0.55;
 /// The room above and below a sheet's rows.
 const SHEET_MARGIN: f32 = 4.0;
-/// The More sheet's rows.
-const MORE_ROWS: usize = 9;
+/// The More sheet's rows with the position hidden.
+const MORE_ROWS: usize = 8;
 
 /// The sheet risen over the map.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -71,7 +71,8 @@ pub fn chrome(app: &mut RustGisApp, ui: &mut Ui) {
         // As tall as its rows, up to its share of the window: a longer list scrolls.
         let rows = match shown {
             Sheet::Layers => (app.session.map().layers.len() + app.session.map().tiles.len()).max(1),
-            Sheet::More => MORE_ROWS,
+            // Go to My Position is there only while the position is shown.
+            Sheet::More => MORE_ROWS + usize::from(app.locate),
             Sheet::Capture => capture_rows(app, &ctx),
             Sheet::None => 0,
         };
