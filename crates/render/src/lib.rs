@@ -3029,9 +3029,9 @@ fn raise_labels(map: &Map, view: &View, candidates: &mut [Candidate]) {
                 by_id.get(&fid).copied()
             })
             .unwrap_or(usize::MAX);
-        // The roof stands at the base plus the height.
         let columns = x.columns(&layer.dataset);
-        let metres = x.base_metres_at(&layer.dataset, row, columns) + x.metres_at(&layer.dataset, row, columns);
+        // The roof stands on the walls: a height below the ground is none, as the walls draw it.
+        let metres = x.base_metres_at(&layer.dataset, row, columns) + x.metres_at(&layer.dataset, row, columns).max(0.0);
         let offset = |x: f32, y: f32| {
             let m = cam.try_to_map(f64::from(x), f64::from(y), w, h)?;
             let up = (metres / (flat.ground_per_unit(m) * map.body().ratio()).max(1e-9) / cam.res.max(1e-9)).clamp(0.0, 1e7);
@@ -3199,10 +3199,10 @@ fn extrusion_cmds(shapes: &[ExtrudedShape], origin: [f64; 2]) -> Option<Vec<gpu_
     let (mut shade, mut shade_i) = (Vec::new(), Vec::<u32>::new());
     let shadow = mesh::premul(Rgba::new(0, 0, 0, 60));
     for s in shapes {
-        // A height that is no number (hostile attributes) stands no higher than the ground.
-        let h = if s.height.is_finite() { s.height.clamp(0.0, 1e9) } else { 0.0 };
-        // The walls stand from their base, the roof at the base plus the height.
+        // The walls stand from their base, the roof at the base plus the height, together within
+        // 1e9; a height or base that is no number (hostile attributes) is the ground.
         let foot = if s.base_height.is_finite() { s.base_height.clamp(0.0, 1e9) } else { 0.0 };
+        let h = if s.height.is_finite() { s.height.clamp(0.0, 1e9 - foot) } else { 0.0 };
         let top = foot + h;
         // The roof drawn for the solid, its shadow, and (raised) the shadow of the base.
         let roofs = if foot > 0.0 { 3 } else { 2 };
@@ -9412,6 +9412,9 @@ mod tests {
         let (on_stilts, whole, short) = (lifted(50_000.0, 50_000.0), lifted(100_000.0, 0.0), lifted(50_000.0, 0.0));
         assert!((on_stilts - whole).abs() < 0.5, "base + height is the roof: {on_stilts} vs {whole}");
         assert!(on_stilts < short - 10.0, "higher than the height alone: {on_stilts} vs {short}");
+        // A height below the ground (a hand-edited file) is none, as the walls draw it: the label
+        // sits on the roof at the base.
+        assert!((lifted(-50_000.0, 50_000.0) - short).abs() < 0.5, "at the base, where the roof is");
     }
 
     /// The GPU's commands stand the walls on the base, the roof at the base plus the height, and
@@ -9474,6 +9477,12 @@ mod tests {
             let gpu_scene::DrawCmd::Extrusion { vertices, indices, .. } = cmd else { panic!("an extrusion") };
             assert!(vertices.iter().all(|v| v.position.iter().chain(&v.info).all(|x| x.is_finite())));
             assert!(indices.iter().all(|i| (*i as usize) < vertices.len()));
+        }
+        // A base and a height at the cap stand within it together.
+        let tall = ExtrudedShape { base_metres: 1e12, base_height: 1e12, ..shape(1e12, vec![0, 1, 2, 0, 2, 3]) };
+        for cmd in extrusion_cmds(&[tall], [0.0, 0.0]).expect("within the budget") {
+            let gpu_scene::DrawCmd::Extrusion { vertices, .. } = cmd else { panic!("an extrusion") };
+            assert!(vertices.iter().all(|v| v.position[2] <= 1e9 && v.info[3] <= 1e9));
         }
     }
 
