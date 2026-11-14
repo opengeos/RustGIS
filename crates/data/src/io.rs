@@ -4859,15 +4859,15 @@ mod tests {
         assert!(!out.contains("'+987654321098765"), "{out}");
         assert!(out.contains("+0.00001234"), "{out}");
         assert!(!out.contains("'+0.00001234"), "{out}");
-        assert!(out.contains("'-007"), "{out}");
-        assert!(out.contains("'-1234567890123456"), "{out}");
-        assert!(out.contains("'+1234567890123456"), "{out}");
-        assert!(out.contains("'+1234567890123456.5"), "{out}");
-        assert!(out.contains("'+1.234567890123456e5"), "{out}");
-        assert!(out.contains("'-1152921504606846976"), "{out}");
-        assert!(out.contains("'-9007199254740992"), "{out}");
-        assert!(out.contains("'-123456789012345678"), "{out}");
-        assert!(out.contains("'-12345678901234567890"), "{out}");
+        assert!(out.contains("'-007,"), "{out}");
+        assert!(out.contains("'-1234567890123456,"), "{out}");
+        assert!(out.contains(",'+1234567890123456\n"), "{out}");
+        assert!(out.contains("'+1234567890123456.5,"), "{out}");
+        assert!(out.contains(",'+1.234567890123456e5\n"), "{out}");
+        assert!(out.contains("'-1152921504606846976,"), "{out}");
+        assert!(out.contains(",'-9007199254740992\n"), "{out}");
+        assert!(out.contains(",'-123456789012345678\n"), "{out}");
+        assert!(out.contains(",'-12345678901234567890\n"), "{out}");
         assert!(out.contains("'=SUM(A1)"), "{out}");
         assert!(out.contains("'+cmd"), "{out}");
     }
