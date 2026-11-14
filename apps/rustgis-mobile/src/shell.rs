@@ -176,7 +176,10 @@ impl<P: Phone> App<P> {
                     let ended = self.asked.borrow_mut().ended(&purpose);
                     self.end(ended);
                 }
-                Event::Photo { path, .. } => self.app.photos.push(path),
+                Event::Photo { path, .. } => {
+                    self.asked.borrow_mut().photo_taken();
+                    self.app.photos.push(path);
+                }
                 Event::Saved { name } => self.app.session.notify(i18n::fmt("Saved {name}.", &[("name", &name)]), false),
                 Event::Position(fix) if self.locating => self.app.report_position(fix),
                 // A fix that was on its way when positioning was turned off.
@@ -386,8 +389,13 @@ fn use_picker<P: Phone + 'static>(
     let saver = phone.clone();
     app.services.download = Some(Box::new(move |name: &str, bytes: Vec<u8>| saver.save_file(name, bytes)));
     app.services.inbox = Some(inbox.clone());
-    let camera = phone.clone();
-    app.services.take_photo = Some(Box::new(move || camera.take_photo()));
+    let (camera, photographing) = (phone.clone(), asked.clone());
+    app.services.take_photo = Some(Box::new(move || {
+        camera.take_photo()?;
+        // Its cancel, if it comes, is the camera's ([`crate::Requests::cancelled`]).
+        photographing.borrow_mut().photo_asked();
+        Ok(())
+    }));
 }
 
 impl<P: Phone> eframe::App for App<P> {

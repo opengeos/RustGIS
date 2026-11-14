@@ -73,6 +73,9 @@ struct Requests {
     current: String,
     /// Whether the phone was seen busy with it (a picker up, its files being copied).
     seen_busy: bool,
+    /// Whether the camera was asked for a photo and hasn't answered: a cancel then is the
+    /// camera's, and ends no request for files.
+    photo: bool,
 }
 
 #[cfg(any(target_os = "android", target_os = "ios", test))]
@@ -97,8 +100,22 @@ impl Requests {
         }
     }
 
-    /// The picker on the screen closed with no choice: it is the request waited on.
+    /// The camera was asked for a photo ([`Requests::cancelled`] is then the camera's).
+    fn photo_asked(&mut self) {
+        self.photo = true;
+    }
+
+    /// The camera answered with a photo.
+    fn photo_taken(&mut self) {
+        self.photo = false;
+    }
+
+    /// A picker or the camera closed with no choice. The camera's (asked for since, and not
+    /// answered) ends nothing; a picker's ends the request waited on.
     fn cancelled(&mut self) -> Option<String> {
+        if std::mem::take(&mut self.photo) {
+            return None;
+        }
         self.seen_busy = false;
         Some(std::mem::take(&mut self.current)).filter(|purpose| !purpose.is_empty())
     }
@@ -276,6 +293,24 @@ mod tests {
         // The second's picker is cancelled: it ends.
         assert_eq!(requests.cancelled(), Some("dxf:2".into()));
         assert_eq!(requests.frame(false), None);
+    }
+
+    #[test]
+    fn a_camera_cancel_ends_no_request_for_files() {
+        let mut requests = super::Requests::default();
+        // A DXF pick whose file is still being copied, then the camera, cancelled.
+        assert_eq!(requests.asked("dxf:1", false), None);
+        assert_eq!(requests.frame(true), None);
+        requests.photo_asked();
+        assert_eq!(requests.cancelled(), None);
+        // The copy arrives: it answers its request, still open.
+        requests.picked("dxf:1");
+        assert_eq!(requests.frame(false), None);
+        // A photo taken leaves the next cancel to a picker.
+        requests.photo_asked();
+        requests.photo_taken();
+        assert_eq!(requests.asked("dxf:2", false), None);
+        assert_eq!(requests.cancelled(), Some("dxf:2".into()));
     }
 
     #[test]

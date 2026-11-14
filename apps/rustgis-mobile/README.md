@@ -292,7 +292,13 @@ cp parcels.gpkg "$(xcrun simctl get_app_container booted org.rustgis.mobile data
 | Camera | `UIImagePickerController`: the photo is written as a JPEG to `Library/Application Support/photos`. A device without a camera (the Simulator) says so |
 | Soft keyboard | winit's own (`UIKeyInput`): letters and Backspace reach the form. The room the keyboard takes comes from UIKit's keyboard notices and keeps the field above it. Return types nothing, as winit 0.30 hands it on as a character: typing ends with a tap outside the field |
 | Folders | Settings, app data and the cache are in `Library/Application Support` |
+| Picked copies | Kept in `picked/`, as on Android: data and projects open from their copies and are edited there. The folder is left out of the device's backups (`NSURLIsExcludedFromBackupKey`), as the documents are the user's elsewhere. Nothing removes old copies yet |
 | Plain HTTP | App Transport Security is off for every host (`NSAllowsArbitraryLoads`): a project's tile layers and services may be any `http://` server, not known when the app is built, so a list of exceptions can't name them. The App Review notes say so |
+
+`src/ios.rs` is the one module of the app with `unsafe` code beyond Android's `no_mangle`, an
+exception to the workspace's rule allowed by `#![expect(unsafe_code)]` on the module: UIKit's
+delegates are Objective-C classes made with `objc2`'s `define_class!`, which needs `unsafe impl`,
+and a few of UIKit's calls are unsafe in `objc2`. Each block says why it holds.
 
 Two things winit 0.30 doesn't do on iOS 27 are done in `src/ios.rs`:
 

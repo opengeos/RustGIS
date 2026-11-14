@@ -179,10 +179,16 @@ impl PickerDelegate {
                 // its own for each folder the documents came from: a file read with the one
                 // beside it (a .shp and its .dbf) finds that one, not one of the same name picked
                 // from elsewhere, and a later pick can't replace a file the session has open.
-                let picked = ivars.folders.support.join("picked").join(unique());
+                let root = ivars.folders.support.join("picked");
+                let picked = root.join(unique());
                 // Copied off the main thread: a document can be large, or come from the network.
                 let (copied, unstarted) = (shared.clone(), purpose.clone());
                 let copying = std::thread::Builder::new().name("picked documents".into()).spawn(move || {
+                    // Copies of documents the user has elsewhere: left out of the device's
+                    // backups (iCloud, a computer's), as the app can be given them again.
+                    if std::fs::create_dir_all(&root).is_ok() {
+                        exclude_from_backup(&root);
+                    }
                     let mut copies = 0usize;
                     let mut sources: Vec<Option<String>> = Vec::new();
                     for url in urls {
@@ -207,6 +213,18 @@ impl PickerDelegate {
                 }
             }
         }
+    }
+}
+
+/// Leaves `folder` (and what is in it) out of the device's backups.
+fn exclude_from_backup(folder: &Path) {
+    let url = NSURL::fileURLWithPath(&NSString::from_str(&folder.to_string_lossy()));
+    let yes = objc2_foundation::NSNumber::numberWithBool(true);
+    // SAFETY: the key's documented value is an NSNumber holding a boolean.
+    let set = unsafe { url.setResourceValue_forKey_error(Some(&yes), objc2_foundation::NSURLIsExcludedFromBackupKey) };
+    if let Err(e) = set {
+        // Not data lost: the copies are then backed up with the app.
+        log::warn!("{} is kept in the device's backups: {}", folder.display(), e.localizedDescription());
     }
 }
 
@@ -677,8 +695,8 @@ impl WindowWatcher {
         let this = Self::alloc(mtm).set_ivars(());
         // SAFETY: NSObject's `init` on a freshly allocated object.
         let this: Retained<Self> = unsafe { msg_send![super(this), init] };
-        // SAFETY: the selector is this class's own method, taking the notification; the
-        // watcher is never released, so it outlives the observation.
+        // SAFETY: the selector is this class's own method, taking the notification; `main`
+        // leaks the watcher, so it outlives the observation.
         unsafe {
             NSNotificationCenter::defaultCenter().addObserver_selector_name_object(
                 &this,
@@ -1009,7 +1027,8 @@ pub fn main() {
     // iOS 27 refuses an app without scenes: `Info.plist` names this class as the scene's
     // delegate, which UIKit looks up by name, so it is made before UIKit starts.
     let _ = SceneDelegate::class();
-    let _watcher = WindowWatcher::start(mtm);
+    // Kept for the app's life: the notification center doesn't hold its observers.
+    std::mem::forget(WindowWatcher::start(mtm));
     let folders = folders();
     let made = std::fs::create_dir_all(&folders.support).is_ok() && rustgis_engine::data::dirs::set_root(folders.support.clone());
     let mut app = shell::front_end(made);
