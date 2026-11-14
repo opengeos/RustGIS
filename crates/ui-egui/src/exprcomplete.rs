@@ -266,19 +266,40 @@ fn arg_range(signature: &str, arg: usize) -> Option<std::ops::Range<usize>> {
     names.get(arg).or(rest).cloned()
 }
 
+/// A function's `signature` coloured as the list's help colours one (`scriptcolor::expr_job`),
+/// the argument at `arg` (bytes) marked in `mark`'s background and text colours. Laid out in
+/// three parts, so the argument is a part of its own: a layout joins neighbours of one format
+/// (`places` with the space before it).
+fn signature_job(
+    signature: &str,
+    arg: Option<std::ops::Range<usize>>,
+    palette: crate::scriptcolor::Palette,
+    font: &egui::FontId,
+    mark: (egui::Color32, egui::Color32),
+) -> egui::text::LayoutJob {
+    let parts = arg.and_then(|r| Some((signature.get(..r.start)?, signature.get(r.clone())?, signature.get(r.end..)?)));
+    let Some((before, marked, after)) = parts else { return crate::scriptcolor::expr_job(signature, palette, font) };
+    let mut job = egui::text::LayoutJob::default();
+    for (text, marked) in [(before, false), (marked, true), (after, false)] {
+        let part = crate::scriptcolor::expr_job(text, palette, font);
+        for s in &part.sections {
+            let mut format = s.format.clone();
+            if marked {
+                (format.background, format.color) = mark;
+            }
+            job.append(part.text.get(s.byte_range.start.0..s.byte_range.end.0).unwrap_or_default(), 0.0, format);
+        }
+    }
+    job
+}
+
 /// The signature of the function the cursor is in a call of, coloured as the list's help colours
 /// one, the argument the cursor is in marked, and what the function gives.
 fn draw_call(ui: &mut Ui, call: &Call, width: f32) {
     let palette = crate::scriptcolor::Palette::of(&crate::theme::Tokens::get(ui.ctx()));
     let mono = egui::TextStyle::Monospace.resolve(ui.style());
-    let mut job = crate::scriptcolor::expr_job(call.spec.signature, palette, &mono);
-    if let Some(arg) = arg_range(call.spec.signature, call.arg) {
-        let (fill, color) = (ui.visuals().selection.bg_fill, ui.visuals().selection.stroke.color);
-        for s in job.sections.iter_mut().filter(|s| s.byte_range.start.0 >= arg.start && s.byte_range.end.0 <= arg.end) {
-            s.format.background = fill;
-            s.format.color = color;
-        }
-    }
+    let mark = (ui.visuals().selection.bg_fill, ui.visuals().selection.stroke.color);
+    let mut job = signature_job(call.spec.signature, arg_range(call.spec.signature, call.arg), palette, &mono, mark);
     job.wrap.max_width = width;
     ui.vertical(|ui| {
         ui.set_max_width(width);
@@ -538,6 +559,29 @@ mod tests {
                 assert!(at(f.signature, arg).is_some(), "{} argument {arg}", f.signature);
             }
         }
+    }
+
+    /// The argument is marked whole, and only it, though a layout joins neighbours of one format.
+    #[test]
+    fn a_signature_job_marks_the_argument_alone() {
+        let palette = crate::scriptcolor::Palette::of(&crate::theme::Tokens::light());
+        let font = egui::FontId::monospace(12.0);
+        let mark = (egui::Color32::YELLOW, egui::Color32::BLACK);
+        for (sig, arg, want) in [("round(x[, places])", 1, "places"), ("round(x[, places])", 0, "x"), ("concat(a, b, …)", 5, "…")] {
+            let job = signature_job(sig, arg_range(sig, arg), palette, &font, mark);
+            assert_eq!(job.text, sig);
+            let marked: String = job
+                .sections
+                .iter()
+                .filter(|s| s.format.background == mark.0)
+                .filter_map(|s| job.text.get(s.byte_range.start.0..s.byte_range.end.0))
+                .collect();
+            assert_eq!(marked, want, "{sig} argument {arg}");
+            // The function's name keeps its colour: the `(` after it is in the same part.
+            assert_eq!(job.sections.first().map(|s| s.format.color), Some(palette.id), "{sig}");
+        }
+        let job = signature_job("pi()", None, palette, &font, mark);
+        assert!(job.sections.iter().all(|s| s.format.background != mark.0), "none past the last");
     }
 
     /// In a call, its signature floats by the cursor while no list shows; Escape closes it until
