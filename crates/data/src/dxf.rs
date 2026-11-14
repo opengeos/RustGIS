@@ -119,21 +119,27 @@ fn decode(bytes: &[u8]) -> (Cow<'_, str>, Option<String>) {
 /// The code page a drawing's header gives (`$DWGCODEPAGE`, such as `ANSI_936`), read from the
 /// first megabyte: a header is small, and a file that isn't a drawing isn't searched further.
 fn code_page(bytes: &[u8]) -> Option<String> {
-    const NAME: &[u8] = b"$DWGCODEPAGE";
     let head = bytes.get(..bytes.len().min(1 << 20)).unwrap_or(bytes);
-    let at = head.windows(NAME.len()).position(|w| w.eq_ignore_ascii_case(NAME))?;
-    let mut lines = head.get(at + NAME.len()..)?.split(|&b| b == b'\n');
-    while let Some(code) = lines.next() {
-        let code = trim_ascii(code);
-        if code.is_empty() {
-            continue;
+    let mut lines = head.split(|&b| b == b'\n');
+    let (mut section, mut header, mut page) = (false, false, false);
+    while let (Some(code), Some(value)) = (lines.next(), lines.next()) {
+        let code = std::str::from_utf8(trim_ascii(code)).ok().and_then(|s| s.parse::<u16>().ok());
+        let value = trim_ascii(value);
+        match code {
+            Some(999) => continue, // Comments never name a section or header variable.
+            Some(0) => {
+                section = value.eq_ignore_ascii_case(b"SECTION");
+                header = false;
+                page = false;
+            }
+            Some(2) if section => {
+                header = value.eq_ignore_ascii_case(b"HEADER");
+                section = false;
+            }
+            Some(9) if header => page = value.eq_ignore_ascii_case(b"$DWGCODEPAGE"),
+            Some(3) if header && page => return Some(String::from_utf8_lossy(value).into_owned()),
+            _ => {}
         }
-        // The variable is followed by its group code, then its value (group 3 in the header).
-        if !code.iter().all(u8::is_ascii_digit) {
-            return None;
-        }
-        let value = trim_ascii(lines.next()?);
-        return Some(String::from_utf8_lossy(value).into_owned());
     }
     None
 }
@@ -2245,11 +2251,12 @@ mod tests {
     }
 
     /// A drawing's text in the code page its header names (AutoCAD 2004 and earlier): its Chinese
-    /// layer names and text are read as they were written, not as Latin-1 mojibake.
+    /// layer names and text are read as they were written, not as Latin-1 mojibake. Comments naming
+    /// a different code page, outside and inside HEADER, must not override the real variable.
     #[test]
     fn an_ansi_code_page_is_decoded() {
         let mut d =
-            b"  0\nSECTION\n  2\nHEADER\n  9\n$DWGCODEPAGE\n  3\nANSI_936\n  0\nENDSEC\n  0\nSECTION\n  2\nTABLES\n  0\nLAYER\n  2\n"
+            b"999\n$DWGCODEPAGE\n999\nANSI_1252\n  0\nSECTION\n  2\nHEADER\n999\n$DWGCODEPAGE\n999\nANSI_1252\n  9\n$DWGCODEPAGE\n999\nignored comment\n  3\nANSI_936\n  0\nENDSEC\n  0\nSECTION\n  2\nTABLES\n  0\nLAYER\n  2\n"
                 .to_vec();
         let (gbk, _, _) = encoding_rs::GBK.encode("道路");
         d.extend_from_slice(&gbk);

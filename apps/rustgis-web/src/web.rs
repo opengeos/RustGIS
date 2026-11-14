@@ -485,6 +485,9 @@ async fn read_together(files: Vec<web_sys::File>, mark: &str, inbox: &Inbox, not
         }
         if let Some(bytes) = crate::parts::read_file(file, notes.clone()).await {
             read.push((name, bytes));
+        } else if mark.starts_with(rustgis_ui_egui::DXF_PICK) {
+            // A failed read completes this request just like cancelling its picker.
+            inbox.lock().unwrap_or_else(|e| e.into_inner()).push((mark.to_string(), Vec::new()));
         }
     }
     let (read, problems) = rustgis_ui_egui::rustgis_engine::data::io::gather_shapefiles(read);
