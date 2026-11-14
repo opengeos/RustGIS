@@ -13,12 +13,17 @@
 set -euo pipefail
 
 profile=release
-if [ "${1:-}" = "--debug" ]; then profile=debug; shift; fi
-kind=${1:-simulator}
+kind=simulator
+for arg in "$@"; do
+    case $arg in
+        --debug) profile=debug ;;
+        simulator | device) kind=$arg ;;
+        *) echo "build-ios: say simulator or device, not $arg (and --debug, if wanted)" >&2; exit 1 ;;
+    esac
+done
 case $kind in
     simulator) target=aarch64-apple-ios-sim; platform=iPhoneSimulator; sdk=iphonesimulator ;;
     device) target=aarch64-apple-ios; platform=iPhoneOS; sdk=iphoneos ;;
-    *) echo "build-ios: say simulator or device, not $kind" >&2; exit 1 ;;
 esac
 
 root=$(cd "$(dirname "$0")/../.." && pwd)

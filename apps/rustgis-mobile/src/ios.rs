@@ -3,7 +3,8 @@
 //!
 //! Everything here runs on the main thread, where UIKit calls its delegates: between frames, as
 //! the run loop turns. What they report waits in [`Shared`] until the next frame takes it, as the
-//! Android activity's events do; only copying a picked document runs on a thread of its own.
+//! Android activity's events do. Copying picked documents, writing a file to save and writing a
+//! photo run on threads of their own.
 //!
 //! The delegates are Objective-C classes made here (`define_class!`): UIKit keeps only a weak
 //! reference to a delegate, so [`Ios`] holds each one for as long as it is wanted.
@@ -164,6 +165,7 @@ impl PickerDelegate {
                 // Copied off the main thread: a document can be large, or come from the network.
                 let copied = shared.clone();
                 let copying = std::thread::Builder::new().name("picked documents".into()).spawn(move || {
+                    let mut copies = 0usize;
                     let mut sources: Vec<Option<String>> = Vec::new();
                     for url in urls {
                         let source = url.URLByDeletingLastPathComponent().and_then(|u| u.path()).map(|p| p.to_string());
@@ -171,7 +173,12 @@ impl PickerDelegate {
                             sources.push(source);
                             sources.len() - 1
                         });
-                        copy_in(&copied, &purpose, &url, &picked.join(k.to_string()));
+                        copies += usize::from(copy_in(&copied, &purpose, &url, &picked.join(k.to_string())));
+                    }
+                    // Nothing copied (each failure said): the picker answered with nothing, so
+                    // the request ends as a cancelled one does (Import DXF stops waiting).
+                    if copies == 0 {
+                        copied.add(Event::Cancelled);
                     }
                     copied.answered();
                 });
@@ -187,8 +194,8 @@ impl PickerDelegate {
 /// Copies the picked document at `url` into `folder` in the app's storage, where the front end
 /// can open it by path, and says so; or says why it wasn't. The document is read inside its
 /// security scope, through a file coordinator: one in iCloud Drive is downloaded first, and
-/// another app writing it is waited for.
-fn copy_in(shared: &Shared, purpose: &str, url: &NSURL, folder: &Path) {
+/// another app writing it is waited for. Returns whether it was copied.
+fn copy_in(shared: &Shared, purpose: &str, url: &NSURL, folder: &Path) -> bool {
     let name = safe_name(&url.lastPathComponent().map(|n| n.to_string()).unwrap_or_default());
     // SAFETY: a URL the document picker returned; the scope ends below, once read.
     let scoped = unsafe { url.startAccessingSecurityScopedResource() };
@@ -209,11 +216,13 @@ fn copy_in(shared: &Shared, purpose: &str, url: &NSURL, folder: &Path) {
             // The copy's own name: a second document of one name is told from the first.
             let shown = file.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or(name);
             shared.add(Event::Picked { purpose: purpose.to_string(), name: shown, path: file });
+            true
         }
         Err(error) => {
             // Half a copy would only fill the storage: nothing reports its path to remove it.
             remove_with_folder(&file);
             shared.failed(i18n::fmt("{name} wasn't opened: {error}", &[("name", &name), ("error", &error)]));
+            false
         }
     }
 }
@@ -785,8 +794,10 @@ impl Platform for Ios {
             &types,
             false,
         );
-        // A Shapefile's parts are chosen together.
-        picker.setAllowsMultipleSelection(true);
+        // Several files only where the front end takes several, as on Android: a Shapefile's
+        // parts are chosen together, while two projects would replace one another and a
+        // dialog's request (a DXF's options) goes with one file.
+        picker.setAllowsMultipleSelection(purpose == "data" || purpose == "shapefile");
         let delegate =
             PickerDelegate::new(self.mtm, self.shared.clone(), self.folders.clone(), Asked::Open { purpose: purpose.to_string() });
         picker.setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
